@@ -663,6 +663,35 @@ const {
  * customizer is Teleported from inside it), just invisible and click-through.
  */
 const lyricsCustomizerActive = ref(false)
+const hifiSidebarWidth = ref(440)
+const isResizingSidebar = ref(false)
+const sidebarResizeStartX = ref(0)
+const sidebarResizeStartWidth = ref(0)
+
+function startResizeSidebar(e: MouseEvent): void {
+  isResizingSidebar.value = true
+  sidebarResizeStartX.value = e.clientX
+  sidebarResizeStartWidth.value = hifiSidebarWidth.value
+  document.addEventListener('mousemove', onResizeSidebar)
+  document.addEventListener('mouseup', stopResizeSidebar)
+  document.body.style.cursor = 'ew-resize'
+  document.body.style.userSelect = 'none'
+}
+
+function onResizeSidebar(e: MouseEvent): void {
+  if (!isResizingSidebar.value) return
+  const delta = sidebarResizeStartX.value - e.clientX
+  const newWidth = Math.min(800, Math.max(320, sidebarResizeStartWidth.value + delta))
+  hifiSidebarWidth.value = Math.round(newWidth)
+}
+
+function stopResizeSidebar(): void {
+  isResizingSidebar.value = false
+  document.removeEventListener('mousemove', onResizeSidebar)
+  document.removeEventListener('mouseup', stopResizeSidebar)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
 
 watch(moreOpen, (open) => {
   if (open) void playbackBookmarks.ensureLoaded()
@@ -1495,6 +1524,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = null
+  stopResizeSidebar()
   if (geometryAnimTimer !== null) window.clearTimeout(geometryAnimTimer)
   geometryAnimTimer = null
   glassPointerEnabled = false
@@ -2129,10 +2159,13 @@ onBeforeUnmount(() => {
       <Transition name="hifi-overlay">
         <div
           v-if="moreOpen"
-          class="hifi-overlay"
-          @pointerdown.stop
           :class="{ glass, 'is-lyrics-customizing': lyricsCustomizerActive }"
+          class="hifi-overlay"
+          :style="{ width: `${hifiSidebarWidth}px` }"
+          @pointerdown.stop
         >
+          <!-- 宽度调整手柄 -->
+          <div class="hifi-resize-handle" @mousedown="startResizeSidebar"></div>
           <HiFiSidebar
             :glass="glass"
             :accent-color="playButtonColor"

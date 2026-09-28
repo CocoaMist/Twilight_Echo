@@ -2200,6 +2200,14 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <span>{{ selectionAllFavorited ? '取消收藏' : '加入收藏' }}</span>
                 </button>
                 <button
+                  type="button"
+                  class="selection-btn"
+                  @click="appendActionTracksToQueue(selectionActionTracks)"
+                >
+                  <i class="pi pi-list"></i>
+                  <span>添加到播放队列</span>
+                </button>
+                <button
                   v-if="selectedLocalTrackCount > 0"
                   type="button"
                   class="selection-btn"

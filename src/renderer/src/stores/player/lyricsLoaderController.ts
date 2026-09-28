@@ -348,7 +348,11 @@ export function createLyricsLoader(options: LyricsLoaderOptions) {
           romanizedLyricsSource: resolverTrack.romanizedLyricsSource ?? null
         })
         completeIfCurrent(
-          hasOriginal || hasLyricContent(resolverTrack.translatedLyrics) ? 'ready' : 'empty'
+          hasOriginal ||
+            hasLyricContent(resolverTrack.translatedLyrics) ||
+            hasLyricContent(resolverTrack.romanizedLyrics)
+            ? 'ready'
+            : 'empty'
         )
         return
       }
