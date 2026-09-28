@@ -188,8 +188,7 @@ const {
 const currentTrack = computed(() =>
   props.preview && props.previewTrack ? props.previewTrack : playbackCurrentTrack.value
 )
-// Hold a visualization consumer only while the compact skyline is mounted, so
-// the standard / mini shapes never keep the 60ms spectrum IPC poll running.
+// Keep the visualization poll alive only while the compact skyline is mounted.
 let releaseVisualizationConsumer: (() => void) | null = null
 watch(
   showCompactVisualizer,

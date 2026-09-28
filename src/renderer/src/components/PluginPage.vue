@@ -1188,7 +1188,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--te-neutral-600, #52525b);
+  color: var(--te-neutral-500);
   font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
 }
 
@@ -1491,8 +1491,8 @@ onUnmounted(() => {
 }
 
 .tag.community {
-  background: rgba(107, 114, 128, 0.12);
-  color: var(--te-neutral-500, #6b7280);
+  background: color-mix(in srgb, var(--te-neutral-500) 12%, transparent);
+  color: var(--te-neutral-500);
 }
 
 .plugin-desc {
