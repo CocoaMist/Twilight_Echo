@@ -105,7 +105,12 @@ function fixture() {
     isPlaying,
     isLoading,
     resets: () => resets,
-    pending: () => pending
+    pending: () => pending,
+    pendingPosition: () => restoredPosition,
+    seekDuringLoad: (position: number) => {
+      pending = true
+      restoredPosition = position
+    }
   }
 }
 
@@ -123,6 +128,22 @@ test('automatic restore selects the saved duplicate occurrence instead of an obs
   assert.equal(state.pending(), true)
   assert.equal(state.resets(), 1)
   assert.deepEqual(state.originalQueue.value, state.queue.value)
+})
+
+test('playback state snapshots leave queue cloning to the shared writer', () => {
+  const state = fixture()
+  const selected = makeTrack('selected', 'entry')
+  state.restore(selected, [selected], 0)
+  assert.equal(state.controller.createPlaybackSession('trackAndPosition')?.queue, undefined)
+})
+
+test('restore keeps the selected track cover when the compact queue omits inline art', () => {
+  const state = fixture()
+  const selected = makeTrack('selected', 'entry')
+  const cover = 'data:image/jpeg;base64,AAAA'
+  state.restore({ ...selected, cover }, [selected], 0)
+  assert.equal(state.currentTrack.value?.cover, cover)
+  assert.equal(state.queue.value[0].cover, null)
 })
 
 test('legacy sessions reject fractional or mismatched indices and match the saved track identity', () => {
@@ -165,4 +186,40 @@ test('automatic restore strips stale provider URLs from both the queue and selec
   assert.equal(state.queue.value[0].streamUrl, null)
   assert.equal(state.currentTrack.value?.streamUrl, null)
   assert.equal(state.currentTrack.value?.queueEntryId, 'entry')
+})
+
+test('playing another song after a paused session restore does not inherit its position', () => {
+  for (const startTime of [0, 12]) {
+    const state = fixture()
+    const saved = makeTrack('saved')
+    const next = makeTrack('next')
+    state.restore(saved, [saved, next], 0)
+    state.currentTrack.value = next
+    state.controller.clearPendingPlaybackPosition()
+    assert.equal(state.controller.consumePendingPlaybackPosition(next, startTime), startTime)
+    assert.equal(state.pending(), false)
+    assert.equal(state.pendingPosition(), 0)
+  }
+})
+
+test('resuming the restored song keeps its explicitly requested starting position', () => {
+  const state = fixture()
+  const saved = makeTrack('saved')
+  state.restore(saved, [saved], 0)
+  const startTime = state.pendingPosition()
+  state.controller.clearPendingPlaybackPosition()
+  assert.equal(state.controller.consumePendingPlaybackPosition(saved, startTime), 25)
+})
+
+test('seeking during a load overrides its start but is discarded when another load begins', () => {
+  const state = fixture()
+  const track = makeTrack('saved')
+  state.restore(track, [track], 0)
+  state.controller.clearPendingPlaybackPosition()
+  state.seekDuringLoad(40)
+  assert.equal(state.controller.consumePendingPlaybackPosition(track, 25), 40)
+  assert.equal(state.controller.consumePendingPlaybackPosition(track, 0), 0)
+  state.seekDuringLoad(60)
+  state.controller.clearPendingPlaybackPosition()
+  assert.equal(state.controller.consumePendingPlaybackPosition(makeTrack('next'), 0), 0)
 })

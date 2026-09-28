@@ -18,7 +18,8 @@ import {
   type MiniPlayerBootstrap,
   type MiniPlayerSettings,
   type MiniPlayerSettingsPatch,
-  type MiniPlayerStateSnapshot
+  type MiniPlayerStateSnapshot,
+  type MiniPlayerWindowSize
 } from '../../shared/miniPlayer'
 import type { MotionPreference } from '../../shared/motion.ts'
 import { runtime } from '../core/runtime'
@@ -31,8 +32,10 @@ import {
   MINI_PLAYER_MIN_HEIGHT,
   MINI_PLAYER_MIN_WIDTH,
   clampMiniPlayerBoundsToWorkArea,
-  createMiniPlayerWindowShape,
-  miniPlayerBoundsPatch
+  isMiniPlayerBoundsEcho,
+  miniPlayerBoundsPatch,
+  parseMiniPlayerMoveTarget,
+  resizeMiniPlayerBounds
 } from './miniPlayerWindow'
 
 const MINI_PLAYER_EDGE_GAP = 22
@@ -40,6 +43,7 @@ const MINI_PLAYER_BOUNDS_SAVE_DELAY_MS = 350
 
 let boundsSaveTimer: NodeJS.Timeout | null = null
 let programmedBounds: Electron.Rectangle | null = null
+let dragSize: MiniPlayerWindowSize | null = null
 
 function getMiniPlayerIconPath(): string | undefined {
   const candidates =
@@ -87,14 +91,23 @@ function resolveInitialBounds(settings: MiniPlayerSettings): Electron.Rectangle 
   )
 }
 
+/** The bounds the window was given, while its rounded read-back is only an echo of them. */
+function settledMiniPlayerBounds(win: BrowserWindow): Electron.Rectangle {
+  const actual = win.getBounds()
+  return programmedBounds && isMiniPlayerBoundsEcho(actual, programmedBounds)
+    ? programmedBounds
+    : actual
+}
+
 function fitMiniPlayerToWorkArea(win: BrowserWindow, settings: MiniPlayerSettings): void {
-  const current = win.getBounds()
+  const current = settledMiniPlayerBounds(win)
   const display = screen.getDisplayMatching(current)
-  const next = clampMiniPlayerBoundsToWorkArea(
-    { ...current, width: settings.windowWidth, height: settings.windowHeight },
+  const next = resizeMiniPlayerBounds(
+    current,
+    { width: settings.windowWidth, height: settings.windowHeight },
     display.workArea
   )
-  if (rectanglesEqual(current, next)) return
+  if (rectanglesEqual(win.getBounds(), next)) return
   programmedBounds = next
   win.setBounds(next, false)
 }
@@ -111,29 +124,13 @@ function applyMiniPlayerWindowSettings(settings: MiniPlayerSettings): void {
   win.setBackgroundColor('#00000000')
   win.setMovable(!settings.positionLocked)
   win.setSkipTaskbar(!settings.showInTaskbar)
-  applyMiniPlayerWindowShape(win, settings)
+  if (dragSize) dragSize = { width: settings.windowWidth, height: settings.windowHeight }
   fitMiniPlayerToWorkArea(win, settings)
 }
 
-function applyMiniPlayerWindowShape(win: BrowserWindow, settings: MiniPlayerSettings): void {
-  if (process.platform !== 'win32') return
-  const profile = settings.profiles[settings.activeStyleId]
-  const cornerRadius = profile?.appearance.cornerRadius ?? 0
-  const bounds = win.getBounds()
-  // The OS window region is binary, so a rounded region is drawn as a 1px
-  // stair-step and cannot be anti-aliased. If that region is rounder than the
-  // CSS surface it becomes the visible boundary and looks jagged. Keep the
-  // region slightly *less* round instead: the staircase then hides in the
-  // transparent rim outside the CSS border-radius, and Chromium's antialiased
-  // CSS corner is what the user actually sees. The shape still cuts the corner
-  // tip so clicks outside the rounded surface fall through to the desktop.
-  const safetyRadius = Math.max(0, cornerRadius - 2)
-  win.setShape(createMiniPlayerWindowShape(bounds.width, bounds.height, safetyRadius))
-}
-
-function persistMiniPlayerBounds(win: BrowserWindow): void {
+function persistMiniPlayerBounds(win: BrowserWindow, bounds?: Electron.Rectangle): void {
   if (win.isDestroyed() || runtime.miniPlayerWindow !== win) return
-  const boundsPatch = miniPlayerBoundsPatch(win.getBounds())
+  const boundsPatch = miniPlayerBoundsPatch(bounds ?? settledMiniPlayerBounds(win))
   runtime.appSettings = {
     ...runtime.appSettings,
     miniPlayer: {
@@ -149,15 +146,57 @@ function persistMiniPlayerBounds(win: BrowserWindow): void {
   )
 }
 
+function isMiniPlayerBoundsSaved(bounds: Electron.Rectangle): boolean {
+  const saved = currentMiniPlayerSettings()
+  const patch = miniPlayerBoundsPatch(bounds)
+  return (
+    patch.windowX === saved.windowX &&
+    patch.windowY === saved.windowY &&
+    patch.windowWidth === saved.windowWidth &&
+    patch.windowHeight === saved.windowHeight
+  )
+}
+
 function scheduleMiniPlayerBoundsSave(win: BrowserWindow): void {
-  const current = win.getBounds()
-  if (programmedBounds && rectanglesEqual(current, programmedBounds)) return
-  programmedBounds = null
+  if (dragSize) return
+  if (programmedBounds && !isMiniPlayerBoundsEcho(win.getBounds(), programmedBounds)) {
+    programmedBounds = null
+  }
+  // Programmatic resizes still move the window (corner anchoring, work-area
+  // clamps); those land here as echoes and save the bounds that were asked for.
+  if (isMiniPlayerBoundsSaved(settledMiniPlayerBounds(win))) return
   if (boundsSaveTimer) clearTimeout(boundsSaveTimer)
   boundsSaveTimer = setTimeout(() => {
     boundsSaveTimer = null
     persistMiniPlayerBounds(win)
   }, MINI_PLAYER_BOUNDS_SAVE_DELAY_MS)
+}
+
+function moveMiniPlayerWindow(win: BrowserWindow, target: { x: number; y: number }): void {
+  if (!dragSize && boundsSaveTimer) {
+    clearTimeout(boundsSaveTimer)
+    boundsSaveTimer = null
+    persistMiniPlayerBounds(win)
+  }
+  const settings = currentMiniPlayerSettings()
+  if (settings.positionLocked) return
+  // At fractional scale factors this frameless thick-frame window reads back a
+  // pixel or two larger than it was set to, and setPosition grows it the same
+  // way. Every step re-sends the configured size, never getBounds(), and the
+  // gesture persists once on moveEnd with that size. A pending edge-resize save
+  // is flushed first so the gesture keeps the size the user just chose.
+  dragSize ??= { width: settings.windowWidth, height: settings.windowHeight }
+  const { width, height } = dragSize
+  const display = screen.getDisplayNearestPoint({
+    x: target.x + Math.round(width / 2),
+    y: target.y + Math.round(height / 2)
+  })
+  const next = clampMiniPlayerBoundsToWorkArea(
+    { x: target.x, y: target.y, width, height },
+    display.workArea
+  )
+  programmedBounds = next
+  win.setBounds(next, false)
 }
 
 function sendMiniPlayerState(state: MiniPlayerStateSnapshot): void {
@@ -241,6 +280,7 @@ function createMiniPlayerWindow(): BrowserWindow {
     }
   })
   runtime.miniPlayerWindow = win
+  programmedBounds = bounds
 
   win.setBackgroundColor('#00000000')
 
@@ -252,10 +292,7 @@ function createMiniPlayerWindow(): BrowserWindow {
   })
 
   win.on('move', () => scheduleMiniPlayerBoundsSave(win))
-  win.on('resize', () => {
-    applyMiniPlayerWindowShape(win, currentMiniPlayerSettings())
-    scheduleMiniPlayerBoundsSave(win)
-  })
+  win.on('resize', () => scheduleMiniPlayerBoundsSave(win))
 
   win.on('close', (event) => {
     if (runtime.forceQuit) {
@@ -272,12 +309,14 @@ function createMiniPlayerWindow(): BrowserWindow {
       boundsSaveTimer = null
     }
     programmedBounds = null
+    dragSize = null
     if (runtime.miniPlayerWindow === win) runtime.miniPlayerWindow = null
   })
 
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
   win.webContents.on('did-finish-load', () => {
+    dragSize = null
     sendMiniPlayerSettings()
     sendMiniPlayerMotionPreference()
     sendMiniPlayerState(runtime.latestMiniPlayerState ?? { ...EMPTY_MINI_PLAYER_STATE })
@@ -460,6 +499,28 @@ export function setupMiniPlayerIpc(): void {
       return
     }
     runtime.miniPlayerWindow?.minimize()
+  })
+
+  ipcMain.on('miniPlayer:moveTo', (event, payload: unknown) => {
+    if (!shouldAcceptSenderWindow(event, runtime.miniPlayerWindow, 'mini player window IPC')) {
+      return
+    }
+    const target = parseMiniPlayerMoveTarget(payload)
+    const win = runtime.miniPlayerWindow
+    if (!target || !win || win.isDestroyed()) return
+    moveMiniPlayerWindow(win, target)
+  })
+
+  ipcMain.on('miniPlayer:moveEnd', (event) => {
+    if (!shouldAcceptSenderWindow(event, runtime.miniPlayerWindow, 'mini player window IPC')) {
+      return
+    }
+    const win = runtime.miniPlayerWindow
+    const settings = currentMiniPlayerSettings()
+    const size = dragSize ?? { width: settings.windowWidth, height: settings.windowHeight }
+    dragSize = null
+    if (!win || win.isDestroyed()) return
+    persistMiniPlayerBounds(win, { ...settledMiniPlayerBounds(win), ...size })
   })
 
   ipcMain.on('miniPlayer:returnToMain', (event) => {

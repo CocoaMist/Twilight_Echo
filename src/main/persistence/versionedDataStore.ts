@@ -1,6 +1,9 @@
 import { resolve } from 'node:path'
 import {
+  backupPathFor,
+  clearJsonFileArtifacts,
   loadJsonFileWithBackup,
+  readJsonCandidate,
   writeJsonFileAtomic,
   type JsonFileLoadResult,
   type JsonFileOptions
@@ -48,6 +51,24 @@ export class VersionedDataStore<T> {
 
   load(): Promise<VersionedDataEnvelope<T> | null> {
     return this.enqueue(() => this.loadCurrent())
+  }
+
+  loadBackup(): Promise<VersionedDataEnvelope<T> | null> {
+    return this.enqueue(() => {
+      const backup = readJsonCandidate(backupPathFor(this.config.filePath), this.options)
+      if (backup.status !== 'loaded') return null
+      if (isVersionedDataEnvelope(backup.value, this.config.isData)) return backup.value
+      return {
+        version: 2,
+        revision: 0,
+        savedAt: legacySavedAt(backup.value) ?? this.now(),
+        data: backup.value
+      }
+    })
+  }
+
+  removeFiles(): Promise<void> {
+    return this.enqueue(() => clearJsonFileArtifacts(this.config.filePath))
   }
 
   save(data: T, expectedRevision: number): Promise<VersionedDataEnvelope<T>> {

@@ -9,9 +9,8 @@ export type {
   TrackMetadataMatch
 } from '../../../shared/track.ts'
 export type { LyricSource } from '../../../shared/lyricsManagement.ts'
-import type { PlaybackResumeMode, PlayMode } from './settings'
+import type { PlaybackSessionData } from '../../../shared/playbackSession.ts'
 import type { NcmPlaybackQuality } from './settings'
-import type { SleepTimerState } from '../../../shared/sleepTimer.ts'
 import type { CueRange, ParsedCueSheet } from '../../../shared/cue.ts'
 import type { NetworkEntry } from '../../../shared/networkSources.ts'
 
@@ -103,16 +102,6 @@ export interface Track {
   r128AlbumGainDb?: number
 }
 
-export interface PlaybackSession {
-  version: 1
-  savedAt: string
-  mode: PlaybackResumeMode
-  playMode?: PlayMode
-  track: Track
-  position: number
-  queue?: Track[]
-  queueIndex?: number
-  sleepTimer?: SleepTimerState
-}
+export type PlaybackSession = PlaybackSessionData<Track>
 
 export { SUPPORTED_EXTENSIONS } from '../../../shared/audioFormats.ts'

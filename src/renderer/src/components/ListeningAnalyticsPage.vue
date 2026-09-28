@@ -87,8 +87,8 @@ const totalPlays = computed(() =>
   trackEntries.value.reduce((sum, stat) => sum + (stat.plays || 0), 0)
 )
 
-const totalTrackCount = computed(() =>
-  trackEntries.value.filter((stat) => (stat.plays || 0) > 0).length
+const totalTrackCount = computed(
+  () => trackEntries.value.filter((stat) => (stat.plays || 0) > 0).length
 )
 
 const totalSeconds = computed(() =>
@@ -411,10 +411,10 @@ function playDashboardTrack(track: Track | null | undefined): void {
 
 function emptyText(title: string): string {
   const map: Record<string, string> = {
-    '最常听曲目': '暂无曲目统计',
-    '最常听艺人': '暂无艺人统计',
-    '音质使用': '暂无音质数据',
-    '格式分布': '暂无格式数据'
+    最常听曲目: '暂无曲目统计',
+    最常听艺人: '暂无艺人统计',
+    音质使用: '暂无音质数据',
+    格式分布: '暂无格式数据'
   }
   return map[title] || '暂无数据'
 }
@@ -476,7 +476,11 @@ function emptyText(title: string): string {
             :key="track.id"
             class="detail-row"
             :class="{ 'is-current': currentTrack?.id && track.track?.id === currentTrack.id }"
+            role="button"
+            tabindex="0"
             @click="playDashboardTrack(track.track)"
+            @keydown.enter="playDashboardTrack(track.track)"
+            @keydown.space.prevent="playDashboardTrack(track.track)"
           >
             <CoverImg
               class="detail-cover"
@@ -511,7 +515,11 @@ function emptyText(title: string): string {
             class="rank-row"
             :class="{ 'is-champion': index === 0 }"
             :style="{ '--rank-alpha': rankAlpha(index) }"
+            role="button"
+            tabindex="0"
             @click="openArtist(artist)"
+            @keydown.enter="openArtist(artist)"
+            @keydown.space.prevent="openArtist(artist)"
           >
             <span class="rank-spine" aria-hidden="true"></span>
             <span class="rank-index">{{ String(index + 1).padStart(2, '0') }}</span>
@@ -529,12 +537,12 @@ function emptyText(title: string): string {
                 >{{ artist.plays }}次 · {{ formatCompactDuration(artist.seconds) }}</span
               >
               <span class="rank-bar" aria-hidden="true">
-                <span
-                  :style="{ width: barPercent(artist.seconds, maxArtistSeconds) + '%' }"
-                ></span>
+                <span :style="{ width: barPercent(artist.seconds, maxArtistSeconds) + '%' }"></span>
               </span>
             </div>
-            <span class="rank-pill">{{ completionRate(artist.completions, artist.plays) }}% 完播</span>
+            <span class="rank-pill"
+              >{{ completionRate(artist.completions, artist.plays) }}% 完播</span
+            >
           </li>
         </ul>
         <p v-else class="detail-empty">{{ emptyText('最常听艺人') }}</p>
@@ -595,11 +603,7 @@ function emptyText(title: string): string {
       <div class="wall-scroll">
         <div class="wall-inner">
           <div class="wall-rail-spacer" aria-hidden="true"></div>
-          <div
-            class="wall-months"
-            :style="{ '--wall-weeks': wallWeeks.length }"
-            aria-hidden="true"
-          >
+          <div class="wall-months" :style="{ '--wall-weeks': wallWeeks.length }" aria-hidden="true">
             <span
               v-for="month in wallMonthLabels"
               :key="month.key"
@@ -646,7 +650,9 @@ function emptyText(title: string): string {
         </div>
         <div class="heatmap-stat">
           <span class="heatmap-stat-label">活跃天数</span>
-          <span class="heatmap-stat-value">{{ yearStats.activeDays }} / {{ yearStats.totalDays }}</span>
+          <span class="heatmap-stat-value"
+            >{{ yearStats.activeDays }} / {{ yearStats.totalDays }}</span
+          >
         </div>
         <div class="heatmap-stat">
           <span class="heatmap-stat-label">活跃日均</span>

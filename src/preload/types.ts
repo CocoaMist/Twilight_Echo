@@ -1,12 +1,17 @@
 import type {
-  PlayMode,
   LoudnormStatus,
   EqualizerBand,
   PlaybackInfo,
   BpmAnalysisResult,
   LoudnessAnalysisResult
 } from '../shared/audioEngineTypes.ts'
-import type { PlaybackResumeMode, AppSettings } from '../shared/appSettings.ts'
+import type { AppSettings } from '../shared/appSettings.ts'
+export type {
+  DspAuditionApi,
+  DspAuditionRequest,
+  DspAuditionResult
+} from '../shared/dspAudition.ts'
+
 export type {
   LibraryLoudnessApi,
   LibraryLoudnessResult,
@@ -429,17 +434,7 @@ export interface TwilightProviderUiMetadata {
   unifiedLibrary?: boolean
 }
 
-export interface PlaybackSession {
-  version: 1
-  savedAt: string
-  mode: PlaybackResumeMode
-  playMode?: PlayMode
-  track: TrackData
-  position: number
-  queue?: TrackData[]
-  queueIndex?: number
-  sleepTimer?: import('../shared/sleepTimer.ts').SleepTimerState
-}
+export type PlaybackSession = import('../shared/playbackSession.ts').PlaybackSessionData<TrackData>
 
 export interface OpraCatalogStatus {
   loaded: boolean

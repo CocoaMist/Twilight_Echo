@@ -23,7 +23,7 @@ import {
 } from '../utils/liquidGlassPress.ts'
 import { useMediaProviders } from '../providers'
 import { normalizeAccentColor } from '../utils/colorExtractor'
-import { useSmoothedValue } from '../utils/useSmoothedValue'
+import SmoothedProgressFill from './SmoothedProgressFill.vue'
 import { HIFI_STATUS_COPY } from '../../../shared/audioProcessingOptions.ts'
 import { resolveReasonCode } from '../../../shared/audio/reasonCodes.ts'
 import { useLocale } from '../app/useLocale.ts'
@@ -408,17 +408,6 @@ const progressPercent = computed(() => {
   if (!Number.isFinite(ratio)) return 0
   return Math.min(100, Math.max(0, ratio * 100))
 })
-
-// Playback ticks arrive stepped (~4/s); chase them so the fill glides between
-// ticks. Jumps over 2.5% (seek / track switch) snap instead of gliding.
-const smoothedProgressPercent = useSmoothedValue(progressPercent, {
-  tau: 160,
-  snapThreshold: 2.5
-})
-
-const progressFillStyle = computed(() => ({
-  transform: `scaleX(${Math.min(100, Math.max(0, smoothedProgressPercent.value)) / 100})`
-}))
 
 const abLoopTitle = computed(() => {
   if (isLiveStream.value) return '直播流不支持 A-B 循环'
@@ -1532,9 +1521,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  stopResizeSidebar()
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = null
+  stopResizeSidebar()
   if (geometryAnimTimer !== null) window.clearTimeout(geometryAnimTimer)
   geometryAnimTimer = null
   glassPointerEnabled = false
@@ -1790,7 +1779,7 @@ onBeforeUnmount(() => {
            紧凑顶边通栏），做成可搬运的控件只会得到渲染不出来的编排。 -->
       <div v-if="isCompact" class="compact-progress-rail">
         <div class="compact-progress-track" aria-hidden="true">
-          <div class="compact-progress-fill" :style="progressFillStyle"></div>
+          <SmoothedProgressFill class="compact-progress-fill" :percent="progressPercent" />
         </div>
         <input
           type="range"
@@ -2103,11 +2092,11 @@ onBeforeUnmount(() => {
           <span class="time-label">{{ isLiveStream ? 'LIVE' : formatTime(currentTime) }}</span>
           <div class="progress-slider-wrap">
             <div class="progress-track" aria-hidden="true">
-              <div
+              <SmoothedProgressFill
                 class="progress-fill"
                 :class="{ live: isLiveStream }"
-                :style="progressFillStyle"
-              ></div>
+                :percent="progressPercent"
+              />
             </div>
             <div
               v-if="abLoopA != null && abLoopB != null && effectiveDuration > 0 && !isLiveStream"
@@ -2135,7 +2124,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="region.name === 'center' && isMini" class="mini-progress-rail">
           <div class="mini-progress-track" aria-hidden="true">
-            <div class="mini-progress-fill" :style="progressFillStyle"></div>
+            <SmoothedProgressFill class="mini-progress-fill" :percent="progressPercent" />
           </div>
           <span class="mini-progress-time" aria-hidden="true">
             {{

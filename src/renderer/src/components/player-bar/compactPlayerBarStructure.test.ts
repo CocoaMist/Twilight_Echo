@@ -51,7 +51,10 @@ test('the compact shape is wired through the same shape prop and class as the ot
 })
 
 test('the expanded visualizer is mounted only for compact on the lyrics page', () => {
-  assert.match(app, /:visualizer-visible="showPlayingPage"/)
+  assert.match(
+    app,
+    /:visualizer-visible="showPlayingPage && settings\.playerBar\.compactVisualizerEnabled"/
+  )
   assert.match(playerBar, /visualizerVisible\?: boolean/)
   assert.match(playerBar, /visualizerVisible: false/)
   assert.match(
@@ -60,6 +63,10 @@ test('the expanded visualizer is mounted only for compact on the lyrics page', (
   )
   assert.match(playerBar, /'player-bar-compact-visualizer': showCompactVisualizer/)
   assert.match(playerBar, /<CompactPlayerBarVisualizer\s+v-if="showCompactVisualizer"/)
+  assert.match(
+    playerBar,
+    /watch\(\s*showCompactVisualizer,[\s\S]*?releaseVisualizationConsumer\?\.\(\)/
+  )
 
   const plainCompact = playerBarCss.match(
     /\.player-bar\.player-bar-compact\.player-bar-compact\.player-bar-compact:not\(\s*\.player-bar-compact-visualizer\s*\)\s*\{[^}]*\}/
@@ -201,7 +208,10 @@ test('compact keeps its progress readout out of the layout, on its own top edge'
     assert.equal(placed.includes(id as never), false, `${id} must not be a layout control`)
   }
   assert.match(playerBar, /v-if="isCompact" class="compact-progress-rail"/)
-  assert.match(playerBar, /class="compact-progress-fill" :style="progressFillStyle"/)
+  assert.match(
+    playerBar,
+    /<SmoothedProgressFill class="compact-progress-fill" :percent="progressPercent" \/>/
+  )
   // Same 0..1 seek handler as mini's long rail, so neither has to know pixels.
   assert.match(playerBar, /class="compact-progress-slider"[\s\S]{0,320}@input="onFlatRailInput"/)
   assert.match(playerBar, /function onFlatRailInput/)

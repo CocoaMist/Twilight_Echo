@@ -1,4 +1,3 @@
-import extract from 'extract-zip'
 import { app } from 'electron'
 import {
   lstat,
@@ -72,6 +71,7 @@ export async function importThemeArchive(source: string): Promise<ThemeProfileV2
   preflightThemeArchive(await readFile(source))
   const temporary = await mkdtemp(join(tmpdir(), 'twilight-theme-import-'))
   try {
+    const { default: extract } = await import('extract-zip')
     await extract(source, { dir: temporary })
     const entries = await collectSafeFiles(temporary)
     const themeEntry = entries.find((entry) => entry.relative === 'theme.json')
@@ -231,7 +231,11 @@ function isThemeAssetContentValid(data: Buffer, extension: string): boolean {
   return valid
 }
 
-async function collectSafeFiles(root: string, allowMissing = false): Promise<ZipEntry[]> {
+async function collectSafeFiles(
+  root: string,
+  allowMissing = false,
+  format: 'theme' | 'plugin-theme' = 'theme'
+): Promise<ZipEntry[]> {
   const rootPath = resolve(root)
   const files: ZipEntry[] = []
   let totalBytes = 0
@@ -251,7 +255,10 @@ async function collectSafeFiles(root: string, allowMissing = false): Promise<Zip
         continue
       }
       if (!info.isFile()) throw new Error('主题包包含不支持的文件类型')
-      if (relativePath !== 'theme.json') {
+      if (format === 'plugin-theme') {
+        if (!['plugin.json', 'theme.css', 'ATTRIBUTION.json'].includes(relativePath))
+          throw new Error('插件主题包包含非主题文件')
+      } else if (relativePath !== 'theme.json') {
         if (!relativePath.startsWith('assets/'))
           throw new Error('主题包只能包含 theme.json 与 assets/')
         if (!THEME_ASSET_EXTENSIONS.has(extname(relativePath).toLowerCase())) {
@@ -368,8 +375,12 @@ export async function copyThemeAssets(
   }
 }
 
-export async function writeStoredZip(root: string, outputFile: string): Promise<void> {
-  const files = await collectSafeFiles(root)
+export async function writeStoredZip(
+  root: string,
+  outputFile: string,
+  format: 'theme' | 'plugin-theme' = 'theme'
+): Promise<void> {
+  const files = await collectSafeFiles(root, false, format)
   const chunks: Buffer[] = []
   const central: Buffer[] = []
   let offset = 0

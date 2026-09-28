@@ -10,7 +10,6 @@ function readDataIpcSources(): string {
     '../ipc/windowIpc.ts',
     '../ipc/fonts.ts',
     '../ipc/settingsIpc.ts',
-    '../ipc/debugIpc.ts',
     '../ipc/filesystemIpc.ts',
     '../ipc/libraryIpc.ts',
     '../ipc/coverIpc.ts',
@@ -163,7 +162,11 @@ test('data IPC applies path and storage limits before touching local files', () 
   assert.match(repositorySource, /export const MAX_MUSIC_LIBRARY_BYTES = 100 \* 1024 \* 1024/)
   assert.match(
     source,
-    /stringifyJsonForIpcStorage\(session, 'playback session', MAX_PLAYBACK_SESSION_BYTES\)/
+    /stringifyJsonForIpcStorage\(state, 'playback session', MAX_PLAYBACK_SESSION_BYTES\)/
+  )
+  assert.match(
+    source,
+    /stringifyJsonForIpcStorage\(queue, 'playback queue', MAX_PLAYBACK_QUEUE_BYTES\)/
   )
   assert.match(source, /stringifyJsonForIpcStorage\(playlists, 'playlists', MAX_PLAYLISTS_BYTES\)/)
   assert.match(source, /normalizeLocalPath\(folderPath, 'music folder path'\)/)
@@ -179,7 +182,7 @@ test('data IPC applies path and storage limits before touching local files', () 
   assert.match(source, /new VersionedDataStore<PlaybackSession \| null>/)
   assert.match(
     source,
-    /return await saveVersionedData\(playbackSessionStore, session, expectedRevision\)/
+    /return await saveVersionedData\(playbackSessionStorage, session, expectedRevision\)/
   )
   assert.match(
     source,
@@ -237,8 +240,6 @@ test('plugin and NCM IPC validate renderer-controlled IDs, methods, paths, and p
   assert.match(ncmSource, /const MAX_NCM_API_PATH_LENGTH = 4096/)
   assert.match(ncmSource, /normalizeNcmApiPath\(path\)/)
   assert.match(ncmSource, /normalizeNcmCookie\(cookie\)/)
-  assert.match(ncmSource, /normalizeNcmSongId\(songId\)/)
-  assert.match(ncmSource, /normalizeIpcString\(url, 'NCM cache url', MAX_NCM_REMOTE_URL_LENGTH\)/)
 })
 
 test('settings, background image, OPRA, and BPM IPC apply input limits before expensive work', () => {
@@ -303,6 +304,8 @@ test('Electron documents use local CSP, denied permissions, and trusted IPC send
   )
   const miniPlayerBoundsPersistence =
     miniPlayerSource.match(/function persistMiniPlayerBounds[\s\S]*?\n\}/)?.[0] ?? ''
+  const miniPlayerDragStep =
+    miniPlayerSource.match(/function moveMiniPlayerWindow[\s\S]*?\n\}/)?.[0] ?? ''
 
   assert.match(lifecycleSource, /installElectronSecurity\(\)/)
   assert.match(electronSecuritySource, /setPermissionRequestHandler/)
@@ -367,6 +370,13 @@ test('Electron documents use local CSP, denied permissions, and trusted IPC send
   assert.match(miniPlayerSource, /win\.on\('resize'/)
   assert.match(miniPlayerSource, /persistMiniPlayerBounds/)
   assert.match(miniPlayerBoundsPersistence, /settings:changed/)
+  // At fractional scale factors a read-back size is inflated; feeding it into the
+  // next drag step grew the window on every pointer move.
+  assert.match(
+    miniPlayerDragStep,
+    /dragSize \?\?= \{ width: settings\.windowWidth, height: settings\.windowHeight \}/
+  )
+  assert.doesNotMatch(miniPlayerDragStep, /win\.getBounds\(\)|win\.setPosition\(/)
   assert.match(miniPlayerSource, /miniPlayer:chooseBackgroundImage/)
   assert.match(
     miniPlayerSource,

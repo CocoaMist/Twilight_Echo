@@ -34,6 +34,13 @@ html.mini-player-document body {
   padding: 0 !important;
 }
 
+/* The mini window is transparent outside its rounded surface: base.css's ambient
+   light field on body::before would haze those corners and keep animating. */
+html.mini-player-document body::before,
+html.mini-player-document body::after {
+  display: none !important;
+}
+
 /* The desktop lyrics window is a transparent overlay on the user's wallpaper:
    it loads this stylesheet for the icon font and the motion tiers, so every page
    background base.css would otherwise paint has to be switched off here. */

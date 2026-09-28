@@ -27,6 +27,7 @@ test('player bar defaults keep the existing standard shape', () => {
     playingPageMode: 'inherit',
     visibility: 'visible',
     playingPageVisibility: 'inherit',
+    compactVisualizerEnabled: true,
     layout: DEFAULT_PLAYER_BAR_LAYOUT,
     revealThresholdPx: 120,
     hideDelayMs: 900
@@ -36,6 +37,18 @@ test('player bar defaults keep the existing standard shape', () => {
   // Deep-equal but not the same object, so editing a settings copy in place
   // cannot rewrite the shared default layout.
   assert.notEqual(DEFAULT_PLAYER_BAR_SETTINGS.layout, DEFAULT_PLAYER_BAR_LAYOUT)
+})
+
+test('compact visualizer preference defaults on and preserves an explicit off choice', () => {
+  assert.equal(normalizePlayerBarSettings({}).compactVisualizerEnabled, true)
+  assert.equal(
+    normalizePlayerBarSettings({ compactVisualizerEnabled: false }).compactVisualizerEnabled,
+    false
+  )
+  assert.equal(
+    normalizePlayerBarSettings({ compactVisualizerEnabled: true }).compactVisualizerEnabled,
+    true
+  )
 })
 
 test('mode source normalization defaults to theme and preserves explicit user choices', () => {

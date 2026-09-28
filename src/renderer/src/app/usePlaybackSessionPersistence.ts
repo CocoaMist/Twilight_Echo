@@ -3,6 +3,7 @@ import type { PlaybackSession, Track } from '../types/music'
 import type { PlaybackResumeMode } from '../types/settings'
 import type { VersionedDataEnvelope } from '../../../shared/versionedPersistence.ts'
 import { playbackSessionWriter, type PlaybackSessionWriter } from './playbackSessionWriter.ts'
+import { cloneTrackForPlaybackQueue } from '../utils/playerSessionTrack.ts'
 
 interface PlaybackSessionSettings {
   playbackResumeMode: PlaybackResumeMode | Ref<PlaybackResumeMode>
@@ -26,6 +27,7 @@ export interface PlaybackSessionPersistenceOptions {
   currentTrack: Ref<Track | null>
   currentTime: Ref<number>
   isPlaying: Ref<boolean>
+  queue?: Ref<Track[]>
   restorePlaybackSession: (session: PlaybackSession) => void
   createPlaybackSession: (mode: PlaybackResumeMode) => PlaybackSession | null
   syncPluginProviders: () => Promise<void>
@@ -61,7 +63,7 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
       const session = await refreshAuthoritativeSession()
 
       if (mode === 'off') {
-        await persistSession(null)
+        await clearSavedPlaybackSession()
         return
       }
 
@@ -77,6 +79,9 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
         position: mode === 'trackAndPosition' ? session.position : 0
       }
       options.restorePlaybackSession(restoredSession)
+      sessionWriter.setSavedQueueRef(
+        session.queueRevision !== undefined ? (options.queue?.value ?? null) : null
+      )
     } finally {
       // A damaged old session must not prevent the next valid playback action
       // from replacing it with a fresh snapshot.
@@ -95,23 +100,23 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
 
     const mode = getPlaybackResumeMode()
     if (mode === 'off') {
-      await persistSession(null)
+      await clearSavedPlaybackSession()
       return
     }
 
+    const queueRef = options.queue?.value ?? null
     const session = options.createPlaybackSession(mode)
-    if (!session) {
-      await persistSession(null)
-      return
-    }
-
-    await persistSession(session)
+    const write = sessionWriter.saveSnapshot(
+      options.dataApi,
+      session,
+      queueRef,
+      () => queueRef?.map(cloneTrackForPlaybackQueue) ?? []
+    )
+    await write.completion
   }
 
-  async function persistSession(session: PlaybackSession | null): Promise<void> {
-    const write = session
-      ? sessionWriter.save(options.dataApi, session)
-      : sessionWriter.clear(options.dataApi)
+  async function clearSavedPlaybackSession(): Promise<void> {
+    const write = sessionWriter.clear(options.dataApi)
     await write.completion
   }
 
@@ -161,6 +166,9 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
     }
 
     stopHandles.push(
+      ...(options.queue
+        ? [watch(options.queue, () => schedulePlaybackSessionAutosave(), { flush: 'post' })]
+        : []),
       watch(
         [() => options.currentTrack.value?.id, () => getPlaybackResumeMode()],
         ([trackId]) => {

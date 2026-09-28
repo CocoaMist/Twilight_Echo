@@ -4,64 +4,85 @@ import type {
   MiniPlayerVisibilitySettings
 } from '../../../shared/miniPlayer.ts'
 
-export type MiniPlayerResolvedLayout = 'compact' | 'standard' | 'wide'
+/**
+ * compact = single-row strip, standard = artwork card, wide = stage with inline
+ * volume and queue, poster = portrait sleeve with the artwork on top.
+ */
+export type MiniPlayerResolvedLayout = 'compact' | 'standard' | 'wide' | 'poster'
 export type MiniPlayerCssVariables = Record<`--mini-${string}`, string>
 
-export const MINI_PLAYER_STANDARD_MIN_WIDTH = 460
-export const MINI_PLAYER_STANDARD_MIN_HEIGHT = 170
-export const MINI_PLAYER_WIDE_MIN_WIDTH = 680
-export const MINI_PLAYER_WIDE_MIN_HEIGHT = 240
+export const MINI_PLAYER_STANDARD_MIN_HEIGHT = 150
+export const MINI_PLAYER_WIDE_MIN_WIDTH = 600
+export const MINI_PLAYER_WIDE_MIN_HEIGHT = 230
+export const MINI_PLAYER_POSTER_MIN_HEIGHT = 320
+/** Portrait once the window is noticeably taller than wide. */
+export const MINI_PLAYER_POSTER_ASPECT = 1.15
+
+function resolveLandscapeLayout(width: number, height: number): MiniPlayerResolvedLayout {
+  if (height < MINI_PLAYER_STANDARD_MIN_HEIGHT) return 'compact'
+  if (width >= MINI_PLAYER_WIDE_MIN_WIDTH && height >= MINI_PLAYER_WIDE_MIN_HEIGHT) return 'wide'
+  return 'standard'
+}
 
 export function resolveMiniPlayerLayout(
   width: number,
   height: number,
   preference: MiniPlayerLayoutPreference
 ): MiniPlayerResolvedLayout {
-  const canUseStandard =
-    width >= MINI_PLAYER_STANDARD_MIN_WIDTH && height >= MINI_PLAYER_STANDARD_MIN_HEIGHT
-  const canUseWide = width >= MINI_PLAYER_WIDE_MIN_WIDTH && height >= MINI_PLAYER_WIDE_MIN_HEIGHT
+  const canUsePoster = height >= MINI_PLAYER_POSTER_MIN_HEIGHT
+  const landscape = resolveLandscapeLayout(width, height)
 
   if (preference === 'compact') return 'compact'
-  if (preference === 'standard') return canUseStandard ? 'standard' : 'compact'
-  if (preference === 'wide') return canUseWide ? 'wide' : canUseStandard ? 'standard' : 'compact'
-  return canUseWide ? 'wide' : canUseStandard ? 'standard' : 'compact'
+  if (preference === 'standard') return landscape === 'compact' ? 'compact' : 'standard'
+  if (preference === 'wide') return landscape
+  if (preference === 'poster') return canUsePoster ? 'poster' : landscape
+  return canUsePoster && height >= width * MINI_PLAYER_POSTER_ASPECT ? 'poster' : landscape
+}
+
+const RESPONSIVE_VISIBILITY: Record<MiniPlayerResolvedLayout, MiniPlayerVisibilitySettings> = {
+  compact: {
+    artwork: true,
+    album: false,
+    equalizer: false,
+    time: false,
+    volume: false,
+    playMode: false,
+    queuePosition: false
+  },
+  standard: {
+    artwork: true,
+    album: true,
+    equalizer: true,
+    time: true,
+    volume: true,
+    playMode: true,
+    queuePosition: false
+  },
+  wide: {
+    artwork: true,
+    album: true,
+    equalizer: true,
+    time: true,
+    volume: true,
+    playMode: true,
+    queuePosition: true
+  },
+  poster: {
+    artwork: true,
+    album: true,
+    equalizer: true,
+    time: true,
+    volume: true,
+    playMode: true,
+    queuePosition: true
+  }
 }
 
 export function resolveMiniPlayerVisibility(
   visibility: MiniPlayerVisibilitySettings,
   layout: MiniPlayerResolvedLayout
 ): MiniPlayerVisibilitySettings {
-  const responsiveMask: MiniPlayerVisibilitySettings =
-    layout === 'compact'
-      ? {
-          artwork: true,
-          album: false,
-          equalizer: false,
-          time: false,
-          volume: false,
-          playMode: true,
-          queuePosition: false
-        }
-      : layout === 'standard'
-        ? {
-            artwork: true,
-            album: true,
-            equalizer: true,
-            time: true,
-            volume: true,
-            playMode: true,
-            queuePosition: false
-          }
-        : {
-            artwork: true,
-            album: true,
-            equalizer: true,
-            time: true,
-            volume: true,
-            playMode: true,
-            queuePosition: true
-          }
-
+  const responsiveMask = RESPONSIVE_VISIBILITY[layout]
   return {
     artwork: visibility.artwork && responsiveMask.artwork,
     album: visibility.album && responsiveMask.album,
@@ -87,19 +108,28 @@ export function readableTextColors(surfaceColor: string): { primary: string; mut
 export function buildMiniPlayerCssVariables(
   profile: MiniPlayerThemeProfile,
   dominantColor: string,
-  volume: number
+  volume: number,
+  coverSurfaceColor: string | null = null
 ): MiniPlayerCssVariables {
-  const accent =
-    profile.appearance.accentMode === 'track'
-      ? normalizeHexColor(dominantColor, profile.appearance.accentColor)
+  const coverMode = profile.background.kind === 'cover'
+  const fallbackColor = coverMode
+    ? normalizeHexColor(coverSurfaceColor ?? '#0a0c10', '#0a0c10')
+    : profile.background.fallbackColor
+  const trackAccent =
+    coverMode || profile.appearance.accentMode === 'track'
+      ? normalizeHexColor(dominantColor, coverMode ? '#8fa8b5' : profile.appearance.accentColor)
       : profile.appearance.accentColor
-  const automaticText = readableTextColors(profile.background.fallbackColor)
+  const accent =
+    !coverMode && hexChroma(trackAccent) < MIN_TRACK_ACCENT_CHROMA
+      ? profile.appearance.accentColor
+      : trackAccent
+  const automaticText = readableTextColors(fallbackColor)
   const primaryText =
-    profile.appearance.textMode === 'custom'
+    !coverMode && profile.appearance.textMode === 'custom'
       ? profile.appearance.primaryTextColor
       : automaticText.primary
   const mutedText =
-    profile.appearance.textMode === 'custom'
+    !coverMode && profile.appearance.textMode === 'custom'
       ? profile.appearance.mutedTextColor
       : automaticText.muted
 
@@ -110,10 +140,19 @@ export function buildMiniPlayerCssVariables(
     // theme-token-only.
     '--mini-bootstrap-surface': 'color-mix(in srgb, #0f172a 82%, transparent)',
     '--mini-bootstrap-text': '#f8fafc',
-    '--mini-bootstrap-action-surface': 'color-mix(in srgb, #7c4dff 88%, #fff)',
+    '--mini-bootstrap-action-surface': 'color-mix(in srgb, #8fa8b5 88%, #fff)',
     '--mini-bootstrap-action-text': '#fff',
     '--mini-surface-backdrop': 'rgba(12, 12, 18, 0.92)',
-    '--mini-track-accent': accent,
+    '--mini-track-accent': trackAccent,
+    '--mini-accent': ensureAccentContrast(
+      accent,
+      estimateMiniPlayerSurface(profile, coverSurfaceColor),
+      primaryText
+    ),
+    '--mini-art-shadow': hexToRgba(
+      profile.appearance.shadowColor,
+      (profile.appearance.shadowStrength / 100) * ART_SHADOW_ALPHA
+    ),
     '--mini-text': primaryText,
     '--mini-muted': mutedText,
     '--mini-font-family': profile.appearance.fontFamily,
@@ -122,8 +161,6 @@ export function buildMiniPlayerCssVariables(
     '--mini-glass-blur': `${profile.appearance.glassBlur}px`,
     '--mini-border-width': `${profile.appearance.borderWidth}px`,
     '--mini-border-color': profile.appearance.borderColor,
-    '--mini-shadow-strength': `${profile.appearance.shadowStrength / 100}`,
-    '--mini-shadow-color': profile.appearance.shadowColor,
     '--mini-background-opacity': `${profile.background.opacity / 100}`,
     '--mini-background-blur': `${profile.background.blur}px`,
     '--mini-background-brightness': `${profile.background.brightness}%`,
@@ -132,7 +169,7 @@ export function buildMiniPlayerCssVariables(
       profile.background.overlayColor,
       profile.background.overlayOpacity / 100
     ),
-    '--mini-background-fallback': profile.background.fallbackColor,
+    '--mini-background-fallback': fallbackColor,
     '--mini-background-solid': profile.background.solidColor,
     '--mini-background-fit': profile.background.imageFit,
     '--mini-gradient-angle': `${profile.background.gradientAngle}deg`,
@@ -140,6 +177,128 @@ export function buildMiniPlayerCssVariables(
     '--mini-gradient-end': profile.background.gradientEnd,
     '--mini-volume': `${clampPercent(volume)}%`
   }
+}
+
+// Icons and fills are non-text UI: WCAG asks 3:1 against what sits behind them.
+const MIN_ACCENT_CONTRAST = 3
+const MIN_TRACK_ACCENT_CHROMA = 40
+// The "shadow strength" slider at its aurora default (80) gives the artwork the
+// same 50% drop shadow the design was drawn with.
+const ART_SHADOW_ALPHA = 0.62
+
+/**
+ * Approximates the colour behind the controls. Cover backgrounds use the sampled
+ * average; other backgrounds combine their fallback, source and overlay.
+ */
+export function estimateMiniPlayerSurface(
+  profile: MiniPlayerThemeProfile,
+  coverSurfaceColor: string | null = null
+): string {
+  const background = profile.background
+  if (background.kind === 'cover') {
+    return normalizeHexColor(coverSurfaceColor ?? '#0a0c10', '#0a0c10')
+  }
+  const base = normalizeHexColor(background.fallbackColor, '#11121d')
+  const source =
+    background.kind === 'solid'
+      ? background.solidColor
+      : background.kind === 'gradient'
+        ? mixHexColors(background.gradientStart, background.gradientEnd, 0.5)
+        : null
+  const lit = source
+    ? scaleHexColor(normalizeHexColor(source, base), background.brightness / 100)
+    : base
+  const withSource = mixHexColors(base, lit, clampUnit(background.opacity / 100))
+  return mixHexColors(
+    withSource,
+    background.overlayColor,
+    clampUnit(background.overlayOpacity / 100)
+  )
+}
+
+/**
+ * Cover colours are often near-black or near-white; used raw they disappear
+ * into the surface and the progress fill goes invisible. Step the accent's
+ * lightness toward the text colour until it separates from the surface, keeping
+ * hue and saturation so a dark crimson cover still reads as crimson.
+ */
+function ensureAccentContrast(accent: string, surface: string, text: string): string {
+  const normalizedAccent = normalizeHexColor(accent, '#8fa8b5')
+  const normalizedSurface = normalizeHexColor(surface, '#11121d')
+  const normalizedText = normalizeHexColor(text, '#ffffff')
+  if (contrastRatio(normalizedAccent, normalizedSurface) >= MIN_ACCENT_CONTRAST) {
+    return normalizedAccent
+  }
+  const [hue, saturation, lightness] = hexToHsl(normalizedAccent)
+  const direction =
+    relativeLuminance(normalizedText) >= relativeLuminance(normalizedSurface) ? 1 : -1
+  for (let step = 1; step <= 20; step += 1) {
+    const candidate = hslToHex(hue, saturation, clampUnit(lightness + direction * step * 0.05))
+    if (contrastRatio(candidate, normalizedSurface) >= MIN_ACCENT_CONTRAST) return candidate
+  }
+  return normalizedText
+}
+
+function hexToHsl(color: string): [number, number, number] {
+  const [red, green, blue] = hexChannels(color).map((channel) => channel / 255) as [
+    number,
+    number,
+    number
+  ]
+  const max = Math.max(red, green, blue)
+  const min = Math.min(red, green, blue)
+  const lightness = (max + min) / 2
+  const delta = max - min
+  if (delta === 0) return [0, 0, lightness]
+  const saturation = delta / (1 - Math.abs(2 * lightness - 1))
+  const sector =
+    max === red
+      ? ((green - blue) / delta) % 6
+      : max === green
+        ? (blue - red) / delta + 2
+        : (red - green) / delta + 4
+  return [(sector * 60 + 360) % 360, saturation, lightness]
+}
+
+function hslToHex(hue: number, saturation: number, lightness: number): string {
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation
+  const second = chroma * (1 - Math.abs(((hue / 60) % 2) - 1))
+  const offset = lightness - chroma / 2
+  const [red, green, blue] =
+    hue < 60
+      ? [chroma, second, 0]
+      : hue < 120
+        ? [second, chroma, 0]
+        : hue < 180
+          ? [0, chroma, second]
+          : hue < 240
+            ? [0, second, chroma]
+            : hue < 300
+              ? [second, 0, chroma]
+              : [chroma, 0, second]
+  return `#${[red, green, blue]
+    .map((channel) =>
+      Math.round(Math.min(1, Math.max(0, channel + offset)) * 255)
+        .toString(16)
+        .padStart(2, '0')
+    )
+    .join('')}`
+}
+
+function hexChroma(color: string): number {
+  const channels = hexChannels(normalizeHexColor(color, '#000000'))
+  return Math.max(...channels) - Math.min(...channels)
+}
+
+function scaleHexColor(color: string, factor: number): string {
+  const channels = hexChannels(normalizeHexColor(color, '#000000')).map((channel) =>
+    Math.round(Math.min(255, Math.max(0, channel * factor)))
+  )
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+}
+
+function clampUnit(value: number): number {
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0
 }
 
 function clampPercent(value: number): number {

@@ -7,6 +7,19 @@ import { translate } from '../../../shared/i18n/translate.ts'
 import { ZH_CN_MESSAGES } from '../../../shared/i18n/messages/zh-CN.ts'
 import { EN_US_MESSAGES } from '../../../shared/i18n/messages/en-US.ts'
 
+test('each playback load clears stale pending positions before asynchronous work starts', () => {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const load = extractInternalFunctionBody(source, 'loadAndPlay')
+  const clear = load.indexOf('playbackSessionController.clearPendingPlaybackPosition()')
+  assert.ok(clear >= 0 && clear < load.indexOf('await '))
+  assert.match(load, /playbackSessionController\.consumePendingPlaybackPosition\(/)
+  const toggle = extractInternalFunctionBody(source, 'togglePlayState')
+  assert.match(
+    toggle,
+    /loadAndPlay\(track, restoredPlaybackPending \? restoredPlaybackPosition : 0\)/
+  )
+})
+
 function extractFunctionBody(source: string, functionName: string): string {
   const signatureIndex = source.indexOf(`export function ${functionName}`)
   assert.notEqual(signatureIndex, -1, `${functionName} export should exist`)
@@ -415,7 +428,10 @@ test('playback session autosaves while playback changes instead of only on windo
     /watch\(\s*\[\(\) => options\.currentTrack\.value\?\.id, \(\) => getPlaybackResumeMode\(\)\]/
   )
   assert.match(sessionPersistenceSource, /DEFAULT_PLAYBACK_SESSION_POSITION_AUTOSAVE_MS/)
-  assert.match(sessionPersistenceSource, /sessionWriter\.save\(options\.dataApi, session\)/)
+  assert.match(
+    sessionPersistenceSource,
+    /sessionWriter\.saveSnapshot\(\s*options\.dataApi,\s*session,\s*queueRef/
+  )
 })
 
 test('player state persists a selected track before shell-level autosave is available', () => {
@@ -438,7 +454,7 @@ test('player state persists a selected track before shell-level autosave is avai
     writeSelectedTrackSession,
     /const mode = options\.getAppSettings\(\)\.value\.playbackResumeMode/
   )
-  assert.match(writeSelectedTrackSession, /playbackSessionWriter\.save\(dataApi, session\)/)
+  assert.match(writeSelectedTrackSession, /playbackSessionWriter\.saveSnapshot\(/)
   // 快速切歌合并为一次写：防抖到期后构建快照并写入。
   assert.match(persistSelectedTrackSession, /writeSelectedTrackSession\(\)/)
   assert.match(
@@ -910,7 +926,14 @@ test('native queue switching guards the target track before applying playback-in
   assert.match(clockControllerSource, /playbackSessionClock\.estimate\(\)/)
   assert.match(playbackSessionClockSource, /maxPredictionGapMs/)
   assert.match(playbackSessionClockSource, /needsResync: true/)
-  assert.match(source, /restoredPlaybackPending &&\s*Number\.isFinite\(restoredPlaybackPosition\)/)
+  const sessionControllerSource = readFileSync(
+    new URL('./player/playbackSessionController.ts', import.meta.url),
+    'utf8'
+  )
+  assert.match(
+    sessionControllerSource,
+    /options\.getRestoredPlaybackPending\(\) && Number\.isFinite\(position\)/
+  )
   // A seek defers to the restore-pending slot only while a load is actually in
   // flight; otherwise it must reach the real dispatch below instead of being
   // dropped on a stale loadedTrackId.
@@ -2030,14 +2053,18 @@ test('playback session carries play mode for quit-time restore', () => {
     'utf8'
   )
   const musicTypes = readFileSync(new URL('../types/music.ts', import.meta.url), 'utf8')
+  const sessionTypes = readFileSync(
+    new URL('../../../shared/playbackSession.ts', import.meta.url),
+    'utf8'
+  )
   const restorePlaybackSession = extractInternalFunctionBody(
     sessionSource,
     'restorePlaybackSession'
   )
   const createPlaybackSession = extractInternalFunctionBody(sessionSource, 'createPlaybackSession')
 
-  assert.match(musicTypes, /import type \{ PlaybackResumeMode, PlayMode \} from '\.\/settings'/)
-  assert.match(musicTypes, /playMode\?: PlayMode/)
+  assert.match(musicTypes, /PlaybackSessionData<Track>/)
+  assert.match(sessionTypes, /playMode\?: PlayMode/)
   assert.match(
     createPlaybackSession,
     /playMode: options\.playMode\.value === 'heart' \? 'sequential' : options\.playMode\.value/

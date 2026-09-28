@@ -57,8 +57,6 @@ test('native Windows SMTC updates are skipped when the rendered session state is
       bitDepth: 16,
       coverSource: null
     },
-    currentLyric: null,
-    lyrics: [],
     isPlaying: true,
     isLoading: false,
     currentTime: 12.2,
@@ -76,13 +74,7 @@ test('native Windows SMTC updates are skipped when the rendered session state is
   const signature = windowsSmtcUpdateSignature(base, true)
   // Sub-second clock ticks and fields the session never renders do not change the signature.
   assert.equal(windowsSmtcUpdateSignature({ ...base, currentTime: 12.7 }, true), signature)
-  assert.equal(
-    windowsSmtcUpdateSignature(
-      { ...base, volume: 0.9, lyrics: [{ time: 1, original: 'x', translation: null }] },
-      true
-    ),
-    signature
-  )
+  assert.equal(windowsSmtcUpdateSignature({ ...base, volume: 0.9 }, true), signature)
   // Whole-second progress, transport, identity and enablement all do.
   assert.notEqual(windowsSmtcUpdateSignature({ ...base, currentTime: 13.0 }, true), signature)
   assert.notEqual(windowsSmtcUpdateSignature({ ...base, isPlaying: false }, true), signature)

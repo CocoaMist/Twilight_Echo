@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { Track } from '../types/music'
-import { cloneTrackForPlaybackSession } from './playerSessionTrack.ts'
+import { cloneTrackForPlaybackQueue, cloneTrackForPlaybackSession } from './playerSessionTrack.ts'
 
 function makeTrack(partial: Partial<Track> = {}): Track {
   return {
@@ -101,4 +101,42 @@ test('cloneTrackForPlaybackSession keeps local stream urls and clears provider s
 test('cloneTrackForPlaybackSession normalizes missing cover source to null', () => {
   const cloned = cloneTrackForPlaybackSession(makeTrack({ coverSource: undefined }))
   assert.equal(cloned.coverSource, null)
+})
+
+test('selected track keeps small inline art while queue omits it', () => {
+  const inlineCover = 'data:image/jpeg;base64,AAAA'
+  assert.equal(cloneTrackForPlaybackSession(makeTrack({ cover: inlineCover })).cover, inlineCover)
+  assert.equal(cloneTrackForPlaybackQueue(makeTrack({ cover: inlineCover })).cover, null)
+  assert.equal(
+    cloneTrackForPlaybackSession(
+      makeTrack({ cover: `data:image/jpeg;base64,${'A'.repeat(300_000)}` })
+    ).cover,
+    null
+  )
+})
+
+test('session snapshots omit expiring covers while retaining durable origins', () => {
+  for (const cover of ['blob:https://example.test/image', 'twilight-media://image/expired-token']) {
+    const cloned = cloneTrackForPlaybackSession(makeTrack({ cover }))
+    assert.equal(cloned.cover, null)
+    assert.equal(cloned.coverSource, 'https://example.test/cover.jpg')
+  }
+  assert.equal(
+    cloneTrackForPlaybackSession(makeTrack({ cover: 'cover://local.jpg' })).cover,
+    'cover://local.jpg'
+  )
+})
+
+test('a 20,000-track session snapshot with embedded art stays below the queue file limit', () => {
+  const inlineCover = `data:image/jpeg;base64,${'A'.repeat(2_000)}`
+  const base = makeTrack({
+    cover: inlineCover,
+    filePath: `D:/Music/${'album/'.repeat(12)}track.flac`
+  })
+  const queue = Array.from({ length: 20_000 }, (_, index) =>
+    cloneTrackForPlaybackQueue({ ...base, id: `local:${index}`, queueEntryId: `entry:${index}` })
+  )
+  assert.ok(queue.length * inlineCover.length > 32 * 1024 * 1024)
+  assert.ok(Buffer.byteLength(JSON.stringify(queue), 'utf8') < 32 * 1024 * 1024)
+  assert.equal(queue[0].cover, null)
 })

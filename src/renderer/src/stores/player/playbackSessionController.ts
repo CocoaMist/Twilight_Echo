@@ -7,7 +7,10 @@ import {
   getRestorableSleepTimerState,
   createSleepTimerController
 } from '../sleepTimerController.ts'
-import { cloneTrackForPlaybackSession } from '../../utils/playerSessionTrack.ts'
+import {
+  cloneTrackForPlaybackQueue,
+  cloneTrackForPlaybackSession
+} from '../../utils/playerSessionTrack.ts'
 import { clampCuePlaybackPosition, cueDuration } from '../../utils/cuePlayback.ts'
 import { toPlaybackQueueSnapshots } from '../../utils/playbackQueueVirtualization.ts'
 import {
@@ -71,13 +74,15 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
     if (mode === 'off') return
 
     // 快照在防抖触发时才构建，连切只保留最新状态的一份克隆。
-    const session = createPlaybackSession(mode)
-    if (!session) return
-
     const dataApi = window.api?.data
     if (!dataApi) return
 
-    const write = playbackSessionWriter.save(dataApi, session)
+    const queueRef = options.queue.value
+    const session = createPlaybackSession(mode)
+    if (!session) return
+    const write = playbackSessionWriter.saveSnapshot(dataApi, session, queueRef, () =>
+      queueRef.map(cloneTrackForPlaybackQueue)
+    )
     void write.completion.catch((err) => {
       console.warn('保存已选曲目播放会话失败:', err)
     })
@@ -152,7 +157,11 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
     options.queue.value = queue
     options.originalQueue.value = [...queue]
     options.queueIndex.value = savedIndex
-    prepareQueueSelection(track, position)
+    const selectedTrack =
+      sameSelection && session.track.cover && !track.cover
+        ? { ...track, cover: session.track.cover, coverSource: session.track.coverSource ?? null }
+        : track
+    prepareQueueSelection(selectedTrack, position)
     options.clearSleepTimerIntervals()
     const sleepTimer = getRestorableSleepTimerState(session.sleepTimer)
     if (sleepTimer) {
@@ -201,12 +210,26 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
       playMode: options.playMode.value === 'heart' ? 'sequential' : options.playMode.value,
       track: cloneTrackForPlaybackSession(track),
       position,
-      queue: options.queue.value.map(cloneTrackForPlaybackSession),
       queueIndex: options.queueIndex.value,
       ...(options.sleepTimerState.value?.active
         ? { sleepTimer: options.sleepTimerState.value }
         : {})
     }
+  }
+
+  function clearPendingPlaybackPosition(): void {
+    options.setRestoredPlaybackPending(false)
+    options.setRestoredPlaybackPosition(0)
+  }
+
+  function consumePendingPlaybackPosition(track: Track, startTime: number): number {
+    const position = options.getRestoredPlaybackPosition()
+    const resumeAt =
+      options.getRestoredPlaybackPending() && Number.isFinite(position)
+        ? clampCuePlaybackPosition(track, position)
+        : startTime
+    clearPendingPlaybackPosition()
+    return resumeAt
   }
 
   function removeUnavailableTracks(trackIds: string[], filePaths: string[]): void {
@@ -259,6 +282,8 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
     restorePlaybackSession,
     prepareQueueSelection,
     createPlaybackSession,
+    clearPendingPlaybackPosition,
+    consumePendingPlaybackPosition,
     removeUnavailableTracks
   }
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { nextTick, ref } from 'vue'
+import { nextTick, ref, shallowRef } from 'vue'
 import type { PlaybackSession, Track } from '../types/music.ts'
 
 const { createPlaybackSessionPersistence } = (await import(
@@ -30,6 +30,61 @@ const track = {
   lyrics: null,
   source: 'local' as const
 }
+
+test('position snapshots stay small while queue changes and quit flush the queue', async () => {
+  const queue = shallowRef([track])
+  const resumeMode = ref<'off' | 'trackAndPosition'>('trackAndPosition')
+  const saved: PlaybackSession[] = []
+  const persistence = createPlaybackSessionPersistence({
+    settings: ref({ playbackResumeMode: resumeMode }),
+    currentTrack: ref(track),
+    currentTime: ref(12),
+    isPlaying: ref(true),
+    queue,
+    restorePlaybackSession: () => undefined,
+    createPlaybackSession: (mode) => ({
+      version: 1,
+      savedAt: '',
+      mode,
+      track,
+      position: 12
+    }),
+    syncPluginProviders: async () => undefined,
+    sessionWriter: new PlaybackSessionWriter(),
+    autosaveDelayMs: 0,
+    dataApi: {
+      clearPlaybackSession: async () => undefined,
+      loadPlaybackSession: async () => null,
+      savePlaybackSession: async (session) => {
+        saved.push(session)
+      }
+    }
+  })
+  await persistence.restoreSavedPlaybackSession('trackAndPosition')
+  await persistence.savePlaybackSessionSnapshot()
+  await persistence.savePlaybackSessionSnapshot()
+  assert.equal(saved[0].queue?.length, 1)
+  assert.equal(saved[1].queue, undefined)
+
+  persistence.startAutosaveWatchers()
+  await waitForTimers()
+  queue.value = [...queue.value, { ...track, id: 'local:two' }]
+  await nextTick()
+  await waitForTimers()
+  assert.equal(saved.at(-1)?.queue?.length, 2)
+
+  queue.value = [...queue.value, { ...track, id: 'local:three' }]
+  await persistence.savePlaybackSessionForQuit()
+  assert.ok(saved.some((session) => session.queue?.length === 3))
+  const fullQueueSaves = saved.filter((session) => session.queue?.length === 3).length
+
+  resumeMode.value = 'off'
+  await persistence.savePlaybackSessionSnapshot()
+  resumeMode.value = 'trackAndPosition'
+  await persistence.savePlaybackSessionSnapshot()
+  persistence.stop()
+  assert.ok(saved.filter((session) => session.queue?.length === 3).length > fullQueueSaves)
+})
 
 test('restore clears persisted session when resume mode is off', async () => {
   const calls: string[] = []
@@ -590,6 +645,110 @@ test('playback session writer continues after a failed write', async () => {
 
   assert.deepEqual(calls, ['failed-save', 'clear'])
   assert.equal(writer.getCommittedSequence(), cleared.sequence)
+})
+
+test('shared session producers clone a changed queue only once', async () => {
+  const writer = new PlaybackSessionWriter()
+  const queue = [track]
+  const snapshots: PlaybackSession[] = []
+  const api = {
+    clearPlaybackSession: async () => undefined,
+    savePlaybackSession: async (session: PlaybackSession, revision: number) => {
+      snapshots.push(session)
+      return {
+        version: 2 as const,
+        revision: revision + 1,
+        savedAt: '',
+        data: session
+      }
+    }
+  }
+  const session: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'track',
+    track,
+    position: 0
+  }
+
+  const storeWrite = writer.saveSnapshot(api, session, queue, () => [...queue])
+  const appWrite = writer.saveSnapshot(api, session, queue, () => [...queue])
+  await Promise.all([storeWrite.completion, appWrite.completion])
+
+  assert.deepEqual(
+    snapshots.map((session) => session.queue?.length),
+    [1, undefined]
+  )
+})
+
+test('a failed queue write leaves the next producer responsible for saving that queue', async () => {
+  const writer = new PlaybackSessionWriter()
+  const queue = [track]
+  const snapshots: PlaybackSession[] = []
+  const api = {
+    clearPlaybackSession: async () => undefined,
+    savePlaybackSession: async (session: PlaybackSession) => {
+      snapshots.push(session)
+      if (snapshots.length === 1) throw new Error('write failed')
+    }
+  }
+  const session: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'track',
+    track,
+    position: 0
+  }
+
+  const first = writer.saveSnapshot(api, session, queue, () => [...queue])
+  const second = writer.saveSnapshot(api, session, queue, () => [...queue])
+  await assert.rejects(first.completion, /write failed/)
+  await second.completion
+  assert.deepEqual(
+    snapshots.map((session) => session.queue?.length),
+    [1, 1]
+  )
+})
+
+test('a revision conflict invalidates the cached queue and retries with a full snapshot', async () => {
+  const writer = new PlaybackSessionWriter()
+  const queue = [track]
+  const session: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'track',
+    track,
+    position: 0
+  }
+  const received: Array<PlaybackSession['queue']> = []
+  let revision = 0
+  const api = {
+    clearPlaybackSession: async () => undefined,
+    savePlaybackSession: async (snapshot: PlaybackSession, expectedRevision: number) => {
+      received.push(snapshot.queue)
+      if (received.length === 2) {
+        revision += 1
+        throw new PersistentDataRevisionConflictError(
+          {
+            version: 2 as const,
+            revision,
+            savedAt: '',
+            data: { ...session, queue: [{ ...track, id: 'other-writer' }] }
+          },
+          expectedRevision
+        )
+      }
+      revision += 1
+      return { version: 2 as const, revision, savedAt: '', data: snapshot }
+    }
+  }
+
+  await writer.saveSnapshot(api, session, queue, () => [...queue]).completion
+  await writer.saveSnapshot(api, session, queue, () => [...queue]).completion
+  assert.deepEqual(
+    received.map((savedQueue) => savedQueue?.length),
+    [1, undefined, 1]
+  )
 })
 
 test('CAS conflict adopts the authoritative revision inside the serialized session writer', async () => {

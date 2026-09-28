@@ -104,7 +104,7 @@ function normalizeStyleDefinition(
 registerMiniPlayerStyle({
   id: DEFAULT_MINI_PLAYER_STYLE_ID,
   name: '暮光玻璃',
-  description: '深色流光与唱片质感',
+  description: '歌词页同款封面背景',
   className: 'mini-style-aurora',
   layout: 'artwork-card',
   windowSize: {
@@ -112,29 +112,19 @@ registerMiniPlayerStyle({
     height: DEFAULT_MINI_PLAYER_SETTINGS.windowHeight
   },
   accentMode: 'track',
-  nativeBackgroundColor: '#11121d',
+  nativeBackgroundColor: '#0a0c10',
   defaultProfile: createDefaultMiniPlayerThemeProfile(DEFAULT_MINI_PLAYER_STYLE_ID),
   tokens: {
-    '--mini-surface': 'linear-gradient(138deg, rgba(20, 18, 34, 0.94), rgba(10, 12, 24, 0.9))',
-    '--mini-surface-border': 'rgba(255, 255, 255, 0.14)',
-    '--mini-surface-shadow': '0 22px 54px rgba(3, 4, 14, 0.48)',
-    '--mini-text': '#ffffff',
-    '--mini-muted': 'rgba(255, 255, 255, 0.68)',
-    '--mini-faint': 'rgba(255, 255, 255, 0.42)',
-    '--mini-control': 'rgba(255, 255, 255, 0.075)',
-    '--mini-control-hover': 'rgba(255, 255, 255, 0.15)',
-    '--mini-control-active': 'rgba(255, 255, 255, 0.2)',
-    '--mini-slider': 'rgba(255, 255, 255, 0.16)',
-    '--mini-placeholder': 'linear-gradient(145deg, #302654, #12182c)',
-    '--mini-artwork-radius': '20px',
-    '--mini-highlight': 'rgba(255, 255, 255, 0.12)'
+    '--mini-placeholder': 'linear-gradient(145deg, #26343b, #10171d)',
+    '--mini-highlight': 'rgba(255, 255, 255, 0.16)',
+    '--mini-grain-opacity': '0.07'
   }
 })
 
 registerMiniPlayerStyle({
   id: 'porcelain',
   name: '月白',
-  description: '轻盈留白与柔和纸感',
+  description: '明亮留白与柔和纸感',
   className: 'mini-style-porcelain',
   layout: 'artwork-card',
   windowSize: {
@@ -146,19 +136,8 @@ registerMiniPlayerStyle({
   nativeBackgroundColor: '#f4f5fb',
   defaultProfile: createDefaultMiniPlayerThemeProfile('porcelain'),
   tokens: {
-    '--mini-surface':
-      'linear-gradient(145deg, rgba(255, 255, 255, 0.97), rgba(241, 243, 252, 0.94))',
-    '--mini-surface-border': 'rgba(52, 61, 104, 0.13)',
-    '--mini-surface-shadow': '0 20px 46px rgba(61, 72, 124, 0.2)',
-    '--mini-text': '#1b2034',
-    '--mini-muted': 'rgba(35, 42, 68, 0.68)',
-    '--mini-faint': 'rgba(35, 42, 68, 0.42)',
-    '--mini-control': 'rgba(68, 78, 133, 0.075)',
-    '--mini-control-hover': 'rgba(68, 78, 133, 0.14)',
-    '--mini-control-active': 'rgba(68, 78, 133, 0.2)',
-    '--mini-slider': 'rgba(65, 75, 125, 0.14)',
     '--mini-placeholder': 'linear-gradient(145deg, #e9e5ff, #dce7ff)',
-    '--mini-artwork-radius': '17px',
-    '--mini-highlight': 'rgba(255, 255, 255, 0.84)'
+    '--mini-highlight': 'rgba(255, 255, 255, 0.7)',
+    '--mini-grain-opacity': '0.05'
   }
 })

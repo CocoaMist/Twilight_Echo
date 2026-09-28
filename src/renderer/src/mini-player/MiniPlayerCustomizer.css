@@ -1,7 +1,7 @@
 .mini-customizer {
   --customizer-text: var(--mini-text, var(--te-neutral-900, #1b2034));
   --customizer-muted: var(--mini-muted, var(--te-neutral-600, #656a7b));
-  --customizer-accent: var(--mini-track-accent, var(--te-accent, #5966d9));
+  --customizer-accent: var(--mini-accent, var(--te-accent, #5966d9));
   --customizer-panel: color-mix(in srgb, var(--te-card-bg, #ffffff) 94%, transparent);
   --customizer-control: color-mix(in srgb, var(--customizer-text) 8%, transparent);
   --customizer-border: color-mix(in srgb, var(--customizer-text) 16%, transparent);
@@ -127,6 +127,13 @@
   padding: 12px;
 }
 
+.customizer-cover-note {
+  margin: 0;
+  color: var(--customizer-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .customizer-theme-option {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) 18px;
@@ -167,6 +174,10 @@
 
 .customizer-segment.four-columns {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.customizer-segment.five-columns {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .customizer-segment button {

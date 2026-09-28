@@ -7,6 +7,9 @@ import {
   MINI_PLAYER_MAX_WIDTH,
   MINI_PLAYER_MIN_HEIGHT,
   MINI_PLAYER_MIN_WIDTH,
+  MINI_PLAYER_SIZE_PRESETS,
+  nearestMiniPlayerSizePreset,
+  nextMiniPlayerSizePreset,
   normalizeMiniPlayerCommand,
   normalizeMiniPlayerSettings,
   normalizeMiniPlayerStateSnapshot
@@ -244,56 +247,47 @@ test('mini player track snapshot clamps quality numbers and drops unsafe ones', 
   assert.equal(withoutQuality.track?.bitDepth, null)
 })
 
-test('mini player state carries the active lyric line with its translation', () => {
+test('mini player state no longer carries lyric payloads', () => {
   const state = normalizeMiniPlayerStateSnapshot({
     track: { id: 'ncm:1', title: 'Daydream' },
-    currentLyric: {
-      original: "I'll always be there for you",
-      translation: '我会一直在你身边',
-      extra: 'dropped'
-    },
-    currentTime: 42
+    currentLyric: { original: 'dropped' },
+    lyrics: [{ time: 1, original: 'dropped' }]
   })
 
-  assert.equal(state.currentLyric?.original, "I'll always be there for you")
-  assert.equal(state.currentLyric?.translation, '我会一直在你身边')
-  assert.equal('extra' in (state.currentLyric as object), false)
-
-  const withoutTranslation = normalizeMiniPlayerStateSnapshot({
-    currentLyric: { original: 'Solo line' }
-  })
-  assert.equal(withoutTranslation.currentLyric?.original, 'Solo line')
-  assert.equal(withoutTranslation.currentLyric?.translation, null)
-
-  const empty = normalizeMiniPlayerStateSnapshot({ currentLyric: null })
-  assert.equal(empty.currentLyric, null)
-
-  const blank = normalizeMiniPlayerStateSnapshot({ currentLyric: { original: '' } })
-  assert.equal(blank.currentLyric, null)
+  assert.equal('currentLyric' in state, false)
+  assert.equal('lyrics' in state, false)
 })
 
-test('mini player state normalizes timed lyric lines for the multi-line view', () => {
-  const state = normalizeMiniPlayerStateSnapshot({
-    track: { id: 'ncm:1', title: 'Daydream' },
-    currentTime: 42,
-    lyrics: [
-      { time: 1.5, original: 'first line', translation: '第一行', extra: 'dropped' },
-      { time: 3, original: 'second line' },
-      { time: -1, original: 'negative time', translation: null },
-      { time: 'bad', original: 'bad time', translation: null },
-      { time: 5, original: '' }
-    ]
+test('mini player size presets cycle through every form from the nearest one', () => {
+  const ids = MINI_PLAYER_SIZE_PRESETS.map((preset) => preset.id)
+  assert.deepEqual(ids, ['strip', 'card', 'stage', 'poster'])
+  for (const preset of MINI_PLAYER_SIZE_PRESETS) {
+    assert.ok(preset.width >= MINI_PLAYER_MIN_WIDTH && preset.width <= MINI_PLAYER_MAX_WIDTH)
+    assert.ok(preset.height >= MINI_PLAYER_MIN_HEIGHT)
+  }
+  assert.equal(nearestMiniPlayerSizePreset({ width: 452, height: 190 }).id, 'card')
+  assert.equal(nearestMiniPlayerSizePreset({ width: 310, height: 400 }).id, 'poster')
+  assert.equal(nextMiniPlayerSizePreset({ width: 440, height: 184 }).id, 'stage')
+  assert.equal(nextMiniPlayerSizePreset({ width: 300, height: 480 }).id, 'strip')
+  assert.equal(
+    nearestMiniPlayerSizePreset({
+      width: DEFAULT_MINI_PLAYER_SETTINGS.windowWidth,
+      height: DEFAULT_MINI_PLAYER_SETTINGS.windowHeight
+    }).id,
+    'card',
+    'the default window opens in the card form'
+  )
+})
+
+test('mini player layout preference accepts the poster form', () => {
+  const settings = normalizeMiniPlayerSettings({
+    profiles: { 'aurora-glass': { layout: { preference: 'poster' } } }
   })
-
-  assert.deepEqual(state.lyrics, [
-    { time: 1.5, original: 'first line', translation: '第一行' },
-    { time: 3, original: 'second line', translation: null },
-    { time: 0, original: 'negative time', translation: null },
-    { time: null, original: 'bad time', translation: null }
-  ])
-
-  assert.deepEqual(normalizeMiniPlayerStateSnapshot({}).lyrics, [])
-  assert.deepEqual(normalizeMiniPlayerStateSnapshot({ lyrics: 'not-an-array' }).lyrics, [])
+  assert.equal(settings.profiles['aurora-glass'].layout.preference, 'poster')
+  const invalid = normalizeMiniPlayerSettings({
+    profiles: { 'aurora-glass': { layout: { preference: 'vertical' } } }
+  })
+  assert.equal(invalid.profiles['aurora-glass'].layout.preference, 'auto')
 })
 
 test('mini player track snapshot keeps large data: covers intact and drops unsafe cover sources', () => {

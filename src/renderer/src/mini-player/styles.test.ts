@@ -66,165 +66,141 @@ test('mini player style registry supports future styles and reversible registrat
   assert.equal(resolveMiniPlayerStyle('test-future-style').id, 'aurora-glass')
 })
 
-test('mini player lyric stage shows only the active line without moving controls', () => {
-  const component = readFileSync(new URL('./MiniPlayerApp.vue', import.meta.url), 'utf8')
-  const styles = readFileSync(new URL('./MiniPlayer.css', import.meta.url), 'utf8')
-  const contentRule = styles.match(/\.mini-player-content\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const lyricStageRule = styles.match(/\.mini-lyric-stage\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const controlsRule =
-    [...styles.matchAll(/\.mini-player-controls\s*\{[\s\S]*?\n\}/g)]
-      .map((match) => match[0])
-      .find((rule) => rule.includes('grid-template-columns')) ?? ''
+const component = readFileSync(new URL('./MiniPlayerApp.vue', import.meta.url), 'utf8')
+const styles = readFileSync(new URL('./MiniPlayer.css', import.meta.url), 'utf8')
 
-  assert.match(component, /<Transition name="mini-lyric-switch" mode="out-in">/)
-  assert.match(component, /class="mini-lyric-stage"/)
-  assert.doesNotMatch(component, /previousLyricLine|nextLyricLine|mini-lyric-adjacent/)
-  assert.match(contentRule, /min-height:\s*0/)
-  assert.match(lyricStageRule, /min-height:\s*0/)
-  assert.match(lyricStageRule, /overflow:\s*hidden/)
-  assert.match(controlsRule, /height:\s*var\(--mini-controls-dock-height\)/)
-  assert.match(controlsRule, /min-height:\s*var\(--mini-controls-dock-height\)/)
-  assert.match(styles, /\.mini-lyric-original\s*\{[\s\S]*?white-space:\s*nowrap/)
-  assert.match(styles, /\.mini-lyric-translation\s*\{[\s\S]*?white-space:\s*nowrap/)
-  assert.match(styles, /\.mini-lyric-switch-enter-active/)
-  assert.match(styles, /\.mini-lyric-switch-leave-active/)
+/** The top-level rule whose selector is exactly `selector`. */
+function cssRule(selector: string): string {
+  const start = styles.indexOf(`\n${selector} {\n`)
+  if (start < 0) return ''
+  return styles.slice(start + 1, styles.indexOf('\n}', start) + 2)
+}
+
+test('mini player no longer renders or reads lyrics', () => {
+  assert.doesNotMatch(component, /lyric/i)
+  assert.doesNotMatch(styles, /lyric/i)
 })
 
-test('mini player reserves independent track, lyric, and transport rails for long lyric lines', () => {
-  const component = readFileSync(new URL('./MiniPlayerApp.vue', import.meta.url), 'utf8')
-  const styles = readFileSync(new URL('./MiniPlayer.css', import.meta.url), 'utf8')
-  const mainRule = styles.match(/\.mini-player-main\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const trackRule = styles.match(/\.mini-track-info\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const lyricStageRule = styles.match(/\.mini-lyric-stage\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-
-  assert.match(component, /class="mini-player-main"/)
-  assert.match(component, /class="mini-player-dock"/)
-  assert.match(
-    mainRule,
-    /grid-template-rows:\s*var\(--mini-track-slot-height\)\s+minmax\(0,\s*1fr\)/
-  )
-  assert.match(mainRule, /row-gap:\s*var\(--mini-content-row-gap\)/)
-  assert.match(trackRule, /height:\s*var\(--mini-track-slot-height\)/)
-  assert.match(trackRule, /overflow:\s*hidden/)
-  assert.match(lyricStageRule, /contain:\s*layout\s+paint/)
-  assert.match(lyricStageRule, /overflow:\s*clip/)
+test('mini player moves itself instead of using a drag region that swallows hover', () => {
+  assert.doesNotMatch(styles, /-webkit-app-region:\s*drag/)
+  assert.match(cssRule('.mini-player-root'), /-webkit-app-region:\s*no-drag/)
+  assert.match(component, /@pointerdown="onPointerDown"/)
+  assert.match(component, /window\.api\.miniPlayer\.moveTo\(/)
+  assert.match(component, /window\.api\.miniPlayer\.moveEnd\(\)/)
+  assert.match(component, /settings\.value\.positionLocked/)
+  assert.match(component, /closest\('button, input, label, \[data-mini-interactive\]'\)/)
 })
 
-test('mini player keeps the playback dock fixed while a lyric changes', () => {
-  const component = readFileSync(new URL('./MiniPlayerApp.vue', import.meta.url), 'utf8')
-  const styles = readFileSync(new URL('./MiniPlayer.css', import.meta.url), 'utf8')
-  const contentRule = styles.match(/\.mini-player-content\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const dockRule = styles.match(/\.mini-player-dock\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const mainRule = styles.match(/\.mini-player-main\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const lyricRule = styles.match(/\.mini-lyric-original\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
+test('mini player lays out four forms from one grid', () => {
+  const surfaceRule = cssRule('.mini-player-surface')
+  assert.match(surfaceRule, /grid-template-areas:\s*'art info'\s*'art progress'\s*'art controls'/)
+  for (const layout of ['compact', 'wide', 'poster']) {
+    assert.ok(styles.includes(`.mini-player-root[data-layout='${layout}']`), layout)
+  }
+  assert.match(styles, /grid-template-areas: 'art info controls'/)
+  assert.match(styles, /'art'\s*'info'\s*'progress'\s*'controls'/)
+  assert.match(component, /:data-layout="resolvedLayout"/)
+  assert.match(component, /resolveMiniPlayerLayout/)
+  assert.match(component, /nextMiniPlayerSizePreset/)
+})
 
-  const compactContentRule =
-    styles.match(
-      /\.mini-player-root\[data-layout='compact'\] \.mini-player-content\s*\{[\s\S]*?\n\}/
-    )?.[0] ?? ''
-  const wideContentRule =
-    styles.match(
-      /\.mini-player-root\[data-layout='wide'\] \.mini-player-content\s*\{[\s\S]*?\n\}/
-    )?.[0] ?? ''
+test('mini player artwork stays square and concentric with the window corners', () => {
+  const rootRule = cssRule('.mini-player-root')
+  const artworkRule = cssRule('.mini-artwork-wrap')
+  assert.match(rootRule, /container-type:\s*size/)
+  assert.match(rootRule, /--mini-art-radius:\s*max\(6px, calc\(var\(--mini-window-radius\)/)
+  assert.match(artworkRule, /aspect-ratio: 1/)
+  assert.match(artworkRule, /width: var\(--mini-art-size\)/)
+  assert.match(artworkRule, /height: var\(--mini-art-size\)/)
+  assert.match(artworkRule, /border-radius: var\(--mini-art-radius\)/)
+})
 
-  assert.match(component, /class="mini-player-main"/)
-  assert.match(component, /class="mini-player-dock"/)
+test('mini player window tools wait behind hover and share the kicker line', () => {
+  const toolsRule = cssRule('.mini-tools')
+  assert.match(toolsRule, /opacity: 0/)
+  assert.match(toolsRule, /pointer-events: none/)
+  assert.match(styles, /\.mini-player-root\.is-hovered \.mini-tools,\s*\.mini-tools:focus-within/)
+  assert.match(styles, /is-hovered \.mini-kicker \{\s*opacity: 0/)
+  assert.match(component, /@pointerenter="hovered = true"/)
+  assert.match(component, /@pointerleave="hovered = false"/)
+  // base.css styles every back control as a white chip with !important.
   assert.match(
-    contentRule,
-    /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+var\(--mini-player-dock-height\)/
-  )
-  assert.match(
-    dockRule,
-    /grid-template-rows:\s*var\(--mini-progress-dock-height\)\s+var\(--mini-controls-dock-height\)/
-  )
-  assert.match(
-    mainRule,
-    /grid-template-rows:\s*var\(--mini-track-slot-height\)\s+minmax\(0,\s*1fr\)/
-  )
-  assert.match(mainRule, /overflow:\s*hidden/)
-  assert.match(lyricRule, /white-space:\s*nowrap/)
-  assert.match(lyricRule, /text-overflow:\s*ellipsis/)
-  assert.match(compactContentRule, /--mini-progress-dock-height:\s*24px/)
-  assert.match(compactContentRule, /--mini-controls-dock-height:\s*46px/)
-  assert.match(wideContentRule, /--mini-progress-dock-height:\s*32px/)
-  assert.match(wideContentRule, /--mini-controls-dock-height:\s*60px/)
-  assert.doesNotMatch(
     styles,
-    /\.mini-player-root\[data-layout='compact'\] \.mini-progress-block\s*\{/
+    /\.mini-tools \.mini-tool-button\[data-te-back-button\] \{[^}]*background: transparent !important/
   )
-  const lyricStageStart = component.indexOf('class="mini-lyric-stage"')
-  const lyricTransitionEnd = component.indexOf('</Transition>', lyricStageStart)
-  const lyricTemplate = component.slice(
-    lyricStageStart,
-    lyricTransitionEnd + '</Transition>'.length
+})
+
+test('mini player sets titles as type and keeps the transport row symmetric', () => {
+  assert.match(component, /class="mini-title-lines"/)
+  assert.match(
+    component,
+    /resolvedLayout\.value === 'wide' \|\| resolvedLayout\.value === 'poster'/
   )
-  assert.match(lyricTemplate, /\{\{ currentLyricLine!\.original \}\}/)
-  assert.doesNotMatch(lyricTemplate, /ScrollingText/)
+  assert.match(cssRule('.mini-title-lines'), /-webkit-line-clamp: 2/)
+  const controlsStart = component.indexOf('<footer class="mini-controls">')
+  const meta = component.slice(component.indexOf('class="mini-track-meta"'), controlsStart)
+  const controls = component.slice(controlsStart, component.indexOf('</footer>'))
+  assert.match(meta, /favorite-button/)
+  assert.doesNotMatch(controls, /favorite-button/)
+  assert.match(styles, /\.mini-volume\.has-slider:hover \.mini-volume-range/)
+})
+
+test('mini player progress keeps rounded ends while it fills', () => {
+  const fillRule = cssRule('.mini-progress-fill')
+  assert.match(
+    fillRule,
+    /clip-path: inset\(0 calc\(\(1 - var\(--mini-progress, 0\)\) \* 100%\) 0 0 round 999px\)/
+  )
+  assert.doesNotMatch(fillRule, /scaleX/)
+  assert.match(component, /'--mini-progress':/)
+})
+
+test('mini player controls cover favourite, play mode, volume wheel and remaining time', () => {
+  assert.match(component, /type: 'toggle-favorite'/)
+  assert.match(component, /type: 'cycle-play-mode'/)
+  assert.match(component, /@wheel\.passive="onWheel"/)
+  assert.match(component, /class="mini-volume-hud"/)
+  assert.match(component, /toggleRemainingTime/)
+  assert.match(component, /MiniGlyph/)
 })
 
 test('mini player surface fills the native window without a rectangular backdrop wrapper', () => {
-  const component = readFileSync(new URL('./MiniPlayerApp.vue', import.meta.url), 'utf8')
-  const styles = readFileSync(new URL('./MiniPlayer.css', import.meta.url), 'utf8')
   const mainStyles = readFileSync(new URL('../assets/main.css', import.meta.url), 'utf8')
   const rendererEntry = readFileSync(new URL('../main.ts', import.meta.url), 'utf8')
   const miniPlayerWindow = readFileSync(
     new URL('../../../main/integrations/miniPlayer.ts', import.meta.url),
     'utf8'
   )
-  const rootRule = styles.match(/\.mini-player-root\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const surfaceRule = styles.match(/\.mini-player-surface\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
-  const artworkRule = styles.match(/\.mini-artwork-wrap\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
+  const rootRule = cssRule('.mini-player-root')
 
   assert.doesNotMatch(rootRule, /padding:/)
   assert.match(rootRule, /border-radius: var\(--mini-window-radius\)/)
   assert.match(rootRule, /overflow: hidden/)
   assert.doesNotMatch(rootRule, /clip-path/)
   assert.match(rootRule, /contain: paint/)
-  assert.doesNotMatch(surfaceRule, /var\(--mini-surface-shadow\)/)
-  assert.match(surfaceRule, /backdrop-filter: blur\(var\(--mini-glass-blur\)\)/)
-  assert.doesNotMatch(surfaceRule, /border:\s*var\(--mini-border-width\)/)
-  assert.doesNotMatch(surfaceRule, /--mini-highlight/)
   assert.match(
     styles,
     /\.mini-window-fill\s*\{[\s\S]*?background: var\(--mini-background-fallback\)/
   )
   assert.match(mainStyles, /html\.mini-player-document[\s\S]*background: transparent !important/)
+  assert.match(
+    mainStyles,
+    /html\.mini-player-document body::before,\s*html\.mini-player-document body::after \{\s*display: none !important/
+  )
   assert.doesNotMatch(mainStyles, /mini-player-native-corners/)
   assert.doesNotMatch(rendererEntry, /nativeCorners|mini-player-native-corners/)
   assert.doesNotMatch(miniPlayerWindow, /nativeCorners/)
   assert.match(miniPlayerWindow, /transparent: true/)
   assert.match(miniPlayerWindow, /roundedCorners: false/)
   assert.match(miniPlayerWindow, /hasShadow: false/)
-  assert.match(miniPlayerWindow, /cornerRadius\s*-\s*2/)
+  assert.doesNotMatch(miniPlayerWindow, /\.setShape\(/)
   assert.match(rendererEntry, /document\.addEventListener\(\s*'dragstart'/)
-  assert.match(rendererEntry, /closest\('\[draggable="true"\]'\)/)
-  assert.match(rendererEntry, /event\.preventDefault\(\)/)
-  assert.match(rendererEntry, /true\s*\)/)
   assert.match(component, /MiniPlayerCustomizer/)
-  assert.match(component, /resolveMiniPlayerLayout/)
-  assert.match(component, /data-layout/)
-  assert.match(component, /mini-window-fill/)
-  assert.match(component, /mini-background-source/)
-  assert.match(component, /findActiveMiniPlayerLyricIndex/)
-  assert.match(component, /mini-lyric-stage/)
-  assert.match(component, /mini-lyric-current/)
-  assert.match(component, /mini-quality/)
-  assert.match(component, /trackQuality/)
-  assert.match(component, /settings\.profiles\[settings\.activeStyleId\]/)
-  assert.match(styles, /\[data-layout='compact'\]/)
-  assert.match(styles, /\[data-layout='wide'\]/)
-  assert.match(styles, /\.mini-lyric-stage/)
-  assert.match(styles, /\.mini-lyric-current/)
-  assert.match(styles, /@container \(max-height: 150px\)/)
-  assert.match(styles, /mini-artwork-breathe/)
-  assert.match(styles, /\.mini-quality-badge/)
-  assert.match(styles, /var\(--mini-window-radius\)/)
-  assert.match(artworkRule, /aspect-ratio: 1/)
-  assert.doesNotMatch(artworkRule, /^\s*height: 100%;/m)
-  assert.doesNotMatch(component, /mini-play-state|mini-state-dot|playbackStateText/)
-  assert.doesNotMatch(styles, /mini-play-state|mini-state-dot/)
-  assert.doesNotMatch(rendererEntry, /mini-player-native-corners/)
   assert.match(component, /class="mini-window-fill"/)
+  assert.match(component, /mini-background-source/)
   assert.match(component, /mini-background-overlay/)
+  assert.match(component, /trackQuality/)
+  assert.match(styles, /\.mini-quality-badge/)
+  assert.match(component, /settings\.profiles\[settings\.activeStyleId\]/)
   assert.doesNotMatch(component, /mini-player-backdrop/)
 })

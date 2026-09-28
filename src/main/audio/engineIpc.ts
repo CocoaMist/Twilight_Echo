@@ -1,4 +1,6 @@
 import { IPC } from '../../shared/ipcChannels.ts'
+import { DspAuditionManager } from './dspAuditionManager.ts'
+import { createDspAuditionHandlers } from './dspAuditionIpc.ts'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { release } from 'node:os'
@@ -715,6 +717,38 @@ export function setupAudioEngineIpc(): void {
 }
 
 function registerAudioEngineIpcHandlers(): void {
+  const auditionManager = new DspAuditionManager({
+    context: async () => (await ensureAudioEngineRuntime()).getAuditionContext(),
+    apply: async (revision, key, graph) =>
+      (await ensureAudioEngineRuntime()).applyAuditionGraph(revision, key, graph),
+    authorize: resolveAuthorizedAudioSource,
+    analyze: async (source, options) => {
+      if (!runtime.audioAnalysisService) throw new Error('独立分析服务不可用')
+      return runtime.audioAnalysisService.analyzeDspAudition(source, options)
+    },
+    cancel: (source) => {
+      runtime.audioAnalysisService?.cancelBySource(source, 'dsp-audition')
+    }
+  })
+  const audition = createDspAuditionHandlers(auditionManager, (event) =>
+    assertTrustedIpcSender(event as Electron.IpcMainInvokeEvent, 'DSP audition')
+  )
+  const auditionOwners = new WeakSet<Electron.WebContents>()
+  ipcMain.handle(IPC.audioEngine.measureDspAudition, async (event, value) => {
+    const result = audition.measure(event, value)
+    if (event.sender === runtime.mainWindow?.webContents && !auditionOwners.has(event.sender)) {
+      auditionOwners.add(event.sender)
+      event.sender.once('destroyed', () => {
+        void auditionManager
+          .end()
+          .catch((error) => console.warn('关闭窗口时退出 DSP 试听失败', error))
+      })
+    }
+    return result
+  })
+  ipcMain.handle(IPC.audioEngine.selectDspAudition, audition.select)
+  ipcMain.handle(IPC.audioEngine.endDspAudition, audition.end)
+  ipcMain.handle(IPC.audioEngine.getDspAudition, audition.status)
   const profiles = createDeviceProfileHandlers(ensureAudioEngineRuntime, (event) =>
     assertTrustedIpcSender(event as Electron.IpcMainInvokeEvent, 'device profiles')
   )

@@ -411,6 +411,7 @@ void DspChain::configureFromJson(const std::string& json) {
 bool DspChain::configureGraphJson(const std::string& json, std::string* error) {
   const std::string graphJson = json_utils::fieldObject(json, "graph");
   const std::string root = graphJson.empty() ? json : graphJson;
+  auditionTransition_ = json_utils::fieldBool(root, "auditionTransition").value_or(false);
   const std::string nodeArray = extractArrayField(root, "nodes");
   const uint64_t revision = static_cast<uint64_t>(std::max(0.0, extractNumberField(json, "revision").value_or(0.0)));
   const std::string sceneId = extractStringField(json, "sceneId").value_or("");
@@ -1015,6 +1016,9 @@ DspConfig DspChain::parseConfigJson(const std::string& json) {
   config.ditherMode = parseDitherMode(extractStringField(json, "dither").value_or("off"));
   config.outputSafetyClamp = extractBoolField(json, "outputSafetyClamp").value_or(true);
   config.crossfadeSeconds = std::clamp(extractNumberField(json, "crossfadeSeconds").value_or(0.0), 0.0, 12.0);
+  config.crossfadeEqualPower = extractStringField(json, "crossfadeCurve").value_or("linear") == "equal-power";
+  const auto crossfadeContent = extractStringField(json, "crossfadeContent").value_or("conservative");
+  config.crossfadeContent = crossfadeContent == "all" ? 1 : (crossfadeContent == "live" ? 2 : 0);
   return config;
 }
 

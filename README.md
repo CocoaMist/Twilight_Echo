@@ -235,6 +235,8 @@ CoreAudio 与 ALSA 后端已存在，但目前没有经过与 Windows 同等级�
 
 [开发者文档](./docs/DEVELOPER_README.md) · [插件开发指南](./docs/PLUGIN_README.md) · [插件规范](./docs/twilight-echo-plugin-spec.md) · [第三方插件仓库](https://github.com/Px-asen/Twilight-Echo-plugins) · [全部文档](./docs/README.md)
 
+第三方开发者可在自己的公开仓库发布 `.tep`，通过 GitHub Topic 和 Release 自动进入插件市场；无需把源码提交到目录仓库。发布步骤见[插件开发指南](./docs/PLUGIN_README.md#14-发布到插件市场)。
+
 开发环境使用项目锁定的 `pnpm@11.7.0`；依赖安装、原生音频工具链和运行步骤见开发者文档，Windows 发布流程见[发布检查](./docs/windows-release-gate.md)。
 
 ## 开源许可

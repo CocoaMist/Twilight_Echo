@@ -343,13 +343,13 @@ const { checkLogin, isLoggedIn: ncmLoggedIn } = useNcmStore()
 const {
   currentTrack,
   currentTime,
+  estimatePlaybackClockPosition,
   duration,
   playbackRate,
   isPlaying,
   isLoading,
   volume,
   playMode,
-  dominantColor,
   coverThemeColor,
   themeCoverUrl,
   themeCoverIdentity,
@@ -441,6 +441,7 @@ watch(
 )
 
 useMiniPlayerSync({
+  positionAt: estimatePlaybackClockPosition,
   currentTrack,
   isPlaying,
   isLoading,
@@ -452,7 +453,7 @@ useMiniPlayerSync({
   favoriteAvailable: favoriteButtonVisible,
   favoriteLiked: favoriteButtonLiked,
   favoriteLoading: favoriteButtonLoading,
-  dominantColor,
+  dominantColor: coverThemeColor,
   queue,
   queueIndex,
   togglePlay,
@@ -572,6 +573,7 @@ const playbackSessionPersistence = createPlaybackSessionPersistence({
   currentTrack,
   currentTime,
   isPlaying,
+  queue,
   restorePlaybackSession,
   createPlaybackSession,
   syncPluginProviders,
@@ -1017,20 +1019,6 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
           />
         </Transition>
         <Transition name="settings-page">
-          <PluginPage
-            v-if="showPluginPage"
-            @open-theme-workshop="
-              onSelectPluginPage({
-                pluginId: 'com.twilightecho.tool.theme-workshop',
-                id: 'theme-workshop',
-                kind: 'sidebarPage',
-                title: '主题插件工坊',
-                command: 'theme-workshop.open'
-              })
-            "
-          />
-        </Transition>
-        <Transition name="settings-page">
           <ThemeStudioPage
             v-if="showThemeStudioPage"
             :initial-domain="themeStudioInitialDomain"
@@ -1067,7 +1055,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         v-if="hasPlayerBar"
         ref="playerBarRef"
         :glass="showPlayingPage"
-        :visualizer-visible="showPlayingPage"
+        :visualizer-visible="showPlayingPage && settings.playerBar.compactVisualizerEnabled"
         :menu-open="sidebarMenuOpen"
         :mode="playerBarPresentation.mode"
         :auto-hide="playerBarPresentation.autoHide"
@@ -1081,7 +1069,10 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
       />
     </div>
   </div>
-  <div class="settings-overlay-root" :class="{ 'settings-overlay-root--active': showSettingsPage }">
+  <div
+    class="settings-overlay-root"
+    :class="{ 'settings-overlay-root--active': showSettingsPage || showPluginPage }"
+  >
     <Transition name="settings-page">
       <SettingsPage
         v-if="showSettingsPage"
@@ -1092,6 +1083,20 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @open-theme-studio="openThemeStudioPage"
         @open-theme-workshop="openThemeWorkshop"
         @reopen-onboarding="handleReopenOnboarding"
+      />
+    </Transition>
+    <Transition name="settings-page">
+      <PluginPage
+        v-if="showPluginPage"
+        @open-theme-workshop="
+          onSelectPluginPage({
+            pluginId: 'com.twilightecho.tool.theme-workshop',
+            id: 'theme-workshop',
+            kind: 'sidebarPage',
+            title: '主题插件工坊',
+            command: 'theme-workshop.open'
+          })
+        "
       />
     </Transition>
   </div>

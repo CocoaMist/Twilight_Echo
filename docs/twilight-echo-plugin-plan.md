@@ -167,10 +167,11 @@ JS 插件 API 与 DSP C ABI 各自有独立版本号、独立的稳定性承诺�
   API 暴露收藏夹和 `bili:<bvid>:<cid>` 音频 track，播放 URL 由插件维护的
   `127.0.0.1` loopback 代理提供。远程索引可先指向 GitHub raw JSON，后续可用
   `TWILIGHT_PLUGIN_INDEX_URL` 切换到自托管 HTTPS `plugins.json`。
-- 第三方插件源码不再写入 Twilight Echo 主项目。后续新增第三方插件统一写入
-  `D:\Twilight-Echo-plugins`，对应 GitHub 仓库为
-  `https://github.com/Px-asen/Twilight-Echo-plugins/`；主项目只实现通用宿主能力，
-  通过远程 `plugins.json` 消费插件。
+- 第三方插件源码不再写入 Twilight Echo 主项目。团队维护的插件保留在
+  `D:\Twilight-Echo-plugins`；其他开发者可在自己的公开仓库维护源码、README 和
+  GitHub Release `.tep`，添加 `twilight-echo-plugin` Topic 后由目录仓库定时自动发现，
+  或通过 `catalog/` 提交人工审核申请。自动发现条目为未验证社区插件；已审核目录条目
+  优先于同 ID 社区条目。主项目通过远程 `plugins.json` 消费插件。
 
 ---
 

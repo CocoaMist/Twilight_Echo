@@ -76,6 +76,12 @@ const miniPlayerWindowApi = {
   returnToMain: (): void => {
     ipcRenderer.send('miniPlayer:returnToMain')
   },
+  moveTo: (x: number, y: number): void => {
+    ipcRenderer.send('miniPlayer:moveTo', { x, y })
+  },
+  moveEnd: (): void => {
+    ipcRenderer.send('miniPlayer:moveEnd')
+  },
   onState: (cb: (state: MiniPlayerStateSnapshot) => void): (() => void) => {
     miniPlayerStateCallbacks.add(cb)
     return () => miniPlayerStateCallbacks.delete(cb)
@@ -142,11 +148,7 @@ const api = {
   ...pluginsApi,
   desktopLyrics: desktopLyricsHostApi,
   miniPlayer: miniPlayerHostApi,
-  trayPlayer: trayPlayerWindowApi,
-  debug: {
-    appendNativeTrace: (message: string): Promise<void> =>
-      ipcRenderer.invoke('debug:appendNativeTrace', message)
-  }
+  trayPlayer: trayPlayerWindowApi
 }
 
 if (process.contextIsolated) {

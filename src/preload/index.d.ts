@@ -19,7 +19,7 @@ import type {
   BpmAnalysisResult,
   LoudnessAnalysisResult
 } from '../shared/audioEngineTypes.ts'
-import type { PlaybackResumeMode, AudioEqPreset, AppSettings } from '../shared/appSettings.ts'
+import type { AudioEqPreset, AppSettings } from '../shared/appSettings.ts'
 import type {
   AudioDeviceProfile,
   AudioDeviceProfilesSnapshot
@@ -238,7 +238,7 @@ interface ProviderDownloadTaskSnapshot {
 
 type MiniPlayerBackgroundKind = 'solid' | 'gradient' | 'cover' | 'image'
 type MiniPlayerImageFit = 'cover' | 'contain'
-type MiniPlayerLayoutPreference = 'auto' | 'compact' | 'standard' | 'wide'
+type MiniPlayerLayoutPreference = 'auto' | 'compact' | 'standard' | 'wide' | 'poster'
 type MotionPreference = 'system' | 'full' | 'reduced' | 'off'
 
 interface MiniPlayerBackgroundSettings {
@@ -321,16 +321,8 @@ interface MiniPlayerTrackSnapshot {
   coverSource: string | null
 }
 
-interface MiniPlayerLyricLineSnapshot {
-  time: number | null
-  original: string
-  translation: string | null
-}
-
 interface MiniPlayerStateSnapshot {
   track: MiniPlayerTrackSnapshot | null
-  currentLyric: { original: string; translation: string | null } | null
-  lyrics: MiniPlayerLyricLineSnapshot[]
   isPlaying: boolean
   isLoading: boolean
   currentTime: number
@@ -410,17 +402,7 @@ interface OpraProfile {
   unsupportedBandTypes: string[]
 }
 
-interface PlaybackSession {
-  version: 1
-  savedAt: string
-  mode: PlaybackResumeMode
-  playMode?: PlayMode
-  track: TrackData
-  position: number
-  queue?: TrackData[]
-  queueIndex?: number
-  sleepTimer?: import('../shared/sleepTimer.ts').SleepTimerState
-}
+type PlaybackSession = import('../shared/playbackSession.ts').PlaybackSessionData<TrackData>
 
 interface VersionedDataEnvelope<T> {
   version: 2
@@ -686,6 +668,7 @@ interface AudioEngineAPI {
   ) => Promise<AudioProcessingSettings>
   getAudioProcessing: () => Promise<AudioProcessingSettings>
   getDspSceneState: () => Promise<DspSceneState>
+  audition: import('../shared/dspAudition.ts').DspAuditionApi
   setDspScenes: (scenes: DspScene[], pinnedSceneId?: string | null) => Promise<DspSceneState>
   setOutputStage: (partial: Partial<DspOutputStageConfig>) => Promise<DspSceneState>
   setStereoImage: (partial: Partial<DspStereoImageConfig>) => Promise<DspSceneState>
@@ -828,7 +811,6 @@ interface WindowAPI {
   }
   fs: {
     scanMusicFiles: (folderPath: string) => Promise<TrackData[]>
-    readAudioFile: (filePath: string) => Promise<{ buffer: ArrayBuffer; mimeType: string }>
     getAudioFileUrl: (filePath: string) => Promise<string>
     isAudioFileAuthorized: (filePath: string) => Promise<boolean>
     areAudioFilesAuthorized: (filePaths: string[]) => Promise<boolean[]>
@@ -868,12 +850,6 @@ interface WindowAPI {
      */
     onSavePlaybackSession: (cb: () => Promise<void> | void) => () => void
     onNavigate: (cb: (target: TrayNavigationTarget) => void) => () => void
-  }
-  ncm: {
-    getPort: () => Promise<number>
-    request: (path: string, cookie?: string) => Promise<unknown>
-    getCachedSong: (songId: number) => Promise<string | null>
-    cacheSong: (songId: number, url: string, fileName?: string) => Promise<string | null>
   }
   ncmCloud: {
     chooseUploadFiles: () => Promise<NcmCloudSelectedFile[]>
@@ -1088,7 +1064,6 @@ interface WindowAPI {
         | void
     ) => () => void
     discoverDlna: () => Promise<import('../shared/remoteControl.ts').DlnaDeviceInfo[]>
-    getDlnaDevices: () => Promise<import('../shared/remoteControl.ts').DlnaDeviceInfo[]>
     castToDevice: (payload: {
       usn: string
       /** Authorized local library / managed-cache path. Mutually exclusive with mediaUrl. */
@@ -1153,7 +1128,6 @@ interface WindowAPI {
   }
   plugins: {
     list: () => Promise<TwilightPluginDescriptor[]>
-    installFromPath: (path: string) => Promise<TwilightPluginInstallResult>
     chooseAndInstall: (
       kind?: 'package' | 'directory'
     ) => Promise<TwilightPluginInstallResult | null>
@@ -1228,6 +1202,8 @@ interface WindowAPI {
     chooseBackgroundImage: () => Promise<string | null>
     minimize: () => void
     returnToMain: () => void
+    moveTo: (x: number, y: number) => void
+    moveEnd: () => void
     publishState: (state: MiniPlayerStateSnapshot) => void
     onState: (cb: (state: MiniPlayerStateSnapshot) => void) => () => void
     onSettings: (cb: (settings: MiniPlayerSettings) => void) => () => void
@@ -1240,9 +1216,6 @@ interface WindowAPI {
     navigate: (target: TrayNavigationTarget) => void
     hide: () => void
     onState: (cb: (state: MiniPlayerStateSnapshot) => void) => () => void
-  }
-  debug: {
-    appendNativeTrace: (message: string) => Promise<void>
   }
 }
 

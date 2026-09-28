@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  buildMiniPlayerLyricLines,
   buildMiniPlayerStateSnapshot,
   createMiniPlayerPublishScheduler,
-  findActiveMiniPlayerLyricIndex,
-  miniPlayerProgressKey,
-  resetMiniPlayerLyricCache,
-  resolveCurrentLyricForMiniPlayer
+  miniPlayerProgressKey
 } from './useMiniPlayerSync.ts'
 import type { Track } from '../types/music.ts'
 import { ref, shallowRef } from 'vue'
@@ -97,10 +93,10 @@ test('mini player snapshots follow queue clear and undo with the restored index 
   assert.equal(snapshot().isPlaying, false)
 })
 
-test('mini player snapshot carries the lyric line active at the snapshot time', () => {
+test('mini player snapshot carries track metadata and quality but no lyric payload', () => {
   const snapshot = buildMiniPlayerStateSnapshot(makeSource(makeTrack(), 3.5))
-  assert.equal(snapshot.currentLyric?.original, 'second line')
-  assert.equal(snapshot.currentLyric?.translation, '第二行')
+  assert.equal('currentLyric' in snapshot, false)
+  assert.equal('lyrics' in snapshot, false)
   assert.equal(snapshot.track?.format, 'FLAC')
   assert.equal(snapshot.track?.sampleRate, 192000)
   assert.equal(snapshot.track?.bitDepth, 24)
@@ -118,88 +114,12 @@ test('mini player snapshot keeps quality fields null when the track has none', (
   assert.equal(snapshot.track?.bitDepth, null)
 })
 
-test('mini player lyric resolution returns null before the first timed line', () => {
-  assert.equal(resolveCurrentLyricForMiniPlayer(makeTrack(), 0.5), null)
-  assert.equal(resolveCurrentLyricForMiniPlayer(null, 10), null)
-})
-
-test('mini player lyric resolution ignores plain untimed lyrics', () => {
-  const plain = makeTrack({ lyrics: 'Just a plain lyric line', translatedLyrics: '' })
-  assert.equal(resolveCurrentLyricForMiniPlayer(plain, 10), null)
-})
-
-test('mini player snapshot drops the lyric field when no line is active', () => {
-  const snapshot = buildMiniPlayerStateSnapshot(makeSource(makeTrack(), 0.5))
-  assert.equal(snapshot.currentLyric, null)
-})
-
-test('mini player snapshot carries timed lyric lines for the multi-line view', () => {
-  const snapshot = buildMiniPlayerStateSnapshot(makeSource(makeTrack(), 3.5))
-  assert.deepEqual(snapshot.lyrics, [
-    { time: 1, original: 'first line', translation: '第一行' },
-    { time: 3, original: 'second line', translation: '第二行' }
-  ])
-})
-
-test('mini player projects explicit duet markers to readable text without leaking metadata', () => {
-  const duet = makeTrack({
-    lyrics: [
-      '[00:01.00][te:voice role=lead lane=start group=duet]First',
-      '[00:01.00][te:voice role=lead lane=end group=duet]Second',
-      '[00:01.20][te:voice role=harmony lane=end group=duet]Harmony'
-    ].join('\n'),
-    translatedLyrics: '[00:01.00]组合翻译'
-  })
-  const snapshot = buildMiniPlayerStateSnapshot(makeSource(duet, 1.5))
-  assert.equal(snapshot.lyrics[0]?.original, 'First · Second')
-  assert.equal(snapshot.lyrics[0]?.translation, '组合翻译')
-  assert.ok(!snapshot.lyrics[0]?.original.includes('[te:voice'))
-})
-
-test('mini player lyric lines ignore plain untimed lyrics', () => {
-  const plain = makeTrack({ lyrics: 'Just a plain lyric line', translatedLyrics: '' })
-  const snapshot = buildMiniPlayerStateSnapshot(makeSource(plain, 10))
-  assert.deepEqual(snapshot.lyrics, [])
-})
-
-test('mini player lyric index picks the latest line at or before current time', () => {
-  const lines = [
-    { time: 1, original: 'first', translation: null },
-    { time: 3, original: 'second', translation: null },
-    { time: 7.5, original: 'third', translation: null }
-  ]
-  assert.equal(findActiveMiniPlayerLyricIndex(lines, 0.5), -1)
-  assert.equal(findActiveMiniPlayerLyricIndex(lines, 1), 0)
-  assert.equal(findActiveMiniPlayerLyricIndex(lines, 3.2), 1)
-  assert.equal(findActiveMiniPlayerLyricIndex(lines, 7.5), 2)
-  assert.equal(findActiveMiniPlayerLyricIndex(lines, 99), 2)
-  assert.equal(findActiveMiniPlayerLyricIndex([], 5), -1)
-})
-
-test('mini player lyric parsing is cached per track identity and reused by progress lookups', () => {
-  resetMiniPlayerLyricCache()
-  const track = makeTrack()
-  const first = buildMiniPlayerLyricLines(track)
-  const second = buildMiniPlayerLyricLines({ ...track })
-  assert.equal(first, second, 'same track id + lyric text must hit the parse cache')
-  assert.equal(resolveCurrentLyricForMiniPlayer(track, 3.5)?.original, 'second line')
-
-  const edited = makeTrack({ lyrics: '[00:02.00]changed line', translatedLyrics: '' })
-  const third = buildMiniPlayerLyricLines(edited)
-  assert.notEqual(third, first)
-  assert.deepEqual(third, [{ time: 2, original: 'changed line', translation: null }])
-
-  const other = makeTrack({ id: 'ncm:2' })
-  assert.notEqual(buildMiniPlayerLyricLines(other), third)
-})
-
-test('mini player progress key only changes across lyric lines or whole seconds', () => {
-  const track = makeTrack()
-  assert.equal(miniPlayerProgressKey(track, 1.1), miniPlayerProgressKey(track, 1.4))
-  assert.notEqual(miniPlayerProgressKey(track, 1.9), miniPlayerProgressKey(track, 2.1))
-  assert.notEqual(miniPlayerProgressKey(track, 2.9), miniPlayerProgressKey(track, 3.0))
-  assert.equal(miniPlayerProgressKey(null, 5.2), miniPlayerProgressKey(null, 5.9))
-  assert.notEqual(miniPlayerProgressKey(null, 5.9), miniPlayerProgressKey(null, 6.0))
+test('mini player progress key only changes across whole seconds', () => {
+  assert.equal(miniPlayerProgressKey(1.1), miniPlayerProgressKey(1.4))
+  assert.notEqual(miniPlayerProgressKey(1.9), miniPlayerProgressKey(2.1))
+  assert.equal(miniPlayerProgressKey(5.2), miniPlayerProgressKey(5.9))
+  assert.notEqual(miniPlayerProgressKey(5.9), miniPlayerProgressKey(6.0))
+  assert.equal(miniPlayerProgressKey(Number.NaN), '-1')
 })
 
 test('mini player publish scheduler throttles progress ticks and publishes metadata immediately', () => {
@@ -234,7 +154,7 @@ test('mini player publish scheduler throttles progress ticks and publishes metad
   scheduler.publishNow()
   assert.deepEqual(published, [0])
 
-  // 250 ms ticks inside the same lyric line and second: nothing is sent.
+  // 250 ms ticks inside the same second: nothing is sent.
   advance(250)
   scheduler.notifyProgress()
   advance(250)

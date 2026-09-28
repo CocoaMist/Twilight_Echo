@@ -1,5 +1,5 @@
-import type { AppSettings, PlaybackResumeMode } from '../../shared/appSettings.ts'
-import type { PlayMode } from '../../shared/audioEngineTypes.ts'
+import type { AppSettings } from '../../shared/appSettings.ts'
+import type { PlaybackSessionData } from '../../shared/playbackSession.ts'
 
 export type * from '../../shared/appSettings.ts'
 
@@ -20,17 +20,7 @@ export type { PlayerShortcutAction } from '../../shared/playerShortcuts.ts'
 /** Accelerator-bound actions only (excludes structured remote payloads). */
 export type PlayerShortcutKeyAction = Extract<PlayerShortcutAction, string>
 
-export interface PlaybackSession {
-  version: number
-  savedAt: string
-  mode: PlaybackResumeMode
-  playMode?: PlayMode
-  track: unknown
-  position: number
-  queue?: unknown[]
-  queueIndex?: number
-  sleepTimer?: unknown
-}
+export type PlaybackSession = PlaybackSessionData<unknown>
 
 export interface SettingsSnapshot extends AppSettings {
   settings: AppSettings

@@ -15,8 +15,13 @@ import {
 import type { PlaybackSession } from '../core/types'
 import { VersionedDataStore } from '../persistence/versionedDataStore.ts'
 import {
+  isPlaybackQueueSnapshot,
+  PlaybackSessionStorage
+} from '../persistence/playbackSessionStorage.ts'
+import {
   PersistentDataRevisionConflictError,
-  createPersistentDataRevisionConflictResponse
+  createPersistentDataRevisionConflictResponse,
+  type VersionedDataEnvelope
 } from '../../shared/versionedPersistence.ts'
 import {
   isLyricsManagementDocument,
@@ -38,6 +43,7 @@ import {
 } from './persistenceReporting.ts'
 
 const MAX_PLAYBACK_SESSION_BYTES = 2 * 1024 * 1024
+const MAX_PLAYBACK_QUEUE_BYTES = 32 * 1024 * 1024
 const MAX_PLAYLISTS_BYTES = 20 * 1024 * 1024
 const MAX_LYRICS_MANAGEMENT_BYTES = 8 * 1024 * 1024
 const MAX_PLAYBACK_BOOKMARKS_BYTES = 4 * 1024 * 1024
@@ -48,6 +54,7 @@ export function registerPersistenceIpc(ipcMain: IpcMain): void {
   const userDataPath = app.getPath('userData')
   const NCM_COOKIE_FILE = join(userDataPath, 'ncm-cookie.json')
   const PLAYBACK_SESSION_FILE = join(userDataPath, 'playback-session.json')
+  const PLAYBACK_QUEUE_FILE = join(userDataPath, 'playback-queue.json')
   const PLAYLISTS_FILE = join(userDataPath, 'playlists.json')
   const LYRICS_MANAGEMENT_FILE = join(userDataPath, 'lyrics-management.json')
   const PLAYBACK_BOOKMARKS_FILE = join(userDataPath, 'playback-bookmarks.json')
@@ -77,6 +84,19 @@ export function registerPersistenceIpc(ipcMain: IpcMain): void {
     onRecovery: (result) =>
       reportPersistentDataRecovery('Playback session', PLAYBACK_SESSION_FILE, result)
   })
+  const playbackQueueStore = new VersionedDataStore<unknown[]>({
+    filePath: PLAYBACK_QUEUE_FILE,
+    label: 'playback queue',
+    maxBytes: MAX_PLAYBACK_QUEUE_BYTES,
+    isData: isPlaybackQueueSnapshot,
+    isLegacy: isPlaybackQueueSnapshot,
+    onRecovery: (result) =>
+      reportPersistentDataRecovery('Playback queue', PLAYBACK_QUEUE_FILE, result)
+  })
+  const playbackSessionStorage = new PlaybackSessionStorage(
+    playbackSessionStore,
+    playbackQueueStore
+  )
   const playlistsStore = new VersionedDataStore<unknown[]>({
     filePath: PLAYLISTS_FILE,
     label: 'playlists',
@@ -155,17 +175,23 @@ export function registerPersistenceIpc(ipcMain: IpcMain): void {
     'data:savePlaybackSession',
     async (event, session: PlaybackSession, expectedRevision: number) => {
       assertTrustedIpcSender(event, 'data IPC')
-      stringifyJsonForIpcStorage(session, 'playback session', MAX_PLAYBACK_SESSION_BYTES)
       if (!isPlaybackSessionFile(session))
         throw new Error('Playback session has an invalid structure')
-      return await saveVersionedData(playbackSessionStore, session, expectedRevision)
+      const { queue, ...state } = session
+      stringifyJsonForIpcStorage(state, 'playback session', MAX_PLAYBACK_SESSION_BYTES)
+      if (queue !== undefined) {
+        stringifyJsonForIpcStorage(queue, 'playback queue', MAX_PLAYBACK_QUEUE_BYTES)
+        if (!isPlaybackQueueSnapshot(queue))
+          throw new Error('Playback queue has an invalid structure')
+      }
+      return await saveVersionedData(playbackSessionStorage, session, expectedRevision)
     }
   )
 
   ipcMain.handle('data:loadPlaybackSession', async (event) => {
     assertTrustedIpcSender(event, 'data IPC')
     try {
-      return await playbackSessionStore.load()
+      return await playbackSessionStorage.load()
     } catch (error) {
       reportPersistentDataFailure('Playback session', PLAYBACK_SESSION_FILE, error)
       return null
@@ -174,7 +200,11 @@ export function registerPersistenceIpc(ipcMain: IpcMain): void {
 
   ipcMain.handle('data:clearPlaybackSession', async (event, expectedRevision: number) => {
     assertTrustedIpcSender(event, 'data IPC')
-    return await saveVersionedData(playbackSessionStore, null, expectedRevision)
+    return await saveVersionedData<PlaybackSession | null>(
+      { save: (_session, revision) => playbackSessionStorage.clear(revision) },
+      null,
+      expectedRevision
+    )
   })
 
   ipcMain.handle(
@@ -209,7 +239,9 @@ export function registerPersistenceIpc(ipcMain: IpcMain): void {
 }
 
 async function saveVersionedData<T>(
-  store: VersionedDataStore<T>,
+  store: {
+    save(data: T, expectedRevision: number): Promise<VersionedDataEnvelope<T>>
+  },
   data: T,
   expectedRevision: number
 ) {
@@ -238,6 +270,8 @@ function isPlaybackSessionFile(value: unknown): value is PlaybackSession {
     typeof record.position === 'number' &&
     Number.isFinite(record.position) &&
     record.position >= 0 &&
+    (record.queueRevision === undefined ||
+      (Number.isSafeInteger(record.queueRevision) && Number(record.queueRevision) >= 0)) &&
     (record.queue === undefined || Array.isArray(record.queue)) &&
     playbackSessionCueRangesAreValid(value)
   )

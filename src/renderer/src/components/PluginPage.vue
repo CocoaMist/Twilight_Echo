@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import PuzzleIcon from './icons/PuzzleIcon.vue'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import {
@@ -11,6 +11,7 @@ import {
   createPluginTrustRefreshController,
   type PluginTrustRefreshController
 } from '@renderer/utils/pluginTrustRefresh'
+import { createPluginMarketIndex, searchPluginMarket } from '@renderer/utils/pluginMarketSearch'
 
 type TwilightPluginDescriptor = Awaited<ReturnType<typeof window.api.plugins.list>>[number]
 type TwilightPluginIndexEntry = Awaited<ReturnType<typeof window.api.plugins.listIndex>>[number]
@@ -22,6 +23,17 @@ const { settings, updateSettings } = useSettingsStore()
 // 开发者模式是持久化设置：这里的开关与「设置 → 常规 → 开发者选项」是同一个值。
 const devMode = computed(() => settings.value.developerMode === true)
 const searchText = ref('')
+const selectedType = ref('')
+const selectedAuthor = ref('')
+const visibleCount = ref(40)
+const marketTypes = [
+  { value: '', label: '全部类型' },
+  { value: 'provider', label: '音源' },
+  { value: 'tool', label: '工具' },
+  { value: 'ui', label: '界面' },
+  { value: 'theme', label: '主题' },
+  { value: 'dsp', label: 'DSP' }
+]
 
 const installedPlugins = ref<TwilightPluginDescriptor[]>([])
 const indexEntries = ref<TwilightPluginIndexEntry[]>([])
@@ -82,26 +94,26 @@ const filteredInstalled = computed(() => {
   )
 })
 
-const filteredIndex = computed(() => {
-  const list = indexEntries.value.filter((e) => e.installState !== 'built-in-blocked')
-  if (!searchText.value.trim()) return list
-  const q = searchText.value.toLowerCase()
-  return list.filter(
-    (e) =>
-      e.name.toLowerCase().includes(q) ||
-      e.author.toLowerCase().includes(q) ||
-      e.id.toLowerCase().includes(q)
+const marketIndex = computed(() =>
+  createPluginMarketIndex(
+    indexEntries.value.filter((entry) => entry.installState !== 'built-in-blocked')
   )
+)
+const filteredIndex = computed(() =>
+  searchPluginMarket(marketIndex.value, searchText.value, selectedType.value, selectedAuthor.value)
+)
+const visibleIndex = computed(() => filteredIndex.value.slice(0, visibleCount.value))
+const marketAuthors = computed(() => marketIndex.value.authors)
+
+watch([searchText, selectedType, selectedAuthor, indexEntries], () => {
+  visibleCount.value = 40
 })
 
 const updateEntries = computed(() => {
   return indexEntries.value.filter((e) => e.installState === 'update-available')
 })
 
-const marketRepoUrl = computed(() => {
-  const entry = indexEntries.value.find((e) => e.repository || e.homepage)
-  return entry?.repository || entry?.homepage || ''
-})
+const marketRepoUrl = 'https://github.com/Px-asen/Twilight-Echo-plugins'
 
 const indexSourceLabel = computed(() => {
   return pluginIndexSourceLabel(indexStatus.value)
@@ -269,7 +281,7 @@ function formatIndexTime(value: string | null | undefined): string {
 }
 
 function openExternal(url: string) {
-  if (url) window.open(url, '_blank')
+  if (/^https:\/\//i.test(url)) window.open(url, '_blank')
 }
 
 let unsubChanged: (() => void) | null = null
@@ -405,7 +417,7 @@ onUnmounted(() => {
                 activeTab === 'installed'
                   ? '搜索已安装插件名称或作者...'
                   : activeTab === 'discover'
-                    ? '搜索当前插件索引...'
+                    ? '搜索名称、开发者、描述或标签...'
                     : '在可用更新中搜索...'
               "
             />
@@ -631,7 +643,7 @@ onUnmounted(() => {
               "
               @click="openExternal(marketRepoUrl)"
             >
-              浏览插件仓库 <i class="pi pi-external-link"></i>
+              浏览插件目录 <i class="pi pi-external-link"></i>
             </button>
           </div>
 
@@ -660,7 +672,26 @@ onUnmounted(() => {
             class="page-title"
             style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); margin-bottom: 16px"
           >
-            可用插件
+            可用插件 <span class="badge">{{ filteredIndex.length }}</span>
+          </div>
+          <div class="market-filters">
+            <label>
+              <span>类型</span>
+              <select v-model="selectedType">
+                <option v-for="item in marketTypes" :key="item.value" :value="item.value">
+                  {{ item.label }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>开发者</span>
+              <select v-model="selectedAuthor">
+                <option value="">全部开发者</option>
+                <option v-for="author in marketAuthors" :key="author" :value="author">
+                  {{ author }}
+                </option>
+              </select>
+            </label>
           </div>
 
           <!-- Empty state -->
@@ -682,12 +713,16 @@ onUnmounted(() => {
                 opacity: 0.3;
               "
             ></i>
-            {{ searchText ? '没有匹配的插件' : '插件市场暂无可用插件' }}
+            {{
+              searchText || selectedType || selectedAuthor
+                ? '没有匹配的插件'
+                : '插件市场暂无可用插件'
+            }}
           </div>
 
           <div class="plugin-grid" v-else>
             <div
-              v-for="entry in filteredIndex"
+              v-for="entry in visibleIndex"
               :key="entry.id"
               class="plugin-card"
               :style="{ opacity: entry.installState === 'incompatible' ? 0.6 : 1 }"
@@ -710,6 +745,9 @@ onUnmounted(() => {
                     {{ entry.author }}
                   </div>
                   <div class="plugin-tags">
+                    <span v-if="entry.tags?.includes('community')" class="tag community"
+                      >社区插件</span
+                    >
                     <span
                       v-for="(tag, idx) in getTags(entry.type)"
                       :key="idx"
@@ -724,6 +762,13 @@ onUnmounted(() => {
               <div class="plugin-desc">
                 {{ entry.description }}
               </div>
+              <button
+                v-if="entry.repository"
+                class="plugin-repository-link"
+                @click="openExternal(entry.repository)"
+              >
+                开发者仓库 <i class="pi pi-external-link"></i>
+              </button>
               <div class="plugin-footer">
                 <div class="plugin-trust-stack">
                   <div
@@ -789,6 +834,13 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
+          <button
+            v-if="visibleIndex.length < filteredIndex.length"
+            class="btn btn-outline market-load-more"
+            @click="visibleCount += 40"
+          >
+            加载更多（{{ visibleIndex.length }}/{{ filteredIndex.length }}）
+          </button>
         </div>
 
         <!-- Scroll Area: Updates -->
@@ -1125,6 +1177,44 @@ onUnmounted(() => {
   color: var(--te-neutral-400, #9ca3af);
 }
 
+.market-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.market-filters label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--te-neutral-500);
+  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+}
+
+.market-filters select {
+  max-width: 200px;
+  padding: 7px 12px;
+  border: 1px solid var(--te-border-color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--te-card-bg, #fff);
+  color: var(--te-neutral-800, #1f2937);
+}
+
+.plugin-repository-link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--te-primary-600, #6366f1);
+  cursor: pointer;
+}
+
+.market-load-more {
+  display: flex;
+  margin: 20px auto 0;
+}
+
 .top-actions {
   display: flex;
   gap: 12px;
@@ -1398,6 +1488,11 @@ onUnmounted(() => {
 .tag.tool {
   background: rgba(16, 185, 129, 0.1);
   color: #059669;
+}
+
+.tag.community {
+  background: color-mix(in srgb, var(--te-neutral-500) 12%, transparent);
+  color: var(--te-neutral-500);
 }
 
 .plugin-desc {
