@@ -206,18 +206,30 @@ TypeScript typings 来自 `@twilight-echo/plugin-api` 包，这是 API v1 与 v2
 import type { TwilightPluginContext } from '@twilight-echo/plugin-api'
 ```
 
-从零到一个可安装运行的插件，完整快速路径：
+目前脚手架 CLI 和 API typings 位于主仓库 `packages/`，尚未发布到 npm。下面用无需安装额外依赖的 JS 插件演示打包；TypeScript 模板可在主仓库本地开发，待工具包发布后再从包仓库安装。
 
 ```bash
-npx create-twilight-plugin init my-provider --type provider --id com.example.provider
-cd my-provider
-npm install
-npm run build
-npm test
-npm run pack
+git clone --branch Pxasen https://github.com/Px-asen/Twilight_Echo.git
+mkdir my-plugin
+cd my-plugin
+# 按第 14 节创建 plugin.json、index.mjs 和 README.md
+node ../Twilight_Echo/packages/create-twilight-plugin/bin/create-twilight-plugin.cjs pack .
 ```
 
-跑完这几步，当前目录下会得到一个 `.tep` 文件，可以直接装进应用测试。目标是模板到可安装运行不超过 30 分钟。
+`pack` 会在 `dist/` 生成 `<插件 ID>-<版本>.tep`，可直接装进应用测试。CLI 的本地调用方式见 [`create-twilight-plugin` README](../packages/create-twilight-plugin/README.md)。
+
+如果要使用 `init` 生成的 TypeScript 模板，先在主仓库运行 `pnpm install --frozen-lockfile`、`pnpm run verify:install-policy`、`pnpm run verify:ncm-patch` 和 `pnpm run build:plugin-api`。假设模板目录与克隆的 `Twilight_Echo` 并列，再运行：
+
+```bash
+node packages/create-twilight-plugin/bin/create-twilight-plugin.cjs init ../my-tool --type tool --id com.example.my-tool
+cd ../my-tool
+pnpm pkg set "devDependencies['@twilight-echo/plugin-api']=file:../Twilight_Echo/packages/plugin-api" "devDependencies['create-twilight-plugin']=file:../Twilight_Echo/packages/create-twilight-plugin"
+pnpm install
+pnpm test
+pnpm run pack
+```
+
+上面第一条命令在 `Twilight_Echo` 仓库根目录执行，其余命令在生成的插件目录执行。独立仓库若在 CI 中构建，需先把主仓库固定版本检出到相同的相邻路径；本地 `file:` 开发依赖不能单独从 npm 下载。
 
 应用里的「扩展中心 → 从本地安装包 (.tep)」只接受 `.tep` 文件。要直接安装未打包的插件目录（省掉每次 `pack`），先在「设置 → 常规 → 开发者选项」里打开**开发者模式**，扩展中心右上角会多出「从文件夹安装（开发）」，选中含 `plugin.json` 的目录即可；关闭开发者模式后该入口消失。两种来源都走同一套信任式安装确认。
 
@@ -262,7 +274,7 @@ TLS 由 `undici.ProxyAgent` 处理，使用系统 CA 校验证书。重定向由
 | `verified`                | 索引发布者声明“已审核”的元数据；单独出现时只显示“索引声明”                                    |
 | `publisherSignature`      | 索引专用 Ed25519 发布者签名；不写入包内 `plugin.json`，也不等同于 manifest 的预留 `signature` |
 
-默认远程索引是 `https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json`。第三方插件源码和发布 `.tep` 包不放在主仓库；开发和发布时应写入外部插件仓库，由外部仓库生成 `plugins.json`。
+默认远程索引是 `https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json`。第三方插件源码和发布 `.tep` 包不放在应用主仓库。独立开发者在自己的公开仓库发布，目录仓库负责发现并合并为 `plugins.json`。
 
 `TWILIGHT_PLUGIN_INDEX_URL` 环境变量优先级最高，可指向自托管 HTTPS `plugins.json` 或本机 HTTP 测试索引。自定义索引的 `verified: true` 只表示该索引自己的声明。官方徽章要求本次从上面的固定官方 URL 直接、fresh 加载，实际 origin 与配置精确一致，记录未 stale/过期，并由 `resources/plugin-index/trusted-publishers.json` 中当前有效且未吊销的 Ed25519 key 验签通过。宿主在每次 list/status/download 时按当前时间重验索引 TTL 与 key 有效期，不把加载时结果永久缓存。
 
@@ -274,26 +286,52 @@ TLS 由 `undici.ProxyAgent` 处理，使用系统 CA 校验证书。重定向由
 
 索引规则见 [spec §7.5](./twilight-echo-plugin-spec.md#75-phase-5-本地可发布生态形态)。注意 Phase 5 仍是信任式安装，索引只提高可发现性和完整性校验，不代表运行时权限 enforcement 或恶意代码沙箱。
 
-## 14. 外部插件仓库
+## 14. 发布到插件市场
 
-第三方插件源码、测试、`.tep` 发布包**不进应用主仓库**。它们统一放在独立的外部插件仓库：
+第三方插件源码、测试和 `.tep` 发布包**不进应用主仓库**。开发者在自己的公开 GitHub 仓库维护插件；[`Twilight-Echo-plugins`](https://github.com/Px-asen/Twilight-Echo-plugins) 是应用检索的统一**目录**，其中的 `plugins/` 和 `packages/` 保留团队维护的现有插件。独立开发者无需把源码复制过去。
 
-- GitHub：`https://github.com/Px-asen/Twilight-Echo-plugins/`
-- 本地路径：`D:\Twilight-Echo-plugins`
+### 14.1 自动加入社区插件列表
 
-外部仓库的布局：
+1. 创建公开 GitHub 仓库，放入源码、`README.md`、`plugin.json` 和入口文件。`plugin.json.repository` 必须是该仓库的精确地址，不带尾部斜杠。下面是一个最小 JS 工具插件示例；请换成自己的 ID、仓库和实际权限：
 
-```text
-plugins/<plugin-name>/    # 插件源码
-packages/                 # .tep 打包产物
-plugins.json              # 索引文件
+```json
+{
+  "id": "com.example.lyrics",
+  "name": "Lyrics Tool",
+  "version": "1.0.0",
+  "description": "Show lyrics for the current track.",
+  "author": "Example Developer",
+  "license": "MIT",
+  "type": ["tool"],
+  "main": "index.mjs",
+  "engines": { "twilightEcho": ">=0.20.0" },
+  "apiVersion": 1,
+  "permissions": [],
+  "repository": "https://github.com/example/twilight-lyrics"
+}
 ```
 
-新增第三方插件时，源码放 `plugins/<plugin-name>/`，打包产物放 `packages/`。运行 `npm run index` 会扫描 `packages/*.tep`、读取包根 `plugin.json`、计算 sha256 并写入 `plugins.json`；`npm run validate:index` 用于发布前确认索引未过期。
+`index.mjs` 至少导出生命周期函数；发布前将示例日志替换为实际功能：
 
-应用主仓库只存：宿主与运行时代码、插件 API typings（`@twilight-echo/plugin-api`）、插件工具链（`create-twilight-plugin`）、内置 NCM provider、随应用分发的静态索引客户端。这是权威插件规范定义的仓库边界。
+```js
+export async function activate(context) {
+  context.logger.info('Lyrics Tool activated')
+}
 
-主项目默认通过 GitHub raw `plugins.json` 消费外部仓库，也可通过 `TWILIGHT_PLUGIN_INDEX_URL` 覆盖。边界规则见 [spec §2.1](./twilight-echo-plugin-spec.md#21-插件源码仓库边界)。
+export async function deactivate() {}
+```
+
+2. 使用第 11 节的 `pack` 命令生成 `dist/com.example.lyrics-1.0.0.tep`。包根必须含 `plugin.json`，文件不超过 50 MiB。先用扩展中心的本地 `.tep` 安装入口验证功能。
+3. 在同一仓库创建 GitHub Release，标签使用 `1.0.0` 或 `v1.0.0`，在**最新 Release** 附带唯一一个 `.tep`：`com.example.lyrics-1.0.0.tep`。给仓库添加 `twilight-echo-plugin` Topic。
+4. [目录仓库的发现工作流](https://github.com/Px-asen/Twilight-Echo-plugins/actions/workflows/community-discovery.yml)约每 6 小时扫描一次；处理成功后会把条目写入 [`plugins.json`](https://github.com/Px-asen/Twilight-Echo-plugins/blob/main/plugins.json)。在应用的扩展中心刷新并按名称、开发者、ID 或标签搜索。自动发现的条目显示“社区插件 / 未验证”，无需提交 PR。
+
+发布更新时递增 manifest 版本，在**同一个仓库**发布对应的新 Release 和 `.tep`。目录会拒绝重复 ID、版本回退和同版本替换安装包；插件 ID 与首次发现的仓库绑定。包无效、下载失败或移除 Topic 时，社区条目会从新索引中移除。扫描只验证包和元数据，不运行插件代码，也不代表人工审核。
+
+### 14.2 申请人工审核
+
+如需申请人工审核，在目录仓库提交 Pull Request，增加 `catalog/<插件 ID>.json`，填写版本、Release 下载地址、SHA-256 和标签，并运行 `pnpm run index`、`pnpm run validate:index`，一并提交生成的 `plugins.json`。目录 CI 校验安装包，维护者审核 README、权限和基本功能。格式和步骤见[目录投稿说明](https://github.com/Px-asen/Twilight-Echo-plugins/blob/main/catalog/README.md)。已审核条目优先于同 ID 社区条目；未签名条目只显示“索引声明”，“官方验证”仍要求有效的发布者签名。更新已审核插件也需提交新版本记录。
+
+应用主仓库只存宿主与运行时代码、插件 API typings、插件工具链、内置 NCM provider 和随包离线索引。边界规则见 [spec §2.1](./twilight-echo-plugin-spec.md#21-插件源码仓库边界)。
 
 ## 15. 内置 NCM provider 参考
 
@@ -313,7 +351,7 @@ plugins.json              # 索引文件
 
 1. **安装确认页强制展示**：作者、权限、实际/配置索引来源、远程/缓存/离线状态、获取/过期时间、索引期望与最终 staged 包实际 SHA-256、签名状态/key ID/公钥 SHA-256 指纹，并明确警示插件可执行任意代码且拥有与应用相同的权限。签名与哈希不能证明代码安全。
 2. **禁止运行时远程代码加载**：全部可执行代码必须随包分发。这条写入生态规范，也是官方索引收录的硬性条件。
-3. **官方索引收录需人工审核与签名链**：开源仓库可溯源、有 README、权限声明与实际行为一致、通过冒烟测试、不含运行时远程代码加载，并由 active trusted publisher key 签名。音源类插件自行承担合规责任，明显侵权源不予收录。
+3. **区分发现、审核与验证**：Topic 自动发现只校验包并显示“未验证”；目录人工审核要求开源仓库可溯源、有 README、权限声明与实际行为一致、通过冒烟测试、不含运行时远程代码加载。有效发布者签名是获得“官方验证”标识的额外条件。音源类插件自行承担合规责任，明显侵权源不予人工收录。
 4. **区分两类签名字段**：manifest 的 `signature` 仍为预留字段；当前索引验证使用不会进入包体的 `publisherSignature`，避免让包内签名循环依赖包 checksum。
 5. **架构预留收紧路径**：utilityProcess 宿主加 API 网关加强制权限声明已就位，未来启用强制权限只需在网关层加闸。
 
