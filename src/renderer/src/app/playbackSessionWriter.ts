@@ -26,13 +26,55 @@ export class PlaybackSessionWriter {
   private nextSequence = 0
   private committedSequence = 0
   private revision = 0
+  private savedQueueRef: object | null = null
 
   save(api: PlaybackSessionWriteApi, session: PlaybackSession): PlaybackSessionWriteReceipt {
-    return this.enqueue((expectedRevision) => api.savePlaybackSession(session, expectedRevision))
+    return this.enqueue(async (expectedRevision) => {
+      const receipt = await api.savePlaybackSession(session, expectedRevision)
+      if (session.queue !== undefined) this.savedQueueRef = null
+      return receipt
+    })
+  }
+
+  saveSnapshot(
+    api: PlaybackSessionWriteApi,
+    session: PlaybackSession | null,
+    queueRef: object | null,
+    createQueue: () => NonNullable<PlaybackSession['queue']>
+  ): PlaybackSessionWriteReceipt {
+    let snapshot: PlaybackSession | null | undefined
+    return this.enqueue(async (expectedRevision) => {
+      if (snapshot === undefined) {
+        snapshot =
+          session && queueRef !== null && queueRef !== this.savedQueueRef && !session.queue
+            ? { ...session, queue: createQueue() }
+            : session
+      }
+      if (!snapshot) {
+        const receipt = await api.clearPlaybackSession(expectedRevision)
+        this.savedQueueRef = null
+        return receipt
+      }
+      try {
+        const receipt = await api.savePlaybackSession(snapshot, expectedRevision)
+        if (snapshot.queue !== undefined) this.savedQueueRef = queueRef
+        return receipt
+      } catch (error) {
+        if (isPersistentDataRevisionConflict(error)) {
+          this.savedQueueRef = null
+          snapshot = undefined
+        }
+        throw error
+      }
+    })
   }
 
   clear(api: PlaybackSessionWriteApi): PlaybackSessionWriteReceipt {
-    return this.enqueue((expectedRevision) => api.clearPlaybackSession(expectedRevision))
+    return this.enqueue(async (expectedRevision) => {
+      const receipt = await api.clearPlaybackSession(expectedRevision)
+      this.savedQueueRef = null
+      return receipt
+    })
   }
 
   whenIdle(): Promise<void> {
@@ -52,6 +94,10 @@ export class PlaybackSessionWriter {
 
   getCommittedSequence(): number {
     return this.committedSequence
+  }
+
+  setSavedQueueRef(queueRef: object | null): void {
+    this.savedQueueRef = queueRef
   }
 
   private enqueue(

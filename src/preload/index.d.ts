@@ -19,7 +19,7 @@ import type {
   BpmAnalysisResult,
   LoudnessAnalysisResult
 } from '../shared/audioEngineTypes.ts'
-import type { PlaybackResumeMode, AudioEqPreset, AppSettings } from '../shared/appSettings.ts'
+import type { AudioEqPreset, AppSettings } from '../shared/appSettings.ts'
 import type {
   AudioDeviceProfile,
   AudioDeviceProfilesSnapshot
@@ -237,7 +237,7 @@ interface ProviderDownloadTaskSnapshot {
 
 type MiniPlayerBackgroundKind = 'solid' | 'gradient' | 'cover' | 'image'
 type MiniPlayerImageFit = 'cover' | 'contain'
-type MiniPlayerLayoutPreference = 'auto' | 'compact' | 'standard' | 'wide'
+type MiniPlayerLayoutPreference = 'auto' | 'compact' | 'standard' | 'wide' | 'poster'
 type MotionPreference = 'system' | 'full' | 'reduced' | 'off'
 
 interface MiniPlayerBackgroundSettings {
@@ -320,16 +320,8 @@ interface MiniPlayerTrackSnapshot {
   coverSource: string | null
 }
 
-interface MiniPlayerLyricLineSnapshot {
-  time: number | null
-  original: string
-  translation: string | null
-}
-
 interface MiniPlayerStateSnapshot {
   track: MiniPlayerTrackSnapshot | null
-  currentLyric: { original: string; translation: string | null } | null
-  lyrics: MiniPlayerLyricLineSnapshot[]
   isPlaying: boolean
   isLoading: boolean
   currentTime: number
@@ -409,17 +401,7 @@ interface OpraProfile {
   unsupportedBandTypes: string[]
 }
 
-interface PlaybackSession {
-  version: 1
-  savedAt: string
-  mode: PlaybackResumeMode
-  playMode?: PlayMode
-  track: TrackData
-  position: number
-  queue?: TrackData[]
-  queueIndex?: number
-  sleepTimer?: import('../shared/sleepTimer.ts').SleepTimerState
-}
+type PlaybackSession = import('../shared/playbackSession.ts').PlaybackSessionData<TrackData>
 
 interface VersionedDataEnvelope<T> {
   version: 2
@@ -1218,6 +1200,8 @@ interface WindowAPI {
     chooseBackgroundImage: () => Promise<string | null>
     minimize: () => void
     returnToMain: () => void
+    moveTo: (x: number, y: number) => void
+    moveEnd: () => void
     publishState: (state: MiniPlayerStateSnapshot) => void
     onState: (cb: (state: MiniPlayerStateSnapshot) => void) => () => void
     onSettings: (cb: (settings: MiniPlayerSettings) => void) => () => void

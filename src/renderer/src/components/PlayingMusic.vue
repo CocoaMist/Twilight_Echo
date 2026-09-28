@@ -14,7 +14,6 @@ import { useVisualizationStore } from '../stores/useVisualizationStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useLyricsManagement } from '../stores/lyricsManagement'
 import CoverImg from './CoverImg.vue'
-import NowPlayingPlaylistButton from '@renderer/components/player-bar/NowPlayingPlaylistButton.vue'
 import { buildLyricLines, findActiveLyricIndex } from '../utils/lyrics'
 import type { LyricLine } from '../utils/lyrics'
 import { isAmlTtml } from '../utils/amllTtml.ts'
@@ -688,7 +687,6 @@ onBeforeUnmount(() => {
             <h1 class="track-title">{{ currentTrack.title }}</h1>
             <p class="track-artist">{{ currentTrack.artist }}</p>
             <p v-if="currentTrack.album" class="track-album">{{ currentTrack.album }}</p>
-            <NowPlayingPlaylistButton :track="currentTrack" />
           </div>
         </section>
 

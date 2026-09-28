@@ -27,7 +27,7 @@ export type JsonFileLoadResult<T> =
       restoreError: string | null
     }
 
-type JsonCandidate<T> =
+export type JsonCandidate<T> =
   | { status: 'missing' }
   | { status: 'loaded'; value: T }
   | { status: 'invalid'; error: string }
@@ -228,7 +228,10 @@ function temporaryPathFor(filePath: string): string {
   return `${filePath}.tmp`
 }
 
-function readJsonCandidate<T>(filePath: string, options: JsonFileOptions<T>): JsonCandidate<T> {
+export function readJsonCandidate<T>(
+  filePath: string,
+  options: JsonFileOptions<T>
+): JsonCandidate<T> {
   if (!existsSync(filePath)) return { status: 'missing' }
   try {
     const fileSize = statSync(filePath).size

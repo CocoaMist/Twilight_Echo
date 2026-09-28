@@ -1033,6 +1033,8 @@ html:is(
   flex: 0 0 auto;
   width: 40px;
   height: 20px;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
   background: #d1d5db;
   cursor: pointer;
@@ -1040,6 +1042,11 @@ html:is(
     background var(--te-motion-panel) var(--te-ease-soft),
     box-shadow var(--te-motion-panel) var(--te-ease-soft),
     scale var(--te-motion-hover) var(--te-ease-soft);
+}
+
+.toggle-switch:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 3px;
 }
 
 .toggle-switch::after {

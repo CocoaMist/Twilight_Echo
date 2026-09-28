@@ -4,10 +4,14 @@ import {
   DEFAULT_MINI_PLAYER_SETTINGS,
   EMPTY_MINI_PLAYER_STATE,
   cloneMiniPlayerSettings,
+  cloneMiniPlayerThemeProfile,
+  nextMiniPlayerSizePreset,
   type MiniPlayerCommand,
   type MiniPlayerSettingsPatch,
-  type MiniPlayerStateSnapshot
+  type MiniPlayerStateSnapshot,
+  type MiniPlayerWindowSize
 } from '../../../shared/miniPlayer.ts'
+import MiniGlyph from './MiniGlyph.vue'
 import MiniPlayerCustomizer from './MiniPlayerCustomizer.vue'
 import ScrollingText from './ScrollingText.vue'
 import {
@@ -19,11 +23,17 @@ import { resolveMiniPlayerStyle } from './styles'
 import { useMiniPlayerCustomizationDraft } from './useMiniPlayerCustomizationDraft'
 import { useMotionPreference } from '../app/useMotionPreference'
 import { useCover } from '../utils/coverLoader'
+import { extractAverageColor } from '../utils/colorExtractor'
 import { useSmoothedValue } from '../utils/useSmoothedValue'
-import { findActiveMiniPlayerLyricIndex } from '../app/useMiniPlayerSync'
-import type { MiniPlayerLyricLineSnapshot } from '../../../shared/miniPlayer'
 import type { MotionPreference } from '../../../shared/motion.ts'
 import { estimateMiniPlayerTime } from '../../../shared/miniPlayerClock.ts'
+
+const VOLUME_STEP = 0.05
+const VOLUME_HUD_MS = 1100
+const DRAG_THRESHOLD_PX = 3
+const REMAINING_TIME_STORAGE_KEY = 'te-mini-player-remaining-time'
+/** The customizer panel needs this much room, with a preview column beside it; smaller forms grow while it is open. */
+const CUSTOMIZER_MIN_SIZE: MiniPlayerWindowSize = { width: 520, height: 340 }
 
 const state = ref<MiniPlayerStateSnapshot>({ ...EMPTY_MINI_PLAYER_STATE })
 const clockNow = ref(Date.now())
@@ -43,14 +53,25 @@ watch(
 const ready = ref(false)
 const bootstrapError = ref('')
 const coverFailed = ref(false)
+const coverSurfaceColor = ref<string | null>(null)
 const customizerOpen = ref(false)
-// Idle (cursor outside the window) shows the current lyric line; hovering the
-// UI switches back to track title / artist so controls stay usable.
 const hovered = ref(false)
+const dragging = ref(false)
+const volumeHudVisible = ref(false)
+const showRemaining = ref(readRemainingPreference())
 const viewportWidth = ref(Math.max(1, window.innerWidth))
 const viewportHeight = ref(Math.max(1, window.innerHeight))
 const motionPreference = ref<MotionPreference>('system')
 useMotionPreference(motionPreference)
+
+let volumeBeforeMute = 0.6
+let volumeHudTimer: ReturnType<typeof setTimeout> | null = null
+let sizeBeforeCustomizer: MiniPlayerWindowSize | null = null
+let dragOrigin: { pointerX: number; pointerY: number; windowX: number; windowY: number } | null =
+  null
+let dragMoved = false
+let dragFrame = 0
+let pendingMove: { x: number; y: number } | null = null
 
 const customization = useMiniPlayerCustomizationDraft({
   initial: cloneMiniPlayerSettings(DEFAULT_MINI_PLAYER_SETTINGS),
@@ -62,6 +83,7 @@ const activeProfile = computed(
   () => settings.value.profiles[settings.value.activeStyleId] ?? customization.activeProfile.value
 )
 const activeStyle = computed(() => resolveMiniPlayerStyle(settings.value.activeStyleId))
+const hasTrack = computed(() => Boolean(state.value.track))
 const rawProgressPercent = computed(() =>
   state.value.duration > 0
     ? Math.min(100, Math.max(0, (playbackTime.value / state.value.duration) * 100))
@@ -69,8 +91,8 @@ const rawProgressPercent = computed(() =>
 )
 // Snapshot pushes are stepped; glide between them like the main PlayerBar.
 const progressPercent = useSmoothedValue(rawProgressPercent, { tau: 160, snapThreshold: 2.5 })
-const progressFillStyle = computed<CSSProperties>(() => ({
-  transform: `scaleX(${Math.min(100, Math.max(0, progressPercent.value)) / 100})`
+const progressStyle = computed<CSSProperties>(() => ({
+  '--mini-progress': `${Math.min(100, Math.max(0, progressPercent.value)) / 100}`
 }))
 const resolvedLayout = computed(() =>
   resolveMiniPlayerLayout(
@@ -79,6 +101,13 @@ const resolvedLayout = computed(() =>
     activeProfile.value.layout.preference
   )
 )
+const isCompact = computed(() => resolvedLayout.value === 'compact')
+const showsInlineVolume = computed(() => resolvedLayout.value === 'wide')
+// The larger forms set the title as a two-line headline instead of a marquee.
+const wrapsTitle = computed(
+  () => resolvedLayout.value === 'wide' || resolvedLayout.value === 'poster'
+)
+const showsFavorite = computed(() => !isCompact.value && state.value.favoriteAvailable)
 const resolvedVisibility = computed(() =>
   resolveMiniPlayerVisibility(activeProfile.value.visibility, resolvedLayout.value)
 )
@@ -89,19 +118,26 @@ const styleVariables = computed(
       ...buildMiniPlayerCssVariables(
         activeProfile.value,
         state.value.dominantColor,
-        state.value.volume * 100
+        state.value.volume * 100,
+        coverSurfaceColor.value
       )
     }) as CSSProperties
 )
 const styleClasses = computed(() => [
   activeStyle.value.className,
-  `mini-layout-${activeStyle.value.layout}`,
   {
     'is-ready': ready.value,
     'is-playing': state.value.isPlaying,
+    'is-empty': !hasTrack.value,
+    // Empty larger forms keep their tools out; the strip would lose its message.
+    'is-hovered': hovered.value || (!hasTrack.value && !isCompact.value),
+    'is-dragging': dragging.value,
     'is-position-locked': settings.value.positionLocked,
     'is-artwork-hidden': !resolvedVisibility.value.artwork,
-    'is-customizing': customizerOpen.value
+    'is-cover-mode': activeProfile.value.background.kind === 'cover',
+    'has-cover-background': hasCoverBackground.value,
+    'is-customizing': customizerOpen.value,
+    'is-volume-hud': volumeHudVisible.value
   }
 ])
 // cover:// / background:// handles and expired twilight-media grants cannot be
@@ -112,6 +148,9 @@ const coverSrc = useCover(
   computed(() => state.value.track?.coverSource)
 )
 const hasCover = computed(() => Boolean(coverSrc.value) && !coverFailed.value)
+const hasCoverBackground = computed(
+  () => activeProfile.value.background.kind === 'cover' && hasCover.value
+)
 const backgroundSourceStyle = computed<CSSProperties>(() => {
   const background = activeProfile.value.background
   const fallback = { backgroundColor: background.fallbackColor }
@@ -123,29 +162,22 @@ const backgroundSourceStyle = computed<CSSProperties>(() => {
       backgroundImage: `linear-gradient(${background.gradientAngle}deg, ${background.gradientStart}, ${background.gradientEnd})`
     }
   }
-  if (background.kind === 'cover' && hasCover.value && coverSrc.value) {
-    return { ...fallback, backgroundImage: cssBackgroundUrl(coverSrc.value) }
+  if (background.kind === 'cover') {
+    return hasCover.value && coverSrc.value
+      ? { backgroundImage: cssBackgroundUrl(coverSrc.value) }
+      : {}
   }
   if (background.kind === 'image' && background.imageUrl) {
     return { ...fallback, backgroundImage: cssBackgroundUrl(background.imageUrl) }
   }
   return fallback
 })
-const trackTitle = computed(() => state.value.track?.title || '暂无播放')
-const trackArtist = computed(() => state.value.track?.artist || '从主窗口选择一首音乐')
-const trackAlbum = computed(() => state.value.track?.album || 'TWILIGHT ECHO')
-// Older main-process snapshots omit the field entirely (undefined); treat that
-// as "no lyric" so the idle view never dereferences a missing line.
-const lyricLines = computed<MiniPlayerLyricLineSnapshot[]>(() => state.value.lyrics ?? [])
-const activeLyricIndex = computed(() =>
-  findActiveMiniPlayerLyricIndex(lyricLines.value, playbackTime.value)
+const trackKey = computed(() => state.value.track?.id ?? 'empty')
+const backgroundSourceKey = computed(() =>
+  hasCoverBackground.value ? `cover:${trackKey.value}:${coverSrc.value}` : 'background'
 )
-const currentLyricLine = computed(() =>
-  activeLyricIndex.value >= 0 ? (lyricLines.value[activeLyricIndex.value] ?? null) : null
-)
-const hasActiveLyric = computed(
-  () => currentLyricLine.value !== null && lyricLines.value.length > 0 && Boolean(state.value.track)
-)
+const trackTitle = computed(() => state.value.track?.title || '此刻安静')
+const trackArtist = computed(() => state.value.track?.artist || '在主窗口挑一首歌开始')
 const trackQuality = computed(() => {
   const track = state.value.track
   if (!track) return { label: '', spec: '', isHiRes: false }
@@ -162,7 +194,7 @@ const trackQuality = computed(() => {
   const lossless = /^(flac|alac|wav|aiff|aif|ape|dsf|dff|tta|wv|m4a)$/i.test(format)
   const isHiRes = (track.bitDepth ?? 0) >= 24 || (track.sampleRate ?? 0) >= 96000
   return {
-    label: isHiRes ? 'Hi-Res Lossless' : lossless ? 'Lossless' : '',
+    label: isHiRes ? 'Hi-Res' : lossless ? 'Lossless' : '',
     spec,
     isHiRes
   }
@@ -170,8 +202,14 @@ const trackQuality = computed(() => {
 const queuePositionText = computed(() =>
   state.value.queueLength > 0 && state.value.queueIndex >= 0
     ? `${state.value.queueIndex + 1} / ${state.value.queueLength}`
-    : `0 / ${state.value.queueLength}`
+    : ''
 )
+const kickerText = computed(() => {
+  if (!hasTrack.value) return 'Twilight Echo'
+  const album = resolvedVisibility.value.album ? state.value.track?.album || '' : ''
+  const queue = resolvedVisibility.value.queuePosition ? queuePositionText.value : ''
+  return [album, queue].filter(Boolean).join('  ·  ')
+})
 const playModeTitle = computed(() => {
   if (state.value.playMode === 'heart') return '心动模式'
   if (state.value.playMode === 'listLoop') return '列表循环'
@@ -180,12 +218,32 @@ const playModeTitle = computed(() => {
   return '顺序播放'
 })
 const playModeIcon = computed(() => {
-  if (state.value.playMode === 'heart') return 'ph ph-heart'
+  if (state.value.playMode === 'heart') return 'ph ph-heart-half'
   if (state.value.playMode === 'listLoop') return 'ph ph-repeat'
   if (state.value.playMode === 'repeat') return 'ph ph-repeat-once'
   if (state.value.playMode === 'shuffle') return 'ph ph-shuffle'
   return 'ph ph-arrow-right'
 })
+const volumePercent = computed(() => Math.round(state.value.volume * 100))
+const volumeIcon = computed(() => {
+  if (state.value.volume <= 0.001) return 'ph ph-speaker-simple-x'
+  if (state.value.volume < 0.34) return 'ph ph-speaker-simple-none'
+  if (state.value.volume < 0.67) return 'ph ph-speaker-simple-low'
+  return 'ph ph-speaker-simple-high'
+})
+const nextFormLabel = computed(
+  () =>
+    nextMiniPlayerSizePreset({
+      width: settings.value.windowWidth,
+      height: settings.value.windowHeight
+    }).label
+)
+const elapsedText = computed(() => formatTime(playbackTime.value))
+const trailingTimeText = computed(() =>
+  showRemaining.value && state.value.duration > 0
+    ? `-${formatTime(Math.max(0, state.value.duration - playbackTime.value))}`
+    : formatTime(state.value.duration)
+)
 
 function cssBackgroundUrl(value: string): string {
   return `url(${JSON.stringify(value)})`
@@ -196,11 +254,18 @@ function sendCommand(command: MiniPlayerCommand): void {
 }
 
 function togglePlay(): void {
-  if (!state.value.track || state.value.isLoading) return
+  if (!hasTrack.value || state.value.isLoading) return
   sendCommand({ type: 'toggle-play' })
 }
 
+function toggleFavorite(): void {
+  if (!state.value.favoriteAvailable || state.value.favoriteLoading) return
+  state.value = { ...state.value, favoriteLiked: !state.value.favoriteLiked }
+  sendCommand({ type: 'toggle-favorite' })
+}
+
 function seekTo(value: number): void {
+  if (!hasTrack.value) return
   const time = Math.min(state.value.duration || value, Math.max(0, value))
   state.value = { ...state.value, currentTime: time, capturedAtMs: Date.now() }
   sendCommand({ type: 'seek', value: time })
@@ -210,14 +275,57 @@ function onProgressInput(event: Event): void {
   seekTo(Number((event.target as HTMLInputElement).value))
 }
 
-function setVolume(value: number): void {
-  const volume = Math.min(1, Math.max(0, value))
+function setVolume(value: number, options: { hud?: boolean } = {}): void {
+  const volume = Math.round(Math.min(1, Math.max(0, value)) * 100) / 100
   state.value = { ...state.value, volume }
   sendCommand({ type: 'set-volume', value: volume })
+  if (options.hud) flashVolumeHud()
 }
 
 function onVolumeInput(event: Event): void {
   setVolume(Number((event.target as HTMLInputElement).value))
+}
+
+function toggleMute(hud = !showsInlineVolume.value): void {
+  if (state.value.volume > 0.001) {
+    volumeBeforeMute = state.value.volume
+    setVolume(0, { hud })
+  } else {
+    setVolume(volumeBeforeMute > 0.001 ? volumeBeforeMute : 0.6, { hud })
+  }
+}
+
+function flashVolumeHud(): void {
+  volumeHudVisible.value = true
+  if (volumeHudTimer) clearTimeout(volumeHudTimer)
+  volumeHudTimer = setTimeout(() => {
+    volumeHudTimer = null
+    volumeHudVisible.value = false
+  }, VOLUME_HUD_MS)
+}
+
+function onWheel(event: WheelEvent): void {
+  if (customizerOpen.value || event.deltaY === 0) return
+  const target = event.target
+  if (target instanceof Element && target.closest('.mini-customizer')) return
+  setVolume(state.value.volume + (event.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP), { hud: true })
+}
+
+function readRemainingPreference(): boolean {
+  try {
+    return window.localStorage.getItem(REMAINING_TIME_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function toggleRemainingTime(): void {
+  showRemaining.value = !showRemaining.value
+  try {
+    window.localStorage.setItem(REMAINING_TIME_STORAGE_KEY, showRemaining.value ? '1' : '0')
+  } catch {
+    // Per-window convenience only; the toggle still works for this session.
+  }
 }
 
 async function updateWindowSettings(patch: MiniPlayerSettingsPatch): Promise<void> {
@@ -237,8 +345,41 @@ function toggleAlwaysOnTop(): void {
   void updateWindowSettings({ alwaysOnTop: !settings.value.alwaysOnTop })
 }
 
+function cycleForm(): void {
+  const preset = nextMiniPlayerSizePreset({
+    width: settings.value.windowWidth,
+    height: settings.value.windowHeight
+  })
+  const styleId = settings.value.activeStyleId
+  const profile = settings.value.profiles[styleId]
+  // A pinned layout would keep the old arrangement inside the new window shape.
+  const profiles =
+    profile && profile.layout.preference !== 'auto'
+      ? {
+          ...settings.value.profiles,
+          [styleId]: {
+            ...cloneMiniPlayerThemeProfile(profile),
+            layout: { preference: 'auto' as const }
+          }
+        }
+      : settings.value.profiles
+  void updateWindowSettings({
+    windowWidth: preset.width,
+    windowHeight: preset.height,
+    profiles
+  })
+}
+
 function openCustomizer(): void {
   customization.beginSession()
+  const { windowWidth, windowHeight } = settings.value
+  if (windowWidth < CUSTOMIZER_MIN_SIZE.width || windowHeight < CUSTOMIZER_MIN_SIZE.height) {
+    sizeBeforeCustomizer = { width: windowWidth, height: windowHeight }
+    void updateWindowSettings({
+      windowWidth: Math.max(windowWidth, CUSTOMIZER_MIN_SIZE.width),
+      windowHeight: Math.max(windowHeight, CUSTOMIZER_MIN_SIZE.height)
+    })
+  }
   customizerOpen.value = true
 }
 
@@ -246,6 +387,11 @@ async function closeCustomizer(): Promise<void> {
   try {
     await customization.flush()
     customizerOpen.value = false
+    if (sizeBeforeCustomizer) {
+      const previous = sizeBeforeCustomizer
+      sizeBeforeCustomizer = null
+      await updateWindowSettings({ windowWidth: previous.width, windowHeight: previous.height })
+    }
   } catch {
     // The editor stays open so its inline persistence error remains actionable.
   }
@@ -285,6 +431,58 @@ function updateViewportSize(): void {
   viewportHeight.value = Math.max(1, window.innerHeight)
 }
 
+function flushMove(): void {
+  dragFrame = 0
+  if (!pendingMove) return
+  window.api.miniPlayer.moveTo(pendingMove.x, pendingMove.y)
+  pendingMove = null
+}
+
+// The window moves itself: an `app-region: drag` surface would be reported to
+// Windows as caption area and swallow every hover the controls reveal on.
+function onPointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || settings.value.positionLocked || customizerOpen.value) return
+  const target = event.target
+  if (target instanceof Element && target.closest('button, input, label, [data-mini-interactive]'))
+    return
+  dragOrigin = {
+    pointerX: event.screenX,
+    pointerY: event.screenY,
+    windowX: window.screenX,
+    windowY: window.screenY
+  }
+  dragMoved = false
+  const root = event.currentTarget
+  if (root instanceof Element) {
+    try {
+      root.setPointerCapture(event.pointerId)
+    } catch {
+      dragOrigin = null
+    }
+  }
+}
+
+function onPointerMove(event: PointerEvent): void {
+  if (!dragOrigin) return
+  const deltaX = event.screenX - dragOrigin.pointerX
+  const deltaY = event.screenY - dragOrigin.pointerY
+  if (!dragMoved && Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD_PX) return
+  dragMoved = true
+  dragging.value = true
+  pendingMove = { x: dragOrigin.windowX + deltaX, y: dragOrigin.windowY + deltaY }
+  if (dragFrame === 0) dragFrame = requestAnimationFrame(flushMove)
+}
+
+function endDrag(): void {
+  if (!dragOrigin) return
+  dragOrigin = null
+  dragging.value = false
+  if (dragFrame !== 0) cancelAnimationFrame(dragFrame)
+  flushMove()
+  if (dragMoved) window.api.miniPlayer.moveEnd()
+  dragMoved = false
+}
+
 async function handleKeydown(event: KeyboardEvent): Promise<void> {
   if (event.key === 'Escape') {
     event.preventDefault()
@@ -294,7 +492,8 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
   }
 
   const target = event.target as HTMLElement | null
-  if (target?.tagName === 'INPUT') return
+  if (target?.tagName === 'INPUT' || customizerOpen.value) return
+  const withModifier = event.ctrlKey || event.metaKey
 
   switch (event.key) {
     case ' ':
@@ -303,19 +502,31 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
       break
     case 'ArrowLeft':
       event.preventDefault()
-      seekTo(state.value.currentTime - 5)
+      if (withModifier) sendCommand({ type: 'previous' })
+      else seekTo(playbackTime.value - 5)
       break
     case 'ArrowRight':
       event.preventDefault()
-      seekTo(state.value.currentTime + 5)
+      if (withModifier) sendCommand({ type: 'next' })
+      else seekTo(playbackTime.value + 5)
       break
     case 'ArrowUp':
       event.preventDefault()
-      setVolume(state.value.volume + 0.05)
+      setVolume(state.value.volume + VOLUME_STEP, { hud: true })
       break
     case 'ArrowDown':
       event.preventDefault()
-      setVolume(state.value.volume - 0.05)
+      setVolume(state.value.volume - VOLUME_STEP, { hud: true })
+      break
+    case 'm':
+    case 'M':
+      event.preventDefault()
+      toggleMute(true)
+      break
+    case 'l':
+    case 'L':
+      event.preventDefault()
+      toggleFavorite()
       break
   }
 }
@@ -339,6 +550,9 @@ onMounted(async () => {
   })
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateViewportSize)
+  document.addEventListener('pointermove', onPointerMove)
+  document.addEventListener('pointerup', endDrag)
+  document.addEventListener('pointercancel', endDrag)
   updateViewportSize()
 
   await loadBootstrap()
@@ -361,12 +575,23 @@ async function loadBootstrap(): Promise<void> {
   }
 }
 
-watch(coverSrc, () => {
+watch(coverSrc, (source, _previous, onCleanup) => {
   coverFailed.value = false
+  coverSurfaceColor.value = null
+  if (!source) return
+  let active = true
+  onCleanup(() => {
+    active = false
+  })
+  void extractAverageColor(source).then((color) => {
+    if (active) coverSurfaceColor.value = color
+  })
 })
 
 onBeforeUnmount(() => {
   if (clockTimer !== null) clearInterval(clockTimer)
+  if (volumeHudTimer) clearTimeout(volumeHudTimer)
+  if (dragFrame !== 0) cancelAnimationFrame(dragFrame)
   const pendingFlush = customization.flush()
   customization.dispose()
   void pendingFlush.catch(() => undefined)
@@ -375,6 +600,9 @@ onBeforeUnmount(() => {
   removeMotionPreferenceListener?.()
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', updateViewportSize)
+  document.removeEventListener('pointermove', onPointerMove)
+  document.removeEventListener('pointerup', endDrag)
+  document.removeEventListener('pointercancel', endDrag)
 })
 </script>
 
@@ -386,17 +614,23 @@ onBeforeUnmount(() => {
     :style="styleVariables"
     :data-layout="resolvedLayout"
     :data-theme-profile="settings.activeStyleId"
-    @mouseenter="hovered = true"
-    @mouseleave="hovered = false"
+    @pointerenter="hovered = true"
+    @pointerleave="hovered = false"
+    @pointerdown="onPointerDown"
+    @wheel.passive="onWheel"
   >
-    <div
-      class="mini-window-fill"
-      :style="{ backgroundColor: activeProfile.background.fallbackColor }"
-      aria-hidden="true"
-    ></div>
+    <div class="mini-window-fill" aria-hidden="true"></div>
     <section class="mini-player-surface">
-      <div class="mini-background-source" :style="backgroundSourceStyle" aria-hidden="true"></div>
+      <Transition name="mini-backdrop-fade">
+        <div
+          :key="backgroundSourceKey"
+          class="mini-background-source"
+          :style="backgroundSourceStyle"
+          aria-hidden="true"
+        ></div>
+      </Transition>
       <div class="mini-background-overlay" aria-hidden="true"></div>
+      <div class="mini-grain" aria-hidden="true"></div>
 
       <div v-if="bootstrapError" class="mini-bootstrap-error" role="alert">
         <p>迷你播放器加载失败：{{ bootstrapError }}</p>
@@ -406,15 +640,204 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <span class="mini-drag-hint" aria-hidden="true"></span>
+      <div
+        v-if="resolvedVisibility.artwork"
+        class="mini-artwork-wrap"
+        title="双击返回完整播放器"
+        @dblclick="returnToMainWindow"
+      >
+        <Transition name="mini-art-swap">
+          <img
+            v-if="hasCover"
+            :key="`art:${trackKey}:${coverSrc}`"
+            :src="coverSrc || ''"
+            class="mini-artwork"
+            alt="专辑封面"
+            draggable="false"
+            @error="coverFailed = true"
+          />
+          <div
+            v-else
+            :key="`art:${trackKey}:placeholder`"
+            class="mini-artwork mini-artwork-placeholder"
+            aria-label="暂无封面"
+          >
+            <i class="ph ph-vinyl-record"></i>
+          </div>
+        </Transition>
+        <span class="mini-artwork-sheen" aria-hidden="true"></span>
+      </div>
 
-      <div class="mini-window-actions mini-no-drag">
+      <div class="mini-info">
+        <div v-if="!isCompact" class="mini-kicker">
+          <span
+            v-if="resolvedVisibility.equalizer && hasTrack"
+            class="mini-equalizer"
+            :class="{ active: state.isPlaying }"
+            aria-hidden="true"
+          >
+            <span></span><span></span><span></span>
+          </span>
+          <span
+            v-if="trackQuality.label"
+            class="mini-quality-badge"
+            :class="{ 'is-hires': trackQuality.isHiRes }"
+            :title="trackQuality.spec"
+          >
+            {{ trackQuality.label }}
+          </span>
+          <span class="mini-kicker-text" :title="kickerText">{{ kickerText }}</span>
+        </div>
+        <Transition name="mini-meta-swap" mode="out-in">
+          <div :key="`meta:${trackKey}`" class="mini-track-meta">
+            <div class="mini-track-text">
+              <h1 class="mini-title" :title="trackTitle">
+                <span v-if="wrapsTitle" class="mini-title-lines">{{ trackTitle }}</span>
+                <ScrollingText v-else :text="trackTitle" />
+              </h1>
+              <p class="mini-artist" :title="trackArtist"><ScrollingText :text="trackArtist" /></p>
+            </div>
+            <button
+              v-if="showsFavorite"
+              type="button"
+              class="mini-icon-button favorite-button"
+              :class="{ 'is-active': state.favoriteLiked }"
+              :title="state.favoriteLiked ? '取消收藏' : '收藏'"
+              :aria-label="state.favoriteLiked ? '取消收藏' : '收藏'"
+              :aria-pressed="state.favoriteLiked"
+              :disabled="state.favoriteLoading"
+              @click="toggleFavorite"
+            >
+              <i :class="state.favoriteLiked ? 'ph-fill ph-heart' : 'ph ph-heart'"></i>
+            </button>
+          </div>
+        </Transition>
+      </div>
+
+      <div
+        class="mini-progress"
+        :class="{ 'without-time': !resolvedVisibility.time, 'is-disabled': !hasTrack }"
+        :style="progressStyle"
+      >
+        <span v-if="resolvedVisibility.time" class="mini-time elapsed">{{ elapsedText }}</span>
+        <div class="mini-progress-rail">
+          <div class="mini-progress-track" aria-hidden="true">
+            <div class="mini-progress-fill"></div>
+          </div>
+          <span class="mini-progress-thumb" aria-hidden="true"></span>
+          <input
+            type="range"
+            class="mini-range mini-progress-range"
+            min="0"
+            :max="state.duration || 1"
+            step="0.1"
+            :value="playbackTime"
+            aria-label="播放进度"
+            :aria-valuetext="`${elapsedText} / ${formatTime(state.duration)}`"
+            :disabled="!hasTrack"
+            @input="onProgressInput"
+          />
+        </div>
+        <button
+          v-if="resolvedVisibility.time"
+          type="button"
+          class="mini-time trailing"
+          :title="showRemaining ? '显示总时长' : '显示剩余时间'"
+          :aria-label="showRemaining ? '显示总时长' : '显示剩余时间'"
+          @click="toggleRemainingTime"
+        >
+          {{ trailingTimeText }}
+        </button>
+      </div>
+
+      <footer class="mini-controls">
+        <div v-if="!isCompact" class="mini-controls-side left">
+          <button
+            v-if="resolvedVisibility.playMode"
+            type="button"
+            class="mini-icon-button mode-button"
+            :class="{ 'is-active': state.playMode !== 'sequential' }"
+            :title="playModeTitle"
+            :aria-label="`播放模式：${playModeTitle}`"
+            :disabled="!hasTrack"
+            @click="sendCommand({ type: 'cycle-play-mode' })"
+          >
+            <i :class="playModeIcon"></i>
+          </button>
+        </div>
+
+        <div class="mini-transport">
+          <button
+            type="button"
+            class="mini-transport-button"
+            title="上一首"
+            aria-label="上一首"
+            :disabled="!hasTrack"
+            @click="sendCommand({ type: 'previous' })"
+          >
+            <MiniGlyph name="previous" />
+          </button>
+          <button
+            type="button"
+            class="mini-play-button"
+            :class="{ 'is-playing': state.isPlaying }"
+            :title="state.isPlaying ? '暂停' : '播放'"
+            :aria-label="state.isPlaying ? '暂停' : '播放'"
+            :disabled="!hasTrack || state.isLoading"
+            @click="togglePlay"
+          >
+            <i v-if="state.isLoading" class="pi pi-spin pi-spinner"></i>
+            <MiniGlyph v-else :name="state.isPlaying ? 'pause' : 'play'" />
+          </button>
+          <button
+            type="button"
+            class="mini-transport-button"
+            title="下一首"
+            aria-label="下一首"
+            :disabled="!hasTrack"
+            @click="sendCommand({ type: 'next' })"
+          >
+            <MiniGlyph name="next" />
+          </button>
+        </div>
+
+        <div v-if="!isCompact" class="mini-controls-side right">
+          <div
+            v-if="resolvedVisibility.volume"
+            class="mini-volume"
+            :class="{ 'has-slider': showsInlineVolume }"
+          >
+            <input
+              v-if="showsInlineVolume"
+              type="range"
+              class="mini-range mini-volume-range"
+              min="0"
+              max="1"
+              step="0.01"
+              :value="state.volume"
+              aria-label="音量"
+              @input="onVolumeInput"
+            />
+            <button
+              type="button"
+              class="mini-icon-button volume-button"
+              :title="`音量 ${volumePercent}%（滚轮调节）`"
+              :aria-label="state.volume > 0.001 ? '静音' : '取消静音'"
+              @click="toggleMute()"
+            >
+              <i :class="volumeIcon"></i>
+            </button>
+          </div>
+        </div>
+      </footer>
+
+      <nav class="mini-tools" aria-label="窗口">
         <button
           type="button"
-          class="mini-tool-button"
-          :class="{ active: customizerOpen }"
-          title="自定义迷你播放器"
-          aria-label="打开迷你播放器自定义面板"
+          class="mini-tool-button tool-customize"
+          :class="{ 'is-active': customizerOpen }"
+          title="自定义外观"
+          aria-label="自定义外观"
           @click="openCustomizer"
         >
           <i class="ph ph-sliders-horizontal"></i>
@@ -422,23 +845,33 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="mini-tool-button"
-          :class="{ active: settings.positionLocked }"
-          :title="settings.positionLocked ? '解锁窗口位置' : '锁定窗口位置'"
-          :aria-pressed="settings.positionLocked"
-          @click="togglePositionLock"
+          :title="`切换形态：${nextFormLabel}`"
+          :aria-label="`切换到${nextFormLabel}形态`"
+          @click="cycleForm"
         >
-          <i :class="settings.positionLocked ? 'ph ph-lock' : 'ph ph-lock-open'"></i>
+          <i class="ph ph-layout"></i>
         </button>
         <button
           type="button"
           class="mini-tool-button"
-          :class="{ active: settings.alwaysOnTop }"
-          :title="settings.alwaysOnTop ? '取消保持置顶' : '保持窗口置顶'"
+          :class="{ 'is-active': settings.alwaysOnTop }"
+          :title="settings.alwaysOnTop ? '取消置顶' : '窗口置顶'"
           :aria-pressed="settings.alwaysOnTop"
           @click="toggleAlwaysOnTop"
         >
-          <i class="ph ph-push-pin"></i>
+          <i :class="settings.alwaysOnTop ? 'ph-fill ph-push-pin' : 'ph ph-push-pin'"></i>
         </button>
+        <button
+          type="button"
+          class="mini-tool-button tool-lock"
+          :class="{ 'is-active': settings.positionLocked }"
+          :title="settings.positionLocked ? '解锁位置' : '锁定位置'"
+          :aria-pressed="settings.positionLocked"
+          @click="togglePositionLock"
+        >
+          <i :class="settings.positionLocked ? 'ph ph-lock-simple' : 'ph ph-lock-simple-open'"></i>
+        </button>
+        <span class="mini-tools-divider" aria-hidden="true"></span>
         <button
           type="button"
           class="mini-tool-button"
@@ -450,7 +883,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
-          class="mini-tool-button return-button"
+          class="mini-tool-button"
           data-te-back-button="icon"
           title="返回完整播放器"
           aria-label="返回完整播放器"
@@ -458,188 +891,17 @@ onBeforeUnmount(() => {
         >
           <i class="ph ph-arrows-out-simple"></i>
         </button>
-      </div>
+      </nav>
 
-      <div
-        v-if="resolvedVisibility.artwork"
-        :key="`artwork:${state.track?.id ?? 'empty'}`"
-        class="mini-artwork-wrap"
-      >
-        <img
-          v-if="hasCover"
-          :src="coverSrc || ''"
-          class="mini-artwork"
-          alt="专辑封面"
-          @error="coverFailed = true"
-        />
-        <div v-else class="mini-artwork mini-artwork-placeholder" aria-label="暂无封面">
-          <i class="ph ph-music-notes"></i>
+      <Transition name="mini-hud">
+        <div v-if="volumeHudVisible" class="mini-volume-hud" role="status" aria-live="polite">
+          <i :class="volumeIcon" aria-hidden="true"></i>
+          <span class="mini-volume-hud-track" :style="{ '--mini-hud-level': state.volume }">
+            <span></span>
+          </span>
+          <span class="mini-volume-hud-value">{{ volumePercent }}</span>
         </div>
-        <div
-          v-if="resolvedVisibility.equalizer"
-          class="mini-equalizer"
-          :class="{ active: state.isPlaying }"
-          aria-hidden="true"
-        >
-          <span></span><span></span><span></span><span></span>
-        </div>
-      </div>
-
-      <div class="mini-player-content">
-        <div class="mini-player-main">
-          <div class="mini-track-info">
-            <div :key="`meta:${state.track?.id ?? 'empty'}`" class="mini-track-meta">
-              <div v-if="resolvedVisibility.album" class="mini-track-kicker">{{ trackAlbum }}</div>
-              <h1 :title="trackTitle"><ScrollingText :text="trackTitle" /></h1>
-              <p :title="trackArtist"><ScrollingText :text="trackArtist" /></p>
-            </div>
-            <div
-              v-if="trackQuality.spec || trackQuality.label"
-              class="mini-quality"
-              aria-label="音质信息"
-            >
-              <span
-                v-if="trackQuality.label"
-                class="mini-quality-badge"
-                :class="{ 'is-hires': trackQuality.isHiRes }"
-              >
-                {{ trackQuality.label }}
-              </span>
-              <span v-if="trackQuality.spec" class="mini-quality-spec">{{
-                trackQuality.spec
-              }}</span>
-            </div>
-          </div>
-
-          <div v-if="hasActiveLyric" class="mini-lyric-stage" aria-live="polite" aria-atomic="true">
-            <Transition name="mini-lyric-switch" mode="out-in">
-              <div :key="`lyric:${state.track?.id}:${activeLyricIndex}`" class="mini-lyric-current">
-                <p class="mini-lyric-original" :title="currentLyricLine!.original">
-                  {{ currentLyricLine!.original }}
-                </p>
-                <p
-                  v-if="currentLyricLine!.translation"
-                  class="mini-lyric-translation"
-                  :title="currentLyricLine!.translation"
-                >
-                  {{ currentLyricLine!.translation }}
-                </p>
-              </div>
-            </Transition>
-          </div>
-          <div v-else class="mini-lyric-empty" aria-hidden="true">
-            <span>♪ 暂无歌词</span>
-          </div>
-        </div>
-
-        <div class="mini-player-dock">
-          <div
-            class="mini-progress-block mini-no-drag"
-            :class="{ 'without-time': !resolvedVisibility.time }"
-          >
-            <div class="mini-progress-track" aria-hidden="true">
-              <div class="mini-progress-fill" :style="progressFillStyle"></div>
-            </div>
-            <input
-              type="range"
-              class="mini-range mini-progress-range"
-              min="0"
-              :max="state.duration || 1"
-              step="0.1"
-              :value="playbackTime"
-              aria-label="播放进度"
-              :disabled="!state.track"
-              @input="onProgressInput"
-            />
-            <div v-if="resolvedVisibility.time" class="mini-time-row">
-              <span>{{ formatTime(playbackTime) }}</span>
-              <span>{{ formatTime(state.duration) }}</span>
-            </div>
-          </div>
-
-          <footer class="mini-player-controls mini-no-drag">
-            <div class="mini-controls-side left">
-              <button
-                v-if="resolvedVisibility.playMode"
-                type="button"
-                class="mini-control-button mode-button"
-                :title="playModeTitle"
-                :aria-label="playModeTitle"
-                :disabled="!state.track"
-                @click="sendCommand({ type: 'cycle-play-mode' })"
-              >
-                <i :class="playModeIcon"></i>
-              </button>
-            </div>
-
-            <div class="mini-transport">
-              <button
-                type="button"
-                class="mini-control-button transport-button"
-                title="上一首"
-                aria-label="上一首"
-                :disabled="!state.track"
-                @click="sendCommand({ type: 'previous' })"
-              >
-                <i class="ph ph-skip-back"></i>
-              </button>
-              <button
-                type="button"
-                class="mini-play-button"
-                :class="{ 'is-playing': state.isPlaying }"
-                :title="state.isPlaying ? '暂停' : '播放'"
-                :aria-label="state.isPlaying ? '暂停' : '播放'"
-                :disabled="!state.track || state.isLoading"
-                @click="togglePlay"
-              >
-                <i
-                  :class="
-                    state.isLoading
-                      ? 'pi pi-spin pi-spinner'
-                      : state.isPlaying
-                        ? 'ph ph-pause'
-                        : 'ph ph-play'
-                  "
-                ></i>
-              </button>
-              <button
-                type="button"
-                class="mini-control-button transport-button"
-                title="下一首"
-                aria-label="下一首"
-                :disabled="!state.track"
-                @click="sendCommand({ type: 'next' })"
-              >
-                <i class="ph ph-skip-forward"></i>
-              </button>
-            </div>
-
-            <div class="mini-controls-side right">
-              <span
-                v-if="resolvedVisibility.queuePosition"
-                class="mini-queue-position"
-                title="当前队列位置"
-              >
-                {{ queuePositionText }}
-              </span>
-
-              <label v-if="resolvedVisibility.volume" class="mini-volume" title="音量">
-                <i class="ph ph-speaker-high"></i>
-                <input
-                  type="range"
-                  class="mini-range mini-volume-range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  :value="state.volume"
-                  aria-label="音量"
-                  @input="onVolumeInput"
-                />
-              </label>
-            </div>
-          </footer>
-        </div>
-      </div>
+      </Transition>
 
       <MiniPlayerCustomizer
         v-if="customizerOpen"

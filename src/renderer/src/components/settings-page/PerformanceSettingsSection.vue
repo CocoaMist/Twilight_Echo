@@ -24,6 +24,15 @@ function updateTp<K extends keyof WindowTransparencyEffectSettings>(
     windowTransparencyEffect: { ...settings.value.windowTransparencyEffect, [key]: value }
   })
 }
+
+function toggleCompactVisualizer(): void {
+  void updateSettings({
+    playerBar: {
+      ...settings.value.playerBar,
+      compactVisualizerEnabled: !settings.value.playerBar.compactVisualizerEnabled
+    }
+  })
+}
 </script>
 
 <template>
@@ -33,6 +42,25 @@ function updateTp<K extends keyof WindowTransparencyEffectSettings>(
       <h2>性能 (Performance)</h2>
     </div>
     <div class="setting-list">
+      <div class="setting-item">
+        <div class="setting-copy">
+          <strong>歌词页底部动态频谱</strong>
+          <span>关闭后隐藏底部跳动的频谱条，并停止它的数据轮询；播放控制栏仍然显示。</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-switch"
+          :class="{
+            active: settings.playerBar.compactVisualizerEnabled,
+            inactive: !settings.playerBar.compactVisualizerEnabled
+          }"
+          role="switch"
+          aria-label="歌词页底部动态频谱"
+          :aria-checked="settings.playerBar.compactVisualizerEnabled"
+          @click="toggleCompactVisualizer"
+        ></button>
+      </div>
+      <hr />
       <div class="setting-item">
         <div class="setting-copy">
           <strong>硬件加速</strong>

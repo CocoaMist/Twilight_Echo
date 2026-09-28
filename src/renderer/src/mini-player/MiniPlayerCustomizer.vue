@@ -62,9 +62,10 @@ const backgroundKinds: { value: MiniPlayerBackgroundKind; label: string; icon: s
 ]
 const layoutOptions: { value: MiniPlayerLayoutPreference; label: string }[] = [
   { value: 'auto', label: '自动' },
-  { value: 'compact', label: '紧凑' },
-  { value: 'standard', label: '标准' },
-  { value: 'wide', label: '宽屏' }
+  { value: 'compact', label: '条形' },
+  { value: 'standard', label: '卡片' },
+  { value: 'wide', label: '舞台' },
+  { value: 'poster', label: '海报' }
 ]
 const backgroundSliders: {
   key: BackgroundNumberKey
@@ -96,7 +97,7 @@ const appearanceSliders: {
 const visibilityOptions: { key: keyof MiniPlayerVisibilitySettings; label: string }[] = [
   { key: 'artwork', label: '专辑封面' },
   { key: 'album', label: '专辑名称' },
-  { key: 'equalizer', label: '均衡器动画' },
+  { key: 'equalizer', label: '律动指示' },
   { key: 'time', label: '时间信息' },
   { key: 'volume', label: '音量控制' },
   { key: 'playMode', label: '播放模式' },
@@ -266,6 +267,10 @@ function removeBackgroundImage(): void {
           </button>
         </div>
 
+        <p v-if="activeProfile.background.kind === 'cover'" class="customizer-cover-note">
+          封面背景沿用歌词页的模糊、暗色遮罩与封面取色效果。
+        </p>
+
         <label v-if="activeProfile.background.kind === 'solid'" class="customizer-color-row">
           <span>背景颜色</span>
           <input
@@ -318,12 +323,7 @@ function removeBackgroundImage(): void {
           </button>
         </div>
 
-        <div
-          v-if="
-            activeProfile.background.kind === 'cover' || activeProfile.background.kind === 'image'
-          "
-          class="customizer-segment"
-        >
+        <div v-if="activeProfile.background.kind === 'image'" class="customizer-segment">
           <button
             type="button"
             :class="{ active: activeProfile.background.imageFit === 'cover' }"
@@ -340,7 +340,7 @@ function removeBackgroundImage(): void {
           </button>
         </div>
 
-        <label class="customizer-color-row">
+        <label v-if="activeProfile.background.kind !== 'cover'" class="customizer-color-row">
           <span>回退颜色</span>
           <input
             type="color"
@@ -350,7 +350,7 @@ function removeBackgroundImage(): void {
           />
           <code>{{ activeProfile.background.fallbackColor }}</code>
         </label>
-        <label class="customizer-color-row">
+        <label v-if="activeProfile.background.kind !== 'cover'" class="customizer-color-row">
           <span>遮罩颜色</span>
           <input
             type="color"
@@ -363,7 +363,10 @@ function removeBackgroundImage(): void {
 
         <label
           v-for="control in backgroundSliders"
-          v-show="control.key !== 'gradientAngle' || activeProfile.background.kind === 'gradient'"
+          v-show="
+            activeProfile.background.kind !== 'cover' &&
+            (control.key !== 'gradientAngle' || activeProfile.background.kind === 'gradient')
+          "
           :key="control.key"
           class="customizer-slider-row"
         >
@@ -382,7 +385,10 @@ function removeBackgroundImage(): void {
       </section>
 
       <section v-else-if="activeTab === 'appearance'" class="customizer-section">
-        <div class="customizer-labeled-control">
+        <p v-if="activeProfile.background.kind === 'cover'" class="customizer-cover-note">
+          背景和文字明暗随封面自动调整，强调色跟随封面取色。
+        </p>
+        <div v-else class="customizer-labeled-control">
           <span>强调色</span>
           <div class="customizer-segment">
             <button
@@ -401,7 +407,13 @@ function removeBackgroundImage(): void {
             </button>
           </div>
         </div>
-        <label v-if="activeProfile.appearance.accentMode === 'custom'" class="customizer-color-row">
+        <label
+          v-if="
+            activeProfile.background.kind !== 'cover' &&
+            activeProfile.appearance.accentMode === 'custom'
+          "
+          class="customizer-color-row"
+        >
           <span>强调颜色</span>
           <input
             type="color"
@@ -412,7 +424,7 @@ function removeBackgroundImage(): void {
           <code>{{ activeProfile.appearance.accentColor }}</code>
         </label>
 
-        <div class="customizer-labeled-control">
+        <div v-if="activeProfile.background.kind !== 'cover'" class="customizer-labeled-control">
           <span>文字颜色</span>
           <div class="customizer-segment">
             <button
@@ -431,7 +443,12 @@ function removeBackgroundImage(): void {
             </button>
           </div>
         </div>
-        <template v-if="activeProfile.appearance.textMode === 'custom'">
+        <template
+          v-if="
+            activeProfile.background.kind !== 'cover' &&
+            activeProfile.appearance.textMode === 'custom'
+          "
+        >
           <label class="customizer-color-row">
             <span>主要文字</span>
             <input
@@ -468,6 +485,7 @@ function removeBackgroundImage(): void {
 
         <label
           v-for="control in appearanceSliders"
+          v-show="control.key !== 'surfaceOpacity' || activeProfile.background.kind !== 'cover'"
           :key="control.key"
           class="customizer-slider-row"
         >
@@ -486,7 +504,7 @@ function removeBackgroundImage(): void {
       </section>
 
       <section v-else class="customizer-section">
-        <div class="customizer-segment four-columns">
+        <div class="customizer-segment five-columns">
           <button
             v-for="option in layoutOptions"
             :key="option.value"

@@ -1,10 +1,18 @@
 import type { Track } from '../types/music'
 import { getTrackSource } from './playerTrackUtils.ts'
 
+const MAX_SESSION_TRACK_INLINE_COVER_LENGTH = 256 * 1024
+
 export function cloneTrackForPlaybackSession(track: Track): Track {
   // Shallow copy — strip lyrics/translatedLyrics/bpmAnalysis to avoid massive
   // memory usage when the entire queue is cloned for session persistence
   const source = getTrackSource(track)
+  const cover =
+    track.cover &&
+    (/^(?:blob:|twilight-media:)/i.test(track.cover) ||
+      (/^data:/i.test(track.cover) && track.cover.length > MAX_SESSION_TRACK_INLINE_COVER_LENGTH))
+      ? null
+      : track.cover
   const cloned: Track = {
     id: track.id,
     queueEntryId: track.queueEntryId,
@@ -21,7 +29,7 @@ export function cloneTrackForPlaybackSession(track: Track): Track {
     cueEncoding: track.cueEncoding,
     duration: track.duration,
     size: track.size,
-    cover: track.cover,
+    cover,
     coverSource: track.coverSource ?? null,
     lyrics: null,
     source: track.source,
@@ -42,5 +50,11 @@ export function cloneTrackForPlaybackSession(track: Track): Track {
     r128TrackGainDb: track.r128TrackGainDb,
     r128AlbumGainDb: track.r128AlbumGainDb
   }
+  return cloned
+}
+
+export function cloneTrackForPlaybackQueue(track: Track): Track {
+  const cloned = cloneTrackForPlaybackSession(track)
+  if (cloned.cover && /^data:/i.test(cloned.cover)) cloned.cover = null
   return cloned
 }

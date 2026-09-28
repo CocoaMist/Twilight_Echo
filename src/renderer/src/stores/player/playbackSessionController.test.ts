@@ -130,6 +130,22 @@ test('automatic restore selects the saved duplicate occurrence instead of an obs
   assert.deepEqual(state.originalQueue.value, state.queue.value)
 })
 
+test('playback state snapshots leave queue cloning to the shared writer', () => {
+  const state = fixture()
+  const selected = makeTrack('selected', 'entry')
+  state.restore(selected, [selected], 0)
+  assert.equal(state.controller.createPlaybackSession('trackAndPosition')?.queue, undefined)
+})
+
+test('restore keeps the selected track cover when the compact queue omits inline art', () => {
+  const state = fixture()
+  const selected = makeTrack('selected', 'entry')
+  const cover = 'data:image/jpeg;base64,AAAA'
+  state.restore({ ...selected, cover }, [selected], 0)
+  assert.equal(state.currentTrack.value?.cover, cover)
+  assert.equal(state.queue.value[0].cover, null)
+})
+
 test('legacy sessions reject fractional or mismatched indices and match the saved track identity', () => {
   const state = fixture()
   const track = makeTrack('saved')

@@ -4043,7 +4043,10 @@ export function usePlayerStore(): {
   selectImpulseResponse: () => Promise<void>
   clearImpulseResponse: () => Promise<void>
   restorePlaybackSession: (session: PlaybackSession) => void
-  createPlaybackSession: (mode: PlaybackResumeMode) => PlaybackSession | null
+  createPlaybackSession: (
+    mode: PlaybackResumeMode,
+    includeQueue?: boolean
+  ) => PlaybackSession | null
   removeUnavailableTracks: (trackIds: string[], filePaths: string[]) => void
   clearBpmAnalysisFromPlaybackState: () => void
   refreshCurrentLyrics: () => Promise<void>

@@ -23,6 +23,52 @@ export function clearDominantColorCache(): void {
   dominantColorCache.clear()
 }
 
+export function extractAverageColor(imageSrc: string): Promise<string | null> {
+  const source = imageSrc.trim()
+  if (!source) return Promise.resolve(null)
+
+  return new Promise((resolve) => {
+    const img = new Image()
+    if (shouldUseAnonymousCors(source)) img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = 32
+        canvas.height = 32
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return resolve(null)
+        ctx.drawImage(img, 0, 0, 32, 32)
+        const pixels = ctx.getImageData(0, 0, 32, 32).data
+        let red = 0
+        let green = 0
+        let blue = 0
+        let totalAlpha = 0
+        for (let i = 0; i < pixels.length; i += 4) {
+          const alpha = pixels[i + 3]! / 255
+          totalAlpha += alpha
+          red += pixels[i]! * alpha
+          green += pixels[i + 1]! * alpha
+          blue += pixels[i + 2]! * alpha
+        }
+        if (totalAlpha === 0) return resolve(null)
+        resolve(
+          `#${[red, green, blue]
+            .map((channel) =>
+              Math.round(channel / totalAlpha)
+                .toString(16)
+                .padStart(2, '0')
+            )
+            .join('')}`
+        )
+      } catch {
+        resolve(null)
+      }
+    }
+    img.onerror = () => resolve(null)
+    img.src = source
+  })
+}
+
 function trimDominantColorCache(): void {
   while (dominantColorCache.size > MAX_DOMINANT_COLOR_CACHE_SIZE) {
     const oldest = dominantColorCache.keys().next().value

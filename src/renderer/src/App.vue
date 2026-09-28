@@ -347,7 +347,6 @@ const {
   isLoading,
   volume,
   playMode,
-  dominantColor,
   coverThemeColor,
   themeCoverUrl,
   themeCoverIdentity,
@@ -437,7 +436,7 @@ useMiniPlayerSync({
   favoriteAvailable: favoriteButtonVisible,
   favoriteLiked: favoriteButtonLiked,
   favoriteLoading: favoriteButtonLoading,
-  dominantColor,
+  dominantColor: coverThemeColor,
   queue,
   queueIndex,
   togglePlay,
@@ -557,6 +556,7 @@ const playbackSessionPersistence = createPlaybackSessionPersistence({
   currentTrack,
   currentTime,
   isPlaying,
+  queue,
   restorePlaybackSession,
   createPlaybackSession,
   syncPluginProviders,
@@ -1032,7 +1032,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         v-if="hasPlayerBar"
         ref="playerBarRef"
         :glass="showPlayingPage"
-        :visualizer-visible="showPlayingPage"
+        :visualizer-visible="showPlayingPage && settings.playerBar.compactVisualizerEnabled"
         :menu-open="sidebarMenuOpen"
         :mode="playerBarPresentation.mode"
         :auto-hide="playerBarPresentation.autoHide"

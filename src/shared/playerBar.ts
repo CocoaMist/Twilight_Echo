@@ -62,6 +62,7 @@ export interface PlayerBarSettings {
   visibility: PlayerBarVisibility
   /** Visibility used on the now-playing page. */
   playingPageVisibility: PlayerBarPageVisibility
+  compactVisualizerEnabled: boolean
   /** Which controls each shape puts in its left / centre / right region. */
   layout: PlayerBarLayoutSettings
   /** Pointer must come within this many px of the viewport bottom to reveal. */
@@ -86,6 +87,7 @@ export const DEFAULT_PLAYER_BAR_SETTINGS: PlayerBarSettings = {
   playingPageMode: 'inherit',
   visibility: 'visible',
   playingPageVisibility: 'inherit',
+  compactVisualizerEnabled: true,
   // Cloned rather than aliased: the default layout is reachable from here, and
   // an in-place edit of a settings object would otherwise rewrite the default.
   layout: clonePlayerBarLayout(DEFAULT_PLAYER_BAR_LAYOUT),
@@ -141,6 +143,7 @@ export function normalizePlayerBarSettings(raw: unknown): PlayerBarSettings {
     playingPageMode: normalizePlayerBarPageMode(value.playingPageMode),
     visibility: normalizePlayerBarVisibility(value.visibility),
     playingPageVisibility: resolvePlayingPageVisibility(value),
+    compactVisualizerEnabled: value.compactVisualizerEnabled !== false,
     layout: normalizePlayerBarLayout(value.layout),
     revealThresholdPx: clamp(
       value.revealThresholdPx,

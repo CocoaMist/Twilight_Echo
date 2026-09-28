@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-const { clearDominantColorCache, extractDominantColor } = (await import(
+const { clearDominantColorCache, extractDominantColor, extractAverageColor } = (await import(
   new URL('./colorExtractor.ts', import.meta.url).href
 )) as typeof import('./colorExtractor')
 
@@ -105,6 +105,23 @@ test('extractDominantColor returns the fallback color for blank covers without d
     clearDominantColorCache()
     assert.equal(await extractDominantColor('   '), '#1a73e8')
     assert.equal(dom.getLoadCount(), 0)
+  } finally {
+    dom.restore()
+  }
+})
+
+test('extractAverageColor preserves a mostly white cover instead of darkening it', async () => {
+  const pixels = makeImageData(255, 255, 255)
+  for (let i = 0; i < 100 * 4; i += 4) {
+    pixels[i] = 40
+    pixels[i + 1] = 140
+    pixels[i + 2] = 220
+  }
+  const dom = installImageDom(pixels)
+  try {
+    assert.equal(await extractAverageColor('cover://mostly-white.jpg'), '#f6fafe')
+    assert.equal(await extractAverageColor('  '), null)
+    assert.equal(dom.getLoadCount(), 1)
   } finally {
     dom.restore()
   }

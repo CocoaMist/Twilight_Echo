@@ -51,7 +51,10 @@ test('the compact shape is wired through the same shape prop and class as the ot
 })
 
 test('the expanded visualizer is mounted only for compact on the lyrics page', () => {
-  assert.match(app, /:visualizer-visible="showPlayingPage"/)
+  assert.match(
+    app,
+    /:visualizer-visible="showPlayingPage && settings\.playerBar\.compactVisualizerEnabled"/
+  )
   assert.match(playerBar, /visualizerVisible\?: boolean/)
   assert.match(playerBar, /visualizerVisible: false/)
   assert.match(
@@ -60,6 +63,10 @@ test('the expanded visualizer is mounted only for compact on the lyrics page', (
   )
   assert.match(playerBar, /'player-bar-compact-visualizer': showCompactVisualizer/)
   assert.match(playerBar, /<CompactPlayerBarVisualizer\s+v-if="showCompactVisualizer"/)
+  assert.match(
+    playerBar,
+    /watch\(\s*showCompactVisualizer,[\s\S]*?releaseVisualizationConsumer\?\.\(\)/
+  )
 
   const plainCompact = playerBarCss.match(
     /\.player-bar\.player-bar-compact\.player-bar-compact\.player-bar-compact:not\(\s*\.player-bar-compact-visualizer\s*\)\s*\{[^}]*\}/

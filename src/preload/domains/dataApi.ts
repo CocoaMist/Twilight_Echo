@@ -32,6 +32,8 @@ function isPlaybackSession(value: unknown): value is PlaybackSession {
     typeof record.position === 'number' &&
     Number.isFinite(record.position) &&
     record.position >= 0 &&
+    (record.queueRevision === undefined ||
+      (Number.isSafeInteger(record.queueRevision) && Number(record.queueRevision) >= 0)) &&
     (record.queue === undefined || Array.isArray(record.queue)) &&
     playbackSessionCueRangesAreValid(value)
   )

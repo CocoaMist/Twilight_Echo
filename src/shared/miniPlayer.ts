@@ -1,8 +1,9 @@
 import type { MotionPreference } from './motion.ts'
 
-// Keep the full transport layout usable at every supported display scale.
-export const MINI_PLAYER_MIN_WIDTH = 420
-export const MINI_PLAYER_MIN_HEIGHT = 220
+// The floor admits the single-row strip form; the ceiling keeps the stage form
+// from outgrowing a satellite window.
+export const MINI_PLAYER_MIN_WIDTH = 300
+export const MINI_PLAYER_MIN_HEIGHT = 88
 export const MINI_PLAYER_MAX_WIDTH = 900
 export const MINI_PLAYER_MAX_HEIGHT = 520
 
@@ -16,7 +17,43 @@ export interface MiniPlayerWindowSize {
 
 export type MiniPlayerBackgroundKind = 'solid' | 'gradient' | 'cover' | 'image'
 export type MiniPlayerImageFit = 'cover' | 'contain'
-export type MiniPlayerLayoutPreference = 'auto' | 'compact' | 'standard' | 'wide'
+export type MiniPlayerLayoutPreference = 'auto' | 'compact' | 'standard' | 'wide' | 'poster'
+
+export type MiniPlayerSizePresetId = 'strip' | 'card' | 'stage' | 'poster'
+
+export interface MiniPlayerSizePreset extends MiniPlayerWindowSize {
+  id: MiniPlayerSizePresetId
+  label: string
+}
+
+/** One window size per form, in the order the form switcher cycles through. */
+export const MINI_PLAYER_SIZE_PRESETS: readonly MiniPlayerSizePreset[] = Object.freeze([
+  { id: 'strip', label: '条形', width: 360, height: 88 },
+  { id: 'card', label: '卡片', width: 440, height: 184 },
+  { id: 'stage', label: '舞台', width: 640, height: 260 },
+  { id: 'poster', label: '海报', width: 300, height: 480 }
+])
+
+/** The preset closest to a window size, so the switcher advances from where the user is. */
+export function nearestMiniPlayerSizePreset(size: MiniPlayerWindowSize): MiniPlayerSizePreset {
+  let best = MINI_PLAYER_SIZE_PRESETS[0]!
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const preset of MINI_PLAYER_SIZE_PRESETS) {
+    const distance =
+      Math.abs(Math.log(preset.width / Math.max(1, size.width))) +
+      Math.abs(Math.log(preset.height / Math.max(1, size.height)))
+    if (distance < bestDistance) {
+      best = preset
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
+export function nextMiniPlayerSizePreset(size: MiniPlayerWindowSize): MiniPlayerSizePreset {
+  const current = MINI_PLAYER_SIZE_PRESETS.indexOf(nearestMiniPlayerSizePreset(size))
+  return MINI_PLAYER_SIZE_PRESETS[(current + 1) % MINI_PLAYER_SIZE_PRESETS.length]!
+}
 
 export interface MiniPlayerBackgroundSettings {
   kind: MiniPlayerBackgroundKind
@@ -109,28 +146,9 @@ export interface MiniPlayerTrackSnapshot {
 
 export type MiniPlayerPlayMode = 'sequential' | 'listLoop' | 'repeat' | 'shuffle' | 'heart'
 
-/**
- * One timed lyric line pushed to the mini player. The mini player uses the
- * per-line timestamps to switch the highlighted line itself, so it can show
- * several surrounding lines without relying on a slow marquee.
- */
-export interface MiniPlayerLyricLineSnapshot {
-  time: number | null
-  original: string
-  translation: string | null
-}
-
 export interface MiniPlayerStateSnapshot {
   capturedAtMs?: number
   track: MiniPlayerTrackSnapshot | null
-  /**
-   * Current lyric line at snapshot time (original + optional translation).
-   * Null when no line is active yet / lyrics are unavailable. The mini player
-   * shows it when the cursor leaves the window; hovering returns to metadata.
-   */
-  currentLyric: { original: string; translation: string | null } | null
-  /** Timed lyric lines (sorted by time) for the mini player's multi-line view. */
-  lyrics: MiniPlayerLyricLineSnapshot[]
   isPlaying: boolean
   isLoading: boolean
   currentTime: number
@@ -184,7 +202,7 @@ const DEFAULT_MINI_PLAYER_VISIBILITY: MiniPlayerVisibilitySettings = {
   time: true,
   volume: true,
   playMode: true,
-  queuePosition: false
+  queuePosition: true
 }
 
 export const DEFAULT_MINI_PLAYER_THEME_PROFILES: Readonly<Record<string, MiniPlayerThemeProfile>> =
@@ -192,30 +210,30 @@ export const DEFAULT_MINI_PLAYER_THEME_PROFILES: Readonly<Record<string, MiniPla
     [DEFAULT_MINI_PLAYER_STYLE_ID]: {
       background: {
         kind: 'cover',
-        solidColor: '#11121d',
-        fallbackColor: '#11121d',
-        gradientStart: '#20182f',
-        gradientEnd: '#0a0c18',
+        solidColor: '#0a0c10',
+        fallbackColor: '#0a0c10',
+        gradientStart: '#1b252b',
+        gradientEnd: '#080b0f',
         gradientAngle: 138,
         imageUrl: '',
         imageFit: 'cover',
-        blur: 32,
-        brightness: 100,
-        saturation: 145,
-        opacity: 36,
-        overlayColor: '#070812',
-        overlayOpacity: 42
+        blur: 40,
+        brightness: 84,
+        saturation: 150,
+        opacity: 72,
+        overlayColor: '#05070b',
+        overlayOpacity: 34
       },
       appearance: {
         accentMode: 'track',
-        accentColor: '#7c4dff',
+        accentColor: '#8fa8b5',
         textMode: 'auto',
         primaryTextColor: '#ffffff',
         mutedTextColor: '#b8b7c2',
         fontFamily: "'Inter', 'MiSans', 'Microsoft YaHei UI', system-ui, sans-serif",
-        surfaceOpacity: 75,
-        glassBlur: 30,
-        cornerRadius: 20,
+        surfaceOpacity: 62,
+        glassBlur: 24,
+        cornerRadius: 22,
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.10)',
         shadowStrength: 80,
@@ -234,12 +252,12 @@ export const DEFAULT_MINI_PLAYER_THEME_PROFILES: Readonly<Record<string, MiniPla
         gradientAngle: 145,
         imageUrl: '',
         imageFit: 'cover',
-        blur: 32,
-        brightness: 108,
-        saturation: 110,
-        opacity: 18,
+        blur: 40,
+        brightness: 118,
+        saturation: 120,
+        opacity: 34,
         overlayColor: '#f5f7ff',
-        overlayOpacity: 58
+        overlayOpacity: 52
       },
       appearance: {
         accentMode: 'custom',
@@ -248,9 +266,9 @@ export const DEFAULT_MINI_PLAYER_THEME_PROFILES: Readonly<Record<string, MiniPla
         primaryTextColor: '#1b2034',
         mutedTextColor: '#656a7b',
         fontFamily: "'Inter', 'MiSans', 'Microsoft YaHei UI', system-ui, sans-serif",
-        surfaceOpacity: 90,
+        surfaceOpacity: 78,
         glassBlur: 20,
-        cornerRadius: 20,
+        cornerRadius: 22,
         borderWidth: 1,
         borderColor: '#d7d9e5',
         shadowStrength: 35,
@@ -284,8 +302,8 @@ export function createDefaultMiniPlayerThemeProfile(styleId: string): MiniPlayer
 export const DEFAULT_MINI_PLAYER_SETTINGS: Readonly<MiniPlayerSettings> = Object.freeze({
   windowX: -1,
   windowY: -1,
-  windowWidth: 480,
-  windowHeight: 300,
+  windowWidth: 440,
+  windowHeight: 184,
   alwaysOnTop: false,
   showInTaskbar: true,
   positionLocked: false,
@@ -314,8 +332,6 @@ export function cloneMiniPlayerSettings(settings: MiniPlayerSettings): MiniPlaye
 
 export const EMPTY_MINI_PLAYER_STATE: Readonly<MiniPlayerStateSnapshot> = Object.freeze({
   track: null,
-  currentLyric: null,
-  lyrics: [],
   isPlaying: false,
   isLoading: false,
   currentTime: 0,
@@ -326,13 +342,12 @@ export const EMPTY_MINI_PLAYER_STATE: Readonly<MiniPlayerStateSnapshot> = Object
   favoriteAvailable: false,
   favoriteLiked: false,
   favoriteLoading: false,
-  dominantColor: '#7c4dff',
+  dominantColor: '#8fa8b5',
   queueIndex: -1,
   queueLength: 0
 })
 
 const MAX_TRACK_TEXT_LENGTH = 512
-const MAX_MINI_PLAYER_LYRIC_LINES = 500
 const MAX_COVER_URL_LENGTH = 16_384
 // Legacy embedded library covers are full data: URLs and routinely exceed the
 // generic URL cap; a sliced data: URL is corrupt, so they get their own bound.
@@ -583,8 +598,6 @@ export function normalizeMiniPlayerStateSnapshot(raw: unknown): MiniPlayerStateS
     ...(typeof value.capturedAtMs === 'number' && Number.isFinite(value.capturedAtMs)
       ? { capturedAtMs: value.capturedAtMs }
       : {}),
-    currentLyric: normalizeMiniPlayerLyric(value.currentLyric),
-    lyrics: normalizeMiniPlayerLyrics(value.lyrics),
     isPlaying: value.isPlaying === true,
     isLoading: value.isLoading === true,
     currentTime,
@@ -599,36 +612,6 @@ export function normalizeMiniPlayerStateSnapshot(raw: unknown): MiniPlayerStateS
     queueIndex: clampFiniteNumber(value.queueIndex, -1, Math.max(-1, queueLength - 1), -1, true),
     queueLength
   }
-}
-
-function normalizeMiniPlayerLyric(
-  raw: unknown
-): { original: string; translation: string | null } | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-  const value = raw as Record<string, unknown>
-  const original = normalizeText(value.original, MAX_TRACK_TEXT_LENGTH)
-  if (!original) return null
-  const translation = normalizeText(value.translation, MAX_TRACK_TEXT_LENGTH)
-  return { original, translation: translation || null }
-}
-
-function normalizeMiniPlayerLyrics(raw: unknown): MiniPlayerLyricLineSnapshot[] {
-  if (!Array.isArray(raw)) return []
-  const lines: MiniPlayerLyricLineSnapshot[] = []
-  for (const entry of raw) {
-    if (lines.length >= MAX_MINI_PLAYER_LYRIC_LINES) break
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
-    const value = entry as Record<string, unknown>
-    const original = normalizeText(value.original, MAX_TRACK_TEXT_LENGTH)
-    if (!original) continue
-    const time =
-      typeof value.time === 'number' && Number.isFinite(value.time)
-        ? Math.max(0, Math.min(MAX_PLAYBACK_SECONDS, value.time))
-        : null
-    const translation = normalizeText(value.translation, MAX_TRACK_TEXT_LENGTH)
-    lines.push({ time, original, translation: translation || null })
-  }
-  return lines
 }
 
 export function normalizeMiniPlayerCommand(raw: unknown): MiniPlayerCommand | null {
@@ -726,7 +709,11 @@ function normalizeLayoutPreference(
   value: unknown,
   fallback: MiniPlayerLayoutPreference
 ): MiniPlayerLayoutPreference {
-  return value === 'compact' || value === 'standard' || value === 'wide' || value === 'auto'
+  return value === 'compact' ||
+    value === 'standard' ||
+    value === 'wide' ||
+    value === 'poster' ||
+    value === 'auto'
     ? value
     : fallback
 }
