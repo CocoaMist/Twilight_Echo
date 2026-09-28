@@ -80,6 +80,10 @@ async function compileComponent(
     /import\s+\{[\s\S]*?\}\s+from\s+['"]@renderer\/utils\/pluginTrustRefresh['"]\s*/g,
     'const { createPluginTrustRefreshController } = window.__trustRefresh\n'
   )
+  compiled = compiled.replace(
+    /import\s+\{[\s\S]*?\}\s+from\s+['"]@renderer\/utils\/pluginMarketSearch['"]\s*/g,
+    'const { createPluginMarketIndex, searchPluginMarket } = window.__marketSearch\n'
+  )
   // 语言选择器带进来的 i18n 依赖：这个 fixture 是纯脚本，没有模块解析，
   // 所以按既有范式换成 window 上的替身。本测试断言的是开发者模式贯通，
   // 语言选择器只需要能渲染出来、不炸。
@@ -186,6 +190,10 @@ function stubApiScript(): string {
         stop() {},
         refreshNow: async () => {}
       })
+    }
+    window.__marketSearch = {
+      createPluginMarketIndex: (entries) => ({ entries, authors: [] }),
+      searchPluginMarket: (index) => index.entries
     }
     window.api = {
       plugins: {

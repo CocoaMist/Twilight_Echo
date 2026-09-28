@@ -59,7 +59,7 @@ Twilight Echo 是 Electron + Vue 3 + TypeScript 应用，使用 electron-vite �
 └── docs/                     技术文档、插件规范、发布 gate
 ```
 
-第三方插件源码不属于 app 仓库。第三方插件应放在外部仓库 `Twilight-Echo-plugins`，app 只消费 `TWILIGHT_PLUGIN_INDEX_URL` 或内置静态索引。`resources/plugins/ncm-provider` 是唯一内置 provider 例外。
+第三方插件源码不属于 app 仓库。现有团队插件放在 `Twilight-Echo-plugins`；其他开发者可在各自公开仓库发布 GitHub Release `.tep`，给仓库添加 `twilight-echo-plugin` Topic，目录仓库定时扫描并自动加入统一 `plugins.json`，应用中显示为“社区插件 / 未验证”。需要人工审核收录时再向目录仓库的 `catalog/` 提交 Pull Request；审核条目优先于同 ID 社区条目。app 只消费 `TWILIGHT_PLUGIN_INDEX_URL` 或内置静态索引。`resources/plugins/ncm-provider` 是唯一内置 provider 例外。
 
 ## 运行架构
 

@@ -73,12 +73,13 @@ primary 损坏时从 backup 恢复并向用户显示告警；两份都损坏时�
 
 - Twilight Echo 主项目仓库不保存第三方插件源码、测试或第三方插件专属 `.tep` 发布包。
 - 主项目只保存宿主能力、插件 API / tooling、内置基础插件和应用内插件市场客户端。
-- 第三方插件源码统一写入独立插件仓库：
+- 现有团队维护的第三方插件源码放在独立插件仓库：
   - GitHub：`https://github.com/Px-asen/Twilight-Echo-plugins/`
   - 本地：`D:\Twilight-Echo-plugins`
-- 新增第三方插件时，源码放在 `D:\Twilight-Echo-plugins\plugins\<plugin-name>\`，
-  打包产物放在 `D:\Twilight-Echo-plugins\packages\`，索引写入
-  `D:\Twilight-Echo-plugins\plugins.json`。
+- 其他开发者在各自的公开仓库维护源码和 README，并将 `.tep` 发布为 GitHub Release
+  资产；添加 `twilight-echo-plugin` Topic 后由目录仓库自动发现。申请人工审核时通过
+  `D:\Twilight-Echo-plugins\catalog\<plugin-id>.json` 投稿。该仓库合并本地包、审核投稿
+  和自动发现条目，生成统一的 `plugins.json`；主项目不接收其源码或安装包。
 - 主项目通过 `TWILIGHT_PLUGIN_INDEX_URL` 指向 GitHub raw `plugins.json` 或未来自托管
   HTTPS `plugins.json` 来消费第三方插件。
 
@@ -260,7 +261,7 @@ schemaVersion 3；API v3 继续接受 schemaVersion 1/2 和 `variables + stylesh
 
 1. 安装时强制确认页：展示作者、权限、索引期望 SHA-256、最终 staged 包实际 SHA-256、索引实际来源与配置来源、远程/缓存/离线状态、获取与过期时间、签名状态、key ID、公钥 SHA-256 指纹，并明确警示插件可执行任意代码且拥有与应用相同的权限。宿主在确认页前必须重算最终 staged bytes；实际值与索引期望不一致时直接拒绝，不能沿用下载阶段的 `checksumVerified`。
 2. **禁止插件运行时从远程加载并执行代码**——全部可执行代码必须随包分发。此条写入生态规范，并作为官方索引收录条件。
-3. 官方索引收录需人工审核 + 开源仓库可溯源；`verified: true` 只是索引发布者声明，不能单独触发官方徽章。非索引来源安装时给出额外警告。
+3. 社区插件可通过公开仓库 Topic 和 GitHub Release 自动进入索引，显示为未验证；人工审核收录需开源仓库可溯源。`verified: true` 只是索引发布者声明，不能单独触发官方徽章。非索引来源安装时给出额外警告。
 4. manifest 预留 `signature` 字段，未来可平滑切换到签名校验而不破坏包格式。
 5. 架构预留收紧路径：utilityProcess 宿主 + API 网关 + 强制权限声明已就位，未来启用强制权限只需在网关层加闸。
 
@@ -283,13 +284,15 @@ schemaVersion 3；API v3 继续接受 schemaVersion 1/2 和 `variables + stylesh
 
 ### 7.4 官方索引收录标准
 
+公开 GitHub 仓库添加 `twilight-echo-plugin` Topic，在最新 Release 附带唯一的 `<插件 ID>-<版本>.tep` 后，目录仓库定时扫描包内 manifest、来源和大小；自动发现条目带 `community` 标签并保持 `verified: false`。版本不得回退，同版本安装包不得替换，插件 ID 绑定首次发现的发布仓库。自动收录仅提供发现能力，不代表人工审核。开发者申请人工审核时向目录仓库 `catalog/` 提交收录记录；该记录优先于同 ID 社区条目，审核标准如下：
+
 1. 开源且仓库可溯源
 2. 有 README
 3. 权限声明与实际行为一致
 4. 通过基本冒烟测试
 5. 不含运行时远程代码加载
 6. 音源类插件自行承担合规责任；明显侵权源不予收录
-7. entry 由当前有效、未吊销的可信发布者 Ed25519 key 签名
+7. 收录记录通过包哈希、manifest 和兼容性校验；签名是取得“官方验证”标识的额外条件
 
 ### 7.5 Phase 5 本地可发布生态形态
 
