@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { Writable } from 'node:stream'
+import { parseByteRange } from './byteRange.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -26,6 +29,171 @@ const hooks = registerHooks({
 })
 const { RemoteHttpServer, RemoteCommandError } = await import('./httpServer.ts')
 hooks.deregister()
+
+type MediaHandler = {
+  serveMedia(req: IncomingMessage, res: ServerResponse, token: string): Promise<void>
+  proxyRemoteMedia(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: string,
+    type: string
+  ): Promise<void>
+  sseClients: Set<ServerResponse>
+  broadcastSse(event: string, data: unknown): void
+}
+
+test('single-range parsing covers suffix, clamping, empty and invalid requests', () => {
+  for (const range of ['bytes=-3', 'bytes=7-', 'bytes=7-999', 'bytes=7-99999999999999999999']) {
+    assert.deepEqual(parseByteRange(range, 10), { start: 7, end: 9 }, range)
+  }
+  assert.deepEqual(parseByteRange('bytes=-999', 10), { start: 0, end: 9 })
+  for (const range of [
+    'bytes=-0',
+    'bytes=-',
+    'bytes=10-',
+    'bytes=8-7',
+    'bytes=1-2,4-5',
+    'other=0-1'
+  ]) {
+    assert.equal(parseByteRange(range, 10), null, range)
+  }
+  assert.equal(parseByteRange('bytes=0-', 0), null)
+})
+
+test('local media serves correct suffix and clamped ranges over HTTP', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'remote-range-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const filePath = join(directory, 'audio.mp3')
+  await writeFile(filePath, '0123456789')
+  const remote = new RemoteHttpServer()
+  const token = remote.getMediaGrants().issueFile(filePath)
+  const handler = remote as unknown as MediaHandler
+  const server = createServer((req, res) => {
+    void handler.serveMedia(req, res, token)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections()
+        server.close(() => resolve())
+      })
+  )
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/media`
+  for (const range of ['bytes=-3', 'bytes=7-999', 'bytes=7-9']) {
+    const response = await fetch(url, { headers: { range } })
+    assert.equal(response.status, 206)
+    assert.equal(response.headers.get('content-range'), 'bytes 7-9/10')
+    assert.equal(await response.text(), '789')
+  }
+  const response = await fetch(url, { headers: { range: 'bytes=10-' } })
+  assert.equal(response.status, 416)
+  assert.equal(response.headers.get('content-range'), 'bytes */10')
+  await response.text()
+})
+
+test('SSE disconnects lagging clients before their buffers exceed one MiB', () => {
+  const remote = new RemoteHttpServer() as unknown as MediaHandler
+  const stalled = new Writable({ highWaterMark: 1, write() {} }) as unknown as ServerResponse
+  remote.sseClients.add(stalled)
+  let largest = 0
+  for (let i = 0; i < 128; i++) {
+    remote.broadcastSse('state', { text: 'x'.repeat(32768) })
+    largest = Math.max(largest, stalled.writableLength)
+  }
+  assert.ok(largest <= 1024 * 1024)
+  assert.equal(stalled.destroyed, true)
+  assert.equal(remote.sseClients.size, 0)
+})
+
+test(
+  'proxy settles and cancels upstream when downstream closes under backpressure',
+  { timeout: 3000 },
+  async (t) => {
+    const remote = new RemoteHttpServer() as unknown as MediaHandler
+    let cancelCount = 0
+    let notifyBlocked!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      notifyBlocked = resolve
+    })
+    const stalled = new Writable({
+      highWaterMark: 1,
+      write() {
+        notifyBlocked()
+      }
+    }) as unknown as ServerResponse
+    stalled.writeHead = () => stalled
+    let upstreamSignal: AbortSignal | null | undefined
+    t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit) => {
+      upstreamSignal = options.signal
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]))
+          },
+          cancel() {
+            cancelCount++
+          }
+        })
+      )
+    })
+    const operation = remote.proxyRemoteMedia(
+      { headers: {} } as IncomingMessage,
+      stalled,
+      'https://example.com/audio',
+      'audio/mpeg'
+    )
+    await blocked
+    stalled.destroy()
+    await operation
+    assert.equal(cancelCount, 1)
+    assert.equal(upstreamSignal?.aborted, true)
+  }
+)
+
+test(
+  'proxy aborts a pending upstream connection on downstream close',
+  { timeout: 3000 },
+  async (t) => {
+    const remote = new RemoteHttpServer() as unknown as MediaHandler
+    const downstream = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback()
+      }
+    }) as unknown as ServerResponse
+    let notifyStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve
+    })
+    let aborted = false
+    t.mock.method(
+      globalThis,
+      'fetch',
+      async (_url: string, options: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          options.signal!.addEventListener(
+            'abort',
+            () => {
+              aborted = true
+              reject(new Error('aborted'))
+            },
+            { once: true }
+          )
+          notifyStarted()
+        })
+    )
+    const operation = remote.proxyRemoteMedia(
+      { headers: {} } as IncomingMessage,
+      downstream,
+      'https://example.com/audio',
+      'audio/mpeg'
+    )
+    await started
+    downstream.destroy()
+    await operation
+    assert.equal(aborted, true)
+  }
+)
 
 test('default remote root serves the complete UI and packaging includes its runtime assets', async (t) => {
   const server = new RemoteHttpServer()
