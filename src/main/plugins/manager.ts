@@ -616,7 +616,6 @@ export class TwilightPluginManager extends EventEmitter {
 
   async broadcastEvent(name: string, payload: unknown): Promise<void> {
     for (const running of this.running.values()) {
-      // While waking, the cached subscription is delivered after activation.
       if (this.hibernated.has(running.descriptor.id)) continue
       if (running.subscriptions.has(name)) {
         this.hostIdle?.touch(running.descriptor.id)

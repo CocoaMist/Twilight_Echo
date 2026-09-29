@@ -117,7 +117,7 @@ Renderer TS 测试通过 `scripts/register-renderer-aliases.mjs` 为 Node `--tes
 
 ## 音频链路
 
-设备档案位于播放设置和 HiFi 输出页，支持从当前配置创建、命名、复制、编辑、删除及按稳定设备 ID 自动应用。版本化 `audioDeviceProfiles` 保存后端、独占、完整 buffer/routing、软件音量上限、SRC/DSD 策略和 DSP 场景引用；场景 graph 不复制进档案，设备 SRC 作为运行时 output-stage override 独立持久化。手工调整输出或 DSP 后清除“已应用档案”标记，保留实际设置和音量上限；编辑或删除已应用档案也不会突然改变播放。
+设备档案位于播放设置和 HiFi 输出页，支持从当前配置创建、命名、复制、编辑、删除及按稳定设备 ID 自动应用。版本化 `audioDeviceProfiles` 保存后端、独占、完整 buffer/routing、软件音量上限、SRC/DSD 策略和 DSP 场景引用；场景 graph 不复制进档案，设备 SRC 作为运行时 output-stage override 独立持久化。档案应用只更新默认场景中的旧式 ReplayGain、EQ、卷积和 Crossfeed 节点，保留其他自定义节点、声像与输出级设置。手工调整输出或 DSP 后清除“已应用档案”标记，保留实际设置和音量上限；编辑或删除已应用档案也不会突然改变播放。
 
 设备档案的读取、保存、应用、删除和变更订阅统一经 `window.api.audioEngine` 暴露。`preload/domains/audioEngineApi.ts` 使用 `satisfies` 限定音频桥的四个顶层域；同目录运行时测试验证域层级、完整 DTO 转发、事件隔离和取消订阅，防止接口误挂到 `window.api` 顶层后导致设置页挂载抛错、进入动画停在透明状态。
 
@@ -227,7 +227,7 @@ Streaming 页的本地歌曲、歌单、歌手搜索逻辑放在 `components/str
 
 插件运行在 `utilityProcess`，入口为 `src/main/pluginHost.ts`。插件只能通过版本化 `twilight` API 访问宿主能力，不得直接 import Electron、Node 内置模块或 app 内部实现。
 
-宿主进程按需存在：`TwilightPluginManager` 用 `plugins/hostIdle.ts` 跟踪每个 JS 插件的活动（provider 调用、UI command、已订阅事件）；连续 5 分钟无活动且没有未完成 RPC 的宿主会被休眠（进程停止，provider/UI 贡献与事件订阅保留在内存快照中），下一次 provider 调用、UI command 或已订阅事件到达时透明唤醒，并发调用共享一次唤醒。休眠期间插件在 `list()` 里仍是 `enabled`，`plugin-state.json` 不变。贡献快照同时持久化到 `plugin-contributions.json`（含插件版本和入口文件 size:mtime）；下次启动若版本与入口文件签名都匹配，启用的插件直接以休眠态就绪而不 fork 进程，签名不符则照常冷启动。试激活、汽水音乐（登录态绑定宿主进程）与正在处理内部 NCM 请求的插件不会休眠；`app:*` 生命周期事件不唤醒休眠宿主。
+宿主进程按需存在：`TwilightPluginManager` 用 `plugins/hostIdle.ts` 跟踪每个 JS 插件的活动（provider 调用、UI command、已订阅事件）；连续 5 分钟无活动且没有未完成 RPC 的宿主会被休眠（进程停止，provider/UI 贡献与事件订阅保留在内存快照中），下一次 provider 调用、UI command 或已订阅事件到达时透明唤醒，并发调用共享一次唤醒。休眠期间插件在 `list()` 里仍是 `enabled`，`plugin-state.json` 不变。贡献快照同时持久化到 `plugin-contributions.json`（含插件版本和入口文件 size:mtime）；下次启动若版本与入口文件签名都匹配，启用的插件直接以休眠态就绪而不 fork 进程，签名不符则照常冷启动。试激活、汽水音乐（登录态绑定宿主进程）与正在处理内部 NCM 请求的插件不会休眠；已订阅 `app:ready` 的休眠宿主会唤醒并在激活后收到事件，`app:before-quit` 不会唤醒休眠宿主。
 
 `audioAnalysisService` 的 worker 池与 `libraryScanService` 同样惰性：分析 worker 只按当前排队/进行中任务数 fork，空闲 60 s 后回收；扫描 worker 在没有扫描进行时 60 s 后回收，下一次扫描重新 fork。
 

@@ -92,8 +92,6 @@ function fixture(stage) {
       }
     }
   }
-  // These are the actual store functions and session controller. Only native
-  // I/O and unrelated rendering dependencies are substituted for the test.
   const harness = new Function(
     'refs',
     'createPlaybackSessionController',

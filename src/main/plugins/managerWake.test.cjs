@@ -100,8 +100,6 @@ async function fixture(t) {
     applyNativeDspPluginChain: () => {},
     player: {}
   })
-  // Replace filesystem side effects and Electron only. Routing, lifecycle,
-  // readiness, subscriptions, operation queues and RPCs use production code.
   manager.appendLog = () => {}
   manager.queueContributionsSave = () => {}
   manager.queueStateSave = () => {}

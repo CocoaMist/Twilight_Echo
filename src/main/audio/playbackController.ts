@@ -112,6 +112,7 @@ export class PlaybackController {
   queue: AudioEngineQueueItem[] = []
   queueJson = '[]'
   playbackInfo: PlaybackInfo
+  private transportRevision = 0
   timer: NodeJS.Timeout | null = null
   lastTick = 0
   lastNativePlaybackInfoTickReadAt = Number.NEGATIVE_INFINITY
@@ -316,6 +317,7 @@ export class PlaybackController {
 
   async play(source: string, startTime = 0): Promise<AudioEnginePlayResult> {
     if (!source) throw audioEngineError('audio.source_empty', 'playback source is empty')
+    this.transportRevision += 1
     this.invalidateUpcomingTrackCache()
     await this.prepareLoudnormForPlay(source)
     const current = this.queue[this.playbackInfo.queueIndex]
@@ -474,6 +476,7 @@ export class PlaybackController {
   }
 
   async togglePause(): Promise<void> {
+    this.transportRevision += 1
     const native = this.native
     if (!native) {
       this.lastNativeError = '未加载 twilight_audio_node.node'
@@ -596,6 +599,7 @@ export class PlaybackController {
   }
 
   async stop(): Promise<void> {
+    this.transportRevision += 1
     if (
       this.playbackInfo.state === 'stopped' &&
       this.playbackInfo.position === 0 &&
@@ -626,6 +630,7 @@ export class PlaybackController {
   }
 
   async loadQueue(items: AudioEngineQueueItem[], startIndex = 0): Promise<void> {
+    this.transportRevision += 1
     const nextQueue = [...items]
     const nextQueueIndex =
       nextQueue.length > 0 ? Math.min(Math.max(0, startIndex), nextQueue.length - 1) : -1
@@ -696,6 +701,7 @@ export class PlaybackController {
 
   async next(): Promise<void> {
     if (this.queue.length === 0) return
+    const revision = ++this.transportRevision
     this.invalidateUpcomingTrackCache()
     const fallbackIndex = (this.playbackInfo.queueIndex + 1) % this.queue.length
     let nextIndex = fallbackIndex
@@ -705,7 +711,9 @@ export class PlaybackController {
       if (typeof this.native.callAsync === 'function') {
         try {
           await this.native.callAsync('Next', [])
+          if (revision !== this.transportRevision) return
           nativeInfo = await this.readNativePlaybackInfoAsync()
+          if (revision !== this.transportRevision) return
           this.lastNativeError = ''
         } catch (err) {
           this.lastNativeError = err instanceof Error ? err.message : String(err)
@@ -713,6 +721,7 @@ export class PlaybackController {
       } else if (this.tryNative('下一首', (native) => native.Next?.())) {
         nativeInfo = this.readNativePlaybackInfo()
       }
+      if (revision !== this.transportRevision) return
       if (
         nativeInfo &&
         nativeInfo.state === 'playing' &&
@@ -731,12 +740,14 @@ export class PlaybackController {
         return
       }
     }
+    if (revision !== this.transportRevision) return
     this.playbackInfo.queueIndex = nextIndex
     await this.play(this.queue[nextIndex].source, 0)
   }
 
   async previous(): Promise<void> {
     if (this.queue.length === 0) return
+    const revision = ++this.transportRevision
     this.invalidateUpcomingTrackCache()
     const fallbackIndex =
       this.playbackInfo.queueIndex <= 0 ? this.queue.length - 1 : this.playbackInfo.queueIndex - 1
@@ -747,7 +758,9 @@ export class PlaybackController {
       if (typeof this.native.callAsync === 'function') {
         try {
           await this.native.callAsync('Previous', [])
+          if (revision !== this.transportRevision) return
           nativeInfo = await this.readNativePlaybackInfoAsync()
+          if (revision !== this.transportRevision) return
           this.lastNativeError = ''
         } catch (err) {
           this.lastNativeError = err instanceof Error ? err.message : String(err)
@@ -755,6 +768,7 @@ export class PlaybackController {
       } else if (this.tryNative('上一首', (native) => native.Previous?.())) {
         nativeInfo = this.readNativePlaybackInfo()
       }
+      if (revision !== this.transportRevision) return
       if (
         nativeInfo &&
         nativeInfo.state === 'playing' &&
@@ -773,6 +787,7 @@ export class PlaybackController {
         return
       }
     }
+    if (revision !== this.transportRevision) return
     this.playbackInfo.queueIndex = nextIndex
     await this.play(this.queue[nextIndex].source, 0)
   }

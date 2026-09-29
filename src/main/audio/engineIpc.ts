@@ -893,17 +893,17 @@ function registerAudioEngineIpcHandlers(): void {
 
   ipcMain.handle(IPC.audioEngine.stop, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
-    ;(await ensureAudioEngineRuntime()).stop()
+    await (await ensureAudioEngineRuntime()).stop()
   })
 
   ipcMain.handle(IPC.audioEngine.next, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
-    ;(await ensureAudioEngineRuntime()).next()
+    await (await ensureAudioEngineRuntime()).next()
   })
 
   ipcMain.handle(IPC.audioEngine.previous, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
-    ;(await ensureAudioEngineRuntime()).previous()
+    await (await ensureAudioEngineRuntime()).previous()
   })
 
   ipcMain.handle(IPC.audioEngine.setPlayMode, async (_event, mode: PlayMode) => {

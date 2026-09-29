@@ -413,6 +413,5 @@ test('plugin hosts hibernate when idle and wake on demand without losing contrib
   // Boot restores cached contributions instead of forking when version and entry file match.
   assert.match(managerSource, /if \(this\.hibernateFromCache\(descriptor\)\) return/)
   assert.match(managerSource, /cached\.mainSignature !== signature/)
-  // Shutdown broadcasts must not resurrect sleeping hosts; startup must deliver.
   assert.match(managerSource, /if \(this\.shuttingDown \|\| name === 'app:before-quit'\) return/)
 })

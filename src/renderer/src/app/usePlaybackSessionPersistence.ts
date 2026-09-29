@@ -55,8 +55,6 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
   async function restoreSavedPlaybackSession(mode: PlaybackResumeMode): Promise<void> {
     const generation = ++restoreGeneration
     let selectionChanged = false
-    // Observe changes synchronously: selecting and then clearing a track must
-    // still cancel the pending restore, even if the final snapshot looks alike.
     const stopSelectionWatch = watch(
       [
         options.currentTrack,

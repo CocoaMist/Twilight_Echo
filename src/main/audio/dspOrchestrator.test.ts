@@ -53,6 +53,15 @@ test('device profile processing reaches the native graph and rollback restores t
   const previous = structuredClone(dsp.getAudioProcessing())
   const defaultScene = dsp.dspScenes.find((scene) => scene.id === 'default')!
   defaultScene.graph.outputStage.targetSampleRate = 96000
+  const compressor = defaultScene.graph.nodes.find((node) => node.id === 'compressor')!
+  compressor.enabled = true
+  compressor.params = { thresholdDb: -12 }
+  defaultScene.graph.nodes.push({
+    id: 'custom-gate',
+    type: 'gate',
+    enabled: true,
+    params: { thresholdDb: -30 }
+  })
   const previousGraph = structuredClone(defaultScene.graph)
   await dsp.applyProfileConfiguration(
     { eqEnabled: true, volumeNormalization: 'album', crossfeedStrength: 0.8 },
@@ -65,6 +74,19 @@ test('device profile processing reaches the native graph and rollback restores t
   assert.equal(graph.nodes.find((node) => node.type === 'replayGain')?.params.mode, 'album')
   assert.equal(graph.nodes.find((node) => node.type === 'crossfeed')?.params.strength, 0.8)
   assert.equal(graph.outputStage.targetSampleRate, 96000)
+  assert.deepEqual(
+    graph.nodes.find((node) => node.id === 'compressor'),
+    compressor
+  )
+  assert.deepEqual(
+    graph.nodes.find((node) => node.id === 'custom-gate'),
+    {
+      id: 'custom-gate',
+      type: 'gate',
+      enabled: true,
+      params: { thresholdDb: -30 }
+    }
+  )
   await dsp.applyProfileConfiguration(previous, 'default', null)
   assert.deepEqual(defaultScene.graph, previousGraph)
   const restored = payloads.at(-1)!.graph as DspGraphConfig

@@ -313,13 +313,17 @@ export class DspOrchestrator {
   private syncDefaultSceneProcessing(): void {
     const defaultScene = this.dspScenes.find((scene) => scene.id === 'default')
     if (!defaultScene) return
-    // Profile apply/rollback and ordinary controls must produce the same graph.
-    // Preserve the scene's output stage and balance/phase settings.
-    defaultScene.graph = createLegacyDspGraph({
-      ...this.processing,
-      outputStage: defaultScene.graph.outputStage,
-      stereoImage: extractStereoImageFromGraph(defaultScene.graph)
-    })
+    const legacyNodes = new Map(
+      createLegacyDspGraph(this.processing)
+        .nodes.filter((node) =>
+          ['replay-gain', 'equalizer', 'convolver', 'crossfeed'].includes(node.id)
+        )
+        .map((node) => [node.id, node])
+    )
+    defaultScene.graph = {
+      ...defaultScene.graph,
+      nodes: defaultScene.graph.nodes.map((node) => legacyNodes.get(node.id) ?? node)
+    }
   }
 
   private graphWithRuntimeModuleGates(graph: DspGraphConfig): DspGraphConfig {

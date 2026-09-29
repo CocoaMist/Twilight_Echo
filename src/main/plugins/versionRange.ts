@@ -45,7 +45,6 @@ export function compareSemver(left: string, right: string): number {
   return compareVersions(a, b)
 }
 
-/** The manifest supports full versions with *, exact, >=, ^ and ~ ranges. */
 export function isCompatibleVersionRange(range: string, version: string): boolean {
   const actual = parseVersion(version)
   if (!actual) return false
@@ -54,7 +53,6 @@ export function isCompatibleVersionRange(range: string, version: string): boolea
   const operator = /^(>=|\^|~)/.exec(trimmed)?.[0] ?? ''
   const required = parseVersion(trimmed.slice(operator.length))
   if (!required) return false
-  // A prerelease only satisfies ranges that explicitly opt into its release triple.
   if (
     actual.prerelease.length &&
     (!required.prerelease.length ||
