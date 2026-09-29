@@ -4,12 +4,57 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { Readable } from 'node:stream'
+import { buildNetworkEntryId } from './networkPath.ts'
+import { normalizeEntry } from './networkEntryInput.ts'
 import { createNetworkSourcesManager } from './sourcesManager.ts'
 import { createNetworkLibrary } from './networkLibrary.ts'
 import type { NetworkProfileStore } from './profileStore.ts'
 import type { NetworkEntry, NetworkSourceProfileSummary } from '../../shared/networkSources.ts'
 
 const FLAC_BYTES = Buffer.from('MANAGER-DATA')
+
+test('playback derives its cache key and size in main and rejects profile mismatches', async (t) => {
+  const cacheRoot = await mkdtemp(join(tmpdir(), 'manager-cache-'))
+  t.after(() => rm(cacheRoot, { recursive: true, force: true }))
+  let closed = 0
+  const entry = normalizeEntry({
+    id: '../escaped',
+    profileId: 'p1',
+    name: 'a.flac',
+    kind: 'audio',
+    path: '/music/a.flac',
+    sizeBytes: 9999
+  })
+  const manager = createNetworkSourcesManager({
+    store: fakeStore,
+    cacheRoot,
+    coverCacheRoot: join(cacheRoot, 'cover'),
+    library: createNetworkLibrary({ filePath: join(cacheRoot, 'library.json') }),
+    getAdapter: async () => ({
+      protocol: 'webdav',
+      createSession: async () => ({
+        protocol: 'webdav',
+        list: async () => [],
+        stat: async () => ({ ...entry, sizeBytes: FLAC_BYTES.length }),
+        resolvePlaybackUrl: async () => null,
+        readStream: async () => Readable.from([FLAC_BYTES]),
+        close: async () => {
+          closed++
+        }
+      })
+    })
+  })
+  const plan = await manager.resolvePlayback('p1', entry)
+  assert.equal(
+    plan.cacheFilePath,
+    join(cacheRoot, `${buildNetworkEntryId('webdav', 'p1', entry.path)}.flac`)
+  )
+  assert.deepEqual(await readFile(plan.cacheFilePath!), FLAC_BYTES)
+  assert.equal(closed, 1)
+  await assert.rejects(manager.resolvePlayback('p2', entry), { code: 'denied' })
+  assert.equal(closed, 1)
+})
 
 function syncsafe(value: number): Buffer {
   return Buffer.from([

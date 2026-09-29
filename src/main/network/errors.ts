@@ -9,6 +9,13 @@ export class NetworkSourceFailure extends Error {
   }
 }
 
+/** The adapter could not prove that the response starts at the requested byte. */
+export class NetworkResumeUnsupported extends NetworkSourceFailure {
+  constructor() {
+    super('network', '远程服务器未确认续传范围')
+  }
+}
+
 export function toNetworkSourceFailure(err: unknown): NetworkSourceFailure {
   if (err instanceof NetworkSourceFailure) return err
   if (err instanceof Error && (err as { code?: string }).code === 'ABORT_ERR') {

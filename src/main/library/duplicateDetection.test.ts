@@ -21,7 +21,7 @@ const HASHES = Object.fromEntries(
 test('detects independent path, hash, acoustic, metadata, and logical-track evidence layers', async () => {
   const candidates: DuplicateCandidate[] = [
     item('path-a', { filePath: 'E:/music/path/shared.wav', duration: 101, size: 101 }),
-    item('path-b', { filePath: 'E:/music/path/SHARED.wav', duration: 102, size: 102 }),
+    item('path-b', { filePath: 'E:/music/path/shared.wav', duration: 102, size: 102 }),
     item('hash-a', { filePath: 'E:/music/0.wav', duration: 201, size: 200 }),
     item('hash-b', { filePath: 'E:/music/1.wav', duration: 202, size: 200 }),
     item('acoustic-a', {
@@ -101,6 +101,26 @@ test('detects independent path, hash, acoustic, metadata, and logical-track evid
     )
   )
   assert.deepEqual(result.contentHashUnavailableIds, [])
+})
+
+test('path evidence folds case only on Windows', () => {
+  const hostPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  try {
+    for (const platform of ['win32', 'linux', 'darwin']) {
+      Object.defineProperty(process, 'platform', { ...hostPlatform, value: platform })
+      const groups = groupDuplicates([
+        item('lower', { filePath: 'E:/music/shared.wav', duration: 101, size: 101 }),
+        item('upper', { filePath: 'E:/music/SHARED.wav', duration: 102, size: 102 })
+      ])
+      assert.equal(
+        groups.some((group) => group.kind === 'path'),
+        platform === 'win32',
+        platform
+      )
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', hostPlatform)
+  }
 })
 
 test('never turns matching technical metadata, missing fields, or logical metadata into a merge plan', () => {

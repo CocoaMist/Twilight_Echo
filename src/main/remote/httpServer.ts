@@ -3,6 +3,10 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import { networkInterfaces } from 'node:os'
 import { app } from 'electron'
+import { Readable } from 'node:stream'
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
+import { pipeline } from 'node:stream/promises'
+import { parseByteRange } from './byteRange.ts'
 import { RemoteAuthSession } from './auth.ts'
 import { MediaStreamGrantStore, guessAudioContentType } from './mediaTokens.ts'
 import {
@@ -58,6 +62,7 @@ export class RemoteHttpServer {
   private readonly sseClients = new Set<ServerResponse>()
   /** S3: SSE 长连接上限，防止局域网内开大量 /api/events 耗尽资源。 */
   private readonly sseMaxClients = 8
+  private readonly sseMaxBufferedBytes = 1024 * 1024
   private browseInFlight = 0
   private readonly maxBrowseInFlight = 2
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -468,21 +473,35 @@ export class RemoteHttpServer {
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive'
     })
-    res.write(`event: state\ndata: ${JSON.stringify(this.snapshot)}\n\n`)
     this.sseClients.add(res)
     reqOnClose(res, () => {
       this.sseClients.delete(res)
     })
+    this.writeSse(res, `event: state\ndata: ${JSON.stringify(this.snapshot)}\n\n`)
+  }
+
+  private writeSse(client: ServerResponse, payload: string): void {
+    if (
+      client.destroyed ||
+      client.writableEnded ||
+      client.writableLength + Buffer.byteLength(payload) > this.sseMaxBufferedBytes
+    ) {
+      this.sseClients.delete(client)
+      client.destroy()
+      return
+    }
+    try {
+      client.write(payload)
+    } catch {
+      this.sseClients.delete(client)
+      client.destroy()
+    }
   }
 
   private broadcastSse(event: string, data: unknown): void {
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
     for (const client of this.sseClients) {
-      try {
-        client.write(payload)
-      } catch {
-        this.sseClients.delete(client)
-      }
+      this.writeSse(client, payload)
     }
   }
 
@@ -545,25 +564,13 @@ export class RemoteHttpServer {
     const type = grant.contentType || guessAudioContentType(filePath)
 
     if (range) {
-      const match = /^bytes=(\d*)-(\d*)$/i.exec(range)
-      if (!match) {
+      const parsed = parseByteRange(range, total)
+      if (!parsed) {
         res.writeHead(416, { 'content-range': `bytes */${total}` })
         res.end()
         return
       }
-      const start = match[1] ? Number(match[1]) : 0
-      const end = match[2] ? Number(match[2]) : total - 1
-      if (
-        !Number.isFinite(start) ||
-        !Number.isFinite(end) ||
-        start < 0 ||
-        end >= total ||
-        start > end
-      ) {
-        res.writeHead(416, { 'content-range': `bytes */${total}` })
-        res.end()
-        return
-      }
+      const { start, end } = parsed
       res.writeHead(206, {
         'content-type': type,
         'content-length': end - start + 1,
@@ -571,7 +578,7 @@ export class RemoteHttpServer {
         'accept-ranges': 'bytes',
         'cache-control': 'no-store'
       })
-      createReadStream(filePath, { start, end }).pipe(res)
+      await pipeline(createReadStream(filePath, { start, end }), res).catch(() => res.destroy())
       return
     }
 
@@ -581,7 +588,7 @@ export class RemoteHttpServer {
       'accept-ranges': 'bytes',
       'cache-control': 'no-store'
     })
-    createReadStream(filePath).pipe(res)
+    await pipeline(createReadStream(filePath), res).catch(() => res.destroy())
   }
 
   /**
@@ -601,69 +608,67 @@ export class RemoteHttpServer {
     const range = req.headers.range
     if (typeof range === 'string' && range) headers.range = range
 
-    let upstream: Response
+    const controller = new AbortController()
+    const onClose = (): void => controller.abort()
+    res.once('close', onClose)
+    res.once('error', onClose)
+    // Bound connection/header acquisition, not the duration of a radio stream.
+    const timeout = setTimeout(() => controller.abort(), 120_000)
+    let upstream: Response | undefined
     try {
+      if (res.destroyed || res.writableEnded) return
       upstream = await fetch(remoteUrl, {
         method: 'GET',
         headers,
         redirect: 'manual',
-        signal: AbortSignal.timeout(120_000)
+        signal: controller.signal
       })
-    } catch {
-      this.sendJson(res, 502, { error: 'upstream_fetch_failed' })
-      return
-    }
-
-    if (upstream.status >= 300 && upstream.status < 400) {
-      this.sendJson(res, 502, { error: 'upstream_redirect_rejected' })
-      return
-    }
-    if (!upstream.ok && upstream.status !== 206) {
-      this.sendJson(res, 502, { error: 'upstream_http_error', status: upstream.status })
-      return
-    }
-
-    const contentType =
-      upstream.headers.get('content-type') || fallbackContentType || 'application/octet-stream'
-    const outHeaders: Record<string, string | number> = {
-      'content-type': contentType,
-      'cache-control': 'no-store',
-      'accept-ranges': upstream.headers.get('accept-ranges') || 'bytes'
-    }
-    for (const name of ['content-length', 'content-range'] as const) {
-      const value = upstream.headers.get(name)
-      if (value) outHeaders[name] = value
-    }
-
-    res.writeHead(upstream.status, outHeaders)
-
-    if (!upstream.body) {
-      res.end()
-      return
-    }
-
-    const reader = upstream.body.getReader()
-    try {
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (!value) continue
-        if (!res.write(Buffer.from(value))) {
-          await new Promise<void>((resolve) => res.once('drain', resolve))
-        }
-        if (res.destroyed || res.writableEnded) {
-          await reader.cancel()
-          return
-        }
+      clearTimeout(timeout)
+      if (res.destroyed || res.writableEnded) return
+      if (upstream.status >= 300 && upstream.status < 400) {
+        this.sendJson(res, 502, { error: 'upstream_redirect_rejected' })
+        return
       }
-      res.end()
-    } catch {
-      try {
-        await reader.cancel()
-      } catch {
-        // ignore
+      if (!upstream.ok && upstream.status !== 206) {
+        this.sendJson(res, 502, { error: 'upstream_http_error', status: upstream.status })
+        return
       }
-      if (!res.writableEnded) res.end()
+      const contentType =
+        upstream.headers.get('content-type') || fallbackContentType || 'application/octet-stream'
+      const outHeaders: Record<string, string | number> = {
+        'content-type': contentType,
+        'cache-control': 'no-store',
+        'accept-ranges': upstream.headers.get('accept-ranges') || 'bytes'
+      }
+      for (const name of ['content-length', 'content-range'] as const) {
+        const value = upstream.headers.get(name)
+        if (value) outHeaders[name] = value
+      }
+      res.writeHead(upstream.status, outHeaders)
+      if (!upstream.body) {
+        res.end()
+        return
+      }
+      // pipeline handles backpressure, premature close and both stream errors;
+      // destroying the converted stream also cancels the upstream reader.
+      await pipeline(
+        Readable.fromWeb(upstream.body as unknown as NodeReadableStream<Uint8Array>),
+        res,
+        { signal: controller.signal }
+      )
+    } catch {
+      if (!res.destroyed && !res.writableEnded) {
+        if (!res.headersSent) this.sendJson(res, 502, { error: 'upstream_fetch_failed' })
+        else res.destroy()
+      }
+    } finally {
+      clearTimeout(timeout)
+      controller.abort()
+      res.off('close', onClose)
+      res.off('error', onClose)
+      if (upstream?.body && !upstream.body.locked) {
+        await upstream.body.cancel().catch(() => undefined)
+      }
     }
   }
 

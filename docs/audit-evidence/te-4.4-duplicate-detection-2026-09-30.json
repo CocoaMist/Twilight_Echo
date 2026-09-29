@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-29T16:05:06.015Z",
+  "node": "v24.13.1",
+  "platform": "win32-x64",
+  "rows": 10000,
+  "warmupIterations": 3,
+  "iterations": 20,
+  "budgets": {
+    "uniqueP95Ms": 1500,
+    "collisionP95Ms": 2500
+  },
+  "provenance": {
+    "algorithm": "sha256",
+    "source": {
+      "path": "src/main/library/duplicateDetection.ts",
+      "sha256": "5f6236b47dbb08b564f15191c758d1169429ef869af910f089a0e50973209a1f"
+    },
+    "sharedContract": {
+      "path": "src/shared/duplicateDetection.ts",
+      "sha256": "c3848f52b1356def97cce7ac9a6f9266df6aca66545a0e7968fb9c58c9b547f6"
+    },
+    "runner": {
+      "path": "scripts/duplicate-detection-benchmark.ts",
+      "sha256": "023d28cfe123e9a98edeafeaf91a364fb38354598def2bed57f92aed3d8afd8e"
+    },
+    "runnerContract": {
+      "path": "scripts/duplicate-detection-benchmark.test.ts",
+      "sha256": "d1f2cea7dbdfa10cdd1691c2b6fcc9841ef3d6c7169b4178abf00f4ec4a55325"
+    },
+    "packageManifest": {
+      "path": "package.json",
+      "sha256": "726b6d092c0afd2181e1a832613fc6f1ad8f76e602775cfd8fd487f686f93b6f"
+    },
+    "lockfile": {
+      "path": "pnpm-lock.yaml",
+      "sha256": "6acaead25d5af44579975874f8c8bbe055460b158c102c61165f998005b12510"
+    }
+  },
+  "scenarios": {
+    "unique": {
+      "rows": 10000,
+      "groups": 0,
+      "groupsByEvidence": {},
+      "hashUnavailableIds": 0,
+      "elapsedMs": [
+        46.14620000000002,
+        52.623699999999985,
+        53.73540000000003,
+        46.13580000000002,
+        46.355500000000006,
+        48.52589999999998,
+        47.383699999999976,
+        50.5376,
+        48.32180000000005,
+        49.19489999999996,
+        45.721900000000005,
+        45.941400000000044,
+        44.913400000000024,
+        46.17109999999991,
+        46.73000000000002,
+        44.393299999999954,
+        44.80250000000001,
+        42.90969999999993,
+        43.709100000000035,
+        43.6739
+      ],
+      "p50Ms": 46.14620000000002,
+      "p95Ms": 52.623699999999985,
+      "heapDeltaBytes": -1041584
+    },
+    "collision": {
+      "rows": 10000,
+      "groups": 5000,
+      "groupsByEvidence": {
+        "path": 1000,
+        "contentHash": 1000,
+        "audioFingerprint": 1000,
+        "metadataCandidate": 1000,
+        "logicalTrack": 1000
+      },
+      "hashUnavailableIds": 0,
+      "elapsedMs": [
+        55.65800000000013,
+        55.56940000000009,
+        56.2023999999999,
+        56.772699999999986,
+        60.41010000000006,
+        59.496700000000146,
+        56.81919999999991,
+        55.80060000000003,
+        56.399900000000116,
+        56.0911000000001,
+        55.00980000000027,
+        56.90029999999979,
+        55.23259999999982,
+        55.45960000000014,
+        57.12869999999975,
+        56.97389999999996,
+        65.5260000000003,
+        56.6248999999998,
+        58.11250000000018,
+        57.03110000000015
+      ],
+      "p50Ms": 56.6248999999998,
+      "p95Ms": 60.41010000000006,
+      "heapDeltaBytes": -2812720
+    }
+  }
+}

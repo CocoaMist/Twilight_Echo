@@ -256,18 +256,34 @@ export interface MediaProvider {
 
 export class MediaProviderRegistry {
   private providers = new Map<string, MediaProvider>()
+  private generations = new Map<string, number>()
+
+  getGeneration(id: string): number {
+    return this.generations.get(normalizeProviderId(id)) ?? 0
+  }
+
+  private invalidate(id: string): void {
+    this.generations.set(id, this.getGeneration(id) + 1)
+  }
 
   register(provider: MediaProvider): void {
     const id = normalizeProviderId(provider.id)
     if (!id) throw new Error('MediaProvider id is required')
     if (this.providers.has(id)) throw new Error(`MediaProvider already registered: ${id}`)
     this.providers.set(id, { ...provider, id })
+    this.invalidate(id)
   }
 
   update(id: string, patch: Partial<MediaProvider>): boolean {
     const normalizedId = normalizeProviderId(id)
     const current = this.providers.get(normalizedId)
     if (!current) return false
+    if (
+      patch.health &&
+      (current.health?.available !== false) !== (patch.health.available !== false)
+    ) {
+      this.invalidate(normalizedId)
+    }
     this.providers.set(normalizedId, {
       ...current,
       ...patch,
@@ -277,13 +293,14 @@ export class MediaProviderRegistry {
   }
 
   unregister(id: string): void {
-    this.providers.delete(normalizeProviderId(id))
+    const normalizedId = normalizeProviderId(id)
+    if (this.providers.delete(normalizedId)) this.invalidate(normalizedId)
   }
 
   unregisterWhere(predicate: (provider: MediaProvider) => boolean): void {
     for (const provider of this.providers.values()) {
       if (predicate(provider)) {
-        this.providers.delete(provider.id)
+        this.unregister(provider.id)
       }
     }
   }

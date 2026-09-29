@@ -1,7 +1,7 @@
 import { NetworkSourceFailure } from './errors.ts'
 import { downloadEntryToCache } from './networkCache.ts'
 import { enrichNetworkEntry } from './networkMetadata.ts'
-import { normalizeRemotePath } from './networkPath.ts'
+import { buildNetworkEntryId, normalizeRemotePath } from './networkPath.ts'
 import type { NetworkLibraryIndex } from './networkLibrary.ts'
 import type { NetworkSourceAdapter, NetworkSourceSession, NetworkAuth } from './adapters/types.ts'
 import type { NetworkProfileStore, NetworkSourceProfileInput } from './profileStore.ts'
@@ -113,13 +113,32 @@ export function createNetworkSourcesManager(deps: {
       }
     },
     async resolvePlayback(profileId, entry, signal) {
-      const { session } = await openSession(profileId)
+      if (entry.profileId !== profileId || entry.kind === 'directory') {
+        throw new NetworkSourceFailure('denied', '网络条目与播放源不匹配')
+      }
+      const path = normalizeRemotePath(entry.path)
+      const { session, profile } = await openSession(profileId)
       try {
-        const directUrl = await session.resolvePlaybackUrl(entry.path, signal)
+        const directUrl = await session.resolvePlaybackUrl(path, signal)
         if (directUrl) {
           return { kind: 'direct-url', url: directUrl, displayName: entry.name }
         }
-        const cacheFilePath = await downloadEntryToCache({ session, entry, cacheRoot, signal })
+        const remoteEntry = await session.stat(path, signal)
+        if (!remoteEntry || remoteEntry.kind === 'directory') {
+          throw new NetworkSourceFailure('notFound', '网络文件不存在')
+        }
+        const cacheEntry = {
+          ...entry,
+          path,
+          id: buildNetworkEntryId(profile.protocol, profile.id, path),
+          sizeBytes: remoteEntry.sizeBytes
+        }
+        const cacheFilePath = await downloadEntryToCache({
+          session,
+          entry: cacheEntry,
+          cacheRoot,
+          signal
+        })
         return { kind: 'local-cache', cacheFilePath, displayName: entry.name }
       } finally {
         await session.close()
