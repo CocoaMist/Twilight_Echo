@@ -8,6 +8,7 @@ import { downloadEntryToCache } from './networkCache.ts'
 import { clearDirectory, getDirectorySize } from './networkCache.ts'
 import { createWebDavAdapter } from './adapters/webdavAdapter.ts'
 import { buildNetworkEntryId } from './networkPath.ts'
+import { normalizeEntry } from './networkEntryInput.ts'
 import type { NetworkEntry, NetworkSourceProfile } from '../../shared/networkSources.ts'
 
 const FLAC_BYTES = Buffer.from('FLAC-CACHE-DATA-0123456789')
@@ -15,6 +16,7 @@ let server: Server
 let getCount = 0
 let rangeRequestSeen = false
 let ignoreRangeRequests = false
+let invalidRangeResponse = false
 let basePort = 0
 
 function makeProfile(): NetworkSourceProfile {
@@ -64,8 +66,11 @@ test.before(async () => {
         }
         const start = Number(match[1])
         const body = FLAC_BYTES.subarray(start)
-        res.writeHead(206, { 'Content-Length': body.length })
-        res.end(body)
+        res.writeHead(206, {
+          'Content-Length': body.length,
+          'Content-Range': `bytes ${invalidRangeResponse ? 0 : start}-${FLAC_BYTES.length - 1}/${FLAC_BYTES.length}`
+        })
+        res.end(invalidRangeResponse ? FLAC_BYTES.subarray(0, body.length) : body)
         return
       }
       res.writeHead(200, { 'Content-Length': FLAC_BYTES.length })
@@ -158,7 +163,7 @@ test('downloadEntryToCache resets a partial file when a server ignores Range', a
     rangeRequestSeen = false
     ignoreRangeRequests = true
     const session = await createWebDavAdapter().createSession(makeProfile(), { kind: 'anonymous' })
-    const entry = makeEntry()
+    const entry = normalizeEntry(makeEntry())
     await mkdir(cacheRoot, { recursive: true })
     await writeFile(join(cacheRoot, `${entry.id}.flac.part`), FLAC_BYTES.subarray(0, 5))
     const target = await downloadEntryToCache({ session, entry, cacheRoot })
@@ -169,4 +174,54 @@ test('downloadEntryToCache resets a partial file when a server ignores Range', a
     ignoreRangeRequests = false
     await rm(cacheRoot, { recursive: true, force: true })
   }
+})
+
+test('unknown-size IPC entries restart partial downloads without appending', async (t) => {
+  const cacheRoot = await mkdtemp(join(tmpdir(), 'network-cache-'))
+  t.after(() => rm(cacheRoot, { recursive: true, force: true }))
+  const session = await createWebDavAdapter().createSession(makeProfile(), { kind: 'anonymous' })
+  t.after(() => session.close())
+  const entry = normalizeEntry({ ...makeEntry(), sizeBytes: undefined })
+  await writeFile(join(cacheRoot, `${entry.id}.flac.part`), FLAC_BYTES.subarray(0, 5))
+  rangeRequestSeen = false
+  const target = await downloadEntryToCache({ session, entry, cacheRoot })
+  assert.deepEqual(await readFile(target), FLAC_BYTES)
+  assert.equal(rangeRequestSeen, false)
+})
+
+test('cache rejects path-like keys before creating any files', async (t) => {
+  const cacheRoot = await mkdtemp(join(tmpdir(), 'network-cache-'))
+  t.after(() => rm(cacheRoot, { recursive: true, force: true }))
+  const session = await createWebDavAdapter().createSession(makeProfile(), { kind: 'anonymous' })
+  t.after(() => session.close())
+  for (const id of ['../escaped', '..\\escaped', '/absolute', 'C:\\absolute', 'a:stream']) {
+    await assert.rejects(
+      downloadEntryToCache({ session, entry: normalizeEntry({ ...makeEntry(), id }), cacheRoot }),
+      { code: 'denied' }
+    )
+  }
+  assert.equal(await getDirectorySize(cacheRoot), 0)
+})
+
+test('playback DTO rejects invalid sizes and entry kinds', () => {
+  for (const sizeBytes of [-1, NaN, Infinity, 1.5, '10']) {
+    assert.throws(() => normalizeEntry({ ...makeEntry(), sizeBytes }), /invalid entry size/)
+  }
+  assert.throws(() => normalizeEntry({ ...makeEntry(), kind: 'unknown' }), /invalid entry kind/)
+  assert.equal(normalizeEntry({ ...makeEntry(), sizeBytes: 0 }).sizeBytes, 0)
+})
+
+test('a wrong Content-Range cannot publish same-size but incorrect resumed bytes', async (t) => {
+  const cacheRoot = await mkdtemp(join(tmpdir(), 'network-cache-'))
+  t.after(() => rm(cacheRoot, { recursive: true, force: true }))
+  const session = await createWebDavAdapter().createSession(makeProfile(), { kind: 'anonymous' })
+  t.after(() => session.close())
+  const entry = normalizeEntry(makeEntry())
+  await writeFile(join(cacheRoot, `${entry.id}.flac.part`), FLAC_BYTES.subarray(0, 5))
+  invalidRangeResponse = true
+  t.after(() => {
+    invalidRangeResponse = false
+  })
+  const target = await downloadEntryToCache({ session, entry, cacheRoot })
+  assert.deepEqual(await readFile(target), FLAC_BYTES)
 })

@@ -2,7 +2,7 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import type { IncomingMessage } from 'node:http'
 import { buildNetworkEntryId, normalizeRemotePath } from '../networkPath.ts'
-import { NetworkSourceFailure } from '../errors.ts'
+import { NetworkResumeUnsupported, NetworkSourceFailure } from '../errors.ts'
 import { entryKind } from '../entryKinds.ts'
 import type { NetworkEntry, NetworkSourceProfile } from '../../../shared/networkSources.ts'
 import type { NetworkAuth, NetworkSourceAdapter, NetworkSourceSession } from './types.ts'
@@ -201,6 +201,18 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
           const headers: Record<string, string> =
             options?.start != null && options.start > 0 ? { Range: `bytes=${options.start}-` } : {}
           const res = await perform('GET', remotePath, headers, signal)
+          if (options?.start != null && options.start > 0) {
+            const range = /^bytes (\d+)-(\d+)\/(\d+|\*)$/i.exec(res.headers['content-range'] ?? '')
+            if (
+              res.statusCode === 200 ||
+              res.statusCode === 416 ||
+              (res.statusCode === 206 &&
+                (!range || Number(range[1]) !== options.start || Number(range[2]) < options.start))
+            ) {
+              res.destroy()
+              throw new NetworkResumeUnsupported()
+            }
+          }
           throwForStatus(res.statusCode, remotePath)
           return res
         },

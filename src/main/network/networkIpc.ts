@@ -19,7 +19,8 @@ import { createFtpAdapter } from './adapters/ftpAdapter.ts'
 import { createSftpSystemAdapter } from './adapters/sftpSystemAdapter.ts'
 import { createNfsMountAdapter, createSmbMountAdapter } from './adapters/smbMountAdapter.ts'
 import { createDlnaAdapter } from './adapters/dlnaAdapter.ts'
-import type { NetworkEntry, NetworkSourceProfileInput } from '../../shared/networkSources.ts'
+import type { NetworkSourceProfileInput } from '../../shared/networkSources.ts'
+import { normalizeEntry } from './networkEntryInput.ts'
 import { parseJsonWithNestingLimit } from '../security/jsonSafety.ts'
 
 const CREDENTIAL_SCOPE = 'network-source-credentials'
@@ -87,18 +88,6 @@ function parseProfileInput(value: unknown): NetworkSourceProfileInput {
   return parseJsonWithNestingLimit(
     stringifyJsonForIpcStorage(value, 'profile input', 16 * 1024)
   ) as NetworkSourceProfileInput
-}
-
-function normalizeEntry(value: unknown): NetworkEntry {
-  if (!value || typeof value !== 'object') throw new Error('entry must be an object')
-  const entry = value as Partial<NetworkEntry>
-  return {
-    id: normalizeIpcString(entry.id, 'entry id', 128),
-    profileId: normalizeIpcString(entry.profileId, 'entry profile id', 128),
-    name: normalizeIpcString(entry.name, 'entry name', 512),
-    kind: (entry.kind ?? 'file') as NetworkEntry['kind'],
-    path: normalizeIpcString(entry.path, 'entry path', 4096)
-  }
 }
 
 export function setupNetworkSourceIpc(): void {
