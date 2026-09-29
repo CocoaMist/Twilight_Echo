@@ -183,11 +183,11 @@ test('duplicate benchmark scripts retain the authenticated contract and isolated
   assert.match(live, /--expose-gc scripts\/duplicate-detection-benchmark\.ts$/)
   assert.match(
     archive,
-    /--output docs\/audit-evidence\/te-4\.4-duplicate-detection-2026-07-18\.json/
+    /--output docs\/audit-evidence\/te-4\.4-duplicate-detection-2026-09-30\.json/
   )
   assert.match(
     archive,
-    /--manifest docs\/audit-evidence\/te-4\.4-duplicate-detection-2026-07-18\.manifest\.json/
+    /--manifest docs\/audit-evidence\/te-4\.4-duplicate-detection-2026-09-30\.manifest\.json/
   )
 })
 
