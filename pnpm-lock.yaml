@@ -10,7 +10,9 @@ overrides:
   qs: 6.16.0
   uuid: 11.1.1
   nanoid: 3.3.18
-  ip-address: 10.5.0
+  ip-address: 10.5.1
+  undici@6.28.0: 6.28.1
+  undici@7.29.0: 7.29.1
   body-parser@1.20.5: 1.20.6
   body-parser@2.2.2: 2.3.0
   node-abi: 4.33.0
@@ -187,8 +189,8 @@ importers:
         specifier: 1.0.1
         version: 1.0.1
       undici:
-        specifier: ^6.28.0
-        version: 6.28.0
+        specifier: 6.28.1
+        version: 6.28.1
       util-deprecate:
         specifier: 1.0.2
         version: 1.0.2
@@ -2183,8 +2185,8 @@ packages:
     resolution: {integrity: sha512-CYdFeFexxhv/Bcny+Q0BfOV+ltRlJcd4BBZBYFX/O0u4npJrgZtIcjokegtiSMAvlMTJ+Koq0GBCc//3bueQxw==}
     engines: {node: '>=8'}
 
-  ip-address@10.5.0:
-    resolution: {integrity: sha512-R5SnVLJmgYYvf2F2ZgwSBnelz5G4q5AxIC277GDfUaNbrZKNANcBC7RHqYYePlszf4kBolVkJauG0ZjHHFh55g==}
+  ip-address@10.5.1:
+    resolution: {integrity: sha512-EXujUp9jyOI/chPgtqk6uy7fDq8AeCB/WlfEuPg9LN0fN9lzKAKfuDYi60SMhHwgUiEhZvVYsbGZN+RUU1INiA==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -3098,12 +3100,12 @@ packages:
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
-  undici@6.28.0:
-    resolution: {integrity: sha512-LIY910g9TI13YS95lrMFrs8Rm/u/irgHeTWoKCoteeJ04CUJ92eEfj0rVn+7VKMPBpUPiUoBKfhNyLI23EE/KA==}
+  undici@6.28.1:
+    resolution: {integrity: sha512-zWpdTVD54H48CIybL0rWQ3ukpb9d23wM7eH5RtfdmeP70cWHNjtfo7P4vZX+5CoDcO53J4Pu5uXp7lNfjc6DRA==}
     engines: {node: '>=18.17'}
 
-  undici@7.29.0:
-    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
+  undici@7.29.1:
+    resolution: {integrity: sha512-RYONW2MeafgYlkVOKYKkA/Ag7BmXqgIWCa8t1m0JcxrQg9pI9lEqRhAOruOBCbAohOa/gkCF+iPi9hrgvTzu6Q==}
     engines: {node: '>=20.18.1'}
 
   universalify@0.1.2:
@@ -3523,7 +3525,7 @@ snapshots:
       semver: 7.7.4
       sumchecker: 3.0.1
     optionalDependencies:
-      undici: 7.29.0
+      undici: 7.29.1
     transitivePeerDependencies:
       - supports-color
 
@@ -5461,7 +5463,7 @@ snapshots:
 
   invert-kv@3.0.1: {}
 
-  ip-address@10.5.0: {}
+  ip-address@10.5.1: {}
 
   ipaddr.js@1.9.1: {}
 
@@ -5721,7 +5723,7 @@ snapshots:
       semver: 7.7.4
       tar: 7.5.13
       tinyglobby: 0.2.16
-      undici: 6.28.0
+      undici: 6.28.1
       which: 6.0.1
 
   node-releases@2.0.38: {}
@@ -6221,7 +6223,7 @@ snapshots:
 
   socks@2.8.8:
     dependencies:
-      ip-address: 10.5.0
+      ip-address: 10.5.1
       smart-buffer: 4.2.0
 
   sonic-boom@1.4.1:
@@ -6407,9 +6409,9 @@ snapshots:
 
   undici-types@7.18.2: {}
 
-  undici@6.28.0: {}
+  undici@6.28.1: {}
 
-  undici@7.29.0:
+  undici@7.29.1:
     optional: true
 
   universalify@0.1.2: {}
