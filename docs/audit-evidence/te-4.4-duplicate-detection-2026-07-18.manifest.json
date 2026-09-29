@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-25T14:56:20.862Z",
+  "generatedAt": "2026-09-28T11:18:53.455Z",
   "evidence": {
     "path": "te-4.4-duplicate-detection-2026-07-18.json",
-    "sha256": "5adf5d8b835da178cb21c4e7a61ca6662d12b1efa54a58632db697f865fa9dd4"
+    "sha256": "756a0146b6d12dfa0bd89a688ee41947b37ada8fc4358a5957fd8f1346ef5f3f"
   },
   "provenance": {
     "algorithm": "sha256",
@@ -25,7 +25,7 @@
     },
     "packageManifest": {
       "path": "package.json",
-      "sha256": "7e4649a6ac4db71335daf20a786362ed01d430b4b9712006b80db854b60a1c36"
+      "sha256": "336328852067d8ede5aee76b9c95b4dcd301bc016c2affef9ec7e49695712d97"
     },
     "lockfile": {
       "path": "pnpm-lock.yaml",
@@ -41,12 +41,12 @@
       "collisionP95Ms": 2500
     },
     "unique": {
-      "p50Ms": 55.36519999999996,
-      "p95Ms": 67.06169999999986
+      "p50Ms": 38.90829999999994,
+      "p95Ms": 44.33019999999999
     },
     "collision": {
-      "p50Ms": 70.7938999999999,
-      "p95Ms": 78.94090000000006
+      "p50Ms": 48.76949999999988,
+      "p95Ms": 53.48239999999987
     }
   }
 }
