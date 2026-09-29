@@ -113,6 +113,8 @@ in parallel with other performance gates. All three commands are part of `test:n
 fallback, podcast parsing/persistence, remote-control authentication, UPnP/Chromecast discovery and
 control, media-token authorization, and renderer cover handles. `test:themes` validates the theme
 token contract, archive preflight, scheduling, plugin runtime integration, and large-list switching.
+Its Electron backdrop-filter pixel probe uses offscreen rendering so it also runs in noninteractive
+Windows release sessions.
 `test:network-sources` covers network source profile persistence, path validation, directory
 traversal, metadata/cache behavior, and the FTP/SFTP/SMB/WebDAV/NFS/DLNA adapter matrix.
 
@@ -132,6 +134,8 @@ DSD bit-frame timing.
 
 `test:renderer-data-tooling` covers persistence-benchmark evidence contracts, packaged renderer font
 assets, shared TypeScript boundaries, renderer size budgets, and visibility-animation scheduling.
+The TTML XML parser has its own `vendor-xmldom` chunk, and `App` loads listening-stat tracking on
+mount so its initial chunk stays within the per-chunk JavaScript budget.
 `test:sleep-timer` covers shared state, main/renderer coordination, IPC and native boundaries,
 fade completion, and mute/volume interactions. `test:cross-cutting-regressions` covers close-time
 persistence, packaged font and visibility budgets, library-view preferences, and visibility polling.

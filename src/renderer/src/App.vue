@@ -49,7 +49,6 @@ const OnboardingWizard = defineAsyncComponent(
 import type { OnboardingFinishResult } from './components/onboarding/OnboardingWizard.vue'
 import { useMusicStore } from './stores/useMusicStore'
 import { useNcmStore } from './stores/useNcmStore'
-import { setupListeningStatsTracking } from './stores/useListeningStatsStore'
 import { isPlaybackSpace } from '@renderer/app/playbackKeyboard'
 import { usePlayerStore } from './stores/usePlayerStore'
 import { useSettingsStore } from './stores/useSettingsStore'
@@ -647,6 +646,7 @@ function flushPendingPersistenceForExit(): void {
 }
 
 onMounted(async () => {
+  const { setupListeningStatsTracking } = await import('@renderer/stores/useListeningStatsStore')
   setupListeningStatsTracking({ currentTrack, isPlaying, currentTime, duration })
   const startupSnapshot = await getStartupSnapshot()
   await bootstrapThemeRuntime(startupSnapshot ?? undefined)

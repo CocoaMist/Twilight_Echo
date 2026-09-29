@@ -33,7 +33,8 @@ export default defineConfig({
           manualChunks: {
             'vendor-vue': ['vue'],
             'vendor-music-metadata': ['music-metadata'],
-            'vendor-qrcode': ['qrcode']
+            'vendor-qrcode': ['qrcode'],
+            'vendor-xmldom': ['@xmldom/xmldom']
           }
         }
       }

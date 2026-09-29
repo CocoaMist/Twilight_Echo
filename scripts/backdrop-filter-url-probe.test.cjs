@@ -353,10 +353,10 @@ function compare(reference, candidate) {
 
 app.whenReady().then(async () => {
   const window = new BrowserWindow({
-    show: true,
+    show: false,
     width: 1440,
     height: 900,
-    webPreferences: { contextIsolation: false, nodeIntegration: false }
+    webPreferences: { contextIsolation: false, nodeIntegration: false, offscreen: true }
   })
   window.webContents.on('console-message', (_event, _level, message) =>
     console.error('RENDERER', message)

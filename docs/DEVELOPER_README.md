@@ -25,7 +25,7 @@
 部分组件仍共享宿主状态。停用经编辑器保存响应后才进入插件生命周期操作。
 全部页面预览、多图层编辑、预览状态完全隔离和实际应用的视觉回归仍需完成后才能正式验收。
 
-Twilight Echo 是 Electron + Vue 3 + TypeScript 应用，使用 electron-vite 构建，electron-builder 打包。当前包信息为 `TwilightEcho@1.2.3`，许可证为 Apache-2.0。
+Twilight Echo 是 Electron + Vue 3 + TypeScript 应用，使用 electron-vite 构建，electron-builder 打包。当前包信息为 `TwilightEcho@1.2.4`，许可证为 Apache-2.0。
 
 核心依赖：
 
