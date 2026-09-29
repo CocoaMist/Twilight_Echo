@@ -15,6 +15,14 @@ import { deviceOptionsForOutput } from '../shared/audioDeviceRouting.ts'
 import { registerNativeSleepTimerBoundaries } from './audio/sleepTimerNativeBoundary.ts'
 import { SleepTimerService } from './sleepTimerCore.ts'
 
+// Most fake devices in this suite implement Windows backend contracts. Tests
+// for other platforms explicitly override this fixture and restore it locally.
+const hostPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+test.beforeEach(() =>
+  Object.defineProperty(process, 'platform', { ...hostPlatform, value: 'win32' })
+)
+test.afterEach(() => Object.defineProperty(process, 'platform', hostPlatform))
+
 function readPreloadSources(): string {
   const root = new URL('../preload/', import.meta.url)
   return [

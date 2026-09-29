@@ -16,6 +16,13 @@ import type {
 import type { DspGraphStatus } from '../../shared/dspGraph.ts'
 import type { DeviceProfileCommit } from './deviceProfiles.ts'
 
+// The binding fixture below models WASAPI/ASIO, independent of the CI host.
+const hostPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+test.beforeEach(() =>
+  Object.defineProperty(process, 'platform', { ...hostPlatform, value: 'win32' })
+)
+test.afterEach(() => Object.defineProperty(process, 'platform', hostPlatform))
+
 function harness(serviceMode = false) {
   const calls: string[] = []
   let devices: AudioDeviceOption[] = [
