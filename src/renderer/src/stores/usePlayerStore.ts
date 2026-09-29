@@ -1496,6 +1496,8 @@ function getNativeQueueAdvanceTarget(
 }
 
 async function advanceNativePlayback(direction: 'next' | 'previous'): Promise<void> {
+  const loadToken = ++activeLoadToken
+  const isCurrentAdvance = () => loadToken === activeLoadToken
   // Drop any pending pause/play grace — a track switch is a new transport action
   // and must not be blocked by a prior pause intent (UI stuck paused while audio
   // already advanced).
@@ -1524,21 +1526,27 @@ async function advanceNativePlayback(direction: 'next' | 'previous'): Promise<vo
   try {
     isLoading.value = true
     await waitForNativeQueueStateSync()
+    if (!isCurrentAdvance()) return
     if (direction === 'next') {
       await window.api.audioEngine.next()
     } else {
       await window.api.audioEngine.previous()
     }
+    if (!isCurrentAdvance()) return
     await new Promise((resolve) =>
       window.setTimeout(resolve, NATIVE_PLAYBACK_INFO_REFRESH_DELAY_MS)
     )
+    if (!isCurrentAdvance()) return
     let info = await window.api.audioEngine.getPlaybackInfo()
+    if (!isCurrentAdvance()) return
     let applied = applyNativePlaybackInfo(info, { applyTrackWhenInactive: true })
     if (!applied) {
       await new Promise((resolve) =>
         window.setTimeout(resolve, NATIVE_PLAYBACK_INFO_REFRESH_DELAY_MS)
       )
+      if (!isCurrentAdvance()) return
       info = await window.api.audioEngine.getPlaybackInfo()
+      if (!isCurrentAdvance()) return
       applied = applyNativePlaybackInfo(info, { applyTrackWhenInactive: true })
     }
     if (!applied) {
@@ -1574,12 +1582,13 @@ async function advanceNativePlayback(direction: 'next' | 'previous'): Promise<vo
       isLoading.value = false
     }
   } catch (err) {
+    if (!isCurrentAdvance()) return
     clearNativePlaybackInfoIntent()
     setAudioEngineError(err instanceof Error ? err.message : String(err))
     console.error('[音频引擎] 切换歌曲失败:', err)
     isLoading.value = false
   } finally {
-    if (isPlaying.value && currentTrack.value) startVisualizationPolling()
+    if (isCurrentAdvance() && isPlaying.value && currentTrack.value) startVisualizationPolling()
   }
 }
 

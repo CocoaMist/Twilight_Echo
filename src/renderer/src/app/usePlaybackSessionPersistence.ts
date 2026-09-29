@@ -48,10 +48,29 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
   let playbackSessionAutosaveTimer: ReturnType<typeof setTimeout> | null = null
   let lastPlaybackSessionPositionSaveAt = 0
   let playbackSessionWritesEnabled = false
+  let restoreGeneration = 0
   const sessionWriter = options.sessionWriter ?? playbackSessionWriter
   const stopHandles: Array<() => void> = []
 
   async function restoreSavedPlaybackSession(mode: PlaybackResumeMode): Promise<void> {
+    const generation = ++restoreGeneration
+    let selectionChanged = false
+    // Observe changes synchronously: selecting and then clearing a track must
+    // still cancel the pending restore, even if the final snapshot looks alike.
+    const stopSelectionWatch = watch(
+      [
+        options.currentTrack,
+        options.currentTime,
+        options.isPlaying,
+        () => options.queue?.value,
+        () => getPlaybackResumeMode()
+      ],
+      () => {
+        selectionChanged = true
+      },
+      { flush: 'sync' }
+    )
+    const canRestore = () => generation === restoreGeneration && !selectionChanged
     playbackSessionWritesEnabled = false
     clearPlaybackSessionAutosave()
 
@@ -61,6 +80,7 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
       // expected revision (0) against a live envelope (e.g. 16) used to block
       // window close with a revision-conflict dialog.
       const session = await refreshAuthoritativeSession()
+      if (!canRestore()) return
 
       if (mode === 'off') {
         await clearSavedPlaybackSession()
@@ -72,6 +92,7 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
       if (requiresPluginProviderSync(session.track)) {
         await options.syncPluginProviders()
       }
+      if (!canRestore()) return
 
       const restoredSession: PlaybackSession = {
         ...session,
@@ -83,9 +104,10 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
         session.queueRevision !== undefined ? (options.queue?.value ?? null) : null
       )
     } finally {
+      stopSelectionWatch()
       // A damaged old session must not prevent the next valid playback action
       // from replacing it with a fresh snapshot.
-      playbackSessionWritesEnabled = true
+      if (generation === restoreGeneration) playbackSessionWritesEnabled = true
     }
   }
 
@@ -211,6 +233,7 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
   }
 
   function stop(): void {
+    restoreGeneration++
     clearPlaybackSessionAutosave()
     while (stopHandles.length > 0) {
       stopHandles.pop()?.()

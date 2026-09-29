@@ -310,6 +310,18 @@ export class DspOrchestrator {
     }
   }
 
+  private syncDefaultSceneProcessing(): void {
+    const defaultScene = this.dspScenes.find((scene) => scene.id === 'default')
+    if (!defaultScene) return
+    // Profile apply/rollback and ordinary controls must produce the same graph.
+    // Preserve the scene's output stage and balance/phase settings.
+    defaultScene.graph = createLegacyDspGraph({
+      ...this.processing,
+      outputStage: defaultScene.graph.outputStage,
+      stereoImage: extractStereoImageFromGraph(defaultScene.graph)
+    })
+  }
+
   private graphWithRuntimeModuleGates(graph: DspGraphConfig): DspGraphConfig {
     if (!this.processing.dspEnabled || this.processing.directMode) {
       return {
@@ -673,6 +685,7 @@ export class DspOrchestrator {
     if (previousDirect && processing.directMode === false)
       await this.applyDirectModeRuntimeOverrides(false)
     this.processing = this.mergeAudioProcessingSettings(processing)
+    this.syncDefaultSceneProcessing()
     this.dspPinnedSceneId = sceneId
     this.outputStageOverride = outputStage
     const chainApplied = await this.host.callNativeMaybeAsync(
@@ -933,14 +946,7 @@ export class DspOrchestrator {
     }
 
     this.processing = nextProcessing
-    if (defaultScene) {
-      // Preserve HiFi sample-rate lock and balance/phase when rewriting the legacy graph.
-      defaultScene.graph = createLegacyDspGraph({
-        ...this.processing,
-        outputStage: defaultScene.graph.outputStage,
-        stereoImage: extractStereoImageFromGraph(defaultScene.graph)
-      })
-    }
+    this.syncDefaultSceneProcessing()
     const sourceIsDsd =
       sourceLooksDsd(this.playbackInfo.source) ||
       this.playbackInfo.codec.trim().toLowerCase() === 'dsd' ||

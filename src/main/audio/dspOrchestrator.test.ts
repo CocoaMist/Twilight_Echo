@@ -6,6 +6,72 @@ import type { DspStatePayload } from '../../shared/audioServiceContract.ts'
 import { compensatedAuditionGraph } from '../../shared/dspAudition.ts'
 import { DEFAULT_DSP_OUTPUT_STAGE, type DspGraphConfig } from '../../shared/dspGraph.ts'
 
+test('device profile processing reaches the native graph and rollback restores the previous values', async () => {
+  const info = createDefaultPlaybackInfo('wasapi', 'auto', false, {
+    routingMode: 'auto',
+    preferredBufferSize: 0
+  })
+  const payloads: DspStatePayload[] = []
+  const host = {
+    getPlaybackInfo: () => info,
+    getDevice: () => 'auto',
+    getOutput: () => 'wasapi',
+    getNative: () => ({}),
+    callNativeMaybeAsync: async () => true,
+    setLastNativeError: () => undefined,
+    updateOutputPerfect: () => undefined,
+    publishPlaybackInfo: () => undefined,
+    syncLoudnormModeTransition: async () => undefined,
+    getAudioServiceBinding: () => ({
+      applyDspState: async (revision: number, payload: DspStatePayload) => {
+        payloads.push(structuredClone(payload))
+        return {
+          revision,
+          activeSceneId: 'default',
+          totalLatencyFrames: 0,
+          totalTailFrames: 0,
+          nodes: [],
+          compileState: 'ready'
+        }
+      }
+    })
+  } as unknown as DspOrchestratorHost
+  const dsp = new DspOrchestrator(
+    host,
+    {
+      audioProcessing: {
+        dspEnabled: true,
+        eqEnabled: false,
+        eqPreamp: -6,
+        volumeNormalization: 'off',
+        crossfeedEnabled: true,
+        crossfeedStrength: 0.2
+      }
+    },
+    {}
+  )
+  const previous = structuredClone(dsp.getAudioProcessing())
+  const defaultScene = dsp.dspScenes.find((scene) => scene.id === 'default')!
+  defaultScene.graph.outputStage.targetSampleRate = 96000
+  const previousGraph = structuredClone(defaultScene.graph)
+  await dsp.applyProfileConfiguration(
+    { eqEnabled: true, volumeNormalization: 'album', crossfeedStrength: 0.8 },
+    'default',
+    null
+  )
+  const graph = payloads.at(-1)!.graph as DspGraphConfig
+  assert.equal(graph.nodes.find((node) => node.type === 'equalizer')?.enabled, true)
+  assert.equal(graph.nodes.find((node) => node.type === 'replayGain')?.enabled, true)
+  assert.equal(graph.nodes.find((node) => node.type === 'replayGain')?.params.mode, 'album')
+  assert.equal(graph.nodes.find((node) => node.type === 'crossfeed')?.params.strength, 0.8)
+  assert.equal(graph.outputStage.targetSampleRate, 96000)
+  await dsp.applyProfileConfiguration(previous, 'default', null)
+  assert.deepEqual(defaultScene.graph, previousGraph)
+  const restored = payloads.at(-1)!.graph as DspGraphConfig
+  assert.equal(restored.nodes.find((node) => node.type === 'equalizer')?.enabled, false)
+  assert.equal(restored.nodes.find((node) => node.type === 'crossfeed')?.params.strength, 0.2)
+})
+
 test('temporary audition graphs use DSP revisions and leave saved processing and position untouched', async () => {
   const info = createDefaultPlaybackInfo('wasapi', 'auto', false, {
     routingMode: 'auto',

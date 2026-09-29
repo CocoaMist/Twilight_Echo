@@ -31,6 +31,71 @@ const track = {
   source: 'local' as const
 }
 
+for (const stage of ['load', 'providers'] as const) {
+  test(`startup restore preserves a user selection made while waiting for ${stage}`, async () => {
+    let release!: () => void
+    let notify!: () => void
+    const started = new Promise<void>((resolve) => {
+      notify = resolve
+    })
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const currentTrack = shallowRef<Track | null>(null)
+    const isPlaying = ref(false)
+    const queue = shallowRef<Track[]>([])
+    const old = { ...track, id: 'demo:old', source: 'demo' }
+    const restores: string[] = []
+    const persistence = createPlaybackSessionPersistence({
+      settings: ref({ playbackResumeMode: 'trackAndPosition' }),
+      currentTrack,
+      currentTime: ref(0),
+      isPlaying,
+      queue,
+      restorePlaybackSession: (session) => {
+        restores.push(session.track.id)
+        currentTrack.value = session.track
+        isPlaying.value = false
+      },
+      createPlaybackSession: () => null,
+      syncPluginProviders: async () => {
+        if (stage === 'providers') {
+          notify()
+          await pending
+        }
+      },
+      sessionWriter: new PlaybackSessionWriter(),
+      dataApi: {
+        loadPlaybackSession: async () => {
+          if (stage === 'load') {
+            notify()
+            await pending
+          }
+          return {
+            version: 2,
+            revision: 12,
+            savedAt: '',
+            data: { version: 1, savedAt: '', mode: 'trackAndPosition', track: old, position: 60 }
+          }
+        },
+        clearPlaybackSession: async () => undefined,
+        savePlaybackSession: async () => undefined
+      }
+    })
+    const restoring = persistence.restoreSavedPlaybackSession('trackAndPosition')
+    await started
+    currentTrack.value = track
+    queue.value = [track]
+    isPlaying.value = true
+    release()
+    await restoring
+    persistence.stop()
+    assert.deepEqual(restores, [])
+    assert.equal(currentTrack.value.id, track.id)
+    assert.equal(isPlaying.value, true)
+  })
+}
+
 test('position snapshots stay small while queue changes and quit flush the queue', async () => {
   const queue = shallowRef([track])
   const resumeMode = ref<'off' | 'trackAndPosition'>('trackAndPosition')
