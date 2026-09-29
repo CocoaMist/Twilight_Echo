@@ -22,11 +22,11 @@ import {
 } from './duplicate-detection-benchmark.ts'
 
 const evidenceUrl = new URL(
-  '../docs/audit-evidence/te-4.4-duplicate-detection-2026-07-18.json',
+  '../docs/audit-evidence/te-4.4-duplicate-detection-2026-09-30.json',
   import.meta.url
 )
 const manifestUrl = new URL(
-  '../docs/audit-evidence/te-4.4-duplicate-detection-2026-07-18.manifest.json',
+  '../docs/audit-evidence/te-4.4-duplicate-detection-2026-09-30.manifest.json',
   import.meta.url
 )
 
@@ -71,7 +71,7 @@ function assertAuthenticatedArchive(
 
   assert.equal(manifest.schemaVersion, 1)
   assert.equal(manifest.generatedAt, evidence.generatedAt)
-  assert.equal(manifest.evidence.path, 'te-4.4-duplicate-detection-2026-07-18.json')
+  assert.equal(manifest.evidence.path, 'te-4.4-duplicate-detection-2026-09-30.json')
   assert.equal(manifest.evidence.sha256, createHash('sha256').update(evidenceBytes).digest('hex'))
   assert.deepEqual(manifest.provenance, provenance)
   assert.deepEqual(manifest.benchmark, {
@@ -223,7 +223,7 @@ test('archive contract rejects stale provenance even when its manifest is recomp
   const staleBytes = Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`)
   const staleManifest = createDuplicateBenchmarkManifest(
     evidence,
-    'te-4.4-duplicate-detection-2026-07-18.json',
+    'te-4.4-duplicate-detection-2026-09-30.json',
     staleBytes
   )
 
@@ -239,7 +239,7 @@ test('archive contract rejects hand-edited p95 values even when its manifest is 
   const editedBytes = Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`)
   const editedManifest = createDuplicateBenchmarkManifest(
     evidence,
-    'te-4.4-duplicate-detection-2026-07-18.json',
+    'te-4.4-duplicate-detection-2026-09-30.json',
     editedBytes
   )
 
