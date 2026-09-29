@@ -5,6 +5,7 @@ import { useBackHandler } from '../app/useBackStack'
 import type { Track } from '../types/music'
 import {
   useNcmStore,
+  captureNcmSession,
   type NcmPlaylistSummary,
   type NcmAlbumSummary,
   type NcmArtistSummary,
@@ -2880,9 +2881,21 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
   if (canMutateCurrentNcmPlaylist.value && currentDetail.value?.type === 'playlist') {
     const playlistId = currentDetail.value.playlist.id
     const playlistName = currentDetail.value.playlist.name
-    const trackIds = selected
-      .map((track) => track.ncmSongId)
-      .filter((id): id is number => id != null && Number.isFinite(id) && id > 0)
+    const token = detailLoadToken
+    const providerId = activeProvider.value
+    const isCurrentSession = captureNcmSession()
+    const isTargetPlaylist = (): boolean =>
+      isCurrentSession() &&
+      activeProvider.value === providerId &&
+      currentDetail.value?.type === 'playlist' &&
+      String(currentDetail.value.playlist.id) === String(playlistId)
+    const trackIds = [
+      ...new Set(
+        selected
+          .map((track) => track.ncmSongId)
+          .filter((id): id is number => id != null && Number.isFinite(id) && id > 0)
+      )
+    ]
     if (trackIds.length === 0) {
       setStreamingBatchRemovalError('所选曲目没有可从网易云歌单移除的歌曲 ID')
       return
@@ -2893,6 +2906,58 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
     try {
       await removeNcmTracksFromPlaylist(playlistId, trackIds)
       const removedSongIds = new Set(trackIds)
+      // Update only cached snapshots for this account/playlist. Navigation may
+      // have moved the source entry below another detail while the write ran.
+      if (isCurrentSession() && activeProvider.value === providerId) {
+        for (const entry of detailStack.value) {
+          if (
+            entry.view.type !== 'playlist' ||
+            String(entry.view.playlist.id) !== String(playlistId) ||
+            !entry.snapshot
+          )
+            continue
+          const before = entry.snapshot.tracks.length
+          entry.snapshot.tracks = entry.snapshot.tracks.filter(
+            (track) => track.ncmSongId == null || !removedSongIds.has(track.ncmSongId)
+          )
+          entry.view.playlist = {
+            ...entry.view.playlist,
+            trackCount: Math.max(
+              0,
+              (entry.view.playlist.trackCount ?? before) - (before - entry.snapshot.tracks.length)
+            )
+          }
+        }
+      }
+      if (!isTargetPlaylist()) return
+      if (!isActiveDetailLoad(token)) {
+        // A -> B -> A: refresh the newly opened view, never apply the old
+        // operation's optimistic state to a different detail generation.
+        const refreshToken = ++detailLoadToken
+        detailLoading.value = true
+        detailError.value = ''
+        try {
+          const tracks = await fetchPlaylistTracks(playlistId, true)
+          if (isTargetPlaylist() && isActiveDetailLoad(refreshToken)) {
+            detailTracks.value = tracks
+            if (currentDetail.value?.type === 'playlist') {
+              replaceTopDetail({
+                ...currentDetail.value,
+                playlist: { ...currentDetail.value.playlist, trackCount: tracks.length }
+              })
+            }
+          }
+        } catch (error) {
+          if (isTargetPlaylist() && isActiveDetailLoad(refreshToken)) {
+            detailError.value = friendlyStreamingError(error, '歌曲已移除，刷新歌单失败')
+          }
+        } finally {
+          if (isTargetPlaylist() && isActiveDetailLoad(refreshToken)) detailLoading.value = false
+        }
+        return
+      }
+      if (currentDetail.value?.type !== 'playlist') return
+      const before = detailTracks.value.length
       detailTracks.value = detailTracks.value.filter(
         (track) => track.ncmSongId == null || !removedSongIds.has(track.ncmSongId)
       )
@@ -2900,7 +2965,11 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
         ...currentDetail.value,
         playlist: {
           ...currentDetail.value.playlist,
-          trackCount: Math.max(0, (currentDetail.value.playlist.trackCount ?? 0) - trackIds.length)
+          trackCount: Math.max(
+            0,
+            (currentDetail.value.playlist.trackCount ?? before) -
+              (before - detailTracks.value.length)
+          )
         }
       })
       clearSelection()
@@ -2909,7 +2978,9 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
         message: `已从歌单「${playlistName}」移除 ${trackIds.length} 首歌曲`
       })
     } catch (error) {
-      setStreamingBatchRemovalError(friendlyStreamingError(error, '从歌单移除失败'))
+      if (isTargetPlaylist() && isActiveDetailLoad(token)) {
+        setStreamingBatchRemovalError(friendlyStreamingError(error, '从歌单移除失败'))
+      }
     }
     return
   }
