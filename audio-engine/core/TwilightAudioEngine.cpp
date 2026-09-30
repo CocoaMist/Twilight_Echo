@@ -1016,6 +1016,13 @@ TAE_Result TwilightAudioEngine::setOutputBackend(const std::string& backendId) {
     emitError(providerError, result, "output-backend");
     return result;
   }
+  if (!isOutputBackendAvailable(nextBackend)) {
+    emitError(
+        "Output backend is not available in this build: " + nextBackend,
+        TAE_RESULT_BACKEND_UNAVAILABLE,
+        "output-backend");
+    return TAE_RESULT_BACKEND_UNAVAILABLE;
+  }
   std::lock_guard lock(mutex_);
   if (nextBackend != info_.outputBackend) outputRoutePending_ = true;
   info_.outputBackend = nextBackend;
@@ -1798,10 +1805,10 @@ void TwilightAudioEngine::stopClock() {
 void TwilightAudioEngine::wakeClock() const {
   {
     std::lock_guard lock(clockMutex_);
-    // A playing clock already ticks every 100 ms; waking it early would only
-    // pull its tick right behind each command.
-    if (!clockIdle_) return;
+    // Record before the idle check: a command can race the transition into an
+    // idle wait. Active waits ignore it and retain their 100 ms cadence.
     clockWakeRequested_ = true;
+    if (!clockIdle_) return;
   }
   clockCv_.notify_all();
 }
@@ -1814,7 +1821,7 @@ void TwilightAudioEngine::waitForClockTick(bool active) {
   const auto interval = active ? std::chrono::milliseconds(100) : std::chrono::milliseconds(1000);
   std::unique_lock lock(clockMutex_);
   clockIdle_ = !active;
-  clockCv_.wait_for(lock, interval, [this] { return clockWakeRequested_ || !running_; });
+  clockCv_.wait_for(lock, interval, [this, active] { return (!active && clockWakeRequested_) || !running_; });
   clockWakeRequested_ = false;
 }
 

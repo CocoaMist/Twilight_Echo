@@ -1883,13 +1883,13 @@ void testConfigAppliedEventFollowsRenderApplication() {
 // NAT-1: the stopped/paused clock waits on a slow 1 s tick. Transport commands
 // must wake it at once, and shutdown must not wait out the idle interval.
 void testIdleClockWakesPromptlyOnPlayAndShutdown() {
-  {
+  for (const int warmupMs : {0, 150}) {
     EngineHarness harness;
     auto& engine = harness.engine();
     ConfigEventCapture capture;
     engine.setEventCallback(captureConfigEvent, &capture);
-    // Let the clock settle into its idle wait before issuing play.
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    // Cover both immediate startup and an already settled idle wait.
+    std::this_thread::sleep_for(std::chrono::milliseconds(warmupMs));
     assert(capturedEventCount(capture, "property-change") == 0);
     const auto playStarted = std::chrono::steady_clock::now();
     assert(engine.play("clock-wake-idle.flac", 0.0) == TAE_RESULT_OK);
@@ -2570,7 +2570,12 @@ void testNativeDsdMuteTimeoutStopsWithoutAdvancingPosition() {
   assert(backend->typedStarted);
   renderBackendTypedBytes(backend, 4);
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  assert(waitUntil([&] {
+    const auto snapshots = g_backendRegistry.snapshots();
+    return jsonContains(engine.playbackInfoJson(), "\"perfectReasonCode\":\"dsd_mute_lock_timeout\"") &&
+           !snapshots.empty() && snapshots.back().stopCalls > 0 && snapshots.back().closeCalls > 0;
+  }));
+  assertLatestPlaybackContains(engine, "\"state\":\"stopped\"");
   assertLatestPlaybackContains(engine, "\"perfectReasonCode\":\"dsd_mute_lock_timeout\"");
   assertLatestPlaybackContains(engine, "\"outputPerfect\":false");
   assertLatestPlaybackContains(engine, "\"sourceExact\":false");
@@ -3927,6 +3932,10 @@ namespace twilight::audio {
 
 std::string defaultBackendId() {
   return "wasapi-exclusive";
+}
+
+bool isOutputBackendAvailable(const std::string&) {
+  return true;  // This fixture supplies fake backends independently of the host OS.
 }
 
 std::unique_ptr<IOutputBackend> createOutputBackend(const std::string& backendId, std::string*) {
