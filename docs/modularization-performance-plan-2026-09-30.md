@@ -158,6 +158,8 @@ GUI 验收在允许真实运行环境时进行：浅/深色、自定义强调色
 
 #99 第二轮 CI 已通过依赖审计、lint/typecheck 和网络等前序门禁，在 `test:local-perf` 中 4 项 Electron 界面测试因缺少 X display 失败。本批为 local-perf 和同样包含界面测试的 app 门禁补齐既有 xvfb-run，并加入门禁检查；没有跳过测试。IPC 调用点清单仅移除 3 项直接 sleepTimer 调用及其直接域足迹：这些调用现通过注入 bridge 完成，main/preload 频道集合不变。注册新测试后重新生成当前重复检测基准与 provenance，并验证归档；旧证据保留在 Git 历史。
 
+#99 第三轮 CI 已通过 local-perf，随后 themes 的两项 Electron 用例缺少显示器，参数测试另将 Windows 绝对路径写死，导致 Linux 的正常 path.resolve 结果不匹配。themes 同样补齐 xvfb-run，参数夹具改用当前平台的临时目录绝对路径；生产路径处理保持原有语义。17 项主题脚本/测试归属门禁及相关 ESLint 通过；真实 Electron 用例仍由 CI 验证。
+
 本批运行源码行为回归、ESLint、Node/Web noEmit 类型检查和架构/IPC/门禁；不运行包含构建的 test:no-real-device 聚合入口。依赖公共协议、持久化 schema、队列版本的变更需要各自契约测试。不能把已修复的首批与尚未实施的大型播放器/插件重构一起宣称完成。
 
 第二批最终本地结果：385 个源码/资源测试文件，2,681 项通过、3 项已有跳过、0 失败；148 项播放器/睡眠/流媒体与架构/IPC/安装/错误门禁及 19 项歌单控制器/页面导航适配检查通过；11 项重复检测基准证据检查通过。ESLint、Node/Web noEmit 类型检查通过。上述专项与全量回归存在重叠，不能相加。源码回归沿用排除构建/原生依赖的清单；没有真实音频设备、Discord 客户端或 Electron 窗口验收。

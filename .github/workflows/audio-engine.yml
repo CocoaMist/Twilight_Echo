@@ -122,7 +122,7 @@ jobs:
         run: xvfb-run -a pnpm run test:local-perf
 
       - name: Test themes
-        run: pnpm run test:themes
+        run: xvfb-run -a pnpm run test:themes
 
       - name: Test DSP graph
         run: pnpm run test:dsp-graph
