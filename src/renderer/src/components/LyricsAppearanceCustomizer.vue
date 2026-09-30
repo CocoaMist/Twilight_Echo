@@ -11,6 +11,7 @@ import { useLyricsAppearanceEditor } from '../composables/useLyricsAppearanceEdi
 import { useLyricsFontPicker, type LyricsFontOption } from '../composables/useLyricsFontPicker'
 import { useCurrentLyricsFormat } from '../composables/useCurrentLyricsFormat.ts'
 import { useLyricsManagement } from '../stores/lyricsManagement.ts'
+import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer.ts'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -39,6 +40,18 @@ const fontPicker = useLyricsFontPicker()
 const { isCurrentTtml } = useCurrentLyricsFormat()
 const lyricsManagement = useLyricsManagement()
 const fontMenuOpen = ref(false)
+const dialogRef = ref<HTMLElement | null>(null)
+useFocusTrap(dialogRef, () => props.open)
+useEscapeToClose(
+  () => props.open,
+  () => emit('close')
+)
+useEscapeToClose(
+  () => props.open && fontMenuOpen.value,
+  () => {
+    fontMenuOpen.value = false
+  }
+)
 const presetName = ref('')
 const showRomanization = computed(() => lyricsManagement.document.value.showRomanization)
 
@@ -147,7 +160,8 @@ watch(
       fontMenuOpen.value = false
       fontPicker.query.value = ''
     }
-  }
+  },
+  { immediate: true }
 )
 </script>
 
@@ -168,14 +182,16 @@ watch(
       @pointerdown.stop
     >
       <aside
+        ref="dialogRef"
         class="lyrics-customizer"
+        tabindex="-1"
         role="dialog"
         aria-modal="true"
-        aria-label="PlayingMusic 歌词个性化"
+        aria-label="歌词个性化"
       >
         <header class="customizer-header">
           <div>
-            <span class="customizer-kicker">PlayingMusic</span>
+            <span class="customizer-kicker">歌词外观</span>
             <h2>歌词个性化</h2>
             <p>分别调整普通、当前、附属、翻译与罗马音歌词，所有更改实时应用并自动保存。</p>
           </div>

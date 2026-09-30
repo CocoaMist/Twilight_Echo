@@ -12,6 +12,43 @@ import {
 } from './appError.ts'
 import { presentError, presentErrorDetail } from './presentError.ts'
 
+test('output route failures survive IPC and render localized copy with their actual params', () => {
+  const cases = [
+    {
+      code: 'audio.output_switch_failed',
+      params: { detail: 'busy' },
+      zh: '输出后端切换失败：busy',
+      en: 'Could not switch the output backend: busy'
+    },
+    {
+      code: 'audio.default_device_rebind_failed',
+      params: { detail: 'busy' },
+      zh: '跟随系统默认输出设备失败：busy',
+      en: 'Could not follow the system default output device: busy'
+    },
+    {
+      code: 'audio.output_target_not_ready',
+      params: {},
+      zh: '目标输出设备未能保持当前播放状态',
+      en: 'The target output device could not preserve the current playback session'
+    },
+    {
+      code: 'audio.output_target_unavailable',
+      params: { device: 'USB DAC' },
+      zh: '目标输出设备不可用：USB DAC',
+      en: 'The target output device is unavailable: USB DAC'
+    }
+  ]
+  for (const entry of cases) {
+    const error = ipcError(entry.code, 'developer detail', entry.params)
+    const received = new Error(
+      `Error invoking remote method 'audioEngine:setOutput': Error: ${error.message}`
+    )
+    assert.equal(presentError('zh-CN', received, 'error.generic.unknown'), entry.zh)
+    assert.equal(presentError('en-US', received, 'error.generic.unknown'), entry.en)
+  }
+})
+
 test('a local AppError exposes its code and params directly', () => {
   const error = appError('audio.service_start_failed', 'audio service failed to start', {
     reason: 'EPERM'

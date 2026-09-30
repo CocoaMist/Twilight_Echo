@@ -28,7 +28,7 @@ test('VST3 self-tests receive the staged VC runtime path', () => {
 })
 
 test('staged VST3 files must all be Windows x64 PE binaries', () => {
-  const root = 'C:/repo'
+  const root = path.resolve('vst3-test-repo')
   const nativeDir = path.join(root, 'resources', 'audio-engine')
   const existing = createExistsSync(
     [...VST3_HELPER_FILES, ...VST3_RUNTIME_FILES].map((file) => path.join(nativeDir, file))
@@ -43,7 +43,7 @@ test('staged VST3 files must all be Windows x64 PE binaries', () => {
 })
 
 test('complete staged VST3 helpers can be reused without a toolchain', () => {
-  const root = 'C:/repo'
+  const root = path.resolve('vst3-test-repo')
   const nativeDir = path.join(root, 'resources', 'audio-engine')
   const existing = createExistsSync(
     [...VST3_HELPER_FILES, ...VST3_RUNTIME_FILES].map((file) => path.join(nativeDir, file))
@@ -70,9 +70,9 @@ test('complete staged VST3 helpers can be reused without a toolchain', () => {
 })
 
 test('VST3 preparation configures, builds, stages, and refreshes capability artifacts', () => {
-  const root = 'C:/repo'
-  const sdkRoot = 'C:/sdk/vst3'
-  const installRoot = 'C:/tools/vs2022'
+  const root = path.resolve('vst3-test-repo')
+  const sdkRoot = path.join(root, 'sdk', 'vst3')
+  const installRoot = path.join(root, 'tools', 'vs2022')
   const nativeDir = path.join(root, 'resources', 'audio-engine')
   const buildDir = path.join(root, 'audio-engine', 'build', 'vst3-msvc-x64')
   const existingPaths = new Set([

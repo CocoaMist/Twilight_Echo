@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -25,7 +25,7 @@ test('canonical grants authorize descendants but reject unrelated files', async 
   const grants = new CanonicalPathGrantSet()
   await grants.grantRoot(library)
 
-  assert.equal(await grants.resolveWithinRoots(track, 'file'), track)
+  assert.equal(await grants.resolveWithinRoots(track, 'file'), await realpath(track))
   assert.equal(await grants.resolveWithinRoots(secret, 'file'), null)
 })
 

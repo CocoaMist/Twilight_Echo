@@ -7,9 +7,15 @@ const require = createRequire(import.meta.url)
 
 type ElectronModule = typeof import('electron')
 
-function resolveElectronApp(): ElectronModule['app'] | null {
+export function resolveElectronApp(
+  electronVersion = process.versions.electron,
+  loadModule: () => ElectronModule | string = () => require('electron')
+): ElectronModule['app'] | null {
+  // In plain Node, importing the SDK only yields an executable path and may
+  // lazily download its binary. App discovery belongs to an Electron runtime.
+  if (!electronVersion) return null
   try {
-    const electronModule = require('electron') as ElectronModule | string
+    const electronModule = loadModule()
     if (typeof electronModule === 'object' && electronModule && 'app' in electronModule) {
       return electronModule.app
     }

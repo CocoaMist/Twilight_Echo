@@ -17,11 +17,55 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
+const ts = require('typescript')
 
 const ROOT = path.join(__dirname, '..')
 const MAIN_DIR = path.join(ROOT, 'src', 'main')
 const CATALOG_DIR = path.join(ROOT, 'src', 'shared', 'i18n', 'messages')
 const LOCALES = ['zh-CN', 'en-US']
+
+function collectSourceCodes(source, file) {
+  const codes = new Set()
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
+  const add = (value) => {
+    if (
+      value &&
+      ts.isStringLiteralLike(value) &&
+      /^(?:audio|diagnostics)\.[a-z0-9_.]+$/.test(value.text)
+    ) {
+      codes.add(value.text)
+    }
+  }
+  const visit = (node) => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression
+      const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : ''
+      if (['audioEngineError', 'nativeAudioError', 'ipcError', 'appError'].includes(name)) {
+        add(node.arguments[0])
+      } else if (name === 'runOutputRouteTransaction') {
+        const options = node.arguments[0]
+        if (options && ts.isObjectLiteralExpression(options)) {
+          for (const property of options.properties) {
+            if (!ts.isPropertyAssignment(property)) continue
+            if (
+              (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+              property.name.text === 'errorCode'
+            ) {
+              add(property.initializer)
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(tree)
+  return codes
+}
 
 /** Codes thrown through the structured helpers, as `code -> [source files]`. */
 function collectThrownCodes() {
@@ -29,18 +73,30 @@ function collectThrownCodes() {
   for (const file of walk(MAIN_DIR)) {
     if (/\.(?:test|spec)\.[^.]+$/.test(file)) continue
     const source = fs.readFileSync(file, 'utf8')
-    // Matches audioEngineError('audio.x', …), nativeAudioError('audio.x', …)
-    // and the raw ipcError('audio.x', …) escape hatch, across line breaks.
-    const pattern =
-      /\b(?:audioEngineError|nativeAudioError|ipcError|appError)\s*\(\s*['"]((?:audio|diagnostics)\.[a-z0-9_.]+)['"]/g
-    for (const match of source.matchAll(pattern)) {
+    // Include literals delegated through the route transaction to nativeAudioError.
+    // Parse call sites so comments and unrelated errorCode properties aren't evidence.
+    for (const code of collectSourceCodes(source, file)) {
       const relative = path.relative(ROOT, file).replace(/\\/g, '/')
-      if (!codes.has(match[1])) codes.set(match[1], [])
-      codes.get(match[1]).push(relative)
+      if (!codes.has(code)) codes.set(code, [])
+      codes.get(code).push(relative)
     }
   }
   return codes
 }
+
+test('the probe follows transaction error codes without counting comments or unrelated properties', () => {
+  const codes = collectSourceCodes(
+    `
+    // nativeAudioError('audio.comment_only', 'unused')
+    const unrelated = { errorCode: 'audio.unrelated' }
+    nativeAudioError('audio.direct', 'failed')
+    router.runOutputRouteTransaction({ errorCode: 'audio.transaction', errorMessage: 'failed' })
+    nativeAudioError(options.errorCode, options.errorMessage)
+  `,
+    'fixture.ts'
+  )
+  assert.deepEqual([...codes].sort(), ['audio.direct', 'audio.transaction'])
+})
 
 /** Message keys present in one catalog. Parsed as text: no TS loader needed. */
 function catalogKeys(locale) {

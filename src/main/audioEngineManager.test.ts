@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   describeNativeBindingFailure,
-  loadNativeBindingWithDiagnostics
+  loadNativeBindingWithDiagnostics,
+  resolveElectronApp
 } from './audio/nativeBinding.ts'
 import type { DspGraphStatus, DspScene } from '../shared/dspGraph.ts'
 import type { DspStatePayload } from '../shared/audioServiceContract.ts'
@@ -18,6 +19,37 @@ import { SleepTimerService } from './sleepTimerCore.ts'
 // Most fake devices in this suite implement Windows backend contracts. Tests
 // for other platforms explicitly override this fixture and restore it locally.
 const hostPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+
+test('plain Node diagnostics never load the Electron SDK or trigger binary discovery', () => {
+  let loads = 0
+  assert.equal(
+    resolveElectronApp('', () => {
+      loads++
+      throw new Error('SDK loaded')
+    }),
+    null
+  )
+  assert.equal(loads, 0)
+})
+
+test('Electron diagnostics use its app API and tolerate non-app or failed loaders', () => {
+  const app = { getAppPath: () => '/fixture' } as (typeof import('electron'))['app']
+  const sdk = { app } as typeof import('electron')
+  assert.equal(
+    resolveElectronApp('43.5.0', () => sdk),
+    app
+  )
+  assert.equal(
+    resolveElectronApp('43.5.0', () => '/electron.exe'),
+    null
+  )
+  assert.equal(
+    resolveElectronApp('43.5.0', () => {
+      throw new Error('unavailable')
+    }),
+    null
+  )
+})
 test.beforeEach(() =>
   Object.defineProperty(process, 'platform', { ...hostPlatform, value: 'win32' })
 )

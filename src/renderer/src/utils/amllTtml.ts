@@ -1,5 +1,5 @@
 import { DOMParser, type Element, type Node } from '@xmldom/xmldom'
-import type { LyricAuxiliaryLayer, LyricLine, LyricVoiceLayer, LyricWord } from './lyrics.ts'
+import type { LyricAuxiliaryLayer, LyricLine, LyricVoiceLayer, LyricWord } from './lyricTypes.ts'
 
 export function isAmlTtml(value: string | null | undefined): boolean {
   return typeof value === 'string' && /^\s*<tt(?:\s|>)/i.test(value)

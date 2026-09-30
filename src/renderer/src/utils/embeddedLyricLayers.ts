@@ -1,4 +1,4 @@
-import type { ParsedTimedLyricLine } from '@renderer/utils/lyrics.ts'
+import type { ParsedTimedLyricLine } from '@renderer/utils/lyricTypes.ts'
 
 type Layer = 'translation' | 'romanization'
 const LABEL =

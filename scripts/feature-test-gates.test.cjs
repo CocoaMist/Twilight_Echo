@@ -196,7 +196,9 @@ test('required Windows CI runs complete product outcomes with native fixtures an
   assert.match(packageJson.scripts['test:local-perf'], /--test-concurrency=2\b/)
   assert.ok(workflow, 'the required CI workflow must exist')
   for (const job of ['repository', 'native-audio', 'required']) {
-    const jobBlock = workflow.match(new RegExp(`^  ${job}:\\r?\\n([\\s\\S]*?)(?=^  [a-z][\\w-]*:|(?![\\s\\S]))`, 'm'))?.[1]
+    const jobBlock = workflow.match(
+      new RegExp(`^  ${job}:\\r?\\n([\\s\\S]*?)(?=^  [a-z][\\w-]*:|(?![\\s\\S]))`, 'm')
+    )?.[1]
     assert.ok(jobBlock, `${job} must remain a required job`)
     assert.match(jobBlock, /runs-on: windows-latest/)
     assert.doesNotMatch(jobBlock, /matrix:|runs-on: (?:ubuntu|macos)-latest/)
@@ -216,7 +218,10 @@ test('required Windows CI runs complete product outcomes with native fixtures an
     'test:themes',
     'test:dsp-graph'
   ]) {
-    assert.ok(PRODUCT_SCRIPTS.includes(script), `${script} must run inside the Windows product gate`)
+    assert.ok(
+      PRODUCT_SCRIPTS.includes(script),
+      `${script} must run inside the Windows product gate`
+    )
   }
   assert.match(workflow, /pnpm run test:duplicate-detection-benchmark/)
   assert.match(workflow, /pnpm run benchmark:duplicate-detection:ci --/)

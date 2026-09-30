@@ -259,6 +259,7 @@ test('streaming page stays mounted across local/streaming switches in one sessio
 test('streaming page supports multi-select batch favorite and delete on track lists', () => {
   const searchSource = readFileSync(new URL('../StreamingSearch.vue', import.meta.url), 'utf8')
   const detailSource = readFileSync(new URL('./StreamingDetailStage.vue', import.meta.url), 'utf8')
+  const menuSource = readFileSync(new URL('./StreamingContextMenu.vue', import.meta.url), 'utf8')
 
   assert.match(source, /useTrackMultiSelect/)
   assert.match(source, /handleStreamingBatchFavorite/)
@@ -268,7 +269,7 @@ test('streaming page supports multi-select batch favorite and delete on track li
   assert.match(source, /removeNcmTracksFromPlaylist/)
   assert.match(source, /onStreamingTrackContextMenu/)
   assert.match(source, /<StreamingContextMenu/)
-  assert.match(source, /添加到歌单/)
+  assert.match(menuSource, /添加到歌单/)
   assert.match(source, /onSearchTrackClickWithSelect/)
   const detailClickHandler = source.match(
     /function onTrackClick\([\s\S]*?\r?\n}\r?\n\r?\nfunction playDetailTrack/

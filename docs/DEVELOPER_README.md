@@ -180,6 +180,10 @@ VST3 音频桥按绝对帧位置回填预分配的环形缓冲，宿主按提交
 
 Streaming 页的本地歌曲、歌单、歌手搜索逻辑放在 `components/streaming-page/localStreamingSearch.ts`。该工具扫描完整集合以保留分页总数，但只 materialize 当前页结果；不要在 SFC 内重新写 `filter().map().slice()` 的全量中间数组链。
 
+网络媒体库索引由 `networkLibrary.ts` 串行提交，`networkLibraryPersistence.ts` 合并在途读取并通过同目录 rename 发布。写事务先复制顶层文档映射，再整体替换来源与条目，不能修改合并读取返回的共享快照；写入失败时并发列表和搜索仍保留已提交数据。
+
+Linux 播放条的 CSS 毛玻璃回退服从减少透明度、高对比度和强制颜色偏好。无障碍模式必须禁用 backdrop 滤镜，其覆盖优先级高于平台回退规则；`liquidGlassSurfaces.test.ts` 使用实际 scoped 样式与 Electron 媒体偏好模拟验证计算结果。
+
 ## Issue #46 交互与诊断约定
 
 - 主窗口前台空格切换播放/暂停，输入、可编辑区域、按钮、菜单和对话框保留自身键盘行为；全局音量增减默认使用 `CommandOrControl+Alt+Up/Down`，步进 5%，允许在快捷键设置中修改。跨进程快捷键载荷统一在 `src/shared/playerShortcuts.ts`。
