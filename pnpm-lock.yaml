@@ -10,7 +10,7 @@ overrides:
   qs: 6.16.0
   uuid: 11.1.1
   nanoid: 3.3.18
-  ip-address: 10.5.1
+  ip-address: 10.7.1
   undici@6.28.0: 6.28.1
   undici@7.29.0: 7.29.1
   body-parser@1.20.5: 1.20.6
@@ -28,7 +28,7 @@ importers:
     dependencies:
       '@electron-toolkit/utils':
         specifier: ^4.0.0
-        version: 4.0.0(electron@43.2.0)
+        version: 4.0.0(electron@43.5.0)
       '@neteasecloudmusicapienhanced/api':
         specifier: ^4.35.1
         version: 4.35.1(patch_hash=656fbb26c80cd8fce02181032bac95656a93ff1e6f1726e8d4cba566fb1cca5b)
@@ -223,8 +223,8 @@ importers:
         specifier: ^6.0.2
         version: 6.0.6(vite@7.3.2(@types/node@22.19.17)(jiti@2.7.0))(vue@3.5.33(typescript@5.9.3))
       electron:
-        specifier: ^43.0.0
-        version: 43.2.0
+        specifier: 43.5.0
+        version: 43.5.0
       electron-builder:
         specifier: ^26.0.12
         version: 26.8.1(electron-builder-squirrel-windows@26.8.1)
@@ -1682,8 +1682,8 @@ packages:
     resolution: {integrity: sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==}
     engines: {node: '>=8.0.0'}
 
-  electron@43.2.0:
-    resolution: {integrity: sha512-80zvrgG7ZRXD+tD0IyLvrnN9n+veSxadMRsMaC9wKKP3iUbtC7rGM8+dVuCmOb0Rrwwv8ESW4awnUZh9Hbp1fA==}
+  electron@43.5.0:
+    resolution: {integrity: sha512-nV2aWuKatmUrxrAWP2pNIynNX7dy83TCAz+6KnsbK7hDVLE+6fa2iouOtir41AboZTa+J5w2UgicWHAqUaaUJw==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -2185,8 +2185,8 @@ packages:
     resolution: {integrity: sha512-CYdFeFexxhv/Bcny+Q0BfOV+ltRlJcd4BBZBYFX/O0u4npJrgZtIcjokegtiSMAvlMTJ+Koq0GBCc//3bueQxw==}
     engines: {node: '>=8'}
 
-  ip-address@10.5.1:
-    resolution: {integrity: sha512-EXujUp9jyOI/chPgtqk6uy7fDq8AeCB/WlfEuPg9LN0fN9lzKAKfuDYi60SMhHwgUiEhZvVYsbGZN+RUU1INiA==}
+  ip-address@10.7.1:
+    resolution: {integrity: sha512-4OUAqU9Z1i3vCnS05hzGiFnEMDpQ+62pAD/MVQOp83fYyNC8GleCqaS0QikQBmcWCrKFiUs/B8ztRRiYOAXuCA==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -3486,9 +3486,9 @@ snapshots:
     dependencies:
       '@types/node': 22.19.17
 
-  '@electron-toolkit/utils@4.0.0(electron@43.2.0)':
+  '@electron-toolkit/utils@4.0.0(electron@43.5.0)':
     dependencies:
-      electron: 43.2.0
+      electron: 43.5.0
 
   '@electron/asar@3.4.1':
     dependencies:
@@ -4812,7 +4812,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@43.2.0:
+  electron@43.5.0:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0
@@ -5463,7 +5463,7 @@ snapshots:
 
   invert-kv@3.0.1: {}
 
-  ip-address@10.5.1: {}
+  ip-address@10.7.1: {}
 
   ipaddr.js@1.9.1: {}
 
@@ -6223,7 +6223,7 @@ snapshots:
 
   socks@2.8.8:
     dependencies:
-      ip-address: 10.5.1
+      ip-address: 10.7.1
       smart-buffer: 4.2.0
 
   sonic-boom@1.4.1:
