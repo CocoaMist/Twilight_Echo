@@ -65,8 +65,7 @@ const REGION_ORIGIN = {
   control3: { x: 104, y: 640 },
   lensChain: { x: 424, y: 640 },
   maskedChain: { x: 744, y: 640 },
-  // The shipped *order*: the playbar runs the lens before blur/saturate so the
-  // chain is handed the sharp backdrop. See LENS FIRST below.
+  // Compare the unsupported alternative with the shipped blur-first order.
   lensFirst: { x: 1064, y: 640 }
 }
 
@@ -188,8 +187,7 @@ function probePageSource() {
   ${region('mixedDisplace', `${MIXED_PREFIX} url(#te-probe-displace)`)}
 
   <!-- Row three: the real chain shapes, against a runtime-baked feImage map.
-       'lensFirst' carries the same chain with the function order the playbar
-       ships: a mixed list whose url() comes *before* blur/saturate. A list
+       'lensFirst' compares a mixed list whose url() comes *before* blur/saturate. A list
        Chromium refuses in that order is dropped whole, taking the blur with it. -->
   ${region('control3', '')}
   ${region('lensChain', `${MIXED_PREFIX} url(#te-probe-lens)`)}
@@ -549,17 +547,13 @@ test('backdrop-filter url() capability probe', async (t) => {
         'Chromium behaviour changed; the constraint documented in LiquidGlassDefs.vue can be relaxed.'
     )
 
-    /* LENS FIRST — the order the playbar ships.
-       Behind `blur()` the chain is handed an already-smoothed backdrop, and
-       displacing a smooth field resamples to the colour it started from, so the
-       refraction is invisible however large the amplitude. The playbar therefore
-       runs `url() blur() saturate()`. If Chromium ever rejects a list in that
-       order it drops the declaration whole and the surface loses its blur too. */
+    // The playbar now ships blur first: lens-first is still measured above as a
+    // capability diagnostic, but must not take down the required blur on Linux.
     assert.ok(
-      lensFirstApplies,
-      `url() ahead of blur() is not honoured: contrast ${lensFirstContrast.toFixed(2)} matches the ` +
+      lensApplies,
+      `the shipped blur-first chain is not honoured: contrast ${lensContrast.toFixed(2)} matches the ` +
         `unfiltered backdrop (${rawContrast.toFixed(2)}), so the whole declaration was dropped. ` +
-        'Move the playbar back to a blur-first list and refract in a nested layer instead.'
+        'Validate a separate compositing layer before changing the playbar material.'
     )
   } finally {
     await rm(root, { recursive: true, force: true })

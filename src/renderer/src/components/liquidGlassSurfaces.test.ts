@@ -165,7 +165,8 @@ test('all SVG filters remain defined once and referenced from their intended sur
   // The playbar warp layer paints only its own gradients, so `filter` would have
   // nothing textured to bend. The chain has to sit in the *backdrop* list, where
   // the compositor hands it the scrolling content behind the bar.
-  assert.match(playerBarStyle, /backdrop-filter:[^;]*url\(#te-lg-playbar\)/)
+  assert.match(playerBarStyle, /backdrop-filter:\s*blur\([^;]*url\(#te-lg-playbar\)/)
+  assert.match(playerBarStyle, /-webkit-backdrop-filter:\s*blur\([^;]*url\(#te-lg-playbar\)/)
   assert.ok(
     !/(^|[^-])filter: url\(#te-lg-playbar\)/m.test(playerBarStyle),
     'playbar must not reference the chain from `filter`, where it is a visual no-op'

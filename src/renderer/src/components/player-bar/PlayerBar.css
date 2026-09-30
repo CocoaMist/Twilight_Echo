@@ -1994,23 +1994,20 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
      refraction was mathematically real and visually absent. The backdrop is the
      only input that carries the scrolling content there is something to bend.
 
-     Order inside the list is the order of application, and the lens has to run
-     *first*. Behind `blur()` the chain was handed an already-smoothed wash, and
-     displacing a wash resamples to the same colour it started from — the same
-     no-op that putting the chain in `filter` produced, one layer further along.
-     Refracting the sharp backdrop and blurring afterwards is what makes the bend
-     at the rim visible at all; the blur then still softens the interior for
-     legibility.
+     Blur must lead the list. The Linux Chromium pixel probe rejects a lens-first
+     declaration entirely, including its blur. This order preserves legibility
+     and the baked highlights across platforms; refraction of a blurred backdrop
+     is weaker. A sharper lens needs a separately validated compositing layer.
 
      The gradients stay as this element's own background, painted over the
      refracted backdrop, so the sheen and rim light read crisp instead of being
      displaced along with everything else. */
-  backdrop-filter: url(#te-lg-playbar) blur(var(--te-lg-blur, 16px))
-    saturate(var(--te-lg-saturate, 140%)) saturate(var(--te-lg-transmit-sat, 1))
-    contrast(var(--te-lg-transmit, 1)) brightness(var(--te-lg-luma, 1));
-  -webkit-backdrop-filter: url(#te-lg-playbar) blur(var(--te-lg-blur, 16px))
-    saturate(var(--te-lg-saturate, 140%)) saturate(var(--te-lg-transmit-sat, 1))
-    contrast(var(--te-lg-transmit, 1)) brightness(var(--te-lg-luma, 1));
+  backdrop-filter: blur(var(--te-lg-blur, 16px)) saturate(var(--te-lg-saturate, 140%))
+    saturate(var(--te-lg-transmit-sat, 1)) url(#te-lg-playbar) contrast(var(--te-lg-transmit, 1))
+    brightness(var(--te-lg-luma, 1));
+  -webkit-backdrop-filter: blur(var(--te-lg-blur, 16px)) saturate(var(--te-lg-saturate, 140%))
+    saturate(var(--te-lg-transmit-sat, 1)) url(#te-lg-playbar) contrast(var(--te-lg-transmit, 1))
+    brightness(var(--te-lg-luma, 1));
 }
 
 /* A solid app background gives the environment sampler no image to read, but it
