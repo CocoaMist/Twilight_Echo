@@ -132,7 +132,7 @@ jobs:
         run: cmake --build audio-engine/build/default --config Debug
 
       - name: Test audio engine
-        run: ctest --test-dir audio-engine/build/default --output-on-failure -C Debug
+        run: ctest --test-dir audio-engine/build/default --output-on-failure --timeout 180 -C Debug
 
   mac-release:
     name: macOS Release Package

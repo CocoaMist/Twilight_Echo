@@ -48,3 +48,5 @@ Node 与 Web 的额外 noUnusedLocals/noUnusedParameters 扫描本次均无诊�
 独立 Debug 原生构建完成，37 项 CTest 中 35 通过、2 条件跳过、0 失败。跳过的是 MSVC 交叉 DLL ABI 与需要 FFmpeg 的性能验证；本机未发现 FFmpeg/libebur128 开发库，不能据此证明真实解码播放或发布静态包。后端/唤醒/DSD 控制回归均实际执行。
 
 新宏观 CI 完整报告还发现音频工具链夹具把 Windows 路径与分隔符当成主机固定值。夹具改为虚拟的主机绝对路径并按主机分隔符检查，保持 CMake/CTest 缺失、依赖完整性、GNU patch、路径优先级和 VST3 staging 行为断言；71 项工具链检查通过。公共 Windows 路径转 CMake 与运行时分隔符语义仍独立覆盖。原生测试方法名的编译错误已修正，各平台 CI 以修正后的提交为准。
+
+后续 Repository Quality 已实际通过。macOS 暴露极短 DSD 位置夹具与默认静音过渡的混合依赖；位置换算测试明确关闭 pre/post-roll，保持 64 bit frames / 2,822,400 Hz 与原精度断言，静音超时/DSD→PCM 保护仍在独立回归中执行。本机整个 runtime queue/reroute 集成再次通过。原生 CTest 进程设置 180 秒退出边界，并在该集成内部记录当前场景，使卡住时留下具体位置；它约束整组结束和可诊断性，不要求单个函数在一次机器计时内完成。
