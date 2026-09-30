@@ -1,3 +1,16 @@
+import {
+  deriveDopSupportState,
+  deriveNativeDsdSupportState
+} from '../../shared/audioDeviceCapabilities.ts'
+export {
+  normalizeAudioCapabilitySupportState,
+  hasNonEmptyArray,
+  getDeviceBackend,
+  getDevicePathKind,
+  deriveDopSupportState,
+  deriveNativeDsdSupportState,
+  normalizeDsdState
+} from '../../shared/audioDeviceCapabilities.ts'
 export {
   normalizeChannelRoutingMode,
   normalizePcmToDsdMode,
@@ -5,7 +18,6 @@ export {
 } from '../../shared/audioOutputConfig.ts'
 import { readFileSync } from 'fs'
 import type {
-  AudioCapabilitySupportState,
   AudioDeviceOption,
   AudioEngineQueueItem,
   AudioEngineScheduler,
@@ -618,91 +630,6 @@ export const DEFAULT_AUDIO_DEVICE_OPTION: AudioDeviceOption = {
 
 export function formatAudioDeviceLabel(device: string): string {
   return device === DEFAULT_AUDIO_DEVICE_OPTION.id ? DEFAULT_AUDIO_DEVICE_OPTION.label : device
-}
-
-export function normalizeAudioCapabilitySupportState(
-  value: unknown
-): AudioCapabilitySupportState | null {
-  return value === 'verified' ||
-    value === 'runtime-probed' ||
-    value === 'unsupported' ||
-    value === 'unknown'
-    ? value
-    : null
-}
-
-export function hasNonEmptyArray(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0
-}
-
-export function getDeviceBackend(option: Partial<AudioDeviceOption>): string {
-  const raw = option.backend || (option.id?.startsWith('asio:') ? 'asio' : '')
-  return String(raw || '').toLowerCase()
-}
-
-export function getDevicePathKind(option: Partial<AudioDeviceOption>): string {
-  return String(option.pathKind || '').toLowerCase()
-}
-
-export function deriveDopSupportState(
-  option: Partial<AudioDeviceOption>
-): AudioCapabilitySupportState {
-  const explicit = normalizeAudioCapabilitySupportState(option.dopSupportState)
-  if (explicit) return explicit
-  if (
-    option.supportsDop === true ||
-    hasNonEmptyArray(option.dopCarrierSampleRates) ||
-    hasNonEmptyArray(option.dopCarrierFormats)
-  ) {
-    return 'verified'
-  }
-  if (option.supportsDop === false) return 'unsupported'
-
-  const backend = getDeviceBackend(option)
-  const pathKind = getDevicePathKind(option)
-  if (
-    option.isDefault === true ||
-    backend === 'wasapi' ||
-    backend === 'coreaudio' ||
-    pathKind === 'default' ||
-    pathKind === 'endpoint' ||
-    pathKind === 'hal'
-  ) {
-    return 'runtime-probed'
-  }
-  if (backend === 'asio' || pathKind === 'asio') return 'unknown'
-  return 'unknown'
-}
-
-export function deriveNativeDsdSupportState(
-  option: Partial<AudioDeviceOption>
-): AudioCapabilitySupportState {
-  const explicit = normalizeAudioCapabilitySupportState(option.nativeDsdSupportState)
-  if (explicit) return explicit
-  if (
-    option.supportsNativeDsd === true ||
-    hasNonEmptyArray(option.nativeDsdSampleRates) ||
-    hasNonEmptyArray(option.nativeDsdSampleFormats) ||
-    hasNonEmptyArray(option.supportedDsdRates)
-  ) {
-    return 'verified'
-  }
-  if (option.supportsNativeDsd === false) return 'unsupported'
-
-  const backend = getDeviceBackend(option)
-  const pathKind = getDevicePathKind(option)
-  if (
-    backend === 'wasapi' ||
-    backend === 'coreaudio' ||
-    pathKind === 'endpoint' ||
-    pathKind === 'hal'
-  ) {
-    return 'unsupported'
-  }
-  if (backend === 'alsa' && pathKind === 'hw') return 'runtime-probed'
-  if (backend === 'asio' || pathKind === 'asio') return 'unknown'
-  if (option.isDefault === true || pathKind === 'default') return 'unsupported'
-  return 'unknown'
 }
 
 export function withAudioCapabilitySupportStates(option: AudioDeviceOption): AudioDeviceOption {
@@ -1407,27 +1334,4 @@ export function inferCodec(source: string): string {
 
 export function sourceLooksDsd(source: string): boolean {
   return /\.(dsf|dff)$/i.test(source)
-}
-
-export function normalizeDsdState(
-  canonicalOutput?: Partial<OutputInfo> | null,
-  mirror?: Partial<PlaybackInfo> | null
-): { isDsd: boolean; dsdMode: string; dsdRate: number } {
-  const canonicalMode =
-    typeof canonicalOutput?.dsdMode === 'string' ? canonicalOutput.dsdMode.trim() : ''
-  const mirrorMode = typeof mirror?.dsdMode === 'string' ? mirror.dsdMode.trim() : ''
-  const canonicalHasMode = canonicalMode.length > 0
-  const modeIndicatesDsd = (mode: string): boolean =>
-    mode === 'native' || mode === 'dop' || mode === 'unsupported'
-  const canonicalIsDsd =
-    typeof canonicalOutput?.isDsd === 'boolean'
-      ? canonicalOutput.isDsd
-      : canonicalHasMode
-        ? modeIndicatesDsd(canonicalMode)
-        : undefined
-  const isDsd = canonicalIsDsd ?? (mirror?.isDsd === true || modeIndicatesDsd(mirrorMode))
-  const rawMode = canonicalHasMode ? canonicalMode : mirrorMode
-  const dsdMode = isDsd ? rawMode || 'unsupported' : 'pcm'
-  const dsdRate = isDsd ? (canonicalOutput?.dsdRate ?? mirror?.dsdRate ?? 0) : 0
-  return { isDsd, dsdMode, dsdRate }
 }

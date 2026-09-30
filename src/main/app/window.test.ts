@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { restoreWindowSize } from './windowState.ts'
+import { getWindowBackgroundColor } from './windowAppearance.ts'
 
 test('main-process startup creates the window before deferred runtime work', async () => {
   const source = await readFile(new URL('./lifecycle.ts', import.meta.url), 'utf8')
@@ -53,4 +54,27 @@ test('windows main window wires taskbar thumbnail buttons separately from native
   assert.match(source, /integrations\/taskbarThumbar/)
   assert.match(source, /initializeWindowsSmtc/)
   assert.match(source, /destroyWindowsSmtc/)
+})
+
+test('explicit light/dark backgrounds are independent of the system theme', () => {
+  const backgrounds = { global: { dark: '#111111', light: '#eeeeee' } }
+  for (const systemDark of [false, true]) {
+    assert.equal(
+      getWindowBackgroundColor({ theme: 'dark', appBackground: backgrounds }, systemDark),
+      '#111111'
+    )
+    assert.equal(
+      getWindowBackgroundColor({ theme: 'pureWhite', appBackground: backgrounds }, systemDark),
+      '#eeeeee'
+    )
+  }
+})
+
+test('system theme follows the current native preference without importing audio runtime', () => {
+  const settings: Parameters<typeof getWindowBackgroundColor>[0] = {
+    theme: 'system',
+    appBackground: { global: { dark: '#111111', light: '#eeeeee' } }
+  }
+  assert.equal(getWindowBackgroundColor(settings, true), '#111111')
+  assert.equal(getWindowBackgroundColor(settings, false), '#eeeeee')
 })

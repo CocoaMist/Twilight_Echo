@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { EqualizerBand, PlaybackInfo } from './audioEngineTypes.ts'
+import {
+  deriveDopSupportState as mainDop,
+  deriveNativeDsdSupportState as mainDsd,
+  normalizeDsdState as mainDsdState
+} from './audioEngineHelpers.ts'
+import {
+  deriveDopSupportState as rendererDop,
+  deriveNativeDsdSupportState as rendererDsd
+} from '../../renderer/src/stores/player/audioOutputNormalize.ts'
+import { normalizeDsdState as rendererDsdState } from '../../renderer/src/utils/playerPlaybackInfo.ts'
+import type {
+  AudioDeviceOption,
+  EqualizerBand,
+  OutputInfo,
+  PlaybackInfo
+} from './audioEngineTypes.ts'
 
 const {
   DEFAULT_OUTPUT_CONFIG,
@@ -257,4 +272,63 @@ test('normalizeAudioProcessingSettings keeps graphic band gains through a round 
   })
   assert.equal(edited.eqBands[3].gain, 5)
   assert.equal(normalizeAudioProcessingSettings({ ...edited }).eqBands[3].gain, 5)
+})
+
+test('main and renderer agree on capability candidates without promoting IDs to verified support', () => {
+  const cases: Array<[Partial<AudioDeviceOption>, string, string]> = [
+    [{ id: 'auto' }, 'runtime-probed', 'unsupported'],
+    [{ id: 'wasapi:usb' }, 'runtime-probed', 'unsupported'],
+    [{ id: 'coreaudio:usb' }, 'runtime-probed', 'unsupported'],
+    [{ id: 'alsa:hw:0,0' }, 'unknown', 'runtime-probed'],
+    [{ id: 'hw:0,0' }, 'unknown', 'runtime-probed'],
+    [{ id: 'alsa:plughw:0,0' }, 'unknown', 'unknown'],
+    [{ id: 'asio:usb' }, 'unknown', 'unknown'],
+    [{ id: 'unknown' }, 'unknown', 'unknown'],
+    [{ id: 'wasapi:usb', backend: 'alsa', pathKind: 'hw' }, 'unknown', 'runtime-probed'],
+    [
+      { id: 'alsa:hw:0,0', supportsNativeDsd: false, supportsDop: false },
+      'unsupported',
+      'unsupported'
+    ],
+    [
+      { id: 'asio:usb', nativeDsdSupportState: 'verified', dopSupportState: 'unsupported' },
+      'unsupported',
+      'verified'
+    ],
+    [
+      { id: 'asio:usb', nativeDsdSampleRates: [2822400], dopCarrierSampleRates: [176400] },
+      'verified',
+      'verified'
+    ]
+  ]
+  for (const [device, dop, dsd] of cases) {
+    for (const [name, deriveDop, deriveDsd] of [
+      ['main', mainDop, mainDsd],
+      ['renderer', rendererDop, rendererDsd]
+    ] as const) {
+      assert.equal(deriveDop(device), dop, `${name} DoP ${device.id}`)
+      assert.equal(deriveDsd(device), dsd, `${name} DSD ${device.id}`)
+    }
+  }
+})
+
+test('both playback consumers honor canonical DSD facts over stale mirror fields', () => {
+  const cases: Array<[Partial<OutputInfo> | null, Partial<PlaybackInfo> | null, object]> = [
+    [
+      { isDsd: false, dsdMode: 'pcm' },
+      { isDsd: true, dsdMode: 'native', dsdRate: 2822400 },
+      { isDsd: false, dsdMode: 'pcm', dsdRate: 0 }
+    ],
+    [
+      { dsdMode: ' native ', dsdRate: 2822400 },
+      null,
+      { isDsd: true, dsdMode: 'native', dsdRate: 2822400 }
+    ],
+    [null, { isDsd: true }, { isDsd: true, dsdMode: 'unsupported', dsdRate: 0 }],
+    [null, null, { isDsd: false, dsdMode: 'pcm', dsdRate: 0 }]
+  ]
+  for (const [canonical, mirror, expected] of cases) {
+    assert.deepEqual(mainDsdState(canonical, mirror), expected)
+    assert.deepEqual(rendererDsdState(canonical, mirror), expected)
+  }
 })
