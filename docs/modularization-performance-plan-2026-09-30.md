@@ -166,6 +166,8 @@ GUI 验收在允许真实运行环境时进行：浅/深色、自定义强调色
 
 最新原生 CI：Linux 29 项中 2 项失败（backend factory 与 special provider），macOS 同两项失败另加 runtime queue reroute。前两项测试直接配置 wasapi / wasapi-exclusive，却要求输出后端存在于 Linux ALSA / macOS CoreAudio 的枚举中；平台假设和不可用后端配置行为需单独核对。macOS 第三项等待 150 ms 后要求 dsd_mute_lock_timeout，但日志仍显示 locking/candidate；它可能涉及测试同步或引擎状态推进，不能仅凭日志断言提高延迟即可修复。此次 audio-engine 源码与 main 无差异，不通过跳过或放宽断言宣称原生检查通过。
 
+第六轮 CI 已实际通过 Linux 主题像素/界面和 local-perf，随后 DSP 两项 Electron 界面测试暴露同样的缺显示器问题。重新按测试源码中的 Electron 运行入口核对 package 脚本归属，当前 Repository Quality 运行的界面组为 plugins、tag-duplicate-management、playlist-lifecycle、lyrics-management、local-perf、themes、dsp-graph、app，均补齐 xvfb-run；DSP 纳入显示环境门禁。其他 source/tooling 组未发现 Electron 窗口入口。失败一步即跳过后续步骤，是连续出现不同 check 失败的原因；没有跳过具体用例来推进流程。
+
 最终复查补充睡眠边界失败路径：触发事件已到达但 invoke 随后失败时继续抑制 EOF 自动换曲；取消、重新配置或销毁仍使旧回复无效。实际控制器回归覆盖这五种顺序。
 
 第二批最终本地结果：385 个源码/资源测试文件，2,682 项通过、3 项已有跳过、0 失败；148 项播放器/睡眠/流媒体与架构/IPC/安装/错误门禁及 19 项歌单控制器/页面导航适配检查通过；11 项重复检测基准证据检查通过，17 项主题参数/门禁跟进检查通过。ESLint、Node/Web noEmit 类型检查通过。上述专项与全量回归存在重叠，不能相加。源码回归沿用排除构建/原生依赖的清单；没有真实音频设备、Discord 客户端或完整应用窗口验收。

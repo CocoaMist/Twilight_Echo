@@ -202,6 +202,7 @@ test('required Ubuntu CI installs a bounded Xvfb dependency and runs real Electr
   assert.match(workflow, /xvfb-run -a pnpm run test:local-perf/)
   assert.match(workflow, /xvfb-run -a pnpm run test:app/)
   assert.match(workflow, /xvfb-run -a pnpm run test:themes/)
+  assert.match(workflow, /xvfb-run -a pnpm run test:dsp-graph/)
   assert.match(workflow, /pnpm run test:duplicate-detection-benchmark/)
   assert.match(workflow, /pnpm run benchmark:duplicate-detection:ci --/)
   assert.match(workflow, /duplicate-detection-benchmark\.manifest\.json/)

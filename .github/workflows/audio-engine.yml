@@ -125,7 +125,7 @@ jobs:
         run: xvfb-run -a pnpm run test:themes
 
       - name: Test DSP graph
-        run: pnpm run test:dsp-graph
+        run: xvfb-run -a pnpm run test:dsp-graph
 
       - name: Test DSP assets
         run: pnpm run test:dsp-assets
