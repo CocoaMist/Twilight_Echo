@@ -98,7 +98,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: product-quality-gate
-          path: ${{ runner.temp }}/product-quality-gate.json
+          path: |
+            ${{ runner.temp }}/product-quality-gate.json
+            ${{ runner.temp }}/backdrop-filter-probe.png
           if-no-files-found: warn
 
       - name: Verify duplicate detection benchmark contract

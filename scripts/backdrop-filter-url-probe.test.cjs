@@ -277,6 +277,7 @@ function runnerSource() {
   const geometry = JSON.stringify({ REGION, REGION_ORIGIN })
 
   return `const { app, BrowserWindow } = require('electron')
+const fs = require('node:fs')
 const path = require('node:path')
 const target = process.argv.at(-1)
 const geometry = ${geometry}
@@ -356,6 +357,7 @@ app.whenReady().then(async () => {
     show: false,
     width: 1440,
     height: 900,
+    useContentSize: true,
     webPreferences: { contextIsolation: false, nodeIntegration: false, offscreen: true }
   })
   window.webContents.on('console-message', (_event, _level, message) =>
@@ -390,7 +392,19 @@ app.whenReady().then(async () => {
     const image = await window.webContents.capturePage()
     const size = image.getSize()
     const bitmap = image.toBitmap()
-    const scale = size.width / 1440
+    if (process.env.RUNNER_TEMP) {
+      fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'backdrop-filter-probe.png'), image.toPNG())
+    }
+    // BrowserWindow dimensions include the native frame unless useContentSize
+    // is set. Derive pixel coordinates from the actual CSS viewport, not the
+    // requested outer width; Windows runner decorations and DPI vary.
+    const viewport = await window.webContents.executeJavaScript(
+      '({ width: innerWidth, height: innerHeight, devicePixelRatio })'
+    )
+    if (bitmap.length !== size.width * size.height * 4) {
+      throw new Error('Capture dimensions do not match the BGRA bitmap')
+    }
+    const scale = size.width / viewport.width
 
     const stats = {}
     for (const id of Object.keys(geometry.REGION_ORIGIN)) {
@@ -402,6 +416,7 @@ app.whenReady().then(async () => {
         JSON.stringify({
           scale,
           imageSize: size,
+          viewport,
           parsed: JSON.parse(parsed),
           controlMean: stats.control.mean,
           blur: compare(stats.control, stats.blur),
@@ -457,6 +472,9 @@ test('backdrop-filter url() capability probe', async (t) => {
     const line = stdout.split(/\r?\n/).find((entry) => entry.startsWith('PROBE_RESULT '))
     assert.ok(line, `probe produced no result.\nstdout:\n${stdout}\nstderr:\n${stderr}`)
     const result = JSON.parse(line.slice('PROBE_RESULT '.length))
+    t.diagnostic(
+      `capture geometry: ${JSON.stringify({ image: result.imageSize, viewport: result.viewport, scale: result.scale })}`
+    )
 
     // A backdrop effect that is known to work must register, otherwise a negative
     // url() result says nothing about Chromium and everything about this harness.
@@ -542,14 +560,8 @@ test('backdrop-filter url() capability probe', async (t) => {
       'the baked displacement map never decoded, so the feImage chains prove nothing'
     )
 
-    // Pins the root cause so the finding cannot quietly rot. If Chromium ever
-    // starts honouring this shape, the masking tail becomes a legitimate option
-    // again and this assertion is the signal to revisit that decision.
-    assert.ok(
-      maskedIsDropped,
-      'masking refraction against an feImage-derived alpha no longer breaks the chain. ' +
-        'Chromium behaviour changed; the constraint documented in LiquidGlassDefs.vue can be relaxed.'
-    )
+    // Alternative chains diagnose compositor capability. A Chromium bug being
+    // fixed is not a product regression; only the shipped visual outcome gates.
 
     // The Linux surface ships a CSS-only fallback. Other platforms retain the
     // lens-first chain. Both SVG orders remain measured capability diagnostics.

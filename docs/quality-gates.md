@@ -54,3 +54,5 @@ Node 与 Web 的额外 noUnusedLocals/noUnusedParameters 扫描本次均无诊�
 历史跨平台 CI 已通过 Repository Quality 与 Linux/macOS 原生。Windows 的退出报告定位到错误事件夹具：registry 锁内调用 pipeline 事件，和状态读取的 pipeline→registry 顺序相反。改为锁内复制回调、锁外调用，保持实际 RenderError/lastError/context 回归；不增加超时或跳过场景。旧结果仅作诊断证据，后续仅验证 Windows。
 
 后续发现实际暂停竞争：clockLoop 在 engine 锁外读取 playing 快照，命令完成 pause 后，旧快照又把状态写成 playing。新增 Windows 可执行的屏障回归，固定“时钟已取快照 → pause 完成 → 时钟继续”顺序，修复前确实失败。时钟刷新现在保留已提交的播放状态；命令和明确的结束/错误事件仍负责状态切换，进度/配置 ACK/曲目信息照常刷新。完整原生回归验证暂停、换曲、路由回滚和 DSD 保护，最终 CI 以最新 Windows head 为准。
+
+首轮 Windows-only CI 的原生门禁通过，完整业务报告继续发现两处夹具问题：路径授权应对比 realpath 规范结果，不能把 Windows 8.3 临时目录别名当作规范路径；像素夹具应按实际 CSS viewport 与 BGRA bitmap 换算坐标，不能假定 BrowserWindow 的外窗宽度就是内容宽度。路径拒绝/符号链接逃逸和播放条低对比度断言保持。替代 SVG 链的 Chromium 能力结果仅作诊断，修复旧 Chromium bug 不再阻断产品。CI 同时保存人工棋盘截图供定位。修正后的本机主题 258 项通过，插件 430 通过/1 原有跳过；软件渲染/100% 探针通过，最终 Windows CI 另行确认。
