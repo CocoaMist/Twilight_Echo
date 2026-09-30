@@ -2572,7 +2572,7 @@ void testNativeDsdMuteTimeoutStopsWithoutAdvancingPosition() {
 
   assert(waitUntil([&] {
     const auto snapshots = g_backendRegistry.snapshots();
-    return jsonContains(engine.playbackInfoJson(), "\"perfectReasonCode\":\"dsd_mute_lock_timeout\"") &&
+    return jsonContains(engine.getPlaybackInfoJson(), "\"perfectReasonCode\":\"dsd_mute_lock_timeout\"") &&
            !snapshots.empty() && snapshots.back().stopCalls > 0 && snapshots.back().closeCalls > 0;
   }));
   assertLatestPlaybackContains(engine, "\"state\":\"stopped\"");
