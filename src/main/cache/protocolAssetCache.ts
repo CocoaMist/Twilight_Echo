@@ -1,74 +1,101 @@
 import { readFile } from 'fs/promises'
 
 const DEFAULT_MAX_CACHE_BYTES = 64 * 1024 * 1024
-
+const DEFAULT_MAX_CACHE_ENTRIES = 512
 type ProtocolAssetBytes = NonSharedBuffer
 export type { ProtocolAssetBytes }
 
-const cachedBytesByPath = new Map<string, ProtocolAssetBytes>()
-const readsInFlightByPath = new Map<string, Promise<ProtocolAssetBytes | null>>()
-let cachedBytesTotal = 0
-let maxCacheBytes = DEFAULT_MAX_CACHE_BYTES
-
-/**
- * Read file bytes for a protocol handler response, trying paths in order.
- * Served bytes are kept in a byte-budgeted LRU so repeat cover/background
- * requests never touch the disk again and never block the main thread.
- */
-export async function readCachedProtocolFile(
-  ...paths: string[]
-): Promise<ProtocolAssetBytes | null> {
-  for (const path of paths) {
-    const data = await readCachedProtocolPath(path)
-    if (data) return data
-  }
-  return null
+interface ProtocolAssetCacheOptions {
+  maxBytes?: number
+  maxEntries?: number
+  read?: (path: string) => Promise<ProtocolAssetBytes>
 }
 
-async function readCachedProtocolPath(filePath: string): Promise<ProtocolAssetBytes | null> {
-  const cached = cachedBytesByPath.get(filePath)
-  if (cached) {
-    cachedBytesByPath.delete(filePath)
-    cachedBytesByPath.set(filePath, cached)
-    return cached
+/** Cache owns its bytes and pending reads. Limits apply to retained data, not HTTP response size. */
+export function createProtocolAssetCache(options: ProtocolAssetCacheOptions = {}) {
+  const cached = new Map<string, ProtocolAssetBytes>()
+  const pending = new Map<string, Promise<ProtocolAssetBytes | null>>()
+  const read = options.read ?? readFile
+  let totalBytes = 0
+  let generation = 0
+  let maxBytes = budget(options.maxBytes ?? DEFAULT_MAX_CACHE_BYTES)
+  const maxEntries = budget(options.maxEntries ?? DEFAULT_MAX_CACHE_ENTRIES)
+
+  function evictOverflow(): void {
+    while (totalBytes > maxBytes || cached.size > maxEntries) {
+      const oldest = cached.keys().next().value
+      if (oldest === undefined) break
+      totalBytes -= cached.get(oldest)!.byteLength
+      cached.delete(oldest)
+    }
   }
 
-  let read = readsInFlightByPath.get(filePath)
-  if (!read) {
-    read = readFile(filePath)
-      .then((data) => {
-        cachedBytesByPath.set(filePath, data)
-        cachedBytesTotal += data.byteLength
-        evictOverflow()
-        return data
-      })
-      .catch(() => null)
-      .finally(() => {
-        readsInFlightByPath.delete(filePath)
-      })
-    readsInFlightByPath.set(filePath, read)
+  async function readPath(path: string): Promise<ProtocolAssetBytes | null> {
+    const hit = cached.get(path)
+    if (hit) {
+      cached.delete(path)
+      cached.set(path, hit)
+      return hit
+    }
+    let request = pending.get(path)
+    if (!request) {
+      const startedGeneration = generation
+      request = read(path)
+        .then((bytes) => {
+          // Oversized responses are served once without evicting useful small assets.
+          if (startedGeneration === generation && bytes.byteLength <= maxBytes && maxEntries > 0) {
+            cached.set(path, bytes)
+            totalBytes += bytes.byteLength
+            evictOverflow()
+          }
+          return bytes
+        })
+        .catch(() => null)
+        .finally(() => {
+          if (pending.get(path) === request) pending.delete(path)
+        })
+      pending.set(path, request)
+    }
+    return request
   }
-  return read
+
+  return {
+    async read(...paths: string[]): Promise<ProtocolAssetBytes | null> {
+      for (const path of paths) {
+        const bytes = await readPath(path)
+        if (bytes) return bytes
+      }
+      return null
+    },
+    clear() {
+      generation++
+      cached.clear()
+      pending.clear()
+      totalBytes = 0
+    },
+    setMaxBytes(bytes: number) {
+      maxBytes = budget(bytes)
+      evictOverflow()
+    },
+    stats() {
+      return { cachedBytes: totalBytes, cachedEntries: cached.size, pendingReads: pending.size }
+    }
+  }
 }
 
-function evictOverflow(): void {
-  while (cachedBytesTotal > maxCacheBytes && cachedBytesByPath.size > 1) {
-    const oldest = cachedBytesByPath.keys().next().value
-    if (oldest === undefined) break
-    const evicted = cachedBytesByPath.get(oldest)
-    cachedBytesByPath.delete(oldest)
-    cachedBytesTotal -= evicted?.byteLength ?? 0
-  }
+function budget(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('Invalid cache budget')
+  return value
 }
+
+const cache = createProtocolAssetCache()
+
+/** The existing protocol entry point shares one process-local, bounded LRU. */
+export const readCachedProtocolFile = cache.read
 
 export function resetProtocolAssetCacheForTests(): void {
-  cachedBytesByPath.clear()
-  readsInFlightByPath.clear()
-  cachedBytesTotal = 0
-  maxCacheBytes = DEFAULT_MAX_CACHE_BYTES
+  cache.clear()
+  cache.setMaxBytes(DEFAULT_MAX_CACHE_BYTES)
 }
 
-export function setProtocolAssetCacheMaxBytesForTests(bytes: number): void {
-  maxCacheBytes = bytes
-  evictOverflow()
-}
+export const setProtocolAssetCacheMaxBytesForTests = cache.setMaxBytes
