@@ -530,8 +530,12 @@ test('backdrop-filter url() capability probe', async (t) => {
 
     t.diagnostic(`map decode:      ${result.mapReady}`)
     t.diagnostic(`contrast raw:    ${rawContrast.toFixed(2)} (no filter)`)
-    t.diagnostic(`contrast lens:   ${Number.isFinite(lensContrast) ? lensContrast.toFixed(2) : 'not captured'} (blur-first chain)`)
-    t.diagnostic(`contrast masked: ${Number.isFinite(maskedContrast) ? maskedContrast.toFixed(2) : 'not captured'} (feComposite vs feImage alpha)`)
+    t.diagnostic(
+      `contrast lens:   ${Number.isFinite(lensContrast) ? lensContrast.toFixed(2) : 'not captured'} (blur-first chain)`
+    )
+    t.diagnostic(
+      `contrast masked: ${Number.isFinite(maskedContrast) ? maskedContrast.toFixed(2) : 'not captured'} (feComposite vs feImage alpha)`
+    )
     t.diagnostic(
       `contrast first:  ${Number.isFinite(lensFirstContrast) ? lensFirstContrast.toFixed(2) : 'not captured'} (url() ahead of blur)`
     )
@@ -539,7 +543,8 @@ test('backdrop-filter url() capability probe', async (t) => {
 
     const lensApplies = Number.isFinite(lensContrast) && lensContrast < droppedThreshold
     const maskedIsDropped = Number.isFinite(maskedContrast) && maskedContrast >= droppedThreshold
-    const lensFirstApplies = Number.isFinite(lensFirstContrast) && lensFirstContrast < droppedThreshold
+    const lensFirstApplies =
+      Number.isFinite(lensFirstContrast) && lensFirstContrast < droppedThreshold
 
     console.log(
       [

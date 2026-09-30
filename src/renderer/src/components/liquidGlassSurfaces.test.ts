@@ -283,6 +283,66 @@ test('playbar pointer tracking remains element-local', () => {
   assert.doesNotMatch(playerBar, /document\.elementFromPoint/)
 })
 
+test('Linux playbar accessibility preferences override the backdrop fallback', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'te-playbar-accessibility-'))
+  const require = createRequire(import.meta.url)
+  try {
+    const css = compileStyle({
+      source: playerBarStyle,
+      filename: 'PlayerBar.css',
+      id: 'data-v-accessibility',
+      scoped: true
+    }).code
+    const html = join(directory, 'fixture.html')
+    const runner = join(directory, 'runner.cjs')
+    await writeFile(
+      html,
+      `<html data-platform="linux"><head><style>${css}</style></head><body>
+      <div class="player-bar-liquid" data-v-accessibility>
+      <span class="player-bar-warp" data-v-accessibility></span>
+      </div></body></html>`
+    )
+    await writeFile(
+      runner,
+      `const { app, BrowserWindow } = require('electron');
+      const assert = require('node:assert/strict');
+      app.whenReady().then(async () => {
+        const win = new BrowserWindow({ show: false });
+        try {
+          await win.loadFile(process.argv.at(-1));
+          win.webContents.debugger.attach('1.3');
+          const readStyle = () => win.webContents.executeJavaScript(
+            'getComputedStyle(document.querySelector(".player-bar-warp")).backdropFilter'
+          );
+          assert.match(await readStyle(), /blur\\(/);
+          for (const [name, value] of [
+            ['prefers-contrast', 'more'],
+            ['prefers-reduced-transparency', 'reduce'],
+            ['forced-colors', 'active']
+          ]) {
+            await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+              features: [{ name, value }]
+            });
+            assert.equal(await win.webContents.executeJavaScript(
+              'matchMedia("(' + name + ': ' + value + ')").matches'
+            ), true, name + ': preference must be active');
+            assert.equal(await readStyle(), 'none', name + ': backdrop must be disabled');
+          }
+          console.error('PLAYBAR_ACCESSIBILITY_OK'); app.exit(0);
+        } catch (error) { console.error(error); app.exit(1); }
+      });`
+    )
+    const { stderr } = await promisify(execFile)(
+      require('electron') as string,
+      ['--no-sandbox', runner, html],
+      { windowsHide: true, timeout: 30000 }
+    )
+    assert.match(stderr, /PLAYBAR_ACCESSIBILITY_OK/)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('playbar regions keep their columns when a theme inserts decorative grid content', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'te-playbar-grid-'))
   const require = createRequire(import.meta.url)

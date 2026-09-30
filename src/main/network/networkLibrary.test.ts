@@ -203,6 +203,44 @@ test('a rejected transaction does not poison subsequent writes or publish its dr
   )
 })
 
+test('coalesced readers never observe a failed mutation draft', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'network-library-draft-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const path = join(dir, 'library.json')
+  const original = makeEntry('/music/a.flac')
+  const document: NetworkLibraryDocument = {
+    p1: { roots: ['/music'], entries: [original] }
+  }
+  for (const action of ['scan', 'enrich', 'remove-entry', 'remove-profile'] as const) {
+    await t.test(action, async () => {
+      const persistence = createNetworkLibraryPersistence(path)
+      await persistence.save(document)
+      const library = createNetworkLibrary({
+        filePath: path,
+        persistence: {
+          load: persistence.load,
+          save: async () => {
+            throw new Error('disk full')
+          }
+        }
+      })
+      const listing = library.listEntries('p1')
+      const search = library.searchEntries(['p1'])
+      const mutations = {
+        scan: () => library.addEntries('p1', '/music', [makeEntry('/music/b.flac')]),
+        enrich: () => library.updateEntries('p1', [{ ...original, metadata: { title: 'Draft' } }]),
+        'remove-entry': () => library.removeEntry('p1', original.id),
+        'remove-profile': () => library.removeProfile('p1')
+      }
+      const rejected = assert.rejects(mutations[action](), /disk full/)
+      const [entries, results] = await Promise.all([listing, search, rejected])
+      assert.deepEqual(entries, [original])
+      assert.deepEqual(results, [{ profileId: 'p1', entry: original }])
+      assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), document)
+    })
+  }
+})
+
 test('multi-profile search reads one snapshot and returns independently owned metadata', async () => {
   let loads = 0
   const source: NetworkLibraryDocument = {

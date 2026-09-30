@@ -33,7 +33,7 @@ export function createNetworkLibrary(deps: {
   let writes: Promise<unknown> = Promise.resolve()
 
   function mutate<T>(apply: (document: NetworkLibraryDocument) => Promise<T>): Promise<T> {
-    const operation = writes.then(async () => apply(await persistence.load()))
+    const operation = writes.then(async () => apply({ ...(await persistence.load()) }))
     // A failed write rejects its caller, but does not poison later transactions.
     writes = operation.catch(() => undefined)
     return operation
