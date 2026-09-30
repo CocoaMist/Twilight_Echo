@@ -89,8 +89,20 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const char* backend = mode == "--provider-special" ? "wasapi-exclusive" : "wasapi";
-  const TAE_Result providerResult = TAE_SetOutputBackend(engine, backend);
+  std::string backend = "wasapi";
+  const std::string initialBackend = stringField(callString(engine, TAE_GetPlaybackInfo), "outputBackend");
+  const std::string initialBackends = callString(engine, TAE_EnumerateBackends);
+  const std::string platformDefault = initialBackend == "none" ? "" : initialBackend;
+  if (mode == "--provider-legacy") backend = platformDefault;
+  if (mode == "--provider-special") {
+    backend = initialBackends.find("\"id\":\"wasapi-exclusive\"") != std::string::npos
+                  ? "wasapi-exclusive"
+                  : (initialBackends.find("\"id\":\"coreaudio-exclusive\"") != std::string::npos
+                         ? "coreaudio-exclusive"
+                         : platformDefault);
+  }
+  const TAE_Result providerResult =
+      backend.empty() ? TAE_RESULT_BACKEND_UNAVAILABLE : TAE_SetOutputBackend(engine, backend.c_str());
   if (mode == "--provider-invalid") {
     if (providerResult != TAE_RESULT_INVALID_ARGUMENT) {
       std::cerr << "An invalid provider value was not rejected\n";
@@ -104,8 +116,8 @@ int main(int argc, char** argv) {
       return 1;
     }
   } else if (mode == "--provider-special") {
-    if (providerResult != TAE_RESULT_OK) {
-      std::cerr << "The PCM provider selector affected WASAPI Exclusive: "
+    if (providerResult != (backend.empty() ? TAE_RESULT_BACKEND_UNAVAILABLE : TAE_RESULT_OK)) {
+      std::cerr << "The PCM provider selector affected a non-provider backend: "
                 << callString(engine, TAE_GetLastError) << "\n";
       TAE_DestroyEngine(engine);
       return 1;
@@ -131,7 +143,7 @@ int main(int argc, char** argv) {
       return 1;
     }
 #endif
-  } else if (providerResult != TAE_RESULT_OK) {
+  } else if (providerResult != (backend.empty() ? TAE_RESULT_BACKEND_UNAVAILABLE : TAE_RESULT_OK)) {
     std::cerr << "Legacy provider selection failed: " << callString(engine, TAE_GetLastError) << "\n";
     TAE_DestroyEngine(engine);
     return 1;
@@ -140,6 +152,13 @@ int main(int argc, char** argv) {
   const std::string backendsJson = callString(engine, TAE_EnumerateBackends);
   const std::string playbackJson = callString(engine, TAE_GetPlaybackInfo);
   const std::string defaultId = stringField(playbackJson, "outputBackend");
+  if (twilight::audio::isOutputBackendAvailable("unknown-backend") ||
+      TAE_SetOutputBackend(engine, "unknown-backend") != TAE_RESULT_BACKEND_UNAVAILABLE ||
+      stringField(callString(engine, TAE_GetPlaybackInfo), "outputBackend") != defaultId) {
+    std::cerr << "An unavailable backend was accepted or changed the committed route\n";
+    TAE_DestroyEngine(engine);
+    return 1;
+  }
   TAE_DestroyEngine(engine);
 
   if (defaultId.empty() || defaultId == "none") {

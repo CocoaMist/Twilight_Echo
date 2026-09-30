@@ -1880,16 +1880,69 @@ void testConfigAppliedEventFollowsRenderApplication() {
   engine.setEventCallback(nullptr, nullptr);
 }
 
+void testClockSnapshotCannotUndoCompletedPause() {
+  struct Capture {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+    std::string property;
+  } capture;
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setDspConfig(kUnityGainProcessingConfigJson) == TAE_RESULT_OK);
+  assert(engine.play("clock-pause-race.flac", 0.0) == TAE_RESULT_OK);
+  auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  engine.setEventCallback(
+      [](const char* event, const char* payload, void* data) {
+        auto& capture = *static_cast<Capture*>(data);
+        std::unique_lock lock(capture.mutex);
+        if (std::string(event) == "config-applied" && !capture.release) {
+          // This clock tick has already read a playing pipeline snapshot.
+          capture.entered = true;
+          capture.cv.notify_all();
+          capture.cv.wait(lock, [&] { return capture.release; });
+        } else if (std::string(event) == "property-change" && capture.release) {
+          capture.property = payload;
+        }
+      },
+      &capture);
+  assert(engine.setVolume(0.5) == TAE_RESULT_OK);
+  renderBackendFrames(backend, 128);
+  assert(waitUntil([&] {
+    std::lock_guard lock(capture.mutex);
+    return capture.entered;
+  }));
+  assert(engine.pause() == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  {
+    std::lock_guard lock(capture.mutex);
+    capture.release = true;
+  }
+  capture.cv.notify_all();
+  assert(waitUntil([&] {
+    std::lock_guard lock(capture.mutex);
+    return !capture.property.empty();
+  }));
+  {
+    std::lock_guard lock(capture.mutex);
+    assert(jsonContains(capture.property, "\"state\":\"paused\""));
+  }
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  engine.setEventCallback(nullptr, nullptr);
+}
+
 // NAT-1: the stopped/paused clock waits on a slow 1 s tick. Transport commands
 // must wake it at once, and shutdown must not wait out the idle interval.
 void testIdleClockWakesPromptlyOnPlayAndShutdown() {
-  {
+  for (const int warmupMs : {0, 150}) {
     EngineHarness harness;
     auto& engine = harness.engine();
     ConfigEventCapture capture;
     engine.setEventCallback(captureConfigEvent, &capture);
-    // Let the clock settle into its idle wait before issuing play.
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    // Cover both immediate startup and an already settled idle wait.
+    std::this_thread::sleep_for(std::chrono::milliseconds(warmupMs));
     assert(capturedEventCount(capture, "property-change") == 0);
     const auto playStarted = std::chrono::steady_clock::now();
     assert(engine.play("clock-wake-idle.flac", 0.0) == TAE_RESULT_OK);
@@ -2101,11 +2154,15 @@ void testBackendRenderErrorIsReportedThroughLastError() {
 
   const auto backend = waitForLatestStartedBackendState();
   assert(backend);
+  OutputEventCallback event;
   {
     std::lock_guard lock(g_backendRegistry.mutex);
-    assert(static_cast<bool>(backend->event));
-    backend->event(OutputBackendEvent::RenderError, "fake backend render failed");
+    event = backend->event;
   }
+  assert(static_cast<bool>(event));
+  // Pipeline status reads take the pipeline lock before querying this registry.
+  // Invoke outside the fixture lock, matching the render callback hand-off.
+  event(OutputBackendEvent::RenderError, "fake backend render failed");
 
   assert(waitUntil([&] {
     const std::string errorJson = engine.getLastErrorJson();
@@ -2570,7 +2627,12 @@ void testNativeDsdMuteTimeoutStopsWithoutAdvancingPosition() {
   assert(backend->typedStarted);
   renderBackendTypedBytes(backend, 4);
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  assert(waitUntil([&] {
+    const auto snapshots = g_backendRegistry.snapshots();
+    return jsonContains(engine.getPlaybackInfoJson(), "\"perfectReasonCode\":\"dsd_mute_lock_timeout\"") &&
+           !snapshots.empty() && snapshots.back().stopCalls > 0 && snapshots.back().closeCalls > 0;
+  }));
+  assertLatestPlaybackContains(engine, "\"state\":\"stopped\"");
   assertLatestPlaybackContains(engine, "\"perfectReasonCode\":\"dsd_mute_lock_timeout\"");
   assertLatestPlaybackContains(engine, "\"outputPerfect\":false");
   assertLatestPlaybackContains(engine, "\"sourceExact\":false");
@@ -2779,15 +2841,23 @@ void testNativeDsdPositionUsesBitSampleFrames() {
   EngineHarness harness("twilight-phase6d-runtime-reroute-dsd64-position.dsf", kDsd64Rate);
   auto& engine = harness.engine();
   assert(engine.setOutputBackend("asio") == TAE_RESULT_OK);
+  // This 8-byte source isolates bit-frame position conversion; mute-roll
+  // progression is covered by the separate guard tests, not host scheduling.
+  assert(engine.setOutputConfig(
+             "{\"dsdMutePreRollFrames\":0,\"dsdMutePostRollFrames\":0}") == TAE_RESULT_OK);
 
   assert(engine.play(harness.dsdPath(), 0.0) == TAE_RESULT_OK);
   assert(waitForStartedBackendCount(1));
   auto state = waitForLatestStartedBackendState();
   assert(state);
-  assert(waitUntil([&] {
+  const bool positionAdvanced = waitUntil([&] {
     renderBackendFrames(state, 8);
     return playbackJsonNumber(engine.getPlaybackInfoJson(), "position") > 0.0;
-  }));
+  });
+  if (!positionAdvanced) {
+    std::fprintf(stderr, "Native DSD position did not advance: %s\n", engine.getPlaybackInfoJson().c_str());
+  }
+  assert(positionAdvanced);
 
   const std::string json = engine.getPlaybackInfoJson();
   const double position = playbackJsonNumber(json, "position");
@@ -3929,6 +3999,10 @@ std::string defaultBackendId() {
   return "wasapi-exclusive";
 }
 
+bool isOutputBackendAvailable(const std::string&) {
+  return true;  // This fixture supplies fake backends independently of the host OS.
+}
+
 std::unique_ptr<IOutputBackend> createOutputBackend(const std::string& backendId, std::string*) {
   return std::make_unique<FakeOutputBackend>(backendId);
 }
@@ -4068,121 +4142,129 @@ void FFmpegDecoder::pollStreamMetadata() {}
 
 }  // namespace twilight::audio
 
+// CTest keeps successful output quiet; on a hang or failure the last case is visible.
+#define RUN_RUNTIME_CASE(expression) \
+  do { \
+    std::fprintf(stderr, "[runtime case] %s\n", #expression); \
+    expression; \
+  } while (false)
+
 int main() {
-  testFixedSpscQueuePreservesFifoAndReportsFull();
-  testFloatScratchResizeForOverwritePreservesSameSizedScratch();
-  testVisualizationFftResolutionMatchesWebAudioReference();
-  testRenderCallbacksDoNotResizePipelineScratchBuffers();
-  testDecodeStreamReadFloatDoesNotResizeTypedScratch();
-  testRenderCallbacksDoNotReconfigureDspChains();
-  testRenderCallbackDoesNotCopyDspConfig();
-  testRenderCallbacksDoNotBlockOnPipelineMutex();
-  testRenderCallbacksDoNotWaitForDecoderBuffers();
-  testNativeDsdRenderPositionAccountsForBitsPerByte();
-  testRenderTypedGatesDopMarkerWritesOnDsdTransport();
-  testTypedDsdFormatMismatchEmitsTransportIdleInsteadOfPcmFallback();
-  testChannelRouterStateIsOwnedByRenderCallback();
-  testRenderCallbacksUseNonBlockingSpectrumReset();
-  testRenderCallbackDoesNotStopDecodeStreams();
-  testSetDspConfigParsesJsonOutsidePipelineMutex();
-  testSetVolumeAvoidsBlockingOnPipelineMutex();
-  testFallbackStatusPreservesStableTransportState();
-  testVolumeCommandApplicationIsRealtimeSafe();
-  testVolumeCommandCallbackWorkIsBoundedAndUsesPortableAtomics();
-  testDecodeStreamReaperRetiresOutsideAudioCallback();
-  testCrossfadePromotionClearsStaleLocalPreloadState();
-  testRenderSideDecodeStreamRetirementDoesNotAllocateOrDestroy();
-  testSetDspConfigPreparesActiveChainForPreRoutingDecodeFormat();
-  testDsdProcessingPcmDecisionUsesSharedHelper();
-  testTwilightAudioEngineReusesParsedDspConfigSnapshot();
-  testVolumeCommandAppliesAtRenderBoundary();
-  testVolumeCommandStormCoalescesToNewestValue();
-  testDspGraphCommandAppliesAtRenderBoundary();
-  testDspGraphEpochRetirementStaysBoundedAcrossOneThousandUpdates();
-  testRetiredDecodeStreamsAreReclaimedWhilePlaying();
-  testApplyDspStateGraphPreparationFailureIsTransactional();
-  testApplyDspStateCapacityFailureKeepsLastAcceptedState();
-  testStoppedVolumeAcceptanceIsVisibleBeforePlayback();
-  testConfigAppliedEventFollowsRenderApplication();
-  testIdleClockWakesPromptlyOnPlayAndShutdown();
-  testDisabledStateEventsSkipPlaybackSnapshots();
-  testDsd64StartsOnDop();
-  testPcmTypedPassthroughKeepsTypedPathDuringTransientDecoderLag();
-  testPcmTypedPassthroughIsOutputPerfect();
-  testPcm192kTypedPassthroughIsOutputPerfect();
-  testPcmExactFormatWithoutTypedRuntimeIsNotPassthrough();
-  testOutputStartWaitsForFirstDecodedFrames();
-  testOutputStartDoesNotWaitForPrerollTimeoutAtEof();
-  testBackendRenderErrorIsReportedThroughLastError();
-  testStoppedSetOutputDeviceKeepsOutputInfoDeviceNamesConsistent();
-  testOutputRouteTransactionCommitsOnceAfterBackendDeviceConfig();
-  testAutoOutputDeviceRefreshCommitsRouteTransaction();
-  testRenderWaitsForTransientDecoderLag();
-  testRoutedRenderHandlesCallbacksLargerThanPreparedScratch();
-  testPcmVolumeFallsBackToFloatProcessing();
-  testDsd128StartsOnDop();
-  testAsioAutoPrefersNativeDsd();
-  testAlsaNativeDsdAcceptsTransportFrameRate();
-  testAsioDopModeDoesNotTryNativeDsd();
-  testAsioDopCandidateIsProvenAfterStart();
-  testAsioDopCandidateAfterStartFallsBackToPcm();
-  testNativeDsdMuteTimeoutStopsWithoutAdvancingPosition();
-  testDsdToPcmTransitionsMuteFloatWithoutAdvancingPosition();
-  testAsioPcmModeDoesNotTryNativeDsd();
-  testAsioNativeDsdMismatchFallsBackToDop();
-  testDsdRouteOverrideCarriesNativeDsdOffMainBackend();
-  testDsdRouteOverrideFallsBackToMainRouteWhenProxyMissing();
-  testDsdRouteStrictPassthroughFailsInsteadOfDegradingToPcm();
-  testDsdRouteOverrideIsNotUsedForPlainPcmSources();
-  testDsdRouteAutoDiscoveryUsesProbeVerifiedProxy();
-  testDsdRouteAutoDiscoveryIsInertWithoutCapableDevice();
-  testExplicitDsdRouteWinsOverAutoDiscovery();
-  testDsdRouteAutoDiscoveryFallsBackToMainRouteWhenProxyRefuses();
-  testAsioNativeDsdAndDopFailureFallsBackToPcm();
-  testAsioNativeDsdUnsupportedAndDopFailureFallsBackToPcm();
-  testDsd256StartsOnWasapiExclusiveDop();
-  testDsd512StartsOnWasapiExclusiveDop();
-  testDsd256StartsOnAsioNativeDsd();
-  testNativeDsdPositionUsesBitSampleFrames();
-  testDsd512StartsOnAsioNativeDsd();
-  testDsd512ForcedPcmUsesExplicitFallbackRate();
-  testSacdIsoTrackUsesAsioNativeDsd();
-  testSacdIsoTrackFallsBackToPcmWhenProcessingActive();
-  testDsdDownratePolicyNegotiatesRateFirstAndReportsActualRate();
-  testDsdDownratePolicyFallsBackToPcmAfterAllDsdRatesAreRejected();
-  testDsdExactPolicyRejectsUnavailableSourceRateWithoutPcmFallback();
-  testDopMismatchFallsBackWithStableCode();
-  testDopUnprovenFallsBackWithStableCode();
-  testInitialNonUnityVolumeUsesPcmFallback();
-  testNonUnityVolumeTicksDoNotRestartDsdPlayback();
-  testEqEnableRequestsPcmReroute();
-  testDisabledGraphKeepsDsdPassthroughDespiteLegacyEqFlag();
-  testEnabledGraphNodeStillForcesDsdPcmFallback();
-  testEnabledButFlatGraphEqKeepsDsdPassthrough();
-  testFlatLegacyEqKeepsDsdPassthrough();
-  testVolumeChangeRequestsPcmReroute();
-  testUnityVolumeReentersForcedDopFromPcm();
-  testDsdOutputModePcmRequestsPcmReroute();
-  testDsdOutputModeDopReentersDopPath();
-  testSeekReevaluatesDsdPath();
-  testPausedSettingsFallbackBeforeResume();
-  testWasapiExclusiveTopologyUpdateReopensAndResumesPlaying();
-  testWasapiExclusiveTopologyStartFailureRollsBackAndPreservesPausedState();
-  testWasapiExclusiveTopologyDeviceInvalidationRollsBack();
-  testManualNextDoesNotInheritDsdPath();
-  testAutoNextDoesNotInheritDsdPath();
-  testNativeCrossfadeOverlapMixesPreloadAndPromotes();
-  testNativeCrossfadeOverlapMixesPreloadAndPromotes(true);
-  testCrossfadeDiscontinuitiesRestartPreloadAtItsBeginning();
-  testPreloadedPromotionKeepsRuntimeReplayGainSettings();
-  testGaplessBlockedReasonReportsCrossfadeAndDisabled();
-  testAutoNextPrefersPreloadedPromoteWithoutReopen();
-  testContinuityPolicyConvertsMixedFormatsAndRejectsDsdPreload();
-  testOriginalPolicyRejectsMixedFormatAndPolicySwitchRetainsPause();
-  testSingleFileCueSegmentsSeekPromoteGaplesslyAndRetainReplayGain();
-  testCueVirtualPregapRendersExactPcmSilenceAndMapsSeek();
-  testCueSameSourcePreloadPreservesFullVirtualPregapWithCrossfadeEnabled();
-  testCueNativeDsdSegmentUsesBitSampleFrameRate();
-  testCueDopPregapOutputsCanonicalCarrierAndResetsMarkerAfterSeek();
+  RUN_RUNTIME_CASE(testFixedSpscQueuePreservesFifoAndReportsFull());
+  RUN_RUNTIME_CASE(testFloatScratchResizeForOverwritePreservesSameSizedScratch());
+  RUN_RUNTIME_CASE(testVisualizationFftResolutionMatchesWebAudioReference());
+  RUN_RUNTIME_CASE(testRenderCallbacksDoNotResizePipelineScratchBuffers());
+  RUN_RUNTIME_CASE(testDecodeStreamReadFloatDoesNotResizeTypedScratch());
+  RUN_RUNTIME_CASE(testRenderCallbacksDoNotReconfigureDspChains());
+  RUN_RUNTIME_CASE(testRenderCallbackDoesNotCopyDspConfig());
+  RUN_RUNTIME_CASE(testRenderCallbacksDoNotBlockOnPipelineMutex());
+  RUN_RUNTIME_CASE(testRenderCallbacksDoNotWaitForDecoderBuffers());
+  RUN_RUNTIME_CASE(testNativeDsdRenderPositionAccountsForBitsPerByte());
+  RUN_RUNTIME_CASE(testRenderTypedGatesDopMarkerWritesOnDsdTransport());
+  RUN_RUNTIME_CASE(testTypedDsdFormatMismatchEmitsTransportIdleInsteadOfPcmFallback());
+  RUN_RUNTIME_CASE(testChannelRouterStateIsOwnedByRenderCallback());
+  RUN_RUNTIME_CASE(testRenderCallbacksUseNonBlockingSpectrumReset());
+  RUN_RUNTIME_CASE(testRenderCallbackDoesNotStopDecodeStreams());
+  RUN_RUNTIME_CASE(testSetDspConfigParsesJsonOutsidePipelineMutex());
+  RUN_RUNTIME_CASE(testSetVolumeAvoidsBlockingOnPipelineMutex());
+  RUN_RUNTIME_CASE(testFallbackStatusPreservesStableTransportState());
+  RUN_RUNTIME_CASE(testVolumeCommandApplicationIsRealtimeSafe());
+  RUN_RUNTIME_CASE(testVolumeCommandCallbackWorkIsBoundedAndUsesPortableAtomics());
+  RUN_RUNTIME_CASE(testDecodeStreamReaperRetiresOutsideAudioCallback());
+  RUN_RUNTIME_CASE(testCrossfadePromotionClearsStaleLocalPreloadState());
+  RUN_RUNTIME_CASE(testRenderSideDecodeStreamRetirementDoesNotAllocateOrDestroy());
+  RUN_RUNTIME_CASE(testSetDspConfigPreparesActiveChainForPreRoutingDecodeFormat());
+  RUN_RUNTIME_CASE(testDsdProcessingPcmDecisionUsesSharedHelper());
+  RUN_RUNTIME_CASE(testTwilightAudioEngineReusesParsedDspConfigSnapshot());
+  RUN_RUNTIME_CASE(testVolumeCommandAppliesAtRenderBoundary());
+  RUN_RUNTIME_CASE(testVolumeCommandStormCoalescesToNewestValue());
+  RUN_RUNTIME_CASE(testDspGraphCommandAppliesAtRenderBoundary());
+  RUN_RUNTIME_CASE(testDspGraphEpochRetirementStaysBoundedAcrossOneThousandUpdates());
+  RUN_RUNTIME_CASE(testRetiredDecodeStreamsAreReclaimedWhilePlaying());
+  RUN_RUNTIME_CASE(testApplyDspStateGraphPreparationFailureIsTransactional());
+  RUN_RUNTIME_CASE(testApplyDspStateCapacityFailureKeepsLastAcceptedState());
+  RUN_RUNTIME_CASE(testStoppedVolumeAcceptanceIsVisibleBeforePlayback());
+  RUN_RUNTIME_CASE(testConfigAppliedEventFollowsRenderApplication());
+  RUN_RUNTIME_CASE(testClockSnapshotCannotUndoCompletedPause());
+  RUN_RUNTIME_CASE(testIdleClockWakesPromptlyOnPlayAndShutdown());
+  RUN_RUNTIME_CASE(testDisabledStateEventsSkipPlaybackSnapshots());
+  RUN_RUNTIME_CASE(testDsd64StartsOnDop());
+  RUN_RUNTIME_CASE(testPcmTypedPassthroughKeepsTypedPathDuringTransientDecoderLag());
+  RUN_RUNTIME_CASE(testPcmTypedPassthroughIsOutputPerfect());
+  RUN_RUNTIME_CASE(testPcm192kTypedPassthroughIsOutputPerfect());
+  RUN_RUNTIME_CASE(testPcmExactFormatWithoutTypedRuntimeIsNotPassthrough());
+  RUN_RUNTIME_CASE(testOutputStartWaitsForFirstDecodedFrames());
+  RUN_RUNTIME_CASE(testOutputStartDoesNotWaitForPrerollTimeoutAtEof());
+  RUN_RUNTIME_CASE(testBackendRenderErrorIsReportedThroughLastError());
+  RUN_RUNTIME_CASE(testStoppedSetOutputDeviceKeepsOutputInfoDeviceNamesConsistent());
+  RUN_RUNTIME_CASE(testOutputRouteTransactionCommitsOnceAfterBackendDeviceConfig());
+  RUN_RUNTIME_CASE(testAutoOutputDeviceRefreshCommitsRouteTransaction());
+  RUN_RUNTIME_CASE(testRenderWaitsForTransientDecoderLag());
+  RUN_RUNTIME_CASE(testRoutedRenderHandlesCallbacksLargerThanPreparedScratch());
+  RUN_RUNTIME_CASE(testPcmVolumeFallsBackToFloatProcessing());
+  RUN_RUNTIME_CASE(testDsd128StartsOnDop());
+  RUN_RUNTIME_CASE(testAsioAutoPrefersNativeDsd());
+  RUN_RUNTIME_CASE(testAlsaNativeDsdAcceptsTransportFrameRate());
+  RUN_RUNTIME_CASE(testAsioDopModeDoesNotTryNativeDsd());
+  RUN_RUNTIME_CASE(testAsioDopCandidateIsProvenAfterStart());
+  RUN_RUNTIME_CASE(testAsioDopCandidateAfterStartFallsBackToPcm());
+  RUN_RUNTIME_CASE(testNativeDsdMuteTimeoutStopsWithoutAdvancingPosition());
+  RUN_RUNTIME_CASE(testDsdToPcmTransitionsMuteFloatWithoutAdvancingPosition());
+  RUN_RUNTIME_CASE(testAsioPcmModeDoesNotTryNativeDsd());
+  RUN_RUNTIME_CASE(testAsioNativeDsdMismatchFallsBackToDop());
+  RUN_RUNTIME_CASE(testDsdRouteOverrideCarriesNativeDsdOffMainBackend());
+  RUN_RUNTIME_CASE(testDsdRouteOverrideFallsBackToMainRouteWhenProxyMissing());
+  RUN_RUNTIME_CASE(testDsdRouteStrictPassthroughFailsInsteadOfDegradingToPcm());
+  RUN_RUNTIME_CASE(testDsdRouteOverrideIsNotUsedForPlainPcmSources());
+  RUN_RUNTIME_CASE(testDsdRouteAutoDiscoveryUsesProbeVerifiedProxy());
+  RUN_RUNTIME_CASE(testDsdRouteAutoDiscoveryIsInertWithoutCapableDevice());
+  RUN_RUNTIME_CASE(testExplicitDsdRouteWinsOverAutoDiscovery());
+  RUN_RUNTIME_CASE(testDsdRouteAutoDiscoveryFallsBackToMainRouteWhenProxyRefuses());
+  RUN_RUNTIME_CASE(testAsioNativeDsdAndDopFailureFallsBackToPcm());
+  RUN_RUNTIME_CASE(testAsioNativeDsdUnsupportedAndDopFailureFallsBackToPcm());
+  RUN_RUNTIME_CASE(testDsd256StartsOnWasapiExclusiveDop());
+  RUN_RUNTIME_CASE(testDsd512StartsOnWasapiExclusiveDop());
+  RUN_RUNTIME_CASE(testDsd256StartsOnAsioNativeDsd());
+  RUN_RUNTIME_CASE(testNativeDsdPositionUsesBitSampleFrames());
+  RUN_RUNTIME_CASE(testDsd512StartsOnAsioNativeDsd());
+  RUN_RUNTIME_CASE(testDsd512ForcedPcmUsesExplicitFallbackRate());
+  RUN_RUNTIME_CASE(testSacdIsoTrackUsesAsioNativeDsd());
+  RUN_RUNTIME_CASE(testSacdIsoTrackFallsBackToPcmWhenProcessingActive());
+  RUN_RUNTIME_CASE(testDsdDownratePolicyNegotiatesRateFirstAndReportsActualRate());
+  RUN_RUNTIME_CASE(testDsdDownratePolicyFallsBackToPcmAfterAllDsdRatesAreRejected());
+  RUN_RUNTIME_CASE(testDsdExactPolicyRejectsUnavailableSourceRateWithoutPcmFallback());
+  RUN_RUNTIME_CASE(testDopMismatchFallsBackWithStableCode());
+  RUN_RUNTIME_CASE(testDopUnprovenFallsBackWithStableCode());
+  RUN_RUNTIME_CASE(testInitialNonUnityVolumeUsesPcmFallback());
+  RUN_RUNTIME_CASE(testNonUnityVolumeTicksDoNotRestartDsdPlayback());
+  RUN_RUNTIME_CASE(testEqEnableRequestsPcmReroute());
+  RUN_RUNTIME_CASE(testDisabledGraphKeepsDsdPassthroughDespiteLegacyEqFlag());
+  RUN_RUNTIME_CASE(testEnabledGraphNodeStillForcesDsdPcmFallback());
+  RUN_RUNTIME_CASE(testEnabledButFlatGraphEqKeepsDsdPassthrough());
+  RUN_RUNTIME_CASE(testFlatLegacyEqKeepsDsdPassthrough());
+  RUN_RUNTIME_CASE(testVolumeChangeRequestsPcmReroute());
+  RUN_RUNTIME_CASE(testUnityVolumeReentersForcedDopFromPcm());
+  RUN_RUNTIME_CASE(testDsdOutputModePcmRequestsPcmReroute());
+  RUN_RUNTIME_CASE(testDsdOutputModeDopReentersDopPath());
+  RUN_RUNTIME_CASE(testSeekReevaluatesDsdPath());
+  RUN_RUNTIME_CASE(testPausedSettingsFallbackBeforeResume());
+  RUN_RUNTIME_CASE(testWasapiExclusiveTopologyUpdateReopensAndResumesPlaying());
+  RUN_RUNTIME_CASE(testWasapiExclusiveTopologyStartFailureRollsBackAndPreservesPausedState());
+  RUN_RUNTIME_CASE(testWasapiExclusiveTopologyDeviceInvalidationRollsBack());
+  RUN_RUNTIME_CASE(testManualNextDoesNotInheritDsdPath());
+  RUN_RUNTIME_CASE(testAutoNextDoesNotInheritDsdPath());
+  RUN_RUNTIME_CASE(testNativeCrossfadeOverlapMixesPreloadAndPromotes());
+  RUN_RUNTIME_CASE(testNativeCrossfadeOverlapMixesPreloadAndPromotes(true));
+  RUN_RUNTIME_CASE(testCrossfadeDiscontinuitiesRestartPreloadAtItsBeginning());
+  RUN_RUNTIME_CASE(testPreloadedPromotionKeepsRuntimeReplayGainSettings());
+  RUN_RUNTIME_CASE(testGaplessBlockedReasonReportsCrossfadeAndDisabled());
+  RUN_RUNTIME_CASE(testAutoNextPrefersPreloadedPromoteWithoutReopen());
+  RUN_RUNTIME_CASE(testContinuityPolicyConvertsMixedFormatsAndRejectsDsdPreload());
+  RUN_RUNTIME_CASE(testOriginalPolicyRejectsMixedFormatAndPolicySwitchRetainsPause());
+  RUN_RUNTIME_CASE(testSingleFileCueSegmentsSeekPromoteGaplesslyAndRetainReplayGain());
+  RUN_RUNTIME_CASE(testCueVirtualPregapRendersExactPcmSilenceAndMapsSeek());
+  RUN_RUNTIME_CASE(testCueSameSourcePreloadPreservesFullVirtualPregapWithCrossfadeEnabled());
+  RUN_RUNTIME_CASE(testCueNativeDsdSegmentUsesBitSampleFrameRate());
+  RUN_RUNTIME_CASE(testCueDopPregapOutputsCanonicalCarrierAndResetsMarkerAfterSeek());
   return 0;
 }

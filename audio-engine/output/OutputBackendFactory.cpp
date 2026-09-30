@@ -111,7 +111,28 @@ std::string defaultBackendId() {
 #endif
 }
 
+bool isOutputBackendAvailable(const std::string& backendId) {
+  (void)backendId;  // Builds with every platform backend disabled still compile cleanly.
+#if defined(_WIN32) && defined(TAE_ENABLE_WASAPI)
+  if (backendId == "wasapi" || backendId == "wasapi-shared" || backendId == "wasapi-exclusive") return true;
+#endif
+#if defined(_WIN32) && defined(TAE_ENABLE_ASIO)
+  if (backendId == "asio") return true;
+#endif
+#if defined(__APPLE__) && defined(TAE_ENABLE_COREAUDIO)
+  if (backendId == "coreaudio" || backendId == "coreaudio-exclusive") return true;
+#endif
+#if defined(__linux__) && defined(TAE_ENABLE_ALSA)
+  if (backendId == "alsa") return true;
+#endif
+  return false;
+}
+
 std::unique_ptr<IOutputBackend> createOutputBackend(const std::string& backendId, std::string* error) {
+  if (!isOutputBackendAvailable(backendId)) {
+    if (error) *error = "Output backend is not available in this build: " + backendId;
+    return nullptr;
+  }
 #if defined(_WIN32) && defined(TAE_ENABLE_WASAPI)
   if (backendId == "wasapi" || backendId == "wasapi-shared") {
     const PcmOutputProviderSelection& selection = configuredPcmOutputProvider();

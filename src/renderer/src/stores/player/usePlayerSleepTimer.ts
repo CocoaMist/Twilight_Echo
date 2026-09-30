@@ -7,6 +7,12 @@ import type {
 import { createSleepTimerController, type SleepTimerBridge } from '../sleepTimerController.ts'
 import { createSleepTimerFadeController } from '../sleepTimerFade.ts'
 
+interface SleepTimerEvents {
+  getState(): Promise<SleepTimerState | null>
+  onState(callback: (state: SleepTimerState | null) => void): () => void
+  onTrigger(callback: (state: SleepTimerState) => void): () => void
+}
+
 export interface PlayerSleepTimerOptions {
   volume: Ref<number>
   muted: Ref<boolean>
@@ -15,7 +21,7 @@ export interface PlayerSleepTimerOptions {
   state: Ref<SleepTimerState | null>
   notice: Ref<string | null>
   getSettings: () => SleepTimerSettings
-  getBridge: () => SleepTimerBridge | null | undefined
+  getBridge: () => (SleepTimerBridge & Partial<SleepTimerEvents>) | null | undefined
   persistSession: () => void
   clearCrossfade: () => void
   stopVisualization: () => void
@@ -26,6 +32,9 @@ export interface PlayerSleepTimerOptions {
 export function createPlayerSleepTimer(options: PlayerSleepTimerOptions) {
   let fadeController: ReturnType<typeof createSleepTimerFadeController> | null = null
   let timerController: ReturnType<typeof createSleepTimerController> | null = null
+  let started = false
+  let disposed = false
+  const subscriptions: Array<() => void> = []
 
   function clearIntervals(): void {
     fadeController?.clear()
@@ -74,16 +83,19 @@ export function createPlayerSleepTimer(options: PlayerSleepTimerOptions) {
         },
         onTriggered: beginSleepShutdown
       })
+      if (disposed) timerController.dispose()
     }
     return timerController
   }
 
   function configure(mode: SleepTimerMode, minutes?: number): void {
+    if (disposed) return
     clearIntervals()
     getController().configure(mode, minutes)
   }
 
   function cancel(): void {
+    if (disposed) return
     clearIntervals()
     getController().cancel()
   }
@@ -92,6 +104,35 @@ export function createPlayerSleepTimer(options: PlayerSleepTimerOptions) {
     clearIntervals,
     getController,
     configure,
-    cancel
+    cancel,
+    start(): void {
+      if (started || disposed) return
+      started = true
+      const bridge = options.getBridge()
+      if (!bridge) return
+      const controller = getController()
+      const isCurrent = controller.capture()
+      if (bridge.onState) subscriptions.push(bridge.onState(controller.applyAuthoritativeState))
+      if (bridge.onTrigger) subscriptions.push(bridge.onTrigger(controller.applyTrigger))
+      void bridge
+        .getState?.()
+        .then((state) => {
+          if (isCurrent() && state?.active) controller.applyAuthoritativeState(state)
+        })
+        .catch(() => {})
+    },
+    dispose(): void {
+      if (disposed) return
+      disposed = true
+      timerController?.dispose()
+      clearIntervals()
+      for (const stop of subscriptions.splice(0)) {
+        try {
+          stop()
+        } catch {
+          /* Release remaining subscriptions too. */
+        }
+      }
+    }
   }
 }

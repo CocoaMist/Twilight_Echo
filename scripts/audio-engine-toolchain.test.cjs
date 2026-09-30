@@ -10,7 +10,7 @@ const {
   writeFileSync
 } = require('node:fs')
 const { tmpdir } = require('node:os')
-const { join } = require('node:path')
+const { join, resolve, parse, delimiter } = require('node:path')
 const crypto = require('node:crypto')
 const { spawnSync } = require('node:child_process')
 const test = require('node:test')
@@ -98,6 +98,11 @@ function writeRuntimeFixture(directory, file, options = {}) {
   writeFileSync(join(directory, file), createMinimalPe(options))
 }
 
+// Virtual absolute fixture paths; no toolchain installation is needed on the host.
+function fixturePath(...parts) {
+  return join(parse(tmpdir()).root, 'twilight-toolchain-fixtures', ...parts).replaceAll('\\', '/')
+}
+
 function createExistsSync(paths) {
   const existing = new Set(paths.map((entry) => entry.replaceAll('\\', '/').toLowerCase()))
   return (entry) => existing.has(String(entry).replaceAll('\\', '/').toLowerCase())
@@ -126,9 +131,9 @@ function createGnuPatchSpawnSync() {
 }
 
 test('prepares a deterministic MSVC and Ninja environment for the ASIO ABI fixture', () => {
-  const installRoot = 'E:/tools/vs2022-buildtools'
+  const installRoot = fixturePath('tools/vs2022-buildtools')
   const msvcVersion = '14.44.35207'
-  const sdkRoot = 'C:/Program Files (x86)/Windows Kits/10'
+  const sdkRoot = fixturePath('Program Files (x86)/Windows Kits/10')
   const sdkVersion = '10.0.26100.0'
   const existing = [
     `${installRoot}/Common7/Tools/VsDevCmd.bat`,
@@ -158,8 +163,8 @@ test('prepares a deterministic MSVC and Ninja environment for the ASIO ABI fixtu
   const result = prepareAsioMsvcNinjaToolchain({
     env: {
       TAE_ASIO_MSVC_INSTALL_ROOT: installRoot,
-      'ProgramFiles(x86)': 'C:/Program Files (x86)',
-      PATH: 'C:/Windows/System32'
+      'ProgramFiles(x86)': fixturePath('Program Files (x86)'),
+      PATH: fixturePath('Windows/System32')
     },
     exists: createExistsSync(existing),
     readDirectories: (path) => {
@@ -176,11 +181,14 @@ test('prepares a deterministic MSVC and Ninja environment for the ASIO ABI fixtu
   assert.equal(result.ok, true)
   assert.equal(result.msvcVersion, msvcVersion)
   assert.equal(result.sdkVersion, sdkVersion)
-  assert.match(result.environment.PATH, /Hostx64\\x64/)
-  assert.match(result.environment.INCLUDE, /MSVC\\14\.44\.35207\\include/)
-  assert.match(result.environment.LIB, /Windows Kits\\10\\Lib\\10\.0\.26100\.0\\um\\x64/)
-  assert.match(result.cmakePath, /CMake\\bin\\cmake\.exe$/)
-  assert.match(result.ninjaPath, /CMake\\Ninja\\ninja\.exe$/)
+  assert.match(cmakeCachePath(result.environment.PATH), /Hostx64\/x64/)
+  assert.match(cmakeCachePath(result.environment.INCLUDE), /MSVC\/14\.44\.35207\/include/)
+  assert.match(
+    cmakeCachePath(result.environment.LIB),
+    /Windows Kits\/10\/Lib\/10\.0\.26100\.0\/um\/x64/
+  )
+  assert.match(cmakeCachePath(result.cmakePath), /CMake\/bin\/cmake\.exe$/)
+  assert.match(cmakeCachePath(result.ninjaPath), /CMake\/Ninja\/ninja\.exe$/)
 })
 
 test('normalizes MSVC cache paths before passing them to CMake', () => {
@@ -192,8 +200,8 @@ test('normalizes MSVC cache paths before passing them to CMake', () => {
 
 test('uses the MSVC Ninja build directory by default for ASIO ABI fixtures', () => {
   assert.match(
-    resolveAsioMsvcBuildDirectory({}, 'C:/repo'),
-    /audio-engine\\build\\asio-msvc-ninja-x64$/
+    cmakeCachePath(resolveAsioMsvcBuildDirectory({}, fixturePath('repo'))),
+    /audio-engine\/build\/asio-msvc-ninja-x64$/
   )
 })
 
@@ -209,8 +217,8 @@ test('rejects a missing MinGW toolchain environment before CMake configures', ()
 })
 
 test('accepts an installed toolchain and rejects CTest entries from a moved build directory', () => {
-  const vcpkgRoot = 'C:/tools/vcpkg'
-  const devkitRoot = 'C:/tools/w64devkit'
+  const vcpkgRoot = fixturePath('tools/vcpkg')
+  const devkitRoot = fixturePath('tools/w64devkit')
   const buildDir = 'C:/repo/audio-engine/build/mingw-static'
   const result = validateMingwToolchain({
     env: { VCPKG_ROOT: vcpkgRoot, W64DEVKIT_ROOT: devkitRoot },
@@ -239,7 +247,7 @@ function registeredCTestOutput(names = MINGW_EXPECTED_CTESTS) {
 }
 
 test('fails closed when a MinGW build has no CMake cache or CTest file', () => {
-  const buildDir = 'C:/twilight-build/mingw-static'
+  const buildDir = fixturePath('twilight-build/mingw-static')
   const missingCache = validateMingwCTestRegistration({
     buildDir,
     existsSync: createExistsSync([]),
@@ -262,11 +270,11 @@ test('fails closed when a MinGW build has no CMake cache or CTest file', () => {
 })
 
 test('rejects zero or incomplete MinGW CTest discovery even when ctest exits zero', () => {
-  const buildDir = 'C:/twilight-build/mingw-static'
+  const buildDir = fixturePath('twilight-build/mingw-static')
   const base = {
     buildDir,
     existsSync: createExistsSync([`${buildDir}/CMakeCache.txt`, `${buildDir}/CTestTestfile.cmake`]),
-    readFileSync: () => 'add_test(NAME local COMMAND "C:/twilight-build/mingw-static/local.exe")'
+    readFileSync: () => `add_test(NAME local COMMAND "${buildDir}/local.exe")`
   }
 
   const zeroTests = validateMingwCTestRegistration({
@@ -289,12 +297,11 @@ test('rejects zero or incomplete MinGW CTest discovery even when ctest exits zer
 })
 
 test('accepts a configured MinGW build only when every native CTest is registered', () => {
-  const buildDir = 'C:/twilight-build/mingw-static'
+  const buildDir = fixturePath('twilight-build/mingw-static')
   const result = validateMingwCTestRegistration({
     buildDir,
     existsSync: createExistsSync([`${buildDir}/CMakeCache.txt`, `${buildDir}/CTestTestfile.cmake`]),
-    readFileSync: () =>
-      'add_test(NAME local COMMAND "C:/twilight-build/mingw-static/twilight_audio_tests.exe")',
+    readFileSync: () => `add_test(NAME local COMMAND "${buildDir}/twilight_audio_tests.exe")`,
     spawnSync: () => ({ status: 0, stdout: registeredCTestOutput(), stderr: '' })
   })
   assert.equal(result.ok, true)
@@ -303,7 +310,7 @@ test('accepts a configured MinGW build only when every native CTest is registere
 })
 
 test('fails closed when the MinGW cache was configured without vcpkg native dependencies', () => {
-  const buildDir = 'C:/twilight-build/mingw-static'
+  const buildDir = fixturePath('twilight-build/mingw-static')
   const cache = `${buildDir}/CMakeCache.txt`
   const result = validateMingwNativeDependencyConfiguration({
     buildDir,
@@ -324,7 +331,7 @@ test('fails closed when the MinGW cache was configured without vcpkg native depe
 })
 
 test('accepts a MinGW cache only when vcpkg FFmpeg and libebur128 resolve from the selected build', () => {
-  const buildDir = 'C:/twilight-build/mingw-static'
+  const buildDir = fixturePath('twilight-build/mingw-static')
   const installRoot = `${buildDir}/vcpkg_installed`
   const tripletRoot = `${installRoot}/x64-mingw-static`
   const cache = `${buildDir}/CMakeCache.txt`
@@ -353,16 +360,16 @@ test('accepts a MinGW cache only when vcpkg FFmpeg and libebur128 resolve from t
 })
 
 test('prepares a MinGW environment with GNU patch before the w64devkit tools', () => {
-  const vcpkgRoot = 'C:/tools/vcpkg'
-  const devkitRoot = 'C:/tools/w64devkit'
-  const programFiles = 'C:/Program Files'
+  const vcpkgRoot = fixturePath('tools/vcpkg')
+  const devkitRoot = fixturePath('tools/w64devkit')
+  const programFiles = fixturePath('Program Files')
   const gnuPatch = `${programFiles}/Git/usr/bin/patch.exe`
   const result = prepareMingwCmakeEnvironment({
     env: {
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
       ProgramFiles: programFiles,
-      PATH: 'C:/Windows/System32'
+      PATH: fixturePath('Windows/System32')
     },
     existsSync: createExistsSync([
       `${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake`,
@@ -374,7 +381,7 @@ test('prepares a MinGW environment with GNU patch before the w64devkit tools', (
       gnuPatch
     ]),
     spawnSync: createSpawnSync({
-      'C:\\Program Files\\Git\\usr\\bin\\patch.exe': {
+      [resolve(gnuPatch)]: {
         status: 0,
         stdout: 'GNU patch 2.7.6',
         stderr: ''
@@ -383,23 +390,23 @@ test('prepares a MinGW environment with GNU patch before the w64devkit tools', (
   })
 
   assert.equal(result.ok, true)
-  assert.match(
-    result.environment.PATH,
-    /^C:\\Program Files\\Git\\usr\\bin;C:\\tools\\w64devkit\\bin;/
-  )
+  assert.deepEqual(result.environment.PATH.split(delimiter).slice(0, 2), [
+    join(programFiles, 'Git', 'usr', 'bin'),
+    join(devkitRoot, 'bin')
+  ])
 })
 
 test('preserves a Windows Path environment value when building the MinGW PATH', () => {
-  const vcpkgRoot = 'C:/tools/vcpkg'
-  const devkitRoot = 'C:/tools/w64devkit'
-  const programFiles = 'C:/Program Files'
+  const vcpkgRoot = fixturePath('tools/vcpkg')
+  const devkitRoot = fixturePath('tools/w64devkit')
+  const programFiles = fixturePath('Program Files')
   const gnuPatch = `${programFiles}/Git/usr/bin/patch.exe`
   const result = prepareMingwCmakeEnvironment({
     env: {
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
       ProgramFiles: programFiles,
-      Path: 'C:/Windows/System32;C:/Windows'
+      Path: [fixturePath('Windows/System32'), fixturePath('Windows')].join(delimiter)
     },
     existsSync: createExistsSync([
       `${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake`,
@@ -415,20 +422,23 @@ test('preserves a Windows Path environment value when building the MinGW PATH', 
 
   assert.equal(result.ok, true)
   assert.equal(result.environment.Path, undefined)
-  assert.match(result.environment.PATH, /C:\/Windows\/System32;C:\/Windows$/)
+  assert.deepEqual(result.environment.PATH.split(delimiter).slice(-2), [
+    fixturePath('Windows/System32'),
+    fixturePath('Windows')
+  ])
 })
 
 test('rejects a TWILIGHT_GNU_PATCH override that is not GNU patch', () => {
-  const vcpkgRoot = 'C:/tools/vcpkg'
-  const devkitRoot = 'C:/tools/w64devkit'
+  const vcpkgRoot = fixturePath('tools/vcpkg')
+  const devkitRoot = fixturePath('tools/w64devkit')
   const busyboxPatch = `${devkitRoot}/bin/patch.exe`
   const result = prepareMingwCmakeEnvironment({
     env: {
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
       TWILIGHT_GNU_PATCH: busyboxPatch,
-      ProgramFiles: 'C:/Program Files',
-      PATH: 'C:/Windows/System32'
+      ProgramFiles: fixturePath('Program Files'),
+      PATH: fixturePath('Windows/System32')
     },
     existsSync: createExistsSync([
       `${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake`,
@@ -438,10 +448,10 @@ test('rejects a TWILIGHT_GNU_PATCH override that is not GNU patch', () => {
       `${devkitRoot}/bin/x86_64-w64-mingw32-g++.exe`,
       `${devkitRoot}/bin/ninja.exe`,
       busyboxPatch,
-      'C:/Program Files/Git/usr/bin/patch.exe'
+      fixturePath('Program Files/Git/usr/bin/patch.exe')
     ]),
     spawnSync: createSpawnSync({
-      'C:\\tools\\w64devkit\\bin\\patch.exe': {
+      [resolve(busyboxPatch)]: {
         status: 0,
         stdout: 'BusyBox v1.36.1',
         stderr: ''
@@ -455,15 +465,15 @@ test('rejects a TWILIGHT_GNU_PATCH override that is not GNU patch', () => {
 })
 
 test('rejects an automatic Git patch path that does not identify as GNU patch', () => {
-  const vcpkgRoot = 'C:/tools/vcpkg'
-  const devkitRoot = 'C:/tools/w64devkit'
-  const gnuPatch = 'C:/Program Files/Git/usr/bin/patch.exe'
+  const vcpkgRoot = fixturePath('tools/vcpkg')
+  const devkitRoot = fixturePath('tools/w64devkit')
+  const gnuPatch = fixturePath('Program Files/Git/usr/bin/patch.exe')
   const result = prepareMingwCmakeEnvironment({
     env: {
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
-      ProgramFiles: 'C:/Program Files',
-      PATH: 'C:/Windows/System32'
+      ProgramFiles: fixturePath('Program Files'),
+      PATH: fixturePath('Windows/System32')
     },
     existsSync: createExistsSync([
       `${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake`,
@@ -489,13 +499,13 @@ test('rejects an automatic Git patch path that does not identify as GNU patch', 
 })
 
 test('rejects a w64devkit environment without a compatible GNU patch executable', () => {
-  const vcpkgRoot = 'C:/tools/vcpkg'
-  const devkitRoot = 'C:/tools/w64devkit'
+  const vcpkgRoot = fixturePath('tools/vcpkg')
+  const devkitRoot = fixturePath('tools/w64devkit')
   const result = prepareMingwCmakeEnvironment({
     env: {
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
-      PATH: 'C:/Windows/System32'
+      PATH: fixturePath('Windows/System32')
     },
     existsSync: createExistsSync([
       `${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake`,
@@ -514,7 +524,7 @@ test('rejects a w64devkit environment without a compatible GNU patch executable'
 
 test('reports missing CMake and CTest before native configuration or test discovery', () => {
   const missingCmake = validateMingwBuildCommands({
-    env: { PATH: 'C:/Windows/System32' },
+    env: { PATH: fixturePath('Windows/System32') },
     spawnSync: createSpawnSync({
       cmake: { error: new Error('spawn cmake ENOENT'), status: null, stdout: '', stderr: '' },
       ctest: { status: 0, stdout: 'ctest version 3.30.0', stderr: '' }
@@ -525,7 +535,7 @@ test('reports missing CMake and CTest before native configuration or test discov
   assert.match(missingCmake.message, /PATH/)
 
   const missingCtest = validateMingwBuildCommands({
-    env: { PATH: 'C:/Windows/System32' },
+    env: { PATH: fixturePath('Windows/System32') },
     spawnSync: createSpawnSync({
       cmake: { status: 0, stdout: 'cmake version 3.30.0', stderr: '' },
       ctest: { error: new Error('spawn ctest ENOENT'), status: null, stdout: '', stderr: '' }
@@ -538,20 +548,20 @@ test('reports missing CMake and CTest before native configuration or test discov
 
 test('requires a no-whitespace MinGW build directory and derives its temporary directory', () => {
   const missingOverride = resolveMingwBuildLayout({
-    root: 'C:/Project With Spaces/Twilight Echo',
+    root: fixturePath('Project With Spaces/Twilight Echo'),
     env: {}
   })
   assert.equal(missingOverride.ok, false)
   assert.match(missingOverride.message, /TAE_MINGW_BUILD_DIR/)
 
   const configured = resolveMingwBuildLayout({
-    root: 'C:/Project With Spaces/Twilight Echo',
-    env: { TAE_MINGW_BUILD_DIR: 'C:/twilight-build/mingw-static' }
+    root: fixturePath('Project With Spaces/Twilight Echo'),
+    env: { TAE_MINGW_BUILD_DIR: fixturePath('twilight-build/mingw-static') }
   })
   assert.deepEqual(configured, {
     ok: true,
-    buildDir: 'C:\\twilight-build\\mingw-static',
-    tempDir: 'C:\\twilight-build\\mingw-static\\tmp'
+    buildDir: resolve(fixturePath('twilight-build/mingw-static')),
+    tempDir: join(fixturePath('twilight-build/mingw-static'), 'tmp')
   })
 })
 
@@ -559,8 +569,8 @@ test('creates and validates the selected MinGW build layout before CMake runs', 
   const created = []
   const checked = []
   const result = prepareMingwBuildLayout({
-    root: 'C:/Project With Spaces/Twilight Echo',
-    env: { TAE_MINGW_BUILD_DIR: 'C:/twilight-build/mingw-static' },
+    root: fixturePath('Project With Spaces/Twilight Echo'),
+    env: { TAE_MINGW_BUILD_DIR: fixturePath('twilight-build/mingw-static') },
     mkdirSync: (directory, options) => created.push({ directory, options }),
     accessSync: (directory, mode) => checked.push({ directory, mode }),
     constants: { W_OK: 2 }
@@ -568,23 +578,29 @@ test('creates and validates the selected MinGW build layout before CMake runs', 
 
   assert.deepEqual(result, {
     ok: true,
-    buildDir: 'C:\\twilight-build\\mingw-static',
-    tempDir: 'C:\\twilight-build\\mingw-static\\tmp'
+    buildDir: resolve(fixturePath('twilight-build/mingw-static')),
+    tempDir: join(fixturePath('twilight-build/mingw-static'), 'tmp')
   })
   assert.deepEqual(created, [
-    { directory: 'C:\\twilight-build\\mingw-static', options: { recursive: true } },
-    { directory: 'C:\\twilight-build\\mingw-static\\tmp', options: { recursive: true } }
+    {
+      directory: resolve(fixturePath('twilight-build/mingw-static')),
+      options: { recursive: true }
+    },
+    {
+      directory: join(fixturePath('twilight-build/mingw-static'), 'tmp'),
+      options: { recursive: true }
+    }
   ])
   assert.deepEqual(checked, [
-    { directory: 'C:\\twilight-build\\mingw-static', mode: 2 },
-    { directory: 'C:\\twilight-build\\mingw-static\\tmp', mode: 2 }
+    { directory: resolve(fixturePath('twilight-build/mingw-static')), mode: 2 },
+    { directory: join(fixturePath('twilight-build/mingw-static'), 'tmp'), mode: 2 }
   ])
 })
 
 test('reports an actionable preflight error for an unwritable selected MinGW layout', () => {
   const result = prepareMingwBuildLayout({
-    root: 'C:/Project With Spaces/Twilight Echo',
-    env: { TAE_MINGW_BUILD_DIR: 'C:/twilight-build/mingw-static' },
+    root: fixturePath('Project With Spaces/Twilight Echo'),
+    env: { TAE_MINGW_BUILD_DIR: fixturePath('twilight-build/mingw-static') },
     mkdirSync: () => {},
     accessSync: () => {
       const error = new Error('permission denied')
@@ -596,22 +612,22 @@ test('reports an actionable preflight error for an unwritable selected MinGW lay
 
   assert.equal(result.ok, false)
   assert.match(result.message, /^MinGW audio toolchain preflight failed:/)
-  assert.match(result.message, /C:\\twilight-build\\mingw-static/)
+  assert.ok(result.message.includes(resolve(fixturePath('twilight-build/mingw-static'))))
   assert.match(result.message, /writable/i)
   assert.doesNotMatch(result.message, /Error:/)
 })
 
 test('uses the selected build directory for the CMake temporary environment', () => {
-  const vcpkgRoot = 'C:/tools/vcpkg'
-  const devkitRoot = 'C:/tools/w64devkit'
-  const programFiles = 'C:/Program Files'
+  const vcpkgRoot = fixturePath('tools/vcpkg')
+  const devkitRoot = fixturePath('tools/w64devkit')
+  const programFiles = fixturePath('Program Files')
   const result = prepareMingwCmakeEnvironment({
-    buildDir: 'C:/twilight-build/mingw-static',
+    buildDir: fixturePath('twilight-build/mingw-static'),
     env: {
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
       ProgramFiles: programFiles,
-      PATH: 'C:/Windows/System32'
+      PATH: fixturePath('Windows/System32')
     },
     existsSync: createExistsSync([
       `${vcpkgRoot}/scripts/buildsystems/vcpkg.cmake`,
@@ -626,22 +642,22 @@ test('uses the selected build directory for the CMake temporary environment', ()
   })
 
   assert.equal(result.ok, true)
-  assert.equal(result.environment.TEMP, 'C:\\twilight-build\\mingw-static\\tmp')
+  assert.equal(result.environment.TEMP, join(fixturePath('twilight-build/mingw-static'), 'tmp'))
   assert.equal(result.environment.TMP, result.environment.TEMP)
   assert.equal(result.environment.TMPDIR, result.environment.TEMP)
 })
 
 test('enables MSYS .lnk symlinks without replacing unrelated MSYS flags', () => {
-  const vcpkgRoot = 'C:/tools/vcpkg'
-  const devkitRoot = 'C:/tools/w64devkit'
-  const programFiles = 'C:/Program Files'
+  const vcpkgRoot = fixturePath('tools/vcpkg')
+  const devkitRoot = fixturePath('tools/w64devkit')
+  const programFiles = fixturePath('Program Files')
   const result = prepareMingwCmakeEnvironment({
-    buildDir: 'C:/twilight-build/mingw-static',
+    buildDir: fixturePath('twilight-build/mingw-static'),
     env: {
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
       ProgramFiles: programFiles,
-      PATH: 'C:/Windows/System32',
+      PATH: fixturePath('Windows/System32'),
       MSYS: 'noacl winsymlinks:lnk'
     },
     existsSync: createExistsSync([
@@ -664,7 +680,7 @@ test('enables MSYS .lnk symlinks without replacing unrelated MSYS flags', () => 
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
       ProgramFiles: programFiles,
-      PATH: 'C:/Windows/System32',
+      PATH: fixturePath('Windows/System32'),
       MSYS: 'noacl winsymlinks:lnk winsymlinks:lnk'
     },
     existsSync: createExistsSync([
@@ -686,7 +702,7 @@ test('enables MSYS .lnk symlinks without replacing unrelated MSYS flags', () => 
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
       ProgramFiles: programFiles,
-      PATH: 'C:/Windows/System32',
+      PATH: fixturePath('Windows/System32'),
       MSYS: 'noacl winsymlinks:lnk winsymlinks:native'
     },
     existsSync: createExistsSync([
@@ -711,7 +727,7 @@ test('enables MSYS .lnk symlinks without replacing unrelated MSYS flags', () => 
       VCPKG_ROOT: vcpkgRoot,
       W64DEVKIT_ROOT: devkitRoot,
       ProgramFiles: programFiles,
-      PATH: 'C:/Windows/System32',
+      PATH: fixturePath('Windows/System32'),
       MSYS: 'noacl'
     },
     existsSync: createExistsSync([

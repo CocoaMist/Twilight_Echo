@@ -137,7 +137,7 @@ async function startFtpServer(): Promise<TestFtpServer> {
             reply('215 UNIX Type: L8')
             break
           case 'FEAT':
-            reply('211 features')
+            reply('211-features')
             reply('211 end')
             break
           case 'PWD':

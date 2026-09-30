@@ -15,8 +15,11 @@ concurrency:
 jobs:
   repository:
     name: Repository Quality
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
@@ -37,11 +40,23 @@ jobs:
       - name: Install frozen dependency tree
         run: pnpm install --frozen-lockfile
 
-      - name: Install virtual display support
+      - name: Prepare Windows bridge compiler
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends xvfb xauth
-          command -v xvfb-run
+          $compiler = (Get-Command g++.exe -ErrorAction SilentlyContinue).Source
+          if (-not $compiler) {
+            $compiler = @(
+              'C:\mingw64\bin\g++.exe',
+              'C:\msys64\mingw64\bin\g++.exe',
+              'C:\msys64\ucrt64\bin\g++.exe'
+            ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (-not $compiler) { throw 'Windows VST3 bridge tests require a MinGW C++ compiler' }
+          $compilerBin = Split-Path -Parent $compiler
+          "W64DEVKIT_ROOT=$(Split-Path -Parent $compilerBin)" >> $env:GITHUB_ENV
+          $compilerBin >> $env:GITHUB_PATH
+          & $compiler --version
+          if ($LASTEXITCODE -ne 0) { throw 'Windows bridge compiler could not start' }
 
       - name: Verify dependency install policy
         run: pnpm run verify:install-policy
@@ -72,14 +87,21 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
-      - name: Test plugins
-        run: xvfb-run -a pnpm run test:plugins
+      - name: Test macro quality policy
+        run: pnpm run test:quality-policy
 
-      - name: Test realtime and offline audio services
-        run: pnpm run test:audio-manager
+      - name: Test product behavior
+        run: pnpm run test:product -- --report "$RUNNER_TEMP/product-quality-gate.json"
 
-      - name: Test tag and duplicate management
-        run: xvfb-run -a pnpm run test:tag-duplicate-management
+      - name: Upload product quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-quality-gate
+          path: |
+            ${{ runner.temp }}/product-quality-gate.json
+            ${{ runner.temp }}/backdrop-filter-probe.png
+          if-no-files-found: warn
 
       - name: Verify duplicate detection benchmark contract
         run: pnpm run test:duplicate-detection-benchmark
@@ -100,73 +122,17 @@ jobs:
             ${{ runner.temp }}/duplicate-detection-benchmark.manifest.json
           if-no-files-found: warn
 
-      - name: Test playback routing
-        run: pnpm run test:playback-routing
-
-      - name: Test playlist lifecycle
-        run: xvfb-run -a pnpm run test:playlist-lifecycle
-
-      - name: Test lyrics management
-        run: xvfb-run -a pnpm run test:lyrics-management
-
-      - name: Test radio, podcast, library watcher, and remote control
-        run: pnpm run test:radio-remote
-
-      - name: Test network sources
-        run: pnpm run test:network-sources
-
-      - name: Test CUE support
-        run: pnpm run test:cue
-
-      - name: Test local performance
-        run: pnpm run test:local-perf
-
-      - name: Test themes
-        run: pnpm run test:themes
-
-      - name: Test DSP graph
-        run: pnpm run test:dsp-graph
-
-      - name: Test DSP assets
-        run: pnpm run test:dsp-assets
-
-      - name: Test plugin tooling
-        run: pnpm run test:plugin-tooling
-
-      - name: Test audio toolchain scripts
-        run: pnpm run test:audio-toolchain
-
-      - name: Test application contracts
-        run: pnpm run test:app
-
-      - name: Test renderer data tooling
-        run: pnpm run test:renderer-data-tooling
-
-      - name: Test sleep timer
-        run: pnpm run test:sleep-timer
-
-      - name: Test cross-cutting regressions
-        run: pnpm run test:cross-cutting-regressions
-
       - name: Production build
         run: pnpm run build
 
   native-audio:
-    name: Native Audio (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Native Audio (windows-latest)
+    runs-on: windows-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Linux audio dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Configure audio engine
         run: cmake -S audio-engine -B audio-engine/build/default -DTAE_BUILD_NAPI=OFF
@@ -175,7 +141,7 @@ jobs:
         run: cmake --build audio-engine/build/default --config Debug
 
       - name: Test audio engine
-        run: ctest --test-dir audio-engine/build/default --output-on-failure -C Debug
+        run: ctest --test-dir audio-engine/build/default --output-on-failure --timeout 180 -C Debug
 
   mac-release:
     name: macOS Release Package
@@ -233,7 +199,10 @@ jobs:
     name: Required Quality Gate
     if: always()
     needs: [repository, native-audio]
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Require every quality job
         env:

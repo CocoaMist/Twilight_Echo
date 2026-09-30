@@ -206,18 +206,13 @@ export function createNetworkSourcesManager(deps: {
     },
     async searchLibrary(query) {
       const profiles = await store.listProfiles()
-      const results: Array<{
-        profileId: string
-        profileName: string
-        entry: NetworkEntry
-      }> = []
-      for (const profile of profiles) {
-        const entries = await library.listEntries(profile.id, query)
-        for (const entry of entries) {
-          results.push({ profileId: profile.id, profileName: profile.name, entry })
-        }
-      }
-      return results
+      const names = new Map(profiles.map((profile) => [profile.id, profile.name]))
+      const results = await library.searchEntries([...names.keys()], query)
+      return results.map(({ profileId, entry }) => ({
+        profileId,
+        profileName: names.get(profileId)!,
+        entry
+      }))
     }
   }
 }

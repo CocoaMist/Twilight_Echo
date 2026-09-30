@@ -84,6 +84,7 @@ test('theme visual seed can generate a real mini-WAV library for the stress benc
 })
 
 test('theme visual runner parses explicit CDP, output, baseline, and viewport options', () => {
+  const mediaFolder = join(tmpdir(), 'twilight-theme-visual-media')
   const options = parseArgs([
     '--port',
     '9333',
@@ -96,7 +97,7 @@ test('theme visual runner parses explicit CDP, output, baseline, and viewport op
     '--height',
     '800',
     '--seed-library-folder',
-    'C:\\media',
+    mediaFolder,
     '--seed-real-files',
     '100'
   ])
@@ -105,7 +106,7 @@ test('theme visual runner parses explicit CDP, output, baseline, and viewport op
   assert.equal(options.height, 800)
   assert.match(options.outputDir, /output[\\/]current$/)
   assert.match(options.baselineDir, /output[\\/]baseline$/)
-  assert.equal(options.seedLibraryFolder, 'C:\\media')
+  assert.equal(options.seedLibraryFolder, mediaFolder)
   assert.equal(options.seedRealFiles, 100)
   assert.equal(createStressLibraryDocument(3).tracks.length, 3)
   assert.equal(parseArgs(['--help']).help, true)

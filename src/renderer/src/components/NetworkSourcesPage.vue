@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useBackHandler } from '../app/useBackStack.ts'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import type { Track } from '../types/music'
@@ -9,6 +9,10 @@ import type {
   NetworkSourceProfileSummary
 } from '../../../shared/networkSources.ts'
 import NetworkCoverThumb from './network-sources/NetworkCoverThumb.vue'
+import {
+  createNetworkBrowser,
+  createNetworkLibraryView
+} from './network-sources/networkViewState.ts'
 
 const networkSourcesApi = window.api?.networkSources
 
@@ -32,19 +36,29 @@ const form = ref({
   passphrase: ''
 })
 
-const browsingProfile = ref<NetworkSourceProfileSummary | null>(null)
-const currentPath = ref('/')
-const entries = ref<NetworkEntry[]>([])
-const browsing = ref(false)
+const browser = createNetworkBrowser(networkSourcesApi?.listDirectory)
+const browsingProfile = browser.profile
+const currentPath = browser.path
+const entries = browser.entries
+const directoryLoading = browser.loading
+const resolvingDirectory = ref(false)
+const browsing = computed(() => directoryLoading.value || resolvingDirectory.value)
 const scanning = ref(false)
-const browsingError = ref('')
+const scanError = ref('')
+const browsingError = computed(() => browser.error.value || scanError.value)
 
 const viewMode = ref<'profiles' | 'library'>('profiles')
-const libraryQuery = ref('')
-const libraryEntries = ref<Array<{ profileName: string; entry: NetworkEntry }>>([])
-const libraryLoading = ref(false)
+const library = createNetworkLibraryView(networkSourcesApi?.searchLibrary)
+const libraryQuery = library.query
+const libraryEntries = library.items
+const libraryLoading = library.loading
+const libraryError = library.error
 const enriching = ref(false)
 const cacheSizeBytes = ref(0)
+let disposed = false
+let profileLoadRevision = 0
+let viewRevision = 0
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
 const breadcrumbs = computed(() => {
   const parts = currentPath.value.split('/').filter(Boolean)
@@ -63,26 +77,33 @@ const currentPathBookmarked = computed(
 )
 
 function setError(message: string): void {
-  error.value = message
+  if (!disposed) error.value = message
 }
 
 function setNotice(message: string): void {
+  if (disposed) return
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer)
   notice.value = message
-  window.setTimeout(() => {
-    if (notice.value === message) notice.value = ''
+  noticeTimer = setTimeout(() => {
+    noticeTimer = undefined
+    notice.value = ''
   }, 4000)
 }
 
 async function loadProfiles(): Promise<void> {
-  if (!networkSourcesApi) return
+  if (!networkSourcesApi || disposed) return
+  const request = ++profileLoadRevision
+  const current = (): boolean => !disposed && request === profileLoadRevision
   loading.value = true
   error.value = ''
   try {
-    profiles.value = await networkSourcesApi.listProfiles()
+    const result = await networkSourcesApi.listProfiles()
+    if (current()) profiles.value = result
   } catch (err) {
-    setError(`读取网络源列表失败：${err instanceof Error ? err.message : String(err)}`)
+    if (current())
+      setError(`读取网络源列表失败：${err instanceof Error ? err.message : String(err)}`)
   } finally {
-    loading.value = false
+    if (current()) loading.value = false
   }
 }
 
@@ -160,33 +181,21 @@ async function testConnection(id: string): Promise<void> {
 }
 
 async function enterBrowse(profile: NetworkSourceProfileSummary): Promise<void> {
-  browsingProfile.value = profile
-  currentPath.value = profile.rootPath
-  entries.value = []
-  browsingError.value = ''
-  await navigateTo(profile.rootPath)
+  viewRevision++
+  scanError.value = ''
+  library.leave()
+  await browser.enter(profile)
 }
 
 async function navigateTo(path: string): Promise<void> {
-  if (!networkSourcesApi || !browsingProfile.value) return
-  browsing.value = true
-  browsingError.value = ''
-  try {
-    currentPath.value = path
-    entries.value = await networkSourcesApi.listDirectory(browsingProfile.value.id, path)
-  } catch (err) {
-    browsingError.value = `读取目录失败：${err instanceof Error ? err.message : String(err)}`
-    entries.value = []
-  } finally {
-    browsing.value = false
-  }
+  scanError.value = ''
+  await browser.navigateTo(path)
 }
 
 function leaveBrowse(): void {
-  browsingProfile.value = null
-  currentPath.value = '/'
-  entries.value = []
-  browsingError.value = ''
+  browser.leave()
+  scanError.value = ''
+  if (viewMode.value === 'library') void loadLibrary()
 }
 
 // 目录浏览是页面内部的一层：标题栏返回键先沿目录树逐级上行（和面包屑同一
@@ -237,13 +246,18 @@ function formatSeconds(seconds: number | undefined): string {
   return `${minutes}:${remainder.toString().padStart(2, '0')}`
 }
 
-function buildTrack(profileId: string, entry: NetworkEntry, plan: NetworkPlaybackPlan): Track {
+function buildTrack(
+  profileId: string,
+  entry: NetworkEntry,
+  plan: NetworkPlaybackPlan,
+  profileName: string
+): Track {
   const extension = entry.name.includes('.') ? (entry.name.split('.').pop() ?? '') : ''
   return {
     id: entry.id,
     title: entry.name.replace(/\.[^.]+$/, ''),
-    artist: browsingProfile.value?.name ?? '网络源',
-    album: browsingProfile.value?.name ?? '网络源',
+    artist: profileName,
+    album: profileName,
     filePath: plan.kind === 'direct-url' ? (plan.url ?? '') : (plan.cacheFilePath ?? ''),
     fileName: entry.name,
     duration: 0,
@@ -266,38 +280,45 @@ async function resolvePlan(
 
 async function playEntry(entry: NetworkEntry): Promise<void> {
   const { playTrack } = usePlayerStore()
-  const profileId = browsingProfile.value?.id ?? entry.profileId
+  const profileId = entry.profileId
+  const profileName = profiles.value.find((profile) => profile.id === profileId)?.name ?? '网络源'
   const plan = await resolvePlan(profileId, entry)
   if (!plan) return
-  const track = buildTrack(profileId, entry, plan)
+  if (disposed) return
+  const track = buildTrack(profileId, entry, plan, profileName)
   playTrack(track, [track])
 }
 
 async function enqueueEntry(entry: NetworkEntry): Promise<void> {
   const { enqueueTrack } = usePlayerStore()
-  const profileId = browsingProfile.value?.id ?? entry.profileId
+  const profileId = entry.profileId
+  const profileName = profiles.value.find((profile) => profile.id === profileId)?.name ?? '网络源'
   const plan = await resolvePlan(profileId, entry)
   if (!plan) return
-  enqueueTrack(buildTrack(profileId, entry, plan))
+  if (!disposed) enqueueTrack(buildTrack(profileId, entry, plan, profileName))
 }
 
 async function playAllInDirectory(): Promise<void> {
   const { playTrack } = usePlayerStore()
-  const profileId = browsingProfile.value?.id
-  if (!profileId) return
+  const profile = browsingProfile.value
+  if (!profile || resolvingDirectory.value) return
+  const current = browser.capture()
+  const sourceEntries = [...audioEntries.value]
   const tracks: Track[] = []
-  browsing.value = true
+  resolvingDirectory.value = true
   try {
-    for (const entry of audioEntries.value) {
-      const plan = await resolvePlan(profileId, entry)
-      if (plan) tracks.push(buildTrack(profileId, entry, plan))
+    for (const entry of sourceEntries) {
+      if (!current()) return
+      const plan = await resolvePlan(profile.id, entry)
+      if (!current()) return
+      if (plan) tracks.push(buildTrack(profile.id, entry, plan, profile.name))
     }
   } catch (err) {
-    setError(`解析播放失败：${err instanceof Error ? err.message : String(err)}`)
+    if (current()) setError(`解析播放失败：${err instanceof Error ? err.message : String(err)}`)
   } finally {
-    browsing.value = false
+    resolvingDirectory.value = false
   }
-  if (tracks.length > 0) {
+  if (current() && tracks.length > 0) {
     playTrack(tracks[0], tracks)
     setNotice(`开始播放 ${tracks.length} 首`)
   }
@@ -305,38 +326,19 @@ async function playAllInDirectory(): Promise<void> {
 
 async function importCurrentDirectory(): Promise<void> {
   if (!networkSourcesApi || !browsingProfile.value) return
+  if (scanning.value) return
+  const profileId = browsingProfile.value.id
+  const path = currentPath.value
+  const current = browser.capture()
   scanning.value = true
-  browsingError.value = ''
+  scanError.value = ''
   try {
-    const result = await networkSourcesApi.scanDirectory(
-      browsingProfile.value.id,
-      currentPath.value
-    )
-    setNotice(`入库完成：新增 ${result.added} 首，当前共 ${result.total} 首`)
+    const result = await networkSourcesApi.scanDirectory(profileId, path)
+    if (current()) setNotice(`入库完成：新增 ${result.added} 首，当前共 ${result.total} 首`)
   } catch (err) {
-    browsingError.value = `入库失败：${err instanceof Error ? err.message : String(err)}`
+    if (current()) scanError.value = `入库失败：${err instanceof Error ? err.message : String(err)}`
   } finally {
     scanning.value = false
-  }
-}
-
-async function loadLibrary(): Promise<void> {
-  if (!networkSourcesApi) return
-  libraryLoading.value = true
-  error.value = ''
-  try {
-    const items: Array<{ profileName: string; entry: NetworkEntry }> = []
-    for (const profile of profiles.value) {
-      const entriesForProfile = await networkSourcesApi.listLibrary(profile.id, libraryQuery.value)
-      for (const entry of entriesForProfile) {
-        items.push({ profileName: profile.name, entry })
-      }
-    }
-    libraryEntries.value = items
-  } catch (err) {
-    setError(`读取媒体库失败：${err instanceof Error ? err.message : String(err)}`)
-  } finally {
-    libraryLoading.value = false
   }
 }
 
@@ -344,7 +346,7 @@ async function removeLibraryEntry(entry: NetworkEntry): Promise<void> {
   if (!networkSourcesApi) return
   try {
     await networkSourcesApi.removeLibraryEntry(entry.profileId, entry.id)
-    libraryEntries.value = libraryEntries.value.filter((item) => item.entry.id !== entry.id)
+    if (!disposed && viewMode.value === 'library' && !browsingProfile.value) await loadLibrary()
     setNotice('已从媒体库移除')
   } catch (err) {
     setError(`移除失败：${err instanceof Error ? err.message : String(err)}`)
@@ -352,18 +354,19 @@ async function removeLibraryEntry(entry: NetworkEntry): Promise<void> {
 }
 
 async function enrichLibraryAll(): Promise<void> {
-  if (!networkSourcesApi) return
+  if (!networkSourcesApi || enriching.value || disposed) return
   enriching.value = true
   error.value = ''
   try {
     let enriched = 0
     let failed = 0
     for (const profile of profiles.value) {
+      if (disposed) return
       const result = await networkSourcesApi.enrichLibrary(profile.id)
       enriched += result.enriched
       failed += result.failed
     }
-    await loadLibrary()
+    if (!disposed && viewMode.value === 'library' && !browsingProfile.value) await loadLibrary()
     setNotice(`元数据解析完成：成功 ${enriched} 首，失败 ${failed} 首`)
   } catch (err) {
     setError(`元数据解析失败：${err instanceof Error ? err.message : String(err)}`)
@@ -373,15 +376,34 @@ async function enrichLibraryAll(): Promise<void> {
 }
 
 async function switchView(mode: 'profiles' | 'library'): Promise<void> {
+  const transition = ++viewRevision
   viewMode.value = mode
   if (mode === 'library') {
     if (profiles.value.length === 0) await loadProfiles()
+    if (disposed || transition !== viewRevision || viewMode.value !== mode || browsingProfile.value)
+      return
     await loadLibrary()
+  } else {
+    library.leave()
   }
+}
+
+async function loadLibrary(): Promise<void> {
+  if (disposed) return
+  error.value = ''
+  await library.load()
+}
+
+function scheduleLibrarySearch(): void {
+  error.value = ''
+  library.schedule()
 }
 
 async function toggleBookmark(): Promise<void> {
   if (!networkSourcesApi || !browsingProfile.value) return
+  const current = browser.capture()
+  const path = currentPath.value
+  const profileId = browsingProfile.value.id
   const bookmarks = new Set(browsingProfile.value.bookmarks)
   if (bookmarks.has(currentPath.value)) {
     bookmarks.delete(currentPath.value)
@@ -389,25 +411,29 @@ async function toggleBookmark(): Promise<void> {
     bookmarks.add(currentPath.value)
   }
   try {
-    const updated = await networkSourcesApi.updateProfile(browsingProfile.value.id, {
+    const updated = await networkSourcesApi.updateProfile(profileId, {
       bookmarks: [...bookmarks]
     })
-    browsingProfile.value = updated
-    setNotice(bookmarks.has(currentPath.value) ? '已收藏此目录' : '已取消收藏')
+    if (!current()) return
+    browser.replaceProfile(updated)
+    setNotice(bookmarks.has(path) ? '已收藏此目录' : '已取消收藏')
   } catch (err) {
-    setError(`书签操作失败：${err instanceof Error ? err.message : String(err)}`)
+    if (current()) setError(`书签操作失败：${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
 async function removeBookmark(path: string): Promise<void> {
   if (!networkSourcesApi || !browsingProfile.value) return
+  const current = browser.capture()
+  const profileId = browsingProfile.value.id
   const bookmarks = browsingProfile.value.bookmarks.filter((item) => item !== path)
   try {
-    browsingProfile.value = await networkSourcesApi.updateProfile(browsingProfile.value.id, {
+    const updated = await networkSourcesApi.updateProfile(profileId, {
       bookmarks
     })
+    if (current()) browser.replaceProfile(updated)
   } catch (err) {
-    setError(`移除书签失败：${err instanceof Error ? err.message : String(err)}`)
+    if (current()) setError(`移除书签失败：${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -436,6 +462,14 @@ async function clearNetworkCache(): Promise<void> {
 onMounted(() => {
   void loadProfiles()
   void loadCacheInfo()
+})
+onBeforeUnmount(() => {
+  disposed = true
+  profileLoadRevision++
+  viewRevision++
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer)
+  browser.dispose()
+  library.dispose()
 })
 </script>
 
@@ -469,7 +503,9 @@ onMounted(() => {
       </div>
     </header>
 
-    <div v-if="error" class="network-inline-error" role="alert">{{ error }}</div>
+    <div v-if="error || libraryError" class="network-inline-error" role="alert">
+      {{ error || libraryError }}
+    </div>
     <div v-if="notice" class="network-inline-notice" role="status">{{ notice }}</div>
 
     <section
@@ -559,7 +595,8 @@ onMounted(() => {
           </button>
         </div>
       </div>
-      <p v-if="browsing" class="network-browsing" aria-live="polite">正在读取目录…</p>
+      <p v-if="directoryLoading" class="network-browsing" aria-live="polite">正在读取目录…</p>
+      <p v-if="resolvingDirectory" class="network-browsing" aria-live="polite">正在准备播放队列…</p>
       <div v-if="browsingError" class="network-inline-error" role="alert">{{ browsingError }}</div>
       <ul v-if="entries.length > 0" class="network-entry-list network-entry-surface">
         <li v-for="entry in entries" :key="entry.id" class="network-entry">
@@ -621,8 +658,8 @@ onMounted(() => {
           v-model="libraryQuery"
           type="search"
           class="network-search-input"
-          placeholder="搜索歌曲、艺人或来源…"
-          @input="loadLibrary"
+          placeholder="搜索歌曲文件名…"
+          @input="scheduleLibrarySearch"
         /><span v-if="libraryLoading" class="network-browsing" aria-live="polite"
           >加载中…</span
         ></label

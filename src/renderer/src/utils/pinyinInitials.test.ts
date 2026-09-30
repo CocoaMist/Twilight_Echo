@@ -15,6 +15,8 @@ test('returns empty string for non-CJK characters', () => {
   assert.equal(getPinyinInitial('a'), '')
   assert.equal(getPinyinInitial('1'), '')
   assert.equal(getPinyinInitial(' '), '')
+  assert.equal(getPinyinInitials('Song Title 42 / Artist 🎵 𠀀'), '')
+  assert.equal(getPinyinInitials('周 Jay 42 杰'), 'zj')
 })
 
 test('identifies CJK characters', () => {
