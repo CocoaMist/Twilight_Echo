@@ -72,14 +72,19 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
-      - name: Test plugins
-        run: xvfb-run -a pnpm run test:plugins
+      - name: Test macro quality policy
+        run: pnpm run test:quality-policy
 
-      - name: Test realtime and offline audio services
-        run: pnpm run test:audio-manager
+      - name: Test product behavior
+        run: xvfb-run -a pnpm run test:product -- --report "$RUNNER_TEMP/product-quality-gate.json"
 
-      - name: Test tag and duplicate management
-        run: xvfb-run -a pnpm run test:tag-duplicate-management
+      - name: Upload product quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-quality-gate
+          path: ${{ runner.temp }}/product-quality-gate.json
+          if-no-files-found: warn
 
       - name: Verify duplicate detection benchmark contract
         run: pnpm run test:duplicate-detection-benchmark
@@ -99,54 +104,6 @@ jobs:
             ${{ runner.temp }}/duplicate-detection-benchmark.json
             ${{ runner.temp }}/duplicate-detection-benchmark.manifest.json
           if-no-files-found: warn
-
-      - name: Test playback routing
-        run: pnpm run test:playback-routing
-
-      - name: Test playlist lifecycle
-        run: xvfb-run -a pnpm run test:playlist-lifecycle
-
-      - name: Test lyrics management
-        run: xvfb-run -a pnpm run test:lyrics-management
-
-      - name: Test radio, podcast, library watcher, and remote control
-        run: pnpm run test:radio-remote
-
-      - name: Test network sources
-        run: pnpm run test:network-sources
-
-      - name: Test CUE support
-        run: pnpm run test:cue
-
-      - name: Test local performance
-        run: xvfb-run -a pnpm run test:local-perf
-
-      - name: Test themes
-        run: xvfb-run -a pnpm run test:themes
-
-      - name: Test DSP graph
-        run: xvfb-run -a pnpm run test:dsp-graph
-
-      - name: Test DSP assets
-        run: pnpm run test:dsp-assets
-
-      - name: Test plugin tooling
-        run: pnpm run test:plugin-tooling
-
-      - name: Test audio toolchain scripts
-        run: pnpm run test:audio-toolchain
-
-      - name: Test application contracts
-        run: xvfb-run -a pnpm run test:app
-
-      - name: Test renderer data tooling
-        run: pnpm run test:renderer-data-tooling
-
-      - name: Test sleep timer
-        run: pnpm run test:sleep-timer
-
-      - name: Test cross-cutting regressions
-        run: pnpm run test:cross-cutting-regressions
 
       - name: Production build
         run: pnpm run build

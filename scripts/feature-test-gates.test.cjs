@@ -2,6 +2,7 @@ const assert = require('node:assert/strict')
 const { readFileSync, readdirSync } = require('node:fs')
 const { join, relative } = require('node:path')
 const test = require('node:test')
+const { PRODUCT_SCRIPTS } = require('./run-product-quality-gate.cjs')
 
 const root = join(__dirname, '..')
 const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
@@ -191,28 +192,33 @@ test('duplicate benchmark scripts retain the authenticated contract and isolated
   )
 })
 
-test('required Ubuntu CI installs a bounded Xvfb dependency and runs real Electron feature gates', (t) => {
-  if (workflow === null) return t.skip('audio-engine.yml is gitignored locally')
+test('required Ubuntu CI runs complete product outcomes with a shared display and bounded workers', () => {
+  assert.match(packageJson.scripts['test:local-perf'], /--test-concurrency=2\b/)
+  assert.ok(workflow, 'the required CI workflow must exist')
   assert.match(workflow, /sudo apt-get install --yes --no-install-recommends xvfb xauth/)
   assert.match(workflow, /command -v xvfb-run/)
-  assert.match(workflow, /xvfb-run -a pnpm run test:playlist-lifecycle/)
-  assert.match(workflow, /xvfb-run -a pnpm run test:lyrics-management/)
-  assert.match(workflow, /pnpm run test:radio-remote/)
-  assert.match(workflow, /xvfb-run -a pnpm run test:tag-duplicate-management/)
-  assert.match(workflow, /xvfb-run -a pnpm run test:local-perf/)
-  assert.match(workflow, /xvfb-run -a pnpm run test:app/)
-  assert.match(workflow, /xvfb-run -a pnpm run test:themes/)
-  assert.match(workflow, /xvfb-run -a pnpm run test:dsp-graph/)
+  assert.match(workflow, /xvfb-run -a pnpm run test:product/)
+  assert.match(workflow, /pnpm run test:quality-policy/)
+  assert.match(workflow, /product-quality-gate\.json/)
+  for (const script of [
+    'test:plugins',
+    'test:playlist-lifecycle',
+    'test:lyrics-management',
+    'test:tag-duplicate-management',
+    'test:local-perf',
+    'test:app',
+    'test:themes',
+    'test:dsp-graph'
+  ]) {
+    assert.ok(PRODUCT_SCRIPTS.includes(script), `${script} must run inside the shared display`)
+  }
   assert.match(workflow, /pnpm run test:duplicate-detection-benchmark/)
   assert.match(workflow, /pnpm run benchmark:duplicate-detection:ci --/)
   assert.match(workflow, /duplicate-detection-benchmark\.manifest\.json/)
   assert.ok(
-    workflow.indexOf('Test tag and duplicate management') <
-      workflow.indexOf('Run isolated duplicate detection 10k benchmark')
-  )
-  assert.ok(
-    workflow.indexOf('Run isolated duplicate detection 10k benchmark') <
-      workflow.indexOf('Test playback routing')
+    workflow.indexOf('Test product behavior') >= 0 &&
+      workflow.indexOf('Test product behavior') <
+        workflow.indexOf('Run isolated duplicate detection 10k benchmark')
   )
 })
 
@@ -245,8 +251,8 @@ test('every repository test file is explicitly owned by a package test script', 
   assert.deepEqual(missing, [], `Unowned test files: ${missing.join(', ')}`)
 })
 
-test('CI and the final integrated gate retain all newly owned regression suites', (t) => {
-  if (workflow === null) return t.skip('audio-engine.yml is gitignored locally')
+test('CI and the final integrated gate retain all newly owned regression suites', () => {
+  assert.ok(workflow, 'the required CI workflow must exist')
   for (const script of [
     'test:renderer-data-tooling',
     'test:sleep-timer',
@@ -255,7 +261,7 @@ test('CI and the final integrated gate retain all newly owned regression suites'
     'test:network-sources',
     'test:themes'
   ]) {
-    assert.match(workflow, new RegExp(`pnpm run ${escapeRegExp(script)}`))
+    assert.ok(PRODUCT_SCRIPTS.includes(script), `${script} must remain a product outcome`)
     assert.match(
       finalIntegratedGate,
       new RegExp(`corepack pnpm@11\\.7\\.0 run ${escapeRegExp(script)}`)

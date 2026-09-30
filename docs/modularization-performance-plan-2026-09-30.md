@@ -124,7 +124,7 @@ JavaScript 由 V8 自动 GC，C++ 由 RAII/资源生命周期管理。应用运�
 
 测量分别记录 heapUsed、external、arrayBuffers、RSS、GC 类型/次数/停顿和事件循环延迟；Buffer 主要影响 external，不能只看 JS heap。GC 事件来自 PerformanceObserver，应用持续监听/日志输出应受诊断开关控制。仅独立基准可用 --expose-gc 做受控保留堆实验，并明确人工收集范围；当前脚本没有强制 GC。
 
-原生实时音频回调应保持预分配、固定容量、无阻塞 I/O 和不可控分配；参数准备/解码/持久化放在控制线程或 worker，销毁使用明确的交接与 ACK。此次没有更改 C++ 音频核心，也没有运行原生构建。
+原生实时音频回调应保持预分配、固定容量、无阻塞 I/O 和不可控分配；参数准备/解码/持久化放在控制线程或 worker，销毁使用明确的交接与 ACK。前两批没有更改 C++ 音频核心；后续门禁清洗修复后端配置能力判定与控制时钟唤醒，未修改 DSP/实时回调算法，也没有运行本地原生构建。
 
 ## 性能验收与结果边界
 
@@ -164,10 +164,20 @@ GUI 验收在允许真实运行环境时进行：浅/深色、自定义强调色
 
 第四、五轮主题门禁进入真实像素检测，发现 Linux offscreen Chromium 对两种顺序的 feImage backdrop 链均无效果，连带丢弃 blur；仅调整顺序不能解决，Windows 本机则两种顺序均通过。最终保留非 Linux 的 lens-first 折射链，Linux 采用不含 SVG 的 CSS blur/saturate/contrast/brightness 回退，减少不支持的滤镜工作，既有透明窗口/降级/辅助功能覆盖规则仍优先。CSS 契约同时固定默认折射和 Linux 无 SVG 回退，探针对平台实际采用的链验证低对比度，两种 SVG 顺序仍记录为诊断。独立 Electron 棋盘探针在本机通过，不需要项目构建，不代表完整应用视觉验收，也不证明所有 Linux GPU 都不支持 SVG。
 
-最新原生 CI：Linux 29 项中 2 项失败（backend factory 与 special provider），macOS 同两项失败另加 runtime queue reroute。前两项测试直接配置 wasapi / wasapi-exclusive，却要求输出后端存在于 Linux ALSA / macOS CoreAudio 的枚举中；平台假设和不可用后端配置行为需单独核对。macOS 第三项等待 150 ms 后要求 dsd_mute_lock_timeout，但日志仍显示 locking/candidate；它可能涉及测试同步或引擎状态推进，不能仅凭日志断言提高延迟即可修复。此次 audio-engine 源码与 main 无差异，不通过跳过或放宽断言宣称原生检查通过。
+此前原生 CI：Linux 29 项中 2 项失败（backend factory 与 special provider），macOS 同两项失败另加 runtime queue reroute。前两项测试直接配置 wasapi / wasapi-exclusive，却要求输出后端存在于 Linux ALSA / macOS CoreAudio 的枚举中；平台假设和不可用后端配置行为需单独核对。macOS 第三项等待 150 ms 后要求 dsd_mute_lock_timeout，但日志仍显示 locking/candidate。该阶段 audio-engine 源码与 main 无差异；后续修复如下，原生是否通过需以新提交的 CI 为准。
 
 第六轮 CI 已实际通过 Linux 主题像素/界面和 local-perf，随后 DSP 两项 Electron 界面测试暴露同样的缺显示器问题。重新按测试源码中的 Electron 运行入口核对 package 脚本归属，当前 Repository Quality 运行的界面组为 plugins、tag-duplicate-management、playlist-lifecycle、lyrics-management、local-perf、themes、dsp-graph、app，均补齐 xvfb-run；DSP 纳入显示环境门禁。其他 source/tooling 组未发现 Electron 窗口入口。失败一步即跳过后续步骤，是连续出现不同 check 失败的原因；没有跳过具体用例来推进流程。
 
 最终复查补充睡眠边界失败路径：触发事件已到达但 invoke 随后失败时继续抑制 EOF 自动换曲；取消、重新配置或销毁仍使旧回复无效。实际控制器回归覆盖这五种顺序。
 
 第二批最终本地结果：385 个源码/资源测试文件，2,682 项通过、3 项已有跳过、0 失败；148 项播放器/睡眠/流媒体与架构/IPC/安装/错误门禁及 19 项歌单控制器/页面导航适配检查通过；11 项重复检测基准证据检查通过，17 项主题参数/门禁跟进检查通过。ESLint、Node/Web noEmit 类型检查通过。上述专项与全量回归存在重叠，不能相加。源码回归沿用排除构建/原生依赖的清单；没有真实音频设备、Discord 客户端或完整应用窗口验收。
+
+## 宏观门禁与项目清洗
+
+按产品结果组织三个组、共 19 个既有业务测试入口，统一 Xvfb 环境；各入口全部执行并记录退出码/耗时/启动错误，最后统一返回失败并上传 JSON。保留安全、类型、公共契约、资源预算与独立基准，移除 IPC 调用点数量下限和 renderer 内部调用足迹冻结。四处本地曲库单次耗时断言改为诊断，补齐完整匹配与 ID/顺序校验；独立受控性能基准继续阻断真实退化。详细边界见 [宏观质量门禁](./quality-gates.md)。
+
+清洗仅移除两个无引用的旧正则 scratch 审计脚本，由正式 AST/i18n 回归替代。Node/Web 额外 noUnusedLocals/noUnusedParameters 扫描均无诊断。纯非 CJK 拼音提取增加快速返回，混合元数据行为保持；不依据静态未命中删除动态入口、插件模板或数据。
+
+原生后端 factory 提供无设备创建的能力谓词，setOutputBackend 先校验 provider 错误语义，再拒绝当前编译不支持的后端，失败保留路线。测试依据引擎实际枚举选择平台默认/专用后端，避免测试目标的私有编译宏与共享引擎不同。控制时钟记录唤醒标记后才检查 idle 状态，活动周期仍为 100 ms；覆盖立即启动和已进入 idle 的命令。DSD 夹具等待精确错误码与 stop/close 结果，保留 stopped、位置、输出准确性断言，不跳过测试或扩大固定 sleep。
+
+本批最终本地验证：385 个源码/资源文件，2,682 通过、3 项已有跳过、0 失败；28 项宏观执行策略/IPC/架构检查与 11 项更新基准 provenance 检查通过；完整 ESLint 和 Node/Web noEmit 通过。专项与全量存在重叠，不能相加。未运行应用/原生构建及构建型 Electron 夹具；新原生控制路径和完整 UI 门禁由 PR 的平台 CI 验证，真实设备与完整窗口验收仍待完成。
