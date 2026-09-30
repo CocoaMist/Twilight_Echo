@@ -50,3 +50,5 @@ Node 与 Web 的额外 noUnusedLocals/noUnusedParameters 扫描本次均无诊�
 新宏观 CI 完整报告还发现音频工具链夹具把 Windows 路径与分隔符当成主机固定值。夹具改为虚拟的主机绝对路径并按主机分隔符检查，保持 CMake/CTest 缺失、依赖完整性、GNU patch、路径优先级和 VST3 staging 行为断言；71 项工具链检查通过。公共 Windows 路径转 CMake 与运行时分隔符语义仍独立覆盖。原生测试方法名的编译错误已修正，各平台 CI 以修正后的提交为准。
 
 后续 Repository Quality 已实际通过。macOS 暴露极短 DSD 位置夹具与默认静音过渡的混合依赖；位置换算测试明确关闭 pre/post-roll，保持 64 bit frames / 2,822,400 Hz 与原精度断言，静音超时/DSD→PCM 保护仍在独立回归中执行。本机整个 runtime queue/reroute 集成再次通过。原生 CTest 进程设置 180 秒退出边界，并在该集成内部记录当前场景，使卡住时留下具体位置；它约束整组结束和可诊断性，不要求单个函数在一次机器计时内完成。
+
+带场景日志的后续 CI 已通过 Repository Quality 与 Linux/macOS 原生。Windows 的退出报告定位到错误事件夹具：registry 锁内调用 pipeline 事件，和状态读取的 pipeline→registry 顺序相反。改为锁内复制回调、锁外调用，保持实际 RenderError/lastError/context 回归；不增加超时或跳过场景。最终平台状态需以该修正之后的 PR head 为准。

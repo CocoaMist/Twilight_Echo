@@ -2101,11 +2101,15 @@ void testBackendRenderErrorIsReportedThroughLastError() {
 
   const auto backend = waitForLatestStartedBackendState();
   assert(backend);
+  OutputEventCallback event;
   {
     std::lock_guard lock(g_backendRegistry.mutex);
-    assert(static_cast<bool>(backend->event));
-    backend->event(OutputBackendEvent::RenderError, "fake backend render failed");
+    event = backend->event;
   }
+  assert(static_cast<bool>(event));
+  // Pipeline status reads take the pipeline lock before querying this registry.
+  // Invoke outside the fixture lock, matching the render callback hand-off.
+  event(OutputBackendEvent::RenderError, "fake backend render failed");
 
   assert(waitUntil([&] {
     const std::string errorJson = engine.getLastErrorJson();
