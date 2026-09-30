@@ -7,10 +7,12 @@ import { createSleepTimerController, getRestorableSleepTimerState } from './slee
 
 function pending<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((yes) => {
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((yes, no) => {
     resolve = yes
+    reject = no
   })
-  return { promise, resolve }
+  return { promise, resolve, reject }
 }
 
 function raceFixture() {
@@ -94,6 +96,23 @@ test('a trigger event arriving before its boundary reply still suppresses EOF ad
   assert.equal(await request, true)
   assert.equal(f.state(), triggered)
   assert.equal(f.triggers(), 1)
+})
+
+test('a failed boundary reply preserves only a trigger from the current timer lifecycle', async () => {
+  for (const action of ['trigger', 'none', 'cancel', 'configure', 'dispose']) {
+    const f = raceFixture()
+    f.controller.configure('trackEnd')
+    const triggered = { ...f.state()!, active: false, triggered: true }
+    const request = f.controller.reportBoundary('trackEnd')
+    if (action !== 'none') f.controller.applyTrigger(triggered)
+    if (action === 'cancel') f.controller.cancel()
+    if (action === 'configure') f.controller.configure('queueEnd')
+    if (action === 'dispose') f.controller.dispose()
+    const expected = f.state()
+    f.boundary.reject(new Error('boundary transport failed'))
+    assert.equal(await request, action === 'trigger', action)
+    assert.equal(f.state(), expected)
+  }
 })
 
 test('configuring and cancelling a timer immediately persists the session', async () => {

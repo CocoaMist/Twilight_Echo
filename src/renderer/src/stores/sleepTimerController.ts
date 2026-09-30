@@ -105,7 +105,13 @@ export function createSleepTimerController(options: SleepTimerControllerOptions)
       applyAuthoritativeState(state)
       return state?.triggered === true
     } catch {
-      return false
+      // A failed reply cannot undo an already received trigger event.
+      return (
+        !disposed &&
+        commandRevision === commandToken &&
+        !isCurrent() &&
+        options.getState()?.triggered === true
+      )
     }
   }
 
