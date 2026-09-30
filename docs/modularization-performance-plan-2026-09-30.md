@@ -162,7 +162,9 @@ GUI 验收在允许真实运行环境时进行：浅/深色、自定义强调色
 
 本批运行源码行为回归、ESLint、Node/Web noEmit 类型检查和架构/IPC/门禁；不运行包含构建的 test:no-real-device 聚合入口。依赖公共协议、持久化 schema、队列版本的变更需要各自契约测试。不能把已修复的首批与尚未实施的大型播放器/插件重构一起宣称完成。
 
-第四轮主题门禁进入真实像素检测，发现 Linux Chromium 拒绝 url-first 的播放条 backdrop-filter，连带丢弃 blur。播放条改为 blur/saturate 在 SVG 引用之前，保留跨平台模糊和烘焙高光；折射弱化是明确的视觉取舍，更强折射需要另行验证分层合成。CSS 契约固定标准/前缀两条规则的 blur-first 顺序，像素门禁验证实际采用的链，url-first 继续记录为诊断。独立 Electron 棋盘探针在本机通过，不需要项目构建，不代表完整应用视觉验收。
+第四、五轮主题门禁进入真实像素检测，发现 Linux offscreen Chromium 对两种顺序的 feImage backdrop 链均无效果，连带丢弃 blur；仅调整顺序不能解决，Windows 本机则两种顺序均通过。最终保留非 Linux 的 lens-first 折射链，Linux 采用不含 SVG 的 CSS blur/saturate/contrast/brightness 回退，减少不支持的滤镜工作，既有透明窗口/降级/辅助功能覆盖规则仍优先。CSS 契约同时固定默认折射和 Linux 无 SVG 回退，探针对平台实际采用的链验证低对比度，两种 SVG 顺序仍记录为诊断。独立 Electron 棋盘探针在本机通过，不需要项目构建，不代表完整应用视觉验收，也不证明所有 Linux GPU 都不支持 SVG。
+
+最新原生 CI：Linux 29 项中 2 项失败（backend factory 与 special provider），macOS 同两项失败另加 runtime queue reroute。前两项测试直接配置 wasapi / wasapi-exclusive，却要求输出后端存在于 Linux ALSA / macOS CoreAudio 的枚举中；平台假设和不可用后端配置行为需单独核对。macOS 第三项等待 150 ms 后要求 dsd_mute_lock_timeout，但日志仍显示 locking/candidate；它可能涉及测试同步或引擎状态推进，不能仅凭日志断言提高延迟即可修复。此次 audio-engine 源码与 main 无差异，不通过跳过或放宽断言宣称原生检查通过。
 
 最终复查补充睡眠边界失败路径：触发事件已到达但 invoke 随后失败时继续抑制 EOF 自动换曲；取消、重新配置或销毁仍使旧回复无效。实际控制器回归覆盖这五种顺序。
 

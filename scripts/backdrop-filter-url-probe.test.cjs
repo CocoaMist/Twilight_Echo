@@ -53,6 +53,7 @@ const REGION = { width: 240, height: 72 }
  * screenshot does show unblurred text through the bar.
  */
 const REGION_ORIGIN = {
+  shipped: { x: 104, y: 160 },
   control: { x: 104, y: 320 },
   blur: { x: 424, y: 320 },
   invert: { x: 744, y: 320 },
@@ -190,6 +191,7 @@ function probePageSource() {
        'lensFirst' compares a mixed list whose url() comes *before* blur/saturate. A list
        Chromium refuses in that order is dropped whole, taking the blur with it. -->
   ${region('control3', '')}
+  ${region('shipped', process.platform === 'linux' ? MIXED_PREFIX : `url(#te-probe-lens) ${MIXED_PREFIX}`)}
   ${region('lensChain', `${MIXED_PREFIX} url(#te-probe-lens)`)}
   ${region('maskedChain', `${MIXED_PREFIX} url(#te-probe-masked)`)}
   ${region('lensFirst', `url(#te-probe-lens) ${MIXED_PREFIX}`)}
@@ -416,7 +418,7 @@ app.whenReady().then(async () => {
           // unfiltered control exactly; a chain that merely looks different
           // still shows the blur's flattened contrast.
           contrast: Object.fromEntries(
-            ['control3', 'lensChain', 'maskedChain', 'lensFirst'].map((id) => [id, stats[id].contrast])
+            ['control3', 'shipped', 'lensChain', 'maskedChain', 'lensFirst'].map((id) => [id, stats[id].contrast])
           ),
           lensChain: compare(stats.control3, stats.lensChain),
           maskedChain: compare(stats.control3, stats.maskedChain),
@@ -493,6 +495,7 @@ test('backdrop-filter url() capability probe', async (t) => {
     const lensContrast = result.contrast.lensChain
     const maskedContrast = result.contrast.maskedChain
     const lensFirstContrast = result.contrast.lensFirst
+    const shippedContrast = result.contrast.shipped
     // Halfway between "blurred" (~1) and "raw pattern" (~14-18) on a log scale.
     const droppedThreshold = rawContrast * 0.5
 
@@ -501,6 +504,7 @@ test('backdrop-filter url() capability probe', async (t) => {
     t.diagnostic(`contrast lens:   ${lensContrast.toFixed(2)} (shipped chain)`)
     t.diagnostic(`contrast masked: ${maskedContrast.toFixed(2)} (feComposite vs feImage alpha)`)
     t.diagnostic(`contrast first:  ${lensFirstContrast.toFixed(2)} (url() ahead of blur)`)
+    t.diagnostic(`contrast shipped (${process.platform}): ${shippedContrast.toFixed(2)}`)
 
     const lensApplies = lensContrast < droppedThreshold
     const maskedIsDropped = maskedContrast >= droppedThreshold
@@ -547,11 +551,11 @@ test('backdrop-filter url() capability probe', async (t) => {
         'Chromium behaviour changed; the constraint documented in LiquidGlassDefs.vue can be relaxed.'
     )
 
-    // The playbar now ships blur first: lens-first is still measured above as a
-    // capability diagnostic, but must not take down the required blur on Linux.
+    // The Linux surface ships a CSS-only fallback. Other platforms retain the
+    // lens-first chain. Both SVG orders remain measured capability diagnostics.
     assert.ok(
-      lensApplies,
-      `the shipped blur-first chain is not honoured: contrast ${lensContrast.toFixed(2)} matches the ` +
+      shippedContrast < droppedThreshold,
+      `the shipped ${process.platform} chain is not honoured: contrast ${shippedContrast.toFixed(2)} matches the ` +
         `unfiltered backdrop (${rawContrast.toFixed(2)}), so the whole declaration was dropped. ` +
         'Validate a separate compositing layer before changing the playbar material.'
     )

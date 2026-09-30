@@ -1994,19 +1994,29 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
      refraction was mathematically real and visually absent. The backdrop is the
      only input that carries the scrolling content there is something to bend.
 
-     Blur must lead the list. The Linux Chromium pixel probe rejects a lens-first
-     declaration entirely, including its blur. This order preserves legibility
-     and the baked highlights across platforms; refraction of a blurred backdrop
-     is weaker. A sharper lens needs a separately validated compositing layer.
+     The lens runs before blur so it receives the sharp backdrop. Linux uses the
+     CSS-only fallback below: its offscreen Chromium compositor rejects the
+     feImage chain in either order, including the required blur.
 
      The gradients stay as this element's own background, painted over the
      refracted backdrop, so the sheen and rim light read crisp instead of being
      displaced along with everything else. */
+  backdrop-filter: url(#te-lg-playbar) blur(var(--te-lg-blur, 16px))
+    saturate(var(--te-lg-saturate, 140%)) saturate(var(--te-lg-transmit-sat, 1))
+    contrast(var(--te-lg-transmit, 1)) brightness(var(--te-lg-luma, 1));
+  -webkit-backdrop-filter: url(#te-lg-playbar) blur(var(--te-lg-blur, 16px))
+    saturate(var(--te-lg-saturate, 140%)) saturate(var(--te-lg-transmit-sat, 1))
+    contrast(var(--te-lg-transmit, 1)) brightness(var(--te-lg-luma, 1));
+}
+
+/* Preserve blur on Linux even when feImage backdrop chains are unsupported.
+   Reduced/transparent-window/accessibility overrides below still take priority. */
+html[data-platform='linux'] .player-bar-liquid .player-bar-warp {
   backdrop-filter: blur(var(--te-lg-blur, 16px)) saturate(var(--te-lg-saturate, 140%))
-    saturate(var(--te-lg-transmit-sat, 1)) url(#te-lg-playbar) contrast(var(--te-lg-transmit, 1))
+    saturate(var(--te-lg-transmit-sat, 1)) contrast(var(--te-lg-transmit, 1))
     brightness(var(--te-lg-luma, 1));
   -webkit-backdrop-filter: blur(var(--te-lg-blur, 16px)) saturate(var(--te-lg-saturate, 140%))
-    saturate(var(--te-lg-transmit-sat, 1)) url(#te-lg-playbar) contrast(var(--te-lg-transmit, 1))
+    saturate(var(--te-lg-transmit-sat, 1)) contrast(var(--te-lg-transmit, 1))
     brightness(var(--te-lg-luma, 1));
 }
 
