@@ -15,8 +15,11 @@ concurrency:
 jobs:
   repository:
     name: Repository Quality
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
@@ -37,11 +40,23 @@ jobs:
       - name: Install frozen dependency tree
         run: pnpm install --frozen-lockfile
 
-      - name: Install virtual display support
+      - name: Prepare Windows bridge compiler
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends xvfb xauth
-          command -v xvfb-run
+          $compiler = (Get-Command g++.exe -ErrorAction SilentlyContinue).Source
+          if (-not $compiler) {
+            $compiler = @(
+              'C:\mingw64\bin\g++.exe',
+              'C:\msys64\mingw64\bin\g++.exe',
+              'C:\msys64\ucrt64\bin\g++.exe'
+            ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (-not $compiler) { throw 'Windows VST3 bridge tests require a MinGW C++ compiler' }
+          $compilerBin = Split-Path -Parent $compiler
+          "W64DEVKIT_ROOT=$(Split-Path -Parent $compilerBin)" >> $env:GITHUB_ENV
+          $compilerBin >> $env:GITHUB_PATH
+          & $compiler --version
+          if ($LASTEXITCODE -ne 0) { throw 'Windows bridge compiler could not start' }
 
       - name: Verify dependency install policy
         run: pnpm run verify:install-policy
@@ -76,7 +91,7 @@ jobs:
         run: pnpm run test:quality-policy
 
       - name: Test product behavior
-        run: xvfb-run -a pnpm run test:product -- --report "$RUNNER_TEMP/product-quality-gate.json"
+        run: pnpm run test:product -- --report "$RUNNER_TEMP/product-quality-gate.json"
 
       - name: Upload product quality report
         if: always()
@@ -109,21 +124,13 @@ jobs:
         run: pnpm run build
 
   native-audio:
-    name: Native Audio (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Native Audio (windows-latest)
+    runs-on: windows-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Linux audio dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Configure audio engine
         run: cmake -S audio-engine -B audio-engine/build/default -DTAE_BUILD_NAPI=OFF
@@ -190,7 +197,10 @@ jobs:
     name: Required Quality Gate
     if: always()
     needs: [repository, native-audio]
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Require every quality job
         env:

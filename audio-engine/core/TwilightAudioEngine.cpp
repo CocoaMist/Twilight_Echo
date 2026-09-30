@@ -1957,7 +1957,7 @@ void TwilightAudioEngine::clockLoop() {
         if (!queueAlreadyOnStartedItem) {
           queue_.advanceAfterEnd();
         }
-        applyPipelineStatusLocked(pipelineStatus);
+        applyClockPipelineStatusLocked(pipelineStatus);
         info_.queueIndex = queue_.currentIndex();
         info_.playMode = queue_.playModeId();
         upcoming = queue_.upcoming();
@@ -1978,7 +1978,7 @@ void TwilightAudioEngine::clockLoop() {
     {
       std::lock_guard lock(mutex_);
       if (hasPipelineStatus && info_.state != PlaybackState::Stopped) {
-        applyPipelineStatusLocked(pipelineStatus);
+        applyClockPipelineStatusLocked(pipelineStatus);
       }
       if (emitEnded) {
         autoNextItem = queue_.advanceAfterEnd();
@@ -2057,6 +2057,15 @@ void TwilightAudioEngine::emitError(const std::string& message, TAE_Result code,
 void TwilightAudioEngine::publishStateLocked() const {
   if (!stateEventsEnabled_.load(std::memory_order_relaxed)) return;
   emit("playback-info", playbackInfoToJson(info_));
+}
+
+void TwilightAudioEngine::applyClockPipelineStatusLocked(const PipelineStatus& status) {
+  // The clock snapshot can predate a completed pause/resume/stop command.
+  // Commands and explicit terminal events own transport state; ticks refresh
+  // progress and metadata without undoing their committed state.
+  const PlaybackState committedState = info_.state;
+  applyPipelineStatusLocked(status);
+  info_.state = committedState;
 }
 
 void TwilightAudioEngine::applyPipelineStatusLocked(const PipelineStatus& status) {

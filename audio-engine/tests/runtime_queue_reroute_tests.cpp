@@ -1880,6 +1880,59 @@ void testConfigAppliedEventFollowsRenderApplication() {
   engine.setEventCallback(nullptr, nullptr);
 }
 
+void testClockSnapshotCannotUndoCompletedPause() {
+  struct Capture {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool release = false;
+    std::string property;
+  } capture;
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setDspConfig(kUnityGainProcessingConfigJson) == TAE_RESULT_OK);
+  assert(engine.play("clock-pause-race.flac", 0.0) == TAE_RESULT_OK);
+  auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  engine.setEventCallback(
+      [](const char* event, const char* payload, void* data) {
+        auto& capture = *static_cast<Capture*>(data);
+        std::unique_lock lock(capture.mutex);
+        if (std::string(event) == "config-applied" && !capture.release) {
+          // This clock tick has already read a playing pipeline snapshot.
+          capture.entered = true;
+          capture.cv.notify_all();
+          capture.cv.wait(lock, [&] { return capture.release; });
+        } else if (std::string(event) == "property-change" && capture.release) {
+          capture.property = payload;
+        }
+      },
+      &capture);
+  assert(engine.setVolume(0.5) == TAE_RESULT_OK);
+  renderBackendFrames(backend, 128);
+  assert(waitUntil([&] {
+    std::lock_guard lock(capture.mutex);
+    return capture.entered;
+  }));
+  assert(engine.pause() == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  {
+    std::lock_guard lock(capture.mutex);
+    capture.release = true;
+  }
+  capture.cv.notify_all();
+  assert(waitUntil([&] {
+    std::lock_guard lock(capture.mutex);
+    return !capture.property.empty();
+  }));
+  {
+    std::lock_guard lock(capture.mutex);
+    assert(jsonContains(capture.property, "\"state\":\"paused\""));
+  }
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  engine.setEventCallback(nullptr, nullptr);
+}
+
 // NAT-1: the stopped/paused clock waits on a slow 1 s tick. Transport commands
 // must wake it at once, and shutdown must not wait out the idle interval.
 void testIdleClockWakesPromptlyOnPlayAndShutdown() {
@@ -4132,6 +4185,7 @@ int main() {
   RUN_RUNTIME_CASE(testApplyDspStateCapacityFailureKeepsLastAcceptedState());
   RUN_RUNTIME_CASE(testStoppedVolumeAcceptanceIsVisibleBeforePlayback());
   RUN_RUNTIME_CASE(testConfigAppliedEventFollowsRenderApplication());
+  RUN_RUNTIME_CASE(testClockSnapshotCannotUndoCompletedPause());
   RUN_RUNTIME_CASE(testIdleClockWakesPromptlyOnPlayAndShutdown());
   RUN_RUNTIME_CASE(testDisabledStateEventsSkipPlaybackSnapshots());
   RUN_RUNTIME_CASE(testDsd64StartsOnDop());

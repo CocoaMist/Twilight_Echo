@@ -183,3 +183,7 @@ GUI 验收在允许真实运行环境时进行：浅/深色、自定义强调色
 本批最终本地验证：385 个源码/资源文件，2,682 通过、3 项已有跳过、0 失败；28 项宏观执行策略/IPC/架构检查与 11 项更新基准 provenance 检查通过；完整 ESLint 和 Node/Web noEmit 通过。专项与全量存在重叠，不能相加。未运行应用/原生构建及构建型 Electron 夹具；新原生控制路径和完整 UI 门禁由 PR 的平台 CI 验证，真实设备与完整窗口验收仍待完成。
 
 用户随后解除本地构建限制。补充生产构建与资源预算验证通过，完整产品门禁三个组、19 个入口全部通过；本机编译 VST3 桥验证参数/音频传输。独立 Debug 原生构建和 CTest 实际完成：35 通过、2 项因 FFmpeg/MSVC 条件跳过、0 失败，后端/时钟/DSD 回归均执行。生产静态预设尚缺 vcpkg/w64devkit 配置；Debug 未找到 FFmpeg/libebur128 开发库，不代表发布包或真实播放验收。宏观 CI 汇总暴露的工具链 Windows 路径假设已改为主机绝对 fixture/分隔符，71 项工具链检查通过；修正原生夹具方法名后等待最新平台 CI。
+
+最新测试范围改为仅 Windows。Repository Quality、Windows Native Audio 与 Required Quality Gate 全部迁到 Windows runner，移除 Linux/macOS 原生测试矩阵与 Xvfb 步骤；现有平台生产代码和显式 macOS 发布打包入口保留。以上跨平台失败记录为历史诊断，后续不再启动这些平台测试。
+
+历史 CI 的 paused→playing 异常进一步定位为实际时钟竞争。Windows 屏障回归固定旧 playing 快照晚于 pause 提交的顺序，修复前失败；clockLoop 的普通与 track-start 刷新保留命令已提交的 transport state，结束/错误事件仍显式提交 stopped，命令路径继续应用最新 pipeline ACK。修复不新增轮询、锁或实时回调工作，不放宽暂停断言；完整 Debug 原生回归与最新 Windows CI 负责验收。

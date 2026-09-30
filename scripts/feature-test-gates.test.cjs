@@ -192,12 +192,18 @@ test('duplicate benchmark scripts retain the authenticated contract and isolated
   )
 })
 
-test('required Ubuntu CI runs complete product outcomes with a shared display and bounded workers', () => {
+test('required Windows CI runs complete product outcomes with native fixtures and bounded workers', () => {
   assert.match(packageJson.scripts['test:local-perf'], /--test-concurrency=2\b/)
   assert.ok(workflow, 'the required CI workflow must exist')
-  assert.match(workflow, /sudo apt-get install --yes --no-install-recommends xvfb xauth/)
-  assert.match(workflow, /command -v xvfb-run/)
-  assert.match(workflow, /xvfb-run -a pnpm run test:product/)
+  for (const job of ['repository', 'native-audio', 'required']) {
+    const jobBlock = workflow.match(new RegExp(`^  ${job}:\\r?\\n([\\s\\S]*?)(?=^  [a-z][\\w-]*:|(?![\\s\\S]))`, 'm'))?.[1]
+    assert.ok(jobBlock, `${job} must remain a required job`)
+    assert.match(jobBlock, /runs-on: windows-latest/)
+    assert.doesNotMatch(jobBlock, /matrix:|runs-on: (?:ubuntu|macos)-latest/)
+  }
+  assert.doesNotMatch(workflow, /xvfb-run/)
+  assert.match(workflow, /W64DEVKIT_ROOT=/)
+  assert.match(workflow, /run: pnpm run test:product/)
   assert.match(workflow, /pnpm run test:quality-policy/)
   assert.match(workflow, /product-quality-gate\.json/)
   for (const script of [
@@ -210,7 +216,7 @@ test('required Ubuntu CI runs complete product outcomes with a shared display an
     'test:themes',
     'test:dsp-graph'
   ]) {
-    assert.ok(PRODUCT_SCRIPTS.includes(script), `${script} must run inside the shared display`)
+    assert.ok(PRODUCT_SCRIPTS.includes(script), `${script} must run inside the Windows product gate`)
   }
   assert.match(workflow, /pnpm run test:duplicate-detection-benchmark/)
   assert.match(workflow, /pnpm run benchmark:duplicate-detection:ci --/)

@@ -10,7 +10,7 @@
 | 曲库与来源 | 数据丢失、写入冲突、查询结果不完整、账户/来源串写、迟到请求污染当前视图 | 实际 repository/controller/store 与 Electron 交互回归 |
 | 播放与音频 | 错误换曲、睡眠触发后继续播放、错误码/状态不一致、撤销与失败不恢复 | 实际状态机、IPC 与音频控制流程回归 |
 | 应用与边界 | 插件授权或生命周期失效、资源不释放、键盘/焦点不可用、公开频道不匹配 | 插件/页面/弹层行为、资源预算与公共 IPC 映射 |
-| 原生平台 | 接受本平台不存在的后端、失败改变路线、DSD 超时不停止、设备恢复语义失效 | 各平台 CTest，使用真实平台能力或明确的 fake backend |
+| Windows 原生音频 | 接受本平台不存在的后端、失败改变路线、暂停状态被旧快照覆盖、DSD 超时不停止、设备恢复语义失效 | Windows CTest，使用真实平台能力或明确的 fake backend |
 | 整体性能与资源 | 受控场景中吞吐或 p95 退化，缓存/监听器/在途任务越界 | 独立固定 fixture 基准、原始证据与 provenance；资源所有权回归 |
 
 公开 IPC 频道仍与提交的契约基线比较。renderer 的内部域/调用足迹属于诊断，不能因为改成注入接口就要求恢复旧调用方式。类型与跨进程依赖方向保持约束；业务回归不因改名或拆文件被删除。
@@ -27,9 +27,9 @@
 
 一个入口失败或启动错误不跳过后续入口；每组记录全部结果、退出码、耗时，最终任一失败则返回非零。CI 上传完整 JSON。所调用的测试入口集中声明在 `scripts/run-product-quality-gate.cjs`，策略测试保证归属、无重复和失败后完整执行。
 
-Linux CI 在同一 Xvfb 环境下运行整个产品门禁，避免只给已暴露失败的单个步骤补显示器。本地性能组限制两个测试进程，避免 Electron 夹具同时争抢 CPU/内存。普通单测中的四处单次耗时变为诊断，仍检查完整匹配、稳定 ID/顺序、逻辑收藏身份、一次批量持久化。性能改善由独立基准和资源预算证明，不能把低负载时的一次耗时作为 PR 合格证。
+当前测试范围按用户要求仅为 Windows：Repository Quality、Native Audio 和 Required Quality Gate 都在 windows-latest 执行，不启动 Linux/macOS 测试任务。业务门禁直接运行 Windows Electron 夹具；CI 从已安装的 MinGW 编译器设置 W64DEVKIT_ROOT，实际编译并执行 VST3 桥回归，缺少编译器则明确失败。本地性能组限制两个测试进程，避免 Electron 夹具同时争抢 CPU/内存。普通单测中的四处单次耗时变为诊断，仍检查完整匹配、稳定 ID/顺序、逻辑收藏身份、一次批量持久化。性能改善由独立基准和资源预算证明，不能把低负载时的一次耗时作为 PR 合格证。
 
-生产依赖审计与独立 10k 重复检测基准继续单独执行。原生平台矩阵独立保留，不用源码测试成功代替原生结果。宏观入口不调用应用/原生构建或打包命令；现有 Electron 测试生成自己的临时夹具。初始本地检查受不构建约束；用户随后解除限制，补跑生产构建、完整产品门禁和独立 Debug 原生验证。
+生产依赖审计与独立 10k 重复检测基准继续单独执行。Windows 原生任务独立执行，不用源码测试成功代替原生结果。宏观入口不调用应用/原生构建或打包命令；现有 Electron 测试生成自己的临时夹具。初始本地检查受不构建约束；用户随后解除限制，补跑生产构建、完整产品门禁和独立 Debug 原生验证。已有 macOS 发布打包任务仅在显式 workflow_dispatch/tag 时触发，不属于 PR 测试或必需门禁；平台生产支持保持现状。
 
 ## 本次项目清洗
 
@@ -51,4 +51,6 @@ Node 与 Web 的额外 noUnusedLocals/noUnusedParameters 扫描本次均无诊�
 
 后续 Repository Quality 已实际通过。macOS 暴露极短 DSD 位置夹具与默认静音过渡的混合依赖；位置换算测试明确关闭 pre/post-roll，保持 64 bit frames / 2,822,400 Hz 与原精度断言，静音超时/DSD→PCM 保护仍在独立回归中执行。本机整个 runtime queue/reroute 集成再次通过。原生 CTest 进程设置 180 秒退出边界，并在该集成内部记录当前场景，使卡住时留下具体位置；它约束整组结束和可诊断性，不要求单个函数在一次机器计时内完成。
 
-带场景日志的后续 CI 已通过 Repository Quality 与 Linux/macOS 原生。Windows 的退出报告定位到错误事件夹具：registry 锁内调用 pipeline 事件，和状态读取的 pipeline→registry 顺序相反。改为锁内复制回调、锁外调用，保持实际 RenderError/lastError/context 回归；不增加超时或跳过场景。最终平台状态需以该修正之后的 PR head 为准。
+历史跨平台 CI 已通过 Repository Quality 与 Linux/macOS 原生。Windows 的退出报告定位到错误事件夹具：registry 锁内调用 pipeline 事件，和状态读取的 pipeline→registry 顺序相反。改为锁内复制回调、锁外调用，保持实际 RenderError/lastError/context 回归；不增加超时或跳过场景。旧结果仅作诊断证据，后续仅验证 Windows。
+
+后续发现实际暂停竞争：clockLoop 在 engine 锁外读取 playing 快照，命令完成 pause 后，旧快照又把状态写成 playing。新增 Windows 可执行的屏障回归，固定“时钟已取快照 → pause 完成 → 时钟继续”顺序，修复前确实失败。时钟刷新现在保留已提交的播放状态；命令和明确的结束/错误事件仍负责状态切换，进度/配置 ACK/曲目信息照常刷新。完整原生回归验证暂停、换曲、路由回滚和 DSD 保护，最终 CI 以最新 Windows head 为准。
