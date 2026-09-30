@@ -327,6 +327,8 @@ pnpm run format
 
 应用测试：
 
+`test:local-perf` 和 `test:plugins` 各限制两个测试进程，避免 Electron 夹具与系统字体 PowerShell 查询在 Windows CI 中争抢资源。全部测试文件与字体查询的原有超时限制保留，`test:quality-policy` 检查并发上限。
+
 ```bash
 pnpm run test:plugins
 pnpm run test:audio-manager

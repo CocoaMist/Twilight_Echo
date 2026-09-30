@@ -194,6 +194,7 @@ test('duplicate benchmark scripts retain the authenticated contract and isolated
 
 test('required Windows CI runs complete product outcomes with native fixtures and bounded workers', () => {
   assert.match(packageJson.scripts['test:local-perf'], /--test-concurrency=2\b/)
+  assert.match(packageJson.scripts['test:plugins'], /--test-concurrency=2\b/)
   assert.ok(workflow, 'the required CI workflow must exist')
   for (const job of ['repository', 'native-audio', 'required']) {
     const jobBlock = workflow.match(
