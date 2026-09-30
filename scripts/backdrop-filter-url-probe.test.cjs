@@ -294,6 +294,12 @@ function regionStats(bitmap, imageWidth, scale, id) {
   const y0 = Math.round(origin.y * scale)
   const w = Math.round(geometry.REGION.width * scale)
   const h = Math.round(geometry.REGION.height * scale)
+  const imageHeight = bitmap.length / (imageWidth * 4)
+  // A hosted Windows desktop can clamp the window to 1024x768. Never read
+  // another row as if it were a clipped diagnostic region's pixels.
+  if (x0 < 0 || y0 < 0 || x0 + w > imageWidth || y0 + h > imageHeight) {
+    return { pixels: [], mean: [], count: 0, contrast: null }
+  }
   const pixels = []
   let sumR = 0
   let sumG = 0
@@ -330,6 +336,7 @@ function regionStats(bitmap, imageWidth, scale, id) {
 }
 
 function compare(reference, candidate) {
+  if (!reference.count || !candidate.count) return { captured: false }
   let maxDelta = 0
   let differing = 0
   for (let i = 0; i < reference.pixels.length; i += 3) {
@@ -514,19 +521,25 @@ test('backdrop-filter url() capability probe', async (t) => {
     const maskedContrast = result.contrast.maskedChain
     const lensFirstContrast = result.contrast.lensFirst
     const shippedContrast = result.contrast.shipped
+    assert.ok(
+      Number.isFinite(rawContrast) && Number.isFinite(shippedContrast),
+      'the control and shipped surface must both fit within the captured viewport'
+    )
     // Halfway between "blurred" (~1) and "raw pattern" (~14-18) on a log scale.
     const droppedThreshold = rawContrast * 0.5
 
     t.diagnostic(`map decode:      ${result.mapReady}`)
     t.diagnostic(`contrast raw:    ${rawContrast.toFixed(2)} (no filter)`)
-    t.diagnostic(`contrast lens:   ${lensContrast.toFixed(2)} (shipped chain)`)
-    t.diagnostic(`contrast masked: ${maskedContrast.toFixed(2)} (feComposite vs feImage alpha)`)
-    t.diagnostic(`contrast first:  ${lensFirstContrast.toFixed(2)} (url() ahead of blur)`)
+    t.diagnostic(`contrast lens:   ${Number.isFinite(lensContrast) ? lensContrast.toFixed(2) : 'not captured'} (blur-first chain)`)
+    t.diagnostic(`contrast masked: ${Number.isFinite(maskedContrast) ? maskedContrast.toFixed(2) : 'not captured'} (feComposite vs feImage alpha)`)
+    t.diagnostic(
+      `contrast first:  ${Number.isFinite(lensFirstContrast) ? lensFirstContrast.toFixed(2) : 'not captured'} (url() ahead of blur)`
+    )
     t.diagnostic(`contrast shipped (${process.platform}): ${shippedContrast.toFixed(2)}`)
 
-    const lensApplies = lensContrast < droppedThreshold
-    const maskedIsDropped = maskedContrast >= droppedThreshold
-    const lensFirstApplies = lensFirstContrast < droppedThreshold
+    const lensApplies = Number.isFinite(lensContrast) && lensContrast < droppedThreshold
+    const maskedIsDropped = Number.isFinite(maskedContrast) && maskedContrast >= droppedThreshold
+    const lensFirstApplies = Number.isFinite(lensFirstContrast) && lensFirstContrast < droppedThreshold
 
     console.log(
       [
@@ -543,9 +556,9 @@ test('backdrop-filter url() capability probe', async (t) => {
         `computed mixed value kept:       ${result.parsed.mixedDisplace}`,
         '',
         '--- real chain shapes (feImage + baked map) ---',
-        `F. blur-first lens chain applies: ${lensApplies ? 'YES' : 'NO'}`,
-        `G. feImage-masked chain dropped: ${maskedIsDropped ? 'YES (as expected)' : 'no longer reproduces'}`,
-        `H. url() ahead of blur applies:  ${lensFirstApplies ? 'YES' : 'NO — ORDER IS REJECTED'}`,
+        `F. blur-first lens chain applies: ${Number.isFinite(lensContrast) ? (lensApplies ? 'YES' : 'NO') : 'NOT CAPTURED'}`,
+        `G. feImage-masked chain dropped: ${Number.isFinite(maskedContrast) ? (maskedIsDropped ? 'YES' : 'no longer reproduces') : 'NOT CAPTURED'}`,
+        `H. url() ahead of blur applies:  ${Number.isFinite(lensFirstContrast) ? (lensFirstApplies ? 'YES' : 'NO') : 'NOT CAPTURED'}`,
         '',
         mixedInvertWorks
           ? '=> mixed list survives; the playbar rule is structurally fine.'
