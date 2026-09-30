@@ -6,7 +6,7 @@
 
 目标是修复可复现的状态与资源问题，把状态提交权、I/O 和生命周期放到明确的模块中，减少重复计算、IPC、文件解析与长期引用。文件数和行数不作为优化收益。
 
-首批已经实现网络目录/媒体库状态、索引持久化与协议资源缓存治理，并补齐焦点资源生命周期；下述播放器、流媒体事务、插件和 UI 基础组件属于后续实施设计。没有改变存储 schema、IPC 频道或插件公共协议。原有脏工作目录保持独立。
+首批已经实现网络目录/媒体库状态、索引持久化与协议资源缓存治理，并补齐焦点资源生命周期。第二批继续实施播放器系统集成/睡眠定时器、创建/加歌事务及歌词依赖分层；播放器队列状态所有者、剩余详情事务、插件和 UI 基础组件仍属后续设计。没有改变存储 schema、IPC 频道或插件公共协议。原有脏工作目录保持独立。
 
 ## 当前证据与首批修复
 
@@ -70,13 +70,25 @@ flowchart LR
 - 各模块负责自己的 listener、timer、RAF、AbortController、pending Map 和对象 URL；dispose 幂等，迟到成功和失败都不能提交。
 - DTO 留在 shared；内部 main 类型不直接成为插件公共契约。第三方协议通过显式版本适配映射。
 
+## 第二批：播放器集成与歌单写入
+
+- `stores/player/playerSystemIntegrations.ts` 只读取歌曲、播放进度和两个开关，通过 4 个业务命令响应媒体键，不修改播放器队列/选曲状态。它拥有自己的 effect scope、浏览器媒体键、元数据去重、原生媒体后端发现及 Discord 发布状态。`start`/`dispose` 幂等；迟到的后端结果不会重新绑定已销毁运行时；关闭媒体功能立即解绑。原生 SMTC 生效时不改浏览器媒体会话。
+- Discord 随持续播放中的歌曲/队列条目变化更新，暂停和禁用后清除，元数据更正保留本次开始时间。按 IPC port 只有一个在途调用和一个待提交的最新快照；同 port 的运行时替换复用发布队列，旧待清除不会覆盖新运行时。100 次进度变化的行为测试验证元数据只创建一次、Discord 只发布一次。这不是 CPU/GC 或真实 Discord socket 延迟的实测结论。
+- 睡眠定时器启动读取与事件订阅进入既有 `usePlayerSleepTimer.ts` 所有者，销毁时释放两项订阅和淡出计时器。`sleepTimerController.ts` 用状态/用户命令代次保护配置和边界回复，避免取消后恢复旧定时器，保留触发事件先于边界回复时阻止 EOF 下一曲的规则。启动快照不会覆盖更新的事件或用户操作。BPM 完成订阅也进入播放器 cleanup 列表。
+- `components/streaming-page/ncmPlaylistEditor.ts` 拥有创建/加歌事务、busy/error 和弹窗数据；端口只有权限检查、上下文捕获、创建、加歌和错误展示适配，不导入账户/player/navigation store。UI 只输入名称并调用命令，直接菜单加歌和弹窗共用同一路径。正整数歌曲 ID 去重，异步前固定目标和歌曲列表。
+- 创建成功而加歌失败时保留已确认的歌单 ID，界面明确显示“重试添加歌曲”，再次提交只重试加歌；账户/provider 更换后不继续第二段写入，也不复用旧歌单。取消此弹窗不会删除已经创建的歌单。创建请求本身发生网络超时、没有成功确认时，仍不能提供服务端 exactly-once 保证，需 provider 支持幂等键。
+- 加歌成功更新同账户/来源的目标导航快照；当前目标详情重新读取服务端曲目，避免按请求数累加重复歌曲。A→B→A 也走重新读取；刷新迟到不写新详情、不清理新选择。写入已成功但刷新失败显示独立详情错误，不要求用户重复写入。
+- 歌词拆为 `lyricTypes.ts` → `lyricParser.ts` / TTML / embedded layers → `lyricLineBuilder.ts`；`lyrics.ts` 保持兼容导出和播放位置辅助。内部不再反向导入 facade，消除原解析/组装循环。没有重写歌词解析算法；既有 LRC/YRC/TTML/多声部测试继续验证语义，架构门禁限制反向依赖。
+
+本批 `usePlayerStore.ts` 由 4,283 行到 4,055 行，`lyrics.ts` 由 517 行到 67 行；实现进入有明确生命周期的模块，不能将这些局部行数减少等同于全仓代码量或内存下降。流媒体页面保留导航适配和目标视图提交，而非向新模块传整组可写 Ref。重新扫描 678 个生产源码文件、1,559 条静态运行依赖，未发现跨进程层反向导入，歌词循环已消除；主进程 window/audio/tray 静态循环仍在，队列多写者尚未收敛。扫描包含本批新增文件，只解析 Vue script，不等于 IPC、模板或 C++ 完整运行时图。
+
 ## 后续模块和实施顺序
 
 | 阶段 | 文件/模块责任 | 必须保持的行为 | 验收 |
 | --- | --- | --- | --- |
 | P1 已实施 | 网络查询控制器、索引 repository/persistence、协议资源缓存、focusTrap | 来源身份、入库替换规则、现有 IPC、授权边界、原有页面布局 | 并发无覆盖、迟到无提交、缓存有界、监听器/RAF 回到 0、相关回归与类型检查 |
-| P2 播放器 | 在现有 stores/player 下完善 playbackStateOwner、selection/queue/session/systemMediaIntegration；usePlayerStore 保留兼容 facade | queueEntryId、重复歌曲条目、原始/随机队列、恢复版本、native ACK/回滚、当前 track identity | queueIndex 只有 owner 提交；换曲/下一首/恢复同走业务命令；后台媒体集成一次订阅并可靠销毁 |
-| P3 在线音乐 | streaming-page 下独立 playlistActions、detailLoader、navigationSnapshots；useNcmStore 保持账户 session 权威 | 创建成功但加歌失败、请求目标与当前视图分离、A→B→A、provider 更换、云盘取消 | 实际模块测试替换字符串提取；读取最后请求有效，写操作按目标事务处理；缓存按账户/provider 隔离 |
+| P2 部分实施 | 系统媒体/Discord 和睡眠定时器生命周期已独立；selection/queue/session 的唯一状态提交者仍待完善；usePlayerStore 保留兼容 facade | queueEntryId、重复歌曲条目、原始/随机队列、恢复版本、native ACK/回滚、当前 track identity | 集成一次订阅并可靠销毁；后续 queueIndex 只有 owner 提交、换曲/下一首/恢复同走业务命令 |
+| P3 部分实施 | 创建/加歌事务和弹窗状态已独立；detailLoader/navigationSnapshots/其他写操作继续增量整理；useNcmStore 保持账户 session 权威 | 创建成功但加歌失败、请求目标与当前视图分离、A→B→A、provider 更换、云盘取消 | 已提取模块直接导入测试，页面导航适配另测；写操作按目标事务处理，账户/provider 隔离 |
 | P4 插件与资源 | manager 保留生命周期编排和唯一运行/休眠注册表；分 providerHealth、permissionDispatch、contributionRepository | wake 合并、host 崩溃清理、权限拒绝、安装回滚、公共插件协议 | 一个唤醒请求、一个 host 所有者；失败清除在途项；睡眠/销毁后订阅和进程引用释放 |
 | P5 UI 基础层 | PageFrame/Header、Button/IconButton/Field、DialogFrame、Empty/Error/Loading；复用 themeTokens 与 AppNotice | 专业 DSP 密度、预设布局差异、键盘/焦点/屏幕阅读器、窗口标题栏和播放条 | 网络源/电台样板页先迁移；删除旧样式和局部反馈逻辑；统一层级、inert/top-layer 策略和语义尺寸 |
 | P6 大数据与原生 | 测量后选择索引分页/查询缓存/worker；独立 native 音频验证批次 | 数据恢复、只读源、音频实时线程约束、平台输出后端 | 迁移前备份/回滚；原生单测与真实设备条件满足后才更改音频核心 |
@@ -144,6 +156,8 @@ GUI 验收在允许真实运行环境时进行：浅/深色、自定义强调色
 
 #99 首轮 CI 的依赖审计发现新公告：Electron 43.2.0 的 4 项未豁免高危命中，以及 ip-address 10.5.1 的 2 项中危命中。本批进一步固定 Electron 43.5.0、覆盖 ip-address 10.7.1，使用项目声明的 pnpm 11.7.0 更新锁文件、frozen install 且禁用安装脚本。更新后的生产依赖审计未豁免 moderate/high/critical 均为 0；现有 extract-zip 补丁和例外保持。新版 Electron 的原生窗口行为仍需要后续运行验证。
 
+#99 第二轮 CI 已通过依赖审计、lint/typecheck 和网络等前序门禁，在 `test:local-perf` 中 4 项 Electron 界面测试因缺少 X display 失败。本批为 local-perf 和同样包含界面测试的 app 门禁补齐既有 xvfb-run，并加入门禁检查；没有跳过测试。IPC 调用点清单仅移除 3 项直接 sleepTimer 调用及其直接域足迹：这些调用现通过注入 bridge 完成，main/preload 频道集合不变。注册新测试后重新生成当前重复检测基准与 provenance，并验证归档；旧证据保留在 Git 历史。
+
 本批运行源码行为回归、ESLint、Node/Web noEmit 类型检查和架构/IPC/门禁；不运行包含构建的 test:no-real-device 聚合入口。依赖公共协议、持久化 schema、队列版本的变更需要各自契约测试。不能把已修复的首批与尚未实施的大型播放器/插件重构一起宣称完成。
 
-本地结果：382 个源码/资源测试文件，2,650 项通过、3 项已有跳过、0 失败；84 项网络门禁、158 项音频诊断/管理专项、56 项架构/IPC/安装策略/错误与双语文案门禁和 11 项重复检测基准证据检查通过。ESLint、Node/Web 类型检查通过。上述专项与全量回归存在重叠，不能相加。源码回归沿用排除构建/原生依赖的清单，音频管理器另以假设备专项运行；没有真实音频设备或 Electron 窗口验收。注册新增测试后刷新当前重复检测归档，旧证据保留在 Git 历史中。
+第二批最终本地结果：385 个源码/资源测试文件，2,681 项通过、3 项已有跳过、0 失败；148 项播放器/睡眠/流媒体与架构/IPC/安装/错误门禁及 19 项歌单控制器/页面导航适配检查通过；11 项重复检测基准证据检查通过。ESLint、Node/Web noEmit 类型检查通过。上述专项与全量回归存在重叠，不能相加。源码回归沿用排除构建/原生依赖的清单；没有真实音频设备、Discord 客户端或 Electron 窗口验收。
