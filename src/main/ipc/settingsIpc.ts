@@ -15,7 +15,7 @@ import {
   importBackgroundImage,
   normalizeBackgroundImageImportData
 } from '../library/coverCache'
-import { updateAppSettings } from '../audio/state'
+import { updateAppSettings } from '../app/settingsRuntime.ts'
 import { getPlayerShortcutStatuses } from '../integrations/shortcutsTray'
 import {
   grantUserSelectedCacheRoot,

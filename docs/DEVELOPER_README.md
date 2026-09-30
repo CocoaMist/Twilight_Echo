@@ -2,6 +2,10 @@
 
 本文档面向 Twilight Echo 维护者，说明仓库结构、运行架构、关键数据流、性能约束和验证命令。插件系统的权威契约以 [twilight-echo-plugin-spec.md](./twilight-echo-plugin-spec.md) 与 [twilight-echo-plugin-plan.md](./twilight-echo-plugin-plan.md) 为准；本文只描述 app 仓库如何接入和承载插件能力。
 
+应用设置的跨领域编排由 `src/main/app/settingsRuntime.ts` 承担：IPC 设置、主题和遥控入口通过它应用设置与同步集成；`audio/state.ts` 只负责音频状态持久化、DSP 生效和播放事件。窗口背景计算是 `app/windowAppearance.ts` 的纯函数，窗口创建不再导入音频状态。架构门禁使用 TypeScript AST 检查 main 的静态运行时 import/re-export 循环；类型引用和延迟 `import()` 不属于初始化依赖。
+
+设备能力与 DSD 状态的两端公共规则位于 `src/shared/audioDeviceCapabilities.ts`。显式能力状态优先于 ID 推断；设备 ID 只能提供候选路径，不能证明设备已经支持 DoP/Native DSD。main 与 renderer 保留现有导出入口并复用该规则。插件目录的更新检测复用 `plugins/versionRange.ts`，按语义版本比较预发布标识，忽略构建元数据。
+
 ## 技术栈
 
 ### 反馈 38–43 行为修正
@@ -322,6 +326,8 @@ pnpm run format
 ```
 
 应用测试：
+
+`test:local-perf` 和 `test:plugins` 各限制两个测试进程，避免 Electron 夹具与系统字体 PowerShell 查询在 Windows CI 中争抢资源。全部测试文件与字体查询的原有超时限制保留，`test:quality-policy` 检查并发上限。
 
 ```bash
 pnpm run test:plugins

@@ -63,6 +63,43 @@ test('loads a valid plugin index and describes install state', async () => {
   )
 })
 
+test('update detection uses semantic prerelease precedence and ignores build metadata', async () => {
+  const fixture = await createIndexFixture()
+  const service = new PluginIndexService({
+    appVersion: '0.20.0',
+    localIndexPath: fixture.indexPath
+  })
+  const [entry] = await service.list()
+  assert.equal(
+    service.describeInstallState(entry, [descriptor({ version: '1.0.0-rc.1' })]),
+    'update-available'
+  )
+  assert.equal(
+    service.describeInstallState({ ...entry, version: '1.0.0-rc.10' }, [
+      descriptor({ version: '1.0.0-rc.2' })
+    ]),
+    'update-available'
+  )
+  assert.equal(
+    service.describeInstallState({ ...entry, version: '1.0.0-rc.1' }, [
+      descriptor({ version: '1.0.0' })
+    ]),
+    'installed'
+  )
+  assert.equal(
+    service.describeInstallState({ ...entry, version: '1.0.0+new' }, [
+      descriptor({ version: '1.0.0+old' })
+    ]),
+    'installed'
+  )
+  // Invalid local manifests still need to appear in the catalog without
+  // causing every otherwise valid entry to fail rendering.
+  assert.equal(
+    service.describeInstallState(entry, [descriptor({ version: 'unknown', status: 'invalid' })]),
+    'update-available'
+  )
+})
+
 test('rejects invalid sourceUrl protocols and escaping paths', async () => {
   await assert.rejects(async () => {
     const fixture = await createIndexFixture({ sourceUrl: 'ftp://example.test/plugin.tep' })

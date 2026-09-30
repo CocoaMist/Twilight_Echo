@@ -1,6 +1,6 @@
 import { nativeTheme, type IpcMain } from 'electron'
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
-import { relaunchApplication } from '../audio/state.ts'
+import { relaunchApplication } from '../app/settingsRuntime.ts'
 import { resolvePlaybackSessionSave } from '../app/window.ts'
 import { createSettingsSnapshot } from '../core/settings.ts'
 import { runtime } from '../core/runtime.ts'

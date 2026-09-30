@@ -18,7 +18,7 @@ import {
 } from '../../shared/versionedPersistence.ts'
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
 import { stringifyJsonForIpcStorage } from '../security/ipcValidation.ts'
-import { updateAppSettings } from '../audio/state.ts'
+import { updateAppSettings } from '../app/settingsRuntime.ts'
 import { runtime } from '../core/runtime.ts'
 import {
   copyThemeAssets,

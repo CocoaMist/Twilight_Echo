@@ -27,7 +27,7 @@
 
 一个入口失败或启动错误不跳过后续入口；每组记录全部结果、退出码、耗时，最终任一失败则返回非零。CI 上传完整 JSON。所调用的测试入口集中声明在 `scripts/run-product-quality-gate.cjs`，策略测试保证归属、无重复和失败后完整执行。
 
-当前测试范围按用户要求仅为 Windows：Repository Quality、Native Audio 和 Required Quality Gate 都在 windows-latest 执行，不启动 Linux/macOS 测试任务。业务门禁直接运行 Windows Electron 夹具；CI 从已安装的 MinGW 编译器设置 W64DEVKIT_ROOT，实际编译并执行 VST3 桥回归，缺少编译器则明确失败。本地性能组限制两个测试进程，避免 Electron 夹具同时争抢 CPU/内存。普通单测中的四处单次耗时变为诊断，仍检查完整匹配、稳定 ID/顺序、逻辑收藏身份、一次批量持久化。性能改善由独立基准和资源预算证明，不能把低负载时的一次耗时作为 PR 合格证。
+当前测试范围按用户要求仅为 Windows：Repository Quality、Native Audio 和 Required Quality Gate 都在 windows-latest 执行，不启动 Linux/macOS 测试任务。业务门禁直接运行 Windows Electron 夹具；CI 从已安装的 MinGW 编译器设置 W64DEVKIT_ROOT，实际编译并执行 VST3 桥回归，缺少编译器则明确失败。本地性能与插件组各限制两个测试进程，避免 Electron 夹具与系统字体 PowerShell 查询同时争抢 CPU/内存；测试文件与字体查询的原有超时限制保留。普通单测中的四处单次耗时变为诊断，仍检查完整匹配、稳定 ID/顺序、逻辑收藏身份、一次批量持久化。性能改善由独立基准和资源预算证明，不能把低负载时的一次耗时作为 PR 合格证。
 
 生产依赖审计与独立 10k 重复检测基准继续单独执行。Windows 原生任务独立执行，不用源码测试成功代替原生结果。宏观入口不调用应用/原生构建或打包命令；现有 Electron 测试生成自己的临时夹具。初始本地检查受不构建约束；用户随后解除限制，补跑生产构建、完整产品门禁和独立 Debug 原生验证。已有 macOS 发布打包任务仅在显式 workflow_dispatch/tag 时触发，不属于 PR 测试或必需门禁；平台生产支持保持现状。
 

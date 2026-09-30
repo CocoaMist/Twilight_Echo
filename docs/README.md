@@ -9,6 +9,7 @@
 - [用户体验功能实施顺序与交接](../plans/024-ux-feature-implementation.md)：设备档案优先，按 D → B → A → F → G → H → L → E 实施；含范围、验收及新窗口启动提示。
 - [高内聚低耦合维护执行方案](./architecture-maintainability-action-plan.md)
 - [模块解耦、运行效率与内存治理方案](./modularization-performance-plan-2026-09-30.md)
+- [基础设施与模块边界检查](./infrastructure-review-2026-09-30.md)
 - [宏观质量门禁](./quality-gates.md)
 - [音频引擎架构](./twilight-audio-engine-architecture.md)
 - [音频引擎 API](./audio-engine-api.md)
