@@ -1,0 +1,145 @@
+# 模块解耦、运行效率与内存治理方案
+
+日期：2026-09-30。基线：1.2.4 / `37d5d95`，包括已合并的 #97、#98。
+
+## 目标与执行状态
+
+目标是修复可复现的状态与资源问题，把状态提交权、I/O 和生命周期放到明确的模块中，减少重复计算、IPC、文件解析与长期引用。文件数和行数不作为优化收益。
+
+首批已经实现网络目录/媒体库状态、索引持久化与协议资源缓存治理，并补齐焦点资源生命周期；下述播放器、流媒体事务、插件和 UI 基础组件属于后续实施设计。没有改变存储 schema、IPC 频道或插件公共协议。原有脏工作目录保持独立。
+
+## 当前证据与首批修复
+
+| 问题 | 实际证据 | 首批处理 |
+| --- | --- | --- |
+| 并发入库覆盖索引 | 原模块 10 个来源同时入库，最终 JSON 仅保留 1 个来源 | 单个 repository 串行提交，读取等待先前提交；失败不阻塞下一事务；同目录临时文件 rename 发布 |
+| 元数据解析复活已删除歌曲 | updateEntries 原来会添加未知 ID；长时间解析完成前用户可能已移除歌曲 | 只合并仍存在的 ID，移除后的条目不被迟到结果重新加入 |
+| 多来源搜索重复解析 | 页面逐来源调用 IPC；主进程逐来源读完整 JSON、解析整个索引 | 复用既有 searchLibrary IPC，单次索引快照搜索全部来源；只克隆返回的匹配结果 |
+| 目录/查询竞态 | `/slow-A` 后 `/fast-B`，迟到 A 可以覆盖 B 内容/错误/loading | 独立控制器拥有结果与代次；离开、切来源和销毁失效；不共用目录读取与批量播放 busy 状态 |
+| 高频输入放大请求 | 原媒体库每次 input 立即遍历来源 | 150ms 防抖，期间立即废止旧请求，离开/卸载取消计时器；一个查询只发送一个 IPC |
+| 响应数据代理与保留 | 大列表原来放入普通 ref，页面自己管理迟到结果 | 控制器用 shallowRef 替换快照，减少逐项深层响应式代理；销毁释放当前列表和 timer |
+| 资源缓存预算不严格 | 原 eviction 在只剩一项时停止，单个大资产仍能超预算；空文件项数未受限 | 64 MiB 字节预算 + 512 项上限；超大内容返回但不保留；相同路径在途读取合并；clear 代次防旧结果重新进入缓存 |
+| 弹层资源生命周期 | 初始 open 没有焦点约束，关闭过渡时焦点不恢复，打开 RAF 无法取消 | Vue 薄适配 + 独立 focusTrap 控制器；首次 mount 初始化、仅最内层处理 Tab、恢复 opener、关闭/卸载取消 RAF 和监听器 |
+| 歌词弹层键盘入口分散 | 未接入共享 Escape/focus helper | 接入共用行为，字体菜单先关闭，初始化打开时同步设置；背景 inert/原生 top-layer 统一仍在后续 DialogFrame 方案中 |
+
+实际文件划分：
+
+```text
+src/main/network/
+  networkLibrary.ts             # 索引业务规则与唯一事务提交者
+  networkLibraryPersistence.ts  # 有界读取、校验、在途读合并、原子发布
+  sourcesManager.ts             # 连接/索引编排；批量查询一次快照
+src/main/cache/
+  protocolAssetCache.ts         # 实例拥有 LRU、字节/项预算、在途读和清理代次
+src/renderer/src/components/network-sources/
+  networkViewState.ts           # 浏览与媒体库控制器，窄 I/O port，不导入播放器
+src/renderer/src/app/
+  focusTrap.ts                  # 纯生命周期控制器，可直接测试
+  useDismissLayer.ts            # Vue mount/watch/unmount 适配
+scripts/
+  network-library-benchmark.ts  # 真实 repository、临时索引、对照查询与 GC 观测
+```
+
+索引只有一个进程内写入所有者。原子 rename 不等于断电事务保障；本批没有 fsync 或跨进程锁。读合并仅保存在途 Promise，完成后释放，不常驻整个 JSON 文档，也不隐藏后续外部文件修改。索引读取/写入上限为 64 MiB，超限报错并保留现有文件。大型库的分页/存储迁移见后续阶段。
+
+目录/查询控制器废止的是旧请求的回写资格，现有 IPC 没有取消频道，本批不会中止已经发送的网络/文件请求。主进程取消、总任务预算和下载共享订阅者的取消语义属于后续 transport 协调方案。
+
+## 依赖与状态边界
+
+保持既有进程分层，按业务域增量演进：
+
+```mermaid
+flowchart LR
+  UI[页面和基础控件] --> C[域控制器：命令和只读选择器]
+  C --> P[窄 I/O port]
+  P --> IPC[preload：版本化 DTO]
+  IPC --> A[main：应用服务]
+  A --> R[repository / transport / native port]
+  A --> D[shared：纯规则与契约]
+  C --> D
+```
+
+约束：
+
+- 基础 UI 控件不读播放器、账户或曲库 store；页面负责布局和用户意图，控制器负责一次完整业务事务。
+- 同一状态只有一个提交者。向模块传 20 个可写 Ref 或把 40 个 host 方法原样搬到接口中，不算解耦。
+- 对外暴露命令、结果和只读选择器，内部状态不沿 barrel 重新向全项目开放。大数组保留稳定身份和 revision，不在进度更新时复制。
+- 不统一所有 generation：账户身份、详情导航、播放加载、native 配置 ACK、缓存清理各自对应不同生命周期。
+- 各模块负责自己的 listener、timer、RAF、AbortController、pending Map 和对象 URL；dispose 幂等，迟到成功和失败都不能提交。
+- DTO 留在 shared；内部 main 类型不直接成为插件公共契约。第三方协议通过显式版本适配映射。
+
+## 后续模块和实施顺序
+
+| 阶段 | 文件/模块责任 | 必须保持的行为 | 验收 |
+| --- | --- | --- | --- |
+| P1 已实施 | 网络查询控制器、索引 repository/persistence、协议资源缓存、focusTrap | 来源身份、入库替换规则、现有 IPC、授权边界、原有页面布局 | 并发无覆盖、迟到无提交、缓存有界、监听器/RAF 回到 0、相关回归与类型检查 |
+| P2 播放器 | 在现有 stores/player 下完善 playbackStateOwner、selection/queue/session/systemMediaIntegration；usePlayerStore 保留兼容 facade | queueEntryId、重复歌曲条目、原始/随机队列、恢复版本、native ACK/回滚、当前 track identity | queueIndex 只有 owner 提交；换曲/下一首/恢复同走业务命令；后台媒体集成一次订阅并可靠销毁 |
+| P3 在线音乐 | streaming-page 下独立 playlistActions、detailLoader、navigationSnapshots；useNcmStore 保持账户 session 权威 | 创建成功但加歌失败、请求目标与当前视图分离、A→B→A、provider 更换、云盘取消 | 实际模块测试替换字符串提取；读取最后请求有效，写操作按目标事务处理；缓存按账户/provider 隔离 |
+| P4 插件与资源 | manager 保留生命周期编排和唯一运行/休眠注册表；分 providerHealth、permissionDispatch、contributionRepository | wake 合并、host 崩溃清理、权限拒绝、安装回滚、公共插件协议 | 一个唤醒请求、一个 host 所有者；失败清除在途项；睡眠/销毁后订阅和进程引用释放 |
+| P5 UI 基础层 | PageFrame/Header、Button/IconButton/Field、DialogFrame、Empty/Error/Loading；复用 themeTokens 与 AppNotice | 专业 DSP 密度、预设布局差异、键盘/焦点/屏幕阅读器、窗口标题栏和播放条 | 网络源/电台样板页先迁移；删除旧样式和局部反馈逻辑；统一层级、inert/top-layer 策略和语义尺寸 |
+| P6 大数据与原生 | 测量后选择索引分页/查询缓存/worker；独立 native 音频验证批次 | 数据恢复、只读源、音频实时线程约束、平台输出后端 | 迁移前备份/回滚；原生单测与真实设备条件满足后才更改音频核心 |
+
+P2 先收拢状态提交权限，再抽系统集成；P3 先拆业务事务，再整理模板。两者都不通过新增全局 event bus 或万能 CRUD 层转移耦合。提交按完整行为边界划分，便于独立回滚。
+
+## 运行速度与缓存策略
+
+| 数据类别 | 所有者与缓存策略 | 失效/并发规则 |
+| --- | --- | --- |
+| 网络曲库索引 | 当前只合并在途文件读；单快照搜索；不保留整库对象 | 写入串行且读等待已排队写；失败保留旧文件；结果独立拥有 |
+| 图片/背景字节 | 当前进程级 byte + entry LRU；相同路径在途读合并 | clear 代次；大对象 bypass。可变路径/mtime 的真实失效策略需后续核对协议调用方 |
+| 下载文件 | 既有主进程可信键、Range/大小校验、原子发布 | 后续加入相同目标下载协调、stat/etag/mtime 版本规则与清缓存屏障；有取消信号的订阅者不能任意取消其他订阅者 |
+| provider 搜索/详情 | 后续按 provider、账户代次、query、page 建小型 LRU，设置容量/TTL | logout/provider 失效全部撤销；写操作失效对应实体缓存；pending Promise 在所有终止路径释放 |
+| 歌曲查找/队列定位 | 后续按队列 revision 构建 ID 索引，不按播放时钟重建 | track ID 与 queueEntryId 分别索引；平台路径大小写规则保持 |
+| 波形/可视化 | 先观测采样/复制成本，再评估 typed array 复用与帧合并 | 缓冲由生产者拥有；双缓冲/lease 避免视图读取被覆盖的帧，不跨 IPC 假设零复制 |
+
+先减少工作次数，再优化一次工作的成本：减少多来源 IPC、重复 JSON.parse、每次 tick 的全队列 map/filter/持久化、重复订阅和不可见页面的绘制。不同来源可并行，但 FTP 单连接的命令不能并发；metadata 解码和多个协议的独立连接采用有界 worker/任务池。禁止无上限 Promise.all 下载整库。
+
+JSON 解析/排序/歌词分析若实测造成长任务，再移到 worker；小任务移线程可能增加序列化成本。持续多万条索引的全文件写入问题应通过 repository 内分页/事务存储解决，不能靠常驻缓存掩盖写放大。迁移数据库需要单独的数据兼容、备份、性能对照和恢复方案。
+
+## 内存与 GC 机制
+
+JavaScript 由 V8 自动 GC，C++ 由 RAII/资源生命周期管理。应用运行时不加入定时 global.gc、不先扩大 old-space，也不为所有对象建立池。
+
+重点控制三种成本：
+
+1. **分配速率**：读取同一文档一次、只克隆返回的匹配数据；进度状态与大列表分离；计算索引只依赖内容 revision；可视化经过验证后复用固定尺寸缓冲。
+2. **保留引用**：Map 以字节和项数限额淘汰；请求完成清 pending；关闭页面清结果；取消 timer/RAF 和解除 listener；release 对象 URL、上游 body/reader、音频 session、插件进程引用。
+3. **大对象与背压**：大资产不常驻 LRU；SSE 已有单连接预算；下载采用 pipeline；后续加总体在途字节/任务数预算。缓存预算只约束保留数据，不证明并发 readFile 或响应发送的峰值内存也有界。
+
+对象池只用于生命周期清楚、尺寸稳定、实测频繁分配的 buffer。缓存或池过大反而增加 old generation、清扫成本和长期驻留。WeakRef/FinalizationRegistry 不负责正确性、文件句柄或 IPC 清理。
+
+测量分别记录 heapUsed、external、arrayBuffers、RSS、GC 类型/次数/停顿和事件循环延迟；Buffer 主要影响 external，不能只看 JS heap。GC 事件来自 PerformanceObserver，应用持续监听/日志输出应受诊断开关控制。仅独立基准可用 --expose-gc 做受控保留堆实验，并明确人工收集范围；当前脚本没有强制 GC。
+
+原生实时音频回调应保持预分配、固定容量、无阻塞 I/O 和不可控分配；参数准备/解码/持久化放在控制线程或 worker，销毁使用明确的交接与 ACK。此次没有更改 C++ 音频核心，也没有运行原生构建。
+
+## 性能验收与结果边界
+
+首批受控基准：10,000 条数据、10 个来源、3 次预热、20 次测量；同进程交替旧式逐来源读取与新式单快照查询，两者都确认 110 个匹配结果。
+
+| 项目 | 结果 |
+| --- | --- |
+| 逐来源查询 p50 / p95 | 81.34 / 85.01 ms |
+| 单快照查询 p50 / p95 | 8.33 / 10.04 ms |
+| 同条件 p95 缩短 | 约 88.2%，约 8.47 倍 |
+| 并发来源写入 | 原模块 1/10；新模块 10/10，重新读取磁盘验证 |
+| GC 观测 | 两种方案合计 29 次、37.05 ms；没有分别隔离 GC 收益，不能据此声称 GC 停顿下降比例 |
+
+这是文件查询微基准，不是应用启动、NAS 下载、音乐切换或 GUI 帧率的端到端成绩。两个时点的内存快照也不是峰值、泄漏或保留堆证明。原始输出带 Node/平台和源码 SHA-256；复跑命令：
+
+[本次原始测量](./audit-evidence/network-library-performance-2026-09-30.json)。
+
+```sh
+node --experimental-strip-types scripts/network-library-benchmark.ts
+```
+
+后续基准约束：相同 fixture、相同机器、串行运行性能任务；记录 warm/cold、数据量、命中率与 p50/p95，包含空数据、100k 曲库、慢盘/慢网络及取消场景。快照查询目标是不增加每来源整库解析；共享资源缓存要求不超过预算；相同 key 并发只发生一次底层读取；页面和弹层关闭后 timer/RAF/listener 回到基线；50 次打开/切换/关闭后的保留堆需稳定而非持续上升。
+
+GUI 验收在允许真实运行环境时进行：浅/深色、自定义强调色、图片/透明背景、播放条变体、960×640 至 1920×1080、100/125/150% 缩放、长标题、空/错/加载状态、Tab/Shift+Tab/Escape 与嵌套弹层。记录同状态前后截图及帧时间；本次没有构建或视觉验收。
+
+## CI 与实施风险
+
+#98 已合并，但它的最终 CI 并非全绿。Repository Quality 的后续失败是 FTP 测试服务器错误地把 FEAT 多行响应写成两个终结响应；本批改为合法的 `211-...` / `211 ...`，重新跑真实回环 FTP 测试。Linux native 日志还显示两个测试默认期待 Windows 的 WASAPI 后端。原生平台夹具问题单独记录，未通过放宽断言或跳过测试宣称成功。
+
+本批运行源码行为回归、ESLint、Node/Web noEmit 类型检查和架构/IPC/门禁；不运行包含构建的 test:no-real-device 聚合入口。依赖公共协议、持久化 schema、队列版本的变更需要各自契约测试。不能把已修复的首批与尚未实施的大型播放器/插件重构一起宣称完成。
+
+本地结果：382 个源码/资源测试文件，2,649 项通过、3 项已有跳过、0 失败；84 项网络门禁、32 项架构/IPC/合同门禁和 11 项重复检测基准证据检查通过。ESLint、Node/Web 类型检查通过。上述专项与全量回归存在重叠，不能相加。注册新增测试后刷新当前重复检测归档，旧证据保留在 Git 历史中。
