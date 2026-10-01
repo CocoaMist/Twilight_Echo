@@ -1712,6 +1712,11 @@
   color: #666;
 }
 
+.search-clear.is-empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .search-clear:hover {
   background: rgba(124, 77, 255, 0.2);
 }

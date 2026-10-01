@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
@@ -24,6 +24,20 @@ export async function createTitlebarFixture() {
     const entry = join(directory, 'entry.ts')
     const html = join(directory, 'test.html')
     const runner = join(directory, 'runner.cjs')
+    const librarySearch = join(directory, 'LibrarySearch.vue')
+    const songListSource = await readFile(
+      join(root, 'src/renderer/src/components/SongList.vue'),
+      'utf8'
+    )
+    // Exercise both actual search templates without bootstrapping the music library.
+    const searchTemplates = [...songListSource.matchAll(/<div class="search-box"[\s\S]*?<\/div>/g)]
+    if (searchTemplates.length !== 2) throw new Error('Expected both SongList search templates')
+    await writeFile(
+      librarySearch,
+      `<script setup>import { ref } from 'vue'; import ThemeIcon from ${source('src/renderer/src/components/ThemeIcon.vue')}; const searchQuery = ref(''), searchInputFocused = ref(false)</script>
+<template><section>${searchTemplates.map((match) => match[0]).join('')}</section></template>
+<style scoped src=${source('src/renderer/src/components/song-list/SongList.css')}></style>`
+    )
     await writeFile(
       mockNcm,
       `import { ref } from 'vue'; export const isLoggedIn=ref(false), profile=ref(null); export const useNcmStore=()=>({isLoggedIn,profile});`
@@ -33,6 +47,8 @@ export async function createTitlebarFixture() {
       `
 import { createApp, h, reactive, nextTick } from 'vue'
 import TitleBar from ${source('src/renderer/src/components/TitleBar.vue')}
+import StreamingTrackToolbar from ${source('src/renderer/src/components/streaming-page/StreamingTrackToolbar.vue')}
+import LibrarySearch from ${JSON.stringify(librarySearch.replaceAll('\\', '/'))}
 import { isLoggedIn, profile } from ${JSON.stringify(mockNcm.replaceAll('\\', '/'))}
 import { pushBackHandler } from ${source('src/renderer/src/app/useBackStack.ts')}
 import ${source('src/renderer/src/assets/base.css')}
@@ -41,20 +57,52 @@ import ${source('src/renderer/src/assets/theme-layouts/paper-light.css')}
 import ${source('src/renderer/src/assets/fluent.css')}
 import ${source('src/renderer/src/assets/fluent-icons.css')}
 const props = reactive({ menuOpen: true, glass: false, liquidMaterial: false, hideStart: false, streaming: false, titleSurface: 'default', notificationsOpen: false })
-const calls = { minimize: 0, maximize: 0, close: 0, read: 0, subscribe: 0, release: 0, commands: 0 }
+const toolbarProps = reactive({ query: '', sort: 'default', direction: 'asc', count: 1000, total: 1000, canLocate: false, refreshing: false })
+createApp({ render: () => h('div', [h(StreamingTrackToolbar, { ...toolbarProps, 'onUpdate:query': value => toolbarProps.query = value }), h(LibrarySearch)]) }).mount('#search-fixtures')
+const calls = { minimize: 0, maximize: 0, close: 0, read: 0, subscribe: 0, release: 0, commands: 0, back: 0 }
 let nativeState, initialReply
 window.api = { window: {
   getState: () => { calls.read++; return new Promise(resolve => initialReply = resolve) },
   onStateChanged: cb => { calls.subscribe++; nativeState = cb; return () => { calls.release++; nativeState = null } },
   minimize: () => calls.minimize++, toggleMaximize: () => calls.maximize++, close: () => calls.close++
 } }
-let app = createApp({ render: () => h(TitleBar, { ...props, onCommands: () => calls.commands++ }) })
+let app = createApp({ render: () => h(TitleBar, { ...props, onCommands: () => calls.commands++, onBack: () => calls.back++ }) })
 app.mount('#app')
 const checks = []
 const check = (value, name) => { if (!value) throw Error(name); checks.push(name) }
 const tick = async () => { await nextTick(); await new Promise(resolve => setTimeout(resolve, 0)) }
+const settle = async () => {
+  // Hidden windows can suspend animation frames. Read geometry to flush styles,
+  // then finish actual animations without depending on compositor visibility.
+  document.querySelector('.title-bar').getBoundingClientRect()
+  await new Promise(resolve => setTimeout(resolve, 16))
+  document.querySelector('.title-bar').getAnimations({ subtree: true }).forEach(animation => animation.finish())
+  await tick()
+}
+const anchors = () => [...document.querySelectorAll('.title-bar-start > button, .title-bar-controls > button')].map(button => {
+  const rect = button.getBoundingClientRect()
+  return { key: button.className, left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+})
+const unchanged = (before, after, name) => {
+  const stable = before.length === after.length && before.every((rect, index) =>
+    rect.key === after[index].key && ['left', 'top', 'width', 'height'].every(key => Math.abs(rect[key] - after[index][key]) < .1))
+  check(stable, name + (stable ? '' : ': ' + JSON.stringify({ before, after })))
+}
 window.runChecks = async () => {
   await tick()
+  const rect = element => { const value = element.getBoundingClientRect(); return { left: value.left, top: value.top, width: value.width, height: value.height } }
+  for (const [index, field] of [...document.querySelectorAll('#search-fixtures input[type="text"], #search-fixtures .track-search input')].entries()) {
+    const clear = field.parentElement.querySelector('button'), before = rect(field)
+    const actions = [...document.querySelectorAll('.track-tool-actions > button, .track-tool-actions > select')]
+    const beforeActions = actions.map(rect)
+    check(clear.disabled && getComputedStyle(clear).visibility === 'hidden', 'empty-search-clear-is-not-focusable:' + index)
+    field.value = 'UI Lab'; field.dispatchEvent(new Event('input', { bubbles: true })); await tick()
+    check(!clear.disabled && getComputedStyle(clear).visibility === 'visible', 'search-clear-becomes-available:' + index)
+    check(Math.abs(rect(field).width - before.width) < .1, 'typing-cannot-shrink-search-input:' + index)
+    check(actions.every((action, i) => Math.abs(rect(action).left - beforeActions[i].left) < .1 && Math.abs(rect(action).top - beforeActions[i].top) < .1), 'search-does-not-displace-sort-or-refresh:' + index)
+    clear.click(); await tick()
+    check(field.value === '' && clear.disabled && Math.abs(rect(field).width - before.width) < .1, 'clearing-keeps-search-geometry:' + index)
+  }
   check(calls.read === 1 && calls.subscribe === 1, 'subscribe-before-window-state-read')
   nativeState({ maximized: true }); initialReply({ maximized: false }); await tick()
   let maximize = document.querySelector('.maximize')
@@ -66,6 +114,16 @@ window.runChecks = async () => {
   document.querySelector('.minimize').click(); document.querySelector('.close').click()
   document.querySelector('.command-palette-trigger').click()
   check(calls.minimize === 1 && calls.close === 1 && calls.commands === 1, 'window-and-command-buttons-dispatch-once')
+  const releaseAction = pushBackHandler(() => {}, '返回场景')
+  await tick(); document.querySelector('.back-btn').click()
+  check(calls.back === 1 && document.querySelector('.back-btn').title === '返回场景', 'back-button-keeps-live-handler-and-hint')
+  releaseAction(); await tick()
+  document.querySelector('.back-btn')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  check(calls.back === 1, 'leaving-back-button-cannot-dispatch-without-history')
+  await settle()
+  const leaving = document.querySelector('.back-btn')
+  leaving?.focus()
+  check(document.querySelector('.title-bar-back').inert && (!leaving || document.activeElement !== leaving), 'empty-back-slot-is-not-focusable')
   props.notificationsOpen = true; await tick()
   const bell = document.querySelector('.notification-btn')
   bell.getAnimations().forEach(animation => animation.finish()); await tick()
@@ -86,7 +144,7 @@ window.runChecks = async () => {
   app = createApp({ render: () => h(TitleBar, { menuOpen: false, preview: true }) }); app.mount('#app'); await tick()
   const preview = document.querySelector('.title-bar')
   check(preview.classList.contains('no-drag') && !preview.classList.contains('drag-region'), 'preview-is-never-a-native-drag-region')
-  check(!preview.querySelector('.back-btn') && !preview.querySelector('.title-bar-back-visible'), 'preview-does-not-inherit-live-back-stack')
+  check(!preview.querySelector('.back-btn') && preview.querySelector('.title-bar-back').getBoundingClientRect().width === 36, 'preview-keeps-fixed-slot-without-live-back-stack')
   for (const button of preview.querySelectorAll('.control-btn')) {
     check(button.disabled, 'preview-disables-' + button.className)
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -108,9 +166,25 @@ window.checkGeometry = async () => {
     for (const mode of ['default', 'settings', 'streaming', 'playing', 'login', 'liquid']) {
       props.titleSurface = mode === 'settings' ? 'settings' : mode === 'streaming' ? 'streaming' : 'default'
       props.streaming = mode === 'streaming'; props.glass = mode === 'playing'; props.hideStart = mode === 'login'; props.liquidMaterial = mode === 'liquid'
-      await tick()
+      await tick(); await settle()
       const title = document.querySelector('.title-bar').getBoundingClientRect()
       check(title.height === 35, 'chrome-height:' + theme + ':' + preset + ':' + mode + ':' + innerWidth)
+      const baseline = anchors(), backStates = [{ state: 'absent', anchors: baseline }]
+      const record = state => {
+        const current = anchors()
+        unchanged(baseline, current, 'fixed-command-anchors:' + state + ':' + theme + ':' + preset + ':' + mode + ':' + innerWidth)
+        check(document.querySelector('.title-bar-back').getBoundingClientRect().width === 36, 'fixed-back-slot:' + state)
+        backStates.push({ state, anchors: current })
+      }
+      const release = pushBackHandler(() => {}, '返回矩阵场景')
+      await tick(); record('entering'); await settle(); record('present')
+      release(); await tick(); record('leaving'); await settle(); record('absent-again')
+      props.menuOpen = false; props.notificationsOpen = false; await tick()
+      unchanged(baseline, anchors(), 'menu-and-notification-state-keeps-anchors:' + mode)
+      props.menuOpen = true; props.notificationsOpen = true; await tick()
+      for (const [index, button] of [...document.querySelectorAll('.title-bar-start > button')].entries()) {
+        check(button.getBoundingClientRect().left === 36 + index * 36, 'left-command-slot:' + button.className + ':' + mode)
+      }
       let edge = 0
       for (const button of document.querySelectorAll('.title-bar-controls button')) {
         const rect = button.getBoundingClientRect(), icon = button.querySelector('svg').getBoundingClientRect()
@@ -118,7 +192,7 @@ window.checkGeometry = async () => {
         check(icon.width === 12 && icon.height === 12 && Math.abs(icon.left + icon.width / 2 - rect.left - rect.width / 2) < .1 && Math.abs(icon.top + icon.height / 2 - rect.top - rect.height / 2) < .1, 'caption-glyph-center:' + button.className + ':' + mode)
         edge = rect.right
       }
-      snapshots.push({ width: innerWidth, theme, preset, mode, height: title.height })
+      snapshots.push({ width: innerWidth, theme, preset, mode, height: title.height, backStates })
     }
   }
   return snapshots
@@ -155,7 +229,7 @@ window.checkGeometry = async () => {
     })
     await writeFile(
       html,
-      '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="bundle/titlebar.css"></head><body><div id="app"></div><script src="bundle/runtime.js"></script></body></html>'
+      '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="bundle/titlebar.css"></head><body><div id="app"></div><div id="search-fixtures" style="position:absolute;top:80px;left:0;width:680px"></div><script src="bundle/runtime.js"></script></body></html>'
     )
     await writeFile(
       runner,

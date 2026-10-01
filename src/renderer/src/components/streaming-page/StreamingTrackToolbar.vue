@@ -33,8 +33,10 @@ const emit = defineEmits<{
         @input="emit('update:query', ($event.target as HTMLInputElement).value)"
       />
       <button
-        v-if="query"
         type="button"
+        class="track-search-clear"
+        :class="{ 'is-empty': !query }"
+        :disabled="!query"
         aria-label="清除歌单搜索"
         @click="emit('update:query', '')"
       >
@@ -124,6 +126,10 @@ const emit = defineEmits<{
 }
 .track-search:focus-within {
   color: var(--stage-accent);
+}
+.track-search-clear.is-empty {
+  visibility: hidden;
+  pointer-events: none;
 }
 .track-count {
   font-size: 0.8em;

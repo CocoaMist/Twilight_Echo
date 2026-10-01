@@ -99,13 +99,11 @@ function close(): void {
     }"
   >
     <div class="title-bar-background" aria-hidden="true"></div>
-    <!-- One global back affordance. It lives outside `hideStart`/`glass` so every
-         deep surface (playing page, theme studio, login, …) resolves through the
-         same fixed position; the wrapper width animates so sibling buttons do
-         not jump when it appears. -->
+    <!-- Reserve the back slot even without history. Only the glyph fades;
+         changing this slot's width would move every fixed command beside it. -->
     <div
       class="title-bar-back no-drag"
-      :class="{ 'title-bar-back-visible': canGoBack && !preview }"
+      :inert="!canGoBack || preview"
       @pointerdown="setPressOrigin"
     >
       <Transition name="title-back-fade">
@@ -115,7 +113,7 @@ function close(): void {
           class="back-btn"
           :title="backHint ?? '返回'"
           aria-label="返回"
-          @click="$emit('back')"
+          @click="canGoBack && $emit('back')"
         >
           <FluentIcon name="arrow_left" />
         </button>
@@ -338,6 +336,7 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 
 .title-bar-start {
   display: flex;
+  flex-shrink: 0;
   height: 100%;
   position: relative;
   z-index: 1;
@@ -346,17 +345,12 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 .title-bar-back {
   display: flex;
   align-items: center;
-  width: 0;
+  width: 36px;
   height: 100%;
   overflow: hidden;
   position: relative;
   z-index: 1;
   flex-shrink: 0;
-  transition: width 0.2s var(--te-ease-soft, ease);
-}
-
-.title-bar-back-visible {
-  width: 36px;
 }
 
 .back-btn {

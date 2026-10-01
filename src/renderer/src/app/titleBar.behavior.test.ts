@@ -20,7 +20,17 @@ test('real titlebar isolates previews, follows native state and keeps caption ge
     assert.ok(json, 'UI Lab must return measured geometry and state checks')
     const evidence = JSON.parse(json.slice('TITLEBAR_LAB_RESULT '.length))
     assert.equal(evidence.matrix.length, 144)
-    assert.ok(evidence.checks.length >= 15)
+    assert.ok(evidence.checks.length >= 20)
+    for (const index of [0, 1, 2]) {
+      assert.ok(evidence.checks.includes(`typing-cannot-shrink-search-input:${index}`))
+      assert.ok(evidence.checks.includes(`clearing-keeps-search-geometry:${index}`))
+    }
+    for (const scenario of evidence.matrix) {
+      assert.deepEqual(
+        scenario.backStates.map((sample: { state: string }) => sample.state),
+        ['absent', 'entering', 'present', 'leaving', 'absent-again']
+      )
+    }
     if (process.env.UI_LAB_TITLEBAR_EVIDENCE)
       await writeFile(
         process.env.UI_LAB_TITLEBAR_EVIDENCE,

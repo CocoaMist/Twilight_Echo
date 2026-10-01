@@ -1626,7 +1626,14 @@ function finishViewSwitchAndRestoreScroll(): void {
                   @focus="searchInputFocused = true"
                   @blur="searchInputFocused = false"
                 />
-                <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">
+                <button
+                  type="button"
+                  class="search-clear"
+                  :class="{ 'is-empty': !searchQuery }"
+                  :disabled="!searchQuery"
+                  aria-label="清除曲库搜索"
+                  @click="searchQuery = ''"
+                >
                   <ThemeIcon icon-slot="library.clear" />
                 </button>
               </div>
@@ -2242,7 +2249,14 @@ function finishViewSwitchAndRestoreScroll(): void {
                   @focus="searchInputFocused = true"
                   @blur="searchInputFocused = false"
                 />
-                <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">
+                <button
+                  type="button"
+                  class="search-clear"
+                  :class="{ 'is-empty': !searchQuery }"
+                  :disabled="!searchQuery"
+                  aria-label="清除曲库搜索"
+                  @click="searchQuery = ''"
+                >
                   <ThemeIcon icon-slot="library.clear" />
                 </button>
               </div>
