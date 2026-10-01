@@ -174,6 +174,8 @@ window.checkGeometry = async () => {
         const current = anchors()
         unchanged(baseline, current, 'fixed-command-anchors:' + state + ':' + theme + ':' + preset + ':' + mode + ':' + innerWidth)
         check(document.querySelector('.title-bar-back').getBoundingClientRect().width === 36, 'fixed-back-slot:' + state)
+        const commands = document.querySelector('.title-bar-start')
+        check(document.querySelector('.title-bar-back').getBoundingClientRect().left === (commands?.getBoundingClientRect().right ?? 0), 'back-slot-follows-fixed-commands:' + state)
         backStates.push({ state, anchors: current })
       }
       const release = pushBackHandler(() => {}, '返回矩阵场景')
@@ -183,7 +185,7 @@ window.checkGeometry = async () => {
       unchanged(baseline, anchors(), 'menu-and-notification-state-keeps-anchors:' + mode)
       props.menuOpen = true; props.notificationsOpen = true; await tick()
       for (const [index, button] of [...document.querySelectorAll('.title-bar-start > button')].entries()) {
-        check(button.getBoundingClientRect().left === 36 + index * 36, 'left-command-slot:' + button.className + ':' + mode)
+        check(button.getBoundingClientRect().left === index * 36, 'left-command-slot-without-leading-gap:' + button.className + ':' + mode)
       }
       const commandIcons = window.getCommandIconMetrics()
       for (const glyph of commandIcons) {

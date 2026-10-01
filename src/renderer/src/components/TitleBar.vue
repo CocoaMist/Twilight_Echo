@@ -99,26 +99,6 @@ function close(): void {
     }"
   >
     <div class="title-bar-background" aria-hidden="true"></div>
-    <!-- Reserve the back slot even without history. Only the glyph fades;
-         changing this slot's width would move every fixed command beside it. -->
-    <div
-      class="title-bar-back no-drag"
-      :inert="!canGoBack || preview"
-      @pointerdown="setPressOrigin"
-    >
-      <Transition name="title-back-fade">
-        <button
-          type="button"
-          v-if="canGoBack && !preview"
-          class="back-btn"
-          :title="backHint ?? '返回'"
-          aria-label="返回"
-          @click="canGoBack && $emit('back')"
-        >
-          <FluentIcon name="arrow_left" :size="16" />
-        </button>
-      </Transition>
-    </div>
     <div v-if="!glass && !hideStart" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
       <button
         type="button"
@@ -177,6 +157,27 @@ function close(): void {
         />
         <FluentIcon v-else name="person" :size="16" />
       </button>
+    </div>
+    <!-- Keep fixed commands at the left edge. Reserve the trailing back slot
+         within the flexible drag space, so history cannot shift those commands. -->
+    <div
+      class="title-bar-back"
+      :class="{ 'no-drag': canGoBack && !preview }"
+      :inert="!canGoBack || preview"
+      @pointerdown="setPressOrigin"
+    >
+      <Transition name="title-back-fade">
+        <button
+          type="button"
+          v-if="canGoBack && !preview"
+          class="back-btn"
+          :title="backHint ?? '返回'"
+          aria-label="返回"
+          @click="canGoBack && $emit('back')"
+        >
+          <FluentIcon name="arrow_left" :size="16" />
+        </button>
+      </Transition>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
       <button
