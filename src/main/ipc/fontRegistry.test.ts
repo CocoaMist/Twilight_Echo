@@ -1,6 +1,59 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseWindowsFontFamilies, listInstalledFontFamilies } from './fontRegistry.ts'
+import {
+  parseWindowsFontFamilies,
+  listInstalledFontFamilies,
+  createFontFamilyLoader
+} from './fontRegistry.ts'
+
+test('font loader shares one pending query and caches the successful catalog', async () => {
+  let calls = 0
+  let complete!: (fonts: string[]) => void
+  const loader = createFontFamilyLoader(() => {
+    calls++
+    return new Promise((resolve) => {
+      complete = resolve
+    })
+  })
+  const first = loader.list()
+  const second = loader.list()
+  await Promise.resolve()
+  assert.equal(calls, 1)
+  complete(['宋体', 'Segoe UI'])
+  assert.deepEqual(await first, ['宋体', 'Segoe UI'])
+  assert.deepEqual(await second, ['宋体', 'Segoe UI'])
+  assert.deepEqual(await loader.list(), ['宋体', 'Segoe UI'])
+  assert.equal(calls, 1)
+})
+
+test('font loader retries a failed or empty query rather than caching absence', async () => {
+  let calls = 0
+  const loader = createFontFamilyLoader(async () => {
+    calls++
+    if (calls === 1) throw new Error('cold registry startup timed out')
+    return calls === 2 ? [] : ['宋体']
+  })
+  assert.deepEqual(await loader.list(), [])
+  assert.deepEqual(await loader.list(), [])
+  assert.deepEqual(await loader.list(), ['宋体'])
+  assert.deepEqual(await loader.list(), ['宋体'])
+  assert.equal(calls, 3)
+})
+
+test('clearing during a font query cannot replace a newer catalog with stale results', async () => {
+  const completions: Array<(fonts: string[]) => void> = []
+  const loader = createFontFamilyLoader(() => new Promise((resolve) => completions.push(resolve)))
+  const first = loader.list()
+  await Promise.resolve()
+  loader.clear()
+  const second = loader.list()
+  await Promise.resolve()
+  completions[1]!(['Segoe UI'])
+  await second
+  completions[0]!(['Old font'])
+  await first
+  assert.deepEqual(await loader.list(), ['Segoe UI'])
+})
 
 test(
   'Windows font registry uses Unicode names without replacement characters',
