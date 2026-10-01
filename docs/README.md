@@ -13,6 +13,7 @@
 - [宏观质量门禁](./quality-gates.md)
 - [Echora UI Lab 开发工具草案](./echora-ui-lab-development-draft-2026-10-01.md)：标题栏修复、专项检查原型与交互式场景台方案。
 - [固定按钮位置检查与修复](./ui-fixed-control-anchors-repair-2026-10-01.md)：返回键位移复现、搜索控件占位及坐标回归。
+- [标题栏图标比例修复](./titlebar-icon-optical-repair-2026-10-02.md)：原生 16px Fluent 图标、实际图形边界和离屏渲染对比。
 - [音频引擎架构](./twilight-audio-engine-architecture.md)
 - [音频引擎 API](./audio-engine-api.md)
 - [安全加固边界](./security-hardening.md)

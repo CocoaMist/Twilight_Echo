@@ -52,6 +52,15 @@
     "headphones": "headphones_20_regular.svg",
     "calendar": "calendar_20_regular.svg",
     "arrow_sort": "arrow_sort_20_regular.svg",
-    "lock_closed": "lock_closed_20_regular.svg"
+    "lock_closed": "lock_closed_20_regular.svg",
+    "person": "person_20_regular.svg"
+  },
+  "compactIcons": {
+    "navigation": "navigation_16_regular.svg",
+    "search": "search_16_regular.svg",
+    "settings": "settings_16_regular.svg",
+    "puzzle_piece": "puzzle_piece_16_regular.svg",
+    "arrow_left": "arrow_left_16_regular.svg",
+    "person": "person_16_regular.svg"
   }
 }

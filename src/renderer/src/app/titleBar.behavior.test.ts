@@ -30,6 +30,9 @@ test('real titlebar isolates previews, follows native state and keeps caption ge
         scenario.backStates.map((sample: { state: string }) => sample.state),
         ['absent', 'entering', 'present', 'leaving', 'absent-again']
       )
+      if (scenario.mode !== 'playing' && scenario.mode !== 'login') {
+        assert.ok(scenario.commandIcons.length >= 4)
+      }
     }
     if (process.env.UI_LAB_TITLEBAR_EVIDENCE)
       await writeFile(

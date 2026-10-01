@@ -142,7 +142,7 @@ window.runChecks = async () => {
   expect(bell.getBoundingClientRect().bottom <= titleRect.bottom, 'notification trigger belongs to chrome')
   for (const button of document.querySelectorAll('.title-bar-start button')) {
     const icon = button.querySelector('svg').getBoundingClientRect()
-    expect(icon.width === 20 && icon.height === 20, 'main toolbar uses Fluent command icons consistently')
+    expect(icon.width === 16 && icon.height === 16, 'titlebar uses native compact Fluent command icons consistently')
   }
   // Measure final geometry after the real tray entry transition has settled.
   expect(document.querySelector('.tray-player.ready'), 'tray bootstrap completes before geometry checks')

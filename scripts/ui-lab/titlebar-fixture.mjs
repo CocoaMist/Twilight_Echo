@@ -185,6 +185,12 @@ window.checkGeometry = async () => {
       for (const [index, button] of [...document.querySelectorAll('.title-bar-start > button')].entries()) {
         check(button.getBoundingClientRect().left === 36 + index * 36, 'left-command-slot:' + button.className + ':' + mode)
       }
+      const commandIcons = window.getCommandIconMetrics()
+      for (const glyph of commandIcons) {
+        check(glyph.size === 16 && glyph.nativeSize === 16, 'native-compact-command:' + glyph.key)
+        check(glyph.inkWidth >= 9 && glyph.inkWidth <= 14 && glyph.inkHeight >= 9 && glyph.inkHeight <= 14, 'compact-command-ink-bounds:' + glyph.key)
+        check(Math.abs(glyph.offsetX) <= .6 && Math.abs(glyph.offsetY) <= .6, 'compact-command-ink-center:' + glyph.key)
+      }
       let edge = 0
       for (const button of document.querySelectorAll('.title-bar-controls button')) {
         const rect = button.getBoundingClientRect(), icon = button.querySelector('svg').getBoundingClientRect()
@@ -192,11 +198,18 @@ window.checkGeometry = async () => {
         check(icon.width === 12 && icon.height === 12 && Math.abs(icon.left + icon.width / 2 - rect.left - rect.width / 2) < .1 && Math.abs(icon.top + icon.height / 2 - rect.top - rect.height / 2) < .1, 'caption-glyph-center:' + button.className + ':' + mode)
         edge = rect.right
       }
-      snapshots.push({ width: innerWidth, theme, preset, mode, height: title.height, backStates })
+      snapshots.push({ width: innerWidth, theme, preset, mode, height: title.height, backStates, commandIcons })
     }
   }
   return snapshots
 }
+window.getCommandIconMetrics = () => [...document.querySelectorAll('.title-bar-start > button, .title-bar-back > button')].map(button => {
+  const svg = button.querySelector('svg'), bounds = svg.getBoundingClientRect(), ink = svg.getBBox(), parent = button.getBoundingClientRect(), nativeSize = svg.viewBox.baseVal.width
+  const scale = bounds.width / nativeSize
+  return { key: button.className, size: bounds.width, nativeSize, inkWidth: ink.width * scale, inkHeight: ink.height * scale,
+    offsetX: bounds.left + (ink.x + ink.width / 2) * scale - parent.left - parent.width / 2,
+    offsetY: bounds.top + (ink.y + ink.height / 2) * scale - parent.top - parent.height / 2 }
+})
 `
     )
     await build({

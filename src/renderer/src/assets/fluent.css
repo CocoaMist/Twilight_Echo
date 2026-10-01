@@ -401,7 +401,7 @@ button {
   max-height: var(--hig-chrome-height);
 }
 #app .title-bar :is(.title-bar-start, .title-bar-back) {
-  --hig-icon-size: 20px;
+  --hig-icon-size: 16px;
   align-items: center;
   transform: none;
 }

@@ -115,7 +115,7 @@ function close(): void {
           aria-label="返回"
           @click="canGoBack && $emit('back')"
         >
-          <FluentIcon name="arrow_left" />
+          <FluentIcon name="arrow_left" :size="16" />
         </button>
       </Transition>
     </div>
@@ -128,7 +128,7 @@ function close(): void {
         :aria-expanded="menuOpen"
         @click="$emit('toggleMenu')"
       >
-        <FluentIcon name="navigation" />
+        <FluentIcon name="navigation" :size="16" />
       </button>
       <button
         type="button"
@@ -138,7 +138,7 @@ function close(): void {
         aria-keyshortcuts="Control+K Meta+K"
         @click="$emit('commands')"
       >
-        <FluentIcon name="search" />
+        <FluentIcon name="search" :size="16" />
       </button>
       <button
         type="button"
@@ -148,7 +148,7 @@ function close(): void {
         title="设置"
         @click="$emit('settings')"
       >
-        <FluentIcon name="settings" />
+        <FluentIcon name="settings" :size="16" />
       </button>
       <button
         type="button"
@@ -158,7 +158,7 @@ function close(): void {
         title="扩展中心"
         @click="$emit('plugins')"
       >
-        <FluentIcon name="puzzle_piece" />
+        <FluentIcon name="puzzle_piece" :size="16" />
       </button>
       <button
         type="button"
@@ -175,7 +175,7 @@ function close(): void {
           alt=""
           @error="avatarLoadFailed = true"
         />
-        <i aria-hidden="true" v-else class="pi pi-user"></i>
+        <FluentIcon v-else name="person" :size="16" />
       </button>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
@@ -471,8 +471,8 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 }
 
 .user-avatar {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   object-fit: cover;
 }
