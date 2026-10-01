@@ -61,7 +61,7 @@ onBeforeUnmount(() => {
         @click="drawerOpen = !drawerOpen"
       >
         <span>{{ drawerOpen ? '收起设备搜索' : '展开设备搜索' }}</span>
-        <i class="pi pi-chevron-down"></i>
+        <i aria-hidden="true" class="pi pi-chevron-down"></i>
       </button>
     </div>
 
@@ -70,7 +70,7 @@ onBeforeUnmount(() => {
         <div class="opra-drawer-inner">
           <div class="opra-search">
             <div class="opra-search-input-wrap">
-              <i class="pi pi-search search-icon"></i>
+              <i aria-hidden="true" class="pi pi-search search-icon"></i>
               <input
                 type="text"
                 v-model="query"

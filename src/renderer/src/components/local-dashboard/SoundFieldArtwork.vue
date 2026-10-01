@@ -14,7 +14,7 @@ defineProps<{
   <span class="sf-artwork" :data-motif="(title.charCodeAt(0) || 0) % 3">
     <span class="sf-artwork-fallback" aria-hidden="true">
       <span class="sf-artwork-form"></span>
-      <i class="ph ph-waveform"></i>
+      <i aria-hidden="true" class="ph ph-waveform"></i>
       <span>{{ title.slice(0, 1) || 'S' }}</span>
       <small>SOUND FIELD</small>
     </span>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { useEscapeToClose, useFocusTrap } from '../../app/useDismissLayer.ts'
 import type { ProviderDownloadTaskSnapshot } from '../../../../shared/providerDownloads.ts'
 import { downloadStatusLabel, filterActiveDownloadTasks } from './streamingDownloads.ts'
 
@@ -16,6 +17,12 @@ const emit = defineEmits<{
 }>()
 
 const activeDownloadTasks = computed(() => filterActiveDownloadTasks(props.tasks))
+const dialogRef = ref<HTMLElement | null>(null)
+useEscapeToClose(
+  () => props.show,
+  () => emit('close')
+)
+useFocusTrap(dialogRef, () => props.show)
 
 function isRunning(task: ProviderDownloadTaskSnapshot): boolean {
   return task.status === 'queued' || task.status === 'preparing' || task.status === 'downloading'
@@ -30,7 +37,13 @@ function formatFileSize(bytes: number): string {
   <Teleport to="body">
     <Transition name="dialog-fade">
       <div v-if="show" class="provider-download-panel-overlay" @click.self="emit('close')">
-        <div class="provider-download-panel" role="dialog" aria-modal="true" aria-label="下载管理">
+        <div
+          ref="dialogRef"
+          class="provider-download-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label="下载管理"
+        >
           <div class="provider-download-panel-header">
             <h3>下载管理</h3>
             <button
@@ -39,7 +52,7 @@ function formatFileSize(bytes: number): string {
               aria-label="关闭下载管理"
               @click="emit('close')"
             >
-              <i class="pi pi-times"></i>
+              <i aria-hidden="true" class="pi pi-times"></i>
             </button>
           </div>
           <div v-if="tasks.length === 0" class="provider-download-empty">
@@ -131,7 +144,7 @@ function formatFileSize(bytes: number): string {
     aria-label="打开下载管理"
     @click="emit('open')"
   >
-    <i class="pi pi-download"></i>
+    <i aria-hidden="true" class="pi pi-download"></i>
     <span class="fab-badge">{{ activeDownloadTasks.length }}</span>
   </button>
 </template>

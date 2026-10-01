@@ -1,18 +1,17 @@
 /**
  * Global UI typography (设置 → 外观 → 全局字体).
  *
- * `system` is the neutral value: the active theme — or the built-in stacks in
- * `base.css` — keeps its own faces. Every other value is an explicit user
- * choice, so it overrides whatever the theme declares, the same way the
- * settings accent color and surface material outrank a theme profile.
+ * System typography follows Fluent's native platform stack. Theme typography
+ * is an explicit preference; content typography remains separately configurable.
  */
-type BuiltinAppFontFamily = 'system' | 'inter' | 'lxgw' | 'sarasa' | 'comic'
+type BuiltinAppFontFamily = 'system' | 'theme' | 'inter' | 'lxgw' | 'sarasa' | 'comic'
 export type AppFontFamily = BuiltinAppFontFamily | `local:${string}`
 
 export const APP_FONT_SYSTEM = 'system' as const
 
 export const APP_FONT_FAMILIES: readonly AppFontFamily[] = [
   'system',
+  'theme',
   'inter',
   'lxgw',
   'sarasa',
@@ -26,9 +25,11 @@ export const APP_FONT_FAMILIES: readonly AppFontFamily[] = [
  */
 const FALLBACK_STACK =
   "'MiSans', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', system-ui, sans-serif"
+export const APP_SYSTEM_FONT_STACK =
+  "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'MiSans', sans-serif"
 
 export const APP_FONT_FAMILY_STACKS: Readonly<
-  Record<Exclude<BuiltinAppFontFamily, 'system'>, string>
+  Record<Exclude<BuiltinAppFontFamily, 'system' | 'theme'>, string>
 > = {
   inter: `'Inter', 'Plus Jakarta Sans', 'Roboto', ${FALLBACK_STACK}`,
   lxgw: `'LXGW WenKai', 'LXGW WenKai GB', '霞鹜文楷', 'KaiTi', 'STKaiti', ${FALLBACK_STACK}`,
@@ -63,12 +64,13 @@ export function normalizeAppFontFamily(value: unknown): AppFontFamily {
     : APP_FONT_SYSTEM
 }
 
-/** `null` means "leave the theme's own typography alone". */
+/** Only the explicit theme preference delegates typography to the theme. */
 export function resolveAppFontStack(value: unknown): string | null {
   const family = normalizeAppFontFamily(value)
-  if (family === APP_FONT_SYSTEM) return null
+  if (family === APP_FONT_SYSTEM) return APP_SYSTEM_FONT_STACK
+  if (family === 'theme') return null
   if (family.startsWith('local:')) return `"${family.slice(6)}", ${FALLBACK_STACK}`
-  return APP_FONT_FAMILY_STACKS[family as Exclude<BuiltinAppFontFamily, 'system'>]
+  return APP_FONT_FAMILY_STACKS[family as Exclude<BuiltinAppFontFamily, 'system' | 'theme'>]
 }
 
 /**

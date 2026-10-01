@@ -85,7 +85,7 @@ function deviceBadges(device: AudioDeviceOption): string[] {
         :aria-checked="audioDevice === device.id"
         @click="selectDevice(device.id)"
       >
-        <i class="onb-device-icon" :class="deviceIcon(device)"></i>
+        <i aria-hidden="true" class="onb-device-icon" :class="deviceIcon(device)"></i>
         <span class="onb-device-copy">
           <strong>{{ device.label }}</strong>
           <small>{{ deviceSpec(device) }}</small>
@@ -94,7 +94,7 @@ function deviceBadges(device: AudioDeviceOption): string[] {
           {{ badge }}
         </span>
         <span v-if="audioDevice === device.id" class="onb-device-check">
-          <i class="ph ph-check"></i>
+          <i aria-hidden="true" class="ph ph-check"></i>
         </span>
       </button>
     </div>
@@ -108,9 +108,9 @@ function deviceBadges(device: AudioDeviceOption): string[] {
         @click="emit('update:audioExclusiveMode', false)"
       >
         <span v-if="!props.audioExclusiveMode" class="onb-card-check">
-          <i class="ph ph-check"></i>
+          <i aria-hidden="true" class="ph ph-check"></i>
         </span>
-        <i class="onb-card-icon ph ph-circles-three-plus"></i>
+        <i aria-hidden="true" class="onb-card-icon ph ph-circles-three-plus"></i>
         <span class="onb-card-title">兼容模式</span>
         <span class="onb-card-desc">与其他应用共享声音输出，省心的默认选择</span>
       </button>
@@ -124,9 +124,9 @@ function deviceBadges(device: AudioDeviceOption): string[] {
         @click="emit('update:audioExclusiveMode', true)"
       >
         <span v-if="props.audioExclusiveMode" class="onb-card-check">
-          <i class="ph ph-check"></i>
+          <i aria-hidden="true" class="ph ph-check"></i>
         </span>
-        <i class="onb-card-icon ph ph-lightning"></i>
+        <i aria-hidden="true" class="onb-card-icon ph ph-lightning"></i>
         <span class="onb-card-title">HiFi 独占</span>
         <span class="onb-card-desc">
           {{

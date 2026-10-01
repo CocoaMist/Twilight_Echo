@@ -71,7 +71,7 @@ onBeforeUnmount(() => {
         <strong>迷你播放器</strong>
         <span>自定义迷你播放器窗口的主题、背景与布局。</span>
       </span>
-      <i class="pi pi-chevron-down"></i>
+      <i aria-hidden="true" class="pi pi-chevron-down"></i>
     </button>
 
     <MiniPlayerCustomizer

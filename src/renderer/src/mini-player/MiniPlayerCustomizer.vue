@@ -216,7 +216,7 @@ function removeBackgroundImage(): void {
           aria-label="关闭自定义面板"
           @click="emit('close')"
         >
-          <i class="ph ph-x"></i>
+          <i aria-hidden="true" class="ph ph-x"></i>
         </button>
       </div>
     </header>
@@ -229,7 +229,7 @@ function removeBackgroundImage(): void {
         :class="{ active: activeTab === tab.id }"
         @click="activeTab = tab.id"
       >
-        <i :class="tab.icon"></i>
+        <i aria-hidden="true" :class="tab.icon"></i>
         <span>{{ tab.label }}</span>
       </button>
     </nav>
@@ -249,7 +249,7 @@ function removeBackgroundImage(): void {
             :style="{ background: theme.defaultProfile.background.fallbackColor }"
           ></span>
           <span>{{ theme.name }}</span>
-          <i v-if="settings.activeStyleId === theme.id" class="ph ph-check"></i>
+          <i aria-hidden="true" v-if="settings.activeStyleId === theme.id" class="ph ph-check"></i>
         </button>
       </section>
 
@@ -262,7 +262,7 @@ function removeBackgroundImage(): void {
             :class="{ active: activeProfile.background.kind === option.value }"
             @click="updateBackground('kind', option.value)"
           >
-            <i :class="option.icon"></i>
+            <i aria-hidden="true" :class="option.icon"></i>
             <span>{{ option.label }}</span>
           </button>
         </div>
@@ -308,7 +308,7 @@ function removeBackgroundImage(): void {
         <div v-if="activeProfile.background.kind === 'image'" class="customizer-image-row">
           <span class="customizer-image-preview" :style="imagePreviewStyle"></span>
           <button type="button" @click="chooseBackgroundImage">
-            <i class="ph ph-image-square"></i>
+            <i aria-hidden="true" class="ph ph-image-square"></i>
             <span>{{ activeProfile.background.imageUrl ? '更换图片' : '选择图片' }}</span>
           </button>
           <button
@@ -319,7 +319,7 @@ function removeBackgroundImage(): void {
             :disabled="!activeProfile.background.imageUrl"
             @click="removeBackgroundImage"
           >
-            <i class="ph ph-trash"></i>
+            <i aria-hidden="true" class="ph ph-trash"></i>
           </button>
         </div>
 
@@ -385,6 +385,27 @@ function removeBackgroundImage(): void {
       </section>
 
       <section v-else-if="activeTab === 'appearance'" class="customizer-section">
+        <label class="customizer-field">
+          <span>播放器字体</span>
+          <select
+            :value="activeProfile.appearance.fontFamily === 'inherit' ? 'inherit' : 'custom'"
+            @change="
+              updateAppearance(
+                'fontFamily',
+                ($event.target as HTMLSelectElement).value === 'inherit' ? 'inherit' : 'Segoe UI'
+              )
+            "
+          >
+            <option value="inherit">跟随界面字体</option>
+            <option value="custom">独立字体</option>
+          </select>
+          <input
+            v-if="activeProfile.appearance.fontFamily !== 'inherit'"
+            :value="activeProfile.appearance.fontFamily"
+            aria-label="独立字体名称"
+            @change="updateAppearance('fontFamily', ($event.target as HTMLInputElement).value)"
+          />
+        </label>
         <p v-if="activeProfile.background.kind === 'cover'" class="customizer-cover-note">
           背景和文字明暗随封面自动调整，强调色跟随封面取色。
         </p>
@@ -527,17 +548,17 @@ function removeBackgroundImage(): void {
     </div>
 
     <div v-if="visibleError" class="mini-customizer-error" role="status">
-      <i class="ph ph-warning-circle"></i>
+      <i aria-hidden="true" class="ph ph-warning-circle"></i>
       <span>{{ visibleError }}</span>
     </div>
 
     <footer class="mini-customizer-footer">
       <button type="button" @click="emit('undo')">
-        <i class="ph ph-arrow-counter-clockwise"></i>
+        <i aria-hidden="true" class="ph ph-arrow-counter-clockwise"></i>
         <span>撤销本次</span>
       </button>
       <button type="button" @click="emit('reset')">
-        <i class="ph ph-clock-counter-clockwise"></i>
+        <i aria-hidden="true" class="ph ph-clock-counter-clockwise"></i>
         <span>恢复默认</span>
       </button>
     </footer>

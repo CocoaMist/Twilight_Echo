@@ -433,8 +433,8 @@ function setContinuitySampleRate(event: Event): void {
 <template>
   <section id="playback" class="glass-card preview-section">
     <div class="section-title-row">
-      <i class="pi pi-volume-up"></i>
-      <h2>播放 (Playback)</h2>
+      <i aria-hidden="true" class="pi pi-volume-up"></i>
+      <h2>播放</h2>
     </div>
 
     <div v-if="audioEngineError" class="engine-error">{{ audioEngineError }}</div>
@@ -468,10 +468,12 @@ function setContinuitySampleRate(event: Event): void {
       </div>
 
       <div class="diagnostic-meta">
-        <span v-if="outputLatencyText"><i class="pi pi-clock"></i> {{ outputLatencyText }}</span>
-        <span><i class="pi pi-chart-bar"></i> {{ outputDiagnosticsText }}</span>
+        <span v-if="outputLatencyText"
+          ><i aria-hidden="true" class="pi pi-clock"></i> {{ outputLatencyText }}</span
+        >
+        <span><i aria-hidden="true" class="pi pi-chart-bar"></i> {{ outputDiagnosticsText }}</span>
         <span v-if="outputProviderImplementation">
-          <i class="pi pi-cog"></i> Provider {{ outputProviderImplementation }}
+          <i aria-hidden="true" class="pi pi-cog"></i> Provider {{ outputProviderImplementation }}
         </span>
       </div>
     </div>
@@ -493,12 +495,13 @@ function setContinuitySampleRate(event: Event): void {
             <span>{{ audioOutputPanelExpanded ? '收起设备列表' : '展开设备列表' }}</span>
           </label>
           <button
+            aria-label="刷新设备列表"
             type="button"
             class="icon-button"
             title="刷新设备列表"
             @click="refreshAudioOutputState"
           >
-            <i class="pi pi-refresh"></i>
+            <i aria-hidden="true" class="pi pi-refresh"></i>
           </button>
         </div>
       </div>
@@ -516,7 +519,7 @@ function setContinuitySampleRate(event: Event): void {
             :class="{ active: audioDevice === device.id }"
             @click="selectAudioDevice(device.id)"
           >
-            <i :class="deviceIcon(device)"></i>
+            <i aria-hidden="true" :class="deviceIcon(device)"></i>
             <span>{{ device.label }}</span>
             <small>{{ deviceSpecText(device) }}</small>
             <div
@@ -583,6 +586,7 @@ function setContinuitySampleRate(event: Event): void {
             aria-label="DSD 直通路由"
           >
             <button
+              :aria-label="option.description"
               v-for="option in dsdOutputModeOptions"
               :key="option.value"
               type="button"
@@ -739,6 +743,7 @@ function setContinuitySampleRate(event: Event): void {
               @input="setVolumeFromInput"
             />
             <button
+              aria-label="将软件音量固定为 100%（Unity）"
               type="button"
               class="soft-button"
               :disabled="volumePercent >= 100"
@@ -977,11 +982,15 @@ function setContinuitySampleRate(event: Event): void {
           <strong>高级引擎参数 (Advanced Engine)</strong>
           <span>缓冲、声道路由、DSD 输出和 SACD program。</span>
         </div>
-        <i class="pi pi-chevron-down" :class="{ rotated: advancedParamsOpen }"></i>
+        <i
+          aria-hidden="true"
+          class="pi pi-chevron-down"
+          :class="{ rotated: advancedParamsOpen }"
+        ></i>
       </button>
       <div v-if="advancedParamsOpen" class="accordion-body">
         <div class="engine-warning">
-          <i class="pi pi-exclamation-triangle"></i>
+          <i aria-hidden="true" class="pi pi-exclamation-triangle"></i>
           <span>警告：以下参数直接与声卡底层交互，调节不当可能导致音频卡顿、无声或爆音。</span>
         </div>
         <div class="advanced-grid">

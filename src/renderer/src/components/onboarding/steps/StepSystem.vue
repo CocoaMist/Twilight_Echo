@@ -69,9 +69,9 @@ const closeBehaviorOptions: {
         @click="emit('update:closeWindowBehavior', option.value)"
       >
         <span v-if="props.closeWindowBehavior === option.value" class="onb-card-check">
-          <i class="ph ph-check"></i>
+          <i aria-hidden="true" class="ph ph-check"></i>
         </span>
-        <i class="onb-card-icon" :class="option.icon"></i>
+        <i aria-hidden="true" class="onb-card-icon" :class="option.icon"></i>
         <span class="onb-card-title">{{ option.title }}</span>
         <span class="onb-card-desc">{{ option.desc }}</span>
       </button>

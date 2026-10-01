@@ -182,7 +182,7 @@ function toggleBackgroundPage(page: AppBackgroundPage): void {
               : '纯色背景'
           }}
         </span>
-        <i class="pi pi-chevron-down"></i>
+        <i aria-hidden="true" class="pi pi-chevron-down"></i>
       </button>
       <div v-if="customBackgroundOpen" class="background-accordion-panel">
         <section class="background-editor">
@@ -239,7 +239,7 @@ function toggleBackgroundPage(page: AppBackgroundPage): void {
               }"
             ></span>
             <button type="button" class="pill-action" @click="openBackgroundFilePicker('global')">
-              <i class="pi pi-image"></i>
+              <i aria-hidden="true" class="pi pi-image"></i>
               <span>{{ settings.appBackground.global.image ? '更换图片' : '选择图片' }}</span>
             </button>
             <button
@@ -288,7 +288,7 @@ function toggleBackgroundPage(page: AppBackgroundPage): void {
                         : '纯色'
                   }}
                 </span>
-                <i class="pi pi-chevron-down"></i>
+                <i aria-hidden="true" class="pi pi-chevron-down"></i>
               </button>
               <div v-if="backgroundPageOpen === page.value" class="page-background-controls">
                 <button
@@ -384,7 +384,7 @@ function toggleBackgroundPage(page: AppBackgroundPage): void {
                     class="pill-action"
                     @click="openBackgroundFilePicker(page.value)"
                   >
-                    <i class="pi pi-image"></i>
+                    <i aria-hidden="true" class="pi pi-image"></i>
                     <span>{{
                       settings.appBackground.pages[page.value].image ? '更换图片' : '选择图片'
                     }}</span>

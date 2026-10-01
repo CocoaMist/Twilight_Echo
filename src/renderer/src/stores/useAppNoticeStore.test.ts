@@ -6,6 +6,40 @@ import { useAppNoticeStore } from './useAppNoticeStore.ts'
 const { notices, pushNotice, dismissNotice, releaseNoticeDedupe, clearNotices } =
   useAppNoticeStore()
 
+test('four visible notices retain a separate history and important failures persist', () => {
+  clearNotices()
+  for (let index = 0; index < 6; index++) pushNotice({ message: `通知 ${index}`, kind: 'error' })
+  assert.equal(notices.value.length, 4)
+  assert.equal(useAppNoticeStore().noticeHistory.value.length, 6)
+  assert.equal(
+    notices.value.every((notice) => notice.sticky),
+    true
+  )
+  dismissNotice(notices.value[0].id)
+  assert.equal(useAppNoticeStore().noticeHistory.value.length, 6)
+  clearNotices()
+})
+
+test('hover and keyboard pauses survive repeated updates and resume only after both leave', (t) => {
+  clearNotices()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const store = useAppNoticeStore()
+  const id = pushNotice({ message: '更新完成', dedupeKey: 'update' })
+  t.mock.timers.tick(1000)
+  store.pauseNotice(id, 'pointer')
+  store.pauseNotice(id, 'focus')
+  pushNotice({ message: '更新完成', dedupeKey: 'update' })
+  t.mock.timers.tick(20_000)
+  assert.equal(notices.value.length, 1)
+  store.resumeNotice(id, 'pointer')
+  t.mock.timers.tick(20_000)
+  assert.equal(notices.value.length, 1)
+  store.resumeNotice(id, 'focus')
+  t.mock.timers.tick(7001)
+  assert.equal(notices.value.length, 0)
+  clearNotices()
+})
+
 const DEDUPE_KEY = 'audio-engine-recovery'
 const CRASH_MESSAGE = '音频服务无法启动：未加载 twilight_audio_node.node。'
 

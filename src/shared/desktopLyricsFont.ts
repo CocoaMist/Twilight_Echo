@@ -4,6 +4,7 @@ import {
   type LyricsAppearanceFontFamily,
   type LyricsTextStyle
 } from './lyricsAppearance.ts'
+import { APP_SYSTEM_FONT_STACK } from './appFont.ts'
 
 export const DESKTOP_LYRICS_FOLLOW_FONT = 'follow' as const
 export const DESKTOP_LYRICS_SYSTEM_FONT = 'system' as const
@@ -38,11 +39,15 @@ function isSafeSystemFontName(value: string): boolean {
 
 export function resolveDesktopLyricsFontFamily(
   fontFamily: string | null | undefined,
-  linkedStyle: Pick<LyricsTextStyle, 'fontFamily' | 'customFontFamily'>
+  linkedStyle: Pick<LyricsTextStyle, 'fontFamily' | 'customFontFamily'>,
+  appFontStack = APP_SYSTEM_FONT_STACK
 ): string {
   const value = typeof fontFamily === 'string' ? fontFamily.trim() : ''
-  if (value === DESKTOP_LYRICS_FOLLOW_FONT) return resolveLyricsFontFamily(linkedStyle)
-  if (value === 'inherit') return 'inherit'
+  if (value === DESKTOP_LYRICS_FOLLOW_FONT) {
+    const linkedFont = resolveLyricsFontFamily(linkedStyle)
+    return linkedFont === 'inherit' ? appFontStack : linkedFont
+  }
+  if (value === 'inherit') return appFontStack
 
   const preset = PRESET_STACKS[value as Exclude<DesktopLyricsFontPreset, 'follow'>]
   if (preset) return preset

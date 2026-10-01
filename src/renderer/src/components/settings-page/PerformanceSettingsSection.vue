@@ -38,8 +38,8 @@ function toggleCompactVisualizer(): void {
 <template>
   <section id="performance" class="glass-card preview-section">
     <div class="section-title-row">
-      <i class="pi pi-bolt"></i>
-      <h2>性能 (Performance)</h2>
+      <i aria-hidden="true" class="pi pi-bolt"></i>
+      <h2>性能</h2>
     </div>
     <div class="setting-list">
       <div class="setting-item">

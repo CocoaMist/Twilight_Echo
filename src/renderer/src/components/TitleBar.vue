@@ -2,9 +2,10 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useBackStack } from '../app/useBackStack'
 import { useNcmStore } from '../stores/useNcmStore'
-import PuzzleIcon from './icons/PuzzleIcon.vue'
+import FluentIcon from './hig/FluentIcon.vue'
+import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     menuOpen: boolean
     glass?: boolean
@@ -12,6 +13,9 @@ withDefaults(
     streaming?: boolean
     hideStart?: boolean
     titleSurface?: 'default' | 'settings' | 'streaming'
+    activeTool?: 'settings' | 'plugins' | null
+    notificationsOpen?: boolean
+    preview?: boolean
   }>(),
   {
     titleSurface: 'default'
@@ -26,14 +30,17 @@ defineEmits<{
   settings: []
   plugins: []
   commands: []
+  notifications: []
 }>()
 
 const { isLoggedIn, profile } = useNcmStore()
 const { canGoBack, backHint } = useBackStack()
+const { noticeHistory } = useAppNoticeStore()
 const avatarLoadFailed = ref(false)
 const titleBar = ref<HTMLElement | null>(null)
 let titleObserver: ResizeObserver | undefined
 onMounted(() => {
+  if (props.preview) return
   const updateInset = (): void => {
     if (titleBar.value)
       titleBar.value.ownerDocument.documentElement.style.setProperty(
@@ -99,43 +106,49 @@ function close(): void {
           aria-label="返回"
           @click="$emit('back')"
         >
-          <i class="pi pi-arrow-left" aria-hidden="true"></i>
+          <FluentIcon name="arrow_left" />
         </button>
       </Transition>
     </div>
     <div v-if="!glass && !hideStart" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
-      <button class="menu-btn" title="菜单" @click="$emit('toggleMenu')">
-        <svg
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <line x1="3" y1="6" x2="21" y2="6" />
-          <line x1="3" y1="12" x2="21" y2="12" />
-          <line x1="3" y1="18" x2="21" y2="18" />
-        </svg>
-      </button>
-      <button class="settings-btn" title="设置" @click="$emit('settings')">
-        <i class="pi pi-cog"></i>
+      <button
+        aria-label="菜单"
+        class="menu-btn"
+        :title="menuOpen ? '收起导航' : '展开导航'"
+        :aria-expanded="menuOpen"
+        @click="$emit('toggleMenu')"
+      >
+        <FluentIcon name="navigation" />
       </button>
       <button
         class="settings-btn command-palette-trigger"
-        title="命令面板 (Ctrl+K / ⌘K)"
+        title="命令面板 (Ctrl+K)"
         aria-label="打开命令面板"
         aria-keyshortcuts="Control+K Meta+K"
         @click="$emit('commands')"
       >
-        <i class="pi pi-search" aria-hidden="true"></i>
-      </button>
-      <button class="plugins-btn" title="扩展中心" @click="$emit('plugins')">
-        <PuzzleIcon />
+        <FluentIcon name="search" />
       </button>
       <button
+        aria-label="设置"
+        :aria-pressed="activeTool === 'settings'"
+        class="settings-btn"
+        title="设置"
+        @click="$emit('settings')"
+      >
+        <FluentIcon name="settings" />
+      </button>
+      <button
+        aria-label="扩展中心"
+        :aria-pressed="activeTool === 'plugins'"
+        class="plugins-btn"
+        title="扩展中心"
+        @click="$emit('plugins')"
+      >
+        <FluentIcon name="puzzle_piece" />
+      </button>
+      <button
+        :aria-label="isLoggedIn ? profile?.nickname || '个人详情' : '网易云登录'"
         v-if="streaming"
         class="login-btn"
         :title="isLoggedIn ? profile?.nickname || '个人详情' : '网易云登录'"
@@ -148,33 +161,76 @@ function close(): void {
           alt=""
           @error="avatarLoadFailed = true"
         />
-        <i v-else class="pi pi-user"></i>
+        <i aria-hidden="true" v-else class="pi pi-user"></i>
       </button>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
-      <button class="control-btn minimize" title="最小化" @click="minimize">
-        <svg width="14" height="14" viewBox="0 0 10 10">
-          <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
+      <button
+        v-if="!preview"
+        class="control-btn notification-btn"
+        :aria-label="`通知记录（${noticeHistory.length}）`"
+        title="通知记录"
+        :aria-expanded="notificationsOpen"
+        aria-controls="hig-notice-history"
+        @click="$emit('notifications')"
+      >
+        <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+          <path
+            d="M3.5 4a2.5 2.5 0 0 1 5 0v2.5L10 8.5H2l1.5-2V4ZM6 .5v1M4.5 10a1.5 1.5 0 0 0 3 0"
+          />
+        </svg>
+        <span v-if="noticeHistory.length" class="notification-dot" aria-hidden="true"></span>
+      </button>
+      <button aria-label="最小化" class="control-btn minimize" title="最小化" @click="minimize">
+        <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M1 6.5h10" />
         </svg>
       </button>
-      <button class="control-btn maximize" title="最大化/还原" @click="toggleMaximize">
-        <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
-          <rect x="2.5" y="2.5" width="7" height="7" rx="1" stroke="currentColor" />
+      <button
+        aria-label="最大化/还原"
+        class="control-btn maximize"
+        title="最大化/还原"
+        @click="toggleMaximize"
+      >
+        <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="9" height="9" />
         </svg>
       </button>
       <button class="control-btn close" title="关闭窗口" aria-label="关闭窗口" @click="close">
-        <i class="pi pi-times" aria-hidden="true" />
+        <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="m1.5 1.5 9 9m0-9-9 9" />
+        </svg>
       </button>
     </div>
   </div>
 </template>
 
 <style scoped>
+.notification-btn {
+  position: relative;
+}
+.notification-dot {
+  position: absolute;
+  top: calc(50% - 8px);
+  right: calc(50% - 8px);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--hig-brand);
+  box-shadow: 0 0 0 1px var(--hig-surface);
+}
+.settings-btn[aria-pressed='true'],
+.plugins-btn[aria-pressed='true'],
+.notification-btn[aria-expanded='true'] {
+  background: var(--te-bg-hover);
+  color: var(--hig-brand);
+}
 .title-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 32px;
+  height: var(--hig-chrome-height, 35px);
+  flex-shrink: 0;
   background: transparent !important;
   user-select: none;
   position: fixed;
@@ -421,9 +477,13 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
+  width: 46px;
+  min-width: 46px;
   height: 100%;
+  flex-shrink: 0;
   border: none;
+  border-radius: 0;
+  padding: 0;
   background: transparent;
   color: var(--te-shell-control-text);
   font-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
@@ -438,6 +498,23 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   transition-duration: 0.1s;
 }
 
+.control-btn:focus-visible {
+  outline: 2px solid var(--hig-brand);
+  outline-offset: -2px;
+}
+
+.window-control-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+
 .title-bar-glass .control-btn {
   color: #fff;
 }
@@ -446,19 +523,13 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   background: rgba(255, 255, 255, 0.08);
 }
 
-.title-bar-glass .control-btn.maximize:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
 .control-btn:hover {
   background: var(--te-shell-control-hover);
 }
 
-.control-btn.maximize:hover {
-  background: var(--te-shell-control-hover);
-}
-
-.control-btn.close:hover {
+.control-btn.close:hover,
+html[data-theme='pureWhite'] .title-bar .control-btn.close:hover,
+.title-bar-liquid .control-btn.close:hover {
   background: #e81123;
   color: #fff;
 }

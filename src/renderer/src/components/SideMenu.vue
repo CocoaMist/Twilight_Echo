@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import ImportDialog from './ImportDialog.vue'
 import ThemeIcon from './ThemeIcon.vue'
 import type { UiContribution } from '../extensions/registry'
@@ -20,6 +20,8 @@ const emit = defineEmits<{
   enterStreaming: []
   enterRadioPodcast: []
   enterNetworkSources: []
+  close: []
+  openDsp: []
 }>()
 
 interface MenuItem {
@@ -40,6 +42,13 @@ const menuItems: MenuItem[] = [
   { key: 'recent', label: '最近播放', icon: 'navigation.recent' },
   { key: 'analytics', label: '统计仪表盘', icon: 'navigation.analytics' }
 ]
+const menuGroups = [
+  { label: '聆听', items: menuItems.filter((item) => ['dashboard', 'recent'].includes(item.key)) },
+  {
+    label: '音乐库',
+    items: menuItems.filter((item) => !['dashboard', 'recent'].includes(item.key))
+  }
+]
 
 const { libraryScanStatus, libraryScanProgress } = useMusicStore()
 const scanning = computed(
@@ -55,6 +64,47 @@ const scanningLabel = computed(() => {
   return '正在扫描…'
 })
 const showImportDialog = ref(false)
+const libraryExpanded = ref(
+  menuItems.some(
+    (item) => item.key === props.activeKey && !['dashboard', 'recent'].includes(item.key)
+  )
+)
+watch(
+  () => props.activeKey,
+  (key) => {
+    if (menuItems.some((item) => item.key === key && !['dashboard', 'recent'].includes(key)))
+      libraryExpanded.value = true
+  }
+)
+const navigationRef = ref<HTMLElement | null>(null)
+let navigationTrigger: HTMLElement | null = null
+watch(
+  () => props.open,
+  async (open) => {
+    if (window.innerWidth >= 1024) return
+    if (open) {
+      navigationTrigger =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null
+      await nextTick()
+      navigationRef.value?.querySelector<HTMLElement>('[aria-current="page"], button')?.focus()
+    } else navigationTrigger?.focus()
+  }
+)
+function trapNavigationFocus(event: KeyboardEvent): void {
+  if (window.innerWidth >= 1024 || event.key !== 'Tab') return
+  const buttons = Array.from(
+    navigationRef.value?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? []
+  ).filter((button) => button.getClientRects().length > 0)
+  const first = buttons[0],
+    last = buttons.at(-1)
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last?.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first?.focus()
+  }
+}
 
 function setPressOrigin(event: PointerEvent): void {
   const button =
@@ -81,17 +131,37 @@ function handleImportClick(): void {
 <template>
   <div
     class="side-menu"
+    ref="navigationRef"
     :class="{ open, 'side-menu-liquid': props.liquidMaterial }"
+    :inert="!open"
+    @keydown.esc.stop="emit('close')"
+    @keydown="trapNavigationFocus"
     @pointerdown="setPressOrigin"
   >
     <div class="navigation-brand" aria-hidden="true">
       <img src="/icon.png" alt="" />
       <span>Twilight Echo</span>
     </div>
-    <nav class="menu-items">
-      <div class="menu-nav">
+    <nav class="menu-items" aria-label="音乐导航">
+      <div v-for="group in menuGroups" :key="group.label" class="menu-nav">
         <button
-          v-for="item in menuItems"
+          v-if="group.label === '音乐库'"
+          class="hig-nav-category"
+          :aria-expanded="libraryExpanded"
+          @click="libraryExpanded = !libraryExpanded"
+        >
+          <ThemeIcon icon-slot="navigation.songs" /><span>音乐库</span
+          ><i
+            class="pi pi-chevron-right"
+            :class="{ 'is-expanded': libraryExpanded }"
+            aria-hidden="true"
+          ></i>
+        </button>
+        <h2 v-else class="menu-group-label">{{ group.label }}</h2>
+        <button
+          :aria-label="item.label"
+          v-for="item in group.items"
+          v-show="group.label !== '音乐库' || libraryExpanded"
           :key="item.key"
           type="button"
           class="menu-item"
@@ -105,8 +175,15 @@ function handleImportClick(): void {
         </button>
       </div>
       <div class="menu-bottom">
+        <h2
+          v-if="(props.localItems?.length ?? 0) + (props.pluginPages?.length ?? 0) > 0"
+          class="menu-group-label"
+        >
+          扩展工具
+        </h2>
         <div v-if="(props.localItems?.length ?? 0) > 0" class="menu-separator"></div>
         <button
+          :aria-label="item.title"
           v-for="item in props.localItems ?? []"
           :key="`local:${item.pluginId}:${item.id}`"
           type="button"
@@ -118,12 +195,13 @@ function handleImportClick(): void {
           :title="item.title"
           @click="selectPluginPage(item)"
         >
-          <i v-if="item.icon" class="item-icon" :class="item.icon"></i>
+          <i aria-hidden="true" v-if="item.icon" class="item-icon" :class="item.icon"></i>
           <ThemeIcon v-else class="item-icon" icon-slot="navigation.plugin" />
           <span class="item-label">{{ item.title }}</span>
         </button>
         <div class="menu-separator"></div>
         <button
+          :aria-label="page.title"
           v-for="page in props.pluginPages ?? []"
           :key="`${page.pluginId}:${page.id}`"
           type="button"
@@ -135,23 +213,30 @@ function handleImportClick(): void {
           :title="page.title"
           @click="selectPluginPage(page)"
         >
-          <i v-if="page.icon" class="item-icon" :class="page.icon"></i>
+          <i aria-hidden="true" v-if="page.icon" class="item-icon" :class="page.icon"></i>
           <ThemeIcon v-else class="item-icon" icon-slot="navigation.plugin" />
           <span class="item-label">{{ page.title }}</span>
         </button>
         <div v-if="(props.pluginPages?.length ?? 0) > 0" class="menu-separator"></div>
+        <h2 class="menu-group-label">音乐来源</h2>
         <button
+          aria-label="在线音乐"
           type="button"
           class="menu-item menu-item-streaming"
-          title="流媒体"
+          :class="{ active: props.activeKey === 'streaming' }"
+          :aria-current="props.activeKey === 'streaming' ? 'page' : undefined"
+          title="在线音乐"
           @click="emit('enterStreaming')"
         >
           <ThemeIcon class="item-icon" icon-slot="navigation.streaming" />
-          <span class="item-label">流媒体</span>
+          <span class="item-label">在线音乐</span>
         </button>
         <button
+          aria-label="电台 / 播客"
           type="button"
           class="menu-item menu-item-radio"
+          :class="{ active: props.activeKey === 'radio' }"
+          :aria-current="props.activeKey === 'radio' ? 'page' : undefined"
           title="电台 / 播客"
           @click="emit('enterRadioPodcast')"
         >
@@ -159,15 +244,19 @@ function handleImportClick(): void {
           <span class="item-label">电台 / 播客</span>
         </button>
         <button
+          aria-label="网络源"
           type="button"
           class="menu-item menu-item-network"
+          :class="{ active: props.activeKey === 'network' }"
+          :aria-current="props.activeKey === 'network' ? 'page' : undefined"
           title="网络源"
           @click="emit('enterNetworkSources')"
         >
-          <i class="item-icon pi pi-server"></i>
+          <i aria-hidden="true" class="item-icon pi pi-server"></i>
           <span class="item-label">网络源</span>
         </button>
         <button
+          aria-label="导入歌曲"
           type="button"
           class="menu-item menu-item-import"
           title="导入歌曲"
@@ -177,6 +266,17 @@ function handleImportClick(): void {
           <span class="item-label">导入歌曲</span>
         </button>
         <span v-if="scanning" class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
+        <div class="menu-separator"></div>
+        <h2 class="menu-group-label">工具</h2>
+        <button
+          type="button"
+          class="menu-item"
+          :class="{ active: props.activeKey === 'dsp' }"
+          @click="emit('openDsp')"
+        >
+          <i class="item-icon pi pi-sliders-v" aria-hidden="true"></i
+          ><span class="item-label">声音工作台</span>
+        </button>
       </div>
     </nav>
     <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
@@ -188,7 +288,7 @@ function handleImportClick(): void {
   position: fixed;
   display: flex;
   flex-direction: column;
-  top: 32px;
+  top: var(--hig-chrome-height, 35px);
   left: 0;
   /* App.vue measures how much of the bottom edge the playbar covers and publishes
      it on `.app-shell-navigation`; the menu ends above the bar instead of running
@@ -274,9 +374,24 @@ function handleImportClick(): void {
   flex-direction: column;
   height: auto;
   width: 100%;
-  min-width: 132px;
-  max-width: 216px;
+  min-width: 0;
+  max-width: none;
   padding: 16px 12px 16px 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.menu-group-label {
+  flex-shrink: 0;
+  margin: 12px 10px 4px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--te-navigation-text);
+}
+
+:global(html[data-te-navigation-style='rail'] .menu-group-label) {
+  display: none;
 }
 
 .menu-nav {
@@ -287,7 +402,7 @@ function handleImportClick(): void {
 
 .menu-bottom {
   flex-shrink: 0;
-  margin-top: auto;
+  margin-top: 16px;
   padding-top: 8px;
 }
 

@@ -85,8 +85,10 @@ function setProxyPort(event: Event): void {
         :aria-checked="props.wantsLogin"
         @click="emit('update:wantsLogin', true)"
       >
-        <span v-if="props.wantsLogin" class="onb-card-check"><i class="ph ph-check"></i></span>
-        <i class="onb-card-icon ph ph-qr-code"></i>
+        <span v-if="props.wantsLogin" class="onb-card-check"
+          ><i aria-hidden="true" class="ph ph-check"></i
+        ></span>
+        <i aria-hidden="true" class="onb-card-icon ph ph-qr-code"></i>
         <span class="onb-card-title">完成后立即登录</span>
         <span class="onb-card-desc">向导结束后打开扫码登录页，一步接入你的曲库</span>
       </button>
@@ -98,8 +100,10 @@ function setProxyPort(event: Event): void {
         :aria-checked="!props.wantsLogin"
         @click="emit('update:wantsLogin', false)"
       >
-        <span v-if="!props.wantsLogin" class="onb-card-check"><i class="ph ph-check"></i></span>
-        <i class="onb-card-icon ph ph-compass"></i>
+        <span v-if="!props.wantsLogin" class="onb-card-check"
+          ><i aria-hidden="true" class="ph ph-check"></i
+        ></span>
+        <i aria-hidden="true" class="onb-card-icon ph ph-compass"></i>
         <span class="onb-card-title">稍后再说</span>
         <span class="onb-card-desc">先随便逛逛，需要时再从标题栏登录</span>
       </button>
@@ -119,6 +123,7 @@ function setProxyPort(event: Event): void {
     </div>
     <div class="onb-segmented is-small" role="radiogroup" aria-label="流媒体音频缓存">
       <button
+        :aria-label="option.title"
         v-for="option in cacheOptions"
         :key="option.value"
         type="button"
@@ -153,7 +158,11 @@ function setProxyPort(event: Event): void {
         :aria-expanded="proxyOpen"
         @click="proxyOpen = !proxyOpen"
       >
-        <i class="ph" :class="proxyOpen ? 'ph-caret-down' : 'ph-caret-right'"></i>
+        <i
+          aria-hidden="true"
+          class="ph"
+          :class="proxyOpen ? 'ph-caret-down' : 'ph-caret-right'"
+        ></i>
         网络代理（连接不上时再设置）
       </button>
       <div v-if="proxyOpen" class="onb-proxy-body">

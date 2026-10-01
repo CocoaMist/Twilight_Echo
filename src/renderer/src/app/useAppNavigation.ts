@@ -35,7 +35,7 @@ const songlistOrder = [
   'analytics'
 ] as const
 
-export function useAppNavigation() {
+export function useAppNavigation(options: { persistentNavigation?: () => boolean } = {}) {
   const menuOpen = ref(false)
   const showPlayingPage = ref(false)
   const showStreamingPage = ref(false)
@@ -47,7 +47,6 @@ export function useAppNavigation() {
   const showSettingsPage = ref(false)
   const showThemeStudioPage = ref(false)
   const themeStudioInitialDomain = ref<ThemeStudioDomain>('presets')
-  const themeStudioReturnTarget = ref<'local' | 'playing' | 'settings'>('settings')
   const showPluginPage = ref(false)
   const showEqualizerPage = ref(false)
   const showDspRackPage = ref(false)
@@ -60,286 +59,222 @@ export function useAppNavigation() {
   const streamingMenuOpen = ref(false)
   const localMenuOpenBeforeStreaming = ref(false)
 
-  const showStreamingSurface = computed(
-    () =>
-      showStreamingPage.value &&
-      !showNetworkSourcesPage.value &&
-      !showPlayingPage.value &&
-      !showLoginPage.value &&
-      !showSettingsPage.value &&
-      !showThemeStudioPage.value &&
-      !showEqualizerPage.value &&
-      !showDspRackPage.value &&
-      !showPluginPage.value &&
-      !activePluginPage.value &&
-      !showRadioPodcastPage.value
+  // Base music destinations survive contextual pages. Only one foreground page
+  // is active at a time; closing it restores the exact originating destination.
+  const foreground = {
+    playing: showPlayingPage,
+    login: showLoginPage,
+    settings: showSettingsPage,
+    theme: showThemeStudioPage,
+    plugins: showPluginPage,
+    equalizer: showEqualizerPage,
+    dsp: showDspRackPage
+  }
+  const baseSurfaceVisible = computed(
+    () => !Object.values(foreground).some((page) => page.value) && !activePluginPage.value
   )
-
+  const showStreamingSurface = computed(() => baseSurfaceVisible.value && showStreamingPage.value)
   const localViewVisible = computed(
     () =>
-      !showPlayingPage.value &&
+      baseSurfaceVisible.value &&
       !showStreamingPage.value &&
       !showRadioPodcastPage.value &&
-      !showNetworkSourcesPage.value &&
-      !showLoginPage.value &&
-      !showSettingsPage.value &&
-      !showThemeStudioPage.value &&
-      !showEqualizerPage.value &&
-      !showDspRackPage.value &&
-      !showPluginPage.value &&
-      !activePluginPage.value
+      !showNetworkSourcesPage.value
   )
 
+  function snapshot() {
+    return {
+      pages: Object.fromEntries(Object.entries(foreground).map(([key, page]) => [key, page.value])),
+      streaming: showStreamingPage.value,
+      radio: showRadioPodcastPage.value,
+      network: showNetworkSourcesPage.value,
+      plugin: activePluginPage.value,
+      section: settingsInitialSection.value,
+      domain: themeStudioInitialDomain.value,
+      loginMode: loginPageMode.value,
+      provider: loginInitialProviderId.value
+    }
+  }
+  const returnStack: Array<{ owner: string; state: ReturnType<typeof snapshot> }> = []
+  function dismissDestinationMenu(): void {
+    if (!options.persistentNavigation?.()) menuOpen.value = false
+  }
+  function clearForeground(): void {
+    Object.values(foreground).forEach((page) => {
+      page.value = false
+    })
+    activePluginPage.value = null
+  }
+  function resetDestination(): void {
+    clearForeground()
+    returnStack.length = 0
+    showStreamingPage.value = false
+    showRadioPodcastPage.value = false
+    showNetworkSourcesPage.value = false
+    streamingMenuOpen.value = false
+  }
+  function openLayer(owner: string): void {
+    const alreadyOpen =
+      owner === 'extension'
+        ? !!activePluginPage.value
+        : foreground[owner as keyof typeof foreground]?.value
+    if (!alreadyOpen) {
+      returnStack.push({ owner, state: snapshot() })
+      if (returnStack.length > 16) returnStack.shift()
+    }
+    clearForeground()
+    dismissDestinationMenu()
+    streamingMenuOpen.value = false
+    if (owner !== 'extension') foreground[owner as keyof typeof foreground].value = true
+  }
+  function closeLayer(owner: string): void {
+    const active =
+      owner === 'extension'
+        ? !!activePluginPage.value
+        : foreground[owner as keyof typeof foreground]?.value
+    if (!active) return
+    clearForeground()
+    const last = returnStack.at(-1)
+    if (!last || last.owner !== owner) {
+      returnStack.length = 0
+      return
+    }
+    returnStack.pop()
+    const state = last.state
+    for (const [key, page] of Object.entries(foreground)) page.value = state.pages[key] === true
+    showStreamingPage.value = state.streaming
+    showRadioPodcastPage.value = state.radio
+    showNetworkSourcesPage.value = state.network
+    activePluginPage.value = state.plugin
+    settingsInitialSection.value = state.section
+    themeStudioInitialDomain.value = state.domain
+    loginPageMode.value = state.loginMode
+    loginInitialProviderId.value = state.provider
+  }
   function toggleStreamingMenu(): void {
     streamingMenuOpen.value = !streamingMenuOpen.value
   }
-
   function collapseMenu(): void {
-    if (showStreamingPage.value) {
-      streamingMenuOpen.value = false
-      return
-    }
     menuOpen.value = false
+    streamingMenuOpen.value = false
   }
-
   function onSelectView(category: string, filter: string | null): void {
     const currentIndex = songlistOrder.indexOf(
       activeCategory.value as (typeof songlistOrder)[number]
     )
     const nextIndex = songlistOrder.indexOf(category as (typeof songlistOrder)[number])
-    if (currentIndex !== -1 && nextIndex !== -1) {
+    if (currentIndex !== -1 && nextIndex !== -1)
       songlistTransitionName.value = nextIndex > currentIndex ? 'page-down' : 'page-up'
-    }
+    resetDestination()
     activeCategory.value = category
     activeFilter.value = filter
-    showPluginPage.value = false
-    activePluginPage.value = null
-    showRadioPodcastPage.value = false
-    showNetworkSourcesPage.value = false
+    dismissDestinationMenu()
   }
-
   function closePluginPage(): void {
-    activePluginPage.value = null
+    closeLayer('extension')
   }
-
   function onSelectPluginPage(page: UiContribution): void {
-    menuOpen.value = false
-    showPlayingPage.value = false
+    openLayer('extension')
     showStreamingPage.value = false
     showRadioPodcastPage.value = false
-    showLoginPage.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showEqualizerPage.value = false
-    showPluginPage.value = false
+    showNetworkSourcesPage.value = false
     activePluginPage.value = page
-    showNetworkSourcesPage.value = false
   }
-
   function openPlayingPage(): void {
-    showLoginPage.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showPluginPage.value = false
-    showEqualizerPage.value = false
-    showDspRackPage.value = false
-    activePluginPage.value = null
-    showPlayingPage.value = true
+    openLayer('playing')
   }
-
   function closePlayingPage(): void {
-    showPlayingPage.value = false
+    closeLayer('playing')
   }
-
   function enterStreamingMode(): void {
-    localMenuOpenBeforeStreaming.value = menuOpen.value
-    menuOpen.value = false
-    showPlayingPage.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showEqualizerPage.value = false
-    showPluginPage.value = false
-    activePluginPage.value = null
-    showRadioPodcastPage.value = false
-    showNetworkSourcesPage.value = false
+    if (!showStreamingPage.value) localMenuOpenBeforeStreaming.value = menuOpen.value
+    resetDestination()
+    dismissDestinationMenu()
     showStreamingPage.value = true
   }
-
   function returnToLocalMode(): void {
-    showStreamingPage.value = false
-    showRadioPodcastPage.value = false
-    streamingMenuOpen.value = false
+    resetDestination()
     menuOpen.value = localMenuOpenBeforeStreaming.value
   }
-
   function enterRadioPodcastMode(): void {
-    menuOpen.value = false
-    showPlayingPage.value = false
-    showStreamingPage.value = false
-    showNetworkSourcesPage.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showEqualizerPage.value = false
-    showDspRackPage.value = false
-    showPluginPage.value = false
-    activePluginPage.value = null
-    showLoginPage.value = false
+    resetDestination()
+    dismissDestinationMenu()
     showRadioPodcastPage.value = true
   }
-
   function closeRadioPodcastPage(): void {
-    showRadioPodcastPage.value = false
+    resetDestination()
   }
-
   function enterNetworkSourcesMode(): void {
-    menuOpen.value = false
-    showPlayingPage.value = false
-    showStreamingPage.value = false
-    showRadioPodcastPage.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showEqualizerPage.value = false
-    showDspRackPage.value = false
-    showPluginPage.value = false
-    activePluginPage.value = null
-    showLoginPage.value = false
+    resetDestination()
+    dismissDestinationMenu()
     showNetworkSourcesPage.value = true
   }
-
   function closeNetworkSourcesPage(): void {
-    showNetworkSourcesPage.value = false
+    resetDestination()
   }
-
   function openLoginPage(
     initialProviderId: string | null = null,
     options?: { profile?: boolean }
   ): void {
-    menuOpen.value = false
-    showPlayingPage.value = false
+    openLayer('login')
     showStreamingPage.value = false
     showRadioPodcastPage.value = false
     showNetworkSourcesPage.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showEqualizerPage.value = false
-    activePluginPage.value = null
     loginPageMode.value = options?.profile ? 'profile' : 'login'
     loginInitialProviderId.value = initialProviderId
-    showLoginPage.value = true
   }
-
   function closeLoginPage(): void {
-    showLoginPage.value = false
+    closeLayer('login')
     loginPageMode.value = 'login'
     loginInitialProviderId.value = null
-    showStreamingPage.value = true
   }
-
   function openSettingsPage(
     section: SettingsSection = 'general',
     target: Omit<SettingsNavigationTarget, 'revision'> = {}
   ): void {
+    openLayer('settings')
     settingsInitialSection.value = section
     settingsNavigationTarget.value = {
       ...target,
       revision: settingsNavigationTarget.value.revision + 1
     }
-    showLoginPage.value = false
-    showPlayingPage.value = false
-    showThemeStudioPage.value = false
-    showPluginPage.value = false
-    showEqualizerPage.value = false
-    showDspRackPage.value = false
-    activePluginPage.value = null
-    showNetworkSourcesPage.value = false
-    showSettingsPage.value = true
   }
-
   function closeSettingsPage(): void {
-    showSettingsPage.value = false
+    closeLayer('settings')
   }
-
   function openThemeStudioPage(initialDomain: ThemeStudioDomain = 'presets'): void {
-    themeStudioInitialDomain.value = initialDomain
-    themeStudioReturnTarget.value =
-      initialDomain === 'presets' || showSettingsPage.value
-        ? 'settings'
-        : showPlayingPage.value
-          ? 'playing'
-          : 'local'
-    menuOpen.value = false
-    showPlayingPage.value = false
-    showSettingsPage.value = false
-    showPluginPage.value = false
-    showEqualizerPage.value = false
-    showDspRackPage.value = false
-    activePluginPage.value = null
-    showNetworkSourcesPage.value = false
-    showThemeStudioPage.value = true
-  }
-
-  function closeThemeStudioPage(): void {
-    showThemeStudioPage.value = false
-    if (themeStudioReturnTarget.value === 'playing') {
-      showPlayingPage.value = true
-    } else if (themeStudioReturnTarget.value === 'settings') {
+    if (initialDomain === 'presets' && !showSettingsPage.value && !showThemeStudioPage.value)
       openSettingsPage('appearance')
-    }
+    if (showSettingsPage.value) settingsInitialSection.value = 'appearance'
+    openLayer('theme')
+    themeStudioInitialDomain.value = initialDomain
   }
-
+  function closeThemeStudioPage(): void {
+    closeLayer('theme')
+  }
   function openPlaybackSettings(): void {
     openSettingsPage('playback')
   }
-
   function openDspSettings(): void {
     openSettingsPage('dsp')
   }
-
   function openPluginPage(): void {
-    menuOpen.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showEqualizerPage.value = false
-    showDspRackPage.value = false
-    activePluginPage.value = null
-    showNetworkSourcesPage.value = false
-    showPluginPage.value = true
+    openLayer('plugins')
   }
-
   function hidePluginPage(): void {
-    showPluginPage.value = false
+    closeLayer('plugins')
   }
-
   function openEqualizerPage(): void {
-    showPlayingPage.value = false
-    showLoginPage.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showPluginPage.value = false
-    showDspRackPage.value = false
-    activePluginPage.value = null
-    showNetworkSourcesPage.value = false
-    showEqualizerPage.value = true
+    openLayer('equalizer')
   }
-
   function closeEqualizerPage(): void {
-    showEqualizerPage.value = false
+    closeLayer('equalizer')
   }
-
   function openDspRackPage(): void {
-    showPlayingPage.value = false
-    showLoginPage.value = false
-    showSettingsPage.value = false
-    showThemeStudioPage.value = false
-    showPluginPage.value = false
-    showEqualizerPage.value = false
-    activePluginPage.value = null
-    showNetworkSourcesPage.value = false
-    showDspRackPage.value = true
+    openLayer('dsp')
   }
-
   function closeDspRackPage(): void {
-    showDspRackPage.value = false
+    closeLayer('dsp')
   }
 
   function openLibraryPlaylist(playlist: { id: string; name: string; kind?: 'aggregate' }): void {
@@ -357,56 +292,29 @@ export function useAppNavigation() {
   }
 
   function closeMissingPluginPage(pages: UiContribution[]): void {
-    const active = activePluginPage.value
-    if (!active) return
-    const stillRegistered = pages.some(
-      (page) => page.pluginId === active.pluginId && page.id === active.id
-    )
-    if (!stillRegistered) {
-      activePluginPage.value = null
+    const registered = (page: UiContribution) =>
+      pages.some((item) => item.pluginId === page.pluginId && item.id === page.id)
+    for (const entry of returnStack) {
+      if (entry.state.plugin && !registered(entry.state.plugin)) entry.state.plugin = null
     }
+    if (activePluginPage.value && !registered(activePluginPage.value)) closePluginPage()
   }
-
   function createToggleMenuHandler(): () => void {
     return () => {
-      // I4: 菜单键全局语义统一为“打开/收起侧边菜单”。
-      // 全屏页（设置/插件）先退出全屏页再打开菜单，保证按键始终有可见反馈。
       if (showLoginPage.value) return
-      if (showSettingsPage.value) {
-        closeSettingsPage()
-        menuOpen.value = true
-        return
-      }
-      if (showPluginPage.value) {
-        hidePluginPage()
-        menuOpen.value = true
-        return
-      }
-      if (showStreamingPage.value) {
-        toggleStreamingMenu()
-        return
-      }
       menuOpen.value = !menuOpen.value
     }
   }
-
   function createToggleSettingsHandler(): () => void {
     return () => {
-      if (showSettingsPage.value) {
-        closeSettingsPage()
-        return
-      }
-      openSettingsPage()
+      if (showSettingsPage.value) closeSettingsPage()
+      else openSettingsPage()
     }
   }
-
   function createTogglePluginHandler(): () => void {
     return () => {
-      if (showPluginPage.value) {
-        hidePluginPage()
-        return
-      }
-      openPluginPage()
+      if (showPluginPage.value) hidePluginPage()
+      else openPluginPage()
     }
   }
 
@@ -434,6 +342,7 @@ export function useAppNavigation() {
     streamingMenuOpen,
     localMenuOpenBeforeStreaming,
     showStreamingSurface,
+    baseSurfaceVisible,
     localViewVisible,
     toggleStreamingMenu,
     collapseMenu,

@@ -167,7 +167,8 @@ export const accentColorOptions: { value: string; label: string; class: string }
 ]
 
 export const fontFamilyOptions: { value: AppFontFamily; label: string }[] = [
-  { value: 'system', label: '默认（跟随主题）' },
+  { value: 'system', label: '系统字体（Fluent 默认）' },
+  { value: 'theme', label: '跟随主题字体' },
   { value: 'inter', label: 'Inter / Roboto' },
   { value: 'lxgw', label: '霞鹜文楷 (LXGW)' },
   { value: 'sarasa', label: 'Sarasa Gothic' },

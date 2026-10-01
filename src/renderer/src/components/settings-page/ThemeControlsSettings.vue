@@ -76,8 +76,8 @@ async function setPluginTheme(event: Event): Promise<void> {
       <strong>主题创意工坊</strong>
     </div>
     <button type="button" class="primary-button" @click="emit('openThemeStudio')">
-      <i class="ph ph-swatches"></i>
-      打开主题创意工坊
+      <i aria-hidden="true" class="ph ph-swatches"></i>
+      打开主题工作室
     </button>
   </div>
   <div class="setting-item">
@@ -111,7 +111,7 @@ async function setPluginTheme(event: Event): Promise<void> {
         :class="{ active: settings.theme === option.value }"
         @click="setTheme(option.value)"
       >
-        <i :class="option.icon"></i>
+        <i aria-hidden="true" :class="option.icon"></i>
         {{ option.label }}
       </button>
     </div>
@@ -170,7 +170,11 @@ async function setPluginTheme(event: Event): Promise<void> {
         @keydown.enter.prevent="setAccentColor('light', option.value)"
         @keydown.space.prevent="setAccentColor('light', option.value)"
       >
-        <i v-if="settings.lightAccentColor === option.value" class="pi pi-check"></i>
+        <i
+          aria-hidden="true"
+          v-if="settings.lightAccentColor === option.value"
+          class="pi pi-check"
+        ></i>
       </span>
     </div>
   </div>
@@ -196,7 +200,11 @@ async function setPluginTheme(event: Event): Promise<void> {
         @keydown.enter.prevent="setAccentColor('dark', option.value)"
         @keydown.space.prevent="setAccentColor('dark', option.value)"
       >
-        <i v-if="settings.darkAccentColor === option.value" class="pi pi-check"></i>
+        <i
+          aria-hidden="true"
+          v-if="settings.darkAccentColor === option.value"
+          class="pi pi-check"
+        ></i>
       </span>
     </div>
   </div>

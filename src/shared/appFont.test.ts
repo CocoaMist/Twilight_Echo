@@ -5,6 +5,7 @@ import {
   APP_FONT_FAMILIES,
   APP_FONT_FAMILY_STACKS,
   APP_FONT_SYSTEM,
+  APP_SYSTEM_FONT_STACK,
   APP_FONT_VARIABLES,
   appFontCssVariables,
   normalizeAppFontFamily,
@@ -19,9 +20,10 @@ test('installed font names survive normalization and use the CJK fallback stack'
   assert.equal(normalizeAppFontFamily('local:   '), 'system')
 })
 
-test('the default global font contributes no override, so themed typography survives', () => {
-  assert.equal(resolveAppFontStack(APP_FONT_SYSTEM), null)
-  assert.deepEqual(appFontCssVariables(APP_FONT_SYSTEM), {})
+test('system typography is stable and theme typography requires explicit selection', () => {
+  assert.equal(resolveAppFontStack(APP_FONT_SYSTEM), APP_SYSTEM_FONT_STACK)
+  assert.deepEqual(appFontCssVariables('theme'), {})
+  assert.equal(resolveAppFontStack('theme'), null)
   // A stored value from a future build, or a hand-edited settings file, must
   // degrade to the theme font instead of reaching CSS as a bare identifier.
   for (const value of [
@@ -36,16 +38,16 @@ test('the default global font contributes no override, so themed typography surv
     {}
   ]) {
     assert.equal(normalizeAppFontFamily(value), APP_FONT_SYSTEM)
-    assert.equal(resolveAppFontStack(value), null)
+    assert.equal(resolveAppFontStack(value), APP_SYSTEM_FONT_STACK)
   }
 })
 
 test('every picker value resolves to a stack that keeps CJK coverage', () => {
   for (const family of APP_FONT_FAMILIES) {
-    if (family === APP_FONT_SYSTEM) continue
+    if (family === APP_FONT_SYSTEM || family === 'theme' || family.startsWith('local:')) continue
     const stack = resolveAppFontStack(family)
     assert.equal(typeof stack, 'string', `${family} must resolve to a stack`)
-    assert.equal(stack, APP_FONT_FAMILY_STACKS[family])
+    assert.equal(stack, APP_FONT_FAMILY_STACKS[family as keyof typeof APP_FONT_FAMILY_STACKS])
     // Latin-only faces would otherwise fall through to SimSun for Chinese text.
     assert.match(stack as string, /'MiSans'/, `${family} must keep the packaged CJK subsets`)
     assert.match(stack as string, /'Microsoft YaHei'/, `${family} must keep a system CJK fallback`)

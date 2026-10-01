@@ -17,6 +17,7 @@ const emit = defineEmits<{
 <template>
   <div class="streaming-placeholder" :class="{ 'detail-placeholder': detail }">
     <i
+      aria-hidden="true"
       :class="icon"
       :style="
         danger
@@ -27,7 +28,7 @@ const emit = defineEmits<{
     <p class="placeholder-title">{{ title }}</p>
     <p class="placeholder-hint">{{ hint }}</p>
     <button v-if="actionLabel" type="button" class="stream-action-btn" @click="emit('action')">
-      <i v-if="actionIcon" :class="actionIcon"></i>
+      <i aria-hidden="true" v-if="actionIcon" :class="actionIcon"></i>
       <span>{{ actionLabel }}</span>
     </button>
   </div>

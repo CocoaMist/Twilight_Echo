@@ -76,7 +76,7 @@ function count(value: number | undefined): string {
     :aria-busy="recsLoading"
   >
     <div v-if="locked" class="music-state">
-      <i class="pi pi-headphones"></i>
+      <i aria-hidden="true" class="pi pi-headphones"></i>
       <h2>你的音乐，在这里继续</h2>
       <p>登录 {{ providerLabel }}，开启首页推荐。</p>
       <button class="music-primary" type="button" @click="emit('requestLogin')">
@@ -98,7 +98,7 @@ function count(value: number | undefined): string {
 
     <template v-else>
       <div v-if="recsError" class="music-notice" role="status">
-        <i class="pi pi-info-circle"></i><span>{{ recsError }}</span>
+        <i aria-hidden="true" class="pi pi-info-circle"></i><span>{{ recsError }}</span>
         <button type="button" :disabled="recsLoading" @click="emit('loadRecommendations')">
           重新加载
         </button>
@@ -121,7 +121,7 @@ function count(value: number | undefined): string {
               type="button"
               @click="emit('requestLogin')"
             >
-              <i class="pi pi-user"></i> 登录查看每日推荐
+              <i aria-hidden="true" class="pi pi-user"></i> 登录查看每日推荐
             </button>
             <button
               v-else-if="hero.tracks.length"
@@ -129,7 +129,7 @@ function count(value: number | undefined): string {
               type="button"
               @click="play(hero)"
             >
-              <i class="pi pi-play"></i> 播放全部
+              <i aria-hidden="true" class="pi pi-play"></i> 播放全部
             </button>
             <button
               v-else
@@ -138,7 +138,7 @@ function count(value: number | undefined): string {
               :disabled="recsLoading"
               @click="emit('loadRecommendations')"
             >
-              <i class="pi pi-refresh"></i> 重新加载
+              <i aria-hidden="true" class="pi pi-refresh"></i> 重新加载
             </button>
             <button
               v-if="hero.tracks.length && !heroLocked"
@@ -146,7 +146,7 @@ function count(value: number | undefined): string {
               type="button"
               @click="emit('openRecSection', hero)"
             >
-              查看歌曲 <i class="pi pi-arrow-up-right"></i>
+              查看歌曲 <i aria-hidden="true" class="pi pi-arrow-up-right"></i>
             </button>
           </div>
           <p class="music-hero-foot">
@@ -175,7 +175,9 @@ function count(value: number | undefined): string {
               loading="eager"
             />
           </div>
-          <div v-if="!artwork.length" class="music-record"><i class="pi pi-headphones"></i></div>
+          <div v-if="!artwork.length" class="music-record">
+            <i aria-hidden="true" class="pi pi-headphones"></i>
+          </div>
           <span class="music-artwork-caption">PRESS PLAY. FEEL MORE.</span>
         </div>
       </section>
@@ -183,7 +185,7 @@ function count(value: number | undefined): string {
       <div v-if="!isLoggedIn" class="music-login-strip">
         <span>先发现喜欢的音乐，登录后开始收听。</span>
         <button type="button" @click="emit('requestLogin')">
-          登录 {{ providerLabel }} <i class="pi pi-arrow-right"></i>
+          登录 {{ providerLabel }} <i aria-hidden="true" class="pi pi-arrow-right"></i>
         </button>
       </div>
 
@@ -197,7 +199,7 @@ function count(value: number | undefined): string {
             先听这几首<span> / {{ hero.eyebrow || 'QUICK LISTEN' }}</span>
           </h2>
           <button type="button" @click="emit('openRecSection', hero)">
-            全部歌曲 <i class="pi pi-arrow-right"></i>
+            全部歌曲 <i aria-hidden="true" class="pi pi-arrow-right"></i>
           </button>
         </header>
         <div class="music-track-grid">
@@ -216,7 +218,7 @@ function count(value: number | undefined): string {
                 :cover="track.cover"
                 :cover-source="track.coverSource"
                 alt=""
-                loading="lazy" /><i class="pi pi-play"></i
+                loading="lazy" /><i aria-hidden="true" class="pi pi-play"></i
             ></span>
             <span class="music-track-meta"
               ><strong>{{ track.title }}</strong
@@ -246,7 +248,7 @@ function count(value: number | undefined): string {
               :aria-label="`播放${section.title}`"
               @click="play(section)"
             >
-              <i :class="section.icon"></i>
+              <i aria-hidden="true" :class="section.icon"></i>
             </button>
           </header>
           <p class="music-feature-description">{{ section.description }}</p>
@@ -278,7 +280,7 @@ function count(value: number | undefined): string {
                 loading="lazy" /></span
             ><strong
               >{{ track.title }}<small>{{ track.artist }}</small></strong
-            ><i class="pi pi-play"></i>
+            ><i aria-hidden="true" class="pi pi-play"></i>
           </button>
           <button
             v-if="section.tracks.length"
@@ -286,7 +288,8 @@ function count(value: number | undefined): string {
             class="music-feature-more"
             @click="emit('openRecSection', section)"
           >
-            查看全部 {{ section.tracks.length }} 首 <i class="pi pi-arrow-up-right"></i>
+            查看全部 {{ section.tracks.length }} 首
+            <i aria-hidden="true" class="pi pi-arrow-up-right"></i>
           </button>
         </article>
       </section>
@@ -295,7 +298,7 @@ function count(value: number | undefined): string {
         <header class="music-section-head">
           <h2>把喜欢，听成一张歌单<span> / CURATED PLAYLISTS</span></h2>
           <button v-if="supportsDiscovery" type="button" @click="emit('openDiscovery')">
-            发现更多 <i class="pi pi-arrow-right"></i>
+            发现更多 <i aria-hidden="true" class="pi pi-arrow-right"></i>
           </button>
         </header>
         <div v-if="playlists.length" class="music-playlist-grid">
@@ -312,7 +315,8 @@ function count(value: number | undefined): string {
                 :cover-source="playlist.coverSmallSource || playlist.coverSource"
                 alt=""
                 loading="lazy"
-              /><span class="music-playlist-symbol"><i class="pi pi-play"></i></span
+              /><span class="music-playlist-symbol"
+                ><i aria-hidden="true" class="pi pi-play"></i></span
               ><span
                 v-if="playlist.playCount || playlist.trackCount"
                 class="music-playlist-count"

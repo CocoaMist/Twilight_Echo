@@ -34,7 +34,11 @@ export default defineConfig({
             'vendor-vue': ['vue'],
             'vendor-music-metadata': ['music-metadata'],
             'vendor-qrcode': ['qrcode'],
-            'vendor-xmldom': ['@xmldom/xmldom']
+            'vendor-xmldom': ['@xmldom/xmldom'],
+            'locale-messages': [
+              resolve(__dirname, 'src/shared/i18n/messages/en-US.ts'),
+              resolve(__dirname, 'src/shared/i18n/messages/zh-CN.ts')
+            ]
           }
         }
       }

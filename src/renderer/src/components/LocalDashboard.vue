@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer.ts'
 import { storeToRefs } from 'pinia'
 import { useMusicStore } from '../stores/useMusicStore'
 import {
@@ -165,7 +166,8 @@ const heroProgressPercent = computed(() => Math.min(100, Math.max(0, progress.va
 
 const heroLabel = computed(() => {
   if (!heroTrack.value) return ''
-  return heroIsCurrent.value && isPlaying.value ? '正在播放' : '上次播放'
+  if (heroIsCurrent.value) return isPlaying.value ? '正在播放' : '已暂停'
+  return lastPlayedTrack.value ? '上次播放' : '开始聆听'
 })
 
 const heroMeta = computed(() => {
@@ -400,6 +402,9 @@ const RESAMPLER_LABELS: Record<string, string> = {
 const dspSceneState = ref<DspSceneState | null>(null)
 const polledDspGraphStatus = ref<DspGraphStatus | null>(null)
 const dspRouteDialogOpen = ref(false)
+const dspRouteDialogRef = ref<HTMLElement | null>(null)
+useEscapeToClose(dspRouteDialogOpen, closeDspRouteDialog)
+useFocusTrap(dspRouteDialogRef, dspRouteDialogOpen)
 const dspRouteLoading = ref(false)
 const dspRouteError = ref('')
 let dspRoutePoll: number | null = null
@@ -843,7 +848,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         </div>
         <button v-if="hasLibrary" type="button" class="masthead-shuffle" @click="shuffleAll">
           <span class="masthead-shuffle-icon" aria-hidden="true"
-            ><i class="ph ph-shuffle"></i
+            ><i aria-hidden="true" class="ph ph-shuffle"></i
           ></span>
           <span class="masthead-shuffle-copy">
             <strong>随机漫游</strong>
@@ -857,7 +862,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
       <section v-if="!hasLibrary" class="empty-stage">
         <div class="empty-orb empty-orb-a" aria-hidden="true"></div>
         <div class="empty-orb empty-orb-b" aria-hidden="true"></div>
-        <span class="empty-badge" aria-hidden="true"><i class="ph ph-music-note"></i></span>
+        <span class="empty-badge" aria-hidden="true"
+          ><i aria-hidden="true" class="ph ph-music-note"></i
+        ></span>
         <p class="empty-kicker">Twilight Echo · 唱片房间</p>
         <h2 class="empty-title">这里还很安静</h2>
         <p class="empty-desc">
@@ -870,9 +877,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           </span>
         </button>
         <div class="empty-chips" aria-hidden="true">
-          <span><i class="ph ph-folder-simple-plus"></i> 批量扫描</span>
-          <span><i class="ph ph-disc"></i> 无损格式</span>
-          <span><i class="ph ph-chart-line-up"></i> 聆听统计</span>
+          <span><i aria-hidden="true" class="ph ph-folder-simple-plus"></i> 批量扫描</span>
+          <span><i aria-hidden="true" class="ph ph-disc"></i> 无损格式</span>
+          <span><i aria-hidden="true" class="ph ph-chart-line-up"></i> 聆听统计</span>
         </div>
       </section>
 
@@ -895,7 +902,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
             <div class="hero-copy">
               <span class="hero-eyebrow">
                 <span v-if="heroIsCurrent && isPlaying" class="eq" aria-hidden="true">
-                  <i></i><i></i><i></i>
+                  <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
                 </span>
                 <i v-else class="ph ph-clock-counter-clockwise" aria-hidden="true"></i>
                 {{ heroLabel }}
@@ -931,7 +938,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   aria-label="上一首"
                   @click="prev"
                 >
-                  <i class="ph ph-skip-back"></i>
+                  <i aria-hidden="true" class="ph ph-skip-back"></i>
                 </button>
                 <button
                   type="button"
@@ -940,7 +947,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   :aria-label="isPlaying ? '暂停' : '播放'"
                   @click="togglePlay"
                 >
-                  <i :class="isPlaying ? 'ph ph-pause' : 'ph ph-play'"></i>
+                  <i aria-hidden="true" :class="isPlaying ? 'ph ph-pause' : 'ph ph-play'"></i>
                 </button>
                 <button
                   type="button"
@@ -949,21 +956,21 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   aria-label="下一首"
                   @click="next"
                 >
-                  <i class="ph ph-skip-forward"></i>
+                  <i aria-hidden="true" class="ph ph-skip-forward"></i>
                 </button>
                 <button type="button" class="hero-ghost-action" @click="shuffleAll">
-                  <i class="ph ph-shuffle"></i>
+                  <i aria-hidden="true" class="ph ph-shuffle"></i>
                   随机畅听
                 </button>
               </div>
 
               <div v-else class="hero-actions">
                 <button type="button" class="hero-ghost-action" @click="handleHeroPlay">
-                  <i class="ph ph-play"></i>
+                  <i aria-hidden="true" class="ph ph-play"></i>
                   播放这首
                 </button>
                 <button type="button" class="hero-ghost-action" @click="shuffleAll">
-                  <i class="ph ph-shuffle"></i>
+                  <i aria-hidden="true" class="ph ph-shuffle"></i>
                   随机畅听
                 </button>
               </div>
@@ -1033,8 +1040,14 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
             </div>
             <div class="signal-head-state">
               <span class="signal-summary">
-                <span><i class="ph ph-stack"></i>{{ enabledDspCount }} 个启用阶段</span>
-                <span><i class="ph ph-timer"></i>{{ dspGraphLatencyMs.toFixed(2) }} ms</span>
+                <span
+                  ><i aria-hidden="true" class="ph ph-stack"></i
+                  >{{ enabledDspCount }} 个启用阶段</span
+                >
+                <span
+                  ><i aria-hidden="true" class="ph ph-timer"></i
+                  >{{ dspGraphLatencyMs.toFixed(2) }} ms</span
+                >
               </span>
               <span class="dsp-state" :class="{ on: dspEngineOn, live: dspProcessingActive }">
                 <span class="dsp-state-dot" aria-hidden="true"></span>
@@ -1046,7 +1059,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
 
           <div class="dsp-route-strip is-compact">
             <div class="route-stage route-endpoint-stage" title="播放源">
-              <span class="route-stage-icon"><i class="ph ph-music-notes"></i></span>
+              <span class="route-stage-icon"
+                ><i aria-hidden="true" class="ph ph-music-notes"></i
+              ></span>
               <div class="route-stage-copy">
                 <small>SOURCE</small>
                 <strong>{{ dspSourceDetail }}</strong>
@@ -1064,7 +1079,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 :class="[`is-${stage.state}`, { 'is-active': stage.active }]"
                 :title="`${stage.label} · ${stage.stateLabel} · ${stage.detail}`"
               >
-                <span class="route-stage-icon"><i :class="stage.icon"></i></span>
+                <span class="route-stage-icon"><i aria-hidden="true" :class="stage.icon"></i></span>
                 <div class="route-stage-copy">
                   <small>{{ stage.shortLabel }}</small>
                   <strong>{{ stage.detail }}</strong>
@@ -1078,7 +1093,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
               aria-hidden="true"
             ></span>
             <div class="route-stage route-endpoint-stage is-output" title="实际输出">
-              <span class="route-stage-icon"><i class="ph ph-speaker-hifi"></i></span>
+              <span class="route-stage-icon"
+                ><i aria-hidden="true" class="ph ph-speaker-hifi"></i
+              ></span>
               <div class="route-stage-copy">
                 <small>OUTPUT</small>
                 <strong>{{ dspOutputDetail }}</strong>
@@ -1101,7 +1118,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'allSongs', null)">
               全部歌曲
-              <i class="ph ph-arrow-right"></i>
+              <i aria-hidden="true" class="ph ph-arrow-right"></i>
             </button>
           </header>
 
@@ -1124,7 +1141,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <span v-if="track.format" class="fresh-format">{{
                   track.format.toUpperCase()
                 }}</span>
-                <span class="fresh-play" aria-hidden="true"><i class="ph ph-play"></i></span>
+                <span class="fresh-play" aria-hidden="true"
+                  ><i aria-hidden="true" class="ph ph-play"></i
+                ></span>
               </span>
               <span class="fresh-name">{{ track.title }}</span>
               <span class="fresh-artist">{{ track.artist || '未知艺术家' }}</span>
@@ -1141,7 +1160,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'recent', null)">
               最近播放
-              <i class="ph ph-arrow-right"></i>
+              <i aria-hidden="true" class="ph ph-arrow-right"></i>
             </button>
           </header>
 
@@ -1190,22 +1209,24 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <span class="panel-kicker">CALENDAR</span>
                 <div class="cal-nav">
                   <button
+                    aria-label="上个月"
                     type="button"
                     class="cal-nav-btn"
                     title="上个月"
                     @click.stop="shiftCalMonth(-1)"
                   >
-                    <i class="ph ph-caret-left"></i>
+                    <i aria-hidden="true" class="ph ph-caret-left"></i>
                   </button>
                   <span class="cal-month">{{ calMonthLabel }}</span>
                   <button
+                    aria-label="下个月"
                     type="button"
                     class="cal-nav-btn"
                     title="下个月"
                     :disabled="calAtCurrentMonth"
                     @click.stop="shiftCalMonth(1)"
                   >
-                    <i class="ph ph-caret-right"></i>
+                    <i aria-hidden="true" class="ph ph-caret-right"></i>
                   </button>
                 </div>
               </header>
@@ -1230,7 +1251,12 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <span class="cal-summary">{{ calSummary }}</span>
                 <span class="cal-legend" aria-hidden="true">
                   少
-                  <i v-for="level in 5" :key="level" :class="`lv-${level - 1}`"></i>
+                  <i
+                    aria-hidden="true"
+                    v-for="level in 5"
+                    :key="level"
+                    :class="`lv-${level - 1}`"
+                  ></i>
                   多
                 </span>
               </div>
@@ -1247,7 +1273,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'albums', null)">
               全部专辑
-              <i class="ph ph-arrow-right"></i>
+              <i aria-hidden="true" class="ph ph-arrow-right"></i>
             </button>
           </header>
 
@@ -1263,7 +1289,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <CoverImg :cover="album.cover" :fallback="DEFAULT_COVER" :alt="album.name" />
                 <span class="gallery-scrim" aria-hidden="true"></span>
                 <span class="gallery-count">{{ album.trackCount }} 首</span>
-                <span class="gallery-play" aria-hidden="true"><i class="ph ph-play"></i></span>
+                <span class="gallery-play" aria-hidden="true"
+                  ><i aria-hidden="true" class="ph ph-play"></i
+                ></span>
               </span>
               <span class="gallery-name">{{ album.name }}</span>
               <span class="gallery-artist">{{ album.artist || '未知艺术家' }}</span>
@@ -1280,6 +1308,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         @click.self="closeDspRouteDialog"
       >
         <section
+          ref="dspRouteDialogRef"
           class="dsp-route-dialog"
           role="dialog"
           aria-modal="true"
@@ -1301,7 +1330,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                     dspGraphStatus?.applyState === 'failed'
                 }"
               >
-                <i></i>{{ dspStatusText }}
+                <i aria-hidden="true"></i>{{ dspStatusText }}
               </span>
               <button
                 type="button"
@@ -1311,7 +1340,11 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 :disabled="dspRouteLoading"
                 @click="refreshDspRouteState(true)"
               >
-                <i class="ph ph-arrow-clockwise" :class="{ spinning: dspRouteLoading }"></i>
+                <i
+                  aria-hidden="true"
+                  class="ph ph-arrow-clockwise"
+                  :class="{ spinning: dspRouteLoading }"
+                ></i>
               </button>
               <button
                 type="button"
@@ -1320,23 +1353,23 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 aria-label="关闭"
                 @click="closeDspRouteDialog"
               >
-                <i class="ph ph-x"></i>
+                <i aria-hidden="true" class="ph ph-x"></i>
               </button>
             </div>
           </header>
 
           <div v-if="dspRouteError" class="dsp-route-error">
-            <i class="ph ph-warning-circle"></i>{{ dspRouteError }}
+            <i aria-hidden="true" class="ph ph-warning-circle"></i>{{ dspRouteError }}
           </div>
 
           <div class="dialog-format-bar">
             <div>
-              <span><i class="ph ph-file-audio"></i>播放源</span>
+              <span><i aria-hidden="true" class="ph ph-file-audio"></i>播放源</span>
               <strong>{{ dspSourceFullDetail }}</strong>
             </div>
-            <i class="ph ph-arrow-right"></i>
+            <i aria-hidden="true" class="ph ph-arrow-right"></i>
             <div class="is-output">
-              <span><i class="ph ph-speaker-hifi"></i>实际输出</span>
+              <span><i aria-hidden="true" class="ph ph-speaker-hifi"></i>实际输出</span>
               <strong>{{ dspOutputFullDetail }}</strong>
             </div>
           </div>
@@ -1344,7 +1377,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           <div class="dialog-route-scroll te-auto-scrollbar">
             <div class="dsp-route-strip is-dialog">
               <div class="route-stage route-endpoint-stage">
-                <span class="route-stage-icon"><i class="ph ph-music-notes"></i></span>
+                <span class="route-stage-icon"
+                  ><i aria-hidden="true" class="ph ph-music-notes"></i
+                ></span>
                 <div class="route-stage-copy">
                   <small>SOURCE</small><strong>{{ dspSourceDetail }}</strong>
                 </div>
@@ -1361,7 +1396,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   class="route-stage"
                   :class="[`is-${stage.state}`, { 'is-active': stage.active }]"
                 >
-                  <span class="route-stage-icon"><i :class="stage.icon"></i></span>
+                  <span class="route-stage-icon"
+                    ><i aria-hidden="true" :class="stage.icon"></i
+                  ></span>
                   <div class="route-stage-copy">
                     <small>{{ stage.shortLabel }}</small
                     ><strong>{{ stage.label }}</strong>
@@ -1377,7 +1414,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 aria-hidden="true"
               ></span>
               <div class="route-stage route-endpoint-stage is-output">
-                <span class="route-stage-icon"><i class="ph ph-speaker-hifi"></i></span>
+                <span class="route-stage-icon"
+                  ><i aria-hidden="true" class="ph ph-speaker-hifi"></i
+                ></span>
                 <div class="route-stage-copy">
                   <small>OUTPUT</small><strong>{{ dspOutputDetail }}</strong>
                 </div>
@@ -1403,7 +1442,9 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   class="dialog-node-row"
                   :class="[`is-${stage.state}`, { 'is-active': stage.active }]"
                 >
-                  <span class="dialog-node-icon"><i :class="stage.icon"></i></span>
+                  <span class="dialog-node-icon"
+                    ><i aria-hidden="true" :class="stage.icon"></i
+                  ></span>
                   <div>
                     <strong>{{ stage.label }}</strong>
                     <small>{{ stage.detail }}</small>
@@ -1484,7 +1525,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
               </dl>
 
               <p v-if="dspGraphStatus?.compileError" class="dialog-compile-error">
-                <i class="ph ph-warning"></i>{{ dspGraphStatus.compileError }}
+                <i aria-hidden="true" class="ph ph-warning"></i>{{ dspGraphStatus.compileError }}
               </p>
             </aside>
           </div>

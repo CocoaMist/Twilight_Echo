@@ -170,6 +170,7 @@ export type MiniPlayerCommand =
   | { type: 'pause' }
   | { type: 'previous' }
   | { type: 'next' }
+  | { type: 'open-queue' }
   | { type: 'cycle-play-mode' }
   | { type: 'set-play-mode'; value: MiniPlayerPlayMode }
   | { type: 'toggle-favorite' }
@@ -230,7 +231,7 @@ export const DEFAULT_MINI_PLAYER_THEME_PROFILES: Readonly<Record<string, MiniPla
         textMode: 'auto',
         primaryTextColor: '#ffffff',
         mutedTextColor: '#b8b7c2',
-        fontFamily: "'Inter', 'MiSans', 'Microsoft YaHei UI', system-ui, sans-serif",
+        fontFamily: 'inherit',
         surfaceOpacity: 62,
         glassBlur: 24,
         cornerRadius: 22,
@@ -265,7 +266,7 @@ export const DEFAULT_MINI_PLAYER_THEME_PROFILES: Readonly<Record<string, MiniPla
         textMode: 'auto',
         primaryTextColor: '#1b2034',
         mutedTextColor: '#656a7b',
-        fontFamily: "'Inter', 'MiSans', 'Microsoft YaHei UI', system-ui, sans-serif",
+        fontFamily: 'inherit',
         surfaceOpacity: 78,
         glassBlur: 20,
         cornerRadius: 22,
@@ -622,6 +623,7 @@ export function normalizeMiniPlayerCommand(raw: unknown): MiniPlayerCommand | nu
     case 'pause':
     case 'previous':
     case 'next':
+    case 'open-queue':
     case 'cycle-play-mode':
     case 'toggle-favorite':
       return { type: value.type }

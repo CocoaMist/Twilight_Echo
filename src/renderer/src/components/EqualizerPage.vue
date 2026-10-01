@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { useId } from 'vue'
+import { onTabKeydown } from '../app/tabNavigation'
+const eqTabsId = useId()
 import { mergeEqualizerPatch } from '@renderer/utils/equalizerSettingsPatch'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useBackHandler } from '@renderer/app/useBackStack.ts'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
 import ParametricEqWorkspace from '@renderer/components/equalizer/ParametricEqWorkspace.vue'
@@ -10,6 +12,7 @@ import OpraEqPanel from '@renderer/components/equalizer/OpraEqPanel.vue'
 import FrequencyResponseChart from '@renderer/components/equalizer/FrequencyResponseChart.vue'
 import FrequencyResponseToolbar from '@renderer/components/equalizer/FrequencyResponseToolbar.vue'
 import GraphicEqPanel from '@renderer/components/equalizer/GraphicEqPanel.vue'
+import MessageBar from './hig/MessageBar.vue'
 import {
   EQ_RESPONSE_DEFAULT_SAMPLE_RATE,
   computeAutoPreampDb,
@@ -64,7 +67,7 @@ let releaseVisualizationConsumer: (() => void) | null = null
 
 const autoPreampStorageKey = 'twilight-echo:eq-auto-preamp:v1'
 
-const activeTab = ref<EqualizerTab>('graphic')
+const activeTab = ref<EqualizerTab>(audioProcessing.value.eqMode)
 const autoPreampEnabled = ref(false)
 const appSettings = ref<AppSettings | null>(null)
 const presetName = ref('')
@@ -795,25 +798,17 @@ async function switchTab(tab: EqualizerTab): Promise<void> {
   activeTab.value = tab
   presetMenuOpen.value = false
   filterMenuOpen.value = false
-  if (tab === 'graphic' || tab === 'parametric') {
-    void updateAudioProcessing({ eqMode: tab })
-  }
 }
 
-// 参数均衡是页面内部的一层：标题栏返回键先退回图形标签，再退出均衡器页
-// （页面层由 App.vue 按页面旗标注冊）。
-useBackHandler(
-  computed(() => activeTab.value === 'parametric'),
-  () => switchTab('graphic'),
-  '返回图形'
-)
+async function activateDisplayedMode(): Promise<void> {
+  await runEqApply(() => updateAudioProcessing({ eqMode: activeTab.value }))
+}
 
 function openAdvancedSettings(index = selectedBandIndex.value): void {
   selectedBandIndex.value = Math.min(Math.max(index, 0), audioProcessing.value.eqBands.length - 1)
   activeTab.value = 'parametric'
   presetMenuOpen.value = false
   filterMenuOpen.value = false
-  void updateAudioProcessing({ eqMode: 'parametric' })
 }
 
 async function resetEqualizer(): Promise<void> {
@@ -821,7 +816,6 @@ async function resetEqualizer(): Promise<void> {
   await commitChain
   await updateAudioProcessing({
     eqEnabled: false,
-    eqMode: activeTab.value === 'parametric' ? 'parametric' : 'graphic',
     eqPreamp: 0,
     eqBands: cloneBands(defaultEqBands)
   })
@@ -901,34 +895,46 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
     @keydown="onEqualizerKeydown"
   >
     <div class="eq-container">
-      <aside v-if="activeTab !== 'parametric'" class="eq-sidebar">
-        <div
+      <aside
+        v-if="activeTab !== 'parametric'"
+        class="eq-sidebar"
+        role="tablist"
+        aria-label="均衡器类型"
+        @keydown="onTabKeydown"
+      >
+        <button
           v-for="tab in tabs"
           :key="tab.key"
           class="nav-item"
           data-te-interactive
-          role="button"
-          tabindex="0"
-          :aria-pressed="activeTab === tab.key"
+          type="button"
+          role="tab"
+          :id="`${eqTabsId}-${tab.key}`"
+          :aria-selected="activeTab === tab.key"
+          :tabindex="activeTab === tab.key ? 0 : -1"
+          :aria-controls="`${eqTabsId}-panel`"
           :class="{ active: activeTab === tab.key }"
           @click="switchTab(tab.key)"
-          @keydown.enter.prevent="switchTab(tab.key)"
-          @keydown.space.prevent="switchTab(tab.key)"
         >
-          <i :class="tab.icon"></i>
+          <i aria-hidden="true" :class="tab.icon"></i>
           <div class="nav-info">
             <span>{{ tab.label }}</span
             ><small>{{ tab.desc }}</small>
           </div>
-        </div>
+        </button>
       </aside>
 
-      <main class="eq-content">
+      <main
+        class="eq-content"
+        role="tabpanel"
+        :id="`${eqTabsId}-panel`"
+        :aria-labelledby="`${eqTabsId}-${activeTab}`"
+      >
         <!-- Toolbar for Presets across Graphic and Parametric -->
         <div v-if="activeTab !== 'parametric'" class="eq-toolbar-modern">
           <div class="preset-menu-anchor">
             <button type="button" class="eq-command preset-menu-button" @click="togglePresetMenu">
-              选择预设 <i class="pi pi-chevron-down"></i>
+              选择预设 <i aria-hidden="true" class="pi pi-chevron-down"></i>
             </button>
             <div v-if="presetMenuOpen" class="preset-menu">
               <div class="preset-menu-section">
@@ -974,29 +980,63 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
             class="eq-command"
             @click="openAdvancedSettings()"
           >
-            高级设置
+            参数设置
           </button>
           <button v-else type="button" class="eq-command" @click="switchTab('graphic')">
-            返回图形
+            查看图形模式
           </button>
           <button
+            aria-label="根据当前曲线的最大增益自动下调前置放大，预留 0.5 dB 余量"
             type="button"
             class="eq-command auto-preamp-toggle"
             :class="{ active: autoPreampEnabled }"
             :aria-pressed="autoPreampEnabled"
+            :disabled="audioProcessing.eqMode !== activeTab"
             title="根据当前曲线的最大增益自动下调前置放大，预留 0.5 dB 余量"
             @click="toggleAutoPreamp"
           >
-            <i :class="autoPreampEnabled ? 'pi pi-check-circle' : 'pi pi-circle'"></i>
+            <i
+              aria-hidden="true"
+              :class="autoPreampEnabled ? 'pi pi-check-circle' : 'pi pi-circle'"
+            ></i>
             自动增益补偿
           </button>
-          <button type="button" class="eq-command soft" @click="resetEqualizer">重置</button>
-          <button type="button" class="eq-command" :disabled="saving" @click="saveAsCurrentPreset">
+          <button
+            type="button"
+            class="eq-command soft"
+            :disabled="audioProcessing.eqMode !== activeTab"
+            @click="resetEqualizer"
+          >
+            重置
+          </button>
+          <button
+            type="button"
+            class="eq-command"
+            :disabled="saving || audioProcessing.eqMode !== activeTab"
+            @click="saveAsCurrentPreset"
+          >
             另存为
           </button>
         </div>
 
-        <div v-if="activeTab === 'graphic'" class="tab-pane active">
+        <MessageBar
+          v-if="audioProcessing.eqMode !== activeTab"
+          class="eq-mode-message"
+          title="正在浏览另一种均衡器"
+          intent="info"
+          >当前生效的是{{
+            audioProcessing.eqMode === 'graphic' ? '图形' : '参数'
+          }}模式。切换浏览不会改变声音。<template #actions
+            ><button class="hig-button hig-button-primary" @click="activateDisplayedMode">
+              使用{{ activeTab === 'graphic' ? '图形' : '参数' }}模式
+            </button></template
+          ></MessageBar
+        >
+        <div
+          v-if="activeTab === 'graphic'"
+          class="tab-pane active"
+          :inert="audioProcessing.eqMode !== activeTab"
+        >
           <header class="eq-header">
             <div class="eq-title">
               <h1>图形均衡器</h1>
@@ -1086,7 +1126,11 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
           />
         </div>
 
-        <div v-else-if="activeTab === 'parametric'" class="tab-pane active parametric-pane">
+        <div
+          v-else-if="activeTab === 'parametric'"
+          class="tab-pane active parametric-pane"
+          :inert="audioProcessing.eqMode !== activeTab"
+        >
           <ParametricEqWorkspace
             ref="parametricWorkspaceRef"
             :bands="audioProcessing.eqBands"

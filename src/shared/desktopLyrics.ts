@@ -83,6 +83,7 @@ export interface DesktopLyricsSettingsV3 {
   hideWhenPaused: boolean
   pauseHideDelaySeconds: number
   resolvedFontFamily?: string
+  uiFontFamily?: string
   accentColor?: string
   motionPreference?: MotionPreference
 }
@@ -113,7 +114,7 @@ export const DEFAULT_DESKTOP_LYRICS_SETTINGS: DesktopLyricsSettingsV3 = {
   windowY: -1,
   alwaysOnTop: true,
   locked: false,
-  fontFamily: 'MiSans',
+  fontFamily: 'follow',
   fontSize: 36,
   fontWeight: 400,
   lineGap: 12,

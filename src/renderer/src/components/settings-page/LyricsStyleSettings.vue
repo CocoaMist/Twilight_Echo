@@ -38,10 +38,10 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
     @click="open = !open"
   >
     <span class="setting-copy">
-      <strong>歌词显示样式 (Lyrics Style)</strong>
+      <strong>歌词显示样式</strong>
       <span>控制主播放页的排版、聚焦范围和高亮效果。</span>
     </span>
-    <i class="pi pi-chevron-down"></i>
+    <i aria-hidden="true" class="pi pi-chevron-down"></i>
   </button>
   <div v-if="open" class="settings-accordion-body">
     <hr />

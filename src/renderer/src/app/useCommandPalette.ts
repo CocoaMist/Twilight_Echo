@@ -6,6 +6,7 @@ import { useUnifiedMusicSearch } from '@renderer/app/useUnifiedMusicSearch.ts'
 import { createCommandPaletteActions } from '@renderer/app/commandPaletteActions.ts'
 import type { useAppNavigation } from '@renderer/app/useAppNavigation.ts'
 import { isCommandPaletteKey } from '../../../shared/commandPaletteShortcut.ts'
+import { navigateWithGuard } from './useNavigationGuard.ts'
 
 export function useCommandPalette(navigation: ReturnType<typeof useAppNavigation>) {
   const isOpen = ref(false)
@@ -36,7 +37,18 @@ export function useCommandPalette(navigation: ReturnType<typeof useAppNavigation
           desktopLyrics: { ...settings.settings.value.desktopLyrics, enabled }
         })
       }
-    })
+    }).map((action) =>
+      ['now-playing', 'equalizer', 'dsp', 'settings', 'device-profiles'].includes(action.id) ||
+      action.id.startsWith('setting:')
+        ? {
+            ...action,
+            run: () =>
+              navigateWithGuard(() => {
+                action.run()
+              })
+          }
+        : action
+    )
   )
   function close(): void {
     isOpen.value = false
@@ -76,6 +88,7 @@ export function useCommandPalette(navigation: ReturnType<typeof useAppNavigation
     playlists: music.playlists,
     tracks: music.tracks,
     playTrack: player.playTrack,
-    openPlaylist: navigation.openLibraryPlaylist
+    openPlaylist: (playlist: Parameters<typeof navigation.openLibraryPlaylist>[0]) =>
+      navigateWithGuard(() => navigation.openLibraryPlaylist(playlist))
   }
 }

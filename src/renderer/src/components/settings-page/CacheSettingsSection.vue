@@ -32,8 +32,8 @@ const emit = defineEmits<{
 <template>
   <section id="cache" class="glass-card preview-section">
     <div class="section-title-row">
-      <i class="pi pi-database"></i>
-      <h2>缓存 (Cache)</h2>
+      <i aria-hidden="true" class="pi pi-database"></i>
+      <h2>缓存</h2>
     </div>
     <div class="setting-list">
       <div class="setting-item top-align">
@@ -137,7 +137,7 @@ const emit = defineEmits<{
           :disabled="clearingBpmAnalysisCache"
           @click="emit('confirmClearBpmAnalysisCache')"
         >
-          <i class="pi pi-trash"></i>
+          <i aria-hidden="true" class="pi pi-trash"></i>
           {{ clearingBpmAnalysisCache ? '清理中…' : '清理 BPM 缓存' }}
         </button>
       </div>
@@ -155,7 +155,7 @@ const emit = defineEmits<{
           :disabled="clearingLoudnessAnalysisCache"
           @click="emit('confirmClearLoudnessAnalysisCache')"
         >
-          <i class="pi pi-trash"></i>
+          <i aria-hidden="true" class="pi pi-trash"></i>
           {{ clearingLoudnessAnalysisCache ? '清理中…' : '清理响度缓存' }}
         </button>
       </div>
@@ -173,7 +173,7 @@ const emit = defineEmits<{
           :disabled="clearingCache"
           @click="emit('confirmClearCache')"
         >
-          <i class="pi pi-trash"></i>
+          <i aria-hidden="true" class="pi pi-trash"></i>
           {{ clearingCache ? '清理中…' : '清理缓存' }}
         </button>
       </div>

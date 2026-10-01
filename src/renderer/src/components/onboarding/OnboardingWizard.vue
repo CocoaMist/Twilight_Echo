@@ -243,7 +243,7 @@ onBeforeUnmount(() => {
           @click="handlePrimary"
         >
           {{ primaryLabel }}
-          <i :class="primaryIcon"></i>
+          <i aria-hidden="true" :class="primaryIcon"></i>
         </button>
       </div>
     </footer>

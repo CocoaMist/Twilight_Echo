@@ -44,6 +44,7 @@ interface MiniPlayerSyncOptions {
   cyclePlayMode: () => void
   setPlayMode: (mode: PlayMode) => void
   toggleFavorite: () => Promise<void>
+  openQueue?: () => void
 }
 
 export function buildMiniPlayerStateSnapshot(
@@ -216,6 +217,9 @@ export function useMiniPlayerSync(options: MiniPlayerSyncOptions): void {
         break
       case 'next':
         options.next()
+        break
+      case 'open-queue':
+        options.openQueue?.()
         break
       case 'seek':
         options.seek(command.value)

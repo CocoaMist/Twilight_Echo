@@ -37,12 +37,12 @@ const features: { icon: string; label: string }[] = [
 <template>
   <section class="onb-stage" data-scene="08">
     <div class="onb-notes" aria-hidden="true">
-      <i class="ph ph-music-note"></i>
-      <i class="ph ph-music-notes"></i>
-      <i class="ph ph-music-note-simple"></i>
-      <i class="ph ph-music-notes-simple"></i>
-      <i class="ph ph-music-note"></i>
-      <i class="ph ph-music-notes"></i>
+      <i aria-hidden="true" class="ph ph-music-note"></i>
+      <i aria-hidden="true" class="ph ph-music-notes"></i>
+      <i aria-hidden="true" class="ph ph-music-note-simple"></i>
+      <i aria-hidden="true" class="ph ph-music-notes-simple"></i>
+      <i aria-hidden="true" class="ph ph-music-note"></i>
+      <i aria-hidden="true" class="ph ph-music-notes"></i>
     </div>
     <div class="onb-eq" aria-hidden="true">
       <span></span><span></span><span></span><span></span><span></span>
@@ -50,7 +50,7 @@ const features: { icon: string; label: string }[] = [
     <h1 class="onb-title"><em>一切就绪</em></h1>
     <p class="onb-subtitle">这些功能已经在设置中等你探索——现在，让音乐开始吧。</p>
     <p v-if="scanText" class="onb-scan-status">
-      <i class="ph ph-vinyl-record"></i>
+      <i aria-hidden="true" class="ph ph-vinyl-record"></i>
       {{ scanText }}
     </p>
     <div class="onb-feature-grid">
@@ -62,12 +62,12 @@ const features: { icon: string; label: string }[] = [
         :aria-checked="desktopLyricsOn"
         @click="() => void toggleDesktopLyrics()"
       >
-        <i class="ph ph-microphone-stage"></i>
+        <i aria-hidden="true" class="ph ph-microphone-stage"></i>
         桌面歌词
         <span class="onb-feature-state">{{ desktopLyricsOn ? '已开启' : '点击开启' }}</span>
       </button>
       <span v-for="feature in features" :key="feature.label" class="onb-feature">
-        <i :class="feature.icon"></i>
+        <i aria-hidden="true" :class="feature.icon"></i>
         {{ feature.label }}
       </span>
     </div>

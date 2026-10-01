@@ -125,7 +125,7 @@ test('the global font setting reaches the theme runtime instead of dying in the 
   assert.match(optionsSource, /fontFamilyOptions: \{ value: AppFontFamily; label: string \}\[\]/)
   // "系统默认" promised a system stack while the value really means "leave the
   // theme alone"; the label has to say so or the option reads as broken.
-  assert.match(optionsSource, /value: 'system', label: '默认（跟随主题）'/)
+  assert.match(optionsSource, /value: 'system', label: '系统字体（Fluent 默认）'/)
 })
 
 test('manual tone scheduling follows the app preference, not a stale DOM attribute', () => {

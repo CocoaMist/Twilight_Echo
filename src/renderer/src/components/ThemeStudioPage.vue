@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import ThemeAppearanceControl from '@renderer/components/theme-studio/ThemeAppearanceControl.vue'
+import { ref } from 'vue'
+import { onTabKeydown } from '../app/tabNavigation'
 import {
   useThemeStudioEditor,
   type BuiltInThemePresetId,
@@ -9,6 +11,7 @@ import { useBackHandlerWhileMounted } from '@renderer/app/useBackStack'
 import SongList from '@renderer/components/SongList.vue'
 import EqualizerPage from '@renderer/components/EqualizerPage.vue'
 import LocalHome from '@renderer/components/local-dashboard/LocalHome.vue'
+import MessageBar from './hig/MessageBar.vue'
 import PlayerBar from '@renderer/components/PlayerBar.vue'
 import PlayingMusic from '@renderer/components/PlayingMusic.vue'
 import SideMenu from '@renderer/components/SideMenu.vue'
@@ -16,6 +19,7 @@ import TitleBar from '@renderer/components/TitleBar.vue'
 
 const props = defineProps<{ initialDomain?: ThemeStudioDomain }>()
 const emit = defineEmits<{ back: [] }>()
+const workspaceView = ref<'editor' | 'preview'>('editor')
 
 const {
   BUILT_IN_THEME_FONTS,
@@ -98,9 +102,7 @@ const {
   updateAssetBinding,
   updateEqualizerMode,
   updateFontSlot,
-  updateIconFamily,
   updateLibraryMode,
-  updateNavigationMode,
   updatePlayerMode,
   updateScheduleTime,
   updateToken,
@@ -127,7 +129,11 @@ void editorPaneRef.value
 </script>
 
 <template>
-  <div class="theme-studio-page" data-te-surface="theme-studio">
+  <div
+    class="theme-studio-page"
+    data-te-surface="theme-studio"
+    :data-workspace-view="workspaceView"
+  >
     <header class="theme-studio-header">
       <div>
         <h1>主题工作室</h1>
@@ -178,7 +184,7 @@ void editorPaneRef.value
             :aria-pressed="tone === 'pureWhite'"
             @click="setTone('pureWhite')"
           >
-            <i class="ph ph-sun"></i>
+            <i aria-hidden="true" class="ph ph-sun"></i>
           </button>
           <button
             type="button"
@@ -188,7 +194,7 @@ void editorPaneRef.value
             :aria-pressed="tone === 'dark'"
             @click="setTone('dark')"
           >
-            <i class="ph ph-moon"></i>
+            <i aria-hidden="true" class="ph ph-moon"></i>
           </button>
         </div>
         <button
@@ -199,7 +205,7 @@ void editorPaneRef.value
           :disabled="!draft || domain === 'presets'"
           @click="resetGroup"
         >
-          <i class="ph ph-arrow-u-up-left"></i>
+          <i aria-hidden="true" class="ph ph-arrow-u-up-left"></i>
         </button>
         <button
           type="button"
@@ -209,7 +215,7 @@ void editorPaneRef.value
           :disabled="!draft"
           @click="resetAll"
         >
-          <i class="ph ph-broom"></i>
+          <i aria-hidden="true" class="ph ph-broom"></i>
         </button>
         <button
           type="button"
@@ -219,7 +225,7 @@ void editorPaneRef.value
           :disabled="!canUndo"
           @click="undo"
         >
-          <i class="ph ph-arrow-counter-clockwise"></i>
+          <i aria-hidden="true" class="ph ph-arrow-counter-clockwise"></i>
         </button>
         <button
           type="button"
@@ -229,7 +235,7 @@ void editorPaneRef.value
           :disabled="!canRedo"
           @click="redo"
         >
-          <i class="ph ph-arrow-clockwise"></i>
+          <i aria-hidden="true" class="ph ph-arrow-clockwise"></i>
         </button>
         <button
           type="button"
@@ -238,7 +244,7 @@ void editorPaneRef.value
           aria-label="导入主题"
           @click="importTheme"
         >
-          <i class="ph ph-download-simple"></i>
+          <i aria-hidden="true" class="ph ph-download-simple"></i>
         </button>
         <button
           type="button"
@@ -247,7 +253,7 @@ void editorPaneRef.value
           aria-label="创建副本"
           @click="duplicateSelected"
         >
-          <i class="ph ph-copy"></i>
+          <i aria-hidden="true" class="ph ph-copy"></i>
         </button>
         <button
           type="button"
@@ -255,14 +261,57 @@ void editorPaneRef.value
           :disabled="themeStore.saving.value"
           @click="applySelected"
         >
-          <i :class="themeStore.saving.value ? 'pi pi-spin pi-spinner' : 'ph ph-check'"></i
+          <i
+            aria-hidden="true"
+            :class="themeStore.saving.value ? 'pi pi-spin pi-spinner' : 'ph ph-check'"
+          ></i
           ><span>{{ draft ? '保存并应用' : '应用主题' }}</span>
         </button>
       </div>
     </header>
-    <p v-if="localError || themeStore.error.value" class="studio-message error" role="alert">
+    <div
+      class="theme-workspace-switcher"
+      role="tablist"
+      aria-label="外观工作区"
+      @keydown="onTabKeydown"
+    >
+      <button
+        id="theme-editor-tab"
+        type="button"
+        role="tab"
+        :aria-selected="workspaceView === 'editor'"
+        :tabindex="workspaceView === 'editor' ? 0 : -1"
+        aria-controls="theme-editor-panel"
+        @click="workspaceView = 'editor'"
+      >
+        编辑
+      </button>
+      <button
+        id="theme-preview-tab"
+        type="button"
+        role="tab"
+        :aria-selected="workspaceView === 'preview'"
+        :tabindex="workspaceView === 'preview' ? 0 : -1"
+        aria-controls="theme-preview-panel"
+        @click="workspaceView = 'preview'"
+      >
+        预览
+      </button>
+    </div>
+    <MessageBar
+      v-if="localError || themeStore.error.value"
+      :key="localError || themeStore.error.value"
+      intent="error"
+      dismissible
+    >
       {{ localError || themeStore.error.value }}
-    </p>
+      <template #actions
+        ><button class="hig-button" @click="workspaceView = 'editor'">返回编辑</button
+        ><button class="hig-button" :disabled="themeStore.saving.value" @click="applySelected">
+          保存并应用
+        </button></template
+      >
+    </MessageBar>
 
     <div class="theme-studio-workspace">
       <aside class="theme-library-pane" aria-label="外观分类">
@@ -301,12 +350,17 @@ void editorPaneRef.value
             :aria-current="domain === item.id ? 'page' : undefined"
             @click="domain = item.id"
           >
-            <i :class="item.icon"></i><span>{{ item.label }}</span>
+            <i aria-hidden="true" :class="item.icon"></i><span>{{ item.label }}</span>
           </button>
         </nav>
       </aside>
 
-      <main class="theme-preview-pane">
+      <main
+        id="theme-preview-panel"
+        class="theme-preview-pane"
+        role="tabpanel"
+        aria-labelledby="theme-preview-tab"
+      >
         <div class="preview-toolbar">
           <div>
             <strong>实时预览</strong><span>{{ activeDomain.label }}</span>
@@ -320,7 +374,7 @@ void editorPaneRef.value
               :aria-pressed="previewSurface === surface.id"
               @click="previewSurface = surface.id"
             >
-              <i :class="surface.icon"></i
+              <i aria-hidden="true" :class="surface.icon"></i
               ><span>{{
                 domain === 'library' && surface.id === 'dashboard' ? '歌曲列表' : surface.label
               }}</span>
@@ -335,6 +389,7 @@ void editorPaneRef.value
         >
           <div class="live-preview-canvas" :style="previewCanvasStyle" inert aria-hidden="true">
             <TitleBar
+              preview
               :menu-open="previewNavigationOpen"
               :glass="previewSurface === 'player'"
               :streaming="false"
@@ -371,7 +426,13 @@ void editorPaneRef.value
         </section>
       </main>
 
-      <aside ref="editorPaneRef" class="theme-editor-pane" aria-label="主题编辑器">
+      <aside
+        id="theme-editor-panel"
+        ref="editorPaneRef"
+        class="theme-editor-pane"
+        role="tabpanel"
+        aria-labelledby="theme-editor-tab"
+      >
         <div class="pane-heading">
           <strong>{{ activeDomain.label }}</strong>
           <div>
@@ -383,7 +444,7 @@ void editorPaneRef.value
               :disabled="!draft || isUnsavedDraft"
               @click="exportTheme"
             >
-              <i class="ph ph-upload-simple"></i>
+              <i aria-hidden="true" class="ph ph-upload-simple"></i>
             </button>
             <button
               type="button"
@@ -393,7 +454,7 @@ void editorPaneRef.value
               :disabled="!draft || isUnsavedDraft"
               @click="deleteSelected"
             >
-              <i class="ph ph-trash"></i>
+              <i aria-hidden="true" class="ph ph-trash"></i>
             </button>
           </div>
         </div>
@@ -424,7 +485,8 @@ void editorPaneRef.value
                   :data-layout="resolveThemeProfileModes(preset).player?.layout"
                   aria-hidden="true"
                 >
-                  <i></i><i></i><i></i><i></i>
+                  <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i
+                  ><i aria-hidden="true"></i>
                 </span>
                 <span class="preset-copy">
                   <strong>{{ preset.name }}</strong>
@@ -439,7 +501,7 @@ void editorPaneRef.value
                   :aria-label="'自定义' + preset.name"
                   @click="derivePreset(preset)"
                 >
-                  <i class="ph ph-copy"></i>
+                  <i aria-hidden="true" class="ph ph-copy"></i>
                 </button>
               </div>
             </article>
@@ -470,7 +532,8 @@ void editorPaneRef.value
                   :data-layout="resolveThemeProfileModes(profile).player?.layout"
                   aria-hidden="true"
                 >
-                  <i></i><i></i><i></i><i></i>
+                  <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i
+                  ><i aria-hidden="true"></i>
                 </span>
                 <span class="preset-copy">
                   <strong>{{ profile.name }}</strong>
@@ -507,7 +570,7 @@ void editorPaneRef.value
                   aria-label="恢复此版本"
                   @click="restoreVersion(entry)"
                 >
-                  <i class="ph ph-clock-counter-clockwise"></i>
+                  <i aria-hidden="true" class="ph ph-clock-counter-clockwise"></i>
                 </button>
               </div>
             </div>
@@ -661,60 +724,10 @@ void editorPaneRef.value
           </div>
         </section>
 
-        <section v-if="domain === 'navigation'" class="studio-control-section">
-          <div class="control-section-heading">
-            <span>图标与侧边栏</span>
-          </div>
-          <label class="studio-setting-row">
-            <span>图标样式</span>
-            <select
-              data-studio-setting="icons.family"
-              :value="activeModes.icons?.family"
-              :disabled="!draft"
-              @change="updateIconFamily"
-            >
-              <option value="outline">描边</option>
-              <option value="rounded">圆润粗线</option>
-              <option value="filled">填充</option>
-            </select>
-          </label>
-          <label class="studio-setting-row">
-            <span>侧边栏样式</span>
-            <select
-              data-studio-setting="navigation.style"
-              :value="activeModes.navigation?.style"
-              :disabled="!draft"
-              @change="updateNavigationMode('style', $event)"
-            >
-              <option value="expanded">展开</option>
-              <option value="compact">紧凑</option>
-              <option value="rail">图标栏</option>
-            </select>
-          </label>
-          <label class="studio-setting-row">
-            <span>侧边栏图标大小</span>
-            <select
-              data-studio-setting="navigation.iconScale"
-              :value="activeModes.navigation?.iconScale"
-              :disabled="!draft"
-              @change="updateNavigationMode('iconScale', $event)"
-            >
-              <option value="sm">小</option>
-              <option value="md">中</option>
-              <option value="lg">大</option>
-            </select>
-          </label>
-          <label class="studio-setting-row">
-            <span>显示播放器标志</span>
-            <input
-              data-studio-setting="navigation.logo"
-              type="checkbox"
-              :checked="activeModes.navigation?.logo === 'show'"
-              :disabled="!draft"
-              @change="updateNavigationMode('logo', $event)"
-            />
-          </label>
-        </section>
+        <MessageBar v-if="domain === 'navigation'" :announce="false"
+          >导航、图标和操作位置统一采用 Fluent
+          规范。主题可以调整配色，公共导航的结构与字体由界面设置管理。</MessageBar
+        >
 
         <section v-if="domain === 'library'" class="studio-control-section">
           <div class="control-section-heading">
@@ -777,7 +790,7 @@ void editorPaneRef.value
               @click="setPlayerLayout(layout.id)"
             >
               <span class="layout-thumbnail" :data-layout="layout.id" aria-hidden="true">
-                <i></i><i></i><i></i>
+                <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
               </span>
               <span>{{ layout.label }}</span>
             </button>
@@ -941,6 +954,9 @@ void editorPaneRef.value
         </section>
 
         <section v-if="domain === 'typography'" class="studio-control-section">
+          <MessageBar :announce="false"
+            >主题字体供歌词内容和明确选择“跟随主题字体”的界面使用。系统字体、分区布局和公共控件尺寸由统一界面规范管理。</MessageBar
+          >
           <div class="control-section-heading"><span>文字样式</span></div>
           <label class="studio-setting-row">
             <span>英文标题大小写</span>
@@ -985,12 +1001,13 @@ void editorPaneRef.value
           <div class="asset-editor-heading">
             <span>选择字体</span>
             <button
+              aria-label="添加 WOFF2 字体文件"
               type="button"
               title="添加 WOFF2 字体文件"
               :disabled="!draft"
               @click="importAsset('font')"
             >
-              <i class="ph ph-file-plus"></i><span>添加字体</span>
+              <i aria-hidden="true" class="ph ph-file-plus"></i><span>添加字体</span>
             </button>
           </div>
           <label
@@ -1319,7 +1336,7 @@ void editorPaneRef.value
           <div class="asset-editor-heading">
             <span>背景图片</span>
             <button type="button" :disabled="!draft" @click="importAsset('image')">
-              <i class="ph ph-image-square"></i><span>导入图片</span>
+              <i aria-hidden="true" class="ph ph-image-square"></i><span>导入图片</span>
             </button>
           </div>
           <label v-for="binding in backgroundBindings" :key="binding.key">
@@ -1373,7 +1390,9 @@ void editorPaneRef.value
           class="contrast-warning"
           role="status"
         >
-          <div><i class="ph ph-warning"></i><strong>部分文字可能不易看清</strong></div>
+          <div>
+            <i aria-hidden="true" class="ph ph-warning"></i><strong>部分文字可能不易看清</strong>
+          </div>
           <p v-for="warning in contrastWarnings" :key="warning.label">
             {{ warning.label }}的颜色太接近
           </p>
@@ -1384,11 +1403,11 @@ void editorPaneRef.value
           class="contrast-warning"
           role="status"
         >
-          <div><i class="ph ph-warning"></i><strong>主题兼容提示</strong></div>
+          <div><i aria-hidden="true" class="ph ph-warning"></i><strong>主题兼容提示</strong></div>
           <p v-for="note in selectedPluginTheme.compatibilityNotes" :key="note">{{ note }}</p>
         </section>
 
-        <p v-if="notice" class="studio-message" role="status">{{ notice }}</p>
+        <MessageBar v-if="notice" intent="success">{{ notice }}</MessageBar>
       </aside>
     </div>
   </div>

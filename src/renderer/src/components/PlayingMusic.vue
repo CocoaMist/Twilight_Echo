@@ -621,13 +621,14 @@ onBeforeUnmount(() => {
     @contextmenu.prevent="openAppearanceMenu"
   >
     <button
+      :aria-label="viewMode === 'cover' ? '音频可视化' : '返回封面'"
       type="button"
       class="visualizer-toggle-button"
       :class="{ 'visualizer-toggle-button--close': viewMode === 'visualizer' }"
       :title="viewMode === 'cover' ? '音频可视化' : '返回封面'"
       @click="toggleVisualizer"
     >
-      <i :class="viewMode === 'cover' ? 'pi pi-chart-bar' : 'pi pi-times'"></i>
+      <i aria-hidden="true" :class="viewMode === 'cover' ? 'pi pi-chart-bar' : 'pi pi-times'"></i>
     </button>
 
     <div v-if="viewMode !== 'visualizer'" class="backdrop" aria-hidden="true">
@@ -679,7 +680,7 @@ onBeforeUnmount(() => {
               alt="cover"
             />
             <div v-else class="cover-placeholder">
-              <i class="pi pi-wave-pulse"></i>
+              <i aria-hidden="true" class="pi pi-wave-pulse"></i>
             </div>
           </div>
 
@@ -776,7 +777,7 @@ onBeforeUnmount(() => {
 
     <div v-else class="empty-shell">
       <div class="empty-state">
-        <i class="pi pi-wave-pulse"></i>
+        <i aria-hidden="true" class="pi pi-wave-pulse"></i>
         <p>暂无正在播放的歌曲</p>
       </div>
     </div>
@@ -791,10 +792,10 @@ onBeforeUnmount(() => {
         @pointerdown.stop
       >
         <button type="button" @click="customizeLyricsAppearance">
-          <i class="ph ph-text-aa"></i><span>个性化歌词</span>
+          <i aria-hidden="true" class="ph ph-text-aa"></i><span>个性化歌词</span>
         </button>
         <button type="button" @click="customizePlayerAppearance">
-          <i class="ph ph-palette"></i><span>定制此区域外观</span>
+          <i aria-hidden="true" class="ph ph-palette"></i><span>定制此区域外观</span>
         </button>
       </div>
     </Teleport>

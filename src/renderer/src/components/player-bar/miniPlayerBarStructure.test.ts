@@ -145,9 +145,12 @@ test('fully hidden is a separate step that outranks auto-hide', () => {
 test('App.vue resolves the shape through the shared policy rather than inline logic', () => {
   assert.match(app, /resolvePlayerBarPresentation/)
   assert.match(app, /onPlayingPage:\s*showPlayingPage\.value/)
-  assert.match(app, /:mode="playerBarPresentation\.mode"/)
-  assert.match(app, /:auto-hide="playerBarPresentation\.autoHide"/)
-  assert.match(app, /:hidden-bar="playerBarPresentation\.hidden \|\| soundFieldSidebarActive"/)
+  assert.match(app, /:mode="toolPageActive \? 'compact' : playerBarPresentation\.mode"/)
+  assert.match(app, /:auto-hide="toolPageActive \? false : playerBarPresentation\.autoHide"/)
+  assert.match(
+    app,
+    /:hidden-bar="!toolPageActive && \(playerBarPresentation\.hidden \|\| soundFieldSidebarActive\)"/
+  )
 })
 
 test('the mini shape drops cover and the standard inline progress row', () => {

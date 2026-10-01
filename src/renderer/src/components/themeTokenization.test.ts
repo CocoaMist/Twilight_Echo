@@ -188,7 +188,7 @@ test('every registered playback token is wired into a real playback or DSP surfa
 test('theme studio is a dedicated navigable settings surface', () => {
   assert.match(app, /ThemeStudioPage/)
   assert.match(app, /@open-theme-studio="openThemeStudioPage"/)
-  assert.match(settingsSurfaces, /打开主题创意工坊/)
+  assert.match(settingsSurfaces, /打开主题工作室/)
   assert.match(settingsSurfaces, /@click="emit\('openThemeStudio'\)"/)
   assert.doesNotMatch(studioSurfaces, /structuredClone\(profile\)/)
   assert.match(studioSurfaces, /配色与背景/)
@@ -300,7 +300,7 @@ test('phase three icon, navigation, and library modes use static host-owned pres
   assert.match(rendererIconFonts, /@phosphor-icons\/web\/regular/)
   assert.match(rendererIconFonts, /@phosphor-icons\/web\/bold/)
   assert.match(rendererIconFonts, /@phosphor-icons\/web\/fill/)
-  assert.match(themeIcon, /THEME_ICON_SLOT_REGISTRY/)
+  assert.match(themeIcon, /FluentIcon/)
   assert.match(themeIcon, /data-theme-icon-slot/)
   assert.match(sideMenu, /icon-slot="navigation\.streaming"/)
   assert.match(sideMenu, /data-te-navigation-style='rail'/)
@@ -317,10 +317,10 @@ test('phase three icon, navigation, and library modes use static host-owned pres
     paperLightLayout,
     /\.side-menu \.menu-item\.active::before\s*\{[\s\S]*box-shadow: 0 0 18px/
   )
-  assert.match(studioStyle, /inset: var\(--te-titlebar-height, 32px\) 0 0/)
+  assert.match(studioStyle, /inset: var\(--hig-chrome-height, 35px\) 0 0/)
   assert.match(sideMenu, /data-te-navigation-icon-scale='lg'/)
   assert.match(studioSurfaces, /updateIconFamily/)
-  assert.match(studio, /updateNavigationMode\('style'/)
+  assert.match(studio, /导航、图标和操作位置统一采用 Fluent\s+规范/)
   assert.match(studio, /updateLibraryMode\('density'/)
   assert.match(songListView, /icon-slot="library\.search"/)
   assert.match(songList, /data-te-library-selection='stroke'/)

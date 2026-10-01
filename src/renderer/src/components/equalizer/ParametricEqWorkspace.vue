@@ -416,7 +416,7 @@ defineExpose({ finishInteraction })
             :aria-pressed="control.visible"
             @click.stop="emit('toggle-headphone-curve', control.key)"
           >
-            <i></i>{{ control.label }}
+            <i aria-hidden="true"></i>{{ control.label }}
           </button>
         </div>
         <svg
@@ -546,7 +546,7 @@ defineExpose({ finishInteraction })
           :style="tooltipStyle"
         >
           <strong
-            ><i></i
+            ><i aria-hidden="true"></i
             >{{ filterTypes.find((filter) => filter.value === tooltipBand?.filterType)?.label
             }}<small>频段 {{ tooltipIndex + 1 }}</small></strong
           >
@@ -578,13 +578,18 @@ defineExpose({ finishInteraction })
           :title="`Peak ${formatGain(meterPeakDb)}`"
         >
           <i
+            aria-hidden="true"
             class="meter-peak"
             :class="{ clipping: meterPeakDb >= -1 }"
             :style="{ transform: `scaleY(${meterLevel(meterPeakDb)})` }"
           ></i>
         </div>
         <div class="meter-channel" aria-label="RMS 均方根" :title="`RMS ${formatGain(meterRmsDb)}`">
-          <i class="meter-rms" :style="{ transform: `scaleY(${meterLevel(meterRmsDb)})` }"></i>
+          <i
+            aria-hidden="true"
+            class="meter-rms"
+            :style="{ transform: `scaleY(${meterLevel(meterRmsDb)})` }"
+          ></i>
         </div>
         <div class="meter-labels" aria-hidden="true"><span>Peak</span><span>RMS</span></div>
       </aside>
@@ -628,7 +633,7 @@ defineExpose({ finishInteraction })
         :aria-pressed="spectrumVisible"
         @click="emit('toggle-spectrum')"
       >
-        <i class="pi pi-chart-line"></i><span>分析器</span
+        <i aria-hidden="true" class="pi pi-chart-line"></i><span>分析器</span
         ><small>{{ spectrumVisible ? '开' : '关' }}</small>
       </button>
       <slot name="footer"></slot>

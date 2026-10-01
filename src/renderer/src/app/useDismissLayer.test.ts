@@ -156,6 +156,39 @@ interface HostNode {
   parent: HostNode | null
   children: HostNode[]
 }
+
+test('nested traps keep background inert until every owner closes and preserve prior inert state', () => {
+  const env = environment()
+  const outside = env.element()
+  const alreadyInert = env.element()
+  const outerRoot = env.element([env.element()])
+  const innerRoot = env.element([env.element()])
+  const siblings = [outside, alreadyInert, outerRoot]
+  Object.assign(env.document.body, { children: siblings })
+  for (const element of siblings)
+    Object.assign(element, { parentElement: env.document.body, inert: false })
+  alreadyInert.inert = true
+  const outer = createFocusTrap(() => outerRoot, env)
+  const inner = createFocusTrap(() => innerRoot, env)
+  try {
+    outer.activate()
+    env.flushFrames()
+    assert.equal(outside.inert, true)
+    Object.assign(innerRoot, { parentElement: env.document.body, inert: false })
+    siblings.push(innerRoot)
+    inner.activate()
+    env.flushFrames()
+    outer.deactivate()
+    assert.equal(outside.inert, true)
+    inner.deactivate()
+    assert.equal(outside.inert, false)
+    assert.equal(alreadyInert.inert, true)
+    assert.equal(outerRoot.inert, false)
+  } finally {
+    inner.deactivate()
+    outer.deactivate()
+  }
+})
 const node = (): HostNode => ({ parent: null, children: [] })
 const renderer = createRenderer<HostNode, HostNode>({
   createElement: node,

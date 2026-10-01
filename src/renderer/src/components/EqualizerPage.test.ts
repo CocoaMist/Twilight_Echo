@@ -211,7 +211,7 @@ test('parametric page puts mode, presets and power into the instrument with a co
   assert.match(page, /class="instrument-mode-switch"/)
   assert.match(page, /class="instrument-power"/)
   assert.match(page, /class="instrument-auto-preamp"/)
-  assert.match(page, /v-if="activeTab !== 'parametric'" class="eq-sidebar"/)
+  assert.match(page, /v-if="activeTab !== 'parametric'"\s+class="eq-sidebar"/)
   assert.doesNotMatch(page, /<header class="parametric-page-header">/)
   assert.match(toolbar, /compact\?: boolean/)
 })

@@ -19,11 +19,11 @@ const emit = defineEmits<{
         </div>
         <div class="inline-controls">
           <button type="button" class="soft-button" @click="emit('exportSettings')">
-            <i class="pi pi-download"></i>
+            <i aria-hidden="true" class="pi pi-download"></i>
             导出
           </button>
           <button type="button" class="soft-button" @click="emit('importSettings')">
-            <i class="pi pi-upload"></i>
+            <i aria-hidden="true" class="pi pi-upload"></i>
             导入
           </button>
         </div>

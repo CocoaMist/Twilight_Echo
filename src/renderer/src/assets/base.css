@@ -1,4 +1,6 @@
 :root {
+  --hig-caption-close-bg: #e81123;
+  --hig-caption-close-fg: #fff;
   --te-primary-500: #7c4dff;
   --te-primary-400: #a885f7;
   --te-primary-300: #c084fc;
@@ -2403,7 +2405,7 @@ html[data-theme='dark'] .settings-preview-layout .plugin-empty {
 /* --- Plugin page (extension center): backgrounds --- */
 html[data-theme='dark'] .plugin-page,
 html[data-theme='dark'] .plugin-page .plugin-window,
-html[data-theme='dark'] .plugin-page .main-content,
+html[data-theme='dark'] .plugin-page .plugin-main-content,
 html[data-theme='dark'] .plugin-page .topbar {
   background-color: var(--te-app-bg);
   background-image: var(--te-app-bg-image);
@@ -2802,7 +2804,7 @@ html[data-window-transparent='on']
     .login-page,
     .eq-page,
     .plugin-page,
-    .plugin-page .main-content,
+    .plugin-page .plugin-main-content,
     .plugin-page .topbar,
     .playing-music
   ) {
@@ -3735,4 +3737,23 @@ html[data-te-liquid-glass-coverage='expanded']
 .metadata-link:focus-visible {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* Fluent 2 semantic palette. Product surfaces reference these tokens. */
+:root {
+  --hig-brand-default: #0f6cbd;
+  --hig-surface-default: #fff;
+  --hig-text-default: #242424;
+  --hig-muted-default: #616161;
+  --hig-stroke-default: #d1d1d1;
+  --hig-hover-default: #f5f5f5;
+  --hig-black: black;
+  --hig-danger: #b10e1e;
+  --hig-status-error: #c50f1f;
+  --hig-status-warning: #bc4b09;
+  --hig-status-success: #107c10;
+  --hig-overlay: rgb(0 0 0 / 40%);
+  --hig-shadow-key: rgb(0 0 0 / 14%);
+  --hig-shadow-ambient: rgb(0 0 0 / 12%);
+  --hig-navigation-overlay: rgb(0 0 0 / 32%);
 }

@@ -131,7 +131,7 @@ const chromeNote: Record<PlayerBarMode, string> = {
       <strong>播放条按钮编排</strong>
       <span>为每种形态分别决定左侧、中间、右侧各放哪些按钮，以及它们的先后顺序。</span>
     </span>
-    <i class="pi pi-chevron-down"></i>
+    <i aria-hidden="true" class="pi pi-chevron-down"></i>
   </button>
   <div v-if="layoutOpen" class="settings-accordion-body">
     <hr />
@@ -148,7 +148,7 @@ const chromeNote: Record<PlayerBarMode, string> = {
           :class="{ active: editingShape === option.value }"
           @click="editingShape = option.value"
         >
-          <i :class="option.icon"></i>
+          <i aria-hidden="true" :class="option.icon"></i>
           {{ option.label }}
         </button>
       </div>

@@ -70,7 +70,7 @@ const placeholder = computed(() => {
   if (!session.value?.track || session.value.status === 'idle') return '等待播放'
   if (session.value.status === 'loading') return '正在获取歌词…'
   if (session.value.status === 'error') return '歌词加载失败'
-  if (session.value.status === 'empty') return '纯音乐，请欣赏'
+  if (session.value.status === 'empty') return '暂无歌词'
   return ''
 })
 const motionMode = computed(() => {
@@ -81,6 +81,7 @@ const motionMode = computed(() => {
 const paletteColors = computed(() => resolveDesktopLyricsPaletteColors(settings.value))
 const rootStyle = computed<Record<string, string>>(() => ({
   '--dl-font': settings.value.resolvedFontFamily || 'system-ui, sans-serif',
+  '--dl-ui-font': settings.value.uiFontFamily || 'system-ui, sans-serif',
   '--dl-size': `${settings.value.fontSize}px`,
   '--dl-weight': String(settings.value.fontWeight),
   '--dl-line-gap': `${settings.value.lineGap}px`,
@@ -552,7 +553,7 @@ onBeforeUnmount(() => {
         data-dl-interactive
         @click="unlock"
       >
-        <i class="ph ph-lock-key-open"></i>
+        <i aria-hidden="true" class="ph ph-lock-key-open"></i>
       </button>
     </Transition>
 

@@ -118,7 +118,7 @@ useFocusTrap(addDialogRef, () => props.showAdd)
               :disabled="addBusy"
               @click="emit('convertAddToCreate')"
             >
-              <i class="pi pi-plus"></i>
+              <i aria-hidden="true" class="pi pi-plus"></i>
               <span>新建歌单并添加</span>
             </button>
             <button
@@ -130,7 +130,7 @@ useFocusTrap(addDialogRef, () => props.showAdd)
               @click="emit('confirmAdd', playlist)"
             >
               <img v-if="playlist.cover" :src="playlist.cover" alt="" />
-              <i v-else class="pi pi-list"></i>
+              <i aria-hidden="true" v-else class="pi pi-list"></i>
               <span>
                 <strong>{{ playlist.name }}</strong>
                 <small>{{ playlist.trackCount ?? 0 }} 首</small>

@@ -1,274 +1,119 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { StreamingSidebarItem } from '../../utils/streamingNavigation'
-
-defineProps<{
+const props = defineProps<{
   menuOpen: boolean
   items: StreamingSidebarItem[]
   isActive: (item: StreamingSidebarItem) => boolean
-  aggregateActive: boolean
 }>()
-
-const emit = defineEmits<{
-  select: [item: StreamingSidebarItem]
-  selectAggregate: []
-  backToLocal: []
-}>()
+const emit = defineEmits<{ select: [item: StreamingSidebarItem]; selectAggregate: [] }>()
+const selectedKey = computed(() => props.items.find(props.isActive)?.key ?? '')
+function selectFromMenu(event: Event): void {
+  const item = props.items.find((item) => item.key === (event.target as HTMLSelectElement).value)
+  if (item) emit('select', item)
+}
 </script>
-
 <template>
-  <div class="streaming-sidebar" :class="{ open: menuOpen }">
-    <div class="streaming-sidebar-inner">
-      <div class="streaming-sidebar-header">
-        <span class="streaming-sidebar-title">流媒体</span>
-      </div>
-      <nav class="streaming-nav">
-        <div
-          v-for="item in items"
-          :key="item.key"
-          class="streaming-menu-item"
-          role="button"
-          tabindex="0"
-          data-te-interactive
-          :class="{ active: isActive(item) }"
-          @click="emit('select', item)"
-          @keydown.enter.prevent="emit('select', item)"
-          @keydown.space.prevent="emit('select', item)"
-        >
-          <i class="streaming-menu-icon" :class="item.icon"></i>
-          <span class="streaming-menu-label">{{ item.label }}</span>
-        </div>
-      </nav>
-      <div class="streaming-sidebar-bottom">
-        <div class="streaming-menu-separator"></div>
-        <div
-          class="streaming-menu-item"
-          role="button"
-          tabindex="0"
-          data-te-interactive
-          :class="{ active: aggregateActive }"
-          @click="emit('selectAggregate')"
-          @keydown.enter.prevent="emit('selectAggregate')"
-          @keydown.space.prevent="emit('selectAggregate')"
-        >
-          <i class="streaming-menu-icon pi pi-sitemap"></i>
-          <span class="streaming-menu-label">聚合歌单</span>
-        </div>
-        <div
-          class="streaming-menu-item streaming-local-btn"
-          role="button"
-          tabindex="0"
-          data-te-interactive
-          @click="emit('backToLocal')"
-          @keydown.enter.prevent="emit('backToLocal')"
-          @keydown.space.prevent="emit('backToLocal')"
-        >
-          <i class="streaming-menu-icon pi pi-desktop"></i>
-          <span class="streaming-menu-label">本地模式</span>
-        </div>
-      </div>
+  <nav class="provider-navigation" aria-label="在线音乐浏览">
+    <div class="provider-navigation-items">
+      <button
+        v-for="item in items"
+        :key="item.key"
+        type="button"
+        class="provider-navigation-item"
+        :class="{ active: isActive(item) }"
+        :aria-current="isActive(item) ? 'page' : undefined"
+        @click="emit('select', item)"
+      >
+        <i class="pi" :class="item.icon" aria-hidden="true"></i><span>{{ item.label }}</span>
+      </button>
     </div>
-  </div>
+    <label class="provider-navigation-select"
+      ><span>浏览</span
+      ><select :value="selectedKey" @change="selectFromMenu">
+        <option v-for="item in items" :key="item.key" :value="item.key">{{ item.label }}</option>
+      </select></label
+    >
+    <button
+      type="button"
+      class="hig-button provider-aggregate-link"
+      @click="emit('selectAggregate')"
+    >
+      跨来源歌单
+    </button>
+  </nav>
 </template>
-
 <style scoped>
-.streaming-sidebar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: var(--te-menu-width);
-  box-sizing: border-box;
-  /* Only the bottom-most global background renders; no separate surface. */
-  background: transparent;
-  border-right: 1px solid var(--te-card-border);
-  z-index: 1000;
-  overflow: hidden;
-  box-shadow: 8px 0 24px rgba(15, 23, 42, 0.04);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  transform: translate3d(-100%, 0, 0);
-  will-change: transform;
-  transition:
-    transform var(--te-motion-panel) var(--te-ease-soft),
-    box-shadow var(--te-motion-panel);
-}
-
-.streaming-sidebar.open {
-  transform: translate3d(0, 0, 0);
-}
-
-.streaming-sidebar-inner {
+.provider-navigation {
   display: flex;
-  flex-direction: column;
-  height: 100%;
-  padding: calc(32px + 14px) 9px 14px 1px;
-  width: var(--te-menu-width);
-  min-width: 132px;
-  max-width: 216px;
-  box-sizing: border-box;
-}
-
-.streaming-sidebar-header {
-  padding: 2px 12px 12px 18px;
-  flex-shrink: 0;
-}
-
-.streaming-sidebar-title {
-  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
-  font-weight: 800;
-  color: #6b7280;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.streaming-nav {
-  display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
+  padding: 8px var(--hig-page-inset, 24px);
+  border-bottom: 1px solid var(--hig-stroke);
+  background: var(--hig-surface);
+  flex: 0 0 auto;
 }
-
-.streaming-menu-item {
+.provider-navigation-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.provider-navigation-item {
   position: relative;
   display: flex;
   align-items: center;
-  height: 42px;
-  padding: 0 12px 0 18px;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 4px;
+  min-height: 36px;
+  background: transparent;
+  color: var(--hig-text);
+  font: 14px/20px var(--hig-font);
   cursor: pointer;
-  border-radius: 11px;
-  color: #111827;
-  transition:
-    background 0.18s,
-    color 0.18s;
-  gap: 12px;
   white-space: nowrap;
 }
-
-.streaming-menu-item:hover {
+.provider-navigation-item:hover {
   background: var(--te-hover-bg);
 }
-
-.streaming-menu-item.active {
-  background: var(--te-active-bg);
-  color: #0f172a;
-  box-shadow: none;
+.provider-navigation-item.active {
+  color: var(--hig-brand);
+  font-weight: 600;
 }
-
-.streaming-menu-item.active::before {
-  content: '';
+.provider-navigation-item.active::after {
   position: absolute;
-  left: -1px;
-  top: 10px;
-  bottom: 10px;
-  width: 4px;
-  border-radius: 0 999px 999px 0;
-  background: #020617;
+  content: '';
+  bottom: 0;
+  left: 12px;
+  right: 12px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--hig-brand);
 }
-
-.streaming-menu-item.active .streaming-menu-icon {
-  color: #111827;
-}
-
-.streaming-menu-icon {
-  font-size: calc(var(--te-font-size-body, 14px) * 1.14286);
-  width: 17px;
-  height: 17px;
-  display: flex;
+.provider-navigation-select {
+  display: none;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: #4b5563;
-  transition: color 0.15s;
+  gap: 8px;
 }
-
-.streaming-menu-label {
-  font-size: calc(var(--te-font-size-body, 14px) * 1);
-  font-weight: 700;
-  color: currentColor;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.streaming-sidebar-bottom {
-  flex-shrink: 0;
-  margin-top: auto;
-}
-
-.streaming-menu-separator {
-  height: 1px;
-  background: var(--te-card-border);
-  margin: 10px 10px 8px 14px;
-}
-
-.streaming-local-btn {
-  color: #111827;
-}
-
-.streaming-local-btn:hover {
-  background: var(--te-hover-bg);
-}
-</style>
-
-<style>
-/* Inset the content rather than narrowing and translating it. The box keeps its
-   full width, so its right edge — and the scrollbar riding it — stay pinned to
-   the window while only the left edge moves. StreamingPage.css carries the
-   matching `padding-left` transition and the reasoning. */
-.streaming-sidebar.open + .streaming-content {
-  padding-left: var(--te-menu-width);
-}
-
-.streaming-sidebar .streaming-menu-label {
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.streaming-sidebar.open .streaming-menu-label {
-  opacity: 1;
-}
-
-:global(html[data-theme='dark'] .streaming-page .streaming-sidebar) {
-  border-right-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-:global(html[data-window-transparent='on'] .streaming-page .streaming-sidebar) {
-  /* The sidebar stays frosted transparent over the global background. */
-  background: transparent !important;
-  background-image: none !important;
-}
-
-@media (max-width: 900px) {
-  .streaming-sidebar.open {
-    transform: translate3d(0, 0, 0);
+@media (max-width: 1023px) {
+  .provider-navigation-items {
+    display: none;
   }
-
-  .streaming-sidebar-inner {
-    width: var(--te-menu-width);
-    min-width: 132px;
-    max-width: 216px;
-    padding: calc(32px + 14px) 9px 14px 1px;
-    box-sizing: border-box;
+  .provider-navigation-select {
+    display: flex;
   }
-
-  .streaming-sidebar.open + .streaming-content {
-    padding-left: var(--te-menu-width);
-  }
-
-  .streaming-menu-item {
-    height: 42px;
-    padding: 0 12px 0 18px;
-    border-radius: 11px;
-  }
-
-  .streaming-menu-icon {
-    width: 17px;
-    height: 17px;
-    font-size: calc(var(--te-font-size-body, 14px) * 1.14286);
-  }
-
-  .streaming-menu-label {
-    font-size: calc(var(--te-font-size-body, 14px) * 1);
+  .provider-navigation-select select {
+    min-height: 32px;
+    max-width: 200px;
+    background: var(--hig-surface);
+    color: var(--hig-text);
+    border: 1px solid var(--hig-stroke);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font: 14px/20px var(--hig-font);
   }
 }
 </style>

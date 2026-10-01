@@ -1,4 +1,6 @@
 ﻿<script setup lang="ts">
+import { confirmAction } from '../app/useAppDialog.ts'
+
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
 import type { ProviderHomeSectionPresentation } from '../../../shared/providerHome'
 import { useBackHandler } from '../app/useBackStack'
@@ -42,7 +44,6 @@ import StreamingPlaceholder from './streaming-page/StreamingPlaceholder.vue'
 import StreamingSocialStage from './streaming-page/StreamingSocialStage.vue'
 import StreamingLoadingStage from './streaming-page/StreamingLoadingStage.vue'
 import ProviderSidebar from './streaming-page/ProviderSidebar.vue'
-import AggregatePlaylistPage from './aggregate-playlist/AggregatePlaylistPage.vue'
 import CreateAggregatePlaylistDialog from './aggregate-playlist/CreateAggregatePlaylistDialog.vue'
 import NcmPlaylistDialogs from './streaming-page/NcmPlaylistDialogs.vue'
 import {
@@ -594,6 +595,7 @@ const emit = defineEmits<{
   toggleMenu: []
   backToLocal: []
   login: [providerId?: string | null]
+  openAggregate: []
 }>()
 
 const {
@@ -1277,7 +1279,6 @@ function selectProvider(provider: string, persist = true): void {
 }
 
 function isSidebarItemActive(item: SidebarItem): boolean {
-  if (showAggregatePanel.value) return false
   if (item.tab === 'library') {
     return (
       activeTab.value === 'library' &&
@@ -1294,14 +1295,12 @@ function isSidebarItemActive(item: SidebarItem): boolean {
 
 // 聚合歌单在流媒体壳里就地渲染，刻意不走 activeTab —— 它不是某个 provider 的
 // 在线导航条目，掺进去会连带改动 buildStreamingSidebarItems 的语义和加载流程。
-const showAggregatePanel = ref(false)
 
 function selectAggregatePanel(): void {
-  showAggregatePanel.value = true
+  emit('openAggregate')
 }
 
 function selectSidebarItem(item: SidebarItem, options: { persistProvider?: boolean } = {}): void {
-  showAggregatePanel.value = false
   const persistProvider = options.persistProvider !== false
   if (item.tab === 'recent') {
     selectTab('recent')
@@ -2285,6 +2284,13 @@ function handleContextPlayNext(): void {
   pushNotice({ kind: 'success', message: `下一首播放：${track.title}` })
 }
 
+function handleContextPlayLast(): void {
+  const tracks = [...streamingContextActionTracks.value]
+  closeStreamingContextMenu()
+  playbackStore.appendQueueTracks(tracks)
+  if (tracks.length) pushNotice({ kind: 'success', message: `已加入队尾：${tracks.length} 首` })
+}
+
 async function handleContextFavorite(): Promise<void> {
   const tracks = streamingContextActionTracks.value
   closeStreamingContextMenu()
@@ -2789,7 +2795,12 @@ async function confirmCreateNcmPlaylist(): Promise<void> {
 async function handleDeleteNcmPlaylist(playlist: MediaProviderPlaylistSummary): Promise<void> {
   if (!canManageNcmPlaylists.value || deletingNcmPlaylistId.value != null) return
   const label = playlist.owned === false ? '取消收藏该歌单' : '删除该歌单'
-  const confirmed = window.confirm(`${label}「${playlist.name}」？此操作不可撤销。`)
+  const confirmed = await confirmAction({
+    title: '删除或取消收藏歌单？',
+    message: `${label}「${playlist.name}」？此操作不可撤销。`,
+    confirmLabel: '继续',
+    destructive: true
+  })
   if (!confirmed) return
   deletingNcmPlaylistId.value = playlist.id
   try {
@@ -2892,9 +2903,17 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
       setStreamingBatchRemovalError('所选曲目没有可从网易云歌单移除的歌曲 ID')
       return
     }
-    if (!window.confirm(`确定从歌单「${playlistName}」移除所选 ${trackIds.length} 首歌曲？`)) {
+    if (
+      !(await confirmAction({
+        title: '确认此更改？',
+        message: `确定从歌单「${playlistName}」移除所选 ${trackIds.length} 首歌曲？`,
+        confirmLabel: '继续',
+        destructive: true
+      }))
+    ) {
       return
     }
+    if (!isTargetPlaylist() || !isActiveDetailLoad(token)) return
     try {
       await removeNcmTracksFromPlaylist(playlistId, trackIds)
       const removedSongIds = new Set(trackIds)
@@ -2986,7 +3005,12 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
     .filter(Boolean)
     .join('，')
   if (
-    !window.confirm(`确定删除所选 ${selected.length} 首歌曲？${consequences}。此操作不可撤销。`)
+    !(await confirmAction({
+      title: '确认此更改？',
+      message: `确定删除所选 ${selected.length} 首歌曲？${consequences}。此操作不可撤销。`,
+      confirmLabel: '继续',
+      destructive: true
+    }))
   ) {
     return
   }
@@ -3363,24 +3387,11 @@ onMounted(async () => {
       :menu-open="menuOpen"
       :items="sidebarItems"
       :is-active="isSidebarItemActive"
-      :aggregate-active="showAggregatePanel"
       @select="selectSidebarItem"
       @select-aggregate="selectAggregatePanel"
-      @back-to-local="emit('backToLocal')"
     />
 
-    <!-- 聚合歌单就地占据内容区。保留 streaming-content 类名，侧边栏那条相邻兄弟
-         规则（.streaming-sidebar.open + .streaming-content）才能继续给出偏移。 -->
-    <div v-if="showAggregatePanel" class="streaming-content">
-      <AggregatePlaylistPage :has-player="hasPlayer" surface="streaming" :active="active" />
-    </div>
-
-    <div
-      v-show="!showAggregatePanel"
-      ref="streamingContentRef"
-      class="streaming-content"
-      @scroll="onStreamingContentScroll"
-    >
+    <div ref="streamingContentRef" class="streaming-content" @scroll="onStreamingContentScroll">
       <StreamingContentHeader
         :is-detail="!!currentDetail"
         :is-searching="isSearching && !currentDetail"
@@ -3420,6 +3431,9 @@ onMounted(async () => {
         <div
           v-if="showUnifiedSearch && isSearching && !currentDetail"
           key="search-results"
+          id="streaming-search-panel"
+          role="tabpanel"
+          :aria-labelledby="`streaming-search-tab-${searchType}`"
           class="streaming-content-body stream-view-panel"
           :class="{ 'has-search-tabs': isSearching }"
         >
@@ -3568,7 +3582,7 @@ onMounted(async () => {
 
           <div v-else-if="currentDetail" class="detail-view">
             <div v-if="showDetailOverlayLoading" class="detail-loading-overlay" aria-live="polite">
-              <i class="pi pi-spin pi-spinner"></i>
+              <i aria-hidden="true" class="pi pi-spin pi-spinner"></i>
               <span>正在加载</span>
             </div>
 
@@ -3763,6 +3777,7 @@ onMounted(async () => {
       :show-aggregate-submenu="showStreamingAggregateSubmenu"
       @play="handleContextPlayTrack"
       @play-next="handleContextPlayNext"
+      @play-last="handleContextPlayLast"
       @favorite="handleContextFavorite"
       @like="handleContextLikeTrack"
       @create-playlist="handleContextCreatePlaylist"

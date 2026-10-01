@@ -65,6 +65,14 @@ async function compileComponent(
   )
   compiled = compiled.replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*/g, '')
   compiled = compiled.replace(
+    /import\s+\{\s*confirmAction\s*\}\s+from\s+['"][^'"]+['"]\s*/g,
+    'const confirmAction = async () => false\n'
+  )
+  compiled = compiled.replace(
+    /import\s+\{\s*onTabKeydown\s*\}\s+from\s+['"][^'"]+['"]\s*/g,
+    'const onTabKeydown = () => {}\n'
+  )
+  compiled = compiled.replace(
     /import\s+\{\s*useSettingsStore\s*\}\s+from\s+['"][^'"]+['"]\s*/g,
     'const useSettingsStore = window.__useSettingsStore\n'
   )
@@ -73,11 +81,11 @@ async function compileComponent(
     'const $1 = window.__stubComponent\n'
   )
   compiled = compiled.replace(
-    /import\s+\{[\s\S]*?\}\s+from\s+['"]@renderer\/utils\/pluginTrustPresentation['"]\s*/g,
+    /import\s+\{[^}]*\}\s+from\s+['"]@renderer\/utils\/pluginTrustPresentation['"]\s*/g,
     'const { pluginIndexLoadedFromLabel, pluginIndexSourceLabel, presentPluginTrust } = window.__trustPresentation\n'
   )
   compiled = compiled.replace(
-    /import\s+\{[\s\S]*?\}\s+from\s+['"]@renderer\/utils\/pluginTrustRefresh['"]\s*/g,
+    /import\s+\{[^}]*\}\s+from\s+['"]@renderer\/utils\/pluginTrustRefresh['"]\s*/g,
     'const { createPluginTrustRefreshController } = window.__trustRefresh\n'
   )
   compiled = compiled.replace(
@@ -88,7 +96,7 @@ async function compileComponent(
   // 所以按既有范式换成 window 上的替身。本测试断言的是开发者模式贯通，
   // 语言选择器只需要能渲染出来、不炸。
   compiled = compiled.replace(
-    /import\s+\{[\s\S]*?\}\s+from\s+['"][^'"]*shared\/i18n\/locale\.ts['"]\s*/g,
+    /import\s+\{[^}]*\}\s+from\s+['"][^'"]*shared\/i18n\/locale\.ts['"]\s*/g,
     'const { APP_LOCALES, normalizeLanguagePreference } = window.__i18nLocale\n'
   )
   compiled = compiled.replace(

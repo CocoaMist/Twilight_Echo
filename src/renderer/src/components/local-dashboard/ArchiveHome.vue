@@ -258,7 +258,9 @@ function trackFormat(track: Track): string {
             </button>
           </div>
           <div v-else class="archive-shelf-empty">
-            <span class="archive-empty-disc" aria-hidden="true"><i class="ph ph-disc"></i></span>
+            <span class="archive-empty-disc" aria-hidden="true"
+              ><i aria-hidden="true" class="ph ph-disc"></i
+            ></span>
             <div>
               <h3>
                 {{

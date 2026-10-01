@@ -70,6 +70,7 @@ function emitPage(first: number): void {
   <div class="search-view">
     <div v-if="searchLoading && searchOffset === 0" class="streaming-placeholder">
       <i
+        aria-hidden="true"
         class="pi pi-spin pi-spinner"
         style="font-size: calc(var(--te-font-size-body, 14px) * 40 / 14); color: #999"
       ></i>
@@ -77,6 +78,7 @@ function emitPage(first: number): void {
     </div>
     <div v-else-if="searchError" class="streaming-placeholder">
       <i
+        aria-hidden="true"
         class="pi pi-exclamation-triangle"
         style="font-size: calc(var(--te-font-size-body, 14px) * 40 / 14); color: #e74c3c"
       ></i>
@@ -86,6 +88,7 @@ function emitPage(first: number): void {
     </div>
     <div v-else-if="searchTotal === 0 && !searchLoading" class="streaming-placeholder">
       <i
+        aria-hidden="true"
         class="pi pi-search"
         style="font-size: calc(var(--te-font-size-body, 14px) * 40 / 14); color: #ccc"
       ></i>
@@ -99,7 +102,10 @@ function emitPage(first: number): void {
             <span class="selection-count">已选择 {{ selectedCount }} 首</span>
             <div class="selection-actions">
               <button type="button" class="selection-btn" @click="emit('batchFavorite')">
-                <i :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+                <i
+                  aria-hidden="true"
+                  :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"
+                ></i>
                 <span>{{ selectionAllFavorited ? '取消收藏' : '加入收藏' }}</span>
               </button>
               <button
@@ -108,15 +114,15 @@ function emitPage(first: number): void {
                 class="selection-btn"
                 @click="emit('batchAddToPlaylist')"
               >
-                <i class="pi pi-list"></i>
+                <i aria-hidden="true" class="pi pi-list"></i>
                 <span>添加到歌单</span>
               </button>
               <button type="button" class="selection-btn danger" @click="emit('batchDelete')">
-                <i class="pi pi-trash"></i>
+                <i aria-hidden="true" class="pi pi-trash"></i>
                 <span>删除</span>
               </button>
               <button type="button" class="selection-btn ghost" @click="emit('clearSelection')">
-                <i class="pi pi-times"></i>
+                <i aria-hidden="true" class="pi pi-times"></i>
                 <span>取消</span>
               </button>
             </div>
@@ -152,6 +158,7 @@ function emitPage(first: number): void {
                   <img v-if="track.cover" :src="track.cover" class="cover-img" alt="cover" />
                   <div v-else class="cover-placeholder">
                     <i
+                      aria-hidden="true"
                       class="pi pi-wave-pulse"
                       style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); color: #bbb"
                     ></i>
@@ -160,6 +167,7 @@ function emitPage(first: number): void {
                 <td class="col-index">
                   <span v-if="currentTrack?.id === track.id" class="playing-indicator">
                     <i
+                      aria-hidden="true"
                       class="pi pi-volume-up"
                       style="
                         font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
@@ -175,6 +183,7 @@ function emitPage(first: number): void {
                 </td>
                 <td class="col-like">
                   <button
+                    aria-label="喜欢"
                     class="btn-like"
                     :class="{
                       liked: isTrackLiked(track.ncmSongId),
@@ -185,11 +194,13 @@ function emitPage(first: number): void {
                     @click.stop="emit('likeTrack', track, $event)"
                   >
                     <i
+                      aria-hidden="true"
                       v-if="likingTracks.has(track.ncmSongId ?? 0)"
                       class="pi pi-spin pi-spinner"
                       style="font-size: calc(var(--te-font-size-body, 14px) * 14 / 14)"
                     ></i>
                     <i
+                      aria-hidden="true"
                       v-else
                       :class="isTrackLiked(track.ncmSongId) ? 'pi pi-heart-fill' : 'pi pi-heart'"
                       style="font-size: calc(var(--te-font-size-body, 14px) * 14 / 14)"
@@ -243,6 +254,7 @@ function emitPage(first: number): void {
             />
             <div v-else class="playlist-grid-cover-placeholder">
               <i
+                aria-hidden="true"
                 class="pi pi-list"
                 style="font-size: calc(var(--te-font-size-body, 14px) * 28 / 14); color: #bbb"
               ></i>
@@ -292,6 +304,7 @@ function emitPage(first: number): void {
             />
             <div v-else class="playlist-grid-cover-placeholder artist-cover">
               <i
+                aria-hidden="true"
                 class="pi pi-user"
                 style="font-size: calc(var(--te-font-size-body, 14px) * 28 / 14); color: #bbb"
               ></i>

@@ -148,7 +148,7 @@ select,
 button {
   box-sizing: border-box;
   border: 1px solid var(--te-card-border);
-  border-radius: 8px;
+  border-radius: 4px;
   font: inherit;
   color: var(--te-neutral-900);
 }
@@ -156,8 +156,8 @@ button {
 input,
 select {
   width: 100%;
-  min-height: 40px;
-  padding: 10px 12px;
+  min-height: 32px;
+  padding: 6px 12px;
   background: var(--te-subtle-bg);
 }
 
@@ -178,13 +178,13 @@ button:focus-visible {
 .playlist-dialog-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   margin-top: 24px;
 }
 
 button {
-  min-height: 36px;
-  padding: 8px 18px;
+  min-height: 32px;
+  padding: 6px 12px;
   background: var(--te-subtle-bg);
   cursor: pointer;
 }

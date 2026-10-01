@@ -334,7 +334,7 @@ function rowNumber(index: number): number {
           </p>
         </div>
         <button type="button" class="aggregate-primary-action" @click="openCreateDialog()">
-          <i class="pi pi-plus"></i>
+          <i aria-hidden="true" class="pi pi-plus"></i>
           <span>新建聚合歌单</span>
         </button>
       </header>
@@ -373,11 +373,15 @@ function rowNumber(index: number): number {
             loading="lazy"
           />
           <div v-else class="aggregate-cover aggregate-cover-placeholder">
-            <i class="pi pi-sitemap aggregate-cover-icon"></i>
+            <i aria-hidden="true" class="pi pi-sitemap aggregate-cover-icon"></i>
           </div>
 
           <div class="aggregate-card-name">
-            <i v-if="playlist.pinnedAt" class="pi pi-thumbtack aggregate-pin-mark"></i>
+            <i
+              aria-hidden="true"
+              v-if="playlist.pinnedAt"
+              class="pi pi-thumbtack aggregate-pin-mark"
+            ></i>
             {{ playlist.name }}
           </div>
           <div class="aggregate-card-meta">{{ playlist.trackIds.length }} 首</div>
@@ -394,7 +398,7 @@ function rowNumber(index: number): number {
               :aria-label="playlist.pinnedAt ? '取消置顶' : '置顶'"
               @click="togglePinned(playlist.id, !!playlist.pinnedAt, $event)"
             >
-              <i class="pi pi-thumbtack"></i>
+              <i aria-hidden="true" class="pi pi-thumbtack"></i>
             </button>
             <button
               type="button"
@@ -405,7 +409,7 @@ function rowNumber(index: number): number {
               :aria-label="pendingDeleteId === playlist.id ? '再点一次确认删除' : '删除聚合歌单'"
               @click="requestDelete(playlist.id, $event)"
             >
-              <i class="pi pi-trash"></i>
+              <i aria-hidden="true" class="pi pi-trash"></i>
               <span v-if="pendingDeleteId === playlist.id">确认</span>
             </button>
           </div>
@@ -431,7 +435,11 @@ function rowNumber(index: number): number {
         </button>
         <div class="aggregate-heading">
           <h2 class="aggregate-title">
-            <i v-if="activePlaylist.pinnedAt" class="pi pi-thumbtack aggregate-pin-mark"></i>
+            <i
+              aria-hidden="true"
+              v-if="activePlaylist.pinnedAt"
+              class="pi pi-thumbtack aggregate-pin-mark"
+            ></i>
             {{ activePlaylist.name }}
           </h2>
           <p class="aggregate-subtitle">{{ detailStatsText }}</p>
@@ -445,18 +453,22 @@ function rowNumber(index: number): number {
             aria-label="在聚合歌单内搜索"
           />
           <button
+            :aria-label="activePlaylist.pinnedAt ? '取消置顶' : '置顶'"
             type="button"
             class="aggregate-card-btn"
             :title="activePlaylist.pinnedAt ? '取消置顶' : '置顶'"
             @click="togglePinned(activePlaylist.id, !!activePlaylist.pinnedAt, $event)"
           >
-            <i class="pi pi-thumbtack"></i>
+            <i aria-hidden="true" class="pi pi-thumbtack"></i>
           </button>
         </div>
       </header>
 
       <div v-if="sourceFilters.length > 0" class="aggregate-source-filters" aria-label="音源筛选">
         <button
+          :aria-label="
+            item.hidden ? `显示 ${sourceLabel(item.source)}` : `隐藏 ${sourceLabel(item.source)}`
+          "
           v-for="item in sourceFilters"
           :key="item.source"
           type="button"
@@ -469,7 +481,10 @@ function rowNumber(index: number): number {
           "
           @click.stop="toggleSourceVisibility(item.source)"
         >
-          <i :class="item.hidden ? 'pi pi-eye-slash' : sourceIcon(item.source)"></i>
+          <i
+            aria-hidden="true"
+            :class="item.hidden ? 'pi pi-eye-slash' : sourceIcon(item.source)"
+          ></i>
           <span>{{ sourceLabel(item.source) }}</span>
           <span class="aggregate-source-count">{{ item.count }}</span>
         </button>
@@ -539,6 +554,11 @@ function rowNumber(index: number): number {
               <td class="col-source">
                 <template v-if="rowFor(track)">
                   <button
+                    :aria-label="
+                      rowFor(track)!.visibleVariants.length > 1
+                        ? '切换这一行使用的音源'
+                        : sourceLabel(rowFor(track)!.selectedVariant.source)
+                    "
                     type="button"
                     class="aggregate-variant-btn"
                     data-te-interactive
@@ -550,9 +570,13 @@ function rowNumber(index: number): number {
                     "
                     @click="toggleVariantMenu(rowFor(track)!.anchorTrackId, $event)"
                   >
-                    <i :class="sourceIcon(rowFor(track)!.selectedVariant.source)"></i>
+                    <i
+                      aria-hidden="true"
+                      :class="sourceIcon(rowFor(track)!.selectedVariant.source)"
+                    ></i>
                     <span>{{ sourceLabel(rowFor(track)!.selectedVariant.source) }}</span>
                     <i
+                      aria-hidden="true"
                       v-if="rowFor(track)!.visibleVariants.length > 1"
                       class="pi pi-angle-down aggregate-variant-caret"
                     ></i>
@@ -573,10 +597,11 @@ function rowNumber(index: number): number {
                       }"
                       @click="chooseVariant(rowFor(track)!, variant.source, $event)"
                     >
-                      <i :class="sourceIcon(variant.source)"></i>
+                      <i aria-hidden="true" :class="sourceIcon(variant.source)"></i>
                       <span>{{ sourceLabel(variant.source) }}</span>
                       <span v-if="variant.lossless" class="aggregate-variant-tag">无损</span>
                       <i
+                        aria-hidden="true"
                         v-if="variant.source === rowFor(track)!.selectedVariant.source"
                         class="pi pi-check aggregate-variant-check"
                       ></i>
@@ -595,7 +620,7 @@ function rowNumber(index: number): number {
                   aria-label="从聚合歌单移除"
                   @click="removeRow(rowFor(track)!, $event)"
                 >
-                  <i class="pi pi-times"></i>
+                  <i aria-hidden="true" class="pi pi-times"></i>
                 </button>
               </td>
             </tr>

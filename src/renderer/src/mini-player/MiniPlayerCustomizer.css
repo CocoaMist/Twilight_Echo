@@ -70,10 +70,13 @@
 }
 
 .customizer-icon-button {
+  --hig-icon-size: 16px;
   display: grid;
   width: 28px;
   height: 28px;
   padding: 0;
+  font-size: var(--hig-icon-size);
+  line-height: 1;
   place-items: center;
   border-radius: 6px;
   background: transparent;
@@ -107,7 +110,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--customizer-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .mini-customizer-tabs button.active {
@@ -191,7 +194,7 @@
   border-radius: 5px;
   background: transparent;
   color: var(--customizer-muted);
-  font-size: 10px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -208,7 +211,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .customizer-color-row {
@@ -229,7 +232,7 @@
 .customizer-slider-row output {
   overflow: hidden;
   color: var(--customizer-muted);
-  font-size: 9px;
+  font-size: 12px;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -290,7 +293,7 @@
   padding: 0 10px;
   border-radius: 6px;
   background: var(--customizer-control);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .mini-customizer-error {
@@ -299,7 +302,7 @@
   gap: 6px;
   padding: 6px 12px;
   color: #d84a5b;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .mini-customizer-footer {

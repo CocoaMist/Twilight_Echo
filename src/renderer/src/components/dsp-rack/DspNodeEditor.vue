@@ -217,13 +217,14 @@ function selectVst3State(assetId: string): void {
           <div class="control-heading">
             <h3>Correction profile</h3>
             <button
+              aria-label="Import REW, Equalizer APO, or AutoEq profile"
               type="button"
               class="icon-button small"
               title="Import REW, Equalizer APO, or AutoEq profile"
               :disabled="busy"
               @click="emit('importCorrectionProfile')"
             >
-              <i class="pi pi-upload"></i>
+              <i aria-hidden="true" class="pi pi-upload"></i>
             </button>
           </div>
           <label
@@ -303,12 +304,13 @@ function selectVst3State(assetId: string): void {
           <div class="control-heading">
             <h3>Routing matrix</h3>
             <button
+              aria-label="Reset to identity"
               type="button"
               class="icon-button small"
               title="Reset to identity"
               @click="resetMatrix(node)"
             >
-              <i class="pi pi-refresh"></i>
+              <i aria-hidden="true" class="pi pi-refresh"></i>
             </button>
           </div>
           <label
@@ -465,12 +467,13 @@ function selectVst3State(assetId: string): void {
           <div class="control-heading">
             <h3>Bands</h3>
             <button
+              aria-label="Add band"
               type="button"
               class="icon-button small"
               title="Add band"
               @click="addDynamicEqBand(node)"
             >
-              <i class="pi pi-plus"></i>
+              <i aria-hidden="true" class="pi pi-plus"></i>
             </button>
           </div>
           <div v-for="(band, index) in bandsFor(node)" :key="index" class="band-grid">
@@ -587,12 +590,13 @@ function selectVst3State(assetId: string): void {
               On</label
             >
             <button
+              aria-label="Remove band"
               type="button"
               class="icon-button small danger"
               title="Remove band"
               @click="removeBand(node, index)"
             >
-              <i class="pi pi-trash"></i>
+              <i aria-hidden="true" class="pi pi-trash"></i>
             </button>
           </div>
         </template>
@@ -618,7 +622,7 @@ function selectVst3State(assetId: string): void {
             class="icon-text-button"
             @click="emit('importAsset', 'impulseResponse')"
           >
-            <i class="pi pi-upload"></i>Import IR
+            <i aria-hidden="true" class="pi pi-upload"></i>Import IR
           </button>
           <label
             >Wet<input
@@ -707,12 +711,13 @@ function selectVst3State(assetId: string): void {
             <div class="control-heading">
               <h3>IR routing</h3>
               <button
+                aria-label="Reset routing"
                 type="button"
                 class="icon-button small"
                 title="Reset routing"
                 @click="resetConvolverRouting(node)"
               >
-                <i class="pi pi-refresh"></i>
+                <i aria-hidden="true" class="pi pi-refresh"></i>
               </button>
             </div>
             <div
@@ -840,12 +845,13 @@ function selectVst3State(assetId: string): void {
           <div class="control-heading">
             <h3>Bands</h3>
             <button
+              aria-label="Add band"
               type="button"
               class="icon-button small"
               title="Add band"
               @click="addMultibandBand(node)"
             >
-              <i class="pi pi-plus"></i>
+              <i aria-hidden="true" class="pi pi-plus"></i>
             </button>
           </div>
           <div v-if="bandsFor(node).length >= 2" class="crossover-grid">
@@ -921,13 +927,14 @@ function selectVst3State(assetId: string): void {
               On</label
             >
             <button
+              aria-label="Remove band"
               type="button"
               class="icon-button small danger"
               title="Remove band"
               :disabled="bandsFor(node).length <= 2"
               @click="removeMultibandBand(node, index)"
             >
-              <i class="pi pi-trash"></i>
+              <i aria-hidden="true" class="pi pi-trash"></i>
             </button>
           </div>
         </template>
@@ -1109,7 +1116,7 @@ function selectVst3State(assetId: string): void {
             :disabled="!node.vst3"
             @click="emit('importAsset', 'vst3Preset')"
           >
-            <i class="pi pi-upload"></i>Import preset
+            <i aria-hidden="true" class="pi pi-upload"></i>Import preset
           </button>
           <button
             type="button"
@@ -1117,7 +1124,7 @@ function selectVst3State(assetId: string): void {
             :disabled="!node.vst3"
             @click="emit('importAsset', 'vst3State')"
           >
-            <i class="pi pi-upload"></i>Import state
+            <i aria-hidden="true" class="pi pi-upload"></i>Import state
           </button>
           <button
             type="button"
@@ -1125,7 +1132,7 @@ function selectVst3State(assetId: string): void {
             :disabled="busy || !vst3HelpersReady"
             @click="emit('scanVst3')"
           >
-            <i class="pi pi-search"></i>Scan VST3
+            <i aria-hidden="true" class="pi pi-search"></i>Scan VST3
           </button>
           <div
             v-if="vst3Catalog?.entries.some((entry) => entry.status !== 'available')"
@@ -1150,7 +1157,7 @@ function selectVst3State(assetId: string): void {
                 :aria-label="`Re-scan and manually re-enable ${entry.name}`"
                 @click="emit('recoverVst3', entry.id)"
               >
-                <i class="pi pi-refresh"></i>
+                <i aria-hidden="true" class="pi pi-refresh"></i>
               </button>
             </div>
           </div>

@@ -622,17 +622,18 @@ const deckAccentVars = computed(() => {
           :aria-pressed="activeSection === tab.id"
           @click="activeSection = tab.id"
         >
-          <i class="ph" :class="tab.icon"></i>
+          <i aria-hidden="true" class="ph" :class="tab.icon"></i>
           <span>{{ tab.label }}</span>
         </button>
         <div class="deck-rail-spacer"></div>
         <button
+          aria-label="播放设置"
           type="button"
           class="deck-rail-btn utility"
           title="播放设置"
           @click="emit('openSettings')"
         >
-          <i class="ph ph-gear-six"></i>
+          <i aria-hidden="true" class="ph ph-gear-six"></i>
           <span>设置</span>
         </button>
       </nav>
@@ -780,7 +781,7 @@ const deckAccentVars = computed(() => {
                   @click="emit('toggleExclusive')"
                 >
                   <span class="deck-led"></span>
-                  <i class="ph ph-lock-key"></i>
+                  <i aria-hidden="true" class="ph ph-lock-key"></i>
                   <span class="deck-toggle-name">Exclusive</span>
                   <em>{{ exclusiveMode ? 'ON' : 'OFF' }}</em>
                 </button>
@@ -791,7 +792,7 @@ const deckAccentVars = computed(() => {
                   @click="emit('toggleGapless')"
                 >
                   <span class="deck-led"></span>
-                  <i class="ph ph-arrows-merge"></i>
+                  <i aria-hidden="true" class="ph ph-arrows-merge"></i>
                   <span class="deck-toggle-name">Gapless</span>
                   <em>{{ audioProcessing.gapless ? 'ON' : 'OFF' }}</em>
                 </button>
@@ -802,7 +803,7 @@ const deckAccentVars = computed(() => {
                   @click="emit('toggleClipGuard')"
                 >
                   <span class="deck-led"></span>
-                  <i class="ph ph-shield-check"></i>
+                  <i aria-hidden="true" class="ph ph-shield-check"></i>
                   <span class="deck-toggle-name">Clip Guard</span>
                   <em>{{ audioProcessing.clipGuard ? 'ON' : 'OFF' }}</em>
                 </button>
@@ -813,7 +814,7 @@ const deckAccentVars = computed(() => {
                   @click="emit('toggleDsp')"
                 >
                   <span class="deck-led"></span>
-                  <i class="ph ph-circuitry"></i>
+                  <i aria-hidden="true" class="ph ph-circuitry"></i>
                   <span class="deck-toggle-name">Master DSP</span>
                   <em>{{ dspMasterOn ? 'ON' : 'OFF' }}</em>
                 </button>
@@ -844,21 +845,21 @@ const deckAccentVars = computed(() => {
 
             <section class="deck-card deck-actions">
               <button type="button" class="deck-action" @click="emit('openSettings')">
-                <i class="ph ph-gear-six"></i>
+                <i aria-hidden="true" class="ph ph-gear-six"></i>
                 <span>
                   <strong>播放设置</strong>
                   <em>输出 · 缓存</em>
                 </span>
               </button>
               <button type="button" class="deck-action accent" @click="emit('openEqualizer')">
-                <i class="ph ph-faders"></i>
+                <i aria-hidden="true" class="ph ph-faders"></i>
                 <span>
                   <strong>均衡器</strong>
                   <em>完整 EQ 页</em>
                 </span>
               </button>
               <button type="button" class="deck-action" @click="emit('openDsp')">
-                <i class="ph ph-sliders-horizontal"></i>
+                <i aria-hidden="true" class="ph ph-sliders-horizontal"></i>
                 <span>
                   <strong>DSP 工作台</strong>
                   <em>空间 · 解码</em>
@@ -892,7 +893,7 @@ const deckAccentVars = computed(() => {
               <div class="deck-card-label">
                 <span><em>02</em>DEVICES</span>
                 <button type="button" class="deck-link" @click="emit('refreshDevices')">
-                  <i class="ph ph-arrows-clockwise"></i>刷新
+                  <i aria-hidden="true" class="ph ph-arrows-clockwise"></i>刷新
                 </button>
               </div>
               <div class="deck-devices">
@@ -904,7 +905,7 @@ const deckAccentVars = computed(() => {
                   :class="{ active: audioDevice === device.id }"
                   @click="emit('setAudioDevice', device.id)"
                 >
-                  <i :class="deviceIcon(device)"></i>
+                  <i aria-hidden="true" :class="deviceIcon(device)"></i>
                   <div class="deck-device-copy">
                     <strong>{{ device.label }}</strong>
                     <span>{{ deviceSpecText(device) || '系统默认路径' }}</span>
@@ -929,7 +930,7 @@ const deckAccentVars = computed(() => {
                   @click="emit('toggleExclusive')"
                 >
                   <span class="deck-led"></span>
-                  <i class="ph ph-lock-key"></i>
+                  <i aria-hidden="true" class="ph ph-lock-key"></i>
                   <span class="deck-toggle-name">Exclusive</span>
                   <em>{{ exclusiveMode ? 'ON' : 'OFF' }}</em>
                 </button>
@@ -940,7 +941,7 @@ const deckAccentVars = computed(() => {
                   @click="emit('toggleGapless')"
                 >
                   <span class="deck-led"></span>
-                  <i class="ph ph-arrows-merge"></i>
+                  <i aria-hidden="true" class="ph ph-arrows-merge"></i>
                   <span class="deck-toggle-name">Gapless</span>
                   <em>{{ audioProcessing.gapless ? 'ON' : 'OFF' }}</em>
                 </button>
@@ -1317,7 +1318,7 @@ const deckAccentVars = computed(() => {
                     @click="toggleInvertLeft"
                   >
                     <span class="deck-led"></span>
-                    <i class="ph ph-arrows-left-right"></i>
+                    <i aria-hidden="true" class="ph ph-arrows-left-right"></i>
                     <span class="deck-toggle-name">L Phase</span>
                     <em>{{ dspStereoImage.invertLeft ? 'INV' : 'OK' }}</em>
                   </button>
@@ -1328,7 +1329,7 @@ const deckAccentVars = computed(() => {
                     @click="toggleInvertRight"
                   >
                     <span class="deck-led"></span>
-                    <i class="ph ph-arrows-left-right"></i>
+                    <i aria-hidden="true" class="ph ph-arrows-left-right"></i>
                     <span class="deck-toggle-name">R Phase</span>
                     <em>{{ dspStereoImage.invertRight ? 'INV' : 'OK' }}</em>
                   </button>
@@ -1341,14 +1342,14 @@ const deckAccentVars = computed(() => {
 
             <section class="deck-card deck-actions">
               <button type="button" class="deck-action accent" @click="emit('openEqualizer')">
-                <i class="ph ph-faders"></i>
+                <i aria-hidden="true" class="ph ph-faders"></i>
                 <span>
                   <strong>进入 EQ 页面</strong>
                   <em>图形 / 参数均衡</em>
                 </span>
               </button>
               <button type="button" class="deck-action" @click="emit('openDsp')">
-                <i class="ph ph-sliders-horizontal"></i>
+                <i aria-hidden="true" class="ph ph-sliders-horizontal"></i>
                 <span>
                   <strong>完整 DSP 设置</strong>
                   <em>高级参数</em>
@@ -1451,6 +1452,7 @@ const deckAccentVars = computed(() => {
                     A-B
                   </button>
                   <button
+                    aria-label="清除 A-B 循环"
                     type="button"
                     class="deck-btn ghost"
                     :disabled="isLiveStream || (abLoopA == null && abLoopB == null)"
@@ -1478,6 +1480,7 @@ const deckAccentVars = computed(() => {
                 </div>
                 <div class="deck-module-actions">
                   <button
+                    aria-label="刷新设备列表"
                     type="button"
                     class="deck-btn"
                     :disabled="castBusy"
@@ -1487,6 +1490,7 @@ const deckAccentVars = computed(() => {
                     {{ castBusy ? '搜索中…' : '刷新' }}
                   </button>
                   <button
+                    aria-label="停止投送"
                     v-if="castTargetName"
                     type="button"
                     class="deck-btn ghost"
@@ -1514,7 +1518,7 @@ const deckAccentVars = computed(() => {
                     "
                     @click="emit('castToDevice', device.usn)"
                   >
-                    <i class="ph ph-broadcast"></i>
+                    <i aria-hidden="true" class="ph ph-broadcast"></i>
                     <span class="deck-cast-name">{{ device.friendlyName }}</span>
                     <span class="deck-cast-meta">
                       {{
@@ -1540,6 +1544,7 @@ const deckAccentVars = computed(() => {
                   <span>{{ isLiveStream ? '直播流不支持书签' : '当前曲目' }}</span>
                 </div>
                 <button
+                  aria-label="在当前时间添加书签"
                   type="button"
                   class="deck-btn"
                   :disabled="isLiveStream"
@@ -1672,6 +1677,7 @@ const deckAccentVars = computed(() => {
                   @click="emit('reloadLyrics', 'auto')"
                 >
                   <i
+                    aria-hidden="true"
                     :class="lyricsReloading ? 'pi pi-spin pi-spinner' : 'ph ph-arrows-clockwise'"
                   ></i>
                   <span>
@@ -1685,7 +1691,7 @@ const deckAccentVars = computed(() => {
                   :disabled="!currentTrack || lyricsReloading"
                   @click="emit('reloadLyrics', 'local')"
                 >
-                  <i class="ph ph-folder-open"></i>
+                  <i aria-hidden="true" class="ph ph-folder-open"></i>
                   <span>
                     <strong>本地 LRC</strong>
                     <em>同目录文件</em>
@@ -1697,7 +1703,7 @@ const deckAccentVars = computed(() => {
                   :disabled="!currentTrack || lyricsReloading"
                   @click="emit('reloadLyrics', 'provider')"
                 >
-                  <i class="ph ph-cloud-arrow-down"></i>
+                  <i aria-hidden="true" class="ph ph-cloud-arrow-down"></i>
                   <span>
                     <strong>在线 Provider</strong>
                     <em>插件源</em>
@@ -1738,7 +1744,7 @@ const deckAccentVars = computed(() => {
 
             <section class="deck-card">
               <button type="button" class="deck-action full" @click="lyricsCustomizerOpen = true">
-                <i class="ph ph-text-aa"></i>
+                <i aria-hidden="true" class="ph ph-text-aa"></i>
                 <span>
                   <strong>歌词显示样式</strong>
                   <em>字体 · 颜色 · 背景 · 高亮 · 动效</em>
@@ -1749,7 +1755,7 @@ const deckAccentVars = computed(() => {
                 class="deck-action deck-action-secondary full"
                 @click="emit('openSettings')"
               >
-                <i class="ph ph-arrow-square-out"></i>
+                <i aria-hidden="true" class="ph ph-arrow-square-out"></i>
                 <span>
                   <strong>打开设置页</strong>
                   <em>字号 · 对齐 · 暗度 · 桌面歌词外观</em>

@@ -347,6 +347,7 @@ type MiniPlayerCommand =
   | { type: 'cycle-play-mode' }
   | { type: 'set-play-mode'; value: PlayMode }
   | { type: 'toggle-favorite' }
+  | { type: 'open-queue' }
   | { type: 'seek'; value: number }
   | { type: 'set-volume'; value: number }
 

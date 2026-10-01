@@ -18,5 +18,5 @@ test('startup defers NCM login and loads PlayerBar asynchronously', () => {
 test('startup begins the aggregate snapshot before loading App', () => {
   assert.match(main, /beginStartupSnapshot\(\)/)
   assert.match(main, /import\('\.\/App\.vue'\)/)
-  assert.match(main, /if \(isMiniPlayer\) await bootstrapThemeRuntime\(\)/)
+  assert.match(main, /if \(isMiniPlayer \|\| isTrayPlayer\) await bootstrapThemeRuntime\(\)/)
 })

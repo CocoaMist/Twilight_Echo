@@ -69,7 +69,7 @@ watch(
   <section class="plugin-extension-page">
     <header class="plugin-extension-header">
       <div class="plugin-extension-icon">
-        <i v-if="page.icon" :class="page.icon"></i>
+        <i aria-hidden="true" v-if="page.icon" :class="page.icon"></i>
         <PuzzleIcon v-else />
       </div>
       <div class="plugin-extension-heading">
@@ -84,7 +84,7 @@ watch(
         :disabled="loading"
         @click="runPageCommand"
       >
-        <i :class="loading ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'"></i>
+        <i aria-hidden="true" :class="loading ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'"></i>
         {{ loading ? '加载中' : '刷新' }}
       </button>
     </header>
@@ -93,6 +93,7 @@ watch(
       <!-- Loading state -->
       <div v-if="loading" class="plugin-extension-loading">
         <i
+          aria-hidden="true"
           class="pi pi-spin pi-spinner"
           style="font-size: calc(var(--te-font-size-body, 14px) * 32 / 14); color: #999"
         ></i>
@@ -102,6 +103,7 @@ watch(
       <!-- Error state -->
       <div v-else-if="error" class="plugin-extension-error-state">
         <i
+          aria-hidden="true"
           class="pi pi-exclamation-triangle"
           style="font-size: calc(var(--te-font-size-body, 14px) * 32 / 14); color: #e74c3c"
         ></i>
@@ -120,7 +122,7 @@ watch(
         <h2>{{ page.title }}</h2>
         <p>{{ page.description || '该页面由插件注册，点击刷新按钮执行命令。' }}</p>
         <button v-if="page.command" class="plugin-extension-run-btn" @click="runPageCommand">
-          <i class="pi pi-play"></i>
+          <i aria-hidden="true" class="pi pi-play"></i>
           执行
         </button>
       </div>

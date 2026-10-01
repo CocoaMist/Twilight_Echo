@@ -419,6 +419,17 @@ async function returnToMainWindow(): Promise<void> {
   }
 }
 
+async function openMainQueue(): Promise<void> {
+  if (!state.value.track) return
+  try {
+    await customization.flush()
+    sendCommand({ type: 'open-queue' })
+    await window.api.miniPlayer.returnToMain()
+  } catch {
+    // Keep the customization draft when persistence fails.
+  }
+}
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
   const minutes = Math.floor(seconds / 60)
@@ -662,7 +673,7 @@ onBeforeUnmount(() => {
             class="mini-artwork mini-artwork-placeholder"
             aria-label="暂无封面"
           >
-            <i class="ph ph-vinyl-record"></i>
+            <i aria-hidden="true" class="ph ph-vinyl-record"></i>
           </div>
         </Transition>
         <span class="mini-artwork-sheen" aria-hidden="true"></span>
@@ -686,7 +697,17 @@ onBeforeUnmount(() => {
           >
             {{ trackQuality.label }}
           </span>
-          <span class="mini-kicker-text" :title="kickerText">{{ kickerText }}</span>
+          <button
+            v-if="resolvedVisibility.queuePosition && state.track"
+            type="button"
+            class="mini-kicker-text mini-queue-position"
+            :title="kickerText"
+            :aria-label="`在主窗口打开播放队列，当前 ${queuePositionText}`"
+            @click="openMainQueue"
+          >
+            {{ kickerText }}
+          </button>
+          <span v-else class="mini-kicker-text" :title="kickerText">{{ kickerText }}</span>
         </div>
         <Transition name="mini-meta-swap" mode="out-in">
           <div :key="`meta:${trackKey}`" class="mini-track-meta">
@@ -708,7 +729,10 @@ onBeforeUnmount(() => {
               :disabled="state.favoriteLoading"
               @click="toggleFavorite"
             >
-              <i :class="state.favoriteLiked ? 'ph-fill ph-heart' : 'ph ph-heart'"></i>
+              <i
+                aria-hidden="true"
+                :class="state.favoriteLiked ? 'ph-fill ph-heart' : 'ph ph-heart'"
+              ></i>
             </button>
           </div>
         </Transition>
@@ -762,7 +786,7 @@ onBeforeUnmount(() => {
             :disabled="!hasTrack"
             @click="sendCommand({ type: 'cycle-play-mode' })"
           >
-            <i :class="playModeIcon"></i>
+            <i aria-hidden="true" :class="playModeIcon"></i>
           </button>
         </div>
 
@@ -786,7 +810,7 @@ onBeforeUnmount(() => {
             :disabled="!hasTrack || state.isLoading"
             @click="togglePlay"
           >
-            <i v-if="state.isLoading" class="pi pi-spin pi-spinner"></i>
+            <i aria-hidden="true" v-if="state.isLoading" class="pi pi-spin pi-spinner"></i>
             <MiniGlyph v-else :name="state.isPlaying ? 'pause' : 'play'" />
           </button>
           <button
@@ -825,7 +849,7 @@ onBeforeUnmount(() => {
               :aria-label="state.volume > 0.001 ? '静音' : '取消静音'"
               @click="toggleMute()"
             >
-              <i :class="volumeIcon"></i>
+              <i aria-hidden="true" :class="volumeIcon"></i>
             </button>
           </div>
         </div>
@@ -840,7 +864,7 @@ onBeforeUnmount(() => {
           aria-label="自定义外观"
           @click="openCustomizer"
         >
-          <i class="ph ph-sliders-horizontal"></i>
+          <i aria-hidden="true" class="ph ph-sliders-horizontal"></i>
         </button>
         <button
           type="button"
@@ -849,27 +873,35 @@ onBeforeUnmount(() => {
           :aria-label="`切换到${nextFormLabel}形态`"
           @click="cycleForm"
         >
-          <i class="ph ph-layout"></i>
+          <i aria-hidden="true" class="ph ph-layout"></i>
         </button>
         <button
           type="button"
           class="mini-tool-button"
           :class="{ 'is-active': settings.alwaysOnTop }"
           :title="settings.alwaysOnTop ? '取消置顶' : '窗口置顶'"
+          :aria-label="settings.alwaysOnTop ? '取消保持置顶' : '保持窗口置顶'"
           :aria-pressed="settings.alwaysOnTop"
           @click="toggleAlwaysOnTop"
         >
-          <i :class="settings.alwaysOnTop ? 'ph-fill ph-push-pin' : 'ph ph-push-pin'"></i>
+          <i
+            aria-hidden="true"
+            :class="settings.alwaysOnTop ? 'ph-fill ph-push-pin' : 'ph ph-push-pin'"
+          ></i>
         </button>
         <button
           type="button"
           class="mini-tool-button tool-lock"
           :class="{ 'is-active': settings.positionLocked }"
           :title="settings.positionLocked ? '解锁位置' : '锁定位置'"
+          :aria-label="settings.positionLocked ? '解锁窗口位置' : '锁定窗口位置'"
           :aria-pressed="settings.positionLocked"
           @click="togglePositionLock"
         >
-          <i :class="settings.positionLocked ? 'ph ph-lock-simple' : 'ph ph-lock-simple-open'"></i>
+          <i
+            aria-hidden="true"
+            :class="settings.positionLocked ? 'ph ph-lock-simple' : 'ph ph-lock-simple-open'"
+          ></i>
         </button>
         <span class="mini-tools-divider" aria-hidden="true"></span>
         <button
@@ -879,7 +911,7 @@ onBeforeUnmount(() => {
           aria-label="最小化"
           @click="minimizeWindow"
         >
-          <i class="ph ph-minus"></i>
+          <i aria-hidden="true" class="ph ph-minus"></i>
         </button>
         <button
           type="button"
@@ -889,7 +921,7 @@ onBeforeUnmount(() => {
           aria-label="返回完整播放器"
           @click="returnToMainWindow"
         >
-          <i class="ph ph-arrows-out-simple"></i>
+          <i aria-hidden="true" class="ph ph-arrows-out-simple"></i>
         </button>
       </nav>
 

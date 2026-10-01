@@ -9,7 +9,7 @@
      inside `.main-content`, whose `transform` makes it the containing block for
      fixed children, and theme-authored shells put the bar in flow above that box
      (see the reset below). */
-  inset: var(--te-titlebar-height, 32px) 0 0;
+  inset: var(--hig-chrome-height, 35px) 0 0;
   /* Above the sidebar (1000) and player bar (1002); below the title bar (9999). */
   z-index: 2000;
   display: flex;
@@ -22,6 +22,28 @@
   background-size: cover;
   background-repeat: no-repeat;
   font-family: var(--te-font-sans);
+}
+
+.theme-workspace-switcher {
+  display: none;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--te-card-border);
+}
+.theme-workspace-switcher button {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--te-card-border);
+  border-radius: 4px;
+  color: inherit;
+  background: var(--te-card-bg);
+  font: inherit;
+  cursor: pointer;
+}
+.theme-workspace-switcher button[aria-selected='true'] {
+  border-color: var(--te-primary-500);
+  font-weight: 600;
 }
 
 /* A theme-authored shell lays the title bar out as its own grid row, so

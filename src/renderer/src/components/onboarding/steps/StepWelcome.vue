@@ -152,7 +152,7 @@ function clearBackgroundImage(): void {
         :aria-checked="settings.theme === option.value"
         @click="setTheme(option.value)"
       >
-        <i :class="option.icon"></i>
+        <i aria-hidden="true" :class="option.icon"></i>
         {{ option.label }}
       </button>
     </div>
@@ -169,7 +169,7 @@ function clearBackgroundImage(): void {
         :title="option.label"
         @click="setAccent(option.value)"
       >
-        <i v-if="activeAccentColor === option.value" class="ph ph-check"></i>
+        <i aria-hidden="true" v-if="activeAccentColor === option.value" class="ph ph-check"></i>
       </button>
     </div>
     <div class="onb-segmented" role="radiogroup" aria-label="界面密度">
@@ -199,7 +199,7 @@ function clearBackgroundImage(): void {
         :title="option.label"
         @click="setBackgroundColor(option.value)"
       >
-        <i v-if="isBackgroundSelected(option.value)" class="ph ph-check"></i>
+        <i aria-hidden="true" v-if="isBackgroundSelected(option.value)" class="ph ph-check"></i>
       </button>
       <button
         type="button"
@@ -209,7 +209,7 @@ function clearBackgroundImage(): void {
         title="自定义图片"
         @click="pickBackgroundImage"
       >
-        <i class="ph ph-image"></i>
+        <i aria-hidden="true" class="ph ph-image"></i>
       </button>
       <button
         v-if="hasBackgroundImage"
@@ -219,7 +219,7 @@ function clearBackgroundImage(): void {
         title="移除背景图片"
         @click="clearBackgroundImage"
       >
-        <i class="ph ph-x"></i>
+        <i aria-hidden="true" class="ph ph-x"></i>
       </button>
       <input
         ref="backgroundFileInput"

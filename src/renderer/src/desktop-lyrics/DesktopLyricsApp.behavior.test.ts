@@ -57,7 +57,7 @@ test('vertical desktop lyrics place the active line on the right and controls on
 test('desktop lyrics has stable empty, loading, instrumental, and error states', () => {
   assert.match(app, /return '等待播放'/)
   assert.match(app, /return '正在获取歌词…'/)
-  assert.match(app, /return '纯音乐，请欣赏'/)
+  assert.match(app, /return '暂无歌词'/)
   assert.match(app, /return '歌词加载失败'/)
   assert.match(app, /const changed = session\.value\?\.sessionId !== next\.sessionId/)
 })

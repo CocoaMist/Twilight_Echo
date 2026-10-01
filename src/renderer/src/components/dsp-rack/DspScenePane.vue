@@ -26,8 +26,14 @@ const emit = defineEmits<{
   <aside class="scene-pane">
     <div class="pane-heading">
       <h2>场景</h2>
-      <button type="button" class="icon-button" title="新建场景" @click="emit('add')">
-        <i class="pi pi-plus"></i>
+      <button
+        aria-label="新建场景"
+        type="button"
+        class="icon-button"
+        title="新建场景"
+        @click="emit('add')"
+      >
+        <i aria-hidden="true" class="pi pi-plus"></i>
       </button>
     </div>
     <button
@@ -38,22 +44,32 @@ const emit = defineEmits<{
       :class="{ selected: scene.id === selectedSceneId, active: scene.id === activeSceneId }"
       @click="emit('select', scene.id)"
     >
-      <i :class="scene.id === activeSceneId ? 'pi pi-play-circle' : 'pi pi-sliders-v'"></i>
+      <i
+        aria-hidden="true"
+        :class="scene.id === activeSceneId ? 'pi pi-play-circle' : 'pi pi-sliders-v'"
+      ></i>
       <span>{{ scene.name }}</span>
       <small>P{{ scene.priority }}</small>
     </button>
     <div class="scene-actions">
-      <button type="button" class="icon-button" title="复制场景" @click="emit('duplicate')">
-        <i class="pi pi-copy"></i>
+      <button
+        aria-label="复制场景"
+        type="button"
+        class="icon-button"
+        title="复制场景"
+        @click="emit('duplicate')"
+      >
+        <i aria-hidden="true" class="pi pi-copy"></i>
       </button>
       <button
+        aria-label="删除场景"
         type="button"
         class="icon-button"
         title="删除场景"
         :disabled="scenes.length <= 1"
         @click="emit('remove')"
       >
-        <i class="pi pi-trash"></i>
+        <i aria-hidden="true" class="pi pi-trash"></i>
       </button>
     </div>
     <div class="factory-template-picker">
@@ -67,12 +83,13 @@ const emit = defineEmits<{
         </option>
       </select>
       <button
+        aria-label="Add factory template"
         type="button"
         class="icon-button"
         title="Add factory template"
         @click="emit('addFactory')"
       >
-        <i class="pi pi-plus"></i>
+        <i aria-hidden="true" class="pi pi-plus"></i>
       </button>
     </div>
   </aside>

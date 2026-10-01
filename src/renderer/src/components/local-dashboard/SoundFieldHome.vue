@@ -339,6 +339,7 @@ function seekFromInput(event: Event): void {
                     <i class="ph ph-subtitles" aria-hidden="true"></i>歌词
                   </button>
                   <button
+                    aria-label="音频输出、DSP 与更多播放设置"
                     type="button"
                     title="音频输出、DSP 与更多播放设置"
                     @click="playback.openAudio()"
@@ -441,7 +442,7 @@ function seekFromInput(event: Event): void {
                   :identity="album.identity"
                   :title="album.name"
                 /><span class="sf-album-open" aria-hidden="true"
-                  ><i class="ph ph-arrow-up-right"></i
+                  ><i aria-hidden="true" class="ph ph-arrow-up-right"></i
                 ></span>
               </div>
               <strong :title="album.name">{{ album.name }}</strong

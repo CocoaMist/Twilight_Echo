@@ -242,7 +242,7 @@ const infoTrack = shallowRef<Track | null>(null)
           alt="cover"
         />
         <div v-else class="stage-cover stage-cover-fallback" aria-hidden="true">
-          <i :class="icon"></i>
+          <i aria-hidden="true" :class="icon"></i>
         </div>
         <span class="stage-cover-ring" aria-hidden="true"></span>
       </div>
@@ -273,7 +273,7 @@ const infoTrack = shallowRef<Track | null>(null)
             :disabled="followLoading"
             @click="emit('follow')"
           >
-            <i :class="followIcon"></i>
+            <i aria-hidden="true" :class="followIcon"></i>
             <span>{{ followLabel }}</span>
           </button>
 
@@ -284,17 +284,18 @@ const infoTrack = shallowRef<Track | null>(null)
               :disabled="!canPlay"
               @click="emit('playAll')"
             >
-              <i class="pi pi-play"></i>
+              <i aria-hidden="true" class="pi pi-play"></i>
               <span>播放全部</span>
             </button>
             <button
+              aria-label="随机播放"
               type="button"
               class="stage-btn stage-btn-ghost"
               :disabled="!canPlay"
               title="随机播放"
               @click="shuffleAndPlay"
             >
-              <i class="pi pi-arrow-right-arrow-left"></i>
+              <i aria-hidden="true" class="pi pi-arrow-right-arrow-left"></i>
               <span>随机</span>
             </button>
           </template>
@@ -381,7 +382,10 @@ const infoTrack = shallowRef<Track | null>(null)
         </div>
         <div class="stage-selection-actions">
           <button type="button" class="stage-mini-btn" @click="emit('batchFavorite')">
-            <i :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+            <i
+              aria-hidden="true"
+              :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"
+            ></i>
             <span>{{ selectionAllFavorited ? '取消收藏' : '加入收藏' }}</span>
           </button>
           <button
@@ -390,15 +394,15 @@ const infoTrack = shallowRef<Track | null>(null)
             class="stage-mini-btn"
             @click="emit('batchAddToPlaylist')"
           >
-            <i class="pi pi-list"></i>
+            <i aria-hidden="true" class="pi pi-list"></i>
             <span>添加到歌单</span>
           </button>
           <button type="button" class="stage-mini-btn danger" @click="emit('batchDelete')">
-            <i class="pi pi-minus-circle"></i>
+            <i aria-hidden="true" class="pi pi-minus-circle"></i>
             <span>{{ canRemoveFromPlaylist ? '从歌单移除' : '移除' }}</span>
           </button>
           <button type="button" class="stage-mini-btn ghost" @click="emit('clearSelection')">
-            <i class="pi pi-times"></i>
+            <i aria-hidden="true" class="pi pi-times"></i>
             <span>取消</span>
           </button>
         </div>
@@ -430,13 +434,16 @@ const infoTrack = shallowRef<Track | null>(null)
         >
           <div class="col-index">
             <button
+              aria-label="正在播放"
               v-if="currentTrackId === track.id"
               type="button"
               class="row-play-btn playing"
               title="正在播放"
               @click="onPlayRow(track, trackIndex(index), $event)"
             >
-              <span class="eq-bars" aria-hidden="true"> <i></i><i></i><i></i> </span>
+              <span class="eq-bars" aria-hidden="true">
+                <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+              </span>
             </button>
             <button
               v-else
@@ -448,7 +455,7 @@ const infoTrack = shallowRef<Track | null>(null)
               <span class="row-index-num">{{
                 String(trackIndex(index) + 1).padStart(2, '0')
               }}</span>
-              <i class="pi pi-play row-play-icon"></i>
+              <i aria-hidden="true" class="pi pi-play row-play-icon"></i>
             </button>
           </div>
 
@@ -461,10 +468,11 @@ const infoTrack = shallowRef<Track | null>(null)
               alt=""
             />
             <div v-else class="row-cover row-cover-fallback" aria-hidden="true">
-              <i class="pi pi-wave-pulse"></i>
+              <i aria-hidden="true" class="pi pi-wave-pulse"></i>
             </div>
             <div class="row-copy">
               <button
+                :aria-label="track.title"
                 type="button"
                 class="row-title metadata-link"
                 :title="track.title"
@@ -474,6 +482,7 @@ const infoTrack = shallowRef<Track | null>(null)
                 {{ track.title }}
               </button>
               <button
+                :aria-label="track.artist"
                 type="button"
                 class="row-artist metadata-link"
                 :title="track.artist"
@@ -487,6 +496,7 @@ const infoTrack = shallowRef<Track | null>(null)
 
           <div v-if="!isExternal" class="col-like">
             <button
+              :aria-label="isTrackLiked(track.ncmSongId) ? '取消喜欢' : '喜欢'"
               type="button"
               class="row-like"
               :class="{
@@ -497,8 +507,13 @@ const infoTrack = shallowRef<Track | null>(null)
               :title="isTrackLiked(track.ncmSongId) ? '取消喜欢' : '喜欢'"
               @click="onLike(track, $event)"
             >
-              <i v-if="isLiking(track.ncmSongId)" class="pi pi-spin pi-spinner"></i>
               <i
+                aria-hidden="true"
+                v-if="isLiking(track.ncmSongId)"
+                class="pi pi-spin pi-spinner"
+              ></i>
+              <i
+                aria-hidden="true"
                 v-else
                 :class="isTrackLiked(track.ncmSongId) ? 'pi pi-heart-fill' : 'pi pi-heart'"
               ></i>
@@ -524,7 +539,7 @@ const infoTrack = shallowRef<Track | null>(null)
 
       <div v-if="likedFooter" class="stage-footer">
         <span v-if="likedFooter.loadingMore" class="stage-footer-msg">
-          <i class="pi pi-spin pi-spinner"></i>
+          <i aria-hidden="true" class="pi pi-spin pi-spinner"></i>
           正在加载更多
         </span>
         <button
@@ -533,7 +548,7 @@ const infoTrack = shallowRef<Track | null>(null)
           class="stage-mini-btn"
           @click="emit('loadMoreLiked')"
         >
-          <i class="pi pi-refresh"></i>
+          <i aria-hidden="true" class="pi pi-refresh"></i>
           <span>继续加载</span>
         </button>
         <span v-else-if="likedFooter.hasMore" class="stage-footer-msg"> 继续向下滚动加载更多 </span>

@@ -90,12 +90,12 @@ const emit = defineEmits<{
 <template>
   <section id="general" class="glass-card preview-section">
     <div class="section-title-row">
-      <i class="pi pi-sliders-h"></i>
-      <h2>常规 (General)</h2>
+      <i aria-hidden="true" class="pi pi-sliders-h"></i>
+      <h2>常规</h2>
     </div>
 
     <div class="section-block">
-      <h3>媒体库管理 (Library & Sync)</h3>
+      <h3>媒体库管理</h3>
       <div class="setting-list">
         <div class="setting-item top-align">
           <div class="setting-copy">
@@ -120,7 +120,7 @@ const emit = defineEmits<{
               暂未添加任何文件夹
             </div>
             <button type="button" class="dashed-button" @click="addLibraryFolder">
-              <i class="pi pi-plus"></i>
+              <i aria-hidden="true" class="pi pi-plus"></i>
               添加文件夹
             </button>
           </div>
@@ -304,6 +304,7 @@ const emit = defineEmits<{
                 {{ libraryResetPending ? '重置中…' : '重置库' }}
               </button>
               <button
+                aria-label="丢弃队列中的富化；已发出的 Provider 请求可能仍会完成但不会写回"
                 v-if="libraryMetadataEnrichmentIsActive"
                 type="button"
                 class="soft-button"
@@ -394,7 +395,7 @@ const emit = defineEmits<{
               :class="{ active: settings.trackActivationMode === option.value }"
               @click="setTrackActivationMode(option.value)"
             >
-              <i :class="option.icon"></i>
+              <i aria-hidden="true" :class="option.icon"></i>
               {{ option.label }}
             </button>
           </div>
@@ -418,7 +419,7 @@ const emit = defineEmits<{
               :class="{ active: settings.startupHomePage === option.value }"
               @click="setStartupHomePage(option.value)"
             >
-              <i :class="option.icon"></i>
+              <i aria-hidden="true" :class="option.icon"></i>
               {{ option.label }}
             </button>
           </div>
@@ -490,7 +491,7 @@ const emit = defineEmits<{
             <span>重新走一遍首次使用引导：外观、听歌偏好、曲库与声音设置。</span>
           </div>
           <button type="button" class="soft-button" @click="emit('reopenOnboarding')">
-            <i class="ph ph-sparkle"></i>
+            <i aria-hidden="true" class="ph ph-sparkle"></i>
             重新打开
           </button>
         </div>
@@ -536,7 +537,7 @@ const emit = defineEmits<{
               :disabled="!panel.command || Boolean(runningPluginSettingsCommand)"
               @click="runPluginSettingsPanel(panel)"
             >
-              <i v-if="panel.icon" :class="panel.icon"></i>
+              <i aria-hidden="true" v-if="panel.icon" :class="panel.icon"></i>
               {{
                 runningPluginSettingsCommand === pluginPanelStateKey(panel)
                   ? '执行中…'

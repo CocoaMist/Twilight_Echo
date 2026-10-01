@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MessageBar from './hig/MessageBar.vue'
 import { computed } from 'vue'
 import type { NcmCloudSelectedFile } from '../../../shared/ncmCloud.ts'
 import type { NcmCloudSong, NcmCloudTransferTask } from '../stores/useNcmStore.ts'
@@ -101,7 +102,7 @@ function progressLabel(task: NcmCloudTransferTask): string {
       <div>
         <span class="cloud-kicker">网易云音乐</span>
         <h2 id="ncm-cloud-title">我的音乐云盘</h2>
-        <p>{{ total }} 首云盘歌曲 · 上传与下载均由主进程安全处理</p>
+        <p>{{ total }} 首云盘歌曲 · 支持播放、上传和下载</p>
       </div>
       <div class="cloud-header-actions">
         <button
@@ -110,11 +111,11 @@ function progressLabel(task: NcmCloudTransferTask): string {
           :disabled="loading"
           @click="emit('refresh')"
         >
-          <i :class="loading ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'"></i>
+          <i aria-hidden="true" :class="loading ? 'pi pi-spin pi-spinner' : 'pi pi-refresh'"></i>
           刷新
         </button>
         <button type="button" class="cloud-button primary" @click="emit('chooseFiles')">
-          <i class="pi pi-upload"></i>
+          <i aria-hidden="true" class="pi pi-upload"></i>
           选择音频
         </button>
       </div>
@@ -124,11 +125,11 @@ function progressLabel(task: NcmCloudTransferTask): string {
       <div class="queue-heading">
         <div>
           <h3>待上传文件</h3>
-          <p>一次最多选择 20 个文件，文件路径不会暴露给页面。</p>
+          <p>一次最多选择 20 个文件，上传完成后可在其他设备收听。</p>
         </div>
       </div>
       <article v-for="file in selectedFiles" :key="file.handle" class="transfer-row">
-        <span class="transfer-icon"><i class="pi pi-file"></i></span>
+        <span class="transfer-icon"><i aria-hidden="true" class="pi pi-file"></i></span>
         <div class="transfer-copy">
           <strong>{{ file.name }}</strong>
           <span>{{ (file.format || '音频').toUpperCase() }} · {{ formatBytes(file.size) }}</span>
@@ -148,22 +149,24 @@ function progressLabel(task: NcmCloudTransferTask): string {
         </div>
         <div class="transfer-actions">
           <button
+            aria-label="取消上传"
             v-if="isActive(taskForHandle(file.handle))"
             type="button"
             class="icon-button danger"
             title="取消上传"
             @click="emit('cancel', taskForHandle(file.handle)!.transferId)"
           >
-            <i class="pi pi-times"></i>
+            <i aria-hidden="true" class="pi pi-times"></i>
           </button>
           <template v-else>
             <button
+              aria-label="移除"
               type="button"
               class="icon-button"
               title="移除"
               @click="emit('removeSelected', file.handle)"
             >
-              <i class="pi pi-trash"></i>
+              <i aria-hidden="true" class="pi pi-trash"></i>
             </button>
             <button
               type="button"
@@ -177,21 +180,21 @@ function progressLabel(task: NcmCloudTransferTask): string {
       </article>
     </div>
 
-    <div v-if="error && songs.length === 0" class="cloud-state error-state">
-      <i class="pi pi-exclamation-triangle"></i>
-      <strong>云盘加载失败</strong>
-      <p>{{ error }}</p>
-      <button type="button" class="cloud-button primary" @click="emit('refresh')">重试</button>
-    </div>
+    <MessageBar v-if="error && songs.length === 0" intent="error" title="云盘加载失败">
+      {{ error }}
+      <template #actions
+        ><button type="button" class="hig-button" @click="emit('refresh')">重试</button></template
+      >
+    </MessageBar>
 
     <div v-else-if="loading && songs.length === 0" class="cloud-state">
-      <i class="pi pi-spin pi-spinner"></i>
+      <i aria-hidden="true" class="pi pi-spin pi-spinner"></i>
       <strong>正在加载云盘歌曲</strong>
       <p>正在从网易云音乐读取当前账号的云盘数据。</p>
     </div>
 
     <div v-else-if="songs.length === 0" class="cloud-state">
-      <i class="pi pi-cloud"></i>
+      <i aria-hidden="true" class="pi pi-cloud"></i>
       <strong>云盘暂时为空</strong>
       <p>选择本地音频上传后，歌曲会出现在这里并复用现有播放器。</p>
       <button type="button" class="cloud-button primary" @click="emit('chooseFiles')">
@@ -206,7 +209,7 @@ function progressLabel(task: NcmCloudTransferTask): string {
           <span>已加载 {{ songs.length }} / {{ total }}</span>
         </div>
         <button type="button" class="cloud-button primary" @click="emit('playAll')">
-          <i class="pi pi-play"></i>
+          <i aria-hidden="true" class="pi pi-play"></i>
           播放全部
         </button>
       </div>
@@ -225,8 +228,8 @@ function progressLabel(task: NcmCloudTransferTask): string {
         >
           <span class="song-cover">
             <img v-if="song.track.cover" :src="song.track.cover" alt="" />
-            <i v-else class="pi pi-music"></i>
-            <span class="cover-play"><i class="pi pi-play"></i></span>
+            <i aria-hidden="true" v-else class="pi pi-music"></i>
+            <span class="cover-play"><i aria-hidden="true" class="pi pi-play"></i></span>
           </span>
           <span class="song-main">
             <strong>{{ song.track.title }}</strong>
@@ -245,22 +248,24 @@ function progressLabel(task: NcmCloudTransferTask): string {
           </span>
           <span class="song-actions">
             <button
+              aria-label="取消下载"
               v-if="isActive(taskForSong(song))"
               type="button"
               class="icon-button danger"
               title="取消下载"
               @click.stop="emit('cancel', taskForSong(song)!.transferId)"
             >
-              <i class="pi pi-times"></i>
+              <i aria-hidden="true" class="pi pi-times"></i>
             </button>
             <button
+              aria-label="下载"
               v-else
               type="button"
               class="icon-button"
               title="下载"
               @click.stop="emit('download', song)"
             >
-              <i class="pi pi-download"></i>
+              <i aria-hidden="true" class="pi pi-download"></i>
             </button>
           </span>
           <span v-if="taskForSong(song)" class="song-progress">
@@ -278,7 +283,7 @@ function progressLabel(task: NcmCloudTransferTask): string {
         :disabled="loadingMore"
         @click="emit('loadMore')"
       >
-        <i v-if="loadingMore" class="pi pi-spin pi-spinner"></i>
+        <i aria-hidden="true" v-if="loadingMore" class="pi pi-spin pi-spinner"></i>
         {{ loadingMore ? '正在加载' : '加载更多' }}
       </button>
     </template>
@@ -286,7 +291,10 @@ function progressLabel(task: NcmCloudTransferTask): string {
     <div v-if="visibleTasks.length > 0" class="recent-transfers">
       <h3>最近传输</h3>
       <article v-for="task in visibleTasks" :key="task.transferId" class="recent-transfer">
-        <i :class="task.kind === 'upload' ? 'pi pi-upload' : 'pi pi-download'"></i>
+        <i
+          aria-hidden="true"
+          :class="task.kind === 'upload' ? 'pi pi-upload' : 'pi pi-download'"
+        ></i>
         <div>
           <strong>{{ task.fileName }}</strong>
           <small :class="{ 'task-error': task.stage === 'failed' }">
@@ -294,13 +302,14 @@ function progressLabel(task: NcmCloudTransferTask): string {
           </small>
         </div>
         <button
+          aria-label="取消传输"
           v-if="isActive(task)"
           type="button"
           class="icon-button danger"
           title="取消传输"
           @click="emit('cancel', task.transferId)"
         >
-          <i class="pi pi-times"></i>
+          <i aria-hidden="true" class="pi pi-times"></i>
         </button>
       </article>
     </div>

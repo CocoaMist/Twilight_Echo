@@ -159,7 +159,7 @@ function emitPage(nextOffset: number): void {
           :aria-pressed="highQuality"
           @click="emit('toggleHighQuality')"
         >
-          <i class="pi pi-crown"></i>
+          <i aria-hidden="true" class="pi pi-crown"></i>
           <span>精品</span>
         </button>
       </div>
@@ -198,7 +198,7 @@ function emitPage(nextOffset: number): void {
         @click="emit('togglePanel')"
       >
         <span>全部分类</span>
-        <i class="pi pi-chevron-down disc-chip-caret"></i>
+        <i aria-hidden="true" class="pi pi-chevron-down disc-chip-caret"></i>
       </button>
     </nav>
 
@@ -206,7 +206,7 @@ function emitPage(nextOffset: number): void {
     <Transition name="disc-atlas">
       <section v-if="panelExpanded" class="disc-atlas" aria-label="全部歌单分类">
         <div v-if="catalogueLoading" class="disc-atlas-status">
-          <i class="pi pi-spin pi-spinner"></i>
+          <i aria-hidden="true" class="pi pi-spin pi-spinner"></i>
           <span>正在加载分类…</span>
         </div>
         <div v-else-if="catalogueError" class="disc-atlas-status">
@@ -248,18 +248,20 @@ function emitPage(nextOffset: number): void {
 
     <!-- ── Error ────────────────────────────────────────────────────── -->
     <div v-else-if="listError && playlists.length === 0" class="disc-state">
-      <span class="disc-state-icon"><i class="pi pi-exclamation-triangle"></i></span>
+      <span class="disc-state-icon"
+        ><i aria-hidden="true" class="pi pi-exclamation-triangle"></i
+      ></span>
       <p class="disc-state-title">歌单暂时走丢了</p>
       <p class="disc-state-hint">{{ listError }}</p>
       <button type="button" class="disc-ink-btn" data-te-interactive @click="emit('retry')">
-        <i class="pi pi-refresh"></i>
+        <i aria-hidden="true" class="pi pi-refresh"></i>
         再试一次
       </button>
     </div>
 
     <!-- ── Empty ────────────────────────────────────────────────────── -->
     <div v-else-if="playlists.length === 0" class="disc-state">
-      <span class="disc-state-icon"><i class="pi pi-inbox"></i></span>
+      <span class="disc-state-icon"><i aria-hidden="true" class="pi pi-inbox"></i></span>
       <p class="disc-state-title">这个频道还很安静</p>
       <p class="disc-state-hint">换一个标签，也许就有惊喜</p>
     </div>
@@ -286,7 +288,9 @@ function emitPage(nextOffset: number): void {
               class="disc-feature-img"
               alt=""
             />
-            <span v-else class="disc-feature-empty"><i class="pi pi-list"></i></span>
+            <span v-else class="disc-feature-empty"
+              ><i aria-hidden="true" class="pi pi-list"></i
+            ></span>
           </div>
           <div class="disc-feature-scrim" aria-hidden="true"></div>
           <div class="disc-feature-copy">
@@ -296,18 +300,19 @@ function emitPage(nextOffset: number): void {
             <h2 class="disc-feature-name">{{ featured.name }}</h2>
             <p class="disc-feature-meta">
               <span v-if="featured.creatorName" class="disc-feature-meta-item">
-                <i class="pi pi-user"></i>{{ featured.creatorName }}
+                <i aria-hidden="true" class="pi pi-user"></i>{{ featured.creatorName }}
               </span>
               <span class="disc-feature-meta-item">
-                <i class="pi pi-list"></i>{{ featured.trackCount }} 首
+                <i aria-hidden="true" class="pi pi-list"></i>{{ featured.trackCount }} 首
               </span>
               <span v-if="formatPlayCount(featured.playCount)" class="disc-feature-meta-item">
-                <i class="pi pi-headphones"></i>{{ formatPlayCount(featured.playCount) }}
+                <i aria-hidden="true" class="pi pi-headphones"></i
+                >{{ formatPlayCount(featured.playCount) }}
               </span>
             </p>
           </div>
           <span class="disc-feature-go" aria-hidden="true">
-            <i class="pi pi-arrow-up-right"></i>
+            <i aria-hidden="true" class="pi pi-arrow-up-right"></i>
           </span>
         </article>
 
@@ -331,13 +336,15 @@ function emitPage(nextOffset: number): void {
               class="disc-card-img"
               alt=""
             />
-            <span v-else class="disc-card-empty"><i class="pi pi-list"></i></span>
+            <span v-else class="disc-card-empty"
+              ><i aria-hidden="true" class="pi pi-list"></i
+            ></span>
             <span v-if="formatPlayCount(playlist.playCount)" class="disc-card-plays">
-              <i class="pi pi-headphones"></i>
+              <i aria-hidden="true" class="pi pi-headphones"></i>
               {{ formatPlayCount(playlist.playCount) }}
             </span>
             <span class="disc-card-go" aria-hidden="true">
-              <i class="pi pi-arrow-up-right"></i>
+              <i aria-hidden="true" class="pi pi-arrow-up-right"></i>
             </span>
           </div>
           <p class="disc-card-name">{{ playlist.name }}</p>
@@ -359,7 +366,7 @@ function emitPage(nextOffset: number): void {
           :disabled="offset <= 0"
           @click="emitPage(offset - pageSize)"
         >
-          <i class="pi pi-arrow-left"></i>
+          <i aria-hidden="true" class="pi pi-arrow-left"></i>
         </button>
         <span class="disc-pager-text">
           第 <em>{{ currentPage }}</em> 页<span v-if="total > 0"> · 共 {{ pageCount }} 页</span>
@@ -372,7 +379,7 @@ function emitPage(nextOffset: number): void {
           :disabled="!hasMore"
           @click="emitPage(offset + pageSize)"
         >
-          <i class="pi pi-arrow-right"></i>
+          <i aria-hidden="true" class="pi pi-arrow-right"></i>
         </button>
       </footer>
 
@@ -384,7 +391,7 @@ function emitPage(nextOffset: number): void {
           :disabled="loadingMore"
           @click="emit('loadMore')"
         >
-          <i v-if="loadingMore" class="pi pi-spin pi-spinner"></i>
+          <i aria-hidden="true" v-if="loadingMore" class="pi pi-spin pi-spinner"></i>
           <span>{{ loadingMore ? '正在加载…' : '继续发掘精品' }}</span>
         </button>
       </footer>

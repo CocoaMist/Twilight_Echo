@@ -381,7 +381,7 @@ onMounted(() => {
   <section id="dsp" class="glass-card preview-section">
     <div class="section-title-row split">
       <div>
-        <i class="pi pi-sliders-v"></i>
+        <i aria-hidden="true" class="pi pi-sliders-v"></i>
         <h2>DSP 处理器</h2>
       </div>
       <span
@@ -396,7 +396,7 @@ onMounted(() => {
     <div class="dsp-signal-chain">
       <div class="signal-node static" :class="{ active: true }">
         <div class="signal-node-circle active">
-          <i class="pi pi-file-audio"></i>
+          <i aria-hidden="true" class="pi pi-file-audio"></i>
         </div>
         <span class="signal-node-label">Input</span>
         <span class="signal-node-name">SOURCE</span>
@@ -415,7 +415,7 @@ onMounted(() => {
         @keydown.space.prevent="toggleEqFromDsp"
       >
         <div class="signal-node-circle" :class="{ active: eqChainActive }">
-          <i class="pi pi-sliders-h"></i>
+          <i aria-hidden="true" class="pi pi-sliders-h"></i>
         </div>
         <span class="signal-node-label">{{ eqChainActive ? 'Active' : 'Bypass' }}</span>
         <span class="signal-node-name">EQ</span>
@@ -434,7 +434,7 @@ onMounted(() => {
         @keydown.space.prevent="toggleCrossfeedFromDsp"
       >
         <div class="signal-node-circle" :class="{ active: crossfeedChainActive }">
-          <i class="pi pi-arrows-h"></i>
+          <i aria-hidden="true" class="pi pi-arrows-h"></i>
         </div>
         <span class="signal-node-label">{{ crossfeedChainActive ? 'Active' : 'Bypass' }}</span>
         <span class="signal-node-name">CROSSFEED</span>
@@ -453,7 +453,7 @@ onMounted(() => {
         @keydown.space.prevent="toggleConvolver"
       >
         <div class="signal-node-circle" :class="{ active: convolverChainActive }">
-          <i class="pi pi-microchip"></i>
+          <i aria-hidden="true" class="pi pi-microchip"></i>
         </div>
         <span class="signal-node-label">{{ convolverChainActive ? 'Active' : 'Bypass' }}</span>
         <span class="signal-node-name">CONVOLVER</span>
@@ -461,7 +461,7 @@ onMounted(() => {
       <div class="signal-line active"></div>
       <div class="signal-node static" :class="{ active: true }">
         <div class="signal-node-circle active">
-          <i class="pi pi-volume-up"></i>
+          <i aria-hidden="true" class="pi pi-volume-up"></i>
         </div>
         <span class="signal-node-label">DAC</span>
         <span class="signal-node-name">OUTPUT</span>
@@ -489,32 +489,32 @@ onMounted(() => {
     <div :class="{ 'dsp-disabled-content': !audioProcessing.dspEnabled }">
       <div class="dsp-actions">
         <button class="brand-soft-button" type="button" @click="openDspRackFromDsp">
-          <i class="pi pi-th-large"></i>
+          <i aria-hidden="true" class="pi pi-th-large"></i>
           打开 DSP Rack
         </button>
         <button class="brand-soft-button" type="button" @click="openEqualizerFromDsp">
-          <i class="pi pi-sliders-h"></i>
+          <i aria-hidden="true" class="pi pi-sliders-h"></i>
           打开均衡器
         </button>
         <button class="soft-button" type="button" @click="selectImpulseResponse">
-          <i class="pi pi-folder-open"></i>
+          <i aria-hidden="true" class="pi pi-folder-open"></i>
           载入 IR · {{ convolverPathLabel }}
         </button>
         <button class="soft-button" type="button" @click="clearImpulseResponse">
-          <i class="pi pi-undo"></i>
+          <i aria-hidden="true" class="pi pi-undo"></i>
           重置
         </button>
       </div>
 
       <div class="dsp-presets">
         <button class="preset-btn" type="button" @click="applyDspPreset('headphone')">
-          <i class="pi pi-headphones"></i> 耳机护耳模式
+          <i aria-hidden="true" class="pi pi-headphones"></i> 耳机护耳模式
         </button>
         <button class="preset-btn" type="button" @click="applyDspPreset('dynamic')">
-          <i class="pi pi-bolt"></i> 动态增强
+          <i aria-hidden="true" class="pi pi-bolt"></i> 动态增强
         </button>
         <button class="preset-btn" type="button" @click="applyDspPreset('bypass')">
-          <i class="pi pi-stop-circle"></i> DSP 旁路 (DSP Bypass)
+          <i aria-hidden="true" class="pi pi-stop-circle"></i> DSP 旁路 (DSP Bypass)
         </button>
       </div>
 
@@ -626,7 +626,7 @@ onMounted(() => {
                 @click="toggleEqFromDsp"
               ></span>
               <button class="soft-button compact" type="button" @click="openEqualizerFromDsp">
-                <i class="pi pi-sliders-h"></i>
+                <i aria-hidden="true" class="pi pi-sliders-h"></i>
                 打开面板
               </button>
             </div>
@@ -704,13 +704,15 @@ onMounted(() => {
             <div>
               <strong>
                 卷积脉冲响应 (Convolver)
-                <span class="compute-badge"><i class="pi pi-microchip"></i> 高算力消耗</span>
+                <span class="compute-badge"
+                  ><i aria-hidden="true" class="pi pi-microchip"></i> 高算力消耗</span
+                >
               </strong>
               <span>加载 IR 脉冲文件用于空间音效。当前路径：{{ convolverPathLabel }}</span>
             </div>
             <div class="inline-controls">
               <button class="soft-button compact" type="button" @click="selectImpulseResponse">
-                <i class="pi pi-folder-open"></i>
+                <i aria-hidden="true" class="pi pi-folder-open"></i>
                 选择文件
               </button>
               <span
@@ -870,7 +872,7 @@ onMounted(() => {
             :disabled="!vst3Catalog || vst3Busy"
             @click="addVst3SearchPath"
           >
-            <i class="pi pi-plus"></i>
+            <i aria-hidden="true" class="pi pi-plus"></i>
             添加目录
           </button>
         </div>
@@ -887,7 +889,7 @@ onMounted(() => {
           :disabled="!vst3Enabled || vst3Scanning || !vst3HelpersReady"
           @click="rescanVst3Plugins"
         >
-          <i class="pi pi-refresh" :class="{ 'pi-spin': vst3Scanning }"></i>
+          <i aria-hidden="true" class="pi pi-refresh" :class="{ 'pi-spin': vst3Scanning }"></i>
           {{ vst3Scanning ? '扫描中…' : '重新扫描' }}
         </button>
       </div>

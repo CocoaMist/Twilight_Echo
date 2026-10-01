@@ -155,7 +155,10 @@ export function buildMiniPlayerCssVariables(
     ),
     '--mini-text': primaryText,
     '--mini-muted': mutedText,
-    '--mini-font-family': profile.appearance.fontFamily,
+    '--mini-font-family':
+      profile.appearance.fontFamily === 'inherit'
+        ? 'var(--te-font-sans)'
+        : profile.appearance.fontFamily,
     '--mini-window-radius': `${profile.appearance.cornerRadius}px`,
     '--mini-surface-opacity': `${profile.appearance.surfaceOpacity / 100}`,
     '--mini-glass-blur': `${profile.appearance.glassBlur}px`,

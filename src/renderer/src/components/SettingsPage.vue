@@ -1,5 +1,16 @@
 ﻿<script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { confirmAction } from '../app/useAppDialog.ts'
+
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onDeactivated,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch
+} from 'vue'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
@@ -10,6 +21,8 @@ import DesktopLyricsSettingsSection from './settings-page/DesktopLyricsSettingsS
 import AboutSettingsSection from './settings-page/AboutSettingsSection.vue'
 import ShortcutsSettingsSection from './settings-page/ShortcutsSettingsSection.vue'
 import AnimatedInput from './AnimatedInput.vue'
+import MessageBar from './hig/MessageBar.vue'
+import PageHeader from './hig/PageHeader.vue'
 import {
   type SectionKey,
   type BooleanSettingKey,
@@ -61,6 +74,7 @@ const emit = defineEmits<{
   openThemeStudio: []
   openThemeWorkshop: []
   reopenOnboarding: []
+  sectionChange: [section: SectionKey]
 }>()
 
 const updateCheckState = ref<'idle' | 'checking' | 'up-to-date' | 'available' | 'error'>('idle')
@@ -86,7 +100,29 @@ const importSettingsInputRef = ref<HTMLInputElement | null>(null)
 const shortcutStatuses = ref<PlayerShortcutStatus[]>([])
 
 const activeSection = ref<SectionKey>(props.initialSection ?? 'general')
+watch(activeSection, (section) => emit('sectionChange', section))
 const pageRef = ref<HTMLElement | null>(null)
+let savedScrollTop = 0
+let settingsInitialized = false
+let settingsVisible = true
+onDeactivated(() => {
+  settingsVisible = false
+  savedScrollTop = pageRef.value?.scrollTop ?? 0
+  pageRef.value?.removeEventListener('scroll', updateActiveSection)
+  if (libraryWatcherStatusTimer !== null) window.clearInterval(libraryWatcherStatusTimer)
+  libraryWatcherStatusTimer = null
+})
+onActivated(async () => {
+  settingsVisible = true
+  if (!settingsInitialized) return
+  await nextTick()
+  if (props.initialSection && props.initialSection !== activeSection.value)
+    scrollToSection(props.initialSection)
+  else if (pageRef.value) pageRef.value.scrollTop = savedScrollTop
+  pageRef.value?.addEventListener('scroll', updateActiveSection, { passive: true })
+  if (libraryWatcherStatusTimer === null)
+    libraryWatcherStatusTimer = window.setInterval(() => void refreshLibraryWatcherStatus(), 5000)
+})
 
 function setNavigationPressOrigin(event: PointerEvent): void {
   const button =
@@ -247,9 +283,13 @@ async function resetLocalLibrary(): Promise<void> {
   libraryScanCommandError.value = ''
   libraryResetMessage.value = ''
   if (
-    !window.confirm(
-      '将清空本地媒体库索引和当前界面中的全部本地曲目。\n\n不会删除磁盘上的音乐文件，也不会删除播放列表；之后可通过“完整重扫”重新建立媒体库。\n\n确定重置吗？'
-    )
+    !(await confirmAction({
+      title: '重置音乐库？',
+      message:
+        '将清空本地媒体库索引和当前界面中的全部本地曲目。\n\n不会删除磁盘上的音乐文件，也不会删除播放列表；之后可通过“完整重扫”重新建立媒体库。\n\n确定重置吗？',
+      confirmLabel: '重置',
+      destructive: true
+    }))
   ) {
     return
   }
@@ -414,11 +454,13 @@ async function toggleDesktopLyrics(): Promise<void> {
   await updateSettings({ desktopLyrics: { ...settings.value.desktopLyrics, enabled } })
 }
 
-function resetSettingsGroup(group: 'appearance' | 'playback' | 'desktopLyrics'): void {
+async function resetSettingsGroup(
+  group: 'appearance' | 'playback' | 'desktopLyrics'
+): Promise<void> {
   if (
-    !window.confirm(
+    !(await confirmAction(
       `恢复${group === 'appearance' ? '外观' : group === 'playback' ? '播放' : '桌面歌词'}设置为默认值？`
-    )
+    ))
   )
     return
   settingsNotice.value = ''
@@ -720,7 +762,15 @@ async function handleSettingsBackupSelected(event: Event): Promise<void> {
   const file = input.files?.[0]
   input.value = ''
   if (!file) return
-  if (!window.confirm('导入设置备份会覆盖当前设置。确认继续？')) return
+  if (
+    !(await confirmAction({
+      title: '确认此更改？',
+      message: '导入设置备份会覆盖当前设置。确认继续？',
+      confirmLabel: '继续',
+      destructive: true
+    }))
+  )
+    return
   settingsNotice.value = ''
   settingsError.value = ''
   try {
@@ -734,9 +784,12 @@ async function handleSettingsBackupSelected(event: Event): Promise<void> {
 
 async function confirmClearCache(): Promise<void> {
   if (
-    !window.confirm(
-      `确认清理缓存？\n\n当前估算：${formattedCacheSize.value}\n将删除封面、歌词、元数据和可复用流媒体缓存。用户固定的离线下载不会被删除。此操作不可恢复。`
-    )
+    !(await confirmAction({
+      title: '清理缓存？',
+      message: `确认清理缓存？\n\n当前估算：${formattedCacheSize.value}\n将删除封面、歌词、元数据和可复用流媒体缓存。用户固定的离线下载不会被删除。此操作不可恢复。`,
+      confirmLabel: '清理',
+      destructive: true
+    }))
   ) {
     return
   }
@@ -745,9 +798,12 @@ async function confirmClearCache(): Promise<void> {
 
 async function confirmClearBpmAnalysisCache(): Promise<void> {
   if (
-    !window.confirm(
-      `确认清理 BPM 分析缓存？\n\n当前估算：${formattedBpmAnalysisCacheSize.value}\n已分析的歌曲下次播放时会重新后台分析。此操作不可恢复。`
-    )
+    !(await confirmAction({
+      title: '清理节奏分析缓存？',
+      message: `确认清理 BPM 分析缓存？\n\n当前估算：${formattedBpmAnalysisCacheSize.value}\n已分析的歌曲下次播放时会重新后台分析。此操作不可恢复。`,
+      confirmLabel: '清理',
+      destructive: true
+    }))
   ) {
     return
   }
@@ -757,9 +813,12 @@ async function confirmClearBpmAnalysisCache(): Promise<void> {
 
 async function confirmClearLoudnessAnalysisCache(): Promise<void> {
   if (
-    !window.confirm(
-      `确认清理 Loudnorm / 响度分析缓存？\n\n当前估算：${formattedLoudnessAnalysisCacheSize.value}\n已测量的响度下次播放时会重新后台分析。此操作不可恢复。`
-    )
+    !(await confirmAction({
+      title: '清理响度分析缓存？',
+      message: `确认清理 Loudnorm / 响度分析缓存？\n\n当前估算：${formattedLoudnessAnalysisCacheSize.value}\n已测量的响度下次播放时会重新后台分析。此操作不可恢复。`,
+      confirmLabel: '清理',
+      destructive: true
+    }))
   ) {
     return
   }
@@ -874,9 +933,12 @@ async function installUpdate(): Promise<void> {
     warnings.push('此安装包未提供 SHA-256 校验和，无法验证完整性。')
   }
   if (
-    !window.confirm(
-      `${warnings.join('\n')}\n\n仅建议安装官方 GitHub Release 发布的签名安装包。\n确定继续安装并退出吗？`
-    )
+    !(await confirmAction({
+      title: '安装更新并退出？',
+      message: `${warnings.join('\n')}\n\n仅建议安装官方 GitHub Release 发布的签名安装包。\n确定继续安装并退出吗？`,
+      confirmLabel: '安装并退出',
+      destructive: true
+    }))
   ) {
     return
   }
@@ -891,9 +953,12 @@ async function installUpdate(): Promise<void> {
           ? result.installerPath
           : updateProgress.value?.installerPath
       if (installerPath) {
-        const openFolder = window.confirm(
-          `${result.error}\n\n是否打开安装包所在文件夹以便手动安装？`
-        )
+        const openFolder = await confirmAction({
+          title: '安装更新并退出？',
+          message: `${result.error}\n\n是否打开安装包所在文件夹以便手动安装？`,
+          confirmLabel: '安装并退出',
+          destructive: true
+        })
         if (openFolder) {
           await window.api.shell.showItemInFolder(installerPath)
         }
@@ -937,6 +1002,14 @@ async function exportAudioDiagnostics(): Promise<void> {
 }
 
 const SETTINGS_SECTION_SCROLL_OFFSET = 24
+function sectionScrollOffset(): number {
+  return (
+    SETTINGS_SECTION_SCROLL_OFFSET +
+    (window.innerWidth <= 1440
+      ? (pageRef.value?.querySelector<HTMLElement>('.settings-preview-nav')?.offsetHeight ?? 0)
+      : 0)
+  )
+}
 let programmaticScrollUntil = 0
 let programmaticScrollRaf = 0
 
@@ -956,7 +1029,7 @@ function scrollPageToElement(
   const nextTop =
     block === 'center'
       ? targetTop - Math.max(0, (page.clientHeight - targetRect.height) / 2)
-      : targetTop - SETTINGS_SECTION_SCROLL_OFFSET
+      : targetTop - sectionScrollOffset()
 
   programmaticScrollUntil = performance.now() + (behavior === 'smooth' ? 700 : 0)
   if (programmaticScrollRaf) {
@@ -983,6 +1056,11 @@ function scrollPageToElement(
 
 function scrollToSection(section: SectionKey): void {
   activeSection.value = section
+  if (section === 'general' && pageRef.value) {
+    programmaticScrollUntil = performance.now() + 700
+    pageRef.value.scrollTo({ top: 0, behavior: 'smooth' })
+    return
+  }
   const el = document.getElementById(section)
   if (!el) return
   scrollPageToElement(el, { block: 'start' })
@@ -1111,9 +1189,7 @@ function updateActiveSection(): void {
   for (const section of sections) {
     const el = document.getElementById(section.key)
     if (!el) continue
-    const distance = Math.abs(
-      el.getBoundingClientRect().top - pageTop - SETTINGS_SECTION_SCROLL_OFFSET
-    )
+    const distance = Math.abs(el.getBoundingClientRect().top - pageTop - sectionScrollOffset())
     if (distance < closestDistance) {
       closest = section.key
       closestDistance = distance
@@ -1132,6 +1208,8 @@ onMounted(async () => {
   await refreshShortcutStatuses()
   await syncExtensions()
   await refreshLibraryWatcherStatus()
+  settingsInitialized = true
+  if (!settingsVisible) return
   libraryWatcherStatusTimer = window.setInterval(() => {
     void refreshLibraryWatcherStatus()
   }, 5_000)
@@ -1171,7 +1249,7 @@ onBeforeUnmount(() => {
       >
         <div class="settings-nav-search-wrap">
           <div class="settings-search-box settings-nav-search">
-            <i class="pi pi-search"></i>
+            <i aria-hidden="true" class="pi pi-search"></i>
             <AnimatedInput
               v-model="settingsSearchQuery"
               type="text"
@@ -1191,7 +1269,7 @@ onBeforeUnmount(() => {
               @click="clearSettingsSearch"
               aria-label="清除搜索"
             >
-              <i class="pi pi-times"></i>
+              <i aria-hidden="true" class="pi pi-times"></i>
             </button>
           </div>
           <div
@@ -1210,7 +1288,10 @@ onBeforeUnmount(() => {
               @mouseenter="activeSearchIndex = index"
               @click="scrollToSearchResult(result)"
             >
-              <i :class="sections.find((section) => section.key === result.section)?.icon"></i>
+              <i
+                aria-hidden="true"
+                :class="sections.find((section) => section.key === result.section)?.icon"
+              ></i>
               <span class="settings-nav-result-title">{{ result.title }}</span>
               <small>{{ sections.find((section) => section.key === result.section)?.label }}</small>
             </button>
@@ -1219,6 +1300,16 @@ onBeforeUnmount(() => {
             没有找到匹配的设置
           </div>
         </div>
+        <label class="hig-settings-section-select"
+          >分区<select
+            :value="activeSection"
+            @change="scrollToSection(($event.target as HTMLSelectElement).value as SectionKey)"
+          >
+            <option v-for="section in sections" :key="section.key" :value="section.key">
+              {{ section.label }}
+            </option>
+          </select></label
+        >
         <button
           v-for="section in sections"
           :key="section.key"
@@ -1227,28 +1318,38 @@ onBeforeUnmount(() => {
           :class="{ active: activeSection === section.key }"
           @click="scrollToSection(section.key)"
         >
-          <i :class="section.icon"></i>
+          <i aria-hidden="true" :class="section.icon"></i>
           <span>{{ section.label }}</span>
         </button>
       </nav>
 
       <div class="settings-preview-stack">
-        <header class="settings-page-header">
-          <h1 class="settings-page-title">设置</h1>
-        </header>
-        <section class="settings-command-bar glass-card">
-          <div class="settings-command-actions">
-            <button type="button" class="soft-button" @click="exportSettingsBackup">
-              <i class="pi pi-download"></i>
+        <PageHeader title="设置" description="管理应用、播放与系统偏好">
+          <template #actions>
+            <button type="button" class="hig-button" @click="exportSettingsBackup">
+              <i aria-hidden="true" class="pi pi-download"></i>
               导出设置
             </button>
-            <button type="button" class="soft-button" @click="importSettingsBackup">
-              <i class="pi pi-upload"></i>
+            <button type="button" class="hig-button" @click="importSettingsBackup">
+              <i aria-hidden="true" class="pi pi-upload"></i>
               导入设置
             </button>
-          </div>
-          <div v-if="settingsNotice" class="settings-inline-notice">{{ settingsNotice }}</div>
-          <div v-if="settingsError" class="settings-inline-error">{{ settingsError }}</div>
+          </template>
+        </PageHeader>
+        <section v-if="settingsNotice || settingsError" class="settings-command-bar glass-card">
+          <MessageBar
+            v-if="settingsNotice"
+            intent="success"
+            dismissible
+            @dismiss="settingsNotice = ''"
+            >{{ settingsNotice }}</MessageBar
+          >
+          <MessageBar v-if="settingsError" intent="error" dismissible @dismiss="settingsError = ''"
+            >{{ settingsError
+            }}<template #actions
+              ><button class="hig-button" @click="loadSettings">重新读取设置</button></template
+            ></MessageBar
+          >
         </section>
 
         <div v-if="restartRequired" class="restart-banner restart-banner-sticky" role="status">
@@ -1257,7 +1358,7 @@ onBeforeUnmount(() => {
             <span>{{ restartReasons.join('、') }}</span>
           </div>
           <button class="brand-soft-button" type="button" @click="relaunch">
-            <i class="pi pi-refresh"></i>
+            <i aria-hidden="true" class="pi pi-refresh"></i>
             立即重启
           </button>
         </div>

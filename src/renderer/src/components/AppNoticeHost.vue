@@ -1,7 +1,41 @@
 <script setup lang="ts">
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { useEscapeToClose } from '../app/useDismissLayer.ts'
+import MessageBar from './hig/MessageBar.vue'
 
-const { notices, dismissNotice } = useAppNoticeStore()
+const { notices, noticeHistory, dismissNotice, pauseNotice, resumeNotice } = useAppNoticeStore()
+const historyOpen = ref(false)
+const historyPanel = ref<HTMLElement | null>(null)
+let historyTrigger: HTMLElement | null = null
+function closeHistory(restoreFocus = true): void {
+  historyOpen.value = false
+  if (restoreFocus && historyTrigger?.isConnected) historyTrigger.focus()
+}
+async function toggleHistory(): Promise<void> {
+  if (historyOpen.value) {
+    closeHistory()
+    return
+  }
+  historyTrigger = document.activeElement as HTMLElement | null
+  historyOpen.value = true
+  await nextTick()
+  historyPanel.value?.querySelector<HTMLElement>('button')?.focus()
+}
+function dismissOutside(event: PointerEvent): void {
+  const target = event.target
+  if (
+    historyOpen.value &&
+    target instanceof Node &&
+    !historyPanel.value?.contains(target) &&
+    !historyTrigger?.contains(target)
+  )
+    closeHistory(false)
+}
+useEscapeToClose(historyOpen, closeHistory)
+onMounted(() => document.addEventListener('pointerdown', dismissOutside))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', dismissOutside))
+defineExpose({ historyOpen, toggleHistory })
 
 function runAction(id: number, run: () => void): void {
   try {
@@ -17,7 +51,6 @@ function runAction(id: number, run: () => void): void {
     tag="div"
     name="app-notice"
     class="app-notice-host"
-    aria-live="polite"
     aria-relevant="additions text"
   >
     <div
@@ -25,7 +58,11 @@ function runAction(id: number, run: () => void): void {
       :key="notice.id"
       class="app-notice"
       :class="`app-notice-${notice.kind}`"
-      role="status"
+      :role="notice.kind === 'error' || notice.kind === 'warning' ? 'alert' : 'status'"
+      @mouseenter="pauseNotice(notice.id, 'pointer')"
+      @mouseleave="resumeNotice(notice.id, 'pointer')"
+      @focusin="pauseNotice(notice.id, 'focus')"
+      @focusout="resumeNotice(notice.id, 'focus')"
     >
       <i
         class="pi"
@@ -53,12 +90,41 @@ function runAction(id: number, run: () => void): void {
         type="button"
         class="app-notice-dismiss"
         aria-label="关闭通知"
+        :tabindex="notice.sticky || notice.action ? 0 : -1"
         @click="dismissNotice(notice.id)"
       >
         <i class="pi pi-times" aria-hidden="true"></i>
       </button>
     </div>
   </TransitionGroup>
+  <section
+    v-if="historyOpen"
+    id="hig-notice-history"
+    class="hig-notice-history"
+    ref="historyPanel"
+    aria-label="通知记录"
+  >
+    <header>
+      <h2>通知记录</h2>
+      <button class="hig-icon-button" aria-label="关闭通知记录" @click="closeHistory()">
+        <i class="pi pi-times" aria-hidden="true"></i>
+      </button>
+    </header>
+    <p v-if="!noticeHistory.length" class="hig-notice-empty">暂无通知</p>
+    <MessageBar
+      v-for="notice in [...noticeHistory].reverse()"
+      :key="notice.id"
+      :intent="notice.kind"
+      :announce="false"
+    >
+      {{ notice.message }}
+      <template v-if="notice.action" #actions
+        ><button class="hig-button" @click="runAction(notice.id, notice.action.run)">
+          {{ notice.action.label }}
+        </button></template
+      >
+    </MessageBar>
+  </section>
 </template>
 
 <style scoped>
@@ -69,7 +135,7 @@ function runAction(id: number, run: () => void): void {
   z-index: 12000;
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 16px;
   width: min(420px, calc(100vw - 32px));
   pointer-events: none;
 }

@@ -42,8 +42,8 @@ function toggleSetting(key: BooleanSettingKey): void {
 <template>
   <section id="appearance" class="glass-card preview-section">
     <div class="section-title-row">
-      <i class="pi pi-palette"></i>
-      <h2>外观 (Appearance)</h2>
+      <i aria-hidden="true" class="pi pi-palette"></i>
+      <h2>外观</h2>
     </div>
 
     <div class="setting-list">
@@ -69,8 +69,10 @@ function toggleSetting(key: BooleanSettingKey): void {
       <hr />
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>全局字体 (Typography)</strong>
-          <span>更换界面的正文、标题与圆体字体；“默认”跟随当前主题自带的字体。</span>
+          <strong>界面字体</strong>
+          <span
+            >统一正文、标题和控件字体。默认使用系统字体；主题字体需明确选择。歌词内容可单独设置。</span
+          >
         </div>
         <select class="preview-select wide" :value="settings.fontFamily" @change="setFontFamily">
           <option v-for="option in fontFamilyOptions" :key="option.value" :value="option.value">
@@ -86,7 +88,7 @@ function toggleSetting(key: BooleanSettingKey): void {
       <hr />
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>界面排版密度 (UI Density)</strong>
+          <strong>界面排版密度</strong>
           <span>控制列表项的间距与信息密度。</span>
         </div>
         <div class="segmented-control density">

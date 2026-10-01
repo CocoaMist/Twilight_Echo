@@ -2,10 +2,19 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useMusicStore } from '../stores/useMusicStore'
 import type { Track } from '../types/music'
+import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer.ts'
+import MessageBar from './hig/MessageBar.vue'
 
-defineProps<{
+const props = defineProps<{
   show: boolean
 }>()
+const dialogRef = ref<HTMLElement | null>(null)
+const error = ref('')
+useEscapeToClose(
+  () => props.show,
+  () => emit('close')
+)
+useFocusTrap(dialogRef, () => props.show)
 
 const emit = defineEmits<{
   close: []
@@ -57,6 +66,7 @@ async function startScan(): Promise<void> {
   }
 
   isScanning.value = true
+  error.value = ''
   scanStatus.value = 'scanning'
   progress.value = { current: 0, total: 0 }
   scannedTrackCount.value = 0
@@ -90,6 +100,7 @@ async function startScan(): Promise<void> {
       scanStatus.value = 'empty'
     }
   } catch (err) {
+    error.value = err instanceof Error ? err.message : '导入音乐失败，请重新尝试。'
     console.error('扫描音乐文件失败：', err)
     scanStatus.value = 'idle'
   } finally {
@@ -114,10 +125,29 @@ onUnmounted(() => {
   <Teleport to="body">
     <Transition name="fade">
       <div v-if="show" class="modal-overlay" @click.self="emit('close')">
-        <div class="import-dialog">
-          <div class="dialog-header"></div>
+        <div
+          ref="dialogRef"
+          class="import-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-label="导入音乐"
+        >
+          <div class="dialog-header">
+            <h2>导入音乐</h2>
+            <button class="hig-icon-button" aria-label="关闭导入音乐" @click="emit('close')">
+              <i class="pi pi-times" aria-hidden="true"></i>
+            </button>
+          </div>
 
           <div class="dialog-content">
+            <MessageBar v-if="error" intent="error" @dismiss="error = ''">
+              {{ error }}
+              <template #actions>
+                <button class="hig-button" :disabled="isScanning" @click="startScan">
+                  重新扫描
+                </button>
+              </template>
+            </MessageBar>
             <div class="folder-list-section">
               <div class="section-header">
                 <span class="section-title">已选文件夹</span>
@@ -128,10 +158,11 @@ onUnmounted(() => {
                   暂无文件夹，请点击下方按钮添加
                 </div>
                 <div v-for="folder in scannedFolders" :key="folder" class="folder-item">
-                  <i class="pi pi-folder"></i>
+                  <i aria-hidden="true" class="pi pi-folder"></i>
                   <span class="folder-path" :title="folder">{{ folder }}</span>
                   <input
                     type="checkbox"
+                    :aria-label="`导入 ${folder}`"
                     :checked="selectedFolders.has(folder)"
                     :disabled="isScanning"
                     @change="toggleFolder(folder)"
@@ -164,11 +195,15 @@ onUnmounted(() => {
           </div>
 
           <div class="dialog-footer">
-            <button class="btn-cancel" :disabled="isScanning" @click="handleAddNewFolder">
+            <button class="hig-button" :disabled="isScanning" @click="handleAddNewFolder">
               添加文件夹
             </button>
-            <button class="btn-start" :disabled="isScanning" @click="startScan">
-              {{ isScanning ? '正在扫描...' : '重新扫描' }}
+            <button
+              class="hig-button hig-button-primary"
+              :disabled="isScanning || selectedFolders.size === 0"
+              @click="startScan"
+            >
+              {{ isScanning ? '正在扫描...' : '导入所选音乐' }}
             </button>
           </div>
         </div>
@@ -241,31 +276,21 @@ html[data-te-motion='off'] .scan-status-leave-to {
 }
 
 .dialog-header {
-  padding: 8px 20px;
+  padding: 24px 24px 0;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  min-height: 24px;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.dialog-header h3 {
+.dialog-header h2 {
   margin: 0;
-  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
-  font-weight: 600;
-  color: #1a1a1a;
-}
-
-.btn-close {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: #999;
-  font-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
-  padding: 4px;
+  font: 600 20px/28px var(--hig-font);
+  color: var(--hig-text);
 }
 
 .dialog-content {
-  padding: 20px;
+  padding: 24px;
   flex: 1;
 }
 
@@ -406,37 +431,11 @@ html[data-te-motion='off'] .scan-status-leave-to {
 }
 
 .dialog-footer {
-  padding: 16px 20px;
+  padding: 24px;
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-}
-
-.btn-cancel {
-  background: var(--te-subtle-bg);
-  border: 1px solid rgba(255, 255, 255, 0.62);
-  padding: 8px 16px;
-  border-radius: 12px;
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  cursor: pointer;
-  color: #666;
-}
-
-.btn-start {
-  background: linear-gradient(135deg, var(--te-primary-500), var(--te-primary-300));
-  border: none;
-  padding: 8px 24px;
-  border-radius: 12px;
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  cursor: pointer;
-  color: #fff;
-  font-weight: 500;
-  box-shadow: 0 12px 30px rgba(124, 77, 255, 0.24);
-}
-
-.btn-start:disabled {
-  background: rgba(168, 133, 247, 0.36);
-  cursor: not-allowed;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .fade-enter-active,

@@ -1,7 +1,7 @@
 .settings-preview-page {
   position: fixed;
   /* Reserve the native title-bar strip so its controls always remain clickable. */
-  inset: 32px 0 0;
+  inset: var(--hig-chrome-height, 35px) 0 0;
   z-index: 2000;
   width: 100%;
   height: auto;
@@ -1637,8 +1637,7 @@ html[data-theme='dark'] .theme-segment button.active {
 }
 
 .dsp-disabled-content {
-  opacity: 0.5;
-  pointer-events: none;
+  opacity: 1;
   transition: opacity 0.3s ease;
 }
 
@@ -3099,6 +3098,8 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
 
   .preview-nav-item {
     flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
   }
 
   .settings-preview-stack {

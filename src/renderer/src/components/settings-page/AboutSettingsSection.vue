@@ -201,8 +201,8 @@ function progressLabel(): string {
   <section id="about" class="glass-card preview-section about-section">
     <div class="about-glow" aria-hidden="true"></div>
     <div class="section-title-row">
-      <i class="pi pi-info-circle"></i>
-      <h2>关于 (About)</h2>
+      <i aria-hidden="true" class="pi pi-info-circle"></i>
+      <h2>关于</h2>
     </div>
 
     <div class="about-hero">
@@ -222,6 +222,7 @@ function progressLabel(): string {
       <div class="update-card">
         <div class="status-icon">
           <i
+            aria-hidden="true"
             :class="
               updateActionState === 'downloading' || updateCheckState === 'checking'
                 ? 'pi pi-spin pi-spinner'
@@ -274,13 +275,13 @@ function progressLabel(): string {
         <div class="update-actions">
           <template v-if="updateActionState === 'downloading'">
             <button class="soft-button" type="button" @click="emit('cancelUpdateDownload')">
-              <i class="pi pi-times"></i>
+              <i aria-hidden="true" class="pi pi-times"></i>
               取消
             </button>
           </template>
           <template v-else-if="updateActionState === 'ready'">
             <button class="brand-soft-button" type="button" @click="emit('installUpdate')">
-              <i class="pi pi-download"></i>
+              <i aria-hidden="true" class="pi pi-download"></i>
               安装并退出
             </button>
             <button class="soft-button" type="button" @click="emit('openReleasePage')">
@@ -294,7 +295,7 @@ function progressLabel(): string {
               type="button"
               @click="emit('downloadUpdate')"
             >
-              <i class="pi pi-download"></i>
+              <i aria-hidden="true" class="pi pi-download"></i>
               下载更新
             </button>
             <button class="soft-button" type="button" @click="emit('openReleasePage')">
@@ -308,7 +309,7 @@ function progressLabel(): string {
               :disabled="updateCheckState === 'checking' || updateActionState === 'installing'"
               @click="emit('checkForUpdates')"
             >
-              <i class="pi pi-sync"></i>
+              <i aria-hidden="true" class="pi pi-sync"></i>
               检查更新
             </button>
           </template>
@@ -318,7 +319,7 @@ function progressLabel(): string {
       <div class="sponsor-card">
         <i class="pi pi-heart-fill sponsor-watermark" aria-hidden="true"></i>
         <div>
-          <h3><i class="pi pi-heart"></i> 支持项目发展</h3>
+          <h3><i aria-hidden="true" class="pi pi-heart"></i> 支持项目发展</h3>
           <p>
             Twilight Echo
             是一个由热情驱动的免费开源项目。您的赞助将用于软件维护、功能开发与发布服务。
@@ -326,11 +327,11 @@ function progressLabel(): string {
         </div>
         <div class="sponsor-card-actions">
           <button class="sponsor-primary-button" type="button" @click="openSponsorDialog">
-            <i class="pi pi-heart-fill"></i>
+            <i aria-hidden="true" class="pi pi-heart-fill"></i>
             赞助作者
           </button>
           <button class="sponsor-secondary-button" type="button" @click="openSponsorList">
-            <i class="pi pi-users"></i>
+            <i aria-hidden="true" class="pi pi-users"></i>
             赞助名单
           </button>
         </div>
@@ -341,12 +342,20 @@ function progressLabel(): string {
 
     <div class="about-links">
       <button type="button" @click="emit('exportAudioDiagnostics')">
-        <i class="pi pi-file-export"></i> 导出音频诊断
+        <i aria-hidden="true" class="pi pi-file-export"></i> 导出音频诊断
       </button>
-      <button type="button" @click="openGithub"><i class="pi pi-github"></i> GitHub</button>
-      <button type="button" @click="openChangelog"><i class="pi pi-file-o"></i> 更新日志</button>
-      <button type="button" @click="openHomepage"><i class="pi pi-heart-fill"></i> 开源致谢</button>
-      <button type="button" @click="openQqGroupDialog"><i class="pi pi-comments"></i> Q群</button>
+      <button type="button" @click="openGithub">
+        <i aria-hidden="true" class="pi pi-github"></i> GitHub
+      </button>
+      <button type="button" @click="openChangelog">
+        <i aria-hidden="true" class="pi pi-file-o"></i> 更新日志
+      </button>
+      <button type="button" @click="openHomepage">
+        <i aria-hidden="true" class="pi pi-heart-fill"></i> 开源致谢
+      </button>
+      <button type="button" @click="openQqGroupDialog">
+        <i aria-hidden="true" class="pi pi-comments"></i> Q群
+      </button>
     </div>
 
     <Teleport to="body">
@@ -365,7 +374,9 @@ function progressLabel(): string {
           >
             <header class="sponsor-dialog-header">
               <div class="sponsor-dialog-title-copy">
-                <span class="sponsor-dialog-icon"><i class="pi pi-heart-fill"></i></span>
+                <span class="sponsor-dialog-icon"
+                  ><i aria-hidden="true" class="pi pi-heart-fill"></i
+                ></span>
                 <div>
                   <h3 id="sponsor-dialog-title">赞助作者</h3>
                   <p>选择适合你的支持方式</p>
@@ -377,28 +388,30 @@ function progressLabel(): string {
                 aria-label="关闭赞助窗口"
                 @click="closeSponsorDialog"
               >
-                <i class="pi pi-times"></i>
+                <i aria-hidden="true" class="pi pi-times"></i>
               </button>
             </header>
 
             <div class="sponsor-dialog-notice" role="note">
-              <i class="pi pi-info-circle"></i>
+              <i aria-hidden="true" class="pi pi-info-circle"></i>
               <p>请务必添加我的联系方式，我会将你加入软件的赞助者名单中，感谢你的支持！</p>
             </div>
 
             <button class="afdian-option" type="button" @click="openAfdian">
-              <span class="afdian-option-icon"><i class="pi pi-external-link"></i></span>
+              <span class="afdian-option-icon"
+                ><i aria-hidden="true" class="pi pi-external-link"></i
+              ></span>
               <span class="afdian-option-copy">
                 <strong>前往爱发电</strong>
                 <small>通过爱发电平台支持作者</small>
               </span>
-              <i class="pi pi-angle-right"></i>
+              <i aria-hidden="true" class="pi pi-angle-right"></i>
             </button>
 
             <div class="sponsor-qr-grid">
               <figure class="sponsor-qr-card alipay">
                 <figcaption>
-                  <span><i class="pi pi-wallet"></i></span>
+                  <span><i aria-hidden="true" class="pi pi-wallet"></i></span>
                   <div>
                     <strong>支付宝</strong>
                     <small>打开支付宝扫一扫</small>
@@ -411,7 +424,7 @@ function progressLabel(): string {
 
               <figure class="sponsor-qr-card wechat">
                 <figcaption>
-                  <span><i class="pi pi-qrcode"></i></span>
+                  <span><i aria-hidden="true" class="pi pi-qrcode"></i></span>
                   <div>
                     <strong>微信支付</strong>
                     <small>打开微信扫一扫</small>
@@ -437,7 +450,9 @@ function progressLabel(): string {
           >
             <header class="sponsor-dialog-header">
               <div class="sponsor-dialog-title-copy">
-                <span class="sponsor-dialog-icon"><i class="pi pi-users"></i></span>
+                <span class="sponsor-dialog-icon"
+                  ><i aria-hidden="true" class="pi pi-users"></i
+                ></span>
                 <div>
                   <h3 id="sponsor-list-title">赞助名单</h3>
                   <p>感谢每一位支持 Twilight Echo 的朋友</p>
@@ -449,7 +464,7 @@ function progressLabel(): string {
                 aria-label="关闭赞助名单"
                 @click="closeSponsorList"
               >
-                <i class="pi pi-times"></i>
+                <i aria-hidden="true" class="pi pi-times"></i>
               </button>
             </header>
 
@@ -472,7 +487,7 @@ function progressLabel(): string {
               </article>
             </div>
             <div v-else class="sponsor-list-empty">
-              <span><i class="pi pi-heart"></i></span>
+              <span><i aria-hidden="true" class="pi pi-heart"></i></span>
               <strong>赞助名单持续更新中</strong>
               <p>完成赞助后请添加作者联系方式，我会在确认后将你加入名单。</p>
               <button type="button" class="sponsor-primary-button" @click="openSponsorDialog">
@@ -499,7 +514,7 @@ function progressLabel(): string {
             <header class="sponsor-dialog-header">
               <div class="sponsor-dialog-title-copy">
                 <span class="sponsor-dialog-icon qq-group-dialog-icon">
-                  <i class="pi pi-comments"></i>
+                  <i aria-hidden="true" class="pi pi-comments"></i>
                 </span>
                 <div>
                   <h3 id="qq-group-dialog-title">TwilightEcho 交流群</h3>
@@ -512,7 +527,7 @@ function progressLabel(): string {
                 aria-label="关闭 Q 群二维码"
                 @click="closeQqGroupDialog"
               >
-                <i class="pi pi-times"></i>
+                <i aria-hidden="true" class="pi pi-times"></i>
               </button>
             </header>
 

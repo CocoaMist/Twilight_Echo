@@ -25,18 +25,23 @@ const stageHint = computed(
       </span>
       <span class="tls-disc">
         <span class="tls-disc-label">
-          <i class="pi pi-headphones"></i>
+          <i aria-hidden="true" class="pi pi-headphones"></i>
         </span>
         <span class="tls-disc-sheen"></span>
       </span>
-      <span class="tls-eq"> <i></i><i></i><i></i><i></i><i></i> </span>
+      <span class="tls-eq">
+        <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i
+        ><i aria-hidden="true"></i><i aria-hidden="true"></i>
+      </span>
     </div>
 
     <p class="tls-kicker">Twilight Echo · 在线漫游</p>
     <h2 class="tls-title">{{ stageTitle }}</h2>
     <p class="tls-hint">
       <span>{{ stageHint }}</span>
-      <span class="tls-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="tls-dots" aria-hidden="true"
+        ><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i
+      ></span>
     </p>
 
     <div class="tls-progress" aria-hidden="true">

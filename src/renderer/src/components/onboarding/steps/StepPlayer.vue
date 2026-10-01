@@ -91,9 +91,9 @@ function updateMiniPlayer(patch: Partial<MiniPlayerSettings>): void {
         @click="setMode(option.value)"
       >
         <span v-if="props.playerBar.mode === option.value" class="onb-card-check">
-          <i class="ph ph-check"></i>
+          <i aria-hidden="true" class="ph ph-check"></i>
         </span>
-        <i class="onb-card-icon" :class="option.icon"></i>
+        <i aria-hidden="true" class="onb-card-icon" :class="option.icon"></i>
         <span class="onb-card-title">{{ option.title }}</span>
         <span class="onb-card-desc">{{ option.desc }}</span>
       </button>
@@ -154,6 +154,7 @@ function updateMiniPlayer(patch: Partial<MiniPlayerSettings>): void {
       </div>
       <div class="onb-segmented is-small" role="radiogroup" aria-label="播放栏可见性">
         <button
+          :aria-label="option.hint"
           v-for="option in visibilityOptions"
           :key="option.value"
           type="button"

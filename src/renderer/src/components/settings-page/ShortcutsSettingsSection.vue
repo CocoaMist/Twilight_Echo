@@ -265,14 +265,14 @@ function onRecorderBlur(key: BindingKey): void {
 <template>
   <section id="shortcuts" class="glass-card preview-section">
     <div class="section-title-row">
-      <i class="pi pi-key"></i>
+      <i aria-hidden="true" class="pi pi-key"></i>
       <h2>快捷键</h2>
     </div>
     <p class="shortcut-panel-hint">Ctrl+K / ⌘K：打开应用内命令面板。无需启用全局快捷键。</p>
     <div class="setting-list">
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>全局快捷键 (Global Shortcuts)</strong>
+          <strong>全局快捷键</strong>
           <span>应用位于后台时，依然响应下方组合键与系统媒体键。</span>
         </div>
         <span
@@ -319,7 +319,7 @@ function onRecorderBlur(key: BindingKey): void {
             :aria-label="`${item.label}：恢复默认组合键`"
             @click="resetBinding(item.key)"
           >
-            <i class="pi pi-undo"></i>
+            <i aria-hidden="true" class="pi pi-undo"></i>
           </button>
           <button
             type="button"

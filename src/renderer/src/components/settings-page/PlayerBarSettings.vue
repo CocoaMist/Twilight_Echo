@@ -105,7 +105,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
         完全隐藏三档可见性；两者都可以在播放页单独覆盖。</span
       >
     </span>
-    <i class="pi pi-chevron-down"></i>
+    <i aria-hidden="true" class="pi pi-chevron-down"></i>
   </button>
   <div v-if="playerBarOpen" class="settings-accordion-body">
     <hr />
@@ -125,7 +125,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
           :class="{ active: settings.playerBar.mode === option.value }"
           @click="setPlayerBarMode(option.value)"
         >
-          <i :class="option.icon"></i>
+          <i aria-hidden="true" :class="option.icon"></i>
           {{ option.label }}
         </button>
       </div>
@@ -160,6 +160,9 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
       </div>
       <div class="segmented-control">
         <button
+          :aria-label="
+            visibilityOptionDisabled(option.value) ? '自动隐藏需要全局形态为迷你或紧凑' : ''
+          "
           v-for="option in playerBarVisibilityOptions"
           :key="option.value"
           type="button"
@@ -171,7 +174,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
           :title="visibilityOptionDisabled(option.value) ? '自动隐藏需要全局形态为迷你或紧凑' : ''"
           @click="setPlayerBarVisibility(option.value)"
         >
-          <i :class="option.icon"></i>
+          <i aria-hidden="true" :class="option.icon"></i>
           {{ option.label }}
         </button>
       </div>

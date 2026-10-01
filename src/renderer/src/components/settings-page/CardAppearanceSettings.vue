@@ -87,7 +87,7 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
       <strong>卡片与背景自定义</strong>
       <span>自由调节卡片模糊、颜色、圆角、阴影及背景模糊等外观。</span>
     </span>
-    <i class="pi pi-chevron-down"></i>
+    <i aria-hidden="true" class="pi pi-chevron-down"></i>
   </button>
   <div v-if="cardAppearanceOpen" class="settings-accordion-body">
     <hr />
@@ -117,7 +117,7 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
             :class="{ active: cardAppearanceTab === 'light' }"
             @click="cardAppearanceTab = 'light'"
           >
-            <i class="pi pi-sun"></i>
+            <i aria-hidden="true" class="pi pi-sun"></i>
             浅色
           </button>
           <button
@@ -125,7 +125,7 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
             :class="{ active: cardAppearanceTab === 'dark' }"
             @click="cardAppearanceTab = 'dark'"
           >
-            <i class="pi pi-moon"></i>
+            <i aria-hidden="true" class="pi pi-moon"></i>
             深色
           </button>
         </div>

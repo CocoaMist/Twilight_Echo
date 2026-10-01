@@ -1,164 +1,56 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { onTabKeydown } from '../../app/tabNavigation'
+import SearchScopeSelect from '../hig/SearchScopeSelect.vue'
 import type { SearchSource, SearchSourceOption, SearchType } from './useStreamingSearch'
-
 const props = defineProps<{
   searchType: SearchType
   availableSearchTypes: SearchType[]
   searchSources: SearchSourceOption[]
   searchSource: SearchSource
 }>()
-
 const emit = defineEmits<{
   'update:searchType': [value: SearchType]
   'select-source': [value: SearchSource]
 }>()
-
-const sourceMenuOpen = ref(false)
-const activeSourceOption = computed(
-  () =>
-    props.searchSources.find((source) => source.id === props.searchSource) ??
-    props.searchSources[0] ??
-    null
-)
-
-function selectSearchSource(sourceId: SearchSource): void {
-  const source = props.searchSources.find((candidate) => candidate.id === sourceId)
-  if (!source || !source.available) return
-  emit('select-source', sourceId)
-  sourceMenuOpen.value = false
-}
-
-function onSourceMenuFocusOut(event: FocusEvent): void {
-  const next = event.relatedTarget as Node | null
-  const container = event.currentTarget as HTMLElement | null
-  if (!next || !container?.contains(next)) sourceMenuOpen.value = false
+const types: Array<{ id: SearchType; label: string }> = [
+  { id: 'songs', label: '单曲' },
+  { id: 'playlists', label: '歌单' },
+  { id: 'artists', label: '艺术家' }
+]
+function selectSource(id: string): void {
+  if (props.searchSources.some((source) => source.id === id && source.available))
+    emit('select-source', id)
 }
 </script>
-
 <template>
   <div class="streaming-search-tabs">
-    <div class="search-type-group">
-      <div
-        class="search-tab-pill"
-        data-te-interactive
-        role="button"
-        :tabindex="availableSearchTypes.includes('songs') ? 0 : -1"
-        :aria-pressed="searchType === 'songs'"
-        :aria-disabled="!availableSearchTypes.includes('songs')"
-        :class="{
-          active: searchType === 'songs',
-          disabled: !availableSearchTypes.includes('songs')
-        }"
-        @click="availableSearchTypes.includes('songs') && emit('update:searchType', 'songs')"
-        @keydown.enter.prevent="
-          availableSearchTypes.includes('songs') && emit('update:searchType', 'songs')
-        "
-        @keydown.space.prevent="
-          availableSearchTypes.includes('songs') && emit('update:searchType', 'songs')
-        "
-      >
-        单曲
-      </div>
-      <div
-        class="search-tab-pill"
-        data-te-interactive
-        role="button"
-        :tabindex="availableSearchTypes.includes('playlists') ? 0 : -1"
-        :aria-pressed="searchType === 'playlists'"
-        :aria-disabled="!availableSearchTypes.includes('playlists')"
-        :class="{
-          active: searchType === 'playlists',
-          disabled: !availableSearchTypes.includes('playlists')
-        }"
-        @click="
-          availableSearchTypes.includes('playlists') && emit('update:searchType', 'playlists')
-        "
-        @keydown.enter.prevent="
-          availableSearchTypes.includes('playlists') && emit('update:searchType', 'playlists')
-        "
-        @keydown.space.prevent="
-          availableSearchTypes.includes('playlists') && emit('update:searchType', 'playlists')
-        "
-      >
-        歌单
-      </div>
-      <div
-        class="search-tab-pill"
-        data-te-interactive
-        role="button"
-        :tabindex="availableSearchTypes.includes('artists') ? 0 : -1"
-        :aria-pressed="searchType === 'artists'"
-        :aria-disabled="!availableSearchTypes.includes('artists')"
-        :class="{
-          active: searchType === 'artists',
-          disabled: !availableSearchTypes.includes('artists')
-        }"
-        @click="availableSearchTypes.includes('artists') && emit('update:searchType', 'artists')"
-        @keydown.enter.prevent="
-          availableSearchTypes.includes('artists') && emit('update:searchType', 'artists')
-        "
-        @keydown.space.prevent="
-          availableSearchTypes.includes('artists') && emit('update:searchType', 'artists')
-        "
-      >
-        歌手
-      </div>
-    </div>
-    <div
-      class="search-source-dropdown"
-      :class="{ open: sourceMenuOpen }"
-      @focusout="onSourceMenuFocusOut"
-      @keydown.esc.prevent="sourceMenuOpen = false"
-    >
+    <div class="search-type-group" role="tablist" aria-label="搜索结果类型" @keydown="onTabKeydown">
       <button
-        class="search-source-trigger"
-        aria-haspopup="listbox"
-        :aria-expanded="sourceMenuOpen"
-        @click="sourceMenuOpen = !sourceMenuOpen"
+        v-for="type in types"
+        :id="`streaming-search-tab-${type.id}`"
+        :key="type.id"
+        type="button"
+        class="search-tab-pill"
+        data-te-interactive
+        role="tab"
+        :tabindex="searchType === type.id ? 0 : -1"
+        :aria-selected="searchType === type.id"
+        aria-controls="streaming-search-panel"
+        :disabled="!availableSearchTypes.includes(type.id)"
+        :class="{
+          active: searchType === type.id,
+          disabled: !availableSearchTypes.includes(type.id)
+        }"
+        @click="emit('update:searchType', type.id)"
       >
-        <i
-          v-if="activeSourceOption?.icon"
-          class="pi"
-          :class="activeSourceOption.icon"
-          style="font-size: calc(var(--te-font-size-body, 14px) * 13 / 14)"
-        ></i>
-        <span>{{ activeSourceOption?.label ?? '音源' }}</span>
-        <i
-          class="pi pi-chevron-down"
-          style="font-size: calc(var(--te-font-size-body, 14px) * 10 / 14)"
-        ></i>
+        {{ type.label }}
       </button>
-      <div v-if="sourceMenuOpen" class="search-source-menu" role="listbox" aria-label="音源">
-        <div
-          v-for="source in searchSources"
-          :key="source.id"
-          class="search-source-option"
-          role="option"
-          :tabindex="source.available ? 0 : -1"
-          :aria-selected="searchSource === source.id"
-          :aria-disabled="!source.available"
-          :class="{ active: searchSource === source.id, disabled: !source.available }"
-          @mousedown.prevent="selectSearchSource(source.id)"
-          @keydown.enter.prevent="selectSearchSource(source.id)"
-          @keydown.space.prevent="selectSearchSource(source.id)"
-        >
-          <i
-            v-if="source.icon"
-            class="pi"
-            :class="source.icon"
-            style="font-size: calc(var(--te-font-size-body, 14px) * 13 / 14)"
-          ></i>
-          <span>{{ source.label }}</span>
-          <i
-            v-if="searchSource === source.id"
-            class="pi pi-check"
-            style="font-size: calc(var(--te-font-size-body, 14px) * 12 / 14); margin-left: auto"
-          ></i>
-        </div>
-      </div>
     </div>
+    <SearchScopeSelect
+      :model-value="searchSource"
+      :options="searchSources"
+      @update:model-value="selectSource"
+    />
   </div>
 </template>
-
 <style scoped src="./StreamingSearchControls.css"></style>

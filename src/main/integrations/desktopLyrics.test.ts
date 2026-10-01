@@ -18,6 +18,7 @@ test('taskbar lyrics preserve translation preferences and fit both lines without
     'runtime',
     'currentTaskbarBounds',
     'resolveDesktopLyricsFontFamily',
+    'resolveAppFontStack',
     `${stripTypeScriptTypes(effectiveSettings.replace('export ', ''))}; return getEffectiveDesktopLyricsSettings()`
   )
   for (const translationVisible of [true, false]) {
@@ -32,6 +33,7 @@ test('taskbar lyrics preserve translation preferences and fit both lines without
       const effective = createSettings(
         { appSettings: { desktopLyrics: saved, lyricsAppearance: { styles: { active: {} } } } },
         () => ({ width: 320, height }),
+        () => 'sans-serif',
         () => 'sans-serif'
       )
       assert.equal(effective.translationVisible, translationVisible)

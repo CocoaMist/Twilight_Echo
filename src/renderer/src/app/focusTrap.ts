@@ -10,6 +10,7 @@ interface FocusEnvironment {
 }
 
 const traps: object[] = []
+const backgroundOwners = new WeakMap<HTMLElement, { count: number; original: boolean }>()
 
 /** Owns listeners, the opening frame and the opener; Vue only controls activation. */
 export function createFocusTrap(getRoot: () => HTMLElement | null, environment: FocusEnvironment) {
@@ -18,6 +19,35 @@ export function createFocusTrap(getRoot: () => HTMLElement | null, environment: 
   let active = false
   let opener: HTMLElement | null = null
   let frame: number | null = null
+  let background: HTMLElement[] = []
+
+  function restoreBackground(): void {
+    for (const element of background) {
+      const owner = backgroundOwners.get(element)
+      if (!owner || --owner.count > 0) continue
+      element.inert = owner.original
+      backgroundOwners.delete(element)
+    }
+    background = []
+  }
+
+  function disableBackground(root: HTMLElement): void {
+    restoreBackground()
+    let current: HTMLElement | null = root
+    while (current?.parentElement) {
+      for (const sibling of Array.from(current.parentElement.children)) {
+        if (sibling === current) continue
+        const element = sibling as HTMLElement
+        const owner = backgroundOwners.get(element)
+        if (owner) owner.count++
+        else backgroundOwners.set(element, { count: 1, original: element.inert })
+        background.push(element)
+        element.inert = true
+      }
+      current = current.parentElement
+      if (current === document.body) break
+    }
+  }
 
   function targets(root: HTMLElement): HTMLElement[] {
     return Array.from(root.querySelectorAll<HTMLElement>(SELECTOR)).filter(
@@ -65,7 +95,10 @@ export function createFocusTrap(getRoot: () => HTMLElement | null, environment: 
         frame = null
         if (!active || traps.at(-1) !== entry) return
         const root = getRoot()
-        if (root?.isConnected) (targets(root)[0] ?? root).focus()
+        if (root?.isConnected) {
+          disableBackground(root)
+          ;(targets(root)[0] ?? root).focus()
+        }
       })
     },
     deactivate(): void {
@@ -76,6 +109,7 @@ export function createFocusTrap(getRoot: () => HTMLElement | null, environment: 
       const index = traps.indexOf(entry)
       if (index !== -1) traps.splice(index, 1)
       window.removeEventListener('keydown', onKeydown, true)
+      restoreBackground()
       const root = getRoot()
       const current = document.activeElement
       if (

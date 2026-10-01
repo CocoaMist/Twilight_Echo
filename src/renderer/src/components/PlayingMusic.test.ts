@@ -381,7 +381,7 @@ test('player bar artist is a keyboard-accessible navigation button', () => {
   )
   assert.match(playerBar, /emit\('openArtist'\)/)
   assert.match(style, /\.player-artist:not\(:disabled\):focus-visible/)
-  assert.match(app, /@open-artist="handlePlayerBarArtistClick"/)
+  assert.match(app, /@open-artist="navigateWithGuard\(handlePlayerBarArtistClick\)"/)
   assert.match(app, /onSelectView\('artists', `artist:\$\{trackArtist\}`\)/)
   assert.match(app, /:artist-navigation-request="streamingArtistRequest"/)
 })

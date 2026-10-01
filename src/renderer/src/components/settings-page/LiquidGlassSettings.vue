@@ -178,7 +178,7 @@ function toggleAdaptiveTone(): void {
       <strong>液态玻璃材质</strong>
       <span>为导航和播放控件启用自适应材质层，可选开启受控的内容卡片实验。</span>
     </span>
-    <i class="pi pi-chevron-down"></i>
+    <i aria-hidden="true" class="pi pi-chevron-down"></i>
   </button>
   <div v-if="liquidGlassOpen" class="settings-accordion-body">
     <hr />
@@ -373,7 +373,7 @@ function toggleAdaptiveTone(): void {
             :class="{ active: liquidGlassTab === 'light' }"
             @click="liquidGlassTab = 'light'"
           >
-            <i class="pi pi-sun"></i>
+            <i aria-hidden="true" class="pi pi-sun"></i>
             浅色
           </button>
           <button
@@ -381,7 +381,7 @@ function toggleAdaptiveTone(): void {
             :class="{ active: liquidGlassTab === 'dark' }"
             @click="liquidGlassTab = 'dark'"
           >
-            <i class="pi pi-moon"></i>
+            <i aria-hidden="true" class="pi pi-moon"></i>
             深色
           </button>
         </div>

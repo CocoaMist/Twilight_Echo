@@ -226,7 +226,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
           :class="{ avatar: avatarCover }"
           aria-hidden="true"
         >
-          <i :class="icon"></i>
+          <i aria-hidden="true" :class="icon"></i>
         </div>
         <span class="stage-cover-ring" :class="{ avatar: avatarCover }" aria-hidden="true"></span>
       </div>
@@ -253,7 +253,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
             :disabled="followLoading"
             @click="emit('follow')"
           >
-            <i :class="followIcon"></i>
+            <i aria-hidden="true" :class="followIcon"></i>
             <span>{{ followLabel }}</span>
           </button>
 
@@ -264,17 +264,18 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
               :disabled="!canPlay"
               @click="emit('playAll')"
             >
-              <i class="pi pi-play"></i>
+              <i aria-hidden="true" class="pi pi-play"></i>
               <span>播放全部</span>
             </button>
             <button
+              aria-label="随机播放"
               type="button"
               class="stage-btn stage-btn-ghost"
               :disabled="!canPlay"
               title="随机播放"
               @click="emit('shufflePlay')"
             >
-              <i class="pi pi-arrow-right-arrow-left"></i>
+              <i aria-hidden="true" class="pi pi-arrow-right-arrow-left"></i>
               <span>随机</span>
             </button>
           </template>
@@ -304,7 +305,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
       <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
       <p>{{ error }}</p>
       <button type="button" class="stage-mini-btn" @click="emit('retry')">
-        <i class="pi pi-refresh"></i>
+        <i aria-hidden="true" class="pi pi-refresh"></i>
         <span>重试</span>
       </button>
     </div>
@@ -372,7 +373,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
             alt=""
           />
           <div v-else class="stage-person-avatar stage-person-fallback" aria-hidden="true">
-            <i class="pi pi-user"></i>
+            <i aria-hidden="true" class="pi pi-user"></i>
           </div>
           <span class="stage-person-name" :title="person.name">{{ person.name }}</span>
         </button>
@@ -402,7 +403,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
             alt=""
           />
           <div v-else class="stage-collection-cover stage-collection-fallback" aria-hidden="true">
-            <i class="pi pi-clone"></i>
+            <i aria-hidden="true" class="pi pi-clone"></i>
           </div>
           <span class="stage-collection-name" :title="item.name">{{ item.name }}</span>
           <span v-if="item.meta || item.trackCount != null" class="stage-collection-meta">
@@ -427,7 +428,10 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
           </div>
           <div class="stage-selection-actions">
             <button type="button" class="stage-mini-btn" @click="emit('batchFavorite')">
-              <i :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+              <i
+                aria-hidden="true"
+                :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"
+              ></i>
               <span>{{ selectionAllFavorited ? '取消收藏' : '加入收藏' }}</span>
             </button>
             <button
@@ -436,15 +440,15 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
               class="stage-mini-btn"
               @click="emit('batchAddToPlaylist')"
             >
-              <i class="pi pi-list"></i>
+              <i aria-hidden="true" class="pi pi-list"></i>
               <span>添加到歌单</span>
             </button>
             <button type="button" class="stage-mini-btn danger" @click="emit('batchDelete')">
-              <i class="pi pi-minus-circle"></i>
+              <i aria-hidden="true" class="pi pi-minus-circle"></i>
               <span>移除</span>
             </button>
             <button type="button" class="stage-mini-btn ghost" @click="emit('clearSelection')">
-              <i class="pi pi-times"></i>
+              <i aria-hidden="true" class="pi pi-times"></i>
               <span>取消</span>
             </button>
           </div>
@@ -476,13 +480,16 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
           >
             <div class="col-index">
               <button
+                aria-label="正在播放"
                 v-if="currentTrackId === track.id"
                 type="button"
                 class="row-play-btn playing"
                 title="正在播放"
                 @click="onPlayRow(track, trackIndex(index), $event)"
               >
-                <span class="eq-bars" aria-hidden="true"> <i></i><i></i><i></i> </span>
+                <span class="eq-bars" aria-hidden="true">
+                  <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+                </span>
               </button>
               <button
                 v-else
@@ -494,7 +501,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
                 <span class="row-index-num">{{
                   String(trackIndex(index) + 1).padStart(2, '0')
                 }}</span>
-                <i class="pi pi-play row-play-icon"></i>
+                <i aria-hidden="true" class="pi pi-play row-play-icon"></i>
               </button>
             </div>
 
@@ -507,7 +514,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
                 alt=""
               />
               <div v-else class="row-cover row-cover-fallback" aria-hidden="true">
-                <i class="pi pi-wave-pulse"></i>
+                <i aria-hidden="true" class="pi pi-wave-pulse"></i>
               </div>
               <div class="row-copy">
                 <div class="row-title" :title="track.title">{{ track.title }}</div>
@@ -517,6 +524,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
 
             <div v-if="!isExternal" class="col-like">
               <button
+                :aria-label="isTrackLiked(track.ncmSongId) ? '取消喜欢' : '喜欢'"
                 type="button"
                 class="row-like"
                 :class="{
@@ -527,8 +535,13 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
                 :title="isTrackLiked(track.ncmSongId) ? '取消喜欢' : '喜欢'"
                 @click="onLike(track, $event)"
               >
-                <i v-if="isLiking(track.ncmSongId)" class="pi pi-spin pi-spinner"></i>
                 <i
+                  aria-hidden="true"
+                  v-if="isLiking(track.ncmSongId)"
+                  class="pi pi-spin pi-spinner"
+                ></i>
+                <i
+                  aria-hidden="true"
                   v-else
                   :class="isTrackLiked(track.ncmSongId) ? 'pi pi-heart-fill' : 'pi pi-heart'"
                 ></i>

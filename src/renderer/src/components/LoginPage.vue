@@ -5,6 +5,7 @@ import { createVisibilityPollingController } from '../utils/visibilityPolling.ts
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useBackHandler } from '../app/useBackStack'
 import AnimatedInput from './AnimatedInput.vue'
+import MessageBar from './hig/MessageBar.vue'
 import { useNcmStore } from '../stores/useNcmStore'
 import { useProviderStore, type ProviderInfo } from '../stores/useProviderStore'
 import type { MediaProviderProfile } from '../providers/mediaProvider'
@@ -488,7 +489,7 @@ async function startQrLogin(): Promise<void> {
 
   try {
     const providerName = activeCard.value?.name ?? providerId
-    const qr = await providerStore.getQrLogin(providerId)
+    const qr = await withLoginTimeout(providerStore.getQrLogin(providerId))
     if (revision !== loginRevision || activeProviderId.value !== providerId) return
     if (!qr?.key) throw new Error(`获取 ${providerName} 登录信息失败`)
     qrKey.value = qr.key
@@ -511,6 +512,20 @@ async function startQrLogin(): Promise<void> {
     if (revision !== loginRevision || activeProviderId.value !== providerId) return
     pageState.value = 'error'
     errorMsg.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function withLoginTimeout<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('连接超时，请重新尝试或选择其他平台。')), 30_000)
+      })
+    ])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -672,7 +687,13 @@ async function handleLogout(): Promise<void> {
   if (!activeProviderId.value) return
   confirmLogout.value = false
   await providerStore.logout(activeProviderId.value)
-  await refreshAccounts()
+  try {
+    await withLoginTimeout(refreshAccounts())
+  } catch (error) {
+    pageState.value = 'error'
+    errorMsg.value = error instanceof Error ? error.message : String(error)
+    return
+  }
   openAccount(activeProviderId.value)
 }
 
@@ -727,7 +748,16 @@ watch(view, (next) => {
 
 onMounted(async () => {
   document.addEventListener('visibilitychange', onDocumentVisibilityChange)
-  await refreshAccounts()
+  const revision = loginRevision
+  try {
+    await withLoginTimeout(refreshAccounts())
+  } catch (error) {
+    if (revision !== loginRevision) return
+    pageState.value = 'error'
+    errorMsg.value = error instanceof Error ? error.message : String(error)
+    return
+  }
+  if (revision !== loginRevision) return
   if (props.initialProviderId && !activeProviderId.value) {
     openAccount(props.initialProviderId)
     return
@@ -764,6 +794,7 @@ onUnmounted(() => {
           <section v-if="view === 'loading'" key="loading" class="stage-center">
             <div class="lp-spinner"></div>
             <p class="stage-muted">正在连接在线音源…</p>
+            <button type="button" class="hig-button" @click="backToAccounts">返回平台列表</button>
           </section>
 
           <!-- 平台选择 -->
@@ -786,7 +817,7 @@ onUnmounted(() => {
                   class="provider-glyph"
                   :style="provider.color ? { color: provider.color } : undefined"
                 >
-                  <i :class="provider.icon"></i>
+                  <i aria-hidden="true" :class="provider.icon"></i>
                 </span>
                 <span class="provider-copy">
                   <span class="provider-name">
@@ -857,7 +888,7 @@ onUnmounted(() => {
                   class="title-glyph"
                   :style="activeCard.color ? { color: activeCard.color } : undefined"
                 >
-                  <i :class="activeCard.icon"></i>
+                  <i aria-hidden="true" :class="activeCard.icon"></i>
                 </span>
                 登录 {{ activeCard?.name ?? '在线账号' }}
               </h2>
@@ -933,6 +964,7 @@ onUnmounted(() => {
                   />
                   <div v-else-if="pageState === 'qr_loading'" class="qr-loading">
                     <div class="lp-spinner"></div>
+                    <span role="status">正在获取二维码…</span>
                   </div>
                   <div
                     v-if="pageState === 'qr_expired'"
@@ -979,7 +1011,7 @@ onUnmounted(() => {
                   class="btn-secondary"
                   @click="handleExtraAction(action.method)"
                 >
-                  <i :class="action.icon"></i>
+                  <i aria-hidden="true" :class="action.icon"></i>
                   {{ action.label }}
                 </button>
               </div>
@@ -1134,7 +1166,12 @@ onUnmounted(() => {
 
             <div class="id-card">
               <div class="id-banner">
-                <i v-if="activeCard" :class="activeCard.icon" class="id-watermark"></i>
+                <i
+                  aria-hidden="true"
+                  v-if="activeCard"
+                  :class="activeCard.icon"
+                  class="id-watermark"
+                ></i>
               </div>
               <div class="id-avatar-slot">
                 <img
@@ -1148,7 +1185,7 @@ onUnmounted(() => {
               <div class="id-identity">
                 <h2 class="id-name">{{ activeProfile?.nickname || '未知用户' }}</h2>
                 <span v-if="activeCard" class="id-provider">
-                  <i :class="activeCard.icon"></i>
+                  <i aria-hidden="true" :class="activeCard.icon"></i>
                   {{ activeCard.name }}
                 </span>
               </div>
@@ -1165,6 +1202,7 @@ onUnmounted(() => {
                   <span>粉丝</span>
                 </span>
                 <button
+                  :aria-label="uidCopied ? '已复制' : '点击复制 UID'"
                   type="button"
                   class="id-stat uid"
                   :title="uidCopied ? '已复制' : '点击复制 UID'"
@@ -1234,18 +1272,20 @@ onUnmounted(() => {
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
             </div>
-            <p class="error-text">{{ errorMsg || '出了点问题，请稍后重试' }}</p>
-            <div class="error-actions">
-              <button type="button" class="btn-primary" @click="handleRefresh">重试</button>
-              <button
-                type="button"
-                class="btn-secondary"
-                data-te-back-button="pill"
-                @click="backToAccounts"
-              >
-                返回平台列表
-              </button>
-            </div>
+            <MessageBar intent="error" title="登录失败" :dismissible="false">
+              {{ errorMsg || '登录未完成，请重试或选择其他平台。' }}
+              <template #actions>
+                <button type="button" class="btn-primary" @click="handleRefresh">重试</button>
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  data-te-back-button="pill"
+                  @click="backToAccounts"
+                >
+                  返回平台列表
+                </button>
+              </template>
+            </MessageBar>
           </section>
         </Transition>
       </main>

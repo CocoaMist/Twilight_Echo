@@ -179,10 +179,10 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   padding: 16px 17px 14px;
-  color: var(--te-neutral-50);
-  background: linear-gradient(155deg, var(--te-neutral-700), var(--te-neutral-900));
+  color: var(--te-neutral-900);
+  background: var(--te-card-bg);
   border: 1px solid var(--te-glass-border);
-  border-radius: 18px;
+  border-radius: 8px;
   box-shadow: var(--te-glass-shadow);
   opacity: 0;
   transform: translateY(5px) scale(0.985);
@@ -231,8 +231,9 @@ onBeforeUnmount(() => {
 
 .track-copy span,
 .time-row {
-  color: var(--te-neutral-300);
-  font-size: 11px;
+  color: var(--te-neutral-500);
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .progress-section {
@@ -290,6 +291,7 @@ button {
 }
 
 .icon-button {
+  --hig-icon-size: 18px;
   display: inline-grid;
   place-items: center;
   width: 30px;
@@ -297,12 +299,13 @@ button {
   padding: 0;
   background: transparent;
   border-radius: 50%;
-  font-size: 17px;
+  font-size: var(--hig-icon-size);
+  line-height: 1;
 }
 
 .close-button {
   flex: 0 0 auto;
-  color: var(--te-neutral-300);
+  color: var(--te-neutral-500);
 }
 
 .play-button {
@@ -313,10 +316,13 @@ button {
   font-size: 18px;
 }
 
-button:hover:not(:disabled),
-button:focus-visible {
+button:hover:not(:disabled) {
   background-color: var(--te-navigation-hover);
-  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 2px;
 }
 
 .play-button:hover:not(:disabled),

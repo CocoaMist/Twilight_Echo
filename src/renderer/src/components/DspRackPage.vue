@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { confirmAction } from '../app/useAppDialog.ts'
+import MessageBar from './hig/MessageBar.vue'
+
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { createDspFactoryScene, type DspFactorySceneTemplateId } from '../../../shared/dspGraph.ts'
 import type {
@@ -76,7 +79,7 @@ const graphApplyLabel = computed(() => {
   if (graphApplyState.value === 'pending') return 'Pending'
   if (graphApplyState.value === 'applied') return 'Applied'
   if (graphApplyState.value === 'failed') return 'Failed'
-  return 'Idle'
+  return '待命'
 })
 const soxrFallbackActive = computed(() => status.value?.outputStage?.resamplerFallback === true)
 let diagnosticsPoll: number | null = null
@@ -214,9 +217,12 @@ async function applySelectedScene(): Promise<void> {
       sceneId
     )
     if (next.requiresPcmFallback && !next.dsdPcmFallbackApplied) {
-      const confirmed = window.confirm(
-        '此场景需要 DSP 处理。切换到 PCM 并应用会停止 Native DSD/DoP 直通，是否继续？'
-      )
+      const confirmed = await confirmAction({
+        title: '切换到 PCM 并应用场景？',
+        message: '此场景需要 DSP 处理。切换到 PCM 并应用会停止 Native DSD/DoP 直通，是否继续？',
+        confirmLabel: '应用',
+        destructive: true
+      })
       if (confirmed) next = await window.api.audioEngine.applyDspScene(sceneId, true)
     }
     state.value = next
@@ -412,48 +418,55 @@ onBeforeUnmount(() => {
   <main class="dsp-rack-page">
     <header class="rack-header">
       <div>
-        <p class="eyebrow">DSP WORKSTATION</p>
-        <h1>DSP Rack</h1>
+        <p class="eyebrow">音频处理</p>
+        <h1>声音工作台</h1>
       </div>
       <div class="rack-header-actions">
         <button
+          aria-label="刷新诊断"
           type="button"
           class="icon-button"
           title="刷新诊断"
           :disabled="busy"
           @click="refreshDiagnostics"
         >
-          <i class="pi pi-refresh"></i>
+          <i aria-hidden="true" class="pi pi-refresh"></i>
         </button>
         <button
+          aria-label="导入配置包"
           type="button"
           class="icon-button"
           title="导入配置包"
           :disabled="busy"
           @click="importProfile"
         >
-          <i class="pi pi-upload"></i>
+          <i aria-hidden="true" class="pi pi-upload"></i>
         </button>
         <button
+          aria-label="导出配置包"
           type="button"
           class="icon-button"
           title="导出配置包"
           :disabled="busy"
           @click="exportProfile"
         >
-          <i class="pi pi-download"></i>
+          <i aria-hidden="true" class="pi pi-download"></i>
         </button>
       </div>
     </header>
 
-    <p
+    <MessageBar
       v-if="message"
       class="rack-message"
-      :class="{ error: graphApplyState === 'failed' }"
-      :role="graphApplyState === 'failed' ? 'alert' : 'status'"
+      :intent="graphApplyState === 'failed' ? 'error' : 'info'"
     >
       {{ message }}
-    </p>
+      <template v-if="graphApplyState === 'failed'" #actions>
+        <button class="hig-button" :disabled="busy" @click="applySelectedScene">
+          重新应用当前场景
+        </button>
+      </template>
+    </MessageBar>
 
     <DspAuditionPanel
       :a="snapshotA?.find((scene) => scene.id === selectedScene?.id)?.graph ?? null"
@@ -511,9 +524,8 @@ onBeforeUnmount(() => {
     </fieldset>
 
     <footer class="rack-footer">
-      <span>图延迟 {{ activeGraphLatency }} frames</span
-      ><span>尾音 {{ activeGraphTail }} frames</span
-      ><span>图 revision {{ status?.revision ?? 0 }}</span
+      <span>图延迟 {{ activeGraphLatency }} 帧</span><span>尾音 {{ activeGraphTail }} 帧</span
+      ><span>场景版本 {{ status?.revision ?? 0 }}</span
       ><span :class="['apply-state', graphApplyState]">
         {{ graphApplyLabel }} {{ status?.appliedRevision ?? 0 }}/{{
           status?.requestedRevision ?? 0
@@ -877,6 +889,7 @@ onBeforeUnmount(() => {
   opacity: 0.58;
 }
 :deep(.graph-node strong),
+:deep(.graph-node .node-edit-button),
 :deep(.graph-node small) {
   display: block;
   overflow: hidden;
@@ -886,6 +899,15 @@ onBeforeUnmount(() => {
 :deep(.graph-node strong) {
   font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
   color: var(--te-settings-text, #1a1a1a);
+}
+:deep(.node-edit-button) {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: 600 14px/20px var(--hig-font);
+  cursor: pointer;
 }
 :deep(.graph-node small) {
   font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);

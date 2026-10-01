@@ -63,7 +63,7 @@ const searchInputFocused = ref(false)
         class="streaming-search-box"
         :class="{ focused: searchInputFocused }"
       >
-        <i class="pi pi-search streaming-search-icon"></i>
+        <i aria-hidden="true" class="pi pi-search streaming-search-icon"></i>
         <AnimatedInput
           :model-value="searchQuery"
           type="text"
@@ -73,14 +73,18 @@ const searchInputFocused = ref(false)
           @focus="searchInputFocused = true"
           @blur="searchInputFocused = false"
         />
-        <i v-if="searchLoading" class="pi pi-spin pi-spinner streaming-search-spinner"></i>
+        <i
+          aria-hidden="true"
+          v-if="searchLoading"
+          class="pi pi-spin pi-spinner streaming-search-spinner"
+        ></i>
         <button
           v-else-if="searchQuery"
           type="button"
           class="streaming-search-clear"
           @click="emit('clear-search')"
         >
-          <i class="pi pi-times"></i>
+          <i aria-hidden="true" class="pi pi-times"></i>
         </button>
       </div>
       <StreamingProviderSwitcher

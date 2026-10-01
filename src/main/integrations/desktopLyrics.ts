@@ -15,6 +15,7 @@ import {
 import { resolveDesktopLyricsFontFamily } from '../../shared/desktopLyricsFont.ts'
 import { runtime } from '../core/runtime'
 import { createSettingsSnapshot, writeAppSettings } from '../core/settings'
+import { APP_SYSTEM_FONT_STACK, resolveAppFontStack } from '../../shared/appFont.ts'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { stringifyJsonForIpcStorage } from '../security/ipcValidation.ts'
 
@@ -119,8 +120,10 @@ export function getEffectiveDesktopLyricsSettings(): DesktopLyricsSettingsV3 {
       : {}),
     resolvedFontFamily: resolveDesktopLyricsFontFamily(
       settings.fontFamily,
-      runtime.appSettings.lyricsAppearance.styles.active
+      runtime.appSettings.lyricsAppearance.styles.active,
+      resolveAppFontStack(runtime.appSettings.fontFamily) ?? APP_SYSTEM_FONT_STACK
     ),
+    uiFontFamily: resolveAppFontStack(runtime.appSettings.fontFamily) ?? APP_SYSTEM_FONT_STACK,
     accentColor: runtime.appSettings.accentColor,
     motionPreference: runtime.appSettings.motionPreference
   }

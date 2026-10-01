@@ -388,7 +388,7 @@ onMounted(() => {
         :disabled="busy"
         @click="requestClose"
       >
-        <i class="pi pi-times"></i>
+        <i aria-hidden="true" class="pi pi-times"></i>
       </button>
     </header>
 

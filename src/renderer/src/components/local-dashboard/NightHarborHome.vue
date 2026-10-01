@@ -101,7 +101,9 @@ function openActivity(): void {
           <div class="nh-deck-body">
             <div class="nh-art-stage" aria-hidden="true">
               <div class="nh-vinyl">
-                <span class="nh-vinyl-label"><i class="ph ph-waveform"></i></span>
+                <span class="nh-vinyl-label"
+                  ><i aria-hidden="true" class="ph ph-waveform"></i
+                ></span>
               </div>
               <ArchiveArtwork
                 class="nh-sleeve"
@@ -263,6 +265,7 @@ function openActivity(): void {
             <span class="nh-track-duration">{{ formatTime(track.duration) }}</span>
             <span class="nh-track-action" aria-hidden="true"
               ><i
+                aria-hidden="true"
                 :class="currentTrackId === track.id && isPlaying ? 'ph ph-pause' : 'ph ph-play'"
               ></i
             ></span>
@@ -314,7 +317,7 @@ function openActivity(): void {
                 :cover-source="album.coverSource"
                 :identity="album.identity"
                 :title="album.name" /><span class="nh-album-open" aria-hidden="true"
-                ><i class="ph ph-arrow-up-right"></i></span
+                ><i aria-hidden="true" class="ph ph-arrow-up-right"></i></span
             ></span>
             <span class="nh-album-index"
               >{{ String(index + 1).padStart(2, '0') }}<span>{{ album.trackCount }} 首</span></span

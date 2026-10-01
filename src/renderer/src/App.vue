@@ -77,6 +77,9 @@ import {
   type StreamingArtistNavigationRequest
 } from './utils/streamingArtistResolution'
 import AppNoticeHost from './components/AppNoticeHost.vue'
+import AppDialogHost from './components/hig/AppDialogHost.vue'
+import { useAppDialog } from './app/useAppDialog.ts'
+import { navigateWithGuard } from './app/useNavigationGuard.ts'
 import LiquidGlassDefs from './components/LiquidGlassDefs.vue'
 import { resolvePlayerBarPresentation } from '../../shared/playerBar.ts'
 import type { AppBackgroundPage } from './types/settings'
@@ -89,7 +92,7 @@ type TitleSurface = 'default' | 'settings' | 'streaming'
 type StreamingInitialTab = 'home' | 'library' | 'recent'
 let idleLoginCheck: IdleTaskHandle | null = null
 
-const navigation = useAppNavigation()
+const navigation = useAppNavigation({ persistentNavigation: () => window.innerWidth >= 1024 })
 const {
   menuOpen,
   showPlayingPage,
@@ -111,8 +114,8 @@ const {
   activeCategory,
   activeFilter,
   songlistTransitionName,
-  streamingMenuOpen,
   showStreamingSurface,
+  baseSurfaceVisible,
   localViewVisible,
   toggleStreamingMenu,
   collapseMenu,
@@ -133,7 +136,6 @@ const {
   openThemeStudioPage,
   closeThemeStudioPage,
   openPlaybackSettings,
-  openDspSettings,
   hidePluginPage,
   openPluginPage,
   openEqualizerPage,
@@ -144,6 +146,7 @@ const {
   openSettingsPage
 } = navigation
 const { pushNotice } = useAppNoticeStore()
+const noticeHostRef = ref<InstanceType<typeof AppNoticeHost> | null>(null)
 
 // One global back affordance on the title bar. Every full-screen page
 // registers a single base layer here; deeper in-page states (streaming
@@ -198,15 +201,25 @@ function applyExternalNavigation(target: 'local' | 'streaming' | 'settings'): vo
     onSelectView('dashboard', null)
   }
 }
-const titleMenuOpen = computed(() =>
-  showPluginPage.value ? false : showStreamingPage.value ? streamingMenuOpen.value : menuOpen.value
-)
+const titleMenuOpen = computed(() => menuOpen.value)
+const narrowNavigation = ref(window.innerWidth < 1024)
+function updateNavigationWidth(): void {
+  const narrow = window.innerWidth < 1024
+  if (narrow !== narrowNavigation.value) menuOpen.value = !narrow
+  narrowNavigation.value = narrow
+}
+onMounted(() => {
+  menuOpen.value = !narrowNavigation.value
+  window.addEventListener('resize', updateNavigationWidth)
+})
+onBeforeUnmount(() => window.removeEventListener('resize', updateNavigationWidth))
 
 function handleTitleBack(): void {
   backStack.goBack()
 }
 
 function onGlobalBackKeydown(event: KeyboardEvent): void {
+  if (useAppDialog().dialog.value) return
   if (isPlaybackSpace(event)) {
     event.preventDefault()
     togglePlay()
@@ -462,7 +475,16 @@ useMiniPlayerSync({
   setVolume,
   cyclePlayMode,
   setPlayMode,
-  toggleFavorite
+  toggleFavorite,
+  openQueue: () => {
+    if (!currentTrack.value) return
+    void navigateWithGuard(() => {
+      visualizerActive.value = false
+      showPlaying()
+      pendingMiniQueueOpen.value = true
+      void nextTick(flushMiniQueueOpen)
+    })
+  }
 })
 const { loadSettings, hydrateStartupSnapshot, settings, updateSettings } = useSettingsStore()
 useMotionPreference(computed(() => settings.value.motionPreference))
@@ -499,6 +521,13 @@ const playerBarRef = ref<{
   openAudio: () => void
   openMiniPlayer: () => void
 } | null>(null)
+const pendingMiniQueueOpen = ref(false)
+function flushMiniQueueOpen(): void {
+  if (!pendingMiniQueueOpen.value || !playerBarRef.value) return
+  pendingMiniQueueOpen.value = false
+  playerBarRef.value.openQueue()
+}
+watch(playerBarRef, flushMiniQueueOpen, { flush: 'post' })
 const soundFieldSidebarActive = computed(() =>
   usesSoundFieldSidebar(
     soundFieldSidebarVisible.value,
@@ -521,16 +550,16 @@ provide(soundFieldPlaybackKey, {
 })
 const hasPlayerBar = computed(
   () =>
-    !showOnboarding.value &&
-    !showLoginPage.value &&
-    !showSettingsPage.value &&
-    !showThemeStudioPage.value &&
-    !showEqualizerPage.value &&
-    !showDspRackPage.value &&
-    !showPluginPage.value &&
-    !activePluginPage.value &&
-    !visualizerActive.value &&
-    !!currentTrack.value
+    !showOnboarding.value && !showLoginPage.value && !visualizerActive.value && !!currentTrack.value
+)
+const toolPageActive = computed(
+  () =>
+    showSettingsPage.value ||
+    showThemeStudioPage.value ||
+    showEqualizerPage.value ||
+    showDspRackPage.value ||
+    showPluginPage.value ||
+    !!activePluginPage.value
 )
 /* Shape and visibility resolution live in shared/playerBar.ts so main and renderer
    agree and the truth table stays unit-testable; App.vue only forwards the result.
@@ -542,21 +571,27 @@ const playerBarPresentation = computed(() =>
   })
 )
 const showLocalSidebar = computed(
-  () =>
-    !showPlayingPage.value &&
-    !showStreamingPage.value &&
-    !showLoginPage.value &&
-    !showSettingsPage.value &&
-    !showThemeStudioPage.value &&
-    !showEqualizerPage.value &&
-    !showDspRackPage.value &&
-    !showPluginPage.value
+  () => !showPlayingPage.value && !showLoginPage.value && !showOnboarding.value
 )
 
 const sideMenuActiveKey = computed(() =>
-  activePluginPage.value
-    ? `plugin:${activePluginPage.value.pluginId}:${activePluginPage.value.id}`
-    : activeCategory.value
+  showSettingsPage.value
+    ? 'settings'
+    : showPluginPage.value
+      ? 'plugins'
+      : showThemeStudioPage.value
+        ? 'appearance'
+        : activePluginPage.value
+          ? `plugin:${activePluginPage.value.pluginId}:${activePluginPage.value.id}`
+          : showRadioPodcastPage.value
+            ? 'radio'
+            : showNetworkSourcesPage.value
+              ? 'network'
+              : showDspRackPage.value || showEqualizerPage.value
+                ? 'dsp'
+                : showStreamingPage.value
+                  ? 'streaming'
+                  : activeCategory.value
 )
 const mainContentMinHeight = computed(() => '100vh')
 
@@ -564,7 +599,7 @@ const sidebarMenuOpen = computed(() => {
   // PlayingMusic hides the local sidebar, so its preserved open state must not
   // shift the full-width compact bar and leave a blank gutter on the left.
   if (showPlayingPage.value) return false
-  return showStreamingPage.value ? streamingMenuOpen.value : menuOpen.value
+  return menuOpen.value && showLocalSidebar.value
 })
 
 const playbackSessionPersistence = createPlaybackSessionPersistence({
@@ -907,7 +942,15 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
 </script>
 
 <template>
-  <div class="app-shell" :style="{ '--te-side-menu-bottom': `${sideMenuBottomOffset}px` }">
+  <div
+    class="app-shell"
+    :class="{
+      'hig-navigation-open': menuOpen && showLocalSidebar,
+      'hig-tool-open': toolPageActive,
+      'hig-has-player': hasPlayerBar
+    }"
+    :style="{ '--te-side-menu-bottom': `${sideMenuBottomOffset}px` }"
+  >
     <LiquidGlassDefs
       :active="liquidGlassActive"
       :follow-pointer="settings.liquidGlass.followPointer"
@@ -919,33 +962,45 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         :glass="showPlayingPage"
         :liquid-material="liquidGlassChromeActive"
         :streaming="showStreamingPage && !showPlayingPage"
-        :hide-start="showThemeStudioPage || showLoginPage"
+        :hide-start="showLoginPage"
         :title-surface="titleSurface"
         :menu-open="titleMenuOpen"
+        :active-tool="showSettingsPage ? 'settings' : showPluginPage ? 'plugins' : null"
+        :notifications-open="noticeHostRef?.historyOpen ?? false"
+        @notifications="noticeHostRef?.toggleHistory()"
         @toggle-menu="toggleMenu"
         @collapse-menu="collapseMenu"
         @back="handleTitleBack"
-        @login="handleTitleLogin"
-        @settings="toggleSettingsPage"
-        @plugins="togglePluginPage"
+        @login="navigateWithGuard(handleTitleLogin)"
+        @settings="navigateWithGuard(toggleSettingsPage)"
+        @plugins="navigateWithGuard(togglePluginPage)"
         @commands="commandPalette.open"
       />
     </div>
     <div v-if="showLocalSidebar" class="app-shell-navigation">
+      <button
+        v-if="menuOpen && narrowNavigation"
+        class="hig-navigation-backdrop"
+        aria-label="关闭导航"
+        tabindex="-1"
+        @click="collapseMenu"
+      ></button>
       <SideMenu
         :open="menuOpen"
         :liquid-material="liquidGlassChromeActive"
         :active-key="sideMenuActiveKey"
         :plugin-pages="sidebarPages"
         :local-items="localSidebarItems"
-        @select-view="onSelectView"
-        @select-plugin-page="onSelectPluginPage"
-        @enter-streaming="enterStreamingLogin"
-        @enter-radio-podcast="enterRadioPodcastMode"
-        @enter-network-sources="enterNetworkSourcesMode"
+        @select-view="(category, filter) => navigateWithGuard(() => onSelectView(category, filter))"
+        @select-plugin-page="(page) => navigateWithGuard(() => onSelectPluginPage(page))"
+        @enter-streaming="navigateWithGuard(enterStreamingLogin)"
+        @enter-radio-podcast="navigateWithGuard(enterRadioPodcastMode)"
+        @enter-network-sources="navigateWithGuard(enterNetworkSourcesMode)"
+        @open-dsp="navigateWithGuard(openDspRackPage)"
+        @close="collapseMenu"
       />
     </div>
-    <div class="app-shell-content">
+    <div class="app-shell-content" :inert="menuOpen && narrowNavigation && showLocalSidebar">
       <div
         class="main-content"
         :class="{
@@ -957,37 +1012,41 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         }"
         :style="{ minHeight: mainContentMinHeight }"
       >
-        <Transition :name="songlistTransitionName" mode="out-in">
-          <LocalDashboard
-            v-if="localViewVisible && activeCategory === 'dashboard'"
-            key="local-dashboard"
-            @select-view="onSelectView"
-            @open-library-settings="openSettingsPage('general')"
-          />
-          <AggregatePlaylistPage
-            v-else-if="localViewVisible && activeCategory === 'aggregate'"
-            key="local-aggregate"
-            :has-player="hasPlayerBar"
-            surface="local"
-            :initial-playlist-id="activeFilter"
-          />
-          <ListeningAnalyticsPage
-            v-else-if="localViewVisible && activeCategory === 'analytics'"
-            key="local-analytics"
-            @select-view="onSelectView"
-            @open-artist="handleAnalyticsArtistOpen"
-          />
-          <SongList
-            v-else-if="localViewVisible"
-            key="local-songlist"
-            :category="activeCategory"
-            :filter="activeFilter"
-            :has-player="hasPlayerBar"
-            :transition-name="songlistTransitionName"
-            @select-view="onSelectView"
-            @customize-appearance="openThemeStudioPage('library')"
-          />
-        </Transition>
+        <div v-show="localViewVisible" class="hig-local-surface">
+          <Transition :name="songlistTransitionName" mode="out-in">
+            <LocalDashboard
+              v-if="activeCategory === 'dashboard'"
+              key="local-dashboard"
+              @select-view="onSelectView"
+              @open-library-settings="openSettingsPage('general')"
+            />
+            <AggregatePlaylistPage
+              v-else-if="activeCategory === 'aggregate'"
+              key="local-aggregate"
+              :has-player="hasPlayerBar"
+              surface="local"
+              :initial-playlist-id="activeFilter"
+              :active="localViewVisible"
+            />
+            <ListeningAnalyticsPage
+              v-else-if="activeCategory === 'analytics'"
+              key="local-analytics"
+              @select-view="onSelectView"
+              @open-artist="handleAnalyticsArtistOpen"
+            />
+            <SongList
+              v-else
+              key="local-songlist"
+              :category="activeCategory"
+              :filter="activeFilter"
+              :has-player="hasPlayerBar"
+              :transition-name="songlistTransitionName"
+              :active="localViewVisible"
+              @select-view="onSelectView"
+              @customize-appearance="openThemeStudioPage('library')"
+            />
+          </Transition>
+        </div>
         <Transition name="playing-page">
           <PlayingMusic
             v-if="showPlayingPage"
@@ -997,18 +1056,26 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         </Transition>
         <StreamingPage
           v-if="streamingPageMounted"
-          v-show="showStreamingPage"
-          :active="showStreamingPage"
-          :menu-open="streamingMenuOpen"
+          v-show="showStreamingSurface"
+          :active="showStreamingSurface"
+          :menu-open="false"
           :has-player="hasPlayerBar"
           :initial-tab="streamingInitialTab ?? undefined"
           :artist-navigation-request="streamingArtistRequest"
           @toggle-menu="toggleStreamingMenu"
           @back-to-local="returnToLocalMode"
           @login="handleStreamingLogin"
+          @open-aggregate="onSelectView('aggregate', null)"
         />
-        <RadioPodcastPage v-if="showRadioPodcastPage" />
-        <NetworkSourcesPage v-if="showNetworkSourcesPage" />
+        <KeepAlive
+          ><RadioPodcastPage v-if="showRadioPodcastPage" v-show="baseSurfaceVisible"
+        /></KeepAlive>
+        <KeepAlive
+          ><NetworkSourcesPage
+            v-if="showNetworkSourcesPage"
+            v-show="baseSurfaceVisible"
+            :active="baseSurfaceVisible && showNetworkSourcesPage"
+        /></KeepAlive>
         <Transition name="login-page">
           <LoginPage
             v-if="showLoginPage"
@@ -1049,6 +1116,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
          they never cover the menu. -->
     <div
       class="app-shell-player"
+      :inert="menuOpen && narrowNavigation && showLocalSidebar"
       :style="{ '--te-side-menu-inline-end': `${sideMenuInlineEnd}px` }"
     >
       <PlayerBar
@@ -1057,33 +1125,41 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         :glass="showPlayingPage"
         :visualizer-visible="showPlayingPage && settings.playerBar.compactVisualizerEnabled"
         :menu-open="sidebarMenuOpen"
-        :mode="playerBarPresentation.mode"
-        :auto-hide="playerBarPresentation.autoHide"
-        :hidden-bar="playerBarPresentation.hidden || soundFieldSidebarActive"
+        :mode="toolPageActive ? 'compact' : playerBarPresentation.mode"
+        :auto-hide="toolPageActive ? false : playerBarPresentation.autoHide"
+        :hidden-bar="!toolPageActive && (playerBarPresentation.hidden || soundFieldSidebarActive)"
         @exit-playing-page="handleExitPlayingPage"
-        @click-cover="handleCoverClick"
-        @open-settings="openPlaybackSettings"
-        @open-dsp="openDspSettings"
-        @open-equalizer="openEqualizerPage"
-        @open-artist="handlePlayerBarArtistClick"
+        @click-cover="(rect) => navigateWithGuard(() => handleCoverClick(rect))"
+        @open-settings="navigateWithGuard(openPlaybackSettings)"
+        @open-dsp="navigateWithGuard(openDspRackPage)"
+        @open-equalizer="navigateWithGuard(openEqualizerPage)"
+        @open-artist="navigateWithGuard(handlePlayerBarArtistClick)"
       />
     </div>
   </div>
   <div
     class="settings-overlay-root"
-    :class="{ 'settings-overlay-root--active': showSettingsPage || showPluginPage }"
+    :inert="menuOpen && narrowNavigation && showLocalSidebar"
+    :class="{
+      'settings-overlay-root--active': showSettingsPage || showPluginPage,
+      'hig-navigation-open': menuOpen && showLocalSidebar,
+      'hig-has-player': hasPlayerBar
+    }"
   >
     <Transition name="settings-page">
-      <SettingsPage
-        v-if="showSettingsPage"
-        :initial-section="settingsInitialSection"
-        :navigation-target="settingsNavigationTarget"
-        @open-equalizer="openEqualizerPage"
-        @open-dsp-rack="openDspRackPage"
-        @open-theme-studio="openThemeStudioPage"
-        @open-theme-workshop="openThemeWorkshop"
-        @reopen-onboarding="handleReopenOnboarding"
-      />
+      <KeepAlive>
+        <SettingsPage
+          v-if="showSettingsPage"
+          :initial-section="settingsInitialSection"
+          :navigation-target="settingsNavigationTarget"
+          @open-equalizer="openEqualizerPage"
+          @open-dsp-rack="openDspRackPage"
+          @open-theme-studio="openThemeStudioPage"
+          @open-theme-workshop="openThemeWorkshop"
+          @reopen-onboarding="handleReopenOnboarding"
+          @section-change="settingsInitialSection = $event"
+        />
+      </KeepAlive>
     </Transition>
     <Transition name="settings-page">
       <PluginPage
@@ -1123,7 +1199,8 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     :undo="undoQueue"
     @close="queueSessions.open.value = false"
   />
-  <AppNoticeHost />
+  <AppNoticeHost ref="noticeHostRef" />
+  <AppDialogHost />
 </template>
 
 <style>
@@ -1224,7 +1301,7 @@ html[data-te-shell-layout='custom'] .app-shell-title .title-bar {
   position: relative !important;
   inset: auto !important;
   width: 100% !important;
-  min-height: 32px;
+  min-height: var(--hig-chrome-height, 35px);
   height: 100%;
 }
 

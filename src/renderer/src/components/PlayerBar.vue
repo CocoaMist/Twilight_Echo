@@ -1554,7 +1554,7 @@ onBeforeUnmount(() => {
       type="button"
       aria-label="关闭浮层"
       @pointerdown.prevent.stop="dismissAllFloatingPanels"
-      @click.prevent.stop
+      @click.prevent.stop="dismissAllFloatingPanels"
     ></button>
 
     <Transition name="drawer-up">
@@ -1562,7 +1562,7 @@ onBeforeUnmount(() => {
         <div class="playlist-header">
           <div class="playlist-heading">
             <div class="playlist-heading-row">
-              <span class="playlist-heading-title">播放列表</span>
+              <span class="playlist-heading-title">播放队列</span>
               <span class="playlist-count">{{ queue.length }} 首</span>
             </div>
             <span class="playlist-heading-subtitle">{{ queueSummaryText }}</span>
@@ -1611,7 +1611,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="queue.length === 0" class="playlist-empty">
           <span class="playlist-empty-icon" aria-hidden="true">
-            <i class="pi pi-inbox"></i>
+            <i aria-hidden="true" class="pi pi-inbox"></i>
           </span>
           <span class="playlist-empty-title">队列还是空的</span>
           <span class="playlist-empty-hint">播放任意歌曲后，会在这里排队等候</span>
@@ -1661,7 +1661,7 @@ onBeforeUnmount(() => {
                     :class="{ paused: !isPlaying }"
                     aria-hidden="true"
                   >
-                    <i></i><i></i><i></i>
+                    <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
                   </span>
                   <span v-else class="playlist-index-num">{{ item.index + 1 }}</span>
                 </span>
@@ -1829,6 +1829,7 @@ onBeforeUnmount(() => {
             />
             <div v-else class="player-cover-placeholder">
               <i
+                aria-hidden="true"
                 class="pi pi-wave-pulse"
                 style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); color: #bbb"
               ></i>
@@ -1846,6 +1847,7 @@ onBeforeUnmount(() => {
                 {{ currentTrack.title }}
               </div>
               <button
+                aria-label="打开播放页面"
                 v-else
                 type="button"
                 class="player-title player-title-button"
@@ -1864,6 +1866,7 @@ onBeforeUnmount(() => {
               >
             </div>
             <button
+              :aria-label="currentTrack.artist ? `打开歌手：${currentTrack.artist}` : undefined"
               type="button"
               class="player-artist"
               data-te-interactive
@@ -1935,7 +1938,7 @@ onBeforeUnmount(() => {
             :disabled="favoriteButtonLoading"
             @click="toggleFavorite"
           >
-            <i v-if="favoriteButtonLoading" class="pi pi-spin pi-spinner"></i>
+            <i aria-hidden="true" v-if="favoriteButtonLoading" class="pi pi-spin pi-spinner"></i>
             <PlayerControlIcon v-else name="favorite" :filled="favoriteButtonLiked" />
           </button>
 
@@ -1976,6 +1979,7 @@ onBeforeUnmount(() => {
                 </div>
                 <span class="volume-drawer-val">{{ Math.round(volume * 100) }}</span>
                 <button
+                  aria-label="Unity：固定软件音量 100%（bit-perfect 需要）"
                   v-if="volume < 0.999 || showVolumeNotUnityCta"
                   type="button"
                   class="volume-unity-btn"
@@ -1998,6 +2002,9 @@ onBeforeUnmount(() => {
               @click="toggleVolume"
             >
               <PlayerControlIcon :name="volume <= 0.001 ? 'muted' : 'volume'" />
+              <span class="volume-control-value" aria-hidden="true"
+                >{{ Math.round(volume * 100) }}%</span
+              >
             </button>
           </div>
 
@@ -2005,8 +2012,8 @@ onBeforeUnmount(() => {
             v-else-if="control === 'queue'"
             class="icon-btn track-menu-button"
             :class="{ active: playlistOpen }"
-            title="播放列表"
-            aria-label="播放列表"
+            title="播放队列"
+            aria-label="播放队列"
             @click="togglePlaylist"
           >
             <PlayerControlIcon name="queue" />
@@ -2053,7 +2060,7 @@ onBeforeUnmount(() => {
             :disabled="miniPlayerOpening"
             @click="openMiniPlayer"
           >
-            <i v-if="miniPlayerOpening" class="pi pi-spin pi-spinner"></i>
+            <i aria-hidden="true" v-if="miniPlayerOpening" class="pi pi-spin pi-spinner"></i>
             <PlayerControlIcon v-else name="miniPlayer" />
           </button>
 
@@ -2111,6 +2118,7 @@ onBeforeUnmount(() => {
               :max="effectiveDuration || 1"
               step="0.1"
               class="progress-slider"
+              aria-label="播放进度"
               :class="{ live: isLiveStream }"
               :disabled="isLiveStream"
               :aria-valuenow="isLiveStream ? 0 : currentTime"

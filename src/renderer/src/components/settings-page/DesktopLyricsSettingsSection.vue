@@ -363,7 +363,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               aria-label="已播放歌词颜色"
               @input="updatePaletteColor('customActiveColor', $event)"
             />
-            <i :style="{ background: paletteColors.active }"></i>
+            <i aria-hidden="true" :style="{ background: paletteColors.active }"></i>
             <span>已播放</span>
           </label>
           <label class="palette-color-button">
@@ -373,7 +373,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               aria-label="未播放歌词颜色"
               @input="updatePaletteColor('customInactiveColor', $event)"
             />
-            <i :style="{ background: paletteColors.inactive }"></i>
+            <i aria-hidden="true" :style="{ background: paletteColors.inactive }"></i>
             <span>未播放</span>
           </label>
         </div>

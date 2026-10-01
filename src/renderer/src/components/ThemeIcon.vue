@@ -1,65 +1,48 @@
 <script setup lang="ts">
-import {
-  THEME_ICON_SLOT_REGISTRY,
-  type ThemeIconFamily,
-  type ThemeIconSlot
-} from '../../../shared/theme.ts'
-
-const props = defineProps<{
-  iconSlot: ThemeIconSlot
-}>()
-
-const families: readonly ThemeIconFamily[] = ['outline', 'rounded', 'filled']
+import type { ThemeIconSlot } from '../../../shared/theme.ts'
+import FluentIcon from './hig/FluentIcon.vue'
+const props = defineProps<{ iconSlot: ThemeIconSlot }>()
+const slots = {
+  'navigation.home': 'home',
+  'navigation.songs': 'music_note_2',
+  'navigation.artists': 'mic',
+  'navigation.albums': 'record',
+  'navigation.genres': 'tag',
+  'navigation.playlists': 'apps_list',
+  'navigation.folders': 'folder_open',
+  'navigation.recent': 'history',
+  'navigation.streaming': 'globe',
+  'navigation.radio': 'channel',
+  'navigation.import': 'add',
+  'navigation.plugin': 'puzzle_piece',
+  'library.search': 'search',
+  'library.clear': 'dismiss',
+  'library.artist': 'mic',
+  'library.album': 'record',
+  'library.genre': 'tag',
+  'library.playlist': 'apps_list',
+  'library.folder': 'folder_open',
+  'library.add': 'add',
+  'library.play': 'play',
+  'library.empty': 'music_note_2',
+  'library.selected': 'checkmark',
+  'library.playing': 'speaker_2',
+  'library.filter': 'filter'
+} as const
 </script>
-
 <template>
-  <span
-    class="theme-icon"
-    :class="`theme-icon-${THEME_ICON_SLOT_REGISTRY[props.iconSlot].domain}`"
-    :data-theme-icon-slot="props.iconSlot"
-    aria-hidden="true"
-  >
-    <i
-      v-for="family in families"
-      :key="family"
-      class="theme-icon-glyph"
-      :class="[
-        `theme-icon-family-${family}`,
-        THEME_ICON_SLOT_REGISTRY[props.iconSlot].classes[family]
-      ]"
-    ></i>
-  </span>
+  <span class="theme-icon" :data-theme-icon-slot="props.iconSlot" aria-hidden="true"
+    ><FluentIcon :name="slots[props.iconSlot]"
+  /></span>
 </template>
-
 <style scoped>
 .theme-icon {
-  display: inline-grid;
-  width: 1em;
-  height: 1em;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
-  place-items: center;
+  align-items: center;
+  justify-content: center;
   color: currentColor;
-  line-height: 1;
-}
-
-.theme-icon-glyph {
-  display: none;
-  grid-area: 1 / 1;
-  font-size: 1em;
-  line-height: 1;
-}
-
-.theme-icon-family-outline {
-  display: inline-block;
-}
-
-:global(html[data-te-icon-family='rounded'] .theme-icon-family-outline),
-:global(html[data-te-icon-family='filled'] .theme-icon-family-outline) {
-  display: none;
-}
-
-:global(html[data-te-icon-family='rounded'] .theme-icon-family-rounded),
-:global(html[data-te-icon-family='filled'] .theme-icon-family-filled) {
-  display: inline-block;
 }
 </style>

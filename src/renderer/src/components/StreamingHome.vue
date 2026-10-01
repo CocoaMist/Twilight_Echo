@@ -5,6 +5,7 @@ import type { MediaProviderPlaylistSummary } from '../providers/mediaProvider'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { resolveMotionMode } from '../../../shared/motion.ts'
 import CoverImg from './CoverImg.vue'
+import MessageBar from './hig/MessageBar.vue'
 import ProviderMusicHome from '@renderer/components/streaming-page/ProviderMusicHome.vue'
 import type {
   ProviderHomePresentation,
@@ -227,7 +228,7 @@ function playPersonalizedStream(section: RecSection | null): void {
       <div class="invite-orb invite-orb-a" aria-hidden="true"></div>
       <div class="invite-orb invite-orb-b" aria-hidden="true"></div>
       <div class="invite-notes" aria-hidden="true">
-        <i class="pi pi-headphones invite-note-icon"></i>
+        <i aria-hidden="true" class="pi pi-headphones invite-note-icon"></i>
       </div>
       <p class="invite-kicker">{{ providerLabel }} · 在线漫游</p>
       <h2 class="invite-title">听见为你而来的音乐</h2>
@@ -235,7 +236,7 @@ function playPersonalizedStream(section: RecSection | null): void {
         登录 {{ providerLabel }} 后，这里会加载此音源提供的个性化推荐与精选歌单。
       </p>
       <button type="button" class="invite-cta" @click="emit('requestLogin')">
-        <i class="pi pi-user"></i>
+        <i aria-hidden="true" class="pi pi-user"></i>
         登录 {{ providerLabel }}
       </button>
     </section>
@@ -257,13 +258,14 @@ function playPersonalizedStream(section: RecSection | null): void {
 
     <!-- ── Error ─────────────────────────────────────────────────────── -->
     <div v-else-if="recsError" class="home-error">
-      <span class="home-error-icon"><i class="pi pi-exclamation-triangle"></i></span>
-      <p class="home-error-title">推荐暂时走丢了</p>
-      <p class="home-error-hint">{{ recsError }}</p>
-      <button type="button" class="home-error-retry" @click="emit('loadRecommendations')">
-        <i class="pi pi-refresh"></i>
-        再试一次
-      </button>
+      <MessageBar intent="error" title="推荐加载失败" :dismissible="false">
+        {{ recsError }}
+        <template #actions>
+          <button type="button" class="hig-button" @click="emit('loadRecommendations')">
+            重新加载推荐
+          </button>
+        </template>
+      </MessageBar>
     </div>
 
     <!-- ── Content ───────────────────────────────────────────────────── -->
@@ -296,12 +298,12 @@ function playPersonalizedStream(section: RecSection | null): void {
             <p class="hero-desc">来自 {{ providerLabel }} 的个性化内容，随你的收听偏好持续更新。</p>
             <div class="hero-actions">
               <button type="button" class="hero-play" @click="playDailyAll">
-                <i class="pi pi-play"></i>
+                <i aria-hidden="true" class="pi pi-play"></i>
                 播放全部
               </button>
               <button type="button" class="hero-open" @click="openDaily">
                 查看全部
-                <i class="pi pi-arrow-right"></i>
+                <i aria-hidden="true" class="pi pi-arrow-right"></i>
               </button>
             </div>
           </div>
@@ -331,7 +333,7 @@ function playPersonalizedStream(section: RecSection | null): void {
               </div>
               <div v-else key="placeholder" class="hero-collage hero-collage-empty">
                 <span class="hero-collage-card hero-collage-card-0 hero-collage-placeholder">
-                  <i class="pi pi-calendar"></i>
+                  <i aria-hidden="true" class="pi pi-calendar"></i>
                 </span>
               </div>
             </Transition>
@@ -360,14 +362,16 @@ function playPersonalizedStream(section: RecSection | null): void {
               v-if="fmCovers.length === 0"
               class="duo-stack-cover duo-stack-cover-0 duo-stack-empty"
             >
-              <i class="pi pi-compass"></i>
+              <i aria-hidden="true" class="pi pi-compass"></i>
             </span>
           </span>
           <span class="duo-copy">
             <span class="duo-name">{{ fmSection.title }}</span>
             <span class="duo-sub">{{ providerLabel }} · 为你持续推荐</span>
           </span>
-          <span class="duo-arrow" aria-hidden="true"><i class="pi pi-arrow-right"></i></span>
+          <span class="duo-arrow" aria-hidden="true"
+            ><i aria-hidden="true" class="pi pi-arrow-right"></i
+          ></span>
         </button>
 
         <button
@@ -389,14 +393,16 @@ function playPersonalizedStream(section: RecSection | null): void {
               v-if="radarCovers.length === 0"
               class="duo-stack-cover duo-stack-cover-0 duo-stack-empty"
             >
-              <i class="pi pi-send"></i>
+              <i aria-hidden="true" class="pi pi-send"></i>
             </span>
           </span>
           <span class="duo-copy">
             <span class="duo-name">{{ radarSection.title }}</span>
             <span class="duo-sub">{{ providerLabel }} · 发现更多好音乐</span>
           </span>
-          <span class="duo-arrow" aria-hidden="true"><i class="pi pi-arrow-right"></i></span>
+          <span class="duo-arrow" aria-hidden="true"
+            ><i aria-hidden="true" class="pi pi-arrow-right"></i
+          ></span>
         </button>
       </section>
 
@@ -408,7 +414,7 @@ function playPersonalizedStream(section: RecSection | null): void {
           </div>
           <button type="button" class="section-more" @click="openDaily">
             完整歌单
-            <i class="pi pi-chevron-right"></i>
+            <i aria-hidden="true" class="pi pi-chevron-right"></i>
           </button>
         </header>
         <div class="chart-grid">
@@ -430,10 +436,14 @@ function playPersonalizedStream(section: RecSection | null): void {
                 :cover-source="track.coverSource"
                 alt=""
               />
-              <span v-else class="chart-cover-empty"><i class="pi pi-volume-up"></i></span>
+              <span v-else class="chart-cover-empty"
+                ><i aria-hidden="true" class="pi pi-volume-up"></i
+              ></span>
               <span class="chart-cover-action" aria-hidden="true">
-                <span v-if="isPlayingTrack(track)" class="chart-eq"> <i></i><i></i><i></i> </span>
-                <i v-else class="pi pi-play"></i>
+                <span v-if="isPlayingTrack(track)" class="chart-eq">
+                  <i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+                </span>
+                <i aria-hidden="true" v-else class="pi pi-play"></i>
               </span>
             </span>
             <span class="chart-meta">
@@ -468,16 +478,20 @@ function playPersonalizedStream(section: RecSection | null): void {
                 :cover-source="playlist.coverSmallSource || playlist.coverSource"
                 alt=""
               />
-              <span v-else class="shelf-cover-empty"><i class="pi pi-list"></i></span>
+              <span v-else class="shelf-cover-empty"
+                ><i aria-hidden="true" class="pi pi-list"></i
+              ></span>
               <span class="shelf-scrim" aria-hidden="true"></span>
               <span class="shelf-count">{{ playlist.trackCount }} 首</span>
-              <span class="shelf-open" aria-hidden="true"><i class="pi pi-play"></i></span>
+              <span class="shelf-open" aria-hidden="true"
+                ><i aria-hidden="true" class="pi pi-play"></i
+              ></span>
             </span>
             <span class="shelf-name">{{ playlist.name }}</span>
           </button>
         </div>
         <div v-else class="shelf-empty">
-          <i class="pi pi-list"></i>
+          <i aria-hidden="true" class="pi pi-list"></i>
           <span>暂无推荐歌单，稍后再来看看</span>
         </div>
       </section>

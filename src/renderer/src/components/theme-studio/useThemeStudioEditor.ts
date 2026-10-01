@@ -1,4 +1,6 @@
+import { confirmAction } from '../../app/useAppDialog.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { registerNavigationGuard } from '../../app/useNavigationGuard.ts'
 import {
   matchesStudioSearch,
   studioModeLabels,
@@ -479,51 +481,75 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
     historyIndex.value = history.value.length - 1
   }
 
+  async function confirmDiscardDraft(): Promise<boolean> {
+    if (!isDirty.value) return true
+    const accepted = await confirmAction({
+      title: '放弃主题修改？',
+      message: '尚未应用的修改将被放弃。当前已保存的主题会保留。',
+      confirmLabel: '放弃修改',
+      cancelLabel: '继续编辑',
+      destructive: true
+    })
+    return accepted
+  }
+
   async function selectBuiltIn(
     presetId: BuiltInThemePresetId = TWILIGHT_DEFAULT_THEME_ID
-  ): Promise<void> {
+  ): Promise<boolean> {
+    if (!(await confirmDiscardDraft())) return false
     previewScheduler.cancel()
     selectedKey.value = `preset:${presetId}`
     draft.value = null
     history.value = []
     historyIndex.value = -1
     await themeStore.previewTheme({ kind: 'builtin', id: presetId })
+    return true
   }
 
-  async function selectProfile(profile: ThemeProfileV2): Promise<void> {
+  async function selectProfile(profile: ThemeProfileV2): Promise<boolean> {
+    if (!(await confirmDiscardDraft())) return false
     previewScheduler.cancel()
     selectedKey.value = `profile:${profile.id}`
     draft.value = cloneProfile(profile)
     resetHistory(draft.value)
     await themeStore.preview(draft.value)
+    return true
   }
 
-  async function selectPlugin(theme: ThemeContribution): Promise<void> {
+  async function selectPlugin(theme: ThemeContribution): Promise<boolean> {
+    if (!(await confirmDiscardDraft())) return false
     previewScheduler.cancel()
     selectedKey.value = `plugin:${getPluginThemeKey(theme)}`
     draft.value = null
     history.value = []
     historyIndex.value = -1
     await themeStore.previewTheme({ kind: 'plugin', pluginId: theme.pluginId, themeId: theme.id })
+    return true
   }
 
   async function selectThemeKey(event: Event): Promise<void> {
-    const key = (event.target as HTMLSelectElement).value
-    if (key.startsWith('preset:')) {
-      const presetId = key.slice('preset:'.length)
-      if (getBuiltInThemePreset(presetId)) await selectBuiltIn(presetId as BuiltInThemePresetId)
-      return
-    }
-    if (key.startsWith('profile:')) {
-      const profile = profiles.value.find((entry) => `profile:${entry.id}` === key)
-      if (profile) await selectProfile(profile)
-      return
-    }
-    if (key.startsWith('plugin:')) {
-      const theme = themeContributions.value.find(
-        (entry) => `plugin:${getPluginThemeKey(entry)}` === key
-      )
-      if (theme) await selectPlugin(theme)
+    const select = event.target as HTMLSelectElement
+    const key = select.value
+    if (key === selectedKey.value) return
+    try {
+      if (key.startsWith('preset:')) {
+        const presetId = key.slice('preset:'.length)
+        if (getBuiltInThemePreset(presetId)) await selectBuiltIn(presetId as BuiltInThemePresetId)
+        return
+      }
+      if (key.startsWith('profile:')) {
+        const profile = profiles.value.find((entry) => `profile:${entry.id}` === key)
+        if (profile) await selectProfile(profile)
+        return
+      }
+      if (key.startsWith('plugin:')) {
+        const theme = themeContributions.value.find(
+          (entry) => `plugin:${getPluginThemeKey(entry)}` === key
+        )
+        if (theme) await selectPlugin(theme)
+      }
+    } finally {
+      select.value = selectedKey.value
     }
   }
 
@@ -581,7 +607,7 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
   }
 
   async function derivePreset(preset: ThemeProfileV2): Promise<void> {
-    await selectBuiltIn(preset.id as BuiltInThemePresetId)
+    if (!(await selectBuiltIn(preset.id as BuiltInThemePresetId))) return
     await duplicateSelected()
   }
 
@@ -1194,9 +1220,18 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
       localError.value = '请先应用主题后再删除'
       return
     }
-    if (!window.confirm(`删除主题“${draft.value.name}”？`)) return
+    if (
+      !(await confirmAction({
+        title: '删除主题？',
+        message: `删除“${draft.value.name}”后不能恢复。`,
+        confirmLabel: '删除',
+        destructive: true
+      }))
+    )
+      return
     try {
       await themeStore.deleteProfile(draft.value.id)
+      draft.value = null
       await selectBuiltIn()
     } catch (cause) {
       localError.value = cause instanceof Error ? cause.message : '主题删除失败'
@@ -1264,9 +1299,14 @@ export function useThemeStudioEditor(options: ThemeStudioEditorOptions) {
     return previewCleanup
   }
 
-  function closeStudio(): void {
-    if (isDirty.value && !window.confirm('放弃尚未应用的主题修改？')) return
-    void clearStudioPreview()
+  async function canLeaveStudio(): Promise<boolean> {
+    if (!(await confirmDiscardDraft())) return false
+    await clearStudioPreview()
+    return true
+  }
+  registerNavigationGuard(canLeaveStudio)
+  async function closeStudio(): Promise<void> {
+    if (!(await canLeaveStudio())) return
     options.onBack()
   }
 

@@ -141,6 +141,10 @@ test('late refresh cannot replace a newer detail or its loading state', async ()
 })
 
 function fixture() {
+  let markStarted!: () => void
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve
+  })
   let finish!: () => void
   let fail!: (error: Error) => void
   const pending = new Promise<void>((resolve, reject) => {
@@ -170,8 +174,9 @@ function fixture() {
     detailLoading: { value: false },
     captureNcmSession: () => () => bindings.sessionCurrent,
     isActiveDetailLoad: (token: number) => token === bindings.detailLoadToken,
-    window: { confirm: () => true },
+    confirmAction: async () => true,
     removeNcmTracksFromPlaylist: (id: string, tracks: number[]) => {
+      markStarted()
       requests.push({ id, tracks: [...tracks] })
       return pending
     },
@@ -195,6 +200,7 @@ function fixture() {
   return {
     bindings,
     remove,
+    started,
     finish,
     fail,
     errors,
@@ -212,6 +218,7 @@ test('playlist removal never edits B or dereferences a closed detail', async () 
   for (const destination of ['B', 'closed', 'provider', 'account']) {
     const f = fixture()
     const operation = f.remove([track(1)])
+    await f.started
     f.bindings.detailLoadToken++
     f.bindings.currentDetail.value = destination === 'closed' ? null : view('B')
     if (destination === 'provider') f.bindings.activeProvider.value = 'other'
@@ -229,6 +236,7 @@ test('playlist removal never edits B or dereferences a closed detail', async () 
 test('A -> B -> A refreshes current data instead of applying the old response', async () => {
   const f = fixture()
   const operation = f.remove([track(1)])
+  await f.started
   f.bindings.detailLoadToken += 2
   f.bindings.currentDetail.value = view('A')
   f.finish()
@@ -244,6 +252,7 @@ test('A -> B -> A refreshes current data instead of applying the old response', 
 test('removal updates the target navigation snapshot and deduplicates song IDs', async () => {
   const f = fixture()
   const operation = f.remove([track(1), track(1)])
+  await f.started
   const cached = { view: view('A'), snapshot: { tracks: [track(1), track(2), track(3)] } }
   f.bindings.detailStack.value.push(cached)
   f.bindings.detailLoadToken++
@@ -258,15 +267,39 @@ test('removal updates the target navigation snapshot and deduplicates song IDs',
 test('same-view success updates count once; stale errors do not contaminate B', async () => {
   const f = fixture()
   const operation = f.remove([track(1), track(1)])
+  await f.started
   f.finish()
   await operation
   assert.equal(f.bindings.currentDetail.value?.playlist.trackCount, 2)
   assert.equal(f.cleared, 1)
   const stale = fixture()
   const failed = stale.remove([track(1)])
+  await stale.started
   stale.bindings.detailLoadToken++
   stale.bindings.currentDetail.value = view('B')
   stale.fail(new Error('network error'))
   await failed
   assert.deepEqual(stale.errors, [])
+})
+
+test('playlist removal confirmation cannot cross a changed account or detail', async () => {
+  for (const destination of ['account', 'detail', 'cancel']) {
+    const f = fixture()
+    let confirm!: (value: boolean) => void
+    f.bindings.confirmAction = () =>
+      new Promise<boolean>((resolve) => {
+        confirm = resolve
+      })
+    const operation = f.remove([track(1)])
+    if (destination === 'account') f.bindings.sessionCurrent = false
+    if (destination === 'detail') {
+      f.bindings.currentDetail.value = view('B')
+      f.bindings.detailLoadToken++
+    }
+    confirm(destination !== 'cancel')
+    await operation
+    assert.deepEqual(f.requests, [])
+    assert.deepEqual(f.errors, [])
+    assert.equal(f.cleared, 0)
+  }
 })

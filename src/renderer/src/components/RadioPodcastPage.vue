@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import MessageBar from './hig/MessageBar.vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { onTabKeydown } from '../app/tabNavigation'
 import { useRadioStore, radioStationToTrack } from '../stores/useRadioStore'
 import { usePodcastStore, podcastEpisodeToTrack } from '../stores/usePodcastStore'
 import { usePlayerStore } from '../stores/usePlayerStore'
@@ -15,7 +17,26 @@ const stationName = ref('')
 const stationUrl = ref('')
 const allowHttp = ref(false)
 const formError = ref('')
+const errorTarget = ref<'station' | 'import' | 'directory' | 'feed' | 'refresh'>('station')
 const formBusy = ref(false)
+const errorAttempt = ref(0)
+const pageRoot = ref<HTMLElement | null>(null)
+async function recoverError(): Promise<void> {
+  errorAttempt.value++
+  if (formError.value) {
+    if (errorTarget.value === 'refresh') {
+      await refreshSelected()
+      return
+    }
+    formError.value = ''
+    await nextTick()
+    const form = pageRoot.value?.querySelector<HTMLElement>(
+      `[data-error-target="${errorTarget.value}"]`
+    )
+    if (form instanceof HTMLDetailsElement) form.open = true
+    form?.querySelector<HTMLInputElement>('input, textarea')?.focus()
+  } else await Promise.all([radio.ensureLoaded(), podcast.ensureLoaded()])
+}
 const playlistText = ref('')
 const directoryQuery = ref('')
 const directoryResults = ref<
@@ -47,6 +68,7 @@ onMounted(() => {
 })
 
 async function addStation(): Promise<void> {
+  errorTarget.value = 'station'
   formError.value = ''
   formBusy.value = true
   try {
@@ -71,6 +93,7 @@ async function addStation(): Promise<void> {
 }
 
 async function importPlaylist(): Promise<void> {
+  errorTarget.value = 'import'
   formError.value = ''
   formBusy.value = true
   try {
@@ -88,6 +111,7 @@ async function importPlaylist(): Promise<void> {
 }
 
 async function searchDirectory(): Promise<void> {
+  errorTarget.value = 'directory'
   formError.value = ''
   directoryBusy.value = true
   try {
@@ -109,6 +133,7 @@ async function addDirectoryStation(row: {
   homepage?: string
   tags: string[]
 }): Promise<void> {
+  errorTarget.value = 'directory'
   formError.value = ''
   formBusy.value = true
   try {
@@ -142,6 +167,7 @@ async function removeStation(id: string): Promise<void> {
 }
 
 async function subscribeFeed(): Promise<void> {
+  errorTarget.value = 'feed'
   formError.value = ''
   formBusy.value = true
   try {
@@ -156,6 +182,7 @@ async function subscribeFeed(): Promise<void> {
 }
 
 async function refreshSelected(): Promise<void> {
+  errorTarget.value = 'refresh'
   if (!selectedPodcastId.value) return
   formError.value = ''
   try {
@@ -211,46 +238,75 @@ function formatDuration(seconds: number): string {
 </script>
 
 <template>
-  <div class="radio-podcast-page">
+  <div ref="pageRoot" class="radio-podcast-page">
     <header class="page-header">
       <div class="page-heading">
         <span class="page-kicker">ONLINE LISTENING</span>
         <h1>电台与播客</h1>
         <p>把正在听的内容放在前面，用轻量工具补充新的电台和播客。</p>
       </div>
-      <div class="tabs" role="tablist" aria-label="在线音频类型">
+      <div class="tabs" role="tablist" aria-label="在线音频类型" @keydown="onTabKeydown">
         <button
           type="button"
           role="tab"
           :aria-selected="tab === 'radio'"
+          id="radio-tab"
+          aria-controls="radio-panel"
+          :tabindex="tab === 'radio' ? 0 : -1"
           :class="{ active: tab === 'radio' }"
           @click="tab = 'radio'"
         >
-          <i class="pi pi-broadcast"></i>
+          <i aria-hidden="true" class="pi pi-broadcast"></i>
           电台
         </button>
         <button
           type="button"
           role="tab"
           :aria-selected="tab === 'podcast'"
+          id="podcast-tab"
+          aria-controls="podcast-panel"
+          :tabindex="tab === 'podcast' ? 0 : -1"
           :class="{ active: tab === 'podcast' }"
           @click="tab = 'podcast'"
         >
-          <i class="pi pi-microphone"></i>
+          <i aria-hidden="true" class="pi pi-microphone"></i>
           播客
         </button>
       </div>
     </header>
 
-    <p v-if="formError || radio.error.value || podcast.error.value" class="page-error" role="alert">
+    <MessageBar
+      v-if="formError || radio.error.value || podcast.error.value"
+      :key="errorAttempt"
+      id="radio-error-message"
+      intent="error"
+    >
       {{ formError || radio.error.value || podcast.error.value }}
-    </p>
+      <template #actions
+        ><button class="hig-button" :disabled="formBusy" @click="recoverError">
+          {{ formError && errorTarget !== 'refresh' ? '检查输入' : '重新加载' }}
+        </button></template
+      >
+    </MessageBar>
 
-    <section v-if="tab === 'radio'" class="radio-workspace">
+    <section
+      v-if="tab === 'radio'"
+      id="radio-panel"
+      role="tabpanel"
+      aria-labelledby="radio-tab"
+      class="radio-workspace"
+    >
       <aside class="radio-tools" aria-label="电台工具">
-        <section class="tool-card">
+        <details
+          class="tool-card"
+          data-error-target="station"
+          :aria-describedby="
+            formError && errorTarget === 'station' ? 'radio-error-message' : undefined
+          "
+        >
+          <summary>添加电台</summary>
           <div class="card-heading">
-            <span class="card-icon"><i class="pi pi-plus"></i></span>
+            <span class="card-icon"><i aria-hidden="true" class="pi pi-plus"></i></span>
             <div>
               <h2>添加电台</h2>
               <p>输入名称和直播流地址，保存后即可播放。</p>
@@ -286,11 +342,12 @@ function formatDuration(seconds: number): string {
           >
             添加到我的电台
           </button>
-        </section>
+        </details>
 
-        <section class="tool-card tool-card-muted">
+        <details class="tool-card tool-card-muted" data-error-target="import">
+          <summary>导入播放列表</summary>
           <div class="card-heading">
-            <span class="card-icon"><i class="pi pi-upload"></i></span>
+            <span class="card-icon"><i aria-hidden="true" class="pi pi-upload"></i></span>
             <div>
               <h2>导入播放列表</h2>
               <p>粘贴 M3U 或 PLS 内容，批量导入电台。</p>
@@ -298,6 +355,10 @@ function formatDuration(seconds: number): string {
           </div>
           <textarea
             v-model="playlistText"
+            aria-label="电台播放列表内容"
+            :aria-describedby="
+              formError && errorTarget === 'import' ? 'radio-error-message' : undefined
+            "
             rows="4"
             placeholder="#EXTM3U&#10;#EXTINF:-1,Station&#10;https://example/stream"
           ></textarea>
@@ -308,11 +369,12 @@ function formatDuration(seconds: number): string {
           >
             导入列表
           </button>
-        </section>
+        </details>
 
-        <section class="tool-card discovery-card">
+        <details class="tool-card discovery-card" data-error-target="directory">
+          <summary>发现电台</summary>
           <div class="card-heading">
-            <span class="card-icon"><i class="pi pi-search"></i></span>
+            <span class="card-icon"><i aria-hidden="true" class="pi pi-search"></i></span>
             <div>
               <h2>发现电台</h2>
               <p>从 radio-browser.info 搜索新的直播流。</p>
@@ -321,6 +383,10 @@ function formatDuration(seconds: number): string {
           <div class="inline-search">
             <input
               v-model="directoryQuery"
+              aria-label="搜索电台目录"
+              :aria-describedby="
+                formError && errorTarget === 'directory' ? 'radio-error-message' : undefined
+              "
               type="search"
               placeholder="jazz / 中文 / BBC"
               maxlength="120"
@@ -351,7 +417,7 @@ function formatDuration(seconds: number): string {
               </button>
             </li>
           </ul>
-        </section>
+        </details>
       </aside>
 
       <section class="station-collection" aria-labelledby="station-library-title">
@@ -366,7 +432,7 @@ function formatDuration(seconds: number): string {
         <div v-if="radio.stations.value.length > 0" class="station-grid">
           <article v-for="station in radio.stations.value" :key="station.id" class="station-card">
             <div class="station-main">
-              <span class="station-icon"><i class="pi pi-broadcast"></i></span>
+              <span class="station-icon"><i aria-hidden="true" class="pi pi-broadcast"></i></span>
               <div>
                 <strong>{{ station.name }}</strong>
                 <small>{{ station.streamUrl }}</small>
@@ -375,7 +441,7 @@ function formatDuration(seconds: number): string {
             </div>
             <div class="station-actions">
               <button type="button" class="primary" @click="playStation(station.id)">
-                <i class="pi pi-play"></i>
+                <i aria-hidden="true" class="pi pi-play"></i>
                 播放
               </button>
               <button type="button" class="quiet-button" @click="removeStation(station.id)">
@@ -385,17 +451,23 @@ function formatDuration(seconds: number): string {
           </article>
         </div>
         <div v-else class="collection-empty">
-          <span class="empty-icon"><i class="pi pi-broadcast"></i></span>
+          <span class="empty-icon"><i aria-hidden="true" class="pi pi-broadcast"></i></span>
           <h3>还没有收藏的电台</h3>
           <p>从左侧手动添加、导入播放列表，或搜索发现新的电台。</p>
         </div>
       </section>
     </section>
 
-    <section v-else class="podcast-workspace">
-      <section class="podcast-subscribe-card">
+    <section
+      v-else
+      id="podcast-panel"
+      role="tabpanel"
+      aria-labelledby="podcast-tab"
+      class="podcast-workspace"
+    >
+      <section class="podcast-subscribe-card" data-error-target="feed">
         <div class="card-heading">
-          <span class="card-icon"><i class="pi pi-rss"></i></span>
+          <span class="card-icon"><i aria-hidden="true" class="pi pi-rss"></i></span>
           <div>
             <h2>订阅播客</h2>
             <p>输入 RSS 或 Atom 地址，将新内容收进你的订阅列表。</p>
@@ -406,6 +478,9 @@ function formatDuration(seconds: number): string {
           <input
             id="podcast-feed-url"
             v-model="feedUrl"
+            :aria-describedby="
+              formError && errorTarget === 'feed' ? 'radio-error-message' : undefined
+            "
             type="url"
             placeholder="https://example.com/feed.xml"
           />
@@ -440,10 +515,15 @@ function formatDuration(seconds: number): string {
               data-te-interactive
               @click="selectedPodcastId = sub.id"
             >
-              <div>
+              <button
+                type="button"
+                class="subscription-select"
+                :aria-pressed="selectedPodcastId === sub.id"
+                @click.stop="selectedPodcastId = sub.id"
+              >
                 <strong>{{ sub.title }}</strong>
                 <small>{{ sub.episodes.length }} 集</small>
-              </div>
+              </button>
               <button type="button" class="linkish" @click.stop="unsubscribePodcast(sub.id)">
                 取消订阅
               </button>
@@ -463,7 +543,7 @@ function formatDuration(seconds: number): string {
               </p>
             </div>
             <button type="button" :disabled="podcast.busy.value" @click="refreshSelected">
-              <i class="pi pi-refresh"></i>
+              <i aria-hidden="true" class="pi pi-refresh"></i>
               刷新
             </button>
           </div>
@@ -484,7 +564,7 @@ function formatDuration(seconds: number): string {
                   class="primary"
                   @click="playEpisode(selectedPodcast, episode.guid)"
                 >
-                  <i class="pi pi-play"></i>
+                  <i aria-hidden="true" class="pi pi-play"></i>
                   播放
                 </button>
               </div>
@@ -495,7 +575,7 @@ function formatDuration(seconds: number): string {
           </ul>
         </section>
         <div v-else class="episode-empty">
-          <span class="empty-icon"><i class="pi pi-microphone"></i></span>
+          <span class="empty-icon"><i aria-hidden="true" class="pi pi-microphone"></i></span>
           <h2>选择一个播客</h2>
           <p>从左侧订阅列表选择播客，查看最新剧集并开始播放。</p>
         </div>
@@ -985,7 +1065,15 @@ button.primary {
   border-color: color-mix(in srgb, var(--te-primary-500) 32%, transparent);
   background: color-mix(in srgb, var(--te-primary-500) 10%, transparent);
 }
-.subscription-list li > div {
+.subscription-select {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  flex: 1;
   min-width: 0;
 }
 .subscription-list strong {

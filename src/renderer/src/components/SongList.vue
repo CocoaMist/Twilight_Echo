@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { confirmAction } from '../app/useAppDialog.ts'
+import SearchScopeSelect from './hig/SearchScopeSelect.vue'
+
+import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+const { pushNotice } = useAppNoticeStore()
 import { useHoldReorder } from '@renderer/composables/useHoldReorder'
 import NativeContextMenu from '@renderer/components/NativeContextMenu.vue'
 import { useLocalPlaylistOrder } from '@renderer/components/song-list/useLocalPlaylistOrder'
@@ -70,6 +75,7 @@ const LibraryInboxDialog = defineAsyncComponent(
   () => import('@renderer/components/library-inbox/LibraryInboxDialog.vue')
 )
 import ThemeIcon from './ThemeIcon.vue'
+import ImportDialog from './ImportDialog.vue'
 import { formatDuration } from './song-list/formatDuration'
 import type { GridItem } from './song-list/types'
 import { useSongListContextMenu } from './song-list/useSongListContextMenu'
@@ -85,6 +91,7 @@ const props = defineProps<{
   hasPlayer: boolean
   transitionName: 'page-down' | 'page-up'
   previewTracks?: Track[]
+  active?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -127,7 +134,8 @@ const {
 const playbackStore = usePlayerStore()
 const settingsStore = useSettingsStore()
 const { currentTrack } = playbackStore
-const { playTrack, playTrackFromPosition, setPlayMode, playNextTrack } = playbackStore
+const { playTrack, playTrackFromPosition, setPlayMode, playNextTrack, appendQueueTracks } =
+  playbackStore
 const playbackBookmarks = usePlaybackBookmarks()
 void playbackBookmarks.ensureLoaded()
 const mediaProviders = useMediaProviders()
@@ -137,9 +145,30 @@ const { listeningStats } = useListeningStatsStore()
 const EMPTY_LAST_PLAYED_BY_TRACK_ID: ReadonlyMap<string, number> = new Map()
 
 const { searchQuery, debouncedSearchQuery, searchInputFocused } = useSongListSearch()
+const showImportDialog = ref(false)
+const emptyLibraryMessage = computed(() =>
+  searchQuery.value.trim()
+    ? '没有符合搜索条件的歌曲'
+    : props.category === 'recent'
+      ? '还没有播放记录'
+      : props.filter
+        ? '这个集合还没有歌曲'
+        : tracks.value.length === 0
+          ? '音乐库还是空的'
+          : '没有符合筛选条件的歌曲'
+)
+const emptyLibraryHint = computed(() =>
+  searchQuery.value.trim()
+    ? '清除搜索后可查看其他歌曲。'
+    : props.category === 'recent'
+      ? '播放音乐后，会在这里显示记录。'
+      : tracks.value.length === 0 && !props.filter
+        ? '导入音乐文件或文件夹，开始建立音乐库。'
+        : '尝试清除筛选，或向这个集合添加歌曲。'
+)
 
 // ─── Recent playback source selector ──────────────────────────────────────
-const recentSource = ref('local')
+const recentSource = ref('all')
 const recentSourceMenuOpen = ref(false)
 
 const recentSourceOptions = computed(() => {
@@ -550,7 +579,10 @@ const showDetailBackButton = computed(() => {
 // The title-bar back button clears the active filter (same action as the old
 // in-page back button's selectView emit). SongList unmounts whenever another
 // full-screen surface takes over, so this layer always cleans itself up.
-useBackHandler(showDetailBackButton, () => emit('selectView', props.category, null))
+useBackHandler(
+  computed(() => props.active !== false && showDetailBackButton.value),
+  () => emit('selectView', props.category, null)
+)
 
 const showGrid = computed(() => {
   if (props.category === 'allSongs' || props.category === 'recent') return false
@@ -942,7 +974,10 @@ function onAggregatePlaylistCreated(_playlistId: string, addedCount: number): vo
   repairMessage.value = addedCount > 0 ? `已创建聚合歌单并加入 ${addedCount} 首` : '已创建聚合歌单'
 }
 
-useEscapeToClose(showContextMenu, closeContextMenu)
+useEscapeToClose(
+  computed(() => props.active !== false && showContextMenu.value),
+  closeContextMenu
+)
 
 const {
   containerRef,
@@ -977,7 +1012,7 @@ void tbodyRef.value
 const multiSelect = useTrackMultiSelect({
   tracks: displayTracks,
   resetSources: [() => props.category, () => props.filter, debouncedSearchQuery, recentSource],
-  enabled: showTable
+  enabled: computed(() => props.active !== false && showTable.value)
 })
 
 const { selectedCount, hasSelection, isSelected, clearSelection, toggle, getSelectedTracks } =
@@ -1048,6 +1083,79 @@ function onTrackContextMenu(event: MouseEvent, track: Track): void {
   onContextMenu(event, track)
 }
 
+const focusedTrackId = ref<string | null>(null)
+watch(
+  displayTracks,
+  (tracks) => {
+    if (!tracks.some((track) => track.id === focusedTrackId.value))
+      focusedTrackId.value = tracks[0]?.id ?? null
+  },
+  { immediate: true }
+)
+
+async function onTrackRowKeydown(event: KeyboardEvent, track: Track, index: number): Promise<void> {
+  if (event.target !== event.currentTarget || event.isComposing) return
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (track.source === 'network') void playNetworkTrack(track)
+    else playTrack(track, displayTracks.value)
+    return
+  }
+  if (event.code === 'Space') {
+    event.preventDefault()
+    event.stopPropagation()
+    toggle(track.id, index)
+    return
+  }
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    onTrackContextMenu(
+      new MouseEvent('contextmenu', {
+        clientX: rect.left + 24,
+        clientY: rect.top + rect.height / 2
+      }),
+      track
+    )
+    return
+  }
+  const destination =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? displayTracks.value.length - 1
+        : event.key === 'ArrowDown'
+          ? index + 1
+          : event.key === 'ArrowUp'
+            ? index - 1
+            : null
+  if (destination === null) return
+  event.preventDefault()
+  event.stopPropagation()
+  const nextIndex = Math.max(0, Math.min(displayTracks.value.length - 1, destination))
+  const nextTrack = displayTracks.value[nextIndex]
+  if (!nextTrack) return
+  if (event.shiftKey) {
+    if (!hasSelection.value) multiSelect.selectOnly(track.id, index)
+    multiSelect.selectRange(nextIndex)
+  }
+  focusedTrackId.value = nextTrack.id
+  if (nextIndex < visibleRange.value.start || nextIndex >= visibleRange.value.end) {
+    const top = Math.max(
+      0,
+      nextIndex * rowHeight + (tbodyRef.value?.offsetTop ?? 0) - viewportHeight.value / 2
+    )
+    if (containerRef.value) containerRef.value.scrollTop = top
+    scrollTop.value = top
+  }
+  await nextTick()
+  containerRef.value
+    ?.querySelector<HTMLElement>(`[data-track-index="${nextIndex}"]`)
+    ?.focus({ preventScroll: true })
+}
+
 function customizeLibraryAppearance(): void {
   closeContextMenu()
   emit('customizeAppearance')
@@ -1064,6 +1172,10 @@ const contextActionTracks = computed(() =>
       : []
 )
 const contextActionCount = computed(() => contextActionTracks.value.length)
+function handleContextAddToTail(): void {
+  appendQueueTracks(contextActionTracks.value)
+  closeContextMenu()
+}
 const contextActionLabel = computed(() =>
   contextActionCount.value > 1 ? ` (${contextActionCount.value})` : ''
 )
@@ -1099,17 +1211,23 @@ async function runLocalLibraryRemoval(
   if (selected.length === 0) return
   if (
     mode === 'library' &&
-    !window.confirm(
-      `确定从音乐库移除选中的 ${selected.length} 首？\n文件仍保留在磁盘，不会删除；可在「已从音乐库移除」中恢复。`
-    )
+    !(await confirmAction({
+      title: '移除所选音乐？',
+      message: `确定从音乐库移除选中的 ${selected.length} 首？\n文件仍保留在磁盘，不会删除；可在「已从音乐库移除」中恢复。`,
+      confirmLabel: '移除',
+      destructive: true
+    }))
   ) {
     return
   }
   if (
     mode === 'trash' &&
-    !window.confirm(
-      `确定将选中的 ${selected.length} 个本地文件移到系统回收站吗？失败的文件会继续保留在音乐库中。`
-    )
+    !(await confirmAction({
+      title: '移除所选音乐？',
+      message: `确定将选中的 ${selected.length} 个本地文件移到系统回收站吗？失败的文件会继续保留在音乐库中。`,
+      confirmLabel: '移除',
+      destructive: true
+    }))
   ) {
     return
   }
@@ -1126,7 +1244,7 @@ async function runLocalLibraryRemoval(
         .slice(0, 8)
         .map((failure) => `${failure.filePath}\n${failure.message}`)
         .join('\n\n')
-      window.alert(`${action}未全部完成：\n\n${details}`)
+      pushNotice({ kind: 'error', message: `${action}未全部完成：\n\n${details}` })
     }
     clearSelection()
     closeContextMenu()
@@ -1450,6 +1568,7 @@ function finishViewSwitchAndRestoreScroll(): void {
     :style="{ height: '100vh' }"
     @scroll="onSongListScroll"
   >
+    <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
     <TrackInfoDialog v-if="infoTrack" :track="infoTrack" @close="infoTrack = null" />
     <Transition
       :name="localTransitionName"
@@ -1679,6 +1798,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     :class="{ 'default-playlist-cover': playlist.isDefault }"
                   >
                     <i
+                      aria-hidden="true"
                       :class="playlist.isDefault ? 'pi pi-heart' : 'pi pi-list'"
                       style="font-size: calc(var(--te-font-size-body, 14px) * 32 / 14); color: #ccc"
                     ></i>
@@ -1696,6 +1816,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     @click="handleDeletePlaylist(playlist.id || '', $event)"
                   >
                     <i
+                      aria-hidden="true"
                       class="pi pi-trash"
                       style="font-size: calc(var(--te-font-size-body, 14px) * 12 / 14)"
                     ></i>
@@ -1733,6 +1854,9 @@ function finishViewSwitchAndRestoreScroll(): void {
             </div>
             <nav v-if="isCollectionGrid" class="az-index" aria-label="A-Z 快捷索引">
               <button
+                :aria-label="
+                  collectionLetterDisabled(letter) ? `${letter} 暂无内容` : `跳转到 ${letter}`
+                "
                 v-for="letter in AZ_INDEX_LETTERS"
                 :key="letter"
                 type="button"
@@ -1799,6 +1923,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                 :class="{ open: libraryToolsMenuOpen }"
               >
                 <button
+                  aria-label="重复检查与已移除管理"
                   type="button"
                   class="excluded-tracks-trigger library-tools-trigger"
                   ref="libraryToolsTrigger"
@@ -1808,12 +1933,13 @@ function finishViewSwitchAndRestoreScroll(): void {
                   @click="libraryToolsMenuOpen = !libraryToolsMenuOpen"
                   @blur="closeLibraryToolsMenuDelayed"
                 >
-                  <i class="pi pi-sitemap"></i>
+                  <i aria-hidden="true" class="pi pi-sitemap"></i>
                   <span>库管理</span>
                   <span v-if="excludedTracks.length > 0" class="library-tools-badge">{{
                     excludedTracks.length
                   }}</span>
                   <i
+                    aria-hidden="true"
                     class="pi pi-chevron-down"
                     style="font-size: calc(var(--te-font-size-body, 14px) * 10 / 14)"
                   ></i>
@@ -1850,7 +1976,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     role="menuitem"
                     @mousedown.prevent="openLibraryDuplicates"
                   >
-                    <i class="pi pi-copy"></i>
+                    <i aria-hidden="true" class="pi pi-copy"></i>
                     <span>重复检查</span>
                   </button>
                   <button
@@ -1859,7 +1985,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     role="menuitem"
                     @mousedown.prevent="openLibraryExcluded"
                   >
-                    <i class="pi pi-ban"></i>
+                    <i aria-hidden="true" class="pi pi-ban"></i>
                     <span>已移除 {{ excludedTracks.length }}</span>
                   </button>
                 </div>
@@ -1875,11 +2001,13 @@ function finishViewSwitchAndRestoreScroll(): void {
                   @blur="closeRecentSourceMenuDelayed"
                 >
                   <i
+                    aria-hidden="true"
                     class="pi pi-bolt"
                     style="font-size: calc(var(--te-font-size-body, 14px) * 13 / 14)"
                   ></i>
                   <span>{{ activeRecentSourceLabel }}</span>
                   <i
+                    aria-hidden="true"
                     class="pi pi-chevron-down"
                     style="font-size: calc(var(--te-font-size-body, 14px) * 10 / 14)"
                   ></i>
@@ -1893,12 +2021,14 @@ function finishViewSwitchAndRestoreScroll(): void {
                     @mousedown.prevent="selectRecentSource(opt.id)"
                   >
                     <i
+                      aria-hidden="true"
                       class="pi"
                       :class="opt.icon"
                       style="font-size: calc(var(--te-font-size-body, 14px) * 13 / 14)"
                     ></i>
                     <span>{{ opt.label }}</span>
                     <i
+                      aria-hidden="true"
                       v-if="recentSource === opt.id"
                       class="pi pi-check"
                       style="
@@ -1916,6 +2046,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                 aria-label="媒体库排序和过滤"
               >
                 <button
+                  aria-label="筛选器"
                   type="button"
                   class="library-filter-trigger"
                   :class="{ active: libraryFilterPanelOpen || activeLibraryFilterCount > 0 }"
@@ -1934,6 +2065,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     {{ activeLibraryFilterCount }}
                   </span>
                   <i
+                    aria-hidden="true"
                     class="pi pi-chevron-down"
                     style="font-size: calc(var(--te-font-size-body, 14px) * 10 / 14)"
                   ></i>
@@ -2091,15 +2223,15 @@ function finishViewSwitchAndRestoreScroll(): void {
                   </div>
                 </div>
               </div>
-              <label
+              <SearchScopeSelect
                 v-if="showOnlineSearchToggle"
-                class="online-search-toggle"
-                title="搜索网络歌曲"
-              >
-                <span>网络搜索</span>
-                <input v-model="searchOnlineSongs" type="checkbox" aria-label="搜索网络歌曲" />
-                <span class="online-search-toggle-track" aria-hidden="true"></span>
-              </label>
+                :model-value="searchOnlineSongs ? 'all' : 'local'"
+                :options="[
+                  { id: 'local', label: '当前音乐库' },
+                  { id: 'all', label: '全部来源' }
+                ]"
+                @update:model-value="searchOnlineSongs = $event === 'all'"
+              />
               <div class="search-box" :class="{ focused: searchInputFocused }">
                 <ThemeIcon class="search-icon" icon-slot="library.search" />
                 <input
@@ -2118,23 +2250,25 @@ function finishViewSwitchAndRestoreScroll(): void {
           </div>
           <div class="library-play-actions" aria-label="播放控制">
             <button
+              aria-label="播放全部"
               type="button"
               class="btn-play-all"
               title="播放全部"
               :disabled="displayTracks.length === 0"
               @click="playAllTracks"
             >
-              <i class="ph ph-play"></i>
+              <i aria-hidden="true" class="ph ph-play"></i>
               <span>播放全部</span>
             </button>
             <button
+              aria-label="随机播放"
               type="button"
               class="btn-shuffle-all"
               title="随机播放"
               :disabled="displayTracks.length === 0"
               @click="shufflePlayTracks"
             >
-              <i class="ph ph-shuffle"></i>
+              <i aria-hidden="true" class="ph ph-shuffle"></i>
               <span>随机播放</span>
             </button>
           </div>
@@ -2145,6 +2279,7 @@ function finishViewSwitchAndRestoreScroll(): void {
           >
             <div class="unified-search-summary">
               <i
+                aria-hidden="true"
                 :class="
                   unifiedSearch.loading.value
                     ? 'pi pi-spin pi-spinner'
@@ -2171,8 +2306,25 @@ function finishViewSwitchAndRestoreScroll(): void {
             <div class="empty-icon">
               <ThemeIcon class="empty-library-icon" icon-slot="library.empty" />
             </div>
-            <p class="empty-text">暂无内容</p>
-            <p class="empty-hint">通过左侧菜单「歌单 → 添加文件夹」导入音乐</p>
+            <p class="empty-text">{{ emptyLibraryMessage }}</p>
+            <p class="empty-hint">{{ emptyLibraryHint }}</p>
+            <button
+              v-if="category !== 'recent' && !filter && tracks.length === 0"
+              class="hig-button hig-button-primary"
+              @click="showImportDialog = true"
+            >
+              导入音乐
+            </button>
+            <button v-else-if="searchQuery.trim()" class="hig-button" @click="searchQuery = ''">
+              清除搜索
+            </button>
+            <button
+              v-else-if="category !== 'recent' && tracks.length > 0 && !filter"
+              class="hig-button"
+              @click="resetLibraryFilters"
+            >
+              清除筛选
+            </button>
           </div>
           <div v-else class="track-table-wrapper">
             <div v-if="hasSelection" class="selection-toolbar">
@@ -2196,7 +2348,10 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <span>响度分析</span>
                 </button>
                 <button type="button" class="selection-btn" @click="handleToolbarFavorite">
-                  <i :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+                  <i
+                    aria-hidden="true"
+                    :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"
+                  ></i>
                   <span>{{ selectionAllFavorited ? '取消收藏' : '加入收藏' }}</span>
                 </button>
                 <button
@@ -2206,7 +2361,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   :disabled="libraryMutationPending"
                   @click="openTagManager('edit')"
                 >
-                  <i class="pi pi-tag"></i>
+                  <i aria-hidden="true" class="pi pi-tag"></i>
                   <span>编辑标签{{ localSelectionActionLabel }}</span>
                 </button>
                 <button
@@ -2215,7 +2370,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   class="selection-btn"
                   @click="handleBatchRemoveFromPlaylist"
                 >
-                  <i class="pi pi-minus-circle"></i>
+                  <i aria-hidden="true" class="pi pi-minus-circle"></i>
                   <span>从歌单移除</span>
                 </button>
                 <button
@@ -2224,7 +2379,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   class="selection-btn"
                   @click="handleMoveSelectedWithinPlaylist(false)"
                 >
-                  <i class="pi pi-angle-double-up"></i>
+                  <i aria-hidden="true" class="pi pi-angle-double-up"></i>
                   <span>移到开头</span>
                 </button>
                 <button
@@ -2233,7 +2388,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   class="selection-btn"
                   @click="handleMoveSelectedWithinPlaylist(true)"
                 >
-                  <i class="pi pi-angle-double-down"></i>
+                  <i aria-hidden="true" class="pi pi-angle-double-down"></i>
                   <span>移到末尾</span>
                 </button>
                 <button
@@ -2242,7 +2397,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   class="selection-btn"
                   @click="handleMoveSelectedToPlaylist"
                 >
-                  <i class="pi pi-arrow-right-arrow-left"></i>
+                  <i aria-hidden="true" class="pi pi-arrow-right-arrow-left"></i>
                   <span>移动到歌单</span>
                 </button>
                 <button
@@ -2252,7 +2407,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   :disabled="libraryMutationPending"
                   @click="handleToolbarRemoveFromLibrary"
                 >
-                  <i class="pi pi-minus-circle"></i>
+                  <i aria-hidden="true" class="pi pi-minus-circle"></i>
                   <span>从音乐库移除</span>
                 </button>
                 <button
@@ -2262,11 +2417,11 @@ function finishViewSwitchAndRestoreScroll(): void {
                   :disabled="libraryMutationPending"
                   @click="handleToolbarMoveToTrash"
                 >
-                  <i class="pi pi-trash"></i>
+                  <i aria-hidden="true" class="pi pi-trash"></i>
                   <span>移到回收站</span>
                 </button>
                 <button type="button" class="selection-btn ghost" @click="clearSelection">
-                  <i class="pi pi-times"></i>
+                  <i aria-hidden="true" class="pi pi-times"></i>
                   <span>取消</span>
                 </button>
               </div>
@@ -2296,6 +2451,12 @@ function finishViewSwitchAndRestoreScroll(): void {
                   v-for="(track, index) in visibleTracks"
                   :key="track.id"
                   class="track-row"
+                  :data-track-index="absoluteIndex(Number(index))"
+                  :tabindex="focusedTrackId === track.id ? 0 : -1"
+                  :aria-label="`${track.title}，${track.artist}。Enter 播放，空格选择，Shift+F10 更多操作`"
+                  :aria-selected="isSelected(track.id)"
+                  @focus="focusedTrackId = track.id"
+                  @keydown="onTrackRowKeydown($event, track, absoluteIndex(Number(index)))"
                   data-te-interactive
                   :class="{
                     'track-playing': currentTrack?.id === track.id,
@@ -2437,8 +2598,17 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handlePlayNext"
                 >
-                  <i class="pi pi-step-forward"></i>
+                  <i aria-hidden="true" class="pi pi-step-forward"></i>
                   <span>下一首播放</span>
+                </div>
+                <div
+                  v-if="selectedTrack"
+                  class="menu-item"
+                  data-te-interactive
+                  @click="handleContextAddToTail"
+                >
+                  <i class="pi pi-plus" aria-hidden="true"></i
+                  ><span>加入队尾{{ contextActionLabel }}</span>
                 </div>
                 <div
                   v-if="
@@ -2450,7 +2620,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleViewArtist"
                 >
-                  <i class="ph ph-microphone-stage"></i>
+                  <i aria-hidden="true" class="ph ph-microphone-stage"></i>
                   <span>查看歌手</span>
                 </div>
                 <div
@@ -2461,7 +2631,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleViewAlbum"
                 >
-                  <i class="ph ph-disc"></i>
+                  <i aria-hidden="true" class="ph ph-disc"></i>
                   <span>查看专辑</span>
                 </div>
                 <div
@@ -2470,7 +2640,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleContextRemoveFromLibrary"
                 >
-                  <i class="pi pi-minus-circle"></i>
+                  <i aria-hidden="true" class="pi pi-minus-circle"></i>
                   <span>从音乐库移除{{ contextLocalActionLabel }}</span>
                 </div>
                 <div
@@ -2479,7 +2649,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleContextMoveToTrash"
                 >
-                  <i class="pi pi-trash"></i>
+                  <i aria-hidden="true" class="pi pi-trash"></i>
                   <span>移到回收站{{ contextLocalActionLabel }}</span>
                 </div>
                 <div
@@ -2488,11 +2658,14 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleContextRemoveFromPlaylist"
                 >
-                  <i class="pi pi-minus-circle"></i>
+                  <i aria-hidden="true" class="pi pi-minus-circle"></i>
                   <span>从歌单移除{{ contextActionLabel }}</span>
                 </div>
                 <div class="menu-item" data-te-interactive @click="handleContextFavorite">
-                  <i :class="contextAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+                  <i
+                    aria-hidden="true"
+                    :class="contextAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"
+                  ></i>
                   <span
                     >{{ contextAllFavorited ? '取消收藏' : '加入收藏'
                     }}{{ contextActionLabel }}</span
@@ -2504,7 +2677,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleRematchTrack"
                 >
-                  <i class="pi pi-refresh"></i>
+                  <i aria-hidden="true" class="pi pi-refresh"></i>
                   <span>重新匹配音源</span>
                 </div>
                 <div
@@ -2513,7 +2686,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleRematchMetadata"
                 >
-                  <i class="pi pi-sync"></i>
+                  <i aria-hidden="true" class="pi pi-sync"></i>
                   <span>重新匹配流媒体元数据</span>
                 </div>
                 <div
@@ -2522,7 +2695,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleClearMetadataMatch"
                 >
-                  <i class="pi pi-times-circle"></i>
+                  <i aria-hidden="true" class="pi pi-times-circle"></i>
                   <span>取消流媒体匹配</span>
                 </div>
                 <div
@@ -2531,7 +2704,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleOpenFolder"
                 >
-                  <i class="pi pi-folder-open"></i>
+                  <i aria-hidden="true" class="pi pi-folder-open"></i>
                   <span>打开文件所在位置</span>
                 </div>
                 <div
@@ -2540,7 +2713,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   data-te-interactive
                   @click="handleContinueFromBookmark"
                 >
-                  <i class="pi pi-bookmark"></i>
+                  <i aria-hidden="true" class="pi pi-bookmark"></i>
                   <span>从书签继续</span>
                 </div>
                 <div
@@ -2548,9 +2721,9 @@ function finishViewSwitchAndRestoreScroll(): void {
                   @mouseenter="showPlaylistSubmenu = true"
                   @mouseleave="showPlaylistSubmenu = false"
                 >
-                  <i class="pi pi-plus"></i>
+                  <i aria-hidden="true" class="pi pi-plus"></i>
                   <span>加入到歌单{{ contextActionLabel }}</span>
-                  <i class="pi pi-chevron-right submenu-icon"></i>
+                  <i aria-hidden="true" class="pi pi-chevron-right submenu-icon"></i>
 
                   <div class="submenu">
                     <div
@@ -2559,6 +2732,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                       @click="handleContextCreatePlaylist"
                     >
                       <i
+                        aria-hidden="true"
                         class="pi pi-plus"
                         style="
                           font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
@@ -2586,9 +2760,9 @@ function finishViewSwitchAndRestoreScroll(): void {
                   @mouseenter="showAggregateSubmenu = true"
                   @mouseleave="showAggregateSubmenu = false"
                 >
-                  <i class="pi pi-sitemap"></i>
+                  <i aria-hidden="true" class="pi pi-sitemap"></i>
                   <span>添加到聚合歌单{{ contextActionLabel }}</span>
-                  <i class="pi pi-chevron-right submenu-icon"></i>
+                  <i aria-hidden="true" class="pi pi-chevron-right submenu-icon"></i>
 
                   <div class="submenu">
                     <div
@@ -2597,6 +2771,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                       @click="handleCreateAggregatePlaylistFromMenu"
                     >
                       <i
+                        aria-hidden="true"
                         class="pi pi-plus"
                         style="
                           font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
@@ -2620,7 +2795,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   </div>
                 </div>
                 <div class="menu-item" data-te-interactive @click="customizeLibraryAppearance">
-                  <i class="ph ph-palette"></i>
+                  <i aria-hidden="true" class="ph ph-palette"></i>
                   <span>定制此区域外观</span>
                 </div>
               </NativeContextMenu>
@@ -2754,12 +2929,13 @@ function finishViewSwitchAndRestoreScroll(): void {
                 <p class="excluded-dialog-count">{{ excludedTracks.length }} 个排除项</p>
               </div>
               <button
+                aria-label="关闭"
                 type="button"
                 class="excluded-dialog-close"
                 title="关闭"
                 @click="showExcludedTracksDialog = false"
               >
-                <i class="pi pi-times"></i>
+                <i aria-hidden="true" class="pi pi-times"></i>
               </button>
             </div>
             <div v-if="excludedTracks.length === 0" class="excluded-empty">暂无排除项</div>
@@ -2776,13 +2952,14 @@ function finishViewSwitchAndRestoreScroll(): void {
                   }}</time>
                 </div>
                 <button
+                  aria-label="恢复到音乐库"
                   type="button"
                   class="excluded-restore-button"
                   :disabled="exclusionRestorePending"
                   title="恢复到音乐库"
                   @click="handleRestoreExclusions([item.filePath])"
                 >
-                  <i class="pi pi-refresh"></i>
+                  <i aria-hidden="true" class="pi pi-refresh"></i>
                   <span>恢复</span>
                 </button>
               </div>

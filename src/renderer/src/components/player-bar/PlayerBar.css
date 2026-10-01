@@ -90,6 +90,11 @@
   align-items: center;
 }
 
+/* Themes may expose the same live value next to the volume control. */
+.volume-control-value {
+  display: none;
+}
+
 .volume-control-button {
   width: 32px;
   border-radius: 10px;
@@ -1673,7 +1678,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 
 .hifi-overlay {
   position: fixed;
-  top: var(--te-titlebar-inset, 32px);
+  top: var(--te-titlebar-inset, var(--hig-chrome-height, 35px));
   right: 0;
   bottom: 0;
   z-index: 1100;

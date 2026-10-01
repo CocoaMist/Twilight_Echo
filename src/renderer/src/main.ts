@@ -1,4 +1,6 @@
 import './assets/main.css'
+import './assets/fluent.css'
+import './assets/fluent-icons.css'
 
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
@@ -65,7 +67,7 @@ async function mountApp(): Promise<void> {
         : (await import('./App.vue')).default
   // The lyrics window reads no theme tokens: every colour arrives in its settings
   // payload, so it must not pay for (or wait on) the theme runtime.
-  if (isMiniPlayer) await bootstrapThemeRuntime()
+  if (isMiniPlayer || isTrayPlayer) await bootstrapThemeRuntime()
   createApp(rootComponent).use(createPinia()).mount('#app')
   void startupSnapshot
 }

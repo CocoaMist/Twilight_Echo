@@ -80,7 +80,7 @@ const emit = defineEmits<{
         :aria-pressed="props.showMeasuredSource"
         @click="emit('toggle-headphone-curve', 'source')"
       >
-        <i></i>源频响 M(f)
+        <i aria-hidden="true"></i>源频响 M(f)
       </button>
       <button
         type="button"
@@ -89,7 +89,7 @@ const emit = defineEmits<{
         :aria-pressed="props.showTargetResponse"
         @click="emit('toggle-headphone-curve', 'target')"
       >
-        <i></i>目标曲线 T(f)
+        <i aria-hidden="true"></i>目标曲线 T(f)
       </button>
       <button
         type="button"
@@ -98,7 +98,7 @@ const emit = defineEmits<{
         :aria-pressed="props.showIndividualFilters"
         @click="emit('toggle-headphone-curve', 'individual')"
       >
-        <i></i>单个滤波 Hn(f)
+        <i aria-hidden="true"></i>单个滤波 Hn(f)
       </button>
       <button
         type="button"
@@ -107,7 +107,7 @@ const emit = defineEmits<{
         :aria-pressed="props.showCombinedFilter"
         @click="emit('toggle-headphone-curve', 'combined')"
       >
-        <i></i>合并滤波 H(f)
+        <i aria-hidden="true"></i>合并滤波 H(f)
       </button>
       <button
         type="button"
@@ -116,14 +116,14 @@ const emit = defineEmits<{
         :aria-pressed="props.showCorrectedResponse"
         @click="emit('toggle-headphone-curve', 'corrected')"
       >
-        <i></i>滤波结果 R(f)
+        <i aria-hidden="true"></i>滤波结果 R(f)
       </button>
       <span class="response-estimate-note"
         >R(f) = M(f) + H(f) · 排除数字前级 · 预计值，非校正后实测</span
       >
     </div>
     <div v-if="props.responseView === 'dsp'" class="response-legend" aria-label="频响曲线图例">
-      <span class="response-legend-item total"><i></i>总 DSP 合成</span>
+      <span class="response-legend-item total"><i aria-hidden="true"></i>总 DSP 合成</span>
       <button
         type="button"
         class="response-legend-item manual"
@@ -131,7 +131,7 @@ const emit = defineEmits<{
         :aria-pressed="props.showManualResponse"
         @click="emit('toggle-manual')"
       >
-        <i></i>手动 EQ（含前级）
+        <i aria-hidden="true"></i>手动 EQ（含前级）
       </button>
       <button
         v-if="props.opraCompensationEnabled"
@@ -141,9 +141,10 @@ const emit = defineEmits<{
         :aria-pressed="props.showOpraResponse"
         @click="emit('toggle-opra')"
       >
-        <i></i>OPRA 校正（含前级）
+        <i aria-hidden="true"></i>OPRA 校正（含前级）
       </button>
       <button
+        aria-label="OPRA 滤波器响应的反向估算；排除前级增益，不代表实测频响"
         v-if="props.opraCompensationEnabled"
         type="button"
         class="response-legend-item estimated"
@@ -152,7 +153,7 @@ const emit = defineEmits<{
         title="OPRA 滤波器响应的反向估算；排除前级增益，不代表实测频响"
         @click="emit('toggle-estimated-deviation')"
       >
-        <i></i>估算源偏差
+        <i aria-hidden="true"></i>估算源偏差
       </button>
       <span v-if="props.opraCompensationEnabled" class="response-estimate-note"
         >相对隐含目标 0 dB · 非实测</span

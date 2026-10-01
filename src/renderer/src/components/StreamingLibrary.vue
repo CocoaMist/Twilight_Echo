@@ -253,7 +253,7 @@ function deleteMenuPlaylist(): void {
           <div class="profile-avatar-ring">
             <img v-if="profile?.avatarUrl" :src="profile.avatarUrl" class="profile-avatar" alt="" />
             <span v-else class="profile-avatar profile-avatar-placeholder">
-              <i class="pi pi-user"></i>
+              <i aria-hidden="true" class="pi pi-user"></i>
             </span>
           </div>
         </div>
@@ -262,6 +262,7 @@ function deleteMenuPlaylist(): void {
             <h3>{{ providerLabel || '在线音源' }}个人音乐库</h3>
             <div v-if="canSwitchProvider" class="provider-switcher">
               <button
+                :aria-label="`切换音源（当前：${activeProviderName}）`"
                 ref="providerTrigger"
                 type="button"
                 class="provider-switch-btn"
@@ -272,9 +273,9 @@ function deleteMenuPlaylist(): void {
                 @click="toggleProviderMenu"
                 @focusout="onProviderFocusOut"
               >
-                <i :class="activeProviderIcon"></i>
+                <i aria-hidden="true" :class="activeProviderIcon"></i>
                 <span class="provider-switch-name">{{ activeProviderName }}</span>
-                <i class="pi pi-chevron-down provider-switch-caret"></i>
+                <i aria-hidden="true" class="pi pi-chevron-down provider-switch-caret"></i>
               </button>
               <div
                 :id="providerMenuId"
@@ -288,6 +289,7 @@ function deleteMenuPlaylist(): void {
                 @focusout="onProviderFocusOut"
               >
                 <button
+                  :aria-label="providerMenuHealthDetail(provider)"
                   v-for="provider in providerOptions"
                   :key="provider.id"
                   type="button"
@@ -297,7 +299,7 @@ function deleteMenuPlaylist(): void {
                   :aria-pressed="provider.id === activeProvider"
                   @click="selectProvider(provider.id)"
                 >
-                  <i :class="provider.icon"></i>
+                  <i aria-hidden="true" :class="provider.icon"></i>
                   <span>
                     {{ provider.name }}
                     <small class="provider-menu-health">
@@ -305,6 +307,7 @@ function deleteMenuPlaylist(): void {
                     </small>
                   </span>
                   <i
+                    aria-hidden="true"
                     v-if="provider.id === activeProvider"
                     class="pi pi-check provider-menu-check"
                   ></i>
@@ -338,7 +341,7 @@ function deleteMenuPlaylist(): void {
           <h2>{{ likedSummary.name || '我收藏的歌曲' }}</h2>
           <p>{{ likedSummary.trackCount }} 首歌曲</p>
           <button class="btn-play" @click.stop="emit('playLikedSongs')">
-            <i class="pi pi-play-fill"></i>
+            <i aria-hidden="true" class="pi pi-play-fill"></i>
             播放全部
           </button>
         </div>
@@ -350,7 +353,7 @@ function deleteMenuPlaylist(): void {
             class="liked-cover-img"
           />
           <span v-else class="liked-cover-img liked-card-cover-placeholder">
-            <i class="pi pi-heart-fill"></i>
+            <i aria-hidden="true" class="pi pi-heart-fill"></i>
           </span>
           <div class="heart-icon">
             <svg viewBox="0 0 24 24">
@@ -373,14 +376,14 @@ function deleteMenuPlaylist(): void {
       >
         <div class="feature-info">
           <div class="icon-wrap">
-            <i class="pi pi-history" style="font-size: 1.1rem"></i>
+            <i aria-hidden="true" class="pi pi-history" style="font-size: 1.1rem"></i>
           </div>
           <h3>最近播放</h3>
           <p>回顾您最近的音乐足迹</p>
         </div>
         <div class="feature-preview">
           <div class="enter-btn">
-            <i class="pi pi-chevron-right"></i>
+            <i aria-hidden="true" class="pi pi-chevron-right"></i>
           </div>
         </div>
       </div>
@@ -393,14 +396,14 @@ function deleteMenuPlaylist(): void {
       >
         <div class="feature-info">
           <div class="icon-wrap">
-            <i class="pi pi-chart-bar" style="font-size: 1.1rem"></i>
+            <i aria-hidden="true" class="pi pi-chart-bar" style="font-size: 1.1rem"></i>
           </div>
           <h3>听歌排行</h3>
           <p>探索您的最常播放榜单</p>
         </div>
         <div class="feature-preview">
           <div class="enter-btn">
-            <i class="pi pi-chevron-right"></i>
+            <i aria-hidden="true" class="pi pi-chevron-right"></i>
           </div>
         </div>
       </div>
@@ -420,13 +423,14 @@ function deleteMenuPlaylist(): void {
           <p>{{ userPlaylistEntries.length }} 个在线列表</p>
         </div>
         <button
+          aria-label="创建网易云歌单"
           v-if="allowPlaylistMutations"
           type="button"
           class="create-playlist-btn"
           title="创建网易云歌单"
           @click="emit('createPlaylist')"
         >
-          <i class="pi pi-plus"></i>
+          <i aria-hidden="true" class="pi pi-plus"></i>
           <span>创建歌单</span>
         </button>
       </div>
@@ -454,7 +458,7 @@ function deleteMenuPlaylist(): void {
       </p>
       <div v-if="libraryLoaded && filteredPlaylists.length === 0" class="empty-state">
         <span class="empty-icon">
-          <i class="pi pi-list"></i>
+          <i aria-hidden="true" class="pi pi-list"></i>
         </span>
         <p class="empty-text">暂无在线歌单</p>
         <p class="empty-hint">
@@ -488,7 +492,7 @@ function deleteMenuPlaylist(): void {
         >
           <img v-if="playlist.cover" :src="playlist.cover" class="playlist-item-cover" alt="" />
           <span v-else class="playlist-item-cover playlist-cover-placeholder">
-            <i class="pi pi-list"></i>
+            <i aria-hidden="true" class="pi pi-list"></i>
           </span>
           <div class="playlist-item-info">
             <h4 class="playlist-item-title">{{ playlist.name }}</h4>
@@ -500,6 +504,7 @@ function deleteMenuPlaylist(): void {
           </div>
 
           <button
+            :aria-label="isPlaylistPinned(playlist) ? '取消置顶收藏夹' : '置顶收藏夹'"
             v-if="allowPinPlaylists"
             type="button"
             class="playlist-pin-button"
@@ -509,6 +514,7 @@ function deleteMenuPlaylist(): void {
             @click.stop="emit('togglePinnedPlaylist', playlist)"
           >
             <i
+              aria-hidden="true"
               :class="
                 isPlaylistPinning(playlist)
                   ? 'pi pi-spin pi-spinner'
@@ -530,12 +536,13 @@ function deleteMenuPlaylist(): void {
             @click.stop="openPlaylistMenu($event, playlist)"
           >
             <i
+              aria-hidden="true"
               :class="isPlaylistDeleting(playlist) ? 'pi pi-spin pi-spinner' : 'pi pi-ellipsis-h'"
             ></i>
           </button>
 
           <div class="playlist-item-arrow">
-            <i class="pi pi-chevron-right"></i>
+            <i aria-hidden="true" class="pi pi-chevron-right"></i>
           </div>
         </article>
       </div>

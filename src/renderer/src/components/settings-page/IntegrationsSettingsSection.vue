@@ -170,7 +170,9 @@ onBeforeUnmount(() => {
     <div class="setting-list">
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>Discord Rich Presence <i class="pi pi-discord discord-icon"></i></strong>
+          <strong
+            >Discord Rich Presence <i aria-hidden="true" class="pi pi-discord discord-icon"></i
+          ></strong>
           <span>在 Discord 状态中向好友展示您正在播放的音乐。</span>
           <span class="setting-substatus" aria-live="polite">{{ discordStatusText }}</span>
         </div>

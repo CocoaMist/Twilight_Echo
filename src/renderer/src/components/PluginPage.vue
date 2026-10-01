@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { confirmAction } from '../app/useAppDialog.ts'
+import MessageBar from './hig/MessageBar.vue'
+import { onTabKeydown } from '../app/tabNavigation.ts'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import PuzzleIcon from './icons/PuzzleIcon.vue'
 import { useSettingsStore } from '../stores/useSettingsStore'
@@ -39,6 +42,8 @@ const installedPlugins = ref<TwilightPluginDescriptor[]>([])
 const indexEntries = ref<TwilightPluginIndexEntry[]>([])
 const indexStatus = ref<TwilightPluginIndexStatus | null>(null)
 const loading = ref(false)
+const localInstalling = ref(false)
+const updatingAll = ref(false)
 const errorMsg = ref('')
 const warningMsg = ref('')
 const busyIds = ref(new Set<string>())
@@ -48,6 +53,7 @@ let indexRequestGeneration = 0
 
 function switchTab(tabId: string) {
   activeTab.value = tabId
+  searchText.value = ''
 }
 
 /* ---------- helpers ---------- */
@@ -66,13 +72,13 @@ function getIconInfo(id: string, type: string[]): { cls: string; icon: string; s
 function getTags(type: string[]): Array<{ label: string; cls: string; style?: string }> {
   const tags: Array<{ label: string; cls: string; style?: string }> = []
   for (const t of type) {
-    if (t === 'provider') tags.push({ label: 'PROVIDER', cls: 'provider' })
-    else if (t === 'ui') tags.push({ label: 'UI', cls: 'ui' })
-    else if (t === 'dsp') tags.push({ label: 'DSP NATIVE', cls: 'dsp' })
-    else if (t === 'tool') tags.push({ label: 'TOOL', cls: 'tool' })
+    if (t === 'provider') tags.push({ label: '音乐源', cls: 'provider' })
+    else if (t === 'ui') tags.push({ label: '界面', cls: 'ui' })
+    else if (t === 'dsp') tags.push({ label: '声音处理', cls: 'dsp' })
+    else if (t === 'tool') tags.push({ label: '工具', cls: 'tool' })
     else if (t === 'theme')
       tags.push({
-        label: 'THEME',
+        label: '主题',
         cls: '',
         style: 'background: rgba(168, 85, 247, 0.1); color: #a855f7;'
       })
@@ -110,7 +116,12 @@ watch([searchText, selectedType, selectedAuthor, indexEntries], () => {
 })
 
 const updateEntries = computed(() => {
-  return indexEntries.value.filter((e) => e.installState === 'update-available')
+  const q = searchText.value.trim().toLowerCase()
+  return indexEntries.value.filter(
+    (e) =>
+      e.installState === 'update-available' &&
+      (!q || [e.name, e.author, e.id].some((value) => value.toLowerCase().includes(q)))
+  )
 })
 
 const marketRepoUrl = 'https://github.com/Px-asen/Twilight-Echo-plugins'
@@ -128,6 +139,11 @@ function pluginTrust(entry: TwilightPluginIndexEntry) {
 }
 
 /* ---------- API ---------- */
+
+async function refreshPluginLists(): Promise<void> {
+  errorMsg.value = ''
+  await Promise.all([refreshInstalled(), refreshIndex()])
+}
 
 async function refreshInstalled() {
   try {
@@ -170,6 +186,7 @@ async function loadAll() {
 async function togglePlugin(plugin: TwilightPluginDescriptor) {
   if (busyIds.value.has(plugin.id)) return
   busyIds.value.add(plugin.id)
+  errorMsg.value = ''
   try {
     if (plugin.enabled) {
       await window.api.plugins.disable(plugin.id)
@@ -186,6 +203,15 @@ async function togglePlugin(plugin: TwilightPluginDescriptor) {
 
 async function uninstallPlugin(plugin: TwilightPluginDescriptor) {
   if (busyIds.value.has(plugin.id)) return
+  if (
+    !(await confirmAction({
+      title: `卸载 ${plugin.name}？`,
+      message: '卸载后，该插件提供的功能将不可用。登录状态和设置会保留，供重新安装后使用。',
+      confirmLabel: '卸载',
+      destructive: true
+    }))
+  )
+    return
   busyIds.value.add(plugin.id)
   try {
     await window.api.plugins.uninstall(plugin.id)
@@ -218,6 +244,8 @@ function formatPluginInstallError(error: unknown): string {
 }
 
 async function installFromLocal(kind: 'package' | 'directory' = 'package') {
+  if (localInstalling.value) return
+  localInstalling.value = true
   errorMsg.value = ''
   warningMsg.value = ''
   try {
@@ -228,6 +256,8 @@ async function installFromLocal(kind: 'package' | 'directory' = 'package') {
     }
   } catch (e) {
     errorMsg.value = formatPluginInstallError(e)
+  } finally {
+    localInstalling.value = false
   }
 }
 
@@ -240,8 +270,8 @@ async function toggleDevMode() {
   }
 }
 
-async function installFromIndex(entry: TwilightPluginIndexEntry) {
-  if (busyIds.value.has(entry.id)) return
+async function installFromIndex(entry: TwilightPluginIndexEntry): Promise<boolean> {
+  if (busyIds.value.has(entry.id)) return false
   busyIds.value.add(entry.id)
   errorMsg.value = ''
   warningMsg.value = ''
@@ -249,16 +279,25 @@ async function installFromIndex(entry: TwilightPluginIndexEntry) {
     const result = await window.api.plugins.installFromIndex(entry.id)
     await loadAll()
     if (result?.warning) warningMsg.value = result.warning
+    return true
   } catch (e) {
     errorMsg.value = formatPluginInstallError(e)
+    return false
   } finally {
     busyIds.value.delete(entry.id)
   }
 }
 
 async function updateAll() {
-  for (const entry of updateEntries.value) {
-    await installFromIndex(entry)
+  if (updatingAll.value || busyIds.value.size) return
+  updatingAll.value = true
+  const entries = [...updateEntries.value]
+  try {
+    for (const entry of entries) {
+      if (!(await installFromIndex(entry))) break
+    }
+  } finally {
+    updatingAll.value = false
   }
 }
 
@@ -321,97 +360,71 @@ onUnmounted(() => {
 <template>
   <div class="plugin-page">
     <div class="plugin-window">
-      <!-- Sidebar -->
-      <aside class="sidebar">
-        <div class="sidebar-header">
+      <header class="plugin-header">
+        <div class="plugin-heading">
           <h1><PuzzleIcon /> 扩展中心</h1>
+          <p>管理音乐来源与应用扩展</p>
         </div>
-        <nav class="nav-menu">
-          <div
+        <nav class="nav-menu" role="tablist" aria-label="扩展中心" @keydown="onTabKeydown">
+          <button
+            v-for="tab in [
+              { id: 'installed', label: '已安装', icon: 'pi-check-circle' },
+              { id: 'discover', label: '发现市场', icon: 'pi-compass' },
+              { id: 'updates', label: '更新', icon: 'pi-cloud-download' }
+            ]"
+            :key="tab.id"
+            :id="'plugin-tab-' + tab.id"
+            type="button"
+            role="tab"
             class="nav-item"
-            data-te-interactive
-            role="button"
-            tabindex="0"
-            :aria-pressed="activeTab === 'installed'"
-            :class="{ active: activeTab === 'installed' }"
-            @click="switchTab('installed')"
-            @keydown.enter.prevent="switchTab('installed')"
-            @keydown.space.prevent="switchTab('installed')"
+            :aria-selected="activeTab === tab.id"
+            aria-controls="plugin-tab-panel"
+            :tabindex="activeTab === tab.id ? 0 : -1"
+            :class="{ active: activeTab === tab.id }"
+            @click="switchTab(tab.id)"
           >
-            <i class="pi pi-check-circle"></i>
-            <span>已安装</span>
-          </div>
-          <div
-            class="nav-item"
-            data-te-interactive
-            role="button"
-            tabindex="0"
-            :aria-pressed="activeTab === 'discover'"
-            :class="{ active: activeTab === 'discover' }"
-            @click="switchTab('discover')"
-            @keydown.enter.prevent="switchTab('discover')"
-            @keydown.space.prevent="switchTab('discover')"
-          >
-            <i class="pi pi-compass"></i>
-            <span>发现市场</span>
-          </div>
-          <div
-            class="nav-item"
-            data-te-interactive
-            role="button"
-            tabindex="0"
-            :aria-pressed="activeTab === 'updates'"
-            :class="{ active: activeTab === 'updates' }"
-            @click="switchTab('updates')"
-            @keydown.enter.prevent="switchTab('updates')"
-            @keydown.space.prevent="switchTab('updates')"
-          >
-            <i class="pi pi-cloud-download"></i>
+            <i :class="['pi', tab.icon]" aria-hidden="true"></i><span>{{ tab.label }}</span>
             <span
-              >更新
-              <span
-                v-if="updateEntries.length > 0"
-                style="
-                  background: #ef4444;
-                  color: #fff;
-                  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
-                  padding: 2px 6px;
-                  border-radius: 100px;
-                  margin-left: 4px;
-                "
-                >{{ updateEntries.length }}</span
-              ></span
+              v-if="
+                tab.id === 'updates' &&
+                indexEntries.filter((entry) => entry.installState === 'update-available').length
+              "
+              class="badge"
+              >{{
+                indexEntries.filter((entry) => entry.installState === 'update-available').length
+              }}</span
             >
-          </div>
+          </button>
         </nav>
-
-        <div class="sidebar-footer">
-          <div class="dev-mode-toggle">
-            <span>开发者模式</span>
-            <div
-              class="switch"
-              data-te-interactive
-              role="switch"
-              tabindex="0"
-              aria-label="开发者模式"
-              :aria-checked="devMode"
-              :class="{ on: devMode }"
-              @click="toggleDevMode"
-              @keydown.enter.prevent="toggleDevMode"
-              @keydown.space.prevent="toggleDevMode"
-            ></div>
-          </div>
+        <div class="dev-mode-toggle">
+          <span>开发者模式</span
+          ><button
+            type="button"
+            class="switch"
+            role="switch"
+            aria-label="开发者模式"
+            :aria-checked="devMode"
+            :class="{ on: devMode }"
+            @click="toggleDevMode"
+          ></button>
         </div>
-      </aside>
+      </header>
 
       <!-- Main Content -->
-      <main class="main-content">
+      <main
+        class="plugin-main-content"
+        id="plugin-tab-panel"
+        role="tabpanel"
+        :aria-labelledby="'plugin-tab-' + activeTab"
+        :aria-busy="loading"
+      >
         <!-- Topbar -->
         <header class="topbar">
           <div class="search-box">
-            <i class="pi pi-search"></i>
+            <i aria-hidden="true" class="pi pi-search"></i>
             <input
-              type="text"
+              type="search"
+              aria-label="搜索插件"
               v-model="searchText"
               :placeholder="
                 activeTab === 'installed'
@@ -426,66 +439,55 @@ onUnmounted(() => {
             <button
               v-if="activeTab === 'installed'"
               class="btn btn-outline"
+              :disabled="localInstalling"
               @click="installFromLocal('package')"
             >
-              <i class="pi pi-folder-open"></i> 从本地安装包 (.tep)
+              <i aria-hidden="true" class="pi pi-folder-open"></i> 从本地安装包 (.tep)
             </button>
             <button
+              aria-label="选择包含 plugin.json 的未打包插件目录（开发者模式）"
               v-if="activeTab === 'installed' && devMode"
               class="btn btn-outline"
               title="选择包含 plugin.json 的未打包插件目录（开发者模式）"
+              :disabled="localInstalling"
               @click="installFromLocal('directory')"
             >
-              <i class="pi pi-folder"></i> 从文件夹安装（开发）
+              <i aria-hidden="true" class="pi pi-folder"></i> 从文件夹安装（开发）
             </button>
             <button
-              v-if="activeTab === 'discover'"
               class="btn btn-outline"
-              @click="refreshMarket"
+              @click="activeTab === 'installed' ? loadAll() : refreshMarket()"
               :disabled="loading"
             >
-              <i class="pi pi-refresh"></i> {{ loading ? '刷新中...' : '刷新市场' }}
+              <i aria-hidden="true" class="pi pi-refresh"></i>
+              {{ loading ? '刷新中...' : activeTab === 'installed' ? '刷新列表' : '刷新市场' }}
             </button>
           </div>
         </header>
 
         <!-- Error / warning banners -->
-        <div
+        <MessageBar
           v-if="errorMsg"
-          style="
-            margin: 0 32px 16px;
-            padding: 12px 16px;
-            background: var(--te-danger-soft-bg);
-            border: 1px solid var(--te-danger-soft-fg);
-            border-radius: 12px;
-            color: var(--te-danger-soft-fg);
-            font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          "
+          intent="error"
+          style="margin: 0 32px 16px"
+          @dismiss="errorMsg = ''"
         >
-          <i class="pi pi-exclamation-triangle"></i>
           {{ errorMsg }}
-        </div>
-        <div
+          <template #actions>
+            <button class="hig-button" @click="refreshPluginLists">刷新插件列表</button>
+          </template>
+        </MessageBar>
+        <MessageBar
           v-if="warningMsg"
-          style="
-            margin: 0 32px 16px;
-            padding: 12px 16px;
-            background: var(--te-warning-soft-bg, #fff7ed);
-            border: 1px solid var(--te-warning-soft-fg, #c2410c);
-            border-radius: 12px;
-            color: var(--te-warning-soft-fg, #c2410c);
-            font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          "
+          intent="warning"
+          style="margin: 0 32px 16px"
+          @dismiss="warningMsg = ''"
         >
-          <i class="pi pi-info-circle"></i>
           {{ warningMsg }}
-        </div>
+          <template #actions>
+            <button class="hig-button" @click="activeTab = 'installed'">查看已安装插件</button>
+          </template>
+        </MessageBar>
 
         <!-- Scroll Area: Installed -->
         <div class="scroll-area" v-if="activeTab === 'installed'">
@@ -504,6 +506,7 @@ onUnmounted(() => {
             "
           >
             <i
+              aria-hidden="true"
               class="pi pi-inbox"
               style="
                 font-size: calc(var(--te-font-size-body, 14px) * 48 / 14);
@@ -538,7 +541,7 @@ onUnmounted(() => {
                   :class="getIconInfo(plugin.id, plugin.type).cls"
                   :style="getIconInfo(plugin.id, plugin.type).style"
                 >
-                  <i :class="getIconInfo(plugin.id, plugin.type).icon"></i>
+                  <i aria-hidden="true" :class="getIconInfo(plugin.id, plugin.type).icon"></i>
                 </div>
                 <div class="plugin-info">
                   <div class="plugin-title-row">
@@ -546,7 +549,7 @@ onUnmounted(() => {
                     <div class="plugin-version">v{{ plugin.version }}</div>
                   </div>
                   <div class="plugin-author">
-                    <i class="pi pi-user"></i>
+                    <i aria-hidden="true" class="pi pi-user"></i>
                     {{ plugin.author }}
                   </div>
                   <div class="plugin-tags">
@@ -571,24 +574,32 @@ onUnmounted(() => {
                     font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
                   "
                 >
-                  <i class="pi pi-exclamation-circle"></i> {{ plugin.error }}
+                  <i aria-hidden="true" class="pi pi-exclamation-circle"></i> {{ plugin.error }}
                 </div>
               </div>
               <div class="plugin-footer">
-                <div
+                <button
+                  type="button"
                   class="switch-wrap"
                   data-te-interactive
                   role="switch"
-                  tabindex="0"
-                  :aria-label="`启用 ${plugin.name}`"
+                  :disabled="busyIds.has(plugin.id) || updatingAll"
+                  :aria-busy="busyIds.has(plugin.id)"
+                  :aria-label="`${plugin.enabled ? '停用' : plugin.error ? '重试启用' : '启用'} ${plugin.name}`"
                   :aria-checked="plugin.enabled"
                   @click="togglePlugin(plugin)"
-                  @keydown.enter.prevent="togglePlugin(plugin)"
-                  @keydown.space.prevent="togglePlugin(plugin)"
                 >
                   <div class="switch" :class="{ on: plugin.enabled }"></div>
-                  <span class="switch-label">{{ plugin.enabled ? '已启用' : '已停用' }}</span>
-                </div>
+                  <span class="switch-label">{{
+                    busyIds.has(plugin.id)
+                      ? '处理中…'
+                      : plugin.enabled
+                        ? '已启用'
+                        : plugin.error
+                          ? '重试启用'
+                          : '已停用'
+                  }}</span>
+                </button>
                 <div class="plugin-actions">
                   <button
                     v-if="plugin.id === 'com.twilightecho.tool.theme-workshop' && plugin.enabled"
@@ -597,20 +608,23 @@ onUnmounted(() => {
                     打开工坊
                   </button>
                   <button
-                    v-if="!plugin.builtIn"
+                    aria-label="查看日志"
                     class="icon-btn"
+                    :disabled="busyIds.has(plugin.id)"
                     title="查看日志"
                     @click="openLog(plugin)"
                   >
-                    <i class="pi pi-align-left"></i>
+                    <i aria-hidden="true" class="pi pi-align-left"></i>
                   </button>
                   <button
+                    aria-label="卸载"
                     v-if="!plugin.builtIn"
+                    :disabled="busyIds.has(plugin.id) || updatingAll"
                     class="icon-btn danger"
                     title="卸载"
                     @click="uninstallPlugin(plugin)"
                   >
-                    <i class="pi pi-trash"></i>
+                    <i aria-hidden="true" class="pi pi-trash"></i>
                   </button>
                 </div>
               </div>
@@ -620,35 +634,28 @@ onUnmounted(() => {
 
         <!-- Scroll Area: Discover -->
         <div class="scroll-area" v-else-if="activeTab === 'discover'">
-          <div class="discover-banner">
-            <div class="banner-text">
-              <h2>{{ indexSourceLabel }}</h2>
-              <p>
-                当前索引用于发现插件；安装前展示来源、有效期、SHA-256、签名、权限与代码执行风险。
-              </p>
-            </div>
-            <div class="banner-art">
-              <i class="pi pi-server"></i>
-            </div>
-            <button
-              v-if="marketRepoUrl"
-              class="btn btn-outline"
-              style="
-                position: absolute;
-                right: 32px;
-                bottom: 32px;
-                background: rgba(255, 255, 255, 0.1);
-                border-color: rgba(255, 255, 255, 0.2);
-                color: #fff;
-              "
-              @click="openExternal(marketRepoUrl)"
-            >
-              浏览插件目录 <i class="pi pi-external-link"></i>
-            </button>
-          </div>
+          <MessageBar
+            class="market-message"
+            :intent="
+              indexStatus?.stale || indexStatus?.expired || !indexStatus?.originVerified
+                ? 'warning'
+                : 'info'
+            "
+            :dismissible="false"
+            :title="indexSourceLabel"
+          >
+            安装前会展示来源、有效期、SHA-256、签名、权限与代码执行风险。
+            <template #actions>
+              <button v-if="marketRepoUrl" class="hig-button" @click="openExternal(marketRepoUrl)">
+                浏览插件仓库 <i aria-hidden="true" class="pi pi-external-link"></i>
+              </button>
+            </template>
+          </MessageBar>
 
           <div v-if="indexStatus" class="market-status">
-            <span><i class="pi pi-database"></i> {{ indexLoadedFromLabel }}</span>
+            <span
+              ><i aria-hidden="true" class="pi pi-database"></i> {{ indexLoadedFromLabel }}</span
+            >
             <span>获取：{{ formatIndexTime(indexStatus.lastFetchedAt) }}</span>
             <span>过期：{{ formatIndexTime(indexStatus.expiresAt) }}</span>
             <span v-if="indexStatus.stale" class="warn">使用回退索引</span>
@@ -705,6 +712,7 @@ onUnmounted(() => {
             "
           >
             <i
+              aria-hidden="true"
               class="pi pi-search"
               style="
                 font-size: calc(var(--te-font-size-body, 14px) * 48 / 14);
@@ -733,7 +741,7 @@ onUnmounted(() => {
                   :class="getIconInfo(entry.id, entry.type).cls"
                   :style="getIconInfo(entry.id, entry.type).style"
                 >
-                  <i :class="getIconInfo(entry.id, entry.type).icon"></i>
+                  <i aria-hidden="true" :class="getIconInfo(entry.id, entry.type).icon"></i>
                 </div>
                 <div class="plugin-info">
                   <div class="plugin-title-row">
@@ -741,7 +749,7 @@ onUnmounted(() => {
                     <div class="plugin-version">v{{ entry.version }}</div>
                   </div>
                   <div class="plugin-author" :title="pluginTrust(entry).detail">
-                    <i :class="pluginTrust(entry).icon"></i>
+                    <i aria-hidden="true" :class="pluginTrust(entry).icon"></i>
                     {{ entry.author }}
                   </div>
                   <div class="plugin-tags">
@@ -776,7 +784,8 @@ onUnmounted(() => {
                     :class="`trust-${pluginTrust(entry).tone}`"
                     :title="pluginTrust(entry).detail"
                   >
-                    <i :class="pluginTrust(entry).icon"></i> {{ pluginTrust(entry).label }}
+                    <i aria-hidden="true" :class="pluginTrust(entry).icon"></i>
+                    {{ pluginTrust(entry).label }}
                   </div>
                   <span
                     class="signature-evidence"
@@ -792,10 +801,14 @@ onUnmounted(() => {
                   v-if="entry.installState === 'not-installed'"
                   class="btn btn-primary"
                   style="padding: 6px 16px"
-                  :disabled="busyIds.has(entry.id)"
+                  :disabled="busyIds.has(entry.id) || updatingAll"
                   @click="installFromIndex(entry)"
                 >
-                  <i v-if="busyIds.has(entry.id)" class="pi pi-spin pi-spinner"></i>
+                  <i
+                    aria-hidden="true"
+                    v-if="busyIds.has(entry.id)"
+                    class="pi pi-spin pi-spinner"
+                  ></i>
                   {{ busyIds.has(entry.id) ? '安装中' : '获取' }}
                 </button>
                 <span
@@ -809,20 +822,25 @@ onUnmounted(() => {
                     gap: 4px;
                   "
                 >
-                  <i class="pi pi-check"></i> 已安装
+                  <i aria-hidden="true" class="pi pi-check"></i> 已安装
                 </span>
                 <button
                   v-else-if="entry.installState === 'update-available'"
                   class="btn btn-primary"
                   style="padding: 6px 16px"
-                  :disabled="busyIds.has(entry.id)"
+                  :disabled="busyIds.has(entry.id) || updatingAll"
                   @click="installFromIndex(entry)"
                 >
-                  <i v-if="busyIds.has(entry.id)" class="pi pi-spin pi-spinner"></i>
+                  <i
+                    aria-hidden="true"
+                    v-if="busyIds.has(entry.id)"
+                    class="pi pi-spin pi-spinner"
+                  ></i>
                   {{ busyIds.has(entry.id) ? '更新中' : '更新' }}
                 </button>
                 <span
                   v-else-if="entry.installState === 'incompatible'"
+                  :title="`需要 Twilight Echo ${entry.engines.twilightEcho}，API ${entry.apiVersion}`"
                   style="
                     font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
                     font-weight: 600;
@@ -866,6 +884,7 @@ onUnmounted(() => {
             "
           >
             <i
+              aria-hidden="true"
               class="pi pi-check-circle"
               style="
                 font-size: calc(var(--te-font-size-body, 14px) * 48 / 14);
@@ -899,7 +918,13 @@ onUnmounted(() => {
               >
                 有 {{ updateEntries.length }} 个插件可以更新。
               </div>
-              <button class="btn btn-primary" @click="updateAll">全部更新</button>
+              <button
+                class="btn btn-primary"
+                :disabled="updatingAll || busyIds.size > 0"
+                @click="updateAll"
+              >
+                {{ updatingAll ? '更新中…' : searchText ? '更新当前列表' : '全部更新' }}
+              </button>
             </div>
 
             <div class="plugin-grid" style="grid-template-columns: 1fr">
@@ -925,7 +950,7 @@ onUnmounted(() => {
                       font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
                     "
                   >
-                    <i :class="getIconInfo(entry.id, entry.type).icon"></i>
+                    <i aria-hidden="true" :class="getIconInfo(entry.id, entry.type).icon"></i>
                   </div>
                   <div class="plugin-info" style="margin-left: 16px">
                     <div class="plugin-title-row">
@@ -939,9 +964,10 @@ onUnmounted(() => {
                     <div class="plugin-author">
                       {{ entry.installedVersion ? `v${entry.installedVersion}` : '未知版本' }}
                       <i
+                        aria-hidden="true"
                         class="pi pi-arrow-right"
                         style="
-                          font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
+                          font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
                           margin: 0 4px;
                         "
                       ></i>
@@ -964,10 +990,14 @@ onUnmounted(() => {
                 <button
                   class="btn btn-primary"
                   style="padding: 6px 16px"
-                  :disabled="busyIds.has(entry.id)"
+                  :disabled="busyIds.has(entry.id) || updatingAll"
                   @click="installFromIndex(entry)"
                 >
-                  <i v-if="busyIds.has(entry.id)" class="pi pi-spin pi-spinner"></i>
+                  <i
+                    aria-hidden="true"
+                    v-if="busyIds.has(entry.id)"
+                    class="pi pi-spin pi-spinner"
+                  ></i>
                   {{ busyIds.has(entry.id) ? '更新中' : '更新' }}
                 </button>
               </div>
@@ -980,6 +1010,19 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.market-message {
+  margin-bottom: 24px;
+}
+.switch-wrap {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
 .plugin-page {
   position: fixed;
   inset: 0;
@@ -1002,98 +1045,67 @@ onUnmounted(() => {
   flex: 1;
   background: transparent;
   display: flex;
+  flex-direction: column;
+  min-height: 0;
   overflow: hidden;
   position: relative;
 }
 
-/* Sidebar */
-.sidebar {
-  width: 240px;
-  /* Frosted surface: the bottom-most global background shows through. */
-  background: transparent;
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border-right: 1px solid var(--te-border-color, #e5e7eb);
+.plugin-header {
+  padding: calc(var(--hig-chrome-height) + 24px) var(--hig-page-inset) 16px;
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  border-bottom: 1px solid var(--hig-stroke);
 }
-
-.sidebar-header {
-  padding: 56px 24px 24px 24px;
+.plugin-heading {
+  flex: 1 0 100%;
 }
-
-.sidebar-header h1 {
-  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
-  font-weight: 700;
+.plugin-heading h1 {
   margin: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: var(--te-neutral-900, #111827);
+  gap: 12px;
 }
-
-.sidebar-header h1 i,
-.sidebar-header h1 .puzzle-icon {
-  color: var(--te-neutral-900, #111827);
-  font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
+.plugin-heading p {
+  color: var(--hig-muted);
+  margin: 8px 0 0;
 }
-
 .nav-menu {
-  flex: 1;
-  padding: 0 16px;
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  flex: 1;
   gap: 8px;
 }
-
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-radius: 12px;
-  color: var(--te-neutral-600, #4b5563);
+  gap: 8px;
+  padding: 8px 12px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--hig-muted);
+  font: 14px/20px var(--hig-font);
   cursor: pointer;
-  transition:
-    background-color 0.2s var(--te-ease-soft),
-    color 0.2s var(--te-ease-soft);
-  font-weight: 500;
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
 }
-
-.nav-item i {
-  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
-  opacity: 0.7;
-}
-
 .nav-item:hover {
-  background: var(--te-bg-hover, #f3f4f6);
-  color: var(--te-neutral-900, #111827);
+  background: var(--te-bg-hover);
+  color: var(--hig-text);
 }
-
 .nav-item.active {
-  background: rgba(99, 102, 241, 0.1);
-  color: var(--te-primary-600, #6366f1);
+  background: color-mix(in srgb, var(--hig-brand) 12%, transparent);
+  color: var(--hig-brand);
 }
-
-.nav-item.active i {
-  opacity: 1;
-}
-
-.sidebar-footer {
-  padding: 20px 24px;
-  border-top: 1px solid var(--te-border-color, #e5e7eb);
-}
-
 .dev-mode-toggle {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  font-weight: 500;
-  color: var(--te-neutral-600, #4b5563);
+  gap: 12px;
+  color: var(--hig-muted);
+  font-size: 12px;
 }
-
 .switch {
   width: 36px;
   height: 20px;
@@ -1126,7 +1138,9 @@ onUnmounted(() => {
 }
 
 /* Main Content */
-.main-content {
+.plugin-main-content {
+  min-height: 0;
+  min-width: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1134,8 +1148,11 @@ onUnmounted(() => {
 }
 
 .topbar {
-  height: 104px;
-  padding: 32px 32px 0 32px;
+  min-height: 64px;
+  padding: 16px var(--hig-page-inset);
+  flex-wrap: wrap;
+  gap: 12px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1150,7 +1167,10 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.04);
   border-radius: 100px;
   padding: 8px 16px;
-  width: 300px;
+  width: min(360px, 100%);
+  min-width: 0;
+  border: 1px solid var(--hig-stroke);
+  border-radius: 4px;
   transition: background-color 0.2s var(--te-ease-soft);
 }
 
@@ -1217,12 +1237,13 @@ onUnmounted(() => {
 
 .top-actions {
   display: flex;
-  gap: 12px;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .btn {
   padding: 8px 16px;
-  border-radius: 100px;
+  border-radius: 4px;
   font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
   font-weight: 600;
   cursor: pointer;
@@ -1258,7 +1279,8 @@ onUnmounted(() => {
 .scroll-area {
   flex: 1;
   overflow-y: auto;
-  padding: 32px;
+  min-height: 0;
+  padding: 8px var(--hig-page-inset) 24px;
 }
 
 .page-title {
@@ -1282,7 +1304,7 @@ onUnmounted(() => {
 
 .plugin-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: 20px;
 }
 
@@ -1320,7 +1342,7 @@ onUnmounted(() => {
 /* Cards */
 .plugin-card {
   background: var(--te-bg-card, #fff);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 24px;
   border: 1px solid var(--te-border-color, #e5e7eb);
   display: flex;
@@ -1342,7 +1364,7 @@ onUnmounted(() => {
   position: absolute;
   top: 16px;
   right: 16px;
-  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   font-weight: 600;
   color: var(--te-neutral-400, #9ca3af);
   text-transform: uppercase;
@@ -1406,7 +1428,7 @@ onUnmounted(() => {
 }
 
 .plugin-version {
-  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   color: var(--te-neutral-400, #9ca3af);
   background: rgba(0, 0, 0, 0.04);
   padding: 2px 6px;
@@ -1437,7 +1459,7 @@ onUnmounted(() => {
 
 .signature-evidence {
   color: var(--te-neutral-400, #9ca3af);
-  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   letter-spacing: 0;
 }
 
@@ -1464,7 +1486,7 @@ onUnmounted(() => {
 }
 
 .tag {
-  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 4px;
@@ -1505,6 +1527,8 @@ onUnmounted(() => {
 
 .plugin-footer {
   display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
   border-top: 1px solid rgba(0, 0, 0, 0.04);

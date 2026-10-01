@@ -30,7 +30,7 @@ function folderName(path: string): string {
     </p>
     <div class="onb-panel">
       <button type="button" class="onb-folder-add" @click="() => void addLibraryFolder()">
-        <i class="ph ph-folder-plus"></i>
+        <i aria-hidden="true" class="ph ph-folder-plus"></i>
         添加音乐文件夹
       </button>
       <div
@@ -39,7 +39,7 @@ function folderName(path: string): string {
         class="onb-folder-row"
         :title="folder"
       >
-        <i class="ph ph-folder-notch"></i>
+        <i aria-hidden="true" class="ph ph-folder-notch"></i>
         <strong>{{ folderName(folder) }}</strong>
         <span class="onb-folder-path">{{ folder }}</span>
         <button
@@ -48,7 +48,7 @@ function folderName(path: string): string {
           :aria-label="`移除 ${folderName(folder)}`"
           @click="() => void removeLibraryFolder(folder)"
         >
-          <i class="ph ph-x"></i>
+          <i aria-hidden="true" class="ph ph-x"></i>
         </button>
       </div>
     </div>

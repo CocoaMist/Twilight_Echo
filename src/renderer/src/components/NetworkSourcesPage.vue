@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { confirmAction } from '../app/useAppDialog.ts'
+import { onTabKeydown } from '../app/tabNavigation'
+
+import { computed, onBeforeUnmount, onActivated, onDeactivated, onMounted, ref } from 'vue'
 import { useBackHandler } from '../app/useBackStack.ts'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import type { Track } from '../types/music'
@@ -8,6 +11,7 @@ import type {
   NetworkPlaybackPlan,
   NetworkSourceProfileSummary
 } from '../../../shared/networkSources.ts'
+import MessageBar from './hig/MessageBar.vue'
 import NetworkCoverThumb from './network-sources/NetworkCoverThumb.vue'
 import {
   createNetworkBrowser,
@@ -15,6 +19,14 @@ import {
 } from './network-sources/networkViewState.ts'
 
 const networkSourcesApi = window.api?.networkSources
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
+const activated = ref(true)
+onActivated(() => {
+  activated.value = true
+})
+onDeactivated(() => {
+  activated.value = false
+})
 
 const profiles = ref<NetworkSourceProfileSummary[]>([])
 const loading = ref(false)
@@ -156,7 +168,15 @@ async function createProfile(): Promise<void> {
 
 async function deleteProfile(id: string): Promise<void> {
   if (!networkSourcesApi) return
-  if (!window.confirm('确定删除该网络源吗？（不会删除远程文件）')) return
+  if (
+    !(await confirmAction({
+      title: '确认此更改？',
+      message: '确定删除该网络源吗？（不会删除远程文件）',
+      confirmLabel: '继续',
+      destructive: true
+    }))
+  )
+    return
   try {
     await networkSourcesApi.deleteProfile(id)
     await loadProfiles()
@@ -220,7 +240,7 @@ function browseBack(): void {
 }
 
 useBackHandler(
-  computed(() => browsingProfile.value !== null),
+  computed(() => activated.value && props.active && browsingProfile.value !== null),
   browseBack,
   '返回来源列表'
 )
@@ -376,6 +396,7 @@ async function enrichLibraryAll(): Promise<void> {
 }
 
 async function switchView(mode: 'profiles' | 'library'): Promise<void> {
+  if (browsingProfile.value) leaveBrowse()
   const transition = ++viewRevision
   viewMode.value = mode
   if (mode === 'library') {
@@ -449,7 +470,15 @@ async function loadCacheInfo(): Promise<void> {
 
 async function clearNetworkCache(): Promise<void> {
   if (!networkSourcesApi) return
-  if (!window.confirm('确定清空网络源下载缓存吗？已入库条目不受影响，下次播放会重新下载。')) return
+  if (
+    !(await confirmAction({
+      title: '确认此更改？',
+      message: '确定清空网络源下载缓存吗？已入库条目不受影响，下次播放会重新下载。',
+      confirmLabel: '继续',
+      destructive: true
+    }))
+  )
+    return
   try {
     await networkSourcesApi.clearCache()
     await loadCacheInfo()
@@ -481,37 +510,60 @@ onBeforeUnmount(() => {
         <h1>网络源</h1>
         <p>连接 NAS 或远程服务器，将重点放在可播放的音乐和已连接来源上。</p>
       </div>
-      <div class="network-view-toggle" role="tablist" aria-label="网络源视图">
+      <div
+        class="network-view-toggle"
+        role="tablist"
+        aria-label="网络源视图"
+        @keydown="onTabKeydown"
+      >
         <button
           type="button"
           role="tab"
           :aria-selected="viewMode === 'profiles'"
+          id="network-profiles-tab"
+          aria-controls="network-view-panel"
+          :tabindex="viewMode === 'profiles' ? 0 : -1"
           :class="{ active: viewMode === 'profiles' }"
           @click="switchView('profiles')"
         >
-          <i class="pi pi-server"></i>网络源
+          <i aria-hidden="true" class="pi pi-server"></i>网络源
         </button>
         <button
           type="button"
           role="tab"
           :aria-selected="viewMode === 'library'"
+          id="network-library-tab"
+          aria-controls="network-view-panel"
+          :tabindex="viewMode === 'library' ? 0 : -1"
           :class="{ active: viewMode === 'library' }"
           @click="switchView('library')"
         >
-          <i class="pi pi-book"></i>媒体库
+          <i aria-hidden="true" class="pi pi-book"></i>媒体库
         </button>
       </div>
     </header>
 
-    <div v-if="error || libraryError" class="network-inline-error" role="alert">
-      {{ error || libraryError }}
-    </div>
-    <div v-if="notice" class="network-inline-notice" role="status">{{ notice }}</div>
+    <MessageBar v-if="error || libraryError" intent="error"
+      >{{ error || libraryError
+      }}<template #actions
+        ><button
+          class="hig-button"
+          @click="viewMode === 'library' ? loadLibrary() : loadProfiles()"
+        >
+          重试
+        </button></template
+      ></MessageBar
+    >
+    <MessageBar v-if="notice" intent="success" dismissible @dismiss="notice = ''">{{
+      notice
+    }}</MessageBar>
 
     <section
       v-if="browsingProfile"
       class="network-browser network-surface"
-      aria-labelledby="network-browser-title"
+      id="network-view-panel"
+      role="tabpanel"
+      :aria-labelledby="`network-${viewMode}-tab network-browser-title`"
     >
       <div class="network-browser-context">
         <div>
@@ -523,7 +575,7 @@ onBeforeUnmount(() => {
           </p>
         </div>
         <button type="button" class="soft-button" @click="leaveBrowse">
-          <i class="pi pi-arrow-left"></i>返回来源列表
+          <i aria-hidden="true" class="pi pi-arrow-left"></i>返回来源列表
         </button>
       </div>
 
@@ -547,7 +599,10 @@ onBeforeUnmount(() => {
         <div class="bookmark-heading">
           <span class="network-subheading">收藏目录</span>
           <button type="button" class="soft-button" @click="toggleBookmark">
-            <i :class="currentPathBookmarked ? 'pi pi-bookmark-fill' : 'pi pi-bookmark'"></i
+            <i
+              aria-hidden="true"
+              :class="currentPathBookmarked ? 'pi pi-bookmark-fill' : 'pi pi-bookmark'"
+            ></i
             >{{ currentPathBookmarked ? '取消收藏' : '收藏此目录' }}
           </button>
         </div>
@@ -583,7 +638,7 @@ onBeforeUnmount(() => {
             :disabled="audioEntries.length === 0 || browsing"
             @click="playAllInDirectory"
           >
-            <i class="pi pi-play"></i>播放全部（{{ audioEntries.length }}）
+            <i aria-hidden="true" class="pi pi-play"></i>播放全部（{{ audioEntries.length }}）
           </button>
           <button
             type="button"
@@ -591,17 +646,26 @@ onBeforeUnmount(() => {
             :disabled="scanning"
             @click="importCurrentDirectory"
           >
-            <i class="pi pi-database"></i>{{ scanning ? '入库中…' : '入库此目录' }}
+            <i aria-hidden="true" class="pi pi-database"></i
+            >{{ scanning ? '入库中…' : '入库此目录' }}
           </button>
         </div>
       </div>
       <p v-if="directoryLoading" class="network-browsing" aria-live="polite">正在读取目录…</p>
       <p v-if="resolvingDirectory" class="network-browsing" aria-live="polite">正在准备播放队列…</p>
-      <div v-if="browsingError" class="network-inline-error" role="alert">{{ browsingError }}</div>
+      <MessageBar v-if="browsingError" intent="error"
+        >{{ browsingError
+        }}<template #actions
+          ><button class="hig-button" :disabled="browsing" @click="navigateTo(currentPath)">
+            重试读取</button
+          ><button class="hig-button" @click="leaveBrowse">返回网络源</button></template
+        ></MessageBar
+      >
       <ul v-if="entries.length > 0" class="network-entry-list network-entry-surface">
         <li v-for="entry in entries" :key="entry.id" class="network-entry">
           <span class="network-entry-kind"
             ><i
+              aria-hidden="true"
               class="pi"
               :class="
                 entry.kind === 'directory'
@@ -635,7 +699,9 @@ onBeforeUnmount(() => {
     <section
       v-else-if="viewMode === 'library'"
       class="network-library network-surface"
-      aria-labelledby="network-library-title"
+      id="network-view-panel"
+      role="tabpanel"
+      aria-labelledby="network-library-tab network-library-title"
     >
       <div class="network-section-heading network-library-heading">
         <div>
@@ -649,11 +715,12 @@ onBeforeUnmount(() => {
           :disabled="enriching || libraryLoading"
           @click="enrichLibraryAll"
         >
-          <i class="pi pi-sparkles"></i>{{ enriching ? '解析中…' : '解析元数据' }}
+          <i aria-hidden="true" class="pi pi-sparkles"></i
+          >{{ enriching ? '解析中…' : '解析元数据' }}
         </button>
       </div>
       <label class="network-library-search"
-        ><i class="pi pi-search"></i
+        ><i aria-hidden="true" class="pi pi-search"></i
         ><input
           v-model="libraryQuery"
           type="search"
@@ -698,13 +765,19 @@ onBeforeUnmount(() => {
         </li>
       </ul>
       <div v-else-if="!libraryLoading" class="network-empty network-library-empty">
-        <span class="network-empty-icon"><i class="pi pi-book"></i></span>
+        <span class="network-empty-icon"><i aria-hidden="true" class="pi pi-book"></i></span>
         <h3>媒体库还是空的</h3>
         <p>在“网络源”中浏览一个目录，再使用“入库此目录”把音乐带到这里。</p>
       </div>
     </section>
 
-    <section v-else class="network-profiles" aria-labelledby="network-profiles-title">
+    <section
+      v-else
+      id="network-view-panel"
+      role="tabpanel"
+      class="network-profiles"
+      aria-labelledby="network-profiles-tab network-profiles-title"
+    >
       <div class="network-section-heading network-profiles-heading">
         <div>
           <span class="network-kicker">CONNECTED SOURCES</span>
@@ -712,12 +785,14 @@ onBeforeUnmount(() => {
           <p>选择一个来源浏览音乐；连接与缓存维护被收纳为次要操作。</p>
         </div>
         <button type="button" class="brand-soft-button" @click="showCreateForm = !showCreateForm">
-          <i :class="showCreateForm ? 'pi pi-minus' : 'pi pi-plus'"></i
+          <i aria-hidden="true" :class="showCreateForm ? 'pi pi-minus' : 'pi pi-plus'"></i
           >{{ showCreateForm ? '收起表单' : '添加网络源' }}
         </button>
       </div>
       <div class="network-cache-row">
-        <span><i class="pi pi-database"></i>网络源缓存 {{ formatBytes(cacheSizeBytes) }}</span
+        <span
+          ><i aria-hidden="true" class="pi pi-database"></i>网络源缓存
+          {{ formatBytes(cacheSizeBytes) }}</span
         ><button type="button" class="text-button" @click="clearNetworkCache">清理缓存</button>
       </div>
 
@@ -795,7 +870,8 @@ onBeforeUnmount(() => {
           </div>
           <div class="network-form-actions">
             <button type="submit" class="brand-soft-button" :disabled="creating || loading">
-              <i class="pi pi-check"></i>{{ creating ? '保存中…' : '保存并测试' }}
+              <i aria-hidden="true" class="pi pi-check"></i
+              >{{ creating ? '保存中…' : '保存并测试' }}
             </button>
           </div>
         </form>
@@ -804,7 +880,7 @@ onBeforeUnmount(() => {
       <div v-if="loading" class="network-loading">加载中…</div>
       <div v-else-if="profiles.length > 0" class="network-profile-list">
         <article v-for="profile in profiles" :key="profile.id" class="network-profile-card">
-          <div class="network-profile-icon"><i class="pi pi-server"></i></div>
+          <div class="network-profile-icon"><i aria-hidden="true" class="pi pi-server"></i></div>
           <div class="network-profile-info">
             <div class="network-profile-title-row">
               <strong>{{ profile.name }}</strong
@@ -818,7 +894,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="network-profile-actions">
             <button type="button" class="brand-soft-button" @click="enterBrowse(profile)">
-              <i class="pi pi-folder-open"></i>浏览</button
+              <i aria-hidden="true" class="pi pi-folder-open"></i>浏览</button
             ><button type="button" class="soft-button" @click="testConnection(profile.id)">
               测试</button
             ><button type="button" class="text-button danger" @click="deleteProfile(profile.id)">
@@ -828,11 +904,11 @@ onBeforeUnmount(() => {
         </article>
       </div>
       <div v-else class="network-empty network-profiles-empty">
-        <span class="network-empty-icon"><i class="pi pi-server"></i></span>
+        <span class="network-empty-icon"><i aria-hidden="true" class="pi pi-server"></i></span>
         <h3>还没有网络源</h3>
         <p>添加你的 NAS、WebDAV 或其他远程音乐服务，然后开始浏览。</p>
         <button type="button" class="brand-soft-button" @click="showCreateForm = true">
-          <i class="pi pi-plus"></i>添加网络源
+          <i aria-hidden="true" class="pi pi-plus"></i>添加网络源
         </button>
       </div>
     </section>

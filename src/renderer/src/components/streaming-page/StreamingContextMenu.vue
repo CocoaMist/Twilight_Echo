@@ -24,6 +24,7 @@ defineProps<{
 const emit = defineEmits<{
   play: []
   playNext: []
+  playLast: []
   favorite: []
   like: []
   createPlaylist: []
@@ -58,7 +59,7 @@ const emit = defineEmits<{
         @keydown.enter.prevent="emit('play')"
         @keydown.space.prevent="emit('play')"
       >
-        <i class="pi pi-play"></i>
+        <i aria-hidden="true" class="pi pi-play"></i>
         <span>播放</span>
       </div>
       <div
@@ -70,7 +71,18 @@ const emit = defineEmits<{
         @keydown.enter.prevent="emit('playNext')"
         @keydown.space.prevent="emit('playNext')"
       >
-        <i class="pi pi-step-forward"></i><span>下一首播放</span>
+        <i aria-hidden="true" class="pi pi-step-forward"></i><span>下一首播放</span>
+      </div>
+      <div
+        class="menu-item"
+        role="menuitem"
+        tabindex="0"
+        data-te-interactive
+        @click="emit('playLast')"
+        @keydown.enter.prevent="emit('playLast')"
+        @keydown.space.prevent="emit('playLast')"
+      >
+        <i class="pi pi-plus" aria-hidden="true"></i><span>加入队尾{{ actionLabel }}</span>
       </div>
       <div
         class="menu-item"
@@ -81,7 +93,7 @@ const emit = defineEmits<{
         @keydown.enter.prevent="emit('favorite')"
         @keydown.space.prevent="emit('favorite')"
       >
-        <i :class="allFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+        <i aria-hidden="true" :class="allFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
         <span> {{ allFavorited ? '取消收藏' : '加入收藏' }}{{ actionLabel }} </span>
       </div>
       <div
@@ -94,7 +106,7 @@ const emit = defineEmits<{
         @keydown.enter.prevent="emit('like')"
         @keydown.space.prevent="emit('like')"
       >
-        <i :class="singleLiked ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
+        <i aria-hidden="true" :class="singleLiked ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
         <span>{{ singleLiked ? '取消喜欢' : '喜欢' }}</span>
       </div>
       <div
@@ -103,9 +115,9 @@ const emit = defineEmits<{
         @mouseenter="emit('togglePlaylistSubmenu', true)"
         @mouseleave="emit('togglePlaylistSubmenu', false)"
       >
-        <i class="pi pi-plus"></i>
+        <i aria-hidden="true" class="pi pi-plus"></i>
         <span>添加到歌单{{ actionLabel }}</span>
-        <i class="pi pi-chevron-right submenu-icon"></i>
+        <i aria-hidden="true" class="pi pi-chevron-right submenu-icon"></i>
         <div class="submenu">
           <div
             class="menu-item create-playlist-menu-item"
@@ -116,7 +128,7 @@ const emit = defineEmits<{
             @keydown.enter.prevent="emit('createPlaylist')"
             @keydown.space.prevent="emit('createPlaylist')"
           >
-            <i class="pi pi-plus"></i>
+            <i aria-hidden="true" class="pi pi-plus"></i>
             <span>创建新歌单</span>
           </div>
           <div v-if="ownedUserPlaylists.length === 0" class="menu-item disabled">暂无自建歌单</div>
@@ -142,7 +154,7 @@ const emit = defineEmits<{
             @keydown.enter.prevent="emit('addToPlaylist')"
             @keydown.space.prevent="emit('addToPlaylist')"
           >
-            <i class="pi pi-list"></i>
+            <i aria-hidden="true" class="pi pi-list"></i>
             <span>选择歌单…</span>
           </div>
         </div>
@@ -152,9 +164,9 @@ const emit = defineEmits<{
         @mouseenter="emit('toggleAggregateSubmenu', true)"
         @mouseleave="emit('toggleAggregateSubmenu', false)"
       >
-        <i class="pi pi-sitemap"></i>
+        <i aria-hidden="true" class="pi pi-sitemap"></i>
         <span>添加到聚合歌单{{ actionLabel }}</span>
-        <i class="pi pi-chevron-right submenu-icon"></i>
+        <i aria-hidden="true" class="pi pi-chevron-right submenu-icon"></i>
         <div class="submenu">
           <div
             class="menu-item create-playlist-menu-item"
@@ -165,7 +177,7 @@ const emit = defineEmits<{
             @keydown.enter.prevent="emit('createAggregatePlaylist')"
             @keydown.space.prevent="emit('createAggregatePlaylist')"
           >
-            <i class="pi pi-plus"></i>
+            <i aria-hidden="true" class="pi pi-plus"></i>
             <span>新建聚合歌单…</span>
           </div>
           <div v-if="aggregatePlaylists.length === 0" class="menu-item disabled">暂无聚合歌单</div>
@@ -194,7 +206,7 @@ const emit = defineEmits<{
         @keydown.enter.prevent="emit('removeFromPlaylist')"
         @keydown.space.prevent="emit('removeFromPlaylist')"
       >
-        <i class="pi pi-minus-circle"></i>
+        <i aria-hidden="true" class="pi pi-minus-circle"></i>
         <span>从歌单移除{{ actionLabel }}</span>
       </div>
       <div
@@ -206,9 +218,9 @@ const emit = defineEmits<{
         @mouseenter="emit('toggleDownloadQualityMenu', true)"
         @mouseleave="emit('toggleDownloadQualityMenu', false)"
       >
-        <i class="pi pi-download"></i>
+        <i aria-hidden="true" class="pi pi-download"></i>
         <span>下载到本地{{ actionLabel }}</span>
-        <i class="pi pi-chevron-right submenu-icon"></i>
+        <i aria-hidden="true" class="pi pi-chevron-right submenu-icon"></i>
         <div class="submenu">
           <div
             class="menu-item"
@@ -219,7 +231,7 @@ const emit = defineEmits<{
             @keydown.enter.prevent="emit('download', 'hi-res')"
             @keydown.space.prevent="emit('download', 'hi-res')"
           >
-            <i class="pi pi-bolt"></i>
+            <i aria-hidden="true" class="pi pi-bolt"></i>
             <span>Hi-Res</span>
           </div>
           <div
@@ -231,7 +243,7 @@ const emit = defineEmits<{
             @keydown.enter.prevent="emit('download', 'lossless')"
             @keydown.space.prevent="emit('download', 'lossless')"
           >
-            <i class="pi pi-wave-pulse"></i>
+            <i aria-hidden="true" class="pi pi-wave-pulse"></i>
             <span>Lossless</span>
           </div>
           <div
@@ -243,7 +255,7 @@ const emit = defineEmits<{
             @keydown.enter.prevent="emit('download', 'aac')"
             @keydown.space.prevent="emit('download', 'aac')"
           >
-            <i class="pi pi-volume-down"></i>
+            <i aria-hidden="true" class="pi pi-volume-down"></i>
             <span>AAC</span>
           </div>
         </div>

@@ -16,7 +16,9 @@ onMounted(async () => {
 
 <template>
   <img v-if="src" :src="src" class="network-cover-thumb" alt="" loading="lazy" />
-  <span v-else class="network-cover-placeholder"><i class="pi pi-music"></i></span>
+  <span v-else class="network-cover-placeholder"
+    ><i aria-hidden="true" class="pi pi-music"></i
+  ></span>
 </template>
 
 <style scoped>

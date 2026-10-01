@@ -11,7 +11,11 @@ test('dashboard prioritizes active and last-played tracks over recommendations',
     source,
     /if \(currentTrack\.value\) return currentTrack\.value\s*if \(lastPlayedTrack\.value\) return lastPlayedTrack\.value/
   )
-  assert.match(source, /heroIsCurrent\.value && isPlaying\.value \? '正在播放' : '上次播放'/)
+  assert.match(
+    source,
+    /if \(heroIsCurrent\.value\) return isPlaying\.value \? '正在播放' : '已暂停'/
+  )
+  assert.match(source, /lastPlayedTrack\.value \? '上次播放' : '开始聆听'/)
   assert.doesNotMatch(source, /return '为你推荐'/)
 })
 

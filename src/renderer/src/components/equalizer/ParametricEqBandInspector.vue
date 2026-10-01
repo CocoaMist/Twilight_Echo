@@ -63,7 +63,7 @@ defineExpose({ finishInteraction })
           :aria-pressed="band.enabled !== false"
           @click="act('toggle')"
         >
-          <i class="pi pi-power-off"></i>
+          <i aria-hidden="true" class="pi pi-power-off"></i>
         </button>
         <span class="band-number">BAND {{ String(index + 1).padStart(2, '0') }}</span>
       </div>
@@ -98,7 +98,7 @@ defineExpose({ finishInteraction })
         title="收起面板"
         @click="act('close')"
       >
-        <i class="pi pi-times"></i>
+        <i aria-hidden="true" class="pi pi-times"></i>
       </button>
       <button
         type="button"
@@ -107,7 +107,7 @@ defineExpose({ finishInteraction })
         title="删除频段"
         @click="act('delete')"
       >
-        <i class="pi pi-trash"></i>
+        <i aria-hidden="true" class="pi pi-trash"></i>
       </button>
     </div>
   </section>

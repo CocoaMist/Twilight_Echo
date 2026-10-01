@@ -132,7 +132,7 @@ test('login page can open with an initial streaming provider', () => {
 test('login page hides the title bar start actions', () => {
   const appSource = readFileSync(new URL('../App.vue', import.meta.url), 'utf8')
 
-  assert.match(appSource, /:hide-start="showThemeStudioPage \|\| showLoginPage"/)
+  assert.match(appSource, /:hide-start="showLoginPage"/)
 })
 
 test('login page can open directly in profile mode for a provider', () => {
@@ -201,4 +201,104 @@ test('command destinations replace foreground overlays and repeated settings tar
   const first = navigation.settingsNavigationTarget.value.revision
   navigation.openSettingsPage('playback', { anchor: 'device-profiles' })
   assert.equal(navigation.settingsNavigationTarget.value.revision, first + 1)
+})
+
+test('every root destination clears every previous foreground page', () => {
+  const openers = [
+    'openDspRackPage',
+    'openEqualizerPage',
+    'openPluginPage',
+    'openSettingsPage',
+    'openLoginPage',
+    'openPlayingPage',
+    'openThemeStudioPage'
+  ] as const
+  for (const open of openers) {
+    for (const destination of ['local', 'streaming', 'radio', 'network']) {
+      const nav = useAppNavigation()
+      nav[open]()
+      if (destination === 'local') nav.onSelectView('albums', 'album:fixture')
+      if (destination === 'streaming') nav.enterStreamingMode()
+      if (destination === 'radio') nav.enterRadioPodcastMode()
+      if (destination === 'network') nav.enterNetworkSourcesMode()
+      assert.equal(nav.baseSurfaceVisible.value, true, `${open} -> ${destination}`)
+      assert.equal(nav.localViewVisible.value, destination === 'local')
+      assert.equal(nav.showStreamingSurface.value, destination === 'streaming')
+      assert.equal(nav.showRadioPodcastPage.value, destination === 'radio')
+      assert.equal(nav.showNetworkSourcesPage.value, destination === 'network')
+    }
+  }
+})
+
+test('foreground transitions never leave two competing visible pages', () => {
+  const openers = [
+    'openDspRackPage',
+    'openEqualizerPage',
+    'openPluginPage',
+    'openSettingsPage',
+    'openLoginPage',
+    'openPlayingPage',
+    'openThemeStudioPage'
+  ] as const
+  for (const first of openers)
+    for (const second of openers) {
+      const nav = useAppNavigation()
+      nav.enterStreamingMode()
+      nav[first]()
+      nav[second]()
+      const flags = [
+        nav.showDspRackPage,
+        nav.showEqualizerPage,
+        nav.showPluginPage,
+        nav.showSettingsPage,
+        nav.showLoginPage,
+        nav.showPlayingPage,
+        nav.showThemeStudioPage
+      ]
+      assert.equal(flags.filter((flag) => flag.value).length, 1, `${first} -> ${second}`)
+      assert.equal(nav.showStreamingSurface.value, false)
+    }
+})
+
+test('contextual back restores player and original network source without losing the local filter', () => {
+  const nav = useAppNavigation()
+  nav.onSelectView('artists', 'artist:fixture')
+  nav.enterNetworkSourcesMode()
+  nav.openPlayingPage()
+  nav.openDspRackPage()
+  nav.openSettingsPage('playback')
+  nav.closeSettingsPage()
+  assert.equal(nav.showDspRackPage.value, true)
+  nav.closeDspRackPage()
+  assert.equal(nav.showPlayingPage.value, true)
+  nav.closePlayingPage()
+  assert.equal(nav.showNetworkSourcesPage.value, true)
+  assert.equal(nav.baseSurfaceVisible.value, true)
+  nav.closeNetworkSourcesPage()
+  assert.equal(nav.activeFilter.value, 'artist:fixture')
+})
+
+test('login from local returns to local, and a new destination discards old return history', () => {
+  const nav = useAppNavigation()
+  nav.openLoginPage('ncm')
+  nav.closeLoginPage()
+  assert.equal(nav.localViewVisible.value, true)
+  nav.openDspRackPage()
+  nav.openSettingsPage()
+  nav.onSelectView('recent', null)
+  nav.closeSettingsPage()
+  assert.equal(nav.localViewVisible.value, true)
+  assert.equal(nav.showDspRackPage.value, false)
+})
+
+test('opening navigation preserves the foreground page and return destination', () => {
+  const nav = useAppNavigation()
+  nav.enterStreamingMode()
+  nav.openDspRackPage()
+  nav.createToggleMenuHandler()()
+  assert.equal(nav.showStreamingSurface.value, false)
+  assert.equal(nav.menuOpen.value, true)
+  assert.equal(nav.showDspRackPage.value, true)
+  nav.closeDspRackPage()
+  assert.equal(nav.showStreamingSurface.value, true)
 })

@@ -797,6 +797,7 @@ async function toggleLyricVisibility(
               <span>{{ selectedVoiceRows.length }} / {{ voiceDraftRows.length }} 行已选</span>
             </div>
             <button
+              aria-label="撤销上一次编排"
               type="button"
               title="撤销上一次编排"
               :disabled="!currentTrack || !voiceArrangementUndo"

@@ -201,12 +201,12 @@ watch(
             aria-label="关闭歌词个性化"
             @click="emit('close')"
           >
-            <i class="pi pi-times"></i>
+            <i aria-hidden="true" class="pi pi-times"></i>
           </button>
         </header>
 
         <div class="customizer-status" :data-state="saveState">
-          <span><i class="pi pi-eye"></i>{{ statusLabel }}</span>
+          <span><i aria-hidden="true" class="pi pi-eye"></i>{{ statusLabel }}</span>
           <button type="button" @click="resetAll">恢复全部默认</button>
         </div>
 
@@ -306,7 +306,7 @@ watch(
                 <span :style="{ fontFamily: previewStyle(activeTarget).fontFamily }">{{
                   fontLabel
                 }}</span>
-                <i class="pi pi-chevron-down"></i>
+                <i aria-hidden="true" class="pi pi-chevron-down"></i>
               </button>
               <div v-if="fontMenuOpen" class="font-menu">
                 <input
@@ -617,7 +617,10 @@ watch(
               @click="setGlobal('karaokeEnabled', !draft.karaokeEnabled)"
             >
               <span><strong>逐字高亮</strong><small>仅在歌词含逐字时间戳时生效</small></span
-              ><i :class="draft.karaokeEnabled ? 'pi pi-check-circle' : 'pi pi-circle'"></i>
+              ><i
+                aria-hidden="true"
+                :class="draft.karaokeEnabled ? 'pi pi-check-circle' : 'pi pi-circle'"
+              ></i>
             </button>
             <button
               type="button"
@@ -626,7 +629,10 @@ watch(
               @click="setGlobal('hidePassedLines', !draft.hidePassedLines)"
             >
               <span><strong>隐藏已唱歌词</strong><small>播放时淡出当前行之前的内容</small></span
-              ><i :class="draft.hidePassedLines ? 'pi pi-check-circle' : 'pi pi-circle'"></i>
+              ><i
+                aria-hidden="true"
+                :class="draft.hidePassedLines ? 'pi pi-check-circle' : 'pi pi-circle'"
+              ></i>
             </button>
             <button
               type="button"
@@ -635,7 +641,10 @@ watch(
               @click="toggleRomanization"
             >
               <span><strong>显示罗马音</strong><small>独立显示或隐藏歌词中的音译层</small></span>
-              <i :class="showRomanization ? 'pi pi-check-circle' : 'pi pi-circle'"></i>
+              <i
+                aria-hidden="true"
+                :class="showRomanization ? 'pi pi-check-circle' : 'pi pi-circle'"
+              ></i>
             </button>
           </section>
 

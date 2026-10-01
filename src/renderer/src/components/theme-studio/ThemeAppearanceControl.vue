@@ -83,7 +83,7 @@ function updateFilter(name: string, unit: string, event: Event): void {
         :aria-label="'恢复' + label"
         @click="emit('reset')"
       >
-        <i class="ph ph-arrow-u-up-left"></i>
+        <i aria-hidden="true" class="ph ph-arrow-u-up-left"></i>
       </button>
     </div>
     <p v-if="hint" class="studio-control-hint">{{ hint }}</p>

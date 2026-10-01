@@ -71,28 +71,10 @@ test('side-menu clearance animates the inset, never a transform', () => {
  * which is the same right-edge sweep in two properties instead of one. Padding
  * leaves the border box — and the scrollbar riding its right edge — where it was.
  */
-test('the streaming content gives way by padding, not by narrowing and translating', () => {
-  /** Property names only. `var(--te-menu-width)` is a *value* — matching the raw
-   *  text for "width" would flag the correct declaration. */
-  function declaredProperties(body: string): string[] {
-    return body
-      .split(';')
-      .map((declaration) => declaration.split(':')[0]?.trim() ?? '')
-      .filter(Boolean)
-  }
-
-  const rules = [...providerSidebar.matchAll(/\.streaming-sidebar\.open \+ [^{]*\{([^}]*)\}/g)]
-  assert.ok(rules.length >= 1, 'the streaming give-way sibling rule must exist')
-  for (const [, body] of rules) {
-    assert.match(body, /padding-left:\s*var\(--te-menu-width\)/)
-    const properties = declaredProperties(body)
-    assert.deepEqual(
-      properties.filter((property) => property !== 'padding-left'),
-      [],
-      'padding alone clears the sidebar: a translate sweeps the right edge back in, ' +
-        'and width/flex-basis drag the scroller’s scrollbar inward with it'
-    )
-  }
+test('provider browsing stays inside the shared application navigation', () => {
+  assert.doesNotMatch(providerSidebar, /streaming-sidebar|本地模式/)
+  assert.match(providerSidebar, /provider-navigation/)
+  assert.match(providerSidebar, /selectAggregate/)
 })
 
 /**
