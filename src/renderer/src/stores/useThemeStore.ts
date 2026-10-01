@@ -509,7 +509,7 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
       assetStylesheet,
       root ? `:root {\n${root}\n}` : '',
       stylesheet,
-      sharedPlayerBarStylesheet(tone)
+      sharedPlayerBarStylesheet(tone, selectedProfile)
     ]
       .filter(Boolean)
       .join('\n\n'),

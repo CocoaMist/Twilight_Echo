@@ -645,7 +645,10 @@ export class TwilightPluginManager extends EventEmitter {
 
   /** Running plugins plus hibernated ones, so contributions survive host sleep. */
   private contributingPlugins(): Array<RunningPlugin | HibernatedPlugin> {
-    return [...this.hibernated.values(), ...this.running.values()]
+    return [
+      ...this.hibernated.values(),
+      ...[...this.running.values()].filter((plugin) => !this.hibernated.has(plugin.descriptor.id))
+    ]
   }
 
   /** Whether a plugin's host is currently hibernated (contributions kept, process stopped). */
@@ -799,6 +802,8 @@ export class TwilightPluginManager extends EventEmitter {
    * single process.
    */
   private async ensureRunningForCall(id: string): Promise<RunningPlugin> {
+    const waking = this.wakeOperations.get(id)
+    if (waking) return waking
     const running = this.running.get(id)
     if (running) return running
     if (!this.hibernated.has(id)) throw new Error(`Provider 未启用：${id}`)
@@ -1136,7 +1141,6 @@ export class TwilightPluginManager extends EventEmitter {
       themes: this.normalizeDeclarativeThemeContributions(descriptor)
     }
     this.running.set(descriptor.id, running)
-    this.hibernated.delete(descriptor.id)
     child.on('message', (message: PluginHostResponse) => {
       void this.handleHostMessage(descriptor.id, message)
     })
@@ -1186,6 +1190,7 @@ export class TwilightPluginManager extends EventEmitter {
     } satisfies PluginHostRequest)
     try {
       await activation
+      this.hibernated.delete(descriptor.id)
       if (options.persistState !== false) this.markStarted(descriptor)
       this.appendLog(descriptor, 'info', '插件已激活')
       if (!running.trial) {

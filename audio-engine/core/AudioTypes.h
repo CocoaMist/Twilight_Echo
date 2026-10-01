@@ -66,6 +66,7 @@ struct OutputConfig {
   uint32_t preferredBufferSize = 0;
   ChannelRoutingMode routingMode = ChannelRoutingMode::Auto;
   bool wasapiExclusivePushMode = false;
+  bool releaseExclusiveOnPause = false;
   PcmToDsdMode pcmToDsdMode = PcmToDsdMode::Off;
   uint32_t dsdMutePreRollFrames = 256;
   uint32_t dsdMutePostRollFrames = 256;
@@ -219,6 +220,7 @@ struct OutputInfo {
   };
 
   bool exclusive = false;
+  bool outputReleased = false;
   std::string accessMode = "shared";
   bool supportsOutputPerfect = false;
   bool sourceExact = false;

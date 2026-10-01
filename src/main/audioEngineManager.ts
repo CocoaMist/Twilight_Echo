@@ -1083,6 +1083,12 @@ export class AudioEngineManager extends EventEmitter {
     return this.outputRouter.getExclusiveMode()
   }
 
+  async setExclusiveAutoRelease(enabled: boolean): Promise<void> {
+    return this.outputRouter.serializeConfiguration(() =>
+      this.outputRouter.setExclusiveAutoRelease(enabled)
+    )
+  }
+
   async setAudioOutput(output: AudioOutputId, device?: string): Promise<AudioOutputState> {
     return this.changeAudioConfiguration(() => this.outputRouter.setAudioOutput(output, device))
   }
@@ -1198,11 +1204,11 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   async togglePause(): Promise<void> {
-    return this.playback.togglePause()
+    return this.outputRouter.serializeConfiguration(() => this.playback.togglePause())
   }
 
   async pause(): Promise<void> {
-    return this.playback.pause()
+    return this.outputRouter.serializeConfiguration(() => this.playback.pause())
   }
 
   async seek(time: number): Promise<void> {
@@ -1569,8 +1575,9 @@ export class AudioEngineManager extends EventEmitter {
     this.playbackInfo.dspActive = dspActive
     this.playbackInfo.outputInfo = {
       ...this.playbackInfo.outputInfo,
-      exclusive:
-        this.output === 'wasapi' || this.output === 'coreaudio'
+      exclusive: this.playbackInfo.outputInfo.outputReleased
+        ? false
+        : this.output === 'wasapi' || this.output === 'coreaudio'
           ? this.exclusiveMode
           : this.playbackInfo.outputInfo.exclusive,
       supportsOutputPerfect,

@@ -6,6 +6,15 @@ import {
   type ListeningStatsPersistenceStatus,
   type ListeningStatsStorage
 } from './listeningStatsPersistence.ts'
+import {
+  clearListeningStatsHistory,
+  compactListeningTrackDays,
+  isListeningStatsClearRange,
+  normalizeListeningTrackDays,
+  recordListeningTrackDay,
+  type ListeningStatsClearRange,
+  type ListeningTrackDayStat
+} from '@renderer/stores/listeningStatsHistory.ts'
 
 export interface ListeningTrackStat {
   seconds: number
@@ -13,6 +22,8 @@ export interface ListeningTrackStat {
   lastPlayed: number
   skips: number
   completions: number
+  daily?: Record<string, ListeningTrackDayStat>
+  undatedLastPlayed?: number
   title: string
   artist: string
   cover: string | null
@@ -97,6 +108,7 @@ const listeningStatsPersistence = new ListeningStatsPersistence<ListeningStats>(
 
 let listeningTimer: number | null = null
 let lastCountedTrackId = ''
+let lastCountedTimestamp = 0
 let trackerStarted = false
 let lastOutcomeTrack: Track | null = null
 let lastOutcomePosition = 0
@@ -130,6 +142,11 @@ function normalizeTrackStats(value: Record<string, unknown>): Record<string, Lis
       lastPlayed: Number.isFinite(lastPlayed) && lastPlayed > 0 ? lastPlayed : 0,
       skips: Number.isFinite(skips) && skips > 0 ? skips : 0,
       completions: Number.isFinite(completions) && completions > 0 ? completions : 0,
+      daily: normalizeListeningTrackDays(raw.daily),
+      undatedLastPlayed:
+        Number.isFinite(Number(raw.undatedLastPlayed)) && Number(raw.undatedLastPlayed) > 0
+          ? Number(raw.undatedLastPlayed)
+          : 0,
       title: typeof raw.title === 'string' ? raw.title : 'Unknown Track',
       artist: typeof raw.artist === 'string' ? raw.artist : 'Unknown Artist',
       cover: typeof raw.cover === 'string' && raw.cover ? raw.cover : null,
@@ -211,6 +228,9 @@ export function compactListeningStatsForPersistence(
   }
 
   const trackIds = Object.keys(stats.tracks)
+  for (const id of trackIds) {
+    if (compactListeningTrackDays(stats.tracks[id], oldestDay)) changed = true
+  }
   if (trackIds.length <= LISTENING_STATS_MAX_TRACKS) return changed
   trackIds
     .sort((left, right) => {
@@ -245,9 +265,12 @@ function recordListening(track: Track, seconds: number, timestamp: number): void
   commitListeningStats((stats) => {
     stats.days[today] = (stats.days[today] ?? 0) + seconds
     const previous = stats.tracks[statKey] ?? createEmptyTrackStat(track)
+    const plays = lastCountedTrackId === track.id ? 0 : 1
+    recordListeningTrackDay(previous, timestamp, { seconds, plays })
     stats.tracks[statKey] = {
+      ...previous,
       seconds: previous.seconds + seconds,
-      plays: previous.plays + (lastCountedTrackId === track.id ? 0 : 1),
+      plays: previous.plays + plays,
       lastPlayed: timestamp,
       skips: previous.skips,
       completions: previous.completions,
@@ -259,6 +282,7 @@ function recordListening(track: Track, seconds: number, timestamp: number): void
     }
   })
   lastCountedTrackId = track.id
+  lastCountedTimestamp = timestamp
 }
 
 function recordPlaybackOutcome(
@@ -289,6 +313,10 @@ function recordPlaybackOutcome(
   const statKey = getListeningStatKey(track)
   commitListeningStats((stats) => {
     const previous = stats.tracks[statKey] ?? createEmptyTrackStat(track)
+    recordListeningTrackDay(previous, timestamp, {
+      skips: outcome === 'skip' ? 1 : 0,
+      completions: outcome === 'completion' ? 1 : 0
+    })
     stats.tracks[statKey] = {
       ...previous,
       lastPlayed: Math.max(previous.lastPlayed, timestamp),
@@ -328,6 +356,8 @@ function createEmptyTrackStat(track: Track): ListeningTrackStat {
     lastPlayed: 0,
     skips: 0,
     completions: 0,
+    daily: {},
+    undatedLastPlayed: 0,
     title: track.title,
     artist: track.artist,
     cover: coverFields.cover,
@@ -553,11 +583,24 @@ export function setupListeningStatsTracking(player: ListeningPlayerState): void 
 export function useListeningStatsStore(): {
   listeningStats: Ref<ListeningStats>
   persistenceStatus: Ref<ListeningStatsPersistenceStatus>
+  clearListeningStats(range: ListeningStatsClearRange): boolean
 } {
   return {
     listeningStats,
-    persistenceStatus: listeningStatsPersistenceStatus
+    persistenceStatus: listeningStatsPersistenceStatus,
+    clearListeningStats
   }
+}
+
+export function clearListeningStats(range: ListeningStatsClearRange): boolean {
+  if (!isListeningStatsClearRange(range)) throw new Error('请选择有效的开始和结束日期')
+  commitListeningStats((stats) => clearListeningStatsHistory(stats, range))
+  const countedDay = dayKey(lastCountedTimestamp)
+  if (range === null || (countedDay >= range.startDay && countedDay <= range.endDay)) {
+    lastCountedTrackId = ''
+    lastCountedTimestamp = 0
+  }
+  return listeningStatsPersistence.flush()
 }
 
 export function getRecentTracks(limit = 100): ListeningTrackStatWithId[] {
@@ -633,6 +676,7 @@ export function resetListeningStatsForTest(): void {
   listeningStatsPersistence.resetForTest()
   listeningStats.value = { days: {}, tracks: {} }
   lastCountedTrackId = ''
+  lastCountedTimestamp = 0
   lastOutcomeTrack = null
   lastOutcomePosition = 0
   lastOutcomeDuration = 0

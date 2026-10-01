@@ -630,6 +630,10 @@ onBeforeUnmount(() => {
       <i :class="viewMode === 'cover' ? 'pi pi-chart-bar' : 'pi pi-times'"></i>
     </button>
 
+    <div v-if="currentTrack && viewMode === 'cover'" class="playback-time">
+      <PlayingMusicTimeChip />
+    </div>
+
     <div v-if="viewMode !== 'visualizer'" class="backdrop" aria-hidden="true">
       <Transition name="backdrop-cover-fade" appear>
         <div
@@ -699,9 +703,7 @@ onBeforeUnmount(() => {
           }"
           :style="lyricStyle"
         >
-          <div class="lyrics-head">
-            <PlayingMusicTimeChip />
-          </div>
+          <div class="lyrics-head" aria-hidden="true" />
 
           <div
             ref="lyricsEl"
@@ -1068,15 +1070,21 @@ html[data-te-motion='off'] .backdrop-fluid::before {
   align-self: center;
 }
 
-@media (min-width: 1121px) {
-  :global(html[data-te-player-layout='standard'] .playing-music .cover-column) {
-    transform: translateX(clamp(42px, 5vw, 80px));
-  }
+:global(html[data-te-player-layout='standard'] .playing-music .layout:not(.layout--single)) {
+  width: min(
+    100%,
+    calc(360px + var(--te-lyric-cover-gap, 40px) + var(--te-lyric-max-width, 820px))
+  );
+  margin-inline: auto;
 }
 
 .cover-frame {
-  width: var(--te-playback-cover-size, 100%);
+  width: min(
+    var(--te-playback-cover-size, 100%),
+    max(120px, calc(100vh - 100px - var(--te-font-size-body, 14px) * 180 / 14))
+  );
   max-width: 100%;
+  flex-shrink: 0;
   margin-inline: auto;
   aspect-ratio: 1;
   border-radius: var(--te-playback-cover-radius, 26px);
@@ -1222,7 +1230,15 @@ html[data-te-motion='off'] .backdrop-fluid::before {
   justify-content: flex-end;
   gap: 16px;
   padding-bottom: 18px;
+  min-height: 56px;
   min-width: 0;
+}
+
+.playback-time {
+  position: absolute;
+  top: 42px;
+  right: 42px;
+  z-index: 2;
 }
 
 .time-chip {
@@ -1637,7 +1653,7 @@ html[data-te-motion='off'] .backdrop-fluid::before {
 @media (max-width: 1120px) {
   .stage,
   .empty-shell {
-    padding: 38px 22px 20px;
+    padding: 98px 22px 20px;
   }
 
   .layout {
@@ -1682,7 +1698,11 @@ html[data-te-motion='off'] .backdrop-fluid::before {
 @media (max-width: 760px) {
   .stage,
   .empty-shell {
-    padding: 34px 16px 16px;
+    padding: 98px 16px 16px;
+  }
+
+  .playback-time {
+    right: 16px;
   }
 
   .track-title {
@@ -1951,8 +1971,12 @@ html[data-te-motion='off'] .backdrop-fluid::before {
 }
 
 @media (max-width: 1120px) {
-  :global(html[data-te-player-layout='standard'] .playing-music .cover-column),
-  :global(html[data-te-player-layout='split'] .playing-music .cover-column) {
+  :global(
+    html[data-te-player-layout='standard'] .playing-music .layout:not(.layout--single) .cover-column
+  ),
+  :global(
+    html[data-te-player-layout='split'] .playing-music .layout:not(.layout--single) .cover-column
+  ) {
     display: grid;
     grid-template-columns: minmax(132px, 180px) minmax(0, 1fr);
     align-items: center;
@@ -1961,8 +1985,12 @@ html[data-te-motion='off'] .backdrop-fluid::before {
     justify-self: center;
   }
 
-  :global(html[data-te-player-layout='standard'] .playing-music .cover-frame),
-  :global(html[data-te-player-layout='split'] .playing-music .cover-frame) {
+  :global(
+    html[data-te-player-layout='standard'] .playing-music .layout:not(.layout--single) .cover-frame
+  ),
+  :global(
+    html[data-te-player-layout='split'] .playing-music .layout:not(.layout--single) .cover-frame
+  ) {
     width: min(100%, 180px);
   }
 
@@ -2005,6 +2033,25 @@ html[data-te-motion='off'] .backdrop-fluid::before {
   :global(html[data-te-player-layout='split'] .playing-music .cover-column) {
     width: auto;
     justify-self: stretch;
+  }
+}
+
+@media (max-width: 1120px) {
+  .layout--single {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .layout--single .cover-column {
+    display: flex;
+    align-self: center;
+  }
+
+  .layout--single .cover-frame {
+    width: min(
+      var(--te-playback-cover-size, 100%),
+      max(120px, calc(100vh - 118px - var(--te-font-size-body, 14px) * 180 / 14))
+    );
+    margin-inline: auto;
   }
 }
 

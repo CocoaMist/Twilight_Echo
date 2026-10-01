@@ -71,6 +71,7 @@ const props = withDefaults(
     menuOpen?: boolean
     preview?: boolean
     previewTrack?: Track
+    previewState?: string
     /** Show the expanded artwork and waveform stage on the actual lyrics page. */
     visualizerVisible?: boolean
     /**
@@ -107,11 +108,11 @@ const showCompactVisualizer = computed(() => isCompact.value && props.visualizer
 const {
   currentTrack: playbackCurrentTrack,
   dominantColor,
-  isPlaying,
-  isStreamBuffering,
+  isPlaying: playbackIsPlaying,
+  isStreamBuffering: playbackStreamBuffering,
   streamNowPlaying,
-  currentTime,
-  duration,
+  currentTime: playbackCurrentTime,
+  duration: playbackDuration,
   volume,
   playbackRate,
   setPlaybackRate,
@@ -185,9 +186,30 @@ const {
   discoverCastDevices,
   refreshCastTarget
 } = usePlayerStore()
+const isPlaying = computed(() =>
+  props.preview ? props.previewState === 'listening' : playbackIsPlaying.value
+)
+const isStreamBuffering = computed(() =>
+  props.preview ? props.previewState === 'loading' : playbackStreamBuffering.value
+)
+const duration = computed(() =>
+  props.preview ? (props.previewTrack?.duration ?? 180) : playbackDuration.value
+)
+const currentTime = computed(() =>
+  props.preview
+    ? duration.value * (props.previewState === 'done' ? 1 : 0.35)
+    : playbackCurrentTime.value
+)
 const currentTrack = computed(() =>
   props.preview && props.previewTrack ? props.previewTrack : playbackCurrentTrack.value
 )
+const currentSourceInfo = computed(() => {
+  const track = currentTrack.value
+  const info = playbackInfo.value
+  return !props.preview && track && info?.nativePlaybackActive && info.source === track.filePath
+    ? info
+    : null
+})
 // Keep the visualization poll alive only while the compact skyline is mounted.
 let releaseVisualizationConsumer: (() => void) | null = null
 watch(
@@ -933,6 +955,9 @@ const audioStatusChips = computed(() => {
   const sourceExact = canonicalSourceExact()
   const outputPerfect = canonicalOutputPerfect()
   const reasonText = resolvePerfectReasonText()
+  if (outputInfo.value?.outputReleased) {
+    return [{ label: '设备已释放', tone: 'muted' as const, title: '继续播放时重新获取音频设备' }]
+  }
   chips.push({
     label: 'Source Exact',
     tone: sourceExact ? 'success' : 'muted',
@@ -1061,6 +1086,7 @@ function formatDecodedStage(info: NonNullable<typeof playbackInfo.value>): strin
 }
 
 const outputChainText = computed(() => {
+  if (outputInfo.value?.outputReleased) return '音频设备已释放，继续播放时重新获取'
   const info = playbackInfo.value
   if (!info) return ''
   const source =
@@ -1092,6 +1118,7 @@ const outputChainText = computed(() => {
   return `${source || 'Source'} -> ${decoded} -> ${backend ? formatBackendLabel(backend) : 'Backend pending'} -> ${actual} -> ${perfect}`
 })
 const outputLatencyText = computed(() => {
+  if (outputInfo.value?.outputReleased) return '设备释放期间无输出延迟'
   const info = outputInfo.value
   if (!info) return 'Latency 0.0 ms'
   const buffer = info.latencyInfo?.bufferLatencyMs ?? 0
@@ -2169,6 +2196,7 @@ onBeforeUnmount(() => {
             :glass="glass"
             :accent-color="playButtonColor"
             :exclusive-mode="exclusiveMode"
+            :output-released="outputInfo?.outputReleased"
             :exclusive-available="exclusiveAvailable"
             :audio-output="audioOutput"
             :audio-output-options="audioOutputOptions"
@@ -2198,6 +2226,7 @@ onBeforeUnmount(() => {
             :output-diagnostics-text="outputDiagnosticsText"
             :native-dsd-runtime-reason-text="nativeDsdRuntimeReasonText"
             :current-track="currentTrack"
+            :source-info="currentSourceInfo"
             :desktop-lyrics-on="desktopLyricsOn"
             :lyrics-reloading="lyricsReloading"
             :original-layer-selection="originalLayerSelection"

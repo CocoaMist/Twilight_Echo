@@ -1,8 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue'
+import { EQ_DISPLAY_RANGES, gainTicksForRange } from '@renderer/utils/eqViewport'
+import { useEqSpectrum } from '@renderer/composables/useEqSpectrum'
+import EqAnalyzerControls from '@renderer/components/equalizer/EqAnalyzerControls.vue'
+import NativeContextMenu from '@renderer/components/NativeContextMenu.vue'
+import type { EqDisplayRange } from '@renderer/utils/eqViewport'
+import {
+  eqBandsInBox,
+  groupEqBandPatches,
+  selectEqBands
+} from '@renderer/utils/parametricEqSelection'
+import type { EqBandPatch, EqSelectionBox } from '@renderer/utils/parametricEqSelection'
 import ParametricEqBandInspector from '@renderer/components/equalizer/ParametricEqBandInspector.vue'
 import {
   PARAMETRIC_EQ_MAX_BANDS,
+  PARAMETRIC_EQ_MIN_FREQUENCY,
+  PARAMETRIC_EQ_MAX_FREQUENCY,
   adjustQByWheel,
   clampEqValue,
   displayBandGain,
@@ -13,18 +26,28 @@ import {
   percentToGain
 } from '@renderer/utils/parametricEqInteraction'
 import { createEqWheelCommit, nudgeEqParameter } from '@renderer/utils/parametricEqKnob'
-import { placeEqInspector, placeEqTooltip } from '@renderer/utils/parametricEqLayout'
+import {
+  constrainEqInspector,
+  placeEqInspector,
+  placeEqTooltip
+} from '@renderer/utils/parametricEqLayout'
 import type { EqualizerBand, EqualizerFilterType } from '@renderer/types/settings'
 
 type HeadphoneCurveKey = 'source' | 'target' | 'individual' | 'combined' | 'corrected'
 const props = defineProps<{
   bands: EqualizerBand[]
   selectedIndex: number
+  selectedIndices?: number[]
+  clipboardBusy?: boolean
+  clipboardMessage?: string
+  clipboardFailed?: boolean
+  displayRangeDb: EqDisplayRange
   filterTypes: { value: EqualizerFilterType; label: string; usesGain: boolean }[]
   responseView: 'dsp' | 'headphone'
   responsePath: string
-  spectrumPath: string
+  spectrumLevels: Float32Array | null
   spectrumVisible: boolean
+  spectrumFrozen?: boolean
   measuredSourcePath: string
   targetResponsePath: string
   combinedFilterPath: string
@@ -43,14 +66,18 @@ const props = defineProps<{
   error: string
 }>()
 const emit = defineEmits<{
-  select: [index: number]
+  'update:displayRangeDb': [range: EqDisplayRange]
+  select: [index: number, indices: number[]]
+  copy: [all: boolean]
+  paste: []
   add: [frequency: number, gain: number]
-  preview: [index: number, patch: Partial<EqualizerBand>]
+  'preview-bands': [changes: EqBandPatch[]]
   commit: []
   delete: [index: number]
   toggle: [index: number]
   filter: [index: number, filterType: EqualizerFilterType]
   'toggle-spectrum': []
+  'update:spectrumFrozen': [frozen: boolean]
   'toggle-headphone-curve': [curve: HeadphoneCurveKey]
 }>()
 const workspaceRef = ref<HTMLElement | null>(null)
@@ -59,14 +86,49 @@ const inspectorHost = ref<HTMLElement | null>(null)
 const inspectorRef = ref<InstanceType<typeof ParametricEqBandInspector> | null>(null)
 const hoveredIndex = ref<number | null>(null)
 const inspectorOpen = ref(true)
+const contextMenuOpen = ref(false)
+const contextMenuOnBand = ref(false)
 const pointerPosition = shallowRef<{ x: number; y: number } | null>(null)
 const drag = shallowRef<{
   index: number
   pointerId: number
   rect: DOMRect
   changed: boolean
+  bands: EqualizerBand[]
+  indices: number[]
+  lastX: number
+  lastY: number
+  deltaX: number
+  deltaY: number
 } | null>(null)
+const boxDrag = shallowRef<{
+  pointerId: number
+  rect: DOMRect
+  startX: number
+  startY: number
+  box: EqSelectionBox
+  original: number[]
+  primary: number
+  additive: boolean
+  moved: boolean
+} | null>(null)
+let suppressBackgroundClick = false
+let backgroundCreated = false
+let selectionAnchor = props.selectedIndex
+let inspectorGesture: { bands: EqualizerBand[]; indices: number[]; index: number } | null = null
 const frozenInspector = shallowRef<{ left: number; top: number } | null>(null)
+const manualInspector = shallowRef<{ left: number; top: number } | null>(null)
+const inspectorDrag = shallowRef<{
+  pointerId: number
+  target: HTMLElement
+  clientX: number
+  clientY: number
+  left: number
+  top: number
+  scale: number
+  moved: boolean
+  original: { left: number; top: number } | null
+} | null>(null)
 const geometry = shallowRef({
   width: 1000,
   height: 500,
@@ -77,6 +139,12 @@ const geometry = shallowRef({
 })
 const compact = ref(false)
 const spectrumGradientId = `eq-spectrum-${useId()}`
+const spectrum = useEqSpectrum({
+  levels: () => props.spectrumLevels,
+  visible: () => props.spectrumVisible && props.responseView === 'dsp',
+  frozen: () => props.spectrumFrozen === true
+})
+const { peakHold, range: spectrumRange, speed: spectrumSpeed, resetPeaks } = spectrum
 let resizeObserver: ResizeObserver | null = null
 let wheelQ: { index: number; value: number } | null = null
 const wheelCommit = createEqWheelCommit(() => {
@@ -98,12 +166,29 @@ const frequencyTicks = [
 ]
 const majorFrequencyTicks = new Set([20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000])
 const labeledFrequencies = frequencyTicks.filter((frequency) => majorFrequencyTicks.has(frequency))
-const gainTicks = [18, 12, 6, 0, -6, -12, -18]
+const gainTicks = computed(() => gainTicksForRange(props.displayRangeDb))
+function gainY(gain: number): number {
+  return gainToPercent(gain, props.displayRangeDb)
+}
+function changeDisplayRange(event: Event): void {
+  finishInteraction()
+  emit('update:displayRangeDb', Number((event.target as HTMLSelectElement).value) as EqDisplayRange)
+}
 const meterTicks = [0, -12, -24, -36, -48, -60]
 const selectedBand = computed(() => props.bands[props.selectedIndex] ?? null)
+const selectedIndices = computed(() =>
+  (props.selectedIndices ?? (selectedBand.value ? [props.selectedIndex] : [])).filter(
+    (index) => props.bands[index]
+  )
+)
+const selectedSet = computed(() => new Set(selectedIndices.value))
 const activeBandCount = computed(() => props.bands.filter((band) => band.enabled !== false).length)
 const showInspector = computed(
-  () => inspectorOpen.value && selectedBand.value && props.responseView === 'dsp'
+  () =>
+    inspectorOpen.value &&
+    selectedBand.value &&
+    props.responseView === 'dsp' &&
+    !boxDrag.value?.moved
 )
 const tooltipIndex = computed(() => drag.value?.index ?? hoveredIndex.value)
 const tooltipBand = computed(() =>
@@ -116,9 +201,6 @@ const responseLayers = computed(() =>
     bypassed: props.responseView === 'dsp' && props.bands[item.index]?.enabled === false
   }))
 )
-const spectrumFillPath = computed(() =>
-  props.spectrumPath ? `${props.spectrumPath} L100,100 L0,100 Z` : ''
-)
 const headphoneControls = computed<{ key: HeadphoneCurveKey; label: string; visible: boolean }[]>(
   () => [
     { key: 'source', label: '源频响', visible: props.showMeasuredSource },
@@ -130,13 +212,19 @@ const headphoneControls = computed<{ key: HeadphoneCurveKey; label: string; visi
 )
 function currentInspectorPlacement() {
   const bounds = geometry.value
+  if (manualInspector.value)
+    return constrainEqInspector(
+      bounds,
+      { width: bounds.panelWidth, height: bounds.panelHeight },
+      manualInspector.value
+    )
   const band = selectedBand.value
   return placeEqInspector(
     bounds,
     band
       ? {
           x: (frequencyToPercent(band.frequency) * bounds.width) / 100,
-          y: (gainToPercent(displayBandGain(band)) * bounds.height) / 100
+          y: (gainY(displayBandGain(band)) * bounds.height) / 100
         }
       : { x: 0, y: 0 },
     { width: bounds.panelWidth, height: bounds.panelHeight }
@@ -145,8 +233,9 @@ function currentInspectorPlacement() {
 const inspectorPosition = computed(() => {
   const placement = frozenInspector.value ?? currentInspectorPlacement()
   return {
-    left: `${geometry.value.left + placement.left}px`,
-    top: `${geometry.value.top + placement.top}px`
+    left: `${geometry.value.left}px`,
+    top: `${geometry.value.top}px`,
+    transform: `translate3d(${placement.left}px, ${placement.top}px, 0)`
   }
 })
 const tooltipStyle = computed(() => {
@@ -155,7 +244,7 @@ const tooltipStyle = computed(() => {
   const bounds = geometry.value
   const placement = placeEqTooltip(bounds, {
     x: (frequencyToPercent(band.frequency) * bounds.width) / 100,
-    y: (gainToPercent(displayBandGain(band)) * bounds.height) / 100
+    y: (gainY(displayBandGain(band)) * bounds.height) / 100
   })
   return {
     left: `${placement.left}px`,
@@ -193,6 +282,111 @@ function measure(): void {
     panelWidth: panel?.offsetWidth || 460,
     panelHeight: panel?.offsetHeight || 142
   }
+  if (compact.value) endInspectorDrag()
+  if (!compact.value && manualInspector.value) manualInspector.value = currentInspectorPlacement()
+}
+function isInspectorControl(event: Event): boolean {
+  return !!(event.target as Element).closest(
+    'button, input, select, textarea, .eq-parameter-knob, .filter-select, [contenteditable="true"]'
+  )
+}
+function beginInspectorDrag(event: PointerEvent): void {
+  if (event.button !== 0 || compact.value || inspectorDrag.value || isInspectorControl(event))
+    return
+  event.preventDefault()
+  event.stopPropagation()
+  finishInteraction()
+  const surface = surfaceRef.value!
+  const panelRect = inspectorHost.value!.getBoundingClientRect()
+  const rect = surface.getBoundingClientRect()
+  const scale = rect.width / surface.clientWidth
+  const position = {
+    left: (panelRect.left - rect.left) / scale,
+    top: (panelRect.top - rect.top) / scale
+  }
+  const target = event.currentTarget as HTMLElement
+  inspectorDrag.value = {
+    pointerId: event.pointerId,
+    target,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    ...position,
+    scale,
+    moved: false,
+    original: manualInspector.value
+  }
+  manualInspector.value = position
+  target.focus({ preventScroll: true })
+  target.setPointerCapture(event.pointerId)
+}
+function moveInspector(event: PointerEvent): void {
+  const gesture = inspectorDrag.value
+  if (!gesture || event.pointerId !== gesture.pointerId) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.clientX !== gesture.clientX || event.clientY !== gesture.clientY) gesture.moved = true
+  const bounds = geometry.value
+  manualInspector.value = constrainEqInspector(
+    bounds,
+    { width: bounds.panelWidth, height: bounds.panelHeight },
+    {
+      left: gesture.left + (event.clientX - gesture.clientX) / gesture.scale,
+      top: gesture.top + (event.clientY - gesture.clientY) / gesture.scale
+    }
+  )
+}
+function endInspectorDrag(event?: PointerEvent): void {
+  const gesture = inspectorDrag.value
+  if (!gesture || (event && event.pointerId !== gesture.pointerId)) return
+  if (event?.type === 'pointercancel' || !gesture.moved) manualInspector.value = gesture.original
+  inspectorDrag.value = null
+  if (gesture.target.hasPointerCapture(gesture.pointerId))
+    gesture.target.releasePointerCapture(gesture.pointerId)
+}
+function resetInspectorPosition(event?: MouseEvent): void {
+  if (event && (compact.value || isInspectorControl(event))) return
+  event?.preventDefault()
+  event?.stopPropagation()
+  endInspectorDrag()
+  manualInspector.value = null
+  frozenInspector.value = null
+}
+function handleInspectorKey(event: KeyboardEvent): void {
+  if (event.altKey || event.ctrlKey || event.metaKey) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (inspectorDrag.value) {
+      manualInspector.value = inspectorDrag.value.original
+      endInspectorDrag()
+    } else closeInspector()
+    return
+  }
+  if (event.key === 'Home' || event.key === 'Enter') {
+    event.preventDefault()
+    event.stopPropagation()
+    resetInspectorPosition()
+    return
+  }
+  const directions: Record<string, [number, number]> = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1]
+  }
+  const direction = directions[event.key]
+  if (!direction) return
+  event.preventDefault()
+  event.stopPropagation()
+  finishInteraction()
+  const position = currentInspectorPlacement(),
+    step = event.shiftKey ? 1 : 10
+  const bounds = geometry.value
+  manualInspector.value = constrainEqInspector(
+    bounds,
+    { width: bounds.panelWidth, height: bounds.panelHeight },
+    { left: position.left + direction[0] * step, top: position.top + direction[1] * step }
+  )
 }
 function freezeInspector(active: boolean): void {
   if (!active) {
@@ -204,16 +398,61 @@ function freezeInspector(active: boolean): void {
 function eventCoordinates(event: MouseEvent, rect: DOMRect) {
   const x = clampEqValue(((event.clientX - rect.left) / rect.width) * 100, 0, 100)
   const y = clampEqValue(((event.clientY - rect.top) / rect.height) * 100, 0, 100)
-  return { x, y, frequency: percentToFrequency(x), gain: percentToGain(y) }
+  return { x, y, frequency: percentToFrequency(x), gain: percentToGain(y, props.displayRangeDb) }
 }
 function finishInteraction(): void {
+  endInspectorDrag()
+  finishDrag()
+  const box = boxDrag.value
+  if (box) {
+    suppressBackgroundClick = box.moved
+    boxDrag.value = null
+    if (surfaceRef.value?.hasPointerCapture(box.pointerId))
+      surfaceRef.value.releasePointerCapture(box.pointerId)
+  }
   wheelCommit.flush()
   inspectorRef.value?.finishInteraction()
 }
-function selectBand(index: number): void {
+function selectBand(index: number, event?: MouseEvent): number[] {
   finishInteraction()
-  emit('select', index)
+  const selection = selectEqBands(props.bands, selectedIndices.value, index, selectionAnchor, {
+    toggle: event?.ctrlKey === true || event?.metaKey === true,
+    range: event?.shiftKey === true
+  })
+  if (!event?.shiftKey) selectionAnchor = selection.primary
+  emit('select', selection.primary, selection.indices)
   inspectorOpen.value = true
+  return selection.indices
+}
+function selectAllBands(): void {
+  finishInteraction()
+  const indices = props.bands.map((_band, index) => index)
+  selectionAnchor = indices[0] ?? -1
+  emit('select', selectionAnchor, indices)
+  inspectorOpen.value = true
+}
+function openContextMenu(index: number | null): void {
+  if (props.responseView !== 'dsp' || props.clipboardBusy) return
+  finishInteraction()
+  if (index !== null) selectBand(index)
+  contextMenuOnBand.value = index !== null
+  contextMenuOpen.value = true
+}
+function handleContextMenuKey(index: number | null, event: KeyboardEvent): boolean {
+  if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return false
+  event.preventDefault()
+  event.stopPropagation()
+  openContextMenu(index)
+  return true
+}
+function resetSelectedGain(): void {
+  finishInteraction()
+  const changes = selectedIndices.value
+    .filter((index) => filterUsesGain(props.bands[index].filterType))
+    .map((index) => ({ index, patch: { gain: 0 } }))
+  if (!changes.length) return
+  emit('preview-bands', changes)
+  emit('commit')
 }
 function addBand(event: MouseEvent): void {
   if (props.responseView !== 'dsp' || drag.value || props.bands.length >= PARAMETRIC_EQ_MAX_BANDS)
@@ -225,41 +464,143 @@ function addBand(event: MouseEvent): void {
   emit('add', point.frequency, point.gain)
   inspectorOpen.value = true
 }
+function clickBackground(event: MouseEvent): void {
+  if (suppressBackgroundClick) {
+    suppressBackgroundClick = false
+    return
+  }
+  if (event.detail > 1 || props.responseView !== 'dsp') return
+  backgroundCreated = false
+  finishInteraction()
+  if (selectedIndices.value.length && !event.ctrlKey && !event.metaKey) {
+    emit('select', -1, [])
+    inspectorOpen.value = false
+  } else {
+    addBand(event)
+    backgroundCreated = true
+  }
+}
+function doubleClickBackground(event: MouseEvent): void {
+  if (!backgroundCreated) addBand(event)
+}
+function beginBox(event: PointerEvent): void {
+  if (event.button !== 0 || props.responseView !== 'dsp' || !surfaceRef.value) return
+  finishInteraction()
+  suppressBackgroundClick = false
+  const rect = surfaceRef.value.getBoundingClientRect()
+  const point = eventCoordinates(event, rect)
+  boxDrag.value = {
+    pointerId: event.pointerId,
+    rect,
+    startX: point.x,
+    startY: point.y,
+    box: { left: point.x, right: point.x, top: point.y, bottom: point.y },
+    original: [...selectedIndices.value],
+    primary: props.selectedIndex,
+    additive: event.ctrlKey || event.metaKey || event.shiftKey,
+    moved: false
+  }
+  surfaceRef.value.focus({ preventScroll: true })
+  surfaceRef.value.setPointerCapture(event.pointerId)
+}
+function endBox(event: PointerEvent): void {
+  const current = boxDrag.value
+  if (!current || current.pointerId !== event.pointerId) return
+  suppressBackgroundClick = current.moved
+  boxDrag.value = null
+  if (event.type === 'pointercancel') emit('select', current.primary, current.original)
+  else if (current.moved) selectionAnchor = props.selectedIndex
+  if (surfaceRef.value?.hasPointerCapture(event.pointerId))
+    surfaceRef.value.releasePointerCapture(event.pointerId)
+}
 function beginDrag(index: number, event: PointerEvent): void {
   if (props.responseView !== 'dsp' || event.button !== 0 || drag.value || !surfaceRef.value) return
-  selectBand(index)
+  const indices = selectBand(index, event)
+  if (!indices.includes(index)) return
   const element = event.currentTarget as HTMLElement
   element.focus({ preventScroll: true })
   hoveredIndex.value = index
+  const rect = surfaceRef.value.getBoundingClientRect()
+  const point = eventCoordinates(event, rect)
   drag.value = {
     index,
     pointerId: event.pointerId,
-    rect: surfaceRef.value.getBoundingClientRect(),
-    changed: false
+    rect,
+    changed: false,
+    bands: props.bands.map((band) => ({ ...band })),
+    indices,
+    lastX: point.x,
+    lastY: point.y,
+    deltaX: 0,
+    deltaY: 0
   }
   element.setPointerCapture(event.pointerId)
   freezeInspector(true)
 }
 function updatePointer(event: PointerEvent): void {
   if (!surfaceRef.value) return
+  const selection = boxDrag.value
+  if (selection?.pointerId === event.pointerId) {
+    const point = eventCoordinates(event, selection.rect)
+    const moved =
+      Math.hypot(
+        ((point.x - selection.startX) * selection.rect.width) / 100,
+        ((point.y - selection.startY) * selection.rect.height) / 100
+      ) >= 3
+    if (!selection.moved && !moved) return
+    const box = {
+      left: Math.min(selection.startX, point.x),
+      right: Math.max(selection.startX, point.x),
+      top: Math.min(selection.startY, point.y),
+      bottom: Math.max(selection.startY, point.y)
+    }
+    boxDrag.value = { ...selection, box, moved: true }
+    const found = eqBandsInBox(props.bands, box, props.displayRangeDb)
+    const indices = selection.additive ? [...new Set([...selection.original, ...found])] : found
+    emit(
+      'select',
+      indices.includes(selection.primary) ? selection.primary : (indices.at(-1) ?? -1),
+      indices
+    )
+    return
+  }
   const current = drag.value
   const point = eventCoordinates(event, current?.rect ?? surfaceRef.value.getBoundingClientRect())
   pointerPosition.value = { x: point.x, y: point.y }
   if (!current || current.pointerId !== event.pointerId) return
-  const band = props.bands[current.index]
-  if (!band) return
+  if (point.x === current.lastX && point.y === current.lastY) return
+  const band = current.bands[current.index]
+  const fine = event.shiftKey ? 0.1 : 1
+  current.deltaX += (point.x - current.lastX) * fine
+  current.deltaY += (point.y - current.lastY) * fine
+  current.lastX = point.x
+  current.lastY = point.y
   current.changed = true
-  emit('preview', current.index, {
-    frequency: point.frequency,
-    ...(filterUsesGain(band.filterType) ? { gain: point.gain } : {})
-  })
+  emit(
+    'preview-bands',
+    groupEqBandPatches(current.bands, current.indices, current.index, {
+      frequency:
+        band.frequency *
+        (PARAMETRIC_EQ_MAX_FREQUENCY / PARAMETRIC_EQ_MIN_FREQUENCY) ** (current.deltaX / 100),
+      ...(filterUsesGain(band.filterType)
+        ? { gain: band.gain - (current.deltaY * props.displayRangeDb) / 50 }
+        : {})
+    })
+  )
 }
 function endDrag(event: PointerEvent): void {
   const current = drag.value
   if (!current || current.pointerId !== event.pointerId) return
+  finishDrag()
+}
+function finishDrag(): void {
+  const current = drag.value
+  if (!current) return
   drag.value = null
-  const element = event.currentTarget as HTMLElement
-  if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId)
+  const element =
+    surfaceRef.value?.querySelectorAll<HTMLElement>('.parametric-band-handle')[current.index]
+  if (element?.hasPointerCapture(current.pointerId))
+    element.releasePointerCapture(current.pointerId)
   freezeInspector(false)
   if (current.changed) emit('commit')
 }
@@ -274,20 +615,52 @@ function adjustQ(index: number, event: WheelEvent): void {
     event.shiftKey
   )
   wheelQ = { index, value: q }
-  emit('preview', index, { q })
+  const changes = previewBand(index, { q })
+  wheelQ.value = changes.find((change) => change.index === index)?.patch.q ?? q
   wheelCommit.schedule()
 }
-function resetBandGain(index: number): void {
+function previewBand(index: number, patch: Partial<EqualizerBand>): EqBandPatch[] {
+  const gesture = inspectorGesture
+  const indices = selectedSet.value.has(index) ? selectedIndices.value : [index]
+  const changes = groupEqBandPatches(
+    gesture?.bands ?? props.bands,
+    gesture?.indices ?? indices,
+    gesture?.index ?? index,
+    patch
+  )
+  emit('preview-bands', changes)
+  return changes
+}
+function inspectorInteraction(active: boolean): void {
+  if (active && !inspectorGesture)
+    inspectorGesture = {
+      bands: props.bands.map((band) => ({ ...band })),
+      indices: [...selectedIndices.value],
+      index: props.selectedIndex
+    }
+  if (!active) inspectorGesture = null
+  freezeInspector(active)
+}
+function resetBandGain(index: number, event: MouseEvent): void {
+  if (event.ctrlKey || event.metaKey || event.shiftKey) return
   const band = props.bands[index]
   if (!band || !filterUsesGain(band.filterType)) return
-  selectBand(index)
-  emit('preview', index, { gain: 0 })
+  const indices = selectBand(index)
+  emit(
+    'preview-bands',
+    indices
+      .filter((index) => filterUsesGain(props.bands[index].filterType))
+      .map((index) => ({ index, patch: { gain: 0 } }))
+  )
   emit('commit')
 }
 function handleBandKeydown(index: number, event: KeyboardEvent): void {
+  if (handleContextMenuKey(index, event)) return
   const band = props.bands[index]
   if (!band) return
   if (event.key === 'Escape') {
+    finishInteraction()
+    emit('select', -1, [])
     inspectorOpen.value = false
     event.stopPropagation()
     return
@@ -303,12 +676,13 @@ function handleBandKeydown(index: number, event: KeyboardEvent): void {
   event.preventDefault()
   event.stopPropagation()
   selectBand(index)
-  emit('preview', index, {
+  previewBand(index, {
     [field]: nudgeEqParameter(field, band[field], direction, event.shiftKey)
   })
   emit('commit')
 }
 function closeInspector(): void {
+  endInspectorDrag()
   inspectorOpen.value = false
   surfaceRef.value
     ?.querySelector<HTMLElement>('.parametric-band-handle.selected')
@@ -318,9 +692,12 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(measure)
   if (workspaceRef.value) resizeObserver.observe(workspaceRef.value)
   if (surfaceRef.value) resizeObserver.observe(surfaceRef.value)
+  if (inspectorHost.value) resizeObserver.observe(inspectorHost.value)
   measure()
 })
-watch(showInspector, () => {
+watch(inspectorHost, (panel, previous) => {
+  if (previous) resizeObserver?.unobserve(previous)
+  if (panel) resizeObserver?.observe(panel)
   void nextTick(measure)
 })
 watch(
@@ -328,6 +705,7 @@ watch(
   () => {
     finishInteraction()
     hoveredIndex.value = null
+    contextMenuOpen.value = false
   }
 )
 onBeforeUnmount(() => {
@@ -358,18 +736,55 @@ defineExpose({ finishInteraction })
     <div class="parametric-graph-frame" :class="{ bypassed: !eqEnabled }">
       <div class="graph-heading">
         <span>{{ activeBandCount }} / {{ PARAMETRIC_EQ_MAX_BANDS }} 频段</span
-        ><span v-if="!eqEnabled" class="bypass-label">EQ 已旁路</span
-        ><span class="graph-range">±18 dB</span>
+        ><span v-if="!eqEnabled" class="bypass-label">EQ 已旁路</span>
+        <div v-if="responseView === 'dsp'" class="band-clipboard-actions">
+          <button
+            type="button"
+            title="复制所选频段（Ctrl/⌘+C）"
+            :disabled="clipboardBusy || !selectedIndices.length"
+            @click="emit('copy', false)"
+          >
+            复制
+          </button>
+          <button
+            type="button"
+            title="粘贴频段（Ctrl/⌘+V）"
+            :disabled="clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
+            @click="emit('paste')"
+          >
+            粘贴
+          </button>
+        </div>
+        <label class="graph-range"
+          ><select
+            aria-label="增益显示范围"
+            :value="displayRangeDb"
+            :disabled="!!drag"
+            @change="changeDisplayRange"
+          >
+            <option v-for="range in EQ_DISPLAY_RANGES" :key="range" :value="range">
+              ±{{ range }} dB
+            </option>
+          </select></label
+        >
       </div>
       <div
         ref="surfaceRef"
         class="parametric-graph-surface"
-        :class="{ dragging: drag }"
+        :class="{ dragging: drag, selecting: boxDrag?.moved }"
         role="application"
         aria-label="参数均衡器频响编辑区"
+        tabindex="0"
+        @pointerdown.self="beginBox"
         @pointermove="updatePointer"
+        @pointerup="endBox"
+        @pointercancel="endBox"
+        @lostpointercapture="endBox"
         @pointerleave="pointerPosition = null"
-        @click.self="addBand"
+        @click.self="clickBackground"
+        @dblclick.self.prevent="doubleClickBackground"
+        @contextmenu.self.prevent="openContextMenu(null)"
+        @keydown.self="handleContextMenuKey(null, $event)"
       >
         <div
           v-for="frequency in frequencyTicks"
@@ -383,14 +798,14 @@ defineExpose({ finishInteraction })
           :key="`g-${gain}`"
           class="gain-grid-line"
           :class="{ zero: gain === 0 }"
-          :style="{ top: gainToPercent(gain) + '%' }"
+          :style="{ top: gainY(gain) + '%' }"
         ></div>
         <div class="gain-labels" aria-hidden="true">
           <span
             v-for="gain in gainTicks"
             :key="gain"
             :class="{ zero: gain === 0 }"
-            :style="{ top: gainToPercent(gain) + '%' }"
+            :style="{ top: gainY(gain) + '%' }"
             >{{ gain > 0 ? '+' + gain : gain }}</span
           >
         </div>
@@ -419,6 +834,15 @@ defineExpose({ finishInteraction })
             <i></i>{{ control.label }}
           </button>
         </div>
+        <div
+          v-if="responseView === 'dsp' && spectrumVisible"
+          class="spectrum-scale"
+          aria-label="频谱 dB 刻度"
+        >
+          <span style="top: 12%">+10 dB</span>
+          <span style="top: 55%">{{ 10 - spectrumRange / 2 }} dB</span>
+          <span style="top: 98%">{{ 10 - spectrumRange }} dB</span>
+        </div>
         <svg
           class="parametric-plot"
           viewBox="0 0 100 100"
@@ -427,20 +851,26 @@ defineExpose({ finishInteraction })
         >
           <defs>
             <linearGradient :id="spectrumGradientId" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="var(--eq-spectrum)" stop-opacity="0.26" />
-              <stop offset="100%" stop-color="var(--eq-spectrum)" stop-opacity="0.025" />
+              <stop offset="0%" stop-color="var(--eq-spectrum)" stop-opacity="0.10" />
+              <stop offset="100%" stop-color="var(--eq-spectrum)" stop-opacity="0.01" />
             </linearGradient>
           </defs>
           <path
-            v-if="responseView === 'dsp' && spectrumVisible && spectrumFillPath"
+            v-show="responseView === 'dsp' && spectrumVisible"
+            :ref="spectrum.fillRef"
             class="live-spectrum-fill"
-            :d="spectrumFillPath"
             :fill="`url(#${spectrumGradientId})`"
           />
           <path
-            v-if="responseView === 'dsp' && spectrumVisible && spectrumPath"
+            v-show="responseView === 'dsp' && spectrumVisible"
+            :ref="spectrum.lineRef"
             class="live-spectrum-line"
-            :d="spectrumPath"
+            vector-effect="non-scaling-stroke"
+          />
+          <path
+            v-show="responseView === 'dsp' && spectrumVisible && peakHold"
+            :ref="spectrum.peakRef"
+            class="spectrum-peak-line"
             vector-effect="non-scaling-stroke"
           />
           <template v-if="responseView === 'dsp'">
@@ -448,13 +878,13 @@ defineExpose({ finishInteraction })
               <path
                 v-if="!item.bypassed"
                 class="individual-band-fill"
-                :class="{ selected: selectedIndex === item.index }"
+                :class="{ selected: selectedSet.has(item.index) }"
                 :style="{ '--band-color': bandColor(item.index) }"
                 :d="item.fill"
               />
               <path
                 class="individual-band-line"
-                :class="{ selected: selectedIndex === item.index, bypassed: item.bypassed }"
+                :class="{ selected: selectedSet.has(item.index), bypassed: item.bypassed }"
                 :style="{ '--band-color': bandColor(item.index) }"
                 :d="item.path"
                 vector-effect="non-scaling-stroke"
@@ -503,6 +933,17 @@ defineExpose({ finishInteraction })
             />
           </template>
         </svg>
+        <div
+          v-if="boxDrag?.moved"
+          class="band-selection-box"
+          :style="{
+            left: boxDrag.box.left + '%',
+            top: boxDrag.box.top + '%',
+            width: boxDrag.box.right - boxDrag.box.left + '%',
+            height: boxDrag.box.bottom - boxDrag.box.top + '%'
+          }"
+          aria-hidden="true"
+        ></div>
         <template v-if="responseView === 'dsp'">
           <button
             v-for="(band, index) in bands"
@@ -510,19 +951,20 @@ defineExpose({ finishInteraction })
             type="button"
             class="parametric-band-handle"
             :class="{
-              selected: selectedIndex === index,
+              selected: selectedSet.has(index),
               hovered: hoveredIndex === index,
               bypassed: band.enabled === false,
-              dragging: drag?.index === index
+              dragging: drag?.indices.includes(index),
+              'outside-range': Math.abs(displayBandGain(band)) > displayRangeDb
             }"
             :style="{
               left: frequencyToPercent(band.frequency) + '%',
-              top: gainToPercent(displayBandGain(band)) + '%',
+              top: gainY(displayBandGain(band)) + '%',
               '--band-color': bandColor(index)
             }"
             :aria-label="`频段 ${index + 1}，${formatFrequency(band.frequency)}，${formatGain(displayBandGain(band))}，Q ${band.q.toFixed(2)}`"
-            :aria-pressed="selectedIndex === index"
-            @click.stop="selectBand(index)"
+            :aria-pressed="selectedSet.has(index)"
+            @click.stop="$event.detail === 0 && selectBand(index, $event)"
             @pointerenter="hoveredIndex = index"
             @pointerleave="hoveredIndex = null"
             @pointerdown.prevent.stop="beginDrag(index, $event)"
@@ -531,10 +973,17 @@ defineExpose({ finishInteraction })
             @pointercancel.stop="endDrag"
             @lostpointercapture="endDrag"
             @wheel.prevent.stop="adjustQ(index, $event)"
-            @dblclick.prevent.stop="resetBandGain(index)"
+            @dblclick.prevent.stop="resetBandGain(index, $event)"
             @keydown="handleBandKeydown(index, $event)"
+            @contextmenu.prevent.stop="openContextMenu(index)"
           >
-            <span class="handle-index">{{ index + 1 }}</span>
+            <span class="handle-index">{{
+              Math.abs(displayBandGain(band)) > displayRangeDb
+                ? displayBandGain(band) > 0
+                  ? '↑'
+                  : '↓'
+                : index + 1
+            }}</span>
           </button>
           <div v-if="bands.length === 0" class="graph-empty">
             <strong>从一个频段开始</strong><span>单击画布添加 · 拖动节点调节频率与增益</span>
@@ -590,9 +1039,14 @@ defineExpose({ finishInteraction })
       </aside>
       <div class="graph-hint">
         <template v-if="responseView === 'dsp'"
-          >拖动节点 · 滚轮调 Q · 双击复位增益<span v-if="bands.length >= PARAMETRIC_EQ_MAX_BANDS"
+          >拖动节点 · Ctrl/⌘ 多选 · Shift 连选 · 拖空白框选<span
+            v-if="bands.length >= PARAMETRIC_EQ_MAX_BANDS"
             >已达到 32 个频段上限</span
-          ><span v-else>单击空白添加频段</span></template
+          ><span v-else>{{
+            selectedIndices.length
+              ? `已选 ${selectedIndices.length} · 双击空白添加`
+              : '单击空白添加频段'
+          }}</span></template
         ><template v-else
           >R(f) = M(f) + H(f)<span>数字前级不计入声学预计 · 预计值，非实测</span></template
         >
@@ -602,21 +1056,36 @@ defineExpose({ finishInteraction })
       v-if="showInspector && selectedBand"
       ref="inspectorHost"
       class="floating-band-inspector"
+      :class="{ moving: inspectorDrag, movable: !compact }"
       :style="{ ...inspectorPosition, '--band-color': bandColor(selectedIndex) }"
+      :tabindex="compact ? undefined : 0"
+      role="group"
+      aria-label="频段面板"
+      :aria-description="compact ? undefined : '拖动空白区域移动，双击复位，方向键微调'"
+      @pointerdown="beginInspectorDrag"
+      @pointermove="moveInspector"
+      @pointerup="endInspectorDrag"
+      @pointercancel="endInspectorDrag"
+      @lostpointercapture="endInspectorDrag"
+      @dblclick="resetInspectorPosition"
+      @keydown.self="handleInspectorKey"
     >
       <ParametricEqBandInspector
         ref="inspectorRef"
         :key="selectedIndex"
         :band="selectedBand"
         :index="selectedIndex"
+        :selection-count="selectedIndices.length"
+        :selection-enabled="selectedIndices.some((index) => bands[index].enabled !== false)"
         :filter-types="filterTypes"
-        @preview="(index, patch) => emit('preview', index, patch)"
+        :movable="!compact"
+        @preview="previewBand"
         @commit="emit('commit')"
         @toggle="emit('toggle', $event)"
         @delete="emit('delete', $event)"
         @filter="(index, type) => emit('filter', index, type)"
         @close="closeInspector"
-        @interaction="freezeInspector"
+        @interaction="inspectorInteraction"
       />
     </div>
     <footer class="analyzer-footer">
@@ -631,12 +1100,80 @@ defineExpose({ finishInteraction })
         <i class="pi pi-chart-line"></i><span>分析器</span
         ><small>{{ spectrumVisible ? '开' : '关' }}</small>
       </button>
+      <EqAnalyzerControls
+        v-if="responseView === 'dsp' && spectrumVisible"
+        :frozen="spectrumFrozen === true"
+        v-model:peak-hold="peakHold"
+        v-model:range="spectrumRange"
+        v-model:speed="spectrumSpeed"
+        @update:frozen="emit('update:spectrumFrozen', $event)"
+        @reset-peaks="resetPeaks"
+      />
       <slot name="footer"></slot>
       <div class="stage-status" :class="`is-${statusState}`" :title="error || status" role="status">
         <span class="status-dot"></span><span>{{ status }}</span>
       </div>
     </footer>
     <div v-if="error" class="eq-apply-error" role="alert">{{ error }}</div>
+    <div
+      v-if="clipboardMessage"
+      class="clipboard-feedback"
+      :class="{ failed: clipboardFailed }"
+      :role="clipboardFailed ? 'alert' : 'status'"
+    >
+      {{ clipboardMessage }}
+    </div>
+    <NativeContextMenu v-if="contextMenuOpen" @close="contextMenuOpen = false">
+      <button
+        v-if="contextMenuOnBand"
+        type="button"
+        :disabled="clipboardBusy || !selectedIndices.length"
+        @click="emit('copy', false)"
+      >
+        复制所选频段
+      </button>
+      <button type="button" :disabled="clipboardBusy || !bands.length" @click="emit('copy', true)">
+        复制全部频段
+      </button>
+      <button
+        type="button"
+        :disabled="clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
+        @click="emit('paste')"
+      >
+        粘贴频段
+      </button>
+      <button type="button" :disabled="!bands.length" @click="selectAllBands">全选频段</button>
+      <template v-if="contextMenuOnBand">
+        <div class="menu-item">
+          滤波类型
+          <div class="submenu">
+            <button
+              v-for="filter in filterTypes"
+              :key="filter.value"
+              type="button"
+              @click="emit('filter', selectedIndex, filter.value)"
+            >
+              {{ filter.label }}
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          :disabled="!selectedIndices.some((index) => filterUsesGain(bands[index].filterType))"
+          @click="resetSelectedGain"
+        >
+          重置所选增益
+        </button>
+        <button type="button" @click="emit('toggle', selectedIndex)">
+          {{
+            selectedIndices.some((index) => bands[index].enabled !== false)
+              ? '旁路所选频段'
+              : '启用所选频段'
+          }}
+        </button>
+        <button type="button" @click="emit('delete', selectedIndex)">删除所选频段</button>
+      </template>
+    </NativeContextMenu>
   </section>
 </template>
 
@@ -726,6 +1263,7 @@ defineExpose({ finishInteraction })
 }
 .stage-commands {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   flex: 1;
   min-width: 0;
@@ -757,10 +1295,64 @@ defineExpose({ finishInteraction })
   color: var(--eq-response);
   font-family: var(--eq-mono);
 }
+.band-clipboard-actions {
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+}
+.band-clipboard-actions button {
+  padding: 3px 8px;
+  color: var(--eq-text-muted);
+  background: var(--eq-panel);
+  border: 1px solid var(--eq-border-soft);
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+.band-clipboard-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.band-clipboard-actions button:focus-visible {
+  outline: 2px solid var(--eq-response);
+  outline-offset: 2px;
+}
+.graph-range select {
+  pointer-events: auto;
+  background: var(--eq-panel);
+  color: var(--eq-response);
+  border: 1px solid var(--eq-border-soft);
+  border-radius: 4px;
+  padding: 3px 5px;
+  font: inherit;
+  cursor: pointer;
+}
+.graph-range select:focus-visible {
+  outline: 2px solid var(--eq-response);
+  outline-offset: 2px;
+}
+.parametric-band-handle.outside-range {
+  border-style: dashed;
+}
 .bypass-label {
   padding: 2px 6px;
   border: 1px solid var(--eq-border-soft);
   border-radius: 3px;
+}
+.band-selection-box {
+  position: absolute;
+  border: 1px solid var(--eq-response);
+  background: color-mix(in srgb, var(--eq-response) 12%, transparent);
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 12;
+}
+.parametric-graph-surface:focus-visible {
+  outline: 1px solid var(--eq-response);
+  outline-offset: 4px;
+}
+.parametric-graph-surface.selecting {
+  cursor: crosshair;
 }
 .parametric-graph-surface {
   position: relative;
@@ -830,11 +1422,31 @@ defineExpose({ finishInteraction })
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.spectrum-scale {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.spectrum-scale span {
+  position: absolute;
+  left: 4px;
+  transform: translateY(-50%);
+  color: var(--eq-text-subtle);
+  font: 9px var(--eq-mono);
+}
+.spectrum-peak-line {
+  fill: none;
+  stroke: var(--eq-spectrum);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.65;
+}
 .live-spectrum-line {
   fill: none;
   stroke: var(--eq-spectrum);
-  stroke-width: 0.8px;
-  opacity: 0.64;
+  stroke-width: 1px;
+  opacity: 0.78;
 }
 .individual-band-fill {
   fill: var(--band-color);
@@ -1026,6 +1638,17 @@ defineExpose({ finishInteraction })
   width: 460px;
   max-width: calc(100% - 24px);
 }
+.floating-band-inspector.moving {
+  will-change: transform;
+}
+.floating-band-inspector.moving :deep(.band-inspector) {
+  cursor: grabbing;
+}
+.floating-band-inspector:focus-visible {
+  outline: 2px solid var(--eq-response);
+  outline-offset: 2px;
+  border-radius: 14px;
+}
 .output-meter {
   position: absolute;
   top: 38px;
@@ -1193,6 +1816,14 @@ defineExpose({ finishInteraction })
   color: var(--te-danger-soft-fg);
   font-size: 11px;
 }
+.clipboard-feedback {
+  padding: 6px 14px;
+  color: var(--eq-text-muted);
+  font-size: 11px;
+}
+.clipboard-feedback.failed {
+  color: var(--te-danger-soft-fg);
+}
 .spectrum-toggle:focus-visible,
 .curve-control:focus-visible {
   outline: 2px solid var(--eq-response);
@@ -1245,6 +1876,7 @@ defineExpose({ finishInteraction })
   position: relative;
   left: auto !important;
   top: auto !important;
+  transform: none !important;
   align-self: center;
   flex-shrink: 0;
   margin: 0 12px 14px;

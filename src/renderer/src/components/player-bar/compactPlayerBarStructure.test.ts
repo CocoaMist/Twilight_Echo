@@ -506,7 +506,10 @@ test('the compact boundary rail is a 2px line over a real hit target', () => {
   assert.match(playerBarCss, /\.compact-progress-track\s*\{[^}]*height:\s*2px/)
   // Real DOM track and fill, not ::-webkit-slider-runnable-track: Chromium does
   // not reliably repaint the pseudo-element when only a custom property changes.
-  assert.match(playerBarCss, /\.compact-progress-fill\s*\{[^}]*background:\s*var\(--accent-color/)
+  assert.match(
+    playerBarCss,
+    /\.compact-progress-fill\s*\{[^}]*background:\s*var\(--te-player-bar-progress-fill, var\(--accent-color/
+  )
   assert.match(playerBarCss, /\.compact-progress-fill\s*\{[^}]*transform:\s*scaleX\(0\)/)
   assert.match(playerBarCss, /\.compact-progress-slider\s*\{[^}]*inset:\s*0/)
   assert.match(playerBarCss, /\.compact-progress-slider::-webkit-slider-thumb\s*\{[^}]*width:\s*0/)

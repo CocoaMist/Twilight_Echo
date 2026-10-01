@@ -128,6 +128,7 @@ import { createAudioOutputController } from './player/audioOutputController.ts'
 import { createHeartModeController } from './player/heartModeController.ts'
 import { createRemoteControlBridge } from './player/remoteControlBridge.ts'
 import { createRemotePlaybackPublisher } from './player/remotePlaybackPublisher.ts'
+import { createNativePlaybackToggleController } from '@renderer/stores/player/nativePlaybackToggleController.ts'
 
 type NativePlaybackInfo = Awaited<ReturnType<typeof window.api.audioEngine.getPlaybackInfo>>
 type NativeOutputInfo = NativePlaybackInfo['outputInfo']
@@ -3222,6 +3223,14 @@ async function handlePlayerShortcutAction(
   })
 }
 
+const nativePlaybackToggleController = createNativePlaybackToggleController({
+  isPlaying,
+  togglePause: () => window.api.audioEngine.togglePause(),
+  setPlaybackToggleIntent,
+  clearPlaybackToggleIntent,
+  setAudioEngineError
+})
+
 async function togglePlayState(): Promise<void> {
   const track = currentTrack.value
   if (!track) return
@@ -3245,20 +3254,11 @@ async function togglePlayState(): Promise<void> {
       return
     }
     if (nativePlaybackActive) {
-      const nextPlaying = !isPlaying.value
-      if (isPlaying.value && !nextPlaying) {
+      if (isPlaying.value) {
         playbackHistoryController.maybeRecordResumeBookmark(track, getLatestPlaybackTime())
         playbackHistoryController.flushPodcastEpisodeProgress(true)
       }
-      isPlaying.value = nextPlaying
-      setPlaybackToggleIntent(nextPlaying)
-      await window.api.audioEngine.togglePause()
-      // Do not clear the intent here. togglePause publishes the confirmed state,
-      // but a tick that was already in flight can still report the previous
-      // pause/play value. Re-arm from the current UI state (not the closed-over
-      // nextPlaying) so a second click during the await cannot be undone by
-      // re-applying the first click's intent.
-      setPlaybackToggleIntent(isPlaying.value)
+      await nativePlaybackToggleController.togglePause()
     } else {
       const audio = getPlaybackAudio()
       if (audio.paused) {
@@ -3271,10 +3271,6 @@ async function togglePlayState(): Promise<void> {
       }
     }
   } catch (err) {
-    if (nativePlaybackActive) {
-      isPlaying.value = !isPlaying.value
-      clearPlaybackToggleIntent()
-    }
     console.error('[audio-engine] togglePlay failed:', err)
   }
 }
@@ -3920,7 +3916,7 @@ async function refreshCastTarget(): Promise<void> {
   castTargetName.value = target?.friendlyName ?? null
 }
 
-export function usePlayerStore(): {
+export function usePlayerStore(): ReturnType<typeof createAudioOutputController> & {
   rehydrateCurrentTrackFromLibrary: () => void
   currentTrack: Ref<Track | null>
   dominantColor: Ref<string>
@@ -4024,24 +4020,8 @@ export function usePlayerStore(): {
   configureSleepTimer: (mode: SleepTimerMode, minutes?: number) => void
   cancelSleepTimer: () => void
   setUnityVolume: () => void
-  toggleExclusiveMode: () => Promise<void>
-  setAudioOutput: (output: AudioOutputId, device?: string) => Promise<void>
-  setAudioDevice: (device: string) => Promise<void>
-  setAudioOutputConfig: (config: Partial<OutputConfig>) => Promise<void>
   refreshAudioOutputState: () => Promise<void>
   dismissAudioEngineRecoveryNotice: () => void
-  setAudioProcessing: (settings: Partial<AudioProcessingSettings>) => Promise<void>
-  applyAudioProcessingState: (processing: AudioProcessingSettings) => void
-  setOutputStage: (partial: Partial<DspOutputStageConfig>) => Promise<void>
-  setStereoImage: (partial: Partial<DspStereoImageConfig>) => Promise<void>
-  toggleDspEnabled: () => Promise<void>
-  toggleEqEnabled: () => Promise<void>
-  toggleCrossfeed: () => Promise<void>
-  toggleGapless: () => Promise<void>
-  setReplayGainMode: (mode: AudioProcessingSettings['volumeNormalization']) => Promise<void>
-  setCrossfeedStrength: (strength: number) => Promise<void>
-  selectImpulseResponse: () => Promise<void>
-  clearImpulseResponse: () => Promise<void>
   restorePlaybackSession: (session: PlaybackSession) => void
   createPlaybackSession: (
     mode: PlaybackResumeMode,

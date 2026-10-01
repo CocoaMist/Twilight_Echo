@@ -164,6 +164,12 @@ export function getWindowBackgroundColor(settings: AppSettings): string {
 }
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
+  const nextSettings = normalizeAppSettings({ ...runtime.appSettings, ...patch })
+  if (Object.prototype.hasOwnProperty.call(patch, 'audioExclusiveAutoRelease')) {
+    await runtime.audioEngineManager?.setExclusiveAutoRelease(
+      nextSettings.audioExclusiveAutoRelease
+    )
+  }
   const previousCachePath = runtime.appSettings.musicCachePath
   const shouldUpdateAudioProcessing = Object.prototype.hasOwnProperty.call(patch, 'audioProcessing')
   const shouldUpdateHeadphoneCompensation = Object.prototype.hasOwnProperty.call(
@@ -183,7 +189,7 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
   const shouldUpdateWindowBackground =
     Object.prototype.hasOwnProperty.call(patch, 'theme') ||
     Object.prototype.hasOwnProperty.call(patch, 'appBackground')
-  runtime.appSettings = normalizeAppSettings({ ...runtime.appSettings, ...patch })
+  runtime.appSettings = nextSettings
   if (shouldUpdateWindowBackground && !runtime.appSettings.windowTransparency) {
     runtime.mainWindow?.setBackgroundColor(getWindowBackgroundColor(runtime.appSettings))
   }

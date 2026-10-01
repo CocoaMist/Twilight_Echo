@@ -379,7 +379,7 @@ test('phase four player layouts, controls, equalizer modes, and visibility stay 
   assert.match(playingMusic, /data-te-visible-player-artwork='false'/)
   assert.doesNotMatch(playerBar, /data-te-player-(controls|progress|layout|title-align)/)
   assert.doesNotMatch(playerBar, /data-te-visible-(player|previous-button|next-button)/)
-  assert.match(themeStore, /sharedPlayerBarStylesheet\(tone\)/)
+  assert.match(themeStore, /sharedPlayerBarStylesheet\(tone, selectedProfile\)/)
   assert.doesNotMatch(
     baseStyle,
     /html\[data-te-title-(?:case|color)=[^\]]+\][^{]*\.player-(?:title|artist)/

@@ -201,6 +201,7 @@ export interface AppSettings {
   audioOutput: AudioOutputId
   audioDevice: string
   audioExclusiveMode: boolean
+  audioExclusiveAutoRelease: boolean
   audioOutputConfig: OutputConfig
   audioDeviceProfiles: import('./audioDeviceProfiles.ts').AudioDeviceProfileSettings
   audioProcessing: AudioProcessingSettings

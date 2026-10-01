@@ -254,7 +254,9 @@
     "themes:setActive",
     "themes:setWindowInheritance",
     "themes:validateAssets",
-    "trayPlayer:getBootstrap"
+    "trayPlayer:getBootstrap",
+    "window:copy-eq-bands",
+    "window:paste-eq-bands"
   ],
   "mainOn": [
     "desktopLyrics:close",
@@ -533,7 +535,9 @@
     "themes:setActive",
     "themes:setWindowInheritance",
     "themes:validateAssets",
-    "trayPlayer:getBootstrap"
+    "trayPlayer:getBootstrap",
+    "window:copy-eq-bands",
+    "window:paste-eq-bands"
   ],
   "preloadSends": [
     "desktopLyrics:moveTo",
@@ -815,7 +819,9 @@
     "trayPlayer.onState",
     "window.close",
     "window.closeContextMenu",
+    "window.copyEqBands",
     "window.minimize",
+    "window.pasteEqBands",
     "window.popupContextMenu",
     "window.toggleMaximize"
   ]

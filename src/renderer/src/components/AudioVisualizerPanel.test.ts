@@ -4,7 +4,9 @@ import test from 'node:test'
 
 import {
   buildVisualizerQualityString,
-  formatVisualizerBitrate
+  formatVisualizerBitrate,
+  formatVisualizerSource,
+  resolveVisualizerAudioMetadata
 } from './audioVisualizerFormatting.ts'
 
 test('visualizer bitrate formatting converts bps to kbps', () => {
@@ -25,6 +27,82 @@ test('visualizer quality string includes normalized bitrate and source fields', 
     }),
     'FLAC / 24-bit / 44.1kHz / 1737kbps'
   )
+})
+
+test('visualizer source uses the track origin even for cached playback', () => {
+  assert.equal(formatVisualizerSource({ id: 'D:/Music/song.flac' }), 'LOCAL')
+  assert.equal(formatVisualizerSource({ id: 'ncm:123', source: 'ncm' }), 'NCM')
+  assert.equal(formatVisualizerSource({ id: 'ncm:123', source: 'network' }), 'NETWORK')
+  assert.equal(formatVisualizerSource({ id: 'plugin:123', source: 'my-provider' }), 'MY-PROVIDER')
+
+  const panel = readFileSync(new URL('./AudioVisualizerPanel.vue', import.meta.url), 'utf8')
+  const visualizer = readFileSync(
+    new URL('../../../../resources/audio-visualizer/index.html', import.meta.url),
+    'utf8'
+  )
+  assert.match(panel, /source: formatVisualizerSource\(track\)/)
+  assert.match(visualizer, /id="display-source"/)
+  assert.doesNotMatch(visualizer, /display-genre|<div class="stat-label">Genre<\/div>/)
+})
+
+test('visualizer fills missing source properties from matching native playback', () => {
+  const metadata = resolveVisualizerAudioMetadata(
+    {
+      id: 'track-1',
+      filePath: 'D:/Music/song.flac',
+      fileName: 'song.flac',
+      size: 26_738_688,
+      sampleRate: 44100,
+      bitrate: 1021000
+    },
+    {
+      source: 'D:/Music/song.flac',
+      codec: 'flac',
+      sourceSampleRate: 44100,
+      sourceChannels: 2,
+      sourceBitDepth: 16,
+      bitrate: 1021000
+    }
+  )
+
+  assert.equal(metadata.bitdepth, '16-bit')
+  assert.equal(metadata.channels, 'Stereo')
+  assert.equal(metadata.format, 'FLAC')
+  assert.equal(metadata.samplerate, '44.1 kHz')
+  assert.equal(metadata.bitrate, '1021 kbps')
+  assert.equal(metadata.filesize, '25.5 MB')
+})
+
+test('visualizer ignores stale playback data and unknown lossy source bit depth', () => {
+  const track = {
+    id: 'track-2',
+    filePath: 'D:/Music/song.mp3',
+    fileName: 'song.mp3',
+    size: 0
+  }
+  const stale = resolveVisualizerAudioMetadata(track, {
+    source: 'D:/Music/previous.flac',
+    codec: 'flac',
+    sourceSampleRate: 96000,
+    sourceChannels: 2,
+    sourceBitDepth: 24,
+    bitrate: 3000000
+  })
+  assert.equal(stale.format, 'MP3')
+  assert.equal(stale.bitdepth, '')
+  assert.equal(stale.channels, '')
+
+  const lossy = resolveVisualizerAudioMetadata(track, {
+    source: 'D:/Music/song.mp3',
+    codec: 'mp3float',
+    sourceSampleRate: 44100,
+    sourceChannels: 1,
+    sourceBitDepth: 32,
+    bitrate: 192000
+  })
+  assert.equal(lossy.format, 'MP3')
+  assert.equal(lossy.channels, 'Mono')
+  assert.equal(lossy.bitdepth, '')
 })
 
 test('audio visualizer renderer avoids random low-frequency texture', () => {

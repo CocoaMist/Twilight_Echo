@@ -14,7 +14,11 @@ import {
   type ThemeEditorControl,
   type ThemeEditorDescriptor
 } from './themeEditor.ts'
-import type { WorkshopProject, WorkshopCompiledTheme } from './themeWorkshop.ts'
+import {
+  workshopEditor,
+  type WorkshopProject,
+  type WorkshopCompiledTheme
+} from './themeWorkshop.ts'
 
 export function validateWorkshopValue(control: ThemeEditorControl, value: string): void {
   if (control.type === 'image') {
@@ -33,7 +37,7 @@ export function validateWorkshopValue(control: ThemeEditorControl, value: string
     throw new Error(`无效参数：${control.label}`)
   if (control.type === 'number') {
     const unit = control.unit ?? control.defaults.pureWhite.match(/[a-z%]+$/i)?.[0] ?? ''
-    const raw = unit && value.endsWith(unit) ? value.slice(0, -unit.length) : value
+    const raw = unit ? (value.endsWith(unit) ? value.slice(0, -unit.length) : '') : value
     const number = Number(raw)
     if (
       !raw.trim() ||
@@ -43,6 +47,18 @@ export function validateWorkshopValue(control: ThemeEditorControl, value: string
     )
       throw new Error(`无效数值：${control.label}`)
   }
+  if (
+    control.type === 'color' &&
+    !/^(?:#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})|(?:rgba?|hsla?)\([^{};]+\)|transparent|currentcolor)$/i.test(
+      value
+    )
+  )
+    throw new Error(`无效颜色：${control.label}`)
+  if (
+    control.token &&
+    normalizeThemeTokenOverrides({ [control.token]: value })[control.token] === undefined
+  )
+    throw new Error(`无效标准参数：${control.label}`)
   if (control.type === 'select' && !control.options?.includes(value))
     throw new Error(`无效选项：${control.label}`)
   if (
@@ -94,34 +110,48 @@ function workshopStructuredTheme(
 
 export function compileWorkshopTheme(project: WorkshopProject): WorkshopCompiledTheme {
   const structured = workshopStructuredTheme(project)
-  const blocks = [project.base.css]
+  const replaceAssets = (value: string): string => {
+    for (const asset of project.assets ?? [])
+      if (asset.originalDataUrl) value = value.replaceAll(asset.originalDataUrl, asset.dataUrl)
+    return value
+  }
+  const blocks = [replaceAssets(project.base.css)]
+  const inheritedControls = new Set(project.base.editor?.controls.map((control) => control.id))
   for (const tone of ['pureWhite', 'dark'] as const) {
     blocks.push(
       rule(tone, undefined, {
-        ...project.base.variables,
+        ...Object.fromEntries(
+          Object.entries(project.base.variables).map(([key, value]) => [key, replaceAssets(value)])
+        ),
         ...themeTokensToCssVariables(structured.variants[tone]?.tokens ?? {}),
         ...themeShellLayoutToCssVariables(structured.layout)
       })
     )
-    for (const control of project.base.editor?.controls ?? []) {
+    for (const control of workshopEditor(project)?.controls ?? []) {
       const targets =
         control.targets && project.unlinked?.[control.id]
           ? Object.entries(control.targets)
           : [['', control.selector]]
       for (const [target, selector] of targets) {
         const value = project.values[tone][target ? `${control.id}.${target}` : control.id]
-        if (value === undefined) continue
-        validateWorkshopValue(control, value)
+        const rawValue =
+          value ??
+          (project.editor && !inheritedControls.has(control.id)
+            ? control.defaults[tone]
+            : undefined)
+        const effectiveValue = rawValue === undefined ? undefined : replaceAssets(rawValue)
+        if (effectiveValue === undefined) continue
+        validateWorkshopValue(control, effectiveValue)
         if (control.slot) {
           blocks.push(
             rule(tone, WORKSHOP_IMAGE_SLOTS[control.slot], {
-              'background-image': value,
+              'background-image': effectiveValue,
               'background-size': 'contain',
               'background-repeat': 'no-repeat',
               'background-position': 'center'
             })
           )
-          if (value !== 'none')
+          if (effectiveValue !== 'none')
             blocks.push(
               rule(tone, `${WORKSHOP_IMAGE_SLOTS[control.slot]} > *`, { visibility: 'hidden' })
             )
@@ -131,8 +161,8 @@ export function compileWorkshopTheme(project: WorkshopProject): WorkshopCompiled
               tone,
               selector,
               control.token
-                ? themeTokensToCssVariables({ [control.token]: value })
-                : { [control.variable!]: value }
+                ? themeTokensToCssVariables({ [control.token]: effectiveValue })
+                : { [control.variable!]: effectiveValue }
             )
           )
       }
@@ -162,9 +192,10 @@ export function workshopRuntimeAttributes(project: WorkshopProject): Record<stri
 }
 
 export function exportWorkshopEditor(project: WorkshopProject): ThemeEditorDescriptor | undefined {
-  if (!project.base.editor) return undefined
+  const editor = workshopEditor(project)
+  if (!editor) return undefined
   const controls: ThemeEditorControl[] = []
-  for (const control of project.base.editor.controls) {
+  for (const control of editor.controls) {
     const targets =
       control.targets && project.unlinked?.[control.id]
         ? Object.entries(control.targets)

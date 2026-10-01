@@ -90,6 +90,7 @@ export const AUDIO_REASON_CODES: Record<string, ReasonCodeEntry> = {
   integer_passthrough_unavailable: { severity: 'degraded', origin: 'output' },
   backend_not_output_perfect: { severity: 'info', origin: 'output', settingsAnchor: 'playback' },
   output_not_perfect: { severity: 'info', origin: 'output' },
+  output_released: { severity: 'info', origin: 'output' },
 
   // ── Source properties ────────────────────────────────────────────────────
   source_lossy: { severity: 'info', origin: 'source' },

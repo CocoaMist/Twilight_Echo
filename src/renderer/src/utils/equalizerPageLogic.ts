@@ -1,3 +1,10 @@
+export {
+  formatFrequency,
+  frequencyToPercent as frequencyToX,
+  gainToPercent as gainToY,
+  responseToPath
+} from '@renderer/utils/eqViewport.ts'
+import { EQ_MIN_FREQUENCY, EQ_MAX_FREQUENCY } from '@renderer/utils/eqViewport.ts'
 import type { OpraCatalogStatus } from '../../../preload/types'
 import type {
   AudioEqPreset,
@@ -8,8 +15,8 @@ import type {
   HeadphoneCompensationSettings
 } from '../types/settings'
 
-export const GRAPH_MIN_FREQUENCY = 20
-export const GRAPH_MAX_FREQUENCY = 20000
+export const GRAPH_MIN_FREQUENCY = EQ_MIN_FREQUENCY
+export const GRAPH_MAX_FREQUENCY = EQ_MAX_FREQUENCY
 export const GRAPH_MIN_GAIN = -18
 export const GRAPH_MAX_GAIN = 18
 export const FREQUENCY_TICKS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 16000, 20000]
@@ -258,42 +265,6 @@ export function patchBand(
         : next[index].filterType
   }
   return next
-}
-
-export function formatFrequency(frequency: number): string {
-  if (frequency >= 1000) {
-    return (frequency / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
-  }
-  return Math.round(frequency).toString()
-}
-
-export function frequencyToX(frequency: number): number {
-  const min = Math.log10(GRAPH_MIN_FREQUENCY)
-  const max = Math.log10(GRAPH_MAX_FREQUENCY)
-  const ratio =
-    (Math.log10(
-      clampNumber(frequency, GRAPH_MIN_FREQUENCY, GRAPH_MAX_FREQUENCY, GRAPH_MIN_FREQUENCY)
-    ) -
-      min) /
-    (max - min)
-  return ratio * 100
-}
-
-export function gainToY(gain: number): number {
-  const ratio =
-    (clampNumber(gain, GRAPH_MIN_GAIN, GRAPH_MAX_GAIN, 0) - GRAPH_MIN_GAIN) /
-    (GRAPH_MAX_GAIN - GRAPH_MIN_GAIN)
-  return 100 - ratio * 100
-}
-
-export function responseToPath(response: { frequency: number; db: number }[]): string {
-  return response
-    .map((point, index) => {
-      const x = frequencyToX(point.frequency)
-      const y = gainToY(clampNumber(point.db, GRAPH_MIN_GAIN, GRAPH_MAX_GAIN, 0))
-      return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
-    })
-    .join(' ')
 }
 
 export function getThumbTop(val: number, max: number) {

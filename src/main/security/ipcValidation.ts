@@ -1,4 +1,5 @@
 import { stringifyJsonWithNestingLimit } from './jsonSafety.ts'
+export { normalizeEqClipboardBands } from '../../shared/equalizerClipboard.ts'
 
 export const DEFAULT_IPC_STRING_MAX_LENGTH = 4096
 

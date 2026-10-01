@@ -3,14 +3,104 @@ import { runInNewContext } from 'node:vm'
 import { stripTypeScriptTypes } from 'node:module'
 import {
   cloneBands,
+  clampNumber,
   defaultAudioProcessing,
   normalizeAudioProcessing,
   patchBand
 } from '../utils/equalizerPageLogic.ts'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { useEqualizerHistory } from '../composables/useEqualizerHistory.ts'
 
 const page = readFileSync(new URL('./EqualizerPage.vue', import.meta.url), 'utf8')
+
+test('history keyboard shortcuts leave text undo and modified band shortcuts untouched', () => {
+  const declaration = page.match(
+    /function onEqualizerKeydown\(event: KeyboardEvent\): void \{[\s\S]*?\n\}/
+  )?.[0]
+  assert.ok(declaration)
+  const commands: string[] = []
+  const selections: number[][] = []
+  const context = {
+    activeTab: { value: 'parametric' },
+    historyBusy: { value: false },
+    historyLoading: { value: false },
+    clipboardBusy: { value: false },
+    responseView: { value: 'dsp' },
+    selectedBandIndices: { value: [0, 1] },
+    selectedBand: { value: {} },
+    audioProcessing: { value: { eqBands: [{}, {}] } },
+    selectBand: (_index: number, indices: number[]) => selections.push([...indices]),
+    runHistoryCommand: (command: string) => commands.push(command),
+    toggleBandEnabled: () => commands.push('bypass'),
+    deleteBand: () => commands.push('delete'),
+    copyBands: () => commands.push('copy'),
+    pasteBands: () => commands.push('paste')
+  }
+  const handler = runInNewContext(
+    `${stripTypeScriptTypes(declaration)}\nonEqualizerKeydown`,
+    context
+  )
+  const event = (patch: Record<string, unknown> = {}) => ({
+    key: 'z',
+    ctrlKey: true,
+    metaKey: false,
+    altKey: false,
+    shiftKey: false,
+    target: { closest: () => null },
+    preventDefault() {},
+    stopPropagation() {},
+    ...patch
+  })
+  handler(event())
+  handler(event({ shiftKey: true }))
+  handler(event({ key: 'y', ctrlKey: false, metaKey: true }))
+  handler(event({ target: { closest: () => ({}) } }))
+  handler(event({ key: 'b' }))
+  handler(event({ key: 'a' }))
+  handler(event({ key: 'a', target: { closest: () => ({}) } }))
+  handler(event({ key: 'c' }))
+  handler(event({ key: 'v', ctrlKey: false, metaKey: true }))
+  handler(event({ key: 'v', target: { closest: () => ({}) } }))
+  context.responseView.value = 'headphone'
+  handler(event({ key: 'v' }))
+  context.responseView.value = 'dsp'
+  context.clipboardBusy.value = true
+  handler(event({ key: 'v' }))
+  context.clipboardBusy.value = false
+  context.historyBusy.value = true
+  handler(event())
+  assert.deepEqual(commands, ['undo', 'redo', 'redo', 'copy', 'paste'])
+  assert.deepEqual(selections, [[0, 1]])
+})
+
+test('history actions flush pending gestures before switching the applied snapshot', async () => {
+  const declaration = page.match(/async function runHistoryCommand\([\s\S]*?\n\}/)?.[0]
+  assert.ok(declaration)
+  const events: string[] = []
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const context = {
+    commitChain: pending,
+    finishParametricEdits: () => events.push('finish'),
+    runEqApply: (action: () => Promise<void>) => action(),
+    eqHistory: {
+      switchSlot: async (slot: string) => {
+        events.push(slot)
+      }
+    }
+  }
+  const result = runInNewContext(
+    `${stripTypeScriptTypes(declaration)}\nrunHistoryCommand('B')`,
+    context
+  )
+  assert.deepEqual(events, ['finish'])
+  release()
+  await result
+  assert.deepEqual(events, ['finish', 'B'])
+})
 const chart = readFileSync(
   new URL('./equalizer/FrequencyResponseChart.vue', import.meta.url),
   'utf8'
@@ -22,6 +112,214 @@ const toolbar = readFileSync(
   'utf8'
 )
 const equalizerUi = [page, chart, opra, graphic, toolbar].join('\n')
+
+const autoPreampDeclarations = [
+  'loadAutoPreampPreference',
+  'saveAutoPreampPreference',
+  'toggleAutoPreamp',
+  'applyAutoPreamp',
+  'stagePreamp',
+  'updatePreampInput'
+]
+  .map((name) => {
+    const declaration = page.match(
+      new RegExp(`(?:async )?function ${name}\\([\\s\\S]*?\\n\\}`)
+    )?.[0]
+    assert.ok(declaration)
+    return stripTypeScriptTypes(declaration)
+  })
+  .join('\n')
+
+test('auto compensation restores the manual preamp, survives reopening and permits manual overrides', async () => {
+  const initial = normalizeAudioProcessing({
+    ...defaultAudioProcessing,
+    eqMode: 'parametric',
+    eqPreamp: 2.3
+  })
+  const stored = new Map<string, string>()
+  let applies = 0,
+    previews = 0,
+    manualCommit = Promise.resolve()
+  const context = {
+    audioProcessing: { value: initial },
+    autoPreampEnabled: { value: false },
+    autoPreampTargetDb: { value: -6.5 },
+    manualPreampBeforeAuto: null as number | null,
+    autoPreampStorageKey: 'auto',
+    manualPreampStorageKey: 'manual',
+    commitChain: Promise.resolve(),
+    eqApplyFeedback: { value: 'idle' },
+    pendingPreamp: null as number | null,
+    clampNumber,
+    finishParametricEdits() {},
+    scheduleStagedFlush: () => {
+      previews++
+    },
+    runEqApply: async (action: () => Promise<void>) => {
+      try {
+        await action()
+        context.eqApplyFeedback.value = 'applied'
+      } catch {
+        context.eqApplyFeedback.value = 'failed'
+      }
+    },
+    updateAudioProcessing: (patch: Partial<typeof initial>) =>
+      history.commit({ ...context.audioProcessing.value, ...patch }),
+    commitStagedBands: () => {
+      const snapshot = {
+        ...context.audioProcessing.value,
+        eqPreamp: context.pendingPreamp!
+      }
+      manualCommit = context.commitChain.then(() => history.commit(snapshot))
+      context.commitChain = manualCommit
+      return manualCommit
+    },
+    localStorage: {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+      removeItem: (key: string) => stored.delete(key)
+    }
+  }
+  const history = useEqualizerHistory(initial, async (snapshot) => {
+    applies++
+    context.audioProcessing.value = { ...context.audioProcessing.value, ...snapshot }
+  })
+  const actions = runInNewContext(
+    `${autoPreampDeclarations}\n({toggleAutoPreamp,applyAutoPreamp,loadAutoPreampPreference,updatePreampInput})`,
+    context
+  )
+  await actions.toggleAutoPreamp()
+  assert.equal(context.autoPreampEnabled.value, true)
+  assert.equal(context.audioProcessing.value.eqPreamp, -6.5)
+  assert.equal(context.manualPreampBeforeAuto, 2.3)
+  assert.equal(stored.get('manual'), '2.3')
+  context.audioProcessing.value = {
+    ...context.audioProcessing.value,
+    eqBands: [{ ...initial.eqBands[0], gain: 12 }]
+  }
+  context.autoPreampTargetDb.value = -12.5
+  await actions.applyAutoPreamp()
+  await actions.toggleAutoPreamp()
+  assert.equal(context.autoPreampEnabled.value, false)
+  assert.equal(context.audioProcessing.value.eqPreamp, 2.3)
+  assert.equal(context.audioProcessing.value.eqBands[0].gain, 12)
+  assert.equal(stored.get('auto'), '0')
+  assert.equal(stored.has('manual'), false)
+  await history.travel('undo')
+  assert.equal(context.audioProcessing.value.eqPreamp, -12.5)
+  await history.travel('redo')
+  assert.equal(context.audioProcessing.value.eqPreamp, 2.3)
+  await actions.toggleAutoPreamp()
+  context.manualPreampBeforeAuto = null
+  context.autoPreampEnabled.value = false
+  actions.loadAutoPreampPreference()
+  assert.equal(context.autoPreampEnabled.value, true)
+  assert.equal(context.manualPreampBeforeAuto, 2.3)
+  await actions.toggleAutoPreamp()
+  assert.equal(context.audioProcessing.value.eqPreamp, 2.3)
+  await actions.toggleAutoPreamp()
+  const input = { value: '4.2', valueAsNumber: 4.2 }
+  actions.updatePreampInput({ target: input })
+  await manualCommit
+  assert.equal(context.autoPreampEnabled.value, false)
+  assert.equal(context.manualPreampBeforeAuto, null)
+  assert.equal(context.audioProcessing.value.eqPreamp, 4.2)
+  assert.equal(stored.get('auto'), '0')
+  assert.equal(previews, 1)
+  const beforeInvalid = applies
+  actions.updatePreampInput({ target: { value: '', valueAsNumber: NaN } })
+  actions.updatePreampInput({ target: input })
+  assert.equal(applies, beforeInvalid)
+  actions.updatePreampInput({ target: { value: '999', valueAsNumber: 999 } })
+  await manualCommit
+  assert.equal(context.audioProcessing.value.eqPreamp, 24)
+  const applySettings = context.updateAudioProcessing
+  let releaseApply!: () => void
+  let enteredApply!: () => void
+  const entered = new Promise<void>((resolve) => {
+    enteredApply = resolve
+  })
+  const pendingApply = new Promise<void>((resolve) => {
+    releaseApply = resolve
+  })
+  context.updateAudioProcessing = async (patch) => {
+    enteredApply()
+    await pendingApply
+    await applySettings(patch)
+  }
+  const enabling = actions.toggleAutoPreamp()
+  await entered
+  actions.updatePreampInput({ target: { value: '3.7', valueAsNumber: 3.7 } })
+  releaseApply()
+  await enabling
+  await manualCommit
+  assert.equal(context.audioProcessing.value.eqPreamp, 3.7)
+  assert.equal(context.autoPreampEnabled.value, false)
+  assert.equal(context.manualPreampBeforeAuto, null)
+  assert.equal(stored.get('auto'), '0')
+  assert.equal(stored.has('manual'), false)
+  context.updateAudioProcessing = async () => {
+    throw new Error('Engine apply failed')
+  }
+  await actions.toggleAutoPreamp()
+  assert.equal(context.autoPreampEnabled.value, false)
+  assert.equal(context.manualPreampBeforeAuto, null)
+  assert.equal(context.audioProcessing.value.eqPreamp, 3.7)
+  assert.equal(stored.get('auto'), '0')
+  for (const value of ['', 'bad', 'Infinity', '-25', '25']) {
+    stored.set('auto', '1')
+    stored.set('manual', value)
+    actions.loadAutoPreampPreference()
+    assert.equal(context.manualPreampBeforeAuto, null)
+  }
+})
+
+test('turning compensation off waits for queued automatic updates before restoring the previous value', async () => {
+  let release!: () => void
+  const writes: number[] = []
+  const context = {
+    audioProcessing: { value: { eqPreamp: -6.5 } },
+    autoPreampEnabled: { value: true },
+    autoPreampTargetDb: { value: -10 },
+    manualPreampBeforeAuto: 3.7,
+    autoPreampStorageKey: 'auto',
+    manualPreampStorageKey: 'manual',
+    localStorage: { setItem() {}, removeItem() {} },
+    commitChain: new Promise<void>((resolve) => {
+      release = resolve
+    }),
+    eqApplyFeedback: { value: 'idle' },
+    finishParametricEdits() {},
+    runEqApply: async (action: () => Promise<void>) => {
+      await action()
+      context.eqApplyFeedback.value = 'applied'
+    },
+    updateAudioProcessing: async (patch: { eqPreamp: number }) => {
+      writes.push(patch.eqPreamp)
+      await new Promise((resolve) => setImmediate(resolve))
+      context.audioProcessing.value.eqPreamp = patch.eqPreamp
+    }
+  }
+  const actions = runInNewContext(
+    `${autoPreampDeclarations}\n({toggleAutoPreamp,applyAutoPreamp})`,
+    context
+  )
+  const automatic = actions.applyAutoPreamp(),
+    off = actions.toggleAutoPreamp()
+  assert.deepEqual(writes, [])
+  release()
+  await Promise.all([automatic, off])
+  assert.deepEqual(writes, [-10, 3.7])
+  assert.equal(context.audioProcessing.value.eqPreamp, 3.7)
+  assert.equal(context.autoPreampEnabled.value, false)
+})
+
+test('preamp controls stay editable in both equalizer modes while automatic compensation is active', () => {
+  assert.doesNotMatch(graphic, /:disabled="props\.autoPreampEnabled"/)
+  assert.match(page, /aria-label="前级增益"/)
+  assert.match(page, /@change="updatePreampInput"/)
+  assert.match(page, /@keydown\.enter\.prevent="updatePreampInput"/)
+})
 
 test('page orchestrates the extracted equalizer domain panels', () => {
   assert.match(page, /import ParametricEqWorkspace/)
@@ -72,9 +370,288 @@ test('graphic sliders preview locally and commit once per gesture', () => {
   assert.match(page, /\.catch\(\(error\) => \{/)
 })
 
-test('staging a different band lands the queued patch instead of retargeting it', () => {
-  assert.match(page, /if \(pendingBandIndex >= 0 && pendingBandIndex !== index\)/)
-  assert.match(page, /function flushStagedEdit\(\): void/)
+test('group previews merge atomically and one undo restores all edited bands', async () => {
+  const names = ['flushStagedEdit', 'scheduleStagedFlush', 'stageBandPatches', 'commitStagedBands']
+  const declarations = names.map((name) => {
+    const declaration = page.match(
+      new RegExp(`(?:async )?function ${name}\\([\\s\\S]*?\\n\\}`)
+    )?.[0]
+    assert.ok(declaration)
+    return stripTypeScriptTypes(declaration)
+  })
+  const initial = normalizeAudioProcessing({
+    ...defaultAudioProcessing,
+    eqMode: 'parametric',
+    eqEnabled: false,
+    dspEnabled: false,
+    eqBands: [
+      { frequency: 100, gain: 2, q: 1, filterType: 'peak', enabled: false, channelMask: 1 },
+      { frequency: 1000, gain: 4, q: 2, filterType: 'peak' }
+    ]
+  })
+  let renders = 0,
+    applies = 0,
+    frames = 0
+  const context = {
+    pendingBandPatches: new Map(),
+    pendingBandFrame: 0,
+    pendingPreamp: null,
+    commitChain: Promise.resolve(),
+    audioProcessing: { value: initial },
+    appSettings: { value: null },
+    autoPreampEnabled: { value: false },
+    eqApplyFeedback: { value: 'idle' },
+    eqApplyError: { value: '' },
+    cloneBands,
+    patchBand,
+    window: { requestAnimationFrame: () => ++frames, cancelAnimationFrame() {} },
+    audioOutputDspStore: {
+      applyAudioProcessingState: (value: typeof initial) => {
+        renders++
+        context.audioProcessing.value = value
+      }
+    },
+    runEqApply: (action: () => Promise<void>) => action(),
+    updateAudioProcessing: (patch: Partial<typeof initial>) =>
+      history.commit({ ...context.audioProcessing.value, ...patch })
+  }
+  const history: ReturnType<typeof useEqualizerHistory> = useEqualizerHistory(
+    initial,
+    async (snapshot) => {
+      applies++
+      context.audioProcessing.value = { ...context.audioProcessing.value, ...snapshot }
+    }
+  )
+  const actions = runInNewContext(
+    `${declarations.join('\n')}\n({stageBandPatches, commitStagedBands})`,
+    context
+  )
+  actions.stageBandPatches([
+    { index: 0, patch: { gain: 4 } },
+    { index: 1, patch: { gain: 8 } }
+  ])
+  actions.stageBandPatches([{ index: 0, patch: { q: 3 } }])
+  assert.equal(frames, 1)
+  assert.equal(context.audioProcessing.value, initial)
+  await actions.commitStagedBands()
+  assert.equal(renders, 1)
+  assert.equal(applies, 1)
+  assert.equal(context.audioProcessing.value.eqBands[0].q, 3)
+  assert.deepEqual(
+    context.audioProcessing.value.eqBands.map((band) => band.gain),
+    [4, 8]
+  )
+  assert.equal(context.audioProcessing.value.eqEnabled, false)
+  assert.equal(context.audioProcessing.value.dspEnabled, false)
+  assert.equal(context.audioProcessing.value.eqBands[0].enabled, false)
+  assert.equal(context.audioProcessing.value.eqBands[0].channelMask, 1)
+  await history.travel('undo')
+  assert.deepEqual(context.audioProcessing.value.eqBands, initial.eqBands)
+  assert.equal(history.canUndo.value, false)
+  await history.travel('redo')
+  assert.deepEqual(
+    context.audioProcessing.value.eqBands.map((band) => band.gain),
+    [4, 8]
+  )
+})
+
+test('group delete and bypass operate on the selection in one action', async () => {
+  const declarations = ['editedBandIndices', 'deleteBand', 'toggleBandEnabled'].map((name) => {
+    const declaration = page.match(
+      new RegExp(`(?:async )?function ${name}\\([\\s\\S]*?\\n\\}`)
+    )?.[0]
+    assert.ok(declaration)
+    return stripTypeScriptTypes(declaration)
+  })
+  const bands = defaultAudioProcessing.eqBands
+    .slice(0, 4)
+    .map((band, index) => ({ ...band, frequency: 100 * (index + 1), enabled: index !== 0 }))
+  let submitted: Partial<typeof defaultAudioProcessing> = {},
+    enabled: boolean | undefined
+  const context = {
+    activeTab: { value: 'parametric' },
+    selectedBandIndex: { value: 0 },
+    selectedBandIndices: { value: [0, 2] },
+    audioProcessing: { value: { ...defaultAudioProcessing, eqBands: bands } },
+    commitChain: Promise.resolve(),
+    eqApplyFeedback: { value: 'applied' },
+    finishParametricEdits() {},
+    selectBand() {},
+    runEqApply: (action: () => Promise<void>) => action(),
+    updateAudioProcessing: async (patch: Partial<typeof defaultAudioProcessing>) => {
+      submitted = patch
+    },
+    updateEqBand: async (_index: number, patch: { enabled: boolean }) => {
+      enabled = patch.enabled
+    }
+  }
+  const actions = runInNewContext(
+    `${declarations.join('\n')}\n({deleteBand, toggleBandEnabled})`,
+    context
+  )
+  await actions.toggleBandEnabled()
+  assert.equal(enabled, false)
+  context.audioProcessing.value.eqBands[2].enabled = false
+  await actions.toggleBandEnabled()
+  assert.equal(enabled, true)
+  await actions.deleteBand()
+  assert.deepEqual(
+    submitted.eqBands?.map((band) => band.frequency),
+    [200, 400]
+  )
+})
+
+test('copy preserves selected metadata without history; paste appends one undoable edit', async () => {
+  const declarations = ['copyBands', 'pasteBands'].map((name) => {
+    const declaration = page.match(new RegExp(`async function ${name}\\([\\s\\S]*?\\n\\}`))?.[0]
+    assert.ok(declaration)
+    return stripTypeScriptTypes(declaration)
+  })
+  const initial = normalizeAudioProcessing({
+    ...defaultAudioProcessing,
+    eqMode: 'parametric',
+    eqEnabled: false,
+    eqPreamp: -3,
+    eqBands: [
+      { frequency: 100, gain: 3, q: 2, filterType: 'peak', enabled: false, channelMask: 1 },
+      { frequency: 1000, gain: 0, q: 1, filterType: 'highPass', channelMask: 2 }
+    ]
+  })
+  let copied: typeof initial.eqBands = [],
+    applies = 0
+  const context = {
+    audioProcessing: { value: initial },
+    activeTab: { value: 'parametric' },
+    responseView: { value: 'dsp' },
+    selectedBandIndices: { value: [1] },
+    clipboardBusy: { value: false },
+    clipboardMessage: { value: '' },
+    clipboardFailed: { value: false },
+    equalizerMounted: true,
+    commitChain: Promise.resolve(),
+    eqApplyFeedback: { value: 'idle' },
+    cloneBands,
+    finishParametricEdits() {},
+    selectBand: (_index: number, indices: number[]) => {
+      context.selectedBandIndices.value = [...indices]
+    },
+    runEqApply: async (action: () => Promise<void>) => {
+      await action()
+      context.eqApplyFeedback.value = 'applied'
+    },
+    updateAudioProcessing: (patch: Partial<typeof initial>) =>
+      history.commit({ ...context.audioProcessing.value, ...patch }),
+    window: {
+      api: {
+        window: {
+          copyEqBands: async (bands: typeof copied) => {
+            copied = bands
+          },
+          pasteEqBands: async () => cloneBands(copied)
+        }
+      }
+    }
+  }
+  const history = useEqualizerHistory(initial, async (snapshot) => {
+    applies++
+    context.audioProcessing.value = { ...context.audioProcessing.value, ...snapshot }
+  })
+  const actions = runInNewContext(`${declarations.join('\n')}\n({copyBands,pasteBands})`, context)
+  await actions.copyBands()
+  assert.deepEqual(JSON.parse(JSON.stringify(copied)), [initial.eqBands[1]])
+  assert.equal(applies, 0)
+  assert.equal(history.canUndo.value, false)
+  await actions.copyBands(true)
+  assert.deepEqual(JSON.parse(JSON.stringify(copied)), initial.eqBands)
+  await actions.pasteBands()
+  assert.equal(applies, 1)
+  assert.equal(context.audioProcessing.value.eqBands.length, 4)
+  assert.deepEqual(context.selectedBandIndices.value, [2, 3])
+  assert.equal(context.audioProcessing.value.eqEnabled, false)
+  assert.equal(context.audioProcessing.value.eqPreamp, -3)
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.audioProcessing.value.eqBands.slice(2))),
+    initial.eqBands
+  )
+  await history.travel('undo')
+  assert.deepEqual(context.audioProcessing.value.eqBands, initial.eqBands)
+  assert.equal(history.canUndo.value, false)
+  await history.travel('redo')
+  assert.equal(context.audioProcessing.value.eqBands.length, 4)
+  await history.copyToOther()
+  await history.switchSlot('B')
+  assert.equal(context.audioProcessing.value.eqBands.length, 4)
+  const beforeFailure = applies
+  context.window.api.window.pasteEqBands = async () => {
+    throw new Error('没有可粘贴的 EQ 频段')
+  }
+  await actions.pasteBands()
+  assert.equal(applies, beforeFailure)
+  assert.equal(context.clipboardFailed.value, true)
+  assert.match(context.clipboardMessage.value, /没有可粘贴/)
+  context.window.api.window.pasteEqBands = async () => cloneBands(copied)
+  context.audioProcessing.value = {
+    ...initial,
+    eqBands: Array.from({ length: 31 }, () => ({ ...initial.eqBands[0] }))
+  }
+  await actions.pasteBands()
+  assert.equal(applies, beforeFailure)
+  assert.equal(context.audioProcessing.value.eqBands.length, 31)
+  assert.match(context.clipboardMessage.value, /当前 31 个，待粘贴 2 个/)
+  assert.deepEqual(context.selectedBandIndices.value, [2, 3])
+})
+
+test('clipboard commands finish queued edits, reject duplicates and cancel paste after leaving', async () => {
+  const declaration = page.match(/async function pasteBands\([\s\S]*?\n\}/)?.[0]
+  assert.ok(declaration)
+  let releaseEdits!: () => void,
+    releaseClipboard!: (bands: typeof defaultAudioProcessing.eqBands) => void
+  const pending = new Promise<void>((resolve) => {
+    releaseEdits = resolve
+  })
+  let finished = 0,
+    reads = 0,
+    applies = 0
+  const context = {
+    activeTab: { value: 'parametric' },
+    responseView: { value: 'dsp' },
+    clipboardBusy: { value: false },
+    clipboardMessage: { value: '' },
+    clipboardFailed: { value: false },
+    equalizerMounted: true,
+    commitChain: pending,
+    finishParametricEdits: () => {
+      finished++
+    },
+    window: {
+      api: {
+        window: {
+          pasteEqBands: () => {
+            reads++
+            return new Promise((resolve) => {
+              releaseClipboard = resolve
+            })
+          }
+        }
+      }
+    },
+    runEqApply: () => {
+      applies++
+    }
+  }
+  const paste = runInNewContext(`${stripTypeScriptTypes(declaration)}\npasteBands`, context)
+  const result = paste()
+  await paste()
+  assert.equal(finished, 1)
+  assert.equal(reads, 0)
+  releaseEdits()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(reads, 1)
+  context.equalizerMounted = false
+  releaseClipboard(defaultAudioProcessing.eqBands)
+  await result
+  assert.equal(applies, 0)
+  assert.equal(context.clipboardBusy.value, false)
 })
 
 test('theme modes change only equalizer presentation and use stable chart classes', () => {
@@ -196,7 +773,7 @@ test('OPRA-stacked scene bands never overwrite the manual editor state', () => {
 test('parametric editor exposes direct manipulation and throttled DSP commits', () => {
   assert.match(page, /import ParametricEqWorkspace/)
   assert.match(page, /@add="addBand"/)
-  assert.match(page, /@preview="stageBandPatch"/)
+  assert.match(page, /@preview-bands="stageBandPatches"/)
   assert.match(page, /@commit="commitStagedBands"/)
   assert.match(page, /@delete="deleteBand"/)
   assert.match(page, /@toggle="toggleBandEnabled"/)
@@ -216,17 +793,93 @@ test('parametric page puts mode, presets and power into the instrument with a co
   assert.match(toolbar, /compact\?: boolean/)
 })
 
-test('parametric editor reuses native player visualization data and cleans up animation work', () => {
+test('parametric editor polls detailed spectrum only while visible and playing', () => {
   assert.match(
     page,
     /const \{ visualizationData, isPlaying, acquireVisualizationConsumer \} = playerStore/
   )
   assert.match(page, /releaseVisualizationConsumer = acquireVisualizationConsumer\(\)/)
   assert.match(page, /releaseVisualizationConsumer\?\.\(\)/)
-  assert.match(page, /spectrumToPath\(smoothedSpectrum/)
-  assert.match(page, /watch\(\[spectrumVisible, responseView, isPlaying\]/)
+  assert.match(page, /getVisualizationData\(\{\s*spectrumPoints: 2048/)
+  assert.match(page, /projectSpectrumLevels\(\s*data\.spectrum/)
+  assert.match(page, /:spectrum-levels="spectrumLevels"/)
+  assert.match(page, /activeTab\.value === 'parametric'/)
+  assert.match(page, /spectrumVisible\.value &&\s*!spectrumFrozen\.value &&\s*isPlaying\.value/)
+  assert.match(
+    page,
+    /watch\(\[activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen\]/
+  )
   assert.match(page, /onBeforeUnmount/)
-  assert.match(page, /cancelAnimationFrame\(spectrumAnimationFrame\)/)
+  assert.match(page, /window\.clearInterval\(spectrumPollTimer\)/)
+})
+
+test('freezing cancels detailed polling, ignores late responses and resumes on unfreeze', async () => {
+  const pollDeclaration = page.match(
+    /async function pollSpectrum\(generation: number\): Promise<void> \{[\s\S]*?\n\}/
+  )?.[0]
+  const updateDeclaration = page.match(
+    /function updateSpectrumPolling\(\): void \{[\s\S]*?\n\}/
+  )?.[0]
+  assert.ok(pollDeclaration && updateDeclaration)
+  const baseline = new Float32Array([0.2, 0.4])
+  let release!: (data: { active: boolean; spectrum: number[]; sampleRate: number }) => void
+  let requests = 0
+  const cancelled: number[] = []
+  const context = {
+    spectrumRequestInFlight: false,
+    spectrumPollGeneration: 1,
+    spectrumPollTimer: 42 as number | null,
+    spectrumPollingMounted: true,
+    activeTab: { value: 'parametric' },
+    responseView: { value: 'dsp' },
+    spectrumVisible: { value: true },
+    spectrumFrozen: { value: false },
+    isPlaying: { value: true },
+    spectrumLevels: { value: baseline as Float32Array | null },
+    responseSampleRate: { value: 48000 },
+    projectSpectrumLevels: (levels: number[]) => new Float32Array(levels),
+    window: {
+      clearInterval: (id: number) => cancelled.push(id),
+      setInterval: () => 43,
+      api: {
+        audioEngine: {
+          getVisualizationData: () => {
+            requests++
+            return new Promise((resolve) => {
+              release = resolve
+            })
+          }
+        }
+      }
+    }
+  }
+  const actions = runInNewContext(
+    `${stripTypeScriptTypes(pollDeclaration)}\n${stripTypeScriptTypes(updateDeclaration)}\n({pollSpectrum, updateSpectrumPolling})`,
+    context
+  )
+  const pending = actions.pollSpectrum(1)
+  context.spectrumFrozen.value = true
+  actions.updateSpectrumPolling()
+  assert.deepEqual(cancelled, [42])
+  assert.equal(context.spectrumPollTimer, null)
+  assert.equal(context.spectrumLevels.value, baseline)
+  release({ active: true, spectrum: [0.9, 0.9], sampleRate: 48000 })
+  await pending
+  assert.equal(context.spectrumLevels.value, baseline)
+  assert.equal(requests, 1)
+  context.spectrumFrozen.value = false
+  actions.updateSpectrumPolling()
+  assert.equal(context.spectrumPollTimer, 43)
+  assert.equal(requests, 2)
+  release({ active: true, spectrum: [0.5, 0.5], sampleRate: 48000 })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(context.spectrumLevels.value, new Float32Array([0.5, 0.5]))
+  context.spectrumFrozen.value = true
+  context.spectrumVisible.value = false
+  actions.updateSpectrumPolling()
+  assert.equal(context.spectrumFrozen.value, false)
+  assert.equal(context.spectrumLevels.value, null)
+  assert.equal(requests, 2)
 })
 
 test('equalizer state writes go through the store action instead of detaching storeToRefs', () => {
@@ -246,8 +899,7 @@ test('staged pointer edits preserve both EQ and DSP bypass without applying to t
     let staged = defaultAudioProcessing
     const current = { ...defaultAudioProcessing, eqEnabled: enabled, dspEnabled: enabled }
     runInNewContext(`${stripTypeScriptTypes(declaration)}\nflushStagedEdit()`, {
-      pendingBandIndex: 0,
-      pendingBandPatch: { gain: 6 },
+      pendingBandPatches: new Map([[0, { gain: 6 }]]),
       pendingPreamp: null,
       audioProcessing: { value: current },
       audioOutputDspStore: {

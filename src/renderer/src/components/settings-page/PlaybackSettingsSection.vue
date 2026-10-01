@@ -83,6 +83,22 @@ const selectedAudioOutput = computed(() =>
   audioOutputOptions.value.find((option) => option.id === audioOutput.value)
 )
 const exclusiveAvailable = computed(() => selectedAudioOutput.value?.supportsExclusive ?? false)
+const exclusiveAutoReleaseApplying = ref(false)
+
+async function toggleExclusiveAutoRelease(): Promise<void> {
+  if (!exclusiveAvailable.value || !exclusiveMode.value || exclusiveAutoReleaseApplying.value)
+    return
+  exclusiveAutoReleaseApplying.value = true
+  try {
+    await updateSettings({
+      audioExclusiveAutoRelease: !settings.value.audioExclusiveAutoRelease
+    })
+  } catch (error) {
+    audioEngineError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    exclusiveAutoReleaseApplying.value = false
+  }
+}
 const isUpmixActive = computed(
   () =>
     audioOutputConfig.value.routingMode === 'stereo-to-5.1' ||
@@ -722,6 +738,35 @@ function setContinuitySampleRate(event: Event): void {
             :title="exclusiveAvailable ? '' : '当前后端不支持独占模式'"
             @click="exclusiveAvailable && toggleExclusiveMode()"
           ></span>
+        </div>
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>独占模式自动启停</strong>
+            <span>暂停时释放音频设备，继续播放时重新获取。</span>
+            <span v-if="outputInfo?.outputReleased && playbackInfo?.state === 'paused'">
+              已暂停，音频设备已释放。
+            </span>
+          </div>
+          <button
+            type="button"
+            class="toggle-switch"
+            :class="{
+              active: settings.audioExclusiveAutoRelease,
+              inactive: !settings.audioExclusiveAutoRelease
+            }"
+            role="switch"
+            aria-label="独占模式自动启停"
+            :aria-checked="settings.audioExclusiveAutoRelease"
+            :disabled="!exclusiveAvailable || !exclusiveMode || exclusiveAutoReleaseApplying"
+            :title="
+              !exclusiveAvailable
+                ? '当前后端不支持独占模式'
+                : !exclusiveMode
+                  ? '请先开启独占模式'
+                  : ''
+            "
+            @click="toggleExclusiveAutoRelease"
+          ></button>
         </div>
         <hr />
         <div class="setting-item compact-row">

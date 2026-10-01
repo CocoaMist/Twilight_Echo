@@ -1,8 +1,14 @@
-import { BrowserWindow, Menu, type IpcMain } from 'electron'
-import { shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
+import { BrowserWindow, Menu, clipboard, type IpcMain } from 'electron'
+import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { nativeMenuTemplate, registerNativeContextMenuIpc } from './nativeContextMenuIpc.ts'
+import { registerEqualizerClipboardIpc } from './equalizerClipboardIpc.ts'
 
 export function registerWindowIpc(ipcMain: IpcMain): void {
+  registerEqualizerClipboardIpc(ipcMain, {
+    assertTrusted: assertTrustedIpcSender,
+    readText: () => clipboard.readText(),
+    writeText: (text) => clipboard.writeText(text)
+  })
   const menus = new Map<number, { requestId: string; close: () => void }>()
   registerNativeContextMenuIpc(ipcMain, {
     assertTrusted: (event, scope) => {

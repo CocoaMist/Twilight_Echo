@@ -8,12 +8,13 @@ const knob = readFileSync(new URL('./EqParameterKnob.vue', import.meta.url), 'ut
 
 test('graph keeps direct manipulation and one coordinate surface for paths and nodes', () => {
   assert.match(source, /ref="surfaceRef"/)
-  assert.match(source, /@click\.self="addBand"/)
+  assert.match(source, /@click\.self="clickBackground"/)
+  assert.match(source, /@pointerdown\.self="beginBox"/)
   assert.match(source, /setPointerCapture\(event\.pointerId\)/)
   assert.match(source, /@pointermove\.prevent\.stop="updatePointer"/)
   assert.match(source, /@wheel\.prevent\.stop="adjustQ\(index, \$event\)"/)
   assert.match(source, /frequencyToPercent\(band\.frequency\)/)
-  assert.match(source, /gainToPercent\(displayBandGain\(band\)\)/)
+  assert.match(source, /gainY\(displayBandGain\(band\)\)/)
   assert.match(source, /wheelCommit\.schedule\(\)/)
 })
 

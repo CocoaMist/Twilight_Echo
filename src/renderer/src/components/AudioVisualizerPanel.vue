@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia'
 import { useAudioOutputDspStore } from '../stores/useAudioOutputDspStore'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useCover } from '../utils/coverLoader'
-import { buildVisualizerQualityString, formatVisualizerBitrate } from './audioVisualizerFormatting'
+import { formatVisualizerSource, resolveVisualizerAudioMetadata } from './audioVisualizerFormatting'
 import { AudioTempoEstimator, normalizeBpm, type TempoEstimate } from './audioTempoEstimator'
 
 const props = defineProps<{ active: boolean }>()
@@ -12,7 +12,7 @@ const props = defineProps<{ active: boolean }>()
 const playbackStore = usePlayerStore()
 const audioOutputDspStore = useAudioOutputDspStore()
 const { currentTrack, isPlaying, currentTime, duration } = playbackStore
-const { audioEngineReady } = storeToRefs(audioOutputDspStore)
+const { audioEngineReady, playbackInfo } = storeToRefs(audioOutputDspStore)
 const { formatTime, togglePlay, next, prev, seek } = playbackStore
 const resolvedCover = useCover(
   computed(() => currentTrack.value?.cover ?? null),
@@ -304,25 +304,26 @@ watch(
     const primaryBpm = getPrimaryTrackBpm(track)
     const metadataBpm = primaryBpm
     currentMetadataBpm = metadataBpm
+    const audioMetadata = resolveVisualizerAudioMetadata(track, playbackInfo.value)
     const trackPayload = {
       kind: 'track',
       track: {
         title: track.title,
         artist: track.artist,
         album: track.album,
-        quality: buildVisualizerQualityString(track),
+        quality: audioMetadata.quality,
         bpm: formatVisualizerBpm(primaryBpm),
-        genre: '',
+        source: formatVisualizerSource(track),
         duration: formatTime(track.duration),
         durationSeconds: track.duration,
         dynamicRange: '',
         loudness: '',
-        samplerate: track.sampleRate ? `${(track.sampleRate / 1000).toFixed(1)} kHz` : '',
-        bitdepth: track.bitDepth ? `${track.bitDepth}-bit` : '',
-        channels: '',
-        bitrate: formatVisualizerBitrate(track.bitrate),
-        filesize: track.size ? `${(track.size / (1024 * 1024)).toFixed(1)} MB` : '',
-        format: track.format || ''
+        samplerate: audioMetadata.samplerate,
+        bitdepth: audioMetadata.bitdepth,
+        channels: audioMetadata.channels,
+        bitrate: audioMetadata.bitrate,
+        filesize: audioMetadata.filesize,
+        format: audioMetadata.format
       }
     }
     if (iframeReady.value) {
@@ -337,6 +338,24 @@ watch(
     } else pendingTrack = trackPayload
   },
   { immediate: true }
+)
+
+watch(
+  [
+    () => playbackInfo.value?.source,
+    () => playbackInfo.value?.codec,
+    () => playbackInfo.value?.sourceSampleRate,
+    () => playbackInfo.value?.sourceChannels,
+    () => playbackInfo.value?.sourceBitDepth,
+    () => playbackInfo.value?.bitrate
+  ],
+  () => {
+    const track = currentTrack.value
+    if (!track) return
+    const metadata = resolveVisualizerAudioMetadata(track, playbackInfo.value)
+    if (iframeReady.value) post({ kind: 'technical-metadata', metadata })
+    else if (pendingTrack) pendingTrack.track = { ...pendingTrack.track, ...metadata }
+  }
 )
 
 // Post cover URL when resolved.

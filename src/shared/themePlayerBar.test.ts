@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { resolveThemePlayerBarMode, sharedPlayerBarStylesheet } from './themePlayerBar.ts'
-import type { ThemeProfileV2 } from './theme.ts'
+import { BUILT_IN_THEME_PRESETS, type ThemeProfileV2 } from './theme.ts'
 
 test('shared player bar presentation fixes the original controls and typography in both tones', () => {
   for (const tone of ['pureWhite', 'dark'] as const) {
@@ -16,6 +16,43 @@ test('shared player bar presentation fixes the original controls and typography 
     assert.doesNotMatch(css, /--te-menu-width:|--te-titlebar-height:|--te-lg-/)
   }
   assert.notEqual(sharedPlayerBarStylesheet('pureWhite'), sharedPlayerBarStylesheet('dark'))
+})
+
+test('explicit player colors follow the edited tone without inheriting preset geometry', () => {
+  const profile: ThemeProfileV2 = {
+    ...BUILT_IN_THEME_PRESETS[1],
+    id: 'user:player-colors',
+    overrides: {
+      pureWhite: {
+        'playback.progress.track': '#123456',
+        'playback.progress.fill': 'linear-gradient(90deg, #ff0000, #00ff00)',
+        'playback.control.surface': '#654321',
+        'playback.control.hoverSurface': '#abcdef',
+        'playback.control.playSize': '64px',
+        'playback.progress.height': '14px'
+      },
+      dark: { 'playback.progress.track': '#345678' }
+    }
+  }
+  const light = sharedPlayerBarStylesheet('pureWhite', profile)
+  assert.match(light, /--te-player-bar-progress-track: #123456;/)
+  assert.match(light, /--te-player-bar-progress-fill: linear-gradient\(90deg, #ff0000, #00ff00\);/)
+  assert.match(light, /--te-player-bar-play-surface: #654321;/)
+  assert.match(light, /--te-player-bar-play-hover-surface: #abcdef;/)
+  assert.match(light, /--te-player-play-size: 44px;/)
+  assert.match(light, /--te-player-progress-height: 6px;/)
+  const dark = sharedPlayerBarStylesheet('dark', profile)
+  assert.match(dark, /--te-player-bar-progress-track: #345678;/)
+  assert.doesNotMatch(dark, /--te-player-bar-(?:progress-fill|play-surface|play-hover-surface):/)
+
+  profile.overrides.pureWhite = {}
+  assert.equal(
+    sharedPlayerBarStylesheet('pureWhite', profile),
+    sharedPlayerBarStylesheet('pureWhite')
+  )
+  for (const preset of BUILT_IN_THEME_PRESETS) {
+    assert.equal(sharedPlayerBarStylesheet('dark', preset), sharedPlayerBarStylesheet('dark'))
+  }
 })
 
 test('themes two through four default to compact and the others to standard', () => {

@@ -882,12 +882,21 @@
   opacity: 0.82;
 }
 .player-bar-glass .btn-play {
-  background: var(--play-button-color, var(--accent-color, var(--te-primary-500)));
+  background: var(
+    --te-player-bar-play-surface,
+    var(--play-button-color, var(--accent-color, var(--te-primary-500)))
+  );
   color: #fff;
   box-shadow: none;
 }
 .player-bar-glass .btn-play:hover {
-  background: var(--play-button-color, var(--accent-color, var(--te-primary-500)));
+  background: var(
+    --te-player-bar-play-hover-surface,
+    var(
+      --te-player-bar-play-surface,
+      var(--play-button-color, var(--accent-color, var(--te-primary-500)))
+    )
+  );
   box-shadow: none;
 }
 .player-bar-glass .mode-btn-right {
@@ -936,7 +945,10 @@
 }
 
 .player-bar-glass .progress-fill.live {
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.85));
+  background: var(
+    --te-player-bar-progress-fill,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.85))
+  );
 }
 
 /* ===== Player Left ===== */
@@ -1295,7 +1307,10 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .btn-play {
   width: 44px;
   height: 44px;
-  background: var(--play-button-color, var(--accent-color, var(--te-primary-500)));
+  background: var(
+    --te-player-bar-play-surface,
+    var(--play-button-color, var(--accent-color, var(--te-primary-500)))
+  );
   color: #fff;
   padding: 10px;
   box-shadow: none;
@@ -1304,7 +1319,13 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
     background 0.2s ease;
 }
 .btn-play:hover {
-  background: var(--play-button-color, var(--accent-color, var(--te-primary-500)));
+  background: var(
+    --te-player-bar-play-hover-surface,
+    var(
+      --te-player-bar-play-surface,
+      var(--play-button-color, var(--accent-color, var(--te-primary-500)))
+    )
+  );
   box-shadow: none;
 }
 
@@ -1826,12 +1847,12 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .player-bar .progress-track {
   height: var(--te-player-progress-height, 6px);
   border-radius: var(--te-player-progress-radius, 999px);
-  background: var(--te-player-progress-track);
+  background: var(--te-player-bar-progress-track, var(--te-player-progress-track));
 }
 
 .player-bar .progress-fill {
   border-radius: var(--te-player-progress-radius, 999px);
-  background: var(--te-player-progress-fill);
+  background: var(--te-player-bar-progress-fill, var(--te-player-progress-fill));
 }
 
 .player-bar .progress-slider::-webkit-slider-runnable-track {
@@ -2272,7 +2293,7 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   padding: 0;
   border: 0;
   border-radius: 5px;
-  background: transparent;
+  background: var(--te-player-bar-play-surface, transparent);
   color: var(--te-shell-control-text, #475569);
   cursor: pointer;
   transition:
@@ -2284,7 +2305,13 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   .player-bar-mini.player-bar-mini.player-bar-mini
   .player-left
   > .mini-play-button:hover {
-  background: color-mix(in srgb, var(--te-shell-control-text, #475569) 8%, transparent);
+  background: var(
+    --te-player-bar-play-hover-surface,
+    var(
+      --te-player-bar-play-surface,
+      color-mix(in srgb, var(--te-shell-control-text, #475569) 8%, transparent)
+    )
+  );
 }
 
 .mini-play-button i {
@@ -2324,7 +2351,10 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   height: 2px;
   transform: translateY(-50%);
   border-radius: 1px;
-  background: color-mix(in srgb, var(--accent-color, #1a73e8) 24%, transparent);
+  background: var(
+    --te-player-bar-progress-track,
+    color-mix(in srgb, var(--accent-color, #1a73e8) 24%, transparent)
+  );
   overflow: hidden;
   pointer-events: none;
 }
@@ -2333,7 +2363,7 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   height: 100%;
   width: 100%;
   border-radius: 1px;
-  background: var(--accent-color, #2563eb);
+  background: var(--te-player-bar-progress-fill, var(--accent-color, #2563eb));
   transform: scaleX(0);
   transform-origin: 0 50%;
   will-change: transform;
@@ -2476,17 +2506,20 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
    the rail barely there, so both flat shapes lift their track the same way. */
 html[data-theme='dark'] .player-bar-compact .compact-progress-track,
 html[data-theme='dark'] .player-bar-mini .mini-progress-track {
-  background: color-mix(in srgb, var(--accent-color, #60a5fa) 30%, rgba(255, 255, 255, 0.14));
+  background: var(
+    --te-player-bar-progress-track,
+    color-mix(in srgb, var(--accent-color, #60a5fa) 30%, rgba(255, 255, 255, 0.14))
+  );
 }
 
 .player-bar-glass .compact-progress-track,
 .player-bar-glass .mini-progress-track {
-  background: rgba(255, 255, 255, 0.28);
+  background: var(--te-player-bar-progress-track, rgba(255, 255, 255, 0.28));
 }
 
 .player-bar-glass .compact-progress-fill,
 .player-bar-glass .mini-progress-fill {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--te-player-bar-progress-fill, rgba(255, 255, 255, 0.9));
 }
 
 /* Dark themes park the card colour a step or two from the page background —
@@ -2551,12 +2584,19 @@ html[data-theme='dark']
 .player-bar-shell[data-te-playbar-mode='mini']
   .player-bar.player-bar-glass.player-bar-mini.player-bar-mini.player-bar-mini
   .player-right
-  .mode-btn-right:hover,
+  .mode-btn-right:hover {
+  background: var(--te-flat-bar-control-hover-bg);
+  color: var(--te-flat-bar-control-hover-text);
+}
+
 .player-bar-shell[data-te-playbar-mode='mini']
   .player-bar.player-bar-glass.player-bar-mini.player-bar-mini.player-bar-mini
   .player-left
   > .mini-play-button:hover {
-  background: var(--te-flat-bar-control-hover-bg);
+  background: var(
+    --te-player-bar-play-hover-surface,
+    var(--te-player-bar-play-surface, var(--te-flat-bar-control-hover-bg))
+  );
   color: var(--te-flat-bar-control-hover-text);
 }
 
@@ -2750,7 +2790,10 @@ html[data-theme='dark']
   left: 0;
   right: 0;
   height: 2px;
-  background: color-mix(in srgb, var(--accent-color, var(--te-primary-500)) 22%, transparent);
+  background: var(
+    --te-player-bar-progress-track,
+    color-mix(in srgb, var(--accent-color, var(--te-primary-500)) 22%, transparent)
+  );
   overflow: hidden;
   pointer-events: none;
 }
@@ -2758,7 +2801,7 @@ html[data-theme='dark']
 .compact-progress-fill {
   height: 100%;
   width: 100%;
-  background: var(--accent-color, var(--te-primary-500));
+  background: var(--te-player-bar-progress-fill, var(--accent-color, var(--te-primary-500)));
   transform: scaleX(0);
   transform-origin: 0 50%;
   will-change: transform;
@@ -2957,9 +3000,18 @@ html[data-theme='dark']
   padding: 0;
   border: 0;
   border-radius: 10px;
-  background: transparent;
+  background: var(--te-player-bar-play-surface, transparent);
   color: var(--te-shell-control-text);
   cursor: pointer;
+}
+
+.player-bar-shell[data-te-playbar-mode='compact']
+  .player-bar-compact.player-bar-compact.player-bar-compact
+  .mini-play-button:hover {
+  background: var(
+    --te-player-bar-play-hover-surface,
+    var(--te-player-bar-play-surface, transparent)
+  );
 }
 
 .player-time-readout {
@@ -2997,11 +3049,18 @@ html[data-theme='dark']
   .icon-btn:hover,
 .player-bar-shell[data-te-playbar-mode='compact']
   .player-bar.player-bar-glass.player-bar-compact.player-bar-compact.player-bar-compact
-  .mode-btn-right:hover,
+  .mode-btn-right:hover {
+  background: var(--te-flat-bar-control-hover-bg);
+  color: var(--te-flat-bar-control-hover-text);
+}
+
 .player-bar-shell[data-te-playbar-mode='compact']
   .player-bar.player-bar-glass.player-bar-compact.player-bar-compact.player-bar-compact
   .mini-play-button:hover {
-  background: var(--te-flat-bar-control-hover-bg);
+  background: var(
+    --te-player-bar-play-hover-surface,
+    var(--te-player-bar-play-surface, var(--te-flat-bar-control-hover-bg))
+  );
   color: var(--te-flat-bar-control-hover-text);
 }
 

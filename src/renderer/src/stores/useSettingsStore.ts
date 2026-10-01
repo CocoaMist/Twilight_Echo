@@ -221,6 +221,7 @@ const fallbackSettings: AppSettings = {
   audioOutput: getFallbackAudioOutput(),
   audioDevice: 'auto',
   audioExclusiveMode: false,
+  audioExclusiveAutoRelease: false,
   audioOutputConfig: {
     preferredBufferSize: 0,
     routingMode: 'auto',

@@ -16,6 +16,8 @@ const {
   getMostListenedTracks,
   getTopArtists,
   getTopTracks,
+  clearListeningStats,
+  useListeningStatsStore,
   compactListeningStatsForPersistence,
   flushListeningStatsForTest,
   LISTENING_STATS_MAX_TRACKS,
@@ -365,4 +367,87 @@ test('listening stats record previous track outcome when playback switches track
   assert.equal(recent.length, 1)
   assert.equal(recent[0].skips, 1)
   assert.equal(recent[0].completions, 1)
+})
+
+test('date clearing removes only selected daily contributions across logical track variants', () => {
+  resetListeningStatsForTest()
+  const today = new Date().toISOString().slice(0, 10)
+  const dayStart = Date.parse(`${today}T00:00:00Z`)
+  const previousDay = new Date(dayStart - 86_400_000).toISOString().slice(0, 10)
+  const olderDay = new Date(dayStart - 2 * 86_400_000).toISOString().slice(0, 10)
+  recordListeningForTest(localTrack, 10, dayStart - 2 * 86_400_000)
+  recordListeningForTest(providerTrack, 20, dayStart - 86_400_000)
+  recordPlaybackOutcomeForTest(providerTrack, {
+    position: 175,
+    duration: 180,
+    timestamp: dayStart - 86_400_000 + 100
+  })
+  recordListeningForTest(localTrack, 30, dayStart)
+  const { listeningStats } = useListeningStatsStore()
+  const original = listeningStats.value
+  assert.equal(clearListeningStats({ startDay: previousDay, endDay: previousDay }), true)
+  assert.equal(listeningStats.value, original)
+  assert.deepEqual(listeningStats.value.days, { [olderDay]: 10, [today]: 30 })
+  const [stat] = getRecentTracks()
+  assert.equal(stat.seconds, 40)
+  assert.equal(stat.plays, 2)
+  assert.equal(stat.completions, 0)
+  assert.equal(stat.lastPlayed, dayStart)
+  assert.deepEqual(Object.keys(stat.daily ?? {}), [olderDay, today])
+  const persisted = JSON.parse(persistedValues.get('twilight-echo:listening-stats:v1') ?? '{}')
+  assert.equal(persisted.tracks[stat.id].seconds, 40)
+  assert.equal(persisted.tracks[stat.id].daily[previousDay], undefined)
+  recordListeningForTest(localTrack, 5, dayStart + 1_000)
+  assert.equal(getRecentTracks()[0].plays, 2)
+  assert.equal(clearListeningStats({ startDay: olderDay, endDay: today }), true)
+  assert.deepEqual(listeningStats.value, { days: {}, tracks: {} })
+})
+
+test('full clearing persists immediately and counts continuing playback as a fresh record', () => {
+  resetListeningStatsForTest()
+  const timestamp = Date.now()
+  recordListeningForTest(localTrack, 30, timestamp)
+  assert.equal(clearListeningStats(null), true)
+  assert.deepEqual(JSON.parse(persistedValues.get('twilight-echo:listening-stats:v1') ?? '{}'), {
+    days: {},
+    tracks: {}
+  })
+  assert.deepEqual(getRecentTracks(), [])
+  assert.deepEqual(getTopArtists(), [])
+  recordListeningForTest(localTrack, 5, timestamp + 5_000)
+  assert.equal(getRecentTracks()[0].plays, 1)
+  assert.equal(getRecentTracks()[0].seconds, 5)
+})
+
+test('invalid date clearing leaves data and persisted storage untouched', () => {
+  resetListeningStatsForTest()
+  recordListeningForTest(localTrack, 5, Date.now())
+  const before = JSON.stringify(useListeningStatsStore().listeningStats.value)
+  const writes = localStorageWriteCount
+  assert.throws(() => clearListeningStats({ startDay: '2026-09-31', endDay: '2026-09-30' }), /有效/)
+  assert.equal(JSON.stringify(useListeningStatsStore().listeningStats.value), before)
+  assert.equal(localStorageWriteCount, writes)
+})
+
+test('clearing reports a save failure and retry saves the cleared snapshot', () => {
+  resetListeningStatsForTest()
+  recordListeningForTest(localTrack, 5, Date.now())
+  assert.equal(flushListeningStatsForTest(), true)
+  const storage = globalThis.localStorage
+  const setItem = storage.setItem
+  storage.setItem = () => {
+    throw new Error('Quota exceeded')
+  }
+  try {
+    assert.equal(clearListeningStats(null), false)
+    assert.deepEqual(useListeningStatsStore().listeningStats.value, { days: {}, tracks: {} })
+    assert.equal(useListeningStatsStore().persistenceStatus.value.state, 'error')
+  } finally {
+    storage.setItem = setItem
+  }
+  assert.equal(flushListeningStatsForTest(), true)
+  assert.deepEqual(JSON.parse(persistedValues.get('twilight-echo:listening-stats:v1') ?? '{}'), {
+    days: {},
+    tracks: {}
+  })
 })

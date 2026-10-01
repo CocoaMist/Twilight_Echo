@@ -192,6 +192,9 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'audio.reason.output_not_perfect.explain':
     '引擎还没有取得足够证据证明这条链是逐位直通的。链路本身可能没问题，只是未被证明。',
   'audio.reason.output_not_perfect.fix': '',
+  'audio.reason.output_released.label': '音频设备已释放',
+  'audio.reason.output_released.explain': '播放已暂停或结束，音频设备当前未被占用。',
+  'audio.reason.output_released.fix': '继续播放时将重新获取所选音频设备。',
 
   // ── 源文件属性 ────────────────────────────────────────────────────────────
   'audio.reason.source_lossy.label': '源文件是有损格式，不能 Source Exact',
@@ -430,6 +433,7 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'error.audio.output_config_failed': '输出配置应用失败：{detail}',
   'error.audio.source_empty': '音频地址为空',
   'error.audio.play_failed': '播放失败：{detail}',
+  'error.audio.pause_failed': '暂停或继续播放失败：{detail}',
   'error.audio.stop_failed': '停止播放失败：{detail}',
   'error.audio.queue_load_failed': '播放队列加载失败：{detail}',
   'error.audio.play_mode_sync_failed': '播放模式同步失败：{detail}',

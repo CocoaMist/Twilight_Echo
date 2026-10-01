@@ -399,6 +399,7 @@ std::string playbackInfoToJson(const PlaybackInfo& info) {
        << "\"outputDevice\":\"" << json_utils::escape(info.outputDevice) << "\","
        << "\"outputInfo\":{"
        << "\"exclusive\":" << (out.exclusive ? "true" : "false") << ","
+       << "\"outputReleased\":" << (out.outputReleased ? "true" : "false") << ","
        << "\"accessMode\":\"" << json_utils::escape(out.accessMode) << "\","
        << "\"supportsOutputPerfect\":" << (out.supportsOutputPerfect ? "true" : "false") << ","
        << "\"sourceExact\":" << (out.sourceExact ? "true" : "false") << ","
@@ -635,6 +636,7 @@ OutputConfig parseOutputConfigJson(const std::string& json) {
   config.preferredBufferSize = parseUintField(json, "preferredBufferSize", 0);
   config.routingMode = parseChannelRoutingMode(parseStringField(json, "routingMode", "auto"));
   config.wasapiExclusivePushMode = parseBoolField(json, "wasapiExclusivePushMode", false);
+  config.releaseExclusiveOnPause = parseBoolField(json, "releaseExclusiveOnPause", false);
   config.continuityFirst = parseStringField(json, "playbackPolicy", "bit-perfect-first") == "continuity-first";
   const int continuityRate = static_cast<int>(parseUintField(json, "continuitySampleRate", 48000));
   config.continuitySampleRate = continuityRate == 44100 || continuityRate == 96000 ? continuityRate : 48000;
@@ -731,6 +733,7 @@ void TwilightAudioEngine::setStateEventsEnabled(bool enabled) {
 }
 
 TAE_Result TwilightAudioEngine::play(const std::string& source, double startTimeSeconds) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   if (source.empty()) return TAE_RESULT_INVALID_ARGUMENT;
 
@@ -774,6 +777,8 @@ TAE_Result TwilightAudioEngine::play(const std::string& source, double startTime
     info_.playMode = queue_.playModeId();
     info_.hasUpcomingTrack = upcoming.has_value();
     info_.upcomingTrack = upcoming.value_or(QueueItem{});
+    pausedOutputReleased_ = false;
+    info_.outputInfo.outputReleased = false;
     backend = info_.outputBackend;
     device = info_.outputDevice;
     volume = info_.volume;
@@ -807,6 +812,7 @@ TAE_Result TwilightAudioEngine::play(const std::string& source, double startTime
 }
 
 TAE_Result TwilightAudioEngine::playQueueItem(const QueueItem& item, double startTimeSeconds) {
+  std::lock_guard transportLock(transportMutex_);
   if (item.source.empty()) return TAE_RESULT_INVALID_ARGUMENT;
 
   std::string backend;
@@ -833,6 +839,8 @@ TAE_Result TwilightAudioEngine::playQueueItem(const QueueItem& item, double star
     info_.playMode = queue_.playModeId();
     info_.hasUpcomingTrack = upcoming.has_value();
     info_.upcomingTrack = upcoming.value_or(QueueItem{});
+    pausedOutputReleased_ = false;
+    info_.outputInfo.outputReleased = false;
     backend = info_.outputBackend;
     device = info_.outputDevice;
     volume = info_.volume;
@@ -866,36 +874,107 @@ TAE_Result TwilightAudioEngine::playQueueItem(const QueueItem& item, double star
 }
 
 TAE_Result TwilightAudioEngine::pause() {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
-  if (pipeline_) pipeline_->togglePause();
-  std::lock_guard lock(mutex_);
-  if (pipeline_) {
-    applyPipelineStatusLocked(pipeline_->status());
-  } else {
-    info_.state = info_.state == PlaybackState::Paused ? PlaybackState::Playing : PlaybackState::Paused;
+  {
+    std::lock_guard lock(mutex_);
+    if (info_.state == PlaybackState::Stopped) return TAE_RESULT_OK;
   }
-  lastTick_ = std::chrono::steady_clock::now();
-  publishStateLocked();
+  if (pausedOutputReleased_) return resumeReleasedOutput();
+  if (pipeline_) pipeline_->togglePause();
+  bool release = false;
+  {
+    std::lock_guard lock(mutex_);
+    if (pipeline_) {
+      applyPipelineStatusLocked(pipeline_->status());
+    } else {
+      info_.state = info_.state == PlaybackState::Paused ? PlaybackState::Playing : PlaybackState::Paused;
+    }
+    release = info_.state == PlaybackState::Paused && shouldReleaseOutputLocked();
+    lastTick_ = std::chrono::steady_clock::now();
+    if (!release) publishStateLocked();
+  }
+  if (release) releasePausedOutput();
   return TAE_RESULT_OK;
 }
 
+bool TwilightAudioEngine::shouldReleaseOutputLocked() const {
+  const auto& backend = info_.outputInfo.actualBackend;
+  return outputConfig_.releaseExclusiveOnPause &&
+         (info_.outputInfo.exclusive || backend == "wasapi-exclusive" ||
+          backend == "coreaudio-exclusive" || backend == "asio");
+}
+
+void TwilightAudioEngine::markOutputReleasedLocked() {
+  info_.outputInfo.outputReleased = true;
+  info_.outputInfo.exclusive = false;
+  info_.outputInfo.outputPerfect = false;
+  info_.outputInfo.pcmPassthrough = false;
+  info_.outputInfo.accessMode = "released";
+  info_.outputInfo.perfectReasonCode = "output_released";
+  info_.outputInfo.perfectReason = "Audio output device released";
+  info_.gaplessActive = false;
+  info_.preloadReady = false;
+  normalizeOutputInfoMirror(info_);
+}
+
+void TwilightAudioEngine::releasePausedOutput() {
+  {
+    std::lock_guard lock(mutex_);
+    pausedOutputReleased_ = true;
+  }
+  if (pipeline_) pipeline_->stop();
+  std::lock_guard lock(mutex_);
+  markOutputReleasedLocked();
+  publishStateLocked();
+}
+
+TAE_Result TwilightAudioEngine::resumeReleasedOutput() {
+  PlaybackInfo paused;
+  {
+    std::lock_guard lock(mutex_);
+    paused = info_;
+  }
+  const bool liveStream = paused.durationSeconds <= 0.0 &&
+                          (paused.source.rfind("http://", 0) == 0 || paused.source.rfind("https://", 0) == 0);
+  const TAE_Result result = play(paused.source, liveStream ? 0.0 : paused.positionSeconds);
+  if (result != TAE_RESULT_OK) {
+    std::lock_guard lock(mutex_);
+    info_ = paused;
+    pausedOutputReleased_ = true;
+    publishStateLocked();
+  }
+  return result;
+}
+
 TAE_Result TwilightAudioEngine::stop() {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   if (pipeline_) pipeline_->stop();
   std::lock_guard lock(mutex_);
   info_.state = PlaybackState::Stopped;
   info_.positionSeconds = 0.0;
+  if (outputConfig_.releaseExclusiveOnPause || pausedOutputReleased_) markOutputReleasedLocked();
+  pausedOutputReleased_ = false;
   publishStateLocked();
   return TAE_RESULT_OK;
 }
 
 TAE_Result TwilightAudioEngine::seek(double positionSeconds) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   if (!std::isfinite(positionSeconds)) return TAE_RESULT_INVALID_ARGUMENT;
   std::string error;
   PlaybackState currentState = PlaybackState::Stopped;
   {
     std::lock_guard lock(mutex_);
+    if (pausedOutputReleased_) {
+      info_.positionSeconds = info_.durationSeconds > 0.0
+                                  ? std::clamp(positionSeconds, 0.0, info_.durationSeconds)
+                                  : std::max(0.0, positionSeconds);
+      publishStateLocked();
+      return TAE_RESULT_OK;
+    }
     currentState = info_.state;
   }
   if (pipeline_ && currentState != PlaybackState::Stopped) {
@@ -924,6 +1003,7 @@ TAE_Result TwilightAudioEngine::seek(double positionSeconds) {
 }
 
 TAE_Result TwilightAudioEngine::setVolume(double volume) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   if (!std::isfinite(volume)) return TAE_RESULT_INVALID_ARGUMENT;
   std::string rerouteReason;
@@ -936,7 +1016,7 @@ TAE_Result TwilightAudioEngine::setVolume(double volume) {
       pipeline_->setVolume(info_.volume);
       applyPipelineStatusLocked(pipeline_->status());
     }
-    if (pipeline_ && info_.state != PlaybackState::Stopped) {
+    if (pipeline_ && info_.state != PlaybackState::Stopped && !pausedOutputReleased_) {
       if (!shouldReroutePipelineLocked(&rerouteReason, &reroutePosition, &rerouteState)) {
         publishStateLocked();
       }
@@ -952,6 +1032,7 @@ TAE_Result TwilightAudioEngine::setVolume(double volume) {
 }
 
 TAE_Result TwilightAudioEngine::setPlaybackRate(double rate) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   if (!std::isfinite(rate)) return TAE_RESULT_INVALID_ARGUMENT;
   std::string rerouteReason;
@@ -964,7 +1045,7 @@ TAE_Result TwilightAudioEngine::setPlaybackRate(double rate) {
       pipeline_->setPlaybackRate(info_.playbackRate);
       applyPipelineStatusLocked(pipeline_->status());
     }
-    if (pipeline_ && info_.state != PlaybackState::Stopped) {
+    if (pipeline_ && info_.state != PlaybackState::Stopped && !pausedOutputReleased_) {
       if (!shouldReroutePipelineLocked(&rerouteReason, &reroutePosition, &rerouteState)) {
         publishStateLocked();
       }
@@ -988,6 +1069,7 @@ TAE_Result TwilightAudioEngine::setLoopRange(double startSeconds, double endSeco
 }
 
 TAE_Result TwilightAudioEngine::setOutputDevice(const std::string& deviceId) {
+  std::lock_guard transportLock(transportMutex_);
   std::lock_guard lock(mutex_);
   const std::string nextDevice = deviceId.empty() ? "auto" : deviceId;
   if (nextDevice != info_.outputDevice ||
@@ -1004,6 +1086,7 @@ TAE_Result TwilightAudioEngine::setOutputDevice(const std::string& deviceId) {
 }
 
 TAE_Result TwilightAudioEngine::setOutputBackend(const std::string& backendId) {
+  std::lock_guard transportLock(transportMutex_);
   if (backendId.empty()) return TAE_RESULT_INVALID_ARGUMENT;
   const std::string nextBackend = backendId == "wasapi-shared" ? "wasapi" : backendId;
   std::string providerError;
@@ -1017,6 +1100,7 @@ TAE_Result TwilightAudioEngine::setOutputBackend(const std::string& backendId) {
     return result;
   }
   std::lock_guard lock(mutex_);
+  if (pausedOutputReleased_) info_.outputInfo.backend = nextBackend;
   if (nextBackend != info_.outputBackend) outputRoutePending_ = true;
   info_.outputBackend = nextBackend;
   if (info_.state == PlaybackState::Stopped) {
@@ -1031,6 +1115,7 @@ TAE_Result TwilightAudioEngine::setOutputBackend(const std::string& backendId) {
 }
 
 TAE_Result TwilightAudioEngine::loadQueue(const std::string& queueJson, int startIndex) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   std::string error;
   std::lock_guard lock(mutex_);
@@ -1058,6 +1143,7 @@ TAE_Result TwilightAudioEngine::loadQueue(const std::string& queueJson, int star
 }
 
 TAE_Result TwilightAudioEngine::next() {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   std::optional<QueueItem> item;
   std::optional<QueueItem> upcoming;
@@ -1097,6 +1183,7 @@ TAE_Result TwilightAudioEngine::next() {
 }
 
 TAE_Result TwilightAudioEngine::previous() {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   std::optional<QueueItem> item;
   PlaybackState state = PlaybackState::Stopped;
@@ -1125,6 +1212,7 @@ TAE_Result TwilightAudioEngine::previous() {
 }
 
 TAE_Result TwilightAudioEngine::setPlayMode(const std::string& mode) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   std::optional<QueueItem> upcoming;
   {
@@ -1143,6 +1231,7 @@ TAE_Result TwilightAudioEngine::setPlayMode(const std::string& mode) {
 }
 
 TAE_Result TwilightAudioEngine::setDspConfig(const std::string& dspJson) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   std::string rerouteReason;
   double reroutePosition = 0.0;
@@ -1155,7 +1244,7 @@ TAE_Result TwilightAudioEngine::setDspConfig(const std::string& dspJson) {
     dspConfigJson_ = dspJson.empty() ? "{}" : dspJson;
     dspConfig_ = nextConfig;
     if (pipeline_) pipeline_->setDspConfig(dspConfigJson_);
-    if (pipeline_ && info_.state != PlaybackState::Stopped) {
+    if (pipeline_ && info_.state != PlaybackState::Stopped && !pausedOutputReleased_) {
       applyPipelineStatusLocked(pipeline_->status());
       if (info_.isDsd) {
         const bool wantsPcm = nextConfig.dsdOutputMode == DsdOutputMode::Pcm;
@@ -1222,6 +1311,7 @@ TAE_Result TwilightAudioEngine::setDspConfig(const std::string& dspJson) {
 }
 
 TAE_Result TwilightAudioEngine::setDspGraph(const std::string& graphJson) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   const std::string next = graphJson.empty() ? "{\"graph\":{\"nodes\":[]}}" : graphJson;
   std::string error;
@@ -1247,6 +1337,7 @@ TAE_Result TwilightAudioEngine::setDspGraph(const std::string& graphJson) {
 TAE_Result TwilightAudioEngine::applyDspState(
     uint64_t revision,
     const std::string& stateJson) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   const auto payloadRevision = json_utils::fieldNumber(stateJson, "revision");
   const std::string processingJson = json_utils::fieldObject(stateJson, "processing");
@@ -1286,7 +1377,7 @@ TAE_Result TwilightAudioEngine::applyDspState(
     dspConfigJson_ = processingJson;
     dspGraphJson_ = stateJson;
     applyPipelineStatusLocked(pipeline_->status());
-    if (pipeline_ && info_.state != PlaybackState::Stopped) {
+    if (pipeline_ && info_.state != PlaybackState::Stopped && !pausedOutputReleased_) {
       if (info_.isDsd) {
         const bool wantsPcm = nextConfig.dsdOutputMode == DsdOutputMode::Pcm;
         const bool wantsNative =
@@ -1355,6 +1446,7 @@ TAE_Result TwilightAudioEngine::applyDspState(
 }
 
 TAE_Result TwilightAudioEngine::setOutputConfig(const std::string& outputConfigJson) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   OutputConfig parsed = parseOutputConfigJson(outputConfigJson.empty() ? "{}" : outputConfigJson);
   if (parsed.continuityFirst &&
@@ -1369,6 +1461,18 @@ TAE_Result TwilightAudioEngine::setOutputConfig(const std::string& outputConfigJ
   bool routePending = false;
   {
     std::lock_guard lock(mutex_);
+    if (pausedOutputReleased_) {
+      if (pipeline_ && !pipeline_->setOutputConfig(parsed, &error)) {
+        emitError(error.empty() ? "输出配置设置失败" : error, TAE_RESULT_INVALID_ARGUMENT, "output-config");
+        return TAE_RESULT_INVALID_ARGUMENT;
+      }
+      outputConfig_ = parsed;
+      outputRoutePending_ = false;
+      info_.outputInfo.backend = info_.outputBackend;
+      info_.outputInfo.channelRoutingMode = channelRoutingModeToString(parsed.routingMode);
+      publishStateLocked();
+      return TAE_RESULT_OK;
+    }
     routePending = (outputRoutePending_ || outputConfig_.continuityFirst != parsed.continuityFirst ||
                     (parsed.continuityFirst && outputConfig_.continuitySampleRate != parsed.continuitySampleRate)) &&
                    pipeline_ && info_.state != PlaybackState::Stopped;
@@ -1387,7 +1491,7 @@ TAE_Result TwilightAudioEngine::setOutputConfig(const std::string& outputConfigJ
       reroutePosition = info_.positionSeconds;
       rerouteState = info_.state;
       outputRoutePending_ = false;
-    } else if (pipeline_ && info_.state != PlaybackState::Stopped) {
+    } else if (pipeline_ && info_.state != PlaybackState::Stopped && !pausedOutputReleased_) {
       applyPipelineStatusLocked(pipeline_->status());
       if (shouldReroutePipelineLocked(&rerouteReason, &reroutePosition, &rerouteState)) {
         // Defer publish until the reroute completes.
@@ -1403,6 +1507,12 @@ TAE_Result TwilightAudioEngine::setOutputConfig(const std::string& outputConfigJ
   if (!rerouteReason.empty()) {
     return restartCurrentPlaybackForReroute(reroutePosition, rerouteState, rerouteReason, "output-config");
   }
+  bool release = false;
+  {
+    std::lock_guard lock(mutex_);
+    release = info_.state == PlaybackState::Paused && shouldReleaseOutputLocked();
+  }
+  if (release) releasePausedOutput();
   return TAE_RESULT_OK;
 }
 
@@ -1547,6 +1657,7 @@ TAE_Result TwilightAudioEngine::setReplayGainMode(
 }
 
 TAE_Result TwilightAudioEngine::setNativeDspPluginChain(const std::string& chainJson) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   std::string nextChain;
   {
@@ -1828,6 +1939,7 @@ void TwilightAudioEngine::clockLoop() {
     }
     waitForClockTick(active);
     if (!running_) break;
+    std::lock_guard transportLock(transportMutex_);
     // Nobody may be listening for playback snapshots (the N-API addon polls
     // GetPlaybackInfo instead), so only serialize them when a consumer asked.
     const bool stateEvents = stateEventsEnabled_.load(std::memory_order_relaxed);
@@ -1968,6 +2080,7 @@ void TwilightAudioEngine::clockLoop() {
       continue;
     }
     std::optional<QueueItem> autoNextItem;
+    bool releaseAtEnd = false;
     {
       std::lock_guard lock(mutex_);
       if (hasPipelineStatus && info_.state != PlaybackState::Stopped) {
@@ -1985,6 +2098,7 @@ void TwilightAudioEngine::clockLoop() {
           info_.hasUpcomingTrack = queue_.upcoming().has_value();
           info_.upcomingTrack = queue_.upcoming().value_or(QueueItem{});
         } else {
+          releaseAtEnd = shouldReleaseOutputLocked();
           info_.state = PlaybackState::Stopped;
           if (info_.durationSeconds > 0.0) info_.positionSeconds = info_.durationSeconds;
         }
@@ -2025,6 +2139,12 @@ void TwilightAudioEngine::clockLoop() {
       }
       continue;
     }
+    if (releaseAtEnd) {
+      if (pipeline_) pipeline_->stop();
+      std::lock_guard lock(mutex_);
+      markOutputReleasedLocked();
+      if (stateEvents) payload = playbackInfoToJson(info_);
+    }
     if (emitTick) emit("property-change", payload);
     if (emitEnded) emit("end-file", "{\"reason\":\"eof\"}");
   }
@@ -2053,6 +2173,11 @@ void TwilightAudioEngine::publishStateLocked() const {
 }
 
 void TwilightAudioEngine::applyPipelineStatusLocked(const PipelineStatus& status) {
+  if (pausedOutputReleased_) {
+    info_.requestedConfigRevision = status.requestedConfigRevision;
+    info_.appliedConfigRevision = status.appliedConfigRevision;
+    return;
+  }
   switch (status.state) {
     case PipelineState::Playing:
       info_.state = PlaybackState::Playing;
@@ -2150,6 +2275,10 @@ void TwilightAudioEngine::applyPipelineStatusLocked(const PipelineStatus& status
 }
 
 void TwilightAudioEngine::updatePerfectLocked() {
+  if (info_.outputInfo.outputReleased) {
+    markOutputReleasedLocked();
+    return;
+  }
   if (info_.outputInfo.backend.empty()) info_.outputInfo.backend = info_.outputBackend;
   if (info_.outputInfo.actualBackend.empty()) info_.outputInfo.actualBackend = info_.outputInfo.backend;
   info_.outputInfo.channelRoutingMode = channelRoutingModeToString(outputConfig_.routingMode);
@@ -2223,7 +2352,7 @@ bool TwilightAudioEngine::shouldReroutePipelineLocked(
     std::string* reason,
     double* position,
     PlaybackState* state) const {
-  if (!pipeline_ || info_.state == PlaybackState::Stopped) return false;
+  if (!pipeline_ || info_.state == PlaybackState::Stopped || pausedOutputReleased_) return false;
   const DspConfig& config = dspConfig_;
   if (info_.isDsd) {
     const bool wantsPcm = config.dsdOutputMode == DsdOutputMode::Pcm;
@@ -2283,6 +2412,7 @@ TAE_Result TwilightAudioEngine::restartCurrentPlaybackForReroute(
   std::string source;
   {
     std::lock_guard lock(mutex_);
+    if (pausedOutputReleased_) return TAE_RESULT_OK;
     source = info_.source;
     if (pipeline_) pipeline_->setRerouteInProgress(true, reason);
   }

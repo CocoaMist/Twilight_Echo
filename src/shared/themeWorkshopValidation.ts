@@ -43,6 +43,8 @@ export function isWorkshopProject(value: unknown): value is WorkshopProject {
     normalizeThemeEditor(p.base.editor)?.controls.length !== p.base.editor.controls?.length
   )
     return false
+  if (p.editor && normalizeThemeEditor(p.editor)?.controls.length !== p.editor.controls?.length)
+    return false
   if (
     !['pureWhite', 'dark'].every(
       (t) => record(p.values) && strings(p.values[t]) && record(p.tokens) && strings(p.tokens[t])
@@ -71,6 +73,11 @@ export function isWorkshopProject(value: unknown): value is WorkshopProject {
           record(a) &&
           ['image', 'font'].includes(a.type) &&
           [a.id, a.name, a.license, a.source].every((v) => typeof v === 'string') &&
+          (a.originalDataUrl === undefined ||
+            (typeof a.originalDataUrl === 'string' &&
+              /^data:(?:image\/(?:png|jpeg|webp)|font\/woff2);base64,[A-Za-z0-9+/=]+$/.test(
+                a.originalDataUrl
+              ))) &&
           (a.type === 'image'
             ? /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/
             : /^data:font\/woff2;base64,[A-Za-z0-9+/=]+$/

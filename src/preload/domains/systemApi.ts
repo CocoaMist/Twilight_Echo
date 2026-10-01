@@ -1,6 +1,6 @@
 import { collectClosePersistenceOutcome } from '../closePersistence.ts'
 import { ipcRenderer } from 'electron'
-import type { NativeContextMenuRequest } from '../types'
+import type { EqualizerClipboardApi, NativeContextMenuRequest } from '../types'
 import { NCM_CLOUD_TRANSFER_PROGRESS_CHANNEL } from '../../shared/ncmCloud.ts'
 import type {
   NcmCloudDownloadRequest,
@@ -21,6 +21,10 @@ import type {
 
 const appNavigationCallbacks = new Set<(target: TrayNavigationTarget) => void>()
 const savePlaybackSessionCallbacks = new Set<() => Promise<void> | void>()
+const equalizerClipboardApi: EqualizerClipboardApi = {
+  copyEqBands: (bands) => ipcRenderer.invoke('window:copy-eq-bands', bands),
+  pasteEqBands: () => ipcRenderer.invoke('window:paste-eq-bands')
+}
 
 export function bindSystemIpcEvents(): void {
   ipcRenderer.on('app:save-playback-session', async (_event, requestId: string) => {
@@ -46,6 +50,7 @@ export const systemApi = {
       ipcRenderer.invoke('systemMedia:getNativeStatus')
   },
   window: {
+    ...equalizerClipboardApi,
     popupContextMenu: (request: NativeContextMenuRequest): Promise<string | null> =>
       ipcRenderer.invoke('contextMenu:popup', request),
     closeContextMenu: (requestId: string): Promise<void> =>

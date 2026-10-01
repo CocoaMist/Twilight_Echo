@@ -33,6 +33,7 @@ import type {
 } from '../shared/desktopLyrics.ts'
 import type { TrackData } from '../shared/track.ts'
 import type { NativeContextMenuRequest } from '../shared/nativeContextMenu.ts'
+import type { EqualizerClipboardApi } from '../shared/equalizerClipboard.ts'
 import type {
   DspAsset,
   DspAssetKind,
@@ -759,7 +760,7 @@ interface WindowAPI {
       callback: (state: import('../shared/sleepTimer.ts').SleepTimerState) => void
     ) => () => void
   }
-  window: {
+  window: EqualizerClipboardApi & {
     popupContextMenu: (request: NativeContextMenuRequest) => Promise<string | null>
     closeContextMenu: (requestId: string) => Promise<void>
     minimize: () => void
@@ -1103,7 +1104,7 @@ interface WindowAPI {
   fonts: {
     listInstalled: () => Promise<string[]>
   }
-  themeWorkshop: import('../shared/themeWorkshop').ThemeWorkshopApi
+  themeWorkshop: import('./types').ThemeWorkshopApi
   themes: {
     getSystemTone: () => Promise<ThemeTone>
     getBootstrap: () => Promise<ThemeBootstrap>

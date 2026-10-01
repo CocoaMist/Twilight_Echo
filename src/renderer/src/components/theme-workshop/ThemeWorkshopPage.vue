@@ -1,737 +1,894 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import WorkshopLayersPanel from '@renderer/components/theme-workshop/WorkshopLayersPanel.vue'
 import WorkshopAssetsPanel from '@renderer/components/theme-workshop/WorkshopAssetsPanel.vue'
 import WorkshopModesPanel from '@renderer/components/theme-workshop/WorkshopModesPanel.vue'
 import WorkshopPreview from '@renderer/components/theme-workshop/WorkshopPreview.vue'
+import WorkshopControl from '@renderer/components/theme-workshop/WorkshopControl.vue'
+import WorkshopProjectPanel from '@renderer/components/theme-workshop/WorkshopProjectPanel.vue'
+import WorkshopParameterDesigner from '@renderer/components/theme-workshop/WorkshopParameterDesigner.vue'
+import WorkshopDiagnosticsPanel from '@renderer/components/theme-workshop/WorkshopDiagnosticsPanel.vue'
+import WorkshopOnboarding from '@renderer/components/theme-workshop/WorkshopOnboarding.vue'
 import ThemeAppearanceControl from '@renderer/components/theme-studio/ThemeAppearanceControl.vue'
+import { useThemeWorkshopEditor } from '@renderer/components/theme-workshop/useThemeWorkshopEditor'
+import { useWorkshopDiagnostics } from '@renderer/components/theme-workshop/useWorkshopDiagnostics'
+import { createWorkshopTrial } from '@renderer/components/theme-workshop/workshopTrial'
 import {
-  compileWorkshopProject,
-  copyWorkshopDraft,
-  workshopRuntimeAttributes,
-  type WorkshopProjectSummary,
-  WORKSHOP_TEMPLATES,
+  WORKSHOP_PREVIEW_SURFACES,
+  WORKSHOP_PREVIEW_STATES,
+  WORKSHOP_SIMPLE_GROUPS,
+  WORKSHOP_SIMPLE_TOKENS,
+  workshopTokenGroup
+} from '@renderer/components/theme-workshop/workshopCatalog'
+import {
+  workshopEditor,
+  type WorkshopAsset,
   type WorkshopProject,
-  type WorkshopThemeSource,
-  type ThemeEditorControl,
-  type WorkshopBase
-} from '../../../../shared/themeWorkshop'
+  type ThemeEditorControl
+} from '../../../../shared/themeWorkshop.ts'
+import { workshopControlKey } from '../../../../shared/themeEditor.ts'
+import {
+  repairWorkshopDiagnostic,
+  replaceWorkshopAsset
+} from '../../../../shared/themeWorkshopEditing.ts'
 import {
   THEME_TOKEN_DEFINITIONS,
   TWILIGHT_DEFAULT_THEME,
-  THEME_MANAGED_DATA_ATTRIBUTES,
+  THEME_ACCENT_PALETTES,
+  createThemeAccentTokenOverrides,
   type ThemeTone
-} from '../../../../shared/theme'
+} from '../../../../shared/theme.ts'
+import type { WorkshopSurface, WorkshopLayer } from '../../../../shared/themeWorkshopLayers.ts'
+import type { WorkshopDiagnostic } from '../../../../shared/themeWorkshopDiagnostics.ts'
 import { useThemeStore } from '@renderer/stores/useThemeStore'
 import { useExtensionRegistry } from '@renderer/extensions/registry'
 
 const api = window.api.themeWorkshop
-const store = useThemeStore()
-const projects = shallowRef<WorkshopProjectSummary[]>([])
-const sources = shallowRef<WorkshopThemeSource[]>([])
-const draft = shallowRef<WorkshopProject>()
+const editor = useThemeWorkshopEditor(api)
+const {
+  projects,
+  sources,
+  draft,
+  candidate,
+  previewProject,
+  generation,
+  busy,
+  error,
+  notice,
+  saveState,
+  savedAt,
+  cursor,
+  historyLength,
+  change,
+  persist,
+  adopt,
+  select,
+  create,
+  duplicate,
+  saveCopy,
+  remove,
+  undo,
+  run
+} = editor
+const metadataBuffer = ref<{ name: string; author: string; version: string; description: string }>()
+const mode = ref<'simple' | 'professional'>('simple')
 const tone = ref<ThemeTone>('pureWhite')
 const group = ref('项目')
 const search = ref('')
+const projectSearch = ref('')
+const modifiedOnly = ref(false)
 const surface = ref('dashboard')
 const previewState = ref('normal')
 const editTarget = ref<'local' | 'streaming'>('local')
 const width = ref(1180)
-const error = ref('')
-const notice = ref('')
-const busy = ref(false)
+const zoom = ref(0.65)
+const canvasEditing = ref(true)
+const selectedLayer = ref('')
+const layerSurface = ref<WorkshopSurface>('app')
+const guide = ref(true)
+const guideStep = ref(0)
+const creating = ref(false)
 const trial = ref(false)
-const candidate = shallowRef<WorkshopBase>()
-const history: WorkshopProject[] = []
-let cursor = -1
-const historyIndex = ref(-1)
-const historyLength = ref(0)
-let trialAttributes: Record<string, string | null> = {}
-let trialRecovery: HTMLButtonElement | undefined
-let trialSheet: HTMLStyleElement | undefined
-let saveTimer: ReturnType<typeof setTimeout> | undefined
-let releaseSession: (() => void) | undefined
-let disablePrepared = false
-let saving: Promise<void> = Promise.resolve()
-const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
-const copyProject = copyWorkshopDraft
-const previewProject = computed(() =>
-  draft.value && candidate.value ? { ...draft.value, base: candidate.value } : draft.value
+const deleteDialog = ref<HTMLDialogElement>()
+const page = ref<HTMLElement>()
+const preview = ref<InstanceType<typeof WorkshopPreview>>()
+const code = ref<HTMLTextAreaElement>()
+const sourceCode = ref<HTMLTextAreaElement>()
+const sourceDetails = ref<HTMLDetailsElement>()
+const metadataProblems = ref<WorkshopDiagnostic[]>([])
+const designerProblem = ref('')
+const diagnostics = useWorkshopDiagnostics(
+  previewProject,
+  generation,
+  candidate,
+  async () => preview.value?.inspect() ?? []
 )
-const css = computed(() => {
-  if (!draft.value) return ''
-  try {
-    return compileWorkshopProject(
-      candidate.value ? { ...draft.value, base: candidate.value } : draft.value
-    )
-  } catch {
-    return ''
-  }
+const {
+  css,
+  validProject,
+  previewValid,
+  report,
+  checking,
+  progress,
+  stale,
+  scene,
+  previewP95,
+  bufferProblems
+} = diagnostics
+watch([metadataProblems, designerProblem], () => {
+  bufferProblems.value = [
+    ...metadataProblems.value,
+    ...(designerProblem.value
+      ? [
+          {
+            id: 'editor.buffer',
+            code: 'editor.buffer',
+            severity: 'error' as const,
+            message: designerProblem.value,
+            location: { kind: 'control' as const }
+          }
+        ]
+      : [])
+  ]
 })
-const compilationError = computed(() => {
-  if (!draft.value) return ''
-  try {
-    compileWorkshopProject(
-      candidate.value ? { ...draft.value, base: candidate.value } : draft.value
-    )
-    return ''
-  } catch (cause) {
-    return cause instanceof Error ? cause.message : String(cause)
-  }
+const trialRuntime = createWorkshopTrial(document, () => {
+  trial.value = false
 })
-const groups = computed(() => [
-  '项目',
-  ...new Set(draft.value?.base.editor?.controls.map((c) => c.group) ?? []),
-  '图层与蒙版',
-  '素材库',
-  '布局与模式',
-  '标准外观',
-  '高级 CSS'
-])
+const canFinish = computed(
+  () => !!draft.value && previewValid.value && !report.value.errors && !candidate.value
+)
+const activeScene = computed(
+  () =>
+    scene.value ?? {
+      tone: tone.value,
+      surface: surface.value,
+      width: width.value,
+      state: previewState.value
+    }
+)
+const groups = computed(() =>
+  [
+    ...WORKSHOP_SIMPLE_GROUPS,
+    ...(mode.value === 'professional'
+      ? [
+          '标准外观',
+          ...new Set(workshopEditor(draft.value!)?.controls.map((control) => control.group) ?? []),
+          '参数设计器',
+          '高级 CSS'
+        ]
+      : [])
+  ].filter((name, index, all) => all.indexOf(name) === index)
+)
+const visibleProjects = computed(() =>
+  projects.value.filter((project) =>
+    `${project.name} ${project.author}`.toLowerCase().includes(projectSearch.value.toLowerCase())
+  )
+)
+function key(control: ThemeEditorControl): string {
+  return workshopControlKey(control, draft.value?.unlinked, editTarget.value)
+}
+function value(control: ThemeEditorControl): string {
+  return draft.value?.values[tone.value][key(control)] ?? control.defaults[tone.value]
+}
 const controls = computed(() =>
-  (draft.value?.base.editor?.controls ?? []).filter(
-    (c) =>
-      c.group === group.value &&
-      `${c.label} ${c.id}`.toLowerCase().includes(search.value.toLowerCase())
+  (draft.value ? (workshopEditor(draft.value)?.controls ?? []) : []).filter(
+    (control) =>
+      (search.value ||
+        control.group === group.value ||
+        (group.value === '配色' && control.type === 'color')) &&
+      `${control.label} ${control.id} ${control.group} ${control.description ?? ''}`
+        .toLowerCase()
+        .includes(search.value.toLowerCase()) &&
+      (!modifiedOnly.value || draft.value?.values[tone.value][key(control)] !== undefined)
   )
 )
 const tokens = computed(() =>
-  THEME_TOKEN_DEFINITIONS.filter((t) =>
-    `${t.id} ${t.label}`.toLowerCase().includes(search.value.toLowerCase())
+  THEME_TOKEN_DEFINITIONS.filter(
+    (token) =>
+      (mode.value === 'professional' || WORKSHOP_SIMPLE_TOKENS.has(token.id)) &&
+      (search.value || group.value === '标准外观' || workshopTokenGroup(token) === group.value) &&
+      `${token.id} ${token.label}`.toLowerCase().includes(search.value.toLowerCase()) &&
+      (!modifiedOnly.value || draft.value?.tokens[tone.value][token.id] !== undefined)
   )
 )
-const removedControls = computed(() =>
-  (draft.value?.base.editor?.controls ?? [])
-    .filter((c) => !candidate.value?.editor?.controls.some((next) => next.id === c.id))
-    .map((c) => c.label)
+const modeDomain = computed(
+  () => ({ 导航: 'navigation', 列表: 'library', 播放栏: 'player' })[group.value]
 )
+const saveLabel = computed(() =>
+  bufferProblems.value.length
+    ? '输入尚未保存'
+    : { saved: '已保存', pending: '待保存', saving: '保存中…', failed: '保存失败' }[saveState.value]
+)
+let releaseSession: (() => void) | undefined
 
-async function run(action: () => Promise<void>): Promise<void> {
-  if (busy.value) return
-  busy.value = true
-  error.value = ''
-  notice.value = ''
-  try {
-    await action()
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    busy.value = false
-  }
+function gesture(action: 'begin' | 'end' | 'cancel'): void {
+  if (action === 'begin') editor.beginGesture()
+  else editor.endGesture(action === 'cancel')
 }
-
-function adoptCandidate(): void {
-  const base = candidate.value
-  if (!base) return
+function replace(next: WorkshopProject): void {
+  change((project) => Object.assign(project, next), true)
+}
+function chooseLayer(id: string, region: WorkshopSurface): void {
+  selectedLayer.value = id
+  layerSurface.value = region
+  group.value = '图层与蒙版'
+  const target = WORKSHOP_PREVIEW_SURFACES.find((entry) => entry.layer === region)
+  if (target) surface.value = target.id
+}
+function editLayer(id: string, region: WorkshopSurface, patch: Partial<WorkshopLayer>): void {
   change((project) => {
-    project.base = base
-    const ids = new Set(base.editor?.controls.map((control) => control.id) ?? [])
-    for (const mode of ['pureWhite', 'dark'] as const) {
-      for (const id of Object.keys(project.values[mode])) {
-        const linkedId = id.replace(/\.(local|streaming)$/, '')
-        if (!ids.has(id) && !(project.unlinked?.[linkedId] && ids.has(linkedId))) {
-          delete project.values[mode][id]
-        }
-      }
-    }
-  })
-  candidate.value = undefined
+    const layer = project.layers?.[tone.value]?.[region]?.find((entry) => entry.id === id)
+    if (layer) Object.assign(layer, patch)
+  }, true)
 }
-
-function checkpoint(): void {
-  history.splice(cursor + 1)
-  history.push(copyProject(draft.value!))
-  if (history.length > 40) history.shift()
-  cursor = history.length - 1
-  historyIndex.value = cursor
-  historyLength.value = history.length
-}
-
-function change(edit: (project: WorkshopProject) => void): void {
-  if (!draft.value) return
-  const next = copyProject(draft.value)
-  edit(next)
-  draft.value = next
-  checkpoint()
-  clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    void persist().catch((e) => {
-      error.value = String(e)
-    })
-  }, 600)
-}
-
-function persist(): Promise<void> {
-  clearTimeout(saveTimer)
-  saving = saving
-    .catch(() => {})
-    .then(async () => {
-      const current = draft.value
-      if (!current) return
-      const saved = await api.save(copy(current))
-      if (draft.value?.id === saved.id) draft.value = { ...draft.value, revision: saved.revision }
-      projects.value = [saved, ...projects.value.filter((p) => p.id !== saved.id)]
-    })
-  return saving
-}
-
-async function select(project: WorkshopProjectSummary): Promise<void> {
-  await persist()
-  stopTrial()
-  draft.value = await api.get(project.id)
-  history.length = 0
-  cursor = -1
-  checkpoint()
-  candidate.value = undefined
-}
-
-async function create(template: string, source?: WorkshopThemeSource): Promise<void> {
-  await persist()
-  const project = await api.create(template, source ? copy(source) : undefined)
-  projects.value = [project, ...projects.value]
-  await select(project)
-}
-
-function undo(offset: number): void {
-  const index = cursor + offset
-  if (index < 0 || index >= history.length || !draft.value) return
-  const revision = draft.value.revision
-  draft.value = { ...copyProject(history[index]), revision }
-  cursor = index
-  historyIndex.value = index
-  void persist().catch((e) => {
-    error.value = String(e)
-  })
-}
-
-function value(control: ThemeEditorControl): string {
-  return draft.value?.values[tone.value][controlKey(control)] ?? control.defaults[tone.value]
-}
-function controlKey(control: ThemeEditorControl): string {
-  return control.targets && draft.value?.unlinked?.[control.id]
-    ? `${control.id}.${editTarget.value}`
-    : control.id
+function setValue(control: ThemeEditorControl, raw: string, continuous = false): void {
+  change((project) => {
+    project.values[tone.value][key(control)] = raw
+  }, continuous)
 }
 function toggleLink(control: ThemeEditorControl): void {
   change((project) => {
     project.unlinked = { ...project.unlinked }
     if (project.unlinked[control.id]) {
-      for (const mode of ['pureWhite', 'dark'] as const) {
-        project.values[mode][control.id] =
-          project.values[mode][`${control.id}.${editTarget.value}`] ?? control.defaults[mode]
-        delete project.values[mode][`${control.id}.local`]
-        delete project.values[mode][`${control.id}.streaming`]
+      for (const currentTone of ['pureWhite', 'dark'] as const) {
+        project.values[currentTone][control.id] =
+          project.values[currentTone][`${control.id}.${editTarget.value}`] ??
+          control.defaults[currentTone]
+        delete project.values[currentTone][`${control.id}.local`]
+        delete project.values[currentTone][`${control.id}.streaming`]
       }
       delete project.unlinked[control.id]
     } else {
-      for (const mode of ['pureWhite', 'dark'] as const) {
+      for (const currentTone of ['pureWhite', 'dark'] as const)
         for (const target of ['local', 'streaming'])
-          project.values[mode][`${control.id}.${target}`] =
-            project.values[mode][control.id] ?? control.defaults[mode]
-      }
+          project.values[currentTone][`${control.id}.${target}`] =
+            project.values[currentTone][control.id] ?? control.defaults[currentTone]
       project.unlinked[control.id] = true
     }
   })
 }
-function setValue(control: ThemeEditorControl, raw: string): void {
-  change((p) => {
-    p.values[tone.value][controlKey(control)] =
-      control.type === 'number'
-        ? `${raw}${control.unit ?? control.defaults[tone.value].match(/[a-z%]+$/i)?.[0] ?? ''}`
-        : raw
+async function importAsset(type: 'image' | 'font', control?: ThemeEditorControl): Promise<void> {
+  const asset = await api.importAsset(type)
+  if (!asset) return
+  change((project) => {
+    project.assets = [...(project.assets ?? []), asset]
+    if (control) project.values[tone.value][key(control)] = `url('${asset.dataUrl}')`
   })
 }
-async function image(control: ThemeEditorControl): Promise<void> {
-  const asset = await api.importAsset()
-  if (asset) {
-    change((p) => {
-      p.assets = [...(p.assets ?? []), asset]
-      p.values[tone.value][controlKey(control)] = `url('${asset.dataUrl}')`
-    })
+async function replaceAsset(asset: WorkshopAsset): Promise<void> {
+  const replacement = await api.importAsset(asset.type)
+  if (replacement && draft.value)
+    change((project) =>
+      Object.assign(project, replaceWorkshopAsset(project, asset.id, replacement))
+    )
+}
+function resetGroup(): void {
+  const tokenIds = tokens.value.map((token) => token.id)
+  const controlIds = controls.value.map((control) => key(control))
+  change((project) => {
+    for (const id of tokenIds) delete project.tokens[tone.value][id]
+    for (const id of controlIds) delete project.values[tone.value][id]
+  })
+}
+function copyTone(): void {
+  const other = tone.value === 'dark' ? 'pureWhite' : 'dark'
+  change((project) => {
+    for (const token of tokens.value) {
+      if (project.tokens[tone.value][token.id] === undefined) delete project.tokens[other][token.id]
+      else project.tokens[other][token.id] = project.tokens[tone.value][token.id]
+    }
+    for (const control of controls.value) project.values[other][key(control)] = value(control)
+    if (group.value === '图层与蒙版' && project.layers)
+      project.layers[other] = JSON.parse(JSON.stringify(project.layers[tone.value]))
+  })
+  notice.value = `已将当前分组从${tone.value === 'dark' ? '深色复制到浅色' : '浅色复制到深色'}，可撤销`
+}
+async function locate(item: WorkshopDiagnostic): Promise<void> {
+  const location = item.location
+  search.value = ''
+  modifiedOnly.value = false
+  if (location.tone) tone.value = location.tone
+  if (location.width) width.value = location.width
+  if (location.state) previewState.value = location.state
+  if (location.surface && WORKSHOP_PREVIEW_SURFACES.some((entry) => entry.id === location.surface))
+    surface.value = location.surface
+  let selector = ''
+  if (location.kind === 'control') {
+    const control = workshopEditor(draft.value!)?.controls.find(
+      (entry) =>
+        entry.id === location.id || entry.id === location.id?.replace(/\.(local|streaming)$/, '')
+    )
+    group.value = control?.group ?? '参数设计器'
+    mode.value = 'professional'
+    selector = `[data-workshop-control="${CSS.escape(control?.id ?? '')}"]`
+  }
+  if (location.kind === 'token') {
+    group.value = '标准外观'
+    mode.value = 'professional'
+    selector = `[data-studio-setting="${CSS.escape(location.id ?? '')}"]`
+  }
+  if (location.kind === 'css') {
+    mode.value = 'professional'
+    group.value = '高级 CSS'
+  }
+  if (location.kind === 'project') {
+    group.value = '项目'
+    selector = `[data-workshop-field="${CSS.escape(location.id ?? '')}"]`
+  }
+  if (location.kind === 'asset') {
+    group.value = '素材库'
+    selector = `[data-workshop-asset="${CSS.escape(location.id ?? '')}"]`
+  }
+  if (location.kind === 'layer') chooseLayer(location.id ?? '', location.surface as WorkshopSurface)
+  if (location.kind === 'layout' || location.kind === 'mode') group.value = '布局与模式'
+  await nextTick()
+  if (selector) {
+    const element = page.value?.querySelector<HTMLElement>(selector)
+    element?.scrollIntoView({ block: 'nearest' })
+    element?.focus()
+  }
+  if (location.kind === 'preview' && location.id) preview.value?.highlight(location.id)
+  if (location.kind === 'css') {
+    if (location.source === 'base' && sourceDetails.value) sourceDetails.value.open = true
+    const target = location.source === 'base' ? sourceCode.value : code.value
+    if (!target) return
+    const offset =
+      target.value
+        .split('\n')
+        .slice(0, (location.line ?? 1) - 1)
+        .reduce((count, line) => count + line.length + 1, 0) +
+      (location.column ?? 1) -
+      1
+    target.focus()
+    target.setSelectionRange(offset, offset + 1)
   }
 }
-function stopTrial(): void {
-  for (const [key, value] of Object.entries(trialAttributes)) {
-    if (value === null) document.documentElement.removeAttribute(key)
-    else document.documentElement.setAttribute(key, value)
-  }
-  trialAttributes = {}
-  trialRecovery?.remove()
-  trialRecovery = undefined
-  trialSheet?.remove()
-  trialSheet = undefined
-  trial.value = false
-}
-function toggleTrial(): void {
-  if (trial.value) {
-    stopTrial()
-    return
-  }
-  if (compilationError.value) {
-    error.value = compilationError.value
-    return
-  }
-  for (const key of THEME_MANAGED_DATA_ATTRIBUTES) {
-    trialAttributes[key] = document.documentElement.getAttribute(key)
-    document.documentElement.removeAttribute(key)
-  }
-  const attrs = workshopRuntimeAttributes(previewProject.value!)
-  attrs['data-theme'] = tone.value
-  for (const [key, value] of Object.entries(attrs)) {
-    if (!(key in trialAttributes)) trialAttributes[key] = document.documentElement.getAttribute(key)
-    document.documentElement.setAttribute(key, value)
-  }
-  trialSheet = document.createElement('style')
-  trialSheet.id = 'workshop-trial'
-  trialSheet.textContent = css.value
-  document.head.append(trialSheet)
-  trialRecovery = document.createElement('button')
-  trialRecovery.textContent = '退出主题试用 · Esc'
-  trialRecovery.setAttribute('popover', 'manual')
-  for (const [key, value] of Object.entries({
-    position: 'fixed',
-    top: '12px',
-    right: '12px',
-    left: 'auto',
-    bottom: 'auto',
-    margin: '0',
-    display: 'block',
-    padding: '12px 18px',
-    background: '#ffffff',
-    color: '#152a30',
-    border: '2px solid #087f79',
-    'border-radius': '12px',
-    'font-size': '14px',
-    opacity: '1',
-    visibility: 'visible',
-    'pointer-events': 'auto'
-  }))
-    trialRecovery.style.setProperty(key, value, 'important')
-  trialRecovery.onclick = stopTrial
-  document.body.append(trialRecovery)
-  trialRecovery.showPopover()
-  trial.value = true
-}
-watch([css, tone, previewProject], () => {
-  if (!trialSheet || !draft.value || compilationError.value) return
-  trialSheet.textContent = css.value
-  for (const key of THEME_MANAGED_DATA_ATTRIBUTES) document.documentElement.removeAttribute(key)
-  for (const [key, value] of Object.entries(workshopRuntimeAttributes(previewProject.value!)))
-    document.documentElement.setAttribute(key, value)
-  document.documentElement.dataset.theme = tone.value
-})
-function key(event: KeyboardEvent): void {
-  if (event.key === 'Escape') stopTrial()
-}
-
-async function apply(): Promise<void> {
+async function preflight(): Promise<void> {
+  await diagnostics.flush()
+  if (!canFinish.value)
+    throw new Error(candidate.value ? '请先采用或取消基础主题候选版本' : '请先修复检测中的错误')
   await persist()
-  const result = await api.apply(draft.value!.id)
+  const result = await api.preflight(draft.value!.id, draft.value!.revision)
+  if (result.errors)
+    throw new Error(result.diagnostics.find((item) => item.severity === 'error')!.message)
+}
+async function apply(): Promise<void> {
+  await preflight()
+  const result = await api.apply(draft.value!.id, draft.value!.revision)
   await useExtensionRegistry().syncExtensions()
-  stopTrial()
-  await store.setActive({ kind: 'plugin', pluginId: result.pluginId, themeId: result.themeId })
+  trialRuntime.stop()
+  await useThemeStore().setActive({
+    kind: 'plugin',
+    pluginId: result.pluginId,
+    themeId: result.themeId
+  })
   projects.value = await api.list()
-  draft.value = result.project
+  adopt(result.project)
   notice.value = '主题已应用，停用工坊后仍可使用'
 }
-
-onMounted(() => {
-  releaseSession = api.onPrepareDisable(async () => {
-    busy.value = true
-    try {
-      await persist()
-      stopTrial()
-      disablePrepared = true
-    } catch (error) {
-      busy.value = false
-      throw error
-    }
+async function exportProject(format: 'project' | 'tep'): Promise<void> {
+  if (format === 'tep') await preflight()
+  else await persist()
+  const path = await api.exportProject(draft.value!.id, format, draft.value!.revision)
+  if (path) notice.value = `已导出：${path}`
+}
+function checkFull(): void {
+  void diagnostics.fullCheck().catch((cause) => {
+    error.value = String(cause)
   })
-  window.addEventListener('keydown', key, true)
-  void run(async () => {
-    ;[projects.value, sources.value] = await Promise.all([api.list(), api.sources()])
-    if (projects.value[0]) await select(projects.value[0])
+}
+async function toggleTrial(): Promise<void> {
+  if (trial.value) {
+    trialRuntime.stop()
+    return
+  }
+  await diagnostics.flush()
+  if (!previewValid.value || report.value.errors || !validProject.value)
+    throw new Error('请先修复检测中的错误，再整窗试用')
+  trialRuntime.start(validProject.value, css.value, tone.value)
+  trial.value = true
+}
+function step(index: number): void {
+  guideStep.value = index
+  creating.value = index === 0
+  if (index === 1) group.value = '配色'
+  if (index === 2) group.value = '卡片'
+  if (index === 3) {
+    tone.value = 'dark'
+    void diagnostics.fullCheck().catch((cause) => {
+      error.value = String(cause)
+    })
+  }
+  if (index === 4) group.value = '项目'
+}
+async function createTemplate(template: string): Promise<void> {
+  await create(template)
+  creating.value = false
+  guideStep.value = 1
+  group.value = '背景'
+}
+function adoptCandidate(): void {
+  if (!candidate.value) return
+  const base = candidate.value
+  change((project) => {
+    project.base = base
   })
+  candidate.value = undefined
+}
+function keydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    editor.endGesture(true)
+    trialRuntime.stop()
+  }
+  if (
+    !(event.ctrlKey || event.metaKey) ||
+    (event.target as HTMLElement).matches('input,textarea,select,[contenteditable]')
+  )
+    return
+  if (event.key.toLowerCase() === 'z') {
+    event.preventDefault()
+    undo(event.shiftKey ? 1 : -1)
+  }
+  if (event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    void run(persist)
+  }
+}
+watch([css, tone, validProject], () => {
+  if (trial.value && validProject.value)
+    trialRuntime.update(validProject.value, css.value, tone.value)
 })
+watch([surface, previewState, width, tone], diagnostics.scheduleRuntime)
+watch(mode, () => {
+  if (mode.value === 'simple' && !WORKSHOP_SIMPLE_GROUPS.includes(group.value)) group.value = '配色'
+  search.value = ''
+})
+watch(
+  () => draft.value?.id,
+  () => {
+    metadataProblems.value = []
+    designerProblem.value = ''
+    bufferProblems.value = []
+    metadataBuffer.value = undefined
+    selectedLayer.value = ''
+    layerSurface.value = 'app'
+  }
+)
+onMounted(() => {
+  mode.value =
+    localStorage.getItem('twilight:workshop:mode') === 'professional' ? 'professional' : 'simple'
+  guide.value = localStorage.getItem('twilight:workshop:guide') !== 'hidden'
+  releaseSession = editor.bindLifecycle(trialRuntime.stop, () => !bufferProblems.value.length)
+  window.addEventListener('keydown', keydown, true)
+  void run(editor.initialize)
+})
+watch(mode, () => localStorage.setItem('twilight:workshop:mode', mode.value))
+watch(guide, () =>
+  localStorage.setItem('twilight:workshop:guide', guide.value ? 'visible' : 'hidden')
+)
+watch(
+  () => [draft.value?.name, draft.value?.author, draft.value?.version, draft.value?.description],
+  () => {
+    if (!draft.value || !metadataBuffer.value) return
+    metadataBuffer.value = {
+      name: bufferProblems.value.some((item) => item.location.id === 'name')
+        ? metadataBuffer.value.name
+        : draft.value.name,
+      author: draft.value.author,
+      version: bufferProblems.value.some((item) => item.location.id === 'version')
+        ? metadataBuffer.value.version
+        : draft.value.version,
+      description: draft.value.description
+    }
+  }
+)
 onBeforeUnmount(() => {
   releaseSession?.()
-  window.removeEventListener('keydown', key, true)
-  stopTrial()
-  clearTimeout(saveTimer)
-  if (!disablePrepared)
-    void persist().catch((e) => {
-      console.error('主题工坊保存失败', e)
-    })
+  window.removeEventListener('keydown', keydown, true)
+  trialRuntime.stop()
 })
 </script>
 
 <template>
-  <section class="workshop-page">
+  <section ref="page" class="workshop-page">
     <header class="workshop-header">
       <div>
         <small>THEME PLUGIN WORKSHOP</small>
         <h1>主题插件工坊</h1>
+        <p class="workshop-hint">从一个想法，到可分享的主题</p>
       </div>
-      <select
-        aria-label="项目"
-        :value="draft?.id ?? ''"
+      <div class="workshop-mode-switch" aria-label="编辑模式">
+        <button :aria-pressed="mode === 'simple'" @click="mode = 'simple'">简单模式</button
+        ><button :aria-pressed="mode === 'professional'" @click="mode = 'professional'">
+          专业模式
+        </button>
+      </div>
+      <button @click="guide = !guide">{{ guide ? '收起引导' : '制作引导' }}</button
+      ><button
         :disabled="busy"
-        @change="
-          run(() =>
-            select(projects.find((p) => p.id === ($event.target as HTMLSelectElement).value)!)
-          )
+        @click="
+          guide = true
+          creating = true
+          guideStep = 0
         "
       >
-        <option value="" disabled>选择项目</option>
-        <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-      </select>
-      <button
+        ＋ 新建</button
+      ><button
         :disabled="busy"
         @click="
           run(async () => {
-            const p = await api.importProject()
-            if (p) {
-              projects = [p, ...projects]
-              await select(p)
+            await persist()
+            const project = await api.importProject()
+            if (project) {
+              projects = [project, ...projects]
+              adopt(project)
             }
           })
         "
       >
         导入项目
       </button>
-      <template v-if="draft">
-        <button :disabled="historyIndex <= 0" @click="undo(-1)">撤销</button
-        ><button :disabled="historyIndex >= historyLength - 1" @click="undo(1)">重做</button>
-        <button :disabled="busy" @click="run(persist)">保存</button
-        ><button @click="toggleTrial">{{ trial ? '退出试用（Esc）' : '整窗试用' }}</button>
-        <button :disabled="busy" @click="run(apply)">应用主题</button>
-      </template>
     </header>
-    <p v-if="error" role="alert" class="workshop-error">{{ error }}</p>
-    <p v-if="compilationError" role="alert" class="workshop-error">{{ compilationError }}</p>
-    <p v-if="notice" role="status">{{ notice }}</p>
-    <div class="workshop-create">
-      <button
-        v-for="t in WORKSHOP_TEMPLATES"
-        :key="t.id"
-        :disabled="busy"
-        @click="run(() => create(t.id))"
+    <p v-if="error" role="alert" class="workshop-error">
+      {{ error
+      }}<template v-if="saveState === 'failed'"
+        ><button @click="run(editor.reload)">重新加载</button
+        ><button @click="run(saveCopy)">另存副本</button
+        ><button @click="run(persist)">重试保存</button></template
       >
-        ＋ {{ t.name }}
-      </button>
-      <select
+    </p>
+    <p v-if="notice" role="status" class="workshop-notice">{{ notice }}</p>
+    <WorkshopOnboarding
+      v-if="guide || !draft"
+      :step="guideStep"
+      :has-project="!!draft"
+      :busy="busy"
+      :creating="creating"
+      @step="step"
+      @create="run(() => createTemplate($event))"
+      @close="
+        guide = false
+        creating = false
+      "
+    />
+    <div class="workshop-project-toolbar">
+      <input v-model="projectSearch" aria-label="搜索项目" placeholder="搜索项目…" /><select
+        aria-label="项目"
+        :value="draft?.id ?? ''"
+        :disabled="busy"
+        @change="
+          run(() =>
+            select(
+              projects.find((project) => project.id === ($event.target as HTMLSelectElement).value)!
+            )
+          )
+        "
+      >
+        <option disabled value="">选择项目</option>
+        <option v-for="project in visibleProjects" :key="project.id" :value="project.id">
+          {{ project.name }}
+        </option></select
+      ><select
         aria-label="从插件创建"
         value=""
         :disabled="busy"
         @change="run(() => create('', sources[Number(($event.target as HTMLSelectElement).value)]))"
       >
         <option disabled value="">定制已安装主题…</option>
-        <option v-for="(s, index) in sources" :key="`${s.pluginId}:${s.themeId}`" :value="index">
-          {{ s.name }} · {{ s.version }}
+        <option
+          v-for="(source, index) in sources"
+          :key="`${source.pluginId}:${source.themeId}`"
+          :value="index"
+        >
+          {{ source.name }} · {{ source.version }}
         </option>
       </select>
+      <template v-if="draft"
+        ><span
+          role="status"
+          :class="['workshop-save-state', saveState]"
+          :title="savedAt ? '最近保存：' + savedAt : ''"
+          >{{ saveLabel }}</span
+        ><button :disabled="busy || cursor <= 0" @click="undo(-1)">撤销</button
+        ><button :disabled="busy || cursor >= historyLength - 1" @click="undo(1)">重做</button
+        ><button :disabled="busy" @click="run(persist)">保存</button
+        ><button :disabled="busy || (!trial && !canFinish)" @click="run(toggleTrial)">
+          {{ trial ? '退出试用（Esc）' : '整窗试用' }}</button
+        ><button class="workshop-primary" :disabled="busy || !canFinish" @click="run(apply)">
+          应用主题
+        </button></template
+      >
     </div>
     <div v-if="draft" class="workshop-workspace">
       <nav aria-label="编辑区域">
-        <button v-for="g in groups" :key="g" :class="{ active: group === g }" @click="group = g">
-          {{ g }}
+        <button
+          v-for="name in groups"
+          :key="name"
+          :class="{ active: group === name }"
+          :aria-current="group === name ? 'page' : undefined"
+          @click="
+            group = name
+            search = ''
+          "
+        >
+          {{ name }}
         </button>
       </nav>
       <main class="workshop-preview">
         <div class="workshop-toolbar">
-          <select v-model="tone" aria-label="深浅色">
+          <select v-model="tone" :disabled="checking" aria-label="深浅色">
             <option value="pureWhite">浅色</option>
             <option value="dark">深色</option></select
-          ><select v-model="surface" aria-label="页面">
-            <option value="dashboard">本地首页</option>
-            <option value="streaming">流媒体首页</option>
-            <option value="streaming-list">流媒体歌曲列表</option>
-            <option value="library">歌曲列表</option>
-            <option value="settings">设置与小控件</option></select
-          ><select v-model="width" aria-label="预览宽度">
-            <option :value="760">窄窗 · 760</option>
-            <option :value="1180">标准 · 1180</option>
-            <option :value="1600">宽窗 · 1600</option>
-          </select>
+          ><select v-model="surface" :disabled="checking" aria-label="页面">
+            <option v-for="entry in WORKSHOP_PREVIEW_SURFACES" :key="entry.id" :value="entry.id">
+              {{ entry.label }}
+            </option></select
+          ><select v-model="width" :disabled="checking" aria-label="预览宽度">
+            <option v-for="size in [640, 760, 1180, 1600]" :key="size" :value="size">
+              {{ size }} px
+            </option></select
+          ><select v-model="previewState" :disabled="checking" aria-label="预览状态">
+            <option v-for="state in WORKSHOP_PREVIEW_STATES" :key="state.id" :value="state.id">
+              {{ state.label }}
+            </option></select
+          ><select v-model="zoom" aria-label="预览缩放">
+            <option :value="0.5">50%</option>
+            <option :value="0.65">65%</option>
+            <option :value="0.8">80%</option>
+            <option :value="1">100%</option></select
+          ><button :aria-pressed="canvasEditing" @click="canvasEditing = !canvasEditing">
+            {{ canvasEditing ? '画布编辑' : '体验控件' }}
+          </button>
         </div>
-        <select v-model="previewState" aria-label="预览状态">
-          <option value="normal">正常</option>
-          <option value="empty">空内容</option>
-          <option value="loading">流媒体加载中</option>
-          <option value="selected">流媒体选中行</option>
-        </select>
         <WorkshopPreview
+          v-if="validProject"
+          ref="preview"
           :css="css"
-          :project="previewProject!"
-          :tone="tone"
-          :surface="surface"
-          :width="width"
-          :state="previewState"
+          :project="validProject"
+          :tone="activeScene.tone"
+          :surface="activeScene.surface"
+          :width="activeScene.width"
+          :state="activeScene.state"
+          :zoom="zoom"
+          :selected="selectedLayer"
+          :canvas-editing="canvasEditing && !checking && !busy"
+          @select="chooseLayer"
+          @region="group = $event"
+          @edit="editLayer"
+          @gesture="gesture"
         />
+        <div v-else class="workshop-empty">正在准备预览；有错误时请先修复。</div>
+        <small class="workshop-preview-metric"
+          >预览更新 p95：{{ previewP95 === null ? '—' : previewP95.toFixed(1) + ' ms'
+          }}<span v-if="candidate"> · 来源候选预览</span></small
+        >
       </main>
       <aside class="workshop-properties">
-        <h2>{{ group }}</h2>
-        <template v-if="group === '项目'">
-          <label
-            >名称<input
-              :value="draft.name"
-              @change="
-                change((p) => {
-                  p.name = ($event.target as HTMLInputElement).value
-                })
-              "
-          /></label>
-          <label
-            >作者<input
-              :value="draft.author"
-              @change="
-                change((p) => {
-                  p.author = ($event.target as HTMLInputElement).value
-                })
-              "
-          /></label>
-          <label
-            >版本<input
-              :value="draft.version"
-              @change="
-                change((p) => {
-                  p.version = ($event.target as HTMLInputElement).value
-                })
-              "
-          /></label>
-          <label
-            >描述<textarea
-              :value="draft.description"
-              @change="
-                change((p) => {
-                  p.description = ($event.target as HTMLTextAreaElement).value
-                })
-              "
-            />
-          </label>
-          <button
-            :disabled="busy || !draft.lastApplied"
-            @click="
-              run(async () => {
-                const restored = await api.restoreApplied(draft!.id)
-                draft = restored
-                checkpoint()
-              })
-            "
-          >
-            恢复上次应用版本
-          </button>
-          <p>来源：{{ draft.base.pluginId ?? '内置模板' }} {{ draft.base.version }}</p>
-          <p>素材许可：{{ draft.base.license }}</p>
-          <button
-            :disabled="busy"
-            @click="
-              run(async () => {
-                await persist()
-                const path = await api.exportProject(draft!.id, 'project')
-                if (path) notice = `已导出：${path}`
-              })
-            "
-          >
-            导出可编辑项目
-          </button>
-          <button
-            :disabled="busy"
-            @click="
-              run(async () => {
-                await persist()
-                const path = await api.exportProject(draft!.id, 'tep')
-                if (path) notice = `已导出：${path}`
-              })
-            "
-          >
-            导出独立 .tep
-          </button>
-          <button
-            v-if="draft.base.pluginId"
-            :disabled="busy"
-            @click="
-              run(async () => {
-                await persist()
-                candidate = await api.updateBase(draft!.id)
-              })
-            "
-          >
-            检查基础主题更新
-          </button>
-          <div v-if="candidate">
-            <p>
-              正在预览候选版本 {{ candidate.version }}；失效参数：{{
-                removedControls.join('、') || '无'
-              }}
-            </p>
-            <button @click="adoptCandidate">采用新基础</button
-            ><button @click="candidate = undefined">取消</button>
-          </div>
-          <p v-if="!draft.base.editor">
-            此主题尚未适配专属参数。可编辑标准配色和高级 CSS；原有硬编码样式可能覆盖标准配色。
-          </p>
-        </template>
+        <div class="workshop-properties-heading">
+          <h2>{{ search ? '搜索结果' : group }}</h2>
+          <span>{{ tone === 'dark' ? '深色' : '浅色' }}</span>
+        </div>
+        <WorkshopProjectPanel
+          v-if="group === '项目'"
+          :key="draft.id"
+          :project="draft"
+          :busy="busy"
+          :candidate="candidate"
+          :can-finish="canFinish"
+          :buffer="metadataBuffer"
+          @buffer="metadataBuffer = $event"
+          @field="
+            (key, value) =>
+              change((project) => {
+                project[key] = value
+              }, true)
+          "
+          @problems="metadataProblems = $event"
+          @duplicate="run(duplicate)"
+          @remove="deleteDialog?.showModal()"
+          @restore="
+            run(async () => {
+              await persist()
+              adopt(await api.restoreApplied(draft!.id))
+            })
+          "
+          @export="run(() => exportProject($event))"
+          @update="
+            run(async () => {
+              await persist()
+              candidate = await api.updateBase(draft!.id)
+            })
+          "
+          @adopt="adoptCandidate"
+          @cancel="candidate = undefined"
+        />
         <WorkshopLayersPanel
           v-else-if="group === '图层与蒙版'"
           :project="draft"
           :tone="tone"
-          @change="change((p) => Object.assign(p, $event))"
+          :selection="selectedLayer"
+          :region="layerSurface"
+          :busy="busy"
+          @change="replace"
+          @select="chooseLayer"
+          @gesture="gesture"
         />
         <WorkshopAssetsPanel
           v-else-if="group === '素材库'"
           :project="draft"
           :busy="busy"
-          @change="change((p) => Object.assign(p, $event))"
-          @import="
-            (type) =>
-              run(async () => {
-                const asset = await api.importAsset(type)
-                if (asset)
-                  change((p) => {
-                    p.assets = [...(p.assets ?? []), asset]
-                  })
-              })
-          "
+          @change="replace"
+          @import="run(() => importAsset($event))"
+          @replace="run(() => replaceAsset($event))"
         />
         <WorkshopModesPanel
           v-else-if="group === '布局与模式'"
           :project="draft"
-          @change="change((p) => Object.assign(p, $event))"
+          :busy="busy"
+          @change="replace"
         />
         <template v-else-if="group === '高级 CSS'"
-          ><p>高级样式在原主题和参数之后应用。</p>
+          ><p class="workshop-hint">
+            样式在来源和参数之后应用。输入错误仍保存为草稿，预览保留最近有效版本。
+          </p>
           <textarea
+            ref="code"
             class="workshop-code"
+            aria-label="高级 CSS"
+            :disabled="busy"
             spellcheck="false"
             :value="draft.css"
-            @change="
-              change((p) => {
-                p.css = ($event.target as HTMLTextAreaElement).value
-              })
+            @input="
+              change((project) => {
+                project.css = ($event.target as HTMLTextAreaElement).value
+              }, true)
             " />
-          <details>
-            <summary>查看基础 CSS</summary>
-            <textarea class="workshop-code" readonly :value="draft.base.css" /></details
+          <details ref="sourceDetails">
+            <summary>查看来源 CSS（只读）</summary>
+            <textarea
+              ref="sourceCode"
+              aria-label="来源 CSS"
+              class="workshop-code"
+              readonly
+              :value="draft.base.css"
+            /></details
         ></template>
-        <template v-else>
-          <input v-model="search" placeholder="搜索参数…" aria-label="搜索参数" />
-          <template v-if="group === '标准外观'"
-            ><ThemeAppearanceControl
-              v-for="t in tokens"
-              :key="t.id"
-              :definition="t"
-              :value="
-                draft.tokens[tone][t.id] ??
-                draft.base.structured?.variants[tone]?.tokens?.[t.id] ??
-                TWILIGHT_DEFAULT_THEME.variants[tone].tokens[t.id]
-              "
-              source="主题"
+        <template v-else-if="group !== '参数设计器'"
+          ><input v-model="search" aria-label="搜索参数" placeholder="搜索全部参数…" /><label
+            class="workshop-checkbox"
+            ><input v-model="modifiedOnly" type="checkbox" />仅查看修改项</label
+          >
+          <div class="workshop-inline">
+            <button :disabled="busy" @click="resetGroup">恢复当前分组</button
+            ><button :disabled="busy" @click="copyTone">
+              {{ tone === 'dark' ? '深色 → 浅色' : '浅色 → 深色' }}
+            </button>
+          </div>
+          <select
+            v-if="controls.some((control) => draft!.unlinked?.[control.id])"
+            v-model="editTarget"
+            aria-label="编辑页面"
+          >
+            <option value="local">本地</option>
+            <option value="streaming">流媒体</option>
+          </select>
+          <div v-if="group === '配色' && !search" class="workshop-palette">
+            <button
+              v-for="color in THEME_ACCENT_PALETTES[tone]"
+              :key="color.id"
               :disabled="busy"
-              :modified="draft.tokens[tone][t.id] !== undefined"
-              @change="
-                change((p) => {
-                  p.tokens[tone][t.id] = $event
-                })
-              "
-              @reset="
-                change((p) => {
-                  delete p.tokens[tone][t.id]
-                })
-              "
-          /></template>
-          <label v-for="c in controls" :key="c.id"
-            >{{ c.label }}
-            <template v-if="c.targets">
-              <select v-if="draft.unlinked?.[c.id]" v-model="editTarget" aria-label="编辑页面">
-                <option value="local">本地</option>
-                <option value="streaming">流媒体</option>
-              </select>
-              <button @click="toggleLink(c)">
-                {{
-                  draft.unlinked?.[c.id]
-                    ? `重新同步（保留${editTarget === 'local' ? '本地' : '流媒体'}）`
-                    : '解除本地／流媒体同步'
-                }}
-              </button>
-            </template>
-            <template v-if="c.type === 'image'"
-              ><button :disabled="busy" @click="run(() => image(c))">选择素材</button>
-              <select
-                v-if="draft.assets?.some((a) => a.type === 'image')"
-                aria-label="使用素材库图片"
-                value=""
-                @change="
-                  setValue(
-                    c,
-                    `url('${draft.assets!.find((a) => a.id === ($event.target as HTMLSelectElement).value)!.dataUrl}')`
+              :style="{ background: color.value }"
+              :aria-label="'使用' + color.label + '主题色'"
+              :title="color.label"
+              @click="
+                change((project) =>
+                  Object.assign(
+                    project.tokens[tone],
+                    createThemeAccentTokenOverrides(
+                      color.value,
+                      tone,
+                      project.tokens[tone]['surface.app'] ??
+                        TWILIGHT_DEFAULT_THEME.variants[tone].tokens['surface.app']
+                    )
                   )
-                "
-              >
-                <option value="" disabled>使用已导入图片…</option>
-                <option
-                  v-for="asset in draft.assets?.filter((a) => a.type === 'image')"
-                  :key="asset.id"
-                  :value="asset.id"
-                >
-                  {{ asset.name }}
-                </option>
-              </select>
-              <div class="workshop-asset" :style="{ backgroundImage: value(c) }"
-            /></template>
-            <select
-              v-else-if="c.type === 'select'"
-              :value="value(c)"
-              @change="setValue(c, ($event.target as HTMLSelectElement).value)"
-            >
-              <option v-for="o in c.options" :key="o">{{ o }}</option>
-            </select>
-            <input
-              v-else-if="c.type === 'number'"
-              type="range"
-              :min="c.min ?? 0"
-              :max="c.max ?? 100"
-              :step="c.step ?? 1"
-              :value="parseFloat(value(c))"
-              @change="setValue(c, ($event.target as HTMLInputElement).value)"
-            />
-            <input
-              v-else-if="c.type === 'boolean'"
-              type="checkbox"
-              :checked="value(c) === (c.checkedValue ?? '1')"
-              @change="
-                setValue(
-                  c,
-                  ($event.target as HTMLInputElement).checked
-                    ? (c.checkedValue ?? '1')
-                    : (c.uncheckedValue ?? '0')
                 )
               "
             />
-            <input
-              v-else
-              :value="value(c)"
-              @change="setValue(c, ($event.target as HTMLInputElement).value)"
-            />
-            <small v-if="c.type !== 'image'">{{ value(c) }}</small
-            ><button
-              @click="
-                change((p) => {
-                  delete p.values[tone][controlKey(c)]
-                })
-              "
-            >
-              恢复默认
-            </button>
-          </label>
+          </div>
+          <WorkshopModesPanel
+            v-if="modeDomain && !search"
+            :project="draft"
+            :busy="busy"
+            :domain="modeDomain"
+            @change="replace"
+          />
+          <WorkshopControl
+            v-for="control in controls"
+            :key="control.id"
+            :control="control"
+            :value="value(control)"
+            :modified="draft.values[tone][key(control)] !== undefined"
+            :busy="busy"
+            :assets="draft.assets ?? []"
+            :unlinked="draft.unlinked?.[control.id]"
+            @change="(value, continuous) => setValue(control, value, continuous)"
+            @reset="
+              change((project) => {
+                delete project.values[tone][key(control)]
+              })
+            "
+            @image="run(() => importAsset('image', control))"
+            @link="toggleLink(control)"
+            @gesture="gesture"
+          />
+          <ThemeAppearanceControl
+            v-for="token in tokens"
+            :key="token.id"
+            :definition="token"
+            :value="
+              draft.tokens[tone][token.id] ??
+              draft.base.structured?.variants[tone]?.tokens?.[token.id] ??
+              TWILIGHT_DEFAULT_THEME.variants[tone].tokens[token.id]
+            "
+            source="主题"
+            :disabled="busy"
+            :modified="draft.tokens[tone][token.id] !== undefined"
+            @change="
+              change((project) => {
+                project.tokens[tone][token.id] = $event
+              }, true)
+            "
+            @reset="
+              change((project) => {
+                delete project.tokens[tone][token.id]
+              })
+            "
+          />
+          <p v-if="!controls.length && !tokens.length && !modeDomain" class="workshop-hint">
+            没有匹配参数。可清空搜索，或在专业模式中新增参数。
+          </p>
         </template>
+        <KeepAlive :max="1"
+          ><WorkshopParameterDesigner
+            v-if="group === '参数设计器'"
+            :key="draft.id"
+            :project="draft"
+            :busy="busy"
+            @change="(project) => change((next) => Object.assign(next, project))"
+            @problem="designerProblem = $event"
+        /></KeepAlive>
       </aside>
     </div>
-    <div v-else class="workshop-empty">
-      <h2>从一个主题开始</h2>
-      <p>选择模板，或完整复制已安装主题的样式和素材。</p>
-    </div>
+    <WorkshopDiagnosticsPanel
+      v-if="draft"
+      :report="report"
+      :checking="checking"
+      :progress="progress"
+      :stale="stale"
+      :preview-valid="previewValid"
+      @locate="locate"
+      @repair="
+        change((project) => Object.assign(project, repairWorkshopDiagnostic(project, $event)))
+      "
+      @check="checkFull"
+      @cancel="diagnostics.cancel"
+    />
+    <dialog ref="deleteDialog" class="workshop-delete-dialog">
+      <h2>删除「{{ draft?.name }}」？</h2>
+      <p>删除编辑项目及其备份。已经应用的主题仍可使用。</p>
+      <div class="workshop-inline">
+        <button @click="deleteDialog?.close()">取消</button
+        ><button
+          class="workshop-danger"
+          @click="
+            deleteDialog?.close()
+            run(remove)
+          "
+        >
+          删除编辑项目
+        </button>
+      </div>
+    </dialog>
   </section>
 </template>
-
 <style src="./ThemeWorkshopPage.css"></style>

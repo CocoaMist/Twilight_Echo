@@ -6,6 +6,7 @@ import {
   computeBiquadCoefficients,
   computeCompositeResponse,
   computeEstimatedSourceDeviation,
+  isBandActive,
   magnitudeDbAtFrequency,
   sampleLogFrequencies
 } from './eqResponse.ts'
@@ -123,12 +124,48 @@ test('composite equals the sum of single-band responses plus preamp', () => {
   }
 })
 
-test('bands disabled or with zero gain are skipped like the engine', () => {
+test('disabled bands and zero-gain peak bands are skipped like the engine', () => {
   const disabled = makeBand({ gain: 12, enabled: false })
-  const zeroGainBandPass = makeBand({ gain: 0, filterType: 'bandPass' })
-  const response = computeCompositeResponse([disabled, zeroGainBandPass], 0, { pointCount: 32 })
+  const zeroGainPeak = makeBand({ gain: 0 })
+  const response = computeCompositeResponse([disabled, zeroGainPeak], 0, { pointCount: 32 })
   for (const point of response) {
     assert.ok(Math.abs(point.db) < 1e-9)
+  }
+})
+
+test('gain-independent filters remain active at zero gain and respect bypass and graphic mode', () => {
+  for (const filterType of ['lowPass', 'highPass', 'bandPass', 'notch', 'allPass'] as const) {
+    const band = makeBand({ filterType })
+    assert.equal(isBandActive(band), true, filterType)
+    assert.equal(isBandActive({ ...band, enabled: false }), false)
+    assert.equal(isBandActive(band, 'graphic'), false)
+  }
+  const options = { minFrequency: 100, maxFrequency: 10000, pointCount: 3 }
+  const notch = computeBandResponse(makeBand({ filterType: 'notch' }), options)
+  assert.ok(notch[1].db < -60)
+  const bandPass = computeBandResponse(makeBand({ filterType: 'bandPass' }), options)
+  assert.ok(bandPass[0].db < -15 && bandPass[2].db < -15)
+  assert.ok(Math.abs(bandPass[1].db) < 0.01)
+})
+
+test('shelf Q changes resonance while preserving midpoint and endpoint gains', () => {
+  for (const type of ['lowShelf', 'highShelf'] as const) {
+    for (const gain of [-9, 9]) {
+      const broad = computeBiquadCoefficients(type, 1000, gain, Math.SQRT1_2)
+      const resonant = computeBiquadCoefficients(type, 1000, gain, 2)
+      assert.ok(
+        Math.abs(magnitudeDbAtFrequency(broad, 500) - magnitudeDbAtFrequency(resonant, 500)) > 1
+      )
+      for (const coeffs of [broad, resonant]) {
+        assert.ok(Math.abs(magnitudeDbAtFrequency(coeffs, 1000) - gain / 2) < 1e-6)
+        assert.ok(
+          Math.abs(magnitudeDbAtFrequency(coeffs, 0) - (type === 'lowShelf' ? gain : 0)) < 1e-6
+        )
+        assert.ok(
+          Math.abs(magnitudeDbAtFrequency(coeffs, 24000) - (type === 'highShelf' ? gain : 0)) < 1e-6
+        )
+      }
+    }
   }
 })
 

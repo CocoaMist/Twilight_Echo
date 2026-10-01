@@ -6,6 +6,7 @@ import type {
   LoudnessAnalysisResult
 } from '../shared/audioEngineTypes.ts'
 import type { AppSettings } from '../shared/appSettings.ts'
+export type { EqualizerClipboardApi } from '../shared/equalizerClipboard.ts'
 export type {
   DspAuditionApi,
   DspAuditionRequest,
@@ -647,6 +648,8 @@ export interface TwilightThemeContribution {
 }
 
 export type ThemeWorkshopApi = import('../shared/themeWorkshop').ThemeWorkshopApi
+export type WorkshopDiagnosticReport =
+  import('../shared/themeWorkshopDiagnostics').WorkshopDiagnosticReport
 
 export interface TwilightPluginExtensionContribution {
   pluginId: string

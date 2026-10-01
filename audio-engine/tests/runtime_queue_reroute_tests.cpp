@@ -1358,6 +1358,8 @@ TrackProfile buildTrackProfile(const std::string& source) {
   if (source.find("empty-track") != std::string::npos) {
     profile.totalFrames = 0;
     profile.stream.durationSeconds = 0.0;
+  } else if (source.find("exclusive-live") != std::string::npos) {
+    profile.stream.durationSeconds = 0.0;
   } else if (source.find("crossfade-current") != std::string::npos ||
              source.find("auto-promote-current") != std::string::npos) {
     profile.totalFrames = 4096;
@@ -3260,6 +3262,189 @@ void testPausedSettingsFallbackBeforeResume() {
   assert(g_backendRegistry.snapshots().size() == 2);
 }
 
+void testExclusiveAutoReleasePreservesPauseAcrossBackends() {
+  for (const std::string backendId : {"wasapi-exclusive", "asio", "coreaudio-exclusive"}) {
+    EngineHarness harness;
+    auto& engine = harness.engine();
+    assert(engine.setOutputBackend(backendId) == TAE_RESULT_OK);
+    assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+    assert(engine.loadQueue("[{\"id\":\"track\",\"source\":\"exclusive-release.flac\"}]", 0) == TAE_RESULT_OK);
+    assert(engine.setVolume(0.4) == TAE_RESULT_OK);
+    assert(engine.setPlaybackRate(1.25) == TAE_RESULT_OK);
+    assert(engine.play("exclusive-release.flac", 0.25) == TAE_RESULT_OK);
+    assert(engine.pause() == TAE_RESULT_OK);
+    const double position = playbackJsonNumber(engine.getPlaybackInfoJson(), "position");
+    assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+    assertLatestPlaybackContains(engine, "\"outputReleased\":true");
+    assertLatestPlaybackContains(engine, "\"exclusive\":false");
+    assertLatestPlaybackContains(engine, "\"outputPerfect\":false");
+    const auto released = g_backendRegistry.snapshots();
+    assert(released.size() == 1 && released.front().closed);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+    assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "position") == position);
+    assert(engine.pause() == TAE_RESULT_OK);
+    assertLatestPlaybackContains(engine, "\"state\":\"playing\"");
+    assertLatestPlaybackContains(engine, "\"outputReleased\":false");
+    assertLatestPlaybackContains(engine, "\"queueIndex\":0");
+    assertLatestPlaybackContains(engine, "\"volume\":0.4");
+    assertLatestPlaybackContains(engine, "\"playbackRate\":1.25");
+    assert(std::abs(playbackJsonNumber(engine.getPlaybackInfoJson(), "position") - position) < 0.001);
+    const auto resumed = g_backendRegistry.snapshots();
+    assert(resumed.size() == 2 && !resumed.back().closed);
+    assert(resumed.back().backendId == backendId);
+  }
+}
+
+void testExclusiveAutoReleaseDefaultsOffAndIgnoresSharedOutput() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.play("exclusive-manual.flac", 0.0) == TAE_RESULT_OK);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assert(!g_backendRegistry.snapshots().back().closed);
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+  assert(g_backendRegistry.snapshots().back().closed);
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":false}") == TAE_RESULT_OK);
+  assert(g_backendRegistry.snapshots().size() == 1);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assert(!g_backendRegistry.snapshots().back().closed);
+  assert(engine.stop() == TAE_RESULT_OK);
+  assert(engine.setOutputBackend("wasapi") == TAE_RESULT_OK);
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+  assert(engine.play("exclusive-shared.flac", 0.0) == TAE_RESULT_OK);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assert(!g_backendRegistry.snapshots().back().closed);
+}
+
+void testExclusiveReleasedPauseEditsAndResumeFailureRetainContext() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+  assert(engine.play("exclusive-resume.flac", 0.15) == TAE_RESULT_OK);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assert(engine.seek(0.5) == TAE_RESULT_OK);
+  assert(engine.setVolume(0.3) == TAE_RESULT_OK);
+  assert(engine.setPlaybackRate(1.5) == TAE_RESULT_OK);
+  assert(engine.setOutputDevice("second-dac") == TAE_RESULT_OK);
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true,\"preferredBufferSize\":512}") == TAE_RESULT_OK);
+  assert(engine.setDspConfig("{\"dspEnabled\":true,\"crossfeedStrength\":0.4}") == TAE_RESULT_OK);
+  assert(g_backendRegistry.snapshots().size() == 1);
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  g_fakeTopologyOpenFailures = 1;
+  assert(engine.pause() != TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  assertLatestPlaybackContains(engine, "\"outputReleased\":true");
+  assertLatestPlaybackContains(engine, "\"position\":0.5");
+  assertLatestPlaybackContains(engine, "\"source\":\"exclusive-resume.flac\"");
+  assert(engine.pause() == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"state\":\"playing\"");
+  assertLatestPlaybackContains(engine, "\"position\":0.5");
+  assertLatestPlaybackContains(engine, "\"volume\":0.3");
+  assertLatestPlaybackContains(engine, "\"playbackRate\":1.5");
+  assertLatestPlaybackContains(engine, "\"outputDevice\":\"second-dac\"");
+  assert(g_backendRegistry.snapshots().back().outputConfig.preferredBufferSize == 512);
+}
+
+void testExclusiveReleasedPausePreservesCueQueueIdentity() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  const std::string queue =
+      "[{\"id\":\"cue-1\",\"source\":\"exclusive-cue.flac\",\"duration\":0.5,"
+      "\"cueRange\":{\"startSeconds\":0,\"endSeconds\":0.5}},"
+      "{\"id\":\"cue-2\",\"source\":\"exclusive-cue.flac\",\"duration\":0.5,"
+      "\"cueRange\":{\"startSeconds\":0.5,\"endSeconds\":1}}]";
+  assert(engine.loadQueue(queue, 1) == TAE_RESULT_OK);
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+  assert(engine.play("exclusive-cue.flac", 0.1) == TAE_RESULT_OK);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assert(engine.seek(0.2) == TAE_RESULT_OK);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"queueIndex\":1");
+  assertLatestPlaybackContains(engine, "\"position\":0.2");
+  assert(decoderSeekObserved(0.7));
+}
+
+void testExclusiveAutoReleasePreservesDsdTransport() {
+  for (const std::string backendId : {"wasapi-exclusive", "asio"}) {
+    EngineHarness harness;
+    auto& engine = harness.engine();
+    assert(engine.setOutputBackend(backendId) == TAE_RESULT_OK);
+    assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+    assert(engine.play(harness.dsdPath(), 0.0) == TAE_RESULT_OK);
+    assert(engine.pause() == TAE_RESULT_OK);
+    assert(engine.pause() == TAE_RESULT_OK);
+    const auto resumed = g_backendRegistry.snapshots().back();
+    if (backendId == "asio") {
+      assert(formatLooksDsdSourceRequest(resumed.requestedFormat));
+      assertLatestPlaybackContains(engine, "\"dsdMode\":\"native\"");
+    } else {
+      assert(formatLooksDopCarrier(resumed.requestedFormat));
+      assertLatestPlaybackContains(engine, "\"dsdMode\":\"dop\"");
+    }
+  }
+}
+
+void testExclusiveAutoReleaseKeepsGaplessDeviceUntilQueueEnd() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+  assert(engine.setVolume(0.5) == TAE_RESULT_OK);
+  assert(engine.setDspConfig("{\"dspEnabled\":true,\"gapless\":true}") == TAE_RESULT_OK);
+  assert(engine.loadQueue(
+      "[{\"id\":\"first\",\"source\":\"auto-promote-current.flac\"},"
+      "{\"id\":\"last\",\"source\":\"auto-promote-next.flac\"}]", 0) == TAE_RESULT_OK);
+  assert(engine.play("auto-promote-current.flac", 0.0) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  assert(waitUntil([&engine] { return jsonContains(engine.getPlaybackInfoJson(), "\"preloadReady\":true"); }));
+  pumpBackend(backend, 20);
+  assert(waitUntil([&engine] { return jsonContains(engine.getPlaybackInfoJson(), "\"queueIndex\":1"); }));
+  assert(g_backendRegistry.snapshots().size() == 1);
+  assert(!g_backendRegistry.snapshots().front().closed);
+  pumpBackend(backend, 64);
+  assert(waitUntil([] { return g_backendRegistry.snapshots().front().closed; }));
+  assertLatestPlaybackContains(engine, "\"state\":\"stopped\"");
+  assertLatestPlaybackContains(engine, "\"outputReleased\":true");
+}
+
+void testExclusiveAutoReleaseRapidPauseResumeAndStop() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+  assert(engine.play("exclusive-rapid.flac", 0.25) == TAE_RESULT_OK);
+  for (int i = 0; i < 8; ++i) {
+    assert(engine.pause() == TAE_RESULT_OK);
+    assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+    assert(engine.pause() == TAE_RESULT_OK);
+  }
+  assert(engine.stop() == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"state\":\"stopped\"");
+  assertLatestPlaybackContains(engine, "\"position\":0");
+  for (const auto& backend : g_backendRegistry.snapshots()) assert(backend.closed);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"state\":\"stopped\"");
+}
+
+void testExclusiveReleasedLiveStreamReconnectsAtCurrentStream() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setOutputConfig("{\"releaseExclusiveOnPause\":true}") == TAE_RESULT_OK);
+  assert(engine.play("https://radio.example/exclusive-live", 0.0) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  pumpBackend(backend, 8);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "position") > 0.0);
+  assertLatestPlaybackContains(engine, "\"duration\":0");
+  assert(engine.pause() == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"source\":\"https://radio.example/exclusive-live\"");
+  assertLatestPlaybackContains(engine, "\"state\":\"playing\"");
+  assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "position") == 0.0);
+  assert(g_backendRegistry.snapshots().size() == 2);
+}
+
 void testWasapiExclusiveTopologyUpdateReopensAndResumesPlaying() {
   EngineHarness harness;
   auto& engine = harness.engine();
@@ -4167,6 +4352,14 @@ int main() {
   testSeekReevaluatesDsdPath();
   testPausedSettingsFallbackBeforeResume();
   testWasapiExclusiveTopologyUpdateReopensAndResumesPlaying();
+  testExclusiveAutoReleasePreservesPauseAcrossBackends();
+  testExclusiveAutoReleaseDefaultsOffAndIgnoresSharedOutput();
+  testExclusiveReleasedPauseEditsAndResumeFailureRetainContext();
+  testExclusiveReleasedPausePreservesCueQueueIdentity();
+  testExclusiveAutoReleasePreservesDsdTransport();
+  testExclusiveAutoReleaseKeepsGaplessDeviceUntilQueueEnd();
+  testExclusiveAutoReleaseRapidPauseResumeAndStop();
+  testExclusiveReleasedLiveStreamReconnectsAtCurrentStream();
   testWasapiExclusiveTopologyStartFailureRollsBackAndPreservesPausedState();
   testWasapiExclusiveTopologyDeviceInvalidationRollsBack();
   testManualNextDoesNotInheritDsdPath();

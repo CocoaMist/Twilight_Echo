@@ -1,671 +1,368 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useMusicStore } from '../stores/useMusicStore'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useMusicStore } from '@renderer/stores/useMusicStore'
 import {
   getMostListenedTracks,
   getTopArtists,
+  getTopTracks,
   useListeningStatsStore,
   type ListeningArtistStat
-} from '../stores/useListeningStatsStore'
-import { usePlayerStore } from '../stores/usePlayerStore'
-import { createUnifiedRecentTrackResolver } from '../utils/unifiedRecentTracks'
-import CoverImg from './CoverImg.vue'
-import type { Track } from '../types/music'
+} from '@renderer/stores/useListeningStatsStore'
+import { usePlayerStore } from '@renderer/stores/usePlayerStore'
+import { createUnifiedRecentTrackResolver } from '@renderer/utils/unifiedRecentTracks'
+import CoverImg from '@renderer/components/CoverImg.vue'
+import ListeningRhythm from '@renderer/components/listening-analytics/ListeningRhythm.vue'
+import ListeningRankings from '@renderer/components/listening-analytics/ListeningRankings.vue'
+import ListeningFootprint from '@renderer/components/listening-analytics/ListeningFootprint.vue'
+import ListeningStatsClearDialog from '@renderer/components/listening-analytics/ListeningStatsClearDialog.vue'
+import type { ListeningStatsClearRange } from '@renderer/stores/listeningStatsHistory'
+import {
+  formatListeningDuration,
+  listeningDurationParts,
+  summarizeRecordedTracks,
+  utcDayKey
+} from '@renderer/components/listening-analytics/listeningAnalyticsData'
+import type { Track } from '@renderer/types/music'
 
 const emit = defineEmits<{
   (event: 'select-view', category: string, filter: string | null): void
   (event: 'open-artist', request: { name: string; providerId: string }): void
 }>()
 
-const DEFAULT_COVER = './icon.png'
-const ONE_DAY_MS = 24 * 60 * 60 * 1000
-
 const { tracks: libraryTracks, artists: libraryArtists } = useMusicStore()
-const { listeningStats } = useListeningStatsStore()
+const { listeningStats, persistenceStatus, clearListeningStats } = useListeningStatsStore()
 const { currentTrack, playTrack } = usePlayerStore()
+const now = ref(new Date())
+const sort = ref<'seconds' | 'plays'>('seconds')
+const showFormatTable = ref(false)
+const showClearDialog = ref(false)
+const clearNotice = ref('')
+const clearActivity = computed(() => ({ ...listeningStats.value }))
+let dayTimer: ReturnType<typeof setInterval> | undefined
 
-const generatedAt = ref(new Date())
-
-function formatNumber(value: number): string {
-  return value.toLocaleString('zh-CN')
+function refreshDay(): void {
+  const next = new Date()
+  if (utcDayKey(next) !== utcDayKey(now.value)) now.value = next
 }
 
-/**
- * Anything under a minute stays in seconds. Rounding it up to "1分钟" made a
- * 5-second row and an 85-second row read identically while their bars differed
- * by 17×, which is worse than showing the raw number.
- */
-function formatDuration(totalSeconds: number): string {
-  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '0 秒'
-  const rounded = Math.round(totalSeconds)
-  if (rounded < 60) return `${rounded} 秒`
-  const hours = Math.floor(rounded / 3600)
-  const minutes = Math.floor((rounded % 3600) / 60)
-  if (hours > 0) return `${hours} 小时${minutes > 0 ? ` ${minutes} 分钟` : ''}`
-  return `${minutes} 分钟`
-}
+onMounted(() => {
+  dayTimer = setInterval(refreshDay, 60_000)
+  document.addEventListener('visibilitychange', refreshDay)
+})
+onBeforeUnmount(() => {
+  clearInterval(dayTimer)
+  document.removeEventListener('visibilitychange', refreshDay)
+})
 
-/** Compact form for the ranked rows, matching the "11次 · 23分钟" rhythm. */
-function formatCompactDuration(totalSeconds: number): string {
-  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '0秒'
-  const rounded = Math.round(totalSeconds)
-  if (rounded < 60) return `${rounded}秒`
-  const hours = Math.floor(rounded / 3600)
-  const minutes = Math.floor((rounded % 3600) / 60)
-  if (hours > 0) return `${hours}小时${minutes > 0 ? `${minutes}分钟` : ''}`
-  return `${minutes}分钟`
-}
-
-function formatShortDate(timestamp: number): string {
-  if (!timestamp) return '-'
-  const date = new Date(timestamp)
-  return `${date.getMonth() + 1}/${date.getDate()}`
-}
-
-/** Share of plays that ran to the end, clamped to a sane percentage. */
-function completionRate(completions: number, plays: number): number {
-  if (!Number.isFinite(plays) || plays <= 0) return 0
-  return Math.max(0, Math.min(100, Math.round(((completions || 0) / plays) * 100)))
-}
-
-/** Bar length relative to the list leader, so the widest row always reads 100%. */
-function barPercent(value: number, max: number): number {
-  if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(max) || max <= 0) return 0
-  return Math.max(2, Math.min(100, Math.round((value / max) * 100)))
-}
-
-/** Podium spine fades down the list: champion solid, runner-up mid, rest faint. */
-function rankAlpha(index: number): number {
-  if (index === 0) return 1
-  if (index === 1) return 0.45
-  return 0.28
-}
-
-const trackEntries = computed(() => Object.values(listeningStats.value.tracks))
-
-const totalPlays = computed(() =>
-  trackEntries.value.reduce((sum, stat) => sum + (stat.plays || 0), 0)
-)
-
-const totalTrackCount = computed(
-  () => trackEntries.value.filter((stat) => (stat.plays || 0) > 0).length
-)
-
-const totalSeconds = computed(() =>
-  trackEntries.value.reduce((sum, stat) => sum + (stat.seconds || 0), 0)
-)
-
-const totalDurationText = computed(() => formatDuration(totalSeconds.value))
-
-const resolvedTracks = computed(() => {
-  if (libraryTracks.value.length === 0) return new Map<string, Track>()
-  const resolve = createUnifiedRecentTrackResolver(libraryTracks.value)
-  const map = new Map<string, Track>()
-  for (const stat of getMostListenedTracks(100)) {
-    const track = resolve(stat) ?? stat.track ?? null
-    if (track) map.set(stat.id, track)
+const activity = computed(() => ({ days: listeningStats.value.days }))
+const recorded = computed(() => summarizeRecordedTracks(listeningStats.value.tracks))
+const totalDuration = computed(() => listeningDurationParts(recorded.value.seconds))
+const hasHistory = computed(() => {
+  if (recorded.value.trackCount > 0) return true
+  for (const seconds of Object.values(listeningStats.value.days)) {
+    if (Number.isFinite(seconds) && seconds > 0) return true
   }
-  return map
+  return false
 })
-
-const topTracks = computed(() => {
-  return getMostListenedTracks(5).map((stat) => {
-    const track = resolvedTracks.value.get(stat.id) ?? stat.track ?? null
-    return {
-      id: stat.id,
-      title: stat.title,
-      artist: stat.artist,
-      cover: track?.cover ?? stat.cover ?? null,
-      coverSource: track?.coverSource ?? stat.coverSource ?? null,
-      plays: stat.plays,
-      seconds: stat.seconds,
-      track
-    }
-  })
-})
-
-const topArtists = computed(() => getTopArtists(5))
-
-const maxTrackSeconds = computed(() =>
-  topTracks.value.reduce((max, track) => Math.max(max, track.seconds || 0), 0)
-)
-
-const maxArtistSeconds = computed(() =>
-  topArtists.value.reduce((max, artist) => Math.max(max, artist.seconds || 0), 0)
-)
-
-interface QualityBucket {
-  key: string
-  label: string
-  count: number
-  plays: number
-}
-
-const qualityBuckets = computed<QualityBucket[]>(() => {
-  const buckets = new Map<string, QualityBucket>()
-  for (const stat of trackEntries.value) {
-    if (!stat.track) continue
-    const { sampleRate, bitDepth, bitrate } = stat.track
-    let key: string
-    let label: string
-    if (sampleRate && sampleRate >= 88200 && bitDepth && bitDepth >= 24) {
-      key = 'hires'
-      label = 'Hi-Res'
-    } else if (bitDepth && bitDepth >= 24) {
-      key = 'lossless-hd'
-      label = '高清无损'
-    } else if (
-      (sampleRate && sampleRate >= 44100 && bitDepth && bitDepth >= 16) ||
-      (bitrate && bitrate >= 1411)
-    ) {
-      key = 'lossless'
-      label = '无损'
-    } else {
-      key = 'compressed'
-      label = '有损压缩'
-    }
-    const existing = buckets.get(key)
-    if (existing) {
-      existing.count += 1
-      existing.plays += stat.plays
-    } else {
-      buckets.set(key, { key, label, count: 1, plays: stat.plays })
-    }
-  }
-  return Array.from(buckets.values()).sort((a, b) => b.count - a.count)
-})
-
-interface FormatBucket {
-  format: string
-  count: number
-  plays: number
-}
-
-const formatDistribution = computed<FormatBucket[]>(() => {
-  const map = new Map<string, FormatBucket>()
-  for (const stat of trackEntries.value) {
-    const format = (stat.track?.format || '未知').toLowerCase()
-    const existing = map.get(format)
-    if (existing) {
-      existing.count += 1
-      existing.plays += stat.plays
-    } else {
-      map.set(format, { format, count: 1, plays: stat.plays })
-    }
-  }
-  return Array.from(map.values()).sort((a, b) => b.count - a.count)
-})
-
-const formatSummary = computed(() => {
-  const [first, second] = formatDistribution.value
-  if (!first) return '0 / 0'
-  if (!second) return `${formatNumber(first.count)} / -`
-  return `${formatNumber(first.count)} / ${formatNumber(second.count)}`
-})
-
-/** Weekday rail, Monday-first. Only odd rows are labelled, as in the reference wall. */
-const WEEKDAY_RAIL = ['一', '', '三', '', '五', '', ''] as const
-
-interface WallDay {
-  key: string
-  date: Date
-  seconds: number
-  level: number
-  isFuture: boolean
-  isToday: boolean
-  inRange: boolean
-}
-
-interface WallWeek {
-  key: string
-  days: WallDay[]
-}
-
-const now = computed(() => new Date())
-
-/**
- * The stats store buckets by UTC calendar day (`toISOString().slice(0, 10)`), so
- * the wall walks UTC days too — anything else drifts the lookup by one day for
- * users east of Greenwich.
- */
-function utcDayKey(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
-
-function utcToday(): Date {
-  const source = now.value
-  return new Date(Date.UTC(source.getUTCFullYear(), source.getUTCMonth(), source.getUTCDate()))
-}
-
-function shiftUtcDays(date: Date, days: number): Date {
-  const next = new Date(date)
-  next.setUTCDate(next.getUTCDate() + days)
-  return next
-}
-
-/** Monday-first index, 0 = Monday … 6 = Sunday. */
-function mondayOffset(date: Date): number {
-  return (date.getUTCDay() + 6) % 7
-}
-
-function dayLevel(seconds: number): number {
-  if (!Number.isFinite(seconds) || seconds <= 0) return 0
-  const minutes = seconds / 60
-  if (minutes >= 120) return 4
-  if (minutes >= 60) return 3
-  if (minutes >= 30) return 2
-  return 1
-}
-
-const wallWeeks = computed<WallWeek[]>(() => {
-  const today = utcToday()
-  const rangeStart = shiftUtcDays(today, -(364 + mondayOffset(today)))
-  const totalDays = 364 + mondayOffset(today)
-  const weeks: WallWeek[] = []
-  for (let weekIndex = 0; weekIndex * 7 <= totalDays; weekIndex += 1) {
-    const days: WallDay[] = []
-    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
-      const date = shiftUtcDays(rangeStart, weekIndex * 7 + dayIndex)
-      const isFuture = date.getTime() > today.getTime()
-      const key = utcDayKey(date)
-      const seconds = isFuture ? 0 : listeningStats.value.days[key] || 0
-      days.push({
-        key,
-        date,
-        seconds,
-        level: isFuture ? 0 : dayLevel(seconds),
-        isFuture,
-        isToday: date.getTime() === today.getTime(),
-        inRange: !isFuture
-      })
-    }
-    weeks.push({ key: days[0].key, days })
-  }
-  return weeks
-})
-
-const wallMonthLabels = computed(() => {
-  const labels: Array<{ key: string; label: string; index: number }> = []
-  let lastMonth = -1
-  wallWeeks.value.forEach((week, index) => {
-    const first = week.days.find((day) => day.inRange)
-    if (!first) return
-    const month = first.date.getUTCMonth()
-    if (month === lastMonth) return
-    lastMonth = month
-    labels.push({
-      key: `${first.date.getUTCFullYear()}-${month}`,
-      label: `${month + 1}月`,
-      index
-    })
-  })
-  return labels
-})
-
-const yearStats = computed(() => {
-  const today = now.value
-  const cutoff = today.getTime() - 365 * ONE_DAY_MS
-  let yearPlays = 0
-  let activeDays = 0
-  let maxDaySeconds = 0
-  let maxDayKey = ''
-  let longestStreak = 0
-  let currentStreak = 0
-  const sortedDays = Object.entries(listeningStats.value.days)
-    .filter(([key, seconds]) => {
-      const time = new Date(key).getTime()
-      return time >= cutoff && time <= today.getTime() && seconds > 0
-    })
-    .sort(([a], [b]) => a.localeCompare(b))
-  for (const [dayKey, seconds] of sortedDays) {
-    yearPlays += Math.max(0, Math.round(seconds / 180))
-    activeDays += 1
-    if (seconds > maxDaySeconds) {
-      maxDaySeconds = seconds
-      maxDayKey = dayKey
-    }
-  }
-  let previousKey = ''
-  for (const [key] of sortedDays) {
-    if (previousKey) {
-      const prevDate = new Date(previousKey)
-      const currDate = new Date(key)
-      const diffDays = Math.round((currDate.getTime() - prevDate.getTime()) / ONE_DAY_MS)
-      if (diffDays === 1) {
-        currentStreak += 1
-      } else {
-        longestStreak = Math.max(longestStreak, currentStreak)
-        currentStreak = 1
-      }
-    } else {
-      currentStreak = 1
-    }
-    previousKey = key
-  }
-  longestStreak = Math.max(longestStreak, currentStreak)
-  const avg = activeDays > 0 ? yearPlays / activeDays : 0
+const mostListened = computed(() => getMostListenedTracks(10))
+const resolveTrack = computed(() => createUnifiedRecentTrackResolver(libraryTracks.value))
+const favorite = computed(() => {
+  const stat = mostListened.value[0]
+  if (!stat) return null
+  const track = resolveTrack.value(stat)
   return {
-    yearPlays,
-    activeDays,
-    totalDays: wallWeeks.value.length * 7,
-    maxDayKey,
-    maxDaySeconds,
-    longestStreak,
-    avgPerActiveDay: Math.round(avg)
+    ...stat,
+    resolvedTrack: track,
+    cover: track?.cover ?? stat.cover,
+    coverSource: track?.coverSource ?? stat.coverSource
   }
 })
-
-function cellTitle(cell: WallDay): string {
-  const dateText = `${cell.date.getUTCMonth() + 1}月${cell.date.getUTCDate()}日`
-  if (cell.seconds <= 0) return dateText
-  return `${dateText} · ${formatDuration(cell.seconds)}`
-}
-
-/**
- * The artist rollup only carries track ids, so the owning provider has to come
- * from the underlying track stats.
- */
-function resolveArtistProvider(artistName: string): string | null {
-  for (const stat of Object.values(listeningStats.value.tracks)) {
-    if ((stat.artist || '').trim() !== artistName) continue
+const rankedTracks = computed(() =>
+  (sort.value === 'seconds' ? mostListened.value : getTopTracks(10)).map((stat) => {
+    const track = resolveTrack.value(stat)
+    return {
+      ...stat,
+      resolvedTrack: track,
+      cover: track?.cover ?? stat.cover,
+      coverSource: track?.coverSource ?? stat.coverSource
+    }
+  })
+)
+const rankedArtists = computed(() => getTopArtists(10))
+const localArtistNames = computed(() => new Set(libraryArtists.value.map((artist) => artist.name)))
+const artistProviders = computed(() => {
+  const providers = new Map<string, string>()
+  for (const id in listeningStats.value.tracks) {
+    const stat = listeningStats.value.tracks[id]
+    const name = stat.artist.trim()
+    if (providers.has(name)) continue
     const provider = stat.sourceIds?.find(
       (entry) => entry.source && entry.source !== 'local'
     )?.source
-    if (provider) return provider
+    if (provider) providers.set(name, provider)
   }
-  return null
-}
+  return providers
+})
+const navigableArtists = computed(() => {
+  const names = new Set(localArtistNames.value)
+  for (const name of artistProviders.value.keys()) names.add(name)
+  return names
+})
+const playableRanking = computed(() => {
+  const tracks: Track[] = []
+  for (const entry of rankedTracks.value) if (entry.resolvedTrack) tracks.push(entry.resolvedTrack)
+  return tracks
+})
 
-/**
- * Mirrors the player bar's artist click. The library page matches on the exact
- * artist string (`artist:<name>`), so the raw display name is the only value
- * that resolves; anything not in the local library belongs to a streaming
- * provider and is handed off to that surface instead of opening an empty page.
- */
-function openArtist(artist: ListeningArtistStat): void {
-  const name = artist.name.trim()
-  if (!name) return
-  if (libraryArtists.value.some((item) => item.name === name)) {
-    emit('select-view', 'artists', `artist:${name}`)
-    return
-  }
-  const providerId = resolveArtistProvider(name)
-  if (!providerId) return
-  emit('open-artist', { name, providerId })
-}
-
-function playDashboardTrack(track: Track | null | undefined): void {
-  if (!track) return
-  const sourceIndex = libraryTracks.value.findIndex((item) => item.id === track.id)
+function playDashboardTrack(track: Track): void {
+  const sourceIndex =
+    track.source && track.source !== 'local'
+      ? -1
+      : libraryTracks.value.findIndex((item) => item.id === track.id)
   if (sourceIndex < 0) {
     playTrack(track, [track])
     return
   }
-  const windowSize = 200
-  const halfWindow = Math.floor(windowSize / 2)
-  const start = Math.max(0, sourceIndex - halfWindow)
-  const end = Math.min(libraryTracks.value.length, start + windowSize)
-  const queueStart = Math.max(0, end - windowSize)
-  playTrack(track, libraryTracks.value.slice(queueStart, end))
+  const end = Math.min(libraryTracks.value.length, Math.max(0, sourceIndex - 100) + 200)
+  playTrack(track, libraryTracks.value.slice(Math.max(0, end - 200), end))
 }
 
-function emptyText(title: string): string {
-  const map: Record<string, string> = {
-    最常听曲目: '暂无曲目统计',
-    最常听艺人: '暂无艺人统计',
-    音质使用: '暂无音质数据',
-    格式分布: '暂无格式数据'
+function playRanking(): void {
+  const tracks = playableRanking.value
+  if (tracks.length) playTrack(tracks[0], tracks)
+}
+
+function openArtist(artist: ListeningArtistStat): void {
+  const name = artist.name.trim()
+  if (localArtistNames.value.has(name)) {
+    emit('select-view', 'artists', `artist:${name}`)
+    return
   }
-  return map[title] || '暂无数据'
+  const providerId = artistProviders.value.get(name)
+  if (providerId) emit('open-artist', { name, providerId })
+}
+
+function clearStats(range: ListeningStatsClearRange): void {
+  clearListeningStats(range)
+  showClearDialog.value = false
+  clearNotice.value = range
+    ? `已清除 ${range.startDay} 至 ${range.endDay} 的每日记录及对应曲目明细。`
+    : '已清除全部统计数据。'
 }
 </script>
 
 <template>
-  <main class="analytics-page">
-    <header class="analytics-head">
-      <div class="analytics-identity">
-        <span class="analytics-kicker">LISTENING ANALYTICS</span>
-        <h1 class="analytics-title">播放统计仪表盘</h1>
-      </div>
-      <time class="analytics-generated" :datetime="generatedAt.toISOString()">
-        生成于 {{ generatedAt.getMonth() + 1 }}月{{ generatedAt.getDate() }}日
-        {{ String(generatedAt.getHours()).padStart(2, '0') }}:{{
-          String(generatedAt.getMinutes()).padStart(2, '0')
-        }}
-      </time>
-    </header>
-
-    <section class="analytics-summary">
-      <article class="summary-card">
-        <div class="summary-top">
-          <span class="summary-value">{{ formatNumber(totalPlays) }}</span>
-          <span class="summary-unit">次</span>
+  <main class="analytics-page" aria-label="统计仪表盘">
+    <div class="analytics-journal">
+      <header class="journal-header">
+        <div>
+          <h1>聆听年鉴<span class="journal-title-dot">.</span></h1>
+          <p>有些旋律，值得把时间留给它。</p>
         </div>
-        <span class="summary-caption">累计播放</span>
-      </article>
-      <article class="summary-card">
-        <div class="summary-top">
-          <span class="summary-value">{{ formatNumber(totalTrackCount) }}</span>
-          <span class="summary-unit">首</span>
-        </div>
-        <span class="summary-caption">已播曲目</span>
-      </article>
-      <article class="summary-card">
-        <div class="summary-top">
-          <span class="summary-value">{{ totalDurationText }}</span>
-        </div>
-        <span class="summary-caption">聆听时长</span>
-      </article>
-      <article class="summary-card">
-        <div class="summary-top">
-          <span class="summary-value">{{ formatSummary }}</span>
-        </div>
-        <span class="summary-caption">格式分布</span>
-      </article>
-    </section>
-
-    <section class="analytics-cards">
-      <article class="detail-card">
-        <header class="detail-card-head">
-          <i class="ph ph-music-notes" aria-hidden="true"></i>
-          <h3>最常听曲目</h3>
-        </header>
-        <ul v-if="topTracks.length > 0" class="detail-list">
-          <li
-            v-for="track in topTracks"
-            :key="track.id"
-            class="detail-row"
-            :class="{ 'is-current': currentTrack?.id && track.track?.id === currentTrack.id }"
-            role="button"
-            tabindex="0"
-            @click="playDashboardTrack(track.track)"
-            @keydown.enter="playDashboardTrack(track.track)"
-            @keydown.space.prevent="playDashboardTrack(track.track)"
-          >
-            <CoverImg
-              class="detail-cover"
-              :cover="track.cover"
-              :cover-source="track.coverSource"
-              :identity="track.track?.id ?? track.id"
-              :fallback="DEFAULT_COVER"
-              :alt="track.title"
-            />
-            <div class="detail-meta">
-              <span class="detail-name">{{ track.title }}</span>
-              <span class="detail-sub">{{ track.artist }}</span>
-              <span class="detail-bar" aria-hidden="true">
-                <span :style="{ width: barPercent(track.seconds, maxTrackSeconds) + '%' }"></span>
-              </span>
-            </div>
-            <span class="detail-stat">{{ track.plays }} 次</span>
-          </li>
-        </ul>
-        <p v-else class="detail-empty">{{ emptyText('最常听曲目') }}</p>
-      </article>
-
-      <article class="detail-card">
-        <header class="detail-card-head">
-          <i class="ph ph-microphone-stage" aria-hidden="true"></i>
-          <h3>最常听艺人</h3>
-        </header>
-        <ul v-if="topArtists.length > 0" class="rank-list">
-          <li
-            v-for="(artist, index) in topArtists"
-            :key="artist.id"
-            class="rank-row"
-            :class="{ 'is-champion': index === 0 }"
-            :style="{ '--rank-alpha': rankAlpha(index) }"
-            role="button"
-            tabindex="0"
-            @click="openArtist(artist)"
-            @keydown.enter="openArtist(artist)"
-            @keydown.space.prevent="openArtist(artist)"
-          >
-            <span class="rank-spine" aria-hidden="true"></span>
-            <span class="rank-index">{{ String(index + 1).padStart(2, '0') }}</span>
-            <CoverImg
-              class="rank-cover"
-              :cover="artist.cover"
-              :cover-source="artist.coverSource ?? null"
-              :identity="artist.id"
-              :fallback="DEFAULT_COVER"
-              :alt="artist.name"
-            />
-            <div class="rank-body">
-              <span class="rank-name">{{ artist.name }}</span>
-              <span class="rank-sub"
-                >{{ artist.plays }}次 · {{ formatCompactDuration(artist.seconds) }}</span
-              >
-              <span class="rank-bar" aria-hidden="true">
-                <span :style="{ width: barPercent(artist.seconds, maxArtistSeconds) + '%' }"></span>
-              </span>
-            </div>
-            <span class="rank-pill"
-              >{{ completionRate(artist.completions, artist.plays) }}% 完播</span
+        <div class="journal-header-tools">
+          <div class="journal-edition">
+            <span>{{ now.getUTCFullYear() }}</span>
+            <time :datetime="utcDayKey(now)"
+              >{{ String(now.getUTCMonth() + 1).padStart(2, '0') }} /
+              {{ String(now.getUTCDate()).padStart(2, '0') }}</time
             >
-          </li>
-        </ul>
-        <p v-else class="detail-empty">{{ emptyText('最常听艺人') }}</p>
-      </article>
-
-      <article class="detail-card">
-        <header class="detail-card-head">
-          <i class="ph ph-speaker-hifi" aria-hidden="true"></i>
-          <h3>音质使用</h3>
-        </header>
-        <ul v-if="qualityBuckets.length > 0" class="detail-list">
-          <li v-for="bucket in qualityBuckets" :key="bucket.key" class="detail-row is-static">
-            <span class="detail-avatar">{{ bucket.label.slice(0, 2) }}</span>
-            <div class="detail-meta">
-              <span class="detail-name">{{ bucket.label }}</span>
-              <span class="detail-sub">{{ bucket.count }} 首</span>
-            </div>
-            <span class="detail-stat">{{ bucket.plays }} 次</span>
-          </li>
-        </ul>
-        <p v-else class="detail-empty">{{ emptyText('音质使用') }}</p>
-      </article>
-
-      <article class="detail-card">
-        <header class="detail-card-head">
-          <i class="ph ph-vinyl-record" aria-hidden="true"></i>
-          <h3>格式分布</h3>
-        </header>
-        <ul v-if="formatDistribution.length > 0" class="detail-list">
-          <li
-            v-for="bucket in formatDistribution"
-            :key="bucket.format"
-            class="detail-row is-static"
+            <small><i class="ph ph-hard-drives" aria-hidden="true"></i> 记录保存在本机</small>
+          </div>
+          <button
+            type="button"
+            class="an-button journal-clear"
+            :disabled="!hasHistory"
+            @click="showClearDialog = true"
           >
-            <span class="detail-avatar format-avatar">{{ bucket.format.toUpperCase() }}</span>
-            <div class="detail-meta">
-              <span class="detail-name">{{ bucket.format.toUpperCase() }}</span>
-              <span class="detail-sub">{{ bucket.count }} 首</span>
-            </div>
-            <span class="detail-stat">{{ bucket.plays }} 次</span>
-          </li>
-        </ul>
-        <p v-else class="detail-empty">{{ emptyText('格式分布') }}</p>
-      </article>
-    </section>
-
-    <section class="analytics-heatmap">
-      <header class="heatmap-head">
-        <div class="heatmap-title">
-          <i class="ph ph-calendar-blank" aria-hidden="true"></i>
-          <h2>近一年播放墙</h2>
+            <i class="ph ph-trash" aria-hidden="true"></i> 清除数据
+          </button>
         </div>
-        <span class="heatmap-subtitle"
-          >{{ formatNumber(yearStats.yearPlays) }} 次播放 · 近一年</span
-        >
       </header>
 
-      <div class="wall-scroll">
-        <div class="wall-inner">
-          <div class="wall-rail-spacer" aria-hidden="true"></div>
-          <div class="wall-months" :style="{ '--wall-weeks': wallWeeks.length }" aria-hidden="true">
-            <span
-              v-for="month in wallMonthLabels"
-              :key="month.key"
-              class="wall-month-label"
-              :style="{ gridColumn: month.index + 1 }"
-              >{{ month.label }}</span
+      <p
+        v-if="persistenceStatus.dirty && persistenceStatus.failureCount > 0"
+        class="journal-notice"
+        role="status"
+      >
+        <i class="ph ph-warning-circle" aria-hidden="true"></i>
+        统计数据的更改暂未保存，应用会自动重试。请暂时不要关闭应用。
+      </p>
+      <p
+        v-if="clearNotice && persistenceStatus.failureCount === 0"
+        class="journal-notice"
+        role="status"
+      >
+        {{ clearNotice }}
+      </p>
+
+      <section v-if="!hasHistory" class="journal-empty" aria-labelledby="journal-empty-title">
+        <div class="empty-record" aria-hidden="true">
+          <span><i class="ph ph-music-note"></i></span>
+        </div>
+        <span class="an-eyebrow">YOUR STORY STARTS HERE</span>
+        <h2 id="journal-empty-title">第一首歌，就是序章。</h2>
+        <p>播放喜欢的音乐，时长、偏好与每一天的聆听足迹<br />会在这里，慢慢成为你的音乐年鉴。</p>
+        <button
+          type="button"
+          class="an-button an-button-primary"
+          @click="emit('select-view', 'allSongs', null)"
+        >
+          <i class="ph ph-play" aria-hidden="true"></i> 去音乐库，听一首
+        </button>
+        <span class="empty-note">不需要打卡，也没有目标。只管享受音乐。</span>
+      </section>
+
+      <template v-else>
+        <section class="journal-hero" aria-label="现存聆听记录累计">
+          <div class="hero-listening">
+            <span class="hero-caption"
+              ><i class="ph ph-headphones" aria-hidden="true"></i> 与音乐相处了</span
             >
+            <div class="hero-duration" :aria-label="formatListeningDuration(recorded.seconds)">
+              <strong>{{ totalDuration.value }}</strong
+              ><span>{{ totalDuration.unit }}</span>
+            </div>
+            <p class="hero-note">耳机里的时间，自有意义。</p>
+            <div class="hero-totals">
+              <div>
+                <strong>{{ recorded.plays.toLocaleString('zh-CN') }}</strong
+                ><span>次播放</span>
+              </div>
+              <span class="hero-divider"></span>
+              <div>
+                <strong>{{ recorded.trackCount.toLocaleString('zh-CN') }}</strong
+                ><span>首留下回响</span>
+              </div>
+              <span class="hero-record-scope">现存记录累计</span>
+            </div>
           </div>
+          <div v-if="favorite" class="hero-favorite">
+            <div class="favorite-artwork" aria-hidden="true">
+              <span class="favorite-vinyl"><span></span></span>
+              <div class="favorite-sleeve">
+                <CoverImg
+                  :cover="favorite.cover"
+                  :cover-source="favorite.coverSource"
+                  :identity="favorite.id"
+                  fallback="./icon.png"
+                  alt=""
+                />
+              </div>
+            </div>
+            <div class="favorite-copy">
+              <span class="an-eyebrow">ON REPEAT / 01</span>
+              <span class="favorite-caption">把最多的时间，留给了</span>
+              <h2 :title="favorite.title">{{ favorite.title }}</h2>
+              <p :title="favorite.artist">{{ favorite.artist }}</p>
+              <button
+                v-if="favorite.resolvedTrack"
+                type="button"
+                class="favorite-play"
+                :aria-label="`再听一次 ${favorite.title}`"
+                @click="playDashboardTrack(favorite.resolvedTrack)"
+              >
+                <i class="ph ph-play" aria-hidden="true"></i> 再听一次
+                <span>{{ formatListeningDuration(favorite.seconds) }}</span>
+              </button>
+              <span v-else class="favorite-unavailable">音源暂不可用 · 回响仍在</span>
+            </div>
+          </div>
+          <div v-else class="hero-quiet">
+            <i class="ph ph-waveform" aria-hidden="true"></i><span>下一首喜欢的歌，正在路上。</span>
+          </div>
+        </section>
 
-          <div class="wall-weekdays" aria-hidden="true">
-            <span v-for="(label, index) in WEEKDAY_RAIL" :key="index">{{ label }}</span>
+        <div class="analytics-content-grid">
+          <div class="analytics-left-stack">
+            <ListeningRhythm :activity="activity" :now="now" />
+            <section class="an-panel formats-panel" aria-labelledby="formats-title">
+              <header class="an-section-head">
+                <div>
+                  <span class="an-eyebrow">THE SOUND COLLECTION</span>
+                  <h2 id="formats-title">声音的形状</h2>
+                </div>
+                <button
+                  type="button"
+                  class="an-icon-button"
+                  :aria-expanded="showFormatTable"
+                  aria-controls="formats-table"
+                  :aria-label="showFormatTable ? '收起格式数据表' : '查看格式数据表'"
+                  @click="showFormatTable = !showFormatTable"
+                >
+                  <i class="ph ph-table" aria-hidden="true"></i>
+                </button>
+              </header>
+              <div class="format-bars" role="list" aria-label="已记录曲目的格式分布">
+                <div
+                  v-for="format in recorded.formats"
+                  :key="format.key"
+                  class="format-row"
+                  role="listitem"
+                  tabindex="0"
+                  :aria-label="`${format.label}，${format.count} 首，占 ${format.percent.toFixed(1)}%`"
+                  :title="`${format.label} · ${format.count} 首 · ${format.percent.toFixed(1)}%`"
+                >
+                  <span>{{ format.label }}</span
+                  ><span class="format-track" aria-hidden="true"
+                    ><i :style="{ width: `${format.percent}%` }"></i></span
+                  ><strong>{{ format.count }}<small> 首</small></strong>
+                </div>
+              </div>
+              <p v-if="!recorded.formats.length" class="an-scope-note">还没有可统计的曲目格式</p>
+              <div v-if="showFormatTable" id="formats-table" class="an-table-scroll">
+                <table>
+                  <caption>
+                    已记录曲目的格式分布
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">格式</th>
+                      <th scope="col">曲目数</th>
+                      <th scope="col">占比</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="format in recorded.formats" :key="format.key">
+                      <td>{{ format.label }}</td>
+                      <td>{{ format.count }}</td>
+                      <td>{{ format.percent.toFixed(1) }}%</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="an-scope-note">按已听曲目快照计数，不代表实际输出音质。</p>
+            </section>
           </div>
-          <div class="wall-grid" :style="{ '--wall-weeks': wallWeeks.length }">
-            <template v-for="week in wallWeeks" :key="week.key">
-              <span
-                v-for="cell in week.days"
-                :key="cell.key"
-                class="wall-cell"
-                :class="[
-                  `lv-${cell.level}`,
-                  { 'is-future': cell.isFuture, 'is-today': cell.isToday }
-                ]"
-                :title="cellTitle(cell)"
-              ></span>
-            </template>
-          </div>
+          <ListeningRankings
+            :tracks="rankedTracks"
+            :artists="rankedArtists"
+            :sort="sort"
+            :current-track="currentTrack"
+            :navigable-artists="navigableArtists"
+            :can-play-list="playableRanking.length > 0"
+            @update:sort="sort = $event"
+            @play="playDashboardTrack"
+            @play-list="playRanking"
+            @open-artist="openArtist"
+          />
         </div>
-      </div>
-
-      <footer class="heatmap-foot">
-        <div class="heatmap-stat">
-          <span class="heatmap-stat-label">最热一天</span>
-          <span class="heatmap-stat-value">
-            {{
-              yearStats.maxDayKey
-                ? `${formatShortDate(new Date(yearStats.maxDayKey).getTime())} · ${formatDuration(yearStats.maxDaySeconds)}`
-                : '-'
-            }}
-          </span>
-        </div>
-        <div class="heatmap-stat">
-          <span class="heatmap-stat-label">最长连续</span>
-          <span class="heatmap-stat-value">{{ yearStats.longestStreak }} 天</span>
-        </div>
-        <div class="heatmap-stat">
-          <span class="heatmap-stat-label">活跃天数</span>
-          <span class="heatmap-stat-value"
-            >{{ yearStats.activeDays }} / {{ yearStats.totalDays }}</span
-          >
-        </div>
-        <div class="heatmap-stat">
-          <span class="heatmap-stat-label">活跃日均</span>
-          <span class="heatmap-stat-value">{{ formatNumber(yearStats.avgPerActiveDay) }} 次</span>
-        </div>
-        <div class="heatmap-legend">
-          <span>少</span>
-          <i v-for="level in 5" :key="level" :class="`lv-${level - 1}`"></i>
-          <span>多</span>
-        </div>
+        <ListeningFootprint :activity="activity" :now="now" />
+      </template>
+      <footer class="journal-footer">
+        <span><i class="ph ph-lock-simple" aria-hidden="true"></i> 只记录音乐，不定义品味。</span>
+        <p>
+          汇总本机各音源的聆听记录 · 每日时长保留 730 天，曲目记录最多 10,000 首。<br />累计榜单不随时长范围变化；记录可能因保留策略而不完整。
+        </p>
       </footer>
-    </section>
+    </div>
+    <ListeningStatsClearDialog
+      v-if="showClearDialog"
+      :stats="clearActivity"
+      :now="now"
+      @close="showClearDialog = false"
+      @clear="clearStats"
+    />
   </main>
 </template>
 
-<style scoped src="./ListeningAnalyticsPage.css"></style>
+<style src="./ListeningAnalyticsPage.css"></style>

@@ -993,6 +993,7 @@
       .stat-col {
         display: flex;
         flex-direction: column;
+        min-width: 0;
         padding-inline: 0 22px;
       }
 
@@ -1035,6 +1036,13 @@
       .stat-value.right-align {
         justify-content: flex-end;
         text-align: right;
+      }
+
+      .stat-value.source-value {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       /* Custom BPM Meter Graphic */
@@ -1500,7 +1508,7 @@
             </div>
           </div>
 
-          <!-- BPM / Genre / Duration Grid -->
+          <!-- BPM / Source / Duration Grid -->
           <div class="stats-grid-row">
             <!-- BPM -->
             <div class="stat-col">
@@ -1518,10 +1526,10 @@
               </div>
             </div>
 
-            <!-- Genre -->
+            <!-- Source -->
             <div class="stat-col">
-              <div class="stat-label">Genre</div>
-              <div class="stat-value" id="display-genre">Hardcore</div>
+              <div class="stat-label">Source</div>
+              <div class="stat-value source-value" id="display-source">--</div>
             </div>
 
             <!-- Duration -->
@@ -1714,7 +1722,7 @@
         artist: '',
         quality: '',
         bpm: '',
-        genre: '',
+        source: '',
         duration: '',
         durationSeconds: 0,
         dynamicRange: '',
@@ -2407,6 +2415,13 @@
             }
             break
           }
+          case 'technical-metadata': {
+            if (msg.metadata && typeof msg.metadata === 'object') {
+              currentTrack = { ...currentTrack, ...msg.metadata }
+              applyTechnicalMetadataToUI(currentTrack)
+            }
+            break
+          }
           case 'bpm': {
             updateBpmDisplay(msg.bpm, msg.source)
             break
@@ -2451,19 +2466,14 @@
         syncTitleLineClass()
         document.getElementById('display-album').innerText = `From: ${track.album || '--'}`
         document.getElementById('display-artist').innerText = track.artist || '--'
-        document.getElementById('display-quality').innerText = track.quality || '--'
+        applyTechnicalMetadataToUI(track)
         updateBpmDisplay(track.bpm, track.bpm ? 'metadata' : 'analyzing')
-        document.getElementById('display-genre').innerText = track.genre || '--'
+        const sourceEl = document.getElementById('display-source')
+        sourceEl.innerText = track.source || '--'
+        sourceEl.title = track.source || ''
         document.getElementById('display-duration').innerText = track.duration || '--'
         document.getElementById('val-dynamic-range').innerText = track.dynamicRange || '--'
         document.getElementById('val-loudness').innerText = track.loudness || '--'
-
-        document.getElementById('meta-samplerate').innerText = track.samplerate || '--'
-        document.getElementById('meta-bitdepth').innerText = track.bitdepth || '--'
-        document.getElementById('meta-channels').innerText = track.channels || '--'
-        document.getElementById('meta-bitrate').innerText = track.bitrate || '--'
-        document.getElementById('meta-filesize').innerText = track.filesize || '--'
-        document.getElementById('meta-format').innerText = track.format || '--'
 
         // Timeline end markers (preserved)
         const timelineLabelsRow = document.getElementById('timeline-time-labels')
@@ -2476,6 +2486,16 @@
         <span>${formatTime(step * 4)}</span>
         <span>${track.duration || '0:00'}</span>
       `
+      }
+
+      function applyTechnicalMetadataToUI(track) {
+        document.getElementById('display-quality').innerText = track.quality || '--'
+        document.getElementById('meta-samplerate').innerText = track.samplerate || '--'
+        document.getElementById('meta-bitdepth').innerText = track.bitdepth || '--'
+        document.getElementById('meta-channels').innerText = track.channels || '--'
+        document.getElementById('meta-bitrate').innerText = track.bitrate || '--'
+        document.getElementById('meta-filesize').innerText = track.filesize || '--'
+        document.getElementById('meta-format').innerText = track.format || '--'
       }
 
       function updateBpmDisplay(value, source) {
