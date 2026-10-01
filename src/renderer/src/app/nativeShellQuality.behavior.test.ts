@@ -144,6 +144,9 @@ window.runChecks = async () => {
     const icon = button.querySelector('svg').getBoundingClientRect()
     expect(icon.width === 20 && icon.height === 20, 'main toolbar uses Fluent command icons consistently')
   }
+  // Measure final geometry after the real tray entry transition has settled.
+  expect(document.querySelector('.tray-player.ready'), 'tray bootstrap completes before geometry checks')
+  document.querySelector('#control-fixtures').getAnimations({ subtree: true }).forEach(animation => animation.finish()); await tick()
   for (const [selector, size] of [['#mini-icon-fixture', 16], ['#customizer-icon-fixture', 16], ['.dl-toolbar .is-close', 16], ['.tray-player .close-button', 18], ['#teleported-close', 16]]) {
     const button = document.querySelector(selector), icon = button.querySelector('i'), rect = icon.getBoundingClientRect(), parent = button.getBoundingClientRect()
     expect(Math.abs(rect.width - size) < 0.1 && Math.abs(rect.height - size) < 0.1, selector + ' icon follows its control size: ' + rect.width + 'x' + rect.height)

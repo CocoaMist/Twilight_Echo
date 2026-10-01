@@ -428,7 +428,7 @@ button {
   color: var(--te-shell-control-text);
 }
 #app .title-bar .notification-btn[aria-expanded='true'] {
-  background: var(--te-bg-hover);
+  background: var(--te-shell-control-hover);
   color: var(--hig-brand);
 }
 #app .title-bar .control-btn.close:hover {

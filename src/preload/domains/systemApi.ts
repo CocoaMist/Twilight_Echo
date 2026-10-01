@@ -12,6 +12,7 @@ import type {
 } from '../types'
 import type { AppStartupSnapshot } from '../../shared/appStartup.ts'
 import type { SystemMediaNativeStatus } from '../../shared/systemMedia.ts'
+import type { WindowChromeState } from '../../shared/windowChrome.ts'
 import type {
   AppUpdateCheckResult,
   AppUpdateDownloadResult,
@@ -46,6 +47,14 @@ export const systemApi = {
       ipcRenderer.invoke('systemMedia:getNativeStatus')
   },
   window: {
+    getState: (): Promise<WindowChromeState> => ipcRenderer.invoke('window:getState'),
+    onStateChanged: (callback: (state: WindowChromeState) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: WindowChromeState): void => {
+        callback(state)
+      }
+      ipcRenderer.on('window:state-changed', listener)
+      return () => ipcRenderer.removeListener('window:state-changed', listener)
+    },
     popupContextMenu: (request: NativeContextMenuRequest): Promise<string | null> =>
       ipcRenderer.invoke('contextMenu:popup', request),
     closeContextMenu: (requestId: string): Promise<void> =>

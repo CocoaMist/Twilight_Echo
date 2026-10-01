@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useBackStack } from '../app/useBackStack'
 import { useNcmStore } from '../stores/useNcmStore'
 import FluentIcon from './hig/FluentIcon.vue'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+import { useWindowChrome } from '../app/useWindowChrome'
 
 const props = withDefaults(
   defineProps<{
@@ -36,7 +37,11 @@ defineEmits<{
 const { isLoggedIn, profile } = useNcmStore()
 const { canGoBack, backHint } = useBackStack()
 const { noticeHistory } = useAppNoticeStore()
+const { maximized } = useWindowChrome(() => props.preview === true)
 const avatarLoadFailed = ref(false)
+watch([() => profile.value?.userId, () => profile.value?.avatarUrl], () => {
+  avatarLoadFailed.value = false
+})
 const titleBar = ref<HTMLElement | null>(null)
 let titleObserver: ResizeObserver | undefined
 onMounted(() => {
@@ -64,23 +69,28 @@ function setPressOrigin(event: PointerEvent): void {
 }
 
 function minimize(): void {
+  if (props.preview) return
   window.api.window.minimize()
 }
 
 function toggleMaximize(): void {
+  if (props.preview) return
   window.api.window.toggleMaximize()
 }
 
 function close(): void {
+  if (props.preview) return
   window.api.window.close()
 }
 </script>
 
 <template>
   <div
-    class="title-bar drag-region"
+    class="title-bar"
     ref="titleBar"
     :class="{
+      'drag-region': !preview,
+      'no-drag': preview,
       'title-bar-glass': glass,
       'title-bar-liquid': liquidMaterial,
       'title-bar-settings': titleSurface === 'settings',
@@ -95,12 +105,13 @@ function close(): void {
          not jump when it appears. -->
     <div
       class="title-bar-back no-drag"
-      :class="{ 'title-bar-back-visible': canGoBack }"
+      :class="{ 'title-bar-back-visible': canGoBack && !preview }"
       @pointerdown="setPressOrigin"
     >
       <Transition name="title-back-fade">
         <button
-          v-if="canGoBack"
+          type="button"
+          v-if="canGoBack && !preview"
           class="back-btn"
           :title="backHint ?? '返回'"
           aria-label="返回"
@@ -112,6 +123,7 @@ function close(): void {
     </div>
     <div v-if="!glass && !hideStart" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
       <button
+        type="button"
         aria-label="菜单"
         class="menu-btn"
         :title="menuOpen ? '收起导航' : '展开导航'"
@@ -121,6 +133,7 @@ function close(): void {
         <FluentIcon name="navigation" />
       </button>
       <button
+        type="button"
         class="settings-btn command-palette-trigger"
         title="命令面板 (Ctrl+K)"
         aria-label="打开命令面板"
@@ -130,6 +143,7 @@ function close(): void {
         <FluentIcon name="search" />
       </button>
       <button
+        type="button"
         aria-label="设置"
         :aria-pressed="activeTool === 'settings'"
         class="settings-btn"
@@ -139,6 +153,7 @@ function close(): void {
         <FluentIcon name="settings" />
       </button>
       <button
+        type="button"
         aria-label="扩展中心"
         :aria-pressed="activeTool === 'plugins'"
         class="plugins-btn"
@@ -148,6 +163,7 @@ function close(): void {
         <FluentIcon name="puzzle_piece" />
       </button>
       <button
+        type="button"
         :aria-label="isLoggedIn ? profile?.nickname || '个人详情' : '网易云登录'"
         v-if="streaming"
         class="login-btn"
@@ -166,6 +182,7 @@ function close(): void {
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
       <button
+        type="button"
         v-if="!preview"
         class="control-btn notification-btn"
         :aria-label="`通知记录（${noticeHistory.length}）`"
@@ -181,22 +198,39 @@ function close(): void {
         </svg>
         <span v-if="noticeHistory.length" class="notification-dot" aria-hidden="true"></span>
       </button>
-      <button aria-label="最小化" class="control-btn minimize" title="最小化" @click="minimize">
+      <button
+        type="button"
+        :disabled="preview"
+        aria-label="最小化"
+        class="control-btn minimize"
+        title="最小化"
+        @click="minimize"
+      >
         <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
           <path d="M1 6.5h10" />
         </svg>
       </button>
       <button
-        aria-label="最大化/还原"
+        type="button"
+        :aria-label="maximized ? '还原窗口' : '最大化窗口'"
         class="control-btn maximize"
-        title="最大化/还原"
+        :title="maximized ? '还原窗口' : '最大化窗口'"
+        :disabled="preview"
         @click="toggleMaximize"
       >
         <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
-          <rect x="1.5" y="1.5" width="9" height="9" />
+          <path v-if="maximized" d="M3.5 3.5v-2h7v7h-2M1.5 3.5h7v7h-7Z" />
+          <rect v-else x="1.5" y="1.5" width="9" height="9" />
         </svg>
       </button>
-      <button class="control-btn close" title="关闭窗口" aria-label="关闭窗口" @click="close">
+      <button
+        type="button"
+        :disabled="preview"
+        class="control-btn close"
+        title="关闭窗口"
+        aria-label="关闭窗口"
+        @click="close"
+      >
         <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
           <path d="m1.5 1.5 9 9m0-9-9 9" />
         </svg>
@@ -222,7 +256,7 @@ function close(): void {
 .settings-btn[aria-pressed='true'],
 .plugins-btn[aria-pressed='true'],
 .notification-btn[aria-expanded='true'] {
-  background: var(--te-bg-hover);
+  background: var(--te-shell-control-hover);
   color: var(--hig-brand);
 }
 .title-bar {
@@ -467,6 +501,7 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 
 .title-bar-controls {
   display: flex;
+  flex-shrink: 0;
   height: 100%;
   margin-left: auto;
   position: relative;

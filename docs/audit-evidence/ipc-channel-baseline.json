@@ -254,7 +254,8 @@
     "themes:setActive",
     "themes:setWindowInheritance",
     "themes:validateAssets",
-    "trayPlayer:getBootstrap"
+    "trayPlayer:getBootstrap",
+    "window:getState"
   ],
   "mainOn": [
     "desktopLyrics:close",
@@ -533,7 +534,8 @@
     "themes:setActive",
     "themes:setWindowInheritance",
     "themes:validateAssets",
-    "trayPlayer:getBootstrap"
+    "trayPlayer:getBootstrap",
+    "window:getState"
   ],
   "preloadSends": [
     "desktopLyrics:moveTo",
@@ -591,7 +593,8 @@
     "themeWorkshop:prepareDisable",
     "themes:changed",
     "themes:systemToneChanged",
-    "trayPlayer:state"
+    "trayPlayer:state",
+    "window:state-changed"
   ],
   "rendererDomains": [
     "app",
@@ -812,6 +815,7 @@
     "window.close",
     "window.closeContextMenu",
     "window.minimize",
+    "window.onStateChanged",
     "window.popupContextMenu",
     "window.toggleMaximize"
   ]

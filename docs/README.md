@@ -11,6 +11,7 @@
 - [模块解耦、运行效率与内存治理方案](./modularization-performance-plan-2026-09-30.md)
 - [基础设施与模块边界检查](./infrastructure-review-2026-09-30.md)
 - [宏观质量门禁](./quality-gates.md)
+- [Echora UI Lab 开发工具草案](./echora-ui-lab-development-draft-2026-10-01.md)：标题栏修复、专项检查原型与交互式场景台方案。
 - [音频引擎架构](./twilight-audio-engine-architecture.md)
 - [音频引擎 API](./audio-engine-api.md)
 - [安全加固边界](./security-hardening.md)
