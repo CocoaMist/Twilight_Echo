@@ -1,3 +1,4 @@
+import { isHttpOrHttpsUrl } from './httpUrl.ts'
 /**
  * Podcast subscriptions and cached episode metadata.
  * Episode media is streamed from the feed enclosure URL.
@@ -50,20 +51,6 @@ export interface PodcastSubscriptionsDocument {
 export const DEFAULT_PODCAST_SUBSCRIPTIONS: PodcastSubscriptionsDocument = {
   schemaVersion: PODCAST_SUBSCRIPTIONS_SCHEMA_VERSION,
   subscriptions: []
-}
-
-function isHttpOrHttpsUrl(value: string, maxLength = MAX_PODCAST_URL_LENGTH): boolean {
-  if (typeof value !== 'string') return false
-  const trimmed = value.trim()
-  if (!trimmed || trimmed.length > maxLength || /[\0\r\n]/.test(trimmed)) return false
-  try {
-    const parsed = new URL(trimmed)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-    if (parsed.username || parsed.password) return false
-    return true
-  } catch {
-    return false
-  }
 }
 
 export function isPodcastEpisode(value: unknown): value is PodcastEpisode {

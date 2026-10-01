@@ -20,11 +20,14 @@ export function normalizePcmToDsdMode(value: unknown): NonNullable<OutputConfig[
   return value === 'dsd64' || value === 'dsd128' || value === 'dsd256' ? value : 'off'
 }
 
-export function normalizeOutputConfig(config?: Partial<OutputConfig>): OutputConfig {
+export function normalizeOutputConfig(
+  config?: Partial<OutputConfig>,
+  preferredBufferSizeMax = 2048
+): OutputConfig {
   return {
     ...normalizeContinuityOutputConfig(config ?? {}),
     preferredBufferSize: Number.isFinite(config?.preferredBufferSize)
-      ? clampNumber(Math.trunc(config?.preferredBufferSize ?? 0), 0, 2048, 0)
+      ? clampNumber(Math.trunc(config?.preferredBufferSize ?? 0), 0, preferredBufferSizeMax, 0)
       : 0,
     routingMode: normalizeChannelRoutingMode(config?.routingMode),
     wasapiExclusivePushMode: config?.wasapiExclusivePushMode === true,

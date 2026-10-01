@@ -1,3 +1,4 @@
+import { containsGb18030FourByteSequence } from './legacyTextEncoding.ts'
 /**
  * Lyrics decoding is deliberately kept data-only and fatal so every main-process
  * read site (the lazy .lrc loader, the import dialog, and SACD ISO sibling
@@ -60,22 +61,4 @@ function decode(bytes: Uint8Array, encoding: string): string {
   } catch {
     throw new LyricsDecodeError(`Invalid ${encoding} lyrics data`)
   }
-}
-
-function containsGb18030FourByteSequence(bytes: Uint8Array): boolean {
-  for (let index = 0; index + 3 < bytes.byteLength; index += 1) {
-    if (
-      bytes[index] >= 0x81 &&
-      bytes[index] <= 0xfe &&
-      bytes[index + 1] >= 0x30 &&
-      bytes[index + 1] <= 0x39 &&
-      bytes[index + 2] >= 0x81 &&
-      bytes[index + 2] <= 0xfe &&
-      bytes[index + 3] >= 0x30 &&
-      bytes[index + 3] <= 0x39
-    ) {
-      return true
-    }
-  }
-  return false
 }

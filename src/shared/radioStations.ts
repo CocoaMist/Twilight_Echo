@@ -1,3 +1,5 @@
+import { isHttpOrHttpsUrl } from './httpUrl.ts'
+export { isHttpOrHttpsUrl } from './httpUrl.ts'
 /**
  * User-managed internet radio stations.
  * Stored outside the library index so rescans never wipe favorites.
@@ -33,20 +35,6 @@ export interface RadioStationsDocument {
 export const DEFAULT_RADIO_STATIONS: RadioStationsDocument = {
   schemaVersion: RADIO_STATIONS_SCHEMA_VERSION,
   stations: []
-}
-
-export function isHttpOrHttpsUrl(value: string, maxLength = MAX_RADIO_URL_LENGTH): boolean {
-  if (typeof value !== 'string') return false
-  const trimmed = value.trim()
-  if (!trimmed || trimmed.length > maxLength || /[\0\r\n]/.test(trimmed)) return false
-  try {
-    const parsed = new URL(trimmed)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-    if (parsed.username || parsed.password) return false
-    return true
-  } catch {
-    return false
-  }
 }
 
 export function isInsecureHttpUrl(value: string): boolean {

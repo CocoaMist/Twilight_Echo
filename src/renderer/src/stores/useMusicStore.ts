@@ -1,4 +1,14 @@
-import { computed, ref, shallowRef, toRaw, triggerRef, type ComputedRef, type Ref } from 'vue'
+import { buildDerivedCollections } from './library/derivedCollections.ts'
+import { createPlaylistController } from './library/playlistController.ts'
+import type { Playlist, LibraryItem, PlaylistPersistenceNotice } from './library/musicStoreTypes.ts'
+export type {
+  Playlist,
+  PlaylistImportApplyResult,
+  PlaylistBatchMoveResult,
+  PlaylistPersistenceNotice,
+  DerivedTrackGroup
+} from './library/musicStoreTypes.ts'
+import { computed, ref, shallowRef, type ComputedRef, type Ref } from 'vue'
 import type { Track } from '../types/music'
 import type {
   LocalLibraryExclusion,
@@ -12,93 +22,27 @@ import type {
   LocalLibraryScanUpdate
 } from '../../../shared/localLibraryScan.ts'
 import type { LocalLibraryTagPatch } from '../../../shared/localLibraryTags.ts'
-import {
-  isVersionedDataEnvelope,
-  isPersistentDataRevisionConflict,
-  type VersionedDataEnvelope
-} from '../../../shared/versionedPersistence.ts'
 import { syncPluginProviders, useMediaProviders } from '../providers/index.ts'
 import {
   LibraryMetadataEnrichmentQueue,
   type LibraryMetadataEnrichmentStatus,
   type LibraryMetadataEnrichmentTrackUpdate
 } from '../utils/libraryMetadataEnrichment.ts'
-import { getRecordingTrackKey as getLogicalTrackKey } from '@renderer/utils/logicalTrackModel.ts'
-import { musicVersionRevision, getMusicVersions } from '@renderer/stores/musicVersions.ts'
 import { isAggregatePlaylist, sortAggregatePlaylists } from '../utils/aggregatePlaylistView.ts'
-import {
-  buildLogicalTracks,
-  canShareTrackIdentity,
-  preferredSourceKey,
-  getTrackSource,
-  type LogicalTrack
-} from '../utils/logicalTrackModel.ts'
-import { versionSourceKey } from '@renderer/utils/trackSourceIdentity.ts'
+import { getTrackSource } from '../utils/logicalTrackModel.ts'
 import {
   enrichLocalTrackMetadata,
   type MetadataMatchConfidence
 } from '../utils/musicMetadataMatching.ts'
 import { useSettingsStore } from './useSettingsStore.ts'
 import { notifyLocalTracksUnavailable } from '../utils/localTrackRemovalPolicy.ts'
-import { splitGenreValues } from '../../../shared/genreSeparators.ts'
-import { PlaylistPersistence, type PlaylistPersistenceStatus } from './playlistPersistence.ts'
+import { type PlaylistPersistenceStatus } from './playlistPersistence.ts'
 import {
-  exportPlaylistDocument,
-  findPlaylistRelocations,
-  parsePlaylistDocument,
-  reorderStableIds,
-  type PlaylistFileFormat,
-  type PlaylistRelocationResult
-} from '../utils/playlistLifecycle.ts'
-import {
-  clonePlaylist,
-  compareAlbumTrackOrder,
-  deduplicateLibraryPaths,
-  getAlbumIdentity,
   isLocalLibraryTrack,
-  isTrackUnderLibraryRoot,
-  mergeAlbumGroupsByReleaseEvidence,
-  normalizeLibraryPath,
   normalizePortableLibraryPath,
-  parentDirectoryOf,
-  playlistDataEqual,
-  replayPlaylistTransaction,
-  slimPlaylistLegacySnapshots,
+  nonEmptySnapshots,
   toPlaylistTrackSnapshot
 } from './library/musicStoreData.ts'
-
-export interface Playlist {
-  id: string
-  name: string
-  trackIds: string[]
-  trackSnapshots?: Record<string, Track>
-  /** User-selected data URL or cached cover handle. */
-  cover?: string | null
-  isDefault?: boolean
-  createdAt: string
-  updatedAt?: string
-  /**
-   * 聚合歌单：跨音源收歌，同一首歌的多个音源在视图里合并成一行。缺省即普通本地
-   * 歌单，所以旧的 playlists.json 无需迁移。
-   */
-  kind?: 'aggregate'
-  /** 非空表示置顶，按时间倒序排在列表最前。 */
-  pinnedAt?: string | null
-  /** 该聚合歌单里被隐藏的音源 id。 */
-  hiddenSources?: string[]
-  /** 行锚点 trackId → 用户为这一行选定的音源 id。 */
-  variantPreferences?: Record<string, string>
-}
-
-interface LibraryItem {
-  id?: string
-  name: string
-  trackCount: number
-  tracks: Track[]
-  cover: string | null
-  artist?: string
-  path?: string
-}
 
 interface AddTracksOptions {
   deferRebuild?: boolean
@@ -109,25 +53,6 @@ interface ManualMetadataMatchOptions {
   score: number
 }
 
-export interface PlaylistImportApplyResult {
-  playlistId: string
-  importedCount: number
-  unresolvedEntries: number
-  warnings: string[]
-}
-
-export interface PlaylistBatchMoveResult {
-  moved: number
-  sourceRemoved: number
-}
-
-export interface PlaylistPersistenceNotice {
-  kind: 'revision-conflict-recovered'
-  message: string
-  authoritativeRevision: number
-  recoveredAt: string
-}
-
 interface LibraryRepairReport {
   checkedAt: string
   repairedCount: number
@@ -136,17 +61,9 @@ interface LibraryRepairReport {
   unresolvedTrackIds: string[]
 }
 
-export interface DerivedTrackGroup {
-  tracks: Track[]
-  cover: string | null
-  artist?: string
-}
-
 type LibraryChange =
   | { kind: 'add' | 'remove' | 'unknown'; path?: string }
   | { kind: 'scan'; update: LocalLibraryScanUpdate }
-
-const DEFAULT_FAVORITE_PLAYLIST_NAME = '我收藏的音乐'
 
 const tracks = shallowRef<Track[]>([])
 const scannedFolders = ref<string[]>([])
@@ -156,7 +73,7 @@ const albums = shallowRef<LibraryItem[]>([])
 const genres = shallowRef<LibraryItem[]>([])
 const folders = shallowRef<LibraryItem[]>([])
 // 歌单内含完整 trackSnapshots，深度代理代价高。所有变更（替换与就地修改）都
-// 汇入 queuePlaylistPersistence，统一在那里 triggerRef，见下。
+// 汇入 playlistState.queuePlaylistPersistence，统一在那里 triggerRef。
 const playlists = shallowRef<Playlist[]>([])
 // 聚合歌单与普通歌单共用 playlists.json，靠 kind 分流；这两个视图让消费方不必
 // 各自过滤，也保证普通"歌单"页永远看不到聚合歌单。
@@ -202,18 +119,6 @@ const trackByPath = new Map<string, Track>()
 const trackIndexById = new Map<string, number>()
 let derivedCollectionsInitialized = false
 let tracksRevision = 0
-let localLogicalTrackMapRevision = -1
-let localLogicalVersionRevision = -1
-let localLogicalTrackMapCache = new Map<string, LogicalTrack>()
-let playlistIdentityCache: {
-  playlist: Playlist
-  trackIds: string[]
-  snapshots: Record<string, Track> | undefined
-  tracksRevision: number
-  versionRevision: number
-  ids: Set<string>
-  snapshotsByLogicalKey: Map<string, Track[]>
-} | null = null
 
 // Rebuild coalescing state — module-level so it persists across useMusicStore() calls.
 let rebuildScheduled = false
@@ -227,9 +132,6 @@ let libraryMutationGeneration = 0
 let libraryRemovalOperations = 0
 let librarySaveRetryDelayMs = 500
 let pendingRejectedRemoval: { selectedTracks: Track[] } | null = null
-let playlistsRevision = 0
-let playlistAuthoritativeSnapshot: Playlist[] = []
-let playlistPersistence: PlaylistPersistence<Playlist[]> | null = null
 
 // Background post-load state lets callers await enrichment without blocking first render.
 let librarySettlementInFlight: Promise<void> | null = null
@@ -238,7 +140,20 @@ let metadataProviderSync: Promise<void> | null = null
 const pendingMetadataEnrichmentUpdates = new Map<string, LibraryMetadataEnrichmentTrackUpdate>()
 let metadataEnrichmentFlushScheduled = false
 
-export function useMusicStore(): {
+const { clonePlaylistSnapshot, queuePlaylistPersistence, ...playlistCommands } =
+  createPlaylistController({
+    playlists,
+    tracks,
+    trackById,
+    getTracksRevision: () => tracksRevision,
+    playlistPersistenceStatus,
+    playlistPersistenceNotice
+  })
+
+export function useMusicStore(): Omit<
+  ReturnType<typeof createPlaylistController>,
+  'clonePlaylistSnapshot' | 'queuePlaylistPersistence'
+> & {
   tracks: Ref<Track[]>
   artists: Ref<LibraryItem[]>
   albums: Ref<LibraryItem[]>
@@ -268,64 +183,13 @@ export function useMusicStore(): {
     options: ManualMetadataMatchOptions
   ) => boolean
   clearTracks: () => void
-  createPlaylist: (name: string) => string
-  createPlaylistWithTracks: (name: string, playlistTracks: Track[]) => string
-  renamePlaylist: (playlistId: string, name: string) => boolean
-  setPlaylistCover: (playlistId: string, cover: string | null) => boolean
-  copyPlaylist: (playlistId: string, name: string) => string | null
-  reorderPlaylistTracks: (
-    playlistName: string,
-    trackIds: Iterable<string>,
-    targetIndex: number
-  ) => boolean
-  movePlaylistTracks: (
-    sourcePlaylistName: string,
-    targetPlaylistName: string,
-    trackIds: Iterable<string>
-  ) => PlaylistBatchMoveResult
-  importPlaylistDocument: (
-    name: string,
-    fileName: string,
-    contents: string
-  ) => PlaylistImportApplyResult
-  exportPlaylistDocument: (playlistName: string, format: PlaylistFileFormat) => string | null
-  repairPlaylistMissingTracks: (
-    playlistName: string,
-    candidates: Track[]
-  ) => PlaylistRelocationResult
-  addToPlaylist: (playlistName: string, trackId: string, trackSnapshot?: Track) => void
-  addTracksToPlaylist: (playlistName: string, playlistTracks: Track[]) => number
-  removeFromPlaylist: (playlistName: string, trackId: string) => void
-  removeTracksFromPlaylist: (playlistName: string, trackIds: Iterable<string>) => number
   replaceTrackReference: (oldTrackId: string, replacementTrack: Track) => number
   applyBpmAnalysis: (trackId: string, filePath: string, analysis: Track['bpmAnalysis']) => boolean
   clearBpmAnalysis: () => boolean
-  isFavoriteTrack: (track: Track) => boolean
-  /** True when the favorites playlist changed; false when an equivalent entry already covered it. */
-  addFavoriteTrack: (track: Track) => boolean
-  /** True when the favorites playlist changed; false when nothing matched. */
-  removeFavoriteTrack: (track: Track) => boolean
-  setFavoriteTracks: (favoriteTracks: Track[], favorite: boolean) => number
-  deletePlaylist: (playlistId: string) => void
-  getPlaylistTracks: (playlistName: string) => Track[]
   /** 聚合歌单，置顶优先排序。 */
   aggregatePlaylists: ComputedRef<Playlist[]>
   /** 普通本地歌单（不含聚合歌单）。 */
   localPlaylists: ComputedRef<Playlist[]>
-  createAggregatePlaylist: (name: string) => string
-  setPlaylistPinned: (playlistId: string, pinned: boolean) => boolean
-  setPlaylistHiddenSources: (playlistId: string, sources: string[]) => boolean
-  setPlaylistVariantPreference: (
-    playlistId: string,
-    anchorTrackId: string,
-    source: string | null
-  ) => boolean
-  addTracksToPlaylistById: (playlistId: string, playlistTracks: Track[]) => number
-  removeTracksFromPlaylistById: (playlistId: string, trackIds: Iterable<string>) => number
-  getPlaylistTracksById: (playlistId: string) => Track[]
-  savePlaylists: () => Promise<void>
-  flushPlaylists: () => Promise<boolean>
-  loadPlaylists: () => Promise<void>
   saveLibrary: () => Promise<void>
   scheduleSaveLibrary: () => Promise<void>
   flushSaveLibrary: () => void
@@ -351,6 +215,20 @@ export function useMusicStore(): {
   getRebuildCount: () => number
   getTrackById: (trackId: string) => Track | undefined
 } {
+  function rebuildDerivedCollections(): void {
+    rebuildTrackLookupIndexes()
+    const { settings } = useSettingsStore()
+    const collections = buildDerivedCollections(
+      tracks.value,
+      [...scannedFolders.value, ...settings.value.libraryFolders],
+      settings.value.genreSeparators
+    )
+    artists.value = collections.artists
+    albums.value = collections.albums
+    genres.value = collections.genres
+    folders.value = collections.folders
+  }
+
   function setTracks(nextTracks: Track[], options: { rebuildIndexes?: boolean } = {}): void {
     tracks.value = nextTracks
     tracksRevision++
@@ -383,165 +261,6 @@ export function useMusicStore(): {
     trackById.set(nextTrack.id, nextTrack)
     trackByPath.set(nextTrack.filePath, nextTrack)
     trackIndexById.set(nextTrack.id, index)
-  }
-
-  function rebuildDerivedCollections(): void {
-    rebuildTrackLookupIndexes()
-    const { settings } = useSettingsStore()
-    const artistMap = new Map<string, DerivedTrackGroup>()
-    const albumMap = new Map<string, DerivedTrackGroup>()
-    const genreMap = new Map<string, DerivedTrackGroup>()
-
-    function addToGroup(
-      map: Map<string, DerivedTrackGroup>,
-      key: string,
-      track: Track,
-      artist?: string
-    ): void {
-      let group = map.get(key)
-      if (!group) {
-        group = { tracks: [], cover: null, artist }
-        map.set(key, group)
-      }
-      group.tracks.push(track)
-      if (!group.cover && track.cover) group.cover = track.cover
-    }
-
-    for (const track of tracks.value) {
-      const artistName = track.artist || '未知艺术家'
-      addToGroup(artistMap, artistName, track)
-
-      addToGroup(albumMap, getAlbumIdentity(track), track, track.albumArtist || track.artist)
-
-      const genreNames = splitGenreValues(track.genre, settings.value.genreSeparators)
-      if (genreNames.length === 0) {
-        addToGroup(genreMap, '未知流派', track)
-      } else {
-        for (const genreName of genreNames) addToGroup(genreMap, genreName, track)
-      }
-    }
-
-    artists.value = Array.from(artistMap.entries())
-      .map(([name, group]) => ({
-        name,
-        trackCount: group.tracks.length,
-        tracks: group.tracks,
-        cover: group.cover
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'zh'))
-
-    const mergedAlbumMap = mergeAlbumGroupsByReleaseEvidence(albumMap)
-    albums.value = Array.from(mergedAlbumMap.entries())
-      .map(([id, group]) => {
-        const ordered = [...group.tracks].sort(compareAlbumTrackOrder)
-        return {
-          id,
-          name: ordered[0]?.album || '未知专辑',
-          trackCount: ordered.length,
-          tracks: ordered,
-          cover: group.cover,
-          artist: group.artist || ordered[0]?.artist || '未知艺术家'
-        }
-      })
-      .sort((a, b) => a.name.localeCompare(b.name, 'zh') || (a.id ?? '').localeCompare(b.id ?? ''))
-
-    genres.value = Array.from(genreMap.entries())
-      .map(([name, group]) => ({
-        name,
-        trackCount: group.tracks.length,
-        tracks: group.tracks,
-        cover: group.cover
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'zh'))
-
-    const configuredFolderPaths = deduplicateLibraryPaths([
-      ...scannedFolders.value,
-      ...settings.value.libraryFolders
-    ])
-    const configuredFolderRoots = configuredFolderPaths.map((folderPath) => ({
-      folderPath,
-      normalized: normalizeLibraryPath(folderPath)
-    }))
-    type FolderGroup = {
-      folderPath: string
-      normalized: string
-      tracks: Track[]
-      cover: string | null
-    }
-    const folderGroups = new Map<string, FolderGroup>()
-    const ensureFolderGroup = (folderPath: string): void => {
-      const normalized = normalizeLibraryPath(folderPath)
-      if (!normalized || folderGroups.has(normalized)) return
-      folderGroups.set(normalized, {
-        folderPath,
-        normalized,
-        tracks: [],
-        cover: null
-      })
-    }
-    const addTrackToFolderGroup = (group: FolderGroup | undefined, track: Track): void => {
-      if (!group) return
-      group.tracks.push(track)
-      if (!group.cover && track.cover) group.cover = track.cover
-    }
-
-    for (const root of configuredFolderRoots) ensureFolderGroup(root.folderPath)
-
-    if (configuredFolderRoots.length === 0) {
-      for (const track of tracks.value) {
-        ensureFolderGroup(track.dir?.trim() || parentDirectoryOf(track.filePath))
-      }
-    }
-
-    for (const track of tracks.value) {
-      if (configuredFolderRoots.length === 0) {
-        const trackDirectory = track.dir?.trim() || parentDirectoryOf(track.filePath)
-        addTrackToFolderGroup(folderGroups.get(normalizeLibraryPath(trackDirectory)), track)
-        continue
-      }
-
-      const matchingRoots = configuredFolderRoots.filter((root) =>
-        isTrackUnderLibraryRoot(track.filePath, root.normalized)
-      )
-      if (matchingRoots.length === 0) continue
-      const metadataDirectory = track.dir?.trim() || parentDirectoryOf(track.filePath)
-      const currentDirectoryIsBounded = matchingRoots.some((root) =>
-        isTrackUnderLibraryRoot(metadataDirectory, root.normalized)
-      )
-      let currentDirectory = currentDirectoryIsBounded
-        ? metadataDirectory
-        : parentDirectoryOf(track.filePath)
-      const remainingRootPaths = new Set(matchingRoots.map((root) => root.normalized))
-      while (currentDirectory) {
-        const normalizedCurrent = normalizeLibraryPath(currentDirectory)
-        const group = folderGroups.get(normalizedCurrent)
-        if (!group) {
-          ensureFolderGroup(currentDirectory)
-        }
-        addTrackToFolderGroup(folderGroups.get(normalizedCurrent), track)
-        remainingRootPaths.delete(normalizedCurrent)
-        if (remainingRootPaths.size === 0) break
-        const parent = parentDirectoryOf(currentDirectory)
-        if (!parent || parent === currentDirectory) break
-        currentDirectory = parent
-      }
-    }
-
-    folders.value = [...folderGroups.values()]
-      .map(({ folderPath, normalized, tracks: folderTracks, cover }) => {
-        const name = normalized.split(/[\\/]/).pop() || folderPath
-        return {
-          name,
-          path: folderPath,
-          trackCount: folderTracks.length,
-          tracks: folderTracks,
-          cover
-        }
-      })
-      .filter((f) => f.trackCount > 0)
-      .sort(
-        (a, b) => a.name.localeCompare(b.name, 'zh') || (a.path ?? '').localeCompare(b.path ?? '')
-      )
   }
 
   function librarySnapshot(): { revision: number; tracks: Track[]; folders: string[] } {
@@ -1206,368 +925,6 @@ export function useMusicStore(): {
     rebuildDerivedCollections()
   }
 
-  function clonePlaylistSnapshot(source: Playlist[] = playlists.value): Playlist[] {
-    // Freeze the queued transaction and strip Vue proxies before it reaches the
-    // persistence queue. toRaw unwraps the reactive root (nested storage stays
-    // raw); the JSON fallback covers a reactive proxy ever nested in the tree,
-    // which Chromium's structuredClone serializer rejects outright.
-    const raw = toRaw(source)
-    try {
-      return structuredClone(raw)
-    } catch {
-      return JSON.parse(JSON.stringify(raw)) as Playlist[]
-    }
-  }
-
-  function getPlaylistPersistence(): PlaylistPersistence<Playlist[]> {
-    if (playlistPersistence) return playlistPersistence
-    playlistPersistence = new PlaylistPersistence({
-      write: persistPlaylistSnapshot,
-      onStatus: (status) => {
-        playlistPersistenceStatus.value = status
-      },
-      flushDelayMs: 250,
-      retryDelayMs: 1_000,
-      // queuePlaylistPersistence only ever enqueues clonePlaylistSnapshot()
-      // results (frozen plain data), so the queue does not need to re-clone.
-      cloneSnapshot: (snapshot) => snapshot
-    })
-    return playlistPersistence
-  }
-
-  function queuePlaylistPersistence(
-    base = clonePlaylistSnapshot(playlistAuthoritativeSnapshot)
-  ): void {
-    playlistIdentityCache = null
-    // playlists 是 shallowRef：就地修改（trackIds/trackSnapshots/name/cover）不会
-    // 自动通知，所有变更路径都在此汇合，统一触发。
-    triggerRef(playlists)
-    getPlaylistPersistence().enqueue(clonePlaylistSnapshot(), base)
-  }
-
-  /**
-   * 按名字查找歌单时一律排除聚合歌单。聚合歌单只能通过 id 访问，所以它和普通
-   * 歌单可以同名，而所有既有的 by-name API 都不会被它劫持。
-   */
-  function findLocalPlaylistByName(name: string): Playlist | undefined {
-    return playlists.value.find((item) => !isAggregatePlaylist(item) && item.name === name)
-  }
-
-  /** 重名校验只在同一类歌单内进行——两类是两个命名空间。 */
-  function hasSiblingPlaylistName(playlist: Playlist, name: string): boolean {
-    return playlists.value.some(
-      (item) =>
-        item.id !== playlist.id &&
-        isAggregatePlaylist(item) === isAggregatePlaylist(playlist) &&
-        item.name === name
-    )
-  }
-
-  function ensurePlaylist(name: string, options: { isDefault?: boolean } = {}): Playlist {
-    const existing = findLocalPlaylistByName(name)
-    if (existing) return existing
-    const playlist: Playlist = {
-      id: `pl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      name,
-      trackIds: [],
-      ...(options.isDefault ? { isDefault: true } : {}),
-      createdAt: new Date().toISOString()
-    }
-    playlists.value = [...playlists.value, playlist]
-    return playlist
-  }
-
-  function createPlaylist(name: string): string {
-    const existing = findLocalPlaylistByName(name)
-    if (existing) return existing.id
-    const base = clonePlaylistSnapshot()
-    const playlist = ensurePlaylist(name)
-    queuePlaylistPersistence(base)
-    return playlist.id
-  }
-
-  function createPlaylistWithTracks(name: string, playlistTracks: Track[]): string {
-    const base = clonePlaylistSnapshot()
-    const existing = findLocalPlaylistByName(name)
-    const playlist = existing ?? ensurePlaylist(name)
-    const changed = appendTracksToPlaylist(playlist, playlistTracks)
-    if (!existing || changed) queuePlaylistPersistence(base)
-    return playlist.id
-  }
-
-  function normalizePlaylistName(value: string): string {
-    const normalized = value.trim().replace(/\s+/g, ' ')
-    if (!normalized) throw new Error('歌单名称不能为空')
-    if (normalized.length > 80) throw new Error('歌单名称不能超过 80 个字符')
-    return normalized
-  }
-
-  function touchPlaylist(playlist: Playlist): void {
-    playlist.updatedAt = new Date().toISOString()
-  }
-
-  function renamePlaylist(playlistId: string, name: string): boolean {
-    const playlist = playlists.value.find((item) => item.id === playlistId)
-    if (!playlist) return false
-    const normalizedName = normalizePlaylistName(name)
-    if (playlist.name === normalizedName) return false
-    if (hasSiblingPlaylistName(playlist, normalizedName)) {
-      throw new Error('已存在同名歌单')
-    }
-    const base = clonePlaylistSnapshot()
-    playlist.name = normalizedName
-    touchPlaylist(playlist)
-    queuePlaylistPersistence(base)
-    return true
-  }
-
-  function setPlaylistCover(playlistId: string, cover: string | null): boolean {
-    const playlist = playlists.value.find((item) => item.id === playlistId)
-    if (!playlist) return false
-    const nextCover = cover?.trim() || null
-    if (nextCover && nextCover.length > 8 * 1024 * 1024) {
-      throw new Error('歌单封面数据超过 8 MiB 上限')
-    }
-    if (nextCover && !/^(data:image\/(?:png|jpeg|webp);base64,|cover:\/\/)/i.test(nextCover)) {
-      throw new Error('歌单封面必须是受支持的图片数据')
-    }
-    if ((playlist.cover ?? null) === nextCover) return false
-    const base = clonePlaylistSnapshot()
-    playlist.cover = nextCover
-    touchPlaylist(playlist)
-    queuePlaylistPersistence(base)
-    return true
-  }
-
-  function copyPlaylist(playlistId: string, name: string): string | null {
-    const source = playlists.value.find((item) => item.id === playlistId)
-    if (!source) return null
-    const normalizedName = normalizePlaylistName(name)
-    if (hasSiblingPlaylistName(source, normalizedName)) {
-      throw new Error('已存在同名歌单')
-    }
-    const base = clonePlaylistSnapshot()
-    const now = new Date().toISOString()
-    const copy: Playlist = {
-      ...clonePlaylist(source),
-      id: `pl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      name: normalizedName,
-      isDefault: false,
-      createdAt: now,
-      updatedAt: now
-    }
-    playlists.value = [...playlists.value, copy]
-    queuePlaylistPersistence(base)
-    return copy.id
-  }
-
-  function reorderPlaylistTracks(
-    playlistName: string,
-    trackIds: Iterable<string>,
-    targetIndex: number
-  ): boolean {
-    const playlist = findLocalPlaylistByName(playlistName)
-    if (!playlist || !Number.isInteger(targetIndex)) return false
-    const nextTrackIds = reorderStableIds(playlist.trackIds, trackIds, targetIndex)
-    if (playlistDataEqual(nextTrackIds, playlist.trackIds)) return false
-    const base = clonePlaylistSnapshot()
-    playlist.trackIds = nextTrackIds
-    touchPlaylist(playlist)
-    queuePlaylistPersistence(base)
-    return true
-  }
-
-  function movePlaylistTracks(
-    sourcePlaylistName: string,
-    targetPlaylistName: string,
-    trackIds: Iterable<string>
-  ): PlaylistBatchMoveResult {
-    const source = findLocalPlaylistByName(sourcePlaylistName)
-    const target = findLocalPlaylistByName(targetPlaylistName)
-    if (!source || !target || source === target) return { moved: 0, sourceRemoved: 0 }
-    const selected = new Set(trackIds)
-    if (selected.size === 0) return { moved: 0, sourceRemoved: 0 }
-    const sourceIds = source.trackIds.filter((id) => selected.has(id))
-    if (sourceIds.length === 0) return { moved: 0, sourceRemoved: 0 }
-    const base = clonePlaylistSnapshot()
-    const targetKnown = new Set(target.trackIds)
-    const nextTargetIds = target.trackIds.slice()
-    const nextTargetSnapshots = { ...(target.trackSnapshots ?? {}) }
-    let moved = 0
-    for (const id of sourceIds) {
-      if (!targetKnown.has(id)) {
-        targetKnown.add(id)
-        nextTargetIds.push(id)
-        moved++
-      }
-      const snapshot = source.trackSnapshots?.[id] ?? trackById.get(id)
-      if (snapshot && !nextTargetSnapshots[id])
-        nextTargetSnapshots[id] = toPlaylistTrackSnapshot(snapshot)
-    }
-    source.trackIds = source.trackIds.filter((id) => !selected.has(id))
-    if (source.trackSnapshots) {
-      const nextSourceSnapshots = { ...source.trackSnapshots }
-      for (const id of selected) delete nextSourceSnapshots[id]
-      source.trackSnapshots =
-        Object.keys(nextSourceSnapshots).length > 0 ? nextSourceSnapshots : undefined
-    }
-    target.trackIds = nextTargetIds
-    target.trackSnapshots =
-      Object.keys(nextTargetSnapshots).length > 0 ? nextTargetSnapshots : undefined
-    touchPlaylist(source)
-    touchPlaylist(target)
-    queuePlaylistPersistence(base)
-    return { moved, sourceRemoved: sourceIds.length }
-  }
-
-  function importPlaylistDocument(
-    name: string,
-    fileName: string,
-    contents: string
-  ): PlaylistImportApplyResult {
-    const parsed = parsePlaylistDocument(contents, fileName)
-    const normalizedName = normalizePlaylistName(name)
-    const byPath = new Map<string, Track>()
-    for (const track of tracks.value)
-      byPath.set(normalizePortableLibraryPath(track.filePath), track)
-    const imported: Track[] = []
-    let unresolvedEntries = 0
-    for (const entry of parsed.entries) {
-      const normalizedPath = normalizePortableLibraryPath(entry.path)
-      let matched = byPath.get(normalizedPath)
-      if (!matched && !/^[a-zA-Z]:\\/.test(normalizedPath) && !normalizedPath.startsWith('\\')) {
-        const suffix = `\\${normalizedPath}`
-        const candidates = tracks.value.filter((track) =>
-          normalizePortableLibraryPath(track.filePath).endsWith(suffix)
-        )
-        if (candidates.length === 1) matched = candidates[0]
-      }
-      if (matched) imported.push(matched)
-      else unresolvedEntries++
-    }
-    const base = clonePlaylistSnapshot()
-    const existing = findLocalPlaylistByName(normalizedName)
-    const playlist = existing ?? ensurePlaylist(normalizedName)
-    const changed = appendTracksToPlaylist(playlist, imported)
-    if (changed || !existing) {
-      touchPlaylist(playlist)
-      queuePlaylistPersistence(base)
-    }
-    return {
-      playlistId: playlist.id,
-      importedCount: imported.length,
-      unresolvedEntries,
-      warnings: parsed.warnings
-    }
-  }
-
-  function exportPlaylistDocumentForStore(
-    playlistName: string,
-    format: PlaylistFileFormat
-  ): string | null {
-    const playlist = findLocalPlaylistByName(playlistName)
-    if (!playlist) return null
-    return exportPlaylistDocument(getPlaylistTracks(playlistName), format)
-  }
-
-  function repairPlaylistMissingTracks(
-    playlistName: string,
-    candidates: Track[]
-  ): PlaylistRelocationResult {
-    const playlist = findLocalPlaylistByName(playlistName)
-    if (!playlist) return { relocations: [], unresolvedTrackIds: [], ambiguousTrackIds: [] }
-    const missing = playlist.trackIds
-      .filter((id) => !trackById.has(id))
-      .map((id) => playlist.trackSnapshots?.[id])
-      .filter((track): track is Track => !!track && getTrackSource(track) === 'local')
-    const result = findPlaylistRelocations(missing, candidates)
-    if (result.relocations.length === 0) return result
-    const base = clonePlaylistSnapshot()
-    const replacements = new Map(result.relocations.map((item) => [item.trackId, item.toTrack]))
-    const nextTrackIds: string[] = []
-    const snapshots: Record<string, Track> = { ...(playlist.trackSnapshots ?? {}) }
-    const seen = new Set<string>()
-    for (const id of playlist.trackIds) {
-      const replacement = replacements.get(id)
-      const nextId = replacement?.id ?? id
-      if (seen.has(nextId)) continue
-      seen.add(nextId)
-      nextTrackIds.push(nextId)
-      if (replacement) {
-        delete snapshots[id]
-        snapshots[nextId] = toPlaylistTrackSnapshot(replacement)
-      }
-    }
-    playlist.trackIds = nextTrackIds
-    playlist.trackSnapshots = Object.keys(snapshots).length > 0 ? snapshots : undefined
-    touchPlaylist(playlist)
-    queuePlaylistPersistence(base)
-    return result
-  }
-
-  function deletePlaylist(playlistId: string): void {
-    const pl = playlists.value.find((p) => p.id === playlistId)
-    if (!pl || pl.isDefault) return
-    const base = clonePlaylistSnapshot()
-    playlists.value = playlists.value.filter((p) => p.id !== playlistId)
-    queuePlaylistPersistence(base)
-  }
-
-  function addToPlaylist(playlistName: string, trackId: string, trackSnapshot?: Track): void {
-    const track = trackSnapshot ?? trackById.get(trackId)
-    if (track) {
-      addTracksToPlaylist(playlistName, [track])
-      return
-    }
-    const playlist = findLocalPlaylistByName(playlistName)
-    if (!playlist || playlist.trackIds.includes(trackId)) return
-    const base = clonePlaylistSnapshot()
-    playlist.trackIds = [...playlist.trackIds, trackId]
-    queuePlaylistPersistence(base)
-  }
-
-  function appendTracksToPlaylist(playlist: Playlist, playlistTracks: Track[]): boolean {
-    const knownIds = new Set(playlist.trackIds)
-    const nextTrackIds = playlist.trackIds.slice()
-    const nextSnapshots = { ...(playlist.trackSnapshots ?? {}) }
-    let changed = false
-    for (const track of playlistTracks) {
-      if (!knownIds.has(track.id)) {
-        knownIds.add(track.id)
-        nextTrackIds.push(track.id)
-        changed = true
-      }
-      const snapshot = toPlaylistTrackSnapshot(track)
-      if (!nextSnapshots[track.id]) {
-        nextSnapshots[track.id] = snapshot
-        changed = true
-      }
-    }
-    if (!changed) return false
-    playlist.trackIds = nextTrackIds
-    playlist.trackSnapshots = Object.keys(nextSnapshots).length > 0 ? nextSnapshots : undefined
-    return true
-  }
-
-  function addTracksToPlaylistRecord(playlist: Playlist, playlistTracks: Track[]): number {
-    if (playlistTracks.length === 0) return 0
-    const base = clonePlaylistSnapshot()
-    const beforeCount = playlist.trackIds.length
-    const changed = appendTracksToPlaylist(playlist, playlistTracks)
-    if (changed) queuePlaylistPersistence(base)
-    return playlist.trackIds.length - beforeCount
-  }
-
-  function addTracksToPlaylist(playlistName: string, playlistTracks: Track[]): number {
-    const playlist = findLocalPlaylistByName(playlistName)
-    return playlist ? addTracksToPlaylistRecord(playlist, playlistTracks) : 0
-  }
-
-  function addTracksToPlaylistById(playlistId: string, playlistTracks: Track[]): number {
-    const playlist = playlists.value.find((item) => item.id === playlistId)
-    return playlist ? addTracksToPlaylistRecord(playlist, playlistTracks) : 0
-  }
-
   function getLibraryMetadataEnrichmentQueue(): LibraryMetadataEnrichmentQueue {
     if (libraryMetadataEnrichmentQueue) return libraryMetadataEnrichmentQueue
     libraryMetadataEnrichmentQueue = new LibraryMetadataEnrichmentQueue({
@@ -1656,228 +1013,6 @@ export function useMusicStore(): {
     void scheduleSaveLibrary()
   }
 
-  function removeFromPlaylist(playlistName: string, trackId: string): void {
-    removeTracksFromPlaylist(playlistName, [trackId])
-  }
-
-  function removeTracksFromPlaylistRecord(playlist: Playlist, trackIds: Iterable<string>): number {
-    const removedIds = new Set(trackIds)
-    if (removedIds.size === 0) return 0
-    const nextTrackIds = playlist.trackIds.filter((trackId) => !removedIds.has(trackId))
-    const removedCount = playlist.trackIds.length - nextTrackIds.length
-    if (removedCount === 0) return 0
-    const base = clonePlaylistSnapshot()
-    playlist.trackIds = nextTrackIds
-    if (playlist.trackSnapshots) {
-      const nextSnapshots = { ...playlist.trackSnapshots }
-      for (const trackId of removedIds) delete nextSnapshots[trackId]
-      playlist.trackSnapshots = Object.keys(nextSnapshots).length > 0 ? nextSnapshots : undefined
-    }
-    queuePlaylistPersistence(base)
-    return removedCount
-  }
-
-  function removeTracksFromPlaylist(playlistName: string, trackIds: Iterable<string>): number {
-    const playlist = findLocalPlaylistByName(playlistName)
-    return playlist ? removeTracksFromPlaylistRecord(playlist, trackIds) : 0
-  }
-
-  function removeTracksFromPlaylistById(playlistId: string, trackIds: Iterable<string>): number {
-    const playlist = playlists.value.find((item) => item.id === playlistId)
-    return playlist ? removeTracksFromPlaylistRecord(playlist, trackIds) : 0
-  }
-
-  function getDefaultFavoritePlaylist(): Playlist | null {
-    return (
-      playlists.value.find((playlist) => playlist.isDefault) ??
-      findLocalPlaylistByName(DEFAULT_FAVORITE_PLAYLIST_NAME) ??
-      null
-    )
-  }
-
-  function getPlaylistTrackSnapshot(playlist: Playlist, trackId: string): Track | undefined {
-    return trackById.get(trackId) ?? playlist.trackSnapshots?.[trackId]
-  }
-
-  function getPlaylistIdentity(playlist: Playlist): {
-    ids: Set<string>
-    snapshotsByLogicalKey: Map<string, Track[]>
-  } {
-    if (
-      playlistIdentityCache &&
-      playlistIdentityCache.playlist === playlist &&
-      playlistIdentityCache.trackIds === playlist.trackIds &&
-      playlistIdentityCache.snapshots === playlist.trackSnapshots &&
-      playlistIdentityCache.tracksRevision === tracksRevision &&
-      playlistIdentityCache.versionRevision === musicVersionRevision.value
-    ) {
-      return playlistIdentityCache
-    }
-
-    // Keyed by title+artist, but the bucket keeps every snapshot: two different
-    // recordings can share that key, so callers compare the candidates instead
-    // of treating the key itself as the identity.
-    const ids = new Set<string>()
-    const snapshotsByLogicalKey = new Map<string, Track[]>()
-    for (const trackId of playlist.trackIds) {
-      ids.add(trackId)
-      const snapshot = getPlaylistTrackSnapshot(playlist, trackId)
-      if (!snapshot) continue
-      const key = getLogicalTrackKey(snapshot)
-      const bucket = snapshotsByLogicalKey.get(key)
-      if (bucket) bucket.push(snapshot)
-      else snapshotsByLogicalKey.set(key, [snapshot])
-    }
-    playlistIdentityCache = {
-      playlist,
-      trackIds: playlist.trackIds,
-      snapshots: playlist.trackSnapshots,
-      tracksRevision,
-      versionRevision: musicVersionRevision.value,
-      ids,
-      snapshotsByLogicalKey
-    }
-    return playlistIdentityCache
-  }
-
-  function resolvePlaylistTrack(
-    playlist: Playlist,
-    trackId: string,
-    getLocalLogicalTracks: () => Map<string, LogicalTrack>
-  ): Track | undefined {
-    const exact = trackById.get(trackId)
-    if (exact) return exact
-    const snapshot = playlist.trackSnapshots?.[trackId]
-    if (!snapshot) return undefined
-    const key = getLogicalTrackKey(snapshot)
-    // Variants are ordered best-first, so this takes the best local file that is
-    // actually the same recording rather than any same-titled neighbour.
-    const localReplacement = getLocalLogicalTracks()
-      .get(key)
-      ?.variants.find(
-        (variant) =>
-          canShareTrackIdentity(snapshot, variant.track) &&
-          (!preferredSourceKey(snapshot) ||
-            versionSourceKey(variant.track) === preferredSourceKey(snapshot))
-      )?.track
-    if (localReplacement) return localReplacement
-    return getTrackSource(snapshot) === 'local' ? undefined : snapshot
-  }
-
-  function getLocalLogicalTrackMap(): Map<string, LogicalTrack> {
-    getMusicVersions()
-    if (
-      localLogicalTrackMapRevision === tracksRevision &&
-      localLogicalVersionRevision === musicVersionRevision.value
-    ) {
-      return localLogicalTrackMapCache
-    }
-
-    const result = new Map<string, LogicalTrack>()
-    const localInputs = (function* () {
-      for (const track of tracks.value) {
-        if (getTrackSource(track) !== 'local') continue
-        yield {
-          track,
-          source: 'local' as const,
-          sourceName: '本地音乐',
-          providerAvailable: true
-        }
-      }
-    })()
-
-    for (const logicalTrack of buildLogicalTracks(localInputs)) {
-      const key = getLogicalTrackKey(logicalTrack.preferredTrack)
-      const existing = result.get(key)
-      if (existing) existing.variants.push(...logicalTrack.variants)
-      else result.set(key, { ...logicalTrack, variants: [...logicalTrack.variants] })
-    }
-    localLogicalTrackMapCache = result
-    localLogicalTrackMapRevision = tracksRevision
-    localLogicalVersionRevision = musicVersionRevision.value
-    return result
-  }
-
-  function isFavoriteTrack(track: Track): boolean {
-    const playlist = getDefaultFavoritePlaylist()
-    if (!playlist) return false
-    const identity = getPlaylistIdentity(playlist)
-    if (identity.ids.has(track.id)) return true
-    const candidates = identity.snapshotsByLogicalKey.get(getLogicalTrackKey(track))
-    return candidates?.some((candidate) => canShareTrackIdentity(candidate, track)) ?? false
-  }
-
-  function addFavoriteTrack(track: Track): boolean {
-    return setFavoriteTracks([track], true) > 0
-  }
-
-  function removeFavoriteTrack(track: Track): boolean {
-    return setFavoriteTracks([track], false) > 0
-  }
-
-  function setFavoriteTracks(favoriteTracks: Track[], favorite: boolean): number {
-    if (favoriteTracks.length === 0) return 0
-    const playlist = getDefaultFavoritePlaylist()
-    if (favorite) {
-      const base = clonePlaylistSnapshot()
-      const target = playlist ?? ensurePlaylist(DEFAULT_FAVORITE_PLAYLIST_NAME, { isDefault: true })
-      const identity = getPlaylistIdentity(target)
-      const knownIds = new Set(identity.ids)
-      // Copy the buckets: the map above is cached and must not be mutated.
-      const knownByLogicalKey = new Map<string, Track[]>()
-      for (const [key, snapshots] of identity.snapshotsByLogicalKey) {
-        knownByLogicalKey.set(key, [...snapshots])
-      }
-      const toAdd = favoriteTracks.filter((track) => {
-        if (knownIds.has(track.id)) return false
-        const logicalKey = getLogicalTrackKey(track)
-        const known = knownByLogicalKey.get(logicalKey)
-        if (known?.some((candidate) => canShareTrackIdentity(candidate, track))) return false
-        knownIds.add(track.id)
-        if (known) known.push(track)
-        else knownByLogicalKey.set(logicalKey, [track])
-        return true
-      })
-      const created = !playlist
-      const added = appendTracksToPlaylist(target, toAdd)
-      if (created || added) queuePlaylistPersistence(base)
-      return toAdd.length
-    }
-
-    if (!playlist) return 0
-    const ids = new Set(favoriteTracks.map((track) => track.id))
-    // Mirror the add/query rule: drop the entries that are this recording, and
-    // leave a same-titled neighbour alone.
-    const requestedByLogicalKey = new Map<string, Track[]>()
-    for (const track of favoriteTracks) {
-      const key = getLogicalTrackKey(track)
-      const bucket = requestedByLogicalKey.get(key)
-      if (bucket) bucket.push(track)
-      else requestedByLogicalKey.set(key, [track])
-    }
-    const nextTrackIds = playlist.trackIds.filter((trackId) => {
-      if (ids.has(trackId)) return false
-      const snapshot = getPlaylistTrackSnapshot(playlist, trackId)
-      if (!snapshot) return true
-      const requested = requestedByLogicalKey.get(getLogicalTrackKey(snapshot))
-      return !requested?.some((track) => canShareTrackIdentity(track, snapshot))
-    })
-    const removedCount = playlist.trackIds.length - nextTrackIds.length
-    if (removedCount === 0) return 0
-    const base = clonePlaylistSnapshot()
-    const keptTrackIds = new Set(nextTrackIds)
-    playlist.trackIds = nextTrackIds
-    if (playlist.trackSnapshots) {
-      const snapshots = { ...playlist.trackSnapshots }
-      for (const trackId of Object.keys(snapshots)) {
-        if (!keptTrackIds.has(trackId)) delete snapshots[trackId]
-      }
-      playlist.trackSnapshots = Object.keys(snapshots).length > 0 ? snapshots : undefined
-    }
-    queuePlaylistPersistence(base)
-    return removedCount
-  }
-
   function replaceTrackReference(oldTrackId: string, replacementTrack: Track): number {
     if (!oldTrackId || oldTrackId === replacementTrack.id) return 0
     const playlistBase = clonePlaylistSnapshot()
@@ -1910,7 +1045,7 @@ export function useMusicStore(): {
       const snapshots = { ...(playlist.trackSnapshots ?? {}) }
       delete snapshots[oldTrackId]
       snapshots[replacementTrack.id] = toPlaylistTrackSnapshot(replacementTrack)
-      playlist.trackSnapshots = Object.keys(snapshots).length > 0 ? snapshots : undefined
+      playlist.trackSnapshots = nonEmptySnapshots(snapshots)
       playlistsChanged = true
       replacementCount++
     }
@@ -1997,246 +1132,13 @@ export function useMusicStore(): {
     return libraryChanged || playlistsChanged
   }
 
-  function resolvePlaylistTracks(pl: Playlist): Track[] {
-    let localLogicalTracks: Map<string, LogicalTrack> | null = null
-    const getLocalLogicalTracks = (): Map<string, LogicalTrack> => {
-      localLogicalTracks ??= getLocalLogicalTrackMap()
-      return localLogicalTracks
-    }
-    return pl.trackIds
-      .map((trackId) => resolvePlaylistTrack(pl, trackId, getLocalLogicalTracks))
-      .filter((track): track is Track => !!track)
-  }
-
-  function getPlaylistTracks(playlistName: string): Track[] {
-    const pl = findLocalPlaylistByName(playlistName)
-    return pl ? resolvePlaylistTracks(pl) : []
-  }
-
-  /**
-   * 聚合歌单的曲目解析：保住每条记录原本的音源身份。
-   *
-   * 普通歌单走 resolvePlaylistTrack，它会把流媒体快照替换成同一录音的本地文件
-   * ——对"把这首歌放出来"是对的，但聚合歌单的全部意义就是让用户看见并挑选音源，
-   * 那个替换会让同一首歌的多路音源在到达视图之前就塌成一路。
-   */
-  function resolveAggregatePlaylistTracks(pl: Playlist): Track[] {
-    let localLogicalTracks: Map<string, LogicalTrack> | null = null
-    const getLocalLogicalTracks = (): Map<string, LogicalTrack> => {
-      localLogicalTracks ??= getLocalLogicalTrackMap()
-      return localLogicalTracks
-    }
-    const resolved: Track[] = []
-    for (const trackId of pl.trackIds) {
-      const exact = trackById.get(trackId)
-      if (exact) {
-        resolved.push(exact)
-        continue
-      }
-      const snapshot = pl.trackSnapshots?.[trackId]
-      if (!snapshot) continue
-      if (getTrackSource(snapshot) !== 'local') {
-        resolved.push(snapshot)
-        continue
-      }
-      // 本地条目可以换成同一段录音的另一个本地文件（文件被移动过），但换不到
-      // 就得丢掉——否则会给出一个点了放不出来的本地音源。
-      const relocated = getLocalLogicalTracks()
-        .get(getLogicalTrackKey(snapshot))
-        ?.variants.find(
-          (variant) =>
-            canShareTrackIdentity(snapshot, variant.track) &&
-            (!preferredSourceKey(snapshot) ||
-              versionSourceKey(variant.track) === preferredSourceKey(snapshot))
-        )?.track
-      if (relocated) resolved.push(relocated)
-    }
-    return resolved
-  }
-
-  function getPlaylistTracksById(playlistId: string): Track[] {
-    const pl = playlists.value.find((p) => p.id === playlistId)
-    if (!pl) return []
-    return isAggregatePlaylist(pl) ? resolveAggregatePlaylistTracks(pl) : resolvePlaylistTracks(pl)
-  }
-
-  function createAggregatePlaylist(name: string): string {
-    const normalizedName = normalizePlaylistName(name)
-    // 聚合歌单与普通歌单是两个命名空间，所以只在聚合歌单里查重——用户不该因为
-    // 某个普通歌单占了名字而没法这么叫自己的聚合歌单。
-    const existing = playlists.value.find(
-      (playlist) => isAggregatePlaylist(playlist) && playlist.name === normalizedName
-    )
-    if (existing) return existing.id
-    const base = clonePlaylistSnapshot()
-    const playlist: Playlist = {
-      id: `pl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      name: normalizedName,
-      trackIds: [],
-      kind: 'aggregate',
-      createdAt: new Date().toISOString()
-    }
-    playlists.value = [...playlists.value, playlist]
-    queuePlaylistPersistence(base)
-    return playlist.id
-  }
-
-  function setPlaylistPinned(playlistId: string, pinned: boolean): boolean {
-    const playlist = playlists.value.find((item) => item.id === playlistId)
-    if (!playlist) return false
-    // 重复置顶不刷新时间戳，否则同一个按钮点两下会让列表无意义地重排。
-    if (pinned === !!playlist.pinnedAt) return false
-    const base = clonePlaylistSnapshot()
-    playlist.pinnedAt = pinned ? new Date().toISOString() : null
-    touchPlaylist(playlist)
-    queuePlaylistPersistence(base)
-    return true
-  }
-
-  function setPlaylistHiddenSources(playlistId: string, sources: string[]): boolean {
-    const playlist = playlists.value.find((item) => item.id === playlistId)
-    if (!playlist) return false
-    const normalized = Array.from(new Set(sources.map((source) => source.trim()).filter(Boolean)))
-    const nextValue = normalized.length > 0 ? normalized : undefined
-    if (playlistDataEqual(playlist.hiddenSources, nextValue)) return false
-    const base = clonePlaylistSnapshot()
-    playlist.hiddenSources = nextValue
-    touchPlaylist(playlist)
-    queuePlaylistPersistence(base)
-    return true
-  }
-
-  function setPlaylistVariantPreference(
-    playlistId: string,
-    anchorTrackId: string,
-    source: string | null
-  ): boolean {
-    const playlist = playlists.value.find((item) => item.id === playlistId)
-    if (!playlist || !anchorTrackId) return false
-    const current = playlist.variantPreferences ?? {}
-    const normalizedSource = source?.trim() || null
-    if ((current[anchorTrackId] ?? null) === normalizedSource) return false
-    const next = { ...current }
-    if (normalizedSource) next[anchorTrackId] = normalizedSource
-    else delete next[anchorTrackId]
-    const base = clonePlaylistSnapshot()
-    playlist.variantPreferences = Object.keys(next).length > 0 ? next : undefined
-    touchPlaylist(playlist)
-    queuePlaylistPersistence(base)
-    return true
-  }
-
-  function isPlaylistData(value: unknown): value is Playlist[] {
-    return Array.isArray(value)
-  }
-
-  async function loadPlaylistEnvelopeForConflict(): Promise<VersionedDataEnvelope<
-    Playlist[]
-  > | null> {
-    const loaded = await window.api.data.loadPlaylists()
-    return isVersionedDataEnvelope(loaded, isPlaylistData) ? loaded : null
-  }
-
-  async function persistPlaylistSnapshot(snapshot: Playlist[], base: Playlist[]): Promise<void> {
-    let expectedRevision = playlistsRevision
-    // A preceding queued write may have recovered a CAS conflict while this
-    // transaction was waiting. In that case `base` predates the newly merged
-    // authoritative snapshot even though `expectedRevision` is current. Replay
-    // the local delta before the first attempt so the next successful write
-    // cannot silently erase data recovered by the previous transaction.
-    let desired = playlistDataEqual(base, playlistAuthoritativeSnapshot)
-      ? snapshot
-      : replayPlaylistTransaction(base, snapshot, playlistAuthoritativeSnapshot)
-    let recoveredConflictRevision: number | null = null
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const saved = await window.api.data.savePlaylists(desired, expectedRevision)
-        if (isVersionedDataEnvelope(saved, isPlaylistData)) {
-          playlistsRevision = saved.revision
-          playlistAuthoritativeSnapshot = clonePlaylistSnapshot(saved.data)
-          // Do not overwrite an action that arrived while this write was in flight.
-          if (playlistDataEqual(playlists.value, snapshot)) {
-            playlists.value = clonePlaylistSnapshot(saved.data)
-            playlistIdentityCache = null
-          }
-        } else {
-          playlistAuthoritativeSnapshot = clonePlaylistSnapshot(desired)
-        }
-        if (recoveredConflictRevision !== null) {
-          playlistPersistenceNotice.value = {
-            kind: 'revision-conflict-recovered',
-            message: '检测到歌单被其他窗口更新，已合并权威版本并保存本次修改',
-            authoritativeRevision: recoveredConflictRevision,
-            recoveredAt: new Date().toISOString()
-          }
-        }
-        return
-      } catch (error) {
-        if (!isPersistentDataRevisionConflict(error)) throw error
-        const current = isVersionedDataEnvelope(error.current, isPlaylistData)
-          ? error.current
-          : await loadPlaylistEnvelopeForConflict()
-        if (!current) throw error
-        // Reapply only the immutable local delta to the authoritative snapshot.
-        // Sending the old whole-file snapshot here would erase concurrent edits.
-        desired = replayPlaylistTransaction(base, snapshot, current.data)
-        playlistsRevision = current.revision
-        expectedRevision = current.revision
-        recoveredConflictRevision = current.revision
-      }
-    }
-    throw new Error('Playlist persistence revision conflict did not settle after 3 retries')
-  }
-
-  async function savePlaylists(): Promise<void> {
-    queuePlaylistPersistence()
-  }
-
-  async function flushPlaylists(): Promise<boolean> {
-    return getPlaylistPersistence().flush()
-  }
-
-  async function loadPlaylists(): Promise<void> {
-    const loadedResult = await window.api.data.loadPlaylists()
-    const saved = isVersionedDataEnvelope(loadedResult, isPlaylistData)
-      ? loadedResult.data
-      : loadedResult
-    playlistsRevision = isVersionedDataEnvelope(loadedResult, isPlaylistData)
-      ? loadedResult.revision
-      : 0
-    const DEFAULT_PLAYLIST: Playlist = {
-      id: 'pl_favorites',
-      name: '我收藏的音乐',
-      trackIds: [],
-      isDefault: true,
-      createdAt: new Date().toISOString()
-    }
-
-    if (!saved || !Array.isArray(saved) || saved.length === 0) {
-      // First launch: create default playlist
-      playlists.value = [DEFAULT_PLAYLIST]
-      playlistAuthoritativeSnapshot = []
-      queuePlaylistPersistence([])
-      return
-    }
-
-    // 旧版本保存的歌单快照可能携带歌词全文 / bpmAnalysis / metadataMatch，
-    // 加载时统一瘦身，避免数十 MB 载荷随歌单驻留。
-    const loaded = (saved as Playlist[]).map(slimPlaylistLegacySnapshots)
-    // Ensure default playlist exists
-    if (!loaded.find((p) => p.isDefault)) {
-      loaded.unshift(DEFAULT_PLAYLIST)
-    }
-    playlists.value = loaded
-    playlistAuthoritativeSnapshot = clonePlaylistSnapshot(loaded)
-  }
-
   if (!derivedCollectionsInitialized) {
     rebuildDerivedCollections()
     derivedCollectionsInitialized = true
   }
 
   return {
+    ...playlistCommands,
     tracks,
     artists,
     albums,
@@ -2255,41 +1157,11 @@ export function useMusicStore(): {
     clearTrackMetadataMatch,
     applyTrackMetadataMatch,
     clearTracks,
-    createPlaylist,
-    createPlaylistWithTracks,
-    renamePlaylist,
-    setPlaylistCover,
-    copyPlaylist,
-    reorderPlaylistTracks,
-    movePlaylistTracks,
-    importPlaylistDocument,
-    exportPlaylistDocument: exportPlaylistDocumentForStore,
-    repairPlaylistMissingTracks,
-    addToPlaylist,
-    addTracksToPlaylist,
-    removeFromPlaylist,
-    removeTracksFromPlaylist,
     replaceTrackReference,
     applyBpmAnalysis,
     clearBpmAnalysis,
-    isFavoriteTrack,
-    addFavoriteTrack,
-    removeFavoriteTrack,
-    setFavoriteTracks,
-    deletePlaylist,
-    getPlaylistTracks,
     aggregatePlaylists,
     localPlaylists,
-    createAggregatePlaylist,
-    setPlaylistPinned,
-    setPlaylistHiddenSources,
-    setPlaylistVariantPreference,
-    addTracksToPlaylistById,
-    removeTracksFromPlaylistById,
-    getPlaylistTracksById,
-    savePlaylists,
-    flushPlaylists,
-    loadPlaylists,
     saveLibrary,
     loadLibrary,
     whenLibrarySettled,

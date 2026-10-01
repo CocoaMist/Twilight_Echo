@@ -1,6 +1,12 @@
 import type { Track } from '../../types/music'
 import { getTrackSource } from '../../utils/playerTrackUtils.ts'
-import type { DerivedTrackGroup, Playlist } from '../useMusicStore.ts'
+import type { DerivedTrackGroup, Playlist } from './musicStoreTypes.ts'
+
+export function nonEmptySnapshots(
+  snapshots: Record<string, Track>
+): Record<string, Track> | undefined {
+  return Object.keys(snapshots).length > 0 ? snapshots : undefined
+}
 
 export function getAlbumIdentity(track: Track): string {
   const albumId = track.albumId?.trim()
