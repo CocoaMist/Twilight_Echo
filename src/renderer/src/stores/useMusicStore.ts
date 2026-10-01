@@ -8,7 +8,7 @@ export type {
   PlaylistPersistenceNotice,
   DerivedTrackGroup
 } from './library/musicStoreTypes.ts'
-import { computed, ref, shallowRef, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import type { Track } from '../types/music'
 import type {
   LocalLibraryExclusion,
@@ -150,71 +150,7 @@ const { clonePlaylistSnapshot, queuePlaylistPersistence, ...playlistCommands } =
     playlistPersistenceNotice
   })
 
-export function useMusicStore(): Omit<
-  ReturnType<typeof createPlaylistController>,
-  'clonePlaylistSnapshot' | 'queuePlaylistPersistence'
-> & {
-  tracks: Ref<Track[]>
-  artists: Ref<LibraryItem[]>
-  albums: Ref<LibraryItem[]>
-  genres: Ref<LibraryItem[]>
-  folders: Ref<LibraryItem[]>
-  playlists: Ref<Playlist[]>
-  playlistPersistenceStatus: Ref<PlaylistPersistenceStatus>
-  playlistPersistenceNotice: Ref<PlaylistPersistenceNotice | null>
-  libraryRepairReport: Ref<LibraryRepairReport | null>
-  excludedTracks: Ref<LocalLibraryExclusion[]>
-  libraryScanStatus: Ref<LocalLibraryScanStatus>
-  libraryScanProgress: Ref<LocalLibraryScanProgress | null>
-  libraryMetadataEnrichmentStatus: Ref<LibraryMetadataEnrichmentStatus>
-  addTracks: (newTracks: Track[], options?: AddTracksOptions) => Promise<void>
-  removeTrack: (id: string) => void
-  removeLocalTracks: (
-    selectedTracks: Track[],
-    mode: LocalLibraryRemovalMode
-  ) => Promise<LocalLibraryRemoveResult>
-  restoreExcludedTracks: (filePaths: string[]) => Promise<number>
-  /** Reflect only confirmed local tag writes in the cached library snapshot. */
-  applyLocalTagWrite: (filePaths: readonly string[], patch: LocalLibraryTagPatch) => number
-  clearTrackMetadataMatch: (trackId: string) => boolean
-  applyTrackMetadataMatch: (
-    trackId: string,
-    providerTrack: Track,
-    options: ManualMetadataMatchOptions
-  ) => boolean
-  clearTracks: () => void
-  replaceTrackReference: (oldTrackId: string, replacementTrack: Track) => number
-  applyBpmAnalysis: (trackId: string, filePath: string, analysis: Track['bpmAnalysis']) => boolean
-  clearBpmAnalysis: () => boolean
-  /** 聚合歌单，置顶优先排序。 */
-  aggregatePlaylists: ComputedRef<Playlist[]>
-  /** 普通本地歌单（不含聚合歌单）。 */
-  localPlaylists: ComputedRef<Playlist[]>
-  saveLibrary: () => Promise<void>
-  scheduleSaveLibrary: () => Promise<void>
-  flushSaveLibrary: () => void
-  loadLibrary: () => Promise<void>
-  whenLibrarySettled: () => Promise<void>
-  handleLibraryChange: (change: LibraryChange | undefined) => Promise<void>
-  startStartupLibraryScan: () => Promise<LocalLibraryScanUpdate>
-  startFullLibraryScan: () => Promise<LocalLibraryScanUpdate>
-  resetLibrary: () => Promise<number>
-  pauseLibraryScan: () => Promise<boolean>
-  resumeLibraryScan: () => Promise<boolean>
-  cancelLibraryScan: () => Promise<boolean>
-  cancelLibraryMetadataEnrichment: () => boolean
-  applyLibraryScanProgress: (progress: LocalLibraryScanProgress) => void
-  applyLibraryScanStatus: (status: LocalLibraryScanStatus) => void
-  refreshLibraryIndex: () => void
-  scannedFolders: Ref<string[]>
-  isScanning: Ref<boolean>
-  addFolder: (path: string) => void
-  removeFolder: (path: string) => void
-  syncFolders: (folders: string[]) => void
-  flushRebuild: () => void
-  getRebuildCount: () => number
-  getTrackById: (trackId: string) => Track | undefined
-} {
+export function useMusicStore() {
   function rebuildDerivedCollections(): void {
     rebuildTrackLookupIndexes()
     const { settings } = useSettingsStore()
