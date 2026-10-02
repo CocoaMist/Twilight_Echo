@@ -241,12 +241,16 @@ so duplicate friendly names cannot validate the wrong endpoint.
 ## Unsigned Release Artifact Gate
 
 In-app updates on Windows download the latest GitHub Release installer (`*-setup.exe` preferred),
-optionally verify SHA-256 from the release body or a companion checksum asset, then launch the
+verify SHA-256 from the release body, asset digest, or a companion checksum asset, then launch the
 installer with `shell.openPath` and quit the app after an explicit confirm (exit, SmartScreen/UAC,
 official project release). This is not `electron-updater`, not silent asar replacement, and not a
 generic electron-builder `publish` URL. **Every Windows Release must publish SHA-256** (release body
-line or `*.sha256` asset). Without a checksum the client still downloads but marks verification as
-skipped and degrades the install CTA; if a checksum was known, install re-hashes before openPath.
+line or `*.sha256` asset; GitHub asset digests are also supported). Without a checksum the client
+refuses in-app download. It verifies both the completed download and the installer immediately
+before installation against the checksum bound to that downloaded version. Renderer persistence
+must succeed before `openPath`; the next start confirms the installed version and cleans old packages.
+The main-process updater owns resumable downloads, bounded retries, release channels, scheduled checks
+and durable state. See [application updates](app-updates.md) for its contract and regression tests.
 Unsigned installers remain subject to SmartScreen.
 
 A publishable Windows build is intentionally unsigned because this personal project does not carry

@@ -63,16 +63,6 @@ const emit = defineEmits<{
   reopenOnboarding: []
 }>()
 
-const updateCheckState = ref<'idle' | 'checking' | 'up-to-date' | 'available' | 'error'>('idle')
-const latestVersion = ref('')
-const lastUpdateCheck = ref('')
-const releaseUrl = ref('')
-const updateAssetName = ref('')
-const updateHasChecksum = ref(false)
-const updateError = ref('')
-const updateProgress = ref<import('../../../shared/appUpdate').AppUpdateProgress | null>(null)
-const updateActionState = ref<'idle' | 'downloading' | 'ready' | 'installing' | 'error'>('idle')
-let stopUpdateProgressListener: (() => void) | null = null
 const runningPluginSettingsCommand = ref('')
 const pluginSettingsResult = ref<Record<string, string>>({})
 const pluginSettingsError = ref<Record<string, string>>({})
@@ -767,151 +757,6 @@ async function confirmClearLoudnessAnalysisCache(): Promise<void> {
   await clearLoudnessAnalysisCache()
 }
 
-function ensureUpdateProgressListener(): void {
-  if (stopUpdateProgressListener) return
-  stopUpdateProgressListener =
-    window.api.app.onUpdateProgress?.((progress) => {
-      updateProgress.value = progress
-      if (
-        progress.phase === 'downloading' ||
-        progress.phase === 'resolving' ||
-        progress.phase === 'verifying'
-      ) {
-        updateActionState.value = 'downloading'
-      } else if (progress.phase === 'ready') {
-        updateActionState.value = 'ready'
-      } else if (progress.phase === 'installing') {
-        updateActionState.value = 'installing'
-      } else if (progress.phase === 'error') {
-        updateActionState.value = 'error'
-        updateError.value = progress.error || '更新失败'
-      }
-    }) || null
-}
-
-async function checkForUpdates(): Promise<void> {
-  updateCheckState.value = 'checking'
-  updateError.value = ''
-  updateActionState.value = 'idle'
-  updateProgress.value = null
-  try {
-    const result = await window.api.app.checkForUpdates()
-    const now = new Date()
-    lastUpdateCheck.value = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
-    latestVersion.value = result.latestVersion || ''
-    releaseUrl.value = result.releaseUrl || ''
-    updateAssetName.value = result.assetName || ''
-    updateHasChecksum.value = Boolean(result.hasChecksum)
-    if (result.error === 'network') {
-      updateCheckState.value = 'error'
-      updateError.value = '网络错误，无法检查更新'
-    } else if (result.error === 'unsupported-platform') {
-      updateCheckState.value = 'available'
-      updateError.value = '发现新版本；当前平台请从发布页手动下载'
-    } else if (result.error === 'no-asset') {
-      updateCheckState.value = 'available'
-      updateError.value = '发现新版本，但 Release 中未找到 Windows 安装包'
-    } else if (result.error === 'no-checksum') {
-      updateCheckState.value = 'error'
-      updateError.value = '发现新版本，但 Release 未提供安装包 SHA-256 校验和，已拒绝下载'
-    } else if (result.hasUpdate) {
-      updateCheckState.value = 'available'
-    } else {
-      updateCheckState.value = 'up-to-date'
-    }
-  } catch {
-    updateCheckState.value = 'error'
-    updateError.value = '检查更新失败'
-    releaseUrl.value = ''
-  }
-}
-
-async function downloadUpdate(): Promise<void> {
-  ensureUpdateProgressListener()
-  updateError.value = ''
-  updateActionState.value = 'downloading'
-  updateProgress.value = {
-    phase: 'resolving',
-    percent: 0,
-    receivedBytes: 0,
-    totalBytes: 0,
-    message: '正在准备下载…'
-  }
-  try {
-    const result = await window.api.app.downloadUpdate()
-    if (!result.ok) {
-      updateActionState.value = result.cancelled ? 'idle' : 'error'
-      updateError.value = result.error
-      if (result.cancelled) updateProgress.value = null
-      return
-    }
-    updateActionState.value = 'ready'
-    updateAssetName.value = result.assetName
-    updateHasChecksum.value = result.verified
-  } catch (error) {
-    updateActionState.value = 'error'
-    updateError.value = error instanceof Error ? error.message : '下载失败'
-  }
-}
-
-async function cancelUpdateDownload(): Promise<void> {
-  try {
-    await window.api.app.cancelUpdateDownload()
-  } catch {
-    // ignore
-  }
-  updateActionState.value = 'idle'
-  updateProgress.value = null
-  updateError.value = ''
-}
-
-async function installUpdate(): Promise<void> {
-  updateError.value = ''
-  const warnings: string[] = [
-    '安装程序启动后本应用会退出。',
-    'Windows 可能弹出 SmartScreen 或 UAC 提示，请选择官方签名包继续。'
-  ]
-  if (!updateHasChecksum.value) {
-    warnings.push('此安装包未提供 SHA-256 校验和，无法验证完整性。')
-  }
-  if (
-    !window.confirm(
-      `${warnings.join('\n')}\n\n仅建议安装官方 GitHub Release 发布的签名安装包。\n确定继续安装并退出吗？`
-    )
-  ) {
-    return
-  }
-  updateActionState.value = 'installing'
-  try {
-    const result = await window.api.app.installUpdate()
-    if (!result.ok) {
-      updateActionState.value = 'error'
-      updateError.value = result.error
-      const installerPath =
-        'installerPath' in result && typeof result.installerPath === 'string'
-          ? result.installerPath
-          : updateProgress.value?.installerPath
-      if (installerPath) {
-        const openFolder = window.confirm(
-          `${result.error}\n\n是否打开安装包所在文件夹以便手动安装？`
-        )
-        if (openFolder) {
-          await window.api.shell.showItemInFolder(installerPath)
-        }
-      }
-      return
-    }
-  } catch (error) {
-    updateActionState.value = 'error'
-    updateError.value = error instanceof Error ? error.message : '启动安装程序失败'
-  }
-}
-
-function openReleasePage(): void {
-  const url = releaseUrl.value || 'https://github.com/Px-asen/Twilight_Echo/releases'
-  void window.api?.shell?.openExternal?.(url)
-}
-
 /**
  * The export now writes a readable Markdown report next to the raw JSON, so the
  * notice offers to reveal it instead of telling the user to find and forward a
@@ -1360,20 +1205,6 @@ onBeforeUnmount(() => {
 
         <AboutSettingsSection
           :app-version="appVersion"
-          :update-check-state="updateCheckState"
-          :latest-version="latestVersion"
-          :last-update-check="lastUpdateCheck"
-          :release-url="releaseUrl"
-          :asset-name="updateAssetName"
-          :has-checksum="updateHasChecksum"
-          :update-error="updateError"
-          :update-progress="updateProgress"
-          :update-action-state="updateActionState"
-          @check-for-updates="checkForUpdates"
-          @download-update="downloadUpdate"
-          @cancel-update-download="cancelUpdateDownload"
-          @install-update="installUpdate"
-          @open-release-page="openReleasePage"
           @export-audio-diagnostics="exportAudioDiagnostics"
         />
       </div>

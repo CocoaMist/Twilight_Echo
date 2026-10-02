@@ -155,6 +155,21 @@ const {
   openSettingsPage
 } = navigation
 const { pushNotice } = useAppNoticeStore()
+let stopAppUpdateNotifications: (() => void) | null = null
+let updateNotificationsDisposed = false
+onMounted(() => {
+  void import('./app/useAppUpdateNotifications.ts')
+    .then(({ startAppUpdateNotifications }) => {
+      if (!updateNotificationsDisposed) {
+        stopAppUpdateNotifications = startAppUpdateNotifications(() => openSettingsPage('about'))
+      }
+    })
+    .catch((error) => console.warn('[update] Unable to initialize update notifications:', error))
+})
+onBeforeUnmount(() => {
+  updateNotificationsDisposed = true
+  stopAppUpdateNotifications?.()
+})
 const noticeHostRef = ref<InstanceType<typeof AppNoticeHost> | null>(null)
 
 // One global back affordance on the title bar. Every full-screen page

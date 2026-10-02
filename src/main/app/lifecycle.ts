@@ -55,6 +55,7 @@ import { installElectronSecurity } from '../security/electronSecurity.ts'
 import { createRemoteMediaRequestHandler } from '../security/remoteMediaGrants.ts'
 import { destroyTelemetry, initializeTelemetry } from '../analytics/index.ts'
 import { createWindow } from './window'
+import { startAppUpdateChecks, stopAppUpdateChecks } from './appUpdateService.ts'
 import {
   consumeAppSettingsLoadIssue,
   supportsNativeWindowTransparency,
@@ -410,6 +411,7 @@ export function startApp(): void {
     })
 
     app.on('will-quit', () => {
+      stopAppUpdateChecks()
       destroyDesktopLyrics()
       destroyWindowsSmtc()
       unregisterPlayerShortcuts()
@@ -449,6 +451,7 @@ function createMainWindowAndScheduleDeferredStartup(): void {
   if (!mainWindow) return
   mainWindow.once('ready-to-show', () => {
     if (runtime.mainWindow !== mainWindow || mainWindow.isDestroyed() || runtime.forceQuit) return
+    startAppUpdateChecks()
     if (runtime.appSettings.desktopLyrics.enabled) showDesktopLyrics()
     void ensureAudioEngineRuntime().catch((error) => {
       console.error('[音频引擎] 初始化失败：', error instanceof Error ? error.message : error)

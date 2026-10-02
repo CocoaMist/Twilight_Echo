@@ -41,7 +41,7 @@ export function resolvePlaybackSessionSave(
   resolvePending(outcome)
 }
 
-async function requestRendererPlaybackSessionSave(): Promise<void> {
+export async function requestRendererPlaybackSessionSave(): Promise<void> {
   const win = runtime.mainWindow
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
 

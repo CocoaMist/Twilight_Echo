@@ -394,6 +394,16 @@ interface WindowAPI {
     consumePendingNavigation: () => Promise<TrayNavigationTarget | null>
     relaunch: () => Promise<void>
     checkForUpdates: () => Promise<import('../shared/appUpdate').AppUpdateCheckResult>
+    getUpdateState: () => Promise<import('../shared/appUpdate').AppUpdateSnapshot>
+    setUpdatePreferences: (
+      patch: import('../shared/appUpdate').AppUpdatePreferencePatch
+    ) => Promise<import('../shared/appUpdate').AppUpdateSnapshot>
+    dismissUpdate: (
+      action: 'skip' | 'later'
+    ) => Promise<import('../shared/appUpdate').AppUpdateSnapshot>
+    onUpdateState: (
+      cb: (snapshot: import('../shared/appUpdate').AppUpdateSnapshot) => void
+    ) => () => void
     downloadUpdate: () => Promise<import('../shared/appUpdate').AppUpdateDownloadResult>
     cancelUpdateDownload: () => Promise<boolean>
     installUpdate: () => Promise<import('../shared/appUpdate').AppUpdateInstallResult>

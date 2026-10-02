@@ -405,7 +405,7 @@ BPM/响度只走 `audioAnalysisService` 的有界优先级队列（aging 防饥�
 - 不写第三方插件源码进仓库；插件只能跑在 pluginHost。
 - 不把全文件 BPM/响度分析放进实时播放 RPC 路径。
 - 不 reintroduce 字体转换器；字体必须是已提交的 `.woff2`。
-- 更新机制：GitHub Release installer 下载 → 可选 SHA-256 校验 → `shell.openPath` 启动后退出；**不是** `electron-updater` / 静默 asar 替换。
+- 更新机制：主进程 `AppUpdateManager` 管理 GitHub Release 检查、下载和安装；下载支持 `.part` 续传与有限重试，下载后和安装前均强制 SHA-256 校验。独立记录已下载包的版本与哈希；播放状态持久化成功后才通过 `shell.openPath` 启动安装器并退出。设置页订阅带修订号的状态快照，重启时验证缓存并确认安装结果。详见 [本体更新](app-updates.md)。
 - 不注册 OS 默认协议客户端；`second-instance` 只恢复/聚焦窗口。
 - renderer 不碰 Electron/Node；preload 是唯一桥。
 - 平台行为：WASAPI/CoreAudio 无 native DSD；ALSA `hw:` 可 native DSD；Shared Mode 走系统混音器是预期行为。
