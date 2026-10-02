@@ -1,6 +1,7 @@
 const { existsSync, readdirSync } = require('node:fs')
 const { join, resolve } = require('node:path')
 const { spawnSync: childProcessSpawnSync } = require('node:child_process')
+const { resolveWindowsPersistedEnvironment } = require('./windows-persisted-environment.cjs')
 
 const PERSISTED_VST3_VARIABLES = [
   'TAE_VST3_SDK_ROOT',
@@ -9,20 +10,7 @@ const PERSISTED_VST3_VARIABLES = [
 ]
 
 function resolveVst3MsvcEnvironment({ env = process.env, spawnSync = childProcessSpawnSync } = {}) {
-  const resolved = { ...env }
-  if (process.platform !== 'win32') return resolved
-  for (const name of PERSISTED_VST3_VARIABLES) {
-    if (resolved[name]) continue
-    const result = spawnSync('reg.exe', ['query', 'HKCU\\Environment', '/v', name], {
-      encoding: 'utf8',
-      windowsHide: true
-    })
-    if (result?.status !== 0 || result.error) continue
-    const expression = new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.+?)\\s*$`, 'im')
-    const match = expression.exec(result.stdout ?? '')
-    if (match?.[1]) resolved[name] = match[1].trim()
-  }
-  return resolved
+  return resolveWindowsPersistedEnvironment({ env, names: PERSISTED_VST3_VARIABLES, spawnSync })
 }
 
 function resolveVst3MsvcBuildDirectory(env = process.env, root = process.cwd()) {
