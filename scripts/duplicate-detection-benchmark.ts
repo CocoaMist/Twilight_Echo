@@ -141,7 +141,7 @@ export function buildCollisionRows(rows: number): DuplicateCandidate[] {
         size: 10_000 + index
       }),
       candidate(`${pair}-b`, {
-        filePath: `E:/benchmark/path/${index}.WAV`,
+        filePath: `E:/benchmark/path/${index}.wav`,
         duration: 62 + index,
         size: 11_000 + index
       })

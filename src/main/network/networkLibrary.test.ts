@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { NetworkSourceFailure } from './errors.ts'
 import { createNetworkLibrary } from './networkLibrary.ts'
+import {
+  createNetworkLibraryPersistence,
+  type NetworkLibraryDocument
+} from './networkLibraryPersistence.ts'
 import type { NetworkEntry } from '../../shared/networkSources.ts'
 
 function deeplyNestedValue(depth = 128): unknown {
@@ -121,4 +125,173 @@ test('rejects an excessively nested network media-library document', async () =>
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('concurrent scans preserve every profile and publish valid JSON', async (t) => {
+  const { dir, library } = await makeLibrary()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await Promise.all(
+    Array.from({ length: 10 }, (_, index) => {
+      const profileId = `p${index}`
+      return library.addEntries(profileId, '/music', [
+        { ...makeEntry(`/music/${index}.flac`), profileId }
+      ])
+    })
+  )
+  const saved = JSON.parse(await readFile(join(dir, 'library.json'), 'utf8'))
+  assert.equal(Object.keys(saved).length, 10)
+  const reloaded = createNetworkLibrary({ filePath: join(dir, 'library.json') })
+  for (let index = 0; index < 10; index++) {
+    assert.equal((await reloaded.listEntries(`p${index}`))[0].name, `${index}.flac`)
+  }
+  assert.deepEqual(await readdir(dir), ['library.json'])
+})
+
+test('queued mutations preserve disjoint roots and reads wait for preceding writes', async (t) => {
+  const { dir, library } = await makeLibrary()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const first = library.addEntries('p1', '/a', [makeEntry('/a/a.flac')])
+  const second = library.addEntries('p1', '/b', [makeEntry('/b/b.flac')])
+  const remove = library.removeEntry('p1', 'id:/a/a.flac')
+  const result = await library.listEntries('p1')
+  await Promise.all([first, second, remove])
+  assert.deepEqual(
+    result.map((entry) => entry.path),
+    ['/b/b.flac']
+  )
+})
+
+test('late enrichment does not resurrect removed entries', async (t) => {
+  const { dir, library } = await makeLibrary()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await library.addEntries('p1', '/music', [makeEntry('/music/a.flac'), makeEntry('/music/b.flac')])
+  const before = await library.listEntries('p1')
+  await library.removeEntry('p1', before[0].id)
+  await library.updateEntries(
+    'p1',
+    before.map((entry) => ({ ...entry, metadata: { title: 'enriched' } }))
+  )
+  const after = await library.listEntries('p1')
+  assert.deepEqual(
+    after.map((entry) => entry.path),
+    ['/music/b.flac']
+  )
+  assert.equal(after[0].metadata?.title, 'enriched')
+})
+
+test('a rejected transaction does not poison subsequent writes or publish its draft', async () => {
+  let saved: NetworkLibraryDocument = {}
+  let fail = true
+  const library = createNetworkLibrary({
+    filePath: 'unused',
+    persistence: {
+      load: async () => structuredClone(saved),
+      save: async (document) => {
+        if (fail) {
+          fail = false
+          throw new Error('disk full')
+        }
+        saved = structuredClone(document)
+      }
+    }
+  })
+  await assert.rejects(library.addEntries('p1', '/a', [makeEntry('/a/a.flac')]), /disk full/)
+  await library.addEntries('p1', '/b', [makeEntry('/b/b.flac')])
+  assert.deepEqual(
+    (await library.listEntries('p1')).map((entry) => entry.path),
+    ['/b/b.flac']
+  )
+})
+
+test('coalesced readers never observe a failed mutation draft', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'network-library-draft-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const path = join(dir, 'library.json')
+  const original = makeEntry('/music/a.flac')
+  const document: NetworkLibraryDocument = {
+    p1: { roots: ['/music'], entries: [original] }
+  }
+  for (const action of ['scan', 'enrich', 'remove-entry', 'remove-profile'] as const) {
+    await t.test(action, async () => {
+      const persistence = createNetworkLibraryPersistence(path)
+      await persistence.save(document)
+      const library = createNetworkLibrary({
+        filePath: path,
+        persistence: {
+          load: persistence.load,
+          save: async () => {
+            throw new Error('disk full')
+          }
+        }
+      })
+      const listing = library.listEntries('p1')
+      const search = library.searchEntries(['p1'])
+      const mutations = {
+        scan: () => library.addEntries('p1', '/music', [makeEntry('/music/b.flac')]),
+        enrich: () => library.updateEntries('p1', [{ ...original, metadata: { title: 'Draft' } }]),
+        'remove-entry': () => library.removeEntry('p1', original.id),
+        'remove-profile': () => library.removeProfile('p1')
+      }
+      const rejected = assert.rejects(mutations[action](), /disk full/)
+      const [entries, results] = await Promise.all([listing, search, rejected])
+      assert.deepEqual(entries, [original])
+      assert.deepEqual(results, [{ profileId: 'p1', entry: original }])
+      assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), document)
+    })
+  }
+})
+
+test('multi-profile search reads one snapshot and returns independently owned metadata', async () => {
+  let loads = 0
+  const source: NetworkLibraryDocument = {
+    p1: {
+      roots: ['/music'],
+      entries: [{ ...makeEntry('/music/a.flac'), metadata: { title: 'Original' } }]
+    },
+    p2: { roots: ['/music'], entries: [{ ...makeEntry('/music/b.flac'), profileId: 'p2' }] }
+  }
+  const library = createNetworkLibrary({
+    filePath: 'unused',
+    persistence: {
+      load: async () => {
+        loads++
+        return source
+      },
+      save: async () => undefined
+    }
+  })
+  const rows = await library.searchEntries(['p2', 'p1'], ' FLAC ')
+  assert.equal(loads, 1)
+  assert.deepEqual(
+    rows.map((row) => row.profileId),
+    ['p2', 'p1']
+  )
+  rows[1].entry.metadata!.title = 'Caller change'
+  assert.equal(source.p1.entries[0].metadata!.title, 'Original')
+})
+
+test('persistence coalesces simultaneous reads but sees subsequent external changes', async (t) => {
+  const { dir, library } = await makeLibrary()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await library.addEntries('p1', '/music', [makeEntry('/music/a.flac')])
+  const path = join(dir, 'library.json')
+  const persistence = createNetworkLibraryPersistence(path)
+  const first = persistence.load()
+  assert.equal(first, persistence.load())
+  assert.equal(first, persistence.load())
+  await first
+  await writeFile(path, '{}')
+  assert.deepEqual(await persistence.load(), {})
+})
+
+test('failed atomic replacement cleans temporary files without unlinking the target', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'network-library-atomic-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const target = join(dir, 'library.json')
+  await mkdir(target)
+  await writeFile(join(target, 'preserved.txt'), 'keep')
+  const persistence = createNetworkLibraryPersistence(target)
+  await assert.rejects(persistence.save({}))
+  assert.equal(await readFile(join(target, 'preserved.txt'), 'utf8'), 'keep')
+  assert.deepEqual(await readdir(dir), ['library.json'])
 })

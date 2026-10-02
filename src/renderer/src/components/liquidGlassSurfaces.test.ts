@@ -165,7 +165,15 @@ test('all SVG filters remain defined once and referenced from their intended sur
   // The playbar warp layer paints only its own gradients, so `filter` would have
   // nothing textured to bend. The chain has to sit in the *backdrop* list, where
   // the compositor hands it the scrolling content behind the bar.
-  assert.match(playerBarStyle, /backdrop-filter:[^;]*url\(#te-lg-playbar\)/)
+  assert.match(playerBarStyle, /backdrop-filter:\s*url\(#te-lg-playbar\) blur\(/)
+  assert.match(playerBarStyle, /-webkit-backdrop-filter:\s*url\(#te-lg-playbar\) blur\(/)
+  const linuxFallback = playerBarStyle.match(
+    /html\[data-platform='linux'\] \.player-bar-liquid \.player-bar-warp\s*\{([^}]+)\}/
+  )?.[1]
+  assert.ok(linuxFallback, 'Linux owns a CSS-only fallback on the same warp layer')
+  assert.match(linuxFallback, /backdrop-filter:\s*blur\([^;]+saturate\(/)
+  assert.match(linuxFallback, /-webkit-backdrop-filter:\s*blur\([^;]+saturate\(/)
+  assert.doesNotMatch(linuxFallback, /url\(/)
   assert.ok(
     !/(^|[^-])filter: url\(#te-lg-playbar\)/m.test(playerBarStyle),
     'playbar must not reference the chain from `filter`, where it is a visual no-op'
@@ -273,6 +281,66 @@ test('playbar pointer tracking remains element-local', () => {
   assert.match(playerBar, /@pointermove="onGlassPointerMove"/)
   assert.match(playerBar, /playerBarRef\.value/)
   assert.doesNotMatch(playerBar, /document\.elementFromPoint/)
+})
+
+test('Linux playbar accessibility preferences override the backdrop fallback', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'te-playbar-accessibility-'))
+  const require = createRequire(import.meta.url)
+  try {
+    const css = compileStyle({
+      source: playerBarStyle,
+      filename: 'PlayerBar.css',
+      id: 'data-v-accessibility',
+      scoped: true
+    }).code
+    const html = join(directory, 'fixture.html')
+    const runner = join(directory, 'runner.cjs')
+    await writeFile(
+      html,
+      `<html data-platform="linux"><head><style>${css}</style></head><body>
+      <div class="player-bar-liquid" data-v-accessibility>
+      <span class="player-bar-warp" data-v-accessibility></span>
+      </div></body></html>`
+    )
+    await writeFile(
+      runner,
+      `const { app, BrowserWindow } = require('electron');
+      const assert = require('node:assert/strict');
+      app.whenReady().then(async () => {
+        const win = new BrowserWindow({ show: false });
+        try {
+          await win.loadFile(process.argv.at(-1));
+          win.webContents.debugger.attach('1.3');
+          const readStyle = () => win.webContents.executeJavaScript(
+            'getComputedStyle(document.querySelector(".player-bar-warp")).backdropFilter'
+          );
+          assert.match(await readStyle(), /blur\\(/);
+          for (const [name, value] of [
+            ['prefers-contrast', 'more'],
+            ['prefers-reduced-transparency', 'reduce'],
+            ['forced-colors', 'active']
+          ]) {
+            await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+              features: [{ name, value }]
+            });
+            assert.equal(await win.webContents.executeJavaScript(
+              'matchMedia("(' + name + ': ' + value + ')").matches'
+            ), true, name + ': preference must be active');
+            assert.equal(await readStyle(), 'none', name + ': backdrop must be disabled');
+          }
+          console.error('PLAYBAR_ACCESSIBILITY_OK'); app.exit(0);
+        } catch (error) { console.error(error); app.exit(1); }
+      });`
+    )
+    const { stderr } = await promisify(execFile)(
+      require('electron') as string,
+      ['--no-sandbox', runner, html],
+      { windowsHide: true, timeout: 30000 }
+    )
+    assert.match(stderr, /PLAYBAR_ACCESSIBILITY_OK/)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test('playbar regions keep their columns when a theme inserts decorative grid content', async () => {

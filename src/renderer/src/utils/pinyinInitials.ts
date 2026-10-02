@@ -85,6 +85,7 @@ export function getPinyinInitial(char: string): string {
 }
 
 export function getPinyinInitials(text: string): string {
+  if (!cjkCharPattern.test(text)) return ''
   let result = ''
   for (const char of text) {
     result += getPinyinInitial(char)

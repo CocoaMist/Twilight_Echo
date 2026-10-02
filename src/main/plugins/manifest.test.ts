@@ -347,6 +347,33 @@ test('compares semver release triples with numeric parts', () => {
   assert.equal(compareSemver('1.0.0', '1.0.1'), -1)
 })
 
+test('engine ranges enforce both bounds, zero-major caret and prerelease precedence', () => {
+  const cases: Array<[string, string, boolean]> = [
+    ['^1.2.4', '1.0.0', false],
+    ['~1.2.4', '1.2.0', false],
+    ['^1.2.4', '1.2.4', true],
+    ['^1.2.4', '1.9.0', true],
+    ['^1.2.4', '2.0.0', false],
+    ['~1.2.4', '1.2.5', true],
+    ['~1.2.4', '1.3.0', false],
+    ['^0.2.4', '0.3.0', false],
+    ['^0.2.4', '0.2.5', true],
+    ['^0.0.4', '0.0.5', false],
+    ['^0.0.4', '0.0.4', true],
+    ['>=1.2.4', '1.2.4-beta.1', false],
+    ['^1.2.4', '1.3.0-beta.1', false],
+    ['~1.2.4-beta.2', '1.2.4-beta.1', false],
+    ['~1.2.4-beta.2', '1.2.4-beta.10', true],
+    ['1.2.4', '1.2.4+build.5', true]
+  ]
+  for (const [range, version, expected] of cases) {
+    assert.equal(isCompatibleTwilightRange(range, version), expected, `${range}: ${version}`)
+  }
+  assert.equal(compareSemver('1.2.4-beta.10', '1.2.4-beta.2'), 1)
+  assert.equal(compareSemver('1.2.4-beta', '1.2.4'), -1)
+  assert.equal(compareSemver('1.2.4+build.5', '1.2.4'), 0)
+})
+
 test('converts descriptors to the host manifest sent to plugin processes', async () => {
   const manifest = validatePluginManifest({
     ...validManifest,

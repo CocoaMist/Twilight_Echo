@@ -33,6 +33,7 @@ PcmOutputProviderStatus validatePcmOutputProviderForBackend(
     std::string* error);
 
 std::string defaultBackendId();
+bool isOutputBackendAvailable(const std::string& backendId);
 std::unique_ptr<IOutputBackend> createOutputBackend(
     const std::string& backendId,
     std::string* error = nullptr);

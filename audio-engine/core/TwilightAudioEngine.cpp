@@ -1099,6 +1099,13 @@ TAE_Result TwilightAudioEngine::setOutputBackend(const std::string& backendId) {
     emitError(providerError, result, "output-backend");
     return result;
   }
+  if (!isOutputBackendAvailable(nextBackend)) {
+    emitError(
+        "Output backend is not available in this build: " + nextBackend,
+        TAE_RESULT_BACKEND_UNAVAILABLE,
+        "output-backend");
+    return TAE_RESULT_BACKEND_UNAVAILABLE;
+  }
   std::lock_guard lock(mutex_);
   if (pausedOutputReleased_) info_.outputInfo.backend = nextBackend;
   if (nextBackend != info_.outputBackend) outputRoutePending_ = true;
@@ -1909,10 +1916,10 @@ void TwilightAudioEngine::stopClock() {
 void TwilightAudioEngine::wakeClock() const {
   {
     std::lock_guard lock(clockMutex_);
-    // A playing clock already ticks every 100 ms; waking it early would only
-    // pull its tick right behind each command.
-    if (!clockIdle_) return;
+    // Record before the idle check: a command can race the transition into an
+    // idle wait. Active waits ignore it and retain their 100 ms cadence.
     clockWakeRequested_ = true;
+    if (!clockIdle_) return;
   }
   clockCv_.notify_all();
 }
@@ -1925,7 +1932,7 @@ void TwilightAudioEngine::waitForClockTick(bool active) {
   const auto interval = active ? std::chrono::milliseconds(100) : std::chrono::milliseconds(1000);
   std::unique_lock lock(clockMutex_);
   clockIdle_ = !active;
-  clockCv_.wait_for(lock, interval, [this] { return clockWakeRequested_ || !running_; });
+  clockCv_.wait_for(lock, interval, [this, active] { return (!active && clockWakeRequested_) || !running_; });
   clockWakeRequested_ = false;
 }
 
@@ -1939,7 +1946,7 @@ void TwilightAudioEngine::clockLoop() {
     }
     waitForClockTick(active);
     if (!running_) break;
-    std::lock_guard transportLock(transportMutex_);
+    std::unique_lock transportLock(transportMutex_);
     // Nobody may be listening for playback snapshots (the N-API addon polls
     // GetPlaybackInfo instead), so only serialize them when a consumer asked.
     const bool stateEvents = stateEventsEnabled_.load(std::memory_order_relaxed);
@@ -1979,7 +1986,11 @@ void TwilightAudioEngine::clockLoop() {
       std::ostringstream configPayload;
       configPayload << "{\"requestedConfigRevision\":" << pipelineStatus.requestedConfigRevision
                     << ",\"appliedConfigRevision\":" << pipelineStatus.appliedConfigRevision << "}";
+      // A consumer may wait for a transport command while handling this event.
+      // Let that command complete before applying the clock's earlier snapshot.
+      transportLock.unlock();
       emit("config-applied", configPayload.str());
+      transportLock.lock();
     }
     if (deviceInvalidated) {
       std::string source;
@@ -2062,7 +2073,7 @@ void TwilightAudioEngine::clockLoop() {
         if (!queueAlreadyOnStartedItem) {
           queue_.advanceAfterEnd();
         }
-        applyPipelineStatusLocked(pipelineStatus);
+        applyClockPipelineStatusLocked(pipelineStatus);
         info_.queueIndex = queue_.currentIndex();
         info_.playMode = queue_.playModeId();
         upcoming = queue_.upcoming();
@@ -2084,7 +2095,7 @@ void TwilightAudioEngine::clockLoop() {
     {
       std::lock_guard lock(mutex_);
       if (hasPipelineStatus && info_.state != PlaybackState::Stopped) {
-        applyPipelineStatusLocked(pipelineStatus);
+        applyClockPipelineStatusLocked(pipelineStatus);
       }
       if (emitEnded) {
         autoNextItem = queue_.advanceAfterEnd();
@@ -2170,6 +2181,15 @@ void TwilightAudioEngine::emitError(const std::string& message, TAE_Result code,
 void TwilightAudioEngine::publishStateLocked() const {
   if (!stateEventsEnabled_.load(std::memory_order_relaxed)) return;
   emit("playback-info", playbackInfoToJson(info_));
+}
+
+void TwilightAudioEngine::applyClockPipelineStatusLocked(const PipelineStatus& status) {
+  // The clock snapshot can predate a completed pause/resume/stop command.
+  // Commands and explicit terminal events own transport state; ticks refresh
+  // progress and metadata without undoing their committed state.
+  const PlaybackState committedState = info_.state;
+  applyPipelineStatusLocked(status);
+  info_.state = committedState;
 }
 
 void TwilightAudioEngine::applyPipelineStatusLocked(const PipelineStatus& status) {

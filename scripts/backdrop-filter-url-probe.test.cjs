@@ -53,6 +53,7 @@ const REGION = { width: 240, height: 72 }
  * screenshot does show unblurred text through the bar.
  */
 const REGION_ORIGIN = {
+  shipped: { x: 104, y: 160 },
   control: { x: 104, y: 320 },
   blur: { x: 424, y: 320 },
   invert: { x: 744, y: 320 },
@@ -65,8 +66,7 @@ const REGION_ORIGIN = {
   control3: { x: 104, y: 640 },
   lensChain: { x: 424, y: 640 },
   maskedChain: { x: 744, y: 640 },
-  // The shipped *order*: the playbar runs the lens before blur/saturate so the
-  // chain is handed the sharp backdrop. See LENS FIRST below.
+  // Compare the unsupported alternative with the shipped blur-first order.
   lensFirst: { x: 1064, y: 640 }
 }
 
@@ -188,10 +188,10 @@ function probePageSource() {
   ${region('mixedDisplace', `${MIXED_PREFIX} url(#te-probe-displace)`)}
 
   <!-- Row three: the real chain shapes, against a runtime-baked feImage map.
-       'lensFirst' carries the same chain with the function order the playbar
-       ships: a mixed list whose url() comes *before* blur/saturate. A list
+       'lensFirst' compares a mixed list whose url() comes *before* blur/saturate. A list
        Chromium refuses in that order is dropped whole, taking the blur with it. -->
   ${region('control3', '')}
+  ${region('shipped', process.platform === 'linux' ? MIXED_PREFIX : `url(#te-probe-lens) ${MIXED_PREFIX}`)}
   ${region('lensChain', `${MIXED_PREFIX} url(#te-probe-lens)`)}
   ${region('maskedChain', `${MIXED_PREFIX} url(#te-probe-masked)`)}
   ${region('lensFirst', `url(#te-probe-lens) ${MIXED_PREFIX}`)}
@@ -277,6 +277,7 @@ function runnerSource() {
   const geometry = JSON.stringify({ REGION, REGION_ORIGIN })
 
   return `const { app, BrowserWindow } = require('electron')
+const fs = require('node:fs')
 const path = require('node:path')
 const target = process.argv.at(-1)
 const geometry = ${geometry}
@@ -293,6 +294,12 @@ function regionStats(bitmap, imageWidth, scale, id) {
   const y0 = Math.round(origin.y * scale)
   const w = Math.round(geometry.REGION.width * scale)
   const h = Math.round(geometry.REGION.height * scale)
+  const imageHeight = bitmap.length / (imageWidth * 4)
+  // A hosted Windows desktop can clamp the window to 1024x768. Never read
+  // another row as if it were a clipped diagnostic region's pixels.
+  if (x0 < 0 || y0 < 0 || x0 + w > imageWidth || y0 + h > imageHeight) {
+    return { pixels: [], mean: [], count: 0, contrast: null }
+  }
   const pixels = []
   let sumR = 0
   let sumG = 0
@@ -329,6 +336,7 @@ function regionStats(bitmap, imageWidth, scale, id) {
 }
 
 function compare(reference, candidate) {
+  if (!reference.count || !candidate.count) return { captured: false }
   let maxDelta = 0
   let differing = 0
   for (let i = 0; i < reference.pixels.length; i += 3) {
@@ -356,6 +364,7 @@ app.whenReady().then(async () => {
     show: false,
     width: 1440,
     height: 900,
+    useContentSize: true,
     webPreferences: { contextIsolation: false, nodeIntegration: false, offscreen: true }
   })
   window.webContents.on('console-message', (_event, _level, message) =>
@@ -390,7 +399,19 @@ app.whenReady().then(async () => {
     const image = await window.webContents.capturePage()
     const size = image.getSize()
     const bitmap = image.toBitmap()
-    const scale = size.width / 1440
+    if (process.env.RUNNER_TEMP) {
+      fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'backdrop-filter-probe.png'), image.toPNG())
+    }
+    // BrowserWindow dimensions include the native frame unless useContentSize
+    // is set. Derive pixel coordinates from the actual CSS viewport, not the
+    // requested outer width; Windows runner decorations and DPI vary.
+    const viewport = await window.webContents.executeJavaScript(
+      '({ width: innerWidth, height: innerHeight, devicePixelRatio })'
+    )
+    if (bitmap.length !== size.width * size.height * 4) {
+      throw new Error('Capture dimensions do not match the BGRA bitmap')
+    }
+    const scale = size.width / viewport.width
 
     const stats = {}
     for (const id of Object.keys(geometry.REGION_ORIGIN)) {
@@ -402,6 +423,7 @@ app.whenReady().then(async () => {
         JSON.stringify({
           scale,
           imageSize: size,
+          viewport,
           parsed: JSON.parse(parsed),
           controlMean: stats.control.mean,
           blur: compare(stats.control, stats.blur),
@@ -418,7 +440,7 @@ app.whenReady().then(async () => {
           // unfiltered control exactly; a chain that merely looks different
           // still shows the blur's flattened contrast.
           contrast: Object.fromEntries(
-            ['control3', 'lensChain', 'maskedChain', 'lensFirst'].map((id) => [id, stats[id].contrast])
+            ['control3', 'shipped', 'lensChain', 'maskedChain', 'lensFirst'].map((id) => [id, stats[id].contrast])
           ),
           lensChain: compare(stats.control3, stats.lensChain),
           maskedChain: compare(stats.control3, stats.maskedChain),
@@ -457,6 +479,9 @@ test('backdrop-filter url() capability probe', async (t) => {
     const line = stdout.split(/\r?\n/).find((entry) => entry.startsWith('PROBE_RESULT '))
     assert.ok(line, `probe produced no result.\nstdout:\n${stdout}\nstderr:\n${stderr}`)
     const result = JSON.parse(line.slice('PROBE_RESULT '.length))
+    t.diagnostic(
+      `capture geometry: ${JSON.stringify({ image: result.imageSize, viewport: result.viewport, scale: result.scale })}`
+    )
 
     // A backdrop effect that is known to work must register, otherwise a negative
     // url() result says nothing about Chromium and everything about this harness.
@@ -495,18 +520,31 @@ test('backdrop-filter url() capability probe', async (t) => {
     const lensContrast = result.contrast.lensChain
     const maskedContrast = result.contrast.maskedChain
     const lensFirstContrast = result.contrast.lensFirst
+    const shippedContrast = result.contrast.shipped
+    assert.ok(
+      Number.isFinite(rawContrast) && Number.isFinite(shippedContrast),
+      'the control and shipped surface must both fit within the captured viewport'
+    )
     // Halfway between "blurred" (~1) and "raw pattern" (~14-18) on a log scale.
     const droppedThreshold = rawContrast * 0.5
 
     t.diagnostic(`map decode:      ${result.mapReady}`)
     t.diagnostic(`contrast raw:    ${rawContrast.toFixed(2)} (no filter)`)
-    t.diagnostic(`contrast lens:   ${lensContrast.toFixed(2)} (shipped chain)`)
-    t.diagnostic(`contrast masked: ${maskedContrast.toFixed(2)} (feComposite vs feImage alpha)`)
-    t.diagnostic(`contrast first:  ${lensFirstContrast.toFixed(2)} (url() ahead of blur)`)
+    t.diagnostic(
+      `contrast lens:   ${Number.isFinite(lensContrast) ? lensContrast.toFixed(2) : 'not captured'} (blur-first chain)`
+    )
+    t.diagnostic(
+      `contrast masked: ${Number.isFinite(maskedContrast) ? maskedContrast.toFixed(2) : 'not captured'} (feComposite vs feImage alpha)`
+    )
+    t.diagnostic(
+      `contrast first:  ${Number.isFinite(lensFirstContrast) ? lensFirstContrast.toFixed(2) : 'not captured'} (url() ahead of blur)`
+    )
+    t.diagnostic(`contrast shipped (${process.platform}): ${shippedContrast.toFixed(2)}`)
 
-    const lensApplies = lensContrast < droppedThreshold
-    const maskedIsDropped = maskedContrast >= droppedThreshold
-    const lensFirstApplies = lensFirstContrast < droppedThreshold
+    const lensApplies = Number.isFinite(lensContrast) && lensContrast < droppedThreshold
+    const maskedIsDropped = Number.isFinite(maskedContrast) && maskedContrast >= droppedThreshold
+    const lensFirstApplies =
+      Number.isFinite(lensFirstContrast) && lensFirstContrast < droppedThreshold
 
     console.log(
       [
@@ -523,9 +561,9 @@ test('backdrop-filter url() capability probe', async (t) => {
         `computed mixed value kept:       ${result.parsed.mixedDisplace}`,
         '',
         '--- real chain shapes (feImage + baked map) ---',
-        `F. blur-first lens chain applies: ${lensApplies ? 'YES' : 'NO'}`,
-        `G. feImage-masked chain dropped: ${maskedIsDropped ? 'YES (as expected)' : 'no longer reproduces'}`,
-        `H. url() ahead of blur applies:  ${lensFirstApplies ? 'YES' : 'NO — ORDER IS REJECTED'}`,
+        `F. blur-first lens chain applies: ${Number.isFinite(lensContrast) ? (lensApplies ? 'YES' : 'NO') : 'NOT CAPTURED'}`,
+        `G. feImage-masked chain dropped: ${Number.isFinite(maskedContrast) ? (maskedIsDropped ? 'YES' : 'no longer reproduces') : 'NOT CAPTURED'}`,
+        `H. url() ahead of blur applies:  ${Number.isFinite(lensFirstContrast) ? (lensFirstApplies ? 'YES' : 'NO') : 'NOT CAPTURED'}`,
         '',
         mixedInvertWorks
           ? '=> mixed list survives; the playbar rule is structurally fine.'
@@ -540,26 +578,16 @@ test('backdrop-filter url() capability probe', async (t) => {
       'the baked displacement map never decoded, so the feImage chains prove nothing'
     )
 
-    // Pins the root cause so the finding cannot quietly rot. If Chromium ever
-    // starts honouring this shape, the masking tail becomes a legitimate option
-    // again and this assertion is the signal to revisit that decision.
-    assert.ok(
-      maskedIsDropped,
-      'masking refraction against an feImage-derived alpha no longer breaks the chain. ' +
-        'Chromium behaviour changed; the constraint documented in LiquidGlassDefs.vue can be relaxed.'
-    )
+    // Alternative chains diagnose compositor capability. A Chromium bug being
+    // fixed is not a product regression; only the shipped visual outcome gates.
 
-    /* LENS FIRST — the order the playbar ships.
-       Behind `blur()` the chain is handed an already-smoothed backdrop, and
-       displacing a smooth field resamples to the colour it started from, so the
-       refraction is invisible however large the amplitude. The playbar therefore
-       runs `url() blur() saturate()`. If Chromium ever rejects a list in that
-       order it drops the declaration whole and the surface loses its blur too. */
+    // The Linux surface ships a CSS-only fallback. Other platforms retain the
+    // lens-first chain. Both SVG orders remain measured capability diagnostics.
     assert.ok(
-      lensFirstApplies,
-      `url() ahead of blur() is not honoured: contrast ${lensFirstContrast.toFixed(2)} matches the ` +
+      shippedContrast < droppedThreshold,
+      `the shipped ${process.platform} chain is not honoured: contrast ${shippedContrast.toFixed(2)} matches the ` +
         `unfiltered backdrop (${rawContrast.toFixed(2)}), so the whole declaration was dropped. ` +
-        'Move the playbar back to a blur-first list and refract in a nested layer instead.'
+        'Validate a separate compositing layer before changing the playbar material.'
     )
   } finally {
     await rm(root, { recursive: true, force: true })

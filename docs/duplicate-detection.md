@@ -44,7 +44,7 @@ attempted. Only confirmed successes refresh the renderer's cached title/artist/a
 
 Run `pnpm run benchmark:duplicate-detection` to execute the TypeScript benchmark and write the
 current 10,000-row unique and high-collision results to
-`docs/audit-evidence/te-4.4-duplicate-detection-2026-07-18.json` plus its `.manifest.json`.
+`docs/audit-evidence/te-4.4-duplicate-detection-2026-09-30.json` plus its `.manifest.json`.
 The runner performs three unmeasured warmups followed by twenty measured iterations per scenario,
 emits every measured timing and p50/p95 values, and fails when either scenario exceeds its declared
 p95 budget. The evidence records SHA-256 hashes for the production implementation, shared contract,

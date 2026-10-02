@@ -1,7 +1,8 @@
 import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
-import { extname, join } from 'node:path'
-import { NetworkSourceFailure } from './errors.ts'
+import { dirname, extname, join, resolve } from 'node:path'
+import { pipeline } from 'node:stream/promises'
+import { NetworkResumeUnsupported, NetworkSourceFailure } from './errors.ts'
 import type { NetworkSourceSession } from './adapters/types.ts'
 import type { NetworkEntry } from '../../shared/networkSources.ts'
 
@@ -16,8 +17,20 @@ export async function downloadEntryToCache(deps: {
   signal?: AbortSignal
 }): Promise<string> {
   const { session, entry, cacheRoot, signal } = deps
-  const extension = entry.name.includes('.') ? extname(entry.name) : ''
-  const target = join(cacheRoot, `${entry.id}${extension}`)
+  // Safe legacy keys remain readable. Renderer-supplied keys are never used by
+  // the manager; this check also protects metadata and future direct callers.
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(entry.id)) {
+    throw new NetworkSourceFailure('denied', '无效的网络缓存标识')
+  }
+  const suffix = extname(entry.name)
+  const extension = /^\.[a-z0-9]{1,16}$/i.test(suffix) ? suffix : ''
+  const target = resolve(cacheRoot, `${entry.id}${extension}`)
+  if (dirname(target) !== resolve(cacheRoot)) {
+    throw new NetworkSourceFailure('denied', '无效的网络缓存路径')
+  }
+  if (entry.sizeBytes != null && (!Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0)) {
+    throw new NetworkSourceFailure('network', '无效的网络文件大小')
+  }
   await mkdir(cacheRoot, { recursive: true })
 
   try {
@@ -35,11 +48,13 @@ export async function downloadEntryToCache(deps: {
     } catch {
       // 无部分文件，从头下载
     }
-    if (entry.sizeBytes != null && partialSize > entry.sizeBytes) {
+    // Without a known total the stream interface cannot prove Range was
+    // honored. Restart instead of appending a potentially complete response.
+    if (entry.sizeBytes == null || partialSize > entry.sizeBytes) {
       await rm(temp, { force: true })
       partialSize = 0
     }
-    if (entry.sizeBytes != null && partialSize === entry.sizeBytes) {
+    if (partialSize > 0 && partialSize === entry.sizeBytes) {
       await rename(temp, target)
       return target
     }
@@ -47,23 +62,14 @@ export async function downloadEntryToCache(deps: {
       if (signal?.aborted) throw new NetworkSourceFailure('timeout', '网络文件下载已取消')
       const start = attempt === 0 ? partialSize : 0
       if (start === 0 && attempt > 0) await rm(temp, { force: true })
-      const stream = await session.readStream(entry.path, signal, { start })
-      await new Promise<void>((resolve, reject) => {
-        const out = createWriteStream(temp, { flags: start > 0 ? 'a' : 'w' })
-        const onAbort = (): void => {
-          out.destroy(new Error('download aborted'))
-          const destroyable = stream as NodeJS.ReadableStream & {
-            destroy?: (error?: Error) => void
-          }
-          destroyable.destroy?.(new Error('download aborted'))
-        }
-        signal?.addEventListener('abort', onAbort, { once: true })
-        stream.on('error', reject)
-        out.on('error', reject)
-        out.on('finish', resolve)
-        out.on('close', () => signal?.removeEventListener('abort', onAbort))
-        stream.pipe(out)
-      })
+      let stream: NodeJS.ReadableStream
+      try {
+        stream = await session.readStream(entry.path, signal, { start })
+      } catch (error) {
+        if (start > 0 && error instanceof NetworkResumeUnsupported) continue
+        throw error
+      }
+      await pipeline(stream, createWriteStream(temp, { flags: start > 0 ? 'a' : 'w' }), { signal })
       const completedSize = (await stat(temp)).size
       if (entry.sizeBytes == null || completedSize === entry.sizeBytes) {
         await rename(temp, target)

@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog, shell, screen } from 'electron'
+import { app, BrowserWindow, dialog, shell, screen, nativeTheme } from 'electron'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { runtime } from '../core/runtime'
-import { getWindowBackgroundColor } from '../audio/state'
+import { getWindowBackgroundColor } from './windowAppearance.ts'
 import {
   isWindowsAcrylicBackdropAvailable,
   isWindowsAcrylicBuild,
@@ -164,7 +164,9 @@ export function createWindow(): void {
     show: false,
     frame: false,
     transparent: transparent && !acrylic,
-    backgroundColor: transparent ? '#00000000' : getWindowBackgroundColor(runtime.appSettings),
+    backgroundColor: transparent
+      ? '#00000000'
+      : getWindowBackgroundColor(runtime.appSettings, nativeTheme.shouldUseDarkColors),
     ...(acrylic ? { backgroundMaterial: 'acrylic' as const } : {}),
     icon: getAppIconPath(),
     webPreferences: {

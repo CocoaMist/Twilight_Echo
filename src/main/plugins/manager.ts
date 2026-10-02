@@ -616,6 +616,7 @@ export class TwilightPluginManager extends EventEmitter {
 
   async broadcastEvent(name: string, payload: unknown): Promise<void> {
     for (const running of this.running.values()) {
+      if (this.hibernated.has(running.descriptor.id)) continue
       if (running.subscriptions.has(name)) {
         this.hostIdle?.touch(running.descriptor.id)
         running.process.postMessage({ kind: 'event', name, payload } satisfies PluginHostRequest)
@@ -624,7 +625,7 @@ export class TwilightPluginManager extends EventEmitter {
     // A hibernated plugin that subscribed to this event is woken so it does
     // not miss it; plugins that never subscribed stay asleep. Lifecycle
     // events during shutdown must not resurrect hosts.
-    if (this.shuttingDown || PUBLIC_APP_EVENTS.has(name)) return
+    if (this.shuttingDown || name === 'app:before-quit') return
     for (const [id, sleeping] of this.hibernated) {
       if (!sleeping.subscriptions.has(name)) continue
       void this.wakePlugin(id)
@@ -647,7 +648,7 @@ export class TwilightPluginManager extends EventEmitter {
   private contributingPlugins(): Array<RunningPlugin | HibernatedPlugin> {
     return [
       ...this.hibernated.values(),
-      ...[...this.running.values()].filter((plugin) => !this.hibernated.has(plugin.descriptor.id))
+      ...[...this.running.values()].filter((running) => !this.hibernated.has(running.descriptor.id))
     ]
   }
 

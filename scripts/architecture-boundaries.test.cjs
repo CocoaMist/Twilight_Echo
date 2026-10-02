@@ -5,8 +5,31 @@ const fs = require('node:fs')
 const { builtinModules } = require('node:module')
 const path = require('node:path')
 const test = require('node:test')
+const ts = require('typescript')
 
 const ROOT = path.join(__dirname, '..')
+
+test('lyric internals never import the compatibility facade or reverse their dependency layers', () => {
+  const utils = path.join(ROOT, 'src', 'renderer', 'src', 'utils')
+  const layers = {
+    'lyricTypes.ts': 0,
+    'lyricParser.ts': 1,
+    'embeddedLyricLayers.ts': 1,
+    'amllTtml.ts': 1,
+    'lyricLineBuilder.ts': 2,
+    'lyrics.ts': 3
+  }
+  for (const [name, layer] of Object.entries(layers)) {
+    if (name === 'lyrics.ts') continue
+    for (const specifier of collectImports(path.join(utils, name))) {
+      const target = resolveImportTarget(path.join(utils, name), specifier)
+      if (!target) continue
+      const dependency = path.basename(target)
+      if (dependency in layers)
+        assert.ok(layers[dependency] < layer, `${name} must not depend on ${dependency}`)
+    }
+  }
+})
 
 test('IPC channels are consistently registered in main and exposed through preload', () => {
   const sorted = (values) => [...new Set(values)].sort()
@@ -192,4 +215,70 @@ test('renderer utils never reach across the IPC bridge or preload runtime', () =
     if (/\bipcRenderer\b/.test(source)) violations.push(rel(file) + ' touches ipcRenderer')
   }
   assertNoViolations(violations)
+})
+
+test('main eager runtime imports are acyclic', () => {
+  const files = walk(path.join(ROOT, 'src', 'main')).filter(
+    (file) => !isTestFile(file) && !file.endsWith('.d.ts')
+  )
+  const fileSet = new Set(files)
+  const graph = new Map(files.map((file) => [file, new Set()]))
+  for (const file of files) {
+    const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest)
+    const add = (specifier) => {
+      const target = resolveImportTarget(file, specifier)
+      if (target === null) return
+      const resolved = [target, target + '.ts', path.join(target, 'index.ts')].find((candidate) =>
+        fileSet.has(candidate)
+      )
+      if (resolved) graph.get(file).add(resolved)
+    }
+    for (const statement of source.statements) {
+      if (ts.isImportDeclaration(statement)) {
+        const clause = statement.importClause
+        if (clause?.isTypeOnly) continue
+        if (
+          clause &&
+          !clause.name &&
+          clause.namedBindings &&
+          ts.isNamedImports(clause.namedBindings) &&
+          clause.namedBindings.elements.length > 0 &&
+          clause.namedBindings.elements.every((element) => element.isTypeOnly)
+        )
+          continue
+        add(statement.moduleSpecifier.text)
+      } else if (ts.isExportDeclaration(statement) && statement.moduleSpecifier) {
+        if (statement.isTypeOnly) continue
+        if (
+          statement.exportClause &&
+          ts.isNamedExports(statement.exportClause) &&
+          statement.exportClause.elements.length > 0 &&
+          statement.exportClause.elements.every((element) => element.isTypeOnly)
+        )
+          continue
+        add(statement.moduleSpecifier.text)
+      }
+    }
+  }
+  // Only eager imports participate: type references erase at build time and
+  // deferred import() calls do not cause module-initialization cycles.
+  const active = new Set()
+  const visited = new Set()
+  const chain = []
+  const cycles = []
+  const visit = (file) => {
+    if (active.has(file)) {
+      cycles.push([...chain.slice(chain.indexOf(file)), file].map(rel).join(' -> '))
+      return
+    }
+    if (visited.has(file)) return
+    active.add(file)
+    chain.push(file)
+    for (const dependency of graph.get(file)) visit(dependency)
+    chain.pop()
+    active.delete(file)
+    visited.add(file)
+  }
+  for (const file of files) visit(file)
+  assertNoViolations(cycles)
 })

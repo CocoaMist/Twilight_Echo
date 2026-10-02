@@ -129,6 +129,7 @@ import { createHeartModeController } from './player/heartModeController.ts'
 import { createRemoteControlBridge } from './player/remoteControlBridge.ts'
 import { createRemotePlaybackPublisher } from './player/remotePlaybackPublisher.ts'
 import { createNativePlaybackToggleController } from '@renderer/stores/player/nativePlaybackToggleController.ts'
+import { createPlayerSystemIntegrations } from './player/playerSystemIntegrations.ts'
 
 type NativePlaybackInfo = Awaited<ReturnType<typeof window.api.audioEngine.getPlaybackInfo>>
 type NativeOutputInfo = NativePlaybackInfo['outputInfo']
@@ -1497,6 +1498,8 @@ function getNativeQueueAdvanceTarget(
 }
 
 async function advanceNativePlayback(direction: 'next' | 'previous'): Promise<void> {
+  const loadToken = ++activeLoadToken
+  const isCurrentAdvance = () => loadToken === activeLoadToken
   // Drop any pending pause/play grace — a track switch is a new transport action
   // and must not be blocked by a prior pause intent (UI stuck paused while audio
   // already advanced).
@@ -1525,21 +1528,27 @@ async function advanceNativePlayback(direction: 'next' | 'previous'): Promise<vo
   try {
     isLoading.value = true
     await waitForNativeQueueStateSync()
+    if (!isCurrentAdvance()) return
     if (direction === 'next') {
       await window.api.audioEngine.next()
     } else {
       await window.api.audioEngine.previous()
     }
+    if (!isCurrentAdvance()) return
     await new Promise((resolve) =>
       window.setTimeout(resolve, NATIVE_PLAYBACK_INFO_REFRESH_DELAY_MS)
     )
+    if (!isCurrentAdvance()) return
     let info = await window.api.audioEngine.getPlaybackInfo()
+    if (!isCurrentAdvance()) return
     let applied = applyNativePlaybackInfo(info, { applyTrackWhenInactive: true })
     if (!applied) {
       await new Promise((resolve) =>
         window.setTimeout(resolve, NATIVE_PLAYBACK_INFO_REFRESH_DELAY_MS)
       )
+      if (!isCurrentAdvance()) return
       info = await window.api.audioEngine.getPlaybackInfo()
+      if (!isCurrentAdvance()) return
       applied = applyNativePlaybackInfo(info, { applyTrackWhenInactive: true })
     }
     if (!applied) {
@@ -1575,12 +1584,13 @@ async function advanceNativePlayback(direction: 'next' | 'previous'): Promise<vo
       isLoading.value = false
     }
   } catch (err) {
+    if (!isCurrentAdvance()) return
     clearNativePlaybackInfoIntent()
     setAudioEngineError(err instanceof Error ? err.message : String(err))
     console.error('[音频引擎] 切换歌曲失败:', err)
     isLoading.value = false
   } finally {
-    if (isPlaying.value && currentTrack.value) startVisualizationPolling()
+    if (isCurrentAdvance() && isPlaying.value && currentTrack.value) startVisualizationPolling()
   }
 }
 
@@ -1661,7 +1671,6 @@ async function setPlaybackRate(rate: number): Promise<void> {
   if (currentTrack.value?.source === 'podcast') {
     setPodcastDefaultPlaybackRate(rounded)
   }
-  updateMediaSessionPositionState()
 }
 
 watch(
@@ -2771,6 +2780,8 @@ function disposePlayerStoreRuntime(): void {
     }
   }
   listenersSetup = false
+  playerSystemIntegrations.dispose()
+  playerSleepTimer.dispose()
   playerRuntimeScope.stop()
   playerIntegrationSideEffectsSetup = false
   clearRendererPlaybackWatchdog()
@@ -3430,222 +3441,28 @@ function enforceAbLoop(time: number): void {
 }
 
 let playerIntegrationSideEffectsSetup = false
-let mediaSessionHandlersBound = false
-let mediaSessionMetadataKey = ''
-let systemMediaBackendResolved = false
-let nativeSystemMediaActive = false
-let discordPlayStartTimestamp: number | null = null
-
-function rendererOwnsMediaSession(): boolean {
-  return systemMediaBackendResolved && !nativeSystemMediaActive
-}
-
-function clearRendererMediaSession(): void {
-  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return
-  navigator.mediaSession.metadata = null
-  navigator.mediaSession.playbackState = 'none'
-  if (!mediaSessionHandlersBound) return
-  for (const action of [
-    'play',
-    'pause',
-    'previoustrack',
-    'nexttrack',
-    'seekto',
-    'seekbackward',
-    'seekforward'
-  ] as MediaSessionAction[]) {
-    try {
-      navigator.mediaSession.setActionHandler(action, null)
-    } catch {
-      // Older Chromium builds may not expose every action.
-    }
-  }
-  mediaSessionHandlersBound = false
-  mediaSessionMetadataKey = ''
-}
-
-async function resolveSystemMediaBackendPreference(): Promise<void> {
-  try {
-    const status = await window.api.systemMedia.getNativeStatus()
-    nativeSystemMediaActive = status.active === true
-  } catch {
-    // Native status IPC is best-effort; Chromium MediaSession remains the fallback.
-    nativeSystemMediaActive = false
-  } finally {
-    systemMediaBackendResolved = true
-  }
-
-  if (nativeSystemMediaActive) {
-    clearRendererMediaSession()
-    return
-  }
-  if (appSettings.value?.smtcEnabled) setupMediaSessionHandlers()
-  updateMediaSessionMetadata()
-}
-
-function updateMediaSessionPlaybackState(): void {
-  if (
-    typeof navigator === 'undefined' ||
-    !('mediaSession' in navigator) ||
-    !rendererOwnsMediaSession()
-  )
-    return
-  navigator.mediaSession.playbackState =
-    appSettings.value?.smtcEnabled && currentTrack.value
-      ? isPlaying.value
-        ? 'playing'
-        : 'paused'
-      : 'none'
-}
-
-function updateMediaSessionPositionState(): void {
-  if (
-    typeof navigator === 'undefined' ||
-    !('mediaSession' in navigator) ||
-    !rendererOwnsMediaSession() ||
-    !appSettings.value?.smtcEnabled ||
-    !currentTrack.value ||
-    duration.value <= 0 ||
-    !Number.isFinite(currentTime.value)
-  ) {
-    return
-  }
-
-  try {
-    navigator.mediaSession.setPositionState({
-      duration: duration.value,
-      position: Math.min(currentTime.value, duration.value),
-      playbackRate: playbackRate.value
-    })
-  } catch {
-    // setPositionState can throw if values are invalid; ignore
-  }
-}
-
-function updateMediaSessionMetadata(): void {
-  if (
-    typeof navigator === 'undefined' ||
-    !('mediaSession' in navigator) ||
-    !rendererOwnsMediaSession()
-  )
-    return
-  if (!appSettings.value?.smtcEnabled) {
-    mediaSessionMetadataKey = ''
-    navigator.mediaSession.metadata = null
-    navigator.mediaSession.playbackState = 'none'
-    return
-  }
-
-  const track = currentTrack.value
-  if (!track) {
-    mediaSessionMetadataKey = ''
-    navigator.mediaSession.metadata = null
-    navigator.mediaSession.playbackState = 'none'
-    return
-  }
-
-  const nextMetadataKey = [
-    track.id,
-    track.title || '',
-    track.artist || '',
-    track.album || '',
-    track.cover || ''
-  ].join('\u0000')
-
-  if (mediaSessionMetadataKey !== nextMetadataKey) {
-    mediaSessionMetadataKey = nextMetadataKey
-    navigator.mediaSession.metadata =
-      typeof MediaMetadata !== 'undefined'
-        ? new MediaMetadata({
-            title: track.title || '',
-            artist: track.artist || '',
-            album: track.album || '',
-            artwork: track.cover ? [{ src: track.cover, sizes: '512x512', type: 'image/jpeg' }] : []
-          })
-        : null
-  }
-
-  updateMediaSessionPlaybackState()
-  updateMediaSessionPositionState()
-}
-
-function setupMediaSessionHandlers(): void {
-  if (
-    typeof navigator === 'undefined' ||
-    !('mediaSession' in navigator) ||
-    !rendererOwnsMediaSession()
-  )
-    return
-  if (mediaSessionHandlersBound) return
-  mediaSessionHandlersBound = true
-  const ms = navigator.mediaSession
-  ms.setActionHandler('play', () => {
-    if (!isPlaying.value) void togglePlayState()
-  })
-  ms.setActionHandler('pause', () => {
-    if (isPlaying.value) void togglePlayState()
-  })
-  ms.setActionHandler('previoustrack', () => {
-    previous()
-  })
-  ms.setActionHandler('nexttrack', () => {
-    next()
-  })
-  ms.setActionHandler('seekto', (details) => {
-    if (details.seekTime != null) seekPlayback(details.seekTime)
-  })
-  ms.setActionHandler('seekbackward', () => {
-    seekPlayback(Math.max(0, currentTime.value - 10))
-  })
-  ms.setActionHandler('seekforward', () => {
-    seekPlayback(Math.min(duration.value, currentTime.value + 10))
-  })
-}
-
-function updateDiscordActivity(): void {
-  const discordApi = window.api?.discord
-  if (!discordApi) return
-
-  if (appSettings.value?.discordRpcEnabled !== true) {
-    discordApi.clearActivity().catch(() => {})
-    return
-  }
-  const track = currentTrack.value
-  if (!track || !isPlaying.value) {
-    discordPlayStartTimestamp = null
-    discordApi.clearActivity().catch(() => {})
-    return
-  }
-  if (discordPlayStartTimestamp === null) {
-    discordPlayStartTimestamp = Date.now()
-  }
-  discordApi
-    .updateActivity({
-      title: track.title || '',
-      artist: track.artist || '',
-      album: track.album || '',
-      playing: true,
-      startTime: discordPlayStartTimestamp
-    })
-    .catch(() => {})
-}
+const playerSystemIntegrations = createPlayerSystemIntegrations({
+  currentTrack,
+  isPlaying,
+  currentTime,
+  duration,
+  playbackRate,
+  mediaEnabled: computed(() => Boolean(appSettings.value?.smtcEnabled)),
+  discordEnabled: computed(() => appSettings.value?.discordRpcEnabled === true),
+  commands: { togglePlay: togglePlayState, previous, next, seek: seekPlayback },
+  getNativeStatus: () => window.api.systemMedia.getNativeStatus(),
+  mediaSession: typeof navigator !== 'undefined' ? navigator.mediaSession : undefined,
+  createMetadata:
+    typeof MediaMetadata !== 'undefined' ? (init) => new MediaMetadata(init) : undefined,
+  discord: window.api?.discord
+})
 
 function setupPlayerIntegrationSideEffects(): void {
   if (playerIntegrationSideEffectsSetup) return
   playerIntegrationSideEffectsSetup = true
-  void resolveSystemMediaBackendPreference()
+  playerSystemIntegrations.start()
   void lyricsManagement.ensureLoaded()
-  if (window.api.sleepTimer) {
-    void window.api.sleepTimer.getState().then((state) => {
-      if (state?.active) getSleepTimerController().applyAuthoritativeState(state)
-    })
-    window.api.sleepTimer.onState((state) => {
-      getSleepTimerController().applyAuthoritativeState(state)
-    })
-    window.api.sleepTimer.onTrigger((state) => {
-      getSleepTimerController().applyTrigger(state)
-    })
-  }
+  playerSleepTimer.start()
 
   // This is deliberately owned by the player state machine rather than the
   // application shell. A user can select a track before asynchronous startup
@@ -3660,36 +3477,9 @@ function setupPlayerIntegrationSideEffects(): void {
   )
 
   watch(
-    () => appSettings.value?.smtcEnabled,
-    () => {
-      if (appSettings.value?.smtcEnabled) setupMediaSessionHandlers()
-      updateMediaSessionMetadata()
-    },
-    { immediate: true }
-  )
-
-  watch(
-    [
-      () => currentTrack.value?.id,
-      () => currentTrack.value?.title,
-      () => currentTrack.value?.artist,
-      () => currentTrack.value?.album,
-      () => currentTrack.value?.cover
-    ],
-    () => updateMediaSessionMetadata(),
-    { immediate: true }
-  )
-
-  watch(
     isPlaying,
     () => {
-      updateMediaSessionPlaybackState()
-      if (!isPlaying.value) {
-        discordPlayStartTimestamp = null
-        // Pause/stop is a good moment to flush podcast progress.
-        playbackHistoryController.flushPodcastEpisodeProgress(true)
-      }
-      updateDiscordActivity()
+      if (!isPlaying.value) playbackHistoryController.flushPodcastEpisodeProgress(true)
     },
     { immediate: true }
   )
@@ -3699,10 +3489,6 @@ function setupPlayerIntegrationSideEffects(): void {
     if (!isPlaying.value) return
     if (currentTrack.value?.source !== 'podcast') return
     playbackHistoryController.flushPodcastEpisodeProgress(false)
-  })
-
-  watch([currentTime, duration], () => {
-    if (appSettings.value?.smtcEnabled && isPlaying.value) updateMediaSessionPositionState()
   })
 
   // 8.4：播放后段（≥70%）预解析下一首网易云地址；窗口内的地址由原生队列直接
@@ -3719,12 +3505,6 @@ function setupPlayerIntegrationSideEffects(): void {
     () => {
       if (isPlaying.value) void prefetchUpcomingNcmStream()
     }
-  )
-
-  watch(
-    () => appSettings.value?.discordRpcEnabled,
-    () => updateDiscordActivity(),
-    { immediate: true }
   )
 
   watch(
@@ -3774,9 +3554,10 @@ function setupPlayerIntegrationSideEffects(): void {
     { immediate: true }
   )
 
-  window.api?.bpmAnalysis?.onCompleted((event) => {
+  const stopBpmAnalysis = window.api?.bpmAnalysis?.onCompleted((event) => {
     applyBpmAnalysisToTrack(event.trackId, event.filePath, event.analysis)
   })
+  if (stopBpmAnalysis) cleanupFns.push(stopBpmAnalysis)
 }
 
 function cyclePlayMode(): void {

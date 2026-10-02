@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-09-30T03:06:15.163Z",
+  "node": "v24.13.1",
+  "platform": "win32",
+  "rows": 10000,
+  "profiles": 10,
+  "warmupIterations": 3,
+  "iterations": 20,
+  "concurrentWrites": {
+    "expectedProfiles": 10,
+    "persistedProfiles": 10
+  },
+  "sequentialQueries": {
+    "p50Ms": 81.34100000000001,
+    "p95Ms": 85.01350000000002
+  },
+  "singleSnapshotQuery": {
+    "p50Ms": 8.331800000000158,
+    "p95Ms": 10.037799999999834
+  },
+  "gc": {
+    "forced": false,
+    "count": 29,
+    "totalDurationMs": 37.05079998075962
+  },
+  "memoryBefore": {
+    "rss": 91893760,
+    "heapTotal": 43302912,
+    "heapUsed": 30024448,
+    "external": 10585006,
+    "arrayBuffers": 2126395
+  },
+  "memoryAfter": {
+    "rss": 135847936,
+    "heapTotal": 111497216,
+    "heapUsed": 59712096,
+    "external": 16905595,
+    "arrayBuffers": 8444489
+  },
+  "sourceHashes": {
+    "src/main/network/networkLibrary.ts": "272d8626567f95e99ddb49a29239f264753c75890c428f3a6c8a23f510cc6186",
+    "src/main/network/networkLibraryPersistence.ts": "0da73f66652ed24dfa8016dfaad83b42e651266c78eecf1196b497b452ded9df",
+    "scripts/network-library-benchmark.ts": "180b69e54dd5203517653891d109e732d522fb5d57bfa2ea22fbb7af14cc8b7c"
+  },
+  "limits": "Controlled file-query microbenchmark; GC covers both variants together. Memory endpoints are not peak usage or retained-heap/leak proof. Not end-to-end playback or UI latency."
+}

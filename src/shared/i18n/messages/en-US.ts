@@ -471,18 +471,20 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'error.audio.correction_profile_missing': 'That DSP correction profile does not exist',
   'error.audio.exclusive_unsupported': '{backend} does not support exclusive mode',
   'error.audio.exclusive_switch_failed': 'Could not switch exclusive mode: {detail}',
-  'error.audio.exclusive_config_failed':
-    'Could not apply the exclusive-mode configuration: {detail}',
   'error.audio.device_switch_failed': 'Could not switch the output device: {detail}',
+  'error.audio.output_switch_failed': 'Could not switch the output backend: {detail}',
   'error.audio.device_profile_failed': 'Could not apply the device profile: {detail}',
   'error.audio.service_restarted_during_topology':
     'The audio service restarted while the output topology was being updated',
   'error.audio.service_restarted_during_ack':
     'The audio service restarted while the output topology acknowledgement was being read',
   'error.audio.direct_routing_failed': 'Could not apply direct channel routing: {detail}',
-  'error.audio.output_reopen_failed':
-    'Could not reopen the output with the new configuration: {detail}',
   'error.audio.output_config_failed': 'Could not apply the output configuration: {detail}',
+  'error.audio.default_device_rebind_failed':
+    'Could not follow the system default output device: {detail}',
+  'error.audio.output_target_not_ready':
+    'The target output device could not preserve the current playback session',
+  'error.audio.output_target_unavailable': 'The target output device is unavailable: {device}',
   'error.audio.source_empty': 'The audio source is empty',
   'error.audio.play_failed': 'Playback failed: {detail}',
   'error.audio.pause_failed': 'Pause or resume failed: {detail}',

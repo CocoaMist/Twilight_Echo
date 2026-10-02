@@ -78,3 +78,21 @@ test('fails cyclic plugin dependencies and dependents', () => {
   assert.match(plan.failures.get('com.example.c') ?? '', /启动条件失败/)
   assert.deepEqual(plan.ordered, [])
 })
+
+test('dependency startup rejects versions below the range and across zero-major caret bounds', () => {
+  for (const [range, version] of [
+    ['^1.2.4', '1.0.0'],
+    ['~1.2.4', '1.2.0'],
+    ['^0.2.4', '0.3.0']
+  ]) {
+    const plan = planPluginStartup([
+      plugin('com.example.consumer', { dependencies: { 'com.example.base': range } }),
+      plugin('com.example.base', { version })
+    ])
+    assert.match(plan.failures.get('com.example.consumer') ?? '', /不满足/, `${range}: ${version}`)
+    assert.deepEqual(
+      plan.ordered.map((entry) => entry.id),
+      ['com.example.base']
+    )
+  }
+})

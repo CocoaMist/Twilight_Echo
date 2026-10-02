@@ -1642,10 +1642,20 @@ test('renderer audio device normalization derives tri-state capability fallbacks
   )
   const helper = extractInternalFunctionBody(normalizeSource, 'normalizeAudioDeviceOptions')
 
-  assert.match(normalizeSource, /function deriveDopSupportState/)
-  assert.match(normalizeSource, /function deriveNativeDsdSupportState/)
+  const devices = normalizeAudioDeviceOptions(
+    [
+      { id: 'hw:0,0', label: 'ALSA DAC', isDefault: false },
+      { id: 'asio:usb', label: 'ASIO DAC', isDefault: false }
+    ],
+    'hw:0,0',
+    'alsa'
+  )
+  assert.equal(
+    devices.find((device) => device.id === 'hw:0,0')?.nativeDsdSupportState,
+    'runtime-probed'
+  )
+  assert.equal(devices.find((device) => device.id === 'asio:usb')?.nativeDsdSupportState, 'unknown')
   assert.match(normalizeSource, /fallbackBackend: AudioOutputId \| '' = ''/)
-  assert.match(normalizeSource, /id\.startsWith\('hw:'\)/)
   assert.match(
     source,
     /normalizeAudioDeviceOptions\(\s*state\.deviceOptions,\s*state\.device,\s*state\.output\s*\)/

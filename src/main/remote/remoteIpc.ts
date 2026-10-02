@@ -36,7 +36,7 @@ import {
 } from './chromecastClient.ts'
 import type { CastDevice } from './castBackend.ts'
 import { buildDidlLiteMetadata } from './didl.ts'
-import { updateAppSettings } from '../audio/state.ts'
+import { updateAppSettings } from '../app/settingsRuntime.ts'
 
 let server: RemoteHttpServer | null = null
 /** Unified cast device list (DLNA + Chromecast). usn field holds the cast id. */

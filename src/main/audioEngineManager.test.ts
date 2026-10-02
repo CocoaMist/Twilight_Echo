@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   describeNativeBindingFailure,
-  loadNativeBindingWithDiagnostics
+  loadNativeBindingWithDiagnostics,
+  resolveElectronApp
 } from './audio/nativeBinding.ts'
 import type { DspGraphStatus, DspScene } from '../shared/dspGraph.ts'
 import type { DspStatePayload } from '../shared/audioServiceContract.ts'
@@ -14,6 +15,45 @@ import { createSleepTimerState } from '../shared/sleepTimer.ts'
 import { deviceOptionsForOutput } from '../shared/audioDeviceRouting.ts'
 import { registerNativeSleepTimerBoundaries } from './audio/sleepTimerNativeBoundary.ts'
 import { SleepTimerService } from './sleepTimerCore.ts'
+
+// Most fake devices in this suite implement Windows backend contracts. Tests
+// for other platforms explicitly override this fixture and restore it locally.
+const hostPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+
+test('plain Node diagnostics never load the Electron SDK or trigger binary discovery', () => {
+  let loads = 0
+  assert.equal(
+    resolveElectronApp('', () => {
+      loads++
+      throw new Error('SDK loaded')
+    }),
+    null
+  )
+  assert.equal(loads, 0)
+})
+
+test('Electron diagnostics use its app API and tolerate non-app or failed loaders', () => {
+  const app = { getAppPath: () => '/fixture' } as (typeof import('electron'))['app']
+  const sdk = { app } as typeof import('electron')
+  assert.equal(
+    resolveElectronApp('43.5.0', () => sdk),
+    app
+  )
+  assert.equal(
+    resolveElectronApp('43.5.0', () => '/electron.exe'),
+    null
+  )
+  assert.equal(
+    resolveElectronApp('43.5.0', () => {
+      throw new Error('unavailable')
+    }),
+    null
+  )
+})
+test.beforeEach(() =>
+  Object.defineProperty(process, 'platform', { ...hostPlatform, value: 'win32' })
+)
+test.afterEach(() => Object.defineProperty(process, 'platform', hostPlatform))
 
 function readPreloadSources(): string {
   const root = new URL('../preload/', import.meta.url)
@@ -1684,11 +1724,7 @@ test('setStereoImage patches default scene balance/phase and preserves it across
   const managerSource = await import('node:fs').then((fs) =>
     fs.readFileSync(new URL('./audioEngineManager.ts', import.meta.url), 'utf8')
   )
-  const dspOrchestratorSource = await import('node:fs').then((fs) =>
-    fs.readFileSync(new URL('./audio/dspOrchestrator.ts', import.meta.url), 'utf8')
-  )
   assert.match(managerSource, /async setStereoImage\(/)
-  assert.match(dspOrchestratorSource, /stereoImage: extractStereoImageFromGraph/)
   assert.match(hifiSource, /Balance \/ Phase/)
   assert.match(hifiSource, /setStereoImage/)
   assert.match(playerBarSource, /dsp-stereo-image/)
@@ -1748,11 +1784,7 @@ test('setOutputStage patches default scene graph.outputStage and preserves it ac
   const managerSource = await import('node:fs').then((fs) =>
     fs.readFileSync(new URL('./audioEngineManager.ts', import.meta.url), 'utf8')
   )
-  const dspOrchestratorSource = await import('node:fs').then((fs) =>
-    fs.readFileSync(new URL('./audio/dspOrchestrator.ts', import.meta.url), 'utf8')
-  )
   assert.match(managerSource, /async setOutputStage\(/)
-  assert.match(dspOrchestratorSource, /outputStage: defaultScene\.graph\.outputStage/)
   assert.match(hifiSource, /DSP_OUTPUT_SAMPLE_RATE_OPTIONS/)
   assert.match(hifiSource, /采样率锁/)
   assert.match(hifiSource, /setOutputStage/)
@@ -4198,6 +4230,66 @@ test('audio service next waits for Next ack before falling back to Play', async 
 
   manager.destroy()
 })
+
+for (const [direction, startIndex, targetIndex] of [
+  ['next', 0, 1],
+  ['previous', 1, 0]
+] as const) {
+  test(`${direction} cannot restart playback after a newer stop`, async (t) => {
+    const service = new FakeAudioServiceBinding()
+    Object.assign(service, { Next: () => {}, Previous: () => {} })
+    const manager = new AudioEngineManager(
+      { exclusiveMode: true, audioOutput: 'wasapi', audioDevice: 'auto' },
+      {
+        audioServiceFactory: () => service,
+        scheduler: TEST_SCHEDULER,
+        deviceOptionsProvider: () => DEVICE_OPTIONS
+      }
+    )
+    t.after(() => manager.destroy())
+    const queue = [
+      { id: '1', source: 'first.flac', title: 'First' },
+      { id: '2', source: 'second.flac', title: 'Second' }
+    ]
+    await manager.loadQueue(queue, startIndex)
+    await manager.play(queue[startIndex].source, 0)
+
+    let releaseAdvance!: () => void
+    let notifyStarted!: () => void
+    const pendingAck = new Promise<void>((resolve) => {
+      releaseAdvance = resolve
+    })
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve
+    })
+    const nativeMethod = direction === 'next' ? 'Next' : 'Previous'
+    const originalCallAsync = service.callAsync.bind(service)
+    service.callAsync = async (method, args) => {
+      if (method !== nativeMethod) return originalCallAsync(method, args)
+      service.callOrder.push(method)
+      service.queueIndex = targetIndex
+      service.playbackInfo = makePlaybackInfo({
+        state: 'playing',
+        source: queue[targetIndex].source,
+        queueIndex: targetIndex,
+        nativePlaybackActive: true
+      })
+      notifyStarted()
+      await pendingAck
+      return undefined
+    }
+
+    const advance = manager[direction]()
+    await started
+    await manager.stop()
+    releaseAdvance()
+    await advance
+
+    assert.equal(service.playCalls, 1)
+    assert.equal(service.playbackInfo.state, 'stopped')
+    assert.equal((await manager.getPlaybackInfo()).state, 'stopped')
+  })
+}
 
 test('audio service loadQueue waits for queue and play mode confirmations in order', async () => {
   const service = new DeferredAudioServiceBinding(['LoadQueue', 'SetPlayMode'])

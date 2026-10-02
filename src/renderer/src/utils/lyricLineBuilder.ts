@@ -1,5 +1,9 @@
 import { isAmlTtml, parseAmlTtml } from '@renderer/utils/amllTtml.ts'
-import { parseTimedLrc, parsePlainLyrics, parsePlainLyricLines } from '@renderer/utils/lyrics.ts'
+import {
+  parseTimedLrc,
+  parsePlainLyrics,
+  parsePlainLyricLines
+} from '@renderer/utils/lyricParser.ts'
 import type {
   ParsedTimedLyricLine,
   LyricLine,
@@ -7,7 +11,7 @@ import type {
   LyricVoiceMetadata,
   LyricVoiceLayer,
   BuildLyricLinesOptions
-} from '@renderer/utils/lyrics.ts'
+} from '@renderer/utils/lyricTypes.ts'
 import { splitEmbeddedLyricLayers } from '@renderer/utils/embeddedLyricLayers.ts'
 const LAYER_MATCH_TOLERANCE_MS = 1500
 

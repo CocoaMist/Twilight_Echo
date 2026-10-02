@@ -24,6 +24,7 @@ export class MediaStreamGrantStore {
   private readonly grants = new Map<string, MediaStreamGrant>()
   private readonly now: () => number
   private readonly ttlMs: number
+  private readonly maxGrants = 1024
 
   constructor(options: { now?: () => number; ttlMs?: number } = {}) {
     this.now = options.now ?? Date.now
@@ -36,6 +37,7 @@ export class MediaStreamGrantStore {
   }
 
   issueFile(filePath: string, options: IssueMediaGrantOptions = {}): string {
+    this.pruneForIssue()
     const token = randomBytes(18).toString('base64url')
     this.grants.set(token, {
       kind: 'file',
@@ -49,6 +51,7 @@ export class MediaStreamGrantStore {
 
   /** Issue a token that proxies an upstream http(s) media URL for DLNA cast. */
   issueRemote(remoteUrl: string, options: IssueMediaGrantOptions = {}): string {
+    this.pruneForIssue()
     const token = randomBytes(18).toString('base64url')
     this.grants.set(token, {
       kind: 'remote',
@@ -58,6 +61,19 @@ export class MediaStreamGrantStore {
       expiresAt: this.now() + (options.ttlMs ?? this.ttlMs)
     })
     return token
+  }
+
+  private pruneForIssue(): void {
+    const now = this.now()
+    for (const [token, grant] of this.grants) {
+      if (now >= grant.expiresAt) this.grants.delete(token)
+    }
+    // Map insertion order evicts the oldest grant; current casts keep their
+    // newest token even during a long-running remote-control session.
+    while (this.grants.size >= this.maxGrants) {
+      const oldest = this.grants.keys().next().value
+      if (oldest !== undefined) this.grants.delete(oldest)
+    }
   }
 
   resolve(token: string): MediaStreamGrant | null {

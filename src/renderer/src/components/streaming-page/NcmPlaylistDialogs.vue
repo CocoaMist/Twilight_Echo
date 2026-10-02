@@ -10,10 +10,11 @@ const props = defineProps<{
   showAdd: boolean
   newName: string
   createBusy: boolean
+  createCompleted: boolean
   createError: string
   addBusy: boolean
   addError: string
-  addTracks: Track[]
+  addTracks: readonly Track[]
   ownedUserPlaylists: MediaProviderPlaylistSummary[]
 }>()
 
@@ -68,7 +69,7 @@ useFocusTrap(addDialogRef, () => props.showAdd)
             class="ncm-playlist-name-input"
             maxlength="50"
             placeholder="请输入歌单名称"
-            :disabled="createBusy"
+            :disabled="createBusy || createCompleted"
             autofocus
             animate
             @keyup.enter="emit('confirmCreate')"
@@ -82,7 +83,15 @@ useFocusTrap(addDialogRef, () => props.showAdd)
               :disabled="createBusy || !newName.trim()"
               @click="emit('confirmCreate')"
             >
-              {{ createBusy ? '创建中…' : '创建' }}
+              {{
+                createCompleted
+                  ? createBusy
+                    ? '添加中…'
+                    : '重试添加歌曲'
+                  : createBusy
+                    ? '创建中…'
+                    : '创建'
+              }}
             </button>
           </div>
         </div>

@@ -5,6 +5,7 @@ import { useBackHandler } from '../app/useBackStack'
 import type { Track } from '../types/music'
 import {
   useNcmStore,
+  captureNcmSession,
   type NcmPlaylistSummary,
   type NcmAlbumSummary,
   type NcmArtistSummary,
@@ -44,6 +45,10 @@ import StreamingSocialStage from './streaming-page/StreamingSocialStage.vue'
 import StreamingLoadingStage from './streaming-page/StreamingLoadingStage.vue'
 import CreateAggregatePlaylistDialog from './aggregate-playlist/CreateAggregatePlaylistDialog.vue'
 import NcmPlaylistDialogs from './streaming-page/NcmPlaylistDialogs.vue'
+import {
+  appendNcmPlaylistTracks,
+  createNcmPlaylistEditor
+} from './streaming-page/ncmPlaylistEditor.ts'
 import ProviderDownloadsPanel from './streaming-page/ProviderDownloadsPanel.vue'
 import StreamingContextMenu from './streaming-page/StreamingContextMenu.vue'
 import {
@@ -2235,14 +2240,18 @@ async function handleContextAddToOwnedPlaylist(
 ): Promise<void> {
   const tracks = streamingContextActionTracks.value
   closeStreamingContextMenu()
-  addToNcmPlaylistTracks.value = tracks.filter(
-    (track) => track.ncmSongId != null && Number.isFinite(track.ncmSongId) && track.ncmSongId > 0
-  )
-  if (addToNcmPlaylistTracks.value.length === 0) {
+  if (!canManageNcmPlaylists.value) return
+  if (!ncmPlaylistEditor.openAdd(tracks, false)) {
+    if (addToNcmPlaylistBusy.value || createNcmPlaylistBusy.value) return
     setStreamingBatchRemovalError('所选曲目没有可写入网易云歌单的歌曲 ID')
     return
   }
+  const isCurrent = captureNcmSession()
+  const provider = activeProvider.value
   await confirmAddTracksToNcmPlaylist(playlist)
+  if (isCurrent() && activeProvider.value === provider && addToNcmPlaylistError.value) {
+    pushNotice({ kind: 'error', message: addToNcmPlaylistError.value })
+  }
 }
 
 async function handleContextRemoveFromPlaylist(): Promise<void> {
@@ -2655,15 +2664,34 @@ async function handleStreamingBatchFavorite(): Promise<void> {
   await favoriteStreamingTracks(getSelectedTracks())
 }
 
-const showCreateNcmPlaylistDialog = ref(false)
-const newNcmPlaylistName = ref('')
-const createNcmPlaylistBusy = ref(false)
-const createNcmPlaylistError = ref('')
-const createNcmPlaylistSeedTracks = ref<Track[]>([])
-const showAddToNcmPlaylistDialog = ref(false)
-const addToNcmPlaylistBusy = ref(false)
-const addToNcmPlaylistError = ref('')
-const addToNcmPlaylistTracks = ref<Track[]>([])
+const ncmPlaylistEditor = createNcmPlaylistEditor({
+  canManage: () => canManageNcmPlaylists.value,
+  captureContext: () => {
+    const provider = activeProvider.value
+    const isCurrent = captureNcmSession()
+    return () => isCurrent() && activeProvider.value === provider
+  },
+  create: createNcmPlaylist,
+  add: addNcmTracksToPlaylist,
+  describeError: friendlyStreamingError
+})
+const {
+  showCreate: showCreateNcmPlaylistDialog,
+  name: newNcmPlaylistName,
+  createBusy: createNcmPlaylistBusy,
+  createError: createNcmPlaylistError,
+  created: createNcmPlaylistCompleted,
+  showAdd: showAddToNcmPlaylistDialog,
+  addBusy: addToNcmPlaylistBusy,
+  addError: addToNcmPlaylistError,
+  addTracks: addToNcmPlaylistTracks,
+  closeCreate: closeCreateNcmPlaylistDialog,
+  closeAdd: closeAddToNcmPlaylistDialog,
+  convertAddToCreate: convertAddToCreatePlaylist
+} = ncmPlaylistEditor
+watch([activeProvider, isLoggedIn, () => profile.value?.userId], () => ncmPlaylistEditor.reset())
+onUnmounted(ncmPlaylistEditor.dispose)
+
 const deletingNcmPlaylistId = ref<string | number | null>(null)
 
 const ownedUserPlaylists = computed(() =>
@@ -2680,42 +2708,13 @@ const canMutateCurrentNcmPlaylist = computed(() => {
 const canManageNcmPlaylists = computed(() => !isExternalActive.value && isLoggedIn.value)
 
 function openCreateNcmPlaylistDialog(seedTracks: Track[] = []): void {
-  if (!canManageNcmPlaylists.value) return
-  createNcmPlaylistSeedTracks.value = seedTracks
-  newNcmPlaylistName.value = ''
-  createNcmPlaylistError.value = ''
-  showCreateNcmPlaylistDialog.value = true
-}
-
-function closeCreateNcmPlaylistDialog(): void {
-  if (createNcmPlaylistBusy.value) return
-  showCreateNcmPlaylistDialog.value = false
-  createNcmPlaylistSeedTracks.value = []
-  newNcmPlaylistName.value = ''
-  createNcmPlaylistError.value = ''
+  ncmPlaylistEditor.openCreate(seedTracks)
 }
 
 async function confirmCreateNcmPlaylist(): Promise<void> {
-  const name = newNcmPlaylistName.value.trim()
-  if (!name || createNcmPlaylistBusy.value) return
-  createNcmPlaylistBusy.value = true
-  createNcmPlaylistError.value = ''
-  try {
-    const playlist = await createNcmPlaylist(name)
-    const seedIds = createNcmPlaylistSeedTracks.value
-      .map((track) => track.ncmSongId)
-      .filter((id): id is number => id != null && Number.isFinite(id) && id > 0)
-    if (seedIds.length > 0) {
-      await addNcmTracksToPlaylist(playlist.id, seedIds)
-    }
-    showCreateNcmPlaylistDialog.value = false
-    createNcmPlaylistSeedTracks.value = []
-    newNcmPlaylistName.value = ''
-    clearSelection()
-  } catch (error) {
-    createNcmPlaylistError.value = friendlyStreamingError(error, '创建歌单失败')
-  } finally {
-    createNcmPlaylistBusy.value = false
+  const token = detailLoadToken
+  if (await ncmPlaylistEditor.confirmCreate()) {
+    if (isActiveDetailLoad(token)) clearSelection()
   }
 }
 
@@ -2739,70 +2738,64 @@ async function handleDeleteNcmPlaylist(playlist: MediaProviderPlaylistSummary): 
 
 function openAddToNcmPlaylistDialog(tracks: Track[] = getSelectedTracks()): void {
   if (!canManageNcmPlaylists.value) return
-  const ncmTracks = tracks.filter(
-    (track) => track.ncmSongId != null && Number.isFinite(track.ncmSongId) && track.ncmSongId > 0
-  )
-  if (ncmTracks.length === 0) {
-    setStreamingBatchRemovalError('所选曲目没有可写入网易云歌单的歌曲 ID')
-    return
+  if (!ncmPlaylistEditor.openAdd(tracks)) {
+    if (!addToNcmPlaylistBusy.value && !createNcmPlaylistBusy.value) {
+      setStreamingBatchRemovalError('所选曲目没有可写入网易云歌单的歌曲 ID')
+    }
   }
-  addToNcmPlaylistTracks.value = ncmTracks
-  addToNcmPlaylistError.value = ''
-  showAddToNcmPlaylistDialog.value = true
-}
-
-function closeAddToNcmPlaylistDialog(): void {
-  if (addToNcmPlaylistBusy.value) return
-  showAddToNcmPlaylistDialog.value = false
-  addToNcmPlaylistTracks.value = []
-  addToNcmPlaylistError.value = ''
-}
-
-function convertAddToCreatePlaylist(): void {
-  if (addToNcmPlaylistBusy.value) return
-  const tracks = [...addToNcmPlaylistTracks.value]
-  showAddToNcmPlaylistDialog.value = false
-  addToNcmPlaylistTracks.value = []
-  addToNcmPlaylistError.value = ''
-  openCreateNcmPlaylistDialog(tracks)
 }
 
 async function confirmAddTracksToNcmPlaylist(
   playlist: MediaProviderPlaylistSummary
 ): Promise<void> {
-  if (addToNcmPlaylistBusy.value) return
-  const trackIds = addToNcmPlaylistTracks.value
-    .map((track) => track.ncmSongId)
-    .filter((id): id is number => id != null && Number.isFinite(id) && id > 0)
-  if (trackIds.length === 0) return
-  addToNcmPlaylistBusy.value = true
-  addToNcmPlaylistError.value = ''
-  try {
-    await addNcmTracksToPlaylist(playlist.id, trackIds)
+  const playlistId = playlist.id
+  const token = detailLoadToken
+  const isCurrentSession = captureNcmSession()
+  const providerId = activeProvider.value
+  const selected = addToNcmPlaylistTracks.value.map((track) => ({ ...track }))
+  if (!(await ncmPlaylistEditor.confirmAdd(playlistId))) return
+  if (!isCurrentSession() || activeProvider.value !== providerId) return
+  for (const entry of detailStack.value) {
     if (
-      currentDetail.value?.type === 'playlist' &&
-      String(currentDetail.value.playlist.id) === String(playlist.id)
-    ) {
-      const existing = new Set(detailTracks.value.map((track) => track.id))
-      detailTracks.value = [
-        ...detailTracks.value,
-        ...addToNcmPlaylistTracks.value.filter((track) => !existing.has(track.id))
-      ]
+      entry.view.type !== 'playlist' ||
+      String(entry.view.playlist.id) !== String(playlistId) ||
+      !entry.snapshot
+    )
+      continue
+    const before = entry.snapshot.tracks.length
+    entry.snapshot.tracks = appendNcmPlaylistTracks(entry.snapshot.tracks, selected)
+    entry.view.playlist = {
+      ...entry.view.playlist,
+      trackCount: (entry.view.playlist.trackCount ?? before) + entry.snapshot.tracks.length - before
+    }
+  }
+  const matchesTarget = (): boolean =>
+    isCurrentSession() &&
+    activeProvider.value === providerId &&
+    currentDetail.value?.type === 'playlist' &&
+    String(currentDetail.value.playlist.id) === String(playlistId)
+  if (!matchesTarget()) return
+  if (isActiveDetailLoad(token)) clearSelection()
+  // Re-read authoritative rows even for A -> B -> A and existing song IDs.
+  // A successful add does not imply every requested song increased the count.
+  const refreshToken = ++detailLoadToken
+  detailLoading.value = true
+  detailError.value = ''
+  try {
+    const tracks = await fetchPlaylistTracks(playlistId, true)
+    if (!matchesTarget() || !isActiveDetailLoad(refreshToken)) return
+    detailTracks.value = tracks
+    if (currentDetail.value?.type === 'playlist')
       replaceTopDetail({
         ...currentDetail.value,
-        playlist: {
-          ...currentDetail.value.playlist,
-          trackCount: (currentDetail.value.playlist.trackCount ?? 0) + trackIds.length
-        }
+        playlist: { ...currentDetail.value.playlist, trackCount: tracks.length }
       })
-    }
-    showAddToNcmPlaylistDialog.value = false
-    addToNcmPlaylistTracks.value = []
-    clearSelection()
   } catch (error) {
-    addToNcmPlaylistError.value = friendlyStreamingError(error, '添加到歌单失败')
+    if (matchesTarget() && isActiveDetailLoad(refreshToken)) {
+      detailError.value = friendlyStreamingError(error, '歌曲已添加，刷新歌单失败')
+    }
   } finally {
-    addToNcmPlaylistBusy.value = false
+    if (matchesTarget() && isActiveDetailLoad(refreshToken)) detailLoading.value = false
   }
 }
 
@@ -2812,9 +2805,21 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
   if (canMutateCurrentNcmPlaylist.value && currentDetail.value?.type === 'playlist') {
     const playlistId = currentDetail.value.playlist.id
     const playlistName = currentDetail.value.playlist.name
-    const trackIds = selected
-      .map((track) => track.ncmSongId)
-      .filter((id): id is number => id != null && Number.isFinite(id) && id > 0)
+    const token = detailLoadToken
+    const providerId = activeProvider.value
+    const isCurrentSession = captureNcmSession()
+    const isTargetPlaylist = (): boolean =>
+      isCurrentSession() &&
+      activeProvider.value === providerId &&
+      currentDetail.value?.type === 'playlist' &&
+      String(currentDetail.value.playlist.id) === String(playlistId)
+    const trackIds = [
+      ...new Set(
+        selected
+          .map((track) => track.ncmSongId)
+          .filter((id): id is number => id != null && Number.isFinite(id) && id > 0)
+      )
+    ]
     if (trackIds.length === 0) {
       setStreamingBatchRemovalError('所选曲目没有可从网易云歌单移除的歌曲 ID')
       return
@@ -2825,6 +2830,58 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
     try {
       await removeNcmTracksFromPlaylist(playlistId, trackIds)
       const removedSongIds = new Set(trackIds)
+      // Update only cached snapshots for this account/playlist. Navigation may
+      // have moved the source entry below another detail while the write ran.
+      if (isCurrentSession() && activeProvider.value === providerId) {
+        for (const entry of detailStack.value) {
+          if (
+            entry.view.type !== 'playlist' ||
+            String(entry.view.playlist.id) !== String(playlistId) ||
+            !entry.snapshot
+          )
+            continue
+          const before = entry.snapshot.tracks.length
+          entry.snapshot.tracks = entry.snapshot.tracks.filter(
+            (track) => track.ncmSongId == null || !removedSongIds.has(track.ncmSongId)
+          )
+          entry.view.playlist = {
+            ...entry.view.playlist,
+            trackCount: Math.max(
+              0,
+              (entry.view.playlist.trackCount ?? before) - (before - entry.snapshot.tracks.length)
+            )
+          }
+        }
+      }
+      if (!isTargetPlaylist()) return
+      if (!isActiveDetailLoad(token)) {
+        // A -> B -> A: refresh the newly opened view, never apply the old
+        // operation's optimistic state to a different detail generation.
+        const refreshToken = ++detailLoadToken
+        detailLoading.value = true
+        detailError.value = ''
+        try {
+          const tracks = await fetchPlaylistTracks(playlistId, true)
+          if (isTargetPlaylist() && isActiveDetailLoad(refreshToken)) {
+            detailTracks.value = tracks
+            if (currentDetail.value?.type === 'playlist') {
+              replaceTopDetail({
+                ...currentDetail.value,
+                playlist: { ...currentDetail.value.playlist, trackCount: tracks.length }
+              })
+            }
+          }
+        } catch (error) {
+          if (isTargetPlaylist() && isActiveDetailLoad(refreshToken)) {
+            detailError.value = friendlyStreamingError(error, '歌曲已移除，刷新歌单失败')
+          }
+        } finally {
+          if (isTargetPlaylist() && isActiveDetailLoad(refreshToken)) detailLoading.value = false
+        }
+        return
+      }
+      if (currentDetail.value?.type !== 'playlist') return
+      const before = detailTracks.value.length
       detailTracks.value = detailTracks.value.filter(
         (track) => track.ncmSongId == null || !removedSongIds.has(track.ncmSongId)
       )
@@ -2832,7 +2889,11 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
         ...currentDetail.value,
         playlist: {
           ...currentDetail.value.playlist,
-          trackCount: Math.max(0, (currentDetail.value.playlist.trackCount ?? 0) - trackIds.length)
+          trackCount: Math.max(
+            0,
+            (currentDetail.value.playlist.trackCount ?? before) -
+              (before - detailTracks.value.length)
+          )
         }
       })
       clearSelection()
@@ -2841,7 +2902,9 @@ async function removeStreamingTracks(selected: Track[]): Promise<void> {
         message: `已从歌单「${playlistName}」移除 ${trackIds.length} 首歌曲`
       })
     } catch (error) {
-      setStreamingBatchRemovalError(friendlyStreamingError(error, '从歌单移除失败'))
+      if (isTargetPlaylist() && isActiveDetailLoad(token)) {
+        setStreamingBatchRemovalError(friendlyStreamingError(error, '从歌单移除失败'))
+      }
     }
     return
   }
@@ -3658,6 +3721,7 @@ onMounted(async () => {
       :show-add="showAddToNcmPlaylistDialog"
       v-model:new-name="newNcmPlaylistName"
       :create-busy="createNcmPlaylistBusy"
+      :create-completed="createNcmPlaylistCompleted"
       :create-error="createNcmPlaylistError"
       :add-busy="addToNcmPlaylistBusy"
       :add-error="addToNcmPlaylistError"

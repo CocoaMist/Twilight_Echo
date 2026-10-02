@@ -279,20 +279,41 @@ const cloudSelectedFiles = ref<NcmCloudSelectedFile[]>([])
 const cloudTransferTasks = ref<Record<string, NcmCloudTransferTask>>({})
 let cloudProgressUnsubscribe: (() => void) | null = null
 let cloudStateRevision = 0
+let accountRevision = 0
+let loginRequestRevision = 0
+let libraryRequestRevision = 0
+
+export function captureNcmSession(): () => boolean {
+  const revision = accountRevision
+  const userId = profile.value?.userId
+  const registry = useMediaProviders()
+  const generation = registry.getGeneration(NCM_PROVIDER_ID)
+  return () =>
+    revision === accountRevision &&
+    userId === profile.value?.userId &&
+    generation === registry.getGeneration(NCM_PROVIDER_ID)
+}
 let cloudRefreshTimer: ReturnType<typeof setTimeout> | null = null
 const retiredCloudTransferIds = new Set<string>()
 
 function scheduleCloudRefresh(): void {
   if (cloudRefreshTimer || !isLoggedIn.value) return
+  const isCurrentSession = captureNcmSession()
   const revision = cloudStateRevision
   const userId = profile.value?.userId
   cloudRefreshTimer = setTimeout(() => {
     cloudRefreshTimer = null
-    if (!isLoggedIn.value || cloudStateRevision !== revision || profile.value?.userId !== userId)
+    if (
+      !isCurrentSession() ||
+      !isLoggedIn.value ||
+      cloudStateRevision !== revision ||
+      profile.value?.userId !== userId
+    )
       return
     void callNcmProvider<NcmCloudSongsPage>('fetchCloudSongsPage', [0, 50])
       .then((page) => {
         if (
+          !isCurrentSession() ||
           !isLoggedIn.value ||
           cloudStateRevision !== revision ||
           profile.value?.userId !== userId
@@ -357,6 +378,9 @@ function resetCloudState(): void {
 }
 
 function resetLibraryState(): void {
+  accountRevision += 1
+  loginRequestRevision += 1
+  libraryRequestRevision += 1
   libraryLoading.value = false
   libraryLoaded.value = false
   libraryError.value = ''
@@ -385,12 +409,14 @@ async function callNcmProvider<T>(
   args: unknown[] = [],
   options?: { signal?: AbortSignal }
 ): Promise<T> {
+  const isCurrent = captureNcmSession()
   try {
     const value = await useMediaProviders().call<T>(NCM_PROVIDER_ID, method, args, options)
-    markProviderAvailable()
+    if (isCurrent()) markProviderAvailable()
     return value
   } catch (error) {
     if (
+      isCurrent() &&
       error instanceof Error &&
       /Provider 未启用|provider is disabled|does not implement/i.test(error.message)
     ) {
@@ -409,9 +435,9 @@ function syncLikedIds(tracks: Track[]): void {
 }
 
 function applyLoginState(state: NcmLoginState): boolean {
+  if (!state.loggedIn || profile.value?.userId !== state.profile?.userId) resetLibraryState()
   isLoggedIn.value = state.loggedIn
   profile.value = state.profile
-  if (!state.loggedIn) resetLibraryState()
   return state.loggedIn
 }
 
@@ -439,11 +465,16 @@ export function useNcmStore(): NcmStore {
   }
 
   async function checkLogin(): Promise<boolean> {
+    const request = ++loginRequestRevision
     try {
       await syncPluginProviders()
+      if (request !== loginRequestRevision) return isLoggedIn.value
+      const isCurrent = captureNcmSession()
       const state = await callNcmProvider<NcmLoginState>('checkLogin')
+      if (request !== loginRequestRevision || !isCurrent()) return isLoggedIn.value
       return applyLoginState(state)
     } catch {
+      if (request !== loginRequestRevision) return isLoggedIn.value
       isLoggedIn.value = false
       profile.value = null
       resetLibraryState()
@@ -452,21 +483,24 @@ export function useNcmStore(): NcmStore {
   }
 
   function setLogin(prof: NcmProfile): void {
-    if (profile.value?.userId !== prof.userId) resetLibraryState()
+    resetLibraryState()
     isLoggedIn.value = true
     profile.value = prof
     markProviderAvailable()
   }
 
   async function logout(): Promise<void> {
-    await callNcmProvider<void>('logout')
     isLoggedIn.value = false
     profile.value = null
     resetLibraryState()
+    await callNcmProvider<void>('logout')
   }
 
   async function openOfficialLogin(): Promise<boolean> {
+    const request = ++loginRequestRevision
+    const isCurrent = captureNcmSession()
     const state = await callNcmProvider<NcmLoginState>('openOfficialLogin')
+    if (request !== loginRequestRevision || !isCurrent()) return isLoggedIn.value
     return applyLoginState(state)
   }
 
@@ -486,6 +520,9 @@ export function useNcmStore(): NcmStore {
     likedPlaylist: NcmPlaylistSummary | null
     playlists: NcmPlaylistSummary[]
   }> {
+    const isCurrentSession = captureNcmSession()
+    const request = ++libraryRequestRevision
+    const isCurrent = (): boolean => isCurrentSession() && request === libraryRequestRevision
     libraryLoading.value = true
     libraryError.value = ''
     try {
@@ -493,15 +530,17 @@ export function useNcmStore(): NcmStore {
         likedPlaylist: NcmPlaylistSummary | null
         playlists: NcmPlaylistSummary[]
       }>('fetchUserLibrary', [force])
+      if (!isCurrent()) return library
       likedPlaylist.value = library.likedPlaylist
       userPlaylists.value = library.playlists
       libraryLoaded.value = true
       return library
     } catch (error) {
-      libraryError.value = error instanceof Error ? error.message : '加载网易云音乐库失败'
+      if (isCurrent())
+        libraryError.value = error instanceof Error ? error.message : '加载网易云音乐库失败'
       throw error
     } finally {
-      libraryLoading.value = false
+      if (request === libraryRequestRevision) libraryLoading.value = false
     }
   }
 
@@ -510,8 +549,9 @@ export function useNcmStore(): NcmStore {
   }
 
   async function fetchLikedTracks(force = false): Promise<Track[]> {
+    const isCurrent = captureNcmSession()
     const tracks = await callNcmProvider<Track[]>('fetchLikedTracks', [force])
-    syncLikedIds(tracks)
+    if (isCurrent()) syncLikedIds(tracks)
     return tracks
   }
 
@@ -520,12 +560,13 @@ export function useNcmStore(): NcmStore {
     limit = 100,
     force = false
   ): Promise<NcmLikedTracksPage> {
+    const isCurrent = captureNcmSession()
     const page = await callNcmProvider<NcmLikedTracksPage>('fetchLikedTracksPage', [
       offset,
       limit,
       force
     ])
-    syncLikedIds(page.tracks)
+    if (isCurrent()) syncLikedIds(page.tracks)
     return page
   }
 
@@ -535,10 +576,14 @@ export function useNcmStore(): NcmStore {
     append = false
   ): Promise<NcmCloudSongsPage> {
     if (!isLoggedIn.value) throw new Error('请先登录网易云音乐')
+    const isCurrentSession = captureNcmSession()
     const revision = cloudStateRevision
     const userId = profile.value?.userId
     const isCurrentCloudSession = (): boolean =>
-      isLoggedIn.value && cloudStateRevision === revision && profile.value?.userId === userId
+      isCurrentSession() &&
+      isLoggedIn.value &&
+      cloudStateRevision === revision &&
+      profile.value?.userId === userId
     if (append) cloudLoadingMore.value = true
     else cloudLoading.value = true
     cloudError.value = ''
@@ -579,7 +624,9 @@ export function useNcmStore(): NcmStore {
 
   async function chooseCloudUploadFiles(): Promise<NcmCloudSelectedFile[]> {
     if (!isLoggedIn.value) throw new Error('请先登录网易云音乐')
+    const isCurrent = captureNcmSession()
     const files = await window.api.ncmCloud.chooseUploadFiles()
+    if (!isCurrent()) return []
     const existing = new Set(cloudSelectedFiles.value.map((file) => file.handle))
     cloudSelectedFiles.value = [
       ...cloudSelectedFiles.value,
@@ -768,7 +815,9 @@ export function useNcmStore(): NcmStore {
   }
 
   async function likeTrack(songId: number, like: boolean): Promise<void> {
+    const isCurrent = captureNcmSession()
     await callNcmProvider<void>('likeTrack', [songId, like])
+    if (!isCurrent()) return
     if (like) {
       likedSongIds.value = new Set([...likedSongIds.value, songId])
     } else {
@@ -811,6 +860,7 @@ export function useNcmStore(): NcmStore {
     name: string,
     options?: { privacy?: 0 | 10 }
   ): Promise<NcmPlaylistSummary> {
+    const isCurrent = captureNcmSession()
     const playlist = await callNcmProvider<NcmPlaylistSummary>('createPlaylist', [name, options])
     const summary: NcmPlaylistSummary = {
       id: Number(playlist.id),
@@ -823,13 +873,20 @@ export function useNcmStore(): NcmStore {
       creatorName: playlist.creatorName,
       owned: playlist.owned !== false
     }
-    userPlaylists.value = [summary, ...userPlaylists.value.filter((item) => item.id !== summary.id)]
-    libraryLoaded.value = true
+    if (isCurrent()) {
+      userPlaylists.value = [
+        summary,
+        ...userPlaylists.value.filter((item) => item.id !== summary.id)
+      ]
+      libraryLoaded.value = true
+    }
     return summary
   }
 
   async function deletePlaylist(playlistId: number | string): Promise<void> {
+    const isCurrent = captureNcmSession()
     await callNcmProvider<void>('deletePlaylist', [playlistId])
+    if (!isCurrent()) return
     const id = String(playlistId)
     userPlaylists.value = userPlaylists.value.filter((item) => String(item.id) !== id)
   }
@@ -838,7 +895,9 @@ export function useNcmStore(): NcmStore {
     playlistId: number | string,
     trackIds: Array<number | string>
   ): Promise<void> {
+    const isCurrent = captureNcmSession()
     await callNcmProvider<void>('addTracksToPlaylist', [playlistId, trackIds])
+    if (!isCurrent()) return
     const id = String(playlistId)
     userPlaylists.value = userPlaylists.value.map((item) =>
       String(item.id) === id
@@ -851,7 +910,9 @@ export function useNcmStore(): NcmStore {
     playlistId: number | string,
     trackIds: Array<number | string>
   ): Promise<void> {
+    const isCurrent = captureNcmSession()
     await callNcmProvider<void>('removeTracksFromPlaylist', [playlistId, trackIds])
+    if (!isCurrent()) return
     const id = String(playlistId)
     const removed = trackIds.length
     userPlaylists.value = userPlaylists.value.map((item) =>

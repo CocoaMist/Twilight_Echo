@@ -2,6 +2,10 @@
 
 本文档面向 Twilight Echo 维护者，说明仓库结构、运行架构、关键数据流、性能约束和验证命令。插件系统的权威契约以 [twilight-echo-plugin-spec.md](./twilight-echo-plugin-spec.md) 与 [twilight-echo-plugin-plan.md](./twilight-echo-plugin-plan.md) 为准；本文只描述 app 仓库如何接入和承载插件能力。
 
+应用设置的跨领域编排由 `src/main/app/settingsRuntime.ts` 承担：IPC 设置、主题和遥控入口通过它应用设置与同步集成；`audio/state.ts` 只负责音频状态持久化、DSP 生效和播放事件。窗口背景计算是 `app/windowAppearance.ts` 的纯函数，窗口创建不再导入音频状态。架构门禁使用 TypeScript AST 检查 main 的静态运行时 import/re-export 循环；类型引用和延迟 `import()` 不属于初始化依赖。
+
+设备能力与 DSD 状态的两端公共规则位于 `src/shared/audioDeviceCapabilities.ts`。显式能力状态优先于 ID 推断；设备 ID 只能提供候选路径，不能证明设备已经支持 DoP/Native DSD。main 与 renderer 保留现有导出入口并复用该规则。插件目录的更新检测复用 `plugins/versionRange.ts`，按语义版本比较预发布标识，忽略构建元数据。
+
 ## 技术栈
 
 ### 统一页面导航
@@ -153,7 +157,7 @@ Renderer TS 测试通过 `scripts/register-renderer-aliases.mjs` 为 Node `--tes
 
 ## 音频链路
 
-设备档案位于播放设置和 HiFi 输出页，支持从当前配置创建、命名、复制、编辑、删除及按稳定设备 ID 自动应用。版本化 `audioDeviceProfiles` 保存后端、独占、完整 buffer/routing、软件音量上限、SRC/DSD 策略和 DSP 场景引用；场景 graph 不复制进档案，设备 SRC 作为运行时 output-stage override 独立持久化。手工调整输出或 DSP 后清除“已应用档案”标记，保留实际设置和音量上限；编辑或删除已应用档案也不会突然改变播放。
+设备档案位于播放设置和 HiFi 输出页，支持从当前配置创建、命名、复制、编辑、删除及按稳定设备 ID 自动应用。版本化 `audioDeviceProfiles` 保存后端、独占、完整 buffer/routing、软件音量上限、SRC/DSD 策略和 DSP 场景引用；场景 graph 不复制进档案，设备 SRC 作为运行时 output-stage override 独立持久化。档案应用只更新默认场景中的旧式 ReplayGain、EQ、卷积和 Crossfeed 节点，保留其他自定义节点、声像与输出级设置。手工调整输出或 DSP 后清除“已应用档案”标记，保留实际设置和音量上限；编辑或删除已应用档案也不会突然改变播放。
 
 播放设置的“独占模式自动启停”默认关闭，仅在独占偏好开启且后端支持时生效。开启后 WASAPI Exclusive、ASIO、CoreAudio Hog 暂停立即释放设备，继续播放按保存的曲目、CUE 队列项和进度重新打开；失败仍暂停并显示原因。暂停释放后可以调整进度、设备与 DSP，下一次播放应用最新配置；停止和最终队列结束释放，连续切歌保持占用。全局策略经 `audioEngineManager` 和现有输出配置通道应用，不写入设备档案。`outputInfo.outputReleased` 区分已保存的独占偏好和实际设备占用，释放时不宣称独占或 Output Perfect。契约见 [音频 API](./audio-engine-api.md#playbackinfo-与-outputinfo)。
 
@@ -220,6 +224,10 @@ VST3 音频桥按绝对帧位置回填预分配的环形缓冲，宿主按提交
 
 Streaming 页的本地歌曲、歌单、歌手搜索逻辑放在 `components/streaming-page/localStreamingSearch.ts`。该工具扫描完整集合以保留分页总数，但只 materialize 当前页结果；不要在 SFC 内重新写 `filter().map().slice()` 的全量中间数组链。
 
+网络媒体库索引由 `networkLibrary.ts` 串行提交，`networkLibraryPersistence.ts` 合并在途读取并通过同目录 rename 发布。写事务先复制顶层文档映射，再整体替换来源与条目，不能修改合并读取返回的共享快照；写入失败时并发列表和搜索仍保留已提交数据。
+
+Linux 播放条的 CSS 毛玻璃回退服从减少透明度、高对比度和强制颜色偏好。无障碍模式必须禁用 backdrop 滤镜，其覆盖优先级高于平台回退规则；`liquidGlassSurfaces.test.ts` 使用实际 scoped 样式与 Electron 媒体偏好模拟验证计算结果。
+
 ## Issue #46 交互与诊断约定
 
 - 主窗口前台空格切换播放/暂停，输入、可编辑区域、按钮、菜单和对话框保留自身键盘行为；全局音量增减默认使用 `CommandOrControl+Alt+Up/Down`，步进 5%，允许在快捷键设置中修改。跨进程快捷键载荷统一在 `src/shared/playerShortcuts.ts`。
@@ -274,7 +282,7 @@ Streaming 页的本地歌曲、歌单、歌手搜索逻辑放在 `components/str
 
 插件运行在 `utilityProcess`，入口为 `src/main/pluginHost.ts`。插件只能通过版本化 `twilight` API 访问宿主能力，不得直接 import Electron、Node 内置模块或 app 内部实现。
 
-宿主进程按需存在：`TwilightPluginManager` 用 `plugins/hostIdle.ts` 跟踪每个 JS 插件的活动（provider 调用、UI command、已订阅事件）；连续 5 分钟无活动且没有未完成 RPC 的宿主会被休眠（进程停止，provider/UI 贡献与事件订阅保留在内存快照中），下一次 provider 调用、UI command 或已订阅事件到达时透明唤醒，并发调用共享一次唤醒。休眠期间插件在 `list()` 里仍是 `enabled`，`plugin-state.json` 不变。贡献快照同时持久化到 `plugin-contributions.json`（含插件版本和入口文件 size:mtime）；下次启动若版本与入口文件签名都匹配，启用的插件直接以休眠态就绪而不 fork 进程，签名不符则照常冷启动。试激活、汽水音乐（登录态绑定宿主进程）与正在处理内部 NCM 请求的插件不会休眠；`app:*` 生命周期事件不唤醒休眠宿主。
+宿主进程按需存在：`TwilightPluginManager` 用 `plugins/hostIdle.ts` 跟踪每个 JS 插件的活动（provider 调用、UI command、已订阅事件）；连续 5 分钟无活动且没有未完成 RPC 的宿主会被休眠（进程停止，provider/UI 贡献与事件订阅保留在内存快照中），下一次 provider 调用、UI command 或已订阅事件到达时透明唤醒，并发调用共享一次唤醒。休眠期间插件在 `list()` 里仍是 `enabled`，`plugin-state.json` 不变。贡献快照同时持久化到 `plugin-contributions.json`（含插件版本和入口文件 size:mtime）；下次启动若版本与入口文件签名都匹配，启用的插件直接以休眠态就绪而不 fork 进程，签名不符则照常冷启动。试激活、汽水音乐（登录态绑定宿主进程）与正在处理内部 NCM 请求的插件不会休眠；已订阅 `app:ready` 的休眠宿主会唤醒并在激活后收到事件，`app:before-quit` 不会唤醒休眠宿主。
 
 `audioAnalysisService` 的 worker 池与 `libraryScanService` 同样惰性：分析 worker 只按当前排队/进行中任务数 fork，空闲 60 s 后回收；扫描 worker 在没有扫描进行时 60 s 后回收，下一次扫描重新 fork。
 
@@ -365,6 +373,8 @@ pnpm run format
 ```
 
 应用测试：
+
+`test:local-perf` 和 `test:plugins` 各限制两个测试进程，避免 Electron 夹具与系统字体 PowerShell 查询在 Windows CI 中争抢资源。全部测试文件与字体查询的原有超时限制保留，`test:quality-policy` 检查并发上限。
 
 ```bash
 pnpm run test:plugins

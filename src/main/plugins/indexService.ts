@@ -12,7 +12,7 @@ import {
   type PluginIndexTrustContext,
   type TrustedPluginPublisherRegistry
 } from './indexTrust.ts'
-import { isCompatibleTwilightRange, validatePluginManifest } from './manifest.ts'
+import { compareSemver, isCompatibleTwilightRange, validatePluginManifest } from './manifest.ts'
 import { extractPluginPackage } from './packageSecurity.ts'
 import type {
   TwilightPluginDescriptor,
@@ -436,6 +436,8 @@ export class PluginIndexService {
       return 'incompatible'
     const descriptor = installed.find((plugin) => plugin.id === entry.id)
     if (!descriptor) return 'not-installed'
+    // A malformed installed manifest remains replaceable through the catalog.
+    if (descriptor.status === 'invalid') return 'update-available'
     if (compareSemver(entry.version, descriptor.version) > 0) return 'update-available'
     return 'installed'
   }
@@ -1324,16 +1326,6 @@ function fileUrlToPath(value: string): string {
   const url = new URL(value)
   if (url.protocol !== 'file:') throw new Error('不是 file URL')
   return fileURLToPath(url)
-}
-
-function compareSemver(left: string, right: string): number {
-  const leftParts = left.split('.').map((part) => Number.parseInt(part, 10) || 0)
-  const rightParts = right.split('.').map((part) => Number.parseInt(part, 10) || 0)
-  for (let index = 0; index < 3; index += 1) {
-    if (leftParts[index] > rightParts[index]) return 1
-    if (leftParts[index] < rightParts[index]) return -1
-  }
-  return 0
 }
 
 function isInsidePath(child: string, parent: string): boolean {

@@ -5,6 +5,116 @@ import type { PlaybackSession } from '../types/music.ts'
 import { PlaybackSessionWriter } from '../app/playbackSessionWriter.ts'
 import { createSleepTimerController, getRestorableSleepTimerState } from './sleepTimerController.ts'
 
+function pending<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  return { promise, resolve, reject }
+}
+
+function raceFixture() {
+  let state: SleepTimerState | null = null
+  const configurations: ReturnType<typeof pending<SleepTimerState | null>>[] = []
+  const boundary = pending<SleepTimerState | null>()
+  let triggers = 0
+  const controller = createSleepTimerController({
+    bridge: {
+      configure: () => {
+        const next = pending<SleepTimerState | null>()
+        configurations.push(next)
+        return next.promise
+      },
+      cancel: async () => null,
+      boundary: () => boundary.promise
+    },
+    getSettings: () => ({ defaultMinutes: 30, fadeSeconds: 0 }),
+    getState: () => state,
+    setState: (next) => {
+      state = next
+    },
+    persistSession: () => {},
+    setNotice: () => {},
+    onTriggered: () => {
+      triggers++
+    },
+    now: () => 1000
+  })
+  return { controller, configurations, boundary, state: () => state, triggers: () => triggers }
+}
+
+test('late configure replies cannot resurrect a cancelled timer or replace a newer configuration', async () => {
+  const f = raceFixture()
+  f.controller.configure('minutes', 5)
+  const old = f.state()
+  f.controller.cancel()
+  f.configurations[0].resolve(old)
+  await Promise.resolve()
+  assert.equal(f.state(), null)
+  f.controller.configure('minutes', 10)
+  const first = f.state()
+  f.controller.configure('queueEnd')
+  const latest = f.state()
+  f.configurations[2].resolve(latest)
+  await Promise.resolve()
+  f.configurations[1].resolve(first)
+  await Promise.resolve()
+  assert.equal(f.state(), latest)
+})
+
+test('cancel and dispose fence pending boundary results and later trigger callbacks', async () => {
+  for (const dispose of [false, true]) {
+    const f = raceFixture()
+    f.controller.configure('trackEnd')
+    const triggered = { ...f.state()!, active: false, triggered: true }
+    const request = f.controller.reportBoundary('trackEnd')
+    if (dispose) f.controller.dispose()
+    else f.controller.cancel()
+    const expected = f.state()
+    f.boundary.resolve(triggered)
+    assert.equal(await request, false)
+    assert.equal(f.state(), expected)
+    if (dispose) {
+      f.controller.applyTrigger(triggered)
+      f.controller.configure('minutes')
+      assert.equal(f.triggers(), 0)
+      assert.equal(f.state(), expected)
+    }
+  }
+})
+
+test('a trigger event arriving before its boundary reply still suppresses EOF advancement', async () => {
+  const f = raceFixture()
+  f.controller.configure('trackEnd')
+  const triggered = { ...f.state()!, active: false, triggered: true }
+  const request = f.controller.reportBoundary('trackEnd')
+  f.controller.applyTrigger(triggered)
+  f.controller.applyAuthoritativeState(triggered)
+  f.boundary.resolve(triggered)
+  assert.equal(await request, true)
+  assert.equal(f.state(), triggered)
+  assert.equal(f.triggers(), 1)
+})
+
+test('a failed boundary reply preserves only a trigger from the current timer lifecycle', async () => {
+  for (const action of ['trigger', 'none', 'cancel', 'configure', 'dispose']) {
+    const f = raceFixture()
+    f.controller.configure('trackEnd')
+    const triggered = { ...f.state()!, active: false, triggered: true }
+    const request = f.controller.reportBoundary('trackEnd')
+    if (action !== 'none') f.controller.applyTrigger(triggered)
+    if (action === 'cancel') f.controller.cancel()
+    if (action === 'configure') f.controller.configure('queueEnd')
+    if (action === 'dispose') f.controller.dispose()
+    const expected = f.state()
+    f.boundary.reject(new Error('boundary transport failed'))
+    assert.equal(await request, action === 'trigger', action)
+    assert.equal(f.state(), expected)
+  }
+})
+
 test('configuring and cancelling a timer immediately persists the session', async () => {
   let state: SleepTimerState | null = null
   let persisted = 0

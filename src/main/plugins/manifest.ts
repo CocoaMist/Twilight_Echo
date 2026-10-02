@@ -271,20 +271,10 @@ export function toManifest(descriptor: TwilightPluginDescriptor): TwilightPlugin
   }
 }
 
-export function isCompatibleTwilightRange(range: string, appVersion: string): boolean {
-  const trimmed = range.trim()
-  if (trimmed === '*' || trimmed === '') return true
-  if (trimmed.startsWith('^')) return appVersion.split('.')[0] === trimmed.slice(1).split('.')[0]
-  if (trimmed.startsWith('~')) {
-    const [major, minor] = appVersion.split('.')
-    const [requiredMajor, requiredMinor] = trimmed.slice(1).split('.')
-    return major === requiredMajor && minor === requiredMinor
-  }
-  if (trimmed.startsWith('>=')) {
-    return compareSemver(appVersion, trimmed.slice(2).trim()) >= 0
-  }
-  return trimmed === appVersion
-}
+export {
+  compareSemver,
+  isCompatibleVersionRange as isCompatibleTwilightRange
+} from './versionRange.ts'
 
 export function isSupportedSemverRange(range: string): boolean {
   if (range === '*') return true
@@ -296,14 +286,4 @@ export function isSupportedSemverRange(range: string): boolean {
     return SEMVER_PATTERN.test(range.slice(2).trim())
   }
   return false
-}
-
-export function compareSemver(left: string, right: string): number {
-  const leftParts = left.split('.').map((part) => Number.parseInt(part, 10) || 0)
-  const rightParts = right.split('.').map((part) => Number.parseInt(part, 10) || 0)
-  for (let index = 0; index < 3; index += 1) {
-    if (leftParts[index] > rightParts[index]) return 1
-    if (leftParts[index] < rightParts[index]) return -1
-  }
-  return 0
 }
