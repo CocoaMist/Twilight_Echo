@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import QRCode from 'qrcode'
+import './contentArrival.css'
 import ServerLoginForm from '@renderer/components/login/ServerLoginForm.vue'
 import { createVisibilityPollingController } from '../utils/visibilityPolling.ts'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -902,209 +903,216 @@ onUnmounted(() => {
             </div>
 
             <!-- 扫码 / OAuth -->
-            <ServerLoginForm
-              v-if="supportsServerLogin"
-              :key="activeProviderId || ''"
-              :busy="accountLoginBusy"
-              :error="accountLoginMessage"
-              @submit="handleServerLogin"
-            />
-            <div v-else-if="loginMethod === 'qr'" class="qr-stage">
-              <template v-if="isOAuthProvider">
-                <div class="oauth-panel">
-                  <div class="lp-spinner"></div>
-                  <p class="stage-muted">已在浏览器中打开授权页面，完成授权后将自动登录</p>
-                  <button v-if="authUrl" type="button" class="btn-secondary" @click="openAuthUrl">
-                    重新打开浏览器
+            <div
+              :key="supportsServerLogin ? 'server' : loginMethod"
+              class="login-method-content te-content-arrival"
+            >
+              <ServerLoginForm
+                v-if="supportsServerLogin"
+                :key="activeProviderId || ''"
+                :busy="accountLoginBusy"
+                :error="accountLoginMessage"
+                @submit="handleServerLogin"
+              />
+              <div v-else-if="loginMethod === 'qr'" class="qr-stage">
+                <template v-if="isOAuthProvider">
+                  <div class="oauth-panel">
+                    <div class="lp-spinner"></div>
+                    <p class="stage-muted">已在浏览器中打开授权页面，完成授权后将自动登录</p>
+                    <button v-if="authUrl" type="button" class="btn-secondary" @click="openAuthUrl">
+                      重新打开浏览器
+                    </button>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="qr-frame" :class="{ expired: pageState === 'qr_expired' }">
+                    <span class="qr-corner tl"></span>
+                    <span class="qr-corner tr"></span>
+                    <span class="qr-corner bl"></span>
+                    <span class="qr-corner br"></span>
+                    <img
+                      v-if="qrImage && pageState !== 'qr_expired'"
+                      :src="qrImage"
+                      alt="登录二维码"
+                      class="qr-image"
+                    />
+                    <div v-else-if="pageState === 'qr_loading'" class="qr-loading">
+                      <div class="lp-spinner"></div>
+                    </div>
+                    <div
+                      v-if="pageState === 'qr_expired'"
+                      class="qr-expired-overlay"
+                      data-te-interactive
+                      role="button"
+                      tabindex="0"
+                      aria-label="刷新二维码"
+                      @click="handleRefresh"
+                      @keydown.enter.prevent="handleRefresh"
+                      @keydown.space.prevent="handleRefresh"
+                    >
+                      <svg
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <polyline points="23 4 23 10 17 10" />
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                      </svg>
+                      <span>点击刷新二维码</span>
+                    </div>
+                    <div v-if="pageState === 'qr_ready'" class="qr-scanline"></div>
+                  </div>
+                  <p class="qr-status" :class="{ scanned: pageState === 'qr_scanned' }">
+                    <span
+                      class="qr-dot"
+                      :class="pageState === 'qr_scanned' ? 'scanned' : 'waiting'"
+                    ></span>
+                    {{ qrStatusText }}
+                  </p>
+                </template>
+
+                <div v-if="activeUi?.loginExtraActions?.length" class="extra-actions">
+                  <button
+                    v-for="action in activeUi.loginExtraActions"
+                    :key="action.method"
+                    type="button"
+                    class="btn-secondary"
+                    @click="handleExtraAction(action.method)"
+                  >
+                    <i :class="action.icon"></i>
+                    {{ action.label }}
                   </button>
                 </div>
-              </template>
-              <template v-else>
-                <div class="qr-frame" :class="{ expired: pageState === 'qr_expired' }">
-                  <span class="qr-corner tl"></span>
-                  <span class="qr-corner tr"></span>
-                  <span class="qr-corner bl"></span>
-                  <span class="qr-corner br"></span>
-                  <img
-                    v-if="qrImage && pageState !== 'qr_expired'"
-                    :src="qrImage"
-                    alt="登录二维码"
-                    class="qr-image"
-                  />
-                  <div v-else-if="pageState === 'qr_loading'" class="qr-loading">
-                    <div class="lp-spinner"></div>
-                  </div>
-                  <div
-                    v-if="pageState === 'qr_expired'"
-                    class="qr-expired-overlay"
-                    data-te-interactive
-                    role="button"
-                    tabindex="0"
-                    aria-label="刷新二维码"
-                    @click="handleRefresh"
-                    @keydown.enter.prevent="handleRefresh"
-                    @keydown.space.prevent="handleRefresh"
-                  >
-                    <svg
-                      width="24"
-                      height="24"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <polyline points="23 4 23 10 17 10" />
-                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                    </svg>
-                    <span>点击刷新二维码</span>
-                  </div>
-                  <div v-if="pageState === 'qr_ready'" class="qr-scanline"></div>
-                </div>
-                <p class="qr-status" :class="{ scanned: pageState === 'qr_scanned' }">
-                  <span
-                    class="qr-dot"
-                    :class="pageState === 'qr_scanned' ? 'scanned' : 'waiting'"
-                  ></span>
-                  {{ qrStatusText }}
-                </p>
-              </template>
-
-              <div v-if="activeUi?.loginExtraActions?.length" class="extra-actions">
-                <button
-                  v-for="action in activeUi.loginExtraActions"
-                  :key="action.method"
-                  type="button"
-                  class="btn-secondary"
-                  @click="handleExtraAction(action.method)"
-                >
-                  <i :class="action.icon"></i>
-                  {{ action.label }}
-                </button>
-              </div>
-            </div>
-
-            <!-- 短信 / 密码表单 -->
-            <form v-else class="account-form" @submit.prevent="handleAccountLogin">
-              <div
-                v-if="loginMethod === 'password'"
-                class="kind-switch"
-                role="radiogroup"
-                aria-label="账号类型"
-              >
-                <button
-                  type="button"
-                  class="kind-chip"
-                  :class="{ active: passwordKind === 'phone' }"
-                  @click="((passwordKind = 'phone'), clearAccountLoginFeedback())"
-                >
-                  手机号
-                </button>
-                <button
-                  type="button"
-                  class="kind-chip"
-                  :class="{ active: passwordKind === 'email' }"
-                  @click="((passwordKind = 'email'), clearAccountLoginFeedback())"
-                >
-                  邮箱
-                </button>
               </div>
 
-              <template v-if="loginMethod === 'captcha' || passwordKind === 'phone'">
-                <label class="field-label" for="lp-phone">手机号</label>
-                <div class="field-row phone">
-                  <AnimatedInput
-                    id="lp-country"
-                    v-model="accountCountryCode"
-                    class="field-input country"
-                    autocomplete="tel-country-code"
-                    inputmode="numeric"
-                    placeholder="86"
-                    aria-label="国家区号"
-                  />
-                  <AnimatedInput
-                    id="lp-phone"
-                    v-model="accountPhone"
-                    class="field-input"
-                    autocomplete="tel"
-                    inputmode="tel"
-                    placeholder="输入手机号"
-                  />
-                </div>
-              </template>
-
-              <template v-if="loginMethod === 'password' && passwordKind === 'email'">
-                <label class="field-label" for="lp-email">网易邮箱</label>
-                <AnimatedInput
-                  id="lp-email"
-                  v-model="accountEmail"
-                  class="field-input"
-                  autocomplete="email"
-                  type="email"
-                  placeholder="name@163.com"
-                />
-              </template>
-
-              <template v-if="loginMethod === 'captcha'">
-                <label class="field-label" for="lp-captcha">短信验证码</label>
-                <div class="field-row captcha">
-                  <AnimatedInput
-                    id="lp-captcha"
-                    v-model="accountCaptcha"
-                    class="field-input"
-                    autocomplete="one-time-code"
-                    inputmode="numeric"
-                    placeholder="6 位验证码"
-                  />
+              <!-- 短信 / 密码表单 -->
+              <form v-else class="account-form" @submit.prevent="handleAccountLogin">
+                <div
+                  v-if="loginMethod === 'password'"
+                  class="kind-switch"
+                  role="radiogroup"
+                  aria-label="账号类型"
+                >
                   <button
                     type="button"
-                    class="btn-captcha"
-                    :disabled="captchaBusy || isLoginCoolingDown"
-                    @click="handleSendCaptcha"
+                    class="kind-chip"
+                    :class="{ active: passwordKind === 'phone' }"
+                    @click="((passwordKind = 'phone'), clearAccountLoginFeedback())"
                   >
-                    {{
-                      captchaBusy
-                        ? '发送中…'
-                        : isLoginCoolingDown
-                          ? loginCooldownText
-                          : '获取验证码'
-                    }}
+                    手机号
+                  </button>
+                  <button
+                    type="button"
+                    class="kind-chip"
+                    :class="{ active: passwordKind === 'email' }"
+                    @click="((passwordKind = 'email'), clearAccountLoginFeedback())"
+                  >
+                    邮箱
                   </button>
                 </div>
-              </template>
 
-              <template v-if="loginMethod === 'password'">
-                <label class="field-label" for="lp-password">密码</label>
-                <input
-                  id="lp-password"
-                  v-model="accountPassword"
-                  class="field-input"
-                  autocomplete="current-password"
-                  type="password"
-                  placeholder="输入密码"
-                />
-              </template>
+                <template v-if="loginMethod === 'captcha' || passwordKind === 'phone'">
+                  <label class="field-label" for="lp-phone">手机号</label>
+                  <div class="field-row phone">
+                    <AnimatedInput
+                      id="lp-country"
+                      v-model="accountCountryCode"
+                      class="field-input country"
+                      autocomplete="tel-country-code"
+                      inputmode="numeric"
+                      placeholder="86"
+                      aria-label="国家区号"
+                    />
+                    <AnimatedInput
+                      id="lp-phone"
+                      v-model="accountPhone"
+                      class="field-input"
+                      autocomplete="tel"
+                      inputmode="tel"
+                      placeholder="输入手机号"
+                    />
+                  </div>
+                </template>
 
-              <button
-                class="btn-primary form-submit"
-                type="submit"
-                :disabled="accountLoginBusy || isLoginCoolingDown"
-              >
-                <span v-if="accountLoginBusy" class="btn-spinner"></span>
-                {{
-                  accountLoginBusy
-                    ? '登录中…'
-                    : isLoginCoolingDown
-                      ? `等待 ${loginCooldownText}`
-                      : '登 录'
-                }}
-              </button>
-              <p v-if="isLoginCoolingDown" class="form-message">
-                {{ loginBlockedReason || '登录请求正在冷却' }}，请 {{ loginCooldownText }} 后再试
-              </p>
-              <p v-else-if="accountLoginMessage" class="form-message">{{ accountLoginMessage }}</p>
-            </form>
+                <template v-if="loginMethod === 'password' && passwordKind === 'email'">
+                  <label class="field-label" for="lp-email">网易邮箱</label>
+                  <AnimatedInput
+                    id="lp-email"
+                    v-model="accountEmail"
+                    class="field-input"
+                    autocomplete="email"
+                    type="email"
+                    placeholder="name@163.com"
+                  />
+                </template>
+
+                <template v-if="loginMethod === 'captcha'">
+                  <label class="field-label" for="lp-captcha">短信验证码</label>
+                  <div class="field-row captcha">
+                    <AnimatedInput
+                      id="lp-captcha"
+                      v-model="accountCaptcha"
+                      class="field-input"
+                      autocomplete="one-time-code"
+                      inputmode="numeric"
+                      placeholder="6 位验证码"
+                    />
+                    <button
+                      type="button"
+                      class="btn-captcha"
+                      :disabled="captchaBusy || isLoginCoolingDown"
+                      @click="handleSendCaptcha"
+                    >
+                      {{
+                        captchaBusy
+                          ? '发送中…'
+                          : isLoginCoolingDown
+                            ? loginCooldownText
+                            : '获取验证码'
+                      }}
+                    </button>
+                  </div>
+                </template>
+
+                <template v-if="loginMethod === 'password'">
+                  <label class="field-label" for="lp-password">密码</label>
+                  <input
+                    id="lp-password"
+                    v-model="accountPassword"
+                    class="field-input"
+                    autocomplete="current-password"
+                    type="password"
+                    placeholder="输入密码"
+                  />
+                </template>
+
+                <button
+                  class="btn-primary form-submit"
+                  type="submit"
+                  :disabled="accountLoginBusy || isLoginCoolingDown"
+                >
+                  <span v-if="accountLoginBusy" class="btn-spinner"></span>
+                  {{
+                    accountLoginBusy
+                      ? '登录中…'
+                      : isLoginCoolingDown
+                        ? `等待 ${loginCooldownText}`
+                        : '登 录'
+                  }}
+                </button>
+                <p v-if="isLoginCoolingDown" class="form-message">
+                  {{ loginBlockedReason || '登录请求正在冷却' }}，请 {{ loginCooldownText }} 后再试
+                </p>
+                <p v-else-if="accountLoginMessage" class="form-message">
+                  {{ accountLoginMessage }}
+                </p>
+              </form>
+            </div>
           </section>
 
           <!-- 资料页 -->

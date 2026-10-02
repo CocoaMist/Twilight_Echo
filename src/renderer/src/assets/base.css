@@ -2986,7 +2986,7 @@ html[data-te-background-treatment='cover-blur'] .settings-preview-layout {
   background: transparent !important;
 }
 
-html.te-theme-tone-transition
+html.te-theme-tone-transition:not([data-te-motion='off'])
   :is(
     body,
     .title-bar,
@@ -3047,8 +3047,24 @@ html[data-te-lyric-accent='accent']
   border-radius: var(--te-toast-radius);
 }
 
+html[data-te-motion='reduced'].te-theme-tone-transition
+  :is(
+    body,
+    .title-bar,
+    .side-menu,
+    .dashboard-wrapper,
+    .song-list,
+    .settings-page,
+    .theme-studio-page,
+    .streaming-page,
+    .player-bar,
+    .glass-card
+  ) {
+  transition-duration: 120ms !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  html.te-theme-tone-transition
+  html.te-theme-tone-transition:not([data-te-motion='full'], [data-te-motion='off'])
     :is(
       body,
       .title-bar,
@@ -3061,7 +3077,7 @@ html[data-te-lyric-accent='accent']
       .player-bar,
       .glass-card
     ) {
-    transition-duration: 0.01ms !important;
+    transition-duration: 120ms !important;
   }
 }
 

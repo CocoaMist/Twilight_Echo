@@ -109,6 +109,8 @@ const miniPlayerHostApi = {
 }
 
 const trayPlayerWindowApi = {
+  onMotionPreference: (cb: (preference: MotionPreference) => void): (() => void) =>
+    settingsApi.onChanged((snapshot) => cb(snapshot.settings.motionPreference)),
   getBootstrap: (): Promise<TrayPlayerBootstrap> => ipcRenderer.invoke('trayPlayer:getBootstrap'),
   command: (command: MiniPlayerCommand): void => {
     ipcRenderer.send('trayPlayer:command', command)

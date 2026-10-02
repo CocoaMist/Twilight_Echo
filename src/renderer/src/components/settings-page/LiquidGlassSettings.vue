@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import { DEFAULT_LIQUID_GLASS } from '../../../../shared/liquidGlass.ts'
 import EditableRangeValue from '../EditableRangeValue.vue'
@@ -180,7 +181,7 @@ function toggleAdaptiveTone(): void {
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <div v-if="liquidGlassOpen" class="settings-accordion-body">
+  <SettingsDisclosure :open="liquidGlassOpen" class="settings-accordion-body">
     <hr />
     <div class="liquid-glass-reset-row">
       <div class="setting-copy">
@@ -591,5 +592,5 @@ function toggleAdaptiveTone(): void {
         </div>
       </div>
     </div>
-  </div>
+  </SettingsDisclosure>
 </template>

@@ -43,9 +43,15 @@ test('the shared back-to-top control reveals, anchors, retargets and themes in a
 async function compileController(): Promise<string> {
   const policy = await readFile(new URL('./scrollToTopPolicy.ts', import.meta.url), 'utf8')
   const runtime = await readFile(new URL('./scrollToTopButton.ts', import.meta.url), 'utf8')
-  const inlined = runtime.replace(/import\s+\{[\s\S]*?\}\s+from\s+'\.\/scrollToTopPolicy'\s*/, '')
+  const motion = await readFile(new URL('../../../shared/motion.ts', import.meta.url), 'utf8')
+  const scrollMotion = (
+    await readFile(new URL('../app/scrollMotion.ts', import.meta.url), 'utf8')
+  ).replace(/^import[^\n]*\n/, '')
+  const inlined = runtime
+    .replace(/import\s+\{[\s\S]*?\}\s+from\s+'\.\/scrollToTopPolicy'\s*/, '')
+    .replace(/import[^\n]*scrollMotion[^\n]*\n/, '')
   assert.doesNotMatch(inlined, /^import\s/m, 'the fixture must run the runtime without imports')
-  const combined = `${policy}\n${inlined}`.replace(/^export /gm, '')
+  const combined = `${motion}\n${scrollMotion}\n${policy}\n${inlined}`.replace(/^export /gm, '')
   const transpiled = typescript.transpileModule(combined, {
     compilerOptions: {
       target: typescript.ScriptTarget.ES2022,
@@ -282,6 +288,27 @@ window.runScrollTopChecks = async () => {
   await settle()
   if (page.scrollTop !== 0) fail('the click left the container at ' + page.scrollTop)
   if (shown()) fail('the control stayed visible at the top of the container')
+
+  // CSS smooth must not override reduced/off or explicit smooth requests.
+  page.style.scrollBehavior = 'smooth'
+  for (const mode of ['reduced', 'off']) {
+    html.dataset.teMotion = mode
+    page.scrollTo({ top: 1800, behavior: 'instant' })
+    hover(page)
+    await nudge()
+    control().click()
+    if (page.scrollTop !== 0) fail(mode + ' did not scroll instantly through CSS smooth')
+    if (scrollMotionBehavior('smooth') !== 'instant') fail(mode + ' allowed an explicit smooth override')
+  }
+  html.dataset.teMotion = 'full'
+  if (scrollMotionBehavior('smooth', true) !== 'instant') fail('keyboard navigation was animated')
+  page.scrollTo({ top: 1800, behavior: 'instant' })
+  hover(page)
+  await nudge()
+  control().click()
+  if (page.scrollTop === 0) fail('full mode lost smooth scrolling')
+  page.scrollTo({ top: 0, behavior: 'instant' })
+  page.style.scrollBehavior = 'auto'
 
   html.dataset.teMotion = 'full'
   await frames(2)

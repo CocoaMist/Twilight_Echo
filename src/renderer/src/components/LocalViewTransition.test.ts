@@ -87,14 +87,16 @@ function runtimeEntrySource(): string {
   const template = parse(source).descriptor.template!
   const roots = template.ast!.children.filter((node) => node.type === 1)
   const dialog = '<TrackInfoDialog v-if="infoTrack" />'
+  // Dialogs may be nested in a transition while still belonging to the page root.
+  const containsTrackInfoDialog = (node: (typeof roots)[number]): boolean =>
+    node.tag === 'TrackInfoDialog' ||
+    node.children.some((child) => child.type === 1 && containsTrackInfoDialog(child))
   const shell = roots
     .map((node) => {
       if (node.type !== 1) return ''
       if (node.tag === 'TrackInfoDialog') return dialog
       assert.equal(node.tag, 'div')
-      const hasDialog = node.children.some(
-        (child) => child.type === 1 && child.tag === 'TrackInfoDialog'
-      )
+      const hasDialog = containsTrackInfoDialog(node)
       return (
         '<div class="song-list"><span id="song-list-probe">Songs</span>' +
         (hasDialog ? dialog : '') +

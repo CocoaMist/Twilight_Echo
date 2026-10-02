@@ -239,7 +239,7 @@ test('audio output device cards are opt-in through a closed native checkbox', ()
   )
   assert.match(
     playbackPageSource,
-    /<div\s+v-if="audioOutputPanelExpanded"\s+id="audio-output-device-panel"\s+class="device-panel-content"[\s\S]{0,240}?<div class="device-grid">/
+    /<SettingsDisclosure\s+:open="audioOutputPanelExpanded"\s+trigger-selector='input\[aria-controls="audio-output-device-panel"\]'\s+id="audio-output-device-panel"\s+class="device-panel-content"[\s\S]{0,240}?<div class="device-grid">/
   )
   assert.match(styles, /\.device-panel-disclosure\s*\{[\s\S]*?cursor:\s*pointer/)
   assert.match(

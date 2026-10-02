@@ -44,9 +44,6 @@ const notice = ref('')
 const detecting = ref(false)
 const rescanning = ref(false)
 const mounted = ref(false)
-const focusRestoreTarget =
-  props.restoreFocus ??
-  (document.activeElement instanceof HTMLElement ? document.activeElement : null)
 let generation = 0
 let disposed = false
 try {
@@ -105,7 +102,6 @@ watch(
 onBeforeUnmount(() => {
   disposed = true
   generation++
-  focusRestoreTarget?.focus()
 })
 onMounted(() => {
   mounted.value = true
@@ -199,6 +195,7 @@ function applied(paths: string[], patch: LocalLibraryTagPatch): void {
       v-show="editTracks.length === 0"
       ref="root"
       class="inbox-dialog"
+      data-dialog-panel
       role="dialog"
       aria-modal="true"
       aria-labelledby="inbox-title"

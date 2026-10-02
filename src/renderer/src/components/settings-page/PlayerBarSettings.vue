@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
@@ -107,7 +108,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <div v-if="playerBarOpen" class="settings-accordion-body">
+  <SettingsDisclosure :open="playerBarOpen" class="settings-accordion-body">
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
@@ -260,5 +261,5 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
         </div>
       </div>
     </template>
-  </div>
+  </SettingsDisclosure>
 </template>

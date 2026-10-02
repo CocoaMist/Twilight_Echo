@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AnimatedInput from '../AnimatedInput.vue'
+import CreateAggregatePlaylistDialog from './CreateAggregatePlaylistDialog.vue'
 import CoverImg from '../CoverImg.vue'
 import ThemeIcon from '../ThemeIcon.vue'
 import { formatDuration } from '../song-list/formatDuration'
 import { useSongListVirtualScroll } from '../song-list/useSongListVirtualScroll'
-import { useEscapeToClose, useFocusTrap } from '../../app/useDismissLayer.ts'
 import { useBackHandler } from '../../app/useBackStack.ts'
 import { useMusicStore } from '../../stores/useMusicStore'
 import { usePlayerStore } from '../../stores/usePlayerStore'
@@ -40,7 +40,6 @@ const props = withDefaults(
 
 const {
   aggregatePlaylists,
-  createAggregatePlaylist,
   deletePlaylist,
   setPlaylistPinned,
   setPlaylistHiddenSources,
@@ -64,10 +63,7 @@ const searchQuery = ref('')
 const openVariantMenuFor = ref<string | null>(null)
 const pendingDeleteId = ref<string | null>(null)
 const showCreateDialog = ref(false)
-const newPlaylistName = ref('')
-const createError = ref('')
 const actionError = ref('')
-const createDialogRef = ref<HTMLElement | null>(null)
 
 const activePlaylist = computed(
   () => aggregatePlaylists.value.find((playlist) => playlist.id === activePlaylistId.value) ?? null
@@ -209,34 +205,12 @@ function requestDelete(playlistId: string, event: Event): void {
 }
 
 function openCreateDialog(): void {
-  newPlaylistName.value = ''
-  createError.value = ''
   showCreateDialog.value = true
 }
 
 function closeCreateDialog(): void {
   showCreateDialog.value = false
-  newPlaylistName.value = ''
-  createError.value = ''
 }
-
-function confirmCreate(): void {
-  const name = newPlaylistName.value.trim()
-  if (!name) {
-    createError.value = '请输入聚合歌单名称'
-    return
-  }
-  try {
-    const playlistId = createAggregatePlaylist(name)
-    closeCreateDialog()
-    openPlaylist(playlistId)
-  } catch (error) {
-    createError.value = error instanceof Error ? error.message : '创建聚合歌单失败'
-  }
-}
-
-useEscapeToClose(showCreateDialog, closeCreateDialog)
-useFocusTrap(createDialogRef, showCreateDialog)
 
 // ─── 详情操作 ──────────────────────────────────────────────────────────────
 function toggleSourceVisibility(source: string): void {
@@ -616,46 +590,12 @@ function rowNumber(index: number): number {
     </template>
 
     <!-- ── 新建对话框 ─────────────────────────────────────────────────── -->
-    <Teleport to="body">
-      <div
-        v-if="showCreateDialog"
-        class="aggregate-dialog-overlay"
-        @click.self="closeCreateDialog()"
-      >
-        <div
-          ref="createDialogRef"
-          class="aggregate-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-label="新建聚合歌单"
-          @click.stop
-        >
-          <h3 class="aggregate-dialog-title">新建聚合歌单</h3>
-          <AnimatedInput
-            v-model="newPlaylistName"
-            type="text"
-            class="aggregate-dialog-input"
-            placeholder="聚合歌单名称"
-            aria-label="聚合歌单名称"
-            animate
-            @keydown.enter="confirmCreate()"
-          />
-          <p v-if="createError" class="aggregate-dialog-error" role="alert">{{ createError }}</p>
-          <div class="aggregate-dialog-actions">
-            <button type="button" class="aggregate-dialog-btn" @click="closeCreateDialog()">
-              取消
-            </button>
-            <button
-              type="button"
-              class="aggregate-dialog-btn aggregate-dialog-btn-primary"
-              @click="confirmCreate()"
-            >
-              创建
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <CreateAggregatePlaylistDialog
+      :show="showCreateDialog"
+      :tracks="[]"
+      @close="closeCreateDialog"
+      @created="openPlaylist($event)"
+    />
   </div>
 </template>
 

@@ -1,4 +1,5 @@
 import { applyExplicitThemePreferences } from '@renderer/extensions/themeProfilePriority'
+import { documentMotionMode } from '@renderer/app/scrollMotion'
 import { sharedPlayerBarStylesheet } from '../../../shared/themePlayerBar.ts'
 import { computed, nextTick, ref, shallowRef } from 'vue'
 import {
@@ -870,7 +871,7 @@ export async function applyActiveTheme(
       document.documentElement.setAttribute(attribute, value)
     }
     const toneChanged = resolveTone() !== state.tone
-    if (toneChanged && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    if (toneChanged && documentMotionMode() !== 'off') {
       document.documentElement.classList.add('te-theme-tone-transition')
       window.setTimeout(
         () => document.documentElement.classList.remove('te-theme-tone-transition'),

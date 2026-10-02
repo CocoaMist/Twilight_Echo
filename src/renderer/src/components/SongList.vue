@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
 import { useHoldReorder } from '@renderer/composables/useHoldReorder'
 import NativeContextMenu from '@renderer/components/NativeContextMenu.vue'
 import { useLocalPlaylistOrder } from '@renderer/components/song-list/useLocalPlaylistOrder'
@@ -1453,7 +1454,11 @@ function finishViewSwitchAndRestoreScroll(): void {
     :style="{ height: '100vh' }"
     @scroll="onSongListScroll"
   >
-    <TrackInfoDialog v-if="infoTrack" :track="infoTrack" @close="infoTrack = null" />
+    <Teleport to="body">
+      <NativeDialogTransition>
+        <TrackInfoDialog v-if="infoTrack" :track="infoTrack" @close="infoTrack = null" />
+      </NativeDialogTransition>
+    </Teleport>
     <Transition
       :name="localTransitionName"
       mode="out-in"
@@ -2689,43 +2694,51 @@ function finishViewSwitchAndRestoreScroll(): void {
       </Transition>
     </Teleport>
 
-    <PlaylistActionDialog
-      v-if="playlistDialog"
-      :request="playlistDialog"
-      :error="playlistDialogError"
-      :targets="playlistMoveTargets"
-      @close="dismissPlaylistDialog"
-      @confirm="confirmPlaylistDialog"
-    />
+    <NativeDialogTransition>
+      <PlaylistActionDialog
+        v-if="playlistDialog"
+        :request="playlistDialog"
+        :error="playlistDialogError"
+        :targets="playlistMoveTargets"
+        @close="dismissPlaylistDialog"
+        @confirm="confirmPlaylistDialog"
+      />
+    </NativeDialogTransition>
 
     <Teleport to="body">
-      <LibraryLoudnessDialog
-        v-if="loudnessOpen"
-        :library-tracks="tracks"
-        :selected-tracks="loudnessSelection"
-        :albums="albums"
-        :restore-focus="loudnessFocusTarget"
-        @close="loudnessOpen = false"
-      />
+      <NativeDialogTransition>
+        <LibraryLoudnessDialog
+          v-if="loudnessOpen"
+          :library-tracks="tracks"
+          :selected-tracks="loudnessSelection"
+          :albums="albums"
+          :restore-focus="loudnessFocusTarget"
+          @close="loudnessOpen = false"
+        />
+      </NativeDialogTransition>
     </Teleport>
 
     <Teleport to="body">
-      <MusicVersionsHost
-        v-if="showMusicVersions"
-        :restore-focus="libraryToolsTrigger"
-        :initial-scope="category === 'albums' ? 'albums' : 'tracks'"
-        :initial-track="filter?.startsWith('album:') ? displayTracks[0] : undefined"
-        @close="showMusicVersions = false"
-      />
-      <LibraryInboxDialog
-        v-if="showLibraryInbox"
-        :tracks="tracks"
-        :scanning="isScanning"
-        :rescan="startFullLibraryScan"
-        :restore-focus="libraryToolsTrigger"
-        @close="showLibraryInbox = false"
-        @applied="applyTagManagerWrite"
-      />
+      <NativeDialogTransition>
+        <MusicVersionsHost
+          v-if="showMusicVersions"
+          :restore-focus="libraryToolsTrigger"
+          :initial-scope="category === 'albums' ? 'albums' : 'tracks'"
+          :initial-track="filter?.startsWith('album:') ? displayTracks[0] : undefined"
+          @close="showMusicVersions = false"
+        />
+      </NativeDialogTransition>
+      <NativeDialogTransition overlay :restore-focus="libraryToolsTrigger">
+        <LibraryInboxDialog
+          v-if="showLibraryInbox"
+          :tracks="tracks"
+          :scanning="isScanning"
+          :rescan="startFullLibraryScan"
+          :restore-focus="libraryToolsTrigger"
+          @close="showLibraryInbox = false"
+          @applied="applyTagManagerWrite"
+        />
+      </NativeDialogTransition>
     </Teleport>
 
     <Teleport to="body">

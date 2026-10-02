@@ -104,7 +104,7 @@ const emit = defineEmits<{
           </div>
           <div class="folder-list">
             <div v-for="folder in settings.libraryFolders" :key="folder" class="folder-chip">
-              <span>{{ folder }}</span>
+              <span :title="folder">{{ folder }}</span>
               <i
                 class="pi pi-times"
                 data-te-interactive
@@ -175,13 +175,15 @@ const emit = defineEmits<{
             <strong>实时监控文件夹变动</strong>
             <span>当添加新音乐时自动同步到媒体库，无需手动刷新。</span>
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{ active: settings.watchLibrary, inactive: !settings.watchLibrary }"
             role="switch"
+            aria-label="实时监控文件夹变动"
             :aria-checked="settings.watchLibrary"
             @click="toggleSetting('watchLibrary')"
-          ></span>
+          ></button>
         </div>
         <div class="setting-item">
           <div class="setting-copy">
@@ -191,16 +193,18 @@ const emit = defineEmits<{
               作为最后回退。默认关闭。</span
             >
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{
               active: settings.onlineLyricsFallback,
               inactive: !settings.onlineLyricsFallback
             }"
             role="switch"
+            aria-label="在线歌词回退"
             :aria-checked="settings.onlineLyricsFallback"
             @click="toggleSetting('onlineLyricsFallback')"
-          ></span>
+          ></button>
         </div>
         <div
           v-if="settings.libraryFolders.length > 0"
@@ -326,13 +330,15 @@ const emit = defineEmits<{
             <strong>启动时检查网易云登录</strong>
             <span>应用启动后自动刷新内置网易云音源的登录状态。</span>
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{ active: settings.autoCheckLogin, inactive: !settings.autoCheckLogin }"
             role="switch"
+            aria-label="启动时检查网易云登录"
             :aria-checked="settings.autoCheckLogin"
             @click="toggleSetting('autoCheckLogin')"
-          ></span>
+          ></button>
         </div>
         <hr />
         <div class="setting-item">
@@ -343,13 +349,15 @@ const emit = defineEmits<{
               等兼容工具中显示歌曲、封面和播放控制。</span
             >
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{ active: settings.smtcEnabled, inactive: !settings.smtcEnabled }"
             role="switch"
+            aria-label="原生媒体控制"
             :aria-checked="settings.smtcEnabled"
             @click="toggleSetting('smtcEnabled')"
-          ></span>
+          ></button>
         </div>
         <hr />
         <div class="setting-item">
@@ -357,16 +365,18 @@ const emit = defineEmits<{
             <strong>任务栏缩略图按钮</strong>
             <span>在 Windows 任务栏窗口预览中直接控制上一首、播放与下一首。</span>
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{
               active: settings.taskbarThumbarButtonsEnabled,
               inactive: !settings.taskbarThumbarButtonsEnabled
             }"
             role="switch"
+            aria-label="任务栏缩略图播放按钮"
             :aria-checked="settings.taskbarThumbarButtonsEnabled"
             @click="toggleSetting('taskbarThumbarButtonsEnabled')"
-          ></span>
+          ></button>
         </div>
       </div>
     </div>
@@ -429,13 +439,15 @@ const emit = defineEmits<{
             <strong>开机自动启动</strong>
             <span>在系统启动时自动在后台运行。</span>
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{ active: settings.launchAtLogin, inactive: !settings.launchAtLogin }"
             role="switch"
+            aria-label="开机启动"
             :aria-checked="settings.launchAtLogin"
             @click="toggleSetting('launchAtLogin')"
-          ></span>
+          ></button>
         </div>
         <hr />
         <div class="setting-item">
@@ -472,16 +484,18 @@ const emit = defineEmits<{
             <strong>迷你播放器显示在任务栏</strong>
             <span>开启后可从任务栏独立唤回迷你播放器；关闭后仅剩下悬浮小窗。</span>
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{
               active: settings.miniPlayer.showInTaskbar,
               inactive: !settings.miniPlayer.showInTaskbar
             }"
             role="switch"
+            aria-label="迷你播放器显示在任务栏"
             :aria-checked="settings.miniPlayer.showInTaskbar"
             @click="toggleMiniPlayerShowInTaskbar"
-          ></span>
+          ></button>
         </div>
         <hr />
         <div class="setting-item">
@@ -628,13 +642,15 @@ const emit = defineEmits<{
               .tep 包。默认关闭。
             </span>
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{ active: settings.developerMode, inactive: !settings.developerMode }"
             role="switch"
+            aria-label="开发者模式"
             :aria-checked="settings.developerMode"
             @click="toggleSetting('developerMode')"
-          ></span>
+          ></button>
         </div>
       </div>
     </div>

@@ -110,6 +110,7 @@ let visible=ref(true),open=ref(true),selected='',active=ref('local-home'),app,qu
 const store=useSettingsStore()
 const mount=()=>{app=createApp({setup(){key=ref('songs');queries=useSongListSearch(key);return()=>visible.value?h('div',{class:['app-shell-navigation',{'navigation-temporary':open.value}]},h(SideMenu,{open:open.value,activeKey:active.value,onSelectPage:page=>{selected=page.id;active.value=page.id}})):null}});app.mount('#app')}
 const dialog=()=>document.querySelector('dialog')
+const untilClosed=async()=>{const end=Date.now()+3000;while(dialog()){if(Date.now()>end)throw new Error('native dialog exit did not finish');await pause()}await nextTick()}
 window.runNavigationTests=async()=>{
   window.writes=0;mount();await pause(350)
   queries.searchQuery.value='moon';await pause(200);key.value='albums';await nextTick();expect(queries.searchQuery.value==='','search leaked to a different page');queries.searchQuery.value='album';await nextTick();key.value='songs';await nextTick();expect(queries.searchQuery.value==='moon'&&queries.debouncedSearchQuery.value==='moon','page search did not restore')
@@ -125,7 +126,7 @@ window.runNavigationTests=async()=>{
   active.value='local-home';selected='';await nextTick()
   const opener=button('编辑页面');opener.focus();opener.click();await pause(150)
   expect(dialog().matches(':modal'),'editor is not modal')
-  aria('下移主页').click();aria('显示搜索').click();button('取消').click();await pause()
+  aria('下移主页').click();aria('显示搜索').click();button('取消').click();await untilClosed()
   expect(window.writes===0&&selected==='','cancel wrote settings or navigated')
   expect(document.activeElement===opener,'editor did not restore focus')
   opener.click();await pause();expect(aria('显示搜索').checked,'cancel retained hidden state')
@@ -138,13 +139,13 @@ window.runNavigationTests=async()=>{
   aria('上移主页').focus();aria('上移主页').click();await nextTick();expect(document.querySelector('[data-reorder-id]').dataset.reorderId==='local-home','keyboard-accessible move failed')
   window.failSave=true;button('保存').click();await pause();expect(dialog()&&dialog().querySelector('[role=alert]').textContent.includes('disk failure')&&window.writes===0,'failed save closed the editor or wrote preferences');window.failSave=false
   for(const input of dialog().querySelectorAll('input[type=checkbox]'))if(input.checked)input.click()
-  button('保存').click();await pause();expect(window.writes===1&&document.querySelectorAll('.menu-nav [aria-current]').length===0,'hide-all failed')
+  button('保存').click();await untilClosed();expect(window.writes===1&&document.querySelectorAll('.menu-nav [aria-current]').length===0,'hide-all failed')
   const saved=window.saved;app.unmount();store.settings.value=JSON.parse(saved);mount();await pause()
   expect(button('全部页面')&&button('编辑页面')&&!button('主页'),'hidden page appeared after remount')
   button('全部页面').focus();button('全部页面').click();await pause();const search=aria('搜索页面');expect(document.activeElement===search,'directory did not focus search')
-  search.value='网络';search.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();expect(dialog().querySelectorAll('.page-destination').length===1,'directory filtering failed');dialog().querySelector('.page-destination').click();await pause()
+  search.value='网络';search.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();expect(dialog().querySelectorAll('.page-destination').length===1,'directory filtering failed');dialog().querySelector('.page-destination').click();await untilClosed()
   expect(selected==='network'&&window.writes===1&&store.settings.value.navigationPages.hidden.length===16,'opening hidden page changed configuration')
-  button('编辑页面').click();await pause();button('恢复默认').click();button('保存').click();await pause();expect(button('主页')&&button('流派')&&button('音乐云盘'),'restore defaults failed')
+  button('编辑页面').click();await pause();button('恢复默认').click();button('保存').click();await untilClosed();expect(button('主页')&&button('流派')&&button('音乐云盘'),'restore defaults failed')
   open.value=false;await nextTick();expect(document.querySelector('.side-menu').inert,'closed sidebar remains interactive');open.value=true;await pause()
   document.documentElement.dataset.teShellLayout='custom';document.documentElement.dataset.teShellNavigation='persistent';open.value=false;await pause();expect(!document.querySelector('.side-menu').inert,'persistent shell is inert');delete document.documentElement.dataset.teShellLayout;delete document.documentElement.dataset.teShellNavigation;open.value=true
   store.settings.value={navigationPages:{version:1,order:BUILTIN_NAVIGATION_PAGES.map(page=>page.id),hidden:[]}}
@@ -155,7 +156,7 @@ window.checkNavigationGeometry=async({width,tone,bottom})=>{
   const prefs=JSON.stringify(store.settings.value.navigationPages),menu=document.querySelector('.side-menu'),nav=menu.querySelector('.menu-nav'),footer=menu.querySelector('.menu-bottom')
   expect(menu.getBoundingClientRect().bottom<=window.innerHeight-bottom+1,'sidebar overlaps playbar');expect(footer.getBoundingClientRect().bottom<=menu.getBoundingClientRect().bottom+1,'fixed tools leave sidebar');expect(nav.scrollHeight>nav.clientHeight,'large text directory does not scroll independently')
   for(const label of ['主页','流媒体音乐','音乐库','我的音乐库']){const text=button(label).querySelector('.item-label');expect(text.scrollWidth<=text.clientWidth,'large-text navigation label is truncated: '+label)}
-  button('编辑页面').click();await pause();expect(dialog().getBoundingClientRect().right<=width&&dialog().getBoundingClientRect().bottom<=window.innerHeight,'dialog overflows narrow window');button('取消').click();await pause();expect(JSON.stringify(store.settings.value.navigationPages)===prefs,'theme/layout changed saved preferences')
+  button('编辑页面').click();await pause();expect(dialog().getBoundingClientRect().right<=width&&dialog().getBoundingClientRect().bottom<=window.innerHeight,'dialog overflows narrow window');button('取消').click();await untilClosed();expect(JSON.stringify(store.settings.value.navigationPages)===prefs,'theme/layout changed saved preferences')
 }
 window.prepareSidebarPreview=async({tone,expanded})=>{
   document.documentElement.dataset.theme=tone;document.documentElement.style.setProperty('--te-font-size-body','14px')

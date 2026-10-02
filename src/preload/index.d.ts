@@ -184,6 +184,7 @@ interface MiniPlayerBootstrap {
 
 interface TrayPlayerBootstrap {
   state: MiniPlayerStateSnapshot
+  motionPreference: MotionPreference
 }
 
 interface AudioEngineAPI {
@@ -782,6 +783,7 @@ interface WindowAPI {
     navigate: (target: TrayNavigationTarget) => void
     hide: () => void
     onState: (cb: (state: MiniPlayerStateSnapshot) => void) => () => void
+    onMotionPreference: (cb: (preference: MotionPreference) => void) => () => void
   }
 }
 

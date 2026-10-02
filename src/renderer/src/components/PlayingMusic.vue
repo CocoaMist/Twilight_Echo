@@ -174,6 +174,26 @@ const coverStyle = computed<Record<string, string>>(() => {
 // Visualizer toggle: replaces the cover+lyrics layout with the native-engine
 // spectrum visualizer surface.
 const viewMode = ref<'cover' | 'visualizer'>('cover')
+const displayedView = ref<'cover' | 'visualizer' | null>('cover')
+const visualizerMounted = ref(false)
+const hasSwitchedPlaybackView = ref(false)
+const lyricsViewActive = computed(
+  () => viewMode.value === 'cover' && displayedView.value === 'cover'
+)
+
+// Finish the outgoing surface before mounting the iframe or restoring its blurred
+// backdrop. The cover/lyrics DOM survives the handoff, so returning does not
+// replay its artwork entrance or reset its lyric controller.
+function finishPlaybackHandoff(): void {
+  visualizerMounted.value = viewMode.value === 'visualizer'
+  displayedView.value = viewMode.value
+}
+
+watch(viewMode, () => {
+  hasSwitchedPlaybackView.value = true
+  if (lyricMotionLevel.value === 'off') finishPlaybackHandoff()
+  else displayedView.value = null
+})
 function toggleVisualizer(): void {
   viewMode.value = viewMode.value === 'cover' ? 'visualizer' : 'cover'
 }
@@ -194,6 +214,9 @@ const coverIdentity = computed(
   () =>
     `${currentTrack.value?.id ?? 'none'}:${currentTrack.value?.cover ?? ''}:${currentTrack.value?.coverSource ?? ''}`
 )
+watch(coverIdentity, () => {
+  if (viewMode.value === 'cover') hasSwitchedPlaybackView.value = false
+})
 const lyricsEl = ref<HTMLElement | null>(null)
 const lyricRowElements = new Map<number, HTMLElement>()
 let lyricResizeObserver: ResizeObserver | null = null
@@ -208,6 +231,9 @@ const LYRIC_ROW_GAP_PX = 10
  * `reduced` and `off` snap lines into place and drop the depth effects.
  */
 const lyricMotionLevel = ref<'full' | 'reduced' | 'off'>('full')
+watch(lyricMotionLevel, (level) => {
+  if (level === 'off' && displayedView.value === null) finishPlaybackHandoff()
+})
 
 function readLyricMotionLevel(): void {
   const level = document.documentElement.dataset.teMotion
@@ -346,7 +372,7 @@ const lyricViewport = createLyricViewportController({
   getAlignPosition: () => lyricsAppearance.value.anchorPosition,
   getBottomReservedPx: measurePlaybarReservedPx,
   getRowGapPx: () => LYRIC_ROW_GAP_PX,
-  isSpringEnabled: () => lyricMotionFull.value && viewMode.value === 'cover',
+  isSpringEnabled: () => lyricMotionFull.value && lyricsViewActive.value,
   isBlurEnabled: () => lyricMotionFull.value,
   isScaleEnabled: () => lyricMotionFull.value,
   isPlaying: () => isPlaying.value,
@@ -400,6 +426,7 @@ watch(
 watch(
   displayLyricLines,
   async () => {
+    if (!lyricsViewActive.value) return
     await lyricViewport.recenter('snap')
   },
   { flush: 'post' }
@@ -432,7 +459,7 @@ function syncActiveLyricIndex(time = playbackClockSnapshot.value.position, isSee
   const nextIndex =
     next.buffered.size > 0 ? next.scrollToIndex : findActiveLyricIndex(lyricLines.value, adjusted)
   if (nextIndex !== activeLyricIndex.value) activeLyricIndex.value = nextIndex
-  if (next.added.size > 0 || next.removed.size > 0) {
+  if (lyricsViewActive.value && (next.added.size > 0 || next.removed.size > 0)) {
     void lyricViewport.recenter('resize')
   }
 }
@@ -445,7 +472,8 @@ watch(
     const epochChanged = previousSnapshot != null && previousSnapshot.epoch !== snapshot.epoch
     if (linesChanged) lyricPlayheadState = createLyricPlayheadState()
     syncActiveLyricIndex(snapshot.position, linesChanged || epochChanged)
-    if (epochChanged && !linesChanged) void lyricViewport.recenter('resize')
+    if (epochChanged && !linesChanged && lyricsViewActive.value)
+      void lyricViewport.recenter('resize')
   },
   { immediate: true }
 )
@@ -493,11 +521,11 @@ function setLyricLineRef(index: number, el: Element | ComponentPublicInstance | 
   if (previous && previous !== element) lyricResizeObserver?.unobserve(previous)
   if (element) {
     lyricRowElements.set(index, element)
-    lyricResizeObserver?.observe(element)
+    if (lyricsViewActive.value) lyricResizeObserver?.observe(element)
   } else {
     lyricRowElements.delete(index)
   }
-  lyricViewport.registerRow(index, element)
+  if (lyricsViewActive.value || !element) lyricViewport.registerRow(index, element)
 }
 
 function jumpToLyric(time: number | null): void {
@@ -541,38 +569,48 @@ function onLyricsManualScroll(event: WheelEvent): void {
 }
 
 function onLyricContentResize(): void {
+  if (!lyricsViewActive.value) return
   lyricViewport.onResize('spring')
 }
 
 function onLyricViewportResize(): void {
+  if (!lyricsViewActive.value) return
   lyricViewport.onResize('snap')
 }
 
 function onLyricVisibilityChange(): void {
+  if (!lyricsViewActive.value) return
   void lyricViewport.recenter('snap')
 }
 
 watch(activeLyricIndex, (index) => {
+  if (!lyricsViewActive.value) return
   if (index < 0) return
   if (lyricViewport.isManualBrowsing()) return
   void lyricViewport.follow(index)
 })
 
-watch(lyricsEl, (el, previousEl) => {
-  if (previousEl) {
-    lyricResizeObserver?.unobserve(previousEl)
-    lyricViewport.detach(previousEl)
-  }
-  if (el) {
+watch(
+  [lyricsViewActive, lyricsEl],
+  ([active, el]) => {
+    lyricViewport.detach()
+    lyricResizeObserver?.disconnect()
+    if (!active || !el) return
+    for (const [index, row] of lyricRowElements) {
+      lyricViewport.registerRow(index, row)
+      lyricResizeObserver?.observe(row)
+    }
     lyricViewport.attach(el)
     lyricResizeObserver?.observe(el)
     void lyricViewport.recenter('snap')
-  }
-})
+  },
+  { flush: 'post' }
+)
 
 watch(
   [hasLyrics, viewMode, lyricMotionLevel, isPlaying],
   () => {
+    if (!lyricsViewActive.value) return
     void lyricViewport.recenter(lyricMotionFull.value ? 'resize' : 'snap')
   },
   { flush: 'post' }
@@ -634,154 +672,178 @@ onBeforeUnmount(() => {
       <PlayingMusicTimeChip />
     </div>
 
-    <div v-if="viewMode !== 'visualizer'" class="backdrop" aria-hidden="true">
-      <Transition name="backdrop-cover-fade" appear>
-        <div
-          v-if="isBlurBackground && currentTrack"
-          :key="`bg:${coverIdentity}`"
-          class="backdrop-cover-wrap"
-        >
-          <CoverImg
-            :cover="currentTrack.cover"
-            :cover-source="currentTrack.coverSource"
-            :identity="currentTrack.id"
-            class="backdrop-cover"
-            alt=""
-          />
-        </div>
-      </Transition>
-      <div v-if="isFluidBackground" class="backdrop-fluid" />
-      <div v-if="isSolidBackground" class="backdrop-solid" />
-      <div class="backdrop-scrim" />
-      <div class="backdrop-accent" />
-    </div>
-
-    <div
-      v-if="currentTrack"
-      :key="`stage:${coverIdentity}`"
-      :class="['stage', { 'stage--visualizer': viewMode === 'visualizer' }]"
+    <Transition
+      name="playback-view"
+      :css="lyricMotionLevel !== 'off'"
+      @after-leave="finishPlaybackHandoff"
     >
-      <AudioVisualizerPanel
-        v-if="viewMode === 'visualizer'"
-        class="visualizer-surface"
-        :active="viewMode === 'visualizer'"
-      />
-      <main
-        v-else
-        class="layout"
-        :class="{ 'layout--single': !reserveLyricsColumn }"
-        :style="layoutStyle"
+      <div
+        v-show="displayedView === 'cover'"
+        class="playback-cover-view"
+        :data-returning="hasSwitchedPlaybackView"
+        :inert="viewMode !== 'cover'"
       >
-        <section class="cover-column">
-          <div class="cover-frame" :style="coverStyle">
-            <CoverImg
-              v-if="currentTrack.cover || currentTrack.coverSource"
-              :cover="currentTrack.cover"
-              :cover-source="currentTrack.coverSource"
-              :identity="currentTrack.id"
-              class="cover-image"
-              alt="cover"
-            />
-            <div v-else class="cover-placeholder">
-              <i class="pi pi-wave-pulse"></i>
-            </div>
-          </div>
-
-          <div class="cover-meta">
-            <h1 class="track-title">{{ currentTrack.title }}</h1>
-            <p class="track-artist">{{ currentTrack.artist }}</p>
-            <p v-if="currentTrack.album" class="track-album">{{ currentTrack.album }}</p>
-          </div>
-        </section>
-
-        <section
-          v-if="reserveLyricsColumn"
-          class="lyrics-column lyrics-column--depth"
-          :class="{
-            'lyrics-column--pending': !hasLyrics,
-            'lyrics-column--karaoke-disabled': !lyricsAppearance.karaokeEnabled
-          }"
-          :style="lyricStyle"
-        >
-          <div class="lyrics-head" aria-hidden="true" />
-
-          <div
-            ref="lyricsEl"
-            class="lyrics-scroll"
-            @wheel.passive="onLyricsManualScroll"
-            @touchstart.passive="onLyricsTouchStart"
-            @touchmove.passive="onLyricsTouchMove"
-            @touchend.passive="onLyricsTouchEnd"
-            @touchcancel.passive="onLyricsTouchEnd"
-          >
-            <div v-if="!hasLyrics" class="lyrics-pending" aria-live="polite">
-              {{ lyricsPendingLabel }}
-            </div>
+        <div v-if="!visualizerMounted" class="backdrop" aria-hidden="true">
+          <Transition name="backdrop-cover-fade" :appear="!hasSwitchedPlaybackView">
             <div
-              v-if="hasLyrics && lyricInterludeDotsTop != null"
-              class="lyric-interlude-dots"
-              :style="{ '--lyric-interlude-top': `${lyricInterludeDotsTop}px` }"
-              aria-hidden="true"
+              v-if="isBlurBackground && currentTrack"
+              :key="`bg:${coverIdentity}`"
+              class="backdrop-cover-wrap"
             >
-              <span></span><span></span><span></span>
+              <CoverImg
+                :cover="currentTrack.cover"
+                :cover-source="currentTrack.coverSource"
+                :identity="currentTrack.id"
+                class="backdrop-cover"
+                alt=""
+              />
             </div>
-            <div v-if="hasLyrics" class="lyrics-list">
-              <button
-                v-for="item in renderedLyricLines"
-                :key="lyricRowKey(item)"
-                v-memo="[
-                  item.index === highlightedLyricIndex,
-                  item.singing,
-                  item.presented,
-                  item.line,
-                  lyricsAppearance
-                ]"
-                :ref="(el) => setLyricLineRef(item.index, el)"
-                type="button"
-                class="lyric-row"
-                :class="[
-                  {
-                    active: item.singing,
-                    'is-singing': item.singing,
-                    'is-presented': item.presented,
-                    'is-anchor': item.index === highlightedLyricIndex,
-                    'is-plain': !item.line.timed,
-                    'lyric-row--custom-background':
-                      lyricTextStyle[item.singing ? 'active' : 'normal'].backgroundStyle !== 'none'
-                  }
-                ]"
-                :aria-current="item.index === highlightedLyricIndex ? 'true' : undefined"
-                :aria-label="item.ariaLabel"
-                :style="item.singing ? lyricRowStyleActive : lyricRowStyleNormal"
-                :disabled="!item.line.timed"
-                @pointerdown.stop
-                @click="jumpToLyric(item.line.time)"
-              >
-                <PlayingLyricLine
-                  :line="item.line"
-                  :singing="item.singing"
-                  :offset-seconds="currentLyricOffsetSeconds"
-                  :clock="lyricWordClock"
-                  :karaoke-enabled="lyricsAppearance.karaokeEnabled"
-                  :motion-mode="lyricMotionLevel"
-                  :align="lyricLineAlign(item.singing)"
-                  :translation-style="lyricTranslationStyle"
-                  :romanization-style="lyricRomanizationStyle"
-                  :harmony-style="lyricHarmonyStyle"
-                />
-              </button>
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
+          </Transition>
+          <div v-if="isFluidBackground" class="backdrop-fluid" />
+          <div v-if="isSolidBackground" class="backdrop-solid" />
+          <div class="backdrop-scrim" />
+          <div class="backdrop-accent" />
+        </div>
 
-    <div v-else class="empty-shell">
-      <div class="empty-state">
-        <i class="pi pi-wave-pulse"></i>
-        <p>暂无正在播放的歌曲</p>
+        <div v-if="currentTrack" :key="`stage:${coverIdentity}`" class="stage">
+          <main
+            class="layout"
+            :class="{ 'layout--single': !reserveLyricsColumn }"
+            :style="layoutStyle"
+          >
+            <section class="cover-column">
+              <div class="cover-frame" :style="coverStyle">
+                <CoverImg
+                  v-if="currentTrack.cover || currentTrack.coverSource"
+                  :cover="currentTrack.cover"
+                  :cover-source="currentTrack.coverSource"
+                  :identity="currentTrack.id"
+                  class="cover-image"
+                  alt="cover"
+                />
+                <div v-else class="cover-placeholder">
+                  <i class="pi pi-wave-pulse"></i>
+                </div>
+              </div>
+
+              <div class="cover-meta">
+                <h1 class="track-title">{{ currentTrack.title }}</h1>
+                <p class="track-artist">{{ currentTrack.artist }}</p>
+                <p v-if="currentTrack.album" class="track-album">{{ currentTrack.album }}</p>
+              </div>
+            </section>
+
+            <section
+              v-if="reserveLyricsColumn"
+              class="lyrics-column lyrics-column--depth"
+              :class="{
+                'lyrics-column--pending': !hasLyrics,
+                'lyrics-column--karaoke-disabled': !lyricsAppearance.karaokeEnabled
+              }"
+              :style="lyricStyle"
+            >
+              <div class="lyrics-head" aria-hidden="true" />
+
+              <div
+                ref="lyricsEl"
+                class="lyrics-scroll"
+                @wheel.passive="onLyricsManualScroll"
+                @touchstart.passive="onLyricsTouchStart"
+                @touchmove.passive="onLyricsTouchMove"
+                @touchend.passive="onLyricsTouchEnd"
+                @touchcancel.passive="onLyricsTouchEnd"
+              >
+                <div v-if="!hasLyrics" class="lyrics-pending" aria-live="polite">
+                  {{ lyricsPendingLabel }}
+                </div>
+                <div
+                  v-if="hasLyrics && lyricInterludeDotsTop != null"
+                  class="lyric-interlude-dots"
+                  :style="{ '--lyric-interlude-top': `${lyricInterludeDotsTop}px` }"
+                  aria-hidden="true"
+                >
+                  <span></span><span></span><span></span>
+                </div>
+                <div v-if="hasLyrics" class="lyrics-list">
+                  <button
+                    v-for="item in renderedLyricLines"
+                    :key="lyricRowKey(item)"
+                    v-memo="[
+                      item.index === highlightedLyricIndex,
+                      item.singing,
+                      item.presented,
+                      item.line,
+                      lyricsAppearance,
+                      viewMode,
+                      displayedView,
+                      lyricMotionLevel
+                    ]"
+                    :ref="(el) => setLyricLineRef(item.index, el)"
+                    type="button"
+                    class="lyric-row"
+                    :class="[
+                      {
+                        active: item.singing,
+                        'is-singing': item.singing,
+                        'is-presented': item.presented,
+                        'is-anchor': item.index === highlightedLyricIndex,
+                        'is-plain': !item.line.timed,
+                        'lyric-row--custom-background':
+                          lyricTextStyle[item.singing ? 'active' : 'normal'].backgroundStyle !==
+                          'none'
+                      }
+                    ]"
+                    :aria-current="item.index === highlightedLyricIndex ? 'true' : undefined"
+                    :aria-label="item.ariaLabel"
+                    :style="item.singing ? lyricRowStyleActive : lyricRowStyleNormal"
+                    :disabled="!item.line.timed"
+                    @pointerdown.stop
+                    @click="jumpToLyric(item.line.time)"
+                  >
+                    <PlayingLyricLine
+                      :line="item.line"
+                      :singing="item.singing && viewMode === 'cover' && displayedView === 'cover'"
+                      :offset-seconds="currentLyricOffsetSeconds"
+                      :clock="lyricWordClock"
+                      :karaoke-enabled="lyricsAppearance.karaokeEnabled && viewMode === 'cover'"
+                      :motion-mode="lyricMotionLevel"
+                      :align="lyricLineAlign(item.singing)"
+                      :translation-style="lyricTranslationStyle"
+                      :romanization-style="lyricRomanizationStyle"
+                      :harmony-style="lyricHarmonyStyle"
+                    />
+                  </button>
+                </div>
+              </div>
+            </section>
+          </main>
+        </div>
+
+        <div v-else class="empty-shell">
+          <div class="empty-state">
+            <i class="pi pi-wave-pulse"></i>
+            <p>暂无正在播放的歌曲</p>
+          </div>
+        </div>
       </div>
-    </div>
+    </Transition>
+    <Transition
+      name="playback-view"
+      :css="lyricMotionLevel !== 'off'"
+      @after-leave="finishPlaybackHandoff"
+    >
+      <div
+        v-show="displayedView === 'visualizer'"
+        class="stage stage--visualizer playback-visualizer-view"
+        :inert="viewMode !== 'visualizer'"
+      >
+        <AudioVisualizerPanel
+          v-if="currentTrack && visualizerMounted"
+          class="visualizer-surface"
+          :active="viewMode === 'visualizer' && displayedView === 'visualizer'"
+        />
+      </div>
+    </Transition>
     <Teleport to="body">
       <div
         v-if="appearanceMenuOpen"
@@ -810,6 +872,34 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.playback-cover-view {
+  position: absolute;
+  inset: 0;
+}
+
+.playback-cover-view[data-returning='true'] :is(.cover-frame, .cover-meta) {
+  animation: none !important;
+}
+
+.playback-view-enter-active,
+.playback-view-leave-active {
+  transition: opacity 80ms var(--te-ease-out-strong);
+}
+
+.playback-view-leave-active {
+  pointer-events: none;
+}
+
+.playback-view-enter-from,
+.playback-view-leave-to {
+  opacity: 0;
+}
+
+html[data-te-motion='reduced'] .playback-view-enter-active,
+html[data-te-motion='reduced'] .playback-view-leave-active {
+  transition: opacity 60ms var(--te-ease-out-strong) !important;
+}
+
 .playing-music {
   position: fixed;
   inset: 0;

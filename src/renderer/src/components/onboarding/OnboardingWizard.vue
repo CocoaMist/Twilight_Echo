@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useResolvedMotionMode } from '../../app/useResolvedMotionMode'
 import OnboardingBackdrop from './OnboardingBackdrop.vue'
 import StepWelcome from './steps/StepWelcome.vue'
 import StepUsage from './steps/StepUsage.vue'
@@ -66,21 +67,39 @@ const primaryIcon = computed(() => (isLastStep.value ? 'ph ph-play' : 'ph ph-arr
 const sceneNumber = computed(() => String(currentIndex.value + 1).padStart(2, '0'))
 const sceneTotal = computed(() => String(visibleSteps.value.length).padStart(2, '0'))
 
-// Mouse parallax: the aurora drifts gently against the pointer. Written as
-// CSS vars so the effect stays on the compositor and costs one style write.
+// Only the two decorative layers receive pointer transforms.
 const rootRef = ref<HTMLElement | null>(null)
+const motionMode = useResolvedMotionMode(computed(() => settings.value.motionPreference))
 let parallaxFrame = 0
 
+function resetParallax(): void {
+  if (parallaxFrame) cancelAnimationFrame(parallaxFrame)
+  parallaxFrame = 0
+  rootRef.value?.querySelectorAll<HTMLElement>('.onb-backdrop, .onb-scene-no').forEach((layer) => {
+    layer.style.removeProperty('transform')
+  })
+}
+
+watch(
+  motionMode,
+  (mode) => {
+    if (mode !== 'full') resetParallax()
+  },
+  { flush: 'sync' }
+)
+
 function onPointerMove(event: PointerEvent): void {
-  if (parallaxFrame) return
+  if (motionMode.value !== 'full' || parallaxFrame) return
   parallaxFrame = requestAnimationFrame(() => {
     parallaxFrame = 0
     const root = rootRef.value
-    if (!root) return
+    if (!root || motionMode.value !== 'full') return
     const x = event.clientX / window.innerWidth - 0.5
     const y = event.clientY / window.innerHeight - 0.5
-    root.style.setProperty('--onb-parallax-x', x.toFixed(4))
-    root.style.setProperty('--onb-parallax-y', y.toFixed(4))
+    const backdrop = root.querySelector<HTMLElement>('.onb-backdrop')
+    const scene = root.querySelector<HTMLElement>('.onb-scene-no')
+    if (backdrop) backdrop.style.transform = `translate3d(${x * -28}px, ${y * -20}px, 0)`
+    if (scene) scene.style.transform = `translate3d(${x * 14}px, ${y * 10}px, 0)`
   })
 }
 
@@ -135,7 +154,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
-  if (parallaxFrame) cancelAnimationFrame(parallaxFrame)
+  resetParallax()
 })
 </script>
 
@@ -143,6 +162,7 @@ onBeforeUnmount(() => {
   <div
     ref="rootRef"
     class="onboarding-wizard"
+    :data-motion="motionMode"
     role="dialog"
     aria-label="首次使用引导"
     @pointermove="onPointerMove"

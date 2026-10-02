@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useMusicStore } from '@renderer/stores/useMusicStore'
 import {
@@ -355,13 +356,15 @@ function clearStats(range: ListeningStatsClearRange): void {
         </p>
       </footer>
     </div>
-    <ListeningStatsClearDialog
-      v-if="showClearDialog"
-      :stats="clearActivity"
-      :now="now"
-      @close="showClearDialog = false"
-      @clear="clearStats"
-    />
+    <NativeDialogTransition>
+      <ListeningStatsClearDialog
+        v-if="showClearDialog"
+        :stats="clearActivity"
+        :now="now"
+        @close="showClearDialog = false"
+        @clear="clearStats"
+      />
+    </NativeDialogTransition>
   </main>
 </template>
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsDisclosure from './SettingsDisclosure.vue'
 import { ref } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
@@ -89,7 +90,7 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <div v-if="cardAppearanceOpen" class="settings-accordion-body">
+  <SettingsDisclosure :open="cardAppearanceOpen" class="settings-accordion-body">
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
@@ -461,5 +462,5 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
         </div>
       </div>
     </div>
-  </div>
+  </SettingsDisclosure>
 </template>

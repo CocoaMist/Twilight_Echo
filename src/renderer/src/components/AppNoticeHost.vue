@@ -546,20 +546,15 @@ button:focus-visible {
   opacity: 0;
   transform: translateY(6px);
 }
-:global(html[data-te-motion='reduced'] .notice-history *),
 :global(html[data-te-motion='reduced'] .notice-history),
 :global(html[data-te-motion='reduced'] .app-notice),
-:global(html[data-te-motion='reduced'] .notification-btn *) {
-  transition-duration: 1ms !important;
+:global(html[data-te-motion='reduced'] .notice-record),
+:global(html[data-te-motion='reduced'] .notice-empty) {
+  transition-property: opacity, color, background-color !important;
+  transition-duration: 120ms !important;
+  transition-timing-function: var(--te-ease-out-strong) !important;
   transition-delay: 0ms !important;
-}
-@media (prefers-reduced-motion: reduce) {
-  .notice-history,
-  .notice-history *,
-  .app-notice {
-    transition-duration: 1ms !important;
-    transition-delay: 0ms !important;
-  }
+  transform: none !important;
 }
 :global(body.te-no-blur .notice-history),
 :global(body.te-no-blur .app-notice) {

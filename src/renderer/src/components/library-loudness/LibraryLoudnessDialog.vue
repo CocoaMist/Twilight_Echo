@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useNativeDialog } from '@renderer/composables/useNativeDialog'
 import type { Track } from '@renderer/types/music.ts'
 import { getSongListVirtualRange } from '@renderer/components/song-list/songListVirtualWindow.ts'
 import {
@@ -48,7 +49,7 @@ const scrollTop = ref(0)
 const viewportHeight = ref(360)
 const selectedRow = ref(0)
 const ROW_HEIGHT = 64
-let previousFocus: HTMLElement | null = null
+useNativeDialog(dialog, () => props.restoreFocus)
 let observer: ResizeObserver | undefined
 
 const rows = computed(() => {
@@ -166,10 +167,6 @@ watch(rows, () => {
   if (grid.value) grid.value.scrollTop = 0
 })
 onMounted(async () => {
-  previousFocus =
-    props.restoreFocus ??
-    (document.activeElement instanceof HTMLElement ? document.activeElement : null)
-  dialog.value?.showModal()
   await nextTick()
   trackMode.value?.focus()
   observer = new ResizeObserver(() => {
@@ -179,8 +176,6 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   observer?.disconnect()
-  dialog.value?.close()
-  if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
 })
 </script>
 

@@ -52,12 +52,14 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
       Vue.Transition = { setup: (_props, { slots }) => () => slots.default?.() };
       const replies = [];
       const savedAlbums = [], savedArtists = [];
-      const provider = { id: 'ncm', name: 'NetEase', capabilities: ['login'], ui: {} };
+      const provider = { id: 'ncm', name: 'NetEase', capabilities: ['login'], supportedMethods: ['fetchSavedAlbums', 'fetchSavedArtists'], ui: {} };
       window.fixture = {
         QRCode: { toDataURL: async () => 'data:image/png;base64,AA==' },
         AnimatedInput: { template: '<input />' }, CoverImg: { template: '<img />' },
         useBackHandler: () => {},
         useEscapeToClose: () => {},
+        NativeDialogTransition: Vue.Transition,
+        useNativeDialog: dialog => { Vue.onMounted(() => dialog.value?.showModal()); Vue.onBeforeUnmount(() => dialog.value?.close()); },
         useMediaProviders: () => ({ get: () => ({ fetchSavedAlbums: () => new Promise(resolve => savedAlbums.push(resolve)), fetchSavedArtists: () => new Promise(resolve => savedArtists.push(resolve)) }) }),
         createVisibilityPollingController: () => ({ onVisibilityChange() {} }),
         useNcmStore: () => ({ checkLogin: async () => {} }),
@@ -96,7 +98,7 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
         document.querySelector('.row-play-btn').click(); check(played === 1, 'play button still plays');
         list.unmount();
         let openedAlbum = null, openedArtist = null;
-        const saved = Vue.createApp(fixture.SavedMusicCollections, { userId: 1, onOpenAlbum: item => openedAlbum = item, onOpenArtist: item => openedArtist = item });
+        const saved = Vue.createApp(fixture.SavedMusicCollections, { userId: 1, providerId: 'ncm', onOpenAlbum: item => openedAlbum = item, onOpenArtist: item => openedArtist = item });
         saved.mount('#saved'); await tick();
         savedAlbums[0](Array.from({ length: 60 }, (_, id) => ({ id, name: 'Album ' + id, cover: null, trackCount: 1 }))); await tick();
         check(document.querySelectorAll('#saved .saved-grid button').length === 40, 'saved collections render a bounded first batch');

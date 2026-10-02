@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { defineAsyncComponent, computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { defineAsyncComponent, computed, ref } from 'vue'
+import { useNativeDialog } from '@renderer/composables/useNativeDialog'
 import { useEscapeToClose } from '@renderer/app/useDismissLayer'
 import type { Track } from '@renderer/types/music'
 import CoverImg from '@renderer/components/CoverImg.vue'
@@ -28,80 +29,70 @@ function applyTags(paths: string[], patch: LocalLibraryTagPatch): void {
 }
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement | null>(null)
-onMounted(() => dialog.value?.showModal())
+useNativeDialog(dialog)
 useEscapeToClose(
   () => !editing.value && !versions.value,
   () => emit('close')
 )
-onBeforeUnmount(() => dialog.value?.close())
 </script>
 
 <template>
-  <Teleport to="body">
-    <dialog
-      ref="dialog"
-      class="track-info-dialog"
-      :class="{ 'is-editing': editing || versions }"
-      aria-labelledby="track-info-title"
-      @close="emit('close')"
-      @cancel.prevent="versions ? (versions = false) : editing ? (editing = false) : emit('close')"
-    >
-      <MusicVersionsHost
-        v-if="versions"
-        embedded
-        :initial-track="track"
-        @close="versions = false"
+  <dialog
+    ref="dialog"
+    class="track-info-dialog"
+    :class="{ 'is-editing': editing || versions }"
+    aria-labelledby="track-info-title"
+    @close="emit('close')"
+    @cancel.prevent="versions ? (versions = false) : editing ? (editing = false) : emit('close')"
+  >
+    <MusicVersionsHost v-if="versions" embedded :initial-track="track" @close="versions = false" />
+    <LocalLibraryTagManager
+      v-else-if="editing"
+      :tracks="editableTracks"
+      @close="editing = false"
+      @applied="applyTags"
+    />
+    <template v-else>
+      <button
+        type="button"
+        class="track-info-close"
+        aria-label="关闭歌曲信息"
+        @click.stop="emit('close')"
+      >
+        ×
+      </button>
+      <CoverImg
+        :cover="track.cover"
+        :cover-source="track.coverSource"
+        class="track-info-cover"
+        alt=""
       />
-      <LocalLibraryTagManager
-        v-else-if="editing"
-        :tracks="editableTracks"
-        @close="editing = false"
-        @applied="applyTags"
-      />
-      <template v-else>
-        <button
-          type="button"
-          class="track-info-close"
-          aria-label="关闭歌曲信息"
-          @click.stop="emit('close')"
-        >
-          ×
-        </button>
-        <CoverImg
-          :cover="track.cover"
-          :cover-source="track.coverSource"
-          class="track-info-cover"
-          alt=""
-        />
-        <h2 id="track-info-title">{{ track.title }}</h2>
-        <dl>
-          <dt>艺人</dt>
-          <dd>{{ track.artist || '未知艺人' }}</dd>
-          <dt>专辑</dt>
-          <dd>{{ track.album || '未知专辑' }}</dd>
-          <dt>时长</dt>
-          <dd>
-            {{ Math.floor(track.duration / 60) }}:{{
-              String(Math.floor(track.duration % 60)).padStart(2, '0')
-            }}
-          </dd>
-          <dt>来源</dt>
-          <dd>{{ track.source || 'local' }}</dd>
-        </dl>
-        <button
-          v-if="editableTracks.length"
-          type="button"
-          class="track-info-edit"
-          @click="editing = true"
-        >
-          编辑歌曲信息
-        </button>
-        <button type="button" class="track-info-edit" @click="versions = true">
-          歌曲与专辑版本
-        </button>
-      </template>
-    </dialog>
-  </Teleport>
+      <h2 id="track-info-title">{{ track.title }}</h2>
+      <dl>
+        <dt>艺人</dt>
+        <dd>{{ track.artist || '未知艺人' }}</dd>
+        <dt>专辑</dt>
+        <dd>{{ track.album || '未知专辑' }}</dd>
+        <dt>时长</dt>
+        <dd>
+          {{ Math.floor(track.duration / 60) }}:{{
+            String(Math.floor(track.duration % 60)).padStart(2, '0')
+          }}
+        </dd>
+        <dt>来源</dt>
+        <dd>{{ track.source || 'local' }}</dd>
+      </dl>
+      <button
+        v-if="editableTracks.length"
+        type="button"
+        class="track-info-edit"
+        @click="editing = true"
+      >
+        编辑歌曲信息
+      </button>
+      <button type="button" class="track-info-edit" @click="versions = true">歌曲与专辑版本</button>
+    </template>
+  </dialog>
 </template>
 
 <style scoped>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsDisclosure from './SettingsDisclosure.vue'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { cloneMiniPlayerSettings, type MiniPlayerSettings } from '../../../../shared/miniPlayer.ts'
 import { useSettingsStore } from '../../stores/useSettingsStore'
@@ -74,18 +75,19 @@ onBeforeUnmount(() => {
       <i class="pi pi-chevron-down"></i>
     </button>
 
-    <MiniPlayerCustomizer
-      v-if="open"
-      :settings="customization.settings.value"
-      mode="inline"
-      :saving="customization.saving.value"
-      :error="customization.error.value"
-      :pick-background-image="pickBackgroundImage"
-      @update:settings="customization.replaceSettings"
-      @undo="customization.undoSession"
-      @reset="customization.resetActiveTheme"
-      @flush="customization.flush"
-    />
+    <SettingsDisclosure :open="open">
+      <MiniPlayerCustomizer
+        :settings="customization.settings.value"
+        mode="inline"
+        :saving="customization.saving.value"
+        :error="customization.error.value"
+        :pick-background-image="pickBackgroundImage"
+        @update:settings="customization.replaceSettings"
+        @undo="customization.undoSession"
+        @reset="customization.resetActiveTheme"
+        @flush="customization.flush"
+      />
+    </SettingsDisclosure>
   </div>
 </template>
 

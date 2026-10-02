@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { scrollMotionBehavior } from '../app/scrollMotion'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
@@ -326,9 +327,7 @@ const filteredSearchResults = computed(() => {
 })
 // 结果集变化时修正选中索引，避免越界
 watch(filteredSearchResults, (matches) => {
-  if (activeSearchIndex.value >= matches.length) {
-    activeSearchIndex.value = matches.length > 0 ? 0 : -1
-  }
+  activeSearchIndex.value = matches.length > 0 ? 0 : -1
 })
 const hasSettingsSearchResults = computed(
   () => settingsSearchQuery.value.trim().length > 0 && filteredSearchResults.value.length > 0
@@ -794,15 +793,26 @@ function scrollPageToElement(
   if (!page) return
 
   const block = options.block ?? 'start'
-  const behavior = options.behavior ?? 'smooth'
+  const behavior = scrollMotionBehavior(
+    options.behavior ?? 'smooth',
+    Boolean(page.querySelector(':focus-visible'))
+  )
   const pageRect = page.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
   const targetTop = targetRect.top - pageRect.top + page.scrollTop
+  const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
+  const scrollOffset =
+    SETTINGS_SECTION_SCROLL_OFFSET +
+    (navigation && getComputedStyle(navigation).position === 'sticky'
+      ? navigation.getBoundingClientRect().height
+      : 0)
   const maxScrollTop = Math.max(0, page.scrollHeight - page.clientHeight)
   const nextTop =
     block === 'center'
-      ? targetTop - Math.max(0, (page.clientHeight - targetRect.height) / 2)
-      : targetTop - SETTINGS_SECTION_SCROLL_OFFSET
+      ? targetTop -
+        scrollOffset -
+        Math.max(0, (page.clientHeight - scrollOffset - targetRect.height) / 2)
+      : targetTop - scrollOffset
 
   programmaticScrollUntil = performance.now() + (behavior === 'smooth' ? 700 : 0)
   if (programmaticScrollRaf) {
@@ -921,6 +931,11 @@ function moveSearchSelection(delta: number): void {
   if (results.length === 0) return
   const next = activeSearchIndex.value + delta
   activeSearchIndex.value = ((next % results.length) + results.length) % results.length
+  void nextTick(() => {
+    pageRef.value
+      ?.querySelector(`#settings-search-result-${activeSearchIndex.value}`)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+  })
 }
 
 function handleSettingsSearchEnter(): void {
@@ -936,6 +951,7 @@ function handleSettingsSearchEnter(): void {
 function clearSettingsSearch(): void {
   settingsSearchQuery.value = ''
   activeSearchIndex.value = -1
+  pageRef.value?.querySelector<HTMLInputElement>('#settings-search-input')?.focus()
 }
 
 async function refreshShortcutStatuses(): Promise<void> {
@@ -1019,16 +1035,26 @@ onBeforeUnmount(() => {
           <div class="settings-search-box settings-nav-search">
             <i class="pi pi-search"></i>
             <AnimatedInput
+              id="settings-search-input"
               v-model="settingsSearchQuery"
               type="text"
               class="settings-search-input"
               placeholder="搜索设置"
               aria-label="搜索设置"
+              role="combobox"
+              aria-autocomplete="list"
+              :aria-expanded="hasSettingsSearchResults"
+              :aria-controls="hasSettingsSearchResults ? 'settings-search-results' : undefined"
+              :aria-activedescendant="
+                hasSettingsSearchResults && activeSearchIndex >= 0
+                  ? `settings-search-result-${activeSearchIndex}`
+                  : undefined
+              "
               @focus="activeSearchIndex = filteredSearchResults.length > 0 ? 0 : -1"
               @keydown.down.prevent="moveSearchSelection(1)"
               @keydown.up.prevent="moveSearchSelection(-1)"
               @keydown.enter.prevent="handleSettingsSearchEnter"
-              @keydown.esc.prevent="clearSettingsSearch"
+              @keydown.esc.stop.prevent="clearSettingsSearch"
             />
             <button
               v-if="settingsSearchQuery"
@@ -1042,6 +1068,7 @@ onBeforeUnmount(() => {
           </div>
           <div
             v-if="hasSettingsSearchResults"
+            id="settings-search-results"
             class="settings-nav-results"
             role="listbox"
             aria-label="搜索结果"
@@ -1049,7 +1076,9 @@ onBeforeUnmount(() => {
             <button
               v-for="(result, index) in filteredSearchResults"
               :key="`${result.section}:${result.title}`"
+              :id="`settings-search-result-${index}`"
               type="button"
+              tabindex="-1"
               role="option"
               :aria-selected="activeSearchIndex === index"
               :class="{ active: activeSearchIndex === index }"
@@ -1061,7 +1090,7 @@ onBeforeUnmount(() => {
               <small>{{ sections.find((section) => section.key === result.section)?.label }}</small>
             </button>
           </div>
-          <div v-else-if="hasSettingsSearchNoResults" class="settings-nav-empty">
+          <div v-else-if="hasSettingsSearchNoResults" class="settings-nav-empty" role="status">
             没有找到匹配的设置
           </div>
         </div>
@@ -1071,6 +1100,7 @@ onBeforeUnmount(() => {
           type="button"
           class="preview-nav-item"
           :class="{ active: activeSection === section.key }"
+          :aria-current="activeSection === section.key ? 'location' : undefined"
           @click="scrollToSection(section.key)"
         >
           <i :class="section.icon"></i>

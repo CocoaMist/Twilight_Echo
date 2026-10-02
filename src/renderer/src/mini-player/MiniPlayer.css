@@ -1403,6 +1403,16 @@
 
 /* ─── Customizing ────────────────────────────────────────────────────────── */
 
+.mini-info,
+.mini-progress,
+.mini-controls {
+  transition: opacity 160ms var(--te-ease-out-strong);
+}
+
+html[data-te-motion='reduced'] :is(.mini-info, .mini-progress, .mini-controls) {
+  transition: opacity 120ms var(--te-ease-out-strong) !important;
+}
+
 /* The panel docks on the right; the column beside it becomes a live swatch of
    the surface and the artwork, redrawn as the settings change. */
 .mini-player-root.is-customizing {
@@ -1444,15 +1454,29 @@ html[data-te-motion='reduced'] .mini-backdrop-fade-enter-active,
 html[data-te-motion='reduced'] .mini-backdrop-fade-leave-active,
 html[data-te-motion='reduced'] .mini-hud-enter-active,
 html[data-te-motion='reduced'] .mini-hud-leave-active {
-  transition-property: opacity, color, background-color;
-  transition-duration: 160ms;
-  transition-timing-function: ease;
+  transition-property: opacity, color, background-color !important;
+  transition-duration: 120ms !important;
+  transition-timing-function: var(--te-ease-out-strong) !important;
 }
 
 html[data-te-motion='reduced'] .mini-player-root:not(.is-ready),
 html[data-te-motion='reduced'] .mini-artwork-wrap,
 html[data-te-motion='reduced'] .mini-tools {
   transform: none;
+}
+
+html[data-te-motion='reduced']
+  :is(
+    .mini-meta-swap-enter-from,
+    .mini-meta-swap-leave-to,
+    .mini-art-swap-enter-from,
+    .mini-art-swap-leave-to
+  ) {
+  transform: none !important;
+}
+
+html[data-te-motion='reduced'] :is(.mini-hud-enter-from, .mini-hud-leave-to) {
+  transform: translate(-50%, -50%) !important;
 }
 
 html[data-te-motion='reduced'] .mini-equalizer span,
