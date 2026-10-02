@@ -1,4 +1,4 @@
-import { ref, type Ref } from 'vue'
+import { ref } from 'vue'
 import type { NcmCloudSelectedFile, NcmCloudTransferProgress } from '../../../shared/ncmCloud.ts'
 import type { Track } from '../types/music'
 import { syncPluginProviders, useMediaProviders } from '@renderer/providers'
@@ -128,133 +128,7 @@ export interface NcmCloudSongsPage {
 
 export interface NcmCloudTransferTask extends NcmCloudTransferProgress {}
 
-export interface NcmStore {
-  providerAvailable: Ref<boolean>
-  providerError: Ref<string>
-  isLoggedIn: Ref<boolean>
-  profile: Ref<NcmProfile | null>
-  libraryLoading: Ref<boolean>
-  libraryLoaded: Ref<boolean>
-  libraryError: Ref<string>
-  likedPlaylist: Ref<NcmPlaylistSummary | null>
-  userPlaylists: Ref<NcmPlaylistSummary[]>
-  likedSongIds: Ref<Set<number>>
-  cloudSongs: Ref<NcmCloudSong[]>
-  cloudTotal: Ref<number>
-  cloudHasMore: Ref<boolean>
-  cloudLoading: Ref<boolean>
-  cloudLoadingMore: Ref<boolean>
-  cloudError: Ref<string>
-  cloudSelectedFiles: Ref<NcmCloudSelectedFile[]>
-  cloudTransferTasks: Ref<Record<string, NcmCloudTransferTask>>
-  buildProfile: (prof: {
-    userId: number
-    nickname: string
-    avatarUrl: string
-    avatarUrlSource?: string | null
-    signature?: string
-    follows?: number
-    followeds?: number
-  }) => Promise<NcmProfile>
-  checkLogin: () => Promise<boolean>
-  setLogin: (prof: NcmProfile) => void
-  logout: () => Promise<void>
-  openOfficialLogin: () => Promise<boolean>
-  getQrKey: () => Promise<string | null>
-  getQrImage: (key: string) => Promise<string | null>
-  checkQrLogin: (key: string) => Promise<{ code: number }>
-  fetchUserLibrary: (force?: boolean) => Promise<{
-    likedPlaylist: NcmPlaylistSummary | null
-    playlists: NcmPlaylistSummary[]
-  }>
-  fetchPlaylistTracks: (playlistId: number | string, force?: boolean) => Promise<Track[]>
-  fetchLikedTracks: (force?: boolean) => Promise<Track[]>
-  fetchLikedTracksPage: (
-    offset?: number,
-    limit?: number,
-    force?: boolean
-  ) => Promise<NcmLikedTracksPage>
-  fetchCloudSongsPage: (
-    offset?: number,
-    limit?: number,
-    append?: boolean
-  ) => Promise<NcmCloudSongsPage>
-  refreshCloudSongs: () => Promise<NcmCloudSongsPage>
-  loadMoreCloudSongs: () => Promise<NcmCloudSongsPage | null>
-  chooseCloudUploadFiles: () => Promise<NcmCloudSelectedFile[]>
-  uploadCloudFile: (handle: string) => Promise<string>
-  downloadCloudSong: (song: NcmCloudSong) => Promise<string | null>
-  cancelCloudTransfer: (transferId: string) => Promise<boolean>
-  removeCloudSelectedFile: (handle: string) => void
-  getSongStreamUrl: (songId: number, force?: boolean) => Promise<string | null>
-  fetchRecommendSongs: () => Promise<Track[]>
-  fetchRecommendPlaylists: () => Promise<NcmPlaylistSummary[]>
-  fetchPlaylistCategories: () => Promise<NcmPlaylistCatalogue>
-  fetchDiscoveryPlaylists: (
-    cat?: string,
-    order?: 'hot' | 'new',
-    limit?: number,
-    offset?: number
-  ) => Promise<NcmDiscoveryPlaylistPage>
-  fetchHighQualityPlaylists: (
-    cat?: string,
-    limit?: number,
-    before?: number
-  ) => Promise<NcmHighQualityPlaylistPage>
-  fetchPersonalFm: () => Promise<Track[]>
-  fetchPrivateContent: () => Promise<Track[]>
-  fetchLyric: (songId: number) => Promise<{
-    lyrics: string | null
-    translatedLyrics: string | null
-  }>
-  searchSongs: (
-    keywords: string,
-    limit?: number,
-    offset?: number
-  ) => Promise<{ tracks: Track[]; total: number }>
-  searchPlaylists: (
-    keywords: string,
-    limit?: number,
-    offset?: number
-  ) => Promise<{ playlists: NcmPlaylistSummary[]; total: number }>
-  searchArtists: (
-    keywords: string,
-    limit?: number,
-    offset?: number
-  ) => Promise<{ artists: NcmArtistSummary[]; total: number }>
-  fetchArtistTopSongs: (artistId: number) => Promise<Track[]>
-  fetchArtistAlbums: (artistId: number) => Promise<NcmAlbumSummary[]>
-  fetchArtistIntro: (artistId: number) => Promise<string>
-  fetchArtistFollowState: (artistId: number) => Promise<boolean | null>
-  fetchAlbumTracks: (albumId: number) => Promise<Track[]>
-  fetchArtistPlaylists: (artistId: number) => Promise<NcmPlaylistSummary[]>
-  fetchUserPlaylistsByUid: (uid: number, createdOnly?: boolean) => Promise<NcmPlaylistSummary[]>
-  fetchUserFollows: (uid: number, limit?: number, offset?: number) => Promise<NcmUserSummary[]>
-  fetchUserFolloweds: (uid: number, limit?: number, offset?: number) => Promise<NcmUserSummary[]>
-  fetchPlayRecords: (type?: number) => Promise<Track[]>
-  fetchRecentSongs: (limit?: number) => Promise<Track[]>
-  fetchIntelligenceList: (options: {
-    songId: number
-    playlistId: number
-    startSongId?: number
-    count?: number
-  }) => Promise<Track[]>
-  followArtist: (artistId: number, follow: boolean) => Promise<void>
-  followUser: (userId: number, follow: boolean) => Promise<void>
-  likeTrack: (songId: number, like: boolean) => Promise<void>
-  isTrackLiked: (ncmSongId: number | undefined) => boolean
-  syncLikedIds: (tracks: Track[]) => void
-  createPlaylist: (name: string, options?: { privacy?: 0 | 10 }) => Promise<NcmPlaylistSummary>
-  deletePlaylist: (playlistId: number | string) => Promise<void>
-  addTracksToPlaylist: (
-    playlistId: number | string,
-    trackIds: Array<number | string>
-  ) => Promise<void>
-  removeTracksFromPlaylist: (
-    playlistId: number | string,
-    trackIds: Array<number | string>
-  ) => Promise<void>
-}
+export type NcmStore = ReturnType<typeof useNcmStore>
 
 const NCM_PROVIDER_ID = 'ncm'
 
@@ -441,7 +315,7 @@ function applyLoginState(state: NcmLoginState): boolean {
   return state.loggedIn
 }
 
-export function useNcmStore(): NcmStore {
+export function useNcmStore() {
   ensureCloudProgressListener()
 
   async function buildProfile(prof: {

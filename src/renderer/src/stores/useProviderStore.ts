@@ -1,4 +1,4 @@
-import { computed, ref, type Ref } from 'vue'
+import { computed, ref } from 'vue'
 import { toProviderIpcArgs } from '@renderer/providers/mediaProvider'
 import type {
   MediaProviderPlaylistSummary,
@@ -73,31 +73,7 @@ export interface ProviderInfo {
   health?: ProviderHealth
 }
 
-export interface OnlineProviderStore {
-  providers: Ref<ProviderInfo[]>
-  syncProviders: () => Promise<void>
-  stopProviderHealthPolling: () => void
-  hasProvider: (id: string) => boolean
-  getProvider: (id: string) => ProviderInfo | undefined
-  checkLogin: (id: string) => Promise<ProviderLoginState>
-  getQrLogin: (id: string) => Promise<MediaProviderQrLogin | null>
-  getQrImage: (id: string, key: string) => Promise<string | null>
-  checkQrLogin: (id: string, key: string) => Promise<{ code: number; message?: string }>
-  logout: (id: string) => Promise<void>
-  callProvider: <T>(providerId: string, method: string, args?: unknown[]) => Promise<T>
-  fetchUserLibrary: (
-    id: string,
-    force?: boolean
-  ) => Promise<{
-    likedPlaylist: MediaProviderPlaylistSummary | null
-    playlists: MediaProviderPlaylistSummary[]
-  }>
-  fetchPlaylistTracks: (
-    id: string,
-    playlistId: string | number,
-    force?: boolean
-  ) => Promise<Track[]>
-}
+export type OnlineProviderStore = ReturnType<typeof useProviderStore>
 
 const providers = ref<ProviderInfo[]>([])
 const providerIds = computed(() => new Set(providers.value.map((provider) => provider.id)))
@@ -162,7 +138,7 @@ async function callProvider<T>(
   )) as T
 }
 
-export function useProviderStore(): OnlineProviderStore {
+export function useProviderStore() {
   ensurePluginChangeListener()
 
   function hasProvider(id: string): boolean {

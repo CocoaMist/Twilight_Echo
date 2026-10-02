@@ -5,7 +5,6 @@ import type {
   BpmAnalysisResult,
   LoudnessAnalysisResult
 } from '../shared/audioEngineTypes.ts'
-import type { AppSettings } from '../shared/appSettings.ts'
 export type {
   DspAuditionApi,
   DspAuditionRequest,
@@ -99,7 +98,8 @@ export type {
   MusicCachePolicySettings,
   AudioEqPreset,
   GlobalShortcutSettings,
-  AppSettings
+  AppSettings,
+  SettingsSnapshot
 } from '../shared/appSettings.ts'
 export type {
   BuiltInTrackSource,
@@ -461,23 +461,6 @@ export interface OpraProfile {
   bands: EqualizerBand[]
   applicable: boolean
   unsupportedBandTypes: string[]
-}
-
-export interface SettingsSnapshot extends AppSettings {
-  settings: AppSettings
-  defaults: {
-    cachePath: string
-  }
-  paths: {
-    settingsFile: string
-    userDataPath: string
-    activeCachePath: string
-  }
-  appVersion: string
-  platform: string
-  windowTransparencySupported: boolean
-  restartRequired: boolean
-  restartReasons: string[]
 }
 
 export interface TwilightPluginDescriptor {

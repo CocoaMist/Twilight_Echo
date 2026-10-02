@@ -1,4 +1,3 @@
-import type { AppSettings } from '../../../shared/appSettings.ts'
 export type {
   AudioOutputId,
   PlayMode,
@@ -48,7 +47,8 @@ export type {
   MusicCachePolicySettings,
   AudioEqPreset,
   GlobalShortcutSettings,
-  AppSettings
+  AppSettings,
+  SettingsSnapshotMetadata as SettingsSnapshot
 } from '../../../shared/appSettings.ts'
 
 export type { MiniPlayerSettings } from '../../../shared/miniPlayer.ts'
@@ -78,23 +78,6 @@ import type { PlayerShortcutAction } from '../../../shared/playerShortcuts.ts'
 export type { PlayerShortcutAction } from '../../../shared/playerShortcuts.ts'
 
 export type { DsdRouteSettings } from '../../../shared/audioProcessingOptions.ts'
-
-export interface SettingsSnapshot {
-  settings: AppSettings
-  defaults: {
-    cachePath: string
-  }
-  paths: {
-    settingsFile: string
-    userDataPath: string
-    activeCachePath: string
-  }
-  appVersion: string
-  platform: string
-  windowTransparencySupported: boolean
-  restartRequired: boolean
-  restartReasons: string[]
-}
 
 export interface PlayerShortcutStatus {
   accelerator: string

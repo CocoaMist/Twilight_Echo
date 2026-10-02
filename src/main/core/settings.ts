@@ -15,7 +15,6 @@ export {
 import { normalizeAudioDeviceProfileSettings } from '../../shared/audioDeviceProfiles.ts'
 import { execFile, execFileSync } from 'node:child_process'
 import { release } from 'node:os'
-import { stat, readdir } from 'fs/promises'
 import { join, resolve } from 'path'
 import { createLegacyDspGraph, normalizeDspScenes } from '../../shared/dspGraph'
 import {
@@ -916,23 +915,5 @@ export function createSettingsSnapshot(
     windowTransparencySupported: supportsNativeWindowTransparency(),
     restartRequired: restartReasons.length > 0,
     restartReasons
-  }
-}
-
-export async function getDirectorySize(directory: string): Promise<number> {
-  try {
-    const info = await stat(directory)
-    if (!info.isDirectory()) return info.size
-
-    const entries = await readdir(directory, { withFileTypes: true })
-    const sizes = await Promise.all(
-      entries.map((entry) => {
-        const fullPath = join(directory, entry.name)
-        return entry.isDirectory() ? getDirectorySize(fullPath) : stat(fullPath).then((s) => s.size)
-      })
-    )
-    return sizes.reduce((sum, size) => sum + size, 0)
-  } catch {
-    return 0
   }
 }

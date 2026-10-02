@@ -625,6 +625,10 @@ test('window transparency is gated on native support (Wayland fallback to opaque
   )
   const mainTypes = readFileSync(new URL('../../../main/core/types.ts', import.meta.url), 'utf8')
   const rendererTypes = readFileSync(new URL('../types/settings.ts', import.meta.url), 'utf8')
+  const sharedTypes = readFileSync(
+    new URL('../../../shared/appSettings.ts', import.meta.url),
+    'utf8'
+  )
   const baseCss = readFileSync(new URL('../assets/base.css', import.meta.url), 'utf8')
 
   // Main process must expose a Wayland-aware support check and snapshot field.
@@ -632,9 +636,10 @@ test('window transparency is gated on native support (Wayland fallback to opaque
   assert.match(mainSettings, /WAYLAND_DISPLAY/)
   assert.match(mainSettings, /XDG_SESSION_TYPE'\] === 'wayland'/)
   assert.match(mainSettings, /windowTransparencySupported: supportsNativeWindowTransparency\(\)/)
-  for (const types of [mainTypes, rendererTypes]) {
-    assert.match(types, /windowTransparencySupported: boolean/)
-  }
+  assert.match(sharedTypes, /windowTransparencySupported: boolean/)
+  assert.match(sharedTypes, /SettingsSnapshot extends AppSettings, SettingsSnapshotMetadata/)
+  assert.match(mainTypes, /export type \* from '\.\.\/\.\.\/shared\/appSettings\.ts'/)
+  assert.match(rendererTypes, /SettingsSnapshotMetadata as SettingsSnapshot/)
 
   // Renderer must not enable translucent styling when the platform cannot
   // present transparent pixels (otherwise the whole app disappears).

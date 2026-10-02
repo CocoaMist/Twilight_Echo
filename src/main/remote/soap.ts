@@ -84,7 +84,7 @@ export function parseUpnpTime(value: string): number | null {
   return h * 3600 + m * 60 + s
 }
 
-function escapeXml(value: string): string {
+export function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
