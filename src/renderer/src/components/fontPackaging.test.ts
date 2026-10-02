@@ -3,6 +3,64 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { brotliDecompressSync } from 'node:zlib'
+
+function readWoff2SmoothingRanges(bytes: Buffer): { version: number; ranges: [number, number][] } {
+  assert.equal(bytes.toString('ascii', 0, 4), 'wOF2')
+  let cursor = 48
+  let streamOffset = 0
+  let gaspOffset = -1
+  let gaspLength = 0
+  function readBase128(): number {
+    let value = 0
+    for (let index = 0; index < 5; index++) {
+      const byte = bytes[cursor++]
+      value = value * 128 + (byte & 0x7f)
+      if ((byte & 0x80) === 0) return value
+    }
+    throw new Error('Invalid WOFF2 table length')
+  }
+  for (let index = 0; index < bytes.readUInt16BE(12); index++) {
+    const flags = bytes[cursor++]
+    const tagIndex = flags & 0x3f
+    let isGasp = tagIndex === 17
+    if (tagIndex === 63) {
+      isGasp = bytes.toString('ascii', cursor, cursor + 4) === 'gasp'
+      cursor += 4
+    }
+    const length = readBase128()
+    const version = flags >> 6
+    const transformed = tagIndex === 10 || tagIndex === 11 ? version !== 3 : version !== 0
+    const streamLength = transformed ? readBase128() : length
+    if (isGasp) {
+      assert.equal(transformed, false)
+      gaspOffset = streamOffset
+      gaspLength = length
+    }
+    streamOffset += streamLength
+  }
+  assert.ok(gaspOffset >= 0, 'font must declare its smoothing behavior')
+  const stream = brotliDecompressSync(bytes.subarray(cursor, cursor + bytes.readUInt32BE(20)))
+  const gasp = stream.subarray(gaspOffset, gaspOffset + gaspLength)
+  const ranges: [number, number][] = []
+  for (let index = 0; index < gasp.readUInt16BE(2); index++) {
+    ranges.push([gasp.readUInt16BE(4 + index * 4), gasp.readUInt16BE(6 + index * 4)])
+  }
+  return { version: gasp.readUInt16BE(0), ranges }
+}
+
+test('packaged MiSans keeps multi-axis smoothing enabled at small UI sizes', () => {
+  const fontDir = new URL('../../../../resources/font/misans/', import.meta.url)
+  for (const filename of readdirSync(fontDir).filter((name) => name.endsWith('.woff2'))) {
+    const { version, ranges } = readWoff2SmoothingRanges(readFileSync(new URL(filename, fontDir)))
+    assert.equal(version, 1, `${filename}: symmetric smoothing requires gasp version 1`)
+    for (const ppem of [9, 12, 13, 14, 16, 20]) {
+      const range = ranges.find(([maximum]) => ppem <= maximum)
+      assert.ok(range, `${filename}: missing smoothing range for ${ppem}px`)
+      assert.ok(range[1] & 0x0008, `${filename}: multi-axis smoothing disabled at ${ppem}px`)
+    }
+  }
+})
 
 test('renderer CSS packages the licensed built-in font style library and excludes legacy families', () => {
   const base = readFileSync(new URL('../assets/base.css', import.meta.url), 'utf8')
