@@ -22,6 +22,7 @@ const {
   prepareMingwBuildLayout,
   resolveMingwBuildJobs,
   resolveMingwBuildLayout,
+  resolveMingwEnvironment,
   validateMingwBuildCommands,
   validateMingwCTestRegistration,
   validateMingwNativeDependencyConfiguration,
@@ -30,8 +31,11 @@ const {
 const {
   cmakeCachePath,
   prepareAsioMsvcNinjaToolchain,
-  resolveAsioMsvcBuildDirectory
+  resolveAsioMsvcBuildDirectory,
+  resolveAsioMsvcEnvironment
 } = require('./asio-msvc-toolchain.cjs')
+const { resolveSmtcMsvcEnvironment } = require('./smtc-msvc-toolchain.cjs')
+const { resolveVst3MsvcEnvironment } = require('./vst3-msvc-toolchain.cjs')
 const { createMinimalPe } = require('./pe-fixture.cjs')
 
 // stage-audio-engine.cjs requires these siblings, so a fixture copy needs all of
@@ -39,6 +43,7 @@ const { createMinimalPe } = require('./pe-fixture.cjs')
 const STAGING_SCRIPT_FILES = Object.freeze([
   'stage-audio-engine.cjs',
   'audio-engine-toolchain.cjs',
+  'windows-persisted-environment.cjs',
   'macos-audio-runtime.cjs',
   'generate-audio-capability-manifest.cjs',
   'staged-audio-runtime-observation.cjs',
@@ -129,6 +134,201 @@ function createGnuPatchSpawnSync() {
     )
   )
 }
+
+const persistedEnvironmentCases = [
+  {
+    name: 'MinGW',
+    resolveEnvironment: resolveMingwEnvironment,
+    names: ['VCPKG_ROOT', 'W64DEVKIT_ROOT', 'TAE_MINGW_BUILD_DIR', 'TWILIGHT_GNU_PATCH']
+  },
+  {
+    name: 'ASIO',
+    resolveEnvironment: resolveAsioMsvcEnvironment,
+    names: ['TAE_ASIO_MSVC_INSTALL_ROOT', 'TAE_ASIO_MSVC_BUILD_DIR']
+  },
+  {
+    name: 'SMTC',
+    resolveEnvironment: resolveSmtcMsvcEnvironment,
+    names: ['TAE_SMTC_MSVC_INSTALL_ROOT', 'TAE_SMTC_MSVC_BUILD_DIR']
+  },
+  {
+    name: 'VST3',
+    resolveEnvironment: resolveVst3MsvcEnvironment,
+    names: ['TAE_VST3_SDK_ROOT', 'TAE_VST3_MSVC_INSTALL_ROOT', 'TAE_VST3_MSVC_BUILD_DIR']
+  }
+]
+const windowsEnvironmentOnly =
+  process.platform === 'win32' ? {} : { skip: 'Windows registry lookup' }
+
+for (const { name, resolveEnvironment, names } of persistedEnvironmentCases) {
+  test(
+    `${name} gives process values priority and queries only its persisted variable allowlist`,
+    windowsEnvironmentOnly,
+    () => {
+      const env = Object.freeze({
+        [names[0]]: 'process value',
+        [names[1]]: '',
+        PATH: 'process path'
+      })
+      const spawn = createSpawnSync({
+        'reg.exe': (_, args) => ({
+          status: 0,
+          stdout: `    ${args[3]}    REG_SZ    persisted value`
+        })
+      })
+      const result = resolveEnvironment({ env, spawnSync: spawn })
+
+      assert.notEqual(result, env)
+      assert.deepEqual(result, {
+        ...env,
+        ...Object.fromEntries(names.slice(1).map((variable) => [variable, 'persisted value']))
+      })
+      assert.deepEqual(env, { [names[0]]: 'process value', [names[1]]: '', PATH: 'process path' })
+      assert.deepEqual(
+        spawn.calls,
+        names.slice(1).map((variable) => ({
+          command: 'reg.exe',
+          args: ['query', 'HKCU\\Environment', '/v', variable],
+          options: { encoding: 'utf8', windowsHide: true }
+        }))
+      )
+    }
+  )
+
+  test(
+    `${name} preserves paths and trims REG_SZ and REG_EXPAND_SZ output`,
+    windowsEnvironmentOnly,
+    () => {
+      const values = ['C:\\Program Files\\Build Tools', '%LOCALAPPDATA%\\Tool Chain']
+      const spawn = createSpawnSync({
+        'reg.exe': (_, args) => {
+          const index = names.indexOf(args[3]) % values.length
+          const type = index === 0 ? 'REG_SZ' : 'REG_EXPAND_SZ'
+          return {
+            status: 0,
+            stdout: `HKEY_CURRENT_USER\\Environment\r\n\t${args[3].toLowerCase()}  ${type}\t ${values[index]}  \r\n    UNRELATED    REG_SZ    ignored\r\n`
+          }
+        }
+      })
+      const result = resolveEnvironment({ env: {}, spawnSync: spawn })
+      assert.deepEqual(
+        result,
+        Object.fromEntries(
+          names.map((variable, index) => [variable, values[index % values.length]])
+        )
+      )
+      assert.deepEqual(
+        spawn.calls.map((call) => call.args[3]),
+        names
+      )
+    }
+  )
+
+  test(`${name} ignores failed registry queries and missing values`, windowsEnvironmentOnly, () => {
+    for (const registryResult of [
+      undefined,
+      { status: 1, stdout: `    ${names[0]}    REG_SZ    failed value` },
+      {
+        status: 0,
+        error: new Error('registry unavailable'),
+        stdout: `    ${names[0]}    REG_SZ    failed value`
+      },
+      { status: 0 },
+      { status: 0, stdout: '' },
+      { status: 0, stdout: `    ${names[0]}    REG_SZ` },
+      { status: 0, stdout: '    UNRELATED    REG_SZ    ignored' }
+    ]) {
+      const env = Object.freeze({ PATH: 'process path' })
+      const spawn = createSpawnSync({ 'reg.exe': registryResult })
+      assert.deepEqual(resolveEnvironment({ env, spawnSync: spawn }), env)
+      assert.deepEqual(
+        spawn.calls.map((call) => call.args[3]),
+        names
+      )
+    }
+  })
+}
+
+test(
+  'MinGW keeps its case-insensitive string lookup for existing environment values',
+  windowsEnvironmentOnly,
+  () => {
+    const env = Object.freeze({
+      vcpkg_root: 'process vcpkg',
+      w64devkit_root: 'process devkit',
+      TAE_MINGW_BUILD_DIR: 1
+    })
+    const spawn = createSpawnSync({ 'reg.exe': { status: 1 } })
+    assert.deepEqual(resolveMingwEnvironment({ env, spawnSync: spawn }), env)
+    assert.deepEqual(
+      spawn.calls.map((call) => call.args[3]),
+      ['TAE_MINGW_BUILD_DIR', 'TWILIGHT_GNU_PATCH']
+    )
+  }
+)
+
+test(
+  'MSVC resolvers keep exact-key truthy lookup for existing environment values',
+  windowsEnvironmentOnly,
+  () => {
+    for (const { resolveEnvironment, names } of persistedEnvironmentCases.slice(1)) {
+      const env = Object.freeze({ [names[0]]: 1, [names[1].toLowerCase()]: 'lowercase value' })
+      const spawn = createSpawnSync({ 'reg.exe': { status: 1 } })
+      assert.deepEqual(resolveEnvironment({ env, spawnSync: spawn }), env)
+      assert.deepEqual(
+        spawn.calls.map((call) => call.args[3]),
+        names.slice(1)
+      )
+    }
+  }
+)
+
+test(
+  'ASIO uses the VST3 install root only after process and persisted ASIO values',
+  windowsEnvironmentOnly,
+  () => {
+    const env = Object.freeze({ TAE_VST3_MSVC_INSTALL_ROOT: 'VST3 root' })
+    assert.equal(
+      resolveAsioMsvcEnvironment({ env, spawnSync: () => ({ status: 1 }) })
+        .TAE_ASIO_MSVC_INSTALL_ROOT,
+      'VST3 root'
+    )
+    const spawn = createSpawnSync({
+      'reg.exe': (_, args) => ({ status: 0, stdout: `    ${args[3]}    REG_SZ    persisted ASIO` })
+    })
+    assert.equal(
+      resolveAsioMsvcEnvironment({ env, spawnSync: spawn }).TAE_ASIO_MSVC_INSTALL_ROOT,
+      'persisted ASIO'
+    )
+    assert.equal(
+      resolveAsioMsvcEnvironment({
+        env: { ...env, TAE_ASIO_MSVC_INSTALL_ROOT: 'process ASIO' },
+        spawnSync: spawn
+      }).TAE_ASIO_MSVC_INSTALL_ROOT,
+      'process ASIO'
+    )
+    assert.deepEqual(env, { TAE_VST3_MSVC_INSTALL_ROOT: 'VST3 root' })
+    assert.deepEqual(resolveSmtcMsvcEnvironment({ env, spawnSync: () => ({ status: 1 }) }), env)
+  }
+)
+
+test('environment resolvers return a copy without registry queries or ASIO fallback outside Windows', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  try {
+    Object.defineProperty(process, 'platform', { value: 'non-windows' })
+    for (const { resolveEnvironment } of persistedEnvironmentCases) {
+      const env = Object.freeze({ TAE_VST3_MSVC_INSTALL_ROOT: 'VST3 root' })
+      const result = resolveEnvironment({
+        env,
+        spawnSync: () => assert.fail('unexpected registry query')
+      })
+      assert.notEqual(result, env)
+      assert.deepEqual(result, env)
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+  }
+})
 
 test('prepares a deterministic MSVC and Ninja environment for the ASIO ABI fixture', () => {
   const installRoot = fixturePath('tools/vs2022-buildtools')

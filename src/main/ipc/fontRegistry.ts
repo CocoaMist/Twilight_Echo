@@ -5,7 +5,7 @@ const execFileAsync = promisify(execFile)
 
 const FONT_REGISTRY_KEY = 'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts'
 const USER_FONT_REGISTRY_KEY = 'HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts'
-const REGISTRY_TIMEOUT_MS = 5000
+const REGISTRY_TIMEOUT_MS = 15000
 const MAX_FONTS = 600
 
 /**
@@ -71,45 +71,64 @@ function normalizeFamilyName(candidate: string): string | null {
   return family || trimmed
 }
 
-let cachedFonts: string[] | null = null
-
-export async function listInstalledFontFamilies(): Promise<string[]> {
-  if (cachedFonts) return cachedFonts
-  if (process.platform !== 'win32') {
-    // Other platforms have no equivalent worth a shell-out here; the editor
-    // keeps its built-in stacks and its free-text field.
-    cachedFonts = []
-    return cachedFonts
+/** Share a query in flight; transient failures must not cache an empty catalog. */
+export function createFontFamilyLoader(query: () => Promise<string[]>) {
+  let cachedFonts: string[] | null = null
+  let pending: Promise<string[]> | null = null
+  let generation = 0
+  return {
+    list(): Promise<string[]> {
+      if (cachedFonts) return Promise.resolve(cachedFonts)
+      if (pending) return pending
+      const queryGeneration = generation
+      const task = Promise.resolve()
+        .then(query)
+        .then((fonts) => {
+          if (queryGeneration === generation && fonts.length > 0) cachedFonts = fonts
+          return fonts
+        })
+        .catch(() => [])
+        .finally(() => {
+          if (pending === task) pending = null
+        })
+      pending = task
+      return task
+    },
+    clear(): void {
+      generation++
+      cachedFonts = null
+      pending = null
+    }
   }
+}
 
-  const outputs = await Promise.all(
-    [FONT_REGISTRY_KEY, USER_FONT_REGISTRY_KEY].map(async (key) => {
-      try {
-        const script = `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $key = Get-Item -LiteralPath 'Registry::${key}' -ErrorAction Stop; foreach ($name in $key.GetValueNames()) { '    ' + $name + '    REG_SZ    ' + $key.GetValue($name) }`
-        const { stdout } = await execFileAsync(
-          'powershell.exe',
-          ['-NoProfile', '-NonInteractive', '-Command', script],
-          {
-            encoding: 'utf8',
-            timeout: REGISTRY_TIMEOUT_MS,
-            windowsHide: true,
-            maxBuffer: 4 * 1024 * 1024
-          }
-        )
-        return stdout
-      } catch {
-        // A missing per-user key is normal, and a font list is never worth
-        // failing the caller over.
-        return ''
-      }
-    })
+async function queryInstalledFontFamilies(): Promise<string[]> {
+  if (process.platform !== 'win32') return []
+  // Read both hives with one PowerShell startup; a missing per-user key is normal.
+  const paths = [FONT_REGISTRY_KEY, USER_FONT_REGISTRY_KEY]
+    .map((key) => "'Registry::" + key + "'")
+    .join(',')
+  const script = `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); foreach ($path in @(${paths})) { $key = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue; if ($null -eq $key) { continue }; foreach ($name in $key.GetValueNames()) { '    ' + $name + '    REG_SZ    ' + $key.GetValue($name) } }`
+  const { stdout } = await execFileAsync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    {
+      encoding: 'utf8',
+      timeout: REGISTRY_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024
+    }
   )
+  return parseWindowsFontFamilies(stdout)
+}
 
-  cachedFonts = parseWindowsFontFamilies(outputs.join('\n'))
-  return cachedFonts
+const fontLoader = createFontFamilyLoader(queryInstalledFontFamilies)
+
+export function listInstalledFontFamilies(): Promise<string[]> {
+  return fontLoader.list()
 }
 
 /** Exposed for tests; installing a font mid-session is rare enough to ignore. */
 export function clearInstalledFontCache(): void {
-  cachedFonts = null
+  fontLoader.clear()
 }

@@ -1,4 +1,4 @@
-import { computed, ref, type Ref, type ComputedRef } from 'vue'
+import { computed, ref } from 'vue'
 
 export type AppNoticeKind = 'info' | 'success' | 'warning' | 'error'
 
@@ -54,26 +54,7 @@ function scheduleAutoDismiss(notice: AppNotice, durationMs?: number): void {
   )
 }
 
-export function useAppNoticeStore(): {
-  notices: Ref<AppNotice[]>
-  noticeHistory: Ref<AppNotice[]>
-  unreadCount: ComputedRef<number>
-  markHistoryRead: () => void
-  clearHistory: () => void
-  pauseNotice: (id: number, reason: string) => void
-  resumeNotice: (id: number, reason: string) => void
-  pushNotice: (input: {
-    kind?: AppNoticeKind
-    message: string
-    action?: AppNoticeAction
-    sticky?: boolean
-    durationMs?: number
-    dedupeKey?: string
-  }) => number
-  dismissNotice: (id: number) => void
-  releaseNoticeDedupe: (dedupeKey: string) => void
-  clearNotices: () => void
-} {
+export function useAppNoticeStore() {
   /** Closing a deduped notice suppresses that exact message until it changes. */
   function dismissNotice(id: number): void {
     const notice = notices.value.find((item) => item.id === id)

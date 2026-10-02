@@ -156,6 +156,18 @@ test('album track ordering groups by disc, track, then file name', () => {
   )
   assert.equal(albumOrderIndex(0), Number.MAX_SAFE_INTEGER)
   assert.equal(albumOrderIndex(3), 3)
+  for (const [left, right] of [
+    ['曲目2.flac', '曲目10.flac'],
+    ['', 'a.flac'],
+    ['Écho2.flac', 'echo2.flac']
+  ]) {
+    assert.equal(
+      Math.sign(
+        compareAlbumTrackOrder(makeTrack({ fileName: left }), makeTrack({ fileName: right }))
+      ),
+      Math.sign(left.localeCompare(right, 'zh', { numeric: true, sensitivity: 'base' }))
+    )
+  }
 })
 
 test('library path helpers normalize, deduplicate, and bound tracks to roots', () => {

@@ -1,5 +1,6 @@
+import { hashFile } from '../core/fileHash.ts'
 import { createHash, randomUUID } from 'crypto'
-import { createReadStream, existsSync } from 'fs'
+import { existsSync } from 'fs'
 import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { basename, extname, join, resolve } from 'path'
 import type { DspAsset, DspAssetKind } from '../../shared/dspGraph.ts'
@@ -358,16 +359,6 @@ function sanitizeFileName(fileName: string): string {
     .join('')
     .trim()
   return name.slice(0, 160) || 'asset.bin'
-}
-
-function hashFile(filePath: string): Promise<string> {
-  return new Promise((resolveHash, rejectHash) => {
-    const hash = createHash('sha256')
-    const stream = createReadStream(filePath)
-    stream.on('error', rejectHash)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('end', () => resolveHash(hash.digest('hex')))
-  })
 }
 
 function isStoredAssetIndex(value: unknown): value is StoredAssetIndex {

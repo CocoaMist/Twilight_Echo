@@ -48,11 +48,6 @@ import {
   staticPointerCssVariables,
   type LiquidGlassPointerVariables
 } from '../utils/liquidGlassPointer.ts'
-import {
-  LIQUID_GLASS_PRESS_TARGET_SCALE,
-  LiquidGlassPressController,
-  liquidGlassPressCssVariables
-} from '../utils/liquidGlassPress.ts'
 
 const props = defineProps<{
   /** Whether liquid glass is the active material. */
@@ -542,132 +537,6 @@ function isReducedMotion(): boolean {
   return resolveMotionMode() === 'reduced'
 }
 
-/* Press "squish": the surface flexes toward the press point on a spring and
-   relaxes on release. Delegated like the hover tracking, so per-card handlers are
-   never needed; the high-rate work is one rAF loop while a press is in flight. */
-
-const pressController = new LiquidGlassPressController()
-let pressedSurface: HTMLElement | null = null
-let pressFrame: number | null = null
-let pressLastTime = 0
-
-function resolvePressTarget(target: EventTarget | null): HTMLElement | null {
-  if (!(target instanceof Element)) return null
-  const card = target.closest<HTMLElement>(LIQUID_GLASS_CARD_SELECTOR)
-  if (card) return card
-  if (props.expandedActive) {
-    return target.closest<HTMLElement>(LIQUID_GLASS_EXPANDED_SURFACE_SELECTOR)
-  }
-  return null
-}
-
-function writePressVariables(scale: number, element: HTMLElement): void {
-  for (const [name, value] of Object.entries(liquidGlassPressCssVariables(scale))) {
-    if (element.style.getPropertyValue(name) !== value) element.style.setProperty(name, value)
-  }
-}
-
-function clearPressVariables(element: HTMLElement): void {
-  element.style.removeProperty('--te-lg-press-scale')
-  element.style.removeProperty('--te-lg-press-glow')
-}
-
-function stopPressFrame(): void {
-  if (pressFrame !== null) {
-    cancelAnimationFrame(pressFrame)
-    pressFrame = null
-  }
-}
-
-/** Anchors the squish at the press point so the flex reads as directional. */
-function writePressOrigin(event: PointerEvent, element: HTMLElement): void {
-  const rect = element.getBoundingClientRect()
-  const originX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * 100
-  const originY = ((event.clientY - rect.top) / Math.max(1, rect.height)) * 100
-  element.style.setProperty('--te-lg-press-x', `${originX.toFixed(1)}%`)
-  element.style.setProperty('--te-lg-press-y', `${originY.toFixed(1)}%`)
-}
-
-function tickPress(now: number): void {
-  pressFrame = null
-  const element = pressedSurface
-  if (!element) return
-  const step = pressLastTime > 0 ? Math.min(0.05, (now - pressLastTime) / 1000) : 1 / 60
-  pressLastTime = now
-  const state = pressController.update(step)
-  writePressVariables(state.scale, element)
-  if (state.settled && !pressController.isPressed()) {
-    stopPressFrame()
-    clearPressVariables(element)
-    pressedSurface = null
-    pressLastTime = 0
-    return
-  }
-  if (!state.settled) pressFrame = requestAnimationFrame(tickPress)
-}
-
-function onSurfacePointerDown(event: PointerEvent): void {
-  const target = resolvePressTarget(event.target)
-  if (!target || event.button !== 0) return
-  stopPressFrame()
-  if (pressedSurface && pressedSurface !== target) clearPressVariables(pressedSurface)
-  pressedSurface = target
-  writePressOrigin(event, target)
-  pressController.press()
-  if (isMotionGated()) {
-    writePressVariables(LIQUID_GLASS_PRESS_TARGET_SCALE, target)
-    return
-  }
-  pressLastTime = 0
-  pressFrame = requestAnimationFrame(tickPress)
-}
-
-function onSurfacePointerUp(): void {
-  if (!pressedSurface) return
-  pressController.release()
-  if (isMotionGated()) {
-    clearPressVariables(pressedSurface)
-    pressedSurface = null
-    return
-  }
-  if (pressFrame === null) {
-    pressLastTime = 0
-    pressFrame = requestAnimationFrame(tickPress)
-  }
-}
-
-function resetPress(): void {
-  stopPressFrame()
-  pressController.reset()
-  if (pressedSurface) clearPressVariables(pressedSurface)
-  pressedSurface = null
-  pressLastTime = 0
-}
-
-function isMotionGated(): boolean {
-  const mode = resolveMotionMode()
-  return mode === 'off' || mode === 'reduced'
-}
-
-let pressAttached = false
-
-function syncPressTracking(): void {
-  const shouldAttach = props.active && (props.homeCardsActive || props.expandedActive)
-  if (shouldAttach === pressAttached) return
-  if (shouldAttach) {
-    document.addEventListener('pointerdown', onSurfacePointerDown, { passive: true })
-    window.addEventListener('pointerup', onSurfacePointerUp, { passive: true })
-    window.addEventListener('pointercancel', onSurfacePointerUp, { passive: true })
-    pressAttached = true
-    return
-  }
-  document.removeEventListener('pointerdown', onSurfacePointerDown)
-  window.removeEventListener('pointerup', onSurfacePointerUp)
-  window.removeEventListener('pointercancel', onSurfacePointerUp)
-  resetPress()
-  pressAttached = false
-}
-
 let motionObserver: MutationObserver | null = null
 let surfaceVisibilityObserver: IntersectionObserver | null = null
 let surfaceMutationObserver: MutationObserver | null = null
@@ -782,7 +651,6 @@ onMounted(() => {
   syncFilterInputs()
   writePointerVariables(staticPointerCssVariables(), document.documentElement)
   syncPointerTracking()
-  syncPressTracking()
   syncSurfaceVisibility()
   syncGeometryObserver()
   window.addEventListener(LIQUID_GLASS_TUNING_CHANGED_EVENT, onTuningChanged)
@@ -808,8 +676,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener(LIQUID_GLASS_TUNING_CHANGED_EVENT, onTuningChanged)
   detachPointer()
-  resetPress()
-  pressAttached = false
   clearSurfaceVisibility()
   geometryFrames.cancel()
   clearGeometryObservers()
@@ -823,7 +689,6 @@ watch(
     ensureMaps()
     syncFilterInputs()
     syncPointerTracking()
-    syncPressTracking()
     syncSurfaceVisibility()
     syncGeometryObserver()
   }

@@ -1,3 +1,4 @@
+import { containsGb18030FourByteSequence } from './legacyTextEncoding.ts'
 /** CUE parsing is deliberately kept data-only so both local scan workers use identical rules. */
 export interface CueRange {
   /** INDEX 01 offset in the referenced audio file, in seconds. */
@@ -277,24 +278,6 @@ function readCueText(line: string, directive: string): string | null {
 
 function sameCueFileName(left: string, right: string): boolean {
   return left.replace(/\\/g, '/').toLowerCase() === right.replace(/\\/g, '/').toLowerCase()
-}
-
-function containsGb18030FourByteSequence(bytes: Uint8Array): boolean {
-  for (let index = 0; index + 3 < bytes.byteLength; index += 1) {
-    if (
-      bytes[index] >= 0x81 &&
-      bytes[index] <= 0xfe &&
-      bytes[index + 1] >= 0x30 &&
-      bytes[index + 1] <= 0x39 &&
-      bytes[index + 2] >= 0x81 &&
-      bytes[index + 2] <= 0xfe &&
-      bytes[index + 3] >= 0x30 &&
-      bytes[index + 3] <= 0x39
-    ) {
-      return true
-    }
-  }
-  return false
 }
 
 interface RawCueTrack {

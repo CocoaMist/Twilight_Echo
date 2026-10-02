@@ -27,7 +27,7 @@ import {
   isLyricsManagementDocument,
   type LyricsManagementDocument
 } from '../../shared/lyricsManagement.ts'
-import { playbackSessionCueRangesAreValid } from '../../shared/cue.ts'
+import { isPlaybackSession } from '../../shared/playbackSession.ts'
 import {
   isSecureValueEnvelope,
   protectString,
@@ -255,28 +255,6 @@ async function saveVersionedData<T>(
   }
 }
 
-function isPlaybackSessionFile(value: unknown): value is PlaybackSession {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const record = value as Record<string, unknown>
-  const track = record.track
-  return (
-    record.version === 1 &&
-    typeof record.savedAt === 'string' &&
-    (record.mode === 'off' || record.mode === 'track' || record.mode === 'trackAndPosition') &&
-    !!track &&
-    typeof track === 'object' &&
-    !Array.isArray(track) &&
-    typeof (track as Record<string, unknown>).id === 'string' &&
-    typeof record.position === 'number' &&
-    Number.isFinite(record.position) &&
-    record.position >= 0 &&
-    (record.queueRevision === undefined ||
-      (Number.isSafeInteger(record.queueRevision) && Number(record.queueRevision) >= 0)) &&
-    (record.queue === undefined || Array.isArray(record.queue)) &&
-    playbackSessionCueRangesAreValid(value)
-  )
-}
-
 function normalizeNcmCookieForSave(cookie: unknown): string {
   if (cookie == null || cookie === '') return ''
   return normalizeIpcString(cookie, 'NCM cookie', MAX_NCM_COOKIE_BYTES)
@@ -344,4 +322,8 @@ function normalizeLoadedNcmCookie(cookie: string | null): string {
 
 function ncmCookieScope(filePath: string): string {
   return `ncm-cookie:${filePath}`
+}
+
+function isPlaybackSessionFile(value: unknown): value is PlaybackSession {
+  return isPlaybackSession(value)
 }

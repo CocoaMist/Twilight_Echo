@@ -1,6 +1,12 @@
 import type { Track } from '../../types/music'
 import { getTrackSource } from '../../utils/playerTrackUtils.ts'
-import type { DerivedTrackGroup, Playlist } from '../useMusicStore.ts'
+import type { DerivedTrackGroup, Playlist } from './musicStoreTypes.ts'
+
+export function nonEmptySnapshots(
+  snapshots: Record<string, Track>
+): Record<string, Track> | undefined {
+  return Object.keys(snapshots).length > 0 ? snapshots : undefined
+}
 
 export function getAlbumIdentity(track: Track): string {
   const albumId = track.albumId?.trim()
@@ -89,15 +95,15 @@ export function getAlbumCoverIdentity(track: Track): string {
   return cover.toLocaleLowerCase()
 }
 
+const compareAlbumFileNames = new Intl.Collator('zh', { numeric: true, sensitivity: 'base' })
+  .compare
+
 export function compareAlbumTrackOrder(left: Track, right: Track): number {
   const disc = albumOrderIndex(left.discNumber) - albumOrderIndex(right.discNumber)
   if (disc !== 0) return disc
   const track = albumOrderIndex(left.trackNumber) - albumOrderIndex(right.trackNumber)
   if (track !== 0) return track
-  const byFile = (left.fileName || '').localeCompare(right.fileName || '', 'zh', {
-    numeric: true,
-    sensitivity: 'base'
-  })
+  const byFile = compareAlbumFileNames(left.fileName || '', right.fileName || '')
   if (byFile !== 0) return byFile
   return (left.title || '').localeCompare(right.title || '', 'zh')
 }

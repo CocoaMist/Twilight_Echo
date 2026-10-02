@@ -8,6 +8,7 @@ const {
 const { delimiter, dirname, join, resolve } = require('node:path')
 const { spawnSync: childProcessSpawnSync } = require('node:child_process')
 const { cpus: osCpus, totalmem: osTotalmem } = require('node:os')
+const { resolveWindowsPersistedEnvironment } = require('./windows-persisted-environment.cjs')
 
 function osTotalMemory() {
   return osTotalmem()
@@ -80,20 +81,12 @@ function setEnvironmentValue(env, name, value) {
 }
 
 function resolveMingwEnvironment({ env = process.env, spawnSync = childProcessSpawnSync } = {}) {
-  const resolved = { ...env }
-  if (process.platform !== 'win32') return resolved
-  for (const name of PERSISTED_MINGW_VARIABLES) {
-    if (environmentValue(resolved, name)) continue
-    const result = spawnSync('reg.exe', ['query', 'HKCU\\Environment', '/v', name], {
-      encoding: 'utf8',
-      windowsHide: true
-    })
-    if (result?.status !== 0 || result.error) continue
-    const expression = new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.+?)\\s*$`, 'im')
-    const match = expression.exec(result.stdout ?? '')
-    if (match?.[1]) resolved[name] = match[1].trim()
-  }
-  return resolved
+  return resolveWindowsPersistedEnvironment({
+    env,
+    names: PERSISTED_MINGW_VARIABLES,
+    spawnSync,
+    getValue: environmentValue
+  })
 }
 
 function normalizePath(value) {

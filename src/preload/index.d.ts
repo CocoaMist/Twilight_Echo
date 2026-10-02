@@ -1,9 +1,35 @@
 import type {
+  BpmAnalysisRequest,
+  BpmAnalysisRequestResult,
+  BpmAnalysisCompletedEvent,
+  LoudnessAnalysisRequest,
+  LoudnessAnalysisRequestResult,
+  LoudnessAnalysisCompletedEvent,
+  LoudnormStatusEvent,
+  ProviderDownloadCreateInput,
+  ProviderDownloadTaskSnapshot,
+  OpraCatalogStatus,
+  OpraProfile,
+  PlaybackSession,
+  TwilightPluginDescriptor,
+  TwilightPluginInstallResult,
+  TwilightPluginIndexEntry,
+  TwilightPluginIndexStatus,
+  TwilightMediaProviderRegistration,
+  TwilightPluginExtensionContribution,
+  AudioEngineConfigAppliedEvent
+} from './types.ts'
+import type {
+  MiniPlayerSettings,
+  MiniPlayerTrackSnapshot,
+  MiniPlayerSettingsPatch
+} from '../shared/miniPlayer.ts'
+import type { TrayNavigationTarget } from '../shared/trayPlayer.ts'
+import type { VersionedDataEnvelope } from '../shared/versionedPersistence.ts'
+import type {
   AudioOutputId,
   PlayMode,
   VolumeNormalizationMode,
-  LoudnormStatus,
-  EqualizerBand,
   AudioProcessingSettings,
   AudioOutputOption,
   OutputConfig,
@@ -15,11 +41,9 @@ import type {
   VisualizationOptions,
   VisualizationData,
   ConvolverInfo,
-  NativeAudioMetadata,
-  BpmAnalysisResult,
-  LoudnessAnalysisResult
+  NativeAudioMetadata
 } from '../shared/audioEngineTypes.ts'
-import type { AudioEqPreset, AppSettings } from '../shared/appSettings.ts'
+import type { AudioEqPreset, AppSettings, SettingsSnapshot } from '../shared/appSettings.ts'
 import type {
   AudioDeviceProfile,
   AudioDeviceProfilesSnapshot
@@ -119,208 +143,9 @@ type LibraryChange =
   | { kind: 'add' | 'remove' | 'unknown'; path?: string }
   | { kind: 'scan'; update: LocalLibraryScanUpdate }
 
-interface BpmAnalysisRequest {
-  trackId: string
-  filePath: string
-  referenceBpm?: number
-}
-type BpmAnalysisRequestResult =
-  | { status: 'completed'; analysis: BpmAnalysisResult }
-  | { status: 'cached'; analysis: BpmAnalysisResult }
-  | { status: 'skipped'; reason: string }
-  | { status: 'failed'; reason: string }
-interface BpmAnalysisCompletedEvent {
-  trackId: string
-  filePath: string
-  analysis: BpmAnalysisResult
-}
-
-interface LoudnessAnalysisRequest {
-  trackId: string
-  filePath: string
-  targetLufs?: number
-  truePeakCeilingDb?: number
-}
-type LoudnessAnalysisRequestResult =
-  | { status: 'completed'; analysis: LoudnessAnalysisResult }
-  | { status: 'cached'; analysis: LoudnessAnalysisResult }
-  | { status: 'skipped'; reason: string }
-  | { status: 'failed'; reason: string }
-  | { status: 'unavailable'; reason: string }
-interface LoudnessAnalysisCompletedEvent {
-  trackId: string
-  filePath: string
-  analysis: LoudnessAnalysisResult
-}
-
-interface LoudnormStatusEvent {
-  status: LoudnormStatus
-  source: string | null
-  reason?: string
-  analysis?: LoudnessAnalysisResult
-}
-type TwilightPluginType = 'provider' | 'tool' | 'ui' | 'theme' | 'dsp'
-type TwilightPluginStatus = 'installed' | 'enabled' | 'disabled' | 'invalid' | 'failed'
-type TwilightPluginIndexInstallState =
-  | 'not-installed'
-  | 'installed'
-  | 'update-available'
-  | 'incompatible'
-  | 'built-in-blocked'
-type TwilightPluginIndexSourceKind = 'github' | 'custom' | 'bundled'
-type TwilightPluginIndexLoadedFrom = 'remote' | 'cache' | 'bundled'
-type TwilightPluginIndexCacheFormat = 'envelope-v1' | 'legacy'
-type TwilightPluginSignatureStatus =
-  | 'missing'
-  | 'malformed'
-  | 'unsupported'
-  | 'unknown-key'
-  | 'revoked-key'
-  | 'key-not-yet-valid'
-  | 'key-expired'
-  | 'invalid-key'
-  | 'invalid'
-  | 'valid'
-  | 'trust-store-error'
-type TwilightPluginVerificationLevel =
-  | 'official'
-  | 'publisher-signed'
-  | 'index-declared'
-  | 'unverified'
-type TwilightMediaProviderCapability =
-  | 'search'
-  | 'playbackUrl'
-  | 'lyrics'
-  | 'cover'
-  | 'playlist'
-  | 'library'
-  | 'login'
-  | 'download'
 import type { TwilightMediaProviderMethod } from '../shared/mediaProviderMethods.ts'
-type ProviderDownloadQuality = 'aac' | 'lossless' | 'hi-res'
-type ProviderDownloadTaskStatus =
-  | 'queued'
-  | 'preparing'
-  | 'downloading'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-interface ProviderDownloadTrackInput {
-  id: string | number
-  title: string
-  artist: string
-  album?: string
-  cover?: string
-  provider?: string
-  [key: string]: unknown
-}
-interface ProviderDownloadCreateInput {
-  providerId: string
-  track: ProviderDownloadTrackInput
-  quality: ProviderDownloadQuality
-  targetRoot?: string
-}
-interface ProviderDownloadTaskSnapshot {
-  id: string
-  providerId: string
-  providerJobId: string
-  track: ProviderDownloadTrackInput
-  requestedQuality: ProviderDownloadQuality
-  actualQuality: ProviderDownloadQuality | null
-  status: ProviderDownloadTaskStatus
-  progress: number
-  queuePosition: number | null
-  targetPath: string | null
-  fileSize: number | null
-  error: string | null
-  createdAt: string
-  updatedAt: string
-}
 
-type MiniPlayerBackgroundKind = 'solid' | 'gradient' | 'cover' | 'image'
-type MiniPlayerImageFit = 'cover' | 'contain'
-type MiniPlayerLayoutPreference = 'auto' | 'compact' | 'standard' | 'wide' | 'poster'
 type MotionPreference = 'system' | 'full' | 'reduced' | 'off'
-
-interface MiniPlayerBackgroundSettings {
-  kind: MiniPlayerBackgroundKind
-  solidColor: string
-  fallbackColor: string
-  gradientStart: string
-  gradientEnd: string
-  gradientAngle: number
-  imageUrl: string
-  imageFit: MiniPlayerImageFit
-  blur: number
-  brightness: number
-  saturation: number
-  opacity: number
-  overlayColor: string
-  overlayOpacity: number
-}
-
-interface MiniPlayerAppearanceSettings {
-  accentMode: 'track' | 'custom'
-  accentColor: string
-  textMode: 'auto' | 'custom'
-  primaryTextColor: string
-  mutedTextColor: string
-  fontFamily: string
-  surfaceOpacity: number
-  glassBlur: number
-  cornerRadius: number
-  borderWidth: number
-  borderColor: string
-  shadowStrength: number
-  shadowColor: string
-}
-
-interface MiniPlayerLayoutSettings {
-  preference: MiniPlayerLayoutPreference
-}
-
-interface MiniPlayerVisibilitySettings {
-  artwork: boolean
-  album: boolean
-  equalizer: boolean
-  time: boolean
-  volume: boolean
-  playMode: boolean
-  queuePosition: boolean
-}
-
-interface MiniPlayerThemeProfile {
-  background: MiniPlayerBackgroundSettings
-  appearance: MiniPlayerAppearanceSettings
-  layout: MiniPlayerLayoutSettings
-  visibility: MiniPlayerVisibilitySettings
-}
-
-interface MiniPlayerSettings {
-  windowX: number
-  windowY: number
-  windowWidth: number
-  windowHeight: number
-  alwaysOnTop: boolean
-  showInTaskbar: boolean
-  positionLocked: boolean
-  activeStyleId: string
-  profiles: Record<string, MiniPlayerThemeProfile>
-}
-
-interface MiniPlayerTrackSnapshot {
-  id: string
-  title: string
-  artist: string
-  album: string
-  albumArtist: string
-  trackNumber: number
-  cover: string | null
-  format: string | null
-  sampleRate: number | null
-  bitDepth: number | null
-  coverSource: string | null
-}
 
 interface MiniPlayerStateSnapshot {
   track: MiniPlayerTrackSnapshot | null
@@ -351,288 +176,14 @@ type MiniPlayerCommand =
   | { type: 'seek'; value: number }
   | { type: 'set-volume'; value: number }
 
-type MiniPlayerSettingsPatch = Partial<
-  Pick<
-    MiniPlayerSettings,
-    | 'alwaysOnTop'
-    | 'showInTaskbar'
-    | 'positionLocked'
-    | 'activeStyleId'
-    | 'profiles'
-    | 'windowWidth'
-    | 'windowHeight'
-  >
->
-
 interface MiniPlayerBootstrap {
   state: MiniPlayerStateSnapshot
   settings: MiniPlayerSettings
   motionPreference: MotionPreference
 }
 
-type TrayNavigationTarget = 'local' | 'streaming' | 'settings'
-
 interface TrayPlayerBootstrap {
   state: MiniPlayerStateSnapshot
-}
-
-interface OpraCatalogStatus {
-  loaded: boolean
-  loading: boolean
-  source: 'empty' | 'cache' | 'network'
-  cachePath: string
-  vendorCount: number
-  productCount: number
-  profileCount: number
-  lastUpdatedAt: string | null
-  lastError: string
-}
-
-interface OpraProfile {
-  eqId: string
-  productId: string
-  productName: string
-  vendorName: string
-  author: string
-  details: string
-  link: string
-  attributionUrl: string
-  preampDb: number
-  bands: EqualizerBand[]
-  applicable: boolean
-  unsupportedBandTypes: string[]
-}
-
-type PlaybackSession = import('../shared/playbackSession.ts').PlaybackSessionData<TrackData>
-
-interface VersionedDataEnvelope<T> {
-  version: 2
-  revision: number
-  savedAt: string
-  data: T
-}
-
-interface SettingsSnapshot extends AppSettings {
-  settings: AppSettings
-  defaults: {
-    cachePath: string
-  }
-  paths: {
-    settingsFile: string
-    userDataPath: string
-    activeCachePath: string
-  }
-  appVersion: string
-  platform: string
-  windowTransparencySupported: boolean
-  restartRequired: boolean
-  restartReasons: string[]
-}
-
-interface TwilightPluginDescriptor {
-  id: string
-  name: string
-  version: string
-  description: string
-  author: string
-  license: string
-  type: TwilightPluginType[]
-  main?: string
-  binary?: Record<string, string>
-  dependencies?: Record<string, string>
-  engines: {
-    twilightEcho: string
-  }
-  apiVersion: number
-  permissions: string[]
-  status: TwilightPluginStatus
-  enabled: boolean
-  builtIn: boolean
-  error: string | null
-  isDsp: boolean
-  source: 'directory' | 'tep' | 'bundled' | 'index' | 'scan'
-  installedAt: string | null
-  updatedAt: string | null
-  paths: {
-    root: string
-    versionRoot: string
-    manifestPath: string
-    dataDir: string
-    logPath: string
-  }
-}
-
-interface TwilightPluginInstallResult {
-  plugin: TwilightPluginDescriptor
-  warning: string
-}
-
-interface TwilightPluginPublisherSignature {
-  schemaVersion: 1
-  algorithm: 'ed25519'
-  keyId: string
-  value: string
-}
-
-interface TwilightPluginVerification {
-  level: TwilightPluginVerificationLevel
-  official: boolean
-  officialSource: boolean
-  indexClaimed: boolean
-  signatureStatus: TwilightPluginSignatureStatus
-  keyId: string | null
-  publisher: string | null
-  keyFingerprintSha256: string | null
-  revalidateAt: string | null
-  reason: string
-}
-
-interface TwilightPluginIndexEntry {
-  id: string
-  name: string
-  version: string
-  description: string
-  author: string
-  license: string
-  type: TwilightPluginType[]
-  main?: string
-  binary?: Record<string, string>
-  dependencies?: Record<string, string>
-  engines: {
-    twilightEcho: string
-  }
-  apiVersion: number
-  permissions: string[]
-  homepage?: string
-  repository?: string
-  icon?: string
-  sourceUrl: string
-  checksumSha256: string
-  tags?: string[]
-  publisherSignature?: TwilightPluginPublisherSignature
-  /** Publisher/index metadata only. Never use this field as an official trust decision. */
-  verified?: boolean
-  verification: TwilightPluginVerification
-  installState?: TwilightPluginIndexInstallState
-  installedVersion?: string
-}
-
-interface TwilightPluginIndexStatus {
-  sourceUrl: string
-  configuredSourceUrl: string
-  sourceKind: TwilightPluginIndexSourceKind
-  loadedFrom: TwilightPluginIndexLoadedFrom
-  lastFetchedAt: string | null
-  expiresAt: string | null
-  loadedAt: string
-  stale: boolean
-  expired: boolean
-  originVerified: boolean
-  officialSource: boolean
-  cacheFormat: TwilightPluginIndexCacheFormat | null
-  trustStoreError: string | null
-  error: string | null
-}
-
-type TwilightProviderStreamingSection = import('../shared/providerHome').ProviderStreamingSection
-
-interface TwilightProviderUiMetadata {
-  icon: string
-  color?: string
-  description?: string
-  authType: 'qr' | 'oauth' | 'cookie' | 'settings'
-  loginInstructions?: string
-  qrStatusCodes?: {
-    waiting: number
-    scanned: number | null
-    expired: number
-    denied?: number
-    success: number
-  }
-  showBrowserButton?: boolean
-  loginExtraActions?: Array<{
-    label: string
-    icon: string
-    method: string
-  }>
-  streamingHome?: import('../shared/providerHome').ProviderHomePresentation
-  streamingDiscovery?: import('../shared/providerHome').ProviderDiscoveryPresentation
-  streamingSections?: TwilightProviderStreamingSection[]
-  streamingLibraryTab?: boolean
-  streamingSearch?: boolean
-  unifiedLibrary?: boolean
-}
-
-interface TwilightMediaProviderRegistration {
-  id: string
-  name: string
-  capabilities: TwilightMediaProviderCapability[]
-  supportedMethods?: TwilightMediaProviderMethod[]
-  ui?: TwilightProviderUiMetadata
-  health?: TwilightMediaProviderHealth
-}
-
-interface TwilightMediaProviderHealth {
-  providerId: string
-  pluginId: string
-  pluginStatus: TwilightPluginStatus
-  available: boolean
-  totalCalls: number
-  successfulCalls: number
-  failedCalls: number
-  successRate: number
-  methodStats?: Partial<Record<TwilightMediaProviderMethod, TwilightMediaProviderMethodHealth>>
-  lastError: string | null
-  lastCheckedAt: string | null
-}
-
-interface TwilightMediaProviderMethodHealth {
-  totalCalls: number
-  successfulCalls: number
-  failedCalls: number
-  successRate: number
-  lastError: string | null
-  lastCheckedAt: string | null
-}
-
-type TwilightUiContributionKind =
-  | 'sidebarPage'
-  | 'playerBarButton'
-  | 'settingsPanel'
-  | 'localSidebarItem'
-  | 'streamingHome'
-
-interface TwilightUiContribution {
-  id: string
-  kind: TwilightUiContributionKind
-  title: string
-  description?: string
-  icon?: string
-  command?: string
-  /** Legacy field normalized by the host to command-only rendering. */
-  renderMode?: 'command'
-  autoLoad?: boolean
-}
-
-interface TwilightThemeContribution {
-  id: string
-  name: string
-  description?: string
-  variables?: Record<string, string>
-  stylesheet?: string
-  structured?: import('../shared/theme.ts').StructuredPluginTheme
-  compatibilityNotes?: string[]
-}
-
-interface TwilightPluginExtensionContribution {
-  pluginId: string
-  ui: TwilightUiContribution[]
-  themes: TwilightThemeContribution[]
-}
-
-interface AudioEngineConfigAppliedEvent {
-  requestedConfigRevision: number
-  appliedConfigRevision: number
 }
 
 interface AudioEngineAPI {

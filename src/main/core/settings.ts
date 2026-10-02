@@ -4,11 +4,18 @@ import {
   normalizeDownloadPreferences
 } from '../../shared/downloadPreferences.ts'
 import { app } from 'electron'
-import { normalizeContinuityOutputConfig } from '../../shared/audioOutputConfig.ts'
+import {
+  normalizeContinuityOutputConfig,
+  normalizeOutputConfig as normalizeSharedOutputConfig
+} from '../../shared/audioOutputConfig.ts'
+export {
+  normalizeChannelRoutingMode,
+  normalizePcmToDsdMode
+} from '../../shared/audioOutputConfig.ts'
+
 import { normalizeAudioDeviceProfileSettings } from '../../shared/audioDeviceProfiles.ts'
 import { execFile, execFileSync } from 'node:child_process'
 import { release } from 'node:os'
-import { stat, readdir } from 'fs/promises'
 import { join, resolve } from 'path'
 import { createLegacyDspGraph, normalizeDspScenes } from '../../shared/dspGraph'
 import {
@@ -19,7 +26,6 @@ import {
   DEFAULT_AUDIO_PROCESSING,
   normalizeAudioOutput,
   normalizeAudioProcessingSettings,
-  type ChannelRoutingMode,
   type OutputConfig
 } from '../audioEngineManager'
 import {
@@ -611,42 +617,11 @@ export function normalizeAudioDevice(device: unknown): string {
   return normalized
 }
 
-export function normalizeChannelRoutingMode(value: unknown): ChannelRoutingMode {
-  return value === 'stereo' ||
-    value === 'stereo-to-5.1' ||
-    value === 'stereo-to-7.1' ||
-    value === 'mono-to-stereo' ||
-    value === 'mono-to-multichannel'
-    ? value
-    : 'auto'
-}
-
-export function normalizePcmToDsdMode(value: unknown): NonNullable<OutputConfig['pcmToDsdMode']> {
-  return value === 'dsd64' || value === 'dsd128' || value === 'dsd256' ? value : 'off'
-}
-
+// Stored preferences retain the existing 8192-frame range. The engine applies
+// its 2048-frame cap when activating the shared configuration.
 export function normalizeOutputConfig(config: unknown): OutputConfig {
   if (!config || typeof config !== 'object') return { ...DEFAULT_SETTINGS.audioOutputConfig }
-  const value = config as Partial<Record<keyof OutputConfig, unknown>>
-  return {
-    ...normalizeContinuityOutputConfig(value),
-    preferredBufferSize:
-      typeof value.preferredBufferSize === 'number'
-        ? clampNumber(Math.trunc(value.preferredBufferSize), 0, 8192, 0)
-        : DEFAULT_SETTINGS.audioOutputConfig.preferredBufferSize,
-    routingMode: normalizeChannelRoutingMode(value.routingMode),
-    wasapiExclusivePushMode: value.wasapiExclusivePushMode === true,
-    pcmToDsdMode: normalizePcmToDsdMode(value.pcmToDsdMode),
-    dsdMutePreRollFrames: clampNumber(value.dsdMutePreRollFrames, 0, 4096, 256),
-    dsdMutePostRollFrames: clampNumber(value.dsdMutePostRollFrames, 0, 4096, 256),
-    dsdMuteTimeoutFrames: clampNumber(value.dsdMuteTimeoutFrames, 1, 4096, 4096),
-    upmixCenterGain: clampNumber(value.upmixCenterGain, 0, 2, 0.7071),
-    upmixLfeGain: clampNumber(value.upmixLfeGain, 0, 2, 0.5),
-    upmixLfeLowpassHz: clampNumber(value.upmixLfeLowpassHz, 20, 500, 120),
-    upmixSurroundGain: clampNumber(value.upmixSurroundGain, 0, 2, 0.5),
-    upmixSideGain: clampNumber(value.upmixSideGain, 0, 2, 0.3),
-    upmixSurroundDelayMs: clampNumber(value.upmixSurroundDelayMs, 0, 100, 0)
-  }
+  return normalizeSharedOutputConfig(config as Partial<OutputConfig>, 8192)
 }
 
 export function normalizeDesktopLyrics(raw: unknown): DesktopLyricsSettings {
@@ -945,23 +920,5 @@ export function createSettingsSnapshot(
     windowTransparencySupported: supportsNativeWindowTransparency(),
     restartRequired: restartReasons.length > 0,
     restartReasons
-  }
-}
-
-export async function getDirectorySize(directory: string): Promise<number> {
-  try {
-    const info = await stat(directory)
-    if (!info.isDirectory()) return info.size
-
-    const entries = await readdir(directory, { withFileTypes: true })
-    const sizes = await Promise.all(
-      entries.map((entry) => {
-        const fullPath = join(directory, entry.name)
-        return entry.isDirectory() ? getDirectorySize(fullPath) : stat(fullPath).then((s) => s.size)
-      })
-    )
-    return sizes.reduce((sum, size) => sum + size, 0)
-  } catch {
-    return 0
   }
 }

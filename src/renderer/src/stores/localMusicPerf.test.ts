@@ -669,7 +669,8 @@ test('derived collections keep first cover without per-group rescans', async () 
     store.folders.value.find((item) => item.path === 'C:\\music\\cover-folder')?.cover,
     'cover://first.jpg'
   )
-  assert.match(musicStoreSource, /interface DerivedTrackGroup/)
+  const types = readFileSync(new URL('./library/musicStoreTypes.ts', import.meta.url), 'utf8')
+  assert.match(types, /interface DerivedTrackGroup/)
   assert.doesNotMatch(musicStoreSource, /items\.find\(\(t\) => t\.cover\)/)
 
   store.clearTracks()

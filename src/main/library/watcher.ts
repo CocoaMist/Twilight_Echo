@@ -5,24 +5,22 @@ import {
   isActiveLibraryPathExcluded,
   isLibraryPathMutationInProgress
 } from './libraryRepository.ts'
-import type { LocalLibraryWatchChange } from '../../shared/localLibraryScan.ts'
+import type {
+  LibraryWatcherFolderStatus,
+  LibraryWatcherMode,
+  LibraryWatcherState,
+  LocalLibraryWatchChange
+} from '../../shared/localLibraryScan.ts'
+export type {
+  LibraryWatcherFolderStatus,
+  LibraryWatcherMode,
+  LibraryWatcherState
+} from '../../shared/localLibraryScan.ts'
 import {
   isWatchableFileExtension,
   looksLikeDirectoryEvent,
   LIBRARY_WATCH_EXTENSIONS
 } from './watcherExtensions.ts'
-
-export type LibraryWatcherState = 'active' | 'degraded' | 'failed' | 'disabled'
-export type LibraryWatcherMode = 'recursive' | 'polling' | 'none'
-
-export interface LibraryWatcherFolderStatus {
-  folder: string
-  state: LibraryWatcherState
-  mode: LibraryWatcherMode
-  lastError: string | null
-  lastEventAt: string | null
-  lastReconcileAt: string | null
-}
 
 export { LIBRARY_WATCH_EXTENSIONS }
 

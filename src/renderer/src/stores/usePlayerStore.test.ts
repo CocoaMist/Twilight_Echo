@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import ts from 'typescript'
 import { normalizeAudioDeviceOptions } from './player/audioOutputNormalize.ts'
 import { APP_LOCALES } from '../../../shared/i18n/locale.ts'
 import { translate } from '../../../shared/i18n/translate.ts'
@@ -21,23 +22,13 @@ test('each playback load clears stale pending positions before asynchronous work
 })
 
 function extractFunctionBody(source: string, functionName: string): string {
-  const signatureIndex = source.indexOf(`export function ${functionName}`)
-  assert.notEqual(signatureIndex, -1, `${functionName} export should exist`)
-
-  const implementationStart = source.slice(signatureIndex).match(/\r?\n} \{/)
-  assert.ok(implementationStart?.index != null, `${functionName} implementation should start`)
-
-  const bodyStart = signatureIndex + implementationStart.index + implementationStart[0].length - 1
-
-  let depth = 0
-  for (let index = bodyStart; index < source.length; index += 1) {
-    const char = source[index]
-    if (char === '{') depth += 1
-    if (char === '}') depth -= 1
-    if (depth === 0) return source.slice(bodyStart + 1, index)
-  }
-
-  assert.fail(`${functionName} body should close`)
+  const file = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true)
+  const declaration = file.statements.find(
+    (node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === functionName
+  )
+  assert.ok(declaration?.body, `${functionName} implementation should exist`)
+  return source.slice(declaration.body.getStart(file) + 1, declaration.body.end - 1)
 }
 
 function extractInternalFunctionBody(source: string, functionName: string): string {
@@ -134,7 +125,7 @@ test('playback info keeps loaded lyrics when reusing the current queue track', (
 
   assert.match(trackUtilsSource, /export function mergeTrackTransientData/)
   assert.match(source, /const mergedTrack = mergeTrackTransientData\(track, currentTrack\.value\)/)
-  assert.match(source, /patchTrackInQueues\(updatedTrack\)/)
+  assert.match(source, /patchTrackInQueues,/)
 })
 
 test('empty automatic lyric content remains eligible for a later provider retry', () => {
@@ -300,9 +291,10 @@ test('playback history behavior lives in its injected controller while the store
     storeSource,
     /if \(track\.source === 'podcast'\) \{[\s\S]*getPodcastDefaultPlaybackRate\(\)/
   )
-  assert.match(storeSource, /acceptResumeOffer: \(\) => void/)
-  assert.match(storeSource, /dismissResumeOffer: \(\) => void/)
-  assert.match(storeSource, /addManualBookmarkAtCurrentTime: \(\) => void/)
+  const apiBody = extractFunctionBody(storeSource, 'usePlayerStore')
+  assert.match(apiBody, /acceptResumeOffer,/)
+  assert.match(apiBody, /dismissResumeOffer,/)
+  assert.match(apiBody, /addManualBookmarkAtCurrentTime,/)
   assert.match(storeSource, /playbackHistoryController\.dispose\(\)/)
   assert.doesNotMatch(storeSource, /let lastPodcastProgressWriteAt = 0/)
   assert.doesNotMatch(storeSource, /function maybeOfferResumeForTrack\(/)
@@ -1139,35 +1131,16 @@ test('playback session strips transient provider stream URLs before restore', ()
   )
 })
 
-test('player store requests background BPM analysis and merges completed results', () => {
+test('player store wires background BPM analysis and completion into one controller', () => {
   const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
-  const trackUtilsSource = readFileSync(
-    new URL('../utils/playerTrackUtils.ts', import.meta.url),
-    'utf8'
-  )
   const setupSideEffects = extractInternalFunctionBody(source, 'setupPlayerIntegrationSideEffects')
-  const requestBpmAnalysis = extractInternalFunctionBody(source, 'requestBpmAnalysisForTrack')
-  const applyBpmAnalysis = extractInternalFunctionBody(source, 'applyBpmAnalysisToTrack')
-  const clearBpmAnalysis = extractInternalFunctionBody(source, 'clearBpmAnalysisFromPlaybackState')
-
-  assert.match(trackUtilsSource, /export function hasAnalyzedBpm\(/)
-  assert.match(source, /function isAutoBpmAnalysisEnabled\(/)
-  assert.match(trackUtilsSource, /export function isAnalyzableAudioPath\(/)
-  assert.match(requestBpmAnalysis, /window\.api\?\.bpmAnalysis\?\.request/)
-  assert.match(requestBpmAnalysis, /!isAutoBpmAnalysisEnabled\(\)/)
-  assert.match(requestBpmAnalysis, /hasAnalyzedBpm\(track\)/)
-  assert.match(requestBpmAnalysis, /!isAnalyzableAudioPath\(track\.filePath\)/)
-  assert.match(requestBpmAnalysis, /referenceBpm: track\.bpm/)
-  assert.match(applyBpmAnalysis, /currentTrack\.value = updatedTrack/)
-  assert.match(applyBpmAnalysis, /patchTrackInQueues\(updatedTrack\)/)
-  assert.match(applyBpmAnalysis, /useMusicStore\(\)\.applyBpmAnalysis/)
-  assert.match(clearBpmAnalysis, /currentTrack\.value/)
-  assert.match(clearBpmAnalysis, /queue\.value = queue\.value\.map/)
-  assert.match(clearBpmAnalysis, /originalQueue\.value = originalQueue\.value\.map/)
-  assert.match(clearBpmAnalysis, /useMusicStore\(\)\.clearBpmAnalysis\(\)/)
-  assert.match(source, /clearBpmAnalysisFromPlaybackState: \(\) => void/)
+  assert.match(source, /createBpmAnalysisController\(\{/)
+  assert.match(source, /getMusicStore: useMusicStore/)
+  assert.match(source, /getAnalysisApi: \(\) => window\.api\?\.bpmAnalysis/)
+  assert.match(source, /clearBpmAnalysisFromPlaybackState,/)
   assert.match(setupSideEffects, /window\.api\?\.bpmAnalysis\?\.onCompleted/)
   assert.match(setupSideEffects, /requestBpmAnalysisForTrack\(track\)/)
+  assert.match(setupSideEffects, /applyBpmAnalysisToTrack\(/)
 })
 
 test('playback failure tries a same-song fallback variant from the queue', () => {

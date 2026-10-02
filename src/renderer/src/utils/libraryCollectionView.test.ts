@@ -39,21 +39,22 @@ function item(name: string, genresAndTimes: Array<[string | null, number]>): Lib
   }
 }
 
-test('combines genre filtering with all four collection sort modes', () => {
-  const items = [
-    item('Zulu', [['Rock', 300]]),
-    item('Alpha', [
+test('combines genre filters, natural order and stable ties without mutating the input', () => {
+  const items = Object.freeze([
+    item('Écho10', [['Rock', 300]]),
+    item('Écho2', [
       ['Jazz', 200],
       ['Rock', 100]
     ]),
-    item('Beta', [['Rock', 400]])
-  ]
+    item('echo2', [['Rock', 200]])
+  ])
+  items.forEach((entry) => Object.assign(entry, { id: 'duplicate' }))
 
   for (const [sort, expected] of [
-    ['name-asc', ['Alpha', 'Beta', 'Zulu']],
-    ['name-desc', ['Zulu', 'Beta', 'Alpha']],
-    ['added-newest', ['Beta', 'Zulu', 'Alpha']],
-    ['added-oldest', ['Alpha', 'Zulu', 'Beta']]
+    ['name-asc', ['Écho2', 'echo2', 'Écho10']],
+    ['name-desc', ['Écho10', 'Écho2', 'echo2']],
+    ['added-newest', ['Écho10', 'Écho2', 'echo2']],
+    ['added-oldest', ['Écho2', 'echo2', 'Écho10']]
   ] as const) {
     assert.deepEqual(
       applyLibraryCollectionView(items, { sort, genre: 'rock' }).map((entry) => entry.name),
@@ -73,6 +74,8 @@ test('uses the latest track addedAt as the artist or album add time', () => {
     ),
     450
   )
+  assert.equal(collectionAddedAt(item('', [[null, Infinity]])), 0)
+  assert.equal(collectionAddedAt({ name: '' }), 0)
 })
 
 test('builds deduplicated genre choices case-insensitively', () => {

@@ -223,3 +223,22 @@ export interface AppSettings {
   /** Preferred remote HTTP port; 0 = ephemeral. */
   remoteControlPort: number
 }
+
+export interface SettingsSnapshotMetadata {
+  settings: AppSettings
+  defaults: {
+    cachePath: string
+  }
+  paths: {
+    settingsFile: string
+    userDataPath: string
+    activeCachePath: string
+  }
+  appVersion: string
+  platform: string
+  windowTransparencySupported: boolean
+  restartRequired: boolean
+  restartReasons: string[]
+}
+
+export interface SettingsSnapshot extends AppSettings, SettingsSnapshotMetadata {}

@@ -1,6 +1,6 @@
 import { applyExplicitThemePreferences } from '@renderer/extensions/themeProfilePriority'
 import { sharedPlayerBarStylesheet } from '../../../shared/themePlayerBar.ts'
-import { computed, nextTick, ref, shallowRef, type ComputedRef, type Ref } from 'vue'
+import { computed, nextTick, ref, shallowRef } from 'vue'
 import {
   DEFAULT_THEME_TONE_SCHEDULE,
   THEME_MANAGED_DATA_ATTRIBUTES,
@@ -907,34 +907,7 @@ function activeThemeKey(selection: ThemeSelection | undefined): string {
   return selection.id
 }
 
-export function useThemeStore(): {
-  snapshot: Ref<ThemeLibrarySnapshot | null>
-  effectiveVariables: Ref<Record<string, string>>
-  profiles: ComputedRef<ThemeProfileV2[]>
-  activeTheme: ComputedRef<ThemeSelection>
-  presetLayout: ComputedRef<string>
-  activeProfile: ComputedRef<ThemeProfileV2 | null>
-  previewProfile: Ref<ThemeProfileV2 | null>
-  previewSelection: Ref<ThemeSelection | null>
-  loaded: Ref<boolean>
-  saving: Ref<boolean>
-  error: Ref<string>
-  performance: Ref<ThemePerformanceSnapshot>
-  load: () => Promise<void>
-  preview: (profile: ThemeProfileV2 | null) => Promise<void>
-  previewTheme: (selection: ThemeSelection | null) => Promise<void>
-  createProfile: (name?: string, source?: ThemeProfileV2 | null) => ThemeProfileV2
-  saveProfile: (profile: ThemeProfileV2) => Promise<ThemeLibrarySnapshot>
-  deleteProfile: (profileId: string) => Promise<ThemeLibrarySnapshot>
-  setActive: (selection: ThemeSelection) => Promise<ThemeLibrarySnapshot>
-  setWindowInheritance: (inheritance: ThemeWindowInheritance) => Promise<ThemeLibrarySnapshot>
-  importTheme: () => Promise<ThemeLibrarySnapshot | null>
-  exportTheme: (profileId: string) => Promise<string | null>
-  importAsset: (profileId: string, type: ThemeAssetType) => Promise<ThemeAssetReference | null>
-  copyAssets: (sourceProfileId: string, targetProfileId: string) => Promise<void>
-  setAdaptiveMedia: typeof setThemeAdaptiveMedia
-  setPreviewTone: typeof setThemePreviewTone
-} {
+export function useThemeStore() {
   const profiles = computed(() => snapshot.value?.data.profiles ?? [])
   const activeTheme = computed(
     () =>

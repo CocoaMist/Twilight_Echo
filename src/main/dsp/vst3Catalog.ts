@@ -1,5 +1,6 @@
+import { hashFile } from '../core/fileHash.ts'
 import { createHash } from 'crypto'
-import { createReadStream, existsSync } from 'fs'
+import { existsSync } from 'fs'
 import { lstat, mkdir, readFile, rename, readdir, stat, writeFile } from 'fs/promises'
 import { basename, extname, join, resolve } from 'path'
 import type {
@@ -356,16 +357,6 @@ async function hashDirectory(
     hash.update(`${info.size}:${info.mtimeMs}:${info.isDirectory() ? 'd' : 'f'}`)
     if (info.isDirectory()) await hashDirectory(root, path, hash, depth + 1)
   }
-}
-
-function hashFile(filePath: string): Promise<string> {
-  return new Promise((resolveHash, rejectHash) => {
-    const hash = createHash('sha256')
-    const stream = createReadStream(filePath)
-    stream.on('error', rejectHash)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('end', () => resolveHash(hash.digest('hex')))
-  })
 }
 
 function uniquePaths(paths: string[]): string[] {

@@ -156,14 +156,20 @@ test('serializes a revision conflict for IPC and restores its current envelope a
 test('serializes a domain while allowing the queue to continue after a failed write', async () => {
   const { directory, filePath } = createWorkspace()
   try {
-    const store = new VersionedDataStore<string>({
+    const store = new VersionedDataStore<string | unknown[]>({
       filePath,
       label: 'small state',
-      maxBytes: 120,
-      isData: (value): value is string => typeof value === 'string',
+      maxBytes: 4096,
+      isData: (value): value is string | unknown[] =>
+        typeof value === 'string' || Array.isArray(value),
       isLegacy: (value): value is string => typeof value === 'string'
     })
-    const failed = store.save('x'.repeat(200), 0)
+    await assert.rejects(store.save(42 as unknown as string, 0), /invalid structure/)
+    await assert.rejects(
+      store.save(JSON.parse('['.repeat(65) + '0' + ']'.repeat(65)), 0),
+      /too deeply nested/
+    )
+    const failed = store.save('x'.repeat(5000), 0)
     const committed = store.save('after-failure', 0)
     await assert.rejects(failed, /too large/)
     assert.deepEqual(await committed, {

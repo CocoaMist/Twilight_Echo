@@ -29,6 +29,10 @@ const VALID_SORTS = new Set<LibraryCollectionSort>([
   'added-newest',
   'added-oldest'
 ])
+const compareNames = new Intl.Collator(['zh-CN', 'en'], {
+  numeric: true,
+  sensitivity: 'base'
+}).compare
 
 export function applyLibraryCollectionView<T extends LibraryCollectionItem>(
   items: readonly T[],
@@ -36,21 +40,21 @@ export function applyLibraryCollectionView<T extends LibraryCollectionItem>(
   genreSeparators?: string
 ): T[] {
   const genre = normalizeGenre(state.genre)
-  return items
-    .map((item, index) => ({ item, index }))
-    .filter(
-      ({ item }) =>
-        !genre || itemGenres(item, genreSeparators).some((value) => normalizeGenre(value) === genre)
+  const result = items.filter(
+    (item) =>
+      !genre || itemGenres(item, genreSeparators).some((value) => normalizeGenre(value) === genre)
+  )
+  const addedAt = state.sort.startsWith('added-')
+    ? new Map(result.map((item) => [item, collectionAddedAt(item)]))
+    : null
+  // Native sort is stable; compute each collection's date once per view update.
+  return result.sort((left, right) => {
+    const byAddedAt = addedAt ? addedAt.get(left)! - addedAt.get(right)! : 0
+    return (
+      byAddedAt * (state.sort === 'added-oldest' ? 1 : -1) ||
+      compareNames(left.name, right.name) * (state.sort === 'name-desc' ? -1 : 1)
     )
-    .sort((left, right) => {
-      const comparison = compareCollectionItems(left.item, right.item, state.sort)
-      return (
-        comparison ||
-        left.index - right.index ||
-        collectionIdentity(left.item).localeCompare(collectionIdentity(right.item))
-      )
-    })
-    .map(({ item }) => item)
+  })
 }
 
 export function availableCollectionGenres(
@@ -156,18 +160,6 @@ export class LibraryCollectionViewPreferences {
   }
 }
 
-function compareCollectionItems(
-  left: LibraryCollectionItem,
-  right: LibraryCollectionItem,
-  sort: LibraryCollectionSort
-): number {
-  if (sort === 'name-asc') return compareNames(left.name, right.name)
-  if (sort === 'name-desc') return compareNames(right.name, left.name)
-  const byAddedAt = collectionAddedAt(left) - collectionAddedAt(right)
-  if (byAddedAt !== 0) return sort === 'added-oldest' ? byAddedAt : -byAddedAt
-  return compareNames(left.name, right.name)
-}
-
 function itemGenres(item: LibraryCollectionItem, genreSeparators?: string): string[] {
   const genres = new Map<string, string>()
   for (const track of item.tracks ?? []) {
@@ -194,12 +186,4 @@ function normalizeState(value: unknown): LibraryCollectionViewState {
     genre:
       typeof candidate.genre === 'string' && candidate.genre.trim() ? candidate.genre.trim() : null
   }
-}
-
-function compareNames(left: string, right: string): number {
-  return left.localeCompare(right, ['zh-CN', 'en'], { numeric: true, sensitivity: 'base' })
-}
-
-function collectionIdentity(item: LibraryCollectionItem): string {
-  return item.id ?? item.name
 }
