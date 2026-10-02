@@ -23,6 +23,7 @@ patchedDependencies:
   '@neteasecloudmusicapienhanced/api@4.35.1': 656fbb26c80cd8fce02181032bac95656a93ff1e6f1726e8d4cba566fb1cca5b
   '@phosphor-icons/web@2.1.2': d72ddd19ae5364cf585c9f7c63b19372deb741a3e80cdad3ab6bdc74cf0bbaeb
   extract-zip@2.0.1: 59db17789d14064f3a4432efcf74b7a57de863db5b515354ef04aa411e6d7c73
+  node-forge@1.4.0: 7aa50d29a105c5fb9d206aadd58501d637901b4d5878feafb4c1d04b4cf8c6cf
 
 importers:
 
@@ -3848,7 +3849,7 @@ snapshots:
       express-fileupload: 1.5.2
       gzip: 0.1.0
       music-metadata: 11.13.0
-      node-forge: 1.4.0
+      node-forge: 1.4.0(patch_hash=7aa50d29a105c5fb9d206aadd58501d637901b4d5878feafb4c1d04b4cf8c6cf)
       pac-proxy-agent: 7.2.0
       qrcode: 1.5.4
       safe-decode-uri-component: 1.2.1
@@ -5713,7 +5714,7 @@ snapshots:
     optionalDependencies:
       encoding: 0.1.13
 
-  node-forge@1.4.0: {}
+  node-forge@1.4.0(patch_hash=7aa50d29a105c5fb9d206aadd58501d637901b4d5878feafb4c1d04b4cf8c6cf): {}
 
   node-gyp@12.3.0:
     dependencies:
