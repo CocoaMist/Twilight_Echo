@@ -1,13 +1,7 @@
 /** Minimal DIDL-Lite metadata for SetAVTransportURI. */
 
-export function escapeXmlForDidl(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
+import { escapeXml as escapeXmlForDidl } from './soap.ts'
+export { escapeXmlForDidl }
 
 export function buildDidlLiteMetadata(options: {
   title: string

@@ -188,7 +188,10 @@ test('data IPC applies path and storage limits before touching local files', () 
     source,
     /return await saveVersionedData\(playlistsStore, playlists, expectedRevision\)/
   )
-  assert.match(versionedStoreSource, /writeJsonFileAtomic\(/)
+  assert.match(
+    versionedStoreSource,
+    /writeJsonValueAtomic\(this\.config\.filePath, value, this\.options\)/
+  )
   assert.match(source, /reportPersistentDataFailure\('Playback session'/)
   assert.match(source, /reportPersistentDataFailure\('Playlists'/)
   /* Legacy mojibake assertions retained below are intentionally disabled.

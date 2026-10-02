@@ -10,7 +10,9 @@ test(
   'VST3 bridge transfers 2048 parameters and returns processed audio',
   {
     skip: process.platform !== 'win32',
-    timeout: 60000
+    // Compilation is setup, and cold Windows CI runners can take over 45 seconds.
+    // The processed-audio executable retains its separate 10-second deadline.
+    timeout: 150000
   },
   () => {
     const env = resolveMingwEnvironment()
@@ -29,7 +31,7 @@ test(
           join(__dirname, 'Vst3BridgeProcessor.test.cpp'),
           join(__dirname, 'Vst3BridgeProcessor.cpp')
         ],
-        { env, encoding: 'utf8', windowsHide: true, timeout: 45000 }
+        { env, encoding: 'utf8', windowsHide: true, timeout: 120000 }
       )
       assert.equal(build.status, 0, build.error?.message || build.stderr || build.stdout)
       copyFileSync(executable, join(directory, 'twilight-vst3-host.exe'))

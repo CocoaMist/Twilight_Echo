@@ -359,7 +359,7 @@
 
 :where(button, [role='button'], [role='switch'], [data-te-interactive]) {
   -webkit-tap-highlight-color: transparent;
-  transition: translate var(--te-motion-hover) var(--te-ease-soft);
+  transition: opacity var(--te-motion-hover) var(--te-ease-soft);
 }
 
 :where(button, [role='button'], [role='switch'], [data-te-interactive]):focus-visible {
@@ -375,43 +375,14 @@
   opacity: 0.52;
 }
 
-/* Press feedback is a transition, not a keyframe: a transition retargets from
-   the current scale when the button is tapped again mid-flight, and it holds the
-   pressed state for as long as the pointer is down. Asymmetric on purpose —
-   `:active` presses in over --te-motion-press (90ms) and the release rides the
-   longer base duration (160ms) below.
-
-   Every part of this selector is wrapped in :where() so the whole thing weighs
-   zero, exactly like the base rule above. This is a `transition` shorthand, so
-   any specificity here would replace — not merge with — the transition list of
-   every button that declares its own. `:where()` zeroes out but `:not()` does
-   not: unwrapped, this selector scores (0,3,1) and silently deletes the
-   background/color/opacity fades of 16 component rules, including the shared
-   back-to-top control (a real <button>, see utils/scrollToTopButton.ts). */
-:where(html[data-te-motion='full'])
-  :where(button, [role='button'], [role='switch'], [data-te-interactive]):where(
-    :not(:disabled)
-  ):where(:not([aria-disabled='true'])):where(:not(.lyric-row)) {
-  transition:
-    translate var(--te-motion-hover) var(--te-ease-soft),
-    transform 160ms var(--te-ease-soft);
-}
-
-html[data-te-motion='full']
-  :where(button, [role='button'], [role='switch'], [data-te-interactive]):not(:disabled):not(
-    [aria-disabled='true']
-  ):where(:not(.lyric-row)):active {
-  transform: scale(var(--te-motion-press-scale));
-  transition-duration: var(--te-motion-hover), var(--te-motion-press);
-}
-
-@media (hover: hover) {
-  html[data-te-motion='full']
-    :where(button, [role='button'], [role='switch'], [data-te-interactive]):not(:disabled):not(
-      [aria-disabled='true']
-    ):where(:not(.lyric-row)):hover {
-    translate: none;
-  }
+/* Keep press feedback on the control. A global transform replaces positioning
+   transforms and makes nested controls shrink their containing panel. */
+:where(button, [role='button'], [role='switch'], [data-te-interactive]):where(
+    :not(:disabled, [aria-disabled='true'], .lyric-row)
+  ):active:not(
+    :has(:where(button, [role='button'], [role='switch'], [data-te-interactive]):active)
+  ) {
+  opacity: 0.8;
 }
 
 /* Duration tokens still drop so any rule that reads them directly gets the
@@ -3199,12 +3170,6 @@ html[data-te-liquid-glass-coverage='expanded']
   /* Contains the negative-z warp layer so it cannot slip behind an ancestor. */
   isolation: isolate;
   background: transparent !important;
-  /* Press squish: the element itself compresses toward the press point so the
-     content flexes with the material instead of sliding over it. The press
-     spring writes --te-lg-press-scale/origin every frame while a press is in
-     flight, so no transition is layered on top of it. */
-  transform-origin: var(--te-lg-press-x, 50%) var(--te-lg-press-y, 50%);
-  transform: scale(var(--te-lg-press-scale, 1));
   /* The rim is crisp and the depth is diffused, rather than one dark, hard card
      shadow. That is what keeps the surface reading as glass instead of plastic. */
   border-color: transparent !important;
@@ -3340,36 +3305,6 @@ html[data-te-liquid-glass-source='solid'][data-te-liquid-glass-coverage='expande
       color-mix(in srgb, var(--te-lg-context-label) 8%, transparent)
     ),
     var(--te-lg-context-material) !important;
-}
-
-html[data-te-liquid-glass-coverage='expanded']
-  :is(
-    .artist-card,
-    .album-card,
-    .playlist-card,
-    .glass-card,
-    .signal-card,
-    .chart-card,
-    .profile-card,
-    .recent-card,
-    .ranking-card
-  ) {
-  transition: transform 120ms ease-out;
-}
-
-html[data-te-liquid-glass-coverage='expanded']
-  :is(
-    .artist-card,
-    .album-card,
-    .playlist-card,
-    .glass-card,
-    .signal-card,
-    .chart-card,
-    .profile-card,
-    .recent-card,
-    .ranking-card
-  ):active {
-  transform: scale(0.985);
 }
 
 /* Dark tone: the sheen stays light (it is a specular highlight) but the tint

@@ -66,10 +66,6 @@ function createMountAdapterForProtocol(
     return `smb://${user}${profile.host}/${shareName(profile)}`
   }
 
-  function defaultLocalMap(mountKey: string): (remotePath: string) => string {
-    return (remotePath) => join(mountKey, remotePath.replace(/^\//, ''))
-  }
-
   async function findGvfsMount(profile: NetworkSourceProfile): Promise<string | null> {
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
     const runtimeDir = process.env.XDG_RUNTIME_DIR ?? (uid == null ? null : `/run/user/${uid}`)
@@ -128,25 +124,18 @@ function createMountAdapterForProtocol(
       }
 
       let mountPoint: string | null = null
-      const localMap = deps.localMap
-        ? (remotePath: string) => {
-            const key =
-              protocol === 'nfs'
-                ? (mountPoint ?? '')
-                : platform === 'win32'
-                  ? uncFor(profile)
-                  : (mountPoint ?? gioUri(profile))
-            return deps.localMap!(key, remotePath)
-          }
-        : (remotePath: string) => {
-            const key =
-              protocol === 'nfs'
-                ? (mountPoint ?? '')
-                : platform === 'win32'
-                  ? uncFor(profile)
-                  : (mountPoint ?? gioUri(profile))
-            return defaultLocalMap(key)(remotePath)
-          }
+      const hasLocalMap = !!deps.localMap
+      function localMap(remotePath: string): string {
+        const key =
+          protocol === 'nfs'
+            ? (mountPoint ?? '')
+            : platform === 'win32'
+              ? uncFor(profile)
+              : (mountPoint ?? gioUri(profile))
+        return hasLocalMap
+          ? deps.localMap!(key, remotePath)
+          : join(key, remotePath.replace(/^\//, ''))
+      }
 
       let mounted = false
 

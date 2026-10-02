@@ -1,5 +1,5 @@
 import { DEFAULT_DOWNLOAD_PREFERENCES } from '../../../shared/downloadPreferences.ts'
-import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   DEFAULT_MINI_PLAYER_SETTINGS,
   cloneMiniPlayerSettings
@@ -485,52 +485,7 @@ if (typeof document !== 'undefined') {
   }
 }
 
-export function useSettingsStore(): {
-  settings: Ref<AppSettings>
-  defaults: Ref<SettingsSnapshot['defaults']>
-  paths: Ref<SettingsSnapshot['paths'] | null>
-  appVersion: Ref<string>
-  platform: Ref<string>
-  windowTransparencySupported: Ref<boolean>
-  loaded: Ref<boolean>
-  loading: Ref<boolean>
-  saving: Ref<boolean>
-  lastSettingsError: Ref<string | null>
-  clearingCache: Ref<boolean>
-  cacheSize: Ref<number | null>
-  formattedCacheSize: ComputedRef<string>
-  clearingBpmAnalysisCache: Ref<boolean>
-  bpmAnalysisCacheSize: Ref<number | null>
-  formattedBpmAnalysisCacheSize: ComputedRef<string>
-  clearingLoudnessAnalysisCache: Ref<boolean>
-  loudnessAnalysisCacheSize: Ref<number | null>
-  formattedLoudnessAnalysisCacheSize: ComputedRef<string>
-  restartRequired: ComputedRef<boolean>
-  restartReasons: Ref<string[]>
-  loadSettings: () => Promise<AppSettings>
-  hydrateStartupSnapshot: (snapshot: AppStartupSnapshot) => AppSettings
-  updateSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>
-  chooseCacheFolder: () => Promise<void>
-  chooseDownloadFolder: () => Promise<void>
-  resetDownloadFolder: () => Promise<void>
-  chooseBackgroundImage: () => Promise<string | null>
-  importBackgroundImage: (file: File) => Promise<string | null>
-  exportSettingsBackup: () => Promise<string>
-  importSettingsBackup: (json: string) => Promise<AppSettings>
-  resetCacheFolder: () => Promise<void>
-  refreshCacheSize: () => Promise<void>
-  clearCache: () => Promise<void>
-  refreshBpmAnalysisCacheSize: () => Promise<void>
-  clearBpmAnalysisCache: () => Promise<void>
-  refreshLoudnessAnalysisCacheSize: () => Promise<void>
-  clearLoudnessAnalysisCache: () => Promise<void>
-  openCacheFolder: () => Promise<void>
-  relaunch: () => Promise<void>
-  addLibraryFolder: () => Promise<void>
-  removeLibraryFolder: (folder: string) => Promise<void>
-  openExternalUrl: (url: string) => Promise<void>
-  getShortcutStatuses: () => Promise<PlayerShortcutStatus[]>
-} {
+export function useSettingsStore() {
   const formattedCacheSize = computed(() => formatBytes(cacheSize.value))
   const formattedBpmAnalysisCacheSize = computed(() => formatBytes(bpmAnalysisCacheSize.value))
   const formattedLoudnessAnalysisCacheSize = computed(() =>

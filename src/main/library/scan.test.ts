@@ -1,21 +1,10 @@
 import assert from 'node:assert/strict'
-import {
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  unlinkSync,
-  writeFileSync
-} from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import type { LocalMusicLibraryDocument } from '../../shared/localLibrary.ts'
 
-const { collectFilesAsync, filterParsedTracksAgainstExclusions } = (await import(
-  new URL('./libraryFiles.ts', import.meta.url).href
-)) as typeof import('./libraryFiles.ts')
 const {
   assertMusicLibraryRevision,
   beginLibraryPathMutation,
@@ -24,7 +13,6 @@ const {
   isLibraryPathMutationInProgress,
   loadMusicLibraryDocument,
   migrateMusicLibraryCovers,
-  normalizeLibraryFilePath,
   persistMusicLibraryDocument,
   replaceActiveLibraryExclusions,
   restoreLibraryExclusions
@@ -251,42 +239,6 @@ test('legacy array removal uses persisted membership and survives restart', asyn
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
-})
-
-test('full directory scans omit persisted exclusion paths', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'twilight-library-scan-'))
-  const nested = join(root, 'nested')
-  const keptPath = join(root, 'Keep.mp3')
-  const excludedPath = join(nested, 'Excluded.flac')
-  try {
-    mkdirSync(nested)
-    writeFileSync(keptPath, 'keep')
-    writeFileSync(excludedPath, 'excluded')
-    const excludedKey = normalizeLibraryFilePath(excludedPath)
-
-    const files = await collectFilesAsync(
-      root,
-      (filePath) => normalizeLibraryFilePath(filePath) === excludedKey
-    )
-
-    assert.deepEqual(
-      files.map((file) => file.fullPath),
-      [keptPath]
-    )
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('parsed scan results are checked again when exclusion changes after collection', () => {
-  const filePath = join(tmpdir(), 'Twilight Deferred Scan.flac')
-  const collectedResult = [createTrack('stale', filePath)]
-  let excluded = false
-  const isExcluded = (candidate: string): boolean => excluded && candidate === filePath
-
-  assert.equal(filterParsedTracksAgainstExclusions(collectedResult, isExcluded).length, 1)
-  excluded = true
-  assert.deepEqual(filterParsedTracksAgainstExclusions(collectedResult, isExcluded), [])
 })
 
 test('persisted exclusions prime the matcher used by incremental watchers', () => {

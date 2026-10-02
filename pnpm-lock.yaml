@@ -5,6 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  axios: 1.20.0
+  basic-ftp: 6.2.1
   form-data: 4.0.6
   postcss: 8.5.26
   qs: 6.16.0
@@ -21,6 +23,7 @@ patchedDependencies:
   '@neteasecloudmusicapienhanced/api@4.35.1': 656fbb26c80cd8fce02181032bac95656a93ff1e6f1726e8d4cba566fb1cca5b
   '@phosphor-icons/web@2.1.2': d72ddd19ae5364cf585c9f7c63b19372deb741a3e80cdad3ab6bdc74cf0bbaeb
   extract-zip@2.0.1: 59db17789d14064f3a4432efcf74b7a57de863db5b515354ef04aa411e6d7c73
+  node-forge@1.4.0: 7aa50d29a105c5fb9d206aadd58501d637901b4d5878feafb4c1d04b4cf8c6cf
 
 importers:
 
@@ -45,8 +48,8 @@ importers:
         specifier: 0.4.0
         version: 0.4.0
       basic-ftp:
-        specifier: ^5.3.1
-        version: 5.3.1
+        specifier: 6.2.1
+        version: 6.2.1
       buffer-crc32:
         specifier: 0.2.13
         version: 0.2.13
@@ -1293,8 +1296,8 @@ packages:
     resolution: {integrity: sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ==}
     engines: {node: '>=8.0.0'}
 
-  axios@1.18.0:
-    resolution: {integrity: sha512-E32NzpYKp++W7XRe52rHiXV2ehxmh3wbdgO7MHeFM+vqxLBYHzt0ElkiImtOBxtOmyp0yoC8C6uESVV84Y2/hw==}
+  axios@1.20.0:
+    resolution: {integrity: sha512-r8aOh8j9cGKpgQAqpzrUHnSIc6a59Y3Xf/cv8sy1DrHCkZHzQGEuoq1tARk6qSyDdtQGSDgpb9kFlruzPvrgwg==}
 
   balanced-match@1.0.2:
     resolution: {integrity: sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==}
@@ -1311,8 +1314,8 @@ packages:
     engines: {node: '>=6.0.0'}
     hasBin: true
 
-  basic-ftp@5.3.1:
-    resolution: {integrity: sha512-bopVNp6ugyA150DDuZfPFdt1KZ5a94ZDiwX4hMgZDzF+GttD80lEy8kj98kbyhLXnPvhtIo93mdnLIjpCAeeOw==}
+  basic-ftp@6.2.1:
+    resolution: {integrity: sha512-bK67isD+lKq46AU8vNtjvMaT2ZqAOAmNCbxUHlFBRD4k15NWxyEjmaKtZPlgce58So4BNTjITGQOVTjL9y0ECA==}
     engines: {node: '>=10.0.0'}
 
   birpc@2.9.0:
@@ -3839,14 +3842,14 @@ snapshots:
   '@neteasecloudmusicapienhanced/api@4.35.1(patch_hash=656fbb26c80cd8fce02181032bac95656a93ff1e6f1726e8d4cba566fb1cca5b)':
     dependencies:
       '@neteasecloudmusicapienhanced/unblockmusic-utils': 0.3.3
-      axios: 1.18.0
+      axios: 1.20.0
       crypto-js: 4.2.0
       dotenv: 17.4.2
       express: 5.2.1
       express-fileupload: 1.5.2
       gzip: 0.1.0
       music-metadata: 11.13.0
-      node-forge: 1.4.0
+      node-forge: 1.4.0(patch_hash=7aa50d29a105c5fb9d206aadd58501d637901b4d5878feafb4c1d04b4cf8c6cf)
       pac-proxy-agent: 7.2.0
       qrcode: 1.5.4
       safe-decode-uri-component: 1.2.1
@@ -3860,7 +3863,7 @@ snapshots:
   '@neteasecloudmusicapienhanced/unblockmusic-utils@0.3.3':
     dependencies:
       '@unblockneteasemusic/server': 0.28.0
-      axios: 1.18.0
+      axios: 1.20.0
       dotenv: 17.4.2
       express: 4.22.2
       https: 1.0.0
@@ -4355,7 +4358,7 @@ snapshots:
 
   atomic-sleep@1.0.0: {}
 
-  axios@1.18.0:
+  axios@1.20.0:
     dependencies:
       follow-redirects: 1.16.0
       form-data: 4.0.6
@@ -4373,7 +4376,7 @@ snapshots:
 
   baseline-browser-mapping@2.10.24: {}
 
-  basic-ftp@5.3.1: {}
+  basic-ftp@6.2.1: {}
 
   birpc@2.9.0: {}
 
@@ -5301,7 +5304,7 @@ snapshots:
 
   get-uri@6.0.5:
     dependencies:
-      basic-ftp: 5.3.1
+      basic-ftp: 6.2.1
       data-uri-to-buffer: 6.0.2
       debug: 4.4.3
     transitivePeerDependencies:
@@ -5711,7 +5714,7 @@ snapshots:
     optionalDependencies:
       encoding: 0.1.13
 
-  node-forge@1.4.0: {}
+  node-forge@1.4.0(patch_hash=7aa50d29a105c5fb9d206aadd58501d637901b4d5878feafb4c1d04b4cf8c6cf): {}
 
   node-gyp@12.3.0:
     dependencies:

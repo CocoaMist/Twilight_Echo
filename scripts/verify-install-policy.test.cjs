@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict')
+const { createHash } = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -62,6 +63,8 @@ test('installed extract-zip rejects a symlink followed by a same-name file', asy
 const {
   assertLocalVirtualStore,
   assertSingleLockfile,
+  assertNodeForgePatch,
+  FORGE_PATCH_PATH,
   readModulesMetadata,
   verifyInstallPolicy
 } = require('./verify-install-policy.cjs')
@@ -70,13 +73,16 @@ function makeCandidate(options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'twilight-install-policy-'))
   fs.mkdirSync(path.join(root, 'patches'), { recursive: true })
   fs.mkdirSync(path.join(root, 'node_modules', '.pnpm'), { recursive: true })
+  const forgePatch = fs.readFileSync(path.resolve(__dirname, '..', FORGE_PATCH_PATH))
+  const forgeHash = createHash('sha256').update(forgePatch).digest('hex')
+  fs.writeFileSync(path.join(root, FORGE_PATCH_PATH), forgePatch)
   fs.writeFileSync(
     path.join(root, 'package.json'),
     JSON.stringify({ packageManager: 'pnpm@11.7.0', scripts: { postinstall: 'x' } })
   )
   fs.writeFileSync(
     path.join(root, 'pnpm-lock.yaml'),
-    "lockfileVersion: '9.0'\npackages:\n  '@neteasecloudmusicapienhanced/api@4.35.1(patch_hash=abc)': {}\n"
+    `lockfileVersion: '9.0'\npatchedDependencies:\n  node-forge@1.4.0: ${forgeHash}\npackages:\n  '@neteasecloudmusicapienhanced/api@4.35.1(patch_hash=abc)': {}\nsnapshots:\n  api:\n    dependencies:\n      node-forge: 1.4.0(patch_hash=${forgeHash})\n`
   )
   fs.writeFileSync(
     path.join(root, 'pnpm-workspace.yaml'),
@@ -86,7 +92,8 @@ function makeCandidate(options = {}) {
       '  form-data: 4.0.6',
       '  qs: 6.16.0',
       'patchedDependencies:',
-      "  '@neteasecloudmusicapienhanced/api@4.35.1': patches/@neteasecloudmusicapienhanced__api@4.35.1.patch"
+      "  '@neteasecloudmusicapienhanced/api@4.35.1': patches/@neteasecloudmusicapienhanced__api@4.35.1.patch",
+      '  node-forge@1.4.0: patches/node-forge@1.4.0.patch'
     ].join('\n')
   )
   fs.writeFileSync(
@@ -108,6 +115,31 @@ test('install policy accepts the single-lock pnpm candidate layout', () => {
     assert.equal(verifyInstallPolicy(root, { skipRuntime: true }), true)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('install policy rejects a missing or unbound node-forge security patch', () => {
+  for (const corrupt of ['declaration', 'file', 'hash']) {
+    const root = makeCandidate()
+    try {
+      if (corrupt === 'file') fs.rmSync(path.join(root, FORGE_PATCH_PATH))
+      else {
+        const target = path.join(
+          root,
+          corrupt === 'hash' ? 'pnpm-lock.yaml' : 'pnpm-workspace.yaml'
+        )
+        const text = fs.readFileSync(target, 'utf8')
+        fs.writeFileSync(
+          target,
+          corrupt === 'hash'
+            ? text.replace(/node-forge@1\.4\.0: [a-f0-9]+/, 'node-forge@1.4.0: invalid')
+            : text.replace(/\n  node-forge@1\.4\.0: patches\/node-forge@1\.4\.0\.patch/, '')
+        )
+      }
+      assert.throws(() => assertNodeForgePatch(root), /node-forge.*(?:patch|dependency)/)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   }
 })
 

@@ -1,4 +1,3 @@
-import type { AppSettings } from '../../shared/appSettings.ts'
 import type { PlaybackSessionData } from '../../shared/playbackSession.ts'
 
 export type * from '../../shared/appSettings.ts'
@@ -21,23 +20,6 @@ export type { PlayerShortcutAction } from '../../shared/playerShortcuts.ts'
 export type PlayerShortcutKeyAction = Extract<PlayerShortcutAction, string>
 
 export type PlaybackSession = PlaybackSessionData<unknown>
-
-export interface SettingsSnapshot extends AppSettings {
-  settings: AppSettings
-  defaults: {
-    cachePath: string
-  }
-  paths: {
-    settingsFile: string
-    userDataPath: string
-    activeCachePath: string
-  }
-  appVersion: string
-  platform: string
-  windowTransparencySupported: boolean
-  restartRequired: boolean
-  restartReasons: string[]
-}
 
 export interface PlayerShortcutStatus {
   accelerator: string

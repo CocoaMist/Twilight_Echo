@@ -16,11 +16,6 @@ import {
   resolvePointerOffset,
   staticPointerCssVariables
 } from '../utils/liquidGlassPointer.ts'
-import {
-  LIQUID_GLASS_PRESS_TARGET_SCALE,
-  LiquidGlassPressController,
-  liquidGlassPressCssVariables
-} from '../utils/liquidGlassPress.ts'
 import { useMediaProviders } from '../providers'
 import { normalizeAccentColor } from '../utils/colorExtractor'
 import SmoothedProgressFill from './SmoothedProgressFill.vue'
@@ -1335,79 +1330,10 @@ function onGlassPointerMove(event: PointerEvent): void {
 
 function setGlassPressOrigin(event: PointerEvent): void {
   const element = playerBarRef.value
-  if (!element || !liquidGlassActive.value) return
+  if (!element || !liquidGlassActive.value || event.button !== 0) return
   const rect = element.getBoundingClientRect()
   element.style.setProperty('--te-lg-press-x', `${event.clientX - rect.left}px`)
   element.style.setProperty('--te-lg-press-y', `${event.clientY - rect.top}px`)
-  if (event.button !== 0) return
-  stopGlassPress()
-  glassPress.press()
-  window.addEventListener('pointerup', onGlassPressReleaseEvent, { passive: true })
-  window.addEventListener('pointercancel', onGlassPressReleaseEvent, { passive: true })
-  if (!motionAllowsPointer()) {
-    writeGlassPressVariables(LIQUID_GLASS_PRESS_TARGET_SCALE)
-    return
-  }
-  glassPressLastTime = 0
-  glassPressFrame = requestAnimationFrame(tickGlassPress)
-}
-
-/* Press "squish": the bar compresses toward the press point on the shared press
-   spring and relaxes on release. One rAF loop runs while a press is in flight;
-   the release listeners are window-level so a press that ends off-bar still
-   settles. */
-
-const glassPress = new LiquidGlassPressController()
-let glassPressFrame: number | null = null
-let glassPressLastTime = 0
-
-function writeGlassPressVariables(scale: number): void {
-  const element = playerBarRef.value
-  if (!element) return
-  for (const [name, value] of Object.entries(liquidGlassPressCssVariables(scale))) {
-    if (element.style.getPropertyValue(name) !== value) element.style.setProperty(name, value)
-  }
-}
-
-function tickGlassPress(now: number): void {
-  glassPressFrame = null
-  const step = glassPressLastTime > 0 ? Math.min(0.05, (now - glassPressLastTime) / 1000) : 1 / 60
-  glassPressLastTime = now
-  const state = glassPress.update(step)
-  writeGlassPressVariables(state.scale)
-  if (state.settled && !glassPress.isPressed()) {
-    stopGlassPress()
-    return
-  }
-  if (!state.settled) glassPressFrame = requestAnimationFrame(tickGlassPress)
-}
-
-function stopGlassPress(): void {
-  if (glassPressFrame !== null) {
-    cancelAnimationFrame(glassPressFrame)
-    glassPressFrame = null
-  }
-  glassPressLastTime = 0
-  const element = playerBarRef.value
-  if (element) {
-    element.style.removeProperty('--te-lg-press-scale')
-    element.style.removeProperty('--te-lg-press-glow')
-  }
-}
-
-function onGlassPressReleaseEvent(): void {
-  window.removeEventListener('pointerup', onGlassPressReleaseEvent)
-  window.removeEventListener('pointercancel', onGlassPressReleaseEvent)
-  if (!glassPress.isPressed()) return
-  glassPress.release()
-  if (!motionAllowsPointer()) {
-    stopGlassPress()
-    return
-  }
-  if (glassPressFrame === null) {
-    glassPressLastTime = 0
-    glassPressFrame = requestAnimationFrame(tickGlassPress)
-  }
 }
 
 function onGlassPointerLeave(): void {
@@ -1528,10 +1454,6 @@ onBeforeUnmount(() => {
   geometryAnimTimer = null
   glassPointerEnabled = false
   resetGlassPointer()
-  window.removeEventListener('pointerup', onGlassPressReleaseEvent)
-  window.removeEventListener('pointercancel', onGlassPressReleaseEvent)
-  glassPress.reset()
-  stopGlassPress()
 })
 </script>
 

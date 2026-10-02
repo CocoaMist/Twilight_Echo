@@ -126,12 +126,17 @@ test('config-applied crosses the manager, IPC, and preload boundary', () => {
   assert.match(preloadSource, /audioEngineConfigAppliedCallbacks/)
   assert.match(preloadSource, /onConfigApplied:/)
 
-  for (const declaration of [preloadTypes, preloadDeclaration]) {
-    assert.match(declaration, /AudioEngineConfigAppliedEvent/)
-    assert.match(declaration, /requestedConfigRevision: number/)
-    assert.match(declaration, /appliedConfigRevision: number/)
-  }
-  assert.match(preloadDeclaration, /onConfigApplied:/)
+  assert.match(preloadTypes, /export interface AudioEngineConfigAppliedEvent/)
+  assert.match(preloadTypes, /requestedConfigRevision: number/)
+  assert.match(preloadTypes, /appliedConfigRevision: number/)
+  assert.match(
+    preloadDeclaration,
+    /import type\s*\{[^}]*\bAudioEngineConfigAppliedEvent\b[^}]*\}\s*from '\.\/types\.ts'/
+  )
+  assert.match(
+    preloadDeclaration,
+    /onConfigApplied: \(cb: \(event: AudioEngineConfigAppliedEvent\) => void\) => \(\) => void/
+  )
 })
 
 test('offline analysis is routed away from the playback audio service', () => {

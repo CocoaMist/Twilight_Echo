@@ -1,3 +1,6 @@
+import { createAbLoopController } from './player/abLoopController.ts'
+import { createCastController } from './player/castController.ts'
+import { createBpmAnalysisController } from './player/bpmAnalysisController.ts'
 import { createAudioOutputState } from '@renderer/stores/player/audioOutputState.ts'
 import { createPlaybackSelectionController } from '@renderer/stores/player/playbackSelectionController.ts'
 import { createQueueWorkspaceStore } from '@renderer/stores/player/queueWorkspaceStore.ts'
@@ -11,20 +14,14 @@ import {
   computed,
   watch as vueWatch,
   effectScope,
-  type Ref,
-  type ComputedRef,
   type WatchStopHandle
 } from 'vue'
 import { shouldApplyNativeTimePosition } from './playerProgressPolicy.ts'
-import type { PlaybackSession, Track } from '../types/music'
+import type { Track } from '../types/music'
 import type {
-  AudioDeviceOption,
-  AudioOutputId,
-  AudioOutputOption,
   AudioProcessingSettings,
   OutputConfig,
   OutputConfigApplyStatus,
-  PlaybackResumeMode,
   PlayMode
 } from '../types/settings'
 import {
@@ -49,12 +46,9 @@ import {
   START_FILE_PLAYBACK_INFO_REFRESH_DELAY_MS
 } from '../utils/playerConstants.ts'
 import { formatTime, getNowMs } from '../utils/playerTime.ts'
-import type { PlaybackClockSnapshot } from '../utils/playbackSessionClock.ts'
 import {
   getTrackAudioSource,
   getTrackSource,
-  hasAnalyzedBpm,
-  isAnalyzableAudioPath,
   isLikelyLocalFilePath,
   isStreamLikeTrack,
   mergeTrackTransientData,
@@ -104,7 +98,7 @@ import {
 import { syncPluginProviders, useMediaProviders } from '../providers'
 import { useSettingsStore } from './useSettingsStore'
 import { useMusicStore } from './useMusicStore'
-import { type SleepTimerMode, type SleepTimerState } from '../../../shared/sleepTimer.ts'
+import { type SleepTimerState } from '../../../shared/sleepTimer.ts'
 import { DEFAULT_SOFTWARE_VOLUME } from '../../../shared/audioProcessingOptions.ts'
 import { presentError, presentErrorDetail } from '../../../shared/errors/presentError.ts'
 import { parseAppError } from '../../../shared/errors/appError.ts'
@@ -208,6 +202,21 @@ const playbackRate = ref(1)
 /** A-B loop points in seconds relative to the logical track start. Null = unset. */
 const abLoopA = ref<number | null>(null)
 const abLoopB = ref<number | null>(null)
+const {
+  clearAbLoop,
+  isCurrentTrackLiveStream,
+  setAbLoopPoint,
+  toggleAbLoopAtCurrentTime,
+  enforceAbLoop,
+  getAbLoopNativeActive
+} = createAbLoopController({
+  currentTrack,
+  abLoopA,
+  abLoopB,
+  getLatestPlaybackTime: () => getLatestPlaybackTime(),
+  seekPlayback,
+  getNativeLoopRange: () => window.api?.audioEngine?.setLoopRange
+})
 const lastAudibleVolume = ref(DEFAULT_SOFTWARE_VOLUME)
 let suppressVolumePersist = false
 /** Active cast target display name (null when not casting). */
@@ -464,7 +473,17 @@ let playbackToggleIntent: { playing: boolean; expiresAt: number } | null = null
 let nativePlaybackInfoIntent: NativePlaybackInfoIntent | null = null
 let startFilePlaybackInfoRefreshGeneration = 0
 let rendererResumePlaybackInfoRefresh: Promise<void> | null = null
-const bpmAnalysisRequests = new Set<string>()
+
+const { applyBpmAnalysisToTrack, clearBpmAnalysisFromPlaybackState, requestBpmAnalysisForTrack } =
+  createBpmAnalysisController({
+    currentTrack,
+    queue,
+    originalQueue,
+    isEnabled: () => useSettingsStore().settings.value.autoAnalyzeBpm !== false,
+    patchTrackInQueues,
+    getMusicStore: useMusicStore,
+    getAnalysisApi: () => window.api?.bpmAnalysis
+  })
 
 function isActiveLoad(loadToken: number, track: Track): boolean {
   return loadToken === activeLoadToken && currentTrack.value?.id === track.id
@@ -840,7 +859,7 @@ const playbackClockController = createPlaybackClockController({
   playMode,
   getNow: getNowMs,
   getPlaybackToggleIntent: () => playbackToggleIntent,
-  getAbLoopNativeActive: () => abLoopNativeActive,
+  getAbLoopNativeActive,
   enforceAbLoop,
   isCurrentTrackLiveStream,
   applyNativePlaybackInfo
@@ -2153,83 +2172,6 @@ function handleNativePlaybackEnded(): void {
   void handlePlaybackEnded()
 }
 
-function isAutoBpmAnalysisEnabled(): boolean {
-  return useSettingsStore().settings.value.autoAnalyzeBpm !== false
-}
-
-function applyBpmAnalysisToTrack(
-  trackId: string,
-  filePath: string,
-  analysis: Track['bpmAnalysis']
-): void {
-  if (!analysis) return
-  const target = currentTrack.value
-  if (target && (target.id === trackId || target.filePath === filePath)) {
-    const updatedTrack = {
-      ...target,
-      bpmAnalysis: analysis
-    }
-    currentTrack.value = updatedTrack
-    patchTrackInQueues(updatedTrack)
-  } else {
-    queue.value = queue.value.map((track) =>
-      track.id === trackId || track.filePath === filePath
-        ? { ...track, bpmAnalysis: analysis }
-        : track
-    )
-    originalQueue.value = originalQueue.value.map((track) =>
-      track.id === trackId || track.filePath === filePath
-        ? { ...track, bpmAnalysis: analysis }
-        : track
-    )
-  }
-  useMusicStore().applyBpmAnalysis(trackId, filePath, analysis)
-}
-
-function clearBpmAnalysisFromPlaybackState(): void {
-  if (currentTrack.value?.bpmAnalysis) {
-    const { bpmAnalysis: _bpmAnalysis, ...nextTrack } = currentTrack.value
-    currentTrack.value = nextTrack
-  }
-  queue.value = queue.value.map((track) => {
-    if (!track.bpmAnalysis) return track
-    const { bpmAnalysis: _bpmAnalysis, ...nextTrack } = track
-    return nextTrack
-  })
-  originalQueue.value = originalQueue.value.map((track) => {
-    if (!track.bpmAnalysis) return track
-    const { bpmAnalysis: _bpmAnalysis, ...nextTrack } = track
-    return nextTrack
-  })
-  useMusicStore().clearBpmAnalysis()
-}
-
-async function requestBpmAnalysisForTrack(track: Track): Promise<void> {
-  if (
-    !isAutoBpmAnalysisEnabled() ||
-    hasAnalyzedBpm(track) ||
-    !isAnalyzableAudioPath(track.filePath)
-  )
-    return
-  const key = `${track.id}\u0000${track.filePath}`
-  if (bpmAnalysisRequests.has(key)) return
-  bpmAnalysisRequests.add(key)
-  try {
-    const result = await window.api?.bpmAnalysis?.request({
-      trackId: track.id,
-      filePath: track.filePath,
-      referenceBpm: track.bpm
-    })
-    if (result?.status === 'cached' || result?.status === 'completed') {
-      applyBpmAnalysisToTrack(track.id, track.filePath, result.analysis)
-    }
-  } catch {
-    // BPM analysis is best-effort; playback and live visualization continue.
-  } finally {
-    bpmAnalysisRequests.delete(key)
-  }
-}
-
 /** True when a previously resolved local playback file still exists. */
 async function isUsableLocalPlaybackFile(filePath: string): Promise<boolean> {
   try {
@@ -3350,100 +3292,6 @@ function seekPlayback(time: number): void {
   }
 }
 
-function clearAbLoop(): void {
-  abLoopA.value = null
-  abLoopB.value = null
-  abLoopNativeActive = false
-  // Prefer native clear; soft path is a no-op when range is null.
-  void window.api?.audioEngine?.setLoopRange?.(-1, -1).catch(() => {})
-}
-
-/** Push current A-B range to native engine when both points are set; otherwise clear. */
-function syncNativeAbLoop(): void {
-  const a = abLoopA.value
-  const b = abLoopB.value
-  const api = window.api?.audioEngine?.setLoopRange
-  if (!api) return
-  if (a == null || b == null || b <= a || isCurrentTrackLiveStream()) {
-    abLoopNativeActive = false
-    void api(-1, -1).catch(() => {})
-    return
-  }
-  void api(a, b)
-    .then((ok) => {
-      // When native accepts, soft enforce becomes a safety net only.
-      if (ok) abLoopNativeActive = true
-      else abLoopNativeActive = false
-    })
-    .catch(() => {
-      abLoopNativeActive = false
-    })
-}
-
-function isCurrentTrackLiveStream(): boolean {
-  const track = currentTrack.value
-  if (!track) return false
-  if (track.source === 'radio') return true
-  return (
-    typeof track.duration === 'number' &&
-    track.duration <= 0 &&
-    Boolean(track.streamUrl || /^https?:\/\//i.test(track.filePath || ''))
-  )
-}
-
-function setAbLoopPoint(point: 'a' | 'b', time = getLatestPlaybackTime()): void {
-  if (isCurrentTrackLiveStream()) return
-  const position = Math.max(0, Number.isFinite(time) ? time : 0)
-  if (point === 'a') {
-    abLoopA.value = position
-    if (abLoopB.value != null && abLoopB.value <= position) abLoopB.value = null
-    syncNativeAbLoop()
-    return
-  }
-  if (abLoopA.value == null) abLoopA.value = 0
-  if (position <= (abLoopA.value ?? 0)) return
-  abLoopB.value = position
-  syncNativeAbLoop()
-}
-
-function toggleAbLoopAtCurrentTime(): void {
-  if (isCurrentTrackLiveStream()) {
-    clearAbLoop()
-    return
-  }
-  if (abLoopA.value == null) {
-    setAbLoopPoint('a')
-    return
-  }
-  if (abLoopB.value == null) {
-    setAbLoopPoint('b')
-    return
-  }
-  clearAbLoop()
-}
-
-/** True when native SetLoopRange last accepted an active range (soft seek is backup). */
-let abLoopNativeActive = false
-let abLoopEnforcing = false
-function enforceAbLoop(time: number): void {
-  if (abLoopEnforcing) return
-  if (isCurrentTrackLiveStream()) return
-  // When native SetLoopRange is active, clock-thread seek owns enforcement.
-  if (abLoopNativeActive) return
-  const a = abLoopA.value
-  const b = abLoopB.value
-  if (a == null || b == null || b <= a) return
-  // Soft A-B fallback when native binding is missing or rejected the range.
-  if (time + 0.02 >= b) {
-    abLoopEnforcing = true
-    try {
-      seekPlayback(a)
-    } finally {
-      abLoopEnforcing = false
-    }
-  }
-}
-
 let playerIntegrationSideEffectsSetup = false
 const playerSystemIntegrations = createPlayerSystemIntegrations({
   currentTrack,
@@ -3620,224 +3468,20 @@ const progress = computed(() => {
   return (currentTime.value / duration.value) * 100
 })
 
-async function castCurrentTrackToDevice(usn: string): Promise<void> {
-  const track = currentTrack.value
-  if (!track) throw new Error('当前没有可投送的曲目')
-  const remoteApi = window.api?.remote
-  if (!remoteApi?.castToDevice) throw new Error('远程控制 API 不可用')
-
-  // Prefer a resolved local library / managed-cache path when available;
-  // otherwise resolve the live stream URL (podcast / radio / provider) and
-  // cast via the remote media token proxy. Provider streams may be
-  // twilight-media:// grants — main resolves those to the real upstream.
-  let filePath: string | undefined
-  let mediaUrl: string | undefined
-  const classifyCastTarget = (target: string): void => {
-    if (!target) return
-    if (target.startsWith('twilight-media:')) {
-      mediaUrl = target
-      return
-    }
-    if (/^https?:\/\//i.test(target)) {
-      mediaUrl = target
-      return
-    }
-    // Local path (no scheme or file-like absolute path).
-    if (!/^[a-z][a-z\d+.-]*:\/\//i.test(target)) {
-      filePath = target
-    }
-  }
-  try {
-    classifyCastTarget(await resolvePlayTarget(track))
-  } catch {
-    // Fall through to direct fields when resolvePlayTarget fails.
-  }
-  if (!filePath && !mediaUrl) {
-    classifyCastTarget(track.streamUrl || track.filePath || '')
-  }
-  if (!filePath && !mediaUrl) {
-    throw new Error('当前曲目不支持投送（缺少本地路径或流地址）')
-  }
-
-  const result = await remoteApi.castToDevice({
-    usn,
-    ...(filePath ? { filePath } : { mediaUrl }),
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    // Live radio: do not seek after load.
-    positionSeconds: isCurrentTrackLiveStream() ? 0 : currentTime.value
+const { castCurrentTrackToDevice, stopCastSession, discoverCastDevices, refreshCastTarget } =
+  createCastController({
+    currentTrack,
+    currentTime,
+    castTargetName,
+    castTargetUsn,
+    getRemoteApi: () => window.api?.remote,
+    resolvePlayTarget,
+    isCurrentTrackLiveStream,
+    recordPlaybackStart: (track) =>
+      playbackHistoryController.recordPlaybackStart(track, playMode.value)
   })
-  castTargetUsn.value = result.usn
-  castTargetName.value = result.friendlyName
-  playbackHistoryController.recordPlaybackStart(track, playMode.value)
-  // Main process already dispatches a 'pause' shortcut for local engine.
-}
 
-async function stopCastSession(): Promise<void> {
-  const remoteApi = window.api?.remote
-  if (remoteApi?.stopCast) await remoteApi.stopCast()
-  castTargetUsn.value = null
-  castTargetName.value = null
-}
-
-async function discoverCastDevices(): Promise<
-  import('../../../shared/remoteControl.ts').DlnaDeviceInfo[]
-> {
-  const remoteApi = window.api?.remote
-  if (!remoteApi?.discoverDlna) return []
-  return await remoteApi.discoverDlna()
-}
-
-async function refreshCastTarget(): Promise<void> {
-  const remoteApi = window.api?.remote
-  if (!remoteApi?.getCastTarget) {
-    castTargetUsn.value = null
-    castTargetName.value = null
-    return
-  }
-  const target = await remoteApi.getCastTarget()
-  castTargetUsn.value = target?.usn ?? null
-  castTargetName.value = target?.friendlyName ?? null
-}
-
-export function usePlayerStore(): {
-  rehydrateCurrentTrackFromLibrary: () => void
-  currentTrack: Ref<Track | null>
-  dominantColor: Ref<string>
-  coverThemeColor: Ref<string>
-  themeCoverUrl: Ref<string>
-  themeCoverIdentity: Ref<string>
-  isPlaying: Ref<boolean>
-  isLoading: Ref<boolean>
-  lyricsLoadState: Ref<LyricsLoadState>
-  isStreamBuffering: Ref<boolean>
-  streamNowPlaying: Ref<string>
-  currentTime: Ref<number>
-  playbackClockSnapshot: Ref<PlaybackClockSnapshot>
-  estimatePlaybackClockPosition: (at?: number) => number
-  duration: Ref<number>
-  volume: Ref<number>
-  muted: Ref<boolean>
-  playbackRate: Ref<number>
-  abLoopA: Ref<number | null>
-  abLoopB: Ref<number | null>
-  sleepTimerState: Ref<SleepTimerState | null>
-  sleepTimerNotice: Ref<string | null>
-  progress: ComputedRef<number>
-  queue: Ref<Track[]>
-  queueIndex: Ref<number>
-  canUndoQueue: ComputedRef<boolean>
-  queueUndoLabel: ComputedRef<string>
-  undoQueue: (revision?: number) => boolean
-  queueWorkspace: ReturnType<typeof createQueueWorkspaceStore>
-  queueSessions: ReturnType<typeof createQueueSessionController>
-  playMode: Ref<PlayMode>
-  heartModeAvailable: ComputedRef<boolean>
-  setHeartModeContext: (playlistId: number | null) => void
-  personalizedStreamSession: Ref<PersonalizedStreamSession | null>
-  personalizedStreamRemaining: Ref<number>
-  audioEngineReady: Ref<boolean>
-  audioEngineError: Ref<string | null>
-  audioEngineRecoveryNotice: Ref<AudioEngineRecoveryNotice | null>
-  exclusiveMode: Ref<boolean>
-  visualizerActive: Ref<boolean>
-  audioOutput: Ref<AudioOutputId>
-  audioDevice: Ref<string>
-  audioOutputOptions: Ref<AudioOutputOption[]>
-  audioDeviceOptions: Ref<AudioDeviceOption[]>
-  audioOutputDeviceOptions: ComputedRef<AudioDeviceOption[]>
-  audioProcessing: Ref<AudioProcessingSettings>
-  audioOutputConfig: Ref<OutputConfig>
-  audioOutputConfigApplyStatus: Ref<OutputConfigApplyStatus>
-  dspOutputStage: Ref<DspOutputStageConfig>
-  dspStereoImage: Ref<DspStereoImageConfig>
-  playbackInfo: Ref<NativePlaybackInfo | null>
-  loudnormStatus: Ref<'idle' | 'measuring' | 'cached' | 'fallback' | 'unavailable'>
-  loudnormStatusSource: Ref<string | null>
-  outputInfo: ComputedRef<NativeOutputInfo | null>
-  visualizationData: Ref<NativeVisualizationData>
-  acquireVisualizationConsumer: () => () => void
-  cyclePlayMode: () => void
-  setPlayMode: (mode: PlayMode) => void
-  enqueueTrack: (track: Track) => void
-  appendQueueTracks: (tracks: readonly Track[]) => void
-  startPersonalizedStream: (key: PersonalizedStreamKey) => PersonalizedStreamSession
-  appendPersonalizedStreamTracks: (
-    session: PersonalizedStreamSession,
-    tracks: readonly Track[]
-  ) => boolean
-  endPersonalizedStream: () => void
-  playNextTrack: (track: Track) => void
-  removeQueueItem: (index: number) => void
-  clearQueue: () => void
-  reorderQueue: (fromIndex: number, toIndex: number) => void
-  saveQueueAsPlaylist: (
-    name: string,
-    createPlaylistWithTracks: (name: string, tracks: Track[]) => string
-  ) => string
-  playTrack: (
-    track: Track,
-    trackList?: Track[],
-    options?: { heartModePlaylistId?: number | null }
-  ) => void
-  playTrackFromPosition: (
-    track: Track,
-    positionSeconds: number,
-    trackList?: Track[],
-    options?: { heartModePlaylistId?: number | null }
-  ) => void
-  togglePlay: () => Promise<void>
-  next: () => void
-  prev: () => void
-  seek: (time: number) => void
-  setAbLoopPoint: (point: 'a' | 'b', time?: number) => void
-  toggleAbLoopAtCurrentTime: () => void
-  clearAbLoop: () => void
-  resumeOffer: Ref<{ trackId: string; positionSeconds: number; label: string } | null>
-  acceptResumeOffer: () => void
-  dismissResumeOffer: () => void
-  addManualBookmarkAtCurrentTime: () => void
-  setVolume: (vol: number) => void
-  flushSoftwareVolumePersist: () => Promise<void>
-  setPlaybackRate: (rate: number) => Promise<void>
-  toggleMute: () => void
-  configureSleepTimer: (mode: SleepTimerMode, minutes?: number) => void
-  cancelSleepTimer: () => void
-  setUnityVolume: () => void
-  toggleExclusiveMode: () => Promise<void>
-  setAudioOutput: (output: AudioOutputId, device?: string) => Promise<void>
-  setAudioDevice: (device: string) => Promise<void>
-  setAudioOutputConfig: (config: Partial<OutputConfig>) => Promise<void>
-  refreshAudioOutputState: () => Promise<void>
-  dismissAudioEngineRecoveryNotice: () => void
-  setAudioProcessing: (settings: Partial<AudioProcessingSettings>) => Promise<void>
-  applyAudioProcessingState: (processing: AudioProcessingSettings) => void
-  setOutputStage: (partial: Partial<DspOutputStageConfig>) => Promise<void>
-  setStereoImage: (partial: Partial<DspStereoImageConfig>) => Promise<void>
-  toggleDspEnabled: () => Promise<void>
-  toggleEqEnabled: () => Promise<void>
-  toggleCrossfeed: () => Promise<void>
-  toggleGapless: () => Promise<void>
-  setReplayGainMode: (mode: AudioProcessingSettings['volumeNormalization']) => Promise<void>
-  setCrossfeedStrength: (strength: number) => Promise<void>
-  selectImpulseResponse: () => Promise<void>
-  clearImpulseResponse: () => Promise<void>
-  restorePlaybackSession: (session: PlaybackSession) => void
-  createPlaybackSession: (
-    mode: PlaybackResumeMode,
-    includeQueue?: boolean
-  ) => PlaybackSession | null
-  removeUnavailableTracks: (trackIds: string[], filePaths: string[]) => void
-  clearBpmAnalysisFromPlaybackState: () => void
-  refreshCurrentLyrics: () => Promise<void>
-  castTargetName: Ref<string | null>
-  castToDevice: (usn: string) => Promise<void>
-  stopCast: () => Promise<void>
-  discoverCastDevices: () => Promise<import('../../../shared/remoteControl.ts').DlnaDeviceInfo[]>
-  refreshCastTarget: () => Promise<void>
-  formatTime: (seconds: number) => string
-} {
+export function usePlayerStore() {
   setupPlayerIntegrationSideEffects()
 
   const { playTrack, playTrackFromPosition } = createPlaybackSelectionController({

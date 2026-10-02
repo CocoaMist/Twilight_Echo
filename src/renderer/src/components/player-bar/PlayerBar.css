@@ -1278,9 +1278,6 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .ctrl-btn:hover {
   background: #f0f0f0;
 }
-/* Press scale comes from the global :active rule in base.css; a local
-   transform: scale() would multiply with it (scale and transform are separate
-   properties) and overshoot the 0.95–0.98 press range. */
 .ctrl-btn:active {
   transition-duration: 0.1s;
 }
@@ -2043,14 +2040,6 @@ html[data-te-liquid-glass-source='solid'] .player-bar-liquid .player-bar-warp {
 .player-bar-liquid > *:not(.player-bar-warp) {
   position: relative;
   z-index: 1;
-}
-
-/* Press squish: the container compresses toward the press point while the
-   pointer is down; the press spring writes --te-lg-press-scale each frame, so
-   no transform transition is layered on top of it. */
-.player-bar-liquid {
-  transform-origin: var(--te-lg-press-x, 50%) var(--te-lg-press-y, 50%);
-  transform: scale(var(--te-lg-press-scale, 1));
 }
 
 .player-bar-liquid:active {
