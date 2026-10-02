@@ -116,7 +116,7 @@ function describe(profile: AudioDeviceProfile): string {
 <template>
   <details id="device-profiles" class="device-profiles" :open="!compact">
     <summary>
-      设备档案
+      <i class="pi pi-sliders-h" aria-hidden="true"></i> 设备档案
       <span v-if="snapshot?.activeProfileId"
         >·
         {{
@@ -140,7 +140,7 @@ function describe(profile: AudioDeviceProfile): string {
       <button ref="createButton" type="button" :disabled="busy || !!draft" @click="edit()">
         从当前配置创建
       </button>
-      <p v-if="!snapshot.profiles.length && !draft" class="intro">
+      <p v-if="!snapshot.profiles.length && !draft" class="intro profile-empty">
         还没有设备档案。连接设备后保存当前配置，即可快速切换。
       </p>
       <AudioDeviceProfileEditor
@@ -195,14 +195,34 @@ function describe(profile: AudioDeviceProfile): string {
 
 <style scoped>
 .device-profiles {
-  border: 1px solid var(--border-color, #8884);
-  border-radius: 12px;
-  padding: 16px;
-  color: var(--text-primary);
+  border: 1px solid var(--te-card-border);
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 16px;
+  background: var(--te-card-bg);
+  color: var(--te-settings-text);
 }
 summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
   cursor: pointer;
   font-weight: 600;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+summary > i {
+  color: var(--te-primary-500);
+}
+summary::after {
+  content: '›';
+  margin-left: auto;
+  color: var(--te-settings-text-muted);
+}
+.device-profiles[open] > summary::after {
+  transform: rotate(90deg);
 }
 summary span {
   font-size: 12px;
@@ -212,8 +232,18 @@ summary span {
 li p {
   font-size: 12px;
   line-height: 1.7;
-  opacity: 0.75;
+  color: var(--te-settings-text-muted);
+  margin: 10px 0 14px;
   overflow-wrap: anywhere;
+}
+.profile-empty {
+  padding: 14px 16px;
+  margin-bottom: 0;
+  border-radius: 12px;
+  background: var(--te-settings-search-bg);
+}
+.profiles-list:empty {
+  display: none;
 }
 .profiles-list {
   list-style: none;
@@ -224,7 +254,7 @@ li p {
 }
 li {
   padding: 12px 0;
-  border-top: 1px solid var(--border-color, #8883);
+  border-top: 1px solid var(--te-card-border);
 }
 .profile-name,
 .actions {
@@ -234,7 +264,7 @@ li {
   flex-wrap: wrap;
 }
 .profile-name span {
-  color: var(--accent-color);
+  color: var(--te-primary-500);
   font-size: 11px;
 }
 .actions {
@@ -244,18 +274,23 @@ li {
 button {
   cursor: pointer;
   font: inherit;
+  font-size: 13px;
   color: inherit;
-  border: 1px solid var(--border-color, #8884);
-  border-radius: 8px;
-  background: var(--bg-secondary, #8881);
-  padding: 7px 10px;
+  border: 1px solid var(--te-card-border);
+  border-radius: 999px;
+  background: var(--te-settings-search-bg);
+  padding: 8px 14px;
+  min-height: 34px;
+}
+button:hover:not(:disabled) {
+  background: rgba(var(--te-primary-rgb), 0.1);
 }
 button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 :is(button, summary):focus-visible {
-  outline: 2px solid var(--accent-color, #7c4dff);
+  outline: 2px solid var(--te-primary-500);
   outline-offset: 3px;
 }
 .error {

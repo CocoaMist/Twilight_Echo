@@ -15,7 +15,7 @@ const providerMenuOpen = ref(false)
 const switcherRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
 const menuId = useId()
-const menuStyle = ref({ left: '0px', top: '0px', maxHeight: '320px' })
+const menuStyle = ref({ left: '0px', top: '0px', maxHeight: '320px', transformOrigin: 'right top' })
 const activeOption = computed(
   () => props.options.find((option) => option.id === props.modelValue) ?? props.options[0] ?? null
 )
@@ -30,6 +30,7 @@ function toggleProviderMenu(): void {
     return
   }
   positionMenu()
+  menu.inert = false
   menu.showPopover()
   providerMenuOpen.value = true
 }
@@ -41,14 +42,17 @@ function positionMenu(): void {
   const above = Math.max(0, rect.top - 16)
   const upward = below < 200 && above > below
   const height = Math.min(320, upward ? above : below)
+  const left = Math.max(8, Math.min(rect.right - 220, window.innerWidth - 228))
   menuStyle.value = {
-    left: `${Math.max(8, Math.min(rect.right - 220, window.innerWidth - 228))}px`,
+    left: `${left}px`,
     top: `${upward ? Math.max(8, rect.top - height - 8) : rect.bottom + 8}px`,
-    maxHeight: `${height}px`
+    maxHeight: `${height}px`,
+    transformOrigin: `${Math.max(0, Math.min(220, rect.left + rect.width / 2 - left))}px ${upward ? 'bottom' : 'top'}`
   }
 }
 
 function closeMenu(): void {
+  if (menuRef.value) menuRef.value.inert = true
   menuRef.value?.hidePopover()
   providerMenuOpen.value = false
 }
@@ -60,6 +64,7 @@ function onViewportChange(event: Event): void {
 
 function onToggle(event: Event): void {
   providerMenuOpen.value = (event as ToggleEvent).newState === 'open'
+  if (menuRef.value) menuRef.value.inert = !providerMenuOpen.value
 }
 
 function selectProvider(providerId: string): void {
@@ -220,6 +225,40 @@ onBeforeUnmount(() => {
   box-shadow: 0 18px 42px color-mix(in srgb, var(--te-neutral-900) 18%, transparent);
   backdrop-filter: blur(18px) saturate(145%);
   -webkit-backdrop-filter: blur(18px) saturate(145%);
+  opacity: 0;
+  transform: scale(0.97);
+  pointer-events: none;
+  transition:
+    opacity 160ms var(--te-ease-out-strong),
+    transform 160ms var(--te-ease-out-strong),
+    display 160ms allow-discrete,
+    overlay 160ms allow-discrete;
+}
+
+.provider-switcher-menu:popover-open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+:global(html[data-te-motion='reduced'] .provider-switcher-menu) {
+  transform: none;
+  transition:
+    opacity 120ms var(--te-ease-out-strong),
+    display 120ms allow-discrete,
+    overlay 120ms allow-discrete !important;
+  @starting-style {
+    transform: none;
+  }
+}
+
+:global(html[data-te-motion='off'] .provider-switcher-menu) {
+  transform: none;
+  transition: none !important;
 }
 
 .provider-switcher-option {

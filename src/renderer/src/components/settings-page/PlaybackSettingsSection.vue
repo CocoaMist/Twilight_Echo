@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsDisclosure from './SettingsDisclosure.vue'
 import { storeToRefs } from 'pinia'
 import AudioDeviceProfilesPanel from '@renderer/components/settings-page/AudioDeviceProfilesPanel.vue'
 import { computed, ref } from 'vue'
@@ -518,8 +519,9 @@ function setContinuitySampleRate(event: Event): void {
           </button>
         </div>
       </div>
-      <div
-        v-if="audioOutputPanelExpanded"
+      <SettingsDisclosure
+        :open="audioOutputPanelExpanded"
+        trigger-selector='input[aria-controls="audio-output-device-panel"]'
         id="audio-output-device-panel"
         class="device-panel-content"
       >
@@ -565,7 +567,7 @@ function setContinuitySampleRate(event: Event): void {
         <p class="device-capability-note">
           列表为设备能力声明；是否 Native DSD / DoP 以播放时 HiFi 状态为准（筛选≠当前输出模式）。
         </p>
-      </div>
+      </SettingsDisclosure>
     </div>
 
     <div class="section-block">
@@ -1016,6 +1018,8 @@ function setContinuitySampleRate(event: Event): void {
       <button
         type="button"
         class="accordion-head"
+        :aria-expanded="advancedParamsOpen"
+        aria-controls="advanced-engine-parameters"
         @click="advancedParamsOpen = !advancedParamsOpen"
       >
         <div>
@@ -1024,7 +1028,11 @@ function setContinuitySampleRate(event: Event): void {
         </div>
         <i class="pi pi-chevron-down" :class="{ rotated: advancedParamsOpen }"></i>
       </button>
-      <div v-if="advancedParamsOpen" class="accordion-body">
+      <SettingsDisclosure
+        :open="advancedParamsOpen"
+        class="accordion-body"
+        id="advanced-engine-parameters"
+      >
         <div class="engine-warning">
           <i class="pi pi-exclamation-triangle"></i>
           <span>警告：以下参数直接与声卡底层交互，调节不当可能导致音频卡顿、无声或爆音。</span>
@@ -1176,7 +1184,7 @@ function setContinuitySampleRate(event: Event): void {
             @click="toggleWasapiExclusivePushMode"
           ></span>
         </div>
-      </div>
+      </SettingsDisclosure>
     </div>
   </section>
 </template>

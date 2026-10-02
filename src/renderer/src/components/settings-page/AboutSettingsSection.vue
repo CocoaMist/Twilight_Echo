@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useEscapeToClose, useFocusTrap } from '../../app/useDismissLayer.ts'
 import { resolveCover } from '../../utils/coverLoader.ts'
 import { GITHUB_URL, HOMEPAGE_URL, RELEASES_URL } from './types.ts'
-import type { AppUpdateProgress } from '../../../../shared/appUpdate.ts'
+import AppUpdatePanel from './AppUpdatePanel.vue'
 
 const AFDIAN_URL = 'https://ifdian.net/a/pxasen'
 // Public assets are copied to the renderer root at build time. Relative paths
@@ -79,27 +79,8 @@ const SPONSORS: readonly Sponsor[] = [
   }
 ]
 
-const props = defineProps<{
-  appVersion: string
-  updateCheckState: 'idle' | 'checking' | 'up-to-date' | 'available' | 'error'
-  latestVersion: string
-  lastUpdateCheck: string
-  releaseUrl: string
-  assetName: string
-  hasChecksum: boolean
-  updateError: string
-  updateProgress: AppUpdateProgress | null
-  updateActionState: 'idle' | 'downloading' | 'ready' | 'installing' | 'error'
-}>()
-
-const emit = defineEmits<{
-  checkForUpdates: []
-  downloadUpdate: []
-  cancelUpdateDownload: []
-  installUpdate: []
-  openReleasePage: []
-  exportAudioDiagnostics: []
-}>()
+defineProps<{ appVersion: string }>()
+const emit = defineEmits<{ exportAudioDiagnostics: [] }>()
 
 function openExternal(url: string): void {
   void window.api?.shell?.openExternal?.(url)
@@ -179,22 +160,6 @@ useEscapeToClose(sponsorListOpen, closeSponsorList)
 useFocusTrap(sponsorListRef, sponsorListOpen)
 useEscapeToClose(qqGroupDialogOpen, closeQqGroupDialog)
 useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
-
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '—'
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function progressLabel(): string {
-  const progress = props.updateProgress
-  if (!progress) return ''
-  if (progress.phase === 'downloading') {
-    return `${progress.percent}% · ${formatBytes(progress.receivedBytes)} / ${formatBytes(progress.totalBytes)}`
-  }
-  return progress.message || ''
-}
 </script>
 
 <template>
@@ -219,101 +184,7 @@ function progressLabel(): string {
     </div>
 
     <div class="about-cards">
-      <div class="update-card">
-        <div class="status-icon">
-          <i
-            :class="
-              updateActionState === 'downloading' || updateCheckState === 'checking'
-                ? 'pi pi-spin pi-spinner'
-                : updateCheckState === 'available' || updateActionState === 'ready'
-                  ? 'pi pi-download'
-                  : updateCheckState === 'error' || updateActionState === 'error'
-                    ? 'pi pi-exclamation-circle'
-                    : updateCheckState === 'idle'
-                      ? 'pi pi-sync'
-                      : 'pi pi-check-circle'
-            "
-          ></i>
-        </div>
-        <div class="update-copy">
-          <strong v-if="updateCheckState === 'idle'">点击检查更新</strong>
-          <strong v-else-if="updateCheckState === 'checking'">正在检查更新…</strong>
-          <strong v-else-if="updateActionState === 'downloading'">正在下载更新…</strong>
-          <strong v-else-if="updateActionState === 'ready'">更新包已就绪</strong>
-          <strong v-else-if="updateActionState === 'installing'">正在启动安装程序…</strong>
-          <strong v-else-if="updateCheckState === 'available'"
-            >发现新版本 v{{ latestVersion }}</strong
-          >
-          <strong v-else-if="updateCheckState === 'error' || updateActionState === 'error'"
-            >更新失败</strong
-          >
-          <strong v-else>当前已是最新版本</strong>
-          <span v-if="updateError" class="update-error">{{ updateError }}</span>
-          <span v-else-if="updateActionState === 'downloading' || updateActionState === 'ready'">
-            {{ progressLabel() || assetName || '—' }}
-            <!-- downloads are refused without a checksum, so a ready package is always verified -->
-            <template v-if="updateActionState === 'ready'"> · SHA-256 已校验 </template>
-          </span>
-          <span v-else-if="updateCheckState === 'available' && assetName">
-            {{ assetName }}{{ hasChecksum ? ' · 可校验' : ' · 无校验和' }}
-          </span>
-          <span v-else>上次检查：{{ lastUpdateCheck || '—' }}</span>
-          <div
-            v-if="updateActionState === 'downloading' && updateProgress"
-            class="update-progress-track"
-            aria-hidden="true"
-          >
-            <div
-              class="update-progress-fill"
-              :style="{
-                transform: `scaleX(${Math.max(0, Math.min(100, updateProgress.percent)) / 100})`
-              }"
-            ></div>
-          </div>
-        </div>
-        <div class="update-actions">
-          <template v-if="updateActionState === 'downloading'">
-            <button class="soft-button" type="button" @click="emit('cancelUpdateDownload')">
-              <i class="pi pi-times"></i>
-              取消
-            </button>
-          </template>
-          <template v-else-if="updateActionState === 'ready'">
-            <button class="brand-soft-button" type="button" @click="emit('installUpdate')">
-              <i class="pi pi-download"></i>
-              安装并退出
-            </button>
-            <button class="soft-button" type="button" @click="emit('openReleasePage')">
-              打开发布页
-            </button>
-          </template>
-          <template v-else-if="updateCheckState === 'available'">
-            <button
-              v-if="assetName"
-              class="brand-soft-button"
-              type="button"
-              @click="emit('downloadUpdate')"
-            >
-              <i class="pi pi-download"></i>
-              下载更新
-            </button>
-            <button class="soft-button" type="button" @click="emit('openReleasePage')">
-              打开发布页
-            </button>
-          </template>
-          <template v-else>
-            <button
-              class="soft-button"
-              type="button"
-              :disabled="updateCheckState === 'checking' || updateActionState === 'installing'"
-              @click="emit('checkForUpdates')"
-            >
-              <i class="pi pi-sync"></i>
-              检查更新
-            </button>
-          </template>
-        </div>
-      </div>
+      <AppUpdatePanel />
 
       <div class="sponsor-card">
         <i class="pi pi-heart-fill sponsor-watermark" aria-hidden="true"></i>

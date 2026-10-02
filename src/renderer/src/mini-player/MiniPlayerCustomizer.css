@@ -32,6 +32,33 @@
   border-block: 1px solid var(--customizer-border);
 }
 
+.mini-customizer-panel-enter-active {
+  transition:
+    transform 200ms var(--te-ease-out-strong),
+    opacity 200ms var(--te-ease-out-strong);
+  transform-origin: right center;
+}
+
+.mini-customizer-panel-leave-active {
+  transition:
+    transform 160ms var(--te-ease-out-strong),
+    opacity 160ms var(--te-ease-out-strong);
+  transform-origin: right center;
+  pointer-events: none;
+}
+
+.mini-customizer-panel-enter-from,
+.mini-customizer-panel-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+html[data-te-motion='reduced'] .mini-customizer-panel-enter-active,
+html[data-te-motion='reduced'] .mini-customizer-panel-leave-active {
+  transition: opacity 120ms var(--te-ease-out-strong) !important;
+  transform: none !important;
+}
+
 .mini-customizer-header,
 .mini-customizer-footer,
 .mini-customizer-tabs {

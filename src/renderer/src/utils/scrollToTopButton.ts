@@ -6,6 +6,7 @@ import {
   type ScrollTopAnchor,
   type ScrollTopObstruction
 } from './scrollToTopPolicy'
+import { scrollMotionBehavior } from '../app/scrollMotion'
 
 /**
  * One shared "back to top" control for every scroll container in the window.
@@ -214,10 +215,9 @@ function scheduleSettleCheck(): void {
 function onButtonClick(): void {
   const target = scroller
   if (!target) return
-  const motion = document.documentElement.dataset.teMotion
   // Visibility is left to the scroll events the animation emits, so the control
   // fades exactly when the offset drops back under the reveal distance.
-  target.scrollTo({ top: 0, behavior: motion === 'off' ? 'auto' : 'smooth' })
+  target.scrollTo({ top: 0, behavior: scrollMotionBehavior() })
 }
 
 function onScroll(event: Event): void {

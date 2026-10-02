@@ -7,6 +7,7 @@ import type {
 import type { DiscoveryOrder } from './streaming-page/useStreamingDiscovery'
 import type { PageState } from './streaming-page/types'
 import CoverImg from './CoverImg.vue'
+import SettingsDisclosure from './settings-page/SettingsDisclosure.vue'
 
 const props = defineProps<{
   providerLabel: string
@@ -192,6 +193,7 @@ function emitPage(nextOffset: number): void {
       <button
         type="button"
         class="disc-chip disc-chip-more"
+        aria-controls="discovery-categories"
         data-te-interactive
         :class="{ open: panelExpanded }"
         :aria-expanded="panelExpanded"
@@ -203,38 +205,44 @@ function emitPage(nextOffset: number): void {
     </nav>
 
     <!-- ── Category atlas ───────────────────────────────────────────── -->
-    <Transition name="disc-atlas">
-      <section v-if="panelExpanded" class="disc-atlas" aria-label="全部歌单分类">
-        <div v-if="catalogueLoading" class="disc-atlas-status">
-          <i class="pi pi-spin pi-spinner"></i>
-          <span>正在加载分类…</span>
-        </div>
-        <div v-else-if="catalogueError" class="disc-atlas-status">
-          <span>{{ catalogueError }}</span>
-          <button type="button" class="disc-ghost-btn" data-te-interactive @click="emit('retry')">
-            重试
-          </button>
-        </div>
-        <template v-else>
-          <div v-for="group in catalogue?.groups ?? []" :key="group.id" class="disc-atlas-group">
-            <p class="disc-atlas-name">{{ group.name }}</p>
-            <div class="disc-atlas-tags">
-              <button
-                v-for="tag in group.tags"
-                :key="tag.name"
-                type="button"
-                class="disc-atlas-chip"
-                data-te-interactive
-                :class="{ active: selectedTag === tag.name, hot: tag.hot }"
-                @click="emit('selectTag', tag.name)"
-              >
-                {{ tag.name }}
-              </button>
-            </div>
+    <SettingsDisclosure
+      :open="panelExpanded"
+      tag="section"
+      boundary=".disc"
+      trigger-selector='[aria-controls="discovery-categories"]'
+      id="discovery-categories"
+      class="disc-atlas"
+      aria-label="全部歌单分类"
+    >
+      <div v-if="catalogueLoading" class="disc-atlas-status">
+        <i class="pi pi-spin pi-spinner"></i>
+        <span>正在加载分类…</span>
+      </div>
+      <div v-else-if="catalogueError" class="disc-atlas-status">
+        <span>{{ catalogueError }}</span>
+        <button type="button" class="disc-ghost-btn" data-te-interactive @click="emit('retry')">
+          重试
+        </button>
+      </div>
+      <template v-else>
+        <div v-for="group in catalogue?.groups ?? []" :key="group.id" class="disc-atlas-group">
+          <p class="disc-atlas-name">{{ group.name }}</p>
+          <div class="disc-atlas-tags">
+            <button
+              v-for="tag in group.tags"
+              :key="tag.name"
+              type="button"
+              class="disc-atlas-chip"
+              data-te-interactive
+              :class="{ active: selectedTag === tag.name, hot: tag.hot }"
+              @click="emit('selectTag', tag.name)"
+            >
+              {{ tag.name }}
+            </button>
           </div>
-        </template>
-      </section>
-    </Transition>
+        </div>
+      </template>
+    </SettingsDisclosure>
 
     <!-- ── Skeleton ─────────────────────────────────────────────────── -->
     <div v-if="listLoading && playlists.length === 0" class="disc-mosaic" aria-label="正在加载歌单">
@@ -312,13 +320,12 @@ function emitPage(nextOffset: number): void {
         </article>
 
         <article
-          v-for="(playlist, index) in restPlaylists"
+          v-for="playlist in restPlaylists"
           :key="playlist.id"
           class="disc-card"
           data-te-interactive
           role="button"
           tabindex="0"
-          :style="{ '--d': Math.min(index, 11) }"
           :aria-label="`打开歌单 ${playlist.name}`"
           @click="emit('openPlaylist', playlist)"
           @keydown.enter="emit('openPlaylist', playlist)"
@@ -631,19 +638,6 @@ function emitPage(nextOffset: number): void {
   box-shadow: var(--disc-shadow);
 }
 
-.disc-atlas-enter-active,
-.disc-atlas-leave-active {
-  transition:
-    opacity var(--te-motion-panel) var(--te-ease-out-quint),
-    transform var(--te-motion-panel) var(--te-ease-out-quint);
-}
-
-.disc-atlas-enter-from,
-.disc-atlas-leave-to {
-  opacity: 0;
-  transform: translateY(-8px);
-}
-
 .disc-atlas-status {
   display: flex;
   align-items: center;
@@ -882,7 +876,6 @@ function emitPage(nextOffset: number): void {
   overflow: hidden;
   cursor: pointer;
   box-shadow: var(--disc-shadow);
-  animation: disc-pop 0.5s var(--te-ease-out-quint) both;
   transition:
     transform var(--te-motion-return) var(--te-ease-out-quint),
     box-shadow var(--te-motion-return) var(--te-ease-out-quint);
@@ -1041,19 +1034,6 @@ function emitPage(nextOffset: number): void {
   gap: 4px;
   cursor: pointer;
   border-radius: var(--disc-radius-md);
-  animation: disc-pop 0.5s var(--te-ease-out-quint) both;
-  animation-delay: calc(var(--d, 0) * 26ms);
-}
-
-@keyframes disc-pop {
-  from {
-    opacity: 0;
-    transform: translateY(12px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 
 .disc-card-media {

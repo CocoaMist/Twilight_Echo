@@ -6,12 +6,19 @@ import {
   type MiniPlayerStateSnapshot
 } from '../../../shared/miniPlayer.ts'
 import type { TrayNavigationTarget } from '../../../shared/trayPlayer.ts'
+import { normalizeMotionPreference, type MotionPreference } from '../../../shared/motion.ts'
+import { useMotionPreference } from '../app/useMotionPreference'
 
 const state = ref<MiniPlayerStateSnapshot>({ ...EMPTY_MINI_PLAYER_STATE })
 const ready = ref(false)
+const motionPreference = ref<MotionPreference>('system')
+useMotionPreference(motionPreference)
 const seeking = ref(false)
 const seekDraft = ref(0)
 let removeStateListener: (() => void) | null = null
+let removeSettingsListener: (() => void) | null = null
+let settingsRevision = 0
+let disposed = false
 
 const displayedTime = computed(() => (seeking.value ? seekDraft.value : state.value.currentTime))
 const duration = computed(() => Math.max(0, state.value.duration))
@@ -66,22 +73,33 @@ function handleKeydown(event: KeyboardEvent): void {
 
 onMounted(async () => {
   window.addEventListener('keydown', handleKeydown)
+  removeSettingsListener = window.api.trayPlayer.onMotionPreference((preference) => {
+    settingsRevision++
+    motionPreference.value = normalizeMotionPreference(preference)
+  })
   removeStateListener = window.api.trayPlayer.onState((next) => {
     state.value = next
     if (!seeking.value) seekDraft.value = next.currentTime
   })
   try {
+    const revision = settingsRevision
     const bootstrap = await window.api.trayPlayer.getBootstrap()
+    if (disposed) return
+    if (revision === settingsRevision) {
+      motionPreference.value = normalizeMotionPreference(bootstrap.motionPreference)
+    }
     state.value = bootstrap.state
     seekDraft.value = bootstrap.state.currentTime
   } finally {
-    ready.value = true
+    if (!disposed) ready.value = true
   }
 })
 
 onBeforeUnmount(() => {
+  disposed = true
   window.removeEventListener('keydown', handleKeydown)
   removeStateListener?.()
+  removeSettingsListener?.()
 })
 </script>
 
@@ -187,8 +205,8 @@ onBeforeUnmount(() => {
   opacity: 0;
   transform: translateY(5px) scale(0.985);
   transition:
-    opacity 130ms ease,
-    transform 130ms ease;
+    opacity 160ms var(--te-ease-out-strong),
+    transform 160ms var(--te-ease-out-strong);
   user-select: none;
 }
 
@@ -329,9 +347,12 @@ button:disabled {
   opacity: 0.42;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tray-player {
-    transition: none;
-  }
+:global(html[data-te-motion='reduced'] .tray-player) {
+  transform: none;
+  transition: opacity 120ms var(--te-ease-out-strong) !important;
+}
+:global(html[data-te-motion='off'] .tray-player) {
+  transform: none;
+  transition: none !important;
 }
 </style>

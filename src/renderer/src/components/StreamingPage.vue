@@ -3098,10 +3098,11 @@ watch(isSearching, (searching, wasSearching) => {
 // any external change). This is how the app restores the user's last provider
 // choice after restart.
 watch(
-  () => settingsStore.settings.value.streamingActiveProvider,
-  (pref) => {
+  [() => settingsStore.settings.value.streamingActiveProvider, () => props.active],
+  ([pref]) => {
     if (props.active === false) return
     if (typeof pref === 'string' && pref && pref !== preferredProvider.value) {
+      fallbackProvider.value = null
       preferredProvider.value = pref
     }
   }

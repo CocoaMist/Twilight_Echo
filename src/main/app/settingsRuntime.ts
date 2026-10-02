@@ -137,10 +137,11 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
     applyLibraryWatchers(runtime.appSettings.libraryFolders, runtime.appSettings.watchLibrary)
   }
 
-  // Forward desktop lyrics settings and linked appearance changes to the lyrics window.
+  // Keep already-open lyric controls in sync with the application motion tier.
   if (
     (Object.prototype.hasOwnProperty.call(patch, 'desktopLyrics') ||
-      Object.prototype.hasOwnProperty.call(patch, 'lyricsAppearance')) &&
+      Object.prototype.hasOwnProperty.call(patch, 'lyricsAppearance') ||
+      Object.prototype.hasOwnProperty.call(patch, 'motionPreference')) &&
     runtime.desktopLyricsWindow &&
     !runtime.desktopLyricsWindow.isDestroyed()
   ) {
@@ -158,6 +159,10 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
   applyRuntimeSettings()
   const snapshot = createSettingsSnapshot(runtime.appSettings, runtime.launchSettings)
   runtime.mainWindow?.webContents.send('settings:changed', snapshot)
+  const trayWindow = runtime.trayPlayerWindow
+  if (trayWindow && !trayWindow.isDestroyed() && !trayWindow.webContents.isDestroyed()) {
+    trayWindow.webContents.send('settings:changed', snapshot)
+  }
   return snapshot
 }
 

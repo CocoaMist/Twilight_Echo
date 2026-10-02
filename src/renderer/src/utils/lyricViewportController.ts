@@ -364,7 +364,12 @@ export function createLyricViewportController(options: LyricViewportControllerOp
   }
 
   function detach(element?: LyricStageElement | null): void {
-    if (!element || stage === element) stage = null
+    if (!element || stage === element) {
+      stage = null
+      cancelFollow()
+      cancelResize?.()
+      cancelResize = null
+    }
   }
 
   function activate(trackId: string): void {

@@ -83,13 +83,7 @@ html[data-theme='dark'] .onboarding-wizard {
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
-  /* Pointer parallax: vars are written from JS, the blob layer glides
-     against the cursor on the compositor only. */
-  transform: translate3d(
-    calc(var(--onb-parallax-x, 0) * -28px),
-    calc(var(--onb-parallax-y, 0) * -20px),
-    0
-  );
+  transform: translate3d(0, 0, 0);
   transition: transform 900ms var(--te-ease-out-quint);
   will-change: transform;
 }
@@ -277,11 +271,7 @@ body.te-no-blur .onb-blob {
   pointer-events: none;
   font-family: var(--onb-display);
   line-height: 1;
-  transform: translate3d(
-    calc(var(--onb-parallax-x, 0) * 14px),
-    calc(var(--onb-parallax-y, 0) * 10px),
-    0
-  );
+  transform: translate3d(0, 0, 0);
   transition: transform 900ms var(--te-ease-out-quint);
 }
 
@@ -297,6 +287,12 @@ body.te-no-blur .onb-blob {
   );
   -webkit-background-clip: text;
   background-clip: text;
+}
+
+.onboarding-wizard:not([data-motion='full']) :is(.onb-backdrop, .onb-scene-no) {
+  transform: none !important;
+  transition: none !important;
+  will-change: auto;
 }
 
 .onb-scene-no small {

@@ -9,6 +9,8 @@ import WorkshopProjectPanel from '@renderer/components/theme-workshop/WorkshopPr
 import WorkshopParameterDesigner from '@renderer/components/theme-workshop/WorkshopParameterDesigner.vue'
 import WorkshopDiagnosticsPanel from '@renderer/components/theme-workshop/WorkshopDiagnosticsPanel.vue'
 import WorkshopOnboarding from '@renderer/components/theme-workshop/WorkshopOnboarding.vue'
+import WorkshopDeleteDialog from './WorkshopDeleteDialog.vue'
+import NativeDialogTransition from '../NativeDialogTransition.vue'
 import ThemeAppearanceControl from '@renderer/components/theme-studio/ThemeAppearanceControl.vue'
 import { useThemeWorkshopEditor } from '@renderer/components/theme-workshop/useThemeWorkshopEditor'
 import { useWorkshopDiagnostics } from '@renderer/components/theme-workshop/useWorkshopDiagnostics'
@@ -102,11 +104,11 @@ function selectGroup(name: string): void {
   search.value = ''
 }
 function confirmRemove(): void {
-  deleteDialog.value?.close()
+  deleteProjectName.value = null
   void run(remove)
 }
 const trial = ref(false)
-const deleteDialog = ref<HTMLDialogElement>()
+const deleteProjectName = ref<string | null>(null)
 const page = ref<HTMLElement>()
 const preview = ref<InstanceType<typeof WorkshopPreview>>()
 const code = ref<HTMLTextAreaElement>()
@@ -688,7 +690,7 @@ onBeforeUnmount(() => {
           "
           @problems="metadataProblems = $event"
           @duplicate="run(duplicate)"
-          @remove="deleteDialog?.showModal()"
+          @remove="deleteProjectName = draft?.name ?? ''"
           @restore="
             run(async () => {
               await persist()
@@ -876,14 +878,14 @@ onBeforeUnmount(() => {
       @check="checkFull"
       @cancel="diagnostics.cancel"
     />
-    <dialog ref="deleteDialog" class="workshop-delete-dialog">
-      <h2>删除「{{ draft?.name }}」？</h2>
-      <p>删除编辑项目及其备份。已经应用的主题仍可使用。</p>
-      <div class="workshop-inline">
-        <button @click="deleteDialog?.close()">取消</button
-        ><button class="workshop-danger" @click="confirmRemove">删除编辑项目</button>
-      </div>
-    </dialog>
+    <NativeDialogTransition>
+      <WorkshopDeleteDialog
+        v-if="deleteProjectName !== null"
+        :name="deleteProjectName"
+        @close="deleteProjectName = null"
+        @confirm="confirmRemove"
+      />
+    </NativeDialogTransition>
   </section>
 </template>
 <style src="./ThemeWorkshopPage.css"></style>

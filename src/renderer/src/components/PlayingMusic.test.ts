@@ -42,7 +42,7 @@ test('now playing lyrics have no page-entry animation', () => {
 test('visualizer mode does not keep the heavy blurred backdrop mounted', () => {
   const source = readFileSync(new URL('./PlayingMusic.vue', import.meta.url), 'utf8')
 
-  assert.match(source, /<div v-if="viewMode !== 'visualizer'" class="backdrop"/)
+  assert.match(source, /<div v-if="!visualizerMounted" class="backdrop"/)
 })
 
 test('active lyrics keep their size while auxiliary layers render smaller and compact', () => {
@@ -428,7 +428,7 @@ test('player bar smooths progress between player store ticks and snaps large jum
 test('visualizer mode uses a full viewport stage without changing the regular stage cap', () => {
   const source = readFileSync(new URL('./PlayingMusic.vue', import.meta.url), 'utf8')
 
-  assert.match(source, /class="\['stage', \{ 'stage--visualizer': viewMode === 'visualizer' \}\]"/)
+  assert.match(source, /class="stage stage--visualizer playback-visualizer-view"/)
   assert.match(source, /\.stage \{[\s\S]*width: min\(100%, 1560px\)/)
   assert.match(source, /\.stage--visualizer \{[\s\S]*width: 100vw/)
   assert.match(source, /\.stage--visualizer \{[\s\S]*height: 100vh/)

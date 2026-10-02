@@ -192,7 +192,10 @@ export function consumePendingTrayNavigation(): TrayNavigationTarget | null {
 export function setupTrayPlayerIpc(): void {
   ipcMain.handle('trayPlayer:getBootstrap', (event): TrayPlayerBootstrap => {
     assertTrayPlayerSender(event, 'tray player window IPC')
-    return { state: runtime.latestMiniPlayerState ?? { ...EMPTY_MINI_PLAYER_STATE } }
+    return {
+      state: runtime.latestMiniPlayerState ?? { ...EMPTY_MINI_PLAYER_STATE },
+      motionPreference: runtime.appSettings.motionPreference
+    }
   })
 
   ipcMain.on('trayPlayer:command', (event, rawCommand: unknown) => {

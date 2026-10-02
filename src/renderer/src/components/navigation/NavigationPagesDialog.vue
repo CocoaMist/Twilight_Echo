@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
+import { useNativeDialog } from '@renderer/composables/useNativeDialog'
 import ThemeIcon from '@renderer/components/ThemeIcon.vue'
 import { useSettingsStore } from '@renderer/stores/useSettingsStore'
 import { useHoldReorder } from '@renderer/composables/useHoldReorder'
@@ -31,7 +32,7 @@ const results = computed(() => {
       )
     : ordered.value
 })
-let previousFocus: HTMLElement | null = null
+useNativeDialog(dialog)
 
 function move(from: string, to: string): void {
   draft.value = moveNavigationPage(draft.value, from, to)
@@ -70,14 +71,6 @@ function close(): void {
   if (!busy.value) emit('close')
 }
 useEscapeToClose(() => !busy.value, close)
-onMounted(() => {
-  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  dialog.value?.showModal()
-})
-onBeforeUnmount(() => {
-  dialog.value?.close()
-  if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
-})
 </script>
 
 <template>

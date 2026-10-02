@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
 import TrackInfoDialog from '@renderer/components/TrackInfoDialog.vue'
 import { computed, shallowRef, nextTick, watch } from 'vue'
 import StreamingTrackToolbar from '@renderer/components/streaming-page/StreamingTrackToolbar.vue'
@@ -231,7 +232,11 @@ const infoTrack = shallowRef<Track | null>(null)
 </script>
 
 <template>
-  <TrackInfoDialog v-if="infoTrack" :track="infoTrack" @close="infoTrack = null" />
+  <Teleport to="body">
+    <NativeDialogTransition>
+      <TrackInfoDialog v-if="infoTrack" :track="infoTrack" @close="infoTrack = null" />
+    </NativeDialogTransition>
+  </Teleport>
   <section class="detail-stage" :data-kind="kind">
     <header class="stage-hero">
       <div class="stage-cover-frame">

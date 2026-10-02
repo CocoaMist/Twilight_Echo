@@ -17,7 +17,9 @@ import type {
   AppUpdateCheckResult,
   AppUpdateDownloadResult,
   AppUpdateInstallResult,
-  AppUpdateProgress
+  AppUpdateProgress,
+  AppUpdateSnapshot,
+  AppUpdatePreferencePatch
 } from '../../shared/appUpdate.ts'
 
 const appNavigationCallbacks = new Set<(target: TrayNavigationTarget) => void>()
@@ -99,6 +101,17 @@ export const systemApi = {
       ipcRenderer.invoke('app:consumePendingNavigation'),
     relaunch: (): Promise<void> => ipcRenderer.invoke('app:relaunch'),
     checkForUpdates: (): Promise<AppUpdateCheckResult> => ipcRenderer.invoke('app:checkForUpdates'),
+    getUpdateState: (): Promise<AppUpdateSnapshot> => ipcRenderer.invoke('app:getUpdateState'),
+    setUpdatePreferences: (patch: AppUpdatePreferencePatch): Promise<AppUpdateSnapshot> =>
+      ipcRenderer.invoke('app:setUpdatePreferences', patch),
+    dismissUpdate: (action: 'skip' | 'later'): Promise<AppUpdateSnapshot> =>
+      ipcRenderer.invoke('app:dismissUpdate', action),
+    onUpdateState: (cb: (snapshot: AppUpdateSnapshot) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, snapshot: AppUpdateSnapshot): void =>
+        cb(snapshot)
+      ipcRenderer.on('app:update-state', handler)
+      return () => ipcRenderer.removeListener('app:update-state', handler)
+    },
     downloadUpdate: (): Promise<AppUpdateDownloadResult> =>
       ipcRenderer.invoke('app:downloadUpdate'),
     cancelUpdateDownload: (): Promise<boolean> => ipcRenderer.invoke('app:cancelUpdateDownload'),

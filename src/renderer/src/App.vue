@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
 import { mountWorkshopDecorations } from '@renderer/components/theme-workshop/workshopDecorations'
 import {
   ref,
@@ -91,7 +92,7 @@ import {
   getPrimaryStreamingArtistName,
   type StreamingArtistNavigationRequest
 } from './utils/streamingArtistResolution'
-import AppNoticeHost from './components/AppNoticeHost.vue'
+const AppNoticeHost = defineAsyncComponent(() => import('./components/AppNoticeHost.vue'))
 import LiquidGlassDefs from './components/LiquidGlassDefs.vue'
 import { resolvePlayerBarPresentation } from '../../shared/playerBar.ts'
 import type { AppBackgroundPage } from './types/settings'
@@ -155,6 +156,21 @@ const {
   openSettingsPage
 } = navigation
 const { pushNotice } = useAppNoticeStore()
+let stopAppUpdateNotifications: (() => void) | null = null
+let updateNotificationsDisposed = false
+onMounted(() => {
+  void import('./app/useAppUpdateNotifications.ts')
+    .then(({ startAppUpdateNotifications }) => {
+      if (!updateNotificationsDisposed) {
+        stopAppUpdateNotifications = startAppUpdateNotifications(() => openSettingsPage('about'))
+      }
+    })
+    .catch((error) => console.warn('[update] Unable to initialize update notifications:', error))
+})
+onBeforeUnmount(() => {
+  updateNotificationsDisposed = true
+  stopAppUpdateNotifications?.()
+})
 const noticeHostRef = ref<InstanceType<typeof AppNoticeHost> | null>(null)
 
 // One global back affordance on the title bar. Every full-screen page
@@ -985,6 +1001,10 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             key="local-dashboard"
             @select-view="onSelectView"
             @open-library-settings="openSettingsPage('general')"
+            @open-streaming="enterStreamingMode($event)"
+            @open-plugins="navigation.openPluginPage()"
+            @open-radio="navigation.enterRadioPodcastMode()"
+            @login="handleStreamingLogin"
           />
           <ApplicationPlaylistsPage
             v-else-if="
@@ -1162,16 +1182,18 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
   <Transition name="onboarding-page">
     <OnboardingWizard v-if="showOnboarding" @finish="handleOnboardingFinish" />
   </Transition>
-  <QueueWorkspaceDialog
-    v-if="queueSessions.open.value"
-    :workspace="queueWorkspace"
-    :controller="queueSessions"
-    :queue-length="queue.length"
-    :can-undo="canUndoQueue"
-    :undo-label="queueUndoLabel"
-    :undo="undoQueue"
-    @close="queueSessions.open.value = false"
-  />
+  <NativeDialogTransition>
+    <QueueWorkspaceDialog
+      v-if="queueSessions.open.value"
+      :workspace="queueWorkspace"
+      :controller="queueSessions"
+      :queue-length="queue.length"
+      :can-undo="canUndoQueue"
+      :undo-label="queueUndoLabel"
+      :undo="undoQueue"
+      @close="queueSessions.open.value = false"
+    />
+  </NativeDialogTransition>
   <AppNoticeHost ref="noticeHostRef" />
 </template>
 
@@ -1493,28 +1515,71 @@ body.te-no-blur .login-page-leave-to {
   filter: blur(8px);
 }
 
+/* Explicit application preferences take precedence over the system setting.
+   The direct-child page rules above use !important, so match their specificity. */
+html[data-te-motion='reduced']
+  .main-content
+  :is(
+    .page-down-enter-active,
+    .page-down-leave-active,
+    .page-up-enter-active,
+    .page-up-leave-active
+  ) {
+  transition: opacity 120ms var(--te-ease-out-strong) !important;
+}
+html[data-te-motion='reduced']
+  .main-content
+  :is(
+    .page-down-enter-active,
+    .page-down-leave-active,
+    .page-up-enter-active,
+    .page-up-leave-active,
+    .page-down-enter-from,
+    .page-down-leave-to,
+    .page-up-enter-from,
+    .page-up-leave-to
+  ),
+html[data-te-motion='off']
+  .main-content
+  :is(
+    .page-down-enter-active,
+    .page-down-leave-active,
+    .page-up-enter-active,
+    .page-up-leave-active,
+    .page-down-enter-from,
+    .page-down-leave-to,
+    .page-up-enter-from,
+    .page-up-leave-to
+  ) {
+  transform: none !important;
+  filter: none !important;
+}
+html[data-te-motion='off']
+  .main-content
+  :is(
+    .page-down-enter-active,
+    .page-down-leave-active,
+    .page-up-enter-active,
+    .page-up-leave-active
+  ) {
+  transition: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .main-content > .page-down-enter-active,
-  .main-content > .page-down-leave-active,
-  .main-content > .page-up-enter-active,
-  .main-content > .page-up-leave-active,
-  .page-down-enter-active,
-  .page-down-leave-active,
-  .page-up-enter-active,
-  .page-up-leave-active {
-    transition:
-      opacity 0.12s ease,
-      transform 0.12s ease !important;
+  html:not([data-te-motion='full'], [data-te-motion='off'])
+    .main-content
+    :is(
+      .page-down-enter-active,
+      .page-down-leave-active,
+      .page-up-enter-active,
+      .page-up-leave-active
+    ) {
+    transition: opacity 120ms var(--te-ease-out-strong) !important;
   }
 
-  .main-content > .page-down-enter-from,
-  .main-content > .page-down-leave-to,
-  .main-content > .page-up-enter-from,
-  .main-content > .page-up-leave-to,
-  .page-down-enter-from,
-  .page-down-leave-to,
-  .page-up-enter-from,
-  .page-up-leave-to {
+  html:not([data-te-motion='full'], [data-te-motion='off'])
+    .main-content
+    :is(.page-down-enter-from, .page-down-leave-to, .page-up-enter-from, .page-up-leave-to) {
     transform: none !important;
     filter: none !important;
   }

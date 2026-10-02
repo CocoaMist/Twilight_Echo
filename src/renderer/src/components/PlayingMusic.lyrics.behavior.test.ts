@@ -1354,6 +1354,103 @@ window.runPlayingMusicLyricsRuntime = async () => {
   )
   remountedApp.unmount()
   remountRoot.remove()
+
+  // The real surfaces hand off without an overlapping iframe/blurred backdrop,
+  // and returning preserves the cover/lyrics instance without replaying entry.
+  const coverView = document.querySelector('.playback-cover-view')
+  const coverFrame = document.querySelector('.cover-frame')
+  const toggleView = () => document.querySelector('.visualizer-toggle-button').click()
+  const visualizer = () => document.querySelector('.visualizer-panel')
+  const waitMotion = async (predicate, message) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      await tick()
+      if (predicate()) return
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    throw new Error(message)
+  }
+  let samples = 0
+  window.api.audioEngine.getVisualizationData = async () => {
+    samples++
+    return { tapStatus: 'synthetic-fallback' }
+  }
+  player.audioEngineReady.value = true
+  player.isPlaying.value = true
+  const originalHidden = Object.getOwnPropertyDescriptor(document, 'hidden')
+  Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+  for (const mode of ['full', 'reduced', 'off']) {
+    document.documentElement.dataset.teMotion = mode
+    await tick()
+    toggleView()
+    await waitMotion(() => visualizer() && getComputedStyle(document.querySelector('.playback-visualizer-view')).opacity === '1', mode + ' visualizer did not arrive')
+    expect(!document.querySelector('.backdrop'), 'the live iframe overlaps the blurred backdrop')
+    expect(getComputedStyle(coverView).display === 'none' && coverView.inert, 'the outgoing cover stayed visible or interactive')
+    expect(document.querySelector('.cover-frame') === coverFrame, 'view switch remounted the cover')
+    expect([...document.querySelectorAll('.lyric-row-content')].every(node => !node.__vueParentComponent.props.singing), 'memoized hidden lyric retained singing work')
+    const iframe = document.querySelector('.visualizer-iframe')
+    const samplesBeforeReady = samples
+    window.dispatchEvent(new MessageEvent('message', { source: iframe.contentWindow, data: { kind: 'ready' } }))
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitMotion(() => samples > samplesBeforeReady, 'active visualizer never polled')
+    toggleView()
+    await tick()
+    const stoppedAt = samples
+    await new Promise(resolve => setTimeout(resolve, 70))
+    expect(samples === stoppedAt, 'outgoing visualizer continued polling')
+    await waitMotion(() => !visualizer() && getComputedStyle(coverView).opacity === '1' && getComputedStyle(coverView).display !== 'none', mode + ' cover did not return')
+    expect(document.querySelector('.cover-frame') === coverFrame, 'returning remounted artwork')
+    expect(!coverFrame.getAnimations().length, 'returning replayed artwork entrance')
+    expect(document.querySelector('.lyric-row.is-singing .lyric-row-content').__vueParentComponent.props.singing, 'same-line return did not reactivate memoized lyric')
+    expect(document.querySelector('.lyric-row.is-singing .lyric-row-content').__vueParentComponent.props.karaokeEnabled === settingsStore.settings.value.lyricsAppearance.karaokeEnabled, 'same-line return did not restore karaoke preference')
+    expect(document.querySelector('.backdrop'), 'cover backdrop was not restored after iframe unmounted')
+  }
+  document.documentElement.dataset.teMotion = 'full'
+  // Keep the timeline moving while the retained lyric DOM is hidden, but do
+  // not measure its zero-height viewport or rewrite its layout in that state.
+  toggleView()
+  await waitMotion(() => visualizer() && getComputedStyle(coverView).display === 'none', 'hidden-layout probe did not reach visualizer')
+  const hiddenStage = document.querySelector('.lyrics-scroll')
+  const previousHeight = Object.getOwnPropertyDescriptor(hiddenStage, 'clientHeight')
+  const stageHeight = hiddenStage.clientHeight
+  let hiddenMeasurements = 0
+  Object.defineProperty(hiddenStage, 'clientHeight', { configurable: true, get() { hiddenMeasurements++; return stageHeight } })
+  const hiddenTops = [...document.querySelectorAll('.lyric-row')].map(row => row.style.getPropertyValue('--lyric-line-top'))
+  player.currentTime.value = 4.2
+  player.seek(4.2)
+  window.dispatchEvent(new Event('resize'))
+  document.dispatchEvent(new Event('visibilitychange'))
+  await new Promise(resolve => setTimeout(resolve, 120))
+  expect(hiddenMeasurements === 0, 'hidden lyric viewport was measured')
+  expect([...document.querySelectorAll('.lyric-row')].every((row, index) => row.style.getPropertyValue('--lyric-line-top') === hiddenTops[index]), 'hidden lyric layout was rewritten')
+  if (previousHeight) Object.defineProperty(hiddenStage, 'clientHeight', previousHeight)
+  else delete hiddenStage.clientHeight
+  toggleView()
+  await waitMotion(() => !visualizer() && getComputedStyle(coverView).opacity === '1', 'hidden clock advance stranded return')
+  expect([...document.querySelectorAll('.lyric-row')].every(row => row.style.getPropertyValue('--lyric-line-ready') === '1'), 'reattached lyric rows were not laid out')
+  toggleView();await tick();toggleView();await tick();toggleView()
+  await waitMotion(() => visualizer() && getComputedStyle(document.querySelector('.playback-visualizer-view')).opacity === '1', 'rapid handoff did not converge to latest view')
+  toggleView();await tick();document.documentElement.dataset.teMotion = 'off'
+  await waitMotion(() => !visualizer() && getComputedStyle(coverView).display !== 'none', 'off mid-handoff left a blank surface')
+  if (originalHidden) Object.defineProperty(document, 'hidden', originalHidden)
+  else delete document.hidden
+  window.beginPlaybackMotionCapture = async () => {
+    document.documentElement.dataset.teMotion = 'full'
+    await tick()
+    await waitMotion(() => getComputedStyle(coverView).opacity === '1' && !coverView.getAnimations().length, 'capture cover did not settle')
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+    toggleView()
+    await waitMotion(() => coverView.getAnimations().length > 0, 'capture handoff did not animate')
+    coverView.getAnimations().forEach(animation => { animation.pause(); animation.currentTime = 25 })
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  }
+  window.endPlaybackMotionCapture = async () => {
+    coverView.getAnimations().forEach(animation => animation.play())
+    await waitMotion(() => visualizer() && getComputedStyle(document.querySelector('.playback-visualizer-view')).opacity === '1', 'capture visualizer did not arrive')
+    toggleView()
+    await waitMotion(() => !visualizer() && getComputedStyle(coverView).opacity === '1' && getComputedStyle(coverView).display !== 'none', 'capture did not restore cover')
+  }
   window.setPlayingMusicLayoutFixture = async (hasLyrics, appearance = {}) => {
     document.documentElement.dataset.teMotion = 'off'
     document.documentElement.dataset.tePlayerLayout = 'standard'
@@ -1607,6 +1704,7 @@ const { mkdir, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const target = process.argv.at(-1)
 const visualDir = process.env.TWILIGHT_LYRIC_VISUAL_DIR || ''
+const motionVisualDir = process.env.TWILIGHT_MOTION_VISUAL_DIR || ''
 // Keep requested CSS viewport sizes exact on Windows displays with fractional DPI.
 app.commandLine.appendSwitch('force-device-scale-factor', '1')
 const userDataDir = process.env.TWILIGHT_ELECTRON_USER_DATA_DIR || ''
@@ -1623,6 +1721,13 @@ app.whenReady().then(async () => {
       'window.runPlayingMusicLyricsRuntime().then(() => ({ ok: true }), (error) => ({ ok: false, message: error?.stack ?? error?.message ?? String(error) }))'
     )
     if (!runtimeResult.ok) throw new Error(runtimeResult.message)
+    if (motionVisualDir) {
+      await mkdir(motionVisualDir, { recursive: true })
+      await window.webContents.executeJavaScript('window.beginPlaybackMotionCapture()')
+      await writeFile(path.join(motionVisualDir, 'playback-view-handoff.png'), (await window.webContents.capturePage()).toPNG())
+      await window.webContents.executeJavaScript('window.endPlaybackMotionCapture()')
+      await writeFile(path.join(motionVisualDir, 'playback-view-return.png'), (await window.webContents.capturePage()).toPNG())
+    }
     await window.webContents.executeJavaScript(${JSON.stringify(resetFixtureGeometrySource)})
     const layoutViewports = [[2560, 1440], [1920, 1080], [1440, 900], [1366, 768], [1280, 600], [1121, 720], [1120, 720], [1024, 768], [960, 540], [760, 600], [390, 844]]
     for (const [width, height] of layoutViewports) {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useNativeDialog } from '@renderer/composables/useNativeDialog'
 import type { createQueueWorkspaceStore } from '@renderer/stores/player/queueWorkspaceStore.ts'
 import type { createQueueSessionController } from '@renderer/stores/player/queueSessionController.ts'
 import { getPlaybackQueueWindow } from '@renderer/utils/playbackQueueVirtualization.ts'
@@ -23,7 +24,7 @@ const pending = ref(false)
 const message = ref('')
 const error = ref('')
 const scrollTop = ref(0)
-let previousFocus: HTMLElement | null = null
+useNativeDialog(dialog)
 let active = true
 const busy = computed(
   () => pending.value || props.workspace.busy.value || props.controller.restoring.value
@@ -94,8 +95,6 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onMounted(async () => {
-  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  dialog.value?.showModal()
   await run(props.workspace.ensureLoaded, '')
   await nextTick()
   if (active) nameInput.value?.focus()
@@ -103,8 +102,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   active = false
   props.controller.cancelRestore()
-  dialog.value?.close()
-  if (previousFocus?.isConnected) previousFocus.focus()
 })
 </script>
 

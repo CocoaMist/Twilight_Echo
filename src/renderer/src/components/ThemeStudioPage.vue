@@ -358,7 +358,7 @@ void editorPaneRef.value
                 :filter="null"
                 :has-player="true"
                 transition-name="page-down"
-              /><LocalHome v-else />
+              /><LocalHome v-else preview />
             </div>
             <PlayingMusic v-else-if="previewSurface === 'player'" />
             <EqualizerPage v-else />

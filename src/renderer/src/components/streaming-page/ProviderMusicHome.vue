@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import '../contentArrival.css'
 import { computed } from 'vue'
 import CoverImg from '@renderer/components/CoverImg.vue'
 import type { Track } from '@renderer/types/music'
@@ -96,7 +97,7 @@ function count(value: number | undefined): string {
       <span class="music-sr-only">正在加载首页推荐</span>
     </div>
 
-    <template v-else>
+    <div v-else class="music-content te-content-arrival">
       <div v-if="recsError" class="music-notice" role="status">
         <i class="pi pi-info-circle"></i><span>{{ recsError }}</span>
         <button type="button" :disabled="recsLoading" @click="emit('loadRecommendations')">
@@ -330,7 +331,7 @@ function count(value: number | undefined): string {
           </button>
         </div>
       </section>
-    </template>
+    </div>
   </div>
 </template>
 

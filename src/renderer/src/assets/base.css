@@ -835,9 +835,20 @@ html[data-theme='pureWhite'] body {
 html[data-theme='pureWhite'][data-te-surface-material='liquidGlass'] body {
   background-color: #f5f7fb !important;
   background-image:
+    var(--te-glass-backdrop-image, var(--te-app-bg-image, none)),
     radial-gradient(88% 74% at 8% -10%, rgba(116, 164, 245, 0.14) 0%, transparent 67%),
     radial-gradient(72% 68% at 103% 92%, rgba(236, 164, 190, 0.09) 0%, transparent 70%),
     linear-gradient(142deg, #fbfcff 0%, #f3f5fa 100%) !important;
+}
+
+/* Keep the resolved page wallpaper above the lighting field. These variables
+   already account for global inheritance and explicit page overrides. */
+html[data-theme='pureWhite'][data-te-surface-material='liquidGlass'] body.te-local-surface {
+  --te-glass-backdrop-image: var(--te-local-bg-image, none);
+}
+
+html[data-theme='pureWhite'][data-te-surface-material='liquidGlass'] body.te-streaming-surface {
+  --te-glass-backdrop-image: var(--te-streaming-bg-image, none);
 }
 
 /* Preserve every settings background choice: the configured image remains the top
@@ -2975,7 +2986,7 @@ html[data-te-background-treatment='cover-blur'] .settings-preview-layout {
   background: transparent !important;
 }
 
-html.te-theme-tone-transition
+html.te-theme-tone-transition:not([data-te-motion='off'])
   :is(
     body,
     .title-bar,
@@ -3036,8 +3047,24 @@ html[data-te-lyric-accent='accent']
   border-radius: var(--te-toast-radius);
 }
 
+html[data-te-motion='reduced'].te-theme-tone-transition
+  :is(
+    body,
+    .title-bar,
+    .side-menu,
+    .dashboard-wrapper,
+    .song-list,
+    .settings-page,
+    .theme-studio-page,
+    .streaming-page,
+    .player-bar,
+    .glass-card
+  ) {
+  transition-duration: 120ms !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  html.te-theme-tone-transition
+  html.te-theme-tone-transition:not([data-te-motion='full'], [data-te-motion='off'])
     :is(
       body,
       .title-bar,
@@ -3050,7 +3077,7 @@ html[data-te-lyric-accent='accent']
       .player-bar,
       .glass-card
     ) {
-    transition-duration: 0.01ms !important;
+    transition-duration: 120ms !important;
   }
 }
 

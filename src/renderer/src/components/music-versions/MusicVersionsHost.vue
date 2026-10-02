@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useNativeDialog } from '@renderer/composables/useNativeDialog'
 import type { Track } from '@renderer/types/music'
 import type { VersionScope } from '@renderer/utils/musicVersions.ts'
 import { versionSourceKey } from '@renderer/utils/trackSourceIdentity.ts'
@@ -19,7 +20,7 @@ const props = withDefaults(
 const emit = defineEmits<{ close: [] }>()
 const music = useMusicStore()
 const dialog = ref<HTMLDialogElement | null>(null)
-const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+useNativeDialog(dialog, () => props.restoreFocus)
 const tracks = computed(() => {
   const result = new Map(music.tracks.value.map((track) => [versionSourceKey(track), track]))
   for (const playlist of music.playlists.value)
@@ -29,11 +30,6 @@ const tracks = computed(() => {
     }
   if (props.initialTrack) result.set(versionSourceKey(props.initialTrack), props.initialTrack)
   return [...result.values()]
-})
-onMounted(() => dialog.value?.showModal())
-onBeforeUnmount(() => {
-  dialog.value?.close()
-  ;(props.restoreFocus ?? trigger)?.focus()
 })
 function play(selected: Track[]): void {
   if (selected.length) usePlayerStore().playTrack(selected[0], selected)

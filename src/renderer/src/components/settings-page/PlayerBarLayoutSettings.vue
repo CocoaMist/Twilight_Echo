@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { PLAYER_BAR_MODES, type PlayerBarMode } from '../../../../shared/playerBar.ts'
@@ -133,7 +134,7 @@ const chromeNote: Record<PlayerBarMode, string> = {
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <div v-if="layoutOpen" class="settings-accordion-body">
+  <SettingsDisclosure :open="layoutOpen" class="settings-accordion-body">
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
@@ -247,7 +248,7 @@ const chromeNote: Record<PlayerBarMode, string> = {
       同一个按钮只会出现在一处：把它添加到别的一侧，就等于从原来那一侧移过去。播放控制至少要留一个，全部移除后会自动补回。
       共 {{ PLAYER_BAR_MODES.length }} 种形态，各自独立编排。
     </p>
-  </div>
+  </SettingsDisclosure>
 </template>
 
 <style scoped>

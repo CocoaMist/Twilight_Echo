@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useNativeDialog } from '@renderer/composables/useNativeDialog'
 import { useEscapeToClose } from '@renderer/app/useDismissLayer.ts'
 import type { Playlist } from '@renderer/stores/useMusicStore.ts'
 import type { PlaylistDialogRequest } from '@renderer/components/song-list/usePlaylistLifecycleActions.ts'
@@ -14,7 +15,7 @@ const dialog = ref<HTMLDialogElement | null>(null)
 const input = ref<HTMLInputElement | null>(null)
 const targetSelect = ref<HTMLSelectElement | null>(null)
 const value = ref(props.request.initialValue)
-let previousFocus: HTMLElement | null = null
+useNativeDialog(dialog)
 
 const labels = computed(() => {
   if (props.request.kind === 'move') {
@@ -53,14 +54,8 @@ useEscapeToClose(
   () => emit('close')
 )
 onMounted(() => {
-  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  dialog.value?.showModal()
   if (input.value) input.value.select()
   else targetSelect.value?.focus()
-})
-onBeforeUnmount(() => {
-  dialog.value?.close()
-  if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
 })
 </script>
 

@@ -1,0 +1,11 @@
+/* A single content handoff, with no per-row stagger or delayed interaction. */
+html:is([data-te-motion='full'], [data-te-motion='reduced']) .te-content-arrival {
+  opacity: 1;
+  transition: opacity 160ms var(--te-ease-out-strong) !important;
+  @starting-style {
+    opacity: 0;
+  }
+}
+html[data-te-motion='reduced'] .te-content-arrival {
+  transition-duration: 120ms !important;
+}

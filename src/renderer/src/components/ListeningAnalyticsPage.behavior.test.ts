@@ -85,6 +85,7 @@ import {useListeningStatsStore,resetListeningStatsForTest,recordListeningForTest
 import {getUnifiedRecentResolverRebuildCount} from '@renderer/utils/unifiedRecentTracks'
 const expect=(ok,message)=>{if(!ok)throw new Error(message)}
 const tick=async()=>{await nextTick();await nextTick()}
+const untilClosed=async()=>{const end=Date.now()+3000;while(document.querySelector('.stats-clear-dialog')){if(Date.now()>end)throw new Error('native clear dialog exit did not finish');await new Promise(resolve=>setTimeout(resolve,20))}await tick()}
 const text=selector=>document.querySelector(selector)?.textContent
 const button=(scope,label)=>[...document.querySelectorAll(scope+' button')].find(el=>el.textContent.trim()===label)
 const key=async(el,value)=>{el.focus();el.dispatchEvent(new KeyboardEvent('keydown',{key:value,bubbles:true,cancelable:true}));await tick()}
@@ -152,7 +153,7 @@ window.runJournalTests=async()=>{
   expect(document.activeElement.textContent.trim()==='取消','destructive action received initial focus')
   expect(text('.stats-clear-preview').includes('2分钟'),'clear preview did not use the selected period')
   expect(JSON.stringify(listeningStats.value)===before,'opening clear dialog deleted records')
-  button('.stats-clear-actions','取消').click();await tick()
+  button('.stats-clear-actions','取消').click();await untilClosed()
   expect(!document.querySelector('.stats-clear-dialog')&&document.activeElement===clearEntry,'cancel failed to close and restore focus')
   expect(JSON.stringify(listeningStats.value)===before,'cancel deleted data')
   clearEntry.click();await tick()
@@ -164,7 +165,7 @@ window.runJournalTests=async()=>{
   expect(document.querySelector('.stats-clear-error')&&document.querySelector('.stats-clear-confirm').disabled,'reversed date range allowed deletion')
   await setDate('开始日期',earlier);await setDate('结束日期',earlier)
   expect(text('.stats-clear-preview').includes('1分钟'),'custom range preview is incorrect')
-  document.querySelector('.stats-clear-confirm').click();await tick()
+  document.querySelector('.stats-clear-confirm').click();await untilClosed()
   expect(!document.querySelector('.stats-clear-dialog'),'clear did not close dialog')
   expect(listeningStats.value.days[earlier]===undefined&&listeningStats.value.days[today]===120,'custom clearing affected dates outside range')
   expect(text('.hero-duration').includes('2')&&text('.rhythm-total').includes('2'),'clearing failed to update hero and child chart')
@@ -172,12 +173,12 @@ window.runJournalTests=async()=>{
   expect(JSON.parse(localStorage.getItem('twilight-echo:listening-stats:v1')).days[earlier]===undefined,'clear was not saved immediately')
   clearEntry.click();await tick();await setPreset('custom');await setDate('开始日期',earlier);await setDate('结束日期',earlier)
   expect(document.querySelector('.stats-clear-confirm').disabled&&text('.stats-clear-preview').includes('没有可清除'),'empty range can be cleared')
-  dialog=document.querySelector('.stats-clear-dialog');dialog.dispatchEvent(new Event('cancel',{cancelable:true}));await tick()
+  dialog=document.querySelector('.stats-clear-dialog');dialog.dispatchEvent(new Event('cancel',{cancelable:true}));await untilClosed()
   expect(!document.querySelector('.stats-clear-dialog'),'Escape cancel did not close dialog')
   listeningStats.value.tracks.legacy=stat(track('legacy'),3600,5);triggerRef(listeningStats);await tick()
   clearEntry.click();await tick();expect(document.querySelector('.stats-clear-legacy'),'undated history limitation is hidden')
   await setPreset('all');expect(!document.querySelector('.stats-clear-legacy'),'all-data clearing still claims to retain legacy history')
-  document.querySelector('.stats-clear-confirm').click();await tick()
+  document.querySelector('.stats-clear-confirm').click();await untilClosed()
   expect(document.querySelector('.journal-empty')&&document.querySelector('.journal-clear').disabled,'full clear did not restore empty state')
   expect(Object.keys(listeningStats.value.days).length===0&&Object.keys(listeningStats.value.tracks).length===0,'full clear retained historical data')
   app.unmount();resetListeningStatsForTest()

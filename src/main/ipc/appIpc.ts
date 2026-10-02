@@ -15,7 +15,10 @@ import {
   cancelAppUpdateDownload,
   checkForAppUpdate,
   downloadAppUpdate,
-  installDownloadedAppUpdate
+  installDownloadedAppUpdate,
+  getAppUpdateState,
+  setAppUpdatePreferences,
+  dismissAppUpdate
 } from '../app/appUpdateService.ts'
 
 const MAX_PLAYBACK_SAVE_REQUEST_ID_LENGTH = 128
@@ -85,6 +88,18 @@ export function registerAppIpc(ipcMain: IpcMain): void {
   ipcMain.handle('app:checkForUpdates', async (event) => {
     assertTrustedIpcSender(event, 'app IPC')
     return await checkForAppUpdate()
+  })
+  ipcMain.handle('app:getUpdateState', async (event) => {
+    assertTrustedIpcSender(event, 'app update IPC')
+    return getAppUpdateState()
+  })
+  ipcMain.handle('app:setUpdatePreferences', async (event, patch) => {
+    assertTrustedIpcSender(event, 'app update IPC')
+    return setAppUpdatePreferences(patch)
+  })
+  ipcMain.handle('app:dismissUpdate', async (event, action) => {
+    assertTrustedIpcSender(event, 'app update IPC')
+    return dismissAppUpdate(action)
   })
   ipcMain.handle('app:downloadUpdate', async (event) => {
     assertTrustedIpcSender(event, 'app IPC')

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useNativeDialog } from '@renderer/composables/useNativeDialog'
 import type { ListeningStats } from '@renderer/stores/useListeningStatsStore'
 import {
   isListeningStatsClearRange,
@@ -19,7 +20,6 @@ const preset = ref('7')
 const today = computed(() => utcDayKey(props.now))
 const customStart = ref(utcDayKey(new Date(props.now.getTime() - 6 * 86_400_000)))
 const customEnd = ref(today.value)
-let previousFocus: HTMLElement | null = null
 
 const range = computed<ListeningStatsClearRange>(() => {
   if (preset.value === 'all') return null
@@ -41,14 +41,9 @@ const canClear = computed(() =>
   Boolean(preview.value && (preview.value.dayCount > 0 || preview.value.trackCount > 0))
 )
 
+useNativeDialog(dialog)
 onMounted(() => {
-  previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  dialog.value?.showModal()
   cancel.value?.focus()
-})
-onBeforeUnmount(() => {
-  dialog.value?.close()
-  previousFocus?.focus()
 })
 
 function onBackdropClick(event: MouseEvent): void {

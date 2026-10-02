@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from 'vue'
 import {
   DEFAULT_MINI_PLAYER_SETTINGS,
   EMPTY_MINI_PLAYER_STATE,
@@ -22,6 +22,7 @@ import {
 import { resolveMiniPlayerStyle } from './styles'
 import { useMiniPlayerCustomizationDraft } from './useMiniPlayerCustomizationDraft'
 import { useMotionPreference } from '../app/useMotionPreference'
+import { useResolvedMotionMode } from '../app/useResolvedMotionMode'
 import { useCover } from '../utils/coverLoader'
 import { extractAverageColor } from '../utils/colorExtractor'
 import { useSmoothedValue } from '../utils/useSmoothedValue'
@@ -55,6 +56,11 @@ const bootstrapError = ref('')
 const coverFailed = ref(false)
 const coverSurfaceColor = ref<string | null>(null)
 const customizerOpen = ref(false)
+const customizerLayout = ref(false)
+const customizerOpening = ref(false)
+const artworkElement = ref<HTMLElement | null>(null)
+let customizerGeneration = 0
+let artworkAnimation: Animation | null = null
 const hovered = ref(false)
 const dragging = ref(false)
 const volumeHudVisible = ref(false)
@@ -63,6 +69,15 @@ const viewportWidth = ref(Math.max(1, window.innerWidth))
 const viewportHeight = ref(Math.max(1, window.innerHeight))
 const motionPreference = ref<MotionPreference>('system')
 useMotionPreference(motionPreference)
+const motionMode = useResolvedMotionMode(motionPreference)
+watch(
+  motionMode,
+  () => {
+    artworkAnimation?.cancel()
+    artworkAnimation = null
+  },
+  { flush: 'sync' }
+)
 
 let volumeBeforeMute = 0.6
 let volumeHudTimer: ReturnType<typeof setTimeout> | null = null
@@ -136,7 +151,7 @@ const styleClasses = computed(() => [
     'is-artwork-hidden': !resolvedVisibility.value.artwork,
     'is-cover-mode': activeProfile.value.background.kind === 'cover',
     'has-cover-background': hasCoverBackground.value,
-    'is-customizing': customizerOpen.value,
+    'is-customizing': customizerLayout.value,
     'is-volume-hud': volumeHudVisible.value
   }
 ])
@@ -328,12 +343,14 @@ function toggleRemainingTime(): void {
   }
 }
 
-async function updateWindowSettings(patch: MiniPlayerSettingsPatch): Promise<void> {
+async function updateWindowSettings(patch: MiniPlayerSettingsPatch): Promise<boolean> {
   customization.replaceSettings({ ...settings.value, ...patch })
   try {
     await customization.flush()
+    return true
   } catch (error) {
     console.error('[mini-player] Failed to update window settings:', error)
+    return false
   }
 }
 
@@ -370,31 +387,103 @@ function cycleForm(): void {
   })
 }
 
-function openCustomizer(): void {
-  customization.beginSession()
+async function animateCustomizerArtwork(
+  before: DOMRect | undefined,
+  generation: number
+): Promise<void> {
+  await nextTick()
+  if (generation !== customizerGeneration) return
+  const artwork = artworkElement.value
+  artworkAnimation?.cancel()
+  artworkAnimation = null
+  if (!artwork || !before || motionMode.value === 'off') return
+  const after = artwork.getBoundingClientRect()
+  if (!after.width || !after.height || !before.width || !before.height) return
+  const targetTransform = getComputedStyle(artwork).transform
+  const dx = before.left + before.width / 2 - after.left - after.width / 2
+  const dy = before.top + before.height / 2 - after.top - after.height / 2
+  const reduced = motionMode.value === 'reduced'
+  const animation = artwork.animate(
+    reduced
+      ? [{ opacity: 0 }, { opacity: 1 }]
+      : [
+          {
+            transform: `translate(${dx}px, ${dy}px) scale(${before.width / after.width}, ${before.height / after.height}) ${targetTransform === 'none' ? '' : targetTransform}`
+          },
+          { transform: targetTransform }
+        ],
+    { duration: reduced ? 120 : 200, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' }
+  )
+  artworkAnimation = animation
+  void animation.finished
+    .then(() => {
+      if (artworkAnimation === animation) artworkAnimation = null
+    })
+    .catch(() => undefined)
+}
+
+async function openCustomizer(): Promise<void> {
+  if (customizerOpen.value) {
+    customizerGeneration++
+    return
+  }
+  if (customizerOpening.value) return
+  const generation = ++customizerGeneration
+  const before = artworkElement.value?.getBoundingClientRect()
+  customizerOpening.value = true
+  if (!customizerLayout.value) customization.beginSession()
   const { windowWidth, windowHeight } = settings.value
   if (windowWidth < CUSTOMIZER_MIN_SIZE.width || windowHeight < CUSTOMIZER_MIN_SIZE.height) {
-    sizeBeforeCustomizer = { width: windowWidth, height: windowHeight }
-    void updateWindowSettings({
+    sizeBeforeCustomizer ??= { width: windowWidth, height: windowHeight }
+    await updateWindowSettings({
       windowWidth: Math.max(windowWidth, CUSTOMIZER_MIN_SIZE.width),
       windowHeight: Math.max(windowHeight, CUSTOMIZER_MIN_SIZE.height)
     })
   }
+  if (generation !== customizerGeneration) return
+  customizerOpening.value = false
+  customizerLayout.value = true
   customizerOpen.value = true
+  await animateCustomizerArtwork(before, generation)
 }
 
 async function closeCustomizer(): Promise<void> {
+  const generation = ++customizerGeneration
   try {
     await customization.flush()
+    if (generation !== customizerGeneration) return
+    customizerOpening.value = false
     customizerOpen.value = false
-    if (sizeBeforeCustomizer) {
-      const previous = sizeBeforeCustomizer
-      sizeBeforeCustomizer = null
-      await updateWindowSettings({ windowWidth: previous.width, windowHeight: previous.height })
-    }
+    if (!customizerLayout.value) await finishCustomizerLeave()
   } catch {
     // The editor stays open so its inline persistence error remains actionable.
+    if (generation !== customizerGeneration) return
+    customizerOpening.value = false
+    customizerLayout.value = true
+    customizerOpen.value = true
   }
+}
+
+async function finishCustomizerLeave(): Promise<void> {
+  if (customizerOpen.value || customizerOpening.value) return
+  const generation = customizerGeneration
+  const before = artworkElement.value?.getBoundingClientRect()
+  if (sizeBeforeCustomizer) {
+    const previous = sizeBeforeCustomizer
+    const restored = await updateWindowSettings({
+      windowWidth: previous.width,
+      windowHeight: previous.height
+    })
+    if (generation !== customizerGeneration) return
+    if (!restored) {
+      customizerLayout.value = true
+      customizerOpen.value = true
+      return
+    }
+    sizeBeforeCustomizer = null
+  }
+  customizerLayout.value = false
+  if (generation === customizerGeneration) await animateCustomizerArtwork(before, generation)
 }
 
 async function pickBackgroundImage(): Promise<string | null> {
@@ -486,7 +575,7 @@ function endDrag(): void {
 async function handleKeydown(event: KeyboardEvent): Promise<void> {
   if (event.key === 'Escape') {
     event.preventDefault()
-    if (customizerOpen.value) await closeCustomizer()
+    if (customizerOpen.value || customizerOpening.value) await closeCustomizer()
     else await returnToMainWindow()
     return
   }
@@ -589,6 +678,9 @@ watch(coverSrc, (source, _previous, onCleanup) => {
 })
 
 onBeforeUnmount(() => {
+  customizerGeneration++
+  artworkAnimation?.cancel()
+  artworkAnimation = null
   if (clockTimer !== null) clearInterval(clockTimer)
   if (volumeHudTimer) clearTimeout(volumeHudTimer)
   if (dragFrame !== 0) cancelAnimationFrame(dragFrame)
@@ -642,6 +734,7 @@ onBeforeUnmount(() => {
 
       <div
         v-if="resolvedVisibility.artwork"
+        ref="artworkElement"
         class="mini-artwork-wrap"
         title="双击返回完整播放器"
         @dblclick="returnToMainWindow"
@@ -668,7 +761,7 @@ onBeforeUnmount(() => {
         <span class="mini-artwork-sheen" aria-hidden="true"></span>
       </div>
 
-      <div class="mini-info">
+      <div class="mini-info" :inert="customizerLayout">
         <div v-if="!isCompact" class="mini-kicker">
           <span
             v-if="resolvedVisibility.equalizer && hasTrack"
@@ -716,6 +809,7 @@ onBeforeUnmount(() => {
 
       <div
         class="mini-progress"
+        :inert="customizerLayout"
         :class="{ 'without-time': !resolvedVisibility.time, 'is-disabled': !hasTrack }"
         :style="progressStyle"
       >
@@ -750,7 +844,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <footer class="mini-controls">
+      <footer class="mini-controls" :inert="customizerLayout">
         <div v-if="!isCompact" class="mini-controls-side left">
           <button
             v-if="resolvedVisibility.playMode"
@@ -903,19 +997,21 @@ onBeforeUnmount(() => {
         </div>
       </Transition>
 
-      <MiniPlayerCustomizer
-        v-if="customizerOpen"
-        :settings="settings"
-        mode="overlay"
-        :saving="customization.saving.value"
-        :error="customization.error.value"
-        :pick-background-image="pickBackgroundImage"
-        @update:settings="customization.replaceSettings"
-        @undo="customization.undoSession"
-        @reset="customization.resetActiveTheme"
-        @flush="customization.flush"
-        @close="closeCustomizer"
-      />
+      <Transition name="mini-customizer-panel" @after-leave="finishCustomizerLeave">
+        <MiniPlayerCustomizer
+          v-if="customizerOpen"
+          :settings="settings"
+          mode="overlay"
+          :saving="customization.saving.value"
+          :error="customization.error.value"
+          :pick-background-image="pickBackgroundImage"
+          @update:settings="customization.replaceSettings"
+          @undo="customization.undoSession"
+          @reset="customization.resetActiveTheme"
+          @flush="customization.flush"
+          @close="closeCustomizer"
+        />
+      </Transition>
     </section>
   </main>
 </template>

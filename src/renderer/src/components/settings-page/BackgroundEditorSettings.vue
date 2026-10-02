@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsDisclosure from './SettingsDisclosure.vue'
 import { ref } from 'vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { appBackgroundPageOptions } from './types.ts'
@@ -184,7 +185,7 @@ function toggleBackgroundPage(page: AppBackgroundPage): void {
         </span>
         <i class="pi pi-chevron-down"></i>
       </button>
-      <div v-if="customBackgroundOpen" class="background-accordion-panel">
+      <SettingsDisclosure :open="customBackgroundOpen" class="background-accordion-panel">
         <section class="background-editor">
           <div class="background-editor-head">
             <div>
@@ -290,7 +291,10 @@ function toggleBackgroundPage(page: AppBackgroundPage): void {
                 </span>
                 <i class="pi pi-chevron-down"></i>
               </button>
-              <div v-if="backgroundPageOpen === page.value" class="page-background-controls">
+              <SettingsDisclosure
+                :open="backgroundPageOpen === page.value"
+                class="page-background-controls"
+              >
                 <button
                   type="button"
                   class="inherit-toggle"
@@ -401,11 +405,11 @@ function toggleBackgroundPage(page: AppBackgroundPage): void {
                     settings.appBackground.pages[page.value].image ? '已选择图片' : '未设置图片'
                   }}</small>
                 </div>
-              </div>
+              </SettingsDisclosure>
             </div>
           </div>
         </section>
-      </div>
+      </SettingsDisclosure>
     </div>
   </div>
 </template>

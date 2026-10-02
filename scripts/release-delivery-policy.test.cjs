@@ -120,6 +120,11 @@ test('update checks download GitHub release installers without electron-updater'
   const projectUrls = read('src/shared/projectUrls.ts')
   const updater = read('src/main/ipc/appIpc.ts')
   const service = read('src/main/app/appUpdateService.ts')
+  const updateEngine = [
+    service,
+    read('src/main/app/appUpdateRelease.ts'),
+    read('src/main/app/appUpdateDownload.ts')
+  ].join('\n')
   assert.match(projectUrls, /export const GITHUB_OWNER = 'Px-asen'/)
   assert.match(projectUrls, /export const GITHUB_REPO = 'Twilight_Echo'/)
   assert.match(
@@ -135,18 +140,18 @@ test('update checks download GitHub release installers without electron-updater'
   assert.doesNotMatch(service, /electron-updater/)
   assert.doesNotMatch(service, /autoUpdater/)
   assert.match(service, /shell\.openPath/)
-  assert.match(service, /createHash\('sha256'\)/)
-  assert.match(service, /error: 'no-checksum'/)
-  assert.match(service, /pickLatestAvailableRelease/)
-  assert.match(service, /extractAssetDigestSha256/)
-  assert.match(service, /GitHub Release 未提供 Windows 安装包的 SHA-256 校验和/)
+  assert.match(updateEngine, /createHash\('sha256'\)/)
+  assert.match(updateEngine, /error: 'no-checksum'/)
+  assert.match(updateEngine, /pickLatestAvailableRelease/)
+  assert.match(updateEngine, /extractAssetDigestSha256/)
+  assert.match(updateEngine, /GitHub Release 未提供 Windows 安装包的 SHA-256 校验和/)
   const settingsTypes = read('src/renderer/src/components/settings-page/types.ts')
-  const about = read('src/renderer/src/components/settings-page/AboutSettingsSection.vue')
+  const about = read('src/renderer/src/components/settings-page/AppUpdatePanel.vue')
   assert.match(settingsTypes, /from '\.\.\/\.\.\/\.\.\/\.\.\/shared\/projectUrls\.ts'/)
   assert.match(settingsTypes, /RELEASES_URL/)
   assert.match(about, /下载更新/)
   assert.match(about, /安装并退出/)
-  assert.match(about, /点击检查更新/)
+  assert.match(about, /检查更新/)
 })
 
 test('release docs keep non-Windows audio backends explicitly unverified', () => {

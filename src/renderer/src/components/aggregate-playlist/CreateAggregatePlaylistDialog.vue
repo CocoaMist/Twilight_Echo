@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import AnimatedInput from '../AnimatedInput.vue'
+import NativeDialogTransition from '../NativeDialogTransition.vue'
 import { useEscapeToClose, useFocusTrap } from '../../app/useDismissLayer.ts'
 import { useMusicStore } from '../../stores/useMusicStore'
 import type { Track } from '../../types/music'
@@ -68,10 +69,11 @@ useFocusTrap(dialogRef, () => props.show)
 
 <template>
   <Teleport to="body">
-    <Transition name="aggregate-dialog">
+    <NativeDialogTransition overlay>
       <div v-if="show" class="create-aggregate-overlay" @click.self="close()">
         <div
           ref="dialogRef"
+          data-dialog-panel
           class="create-aggregate-dialog"
           role="dialog"
           aria-modal="true"
@@ -101,50 +103,11 @@ useFocusTrap(dialogRef, () => props.show)
           </div>
         </div>
       </div>
-    </Transition>
+    </NativeDialogTransition>
   </Teleport>
 </template>
 
 <style scoped>
-.aggregate-dialog-enter-active,
-.aggregate-dialog-leave-active {
-  transition: opacity var(--te-motion-panel) var(--te-ease-soft);
-}
-
-.aggregate-dialog-enter-active .create-aggregate-dialog,
-.aggregate-dialog-leave-active .create-aggregate-dialog {
-  transition: transform var(--te-motion-panel) var(--te-ease-soft);
-}
-
-.aggregate-dialog-leave-active,
-.aggregate-dialog-leave-active .create-aggregate-dialog {
-  transition-duration: var(--te-motion-hover);
-  pointer-events: none;
-}
-
-.aggregate-dialog-enter-from,
-.aggregate-dialog-leave-to {
-  opacity: 0;
-}
-
-.aggregate-dialog-enter-from .create-aggregate-dialog,
-.aggregate-dialog-leave-to .create-aggregate-dialog {
-  transform: scale(0.97);
-}
-
-html[data-te-motion='reduced'] .create-aggregate-overlay {
-  transition: opacity 120ms var(--te-ease-soft) !important;
-}
-
-html[data-te-motion='reduced'] .create-aggregate-dialog,
-html[data-te-motion='off'] .create-aggregate-dialog {
-  transform: none !important;
-}
-
-html[data-te-motion='off'] .create-aggregate-overlay {
-  opacity: 1 !important;
-}
-
 .create-aggregate-overlay {
   position: fixed;
   inset: 0;

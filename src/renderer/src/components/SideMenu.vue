@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
 import {
   computed,
   defineAsyncComponent,
@@ -272,13 +273,15 @@ function setPressOrigin(event: PointerEvent): void {
     </nav>
   </div>
   <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
-  <NavigationPagesDialog
-    v-if="directory"
-    :pages="props.pages"
-    :edit="directory === 'edit'"
-    @close="directory = null"
-    @select="selectPage"
-  />
+  <NativeDialogTransition>
+    <NavigationPagesDialog
+      v-if="directory"
+      :pages="props.pages"
+      :edit="directory === 'edit'"
+      @close="directory = null"
+      @select="selectPage"
+    />
+  </NativeDialogTransition>
 </template>
 
 <style scoped>

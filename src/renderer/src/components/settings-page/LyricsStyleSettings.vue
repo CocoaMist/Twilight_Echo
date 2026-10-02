@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsDisclosure from './SettingsDisclosure.vue'
 import { ref } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
 import LyricsAppearanceCustomizer from '../LyricsAppearanceCustomizer.vue'
@@ -43,7 +44,7 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <div v-if="open" class="settings-accordion-body">
+  <SettingsDisclosure :open="open" class="settings-accordion-body">
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
@@ -319,7 +320,7 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
         打开歌词个性化
       </button>
     </div>
-  </div>
+  </SettingsDisclosure>
   <Teleport to="body">
     <LyricsAppearanceCustomizer :open="customizerOpen" @close="customizerOpen = false" />
   </Teleport>
