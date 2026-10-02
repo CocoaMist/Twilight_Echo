@@ -22,6 +22,7 @@ import { ClosePersistenceAttemptGate } from './closePersistence.ts'
 import { isSafeExternalUrl } from '../security/externalUrl.ts'
 import type { RendererClosePersistenceOutcome } from '../../shared/closePersistence.ts'
 import { readWindowState, restoreWindowSize, saveWindowState } from './windowState.ts'
+import { installWindowChromePublisher } from './windowChrome.ts'
 
 const PLAYBACK_SESSION_SAVE_TIMEOUT_MS = 1800
 const closePersistenceAttemptGate = new ClosePersistenceAttemptGate()
@@ -179,6 +180,7 @@ export function createWindow(): void {
     }
   })
 
+  installWindowChromePublisher(runtime.mainWindow)
   runtime.mainWindow.on('ready-to-show', () => {
     if (windowState?.maximized) runtime.mainWindow?.maximize()
     runtime.mainWindow?.show()

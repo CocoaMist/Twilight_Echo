@@ -335,6 +335,7 @@ void editorPaneRef.value
         >
           <div class="live-preview-canvas" :style="previewCanvasStyle" inert aria-hidden="true">
             <TitleBar
+              preview
               :menu-open="previewNavigationOpen"
               :glass="previewSurface === 'player'"
               :streaming="false"

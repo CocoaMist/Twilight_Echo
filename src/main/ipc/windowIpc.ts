@@ -2,8 +2,16 @@ import { BrowserWindow, Menu, clipboard, type IpcMain } from 'electron'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { nativeMenuTemplate, registerNativeContextMenuIpc } from './nativeContextMenuIpc.ts'
 import { registerEqualizerClipboardIpc } from './equalizerClipboardIpc.ts'
+import { readWindowChromeState } from '../app/windowChrome.ts'
 
 export function registerWindowIpc(ipcMain: IpcMain): void {
+  ipcMain.handle('window:getState', (event) => {
+    if (!shouldAcceptIpcEvent(event, 'window state IPC'))
+      throw new Error('Untrusted window request')
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) throw new Error('Window is unavailable')
+    return readWindowChromeState(win)
+  })
   registerEqualizerClipboardIpc(ipcMain, {
     assertTrusted: assertTrustedIpcSender,
     readText: () => clipboard.readText(),

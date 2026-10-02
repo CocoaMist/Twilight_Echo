@@ -110,9 +110,11 @@ export function useAppNavigation() {
     pageTarget.value.kind === 'streaming' ? pageTarget.value.tab : 'home'
   )
 
-  function navigate(target: NavigationPageTarget): void {
+  function navigate(target: NavigationPageTarget, options?: { resetHistory?: boolean }): void {
     if (pageTarget.value.kind === 'local') lastLocal.value = pageTarget.value
-    if (
+    if (options?.resetHistory) {
+      history.value = []
+    } else if (
       navigationTargetId(target) !== activePageId.value ||
       JSON.stringify(target) !== JSON.stringify(pageTarget.value)
     ) {
@@ -121,6 +123,10 @@ export function useAppNavigation() {
     pageTarget.value = target
     overlayHistory.length = 0
     overlay.value = null
+  }
+  function selectSidebarPage(target: NavigationPageTarget): void {
+    // Sidebar entries are roots, not another level in the current return path.
+    navigate(target, { resetHistory: true })
   }
   function goBackPage(): void {
     const previous = history.value.at(-1)
@@ -281,6 +287,7 @@ export function useAppNavigation() {
     streamingTab,
     canGoBackPage,
     navigate,
+    selectSidebarPage,
     goBackPage,
     showPlayingPage,
     showStreamingPage,

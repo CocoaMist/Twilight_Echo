@@ -761,6 +761,10 @@ interface WindowAPI {
     ) => () => void
   }
   window: EqualizerClipboardApi & {
+    getState: () => Promise<import('../shared/windowChrome.ts').WindowChromeState>
+    onStateChanged: (
+      callback: (state: import('../shared/windowChrome.ts').WindowChromeState) => void
+    ) => () => void
     popupContextMenu: (request: NativeContextMenuRequest) => Promise<string | null>
     closeContextMenu: (requestId: string) => Promise<void>
     minimize: () => void

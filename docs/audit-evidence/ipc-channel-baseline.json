@@ -259,6 +259,7 @@
     "themes:validateAssets",
     "trayPlayer:getBootstrap",
     "window:copy-eq-bands",
+    "window:getState",
     "window:paste-eq-bands"
   ],
   "mainOn": [
@@ -543,6 +544,7 @@
     "themes:validateAssets",
     "trayPlayer:getBootstrap",
     "window:copy-eq-bands",
+    "window:getState",
     "window:paste-eq-bands"
   ],
   "preloadSends": [
@@ -601,7 +603,8 @@
     "themeWorkshop:prepareDisable",
     "themes:changed",
     "themes:systemToneChanged",
-    "trayPlayer:state"
+    "trayPlayer:state",
+    "window:state-changed"
   ],
   "rendererDomains": [
     "app",
@@ -823,6 +826,7 @@
     "window.closeContextMenu",
     "window.copyEqBands",
     "window.minimize",
+    "window.onStateChanged",
     "window.pasteEqBands",
     "window.popupContextMenu",
     "window.toggleMaximize"

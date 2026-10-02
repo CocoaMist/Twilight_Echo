@@ -13,7 +13,11 @@ import {
 } from 'vue'
 import TitleBar from './components/TitleBar.vue'
 const SideMenu = defineAsyncComponent(() => import('@renderer/components/SideMenu.vue'))
-import { buildNavigationPages, type StreamingPageTab } from '@renderer/app/navigationPages.ts'
+import {
+  buildNavigationPages,
+  type NavigationPageTarget,
+  type StreamingPageTab
+} from '@renderer/app/navigationPages.ts'
 import { useProviderStore } from '@renderer/stores/useProviderStore'
 import {
   getNavigationLibraryProviders,
@@ -151,6 +155,7 @@ const {
   openSettingsPage
 } = navigation
 const { pushNotice } = useAppNoticeStore()
+const noticeHostRef = ref<InstanceType<typeof AppNoticeHost> | null>(null)
 
 // One global back affordance on the title bar. Every full-screen page
 // registers a single base layer here; deeper in-page states (streaming
@@ -173,9 +178,19 @@ const togglePluginPage = navigation.createTogglePluginHandler()
 const coverOrigin = ref({ x: 48, y: window.innerHeight - 36, w: 48, h: 48 })
 const streamingArtistRequest = ref<StreamingArtistNavigationRequest | null>(null)
 let streamingArtistRequestKey = 0
-// Keep StreamingPage mounted for the rest of the session so leaving/re-entering
-// restores the last tab and detail. App restart remounts and returns to home.
+// Keep StreamingPage mounted so contextual navigation preserves its detail.
+// Explicit sidebar selection returns the selected tab to its root instead.
 const streamingPageTabs = shallowRef<StreamingPageTab[]>([])
+const streamingRootNavigationRevisions = ref<Partial<Record<StreamingPageTab, number>>>({})
+
+function selectSidebarPage(target: NavigationPageTarget): void {
+  streamingArtistRequest.value = null
+  if (target.kind === 'streaming') {
+    const revisions = streamingRootNavigationRevisions.value
+    revisions[target.tab] = (revisions[target.tab] ?? 0) + 1
+  }
+  navigation.selectSidebarPage(target)
+}
 watch(
   [showStreamingPage, streamingTab],
   ([visible, tab]) => {
@@ -925,6 +940,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         :streaming="showStreamingPage && !showPlayingPage"
         :hide-start="showThemeStudioPage || showLoginPage"
         :title-surface="titleSurface"
+        :active-tool="showPluginPage ? 'plugins' : showSettingsPage ? 'settings' : null"
         :menu-open="titleMenuOpen"
         @toggle-menu="toggleMenu"
         @collapse-menu="collapseMenu"
@@ -933,6 +949,8 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @settings="toggleSettingsPage"
         @plugins="togglePluginPage"
         @commands="commandPalette.open"
+        :notifications-open="noticeHostRef?.historyOpen ?? false"
+        @notifications="noticeHostRef?.toggleHistory($event)"
       />
     </div>
     <div
@@ -946,7 +964,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         :active-key="sideMenuActiveKey"
         :pages="navigationPages"
         @vue:mounted="startSideMenuMonitor"
-        @select-page="navigation.navigate($event.target)"
+        @select-page="selectSidebarPage($event.target)"
       />
     </div>
     <div class="app-shell-content">
@@ -1014,6 +1032,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
           :menu-open="menuOpen && showLocalSidebar"
           :has-player="hasPlayerBar"
           :initial-tab="tab"
+          :root-navigation-revision="streamingRootNavigationRevisions[tab] ?? 0"
           :artist-navigation-request="
             showStreamingSurface && tab === 'home' && streamingTab === tab
               ? streamingArtistRequest
@@ -1153,7 +1172,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     :undo="undoQueue"
     @close="queueSessions.open.value = false"
   />
-  <AppNoticeHost />
+  <AppNoticeHost ref="noticeHostRef" />
 </template>
 
 <style>

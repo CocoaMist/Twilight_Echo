@@ -225,6 +225,7 @@ onBeforeUnmount(() => {
       <div class="app-shell" :data-workshop-state="state">
         <div class="app-shell-title" inert>
           <TitleBar
+            preview
             :menu-open="true"
             :glass="false"
             :streaming="false"

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { BUILTIN_NAVIGATION_PAGES } from './navigationPages.ts'
 
 const { useAppNavigation } = (await import(
   new URL('./useAppNavigation.ts', import.meta.url).href
@@ -54,6 +55,43 @@ test('page history restores page parameters and foreground tools return to their
   navigation.goBackPage()
   assert.equal(navigation.activeCategory.value, 'albums')
   assert.equal(navigation.activeFilter.value, 'album:one')
+})
+
+test('sidebar selections switch root pages without exposing a return path', () => {
+  const navigation = useAppNavigation()
+  for (const page of BUILTIN_NAVIGATION_PAGES) {
+    navigation.onSelectView('albums', 'album:detail')
+    navigation.openSettingsPage()
+    navigation.selectSidebarPage(page.target)
+    assert.deepEqual(navigation.pageTarget.value, page.target)
+    assert.equal(navigation.canGoBackPage.value, false, page.id)
+    assert.equal(navigation.showSettingsPage.value, false)
+    navigation.goBackPage()
+    assert.deepEqual(navigation.pageTarget.value, page.target)
+  }
+})
+
+test('a secondary page returns to its selected root and stops there', () => {
+  const navigation = useAppNavigation()
+  navigation.selectSidebarPage({ kind: 'local', category: 'artists', filter: null })
+  navigation.onSelectView('artists', 'artist:one')
+  navigation.onSelectView('albums', 'album:one')
+  assert.equal(navigation.canGoBackPage.value, true)
+  navigation.goBackPage()
+  assert.equal(navigation.activeFilter.value, 'artist:one')
+  navigation.goBackPage()
+  assert.equal(navigation.activeCategory.value, 'artists')
+  assert.equal(navigation.activeFilter.value, null)
+  assert.equal(navigation.canGoBackPage.value, false)
+})
+
+test('selecting the current root from the sidebar discards its old detail history', () => {
+  const navigation = useAppNavigation()
+  navigation.selectSidebarPage({ kind: 'local', category: 'albums', filter: null })
+  navigation.onSelectView('albums', 'album:one')
+  navigation.selectSidebarPage({ kind: 'local', category: 'albums', filter: null })
+  assert.equal(navigation.activeFilter.value, null)
+  assert.equal(navigation.canGoBackPage.value, false)
 })
 
 test('local home history links open the shared recent page and retain their return target', () => {

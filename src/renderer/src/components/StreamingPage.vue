@@ -157,6 +157,7 @@ const props = defineProps<{
   hasPlayer: boolean
   active?: boolean
   initialTab?: StreamingTab
+  rootNavigationRevision?: number
   artistNavigationRequest?: StreamingArtistNavigationRequest | null
 }>()
 
@@ -2053,6 +2054,16 @@ function goBack(): void {
   clearSelection()
   popDetail()
 }
+
+watch(
+  () => props.rootNavigationRevision,
+  (revision) => {
+    if (!revision) return
+    resetDetail({ animate: false })
+    clearSearch()
+    clearSelection()
+  }
+)
 
 // The title-bar back button routes here through the global back stack (App.vue
 // registers the page-level layers). One entry covers this page's two deep
