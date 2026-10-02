@@ -241,6 +241,36 @@ test('watcher changes coalesce by canonical path before entering the scan queue'
   }
 })
 
+test('scan removals retain first canonical spelling, empty-path fallback, and inferred order', async (t) => {
+  const fixture = createFixture('removal-order')
+  t.after(fixture.cleanup)
+  const explicit = join(fixture.root, 'explicit.flac')
+  const missing = join(fixture.root, 'missing.flac')
+  fixture.persist(
+    createDocument(
+      1,
+      [fixture.root],
+      [
+        createTrack('cwd', process.cwd()),
+        createTrack('explicit', explicit),
+        createTrack('missing', missing),
+        createTrack('invalid', '')
+      ]
+    )
+  )
+  const first = process.platform === 'win32' ? explicit.toUpperCase() : explicit
+  const runner = new ScriptedRunner(async () =>
+    scanResult({
+      removedFilePaths: ['', first, explicit, first]
+    })
+  )
+  const coordinator = fixture.coordinator(runner)
+  t.after(() => coordinator.destroy())
+  const result = await coordinator.scanFull()
+  assert.deepEqual(result.removedFilePaths, [process.cwd(), first, missing])
+  assert.deepEqual(result.library.tracks, [createTrack('invalid', '')])
+})
+
 test('full scan exposes progress, pause, resume, and cancellation without committing partial data', async () => {
   const fixture = createFixture('scan-controls')
   try {
@@ -368,6 +398,10 @@ test('worker cover handles are normalized to thumbnails before batches and resul
         parsedTracks: [{ ...createTrack('streamed', streamedPath), cover: 'cover://full-a.png' }],
         parsedFilePaths: [streamedPath]
       })
+      call.onBatch?.({
+        parsedTracks: [{ ...createTrack('repeated', streamedPath), cover: 'cover://full-a.png' }],
+        parsedFilePaths: [streamedPath]
+      })
       return scanResult({
         identities: [
           { filePath: streamedPath, size: 1, mtimeMs: 1 },
@@ -402,7 +436,12 @@ test('worker cover handles are normalized to thumbnails before batches and resul
       final: 'cover://full-b.jpg',
       remote: 'https://x/y.jpg'
     })
-    assert.deepEqual(normalized.sort(), ['cover://full-a.png', 'cover://full-b.jpg'])
+    assert.deepEqual(Object.keys(covers), ['streamed', 'final', 'remote'])
+    assert.deepEqual(normalized.sort(), [
+      'cover://full-a.png',
+      'cover://full-a.png',
+      'cover://full-b.jpg'
+    ])
     assert.deepEqual(
       Object.fromEntries(
         fixture

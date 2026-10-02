@@ -612,9 +612,19 @@ test('settings backup and shortcut status APIs are exposed to the renderer', () 
   assert.doesNotMatch(preloadSource, /\.\.\.dataApi/)
   assert.doesNotMatch(preloadSource, /\.\.\.settingsApi/)
   assert.doesNotMatch(preloadSource, /\.\.\.themesApi/)
-  assert.match(storeSource, /exportSettingsBackup: \(\) => Promise<string>/)
-  assert.match(storeSource, /importSettingsBackup: \(json: string\) => Promise<AppSettings>/)
-  assert.match(storeSource, /getShortcutStatuses: \(\) => Promise<PlayerShortcutStatus\[]>/)
+  assert.match(storeSource, /async function exportSettingsBackup\(\): Promise<string>/)
+  assert.match(
+    storeSource,
+    /async function importSettingsBackup\(json: string\): Promise<AppSettings>/
+  )
+  assert.match(
+    storeSource,
+    /async function getShortcutStatuses\(\): Promise<PlayerShortcutStatus\[]>/
+  )
+  assert.match(
+    storeSource,
+    /return \{[\s\S]*exportSettingsBackup,[\s\S]*importSettingsBackup,[\s\S]*getShortcutStatuses/
+  )
 })
 
 test('window transparency is gated on native support (Wayland fallback to opaque)', () => {

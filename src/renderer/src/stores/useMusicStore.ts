@@ -499,9 +499,12 @@ export function useMusicStore() {
   }
 
   async function addTracks(newTracks: Track[], options: AddTracksOptions = {}): Promise<void> {
+    const excludedPaths = new Set(
+      excludedTracks.value.map((track) => normalizePortableLibraryPath(track.filePath))
+    )
     const unique: Track[] = []
     for (const track of newTracks) {
-      if (isTrackCurrentlyExcluded(track)) continue
+      if (excludedPaths.has(normalizePortableLibraryPath(track.filePath))) continue
       if (trackByPath.has(track.filePath)) continue
       trackByPath.set(track.filePath, track)
       trackById.set(track.id, track)
@@ -509,35 +512,14 @@ export function useMusicStore() {
     }
     if (unique.length === 0) return
 
-    const allowedTracks = unique.filter((track) => !isTrackCurrentlyExcluded(track))
-    if (allowedTracks.length !== unique.length) {
-      const allowedPaths = new Set(allowedTracks.map((track) => track.filePath))
-      for (const track of unique) {
-        if (allowedPaths.has(track.filePath)) continue
-        if (trackByPath.get(track.filePath)?.id === track.id) trackByPath.delete(track.filePath)
-        if (trackById.get(track.id)?.filePath === track.filePath) trackById.delete(track.id)
-      }
-    }
-    if (allowedTracks.length === 0) return
-    for (const track of allowedTracks) {
-      trackById.set(track.id, track)
-      trackByPath.set(track.filePath, track)
-    }
-    setTracks([...tracks.value, ...allowedTracks])
+    setTracks([...tracks.value, ...unique])
     if (!options.deferRebuild) {
       scheduleRebuild()
     }
     if (!isScanning.value) {
       void scheduleSaveLibrary()
     }
-    void queueBackgroundMetadataEnrichment(allowedTracks)
-  }
-
-  function isTrackCurrentlyExcluded(track: Pick<Track, 'filePath'>): boolean {
-    const key = normalizePortableLibraryPath(track.filePath)
-    return excludedTracks.value.some(
-      (exclusion) => normalizePortableLibraryPath(exclusion.filePath) === key
-    )
+    void queueBackgroundMetadataEnrichment(unique)
   }
 
   function removeTrack(id: string): void {

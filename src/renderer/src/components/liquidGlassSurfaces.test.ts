@@ -416,3 +416,85 @@ test('playbar regions keep their columns when a theme inserts decorative grid co
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+test('browser press states preserve glass panel geometry and keyboard feedback', async () => {
+  assert.doesNotMatch(defs + playerBar, /LiquidGlassPressController|tickGlassPress|tickPress/)
+  const directory = await mkdtemp(join(tmpdir(), 'te-press-feedback-'))
+  const require = createRequire(import.meta.url)
+  try {
+    const css = [playerBarStyle, dashboardStyle]
+      .map(
+        (source) =>
+          compileStyle({ source, filename: 'press.css', id: 'data-v-press', scoped: true }).code
+      )
+      .join('\n')
+    const html = join(directory, 'fixture.html')
+    const runner = join(directory, 'runner.cjs')
+    await writeFile(
+      html,
+      `<html data-te-motion="full" data-te-liquid-glass-coverage="expanded"
+      data-te-home-liquid-glass="on" data-platform="win32"><style>${baseStyle}\n${css}
+      .fixture { position: relative; margin: 20px; width: 600px; height: 100px; }
+      button { width: 100px; height: 40px; }
+      .positioned { transform: translateX(40px); transition: color 100ms; }
+      </style><body><div class="home" data-v-press>
+      <div id="hero-panel" class="feature-card fixture" data-v-press data-te-interactive><button id="hero">Hero</button></div>
+      </div><div id="card-panel" class="album-card fixture" data-v-press data-te-interactive><button id="card">Album</button></div>
+      <div id="player-panel" class="player-bar-liquid fixture" data-v-press><button id="player">Play</button></div>
+      <button id="positioned" class="positioned">Positioned</button>
+      <button id="disabled" disabled>Disabled</button><button id="aria-disabled" aria-disabled="true">Disabled</button>
+      </body></html>`
+    )
+    await writeFile(
+      runner,
+      `const { app, BrowserWindow } = require('electron');
+      const assert = require('node:assert/strict');
+      app.whenReady().then(async () => {
+        const win = new BrowserWindow({ show: false, width: 1000, height: 800 });
+        try {
+          await win.loadFile(process.argv.at(-1));
+          const run = code => win.webContents.executeJavaScript(code);
+          const settle = () => run('document.getAnimations().filter(animation => animation instanceof CSSTransition).forEach(animation => animation.finish())');
+          win.webContents.debugger.attach('1.3');
+          const { root } = await win.webContents.debugger.sendCommand('DOM.getDocument');
+          await win.webContents.debugger.sendCommand('CSS.enable');
+          const force = async (selector, forcedPseudoClasses) => {
+            const { nodeId } = await win.webContents.debugger.sendCommand('DOM.querySelector', { nodeId:root.nodeId, selector });
+            await win.webContents.debugger.sendCommand('CSS.forcePseudoState', { nodeId, forcedPseudoClasses });
+          };
+          const snapshot = id => run('(() => { const el = document.getElementById(' + JSON.stringify(id) + '); const r = el.getBoundingClientRect(), p = el.parentElement.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height, parent:[p.x,p.y,p.width,p.height], opacity:getComputedStyle(el).opacity, parentOpacity:getComputedStyle(el.parentElement).opacity }; })()');
+          for (const mode of ['full', 'reduced', 'off']) {
+            await run('document.documentElement.dataset.teMotion = ' + JSON.stringify(mode));
+            for (const id of ['hero', 'card', 'player', 'positioned', 'disabled', 'aria-disabled']) {
+              const before = await snapshot(id);
+              await force('#' + id, ['active']);
+              if (['hero','card','player'].includes(id)) await force('#' + id + '-panel', ['active']);
+              await settle();
+              const down = await snapshot(id);
+              assert.deepEqual(down.parent, before.parent, mode + '/' + id + ': panel must stay fixed');
+              for (const key of ['x','y','width','height','parentOpacity']) assert.equal(down[key], before[key], mode + '/' + id + '/' + key);
+              if (id.includes('disabled')) assert.equal(down.opacity, before.opacity, 'disabled feedback is stable');
+              else { assert.ok(Number(down.opacity) < Number(before.opacity), 'pressed control is visible'); }
+              await force('#' + id, []);
+              if (['hero','card','player'].includes(id)) await force('#' + id + '-panel', []);
+              await settle();
+              const after = await snapshot(id);
+              assert.deepEqual(after, before, mode + '/' + id + ': release restores baseline');
+            }
+          }
+          await force('#positioned', ['focus-visible']);
+          assert.equal(await run('getComputedStyle(document.getElementById("positioned")).outlineStyle'), 'solid');
+          console.error('PRESS_FEEDBACK_OK'); app.exit(0);
+        } catch (error) { console.error(error); app.exit(1); }
+      });`
+    )
+    const { stderr } = await promisify(execFile)(
+      require('electron') as string,
+      ['--no-sandbox', runner, html],
+      { windowsHide: true, timeout: 30000 }
+    )
+    assert.match(stderr, /PRESS_FEEDBACK_OK/)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})

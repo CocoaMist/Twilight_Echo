@@ -498,8 +498,6 @@ type ScanAccumulator = {
   previousByPath: Map<string, Record<string, unknown>[]>
   excludedPaths: Set<string>
   replacementsByPath: Map<string, Record<string, unknown>[]>
-  replacementOrder: string[]
-  replacedPaths: Set<string>
   addedTracks: unknown[]
   updatedTracks: unknown[]
   inlineDeltaTrackCount: number
@@ -542,8 +540,6 @@ function createScanAccumulator(document: LocalMusicLibraryDocument): ScanAccumul
       document.exclusions.map((entry) => normalizeLibraryFilePath(entry.filePath))
     ),
     replacementsByPath: new Map(),
-    replacementOrder: [],
-    replacedPaths: new Set(),
     addedTracks: [],
     updatedTracks: [],
     inlineDeltaTrackCount: 0,
@@ -576,17 +572,11 @@ function applyScanBatch(accumulator: ScanAccumulator, batch: LocalLibraryScanBat
   for (const path of parsedByPath.keys()) replacePaths.add(path)
   for (const path of replacePaths) {
     const previous = accumulator.previousByPath.get(path) ?? []
-    const wasReplaced = accumulator.replacedPaths.has(path)
+    const wasReplaced = accumulator.replacementsByPath.has(path)
     const priorParsed = accumulator.replacementsByPath.get(path) ?? previous
     const parsed = preserveTrackIdentifiers(priorParsed, parsedByPath.get(path) ?? [])
     accumulator.replacementsByPath.set(path, parsed)
-    if (!wasReplaced) {
-      accumulator.replacedPaths.add(path)
-      accumulator.replacementOrder.push(path)
-    }
-
-    const comparison = wasReplaced ? priorParsed : previous
-    const same = sameTrackCollection(comparison, parsed)
+    const same = sameTrackCollection(priorParsed, parsed)
     if (same) continue
     accumulator.changed = true
     if (!wasReplaced && previous.length === 0 && parsed.length > 0) {
@@ -628,7 +618,11 @@ function finalizeScanAccumulator(
   const excluded = new Set(
     document.exclusions.map((entry) => normalizeLibraryFilePath(entry.filePath))
   )
-  const removePaths = new Set(workerResult.removedFilePaths.map(normalizeLibraryFilePath))
+  const removePaths = new Map<string, string>()
+  for (const filePath of workerResult.removedFilePaths) {
+    const key = normalizeLibraryFilePath(filePath)
+    if (!removePaths.has(key)) removePaths.set(key, filePath)
+  }
   if (workerResult.completeIdentitySnapshot) {
     const presentPaths = new Set([
       ...workerResult.identities.map((identity) => normalizeLibraryFilePath(identity.filePath)),
@@ -636,7 +630,7 @@ function finalizeScanAccumulator(
     ])
     for (const [path, tracks] of accumulator.previousByPath) {
       if (!presentPaths.has(path) || excluded.has(path)) {
-        if (tracks.length > 0) removePaths.add(path)
+        if (tracks.length > 0 && !removePaths.has(path)) removePaths.set(path, '')
       }
     }
   }
@@ -650,7 +644,7 @@ function finalizeScanAccumulator(
     }
     const key = normalizeLibraryFilePath(track.filePath)
     if (removePaths.has(key)) continue
-    if (!accumulator.replacedPaths.has(key)) {
+    if (!accumulator.replacementsByPath.has(key)) {
       retained.push(track)
       continue
     }
@@ -658,10 +652,10 @@ function finalizeScanAccumulator(
     emittedReplacements.add(key)
     retained.push(...(accumulator.replacementsByPath.get(key) ?? []))
   }
-  for (const path of accumulator.replacementOrder) {
+  for (const [path, tracks] of accumulator.replacementsByPath) {
     if (emittedReplacements.has(path)) continue
     emittedReplacements.add(path)
-    retained.push(...(accumulator.replacementsByPath.get(path) ?? []))
+    retained.push(...tracks)
   }
 
   const next = createMusicLibraryDocument(
@@ -677,10 +671,7 @@ function finalizeScanAccumulator(
     document: next,
     addedTracks: accumulator.addedTracks,
     updatedTracks: accumulator.updatedTracks,
-    removedFilePaths: Array.from(removePaths).map((key) => {
-      const matching = workerResult.removedFilePaths.find(
-        (filePath) => normalizeLibraryFilePath(filePath) === key
-      )
+    removedFilePaths: Array.from(removePaths, ([key, matching]) => {
       if (matching) return matching
       const previous = accumulator.previousByPath.get(key)?.[0]
       return typeof previous?.filePath === 'string' ? previous.filePath : key

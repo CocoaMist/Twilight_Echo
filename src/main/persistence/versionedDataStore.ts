@@ -4,7 +4,7 @@ import {
   clearJsonFileArtifacts,
   loadJsonFileWithBackup,
   readJsonCandidate,
-  writeJsonFileAtomic,
+  writeJsonValueAtomic,
   type JsonFileLoadResult,
   type JsonFileOptions
 } from './jsonFile.ts'
@@ -118,7 +118,7 @@ export class VersionedDataStore<T> {
   }
 
   private write(value: VersionedDataEnvelope<T>): void {
-    writeJsonFileAtomic(this.config.filePath, JSON.stringify(value), this.options, value)
+    writeJsonValueAtomic(this.config.filePath, value, this.options)
   }
 
   private assertExpectedRevision(expectedRevision: number): void {
