@@ -985,6 +985,10 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             key="local-dashboard"
             @select-view="onSelectView"
             @open-library-settings="openSettingsPage('general')"
+            @open-streaming="enterStreamingMode($event)"
+            @open-plugins="navigation.openPluginPage()"
+            @open-radio="navigation.enterRadioPodcastMode()"
+            @login="handleStreamingLogin"
           />
           <ApplicationPlaylistsPage
             v-else-if="

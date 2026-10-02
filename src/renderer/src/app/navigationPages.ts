@@ -33,7 +33,7 @@ export const BUILTIN_NAVIGATION_PAGES: NavigationPageDefinition[] = [
   {
     id: 'local-home',
     title: '主页',
-    description: '本地音乐与主题主页',
+    description: '继续收听、本地音乐与在线发现',
     icon: 'navigation.home',
     defaultVisible: true,
     target: local('dashboard')
