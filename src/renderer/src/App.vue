@@ -92,7 +92,7 @@ import {
   getPrimaryStreamingArtistName,
   type StreamingArtistNavigationRequest
 } from './utils/streamingArtistResolution'
-import AppNoticeHost from './components/AppNoticeHost.vue'
+const AppNoticeHost = defineAsyncComponent(() => import('./components/AppNoticeHost.vue'))
 import LiquidGlassDefs from './components/LiquidGlassDefs.vue'
 import { resolvePlayerBarPresentation } from '../../shared/playerBar.ts'
 import type { AppBackgroundPage } from './types/settings'
