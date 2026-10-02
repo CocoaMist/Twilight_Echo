@@ -1607,6 +1607,8 @@ const { mkdir, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const target = process.argv.at(-1)
 const visualDir = process.env.TWILIGHT_LYRIC_VISUAL_DIR || ''
+// Keep requested CSS viewport sizes exact on Windows displays with fractional DPI.
+app.commandLine.appendSwitch('force-device-scale-factor', '1')
 const userDataDir = process.env.TWILIGHT_ELECTRON_USER_DATA_DIR || ''
 if (userDataDir) {
   app.setPath('userData', userDataDir)

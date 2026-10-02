@@ -217,6 +217,7 @@ defineExpose({ historyOpen, toggleHistory })
 <style scoped>
 .app-notice-host,
 .notice-history {
+  --notice-accent: var(--te-primary-500, #7c4dff);
   --notice-surface: var(--te-surface, var(--te-app-bg, #fff));
   --notice-text: var(--te-text, var(--color-text, #172033));
   --notice-muted: var(--te-text-secondary, #78808f);
@@ -242,7 +243,7 @@ defineExpose({ historyOpen, toggleHistory })
 }
 .app-notice,
 .notice-record {
-  --notice-intent: var(--te-primary-500, #7c4dff);
+  --notice-intent: var(--notice-accent);
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -348,7 +349,7 @@ defineExpose({ historyOpen, toggleHistory })
   background: color-mix(in srgb, var(--notice-intent) 18%, transparent);
 }
 button:focus-visible {
-  outline: 2px solid var(--te-primary-500, #7c4dff);
+  outline: 2px solid var(--notice-accent);
   outline-offset: 3px;
 }
 .notice-history {
@@ -390,8 +391,8 @@ button:focus-visible {
   padding: 0 5px;
   box-sizing: border-box;
   border-radius: 7px;
-  color: var(--te-primary-500, #7c4dff);
-  background: color-mix(in srgb, var(--te-primary-500, #7c4dff) 10%, transparent);
+  color: var(--notice-accent);
+  background: color-mix(in srgb, var(--notice-accent) 10%, transparent);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -467,8 +468,8 @@ button:focus-visible {
   height: 58px;
   border-radius: 20px;
   font-size: 23px;
-  background: color-mix(in srgb, var(--te-primary-500, #7c4dff) 7%, transparent);
-  color: var(--te-primary-500, #7c4dff);
+  background: color-mix(in srgb, var(--notice-accent) 7%, transparent);
+  color: var(--notice-accent);
 }
 .notice-empty h3 {
   margin: 18px 0 0;
