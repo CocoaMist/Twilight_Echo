@@ -68,6 +68,21 @@ test('native context menus expose DTO requests through the sandboxed system brid
   assert.match(declarations, /popupContextMenu: \(request: NativeContextMenuRequest\)/)
 })
 
+test('EQ clipboard exposes validated band DTOs rather than arbitrary system clipboard text', () => {
+  const source = readFileSync(new URL('./domains/systemApi.ts', import.meta.url), 'utf8')
+  assert.match(source, /equalizerClipboardApi: EqualizerClipboardApi/)
+  assert.match(source, /ipcRenderer\.invoke\('window:copy-eq-bands', bands\)/)
+  assert.match(source, /ipcRenderer\.invoke\('window:paste-eq-bands'\)/)
+  assert.doesNotMatch(source, /clipboard\.readText|clipboard\.writeText/)
+  const declarations = readFileSync(new URL('./index.d.ts', import.meta.url), 'utf8')
+  assert.match(declarations, /window: EqualizerClipboardApi &/)
+  const types = readFileSync(new URL('./types.ts', import.meta.url), 'utf8')
+  assert.match(
+    types,
+    /export type \{ EqualizerClipboardApi \} from '..\/shared\/equalizerClipboard\.ts'/
+  )
+})
+
 test('lyrics companion files cross the sandbox through typed data bridge methods', () => {
   const source = readFileSync(new URL('./domains/dataApi.ts', import.meta.url), 'utf8')
   const declarations = readFileSync(new URL('./index.d.ts', import.meta.url), 'utf8')
@@ -150,7 +165,17 @@ test('sandboxed preload only imports Node builtins supported by the sandbox', ()
 
 test('workshop project and restore APIs stay in the sandboxed bridge', () => {
   const source = readFileSync(new URL('./domains/themeWorkshopApi.ts', import.meta.url), 'utf8')
-  for (const channel of ['get', 'restoreApplied', 'save', 'apply', 'importAsset'])
+  for (const channel of [
+    'get',
+    'restoreApplied',
+    'save',
+    'apply',
+    'importAsset',
+    'duplicate',
+    'remove',
+    'preflight',
+    'exportProject'
+  ])
     assert.ok(source.includes("ipcRenderer.invoke('themeWorkshop:" + channel + "'"))
   assert.doesNotMatch(source, /from ['"].*main\//)
 })

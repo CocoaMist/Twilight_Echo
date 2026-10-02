@@ -4,6 +4,7 @@ import { useHoldReorder } from '@renderer/composables/useHoldReorder'
 import { usePlaylistLibraryView } from '@renderer/components/streaming-page/usePlaylistLibraryView'
 import NativeContextMenu from '@renderer/components/NativeContextMenu.vue'
 import SavedMusicCollections from '@renderer/components/streaming-page/SavedMusicCollections.vue'
+import { useProviderStore } from '@renderer/stores/useProviderStore'
 import type {
   MediaProviderPlaylistSummary,
   MediaProviderAlbumSummary,
@@ -42,6 +43,15 @@ const props = defineProps<{
   availableProviders?: ProviderOption[]
   activeProvider?: string
 }>()
+const providerStore = useProviderStore()
+const canShowSavedCollections = computed(
+  () =>
+    providerStore
+      .getProvider(props.activeProvider ?? 'ncm')
+      ?.supportedMethods.some(
+        (method) => method === 'fetchSavedAlbums' || method === 'fetchSavedArtists'
+      ) === true
+)
 
 const {
   category: playlistCategory,
@@ -246,6 +256,7 @@ function deleteMenuPlaylist(): void {
 <template>
   <div class="library-view">
     <!-- Top Cards -->
+    <p v-if="showLikedPanel === false" class="provider-liked-empty">这个平台未提供“我喜欢”列表。</p>
     <section class="top-cards" :class="{ 'top-cards-single': showLikedPanel === false }">
       <!-- Profile Card -->
       <div class="glass-card profile-card">
@@ -335,7 +346,7 @@ function deleteMenuPlaylist(): void {
       >
         <div class="favorites-info">
           <span class="tag">我的收藏</span>
-          <h2>{{ likedSummary.name || '我收藏的歌曲' }}</h2>
+          <h2>{{ likedSummary.name || '我喜欢' }}</h2>
           <p>{{ likedSummary.trackCount }} 首歌曲</p>
           <button class="btn-play" @click.stop="emit('playLikedSongs')">
             <i class="pi pi-play-fill"></i>
@@ -408,8 +419,9 @@ function deleteMenuPlaylist(): void {
 
     <!-- Playlists Section -->
     <SavedMusicCollections
-      v-if="isLoggedIn && profile && activeProvider === 'ncm'"
-      :user-id="profile.userId"
+      v-if="isLoggedIn && canShowSavedCollections"
+      :user-id="profile?.userId ?? 'guest'"
+      :provider-id="activeProvider ?? 'ncm'"
       @open-album="emit('openAlbum', $event)"
       @open-artist="emit('openArtist', $event)"
     />

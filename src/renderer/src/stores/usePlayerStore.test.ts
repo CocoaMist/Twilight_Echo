@@ -768,17 +768,8 @@ test('next and previous only use native controls when the native queue is delega
   )
   assert.match(togglePlayState, /if \(casting\)/)
   assert.match(togglePlayState, /if \(nativePlaybackActive\)/)
-  // Optimistic toggle must keep the intent after togglePause returns so a
-  // stale pre-toggle pause/playback-info tick cannot flip the button back.
-  assert.match(togglePlayState, /setPlaybackToggleIntent\(nextPlaying\)/)
-  assert.match(togglePlayState, /await window\.api\.audioEngine\.togglePause\(\)/)
-  assert.doesNotMatch(
-    togglePlayState.match(
-      /if \(nativePlaybackActive\) \{[\s\S]*?await window\.api\.audioEngine\.togglePause\(\)[\s\S]*?\n    \} else \{/
-    )?.[0] ?? '',
-    /clearPlaybackToggleIntent\(\)/
-  )
-  assert.match(togglePlayState, /setPlaybackToggleIntent\(isPlaying\.value\)/)
+  assert.match(togglePlayState, /await nativePlaybackToggleController\.togglePause\(\)/)
+  assert.match(source, /togglePause: \(\) => window\.api\.audioEngine\.togglePause\(\)/)
   assert.match(seekPlayback, /nativePlaybackActive \|\| nativeQueueDelegated/)
   assert.match(playQueueTrack, /if \(castTargetUsn\.value\)[\s\S]*castCurrentTrackToDevice/)
   assert.match(playQueueTrack, /void loadAndPlay\(track\)/)

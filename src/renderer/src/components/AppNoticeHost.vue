@@ -1,57 +1,133 @@
 <script setup lang="ts">
-import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useAppNoticeStore, type AppNoticeKind } from '../stores/useAppNoticeStore'
+import { useEscapeToClose } from '../app/useDismissLayer'
 
-const { notices, dismissNotice } = useAppNoticeStore()
-
+const {
+  notices,
+  noticeHistory,
+  unreadCount,
+  dismissNotice,
+  pauseNotice,
+  resumeNotice,
+  markHistoryRead,
+  clearHistory
+} = useAppNoticeStore()
+const historyOpen = ref(false)
+const historyPanel = ref<HTMLElement | null>(null)
+const history = computed(() => [...noticeHistory.value].reverse())
+const intents: Record<AppNoticeKind, { label: string; icon: string }> = {
+  info: { label: '提示', icon: 'pi-info-circle' },
+  success: { label: '已完成', icon: 'pi-check-circle' },
+  warning: { label: '请留意', icon: 'pi-exclamation-triangle' },
+  error: { label: '需要处理', icon: 'pi-exclamation-circle' }
+}
+let historyTrigger: HTMLElement | null = null
+function closeHistory(restoreFocus = true): void {
+  historyOpen.value = false
+  if (restoreFocus && historyTrigger?.isConnected) historyTrigger.focus()
+}
+async function toggleHistory(event?: MouseEvent): Promise<void> {
+  if (historyOpen.value) return closeHistory()
+  historyTrigger =
+    event?.currentTarget instanceof HTMLElement
+      ? event.currentTarget
+      : (document.activeElement as HTMLElement | null)
+  historyOpen.value = true
+  markHistoryRead()
+  await nextTick()
+  historyPanel.value?.focus()
+}
+function dismissOutside(event: PointerEvent): void {
+  const target = event.target
+  if (
+    historyOpen.value &&
+    target instanceof Node &&
+    !historyPanel.value?.contains(target) &&
+    !historyTrigger?.contains(target)
+  )
+    closeHistory(false)
+}
+function focusOut(event: FocusEvent, id: number): void {
+  if (
+    event.relatedTarget instanceof Node &&
+    (event.currentTarget as HTMLElement).contains(event.relatedTarget)
+  )
+    return
+  resumeNotice(id, 'focus')
+}
 function runAction(id: number, run: () => void): void {
+  const entry = noticeHistory.value.find((notice) => notice.id === id)
+  if (entry) entry.action = undefined
   try {
     run()
   } finally {
     dismissNotice(id)
   }
 }
+function timeLabel(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+watch(unreadCount, () => {
+  if (historyOpen.value) markHistoryRead()
+})
+watch([historyOpen, notices], () => {
+  for (const notice of notices.value) {
+    if (historyOpen.value) {
+      pauseNotice(notice.id, 'history')
+      resumeNotice(notice.id, 'pointer')
+      resumeNotice(notice.id, 'focus')
+    } else resumeNotice(notice.id, 'history')
+  }
+})
+useEscapeToClose(historyOpen, closeHistory)
+onMounted(() => document.addEventListener('pointerdown', dismissOutside))
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', dismissOutside)
+  for (const notice of notices.value) {
+    for (const reason of ['pointer', 'focus', 'history']) resumeNotice(notice.id, reason)
+  }
+})
+defineExpose({ historyOpen, toggleHistory })
 </script>
 
 <template>
   <TransitionGroup
+    v-show="!historyOpen"
     tag="div"
     name="app-notice"
     class="app-notice-host"
-    aria-live="polite"
     aria-relevant="additions text"
   >
     <div
       v-for="notice in notices"
       :key="notice.id"
       class="app-notice"
-      :class="`app-notice-${notice.kind}`"
-      role="status"
+      :class="`notice-${notice.kind}`"
+      :role="notice.kind === 'error' ? 'alert' : 'status'"
+      @mouseenter="pauseNotice(notice.id, 'pointer')"
+      @mouseleave="resumeNotice(notice.id, 'pointer')"
+      @focusin="pauseNotice(notice.id, 'focus')"
+      @focusout="focusOut($event, notice.id)"
     >
-      <i
-        class="pi"
-        :class="
-          notice.kind === 'error'
-            ? 'pi-exclamation-circle'
-            : notice.kind === 'warning'
-              ? 'pi-exclamation-triangle'
-              : notice.kind === 'success'
-                ? 'pi-check-circle'
-                : 'pi-info-circle'
-        "
-        aria-hidden="true"
-      ></i>
-      <span class="app-notice-message">{{ notice.message }}</span>
-      <button
-        v-if="notice.action"
-        type="button"
-        class="app-notice-action"
-        @click="runAction(notice.id, notice.action.run)"
-      >
-        {{ notice.action.label }}
-      </button>
+      <span class="notice-symbol"
+        ><i class="pi" :class="intents[notice.kind].icon" aria-hidden="true"></i
+      ></span>
+      <div class="notice-content">
+        <span class="notice-label">{{ intents[notice.kind].label }}</span>
+        <p class="notice-message">{{ notice.message }}</p>
+        <button
+          v-if="notice.action"
+          type="button"
+          class="notice-action"
+          @click="runAction(notice.id, notice.action.run)"
+        >
+          {{ notice.action.label }} <i class="pi pi-arrow-right" aria-hidden="true"></i>
+        </button>
+      </div>
       <button
         type="button"
-        class="app-notice-dismiss"
+        class="notice-icon-button"
         aria-label="关闭通知"
         @click="dismissNotice(notice.id)"
       >
@@ -59,136 +135,435 @@ function runAction(id: number, run: () => void): void {
       </button>
     </div>
   </TransitionGroup>
+  <Transition name="notice-panel">
+    <section
+      v-if="historyOpen"
+      id="app-notice-history"
+      ref="historyPanel"
+      class="notice-history"
+      tabindex="-1"
+      role="region"
+      aria-labelledby="notice-history-title"
+    >
+      <header class="notice-history-header">
+        <div>
+          <h2 id="notice-history-title">
+            通知记录 <span class="notice-count">{{ history.length }}</span>
+          </h2>
+          <p>不错过每一次更新</p>
+        </div>
+        <button
+          type="button"
+          class="notice-icon-button"
+          aria-label="关闭通知记录"
+          @click="closeHistory()"
+        >
+          <i class="pi pi-times" aria-hidden="true"></i>
+        </button>
+      </header>
+      <div class="notice-history-body">
+        <Transition name="notice-empty">
+          <div v-if="!history.length" class="notice-empty">
+            <span class="notice-empty-symbol"><i class="pi pi-bell" aria-hidden="true"></i></span>
+            <h3>一切已是最新</h3>
+            <p>新的通知会出现在这里</p>
+          </div>
+        </Transition>
+        <TransitionGroup tag="div" name="notice-record" class="notice-records">
+          <article
+            v-for="notice in history"
+            :key="notice.id"
+            class="notice-record"
+            :class="`notice-${notice.kind}`"
+          >
+            <span class="notice-symbol"
+              ><i class="pi" :class="intents[notice.kind].icon" aria-hidden="true"></i
+            ></span>
+            <div class="notice-content">
+              <div class="notice-record-meta">
+                <span class="notice-label">{{ intents[notice.kind].label }}</span
+                ><time :datetime="new Date(notice.createdAt).toISOString()">{{
+                  timeLabel(notice.createdAt)
+                }}</time>
+              </div>
+              <p class="notice-message">{{ notice.message }}</p>
+              <button
+                v-if="notice.action"
+                type="button"
+                class="notice-action"
+                @click="runAction(notice.id, notice.action.run)"
+              >
+                {{ notice.action.label }} <i class="pi pi-arrow-right" aria-hidden="true"></i>
+              </button>
+            </div>
+          </article>
+        </TransitionGroup>
+      </div>
+      <footer class="notice-history-footer">
+        <span>保留最近 50 条通知</span
+        ><button
+          type="button"
+          class="notice-clear"
+          :disabled="!history.length"
+          @click="clearHistory"
+        >
+          清空记录
+        </button>
+      </footer>
+    </section>
+  </Transition>
 </template>
 
 <style scoped>
-.app-notice-host {
+.app-notice-host,
+.notice-history {
+  --notice-accent: var(--te-primary-500, #7c4dff);
+  --notice-surface: var(--te-surface, var(--te-app-bg, #fff));
+  --notice-text: var(--te-text, var(--color-text, #172033));
+  --notice-muted: var(--te-text-secondary, #78808f);
+  --notice-border: color-mix(in srgb, var(--te-border, #9ca3af) 28%, transparent);
   position: fixed;
-  top: 44px;
+  top: calc(var(--te-titlebar-inset, 35px) + 12px);
   right: 16px;
   z-index: 12000;
+  width: min(392px, calc(100vw - 32px));
+  color: var(--notice-text);
+  font-family: var(--te-font-sans, sans-serif);
+}
+.app-notice-host {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
-  width: min(420px, calc(100vw - 32px));
+  gap: 10px;
   pointer-events: none;
+  max-height: calc(100dvh - var(--te-titlebar-inset, 35px) - 32px);
+  overflow-y: auto;
+  padding: 4px;
+  right: 12px;
+  width: min(400px, calc(100vw - 24px));
 }
-
+.app-notice,
+.notice-record {
+  --notice-intent: var(--notice-accent);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  box-sizing: border-box;
+}
+.notice-success {
+  --notice-intent: var(--te-success-500, #20c65e);
+}
+.notice-warning {
+  --notice-intent: var(--te-warning-500, #f59e0b);
+}
+.notice-error {
+  --notice-intent: var(--te-danger-500, #e25565);
+}
 .app-notice {
   pointer-events: auto;
+  padding: 16px;
+  border: 1px solid var(--notice-border);
+  border-radius: max(12px, var(--te-toast-radius, 8px));
+  background: color-mix(in srgb, var(--notice-surface) 96%, transparent);
+  box-shadow:
+    0 3px 12px #0000000a,
+    0 1px 3px #00000005;
+  backdrop-filter: blur(20px);
+}
+.notice-symbol {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
-  align-items: start;
-  gap: 0.55rem;
-  padding: 0.72rem 0.8rem;
-  border: 1px solid color-mix(in srgb, var(--te-border, #cbd5e1) 70%, transparent);
-  border-radius: var(--te-toast-radius, 8px);
-  background: color-mix(in srgb, var(--te-surface, #ffffff) 92%, transparent);
-  color: var(--te-text, #0f172a);
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
-  backdrop-filter: blur(12px);
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 10px;
+  color: var(--notice-intent);
+  background: color-mix(in srgb, var(--notice-intent) 11%, transparent);
+  font-size: 16px;
 }
-
-.app-notice > .pi {
-  margin-top: 0.12rem;
-  color: var(--te-accent, #7c4dff);
-}
-
-.app-notice-error > .pi {
-  color: #ef4444;
-}
-
-.app-notice-warning > .pi {
-  color: #f59e0b;
-}
-
-.app-notice-success > .pi {
-  color: #22c55e;
-}
-
-.app-notice-message {
+.notice-content {
+  flex: 1;
   min-width: 0;
-  font-size: 0.86rem;
-  line-height: 1.45;
+}
+.notice-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+}
+.notice-message {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.65;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
-
-.app-notice-action,
-.app-notice-dismiss {
-  border: 0;
-  background: transparent;
-  color: inherit;
+.notice-icon-button,
+.notice-action,
+.notice-clear {
+  font: inherit;
   cursor: pointer;
-  padding: 0.1rem 0.2rem;
+  border: 0;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
 }
-
-.app-notice-action {
-  font-size: 0.78rem;
+.notice-icon-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--notice-muted);
+  background: transparent;
+  font-size: 12px;
+}
+.notice-icon-button:hover {
+  background: color-mix(in srgb, var(--notice-text) 7%, transparent);
+  color: var(--notice-text);
+}
+.notice-icon-button:active,
+.notice-action:active,
+.notice-clear:active {
+  transform: scale(0.95);
+}
+.notice-action {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+  padding: 6px 10px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--notice-text);
+  background: color-mix(in srgb, var(--notice-intent) 10%, transparent);
+}
+.notice-action .pi {
+  font-size: 10px;
+}
+.notice-action:hover {
+  background: color-mix(in srgb, var(--notice-intent) 18%, transparent);
+}
+button:focus-visible {
+  outline: 2px solid var(--notice-accent);
+  outline-offset: 3px;
+}
+.notice-history {
+  display: flex;
+  flex-direction: column;
+  max-height: min(620px, calc(100dvh - var(--te-titlebar-inset, 35px) - 28px));
+  border: 1px solid var(--notice-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--notice-surface) 96%, transparent);
+  box-shadow:
+    0 24px 70px #00000021,
+    0 4px 14px #0000000a;
+  backdrop-filter: blur(28px);
+  overflow: hidden;
+  outline: none;
+  transform-origin: calc(100% - 142px) top;
+}
+.notice-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 20px 18px;
+  border-bottom: 1px solid var(--notice-border);
+}
+.notice-history-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 16px;
   font-weight: 650;
-  color: var(--te-accent, #7c4dff);
-  white-space: nowrap;
+  letter-spacing: 0.02em;
 }
-
-.app-notice-dismiss {
-  opacity: 0.65;
+.notice-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  color: var(--notice-accent);
+  background: color-mix(in srgb, var(--notice-accent) 10%, transparent);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
-
-.app-notice-dismiss:hover,
-.app-notice-action:hover {
-  opacity: 1;
+.notice-history-header p {
+  margin: 7px 0 0;
+  font-size: 11px;
+  color: var(--notice-muted);
 }
-
-/* Toasts slide in from the edge they are anchored to and collapse out of the
-   stack, so a dismissal reads as "gone" rather than "replaced". */
-.app-notice-enter-active {
+.notice-history-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  scrollbar-width: thin;
+}
+.notice-records {
+  position: relative;
+  padding: 0 12px;
+}
+.notice-record {
+  padding: 18px 8px;
+  border-bottom: 1px solid var(--notice-border);
+}
+.notice-record:last-child {
+  border-bottom: 0;
+}
+.notice-record-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.notice-record time {
+  font-size: 10px;
+  color: var(--notice-muted);
+  font-variant-numeric: tabular-nums;
+}
+.notice-history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-top: 1px solid var(--notice-border);
+  font-size: 10px;
+  color: var(--notice-muted);
+}
+.notice-clear {
+  padding: 5px 7px;
+  margin-right: -7px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--notice-text);
+  font-size: 11px;
+}
+.notice-clear:hover:enabled {
+  background: color-mix(in srgb, var(--notice-text) 6%, transparent);
+}
+.notice-clear:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.notice-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+}
+.notice-empty-symbol {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 20px;
+  font-size: 23px;
+  background: color-mix(in srgb, var(--notice-accent) 7%, transparent);
+  color: var(--notice-accent);
+}
+.notice-empty h3 {
+  margin: 18px 0 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+.notice-empty p {
+  margin: 8px 0 0;
+  color: var(--notice-muted);
+  font-size: 12px;
+}
+.app-notice-enter-active,
+.app-notice-move {
   transition:
-    opacity var(--te-toast-motion-duration, 220ms) ease-out,
-    transform var(--te-toast-motion-duration, 220ms) cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--te-toast-motion-duration, 300ms) ease,
+    transform var(--te-toast-motion-duration, 300ms) cubic-bezier(0.22, 1, 0.36, 1);
 }
-
 .app-notice-leave-active {
-  /* Out of flow so the remaining toasts close the gap with the move transition
-     instead of jumping. */
   position: absolute;
-  right: 0;
-  width: 100%;
+  right: 4px;
+  width: calc(100% - 8px);
   transition:
-    opacity 160ms var(--te-ease-out-strong),
-    transform 160ms var(--te-ease-out-strong);
+    opacity 160ms ease,
+    transform 180ms ease;
 }
-
 .app-notice-enter-from {
   opacity: 0;
-  transform: translateX(16px) scale(0.97);
+  transform: translateY(-12px) scale(0.97);
 }
-
 .app-notice-leave-to {
   opacity: 0;
-  transform: translateX(16px) scale(0.97);
+  transform: translateX(18px) scale(0.98);
 }
-
-.app-notice-move {
-  transition: transform var(--te-toast-motion-duration, 220ms) cubic-bezier(0.22, 1, 0.36, 1);
+.notice-panel-enter-active {
+  transition:
+    opacity 200ms ease,
+    transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-
+.notice-panel-leave-active {
+  transition:
+    opacity 140ms ease,
+    transform 180ms cubic-bezier(0.4, 0, 1, 1);
+  pointer-events: none;
+}
+.notice-panel-enter-from,
+.notice-panel-leave-to {
+  opacity: 0;
+  transform: translateY(-10px) scale(0.96);
+}
+.notice-record-enter-active,
+.notice-record-move {
+  transition:
+    opacity 220ms ease,
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.notice-record-enter-from {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+.notice-record-leave-active {
+  position: absolute;
+  width: calc(100% - 24px);
+  transition: opacity 120ms ease;
+}
+.notice-record-leave-to {
+  opacity: 0;
+}
+.notice-empty-enter-active {
+  transition:
+    opacity 240ms ease 100ms,
+    transform 300ms ease 100ms;
+}
+.notice-empty-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+:global(html[data-te-motion='reduced'] .notice-history *),
+:global(html[data-te-motion='reduced'] .notice-history),
+:global(html[data-te-motion='reduced'] .app-notice),
+:global(html[data-te-motion='reduced'] .notification-btn *) {
+  transition-duration: 1ms !important;
+  transition-delay: 0ms !important;
+}
 @media (prefers-reduced-motion: reduce) {
-  .app-notice-enter-active,
-  .app-notice-leave-active,
-  .app-notice-move {
-    transition-duration: 1ms;
-  }
-
-  .app-notice-enter-from,
-  .app-notice-leave-to {
-    transform: none;
+  .notice-history,
+  .notice-history *,
+  .app-notice {
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
   }
 }
-
-html[data-theme='dark'] .app-notice {
-  background: color-mix(in srgb, #0f172a 88%, transparent);
-  border-color: rgba(148, 163, 184, 0.22);
-  color: #e2e8f0;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+:global(body.te-no-blur .notice-history),
+:global(body.te-no-blur .app-notice) {
+  backdrop-filter: none;
+  background: var(--notice-surface);
 }
 </style>

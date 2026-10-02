@@ -6,7 +6,83 @@ import { useAppNoticeStore } from './useAppNoticeStore.ts'
 const { notices, pushNotice, dismissNotice, releaseNoticeDedupe, clearNotices } =
   useAppNoticeStore()
 
+test('four visible notices retain a separate history and important failures persist', () => {
+  clearNotices()
+  for (let index = 0; index < 6; index++) pushNotice({ message: `通知 ${index}`, kind: 'error' })
+  assert.equal(notices.value.length, 4)
+  assert.equal(useAppNoticeStore().noticeHistory.value.length, 6)
+  assert.equal(
+    notices.value.every((notice) => notice.sticky),
+    true
+  )
+  dismissNotice(notices.value[0].id)
+  assert.equal(useAppNoticeStore().noticeHistory.value.length, 6)
+  clearNotices()
+})
+
+test('hover and keyboard pauses survive repeated updates and resume only after both leave', (t) => {
+  clearNotices()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const store = useAppNoticeStore()
+  const id = pushNotice({ message: '更新完成', dedupeKey: 'update' })
+  t.mock.timers.tick(1000)
+  store.pauseNotice(id, 'pointer')
+  store.pauseNotice(id, 'focus')
+  pushNotice({ message: '更新完成', dedupeKey: 'update' })
+  t.mock.timers.tick(20_000)
+  assert.equal(notices.value.length, 1)
+  store.resumeNotice(id, 'pointer')
+  t.mock.timers.tick(20_000)
+  assert.equal(notices.value.length, 1)
+  store.resumeNotice(id, 'focus')
+  t.mock.timers.tick(7001)
+  assert.equal(notices.value.length, 0)
+  clearNotices()
+})
+
 const DEDUPE_KEY = 'audio-engine-recovery'
+test('reading history clears unread state; only changed messages become unread again', () => {
+  clearNotices()
+  const store = useAppNoticeStore()
+  pushNotice({ message: '正在连接', sticky: true, dedupeKey: 'connection' })
+  assert.equal(store.unreadCount.value, 1)
+  store.markHistoryRead()
+  assert.equal(store.unreadCount.value, 0)
+  pushNotice({ message: '正在连接', sticky: true, dedupeKey: 'connection' })
+  assert.equal(store.unreadCount.value, 0)
+  pushNotice({ message: '连接完成', dedupeKey: 'connection' })
+  assert.equal(store.unreadCount.value, 1)
+  clearNotices()
+})
+
+test('clearing history preserves active notices and records subsequent changed information', () => {
+  clearNotices()
+  const store = useAppNoticeStore()
+  const id = pushNotice({ message: '等待连接', sticky: true, dedupeKey: 'connection' })
+  store.clearHistory()
+  assert.equal(notices.value[0].id, id)
+  assert.equal(store.unreadCount.value, 0)
+  pushNotice({ message: '等待连接', sticky: true, dedupeKey: 'connection' })
+  assert.equal(store.noticeHistory.value.length, 0)
+  pushNotice({ message: '已连接', dedupeKey: 'connection' })
+  assert.equal(store.noticeHistory.value.length, 1)
+  assert.equal(store.unreadCount.value, 1)
+  clearNotices()
+})
+
+test('history remains bounded while expired cards remain available to read', (t) => {
+  clearNotices()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const store = useAppNoticeStore()
+  for (let index = 0; index < 60; index++) pushNotice({ message: `完成 ${index}` })
+  assert.equal(store.noticeHistory.value.length, 50)
+  assert.equal(store.noticeHistory.value[0].message, '完成 10')
+  t.mock.timers.tick(7001)
+  assert.equal(notices.value.length, 0)
+  assert.equal(store.noticeHistory.value.length, 50)
+  clearNotices()
+})
+
 const CRASH_MESSAGE = '音频服务无法启动：未加载 twilight_audio_node.node。'
 
 function messages(): string[] {

@@ -1049,6 +1049,11 @@ html:is(
   outline-offset: 3px;
 }
 
+.toggle-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .toggle-switch::after {
   content: '';
   position: absolute;

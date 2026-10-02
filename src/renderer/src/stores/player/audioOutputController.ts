@@ -121,7 +121,10 @@ export function createAudioOutputController(options: AudioOutputControllerOption
     }
   }
 
-  async function setAudioProcessing(settings: Partial<AudioProcessingSettings>): Promise<void> {
+  async function setAudioProcessing(
+    settings: Partial<AudioProcessingSettings>,
+    { throwOnError = false }: { throwOnError?: boolean } = {}
+  ): Promise<void> {
     const api = options.getAudioEngineApi()
     const nextSettings = mergeAudioProcessingPatch(settings)
     const previousSettings = cloneAudioProcessingSettings(audioProcessing.value)
@@ -142,6 +145,7 @@ export function createAudioOutputController(options: AudioOutputControllerOption
       audioProcessing.value = previousSettings
       options.setAudioEngineError(err instanceof Error ? err.message : String(err))
       console.error('[audio-engine] Failed to update audio processing settings:', err)
+      if (throwOnError) throw err
     }
   }
 

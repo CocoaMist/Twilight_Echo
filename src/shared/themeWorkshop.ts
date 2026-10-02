@@ -1,6 +1,7 @@
 import type { StructuredPluginTheme, ThemeModes, ThemeShellLayout, ThemeTone } from './theme.ts'
 import type { ThemeEditorDescriptor } from './themeEditor.ts'
 import type { WorkshopLayer, WorkshopSurface } from './themeWorkshopLayers.ts'
+import type { WorkshopDiagnosticReport } from './themeWorkshopDiagnostics.ts'
 
 export { normalizeThemeEditor } from './themeEditor.ts'
 export type { ThemeEditorControl, ThemeEditorDescriptor } from './themeEditor.ts'
@@ -16,7 +17,10 @@ export const THEME_WORKSHOP_ID = 'com.twilightecho.tool.theme-workshop'
 export const WORKSHOP_TEMPLATES = [
   { id: 'minimal', name: '简洁配色', description: '从配色、圆角和干净的留白开始' },
   { id: 'wallpaper', name: '全屏壁纸', description: '选择一张壁纸，搭配清晰的半透明界面' },
-  { id: 'illustration', name: '插画主题', description: '为首页、列表和空状态安排自己的插画' }
+  { id: 'illustration', name: '插画主题', description: '为首页、列表和空状态安排自己的插画' },
+  { id: 'glass', name: '玻璃质感', description: '半透明面板与柔和的层次，适合壁纸主题' },
+  { id: 'high-contrast', name: '高对比', description: '清晰的文字和控件，兼顾深浅色可读性' },
+  { id: 'compact', name: '紧凑列表', description: '紧凑列表与简洁播放栏，适合大曲库' }
 ] as const
 
 export interface WorkshopAsset {
@@ -26,6 +30,7 @@ export interface WorkshopAsset {
   dataUrl: string
   license: string
   source: string
+  originalDataUrl?: string
 }
 
 export interface WorkshopBase {
@@ -56,6 +61,7 @@ export interface WorkshopProject {
   tokens: Record<ThemeTone, Record<string, string>>
   css: string
   lastApplied?: { version: string; at: string; revision?: number }
+  editor?: ThemeEditorDescriptor
   unlinked?: Record<string, boolean>
   enabled?: boolean
   assets?: WorkshopAsset[]
@@ -91,11 +97,23 @@ export interface ThemeWorkshopApi {
   create(template: string, source?: WorkshopThemeSource): Promise<WorkshopProject>
   save(project: WorkshopProject): Promise<WorkshopProject>
   importProject(): Promise<WorkshopProject | null>
-  exportProject(id: string, format: 'project' | 'tep'): Promise<string | null>
+  duplicate(id: string, revision: number): Promise<WorkshopProject>
+  remove(id: string, revision: number): Promise<void>
+  preflight(id: string, revision: number): Promise<WorkshopDiagnosticReport>
+  exportProject(id: string, format: 'project' | 'tep', revision?: number): Promise<string | null>
   importAsset(type?: 'image' | 'font'): Promise<WorkshopAsset | null>
   updateBase(id: string): Promise<WorkshopBase>
   restoreApplied(id: string): Promise<WorkshopProject>
-  apply(id: string): Promise<{ pluginId: string; themeId: string; project: WorkshopProject }>
+  apply(
+    id: string,
+    revision?: number
+  ): Promise<{ pluginId: string; themeId: string; project: WorkshopProject }>
+}
+
+export function workshopEditor(
+  project: WorkshopProject | undefined
+): ThemeEditorDescriptor | undefined {
+  return project?.editor ?? project?.base.editor
 }
 
 export function createWorkshopProject(
@@ -127,6 +145,15 @@ export function workshopProjectSummary(project: WorkshopProject): WorkshopProjec
 export function copyWorkshopDraft(project: WorkshopProject): WorkshopProject {
   return {
     ...project,
+    editor: project.editor && {
+      schemaVersion: 1,
+      controls: project.editor.controls.map((control) => ({
+        ...control,
+        defaults: { ...control.defaults },
+        options: control.options && [...control.options],
+        targets: control.targets && { ...control.targets }
+      }))
+    },
     values: { pureWhite: { ...project.values.pureWhite }, dark: { ...project.values.dark } },
     tokens: { pureWhite: { ...project.tokens.pureWhite }, dark: { ...project.tokens.dark } },
     unlinked: { ...project.unlinked },

@@ -85,6 +85,7 @@ const props = defineProps<{
   hasPlayer: boolean
   transitionName: 'page-down' | 'page-up'
   previewTracks?: Track[]
+  returnFromDetail?: () => void
 }>()
 
 const emit = defineEmits<{
@@ -136,10 +137,12 @@ const providerStore = useProviderStore()
 const { listeningStats } = useListeningStatsStore()
 const EMPTY_LAST_PLAYED_BY_TRACK_ID: ReadonlyMap<string, number> = new Map()
 
-const { searchQuery, debouncedSearchQuery, searchInputFocused } = useSongListSearch()
+const currentLibraryViewKey = computed(() => libraryViewKey(props.category, props.filter))
+const { searchQuery, debouncedSearchQuery, searchInputFocused } =
+  useSongListSearch(currentLibraryViewKey)
 
 // ─── Recent playback source selector ──────────────────────────────────────
-const recentSource = ref('local')
+const recentSource = ref('all')
 const recentSourceMenuOpen = ref(false)
 
 const recentSourceOptions = computed(() => {
@@ -234,7 +237,6 @@ const baseDisplayTracks = computed(() => {
 })
 
 const libraryViewPreferences = new LibraryViewPreferences()
-const currentLibraryViewKey = computed(() => libraryViewKey(props.category, props.filter))
 const libraryViewState = ref<LibraryViewState>(
   libraryViewPreferences.read(currentLibraryViewKey.value, props.category)
 )
@@ -547,10 +549,11 @@ const showDetailBackButton = computed(() => {
   return !!props.filter
 })
 
-// The title-bar back button clears the active filter (same action as the old
-// in-page back button's selectView emit). SongList unmounts whenever another
-// full-screen surface takes over, so this layer always cleans itself up.
-useBackHandler(showDetailBackButton, () => emit('selectView', props.category, null))
+function handleDetailBack(): void {
+  if (props.returnFromDetail) props.returnFromDetail()
+  else emit('selectView', props.category, null)
+}
+useBackHandler(showDetailBackButton, handleDetailBack)
 
 const showGrid = computed(() => {
   if (props.category === 'allSongs' || props.category === 'recent') return false
@@ -1757,7 +1760,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                 type="button"
                 class="detail-back-button"
                 data-te-back-button="pill"
-                @click="emit('selectView', props.category, null)"
+                @click="handleDetailBack"
               >
                 <i class="pi pi-arrow-left" aria-hidden="true"></i>
                 <span>返回</span>
@@ -2197,7 +2200,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                 </button>
                 <button type="button" class="selection-btn" @click="handleToolbarFavorite">
                   <i :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
-                  <span>{{ selectionAllFavorited ? '取消收藏' : '加入收藏' }}</span>
+                  <span>{{ selectionAllFavorited ? '移出应用收藏' : '加入应用收藏' }}</span>
                 </button>
                 <button
                   v-if="selectedLocalTrackCount > 0"
@@ -2494,7 +2497,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                 <div class="menu-item" data-te-interactive @click="handleContextFavorite">
                   <i :class="contextAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
                   <span
-                    >{{ contextAllFavorited ? '取消收藏' : '加入收藏'
+                    >{{ contextAllFavorited ? '移出应用收藏' : '加入应用收藏'
                     }}{{ contextActionLabel }}</span
                   >
                 </div>

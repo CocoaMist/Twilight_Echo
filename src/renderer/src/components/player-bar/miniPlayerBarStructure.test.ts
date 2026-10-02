@@ -427,7 +427,10 @@ test('the mini rail stays visible as a flat, long seeking target', () => {
   assert.match(rail[0], /height:\s*100%/)
   assert.match(rail[0], /width:\s*100%/)
   assert.match(playerBarCss, /\.mini-progress-track\s*\{[^}]*height:\s*2px/)
-  assert.match(playerBarCss, /\.mini-progress-fill\s*\{[^}]*background:\s*var\(--accent-color/)
+  assert.match(
+    playerBarCss,
+    /\.mini-progress-fill\s*\{[^}]*background:\s*var\(--te-player-bar-progress-fill, var\(--accent-color/
+  )
   assert.match(playerBarCss, />\s*\.mini-play-button\s*\{[^}]*width:\s*26px/)
   // And the region has to be a row with full height, or the rail cannot stretch.
   const center = playerBarCss.match(

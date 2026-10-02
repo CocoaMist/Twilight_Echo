@@ -1,6 +1,9 @@
 ﻿.streaming-page {
   position: fixed;
   inset: 0;
+  /* Opt out of .main-content > * grid placement: its grid area already excludes
+     the sidebar padding, while .streaming-content clears the sidebar itself. */
+  grid-area: auto;
   z-index: 50;
   display: flex;
   box-sizing: border-box;

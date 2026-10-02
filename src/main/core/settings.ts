@@ -1,3 +1,4 @@
+import { normalizeNavigationPagePreferences } from '../../shared/navigationPages.ts'
 import {
   DEFAULT_DOWNLOAD_PREFERENCES,
   normalizeDownloadPreferences
@@ -142,6 +143,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   onboardingCompleted: false,
   developerMode: false,
   startupHomePage: 'local',
+  navigationPages: normalizeNavigationPagePreferences(undefined),
   trackActivationMode: 'singleClick',
   language: DEFAULT_LANGUAGE_PREFERENCE,
   theme: 'system',
@@ -235,6 +237,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     process.platform === 'darwin' ? 'coreaudio' : process.platform === 'linux' ? 'alsa' : 'wasapi',
   audioDevice: 'auto',
   audioExclusiveMode: false,
+  audioExclusiveAutoRelease: false,
   audioOutputConfig: {
     ...normalizeContinuityOutputConfig({}),
     preferredBufferSize: 0,
@@ -701,6 +704,7 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     onboardingCompleted: settings.onboardingCompleted === true,
     developerMode: settings.developerMode === true,
     startupHomePage: normalizeStartupHomePage(settings.startupHomePage),
+    navigationPages: normalizeNavigationPagePreferences(settings.navigationPages),
     trackActivationMode: normalizeTrackActivationMode(settings.trackActivationMode),
     language: normalizeLanguagePreference(settings.language),
     theme: normalizeAppTheme(settings.theme),
@@ -753,6 +757,7 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     audioOutput: normalizeAudioOutput(settings.audioOutput),
     audioDevice: normalizeAudioDevice(settings.audioDevice),
     audioExclusiveMode: settings.audioExclusiveMode === true,
+    audioExclusiveAutoRelease: settings.audioExclusiveAutoRelease === true,
     audioOutputConfig: normalizeOutputConfig(settings.audioOutputConfig),
     audioDeviceProfiles: deviceProfiles,
     audioProcessing,

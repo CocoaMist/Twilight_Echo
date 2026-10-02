@@ -1,5 +1,16 @@
 import type { PersonalizedStreamKey } from '../../stores/usePlayerStore.ts'
 
+export function streamingFavoriteLabel(
+  tracks: readonly { ncmSongId?: number | null }[],
+  liked: boolean
+): string {
+  const ncm = tracks.some((track) => track.ncmSongId != null)
+  const app = tracks.some((track) => track.ncmSongId == null)
+  if (ncm && app) return liked ? '取消网易云喜欢与应用收藏' : '加入网易云喜欢与应用收藏'
+  if (ncm) return liked ? '在网易云取消喜欢' : '在网易云喜欢'
+  return liked ? '移出应用收藏' : '加入应用收藏'
+}
+
 export function getPersonalizedStreamKey(
   section: { key: string } | null
 ): PersonalizedStreamKey | null {

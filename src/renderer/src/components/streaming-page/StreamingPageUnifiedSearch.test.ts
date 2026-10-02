@@ -29,7 +29,7 @@ test('streaming page renders NetEase cloud as a dedicated sidebar surface', () =
   assert.match(source, /import NcmCloudPanel from '\.\/NcmCloudPanel\.vue'/)
   assert.match(source, /activeTab === 'cloud'/)
   assert.match(source, /<NcmCloudPanel[\s\S]*@download="startCloudDownload"/)
-  assert.match(source, /if \(item\.tab === 'cloud'\) \{\s*clearSearch\(\)/)
+  assert.match(source, /activeTab\.value === 'cloud'/)
   assert.doesNotMatch(source, /<StreamingLibrary[\s\S]*:show-ncm-cloud=/)
 })
 
@@ -116,12 +116,9 @@ test('streaming page keeps third-party providers on the generic provider library
   assert.doesNotMatch(source, /bilibili\.setPinnedFavoriteFolder/)
 })
 
-test('recent playback detail uses local unified listening history before provider recent APIs', () => {
-  assert.match(source, /getRecentTracks\(\)/)
-  assert.match(source, /resolveUnifiedRecentTracks\(\{/)
-  assert.match(source, /recentStats/)
-  assert.match(source, /localTracks: musicStore\.tracks\.value/)
-  assert.doesNotMatch(source, /const tracks = await fetchRecentSongs\(\)/)
+test('platform history is delegated to the independent recent page', () => {
+  assert.match(source, /emit\('recent', activeProvider\.value\)/)
+  assert.doesNotMatch(source, /getRecentTracks\(\)/)
 })
 
 test('ranking detail uses cross-source listening stats before provider play records', () => {
@@ -131,18 +128,10 @@ test('ranking detail uses cross-source listening stats before provider play reco
   assert.doesNotMatch(source, /const tracks = await fetchPlayRecords\(1\)/)
 })
 
-test('liked detail loads provider cloud likes instead of local default favorites', () => {
+test('provider likes never fall back to application favorites', () => {
   assert.match(source, /fetchLikedTracksPage\(0, LIKED_TRACKS_PAGE_SIZE, force\)/)
-  assert.match(source, /NCM: always load cloud liked tracks/)
-  assert.match(source, /must not short-circuit the provider liked list/)
-  assert.match(
-    source,
-    /const unifiedFavoriteTracks = computed\(\(\) => musicStore\.getPlaylistTracks\(/
-  )
-  // Local unified favorites are only a fallback for external providers without
-  // their own liked playlist - never a short-circuit for NCM.
-  assert.doesNotMatch(source, /resolveUnifiedFavoriteTracks\(\{/)
-  assert.match(source, /if \(state\?\.likedPlaylist\) return providerSummary/)
+  assert.doesNotMatch(source, /unifiedFavoriteTracks|summarizeUnifiedFavoriteTracks/)
+  assert.match(source, /Boolean\(activeExternalState\.value\?\.likedPlaylist\)/)
 })
 
 test('liked playback resolves the complete provider list instead of queueing only the first page', () => {
@@ -163,8 +152,8 @@ test('recommendations load declared provider sections and fence stale source res
     source,
     /requestId !== recommendationRequestId \|\| providerId !== activeProvider\.value/
   )
-  assert.match(source, /const surfaceProviders =\s*activeTab\.value === 'home'/)
-  assert.match(source, /selectProvider\(surfaceProviders\[0\]\.id, false\)/)
+  assert.match(source, /const options =\s*activeTab\.value === 'home'/)
+  assert.match(source, /selectProvider\(options\[0\]\.id, false\)/)
 })
 
 test('logged-out home and library retain source options independently of search visibility', () => {
@@ -186,7 +175,7 @@ test('logged-out home and library retain source options independently of search 
   context.activeTab.value = 'library'
   assert.equal(read(), context.libraryProviderOptions.value)
   context.activeLoggedIn.value = true
-  assert.equal((read() as unknown[]).length, 0)
+  assert.equal(read(), context.libraryProviderOptions.value)
 })
 
 test('streaming provider switcher replaces the avatar in the content header', () => {
@@ -195,8 +184,7 @@ test('streaming provider switcher replaces the avatar in the content header', ()
   assert.match(providerSwitcherSource, /role="listbox"/)
   assert.match(providerSwitcherSource, /class="provider-switcher-option"/)
   assert.match(providerSwitcherSource, /options\.length < 2/)
-  assert.doesNotMatch(providerSwitcherSource, /class="provider-switcher-label"/)
-  assert.doesNotMatch(providerSwitcherSource, /class="provider-switcher-name"/)
+  assert.match(providerSwitcherSource, /class="provider-switcher-label"/)
   assert.match(headerSource, /<StreamingProviderSwitcher/)
   assert.match(headerSource, /class="streaming-header-provider-switcher"/)
   assert.match(headerSource, /emit\('select-provider', \$event\)/)
@@ -246,14 +234,13 @@ test('private FM and radar use a session-fenced queue stream in shuffle mode', (
   assert.doesNotMatch(homeSource, /@click="emit\('openRecSection', radarSection\)"/)
 })
 
-test('streaming page stays mounted across local/streaming switches in one session', () => {
+test('each streaming destination stays mounted across page switches', () => {
   const appSource = readFileSync(new URL('../../App.vue', import.meta.url), 'utf8')
-  assert.match(appSource, /const streamingPageMounted = ref\(false\)/)
-  assert.match(appSource, /v-if="streamingPageMounted"/)
-  assert.match(appSource, /v-show="showStreamingPage"/)
-  assert.match(appSource, /:active="showStreamingPage"/)
+  assert.match(appSource, /v-for="tab in streamingPageTabs"/)
+  assert.match(appSource, /v-show="showStreamingSurface && streamingTab === tab"/)
+  assert.match(appSource, /:active="showStreamingSurface && streamingTab === tab"/)
+  assert.doesNotMatch(source, /<ProviderSidebar/)
   assert.match(source, /async function refreshStreamingSurface/)
-  assert.match(source, /\(\) => props\.active/)
 })
 
 test('streaming page supports multi-select batch favorite and delete on track lists', () => {
@@ -421,7 +408,7 @@ function createFmHarness() {
   }
   const functionSource = source.slice(
     source.indexOf('async function loadMorePersonalizedStream('),
-    source.indexOf('\ntype SidebarItem =')
+    source.indexOf('\nconst hasOnlineNavigationEntries =')
   )
   const load = runInNewContext(
     `${stripTypeScriptTypes(functionSource)}\nloadMorePersonalizedStream`,

@@ -16,8 +16,8 @@ test('knob mapping uses logarithmic frequency and Q, and linear gain', () => {
   assert.equal(eqParameterAtPosition('q', 0.5), 1.41)
   assert.equal(eqParameterAtPosition('gain', 0.5), 0)
   assert.ok(Math.abs(eqParameterPosition('frequency', 200) - 1 / 3) < 1e-12)
-  assert.equal(eqParameterPosition('gain', 9), 0.75)
-  assert.equal(eqParameterAtPosition('gain', -2), -18)
+  assert.equal(eqParameterPosition('gain', 12), 0.75)
+  assert.equal(eqParameterAtPosition('gain', -2), -24)
   assert.equal(eqParameterAtPosition('q', 4), 20)
   assert.equal(normalizeEqParameter('frequency', 2345.67), 2346)
   assert.equal(normalizeEqParameter('gain', 3.26), 3.3)
@@ -30,12 +30,12 @@ test('keyboard and wheel steps support fine edits and respect filter limits', ()
   assert.equal(nudgeEqParameter('frequency', 1000, 1, true), 1005)
   assert.equal(nudgeEqParameter('q', 1, 1), 1.08)
   assert.equal(nudgeEqParameter('q', 1, 1, true), 1.01)
-  assert.equal(nudgeEqParameter('gain', 18, 1), 18)
+  assert.equal(nudgeEqParameter('gain', 24, 1), 24)
   assert.equal(nudgeEqParameter('q', 0.1, -1), 0.1)
 })
 
 test('pointer editing spans the range in 180px, ignores other pointers, and commits once', () => {
-  let value = -18
+  let value = -24
   let commits = 0
   const gesture = createEqKnobGesture({
     field: 'gain',
@@ -50,11 +50,11 @@ test('pointer editing spans the range in 180px, ignores other pointers, and comm
   assert.equal(gesture.start(1, 300), true)
   assert.equal(gesture.start(2, 100), false)
   gesture.move(2, 0)
-  assert.equal(value, -18)
+  assert.equal(value, -24)
   gesture.move(1, 210)
   assert.equal(value, 0)
   gesture.move(1, 120)
-  assert.equal(value, 18)
+  assert.equal(value, 24)
   assert.equal(commits, 0)
   assert.equal(gesture.finish(2), false)
   assert.equal(gesture.finish(1), true)
@@ -74,11 +74,11 @@ test('switching Shift during a gesture changes speed without jumping', () => {
   })
   gesture.start(1, 200)
   gesture.move(1, 190)
-  assert.equal(value, 2)
+  assert.equal(value, 2.7)
   gesture.move(1, 180, true)
-  assert.equal(value, 2.2)
+  assert.equal(value, 2.9)
   gesture.move(1, 170)
-  assert.equal(value, 4.2)
+  assert.equal(value, 5.6)
 })
 
 test('pointer cancellation finishes the last preview once and an untouched click never commits', () => {

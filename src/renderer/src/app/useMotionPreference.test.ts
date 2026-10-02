@@ -4,7 +4,15 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { resolveDocumentMotionMode } from './useMotionPreference.ts'
 
-const NATIVE_INTERACTIVE_TAGS = new Set(['button', 'a', 'input', 'select', 'textarea', 'label'])
+const NATIVE_INTERACTIVE_TAGS = new Set([
+  'button',
+  'a',
+  'input',
+  'select',
+  'textarea',
+  'label',
+  'dialog'
+])
 const PASSIVE_CLICK_STOP_CLASSES = [
   'playlist-row-actions',
   'context-menu',
@@ -91,6 +99,8 @@ test('every custom renderer click target declares motion coverage', async () => 
       const attributes = match.groups?.attributes ?? ''
       if (NATIVE_INTERACTIVE_TAGS.has(tag)) continue
       if (attributes.includes('@click.self')) continue
+      if (attributes.includes('@click.capture=') && attributes.includes('@pointerdown.capture='))
+        continue
       if (attributes.includes('data-reorder-group') && attributes.includes('@click.capture='))
         continue
       if (

@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { EqualizerBand } from '../../types/settings'
+import type { EqualizerBand } from '@renderer/types/settings'
 import {
   formatFrequency,
   getFillStyle,
   getThumbTop,
   isGainDisabled
-} from '../../utils/equalizerPageLogic'
+} from '@renderer/utils/equalizerPageLogic'
 
 const props = defineProps<{
   preamp: number
@@ -40,7 +40,6 @@ const emit = defineEmits<{
           max="24"
           step="0.1"
           :value="props.preamp"
-          :disabled="props.autoPreampEnabled"
           @input="emit('preview-preamp', Number(($event.target as HTMLInputElement).value))"
           @change="emit('commit')"
           class="invisible-range"

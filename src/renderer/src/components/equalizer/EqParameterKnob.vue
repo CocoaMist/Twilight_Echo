@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   createEqKnobGesture,
   createEqWheelCommit,
@@ -37,6 +37,9 @@ function preview(value: number): void {
 function commit(): void {
   emit('commit')
   emit('interaction', false)
+  void nextTick(() => {
+    displayedValue.value = props.value
+  })
 }
 
 const gesture = createEqKnobGesture({

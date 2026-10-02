@@ -1,3 +1,4 @@
+export type { EqualizerClipboardApi } from '../shared/equalizerClipboard.ts'
 import type {
   LoudnormStatus,
   EqualizerBand,
@@ -630,6 +631,8 @@ export interface TwilightThemeContribution {
 }
 
 export type ThemeWorkshopApi = import('../shared/themeWorkshop').ThemeWorkshopApi
+export type WorkshopDiagnosticReport =
+  import('../shared/themeWorkshopDiagnostics').WorkshopDiagnosticReport
 
 export interface TwilightPluginExtensionContribution {
   pluginId: string

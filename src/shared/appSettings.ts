@@ -18,6 +18,7 @@ import type { DesktopLyricsSettingsV3 } from './desktopLyrics.ts'
 import type { PlayerBarSettings } from './playerBar.ts'
 import type { LanguagePreference } from './i18n/locale.ts'
 import type { MotionPreference } from './motion.ts'
+import type { NavigationPagePreferences } from './navigationPages.ts'
 
 export type {
   DesktopLyricsPalette,
@@ -153,6 +154,7 @@ export interface AppSettings {
   /** Unlocks developer-only affordances, e.g. installing an unpacked plugin directory. */
   developerMode: boolean
   startupHomePage: StartupHomePage
+  navigationPages: NavigationPagePreferences
   trackActivationMode: TrackActivationMode
   /** UI and error-message language. `system` follows the OS locale. */
   language: LanguagePreference
@@ -201,6 +203,7 @@ export interface AppSettings {
   audioOutput: AudioOutputId
   audioDevice: string
   audioExclusiveMode: boolean
+  audioExclusiveAutoRelease: boolean
   audioOutputConfig: OutputConfig
   audioDeviceProfiles: import('./audioDeviceProfiles.ts').AudioDeviceProfileSettings
   audioProcessing: AudioProcessingSettings

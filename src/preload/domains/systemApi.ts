@@ -1,6 +1,6 @@
 import { collectClosePersistenceOutcome } from '../closePersistence.ts'
 import { ipcRenderer } from 'electron'
-import type { NativeContextMenuRequest } from '../types'
+import type { EqualizerClipboardApi, NativeContextMenuRequest } from '../types'
 import { NCM_CLOUD_TRANSFER_PROGRESS_CHANNEL } from '../../shared/ncmCloud.ts'
 import type {
   NcmCloudDownloadRequest,
@@ -12,6 +12,7 @@ import type {
 } from '../types'
 import type { AppStartupSnapshot } from '../../shared/appStartup.ts'
 import type { SystemMediaNativeStatus } from '../../shared/systemMedia.ts'
+import type { WindowChromeState } from '../../shared/windowChrome.ts'
 import type {
   AppUpdateCheckResult,
   AppUpdateDownloadResult,
@@ -21,6 +22,10 @@ import type {
 
 const appNavigationCallbacks = new Set<(target: TrayNavigationTarget) => void>()
 const savePlaybackSessionCallbacks = new Set<() => Promise<void> | void>()
+const equalizerClipboardApi: EqualizerClipboardApi = {
+  copyEqBands: (bands) => ipcRenderer.invoke('window:copy-eq-bands', bands),
+  pasteEqBands: () => ipcRenderer.invoke('window:paste-eq-bands')
+}
 
 export function bindSystemIpcEvents(): void {
   ipcRenderer.on('app:save-playback-session', async (_event, requestId: string) => {
@@ -46,6 +51,15 @@ export const systemApi = {
       ipcRenderer.invoke('systemMedia:getNativeStatus')
   },
   window: {
+    ...equalizerClipboardApi,
+    getState: (): Promise<WindowChromeState> => ipcRenderer.invoke('window:getState'),
+    onStateChanged: (callback: (state: WindowChromeState) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: WindowChromeState): void => {
+        callback(state)
+      }
+      ipcRenderer.on('window:state-changed', listener)
+      return () => ipcRenderer.removeListener('window:state-changed', listener)
+    },
     popupContextMenu: (request: NativeContextMenuRequest): Promise<string | null> =>
       ipcRenderer.invoke('contextMenu:popup', request),
     closeContextMenu: (requestId: string): Promise<void> =>

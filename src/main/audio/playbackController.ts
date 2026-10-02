@@ -503,15 +503,20 @@ export class PlaybackController {
         this.publishPlaybackInfo()
         return
       } catch (err) {
-        // 异步调用失败，回退到同步路径
         const message = err instanceof Error ? err.message : String(err)
         this.lastNativeError = message
-        console.warn('原生音频引擎异步暂停/继续失败，回退同步路径：', message)
+        throw nativeAudioError('audio.pause_failed', 'native pause/resume failed', message)
       }
     }
 
     // 直接 N-API 模式：Pause() 同步阻塞，GetPlaybackInfo() 立即返回真实状态
-    this.tryNative('暂停/继续', (n) => n.Pause())
+    if (!this.tryNative('暂停/继续', (n) => n.Pause())) {
+      throw nativeAudioError(
+        'audio.pause_failed',
+        'native pause/resume failed',
+        this.lastNativeError
+      )
+    }
     const nativeInfo = this.readNativePlaybackInfo()
     if (nativeInfo) {
       this.playbackInfo = this.mergeNativePlaybackInfo(nativeInfo)
@@ -1144,6 +1149,7 @@ export class PlaybackController {
     )
     const staleNativeOutputRoute =
       this.nativeOutputRouteSynced &&
+      info.outputInfo?.outputReleased !== true &&
       [reportedBackend, reportedActualBackend].some(
         (backend) =>
           backend.length > 0 && normalizeBackendId(backend) !== normalizeBackendId(expectedBackend)

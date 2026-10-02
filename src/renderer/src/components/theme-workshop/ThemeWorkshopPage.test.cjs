@@ -9,7 +9,13 @@ for (const filename of [
   'WorkshopPreview.vue',
   'WorkshopLayersPanel.vue',
   'WorkshopAssetsPanel.vue',
-  'WorkshopModesPanel.vue'
+  'WorkshopModesPanel.vue',
+  'WorkshopControl.vue',
+  'WorkshopParameterDesigner.vue',
+  'WorkshopDiagnosticsPanel.vue',
+  'WorkshopProjectPanel.vue',
+  'WorkshopOnboarding.vue',
+  'WorkshopCanvasOverlay.vue'
 ]) {
   test(`${filename} compiles through the Vue SFC compiler`, () => {
     const source = readFileSync(join(__dirname, filename), 'utf8')
@@ -69,6 +75,9 @@ test('preview refreshes mode-only edits and reads candidate layout independently
       }
     },
     querySelectorAll: () => [],
+    querySelector: () => null,
+    addEventListener() {},
+    removeEventListener() {},
     createElement: () => ({ textContent: '' }),
     head: { append() {}, insertBefore() {} },
     body: {}
@@ -77,6 +86,12 @@ test('preview refreshes mode-only edits and reads candidate layout independently
   const scope = vue.effectScope()
   vm.runInNewContext(code, {
     exports,
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame() {},
+    ResizeObserver: class {
+      observe() {}
+      disconnect() {}
+    },
     document: { querySelectorAll: () => [] },
     MutationObserver: class {
       observe() {}

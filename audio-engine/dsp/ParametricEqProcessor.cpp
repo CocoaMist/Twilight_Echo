@@ -34,7 +34,8 @@ bool filterNeedsProcessing(const DspEqBand& band, EqMode mode) {
   if (!band.enabled) return false;
   const DspFilterType type = mode == EqMode::Graphic ? DspFilterType::Peak : band.type;
   if (!isSupportedFilter(type)) return false;
-  if (type == DspFilterType::LowPass || type == DspFilterType::HighPass) return true;
+  if (type == DspFilterType::LowPass || type == DspFilterType::HighPass ||
+      type == DspFilterType::BandPass || type == DspFilterType::AllPass || type == DspFilterType::Notch) return true;
   return std::abs(band.gainDb) > kGainEpsilonDb;
 }
 
@@ -68,7 +69,7 @@ ParametricEqProcessor::Biquad makeBiquad(const DspEqBand& sourceBand, EqMode mod
     }
     case DspFilterType::LowShelf: {
       const double sqrtA = std::sqrt(a);
-      const double shelfAlpha = sinW0 / 2.0 * std::sqrt(2.0);
+      const double shelfAlpha = alpha;
       return normalize(
           a * ((a + 1.0) - (a - 1.0) * cosW0 + 2.0 * sqrtA * shelfAlpha),
           2.0 * a * ((a - 1.0) - (a + 1.0) * cosW0),
@@ -79,7 +80,7 @@ ParametricEqProcessor::Biquad makeBiquad(const DspEqBand& sourceBand, EqMode mod
     }
     case DspFilterType::HighShelf: {
       const double sqrtA = std::sqrt(a);
-      const double shelfAlpha = sinW0 / 2.0 * std::sqrt(2.0);
+      const double shelfAlpha = alpha;
       return normalize(
           a * ((a + 1.0) + (a - 1.0) * cosW0 + 2.0 * sqrtA * shelfAlpha),
           -2.0 * a * ((a - 1.0) + (a + 1.0) * cosW0),

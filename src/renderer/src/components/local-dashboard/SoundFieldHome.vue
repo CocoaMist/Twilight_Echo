@@ -196,8 +196,14 @@ function seekFromInput(event: Event): void {
                 type="button"
                 class="sf-icon-button sf-favorite"
                 :class="{ 'is-active': playback.favoriteLiked.value }"
-                :aria-label="playback.favoriteLiked.value ? '取消收藏' : '收藏当前歌曲'"
-                :title="playback.favoriteLiked.value ? '取消收藏' : '收藏当前歌曲'"
+                :aria-label="
+                  playback.favoriteTitle?.value ??
+                  (playback.favoriteLiked.value ? '移出应用收藏' : '加入应用收藏')
+                "
+                :title="
+                  playback.favoriteTitle?.value ??
+                  (playback.favoriteLiked.value ? '移出应用收藏' : '加入应用收藏')
+                "
                 :aria-pressed="playback.favoriteLiked.value"
                 :disabled="playback.favoriteLoading.value"
                 @click="playback.toggleFavorite()"

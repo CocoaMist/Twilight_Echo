@@ -180,6 +180,10 @@ class TwilightAudioEngine {
   void applyPipelineStatusLocked(const PipelineStatus& status);
   void applyClockPipelineStatusLocked(const PipelineStatus& status);
   void updatePerfectLocked();
+  bool shouldReleaseOutputLocked() const;
+  void markOutputReleasedLocked();
+  void releasePausedOutput();
+  TAE_Result resumeReleasedOutput();
   TAE_Result playQueueItem(const QueueItem& item, double startTimeSeconds);
   bool shouldReroutePipelineLocked(std::string* reason, double* position, PlaybackState* state) const;
   TAE_Result restartCurrentPlaybackForReroute(
@@ -190,6 +194,7 @@ class TwilightAudioEngine {
   QueueItem currentItemLocked() const;
 
   mutable std::mutex mutex_;
+  std::recursive_mutex transportMutex_;
   PlaybackInfo info_;
   QueueManager queue_;
   std::string dspConfigJson_ = "{}";
@@ -198,6 +203,7 @@ class TwilightAudioEngine {
   std::string nativeDspPluginChainJson_ = "{\"plugins\":[]}";
   OutputConfig outputConfig_;
   bool outputRoutePending_ = false;
+  bool pausedOutputReleased_ = false;
   std::unique_ptr<AudioPipeline> pipeline_;
   TAE_EventCallback eventCallback_ = nullptr;
   void* eventUserData_ = nullptr;

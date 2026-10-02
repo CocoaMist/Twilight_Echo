@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   TWILIGHT_DEFAULT_THEME_ID,
   createDefaultThemeLibraryDocument,
+  resolveThemeProfileTokens,
   type ThemeProfileV2
 } from '../../shared/theme.ts'
 import { PersistentDataRevisionConflictError } from '../../shared/versionedPersistence.ts'
@@ -108,6 +109,47 @@ test('theme profile writes keep a bounded recoverable history without changing C
     assert.equal(history[0].profile.overrides.pureWhite['color.primary.500'], '#113456')
     assert.ok(Buffer.byteLength(JSON.stringify(history), 'utf8') <= 256 * 1024)
   } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('saved player colors survive activation and a fresh repository load in both tones', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'twilight-theme-player-colors-'))
+  const file = join(directory, 'themes.json')
+  try {
+    const repository = new ThemeLibraryRepository(file, createDefaultThemeLibraryDocument)
+    const profile = createProfile('user:player-colors')
+    profile.overrides = {
+      pureWhite: {
+        'playback.progress.track': '#123456',
+        'playback.progress.fill': 'linear-gradient(90deg, #ff0000, #00ff00)',
+        'playback.control.surface': '#654321',
+        'playback.control.hoverSurface': '#abcdef'
+      },
+      dark: {
+        'playback.progress.track': '#345678',
+        'playback.progress.fill': 'linear-gradient(90deg, #0000ff, #ff00ff)',
+        'playback.control.surface': '#876543',
+        'playback.control.hoverSurface': '#fedcba'
+      }
+    }
+    const saved = await repository.saveProfile(profile, 0)
+    await repository.setActive({ kind: 'user', id: profile.id }, saved.revision)
+    const reloaded = await new ThemeLibraryRepository(
+      file,
+      createDefaultThemeLibraryDocument
+    ).load()
+    assert.deepEqual(reloaded.data.activeTheme, { kind: 'user', id: profile.id })
+    const persisted = reloaded.data.profiles[0]
+    assert.deepEqual(persisted.overrides, profile.overrides)
+    for (const tone of ['pureWhite', 'dark'] as const) {
+      const tokens = resolveThemeProfileTokens(persisted, tone)
+      for (const [id, value] of Object.entries(profile.overrides[tone])) {
+        assert.equal(tokens[id], value)
+      }
+    }
+  } finally {
+    assert.ok(directory.startsWith(join(tmpdir(), 'twilight-theme-player-colors-')))
     rmSync(directory, { recursive: true, force: true })
   }
 })

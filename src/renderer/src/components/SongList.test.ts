@@ -212,7 +212,7 @@ test('song list supports batch favorite plus explicit local remove and recycle-b
   assert.match(source, /从音乐库移除/)
   assert.match(source, /移到回收站/)
   assert.match(source, /handleContextFavorite/)
-  assert.match(source, /加入收藏/)
+  assert.match(source, /加入应用收藏/)
   // Multi-select is opt-in via modifier keys / checkbox / context menu — not plain play.
   assert.match(source, /onTrackSelectToggle/)
   assert.match(source, /track-select-checkbox/)

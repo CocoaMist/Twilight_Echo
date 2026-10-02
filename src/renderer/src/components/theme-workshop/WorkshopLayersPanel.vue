@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   WORKSHOP_SURFACES,
   WORKSHOP_LAYER_LIMIT,
@@ -10,10 +10,32 @@ import {
 } from '../../../../shared/themeWorkshopLayers'
 import { copyWorkshopDraft, type WorkshopProject } from '../../../../shared/themeWorkshop'
 import type { ThemeTone } from '../../../../shared/theme'
-const props = defineProps<{ project: WorkshopProject; tone: ThemeTone }>()
-const emit = defineEmits<{ change: [project: WorkshopProject] }>()
+const props = defineProps<{
+  project: WorkshopProject
+  tone: ThemeTone
+  selection?: string
+  region?: WorkshopSurface
+  busy?: boolean
+}>()
+const emit = defineEmits<{
+  change: [project: WorkshopProject]
+  select: [id: string, surface: WorkshopSurface]
+  gesture: [action: 'begin' | 'end' | 'cancel']
+}>()
 const surface = ref<WorkshopSurface>('app')
 const selected = ref('')
+watch(
+  () => [props.selection, props.region],
+  () => {
+    if (props.region) surface.value = props.region
+    selected.value = props.selection ?? ''
+  },
+  { immediate: true }
+)
+function choose(id: string): void {
+  selected.value = id
+  emit('select', id, surface.value)
+}
 const layers = computed(() => props.project.layers?.[props.tone]?.[surface.value] ?? [])
 const active = computed(() => layers.value.find((l) => l.id === selected.value))
 const numbers = [
@@ -31,6 +53,7 @@ const numbers = [
 const edges = ['top', 'right', 'bottom', 'left'] as const
 const edgeNames = { top: '上', right: '右', bottom: '下', left: '左' }
 function edit(action: (list: WorkshopLayer[]) => void): void {
+  if (props.busy) return
   const next = copyWorkshopDraft(props.project)
   next.layers ??= { pureWhite: {}, dark: {} }
   const list = (next.layers[props.tone][surface.value] ??= [])
@@ -41,6 +64,19 @@ function add(kind: WorkshopLayer['kind']): void {
   const layer = createWorkshopLayer(crypto.randomUUID(), kind)
   edit((list) => list.push(layer))
   selected.value = layer.id
+  emit('select', layer.id, surface.value)
+}
+function duplicate(): void {
+  if (!active.value || layers.value.length >= WORKSHOP_LAYER_LIMIT) return
+  const layer = {
+    ...active.value,
+    id: crypto.randomUUID(),
+    name: `${active.value.name} 副本`,
+    fade: { ...active.value.fade },
+    crop: { ...active.value.crop }
+  }
+  edit((list) => list.push(layer))
+  choose(layer.id)
 }
 function set(key: string, value: unknown): void {
   edit((list) => Object.assign(list.find((l) => l.id === selected.value)!, { [key]: value }))
@@ -56,22 +92,28 @@ function move(offset: number): void {
 </script>
 <template>
   <label
-    >页面区域<select v-model="surface">
+    >页面区域<select v-model="surface" :disabled="busy" @change="choose('')">
       <option v-for="s in WORKSHOP_SURFACES" :key="s.id" :value="s.id">{{ s.label }}</option>
     </select></label
   >
   <p>图层从下到上排列。人物放在背景层，内容可独立滚动。</p>
-  <button :disabled="layers.length >= WORKSHOP_LAYER_LIMIT" @click="add('image')">＋ 图片</button>
-  <button :disabled="layers.length >= WORKSHOP_LAYER_LIMIT" @click="add('gradient')">
+  <button :disabled="busy || layers.length >= WORKSHOP_LAYER_LIMIT" @click="add('image')">
+    ＋ 图片
+  </button>
+  <button :disabled="busy || layers.length >= WORKSHOP_LAYER_LIMIT" @click="add('gradient')">
     ＋ 渐变
   </button>
   <label v-for="layer in layers" :key="layer.id"
-    ><button :class="{ active: selected === layer.id }" @click="selected = layer.id">
+    ><button :disabled="busy" :class="{ active: selected === layer.id }" @click="choose(layer.id)">
       {{ layer.visible ? '◉' : '○' }} {{ layer.name }}
     </button></label
   >
   <template v-if="active">
-    <button @click="move(-1)">下移</button><button @click="move(1)">上移</button
+    <button :disabled="busy" @click="move(-1)">下移</button
+    ><button :disabled="busy" @click="move(1)">上移</button
+    ><button :disabled="busy || layers.length >= WORKSHOP_LAYER_LIMIT" @click="duplicate">
+      复制图层
+    </button>
     ><button
       @click="
         edit((list) =>
@@ -154,6 +196,9 @@ function move(offset: number): void {
         :max="max"
         :step="step"
         :value="active[key]"
+        @pointerdown="emit('gesture', 'begin')"
+        @pointerup="emit('gesture', 'end')"
+        @pointercancel="emit('gesture', 'cancel')"
         @input="set(key, Number(($event.target as HTMLInputElement).value))"
     /></label>
     <label
@@ -177,6 +222,9 @@ function move(offset: number): void {
           min="0"
           max="49"
           :value="active[kind][edge]"
+          @pointerdown="emit('gesture', 'begin')"
+          @pointerup="emit('gesture', 'end')"
+          @pointercancel="emit('gesture', 'cancel')"
           @input="
             set(kind, {
               ...active[kind],

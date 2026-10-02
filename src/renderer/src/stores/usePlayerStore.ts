@@ -122,6 +122,7 @@ import { createAudioOutputController } from './player/audioOutputController.ts'
 import { createHeartModeController } from './player/heartModeController.ts'
 import { createRemoteControlBridge } from './player/remoteControlBridge.ts'
 import { createRemotePlaybackPublisher } from './player/remotePlaybackPublisher.ts'
+import { createNativePlaybackToggleController } from '@renderer/stores/player/nativePlaybackToggleController.ts'
 import { createPlayerSystemIntegrations } from './player/playerSystemIntegrations.ts'
 
 type NativePlaybackInfo = Awaited<ReturnType<typeof window.api.audioEngine.getPlaybackInfo>>
@@ -3175,6 +3176,14 @@ async function handlePlayerShortcutAction(
   })
 }
 
+const nativePlaybackToggleController = createNativePlaybackToggleController({
+  isPlaying,
+  togglePause: () => window.api.audioEngine.togglePause(),
+  setPlaybackToggleIntent,
+  clearPlaybackToggleIntent,
+  setAudioEngineError
+})
+
 async function togglePlayState(): Promise<void> {
   const track = currentTrack.value
   if (!track) return
@@ -3198,20 +3207,11 @@ async function togglePlayState(): Promise<void> {
       return
     }
     if (nativePlaybackActive) {
-      const nextPlaying = !isPlaying.value
-      if (isPlaying.value && !nextPlaying) {
+      if (isPlaying.value) {
         playbackHistoryController.maybeRecordResumeBookmark(track, getLatestPlaybackTime())
         playbackHistoryController.flushPodcastEpisodeProgress(true)
       }
-      isPlaying.value = nextPlaying
-      setPlaybackToggleIntent(nextPlaying)
-      await window.api.audioEngine.togglePause()
-      // Do not clear the intent here. togglePause publishes the confirmed state,
-      // but a tick that was already in flight can still report the previous
-      // pause/play value. Re-arm from the current UI state (not the closed-over
-      // nextPlaying) so a second click during the await cannot be undone by
-      // re-applying the first click's intent.
-      setPlaybackToggleIntent(isPlaying.value)
+      await nativePlaybackToggleController.togglePause()
     } else {
       const audio = getPlaybackAudio()
       if (audio.paused) {
@@ -3224,10 +3224,6 @@ async function togglePlayState(): Promise<void> {
       }
     }
   } catch (err) {
-    if (nativePlaybackActive) {
-      isPlaying.value = !isPlaying.value
-      clearPlaybackToggleIntent()
-    }
     console.error('[audio-engine] togglePlay failed:', err)
   }
 }

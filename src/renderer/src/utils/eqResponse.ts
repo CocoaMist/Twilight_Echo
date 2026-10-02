@@ -89,7 +89,7 @@ export function computeBiquadCoefficients(
       )
     case 'lowShelf': {
       const sqrtA = Math.sqrt(a)
-      const shelfAlpha = (sinW0 / 2) * Math.SQRT2
+      const shelfAlpha = alpha
       return normalize(
         a * (a + 1 - (a - 1) * cosW0 + 2 * sqrtA * shelfAlpha),
         2 * a * (a - 1 - (a + 1) * cosW0),
@@ -101,7 +101,7 @@ export function computeBiquadCoefficients(
     }
     case 'highShelf': {
       const sqrtA = Math.sqrt(a)
-      const shelfAlpha = (sinW0 / 2) * Math.SQRT2
+      const shelfAlpha = alpha
       return normalize(
         a * (a + 1 + (a - 1) * cosW0 + 2 * sqrtA * shelfAlpha),
         -2 * a * (a - 1 + (a + 1) * cosW0),
@@ -168,15 +168,17 @@ function effectiveFilterType(band: EqualizerBand, mode: EqMode): EqualizerFilter
   return mode === 'graphic' ? 'peak' : band.filterType
 }
 
-/**
- * Mirrors filterNeedsProcessing in the engine: disabled bands are skipped,
- * low/high-pass filters always run, everything else is bypassed when its
- * gain is effectively zero (so e.g. a 0 dB band-pass band has no effect).
- */
 export function isBandActive(band: EqualizerBand, mode: EqMode = 'parametric'): boolean {
   if (band.enabled === false) return false
   const type = effectiveFilterType(band, mode)
-  if (type === 'lowPass' || type === 'highPass') return true
+  if (
+    type === 'lowPass' ||
+    type === 'highPass' ||
+    type === 'bandPass' ||
+    type === 'allPass' ||
+    type === 'notch'
+  )
+    return true
   return Math.abs(band.gain) > GAIN_EPSILON_DB
 }
 

@@ -1,10 +1,16 @@
 <script setup lang="ts">
+import type { EqDisplayRange } from '@renderer/utils/eqViewport'
 import { mergeEqualizerPatch } from '@renderer/utils/equalizerSettingsPatch'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useEqualizerHistory } from '@renderer/composables/useEqualizerHistory'
+import type { EqSnapshot } from '@renderer/composables/useEqualizerHistory'
+import { groupEqBandPatches } from '@renderer/utils/parametricEqSelection'
+import type { EqBandPatch } from '@renderer/utils/parametricEqSelection'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useBackHandler } from '@renderer/app/useBackStack.ts'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
+import EqHistoryControls from '@renderer/components/equalizer/EqHistoryControls.vue'
 import ParametricEqWorkspace from '@renderer/components/equalizer/ParametricEqWorkspace.vue'
 import OpraEqPanel from '@renderer/components/equalizer/OpraEqPanel.vue'
 import FrequencyResponseChart from '@renderer/components/equalizer/FrequencyResponseChart.vue'
@@ -34,7 +40,10 @@ import {
 } from '@renderer/utils/equalizerPageLogic'
 import { computeFrequencyResponseComparison } from '../../../shared/frequencyResponse.ts'
 import type { ImportedFrequencyResponse } from '../../../shared/frequencyResponse.ts'
-import { createParametricBand, spectrumToPath } from '@renderer/utils/parametricEqInteraction'
+import {
+  createParametricBand,
+  projectSpectrumLevels
+} from '@renderer/utils/parametricEqInteraction'
 import type {
   AppSettings,
   AudioEqPreset,
@@ -63,6 +72,8 @@ const { setAudioProcessing } = audioOutputDspStore
 let releaseVisualizationConsumer: (() => void) | null = null
 
 const autoPreampStorageKey = 'twilight-echo:eq-auto-preamp:v1'
+const manualPreampStorageKey = 'twilight-echo:eq-manual-preamp:v1'
+let manualPreampBeforeAuto: number | null = null
 
 const activeTab = ref<EqualizerTab>('graphic')
 const autoPreampEnabled = ref(false)
@@ -72,11 +83,17 @@ const saving = ref(false)
 const presetMenuOpen = ref(false)
 const filterMenuOpen = ref(false)
 const selectedBandIndex = ref(0)
+const selectedBandIndices = shallowRef<number[]>([0])
 const eqApplyFeedback = ref<EqApplyFeedback>('idle')
 const eqApplyError = ref('')
+const clipboardBusy = ref(false)
+const clipboardMessage = ref('')
+const clipboardFailed = ref(false)
+let equalizerMounted = true
 const parametricWorkspaceRef = ref<InstanceType<typeof ParametricEqWorkspace> | null>(null)
 const spectrumVisible = ref(true)
-const spectrumPath = ref('')
+const spectrumFrozen = ref(false)
+const spectrumLevels = shallowRef<Float32Array | null>(null)
 const opraQuery = ref('')
 const opraResults = ref<OpraProfile[]>([])
 const opraStatus = ref<OpraCatalogStatus | null>(null)
@@ -85,15 +102,17 @@ const opraRefreshing = ref(false)
 const opraApplyingEqId = ref('')
 const opraError = ref('')
 let pendingBandFrame = 0
-let pendingBandIndex = -1
-let pendingBandPatch: Partial<EqualizerBand> | null = null
+const pendingBandPatches = new Map<number, Partial<EqualizerBand>>()
 let pendingPreamp: number | null = null
 let commitChain: Promise<void> = Promise.resolve()
 let applyFeedbackTimer: number | null = null
-let spectrumAnimationFrame = 0
-const SPECTRUM_ATTACK = 0.42
-const SPECTRUM_RELEASE = 0.18
-let smoothedSpectrum: number[] = []
+let spectrumPollTimer: number | null = null
+let spectrumPollGeneration = 0
+let spectrumRequestInFlight = false
+let spectrumPollingMounted = false
+const eqHistory = useEqualizerHistory(audioProcessing.value, applyEqualizerSnapshot)
+const { activeSlot, busy: historyBusy, canUndo, canRedo } = eqHistory
+const historyLoading = ref(true)
 
 const userPresets = computed(() => appSettings.value?.audioEqPresets ?? [])
 const headphoneCompensation = computed<HeadphoneCompensationSettings>(
@@ -134,9 +153,7 @@ const displayEqBands = computed(() =>
       ]
     : audioProcessing.value.eqBands
 )
-const selectedBand = computed(
-  () => audioProcessing.value.eqBands[selectedBandIndex.value] ?? audioProcessing.value.eqBands[0]
-)
+const selectedBand = computed(() => audioProcessing.value.eqBands[selectedBandIndex.value] ?? null)
 const eqApplyStatusText = computed(() => {
   if (eqApplyFeedback.value === 'editing') return '正在编辑'
   if (eqApplyFeedback.value === 'applying') return '正在同步 DSP'
@@ -147,6 +164,14 @@ const eqApplyStatusText = computed(() => {
 })
 
 const responseView = ref<ResponseView>('dsp')
+const displayRangeDb = ref<EqDisplayRange>(12)
+function plotResponse(response: { frequency: number; db: number }[]): string {
+  return responseToPath(
+    response,
+    activeTab.value === 'parametric' ? displayRangeDb.value : 18,
+    activeTab.value !== 'parametric'
+  )
+}
 const importedFrequencyResponse = ref<ImportedFrequencyResponse | null>(null)
 const frequencyResponseImporting = ref(false)
 const frequencyResponseError = ref('')
@@ -177,7 +202,7 @@ const responseOptions = computed(() => ({
 // Exact RBJ biquad responses (same math as ParametricEqProcessor.cpp). Keep
 // each processing contribution separate while retaining the effective total.
 const manualResponsePath = computed(() =>
-  responseToPath(
+  plotResponse(
     computeCompositeResponse(audioProcessing.value.eqBands, audioProcessing.value.eqPreamp, {
       ...responseOptions.value,
       mode: audioProcessing.value.eqMode
@@ -186,7 +211,7 @@ const manualResponsePath = computed(() =>
 )
 const opraResponsePath = computed(() =>
   opraCompensationEnabled.value
-    ? responseToPath(
+    ? plotResponse(
         computeCompositeResponse(
           headphoneCompensation.value.bands,
           headphoneCompensation.value.preampDb,
@@ -197,7 +222,7 @@ const opraResponsePath = computed(() =>
 )
 const opraEstimatedDeviationPath = computed(() =>
   opraCompensationEnabled.value
-    ? responseToPath(
+    ? plotResponse(
         computeEstimatedSourceDeviation(headphoneCompensation.value.bands, responseOptions.value)
       )
     : ''
@@ -208,7 +233,7 @@ const effectiveDspResponse = computed(() =>
     mode: displayEqMode.value
   })
 )
-const responsePath = computed(() => responseToPath(effectiveDspResponse.value))
+const responsePath = computed(() => plotResponse(effectiveDspResponse.value))
 const acousticDspResponse = computed(() =>
   computeCompositeResponse(displayEqBands.value, 0, {
     ...responseOptions.value,
@@ -227,20 +252,18 @@ const frequencyResponseComparison = computed(() => {
   )
 })
 const measuredSourcePath = computed(() =>
-  frequencyResponseComparison.value ? responseToPath(frequencyResponseComparison.value.source) : ''
+  frequencyResponseComparison.value ? plotResponse(frequencyResponseComparison.value.source) : ''
 )
 const targetResponsePath = computed(() =>
-  frequencyResponseComparison.value ? responseToPath(frequencyResponseComparison.value.target) : ''
+  frequencyResponseComparison.value ? plotResponse(frequencyResponseComparison.value.target) : ''
 )
 const combinedFilterPath = computed(() =>
   frequencyResponseComparison.value
-    ? responseToPath(frequencyResponseComparison.value.combinedFilter)
+    ? plotResponse(frequencyResponseComparison.value.combinedFilter)
     : ''
 )
 const correctedAcousticPath = computed(() =>
-  frequencyResponseComparison.value
-    ? responseToPath(frequencyResponseComparison.value.corrected)
-    : ''
+  frequencyResponseComparison.value ? plotResponse(frequencyResponseComparison.value.corrected) : ''
 )
 const responseFillPath = computed(() => {
   if (!responsePath.value) return ''
@@ -261,7 +284,7 @@ function computeBandResponsePaths(
     if (!isBandActive(band, mode) && !(includeBypassed && band.enabled === false)) return
     paths.push({
       index,
-      path: responseToPath(
+      path: plotResponse(
         computeBandResponse(includeBypassed ? { ...band, enabled: true } : band, {
           sampleRate,
           mode,
@@ -299,6 +322,12 @@ const autoPreampTargetDb = computed(() =>
 function loadAutoPreampPreference(): void {
   try {
     autoPreampEnabled.value = globalThis.localStorage?.getItem(autoPreampStorageKey) === '1'
+    const saved = globalThis.localStorage?.getItem(manualPreampStorageKey)
+    const value = saved?.trim() ? Number(saved) : NaN
+    manualPreampBeforeAuto =
+      autoPreampEnabled.value && Number.isFinite(value) && value >= -24 && value <= 24
+        ? value
+        : null
   } catch {
     // A blocked localStorage must not break the equalizer page.
   }
@@ -306,22 +335,47 @@ function loadAutoPreampPreference(): void {
 
 function saveAutoPreampPreference(enabled: boolean): void {
   try {
+    if (enabled && manualPreampBeforeAuto !== null)
+      globalThis.localStorage?.setItem(manualPreampStorageKey, String(manualPreampBeforeAuto))
+    else globalThis.localStorage?.removeItem(manualPreampStorageKey)
     globalThis.localStorage?.setItem(autoPreampStorageKey, enabled ? '1' : '0')
   } catch {
     // Persisting the toggle is best-effort only.
   }
 }
 
-function toggleAutoPreamp(): void {
-  autoPreampEnabled.value = !autoPreampEnabled.value
-  saveAutoPreampPreference(autoPreampEnabled.value)
-  if (autoPreampEnabled.value) void applyAutoPreamp()
+async function toggleAutoPreamp(): Promise<void> {
+  finishParametricEdits()
+  commitChain = commitChain.then(async () => {
+    const enabled = !autoPreampEnabled.value
+    const previousManual = manualPreampBeforeAuto
+    if (enabled) manualPreampBeforeAuto = audioProcessing.value.eqPreamp
+    const preamp = enabled
+      ? autoPreampTargetDb.value
+      : (manualPreampBeforeAuto ?? audioProcessing.value.eqPreamp)
+    autoPreampEnabled.value = enabled
+    await runEqApply(() => updateAudioProcessing({ eqPreamp: preamp }))
+    if (autoPreampEnabled.value !== enabled) return
+    if (eqApplyFeedback.value === 'applied') {
+      if (!enabled) manualPreampBeforeAuto = null
+      saveAutoPreampPreference(enabled)
+    } else {
+      autoPreampEnabled.value = !enabled
+      manualPreampBeforeAuto = previousManual
+    }
+  })
+  await commitChain
 }
 
 async function applyAutoPreamp(): Promise<void> {
-  const target = autoPreampTargetDb.value
-  if (Math.abs(audioProcessing.value.eqPreamp - target) < 0.05) return
-  await updateAudioProcessing({ eqPreamp: target })
+  if (!autoPreampEnabled.value) return
+  commitChain = commitChain.then(async () => {
+    if (!autoPreampEnabled.value) return
+    const target = autoPreampTargetDb.value
+    if (Math.abs(audioProcessing.value.eqPreamp - target) < 0.05) return
+    await runEqApply(() => updateAudioProcessing({ eqPreamp: target }))
+  })
+  await commitChain
 }
 
 async function loadAppSettings(): Promise<void> {
@@ -409,8 +463,21 @@ async function updateAudioProcessing(patch: Partial<AudioProcessingSettings>): P
       maxPreampDb: 24
     })
   }
-  await setAudioProcessing(nextSettings)
+  await eqHistory.commit(nextSettings)
+}
+
+async function applyEqualizerSnapshot(snapshot: EqSnapshot): Promise<void> {
+  const nextSettings = normalizeAudioProcessing(
+    mergeEqualizerPatch(audioProcessing.value, snapshot)
+  )
+  await setAudioProcessing(nextSettings, { throwOnError: true })
   await syncActiveSceneEq(nextSettings)
+  activeTab.value = nextSettings.eqMode
+  const indices = selectedBandIndices.value.filter((index) => nextSettings.eqBands[index])
+  selectBand(
+    indices.includes(selectedBandIndex.value) ? selectedBandIndex.value : (indices.at(-1) ?? -1),
+    indices
+  )
   if (appSettings.value) {
     appSettings.value = {
       ...appSettings.value,
@@ -422,8 +489,11 @@ async function updateAudioProcessing(patch: Partial<AudioProcessingSettings>): P
 async function updateEqBand(index: number, patch: Partial<EqualizerBand>): Promise<void> {
   finishParametricEdits()
   await commitChain
-  const bands = patchBand(audioProcessing.value.eqBands, index, patch, audioProcessing.value.eqMode)
-  if (!bands[index]) return
+  if (!audioProcessing.value.eqBands[index]) return
+  let bands = audioProcessing.value.eqBands
+  const changes = groupEqBandPatches(bands, editedBandIndices(index), index, patch)
+  for (const change of changes)
+    bands = patchBand(bands, change.index, change.patch, audioProcessing.value.eqMode)
   await runEqApply(() => updateAudioProcessing({ eqBands: bands }))
 }
 
@@ -455,19 +525,13 @@ async function runEqApply(action: () => Promise<void>): Promise<void> {
 // concurrent applies resolve out of order and can strand the UI (and the DSP
 // scene) on an earlier value than the one the user dragged to.
 function flushStagedEdit(): void {
-  if (pendingBandIndex < 0 && pendingPreamp === null) return
-  const bands =
-    pendingBandIndex >= 0 && pendingBandPatch
-      ? patchBand(
-          audioProcessing.value.eqBands,
-          pendingBandIndex,
-          pendingBandPatch,
-          audioProcessing.value.eqMode
-        )
-      : audioProcessing.value.eqBands
+  if (pendingBandPatches.size === 0 && pendingPreamp === null) return
+  let bands = audioProcessing.value.eqBands
+  for (const [index, patch] of pendingBandPatches) {
+    bands = patchBand(bands, index, patch, audioProcessing.value.eqMode)
+  }
   const preamp = pendingPreamp ?? audioProcessing.value.eqPreamp
-  pendingBandIndex = -1
-  pendingBandPatch = null
+  pendingBandPatches.clear()
   pendingPreamp = null
   audioOutputDspStore.applyAudioProcessingState({
     ...audioProcessing.value,
@@ -489,24 +553,39 @@ function scheduleStagedFlush(): void {
 }
 
 function stageBandPatch(index: number, patch: Partial<EqualizerBand>): void {
-  if (!audioProcessing.value.eqBands[index]) return
-  // Staging a different band must not retarget the patch already queued for the
-  // previous one; land it first, then start the new one.
-  if (pendingBandIndex >= 0 && pendingBandIndex !== index) {
-    if (pendingBandFrame !== 0) {
-      window.cancelAnimationFrame(pendingBandFrame)
-      pendingBandFrame = 0
-    }
-    flushStagedEdit()
+  stageBandPatches([{ index, patch }])
+}
+
+function stageBandPatches(changes: EqBandPatch[]): void {
+  for (const { index, patch } of changes) {
+    if (!audioProcessing.value.eqBands[index]) continue
+    pendingBandPatches.set(index, { ...pendingBandPatches.get(index), ...patch })
   }
-  pendingBandIndex = index
-  pendingBandPatch = { ...(pendingBandPatch ?? {}), ...patch }
   scheduleStagedFlush()
 }
 
 function stagePreamp(value: number): void {
+  if (autoPreampEnabled.value) {
+    autoPreampEnabled.value = false
+    manualPreampBeforeAuto = null
+    saveAutoPreampPreference(false)
+  }
   pendingPreamp = clampNumber(value, -24, 24, audioProcessing.value.eqPreamp)
   scheduleStagedFlush()
+}
+
+function updatePreampInput(event: Event): void {
+  const input = event.target as HTMLInputElement
+  const value = input.valueAsNumber
+  if (!Number.isFinite(value)) {
+    input.value = audioProcessing.value.eqPreamp.toFixed(1)
+    return
+  }
+  const preamp = clampNumber(value, -24, 24, audioProcessing.value.eqPreamp)
+  input.value = preamp.toFixed(1)
+  if (!autoPreampEnabled.value && preamp === audioProcessing.value.eqPreamp) return
+  stagePreamp(preamp)
+  void commitStagedBands()
 }
 
 async function commitStagedBands(): Promise<void> {
@@ -518,16 +597,14 @@ async function commitStagedBands(): Promise<void> {
   // Snapshot the staged bands now, before any in-flight commit's response can
   // overwrite the shared state. Reading them inside the chained thunk would pick
   // up the earlier engine response and silently drop this gesture's edit.
-  // Do not pass eqPreamp: updateAudioProcessing recomputes it for auto gain
-  // compensation only when the patch omits it, and the staged value is already
-  // spread in from audioProcessing.value.
+  const preamp = autoPreampEnabled.value ? undefined : audioProcessing.value.eqPreamp
   const bands = cloneBands(audioProcessing.value.eqBands)
   // Serialize commits. setAudioProcessing assigns the engine response straight
   // onto the shared state, so a slow earlier response landing after a faster
   // later one would overwrite the newer edit in both the UI and the DSP scene.
   commitChain = commitChain
     .then(async () => {
-      await runEqApply(() => updateAudioProcessing({ eqBands: bands }))
+      await runEqApply(() => updateAudioProcessing({ eqBands: bands, eqPreamp: preamp }))
     })
     // Never leave the chain rejected: a settled failure would make every later
     // slider release reject without ever reaching the engine.
@@ -538,6 +615,16 @@ async function commitStagedBands(): Promise<void> {
   await commitChain
 }
 
+async function runHistoryCommand(action: 'undo' | 'redo' | 'A' | 'B' | 'copy'): Promise<void> {
+  finishParametricEdits()
+  await commitChain
+  await runEqApply(async () => {
+    if (action === 'undo' || action === 'redo') await eqHistory.travel(action)
+    else if (action === 'copy') await eqHistory.copyToOther()
+    else await eqHistory.switchSlot(action)
+  })
+}
+
 async function addBand(frequency: number, gain: number): Promise<void> {
   finishParametricEdits()
   await commitChain
@@ -546,63 +633,189 @@ async function addBand(frequency: number, gain: number): Promise<void> {
     ...cloneBands(audioProcessing.value.eqBands),
     createParametricBand(frequency, gain)
   ]
-  selectedBandIndex.value = bands.length - 1
   await runEqApply(() => updateAudioProcessing({ eqMode: 'parametric', eqBands: bands }))
+  if (eqApplyFeedback.value === 'applied') selectBand(bands.length - 1)
+}
+
+function editedBandIndices(index: number): number[] {
+  return activeTab.value === 'parametric' && selectedBandIndices.value.includes(index)
+    ? selectedBandIndices.value
+    : [index]
 }
 
 async function deleteBand(index = selectedBandIndex.value): Promise<void> {
   finishParametricEdits()
   await commitChain
-  const bands = cloneBands(audioProcessing.value.eqBands)
-  if (!bands[index]) return
-  bands.splice(index, 1)
-  selectedBandIndex.value = Math.max(0, Math.min(index, bands.length - 1))
+  if (!audioProcessing.value.eqBands[index]) return
+  const removed = new Set(editedBandIndices(index))
+  const bands = audioProcessing.value.eqBands.filter((_band, index) => !removed.has(index))
   await runEqApply(() => updateAudioProcessing({ eqBands: bands }))
+  if (eqApplyFeedback.value === 'applied')
+    selectBand(Math.min(Math.min(...removed), bands.length - 1))
 }
 
 async function toggleBandEnabled(index = selectedBandIndex.value): Promise<void> {
-  const band = audioProcessing.value.eqBands[index]
-  if (!band) return
-  await updateEqBand(index, { enabled: band.enabled === false })
+  finishParametricEdits()
+  await commitChain
+  if (!audioProcessing.value.eqBands[index]) return
+  const indices = editedBandIndices(index)
+  const enabled = !indices.some((index) => audioProcessing.value.eqBands[index].enabled !== false)
+  await updateEqBand(index, { enabled })
+}
+
+async function copyBands(all = false): Promise<void> {
+  if (clipboardBusy.value || activeTab.value !== 'parametric' || responseView.value !== 'dsp')
+    return
+  clipboardBusy.value = true
+  clipboardMessage.value = ''
+  clipboardFailed.value = false
+  try {
+    finishParametricEdits()
+    await commitChain
+    if (!equalizerMounted || activeTab.value !== 'parametric' || responseView.value !== 'dsp')
+      return
+    const selected = new Set(selectedBandIndices.value)
+    const bands = cloneBands(
+      audioProcessing.value.eqBands.filter((_band, index) => all || selected.has(index))
+    )
+    if (!bands.length) return
+    await window.api.window.copyEqBands(bands)
+    clipboardMessage.value = `已复制 ${bands.length} 个频段`
+  } catch (error) {
+    clipboardFailed.value = true
+    clipboardMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    clipboardBusy.value = false
+  }
+}
+
+async function pasteBands(): Promise<void> {
+  if (clipboardBusy.value || activeTab.value !== 'parametric' || responseView.value !== 'dsp')
+    return
+  clipboardBusy.value = true
+  clipboardMessage.value = ''
+  clipboardFailed.value = false
+  try {
+    finishParametricEdits()
+    await commitChain
+    if (!equalizerMounted || activeTab.value !== 'parametric' || responseView.value !== 'dsp')
+      return
+    const incoming = await window.api.window.pasteEqBands()
+    if (!equalizerMounted || activeTab.value !== 'parametric' || responseView.value !== 'dsp')
+      return
+    const first = audioProcessing.value.eqBands.length
+    if (first + incoming.length > 32)
+      throw new Error(`最多支持 32 个频段：当前 ${first} 个，待粘贴 ${incoming.length} 个`)
+    const bands = [...cloneBands(audioProcessing.value.eqBands), ...cloneBands(incoming)]
+    await runEqApply(() => updateAudioProcessing({ eqMode: 'parametric', eqBands: bands }))
+    if (eqApplyFeedback.value === 'applied') {
+      selectBand(
+        first,
+        incoming.map((_band, index) => first + index)
+      )
+      clipboardMessage.value = `已粘贴 ${incoming.length} 个频段`
+    }
+  } catch (error) {
+    clipboardFailed.value = true
+    clipboardMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    clipboardBusy.value = false
+  }
+}
+
+function blockWhileApplying(event: Event): void {
+  if (!historyBusy.value && !clipboardBusy.value) return
+  if (event instanceof KeyboardEvent && event.key === 'Tab') return
+  event.preventDefault()
+  event.stopImmediatePropagation()
 }
 
 function onEqualizerKeydown(event: KeyboardEvent): void {
-  if (activeTab.value !== 'parametric') return
   const target = event.target as HTMLElement | null
-  if (target?.matches('input, select, textarea, [contenteditable="true"]')) return
+  if (target?.closest('input, select, textarea, [contenteditable="true"]')) return
+  if (historyBusy.value || historyLoading.value || clipboardBusy.value) return
+  const key = event.key.toLowerCase()
+  if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+    if (key === 'z' || key === 'y') {
+      event.preventDefault()
+      event.stopPropagation()
+      void runHistoryCommand(key === 'y' || event.shiftKey ? 'redo' : 'undo')
+    } else if (key === 'a' && activeTab.value === 'parametric') {
+      event.preventDefault()
+      event.stopPropagation()
+      const indices = audioProcessing.value.eqBands.map((_band, index) => index)
+      selectBand(indices[0] ?? -1, indices)
+    } else if (
+      activeTab.value === 'parametric' &&
+      responseView.value === 'dsp' &&
+      (key === 'v' || (key === 'c' && selectedBandIndices.value.length))
+    ) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (key === 'c') void copyBands()
+      else void pasteBands()
+    }
+    return
+  }
+  if (activeTab.value !== 'parametric') return
   if ((event.key === 'Delete' || event.key === 'Backspace') && selectedBand.value) {
     event.preventDefault()
     void deleteBand()
   }
-  if (event.key.toLowerCase() === 'b' && selectedBand.value) {
+  if (!event.altKey && event.key.toLowerCase() === 'b' && selectedBand.value) {
     event.preventDefault()
     void toggleBandEnabled()
   }
 }
 
-function updateSpectrumPath(): void {
-  spectrumAnimationFrame = 0
-  const data = visualizationData.value
-  if (!spectrumVisible.value || !data.active || data.spectrum.length < 2) {
-    spectrumPath.value = ''
-    smoothedSpectrum = []
-    return
-  }
-  if (smoothedSpectrum.length !== data.spectrum.length) {
-    smoothedSpectrum = Array.from(data.spectrum, (value) => clampNumber(value, 0, 1, 0))
-  } else {
-    data.spectrum.forEach((value, index) => {
-      const target = clampNumber(value, 0, 1, 0)
-      const speed = target > smoothedSpectrum[index] ? SPECTRUM_ATTACK : SPECTRUM_RELEASE
-      smoothedSpectrum[index] += (target - smoothedSpectrum[index]) * speed
+async function pollSpectrum(generation: number): Promise<void> {
+  if (spectrumRequestInFlight) return
+  spectrumRequestInFlight = true
+  try {
+    const data = await window.api.audioEngine.getVisualizationData({
+      spectrumPoints: 2048,
+      waveformPoints: 16,
+      spectrogramFrames: 0,
+      oscilloscopePoints: 0
     })
+    if (generation !== spectrumPollGeneration) return
+    if (!data.active || data.spectrum.length < 2) {
+      spectrumLevels.value = null
+      return
+    }
+    spectrumLevels.value = projectSpectrumLevels(
+      data.spectrum,
+      data.sampleRate || responseSampleRate.value
+    )
+  } catch {
+    if (generation !== spectrumPollGeneration) return
+    spectrumLevels.value = null
+  } finally {
+    spectrumRequestInFlight = false
   }
-  spectrumPath.value = spectrumToPath(smoothedSpectrum, data.sampleRate || responseSampleRate.value)
 }
 
-function scheduleSpectrumPathUpdate(): void {
-  if (spectrumAnimationFrame !== 0) return
-  spectrumAnimationFrame = window.requestAnimationFrame(updateSpectrumPath)
+function updateSpectrumPolling(): void {
+  if (!spectrumVisible.value || responseView.value !== 'dsp' || activeTab.value !== 'parametric')
+    spectrumFrozen.value = false
+  const shouldPoll =
+    spectrumPollingMounted &&
+    activeTab.value === 'parametric' &&
+    responseView.value === 'dsp' &&
+    spectrumVisible.value &&
+    !spectrumFrozen.value &&
+    isPlaying.value
+  if (!shouldPoll) {
+    spectrumPollGeneration += 1
+    if (spectrumPollTimer !== null) window.clearInterval(spectrumPollTimer)
+    spectrumPollTimer = null
+    if (!spectrumFrozen.value) spectrumLevels.value = null
+    return
+  }
+  if (spectrumPollTimer !== null) return
+  const generation = ++spectrumPollGeneration
+  void pollSpectrum(generation)
+  spectrumPollTimer = window.setInterval(() => void pollSpectrum(generation), 60)
 }
 
 async function importFrequencyResponse(): Promise<void> {
@@ -746,11 +959,13 @@ async function applyEqPreset(preset: AudioEqPreset): Promise<void> {
   finishParametricEdits()
   await commitChain
   activeTab.value = preset.eqMode
-  await updateAudioProcessing({
-    eqMode: preset.eqMode,
-    eqPreamp: preset.eqPreamp,
-    eqBands: cloneBands(preset.eqBands)
-  })
+  await runEqApply(() =>
+    updateAudioProcessing({
+      eqMode: preset.eqMode,
+      eqPreamp: preset.eqPreamp,
+      eqBands: cloneBands(preset.eqBands)
+    })
+  )
   presetMenuOpen.value = false
 }
 
@@ -796,7 +1011,7 @@ async function switchTab(tab: EqualizerTab): Promise<void> {
   presetMenuOpen.value = false
   filterMenuOpen.value = false
   if (tab === 'graphic' || tab === 'parametric') {
-    void updateAudioProcessing({ eqMode: tab })
+    await runEqApply(() => updateAudioProcessing({ eqMode: tab }))
   }
 }
 
@@ -809,22 +1024,24 @@ useBackHandler(
 )
 
 function openAdvancedSettings(index = selectedBandIndex.value): void {
-  selectedBandIndex.value = Math.min(Math.max(index, 0), audioProcessing.value.eqBands.length - 1)
+  selectBand(Math.min(Math.max(index, 0), audioProcessing.value.eqBands.length - 1))
   activeTab.value = 'parametric'
   presetMenuOpen.value = false
   filterMenuOpen.value = false
-  void updateAudioProcessing({ eqMode: 'parametric' })
+  void runEqApply(() => updateAudioProcessing({ eqMode: 'parametric' }))
 }
 
 async function resetEqualizer(): Promise<void> {
   finishParametricEdits()
   await commitChain
-  await updateAudioProcessing({
-    eqEnabled: false,
-    eqMode: activeTab.value === 'parametric' ? 'parametric' : 'graphic',
-    eqPreamp: 0,
-    eqBands: cloneBands(defaultEqBands)
-  })
+  await runEqApply(() =>
+    updateAudioProcessing({
+      eqEnabled: false,
+      eqMode: activeTab.value === 'parametric' ? 'parametric' : 'graphic',
+      eqPreamp: 0,
+      eqBands: cloneBands(defaultEqBands)
+    })
+  )
 }
 
 function togglePresetMenu(): void {
@@ -850,27 +1067,36 @@ function finishParametricEdits(): void {
 async function toggleParametricEq(): Promise<void> {
   finishParametricEdits()
   await commitChain
-  await updateAudioProcessing({ eqEnabled: !audioProcessing.value.eqEnabled })
+  await runEqApply(() => updateAudioProcessing({ eqEnabled: !audioProcessing.value.eqEnabled }))
 }
 
-function selectBand(index: number): void {
-  selectedBandIndex.value = index
+function selectBand(index: number, indices: number[] = [index]): void {
+  const valid = indices.filter((index) => audioProcessing.value.eqBands[index])
+  selectedBandIndex.value = valid.includes(index) ? index : (valid.at(-1) ?? -1)
+  selectedBandIndices.value = valid
   filterMenuOpen.value = false
 }
 
 onMounted(() => {
+  spectrumPollingMounted = true
   releaseVisualizationConsumer = acquireVisualizationConsumer()
   loadAutoPreampPreference()
-  void loadAppSettings()
+  void loadAppSettings().then(() => {
+    eqHistory.reset(audioProcessing.value)
+    historyLoading.value = false
+  })
   void loadOpraStatus()
+  updateSpectrumPolling()
 })
 
 onBeforeUnmount(() => {
+  equalizerMounted = false
+  spectrumPollingMounted = false
+  updateSpectrumPolling()
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = null
   clearApplyFeedbackTimer()
   if (pendingBandFrame !== 0) window.cancelAnimationFrame(pendingBandFrame)
-  if (spectrumAnimationFrame !== 0) window.cancelAnimationFrame(spectrumAnimationFrame)
 })
 
 // Keep the compensated preamp in sync when bands change through paths that
@@ -878,6 +1104,8 @@ onBeforeUnmount(() => {
 watch(autoPreampTargetDb, () => {
   if (
     !autoPreampEnabled.value ||
+    historyLoading.value ||
+    historyBusy.value ||
     eqApplyFeedback.value === 'editing' ||
     eqApplyFeedback.value === 'applying'
   )
@@ -885,13 +1113,7 @@ watch(autoPreampTargetDb, () => {
   void applyAutoPreamp()
 })
 
-watch(
-  () => visualizationData.value,
-  () => scheduleSpectrumPathUpdate(),
-  { deep: false }
-)
-
-watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpdate())
+watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], updateSpectrumPolling)
 </script>
 
 <template>
@@ -900,7 +1122,16 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
     :class="{ 'is-parametric': activeTab === 'parametric' }"
     @keydown="onEqualizerKeydown"
   >
-    <div class="eq-container">
+    <div
+      class="eq-container"
+      :inert="historyLoading"
+      :aria-busy="historyBusy || historyLoading || clipboardBusy"
+      @click.capture="blockWhileApplying"
+      @pointerdown.capture="blockWhileApplying"
+      @keydown.capture="blockWhileApplying"
+      @wheel.capture="blockWhileApplying"
+      @contextmenu.capture="blockWhileApplying"
+    >
       <aside v-if="activeTab !== 'parametric'" class="eq-sidebar">
         <div
           v-for="tab in tabs"
@@ -926,6 +1157,12 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
       <main class="eq-content">
         <!-- Toolbar for Presets across Graphic and Parametric -->
         <div v-if="activeTab !== 'parametric'" class="eq-toolbar-modern">
+          <EqHistoryControls
+            :active-slot="activeSlot"
+            :can-undo="canUndo"
+            :can-redo="canRedo"
+            @command="runHistoryCommand"
+          />
           <div class="preset-menu-anchor">
             <button type="button" class="eq-command preset-menu-button" @click="togglePresetMenu">
               选择预设 <i class="pi pi-chevron-down"></i>
@@ -1010,13 +1247,9 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
               aria-label="启用均衡器"
               :aria-checked="audioProcessing.eqEnabled"
               :class="{ off: !audioProcessing.eqEnabled }"
-              @click="updateAudioProcessing({ eqEnabled: !audioProcessing.eqEnabled })"
-              @keydown.enter.prevent="
-                updateAudioProcessing({ eqEnabled: !audioProcessing.eqEnabled })
-              "
-              @keydown.space.prevent="
-                updateAudioProcessing({ eqEnabled: !audioProcessing.eqEnabled })
-              "
+              @click="toggleParametricEq()"
+              @keydown.enter.prevent="toggleParametricEq()"
+              @keydown.space.prevent="toggleParametricEq()"
             >
               {{ audioProcessing.eqEnabled ? '已启用' : '已关闭' }}
               <div class="toggle-track"><div class="toggle-thumb"></div></div>
@@ -1091,11 +1324,17 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
             ref="parametricWorkspaceRef"
             :bands="audioProcessing.eqBands"
             :selected-index="selectedBandIndex"
+            :selected-indices="selectedBandIndices"
+            :clipboard-busy="clipboardBusy"
+            :clipboard-message="clipboardMessage"
+            :clipboard-failed="clipboardFailed"
+            v-model:display-range-db="displayRangeDb"
             :filter-types="filterTypes"
             :response-view="responseView"
             :response-path="responsePath"
-            :spectrum-path="spectrumPath"
+            :spectrum-levels="spectrumLevels"
             :spectrum-visible="spectrumVisible"
+            v-model:spectrum-frozen="spectrumFrozen"
             :measured-source-path="measuredSourcePath"
             :target-response-path="targetResponsePath"
             :combined-filter-path="combinedFilterPath"
@@ -1115,8 +1354,10 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
             :status-state="eqApplyFeedback"
             :error="eqApplyError"
             @select="selectBand"
+            @copy="copyBands"
+            @paste="pasteBands"
             @add="addBand"
-            @preview="stageBandPatch"
+            @preview-bands="stageBandPatches"
             @commit="commitStagedBands"
             @delete="deleteBand"
             @toggle="toggleBandEnabled"
@@ -1125,6 +1366,12 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
             @toggle-headphone-curve="toggleHeadphoneCurve"
           >
             <template #commands>
+              <EqHistoryControls
+                :active-slot="activeSlot"
+                :can-undo="canUndo"
+                :can-redo="canRedo"
+                @command="runHistoryCommand"
+              />
               <div class="instrument-mode-switch" aria-label="均衡器模式">
                 <button type="button" :aria-pressed="false" @click="switchTab('graphic')">
                   图形
@@ -1225,9 +1472,19 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
               >
                 <i :class="autoPreampEnabled ? 'pi pi-check-circle' : 'pi pi-circle'"></i>自动补偿
               </button>
-              <span class="instrument-preamp" title="前置放大"
-                >{{ audioProcessing.eqPreamp.toFixed(1) }} <small>dB</small></span
-              >
+              <label class="instrument-preamp" title="前置放大，手动修改会关闭自动补偿">
+                <input
+                  type="number"
+                  min="-24"
+                  max="24"
+                  step="0.1"
+                  :value="audioProcessing.eqPreamp.toFixed(1)"
+                  aria-label="前级增益"
+                  @change="updatePreampInput"
+                  @keydown.enter.prevent="updatePreampInput"
+                />
+                <small>dB</small>
+              </label>
             </template>
           </ParametricEqWorkspace>
         </div>
@@ -2085,6 +2342,25 @@ watch([spectrumVisible, responseView, isPlaying], () => scheduleSpectrumPathUpda
 .instrument-preamp small {
   font-size: 9px;
   color: var(--eq-text-subtle);
+}
+.instrument-preamp input {
+  width: 54px;
+  padding: 3px 4px;
+  border: 1px solid var(--eq-border-soft);
+  border-radius: 4px;
+  color: inherit;
+  background: var(--eq-panel);
+  font: inherit;
+  text-align: right;
+  appearance: textfield;
+}
+.instrument-preamp input::-webkit-inner-spin-button,
+.instrument-preamp input::-webkit-outer-spin-button {
+  appearance: none;
+}
+.instrument-preamp input:focus-visible {
+  outline: 2px solid var(--eq-response);
+  outline-offset: 2px;
 }
 .instrument-mode-switch button:focus-visible,
 .instrument-power:focus-visible,

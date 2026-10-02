@@ -33,6 +33,7 @@ import type {
   VolumeNormalizationMode
 } from '../../types/settings'
 import type { LyricSource, Track } from '../../types/music'
+import type { PlaybackInfo } from '../../../../shared/audioEngineTypes.ts'
 import type { DlnaDeviceInfo } from '../../../../shared/remoteControl.ts'
 import type { PlaybackBookmark } from '../../../../shared/playbackBookmarks.ts'
 import type { LyricLayerSourceSelection } from '../../../../shared/lyricsManagement.ts'
@@ -51,6 +52,7 @@ const props = defineProps<{
   glass?: boolean
   accentColor?: string
   exclusiveMode: boolean
+  outputReleased?: boolean
   exclusiveAvailable: boolean
   audioOutput: AudioOutputId
   audioOutputOptions: AudioOutputOption[]
@@ -81,6 +83,10 @@ const props = defineProps<{
   outputDiagnosticsText: string
   nativeDsdRuntimeReasonText: string
   currentTrack: Track | null
+  sourceInfo?: Pick<
+    PlaybackInfo,
+    'codec' | 'sourceSampleRate' | 'sourceBitDepth' | 'bitrate'
+  > | null
   desktopLyricsOn: boolean
   lyricsReloading?: boolean
   originalLayerSelection: LyricLayerSourceSelection
@@ -402,10 +408,18 @@ const sourceQuality = computed(() => {
     }
   }
 
-  const format = (track.format || track.fileName?.split('.').pop() || 'PCM').toUpperCase()
-  const rate = track.sampleRate ? `${Math.round(track.sampleRate / 100) / 10} kHz` : '—'
-  const depth = track.bitDepth ? `${track.bitDepth} bit` : '—'
-  const bitrate = track.bitrate ? `${Math.round(track.bitrate / 1000)} kbps` : '—'
+  const sampleRate = props.sourceInfo?.sourceSampleRate || track.sampleRate || 0
+  const bitDepth = props.sourceInfo?.sourceBitDepth || track.bitDepth || 0
+  const bitsPerSecond = props.sourceInfo?.bitrate || track.bitrate || 0
+  const format = (
+    props.sourceInfo?.codec ||
+    track.format ||
+    track.fileName?.split('.').pop() ||
+    'PCM'
+  ).toUpperCase()
+  const rate = sampleRate >= 1000 ? `${Math.round(sampleRate / 100) / 10} kHz` : '—'
+  const depth = bitDepth > 0 ? `${bitDepth} bit` : '—'
+  const bitrate = bitsPerSecond > 0 ? `${Math.round(bitsPerSecond / 1000)} kbps` : '—'
   const source = track.source === 'local' || !track.source ? '本地库' : String(track.source)
 
   let badge = 'Standard'
@@ -413,16 +427,16 @@ const sourceQuality = computed(() => {
   if (/\b(dsf|dff|dsd|sacd)\b/i.test(`${format} ${track.fileName || ''}`)) {
     badge = 'DSD'
     tone = 'success'
-  } else if ((track.sampleRate || 0) >= 88200 || (track.bitDepth || 0) >= 24) {
+  } else if (sampleRate >= 88200 || bitDepth >= 24) {
     badge = 'Hi-Res'
     tone = 'success'
-  } else if ((track.sampleRate || 0) >= 44100 && (track.bitDepth || 0) >= 16 && !track.bitrate) {
+  } else if (format === 'ALAC' || (sampleRate >= 44100 && bitDepth >= 16 && !bitsPerSecond)) {
     badge = 'Lossless'
     tone = 'success'
-  } else if ((track.bitrate || 0) >= 320000) {
+  } else if (bitsPerSecond >= 320000) {
     badge = 'High'
     tone = 'warning'
-  } else if (track.bitrate) {
+  } else if (bitsPerSecond) {
     badge = 'Lossy'
     tone = 'muted'
   }
@@ -559,8 +573,8 @@ function resetStereoImage(): void {
 /* ===== Signal Deck 展示层 ===== */
 
 const deckRateValue = computed(() => {
-  const rate = props.currentTrack?.sampleRate
-  if (!rate || !Number.isFinite(rate) || rate <= 0) return '--.-'
+  const rate = props.sourceInfo?.sourceSampleRate || props.currentTrack?.sampleRate
+  if (!rate || !Number.isFinite(rate) || rate < 1000) return '--.-'
   return (Math.round(rate / 100) / 10).toFixed(1)
 })
 
@@ -579,6 +593,7 @@ const deckLiveTone = computed<StatusTone>(() => {
 
 const deckOutNodeSub = computed(() => {
   const backend = selectedDevice.value?.backend?.toUpperCase() || 'OUTPUT'
+  if (props.outputReleased) return `${backend} · RELEASED`
   return `${backend} · ${props.exclusiveMode ? 'EXCLUSIVE' : 'SHARED'}`
 })
 

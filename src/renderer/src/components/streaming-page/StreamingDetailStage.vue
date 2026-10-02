@@ -53,6 +53,7 @@ const props = withDefaults(
     hasSelection?: boolean
     selectedCount?: number
     selectionAllFavorited?: boolean
+    favoriteLabel?: string
     canAddToPlaylist?: boolean
     canRemoveFromPlaylist?: boolean
     isSelected: (id: string) => boolean
@@ -382,7 +383,9 @@ const infoTrack = shallowRef<Track | null>(null)
         <div class="stage-selection-actions">
           <button type="button" class="stage-mini-btn" @click="emit('batchFavorite')">
             <i :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
-            <span>{{ selectionAllFavorited ? '取消收藏' : '加入收藏' }}</span>
+            <span>{{
+              favoriteLabel ?? (selectionAllFavorited ? '移出应用收藏' : '加入应用收藏')
+            }}</span>
           </button>
           <button
             v-if="canAddToPlaylist"
@@ -494,7 +497,7 @@ const infoTrack = shallowRef<Track | null>(null)
                 loading: isLiking(track.ncmSongId)
               }"
               :disabled="isLiking(track.ncmSongId)"
-              :title="isTrackLiked(track.ncmSongId) ? '取消喜欢' : '喜欢'"
+              :title="isTrackLiked(track.ncmSongId) ? '在网易云取消喜欢' : '在网易云喜欢'"
               @click="onLike(track, $event)"
             >
               <i v-if="isLiking(track.ncmSongId)" class="pi pi-spin pi-spinner"></i>

@@ -241,6 +241,17 @@ test('setAudioProcessing rolls back to the previous snapshot on failure', async 
   assert.equal(harness.crossfadeSchedules, 0)
 })
 
+test('setAudioProcessing can propagate rejection to transactional EQ callers', async () => {
+  const harness = createHarness()
+  harness.failProcessing = true
+  await assert.rejects(
+    harness.controller.setAudioProcessing({ eqEnabled: true }, { throwOnError: true }),
+    /engine rejected processing update/
+  )
+  assert.equal(harness.audioProcessing.value.eqEnabled, false)
+  assert.equal(harness.crossfadeSchedules, 0)
+})
+
 test('setAudioOutputConfig ignores reentrant requests while pending', async () => {
   const harness = createHarness()
   const first = harness.controller.setAudioOutputConfig({ preferredBufferSize: 256 })

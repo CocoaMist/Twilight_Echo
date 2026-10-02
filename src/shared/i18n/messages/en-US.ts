@@ -203,6 +203,10 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'audio.reason.output_not_perfect.explain':
     'The engine has not gathered enough evidence to prove this chain is bit-exact. The chain may well be fine — it is simply unproven.',
   'audio.reason.output_not_perfect.fix': '',
+  'audio.reason.output_released.label': 'Audio device released',
+  'audio.reason.output_released.explain':
+    'Playback is paused or ended and the audio device is released.',
+  'audio.reason.output_released.fix': 'Resume playback to reacquire the selected audio device.',
 
   // ══ Source properties ════════════════════════════════════════════════════
   'audio.reason.source_lossy.label': 'The source is lossy, so source-exact is impossible',
@@ -483,6 +487,7 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'error.audio.output_target_unavailable': 'The target output device is unavailable: {device}',
   'error.audio.source_empty': 'The audio source is empty',
   'error.audio.play_failed': 'Playback failed: {detail}',
+  'error.audio.pause_failed': 'Pause or resume failed: {detail}',
   'error.audio.stop_failed': 'Could not stop playback: {detail}',
   'error.audio.queue_load_failed': 'Could not load the playback queue: {detail}',
   'error.audio.play_mode_sync_failed': 'Could not sync the play mode: {detail}',

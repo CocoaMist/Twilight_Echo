@@ -5,6 +5,7 @@ export interface SoundFieldPlayback {
   favoriteAvailable: Readonly<Ref<boolean>>
   favoriteLiked: Readonly<Ref<boolean>>
   favoriteLoading: Readonly<Ref<boolean>>
+  favoriteTitle?: Readonly<Ref<string>>
   toggleFavorite: () => void
   openQueue: () => void
   openAudio: () => void

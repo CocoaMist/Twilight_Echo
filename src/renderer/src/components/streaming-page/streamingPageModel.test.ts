@@ -10,6 +10,13 @@ import {
   resolveStreamingTabIndex,
   timeGreeting
 } from './streamingPageModel.ts'
+import { streamingFavoriteLabel } from './streamingPageModel.ts'
+
+test('favorite action labels name their existing application or platform destination', () => {
+  assert.equal(streamingFavoriteLabel([{}], false), '加入应用收藏')
+  assert.equal(streamingFavoriteLabel([{ ncmSongId: 1 }], true), '在网易云取消喜欢')
+  assert.equal(streamingFavoriteLabel([{}, { ncmSongId: 1 }], false), '加入网易云喜欢与应用收藏')
+})
 
 test('getPersonalizedStreamKey maps only fm and radar sections', () => {
   assert.equal(getPersonalizedStreamKey({ key: 'fm' }), 'fm')

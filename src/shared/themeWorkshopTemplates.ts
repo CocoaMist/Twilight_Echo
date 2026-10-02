@@ -22,7 +22,12 @@ const control = (
 })
 
 export function workshopTemplate(id: string, template: string): WorkshopProject {
-  if (!['minimal', 'wallpaper', 'illustration'].includes(template)) throw new Error('未知主题模板')
+  if (
+    !['minimal', 'wallpaper', 'illustration', 'glass', 'high-contrast', 'compact'].includes(
+      template
+    )
+  )
+    throw new Error('未知主题模板')
   const project = createWorkshopProject(
     id,
     template === 'minimal' ? '简洁配色' : template === 'wallpaper' ? '全屏壁纸' : '插画主题'
@@ -93,6 +98,38 @@ html {--workshop-illustration:none;--workshop-illustration-size:45%;--workshop-i
 html[data-theme='dark'] {--workshop-illustration-wash:55%}
 :is(.song-list,.streaming-content) {isolation:isolate}
 :is(.song-list,.streaming-content)::before {content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;background-image:linear-gradient(color-mix(in srgb,var(--workshop-paper) var(--workshop-illustration-wash),transparent),color-mix(in srgb,var(--workshop-paper) var(--workshop-illustration-wash),transparent)),var(--workshop-illustration);background-size:var(--workshop-illustration-size) auto;background-position:var(--workshop-illustration-position);background-repeat:no-repeat;mask-image:linear-gradient(90deg,transparent,var(--workshop-paper) var(--workshop-illustration-fade))}`
+  }
+  if (template === 'glass') {
+    project.name = '玻璃质感'
+    project.modes = { appearance: { backgroundTreatment: 'gradient' } }
+    project.tokens.pureWhite = { 'surface.card': 'rgba(255,255,255,0.8)' }
+    project.tokens.dark = { 'surface.card': 'rgba(25,49,55,0.85)' }
+    project.values.pureWhite.card = 'rgba(248,252,250,0.8)'
+    project.values.dark.card = 'rgba(25,49,55,0.85)'
+  }
+  if (template === 'high-contrast') {
+    project.name = '高对比'
+    project.modes = { appearance: { contrastGuard: 'enforce' } }
+    project.tokens.pureWhite = {
+      'color.neutral.900': '#111827',
+      'surface.app': '#ffffff',
+      'navigation.text': '#111827',
+      'navigation.surface': '#ffffff'
+    }
+    project.tokens.dark = {
+      'color.neutral.900': '#f8fafc',
+      'surface.app': '#111827',
+      'navigation.text': '#f8fafc',
+      'navigation.surface': '#111827'
+    }
+    project.values.pureWhite.paper = '#ffffff'
+    project.values.dark.paper = '#111827'
+  }
+  if (template === 'compact') {
+    project.name = '紧凑列表'
+    project.modes = { library: { density: 'compact' } }
+    project.values.pureWhite.radius = '8px'
+    project.values.dark.radius = '8px'
   }
   return project
 }

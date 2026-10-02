@@ -449,6 +449,7 @@ function resetSettingsGroup(group: 'appearance' | 'playback' | 'desktopLyrics'):
       sleepTimer: { defaultMinutes: 30, fadeSeconds: 10 },
       ncmPlaybackQuality: 'auto',
       audioExclusiveMode: false,
+      audioExclusiveAutoRelease: false,
       audioOutputConfig: {
         preferredBufferSize: 0,
         routingMode: 'auto',

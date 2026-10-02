@@ -1354,6 +1354,22 @@ window.runPlayingMusicLyricsRuntime = async () => {
   )
   remountedApp.unmount()
   remountRoot.remove()
+  window.setPlayingMusicLayoutFixture = async (hasLyrics, appearance = {}) => {
+    document.documentElement.dataset.teMotion = 'off'
+    document.documentElement.dataset.tePlayerLayout = 'standard'
+    settingsStore.settings.value.lyricsAppearance = { ...originalAppearance, ...appearance }
+    player.currentTrack.value = {
+      ...duetTrack,
+      id: 'fixture-provider:responsive-layout',
+      title: 'When the Bird Meets the Sky',
+      artist: 'Whilist',
+      album: '夜想録',
+      lyrics: hasLyrics ? duetTrack.lyrics : '',
+      translatedLyrics: hasLyrics ? duetTrack.translatedLyrics : null
+    }
+    await tick()
+    window.dispatchEvent(new Event('resize'))
+  }
   console.log('PLAYING_MUSIC_LYRICS_RUNTIME_OK')
 }
 `
@@ -1507,6 +1523,33 @@ function electronRunnerSource(): string {
     })
     window.dispatchEvent(new Event('resize'))
   })()`
+  const layoutDiagnosticsSource = `(() => {
+    const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect()
+    const page = rect('.playing-music')
+    const layout = rect('.layout')
+    const column = rect('.cover-column')
+    const cover = rect('.cover-frame')
+    const lyrics = rect('.lyrics-column')
+    const time = rect('.time-chip')
+    const center = (box) => (box.left + box.right) / 2
+    const gap = Number.parseFloat(getComputedStyle(document.querySelector('.layout')).columnGap)
+    return {
+      viewport: [innerWidth, innerHeight],
+      centered: Math.abs(center(layout) - center(page)) < 1,
+      coverCentered: Math.abs(center(cover) - center(column)) < 1,
+      coverVerticallyCentered: Math.abs((column.top + column.bottom - layout.top - layout.bottom) / 2) < 1,
+      coverFits: cover.width > 0 && Math.abs(cover.width - cover.height) < 1 && column.top >= layout.top - 1 && column.bottom <= layout.bottom + 1,
+      columnsSeparated: !lyrics || (innerWidth > 1120 ? lyrics.left >= column.right + gap - 1 : lyrics.top >= column.bottom + gap - 1),
+      timeAtEdge: Math.abs(page.right - time.right - (innerWidth <= 760 ? 16 : 42)) < 1 && Math.abs(time.top - page.top - 42) < 1,
+      controlsClear: innerWidth > 1120 || time.bottom <= column.top,
+      single: document.querySelector('.layout').classList.contains('layout--single'),
+      overflow: document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth,
+      cover: [cover.left, cover.right, cover.top, cover.bottom],
+      column: [column.left, column.right, column.top, column.bottom],
+      layout: [layout.left, layout.right, layout.top, layout.bottom],
+      time: [time.left, time.right, time.top, time.bottom]
+    }
+  })()`
   const _diagnosticsSource = `(() => {
     const page = document.querySelector('.playing-music')
     const stage = document.querySelector('.lyrics-scroll')
@@ -1564,13 +1607,15 @@ const { mkdir, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 const target = process.argv.at(-1)
 const visualDir = process.env.TWILIGHT_LYRIC_VISUAL_DIR || ''
+// Keep requested CSS viewport sizes exact on Windows displays with fractional DPI.
+app.commandLine.appendSwitch('force-device-scale-factor', '1')
 const userDataDir = process.env.TWILIGHT_ELECTRON_USER_DATA_DIR || ''
 if (userDataDir) {
   app.setPath('userData', userDataDir)
   app.commandLine.appendSwitch('disk-cache-dir', path.join(userDataDir, 'cache'))
 }
 app.whenReady().then(async () => {
-  const window = new BrowserWindow({ show: false, width: 1440, height: 900, webPreferences: { contextIsolation: false, nodeIntegration: false } })
+  const window = new BrowserWindow({ show: false, width: 1440, height: 900, webPreferences: { contextIsolation: false, nodeIntegration: false, backgroundThrottling: false, offscreen: true } })
   window.webContents.on('console-message', (_event, _level, message, line, sourceId) => console.error('RENDERER', sourceId + ':' + line, message))
   try {
     await window.loadFile(path.resolve(target))
@@ -1578,6 +1623,34 @@ app.whenReady().then(async () => {
       'window.runPlayingMusicLyricsRuntime().then(() => ({ ok: true }), (error) => ({ ok: false, message: error?.stack ?? error?.message ?? String(error) }))'
     )
     if (!runtimeResult.ok) throw new Error(runtimeResult.message)
+    await window.webContents.executeJavaScript(${JSON.stringify(resetFixtureGeometrySource)})
+    const layoutViewports = [[2560, 1440], [1920, 1080], [1440, 900], [1366, 768], [1280, 600], [1121, 720], [1120, 720], [1024, 768], [960, 540], [760, 600], [390, 844]]
+    for (const [width, height] of layoutViewports) {
+      window.setContentSize(width, height)
+      for (const hasLyrics of [true, false]) {
+        await window.webContents.executeJavaScript('window.setPlayingMusicLayoutFixture(' + hasLyrics + ')')
+        await new Promise((resolve) => setTimeout(resolve, 80))
+        const diagnostics = await window.webContents.executeJavaScript(${JSON.stringify(layoutDiagnosticsSource)})
+        if (diagnostics.viewport[0] !== width || diagnostics.viewport[1] !== height || !diagnostics.centered || !diagnostics.coverFits || !diagnostics.columnsSeparated || !diagnostics.timeAtEdge || !diagnostics.controlsClear || diagnostics.overflow || diagnostics.single === hasLyrics || ((width > 1120 || !hasLyrics) && (!diagnostics.coverCentered || !diagnostics.coverVerticallyCentered))) {
+          throw new Error('responsive layout failed: ' + JSON.stringify({ hasLyrics, ...diagnostics }))
+        }
+        if (visualDir && hasLyrics) {
+          await mkdir(visualDir, { recursive: true })
+          const image = await window.webContents.capturePage()
+          await writeFile(path.join(visualDir, 'playing-layout-' + width + 'x' + height + '.png'), image.toPNG())
+        }
+      }
+    }
+    window.setContentSize(1920, 1080)
+    for (const appearance of [{ coverGap: 160, lyricsMaxWidth: 420, coverSize: 60 }, { coverGap: 0, lyricsMaxWidth: 1200, lyricsOffsetX: 160 }]) {
+      await window.webContents.executeJavaScript('window.setPlayingMusicLayoutFixture(true, ' + JSON.stringify(appearance) + ')')
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      const diagnostics = await window.webContents.executeJavaScript(${JSON.stringify(layoutDiagnosticsSource)})
+      if (diagnostics.viewport[0] !== 1920 || diagnostics.viewport[1] !== 1080 || !diagnostics.centered || !diagnostics.coverFits || !diagnostics.coverCentered || !diagnostics.timeAtEdge) {
+        throw new Error('custom lyric geometry failed: ' + JSON.stringify({ appearance, ...diagnostics }))
+      }
+    }
+    await window.webContents.executeJavaScript('window.setPlayingMusicLayoutFixture(true)')
     if (visualDir) {
       await mkdir(visualDir, { recursive: true })
       await window.webContents.executeJavaScript(${JSON.stringify(resetFixtureGeometrySource)})

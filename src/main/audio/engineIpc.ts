@@ -569,6 +569,7 @@ async function initializeAudioEngineRuntime(): Promise<void> {
   runtime.audioEngineManager = new AudioEngineManager(
     {
       exclusiveMode: runtime.appSettings.audioExclusiveMode,
+      exclusiveAutoRelease: runtime.appSettings.audioExclusiveAutoRelease,
       volume: runtime.appSettings.softwareVolume,
       audioOutput: runtime.appSettings.audioOutput,
       audioDevice: runtime.appSettings.audioDevice,
@@ -845,7 +846,7 @@ function registerAudioEngineIpcHandlers(): void {
 
   ipcMain.handle(IPC.audioEngine.togglePause, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
-    ;(await ensureAudioEngineRuntime()).togglePause()
+    await (await ensureAudioEngineRuntime()).togglePause()
   })
 
   ipcMain.handle(IPC.audioEngine.seek, async (_event, time: number) => {

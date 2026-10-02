@@ -231,13 +231,16 @@
     "systemMedia:getNativeStatus",
     "themeWorkshop:apply",
     "themeWorkshop:create",
+    "themeWorkshop:duplicate",
     "themeWorkshop:editorSession",
     "themeWorkshop:exportProject",
     "themeWorkshop:get",
     "themeWorkshop:importAsset",
     "themeWorkshop:importProject",
     "themeWorkshop:list",
+    "themeWorkshop:preflight",
     "themeWorkshop:readyToDisable",
+    "themeWorkshop:remove",
     "themeWorkshop:restoreApplied",
     "themeWorkshop:save",
     "themeWorkshop:sources",
@@ -254,7 +257,10 @@
     "themes:setActive",
     "themes:setWindowInheritance",
     "themes:validateAssets",
-    "trayPlayer:getBootstrap"
+    "trayPlayer:getBootstrap",
+    "window:copy-eq-bands",
+    "window:getState",
+    "window:paste-eq-bands"
   ],
   "mainOn": [
     "desktopLyrics:close",
@@ -510,13 +516,16 @@
     "systemMedia:getNativeStatus",
     "themeWorkshop:apply",
     "themeWorkshop:create",
+    "themeWorkshop:duplicate",
     "themeWorkshop:editorSession",
     "themeWorkshop:exportProject",
     "themeWorkshop:get",
     "themeWorkshop:importAsset",
     "themeWorkshop:importProject",
     "themeWorkshop:list",
+    "themeWorkshop:preflight",
     "themeWorkshop:readyToDisable",
+    "themeWorkshop:remove",
     "themeWorkshop:restoreApplied",
     "themeWorkshop:save",
     "themeWorkshop:sources",
@@ -533,7 +542,10 @@
     "themes:setActive",
     "themes:setWindowInheritance",
     "themes:validateAssets",
-    "trayPlayer:getBootstrap"
+    "trayPlayer:getBootstrap",
+    "window:copy-eq-bands",
+    "window:getState",
+    "window:paste-eq-bands"
   ],
   "preloadSends": [
     "desktopLyrics:moveTo",
@@ -591,7 +603,8 @@
     "themeWorkshop:prepareDisable",
     "themes:changed",
     "themes:systemToneChanged",
-    "trayPlayer:state"
+    "trayPlayer:state",
+    "window:state-changed"
   ],
   "rendererDomains": [
     "app",
@@ -811,7 +824,10 @@
     "trayPlayer.onState",
     "window.close",
     "window.closeContextMenu",
+    "window.copyEqBands",
     "window.minimize",
+    "window.onStateChanged",
+    "window.pasteEqBands",
     "window.popupContextMenu",
     "window.toggleMaximize"
   ]

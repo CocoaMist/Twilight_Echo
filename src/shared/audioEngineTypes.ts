@@ -532,6 +532,7 @@ export interface OutputConversionInfo {
 
 export interface OutputInfo {
   exclusive: boolean
+  outputReleased?: boolean
   supportsOutputPerfect: boolean
   sourceExact: boolean
   outputPerfect: boolean
@@ -593,6 +594,7 @@ export interface OutputInfo {
 
 export interface AudioEngineConfig {
   exclusiveMode: boolean
+  exclusiveAutoRelease?: boolean
   /** Initial software gain in [0, 1], restored before the engine reports ready. */
   volume?: number
   audioOutput?: AudioOutputId

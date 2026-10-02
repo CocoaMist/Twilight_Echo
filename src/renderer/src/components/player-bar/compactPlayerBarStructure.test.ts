@@ -22,10 +22,6 @@ const compactVisualizer = readFileSync(
   'utf8'
 )
 const app = readFileSync(new URL('../../App.vue', import.meta.url), 'utf8')
-const streamingSidebar = readFileSync(
-  new URL('../streaming-page/ProviderSidebar.vue', import.meta.url),
-  'utf8'
-)
 
 /**
  * Class-level specificity components of a selector: classes, attribute selectors
@@ -302,7 +298,7 @@ test('the shell clears the bar beside either open sidebar', () => {
   // gives the bar the same `menu-open` state, so the bar begins to its right.
   assert.match(
     app,
-    /const sidebarMenuOpen = computed\(\(\) => \{[\s\S]*?if \(showPlayingPage\.value\) return false[\s\S]*?return showStreamingPage\.value \? streamingMenuOpen\.value : menuOpen\.value\s*\}\)/
+    /const sidebarMenuOpen = computed\(\(\) => \{[\s\S]*?if \(showPlayingPage\.value\) return false[\s\S]*?return menuOpen\.value && showLocalSidebar\.value\s*\}\)/
   )
   assert.match(app, /:menu-open="sidebarMenuOpen"/)
   assert.match(playerBar, /'menu-open': menuOpen/)
@@ -316,8 +312,7 @@ test('the shell clears the bar beside either open sidebar', () => {
   // layout's `inset: auto !important` on the menu still wins.
   assert.match(app, /'--te-side-menu-bottom': `\$\{sideMenuBottomOffset\}px`/)
   assert.match(sideMenu, /bottom: var\(--te-side-menu-bottom, 0px\)/)
-  assert.match(streamingSidebar, /\.streaming-sidebar\s*\{[^}]*bottom:\s*0;/)
-  assert.doesNotMatch(streamingSidebar, /--te-side-menu-bottom/)
+  assert.match(app, /<SideMenu[\s\S]*?:pages="navigationPages"/)
   assert.doesNotMatch(clearance, /streamingSidebarVisible/)
 
   // Lifting the menu shrinks its own rect, so measuring the lifted bottom would
@@ -506,7 +501,10 @@ test('the compact boundary rail is a 2px line over a real hit target', () => {
   assert.match(playerBarCss, /\.compact-progress-track\s*\{[^}]*height:\s*2px/)
   // Real DOM track and fill, not ::-webkit-slider-runnable-track: Chromium does
   // not reliably repaint the pseudo-element when only a custom property changes.
-  assert.match(playerBarCss, /\.compact-progress-fill\s*\{[^}]*background:\s*var\(--accent-color/)
+  assert.match(
+    playerBarCss,
+    /\.compact-progress-fill\s*\{[^}]*background:\s*var\(--te-player-bar-progress-fill, var\(--accent-color/
+  )
   assert.match(playerBarCss, /\.compact-progress-fill\s*\{[^}]*transform:\s*scaleX\(0\)/)
   assert.match(playerBarCss, /\.compact-progress-slider\s*\{[^}]*inset:\s*0/)
   assert.match(playerBarCss, /\.compact-progress-slider::-webkit-slider-thumb\s*\{[^}]*width:\s*0/)

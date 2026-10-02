@@ -76,6 +76,7 @@ export class OutputRouter {
   output: AudioOutputId
   device: string
   exclusiveMode: boolean
+  private exclusiveAutoRelease: boolean
   outputConfig: OutputConfig
   private directRoutingOverride: ChannelRoutingMode | null = null
   outputConfigRevision = 0
@@ -109,7 +110,7 @@ export class OutputRouter {
     host: OutputRouterHost,
     config: Pick<
       AudioEngineConfig,
-      'audioOutput' | 'audioDevice' | 'exclusiveMode' | 'audioOutputConfig'
+      'audioOutput' | 'audioDevice' | 'exclusiveMode' | 'exclusiveAutoRelease' | 'audioOutputConfig'
     >,
     dependencies: Pick<AudioEngineManagerDependencies, 'deviceOptionsProvider'>
   ) {
@@ -118,6 +119,7 @@ export class OutputRouter {
     this.output = normalizeAudioOutput(config.audioOutput)
     this.device = normalizeAudioDevice(config.audioDevice)
     this.exclusiveMode = Boolean(config.exclusiveMode)
+    this.exclusiveAutoRelease = config.exclusiveAutoRelease === true
     this.outputConfig = normalizeOutputConfig(config.audioOutputConfig)
     // Compatible device resolution needs options; defer until host playbackInfo exists.
   }
@@ -300,6 +302,27 @@ export class OutputRouter {
 
   async getExclusiveMode(): Promise<boolean> {
     return this.exclusiveMode
+  }
+
+  async setExclusiveAutoRelease(enabled: boolean): Promise<void> {
+    const previous = this.exclusiveAutoRelease
+    this.exclusiveAutoRelease = enabled
+    const applied = await this.callNativeMaybeAsync(
+      '应用独占模式自动启停',
+      'SetOutputConfig',
+      JSON.stringify(this.getEffectiveOutputConfig())
+    )
+    if (!applied) {
+      this.exclusiveAutoRelease = previous
+      throw nativeAudioError(
+        'audio.output_config_failed',
+        'exclusive auto release apply failed',
+        this.lastNativeError
+      )
+    }
+    const info = await this.readNativePlaybackInfoAsync()
+    if (info) this.playbackInfo = this.mergeNativePlaybackInfo(info)
+    this.publishPlaybackInfo()
   }
 
   async setAudioOutput(output: AudioOutputId, device?: string): Promise<AudioOutputState> {
@@ -508,7 +531,11 @@ export class OutputRouter {
       options.nextOutput,
       options.nextExclusiveMode
     )
-    const targetEffectiveConfig = this.effectiveOutputConfig(options.nextConfig)
+    const targetEffectiveConfig = this.effectiveOutputConfig(
+      options.nextConfig,
+      options.nextOutput,
+      options.nextExclusiveMode
+    )
 
     this.emitOutputRouteTransaction(options.context, 'prepare')
     this.assertOutputTargetAvailable(options.nextOutput, options.nextDevice)
@@ -570,9 +597,13 @@ export class OutputRouter {
             ? actualDeviceId === options.nextDevice
             : acceptedDeviceNames.has(actualDevice)
         }
-        const routeMatches =
-          (targetBackend === targetNativeBackendId && actualDeviceMatches) ||
-          (targetInfo && options.acceptsDsdRoute?.(targetInfo))
+        const releasedPause =
+          targetInfo?.state === 'paused' && targetInfo.outputInfo.outputReleased === true
+        const routeMatches = releasedPause
+          ? targetInfo.outputBackend === targetNativeBackendId &&
+            targetInfo.outputDevice === options.nextDevice
+          : (targetBackend === targetNativeBackendId && actualDeviceMatches) ||
+            (targetInfo && options.acceptsDsdRoute?.(targetInfo))
         if (
           !targetInfo ||
           !routeMatches ||
@@ -1098,10 +1129,17 @@ export class OutputRouter {
       .join('|')
   }
 
-  private effectiveOutputConfig(config: OutputConfig): OutputConfig {
-    return this.directRoutingOverride === null
-      ? { ...config }
-      : { ...config, routingMode: this.directRoutingOverride }
+  private effectiveOutputConfig(
+    config: OutputConfig,
+    output = this.output,
+    exclusiveMode = this.exclusiveMode
+  ): OutputConfig & { releaseExclusiveOnPause: boolean } {
+    return {
+      ...config,
+      routingMode: this.directRoutingOverride ?? config.routingMode,
+      releaseExclusiveOnPause:
+        this.exclusiveAutoRelease && exclusiveMode && supportsAudioExclusive(output)
+    }
   }
 
   createDeviceCapabilityRefreshSignature(info: PlaybackInfo): string {

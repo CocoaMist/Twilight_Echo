@@ -1,3 +1,5 @@
+import { getTrackSource } from '@renderer/utils/trackSourceIdentity.ts'
+
 export function formatVisualizerBitrateValue(bitrate?: number): number | null {
   if (typeof bitrate !== 'number' || !Number.isFinite(bitrate) || bitrate <= 0) return null
   return Math.round(bitrate >= 10000 ? bitrate / 1000 : bitrate)
@@ -21,4 +23,99 @@ export function buildVisualizerQualityString(track: {
   if (track.sampleRate) parts.push(`${(track.sampleRate / 1000).toFixed(1)}kHz`)
   if (bitrate !== null) parts.push(`${bitrate}kbps`)
   return parts.join(' / ')
+}
+
+export function formatVisualizerSource(track: { id: string; source?: string }): string {
+  const source = getTrackSource(track)
+  switch (source) {
+    case 'local':
+      return 'LOCAL'
+    case 'ncm':
+      return 'NCM'
+    case 'network':
+      return 'NETWORK'
+    case 'radio':
+      return 'RADIO'
+    case 'podcast':
+      return 'PODCAST'
+    default:
+      return source.toUpperCase()
+  }
+}
+
+interface VisualizerTrackMetadata {
+  id: string
+  filePath: string
+  fileName: string
+  streamUrl?: string | null
+  size: number
+  format?: string
+  sampleRate?: number
+  bitrate?: number
+  bitDepth?: number
+}
+
+interface VisualizerPlaybackMetadata {
+  source: string
+  codec: string
+  sourceSampleRate: number
+  sourceChannels?: number
+  sourceBitDepth: number
+  bitrate: number
+}
+
+function positiveNumber(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function formatCodec(codec: string, fileName: string): string {
+  const normalized = codec.trim().toLowerCase()
+  if (normalized.startsWith('mp3')) return 'MP3'
+  if (normalized.startsWith('pcm_')) {
+    const extension = fileName.match(/\.(wav|wave|aif|aiff)$/i)?.[1]?.toUpperCase()
+    return extension === 'WAVE' ? 'WAV' : (extension ?? 'PCM')
+  }
+  if (normalized && normalized !== '未知') return normalized.toUpperCase()
+  return (
+    fileName.match(/\.(flac|mp3|m4a|aac|ogg|opus|wav|aiff|ape|wv|dsf|dff)$/i)?.[1]?.toUpperCase() ??
+    ''
+  )
+}
+
+export function resolveVisualizerAudioMetadata(
+  track: VisualizerTrackMetadata,
+  playbackInfo?: VisualizerPlaybackMetadata | null
+): {
+  quality: string
+  samplerate: string
+  bitdepth: string
+  channels: string
+  bitrate: string
+  filesize: string
+  format: string
+} {
+  const sourceMatches =
+    !!playbackInfo?.source &&
+    (playbackInfo.source === track.streamUrl || playbackInfo.source === track.filePath)
+  const source = sourceMatches ? playbackInfo : null
+  const codec = source?.codec.trim().toLowerCase() ?? ''
+  const losslessCodec = /^(flac|alac|ape|wavpack|tta|dsd|dst|pcm_)/.test(codec)
+  const sampleRate = positiveNumber(source?.sourceSampleRate) ?? positiveNumber(track.sampleRate)
+  const bitDepth =
+    (losslessCodec ? positiveNumber(source?.sourceBitDepth) : undefined) ??
+    positiveNumber(track.bitDepth)
+  const bitrate = positiveNumber(source?.bitrate) ?? positiveNumber(track.bitrate)
+  const channels = positiveNumber(source?.sourceChannels)
+  const format = track.format?.trim() || formatCodec(source?.codec ?? '', track.fileName)
+
+  return {
+    quality: buildVisualizerQualityString({ format, sampleRate, bitDepth, bitrate }),
+    samplerate: sampleRate ? `${(sampleRate / 1000).toFixed(1)} kHz` : '',
+    bitdepth: bitDepth ? `${bitDepth}-bit` : '',
+    channels:
+      channels === 1 ? 'Mono' : channels === 2 ? 'Stereo' : channels ? `${channels} channels` : '',
+    bitrate: formatVisualizerBitrate(bitrate),
+    filesize: positiveNumber(track.size) ? `${(track.size / (1024 * 1024)).toFixed(1)} MB` : '',
+    format
+  }
 }

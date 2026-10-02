@@ -409,6 +409,11 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
       title: '独占模式 (Exclusive)',
       terms: '独占 exclusive 输出 设备 绕过 混音'
     },
+    {
+      section: 'playback',
+      title: '独占模式自动启停',
+      terms: '独占 exclusive 自动 启停 暂停 释放 声卡 设备'
+    },
     { section: 'playback', title: '音量与削波保护', terms: '音量 削波 clip 保护 响度 安全' },
     {
       section: 'playback',

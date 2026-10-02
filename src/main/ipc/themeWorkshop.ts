@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain } from 'electron'
+import { app, dialog, ipcMain, nativeImage } from 'electron'
 import type { WebContents } from 'electron'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile, writeFile, mkdtemp, rm, realpath } from 'node:fs/promises'
@@ -11,6 +11,11 @@ import { tryParseJsonWithNestingLimit } from '../security/jsonSafety.ts'
 import { WorkshopRepository } from '../themes/workshopRepository.ts'
 import { writeStoredZip } from '../themes/themeArchive.ts'
 import { workshopTemplate } from '../../shared/themeWorkshopTemplates.ts'
+import {
+  diagnoseWorkshopProject,
+  workshopDiagnosticReport
+} from '../../shared/themeWorkshopDiagnostics.ts'
+import { diagnoseWorkshopAssetEncoding } from '../themes/workshopAssetValidation.ts'
 import {
   THEME_WORKSHOP_ID,
   createWorkshopProject,
@@ -237,6 +242,21 @@ export function setupThemeWorkshopIpc(): void {
     (repository ??= new WorkshopRepository(
       join(app.getPath('userData'), 'theme-workshop', 'projects')
     ))
+  const checked = (id: string, revision?: number): WorkshopProject => {
+    const project = repo().require(id, revision)
+    const report = workshopDiagnosticReport([
+      ...diagnoseWorkshopProject(project).diagnostics,
+      ...diagnoseWorkshopAssetEncoding(
+        project,
+        (dataUrl) => !nativeImage.createFromDataURL(dataUrl).isEmpty()
+      )
+    ])
+    if (report.errors)
+      throw new Error(
+        `主题有 ${report.errors} 个错误：${report.diagnostics.find((item) => item.severity === 'error')!.message}`
+      )
+    return project
+  }
   const handlers = {
     list: async () => repo().list().map(workshopProjectSummary),
     get: async (id: string) => {
@@ -245,6 +265,19 @@ export function setupThemeWorkshopIpc(): void {
       return project
     },
     restoreApplied: async (id: string) => repo().restoreApplied(id),
+    duplicate: async (id: string, revision: number) => repo().duplicate(id, revision),
+    remove: async (id: string, revision: number) => repo().remove(id, revision),
+    preflight: async (id: string, revision: number) => {
+      if (!Number.isSafeInteger(revision)) throw new Error('无效项目 revision')
+      const project = repo().require(id, revision)
+      return workshopDiagnosticReport([
+        ...diagnoseWorkshopProject(project).diagnostics,
+        ...diagnoseWorkshopAssetEncoding(
+          project,
+          (dataUrl) => !nativeImage.createFromDataURL(dataUrl).isEmpty()
+        )
+      ])
+    },
     sources: async () => {
       const plugins = await runtime.pluginManager!.list()
       const extensions = await runtime.pluginManager!.listExtensions()
@@ -310,9 +343,8 @@ export function setupThemeWorkshopIpc(): void {
         version: ''
       })
     },
-    exportProject: async (id: string, format: 'project' | 'tep') => {
-      const project = repo().get(id)
-      if (!project) throw new Error('项目不存在')
+    exportProject: async (id: string, format: 'project' | 'tep', revision?: number) => {
+      const project = format === 'tep' ? checked(id, revision) : repo().require(id, revision)
       if (format !== 'project' && format !== 'tep') throw new Error('无效导出格式')
       const extension = format === 'tep' ? 'tep' : 'teworkshop'
       const result = await dialog.showSaveDialog({
@@ -332,9 +364,8 @@ export function setupThemeWorkshopIpc(): void {
       }
       return result.filePath
     },
-    apply: async (id: string) => {
-      const project = repo().get(id)
-      if (!project) throw new Error('项目不存在')
+    apply: async (id: string, revision?: number) => {
+      const project = checked(id, revision)
       const work = await mkdtemp(join(tmpdir(), 'te-workshop-'))
       try {
         const pluginId = await packageProject(project, work)
@@ -360,6 +391,9 @@ export function setupThemeWorkshopIpc(): void {
       return (handler as (...values: unknown[]) => Promise<unknown>)(...args)
     }
   ipcMain.handle('themeWorkshop:get', guarded(handlers.get))
+  ipcMain.handle('themeWorkshop:duplicate', guarded(handlers.duplicate))
+  ipcMain.handle('themeWorkshop:remove', guarded(handlers.remove))
+  ipcMain.handle('themeWorkshop:preflight', guarded(handlers.preflight))
   ipcMain.handle('themeWorkshop:restoreApplied', guarded(handlers.restoreApplied))
   ipcMain.handle('themeWorkshop:list', guarded(handlers.list))
   ipcMain.handle('themeWorkshop:sources', guarded(handlers.sources))

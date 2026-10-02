@@ -13,6 +13,7 @@ import {
 } from '../../shared/localLibraryScan.ts'
 import { SUPPORTED_EXTENSIONS } from './libraryFiles.ts'
 import { deriveCueTracks } from './cueLibrary.ts'
+import { readMp4AlacFormat } from './mp4AlacFormat.ts'
 import { createLocalLibraryScanPlan } from './scanPlanner.ts'
 
 type ParentPort = {
@@ -564,6 +565,7 @@ async function parseTrack(
       native: metadata.native
     })
     const audioFingerprint = extractAcousticFingerprint(metadata.native)
+    const alacFormat = metadata.format.codec === 'ALAC' ? await readMp4AlacFormat(filePath) : null
     const bpm = normalizeBpm(metadata.common.bpm)
     const trackNumber = normalizeTrackIndex(metadata.common.track)
     const discNumber = normalizeTrackIndex(metadata.common.disk)
@@ -578,10 +580,10 @@ async function parseTrack(
       genre: extractGenre(metadata.common.genre),
       duration: Math.round(metadata.format.duration || 0),
       cover: embeddedCover ?? baseTrack.cover,
-      format: metadata.format.container,
-      sampleRate: metadata.format.sampleRate,
+      format: alacFormat ? 'ALAC' : metadata.format.container,
+      sampleRate: alacFormat?.sampleRate ?? metadata.format.sampleRate,
       bitrate: metadata.format.bitrate,
-      bitDepth: metadata.format.bitsPerSample,
+      bitDepth: alacFormat?.bitDepth ?? metadata.format.bitsPerSample,
       ...replayGainTags
     }
     if (bpm !== undefined) track.bpm = bpm

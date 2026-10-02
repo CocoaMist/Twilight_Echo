@@ -12,7 +12,7 @@
 - A1/A2 边界与 IPC 通道清单已落地：`scripts/architecture-boundaries.test.cjs`、`scripts/ipc-channel-report.cjs` 存在并纳入仓库校验体系。
 - `SettingsPage.vue` 已拆为 `components/settings-page/` 的 13 个分区组件，当前约 62KB，作为页面编排入口。
 - `DspRackPage.vue` / `EqualizerPage.vue` 已抽领域子组件：`components/dsp-rack/`（DspScenePane、DspGraphCanvas、DspNodeEditor）、`components/equalizer/`（OpraEqPanel、FrequencyResponseChart、FrequencyResponseToolbar、GraphicEqPanel），并抽出 `utils/dspNodeParams.ts`、`utils/equalizerPageLogic.ts`。
-- `StreamingPage.vue` 已拆出：`streaming-page/ProviderSidebar.vue`、`NcmPlaylistDialogs.vue`、`ProviderDownloadsPanel.vue`、`StreamingContextMenu.vue`、`streamingDownloads.ts`、`streaming-page/streamingPageModel.ts`、`StreamingContentHeader.vue/.css`、`StreamingSearchControls.vue/.css`、`StreamingPlaceholder.vue/.css`；页面约 112KB，继续列为拆分候选。
+- `StreamingPage.vue` 已拆出：`NcmPlaylistDialogs.vue`、`ProviderDownloadsPanel.vue`、`StreamingContextMenu.vue`、`streamingDownloads.ts`、`streaming-page/streamingPageModel.ts`、`StreamingContentHeader.vue/.css`、`StreamingSearchControls.vue/.css`、`StreamingPlaceholder.vue/.css`；页面约 112KB，继续列为拆分候选。
 - `usePlayerStore.ts` 约 147KB，纯函数已抽到 `utils/playerTime.ts`、`playerAudioSettings.ts`、`playerQueueUtils.ts`、`playerConstants.ts` 及既有 `utils/player*`；Round 3/4/5 已把队列、会话、歌词、播放时钟、播放历史控制器抽到 `stores/player/`（新增 `playbackHistoryController.ts`，约 6KB）；仍列为最大 store 候选。
 - `shared/theme.ts` 主题目录已迁到 `shared/themeCatalog.ts`（re-export barrel），数据拆为 `themeTokens.ts`（约 34KB）与 `themePresets.ts`（约 58KB），`theme.ts` 降到约 48KB。
 - `src/main/plugins/manager.ts` 已把 provider 路由/幂等/安全助手迁回插件域模块，当前约 68KB。
@@ -194,7 +194,7 @@
 
 #### B3 再拆 StreamingPage.vue / DspRackPage.vue / EqualizerPage.vue（部分完成，Round 3 已拆头部/搜索/占位）
 
-- StreamingPage（112 KB）：继续按 `streaming-home`、`streaming-library`、`streaming-discovery`、`streaming-search` 拆子组件；已新增 `ProviderSidebar.vue`、`NcmPlaylistDialogs.vue`、`ProviderDownloadsPanel.vue`、`StreamingContextMenu.vue`、`streamingDownloads.ts`、`streamingPageModel.ts`、`StreamingContentHeader.vue/.css`、`StreamingSearchControls.vue/.css`、`StreamingPlaceholder.vue/.css`。
+- StreamingPage（112 KB）：继续按 `streaming-home`、`streaming-library`、`streaming-discovery`、`streaming-search` 拆子组件；已新增 `NcmPlaylistDialogs.vue`、`ProviderDownloadsPanel.vue`、`StreamingContextMenu.vue`、`streamingDownloads.ts`、`streamingPageModel.ts`、`StreamingContentHeader.vue/.css`、`StreamingSearchControls.vue/.css`、`StreamingPlaceholder.vue/.css`。
 - DspRackPage / EqualizerPage 已抽到 `dsp-rack/`、`equalizer/` 子目录，当前均为编排入口。
 
 #### B4 最后拆 shared/theme.ts 与 main/plugins/manager.ts（部分完成，Round 2 已拆主题目录数据）

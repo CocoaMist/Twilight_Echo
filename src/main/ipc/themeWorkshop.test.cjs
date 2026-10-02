@@ -10,11 +10,14 @@ test('workshop handlers enforce sender and enablement and preserve applied versi
   const { WorkshopRepository } = await import('../themes/workshopRepository.ts')
   const shared = await import('../../shared/themeWorkshop.ts')
   const templates = await import('../../shared/themeWorkshopTemplates.ts')
+  const diagnostics = await import('../../shared/themeWorkshopDiagnostics.ts')
+  const assetValidation = await import('../themes/workshopAssetValidation.ts')
   const directory = mkdtempSync(join(tmpdir(), 'workshop-ipc-'))
   const handlers = new Map()
   let enabled = false
   let installed
   let installedCss
+  let dialogs = 0
   const runtime = {
     pluginManagerReady: Promise.resolve(),
     pluginManager: {
@@ -33,7 +36,13 @@ test('workshop handlers enforce sender and enablement and preserve applied versi
   const dependencies = {
     electron: {
       app: { getPath: () => directory },
-      dialog: {},
+      nativeImage: { createFromDataURL: () => ({ isEmpty: () => false }) },
+      dialog: {
+        showSaveDialog: async () => {
+          dialogs++
+          return { canceled: true }
+        }
+      },
       ipcMain: { handle: (name, handler) => handlers.set(name, handler) }
     },
     '../core/runtime.ts': { runtime },
@@ -47,7 +56,9 @@ test('workshop handlers enforce sender and enablement and preserve applied versi
     '../themes/workshopRepository.ts': { WorkshopRepository },
     '../themes/themeArchive.ts': {},
     '../../shared/themeWorkshopTemplates.ts': templates,
-    '../../shared/themeWorkshop.ts': shared
+    '../../shared/themeWorkshop.ts': shared,
+    '../../shared/themeWorkshopDiagnostics.ts': diagnostics,
+    '../themes/workshopAssetValidation.ts': assetValidation
   }
   vm.runInNewContext(source, {
     exports,
@@ -67,6 +78,11 @@ test('workshop handlers enforce sender and enablement and preserve applied versi
     assert.equal(list.length, 1)
     assert.equal(list[0].base, undefined)
     assert.equal((await invoke('get', project.id)).name, project.name)
+    const copy = await invoke('duplicate', project.id, project.revision)
+    assert.notEqual(copy.id, project.id)
+    await invoke('remove', copy.id, copy.revision)
+    await assert.rejects(invoke('duplicate', project.id, 0), /其他窗口/)
+    await assert.rejects(invoke('preflight', project.id, 0), /其他窗口/)
     await assert.rejects(invoke('get', '../escape'), /无效/)
     await assert.rejects(invoke('save', { ...project, version: 'invalid' }), /无效/)
     await assert.rejects(invoke('restoreApplied', project.id), /没有应用/)
@@ -83,6 +99,20 @@ test('workshop handlers enforce sender and enablement and preserve applied versi
     )
     assert.match(installedCss, /--te-primary-500:#123456/)
     assert.equal(applied.project.lastApplied.version, project.version)
+    await assert.rejects(invoke('apply', saved.id, saved.revision), /其他窗口/)
+    const invalid = await invoke('create', 'minimal')
+    const editable = await invoke('save', {
+      ...invalid,
+      css: '.x{ color red; background:url(remote.png) }'
+    })
+    assert.ok((await invoke('preflight', editable.id, editable.revision)).errors)
+    await assert.rejects(invoke('apply', editable.id, editable.revision), /错误/)
+    await assert.rejects(invoke('exportProject', editable.id, 'tep', editable.revision), /错误/)
+    assert.equal(dialogs, 0)
+    assert.equal(await invoke('exportProject', editable.id, 'project', editable.revision), null)
+    assert.equal(dialogs, 1)
+    await assert.rejects(invoke('exportProject', editable.id, 'project', 0), /其他窗口/)
+    await invoke('remove', editable.id, editable.revision)
     await invoke('save', { ...applied.project, name: '修改后' })
     assert.equal((await invoke('restoreApplied', saved.id)).name, project.name)
     enabled = false
@@ -95,6 +125,8 @@ test('workshop handlers enforce sender and enablement and preserve applied versi
 test('source snapshots export real plugin archives and editable projects without source files', async () => {
   const shared = await import('../../shared/themeWorkshop.ts')
   const templates = await import('../../shared/themeWorkshopTemplates.ts')
+  const diagnostics = await import('../../shared/themeWorkshopDiagnostics.ts')
+  const assetValidation = await import('../themes/workshopAssetValidation.ts')
   const { WorkshopRepository } = await import('../themes/workshopRepository.ts')
   const { normalizeThemeContribution } = await import('../plugins/themeContribution.ts')
   const jsonSafety = await import('../security/jsonSafety.ts')
@@ -155,6 +187,7 @@ test('source snapshots export real plugin archives and editable projects without
   const handlers = new Map()
   const electron = {
     app: { getPath: () => directory },
+    nativeImage: { createFromDataURL: () => ({ isEmpty: () => false }) },
     dialog: {
       showSaveDialog: async () => ({ filePath: savePath }),
       showOpenDialog: async () => ({ filePaths: [savePath] })
@@ -215,7 +248,9 @@ test('source snapshots export real plugin archives and editable projects without
     '../themes/workshopRepository.ts': { WorkshopRepository },
     '../themes/themeArchive.ts': archive,
     '../../shared/themeWorkshopTemplates.ts': templates,
-    '../../shared/themeWorkshop.ts': shared
+    '../../shared/themeWorkshop.ts': shared,
+    '../../shared/themeWorkshopDiagnostics.ts': diagnostics,
+    '../themes/workshopAssetValidation.ts': assetValidation
   })
   const invoke = (name, ...args) => handlers.get('themeWorkshop:' + name)({}, ...args)
   try {

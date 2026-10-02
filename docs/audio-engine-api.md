@@ -10,6 +10,12 @@
 
 `TAE_GetPlaybackInfo()` 返回 JSON。`outputInfo` 是 canonical 字段，顶层的 `actualBackend`、`actualSampleRate`、`latencyMs`、`sourceExact`、`outputPerfect`、`perfectReason` 等字段只做镜像，值从 `outputInfo` 派生。
 
+全局设置 `audioExclusiveAutoRelease` 默认关闭，作为 `audioExclusiveMode` 的附加选项。两个开关都开启时，WASAPI Exclusive、ASIO 和 CoreAudio Hog 在暂停后关闭原生输出，在继续播放时重新协商设备；停止或队列最终结束也会关闭输出，普通切歌与 gapless promotion 保持设备占用。设备档案不覆盖这个全局设置。策略由 main 计算后通过现有 `SetOutputConfig` JSON 的 `releaseExclusiveOnPause` 字段传入，缺省为 false，不新增 IPC 通道或 C ABI 函数。
+
+暂停释放后 `state` 仍为 `paused`，保留曲目、队列项身份、CUE 区间与进度。`outputInfo.outputReleased=true` 表示设备已释放，此时 `exclusive`、`outputPerfect` 和 `pcmPassthrough` 都为 false，`accessMode=released`，`perfectReasonCode=output_released`；保留的格式和设备诊断属于上一次播放观察，不能作为当前设备已打开的证明。旧引擎缺少该可选字段时不推断已释放。
+
+释放期间的 seek、设备、buffer、DSP 和音量调整只更新下一次播放的配置。暂停时开启自动启停立即释放；关闭后等用户继续播放再获取设备。恢复失败返回现有 Pause 调用的错误，保持暂停、原进度和独占偏好，不自动重试或改用共享输出；直播继续播放会重新连接当前流。释放态的输出事务 ACK 校验请求后端、设备及暂停状态，实际设备身份在下一次打开时重新验证。音频服务崩溃后的恢复顺序与手动续播要求不变。
+
 关键字段：
 
 - `outputInfo.backend`：用户选择的后端，例如 `wasapi`、`wasapi-exclusive`、`asio`、`coreaudio`、`alsa`。

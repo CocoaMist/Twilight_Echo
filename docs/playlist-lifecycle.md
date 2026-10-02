@@ -1,5 +1,17 @@
 # Playlist Lifecycle
 
+The shared Playlists destination switches between application playlists and aggregate playlists.
+The application favorites playlist “我收藏的音乐” stays in application playlists. Provider likes,
+created/saved playlists, saved albums and saved artists belong to the platform Music Library;
+only supported capabilities are shown. A provider without a liked list displays an empty state
+and never substitutes application favorites. Favorite controls name their destination explicitly.
+
+Recent Playback separates device records (tracks played through this app, across sources) from
+platform history. Platform history selects a provider that implements `fetchRecentSongs`; login,
+availability and request errors remain visible. Requests are invalidated when switching provider
+or leaving the view, so late results cannot replace the selected platform's records. The two
+record sets are not merged.
+
 Local playlists support rename, cover selection, copying, manual ordering, and moving a selected group
 to another playlist. A playlist update is queued as one versioned persistence transaction; a bulk action
 does not create one JSON write per track.

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import EqParameterKnob from '@renderer/components/equalizer/EqParameterKnob.vue'
 import { filterUsesGain } from '@renderer/utils/parametricEqInteraction'
 import type { EqParameter } from '@renderer/utils/parametricEqKnob'
@@ -8,6 +8,9 @@ import type { EqualizerBand, EqualizerFilterType } from '@renderer/types/setting
 const props = defineProps<{
   band: EqualizerBand
   index: number
+  selectionCount?: number
+  selectionEnabled?: boolean
+  movable?: boolean
   filterTypes: { value: EqualizerFilterType; label: string; usesGain: boolean }[]
 }>()
 const emit = defineEmits<{
@@ -21,6 +24,7 @@ const emit = defineEmits<{
 }>()
 const knobs = ref<InstanceType<typeof EqParameterKnob>[]>([])
 const parameters: EqParameter[] = ['frequency', 'gain', 'q']
+const selectionEnabled = computed(() => props.selectionEnabled ?? props.band.enabled !== false)
 const glyphs: Record<EqualizerFilterType, string> = {
   peak: 'M2 17H7C12 17 10 5 16 5S20 17 25 17H30',
   lowShelf: 'M2 7H10C17 7 15 18 22 18H30',
@@ -52,15 +56,20 @@ defineExpose({ finishInteraction })
 </script>
 
 <template>
-  <section class="band-inspector" aria-label="所选频段参数" @keydown.esc.stop="act('close')">
+  <section
+    class="band-inspector"
+    :class="{ movable }"
+    aria-label="所选频段参数"
+    @keydown.esc.stop="act('close')"
+  >
     <div class="inspector-identity">
       <div class="band-identity-row">
         <button
           type="button"
           class="inspector-icon band-power"
-          :class="{ bypassed: band.enabled === false }"
-          :aria-label="band.enabled === false ? '启用频段' : '旁路频段'"
-          :aria-pressed="band.enabled !== false"
+          :class="{ bypassed: !selectionEnabled }"
+          :aria-label="selectionEnabled ? '旁路频段' : '启用频段'"
+          :aria-pressed="selectionEnabled"
           @click="act('toggle')"
         >
           <i class="pi pi-power-off"></i>
@@ -75,7 +84,13 @@ defineExpose({ finishInteraction })
           </option>
         </select>
       </label>
-      <span class="band-state">{{ band.enabled === false ? '频段已旁路' : 'Shift 精细调节' }}</span>
+      <span class="band-state">{{
+        (selectionCount ?? 1) > 1
+          ? `已选 ${selectionCount} · 联动编辑`
+          : band.enabled === false
+            ? '频段已旁路'
+            : 'Shift 精细调节'
+      }}</span>
     </div>
     <div class="precision-controls">
       <EqParameterKnob
@@ -141,6 +156,13 @@ defineExpose({ finishInteraction })
   justify-content: center;
   gap: 12px;
 }
+.band-inspector.movable {
+  cursor: grab;
+  touch-action: none;
+}
+.band-inspector.movable :deep(.eq-parameter-knob) {
+  cursor: default;
+}
 .band-identity-row {
   display: flex;
   align-items: center;
@@ -172,6 +194,7 @@ defineExpose({ finishInteraction })
   color: var(--eq-text-subtle);
 }
 .filter-select {
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 5px;

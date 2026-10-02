@@ -2,75 +2,33 @@
 import { computed } from 'vue'
 import {
   THEME_MODE_DEFINITIONS,
-  type ThemeShellLayout,
   resolveThemeModes,
   type ThemeModes
-} from '../../../../shared/theme'
-import { copyWorkshopDraft, type WorkshopProject } from '../../../../shared/themeWorkshop'
-const layouts: { id: string; name: string; layout: ThemeShellLayout }[] = [
-  {
-    id: 'left',
-    name: '左侧导航',
-    layout: {
-      navigation: 'persistent',
-      desktop: {
-        columns: ['standard', 'fill'],
-        rows: ['content', 'fill', 'content'],
-        areas: [
-          ['titleBar', 'titleBar'],
-          ['navigation', 'content'],
-          ['playerBar', 'playerBar']
-        ]
-      }
-    }
-  },
-  {
-    id: 'right',
-    name: '右侧导航',
-    layout: {
-      navigation: 'persistent',
-      desktop: {
-        columns: ['fill', 'standard'],
-        rows: ['content', 'fill', 'content'],
-        areas: [
-          ['titleBar', 'titleBar'],
-          ['content', 'navigation'],
-          ['playerBar', 'playerBar']
-        ]
-      }
-    }
-  },
-  {
-    id: 'focus',
-    name: '专注内容',
-    layout: {
-      navigation: 'hidden',
-      desktop: {
-        columns: ['fill'],
-        rows: ['content', 'fill', 'content'],
-        areas: [['titleBar'], ['content'], ['playerBar']]
-      }
-    }
-  }
-]
-const props = defineProps<{ project: WorkshopProject }>()
+} from '../../../../shared/theme.ts'
+import { WORKSHOP_LAYOUTS } from '../../../../shared/themeWorkshopLayouts.ts'
+import { copyWorkshopDraft, type WorkshopProject } from '../../../../shared/themeWorkshop.ts'
+import { studioModeLabels } from '@renderer/components/theme-studio/themeVisualControls'
+const props = defineProps<{ project: WorkshopProject; busy?: boolean; domain?: string }>()
 const emit = defineEmits<{ change: [project: WorkshopProject] }>()
 const selectedLayout = computed(() =>
   props.project.layout === null
     ? 'default'
     : props.project.layout === undefined
       ? ''
-      : (layouts.find(
+      : (WORKSHOP_LAYOUTS.find(
           (preset) => JSON.stringify(preset.layout) === JSON.stringify(props.project.layout)
         )?.id ?? 'custom')
 )
+const modes = computed(() =>
+  THEME_MODE_DEFINITIONS.filter((mode) => !props.domain || mode.id.startsWith(props.domain + '.'))
+)
 function read(id: string): string {
   const base = props.project.base.structured
-  const modes = resolveThemeModes(
+  const resolved = resolveThemeModes(
     props.project.modes ?? (base && base.schemaVersion !== 1 ? base.modes : undefined)
   )
   const [domain, key] = id.split('.')
-  return String((modes[domain as keyof ThemeModes] as Record<string, unknown>)?.[key] ?? '')
+  return String((resolved[domain as keyof ThemeModes] as Record<string, unknown>)?.[key] ?? '')
 }
 function set(id: string, value: string): void {
   const next = copyWorkshopDraft(props.project)
@@ -86,36 +44,52 @@ function set(id: string, value: string): void {
 }
 function layout(id: string): void {
   const next = copyWorkshopDraft(props.project)
-  const preset = layouts.find((p) => p.id === id)
-  next.layout = preset?.layout ?? (id === 'default' ? null : undefined)
+  next.layout =
+    WORKSHOP_LAYOUTS.find((preset) => preset.id === id)?.layout ??
+    (id === 'default' ? null : undefined)
+  emit('change', next)
+}
+function reset(): void {
+  const next = copyWorkshopDraft(props.project)
+  if (props.domain) {
+    const base = next.base.structured
+    const modes = base && base.schemaVersion !== 1 ? base.modes : undefined
+    if (next.modes)
+      Object.assign(next.modes, { [props.domain]: modes?.[props.domain as keyof ThemeModes] })
+  } else {
+    next.modes = undefined
+    next.layout = undefined
+  }
   emit('change', next)
 }
 </script>
 <template>
-  <label
-    >窗口布局<select
-      :value="selectedLayout"
-      @change="layout(($event.target as HTMLSelectElement).value)"
+  <template v-if="!domain"
+    ><label
+      >窗口布局<select
+        :disabled="busy"
+        :value="selectedLayout"
+        @change="layout(($event.target as HTMLSelectElement).value)"
+      >
+        <option value="">继承来源</option>
+        <option v-if="selectedLayout === 'custom'" value="custom" disabled>自定义布局</option>
+        <option value="default">默认布局</option>
+        <option v-for="preset in WORKSHOP_LAYOUTS" :key="preset.id" :value="preset.id">
+          {{ preset.name }}
+        </option>
+      </select></label
     >
-      <option value="">继承来源</option>
-      <option v-if="selectedLayout === 'custom'" value="custom" disabled>自定义布局</option>
-      <option value="default">默认布局</option>
-      <option v-for="preset in layouts" :key="preset.id" :value="preset.id">
-        {{ preset.name }}
-      </option>
-    </select></label
+    <p class="workshop-hint">预设在窄窗自动收起导航，列表行高继续使用宿主模式。</p></template
   >
-  <p>列表密度使用宿主原生模式，行高与虚拟列表测量保持一致。</p>
-  <label v-for="mode in THEME_MODE_DEFINITIONS" :key="mode.id"
-    >{{ mode.label
+  <label v-for="mode in modes" :key="mode.id" :data-workshop-mode="mode.id" tabindex="-1"
+    >{{ studioModeLabels[mode.id] ?? mode.label
     }}<select
+      :disabled="busy"
       :value="read(mode.id)"
       @change="set(mode.id, ($event.target as HTMLSelectElement).value)"
     >
       <option v-for="option in mode.options" :key="option" :value="option">{{ option }}</option>
     </select></label
   >
-  <button @click="emit('change', { ...project, modes: undefined, layout: undefined })">
-    恢复来源布局与模式
-  </button>
+  <button :disabled="busy" @click="reset">恢复来源{{ domain ? '组件模式' : '布局与模式' }}</button>
 </template>

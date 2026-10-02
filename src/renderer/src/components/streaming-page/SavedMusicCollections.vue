@@ -2,18 +2,30 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import CoverImg from '@renderer/components/CoverImg.vue'
 import { useMediaProviders } from '@renderer/providers'
+import { useProviderStore } from '@renderer/stores/useProviderStore'
 import type {
   MediaProviderAlbumSummary,
   MediaProviderArtistSummary
 } from '@renderer/providers/mediaProvider'
 
-const props = defineProps<{ userId: number | string }>()
+const props = defineProps<{ userId: number | string; providerId: string }>()
 const emit = defineEmits<{
   openAlbum: [album: MediaProviderAlbumSummary]
   openArtist: [artist: MediaProviderArtistSummary]
 }>()
 const providers = useMediaProviders()
+const providerStore = useProviderStore()
 const tab = ref<'albums' | 'artists'>('albums')
+const supportedTabs = computed(() => {
+  const methods = providerStore.getProvider(props.providerId)?.supportedMethods ?? []
+  return {
+    albums: methods.includes('fetchSavedAlbums'),
+    artists: methods.includes('fetchSavedArtists')
+  }
+})
+watch(supportedTabs, (supported) => {
+  if (!supported[tab.value]) tab.value = supported.albums ? 'albums' : 'artists'
+})
 const albums = shallowRef<MediaProviderAlbumSummary[]>([])
 const artists = shallowRef<MediaProviderArtistSummary[]>([])
 const loading = ref(false)
@@ -32,13 +44,13 @@ async function load(): Promise<void> {
   albums.value = []
   artists.value = []
   try {
-    const provider = providers.get('ncm')
+    const provider = providers.get(props.providerId)
     if (tab.value === 'albums') {
-      if (!provider?.fetchSavedAlbums) throw new Error('当前网易云插件不支持收藏专辑，请更新插件')
+      if (!provider?.fetchSavedAlbums) throw new Error('这个平台未提供收藏专辑功能')
       const result = await provider.fetchSavedAlbums()
       if (current === request) albums.value = result
     } else {
-      if (!provider?.fetchSavedArtists) throw new Error('当前网易云插件不支持收藏歌手，请更新插件')
+      if (!provider?.fetchSavedArtists) throw new Error('这个平台未提供收藏歌手功能')
       const result = await provider.fetchSavedArtists()
       if (current === request) artists.value = result
     }
@@ -48,7 +60,15 @@ async function load(): Promise<void> {
     if (current === request) loading.value = false
   }
 }
-watch([() => props.userId, tab], () => void load(), { immediate: true })
+watch(
+  [() => props.userId, () => props.providerId, tab],
+  () => {
+    if (!supportedTabs.value[tab.value])
+      tab.value = supportedTabs.value.albums ? 'albums' : 'artists'
+    void load()
+  },
+  { immediate: true }
+)
 onBeforeUnmount(() => {
   request++
 })
@@ -59,8 +79,20 @@ onBeforeUnmount(() => {
     <header>
       <h2>我收藏的</h2>
       <div role="group" aria-label="收藏类型">
-        <button type="button" :aria-pressed="tab === 'albums'" @click="tab = 'albums'">专辑</button>
-        <button type="button" :aria-pressed="tab === 'artists'" @click="tab = 'artists'">
+        <button
+          v-if="supportedTabs.albums"
+          type="button"
+          :aria-pressed="tab === 'albums'"
+          @click="tab = 'albums'"
+        >
+          专辑
+        </button>
+        <button
+          v-if="supportedTabs.artists"
+          type="button"
+          :aria-pressed="tab === 'artists'"
+          @click="tab = 'artists'"
+        >
           歌手
         </button>
       </div>

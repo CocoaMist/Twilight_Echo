@@ -8,6 +8,7 @@ defineProps<{
   x: number
   y: number
   allFavorited: boolean
+  favoriteLabel?: string
   actionLabel: string
   canLike: boolean
   singleLiked: boolean
@@ -82,7 +83,9 @@ const emit = defineEmits<{
         @keydown.space.prevent="emit('favorite')"
       >
         <i :class="allFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
-        <span> {{ allFavorited ? '取消收藏' : '加入收藏' }}{{ actionLabel }} </span>
+        <span>
+          {{ favoriteLabel ?? (allFavorited ? '移出应用收藏' : '加入应用收藏') }}{{ actionLabel }}
+        </span>
       </div>
       <div
         v-if="canLike"
@@ -95,7 +98,7 @@ const emit = defineEmits<{
         @keydown.space.prevent="emit('like')"
       >
         <i :class="singleLiked ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
-        <span>{{ singleLiked ? '取消喜欢' : '喜欢' }}</span>
+        <span>{{ singleLiked ? '在网易云取消喜欢' : '在网易云喜欢' }}</span>
       </div>
       <div
         v-if="canManagePlaylists"

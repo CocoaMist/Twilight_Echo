@@ -1,4 +1,4 @@
-export type StreamingTabKey = 'home' | 'discover' | 'library' | 'cloud' | 'recent'
+export type StreamingTabKey = 'home' | 'discover' | 'library' | 'cloud' | 'recent' | 'search'
 
 export interface StreamingNavigationProvider {
   id: string
@@ -214,4 +214,18 @@ export function isSidebarItemActiveForProvider({
     return activeProvider === 'ncm' && activeTab === itemKey
   }
   return activeProvider === itemProvider
+}
+
+export function getNavigationLibraryProviders(options: {
+  ncmAvailable: boolean
+  providers: StreamingNavigationProvider[]
+}): StreamingProviderOption[] {
+  return getAvailableProviders(options)
+    .filter(
+      (provider) =>
+        provider.capabilities.includes('library') &&
+        provider.ui?.streamingLibraryTab !== false &&
+        (provider.id === NCM_PROVIDER_ID || provider.supportedMethods?.includes('fetchUserLibrary'))
+    )
+    .map(toProviderOption)
 }

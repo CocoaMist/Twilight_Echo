@@ -18,6 +18,17 @@ export function placeEqInspector(
   return { left, top: overlap ? 12 : bottom }
 }
 
+export function constrainEqInspector(
+  plot: EqPlotBounds,
+  panel: EqPlotBounds,
+  position: { left: number; top: number }
+): { left: number; top: number } {
+  return {
+    left: bound(position.left, 8, plot.width - panel.width - 8),
+    top: bound(position.top, 8, plot.height - panel.height - 8)
+  }
+}
+
 export function placeEqTooltip(
   plot: EqPlotBounds,
   node: { x: number; y: number }
