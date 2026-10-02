@@ -6,21 +6,25 @@ const { useAppNavigation } = (await import(
   new URL('./useAppNavigation.ts', import.meta.url).href
 )) as typeof import('./useAppNavigation')
 
-test('streaming mode preserves and restores local menu state', () => {
+test('the menu starts closed and stays shared across local and streaming pages', () => {
   const navigation = useAppNavigation()
+  assert.equal(navigation.menuOpen.value, false)
 
   navigation.menuOpen.value = true
   navigation.enterStreamingMode()
 
   assert.equal(navigation.showStreamingPage.value, true)
-  assert.equal(navigation.menuOpen.value, false)
-  assert.equal(navigation.localMenuOpenBeforeStreaming.value, true)
+  assert.equal(navigation.menuOpen.value, true)
+  navigation.enterStreamingMode('library')
+  assert.equal(navigation.menuOpen.value, true)
 
   navigation.returnToLocalMode()
 
   assert.equal(navigation.showStreamingPage.value, false)
-  assert.equal(navigation.streamingMenuOpen.value, false)
   assert.equal(navigation.menuOpen.value, true)
+  navigation.collapseMenu()
+  navigation.enterStreamingMode('search')
+  assert.equal(navigation.menuOpen.value, false)
 })
 
 test('online audio pages retain the local sidebar so the title-bar menu can open it', () => {
@@ -29,7 +33,66 @@ test('online audio pages retain the local sidebar so the title-bar menu can open
 
   assert.doesNotMatch(localSidebar, /!showRadioPodcastPage\.value/)
   assert.doesNotMatch(localSidebar, /!showNetworkSourcesPage\.value/)
+  assert.doesNotMatch(localSidebar, /!showStreamingPage\.value/)
   assert.match(appSource, /'menu-open': menuOpen && showLocalSidebar/)
+})
+
+test('page history restores page parameters and foreground tools return to their page', () => {
+  const navigation = useAppNavigation()
+  navigation.onSelectView('albums', 'album:one')
+  navigation.enterStreamingMode('search')
+  navigation.navigate({ kind: 'recent', scope: 'platform', providerId: 'example' })
+  navigation.openSettingsPage()
+  navigation.closeSettingsPage()
+  assert.deepEqual(navigation.pageTarget.value, {
+    kind: 'recent',
+    scope: 'platform',
+    providerId: 'example'
+  })
+  navigation.goBackPage()
+  assert.equal(navigation.streamingTab.value, 'search')
+  navigation.goBackPage()
+  assert.equal(navigation.activeCategory.value, 'albums')
+  assert.equal(navigation.activeFilter.value, 'album:one')
+})
+
+test('local home history links open the shared recent page and retain their return target', () => {
+  const navigation = useAppNavigation()
+  navigation.menuOpen.value = true
+  navigation.onSelectView('artists', 'artist:one')
+  navigation.onSelectView('recent', null)
+  assert.deepEqual(navigation.pageTarget.value, { kind: 'recent', scope: 'device' })
+  assert.equal(navigation.showRecentPage.value, true)
+  assert.equal(navigation.localViewVisible.value, false)
+  assert.equal(navigation.menuOpen.value, true)
+  navigation.goBackPage()
+  assert.equal(navigation.activeFilter.value, 'artist:one')
+})
+
+test('nested foreground tools restore their originating surface before returning to the page', () => {
+  const navigation = useAppNavigation()
+  navigation.enterStreamingMode('library')
+  navigation.openPlayingPage()
+  navigation.openPlaybackSettings()
+  navigation.openPluginPage()
+  navigation.hidePluginPage()
+  assert.equal(navigation.showSettingsPage.value, true)
+  navigation.closeSettingsPage()
+  assert.equal(navigation.showPlayingPage.value, true)
+  navigation.openDspRackPage()
+  navigation.closeDspRackPage()
+  assert.equal(navigation.showPlayingPage.value, true)
+  navigation.closePlayingPage()
+  assert.equal(navigation.showStreamingSurface.value, true)
+  assert.equal(navigation.streamingTab.value, 'library')
+  navigation.openPlayingPage()
+  navigation.openEqualizerPage()
+  navigation.navigate({ kind: 'recent' })
+  navigation.openSettingsPage()
+  navigation.closeSettingsPage()
+  assert.equal(navigation.showPlayingPage.value, false)
+  assert.equal(navigation.showEqualizerPage.value, false)
+  assert.equal(navigation.showRecentPage.value, true)
 })
 
 test('network sources page is mutually exclusive with streaming and radio pages', () => {
@@ -108,6 +171,21 @@ test('active plugin extension page closes when its contribution disappears', () 
   navigation.closeMissingPluginPage([])
 
   assert.equal(navigation.activePluginPage.value, null)
+})
+
+test('page back history discards disabled plugin targets while preserving other pages', () => {
+  const navigation = useAppNavigation()
+  navigation.onSelectPluginPage({
+    pluginId: 'tool',
+    id: 'page',
+    kind: 'sidebarPage',
+    title: 'Tool',
+    command: 'open'
+  })
+  navigation.enterStreamingMode('library')
+  navigation.closeMissingPluginPage([])
+  navigation.goBackPage()
+  assert.equal(navigation.activePageId.value, 'local-home')
 })
 
 test('login page can open with an initial streaming provider', () => {

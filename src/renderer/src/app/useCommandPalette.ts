@@ -5,16 +5,23 @@ import { useSettingsStore } from '@renderer/stores/useSettingsStore.ts'
 import { useUnifiedMusicSearch } from '@renderer/app/useUnifiedMusicSearch.ts'
 import { createCommandPaletteActions } from '@renderer/app/commandPaletteActions.ts'
 import type { useAppNavigation } from '@renderer/app/useAppNavigation.ts'
+import {
+  BUILTIN_NAVIGATION_PAGES,
+  type NavigationPageDefinition
+} from '@renderer/app/navigationPages.ts'
 import { isCommandPaletteKey } from '../../../shared/commandPaletteShortcut.ts'
 
-export function useCommandPalette(navigation: ReturnType<typeof useAppNavigation>) {
+export function useCommandPalette(
+  navigation: ReturnType<typeof useAppNavigation>,
+  getPages: () => NavigationPageDefinition[] = () => BUILTIN_NAVIGATION_PAGES
+) {
   const isOpen = ref(false)
   const music = useMusicStore()
   const player = usePlayerStore()
   const settings = useSettingsStore()
   const search = useUnifiedMusicSearch()
-  const actions = computed(() =>
-    createCommandPaletteActions({
+  const actions = computed(() => [
+    ...createCommandPaletteActions({
       navigation,
       currentTrack: player.currentTrack.value,
       playing: player.isPlaying.value,
@@ -36,8 +43,16 @@ export function useCommandPalette(navigation: ReturnType<typeof useAppNavigation
           desktopLyrics: { ...settings.settings.value.desktopLyrics, enabled }
         })
       }
-    })
-  )
+    }),
+    ...getPages().map((page) => ({
+      id: 'page:' + page.id,
+      title: '打开' + page.title,
+      description: page.unavailableReason ?? page.description,
+      terms: page.title + ' ' + page.description,
+      group: '操作' as const,
+      run: () => navigation.navigate(page.target)
+    }))
+  ])
   function close(): void {
     isOpen.value = false
     search.clear()

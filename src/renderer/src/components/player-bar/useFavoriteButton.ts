@@ -94,9 +94,20 @@ export function useFavoriteButton({
     return !!track && !isLocalTrack(track) && providerFavoriteLoading.value
   })
 
-  const favoriteButtonTitle = computed(() =>
-    favoriteButtonLiked.value ? '取消收藏' : '添加到收藏'
-  )
+  const favoriteButtonTitle = computed(() => {
+    const track = currentTrack.value
+    const platform =
+      track && !isLocalTrack(track)
+        ? mediaProviders.get(getTrackProviderId(track) ?? '')?.name
+        : null
+    return platform
+      ? favoriteButtonLiked.value
+        ? '在' + platform + '取消喜欢'
+        : '在' + platform + '喜欢'
+      : favoriteButtonLiked.value
+        ? '移出应用收藏'
+        : '加入应用收藏'
+  })
 
   async function refreshProviderFavoriteState(track: Track | null | undefined): Promise<void> {
     const requestId = ++providerFavoriteRequestId

@@ -1,3 +1,4 @@
+import { normalizeNavigationPagePreferences } from '../../../shared/navigationPages.ts'
 import { DEFAULT_DOWNLOAD_PREFERENCES } from '../../../shared/downloadPreferences.ts'
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import {
@@ -129,6 +130,7 @@ const fallbackSettings: AppSettings = {
   onboardingCompleted: false,
   developerMode: false,
   startupHomePage: 'local',
+  navigationPages: normalizeNavigationPagePreferences(undefined),
   trackActivationMode: 'singleClick',
   language: 'system',
   theme: 'system',
@@ -429,6 +431,7 @@ function applySnapshot(snapshot: SettingsSnapshot): void {
       ...fallbackSettings.cachePolicy,
       ...(incoming.cachePolicy ?? {})
     },
+    navigationPages: normalizeNavigationPagePreferences(incoming.navigationPages),
     lyricsAppearance: normalizeLyricsAppearance(incoming.lyricsAppearance),
     lyricsPresets: normalizeLyricsPresetConfig(incoming.lyricsPresets),
     desktopLyrics: normalizeDesktopLyricsSettings(incoming.desktopLyrics, { resetLegacy: false }),

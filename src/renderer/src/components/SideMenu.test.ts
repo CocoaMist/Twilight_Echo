@@ -5,10 +5,7 @@ import test from 'node:test'
 const sideMenu = readFileSync(new URL('./SideMenu.vue', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../App.vue', import.meta.url), 'utf8')
 const playerBarCss = readFileSync(new URL('./player-bar/PlayerBar.css', import.meta.url), 'utf8')
-const providerSidebar = readFileSync(
-  new URL('./streaming-page/ProviderSidebar.vue', import.meta.url),
-  'utf8'
-)
+
 const streamingCss = readFileSync(
   new URL('./streaming-page/StreamingPage.css', import.meta.url),
   'utf8'
@@ -81,7 +78,9 @@ test('the streaming content gives way by padding, not by narrowing and translati
       .filter(Boolean)
   }
 
-  const rules = [...providerSidebar.matchAll(/\.streaming-sidebar\.open \+ [^{]*\{([^}]*)\}/g)]
+  const rules = [
+    ...app.matchAll(/^\.streaming-page\.menu-open \.streaming-content\s*\{([^}]*)\}/gm)
+  ]
   assert.ok(rules.length >= 1, 'the streaming give-way sibling rule must exist')
   for (const [, body] of rules) {
     assert.match(body, /padding-left:\s*var\(--te-menu-width\)/)

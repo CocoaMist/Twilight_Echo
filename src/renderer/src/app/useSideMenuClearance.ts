@@ -83,7 +83,11 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     // transition is in flight briefly reports an overlap, which lifts the menu
     // and then drops it again once the transition completes. The class is the
     // stable geometry contract, so it must win over that transient rect.
-    if (playerBar.classList.contains('menu-open')) {
+    if (
+      playerBar.classList.contains('menu-open') &&
+      window.innerWidth > 900 &&
+      document.documentElement.dataset.teShellLayout !== 'custom'
+    ) {
       setSideMenuBottomOffset(0)
       return
     }

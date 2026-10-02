@@ -1,3 +1,4 @@
+import { normalizeNavigationPagePreferences } from '../../shared/navigationPages.ts'
 import {
   DEFAULT_DOWNLOAD_PREFERENCES,
   normalizeDownloadPreferences
@@ -136,6 +137,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   onboardingCompleted: false,
   developerMode: false,
   startupHomePage: 'local',
+  navigationPages: normalizeNavigationPagePreferences(undefined),
   trackActivationMode: 'singleClick',
   language: DEFAULT_LANGUAGE_PREFERENCE,
   theme: 'system',
@@ -727,6 +729,7 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     onboardingCompleted: settings.onboardingCompleted === true,
     developerMode: settings.developerMode === true,
     startupHomePage: normalizeStartupHomePage(settings.startupHomePage),
+    navigationPages: normalizeNavigationPagePreferences(settings.navigationPages),
     trackActivationMode: normalizeTrackActivationMode(settings.trackActivationMode),
     language: normalizeLanguagePreference(settings.language),
     theme: normalizeAppTheme(settings.theme),

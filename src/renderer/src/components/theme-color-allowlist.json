@@ -40,7 +40,6 @@
   "src/renderer/src/components/song-list/SongList.css": 258,
   "src/renderer/src/components/streaming-page/NcmPlaylistDialogs.vue": 24,
   "src/renderer/src/components/streaming-page/ProviderDownloadsPanel.vue": 1,
-  "src/renderer/src/components/streaming-page/ProviderSidebar.vue": 8,
   "src/renderer/src/components/streaming-page/StreamingContentHeader.css": 42,
   "src/renderer/src/components/streaming-page/StreamingContextMenu.vue": 18,
   "src/renderer/src/components/streaming-page/StreamingDetailStage.css": 61,
@@ -57,5 +56,8 @@
   "src/renderer/src/components/TitleBar.vue": 12,
   "src/renderer/src/desktop-lyrics/desktopLyrics.css": 30,
   "src/renderer/src/mini-player/MiniPlayer.css": 7,
-  "src/renderer/src/mini-player/MiniPlayerCustomizer.css": 6
+  "src/renderer/src/mini-player/MiniPlayerCustomizer.css": 6,
+  "src/renderer/src/components/listening-analytics/ListeningStatsClearDialog.vue": 1,
+  "src/renderer/src/components/theme-workshop/ThemeWorkshopEnhancements.css": 19,
+  "src/renderer/src/components/theme-workshop/WorkshopCanvasOverlay.vue": 3
 }

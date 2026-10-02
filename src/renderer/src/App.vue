@@ -2,6 +2,7 @@
 import { mountWorkshopDecorations } from '@renderer/components/theme-workshop/workshopDecorations'
 import {
   ref,
+  shallowRef,
   provide,
   computed,
   onMounted,
@@ -11,14 +12,24 @@ import {
   defineAsyncComponent
 } from 'vue'
 import TitleBar from './components/TitleBar.vue'
-import SideMenu from './components/SideMenu.vue'
+const SideMenu = defineAsyncComponent(() => import('@renderer/components/SideMenu.vue'))
+import { buildNavigationPages, type StreamingPageTab } from '@renderer/app/navigationPages.ts'
+import { useProviderStore } from '@renderer/stores/useProviderStore'
+import {
+  getNavigationLibraryProviders,
+  getStreamingHomeProviders,
+  getStreamingDiscoveryProviders
+} from '@renderer/utils/streamingNavigation.ts'
+const RecentPlaybackPage = defineAsyncComponent(
+  () => import('@renderer/components/navigation/RecentPlaybackPage.vue')
+)
 const PlayerBar = defineAsyncComponent(() => import('./components/PlayerBar.vue'))
 const LocalDashboard = defineAsyncComponent(
   () => import('@renderer/components/local-dashboard/LocalHome.vue')
 )
 const SongList = defineAsyncComponent(() => import('./components/SongList.vue'))
-const AggregatePlaylistPage = defineAsyncComponent(
-  () => import('./components/aggregate-playlist/AggregatePlaylistPage.vue')
+const ApplicationPlaylistsPage = defineAsyncComponent(
+  () => import('@renderer/components/navigation/ApplicationPlaylistsPage.vue')
 )
 const PlayingMusic = defineAsyncComponent(() => import('./components/PlayingMusic.vue'))
 const StreamingPage = defineAsyncComponent(() => import('./components/StreamingPage.vue'))
@@ -86,7 +97,6 @@ import {
 } from '@renderer/components/local-dashboard/soundFieldPlayback'
 
 type TitleSurface = 'default' | 'settings' | 'streaming'
-type StreamingInitialTab = 'home' | 'library' | 'recent'
 let idleLoginCheck: IdleTaskHandle | null = null
 
 const navigation = useAppNavigation()
@@ -94,6 +104,10 @@ const {
   menuOpen,
   showPlayingPage,
   showStreamingPage,
+  showRecentPage,
+  streamingTab,
+  activePageId,
+  pageTarget,
   showRadioPodcastPage,
   showNetworkSourcesPage,
   showLoginPage,
@@ -111,21 +125,14 @@ const {
   activeCategory,
   activeFilter,
   songlistTransitionName,
-  streamingMenuOpen,
   showStreamingSurface,
   localViewVisible,
-  toggleStreamingMenu,
   collapseMenu,
   onSelectView,
-  closePluginPage,
   onSelectPluginPage,
   openPlayingPage: showPlaying,
   closePlayingPage,
   enterStreamingMode,
-  enterRadioPodcastMode,
-  closeRadioPodcastPage,
-  enterNetworkSourcesMode,
-  closeNetworkSourcesPage,
   returnToLocalMode,
   openLoginPage,
   closeLoginPage,
@@ -150,6 +157,7 @@ const { pushNotice } = useAppNoticeStore()
 // details, login QR flow, EQ advanced settings, …) push themselves on top of
 // it, so the button always resolves the innermost layer first.
 const backStack = useBackStack()
+backStack.useBackHandler(navigation.canGoBackPage, navigation.goBackPage)
 backStack.useBackHandler(showPlayingPage, closePlayingPage)
 backStack.useBackHandler(showSettingsPage, closeSettingsPage)
 // ThemeStudio 不在此注册：未应用的修改需要确认，由 ThemeStudioPage 自己挂载
@@ -157,31 +165,29 @@ backStack.useBackHandler(showSettingsPage, closeSettingsPage)
 backStack.useBackHandler(showPluginPage, hidePluginPage)
 backStack.useBackHandler(showEqualizerPage, closeEqualizerPage)
 backStack.useBackHandler(showDspRackPage, closeDspRackPage)
-backStack.useBackHandler(showRadioPodcastPage, closeRadioPodcastPage)
-backStack.useBackHandler(showNetworkSourcesPage, closeNetworkSourcesPage)
 backStack.useBackHandler(showLoginPage, closeLoginPage)
-backStack.useBackHandler(
-  computed(() => activePluginPage.value !== null),
-  closePluginPage
-)
 const toggleMenu = navigation.createToggleMenuHandler()
 const toggleSettingsPage = navigation.createToggleSettingsHandler()
 const togglePluginPage = navigation.createTogglePluginHandler()
 
 const coverOrigin = ref({ x: 48, y: window.innerHeight - 36, w: 48, h: 48 })
-const streamingInitialTab = ref<StreamingInitialTab | null>(null)
 const streamingArtistRequest = ref<StreamingArtistNavigationRequest | null>(null)
 let streamingArtistRequestKey = 0
 // Keep StreamingPage mounted for the rest of the session so leaving/re-entering
 // restores the last tab and detail. App restart remounts and returns to home.
-const streamingPageMounted = ref(false)
+const streamingPageTabs = shallowRef<StreamingPageTab[]>([])
 watch(
-  showStreamingPage,
-  (visible) => {
-    if (visible) streamingPageMounted.value = true
+  [showStreamingPage, streamingTab],
+  ([visible, tab]) => {
+    if (visible && !streamingPageTabs.value.includes(tab))
+      streamingPageTabs.value = [...streamingPageTabs.value, tab]
   },
   { immediate: true }
 )
+const recentPageMounted = ref(false)
+watch(showRecentPage, (visible) => {
+  if (visible) recentPageMounted.value = true
+})
 const showOnboarding = ref(false)
 
 function applyExternalNavigation(target: 'local' | 'streaming' | 'settings'): void {
@@ -190,17 +196,13 @@ function applyExternalNavigation(target: 'local' | 'streaming' | 'settings'): vo
     openSettingsPage('general')
     return
   }
-  streamingInitialTab.value = target === 'streaming' ? 'home' : null
   if (target === 'streaming') {
     enterStreamingMode()
   } else {
-    returnToLocalMode()
     onSelectView('dashboard', null)
   }
 }
-const titleMenuOpen = computed(() =>
-  showPluginPage.value ? false : showStreamingPage.value ? streamingMenuOpen.value : menuOpen.value
-)
+const titleMenuOpen = computed(() => menuOpen.value)
 
 function handleTitleBack(): void {
   backStack.goBack()
@@ -255,17 +257,6 @@ function handleExitPlayingPage(): void {
   closePlayingPage()
 }
 
-function enterStreamingLogin(): void {
-  // First entry starts on home; later re-entries keep the mounted page state.
-  if (!streamingPageMounted.value) {
-    streamingInitialTab.value = 'home'
-  }
-  enterStreamingMode()
-  if (!ncmLoggedIn.value) {
-    openLoginPage('ncm')
-  }
-}
-
 function handleStreamingLogin(providerId?: string | null): void {
   openLoginPage(providerId ?? null)
 }
@@ -316,9 +307,6 @@ async function handleOnboardingFinish(result: OnboardingFinishResult): Promise<v
 }
 
 function handleLoginSuccess(): void {
-  if (loginInitialProviderId.value === 'ncm') {
-    streamingInitialTab.value = 'home'
-  }
   closeLoginPage()
 }
 
@@ -338,7 +326,7 @@ const {
   applyLibraryScanProgress,
   applyLibraryScanStatus
 } = musicStore
-const { checkLogin, isLoggedIn: ncmLoggedIn } = useNcmStore()
+const { checkLogin } = useNcmStore()
 const {
   currentTrack,
   currentTime,
@@ -375,7 +363,8 @@ const {
 useDesktopLyricsPublisher()
 const { setAdaptiveMedia } = useThemeStore()
 const mediaProviders = useMediaProviders()
-const commandPalette = useCommandPalette(navigation)
+const navigationProviders = useProviderStore()
+const commandPalette = useCommandPalette(navigation, () => navigationPages.value)
 
 function handlePlayerBarArtistClick(): void {
   const track = currentTrack.value
@@ -394,7 +383,6 @@ function handlePlayerBarArtistClick(): void {
   if (!artistName) return
   // 同名歌手只能靠 provider 歌手 id 区分；曲目没带 id 时才让流媒体页按名字搜。
   const artistId = getPrimaryStreamingArtistId(trackArtist, track.artists)
-  streamingInitialTab.value = 'home'
   streamingArtistRequest.value = {
     key: ++streamingArtistRequestKey,
     providerId: source,
@@ -409,7 +397,6 @@ function handlePlayerBarArtistClick(): void {
 function handleAnalyticsArtistOpen(request: { name: string; providerId: string }): void {
   const artistName = getPrimaryStreamingArtistName(request.name)
   if (!artistName) return
-  streamingInitialTab.value = 'home'
   streamingArtistRequest.value = {
     key: ++streamingArtistRequestKey,
     providerId: request.providerId,
@@ -418,18 +405,23 @@ function handleAnalyticsArtistOpen(request: { name: string; providerId: string }
   enterStreamingMode()
 }
 
-const { favoriteButtonVisible, favoriteButtonLiked, favoriteButtonLoading, toggleFavorite } =
-  useFavoriteButton({
-    currentTrack,
-    playlists: musicStore.localPlaylists,
-    mediaProviders,
-    addToPlaylist: musicStore.addToPlaylist,
-    removeFromPlaylist: musicStore.removeFromPlaylist,
-    createPlaylist: musicStore.createPlaylist,
-    isFavoriteTrack: musicStore.isFavoriteTrack,
-    addFavoriteTrack: musicStore.addFavoriteTrack,
-    removeFavoriteTrack: musicStore.removeFavoriteTrack
-  })
+const {
+  favoriteButtonVisible,
+  favoriteButtonLiked,
+  favoriteButtonLoading,
+  favoriteButtonTitle,
+  toggleFavorite
+} = useFavoriteButton({
+  currentTrack,
+  playlists: musicStore.localPlaylists,
+  mediaProviders,
+  addToPlaylist: musicStore.addToPlaylist,
+  removeFromPlaylist: musicStore.removeFromPlaylist,
+  createPlaylist: musicStore.createPlaylist,
+  isFavoriteTrack: musicStore.isFavoriteTrack,
+  addFavoriteTrack: musicStore.addFavoriteTrack,
+  removeFavoriteTrack: musicStore.removeFavoriteTrack
+})
 
 watch(
   [themeCoverIdentity, coverThemeColor, themeCoverUrl],
@@ -468,18 +460,8 @@ const { loadSettings, hydrateStartupSnapshot, settings, updateSettings } = useSe
 useMotionPreference(computed(() => settings.value.motionPreference))
 useLanguagePreference(computed(() => settings.value.language))
 const { uiContributions, syncExtensions } = useExtensionRegistry()
-const STREAMING_ACCOUNT_PAGE_KEYS = new Set(['com.twilightecho.provider.ytmusic:ytmusic-account'])
 const availablePluginPages = computed(() =>
-  uiContributions.value.filter(
-    (contribution) =>
-      contribution.kind === 'sidebarPage' &&
-      !STREAMING_ACCOUNT_PAGE_KEYS.has(`${contribution.pluginId}:${contribution.id}`)
-  )
-)
-const sidebarPages = computed(() =>
-  availablePluginPages.value.filter(
-    (page) => page.pluginId !== 'com.twilightecho.tool.theme-workshop'
-  )
+  uiContributions.value.filter((contribution) => contribution.kind === 'sidebarPage')
 )
 function openThemeWorkshop(): void {
   const page = availablePluginPages.value.find(
@@ -513,6 +495,7 @@ provide(soundFieldPlaybackKey, {
   favoriteAvailable: favoriteButtonVisible,
   favoriteLiked: favoriteButtonLiked,
   favoriteLoading: favoriteButtonLoading,
+  favoriteTitle: favoriteButtonTitle,
   toggleFavorite,
   openQueue: () => playerBarRef.value?.openQueue(),
   openAudio: () => playerBarRef.value?.openAudio(),
@@ -544,7 +527,6 @@ const playerBarPresentation = computed(() =>
 const showLocalSidebar = computed(
   () =>
     !showPlayingPage.value &&
-    !showStreamingPage.value &&
     !showLoginPage.value &&
     !showSettingsPage.value &&
     !showThemeStudioPage.value &&
@@ -553,18 +535,38 @@ const showLocalSidebar = computed(
     !showPluginPage.value
 )
 
-const sideMenuActiveKey = computed(() =>
-  activePluginPage.value
-    ? `plugin:${activePluginPage.value.pluginId}:${activePluginPage.value.id}`
-    : activeCategory.value
-)
+const sideMenuActiveKey = activePageId
+const navigationPages = computed(() => {
+  const providers = navigationProviders.providers.value
+  const ncmAvailable = providers.some(
+    (provider) => provider.id === 'ncm' && provider.health?.available !== false
+  )
+  const options = { providers, ncmAvailable }
+  const unavailable: Record<string, string> = {}
+  if (!getStreamingHomeProviders(options).length)
+    unavailable['streaming-home'] = '尚未启用提供推荐主页的音源'
+  if (!getStreamingDiscoveryProviders(options).length)
+    unavailable.discover = '尚未启用提供发现歌单的音源'
+  if (!getNavigationLibraryProviders(options).length)
+    unavailable.library = '尚未启用提供个人音乐库的音源'
+  if (!ncmAvailable) unavailable.cloud = '需要启用网易云音乐音源'
+  return buildNavigationPages(
+    [
+      ...availablePluginPages.value.filter(
+        (page) => page.pluginId !== 'com.twilightecho.tool.theme-workshop'
+      ),
+      ...localSidebarItems.value
+    ],
+    unavailable
+  )
+})
 const mainContentMinHeight = computed(() => '100vh')
 
 const sidebarMenuOpen = computed(() => {
   // PlayingMusic hides the local sidebar, so its preserved open state must not
   // shift the full-width compact bar and leave a blank gutter on the left.
   if (showPlayingPage.value) return false
-  return showStreamingPage.value ? streamingMenuOpen.value : menuOpen.value
+  return menuOpen.value && showLocalSidebar.value
 })
 
 const playbackSessionPersistence = createPlaybackSessionPersistence({
@@ -835,7 +837,9 @@ watch(
   { immediate: true }
 )
 
-watch(availablePluginPages, (pages) => closeMissingPluginPage(pages))
+watch([availablePluginPages, localSidebarItems], ([pages, local]) =>
+  closeMissingPluginPage([...pages, ...local])
+)
 
 onBeforeUnmount(() => {
   idleLoginCheck?.cancel()
@@ -931,18 +935,18 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @commands="commandPalette.open"
       />
     </div>
-    <div v-if="showLocalSidebar" class="app-shell-navigation">
+    <div
+      v-if="showLocalSidebar"
+      class="app-shell-navigation"
+      :class="{ 'navigation-temporary': menuOpen }"
+    >
       <SideMenu
         :open="menuOpen"
         :liquid-material="liquidGlassChromeActive"
         :active-key="sideMenuActiveKey"
-        :plugin-pages="sidebarPages"
-        :local-items="localSidebarItems"
-        @select-view="onSelectView"
-        @select-plugin-page="onSelectPluginPage"
-        @enter-streaming="enterStreamingLogin"
-        @enter-radio-podcast="enterRadioPodcastMode"
-        @enter-network-sources="enterNetworkSourcesMode"
+        :pages="navigationPages"
+        @vue:mounted="startSideMenuMonitor"
+        @select-page="navigation.navigate($event.target)"
       />
     </div>
     <div class="app-shell-content">
@@ -964,12 +968,18 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             @select-view="onSelectView"
             @open-library-settings="openSettingsPage('general')"
           />
-          <AggregatePlaylistPage
-            v-else-if="localViewVisible && activeCategory === 'aggregate'"
-            key="local-aggregate"
+          <ApplicationPlaylistsPage
+            v-else-if="
+              localViewVisible && (activeCategory === 'playlists' || activeCategory === 'aggregate')
+            "
+            key="local-playlists"
+            :category="activeCategory"
+            :filter="activeFilter"
             :has-player="hasPlayerBar"
-            surface="local"
-            :initial-playlist-id="activeFilter"
+            :transition-name="songlistTransitionName"
+            :return-from-detail="navigation.goBackPage"
+            @select-view="onSelectView"
+            @customize-appearance="openThemeStudioPage('library')"
           />
           <ListeningAnalyticsPage
             v-else-if="localViewVisible && activeCategory === 'analytics'"
@@ -984,6 +994,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             :filter="activeFilter"
             :has-player="hasPlayerBar"
             :transition-name="songlistTransitionName"
+            :return-from-detail="navigation.goBackPage"
             @select-view="onSelectView"
             @customize-appearance="openThemeStudioPage('library')"
           />
@@ -996,15 +1007,29 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
           />
         </Transition>
         <StreamingPage
-          v-if="streamingPageMounted"
-          v-show="showStreamingPage"
-          :active="showStreamingPage"
-          :menu-open="streamingMenuOpen"
+          v-for="tab in streamingPageTabs"
+          :key="tab"
+          v-show="showStreamingSurface && streamingTab === tab"
+          :active="showStreamingSurface && streamingTab === tab"
+          :menu-open="menuOpen && showLocalSidebar"
           :has-player="hasPlayerBar"
-          :initial-tab="streamingInitialTab ?? undefined"
-          :artist-navigation-request="streamingArtistRequest"
-          @toggle-menu="toggleStreamingMenu"
-          @back-to-local="returnToLocalMode"
+          :initial-tab="tab"
+          :artist-navigation-request="
+            showStreamingSurface && tab === 'home' && streamingTab === tab
+              ? streamingArtistRequest
+              : null
+          "
+          @navigate-tab="enterStreamingMode($event)"
+          @recent="navigation.navigate({ kind: 'recent', scope: 'platform', providerId: $event })"
+          @login="handleStreamingLogin"
+        />
+        <RecentPlaybackPage
+          v-if="recentPageMounted"
+          v-show="showRecentPage"
+          :active="showRecentPage"
+          :target="pageTarget.kind === 'recent' ? pageTarget : undefined"
+          :has-player="hasPlayerBar"
+          @select-view="onSelectView"
           @login="handleStreamingLogin"
         />
         <RadioPodcastPage v-if="showRadioPodcastPage" />
@@ -1038,7 +1063,11 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
               activePluginPage.id === 'theme-workshop'
             "
           />
-          <PluginExtensionPage v-else-if="activePluginPage" :page="activePluginPage" />
+          <PluginExtensionPage
+            v-else-if="activePluginPage"
+            :key="activePageId"
+            :page="activePluginPage"
+          />
         </Transition>
       </div>
     </div>
@@ -1060,6 +1089,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         :mode="playerBarPresentation.mode"
         :auto-hide="playerBarPresentation.autoHide"
         :hidden-bar="playerBarPresentation.hidden || soundFieldSidebarActive"
+        @vue:mounted="startSideMenuMonitor"
         @exit-playing-page="handleExitPlayingPage"
         @click-cover="handleCoverClick"
         @open-settings="openPlaybackSettings"
@@ -1208,6 +1238,7 @@ html[data-te-shell-layout='custom'] .app-shell-navigation {
 
 html[data-te-shell-layout='custom'] .app-shell-content {
   grid-area: content;
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1284,6 +1315,20 @@ html[data-te-shell-layout='custom']
 
   html[data-te-shell-layout='custom'] .app-shell-player {
     display: var(--te-shell-compact-player-bar-display);
+  }
+
+  html[data-te-shell-layout='custom'] .app-shell-navigation.navigation-temporary {
+    display: block;
+    position: fixed;
+    top: var(--te-titlebar-inset, 32px);
+    left: 0;
+    width: var(--te-menu-width);
+    bottom: var(--te-side-menu-bottom, 0px);
+    z-index: 1000;
+  }
+
+  html[data-te-shell-layout='custom'] .app-shell-navigation.navigation-temporary .side-menu {
+    transform: none;
   }
 }
 
@@ -1551,5 +1596,41 @@ body.te-no-blur .onboarding-page-leave-to {
 .login-page-leave-to {
   opacity: 0;
   transform: translateY(10px);
+}
+</style>
+
+<style>
+.streaming-page.menu-open .streaming-content {
+  padding-left: var(--te-menu-width);
+}
+html[data-te-shell-layout='custom'] .streaming-page {
+  position: absolute;
+}
+html[data-te-shell-layout='custom'] .streaming-page .streaming-content {
+  padding-left: 0;
+}
+html[data-te-shell-layout='custom'][data-te-shell-navigation='hidden']
+  .app-shell-navigation.navigation-temporary {
+  display: block;
+  position: fixed;
+  top: var(--te-titlebar-inset, 32px);
+  left: 0;
+  width: var(--te-menu-width);
+  bottom: var(--te-side-menu-bottom, 0px);
+  z-index: 1000;
+}
+html[data-te-shell-layout='custom'][data-te-shell-navigation='hidden']
+  .app-shell-navigation.navigation-temporary
+  .side-menu {
+  transform: none;
+}
+@media (max-width: 900px) {
+  .main-content.menu-open,
+  .streaming-page.menu-open .streaming-content {
+    padding-left: 0 !important;
+  }
+  .app-shell-player .player-bar-shell {
+    left: 0 !important;
+  }
 }
 </style>

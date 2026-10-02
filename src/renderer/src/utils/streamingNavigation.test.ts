@@ -6,11 +6,37 @@ const {
   getFirstVisibleStreamingTab,
   getStreamingDiscoveryProviders,
   getStreamingHomeProviders,
+  getNavigationLibraryProviders,
   hasStreamingSidebarEntries,
   isSidebarItemActiveForProvider
 } = (await import(
   new URL('./streamingNavigation.ts', import.meta.url).href
 )) as typeof import('./streamingNavigation')
+
+test('the unified library accepts implemented personal libraries without a legacy unified opt-in', () => {
+  const providers = [
+    {
+      id: 'personal',
+      name: 'Personal',
+      capabilities: ['library'],
+      supportedMethods: ['fetchUserLibrary']
+    },
+    { id: 'unsupported', name: 'Unsupported', capabilities: ['library'], supportedMethods: [] },
+    {
+      id: 'opt-out',
+      name: 'Opt out',
+      capabilities: ['library'],
+      supportedMethods: ['fetchUserLibrary'],
+      ui: { streamingLibraryTab: false }
+    }
+  ]
+  assert.deepEqual(
+    getNavigationLibraryProviders({ providers, ncmAvailable: false }).map(
+      (provider) => provider.id
+    ),
+    ['personal']
+  )
+})
 
 test('provider sidebar active state is provider driven without dedicated provider pages', () => {
   assert.equal(

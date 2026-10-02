@@ -1613,7 +1613,7 @@ if (userDataDir) {
   app.commandLine.appendSwitch('disk-cache-dir', path.join(userDataDir, 'cache'))
 }
 app.whenReady().then(async () => {
-  const window = new BrowserWindow({ show: false, width: 1440, height: 900, webPreferences: { contextIsolation: false, nodeIntegration: false } })
+  const window = new BrowserWindow({ show: false, width: 1440, height: 900, webPreferences: { contextIsolation: false, nodeIntegration: false, backgroundThrottling: false, offscreen: true } })
   window.webContents.on('console-message', (_event, _level, message, line, sourceId) => console.error('RENDERER', sourceId + ':' + line, message))
   try {
     await window.loadFile(path.resolve(target))
@@ -1629,7 +1629,7 @@ app.whenReady().then(async () => {
         await window.webContents.executeJavaScript('window.setPlayingMusicLayoutFixture(' + hasLyrics + ')')
         await new Promise((resolve) => setTimeout(resolve, 80))
         const diagnostics = await window.webContents.executeJavaScript(${JSON.stringify(layoutDiagnosticsSource)})
-        if (!diagnostics.centered || !diagnostics.coverFits || !diagnostics.columnsSeparated || !diagnostics.timeAtEdge || !diagnostics.controlsClear || diagnostics.overflow || diagnostics.single === hasLyrics || ((width > 1120 || !hasLyrics) && (!diagnostics.coverCentered || !diagnostics.coverVerticallyCentered))) {
+        if (diagnostics.viewport[0] !== width || diagnostics.viewport[1] !== height || !diagnostics.centered || !diagnostics.coverFits || !diagnostics.columnsSeparated || !diagnostics.timeAtEdge || !diagnostics.controlsClear || diagnostics.overflow || diagnostics.single === hasLyrics || ((width > 1120 || !hasLyrics) && (!diagnostics.coverCentered || !diagnostics.coverVerticallyCentered))) {
           throw new Error('responsive layout failed: ' + JSON.stringify({ hasLyrics, ...diagnostics }))
         }
         if (visualDir && hasLyrics) {
@@ -1644,7 +1644,7 @@ app.whenReady().then(async () => {
       await window.webContents.executeJavaScript('window.setPlayingMusicLayoutFixture(true, ' + JSON.stringify(appearance) + ')')
       await new Promise((resolve) => setTimeout(resolve, 80))
       const diagnostics = await window.webContents.executeJavaScript(${JSON.stringify(layoutDiagnosticsSource)})
-      if (!diagnostics.centered || !diagnostics.coverFits || !diagnostics.coverCentered || !diagnostics.timeAtEdge) {
+      if (diagnostics.viewport[0] !== 1920 || diagnostics.viewport[1] !== 1080 || !diagnostics.centered || !diagnostics.coverFits || !diagnostics.coverCentered || !diagnostics.timeAtEdge) {
         throw new Error('custom lyric geometry failed: ' + JSON.stringify({ appearance, ...diagnostics }))
       }
     }

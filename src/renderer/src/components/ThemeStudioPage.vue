@@ -344,7 +344,7 @@ void editorPaneRef.value
             <SideMenu
               v-if="previewSurface === 'dashboard'"
               :open="previewNavigationOpen"
-              active-key="dashboard"
+              active-key="local-home"
             />
             <div
               v-if="previewSurface === 'dashboard'"

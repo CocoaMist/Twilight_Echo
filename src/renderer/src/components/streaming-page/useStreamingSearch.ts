@@ -3,6 +3,7 @@ import {
   getCurrentInstance,
   onBeforeUnmount,
   ref,
+  shallowRef,
   watch,
   type ComputedRef,
   type Ref
@@ -80,12 +81,14 @@ type UseStreamingSearchOptions = {
   searchLocalPlaylists?: (
     keywords: string,
     limit?: number,
-    offset?: number
+    offset?: number,
+    options?: { signal?: AbortSignal }
   ) => Promise<{ playlists: MediaProviderPlaylistSummary[]; total: number }>
   searchLocalArtists?: (
     keywords: string,
     limit?: number,
-    offset?: number
+    offset?: number,
+    options?: { signal?: AbortSignal }
   ) => Promise<{ artists: MediaProviderArtistSummary[]; total: number }>
   searchSources: Ref<SearchSourceOption[]>
   playTrack: (track: Track, queue?: Track[]) => void
@@ -133,10 +136,10 @@ export function useStreamingSearch({
 } {
   const searchQuery = ref('')
   const searchType = ref<SearchType>('songs')
-  const searchSource = ref<SearchSource>('ncm')
-  const searchResults = ref<Track[]>([])
-  const searchPlaylistsResults = ref<MediaProviderPlaylistSummary[]>([])
-  const searchArtistsResults = ref<MediaProviderArtistSummary[]>([])
+  const searchSource = ref<SearchSource>('all')
+  const searchResults = shallowRef<Track[]>([])
+  const searchPlaylistsResults = shallowRef<MediaProviderPlaylistSummary[]>([])
+  const searchArtistsResults = shallowRef<MediaProviderArtistSummary[]>([])
   const searchTotal = ref(0)
   const searchOffset = ref(0)
   const searchLoading = ref(false)
@@ -204,7 +207,7 @@ export function useStreamingSearch({
     signal?: AbortSignal
   ): Promise<{ playlists: MediaProviderPlaylistSummary[]; total: number }> {
     if (source === 'all') {
-      return searchPlaylists(keywords, limit, offset)
+      return searchPlaylists(keywords, limit, offset, { signal })
     }
     if (source === 'local') {
       if (searchLocalPlaylists) return searchLocalPlaylists(keywords, limit, offset)
@@ -224,7 +227,7 @@ export function useStreamingSearch({
     signal?: AbortSignal
   ): Promise<{ artists: MediaProviderArtistSummary[]; total: number }> {
     if (source === 'all') {
-      return searchArtists(keywords, limit, offset)
+      return searchArtists(keywords, limit, offset, { signal })
     }
     if (source === 'local') {
       if (searchLocalArtists) return searchLocalArtists(keywords, limit, offset)

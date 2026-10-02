@@ -1,46 +1,107 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import ImportDialog from './ImportDialog.vue'
-import ThemeIcon from './ThemeIcon.vue'
-import type { UiContribution } from '../extensions/registry'
-import type { ThemeIconSlot } from '../../../shared/theme.ts'
-import { useMusicStore } from '../stores/useMusicStore'
-
-const props = defineProps<{
-  open: boolean
-  liquidMaterial?: boolean
-  activeKey: string
-  pluginPages?: UiContribution[]
-  localItems?: UiContribution[]
-}>()
-
-const emit = defineEmits<{
-  selectView: [category: string, filter: string | null]
-  selectPluginPage: [page: UiContribution]
-  enterStreaming: []
-  enterRadioPodcast: []
-  enterNetworkSources: []
-}>()
-
-interface MenuItem {
-  key: string
-  label: string
-  icon: ThemeIconSlot
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onMounted,
+  onBeforeUnmount,
+  ref,
+  watch
+} from 'vue'
+import ImportDialog from '@renderer/components/ImportDialog.vue'
+import ThemeIcon from '@renderer/components/ThemeIcon.vue'
+import { useMusicStore } from '@renderer/stores/useMusicStore'
+import { useSettingsStore } from '@renderer/stores/useSettingsStore'
+import {
+  BUILTIN_NAVIGATION_PAGES,
+  isNavigationPageVisible,
+  orderNavigationPages,
+  type NavigationPageDefinition
+} from '@renderer/app/navigationPages.ts'
+import {
+  buildSidebarEntries,
+  sidebarGroupId,
+  type SidebarGroupId
+} from '@renderer/app/sidebarNavigation.ts'
+const NavigationPagesDialog = defineAsyncComponent(
+  () => import('@renderer/components/navigation/NavigationPagesDialog.vue')
+)
+const props = withDefaults(
+  defineProps<{
+    open: boolean
+    liquidMaterial?: boolean
+    activeKey: string
+    pages?: NavigationPageDefinition[]
+  }>(),
+  { pages: () => BUILTIN_NAVIGATION_PAGES }
+)
+const persistent = ref(false)
+let observer: MutationObserver | undefined
+onMounted(() => {
+  const root = document.documentElement
+  const sync = (): void => {
+    persistent.value =
+      root.dataset.teShellLayout === 'custom' && root.dataset.teShellNavigation === 'persistent'
+  }
+  sync()
+  observer = new MutationObserver(sync)
+  observer.observe(root, {
+    attributes: true,
+    attributeFilter: ['data-te-shell-layout', 'data-te-shell-navigation']
+  })
+})
+onBeforeUnmount(() => observer?.disconnect())
+const emit = defineEmits<{ selectPage: [page: NavigationPageDefinition] }>()
+const settingsStore = useSettingsStore()
+const ordered = computed(() =>
+  orderNavigationPages(props.pages, settingsStore.settings.value.navigationPages)
+)
+const visible = computed(() =>
+  ordered.value.filter((page) =>
+    isNavigationPageVisible(page, settingsStore.settings.value.navigationPages)
+  )
+)
+const entries = computed(() => buildSidebarEntries(visible.value))
+const expanded = ref(new Set<SidebarGroupId>())
+watch(
+  () => props.activeKey,
+  (key) => {
+    const group = sidebarGroupId(key)
+    if (group) expanded.value.add(group)
+  },
+  { immediate: true }
+)
+function toggleGroup(id: SidebarGroupId): void {
+  if (expanded.value.has(id)) expanded.value.delete(id)
+  else expanded.value.add(id)
 }
-
-const menuItems: MenuItem[] = [
-  { key: 'dashboard', label: '首页', icon: 'navigation.home' },
-  { key: 'allSongs', label: '所有歌曲', icon: 'navigation.songs' },
-  { key: 'artists', label: '艺术家', icon: 'navigation.artists' },
-  { key: 'albums', label: '专辑', icon: 'navigation.albums' },
-  { key: 'genres', label: '流派', icon: 'navigation.genres' },
-  { key: 'playlists', label: '歌单', icon: 'navigation.playlists' },
-  { key: 'aggregate', label: '聚合歌单', icon: 'navigation.playlists' },
-  { key: 'folders', label: '文件夹', icon: 'navigation.folders' },
-  { key: 'recent', label: '最近播放', icon: 'navigation.recent' },
-  { key: 'analytics', label: '统计仪表盘', icon: 'navigation.analytics' }
-]
-
+async function handleGroupKey(event: KeyboardEvent, id: SidebarGroupId): Promise<void> {
+  const group = event.currentTarget as HTMLElement
+  if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    expanded.value.add(id)
+    await nextTick()
+    group.querySelector<HTMLElement>('.menu-children button')?.focus()
+  } else if (event.key === 'ArrowLeft') {
+    event.preventDefault()
+    expanded.value.delete(id)
+    group.querySelector<HTMLElement>('.menu-group-toggle')?.focus()
+  }
+}
+function handleToolbarKey(event: KeyboardEvent): void {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll('button')]
+  const index = buttons.indexOf(event.target as HTMLButtonElement)
+  if (index < 0) return
+  event.preventDefault()
+  const next =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? buttons.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length
+  buttons[next]?.focus()
+}
 const { libraryScanStatus, libraryScanProgress } = useMusicStore()
 const scanning = computed(
   () => libraryScanStatus.value.state === 'running' || libraryScanStatus.value.state === 'paused'
@@ -48,139 +109,176 @@ const scanning = computed(
 const scanningLabel = computed(() => {
   const status = libraryScanStatus.value
   if (status.state === 'paused') return '扫描已暂停'
-  const current = Math.max(0, status.current || 0)
-  const total = Math.max(0, status.total || 0)
   const phase = libraryScanProgress.value?.phase === 'parsing' ? '解析' : '扫描'
-  if (total > 0) return `${phase}中 ${current}/${total}`
-  return '正在扫描…'
+  return status.total > 0 ? phase + '中 ' + (status.current || 0) + '/' + status.total : '正在扫描…'
 })
 const showImportDialog = ref(false)
-
+const directory = ref<'browse' | 'edit' | null>(null)
+function selectPage(page: NavigationPageDefinition): void {
+  directory.value = null
+  emit('selectPage', page)
+}
 function setPressOrigin(event: PointerEvent): void {
   const button =
     event.target instanceof Element ? event.target.closest<HTMLElement>('button') : null
   if (!button) return
   const rect = button.getBoundingClientRect()
-  button.style.setProperty('--te-lg-press-x', `${event.clientX - rect.left}px`)
-  button.style.setProperty('--te-lg-press-y', `${event.clientY - rect.top}px`)
-}
-
-function selectItem(key: string): void {
-  emit('selectView', key, null)
-}
-
-function selectPluginPage(page: UiContribution): void {
-  emit('selectPluginPage', page)
-}
-
-function handleImportClick(): void {
-  showImportDialog.value = true
+  button.style.setProperty('--te-lg-press-x', String(event.clientX - rect.left) + 'px')
+  button.style.setProperty('--te-lg-press-y', String(event.clientY - rect.top) + 'px')
 }
 </script>
 
 <template>
   <div
     class="side-menu"
-    :class="{ open, 'side-menu-liquid': props.liquidMaterial }"
+    :class="{ open: open || persistent, 'side-menu-liquid': props.liquidMaterial }"
+    :inert="!open && !persistent"
     @pointerdown="setPressOrigin"
   >
     <div class="navigation-brand" aria-hidden="true">
-      <img src="/icon.png" alt="" />
-      <span>Twilight Echo</span>
+      <img src="/icon.png" alt="" /><span>Twilight Echo</span>
     </div>
-    <nav class="menu-items">
+    <nav class="menu-items" aria-label="页面">
       <div class="menu-nav">
+        <span class="menu-caption" aria-hidden="true">音乐空间</span>
+        <template v-for="entry in entries" :key="entry.kind === 'page' ? entry.page.id : entry.id">
+          <div
+            v-if="entry.kind === 'group'"
+            class="menu-group"
+            :class="{
+              expanded: expanded.has(entry.id),
+              'contains-active': entry.pages.some((page) => page.id === props.activeKey)
+            }"
+            @keydown="handleGroupKey($event, entry.id)"
+          >
+            <button
+              type="button"
+              class="menu-item menu-group-toggle"
+              :class="{
+                active:
+                  !expanded.has(entry.id) && entry.pages.some((page) => page.id === props.activeKey)
+              }"
+              :aria-label="entry.title"
+              :aria-expanded="expanded.has(entry.id)"
+              :aria-controls="`sidebar-group-${entry.id}`"
+              :title="entry.title"
+              @click="toggleGroup(entry.id)"
+            >
+              <ThemeIcon class="item-icon" :icon-slot="entry.icon" />
+              <span class="item-label">{{ entry.title }}</span>
+              <i
+                class="group-chevron pi"
+                :class="expanded.has(entry.id) ? 'pi-angle-down' : 'pi-angle-right'"
+                aria-hidden="true"
+              ></i>
+            </button>
+            <div
+              :id="`sidebar-group-${entry.id}`"
+              v-show="expanded.has(entry.id)"
+              class="menu-children"
+            >
+              <button
+                v-for="page in entry.pages"
+                :key="page.id"
+                type="button"
+                class="menu-item menu-child"
+                :class="{ active: props.activeKey === page.id }"
+                :aria-current="props.activeKey === page.id ? 'page' : undefined"
+                :aria-label="page.title"
+                :title="page.title"
+                @click="selectPage(page)"
+              >
+                <i
+                  v-if="page.customIcon"
+                  class="item-icon"
+                  :class="page.customIcon"
+                  aria-hidden="true"
+                ></i>
+                <ThemeIcon v-else class="item-icon" :icon-slot="page.icon" />
+                <span class="item-label">{{ page.title }}</span>
+              </button>
+            </div>
+          </div>
+          <button
+            v-else
+            type="button"
+            class="menu-item"
+            :class="{ active: props.activeKey === entry.page.id }"
+            :aria-current="props.activeKey === entry.page.id ? 'page' : undefined"
+            :aria-label="entry.page.title"
+            :title="entry.page.title"
+            @click="selectPage(entry.page)"
+          >
+            <i
+              v-if="entry.page.customIcon"
+              class="item-icon"
+              :class="entry.page.customIcon"
+              aria-hidden="true"
+            ></i
+            ><ThemeIcon v-else class="item-icon" :icon-slot="entry.page.icon" /><span
+              class="item-label"
+              >{{ entry.page.title }}</span
+            >
+          </button>
+        </template>
         <button
-          v-for="item in menuItems"
-          :key="item.key"
+          v-if="visible.length === 0"
           type="button"
           class="menu-item"
-          :class="{ active: props.activeKey === item.key }"
-          :aria-current="props.activeKey === item.key ? 'page' : undefined"
-          :title="item.label"
-          @click="selectItem(item.key)"
+          @click="directory = 'edit'"
         >
-          <ThemeIcon class="item-icon" :icon-slot="item.icon" />
-          <span class="item-label">{{ item.label }}</span>
+          <ThemeIcon class="item-icon" icon-slot="navigation.import" /><span class="item-label"
+            >添加常用页面</span
+          >
         </button>
       </div>
       <div class="menu-bottom">
-        <div v-if="(props.localItems?.length ?? 0) > 0" class="menu-separator"></div>
-        <button
-          v-for="item in props.localItems ?? []"
-          :key="`local:${item.pluginId}:${item.id}`"
-          type="button"
-          class="menu-item menu-item-plugin"
-          :class="{ active: props.activeKey === `plugin:${item.pluginId}:${item.id}` }"
-          :aria-current="
-            props.activeKey === `plugin:${item.pluginId}:${item.id}` ? 'page' : undefined
-          "
-          :title="item.title"
-          @click="selectPluginPage(item)"
-        >
-          <i v-if="item.icon" class="item-icon" :class="item.icon"></i>
-          <ThemeIcon v-else class="item-icon" icon-slot="navigation.plugin" />
-          <span class="item-label">{{ item.title }}</span>
-        </button>
         <div class="menu-separator"></div>
-        <button
-          v-for="page in props.pluginPages ?? []"
-          :key="`${page.pluginId}:${page.id}`"
-          type="button"
-          class="menu-item menu-item-plugin"
-          :class="{ active: props.activeKey === `plugin:${page.pluginId}:${page.id}` }"
-          :aria-current="
-            props.activeKey === `plugin:${page.pluginId}:${page.id}` ? 'page' : undefined
-          "
-          :title="page.title"
-          @click="selectPluginPage(page)"
-        >
-          <i v-if="page.icon" class="item-icon" :class="page.icon"></i>
-          <ThemeIcon v-else class="item-icon" icon-slot="navigation.plugin" />
-          <span class="item-label">{{ page.title }}</span>
-        </button>
-        <div v-if="(props.pluginPages?.length ?? 0) > 0" class="menu-separator"></div>
-        <button
-          type="button"
-          class="menu-item menu-item-streaming"
-          title="流媒体"
-          @click="emit('enterStreaming')"
-        >
-          <ThemeIcon class="item-icon" icon-slot="navigation.streaming" />
-          <span class="item-label">流媒体</span>
-        </button>
-        <button
-          type="button"
-          class="menu-item menu-item-radio"
-          title="电台 / 播客"
-          @click="emit('enterRadioPodcast')"
-        >
-          <ThemeIcon class="item-icon" icon-slot="navigation.radio" />
-          <span class="item-label">电台 / 播客</span>
-        </button>
-        <button
-          type="button"
-          class="menu-item menu-item-network"
-          title="网络源"
-          @click="emit('enterNetworkSources')"
-        >
-          <i class="item-icon pi pi-server"></i>
-          <span class="item-label">网络源</span>
-        </button>
-        <button
-          type="button"
-          class="menu-item menu-item-import"
-          title="导入歌曲"
-          @click="handleImportClick()"
-        >
-          <ThemeIcon class="item-icon" icon-slot="navigation.import" />
-          <span class="item-label">导入歌曲</span>
-        </button>
+        <div class="menu-toolbar" role="toolbar" aria-label="音乐工具" @keydown="handleToolbarKey">
+          <button
+            type="button"
+            class="menu-item toolbar-item"
+            title="导入歌曲"
+            aria-label="导入歌曲"
+            @click="showImportDialog = true"
+          >
+            <ThemeIcon class="item-icon" icon-slot="navigation.import" /><span class="item-label"
+              >导入</span
+            >
+          </button>
+          <button
+            type="button"
+            class="menu-item toolbar-item"
+            title="全部页面"
+            aria-label="全部页面"
+            @click="directory = 'browse'"
+          >
+            <i class="item-icon pi pi-th-large" aria-hidden="true"></i
+            ><span class="item-label">目录</span>
+          </button>
+          <button
+            type="button"
+            class="menu-item toolbar-item"
+            title="编辑页面"
+            aria-label="编辑页面"
+            @click="directory = 'edit'"
+          >
+            <i class="item-icon pi pi-pencil" aria-hidden="true"></i
+            ><span class="item-label">编辑</span>
+          </button>
+        </div>
         <span v-if="scanning" class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
       </div>
     </nav>
-    <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
   </div>
+  <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
+  <NavigationPagesDialog
+    v-if="directory"
+    :pages="props.pages"
+    :edit="directory === 'edit'"
+    @close="directory = null"
+    @select="selectPage"
+  />
 </template>
 
 <style scoped>
@@ -228,11 +326,15 @@ function handleImportClick(): void {
 }
 
 :global(html[data-te-navigation-style='expanded']) {
-  --te-menu-width: clamp(180px, 18vw, 216px) !important;
+  --te-menu-width: clamp(
+    calc(var(--te-font-size-body, 14px) * 180 / 14),
+    18vw,
+    calc(var(--te-font-size-body, 14px) * 216 / 14)
+  ) !important;
 }
 
 :global(html[data-te-navigation-style='compact']) {
-  --te-menu-width: 164px !important;
+  --te-menu-width: calc(var(--te-font-size-body, 14px) * 164 / 14) !important;
 }
 
 :global(html[data-te-navigation-style='rail']) {
@@ -272,17 +374,121 @@ function handleImportClick(): void {
   flex: 1;
   min-height: 0;
   flex-direction: column;
+  overflow: hidden;
   height: auto;
   width: 100%;
-  min-width: 132px;
-  max-width: 216px;
+  min-width: 0;
+  max-width: 100%;
   padding: 16px 12px 16px 4px;
 }
 
 .menu-nav {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.menu-caption {
+  flex-shrink: 0;
+  padding: 6px 12px 10px 24px;
+  color: var(--te-navigation-icon);
+  font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
+  letter-spacing: 1.5px;
+}
+
+.menu-group {
+  flex-shrink: 0;
+}
+
+.menu-group-toggle .item-label {
+  font-weight: 600;
+}
+
+.group-chevron {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--te-navigation-icon);
+  font-size: 14px;
+}
+
+.contains-active .menu-group-toggle,
+.contains-active .menu-group-toggle .item-icon {
+  color: var(--te-navigation-active-text);
+}
+
+.menu-children {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-block: 4px 8px;
+}
+
+.menu-children::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 12px;
+  left: 34px;
+  width: 1px;
+  background: var(--te-navigation-border);
+}
+
+.menu-item.menu-child {
+  width: calc(100% - 44px);
+  margin-left: 44px;
+  padding-inline: 10px;
+  gap: 10px;
+  height: 36px;
+  min-height: calc(var(--te-font-size-body, 14px) * 2.3);
+}
+
+.menu-child .item-icon {
+  width: 18px;
+  height: 18px;
+  font-size: var(--te-font-size-body, 14px);
+}
+
+.menu-child .item-label {
+  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
+}
+
+.menu-child.active::before {
+  left: -10px;
+}
+
+.menu-toolbar {
+  display: flex;
+  gap: 4px;
+  padding-left: 8px;
+}
+
+.menu-item.toolbar-item {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  height: auto;
+  min-height: 56px;
+  margin: 0;
+  padding: 8px 4px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.toolbar-item .item-icon {
+  width: 20px;
+  height: 20px;
+  font-size: calc(var(--te-font-size-body, 14px) * 1.14286);
+}
+
+.toolbar-item .item-label {
+  font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
 }
 
 .menu-bottom {
@@ -294,6 +500,7 @@ function handleImportClick(): void {
 .menu-item {
   position: relative;
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   height: 40px;
   width: calc(100% - 8px);
@@ -337,11 +544,10 @@ function handleImportClick(): void {
   left: -8px;
   top: 10px;
   bottom: 10px;
-  width: 4px;
-  border-radius: 0 4px 4px 0;
+  width: 2px;
+  border-radius: 2px;
   background: var(--te-navigation-indicator);
   opacity: 0.8;
-  box-shadow: 0 0 8px color-mix(in srgb, var(--te-navigation-indicator) 50%, transparent);
 }
 
 :global(html[data-te-motion='full'] .menu-item.active::before) {
@@ -364,9 +570,7 @@ function handleImportClick(): void {
   flex-shrink: 0;
   color: var(--te-navigation-icon);
   font-size: calc(var(--te-font-size-body, 14px) * 1.21429);
-  transition:
-    color 0.2s,
-    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: color var(--te-motion-hover) var(--te-ease-enter);
 }
 
 :global(html[data-te-navigation-icon-scale='sm'] .item-icon) {
@@ -378,17 +582,17 @@ function handleImportClick(): void {
 }
 
 .menu-item:hover .item-icon {
-  transform: translateX(1px) scale(1.12) rotate(-4deg);
   color: var(--te-navigation-hover-text);
 }
 
-.menu-item.active .item-icon,
-.menu-item-streaming .item-icon,
-.menu-item-import .item-icon {
+.menu-item.active .item-icon {
   color: inherit;
 }
 
 .item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: calc(var(--te-font-size-body, 14px) * 1);
   font-weight: 500;
   color: currentColor;
@@ -414,6 +618,22 @@ function handleImportClick(): void {
   font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
 }
 
+:global(html[data-te-navigation-style='compact'] .menu-item.menu-child) {
+  margin-left: 36px;
+  width: calc(100% - 36px);
+  padding-inline: 8px;
+  gap: 8px;
+}
+
+:global(html[data-te-navigation-style='compact'] .menu-children::before) {
+  left: 28px;
+}
+
+:global(html[data-te-navigation-style='compact'] .menu-item.toolbar-item) {
+  gap: 6px;
+  padding-inline: 2px;
+}
+
 :global(html[data-te-navigation-style='rail'] .menu-items) {
   min-width: 0;
   max-width: 100%;
@@ -429,6 +649,32 @@ function handleImportClick(): void {
   margin-left: 6px;
   padding: 0;
   justify-content: center;
+}
+
+:global(html[data-te-navigation-style='rail'] .menu-item.menu-child) {
+  margin-left: 10px;
+  width: 40px;
+  padding: 0;
+}
+
+:global(html[data-te-navigation-style='rail'] .menu-children::before) {
+  left: 5px;
+}
+
+:global(html[data-te-navigation-style='rail'] .menu-toolbar) {
+  flex-direction: column;
+  padding-left: 6px;
+}
+
+:global(html[data-te-navigation-style='rail'] .menu-item.toolbar-item) {
+  width: 44px;
+  min-height: 40px;
+  margin: 0;
+}
+
+:global(html[data-te-navigation-style='rail'] .menu-caption),
+:global(html[data-te-navigation-style='rail'] .group-chevron) {
+  display: none;
 }
 
 :global(html[data-te-navigation-style='rail'] .menu-item:hover) {
@@ -457,16 +703,6 @@ function handleImportClick(): void {
   height: 1px;
   margin: 12px 10px 12px 16px;
   background: linear-gradient(to right, var(--te-navigation-border), transparent);
-}
-
-.menu-item-streaming,
-.menu-item-import {
-  color: var(--te-chrome-text, var(--te-navigation-text));
-}
-
-.menu-item-streaming:hover,
-.menu-item-import:hover {
-  background: var(--te-navigation-hover);
 }
 
 .scanning-text {
@@ -570,20 +806,5 @@ function handleImportClick(): void {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.scanning-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--te-navigation-border);
-  border-top-color: var(--te-primary-500);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
 }
 </style>

@@ -68,7 +68,7 @@ const searchInputFocused = ref(false)
           :model-value="searchQuery"
           type="text"
           class="streaming-search-input"
-          placeholder="搜索音乐、歌手、专辑"
+          placeholder="搜索歌曲、歌单、歌手"
           @update:model-value="emit('update:searchQuery', $event)"
           @focus="searchInputFocused = true"
           @blur="searchInputFocused = false"

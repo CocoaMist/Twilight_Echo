@@ -74,6 +74,10 @@ function remove(asset: WorkshopAsset): void {
 function megabytes(bytes: number): string {
   return (bytes / 1024 / 1024).toFixed(2) + ' MB'
 }
+function replace(asset: WorkshopAsset): void {
+  sizes.value = {}
+  emit('replace', asset)
+}
 </script>
 <template>
   <div class="workshop-inline">
@@ -135,14 +139,7 @@ function megabytes(bytes: number): string {
       <p v-for="reference in references.get(asset.id)" :key="reference">{{ reference }}</p>
     </details>
     <div class="workshop-inline">
-      <button
-        :disabled="busy"
-        @click="
-          sizes = {}
-          emit('replace', asset)
-        "
-      >
-        替换素材</button
+      <button :disabled="busy" @click="replace(asset)">替换素材</button
       ><button
         :disabled="busy || !!references.get(asset.id)?.length"
         :title="references.get(asset.id)?.length ? '先移除引用，再删除素材' : '删除未引用素材'"

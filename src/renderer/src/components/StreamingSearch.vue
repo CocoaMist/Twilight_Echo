@@ -32,6 +32,8 @@ const props = defineProps<{
   hasSelection?: boolean
   selectedCount?: number
   selectionAllFavorited?: boolean
+  favoriteLabel?: string
+  isTrackFavorited?: (track: Track) => boolean
   canAddToPlaylist?: boolean
 }>()
 
@@ -100,7 +102,9 @@ function emitPage(first: number): void {
             <div class="selection-actions">
               <button type="button" class="selection-btn" @click="emit('batchFavorite')">
                 <i :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
-                <span>{{ selectionAllFavorited ? '取消收藏' : '加入收藏' }}</span>
+                <span>{{
+                  favoriteLabel ?? (selectionAllFavorited ? '移出应用收藏' : '加入应用收藏')
+                }}</span>
               </button>
               <button
                 v-if="canAddToPlaylist"
@@ -177,11 +181,19 @@ function emitPage(first: number): void {
                   <button
                     class="btn-like"
                     :class="{
-                      liked: isTrackLiked(track.ncmSongId),
+                      liked: isTrackFavorited?.(track) ?? isTrackLiked(track.ncmSongId),
                       loading: likingTracks.has(track.ncmSongId ?? 0)
                     }"
                     :disabled="likingTracks.has(track.ncmSongId ?? 0)"
-                    title="喜欢"
+                    :title="
+                      track.ncmSongId != null
+                        ? isTrackLiked(track.ncmSongId)
+                          ? '在网易云取消喜欢'
+                          : '在网易云喜欢'
+                        : isTrackFavorited?.(track)
+                          ? '移出应用收藏'
+                          : '加入应用收藏'
+                    "
                     @click.stop="emit('likeTrack', track, $event)"
                   >
                     <i

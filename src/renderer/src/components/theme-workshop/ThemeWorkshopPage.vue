@@ -88,6 +88,23 @@ const layerSurface = ref<WorkshopSurface>('app')
 const guide = ref(true)
 const guideStep = ref(0)
 const creating = ref(false)
+function startProjectGuide(): void {
+  guide.value = true
+  creating.value = true
+  guideStep.value = 0
+}
+function closeProjectGuide(): void {
+  guide.value = false
+  creating.value = false
+}
+function selectGroup(name: string): void {
+  group.value = name
+  search.value = ''
+}
+function confirmRemove(): void {
+  deleteDialog.value?.close()
+  void run(remove)
+}
 const trial = ref(false)
 const deleteDialog = ref<HTMLDialogElement>()
 const page = ref<HTMLElement>()
@@ -504,15 +521,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <button @click="guide = !guide">{{ guide ? '收起引导' : '制作引导' }}</button
-      ><button
-        :disabled="busy"
-        @click="
-          guide = true
-          creating = true
-          guideStep = 0
-        "
-      >
-        ＋ 新建</button
+      ><button :disabled="busy" @click="startProjectGuide">＋ 新建</button
       ><button
         :disabled="busy"
         @click="
@@ -546,10 +555,7 @@ onBeforeUnmount(() => {
       :creating="creating"
       @step="step"
       @create="run(() => createTemplate($event))"
-      @close="
-        guide = false
-        creating = false
-      "
+      @close="closeProjectGuide"
     />
     <div class="workshop-project-toolbar">
       <input v-model="projectSearch" aria-label="搜索项目" placeholder="搜索项目…" /><select
@@ -606,10 +612,7 @@ onBeforeUnmount(() => {
           :key="name"
           :class="{ active: group === name }"
           :aria-current="group === name ? 'page' : undefined"
-          @click="
-            group = name
-            search = ''
-          "
+          @click="selectGroup(name)"
         >
           {{ name }}
         </button>
@@ -878,15 +881,7 @@ onBeforeUnmount(() => {
       <p>删除编辑项目及其备份。已经应用的主题仍可使用。</p>
       <div class="workshop-inline">
         <button @click="deleteDialog?.close()">取消</button
-        ><button
-          class="workshop-danger"
-          @click="
-            deleteDialog?.close()
-            run(remove)
-          "
-        >
-          删除编辑项目
-        </button>
+        ><button class="workshop-danger" @click="confirmRemove">删除编辑项目</button>
       </div>
     </dialog>
   </section>

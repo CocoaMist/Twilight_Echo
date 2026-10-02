@@ -19,6 +19,8 @@ import {
 } from '../stores/usePlayerStore'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useMediaProviders } from '../providers'
+import { searchUnifiedCollections } from '@renderer/components/streaming-page/unifiedCollectionSearch.ts'
+import { BUILTIN_NAVIGATION_PAGES } from '@renderer/app/navigationPages.ts'
 import type {
   MediaProviderAlbumSummary,
   MediaProviderArtistSummary,
@@ -40,20 +42,14 @@ import StreamingSearchControls from './streaming-page/StreamingSearchControls.vu
 import StreamingPlaceholder from './streaming-page/StreamingPlaceholder.vue'
 import StreamingSocialStage from './streaming-page/StreamingSocialStage.vue'
 import StreamingLoadingStage from './streaming-page/StreamingLoadingStage.vue'
-import ProviderSidebar from './streaming-page/ProviderSidebar.vue'
-import AggregatePlaylistPage from './aggregate-playlist/AggregatePlaylistPage.vue'
 import CreateAggregatePlaylistDialog from './aggregate-playlist/CreateAggregatePlaylistDialog.vue'
 import NcmPlaylistDialogs from './streaming-page/NcmPlaylistDialogs.vue'
 import ProviderDownloadsPanel from './streaming-page/ProviderDownloadsPanel.vue'
 import StreamingContextMenu from './streaming-page/StreamingContextMenu.vue'
 import {
-  buildStreamingSidebarItems,
-  getFirstVisibleStreamingTab,
   getStreamingDiscoveryProviders,
   getStreamingHomeProviders,
-  getUnifiedLibraryProviders,
-  hasStreamingSidebarEntries,
-  isSidebarItemActiveForProvider,
+  getNavigationLibraryProviders,
   type StreamingSidebarItem,
   type StreamingTabKey
 } from '../utils/streamingNavigation'
@@ -64,10 +60,9 @@ import {
   resolveLinkedStreamingArtist,
   type StreamingArtistNavigationRequest
 } from '../utils/streamingArtistResolution'
-import { getRecentTracks, getTopTracks } from '../stores/useListeningStatsStore'
+import { getTopTracks } from '../stores/useListeningStatsStore'
 import { shuffleArray } from '../utils/playerQueueUtils'
 import { resolveUnifiedRecentTracks } from '../utils/unifiedRecentTracks'
-import { summarizeUnifiedFavorites } from '../utils/unifiedFavoriteTracks'
 import {
   searchLocalStreamingArtists,
   searchLocalStreamingPlaylists,
@@ -75,9 +70,8 @@ import {
 } from './streaming-page/localStreamingSearch'
 import {
   appendUniqueTracks,
+  streamingFavoriteLabel,
   getPersonalizedStreamKey,
-  getSharedLibraryProviderId,
-  getSidebarItemsSignature,
   mergePlaylistSummaries,
   resolveExternalProviderName as externalProviderName,
   resolveStreamingTabIndex as getStreamingTabIndex,
@@ -365,7 +359,7 @@ const activeProviderLabel = computed(() => {
 // Providers eligible for the unified music-library toggle (the dropdown on
 // the profile card). Providers opt in by declaring `ui.unifiedLibrary: true`.
 const libraryProviders = computed(() =>
-  getUnifiedLibraryProviders({
+  getNavigationLibraryProviders({
     ncmAvailable: ncmNavigationAvailable.value,
     providers: providerStore.providers.value
   })
@@ -565,29 +559,35 @@ async function loadMorePersonalizedStream(
   }
 }
 
-type SidebarItem = StreamingSidebarItem
-
-const sidebarItems = computed<SidebarItem[]>(() =>
-  buildStreamingSidebarItems({
-    ncmAvailable: ncmNavigationAvailable.value,
-    providers: providerStore.providers.value
-  })
-)
-const hasOnlineNavigationEntries = computed(() => hasStreamingSidebarEntries(sidebarItems.value))
-const visibleTabs = computed(() =>
-  sidebarItems.value.filter(
-    (item): item is SidebarItem & { tab: StreamingTab } =>
-      item.tab === 'home' ||
-      item.tab === 'discover' ||
-      item.tab === 'library' ||
-      item.tab === 'cloud'
+const hasOnlineNavigationEntries = computed(() => providerStore.providers.value.length > 0)
+const visibleTabs = computed<Array<StreamingSidebarItem & { tab: StreamingTab }>>(() =>
+  BUILTIN_NAVIGATION_PAGES.flatMap((page) =>
+    page.target.kind === 'streaming'
+      ? [
+          {
+            key: page.id,
+            provider: 'shared',
+            label: page.title,
+            icon: page.customIcon ?? 'pi pi-music',
+            tab: page.target.tab
+          }
+        ]
+      : []
   )
 )
+const surfaceAvailable = computed(() => {
+  if (activeTab.value === 'home') return homeProviderOptions.value.length > 0
+  if (activeTab.value === 'discover') return discoveryProviderOptions.value.length > 0
+  if (activeTab.value === 'library') return libraryProviders.value.length > 0
+  if (activeTab.value === 'cloud') return ncmNavigationAvailable.value
+  return true
+})
 const currentView = computed(() => visibleTabs.value.find((item) => item.tab === activeTab.value))
 
 const emit = defineEmits<{
   toggleMenu: []
-  backToLocal: []
+  navigateTab: [tab: 'home' | 'discover' | 'library' | 'cloud' | 'search']
+  recent: [providerId: string]
   login: [providerId?: string | null]
 }>()
 
@@ -622,8 +622,7 @@ const {
   cancelCloudTransfer,
   removeCloudSelectedFile,
   searchSongs,
-  searchPlaylists,
-  searchArtists,
+  searchArtists: searchNcmArtists,
   fetchArtistTopSongs,
   fetchArtistAlbums,
   fetchArtistIntro,
@@ -633,7 +632,6 @@ const {
   fetchUserFollows,
   fetchUserFolloweds,
   fetchPlayRecords,
-  fetchRecentSongs,
   followArtist,
   followUser,
   likeTrack,
@@ -803,7 +801,7 @@ const searchSources = computed<SearchSourceOption[]>(() => {
       id: 'local',
       label: '本地音乐',
       icon: 'pi pi-desktop',
-      available: musicStore.tracks.value.length > 0,
+      available: true,
       supportedTypes: ['songs', 'playlists', 'artists']
     }
   ]
@@ -811,8 +809,11 @@ const searchSources = computed<SearchSourceOption[]>(() => {
     const hasSearch = provider.capabilities.includes('search')
     const hasPlaylist = provider.capabilities.includes('playlist')
     const supportedTypes: SearchSourceOption['supportedTypes'] = []
-    if (hasSearch) supportedTypes.push('songs', 'artists')
-    if (hasPlaylist) supportedTypes.push('playlists')
+    if (hasSearch && provider.supportedMethods.includes('searchSongs')) supportedTypes.push('songs')
+    if (hasSearch && provider.supportedMethods.includes('searchArtists'))
+      supportedTypes.push('artists')
+    if (hasPlaylist && provider.supportedMethods.includes('searchPlaylists'))
+      supportedTypes.push('playlists')
     if (supportedTypes.length === 0) continue
     sources.push({
       id: provider.id,
@@ -845,8 +846,54 @@ const {
 } = useStreamingSearch({
   searchSongs,
   searchUnifiedSongs,
-  searchPlaylists,
-  searchArtists,
+  searchPlaylists: async (query, limit = 30, offset = 0, options) => {
+    const local = await searchLocalPlaylists(query, limit, 0)
+    const result = await searchUnifiedCollections({
+      local: { items: local.playlists, total: local.total },
+      searchLocal: async (pageLimit, pageOffset) => {
+        const result = await searchLocalPlaylists(query, pageLimit, pageOffset)
+        return { items: result.playlists, total: result.total }
+      },
+      limit,
+      offset,
+      providers: providerStore.providers.value.filter(
+        (provider) =>
+          provider.supportedMethods.includes('searchPlaylists') &&
+          provider.health?.available !== false
+      ),
+      search: (id, pageLimit, pageOffset) =>
+        mediaProviders.searchPlaylists(id, query, pageLimit, pageOffset, options),
+      reportError: (message) => {
+        if (!options?.signal?.aborted)
+          pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
+      }
+    })
+    return { playlists: result.items, total: result.total }
+  },
+  searchArtists: async (query, limit = 30, offset = 0, options) => {
+    const local = await searchLocalArtists(query, limit, 0)
+    const result = await searchUnifiedCollections({
+      local: { items: local.artists, total: local.total },
+      searchLocal: async (pageLimit, pageOffset) => {
+        const result = await searchLocalArtists(query, pageLimit, pageOffset)
+        return { items: result.artists, total: result.total }
+      },
+      limit,
+      offset,
+      providers: providerStore.providers.value.filter(
+        (provider) =>
+          provider.supportedMethods.includes('searchArtists') &&
+          provider.health?.available !== false
+      ),
+      search: (id, pageLimit, pageOffset) =>
+        mediaProviders.searchArtists(id, query, pageLimit, pageOffset, options),
+      reportError: (message) => {
+        if (!options?.signal?.aborted)
+          pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
+      }
+    })
+    return { artists: result.items, total: result.total }
+  },
   searchProviderSongs,
   searchProviderPlaylists,
   searchProviderArtists,
@@ -923,7 +970,12 @@ const likingTracks = ref<Set<number>>(new Set())
 async function onLikeTrack(track: Track, event: MouseEvent): Promise<void> {
   event.stopPropagation()
   const songId = track.ncmSongId
-  if (songId == null || likingTracks.value.has(songId)) return
+  if (songId == null) {
+    if (musicStore.isFavoriteTrack(track)) musicStore.removeFavoriteTrack(track)
+    else musicStore.addFavoriteTrack(track)
+    return
+  }
+  if (likingTracks.value.has(songId)) return
   const currentlyLiked = isTrackLiked(songId)
   likingTracks.value = new Set([...likingTracks.value, songId])
   try {
@@ -931,7 +983,7 @@ async function onLikeTrack(track: Track, event: MouseEvent): Promise<void> {
   } catch {
     pushNotice({
       kind: 'error',
-      message: `${currentlyLiked ? '取消收藏' : '收藏'}「${track.title}」失败，请稍后重试`
+      message: `在网易云${currentlyLiked ? '取消喜欢' : '喜欢'}「${track.title}」失败，请稍后重试`
     })
   } finally {
     const next = new Set(likingTracks.value)
@@ -974,24 +1026,18 @@ const activeProviderUnavailable = computed(() => {
   const error = activeProviderError.value
   return /Provider 未启用|provider is disabled|does not implement/i.test(error)
 })
-const showUnifiedSearch = computed(
-  () => hasOnlineNavigationEntries.value && activeProviderAvailable.value && activeLoggedIn.value
-)
+const showUnifiedSearch = computed(() => props.initialTab === 'search')
 const trackUnitLabel = computed(() => (isExternalActive.value ? '项' : '首歌曲'))
 const profileSignature = computed(() => activeProfile.value?.signature?.trim() || '暂无个人简介')
-const unifiedFavoriteTracks = computed(() => musicStore.getPlaylistTracks('我收藏的音乐'))
 const showActiveLikedPanel = computed(
-  () =>
-    !isExternalActive.value ||
-    unifiedFavoriteTracks.value.length > 0 ||
-    Boolean(activeExternalState.value?.likedPlaylist)
+  () => !isExternalActive.value || Boolean(activeExternalState.value?.likedPlaylist)
 )
 
 const headerProviderOptions = computed(() => {
   if (currentDetail.value || isSearching.value) return []
   if (activeTab.value === 'home') return homeProviderOptions.value
   if (activeTab.value === 'discover') return discoveryProviderOptions.value
-  if (activeTab.value === 'library' && !activeLoggedIn.value) return libraryProviderOptions.value
+  if (activeTab.value === 'library') return libraryProviderOptions.value
   return []
 })
 
@@ -1004,13 +1050,16 @@ const isExternalHome = computed(
 )
 
 const headerTitle = computed(() => {
+  if (!currentDetail.value && activeTab.value === 'search')
+    return searchQuery.value.trim() ? '搜索: ' + searchQuery.value.trim() : '搜索'
+  if (!currentDetail.value && activeTab.value === 'library') return '音乐库'
   if (isExternalHome.value) return '主页'
   if (isExternalActive.value && currentDetail.value?.type === 'playlist')
     return currentDetail.value.playlist.name
   if (isExternalActive.value) return activeProviderLabel.value
   if (isSearching.value) return `搜索: ${searchQuery.value.trim()}`
   if (currentDetail.value?.type === 'rec') return currentDetail.value.section.title
-  if (currentDetail.value?.type === 'liked') return '我收藏的歌曲'
+  if (currentDetail.value?.type === 'liked') return '我喜欢'
   if (currentDetail.value?.type === 'recent') return '最近播放'
   if (currentDetail.value?.type === 'ranking') return '听歌排行'
   if (currentDetail.value?.type === 'playlist') return currentDetail.value.playlist.name
@@ -1041,18 +1090,12 @@ const likedSummary = computed(() => {
       coverSource: state?.likedPlaylist?.coverSource ?? null,
       trackCount: state?.likedPlaylist?.trackCount ?? 0
     }
-    // Prefer the provider liked playlist; only fall back to local unified
-    // favorites when the external source has no liked playlist of its own.
-    if (state?.likedPlaylist) return providerSummary
-    return summarizeUnifiedFavorites({
-      unifiedTracks: unifiedFavoriteTracks.value,
-      providerSummary
-    })
+    return providerSummary
   }
   // NCM cloud likes are authoritative on the streaming page. Local default
   // favorites ("我收藏的音乐") must not replace or shrink this summary.
   return {
-    name: '我收藏的歌曲',
+    name: '我喜欢',
     cover: likedPlaylist.value?.cover ?? null,
     coverSource: likedPlaylist.value?.coverSource ?? null,
     trackCount: likedCount.value ?? likedPlaylist.value?.trackCount ?? 0
@@ -1246,6 +1289,10 @@ const detailFollowButtonIcon = computed(() =>
 )
 
 function selectTab(key: StreamingTab): void {
+  if (props.initialTab && key !== props.initialTab && key !== 'recent') {
+    emit('navigateTab', key)
+    return
+  }
   if (activeTab.value !== key) {
     const oldIndex = getStreamingTabIndex(visibleTabs.value, activeTab.value)
     const newIndex = getStreamingTabIndex(visibleTabs.value, key)
@@ -1269,77 +1316,6 @@ function selectProvider(provider: string, persist = true): void {
   // fallbacks never write back, so the choice survives restarts and plugin toggles.
   preferredProvider.value = provider
   void settingsStore.updateSettings({ streamingActiveProvider: provider })
-}
-
-function isSidebarItemActive(item: SidebarItem): boolean {
-  if (showAggregatePanel.value) return false
-  if (item.tab === 'library') {
-    return (
-      activeTab.value === 'library' &&
-      libraryProviders.value.some((provider) => provider.id === activeProvider.value)
-    )
-  }
-  return isSidebarItemActiveForProvider({
-    itemProvider: item.provider,
-    itemKey: item.key,
-    activeProvider: activeProvider.value,
-    activeTab: activeTab.value
-  })
-}
-
-// 聚合歌单在流媒体壳里就地渲染，刻意不走 activeTab —— 它不是某个 provider 的
-// 在线导航条目，掺进去会连带改动 buildStreamingSidebarItems 的语义和加载流程。
-const showAggregatePanel = ref(false)
-
-function selectAggregatePanel(): void {
-  showAggregatePanel.value = true
-}
-
-function selectSidebarItem(item: SidebarItem, options: { persistProvider?: boolean } = {}): void {
-  showAggregatePanel.value = false
-  const persistProvider = options.persistProvider !== false
-  if (item.tab === 'recent') {
-    selectTab('recent')
-    void openRecent()
-    return
-  }
-  if (item.tab === 'library') {
-    const provider = getSharedLibraryProviderId(
-      activeProvider.value,
-      libraryProviders.value.map((libraryProvider) => libraryProvider.id),
-      NCM_PROVIDER_ID
-    )
-    if (activeProvider.value !== provider) {
-      selectProvider(provider, persistProvider)
-    }
-    selectTab('library')
-    return
-  }
-  if (item.provider === 'shared' && item.tab) {
-    const providers =
-      item.tab === 'home'
-        ? homeProviderOptions.value
-        : item.tab === 'discover'
-          ? discoveryProviderOptions.value
-          : []
-    if (!providers.some((provider) => provider.id === activeProvider.value) && providers[0]) {
-      selectProvider(providers[0].id, false)
-    }
-    selectTab(item.tab)
-    return
-  }
-  if (item.tab === 'cloud') {
-    clearSearch()
-  }
-  if (item.provider !== NCM_PROVIDER_ID) {
-    selectProvider(item.provider, persistProvider)
-    selectTab(item.tab ?? 'library')
-    return
-  }
-  if (activeProvider.value !== NCM_PROVIDER_ID) {
-    selectProvider(NCM_PROVIDER_ID, persistProvider)
-  }
-  if (item.tab) selectTab(item.tab)
 }
 
 function clearDetailState(): void {
@@ -1458,35 +1434,22 @@ function resetLikedTracksPaging(): void {
 }
 
 function ensureVisibleSidebarSelection(): void {
-  if (!hasOnlineNavigationEntries.value) {
-    fallbackProvider.value = null
-    resetDetail()
-    clearSearch()
+  if (props.initialTab === 'search' || props.active === false) return
+  if (activeTab.value === 'cloud') {
+    if (ncmNavigationAvailable.value && activeProvider.value !== NCM_PROVIDER_ID)
+      selectProvider(NCM_PROVIDER_ID, false)
     return
   }
-  const surfaceProviders =
+  const options =
     activeTab.value === 'home'
       ? homeProviderOptions.value
       : activeTab.value === 'discover'
         ? discoveryProviderOptions.value
-        : []
-  if (
-    surfaceProviders.length > 0 &&
-    !surfaceProviders.some((provider) => provider.id === activeProvider.value)
-  ) {
-    selectProvider(surfaceProviders[0].id, false)
-    return
-  }
-  if (sidebarItems.value.some((item) => isSidebarItemActive(item))) {
-    return
-  }
-  const firstTab = getFirstVisibleStreamingTab(sidebarItems.value)
-  const nextItem = firstTab
-    ? sidebarItems.value.find((item) => item.tab === firstTab)
-    : sidebarItems.value[0]
-  if (nextItem) {
-    selectSidebarItem(nextItem, { persistProvider: false })
-  }
+        : activeTab.value === 'library'
+          ? libraryProviders.value
+          : []
+  if (options.length && !options.some((provider) => provider.id === activeProvider.value))
+    selectProvider(options[0].id, false)
 }
 
 function beginDetailLoad(): number {
@@ -1511,7 +1474,7 @@ function isActiveDetailLoad(token: number): boolean {
 async function findArtistByUserName(user: NcmUserSummary): Promise<NcmArtistSummary | null> {
   const keyword = user.name.trim()
   if (!keyword) return null
-  const { artists } = await searchArtists(keyword, 8, 0)
+  const { artists } = await searchNcmArtists(keyword, 8, 0)
   return findBestStreamingArtistMatch(keyword, artists)
 }
 
@@ -1605,12 +1568,10 @@ async function openLikedTracks(force = false): Promise<void> {
       await openPlaylist(liked, force)
       return
     }
-    // No provider liked playlist: fall back to local unified favorites only.
-    const unifiedTracks = unifiedFavoriteTracks.value
     beginDetailTransition()
     pushDetail({ type: 'liked' })
-    detailTracks.value = unifiedTracks
-    likedCount.value = unifiedTracks.length
+    detailTracks.value = []
+    likedCount.value = 0
     detailError.value = ''
     detailLoading.value = false
     return
@@ -1997,43 +1958,8 @@ async function openUserPlaylists(user: NcmUserSummary): Promise<void> {
   }
 }
 
-async function openRecent(): Promise<void> {
-  beginDetailTransition()
-  pushDetail({ type: 'recent' })
-  const token = beginDetailLoad()
-
-  try {
-    const recentStats = getRecentTracks()
-    const providerId = activeProvider.value
-    const filteredStats = recentStats.filter((stat) =>
-      stat.sourceIds?.some((sid) => sid.source === providerId)
-    )
-    let tracks = resolveUnifiedRecentTracks({
-      recentStats: filteredStats,
-      localTracks: musicStore.tracks.value
-    })
-    if (providerId === NCM_PROVIDER_ID) {
-      const serverRecent = await fetchRecentSongs().catch(() => [] as Track[])
-      const seenIds = new Set(tracks.map((t) => t.id))
-      for (const t of serverRecent) {
-        if (!seenIds.has(t.id)) {
-          tracks.push(t)
-          seenIds.add(t.id)
-        }
-      }
-    }
-
-    if (!isActiveDetailLoad(token)) return
-    detailTracks.value = tracks
-  } catch (error) {
-    if (!isActiveDetailLoad(token)) return
-    detailError.value = friendlyStreamingError(error, '加载最近播放失败')
-    detailTracks.value = []
-  } finally {
-    if (isActiveDetailLoad(token)) {
-      detailLoading.value = false
-    }
-  }
+function openRecent(): void {
+  emit('recent', activeProvider.value)
 }
 
 async function openRanking(): Promise<void> {
@@ -2180,6 +2106,9 @@ const selectionAllFavorited = computed(() => {
   const selected = getSelectedTracks()
   return selected.length > 0 && selected.every(isStreamingTrackFavorited)
 })
+const selectionFavoriteLabel = computed(() =>
+  streamingFavoriteLabel(getSelectedTracks(), selectionAllFavorited.value)
+)
 
 const showStreamingContextMenu = ref(false)
 const streamingContextMenuX = ref(0)
@@ -2203,6 +2132,9 @@ const streamingContextAllFavorited = computed(() => {
   const tracks = streamingContextActionTracks.value
   return tracks.length > 0 && tracks.every(isStreamingTrackFavorited)
 })
+const contextFavoriteLabel = computed(() =>
+  streamingFavoriteLabel(streamingContextActionTracks.value, streamingContextAllFavorited.value)
+)
 
 function closeStreamingContextMenu(): void {
   showStreamingContextMenu.value = false
@@ -2672,7 +2604,7 @@ function onSearchTrackClickWithSelect(track: Track, event: MouseEvent): void {
 async function favoriteStreamingTracks(tracks: Track[]): Promise<void> {
   if (tracks.length === 0) return
   const allLiked = tracks.every(isStreamingTrackFavorited)
-  const actionLabel = allLiked ? '取消收藏' : '收藏'
+  const actionLabel = streamingFavoriteLabel(tracks, allLiked)
   let succeeded = 0
   let failed = 0
   // The local favorites playlist can decline a write when an equivalent entry is
@@ -3059,6 +2991,7 @@ async function retryCurrentView(): Promise<void> {
     await refreshCloudSongs()
     return
   }
+  if (isExternalActive.value) await refreshExternalProviderState(activeProvider.value)
   await ensureLibraryLoaded(true)
 }
 
@@ -3093,17 +3026,22 @@ watch(isSearching, (searching, wasSearching) => {
 watch(
   () => settingsStore.settings.value.streamingActiveProvider,
   (pref) => {
+    if (props.active === false) return
     if (typeof pref === 'string' && pref && pref !== preferredProvider.value) {
       preferredProvider.value = pref
     }
   }
 )
 
+let lastArtistNavigationKey = 0
 watch(
   () => props.artistNavigationRequest?.key,
   () => {
     const request = props.artistNavigationRequest
-    if (request) void openRequestedArtist(request)
+    if (request && request.key !== lastArtistNavigationKey) {
+      lastArtistNavigationKey = request.key
+      void openRequestedArtist(request)
+    }
   },
   { immediate: true }
 )
@@ -3111,7 +3049,8 @@ watch(
 watch(
   () =>
     [
-      getSidebarItemsSignature(sidebarItems.value),
+      libraryProviders.value.map((provider) => provider.id).join(','),
+      ncmNavigationAvailable.value,
       activeTab.value,
       homeProviderOptions.value.map((provider) => provider.id).join(','),
       discoveryProviderOptions.value.map((provider) => provider.id).join(',')
@@ -3127,7 +3066,7 @@ watch(
 // first provider that can back the current streaming surface, so we only act
 // on real changes.
 watch(activeProvider, async (provider, oldProvider) => {
-  if (provider === oldProvider) return
+  if (provider === oldProvider || props.active === false) return
   resetDetail()
   clearSearch()
   recommendationRequestId += 1
@@ -3173,6 +3112,7 @@ watch(activeProvider, async (provider, oldProvider) => {
 })
 
 watch(activeTab, async (tab) => {
+  if (props.active === false) return
   if (tab === 'home') {
     if (!providerSupportsHome(activeProvider.value)) {
       const fallback = homeProviderOptions.value[0]?.id
@@ -3211,6 +3151,7 @@ watch(activeTab, async (tab) => {
 })
 
 watch(activeLoggedIn, async () => {
+  if (props.active === false) return
   if (!isExternalActive.value) return
   recommendationRequestId += 1
   recommendationProviderId.value = ''
@@ -3237,7 +3178,7 @@ watch(
       }
       return
     }
-    if (!ncmNavigationAvailable.value) return
+    if (!ncmNavigationAvailable.value || props.active === false) return
     if (activeProvider.value === NCM_PROVIDER_ID && activeTab.value === 'home') {
       await loadRecommendations()
     }
@@ -3290,34 +3231,13 @@ onMounted(async () => {
   await providerStore.syncProviders().catch(() => undefined)
   // syncProviders may have resolved the preferred external provider, in which
   // case the activeProvider watcher above already handles the initial load.
-  await refreshStreamingSurface()
+  if (props.active !== false) await refreshStreamingSurface()
 })
 </script>
 
 <template>
-  <div class="streaming-page" :class="{ 'has-player': hasPlayer }">
-    <ProviderSidebar
-      :menu-open="menuOpen"
-      :items="sidebarItems"
-      :is-active="isSidebarItemActive"
-      :aggregate-active="showAggregatePanel"
-      @select="selectSidebarItem"
-      @select-aggregate="selectAggregatePanel"
-      @back-to-local="emit('backToLocal')"
-    />
-
-    <!-- 聚合歌单就地占据内容区。保留 streaming-content 类名，侧边栏那条相邻兄弟
-         规则（.streaming-sidebar.open + .streaming-content）才能继续给出偏移。 -->
-    <div v-if="showAggregatePanel" class="streaming-content">
-      <AggregatePlaylistPage :has-player="hasPlayer" surface="streaming" :active="active" />
-    </div>
-
-    <div
-      v-show="!showAggregatePanel"
-      ref="streamingContentRef"
-      class="streaming-content"
-      @scroll="onStreamingContentScroll"
-    >
+  <div class="streaming-page" :class="{ 'has-player': hasPlayer, 'menu-open': menuOpen }">
+    <div ref="streamingContentRef" class="streaming-content" @scroll="onStreamingContentScroll">
       <StreamingContentHeader
         :is-detail="!!currentDetail"
         :is-searching="isSearching && !currentDetail"
@@ -3340,7 +3260,7 @@ onMounted(async () => {
 
       <!-- Search Type Tabs + Source Selector -->
       <StreamingSearchControls
-        v-if="showUnifiedSearch && isSearching && !currentDetail"
+        v-if="showUnifiedSearch && !currentDetail"
         :search-type="searchType"
         :available-search-types="availableSearchTypes"
         :search-sources="searchSources"
@@ -3355,12 +3275,19 @@ onMounted(async () => {
         @enter="restoreStreamingScrollPosition"
       >
         <div
-          v-if="showUnifiedSearch && isSearching && !currentDetail"
+          v-if="showUnifiedSearch && !currentDetail"
           key="search-results"
           class="streaming-content-body stream-view-panel"
           :class="{ 'has-search-tabs': isSearching }"
         >
+          <StreamingPlaceholder
+            v-if="!isSearching"
+            title="搜索歌曲、歌单和歌手"
+            hint="输入关键词，可搜索全部来源、本地或指定平台。"
+            icon="pi pi-search"
+          />
           <StreamingSearch
+            v-else
             :search-type="searchType"
             :search-results="searchResults"
             :search-playlists-results="searchPlaylistsResults"
@@ -3378,6 +3305,8 @@ onMounted(async () => {
             :has-selection="hasSelection"
             :selected-count="selectedCount"
             :selection-all-favorited="selectionAllFavorited"
+            :favorite-label="selectionFavoriteLabel"
+            :is-track-favorited="isStreamingTrackFavorited"
             :can-add-to-playlist="canManageNcmPlaylists"
             @search-track-click="onSearchTrackClickWithSelect"
             @like-track="onLikeTrack"
@@ -3394,7 +3323,7 @@ onMounted(async () => {
         </div>
         <div v-else :key="streamingViewKey" class="streaming-content-body stream-view-panel">
           <StreamingPlaceholder
-            v-if="!hasOnlineNavigationEntries && !currentDetail"
+            v-if="(!hasOnlineNavigationEntries || !surfaceAvailable) && !currentDetail"
             title="未启用可用的在线音源"
             hint="请在设置的插件页启用网易云音乐或其它音源插件。"
             icon="pi pi-plug"
@@ -3473,6 +3402,16 @@ onMounted(async () => {
           />
 
           <StreamingPlaceholder
+            v-else-if="activeTab === 'library' && !currentDetail && activeLibraryError"
+            title="加载失败"
+            :hint="activeLibraryError"
+            icon="pi pi-exclamation-triangle"
+            danger
+            action-label="重试"
+            @action="retryCurrentView"
+          />
+
+          <StreamingPlaceholder
             v-else-if="!activeLoggedIn && !currentDetail"
             :title="isExternalActive ? `请先登录 ${activeProviderLabel}` : '请先登录网易云音乐'"
             :hint="
@@ -3491,16 +3430,6 @@ onMounted(async () => {
           <StreamingLoadingStage
             v-else-if="rootLoading && !currentDetail"
             :provider-label="activeProviderLabel"
-          />
-
-          <StreamingPlaceholder
-            v-else-if="activeTab === 'library' && !currentDetail && activeLibraryError"
-            title="加载失败"
-            :hint="activeLibraryError"
-            icon="pi pi-exclamation-triangle"
-            danger
-            action-label="重试"
-            @action="retryCurrentView"
           />
 
           <div v-else-if="currentDetail" class="detail-view">
@@ -3547,6 +3476,7 @@ onMounted(async () => {
                 :has-selection="hasSelection"
                 :selected-count="selectedCount"
                 :selection-all-favorited="selectionAllFavorited"
+                :favorite-label="selectionFavoriteLabel"
                 :can-add-to-playlist="canManageNcmPlaylists"
                 :can-remove-from-playlist="canMutateCurrentNcmPlaylist"
                 :is-selected="isSelected"
@@ -3687,6 +3617,7 @@ onMounted(async () => {
       :x="streamingContextMenuX"
       :y="streamingContextMenuY"
       :all-favorited="streamingContextAllFavorited"
+      :favorite-label="contextFavoriteLabel"
       :action-label="streamingContextActionLabel"
       :can-like="contextMenuCanLike"
       :single-liked="contextMenuSingleLiked"

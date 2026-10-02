@@ -26,6 +26,8 @@ function installDom(options: {
   playerBarMissing?: boolean
   /** Untransformed left edge, i.e. how far a preset floats the menu inward. */
   sideMenuInset?: number
+  viewportWidth?: number
+  shellLayout?: 'classic' | 'custom'
 }): void {
   const playerBarRect = options.playerBarRect ?? {
     top: 700,
@@ -59,9 +61,10 @@ function installDom(options: {
     getBoundingClientRect: () => sideMenuRect
   }
   const g = globalThis as Record<string, unknown>
-  g.window = { innerHeight: 800 }
+  g.window = { innerHeight: 800, innerWidth: options.viewportWidth ?? 1200 }
   g.document = {
     hidden: false,
+    documentElement: { dataset: { teShellLayout: options.shellLayout ?? 'classic' } },
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: (selector: string) => {
@@ -102,6 +105,14 @@ test('sidebar clearance drops to zero once the mini bar is tucked away', () => {
 
 test('the open local menu keeps its full height while the bar moves beside it', () => {
   assert.equal(measure({ playerBarMenuOpen: true }), 0)
+})
+
+test('overlay navigation at 760px reserves room above the full-width playbar', () => {
+  assert.equal(measure({ playerBarMenuOpen: true, viewportWidth: 760 }), 110)
+})
+
+test('temporary navigation in a wide custom shell clears its grid-positioned playbar', () => {
+  assert.equal(measure({ playerBarMenuOpen: true, shellLayout: 'custom' }), 110)
 })
 
 /**
@@ -176,6 +187,7 @@ test('sidebar clearance settles instead of oscillating once the menu is lifted',
   g.window = { innerHeight: 800 }
   g.document = {
     hidden: false,
+    documentElement: { dataset: { teShellLayout: 'classic' } },
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: (selector: string) => {

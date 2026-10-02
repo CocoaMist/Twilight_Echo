@@ -2,6 +2,24 @@
 
 ## Search Requests
 
+The independent Search page uses the existing streaming search controller for songs, playlists
+and artists. Its source choices are All, Local, and enabled providers that implement the selected
+search method. All-source songs retain logical-track grouping; collections retain provider IDs.
+Partial collection failures keep successful sources visible and name the failed providers. Each
+collection page shares one global offset, with local results followed by providers in registry
+order; only the requested window is rendered, without fetching full result sets. Each
+streaming destination retains its own source, filters, detail stack and scroll position for the
+app session. Local list queries and existing view preferences are scoped by page/detail identity.
+
+The title bar and Ctrl+K remain available. Page actions in the command palette come from the same
+registry as the sidebar, including pages hidden by the user's sidebar preferences. Opening a
+hidden destination does not change those preferences.
+
+The sidebar groups provider destinations under Streaming Music and local songs, albums, artists,
+application playlists, folders and genres under Music Library. Provider collections are labelled
+My Music Library within the streaming branch; application favourites remain in Playlists.
+Expanding or collapsing a branch does not change the active destination, search state or playback.
+
 Renderer search state is committed only by the latest monotonically increasing request id.
 Each Streaming search snapshots `query`, `type`, `source`, and `offset` before calling a
 provider. Unified search snapshots its query and pagination inputs. A later response from an

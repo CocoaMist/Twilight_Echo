@@ -302,7 +302,7 @@ test('phase three icon, navigation, and library modes use static host-owned pres
   assert.match(rendererIconFonts, /@phosphor-icons\/web\/fill/)
   assert.match(themeIcon, /THEME_ICON_SLOT_REGISTRY/)
   assert.match(themeIcon, /data-theme-icon-slot/)
-  assert.match(sideMenu, /icon-slot="navigation\.streaming"/)
+  assert.match(sideMenu, /:icon-slot="page\.icon"/)
   assert.match(sideMenu, /data-te-navigation-style='rail'/)
   assert.match(sideMenu, /--te-menu-width: 72px !important/)
   assert.match(obsidianGlassLayout, /data-te-navigation-style='rail'/)

@@ -32,6 +32,8 @@ const props = withDefaults(
      */
     active?: boolean
     initialPlaylistId?: string | null
+    navigatePlaylist?: (id: string) => void
+    returnFromDetail?: () => void
   }>(),
   { surface: 'local', active: true }
 )
@@ -170,13 +172,15 @@ function playlistSourceSummary(playlistId: string): string {
 
 // ─── 网格操作 ──────────────────────────────────────────────────────────────
 function openPlaylist(playlistId: string): void {
-  activePlaylistId.value = playlistId
+  if (props.navigatePlaylist) props.navigatePlaylist(playlistId)
+  else activePlaylistId.value = playlistId
   searchQuery.value = ''
   pendingDeleteId.value = null
 }
 
 function backToGrid(): void {
-  activePlaylistId.value = null
+  if (props.returnFromDetail) props.returnFromDetail()
+  else activePlaylistId.value = null
   openVariantMenuFor.value = null
 }
 

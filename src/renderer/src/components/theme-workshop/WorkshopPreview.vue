@@ -233,7 +233,7 @@ onBeforeUnmount(() => {
           />
         </div>
         <div class="app-shell-navigation" inert>
-          <SideMenu :open="true" active-key="dashboard" />
+          <SideMenu :open="true" active-key="local-home" />
         </div>
         <div class="app-shell-content">
           <main

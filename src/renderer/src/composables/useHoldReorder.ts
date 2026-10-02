@@ -1,6 +1,6 @@
 import { onBeforeUnmount, ref } from 'vue'
 
-export function useHoldReorder(move: (from: string, to: string) => void) {
+export function useHoldReorder(move: (from: string, to: string) => void, delay = 450) {
   const active = ref<string | null>(null)
   const over = ref<string | null>(null)
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -87,13 +87,15 @@ export function useHoldReorder(move: (from: string, to: string) => void) {
     while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
       scroller = scroller.parentElement
     }
-    timer = setTimeout(() => {
+    const activate = (): void => {
       active.value = id
       over.value = id
       suppressClick = true
       window.getSelection()?.removeAllRanges()
       frame = requestAnimationFrame(scroll)
-    }, 450)
+    }
+    if (delay === 0) activate()
+    else timer = setTimeout(activate, delay)
     document.addEventListener('pointermove', pointerMove, { passive: false })
     document.addEventListener('pointerup', pointerUp)
     document.addEventListener('pointercancel', cancel)

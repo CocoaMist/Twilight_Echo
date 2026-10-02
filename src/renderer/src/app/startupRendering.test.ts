@@ -20,3 +20,11 @@ test('startup begins the aggregate snapshot before loading App', () => {
   assert.match(main, /import\('\.\/App\.vue'\)/)
   assert.match(main, /if \(isMiniPlayer\) await bootstrapThemeRuntime\(\)/)
 })
+
+test('the shared navigation loads outside the startup App chunk', () => {
+  assert.match(
+    app,
+    /const SideMenu = defineAsyncComponent\(\(\) => import\('@renderer\/components\/SideMenu\.vue'\)\)/
+  )
+  assert.doesNotMatch(app, /import SideMenu from/)
+})

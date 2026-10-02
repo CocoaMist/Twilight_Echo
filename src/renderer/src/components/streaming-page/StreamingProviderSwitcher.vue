@@ -122,6 +122,7 @@ onBeforeUnmount(() => {
       @click="toggleProviderMenu"
     >
       <i :class="activeOption.icon" aria-hidden="true"></i>
+      <span class="provider-switcher-label">{{ activeOption.name }}</span>
     </button>
 
     <div
@@ -263,5 +264,21 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   color: var(--te-primary-500);
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+}
+</style>
+
+<style scoped>
+.provider-switcher-trigger {
+  display: flex;
+  gap: 8px;
+  width: auto;
+  max-width: 220px;
+  padding: 0 12px;
+}
+.provider-switcher-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--te-font-size-body, 14px);
 }
 </style>
