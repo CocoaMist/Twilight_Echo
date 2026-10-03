@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import TaskCenter from './TaskCenter.vue'
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { defineAsyncComponent, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useBackStack } from '../app/useBackStack'
 import { useNcmStore } from '../stores/useNcmStore'
 import TitleBarIcon from './icons/TitleBarIcon.vue'
 import { useWindowChrome } from '../app/useWindowChrome'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+
+const TaskCenter = defineAsyncComponent(() => import('./TaskCenter.vue'))
 
 const props = withDefaults(
   defineProps<{
