@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { registerPersonalBackupIpc } from './personalBackupIpc.ts'
 import { sleepTimerService } from '../sleepTimer.ts'
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
 import { registerWindowIpc } from './windowIpc.ts'
@@ -15,6 +16,7 @@ import { registerPersistenceIpc } from './persistenceIpc.ts'
 import { registerSleepTimerIpc } from './sleepTimerIpc.ts'
 
 export function setupDataIpc(): void {
+  registerPersonalBackupIpc(ipcMain)
   registerWindowIpc(ipcMain)
   registerShellIpc(ipcMain)
   registerDiscordIpc(ipcMain)

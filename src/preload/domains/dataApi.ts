@@ -22,6 +22,20 @@ function isPlaybackSession(value: unknown): value is PlaybackSession {
 }
 
 export const dataApi = {
+  chooseRestoreFolder: (): Promise<string | null> => ipcRenderer.invoke('data:chooseRestoreFolder'),
+  exportPersonalBackup: (
+    data: import('../../shared/personalBackup.ts').PersonalData
+  ): Promise<boolean> => ipcRenderer.invoke('data:exportPersonalBackup', data),
+  previewPersonalBackup: (
+    data: import('../../shared/personalBackup.ts').PersonalData
+  ): Promise<import('../../shared/personalBackup.ts').PersonalBackupPreview | null> =>
+    ipcRenderer.invoke('data:previewPersonalBackup', data),
+  stagePersonalRestore: (
+    options: import('../../shared/personalBackup.ts').PersonalRestoreOptions
+  ): Promise<void> => ipcRenderer.invoke('data:stagePersonalRestore', options),
+  readRendererRestore: (): Promise<unknown> => ipcRenderer.invoke('data:readRendererRestore'),
+  acknowledgeRendererRestore: (id: string): Promise<void> =>
+    ipcRenderer.invoke('data:acknowledgeRendererRestore', id),
   loadQueueWorkspace: (): Promise<VersionedDataEnvelope<QueueWorkspaceDocument> | null> =>
     ipcRenderer.invoke('data:loadQueueWorkspace'),
   saveQueueWorkspace: (

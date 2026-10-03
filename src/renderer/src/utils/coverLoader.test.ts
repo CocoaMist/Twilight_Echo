@@ -5,6 +5,69 @@ const { clearCoverCache, clearRemoteCoverGrantCache, resolveCover } = (await imp
   new URL('./coverLoader.ts', import.meta.url).href
 )) as typeof import('./coverLoader')
 
+test('local cover cache evicts by byte budget and preserves recently read art', async () => {
+  clearCoverCache()
+  const globalRecord = globalThis as Record<string, unknown>
+  const previous = globalRecord.window
+  const calls = new Map<string, number>()
+  // Each entry uses just over 6 MiB under the conservative UTF-16 budget.
+  const art = 'data:image/jpeg;base64,' + 'a'.repeat(3 * 1024 * 1024)
+  globalRecord.window = {
+    api: {
+      data: {
+        getCover: async (handle: string) => {
+          calls.set(handle, (calls.get(handle) ?? 0) + 1)
+          return art
+        }
+      }
+    }
+  }
+  try {
+    await resolveCover('cover://a.jpg')
+    await resolveCover('cover://b.jpg')
+    await resolveCover('cover://a.jpg')
+    await resolveCover('cover://c.jpg')
+    await resolveCover('cover://a.jpg')
+    assert.equal(calls.get('cover://a.jpg'), 1)
+    await resolveCover('cover://b.jpg')
+    assert.equal(calls.get('cover://b.jpg'), 2)
+    clearCoverCache()
+    await resolveCover('cover://a.jpg')
+    await resolveCover('cover://b.jpg')
+    await resolveCover('cover://a.jpg')
+    assert.equal(calls.get('cover://a.jpg'), 2)
+  } finally {
+    globalRecord.window = previous
+    clearCoverCache()
+  }
+})
+
+test('oversized art is displayed without retaining it in the local cache', async () => {
+  clearCoverCache()
+  const globalRecord = globalThis as Record<string, unknown>
+  const previous = globalRecord.window
+  const art = 'data:image/jpeg;base64,' + 'a'.repeat(8 * 1024 * 1024)
+  let calls = 0
+  globalRecord.window = {
+    api: {
+      data: {
+        getCover: async () => {
+          calls += 1
+          return art
+        }
+      }
+    }
+  }
+  try {
+    assert.equal(await resolveCover('cover://large.jpg'), art)
+    assert.equal(await resolveCover('cover://large.jpg'), art)
+    assert.equal(calls, 2)
+  } finally {
+    globalRecord.window = previous
+    clearCoverCache()
+  }
+})
+
 test('resolveCover materializes cover:// handles via getCover IPC', async () => {
   clearCoverCache()
   const globalRecord = globalThis as Record<string, unknown>

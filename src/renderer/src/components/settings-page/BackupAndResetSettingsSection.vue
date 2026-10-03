@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PersonalBackupSection from './PersonalBackupSection.vue'
 type SettingsGroup = 'appearance' | 'playback' | 'desktopLyrics'
 
 const emit = defineEmits<{
@@ -28,6 +29,8 @@ const emit = defineEmits<{
           </button>
         </div>
       </div>
+      <hr />
+      <PersonalBackupSection />
       <hr />
       <div class="setting-item top-align">
         <div class="setting-copy">

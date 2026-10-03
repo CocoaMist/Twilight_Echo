@@ -54,6 +54,16 @@ document.addEventListener(
 )
 
 async function mountApp(): Promise<void> {
+  if (!isSatelliteWindow) {
+    try {
+      await (await import('./app/personalRestore')).applyPersonalRendererRestore()
+    } catch (error) {
+      const message = document.createElement('p')
+      message.textContent = `个人数据恢复未完成，请关闭应用后重试。${error instanceof Error ? error.message : String(error)}`
+      document.getElementById('app')?.append(message)
+      return
+    }
+  }
   await import('./assets/icon-fonts')
   const startupSnapshot = isSatelliteWindow ? null : beginStartupSnapshot()
   const rootComponent = isMiniPlayer

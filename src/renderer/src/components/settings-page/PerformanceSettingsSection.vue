@@ -66,16 +66,18 @@ function toggleCompactVisualizer(): void {
           <strong>硬件加速</strong>
           <span>使用 GPU 加速界面渲染、动画与模糊效果。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{
             active: settings.hardwareAcceleration,
             inactive: !settings.hardwareAcceleration
           }"
           role="switch"
+          aria-label="硬件加速"
           :aria-checked="settings.hardwareAcceleration"
           @click="toggleSetting('hardwareAcceleration')"
-        ></span>
+        ></button>
       </div>
       <div class="setting-item">
         <div class="setting-copy">
@@ -86,7 +88,8 @@ function toggleCompactVisualizer(): void {
             未开启系统透明效果时暂不支持）。更改后需重启。</span
           >
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{
             active: settings.windowTransparency,
@@ -94,10 +97,12 @@ function toggleCompactVisualizer(): void {
             disabled: !transparencySupported
           }"
           role="switch"
+          aria-label="窗口透明"
+          :disabled="!transparencySupported"
           :aria-checked="settings.windowTransparency"
           :aria-disabled="!transparencySupported"
           @click="toggleSetting('windowTransparency')"
-        ></span>
+        ></button>
       </div>
       <div v-if="transparencyUnsupported" class="settings-inline-warning" role="status">
         当前系统不支持透明窗口（Linux Wayland，或 Windows

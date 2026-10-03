@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import DownloadResultActions from './DownloadResultActions.vue'
+import { useEscapeToClose, useFocusTrap } from '../../app/useDismissLayer.ts'
 import type { ProviderDownloadTaskSnapshot } from '../../../../shared/providerDownloads.ts'
 import { downloadStatusLabel, filterActiveDownloadTasks } from './streamingDownloads.ts'
 
@@ -16,6 +18,12 @@ const emit = defineEmits<{
 }>()
 
 const activeDownloadTasks = computed(() => filterActiveDownloadTasks(props.tasks))
+const dialogRef = ref<HTMLElement | null>(null)
+useFocusTrap(dialogRef, () => props.show)
+useEscapeToClose(
+  () => props.show,
+  () => emit('close')
+)
 
 function isRunning(task: ProviderDownloadTaskSnapshot): boolean {
   return task.status === 'queued' || task.status === 'preparing' || task.status === 'downloading'
@@ -30,7 +38,14 @@ function formatFileSize(bytes: number): string {
   <Teleport to="body">
     <Transition name="dialog-fade">
       <div v-if="show" class="provider-download-panel-overlay" @click.self="emit('close')">
-        <div class="provider-download-panel" role="dialog" aria-modal="true" aria-label="下载管理">
+        <div
+          ref="dialogRef"
+          class="provider-download-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label="下载管理"
+          tabindex="-1"
+        >
           <div class="provider-download-panel-header">
             <h3>下载管理</h3>
             <button
@@ -98,6 +113,7 @@ function formatFileSize(bytes: number): string {
                 >
                   {{ task.targetPath }}
                 </small>
+                <DownloadResultActions v-if="task.status === 'completed'" :task="task" />
               </div>
               <div class="provider-download-item-actions">
                 <button
@@ -225,6 +241,7 @@ function formatFileSize(bytes: number): string {
 }
 
 .provider-download-item-info {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 3px;

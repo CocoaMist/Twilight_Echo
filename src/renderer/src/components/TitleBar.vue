@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import TaskCenter from './TaskCenter.vue'
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useBackStack } from '../app/useBackStack'
 import { useNcmStore } from '../stores/useNcmStore'
@@ -31,6 +32,7 @@ defineEmits<{
   settings: []
   plugins: []
   commands: []
+  library: []
   notifications: [event: MouseEvent]
 }>()
 
@@ -183,6 +185,7 @@ function close(): void {
       </button>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
+      <TaskCenter v-if="!preview" @library="$emit('library')" />
       <button
         v-if="!preview"
         type="button"

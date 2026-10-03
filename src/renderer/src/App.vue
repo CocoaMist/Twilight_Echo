@@ -965,6 +965,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @settings="toggleSettingsPage"
         @plugins="togglePluginPage"
         @commands="commandPalette.open"
+        @library="selectSidebarPage({ kind: 'local', category: 'allSongs', filter: null })"
         :notifications-open="noticeHostRef?.historyOpen ?? false"
         @notifications="noticeHostRef?.toggleHistory($event)"
       />

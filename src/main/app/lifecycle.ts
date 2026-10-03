@@ -1,4 +1,6 @@
 import { app, BrowserWindow, dialog, protocol, net } from 'electron'
+import { applyPendingPersonalRestore } from '../persistence/personalBackup.ts'
+import { readAppSettings } from '../core/settings'
 import { join, extname } from 'path'
 import { cpus } from 'os'
 import { pathToFileURL } from 'url'
@@ -129,6 +131,18 @@ export function startApp(): void {
   if (!gotSingleInstanceLock) {
     app.quit()
   } else {
+    try {
+      applyPendingPersonalRestore(app.getPath('userData'))
+      runtime.appSettings = readAppSettings()
+      runtime.launchSettings = { ...runtime.appSettings }
+    } catch (error) {
+      dialog.showErrorBox(
+        '个人数据恢复尚未完成',
+        `数据恢复日志已保留，下次启动将继续恢复。\n${error instanceof Error ? error.message : String(error)}`
+      )
+      app.exit(1)
+      return
+    }
     protocol.registerSchemesAsPrivileged([
       {
         scheme: 'twilight-audio',

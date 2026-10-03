@@ -1,6 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { scrollMotionBehavior } from '../app/scrollMotion'
+import { createSettingsSectionRendering } from './settings-page/settingsSectionRendering'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
@@ -783,7 +784,7 @@ async function exportAudioDiagnostics(): Promise<void> {
 
 const SETTINGS_SECTION_SCROLL_OFFSET = 24
 let programmaticScrollUntil = 0
-let programmaticScrollRaf = 0
+let programmaticScrollTimer: number | null = null
 
 function scrollPageToElement(
   target: HTMLElement,
@@ -792,6 +793,8 @@ function scrollPageToElement(
   const page = pageRef.value
   if (!page) return
 
+  sectionRendering?.prepareNavigation()
+  sectionGeometryDirty = true
   const block = options.block ?? 'start'
   const behavior = scrollMotionBehavior(
     options.behavior ?? 'smooth',
@@ -815,26 +818,25 @@ function scrollPageToElement(
       : targetTop - scrollOffset
 
   programmaticScrollUntil = performance.now() + (behavior === 'smooth' ? 700 : 0)
-  if (programmaticScrollRaf) {
-    window.cancelAnimationFrame(programmaticScrollRaf)
-    programmaticScrollRaf = 0
-  }
-  if (behavior === 'smooth') {
-    const clearWhenSettled = (): void => {
-      if (performance.now() >= programmaticScrollUntil) {
-        programmaticScrollRaf = 0
-        updateActiveSection()
-        return
-      }
-      programmaticScrollRaf = window.requestAnimationFrame(clearWhenSettled)
-    }
-    programmaticScrollRaf = window.requestAnimationFrame(clearWhenSettled)
-  }
+  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
+  programmaticScrollTimer = window.setTimeout(
+    finishProgrammaticScroll,
+    behavior === 'smooth' ? 750 : 0
+  )
 
   page.scrollTo({
     top: Math.max(0, Math.min(maxScrollTop, nextTop)),
     behavior
   })
+}
+
+function finishProgrammaticScroll(): void {
+  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
+  programmaticScrollTimer = null
+  programmaticScrollUntil = 0
+  sectionRendering?.finishNavigation()
+  sectionGeometryDirty = true
+  scheduleActiveSectionUpdate()
 }
 
 function scrollToSection(section: SectionKey): void {
@@ -963,19 +965,39 @@ async function refreshShortcutStatuses(): Promise<void> {
   }
 }
 
+let settingsDisposed = false
+let sectionFrame = 0
+let sectionGeometryDirty = true
+let sectionRendering: ReturnType<typeof createSettingsSectionRendering> | null = null
+let sectionPositions: { key: SectionKey; top: number }[] = []
+
+function scheduleActiveSectionUpdate(): void {
+  if (sectionFrame || settingsDisposed) return
+  sectionFrame = window.requestAnimationFrame(() => {
+    sectionFrame = 0
+    updateActiveSection()
+  })
+}
+
 function updateActiveSection(): void {
   if (performance.now() < programmaticScrollUntil) return
   const page = pageRef.value
   if (!page) return
-  const pageTop = page.getBoundingClientRect().top
+  const scrollTop = page.scrollTop
+  if (sectionGeometryDirty) {
+    const pageTop = page.getBoundingClientRect().top
+    sectionPositions = sections.flatMap((section) => {
+      const el = page.querySelector<HTMLElement>(`#${section.key}`)
+      return el
+        ? [{ key: section.key, top: el.getBoundingClientRect().top - pageTop + scrollTop }]
+        : []
+    })
+    sectionGeometryDirty = false
+  }
   let closest = activeSection.value
   let closestDistance = Number.POSITIVE_INFINITY
-  for (const section of sections) {
-    const el = document.getElementById(section.key)
-    if (!el) continue
-    const distance = Math.abs(
-      el.getBoundingClientRect().top - pageTop - SETTINGS_SECTION_SCROLL_OFFSET
-    )
+  for (const section of sectionPositions) {
+    const distance = Math.abs(section.top - scrollTop - SETTINGS_SECTION_SCROLL_OFFSET)
     if (distance < closestDistance) {
       closest = section.key
       closestDistance = distance
@@ -985,29 +1007,47 @@ function updateActiveSection(): void {
 }
 
 onMounted(async () => {
+  // Scroll handling must not wait for cache sizes or plugin/native IPC to finish.
+  const page = pageRef.value
+  if (page) {
+    sectionRendering = createSettingsSectionRendering(page, () => {
+      sectionGeometryDirty = true
+      scheduleActiveSectionUpdate()
+    })
+    page.addEventListener('scroll', scheduleActiveSectionUpdate, { passive: true })
+    page.addEventListener('scrollend', finishProgrammaticScroll, { passive: true })
+  }
   await Promise.all([loadSettings(), refreshAudioOutputState(), themeStore.load()])
+  if (settingsDisposed) return
   await Promise.all([
     refreshCacheSize(),
     refreshBpmAnalysisCacheSize(),
     refreshLoudnessAnalysisCacheSize()
   ])
+  if (settingsDisposed) return
   await refreshShortcutStatuses()
+  if (settingsDisposed) return
   await syncExtensions()
+  if (settingsDisposed) return
   await refreshLibraryWatcherStatus()
+  if (settingsDisposed) return
   libraryWatcherStatusTimer = window.setInterval(() => {
+    if (document.visibilityState === 'hidden') return
     void refreshLibraryWatcherStatus()
   }, 5_000)
   await nextTick()
-  pageRef.value?.addEventListener('scroll', updateActiveSection, { passive: true })
+  if (settingsDisposed) return
   applyNavigationTarget()
 })
 
 onBeforeUnmount(() => {
-  pageRef.value?.removeEventListener('scroll', updateActiveSection)
-  if (programmaticScrollRaf) {
-    window.cancelAnimationFrame(programmaticScrollRaf)
-    programmaticScrollRaf = 0
-  }
+  settingsDisposed = true
+  pageRef.value?.removeEventListener('scroll', scheduleActiveSectionUpdate)
+  pageRef.value?.removeEventListener('scrollend', finishProgrammaticScroll)
+  sectionRendering?.dispose()
+  if (sectionFrame) window.cancelAnimationFrame(sectionFrame)
+  if (searchHighlightTimer !== null) window.clearTimeout(searchHighlightTimer)
+  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
   programmaticScrollUntil = 0
   if (libraryWatcherStatusTimer !== null) {
     window.clearInterval(libraryWatcherStatusTimer)

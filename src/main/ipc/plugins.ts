@@ -299,6 +299,15 @@ export function setupPluginIpc(): void {
     assertTrustedIpcSender(event, 'provider download IPC')
     return runtime.providerDownloadManager!.list()
   })
+  ipcMain.handle(
+    'providerDownloads:result',
+    async (event, taskId: string, addToLibrary: boolean) => {
+      assertTrustedIpcSender(event, 'download result IPC')
+      if (typeof taskId !== 'string' || taskId.length > 128 || typeof addToLibrary !== 'boolean')
+        throw new Error('下载任务参数无效')
+      return runtime.providerDownloadManager!.completedResult(taskId, addToLibrary)
+    }
+  )
   ipcMain.handle('providerDownloads:create', async (event, input: ProviderDownloadCreateInput) => {
     assertTrustedIpcSender(event, 'provider download IPC')
     await runtime.pluginManagerReady

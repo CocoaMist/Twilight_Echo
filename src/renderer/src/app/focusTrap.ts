@@ -17,6 +17,7 @@ export function createFocusTrap(getRoot: () => HTMLElement | null, environment: 
   const entry = {}
   let active = false
   let opener: HTMLElement | null = null
+  let activeRoot: HTMLElement | null = null
   let frame: number | null = null
 
   function targets(root: HTMLElement): HTMLElement[] {
@@ -65,6 +66,7 @@ export function createFocusTrap(getRoot: () => HTMLElement | null, environment: 
         frame = null
         if (!active || traps.at(-1) !== entry) return
         const root = getRoot()
+        activeRoot = root
         if (root?.isConnected) (targets(root)[0] ?? root).focus()
       })
     },
@@ -76,7 +78,9 @@ export function createFocusTrap(getRoot: () => HTMLElement | null, environment: 
       const index = traps.indexOf(entry)
       if (index !== -1) traps.splice(index, 1)
       window.removeEventListener('keydown', onKeydown, true)
-      const root = getRoot()
+      // Vue clears a v-if ref before a leave transition removes the focused
+      // node. Keep its identity so focus can still return to the opener.
+      const root = getRoot() ?? activeRoot
       const current = document.activeElement
       if (
         wasTop &&
@@ -85,6 +89,7 @@ export function createFocusTrap(getRoot: () => HTMLElement | null, environment: 
       )
         opener.focus()
       opener = null
+      activeRoot = null
     }
   }
 }

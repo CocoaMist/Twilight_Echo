@@ -87,7 +87,10 @@ function scheduleHide(element: HTMLElement): void {
 function revealWhileScrolling(element: HTMLElement): void {
   if (activeScroller && activeScroller !== element) clearScroller(activeScroller)
   activeScroller = element
-  element.classList.add(AUTO_SCROLLBAR_CLASS, ACTIVE_SCROLLBAR_CLASS)
+  // Repeated class writes invalidate styles even when the tokens already exist.
+  if (!element.classList.contains(AUTO_SCROLLBAR_CLASS)) element.classList.add(AUTO_SCROLLBAR_CLASS)
+  if (!element.classList.contains(ACTIVE_SCROLLBAR_CLASS))
+    element.classList.add(ACTIVE_SCROLLBAR_CLASS)
   scheduleHide(element)
 }
 

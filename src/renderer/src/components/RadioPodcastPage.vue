@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRadioStore, radioStationToTrack } from '../stores/useRadioStore'
 import { usePodcastStore, podcastEpisodeToTrack } from '../stores/usePodcastStore'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { isInsecureHttpUrl } from '../../../shared/radioStations.ts'
 import type { PodcastSubscription } from '../../../shared/podcastSubscriptions.ts'
+import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 
 const radio = useRadioStore()
 const podcast = usePodcastStore()
 const { playTrack, playTrackFromPosition } = usePlayerStore()
+const { pushNotice } = useAppNoticeStore()
+const removingSubscriptions = ref(new Set<string>())
 
 const tab = ref<'radio' | 'podcast'>('radio')
 const stationName = ref('')
@@ -33,6 +36,21 @@ const directoryResults = ref<
   }>
 >([])
 const directoryBusy = ref(false)
+const directoryError = ref('')
+let directoryRequest = 0
+function invalidateDirectorySearch(): void {
+  directoryRequest++
+  directoryBusy.value = false
+}
+watch([directoryQuery, tab], invalidateDirectorySearch, { flush: 'sync' })
+watch(
+  directoryQuery,
+  () => {
+    directoryResults.value = []
+    directoryError.value = ''
+  },
+  { flush: 'sync' }
+)
 const feedUrl = ref('')
 const selectedPodcastId = ref<string | null>(null)
 
@@ -42,8 +60,13 @@ const selectedPodcast = computed<PodcastSubscription | null>(() => {
 })
 
 onMounted(() => {
+  window.addEventListener('pagehide', invalidateDirectorySearch)
   void radio.ensureLoaded()
   void podcast.ensureLoaded()
+})
+onBeforeUnmount(() => {
+  invalidateDirectorySearch()
+  window.removeEventListener('pagehide', invalidateDirectorySearch)
 })
 
 async function addStation(): Promise<void> {
@@ -88,18 +111,28 @@ async function importPlaylist(): Promise<void> {
 }
 
 async function searchDirectory(): Promise<void> {
-  formError.value = ''
+  const query = directoryQuery.value.trim()
+  const request = ++directoryRequest
+  directoryError.value = ''
+  if (!query || tab.value !== 'radio') {
+    directoryResults.value = []
+    directoryBusy.value = false
+    return
+  }
   directoryBusy.value = true
   try {
-    directoryResults.value = await radio.searchDirectory(directoryQuery.value, { limit: 20 })
+    const results = await radio.searchDirectory(query, { limit: 20 })
+    if (request !== directoryRequest) return
+    directoryResults.value = results
     if (directoryResults.value.length === 0) {
-      formError.value = '未找到匹配电台'
+      directoryError.value = '未找到匹配电台'
     }
   } catch (error) {
+    if (request !== directoryRequest) return
     directoryResults.value = []
-    formError.value = error instanceof Error ? error.message : String(error)
+    directoryError.value = error instanceof Error ? error.message : String(error)
   } finally {
-    directoryBusy.value = false
+    if (request === directoryRequest) directoryBusy.value = false
   }
 }
 
@@ -166,8 +199,50 @@ async function refreshSelected(): Promise<void> {
 }
 
 async function unsubscribePodcast(id: string): Promise<void> {
-  await podcast.unsubscribe(id)
-  if (selectedPodcastId.value === id) selectedPodcastId.value = null
+  if (removingSubscriptions.value.has(id)) return
+  removingSubscriptions.value.add(id)
+  try {
+    const removed = await podcast.unsubscribe(id)
+    if (!removed) return
+    if (selectedPodcastId.value === id) selectedPodcastId.value = null
+    let restoring = false
+    let restored = false
+    const dedupeKey = `podcast-unsubscribe:${id}`
+    const restore = async (): Promise<void> => {
+      if (restoring || restored) return
+      restoring = true
+      try {
+        await podcast.restoreSubscription(removed)
+        restored = true
+        pushNotice({
+          kind: 'success',
+          message: `已恢复订阅「${removed.title}」及收听进度`,
+          dedupeKey,
+          sticky: false
+        })
+      } catch (error) {
+        pushNotice({
+          kind: 'error',
+          message: `恢复订阅失败：${error instanceof Error ? error.message : String(error)}`,
+          action: { label: '重试恢复', run: restore }
+        })
+      } finally {
+        restoring = false
+      }
+    }
+    pushNotice({
+      message: `已取消订阅「${removed.title}」，可在本次使用的通知记录中撤销并恢复收听进度。`,
+      dedupeKey,
+      action: { label: '撤销取消订阅', run: restore }
+    })
+  } catch (error) {
+    pushNotice({
+      kind: 'error',
+      message: `取消订阅失败：${error instanceof Error ? error.message : String(error)}`
+    })
+  } finally {
+    removingSubscriptions.value.delete(id)
+  }
 }
 
 function playEpisode(subscription: PodcastSubscription, guid: string): void {
@@ -242,8 +317,12 @@ function formatDuration(seconds: number): string {
       </div>
     </header>
 
-    <p v-if="formError || radio.error.value || podcast.error.value" class="page-error" role="alert">
-      {{ formError || radio.error.value || podcast.error.value }}
+    <p
+      v-if="formError || directoryError || radio.error.value || podcast.error.value"
+      class="page-error"
+      role="alert"
+    >
+      {{ formError || directoryError || radio.error.value || podcast.error.value }}
     </p>
 
     <section v-if="tab === 'radio'" class="radio-workspace">
@@ -437,15 +516,23 @@ function formatDuration(seconds: number): string {
               v-for="sub in podcast.subscriptions.value"
               :key="sub.id"
               :class="{ active: selectedPodcastId === sub.id }"
-              data-te-interactive
-              @click="selectedPodcastId = sub.id"
             >
-              <div>
+              <button
+                type="button"
+                class="subscription-open"
+                :aria-pressed="selectedPodcastId === sub.id"
+                @click="selectedPodcastId = sub.id"
+              >
                 <strong>{{ sub.title }}</strong>
                 <small>{{ sub.episodes.length }} 集</small>
-              </div>
-              <button type="button" class="linkish" @click.stop="unsubscribePodcast(sub.id)">
-                取消订阅
+              </button>
+              <button
+                type="button"
+                class="linkish"
+                :disabled="removingSubscriptions.has(sub.id)"
+                @click.stop="unsubscribePodcast(sub.id)"
+              >
+                {{ removingSubscriptions.has(sub.id) ? '取消中…' : '取消订阅' }}
               </button>
             </li>
             <li v-if="podcast.subscriptions.value.length === 0" class="empty">暂无订阅</li>
@@ -985,7 +1072,16 @@ button.primary {
   border-color: color-mix(in srgb, var(--te-primary-500) 32%, transparent);
   background: color-mix(in srgb, var(--te-primary-500) 10%, transparent);
 }
-.subscription-list li > div {
+.subscription-list .subscription-open {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 4px;
   min-width: 0;
 }
 .subscription-list strong {

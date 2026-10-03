@@ -113,6 +113,8 @@ export const pluginsApi = {
     }
   },
   providerDownloads: {
+    result: (taskId: string, addToLibrary: boolean): Promise<string> =>
+      ipcRenderer.invoke('providerDownloads:result', taskId, addToLibrary),
     list: (): Promise<ProviderDownloadTaskSnapshot[]> =>
       ipcRenderer.invoke('providerDownloads:list'),
     create: (input: ProviderDownloadCreateInput): Promise<ProviderDownloadTaskSnapshot> =>
