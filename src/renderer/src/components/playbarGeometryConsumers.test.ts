@@ -107,6 +107,59 @@ test('the open local menu keeps its full height while the bar moves beside it', 
   assert.equal(measure({ playerBarMenuOpen: true }), 0)
 })
 
+test('navigation tools stay at the bottom while the playbar moves beside the menu', () => {
+  installDom({ playerBarMenuOpen: true })
+  const clearance = useSideMenuClearance({
+    showLocalSidebar: ref(true),
+    hasPlayerBar: ref(true),
+    menuOpen: ref(true)
+  })
+  clearance.measureSideMenuClearance()
+  assert.equal(clearance.sideMenuBottomOffset.value, 0)
+  assert.equal(clearance.sideMenuToolsClearance.value, 0)
+
+  // Once the transition completes, adjacent bars also need no padding when a
+  // custom shell owns their positioning or the menu-open class is absent.
+  for (const shellLayout of ['classic', 'custom'] as const) {
+    installDom({
+      shellLayout,
+      playerBarRect: { top: 700, bottom: 780, left: 260, right: 1200, height: 80 }
+    })
+    clearance.measureSideMenuClearance()
+    assert.equal(clearance.sideMenuBottomOffset.value, 0)
+    assert.equal(clearance.sideMenuToolsClearance.value, 0)
+  }
+
+  installDom({ playerBarMenuOpen: true, viewportWidth: 760 })
+  clearance.measureSideMenuClearance()
+  assert.equal(clearance.sideMenuToolsClearance.value, 70)
+
+  installDom({ playerBarHidden: 'true' })
+  clearance.measureSideMenuClearance()
+  assert.equal(clearance.sideMenuToolsClearance.value, 0)
+
+  installDom({ playerBarMenuOpen: true })
+  clearance.measureSideMenuClearance()
+  clearance.resetSideMenuClearance()
+  assert.equal(clearance.sideMenuToolsClearance.value, 0)
+  clearance.dispose()
+})
+
+test('navigation tools do not reserve the playback band twice in an inset shell', () => {
+  installDom({
+    shellLayout: 'custom',
+    sideMenuRect: { top: 100, bottom: 680, left: 0, right: 240, height: 580 }
+  })
+  const clearance = useSideMenuClearance({
+    showLocalSidebar: ref(true),
+    hasPlayerBar: ref(true),
+    menuOpen: ref(true)
+  })
+  clearance.measureSideMenuClearance()
+  assert.equal(clearance.sideMenuToolsClearance.value, 0)
+  clearance.dispose()
+})
+
 test('overlay navigation at 760px reserves room above the full-width playbar', () => {
   assert.equal(measure({ playerBarMenuOpen: true, viewportWidth: 760 }), 110)
 })

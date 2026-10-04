@@ -361,7 +361,7 @@ test('engine ranges enforce both bounds, zero-major caret and prerelease precede
     ['^0.0.4', '0.0.5', false],
     ['^0.0.4', '0.0.4', true],
     ['>=1.2.4', '1.2.4-beta.1', false],
-    ['^1.2.4', '1.3.0-beta.1', false],
+    ['^1.2.4', '1.3.0-beta.1', true],
     ['~1.2.4-beta.2', '1.2.4-beta.1', false],
     ['~1.2.4-beta.2', '1.2.4-beta.10', true],
     ['1.2.4', '1.2.4+build.5', true]
@@ -372,6 +372,55 @@ test('engine ranges enforce both bounds, zero-major caret and prerelease precede
   assert.equal(compareSemver('1.2.4-beta.10', '1.2.4-beta.2'), 1)
   assert.equal(compareSemver('1.2.4-beta', '1.2.4'), -1)
   assert.equal(compareSemver('1.2.4+build.5', '1.2.4'), 0)
+})
+
+test('preview hosts satisfy engine ranges without bypassing version bounds', () => {
+  const cases: Array<[string, string, boolean]> = [
+    ['>=0.20.0', '1.3.0-perview', true],
+    ['>=1.2.0', '1.3.0-preview.1', true],
+    ['*', '1.3.0-beta.1+build.5', true],
+    ['', '1.3.0-rc.1', true],
+    ['^1.2.0', '1.3.0-rc.1', true],
+    ['~1.2.0', '1.2.1-preview.1', true],
+    ['>=1.3.0', '1.3.0-perview', false],
+    ['1.3.0', '1.3.0-perview', false],
+    ['1.3.0-perview', '1.3.0-perview+build.5', true],
+    ['>=1.3.0-beta.2', '1.3.0-beta.1', false],
+    ['>=1.3.0-beta.2', '1.3.0-beta.10', true],
+    ['>=1.3.0-beta.2', '1.4.0-beta.1', true],
+    ['>=2.0.0', '1.3.0-perview', false],
+    ['^1.2.0', '2.0.0-alpha.1', false],
+    ['~1.2.0', '1.3.0-alpha.1', false],
+    ['^0.2.4', '0.3.0-alpha.1', false],
+    ['^0.0.4', '0.0.5-alpha.1', false],
+    ['*', '1.3.0-preview.01', false],
+    ['*', 'invalid', false],
+    ['invalid', '1.3.0-perview', false]
+  ]
+  for (const [range, version, expected] of cases) {
+    assert.equal(isCompatibleTwilightRange(range, version), expected, `${range}: ${version}`)
+  }
+})
+
+test('bundled plugins are compatible with the current application version', async () => {
+  const { version } = JSON.parse(
+    await readFile(new URL('../../../package.json', import.meta.url), 'utf-8')
+  )
+  for (const directory of ['ncm-provider', 'theme-workshop']) {
+    const manifest = validatePluginManifest(
+      JSON.parse(
+        await readFile(
+          new URL(`../../../resources/plugins/${directory}/plugin.json`, import.meta.url),
+          'utf-8'
+        )
+      )
+    )
+    assert.equal(
+      isCompatibleTwilightRange(manifest.engines.twilightEcho, version),
+      true,
+      `${manifest.id} must support Twilight Echo ${version}`
+    )
+  }
 })
 
 test('converts descriptors to the host manifest sent to plugin processes', async () => {

@@ -8,7 +8,7 @@ const { pathToFileURL } = require('node:url')
 const test = require('node:test')
 const ts = require('typescript')
 
-async function fixture(t) {
+async function fixture(t, { appVersion = '1.2.4', engineRange = '*' } = {}) {
   const directory = fs.mkdtempSync(path.join(tmpdir(), 'twilight-plugin-wake-'))
   fs.writeFileSync(path.join(directory, 'index.mjs'), 'export function activate() {}\n')
   const importSource = (name) => import(pathToFileURL(path.join(__dirname, name)).href)
@@ -93,7 +93,7 @@ async function fixture(t) {
     console
   })
   const manager = new exports.TwilightPluginManager({
-    appVersion: '1.2.4',
+    appVersion,
     hostEntry: 'unused',
     hostIdleTimeoutMs: 300000,
     getPlaybackInfo: () => ({}),
@@ -110,7 +110,7 @@ async function fixture(t) {
     enabled: true,
     status: 'enabled',
     main: 'index.mjs',
-    engines: { twilightEcho: '*' },
+    engines: { twilightEcho: engineRange },
     type: ['provider'],
     permissions: ['network'],
     apiVersion: 3,
@@ -156,6 +156,41 @@ async function fixture(t) {
   const activate = () => children[0].emit('message', { kind: 'activated', pluginId: descriptor.id })
   return { manager, descriptor, children, activationStarted, register, activate }
 }
+
+for (const directory of ['ncm-provider', 'theme-workshop']) {
+  test(`preview host validates and activates the ${directory} engine range`, async (t) => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(__dirname, '../../../resources/plugins', directory, 'plugin.json'),
+        'utf8'
+      )
+    )
+    const f = await fixture(t, {
+      appVersion: '1.3.0-perview',
+      engineRange: manifest.engines.twilightEcho
+    })
+    assert.equal(
+      f.manager.validateRuntimeDescriptor(manifest, f.descriptor.paths.versionRoot),
+      null
+    )
+    const starting = f.manager.startPlugin(f.descriptor)
+    await Promise.race([f.activationStarted, starting])
+    assert.equal(f.children.length, 1)
+    f.activate()
+    await starting
+    assert.equal(f.manager.state[f.descriptor.id].enabled, true)
+  })
+}
+
+test('preview host rejects a plugin requiring the corresponding stable release', async (t) => {
+  const f = await fixture(t, { appVersion: '1.3.0-perview', engineRange: '>=1.3.0' })
+  assert.match(
+    f.manager.validateRuntimeDescriptor(f.descriptor, f.descriptor.paths.versionRoot),
+    /插件要求 Twilight Echo >=1\.3\.0/
+  )
+  await assert.rejects(f.manager.startPlugin(f.descriptor), /插件要求 Twilight Echo >=1\.3\.0/)
+  assert.equal(f.children.length, 0)
+})
 
 test('concurrent provider calls preserve cached routes and await one activation', async (t) => {
   const f = await fixture(t)

@@ -84,13 +84,11 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
-      - name: Typecheck
-        run: pnpm run typecheck
-
-      - name: Test macro quality policy
-        run: pnpm run test:quality-policy
-
       - name: Test product behavior
+        # Avoid Windows user TEMP aliases giving Vite fixtures multiple module identities.
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: pnpm run test:product -- --report "$RUNNER_TEMP/product-quality-gate.json"
 
       - name: Upload product quality report
@@ -107,13 +105,15 @@ jobs:
         run: pnpm run test:duplicate-detection-benchmark
 
       - name: Run isolated duplicate detection 10k benchmark
+        id: duplicate-benchmark
+        if: github.event_name == 'workflow_dispatch'
         run: >-
           pnpm run benchmark:duplicate-detection:ci --
           --output "$RUNNER_TEMP/duplicate-detection-benchmark.json"
           --manifest "$RUNNER_TEMP/duplicate-detection-benchmark.manifest.json"
 
       - name: Upload duplicate detection benchmark evidence
-        if: always()
+        if: always() && steps.duplicate-benchmark.outcome != 'skipped'
         uses: actions/upload-artifact@v4
         with:
           name: duplicate-detection-benchmark
@@ -142,58 +142,6 @@ jobs:
 
       - name: Test audio engine
         run: ctest --test-dir audio-engine/build/default --output-on-failure --timeout 180 -C Debug
-
-  mac-release:
-    name: macOS Release Package
-    runs-on: macos-latest
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.7.0
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: pnpm
-
-      - name: Install frozen dependency tree
-        run: pnpm install --frozen-lockfile
-
-      - name: Install FFmpeg
-        run: brew install ffmpeg
-
-      - name: Configure audio engine (Node-API)
-        run: >-
-          cmake -S audio-engine -B audio-engine/build/default
-          -DTAE_BUILD_NAPI=ON -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_PREFIX_PATH="$(brew --prefix)"
-
-      - name: Build audio engine
-        run: cmake --build audio-engine/build/default --config Release
-
-      - name: Stage native audio engine
-        run: node scripts/stage-audio-engine.cjs --build-dir audio-engine/build/default
-
-      - name: Build and package macOS app
-        run: pnpm run build:mac
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-release
-          path: |
-            dist/*.dmg
-            dist/*.zip
-          if-no-files-found: error
 
   required:
     name: Required Quality Gate

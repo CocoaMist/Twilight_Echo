@@ -1,6 +1,7 @@
 import { computed, readonly, ref } from 'vue'
 import {
   DEFAULT_PODCAST_SUBSCRIPTIONS,
+  MAX_PODCAST_SUBSCRIPTIONS,
   clonePodcastSubscriptionsDocument,
   podcastEpisodeProgressRatio,
   parsePodcastTrackId,
@@ -107,13 +108,51 @@ export function usePodcastStore() {
     }
   }
 
-  async function unsubscribe(subscriptionId: string): Promise<void> {
+  async function unsubscribe(subscriptionId: string): Promise<PodcastSubscription | null> {
     await ensureLoaded()
     const next = clonePodcastSubscriptionsDocument(document.value)
+    const removed = next.subscriptions.find((sub) => sub.id === subscriptionId)
+    if (!removed) return null
     next.subscriptions = next.subscriptions.filter((sub) => sub.id !== subscriptionId)
     try {
       const saved = await window.api.podcast.saveSubscriptions(next, revision.value)
       applyDocument(saved.data, saved.revision)
+      error.value = ''
+      return removed
+    } catch (err) {
+      if (isPersistentDataRevisionConflict(err) && err.current) {
+        applyDocument(err.current.data as PodcastSubscriptionsDocument, err.current.revision)
+      }
+      error.value = err instanceof Error ? err.message : String(err)
+      throw err
+    }
+  }
+
+  async function restoreSubscription(subscription: PodcastSubscription): Promise<void> {
+    try {
+      // Reload authoritative data and merge only the removed subscription. Never
+      // restore the old whole document over changes made since the removal.
+      const loaded = await window.api.podcast.loadSubscriptions()
+      if (!loaded?.data) throw new Error('无法读取当前订阅，请稍后重试')
+      applyDocument(loaded.data, loaded.revision)
+      const next = clonePodcastSubscriptionsDocument(loaded.data)
+      if (
+        next.subscriptions.some(
+          (sub) => sub.id === subscription.id || sub.feedUrl === subscription.feedUrl
+        )
+      ) {
+        throw new Error('该播客已重新订阅，已保留当前订阅和进度')
+      }
+      if (next.subscriptions.length >= MAX_PODCAST_SUBSCRIPTIONS) {
+        throw new Error('订阅数量已达上限，请先移除其他订阅后重试')
+      }
+      next.subscriptions.push(subscription)
+      const saved = await window.api.podcast.saveSubscriptions(
+        clonePodcastSubscriptionsDocument(next),
+        loaded.revision
+      )
+      applyDocument(saved.data, saved.revision)
+      error.value = ''
     } catch (err) {
       if (isPersistentDataRevisionConflict(err) && err.current) {
         applyDocument(err.current.data as PodcastSubscriptionsDocument, err.current.revision)
@@ -195,6 +234,7 @@ export function usePodcastStore() {
     ensureLoaded,
     subscribe,
     unsubscribe,
+    restoreSubscription,
     refresh,
     refreshAll,
     updateEpisodeProgress,

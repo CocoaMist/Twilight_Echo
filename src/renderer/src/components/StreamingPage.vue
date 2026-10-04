@@ -93,7 +93,8 @@ import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import { getTrackSource } from '../utils/logicalTrackModel'
 import { friendlyStreamingError } from './streaming-page/friendlyStreamingError.ts'
 import { useEscapeToClose } from '../app/useDismissLayer.ts'
-import type { ProviderDownloadQuality, ProviderDownloadTaskSnapshot } from '../../../preload/types'
+import type { ProviderDownloadQuality } from '../../../preload/types'
+import { useDownloadTasks } from '../stores/useDownloadTasks'
 
 interface RecSection extends ProviderHomeSectionPresentation {
   key: string
@@ -2300,7 +2301,8 @@ const contextMenuCanLike = computed(
 )
 
 // ─── Provider download ───────────────────────────────────────────────
-const downloadTasks = ref<ProviderDownloadTaskSnapshot[]>([])
+const downloadStore = useDownloadTasks()
+const downloadTasks = downloadStore.tasks
 const showDownloadPanel = ref(false)
 const downloadQualityMenuOpen = ref(false)
 let stopDownloadListener: (() => void) | null = null
@@ -2318,12 +2320,7 @@ const contextMenuDownloadProviderId = computed<string | null>(() => {
 const contextMenuCanDownload = computed(() => contextMenuDownloadProviderId.value !== null)
 
 onMounted(() => {
-  stopDownloadListener = window.api.providerDownloads.onChanged((tasks) => {
-    downloadTasks.value = tasks
-  })
-  void window.api.providerDownloads.list().then((tasks) => {
-    downloadTasks.value = tasks
-  })
+  stopDownloadListener = downloadStore.connect()
 })
 
 onUnmounted(() => {
@@ -3384,6 +3381,12 @@ onMounted(async () => {
             :is-track-favorited="isStreamingTrackFavorited"
             :can-add-to-playlist="canManageNcmPlaylists"
             @search-track-click="onSearchTrackClickWithSelect"
+            @search-track-activate="
+              (track) => {
+                clearSelection()
+                onSearchTrackClick(track)
+              }
+            "
             @like-track="onLikeTrack"
             @open-playlist="openPlaylist"
             @open-artist="openArtist"

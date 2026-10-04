@@ -39,6 +39,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   searchTrackClick: [track: Track, event: MouseEvent]
+  searchTrackActivate: [track: Track]
   likeTrack: [track: Track, event: MouseEvent]
   openPlaylist: [playlist: MediaProviderPlaylistSummary]
   openArtist: [artist: MediaProviderArtistSummary]
@@ -58,13 +59,33 @@ function isSelected(trackId: string): boolean {
 }
 
 function emitPage(first: number): void {
-  const normalizedFirst = Math.max(0, Math.min(first, Math.max(0, props.searchTotal - pageSize)))
+  if (props.searchLoading) return
+  const lastPageOffset = Math.max(0, Math.ceil(props.searchTotal / pageSize) - 1) * pageSize
+  const normalizedFirst = Math.max(
+    0,
+    Math.min(Math.floor(first / pageSize) * pageSize, lastPageOffset)
+  )
   emit('pageChange', {
     first: normalizedFirst,
     rows: pageSize,
     page: Math.floor(normalizedFirst / pageSize),
     pageCount: Math.max(1, Math.ceil(props.searchTotal / pageSize))
   })
+}
+
+function onTrackKeydown(event: KeyboardEvent, track: Track): void {
+  if (event.target !== event.currentTarget) return
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!event.repeat) emit('searchTrackActivate', track)
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    event.stopPropagation()
+    const row = event.currentTarget as HTMLElement
+    const next = event.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling
+    if (next instanceof HTMLElement) next.focus()
+  }
 }
 </script>
 
@@ -142,6 +163,9 @@ function emitPage(first: number): void {
                 :key="track.id"
                 class="track-row"
                 data-te-interactive
+                tabindex="0"
+                :aria-label="`${track.title} · ${track.artist}，按回车播放`"
+                @keydown="onTrackKeydown($event, track)"
                 :class="{
                   'track-playing': currentTrack?.id === track.id,
                   'track-selected': isSelected(track.id)
@@ -218,7 +242,7 @@ function emitPage(first: number): void {
           <button
             type="button"
             class="pager-btn"
-            :disabled="searchOffset <= 0"
+            :disabled="searchLoading || searchOffset <= 0"
             @click="emitPage(searchOffset - pageSize)"
           >
             上一页
@@ -230,7 +254,7 @@ function emitPage(first: number): void {
           <button
             type="button"
             class="pager-btn"
-            :disabled="searchOffset + pageSize >= searchTotal"
+            :disabled="searchLoading || searchOffset + pageSize >= searchTotal"
             @click="emitPage(searchOffset + pageSize)"
           >
             下一页
@@ -239,9 +263,10 @@ function emitPage(first: number): void {
       </div>
       <div v-else-if="searchType === 'playlists'" class="rec-sections">
         <div class="playlist-grid">
-          <div
+          <button
             v-for="playlist in searchPlaylistsResults"
             :key="playlist.id"
+            type="button"
             class="playlist-grid-card"
             data-te-interactive
             @click="emit('openPlaylist', playlist)"
@@ -261,13 +286,13 @@ function emitPage(first: number): void {
             </div>
             <div class="playlist-grid-name">{{ playlist.name }}</div>
             <div class="playlist-grid-count">{{ playlist.trackCount }} 首</div>
-          </div>
+          </button>
         </div>
         <div v-if="searchTotal > 30" class="search-paginator">
           <button
             type="button"
             class="pager-btn"
-            :disabled="searchOffset <= 0"
+            :disabled="searchLoading || searchOffset <= 0"
             @click="emitPage(searchOffset - pageSize)"
           >
             上一页
@@ -279,7 +304,7 @@ function emitPage(first: number): void {
           <button
             type="button"
             class="pager-btn"
-            :disabled="searchOffset + pageSize >= searchTotal"
+            :disabled="searchLoading || searchOffset + pageSize >= searchTotal"
             @click="emitPage(searchOffset + pageSize)"
           >
             下一页
@@ -288,9 +313,10 @@ function emitPage(first: number): void {
       </div>
       <div v-else-if="searchType === 'artists'" class="rec-sections">
         <div class="playlist-grid">
-          <div
+          <button
             v-for="artist in searchArtistsResults"
             :key="artist.id"
+            type="button"
             class="playlist-grid-card artist-card"
             data-te-interactive
             @click="emit('openArtist', artist)"
@@ -310,13 +336,13 @@ function emitPage(first: number): void {
             </div>
             <div class="playlist-grid-name">{{ artist.name }}</div>
             <div class="playlist-grid-count">{{ artist.musicSize ?? 0 }} 首单曲</div>
-          </div>
+          </button>
         </div>
         <div v-if="searchTotal > 30" class="search-paginator">
           <button
             type="button"
             class="pager-btn"
-            :disabled="searchOffset <= 0"
+            :disabled="searchLoading || searchOffset <= 0"
             @click="emitPage(searchOffset - pageSize)"
           >
             上一页
@@ -328,7 +354,7 @@ function emitPage(first: number): void {
           <button
             type="button"
             class="pager-btn"
-            :disabled="searchOffset + pageSize >= searchTotal"
+            :disabled="searchLoading || searchOffset + pageSize >= searchTotal"
             @click="emitPage(searchOffset + pageSize)"
           >
             下一页
@@ -670,6 +696,8 @@ function emitPage(first: number): void {
 
 .playlist-grid-card {
   cursor: pointer;
+  font: inherit;
+  text-align: left;
   padding: 12px;
   border-radius: 8px;
   background: var(--te-card-bg);

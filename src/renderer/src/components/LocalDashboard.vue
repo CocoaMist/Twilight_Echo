@@ -9,7 +9,7 @@ import {
 } from '../stores/useListeningStatsStore'
 import { useAudioOutputDspStore } from '../stores/useAudioOutputDspStore'
 import { usePlayerStore } from '../stores/usePlayerStore'
-import SmoothedProgressFill from './SmoothedProgressFill.vue'
+import DashboardPlaybackProgress from './local-dashboard/DashboardPlaybackProgress.vue'
 import {
   DEFAULT_DSP_OUTPUT_STAGE,
   type DspGraphNode,
@@ -42,9 +42,9 @@ const tracks = computed(() => props.previewTracks ?? libraryTracks.value)
 const { listeningStats } = useListeningStatsStore()
 const playbackStore = usePlayerStore()
 const audioOutputDspStore = useAudioOutputDspStore()
-const { currentTrack, isPlaying, currentTime, duration, progress } = playbackStore
+const { currentTrack, isPlaying } = playbackStore
 const { audioProcessing, playbackInfo, outputInfo } = storeToRefs(audioOutputDspStore)
-const { playTrack, togglePlay, next, prev, seek, formatTime, setPlayMode } = playbackStore
+const { playTrack, togglePlay, next, prev, setPlayMode } = playbackStore
 
 const now = ref(new Date())
 
@@ -160,8 +160,6 @@ const heroCoverKey = computed(
 const nowPlayingTitle = computed(() =>
   props.previewTracks ? heroTrack.value?.title : currentTrack.value?.title || heroTrack.value?.title
 )
-// 0..100 的进度百分比；SmoothedProgressFill 在自身内部补间，首页不随每帧重渲染。
-const heroProgressPercent = computed(() => Math.min(100, Math.max(0, progress.value)))
 
 const heroLabel = computed(() => {
   if (!heroTrack.value) return ''
@@ -231,13 +229,6 @@ function shuffleAll(): void {
   const index = Math.floor(Math.random() * tracks.value.length)
   setPlayMode('shuffle')
   playDashboardTrack(tracks.value[index])
-}
-
-function handleHeroSeek(event: MouseEvent): void {
-  if (!heroIsCurrent.value || duration.value <= 0) return
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-  seek(duration.value * ratio)
 }
 
 function playAlbum(album: { tracks: Track[] }): void {
@@ -908,20 +899,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 {{ heroMeta || '本地音乐' }}
               </p>
 
-              <div v-if="heroIsCurrent" class="hero-progress">
-                <button
-                  class="hero-progress-track"
-                  title="点击跳转播放进度"
-                  aria-label="播放进度"
-                  @click="handleHeroSeek"
-                >
-                  <SmoothedProgressFill as="span" :percent="heroProgressPercent" />
-                </button>
-                <div class="hero-time">
-                  <span>{{ formatTime(currentTime) }}</span>
-                  <span>{{ formatTime(duration) }}</span>
-                </div>
-              </div>
+              <DashboardPlaybackProgress v-if="heroIsCurrent" />
 
               <div v-if="heroIsCurrent" class="hero-actions">
                 <button

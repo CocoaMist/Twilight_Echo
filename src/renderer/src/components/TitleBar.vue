@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { defineAsyncComponent, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useBackStack } from '../app/useBackStack'
 import { useNcmStore } from '../stores/useNcmStore'
 import TitleBarIcon from './icons/TitleBarIcon.vue'
 import { useWindowChrome } from '../app/useWindowChrome'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+
+const TaskCenter = defineAsyncComponent(() => import('./TaskCenter.vue'))
 
 const props = withDefaults(
   defineProps<{
@@ -31,6 +33,7 @@ defineEmits<{
   settings: []
   plugins: []
   commands: []
+  library: []
   notifications: [event: MouseEvent]
 }>()
 
@@ -183,6 +186,7 @@ function close(): void {
       </button>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
+      <TaskCenter v-if="!preview" @library="$emit('library')" />
       <button
         v-if="!preview"
         type="button"

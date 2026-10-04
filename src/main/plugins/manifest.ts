@@ -271,10 +271,7 @@ export function toManifest(descriptor: TwilightPluginDescriptor): TwilightPlugin
   }
 }
 
-export {
-  compareSemver,
-  isCompatibleVersionRange as isCompatibleTwilightRange
-} from './versionRange.ts'
+export { compareSemver, isCompatibleTwilightRange } from './versionRange.ts'
 
 export function isSupportedSemverRange(range: string): boolean {
   if (range === '*') return true

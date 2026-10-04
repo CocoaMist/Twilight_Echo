@@ -10,6 +10,7 @@ const SIDE_MENU_OVERLAP_GAP = 10
 
 export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   const sideMenuBottomOffset = ref(0)
+  const sideMenuToolsClearance = ref(0)
   /**
    * Where the open side menu's right edge actually sits, so a bar that spans the
    * window can start after it. Not derivable in CSS: `--te-menu-width` is only
@@ -45,6 +46,7 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   function measureSideMenuClearance(): void {
     if (!options.showLocalSidebar.value || !options.hasPlayerBar.value) {
       setSideMenuBottomOffset(0)
+      sideMenuToolsClearance.value = 0
       return
     }
 
@@ -53,6 +55,7 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
 
     if (!sideMenu || !playerBar) {
       setSideMenuBottomOffset(0)
+      sideMenuToolsClearance.value = 0
       return
     }
 
@@ -75,9 +78,12 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     // so its rect would still push the sidebar up. The shell flags the state.
     if (playerBar.dataset.tePlaybarHidden === 'true') {
       setSideMenuBottomOffset(0)
+      sideMenuToolsClearance.value = 0
       return
     }
 
+    const sideMenuRect = sideMenu.getBoundingClientRect()
+    const playerBarRect = playerBar.getBoundingClientRect()
     // An open local menu already gives the bar horizontal clearance through
     // `.player-bar-shell.menu-open`. Reading the bar's rect while that `left`
     // transition is in flight briefly reports an overlap, which lifts the menu
@@ -89,13 +95,21 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
       document.documentElement.dataset.teShellLayout !== 'custom'
     ) {
       setSideMenuBottomOffset(0)
+      sideMenuToolsClearance.value = 0
       return
     }
 
-    const sideMenuRect = sideMenu.getBoundingClientRect()
-    const playerBarRect = playerBar.getBoundingClientRect()
     const overlapsHorizontally =
       playerBarRect.left < sideMenuRect.right && playerBarRect.right > sideMenuRect.left
+    // Reserve content padding only when the bar actually covers the menu. A bar
+    // beside it must leave the tools at the bottom, including in custom shells.
+    sideMenuToolsClearance.value =
+      overlapsHorizontally &&
+      playerBarRect.height > 0 &&
+      playerBarRect.top < window.innerHeight &&
+      playerBarRect.bottom > sideMenuRect.top
+        ? Math.max(0, Math.round(sideMenuRect.bottom - playerBarRect.top + SIDE_MENU_OVERLAP_GAP))
+        : 0
     /**
      * Test the overlap against the bottom the menu would have with no clearance
      * applied, not its current one. Once the offset lifts the menu, its measured
@@ -177,6 +191,7 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     stopSideMenuMonitor()
     setSideMenuBottomOffset(0)
     setSideMenuInlineEnd(0)
+    sideMenuToolsClearance.value = 0
   }
 
   function onDocumentVisibilityChange(): void {
@@ -195,6 +210,7 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
 
   return {
     sideMenuBottomOffset,
+    sideMenuToolsClearance,
     sideMenuInlineEnd,
     startSideMenuMonitor,
     stopSideMenuMonitor,

@@ -26,16 +26,26 @@ const localCoverDataCache = new Map<string, string>()
 const localCoverDataInflight = new Map<string, Promise<string | null>>()
 
 const LOCAL_COVER_DATA_CACHE_LIMIT = 128
+// Conservatively count UTF-16 storage; entry count alone does not bound large art.
+const LOCAL_COVER_DATA_CACHE_BYTES = 16 * 1024 * 1024
+let localCoverDataBytes = 0
 
 /** Insert a materialized cover while keeping the renderer cache bounded. */
 function cacheLocalCoverData(handle: string, dataUrl: string): void {
-  // Re-setting an existing key should make it the newest entry for FIFO
-  // eviction, avoiding eviction of a frequently reused cover.
+  const previous = localCoverDataCache.get(handle)
+  if (previous) localCoverDataBytes -= previous.length * 2
   localCoverDataCache.delete(handle)
+  const bytes = dataUrl.length * 2
+  if (bytes > LOCAL_COVER_DATA_CACHE_BYTES) return
   localCoverDataCache.set(handle, dataUrl)
-  while (localCoverDataCache.size > LOCAL_COVER_DATA_CACHE_LIMIT) {
+  localCoverDataBytes += bytes
+  while (
+    localCoverDataCache.size > LOCAL_COVER_DATA_CACHE_LIMIT ||
+    localCoverDataBytes > LOCAL_COVER_DATA_CACHE_BYTES
+  ) {
     const oldest = localCoverDataCache.keys().next().value
     if (typeof oldest !== 'string') break
+    localCoverDataBytes -= localCoverDataCache.get(oldest)!.length * 2
     localCoverDataCache.delete(oldest)
   }
 }
@@ -127,7 +137,11 @@ async function materializeLocalCoverForDisplay(handle: string): Promise<string |
   if (!bare) return null
 
   const cached = localCoverDataCache.get(bare)
-  if (cached) return cached
+  if (cached) {
+    localCoverDataCache.delete(bare)
+    localCoverDataCache.set(bare, cached)
+    return cached
+  }
 
   const inflight = localCoverDataInflight.get(bare)
   if (inflight) return inflight
@@ -270,6 +284,7 @@ export function clearRemoteCoverGrantCache(): void {
 
 export function clearLocalCoverDataCache(): void {
   localCoverDataCache.clear()
+  localCoverDataBytes = 0
   localCoverDataInflight.clear()
 }
 

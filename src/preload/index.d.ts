@@ -483,6 +483,18 @@ interface WindowAPI {
     >
   }
   data: {
+    chooseRestoreFolder: () => Promise<string | null>
+    exportPersonalBackup: (
+      data: import('../shared/personalBackup.ts').PersonalData
+    ) => Promise<boolean>
+    previewPersonalBackup: (
+      data: import('../shared/personalBackup.ts').PersonalData
+    ) => Promise<import('../shared/personalBackup.ts').PersonalBackupPreview | null>
+    stagePersonalRestore: (
+      options: import('../shared/personalBackup.ts').PersonalRestoreOptions
+    ) => Promise<void>
+    readRendererRestore: () => Promise<unknown>
+    acknowledgeRendererRestore: (id: string) => Promise<void>
     saveMusicLibrary: (data: LocalLibrarySnapshotInput) => Promise<LocalMusicLibraryDocument>
     loadMusicLibrary: () => Promise<LocalMusicLibraryDocument | unknown[]>
     getCover: (handle: string) => Promise<Uint8Array | string | null>
@@ -725,6 +737,7 @@ interface WindowAPI {
     cancel: (requestId: string) => void
   }
   providerDownloads: {
+    result: (taskId: string, addToLibrary: boolean) => Promise<string>
     list: () => Promise<ProviderDownloadTaskSnapshot[]>
     create: (input: ProviderDownloadCreateInput) => Promise<ProviderDownloadTaskSnapshot>
     cancel: (taskId: string) => Promise<void>

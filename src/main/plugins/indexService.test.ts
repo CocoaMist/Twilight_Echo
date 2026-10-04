@@ -100,6 +100,39 @@ test('update detection uses semantic prerelease precedence and ignores build met
   )
 })
 
+test('preview hosts can install compatible catalog plugins and still reject newer engines', async () => {
+  for (const [range, compatible] of [
+    ['>=0.20.0', true],
+    ['>=1.2.0', true],
+    ['>=1.3.0', false]
+  ] as const) {
+    const fixture = await createIndexFixture({
+      manifest: { ...baseManifest, engines: { twilightEcho: range } }
+    })
+    const service = new PluginIndexService({
+      appVersion: '1.3.0-perview',
+      localIndexPath: fixture.indexPath
+    })
+    const [entry] = await service.list()
+    assert.equal(
+      service.describeInstallState(entry, []),
+      compatible ? 'not-installed' : 'incompatible',
+      range
+    )
+    if (!compatible) {
+      await assert.rejects(() => service.downloadPackage(entry.id), /不兼容/)
+      continue
+    }
+    const downloaded = await service.downloadPackage(entry.id)
+    try {
+      assert.equal(downloaded.evidence.checksumVerified, true)
+      assert.equal(downloaded.evidence.manifestVerified, true)
+    } finally {
+      await downloaded.cleanup()
+    }
+  }
+})
+
 test('rejects invalid sourceUrl protocols and escaping paths', async () => {
   await assert.rejects(async () => {
     const fixture = await createIndexFixture({ sourceUrl: 'ftp://example.test/plugin.tep' })

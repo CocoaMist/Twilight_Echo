@@ -1,6 +1,15 @@
 import { registerHooks } from 'node:module'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { extname } from 'node:path'
+
+// Vite switches realpath implementations asynchronously on Windows. Expand
+// TEMP aliases before fixtures are created so shared mocks stay single modules.
+if (process.platform === 'win32') {
+  const temporaryRoot = realpathSync.native(tmpdir())
+  process.env.TEMP = temporaryRoot
+  process.env.TMP = temporaryRoot
+}
 
 const renderer = new URL('../src/renderer/src/', import.meta.url)
 registerHooks({

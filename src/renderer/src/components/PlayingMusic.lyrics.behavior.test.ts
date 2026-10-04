@@ -1707,13 +1707,23 @@ const visualDir = process.env.TWILIGHT_LYRIC_VISUAL_DIR || ''
 const motionVisualDir = process.env.TWILIGHT_MOTION_VISUAL_DIR || ''
 // Keep requested CSS viewport sizes exact on Windows displays with fractional DPI.
 app.commandLine.appendSwitch('force-device-scale-factor', '1')
-const userDataDir = process.env.TWILIGHT_ELECTRON_USER_DATA_DIR || ''
-if (userDataDir) {
-  app.setPath('userData', userDataDir)
-  app.commandLine.appendSwitch('disk-cache-dir', path.join(userDataDir, 'cache'))
-}
+const userDataDir = process.env.TWILIGHT_ELECTRON_USER_DATA_DIR || path.join(__dirname, 'profile')
+app.setPath('userData', userDataDir)
+app.commandLine.appendSwitch('disk-cache-dir', path.join(userDataDir, 'cache'))
 app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: false, width: 1440, height: 900, webPreferences: { contextIsolation: false, nodeIntegration: false, backgroundThrottling: false, offscreen: true } })
+  // Native resize acknowledgement can lag behind setContentSize on Windows CI.
+  // Wait for the actual CSS viewport instead of inspecting the previous frame.
+  const resizeViewport = async (width, height) => {
+    window.setContentSize(width, height)
+    const deadline = Date.now() + 2400
+    while (Date.now() < deadline) {
+      const viewport = await window.webContents.executeJavaScript('[innerWidth, innerHeight]')
+      if (viewport[0] === width && viewport[1] === height) return
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    throw new Error('viewport resize did not reach ' + width + 'x' + height)
+  }
   window.webContents.on('console-message', (_event, _level, message, line, sourceId) => console.error('RENDERER', sourceId + ':' + line, message))
   try {
     await window.loadFile(path.resolve(target))
@@ -1731,7 +1741,7 @@ app.whenReady().then(async () => {
     await window.webContents.executeJavaScript(${JSON.stringify(resetFixtureGeometrySource)})
     const layoutViewports = [[2560, 1440], [1920, 1080], [1440, 900], [1366, 768], [1280, 600], [1121, 720], [1120, 720], [1024, 768], [960, 540], [760, 600], [390, 844]]
     for (const [width, height] of layoutViewports) {
-      window.setContentSize(width, height)
+      await resizeViewport(width, height)
       for (const hasLyrics of [true, false]) {
         await window.webContents.executeJavaScript('window.setPlayingMusicLayoutFixture(' + hasLyrics + ')')
         await new Promise((resolve) => setTimeout(resolve, 80))
@@ -1746,7 +1756,7 @@ app.whenReady().then(async () => {
         }
       }
     }
-    window.setContentSize(1920, 1080)
+    await resizeViewport(1920, 1080)
     for (const appearance of [{ coverGap: 160, lyricsMaxWidth: 420, coverSize: 60 }, { coverGap: 0, lyricsMaxWidth: 1200, lyricsOffsetX: 160 }]) {
       await window.webContents.executeJavaScript('window.setPlayingMusicLayoutFixture(true, ' + JSON.stringify(appearance) + ')')
       await new Promise((resolve) => setTimeout(resolve, 80))
@@ -1761,7 +1771,7 @@ app.whenReady().then(async () => {
       await window.webContents.executeJavaScript(${JSON.stringify(resetFixtureGeometrySource)})
       const viewports = [[1440, 900], [1024, 768], [760, 900], [390, 844]]
       for (const [width, height] of viewports) {
-        window.setContentSize(width, height)
+        await resizeViewport(width, height)
         await window.webContents.executeJavaScript('window.dispatchEvent(new Event("resize"))')
         const readyDeadline = Date.now() + 2400
         while (Date.now() < readyDeadline) {

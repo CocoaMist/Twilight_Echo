@@ -11,7 +11,11 @@ import { basename, extname, join, parse } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable, Transform } from 'node:stream'
 import type { TwilightPluginManager } from '../plugins/manager.ts'
-import { filterAuthorizedLibraryRoots } from '../security/localPaths.ts'
+import {
+  filterAuthorizedLibraryRoots,
+  grantCompletedDownloadAudioFile
+} from '../security/localPaths.ts'
+import { resolveCompletedDownloadResult } from './completedDownloadResult.ts'
 import { isCanonicalPathInside } from '../security/pathGrants.ts'
 import { flushFileToDisk, orderDownloadRoots, selectDownloadTargetRoot } from './downloadTargets.ts'
 import type { LocalLibraryIndexCoordinator } from '../library/libraryIndexCoordinator.ts'
@@ -93,6 +97,7 @@ export class ProviderDownloadManager {
   private readonly abortControllers = new Map<string, AbortController>()
   private readonly fetchImpl: typeof globalThis.fetch
   private readonly now: () => Date
+  private readonly resultOperations = new Map<string, Promise<unknown>>()
 
   constructor(private readonly options: ProviderDownloadManagerOptions) {
     this.fetchImpl = options.fetch ?? globalThis.fetch
@@ -103,6 +108,34 @@ export class ProviderDownloadManager {
     return [...this.tasks.values()]
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((task) => structuredClone(task))
+  }
+
+  async completedResult(taskId: string, addToLibrary = false): Promise<string> {
+    const previous = this.resultOperations.get(taskId) ?? Promise.resolve()
+    const operation = previous
+      .catch(() => {})
+      .then(async () => {
+        const task = this.requireTask(taskId)
+        const libraryRoots = await filterAuthorizedLibraryRoots(this.options.getLibraryFolders())
+        const download = await this.options.resolveDownloadRoot?.()
+        const coordinator = this.options.libraryIndexCoordinator()
+        return resolveCompletedDownloadResult(task, {
+          libraryRoots,
+          downloadRoots: download ? [download] : [],
+          addToLibrary,
+          enqueue: coordinator
+            ? (path) => coordinator.enqueueWatcherChanges([{ kind: 'add', path }])
+            : undefined,
+          updatePath: (path) => this.patch(taskId, { targetPath: path }),
+          grant: grantCompletedDownloadAudioFile
+        })
+      })
+    this.resultOperations.set(taskId, operation)
+    try {
+      return await operation
+    } finally {
+      if (this.resultOperations.get(taskId) === operation) this.resultOperations.delete(taskId)
+    }
   }
 
   async create(input: ProviderDownloadCreateInput): Promise<ProviderDownloadTaskSnapshot> {
