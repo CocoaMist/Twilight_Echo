@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -14,14 +14,17 @@ const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
 test('page editing, hidden-page recovery, focus, dragging and theme geometry work in Electron', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'twilight-navigation-pages-'))
+  // Vite switches realpath implementations asynchronously on Windows. Canonical
+  // paths keep the settings stub a single module when TEMP uses an 8.3 alias.
+  const temporaryRoot = await realpath(tmpdir())
+  const directory = await mkdtemp(join(temporaryRoot, 'twilight-navigation-pages-'))
   try {
     await writeFile(join(directory, 'entry.ts'), runtime)
     await writeFile(
       join(directory, 'settings.ts'),
       `import {shallowRef} from 'vue'
 export const settings=shallowRef({navigationPages:{version:1,order:[],hidden:[]}})
-export const useSettingsStore=()=>({settings,updateSettings:async patch=>{if(window.failSave)throw new Error('disk failure');window.writes++;settings.value={...settings.value,...patch};window.saved=JSON.stringify(settings.value);window.navigationTrace?.push({event:'saved',settings:JSON.parse(window.saved)})}})`
+export const useSettingsStore=()=>({settings,updateSettings:async patch=>{if(window.failSave)throw new Error('disk failure');window.writes++;settings.value={...settings.value,...patch};window.saved=JSON.stringify(settings.value)}})`
     )
     await writeFile(
       join(directory, 'music.ts'),
@@ -33,7 +36,22 @@ export const useSettingsStore=()=>({settings,updateSettings:async patch=>{if(win
       logLevel: 'error',
       root: workspace,
       publicDir: false,
-      plugins: [vue()],
+      plugins: [
+        vue(),
+        {
+          name: 'assert-navigation-settings-singleton',
+          generateBundle() {
+            const settingsModules = [...this.getModuleIds()].filter((id) =>
+              /twilight-navigation-pages-[^/\\]+[/\\]settings\.ts$/.test(id)
+            )
+            assert.equal(
+              settingsModules.length,
+              1,
+              `Navigation settings stub loaded more than once: ${settingsModules.join(', ')}`
+            )
+          }
+        }
+      ],
       resolve: {
         alias: {
           '/icon.png': join(workspace, 'resources/icon.png'),
@@ -92,7 +110,8 @@ console.log('NAVIGATION_PAGES_OK');app.exit(0)}catch(error){console.error(error.
   } finally {
     const target = resolve(directory)
     assert.ok(
-      target.startsWith(resolve(tmpdir()) + '\\') || target.startsWith(resolve(tmpdir()) + '/')
+      target.startsWith(resolve(temporaryRoot) + '\\') ||
+        target.startsWith(resolve(temporaryRoot) + '/')
     )
     await rm(target, { recursive: true, force: true })
   }
@@ -118,7 +137,7 @@ const until=async(predicate,message)=>{const end=Date.now()+3000;while(!predicat
 const openEditor=async opener=>{opener.click();await until(()=>dialog()?.matches(':modal')&&!dialog().inert&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'native editor did not finish mounting');await nextTick()}
 const untilClosed=async()=>{const end=Date.now()+3000;while(dialog()){if(Date.now()>end)throw new Error('native dialog exit did not finish');await pause()}await nextTick()}
 window.runNavigationTests=async()=>{
-  window.navigationTrace=[];document.addEventListener('change',event=>window.navigationTrace.push({event:'change',label:event.target.getAttribute('aria-label'),checked:event.target.checked,hidden:[...store.settings.value.navigationPages.hidden]}));window.writes=0;mount();await pause(350)
+  window.writes=0;mount();await pause(350)
   queries.searchQuery.value='moon';await pause(200);key.value='albums';await nextTick();expect(queries.searchQuery.value==='','search leaked to a different page');queries.searchQuery.value='album';await nextTick();key.value='songs';await nextTick();expect(queries.searchQuery.value==='moon'&&queries.debouncedSearchQuery.value==='moon','page search did not restore')
   expect(button('主页')&&button('流媒体音乐')&&button('音乐库'),'primary hierarchy missing')
   expect(document.querySelectorAll('button[aria-label="编辑页面"]').length===1&&button('编辑页面').closest('.menu-bottom')&&!button('全部页面')&&!document.querySelector('.menu-heading button'),'editor must have one footer entry')
@@ -154,8 +173,8 @@ window.runNavigationTests=async()=>{
   expect(button('编辑页面')&&button('添加常用页面')&&!button('主页'),'hidden page appeared after remount')
   await openEditor(button('编辑页面'));expect(!aria('显示网络源').checked&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'editor lost hidden pages');button('取消').click();await untilClosed()
   expect(window.writes===1&&store.settings.value.navigationPages.hidden.length===16,'cancel changed hidden-page configuration')
-  await openEditor(button('添加常用页面'));aria('显示网络源').click();await nextTick();expect(aria('显示网络源').checked,'network checkbox did not update');button('保存').click();await untilClosed();window.navigationTrace.push({event:'closed',hidden:[...store.settings.value.navigationPages.hidden]});button('流媒体音乐').click();await nextTick();await until(()=>button('网络源')?.checkVisibility(),'restored network page did not become visible');window.navigationTrace.push({event:'visible',hidden:[...store.settings.value.navigationPages.hidden]});button('网络源').click();await nextTick()
-  expect(selected==='network'&&window.writes===2&&store.settings.value.navigationPages.hidden.length===15,'editor could not restore a hidden page: '+JSON.stringify({selected,writes:window.writes,hidden:store.settings.value.navigationPages.hidden,trace:window.navigationTrace}))
+  await openEditor(button('添加常用页面'));aria('显示网络源').click();await nextTick();expect(aria('显示网络源').checked,'network checkbox did not update');button('保存').click();await untilClosed();button('流媒体音乐').click();await nextTick();await until(()=>button('网络源')?.checkVisibility(),'restored network page did not become visible');button('网络源').click();await nextTick()
+  expect(selected==='network'&&window.writes===2&&store.settings.value.navigationPages.hidden.length===15,'editor could not restore a hidden page: '+JSON.stringify({selected,writes:window.writes,hidden:store.settings.value.navigationPages.hidden}))
   await openEditor(button('编辑页面'));button('恢复默认').click();button('保存').click();await untilClosed();expect(button('主页')&&button('流派')&&button('音乐云盘'),'restore defaults failed')
   open.value=false;await nextTick();expect(document.querySelector('.side-menu').inert,'closed sidebar remains interactive');open.value=true;await pause()
   document.documentElement.dataset.teShellLayout='custom';document.documentElement.dataset.teShellNavigation='persistent';open.value=false;await pause();expect(!document.querySelector('.side-menu').inert,'persistent shell is inert');delete document.documentElement.dataset.teShellLayout;delete document.documentElement.dataset.teShellNavigation;open.value=true
