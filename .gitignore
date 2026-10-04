@@ -92,6 +92,8 @@ CLAUDE.md
 /.github/*
 !/.github/workflows/
 !/.github/workflows/**
+!/.github/ISSUE_TEMPLATE/
+!/.github/ISSUE_TEMPLATE/**
 
 # AI agent session state / local tool state
 .workbuddy/

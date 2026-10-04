@@ -1,0 +1,116 @@
+name: Bug 反馈
+description: 报告崩溃、功能异常或与预期不符的行为。
+title: '[Bug] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢帮助改进 Twilight Echo！请用一句话概括标题，例如「[Bug] 切换 WASAPI 独占模式后播放无声」。
+        一条 Issue 只描述一个问题；相关问题可以互相引用。
+        截图、日志和诊断文件会公开显示，上传前请删除密码、Cookie、Token、账号信息及私人文件路径。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前检查
+      description: 如果已有相同问题，请到原 Issue 补充信息，避免重复提交。
+      options:
+        - label: 我已搜索已有的 [Issues](https://github.com/Px-asen/Twilight_Echo/issues)，没有找到相同问题。
+          required: true
+        - label: 我已查看 [常见问题](https://github.com/Px-asen/Twilight_Echo/blob/HEAD/README.md#常见问题)，仍未解决。
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本
+      description: 在「设置 → 关于」查看完整版本号；无法启动时填写安装包文件名。源码构建请补充 commit。
+      placeholder: 例如：1.x.x；预览版请保留完整版本号。
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system
+    attributes:
+      label: 操作系统与版本
+      description: 请填写系统名称、版本和架构。Windows 是当前主要验证的平台，macOS / Linux 反馈也欢迎提交。
+      placeholder: 例如：Windows 11 24H2 x64 / macOS 15 arm64 / Ubuntu 24.04 x64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及的功能
+      description: 选择最接近的功能；跨模块问题可以多选。
+      multiple: true
+      options:
+        - 安装、启动与更新
+        - 本地曲库、扫描与标签
+        - 歌单与播放队列
+        - 在线音乐、电台与播客
+        - 音频播放、输出与 DSP
+        - 歌词与桌面歌词
+        - 界面、主题与迷你播放器
+        - 插件与扩展中心
+        - 设置、备份与数据恢复
+        - 其他 / 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: 问题描述与实际表现
+      description: 描述发生了什么、影响什么功能，以及界面显示的错误提示。
+      placeholder: 例如：切换输出模式后，播放进度继续前进，但耳机没有声音；共享模式正常。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 从打开应用开始，按顺序写出操作。无法稳定复现时，请说明问题发生前的操作及大致频率。
+      placeholder: |
+        1. 打开「设置 → 播放」……
+        2. 选择……
+        3. 播放……
+        4. 出现……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: 预期表现
+      description: 你希望完成上述操作后发生什么？
+      placeholder: 例如：切换模式后，歌曲继续通过所选设备正常播放。
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 相关环境与已尝试的方法（选填）
+      description: 仅补充与问题相关的信息。不清楚的项目可以跳过；第三方插件问题请提供插件名称和版本。
+      placeholder: |
+        音频问题：输出设备、驱动版本、共享 / 独占 / ASIO 模式、歌曲格式与采样率、是否开启 DSP。
+        在线音乐问题：音乐来源、是否已登录、是否只有特定歌曲受影响；不要提供登录凭据。
+        插件问题：插件名称、版本、来源，以及停用插件后是否仍然出现。
+        已尝试：重启、更新、切换输出模式等，以及尝试后的结果。
+    validations:
+      required: false
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: 截图、日志或音频诊断（选填）
+      description: |
+        可以在此粘贴截图、拖入附件或粘贴相关日志。
+        音频问题可在「设置 → 关于 → 导出音频诊断」保存诊断文件，并附上导出的 Markdown 报告。
+        上传前请检查并删除敏感信息；无需上传整首音乐或完整媒体库。
+      placeholder: 附上与本次问题相关的截图、错误日志或经过检查的诊断报告。
+    validations:
+      required: false
