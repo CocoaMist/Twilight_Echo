@@ -619,6 +619,7 @@ const playbackSessionPersistence = createPlaybackSessionPersistence({
 })
 const {
   sideMenuBottomOffset,
+  sideMenuToolsClearance,
   sideMenuInlineEnd,
   startSideMenuMonitor,
   stopSideMenuMonitor,
@@ -942,7 +943,13 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
 </script>
 
 <template>
-  <div class="app-shell" :style="{ '--te-side-menu-bottom': `${sideMenuBottomOffset}px` }">
+  <div
+    class="app-shell"
+    :style="{
+      '--te-side-menu-bottom': `${sideMenuBottomOffset}px`,
+      '--te-side-menu-tools-clearance': `${sideMenuToolsClearance}px`
+    }"
+  >
     <LiquidGlassDefs
       :active="liquidGlassActive"
       :follow-pointer="settings.liquidGlass.followPointer"

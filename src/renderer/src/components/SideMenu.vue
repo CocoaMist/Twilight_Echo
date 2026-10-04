@@ -90,7 +90,7 @@ async function handleGroupKey(event: KeyboardEvent, id: SidebarGroupId): Promise
   }
 }
 function handleToolbarKey(event: KeyboardEvent): void {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
   const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll('button')]
   const index = buttons.indexOf(event.target as HTMLButtonElement)
   if (index < 0) return
@@ -100,7 +100,7 @@ function handleToolbarKey(event: KeyboardEvent): void {
       ? 0
       : event.key === 'End'
         ? buttons.length - 1
-        : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length
+        : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
   buttons[next]?.focus()
 }
 const { libraryScanStatus, libraryScanProgress } = useMusicStore()
@@ -114,9 +114,9 @@ const scanningLabel = computed(() => {
   return status.total > 0 ? phase + '中 ' + (status.current || 0) + '/' + status.total : '正在扫描…'
 })
 const showImportDialog = ref(false)
-const directory = ref<'browse' | 'edit' | null>(null)
+const showPagesEditor = ref(false)
 function selectPage(page: NavigationPageDefinition): void {
-  directory.value = null
+  showPagesEditor.value = false
   emit('selectPage', page)
 }
 function setPressOrigin(event: PointerEvent): void {
@@ -140,8 +140,10 @@ function setPressOrigin(event: PointerEvent): void {
       <img src="/icon.png" alt="" /><span>Twilight Echo</span>
     </div>
     <nav class="menu-items" aria-label="页面">
-      <div class="menu-nav">
+      <div class="menu-heading">
         <span class="menu-caption" aria-hidden="true">音乐空间</span>
+      </div>
+      <div class="menu-nav">
         <template v-for="entry in entries" :key="entry.kind === 'page' ? entry.page.id : entry.id">
           <div
             v-if="entry.kind === 'group'"
@@ -226,7 +228,7 @@ function setPressOrigin(event: PointerEvent): void {
           v-if="visible.length === 0"
           type="button"
           class="menu-item"
-          @click="directory = 'edit'"
+          @click="showPagesEditor = true"
         >
           <ThemeIcon class="item-icon" icon-slot="navigation.import" /><span class="item-label"
             >添加常用页面</span
@@ -235,7 +237,13 @@ function setPressOrigin(event: PointerEvent): void {
       </div>
       <div class="menu-bottom">
         <div class="menu-separator"></div>
-        <div class="menu-toolbar" role="toolbar" aria-label="音乐工具" @keydown="handleToolbarKey">
+        <div
+          class="menu-toolbar"
+          role="toolbar"
+          aria-label="音乐工具"
+          aria-orientation="vertical"
+          @keydown="handleToolbarKey"
+        >
           <button
             type="button"
             class="menu-item toolbar-item"
@@ -244,28 +252,18 @@ function setPressOrigin(event: PointerEvent): void {
             @click="showImportDialog = true"
           >
             <ThemeIcon class="item-icon" icon-slot="navigation.import" /><span class="item-label"
-              >导入</span
+              >导入歌曲</span
             >
-          </button>
-          <button
-            type="button"
-            class="menu-item toolbar-item"
-            title="全部页面"
-            aria-label="全部页面"
-            @click="directory = 'browse'"
-          >
-            <i class="item-icon pi pi-th-large" aria-hidden="true"></i
-            ><span class="item-label">目录</span>
           </button>
           <button
             type="button"
             class="menu-item toolbar-item"
             title="编辑页面"
             aria-label="编辑页面"
-            @click="directory = 'edit'"
+            @click="showPagesEditor = true"
           >
             <i class="item-icon pi pi-pencil" aria-hidden="true"></i
-            ><span class="item-label">编辑</span>
+            ><span class="item-label">编辑页面</span>
           </button>
         </div>
         <span v-if="scanning" class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
@@ -275,10 +273,10 @@ function setPressOrigin(event: PointerEvent): void {
   <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
   <NativeDialogTransition>
     <NavigationPagesDialog
-      v-if="directory"
+      v-if="showPagesEditor"
       :pages="props.pages"
-      :edit="directory === 'edit'"
-      @close="directory = null"
+      edit
+      @close="showPagesEditor = false"
       @select="selectPage"
     />
   </NativeDialogTransition>
@@ -382,7 +380,7 @@ function setPressOrigin(event: PointerEvent): void {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  padding: 16px 12px 16px 4px;
+  padding: 16px 12px max(16px, var(--te-side-menu-tools-clearance, 0px)) 4px;
 }
 
 .menu-nav {
@@ -396,9 +394,17 @@ function setPressOrigin(event: PointerEvent): void {
   gap: 6px;
 }
 
+.menu-heading {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-height: 32px;
+  margin: 0 0 10px 8px;
+  padding-left: 16px;
+}
+
 .menu-caption {
   flex-shrink: 0;
-  padding: 6px 12px 10px 24px;
   color: var(--te-navigation-icon);
   font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
   letter-spacing: 1.5px;
@@ -467,37 +473,21 @@ function setPressOrigin(event: PointerEvent): void {
 
 .menu-toolbar {
   display: flex;
-  gap: 4px;
-  padding-left: 8px;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .menu-item.toolbar-item {
-  flex: 1;
-  min-width: 0;
-  width: auto;
-  height: auto;
-  min-height: 56px;
-  margin: 0;
-  padding: 8px 4px;
-  flex-direction: column;
-  justify-content: center;
-  gap: 6px;
-}
-
-.toolbar-item .item-icon {
-  width: 20px;
-  height: 20px;
-  font-size: calc(var(--te-font-size-body, 14px) * 1.14286);
+  color: var(--te-navigation-icon);
 }
 
 .toolbar-item .item-label {
-  font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
+  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
 }
 
 .menu-bottom {
   flex-shrink: 0;
   margin-top: auto;
-  padding-top: 8px;
 }
 
 .menu-item {
@@ -632,15 +622,14 @@ function setPressOrigin(event: PointerEvent): void {
   left: 28px;
 }
 
-:global(html[data-te-navigation-style='compact'] .menu-item.toolbar-item) {
-  gap: 6px;
-  padding-inline: 2px;
+:global(html[data-te-navigation-style='compact'] .menu-heading) {
+  padding-left: 12px;
 }
 
 :global(html[data-te-navigation-style='rail'] .menu-items) {
   min-width: 0;
   max-width: 100%;
-  padding: 12px 8px;
+  padding: 12px 8px max(12px, var(--te-side-menu-tools-clearance, 0px));
 }
 
 :global(html[data-te-navigation-style='rail'] .menu-nav) {
@@ -665,14 +654,11 @@ function setPressOrigin(event: PointerEvent): void {
 }
 
 :global(html[data-te-navigation-style='rail'] .menu-toolbar) {
-  flex-direction: column;
-  padding-left: 6px;
+  gap: 5px;
 }
 
-:global(html[data-te-navigation-style='rail'] .menu-item.toolbar-item) {
-  width: 44px;
-  min-height: 40px;
-  margin: 0;
+:global(html[data-te-navigation-style='rail'] .menu-heading) {
+  display: none;
 }
 
 :global(html[data-te-navigation-style='rail'] .menu-caption),
@@ -704,8 +690,8 @@ function setPressOrigin(event: PointerEvent): void {
 
 .menu-separator {
   height: 1px;
-  margin: 12px 10px 12px 16px;
-  background: linear-gradient(to right, var(--te-navigation-border), transparent);
+  margin: 12px 12px 12px 24px;
+  background: var(--te-navigation-border);
 }
 
 .scanning-text {

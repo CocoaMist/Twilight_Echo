@@ -13,7 +13,7 @@ import { build } from 'vite'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
-test('page editing, hidden-page access, focus, dragging and theme geometry work in Electron', async () => {
+test('page editing, hidden-page recovery, focus, dragging and theme geometry work in Electron', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-navigation-pages-'))
   try {
     await writeFile(join(directory, 'entry.ts'), runtime)
@@ -75,6 +75,7 @@ export const useSettingsStore=()=>({settings,updateSettings:async patch=>{if(win
       `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');
 app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1280,height:820,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{
 await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runNavigationTests()');
+for(const tone of ['pureWhite','dark']){await win.webContents.executeJavaScript('window.checkAdjacentNavigation('+JSON.stringify({tone})+')');if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,{recursive:true});fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,'adjacent-'+tone+'.png'),(await win.webContents.capturePage()).toPNG())}}
 if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,{recursive:true});for(const tone of ['pureWhite','dark'])for(const expanded of [false,true]){await win.webContents.executeJavaScript('window.prepareSidebarPreview('+JSON.stringify({tone,expanded})+')');fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,'grouped-'+tone+'-'+expanded+'.png'),(await win.webContents.capturePage()).toPNG())}}
 for(const width of [1280,760])for(const tone of ['pureWhite','dark'])for(const bottom of [52,84,124]){win.setSize(width,820);await win.webContents.executeJavaScript('window.checkNavigationGeometry('+JSON.stringify({width,tone,bottom})+')');if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,{recursive:true});fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,width+'-'+tone+'-'+bottom+'.png'),(await win.webContents.capturePage()).toPNG())}}
 await win.webContents.executeJavaScript('window.checkNavigationStyles()');await win.webContents.executeJavaScript('window.openNavigationEditor()');if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS)fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,'editor-760-dark.png'),(await win.webContents.capturePage()).toPNG());await win.webContents.executeJavaScript('window.checkCustomNavigation()');
@@ -99,6 +100,7 @@ const runtime = `import {createApp,h,nextTick,ref} from 'vue'
 import SideMenu from '@renderer/components/SideMenu.vue'
 import {BUILTIN_NAVIGATION_PAGES} from '@renderer/app/navigationPages.ts'
 import {useSettingsStore} from '@renderer/stores/useSettingsStore'
+import {useSideMenuClearance} from '@renderer/app/useSideMenuClearance'
 import {useSongListSearch} from '@renderer/components/song-list/useSongListSearch'
 import '@renderer/assets/main.css'
 import '@renderer/assets/icon-fonts'
@@ -115,6 +117,9 @@ window.runNavigationTests=async()=>{
   window.writes=0;mount();await pause(350)
   queries.searchQuery.value='moon';await pause(200);key.value='albums';await nextTick();expect(queries.searchQuery.value==='','search leaked to a different page');queries.searchQuery.value='album';await nextTick();key.value='songs';await nextTick();expect(queries.searchQuery.value==='moon'&&queries.debouncedSearchQuery.value==='moon','page search did not restore')
   expect(button('主页')&&button('流媒体音乐')&&button('音乐库'),'primary hierarchy missing')
+  expect(document.querySelectorAll('button[aria-label="编辑页面"]').length===1&&button('编辑页面').closest('.menu-bottom')&&!button('全部页面')&&!document.querySelector('.menu-heading button'),'editor must have one footer entry')
+  const menu=document.querySelector('.side-menu'),footer=menu.querySelector('.menu-bottom'),items=menu.querySelector('.menu-items')
+  expect(Math.abs(menu.getBoundingClientRect().bottom-footer.getBoundingClientRect().bottom-parseFloat(getComputedStyle(items).paddingBottom))<=1,'collapsed navigation leaves empty space below tools')
   expect(button('流媒体音乐').getAttribute('aria-expanded')==='false'&&button('音乐库').getAttribute('aria-expanded')==='false','groups should start tucked away on home')
   button('流媒体音乐').click();await nextTick();expect(button('音乐云盘').getBoundingClientRect().height>0&&selected==='','expanding streaming navigated or omitted cloud')
   button('发现歌单').click();await nextTick();expect(selected==='discover'&&open.value&&button('流媒体音乐').getAttribute('aria-expanded')==='true','child navigation closed the menu')
@@ -122,10 +127,11 @@ window.runNavigationTests=async()=>{
   active.value='library';await nextTick();expect(button('流媒体音乐').getAttribute('aria-expanded')==='true','external navigation did not reveal active child')
   button('音乐库').focus();button('音乐库').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));await nextTick();await nextTick();expect(document.activeElement===button('所有歌曲'),'keyboard expansion did not focus first child')
   button('所有歌曲').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));await nextTick();expect(document.activeElement===button('音乐库')&&button('音乐库').getAttribute('aria-expanded')==='false','keyboard collapse did not restore branch focus')
-  button('导入歌曲').focus();button('导入歌曲').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));expect(document.activeElement===button('全部页面'),'toolbar arrow navigation failed')
+  button('导入歌曲').focus();button('导入歌曲').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));expect(document.activeElement===button('编辑页面'),'toolbar arrow navigation failed')
   active.value='local-home';selected='';await nextTick()
   const opener=button('编辑页面');opener.focus();opener.click();await pause(150)
   expect(dialog().matches(':modal'),'editor is not modal')
+  expect(dialog().querySelector('h2').textContent==='编辑页面'&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length&&!aria('搜索页面'),'footer did not open editing directly')
   aria('下移主页').click();aria('显示搜索').click();button('取消').click();await untilClosed()
   expect(window.writes===0&&selected==='','cancel wrote settings or navigated')
   expect(document.activeElement===opener,'editor did not restore focus')
@@ -141,20 +147,33 @@ window.runNavigationTests=async()=>{
   for(const input of dialog().querySelectorAll('input[type=checkbox]'))if(input.checked)input.click()
   button('保存').click();await untilClosed();expect(window.writes===1&&document.querySelectorAll('.menu-nav [aria-current]').length===0,'hide-all failed')
   const saved=window.saved;app.unmount();store.settings.value=JSON.parse(saved);mount();await pause()
-  expect(button('全部页面')&&button('编辑页面')&&!button('主页'),'hidden page appeared after remount')
-  button('全部页面').focus();button('全部页面').click();await pause();const search=aria('搜索页面');expect(document.activeElement===search,'directory did not focus search')
-  search.value='网络';search.dispatchEvent(new Event('input',{bubbles:true}));await nextTick();expect(dialog().querySelectorAll('.page-destination').length===1,'directory filtering failed');dialog().querySelector('.page-destination').click();await untilClosed()
-  expect(selected==='network'&&window.writes===1&&store.settings.value.navigationPages.hidden.length===16,'opening hidden page changed configuration')
+  expect(button('编辑页面')&&button('添加常用页面')&&!button('主页'),'hidden page appeared after remount')
+  button('编辑页面').click();await pause();expect(!aria('显示网络源').checked&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'editor lost hidden pages');button('取消').click();await untilClosed()
+  expect(window.writes===1&&store.settings.value.navigationPages.hidden.length===16,'cancel changed hidden-page configuration')
+  button('添加常用页面').click();await pause();aria('显示网络源').click();button('保存').click();await untilClosed();button('流媒体音乐').click();await nextTick();button('网络源').click();await nextTick()
+  expect(selected==='network'&&window.writes===2&&store.settings.value.navigationPages.hidden.length===15,'editor could not restore a hidden page')
   button('编辑页面').click();await pause();button('恢复默认').click();button('保存').click();await untilClosed();expect(button('主页')&&button('流派')&&button('音乐云盘'),'restore defaults failed')
   open.value=false;await nextTick();expect(document.querySelector('.side-menu').inert,'closed sidebar remains interactive');open.value=true;await pause()
   document.documentElement.dataset.teShellLayout='custom';document.documentElement.dataset.teShellNavigation='persistent';open.value=false;await pause();expect(!document.querySelector('.side-menu').inert,'persistent shell is inert');delete document.documentElement.dataset.teShellLayout;delete document.documentElement.dataset.teShellNavigation;open.value=true
   store.settings.value={navigationPages:{version:1,order:BUILTIN_NAVIGATION_PAGES.map(page=>page.id),hidden:[]}}
   await nextTick();for(const label of ['流媒体音乐','音乐库'])if(button(label).getAttribute('aria-expanded')==='false')button(label).click();await nextTick()
 }
+window.checkAdjacentNavigation=async({tone})=>{
+  document.documentElement.dataset.theme=tone;document.documentElement.style.setProperty('--te-font-size-body','14px')
+  const host=document.querySelector('#app'),menu=document.querySelector('.side-menu'),bar=document.querySelector('.playbar-fixture')
+  host.style.setProperty('--te-side-menu-bottom','0px');bar.classList.add('player-bar-shell','menu-open');bar.style.left=(menu.offsetLeft+menu.offsetWidth+18)+'px';bar.style.height='84px';await pause(350)
+  const clearance=useSideMenuClearance({showLocalSidebar:visible,hasPlayerBar:ref(true),menuOpen:open});clearance.measureSideMenuClearance()
+  host.style.setProperty('--te-side-menu-bottom',clearance.sideMenuBottomOffset.value+'px');host.style.setProperty('--te-side-menu-tools-clearance',clearance.sideMenuToolsClearance.value+'px');await nextTick()
+  expect(clearance.sideMenuBottomOffset.value===0&&clearance.sideMenuToolsClearance.value===0,'adjacent playbar reserves empty space under the tools')
+  expect(Math.abs(menu.getBoundingClientRect().bottom-window.innerHeight)<=1,'adjacent playbar shortens the sidebar')
+  expect(Math.abs(window.innerHeight-button('编辑页面').getBoundingClientRect().bottom-16)<=1,'edit entry leaves a playback-height gap above the window bottom')
+  clearance.dispose()
+}
 window.checkNavigationGeometry=async({width,tone,bottom})=>{
+  const bar=document.querySelector('.playbar-fixture');bar.classList.remove('player-bar-shell','menu-open');bar.style.left='0';document.querySelector('#app').style.setProperty('--te-side-menu-tools-clearance','0px')
   document.documentElement.dataset.theme=tone;document.documentElement.style.setProperty('--te-font-size-body','21px');document.querySelector('#app').style.setProperty('--te-side-menu-bottom',bottom+'px');document.querySelector('.playbar-fixture').style.height=bottom+'px';await pause(350)
   const prefs=JSON.stringify(store.settings.value.navigationPages),menu=document.querySelector('.side-menu'),nav=menu.querySelector('.menu-nav'),footer=menu.querySelector('.menu-bottom')
-  expect(menu.getBoundingClientRect().bottom<=window.innerHeight-bottom+1,'sidebar overlaps playbar');expect(footer.getBoundingClientRect().bottom<=menu.getBoundingClientRect().bottom+1,'fixed tools leave sidebar');expect(nav.scrollHeight>nav.clientHeight,'large text directory does not scroll independently')
+  expect(menu.getBoundingClientRect().bottom<=window.innerHeight-bottom+1,'sidebar overlaps playbar');expect(nav.scrollHeight>nav.clientHeight,'large text directory does not scroll independently');expect(Math.abs(menu.getBoundingClientRect().bottom-footer.getBoundingClientRect().bottom-parseFloat(getComputedStyle(menu.querySelector('.menu-items')).paddingBottom))<=1,'tools are not anchored to the sidebar bottom');expect(button('编辑页面').getBoundingClientRect().top>=menu.getBoundingClientRect().top,'edit action scrolled out of footer')
   for(const label of ['主页','流媒体音乐','音乐库','我的音乐库']){const text=button(label).querySelector('.item-label');expect(text.scrollWidth<=text.clientWidth,'large-text navigation label is truncated: '+label)}
   button('编辑页面').click();await pause();expect(dialog().getBoundingClientRect().right<=width&&dialog().getBoundingClientRect().bottom<=window.innerHeight,'dialog overflows narrow window');button('取消').click();await untilClosed();expect(JSON.stringify(store.settings.value.navigationPages)===prefs,'theme/layout changed saved preferences')
 }

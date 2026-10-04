@@ -45,15 +45,28 @@ export function compareSemver(left: string, right: string): number {
   return compareVersions(a, b)
 }
 
-export function isCompatibleVersionRange(range: string, version: string): boolean {
+export function isCompatibleTwilightRange(range: string, version: string): boolean {
+  // Preview hosts can run plugins targeting earlier releases. Plugin dependencies
+  // keep the default prerelease opt-in policy below.
+  return isCompatibleVersionRange(range, version, { includePrerelease: true })
+}
+
+export function isCompatibleVersionRange(
+  range: string,
+  version: string,
+  options: { includePrerelease?: boolean } = {}
+): boolean {
   const actual = parseVersion(version)
   if (!actual) return false
   const trimmed = range.trim()
-  if (trimmed === '*' || trimmed === '') return actual.prerelease.length === 0
+  if (trimmed === '*' || trimmed === '') {
+    return options.includePrerelease === true || actual.prerelease.length === 0
+  }
   const operator = /^(>=|\^|~)/.exec(trimmed)?.[0] ?? ''
   const required = parseVersion(trimmed.slice(operator.length))
   if (!required) return false
   if (
+    !options.includePrerelease &&
     actual.prerelease.length &&
     (!required.prerelease.length ||
       actual.core.some((part, index) => part !== required.core[index]))
@@ -72,5 +85,6 @@ export function isCompatibleVersionRange(range: string, version: string): boolea
         : minor > 0
           ? [0, minor + 1, 0]
           : [0, 0, patch + 1]
-  return compareVersions(actual, { core: upper, prerelease: [] }) < 0
+  // Exclude the next incompatible release, including its earliest prerelease.
+  return compareVersions(actual, { core: upper, prerelease: ['0'] }) < 0
 }

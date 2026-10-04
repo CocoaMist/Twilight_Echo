@@ -79,6 +79,26 @@ test('fails cyclic plugin dependencies and dependents', () => {
   assert.deepEqual(plan.ordered, [])
 })
 
+test('prerelease plugin dependencies still require an explicit matching prerelease range', () => {
+  const cases: Array<[string, string, boolean]> = [
+    ['*', '1.3.0-perview', false],
+    ['>=1.2.0', '1.3.0-perview', false],
+    ['^1.2.0', '1.3.0-perview', false],
+    ['~1.2.0', '1.2.1-beta.1', false],
+    ['>=1.3.0-beta.1', '1.3.0-beta.2', true],
+    ['>=1.3.0-beta.2', '1.3.0-beta.1', false],
+    ['>=1.3.0-beta.1', '1.4.0-beta.2', false],
+    ['1.3.0-perview', '1.3.0-perview', true]
+  ]
+  for (const [range, version, compatible] of cases) {
+    const plan = planPluginStartup([
+      plugin('com.example.consumer', { dependencies: { 'com.example.base': range } }),
+      plugin('com.example.base', { version })
+    ])
+    assert.equal(plan.failures.has('com.example.consumer'), !compatible, `${range}: ${version}`)
+  }
+})
+
 test('dependency startup rejects versions below the range and across zero-major caret bounds', () => {
   for (const [range, version] of [
     ['^1.2.4', '1.0.0'],
