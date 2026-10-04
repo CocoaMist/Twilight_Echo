@@ -6,15 +6,7 @@ const { PRODUCT_SCRIPTS } = require('./run-product-quality-gate.cjs')
 
 const root = join(__dirname, '..')
 const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
-// .github/ is gitignored and not shipped in fresh clones (upstream deleted the
-// workflow), so keep the gate green when the file is absent while still
-// validating it whenever it exists locally.
-let workflow = null
-try {
-  workflow = readFileSync(join(root, '.github', 'workflows', 'audio-engine.yml'), 'utf8')
-} catch {
-  workflow = null
-}
+const workflow = readFileSync(join(root, '.github', 'workflows', 'audio-engine.yml'), 'utf8')
 const finalIntegratedGate = readFileSync(
   join(root, 'scripts', 'run-final-integrated-gate.ps1'),
   'utf8'
@@ -207,7 +199,8 @@ test('required Windows CI runs complete product outcomes with native fixtures an
   assert.doesNotMatch(workflow, /xvfb-run/)
   assert.match(workflow, /W64DEVKIT_ROOT=/)
   assert.match(workflow, /run: pnpm run test:product/)
-  assert.match(workflow, /pnpm run test:quality-policy/)
+  // These checks already run inside test:product, and build includes typecheck.
+  assert.doesNotMatch(workflow, /run: pnpm run (?:test:quality-policy|typecheck)\b/)
   assert.match(workflow, /product-quality-gate\.json/)
   for (const script of [
     'test:plugins',
@@ -226,12 +219,43 @@ test('required Windows CI runs complete product outcomes with native fixtures an
   }
   assert.match(workflow, /pnpm run test:duplicate-detection-benchmark/)
   assert.match(workflow, /pnpm run benchmark:duplicate-detection:ci --/)
+  assert.match(
+    workflow,
+    /name: Run isolated duplicate detection 10k benchmark\r?\n\s+id: duplicate-benchmark\r?\n\s+if: github\.event_name == 'workflow_dispatch'/
+  )
+  assert.match(workflow, /if: always\(\) && steps\.duplicate-benchmark\.outcome != 'skipped'/)
   assert.match(workflow, /duplicate-detection-benchmark\.manifest\.json/)
   assert.ok(
     workflow.indexOf('Test product behavior') >= 0 &&
       workflow.indexOf('Test product behavior') <
         workflow.indexOf('Run isolated duplicate detection 10k benchmark')
   )
+})
+
+test('CI keeps Windows checks automatic and package workflows manual', () => {
+  assert.doesNotMatch(workflow, /mac-release:|runs-on: (?:macos|ubuntu)|build:(?:mac|linux)/)
+  for (const file of ['build-linux.yml', 'build-macos.yml']) {
+    const packaging = readFileSync(join(root, '.github', 'workflows', file), 'utf8')
+    const triggers = packaging.match(/^on:\r?\n([\s\S]*?)(?=^[^\s#])/m)?.[1]
+    assert.equal(triggers?.trim(), 'workflow_dispatch:', `${file} must only run manually`)
+  }
+  const macPackaging = readFileSync(join(root, '.github', 'workflows', 'build-macos.yml'), 'utf8')
+  assert.match(macPackaging, /runner: macos-15-intel/)
+  assert.match(macPackaging, /runner: macos-15\r?\n/)
+  assert.match(workflow, /needs: \[repository, native-audio\]/)
+  assert.ok(PRODUCT_SCRIPTS.includes('test:app'))
+  assert.ok(PRODUCT_SCRIPTS.includes('test:renderer-data-tooling'))
+  for (const file of [
+    'feature-test-gates.test.cjs',
+    'architecture-boundaries.test.cjs',
+    'ipc-channel-consistency.test.cjs'
+  ]) {
+    assert.ok(packageJson.scripts['test:app'].includes(file))
+  }
+  assert.ok(
+    packageJson.scripts['test:renderer-data-tooling'].includes('run-product-quality-gate.test.cjs')
+  )
+  assert.match(packageJson.scripts.build, /^pnpm run typecheck &&/)
 })
 
 test('Windows no-device and release gates cannot omit product suites or the live duplicate benchmark', () => {

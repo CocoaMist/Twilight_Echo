@@ -94,9 +94,10 @@ test('settings skip distant content without shifting scroll height or breaking n
       `
 const {app,BrowserWindow,ipcMain}=require('electron');
 app.setPath('userData',require('node:path').join(__dirname,'profile'));
+app.commandLine.appendSwitch('force-device-scale-factor','1');
 app.whenReady().then(async()=>{
- const win=new BrowserWindow({show:false,width:1440,height:900,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});
- ipcMain.handle('settings:resize',async(_event,width)=>{win.setSize(width,900);await new Promise(resolve=>setTimeout(resolve,80))});
+ const win=new BrowserWindow({show:false,width:1440,height:900,useContentSize:true,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});
+ ipcMain.handle('settings:resize',async(_event,width)=>{win.setContentSize(width,900);await new Promise(resolve=>setTimeout(resolve,80))});
  try {
   await win.loadFile(require('node:path').join(__dirname,'index.html'));
   await win.webContents.executeJavaScript("window.resizeTestWindow=width=>require('electron').ipcRenderer.invoke('settings:resize',width);void 0");

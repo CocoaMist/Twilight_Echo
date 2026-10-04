@@ -205,7 +205,7 @@ select {
   position: fixed;
   inset: 0;
   z-index: 1700;
-  background: #0007;
+  background: var(--te-dialog-backdrop);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -228,7 +228,7 @@ table {
 td,
 th {
   padding: 8px;
-  border-bottom: 1px solid #8884;
+  border-bottom: 1px solid var(--te-card-border);
 }
 .conflict {
   display: block;

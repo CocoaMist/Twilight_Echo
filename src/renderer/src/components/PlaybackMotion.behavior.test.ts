@@ -66,7 +66,7 @@ test('mini customizer lifecycle, reduced fades and onboarding parallax honor liv
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow,ipcMain,nativeTheme}=require('electron');const fs=require('node:fs/promises');const path=require('node:path');app.commandLine.appendSwitch('force-device-scale-factor','1');app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:500,height:190,useContentSize:true,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});ipcMain.handle('motion-resize',async(_event,width,height)=>{win.setContentSize(width,height);return true});ipcMain.handle('motion-system',async(_event,reduced)=>{nativeTheme.prefersReducedMotion=reduced;return true});ipcMain.handle('motion-capture',async(_event,label)=>{const dir=process.env.TWILIGHT_MOTION_VISUAL_DIR;if(!dir)return;await fs.mkdir(dir,{recursive:true});await fs.writeFile(path.join(dir,label+'.png'),(await win.webContents.capturePage()).toPNG())});win.webContents.on('console-message',(_e,_l,message)=>console.error(message));try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runPlaybackMotionTests()');console.log('PLAYBACK_MOTION_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
+      `const {app,BrowserWindow,ipcMain,nativeTheme}=require('electron');const fs=require('node:fs/promises');const path=require('node:path');app.setPath('userData',path.join(__dirname,'profile'));app.commandLine.appendSwitch('force-device-scale-factor','1');app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:500,height:190,useContentSize:true,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});ipcMain.handle('motion-resize',async(_event,width,height)=>{win.setContentSize(width,height);return true});ipcMain.handle('motion-system',async(_event,reduced)=>{nativeTheme.prefersReducedMotion=reduced;return true});ipcMain.handle('motion-capture',async(_event,label)=>{const dir=process.env.TWILIGHT_MOTION_VISUAL_DIR;if(!dir)return;await fs.mkdir(dir,{recursive:true});await fs.writeFile(path.join(dir,label+'.png'),(await win.webContents.capturePage()).toPNG())});win.webContents.on('console-message',(_e,_l,message)=>console.error(message));try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runPlaybackMotionTests()');console.log('PLAYBACK_MOTION_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
@@ -144,7 +144,7 @@ window.runPlaybackMotionTests=async()=>{
       animations.forEach(a=>a.play())
     }
     await until(()=>!panel()&&disk.windowHeight===190,mode+' customizer did not finish leaving')
-    expect(!document.querySelector('.mini-info').inert,'mini controls remained inert after leave')
+    await until(()=>!document.querySelector('.mini-info').inert,'mini controls remained inert after leave')
   }
   motionListener('full');await tick();open();await until(panel,'reversal panel missing');await sleep(240)
   close();await tick();open();await sleep(260)

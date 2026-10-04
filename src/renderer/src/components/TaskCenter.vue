@@ -332,7 +332,7 @@ onUnmounted(() => stops.forEach((stop) => stop()))
   position: fixed;
   inset: 0;
   z-index: 1600;
-  background: #0007;
+  background: var(--te-dialog-backdrop);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -345,7 +345,7 @@ onUnmounted(() => stops.forEach((stop) => stop()))
   border-radius: 16px;
   background: var(--te-app-bg);
   color: var(--te-settings-text);
-  box-shadow: 0 16px 64px #0005;
+  box-shadow: var(--te-glass-shadow);
 }
 header,
 .actions {
@@ -360,7 +360,7 @@ header h2 {
 }
 article {
   padding: 16px 0;
-  border-bottom: 1px solid var(--te-border-color, #8884);
+  border-bottom: 1px solid var(--te-card-border);
   overflow-wrap: anywhere;
 }
 article > span {

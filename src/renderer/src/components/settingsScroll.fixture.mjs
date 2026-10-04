@@ -104,6 +104,7 @@ window.runSettingsScrollTests = async () => {
   const app = createApp({ render: () => (mounted.value ? h(SettingsPage) : null) })
   app.mount('#app')
   await settle()
+  expect(innerWidth === 1440, `unexpected desktop viewport: ${innerWidth}`)
   const page = document.querySelector('.settings-preview-page')
   const sections = [...page.querySelectorAll('.preview-section')]
   const nav = (label) =>
@@ -160,6 +161,7 @@ window.runSettingsScrollTests = async () => {
   // every preceding card at the new width, including skipped cards.
   await window.resizeTestWindow(760)
   await settle()
+  expect(innerWidth === 760, `unexpected narrow viewport: ${innerWidth}`)
   nav('性能').click()
   await settle()
   const performance = document.querySelector('#performance')

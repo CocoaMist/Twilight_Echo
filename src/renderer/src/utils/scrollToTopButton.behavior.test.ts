@@ -66,6 +66,7 @@ function electronRunnerSource(): string {
   return `const { app, BrowserWindow } = require('electron')
 const path = require('node:path')
 const target = process.argv.at(-1)
+app.setPath('userData', path.join(__dirname, 'profile'))
 app.whenReady().then(async () => {
   const window = new BrowserWindow({
     show: false,
@@ -305,9 +306,18 @@ window.runScrollTopChecks = async () => {
   page.scrollTo({ top: 1800, behavior: 'instant' })
   hover(page)
   await nudge()
+  // Windows runners can disable compositor scroll animations independently of
+  // the app preference. Observe the requested behavior while still delegating
+  // to the real DOM scroll and checking that it reaches the target.
+  const nativeScrollTo = page.scrollTo.bind(page)
+  let scrollRequest
+  page.scrollTo = (options) => { scrollRequest = options; nativeScrollTo(options) }
   control().click()
-  if (page.scrollTop === 0) fail('full mode lost smooth scrolling')
-  page.scrollTo({ top: 0, behavior: 'instant' })
+  if (scrollRequest?.behavior !== 'smooth' || scrollRequest.top !== 0) fail('full mode lost smooth scrolling')
+  const scrollDeadline = performance.now() + 2000
+  while (page.scrollTop !== 0 && performance.now() < scrollDeadline) await frames(1)
+  if (page.scrollTop !== 0) fail('full mode did not reach the top: ' + page.scrollTop)
+  page.scrollTo = nativeScrollTo
   page.style.scrollBehavior = 'auto'
 
   html.dataset.teMotion = 'full'
