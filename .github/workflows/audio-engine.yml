@@ -85,6 +85,10 @@ jobs:
         run: pnpm run lint
 
       - name: Test product behavior
+        # Avoid Windows user TEMP aliases giving Vite fixtures multiple module identities.
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: pnpm run test:product -- --report "$RUNNER_TEMP/product-quality-gate.json"
 
       - name: Upload product quality report

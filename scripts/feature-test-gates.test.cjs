@@ -199,6 +199,17 @@ test('required Windows CI runs complete product outcomes with native fixtures an
   assert.doesNotMatch(workflow, /xvfb-run/)
   assert.match(workflow, /W64DEVKIT_ROOT=/)
   assert.match(workflow, /run: pnpm run test:product/)
+  const productStep = workflow.match(
+    /name: Test product behavior\r?\n([\s\S]*?)(?=\r?\n\s+- name:)/
+  )?.[1]
+  assert.ok(productStep, 'the product test step must exist')
+  for (const name of ['TEMP', 'TMP']) {
+    assert.match(
+      productStep,
+      new RegExp(`^\\s+${name}: \\$\\{\\{ runner\\.temp \\}\\}\\r?$`, 'm'),
+      'Windows product fixtures must use the runner temporary directory without user aliases'
+    )
+  }
   // These checks already run inside test:product, and build includes typecheck.
   assert.doesNotMatch(workflow, /run: pnpm run (?:test:quality-policy|typecheck)\b/)
   assert.match(workflow, /product-quality-gate\.json/)
