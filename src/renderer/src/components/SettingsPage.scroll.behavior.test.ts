@@ -96,10 +96,23 @@ const {app,BrowserWindow,ipcMain}=require('electron');
 app.setPath('userData',require('node:path').join(__dirname,'profile'));
 app.commandLine.appendSwitch('force-device-scale-factor','1');
 app.whenReady().then(async()=>{
- const win=new BrowserWindow({show:false,width:1440,height:900,useContentSize:true,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});
- ipcMain.handle('settings:resize',async(_event,width)=>{win.setContentSize(width,900);await new Promise(resolve=>setTimeout(resolve,80))});
+ const win=new BrowserWindow({show:false,width:1024,height:768,useContentSize:true,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});
+ const resizeViewport=async width=>{
+  // Windows limits the initial hidden window to the runner's 1024px display.
+  // An explicit resize after loading can exceed the display's work area.
+  win.setContentSize(width,900);
+  const deadline=Date.now()+3000;
+  while(Date.now()<deadline){
+   const viewport=await win.webContents.executeJavaScript('[innerWidth,innerHeight]');
+   if(viewport[0]===width&&viewport[1]===900)return;
+   await new Promise(resolve=>setTimeout(resolve,20));
+  }
+  throw new Error('settings viewport did not reach '+width+'x900');
+ };
+ ipcMain.handle('settings:resize',(_event,width)=>resizeViewport(width));
  try {
   await win.loadFile(require('node:path').join(__dirname,'index.html'));
+  await resizeViewport(1440);
   await win.webContents.executeJavaScript("window.resizeTestWindow=width=>require('electron').ipcRenderer.invoke('settings:resize',width);void 0");
   console.log(await win.webContents.executeJavaScript('window.runSettingsScrollTests()'));
   app.exit(0);

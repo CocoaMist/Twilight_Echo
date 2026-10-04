@@ -73,11 +73,13 @@ export const useSettingsStore=()=>({settings,updateSettings:async patch=>{if(win
     await writeFile(
       join(directory, 'runner.cjs'),
       `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');
-app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1280,height:820,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{
-await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runNavigationTests()');
+app.setPath('userData',path.join(__dirname,'profile'));app.commandLine.appendSwitch('force-device-scale-factor','1');
+app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1024,height:768,useContentSize:true,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});
+const resizeViewport=async width=>{win.setContentSize(width,820);const deadline=Date.now()+3000;while(Date.now()<deadline){const viewport=await win.webContents.executeJavaScript('[innerWidth,innerHeight]');if(viewport[0]===width&&viewport[1]===820)return;await new Promise(resolve=>setTimeout(resolve,20))}throw new Error('navigation viewport did not reach '+width+'x820')};try{
+await win.loadFile(process.argv.at(-1));await resizeViewport(1280);await win.webContents.executeJavaScript('window.runNavigationTests()');
 for(const tone of ['pureWhite','dark']){await win.webContents.executeJavaScript('window.checkAdjacentNavigation('+JSON.stringify({tone})+')');if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,{recursive:true});fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,'adjacent-'+tone+'.png'),(await win.webContents.capturePage()).toPNG())}}
 if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,{recursive:true});for(const tone of ['pureWhite','dark'])for(const expanded of [false,true]){await win.webContents.executeJavaScript('window.prepareSidebarPreview('+JSON.stringify({tone,expanded})+')');fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,'grouped-'+tone+'-'+expanded+'.png'),(await win.webContents.capturePage()).toPNG())}}
-for(const width of [1280,760])for(const tone of ['pureWhite','dark'])for(const bottom of [52,84,124]){win.setSize(width,820);await win.webContents.executeJavaScript('window.checkNavigationGeometry('+JSON.stringify({width,tone,bottom})+')');if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,{recursive:true});fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,width+'-'+tone+'-'+bottom+'.png'),(await win.webContents.capturePage()).toPNG())}}
+for(const width of [1280,760])for(const tone of ['pureWhite','dark'])for(const bottom of [52,84,124]){await resizeViewport(width);await win.webContents.executeJavaScript('window.checkNavigationGeometry('+JSON.stringify({width,tone,bottom})+')');if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,{recursive:true});fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,width+'-'+tone+'-'+bottom+'.png'),(await win.webContents.capturePage()).toPNG())}}
 await win.webContents.executeJavaScript('window.checkNavigationStyles()');await win.webContents.executeJavaScript('window.openNavigationEditor()');if(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS)fs.writeFileSync(path.join(process.env.TWILIGHT_NAVIGATION_SCREENSHOTS,'editor-760-dark.png'),(await win.webContents.capturePage()).toPNG());await win.webContents.executeJavaScript('window.checkCustomNavigation()');
 console.log('NAVIGATION_PAGES_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
@@ -112,6 +114,8 @@ let visible=ref(true),open=ref(true),selected='',active=ref('local-home'),app,qu
 const store=useSettingsStore()
 const mount=()=>{app=createApp({setup(){key=ref('songs');queries=useSongListSearch(key);return()=>visible.value?h('div',{class:['app-shell-navigation',{'navigation-temporary':open.value}]},h(SideMenu,{open:open.value,activeKey:active.value,onSelectPage:page=>{selected=page.id;active.value=page.id}})):null}});app.mount('#app')}
 const dialog=()=>document.querySelector('dialog')
+const until=async(predicate,message)=>{const end=Date.now()+3000;while(!predicate()){if(Date.now()>end)throw new Error(message);await nextTick();await pause(10)}}
+const openEditor=async opener=>{opener.click();await until(()=>dialog()?.matches(':modal')&&!dialog().inert&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'native editor did not finish mounting');await nextTick()}
 const untilClosed=async()=>{const end=Date.now()+3000;while(dialog()){if(Date.now()>end)throw new Error('native dialog exit did not finish');await pause()}await nextTick()}
 window.runNavigationTests=async()=>{
   window.writes=0;mount();await pause(350)
@@ -129,13 +133,13 @@ window.runNavigationTests=async()=>{
   button('所有歌曲').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));await nextTick();expect(document.activeElement===button('音乐库')&&button('音乐库').getAttribute('aria-expanded')==='false','keyboard collapse did not restore branch focus')
   button('导入歌曲').focus();button('导入歌曲').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));expect(document.activeElement===button('编辑页面'),'toolbar arrow navigation failed')
   active.value='local-home';selected='';await nextTick()
-  const opener=button('编辑页面');opener.focus();opener.click();await pause(150)
+  const opener=button('编辑页面');opener.focus();await openEditor(opener)
   expect(dialog().matches(':modal'),'editor is not modal')
   expect(dialog().querySelector('h2').textContent==='编辑页面'&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length&&!aria('搜索页面'),'footer did not open editing directly')
   aria('下移主页').click();aria('显示搜索').click();button('取消').click();await untilClosed()
   expect(window.writes===0&&selected==='','cancel wrote settings or navigated')
   expect(document.activeElement===opener,'editor did not restore focus')
-  opener.click();await pause();expect(aria('显示搜索').checked,'cancel retained hidden state')
+  await openEditor(opener);expect(aria('显示搜索').checked,'cancel retained hidden state')
   const first=document.querySelector('[data-reorder-id="local-home"] .drag-handle'),second=document.querySelector('[data-reorder-id="streaming-home"]')
   const a=first.getBoundingClientRect(),b=second.getBoundingClientRect()
   first.dispatchEvent(new PointerEvent('pointerdown',{button:0,pointerId:1,isPrimary:true,bubbles:true,clientX:a.x+3,clientY:a.y+3}))
@@ -148,11 +152,11 @@ window.runNavigationTests=async()=>{
   button('保存').click();await untilClosed();expect(window.writes===1&&document.querySelectorAll('.menu-nav [aria-current]').length===0,'hide-all failed')
   const saved=window.saved;app.unmount();store.settings.value=JSON.parse(saved);mount();await pause()
   expect(button('编辑页面')&&button('添加常用页面')&&!button('主页'),'hidden page appeared after remount')
-  button('编辑页面').click();await pause();expect(!aria('显示网络源').checked&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'editor lost hidden pages');button('取消').click();await untilClosed()
+  await openEditor(button('编辑页面'));expect(!aria('显示网络源').checked&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'editor lost hidden pages');button('取消').click();await untilClosed()
   expect(window.writes===1&&store.settings.value.navigationPages.hidden.length===16,'cancel changed hidden-page configuration')
-  button('添加常用页面').click();await pause();aria('显示网络源').click();button('保存').click();await untilClosed();button('流媒体音乐').click();await nextTick();button('网络源').click();await nextTick()
-  expect(selected==='network'&&window.writes===2&&store.settings.value.navigationPages.hidden.length===15,'editor could not restore a hidden page')
-  button('编辑页面').click();await pause();button('恢复默认').click();button('保存').click();await untilClosed();expect(button('主页')&&button('流派')&&button('音乐云盘'),'restore defaults failed')
+  await openEditor(button('添加常用页面'));aria('显示网络源').click();await nextTick();expect(aria('显示网络源').checked,'network checkbox did not update');button('保存').click();await untilClosed();button('流媒体音乐').click();await nextTick();await until(()=>button('网络源')?.checkVisibility(),'restored network page did not become visible');button('网络源').click();await nextTick()
+  expect(selected==='network'&&window.writes===2&&store.settings.value.navigationPages.hidden.length===15,'editor could not restore a hidden page: '+JSON.stringify({selected,writes:window.writes,hidden:store.settings.value.navigationPages.hidden}))
+  await openEditor(button('编辑页面'));button('恢复默认').click();button('保存').click();await untilClosed();expect(button('主页')&&button('流派')&&button('音乐云盘'),'restore defaults failed')
   open.value=false;await nextTick();expect(document.querySelector('.side-menu').inert,'closed sidebar remains interactive');open.value=true;await pause()
   document.documentElement.dataset.teShellLayout='custom';document.documentElement.dataset.teShellNavigation='persistent';open.value=false;await pause();expect(!document.querySelector('.side-menu').inert,'persistent shell is inert');delete document.documentElement.dataset.teShellLayout;delete document.documentElement.dataset.teShellNavigation;open.value=true
   store.settings.value={navigationPages:{version:1,order:BUILTIN_NAVIGATION_PAGES.map(page=>page.id),hidden:[]}}
@@ -175,7 +179,7 @@ window.checkNavigationGeometry=async({width,tone,bottom})=>{
   const prefs=JSON.stringify(store.settings.value.navigationPages),menu=document.querySelector('.side-menu'),nav=menu.querySelector('.menu-nav'),footer=menu.querySelector('.menu-bottom')
   expect(menu.getBoundingClientRect().bottom<=window.innerHeight-bottom+1,'sidebar overlaps playbar');expect(nav.scrollHeight>nav.clientHeight,'large text directory does not scroll independently');expect(Math.abs(menu.getBoundingClientRect().bottom-footer.getBoundingClientRect().bottom-parseFloat(getComputedStyle(menu.querySelector('.menu-items')).paddingBottom))<=1,'tools are not anchored to the sidebar bottom');expect(button('编辑页面').getBoundingClientRect().top>=menu.getBoundingClientRect().top,'edit action scrolled out of footer')
   for(const label of ['主页','流媒体音乐','音乐库','我的音乐库']){const text=button(label).querySelector('.item-label');expect(text.scrollWidth<=text.clientWidth,'large-text navigation label is truncated: '+label)}
-  button('编辑页面').click();await pause();expect(dialog().getBoundingClientRect().right<=width&&dialog().getBoundingClientRect().bottom<=window.innerHeight,'dialog overflows narrow window');button('取消').click();await untilClosed();expect(JSON.stringify(store.settings.value.navigationPages)===prefs,'theme/layout changed saved preferences')
+  await openEditor(button('编辑页面'));expect(dialog().getBoundingClientRect().right<=width&&dialog().getBoundingClientRect().bottom<=window.innerHeight,'dialog overflows narrow window');button('取消').click();await untilClosed();expect(JSON.stringify(store.settings.value.navigationPages)===prefs,'theme/layout changed saved preferences')
 }
 window.prepareSidebarPreview=async({tone,expanded})=>{
   document.documentElement.dataset.theme=tone;document.documentElement.style.setProperty('--te-font-size-body','14px')
@@ -191,7 +195,7 @@ window.checkNavigationStyles=async()=>{
   }
   document.documentElement.dataset.teNavigationStyle='expanded';await pause(350)
 }
-window.openNavigationEditor=async()=>{button('编辑页面').click();await pause(150)}
+window.openNavigationEditor=async()=>{await openEditor(button('编辑页面'))}
 window.checkCustomNavigation=async()=>{
   button('取消').click();document.documentElement.dataset.teShellLayout='custom'
   for(const mode of ['hidden','persistent']){
