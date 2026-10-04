@@ -1,0 +1,55 @@
+name: 功能建议
+description: 提出新功能或改进现有体验的建议。
+title: '[Feature] '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎分享你的想法！标题请概括希望改善的体验，例如「[Feature] 支持按文件夹批量加入播放队列」。
+        一条 Issue 只讨论一项建议。说明使用场景和遇到的困难，能帮助我们判断怎样改进更合适。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前检查
+      description: 如果已有相同建议，请到原 Issue 补充你的使用场景。
+      options:
+        - label: 我已搜索已有的 [Issues](https://github.com/Px-asen/Twilight_Echo/issues)，没有找到相同建议。
+          required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: 使用场景与遇到的问题
+      description: 你在什么情况下需要这项功能？当前操作有什么困难？
+      placeholder: 例如：我的本地音乐按文件夹整理，想一次播放一个文件夹，现在需要逐首添加到队列。
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired-behavior
+    attributes:
+      label: 希望的功能或体验
+      description: 描述你希望如何操作，以及操作后应该得到什么结果。不需要提供技术实现方案。
+      placeholder: 例如：在文件夹的右键菜单中增加「加入播放队列」，并保留当前正在播放的歌曲。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 目前的替代方法（选填）
+      description: 你现在如何完成这件事？替代方法有什么不足？
+      placeholder: 例如：先进入文件夹全选歌曲，再加入队列，但每次都要重复操作。
+    validations:
+      required: false
+
+  - type: textarea
+    id: references
+    attributes:
+      label: 补充说明或参考（选填）
+      description: 可以附上截图、参考产品链接或草图。请避免包含私人信息。
+      placeholder: 参考链接、截图，或你认为需要考虑的其他场景。
+    validations:
+      required: false
