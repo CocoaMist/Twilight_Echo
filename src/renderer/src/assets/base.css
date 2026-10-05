@@ -47,7 +47,9 @@
   --te-motion-hover-translate: -1px;
   --te-ui-scale: 0.94;
   --te-menu-width: clamp(132px, 18vw, 216px);
-  --te-radius-global: 10px;
+  --te-radius-global: 13px;
+  --te-card-radius: 21px;
+  --te-corner-shape: superellipse(2);
   --te-surface-opacity: 100%;
   /* Latin: Inter. CJK: packaged MiSans unicode-range subsets. */
   --te-font-display:
@@ -73,9 +75,9 @@
   --te-background-gradient-angle: 135deg;
   --te-background-cover-blur: 28px;
   --te-background-overlay-opacity: 12%;
-  --te-dialog-radius: 8px;
-  --te-search-radius: 10px;
-  --te-toast-radius: 8px;
+  --te-dialog-radius: 21px;
+  --te-search-radius: 13px;
+  --te-toast-radius: 13px;
   --te-track-title-radius: 6px;
   --te-track-title-opacity: 0%;
   --te-local-bg: var(--te-app-bg);
@@ -3029,8 +3031,51 @@ html[data-te-lyric-accent='accent']
   background: color-mix(in srgb, var(--te-primary-500) var(--te-track-title-opacity), transparent);
 }
 
-:is([role='dialog'], .import-dialog, .dsp-route-dialog) {
+:is(dialog, [role='dialog'], [data-dialog-panel], .import-dialog, .dsp-route-dialog):where(
+  :not(.onboarding-wizard)
+) {
   border-radius: var(--te-dialog-radius);
+}
+
+/* Native continuous corners keep borders, shadows and clipping on one contour. */
+@supports (corner-shape: superellipse(2)) {
+  :where(
+    dialog,
+    [role='dialog']:where(:not(.onboarding-wizard)),
+    [data-dialog-panel],
+    .import-dialog,
+    .dsp-route-dialog,
+    .artist-card,
+    .album-card,
+    .playlist-card,
+    .glass-card,
+    .signal-card,
+    .chart-card,
+    .profile-card,
+    .recent-card,
+    .ranking-card,
+    .feature-card,
+    .empty-stage,
+    .settings-preview-nav,
+    .settings-nav-results,
+    .search-box,
+    .streaming-search-box,
+    .settings-inline-notice,
+    .playlist-action-notice,
+    .lyric-manager-notice,
+    .studio-message,
+    .audio-engine-recovery-notice,
+    .an-button,
+    .btn-cancel,
+    .btn-start
+  ) {
+    corner-shape: var(--te-corner-shape);
+
+    &::before,
+    &::after {
+      corner-shape: inherit;
+    }
+  }
 }
 
 :is(.search-box, .streaming-search-box, .opra-search-input-wrap input) {

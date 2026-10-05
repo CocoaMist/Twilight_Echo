@@ -99,6 +99,29 @@ const modal=()=>document.querySelector('dialog')
 const open=async()=>{opener.click();await nextTick();await until(()=>modal()?.matches(':modal'),'modal did not open')}
 const close=()=>modal().dispatchEvent(new Event('cancel',{cancelable:true}))
 window.runMotionTests=async()=>{
+ expect(CSS.supports('corner-shape','superellipse(2)'),'packaged Chromium lacks continuous corners')
+ const surface=document.querySelector('.glass-card'),root=document.documentElement
+ const shape=getComputedStyle(surface).cornerShape
+ expect(shape==='squircle'||shape==='superellipse(2)','card did not adopt continuous corners')
+ for(const tone of ['light','dark']){root.dataset.theme=tone;expect(getComputedStyle(surface).cornerShape===shape,'theme tone changed the contour')}
+ delete root.dataset.theme
+ root.dataset.teSurfaceMaterial='liquidGlass'
+ expect(getComputedStyle(surface,'::after').cornerShape===shape,'surface highlight follows a different curve')
+ delete root.dataset.teSurfaceMaterial
+ const originalRect=surface.getBoundingClientRect()
+ for(const radius of ['0px','7px','24px']){
+  root.style.setProperty('--te-card-radius',radius)
+  expect(getComputedStyle(surface).borderTopLeftRadius===radius,'custom radius was replaced')
+  const rect=surface.getBoundingClientRect()
+  expect(Math.abs(rect.width-originalRect.width)<.1&&Math.abs(rect.height-originalRect.height)<.1,'corner treatment changed layout')
+ }
+ root.style.removeProperty('--te-card-radius')
+ const circle=document.createElement('button');circle.style.cssText='width:44px;height:44px;border-radius:50%';document.body.append(circle)
+ expect(getComputedStyle(circle).cornerShape==='round','round transport controls became squircles');circle.remove()
+ root.style.setProperty('--te-corner-shape','round')
+ expect(getComputedStyle(surface).cornerShape==='round','theme cannot opt out of the curve');root.style.removeProperty('--te-corner-shape')
+ const fullscreen=document.createElement('div');fullscreen.className='onboarding-wizard';fullscreen.setAttribute('role','dialog');document.body.append(fullscreen)
+ expect(getComputedStyle(fullscreen).cornerShape==='round'&&getComputedStyle(fullscreen).borderTopLeftRadius==='0px','fullscreen onboarding was treated as a rounded panel');fullscreen.remove()
  for(const mode of ['full','reduced','off']){
   document.documentElement.dataset.teMotion=mode;await open();if(mode!=='off')await until(()=>!modal().classList.contains('native-dialog-enter-from'),'entry never advanced');await pause(mode==='off'?30:30)
   const d=modal();if(mode!=='off')for(const a of d.getAnimations())a.currentTime=mode==='reduced'?45:70;const enter=getComputedStyle(d)

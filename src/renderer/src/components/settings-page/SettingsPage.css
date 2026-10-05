@@ -696,7 +696,7 @@ html:is(
 
 .glass-card {
   border: 1px solid var(--te-settings-panel-border, transparent);
-  border-radius: 20px;
+  border-radius: var(--te-card-radius, 21px);
   background: var(--te-settings-control-bg, #ffffff);
   box-shadow: var(--te-settings-shadow, 0 2px 16px rgba(15, 23, 42, 0.04));
 }

@@ -14,8 +14,8 @@
   --home-accent: var(--te-primary-500);
   --home-tint: color-mix(in srgb, var(--te-primary-500) 12%, transparent);
   --home-cyan-tint: color-mix(in srgb, var(--te-accent-cyan) 12%, transparent);
-  --home-radius-lg: 22px;
-  --home-radius-md: 14px;
+  --home-radius-lg: var(--te-card-radius, 21px);
+  --home-radius-md: var(--te-radius-global, 13px);
   --home-shadow-color: rgba(15, 23, 42, 0.09);
   --home-shadow-strong: rgba(15, 23, 42, 0.16);
   --home-shadow: 0 18px 44px var(--home-shadow-color);

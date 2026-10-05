@@ -933,8 +933,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'card',
     'length',
-    '16px',
-    '16px',
+    '21px',
+    '21px',
     {
       min: 0,
       max: 24,
@@ -949,8 +949,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'global',
     'length',
-    '10px',
-    '10px',
+    '13px',
+    '13px',
     {
       min: 0,
       max: 24,
@@ -965,8 +965,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'dialog',
     'length',
-    '8px',
-    '8px',
+    '21px',
+    '21px',
     { min: 0, max: 24, step: 1, unit: 'px' }
   ),
   token(
@@ -976,8 +976,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'search',
     'length',
-    '10px',
-    '10px',
+    '13px',
+    '13px',
     { min: 0, max: 24, step: 1, unit: 'px' }
   ),
   token(
@@ -987,8 +987,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'toast',
     'length',
-    '8px',
-    '8px',
+    '13px',
+    '13px',
     { min: 0, max: 24, step: 1, unit: 'px' }
   ),
   token(
