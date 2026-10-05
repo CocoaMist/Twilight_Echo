@@ -793,43 +793,30 @@ test('parametric page puts mode, presets and power into the instrument with a co
   assert.match(toolbar, /compact\?: boolean/)
 })
 
-test('parametric editor polls detailed spectrum only while visible and playing', () => {
-  assert.match(
-    page,
-    /const \{ visualizationData, isPlaying, acquireVisualizationConsumer \} = playerStore/
-  )
-  assert.match(page, /releaseVisualizationConsumer = acquireVisualizationConsumer\(\)/)
-  assert.match(page, /releaseVisualizationConsumer\?\.\(\)/)
-  assert.match(page, /getVisualizationData\(\{\s*spectrumPoints: 2048/)
-  assert.match(page, /projectSpectrumLevels\(\s*data\.spectrum/)
+test('parametric spectrum and meters acquire one shared demand without a second IPC timer', () => {
+  assert.match(page, /acquireVisualizationConsumer\(\{ spectrumPoints: points \}\)/)
+  assert.match(page, /shouldPoll \? 2048 : 64/)
+  assert.doesNotMatch(page, /getVisualizationData|spectrumPollTimer/)
   assert.match(page, /:spectrum-levels="spectrumLevels"/)
-  assert.match(page, /activeTab\.value === 'parametric'/)
-  assert.match(page, /spectrumVisible\.value &&\s*!spectrumFrozen\.value &&\s*isPlaying\.value/)
-  assert.match(
-    page,
-    /watch\(\[activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen\]/
-  )
-  assert.match(page, /onBeforeUnmount/)
-  assert.match(page, /window\.clearInterval\(spectrumPollTimer\)/)
 })
 
-test('freezing cancels detailed polling, ignores late responses and resumes on unfreeze', async () => {
-  const pollDeclaration = page.match(
-    /async function pollSpectrum\(generation: number\): Promise<void> \{[\s\S]*?\n\}/
-  )?.[0]
-  const updateDeclaration = page.match(
-    /function updateSpectrumPolling\(\): void \{[\s\S]*?\n\}/
-  )?.[0]
-  assert.ok(pollDeclaration && updateDeclaration)
+test('freeze retains its frame, downgrades shared demand, and ignores late detailed samples', () => {
+  const update = page.match(/function updateSpectrumPolling\(\): void \{[\s\S]*?\n\}/)?.[0]
+  const sample = page.match(/function updateSpectrumFromSample\([\s\S]*?\n\}/)?.[0]
+  assert.ok(update && sample)
+  const demands: number[] = []
+  let releases = 0
   const baseline = new Float32Array([0.2, 0.4])
-  let release!: (data: { active: boolean; spectrum: number[]; sampleRate: number }) => void
-  let requests = 0
-  const cancelled: number[] = []
   const context = {
-    spectrumRequestInFlight: false,
-    spectrumPollGeneration: 1,
-    spectrumPollTimer: 42 as number | null,
     spectrumPollingMounted: true,
+    visualizationConsumerPoints: 0,
+    releaseVisualizationConsumer: null,
+    acquireVisualizationConsumer: ({ spectrumPoints }: { spectrumPoints: number }) => {
+      demands.push(spectrumPoints)
+      return () => {
+        releases++
+      }
+    },
     activeTab: { value: 'parametric' },
     responseView: { value: 'dsp' },
     spectrumVisible: { value: true },
@@ -837,49 +824,31 @@ test('freezing cancels detailed polling, ignores late responses and resumes on u
     isPlaying: { value: true },
     spectrumLevels: { value: baseline as Float32Array | null },
     responseSampleRate: { value: 48000 },
-    projectSpectrumLevels: (levels: number[]) => new Float32Array(levels),
-    window: {
-      clearInterval: (id: number) => cancelled.push(id),
-      setInterval: () => 43,
-      api: {
-        audioEngine: {
-          getVisualizationData: () => {
-            requests++
-            return new Promise((resolve) => {
-              release = resolve
-            })
-          }
-        }
-      }
-    }
+    projectSpectrumLevels: (levels: number[]) => new Float32Array(levels)
   }
   const actions = runInNewContext(
-    `${stripTypeScriptTypes(pollDeclaration)}\n${stripTypeScriptTypes(updateDeclaration)}\n({pollSpectrum, updateSpectrumPolling})`,
+    stripTypeScriptTypes(update) +
+      '\n' +
+      stripTypeScriptTypes(sample) +
+      '\n({updateSpectrumPolling, updateSpectrumFromSample})',
     context
   )
-  const pending = actions.pollSpectrum(1)
+  actions.updateSpectrumPolling()
+  assert.deepEqual(demands, [2048])
   context.spectrumFrozen.value = true
   actions.updateSpectrumPolling()
-  assert.deepEqual(cancelled, [42])
-  assert.equal(context.spectrumPollTimer, null)
+  actions.updateSpectrumFromSample({ active: true, spectrum: [0.9, 0.9], sampleRate: 48000 })
+  assert.deepEqual(demands, [2048, 64])
   assert.equal(context.spectrumLevels.value, baseline)
-  release({ active: true, spectrum: [0.9, 0.9], sampleRate: 48000 })
-  await pending
-  assert.equal(context.spectrumLevels.value, baseline)
-  assert.equal(requests, 1)
   context.spectrumFrozen.value = false
   actions.updateSpectrumPolling()
-  assert.equal(context.spectrumPollTimer, 43)
-  assert.equal(requests, 2)
-  release({ active: true, spectrum: [0.5, 0.5], sampleRate: 48000 })
-  await new Promise((resolve) => setImmediate(resolve))
+  actions.updateSpectrumFromSample({ active: true, spectrum: [0.5, 0.5], sampleRate: 48000 })
   assert.deepEqual(context.spectrumLevels.value, new Float32Array([0.5, 0.5]))
-  context.spectrumFrozen.value = true
-  context.spectrumVisible.value = false
+  context.activeTab.value = 'graphic'
   actions.updateSpectrumPolling()
-  assert.equal(context.spectrumFrozen.value, false)
   assert.equal(context.spectrumLevels.value, null)
-  assert.equal(requests, 2)
+  assert.equal(context.visualizationConsumerPoints, 0)
+  assert.equal(releases, 3)
 })
 
 test('equalizer state writes go through the store action instead of detaching storeToRefs', () => {

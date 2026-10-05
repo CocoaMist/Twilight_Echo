@@ -659,6 +659,7 @@ struct VisualizationQuery {
   size_t waveformPoints = 128;
   size_t spectrogramFrames = 48;
   size_t oscilloscopePoints = 1024;
+  size_t visualizerBarCount = 0;
 };
 
 VisualizationQuery parseVisualizationQueryJson(const std::string& json) {
@@ -667,6 +668,7 @@ VisualizationQuery parseVisualizationQueryJson(const std::string& json) {
   query.waveformPoints = std::clamp<uint32_t>(parseUintField(json, "waveformPoints", 128), 16, 512);
   query.spectrogramFrames = std::clamp<uint32_t>(parseUintField(json, "spectrogramFrames", 48), 0, 96);
   query.oscilloscopePoints = std::clamp<uint32_t>(parseUintField(json, "oscilloscopePoints", 1024), 0, 4096);
+  query.visualizerBarCount = std::clamp<uint32_t>(parseUintField(json, "visualizerBarCount", 0), 0, 256);
   return query;
 }
 
@@ -681,11 +683,15 @@ std::string inactiveVisualizationJson(const VisualizationQuery& query, int sampl
     out << "]";
   };
   json << "{\"spectrum\":";
-  writeZeros(json, query.spectrumPoints);
+  writeZeros(json, query.visualizerBarCount > 0 ? 0 : query.spectrumPoints);
+  if (query.visualizerBarCount > 0) {
+    json << ",\"visualizerBars\":";
+    writeZeros(json, query.visualizerBarCount);
+  }
   json << ",\"waveform\":";
   writeZeros(json, query.waveformPoints);
   json << ",\"oscilloscope\":";
-  writeZeros(json, query.oscilloscopePoints);
+  writeZeros(json, query.visualizerBarCount > 0 ? 0 : query.oscilloscopePoints);
   json << ",\"peakDb\":-120,\"rmsDb\":-120,\"lufsMomentary\":null,\"spectrogram\":[],"
        << "\"sampleRate\":" << sampleRate
        << ",\"active\":false,\"tapStatus\":\"stopped\",\"reason\":\"Audio pipeline is stopped\"}";
@@ -1907,7 +1913,8 @@ std::string TwilightAudioEngine::getVisualizationDataJson(const std::string& opt
         query.spectrumPoints,
         query.waveformPoints,
         query.spectrogramFrames,
-        query.oscilloscopePoints);
+        query.oscilloscopePoints,
+        query.visualizerBarCount);
   }
   std::lock_guard lock(mutex_);
   return inactiveVisualizationJson(query, info_.actualSampleRate);

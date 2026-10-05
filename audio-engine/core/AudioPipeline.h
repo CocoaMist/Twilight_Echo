@@ -167,7 +167,8 @@ class AudioPipeline {
       size_t spectrumPoints,
       size_t waveformPoints,
       size_t spectrogramFrames,
-      size_t oscilloscopePoints = 1024) const;
+      size_t oscilloscopePoints = 1024,
+      size_t visualizerBarCount = 0) const;
   bool isDopPathActive() const;
   bool isNativeDsdPathActive() const;
   bool needsPcmFallback(std::string* reason) const;

@@ -70,6 +70,7 @@ const { setAudioProcessing } = audioOutputDspStore
 // The spectrum overlay and level meters read visualizationData while this page
 // is open; the store poll only runs while at least one consumer holds a handle.
 let releaseVisualizationConsumer: (() => void) | null = null
+let visualizationConsumerPoints = 0
 
 const autoPreampStorageKey = 'twilight-echo:eq-auto-preamp:v1'
 const manualPreampStorageKey = 'twilight-echo:eq-manual-preamp:v1'
@@ -106,9 +107,6 @@ const pendingBandPatches = new Map<number, Partial<EqualizerBand>>()
 let pendingPreamp: number | null = null
 let commitChain: Promise<void> = Promise.resolve()
 let applyFeedbackTimer: number | null = null
-let spectrumPollTimer: number | null = null
-let spectrumPollGeneration = 0
-let spectrumRequestInFlight = false
 let spectrumPollingMounted = false
 const eqHistory = useEqualizerHistory(audioProcessing.value, applyEqualizerSnapshot)
 const { activeSlot, busy: historyBusy, canUndo, canRedo } = eqHistory
@@ -768,33 +766,6 @@ function onEqualizerKeydown(event: KeyboardEvent): void {
   }
 }
 
-async function pollSpectrum(generation: number): Promise<void> {
-  if (spectrumRequestInFlight) return
-  spectrumRequestInFlight = true
-  try {
-    const data = await window.api.audioEngine.getVisualizationData({
-      spectrumPoints: 2048,
-      waveformPoints: 16,
-      spectrogramFrames: 0,
-      oscilloscopePoints: 0
-    })
-    if (generation !== spectrumPollGeneration) return
-    if (!data.active || data.spectrum.length < 2) {
-      spectrumLevels.value = null
-      return
-    }
-    spectrumLevels.value = projectSpectrumLevels(
-      data.spectrum,
-      data.sampleRate || responseSampleRate.value
-    )
-  } catch {
-    if (generation !== spectrumPollGeneration) return
-    spectrumLevels.value = null
-  } finally {
-    spectrumRequestInFlight = false
-  }
-}
-
 function updateSpectrumPolling(): void {
   if (!spectrumVisible.value || responseView.value !== 'dsp' || activeTab.value !== 'parametric')
     spectrumFrozen.value = false
@@ -806,17 +777,27 @@ function updateSpectrumPolling(): void {
     !spectrumFrozen.value &&
     isPlaying.value
   if (!shouldPoll) {
-    spectrumPollGeneration += 1
-    if (spectrumPollTimer !== null) window.clearInterval(spectrumPollTimer)
-    spectrumPollTimer = null
     if (!spectrumFrozen.value) spectrumLevels.value = null
-    return
   }
-  if (spectrumPollTimer !== null) return
-  const generation = ++spectrumPollGeneration
-  void pollSpectrum(generation)
-  spectrumPollTimer = window.setInterval(() => void pollSpectrum(generation), 60)
+  // Spectrum and meters share a single native sample, also consumed by the bar.
+  const points =
+    spectrumPollingMounted && activeTab.value === 'parametric' ? (shouldPoll ? 2048 : 64) : 0
+  if (points === visualizationConsumerPoints) return
+  releaseVisualizationConsumer?.()
+  releaseVisualizationConsumer = points
+    ? acquireVisualizationConsumer({ spectrumPoints: points })
+    : null
+  visualizationConsumerPoints = points
 }
+
+function updateSpectrumFromSample(data: typeof visualizationData.value): void {
+  if (visualizationConsumerPoints !== 2048 || spectrumFrozen.value) return
+  spectrumLevels.value =
+    data.active && data.spectrum.length >= 2
+      ? projectSpectrumLevels(data.spectrum, data.sampleRate || responseSampleRate.value)
+      : null
+}
+watch([visualizationData, responseSampleRate], ([data]) => updateSpectrumFromSample(data))
 
 async function importFrequencyResponse(): Promise<void> {
   if (frequencyResponseImporting.value) return
@@ -1079,7 +1060,6 @@ function selectBand(index: number, indices: number[] = [index]): void {
 
 onMounted(() => {
   spectrumPollingMounted = true
-  releaseVisualizationConsumer = acquireVisualizationConsumer()
   loadAutoPreampPreference()
   void loadAppSettings().then(() => {
     eqHistory.reset(audioProcessing.value)

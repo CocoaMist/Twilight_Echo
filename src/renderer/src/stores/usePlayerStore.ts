@@ -371,6 +371,7 @@ const outputInfo = computed<NativeOutputInfo | null>(() => playbackInfo.value?.o
 const visualizationData = shallowRef<NativeVisualizationData>(createInactiveVisualizationData())
 // 读取 visualizationData 的已挂载组件数；为 0 时 60ms IPC 轮询不启动。
 const visualizationConsumers = ref(0)
+const visualizationDocumentVisible = ref(typeof document === 'undefined' || !document.hidden)
 const { settings: appSettings, updateSettings } = useSettingsStore()
 const lyricsManagement = useLyricsManagement()
 let playbackAudio: HTMLAudioElement | null = null
@@ -2100,7 +2101,9 @@ function setAudioServiceReadyNotice(event?: {
 const visualizationPolling = createVisualizationPolling({
   data: visualizationData,
   active: visualizerActive,
-  consumers: visualizationConsumers
+  consumers: visualizationConsumers,
+  visible: visualizationDocumentVisible,
+  enabled: () => Boolean(isPlaying.value && audioEngineReady.value && currentTrack.value?.id)
 })
 
 const {
@@ -2547,6 +2550,7 @@ function setupAudioEngineListeners(): void {
   )
 
   const refreshAfterRendererResume = (): void => {
+    visualizationDocumentVisible.value = document.visibilityState !== 'hidden'
     if (document.visibilityState === 'hidden') return
     void refreshPlaybackAfterRendererResume()
   }
@@ -2761,9 +2765,15 @@ watch([isPlaying, playbackRate], ([playing, rate], [previousPlaying, previousRat
 })
 
 watch(
-  [isPlaying, audioEngineReady, () => currentTrack.value?.id, visualizerActive],
-  ([playing, ready, trackId, activeVisualizer]) => {
-    if (playing && ready && trackId && !activeVisualizer) {
+  [
+    isPlaying,
+    audioEngineReady,
+    () => currentTrack.value?.id,
+    visualizerActive,
+    visualizationDocumentVisible
+  ],
+  ([playing, ready, trackId, activeVisualizer, visible]) => {
+    if (playing && ready && trackId && !activeVisualizer && visible) {
       startVisualizationPolling()
       return
     }

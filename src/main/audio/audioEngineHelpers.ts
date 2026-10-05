@@ -999,11 +999,10 @@ export function withPrecomputedVisualizerBars(
     spectrum: [],
     spectrogram: [],
     oscilloscope: [],
-    visualizerBars: mapSpectrumToVisualizerBars(
-      data.spectrum,
-      data.sampleRate,
-      options.visualizerBarCount
-    )
+    visualizerBars:
+      data.visualizerBars?.length === options.visualizerBarCount
+        ? data.visualizerBars
+        : mapSpectrumToVisualizerBars(data.spectrum, data.sampleRate, options.visualizerBarCount)
   }
 }
 
@@ -1092,6 +1091,10 @@ export function normalizeVisualizationData(
   options: Required<VisualizationOptions>
 ): VisualizationData {
   const active = data.active === true
+  const nativeBars =
+    options.visualizerBarCount > 0 &&
+    Array.isArray(data.visualizerBars) &&
+    data.visualizerBars.length === options.visualizerBarCount
   const sampleRate =
     typeof data.sampleRate === 'number' && Number.isFinite(data.sampleRate) ? data.sampleRate : 0
   const maxFrequencyLimit = visualizationMaxFrequency(sampleRate)
@@ -1101,7 +1104,14 @@ export function normalizeVisualizationData(
       : maxFrequencyLimit
 
   return {
-    spectrum: normalizeNumberArray(data.spectrum, options.spectrumPoints),
+    spectrum: nativeBars ? [] : normalizeNumberArray(data.spectrum, options.spectrumPoints),
+    ...(nativeBars
+      ? {
+          visualizerBars: normalizeNumberArray(data.visualizerBars, options.visualizerBarCount).map(
+            (value) => Math.max(0, Math.min(1, value))
+          )
+        }
+      : {}),
     waveform: normalizeNumberArray(data.waveform, options.waveformPoints),
     oscilloscope: normalizeNumberArray(data.oscilloscope, options.oscilloscopePoints),
     peakDb: typeof data.peakDb === 'number' && Number.isFinite(data.peakDb) ? data.peakDb : -120,

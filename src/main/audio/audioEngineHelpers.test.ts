@@ -29,6 +29,9 @@ const {
   normalizeOutputConversionInfo,
   normalizeOutputProviderImplementation,
   normalizeOutputConfig,
+  normalizeVisualizationData,
+  normalizeVisualizationOptions,
+  withPrecomputedVisualizerBars,
   outputConfigsEqual,
   parseDspGraphStatusOrThrow,
   parseNativeJson,
@@ -41,6 +44,39 @@ const {
 function deeplyNestedJson(depth: number): string {
   return `${'['.repeat(depth)}0${']'.repeat(depth)}`
 }
+
+test('native visualizer bars bypass spectrum expansion and malformed bars use the legacy fallback', () => {
+  const options = normalizeVisualizationOptions({
+    spectrumPoints: 4096,
+    waveformPoints: 48,
+    spectrogramFrames: 0,
+    oscilloscopePoints: 0,
+    visualizerBarCount: 140
+  })
+  const bars = Array.from({ length: 140 }, (_, i) => i / 140)
+  bars[0] = Number.NaN
+  bars[1] = 2
+  const normalized = normalizeVisualizationData(
+    { spectrum: [], visualizerBars: bars, active: true, sampleRate: 48000 },
+    options
+  )
+  assert.deepEqual(normalized.spectrum, [])
+  assert.equal(normalized.visualizerBars?.[0], 0)
+  assert.equal(normalized.visualizerBars?.[1], 1)
+  assert.equal(
+    withPrecomputedVisualizerBars(normalized, options).visualizerBars,
+    normalized.visualizerBars
+  )
+  const fallback = normalizeVisualizationData(
+    { spectrum: Array(4096).fill(0.5), visualizerBars: [1], active: true, sampleRate: 48000 },
+    options
+  )
+  assert.equal(fallback.spectrum.length, 4096)
+  assert.deepEqual(
+    withPrecomputedVisualizerBars(fallback, options).visualizerBars,
+    Array(140).fill(0.5)
+  )
+})
 
 test('crossfade defaults remain linear and content rules participate in settings equality', () => {
   const previous = normalizeAudioProcessingSettings()

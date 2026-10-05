@@ -208,7 +208,7 @@ const currentSourceInfo = computed(() => {
 // Keep the visualization poll alive only while the compact skyline is mounted.
 let releaseVisualizationConsumer: (() => void) | null = null
 watch(
-  showCompactVisualizer,
+  () => showCompactVisualizer.value && !props.hiddenBar,
   (visible) => {
     if (visible && !props.preview) {
       releaseVisualizationConsumer ??= acquireVisualizationConsumer()

@@ -1098,6 +1098,27 @@ int main() {
       if (value > 0.0f) anyNonZero = true;
     }
     assert(anyNonZero);
+    const std::string barsJson = analyzer.readVisualizationJson(4096, 32, 8, 1024, 140);
+    const auto bars = extractJsonArray(barsJson, "visualizerBars");
+    assert(bars.size() == 140);
+    assert(extractJsonArray(barsJson, "spectrum").empty());
+    assert(extractJsonArray(barsJson, "oscilloscope").empty());
+    assert(barsJson.find("\"spectrogram\":[]") != std::string::npos);
+    assert(barsJson.size() < json.size() / 2);
+    // Match the existing JS logarithmic interpolation over the requested
+    // virtual spectrum bins, while keeping the native 8192-point FFT intact.
+    for (size_t bar = 0; bar < bars.size(); ++bar) {
+      const double frequency = 20.0 * std::pow(1000.0, static_cast<double>(bar) / (bars.size() - 1));
+      const double decimal = frequency / (48000.0 / 8192);
+      const size_t low = std::min(static_cast<size_t>(decimal), spectrum.size() - 1);
+      const size_t high = std::min(low + 1, spectrum.size() - 1);
+      const double expected = std::clamp(spectrum[low] + (spectrum[high] - spectrum[low]) * (decimal - low), 0.0, 1.0);
+      assert(std::abs(bars[bar] - expected) < .00001);
+    }
+    analyzer.resetCapture();
+    const auto inactiveBars = extractJsonArray(analyzer.readVisualizationJson(4096, 32, 0, 0, 140), "visualizerBars");
+    assert(inactiveBars.size() == 140);
+    for (float value : inactiveBars) assert(value == 0);
   }
 
   {

@@ -4301,8 +4301,9 @@ std::string AudioPipeline::getVisualizationDataJson(
     size_t spectrumPoints,
     size_t waveformPoints,
     size_t spectrogramFrames,
-    size_t oscilloscopePoints) const {
-  return spectrum_.readVisualizationJson(spectrumPoints, waveformPoints, spectrogramFrames, oscilloscopePoints);
+    size_t oscilloscopePoints,
+    size_t visualizerBarCount) const {
+  return spectrum_.readVisualizationJson(spectrumPoints, waveformPoints, spectrogramFrames, oscilloscopePoints, visualizerBarCount);
 }
 
 bool AudioPipeline::configureActiveStreamLocked(
