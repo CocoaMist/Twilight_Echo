@@ -4,12 +4,15 @@
 #include "FFmpegDsdRate.h"
 #include "SacdIsoProbe.h"
 #include "../core/DsdRate.h"
+#include "../core/Utf8Path.h"
 #include "../dsp/DspTypes.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -536,7 +539,21 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     impl_->icyEnabled = true;
   }
 
-  int ret = avformat_open_input(&impl_->formatContext, source.c_str(), nullptr, &openOptions);
+  // Highly periodic PCM can outscore WAV in FFmpeg's generic MPEG-TS probe.
+  // Prefer WAV only after validating the local container signature; a renamed
+  // non-WAV file and all network sources retain ordinary format discovery.
+  const AVInputFormat* inputFormat = nullptr;
+  if (!looksHttp && (extensionOf(source) == "wav" || extensionOf(source) == "wave")) {
+    std::array<char, 12> header{};
+    std::ifstream input(utf8Path(source), std::ios::binary);
+    input.read(header.data(), header.size());
+    if (input.gcount() == static_cast<std::streamsize>(header.size()) &&
+        (std::memcmp(header.data(), "RIFF", 4) == 0 || std::memcmp(header.data(), "RF64", 4) == 0 ||
+         std::memcmp(header.data(), "RIFX", 4) == 0) && std::memcmp(header.data() + 8, "WAVE", 4) == 0) {
+      inputFormat = av_find_input_format("wav");
+    }
+  }
+  int ret = avformat_open_input(&impl_->formatContext, source.c_str(), inputFormat, &openOptions);
   av_dict_free(&openOptions);
   if (ret < 0) {
     if (error) *error = "打开音频失败，错误码：" + std::to_string(ret);
