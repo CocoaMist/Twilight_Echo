@@ -15,6 +15,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <numbers>
 
 namespace twilight::audio {
 namespace {
@@ -28,7 +29,6 @@ constexpr std::array<unsigned char, 16> kWaveSubFormatPcm = {
 constexpr std::array<unsigned char, 16> kWaveSubFormatFloat = {
     0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
     0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71};
-constexpr uint64_t kConvolverRealtimeBypassOverrunThreshold = 3;
 constexpr const char* kConvolverRealtimeBypassReason = "convolver process exceeded realtime budget";
 // First re-arm waits 500 ms, then 1 s, 2 s, ... Anything that keeps missing its budget this
 // many times stays bypassed until the user changes the configuration.
@@ -93,91 +93,256 @@ bool hasMonoToManyMatrix(const DspConfig& config, int channels) {
 struct ConvolverProcessor::FftChannel {
   using Complex = KissFftAdapter::Complex;
 
+  // Larger tail tiers have at least one whole block of lookahead. Their FFT,
+  // multiply/add and inverse FFT are resumable work, rather than one burst at
+  // a partition boundary. The head still has exactly the advertised latency.
+  struct Plan {
+    size_t size = 0;
+    std::vector<size_t> reversed;
+    std::vector<Complex> roots;
+    void prepare(size_t n) {
+      size = n;
+      reversed.resize(n);
+      roots.resize(n / 2);
+      for (size_t i = 1; i < n; ++i) reversed[i] = (reversed[i >> 1] >> 1) | ((i & 1) ? n / 2 : 0);
+      for (size_t i = 0; i < n / 2; ++i) {
+        const double angle = -2.0 * std::numbers::pi * i / n;
+        roots[i] = Complex(static_cast<float>(std::cos(angle)), static_cast<float>(std::sin(angle)));
+      }
+    }
+    void butterfly(std::vector<Complex>& data, size_t group, size_t offset, size_t half, size_t stride, bool inverse) const {
+      const Complex root = roots[offset * stride];
+      const float wi = inverse ? -root.imag() : root.imag();
+      const Complex u = data[group + offset], v = data[group + offset + half];
+      const float vr = v.real() * root.real() - v.imag() * wi;
+      const float vi = v.real() * wi + v.imag() * root.real();
+      data[group + offset] = Complex(u.real() + vr, u.imag() + vi);
+      data[group + offset + half] = Complex(u.real() - vr, u.imag() - vi);
+    }
+    void transform(std::vector<Complex>& data, bool inverse) const {
+      for (size_t i = 0; i < size; ++i) if (i < reversed[i]) std::swap(data[i], data[reversed[i]]);
+      for (size_t length = 2; length <= size; length *= 2) {
+        const size_t stride = size / length;
+        for (size_t group = 0; group < size; group += length)
+          for (size_t offset = 0; offset < length / 2; ++offset) butterfly(data, group, offset, length / 2, stride, inverse);
+      }
+    }
+    void forward(std::vector<Complex>& data) const { transform(data, false); }
+  };
+
+  struct Tier {
+    enum class Phase { Idle, Input, Forward, History, Product, Reflect, Inverse, Output };
+    size_t blockSize = 0, irOffset = 0, inputPos = 0, currentIndex = 0, validHistory = 0;
+    size_t cursor = 0, productPartition = 0, fftLength = 0, fftGroup = 0, fftOffset = 0;
+    uint64_t outputStart = 0;
+    size_t workPerSample = 0;
+    size_t pendingWorkFrames = 0;
+    Phase phase = Phase::Idle;
+    Plan plan;
+    std::vector<float> input, jobInput;
+    std::vector<std::vector<Complex>> impulse, history;
+    std::vector<Complex> product;
+
+    void configure(const std::vector<float>& ir, size_t offset, size_t end, size_t block) {
+      blockSize = block; irOffset = offset;
+      const size_t n = block * 2;
+      plan.prepare(n);
+      const size_t count = std::max<size_t>(1, (end - offset + block - 1) / block);
+      const size_t bins = block + 1;
+      impulse.assign(count, std::vector<Complex>(bins));
+      history.assign(count, std::vector<Complex>(bins));
+      input.assign(block, 0.0f); jobInput.assign(block, 0.0f); product.assign(n, Complex{});
+      for (size_t part = 0; part < count; ++part) {
+        std::fill(product.begin(), product.end(), Complex{});
+        for (size_t i = 0; i < block; ++i) {
+          const size_t index = offset + part * block + i;
+          product[i] = Complex(index < end ? ir[index] : 0.0f, 0.0f);
+        }
+        plan.forward(product);
+        std::copy_n(product.begin(), bins, impulse[part].begin());
+      }
+      size_t levels = 0;
+      for (size_t value = n; value > 1; value /= 2) ++levels;
+      // Input + two bit reversals/FFTs + product + overlap-add. Complete
+      // strictly before the next input block, even for callback fragmentation.
+      const size_t operations = n * (5 + levels) + bins * count;
+      workPerSample = (operations + block - 2) / (block - 1);
+      reset();
+    }
+    void reset() {
+      inputPos = 0; currentIndex = 0; validHistory = 0; pendingWorkFrames = 0; phase = Phase::Idle;
+      // History validity replaces clearing O(IR length) memory on re-arm.
+    }
+    uint64_t memoryBytes() const {
+      uint64_t bytes = sizeof(*this) + (input.capacity() + jobInput.capacity()) * sizeof(float) +
+          (product.capacity() + plan.roots.capacity()) * sizeof(Complex) + plan.reversed.capacity() * sizeof(size_t);
+      for (const auto& value : impulse) bytes += value.capacity() * sizeof(Complex);
+      for (const auto& value : history) bytes += value.capacity() * sizeof(Complex);
+      return bytes;
+    }
+    void start(uint64_t blockEnd, size_t latency) {
+      input.swap(jobInput);
+      currentIndex = (currentIndex + history.size() - 1) % history.size();
+      validHistory = std::min(validHistory + 1, history.size());
+      outputStart = blockEnd - blockSize + irOffset + latency;
+      cursor = 0; phase = Phase::Input;
+    }
+    void startTransform(Phase next) { cursor = 0; fftLength = 0; fftGroup = 0; fftOffset = 0; phase = next; }
+    bool transformWork(std::vector<Complex>& data, bool inverse, size_t& operations) {
+      if (fftLength == 0) {
+        const size_t count = std::min(operations, plan.size - cursor);
+        for (size_t end = cursor + count; cursor < end; ++cursor)
+          if (cursor < plan.reversed[cursor]) std::swap(data[cursor], data[plan.reversed[cursor]]);
+        operations -= count;
+        if (cursor != plan.size) return false;
+        fftLength = 2; cursor = 0;
+      }
+      while (operations > 0 && fftLength <= plan.size) {
+        const size_t count = std::min(operations, fftLength / 2 - fftOffset);
+        const size_t stride = plan.size / fftLength, half = fftLength / 2;
+        for (size_t end = fftOffset + count; fftOffset < end; ++fftOffset)
+          plan.butterfly(data, fftGroup, fftOffset, half, stride, inverse);
+        operations -= count;
+        if (fftOffset == fftLength / 2) {
+          fftOffset = 0; fftGroup += fftLength;
+          if (fftGroup == plan.size) { fftGroup = 0; fftLength *= 2; }
+        }
+      }
+      return fftLength > plan.size;
+    }
+    void work(size_t operations, std::vector<float>& output) {
+      const size_t n = plan.size;
+      const size_t bins = blockSize + 1;
+      const bool synchronous = operations == std::numeric_limits<size_t>::max();
+      while (operations > 0 && phase != Phase::Idle) {
+        if (phase == Phase::Input) {
+          const size_t count = std::min(operations, (cursor < blockSize ? blockSize : n) - cursor);
+          auto& data = product;
+          if (cursor < blockSize) {
+            for (size_t end = cursor + count; cursor < end; ++cursor) data[cursor] = Complex(jobInput[cursor], 0.0f);
+          } else {
+            std::fill_n(data.begin() + static_cast<std::ptrdiff_t>(cursor), count, Complex{});
+            cursor += count;
+          }
+          operations -= count;
+          if (cursor == n) startTransform(Phase::Forward);
+        } else if (phase == Phase::Forward) {
+          // The head finishes in this call; it needs no resumable FFT cursor
+          // bookkeeping at each butterfly group. Tail work remains bounded.
+          if (synchronous) {
+            plan.forward(product); phase = Phase::History; cursor = 0;
+          } else if (transformWork(product, false, operations)) {
+            phase = Phase::History; cursor = 0;
+          }
+        } else if (phase == Phase::History) {
+          const size_t count = std::min(operations, bins - cursor);
+          std::copy_n(product.begin() + static_cast<std::ptrdiff_t>(cursor), count,
+              history[currentIndex].begin() + static_cast<std::ptrdiff_t>(cursor));
+          cursor += count; operations -= count;
+          if (cursor == bins) { phase = Phase::Product; cursor = 0; productPartition = 0; }
+        } else if (phase == Phase::Product) {
+          const size_t count = std::min(operations, bins - cursor);
+          const auto& data = history[(currentIndex + productPartition) % history.size()];
+          const auto& ir = impulse[productPartition];
+          if (productPartition == 0) {
+            for (size_t end = cursor + count; cursor < end; ++cursor) {
+              const Complex x = data[cursor], h = ir[cursor];
+              product[cursor] = Complex(x.real() * h.real() - x.imag() * h.imag(), x.real() * h.imag() + x.imag() * h.real());
+            }
+          } else {
+            for (size_t end = cursor + count; cursor < end; ++cursor) {
+              const Complex x = data[cursor], h = ir[cursor];
+              product[cursor] += Complex(x.real() * h.real() - x.imag() * h.imag(), x.real() * h.imag() + x.imag() * h.real());
+            }
+          }
+          operations -= count;
+          if (cursor == bins) {
+            cursor = 0;
+            if (++productPartition == validHistory) { phase = Phase::Reflect; cursor = bins; }
+          }
+        } else if (phase == Phase::Reflect) {
+          const size_t count = std::min(operations, n - cursor);
+          for (size_t end = cursor + count; cursor < end; ++cursor) product[cursor] = std::conj(product[n - cursor]);
+          operations -= count;
+          if (cursor == n) startTransform(Phase::Inverse);
+        } else if (phase == Phase::Inverse) {
+          if (synchronous) {
+            plan.transform(product, true); phase = Phase::Output; cursor = 0;
+          } else if (transformWork(product, true, operations)) {
+            phase = Phase::Output; cursor = 0;
+          }
+        } else {
+          const size_t slot = (outputStart + cursor) % output.size();
+          const size_t count = std::min({operations, n - cursor, output.size() - slot});
+          const float scale = 1.0f / static_cast<float>(n);
+          for (size_t i = 0; i < count; ++i) output[slot + i] += product[cursor + i].real() * scale;
+          cursor += count; operations -= count;
+          if (cursor == n) phase = Phase::Idle;
+        }
+      }
+    }
+  };
+
   uint32_t partitionSize = 0;
-  size_t fftSize = 0;
-  size_t currentIndex = 0;
-  std::vector<std::vector<Complex>> impulsePartitions;
-  std::vector<std::vector<Complex>> inputHistory;
-  std::vector<float> inputBlock;
-  std::vector<float> outputBlock;
-  std::vector<float> overlap;
-  std::vector<float> paddedScratch;
-  std::vector<Complex> spectrumScratch;
-  size_t inputPos = 0;
+  uint64_t position = 0;
+  std::vector<Tier> tiers;
+  std::vector<float> output;
 
   void configure(const std::vector<float>& impulse, uint32_t requestedPartitionSize) {
-    partitionSize = std::max<uint32_t>(1, requestedPartitionSize);
-    fftSize = static_cast<size_t>(partitionSize) * 2;
-    const size_t partitionCount =
-        std::max<size_t>(1, (impulse.size() + static_cast<size_t>(partitionSize) - 1) / partitionSize);
-
-    impulsePartitions.assign(partitionCount, std::vector<Complex>(fftSize));
-    inputHistory.assign(partitionCount, std::vector<Complex>(fftSize));
-    paddedScratch.assign(fftSize, 0.0f);
-    spectrumScratch.assign(fftSize, Complex{});
-    for (size_t partition = 0; partition < partitionCount; ++partition) {
-      const size_t offset = partition * static_cast<size_t>(partitionSize);
-      convolver::writeImpulsePartitionToPaddedScratch(impulse, offset, paddedScratch, partitionSize, fftSize);
-      KissFftAdapter::forward(paddedScratch, &impulsePartitions[partition]);
+    partitionSize = std::max<uint32_t>(64, requestedPartitionSize);
+    tiers.clear();
+    const size_t firstEnd = std::min(impulse.size(), size_t(partitionSize) * 8);
+    tiers.emplace_back();
+    tiers.back().configure(impulse, 0, firstEnd, partitionSize);
+    size_t offset = firstEnd, block = size_t(partitionSize) * 4;
+    while (offset < impulse.size()) {
+      const size_t end = block >= 65536 ? impulse.size() : std::min(impulse.size(), block * 8);
+      tiers.emplace_back();
+      tiers.back().configure(impulse, offset, end, block);
+      offset = end; block *= 4;
     }
-
-    inputBlock.assign(partitionSize, 0.0f);
-    outputBlock.assign(partitionSize, 0.0f);
-    overlap.assign(partitionSize, 0.0f);
-    inputPos = 0;
-    currentIndex = 0;
+    const Tier& last = tiers.back();
+    output.assign(last.irOffset + last.blockSize * 2 + partitionSize + 1, 0.0f);
+    position = 0;
   }
-
   void reset() {
-    for (auto& block : inputHistory) std::fill(block.begin(), block.end(), Complex{});
-    std::fill(inputBlock.begin(), inputBlock.end(), 0.0f);
-    std::fill(outputBlock.begin(), outputBlock.end(), 0.0f);
-    std::fill(overlap.begin(), overlap.end(), 0.0f);
-    inputPos = 0;
-    currentIndex = 0;
+    for (auto& tier : tiers) tier.reset();
+    std::fill(output.begin(), output.end(), 0.0f);
+    position = 0;
   }
-
   uint64_t memoryBytes() const {
-    uint64_t total = sizeof(*this);
-    total += static_cast<uint64_t>(inputBlock.capacity() + outputBlock.capacity() + overlap.capacity() + paddedScratch.capacity()) *
-             sizeof(float);
-    total += static_cast<uint64_t>(spectrumScratch.capacity()) * sizeof(Complex);
-    for (const auto& partition : impulsePartitions) total += static_cast<uint64_t>(partition.capacity()) * sizeof(Complex);
-    for (const auto& history : inputHistory) total += static_cast<uint64_t>(history.capacity()) * sizeof(Complex);
-    return total;
+    uint64_t bytes = sizeof(*this) + output.capacity() * sizeof(float);
+    for (const auto& tier : tiers) bytes += tier.memoryBytes();
+    return bytes;
   }
-
   float process(float input) {
-    if (partitionSize == 0 || impulsePartitions.empty()) return input;
-    const float output = outputBlock[inputPos];
-    inputBlock[inputPos] = input;
-    ++inputPos;
-    if (inputPos >= partitionSize) {
-      computeNextBlock();
-      inputPos = 0;
+    if (tiers.empty()) return input;
+    // Process before reading: the synchronous head finishes just before its
+    // first delayed output sample is due, for any host callback size.
+    for (size_t index = 0; index < tiers.size(); ++index) {
+      Tier& tier = tiers[index];
+      if (index > 0 && tier.phase != Tier::Phase::Idle) ++tier.pendingWorkFrames;
+      tier.input[tier.inputPos++] = input;
+      if (tier.inputPos == tier.blockSize) {
+        tier.inputPos = 0;
+        if (index > 0) {
+          tier.work(tier.workPerSample * tier.pendingWorkFrames, output);
+          tier.pendingWorkFrames = 0;
+        }
+        tier.start(position + 1, partitionSize);
+        if (index == 0) tier.work(std::numeric_limits<size_t>::max(), output);
+      }
     }
-    return std::isfinite(output) ? output : 0.0f;
+    const size_t slot = position++ % output.size();
+    const float value = output[slot]; output[slot] = 0.0f;
+    return std::isfinite(value) ? std::clamp(value, -8.0f, 8.0f) : 0.0f;
   }
-
-  void computeNextBlock() {
-    const size_t partitionCount = impulsePartitions.size();
-    currentIndex = (currentIndex + partitionCount - 1) % partitionCount;
-
-    convolver::writeInputBlockToPaddedScratch(inputBlock, paddedScratch, partitionSize, fftSize);
-    KissFftAdapter::forward(paddedScratch, &inputHistory[currentIndex]);
-
-    convolver::writePartitionedSpectrumProduct(
-        inputHistory,
-        impulsePartitions,
-        currentIndex,
-        fftSize,
-        spectrumScratch);
-
-    KissFftAdapter::inverse(&spectrumScratch);
-    for (size_t i = 0; i < partitionSize; ++i) {
-      outputBlock[i] = static_cast<float>(std::clamp(
-          static_cast<double>(spectrumScratch[i].real()) + static_cast<double>(overlap[i]), -8.0, 8.0));
-      overlap[i] = spectrumScratch[i + partitionSize].real();
+  size_t framesUntilBoundary() const { return partitionSize - tiers.front().inputPos; }
+  void finishChunk() {
+    for (size_t index = 1; index < tiers.size(); ++index) {
+      Tier& tier = tiers[index];
+      tier.work(tier.workPerSample * tier.pendingWorkFrames, output);
+      tier.pendingWorkFrames = 0;
     }
   }
 };
@@ -211,48 +376,52 @@ void ConvolverProcessor::process(float* samples, size_t frameCount) {
   const int channels = std::clamp(format_.channelCount, 1, 8);
   const bool routed = hasRoutingMatrix(config_, channels);
   const bool monoToMany = hasMonoToManyMatrix(config_, channels);
-  for (size_t frame = 0; frame < frameCount; ++frame) {
-    float* current = samples + frame * static_cast<size_t>(channels);
-    for (int output = 0; output < channels; ++output) {
-      double input = 0.0;
-      if (routed) {
-        for (int inputChannel = 0; inputChannel < channels; ++inputChannel) {
-          input += config_.convolverMatrix[static_cast<size_t>(output * channels + inputChannel)] * current[inputChannel];
+  size_t processed = 0;
+  while (processed < frameCount) {
+    const size_t chunk = std::min(frameCount - processed, channels_.front()->framesUntilBoundary());
+    for (size_t frame = processed; frame < processed + chunk; ++frame) {
+      float* current = samples + frame * static_cast<size_t>(channels);
+      for (int output = 0; output < channels; ++output) {
+        double input = 0.0;
+        if (routed) {
+          for (int inputChannel = 0; inputChannel < channels; ++inputChannel) {
+            input += config_.convolverMatrix[static_cast<size_t>(output * channels + inputChannel)] * current[inputChannel];
+          }
+        } else if (monoToMany) {
+          input = config_.convolverMatrix[static_cast<size_t>(output)] * current[0];
+        } else {
+          input = current[output];
         }
-      } else if (monoToMany) {
-        input = config_.convolverMatrix[static_cast<size_t>(output)] * current[0];
-      } else {
-        input = current[output];
+        routedInput_[static_cast<size_t>(output)] = static_cast<float>(std::clamp(input, -8.0, 8.0));
       }
-      routedInput_[static_cast<size_t>(output)] = static_cast<float>(std::clamp(input, -8.0, 8.0));
-    }
-    for (int output = 0; output < channels; ++output) {
-      wetOutput_[static_cast<size_t>(output)] = channels_[static_cast<size_t>(output)]->process(
-          routedInput_[static_cast<size_t>(output)]);
-    }
-    const size_t delayRingFrames = wetDelayFrames_ + 1;
-    for (int channel = 0; channel < channels; ++channel) {
-      const size_t channelIndex = static_cast<size_t>(channel);
-      float wet = wetOutput_[channelIndex];
-      if (!wetDelayBuffer_.empty()) {
-        wetDelayBuffer_[wetDelayWriteFrame_ * static_cast<size_t>(channels) + channelIndex] = wet;
-        const size_t readFrame =
-            (wetDelayWriteFrame_ + delayRingFrames - wetDelayFrames_) % delayRingFrames;
-        wet = wetDelayBuffer_[readFrame * static_cast<size_t>(channels) + channelIndex];
+      for (int output = 0; output < channels; ++output) {
+        wetOutput_[static_cast<size_t>(output)] = channels_[static_cast<size_t>(output)]->process(
+            routedInput_[static_cast<size_t>(output)]);
       }
-      current[channel] = static_cast<float>(std::clamp(
-          static_cast<double>(current[channel]) * config_.convolverDry +
-              static_cast<double>(wet) * config_.convolverWet * wetGain_,
-          -8.0,
-          8.0));
+      const size_t delayRingFrames = wetDelayFrames_ + 1;
+      for (int channel = 0; channel < channels; ++channel) {
+        const size_t channelIndex = static_cast<size_t>(channel);
+        float wet = wetOutput_[channelIndex];
+        if (!wetDelayBuffer_.empty()) {
+          wetDelayBuffer_[wetDelayWriteFrame_ * static_cast<size_t>(channels) + channelIndex] = wet;
+          const size_t readFrame =
+              (wetDelayWriteFrame_ + delayRingFrames - wetDelayFrames_) % delayRingFrames;
+          wet = wetDelayBuffer_[readFrame * static_cast<size_t>(channels) + channelIndex];
+        }
+        current[channel] = static_cast<float>(std::clamp(
+            static_cast<double>(current[channel]) * config_.convolverDry +
+                static_cast<double>(wet) * config_.convolverWet * wetGain_,
+            -8.0,
+            8.0));
+      }
+      wetDelayWriteFrame_ = (wetDelayWriteFrame_ + 1) % delayRingFrames;
     }
-    wetDelayWriteFrame_ = (wetDelayWriteFrame_ + 1) % delayRingFrames;
+    for (auto& channel : channels_) channel->finishChunk();
+    processed += chunk;
   }
   const auto elapsed = std::chrono::steady_clock::now() - started;
   const double elapsedMs = std::chrono::duration<double, std::milli>(elapsed).count();
-  const double blockMs =
-      format_.sampleRate > 0 ? static_cast<double>(frameCount) * 1000.0 / static_cast<double>(format_.sampleRate) : 0.0;
-  const double budgetMs = std::max(2.0, blockMs * 0.5);
+  const double budgetMs = convolver::RealtimeBudget::milliseconds(frameCount, format_.sampleRate);
   info_.lastProcessMs = elapsedMs;
   info_.maxProcessMs = std::max(info_.maxProcessMs, elapsedMs);
   if (realtimeState_) {
@@ -266,13 +435,9 @@ void ConvolverProcessor::process(float* samples, size_t frameCount) {
   if (elapsedMs > budgetMs) {
     info_.overrunCount += 1;
     if (realtimeState_) realtimeState_->overrunCount.fetch_add(1, std::memory_order_relaxed);
-    consecutiveOverruns_ += 1;
-    if (consecutiveOverruns_ >= kConvolverRealtimeBypassOverrunThreshold) {
-      bypassRealtime();
-    }
-    return;
   }
-  consecutiveOverruns_ = 0;
+  if (realtimeBudget_.observe(elapsedMs > budgetMs, frameCount, format_.sampleRate, info_.partitionSize))
+    bypassRealtime();
 }
 
 void ConvolverProcessor::reset() {
@@ -281,7 +446,7 @@ void ConvolverProcessor::reset() {
   }
   std::fill(wetDelayBuffer_.begin(), wetDelayBuffer_.end(), 0.0f);
   wetDelayWriteFrame_ = 0;
-  consecutiveOverruns_ = 0;
+  realtimeBudget_.reset();
 }
 
 bool ConvolverProcessor::isActive() const {
@@ -298,7 +463,7 @@ bool ConvolverProcessor::loadImpulseResponse(const std::string& path, std::strin
   originalIr_ = std::move(ir);
   irCache_.clear();
   info_ = {};
-  consecutiveOverruns_ = 0;
+  realtimeBudget_.reset();
   info_.loaded = true;
   info_.path = path;
   info_.sampleRate = originalIr_->sampleRate;
@@ -326,7 +491,7 @@ void ConvolverProcessor::unloadImpulseResponse() {
   wetGain_ = 1.0;
   active_ = false;
   info_ = {};
-  consecutiveOverruns_ = 0;
+  realtimeBudget_.reset();
   realtimeBypassed_ = false;
   bypassGeneration_ = 0;
   if (realtimeState_) {
@@ -624,7 +789,7 @@ bool ConvolverProcessor::shouldRearmAfterBypass() {
   }
   std::fill(wetDelayBuffer_.begin(), wetDelayBuffer_.end(), 0.0f);
   wetDelayWriteFrame_ = 0;
-  consecutiveOverruns_ = 0;
+  realtimeBudget_.reset();
   realtimeBypassed_ = false;
   active_ = true;
   info_.active = true;
@@ -694,7 +859,7 @@ bool ConvolverProcessor::prepareRuntimeIr(std::string* error) {
   active_ = true;
   info_.active = true;
   info_.bypassed = false;
-  consecutiveOverruns_ = 0;
+  realtimeBudget_.reset();
   // A fresh runtime IR is a clean slate: drop the accumulated backoff so a reconfigured
   // convolver is not still serving a penalty earned by the previous setup.
   realtimeBypassed_ = false;
@@ -710,9 +875,9 @@ uint32_t ConvolverProcessor::choosePartitionSize(const IrData& ir) const {
     while (partitionSize < requested && partitionSize < 8192U) partitionSize *= 2;
     return partitionSize;
   }
-  if (ir.sampleRate <= 48000 && ir.frames <= static_cast<uint64_t>(ir.sampleRate / 2)) return 1024;
-  if (ir.sampleRate >= 176400 || ir.frames >= static_cast<uint64_t>(ir.sampleRate * 2)) return 4096;
-  return 2048;
+  if (ir.sampleRate >= 176400) return 256;
+  if (ir.sampleRate > 48000) return 512;
+  return 1024;
 }
 
 std::vector<float> ConvolverProcessor::impulseForOutputChannel(const IrData& ir, int outputChannel) const {

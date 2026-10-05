@@ -349,6 +349,9 @@ if(TAE_BUILD_TESTS)
     target_link_libraries(twilight_dsp_tests PRIVATE ${EBUR128_LIBRARY})
   endif()
   add_test(NAME twilight_dsp_unit COMMAND twilight_dsp_tests)
+  add_executable(twilight_convolver_tests tests/convolver_tests.cpp dsp/ConvolverProcessor.cpp dsp/KissFftAdapter.cpp)
+  target_include_directories(twilight_convolver_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME twilight_convolver_unit COMMAND twilight_convolver_tests)
 
   add_executable(twilight_channel_router_tests
     tests/channel_router_tests.cpp
@@ -939,6 +942,7 @@ if(TAE_BUILD_TESTS)
   set(TAE_TEST_TARGETS
     twilight_audio_tests
     twilight_dsp_tests
+    twilight_convolver_tests
     twilight_channel_router_tests
     twilight_wsola_tests
     twilight_wsola_performance

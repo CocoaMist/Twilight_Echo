@@ -396,8 +396,8 @@ void testConvolverBypassesAfterRepeatedBudgetMisses() {
 
   require(body.find("std::chrono::steady_clock::now()") != std::string::npos);
   require(body.find("elapsedMs > budgetMs") != std::string::npos);
-  require(body.find("consecutiveOverruns_ +=") != std::string::npos);
-  require(body.find("kConvolverRealtimeBypassOverrunThreshold") != std::string::npos);
+  require(body.find("realtimeBudget_.observe(") != std::string::npos);
+  require(body.find("RealtimeBudget::milliseconds(") != std::string::npos);
   require(body.find("bypassRealtime(") != std::string::npos);
   require(bypassBody.find("channels_.clear()") == std::string::npos);
 

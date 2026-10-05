@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IAudioProcessor.h"
+#include "ConvolverRealtimeBudget.h"
 
 #include <array>
 #include <chrono>
@@ -71,7 +72,7 @@ class ConvolverProcessor final : public IAudioProcessor {
   size_t wetDelayFrames_ = 0;
   size_t wetDelayWriteFrame_ = 0;
   ConvolverInfo info_;
-  uint64_t consecutiveOverruns_ = 0;
+  convolver::RealtimeBudget realtimeBudget_;
   // Successive bypasses back off exponentially so a genuinely too-heavy IR settles into
   // "off" instead of thrashing, while a one-off scheduling hiccup recovers quickly.
   uint32_t bypassGeneration_ = 0;
