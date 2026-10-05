@@ -7,13 +7,13 @@ import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
-import { compileStyle } from '@vue/compiler-sfc'
+import { compileStyle, parse } from '@vue/compiler-sfc'
 import { build } from 'vite'
 
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
-test('saved theme colors reach the rendered player controls across tones and bar modes', async () => {
+test('rendered surfaces keep restrained default shadows and saved theme controls across tones', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-player-theme-'))
   try {
     const source = await readFile(new URL('./PlayerBar.css', import.meta.url), 'utf8')
@@ -25,12 +25,18 @@ test('saved theme colors reach the rendered player controls across tones and bar
     })
     assert.deepEqual(style.errors, [])
     const geometryStyles = await Promise.all(
-      ['../../assets/base.css', '../song-list/SongList.css'].map(async (path) => {
+      [
+        '../../assets/base.css',
+        '../song-list/SongList.css',
+        '../settings-page/SettingsPage.css',
+        '../PlayingMusic.vue'
+      ].map(async (path) => {
+        const source = await readFile(new URL(path, import.meta.url), 'utf8')
         const compiled = compileStyle({
-          source: await readFile(new URL(path, import.meta.url), 'utf8'),
+          source: path.endsWith('.vue') ? parse(source).descriptor.styles[0].content : source,
           filename: path,
           id: 'data-v-test',
-          scoped: path.endsWith('SongList.css')
+          scoped: path !== '../../assets/base.css'
         })
         assert.deepEqual(compiled.errors, [])
         return compiled.code
@@ -78,6 +84,22 @@ app.whenReady().then(async()=>{
       await win.webContents.executeJavaScript('window.checkArtworkGeometry()')
     }
     win.setSize(1080,900)
+    win.webContents.debugger.attach('1.3')
+    await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled',{enabled:true})
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab'})
+    win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'})
+    await win.webContents.executeJavaScript('window.checkDefaultSurfaceShadows()')
+    if(process.env.TWILIGHT_SHADOW_VISUAL_DIR){
+      const fs=require('node:fs'),path=require('node:path')
+      fs.mkdirSync(process.env.TWILIGHT_SHADOW_VISUAL_DIR,{recursive:true})
+      for(const tone of ['pureWhite','dark']){
+        await win.webContents.executeJavaScript('window.prepareSurfaceShadowPreview('+JSON.stringify(tone)+')')
+        await new Promise(resolve=>setTimeout(resolve,300))
+        const image=await win.webContents.capturePage()
+        fs.writeFileSync(path.join(process.env.TWILIGHT_SHADOW_VISUAL_DIR,tone+'-standard.png'),image.toPNG())
+      }
+      await win.webContents.executeJavaScript('window.clearSurfaceShadowPreview()')
+    }
     await win.webContents.executeJavaScript('document.querySelector("#geometry-styles").remove()')
     await win.webContents.executeJavaScript('window.runPlayerThemeTests()')
     for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact'])for(const glass of [false,true]){
@@ -217,6 +239,118 @@ window.checkArtworkGeometry=async()=>{
   delete root.dataset.cardCustom
   root.style.removeProperty('--te-card-radius')
   root.style.removeProperty('--te-card-border-width')
+}
+const shadowLayers=(element)=>{
+  const value=getComputedStyle(element).boxShadow
+  return value==='none'?[]:value.split(/,(?![^()]*\\))/).map(value=>value.trim())
+}
+const checkShadow=(element,value,label)=>{
+  const probe=document.createElement('div')
+  probe.style.boxShadow=value
+  document.body.append(probe)
+  expect(getComputedStyle(element).boxShadow===getComputedStyle(probe).boxShadow,label+': '+getComputedStyle(element).boxShadow)
+  probe.remove()
+}
+let surfaceFixture
+const mountSurfaces=()=>{
+  surfaceFixture?.remove()
+  surfaceFixture=document.createElement('main')
+  surfaceFixture.id='shadow-surfaces'
+  surfaceFixture.style.cssText='padding:32px;display:grid;grid-template-columns:1fr 1fr;gap:24px;font:14px system-ui;color:var(--te-settings-text)'
+  surfaceFixture.innerHTML='<section class="song-list"><h2>Library</h2><div class="track-table-wrapper">Track list stays on the page surface</div></section><section class="playing-music"><div class="cover-frame" style="width:220px"><img class="cover-image" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22220%22 height=%22220%22%3E%3Crect width=%22220%22 height=%22220%22 fill=%22%235d7dab%22/%3E%3C/svg%3E"></div></section><section class="settings-preview-page" style="position:static;padding:0"><h2>Settings</h2><div class="glass-card">Settings section</div><button class="device-card">Output device</button><div class="dsp-meter">Level meter</div><div class="settings-nav-results" style="position:static;margin-top:16px">Floating search results</div></section>'
+  surfaceFixture.querySelector('.playing-music').style.cssText='position:static;background:none;z-index:auto'
+  surfaceFixture.querySelector('.song-list').style.cssText='display:block;padding:0'
+  for(const element of [surfaceFixture,...surfaceFixture.querySelectorAll('*')])element.setAttribute('data-v-test','')
+  document.body.append(surfaceFixture)
+}
+window.checkDefaultSurfaceShadows=async()=>{
+  await boot()
+  await store.setActive({kind:'builtin',id:'builtin:twilight-echo-default'})
+  document.documentElement.dataset.teMotion='off'
+  for(const tone of ['pureWhite','dark']){
+    await store.setPreviewTone(tone)
+    mountSurfaces()
+    await settle()
+    checkShadow(surfaceFixture.querySelector('.track-table-wrapper'),'none',tone+' library table has no elevation')
+    const cover=surfaceFixture.querySelector('.cover-frame')
+    checkShadow(cover,tone==='dark'?'0 4px 12px rgba(0,0,0,.18)':'0 4px 12px rgba(15,23,42,.08)',tone+' artwork has a small single shadow')
+    expect(shadowLayers(cover).length===1,tone+' artwork shadow layers')
+    for(const selector of ['.glass-card','.device-card','.dsp-meter']){
+      const element=surfaceFixture.querySelector(selector)
+      checkShadow(element,'none',tone+' flat settings '+selector)
+      expect(parseFloat(getComputedStyle(element).borderTopWidth)>0,tone+' settings border survives '+selector)
+    }
+    const popup=surfaceFixture.querySelector('.settings-nav-results')
+    expect(shadowLayers(popup).some(value=>!value.includes('inset')),tone+' floating search results keep elevation')
+    mount('standard')
+    await settle()
+    const layers=shadowLayers(bar),external=layers.filter(value=>!value.includes('inset'))
+    expect(external.length===1&&layers.length<=2,tone+' player bar uses one outer shadow and at most one inset')
+    const probe=document.createElement('div')
+    probe.style.boxShadow=tone==='dark'?'0 4px 12px rgba(0,0,0,.16)':'0 4px 12px rgba(15,23,42,.06)'
+    document.body.append(probe)
+    expect(external[0]===shadowLayers(probe)[0],tone+' player bar stays close to the surface')
+    probe.remove()
+    const slot=document.createElement('div')
+    slot.className='player-cover-slot'
+    slot.innerHTML='<img class="player-cover"><div class="player-cover-placeholder"></div>'
+    for(const element of [slot,...slot.querySelectorAll('*')])element.setAttribute('data-v-test','')
+    bar.querySelector('.player-left').prepend(slot)
+    checkShadow(slot.querySelector('img'),'none',tone+' clipped artwork has no wasted image shadow')
+    checkShadow(slot.querySelector('.player-cover-placeholder'),'none',tone+' placeholder has no extra shadow')
+    expect(shadowLayers(slot).every(value=>value.includes('inset')),tone+' artwork slot has no drop shadow')
+    const focus=document.createElement('button')
+    focus.className='player-title-button'
+    focus.textContent='Song title'
+    focus.setAttribute('data-v-test','')
+    bar.querySelector('.player-left').append(focus)
+    focus.focus()
+    const focusStyle=getComputedStyle(focus)
+    expect(focus.matches(':focus-visible')&&parseFloat(focusStyle.outlineWidth)>=2&&focusStyle.outlineStyle!=='none',tone+' keyboard focus remains visible: '+[document.activeElement===focus,focus.matches(':focus-visible'),focusStyle.outlineWidth,focusStyle.outlineStyle,focusStyle.outlineColor].join('/'))
+    focus.blur()
+    const drawer=document.createElement('div')
+    drawer.className='volume-drawer'
+    drawer.setAttribute('data-v-test','')
+    bar.append(drawer)
+    expect(shadowLayers(drawer).some(value=>!value.includes('inset')),tone+' actual volume popup keeps elevation')
+    expect(getComputedStyle(bar).overflowY==='visible',tone+' popup remains unclipped')
+  }
+  const custom=store.createProfile('Surface shadows')
+  const overrides={'library.table.shadow':'0 3px 9px rgba(31,63,95,.3)','playback.cover.shadow':'0 5px 15px rgba(12,34,56,.4)','material.glassShadow':'0 7px 21px rgba(21,43,65,.5)'}
+  custom.overrides={pureWhite:{...overrides},dark:{...overrides}}
+  await store.preview(custom)
+  for(const tone of ['pureWhite','dark']){
+    await store.setPreviewTone(tone)
+    mountSurfaces()
+    await settle()
+    checkShadow(surfaceFixture.querySelector('.track-table-wrapper'),overrides['library.table.shadow'],tone+' explicit library shadow stays supported')
+    checkShadow(surfaceFixture.querySelector('.cover-frame'),overrides['playback.cover.shadow'],tone+' explicit artwork shadow stays supported')
+    const glass=document.createElement('div')
+    glass.style.boxShadow='var(--te-glass-shadow)'
+    document.body.append(glass)
+    checkShadow(glass,overrides['material.glassShadow'],tone+' explicit floating material shadow stays supported')
+    glass.remove()
+  }
+  await store.preview(null)
+  surfaceFixture.remove()
+  document.querySelector('.player-bar-shell')?.remove()
+}
+window.prepareSurfaceShadowPreview=async(tone)=>{
+  await store.setPreviewTone(tone)
+  document.body.style.background=tone==='dark'?'#10141e':'#f6f7fb'
+  mountSurfaces()
+  mount('standard')
+  const slot=document.createElement('div')
+  slot.className='player-cover-slot'
+  slot.innerHTML='<div class="player-cover-placeholder">♪</div>'
+  for(const element of [slot,...slot.querySelectorAll('*')])element.setAttribute('data-v-test','')
+  bar.querySelector('.player-left').prepend(slot)
+  await settle()
+}
+window.clearSurfaceShadowPreview=()=>{
+  surfaceFixture?.remove()
+  document.querySelector('.player-bar-shell')?.remove()
+  document.body.style.removeProperty('background')
 }
 const checkColors=async(overrides)=>{
   for(const tone of ['pureWhite','dark']){

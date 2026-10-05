@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import vue from '@vitejs/plugin-vue'
-import { parse } from '@vue/compiler-sfc'
+import { compileStyle, parse } from '@vue/compiler-sfc'
 import { build } from 'vite'
 
 const require = createRequire(import.meta.url)
@@ -23,6 +23,20 @@ test('motion modes, legacy overlays, discovery layout, popovers and satellite bo
       join(directory, 'app.css'),
       app.descriptor.styles.map((s) => s.content).join('\n')
     )
+    const surfaceStyles = await Promise.all(
+      ['streaming-page/StreamingPage.css', 'player-bar/PlayerBar.css'].map(async (path) => {
+        const filename = join(workspace, 'src/renderer/src/components', path)
+        const result = compileStyle({
+          source: await readFile(filename, 'utf8'),
+          filename,
+          id: 'data-v-motion',
+          scoped: true
+        })
+        assert.deepEqual(result.errors, [])
+        return result.code
+      })
+    )
+    await writeFile(join(directory, 'motion-surfaces.css'), surfaceStyles.join('\n'))
     await build({
       configFile: false,
       logLevel: 'error',
@@ -69,7 +83,7 @@ test('motion modes, legacy overlays, discovery layout, popovers and satellite bo
         .map((f) => `<link rel="stylesheet" href="bundle/${f}">`)
         .join(
           ''
-        )}<link rel="stylesheet" href="app.css"><style>body{padding:24px;background:#edf0f5}body::before,body::after{display:none!important}#app{max-width:880px;margin:auto}.disc{animation:none!important}.workshop-delete-dialog{padding:24px;border-radius:16px;background:white}.workshop-delete-dialog::backdrop{background:#0005}</style></head><body><button id="opener">打开弹窗</button><div id="app"></div><script src="bundle/${files.find((f) => f.endsWith('.js'))}"></script></body></html>`
+        )}<link rel="stylesheet" href="app.css"><link rel="stylesheet" href="motion-surfaces.css"><style>body{padding:24px;background:#edf0f5}body::before,body::after{display:none!important}#app{max-width:880px;margin:auto}.disc{animation:none!important}.workshop-delete-dialog{padding:24px;border-radius:16px;background:white}.workshop-delete-dialog::backdrop{background:#0005}</style></head><body><button id="opener">打开弹窗</button><div id="app"></div><script src="bundle/${files.find((f) => f.endsWith('.js'))}"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),
@@ -90,6 +104,7 @@ test('motion modes, legacy overlays, discovery layout, popovers and satellite bo
 })
 
 const runtime = `import {createApp,h,nextTick,ref} from 'vue'
+import '@renderer/assets/icons.css'
 import '@renderer/assets/base.css'
 import CreateAggregatePlaylistDialog from '@renderer/components/aggregate-playlist/CreateAggregatePlaylistDialog.vue'
 import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
@@ -125,9 +140,35 @@ window.runMotionCoverage=async()=>{
       await mount(()=>h('div',{class:'main-content'},[h('article',{class:'page-down-enter-active page-down-enter-from'},'页面内容')]))
       const page=document.querySelector('article'),style=getComputedStyle(page)
       expect(mode==='full'?style.transform!=='none':style.transform==='none','page mode moved incorrectly: '+mode)
-      expect(style.transitionDuration===(mode==='full'?'0.34s, 0.48s, 0.42s':mode==='reduced'?'0.12s':'0s'),'page duration ignored mode: '+mode+' '+style.transitionDuration)
-      root.classList.add('te-theme-tone-transition');page.className='glass-card';await nextTick()
-      expect(getComputedStyle(page).transitionDuration===(mode==='full'?'0.2s, 0.2s, 0.2s':mode==='reduced'?'0.12s':'0s'),'theme transition ignored mode '+mode+' '+getComputedStyle(page).transitionDuration)
+      expect(style.transitionDuration===(mode==='full'?'0.18s, 0.24s':mode==='reduced'?'0.12s':'0s'),'page duration ignored mode: '+mode+' '+style.transitionDuration)
+      expect(style.filter==='none','page transition blurred text')
+      if(mode==='full')expect(new DOMMatrix(style.transform).a===1&&new DOMMatrix(style.transform).d===1,'page transition scaled text')
+      await mount(()=>h('div',null,[h('i',{id:'spinner',class:'pi pi-spinner pi-spin'}),h('span',{'data-v-motion':'',class:'live-badge'},'LIVE'),h('section',{'data-v-motion':'',class:'stream-view-panel'},'在线音乐')]))
+      const spinner=document.querySelector('#spinner'),badge=document.querySelector('.live-badge'),stream=document.querySelector('section')
+      const spin=spinner.getAnimations()[0]
+      expect(mode==='off'?!spin:Boolean(spin),'loading spinner missing or unexpectedly moving: '+mode)
+      if(spin){expect(spin.effect.getTiming().duration===(mode==='full'?2000:4000),'spinner ignored motion speed');spin.pause();spin.currentTime=500;expect(getComputedStyle(spinner).transform!=='none','spinner keyframes do not exist')}
+      const pulses=badge.getAnimations({subtree:true})
+      expect(mode==='full'?pulses.length===1:pulses.length===0,'live badge ignored motion mode')
+      if(mode==='full'){
+        const pulse=pulses[0];pulse.pause();pulse.currentTime=0;const before=getComputedStyle(badge,'::before');const shadow=before.boxShadow,width=badge.getBoundingClientRect().width
+        pulse.currentTime=700;await frame();const after=getComputedStyle(badge,'::before')
+        expect(Number(after.opacity)<0.6,'live indicator does not breathe')
+        expect(after.boxShadow===shadow&&after.transform==='none'&&badge.getBoundingClientRect().width===width,'live indicator repainted shadow or moved text')
+      }
+      expect(getComputedStyle(stream).willChange==='auto','idle streaming page retains a compositor hint')
+      for(const [name,axis,direction] of [['stream-page-down','f',1],['stream-page-up','f',-1],['stream-detail-forward','e',1],['stream-detail-back','e',-1]]){
+        stream.className='stream-view-panel '+name+'-enter-active '+name+'-enter-from';await flush();const css=getComputedStyle(stream)
+        expect(css.filter==='none','streaming transition blurred text')
+        expect(css.transitionDuration===(mode==='full'?'0.18s, 0.24s':mode==='reduced'?'0.12s':'0s'),'streaming transition ignored mode '+mode+' '+css.transitionDuration)
+        if(mode==='full'){const matrix=new DOMMatrix(css.transform);expect(matrix.a===1&&matrix.d===1&&Math.sign(matrix[axis])===direction,'streaming direction or text scale changed: '+name)}
+        else expect(css.transform==='none','streaming reduced/off moved content')
+        stream.className='stream-view-panel';await flush();expect(getComputedStyle(stream).willChange==='auto','streaming page did not release compositor hint')
+      }
+      await mount(()=>h('article',{class:'glass-card'},'主题内容'))
+      const themePage=document.querySelector('article')
+      root.classList.add('te-theme-tone-transition');await nextTick()
+      expect(getComputedStyle(themePage).transitionDuration===(mode==='full'?'0.2s, 0.2s, 0.2s':mode==='reduced'?'0.12s':'0s'),'theme transition ignored mode '+mode+' '+getComputedStyle(themePage).transitionDuration)
       root.classList.remove('te-theme-tone-transition')
     }
   }

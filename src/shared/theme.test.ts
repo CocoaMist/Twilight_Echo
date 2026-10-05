@@ -94,6 +94,33 @@ test('theme profiles keep sparse known-token overrides and reject unsafe values'
   })
 })
 
+test('saved shadow overrides survive quieter defaults in both tones', () => {
+  const shadow = '0 3px 9px rgba(0, 0, 0, 0.2)'
+  const overrides = {
+    'library.table.shadow': shadow,
+    'playback.cover.shadow': shadow,
+    'material.glassShadow': shadow
+  }
+  const profile = normalizeThemeProfile({
+    schemaVersion: 2,
+    id: 'user:shadows',
+    name: 'Shadows',
+    baseThemeId: TWILIGHT_DEFAULT_THEME_ID,
+    createdAt: '2026-10-05T00:00:00.000Z',
+    updatedAt: '2026-10-05T00:00:00.000Z',
+    overrides: { pureWhite: overrides, dark: overrides }
+  })
+  assert.ok(profile)
+  for (const tone of ['pureWhite', 'dark'] as const) {
+    const resolved = resolveThemeProfileTokens(profile, tone)
+    for (const id of Object.keys(overrides)) assert.equal(resolved[id], shadow)
+    const variables = themeTokensToCssVariables(resolved)
+    assert.equal(variables['--te-library-table-shadow'], shadow)
+    assert.equal(variables['--te-playback-cover-shadow'], shadow)
+    assert.equal(variables['--te-glass-shadow'], shadow)
+  }
+})
+
 test('theme profiles keep only local typed assets and valid visual bindings', () => {
   const profile = normalizeThemeProfile({
     schemaVersion: 1,

@@ -712,14 +712,14 @@ html:is(
   border: 1px solid var(--te-settings-panel-border, transparent);
   border-radius: var(--te-card-radius, 21px);
   background: var(--te-settings-control-bg, #ffffff);
-  box-shadow: var(--te-settings-shadow, 0 2px 16px rgba(15, 23, 42, 0.04));
+  box-shadow: none;
 }
 
 :global(body.te-no-blur .glass-card) {
   background: var(--te-settings-control-bg, #ffffff);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  box-shadow: var(--te-settings-shadow-soft, 0 1px 4px rgba(15, 23, 42, 0.04));
+  box-shadow: none;
 }
 
 .preview-section {
@@ -1406,14 +1406,14 @@ html[data-te-motion='full'] .toggle-switch.active::after {
     linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(249, 250, 251, 0.78)), #ffffff;
   color: #374151;
   text-align: left;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  box-shadow: none;
   cursor: pointer;
 }
 
 .device-card:hover,
 .device-card.active {
   border-color: var(--brand-300);
-  box-shadow: 0 14px 32px rgba(var(--te-primary-rgb), 0.12);
+  box-shadow: none;
 }
 
 .device-card > i {
@@ -1687,7 +1687,7 @@ html[data-theme='dark'] .theme-segment button.active {
   border: 1px solid rgba(229, 231, 235, 0.72);
   border-radius: 14px;
   background: var(--te-card-bg);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  box-shadow: none;
 }
 
 .dsp-meter span {

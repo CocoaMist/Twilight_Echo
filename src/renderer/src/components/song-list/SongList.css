@@ -1589,13 +1589,12 @@
   border-radius: 999px;
   background: var(--te-glass-bg);
   border: 1px solid rgba(255, 255, 255, 0.72);
-  box-shadow: 0 14px 36px rgba(86, 70, 160, 0.08);
+  box-shadow: none;
   backdrop-filter: blur(16px) saturate(145%);
   -webkit-backdrop-filter: blur(16px) saturate(145%);
   transition:
     border-color 0.2s,
-    background 0.2s,
-    box-shadow 0.2s;
+    background 0.2s;
   width: clamp(260px, 30vw, 390px);
   flex: 0 1 auto;
 }
@@ -1671,9 +1670,9 @@
 .search-box.focused {
   border-color: rgba(124, 77, 255, 0.34);
   background: var(--te-glass-bg);
-  box-shadow:
-    0 0 0 4px rgba(124, 77, 255, 0.08),
-    0 16px 42px rgba(86, 70, 160, 0.1);
+  box-shadow: none;
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 2px;
 }
 
 .search-icon {

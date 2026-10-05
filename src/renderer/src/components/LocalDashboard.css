@@ -185,17 +185,15 @@
   border-radius: 999px;
   background: var(--home-card);
   cursor: pointer;
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
   transition:
     transform var(--te-motion-hover) var(--te-ease-soft),
-    box-shadow var(--te-motion-hover),
     border-color var(--te-motion-hover);
 }
 
 .masthead-shuffle:hover {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--home-ink) 18%, transparent);
-  box-shadow: var(--home-shadow-lift);
 }
 
 .masthead-shuffle:active {
@@ -265,7 +263,7 @@
   border-radius: var(--home-radius-lg);
   background: var(--home-card);
   overflow: hidden;
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
 }
 
 .empty-orb {
@@ -356,10 +354,9 @@
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 16px 34px color-mix(in srgb, var(--home-ink) 26%, transparent);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--home-ink) 12%, transparent);
   transition:
     transform var(--te-motion-hover) var(--te-ease-soft),
-    box-shadow var(--te-motion-hover),
     background var(--te-motion-hover);
 }
 
@@ -412,7 +409,7 @@
   border-radius: var(--home-radius-lg);
   background: var(--home-card);
   overflow: hidden;
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
 }
 
 .feature-backdrop {
@@ -611,7 +608,7 @@
   color: var(--home-card);
   -webkit-text-fill-color: currentColor;
   background: var(--home-ink);
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--home-ink) 26%, transparent);
+  box-shadow: none;
 }
 
 .transport-play:hover {
@@ -667,9 +664,8 @@
   display: block;
   border-radius: 20px;
   overflow: hidden;
-  box-shadow:
-    0 26px 54px color-mix(in srgb, var(--te-neutral-900) 26%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--home-card) 42%, transparent);
+  border: 1px solid var(--home-line);
+  box-sizing: border-box;
   transform: rotate(-2deg);
   transition: transform 0.4s var(--te-ease-soft);
 }
@@ -797,18 +793,16 @@
   border: 1px solid var(--home-line);
   border-radius: var(--home-radius-lg);
   background: var(--home-card);
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
   cursor: pointer;
   transition:
     transform var(--te-motion-hover) var(--te-ease-soft),
-    border-color var(--te-motion-hover),
-    box-shadow var(--te-motion-hover);
+    border-color var(--te-motion-hover);
 }
 
 .signal-card:hover {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--home-ink) 16%, transparent);
-  box-shadow: var(--home-shadow-lift);
 }
 
 .signal-card:focus-visible {
@@ -1156,14 +1150,8 @@
   border-radius: var(--te-library-cover-radius);
   overflow: hidden;
   background: var(--home-soft);
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--te-neutral-900) 12%, transparent);
-  transition:
-    transform var(--te-motion-hover) var(--te-ease-soft),
-    box-shadow var(--te-motion-hover);
-}
-
-:global(html[data-theme='dark'] .home .fresh-cover) {
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.3);
+  box-shadow: none;
+  transition: transform var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .fresh-cover img {
@@ -1177,7 +1165,6 @@
 @media (hover: hover) and (pointer: fine) {
   .fresh-tile:hover .fresh-cover {
     transform: translateY(-2px);
-    box-shadow: 0 20px 42px color-mix(in srgb, var(--te-neutral-900) 20%, transparent);
   }
 
   .fresh-tile:hover .fresh-cover img {
@@ -1210,9 +1197,9 @@
   height: 36px;
   border-radius: 999px;
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  color: var(--te-neutral-900);
-  background: color-mix(in srgb, #ffffff 92%, transparent);
-  box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-900) 30%, transparent);
+  color: var(--home-ink);
+  background: var(--home-card);
+  box-shadow: none;
   opacity: 0;
   transform: translateY(6px) scale(0.9);
   transition:
@@ -1266,7 +1253,7 @@
   border: 1px solid var(--home-line);
   border-radius: var(--home-radius-lg);
   background: var(--home-card);
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
 }
 
 .panel-head {
@@ -1343,7 +1330,7 @@
   border-radius: 10px;
   overflow: hidden;
   background: var(--home-soft);
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--te-neutral-900) 12%, transparent);
+  box-shadow: none;
 }
 
 .chart-cover img {
@@ -1591,14 +1578,8 @@
   border-radius: var(--te-library-cover-radius);
   overflow: hidden;
   background: var(--home-soft);
-  box-shadow: 0 16px 34px color-mix(in srgb, var(--te-neutral-900) 13%, transparent);
-  transition:
-    transform var(--te-motion-hover) var(--te-ease-soft),
-    box-shadow var(--te-motion-hover);
-}
-
-:global(html[data-theme='dark'] .home .gallery-cover) {
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.32);
+  box-shadow: none;
+  transition: transform var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .gallery-cover img {
@@ -1612,7 +1593,6 @@
 @media (hover: hover) and (pointer: fine) {
   .gallery-tile:hover .gallery-cover {
     transform: translateY(-2px);
-    box-shadow: 0 22px 46px color-mix(in srgb, var(--te-neutral-900) 22%, transparent);
   }
 
   .gallery-tile:hover .gallery-cover img {
@@ -1670,9 +1650,9 @@
   height: 40px;
   border-radius: 999px;
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  color: var(--te-neutral-900);
-  background: color-mix(in srgb, #ffffff 92%, transparent);
-  box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-900) 30%, transparent);
+  color: var(--home-ink);
+  background: var(--home-card);
+  box-shadow: none;
   opacity: 0;
   transform: translateY(6px) scale(0.9);
   transition:
@@ -2536,9 +2516,7 @@ html[data-te-home-liquid-glass='on'] .home .feature-card {
       rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.54)),
     inset 0 1px 0.5px
       rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.2)),
-    inset 0 -1px 1px rgba(var(--te-lg-shade-rgb, 15, 23, 42), 0.062),
-    0 2px 7px rgba(var(--te-lg-drop-rgb, 15, 23, 42), 0.026),
-    0 13px 32px rgba(var(--te-lg-drop-rgb, 15, 23, 42), 0.072) !important;
+    inset 0 -1px 1px rgba(var(--te-lg-shade-rgb, 15, 23, 42), 0.062) !important;
 }
 
 html[data-te-home-liquid-glass='on'] .home .feature-card::after {
@@ -2631,9 +2609,7 @@ html[data-theme='dark'][data-te-home-liquid-glass='on'] .home .feature-card {
       rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.54)),
     inset 0 1px 0.5px
       rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.2)),
-    inset 0 -1px 1px rgba(0, 0, 0, 0.15),
-    0 2px 7px rgba(0, 0, 0, 0.07),
-    0 13px 32px rgba(0, 0, 0, 0.18) !important;
+    inset 0 -1px 1px rgba(0, 0, 0, 0.15) !important;
 }
 
 html[data-theme='dark'][data-te-home-liquid-glass='on'] .home .feature-card::after {
