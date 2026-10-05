@@ -222,7 +222,7 @@ test('about settings expose local-only sponsor payment options and sponsor list'
   assert.match(source, /const AFDIAN_URL = 'https:\/\/ifdian\.net\/a\/pxasen'/)
   assert.match(source, />\s*赞助作者\s*</)
   assert.match(source, />\s*赞助名单\s*</)
-  assert.match(source, /请务必添加我的联系方式，我会将你加入软件的赞助者名单中，感谢你的支持！/)
+  assert.match(source, /如需加入赞助名单，请联系作者。/)
   assert.match(source, /const ALIPAY_QR_URL = '\.\/sponsor\/alipay\.jpg'/)
   assert.match(source, /const WECHAT_QR_URL = '\.\/sponsor\/wechat\.png'/)
   assert.match(source, /name: '江枫Jiang1021'/)
@@ -436,7 +436,7 @@ test('audio settings expose advanced replaygain, fft, crossfeed, and real loudno
   )
   assert.match(settingsPageSource, /replayGainOptions/)
   assert.match(hifiSidebarSource, /VOLUME_NORMALIZATION_OPTIONS|value: 'loudnorm'/)
-  assert.match(settingsPageSource, /High-Res 当前为自动链路能力/)
+  assert.match(settingsPageSource, /High-Res 暂不支持手动设置/)
   assert.match(settingsPageSource, /function capabilityStateLabel/)
   assert.ok(
     settingsPageSource.includes(
@@ -578,11 +578,8 @@ test('settings page exposes search, backup, cache confirmation, and isolated plu
   assert.match(settingsPageSource, /function resetSettingsGroup/)
   assert.match(settingsPageSource, /function pluginPanelStateKey/)
   assert.match(settingsPageSource, /pluginSettingsResult\[pluginPanelStateKey\(panel\)\]/)
-  assert.match(settingsPageSource, /High-Res 当前为自动链路能力/)
-  assert.doesNotMatch(
-    settingsPageSource,
-    /aria-checked="false"[\s\S]{0,160}当前版本暂未接入原生处理链/
-  )
+  assert.match(settingsPageSource, /High-Res 暂不支持手动设置/)
+  assert.doesNotMatch(settingsPageSource, /aria-checked="false"[\s\S]{0,160}不支持手动设置/)
 })
 
 test('settings backup and shortcut status APIs are exposed to the renderer', () => {

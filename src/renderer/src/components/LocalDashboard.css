@@ -175,14 +175,6 @@
   color: var(--home-ink);
 }
 
-.masthead-sub {
-  margin-top: 8px;
-  line-height: 1.6;
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  font-weight: 500;
-  color: var(--home-muted);
-}
-
 .masthead-shuffle {
   flex-shrink: 0;
   display: inline-flex;
@@ -335,16 +327,6 @@
   border: 1px solid color-mix(in srgb, var(--te-primary-500) 20%, transparent);
 }
 
-.empty-kicker {
-  position: relative;
-  z-index: 1;
-  margin-top: 26px;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  font-weight: 700;
-  letter-spacing: 0.32em;
-  color: var(--home-muted);
-}
-
 .empty-title {
   position: relative;
   z-index: 1;
@@ -354,17 +336,6 @@
   font-weight: 900;
   letter-spacing: -0.01em;
   color: var(--home-ink);
-}
-
-.empty-desc {
-  position: relative;
-  z-index: 1;
-  max-width: 440px;
-  margin-top: 14px;
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  line-height: 1.75;
-  font-weight: 500;
-  color: var(--home-muted);
 }
 
 .empty-cta {
@@ -1126,14 +1097,6 @@
   font-weight: 800;
   letter-spacing: -0.005em;
   color: var(--home-ink);
-}
-
-.block-copy p {
-  margin-top: 4px;
-  line-height: 1.6;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  font-weight: 500;
-  color: var(--home-muted);
 }
 
 .block-more {
@@ -2384,10 +2347,6 @@
     font-size: clamp(28px, 7vw, 34px);
   }
 
-  .masthead-sub {
-    font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  }
-
   .hero-title {
     font-size: clamp(26px, 6.5vw, 30px);
   }
@@ -2414,10 +2373,6 @@
 
   .block-copy h3 {
     font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
-  }
-
-  .block-copy p {
-    font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   }
 
   .hero-inner {

@@ -257,7 +257,7 @@ function emitPage(nextOffset: number): void {
     <!-- ── Error ────────────────────────────────────────────────────── -->
     <div v-else-if="listError && playlists.length === 0" class="disc-state">
       <span class="disc-state-icon"><i class="pi pi-exclamation-triangle"></i></span>
-      <p class="disc-state-title">歌单暂时走丢了</p>
+      <p class="disc-state-title">歌单加载失败</p>
       <p class="disc-state-hint">{{ listError }}</p>
       <button type="button" class="disc-ink-btn" data-te-interactive @click="emit('retry')">
         <i class="pi pi-refresh"></i>

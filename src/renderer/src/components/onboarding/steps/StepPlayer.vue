@@ -27,13 +27,13 @@ const modeOptions: { value: PlayerBarMode; title: string; desc: string; icon: st
   {
     value: 'mini',
     title: '迷你胶囊',
-    desc: '轻量控制占据更少空间，适合日常使用',
+    desc: '胶囊形播放控制',
     icon: 'ph ph-minus-square'
   },
   {
     value: 'compact',
     title: '紧凑模式',
-    desc: '贴边布局，把更多屏幕空间留给音乐内容',
+    desc: '贴边播放控制',
     icon: 'ph ph-rows'
   }
 ]
@@ -71,9 +71,6 @@ function updateMiniPlayer(patch: Partial<MiniPlayerSettings>): void {
   <section class="onb-stage" data-scene="05">
     <p class="onb-kicker">播放器形态</p>
     <h1 class="onb-title">选择<em>播放控制</em>的位置</h1>
-    <p class="onb-subtitle">
-      主播放栏的形态与可见性会立即进入首启配置；迷你播放器保持轻量，也不会抢走主窗口。
-    </p>
 
     <div
       class="onb-cards onb-player-shape-cards has-selection"
@@ -103,7 +100,6 @@ function updateMiniPlayer(patch: Partial<MiniPlayerSettings>): void {
       <div class="onb-toggle-row">
         <div class="onb-toggle-copy">
           <strong>迷你播放器显示在任务栏</strong>
-          <span>开启时像独立小应用一样可从任务栏切换；关闭后仅作为悬浮窗口存在。</span>
         </div>
         <button
           type="button"
@@ -118,7 +114,6 @@ function updateMiniPlayer(patch: Partial<MiniPlayerSettings>): void {
       <div class="onb-toggle-row">
         <div class="onb-toggle-copy">
           <strong>迷你播放器置顶</strong>
-          <span>让控制按钮浮在其他窗口之上，切工作时也能快速暂停。</span>
         </div>
         <button
           type="button"
@@ -133,7 +128,7 @@ function updateMiniPlayer(patch: Partial<MiniPlayerSettings>): void {
       <div class="onb-toggle-row">
         <div class="onb-toggle-copy">
           <strong>完成后打开迷你播放器</strong>
-          <span>向导结束后直接进入轻量控制模式，主窗口暂时收起。</span>
+          <span>主窗口将收起。</span>
         </div>
         <button
           type="button"
@@ -150,7 +145,6 @@ function updateMiniPlayer(patch: Partial<MiniPlayerSettings>): void {
     <div class="onb-panel onb-visibility-panel">
       <div class="onb-toggle-copy">
         <strong>播放栏可见性</strong>
-        <span>选择播放控制什么时候出现。</span>
       </div>
       <div class="onb-segmented is-small" role="radiogroup" aria-label="播放栏可见性">
         <button
@@ -167,7 +161,5 @@ function updateMiniPlayer(patch: Partial<MiniPlayerSettings>): void {
         </button>
       </div>
     </div>
-
-    <p class="onb-hint">这些选择都可以在 设置 → 外观 / 播放栏 中随时修改。</p>
   </section>
 </template>

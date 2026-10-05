@@ -828,18 +828,8 @@
   letter-spacing: 0.1em;
 }
 
-.nh-colophon > span > span {
-  margin: 0 9px;
-  color: var(--nh-accent);
-}
-
-.nh-colophon > span:nth-child(2) {
-  margin-left: auto;
-  font-family: var(--te-font-sans);
-  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
-}
-
 .nh-colophon > i {
+  margin-left: auto;
   color: var(--nh-accent);
   font-size: calc(var(--te-font-size-body, 14px) * 21 / 14);
 }
@@ -1016,10 +1006,6 @@
   .nh-albums {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 24px 16px;
-  }
-
-  .nh-colophon > span:nth-child(2) {
-    display: none;
   }
 
   .nh-colophon > i {

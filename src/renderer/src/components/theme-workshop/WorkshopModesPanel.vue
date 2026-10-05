@@ -79,8 +79,7 @@ function reset(): void {
         </option>
       </select></label
     >
-    <p class="workshop-hint">预设在窄窗自动收起导航，列表行高继续使用宿主模式。</p></template
-  >
+  </template>
   <label v-for="mode in modes" :key="mode.id" :data-workshop-mode="mode.id" tabindex="-1"
     >{{ studioModeLabels[mode.id] ?? mode.label
     }}<select

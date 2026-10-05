@@ -326,20 +326,10 @@
 
 .sf-session-bottom {
   gap: 12px;
+  justify-content: flex-end;
   margin-top: auto;
   padding-top: 16px;
   color: var(--sf-console-muted);
-}
-
-.sf-session-caption {
-  font:
-    400 11px / 1.8 'Space Grotesk',
-    var(--te-font-sans);
-}
-
-.sf-session-caption strong {
-  color: var(--sf-console-ink);
-  font-weight: 400;
 }
 
 .sf-session-bottom > i {
@@ -371,13 +361,6 @@
   font-size: calc(var(--te-font-size-body, 14px) * 36 / 14);
   font-weight: 550;
   line-height: 1.2;
-}
-
-.sf-intro {
-  margin: 12px 0 0;
-  color: var(--sf-muted);
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  line-height: 1.6;
 }
 
 .sf-shuffle {

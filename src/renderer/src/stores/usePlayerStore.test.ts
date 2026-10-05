@@ -1091,12 +1091,12 @@ test('local dashboard playback keeps a multi-track queue for next and previous c
   )
 })
 
-test('local dashboard keeps the restored editorial masthead in Chinese', () => {
+test('local dashboard keeps a concise Chinese masthead', () => {
   const source = readFileSync(new URL('../components/LocalDashboard.vue', import.meta.url), 'utf8')
 
   assert.match(source, /class="masthead-kicker"/)
   assert.match(source, /class="masthead-title"/)
-  assert.match(source, /class="masthead-sub"/)
+  assert.doesNotMatch(source, /class="masthead-sub"/)
   assert.match(source, /本地音乐库/)
   assert.doesNotMatch(source, /Good (morning|afternoon|evening)/i)
 })

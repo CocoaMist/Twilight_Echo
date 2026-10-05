@@ -3,20 +3,19 @@ import { WORKSHOP_TEMPLATES } from '../../../../shared/themeWorkshop.ts'
 defineProps<{ step: number; hasProject: boolean; busy: boolean; creating: boolean }>()
 const emit = defineEmits<{ step: [step: number]; create: [template: string]; close: [] }>()
 const steps = [
-  { name: '选择模板', description: '先选择一个接近你想法的起点，也可以复制已安装主题。' },
+  { name: '选择模板', description: '选择模板或复制已安装主题。' },
   {
     name: '背景与配色',
-    description: '调整主题色和背景，两套颜色可以分别编辑。所有修改会自动保存。'
+    description: '分别设置深浅色配色。修改自动保存。'
   },
-  { name: '调整组件', description: '点选画布跳到对应设置。导入图片后可添加图层，直接拖动和缩放。' },
+  { name: '调整组件', description: '点击组件进行设置，拖动图层调整位置。' },
   {
     name: '检查深浅色',
-    description: '切换深浅色与窗口宽度，打开实时检测，点击问题即可定位并修复。'
+    description: '检查深浅色和不同窗口宽度下的显示。'
   },
   {
     name: '应用或导出',
-    description:
-      '整窗试用可随时按 Esc 退出。应用主题后，即使停用工坊仍可使用；.tep 可分享，可编辑项目可继续创作。'
+    description: '按 Esc 退出试用。导出 .tep 安装包或可编辑项目。'
   }
 ]
 </script>

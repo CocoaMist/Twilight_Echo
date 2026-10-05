@@ -830,7 +830,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         <div class="masthead-copy">
           <p class="masthead-kicker">{{ dateKicker }} · 本地音乐库</p>
           <h1 class="masthead-title">{{ greeting }}</h1>
-          <p class="masthead-sub">让熟悉的旋律，陪你度过此刻。</p>
         </div>
         <button v-if="hasLibrary" type="button" class="masthead-shuffle" @click="shuffleAll">
           <span class="masthead-shuffle-icon" aria-hidden="true"
@@ -849,11 +848,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         <div class="empty-orb empty-orb-a" aria-hidden="true"></div>
         <div class="empty-orb empty-orb-b" aria-hidden="true"></div>
         <span class="empty-badge" aria-hidden="true"><i class="ph ph-music-note"></i></span>
-        <p class="empty-kicker">Twilight Echo · 唱片房间</p>
-        <h2 class="empty-title">这里还很安静</h2>
-        <p class="empty-desc">
-          添加本地音乐文件夹后，封面、专辑与听歌足迹会自动在这里生长成你的唱片房间。
-        </p>
+        <h2 class="empty-title">暂无本地音乐</h2>
         <button type="button" class="empty-cta" @click="emit('open-library-settings')">
           <span class="empty-cta-content">
             <i class="ph ph-folder-simple-plus" aria-hidden="true"></i>
@@ -1075,7 +1070,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           <header class="block-head">
             <div class="block-copy">
               <h3>最近添加</h3>
-              <p>刚收进音乐库的声音，先听为敬。</p>
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'allSongs', null)">
               全部歌曲
@@ -1115,7 +1109,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           <header class="block-head">
             <div class="block-copy">
               <h3>聆听足迹</h3>
-              <p>每一次重播，都在慢慢画出你的音乐偏好。</p>
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'recent', null)">
               最近播放
@@ -1221,7 +1214,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           <header class="block-head">
             <div class="block-copy">
               <h3>专辑精选</h3>
-              <p>从头到尾听完一张专辑，是留给音乐最温柔的时间。</p>
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'albums', null)">
               全部专辑

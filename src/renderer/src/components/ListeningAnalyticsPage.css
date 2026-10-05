@@ -194,14 +194,9 @@
   font-size: 15px;
   white-space: nowrap;
 }
-.analytics-page .hero-note {
-  font-size: 11px;
-  color: var(--an-muted);
-  margin: 10px 0 25px;
-  letter-spacing: 0.06em;
-}
 .analytics-page .hero-totals {
   display: flex;
+  margin-top: 16px;
   align-items: center;
   gap: 20px;
   flex-wrap: wrap;

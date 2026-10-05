@@ -93,7 +93,7 @@ export function useOnlineHome(options: {
         }
         // Public discovery keeps a signed-out home useful without calling personal endpoints.
         if (current() && source!.supportedMethods.includes('fetchDiscoveryPlaylists')) {
-          nextPlaylistTitle = '发现好歌单'
+          nextPlaylistTitle = '发现歌单'
           const page = await options.callProvider<MediaProviderDiscoveryPlaylistPage>(
             source!.id,
             'fetchDiscoveryPlaylists',

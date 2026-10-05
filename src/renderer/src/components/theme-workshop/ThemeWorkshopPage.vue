@@ -514,7 +514,6 @@ onBeforeUnmount(() => {
       <div>
         <small>THEME PLUGIN WORKSHOP</small>
         <h1>主题插件工坊</h1>
-        <p class="workshop-hint">从一个想法，到可分享的主题</p>
       </div>
       <div class="workshop-mode-switch" aria-label="编辑模式">
         <button :aria-pressed="mode === 'simple'" @click="mode = 'simple'">简单模式</button

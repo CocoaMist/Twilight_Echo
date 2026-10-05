@@ -70,10 +70,8 @@ function deviceBadges(device: AudioDeviceOption): string[] {
 <template>
   <section class="onb-stage" data-scene="06">
     <p class="onb-kicker">声音输出</p>
-    <h1 class="onb-title">让声音去<em>对的地方</em></h1>
-    <p class="onb-subtitle">
-      选择输出设备与模式。独占模式绕过系统混音器，把声卡完全交给音乐，按位精确、无重采样。
-    </p>
+    <h1 class="onb-title">选择<em>输出设备</em></h1>
+    <p class="onb-subtitle">独占模式会占用所选设备，其他应用可能无法使用。</p>
     <div class="onb-panel onb-device-panel" role="radiogroup" aria-label="输出设备">
       <button
         v-for="device in audioOutputDeviceOptions"
@@ -152,6 +150,5 @@ function deviceBadges(device: AudioDeviceOption): string[] {
         ></button>
       </div>
     </div>
-    <p class="onb-hint">设备与链路可随时在 设置 → 播放 中调整；DSD、ASIO 等进阶选项也在那里。</p>
   </section>
 </template>

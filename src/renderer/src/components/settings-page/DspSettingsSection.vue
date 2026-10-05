@@ -806,8 +806,8 @@ onMounted(() => {
             <label class="decode-highres">
               <span>高解析度处理 (High-Res)</span>
               <div class="mini-highres">
-                <small>High-Res 当前为自动链路能力，原生 DSP 链未消费手动开关。</small>
-                <span class="read-only-pill" title="当前版本暂未接入原生处理链">自动</span>
+                <small>High-Res 暂不支持手动设置。</small>
+                <span class="read-only-pill" title="不支持手动设置">自动</span>
               </div>
             </label>
           </div>

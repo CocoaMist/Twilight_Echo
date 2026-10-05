@@ -208,7 +208,6 @@ onUnmounted(() => stops.forEach((stop) => stop()))
           <h2 id="task-center-title">后台任务</h2>
           <button type="button" aria-label="关闭后台任务" @click="open = false">关闭</button>
         </header>
-        <p>切换页面后仍可查看进度。扫描、信息补全和分析显示最近一次任务。</p>
         <label
           >显示
           <select v-model="filter">

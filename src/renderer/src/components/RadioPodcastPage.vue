@@ -291,7 +291,6 @@ function formatDuration(seconds: number): string {
       <div class="page-heading">
         <span class="page-kicker">ONLINE LISTENING</span>
         <h1>电台与播客</h1>
-        <p>把正在听的内容放在前面，用轻量工具补充新的电台和播客。</p>
       </div>
       <div class="tabs" role="tablist" aria-label="在线音频类型">
         <button
@@ -332,7 +331,6 @@ function formatDuration(seconds: number): string {
             <span class="card-icon"><i class="pi pi-plus"></i></span>
             <div>
               <h2>添加电台</h2>
-              <p>输入名称和直播流地址，保存后即可播放。</p>
             </div>
           </div>
           <label>
@@ -394,7 +392,6 @@ function formatDuration(seconds: number): string {
             <span class="card-icon"><i class="pi pi-search"></i></span>
             <div>
               <h2>发现电台</h2>
-              <p>从 radio-browser.info 搜索新的直播流。</p>
             </div>
           </div>
           <div class="inline-search">
@@ -438,7 +435,6 @@ function formatDuration(seconds: number): string {
           <div>
             <span class="section-kicker">MY LIBRARY</span>
             <h2 id="station-library-title">我的电台</h2>
-            <p>播放是主操作，管理操作保持克制。</p>
           </div>
           <span class="collection-count">{{ radio.stations.value.length }} 个电台</span>
         </div>
@@ -466,7 +462,7 @@ function formatDuration(seconds: number): string {
         <div v-else class="collection-empty">
           <span class="empty-icon"><i class="pi pi-broadcast"></i></span>
           <h3>还没有收藏的电台</h3>
-          <p>从左侧手动添加、导入播放列表，或搜索发现新的电台。</p>
+          <p>添加或导入电台。</p>
         </div>
       </section>
     </section>
@@ -477,7 +473,6 @@ function formatDuration(seconds: number): string {
           <span class="card-icon"><i class="pi pi-rss"></i></span>
           <div>
             <h2>订阅播客</h2>
-            <p>输入 RSS 或 Atom 地址，将新内容收进你的订阅列表。</p>
           </div>
         </div>
         <div class="podcast-subscribe-form">
@@ -584,7 +579,6 @@ function formatDuration(seconds: number): string {
         <div v-else class="episode-empty">
           <span class="empty-icon"><i class="pi pi-microphone"></i></span>
           <h2>选择一个播客</h2>
-          <p>从左侧订阅列表选择播客，查看最新剧集并开始播放。</p>
         </div>
       </div>
     </section>

@@ -650,7 +650,7 @@ export const BUILT_IN_THEME_PRESETS: readonly ThemeProfileV2[] = Object.freeze([
   builtInThemePreset(
     'builtin:obsidian-glass',
     '夜港 · Night Harbor',
-    '黑胶播放台、珊瑚红与青绿的唱片厅，独立的聆听布局，让封面与音乐成为主角。',
+    '黑胶播放台，珊瑚红与青绿配色，独立播放面板。',
     {
       pureWhite: {
         'color.primary.500': '#b94035',
@@ -847,7 +847,7 @@ export const BUILT_IN_THEME_PRESETS: readonly ThemeProfileV2[] = Object.freeze([
   builtInThemePreset(
     'builtin:paper-light',
     '声场 Sound Field',
-    '第四套主页：暖灰底色、柔和青绿与独立聆听面板，配合圆角专辑画廊和清晰的曲目目录，留一点时间给音乐。',
+    '暖灰与青绿配色，独立播放面板、圆角专辑画廊和曲目目录。',
     {
       pureWhite: {
         'color.neutral.50': '#ffffff',

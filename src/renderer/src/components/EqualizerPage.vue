@@ -1237,7 +1237,6 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
           <header class="eq-header">
             <div class="eq-title">
               <h1>图形均衡器</h1>
-              <p>全局频率响应塑形工具，调整此面板将改变最终输出听感。</p>
             </div>
             <div
               class="master-switch"
