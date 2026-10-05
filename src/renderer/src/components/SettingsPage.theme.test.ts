@@ -275,10 +275,10 @@ test('settings wallpaper is painted once by the overlay root, never per element'
   )
   assert.match(appSource, /\.app-shell-title\s*\{[\s\S]*?z-index:\s*2100/)
   assert.match(appSource, /\.settings-page-enter-active\s*\{[\s\S]*?z-index:\s*2000/)
-  const titleBarSettingsRule =
-    titleBarSource.match(/\.title-bar\.title-bar-settings,([\s\S]*?)\n\}/)?.[1] ?? ''
-  assert.match(titleBarSettingsRule, /background:\s*transparent !important;/)
-  assert.doesNotMatch(titleBarSettingsRule, /--te-settings-bg-image|background-attachment/)
+  const titleBarSurfaceRule =
+    titleBarSource.match(/\.title-bar-background\s*\{([^}]*)\}/)?.[1] ?? ''
+  assert.match(titleBarSurfaceRule, /color-mix\(in srgb, var\(--te-app-bg\) 92%, transparent\)/)
+  assert.doesNotMatch(titleBarSurfaceRule, /--te-settings-bg-image|background-attachment/)
   assert.doesNotMatch(baseStyles, /html\[data-theme='dark'\] \.title-bar\.title-bar-settings,/)
 })
 

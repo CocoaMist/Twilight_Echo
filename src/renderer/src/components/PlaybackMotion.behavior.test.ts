@@ -229,7 +229,7 @@ window.runPlaybackMotionTests=async()=>{
   const host=ref(null), store=useAppNoticeStore()
   app=createApp({render:()=>h(AppNoticeHost,{ref:host})});app.mount('#app')
   document.documentElement.dataset.teMotion='reduced'
-  store.pushNotice({kind:'info',message:'动效行为验证',sticky:true});await tick();await frame()
+  store.pushNotice({kind:'info',message:'动效行为验证',sticky:true,presentation:'toast'});await tick();await frame()
   const notice=document.querySelector('.app-notice')
   expect(getComputedStyle(notice).transitionDuration==='0.12s','notice reduced fade is missing')
   expect(getComputedStyle(notice).transform==='none','notice reduced enter moved')

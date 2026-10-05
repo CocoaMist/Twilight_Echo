@@ -171,7 +171,6 @@ onBeforeUnmount(() => {
   updateNotificationsDisposed = true
   stopAppUpdateNotifications?.()
 })
-const noticeHostRef = ref<InstanceType<typeof AppNoticeHost> | null>(null)
 
 // One global back affordance on the title bar. Every full-screen page
 // registers a single base layer here; deeper in-page states (streaming
@@ -307,6 +306,7 @@ async function handleOnboardingFinish(result: OnboardingFinishResult): Promise<v
   } catch (error) {
     pushNotice({
       kind: 'warning',
+      presentation: 'toast',
       message: `保存引导设置失败：${error instanceof Error ? error.message : String(error)}`
     })
   }
@@ -324,6 +324,7 @@ async function handleOnboardingFinish(result: OnboardingFinishResult): Promise<v
     } catch (error) {
       pushNotice({
         kind: 'warning',
+        presentation: 'toast',
         message: `打开迷你播放器失败：${error instanceof Error ? error.message : String(error)}`
       })
     }
@@ -613,6 +614,8 @@ const playbackSessionPersistence = createPlaybackSessionPersistence({
   onAutosaveError: (error) => {
     pushNotice({
       kind: 'warning',
+      presentation: 'toast',
+      dedupeKey: 'playback-session-autosave',
       message: `自动保存播放会话失败：${error instanceof Error ? error.message : String(error)}`
     })
   }
@@ -777,6 +780,8 @@ onMounted(async () => {
     console.error('[library] Startup reconciliation failed:', error)
     pushNotice({
       kind: 'warning',
+      presentation: 'center',
+      dedupeKey: 'library-startup-reconciliation',
       message: `启动音乐库核对失败：${error instanceof Error ? error.message : String(error)}`,
       action: {
         label: '打开音乐库设置',
@@ -796,6 +801,8 @@ onMounted(async () => {
     console.warn(`[library] ${dirtyCount} tracks are missing cover art`)
     pushNotice({
       kind: 'warning',
+      presentation: 'center',
+      dedupeKey: 'library-missing-covers',
       message: `检测到 ${dirtyCount} 首缺少封面，可在设置中完整重扫以补全封面。`,
       action: {
         label: '打开音乐库设置',
@@ -977,8 +984,6 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @plugins="togglePluginPage"
         @commands="commandPalette.open"
         @library="selectSidebarPage({ kind: 'local', category: 'allSongs', filter: null })"
-        :notifications-open="noticeHostRef?.historyOpen ?? false"
-        @notifications="noticeHostRef?.toggleHistory($event)"
       />
     </div>
     <div
@@ -1206,7 +1211,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
       @close="queueSessions.open.value = false"
     />
   </NativeDialogTransition>
-  <AppNoticeHost ref="noticeHostRef" />
+  <AppNoticeHost />
 </template>
 
 <style>

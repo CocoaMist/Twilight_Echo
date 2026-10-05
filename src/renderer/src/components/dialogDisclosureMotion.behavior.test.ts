@@ -54,7 +54,7 @@ test('native modal lifecycle and reversible settings disclosures preserve focus 
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'electron-user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1360,height:820,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runMotionTests()');for(const [width,layout] of [[1000,'columns'],[640,'stack']]){win.setContentSize(width,820);await win.webContents.executeJavaScript('window.checkSettingsNavLayout('+JSON.stringify(layout)+')')}if(process.env.TWILIGHT_MOTION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_MOTION_SCREENSHOTS,{recursive:true});for(const state of ['modal-enter','modal-leave','disclosure-expanded','disclosure-leave']){await win.webContents.executeJavaScript('window.prepareMotionFrame('+JSON.stringify(state)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_MOTION_SCREENSHOTS,state+'.png'),(await win.webContents.capturePage()).toPNG())}}console.log('DIALOG_DISCLOSURE_MOTION_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
+      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'electron-user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1360,height:820,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));win.setContentSize(1360,820);await win.webContents.executeJavaScript('window.waitForViewport(1360)');await win.webContents.executeJavaScript('window.runMotionTests()');for(const [width,layout] of [[1000,'columns'],[640,'stack']]){win.setContentSize(width,820);await win.webContents.executeJavaScript('window.waitForViewport('+width+')');await win.webContents.executeJavaScript('window.checkSettingsNavLayout('+JSON.stringify(layout)+')')}if(process.env.TWILIGHT_MOTION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_MOTION_SCREENSHOTS,{recursive:true});for(const state of ['modal-enter','modal-leave','disclosure-expanded','disclosure-leave']){await win.webContents.executeJavaScript('window.prepareMotionFrame('+JSON.stringify(state)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_MOTION_SCREENSHOTS,state+'.png'),(await win.webContents.capturePage()).toPNG())}}console.log('DIALOG_DISCLOSURE_MOTION_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
     const result = await promisify(execFile)(
       require('electron'),
@@ -127,6 +127,13 @@ const sampleNativeLeave=(dialog)=>new Promise((resolve,reject)=>{
  observer.observe(dialog,{attributes:true,attributeFilter:['class']})
  frame=requestAnimationFrame(sample)
 })
+window.waitForViewport=async(width)=>{
+ const end=performance.now()+3000
+ while(window.innerWidth!==width){
+  if(performance.now()>end)throw new Error('native viewport did not resize: '+JSON.stringify({expected:width,actual:window.innerWidth,deviceScale:window.devicePixelRatio}))
+  await new Promise(requestAnimationFrame)
+ }
+}
 window.runMotionTests=async()=>{
  expect(CSS.supports('corner-shape','superellipse(2)'),'packaged Chromium lacks continuous corners')
  const surface=document.querySelector('.glass-card'),root=document.documentElement
@@ -189,7 +196,7 @@ window.checkSettingsNavLayout=async(expectedLayout)=>{
  const navSearch=document.createElement('div');navSearch.className='settings-search-box settings-nav-search';searchWrap.append(navSearch);const links=document.createElement('div');links.className='settings-nav-links';links.append(navItem);nav.append(searchWrap,links);document.body.append(nav)
  const root=document.documentElement;root.dataset.teSettingsNavigationLiquidGlass='on'
  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))
- const layout=getComputedStyle(nav).display;expect(layout===(expectedLayout==='desktop'?'flex':'grid'),'navigation did not adopt the expected responsive layout')
+ const layout=getComputedStyle(nav).display;expect(layout===(expectedLayout==='desktop'?'flex':'grid'),'navigation did not adopt the expected responsive layout: '+JSON.stringify({expectedLayout,layout,width:window.innerWidth,deviceScale:window.devicePixelRatio}))
  for(const radius of [21,13,7,0]){
   root.style.setProperty('--te-card-radius',radius+'px')
   const style=getComputedStyle(nav),inset=parseFloat(style.paddingLeft)+parseFloat(style.borderLeftWidth),inner=Math.max(0,radius-inset)

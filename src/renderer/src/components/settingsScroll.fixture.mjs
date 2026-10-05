@@ -302,6 +302,18 @@ window.runSettingsScrollTests = async () => {
             title.getBoundingClientRect().top >= entryPage.getBoundingClientRect().top,
             'default entry hid the page title'
           )
+          if (width > 1120) {
+            const navigation = entryPage
+              .querySelector('.settings-preview-nav')
+              .getBoundingClientRect()
+            const pageRect = entryPage.getBoundingClientRect()
+            expect(
+              Math.abs(
+                navigation.top + navigation.height / 2 - (pageRect.top + entryPage.clientHeight / 2)
+              ) < 1,
+              `desktop settings navigation center ${navigation.top + navigation.height / 2} differs from ${pageRect.top + entryPage.clientHeight / 2}`
+            )
+          }
         } else {
           const heading = entryPage.querySelector('#playback h2')
           const entryNav = entryPage.querySelector('.settings-preview-nav')

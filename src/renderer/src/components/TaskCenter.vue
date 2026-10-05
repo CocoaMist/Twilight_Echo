@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDownloadTasks } from '../stores/useDownloadTasks'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useAppUpdateStore } from '../stores/useAppUpdateStore'
@@ -7,6 +7,8 @@ import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer'
 import DownloadResultActions from './streaming-page/DownloadResultActions.vue'
 import { downloadStatusLabel } from './streaming-page/streamingDownloads'
 import type { LoudnessBatchStatus } from '../../../shared/libraryLoudness'
+import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+import AppNoticeHost from './AppNoticeHost.vue'
 
 const api = window.api
 const emit = defineEmits<{ library: [] }>()
@@ -14,7 +16,9 @@ function openLibrary() {
   open.value = false
   emit('library')
 }
-const open = ref(false)
+const notices = useAppNoticeStore()
+const open = notices.centerOpen
+const unreadCount = notices.unreadCount
 const root = ref<HTMLElement | null>(null)
 useFocusTrap(root, () => open.value)
 useEscapeToClose(
@@ -136,10 +140,40 @@ const activeCount = computed(
 )
 const visibleJobs = computed(() => jobs.value.filter((j) => matches(j.state)))
 const visibleDownloads = computed(() => downloads.tasks.value.filter((t) => matches(t.status)))
+const previousJobs = new Map<string, string>()
+watch(
+  jobs,
+  (current) => {
+    for (const job of current) {
+      const previous = previousJobs.get(job.id)
+      previousJobs.set(job.id, job.state)
+      if (
+        !previous ||
+        previous === job.state ||
+        !['completed', 'failed', 'error', 'cancelled'].includes(job.state)
+      )
+        continue
+      notices.pushNotice({
+        kind: ['failed', 'error'].includes(job.state)
+          ? 'error'
+          : job.state === 'completed'
+            ? 'success'
+            : 'info',
+        message: `${job.title}：${labels[job.state]}${job.detail ? ` · ${job.detail}` : ''}`,
+        dedupeKey: `task-result:${job.id}`,
+        presentation: 'center',
+        action: job.retry ? { label: '重试', run: job.retry } : undefined
+      })
+    }
+  },
+  { immediate: true }
+)
 function matches(state: string) {
   return (
     filter.value === 'all' ||
-    (filter.value === 'active' ? activeStates.includes(state) : ['failed', 'error'].includes(state))
+    (filter.value === 'active'
+      ? activeStates.includes(state)
+      : ['failed', 'error', 'ready'].includes(state))
   )
 }
 async function run(id: string, action: () => Promise<unknown>) {
@@ -150,6 +184,12 @@ async function run(id: string, action: () => Promise<unknown>) {
     await action()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : '操作失败，请重试'
+    notices.pushNotice({
+      kind: 'error',
+      message: actionError.value,
+      dedupeKey: `task-action:${id}`,
+      presentation: 'center'
+    })
   } finally {
     pending.value.delete(id)
   }
@@ -168,7 +208,10 @@ onMounted(() => {
       actionError.value = '响度任务读取失败'
     })
 })
-onUnmounted(() => stops.forEach((stop) => stop()))
+onUnmounted(() => {
+  stops.forEach((stop) => stop())
+  open.value = false
+})
 </script>
 
 <template>
@@ -177,12 +220,13 @@ onUnmounted(() => stops.forEach((stop) => stop()))
     class="task-entry"
     :aria-expanded="open"
     aria-controls="task-center"
-    :aria-label="`后台任务（${activeCount} 项进行中）`"
-    title="后台任务"
+    :aria-label="`任务与通知（${activeCount} 项进行中，${unreadCount} 条未读）`"
+    title="任务与通知"
     @click="open = true"
   >
     <i class="ph ph-list-checks" style="font-size: 18px" aria-hidden="true"></i>
     <span v-if="activeCount">{{ activeCount }}</span>
+    <span v-if="unreadCount" class="task-unread" aria-hidden="true"></span>
   </button>
   <Teleport to="body">
     <div v-if="open" class="task-overlay" @click.self="open = false">
@@ -196,15 +240,15 @@ onUnmounted(() => stops.forEach((stop) => stop()))
         tabindex="-1"
       >
         <header>
-          <h2 id="task-center-title">后台任务</h2>
-          <button type="button" aria-label="关闭后台任务" @click="open = false">关闭</button>
+          <h2 id="task-center-title">任务与通知</h2>
+          <button type="button" aria-label="关闭任务与通知" @click="open = false">关闭</button>
         </header>
         <label
           >显示
           <select v-model="filter">
             <option value="all">全部</option>
             <option value="active">进行中</option>
-            <option value="failed">失败</option>
+            <option value="failed">需处理</option>
           </select></label
         >
         <p
@@ -226,6 +270,7 @@ onUnmounted(() => stops.forEach((stop) => stop()))
         <button v-if="downloads.error.value" type="button" @click="downloads.refresh">
           重新读取
         </button>
+        <h3>后台任务</h3>
         <p v-if="!visibleJobs.length && !visibleDownloads.length" class="empty">
           暂无符合条件的任务
         </p>
@@ -302,6 +347,7 @@ onUnmounted(() => stops.forEach((stop) => stop()))
             </button>
           </div>
         </article>
+        <AppNoticeHost v-if="filter !== 'active'" embedded :attention-only="filter === 'failed'" />
       </section>
     </div>
   </Teleport>
@@ -309,6 +355,7 @@ onUnmounted(() => stops.forEach((stop) => stop()))
 
 <style scoped>
 .task-entry {
+  position: relative;
   border: 0;
   background: transparent;
   color: inherit;
@@ -317,6 +364,12 @@ onUnmounted(() => stops.forEach((stop) => stop()))
   gap: 4px;
   padding: 10px;
   cursor: pointer;
+}
+.task-unread {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--te-primary-500);
 }
 .task-overlay {
   position: fixed;
@@ -372,6 +425,7 @@ select {
 }
 .actions {
   justify-content: flex-end;
+  flex-wrap: wrap;
   margin-top: 8px;
 }
 .empty {

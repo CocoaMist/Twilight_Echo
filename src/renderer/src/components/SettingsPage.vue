@@ -1090,6 +1090,20 @@ onBeforeUnmount(() => {
     <div class="settings-preview-layout">
       <header class="settings-page-header">
         <h1 class="settings-page-title">设置</h1>
+        <div class="settings-command-bar">
+          <div class="settings-command-actions">
+            <button type="button" class="soft-button" @click="exportSettingsBackup">
+              <i class="pi pi-download"></i>
+              导出设置
+            </button>
+            <button type="button" class="soft-button" @click="importSettingsBackup">
+              <i class="pi pi-upload"></i>
+              导入设置
+            </button>
+          </div>
+          <div v-if="settingsNotice" class="settings-inline-notice">{{ settingsNotice }}</div>
+          <div v-if="settingsError" class="settings-inline-error">{{ settingsError }}</div>
+        </div>
       </header>
       <nav
         class="settings-preview-nav"
@@ -1176,21 +1190,6 @@ onBeforeUnmount(() => {
       </nav>
 
       <div class="settings-preview-stack">
-        <section class="settings-command-bar glass-card">
-          <div class="settings-command-actions">
-            <button type="button" class="soft-button" @click="exportSettingsBackup">
-              <i class="pi pi-download"></i>
-              导出设置
-            </button>
-            <button type="button" class="soft-button" @click="importSettingsBackup">
-              <i class="pi pi-upload"></i>
-              导入设置
-            </button>
-          </div>
-          <div v-if="settingsNotice" class="settings-inline-notice">{{ settingsNotice }}</div>
-          <div v-if="settingsError" class="settings-inline-error">{{ settingsError }}</div>
-        </section>
-
         <div v-if="restartRequired" class="restart-banner restart-banner-sticky" role="status">
           <div>
             <strong>需要重启以应用更改</strong>

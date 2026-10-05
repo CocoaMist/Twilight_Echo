@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppNoticeStore, type AppNoticeKind } from '../stores/useAppNoticeStore'
 import { useEscapeToClose } from '../app/useDismissLayer'
 
+const props = defineProps<{ embedded?: boolean; attentionOnly?: boolean }>()
+
 const {
   notices,
   noticeHistory,
@@ -11,11 +13,24 @@ const {
   pauseNotice,
   resumeNotice,
   markHistoryRead,
-  clearHistory
+  clearHistory,
+  centerOpen,
+  pendingActions,
+  runNoticeAction
 } = useAppNoticeStore()
 const historyOpen = ref(false)
 const historyPanel = ref<HTMLElement | null>(null)
-const history = computed(() => [...noticeHistory.value].reverse())
+const history = computed(() =>
+  [...noticeHistory.value]
+    .reverse()
+    .filter(
+      (notice) =>
+        !props.attentionOnly ||
+        notice.kind === 'error' ||
+        notice.kind === 'warning' ||
+        notice.action
+    )
+)
 const intents: Record<AppNoticeKind, { label: string; icon: string }> = {
   info: { label: '提示', icon: 'pi-info-circle' },
   success: { label: '已完成', icon: 'pi-check-circle' },
@@ -56,20 +71,12 @@ function focusOut(event: FocusEvent, id: number): void {
     return
   resumeNotice(id, 'focus')
 }
-function runAction(id: number, run: () => void): void {
-  const entry = noticeHistory.value.find((notice) => notice.id === id)
-  if (entry) entry.action = undefined
-  try {
-    run()
-  } finally {
-    dismissNotice(id)
-  }
-}
 function timeLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
-watch(unreadCount, () => {
-  if (historyOpen.value) markHistoryRead()
+watch([unreadCount, () => props.attentionOnly], () => {
+  if (props.embedded) markHistoryRead(history.value.map((notice) => notice.id))
+  else if (historyOpen.value) markHistoryRead()
 })
 watch([historyOpen, notices], () => {
   for (const notice of notices.value) {
@@ -81,7 +88,10 @@ watch([historyOpen, notices], () => {
   }
 })
 useEscapeToClose(historyOpen, closeHistory)
-onMounted(() => document.addEventListener('pointerdown', dismissOutside))
+onMounted(() => {
+  if (props.embedded) markHistoryRead(history.value.map((notice) => notice.id))
+  else document.addEventListener('pointerdown', dismissOutside)
+})
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', dismissOutside)
   for (const notice of notices.value) {
@@ -93,7 +103,8 @@ defineExpose({ historyOpen, toggleHistory })
 
 <template>
   <TransitionGroup
-    v-show="!historyOpen"
+    v-if="!embedded"
+    v-show="!historyOpen && !centerOpen"
     tag="div"
     name="app-notice"
     class="app-notice-host"
@@ -120,7 +131,8 @@ defineExpose({ historyOpen, toggleHistory })
           v-if="notice.action"
           type="button"
           class="notice-action"
-          @click="runAction(notice.id, notice.action.run)"
+          :disabled="pendingActions.has(notice.id)"
+          @click="runNoticeAction(notice.id)"
         >
           {{ notice.action.label }} <i class="pi pi-arrow-right" aria-hidden="true"></i>
         </button>
@@ -137,10 +149,11 @@ defineExpose({ historyOpen, toggleHistory })
   </TransitionGroup>
   <Transition name="notice-panel">
     <section
-      v-if="historyOpen"
+      v-if="embedded || historyOpen"
       id="app-notice-history"
       ref="historyPanel"
       class="notice-history"
+      :class="{ 'notice-history-embedded': embedded }"
       tabindex="-1"
       role="region"
       aria-labelledby="notice-history-title"
@@ -148,11 +161,11 @@ defineExpose({ historyOpen, toggleHistory })
       <header class="notice-history-header">
         <div>
           <h2 id="notice-history-title">
-            通知记录 <span class="notice-count">{{ history.length }}</span>
+            通知 <span class="notice-count">{{ history.length }}</span>
           </h2>
-          <p>不错过每一次更新</p>
         </div>
         <button
+          v-if="!embedded"
           type="button"
           class="notice-icon-button"
           aria-label="关闭通知记录"
@@ -165,8 +178,7 @@ defineExpose({ historyOpen, toggleHistory })
         <Transition name="notice-empty">
           <div v-if="!history.length" class="notice-empty">
             <span class="notice-empty-symbol"><i class="pi pi-bell" aria-hidden="true"></i></span>
-            <h3>一切已是最新</h3>
-            <p>新的通知会出现在这里</p>
+            <h3>暂无通知</h3>
           </div>
         </Transition>
         <TransitionGroup tag="div" name="notice-record" class="notice-records">
@@ -191,7 +203,8 @@ defineExpose({ historyOpen, toggleHistory })
                 v-if="notice.action"
                 type="button"
                 class="notice-action"
-                @click="runAction(notice.id, notice.action.run)"
+                :disabled="pendingActions.has(notice.id)"
+                @click="runNoticeAction(notice.id)"
               >
                 {{ notice.action.label }} <i class="pi pi-arrow-right" aria-hidden="true"></i>
               </button>
@@ -200,7 +213,7 @@ defineExpose({ historyOpen, toggleHistory })
         </TransitionGroup>
       </div>
       <footer class="notice-history-footer">
-        <span>保留最近 50 条通知</span
+        <span>最近通知</span
         ><button
           type="button"
           class="notice-clear"
@@ -453,6 +466,37 @@ button:focus-visible {
 .notice-clear:disabled {
   cursor: default;
   opacity: 0.35;
+}
+.notice-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.notice-history-embedded {
+  position: static;
+  width: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: visible;
+}
+.notice-history-embedded .notice-history-body {
+  overflow: visible;
+}
+.notice-history-embedded .notice-history-header,
+.notice-history-embedded .notice-history-footer {
+  padding-inline: 0;
+}
+.notice-history-embedded .notice-records {
+  padding: 0;
+}
+.notice-history-embedded .notice-record {
+  padding-inline: 0;
+}
+.notice-history-embedded .notice-empty {
+  min-height: 100px;
 }
 .notice-empty {
   display: flex;

@@ -4,7 +4,6 @@ import { useBackStack } from '../app/useBackStack'
 import { useNcmStore } from '../stores/useNcmStore'
 import TitleBarIcon from './icons/TitleBarIcon.vue'
 import { useWindowChrome } from '../app/useWindowChrome'
-import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 
 const TaskCenter = defineAsyncComponent(() => import('./TaskCenter.vue'))
 
@@ -18,7 +17,6 @@ const props = withDefaults(
     titleSurface?: 'default' | 'settings' | 'streaming'
     activeTool?: 'settings' | 'plugins' | null
     preview?: boolean
-    notificationsOpen?: boolean
   }>(),
   {
     titleSurface: 'default'
@@ -34,12 +32,10 @@ defineEmits<{
   plugins: []
   commands: []
   library: []
-  notifications: [event: MouseEvent]
 }>()
 
 const { isLoggedIn, profile } = useNcmStore()
 const { canGoBack, backHint } = useBackStack()
-const { unreadCount } = useAppNoticeStore()
 const { maximized } = useWindowChrome(() => props.preview === true)
 const avatarLoadFailed = ref(false)
 watch([() => profile.value?.userId, () => profile.value?.avatarUrl], () => {
@@ -188,21 +184,6 @@ function close(): void {
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
       <TaskCenter v-if="!preview" @library="$emit('library')" />
       <button
-        v-if="!preview"
-        type="button"
-        class="control-btn notification-btn"
-        :aria-label="unreadCount ? `通知记录（${unreadCount} 条未读）` : '通知记录'"
-        title="通知记录"
-        :aria-expanded="notificationsOpen"
-        aria-controls="app-notice-history"
-        @click="$emit('notifications', $event)"
-      >
-        <i class="notification-icon ph ph-bell" aria-hidden="true"></i>
-        <Transition name="notification-dot">
-          <span v-if="unreadCount" class="notification-dot" aria-hidden="true"></span>
-        </Transition>
-      </button>
-      <button
         type="button"
         :disabled="preview"
         aria-label="最小化"
@@ -244,46 +225,6 @@ function close(): void {
 </template>
 
 <style scoped>
-.notification-btn {
-  position: relative;
-}
-.notification-btn[aria-expanded='true'] {
-  color: var(--te-primary-500);
-  background: var(--te-shell-control-hover);
-}
-.notification-icon {
-  width: 17px;
-  height: 17px;
-  font-size: 17px;
-  transition: transform 280ms var(--te-ease-soft);
-}
-.notification-btn:hover .notification-icon {
-  transform: rotate(-10deg);
-}
-.notification-btn:active .notification-icon {
-  transform: scale(0.9);
-}
-.notification-dot {
-  position: absolute;
-  top: calc(50% - 9px);
-  right: 12px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--te-primary-500);
-  box-shadow: 0 0 0 2px var(--te-app-bg);
-}
-.notification-dot-enter-active,
-.notification-dot-leave-active {
-  transition:
-    opacity 180ms ease,
-    transform 240ms var(--te-ease-soft);
-}
-.notification-dot-enter-from,
-.notification-dot-leave-to {
-  opacity: 0;
-  transform: scale(0);
-}
 .settings-btn[aria-pressed='true'],
 .plugins-btn[aria-pressed='true'] {
   background: var(--te-shell-control-hover);
@@ -307,9 +248,7 @@ function close(): void {
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  transition:
-    border-color 0.3s,
-    box-shadow 0.3s;
+  isolation: isolate;
 }
 
 .title-bar-background {
@@ -320,50 +259,14 @@ function close(): void {
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  background: transparent !important;
+  background: color-mix(in srgb, var(--te-app-bg) 92%, transparent) !important;
+  box-shadow: inset 0 -1px 0 var(--te-navigation-border);
+  backdrop-filter: blur(12px) saturate(115%);
+  -webkit-backdrop-filter: blur(12px) saturate(115%);
 }
 
 .title-bar::before {
   display: none;
-}
-
-.title-bar-glass,
-.title-bar.title-bar-streaming,
-.title-bar.title-bar-menu-open:not(.title-bar-glass):not(.title-bar-settings),
-.title-bar.title-bar-streaming.title-bar-menu-open:not(.title-bar-glass):not(.title-bar-settings) {
-  background: transparent !important;
-  border-bottom-color: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-.title-bar.title-bar-settings::before,
-.title-bar.title-bar-glass::before {
-  display: none;
-}
-
-/* The settings title strip stays transparent: the settings overlay below it is
-   the single wallpaper painter and spans the full window, so the image reads as
-   one continuous surface through the strip. The bar keeps its own higher
-   stacking context, so the controls remain clickable. */
-.title-bar.title-bar-settings,
-.title-bar.title-bar-settings .title-bar-background {
-  background: transparent !important;
-}
-
-/* Dark tone must not wrap the whole chain in `:global()`: Vue's scoped transform
-   rewrites only the last compound, so `:global(html .title-bar…)` compiles to the
-   bare ancestor and the declarations land on <html> instead of this component.
-   Both compounds here belong to this component; scoping appends the id to the
-   subject and leaves the document-level ancestor alone — same contract as the
-   playbar glass rules in PlayerBar.css. */
-html[data-theme='dark'] .title-bar,
-html[data-theme='dark'] .title-bar.title-bar-streaming,
-html[data-theme='dark']
-  .title-bar.title-bar-streaming.title-bar-menu-open:not(.title-bar-glass):not(.title-bar-settings),
-html[data-theme='dark'] .title-bar.title-bar-glass {
-  background: transparent !important;
 }
 
 .title-bar-start {
@@ -421,11 +324,11 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 }
 
 .title-bar-glass .back-btn {
-  color: #fff;
+  color: var(--te-shell-control-text);
 }
 
 .title-bar-glass .back-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--te-shell-control-hover);
 }
 
 .menu-btn {
@@ -515,19 +418,19 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 }
 
 .title-bar-glass .settings-btn {
-  color: #fff;
+  color: var(--te-shell-control-text);
 }
 
 .title-bar-glass .settings-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--te-shell-control-hover);
 }
 
 .title-bar-glass .login-btn {
-  color: #fff;
+  color: var(--te-shell-control-text);
 }
 
 .title-bar-glass .login-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--te-shell-control-hover);
 }
 
 .title-bar-controls {
@@ -582,11 +485,11 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 }
 
 .title-bar-glass .control-btn {
-  color: #fff;
+  color: var(--te-shell-control-text);
 }
 
 .title-bar-glass .control-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--te-shell-control-hover);
 }
 
 .control-btn:hover {
@@ -601,45 +504,7 @@ html[data-theme='pureWhite'] .title-bar .control-btn.close:hover,
 }
 
 .title-bar-liquid {
-  isolation: isolate;
-  color: var(--te-lg-context-label);
-}
-
-.title-bar-liquid .title-bar-background {
-  display: block;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 18%, transparent),
-      transparent 82%
-    ),
-    color-mix(in srgb, var(--te-lg-context-surface) 56%, transparent) !important;
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--te-lg-context-label) 8%, transparent);
-  backdrop-filter: blur(16px) saturate(124%);
-  -webkit-backdrop-filter: blur(16px) saturate(124%);
-}
-
-:global(html[data-te-liquid-glass-source='solid'] .title-bar-liquid .title-bar-background) {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 22%, transparent),
-      transparent 82%
-    ),
-    var(--te-lg-context-material) !important;
-}
-
-html[data-te-liquid-glass-scrolled='on'] .title-bar-liquid .title-bar-background {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 24%, transparent),
-      transparent 66%
-    ),
-    color-mix(in srgb, var(--te-lg-context-surface) 72%, transparent) !important;
-  box-shadow:
-    inset 0 -1px 0 color-mix(in srgb, var(--te-lg-context-label) 13%, transparent),
-    0 6px 18px color-mix(in srgb, var(--te-lg-context-label) 8%, transparent);
+  color: var(--te-shell-control-text);
 }
 
 .title-bar-liquid :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn) {
@@ -675,21 +540,33 @@ html[data-te-liquid-glass-scrolled='on'] .title-bar-liquid .title-bar-background
 }
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-  .title-bar-liquid .title-bar-background {
-    background: var(--te-lg-context-surface-solid) !important;
-    border-bottom: 1px solid var(--te-lg-context-label);
+  .title-bar-background {
+    background: var(--te-app-bg) !important;
+    border-bottom: 1px solid var(--te-shell-control-text);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 }
 
 @media (forced-colors: active) {
-  .title-bar-liquid .title-bar-background {
+  .title-bar-background {
     background: Canvas !important;
     border-bottom: 1px solid CanvasText;
     box-shadow: none;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+  }
+}
+
+:global(body.te-no-blur .title-bar-background) {
+  background: var(--te-app-bg) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@supports not (backdrop-filter: blur(12px)) {
+  .title-bar-background {
+    background: var(--te-app-bg) !important;
   }
 }
 </style>
