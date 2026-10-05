@@ -83,6 +83,7 @@
     "test:release-artifacts": "node --test scripts/verify-install-policy.test.cjs scripts/release-artifact-strip.test.cjs scripts/verify-release-artifacts.test.cjs scripts/prepare-smtc-msvc.test.cjs scripts/verify-release-capability-consistency.test.cjs scripts/staged-audio-runtime-observation.test.cjs scripts/release-delivery-policy.test.cjs scripts/verify-packaged-dependency-closure.test.cjs scripts/verify-windows-app-branding.test.cjs scripts/macos-audio-runtime.test.cjs",
     "verify:release-artifacts": "node scripts/verify-release-artifacts.cjs",
     "verify:packaged-dependencies": "node scripts/verify-packaged-dependency-closure.cjs dist/win-unpacked/resources/app.asar",
+    "benchmark:listening-stats": "node scripts/listening-stats-browser-benchmark.cjs",
     "verify:renderer-budgets": "node scripts/verify-renderer-budgets.cjs --renderer-dir out/renderer",
     "test:production-audit": "node --test scripts/verify-production-dependency-audit.test.cjs scripts/verify-production-dependency-audit.integration.test.cjs",
     "audit:production": "node scripts/verify-production-dependency-audit.cjs",

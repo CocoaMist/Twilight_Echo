@@ -5,6 +5,15 @@ export interface ListeningStatsPersistenceStatus {
   dirty: boolean
   failureCount: number
   lastError: string | null
+  lastFlush?: ListeningStatsFlushMeasurement
+}
+
+export interface ListeningStatsFlushMeasurement {
+  preparationMs: number
+  serializationMs: number
+  storageWriteMs: number
+  totalMs: number
+  characters: number
 }
 
 export interface ListeningStatsStorage {
@@ -52,6 +61,7 @@ export class ListeningStatsPersistence<T> {
   private timer: TimerHandle | null = null
   private failureCount = 0
   private lastError: string | null = null
+  private lastFlush: ListeningStatsFlushMeasurement | undefined
   private lifecycleAttached = false
   private readonly setTimer: typeof globalThis.setTimeout
   private readonly clearTimer: typeof globalThis.clearTimeout
@@ -79,8 +89,20 @@ export class ListeningStatsPersistence<T> {
     }
 
     try {
+      const started = performance.now()
       this.options.beforePersist()
-      this.options.storage.setItem(this.options.key, JSON.stringify(this.options.getSnapshot()))
+      const prepared = performance.now()
+      const serialized = JSON.stringify(this.options.getSnapshot())
+      const encoded = performance.now()
+      this.options.storage.setItem(this.options.key, serialized)
+      const written = performance.now()
+      this.lastFlush = {
+        preparationMs: prepared - started,
+        serializationMs: encoded - prepared,
+        storageWriteMs: written - encoded,
+        totalMs: written - started,
+        characters: serialized.length
+      }
       this.dirty = false
       this.failureCount = 0
       this.lastError = null
@@ -103,6 +125,7 @@ export class ListeningStatsPersistence<T> {
     this.dirty = false
     this.failureCount = 0
     this.lastError = null
+    this.lastFlush = undefined
     this.publish('idle')
   }
 
@@ -155,7 +178,8 @@ export class ListeningStatsPersistence<T> {
       state,
       dirty: this.dirty,
       failureCount: this.failureCount,
-      lastError: this.lastError
+      lastError: this.lastError,
+      ...(this.lastFlush ? { lastFlush: this.lastFlush } : {})
     })
   }
 }

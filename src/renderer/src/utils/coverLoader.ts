@@ -19,6 +19,7 @@
  */
 
 import { ref, type Ref, watch, type ComputedRef } from 'vue'
+import { clearDominantColorCache } from './colorExtractor.ts'
 
 const remoteCoverGrantCache = new Map<string, string>()
 const remoteCoverGrantInflight = new Map<string, Promise<string | null>>()
@@ -29,6 +30,8 @@ const LOCAL_COVER_DATA_CACHE_LIMIT = 128
 // Conservatively count UTF-16 storage; entry count alone does not bound large art.
 const LOCAL_COVER_DATA_CACHE_BYTES = 16 * 1024 * 1024
 let localCoverDataBytes = 0
+let localCoverGeneration = 0
+let remoteCoverGeneration = 0
 
 /** Insert a materialized cover while keeping the renderer cache bounded. */
 function cacheLocalCoverData(handle: string, dataUrl: string): void {
@@ -145,6 +148,7 @@ async function materializeLocalCoverForDisplay(handle: string): Promise<string |
 
   const inflight = localCoverDataInflight.get(bare)
   if (inflight) return inflight
+  const generation = localCoverGeneration
 
   const request = (async () => {
     try {
@@ -163,12 +167,12 @@ async function materializeLocalCoverForDisplay(handle: string): Promise<string |
         const response = await api.getCover(bare)
         if (typeof response === 'string' && response.startsWith('data:')) {
           const dataUrl = response
-          cacheLocalCoverData(bare, dataUrl)
+          if (generation === localCoverGeneration) cacheLocalCoverData(bare, dataUrl)
           return dataUrl
         }
         const materialized = await coverBytesToDataUrl(response, bare)
         if (materialized) {
-          cacheLocalCoverData(bare, materialized)
+          if (generation === localCoverGeneration) cacheLocalCoverData(bare, materialized)
           return materialized
         }
       }
@@ -180,7 +184,7 @@ async function materializeLocalCoverForDisplay(handle: string): Promise<string |
         const blob = await response.blob()
         const dataUrl = await blobToDataUrl(blob)
         if (dataUrl) {
-          cacheLocalCoverData(bare, dataUrl)
+          if (generation === localCoverGeneration) cacheLocalCoverData(bare, dataUrl)
           return dataUrl
         }
       }
@@ -188,7 +192,7 @@ async function materializeLocalCoverForDisplay(handle: string): Promise<string |
     } catch {
       return null
     } finally {
-      localCoverDataInflight.delete(bare)
+      if (generation === localCoverGeneration) localCoverDataInflight.delete(bare)
     }
   })()
 
@@ -245,6 +249,7 @@ async function ensureCachedRemoteGrant(source: string): Promise<string | null> {
 
   const inflight = remoteCoverGrantInflight.get(normalized)
   if (inflight) return inflight
+  const generation = remoteCoverGeneration
 
   const request = (async () => {
     try {
@@ -257,7 +262,7 @@ async function ensureCachedRemoteGrant(source: string): Promise<string | null> {
       const granted = await api.grantRemoteCover(normalized)
       if (typeof granted === 'string' && granted.trim()) {
         const token = granted.trim()
-        remoteCoverGrantCache.set(normalized, token)
+        if (generation === remoteCoverGeneration) remoteCoverGrantCache.set(normalized, token)
         if (remoteCoverGrantCache.size > 256) {
           const first = remoteCoverGrantCache.keys().next().value
           if (first) remoteCoverGrantCache.delete(first)
@@ -268,7 +273,7 @@ async function ensureCachedRemoteGrant(source: string): Promise<string | null> {
     } catch {
       return null
     } finally {
-      remoteCoverGrantInflight.delete(normalized)
+      if (generation === remoteCoverGeneration) remoteCoverGrantInflight.delete(normalized)
     }
   })()
 
@@ -278,11 +283,13 @@ async function ensureCachedRemoteGrant(source: string): Promise<string | null> {
 
 /** Clear re-grant cache (tests / after clear-cache). */
 export function clearRemoteCoverGrantCache(): void {
+  remoteCoverGeneration += 1
   remoteCoverGrantCache.clear()
   remoteCoverGrantInflight.clear()
 }
 
 export function clearLocalCoverDataCache(): void {
+  localCoverGeneration += 1
   localCoverDataCache.clear()
   localCoverDataBytes = 0
   localCoverDataInflight.clear()
@@ -331,6 +338,7 @@ export function useCover(
 
 /** Clear local + remote cover display caches. */
 export function clearCoverCache(): void {
+  clearDominantColorCache()
   clearRemoteCoverGrantCache()
   clearLocalCoverDataCache()
 }

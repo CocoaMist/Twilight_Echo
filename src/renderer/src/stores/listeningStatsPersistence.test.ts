@@ -112,6 +112,28 @@ test('listening stats persistence batches a burst into one trailing full-snapsho
   assert.ok(elapsedMs < 1_000, `batch scheduling took ${elapsedMs.toFixed(1)}ms`)
 })
 
+test('successful flush measures preparation, serialization and actual storage writes', () => {
+  const { persistence, statuses } = createPersistence({ count: 5 })
+  persistence.markDirty()
+  assert.equal(persistence.flush(), true)
+  const measurement = statuses.at(-1)?.lastFlush
+  assert.ok(measurement)
+  assert.equal(measurement.characters, JSON.stringify({ count: 5 }).length)
+  assert.ok(
+    measurement.preparationMs >= 0 &&
+      measurement.serializationMs >= 0 &&
+      measurement.storageWriteMs >= 0
+  )
+  assert.ok(
+    Math.abs(
+      measurement.totalMs -
+        measurement.preparationMs -
+        measurement.serializationMs -
+        measurement.storageWriteMs
+    ) < 0.001
+  )
+})
+
 test('pagehide and hidden visibility flush pending listening history immediately', () => {
   const snapshot = { count: 1 }
   const { persistence, storage, page, document } = createPersistence(snapshot)
@@ -144,7 +166,9 @@ test('QuotaExceededError stays observable, retains in-memory history, and recove
   snapshot.count = 42
   assert.equal(persistence.flush(), true)
   assert.equal(storage.getItem('stats'), JSON.stringify({ count: 42 }))
-  assert.deepEqual(statuses.at(-1), {
+  const { lastFlush, ...status } = statuses.at(-1)!
+  assert.ok(lastFlush)
+  assert.deepEqual(status, {
     state: 'idle',
     dirty: false,
     failureCount: 0,
