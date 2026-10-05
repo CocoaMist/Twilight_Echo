@@ -1324,8 +1324,7 @@ test('audio visualizer iframe controls are wired to the player store', () => {
   assert.match(visualizerSource, /const val = visualizerDisplayLevel\(sourceLevels\[i\]\) \* 255/)
   assert.doesNotMatch(visualizerSource, /Math\.max\(lastSpectrumHeights\[i\], 2\)/)
   assert.match(visualizerSource, /i \* \(barWidth \+ barSpacing\)/)
-  assert.match(visualizerSource, /specCtx\.setTransform\(dpr, 0, 0, dpr, 0, 0\)/)
-  assert.match(visualizerSource, /new ResizeObserver\(resizeCanvases\)/)
+  // Canvas scaling and resize behavior are exercised in AudioVisualizerPanel.test.ts.
   assert.match(visualizerSource, /function isNumericSequence\(value\)/)
   assert.match(visualizerSource, /ArrayBuffer\.isView\(value\)/)
   assert.match(
