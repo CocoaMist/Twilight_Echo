@@ -8,7 +8,8 @@ import {
   getPlaybackQueueScrollTopForIndex,
   getPlaybackQueueWindow,
   toPlaybackQueueSnapshot,
-  toPlaybackQueueSnapshots
+  toPlaybackQueueSnapshots,
+  createPlaybackQueueSnapshotCache
 } from './playbackQueueVirtualization.ts'
 import { usePlaybackQueueVirtualScroll } from '../components/player-bar/usePlaybackQueueVirtualScroll.ts'
 
@@ -120,8 +121,28 @@ test('player queue state uses shallow snapshots and revision-fenced native synch
 
   assert.match(source, /const queue = shallowRef<Track\[\]>\(\[\]\)/)
   assert.match(source, /const originalQueue = shallowRef<Track\[\]>\(\[\]\)/)
-  assert.match(selectionSource, /toPlaybackQueueSnapshots\(trackList\)/)
+  assert.match(selectionSource, /queueSnapshots\(trackList\)/)
   assert.match(source, /const nativeQueueRevisionFence = new NativeQueueRevisionFence\(\)/)
   assert.match(source, /const snapshot = captureNativeQueueState\(revision\)/)
   assert.match(source, /if \(!nativeQueueRevisionFence\.isCurrent\(snapshot\.revision\)\) return/)
+})
+
+test('snapshot cache invalidates mutable metadata, routing, ordering and duplicate identities', () => {
+  const cached = createPlaybackQueueSnapshotCache()
+  const tracks = [track(1), track(1), track(2)]
+  const first = cached(tracks)
+  assert.equal(cached([...tracks]), first)
+  tracks[0].lyrics = 'new heavy payload'
+  assert.equal(cached(tracks), first)
+  tracks[0].title = 'edited'
+  const edited = cached(tracks)
+  assert.notEqual(edited, first)
+  assert.equal(edited[0].title, 'edited')
+  tracks[0].filePath = 'another.flac'
+  assert.notEqual(cached(tracks), edited)
+  const reversed = cached([...tracks].reverse())
+  assert.equal(reversed[0].id, 'local:2')
+  tracks[0].queueEntryId = 'custom'
+  assert.equal(cached(tracks)[0].queueEntryId, 'custom')
+  assert.equal(cached(tracks.slice(1)).length, 2)
 })

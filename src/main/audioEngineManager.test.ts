@@ -4335,6 +4335,62 @@ test('audio service loadQueue waits for queue and play mode confirmations in ord
   manager.destroy()
 })
 
+test('queue cursor reuse verifies content token and CUE identity before native selection', async (t) => {
+  const nativeBinding = new FakeNativeBinding()
+  const selected: number[] = []
+  Object.assign(nativeBinding, {
+    SelectQueueIndex: (index: number) => {
+      selected.push(index)
+      nativeBinding.playbackInfo.queueIndex = index
+    }
+  })
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding
+  )
+  t.after(() => manager.destroy())
+  const queue: AudioEngineQueueItem[] = [
+    {
+      id: 'cue:1',
+      source: 'disc.flac',
+      cueRange: {
+        startSeconds: 0,
+        endSeconds: 60,
+        pregapSeconds: 0,
+        virtualPregapSeconds: 0,
+        sourcePregapSeconds: 0
+      }
+    },
+    {
+      id: 'cue:2',
+      source: 'disc.flac',
+      cueRange: {
+        startSeconds: 60,
+        endSeconds: 120,
+        pregapSeconds: 0,
+        virtualPregapSeconds: 0,
+        sourcePregapSeconds: 0
+      }
+    }
+  ]
+  await manager.loadQueue(queue, 0)
+  const queueToken = manager.getQueueToken()
+  assert.ok(queueToken)
+  const selection = { queueToken, index: 1, id: 'cue:2', source: 'disc.flac' }
+  assert.equal(await manager.selectQueueItem({ ...selection, queueToken: 'stale' }), false)
+  assert.equal(await manager.selectQueueItem({ ...selection, id: 'cue:1' }), false)
+  assert.equal(await manager.selectQueueItem({ ...selection, source: 'other.flac' }), false)
+  assert.deepEqual(selected, [])
+  assert.equal(await manager.selectQueueItem(selection), true)
+  assert.deepEqual(selected, [1])
+  assert.equal((await manager.getPlaybackInfo()).queueIndex, 1)
+  assert.equal(nativeBinding.loadQueueCalls, 1)
+  await manager.loadQueue([{ ...queue[0], replayGainTrackGainDb: -3 }, queue[1]], 1)
+  assert.notEqual(manager.getQueueToken(), queueToken)
+  assert.equal(await manager.selectQueueItem(selection), false)
+  assert.deepEqual(selected, [1])
+})
+
 test('loadQueue skips native call and queue fanout when normalized queue is unchanged', async () => {
   const nativeBinding = new FakeNativeBinding()
   const manager = makeManager(

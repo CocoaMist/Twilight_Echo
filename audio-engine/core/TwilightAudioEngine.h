@@ -122,6 +122,7 @@ class TwilightAudioEngine {
   TAE_Result setOutputBackend(const std::string& backendId);
 
   TAE_Result loadQueue(const std::string& queueJson, int startIndex);
+  TAE_Result selectQueueIndex(int index);
   TAE_Result next();
   TAE_Result previous();
   TAE_Result setPlayMode(const std::string& mode);

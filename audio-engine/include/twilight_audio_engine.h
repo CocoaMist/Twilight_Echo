@@ -65,6 +65,7 @@ TAE_API TAE_Result TAE_SetOutputDevice(TAE_EngineHandle engine, const char* devi
 TAE_API TAE_Result TAE_SetOutputBackend(TAE_EngineHandle engine, const char* backend_id);
 
 TAE_API TAE_Result TAE_LoadQueue(TAE_EngineHandle engine, const char* queue_json, int start_index);
+TAE_API TAE_Result TAE_SelectQueueIndex(TAE_EngineHandle engine, int index);
 TAE_API TAE_Result TAE_Next(TAE_EngineHandle engine);
 TAE_API TAE_Result TAE_Previous(TAE_EngineHandle engine);
 TAE_API TAE_Result TAE_SetPlayMode(TAE_EngineHandle engine, const char* mode);

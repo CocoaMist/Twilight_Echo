@@ -1121,6 +1121,19 @@ TAE_Result TwilightAudioEngine::setOutputBackend(const std::string& backendId) {
   return TAE_RESULT_OK;
 }
 
+TAE_Result TwilightAudioEngine::selectQueueIndex(int index) {
+  std::lock_guard transportLock(transportMutex_);
+  const ClockWake wake(*this);
+  std::lock_guard lock(mutex_);
+  if (index < 0 || static_cast<size_t>(index) >= queue_.size()) return TAE_RESULT_INVALID_ARGUMENT;
+  queue_.setCurrentIndex(index);
+  info_.queueIndex = index;
+  const auto upcoming = queue_.upcoming();
+  info_.hasUpcomingTrack = upcoming.has_value();
+  info_.upcomingTrack = upcoming.value_or(QueueItem{});
+  return TAE_RESULT_OK;
+}
+
 TAE_Result TwilightAudioEngine::loadQueue(const std::string& queueJson, int startIndex) {
   std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
@@ -2664,6 +2677,11 @@ TAE_Result TAE_SetOutputBackend(TAE_EngineHandle engine, const char* backend_id)
 TAE_Result TAE_LoadQueue(TAE_EngineHandle engine, const char* queue_json, int start_index) {
   if (!engine) return TAE_RESULT_NOT_INITIALIZED;
   return fromHandle(engine)->loadQueue(queue_json ? queue_json : "[]", start_index);
+}
+
+TAE_Result TAE_SelectQueueIndex(TAE_EngineHandle engine, int index) {
+  if (!engine) return TAE_RESULT_NOT_INITIALIZED;
+  return fromHandle(engine)->selectQueueIndex(index);
 }
 
 TAE_Result TAE_Next(TAE_EngineHandle engine) {

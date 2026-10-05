@@ -34,6 +34,9 @@ export interface PrepareNativeQueueOptions {
   currentTrack: Track
   currentTarget: string
   currentIndex: number
+  /** Only the main-issued queue token may commit this speculative reuse. */
+  canReuseQueue?: (items: NativeQueueLoadItem[]) => boolean
+  isCurrent?: () => boolean
   isAudioFileAuthorized: (filePath: string) => Promise<boolean>
   /**
    * Authorizes a whole queue in one IPC round-trip. Optional so the per-file
@@ -59,6 +62,7 @@ export async function preparePlayerNativeQueue(
   options: PreparePlayerNativeQueueOptions,
   boundary: PlayerNativeQueueBoundary
 ): Promise<PreparedNativeQueue | null> {
+  if (options.isCurrent?.() === false) return null
   return prepareNativeQueue({ ...options, ...boundary })
 }
 
@@ -71,6 +75,7 @@ export async function prepareNativeQueue(
   )
   if (!(await isNativeTargetAvailable(options.currentTrack, currentItem.source, options)))
     return null
+  if (options.isCurrent?.() === false) return null
 
   const currentIndex = findCurrentQueueIndex(options)
   if (currentIndex < 0) return asCurrentOnly(currentItem)
@@ -84,6 +89,7 @@ export async function prepareNativeQueue(
   const items = options.queue.map((track, index) =>
     index === currentIndex ? currentItem : toQueueItem(track, getTrackTarget(track))
   )
+  if (options.canReuseQueue?.(items)) return { items, startIndex: currentIndex, delegated: true }
   // Routing is decided locally; only the local-file entries need the authorization
   // boundary, and they are resolved together. Doing it per track cost one IPC
   // round-trip per queue entry before playback could start.
@@ -94,6 +100,7 @@ export async function prepareNativeQueue(
     kinds.flatMap((kind, index) => (kind === 'local' ? [items[index].source] : [])),
     options
   )
+  if (options.isCurrent?.() === false) return null
   const available = kinds.every((kind, index) =>
     kind === 'local' ? authorized.get(items[index].source) === true : kind === 'remote'
   )
@@ -219,8 +226,16 @@ async function authorizeLocalTargets(
     }
   }
 
-  const results = await Promise.all(unique.map((target) => isAuthorizedLocalFile(target, options)))
-  unique.forEach((target, index) => verdicts.set(target, results[index]))
+  let nextIndex = 0
+  await Promise.all(
+    Array.from({ length: Math.min(16, unique.length) }, async () => {
+      while (nextIndex < unique.length) {
+        if (options.isCurrent?.() === false) return
+        const target = unique[nextIndex++]
+        verdicts.set(target, await isAuthorizedLocalFile(target, options))
+      }
+    })
+  )
   return verdicts
 }
 

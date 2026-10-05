@@ -67,6 +67,7 @@ import {
   NativeQueueRevisionFence,
   synchronizeLatestNativeQueue
 } from '../utils/nativeQueueRevision.ts'
+import { NativeQueueLoader } from '../utils/nativeQueueLoader.ts'
 import {
   toPlaybackQueueSnapshot,
   toPlaybackQueueSnapshots
@@ -467,6 +468,7 @@ async function prefetchUpcomingNcmStream(): Promise<void> {
 }
 
 const nativeQueueRevisionFence = new NativeQueueRevisionFence()
+const nativeQueueLoader = new NativeQueueLoader()
 let activeLoadToken = 0
 let rendererFallbackInProgress = false
 let rendererPlaybackWatchdogTimer: number | null = null
@@ -1438,7 +1440,7 @@ async function syncNativeQueueState(snapshot: NativeQueueStateSnapshot): Promise
           }
         ),
       loadQueue: (preparedQueue) =>
-        window.api.audioEngine.loadQueue(preparedQueue.items, preparedQueue.startIndex),
+        nativeQueueLoader.loadPrepared(preparedQueue, window.api.audioEngine),
       setPlayMode: () => window.api.audioEngine.setPlayMode(nativePlayMode)
     }
   )
@@ -2581,6 +2583,7 @@ function setupAudioEngineListeners(): void {
   if (api.onServiceCrash) {
     cleanupFns.push(
       api.onServiceCrash(({ reason, fatal }) => {
+        nativeQueueLoader.clear()
         setAudioServiceCrashNotice(reason, { fatal: fatal === true })
       })
     )
@@ -2589,6 +2592,7 @@ function setupAudioEngineListeners(): void {
   if (api.onServiceReady) {
     cleanupFns.push(
       api.onServiceReady((event) => {
+        nativeQueueLoader.clear()
         audioEngineReady.value = true
         if (event.outputRouteSynced) {
           setAudioEngineError(null)
@@ -2914,7 +2918,7 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
 
     if (useNativePlayback) {
       try {
-        const preparedQueue = await preparePlayerNativeQueue(
+        const preparedQueue = await nativeQueueLoader.prepareAndLoad(
           {
             // 心动模式：渲染层自行驱动切歌与补拉，原生引擎只加载当前曲目。
             queue: stripStaleNcmStreamUrls(playMode.value === 'heart' ? [track] : queue.value, {
@@ -2922,12 +2926,14 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
             }),
             currentTrack: track,
             currentTarget: playTarget,
-            currentIndex: playMode.value === 'heart' ? 0 : queueIndex.value
+            currentIndex: playMode.value === 'heart' ? 0 : queueIndex.value,
+            isCurrent: () => isActiveLoad(loadToken, track)
           },
           {
             isAudioFileAuthorized: window.api.fs.isAudioFileAuthorized,
             areAudioFilesAuthorized: window.api.fs.areAudioFilesAuthorized
-          }
+          },
+          window.api.audioEngine
         )
         if (!preparedQueue) {
           throw new Error('Native playback target is unavailable')
@@ -2944,11 +2950,6 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
           return
         }
 
-        await window.api.audioEngine.loadQueue(preparedQueue.items, preparedQueue.startIndex)
-        if (!isActiveLoad(loadToken, track)) {
-          releaseLoadIfOwned()
-          return
-        }
         nativeQueueDelegated = preparedQueue.delegated
         // 心动模式由渲染层驱动切歌与补拉，原生队列不代管边界。
         if (playMode.value === 'heart') nativeQueueDelegated = false

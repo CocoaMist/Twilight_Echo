@@ -271,6 +271,10 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
     this.fireAndForget('LoadQueue', [queueJson, startIndex])
   }
 
+  SelectQueueIndex(index: number): void {
+    this.fireAndForget('SelectQueueIndex', [index])
+  }
+
   Next(): void {
     this.fireAndForget('Next', [])
   }

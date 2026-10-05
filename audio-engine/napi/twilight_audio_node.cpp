@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -505,6 +506,18 @@ napi_value Previous(napi_env env, napi_callback_info) {
   return throwOnError(env, TAE_Previous(g_engine));
 }
 
+napi_value SelectQueueIndex(napi_env env, napi_callback_info info) {
+  ensureEngine();
+  clearLastError();
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const double index = argc > 0 ? getNumberArg(env, argv[0], -1.0) : -1.0;
+  if (!std::isfinite(index) || index < 0 || index > std::numeric_limits<int>::max() || std::floor(index) != index)
+    return throwOnError(env, TAE_RESULT_INVALID_ARGUMENT);
+  return throwOnError(env, TAE_SelectQueueIndex(g_engine, static_cast<int>(index)));
+}
+
 napi_value SetPlayMode(napi_env env, napi_callback_info info) {
   ensureEngine();
   clearLastError();
@@ -899,6 +912,7 @@ napi_value Init(napi_env env, napi_value exports) {
   define(env, exports, "SetOutputDevice", SetOutputDevice);
   define(env, exports, "SetOutputBackend", SetOutputBackend);
   define(env, exports, "LoadQueue", LoadQueue);
+  define(env, exports, "SelectQueueIndex", SelectQueueIndex);
   define(env, exports, "Next", Next);
   define(env, exports, "Previous", Previous);
   define(env, exports, "SetPlayMode", SetPlayMode);

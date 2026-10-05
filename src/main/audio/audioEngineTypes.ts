@@ -34,6 +34,7 @@ export interface NativeAudioBinding {
   SetOutputBackend: (backend: string) => void
   SetOutputConfig?: (json: string) => void
   LoadQueue?: (queueJson: string, startIndex: number) => void
+  SelectQueueIndex?: (index: number) => void
   Next?: () => void
   Previous?: () => void
   SetPlayMode?: (mode: 'sequential' | 'repeat' | 'shuffle') => void

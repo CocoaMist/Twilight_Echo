@@ -188,7 +188,13 @@ interface TrayPlayerBootstrap {
 }
 
 interface AudioEngineAPI {
-  loadQueue: (items: AudioEngineQueueItem[], startIndex?: number) => Promise<void>
+  loadQueue: (
+    items: AudioEngineQueueItem[],
+    startIndex?: number
+  ) => Promise<import('../shared/nativeQueue').NativeQueueCommit | void>
+  selectQueueItem?: (
+    selection: import('../shared/nativeQueue').NativeQueueSelection
+  ) => Promise<boolean>
   play: (filePath: string, startTime?: number) => Promise<AudioEnginePlayResult>
   isHtmlAudioFallbackAllowed: () => Promise<boolean>
   togglePause: () => Promise<void>

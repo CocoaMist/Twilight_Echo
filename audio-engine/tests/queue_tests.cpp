@@ -245,6 +245,26 @@ void testPlayModeIdRoundTripsListLoop() {
   assert(QueueManager::parsePlayMode("") == PlayMode::Sequential);
 }
 
+void testIdenticalContentMovesCursorWithoutChangingPolicy() {
+  QueueManager queue;
+  std::string error;
+  assert(queue.loadFromJson(kQueueJson, 0, &error));
+  queue.setPlayMode(PlayMode::Shuffle);
+  queue.setCurrentIndex(1);
+  const auto upcoming = queue.upcoming()->id;
+  assert(queue.loadFromJson(kQueueJson, 1, &error));
+  assert(queue.size() == 3);
+  assert(queue.playMode() == PlayMode::Shuffle);
+  assert(queue.current()->id == "b");
+  assert(queue.upcoming()->id == upcoming);
+  assert(queue.loadFromJson(kQueueJson, 99, &error));
+  assert(queue.currentIndex() == 2);
+  assert(queue.upcoming());
+  const std::string invalid = "[{\"source\":\"disc.flac\",\"cueRange\":null}]";
+  assert(!queue.loadFromJson(invalid, 0, &error));
+  assert(!queue.loadFromJson(invalid, 0, &error));
+}
+
 }  // namespace
 
 int main() {
@@ -257,6 +277,7 @@ int main() {
   testListLoopUpcomingWrapsForGaplessPreload();
   testShuffleCycleWrapsWithoutReshuffling();
   testPlayModeIdRoundTripsListLoop();
+  testIdenticalContentMovesCursorWithoutChangingPolicy();
   testAddRemoveAndInvalidInput();
   testShuffleAddKeepsCurrentTrackStable();
   testSingleFileCueRangesKeepDistinctQueueIdentity();

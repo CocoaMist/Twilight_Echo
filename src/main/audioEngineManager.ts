@@ -346,6 +346,7 @@ export class AudioEngineManager extends EventEmitter {
   }
   private set queue(value: AudioEngineQueueItem[]) {
     this.playback.queue = value
+    this.playback.queueToken = ''
   }
   private get queueJson(): string {
     return this.playback.queueJson
@@ -476,6 +477,7 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   private handleAudioServiceCrash(reason: string, options?: { fatal?: boolean }): void {
+    this.playback.queueToken = ''
     this.outputConfigServiceGeneration += 1
     this.nativeVolumeSynced = false
     if (this.outputConfigApplyStatus.state === 'pending') {
@@ -542,6 +544,7 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   private handleAudioServiceReady(): void {
+    this.playback.queueToken = ''
     const restoreSerial = ++this.audioServiceReadyRestoreSerial
     this.nativeOutputRouteSynced = false
     this.invalidateAudioDeviceOptionsCache('audio-service-ready')
@@ -1239,6 +1242,16 @@ export class AudioEngineManager extends EventEmitter {
 
   async loadQueue(items: AudioEngineQueueItem[], startIndex = 0): Promise<void> {
     return this.playback.loadQueue(items, startIndex)
+  }
+
+  getQueueToken(): string {
+    return this.playback.queueToken
+  }
+
+  async selectQueueItem(
+    selection: import('../shared/nativeQueue.ts').NativeQueueSelection
+  ): Promise<boolean> {
+    return this.playback.selectQueueItem(selection)
   }
 
   async next(): Promise<void> {

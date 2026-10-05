@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import type { NativeQueueSelection } from '../../shared/nativeQueue.ts'
 import type {
   AudioEnginePlayResult,
   AudioEngineQueueItem,
@@ -110,6 +112,7 @@ const NATIVE_IDLE_POLL_INTERVAL_TICKS = 4
 
 export class PlaybackController {
   queue: AudioEngineQueueItem[] = []
+  queueToken = ''
   queueJson = '[]'
   playbackInfo: PlaybackInfo
   private transportRevision = 0
@@ -640,11 +643,17 @@ export class PlaybackController {
     const nextQueueIndex =
       nextQueue.length > 0 ? Math.min(Math.max(0, startIndex), nextQueue.length - 1) : -1
     const nextQueueJson = JSON.stringify(nextQueue)
-    if (nextQueueJson === this.queueJson && nextQueueIndex === this.playbackInfo.queueIndex) return
+    if (
+      this.queueToken &&
+      nextQueueJson === this.queueJson &&
+      nextQueueIndex === this.playbackInfo.queueIndex
+    )
+      return
 
     const previousQueueJson = this.queueJson
     const previousQueueIndex = this.playbackInfo.queueIndex
     const hasPreviousQueue = this.queue.length > 0
+    this.queueToken = ''
     try {
       const queueLoaded = await this.callNativeMaybeAsync(
         '加载队列',
@@ -684,9 +693,38 @@ export class PlaybackController {
 
     this.queue = nextQueue
     this.queueJson = nextQueueJson
+    this.queueToken = randomUUID()
     this.playbackInfo.queueIndex = nextQueueIndex
     this.invalidateUpcomingTrackCache()
     this.emit('queue-change', this.queue)
+  }
+
+  async selectQueueItem(selection: NativeQueueSelection): Promise<boolean> {
+    const item = this.queue[selection.index]
+    if (
+      !this.queueToken ||
+      selection.queueToken !== this.queueToken ||
+      !item ||
+      item.id !== selection.id ||
+      item.source !== selection.source ||
+      typeof this.native?.SelectQueueIndex !== 'function'
+    )
+      return false
+    const revision = ++this.transportRevision
+    const selected = await this.callNativeMaybeAsync(
+      '选择已加载队列条目',
+      'SelectQueueIndex',
+      selection.index
+    )
+    if (
+      !selected ||
+      revision !== this.transportRevision ||
+      selection.queueToken !== this.queueToken
+    )
+      return false
+    this.playbackInfo.queueIndex = selection.index
+    this.invalidateUpcomingTrackCache()
+    return true
   }
 
   private rollbackQueueAfterFailedLoad(queueJson: string, queueIndex: number): void {

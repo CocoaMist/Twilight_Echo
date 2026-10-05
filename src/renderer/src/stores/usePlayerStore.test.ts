@@ -718,7 +718,7 @@ test('provider queues use native for resolved current targets without native que
     loadAndPlay,
     /const useNativePlayback = shouldUseNativePlayback\(track, playTarget\)/
   )
-  assert.match(loadAndPlay, /if \(useNativePlayback\) \{[\s\S]*window\.api\.audioEngine\.loadQueue/)
+  assert.match(loadAndPlay, /if \(useNativePlayback\) \{[\s\S]*nativeQueueLoader\.prepareAndLoad/)
 })
 
 test('player store prepares native queues before loading or synchronizing them', () => {
@@ -730,24 +730,23 @@ test('player store prepares native queues before loading or synchronizing them',
     source,
     /import \{[\s\S]*preparePlayerNativeQueue[\s\S]*\} from '\.\.\/utils\/nativeQueuePreparation\.ts'/
   )
-  assert.match(loadAndPlay, /const preparedQueue = await preparePlayerNativeQueue\(/)
+  assert.match(loadAndPlay, /const preparedQueue = await nativeQueueLoader\.prepareAndLoad\(/)
   assert.match(loadAndPlay, /isAudioFileAuthorized: window\.api\.fs\.isAudioFileAuthorized/)
   // The queue's local targets are authorized in one round-trip; a per-track invoke
   // cost one IPC hop per queue entry before playback could start.
   assert.match(loadAndPlay, /areAudioFilesAuthorized: window\.api\.fs\.areAudioFilesAuthorized/)
   assert.match(
     loadAndPlay,
-    /if \(!isActiveLoad\(loadToken, track\)\) \{[\s\S]*?return[\s\S]*?\}\s*await window\.api\.audioEngine\.loadQueue/,
+    /isCurrent: \(\) => isActiveLoad\(loadToken, track\)/,
     'an old async queue preparation must not reach native LoadQueue'
   )
-  assert.match(loadAndPlay, /preparedQueue\.items,\s*preparedQueue\.startIndex/)
   assert.match(loadAndPlay, /nativeQueueDelegated = preparedQueue\.delegated/)
   assert.match(
     syncNativeQueueState,
     /synchronizeLatestNativeQueue\(\s*nativeQueueRevisionFence,\s*snapshot\.revision,\s*\{[\s\S]*prepare: \(\) =>\s*preparePlayerNativeQueue\(/
   )
   assert.match(syncNativeQueueState, /if \(!synchronized\.applied\) return/)
-  assert.match(syncNativeQueueState, /preparedQueue\.items, preparedQueue\.startIndex/)
+  assert.match(syncNativeQueueState, /nativeQueueLoader\.loadPrepared\(preparedQueue, window\.api\.audioEngine\)/)
 })
 
 test('next and previous only use native controls when the native queue is delegated', () => {
@@ -1508,8 +1507,8 @@ test('player bar visualization polling stays light and stops behind the full vis
   // No renderer consumer reads oscilloscope / spectrogram from the store poll.
   assert.match(pollingSource, /spectrogramFrames: 0/)
   assert.match(pollingSource, /oscilloscopePoints: 0/)
-  assert.match(pollingSource, /if \(options\.active\.value\) return/)
-  assert.match(pollingSource, /if \(options\.consumers\.value <= 0\) return/)
+  assert.match(pollingSource, /!options\.active\.value &&\s*options\.consumers\.value > 0/)
+  assert.match(pollingSource, /options\.visible\?\.value/)
   assert.match(source, /const visualizationConsumers = ref\(0\)/)
   assert.match(source, /watch\(visualizationConsumers,/)
   assert.match(pollingSource, /let pollingGeneration = 0/)
@@ -1521,7 +1520,7 @@ test('player bar visualization polling stays light and stops behind the full vis
   assert.match(source, /startVisualizationPolling\(/)
   assert.match(
     source,
-    /\[isPlaying, audioEngineReady, \(\) => currentTrack\.value\?\.id, visualizerActive\]/
+    /\[\s*isPlaying,\s*audioEngineReady,\s*\(\) => currentTrack\.value\?\.id,\s*visualizerActive,\s*visualizationDocumentVisible\s*\]/
   )
 })
 

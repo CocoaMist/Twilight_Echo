@@ -3456,6 +3456,28 @@ void testExclusiveAutoReleasePreservesDsdTransport() {
   }
 }
 
+void testQueueCursorSelectsSameFileCueWithoutReloadingContent() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.selectQueueIndex(0) == TAE_RESULT_INVALID_ARGUMENT);
+  const std::string queue =
+      "[{\"id\":\"cue-1\",\"source\":\"cursor-cue.flac\",\"duration\":0.5,"
+      "\"cueRange\":{\"startSeconds\":0,\"endSeconds\":0.5}},"
+      "{\"id\":\"cue-2\",\"source\":\"cursor-cue.flac\",\"duration\":0.5,"
+      "\"cueRange\":{\"startSeconds\":0.5,\"endSeconds\":1}}]";
+  assert(engine.loadQueue(queue, 0) == TAE_RESULT_OK);
+  assert(engine.selectQueueIndex(1) == TAE_RESULT_OK);
+  assert(engine.selectQueueIndex(2) == TAE_RESULT_INVALID_ARGUMENT);
+  assert(engine.selectQueueIndex(-1) == TAE_RESULT_INVALID_ARGUMENT);
+  assert(engine.play("cursor-cue.flac", 0.1) == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"queueIndex\":1");
+  assert(decoderSeekObserved(0.6));
+  assert(engine.selectQueueIndex(0) == TAE_RESULT_OK);
+  assert(engine.play("cursor-cue.flac", 0.1) == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"queueIndex\":0");
+  assert(decoderSeekObserved(0.1));
+}
+
 void testExclusiveAutoReleaseKeepsGaplessDeviceUntilQueueEnd() {
   EngineHarness harness;
   auto& engine = harness.engine();
@@ -4438,6 +4460,7 @@ int main() {
   RUN_RUNTIME_CASE(testExclusiveAutoReleaseDefaultsOffAndIgnoresSharedOutput());
   RUN_RUNTIME_CASE(testExclusiveReleasedPauseEditsAndResumeFailureRetainContext());
   RUN_RUNTIME_CASE(testExclusiveReleasedPausePreservesCueQueueIdentity());
+  RUN_RUNTIME_CASE(testQueueCursorSelectsSameFileCueWithoutReloadingContent());
   RUN_RUNTIME_CASE(testExclusiveAutoReleasePreservesDsdTransport());
   RUN_RUNTIME_CASE(testExclusiveAutoReleaseKeepsGaplessDeviceUntilQueueEnd());
   RUN_RUNTIME_CASE(testExclusiveAutoReleaseRapidPauseResumeAndStop());
