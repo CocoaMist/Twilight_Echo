@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { promisify } from 'node:util'
 
 import {
   buildVisualizerQualityString,
@@ -8,6 +15,91 @@ import {
   formatVisualizerSource,
   resolveVisualizerAudioMetadata
 } from './audioVisualizerFormatting.ts'
+
+test('visualizer keeps sharp backing surfaces across fractional DPI, resize and paused playback', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'twilight-visualizer-dpi-'))
+  try {
+    const runner = join(directory, 'runner.cjs')
+    await writeFile(
+      runner,
+      `const {app,BrowserWindow}=require('electron');
+app.commandLine.appendSwitch('force-device-scale-factor','1.25');
+app.whenReady().then(async()=>{
+  const win=new BrowserWindow({show:false,width:1280,height:800,webPreferences:{backgroundThrottling:false}});
+  try {
+    await win.loadFile(process.argv.at(-1));
+    await win.webContents.executeJavaScript(${JSON.stringify(checkVisualizerSurfaces())});
+    console.log('VISUALIZER_DPI_OK');app.exit(0);
+  } catch(error){console.error(error.stack);app.exit(1)}
+});`
+    )
+    const env = { ...process.env }
+    delete env.ELECTRON_RUN_AS_NODE
+    const result = await promisify(execFile)(
+      createRequire(import.meta.url)('electron'),
+      [
+        runner,
+        fileURLToPath(new URL('../../../../resources/audio-visualizer/index.html', import.meta.url))
+      ],
+      { windowsHide: true, timeout: 60_000, env }
+    )
+    assert.match(result.stdout, /VISUALIZER_DPI_OK/)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+function checkVisualizerSurfaces(): string {
+  // Execute against the shipped HTML, including its resize and DPR listeners.
+  return String.raw`(async () => {
+    const expect = (value, message) => { if (!value) throw new Error(message) }
+    const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    await settle()
+    expect(Math.abs(devicePixelRatio - 1.25) < 0.01, 'fractional Windows scaling missing')
+    const check = () => {
+      for (const [surface, minimum] of [[spectrumSurface, 1], [waveformSurface, 2]]) {
+        const rect = surface.canvas.getBoundingClientRect(), matrix = surface.ctx.getTransform()
+        expect(surface.canvas.width === Math.ceil(rect.width * Math.max(minimum, devicePixelRatio)), 'backing width does not cover display')
+        expect(surface.canvas.height === Math.ceil(rect.height * Math.max(minimum, devicePixelRatio)), 'backing height does not cover display')
+        expect(Math.abs(rect.width * matrix.a - surface.canvas.width) < 0.001, 'fractional width is distorted')
+        expect(Math.abs(rect.height * matrix.d - surface.canvas.height) < 0.001, 'fractional height is distorted')
+      }
+    }
+    check()
+    for (const ratio of [1, 1.5, 2, 1.25]) {
+      const previousQuery = resolutionQuery
+      Object.defineProperty(window, 'devicePixelRatio', {configurable:true, value:ratio})
+      previousQuery.dispatchEvent(new Event('change'))
+      await settle(); check()
+      expect(resolutionQuery !== previousQuery, 'resolution listener was not rearmed')
+    }
+    waveformCanvas.style.width = '431.375px'
+    waveformCanvas.style.height = '47.625px'
+    spectrumCanvas.style.width = '599.375px'
+    await settle(); check()
+    expect(waveformSurface.width === waveformCanvas.getBoundingClientRect().width, 'wrapper border changed waveform size')
+    liveWaveformPoints = Float32Array.from({length:256}, (_, i) => Math.sin(i * 0.16) * 0.5)
+    drawWaveform()
+    const pixels = waveCtx.getImageData(0, 0, waveformCanvas.width, waveformCanvas.height).data
+    expect(pixels.some((value, i) => i % 4 === 3 && value > 0 && value < 190), 'waveform has no antialiased edge coverage')
+    waveCtx.setLineDash([3, 5])
+    resizeCanvases()
+    expect(waveCtx.getLineDash().join() === '3,5', 'unchanged backing size resets the drawing context')
+    let strokes = 0
+    const stroke = specCtx.stroke.bind(specCtx)
+    specCtx.stroke = () => { strokes++; stroke() }
+    expect(!isPlaying, 'fixture should be paused')
+    spectrumCanvas.style.width = '613.625px'
+    await settle(); check()
+    expect(strokes > 0, 'paused spectrum stayed blank after resize')
+    window.dispatchEvent(new Event('pagehide'))
+    strokes = 0
+    window.dispatchEvent(new Event('resize'))
+    resolutionQuery.dispatchEvent(new Event('change'))
+    await settle()
+    expect(strokes === 0, 'disposed visualizer still redraws')
+  })()`
+}
 
 test('visualizer bitrate formatting converts bps to kbps', () => {
   assert.equal(formatVisualizerBitrate(1737220), '1737 kbps')
