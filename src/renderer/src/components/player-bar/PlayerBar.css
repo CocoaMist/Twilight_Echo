@@ -819,15 +819,15 @@
   grid-template-columns: minmax(0, 280px) minmax(460px, 1fr) minmax(0, 280px);
   align-items: center;
   column-gap: 22px;
-  height: 72px;
+  height: 78px;
   max-width: 1180px;
   margin: 0 auto;
-  border-radius: 22px;
+  border-radius: 25px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.66), rgba(248, 245, 255, 0.42)),
     rgba(255, 255, 255, 0.48);
   border: 1px solid rgba(255, 255, 255, 0.68);
-  padding: 0 22px;
+  padding: 0 12px;
   box-shadow:
     0 24px 80px rgba(15, 23, 42, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.72);
@@ -960,8 +960,8 @@
   max-width: 100%;
 }
 .player-cover-slot {
-  width: 48px;
-  height: 48px;
+  width: 52px;
+  height: 52px;
   flex-shrink: 0;
   cursor: pointer;
   border-radius: 12px;
@@ -971,9 +971,9 @@
 .player-cover-slot img.player-cover,
 .player-cover-slot :deep(img.player-cover),
 .player-cover {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
   object-fit: cover;
   flex-shrink: 0;
   cursor: pointer;
@@ -987,14 +987,14 @@
 .player-cover-slot:hover img.player-cover,
 .player-cover-slot:hover :deep(img.player-cover),
 .player-cover-slot:hover .player-cover {
-  transform: translateY(-2px) scale(1.05);
+  transform: scale(1.04);
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.16);
   filter: saturate(1.08);
 }
 .player-cover-placeholder {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
   background:
     radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.9), transparent 36%),
     linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(13, 148, 136, 0.12));
@@ -1656,7 +1656,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   .player-bar {
     grid-template-columns: minmax(0, 0.72fr) minmax(360px, 1.8fr) minmax(0, 0.72fr);
     column-gap: 12px;
-    padding: 0 14px;
+    padding: 0 12px;
   }
 
   .player-right {
@@ -1956,6 +1956,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
+  corner-shape: inherit;
   /* Elasticity lets the playbar reach toward the cursor; 0 keeps it pinned. */
   transform: translate(var(--te-lg-elastic-x, 0px), var(--te-lg-elastic-y, 0px));
   /* Only the press flash and edge accents live here. The broad sheen washes this
@@ -2914,22 +2915,25 @@ html[data-theme='dark']
   font-weight: 600;
 }
 
-/* The artwork the shape leads with. Smaller than the standard bar's 48px so it
-   stays visually subordinate to the full-width spectrum stage above.
-   All three selectors are needed — the slot, a loaded image, and the placeholder
-   each carry their own box in the base rules. */
+/* The slot owns artwork sizing and clipping in every shape. */
 .player-bar-shell[data-te-playbar-mode='compact']
   .player-bar-compact.player-bar-compact.player-bar-compact
-  .player-cover-slot,
-.player-bar-shell[data-te-playbar-mode='compact']
-  .player-bar-compact.player-bar-compact.player-bar-compact
-  .player-cover,
-.player-bar-shell[data-te-playbar-mode='compact']
-  .player-bar-compact.player-bar-compact.player-bar-compact
-  .player-cover-placeholder {
+  .player-cover-slot {
   width: 46px;
   height: 46px;
   border-radius: 12px;
+}
+
+.player-bar-shell[data-te-playbar-mode='mini']
+  .player-bar-mini.player-bar-mini.player-bar-mini
+  .player-cover-slot {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+
+.player-bar-liquid .player-cover-slot {
+  corner-shape: inherit;
 }
 
 .player-bar-shell[data-te-playbar-mode='compact']

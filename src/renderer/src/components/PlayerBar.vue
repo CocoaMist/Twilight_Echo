@@ -1769,19 +1769,21 @@ onBeforeUnmount(() => {
             @click="onCoverClick"
           >
             <CoverImg
-              v-if="currentTrack.cover || currentTrack.coverSource"
               :cover="currentTrack.cover"
               :cover-source="currentTrack.coverSource"
               :identity="currentTrack.id"
               class="player-cover"
               alt=""
-            />
-            <div v-else class="player-cover-placeholder">
-              <i
-                class="pi pi-wave-pulse"
-                style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); color: #bbb"
-              ></i>
-            </div>
+            >
+              <template #placeholder>
+                <div class="player-cover-placeholder">
+                  <i
+                    class="pi pi-wave-pulse"
+                    style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); color: #bbb"
+                  ></i>
+                </div>
+              </template>
+            </CoverImg>
           </div>
 
           <div v-else-if="control === 'trackInfo'" class="player-track-info">

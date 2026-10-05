@@ -741,11 +741,14 @@
 .artist-card,
 .album-card,
 .playlist-card {
+  --te-library-card-padding: 13px;
+  --te-library-card-radius: var(--te-card-radius, 21px);
   display: flex;
   flex-direction: column;
-  padding: 13px 13px 15px;
+  padding: var(--te-library-card-padding) var(--te-library-card-padding)
+    calc(var(--te-library-card-padding) + 2px);
   min-width: 0;
-  border-radius: 18px;
+  border-radius: var(--te-library-card-radius);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.56), rgba(248, 245, 255, 0.34)),
     rgba(255, 255, 255, 0.34);
@@ -765,7 +768,7 @@
   .artist-card,
   .album-card,
   .playlist-card {
-    padding: 10px 10px 12px;
+    --te-library-card-padding: 10px;
   }
 }
 
@@ -773,7 +776,7 @@
   .artist-card,
   .album-card,
   .playlist-card {
-    padding: 8px 8px 10px;
+    --te-library-card-padding: 8px;
   }
 }
 
@@ -828,7 +831,16 @@
   width: 100%;
   aspect-ratio: 1;
   object-fit: cover;
-  border-radius: calc(var(--te-library-cover-radius) + 2px);
+  border-radius: min(
+    var(--te-library-cover-radius, 8px),
+    max(
+      0px,
+      calc(
+        var(--te-library-card-radius) - var(--te-library-card-padding) -
+          var(--te-card-border-width, 1px)
+      )
+    )
+  );
   margin-bottom: 13px;
   flex-shrink: 0;
   box-shadow:
@@ -2292,6 +2304,7 @@
 }
 
 :global(html[data-te-library-density='compact'] :is(.artist-card, .album-card, .playlist-card)) {
+  --te-library-card-padding: 10px;
   padding: 10px;
 }
 

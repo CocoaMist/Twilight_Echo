@@ -24,6 +24,18 @@ test('saved theme colors reach the rendered player controls across tones and bar
       scoped: true
     })
     assert.deepEqual(style.errors, [])
+    const geometryStyles = await Promise.all(
+      ['../../assets/base.css', '../song-list/SongList.css'].map(async (path) => {
+        const compiled = compileStyle({
+          source: await readFile(new URL(path, import.meta.url), 'utf8'),
+          filename: path,
+          id: 'data-v-test',
+          scoped: path.endsWith('SongList.css')
+        })
+        assert.deepEqual(compiled.errors, [])
+        return compiled.code
+      })
+    )
     await writeFile(join(directory, 'entry.ts'), runtime)
     await build({
       configFile: false,
@@ -50,7 +62,7 @@ test('saved theme colors reach the rendered player controls across tones and bar
     })
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><html><head><meta charset="utf-8"><style>${style.code}</style></head><body><script src="bundle/runtime.js"></script></body></html>`
+      `<!doctype html><html><head><meta charset="utf-8"><style id="geometry-styles">${geometryStyles.join('\n')}</style><style>${style.code}</style></head><body><script src="bundle/runtime.js"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),
@@ -61,6 +73,12 @@ app.whenReady().then(async()=>{
   win.webContents.on('console-message',event=>console.error(event.message))
   try{
     await win.loadFile(process.argv.at(-1))
+    for(const width of [1280,800,600]){
+      win.setSize(width,900)
+      await win.webContents.executeJavaScript('window.checkArtworkGeometry()')
+    }
+    win.setSize(1080,900)
+    await win.webContents.executeJavaScript('document.querySelector("#geometry-styles").remove()')
     await win.webContents.executeJavaScript('window.runPlayerThemeTests()')
     for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact'])for(const glass of [false,true]){
       const rect=await win.webContents.executeJavaScript('window.preparePlayerThemeHover('+JSON.stringify(tone)+','+JSON.stringify(mode)+','+glass+')')
@@ -145,6 +163,61 @@ const checkBackground=(element,value,label)=>{
   probe.remove()
 }
 const settle=()=>new Promise(resolve=>setTimeout(resolve,250))
+window.checkArtworkGeometry=async()=>{
+  const root=document.documentElement
+  const close=(a,b,label)=>expect(Math.abs(a-b)<0.1,label+': '+a+' / '+b)
+  for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact']){
+    root.dataset.theme=tone
+    mount(mode)
+    const slot=document.createElement('div')
+    slot.className='player-cover-slot'
+    slot.setAttribute('data-v-test','')
+    bar.querySelector('.player-left').prepend(slot)
+    for(const tag of ['img','div']){
+      slot.innerHTML=tag==='img'?'<img class="player-cover" src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2252%22 height=%2252%22%3E%3Crect width=%2252%22 height=%2252%22 fill=%22skyblue%22/%3E%3C/svg%3E">':'<div class="player-cover-placeholder">♪</div>'
+      const artwork=slot.firstElementChild
+      artwork.setAttribute('data-v-test','')
+      const outer=bar.getBoundingClientRect(),inner=slot.getBoundingClientRect(),image=artwork.getBoundingClientRect()
+      close(image.width,inner.width,mode+' artwork width')
+      close(image.height,inner.height,mode+' artwork height')
+      close(image.x,inner.x,mode+' artwork x')
+      close(image.y,inner.y,mode+' artwork y')
+      expect(inner.top>=outer.top&&inner.bottom<=outer.bottom,mode+' cover overflows the bar')
+      expect(getComputedStyle(artwork).borderTopLeftRadius==='0px','artwork adds a second rounding mask')
+      if(mode==='standard'){
+        close(inner.width,52,'slightly enlarged artwork')
+        close(outer.height,78,'slightly enlarged standard bar')
+        const radius=parseFloat(getComputedStyle(bar).borderTopLeftRadius),small=parseFloat(getComputedStyle(slot).borderTopLeftRadius)
+        close(inner.x+small,outer.x+radius,'horizontal corner centres')
+        close(inner.y+small,outer.y+radius,'vertical corner centres')
+      }
+    }
+    expect(getComputedStyle(bar).overflowY==='visible','bar clips its upward volume drawer')
+    bar.classList.add('player-bar-liquid')
+    expect(getComputedStyle(slot).cornerShape===getComputedStyle(bar).cornerShape,'glass artwork differs from the raster contour')
+  }
+  document.querySelector('.player-bar-shell').remove()
+  const fixture=document.createElement('div')
+  fixture.className='song-list'
+  fixture.innerHTML='<div class="album-card" style="width:220px"><div class="album-cover-placeholder"></div></div>'
+  for(const element of [fixture,...fixture.querySelectorAll('*')])element.setAttribute('data-v-test','')
+  document.body.append(fixture)
+  const card=fixture.firstElementChild,cover=card.firstElementChild
+  for(const density of ['comfortable','compact'])for(const radius of [0,7,21,24])for(const border of [0,1,2]){
+    root.dataset.teLibraryDensity=density
+    root.dataset.cardCustom='on'
+    root.style.setProperty('--te-card-radius',radius+'px')
+    root.style.setProperty('--te-card-border-width',border+'px')
+    const outer=card.getBoundingClientRect(),inner=cover.getBoundingClientRect(),inset=inner.x-outer.x
+    close(parseFloat(getComputedStyle(cover).borderTopLeftRadius),Math.min(8,Math.max(0,radius-inset)),'library cover inset')
+    expect(getComputedStyle(cover).cornerShape===getComputedStyle(card).cornerShape,'library cover curve mismatch')
+  }
+  fixture.remove()
+  delete root.dataset.teLibraryDensity
+  delete root.dataset.cardCustom
+  root.style.removeProperty('--te-card-radius')
+  root.style.removeProperty('--te-card-border-width')
+}
 const checkColors=async(overrides)=>{
   for(const tone of ['pureWhite','dark']){
     await store.setPreviewTone(tone)
