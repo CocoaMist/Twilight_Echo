@@ -197,9 +197,7 @@ function close(): void {
         aria-controls="app-notice-history"
         @click="$emit('notifications', $event)"
       >
-        <svg class="notification-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
-        </svg>
+        <i class="notification-icon ph ph-bell" aria-hidden="true"></i>
         <Transition name="notification-dot">
           <span v-if="unreadCount" class="notification-dot" aria-hidden="true"></span>
         </Transition>
@@ -256,10 +254,7 @@ function close(): void {
 .notification-icon {
   width: 17px;
   height: 17px;
-  stroke: currentColor;
-  stroke-width: 1.65;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  font-size: 17px;
   transition: transform 280ms var(--te-ease-soft);
 }
 .notification-btn:hover .notification-icon {

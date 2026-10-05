@@ -44,11 +44,7 @@ test('online home preserves source/playback behavior and refresh geometry; disco
             replacement: '\0local-dashboard-stub'
           },
           { find: '@renderer', replacement: join(workspace, 'src/renderer/src') },
-          { find: 'vue', replacement: require.resolve('vue/dist/vue.esm-bundler.js') },
-          {
-            find: 'primeicons/primeicons.css',
-            replacement: require.resolve('primeicons/primeicons.css')
-          }
+          { find: 'vue', replacement: require.resolve('vue/dist/vue.esm-bundler.js') }
         ]
       },
       define: { 'process.env.NODE_ENV': '"production"' },
@@ -138,7 +134,7 @@ const runtime = `import {createApp,h,nextTick,ref} from 'vue'
 import LocalHome from '@renderer/components/local-dashboard/LocalHome.vue'
 import StreamingDiscovery from '@renderer/components/StreamingDiscovery.vue'
 import '@renderer/assets/base.css'
-import 'primeicons/primeicons.css'
+import '@renderer/assets/icons.css'
 import * as state from './fixtures.ts'
 const pause=()=>new Promise(resolve=>setTimeout(resolve,60))
 const expect=(value,message)=>{if(!value)throw new Error(message)}

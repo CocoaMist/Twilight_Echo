@@ -96,7 +96,10 @@ function runtimeEntrySource(): string {
     '\\',
     '/'
   )
-  const iconStylePath = require.resolve('primeicons/primeicons.css').replaceAll('\\', '/')
+  const iconStylePath = join(workspaceRoot, 'src/renderer/src/assets/icons.css').replaceAll(
+    '\\',
+    '/'
+  )
   return `import { computed, createApp, h, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { usePlaylistLifecycleActions } from ${JSON.stringify(actionsPath)}

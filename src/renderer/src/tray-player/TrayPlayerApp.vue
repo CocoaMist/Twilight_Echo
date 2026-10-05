@@ -8,6 +8,7 @@ import {
 import type { TrayNavigationTarget } from '../../../shared/trayPlayer.ts'
 import { normalizeMotionPreference, type MotionPreference } from '../../../shared/motion.ts'
 import { useMotionPreference } from '../app/useMotionPreference'
+import MiniGlyph from '../mini-player/MiniGlyph.vue'
 
 const state = ref<MiniPlayerStateSnapshot>({ ...EMPTY_MINI_PLAYER_STATE })
 const ready = ref(false)
@@ -159,7 +160,7 @@ onBeforeUnmount(() => {
           aria-label="上一首"
           @click="sendCommand({ type: 'previous' })"
         >
-          <i class="ph ph-skip-back" aria-hidden="true"></i>
+          <MiniGlyph name="previous" />
         </button>
         <button
           class="icon-button play-button"
@@ -168,7 +169,7 @@ onBeforeUnmount(() => {
           :disabled="!state.track || state.isLoading"
           @click="sendCommand({ type: 'toggle-play' })"
         >
-          <i :class="state.isPlaying ? 'ph ph-pause' : 'ph ph-play'" aria-hidden="true"></i>
+          <MiniGlyph :name="state.isPlaying ? 'pause' : 'play'" />
         </button>
         <button
           class="icon-button"
@@ -176,7 +177,7 @@ onBeforeUnmount(() => {
           aria-label="下一首"
           @click="sendCommand({ type: 'next' })"
         >
-          <i class="ph ph-skip-forward" aria-hidden="true"></i>
+          <MiniGlyph name="next" />
         </button>
       </div>
     </section>

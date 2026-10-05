@@ -1706,12 +1706,6 @@ html[data-theme='dark'] .mode-btn-right:hover {
   color: rgba(248, 250, 252, 0.94);
 }
 
-html[data-theme='dark'] .player-bar:not(.player-bar-glass) .ctrl-btn img,
-html[data-theme='dark'] .player-bar:not(.player-bar-glass) .mode-btn-right img {
-  filter: invert(1);
-  opacity: 0.68;
-}
-
 /* Pressed and toggled-on playbar controls must stay visible on the dark bar:
    the old 7.5% white wash made active/pressed buttons melt into the surface. */
 html[data-theme='dark'] .ctrl-btn:active,

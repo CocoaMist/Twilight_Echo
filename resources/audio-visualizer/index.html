@@ -1456,32 +1456,64 @@
           </div>
 
           <button class="btn-circle" id="btn-prev" title="Previous Track">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M11 5 3 12l8 7V5Zm10 0-8 7 8 7V5Z" />
+            <svg
+              width="16"
+              height="16"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 256 256"
+              fill="currentColor"
+            >
+              <path
+                d="M208,47.88V208.12a16,16,0,0,1-24.43,13.43L64,146.77V216a8,8,0,0,1-16,0V40a8,8,0,0,1,16,0v69.23L183.57,34.45A15.95,15.95,0,0,1,208,47.88Z"
+              />
             </svg>
           </button>
 
           <button class="btn-circle play-pause" id="btn-play-pause" title="Play / Pause Demo Synth">
-            <!-- Play icon -->
-            <svg id="svg-play" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
+            <!-- Phosphor Core 2.1.1, MIT; see ../licenses/phosphor-icons.txt. -->
+            <svg
+              id="svg-play"
+              width="24"
+              height="24"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 256 256"
+              fill="currentColor"
+            >
+              <path
+                d="M240,128a15.74,15.74,0,0,1-7.6,13.51L88.32,229.65a16,16,0,0,1-16.2.3A15.86,15.86,0,0,1,64,216.13V39.87a15.86,15.86,0,0,1,8.12-13.82,16,16,0,0,1,16.2.3L232.4,114.49A15.74,15.74,0,0,1,240,128Z"
+              />
             </svg>
             <!-- Pause icon -->
             <svg
               id="svg-pause"
-              viewBox="0 0 24 24"
               width="24"
               height="24"
-              fill="currentColor"
               style="display: none"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 256 256"
+              fill="currentColor"
             >
-              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+              <path
+                d="M216,48V208a16,16,0,0,1-16,16H160a16,16,0,0,1-16-16V48a16,16,0,0,1,16-16h40A16,16,0,0,1,216,48ZM96,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16H96a16,16,0,0,0,16-16V48A16,16,0,0,0,96,32Z"
+              />
             </svg>
           </button>
 
           <button class="btn-circle" id="btn-next" title="Next Track / Audio Upload">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="m3 5 8 7-8 7V5Zm10 0 8 7-8 7V5Z" />
+            <svg
+              width="16"
+              height="16"
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 256 256"
+              fill="currentColor"
+            >
+              <path
+                d="M208,40V216a8,8,0,0,1-16,0V146.77L72.43,221.55A15.95,15.95,0,0,1,48,208.12V47.88A15.95,15.95,0,0,1,72.43,34.45L192,109.23V40a8,8,0,0,1,16,0Z"
+              />
             </svg>
           </button>
         </div>

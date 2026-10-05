@@ -877,10 +877,6 @@
 .player-bar-glass .ctrl-btn:hover {
   background: rgba(255, 255, 255, 0.1);
 }
-.player-bar-glass .ctrl-btn img {
-  filter: brightness(0) invert(1);
-  opacity: 0.82;
-}
 .player-bar-glass .btn-play {
   background: var(
     --te-player-bar-play-surface,
@@ -901,10 +897,6 @@
 }
 .player-bar-glass .mode-btn-right {
   color: rgba(255, 255, 255, 0.6);
-}
-.player-bar-glass .mode-btn-right img {
-  filter: brightness(0) invert(1);
-  opacity: 0.55;
 }
 .player-bar-glass .time-label {
   color: rgba(255, 255, 255, 0.5);
@@ -1293,11 +1285,10 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .ctrl-btn:active {
   transition-duration: 0.1s;
 }
-.ctrl-btn img {
+.ctrl-btn .player-control-icon {
   width: 18px;
   height: 18px;
-  object-fit: contain;
-  opacity: 0.8;
+  font-size: 18px;
   pointer-events: none;
   user-select: none;
 }
@@ -1326,16 +1317,10 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   box-shadow: none;
 }
 
-.btn-play i {
-  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
-  line-height: 1;
-  color: #fff;
-}
-.btn-play img {
+.btn-play .player-control-icon {
   width: 21px;
   height: 21px;
-  opacity: 1;
-  filter: brightness(0) invert(1);
+  font-size: 21px;
 }
 
 /* ===== Progress ===== */
@@ -1542,11 +1527,10 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .mode-btn-right:hover {
   background: #f0f0f0;
 }
-.mode-btn-right img {
+.mode-btn-right .player-control-icon {
   width: 19px;
   height: 19px;
-  object-fit: contain;
-  opacity: 0.58;
+  font-size: 19px;
   pointer-events: none;
   user-select: none;
 }
@@ -1560,8 +1544,8 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .player-bar-glass .mode-btn-right.heart-mode-active {
   background: color-mix(in srgb, var(--te-favorite-500, #ef4444) 16%, transparent);
 }
-.mode-btn-right.heart-mode-active img {
-  opacity: 0.95;
+.mode-btn-right.heart-mode-active .player-control-icon {
+  color: var(--te-favorite-500, #ef4444);
 }
 
 .icon-btn {
@@ -2955,8 +2939,10 @@ html[data-theme='dark']
   .player-bar-compact.player-bar-compact.player-bar-compact
   .player-controls
   .ctrl-btn
-  img {
+  .player-control-icon {
   width: 17px;
+  height: 17px;
+  font-size: 17px;
 }
 
 /* The filled circle the shape is recognised by: bigger than its neighbours, and
@@ -2974,8 +2960,10 @@ html[data-theme='dark']
   .player-bar-compact.player-bar-compact.player-bar-compact
   .player-controls
   .btn-play
-  img {
+  .player-control-icon {
   width: 16px;
+  height: 16px;
+  font-size: 16px;
 }
 
 .player-bar-shell[data-te-playbar-mode='compact']

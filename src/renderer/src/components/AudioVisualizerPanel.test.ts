@@ -649,8 +649,6 @@ test('audio visualizer has slow cover and playback orbit layers', () => {
   assert.match(visualizer, /\.btn-circle \{[\s\S]*width: 74px/)
   assert.match(visualizer, /\.btn-circle\.play-pause \{[\s\S]*width: 84px/)
   assert.match(visualizer, /\.btn-circle\.play-pause svg \{[\s\S]*width: 32px/)
-  assert.match(visualizer, /M11 5 3 12l8 7V5Zm10 0-8 7 8 7V5Z/)
-  assert.match(visualizer, /m3 5 8 7-8 7V5Zm10 0 8 7-8 7V5Z/)
   assert.match(visualizer, /animation: orbit-spin 22s linear infinite/)
   assert.doesNotMatch(visualizer, /animation-duration: var\(--orbit-idle-duration/)
   assert.doesNotMatch(visualizer, /animation-duration: 60s/)

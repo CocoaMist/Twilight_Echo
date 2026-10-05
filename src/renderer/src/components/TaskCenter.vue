@@ -181,17 +181,8 @@ onUnmounted(() => stops.forEach((stop) => stop()))
     title="后台任务"
     @click="open = true"
   >
-    <svg
-      viewBox="0 0 24 24"
-      width="18"
-      height="18"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.7"
-      aria-hidden="true"
-    >
-      <path d="m3 6 2 2 3-4M11 6h10M3 13h5m3 0h10M3 20h5m3 0h10" /></svg
-    ><span v-if="activeCount">{{ activeCount }}</span>
+    <i class="ph ph-list-checks" style="font-size: 18px" aria-hidden="true"></i>
+    <span v-if="activeCount">{{ activeCount }}</span>
   </button>
   <Teleport to="body">
     <div v-if="open" class="task-overlay" @click.self="open = false">
