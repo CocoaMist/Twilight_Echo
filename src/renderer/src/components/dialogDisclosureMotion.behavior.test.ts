@@ -98,6 +98,35 @@ const opener=document.querySelector('#opener');opener.onclick=()=>{opener.focus(
 const modal=()=>document.querySelector('dialog')
 const open=async()=>{opener.click();await nextTick();await until(()=>modal()?.matches(':modal'),'modal did not open')}
 const close=()=>modal().dispatchEvent(new Event('cancel',{cancelable:true}))
+const sampleNativeLeave=(dialog)=>new Promise((resolve,reject)=>{
+ let frame=0,done=false
+ const stages=[]
+ const cleanup=()=>{done=true;observer.disconnect();cancelAnimationFrame(frame);clearTimeout(timer)}
+ const timer=setTimeout(()=>{cleanup();reject(new Error('native dialog never entered its leave animation: '+JSON.stringify({mode:document.documentElement.dataset.teMotion,connected:dialog.isConnected,modal:dialog.matches(':modal'),inert:dialog.inert,classes:dialog.className,stages})))},3000)
+ const sample=()=>{
+  if(done)return
+  cancelAnimationFrame(frame);frame=requestAnimationFrame(sample)
+  if(!dialog.classList.contains('native-dialog-leave-to'))return
+  try{
+   getComputedStyle(dialog).opacity;getComputedStyle(dialog,'::backdrop').opacity
+   const animations=dialog.getAnimations({subtree:true})
+   if(!animations.length)return
+   cleanup()
+   for(const animation of animations){animation.pause();animation.currentTime=45}
+   expect(dialog.isConnected&&dialog.matches(':modal'),'native top layer vanished during leave')
+   expect(dialog.inert,'leaving modal stayed interactive')
+   const opacity=Number(getComputedStyle(dialog).opacity),backdrop=Number(getComputedStyle(dialog,'::backdrop').opacity)
+   expect(opacity>0&&opacity<1,'native dialog did not fade at the sampled leave time: '+opacity)
+   expect(backdrop>0&&backdrop<1,'native backdrop did not fade at the sampled leave time: '+backdrop)
+   dialog.dispatchEvent(new TransitionEvent('transitionend',{propertyName:'opacity',elapsedTime:.2,bubbles:true}))
+   expect(dialog.isConnected&&dialog.matches(':modal'),'old transitionend completed the current leave animation')
+   resolve(animations)
+  }catch(error){cleanup();reject(error)}
+ }
+ const observer=new MutationObserver(()=>{stages.push(dialog.className);sample()})
+ observer.observe(dialog,{attributes:true,attributeFilter:['class']})
+ frame=requestAnimationFrame(sample)
+})
 window.runMotionTests=async()=>{
  expect(CSS.supports('corner-shape','superellipse(2)'),'packaged Chromium lacks continuous corners')
  const surface=document.querySelector('.glass-card'),root=document.documentElement
@@ -138,13 +167,19 @@ window.runMotionTests=async()=>{
  }
  nav.remove();root.style.removeProperty('--te-card-radius');delete root.dataset.teSettingsNavigationLiquidGlass
  for(const mode of ['full','reduced','off']){
-  document.documentElement.dataset.teMotion=mode;await open();if(mode!=='off')await until(()=>!modal().classList.contains('native-dialog-enter-from'),'entry never advanced');await pause(mode==='off'?30:30)
+  document.documentElement.dataset.teMotion=mode;await nextTick();await new Promise(requestAnimationFrame);await open();if(mode!=='off')await until(()=>!modal().classList.contains('native-dialog-enter-from'),'entry never advanced');await pause(mode==='off'?30:30)
   const d=modal();if(mode!=='off')for(const a of d.getAnimations())a.currentTime=mode==='reduced'?45:70;const enter=getComputedStyle(d)
   if(mode==='full'){expect(Number(enter.opacity)>0&&Number(enter.opacity)<1,'full entry must have intermediate opacity: '+JSON.stringify({opacity:enter.opacity,transform:enter.transform,classes:d.className,animations:d.getAnimations().map(a=>({time:a.currentTime,state:a.playState,frames:a.effect.getKeyframes()}))}));expect(enter.transform!=='none','full entry has no scale')}
   if(mode==='reduced'){expect(enter.transform==='none','reduced modal moved');expect(Number(enter.opacity)>0&&Number(enter.opacity)<1,'reduced modal lost fade')}
   await pause(240);busy.value=true;await nextTick();close();await pause(30);expect(shown.value&&d.matches(':modal'),'busy cancel closed modal');busy.value=false;await nextTick()
+  const leaveSample=mode==='off'?null:sampleNativeLeave(d)
   const beforeCloses=closes;close();await nextTick();if(mode!=='off')close()
-  if(mode!=='off'){expect(d.isConnected&&d.matches(':modal'),'beforeUnmount removed native top layer before leave');expect(d.inert,'leaving modal stayed interactive');await pause(50);expect(Number(getComputedStyle(d,'::backdrop').opacity)>0,'backdrop vanished before leave')}
+  if(mode!=='off'){
+   expect(d.classList.contains('native-dialog-leave-from')&&d.classList.contains('native-dialog-leave-active'),'regression injection missed the actual leave-from phase')
+   d.dispatchEvent(new TransitionEvent('transitionend',{propertyName:'opacity',elapsedTime:.2,bubbles:true}))
+   expect(d.isConnected&&d.matches(':modal'),'late enter opacity transitionend removed the leaving native modal: '+JSON.stringify({mode,classes:d.className}))
+  }
+  if(leaveSample){const animations=await leaveSample;for(const animation of animations)animation.play()}
   await until(()=>!modal(),'modal did not leave');expect(document.activeElement===opener,'focus not restored after leave');expect(closes===beforeCloses+1,'close emitted twice')
  }
  document.documentElement.dataset.teMotion='full';await open();await pause(70);close();await pause(40);shown.value=true;await nextTick();await pause(250);expect(document.querySelectorAll('dialog').length===1&&modal().matches(':modal'),'rapid reopen left stranded or duplicate modal');close();await until(()=>!modal(),'rapid reopened modal failed close')

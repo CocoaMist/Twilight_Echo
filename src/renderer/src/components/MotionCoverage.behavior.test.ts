@@ -87,7 +87,7 @@ test('motion modes, legacy overlays, discovery layout, popovers and satellite bo
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow,ipcMain,nativeTheme}=require('electron');const fs=require('node:fs/promises');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1000,height:880,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});ipcMain.handle('motion-system',(_e,reduced)=>{nativeTheme.prefersReducedMotion=reduced});ipcMain.handle('motion-capture',async(_e,name)=>{if(process.env.TWILIGHT_MOTION_VISUAL_DIR){await fs.mkdir(process.env.TWILIGHT_MOTION_VISUAL_DIR,{recursive:true});await fs.writeFile(path.join(process.env.TWILIGHT_MOTION_VISUAL_DIR,name+'.png'),(await win.webContents.capturePage()).toPNG())}});try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runMotionCoverage()');console.log('MOTION_COVERAGE_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
+      `const {app,BrowserWindow,ipcMain,nativeTheme}=require('electron');const fs=require('node:fs/promises');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1000,height:880,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});ipcMain.handle('motion-system',(_e,reduced)=>{nativeTheme.prefersReducedMotion=reduced});ipcMain.handle('control-key',(_e,key)=>{win.webContents.sendInputEvent({type:'keyDown',keyCode:key});win.webContents.sendInputEvent({type:'keyUp',keyCode:key})});ipcMain.handle('control-click',(_e,point)=>{for(const type of ['mouseMove','mouseDown','mouseUp'])win.webContents.sendInputEvent({type,x:Math.round(point.x),y:Math.round(point.y),...(type==='mouseMove'?{}:{button:'left',clickCount:1})})});ipcMain.handle('motion-capture',async(_e,name)=>{if(process.env.TWILIGHT_MOTION_VISUAL_DIR){await fs.mkdir(process.env.TWILIGHT_MOTION_VISUAL_DIR,{recursive:true});await fs.writeFile(path.join(process.env.TWILIGHT_MOTION_VISUAL_DIR,name+'.png'),(await win.webContents.capturePage()).toPNG())}});try{await win.loadFile(process.argv.at(-1));win.webContents.debugger.attach('1.3');await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled',{enabled:true});await win.webContents.executeJavaScript('window.runMotionCoverage()');console.log('MOTION_COVERAGE_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
@@ -113,6 +113,7 @@ import StreamingDiscovery from '@renderer/components/StreamingDiscovery.vue'
 import StreamingProviderSwitcher from '@renderer/components/streaming-page/StreamingProviderSwitcher.vue'
 import ProviderMusicHome from '@renderer/components/streaming-page/ProviderMusicHome.vue'
 import TrayPlayerApp from '@renderer/tray-player/TrayPlayerApp.vue'
+import AnimatedInput from '@renderer/components/AnimatedInput.vue'
 import {EMPTY_MINI_PLAYER_STATE} from '@renderer/../../shared/miniPlayer.ts'
 const ipc=window.require('electron').ipcRenderer
 const expect=(value,message)=>{if(!value)throw new Error(message)}
@@ -120,6 +121,16 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))
 const frame=()=>new Promise(requestAnimationFrame)
 const flush=async()=>{await nextTick();await frame();await frame()}
 const until=async(fn,label)=>{for(let i=0;i<150;i++){if(fn())return;await sleep(10)}throw Error(label)}
+const pressKey=async(key)=>{
+  let listener,timer
+  const delivered=new Promise((resolve,reject)=>{
+    listener=event=>{if(event.key===(key==='Right'?'ArrowRight':key))resolve()}
+    document.addEventListener('keydown',listener,true)
+    timer=setTimeout(()=>reject(new Error('native key was not delivered: '+key)),1500)
+  })
+  try{await ipc.invoke('control-key',key);await delivered;await flush()}
+  finally{clearTimeout(timer);document.removeEventListener('keydown',listener,true)}
+}
 const root=document.documentElement,opener=document.querySelector('#opener')
 let app
 const mount=async(render)=>{app?.unmount();document.querySelector('#app').innerHTML='';app=createApp({render});app.mount('#app');await nextTick()}
@@ -133,6 +144,30 @@ const capture=async(name)=>{
 }
 const playlist={id:'focus',name:'安静的夜晚',trackCount:12,coverUrl:'',creatorName:'Twilight Echo'}
 window.runMotionCoverage=async()=>{
+  await setMode('off')
+  await pressKey('Tab')
+  for(const tone of ['pureWhite','dark']){
+    root.dataset.theme=tone
+    const text=ref(''),disabled=ref(false)
+    await mount(()=>h(AnimatedInput,{modelValue:text.value,'onUpdate:modelValue':value=>text.value=value,placeholder:'请输入歌单名称',disabled:disabled.value,animate:true,style:'width:240px;height:44px;color:var(--te-neutral-900);--ai-placeholder:var(--te-neutral-500)'}))
+    const input=document.querySelector('.animated-input-field'),host=input.parentElement
+    input.focus();await flush()
+    const placeholder=getComputedStyle(input,'::placeholder'),hostStyle=getComputedStyle(host)
+    expect(placeholder.webkitTextFillColor===placeholder.color&&placeholder.color!=='rgba(0, 0, 0, 0)',tone+' native placeholder is invisible')
+    expect(input.matches(':focus-visible')&&hostStyle.outlineStyle==='solid'&&parseFloat(hostStyle.outlineWidth)===2,tone+' input has no keyboard focus ring')
+    expect(getComputedStyle(input).webkitTextFillColor==='rgba(0, 0, 0, 0)',tone+' ordinary input no longer uses its character mirror')
+    input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))
+    input.value='中文';input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'中文'}));await flush()
+    expect(text.value==='中文'&&host.classList.contains('is-composing'),tone+' IME input stopped updating model')
+    expect(getComputedStyle(input).webkitTextFillColor!=='rgba(0, 0, 0, 0)'&&getComputedStyle(host.querySelector('.animated-input-mirror')).opacity==='0',tone+' IME shows both native text and mirror')
+    input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'中文'}));await sleep(20);await flush()
+    expect(!host.classList.contains('is-composing')&&host.querySelector('.animated-input-track').textContent==='中文',tone+' committed text lost its mirror')
+    input.value='中文A';input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'A'}));await flush()
+    expect(text.value==='中文A'&&host.querySelector('.animated-input-track').textContent==='中文A',tone+' ordinary input stopped updating')
+    disabled.value=true;await flush();expect(input.disabled,tone+' disabled prop did not reach native input')
+    opener.focus();input.focus();expect(document.activeElement!==input,tone+' disabled input accepted focus')
+  }
+  delete root.dataset.theme
   for(const reduced of [false,true]){
     await ipc.invoke('motion-system',reduced);await sleep(30)
     for(const mode of ['full','reduced','off']){
@@ -224,11 +259,32 @@ window.runMotionCoverage=async()=>{
   await flush();expect(document.querySelector('.music-skeleton'),'missing loading skeleton');lists.value=[playlist];loading.value=false;await flush()
   const content=document.querySelector('.music-content');expect(content.getAnimations().length>0,'home content did not fade after loading');await capture('provider-home-arrival');await sleep(200)
   lists.value=[playlist,{...playlist,id:'two'}];await flush();expect(document.querySelector('.music-content')===content&&content.getAnimations().length===0,'recommendation updates replayed entrance')
-  app.unmount();let preferenceListener,resolveBootstrap
-  window.api={trayPlayer:{getBootstrap:()=>new Promise(resolve=>resolveBootstrap=resolve),onState:()=>()=>{},onMotionPreference:cb=>{preferenceListener=cb;return()=>preferenceListener=null},command:()=>{},navigate:()=>{},hide:()=>{}}}
+  app.unmount();let preferenceListener,resolveBootstrap,stateListener
+  const commands=[]
+  window.api={trayPlayer:{getBootstrap:()=>new Promise(resolve=>resolveBootstrap=resolve),onState:cb=>{stateListener=cb;return()=>stateListener=null},onMotionPreference:cb=>{preferenceListener=cb;return()=>preferenceListener=null},command:command=>commands.push(command),navigate:()=>{},hide:()=>{}}}
   await mount(()=>h(TrayPlayerApp));preferenceListener('off');resolveBootstrap({state:EMPTY_MINI_PLAYER_STATE,motionPreference:'full'});await flush()
   expect(root.dataset.teMotion==='off','stale tray bootstrap overwrote live preference');expect(getComputedStyle(document.querySelector('.tray-player')).transitionDuration==='0s','tray off still animated')
   preferenceListener('reduced');await flush();expect(root.dataset.teMotion==='reduced'&&getComputedStyle(document.querySelector('.tray-player')).transform==='none','tray reduced mode failed')
-  app.unmount();expect(!preferenceListener,'tray leaked motion listener')
+  for(const tone of ['pureWhite','dark']){
+    root.dataset.theme=tone
+    const slider=document.querySelector('.progress-slider'),button=document.querySelector('.page-actions button')
+    expect(slider.disabled,tone+' empty tray incorrectly permits seeking')
+    const style=getComputedStyle(slider)
+    expect(slider.getBoundingClientRect().height===24&&parseFloat(style.height)-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom)===4,tone+' tray range lacks a 24px target around its 4px track')
+    await pressKey('Tab')
+    button.focus();await flush()
+    expect(button.matches(':focus-visible')&&getComputedStyle(button).outlineStyle==='solid'&&parseFloat(getComputedStyle(button).outlineWidth)===2,tone+' tray navigation has no keyboard focus ring')
+    stateListener({...EMPTY_MINI_PLAYER_STATE,track:{title:'Test track',artist:'Test artist'},duration:100,currentTime:25});await flush()
+    expect(!slider.disabled,tone+' loaded tray cannot seek')
+    slider.focus();await pressKey('Right')
+    expect(commands.at(-1)?.type==='seek'&&commands.at(-1).value>25,tone+' native keyboard seeking stopped committing')
+    expect(slider.matches(':focus-visible')&&getComputedStyle(slider).outlineStyle==='solid',tone+' tray slider has no focus ring')
+    const rect=slider.getBoundingClientRect()
+    await ipc.invoke('control-click',{x:rect.x+rect.width*.6,y:rect.y+2});await flush()
+    expect(commands.at(-1)?.type==='seek'&&commands.at(-1).value>40,tone+' padded progress target did not accept a native pointer seek')
+    stateListener(EMPTY_MINI_PLAYER_STATE);await flush()
+  }
+  delete root.dataset.theme
+  app.unmount();expect(!preferenceListener&&!stateListener,'tray leaked state or motion listener')
 }
 `

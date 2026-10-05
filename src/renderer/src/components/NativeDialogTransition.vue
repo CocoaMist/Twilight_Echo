@@ -20,28 +20,42 @@ function transition(element: Element, done: () => void, leaving: boolean): void 
   }
   let frame = 0
   let timer: ReturnType<typeof setTimeout> | undefined
+  let cancelled = false
+  const phase = `${props.overlay ? 'overlay-dialog' : 'native-dialog'}-${leaving ? 'leave' : 'enter'}-to`
   const cancel = (): void => {
+    cancelled = true
     cancelAnimationFrame(frame)
     clearTimeout(timer)
-    element.removeEventListener('transitionend', ended)
     pending.delete(element)
   }
   const finish = (): void => {
+    if (cancelled) return
     cancel()
     done()
   }
-  const ended = (event: Event): void => {
-    if (event.target === element && (event as TransitionEvent).propertyName === 'opacity') finish()
-  }
   pending.set(element, { finish, cancel })
-  element.addEventListener('transitionend', ended)
-  // Vue removes enter-from / applies leave-to on its second animation frame.
-  frame = requestAnimationFrame(() => {
-    frame = requestAnimationFrame(() => {
-      const duration = documentMotionMode() === 'reduced' ? 120 : leaving ? 160 : 200
-      timer = setTimeout(finish, duration + 30)
-    })
-  })
+  // Bind completion to this phase's animation; a queued enter event may arrive
+  // after leave has already installed its completion handler.
+  const capture = (): void => {
+    if (cancelled) return
+    if (!element.classList.contains(phase)) {
+      frame = requestAnimationFrame(capture)
+      return
+    }
+    getComputedStyle(element).getPropertyValue('opacity')
+    const animations = element
+      .getAnimations()
+      .filter(
+        (animation) =>
+          animation instanceof CSSTransition && animation.transitionProperty === 'opacity'
+      )
+    const duration = documentMotionMode() === 'reduced' ? 120 : leaving ? 160 : 200
+    timer = setTimeout(finish, duration + 30)
+    if (animations.length) {
+      void Promise.all(animations.map((animation) => animation.finished)).then(finish, finish)
+    }
+  }
+  frame = requestAnimationFrame(capture)
 }
 function enter(element: Element, done: () => void): void {
   transition(element, done, false)

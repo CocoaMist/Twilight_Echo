@@ -330,7 +330,7 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'colors',
     'settings',
     'color',
-    '#8a8f98',
+    '#626b78',
     '#9b9b9b'
   ),
   token(

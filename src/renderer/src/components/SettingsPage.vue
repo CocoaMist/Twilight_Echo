@@ -1342,7 +1342,7 @@ html[data-theme='dark'] .settings-preview-page {
      single settings wallpaper painter, so the page stays transparent in every
      theme — a second image copy here would drift into split bands again. */
   background: transparent;
-  color: var(--te-text);
+  color: var(--te-settings-text);
 }
 
 html[data-theme='dark'] .settings-preview-page::-webkit-scrollbar-thumb {
@@ -1354,15 +1354,15 @@ html[data-theme='dark'] .settings-preview-page::-webkit-scrollbar-thumb:hover {
 }
 
 html[data-theme='dark'] .settings-preview-page .preview-nav-item {
-  color: var(--te-text-muted);
+  color: var(--te-settings-text-muted);
 }
 
 html[data-theme='dark'] .settings-preview-page .preview-nav-item:hover,
 html[data-theme='dark'] .settings-preview-page .preview-nav-item.active {
   border-color: rgba(var(--te-primary-rgb), 0.28);
   background: var(--te-card-bg);
-  color: var(--te-text);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  color: var(--te-settings-text);
+  box-shadow: none;
 }
 
 html[data-theme='dark'] .settings-preview-page .glass-card,
@@ -1372,10 +1372,7 @@ html[data-theme='dark'] .settings-preview-page .accordion-preview,
 html[data-theme='dark'] .settings-preview-page .dsp-module-card,
 html[data-theme='dark'] .settings-preview-page .dsp-meter,
 html[data-theme='dark'] .settings-preview-page .folder-chip,
-html[data-theme='dark'] .settings-preview-page .preview-select,
-html[data-theme='dark'] .settings-preview-page .preview-select.wide,
 html[data-theme='dark'] .settings-preview-page .select-control,
-html[data-theme='dark'] .settings-preview-page .number-input,
 html[data-theme='dark'] .settings-preview-page .path-control input,
 html[data-theme='dark'] .settings-preview-page .plugin-empty,
 html[data-theme='dark'] .settings-preview-page .range-pill,
@@ -1396,8 +1393,16 @@ html[data-theme='dark'] .settings-preview-page .settings-nav-search,
 html[data-theme='dark'] .settings-preview-page .read-only-pill {
   border-color: var(--te-card-border);
   background: var(--te-settings-control-bg);
-  color: rgba(226, 232, 240, 0.9);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  color: var(--te-settings-text);
+  box-shadow: none;
+}
+
+html[data-theme='dark'] .settings-preview-page .preview-select,
+html[data-theme='dark'] .settings-preview-page .number-input {
+  border-color: var(--te-settings-control-border);
+  background: var(--te-settings-control-bg);
+  color: var(--te-settings-text);
+  box-shadow: none;
 }
 
 html[data-theme='dark'] .settings-preview-page .folder-chip,
@@ -1409,8 +1414,8 @@ html[data-theme='dark'] .settings-preview-page .settings-nav-results,
 html[data-theme='dark'] .settings-preview-page .settings-nav-empty {
   border-color: var(--te-card-border);
   background: var(--te-card-bg);
-  color: rgba(226, 232, 240, 0.9);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
+  color: var(--te-settings-text);
+  box-shadow: var(--te-glass-shadow);
 }
 
 html[data-theme='dark'] .settings-preview-page .settings-nav-results button {
@@ -1454,15 +1459,15 @@ html[data-theme='dark'] .settings-preview-page .background-accordion-trigger,
 html[data-theme='dark'] .settings-preview-page .background-kind-toggle button,
 html[data-theme='dark'] .settings-preview-page .page-background-header,
 html[data-theme='dark'] .settings-preview-page .settings-search-box .settings-search-input {
-  color: rgba(148, 163, 184, 0.88);
+  color: var(--te-settings-text-muted);
 }
 
 html[data-theme='dark'] .settings-preview-page .segmented-control button.active,
 html[data-theme='dark'] .settings-preview-page .theme-segment button.active,
 html[data-theme='dark'] .settings-preview-page .background-kind-toggle button.active {
   background: var(--te-card-bg);
-  color: var(--te-text);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  color: var(--te-settings-text);
+  box-shadow: none;
 }
 
 html[data-theme='dark'] .settings-preview-page .dsp-signal-chain {
@@ -1474,7 +1479,7 @@ html[data-theme='dark'] .settings-preview-page .device-card:hover,
 html[data-theme='dark'] .settings-preview-page .device-card.active {
   border-color: rgba(var(--te-primary-rgb), 0.42);
   background: rgba(var(--te-primary-rgb), 0.1);
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.32);
+  box-shadow: none;
 }
 
 html[data-theme='dark'] .settings-preview-page .device-card > i {
@@ -1486,9 +1491,7 @@ html[data-theme='dark'] .settings-preview-page .device-card > i {
   border-radius: 10px;
   background: #07080a;
   color: var(--te-primary-400);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 10px 24px rgba(0, 0, 0, 0.26);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 html[data-theme='dark'] .settings-preview-page .device-capability-chip {
@@ -1540,7 +1543,7 @@ html[data-theme='dark'] .settings-preview-page .update-card strong,
 html[data-theme='dark'] .settings-preview-page .background-editor-head strong,
 html[data-theme='dark'] .settings-preview-page .page-background-copy strong,
 html[data-theme='dark'] .settings-preview-page .signal-node.active .signal-node-name {
-  color: var(--te-text);
+  color: var(--te-settings-text);
 }
 
 html[data-theme='dark'] .settings-preview-page .setting-copy span,
@@ -1569,12 +1572,12 @@ html[data-theme='dark'] .settings-preview-page .crossfeed-percent,
 html[data-theme='dark'] .settings-preview-page .diagnostic-chain,
 html[data-theme='dark'] .settings-preview-page .diagnostic-meta,
 html[data-theme='dark'] .settings-preview-page .mini-highres small {
-  color: rgba(148, 163, 184, 0.82);
+  color: var(--te-settings-text-muted);
 }
 
 html[data-theme='dark'] .settings-preview-page .background-options span {
   border-color: var(--te-card-border);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: none;
 }
 
 html[data-theme='dark'] .settings-preview-page .background-options button.active small {
@@ -1611,7 +1614,7 @@ html[data-theme='dark'] .settings-preview-page .dashed-button,
 html[data-theme='dark'] .settings-preview-page .folder-empty-hint {
   border-color: var(--te-card-border);
   background: var(--te-settings-control-bg);
-  color: rgba(203, 213, 225, 0.9);
+  color: var(--te-settings-text);
   box-shadow: none;
 }
 

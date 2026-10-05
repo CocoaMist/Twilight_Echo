@@ -29,14 +29,25 @@ test('rendered surfaces keep restrained default shadows and saved theme controls
         '../../assets/base.css',
         '../song-list/SongList.css',
         '../settings-page/SettingsPage.css',
+        '../SettingsPage.vue',
+        '../AnimatedInput.vue',
         '../PlayingMusic.vue'
       ].map(async (path) => {
         const source = await readFile(new URL(path, import.meta.url), 'utf8')
         const compiled = compileStyle({
-          source: path.endsWith('.vue') ? parse(source).descriptor.styles[0].content : source,
+          source: path.endsWith('.vue')
+            ? parse(source)
+                .descriptor.styles.filter((style) => !style.src)
+                .map((style) => style.content)
+                .join('\n')
+            : source,
           filename: path,
           id: 'data-v-test',
-          scoped: path !== '../../assets/base.css'
+          scoped: ![
+            '../../assets/base.css',
+            '../settings-page/SettingsPage.css',
+            '../SettingsPage.vue'
+          ].includes(path)
         })
         assert.deepEqual(compiled.errors, [])
         return compiled.code
@@ -72,7 +83,7 @@ test('rendered surfaces keep restrained default shadows and saved theme controls
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow}=require('electron')
+      `const {app,BrowserWindow,nativeTheme}=require('electron')
 app.setPath('userData',require('node:path').join(__dirname,'profile'))
 app.whenReady().then(async()=>{
   const win=new BrowserWindow({show:false,width:1080,height:900,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}})
@@ -89,6 +100,25 @@ app.whenReady().then(async()=>{
     win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab'})
     win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'})
     await win.webContents.executeJavaScript('window.checkDefaultSurfaceShadows()')
+    await win.webContents.debugger.sendCommand('DOM.enable')
+    await win.webContents.debugger.sendCommand('CSS.enable')
+    for(const system of ['light','dark']){
+      nativeTheme.themeSource=system
+      for(const tone of ['pureWhite','dark']){
+        await win.webContents.executeJavaScript('window.checkSettingsControls('+JSON.stringify(tone)+')')
+        win.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'})
+        win.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'})
+        await win.webContents.executeJavaScript('window.checkSettingsCheckboxKeyboard()')
+        const doc=await win.webContents.debugger.sendCommand('DOM.getDocument')
+        const node=await win.webContents.debugger.sendCommand('DOM.querySelector',{nodeId:doc.root.nodeId,selector:'#settings-disabled-toggle'})
+        await win.webContents.debugger.sendCommand('CSS.forcePseudoState',{nodeId:node.nodeId,forcedPseudoClasses:['hover']})
+        await new Promise(resolve=>setTimeout(resolve,250))
+        await win.webContents.executeJavaScript('window.checkDisabledSettingsHover()')
+        await win.webContents.debugger.sendCommand('CSS.forcePseudoState',{nodeId:node.nodeId,forcedPseudoClasses:[]})
+      }
+    }
+    await win.webContents.executeJavaScript('window.clearSettingsControls()')
+    nativeTheme.themeSource='system'
     if(process.env.TWILIGHT_SHADOW_VISUAL_DIR){
       const fs=require('node:fs'),path=require('node:path')
       fs.mkdirSync(process.env.TWILIGHT_SHADOW_VISUAL_DIR,{recursive:true})
@@ -129,7 +159,7 @@ app.whenReady().then(async()=>{
 })
 
 const runtime = `import {bootstrapThemeRuntime,useThemeStore} from '@renderer/stores/useThemeStore.ts'
-import {createDefaultThemeLibraryDocument,normalizeThemeProfile} from '@shared/theme.ts'
+import {createDefaultThemeLibraryDocument,normalizeThemeProfile,themeContrastRatio} from '@shared/theme.ts'
 const storageKey='player-theme-test-library'
 let library=JSON.parse(localStorage.getItem(storageKey)||'null')||{version:2,revision:0,savedAt:new Date(0).toISOString(),data:createDefaultThemeLibraryDocument()}
 const expect=(value,message)=>{if(!value)throw new Error(message)}
@@ -263,6 +293,65 @@ const mountSurfaces=()=>{
   for(const element of [surfaceFixture,...surfaceFixture.querySelectorAll('*')])element.setAttribute('data-v-test','')
   document.body.append(surfaceFixture)
 }
+const root=document.documentElement
+let controlsFixture,checkboxGeometry
+window.checkSettingsControls=async(tone)=>{
+  await store.setPreviewTone(tone)
+  root.dataset.teMotion='full'
+  controlsFixture?.remove()
+  controlsFixture=document.createElement('main')
+  controlsFixture.className='settings-preview-page settings-preview-layout'
+  controlsFixture.style.cssText='position:static;padding:16px'
+  controlsFixture.innerHTML='<div class="glass-card"><div class="setting-copy"><span id="settings-hint">设置说明</span></div><input id="settings-number" type="number" class="number-input" value="123"><select id="settings-select" class="preview-select"><option>主题</option></select><input id="settings-checkbox" type="checkbox" checked><button id="settings-disabled-toggle" class="toggle-switch inactive" disabled aria-label="Disabled setting"></button><div id="settings-search" class="settings-search-box"><span class="animated-input settings-search-input" data-v-test><input class="animated-input-field" data-v-test></span></div></div>'
+  document.body.append(controlsFixture)
+  await settle()
+  const css=element=>getComputedStyle(element)
+  const panel=controlsFixture.querySelector('.glass-card'),number=controlsFixture.querySelector('#settings-number'),select=controlsFixture.querySelector('#settings-select'),hint=controlsFixture.querySelector('#settings-hint'),checkbox=controlsFixture.querySelector('#settings-checkbox'),toggle=controlsFixture.querySelector('#settings-disabled-toggle')
+  expect(css(root).colorScheme===(tone==='dark'?'dark':'light'),'selected app tone does not own native color scheme')
+  for(const input of [number,select]){
+    checkShadow(input,'none',tone+' settings control stays flat: '+input.id)
+    expect((themeContrastRatio(css(input).color,css(input).backgroundColor)??0)>=4.5,tone+' settings control has low contrast: '+input.id)
+    input.focus()
+    expect(input.matches(':focus-visible')&&css(input).outlineStyle==='solid'&&css(input).outlineWidth==='2px',tone+' control lost keyboard focus feedback')
+  }
+  const search=controlsFixture.querySelector('#settings-search'),searchRoot=search.firstElementChild,searchField=searchRoot.firstElementChild;searchField.focus()
+  expect(searchField.matches(':focus-visible')&&css(search).outlineStyle==='solid'&&css(search).outlineWidth==='2px',tone+' search parent lost its focus ring')
+  expect(css(searchRoot).outlineStyle==='none'&&css(searchField).outlineStyle==='none',tone+' search paints a duplicate focus ring')
+  expect((themeContrastRatio(css(hint).color,css(panel).backgroundColor)??0)>=4.5,tone+' settings muted text has low contrast')
+  const rectangle=checkbox.getBoundingClientRect(),geometry=[rectangle.width,rectangle.height,css(checkbox).borderRadius,css(checkbox).appearance].join('|')
+  if(checkboxGeometry)expect(geometry===checkboxGeometry,'checkbox changes shape across app/system tones')
+  checkboxGeometry=geometry
+  expect(css(checkbox).appearance==='none'&&getComputedStyle(checkbox,'::after').content==='""','checkbox checked glyph disappeared')
+  checkbox.click();expect(!checkbox.checked,'checkbox lost native mouse activation')
+  expect((themeContrastRatio(css(checkbox).borderTopColor,css(checkbox).backgroundColor)??0)>=3,tone+' unchecked checkbox boundary has low contrast')
+  checkbox.disabled=true;checkbox.click();expect(!checkbox.checked,'disabled checkbox still toggles')
+  checkbox.disabled=false;checkbox.focus()
+  if(tone==='dark')expect((themeContrastRatio(getComputedStyle(toggle,'::after').backgroundColor,css(toggle).backgroundColor)??0)>=3,tone+' inactive toggle thumb has low contrast')
+  const changed=store.createProfile('Settings foregrounds')
+  changed.overrides={pureWhite:{'settings.text.primary':'#234567','settings.text.muted':'#456789','settings.control.surface':'#f1f5f9','settings.control.border':'#547698','color.neutral.500':'#56789a'},dark:{'settings.text.primary':'#e4edf6','settings.text.muted':'#b1c3d5','settings.control.surface':'#121c26','settings.control.border':'#87a9cb','color.neutral.500':'#bacdef'}}
+  await store.preview(changed);await settle()
+  expect(css(number).color===css(select).color,tone+' number and select foregrounds drifted')
+  const probe=document.createElement('div');probe.style.color='var(--te-settings-text-muted)';document.body.append(probe)
+  expect(css(hint).color===css(probe).color,tone+' saved settings muted override was lost');probe.style.color='var(--te-settings-text)'
+  expect(css(number).color===css(probe).color,tone+' saved control foreground override was lost');probe.style.backgroundColor='var(--te-settings-control-bg)'
+  expect(css(number).backgroundColor===css(probe).backgroundColor,tone+' saved control background override was lost');probe.style.border='1px solid var(--te-settings-control-border)'
+  expect(css(number).borderTopColor===css(probe).borderTopColor,tone+' saved control border override was lost');probe.style.borderColor='var(--te-neutral-500)'
+  expect(css(checkbox).borderTopColor===css(probe).borderTopColor,tone+' saved checkbox border override was lost');probe.remove()
+  await store.preview(null);await settle();checkbox.focus()
+}
+window.checkSettingsCheckboxKeyboard=()=>{
+  expect(controlsFixture.querySelector('#settings-checkbox').checked,'checkbox lost native keyboard activation')
+}
+window.checkDisabledSettingsHover=async()=>{
+  const toggle=controlsFixture.querySelector('#settings-disabled-toggle')
+  expect(getComputedStyle(toggle).scale==='none','disabled settings toggle reacts to hover')
+  toggle.disabled=false;toggle.setAttribute('aria-disabled','true');await settle()
+  expect(getComputedStyle(toggle).scale==='none','aria-disabled settings toggle reacts to hover')
+  toggle.removeAttribute('aria-disabled')
+  for(const mode of ['reduced','off']){root.dataset.teMotion=mode;await settle();expect(getComputedStyle(toggle).scale==='none','reduced/off settings toggle moves')}
+  root.dataset.teMotion='off'
+}
+window.clearSettingsControls=()=>{controlsFixture?.remove();controlsFixture=null}
 window.checkDefaultSurfaceShadows=async()=>{
   await boot()
   await store.setActive({kind:'builtin',id:'builtin:twilight-echo-default'})
@@ -280,6 +369,10 @@ window.checkDefaultSurfaceShadows=async()=>{
       checkShadow(element,'none',tone+' flat settings '+selector)
       expect(parseFloat(getComputedStyle(element).borderTopWidth)>0,tone+' settings border survives '+selector)
     }
+    const device=surfaceFixture.querySelector('.device-card'),icon=document.createElement('i');device.prepend(icon);device.classList.add('active');await settle()
+    checkShadow(device,'none',tone+' selected device stays flat')
+    expect(shadowLayers(icon).every(value=>value.includes('inset')),tone+' device icon adds a drop shadow')
+    device.classList.remove('active')
     const popup=surfaceFixture.querySelector('.settings-nav-results')
     expect(shadowLayers(popup).some(value=>!value.includes('inset')),tone+' floating search results keep elevation')
     mount('standard')

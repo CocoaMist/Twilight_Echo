@@ -615,6 +615,7 @@ html:is(
 }
 
 .settings-search-box {
+  --ai-focus-outline: none;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1127,7 +1128,7 @@ html:is(
 }
 
 @media (hover: hover) {
-  html[data-te-motion='full'] .toggle-switch:hover {
+  html[data-te-motion='full'] .toggle-switch:enabled:not([aria-disabled='true'], .disabled):hover {
     scale: 1.05;
   }
 }
@@ -1246,12 +1247,12 @@ html[data-te-motion='full'] .toggle-switch.active::after {
   height: 36px;
   flex-shrink: 0;
   max-width: 100%;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--te-settings-control-border);
   border-radius: 8px;
   outline: none;
-  background: var(--te-card-bg);
-  color: #374151;
-  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.05);
+  background: var(--te-settings-control-bg);
+  color: var(--te-settings-text);
+  box-shadow: none;
   font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
   font-weight: 650;
 }
@@ -1289,7 +1290,7 @@ html[data-te-motion='full'] .toggle-switch.active::after {
 
 .preview-select.wide {
   width: 160px;
-  background: #f9fafb;
+  background: var(--te-settings-control-bg);
   box-shadow: none;
 }
 

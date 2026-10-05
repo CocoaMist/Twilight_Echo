@@ -956,8 +956,8 @@ function deleteMenuPlaylist(): void {
 }
 
 .btn-play {
-  background: linear-gradient(135deg, var(--te-primary-500, #6366f1), #818cf8);
-  color: #fff;
+  background: var(--te-neutral-900);
+  color: var(--te-card-bg);
   border: none;
   padding: 12px 32px;
   border-radius: 999px;
@@ -966,13 +966,12 @@ function deleteMenuPlaylist(): void {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  box-shadow: 0 10px 24px rgba(var(--te-primary-rgb, 99, 102, 241), 0.3);
+  box-shadow: none;
   transition: transform 0.3s var(--te-ease-soft);
   cursor: pointer;
 }
 .btn-play:hover {
   transform: translateY(-2px) scale(1.02);
-  box-shadow: 0 14px 32px rgba(var(--te-primary-rgb, 99, 102, 241), 0.4);
 }
 
 .favorites-cover {
@@ -1023,7 +1022,7 @@ function deleteMenuPlaylist(): void {
   width: 24px;
   height: 24px;
   font-size: 24px;
-  color: #fff;
+  color: var(--te-neutral-900);
 }
 
 /* Feature Cards (Recent & Ranking portals) */
@@ -1489,16 +1488,6 @@ function deleteMenuPlaylist(): void {
   color: #fb7185 !important;
 }
 
-:global(html[data-theme='dark'] .library-view .btn-play) {
-  background: linear-gradient(135deg, var(--te-primary-500), var(--te-primary-400));
-  color: #111111;
-  box-shadow: 0 10px 24px rgba(var(--te-primary-rgb), 0.22);
-}
-
-:global(html[data-theme='dark'] .library-view .btn-play:hover) {
-  box-shadow: 0 14px 32px rgba(var(--te-primary-rgb), 0.3);
-}
-
 :global(html[data-theme='dark'] .library-view .recent-card),
 :global(html[data-theme='dark'] .library-view .ranking-card) {
   background: linear-gradient(135deg, rgba(31, 31, 31, 0.96) 0%, rgba(24, 24, 24, 0.84) 100%);
@@ -1547,7 +1536,7 @@ function deleteMenuPlaylist(): void {
 }
 
 :global(html[data-window-transparent='on'] .library-view .heart-icon) {
-  background: rgba(255, 255, 255, 0.1) !important;
+  background: var(--te-glass-bg) !important;
 }
 
 @keyframes library-in {
