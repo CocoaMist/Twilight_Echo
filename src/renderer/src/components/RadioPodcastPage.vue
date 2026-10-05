@@ -587,15 +587,16 @@ function formatDuration(seconds: number): string {
 
 <style scoped>
 .radio-podcast-page {
+  container: radio-podcast / inline-size;
   box-sizing: border-box;
   width: 100%;
-  height: 100vh;
+  height: 100dvh;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 52px clamp(24px, 5vw, 72px) 132px;
+  padding: var(--te-page-top) var(--te-page-gutter) var(--te-page-bottom);
   color: var(--te-text, #0f172a);
   scrollbar-width: thin;
   scrollbar-color: var(--te-scrollbar-thumb) transparent;
@@ -626,7 +627,6 @@ function formatDuration(seconds: number): string {
   margin-bottom: 28px;
 }
 
-.back-btn,
 .tabs button,
 .tool-card button,
 .podcast-subscribe-form button,
@@ -678,9 +678,9 @@ button:disabled {
 }
 .page-heading h1 {
   margin: 5px 0 4px;
-  font-size: clamp(25px, 3vw, 34px);
+  font-size: var(--te-page-title-size);
   letter-spacing: -0.045em;
-  line-height: 1.04;
+  line-height: 1.18;
 }
 .page-heading p,
 .card-heading p,
@@ -1141,9 +1141,9 @@ button.primary {
   background: color-mix(in srgb, var(--te-card-bg) 82%, transparent);
 }
 
-@media (max-width: 880px) {
+@container radio-podcast (max-width: 880px) {
   .page-header {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
   .tabs {
     grid-column: 1 / -1;
@@ -1164,27 +1164,9 @@ button.primary {
   }
 }
 
-@media (max-width: 680px) {
-  .radio-podcast-page {
-    padding: 38px 16px 120px;
-  }
+@container radio-podcast (max-width: 680px) {
   .page-header {
     gap: 14px;
-    padding: 52px 0 0;
-  }
-  .back-btn {
-    inset-block: 0 auto;
-    transform: none;
-  }
-  .back-btn:hover {
-    transform: translateX(-2px);
-  }
-  .page-heading {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-  .tabs {
-    grid-row: 3;
   }
   .radio-tools {
     grid-template-columns: 1fr;
@@ -1213,5 +1195,8 @@ button.primary {
   .episode-actions {
     justify-content: flex-start;
   }
+}
+:global(html[data-te-shell-layout='custom'] .radio-podcast-page) {
+  height: 100%;
 }
 </style>

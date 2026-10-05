@@ -203,18 +203,19 @@ function play(track: Track): void {
   min-height: 0;
 }
 .recent-playback-page :deep(.song-list) {
+  --te-page-top: 20px;
   height: 0 !important;
   flex: 1;
   min-height: 0;
-  padding-top: 24px;
 }
 .recent-scope-tabs {
   position: relative;
   z-index: 51;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
-  padding: 52px clamp(24px, 4vw, 60px) 0;
+  padding: var(--te-page-top) var(--te-page-gutter) 0;
 }
 button,
 select {
@@ -240,14 +241,12 @@ button:disabled {
   cursor: default;
 }
 .platform-history {
+  --te-page-top: 20px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 24px clamp(24px, 4vw, 60px) 40px;
+  padding: var(--te-page-top) var(--te-page-gutter) var(--te-page-bottom);
   color: var(--te-neutral-900);
-}
-.has-player .platform-history {
-  padding-bottom: 130px;
 }
 header {
   display: flex;
@@ -260,7 +259,8 @@ header > div {
 }
 h2 {
   margin: 0;
-  font-size: calc(var(--te-font-size-body, 14px) * 1.5);
+  font-size: var(--te-page-title-size);
+  line-height: 1.18;
 }
 p,
 small {
@@ -311,8 +311,5 @@ nav {
 }
 :global(html[data-te-shell-layout='custom'] .recent-playback-page) {
   height: 100%;
-}
-:global(html[data-te-shell-layout='custom'] .recent-scope-tabs) {
-  padding-top: 20px;
 }
 </style>

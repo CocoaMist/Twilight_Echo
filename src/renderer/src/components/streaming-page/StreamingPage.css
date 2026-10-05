@@ -25,6 +25,7 @@
    drags the scrollbar inward; padding leaves the scrollbar where it is and insets
    only the content. The identity transform stays as a compositing hint. */
 .streaming-content {
+  container: streaming-content / inline-size;
   flex: 0 0 100%;
   display: flex;
   flex-direction: column;
@@ -45,7 +46,7 @@
   min-height: 64px;
   padding: 12px 0 14px;
   flex-shrink: 0;
-  margin: calc(32px + 20px) clamp(36px, 6vw, 84px) 0;
+  margin: var(--te-page-top) var(--te-page-gutter) 0;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -79,11 +80,11 @@
 .streaming-content-body {
   flex: 0 0 auto;
   overflow: visible;
-  padding: 14px clamp(36px, 6vw, 84px) 34px;
+  padding: 14px var(--te-page-gutter) var(--te-page-bottom);
 }
 
 .streaming-page.has-player .streaming-content-body {
-  padding-bottom: 126px;
+  padding-bottom: var(--te-page-bottom);
 }
 
 .streaming-placeholder {
@@ -864,7 +865,7 @@
 
 .streaming-content-header {
   min-height: 82px;
-  margin: calc(32px + 20px) 40px 0;
+  margin: var(--te-page-top) var(--te-page-gutter) 0;
   padding: 20px 0 14px;
 }
 
@@ -880,7 +881,7 @@
 }
 
 .streaming-content-body {
-  padding: 16px 40px 36px;
+  padding: 14px var(--te-page-gutter) var(--te-page-bottom);
 }
 
 .streaming-search-box {
@@ -1040,15 +1041,15 @@
   color: rgba(82, 90, 122, 0.58);
 }
 
-@media (max-width: 900px) {
+@container streaming-content (max-width: 900px) {
   .streaming-content::before {
     inset: 12px;
   }
 
   .streaming-content-header,
   .streaming-content-body {
-    margin-left: 22px;
-    margin-right: 22px;
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
     padding-left: 0;
     padding-right: 0;
   }
@@ -1083,7 +1084,7 @@
 
 .streaming-content-header {
   min-height: 64px;
-  margin: calc(32px + 20px) clamp(36px, 6vw, 84px) 0;
+  margin: var(--te-page-top) var(--te-page-gutter) 0;
   padding: 12px 0 14px;
 }
 
@@ -1096,7 +1097,7 @@
 }
 
 .streaming-content-body {
-  padding: 14px clamp(36px, 6vw, 84px) 34px;
+  padding: 14px var(--te-page-gutter) var(--te-page-bottom);
 }
 
 .streaming-search-box {
@@ -1312,11 +1313,11 @@
   background: rgba(var(--te-primary-rgb), 0.14) !important;
 }
 
-@media (max-width: 900px) {
+@container streaming-content (max-width: 900px) {
   .streaming-content-header,
   .streaming-content-body {
-    margin-left: 24px;
-    margin-right: 24px;
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
     padding-left: 0;
     padding-right: 0;
   }
@@ -1436,8 +1437,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  min-height: 72px;
-  margin: calc(32px + 20px) clamp(36px, 6vw, 84px) 0;
+  min-height: 64px;
+  margin: var(--te-page-top) var(--te-page-gutter) 0;
   padding: 10px 0 14px;
   border: 0;
   border-bottom: 1px solid var(--bar-line);
@@ -1491,7 +1492,7 @@
   margin: 0;
   color: var(--bar-ink);
   font-family: var(--te-font-display), Georgia, 'Times New Roman', serif;
-  font-size: clamp(20px, 2.2vw, 26px);
+  font-size: var(--te-page-title-size);
   font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1.15;
@@ -1510,7 +1511,7 @@
 
 .streaming-content-header.is-detail .streaming-content-title,
 .streaming-content-header.is-searching .streaming-content-title {
-  font-size: clamp(18px, 2vw, 22px);
+  font-size: var(--te-page-title-size);
 }
 
 .streaming-header-right {
@@ -1664,14 +1665,14 @@
   border-bottom-color: var(--bar-line) !important;
 }
 
-@media (max-width: 900px) {
+@container streaming-content (max-width: 900px) {
   .streaming-content-header {
     align-items: flex-start;
     flex-direction: column;
     gap: 12px;
     min-height: 0;
-    margin-left: 22px;
-    margin-right: 22px;
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
   }
 
   .streaming-header-right {
@@ -1686,7 +1687,7 @@
 }
 
 /* ── Narrow-window adaptation ────────────────────────────────────────── */
-@media (max-width: 900px) {
+@container streaming-content (max-width: 900px) {
   .playlist-grid {
     grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
     gap: 12px 10px;
@@ -1707,7 +1708,7 @@
   }
 }
 
-@media (max-width: 640px) {
+@container streaming-content (max-width: 640px) {
   .playlist-grid {
     grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
     gap: 10px 8px;

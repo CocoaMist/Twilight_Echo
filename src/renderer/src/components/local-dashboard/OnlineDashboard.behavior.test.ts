@@ -170,8 +170,10 @@ window.previewOnlineHome=async({dark,mode})=>{document.documentElement.dataset.t
 let refreshProbe=null
 window.prepareRefreshProbe=async motion=>{
  document.documentElement.dataset.teMotion=motion
- await window.previewOnlineHome({dark:false,mode:'ready'});await new Promise(resolve=>setTimeout(resolve,220))
+ await window.previewOnlineHome({dark:false,mode:'ready'})
  const results=document.querySelector('.online-results'),first=document.querySelector('.online-recommendations .online-track'),footer=document.querySelector('.online-footer')
+ await Promise.all(results.getAnimations().map(animation=>animation.finished))
+ expect(getComputedStyle(results).opacity==='1','Refresh baseline is not fully visible')
  refreshProbe={results,first,height:results.getBoundingClientRect().height,footerTop:footer.getBoundingClientRect().top,motion}
  document.querySelector('.online-home').scrollTop=document.querySelector('.online-discovery').offsetTop-24
  refreshProbe.footerTop=footer.getBoundingClientRect().top
@@ -187,9 +189,19 @@ window.beginRefreshProbe=async()=>{
  expect(styles.transitionDuration===expected,'Wrong refresh duration for '+refreshProbe.motion+': '+styles.transitionDuration)
  expect(styles.transform==='none','Refresh moves the result container')
  expect(document.querySelector('.online-sr-only[role="status"]').textContent.includes('正在刷新'),'Refresh status missing')
- await pause()
+ // Sample the real CSS transition by timeline position, not a wall-clock delay:
+ // a busy/offscreen compositor can start its first frame after the old 60ms sample.
+ const animations=refreshProbe.results.getAnimations(),transition=animations.find(animation=>animation.transitionProperty==='opacity')
+ if(refreshProbe.motion==='off')expect(!transition,'Off motion still animates refresh opacity')
+ else{
+  expect(transition,'Refresh opacity transition is missing')
+  const duration=transition.effect.getTiming().duration
+  expect(duration===parseFloat(expected)*1000,'Refresh opacity timeline has the wrong duration')
+  transition.pause();transition.currentTime=duration/2
+ }
  const opacity=Number(getComputedStyle(refreshProbe.results).opacity)
- expect(opacity>=0.65&&opacity<1,'Refresh opacity did not respond')
+ expect(opacity>=0.65&&opacity<1,'Refresh opacity did not respond in '+refreshProbe.motion+': '+opacity)
+ if(transition){transition.currentTime=transition.effect.getTiming().duration;expect(Math.abs(Number(getComputedStyle(refreshProbe.results).opacity)-0.65)<0.0001,'Refresh opacity has the wrong pending target');transition.play()}
  expect(Math.abs(refreshProbe.results.getBoundingClientRect().height-refreshProbe.height)<1,'Pending refresh collapsed result geometry')
  expect(Math.abs(document.querySelector('.online-footer').getBoundingClientRect().top-refreshProbe.footerTop)<1,'Pending refresh moved footer')
 }
@@ -200,7 +212,7 @@ window.finishRefreshProbe=async()=>{
  expect(document.querySelector('.online-discovery').getAttribute('aria-busy')==='false','Refresh remained busy')
  expect(Math.abs(refreshProbe.results.getBoundingClientRect().height-refreshProbe.height)<1,'Successful refresh changed stable geometry')
  expect(Math.abs(document.querySelector('.online-footer').getBoundingClientRect().top-refreshProbe.footerTop)<1,'Successful refresh moved footer')
- await new Promise(resolve=>setTimeout(resolve,180));expect(getComputedStyle(refreshProbe.results).opacity==='1','Refresh did not settle visibly')
+ await Promise.all(refreshProbe.results.getAnimations().map(animation=>animation.finished));expect(getComputedStyle(refreshProbe.results).opacity==='1','Refresh did not settle visibly')
 }
 let initialProbe=null
 window.prepareInitialProbe=async()=>{

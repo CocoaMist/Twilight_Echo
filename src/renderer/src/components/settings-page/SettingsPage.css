@@ -1,13 +1,13 @@
 .settings-preview-page {
   position: fixed;
   /* Reserve the native title-bar strip so its controls always remain clickable. */
-  inset: 32px 0 0;
+  inset: var(--te-titlebar-inset, 35px) 0 0;
   z-index: 2000;
   width: 100%;
   height: auto;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 28px 48px 48px;
+  padding: 20px var(--te-page-gutter, clamp(16px, 3vw, 32px)) var(--te-page-bottom, 32px);
   /*
    * The page itself is transparent: the settings overlay root in App is the
    * SINGLE painter of the settings wallpaper. Earlier copies of the image here
@@ -55,29 +55,46 @@
 }
 
 .settings-preview-layout {
-  width: min(100%, 1280px);
+  display: grid;
+  grid-template-columns: 192px minmax(0, 896px);
+  gap: 20px 24px;
+  width: min(100%, 1112px);
   margin: 0 auto;
   position: relative;
-  display: block;
-  padding-top: 28px;
 }
 
 .settings-preview-nav {
-  position: fixed;
-  /* Horizontally center the 192px nav within the left gutter beside the 896px stack. */
-  left: max(24px, calc((100vw - min(100vw, 896px)) / 4 - 96px));
-  /* Vertically center the nav in the viewport while keeping a small top/bottom margin. */
-  top: 50%;
-  transform: translateY(-50%);
+  grid-column: 1;
+  grid-row: 2;
+  position: sticky;
+  top: 0;
+  align-self: start;
   z-index: 100;
   display: flex;
   width: 192px;
   height: auto;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  max-height: calc(100vh - 96px);
+}
+
+.settings-nav-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  max-height: calc(100vh - var(--te-titlebar-inset, 35px) - 160px);
+  overflow-y: auto;
+  corner-shape: inherit;
+}
+
+.settings-nav-links .preview-nav-item {
+  flex-shrink: 0;
+}
+
+.settings-nav-links .preview-nav-item:focus-visible {
+  outline-offset: -2px;
 }
 
 /* Liquid glass gives the fixed navigation its own readable surface. Keep the
@@ -327,8 +344,7 @@ html:is(
 }
 
 .settings-preview-page.settings-page-enter-active .settings-preview-nav {
-  /* Nav-specific arrive keyframes preserve translateY(-50%) centering. */
-  animation: te-settings-nav-arrive var(--te-motion-page) var(--te-ease-soft) both;
+  animation: te-settings-arrive var(--te-motion-page) var(--te-ease-soft) both;
   animation-delay: 0ms;
 }
 
@@ -576,24 +592,24 @@ html:is(
 }
 
 .settings-preview-stack {
+  grid-column: 2;
+  grid-row: 2;
   display: flex;
-  width: min(100%, 896px);
+  width: 100%;
   min-width: 0;
-  /* Keep the stack centered, then nudge it right to balance the fixed left nav gutter. */
-  margin: 0 auto 0 calc(50% - min(50%, 448px) + 56px);
   flex-direction: column;
   gap: 20px;
-  padding-bottom: 48px;
 }
 
 .settings-page-header {
-  padding: 8px 4px 0;
+  grid-column: 2;
+  padding: 0;
 }
 
 .settings-page-title {
   margin: 0;
   color: var(--te-settings-text, #1a1a1a);
-  font-size: calc(var(--te-font-size-body, 14px) * 2.42857);
+  font-size: var(--te-page-title-size, calc(var(--te-font-size-body, 14px) * 32 / 14));
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.15;
@@ -602,7 +618,7 @@ html:is(
 .settings-command-bar {
   display: grid;
   gap: 14px;
-  padding: 16px 18px;
+  padding: 0;
   border: none;
   background: transparent;
   box-shadow: none;
@@ -3090,19 +3106,6 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
   }
 }
 
-/* Like te-settings-arrive, but keeps fixed-nav translateY(-50%) on every frame. */
-@keyframes te-settings-nav-arrive {
-  from {
-    opacity: 0;
-    transform: translate3d(0, calc(-50% + 12px), 0) scale(0.992);
-  }
-
-  to {
-    opacity: 1;
-    transform: translate3d(0, -50%, 0) scale(1);
-  }
-}
-
 @keyframes te-settings-toggle-pop {
   45% {
     scale: 1.16;
@@ -3130,41 +3133,36 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
   }
 }
 
-@media (max-width: 1360px) {
-  .settings-preview-page {
-    padding: 0 24px 24px;
+@media (max-width: 1120px) {
+  .settings-preview-layout {
+    grid-template-columns: minmax(0, 896px);
+    width: min(100%, 896px);
   }
 
-  .settings-preview-layout {
-    display: flex;
-    flex-direction: column;
-    gap: 28px;
-    padding-top: 32px;
+  .settings-page-header,
+  .settings-preview-nav,
+  .settings-preview-stack {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .settings-preview-nav {
-    position: sticky;
-    top: 0;
-    left: auto;
+    display: grid;
+    grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
     width: 100%;
-    max-width: 896px;
-    margin-inline: auto;
-    flex: 0 0 auto;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-start;
-    min-height: auto;
-    flex-wrap: wrap;
-    overflow: visible;
-    padding: 12px;
+    padding: 8px;
     border-radius: 16px;
     background: var(--te-settings-control-bg);
-    transform: none;
   }
 
   .settings-nav-search-wrap {
-    flex: 1 0 100%;
-    margin-bottom: 4px;
+    margin-bottom: 0;
+  }
+
+  .settings-nav-links {
+    flex-direction: row;
+    max-height: none;
+    overflow-x: auto;
   }
 
   .preview-nav-item {
@@ -3173,16 +3171,11 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
     gap: 8px;
     padding-inline: 12px;
   }
-
-  .settings-preview-stack {
-    width: min(100%, 896px);
-    margin-inline: auto;
-  }
 }
 
 @media (max-width: 760px) {
-  .settings-preview-page {
-    padding: 0 16px 40px;
+  .settings-preview-nav {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .preview-section {
@@ -3909,12 +3902,10 @@ html[data-te-motion='full'] .signal-line.active::before {
 
 html[data-density='compact'] .settings-preview-stack {
   gap: 14px;
-  padding-bottom: 32px;
 }
 
 html[data-density='compact'] .settings-command-bar {
   gap: 10px;
-  padding: 12px 14px;
 }
 
 html[data-density='compact'] .settings-search-box {
@@ -3954,12 +3945,10 @@ html[data-density='compact'] .setting-copy {
 
 html[data-density='comfortable'] .settings-preview-stack {
   gap: 26px;
-  padding-bottom: 60px;
 }
 
 html[data-density='comfortable'] .settings-command-bar {
   gap: 18px;
-  padding: 20px 22px;
 }
 
 html[data-density='comfortable'] .settings-search-box {

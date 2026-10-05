@@ -408,6 +408,22 @@ onUnmounted(() => {
       <main class="main-content">
         <!-- Topbar -->
         <header class="topbar">
+          <h1 class="page-title">
+            {{
+              activeTab === 'installed'
+                ? '已安装扩展'
+                : activeTab === 'discover'
+                  ? '可用插件'
+                  : '可用更新'
+            }}
+            <span class="badge">{{
+              activeTab === 'installed'
+                ? filteredInstalled.length
+                : activeTab === 'discover'
+                  ? filteredIndex.length
+                  : updateEntries.length
+            }}</span>
+          </h1>
           <div class="search-box">
             <i class="pi pi-search"></i>
             <input
@@ -453,7 +469,7 @@ onUnmounted(() => {
         <div
           v-if="errorMsg"
           style="
-            margin: 0 32px 16px;
+            margin: 0 var(--te-page-gutter, 32px) 16px;
             padding: 12px 16px;
             background: var(--te-danger-soft-bg);
             border: 1px solid var(--te-danger-soft-fg);
@@ -471,7 +487,7 @@ onUnmounted(() => {
         <div
           v-if="warningMsg"
           style="
-            margin: 0 32px 16px;
+            margin: 0 var(--te-page-gutter, 32px) 16px;
             padding: 12px 16px;
             background: var(--te-warning-soft-bg, #fff7ed);
             border: 1px solid var(--te-warning-soft-fg, #c2410c);
@@ -489,10 +505,6 @@ onUnmounted(() => {
 
         <!-- Scroll Area: Installed -->
         <div class="scroll-area" v-if="activeTab === 'installed'">
-          <div class="page-title">
-            已安装扩展 <span class="badge">{{ filteredInstalled.length }}</span>
-          </div>
-
           <!-- Empty state -->
           <div
             v-if="filteredInstalled.length === 0"
@@ -668,12 +680,6 @@ onUnmounted(() => {
             </span>
           </div>
 
-          <div
-            class="page-title"
-            style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); margin-bottom: 16px"
-          >
-            可用插件 <span class="badge">{{ filteredIndex.length }}</span>
-          </div>
           <div class="market-filters">
             <label>
               <span>类型</span>
@@ -845,16 +851,6 @@ onUnmounted(() => {
 
         <!-- Scroll Area: Updates -->
         <div class="scroll-area" v-else-if="activeTab === 'updates'">
-          <div class="page-title">
-            可用更新
-            <span
-              v-if="updateEntries.length > 0"
-              class="badge"
-              style="background: var(--te-danger-soft-bg); color: var(--te-danger-soft-fg)"
-              >{{ updateEntries.length }}</span
-            >
-          </div>
-
           <!-- Empty state -->
           <div
             v-if="updateEntries.length === 0"
@@ -1009,6 +1005,8 @@ onUnmounted(() => {
 /* Sidebar */
 .sidebar {
   width: 240px;
+  flex-shrink: 0;
+  min-height: 0;
   /* Frosted surface: the bottom-most global background shows through. */
   background: transparent;
   backdrop-filter: blur(24px) saturate(180%);
@@ -1019,7 +1017,7 @@ onUnmounted(() => {
 }
 
 .sidebar-header {
-  padding: 56px 24px 24px 24px;
+  padding: var(--te-page-top, 55px) 24px 24px;
 }
 
 .sidebar-header h1 {
@@ -1040,6 +1038,8 @@ onUnmounted(() => {
 
 .nav-menu {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 0 16px;
   display: flex;
   flex-direction: column;
@@ -1128,17 +1128,21 @@ onUnmounted(() => {
 /* Main Content */
 .main-content {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: #fafaf9; /* 极浅暖灰背景，区分侧边栏 */
 }
 
 .topbar {
-  height: 104px;
-  padding: 32px 32px 0 32px;
-  display: flex;
+  flex-shrink: 0;
+  padding: var(--te-page-top, 55px) var(--te-page-gutter, clamp(16px, 3vw, 32px)) 20px;
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto;
+  gap: 12px;
   align-items: center;
-  justify-content: space-between;
   border-bottom: 0;
   background: transparent;
   z-index: 10;
@@ -1150,7 +1154,8 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.04);
   border-radius: 100px;
   padding: 8px 16px;
-  width: 300px;
+  min-width: 0;
+  width: min(100%, 360px);
   transition: background-color 0.2s var(--te-ease-soft);
 }
 
@@ -1217,6 +1222,8 @@ onUnmounted(() => {
 
 .top-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 12px;
 }
 
@@ -1257,15 +1264,19 @@ onUnmounted(() => {
 
 .scroll-area {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
-  padding: 32px;
+  overflow-x: hidden;
+  padding: 0 var(--te-page-gutter, clamp(16px, 3vw, 32px)) var(--te-page-bottom, 32px);
 }
 
 .page-title {
-  font-size: calc(var(--te-font-size-body, 14px) * 24 / 14);
-  font-weight: 700;
+  grid-column: 1 / -1;
+  font-size: var(--te-page-title-size, calc(var(--te-font-size-body, 14px) * 32 / 14));
+  font-weight: 600;
   color: var(--te-neutral-900, #111827);
-  margin-bottom: 24px;
+  margin: 0;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1589,5 +1600,50 @@ onUnmounted(() => {
   font-size: 180px;
   opacity: 0.1;
   transform: rotate(-15deg);
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    width: 192px;
+  }
+  .topbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .top-actions {
+    justify-content: flex-start;
+  }
+  .plugin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .plugin-window {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    padding-top: var(--te-page-top, 55px);
+    border-right: 0;
+    border-bottom: 1px solid var(--te-card-border);
+  }
+  .sidebar-header {
+    display: none;
+  }
+  .nav-menu {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-inline: var(--te-page-gutter, 16px);
+  }
+  .nav-item {
+    flex-shrink: 0;
+  }
+  .sidebar-footer {
+    padding: 8px var(--te-page-gutter, 16px);
+    border-top: 0;
+  }
+  .topbar {
+    padding-top: 20px;
+  }
 }
 </style>

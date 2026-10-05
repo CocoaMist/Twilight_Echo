@@ -54,7 +54,7 @@ test('native modal lifecycle and reversible settings disclosures preserve focus 
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'electron-user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1000,height:820,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runMotionTests()');if(process.env.TWILIGHT_MOTION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_MOTION_SCREENSHOTS,{recursive:true});for(const state of ['modal-enter','modal-leave','disclosure-expanded','disclosure-leave']){await win.webContents.executeJavaScript('window.prepareMotionFrame('+JSON.stringify(state)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_MOTION_SCREENSHOTS,state+'.png'),(await win.webContents.capturePage()).toPNG())}}console.log('DIALOG_DISCLOSURE_MOTION_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
+      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'electron-user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1360,height:820,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runMotionTests()');for(const [width,layout] of [[1000,'columns'],[640,'stack']]){win.setContentSize(width,820);await win.webContents.executeJavaScript('window.checkSettingsNavLayout('+JSON.stringify(layout)+')')}if(process.env.TWILIGHT_MOTION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_MOTION_SCREENSHOTS,{recursive:true});for(const state of ['modal-enter','modal-leave','disclosure-expanded','disclosure-leave']){await win.webContents.executeJavaScript('window.prepareMotionFrame('+JSON.stringify(state)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_MOTION_SCREENSHOTS,state+'.png'),(await win.webContents.capturePage()).toPNG())}}console.log('DIALOG_DISCLOSURE_MOTION_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
     const result = await promisify(execFile)(
       require('electron'),
@@ -151,21 +151,7 @@ window.runMotionTests=async()=>{
  expect(getComputedStyle(surface).cornerShape==='round','theme cannot opt out of the curve');root.style.removeProperty('--te-corner-shape')
  const fullscreen=document.createElement('div');fullscreen.className='onboarding-wizard';fullscreen.setAttribute('role','dialog');document.body.append(fullscreen)
  expect(getComputedStyle(fullscreen).cornerShape==='round'&&getComputedStyle(fullscreen).borderTopLeftRadius==='0px','fullscreen onboarding was treated as a rounded panel');fullscreen.remove()
- const nav=document.createElement('nav');nav.className='settings-preview-nav'
- const navItem=document.createElement('button');navItem.className='preview-nav-item';navItem.textContent='常规'
- const searchWrap=document.createElement('div');searchWrap.className='settings-nav-search-wrap'
- const navSearch=document.createElement('div');navSearch.className='settings-search-box settings-nav-search';searchWrap.append(navSearch);nav.append(searchWrap,navItem);document.body.append(nav)
- root.dataset.teSettingsNavigationLiquidGlass='on'
- for(const radius of [21,13,7,0]){
-  root.style.setProperty('--te-card-radius',radius+'px')
-  const style=getComputedStyle(nav),inset=parseFloat(style.paddingLeft)+parseFloat(style.borderLeftWidth),inner=Math.max(0,radius-inset)
-  for(const item of [navItem,navSearch]){
-   expect(parseFloat(getComputedStyle(item).borderTopLeftRadius)===inner,'nested radius ignores the parent inset: '+JSON.stringify({item:item.className,radius,inner,actual:getComputedStyle(item).borderTopLeftRadius,inset}))
-   expect(getComputedStyle(item).cornerShape===style.cornerShape,'nested curve differs from its parent')
-   if(radius>=inset)expect(Math.abs(item.getBoundingClientRect().left+inner-nav.getBoundingClientRect().left-radius)<.1,'nested corner centers are misaligned')
-  }
- }
- nav.remove();root.style.removeProperty('--te-card-radius');delete root.dataset.teSettingsNavigationLiquidGlass
+ await window.checkSettingsNavLayout('desktop')
  for(const mode of ['full','reduced','off']){
   document.documentElement.dataset.teMotion=mode;await nextTick();await new Promise(requestAnimationFrame);await open();if(mode!=='off')await until(()=>!modal().classList.contains('native-dialog-enter-from'),'entry never advanced');await pause(mode==='off'?30:30)
   const d=modal();if(mode!=='off')for(const a of d.getAnimations())a.currentTime=mode==='reduced'?45:70;const enter=getComputedStyle(d)
@@ -195,6 +181,29 @@ window.runMotionTests=async()=>{
   await pause(350);expect(Math.abs(following.getBoundingClientRect().top-initial)<1,'collapsed disclosure retained a gap');expect(!document.querySelector('#disclosure-input'),'closed content did not unmount')
  }
  document.documentElement.dataset.teMotion='full';await pause();trigger.click();await pause(70);trigger.click();await pause(50);const opacity=Number(getComputedStyle(panel).opacity);trigger.click();await nextTick();expect(Math.abs(Number(getComputedStyle(panel).opacity)-opacity)<.12,'reversal jumped to animation start');await pause(250);expect(!panel.inert&&document.querySelector('#disclosure-input'),'reversal removed reopened content');trigger.click();await pause(30);document.documentElement.dataset.teMotion='off';await pause(40);expect(getComputedStyle(panel).display==='none','live off preference did not finish disclosure');expect(Math.abs(following.getBoundingClientRect().top-initial)<1,'live off preference left projected geometry')
+}
+window.checkSettingsNavLayout=async(expectedLayout)=>{
+ const nav=document.createElement('nav');nav.className='settings-preview-nav'
+ const navItem=document.createElement('button');navItem.className='preview-nav-item';navItem.textContent='常规'
+ const searchWrap=document.createElement('div');searchWrap.className='settings-nav-search-wrap'
+ const navSearch=document.createElement('div');navSearch.className='settings-search-box settings-nav-search';searchWrap.append(navSearch);const links=document.createElement('div');links.className='settings-nav-links';links.append(navItem);nav.append(searchWrap,links);document.body.append(nav)
+ const root=document.documentElement;root.dataset.teSettingsNavigationLiquidGlass='on'
+ await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))
+ const layout=getComputedStyle(nav).display;expect(layout===(expectedLayout==='desktop'?'flex':'grid'),'navigation did not adopt the expected responsive layout')
+ for(const radius of [21,13,7,0]){
+  root.style.setProperty('--te-card-radius',radius+'px')
+  const style=getComputedStyle(nav),inset=parseFloat(style.paddingLeft)+parseFloat(style.borderLeftWidth),inner=Math.max(0,radius-inset)
+  for(const item of [navItem,navSearch]){
+   expect(parseFloat(getComputedStyle(item).borderTopLeftRadius)===inner,'nested radius ignores the parent inset: '+JSON.stringify({item:item.className,radius,inner,actual:getComputedStyle(item).borderTopLeftRadius,inset}))
+   expect(getComputedStyle(item).cornerShape===style.cornerShape,'nested curve differs from its parent')
+   if(radius>=inset&&(expectedLayout!=='columns'||item===navSearch))expect(Math.abs(item.getBoundingClientRect().left+inner-nav.getBoundingClientRect().left-radius)<.1,'nested corner centers are misaligned: '+JSON.stringify({expectedLayout,item:item.className,radius,inset,inner,navLeft:nav.getBoundingClientRect().left,itemLeft:item.getBoundingClientRect().left}))
+  }
+  const navRect=nav.getBoundingClientRect(),searchRect=navSearch.getBoundingClientRect(),itemRect=navItem.getBoundingClientRect(),linksRect=links.getBoundingClientRect()
+  expect(itemRect.left>=linksRect.left-.1&&itemRect.right<=linksRect.right+.1,'navigation item escaped its scroll container')
+  if(expectedLayout==='columns')expect(linksRect.left>=searchRect.right,'compact navigation columns overlap')
+  else expect(Math.abs(linksRect.left-navRect.left-inset)<.1,'navigation list no longer aligns with the panel inset')
+ }
+ nav.remove();root.style.removeProperty('--te-card-radius');delete root.dataset.teSettingsNavigationLiquidGlass
 }
 window.prepareMotionFrame=async(state)=>{
  for(const animation of document.getAnimations())animation.play();document.documentElement.dataset.teMotion='full';shown.value=false;expanded.value=false;await pause(380)

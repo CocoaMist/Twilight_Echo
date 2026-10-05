@@ -3,12 +3,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px clamp(36px, 6vw, 84px) 12px;
+  flex-wrap: wrap;
+  padding: 10px var(--te-page-gutter) 12px;
   margin-top: -8px;
 }
 
 .search-type-group {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -129,10 +131,10 @@
   -webkit-backdrop-filter: blur(var(--te-tp-card-blur)) saturate(145%);
 }
 
-@media (max-width: 900px) {
+@container streaming-content (max-width: 900px) {
   .streaming-search-tabs {
-    margin-left: 22px;
-    margin-right: 22px;
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
     padding-left: 0;
     padding-right: 0;
   }

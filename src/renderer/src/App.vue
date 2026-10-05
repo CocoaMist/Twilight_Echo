@@ -618,6 +618,7 @@ const playbackSessionPersistence = createPlaybackSessionPersistence({
   }
 })
 const {
+  playerBottomClearance,
   sideMenuBottomOffset,
   sideMenuToolsClearance,
   sideMenuInlineEnd,
@@ -630,6 +631,13 @@ const {
   hasPlayerBar,
   menuOpen
 })
+
+watch(
+  playerBottomClearance,
+  (clearance) =>
+    document.documentElement.style.setProperty('--te-playbar-bottom-clearance', `${clearance}px`),
+  { immediate: true }
+)
 
 let removePlaybackSessionSaveListener: (() => void) | null = null
 let removeAppNavigationListener: (() => void) | null = null
@@ -807,11 +815,7 @@ onMounted(async () => {
 watch(
   [showLocalSidebar, hasPlayerBar, menuOpen],
   () => {
-    if (
-      showLocalSidebar.value &&
-      hasPlayerBar.value &&
-      (menuOpen.value || sideMenuBottomOffset.value > 0)
-    ) {
+    if (hasPlayerBar.value) {
       nextTick(startSideMenuMonitor)
       return
     }

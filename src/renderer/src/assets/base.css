@@ -1,4 +1,8 @@
 :root {
+  --te-page-gutter: clamp(16px, 3vw, 32px);
+  --te-page-top: calc(var(--te-titlebar-inset, 35px) + 20px);
+  --te-page-title-size: calc(var(--te-font-size-body, 14px) * 32 / 14);
+  --te-page-bottom: calc(var(--te-playbar-bottom-clearance, 0px) + 32px);
   --te-dialog-backdrop: rgba(0, 0, 0, 0.35);
   --te-primary-500: #7c4dff;
   --te-primary-400: #a885f7;
@@ -222,6 +226,11 @@
   --te-scroll-top-border: rgba(15, 23, 42, 0.1);
   --te-scroll-top-color: #2563eb;
   --te-scroll-top-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+}
+
+html[data-te-shell-layout='custom'] {
+  --te-page-top: 20px;
+  --te-page-bottom: 32px;
 }
 
 /* Scrollbars stay visually absent until the pointer reaches the scroll edge or scrolling is active. */

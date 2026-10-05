@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs'
+import { stripTypeScriptTypes } from 'node:module'
 import { test } from 'node:test'
+import { runInNewContext } from 'node:vm'
 import assert from 'node:assert/strict'
 
 const styles = readFileSync(new URL('./settings-page/SettingsPage.css', import.meta.url), 'utf8')
@@ -19,6 +21,71 @@ const desktopLyricsSettingsSource = readFileSync(
   new URL('./settings-page/DesktopLyricsSettingsSection.vue', import.meta.url),
   'utf8'
 )
+
+test('section scrolling reserves sticky navigation height only when it overlays content', () => {
+  const declaration = pageSource.match(/function settingsSectionScrollOffset[\s\S]*?\n}/)?.[0]
+  assert.ok(declaration)
+  let position = 'sticky'
+  let navigationRect = { left: 32, right: 224, height: 600 }
+  const navigation = {
+    getBoundingClientRect: () => navigationRect,
+    get offsetHeight() {
+      return navigationRect.height
+    }
+  }
+  const page = { querySelector: () => navigation }
+  const offset = runInNewContext(
+    `${stripTypeScriptTypes(declaration)}\nsettingsSectionScrollOffset`,
+    {
+      SETTINGS_SECTION_SCROLL_OFFSET: 24,
+      getComputedStyle: () => ({ position })
+    }
+  )
+  const contentRect = { left: 248, right: 1000 }
+  assert.equal(offset(page, contentRect), 24)
+  navigationRect = { left: 32, right: 1000, height: 104 }
+  assert.equal(offset(page, contentRect), 128)
+  position = 'static'
+  assert.equal(offset(page, contentRect), 24)
+})
+
+test('section scroll coordinates ignore entrance transforms and viewport scrolling', () => {
+  const declaration = pageSource.match(/function settingsElementLayoutTop[\s\S]*?\n}/)?.[0]
+  assert.ok(declaration)
+  const page = { offsetTop: 35, scrollTop: 130 }
+  const layout = { offsetTop: 20, clientTop: 0, offsetParent: page }
+  const stack = { offsetTop: 88, clientTop: 1, offsetParent: layout }
+  const target = { offsetTop: 90, offsetParent: stack }
+  const layoutTop = runInNewContext(
+    `${stripTypeScriptTypes(declaration)}\nsettingsElementLayoutTop`
+  )
+  assert.equal(layoutTop(page, target), 199)
+  page.scrollTop = 222
+  assert.equal(layoutTop(page, target), 199)
+})
+
+test('opening default settings preserves its title while explicit links still navigate', () => {
+  const declaration = pageSource.match(/function applyNavigationTarget[\s\S]*?\n}/)?.[0]
+  assert.ok(declaration)
+  const props: { initialSection?: string; navigationTarget?: { entry: object } } = {}
+  const actions: string[] = []
+  const navigate = runInNewContext(`${stripTypeScriptTypes(declaration)}\napplyNavigationTarget`, {
+    pageRef: { value: {} },
+    props,
+    scrollToSection: (section: string) => actions.push(section),
+    scrollToSearchResult: () => actions.push('search')
+  })
+  navigate(true)
+  props.initialSection = 'general'
+  navigate(true)
+  assert.deepEqual(actions, [])
+  navigate()
+  props.initialSection = 'playback'
+  navigate(true)
+  props.navigationTarget = { entry: {} }
+  navigate(true)
+  assert.deepEqual(actions, ['general', 'playback', 'search'])
+})
 
 test('desktop lyrics is a navigable settings card', () => {
   assert.match(
@@ -146,7 +213,7 @@ test('native checkboxes share geometry across both tones and inherit the theme a
 test('settings wallpaper is painted once by the overlay root, never per element', () => {
   assert.match(
     styles,
-    /\.settings-preview-page\s*\{[\s\S]*?inset:\s*32px 0 0;[\s\S]*?z-index:\s*2000;[\s\S]*?height:\s*auto/
+    /\.settings-preview-page\s*\{[\s\S]*?inset:\s*var\(--te-titlebar-inset, 35px\) 0 0;[\s\S]*?z-index:\s*2000;[\s\S]*?height:\s*auto/
   )
   // The page stays transparent: per-element wallpaper copies relied on
   // `background-attachment: fixed`, which composited layers silently unpin —

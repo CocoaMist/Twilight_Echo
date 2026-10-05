@@ -786,6 +786,32 @@ const SETTINGS_SECTION_SCROLL_OFFSET = 24
 let programmaticScrollUntil = 0
 let programmaticScrollTimer: number | null = null
 
+function settingsSectionScrollOffset(page: HTMLElement, contentRect: DOMRect): number {
+  const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
+  const navigationRect = navigation?.getBoundingClientRect()
+  return (
+    SETTINGS_SECTION_SCROLL_OFFSET +
+    (navigation &&
+    navigationRect &&
+    getComputedStyle(navigation).position === 'sticky' &&
+    navigationRect.left < contentRect.right &&
+    navigationRect.right > contentRect.left
+      ? navigation.offsetHeight
+      : 0)
+  )
+}
+
+function settingsElementLayoutTop(page: HTMLElement, target: HTMLElement): number {
+  let top = 0
+  for (let element: HTMLElement | null = target; element && element !== page; ) {
+    top += element.offsetTop
+    const parent = element.offsetParent as HTMLElement | null
+    if (parent && parent !== page) top += parent.clientTop
+    element = parent
+  }
+  return top
+}
+
 function scrollPageToElement(
   target: HTMLElement,
   options: { block?: 'start' | 'center'; behavior?: ScrollBehavior } = {}
@@ -800,21 +826,15 @@ function scrollPageToElement(
     options.behavior ?? 'smooth',
     Boolean(page.querySelector(':focus-visible'))
   )
-  const pageRect = page.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
-  const targetTop = targetRect.top - pageRect.top + page.scrollTop
-  const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
-  const scrollOffset =
-    SETTINGS_SECTION_SCROLL_OFFSET +
-    (navigation && getComputedStyle(navigation).position === 'sticky'
-      ? navigation.getBoundingClientRect().height
-      : 0)
+  const targetTop = settingsElementLayoutTop(page, target)
+  const scrollOffset = settingsSectionScrollOffset(page, targetRect)
   const maxScrollTop = Math.max(0, page.scrollHeight - page.clientHeight)
   const nextTop =
     block === 'center'
       ? targetTop -
         scrollOffset -
-        Math.max(0, (page.clientHeight - scrollOffset - targetRect.height) / 2)
+        Math.max(0, (page.clientHeight - scrollOffset - target.offsetHeight) / 2)
       : targetTop - scrollOffset
 
   programmaticScrollUntil = performance.now() + (behavior === 'smooth' ? 700 : 0)
@@ -846,7 +866,7 @@ function scrollToSection(section: SectionKey): void {
   scrollPageToElement(el, { block: 'start' })
 }
 
-function applyNavigationTarget(): void {
+function applyNavigationTarget(initialOpen = false): void {
   if (!pageRef.value) return
   const target = props.navigationTarget
   if (target?.anchor) {
@@ -859,10 +879,11 @@ function applyNavigationTarget(): void {
     }
   }
   if (target?.entry) scrollToSearchResult(target.entry)
-  else scrollToSection(props.initialSection ?? 'general')
+  else if (!initialOpen || (props.initialSection ?? 'general') !== 'general')
+    scrollToSection(props.initialSection ?? 'general')
 }
 
-watch([() => props.initialSection, () => props.navigationTarget], applyNavigationTarget, {
+watch([() => props.initialSection, () => props.navigationTarget], () => applyNavigationTarget(), {
   flush: 'post'
 })
 
@@ -985,19 +1006,20 @@ function updateActiveSection(): void {
   if (!page) return
   const scrollTop = page.scrollTop
   if (sectionGeometryDirty) {
-    const pageTop = page.getBoundingClientRect().top
     sectionPositions = sections.flatMap((section) => {
       const el = page.querySelector<HTMLElement>(`#${section.key}`)
-      return el
-        ? [{ key: section.key, top: el.getBoundingClientRect().top - pageTop + scrollTop }]
-        : []
+      return el ? [{ key: section.key, top: settingsElementLayoutTop(page, el) }] : []
     })
     sectionGeometryDirty = false
   }
   let closest = activeSection.value
   let closestDistance = Number.POSITIVE_INFINITY
+  const contentRect = page.querySelector('.settings-preview-stack')?.getBoundingClientRect()
+  const scrollOffset = contentRect
+    ? settingsSectionScrollOffset(page, contentRect)
+    : SETTINGS_SECTION_SCROLL_OFFSET
   for (const section of sectionPositions) {
-    const distance = Math.abs(section.top - scrollTop - SETTINGS_SECTION_SCROLL_OFFSET)
+    const distance = Math.abs(section.top - scrollTop - scrollOffset)
     if (distance < closestDistance) {
       closest = section.key
       closestDistance = distance
@@ -1037,7 +1059,7 @@ onMounted(async () => {
   }, 5_000)
   await nextTick()
   if (settingsDisposed) return
-  applyNavigationTarget()
+  applyNavigationTarget(true)
 })
 
 onBeforeUnmount(() => {
@@ -1066,6 +1088,9 @@ onBeforeUnmount(() => {
       @change="handleSettingsBackupSelected"
     />
     <div class="settings-preview-layout">
+      <header class="settings-page-header">
+        <h1 class="settings-page-title">设置</h1>
+      </header>
       <nav
         class="settings-preview-nav"
         aria-label="设置分区"
@@ -1134,24 +1159,23 @@ onBeforeUnmount(() => {
             没有找到匹配的设置
           </div>
         </div>
-        <button
-          v-for="section in sections"
-          :key="section.key"
-          type="button"
-          class="preview-nav-item"
-          :class="{ active: activeSection === section.key }"
-          :aria-current="activeSection === section.key ? 'location' : undefined"
-          @click="scrollToSection(section.key)"
-        >
-          <i :class="section.icon"></i>
-          <span>{{ section.label }}</span>
-        </button>
+        <div class="settings-nav-links">
+          <button
+            v-for="section in sections"
+            :key="section.key"
+            type="button"
+            class="preview-nav-item"
+            :class="{ active: activeSection === section.key }"
+            :aria-current="activeSection === section.key ? 'location' : undefined"
+            @click="scrollToSection(section.key)"
+          >
+            <i :class="section.icon"></i>
+            <span>{{ section.label }}</span>
+          </button>
+        </div>
       </nav>
 
       <div class="settings-preview-stack">
-        <header class="settings-page-header">
-          <h1 class="settings-page-title">设置</h1>
-        </header>
         <section class="settings-command-bar glass-card">
           <div class="settings-command-actions">
             <button type="button" class="soft-button" @click="exportSettingsBackup">

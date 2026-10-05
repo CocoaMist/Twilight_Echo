@@ -831,15 +831,17 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           <p class="masthead-kicker">{{ dateKicker }} · 本地音乐库</p>
           <h1 class="masthead-title">{{ greeting }}</h1>
         </div>
-        <button v-if="hasLibrary" type="button" class="masthead-shuffle" @click="shuffleAll">
+        <button
+          v-if="hasLibrary"
+          type="button"
+          class="masthead-shuffle"
+          :title="`从 ${tracks.length} 首歌曲中随机播放`"
+          @click="shuffleAll"
+        >
           <span class="masthead-shuffle-icon" aria-hidden="true"
             ><i class="ph ph-shuffle"></i
           ></span>
-          <span class="masthead-shuffle-copy">
-            <strong>随机漫游</strong>
-            <small>从 {{ tracks.length }} 首收藏里抽一首</small>
-          </span>
-          <i class="ph ph-arrow-up-right masthead-shuffle-arrow" aria-hidden="true"></i>
+          <span class="masthead-shuffle-label">随机播放</span>
         </button>
       </header>
 
