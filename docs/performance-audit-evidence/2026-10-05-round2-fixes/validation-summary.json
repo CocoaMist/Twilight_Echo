@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-05",
+  "workspace": "D:/Project/Twilight_Echo",
+  "workingTree": "uncommitted",
+  "checks": [
+    { "command": "pnpm run test:audio-manager", "passed": 425, "failed": 0 },
+    { "command": "pnpm run test:playback-routing", "passed": 638, "failed": 0 },
+    { "command": "pnpm run test:lyrics-management", "passed": 361, "failed": 0 },
+    { "command": "pnpm run test:audio-toolchain", "passed": 87, "failed": 0 },
+    { "name": "round2 targeted tests", "passed": 112, "failed": 0 },
+    { "command": "pnpm run test:audio-engine:mingw", "nativeCTestRegistered": 39, "nativeCTestPassed": 38, "nativeCTestFailed": 0, "nativeCTestSkipped": ["twilight_asio_abi_cross_dll"], "loudnessPassed": 5, "loudnessFailed": 0 },
+    { "command": "pnpm run lint", "result": "passed" },
+    { "command": "pnpm run build", "result": "passed", "includes": ["node typecheck", "Vue typecheck", "production build", "renderer budget checks"] },
+    { "command": "git diff --check", "result": "passed" }
+  ],
+  "notes": [
+    "Test suites overlap; their counts must not be summed as unique coverage.",
+    "ASIO cross-DLL prerequisites are unavailable on this host.",
+    "No real-device endurance playback or multi-hour heap snapshots were performed.",
+    "Native timing records with activeCalls=0 measure bypass; they are excluded from active processing improvements."
+  ]
+}
