@@ -122,6 +122,21 @@ window.runMotionTests=async()=>{
  expect(getComputedStyle(surface).cornerShape==='round','theme cannot opt out of the curve');root.style.removeProperty('--te-corner-shape')
  const fullscreen=document.createElement('div');fullscreen.className='onboarding-wizard';fullscreen.setAttribute('role','dialog');document.body.append(fullscreen)
  expect(getComputedStyle(fullscreen).cornerShape==='round'&&getComputedStyle(fullscreen).borderTopLeftRadius==='0px','fullscreen onboarding was treated as a rounded panel');fullscreen.remove()
+ const nav=document.createElement('nav');nav.className='settings-preview-nav'
+ const navItem=document.createElement('button');navItem.className='preview-nav-item';navItem.textContent='常规'
+ const searchWrap=document.createElement('div');searchWrap.className='settings-nav-search-wrap'
+ const navSearch=document.createElement('div');navSearch.className='settings-search-box settings-nav-search';searchWrap.append(navSearch);nav.append(searchWrap,navItem);document.body.append(nav)
+ root.dataset.teSettingsNavigationLiquidGlass='on'
+ for(const radius of [21,13,7,0]){
+  root.style.setProperty('--te-card-radius',radius+'px')
+  const style=getComputedStyle(nav),inset=parseFloat(style.paddingLeft)+parseFloat(style.borderLeftWidth),inner=Math.max(0,radius-inset)
+  for(const item of [navItem,navSearch]){
+   expect(parseFloat(getComputedStyle(item).borderTopLeftRadius)===inner,'nested radius ignores the parent inset: '+JSON.stringify({item:item.className,radius,inner,actual:getComputedStyle(item).borderTopLeftRadius,inset}))
+   expect(getComputedStyle(item).cornerShape===style.cornerShape,'nested curve differs from its parent')
+   if(radius>=inset)expect(Math.abs(item.getBoundingClientRect().left+inner-nav.getBoundingClientRect().left-radius)<.1,'nested corner centers are misaligned')
+  }
+ }
+ nav.remove();root.style.removeProperty('--te-card-radius');delete root.dataset.teSettingsNavigationLiquidGlass
  for(const mode of ['full','reduced','off']){
   document.documentElement.dataset.teMotion=mode;await open();if(mode!=='off')await until(()=>!modal().classList.contains('native-dialog-enter-from'),'entry never advanced');await pause(mode==='off'?30:30)
   const d=modal();if(mode!=='off')for(const a of d.getAnimations())a.currentTime=mode==='reduced'?45:70;const enter=getComputedStyle(d)

@@ -814,15 +814,19 @@ The background gradient and accent colors are derived from the artwork. Pipeline
 | `space-48` | 48 pt | hero separation, lyrics line spacing     |
 | `space-64` | 64 pt | full-screen mode breathing room          |
 
-### Corner radii (concentric system 🟢 WWDC25 356)
+### Corner radii (project scale; concentric principle 🟢 WWDC25 356)
 
-| Token            | Value                           | Use                                       |
-| ---------------- | ------------------------------- | ----------------------------------------- |
-| `radius-10`      | 10 pt                           | artwork small (mini player)               |
-| `radius-14`      | 14 pt                           | artwork medium, buttons                   |
-| `radius-18`      | 18 pt                           | artwork hero, cards                       |
-| `radius-capsule` | h/2                             | transport buttons, sliders, pill controls |
-| Nested rule      | inner = parent radius − padding | any nested container                      |
+Apple describes fixed rounded rectangles, capsules, and concentric shapes in [WWDC25 — Get to know the new design system, 3:21–6:14](https://developer.apple.com/videos/play/wwdc2025/356/?time=201). Nested radii follow the parent's radius minus the inset; capsules use half the control height. Compact desktop controls retain rounded rectangles. The numerical scale below is an Echora choice, not an Apple HIG requirement or a published golden-ratio formula. CSS `superellipse(2)` is our web approximation of continuous corners, not Apple's proprietary geometry.
+
+| Token / rule         | Default                       | Use                                          |
+| -------------------- | ----------------------------- | -------------------------------------------- |
+| `--te-radius-global` | 13 px                         | standalone compact controls                  |
+| `--te-card-radius`   | 21 px                         | home and settings card surfaces              |
+| `--te-dialog-radius` | 21 px                         | dialog-panel fallback                        |
+| Capsule / circle     | h/2                           | transport buttons and existing pill controls |
+| Nested rule          | max(0, parent radius − inset) | include padding and border in the inset      |
+
+For example, settings navigation with a 21 px outer radius, 8 px padding and a 1 px border gives its nested search and navigation items a 12 px radius. Theme overrides change both levels together; standalone items use a fallback radius. A matching radius alone does not reproduce Apple's material: [HIG Materials](https://developer.apple.com/design/human-interface-guidelines/materials) reserves Liquid Glass for the controls/navigation layer and calls for standard materials in the content layer. Existing optional theme effects remain separate from this geometry change.
 
 ### Typography (iOS Large / default scale, SF Pro 🟢 HIG)
 
