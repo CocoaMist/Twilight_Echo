@@ -364,6 +364,9 @@ if(TAE_BUILD_TESTS)
   )
   target_include_directories(twilight_wsola_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME twilight_wsola_unit COMMAND twilight_wsola_tests)
+  add_executable(twilight_wsola_performance tests/wsola_performance.cpp dsp/WsolaResampler.cpp)
+  target_include_directories(twilight_wsola_performance PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME twilight_wsola_performance_gate COMMAND twilight_wsola_performance)
 
   add_executable(twilight_audio_buffer_tests
     tests/audio_buffer_tests.cpp
@@ -938,6 +941,7 @@ if(TAE_BUILD_TESTS)
     twilight_dsp_tests
     twilight_channel_router_tests
     twilight_wsola_tests
+    twilight_wsola_performance
     twilight_audio_buffer_tests
     twilight_diagnostic_log_tests
     twilight_native_dsp_plugin_tests

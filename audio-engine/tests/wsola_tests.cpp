@@ -75,14 +75,15 @@ int main() {
     resampler.reset();
     resampler.setRate(1.5);
     std::pair<double, size_t> state{0.0, 100000};
-    std::vector<float> out(4800 * 2);  // 100ms out
+    constexpr size_t kOutputFrames = 48000;  // 1s: amortize bounded search lookahead.
+    std::vector<float> out(kOutputFrames * 2);
     const size_t before = state.second;
-    const size_t got = resampler.processFn(out.data(), 4800, sinePull, &state);
-    assert(got == 4800);
+    const size_t got = resampler.processFn(out.data(), kOutputFrames, sinePull, &state);
+    assert(got == kOutputFrames);
     const size_t consumed = before - state.second;
-    // Expect roughly 1.5x source consumption (±25% for WSOLA grain granularity).
-    assert(consumed > static_cast<size_t>(4800 * 1.2));
-    assert(consumed < static_cast<size_t>(4800 * 1.9));
+    // Rate plus the prepared window/search lookahead, independent of callback size.
+    assert(consumed > static_cast<size_t>(kOutputFrames * 1.45));
+    assert(consumed < static_cast<size_t>(kOutputFrames * 1.60));
   }
 
   // 3) Pitch heuristic: 0.75x and 1.25x should keep ~440Hz period near unity.
@@ -117,10 +118,8 @@ int main() {
 
   // 4) Reset clears state, and the resampler still produces output afterwards.
   {
-    // A non-unity rate cannot emit anything until a full grain is available: the 32 ms
-    // window is 1536 frames at 48 kHz, and processImpl needs windowFrames_ + 2 before it
-    // will build one. The old 1000-frame budget was below that floor, so this only ever
-    // measured "returns 0 on starvation".
+    // Supply several complete grains so reset is checked with buffered overlap,
+    // rather than only exercising the zero-padded short-source path.
     constexpr size_t kSourceFrames = 8192;
     resampler.reset();
     resampler.setRate(2.0);
@@ -132,6 +131,69 @@ int main() {
     state = {0.0, kSourceFrames};
     const size_t got = resampler.processFn(out.data(), 256, sinePull, &state);
     assert(got == 256);
+  }
+
+  // Callback boundaries cannot alter the overlap or discard part of a hop.
+  for (int sr : {48000, 96000, 192000}) {
+    for (double rate : {0.5, 0.75, 1.5, 2.0}) {
+      const auto render = [&](size_t block) {
+        WsolaResampler r;
+        r.prepare(2, sr, block);
+        r.setRate(rate);
+        size_t cursor = 0;
+        const auto pull = [&](float* dst, size_t count) {
+          for (size_t i = 0; i < count; ++i, ++cursor) {
+            const float sample = static_cast<float>(0.4 * std::sin(cursor * 6.283185307179586 * 440 / sr));
+            dst[i * 2] = sample;
+            dst[i * 2 + 1] = -sample;  // Anti-phase channels must not cancel the search reference.
+          }
+          return count;
+        };
+        std::vector<float> out(16384 * 2);
+        for (size_t offset = 0; offset < 16384; offset += block) {
+          assert(r.process(out.data() + offset * 2, block, pull) == block);
+        }
+        return out;
+      };
+      const auto small = render(256);
+      const auto large = render(1024);
+      assert(small == large);
+      for (size_t i = 0; i < small.size(); i += 2) {
+        assert(std::isfinite(small[i]));
+        assert(std::abs(small[i] + small[i + 1]) < 1e-7);
+      }
+      const double period = estimatePeriodFrames(small.data() + sr / 25 * 2, 16384 - sr / 25, 2, sr);
+      assert(approxEqual(period, static_cast<double>(sr) / 440, static_cast<double>(sr) / 440 * 0.04));
+    }
+  }
+
+  // DC exposes missing overlap as a repeated window-shaped gain dip.
+  {
+    WsolaResampler r;
+    r.prepare(2, 96000, 256);
+    r.setRate(1.5);
+    const auto pull = [](float* dst, size_t count) { std::fill_n(dst, count * 2, 0.5f); return count; };
+    std::vector<float> out(16384 * 2);
+    assert(r.process(out.data(), 16384, pull) == 16384);
+    for (size_t i = 3072 * 2; i < out.size(); ++i) assert(std::abs(out[i] - 0.5f) < 1e-6);
+  }
+
+  // A short source must emit finite output and drain to EOF in bounded callbacks.
+  for (size_t sourceFrames : {size_t(1), size_t(511), size_t(1536), size_t(5000)}) {
+    WsolaResampler r;
+    r.prepare(2, 48000, 256);
+    r.setRate(0.75);
+    std::pair<double, size_t> state{0.0, sourceFrames};
+    std::vector<float> out(256 * 2);
+    size_t produced = 0;
+    bool drained = false;
+    for (int call = 0; call < 100; ++call) {
+      const size_t got = r.processFn(out.data(), 256, sinePull, &state);
+      for (size_t i = 0; i < got * 2; ++i) assert(std::isfinite(out[i]));
+      produced += got;
+      if (got == 0) { drained = true; break; }
+    }
+    assert(drained && produced > 0 && state.second == 0);
   }
 
   std::puts("wsola_tests: ok");

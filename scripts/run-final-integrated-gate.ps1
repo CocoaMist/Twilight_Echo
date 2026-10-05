@@ -1613,8 +1613,8 @@ function Assert-QueueBenchmarkEvidence {
     if (@($scenario.snapshotMetrics.samplesMs).Count -ne 3 -or
         @($scenario.windowMetrics.samplesMs).Count -ne 3 -or
         [int]$scenario.limits.mountedRows -ne 18 -or
-        [double]$scenario.limits.snapshotP95Ms -ne 2500 -or
-        [double]$scenario.limits.windowP95Ms -ne 250 -or
+        [double]$scenario.limits.snapshotP95Ms -ne [Math]::Max(16, [double]$scenario.queueLength / 1000 * 4) -or
+        [double]$scenario.limits.windowP95Ms -ne 8 -or
         [int64]$scenario.limits.windowHeapDeltaBytes -ne 8388608 -or
         [int64]$scenario.limits.snapshotHeavyBytes -ne 0) {
       throw "Queue benchmark execution contract mismatch for $($scenario.queueLength) rows"
@@ -1737,9 +1737,13 @@ function Invoke-NativeGate {
     $runLog = Resolve-SafeRelativePath -Root $script:CandidatePath -RelativePath ([string]$runRecord.log) -Label 'Native CTest run log'
     $listText = Get-Content -LiteralPath $listLog -Raw
     $runText = Get-Content -LiteralPath $runLog -Raw
-    if ($listText -notmatch 'Total Tests:\s*21') { throw 'CTest -N did not enumerate exactly 21 tests' }
-    if ($runText -notmatch '100% tests passed, 0 tests failed out of 21') {
-      throw 'CTest execution did not report 21/21 passing'
+    $cmakeSource = Get-Content -LiteralPath (Join-Path $script:CandidatePath 'audio-engine\CMakeLists.txt') -Raw
+    $nativeTestCount = [regex]::Matches($cmakeSource, 'add_test\(\s*NAME\s+twilight_[a-z0-9_]+').Count
+    if ($nativeTestCount -le 0 -or $listText -notmatch "Total Tests:\s*$nativeTestCount\b") {
+      throw "CTest -N did not enumerate all $nativeTestCount registered tests"
+    }
+    if ($runText -notmatch "100% tests passed(?:, 0 tests failed)? out of $nativeTestCount\b") {
+      throw "CTest execution did not report $nativeTestCount/$nativeTestCount passing"
     }
   }
 }

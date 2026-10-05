@@ -1,6 +1,7 @@
 #include "dsp/WsolaResampler.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -17,7 +18,7 @@ float hann(int i, int n) {
   return 0.5f *
          (1.0f - std::cos(
                      2.0f * 3.14159265358979323846f * static_cast<float>(i) /
-                     static_cast<float>(n - 1)));
+                     static_cast<float>(n)));
 }
 
 }  // namespace
@@ -34,9 +35,8 @@ void WsolaResampler::prepare(int channelCount, int sampleRate, size_t maxOutFram
   for (int i = 0; i < windowFrames_; ++i) window_[static_cast<size_t>(i)] = hann(i, windowFrames_);
 
   grainA_.assign(static_cast<size_t>(windowFrames_ * channels_), 0.0f);
-  // Mix staging needs room for ola tail + new grain.
-  grainB_.assign(static_cast<size_t>(windowFrames_ * 2 * channels_), 0.0f);
-  olaTail_.assign(static_cast<size_t>(windowFrames_ * 2 * channels_), 0.0f);
+  grainB_.assign(static_cast<size_t>(analysisHop_ * channels_), 0.0f);
+  olaTail_.assign(static_cast<size_t>(analysisHop_ * channels_), 0.0f);
 
   const size_t need =
       static_cast<size_t>(windowFrames_ * 4 + searchRadius_ * 2) +
@@ -44,6 +44,7 @@ void WsolaResampler::prepare(int channelCount, int sampleRate, size_t maxOutFram
   inputCapacity_ = need;
   input_.assign(inputCapacity_ * static_cast<size_t>(channels_), 0.0f);
   pullScratch_.assign(std::max<size_t>(512, maxOutFrames) * static_cast<size_t>(channels_), 0.0f);
+  overlapReference_.assign(static_cast<size_t>(analysisHop_ * channels_), 0.0f);
   reset();
 }
 
@@ -57,6 +58,8 @@ void WsolaResampler::reset() noexcept {
   inputWrite_ = 0;
   inputCount_ = 0;
   olaTailFrames_ = 0;
+  referenceReady_ = false;
+  readyRead_ = readyFrames_ = 0;
   sourceCursor_ = 0.0;
   if (!olaTail_.empty()) std::fill(olaTail_.begin(), olaTail_.end(), 0.0f);
 }
@@ -90,57 +93,76 @@ void WsolaResampler::popInput(size_t frames) {
   inputCount_ -= consume;
 }
 
-int WsolaResampler::findBestOffset(size_t searchCenter, int searchRadius, int templateLen) const noexcept {
-  if (templateLen <= 4 || inputCount_ < static_cast<size_t>(templateLen + searchRadius * 2 + 1)) {
-    return 0;
-  }
-  const int ch = channels_;
-  double bestScore = -1.0e300;
-  int bestOffset = 0;
-
-  double templateEnergy = 0.0;
-  for (int i = 0; i < templateLen; ++i) {
-    const float* f = inputFrame(searchCenter + static_cast<size_t>(i));
-    for (int c = 0; c < ch; ++c) {
-      const double v = f[c];
-      templateEnergy += v * v;
+int WsolaResampler::findBestOffset(size_t center, int radius, int length) const noexcept {
+  if (!referenceReady_ || length <= 4 || inputCount_ < static_cast<size_t>(windowFrames_) ||
+      center + static_cast<size_t>(windowFrames_) > inputCount_) return 0;
+  const int lo = -std::min(radius, static_cast<int>(center));
+  const int hi = std::min(radius, static_cast<int>(inputCount_ - center - windowFrames_));
+  if (hi <= lo) return lo;
+  // Bounded multi-resolution correlation. Keep channels separate: a mono sum
+  // would cancel anti-phase stereo and misalign multichannel material.
+  const int coarseStep = std::max(1, (hi - lo + 95) / 96);
+  const int stride = std::max(1, (length + 191) / 192);
+  double referenceEnergy = 0.0;
+  for (int i = 0; i < length; i += stride) {
+    for (int c = 0; c < channels_; ++c) {
+      const double a = overlapReference_[static_cast<size_t>(i * channels_ + c)];
+      referenceEnergy += a * a;
     }
   }
-  if (templateEnergy < 1.0e-12) return 0;
-
-  for (int offset = -searchRadius; offset <= searchRadius; ++offset) {
-    const int start = static_cast<int>(searchCenter) + offset;
-    if (start < 0) continue;
-    if (static_cast<size_t>(start + templateLen) > inputCount_) continue;
-    double corr = 0.0;
-    double candEnergy = 0.0;
-    for (int i = 0; i < templateLen; ++i) {
-      const float* a = inputFrame(searchCenter + static_cast<size_t>(i));
-      const float* b = inputFrame(static_cast<size_t>(start + i));
-      for (int c = 0; c < ch; ++c) {
-        const double av = a[c];
-        const double bv = b[c];
-        corr += av * bv;
-        candEnergy += bv * bv;
+  if (referenceEnergy < 1.0e-12) return 0;
+  const auto score = [&](int offset) {
+    double corr = 0.0, energy = 0.0;
+    const size_t start = static_cast<size_t>(static_cast<int>(center) + offset);
+    for (int i = 0; i < length; i += stride) {
+      const float* b = inputFrame(start + static_cast<size_t>(i));
+      const float* a = overlapReference_.data() + static_cast<size_t>(i * channels_);
+      for (int c = 0; c < channels_; ++c) {
+        corr += static_cast<double>(a[c]) * b[c];
+        energy += static_cast<double>(b[c]) * b[c];
       }
     }
-    if (candEnergy < 1.0e-12) continue;
-    const double score = corr / std::sqrt(templateEnergy * candEnergy);
-    if (score > bestScore) {
-      bestScore = score;
-      bestOffset = offset;
+    return energy < 1.0e-12 ? -2.0 : corr / std::sqrt(referenceEnergy * energy);
+  };
+  struct Candidate { int offset = 0; double score = -2.0; };
+  std::array<Candidate, 4> best{};
+  const auto consider = [&](int offset) {
+    const double value = score(offset);
+    for (size_t i = 0; i < best.size(); ++i) {
+      if (best[i].score > -2.0 && best[i].offset == offset) return;
+      if (value > best[i].score + 1.0e-10 ||
+          (std::abs(value - best[i].score) <= 1.0e-10 && std::abs(offset) < std::abs(best[i].offset))) {
+        for (size_t j = best.size() - 1; j > i; --j) best[j] = best[j - 1];
+        best[i] = {offset, value};
+        return;
+      }
     }
+  };
+  consider(0);
+  consider(hi);
+  for (int offset = lo; offset <= hi; offset += coarseStep) consider(offset);
+  const auto coarse = best;
+  const int middleStep = std::max(1, coarseStep / 4);
+  for (const auto& candidate : coarse) {
+    for (int offset = std::max(lo, candidate.offset - coarseStep);
+         offset <= std::min(hi, candidate.offset + coarseStep); offset += middleStep) consider(offset);
   }
-  return bestOffset;
+  const auto middle = best;
+  for (size_t i = 0; i < 2; ++i) {
+    for (int offset = std::max(lo, middle[i].offset - middleStep);
+         offset <= std::min(hi, middle[i].offset + middleStep); ++offset) consider(offset);
+  }
+  return best[0].offset;
 }
 
 void WsolaResampler::synthesizeGrain(float* grain, int grainLen, size_t inputOffset) const noexcept {
   const int ch = channels_;
   for (int i = 0; i < grainLen; ++i) {
     const float w = window_[static_cast<size_t>(i)];
-    const float* src = inputFrame(inputOffset + static_cast<size_t>(i));
+    const size_t frame = inputOffset + static_cast<size_t>(i);
+    const float* src = frame < inputCount_ ? inputFrame(frame) : nullptr;
     float* dst = grain + static_cast<size_t>(i * ch);
-    for (int c = 0; c < ch; ++c) dst[c] = src[c] * w;
+    for (int c = 0; c < ch; ++c) dst[c] = src ? src[c] * w : 0.0f;
   }
 }
 
@@ -148,7 +170,9 @@ void WsolaResampler::advanceRead(double sourceFrames) noexcept {
   sourceCursor_ += sourceFrames;
   const size_t whole = static_cast<size_t>(sourceCursor_);
   if (whole == 0) return;
-  const size_t consume = std::min(whole, inputCount_);
+  // Retain history for negative-offset candidates without changing the source clock.
+  const size_t history = static_cast<size_t>(searchRadius_);
+  const size_t consume = std::min(whole > history ? whole - history : 0, inputCount_);
   popInput(consume);
   sourceCursor_ -= static_cast<double>(consume);
 }
