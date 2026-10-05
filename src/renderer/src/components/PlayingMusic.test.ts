@@ -273,7 +273,8 @@ test('lyrics keep the full timeline mounted while the viewport follows the activ
     source,
     /import \{ createLyricViewportController \} from '\.\.\/utils\/lyricViewportController'/
   )
-  assert.match(renderedLines, /displayLyricLines\.value\.map/)
+  assert.match(renderedLines, /staticLyricLines\.value\.map/)
+  assert.doesNotMatch(renderedLines, /resolveLyricVoiceLayout/)
   // Focus mode is a layout concern: the window collapses rows, it never unmounts
   // them, so springs and measured heights survive a line leaving the window.
   assert.doesNotMatch(renderedLines, /getLyricFocusLineIndices|lyricFocusWindow/)

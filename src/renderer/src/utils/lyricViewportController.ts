@@ -119,6 +119,8 @@ function isDocumentHidden(): boolean {
 
 export function createLyricViewportController(options: LyricViewportControllerOptions) {
   const rows = new Map<number, RowState>()
+  const animatingRows = new Set<RowState>()
+  let orderedIndices: number[] | null = null
   const fallbackAlignPosition = options.alignPosition ?? LYRIC_ALIGN_POSITION
   const alignAnchor = options.alignAnchor ?? 'center'
 
@@ -165,7 +167,7 @@ export function createLyricViewportController(options: LyricViewportControllerOp
   }
 
   function layoutLines(): LyricLayoutLine[] {
-    const indices = [...rows.keys()].sort((left, right) => left - right)
+    const indices = (orderedIndices ??= [...rows.keys()].sort((left, right) => left - right))
     return indices.map((index) => {
       const row = rows.get(index) as RowState
       // Culled rows use `content-visibility: hidden`, which applies size
@@ -233,22 +235,29 @@ export function createLyricViewportController(options: LyricViewportControllerOp
       const row = rows.get(target.index)
       if (!row) continue
 
-      if (snap) {
+      const current = row.posY.getCurrentPosition()
+      const margin = stage.clientHeight * 2
+      const outsideMotionWindow =
+        (current + row.height < -margin || current > stage.clientHeight + margin) &&
+        (target.top + row.height < -margin || target.top > stage.clientHeight + margin)
+      if (snap || outsideMotionWindow) {
         row.posY.setPosition(target.top)
         row.scale.setPosition(target.scale)
+        animatingRows.delete(row)
       } else {
         // The delay is the cascade: identical springs, staggered departures.
         row.posY.setTargetPosition(target.top, target.delay)
         row.scale.setTargetPosition(target.scale)
+        if (!row.posY.arrived() || !row.scale.arrived()) animatingRows.add(row)
       }
 
       writeRowStatics(row, target.opacity, target.blur)
+      commitRow(row, stage.clientHeight)
     }
 
     if (snap) {
-      commitRows()
       hasCommittedLayout = true
-    } else scheduleFrame()
+    } else if (animatingRows.size) scheduleFrame()
   }
 
   function writeRowStatics(row: RowState, opacity: number, blur: number): void {
@@ -264,39 +273,30 @@ export function createLyricViewportController(options: LyricViewportControllerOp
   }
 
   /** Write spring positions to the DOM. Culled rows keep a top so a later browse cannot stack them. */
-  function commitRows(): boolean {
-    if (!stage) return true
-    const viewportHeight = stage.clientHeight
-    let settled = true
+  function commitRow(row: RowState, viewportHeight: number): void {
+    if (!row.ready) {
+      row.ready = true
+      row.element.style.setProperty('--lyric-line-ready', '1')
+    }
+    const top = row.posY.getCurrentPosition()
+    const scale = row.scale.getCurrentPosition()
 
-    for (const row of rows.values()) {
-      if (!row.ready) {
-        row.ready = true
-        row.element.style.setProperty('--lyric-line-ready', '1')
-      }
-      const top = row.posY.getCurrentPosition()
-      const scale = row.scale.getCurrentPosition()
-      if (!row.posY.arrived() || !row.scale.arrived()) settled = false
-
-      const inSight = isLyricLineInSight(top, row.height, viewportHeight)
-      if (inSight !== row.inSight) {
-        row.inSight = inSight
-        row.element.style.setProperty('--lyric-line-in-sight', inSight ? '1' : '0')
-      }
-
-      if (row.lastTop !== top || row.lastScale !== scale) {
-        row.lastTop = top
-        row.lastScale = scale
-        row.element.style.setProperty('--lyric-line-top', `${top.toFixed(2)}px`)
-        row.element.style.setProperty('--lyric-line-scale', (scale / 100).toFixed(5))
-      }
-      if (row.lastIntrinsicHeight !== row.height && row.height > 0) {
-        row.lastIntrinsicHeight = row.height
-        row.element.style.setProperty('contain-intrinsic-size', `auto ${row.height.toFixed(2)}px`)
-      }
+    const inSight = isLyricLineInSight(top, row.height, viewportHeight)
+    if (inSight !== row.inSight) {
+      row.inSight = inSight
+      row.element.style.setProperty('--lyric-line-in-sight', inSight ? '1' : '0')
     }
 
-    return settled
+    if (row.lastTop !== top || row.lastScale !== scale) {
+      row.lastTop = top
+      row.lastScale = scale
+      row.element.style.setProperty('--lyric-line-top', `${top.toFixed(2)}px`)
+      row.element.style.setProperty('--lyric-line-scale', (scale / 100).toFixed(5))
+    }
+    if (row.lastIntrinsicHeight !== row.height && row.height > 0) {
+      row.lastIntrinsicHeight = row.height
+      row.element.style.setProperty('contain-intrinsic-size', `auto ${row.height.toFixed(2)}px`)
+    }
   }
 
   function scheduleFrame(): void {
@@ -305,23 +305,26 @@ export function createLyricViewportController(options: LyricViewportControllerOp
       (now) => {
         cancelFrame = null
         if (isDocumentHidden()) {
-          for (const row of rows.values()) {
-            row.posY.setPosition(row.posY.getTargetPosition())
-            row.scale.setPosition(row.scale.getTargetPosition())
+          for (const row of animatingRows) {
+            row.posY.setPosition(row.posY.getDestinationPosition())
+            row.scale.setPosition(row.scale.getDestinationPosition())
+            if (stage) commitRow(row, stage.clientHeight)
           }
-          commitRows()
+          animatingRows.clear()
           lastFrameNow = null
           return
         }
 
         const delta = lastFrameNow == null ? 1 / 60 : Math.min(0.05, (now - lastFrameNow) / 1000)
         lastFrameNow = now
-        for (const row of rows.values()) {
+        for (const row of animatingRows) {
           row.posY.update(delta)
           row.scale.update(delta)
+          if (stage) commitRow(row, stage.clientHeight)
+          if (row.posY.arrived() && row.scale.arrived()) animatingRows.delete(row)
         }
 
-        if (commitRows()) lastFrameNow = null
+        if (animatingRows.size === 0) lastFrameNow = null
         else scheduleFrame()
       },
       FRAME_FALLBACK_MS,
@@ -378,6 +381,8 @@ export function createLyricViewportController(options: LyricViewportControllerOp
     cancelFollow()
     clearManualBrowseTimer()
     rows.clear()
+    animatingRows.clear()
+    orderedIndices = null
     scrollOffset = 0
     hasCommittedLayout = false
     activeTrackId = trackId
@@ -390,6 +395,8 @@ export function createLyricViewportController(options: LyricViewportControllerOp
       // Vue can run an older ref callback after its replacement has registered.
       if (current && current.element.isConnected === true) return
       rows.delete(index)
+      if (current) animatingRows.delete(current)
+      orderedIndices = null
       return
     }
 
@@ -403,6 +410,8 @@ export function createLyricViewportController(options: LyricViewportControllerOp
     // until the next committed layout has given it its own position so rapidly
     // switching tracks or seeking cannot briefly pile every new line together.
     element.style.setProperty('--lyric-line-ready', '0')
+    if (existing) animatingRows.delete(existing)
+    orderedIndices = null
 
     rows.set(index, {
       element,
@@ -517,6 +526,8 @@ export function createLyricViewportController(options: LyricViewportControllerOp
     cancelResize = null
     clearManualBrowseTimer()
     rows.clear()
+    animatingRows.clear()
+    orderedIndices = null
     stage = null
     scrollOffset = 0
     activeTrackId = ''
@@ -542,6 +553,7 @@ export function createLyricViewportController(options: LyricViewportControllerOp
     getRowScale: (index: number) => rows.get(index)?.scale.getCurrentPosition() ?? null,
     getRowTargetTop: (index: number) => rows.get(index)?.posY.getTargetPosition() ?? null,
     getScrollOffset: () => scrollOffset,
-    getInterludeDotsTop: () => interludeDotsTop
+    getInterludeDotsTop: () => interludeDotsTop,
+    getAnimatingRowCount: () => animatingRows.size
   }
 }

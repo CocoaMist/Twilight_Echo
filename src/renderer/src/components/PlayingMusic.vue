@@ -14,7 +14,8 @@ import { useVisualizationStore } from '../stores/useVisualizationStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useLyricsManagement } from '../stores/lyricsManagement'
 import CoverImg from './CoverImg.vue'
-import { buildLyricLines, findActiveLyricIndex } from '../utils/lyrics'
+import { findActiveLyricIndex } from '../utils/lyrics'
+import { createLyricContentCache } from '../utils/lyricContentCache.ts'
 import type { LyricLine } from '../utils/lyrics'
 import { isAmlTtml } from '../utils/amllTtml.ts'
 import { resolveLyricVoiceLayout } from '../utils/lyricVoiceLayout.ts'
@@ -269,7 +270,22 @@ function currentTrackId(): string {
   return currentTrack.value?.id ?? ''
 }
 
-const lyricVisibility = computed(() => lyricsManagement.document.value)
+const lyricVisibility = computed<{
+  showOriginal: boolean
+  showTranslation: boolean
+  showRomanization: boolean
+}>((previous) => {
+  const { showOriginal, showTranslation, showRomanization } = lyricsManagement.document.value
+  if (
+    previous &&
+    previous.showOriginal === showOriginal &&
+    previous.showTranslation === showTranslation &&
+    previous.showRomanization === showRomanization
+  )
+    return previous
+  return { showOriginal, showTranslation, showRomanization }
+})
+const buildCachedLyricLines = createLyricContentCache()
 const managedLyricOverride = computed(() => lyricsManagement.entryFor(currentTrack.value?.id ?? ''))
 const managedLyrics = computed(() =>
   projectManagedLyrics(
@@ -302,7 +318,7 @@ function usesManualManagedLayer(key: 'translationSelection' | 'romanizationSelec
   return selection === 'manual' || (selection == null && override?.source === 'manual')
 }
 const lyricLines = computed<LyricLine[]>(() => {
-  return buildLyricLines(
+  return buildCachedLyricLines(
     managedLyrics.value.original,
     managedLyrics.value.translation,
     managedLyrics.value.romanization,
@@ -408,26 +424,18 @@ watch(
 )
 
 watch(
-  () => [currentTrack.value?.id, lyricLines.value] as const,
+  () => [currentTrack.value?.id, displayLyricLines.value] as const,
   async ([trackId], previous) => {
     const [previousTrackId, previousLines] = previous ?? []
     if (trackId !== previousTrackId) {
       lyricViewport.activate(trackId ?? '')
-      await lyricViewport.recenter('snap')
-      return
     }
-
-    if (currentTrack.value && lyricLines.value !== previousLines) {
+    if (
+      trackId !== previousTrackId ||
+      (lyricsViewActive.value && displayLyricLines.value !== previousLines)
+    ) {
       await lyricViewport.recenter('snap')
     }
-  }
-)
-
-watch(
-  displayLyricLines,
-  async () => {
-    if (!lyricsViewActive.value) return
-    await lyricViewport.recenter('snap')
   },
   { flush: 'post' }
 )
@@ -493,13 +501,18 @@ watch(
   }
 )
 
-const renderedLyricLines = computed(() =>
+const staticLyricLines = computed(() =>
   displayLyricLines.value.map((line, index) => ({
     index,
     line,
-    singing: lyricHotIndices.value.has(index),
-    presented: lyricBufferedIndices.value.has(index),
     ariaLabel: resolveLyricVoiceLayout(line).ariaText || line.text
+  }))
+)
+const renderedLyricLines = computed(() =>
+  staticLyricLines.value.map((item) => ({
+    ...item,
+    singing: lyricHotIndices.value.has(item.index),
+    presented: lyricBufferedIndices.value.has(item.index)
   }))
 )
 
@@ -765,10 +778,12 @@ onBeforeUnmount(() => {
                   <span></span><span></span><span></span>
                 </div>
                 <div v-if="hasLyrics" class="lyrics-list">
+                  <!-- The keyed stage may remount with identical lyric content. -->
                   <button
                     v-for="item in renderedLyricLines"
                     :key="lyricRowKey(item)"
                     v-memo="[
+                      coverIdentity,
                       item.index === highlightedLyricIndex,
                       item.singing,
                       item.presented,

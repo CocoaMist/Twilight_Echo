@@ -1,5 +1,48 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+
+test('timeline retains the first later greater timestamp for unsorted and untimed input', () => {
+  const input = [8, null, 2, 8, 4, 11, 9, Number.NaN, 15]
+  const timeline = buildLyricTimeline(input.map((time) => line({ time })))
+  for (let index = 0; index < input.length; index++) {
+    const time = input[index]
+    if (time == null || !Number.isFinite(time)) {
+      assert.equal(timeline[index].endTime, null)
+    } else {
+      const next = input
+        .slice(index + 1)
+        .find((candidate) => candidate != null && Number.isFinite(candidate) && candidate > time)
+      assert.equal(timeline[index].endTime, next ?? time + LYRIC_TRAILING_LINE_SECONDS)
+    }
+  }
+})
+
+test('unchanged lyric membership reuses sets and never mutates the preceding state', () => {
+  const timeline = buildLyricTimeline([line({ time: 0 }), line({ time: 10 })])
+  const first = advanceLyricPlayhead(timeline, createLyricPlayheadState(), 1)
+  const next = advanceLyricPlayhead(timeline, first, 2)
+  assert.equal(next.hot, first.hot)
+  assert.equal(next.buffered, first.buffered)
+  const changed = advanceLyricPlayhead(timeline, next, 11)
+  assert.notEqual(changed.hot, next.hot)
+  assert.deepEqual([...first.hot], [0])
+  assert.deepEqual([...changed.hot], [1])
+})
+
+test('long untimed and descending timelines read timestamps a linear number of times', () => {
+  for (const timed of [false, true]) {
+    let reads = 0
+    const lines = Array.from({ length: 10000 }, (_, index) => ({
+      ...line({ time: null, timed }),
+      get time() {
+        reads++
+        return timed ? 10000 - index : null
+      }
+    }))
+    assert.equal(buildLyricTimeline(lines).length, lines.length)
+    assert.ok(reads <= lines.length * 5, `timestamp reads: ${reads}`)
+  }
+})
 import type { LyricLine } from './lyrics.ts'
 import {
   advanceLyricPlayhead,
