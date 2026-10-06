@@ -48,6 +48,7 @@ const features: { icon: string; label: string }[] = [
       <span></span><span></span><span></span><span></span><span></span>
     </div>
     <h1 class="onb-title"><em>一切就绪</em></h1>
+    <p class="onb-subtitle">这些功能已经在设置中等你探索——现在，让音乐开始吧。</p>
     <p v-if="scanText" class="onb-scan-status">
       <i class="ph ph-vinyl-record"></i>
       {{ scanText }}

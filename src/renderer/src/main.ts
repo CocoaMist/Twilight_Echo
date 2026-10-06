@@ -64,6 +64,7 @@ async function mountApp(): Promise<void> {
       return
     }
   }
+  await import('./assets/icon-fonts')
   const startupSnapshot = isSatelliteWindow ? null : beginStartupSnapshot()
   const rootComponent = isMiniPlayer
     ? (await import('./mini-player/MiniPlayerApp.vue')).default

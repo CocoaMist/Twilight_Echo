@@ -2,7 +2,7 @@
 import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
-import type { PlayerBarMode } from '../../../../shared/playerBar.ts'
+import { PLAYER_BAR_MODES, type PlayerBarMode } from '../../../../shared/playerBar.ts'
 import {
   DEFAULT_PLAYER_BAR_LAYOUT,
   clonePlayerBarLayout,
@@ -130,6 +130,7 @@ const chromeNote: Record<PlayerBarMode, string> = {
   >
     <span class="setting-copy">
       <strong>播放条按钮编排</strong>
+      <span>为每种形态分别决定左侧、中间、右侧各放哪些按钮，以及它们的先后顺序。</span>
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
@@ -243,7 +244,10 @@ const chromeNote: Record<PlayerBarMode, string> = {
         恢复默认
       </button>
     </div>
-    <p class="playbar-layout-note">按钮移至其他区域时会从原位置移除。至少保留一个播放控制。</p>
+    <p class="playbar-layout-note">
+      同一个按钮只会出现在一处：把它添加到别的一侧，就等于从原来那一侧移过去。播放控制至少要留一个，全部移除后会自动补回。
+      共 {{ PLAYER_BAR_MODES.length }} 种形态，各自独立编排。
+    </p>
   </SettingsDisclosure>
 </template>
 

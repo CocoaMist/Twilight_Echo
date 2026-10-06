@@ -11,8 +11,7 @@ const props = withDefaults(defineProps<{ percent: number; as?: 'div' | 'span' }>
 // per-frame updates stay inside this component so the parent does not re-render.
 const smoothedPercent = useSmoothedValue(toRef(props, 'percent'), {
   tau: 160,
-  snapThreshold: 2.5,
-  epsilon: 0.01
+  snapThreshold: 2.5
 })
 
 const fillStyle = computed(() => ({

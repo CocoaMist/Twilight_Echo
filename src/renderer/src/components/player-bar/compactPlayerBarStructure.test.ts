@@ -358,19 +358,36 @@ test('the artwork is resized to the strip and still clears the rail band', () =>
     .match(/\.player-bar\.player-bar-compact > \.compact-progress-rail\s*\{[^}]*\}/)?.[0]
     .match(/height:\s*(\d+)px/)
   const coverRule = playerBarCss.match(
-    /\.player-bar-shell\[data-te-playbar-mode='compact'\][^{]*\.player-cover-slot\s*\{[^}]*\}/
+    /\.player-bar-shell\[data-te-playbar-mode='compact'\][^{]*\.player-cover-placeholder\s*\{[^}]*\}/
   )
   assert.ok(barHeight, 'the compact strip must declare its height')
   assert.ok(railHeight, 'the compact rail must declare its hit band')
-  assert.ok(coverRule, 'compact must resize the artwork slot')
+  assert.ok(coverRule, 'compact must resize the artwork away from the standard 48px box')
+
+  // All three boxes have to move together: the slot clips, the loaded image sets
+  // its own size, and the placeholder is a third element on the same footprint —
+  // resizing only one of them leaves the artwork cropped or overflowing.
+  const subjects = coverRule[0]
+    .slice(0, coverRule[0].indexOf('{'))
+    .split(',')
+    .map((selector) => selector.trim().split(/\s+/).at(-1))
+  assert.deepEqual(subjects.sort(), [
+    '.player-cover',
+    '.player-cover-placeholder',
+    '.player-cover-slot'
+  ])
 
   const cover = Number(coverRule[0].match(/height:\s*(\d+)px/)?.[1])
   assert.ok(cover > 0, 'the compact artwork needs a real box')
-  assert.ok(cover < 52, `compact artwork ${cover}px must be smaller than the standard 52px`)
+  // Below the base bar's 48px, and small enough that the 4px region nudge still
+  // leaves it clear of the rail's pointer strip along the top edge.
+  assert.ok(cover < 48, `compact artwork ${cover}px must be smaller than the standard 48px`)
   assert.ok(
     (Number(barHeight[1]) - cover) / 2 + 4 > Number(railHeight[1]),
     `a ${cover}px cover in a ${barHeight[1]}px strip would sit inside the ${railHeight[1]}px rail band`
   )
+  // The corners come down with the box; the base 12px radius on a 44px tile reads
+  // as a squircle rather than as artwork.
   assert.match(coverRule[0], /border-radius:\s*\d+px/)
 })
 

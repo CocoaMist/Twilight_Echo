@@ -5,7 +5,8 @@
 </p>
 
 <p align="center">
-  开源桌面音乐播放器，支持本地音乐、在线音乐、高解析度音频和同步歌词。
+  <strong>收藏你喜欢的音乐，找到下一首心动。</strong><br />
+  一款集本地音乐、在线发现、沉浸歌词与 HiFi 播放于一体的开源桌面播放器。
 </p>
 
 <p align="center">
@@ -24,6 +25,8 @@
 </p>
 
 ![Twilight Echo 本地音乐主页：正在播放、曲库概览与随机漫游](./assets/screenshots/local-dashboard.png)
+
+<p align="center"><sub>从硬盘里的珍藏，到每日推荐里的新发现，让音乐陪你度过每一个日常。</sub></p>
 
 ## 下载与安装
 

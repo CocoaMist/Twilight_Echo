@@ -4,7 +4,7 @@ export type AppNoticeKind = 'info' | 'success' | 'warning' | 'error'
 
 export type AppNoticeAction = {
   label: string
-  run: () => void | Promise<unknown>
+  run: () => void
 }
 
 export type AppNotice = {
@@ -16,13 +16,10 @@ export type AppNotice = {
   action?: AppNoticeAction
   sticky?: boolean
   dedupeKey?: string
-  presentation: 'toast' | 'center'
 }
 
 const notices = ref<AppNotice[]>([])
 const noticeHistory = ref<AppNotice[]>([])
-const centerOpen = ref(false)
-const pendingActions = ref(new Set<number>())
 let nextNoticeId = 1
 const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const timerState = new Map<number, { remaining: number; started: number; pauses: Set<string> }>()
@@ -43,7 +40,7 @@ function scheduleAutoDismiss(notice: AppNotice, durationMs?: number): void {
   const pauses = timerState.get(notice.id)?.pauses ?? new Set<string>()
   clearDismissTimer(notice.id)
   timerState.delete(notice.id)
-  if (notice.sticky || notice.presentation === 'center') return
+  if (notice.sticky) return
   const delayMs = Math.max(2500, durationMs ?? 7000)
   timerState.set(notice.id, { remaining: delayMs, started: Date.now(), pauses })
   if (pauses.size) return
@@ -57,44 +54,10 @@ function scheduleAutoDismiss(notice: AppNotice, durationMs?: number): void {
   )
 }
 
-function appendHistory(notice: AppNotice): void {
-  const history = [...noticeHistory.value, notice]
-  while (history.length > 50) {
-    const ordinary = history.findIndex(
-      (item) => !item.action && ['info', 'success'].includes(item.kind)
-    )
-    const index = ordinary >= 0 ? ordinary : history.findIndex((item) => !item.action)
-    if (index < 0) break
-    history.splice(index, 1)
-  }
-  noticeHistory.value = history
-}
-
-function present(notice: AppNotice, durationMs?: number): void {
-  if (notice.presentation === 'center') {
-    clearDismissTimer(notice.id)
-    timerState.delete(notice.id)
-    notices.value = notices.value.filter((item) => item.id !== notice.id)
-    return
-  }
-  const existing = notices.value.some((item) => item.id === notice.id)
-  if (existing) notices.value = notices.value.map((item) => (item.id === notice.id ? notice : item))
-  else {
-    if (notices.value.length >= 4) {
-      clearDismissTimer(notices.value[0].id)
-      timerState.delete(notices.value[0].id)
-    }
-    notices.value = [...notices.value.slice(-3), notice]
-  }
-  scheduleAutoDismiss(notice, durationMs)
-}
-
 export function useAppNoticeStore() {
   /** Closing a deduped notice suppresses that exact message until it changes. */
   function dismissNotice(id: number): void {
-    const notice =
-      notices.value.find((item) => item.id === id) ??
-      noticeHistory.value.find((item) => item.id === id)
+    const notice = notices.value.find((item) => item.id === id)
     if (notice?.dedupeKey) suppressedDedupeMessages.set(notice.dedupeKey, notice.message)
     clearDismissTimer(id)
     timerState.delete(id)
@@ -121,48 +84,39 @@ export function useAppNoticeStore() {
     sticky?: boolean
     durationMs?: number
     dedupeKey?: string
-    presentation?: 'toast' | 'center'
   }): number {
     const message = input.message.trim()
     if (!message) return 0
     const dedupeKey = input.dedupeKey?.trim() || undefined
     const kind = input.kind ?? 'info'
     const sticky = input.sticky ?? (kind === 'error' || kind === 'warning' || !!input.action)
-    const presentation =
-      input.presentation ?? (kind === 'error' || input.action ? 'toast' : 'center')
 
     if (dedupeKey) {
       if (suppressedDedupeMessages.get(dedupeKey) === message) return 0
       suppressedDedupeMessages.delete(dedupeKey)
       // Update in place so a repeating source keeps one stable toast instead of
       // replacing it with a fresh id the user has to chase.
-      const existing =
-        notices.value.find((item) => item.dedupeKey === dedupeKey) ??
-        noticeHistory.value.find((item) => item.dedupeKey === dedupeKey)
+      const existing = notices.value.find((item) => item.dedupeKey === dedupeKey)
       if (existing) {
         const updated: AppNotice = {
           ...existing,
           kind,
           message,
           action: input.action,
-          sticky,
-          presentation
+          sticky
         }
-        if (
-          existing.message !== message ||
-          existing.kind !== kind ||
-          existing.action?.label !== input.action?.label
-        ) {
+        if (existing.message !== message || existing.kind !== kind) {
           updated.read = false
           updated.createdAt = Date.now()
           if (!noticeHistory.value.some((item) => item.id === existing.id)) {
-            appendHistory(updated)
+            noticeHistory.value = [...noticeHistory.value.slice(-49), updated]
           }
         }
+        notices.value = notices.value.map((item) => (item.id === existing.id ? updated : item))
         noticeHistory.value = noticeHistory.value.map((item) =>
           item.id === existing.id ? updated : item
         )
-        present(updated, input.durationMs)
+        scheduleAutoDismiss(updated, input.durationMs)
         return updated.id
       }
     }
@@ -175,62 +129,29 @@ export function useAppNoticeStore() {
       read: false,
       action: input.action,
       sticky,
-      dedupeKey,
-      presentation
+      dedupeKey
     }
-    appendHistory(notice)
-    present(notice, input.durationMs)
+    const evicted = notices.value.length >= 4 ? notices.value[0] : null
+    if (evicted) {
+      clearDismissTimer(evicted.id)
+      timerState.delete(evicted.id)
+    }
+    notices.value = [...notices.value.slice(-3), notice]
+    noticeHistory.value = [...noticeHistory.value.slice(-49), notice]
+    scheduleAutoDismiss(notice, input.durationMs)
     return notice.id
-  }
-
-  async function runNoticeAction(id: number): Promise<boolean> {
-    const notice =
-      noticeHistory.value.find((item) => item.id === id) ??
-      notices.value.find((item) => item.id === id)
-    const action = notice?.action
-    if (!action || pendingActions.value.has(id)) return false
-    pendingActions.value.add(id)
-    try {
-      await action.run()
-      const current =
-        noticeHistory.value.find((item) => item.id === id) ??
-        notices.value.find((item) => item.id === id)
-      if (current?.action === action) {
-        current.action = undefined
-        dismissNotice(id)
-      }
-      return true
-    } catch (error) {
-      pushNotice({
-        kind: 'error',
-        message: `${action.label}失败：${error instanceof Error ? error.message : '请重试'}`,
-        dedupeKey: `notice-action-${id}`,
-        presentation: 'center'
-      })
-      return false
-    } finally {
-      pendingActions.value.delete(id)
-    }
   }
 
   return {
     notices,
     noticeHistory,
-    centerOpen,
-    pendingActions,
     unreadCount: computed(() => noticeHistory.value.filter((notice) => !notice.read).length),
-    markHistoryRead: (ids?: number[]) => {
-      const selected = ids && new Set(ids)
-      for (const notice of noticeHistory.value)
-        if (!selected || selected.has(notice.id)) notice.read = true
+    markHistoryRead: () => {
+      for (const notice of noticeHistory.value) notice.read = true
     },
     clearHistory: () => {
       noticeHistory.value = []
     },
-    setCenterOpen: (value: boolean) => {
-      centerOpen.value = value
-    },
-    runNoticeAction,
     pauseNotice,
     resumeNotice,
     pushNotice,

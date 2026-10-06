@@ -130,13 +130,8 @@ watch(
 
 <style scoped>
 .plugin-extension-page {
-  height: 100vh;
-  min-height: 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: var(--te-page-top, 55px) var(--te-page-gutter, clamp(16px, 3vw, 32px)) 0;
+  min-height: 100vh;
+  padding: calc(32px + 46px) clamp(24px, 5vw, 76px) 120px;
   background: var(--te-subtle-bg);
 }
 
@@ -146,8 +141,6 @@ watch(
   grid-template-columns: 54px minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
-  flex-shrink: 0;
-  width: 100%;
   max-width: 960px;
   margin: 0 auto 20px;
 }
@@ -177,9 +170,7 @@ watch(
 .plugin-extension-heading h1 {
   margin: 3px 0;
   color: var(--te-neutral-900);
-  font-size: var(--te-page-title-size, calc(var(--te-font-size-body, 14px) * 32 / 14));
-  font-weight: 600;
-  overflow-wrap: anywhere;
+  font-size: calc(var(--te-font-size-body, 14px) * 28 / 14);
   line-height: 1.15;
 }
 
@@ -188,7 +179,6 @@ watch(
   color: var(--te-neutral-600);
   font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
   font-weight: 700;
-  overflow-wrap: anywhere;
 }
 
 .plugin-extension-action {
@@ -213,13 +203,8 @@ watch(
 }
 
 .plugin-extension-body {
-  flex: 1;
-  min-height: 0;
-  width: 100%;
   max-width: 960px;
   margin: 0 auto;
-  overflow-y: auto;
-  padding-bottom: var(--te-page-bottom, 32px);
 }
 
 .plugin-extension-loading,
@@ -316,16 +301,5 @@ watch(
   font-weight: 800;
   cursor: pointer;
   width: fit-content;
-}
-
-@media (max-width: 620px) {
-  .plugin-extension-header {
-    grid-template-columns: 54px minmax(0, 1fr);
-    gap: 12px;
-  }
-  .plugin-extension-action {
-    grid-column: 2;
-    justify-self: start;
-  }
 }
 </style>

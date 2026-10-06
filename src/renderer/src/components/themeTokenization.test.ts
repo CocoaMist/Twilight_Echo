@@ -297,8 +297,9 @@ test('phase two unified surface and background tokens are wired into host CSS', 
 })
 
 test('phase three icon, navigation, and library modes use static host-owned presentation', () => {
-  assert.match(rendererIconFonts, /import '\.\/icons\.css'/)
-  assert.doesNotMatch(rendererIconFonts, /@phosphor-icons\/web/)
+  assert.match(rendererIconFonts, /@phosphor-icons\/web\/regular/)
+  assert.match(rendererIconFonts, /@phosphor-icons\/web\/bold/)
+  assert.match(rendererIconFonts, /@phosphor-icons\/web\/fill/)
   assert.match(themeIcon, /THEME_ICON_SLOT_REGISTRY/)
   assert.match(themeIcon, /data-theme-icon-slot/)
   assert.match(sideMenu, /:icon-slot="page\.icon"/)

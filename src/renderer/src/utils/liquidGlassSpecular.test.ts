@@ -509,37 +509,3 @@ test('map url generation degrades to empty string without a DOM', () => {
   assert.equal(typeof globalThis.document, 'undefined')
   assert.equal(getSpecularMapUrl(NOMINAL_CARD_GEOMETRY), '')
 })
-
-test('highlight cache keeps eight recent maps and refreshes recency on a hit', (t) => {
-  clearSpecularMapCache()
-  let encodes = 0
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'document')
-  t.after(() => {
-    if (previous) Object.defineProperty(globalThis, 'document', previous)
-    else Reflect.deleteProperty(globalThis, 'document')
-    clearSpecularMapCache()
-  })
-  Object.defineProperty(globalThis, 'document', {
-    configurable: true,
-    value: {
-      createElement: () => ({
-        getContext: () => ({
-          createImageData: (width: number, height: number) => ({
-            data: new Uint8ClampedArray(width * height * 4)
-          }),
-          putImageData: () => {}
-        }),
-        toDataURL: () => `data:image/png;base64,${++encodes}`
-      })
-    }
-  })
-  const geometry = { width: 24, height: 16, radius: 4 }
-  const first = getSpecularMapUrl(geometry, 0)
-  for (let angle = 1; angle < 8; angle++) getSpecularMapUrl(geometry, angle)
-  assert.equal(encodes, 8)
-  assert.equal(getSpecularMapUrl(geometry, 0), first)
-  getSpecularMapUrl(geometry, 8)
-  assert.equal(getSpecularMapUrl(geometry, 0), first, 'recent hit survives eviction')
-  getSpecularMapUrl(geometry, 1)
-  assert.equal(encodes, 10, 'oldest map is regenerated after eviction')
-})

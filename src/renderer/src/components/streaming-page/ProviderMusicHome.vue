@@ -78,7 +78,8 @@ function count(value: number | undefined): string {
   >
     <div v-if="locked" class="music-state">
       <i class="pi pi-headphones"></i>
-      <h2>登录后查看推荐</h2>
+      <h2>你的音乐，在这里继续</h2>
+      <p>登录 {{ providerLabel }}，开启首页推荐。</p>
       <button class="music-primary" type="button" @click="emit('requestLogin')">
         登录 {{ providerLabel }}
       </button>
@@ -152,7 +153,7 @@ function count(value: number | undefined): string {
           <p class="music-hero-foot">
             {{
               heroLocked
-                ? '登录后查看每日推荐'
+                ? '登录后，加载属于你的每日推荐'
                 : hero.error ||
                   (hero.tracks.length
                     ? `${hero.tracks.length} 首 · ${providerLabel}`
@@ -236,7 +237,7 @@ function count(value: number | undefined): string {
         >
           <header>
             <div>
-              <p v-if="section.eyebrow" class="music-eyebrow">{{ section.eyebrow }}</p>
+              <p class="music-eyebrow">{{ section.eyebrow || 'KEEP EXPLORING' }}</p>
               <h2>{{ section.title }}</h2>
             </div>
             <button

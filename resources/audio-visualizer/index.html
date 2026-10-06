@@ -1456,64 +1456,32 @@
           </div>
 
           <button class="btn-circle" id="btn-prev" title="Previous Track">
-            <svg
-              width="16"
-              height="16"
-              aria-hidden="true"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 256 256"
-              fill="currentColor"
-            >
-              <path
-                d="M208,47.88V208.12a16,16,0,0,1-24.43,13.43L64,146.77V216a8,8,0,0,1-16,0V40a8,8,0,0,1,16,0v69.23L183.57,34.45A15.95,15.95,0,0,1,208,47.88Z"
-              />
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M11 5 3 12l8 7V5Zm10 0-8 7 8 7V5Z" />
             </svg>
           </button>
 
           <button class="btn-circle play-pause" id="btn-play-pause" title="Play / Pause Demo Synth">
-            <!-- Phosphor Core 2.1.1, MIT; see ../licenses/phosphor-icons.txt. -->
-            <svg
-              id="svg-play"
-              width="24"
-              height="24"
-              aria-hidden="true"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 256 256"
-              fill="currentColor"
-            >
-              <path
-                d="M240,128a15.74,15.74,0,0,1-7.6,13.51L88.32,229.65a16,16,0,0,1-16.2.3A15.86,15.86,0,0,1,64,216.13V39.87a15.86,15.86,0,0,1,8.12-13.82,16,16,0,0,1,16.2.3L232.4,114.49A15.74,15.74,0,0,1,240,128Z"
-              />
+            <!-- Play icon -->
+            <svg id="svg-play" viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M8 5v14l11-7z" />
             </svg>
             <!-- Pause icon -->
             <svg
               id="svg-pause"
+              viewBox="0 0 24 24"
               width="24"
               height="24"
-              style="display: none"
-              aria-hidden="true"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 256 256"
               fill="currentColor"
+              style="display: none"
             >
-              <path
-                d="M216,48V208a16,16,0,0,1-16,16H160a16,16,0,0,1-16-16V48a16,16,0,0,1,16-16h40A16,16,0,0,1,216,48ZM96,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16H96a16,16,0,0,0,16-16V48A16,16,0,0,0,96,32Z"
-              />
+              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
             </svg>
           </button>
 
           <button class="btn-circle" id="btn-next" title="Next Track / Audio Upload">
-            <svg
-              width="16"
-              height="16"
-              aria-hidden="true"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 256 256"
-              fill="currentColor"
-            >
-              <path
-                d="M208,40V216a8,8,0,0,1-16,0V146.77L72.43,221.55A15.95,15.95,0,0,1,48,208.12V47.88A15.95,15.95,0,0,1,72.43,34.45L192,109.23V40a8,8,0,0,1,16,0Z"
-              />
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="m3 5 8 7-8 7V5Zm10 0 8 7-8 7V5Z" />
             </svg>
           </button>
         </div>
@@ -1747,22 +1715,6 @@
       const specCtx = spectrumCanvas.getContext('2d')
       const waveformCanvas = document.getElementById('waveform-canvas')
       const waveCtx = waveformCanvas.getContext('2d')
-      const spectrumSurface = {
-        canvas: spectrumCanvas,
-        ctx: specCtx,
-        width: 1,
-        height: 1,
-        scaleX: 1,
-        scaleY: 1
-      }
-      const waveformSurface = {
-        canvas: waveformCanvas,
-        ctx: waveCtx,
-        width: 1,
-        height: 1,
-        scaleX: 1,
-        scaleY: 1
-      }
 
       // Placeholder track — overridden by host 'track' messages
       const defaultTrack = {
@@ -1785,58 +1737,33 @@
       let currentTrack = { ...defaultTrack }
 
       // --- CANVASES INITIALIZATION ---
-      function resizeSurface(surface, minimumRatio) {
-        const dpr = window.devicePixelRatio || 1
-        const rect = surface.canvas.getBoundingClientRect()
-        surface.width = Math.max(1, rect.width)
-        surface.height = Math.max(1, rect.height)
-        const ratio = Math.max(minimumRatio, dpr)
-        const width = Math.ceil(surface.width * ratio)
-        const height = Math.ceil(surface.height * ratio)
-        if (surface.canvas.width !== width) surface.canvas.width = width
-        if (surface.canvas.height !== height) surface.canvas.height = height
-        surface.scaleX = width / surface.width
-        surface.scaleY = height / surface.height
-        surface.ctx.setTransform(surface.scaleX, 0, 0, surface.scaleY, 0, 0)
-      }
-
       function resizeCanvases() {
-        resizeSurface(spectrumSurface, 1)
-        // Supersample only the small waveform; the animated spectrum stays at native DPI.
-        resizeSurface(waveformSurface, 2)
+        const dpr = window.devicePixelRatio || 1
+
+        const specRect = spectrumCanvas.parentElement.getBoundingClientRect()
+        spectrumCanvas.width = specRect.width * dpr
+        spectrumCanvas.height = specRect.height * dpr
+        specCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+        const waveRect = waveformCanvas.parentElement.getBoundingClientRect()
+        waveformCanvas.width = waveRect.width * dpr
+        waveformCanvas.height = waveRect.height * dpr
+        waveCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
         drawWaveform()
-        renderSpectrumFrame(performance.now())
         updateHzLabels()
         syncTitleLineClass()
       }
 
-      let canvasResizeFrame = 0
-      function scheduleCanvasResize() {
-        if (canvasResizeFrame) return
-        canvasResizeFrame = requestAnimationFrame(() => {
-          canvasResizeFrame = 0
-          resizeCanvases()
-        })
-      }
-      let resolutionQuery
-      function watchResolution() {
-        resolutionQuery?.removeEventListener('change', onResolutionChange)
-        resolutionQuery = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)
-        resolutionQuery.addEventListener('change', onResolutionChange)
-      }
-      function onResolutionChange() {
-        watchResolution()
-        scheduleCanvasResize()
-      }
-      watchResolution()
-      window.addEventListener('resize', scheduleCanvasResize)
-      const canvasResizeObserver = new ResizeObserver(scheduleCanvasResize)
-      canvasResizeObserver.observe(spectrumCanvas)
-      canvasResizeObserver.observe(waveformCanvas)
+      window.addEventListener('resize', resizeCanvases)
+      const canvasResizeObserver = new ResizeObserver(resizeCanvases)
+      canvasResizeObserver.observe(spectrumCanvas.parentElement)
+      canvasResizeObserver.observe(waveformCanvas.parentElement)
 
       // --- WAVEFORM RENDER (live, host-fed) ---
       function drawWaveform() {
-        const { width, height } = waveformSurface
+        const width = waveformCanvas.width / (window.devicePixelRatio || 1)
+        const height = waveformCanvas.height / (window.devicePixelRatio || 1)
 
         waveCtx.clearRect(0, 0, width, height)
 
@@ -2136,17 +2063,18 @@
         const deltaSeconds = Math.min(0.05, Math.max(0.001, (now - lastSpectrumFrameAt) / 1000))
         lastSpectrumFrameAt = now
 
-        const { width, height, scaleX, scaleY } = spectrumSurface
+        const width = spectrumCanvas.width / (window.devicePixelRatio || 1)
+        const height = spectrumCanvas.height / (window.devicePixelRatio || 1)
 
         specCtx.clearRect(0, 0, width, height)
 
+        // Grid lines (unchanged from original)
         specCtx.strokeStyle = 'rgba(0, 0, 0, 0.04)'
-        specCtx.lineWidth = 1 / scaleY
+        specCtx.lineWidth = 1
 
         const numGridLines = 6
         for (let j = 0; j < numGridLines; j++) {
-          const y =
-            (Math.floor((5 + (j / (numGridLines - 1)) * (height - 15)) * scaleY) + 0.5) / scaleY
+          const y = 5 + (j / (numGridLines - 1)) * (height - 15)
           specCtx.beginPath()
           specCtx.moveTo(0, y)
           specCtx.lineTo(width, y)
@@ -2154,11 +2082,9 @@
         }
 
         const maxGridFrequency = spectrumMaxFrequency()
-        specCtx.lineWidth = 1 / scaleX
         for (const frequency of FREQUENCY_TICKS) {
           if (frequency > maxGridFrequency) continue
-          const x =
-            (Math.floor(spectrumFrequencyPosition(frequency) * width * scaleX) + 0.5) / scaleX
+          const x = spectrumFrequencyPosition(frequency) * width
           specCtx.beginPath()
           specCtx.moveTo(x, 0)
           specCtx.lineTo(x, height)
@@ -2223,9 +2149,7 @@
           const finalBarH = lastSpectrumHeights[i]
 
           specCtx.fillStyle = '#3c3e44'
-          const left = Math.round(i * (barWidth + barSpacing) * scaleX) / scaleX
-          const right = Math.round((i * (barWidth + barSpacing) + barWidth) * scaleX) / scaleX
-          specCtx.fillRect(left, height - finalBarH, Math.max(0, right - left), finalBarH)
+          specCtx.fillRect(i * (barWidth + barSpacing), height - finalBarH, barWidth, finalBarH)
         }
 
         lastSpectrumDebug = {
@@ -2601,14 +2525,12 @@
 
       // --- INITIALIZATION ON LOAD ---
       resizeCanvases()
+      renderSpectrumFrame(performance.now())
       syncPlayPauseVisual()
       window.addEventListener('pagehide', () => {
         stopPlayheadLoop()
         stopSpectrumLoop()
         canvasResizeObserver.disconnect()
-        cancelAnimationFrame(canvasResizeFrame)
-        window.removeEventListener('resize', scheduleCanvasResize)
-        resolutionQuery.removeEventListener('change', onResolutionChange)
       })
 
       // Signal the host that the visualizer is ready to receive data.

@@ -96,7 +96,7 @@ function move(offset: number): void {
       <option v-for="s in WORKSHOP_SURFACES" :key="s.id" :value="s.id">{{ s.label }}</option>
     </select></label
   >
-  <p>图层从下到上叠加。</p>
+  <p>图层从下到上排列。人物放在背景层，内容可独立滚动。</p>
   <button :disabled="busy || layers.length >= WORKSHOP_LAYER_LIMIT" @click="add('image')">
     ＋ 图片
   </button>

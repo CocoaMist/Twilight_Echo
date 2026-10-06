@@ -17,13 +17,11 @@ const emit = defineEmits<{
 <template>
   <div class="streaming-placeholder" :class="{ 'detail-placeholder': detail }">
     <i
-      class="placeholder-icon"
       :class="icon"
-      :data-danger="danger || undefined"
       :style="
         danger
-          ? 'font-size: calc(var(--te-font-size-body, 14px) * 40 / 14)'
-          : 'font-size: calc(var(--te-font-size-body, 14px) * 48 / 14)'
+          ? 'font-size: calc(var(--te-font-size-body, 14px) * 40 / 14); color: #e74c3c'
+          : 'font-size: calc(var(--te-font-size-body, 14px) * 48 / 14); color: #ccc'
       "
     ></i>
     <p class="placeholder-title">{{ title }}</p>

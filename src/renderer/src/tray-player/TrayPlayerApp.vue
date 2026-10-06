@@ -8,7 +8,6 @@ import {
 import type { TrayNavigationTarget } from '../../../shared/trayPlayer.ts'
 import { normalizeMotionPreference, type MotionPreference } from '../../../shared/motion.ts'
 import { useMotionPreference } from '../app/useMotionPreference'
-import MiniGlyph from '../mini-player/MiniGlyph.vue'
 
 const state = ref<MiniPlayerStateSnapshot>({ ...EMPTY_MINI_PLAYER_STATE })
 const ready = ref(false)
@@ -160,7 +159,7 @@ onBeforeUnmount(() => {
           aria-label="上一首"
           @click="sendCommand({ type: 'previous' })"
         >
-          <MiniGlyph name="previous" />
+          <i class="ph ph-skip-back" aria-hidden="true"></i>
         </button>
         <button
           class="icon-button play-button"
@@ -169,7 +168,7 @@ onBeforeUnmount(() => {
           :disabled="!state.track || state.isLoading"
           @click="sendCommand({ type: 'toggle-play' })"
         >
-          <MiniGlyph :name="state.isPlaying ? 'pause' : 'play'" />
+          <i :class="state.isPlaying ? 'ph ph-pause' : 'ph ph-play'" aria-hidden="true"></i>
         </button>
         <button
           class="icon-button"
@@ -177,7 +176,7 @@ onBeforeUnmount(() => {
           aria-label="下一首"
           @click="sendCommand({ type: 'next' })"
         >
-          <MiniGlyph name="next" />
+          <i class="ph ph-skip-forward" aria-hidden="true"></i>
         </button>
       </div>
     </section>
@@ -259,11 +258,9 @@ onBeforeUnmount(() => {
 }
 
 .progress-slider {
-  box-sizing: border-box;
   display: block;
   width: 100%;
-  height: 24px;
-  padding: 10px 0;
+  height: 4px;
   margin: 0;
   accent-color: var(--te-primary-400);
   cursor: pointer;
@@ -337,11 +334,7 @@ button {
 button:hover:not(:disabled),
 button:focus-visible {
   background-color: var(--te-navigation-hover);
-}
-
-.progress-slider:focus-visible {
-  outline: 2px solid var(--te-primary-500);
-  outline-offset: 2px;
+  outline: none;
 }
 
 .play-button:hover:not(:disabled),

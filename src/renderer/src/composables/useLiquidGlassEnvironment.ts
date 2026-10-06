@@ -133,13 +133,10 @@ export function useLiquidGlassEnvironment(options: {
   let observer: MutationObserver | null = null
   let coverObserver: MutationObserver | null = null
   let environmentKey: string | null = null
-  let refreshQueued = false
-  let disposed = false
 
   async function refresh(): Promise<void> {
-    if (disposed) return
+    const currentSequence = ++sequence
     if (!options.active.value) {
-      sequence++
       environmentKey = null
       clearEnvironment()
       return
@@ -151,7 +148,6 @@ export function useLiquidGlassEnvironment(options: {
     const solidColor = source ? null : solidColorForPage(options.page.value)
     const nextKey = `${isDark}:${source ?? `solid:${solidColor ?? 'fallback'}`}`
     if (environmentKey === nextKey) return
-    const currentSequence = ++sequence
     environmentKey = nextKey
     if (!source || !isTrustedLiquidGlassImageUrl(source)) {
       if (solidColor) {
@@ -165,12 +161,13 @@ export function useLiquidGlassEnvironment(options: {
     }
 
     try {
-      const image = await loadImage(source)
-      if (disposed || currentSequence !== sequence || !options.active.value) return
-      applyEnvironment(sampleImage(image, isDark), tone)
-      document.documentElement.dataset.teLiquidGlassSource = 'image'
+      const environment = sampleImage(await loadImage(source), isDark)
+      if (currentSequence === sequence && options.active.value) {
+        applyEnvironment(environment, tone)
+        document.documentElement.dataset.teLiquidGlassSource = 'image'
+      }
     } catch {
-      if (!disposed && currentSequence === sequence && options.active.value) {
+      if (currentSequence === sequence && options.active.value) {
         applyEnvironment(fallbackLiquidGlassEnvironment(isDark), tone)
         document.documentElement.dataset.teLiquidGlassSource = 'fallback'
       }
@@ -178,12 +175,7 @@ export function useLiquidGlassEnvironment(options: {
   }
 
   function queueRefresh(): void {
-    if (disposed || refreshQueued) return
-    refreshQueued = true
-    queueMicrotask(() => {
-      refreshQueued = false
-      if (!disposed) void refresh()
-    })
+    queueMicrotask(() => void refresh())
   }
 
   function refreshForHeroCoverMutation(mutations: MutationRecord[]): void {
@@ -243,7 +235,6 @@ export function useLiquidGlassEnvironment(options: {
   })
 
   onBeforeUnmount(() => {
-    disposed = true
     sequence++
     clearEnvironment()
     window.removeEventListener(LIQUID_GLASS_TUNING_CHANGED_EVENT, queueRefresh)

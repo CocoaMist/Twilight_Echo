@@ -25,6 +25,9 @@ function folderName(path: string): string {
   <section class="onb-stage" data-scene="03">
     <p class="onb-kicker">本地曲库</p>
     <h1 class="onb-title">你的音乐<em>放在哪里</em>？</h1>
+    <p class="onb-subtitle">
+      选择存放音乐的文件夹，Twilight Echo 会在后台扫描并整理曲目、封面与元数据。
+    </p>
     <div class="onb-panel">
       <button type="button" class="onb-folder-add" @click="() => void addLibraryFolder()">
         <i class="ph ph-folder-plus"></i>
@@ -53,6 +56,7 @@ function folderName(path: string): string {
       <div class="onb-toggle-row">
         <div class="onb-toggle-copy">
           <strong>自动同步文件夹变化</strong>
+          <span>新增或删除音乐时自动更新曲库，无需手动刷新。</span>
         </div>
         <button
           type="button"
@@ -67,7 +71,7 @@ function folderName(path: string): string {
       <div class="onb-toggle-row">
         <div class="onb-toggle-copy">
           <strong>后台分析 BPM 与响度</strong>
-          <span>用于智能歌单和音量匹配。</span>
+          <span>在空闲时分析曲目节奏与响度，用于智能歌单与音量匹配。</span>
         </div>
         <button
           type="button"
@@ -82,7 +86,7 @@ function folderName(path: string): string {
       <div class="onb-toggle-row">
         <div class="onb-toggle-copy">
           <strong>缺歌词时联网补齐</strong>
-          <span>本地缺少歌词时联网搜索。</span>
+          <span>本地文件没有歌词时，可从在线歌词库搜索；关闭后完全不发起该请求。</span>
         </div>
         <button
           type="button"
@@ -95,5 +99,6 @@ function folderName(path: string): string {
         ></button>
       </div>
     </div>
+    <p class="onb-hint">也可以先跳过，之后在 设置 → 通用 中添加。</p>
   </section>
 </template>

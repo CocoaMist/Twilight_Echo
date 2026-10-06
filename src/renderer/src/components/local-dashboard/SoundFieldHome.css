@@ -56,17 +56,17 @@
   max-width: 1560px;
   min-height: 100%;
   margin: 0 auto;
-  padding: var(--te-page-top) var(--te-page-gutter) var(--te-page-bottom);
+  padding: 78px 32px 28px;
 }
 
 .sf-session {
   position: sticky;
-  top: var(--te-page-top);
+  top: 78px;
   display: flex;
   flex-direction: column;
   align-self: start;
   min-width: 0;
-  max-height: calc(100dvh - var(--te-page-top) - var(--te-page-bottom));
+  max-height: calc(100vh - 102px);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--sf-line) transparent;
@@ -326,10 +326,20 @@
 
 .sf-session-bottom {
   gap: 12px;
-  justify-content: flex-end;
   margin-top: auto;
   padding-top: 16px;
   color: var(--sf-console-muted);
+}
+
+.sf-session-caption {
+  font:
+    400 11px / 1.8 'Space Grotesk',
+    var(--te-font-sans);
+}
+
+.sf-session-caption strong {
+  color: var(--sf-console-ink);
+  font-weight: 400;
 }
 
 .sf-session-bottom > i {
@@ -358,9 +368,16 @@
   align-items: baseline;
   gap: 16px;
   margin: 8px 0 0;
-  font-size: var(--te-page-title-size);
+  font-size: calc(var(--te-font-size-body, 14px) * 36 / 14);
   font-weight: 550;
   line-height: 1.2;
+}
+
+.sf-intro {
+  margin: 12px 0 0;
+  color: var(--sf-muted);
+  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+  line-height: 1.6;
 }
 
 .sf-shuffle {
@@ -891,6 +908,8 @@
   .sf-layout {
     grid-template-columns: 252px minmax(0, 1fr);
     gap: 24px;
+    padding-right: 24px;
+    padding-left: 24px;
   }
 
   .sf-session {
@@ -923,6 +942,7 @@
   .sf-layout {
     grid-template-columns: minmax(0, 1fr);
     gap: 28px;
+    padding-bottom: calc(28px + var(--te-playbar-height, 88px));
   }
 
   .sf-session {
@@ -966,6 +986,9 @@
 }
 
 @container (max-width: 540px) {
+  .sf-layout {
+    padding: 70px 16px calc(24px + var(--te-playbar-height, 88px));
+  }
   .sf-session {
     padding: 16px;
     border-radius: 16px;
@@ -1002,6 +1025,7 @@
   }
   .sf-masthead h1 {
     gap: 12px;
+    font-size: calc(var(--te-font-size-body, 14px) * 30 / 14);
   }
   .sf-shuffle {
     min-height: 40px;
@@ -1160,13 +1184,4 @@
 .sf-session .sf-icon-button:hover {
   color: var(--sf-console-ink);
   background: var(--sf-console-line);
-}
-
-:global(html[data-te-shell-layout='custom'] .sound-field) {
-  height: 100%;
-  min-height: 0;
-}
-
-:global(html[data-te-shell-layout='custom'] .sf-session) {
-  max-height: none;
 }

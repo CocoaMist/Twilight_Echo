@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import vue from '@vitejs/plugin-vue'
-import { compileStyle, parse } from '@vue/compiler-sfc'
+import { parse } from '@vue/compiler-sfc'
 import { build } from 'vite'
 
 const require = createRequire(import.meta.url)
@@ -23,20 +23,6 @@ test('motion modes, legacy overlays, discovery layout, popovers and satellite bo
       join(directory, 'app.css'),
       app.descriptor.styles.map((s) => s.content).join('\n')
     )
-    const surfaceStyles = await Promise.all(
-      ['streaming-page/StreamingPage.css', 'player-bar/PlayerBar.css'].map(async (path) => {
-        const filename = join(workspace, 'src/renderer/src/components', path)
-        const result = compileStyle({
-          source: await readFile(filename, 'utf8'),
-          filename,
-          id: 'data-v-motion',
-          scoped: true
-        })
-        assert.deepEqual(result.errors, [])
-        return result.code
-      })
-    )
-    await writeFile(join(directory, 'motion-surfaces.css'), surfaceStyles.join('\n'))
     await build({
       configFile: false,
       logLevel: 'error',
@@ -83,11 +69,11 @@ test('motion modes, legacy overlays, discovery layout, popovers and satellite bo
         .map((f) => `<link rel="stylesheet" href="bundle/${f}">`)
         .join(
           ''
-        )}<link rel="stylesheet" href="app.css"><link rel="stylesheet" href="motion-surfaces.css"><style>body{padding:24px;background:#edf0f5}body::before,body::after{display:none!important}#app{max-width:880px;margin:auto}.disc{animation:none!important}.workshop-delete-dialog{padding:24px;border-radius:16px;background:white}.workshop-delete-dialog::backdrop{background:#0005}</style></head><body><button id="opener">打开弹窗</button><div id="app"></div><script src="bundle/${files.find((f) => f.endsWith('.js'))}"></script></body></html>`
+        )}<link rel="stylesheet" href="app.css"><style>body{padding:24px;background:#edf0f5}body::before,body::after{display:none!important}#app{max-width:880px;margin:auto}.disc{animation:none!important}.workshop-delete-dialog{padding:24px;border-radius:16px;background:white}.workshop-delete-dialog::backdrop{background:#0005}</style></head><body><button id="opener">打开弹窗</button><div id="app"></div><script src="bundle/${files.find((f) => f.endsWith('.js'))}"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow,ipcMain,nativeTheme}=require('electron');const fs=require('node:fs/promises');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1000,height:880,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});ipcMain.handle('motion-system',(_e,reduced)=>{nativeTheme.prefersReducedMotion=reduced});ipcMain.handle('control-key',(_e,key)=>{win.webContents.sendInputEvent({type:'keyDown',keyCode:key});win.webContents.sendInputEvent({type:'keyUp',keyCode:key})});ipcMain.handle('control-click',(_e,point)=>{for(const type of ['mouseMove','mouseDown','mouseUp'])win.webContents.sendInputEvent({type,x:Math.round(point.x),y:Math.round(point.y),...(type==='mouseMove'?{}:{button:'left',clickCount:1})})});ipcMain.handle('motion-capture',async(_e,name)=>{if(process.env.TWILIGHT_MOTION_VISUAL_DIR){await fs.mkdir(process.env.TWILIGHT_MOTION_VISUAL_DIR,{recursive:true});await fs.writeFile(path.join(process.env.TWILIGHT_MOTION_VISUAL_DIR,name+'.png'),(await win.webContents.capturePage()).toPNG())}});try{await win.loadFile(process.argv.at(-1));win.webContents.debugger.attach('1.3');await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled',{enabled:true});await win.webContents.executeJavaScript('window.runMotionCoverage()');console.log('MOTION_COVERAGE_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
+      `const {app,BrowserWindow,ipcMain,nativeTheme}=require('electron');const fs=require('node:fs/promises');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1000,height:880,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});ipcMain.handle('motion-system',(_e,reduced)=>{nativeTheme.prefersReducedMotion=reduced});ipcMain.handle('motion-capture',async(_e,name)=>{if(process.env.TWILIGHT_MOTION_VISUAL_DIR){await fs.mkdir(process.env.TWILIGHT_MOTION_VISUAL_DIR,{recursive:true});await fs.writeFile(path.join(process.env.TWILIGHT_MOTION_VISUAL_DIR,name+'.png'),(await win.webContents.capturePage()).toPNG())}});try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runMotionCoverage()');console.log('MOTION_COVERAGE_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
@@ -104,7 +90,6 @@ test('motion modes, legacy overlays, discovery layout, popovers and satellite bo
 })
 
 const runtime = `import {createApp,h,nextTick,ref} from 'vue'
-import '@renderer/assets/icons.css'
 import '@renderer/assets/base.css'
 import CreateAggregatePlaylistDialog from '@renderer/components/aggregate-playlist/CreateAggregatePlaylistDialog.vue'
 import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
@@ -113,7 +98,6 @@ import StreamingDiscovery from '@renderer/components/StreamingDiscovery.vue'
 import StreamingProviderSwitcher from '@renderer/components/streaming-page/StreamingProviderSwitcher.vue'
 import ProviderMusicHome from '@renderer/components/streaming-page/ProviderMusicHome.vue'
 import TrayPlayerApp from '@renderer/tray-player/TrayPlayerApp.vue'
-import AnimatedInput from '@renderer/components/AnimatedInput.vue'
 import {EMPTY_MINI_PLAYER_STATE} from '@renderer/../../shared/miniPlayer.ts'
 const ipc=window.require('electron').ipcRenderer
 const expect=(value,message)=>{if(!value)throw new Error(message)}
@@ -121,16 +105,6 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))
 const frame=()=>new Promise(requestAnimationFrame)
 const flush=async()=>{await nextTick();await frame();await frame()}
 const until=async(fn,label)=>{for(let i=0;i<150;i++){if(fn())return;await sleep(10)}throw Error(label)}
-const pressKey=async(key)=>{
-  let listener,timer
-  const delivered=new Promise((resolve,reject)=>{
-    listener=event=>{if(event.key===(key==='Right'?'ArrowRight':key))resolve()}
-    document.addEventListener('keydown',listener,true)
-    timer=setTimeout(()=>reject(new Error('native key was not delivered: '+key)),1500)
-  })
-  try{await ipc.invoke('control-key',key);await delivered;await flush()}
-  finally{clearTimeout(timer);document.removeEventListener('keydown',listener,true)}
-}
 const root=document.documentElement,opener=document.querySelector('#opener')
 let app
 const mount=async(render)=>{app?.unmount();document.querySelector('#app').innerHTML='';app=createApp({render});app.mount('#app');await nextTick()}
@@ -144,30 +118,6 @@ const capture=async(name)=>{
 }
 const playlist={id:'focus',name:'安静的夜晚',trackCount:12,coverUrl:'',creatorName:'Twilight Echo'}
 window.runMotionCoverage=async()=>{
-  await setMode('off')
-  await pressKey('Tab')
-  for(const tone of ['pureWhite','dark']){
-    root.dataset.theme=tone
-    const text=ref(''),disabled=ref(false)
-    await mount(()=>h(AnimatedInput,{modelValue:text.value,'onUpdate:modelValue':value=>text.value=value,placeholder:'请输入歌单名称',disabled:disabled.value,animate:true,style:'width:240px;height:44px;color:var(--te-neutral-900);--ai-placeholder:var(--te-neutral-500)'}))
-    const input=document.querySelector('.animated-input-field'),host=input.parentElement
-    input.focus();await flush()
-    const placeholder=getComputedStyle(input,'::placeholder'),hostStyle=getComputedStyle(host)
-    expect(placeholder.webkitTextFillColor===placeholder.color&&placeholder.color!=='rgba(0, 0, 0, 0)',tone+' native placeholder is invisible')
-    expect(input.matches(':focus-visible')&&hostStyle.outlineStyle==='solid'&&parseFloat(hostStyle.outlineWidth)===2,tone+' input has no keyboard focus ring')
-    expect(getComputedStyle(input).webkitTextFillColor==='rgba(0, 0, 0, 0)',tone+' ordinary input no longer uses its character mirror')
-    input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}))
-    input.value='中文';input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'中文'}));await flush()
-    expect(text.value==='中文'&&host.classList.contains('is-composing'),tone+' IME input stopped updating model')
-    expect(getComputedStyle(input).webkitTextFillColor!=='rgba(0, 0, 0, 0)'&&getComputedStyle(host.querySelector('.animated-input-mirror')).opacity==='0',tone+' IME shows both native text and mirror')
-    input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'中文'}));await sleep(20);await flush()
-    expect(!host.classList.contains('is-composing')&&host.querySelector('.animated-input-track').textContent==='中文',tone+' committed text lost its mirror')
-    input.value='中文A';input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'A'}));await flush()
-    expect(text.value==='中文A'&&host.querySelector('.animated-input-track').textContent==='中文A',tone+' ordinary input stopped updating')
-    disabled.value=true;await flush();expect(input.disabled,tone+' disabled prop did not reach native input')
-    opener.focus();input.focus();expect(document.activeElement!==input,tone+' disabled input accepted focus')
-  }
-  delete root.dataset.theme
   for(const reduced of [false,true]){
     await ipc.invoke('motion-system',reduced);await sleep(30)
     for(const mode of ['full','reduced','off']){
@@ -175,35 +125,9 @@ window.runMotionCoverage=async()=>{
       await mount(()=>h('div',{class:'main-content'},[h('article',{class:'page-down-enter-active page-down-enter-from'},'页面内容')]))
       const page=document.querySelector('article'),style=getComputedStyle(page)
       expect(mode==='full'?style.transform!=='none':style.transform==='none','page mode moved incorrectly: '+mode)
-      expect(style.transitionDuration===(mode==='full'?'0.18s, 0.24s':mode==='reduced'?'0.12s':'0s'),'page duration ignored mode: '+mode+' '+style.transitionDuration)
-      expect(style.filter==='none','page transition blurred text')
-      if(mode==='full')expect(new DOMMatrix(style.transform).a===1&&new DOMMatrix(style.transform).d===1,'page transition scaled text')
-      await mount(()=>h('div',null,[h('i',{id:'spinner',class:'pi pi-spinner pi-spin'}),h('span',{'data-v-motion':'',class:'live-badge'},'LIVE'),h('section',{'data-v-motion':'',class:'stream-view-panel'},'在线音乐')]))
-      const spinner=document.querySelector('#spinner'),badge=document.querySelector('.live-badge'),stream=document.querySelector('section')
-      const spin=spinner.getAnimations()[0]
-      expect(mode==='off'?!spin:Boolean(spin),'loading spinner missing or unexpectedly moving: '+mode)
-      if(spin){expect(spin.effect.getTiming().duration===(mode==='full'?2000:4000),'spinner ignored motion speed');spin.pause();spin.currentTime=500;expect(getComputedStyle(spinner).transform!=='none','spinner keyframes do not exist')}
-      const pulses=badge.getAnimations({subtree:true})
-      expect(mode==='full'?pulses.length===1:pulses.length===0,'live badge ignored motion mode')
-      if(mode==='full'){
-        const pulse=pulses[0];pulse.pause();pulse.currentTime=0;const before=getComputedStyle(badge,'::before');const shadow=before.boxShadow,width=badge.getBoundingClientRect().width
-        pulse.currentTime=700;await frame();const after=getComputedStyle(badge,'::before')
-        expect(Number(after.opacity)<0.6,'live indicator does not breathe')
-        expect(after.boxShadow===shadow&&after.transform==='none'&&badge.getBoundingClientRect().width===width,'live indicator repainted shadow or moved text')
-      }
-      expect(getComputedStyle(stream).willChange==='auto','idle streaming page retains a compositor hint')
-      for(const [name,axis,direction] of [['stream-page-down','f',1],['stream-page-up','f',-1],['stream-detail-forward','e',1],['stream-detail-back','e',-1]]){
-        stream.className='stream-view-panel '+name+'-enter-active '+name+'-enter-from';await flush();const css=getComputedStyle(stream)
-        expect(css.filter==='none','streaming transition blurred text')
-        expect(css.transitionDuration===(mode==='full'?'0.18s, 0.24s':mode==='reduced'?'0.12s':'0s'),'streaming transition ignored mode '+mode+' '+css.transitionDuration)
-        if(mode==='full'){const matrix=new DOMMatrix(css.transform);expect(matrix.a===1&&matrix.d===1&&Math.sign(matrix[axis])===direction,'streaming direction or text scale changed: '+name)}
-        else expect(css.transform==='none','streaming reduced/off moved content')
-        stream.className='stream-view-panel';await flush();expect(getComputedStyle(stream).willChange==='auto','streaming page did not release compositor hint')
-      }
-      await mount(()=>h('article',{class:'glass-card'},'主题内容'))
-      const themePage=document.querySelector('article')
-      root.classList.add('te-theme-tone-transition');await nextTick()
-      expect(getComputedStyle(themePage).transitionDuration===(mode==='full'?'0.2s, 0.2s, 0.2s':mode==='reduced'?'0.12s':'0s'),'theme transition ignored mode '+mode+' '+getComputedStyle(themePage).transitionDuration)
+      expect(style.transitionDuration===(mode==='full'?'0.34s, 0.48s, 0.42s':mode==='reduced'?'0.12s':'0s'),'page duration ignored mode: '+mode+' '+style.transitionDuration)
+      root.classList.add('te-theme-tone-transition');page.className='glass-card';await nextTick()
+      expect(getComputedStyle(page).transitionDuration===(mode==='full'?'0.2s, 0.2s, 0.2s':mode==='reduced'?'0.12s':'0s'),'theme transition ignored mode '+mode+' '+getComputedStyle(page).transitionDuration)
       root.classList.remove('te-theme-tone-transition')
     }
   }
@@ -259,32 +183,11 @@ window.runMotionCoverage=async()=>{
   await flush();expect(document.querySelector('.music-skeleton'),'missing loading skeleton');lists.value=[playlist];loading.value=false;await flush()
   const content=document.querySelector('.music-content');expect(content.getAnimations().length>0,'home content did not fade after loading');await capture('provider-home-arrival');await sleep(200)
   lists.value=[playlist,{...playlist,id:'two'}];await flush();expect(document.querySelector('.music-content')===content&&content.getAnimations().length===0,'recommendation updates replayed entrance')
-  app.unmount();let preferenceListener,resolveBootstrap,stateListener
-  const commands=[]
-  window.api={trayPlayer:{getBootstrap:()=>new Promise(resolve=>resolveBootstrap=resolve),onState:cb=>{stateListener=cb;return()=>stateListener=null},onMotionPreference:cb=>{preferenceListener=cb;return()=>preferenceListener=null},command:command=>commands.push(command),navigate:()=>{},hide:()=>{}}}
+  app.unmount();let preferenceListener,resolveBootstrap
+  window.api={trayPlayer:{getBootstrap:()=>new Promise(resolve=>resolveBootstrap=resolve),onState:()=>()=>{},onMotionPreference:cb=>{preferenceListener=cb;return()=>preferenceListener=null},command:()=>{},navigate:()=>{},hide:()=>{}}}
   await mount(()=>h(TrayPlayerApp));preferenceListener('off');resolveBootstrap({state:EMPTY_MINI_PLAYER_STATE,motionPreference:'full'});await flush()
   expect(root.dataset.teMotion==='off','stale tray bootstrap overwrote live preference');expect(getComputedStyle(document.querySelector('.tray-player')).transitionDuration==='0s','tray off still animated')
   preferenceListener('reduced');await flush();expect(root.dataset.teMotion==='reduced'&&getComputedStyle(document.querySelector('.tray-player')).transform==='none','tray reduced mode failed')
-  for(const tone of ['pureWhite','dark']){
-    root.dataset.theme=tone
-    const slider=document.querySelector('.progress-slider'),button=document.querySelector('.page-actions button')
-    expect(slider.disabled,tone+' empty tray incorrectly permits seeking')
-    const style=getComputedStyle(slider)
-    expect(slider.getBoundingClientRect().height===24&&parseFloat(style.height)-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom)===4,tone+' tray range lacks a 24px target around its 4px track')
-    await pressKey('Tab')
-    button.focus();await flush()
-    expect(button.matches(':focus-visible')&&getComputedStyle(button).outlineStyle==='solid'&&parseFloat(getComputedStyle(button).outlineWidth)===2,tone+' tray navigation has no keyboard focus ring')
-    stateListener({...EMPTY_MINI_PLAYER_STATE,track:{title:'Test track',artist:'Test artist'},duration:100,currentTime:25});await flush()
-    expect(!slider.disabled,tone+' loaded tray cannot seek')
-    slider.focus();await pressKey('Right')
-    expect(commands.at(-1)?.type==='seek'&&commands.at(-1).value>25,tone+' native keyboard seeking stopped committing')
-    expect(slider.matches(':focus-visible')&&getComputedStyle(slider).outlineStyle==='solid',tone+' tray slider has no focus ring')
-    const rect=slider.getBoundingClientRect()
-    await ipc.invoke('control-click',{x:rect.x+rect.width*.6,y:rect.y+2});await flush()
-    expect(commands.at(-1)?.type==='seek'&&commands.at(-1).value>40,tone+' padded progress target did not accept a native pointer seek')
-    stateListener(EMPTY_MINI_PLAYER_STATE);await flush()
-  }
-  delete root.dataset.theme
-  app.unmount();expect(!preferenceListener&&!stateListener,'tray leaked state or motion listener')
+  app.unmount();expect(!preferenceListener,'tray leaked motion listener')
 }
 `

@@ -24,6 +24,7 @@ test('update panel survives navigation, exposes retry/cancel, and gates installa
         alias: {
           '@renderer': resolve('src/renderer/src'),
           '@shared': resolve('src/shared'),
+          'primeicons.css': require.resolve('primeicons/primeicons.css'),
           vue: require.resolve('vue/dist/vue.esm-bundler.js')
         }
       },
@@ -70,7 +71,7 @@ import {createApp,h,nextTick,ref} from 'vue'
 import Panel from '@renderer/components/settings-page/AppUpdatePanel.vue'
 import '@renderer/assets/base.css'
 import '@renderer/components/settings-page/SettingsPage.css'
-import '@renderer/assets/icons.css'
+import 'primeicons.css'
 import {useAppUpdateStore} from '@renderer/stores/useAppUpdateStore.ts'
 import {createInitialAppUpdateSnapshot} from '@shared/appUpdate.ts'
 const expect=(ok,message)=>{if(!ok)throw new Error(message)}

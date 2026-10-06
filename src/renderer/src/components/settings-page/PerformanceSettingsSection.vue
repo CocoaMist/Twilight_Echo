@@ -45,7 +45,7 @@ function toggleCompactVisualizer(): void {
       <div class="setting-item">
         <div class="setting-copy">
           <strong>歌词页底部动态频谱</strong>
-          <span>关闭后只保留播放控制。</span>
+          <span>关闭后隐藏底部跳动的频谱条，并停止它的数据轮询；播放控制栏仍然显示。</span>
         </div>
         <button
           type="button"
@@ -113,6 +113,7 @@ function toggleCompactVisualizer(): void {
         <div class="setting-item">
           <div class="setting-copy">
             <strong>表面不透明度 (Surface Opacity)</strong>
+            <span>页面背景表面的不透明程度，越低越通透。</span>
           </div>
           <div class="inline-controls">
             <input
@@ -136,6 +137,7 @@ function toggleCompactVisualizer(): void {
         <div class="setting-item">
           <div class="setting-copy">
             <strong>表面模糊度 (Surface Blur)</strong>
+            <span>页面背景表面的应用内模糊强度。</span>
           </div>
           <div class="inline-controls">
             <input
@@ -160,6 +162,7 @@ function toggleCompactVisualizer(): void {
         <div class="setting-item">
           <div class="setting-copy">
             <strong>卡片不透明度 (Card Opacity)</strong>
+            <span>卡片表面的不透明程度，越低越通透。</span>
           </div>
           <div class="inline-controls">
             <input
@@ -183,6 +186,7 @@ function toggleCompactVisualizer(): void {
         <div class="setting-item">
           <div class="setting-copy">
             <strong>卡片模糊度 (Card Blur)</strong>
+            <span>卡片表面的应用内模糊强度。</span>
           </div>
           <div class="inline-controls">
             <input

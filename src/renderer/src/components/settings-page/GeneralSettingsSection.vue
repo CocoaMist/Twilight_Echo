@@ -100,6 +100,7 @@ const emit = defineEmits<{
         <div class="setting-item top-align">
           <div class="setting-copy">
             <strong>扫描文件夹</strong>
+            <span>添加包含您本地音乐文件的目录。</span>
           </div>
           <div class="folder-list">
             <div v-for="folder in settings.libraryFolders" :key="folder" class="folder-chip">
@@ -172,6 +173,7 @@ const emit = defineEmits<{
         <div class="setting-item">
           <div class="setting-copy">
             <strong>实时监控文件夹变动</strong>
+            <span>当添加新音乐时自动同步到媒体库，无需手动刷新。</span>
           </div>
           <button
             type="button"
@@ -210,6 +212,7 @@ const emit = defineEmits<{
         >
           <div class="setting-copy">
             <strong>媒体库监控状态</strong>
+            <span>各根目录的监听状态；Linux 或失败时会自动降级为定时对账扫描。</span>
           </div>
           <div class="watcher-status-list" aria-live="polite">
             <div
@@ -325,6 +328,7 @@ const emit = defineEmits<{
         <div class="setting-item">
           <div class="setting-copy">
             <strong>启动时检查网易云登录</strong>
+            <span>应用启动后自动刷新内置网易云音源的登录状态。</span>
           </div>
           <button
             type="button"
@@ -414,6 +418,7 @@ const emit = defineEmits<{
         <div class="setting-item">
           <div class="setting-copy">
             <strong>启动后进入</strong>
+            <span>选择每次打开应用时默认显示的主页。</span>
           </div>
           <div class="segmented-control">
             <button
@@ -461,6 +466,7 @@ const emit = defineEmits<{
         <div class="setting-item">
           <div class="setting-copy">
             <strong>关闭主窗口时</strong>
+            <span>选择点击关闭按钮后的应用行为。</span>
           </div>
           <select
             class="preview-select"
@@ -495,6 +501,7 @@ const emit = defineEmits<{
         <div class="setting-item">
           <div class="setting-copy">
             <strong>欢迎向导</strong>
+            <span>重新走一遍首次使用引导：外观、听歌偏好、曲库与声音设置。</span>
           </div>
           <button type="button" class="soft-button" @click="emit('reopenOnboarding')">
             <i class="ph ph-sparkle"></i>

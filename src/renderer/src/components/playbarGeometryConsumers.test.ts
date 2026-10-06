@@ -103,30 +103,6 @@ test('sidebar clearance drops to zero once the mini bar is tucked away', () => {
   assert.equal(measure({ playerBarHidden: 'true' }), 0)
 })
 
-test('page bottom clearance follows visible player geometry without a local sidebar', () => {
-  installDom({ playerBarMenuOpen: true })
-  const hasPlayerBar = ref(true)
-  const clearance = useSideMenuClearance({
-    showLocalSidebar: ref(false),
-    hasPlayerBar,
-    menuOpen: ref(false)
-  })
-  clearance.measureSideMenuClearance()
-  assert.equal(clearance.playerBottomClearance.value, 100)
-  assert.equal(clearance.sideMenuBottomOffset.value, 0)
-  installDom({ playerBarRect: { top: 740, bottom: 790, left: 0, right: 1200, height: 50 } })
-  clearance.measureSideMenuClearance()
-  assert.equal(clearance.playerBottomClearance.value, 60)
-  installDom({ playerBarHidden: 'true' })
-  clearance.measureSideMenuClearance()
-  assert.equal(clearance.playerBottomClearance.value, 0)
-  installDom({})
-  hasPlayerBar.value = false
-  clearance.measureSideMenuClearance()
-  assert.equal(clearance.playerBottomClearance.value, 0)
-  clearance.dispose()
-})
-
 test('the open local menu keeps its full height while the bar moves beside it', () => {
   assert.equal(measure({ playerBarMenuOpen: true }), 0)
 })

@@ -139,7 +139,6 @@ function updatePointerProximity(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
-  if (document.hidden) return
   pendingPointerEvent = event
   if (pointerFrame !== null) return
   pointerFrame = window.requestAnimationFrame(() => {
@@ -154,7 +153,6 @@ function onPointerLeaveDocument(): void {
 }
 
 function onScroll(event: Event): void {
-  if (document.hidden) return
   const element =
     event.target instanceof HTMLElement
       ? event.target
@@ -168,22 +166,12 @@ function onViewportChange(): void {
   invalidateAutoHideScrollbarCache()
 }
 
-function onVisibilityChange(): void {
-  if (!document.hidden) return
-  clearHideTimer()
-  if (pointerFrame !== null) window.cancelAnimationFrame(pointerFrame)
-  pointerFrame = null
-  pendingPointerEvent = null
-  clearScroller(activeScroller)
-}
-
 export function installAutoHideScrollbars(): () => void {
   document.documentElement.classList.add(AUTO_SCROLLBAR_CLASS)
   document.body.classList.add(AUTO_SCROLLBAR_CLASS)
   document.addEventListener('pointermove', onPointerMove, { passive: true })
   document.addEventListener('pointerleave', onPointerLeaveDocument, { passive: true })
   document.addEventListener('scroll', onScroll, { capture: true, passive: true })
-  document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('resize', onViewportChange)
   window.addEventListener('orientationchange', onViewportChange)
 
@@ -191,7 +179,6 @@ export function installAutoHideScrollbars(): () => void {
     document.removeEventListener('pointermove', onPointerMove)
     document.removeEventListener('pointerleave', onPointerLeaveDocument)
     document.removeEventListener('scroll', onScroll, true)
-    document.removeEventListener('visibilitychange', onVisibilityChange)
     window.removeEventListener('resize', onViewportChange)
     window.removeEventListener('orientationchange', onViewportChange)
     clearHideTimer()

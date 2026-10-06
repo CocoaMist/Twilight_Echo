@@ -131,11 +131,11 @@ function input(key: keyof typeof form.value, value: string): void {
     检查基础主题更新
   </button>
   <div v-if="candidate" class="workshop-candidate">
-    <p>正在预览版本 {{ candidate.version }}。采用后请检查参数兼容性。</p>
+    <p>正在预览来源 {{ candidate.version }}。个人参数声明保留；采用后请查看参数兼容性诊断。</p>
     <button :disabled="busy" @click="emit('adopt')">采用新基础</button
     ><button @click="emit('cancel')">取消候选预览</button>
   </div>
   <p v-if="!project.editor && !project.base.editor" class="workshop-hint">
-    可调整标准外观；专业模式可添加自定义参数。
+    来源没有专属参数，可调整标准外观，或切换专业模式自行设计参数。
   </p>
 </template>

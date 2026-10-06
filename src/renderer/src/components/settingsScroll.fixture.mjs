@@ -1,5 +1,4 @@
-/* eslint-disable vue/one-component-per-file -- Independent fixture mounts verify first-open and reopen behavior. */
-import { createApp, h, nextTick, ref, Transition } from 'vue'
+import { createApp, h, nextTick, ref } from 'vue'
 import SettingsPage from './SettingsPage.vue'
 import '../assets/base.css'
 
@@ -189,18 +188,6 @@ window.runSettingsScrollTests = async () => {
     'search result is outside usable viewport'
   )
 
-  search.focus({ preventScroll: true })
-  search.value = '硬件加速'
-  search.dispatchEvent(new Event('input', { bubbles: true }))
-  await settle()
-  search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
-  await settle()
-  expect(search.getAttribute('aria-activedescendant'), 'keyboard search selection is missing')
-  search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  await settle()
-  expect(page.querySelector('.search-target-flash') === target, 'keyboard search missed its target')
-  expect(document.activeElement === search, 'keyboard search unexpectedly moved input focus')
-
   nav('常规').click()
   await settle()
   expect(
@@ -249,95 +236,5 @@ window.runSettingsScrollTests = async () => {
     'unmount retained rendering observers'
   )
   app.unmount()
-  // Entry transforms change visual bounds without changing layout positions.
-  const settleEntry = async () => {
-    await nextTick()
-    const deadline = window.performance.now() + 3000
-    let stable = 0
-    let previous = -1
-    while (window.performance.now() < deadline) {
-      await new Promise(requestAnimationFrame)
-      const current = document.querySelector('.settings-preview-page')
-      const running = current
-        .getAnimations({ subtree: true })
-        .some(
-          (animation) =>
-            animation.playState === 'running' &&
-            animation.effect?.getComputedTiming().iterations !== Infinity
-        )
-      stable = !running && Math.abs(current.scrollTop - previous) < 0.1 ? stable + 1 : 0
-      previous = current.scrollTop
-      if (stable >= 5) return current
-    }
-    throw new Error('settings entry did not settle')
-  }
-  const pageDuration = getComputedStyle(document.documentElement)
-    .getPropertyValue('--te-motion-page')
-    .trim()
-  const enterDuration = parseFloat(pageDuration) * (pageDuration.endsWith('ms') ? 1 : 1000) + 30
-  for (const width of [800, 1440]) {
-    await window.resizeTestWindow(width)
-    for (const initialSection of [undefined, 'general', 'playback']) {
-      const open = ref(true)
-      const entryApp = createApp({
-        render: () =>
-          h(
-            Transition,
-            {
-              name: 'settings-page',
-              appear: true,
-              duration: { enter: enterDuration, leave: 0 }
-            },
-            { default: () => (open.value ? h(SettingsPage, { initialSection }) : null) }
-          )
-      })
-      entryApp.mount('#app')
-      for (let opening = 0; opening < 2; opening++) {
-        const entryPage = await settleEntry()
-        const isDefault = !initialSection || initialSection === 'general'
-        if (isDefault) {
-          expect(entryPage.scrollTop === 0, 'default entry scrolled away from the page title')
-          const title = entryPage.querySelector('.settings-page-header')
-          expect(
-            title.getBoundingClientRect().top >= entryPage.getBoundingClientRect().top,
-            'default entry hid the page title'
-          )
-          if (width > 1120) {
-            const navigation = entryPage
-              .querySelector('.settings-preview-nav')
-              .getBoundingClientRect()
-            const pageRect = entryPage.getBoundingClientRect()
-            expect(
-              Math.abs(
-                navigation.top + navigation.height / 2 - (pageRect.top + entryPage.clientHeight / 2)
-              ) < 1,
-              `desktop settings navigation center ${navigation.top + navigation.height / 2} differs from ${pageRect.top + entryPage.clientHeight / 2}`
-            )
-          }
-        } else {
-          const heading = entryPage.querySelector('#playback h2')
-          const entryNav = entryPage.querySelector('.settings-preview-nav')
-          const lowerBound =
-            width === 800
-              ? entryNav.getBoundingClientRect().bottom
-              : entryPage.getBoundingClientRect().top
-          expect(
-            heading.getBoundingClientRect().top >= lowerBound,
-            'animated initial section landed behind the navigation'
-          )
-          expect(
-            entryPage.querySelector('.preview-nav-item.active')?.textContent.includes('播放'),
-            'animated initial section lost its active navigation item'
-          )
-        }
-        open.value = false
-        await nextTick()
-        while (document.querySelector('.settings-preview-page'))
-          await new Promise(requestAnimationFrame)
-        if (opening === 0) open.value = true
-      }
-      entryApp.unmount()
-    }
-  }
-  return `SETTINGS_SCROLL_OK: ${skippedRows}/405 rows skipped; stable height; resize/search/keyboard/disclosure/input/navigation/cleanup; 12 animated initial-link/open/reopen cases verified`
+  return `SETTINGS_SCROLL_OK: ${skippedRows}/405 rows skipped; stable height; resize/search/disclosure/input/navigation/cleanup verified`
 }

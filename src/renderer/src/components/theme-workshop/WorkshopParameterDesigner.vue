@@ -132,6 +132,7 @@ function input(event: Event): string {
 watch(problem, (message) => emit('problem', message), { immediate: true })
 </script>
 <template>
+  <p class="workshop-hint">为导出的主题声明可调参数。来源快照保留；新增声明随项目和成品导出。</p>
   <button :disabled="busy || controls.length >= 512" @click="choose()">＋ 新增参数</button>
   <article v-for="(control, index) in controls" :key="control.id" class="workshop-designer-row">
     <button :disabled="busy" @click="choose(control)">

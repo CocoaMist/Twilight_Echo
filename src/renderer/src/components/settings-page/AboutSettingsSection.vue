@@ -179,6 +179,7 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
       <div class="about-copy">
         <h3>Twilight Echo</h3>
         <span>Version {{ appVersion || '—' }}</span>
+        <p>一款专为发烧友打造的现代级桌面音乐枢纽，支持海量本地高解析度音频与插件化流媒体扩展。</p>
       </div>
     </div>
 
@@ -189,7 +190,10 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
         <i class="pi pi-heart-fill sponsor-watermark" aria-hidden="true"></i>
         <div>
           <h3><i class="pi pi-heart"></i> 支持项目发展</h3>
-          <p>赞助用于软件维护、功能开发与发布服务。</p>
+          <p>
+            Twilight Echo
+            是一个由热情驱动的免费开源项目。您的赞助将用于软件维护、功能开发与发布服务。
+          </p>
         </div>
         <div class="sponsor-card-actions">
           <button class="sponsor-primary-button" type="button" @click="openSponsorDialog">
@@ -235,6 +239,7 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
                 <span class="sponsor-dialog-icon"><i class="pi pi-heart-fill"></i></span>
                 <div>
                   <h3 id="sponsor-dialog-title">赞助作者</h3>
+                  <p>选择适合你的支持方式</p>
                 </div>
               </div>
               <button
@@ -249,7 +254,7 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
 
             <div class="sponsor-dialog-notice" role="note">
               <i class="pi pi-info-circle"></i>
-              <p>如需加入赞助名单，请联系作者。</p>
+              <p>请务必添加我的联系方式，我会将你加入软件的赞助者名单中，感谢你的支持！</p>
             </div>
 
             <button class="afdian-option" type="button" @click="openAfdian">
@@ -340,7 +345,7 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
             <div v-else class="sponsor-list-empty">
               <span><i class="pi pi-heart"></i></span>
               <strong>赞助名单持续更新中</strong>
-              <p>如需加入名单，请联系作者。</p>
+              <p>完成赞助后请添加作者联系方式，我会在确认后将你加入名单。</p>
               <button type="button" class="sponsor-primary-button" @click="openSponsorDialog">
                 赞助作者
               </button>

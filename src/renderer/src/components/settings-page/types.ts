@@ -205,7 +205,7 @@ export const appBackgroundPageOptions: { value: AppBackgroundPage; label: string
     { value: 'local', label: '本地主页', desc: '本地音乐首页和资料概览背景。' },
     { value: 'settings', label: '设置与插件', desc: '设置页、插件中心等管理界面背景。' },
     { value: 'streaming', label: '流媒体页', desc: '在线音乐浏览、搜索和详情页背景。' },
-    { value: 'player', label: '播放页', desc: '播放页和全屏播放背景。' }
+    { value: 'player', label: '播放页', desc: '沉浸式播放页和全屏播放背景。' }
   ]
 
 export const lyricAlignOptions: { value: LyricsAppearanceAlign; label: string }[] = [

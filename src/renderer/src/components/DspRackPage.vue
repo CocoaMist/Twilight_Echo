@@ -528,8 +528,7 @@ onBeforeUnmount(() => {
   height: 100vh;
   min-height: 0;
   min-width: 0;
-  padding: var(--te-page-top, 55px) var(--te-page-gutter, clamp(16px, 3vw, 32px))
-    var(--te-page-bottom, 32px);
+  padding: calc(28px + 28px) 32px 24px;
   background-color: var(--te-app-bg);
   background-image: var(--te-app-bg-image);
   background-position: center;
@@ -562,7 +561,7 @@ onBeforeUnmount(() => {
 }
 :deep(.rack-header h1) {
   margin: 4px 0 0;
-  font-size: var(--te-page-title-size, calc(var(--te-font-size-body, 14px) * 32 / 14));
+  font-size: calc(var(--te-font-size-body, 14px) * 28 / 14);
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--te-settings-text, #1a1a1a);
@@ -575,8 +574,6 @@ onBeforeUnmount(() => {
   letter-spacing: 0.04em;
 }
 :deep(.rack-header-actions) {
-  flex-wrap: wrap;
-  justify-content: flex-end;
   gap: 8px;
 }
 :deep(.rack-message) {
@@ -1186,6 +1183,9 @@ onBeforeUnmount(() => {
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
 }
 @media (max-width: 1080px) {
+  .dsp-rack-page {
+    padding: 20px;
+  }
   :deep(.rack-layout) {
     grid-template-columns: 200px minmax(380px, 1fr);
   }
@@ -1197,6 +1197,9 @@ onBeforeUnmount(() => {
   }
 }
 @media (max-width: 720px) {
+  .dsp-rack-page {
+    padding: 16px;
+  }
   :deep(.rack-layout) {
     display: flex;
     flex-direction: column;
@@ -1211,14 +1214,15 @@ onBeforeUnmount(() => {
   }
   :deep(.rack-header) {
     align-items: flex-start;
-    flex-wrap: wrap;
-    gap: 12px;
   }
   :deep(.scene-toolbar) {
     align-items: stretch;
   }
   :deep(.rack-footer) {
     flex-wrap: wrap;
+  }
+  :deep(.rack-header h1) {
+    font-size: calc(var(--te-font-size-body, 14px) * 22 / 14);
   }
   :deep(.output-stage) {
     grid-template-columns: 1fr 1fr;

@@ -54,7 +54,7 @@ test('native modal lifecycle and reversible settings disclosures preserve focus 
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'electron-user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1360,height:820,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));win.setContentSize(1360,820);await win.webContents.executeJavaScript('window.waitForViewport(1360)');await win.webContents.executeJavaScript('window.runMotionTests()');for(const [width,layout] of [[1000,'columns'],[640,'stack']]){win.setContentSize(width,820);await win.webContents.executeJavaScript('window.waitForViewport('+width+')');await win.webContents.executeJavaScript('window.checkSettingsNavLayout('+JSON.stringify(layout)+')')}if(process.env.TWILIGHT_MOTION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_MOTION_SCREENSHOTS,{recursive:true});for(const state of ['modal-enter','modal-leave','disclosure-expanded','disclosure-leave']){await win.webContents.executeJavaScript('window.prepareMotionFrame('+JSON.stringify(state)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_MOTION_SCREENSHOTS,state+'.png'),(await win.webContents.capturePage()).toPNG())}}console.log('DIALOG_DISCLOSURE_MOTION_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
+      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');app.setPath('userData',path.join(path.dirname(process.argv.at(-1)),'electron-user-data'));app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1000,height:820,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}});try{await win.loadFile(process.argv.at(-1));await win.webContents.executeJavaScript('window.runMotionTests()');if(process.env.TWILIGHT_MOTION_SCREENSHOTS){fs.mkdirSync(process.env.TWILIGHT_MOTION_SCREENSHOTS,{recursive:true});for(const state of ['modal-enter','modal-leave','disclosure-expanded','disclosure-leave']){await win.webContents.executeJavaScript('window.prepareMotionFrame('+JSON.stringify(state)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_MOTION_SCREENSHOTS,state+'.png'),(await win.webContents.capturePage()).toPNG())}}console.log('DIALOG_DISCLOSURE_MOTION_OK');app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
     const result = await promisify(execFile)(
       require('electron'),
@@ -98,81 +98,15 @@ const opener=document.querySelector('#opener');opener.onclick=()=>{opener.focus(
 const modal=()=>document.querySelector('dialog')
 const open=async()=>{opener.click();await nextTick();await until(()=>modal()?.matches(':modal'),'modal did not open')}
 const close=()=>modal().dispatchEvent(new Event('cancel',{cancelable:true}))
-const sampleNativeLeave=(dialog)=>new Promise((resolve,reject)=>{
- let frame=0,done=false
- const stages=[]
- const cleanup=()=>{done=true;observer.disconnect();cancelAnimationFrame(frame);clearTimeout(timer)}
- const timer=setTimeout(()=>{cleanup();reject(new Error('native dialog never entered its leave animation: '+JSON.stringify({mode:document.documentElement.dataset.teMotion,connected:dialog.isConnected,modal:dialog.matches(':modal'),inert:dialog.inert,classes:dialog.className,stages})))},3000)
- const sample=()=>{
-  if(done)return
-  cancelAnimationFrame(frame);frame=requestAnimationFrame(sample)
-  if(!dialog.classList.contains('native-dialog-leave-to'))return
-  try{
-   getComputedStyle(dialog).opacity;getComputedStyle(dialog,'::backdrop').opacity
-   const animations=dialog.getAnimations({subtree:true})
-   if(!animations.length)return
-   cleanup()
-   for(const animation of animations){animation.pause();animation.currentTime=45}
-   expect(dialog.isConnected&&dialog.matches(':modal'),'native top layer vanished during leave')
-   expect(dialog.inert,'leaving modal stayed interactive')
-   const opacity=Number(getComputedStyle(dialog).opacity),backdrop=Number(getComputedStyle(dialog,'::backdrop').opacity)
-   expect(opacity>0&&opacity<1,'native dialog did not fade at the sampled leave time: '+opacity)
-   expect(backdrop>0&&backdrop<1,'native backdrop did not fade at the sampled leave time: '+backdrop)
-   dialog.dispatchEvent(new TransitionEvent('transitionend',{propertyName:'opacity',elapsedTime:.2,bubbles:true}))
-   expect(dialog.isConnected&&dialog.matches(':modal'),'old transitionend completed the current leave animation')
-   resolve(animations)
-  }catch(error){cleanup();reject(error)}
- }
- const observer=new MutationObserver(()=>{stages.push(dialog.className);sample()})
- observer.observe(dialog,{attributes:true,attributeFilter:['class']})
- frame=requestAnimationFrame(sample)
-})
-window.waitForViewport=async(width)=>{
- const end=performance.now()+3000
- while(window.innerWidth!==width){
-  if(performance.now()>end)throw new Error('native viewport did not resize: '+JSON.stringify({expected:width,actual:window.innerWidth,deviceScale:window.devicePixelRatio}))
-  await new Promise(requestAnimationFrame)
- }
-}
 window.runMotionTests=async()=>{
- expect(CSS.supports('corner-shape','superellipse(2)'),'packaged Chromium lacks continuous corners')
- const surface=document.querySelector('.glass-card'),root=document.documentElement
- const shape=getComputedStyle(surface).cornerShape
- expect(shape==='squircle'||shape==='superellipse(2)','card did not adopt continuous corners')
- for(const tone of ['light','dark']){root.dataset.theme=tone;expect(getComputedStyle(surface).cornerShape===shape,'theme tone changed the contour')}
- delete root.dataset.theme
- root.dataset.teSurfaceMaterial='liquidGlass'
- expect(getComputedStyle(surface,'::after').cornerShape===shape,'surface highlight follows a different curve')
- delete root.dataset.teSurfaceMaterial
- const originalRect=surface.getBoundingClientRect()
- for(const radius of ['0px','7px','24px']){
-  root.style.setProperty('--te-card-radius',radius)
-  expect(getComputedStyle(surface).borderTopLeftRadius===radius,'custom radius was replaced')
-  const rect=surface.getBoundingClientRect()
-  expect(Math.abs(rect.width-originalRect.width)<.1&&Math.abs(rect.height-originalRect.height)<.1,'corner treatment changed layout')
- }
- root.style.removeProperty('--te-card-radius')
- const circle=document.createElement('button');circle.style.cssText='width:44px;height:44px;border-radius:50%';document.body.append(circle)
- expect(getComputedStyle(circle).cornerShape==='round','round transport controls became squircles');circle.remove()
- root.style.setProperty('--te-corner-shape','round')
- expect(getComputedStyle(surface).cornerShape==='round','theme cannot opt out of the curve');root.style.removeProperty('--te-corner-shape')
- const fullscreen=document.createElement('div');fullscreen.className='onboarding-wizard';fullscreen.setAttribute('role','dialog');document.body.append(fullscreen)
- expect(getComputedStyle(fullscreen).cornerShape==='round'&&getComputedStyle(fullscreen).borderTopLeftRadius==='0px','fullscreen onboarding was treated as a rounded panel');fullscreen.remove()
- await window.checkSettingsNavLayout('desktop')
  for(const mode of ['full','reduced','off']){
-  document.documentElement.dataset.teMotion=mode;await nextTick();await new Promise(requestAnimationFrame);await open();if(mode!=='off')await until(()=>!modal().classList.contains('native-dialog-enter-from'),'entry never advanced');await pause(mode==='off'?30:30)
+  document.documentElement.dataset.teMotion=mode;await open();if(mode!=='off')await until(()=>!modal().classList.contains('native-dialog-enter-from'),'entry never advanced');await pause(mode==='off'?30:30)
   const d=modal();if(mode!=='off')for(const a of d.getAnimations())a.currentTime=mode==='reduced'?45:70;const enter=getComputedStyle(d)
   if(mode==='full'){expect(Number(enter.opacity)>0&&Number(enter.opacity)<1,'full entry must have intermediate opacity: '+JSON.stringify({opacity:enter.opacity,transform:enter.transform,classes:d.className,animations:d.getAnimations().map(a=>({time:a.currentTime,state:a.playState,frames:a.effect.getKeyframes()}))}));expect(enter.transform!=='none','full entry has no scale')}
   if(mode==='reduced'){expect(enter.transform==='none','reduced modal moved');expect(Number(enter.opacity)>0&&Number(enter.opacity)<1,'reduced modal lost fade')}
   await pause(240);busy.value=true;await nextTick();close();await pause(30);expect(shown.value&&d.matches(':modal'),'busy cancel closed modal');busy.value=false;await nextTick()
-  const leaveSample=mode==='off'?null:sampleNativeLeave(d)
   const beforeCloses=closes;close();await nextTick();if(mode!=='off')close()
-  if(mode!=='off'){
-   expect(d.classList.contains('native-dialog-leave-from')&&d.classList.contains('native-dialog-leave-active'),'regression injection missed the actual leave-from phase')
-   d.dispatchEvent(new TransitionEvent('transitionend',{propertyName:'opacity',elapsedTime:.2,bubbles:true}))
-   expect(d.isConnected&&d.matches(':modal'),'late enter opacity transitionend removed the leaving native modal: '+JSON.stringify({mode,classes:d.className}))
-  }
-  if(leaveSample){const animations=await leaveSample;for(const animation of animations)animation.play()}
+  if(mode!=='off'){expect(d.isConnected&&d.matches(':modal'),'beforeUnmount removed native top layer before leave');expect(d.inert,'leaving modal stayed interactive');await pause(50);expect(Number(getComputedStyle(d,'::backdrop').opacity)>0,'backdrop vanished before leave')}
   await until(()=>!modal(),'modal did not leave');expect(document.activeElement===opener,'focus not restored after leave');expect(closes===beforeCloses+1,'close emitted twice')
  }
  document.documentElement.dataset.teMotion='full';await open();await pause(70);close();await pause(40);shown.value=true;await nextTick();await pause(250);expect(document.querySelectorAll('dialog').length===1&&modal().matches(':modal'),'rapid reopen left stranded or duplicate modal');close();await until(()=>!modal(),'rapid reopened modal failed close')
@@ -188,29 +122,6 @@ window.runMotionTests=async()=>{
   await pause(350);expect(Math.abs(following.getBoundingClientRect().top-initial)<1,'collapsed disclosure retained a gap');expect(!document.querySelector('#disclosure-input'),'closed content did not unmount')
  }
  document.documentElement.dataset.teMotion='full';await pause();trigger.click();await pause(70);trigger.click();await pause(50);const opacity=Number(getComputedStyle(panel).opacity);trigger.click();await nextTick();expect(Math.abs(Number(getComputedStyle(panel).opacity)-opacity)<.12,'reversal jumped to animation start');await pause(250);expect(!panel.inert&&document.querySelector('#disclosure-input'),'reversal removed reopened content');trigger.click();await pause(30);document.documentElement.dataset.teMotion='off';await pause(40);expect(getComputedStyle(panel).display==='none','live off preference did not finish disclosure');expect(Math.abs(following.getBoundingClientRect().top-initial)<1,'live off preference left projected geometry')
-}
-window.checkSettingsNavLayout=async(expectedLayout)=>{
- const nav=document.createElement('nav');nav.className='settings-preview-nav'
- const navItem=document.createElement('button');navItem.className='preview-nav-item';navItem.textContent='常规'
- const searchWrap=document.createElement('div');searchWrap.className='settings-nav-search-wrap'
- const navSearch=document.createElement('div');navSearch.className='settings-search-box settings-nav-search';searchWrap.append(navSearch);const links=document.createElement('div');links.className='settings-nav-links';links.append(navItem);nav.append(searchWrap,links);document.body.append(nav)
- const root=document.documentElement;root.dataset.teSettingsNavigationLiquidGlass='on'
- await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))
- const layout=getComputedStyle(nav).display;expect(layout===(expectedLayout==='desktop'?'flex':'grid'),'navigation did not adopt the expected responsive layout: '+JSON.stringify({expectedLayout,layout,width:window.innerWidth,deviceScale:window.devicePixelRatio}))
- for(const radius of [21,13,7,0]){
-  root.style.setProperty('--te-card-radius',radius+'px')
-  const style=getComputedStyle(nav),inset=parseFloat(style.paddingLeft)+parseFloat(style.borderLeftWidth),inner=Math.max(0,radius-inset)
-  for(const item of [navItem,navSearch]){
-   expect(parseFloat(getComputedStyle(item).borderTopLeftRadius)===inner,'nested radius ignores the parent inset: '+JSON.stringify({item:item.className,radius,inner,actual:getComputedStyle(item).borderTopLeftRadius,inset}))
-   expect(getComputedStyle(item).cornerShape===style.cornerShape,'nested curve differs from its parent')
-   if(radius>=inset&&(expectedLayout!=='columns'||item===navSearch))expect(Math.abs(item.getBoundingClientRect().left+inner-nav.getBoundingClientRect().left-radius)<.1,'nested corner centers are misaligned: '+JSON.stringify({expectedLayout,item:item.className,radius,inset,inner,navLeft:nav.getBoundingClientRect().left,itemLeft:item.getBoundingClientRect().left}))
-  }
-  const navRect=nav.getBoundingClientRect(),searchRect=navSearch.getBoundingClientRect(),itemRect=navItem.getBoundingClientRect(),linksRect=links.getBoundingClientRect()
-  expect(itemRect.left>=linksRect.left-.1&&itemRect.right<=linksRect.right+.1,'navigation item escaped its scroll container')
-  if(expectedLayout==='columns')expect(linksRect.left>=searchRect.right,'compact navigation columns overlap')
-  else expect(Math.abs(linksRect.left-navRect.left-inset)<.1,'navigation list no longer aligns with the panel inset')
- }
- nav.remove();root.style.removeProperty('--te-card-radius');delete root.dataset.teSettingsNavigationLiquidGlass
 }
 window.prepareMotionFrame=async(state)=>{
  for(const animation of document.getAnimations())animation.play();document.documentElement.dataset.teMotion='full';shown.value=false;expanded.value=false;await pause(380)

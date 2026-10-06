@@ -3,16 +3,8 @@ import test from 'node:test'
 
 import { useAppNoticeStore } from './useAppNoticeStore.ts'
 
-const {
-  notices,
-  pushNotice: presentNotice,
-  dismissNotice,
-  releaseNoticeDedupe,
-  clearNotices
-} = useAppNoticeStore()
-// Timer and dismissal regressions below exercise explicitly requested toasts.
-const pushNotice = (input: Parameters<typeof presentNotice>[0]) =>
-  presentNotice({ presentation: 'toast', ...input })
+const { notices, pushNotice, dismissNotice, releaseNoticeDedupe, clearNotices } =
+  useAppNoticeStore()
 
 test('four visible notices retain a separate history and important failures persist', () => {
   clearNotices()
@@ -205,76 +197,5 @@ test('an in-place update reschedules auto dismissal against the new duration', (
   t.mock.timers.tick(2)
   assert.deepEqual(messages(), [])
 
-  clearNotices()
-})
-
-test('routine results stay in the center while errors and actions remain immediately available', () => {
-  clearNotices()
-  const store = useAppNoticeStore()
-  for (const kind of ['info', 'success', 'warning'] as const)
-    store.pushNotice({ kind, message: kind, dedupeKey: kind })
-  assert.equal(notices.value.length, 0)
-  assert.equal(store.noticeHistory.value.length, 3)
-  assert.equal(store.unreadCount.value, 3)
-  const first = store.noticeHistory.value[0].id
-  store.markHistoryRead()
-  assert.equal(store.pushNotice({ message: 'info', dedupeKey: 'info' }), first)
-  assert.equal(store.noticeHistory.value.length, 3)
-  assert.equal(store.unreadCount.value, 0)
-  store.pushNotice({ kind: 'error', message: '播放失败' })
-  store.pushNotice({ message: '可以撤销', action: { label: '撤销', run: () => {} } })
-  store.pushNotice({ kind: 'error', message: '下载失败', presentation: 'center' })
-  assert.deepEqual(
-    notices.value.map((item) => item.message),
-    ['播放失败', '可以撤销']
-  )
-  assert.equal(store.noticeHistory.value.length, 6)
-  clearNotices()
-})
-
-test('a failed notification action remains retryable and concurrent clicks execute once', async () => {
-  clearNotices()
-  const store = useAppNoticeStore()
-  let calls = 0
-  let finish!: () => void
-  const id = store.pushNotice({
-    message: '恢复播放',
-    action: {
-      label: '重试',
-      run: async () => {
-        calls++
-        if (calls === 1) throw new Error('设备不可用')
-        await new Promise<void>((resolve) => {
-          finish = resolve
-        })
-      }
-    }
-  })
-  assert.equal(await store.runNoticeAction(id), false)
-  assert.ok(store.noticeHistory.value.find((item) => item.id === id)?.action)
-  assert.match(store.noticeHistory.value.at(-1)!.message, /设备不可用/)
-  const retry = store.runNoticeAction(id)
-  assert.equal(await store.runNoticeAction(id), false)
-  assert.equal(calls, 2)
-  finish()
-  assert.equal(await retry, true)
-  assert.equal(store.noticeHistory.value.find((item) => item.id === id)?.action, undefined)
-  clearNotices()
-})
-
-test('routine history eviction retains unfinished user actions', () => {
-  clearNotices()
-  const store = useAppNoticeStore()
-  const id = store.pushNotice({ message: '可撤销操作', action: { label: '撤销', run: () => {} } })
-  const failure = store.pushNotice({ kind: 'error', message: '待处理失败', presentation: 'center' })
-  for (let index = 0; index < 70; index++) store.pushNotice({ message: '后台完成 ' + index })
-  assert.equal(store.noticeHistory.value.length, 50)
-  assert.ok(store.noticeHistory.value.find((item) => item.id === id)?.action)
-  assert.ok(
-    store.noticeHistory.value.find((item) => item.id === failure),
-    'routine completions must not evict important failures first'
-  )
-  store.markHistoryRead([id])
-  assert.equal(store.unreadCount.value, 49)
   clearNotices()
 })

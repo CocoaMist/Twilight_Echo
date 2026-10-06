@@ -1155,26 +1155,6 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
       </aside>
 
       <main class="eq-content">
-        <header v-if="activeTab === 'graphic'" class="eq-header">
-          <div class="eq-title">
-            <h1>图形均衡器</h1>
-          </div>
-          <div
-            class="master-switch"
-            data-te-interactive
-            role="switch"
-            tabindex="0"
-            aria-label="启用均衡器"
-            :aria-checked="audioProcessing.eqEnabled"
-            :class="{ off: !audioProcessing.eqEnabled }"
-            @click="toggleParametricEq()"
-            @keydown.enter.prevent="toggleParametricEq()"
-            @keydown.space.prevent="toggleParametricEq()"
-          >
-            {{ audioProcessing.eqEnabled ? '已启用' : '已关闭' }}
-            <div class="toggle-track"><div class="toggle-thumb"></div></div>
-          </div>
-        </header>
         <!-- Toolbar for Presets across Graphic and Parametric -->
         <div v-if="activeTab !== 'parametric'" class="eq-toolbar-modern">
           <EqHistoryControls
@@ -1254,6 +1234,28 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
         </div>
 
         <div v-if="activeTab === 'graphic'" class="tab-pane active">
+          <header class="eq-header">
+            <div class="eq-title">
+              <h1>图形均衡器</h1>
+              <p>全局频率响应塑形工具，调整此面板将改变最终输出听感。</p>
+            </div>
+            <div
+              class="master-switch"
+              data-te-interactive
+              role="switch"
+              tabindex="0"
+              aria-label="启用均衡器"
+              :aria-checked="audioProcessing.eqEnabled"
+              :class="{ off: !audioProcessing.eqEnabled }"
+              @click="toggleParametricEq()"
+              @keydown.enter.prevent="toggleParametricEq()"
+              @keydown.space.prevent="toggleParametricEq()"
+            >
+              {{ audioProcessing.eqEnabled ? '已启用' : '已关闭' }}
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </div>
+          </header>
+
           <OpraEqPanel
             :compensation="headphoneCompensation"
             :status="opraStatus"
@@ -1518,10 +1520,10 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 .eq-toolbar-modern {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 12px;
-  padding-bottom: 12px;
+  padding: 0 0 20px 0;
   border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  margin-bottom: 24px;
 }
 
 .eq-command {
@@ -1701,10 +1703,9 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 /* Sidebar Navigation */
 .eq-sidebar {
   width: 240px;
-  flex-shrink: 0;
   background: var(--te-glass-bg);
   border-right: 1px solid var(--te-glass-border);
-  padding: var(--te-page-top, 55px) 20px var(--te-page-bottom, 32px);
+  padding: 90px 20px 32px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1767,14 +1768,11 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 /* Content Area */
 .eq-content {
   flex: 1;
-  min-width: 0;
-  min-height: 0;
-  padding: var(--te-page-top, 55px) var(--te-page-gutter, clamp(16px, 3vw, 32px))
-    var(--te-page-bottom, 32px);
+  padding: 40px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 30px;
 }
 .tab-pane {
   display: none;
@@ -1800,14 +1798,12 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
 }
 .eq-title h1 {
-  font-size: var(--te-page-title-size, calc(var(--te-font-size-body, 14px) * 32 / 14));
-  font-weight: 600;
+  font-size: calc(var(--te-font-size-body, 14px) * 28 / 14);
+  font-weight: 800;
   letter-spacing: -0.5px;
-  margin: 0;
+  margin-bottom: 6px;
 }
 .eq-title p {
   color: var(--te-neutral-500);
@@ -2193,7 +2189,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 .eq-page.is-parametric .eq-content {
   min-width: 0;
   min-height: 0;
-  padding: var(--te-page-top, 55px) 14px var(--te-page-bottom, 32px);
+  padding: 48px 14px 14px;
   gap: 0;
   overflow-y: auto;
 }
@@ -2377,6 +2373,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 @media (max-width: 820px) {
   .eq-page.is-parametric .eq-content {
     padding-inline: 8px;
+    padding-bottom: 8px;
   }
   .eq-page.is-parametric .parametric-pane {
     min-height: 560px;
@@ -2387,26 +2384,6 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   .instrument-presets .preset-menu {
     left: auto;
     right: 0;
-  }
-}
-
-@media (max-width: 620px) {
-  .eq-page:not(.is-parametric) .eq-container {
-    flex-direction: column;
-  }
-  .eq-sidebar {
-    width: 100%;
-    flex-direction: row;
-    overflow-x: auto;
-    padding: var(--te-page-top, 55px) var(--te-page-gutter, 16px) 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--te-glass-border);
-  }
-  .eq-sidebar .nav-item {
-    flex-shrink: 0;
-  }
-  .eq-page:not(.is-parametric) .eq-content {
-    padding-top: 20px;
   }
 }
 </style>

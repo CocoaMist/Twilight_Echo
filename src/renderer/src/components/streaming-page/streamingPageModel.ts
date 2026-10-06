@@ -71,10 +71,10 @@ export function resolveExternalProviderName(
 }
 
 export function timeGreeting(hour: number): string {
-  if (hour < 5) return '夜深了'
-  if (hour < 11) return '早上好'
-  if (hour < 14) return '中午好'
-  if (hour < 18) return '下午好'
-  if (hour < 22) return '晚上好'
-  return '夜深了'
+  if (hour < 5) return '夜深了，放一首安静的歌'
+  if (hour < 11) return '早上好，开启美好的一天'
+  if (hour < 14) return '中午好，让音乐陪你休息'
+  if (hour < 18) return '下午好，继续享受音乐'
+  if (hour < 22) return '晚上好，放松一下'
+  return '夜深了，放一首安静的歌'
 }

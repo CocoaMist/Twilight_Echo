@@ -54,7 +54,9 @@ const expectsTracks = computed(() =>
 const heroPlaying = computed(() => props.hero?.id === props.currentTrackId && props.isPlaying)
 const heroLabel = computed(() => {
   if (props.hero?.id === props.currentTrackId) return props.isPlaying ? '正在播放' : '继续收听'
-  return props.recent.some((track) => track.id === props.hero?.id) ? '最近播放' : '推荐歌曲'
+  return props.recent.some((track) => track.id === props.hero?.id)
+    ? '继续上次的旋律'
+    : '从这一首开始'
 })
 function primaryAction(): void {
   if (!props.provider) emit('open-plugins')
@@ -66,11 +68,11 @@ function primaryAction(): void {
 }
 const primaryLabel = computed(() => {
   if (!props.provider) return '接入在线音源'
-  if (canDiscover.value) return '发现歌单'
+  if (canDiscover.value) return '发现好歌单'
   if (needsLogin.value) return `登录 ${providerLabel.value}`
   if (canSearch.value) return '搜索在线音乐'
   if (canLibrary.value) return '打开我的音乐库'
-  return '打开电台与播客'
+  return '探索电台与播客'
 })
 </script>
 
@@ -78,7 +80,7 @@ const primaryLabel = computed(() => {
   <main class="online-home" aria-label="音乐首页">
     <div class="online-home-inner">
       <header class="online-heading">
-        <h1>{{ greeting }}</h1>
+        <h1>{{ greeting }}，听点喜欢的</h1>
         <button class="online-text-button" type="button" @click="emit('open-library-settings')">
           <i class="pi pi-folder-plus" aria-hidden="true"></i> 添加本地音乐
         </button>
@@ -86,10 +88,14 @@ const primaryLabel = computed(() => {
 
       <section class="online-hero" :class="{ 'has-track': hero }">
         <div class="online-hero-copy">
-          <p v-if="hero" class="online-eyebrow">{{ heroLabel }}</p>
-          <h2>{{ hero?.title || '在线音乐' }}</h2>
-          <p v-if="hero" class="online-hero-description">
-            {{ hero.artist }}{{ hero.album ? ' · ' + hero.album : '' }}
+          <p class="online-eyebrow">{{ hero ? heroLabel : '音乐，不必等待收藏' }}</p>
+          <h2>{{ hero?.title || '让音乐，先响起来。' }}</h2>
+          <p class="online-hero-description">
+            {{
+              hero
+                ? `${hero.artist}${hero.album ? ' · ' + hero.album : ''}`
+                : '从一首新歌、一份歌单开始。无需导入，也能找到今天想听的声音。'
+            }}
           </p>
           <div class="online-actions">
             <button v-if="hero" class="online-primary" type="button" @click="emit('play-hero')">
@@ -108,6 +114,9 @@ const primaryLabel = computed(() => {
               <i class="pi pi-search" aria-hidden="true"></i> 搜一首歌
             </button>
           </div>
+          <span class="online-hero-note">{{
+            hero ? '好音乐，随时接着听。' : '在线发现 · 随心播放 · 慢慢收藏'
+          }}</span>
         </div>
         <div class="online-record-stage" aria-hidden="true">
           <div class="online-record"><span></span></div>
@@ -122,7 +131,7 @@ const primaryLabel = computed(() => {
               ><template #placeholder><i class="pi pi-headphones"></i></template
             ></CoverImg>
             <template v-else
-              ><i class="pi pi-headphones"></i><span>TWILIGHT<br />ECHO</span></template
+              ><i class="pi pi-headphones"></i><span>FIND YOUR<br />NEXT FAVORITE.</span></template
             >
           </div>
           <span class="online-record-caption">TWILIGHT ECHO / PRESS PLAY</span>
@@ -131,7 +140,8 @@ const primaryLabel = computed(() => {
 
       <nav class="online-shortcuts" aria-label="探索音乐">
         <button v-if="canDiscover" type="button" @click="emit('open-streaming', 'discover')">
-          <i class="pi pi-compass" aria-hidden="true"></i><span><strong>发现歌单</strong></span
+          <i class="pi pi-compass" aria-hidden="true"></i
+          ><span><strong>发现歌单</strong><small>换个心情，遇见新声音</small></span
           ><i class="pi pi-arrow-up-right" aria-hidden="true"></i>
         </button>
         <button
@@ -140,16 +150,19 @@ const primaryLabel = computed(() => {
           @click="needsLogin ? emit('login') : emit('open-streaming', 'library')"
         >
           <i class="pi pi-heart" aria-hidden="true"></i
-          ><span><strong>我的在线音乐</strong><small v-if="needsLogin">登录后查看</small></span
+          ><span
+            ><strong>我的在线音乐</strong
+            ><small>{{ needsLogin ? '登录后，找回喜欢与歌单' : '喜欢的歌，都在这里' }}</small></span
           ><i class="pi pi-arrow-up-right" aria-hidden="true"></i>
         </button>
         <button type="button" @click="emit('open-radio')">
-          <i class="pi pi-microphone" aria-hidden="true"></i><span><strong>电台与播客</strong></span
+          <i class="pi pi-microphone" aria-hidden="true"></i
+          ><span><strong>电台与播客</strong><small>让声音陪你一会儿</small></span
           ><i class="pi pi-arrow-up-right" aria-hidden="true"></i>
         </button>
         <button v-if="!canDiscover || !canLibrary" type="button" @click="emit('open-plugins')">
           <i class="pi pi-plus-circle" aria-hidden="true"></i
-          ><span><strong>接入更多音源</strong></span
+          ><span><strong>接入更多音源</strong><small>拓展你的音乐世界</small></span
           ><i class="pi pi-arrow-up-right" aria-hidden="true"></i>
         </button>
       </nav>
@@ -349,9 +362,13 @@ const primaryLabel = computed(() => {
           <div v-if="!tracks.length && !playlists.length" class="online-empty">
             <i class="pi pi-headphones" aria-hidden="true"></i>
             <div>
-              <h3>{{ needsLogin ? '登录后查看推荐' : '暂无推荐内容' }}</h3>
+              <h3>{{ needsLogin ? '你的下一首喜欢，等你来发现' : '换一种方式，找到想听的' }}</h3>
               <p>
-                {{ needsLogin ? '也可以浏览歌单和电台。' : '可以使用搜索、音乐库或电台。' }}
+                {{
+                  needsLogin
+                    ? '登录后查看个性推荐，也可以先去探索歌单和电台。'
+                    : '暂时没有推荐内容，试试搜索、在线音乐库或电台。'
+                }}
               </p>
             </div>
             <button class="online-secondary" type="button" @click="primaryAction">
@@ -362,7 +379,8 @@ const primaryLabel = computed(() => {
       </section>
       <div v-else-if="error" class="online-notice" role="status">{{ error }}</div>
       <footer class="online-footer">
-        <button class="online-text-button" type="button" @click="emit('open-plugins')">
+        <span>你的音乐世界，从这里开始。</span
+        ><button class="online-text-button" type="button" @click="emit('open-plugins')">
           管理音源 <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
         </button>
       </footer>

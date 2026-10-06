@@ -4,7 +4,6 @@
   --online-accent: var(--te-primary-500);
   width: 100%;
   height: 100vh;
-  container: te-online-home / inline-size;
   overflow: auto;
   scrollbar-gutter: stable;
   color: var(--online-ink);
@@ -19,7 +18,7 @@
 .online-home-inner {
   max-width: 1320px;
   margin: 0 auto;
-  padding: var(--te-page-top) var(--te-page-gutter) var(--te-page-bottom);
+  padding: 64px clamp(22px, 3.4vw, 48px) calc(120px + var(--te-playbar-bottom-clearance, 0px));
   display: flex;
   flex-direction: column;
   gap: 32px;
@@ -49,7 +48,7 @@
   gap: 16px;
 }
 .online-heading h1 {
-  font-size: var(--te-page-title-size);
+  font-size: clamp(20px, 2.2vw, 28px);
   font-family: var(--te-font-display, inherit);
   font-weight: 650;
   letter-spacing: -0.04em;
@@ -152,6 +151,13 @@
 }
 .online-secondary:hover {
   background: var(--te-hover-bg);
+}
+.online-hero-note {
+  display: block;
+  margin-top: 22px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--online-muted);
 }
 .online-record-stage {
   position: relative;
@@ -550,7 +556,6 @@
 }
 .online-footer {
   padding-top: 20px;
-  justify-content: flex-end;
   border-top: 1px solid var(--te-card-border);
   color: var(--online-muted);
   font-size: 10px;
@@ -564,7 +569,7 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
-@container te-online-home (max-width: 1050px) {
+@media (max-width: 1050px) {
   .online-track-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -580,8 +585,9 @@
     display: none;
   }
 }
-@container te-online-home (max-width: 760px) {
+@media (max-width: 760px) {
   .online-home-inner {
+    padding: 48px 20px 140px;
     gap: 26px;
   }
   .online-heading {
@@ -619,7 +625,7 @@
     min-width: 180px;
   }
 }
-@container te-online-home (max-width: 480px) {
+@media (max-width: 480px) {
   .online-track-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -631,9 +637,4 @@
   .online-login-strip {
     align-items: flex-start;
   }
-}
-
-:global(html[data-te-shell-layout='custom'] .online-home) {
-  height: 100%;
-  min-height: 0;
 }

@@ -41,67 +41,30 @@ export function useProgressiveList<T>(
   let observedRow: Element | null = null
   let listEl: HTMLElement | null = null
   let scrollRoot: HTMLElement | null = null
-  let listParent: HTMLElement | null = null
-  let measureFrame: number | null = null
-  let disposed = false
-  const layoutElements = new Set<Element>()
 
   function onScroll(): void {
-    if (!scrollRoot || document.hidden) return
+    if (!scrollRoot) return
     scrollTop.value = scrollRoot.scrollTop
   }
 
   function bindScrollRoot(element: HTMLElement | null): void {
     if (scrollRoot === element) return
-    if (scrollRoot) {
-      scrollRoot.removeEventListener('scroll', onScroll)
-      rowObserver?.unobserve(scrollRoot)
-    }
+    if (scrollRoot) scrollRoot.removeEventListener('scroll', onScroll)
     scrollRoot = element
-    if (scrollRoot) {
-      scrollRoot.addEventListener('scroll', onScroll, { passive: true })
-      rowObserver?.observe(scrollRoot)
-    }
-  }
-
-  function observeRow(): void {
-    if (!listEl) return
-    const firstRow = listEl.firstElementChild
-    if (observedRow === firstRow) return
-    if (observedRow) rowObserver?.unobserve(observedRow)
-    observedRow = firstRow
-    if (firstRow) rowObserver?.observe(firstRow)
-  }
-
-  function observeLayout(): void {
-    const next = new Set<Element>()
-    for (let node: Element | null = listEl; node; node = node.parentElement) {
-      next.add(node)
-      if (node === scrollRoot) break
-      for (
-        let sibling = node.previousElementSibling;
-        sibling;
-        sibling = sibling.previousElementSibling
-      )
-        next.add(sibling)
-    }
-    for (const element of layoutElements) {
-      if (!next.has(element)) rowObserver?.unobserve(element)
-    }
-    for (const element of next) {
-      if (!layoutElements.has(element)) rowObserver?.observe(element)
-    }
-    layoutElements.clear()
-    for (const element of next) layoutElements.add(element)
+    if (scrollRoot) scrollRoot.addEventListener('scroll', onScroll, { passive: true })
   }
 
   function measure(): void {
-    if (!listEl || document.hidden) return
-    bindScrollRoot(findScrollParent(listEl))
+    if (!listEl) return
+    if (!scrollRoot) bindScrollRoot(findScrollParent(listEl))
     if (!scrollRoot) return
-    observeLayout()
-    observeRow()
-    const actualRowHeight = observedRow?.getBoundingClientRect().height
+    const firstRow = listEl.firstElementChild
+    if (firstRow && observedRow !== firstRow) {
+      rowObserver?.disconnect()
+      rowObserver?.observe(firstRow)
+      observedRow = firstRow
+    }
+    const actualRowHeight = firstRow?.getBoundingClientRect().height
     if (actualRowHeight && Math.abs(actualRowHeight - rowHeight.value) > 0.1) {
       rowHeight.value = actualRowHeight
     }
@@ -112,26 +75,9 @@ export function useProgressiveList<T>(
     scrollTop.value = scrollRoot.scrollTop
   }
 
-  function scheduleMeasure(): void {
-    if (measureFrame !== null || document.hidden) return
-    measureFrame = requestAnimationFrame(() => {
-      measureFrame = null
-      measure()
-    })
-  }
-
   function listRef(el: unknown): void {
-    if (disposed) return
-    const next = el instanceof HTMLElement ? el : null
-    if (listEl === next && listParent === next?.parentElement) {
-      observeRow()
-      return
-    }
-    if (listEl) rowObserver?.unobserve(listEl)
-    listEl = next
-    listParent = next?.parentElement ?? null
-    if (listEl) rowObserver?.observe(listEl)
-    bindScrollRoot(findScrollParent(next))
+    listEl = el instanceof HTMLElement ? el : null
+    bindScrollRoot(findScrollParent(listEl))
     measure()
   }
 
@@ -165,48 +111,20 @@ export function useProgressiveList<T>(
   const totalHeight = computed(() => items.value.length * rowHeight.value)
   const hasMoreToRender = computed(() => false)
 
-  function onVisibilityChange(): void {
-    if (document.hidden) {
-      if (measureFrame !== null) cancelAnimationFrame(measureFrame)
-      measureFrame = null
-    } else scheduleMeasure()
-  }
-
-  watch(items, scheduleMeasure, { flush: 'post' })
+  watch([items, visibleStart], measure, { flush: 'post' })
   onMounted(() => {
-    rowObserver = new ResizeObserver((entries) => {
-      if (document.hidden) return
-      for (const entry of entries) {
-        if (entry.target !== observedRow) {
-          scheduleMeasure()
-          continue
-        }
-        const height = entry.borderBoxSize[0]?.blockSize
-        if (height && Math.abs(height - rowHeight.value) > 0.1) {
-          scheduleMeasure()
-        }
-      }
-    })
-    layoutElements.clear()
+    rowObserver = new ResizeObserver(measure)
     observedRow = null
     measure()
-    window.addEventListener('resize', scheduleMeasure)
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('resize', measure)
   })
 
   onBeforeUnmount(() => {
-    disposed = true
     rowObserver?.disconnect()
-    window.removeEventListener('resize', scheduleMeasure)
-    document.removeEventListener('visibilitychange', onVisibilityChange)
-    if (measureFrame !== null) cancelAnimationFrame(measureFrame)
-    measureFrame = null
+    window.removeEventListener('resize', measure)
     if (scrollRoot) scrollRoot.removeEventListener('scroll', onScroll)
     scrollRoot = null
     listEl = null
-    listParent = null
-    observedRow = null
-    layoutElements.clear()
   })
 
   return {

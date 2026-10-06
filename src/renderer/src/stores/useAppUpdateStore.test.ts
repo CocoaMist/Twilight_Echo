@@ -164,7 +164,7 @@ test('failed actions keep their explanation when snapshot reconciliation also fa
   assert.equal(f.store.busy.value, false)
 })
 
-test('optional update reminders stay in the center while ready updates notify without leaking listeners', async () => {
+test('a same-version reminder after snooze reappears without leaking notification listeners', async () => {
   const f = fixture()
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', {
@@ -183,10 +183,7 @@ test('optional update reminders stay in the center while ready updates notify wi
       notice: { id: 'first', kind: 'available', version: '2.0.0' }
     })
     await tick()
-    assert.equal(notices.notices.value.length, 0)
-    assert.equal(notices.noticeHistory.value.length, 1)
-    assert.equal(notices.noticeHistory.value[0].presentation, 'center')
-    assert.equal(notices.noticeHistory.value[0].action?.label, '查看更新')
+    assert.equal(notices.notices.value.length, 1)
     f.publish({ ...initial, revision: 11, notice: null })
     await tick()
     assert.equal(notices.notices.value.length, 0)
@@ -196,26 +193,7 @@ test('optional update reminders stay in the center while ready updates notify wi
       notice: { id: 'tomorrow', kind: 'available', version: '2.0.0' }
     })
     await tick()
-    assert.equal(notices.notices.value.length, 0)
-    assert.equal(notices.noticeHistory.value.length, 1)
-    assert.match(notices.noticeHistory.value[0].message, /2\.0\.0/)
-    f.publish({
-      ...initial,
-      revision: 13,
-      notice: { id: 'ready', kind: 'ready', version: '2.0.0' }
-    })
-    await tick()
     assert.equal(notices.notices.value.length, 1)
-    assert.equal(notices.notices.value[0].presentation, 'toast')
-    assert.match(notices.notices.value[0].message, /已就绪/)
-    f.publish({
-      ...initial,
-      revision: 14,
-      notice: { id: 'installed', kind: 'installed', version: '2.0.0' }
-    })
-    await tick()
-    assert.equal(notices.notices.value.length, 0)
-    assert.equal(notices.noticeHistory.value[0].presentation, 'center')
   } finally {
     stop()
     assert.equal(f.listeners.size, 0)

@@ -18,6 +18,16 @@ test('local sidebar opening follows the streaming navigation timing', () => {
   )
   assert.doesNotMatch(sideMenu, /side-menu-item-in/)
   assert.match(app, /transition: padding-left var\(--te-motion-panel\) var\(--te-ease-soft\);/)
+  assert.match(
+    app,
+    /transform 0\.48s cubic-bezier\(0\.16, 1, 0\.3, 1\),\s*filter 0\.42s cubic-bezier\(0\.16, 1, 0\.3, 1\)/
+  )
+  assert.match(app, /translate3d\(0, 40px, 0\) scale\(0\.99\)/)
+  assert.match(
+    app,
+    /transform 0\.3s cubic-bezier\(0\.4, 0, 0\.2, 1\),\s*filter 0\.28s cubic-bezier\(0\.4, 0, 0\.2, 1\)/
+  )
+  assert.match(app, /translate3d\(0, -40px, 0\) scale\(0\.99\)/)
   assert.match(playerBarCss, /transition: left var\(--te-motion-panel\) var\(--te-ease-soft\);/)
 })
 

@@ -9,7 +9,6 @@ export interface SideMenuClearanceOptions {
 const SIDE_MENU_OVERLAP_GAP = 10
 
 export function useSideMenuClearance(options: SideMenuClearanceOptions) {
-  const playerBottomClearance = ref(0)
   const sideMenuBottomOffset = ref(0)
   const sideMenuToolsClearance = ref(0)
   /**
@@ -45,17 +44,6 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   }
 
   function measureSideMenuClearance(): void {
-    const playerBar = document.querySelector<HTMLElement>('.player-bar-shell')
-    const playerBarRect = playerBar?.getBoundingClientRect()
-    playerBottomClearance.value =
-      options.hasPlayerBar.value &&
-      playerBar?.dataset.tePlaybarHidden !== 'true' &&
-      playerBarRect &&
-      playerBarRect.height > 0 &&
-      playerBarRect.bottom > 0 &&
-      playerBarRect.top < window.innerHeight
-        ? Math.max(0, Math.ceil(window.innerHeight - playerBarRect.top))
-        : 0
     if (!options.showLocalSidebar.value || !options.hasPlayerBar.value) {
       setSideMenuBottomOffset(0)
       sideMenuToolsClearance.value = 0
@@ -63,8 +51,9 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     }
 
     const sideMenu = document.querySelector<HTMLElement>('.side-menu')
+    const playerBar = document.querySelector<HTMLElement>('.player-bar-shell')
 
-    if (!sideMenu || !playerBar || !playerBarRect) {
+    if (!sideMenu || !playerBar) {
       setSideMenuBottomOffset(0)
       sideMenuToolsClearance.value = 0
       return
@@ -94,6 +83,7 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     }
 
     const sideMenuRect = sideMenu.getBoundingClientRect()
+    const playerBarRect = playerBar.getBoundingClientRect()
     // An open local menu already gives the bar horizontal clearance through
     // `.player-bar-shell.menu-open`. Reading the bar's rect while that `left`
     // transition is in flight briefly reports an overlap, which lifts the menu
@@ -202,7 +192,6 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     setSideMenuBottomOffset(0)
     setSideMenuInlineEnd(0)
     sideMenuToolsClearance.value = 0
-    playerBottomClearance.value = 0
   }
 
   function onDocumentVisibilityChange(): void {
@@ -220,7 +209,6 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   document.addEventListener('visibilitychange', onDocumentVisibilityChange)
 
   return {
-    playerBottomClearance,
     sideMenuBottomOffset,
     sideMenuToolsClearance,
     sideMenuInlineEnd,

@@ -819,17 +819,17 @@
   grid-template-columns: minmax(0, 280px) minmax(460px, 1fr) minmax(0, 280px);
   align-items: center;
   column-gap: 22px;
-  height: 78px;
+  height: 72px;
   max-width: 1180px;
   margin: 0 auto;
-  border-radius: 25px;
+  border-radius: 22px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.66), rgba(248, 245, 255, 0.42)),
     rgba(255, 255, 255, 0.48);
   border: 1px solid rgba(255, 255, 255, 0.68);
-  padding: 0 12px;
+  padding: 0 22px;
   box-shadow:
-    0 4px 12px rgba(15, 23, 42, 0.06),
+    0 24px 80px rgba(15, 23, 42, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
@@ -859,7 +859,7 @@
   border-color: rgba(255, 255, 255, 0.12);
   border-top-color: rgba(255, 255, 255, 0.14);
   box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.16),
+    0 -18px 62px rgba(0, 0, 0, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.16);
   backdrop-filter: blur(28px) saturate(145%);
   -webkit-backdrop-filter: blur(28px) saturate(145%);
@@ -876,6 +876,10 @@
 }
 .player-bar-glass .ctrl-btn:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+.player-bar-glass .ctrl-btn img {
+  filter: brightness(0) invert(1);
+  opacity: 0.82;
 }
 .player-bar-glass .btn-play {
   background: var(
@@ -897,6 +901,10 @@
 }
 .player-bar-glass .mode-btn-right {
   color: rgba(255, 255, 255, 0.6);
+}
+.player-bar-glass .mode-btn-right img {
+  filter: brightness(0) invert(1);
+  opacity: 0.55;
 }
 .player-bar-glass .time-label {
   color: rgba(255, 255, 255, 0.5);
@@ -952,8 +960,8 @@
   max-width: 100%;
 }
 .player-cover-slot {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
   flex-shrink: 0;
   cursor: pointer;
   border-radius: 12px;
@@ -963,29 +971,30 @@
 .player-cover-slot img.player-cover,
 .player-cover-slot :deep(img.player-cover),
 .player-cover {
-  width: 100%;
-  height: 100%;
-  border-radius: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   object-fit: cover;
   flex-shrink: 0;
   cursor: pointer;
   display: block;
   transition:
     transform 0.22s var(--te-ease-soft),
+    box-shadow 0.22s,
     filter 0.22s;
-  box-shadow: none;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.12);
 }
 .player-cover-slot:hover img.player-cover,
 .player-cover-slot:hover :deep(img.player-cover),
 .player-cover-slot:hover .player-cover {
-  transform: scale(1.04);
-  box-shadow: none;
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.16);
   filter: saturate(1.08);
 }
 .player-cover-placeholder {
-  width: 100%;
-  height: 100%;
-  border-radius: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   background:
     radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.9), transparent 36%),
     linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(13, 148, 136, 0.12));
@@ -1010,14 +1019,14 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-slot {
 }
 html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-slot img.player-cover,
 html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover {
-  box-shadow: none;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
 }
 html[data-theme='dark']
   .player-bar:not(.player-bar-glass)
   .player-cover-slot:hover
   img.player-cover,
 html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-slot:hover .player-cover {
-  box-shadow: none;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.55);
 }
 html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeholder {
   background:
@@ -1113,7 +1122,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   height: 6px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7);
   animation: live-pulse 1.4s ease-out infinite;
 }
 
@@ -1128,12 +1137,14 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 }
 
 @keyframes live-pulse {
-  0%,
-  100% {
-    opacity: 1;
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.55);
   }
-  50% {
-    opacity: 0.45;
+  70% {
+    box-shadow: 0 0 0 6px rgba(255, 255, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
   }
 }
 
@@ -1282,10 +1293,11 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .ctrl-btn:active {
   transition-duration: 0.1s;
 }
-.ctrl-btn .player-control-icon {
+.ctrl-btn img {
   width: 18px;
   height: 18px;
-  font-size: 18px;
+  object-fit: contain;
+  opacity: 0.8;
   pointer-events: none;
   user-select: none;
 }
@@ -1314,10 +1326,16 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   box-shadow: none;
 }
 
-.btn-play .player-control-icon {
+.btn-play i {
+  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
+  line-height: 1;
+  color: #fff;
+}
+.btn-play img {
   width: 21px;
   height: 21px;
-  font-size: 21px;
+  opacity: 1;
+  filter: brightness(0) invert(1);
 }
 
 /* ===== Progress ===== */
@@ -1524,10 +1542,11 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .mode-btn-right:hover {
   background: #f0f0f0;
 }
-.mode-btn-right .player-control-icon {
+.mode-btn-right img {
   width: 19px;
   height: 19px;
-  font-size: 19px;
+  object-fit: contain;
+  opacity: 0.58;
   pointer-events: none;
   user-select: none;
 }
@@ -1541,8 +1560,8 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 .player-bar-glass .mode-btn-right.heart-mode-active {
   background: color-mix(in srgb, var(--te-favorite-500, #ef4444) 16%, transparent);
 }
-.mode-btn-right.heart-mode-active .player-control-icon {
-  color: var(--te-favorite-500, #ef4444);
+.mode-btn-right.heart-mode-active img {
+  opacity: 0.95;
 }
 
 .icon-btn {
@@ -1637,7 +1656,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   .player-bar {
     grid-template-columns: minmax(0, 0.72fr) minmax(360px, 1.8fr) minmax(0, 0.72fr);
     column-gap: 12px;
-    padding: 0 12px;
+    padding: 0 14px;
   }
 
   .player-right {
@@ -1878,7 +1897,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   /* Shade and drop are *ink*, and must not be read from the context label.
      `--te-lg-context-label-rgb` is the text colour the sampler picked for
      legibility, so over a dark backdrop it flips to near-white — which turned the
-     bottom lip and the drop shadow into a white halo and was a large part of
+     bottom lip and the 70px drop shadow into a white halo and was a large part of
      why the surface read as a grey slab instead of glass. */
   --te-lg-shade-rgb: 15, 23, 42;
   --te-lg-drop-rgb: 15, 23, 42;
@@ -1913,6 +1932,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   --te-lg-top-wash-alpha: 0.11;
   --te-lg-bottom-density-alpha: 0.1;
   --te-lg-shade-alpha: 0.08;
+  --te-lg-drop-near-alpha: 0.07;
   --te-lg-drop-alpha: var(--te-lg-context-shadow-alpha, 0.16);
   --te-lg-press-color: transparent;
   background: transparent !important;
@@ -1924,7 +1944,8 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
     inset 0 1px 1px
       rgba(var(--te-lg-sheen-rgb), calc(var(--te-lg-specular, var(--te-lg-rim-strength)) * 0.5)),
     inset 0 -1px 1px rgba(var(--te-lg-shade-rgb), var(--te-lg-shade-alpha)),
-    0 4px 12px rgba(var(--te-lg-drop-rgb), calc(var(--te-lg-drop-alpha) * 0.6)) !important;
+    0 5px 18px rgba(var(--te-lg-drop-rgb), var(--te-lg-drop-near-alpha)),
+    0 24px 70px rgba(var(--te-lg-drop-rgb), var(--te-lg-drop-alpha)) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -1935,7 +1956,6 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
-  corner-shape: inherit;
   /* Elasticity lets the playbar reach toward the cursor; 0 keeps it pinned. */
   transform: translate(var(--te-lg-elastic-x, 0px), var(--te-lg-elastic-y, 0px));
   /* Only the press flash and edge accents live here. The broad sheen washes this
@@ -2075,6 +2095,7 @@ html[data-theme='dark'] .player-bar-liquid {
   --te-lg-top-wash-alpha: 0.05;
   --te-lg-bottom-density-alpha: 0.1;
   --te-lg-shade-alpha: 0.16;
+  --te-lg-drop-near-alpha: 0.16;
   --te-lg-drop-alpha: 0.36;
 }
 
@@ -2893,25 +2914,22 @@ html[data-theme='dark']
   font-weight: 600;
 }
 
-/* The slot owns artwork sizing and clipping in every shape. */
+/* The artwork the shape leads with. Smaller than the standard bar's 48px so it
+   stays visually subordinate to the full-width spectrum stage above.
+   All three selectors are needed — the slot, a loaded image, and the placeholder
+   each carry their own box in the base rules. */
 .player-bar-shell[data-te-playbar-mode='compact']
   .player-bar-compact.player-bar-compact.player-bar-compact
-  .player-cover-slot {
+  .player-cover-slot,
+.player-bar-shell[data-te-playbar-mode='compact']
+  .player-bar-compact.player-bar-compact.player-bar-compact
+  .player-cover,
+.player-bar-shell[data-te-playbar-mode='compact']
+  .player-bar-compact.player-bar-compact.player-bar-compact
+  .player-cover-placeholder {
   width: 46px;
   height: 46px;
   border-radius: 12px;
-}
-
-.player-bar-shell[data-te-playbar-mode='mini']
-  .player-bar-mini.player-bar-mini.player-bar-mini
-  .player-cover-slot {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-}
-
-.player-bar-liquid .player-cover-slot {
-  corner-shape: inherit;
 }
 
 .player-bar-shell[data-te-playbar-mode='compact']
@@ -2933,10 +2951,8 @@ html[data-theme='dark']
   .player-bar-compact.player-bar-compact.player-bar-compact
   .player-controls
   .ctrl-btn
-  .player-control-icon {
+  img {
   width: 17px;
-  height: 17px;
-  font-size: 17px;
 }
 
 /* The filled circle the shape is recognised by: bigger than its neighbours, and
@@ -2954,10 +2970,8 @@ html[data-theme='dark']
   .player-bar-compact.player-bar-compact.player-bar-compact
   .player-controls
   .btn-play
-  .player-control-icon {
+  img {
   width: 16px;
-  height: 16px;
-  font-size: 16px;
 }
 
 .player-bar-shell[data-te-playbar-mode='compact']

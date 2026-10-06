@@ -67,10 +67,9 @@ const emit = defineEmits<{
 }
 .playlist-tabs {
   display: flex;
-  flex-wrap: wrap;
   flex-shrink: 0;
   gap: 8px;
-  padding: var(--te-page-top) var(--te-page-gutter) 0;
+  padding: 52px clamp(24px, 4vw, 60px) 0;
 }
 .playlist-tabs button {
   border: 1px solid var(--te-card-border);
@@ -90,15 +89,18 @@ const emit = defineEmits<{
   outline-offset: 2px;
 }
 .playlist-content {
-  --te-page-top: 20px;
   flex: 1;
   min-height: 0;
 }
 .playlist-content :deep(.song-list),
 .playlist-content :deep(.aggregate-page) {
   height: 100% !important;
+  padding-top: 24px;
 }
 :global(html[data-te-shell-layout='custom'] .application-playlists-page) {
   height: 100%;
+}
+:global(html[data-te-shell-layout='custom'] .playlist-tabs) {
+  padding-top: 20px;
 }
 </style>
