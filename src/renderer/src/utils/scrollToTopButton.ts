@@ -180,7 +180,7 @@ function update(): void {
 }
 
 function scheduleUpdate(): void {
-  if (frame !== null) return
+  if (frame !== null || document.hidden) return
   frame = window.requestAnimationFrame(() => {
     frame = null
     update()
@@ -204,6 +204,7 @@ function invalidateGeometry(): void {
 
 /** Page swaps mount and unmount containers without a scroll event of their own. */
 function scheduleSettleCheck(): void {
+  if (document.hidden) return
   invalidateGeometry()
   if (settleTimer !== null) window.clearTimeout(settleTimer)
   settleTimer = window.setTimeout(() => {
@@ -221,6 +222,7 @@ function onButtonClick(): void {
 }
 
 function onScroll(event: Event): void {
+  if (document.hidden) return
   const target = event.target
   if (!(target instanceof HTMLElement)) return
   if (target === scroller) {
@@ -248,6 +250,7 @@ function applyPointerTarget(): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
+  if (document.hidden) return
   pendingPointerTarget = event.target instanceof Element ? event.target : null
   if (pointerFrame !== null) return
   pointerFrame = window.requestAnimationFrame(() => {
@@ -261,11 +264,29 @@ function onKeyDown(event: KeyboardEvent): void {
   if (event.key === 'Escape' || event.key === 'Enter') scheduleSettleCheck()
 }
 
+function cancelPendingUpdates(): void {
+  if (frame !== null) window.cancelAnimationFrame(frame)
+  if (pointerFrame !== null) window.cancelAnimationFrame(pointerFrame)
+  if (settleTimer !== null) window.clearTimeout(settleTimer)
+  frame = null
+  pointerFrame = null
+  settleTimer = null
+  pendingPointerTarget = null
+}
+
+function onVisibilityChange(): void {
+  if (document.hidden) {
+    cancelPendingUpdates()
+    setVisible(false)
+  } else invalidateGeometry()
+}
+
 export function installScrollToTopButton(): () => void {
   document.addEventListener('scroll', onScroll, { capture: true, passive: true })
   document.addEventListener('pointermove', onPointerMove, { passive: true })
   document.addEventListener('click', scheduleSettleCheck, { capture: true, passive: true })
   document.addEventListener('keydown', onKeyDown, { capture: true, passive: true })
+  document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('resize', invalidateGeometry, { passive: true })
 
   return () => {
@@ -273,14 +294,9 @@ export function installScrollToTopButton(): () => void {
     document.removeEventListener('pointermove', onPointerMove)
     document.removeEventListener('click', scheduleSettleCheck, true)
     document.removeEventListener('keydown', onKeyDown, true)
+    document.removeEventListener('visibilitychange', onVisibilityChange)
     window.removeEventListener('resize', invalidateGeometry)
-    if (frame !== null) window.cancelAnimationFrame(frame)
-    if (pointerFrame !== null) window.cancelAnimationFrame(pointerFrame)
-    if (settleTimer !== null) window.clearTimeout(settleTimer)
-    frame = null
-    pointerFrame = null
-    settleTimer = null
-    pendingPointerTarget = null
+    cancelPendingUpdates()
     button?.removeEventListener('click', onButtonClick)
     button?.remove()
     button = null

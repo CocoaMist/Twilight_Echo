@@ -19,7 +19,8 @@
 .nh-page {
   width: min(100%, 1416px);
   margin: 0 auto;
-  padding: 64px clamp(24px, 4.2cqw, 66px) calc(68px + var(--te-playbar-height, 88px));
+  padding: var(--te-page-top) var(--te-page-gutter) var(--te-page-bottom);
+  box-sizing: border-box;
 }
 
 .night-harbor button {
@@ -63,7 +64,7 @@
 
 .nh-intro h1 {
   margin: 9px 0 12px;
-  font-size: clamp(32px, 3.8cqw, 48px);
+  font-size: clamp(var(--te-page-title-size), 3.8cqw, calc(var(--te-page-title-size) * 1.5));
   font-weight: 500;
   letter-spacing: -0.045em;
   line-height: 1.25;
@@ -828,18 +829,8 @@
   letter-spacing: 0.1em;
 }
 
-.nh-colophon > span > span {
-  margin: 0 9px;
-  color: var(--nh-accent);
-}
-
-.nh-colophon > span:nth-child(2) {
-  margin-left: auto;
-  font-family: var(--te-font-sans);
-  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
-}
-
 .nh-colophon > i {
+  margin-left: auto;
   color: var(--nh-accent);
   font-size: calc(var(--te-font-size-body, 14px) * 21 / 14);
 }
@@ -964,11 +955,6 @@
 }
 
 @container (max-width: 620px) {
-  .nh-page {
-    padding-right: 24px;
-    padding-left: 24px;
-  }
-
   .nh-deck-body {
     min-height: 275px;
     padding: 0 18px 4px 5px;
@@ -1018,21 +1004,12 @@
     gap: 24px 16px;
   }
 
-  .nh-colophon > span:nth-child(2) {
-    display: none;
-  }
-
   .nh-colophon > i {
     margin-left: auto;
   }
 }
 
 @container (max-width: 460px) {
-  .nh-page {
-    padding-right: 18px;
-    padding-left: 18px;
-  }
-
   .nh-intro > .nh-library-link {
     display: none;
   }
@@ -1112,4 +1089,9 @@
   .night-harbor button:active:not(:focus-visible) {
     transform: none;
   }
+}
+
+:global(html[data-te-shell-layout='custom'] .night-harbor) {
+  height: 100%;
+  min-height: 0;
 }

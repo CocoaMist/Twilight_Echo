@@ -70,6 +70,7 @@ test('EQ range, grouped selection and analyzer controls preserve gesture and aud
 const runtime = `import {createApp,h,nextTick,ref} from 'vue'
 import Workspace from '@renderer/components/equalizer/ParametricEqWorkspace.vue'
 import {responseToPath} from '@renderer/utils/eqViewport.ts'
+import {useEqSpectrum} from '@renderer/composables/useEqSpectrum.ts'
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const tick=async()=>{await nextTick();await new Promise(resolve=>setTimeout(resolve,20));await nextTick()}
 window.runEqRangeTests=async()=>{
@@ -340,6 +341,45 @@ window.runEqRangeTests=async()=>{
   expect(bands.value[0].q!==qBefore&&near(panelRect().left,beforeKnob.left)&&near(panelRect().top,beforeKnob.top),'knob drag changes its parameter without moving the panel')
   expect(commits===beforeMoveCommits+1,'knob interaction retains one audio commit')
   groupApp.unmount()
+  {
+  const nativeRequest=window.requestAnimationFrame,nativeCancel=window.cancelAnimationFrame
+  const hiddenDescriptor=Object.getOwnPropertyDescriptor(document,'hidden')
+  const frames=new Map();let nextFrame=1,hidden=false,now=0,lineWrites=0,peakWrites=0
+  window.requestAnimationFrame=callback=>{const id=nextFrame++;frames.set(id,callback);return id}
+  window.cancelAnimationFrame=id=>frames.delete(id)
+  Object.defineProperty(document,'hidden',{configurable:true,get:()=>hidden})
+  const step=()=>{now+=16.7;const batch=[...frames.values()];frames.clear();for(const callback of batch)callback(now)}
+  const levels=ref(new Float32Array(16).fill(0.3));let analyzer
+  const analyzerApp=createApp({setup(){analyzer=useEqSpectrum({levels:()=>levels.value,visible:()=>true,frozen:()=>false});return()=>h('svg',[h('path',{ref:analyzer.lineRef}),h('path',{ref:analyzer.fillRef}),h('path',{ref:analyzer.peakRef})])}})
+  try {
+    document.documentElement.dataset.teMotion='off';analyzerApp.mount('#app');await nextTick()
+    const countWrites=(element,count)=>{const original=element.setAttribute.bind(element);element.setAttribute=(name,value)=>{if(name==='d')count();original(name,value)}}
+    countWrites(analyzer.lineRef.value,()=>lineWrites++);countWrites(analyzer.peakRef.value,()=>peakWrites++)
+    document.documentElement.dataset.teMotion='full';await nextTick();step()
+    for(let i=0;i<8;i++){levels.value=new Float32Array(16).fill(0.4+i*0.03);await nextTick()}
+    expect(frames.size===1&&lineWrites===0,'eight input updates coalesce into one frame without eager path writes')
+    step();expect(lineWrites===1,'one rendered frame writes the line once')
+    analyzer.peakHold.value=true;await nextTick();peakWrites=0
+    levels.value=new Float32Array(16).fill(0.1);await nextTick();for(let i=0;i<10;i++)step()
+    expect(peakWrites===0,'held peak path is not rewritten during release interpolation')
+    hidden=true;document.dispatchEvent(new Event('visibilitychange'))
+    expect(frames.size===0,'hidden analyzer cancels pending frames immediately')
+    for(let i=0;i<8;i++){levels.value=new Float32Array(16).fill(0.8);await nextTick()}
+    expect(frames.size===0,'hidden input updates schedule no frames')
+    hidden=false;document.dispatchEvent(new Event('visibilitychange'));await nextTick();step()
+    expect(analyzer.lineRef.value.getAttribute('d').includes(',29.20'),'resume snaps to current data without stale animation')
+    levels.value=new Float32Array(16).fill(0.2);await nextTick()
+    expect(frames.size===1,'visible full motion resumes interpolation')
+    document.documentElement.dataset.teMotion='off';await nextTick()
+    expect(frames.size===0&&analyzer.lineRef.value.getAttribute('d').includes(',80.80'),'live motion off cancels interpolation and paints current data')
+    document.documentElement.dataset.teMotion='full';await nextTick()
+    analyzerApp.unmount();expect(frames.size===0,'unmount releases pending animation')
+  } finally {
+    analyzerApp.unmount();window.requestAnimationFrame=nativeRequest;window.cancelAnimationFrame=nativeCancel
+    if(hiddenDescriptor)Object.defineProperty(document,'hidden',hiddenDescriptor);else delete document.hidden
+    document.documentElement.dataset.teMotion='off'
+  }
+  }
   window.renderEqSpectrumPreview=async()=>{
     document.documentElement.dataset.teMotion='off'
     document.documentElement.dataset.theme='dark'

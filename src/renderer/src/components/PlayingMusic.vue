@@ -1180,7 +1180,7 @@ html[data-te-motion='off'] .backdrop-fluid::before {
   border-radius: var(--te-playback-cover-radius, 26px);
   overflow: hidden;
   background: rgba(255, 255, 255, 0.06);
-  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.38);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
 }
 
 :global(html[data-te-motion='full'] .cover-frame) {
@@ -1196,17 +1196,13 @@ html[data-te-motion='off'] .backdrop-fluid::before {
 
 :global(html[data-theme='dark'] .playing-music .cover-frame) {
   background: var(--te-playback-cover-surface, rgba(15, 23, 42, 0.45));
-  box-shadow: var(
-    --te-playback-cover-shadow,
-    0 26px 70px rgba(0, 0, 0, 0.55),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.06)
-  );
+  box-shadow: var(--te-playback-cover-shadow, 0 4px 12px rgba(0, 0, 0, 0.18));
 }
 
 :global(html[data-theme='light'] .playing-music .cover-frame),
 :global(html[data-theme='pureWhite'] .playing-music .cover-frame) {
   background: var(--te-playback-cover-surface, rgba(15, 23, 42, 0.08));
-  box-shadow: var(--te-playback-cover-shadow, 0 26px 70px rgba(15, 23, 42, 0.28));
+  box-shadow: var(--te-playback-cover-shadow, 0 4px 12px rgba(15, 23, 42, 0.08));
 }
 
 :global(html[data-te-artwork-shadow='off'] .playing-music .cover-frame) {

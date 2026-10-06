@@ -123,7 +123,7 @@ Layer values are the _contract_; implementations must honor the relative order a
 | Layer      | z   | Blur (background contribution)                    | Opacity (rest → active)                 | Interaction priority                                        | Notes                                                                                         |
 | ---------- | --- | ------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Background | 0   | 40–80 pt on artwork-sourced gradient 🔵           | 1.0 → 0.85 when chrome expands          | 0 — never intercepts                                        | Renders at 1 fps ambient drift; **no** beat-synced pulsing (see §10 DON'T)                    |
-| Artwork    | 10  | 0 (sharp); shadow soft 30–60 pt 🔵                | 1.0                                     | 1 — tap: cycle view mode; drag-down: dismiss; pinch: expand | Aspect preserved; no letterbox. GPU-cached (blurred copy for background, sharp copy for hero) |
+| Artwork    | 10  | 0 (sharp); small optional artwork shadow 🔵       | 1.0                                     | 1 — tap: cycle view mode; drag-down: dismiss; pinch: expand | Aspect preserved; no letterbox. GPU-cached (blurred copy for background, sharp copy for hero) |
 | Metadata   | 20  | 0 (text sits on artwork or background)            | 1.0                                     | 2 — tap title/artist: jump to album/artist                  | Max 3 lines; typography from §8.0                                                             |
 | Lyrics     | 30  | 0 — **never** glass-backed (🔵 rationale in §3.3) | current line 1.0, past 0.7, future 0.45 | 3 — vertical scroll, tap line = seek                        | Driven by audio clock (§4.5); scroll position is an output, never an input                    |
 | Control    | 40  | Liquid Glass Regular (auto-adaptive) 🟢           | 0.9 at rest → 1.0 on interaction        | 4 — transport, scrub, volume                                | Transient: auto-recedes after 3 s idle in immersive mode                                      |
@@ -184,12 +184,14 @@ Three behaviors are non-negotiable engineering targets if you build a custom app
 
 Wherever the platform provides Liquid Glass (`SwiftUI .glassEffect`, macOS/iOS system bars), **use the system material and do not override its parameters**. The table is for custom approximations and cross-platform ports.
 
+For the Electron host, use shadows to distinguish raised surfaces rather than decorate every content block. [HIG Color](https://developer.apple.com/design/human-interface-guidelines/color) defines shadow color as the virtual shadow of a raised object; [HIG Materials](https://developer.apple.com/design/human-interface-guidelines/materials) separates the functional control layer from the content layer. Ordinary cards, list containers, inputs and embedded tabs use fills and borders. Menus and dialogs retain elevation, while the floating player bar and main artwork use small, single drop shadows. Avoid stacking card, artwork and button shadows or animating shadow blur. Theme overrides remain supported. The host's 4px/12px artwork shadow and 8px/24px popup shadow are project defaults, not Apple-specified values.
+
 | Parameter          | Resting (small controls, e.g. toolbar buttons) | Expanded (menus, sheets, sidebars)                                | Notes                                                                                                              |
 | ------------------ | ---------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | Blur radius        | 24–32 pt                                       | 40–60 pt                                                          | Larger surface ⇒ thicker material, deeper blur (WWDC25: menus/sheets feel thicker) 🟢-informed                     |
 | Luminosity shift   | −8% … +8% (adaptive to background)             | −12% … +12%                                                       | Must follow background luminance; light/dark flip allowed only for elements < ~400 pt tall (nav bars, tab bars) 🟢 |
 | Tint               | 0 (clear) … 30% of accent                      | accent 15–40%                                                     | Tint strength maps to content brightness underneath (colored-glass behavior) 🟢                                    |
-| Shadow             | opacity 8–20%, blur 12–24 pt, offset 0–4 pt    | opacity 15–30%, blur 24–48 pt, offset 4–8 pt                      | Shadow opacity must **rise when text scrolls underneath** 🟢                                                       |
+| Shadow             | opacity 8–20%, blur 12–24 pt, offset 0–4 pt    | opacity 15–30%, blur 24–48 pt, offset 4–8 pt                      | Adaptive shadow can help separate controls from content; avoid decorative stacking 🔵                              |
 | Corner radius      | capsule (r = h/2) or fixed 14–18 pt            | concentric: parent radius − padding (WWDC25 §356 shape system) 🟢 | Never mix radius families within one control                                                                       |
 | Refraction         | 1–3 pt edge displacement                       | 2–5 pt                                                            | Simulated with an inner stroke + displaced background copy when no real-time refraction is possible                |
 | Specular highlight | top-edge 0.5–1 pt, white 20–40%                | 1–2 pt                                                            | Must follow the geometry, not be a static gradient                                                                 |
@@ -814,15 +816,19 @@ The background gradient and accent colors are derived from the artwork. Pipeline
 | `space-48` | 48 pt | hero separation, lyrics line spacing     |
 | `space-64` | 64 pt | full-screen mode breathing room          |
 
-### Corner radii (concentric system 🟢 WWDC25 356)
+### Corner radii (project scale; concentric principle 🟢 WWDC25 356)
 
-| Token            | Value                           | Use                                       |
-| ---------------- | ------------------------------- | ----------------------------------------- |
-| `radius-10`      | 10 pt                           | artwork small (mini player)               |
-| `radius-14`      | 14 pt                           | artwork medium, buttons                   |
-| `radius-18`      | 18 pt                           | artwork hero, cards                       |
-| `radius-capsule` | h/2                             | transport buttons, sliders, pill controls |
-| Nested rule      | inner = parent radius − padding | any nested container                      |
+Apple describes fixed rounded rectangles, capsules, and concentric shapes in [WWDC25 — Get to know the new design system, 3:21–6:14](https://developer.apple.com/videos/play/wwdc2025/356/?time=201). Nested radii follow the parent's radius minus the inset; capsules use half the control height. Compact desktop controls retain rounded rectangles. The numerical scale below is an Echora choice, not an Apple HIG requirement or a published golden-ratio formula. CSS `superellipse(2)` is our web approximation of continuous corners, not Apple's proprietary geometry.
+
+| Token / rule         | Default                       | Use                                          |
+| -------------------- | ----------------------------- | -------------------------------------------- |
+| `--te-radius-global` | 13 px                         | standalone compact controls                  |
+| `--te-card-radius`   | 21 px                         | home and settings card surfaces              |
+| `--te-dialog-radius` | 21 px                         | dialog-panel fallback                        |
+| Capsule / circle     | h/2                           | transport buttons and existing pill controls |
+| Nested rule          | max(0, parent radius − inset) | include padding and border in the inset      |
+
+For example, settings navigation with a 21 px outer radius, 8 px padding and a 1 px border gives its nested search and navigation items a 12 px radius. Theme overrides change both levels together; standalone items use a fallback radius. A matching radius alone does not reproduce Apple's material: [HIG Materials](https://developer.apple.com/design/human-interface-guidelines/materials) reserves Liquid Glass for the controls/navigation layer and calls for standard materials in the content layer. Existing optional theme effects remain separate from this geometry change.
 
 ### Typography (iOS Large / default scale, SF Pro 🟢 HIG)
 

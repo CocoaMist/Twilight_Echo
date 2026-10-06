@@ -22,7 +22,7 @@ const server = await createServer({
           <body><div id="app"></div><script type="module">
           import { createApp } from 'vue';
           import Preview from '/scripts/notice-preview/NoticePreview.vue';
-          import '/node_modules/primeicons/primeicons.css';
+          import '/src/renderer/src/assets/icons.css';
           createApp(Preview).mount('#app');
           </script></body></html>`
           )

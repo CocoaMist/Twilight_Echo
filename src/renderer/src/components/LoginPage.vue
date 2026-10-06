@@ -812,18 +812,7 @@ onUnmounted(() => {
                   alt=""
                 />
                 <span class="provider-arrow">
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M9 18l6-6-6-6" />
-                  </svg>
+                  <i class="ph ph-caret-right" style="font-size: 15px" aria-hidden="true"></i>
                 </span>
               </button>
             </div>
@@ -838,18 +827,7 @@ onUnmounted(() => {
                 data-te-back-button="pill"
                 @click="backToAccounts"
               >
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.4"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M15 18l-6-6 6-6" />
-                </svg>
+                <i class="ph ph-caret-left" style="font-size: 13px" aria-hidden="true"></i>
                 全部平台
               </button>
               <h2 class="stage-title">
@@ -950,19 +928,11 @@ onUnmounted(() => {
                       @keydown.enter.prevent="handleRefresh"
                       @keydown.space.prevent="handleRefresh"
                     >
-                      <svg
-                        width="24"
-                        height="24"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <polyline points="23 4 23 10 17 10" />
-                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                      </svg>
+                      <i
+                        class="ph ph-arrow-clockwise"
+                        style="font-size: 24px"
+                        aria-hidden="true"
+                      ></i>
                       <span>点击刷新二维码</span>
                     </div>
                     <div v-if="pageState === 'qr_ready'" class="qr-scanline"></div>
@@ -1124,18 +1094,7 @@ onUnmounted(() => {
                 data-te-back-button="pill"
                 @click="backToAccounts"
               >
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.4"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M15 18l-6-6 6-6" />
-                </svg>
+                <i class="ph ph-caret-left" style="font-size: 13px" aria-hidden="true"></i>
                 全部平台
               </button>
             </header>
@@ -1184,18 +1143,7 @@ onUnmounted(() => {
               </div>
               <div class="id-actions">
                 <button type="button" class="btn-primary" @click="enterAfterLoggedIn">
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polygon points="5 3 19 12 5 21 5 3" />
-                  </svg>
+                  <i class="ph-fill ph-play" style="font-size: 15px" aria-hidden="true"></i>
                   进入流媒体
                 </button>
                 <button
@@ -1216,10 +1164,7 @@ onUnmounted(() => {
           <!-- 登录成功 -->
           <section v-else-if="view === 'success'" key="success" class="stage-center">
             <div class="success-burst">
-              <svg viewBox="0 0 52 52" class="success-check">
-                <circle class="success-circle" cx="26" cy="26" r="24" fill="none" />
-                <path class="success-tick" fill="none" d="M15 27l7 7 15-16" />
-              </svg>
+              <i class="success-check ph ph-check-circle" aria-hidden="true"></i>
             </div>
             <h2 class="stage-title center">登录成功</h2>
             <p class="stage-muted">正在为你打开流媒体…</p>
@@ -1228,19 +1173,7 @@ onUnmounted(() => {
           <!-- 错误 -->
           <section v-else key="error" class="stage-center">
             <div class="error-badge">
-              <svg
-                width="26"
-                height="26"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
+              <i class="ph ph-warning-circle" style="font-size: 26px" aria-hidden="true"></i>
             </div>
             <p class="error-text">{{ errorMsg || '出了点问题，请稍后重试' }}</p>
             <div class="error-actions">
@@ -2322,31 +2255,8 @@ onUnmounted(() => {
   position: relative;
   width: 62px;
   height: 62px;
-}
-
-.success-circle {
-  stroke: var(--te-success-soft-fg);
-  stroke-width: 2.4;
-  stroke-dasharray: 152;
-  stroke-dashoffset: 152;
-  stroke-linecap: round;
-  animation: drawStroke 0.7s var(--te-ease-soft) 0.1s forwards;
-}
-
-.success-tick {
-  stroke: var(--te-success-soft-fg);
-  stroke-width: 3.4;
-  stroke-dasharray: 36;
-  stroke-dashoffset: 36;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  animation: drawStroke 0.4s var(--te-ease-soft) 0.55s forwards;
-}
-
-@keyframes drawStroke {
-  to {
-    stroke-dashoffset: 0;
-  }
+  font-size: 62px;
+  color: var(--te-success-soft-fg);
 }
 
 .error-badge {

@@ -105,7 +105,11 @@ const rawProgressPercent = computed(() =>
     : 0
 )
 // Snapshot pushes are stepped; glide between them like the main PlayerBar.
-const progressPercent = useSmoothedValue(rawProgressPercent, { tau: 160, snapThreshold: 2.5 })
+const progressPercent = useSmoothedValue(rawProgressPercent, {
+  tau: 160,
+  snapThreshold: 2.5,
+  epsilon: 0.01
+})
 const progressStyle = computed<CSSProperties>(() => ({
   '--mini-progress': `${Math.min(100, Math.max(0, progressPercent.value)) / 100}`
 }))

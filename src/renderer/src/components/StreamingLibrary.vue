@@ -364,11 +364,7 @@ function deleteMenuPlaylist(): void {
             <i class="pi pi-heart-fill"></i>
           </span>
           <div class="heart-icon">
-            <svg viewBox="0 0 24 24">
-              <path
-                d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
-              />
-            </svg>
+            <i class="ph-fill ph-heart" aria-hidden="true"></i>
           </div>
         </div>
       </div>
@@ -960,8 +956,8 @@ function deleteMenuPlaylist(): void {
 }
 
 .btn-play {
-  background: linear-gradient(135deg, var(--te-primary-500, #6366f1), #818cf8);
-  color: #fff;
+  background: var(--te-neutral-900);
+  color: var(--te-card-bg);
   border: none;
   padding: 12px 32px;
   border-radius: 999px;
@@ -970,13 +966,12 @@ function deleteMenuPlaylist(): void {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  box-shadow: 0 10px 24px rgba(var(--te-primary-rgb, 99, 102, 241), 0.3);
+  box-shadow: none;
   transition: transform 0.3s var(--te-ease-soft);
   cursor: pointer;
 }
 .btn-play:hover {
   transform: translateY(-2px) scale(1.02);
-  box-shadow: 0 14px 32px rgba(var(--te-primary-rgb, 99, 102, 241), 0.4);
 }
 
 .favorites-cover {
@@ -1023,10 +1018,11 @@ function deleteMenuPlaylist(): void {
   align-items: center;
   justify-content: center;
 }
-.heart-icon svg {
+.heart-icon .ph-fill {
   width: 24px;
   height: 24px;
-  fill: #fff;
+  font-size: 24px;
+  color: var(--te-neutral-900);
 }
 
 /* Feature Cards (Recent & Ranking portals) */
@@ -1492,16 +1488,6 @@ function deleteMenuPlaylist(): void {
   color: #fb7185 !important;
 }
 
-:global(html[data-theme='dark'] .library-view .btn-play) {
-  background: linear-gradient(135deg, var(--te-primary-500), var(--te-primary-400));
-  color: #111111;
-  box-shadow: 0 10px 24px rgba(var(--te-primary-rgb), 0.22);
-}
-
-:global(html[data-theme='dark'] .library-view .btn-play:hover) {
-  box-shadow: 0 14px 32px rgba(var(--te-primary-rgb), 0.3);
-}
-
 :global(html[data-theme='dark'] .library-view .recent-card),
 :global(html[data-theme='dark'] .library-view .ranking-card) {
   background: linear-gradient(135deg, rgba(31, 31, 31, 0.96) 0%, rgba(24, 24, 24, 0.84) 100%);
@@ -1550,7 +1536,7 @@ function deleteMenuPlaylist(): void {
 }
 
 :global(html[data-window-transparent='on'] .library-view .heart-icon) {
-  background: rgba(255, 255, 255, 0.1) !important;
+  background: var(--te-glass-bg) !important;
 }
 
 @keyframes library-in {

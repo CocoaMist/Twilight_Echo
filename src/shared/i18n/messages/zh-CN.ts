@@ -189,8 +189,7 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'audio.reason.backend_not_output_perfect.fix': '切换到 WASAPI Exclusive、ASIO 或 CoreAudio Hog。',
 
   'audio.reason.output_not_perfect.label': '当前输出链尚未验证为直通',
-  'audio.reason.output_not_perfect.explain':
-    '引擎还没有取得足够证据证明这条链是逐位直通的。链路本身可能没问题，只是未被证明。',
+  'audio.reason.output_not_perfect.explain': '尚未取得逐位直通的验证结果。',
   'audio.reason.output_not_perfect.fix': '',
   'audio.reason.output_released.label': '音频设备已释放',
   'audio.reason.output_released.explain': '播放已暂停或结束，音频设备当前未被占用。',
@@ -199,7 +198,7 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   // ── 源文件属性 ────────────────────────────────────────────────────────────
   'audio.reason.source_lossy.label': '源文件是有损格式，不能 Source Exact',
   'audio.reason.source_lossy.explain':
-    '有损格式（MP3、AAC 等）解码出来的是重建波形，原始样本已在编码时丢失，Source Exact 无从谈起。这不是播放器的问题。',
+    'MP3、AAC 等有损格式未保留原始样本，无法验证为 Source Exact。',
   'audio.reason.source_lossy.fix': '',
 
   'audio.reason.source_format_differs.label': '源格式与输出链不一致',
@@ -220,9 +219,9 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
 
   'audio.reason.dsd_volume_pcm_fallback.label': 'DSD 因软件音量不是 100% 而回退到 PCM',
   'audio.reason.dsd_volume_pcm_fallback.explain':
-    '软件音量要逐样本乘一个增益系数，而 DSD 位流无法直接承载增益，所以 DSD 先被解调成 PCM 才能调音量。这与 DSP 处理链无关，开启直通模式也不会解除——直通模式刻意不动音量，避免响度突然跳到满刻度。',
+    '调整软件音量需要将 DSD 转为 PCM。直通模式不会修改音量，也不会取消此转换。',
   'audio.reason.dsd_volume_pcm_fallback.fix':
-    '把软件音量设为 100%（Unity），改用功放或 DAC 上的物理旋钮控制响度，DSD 即可恢复原生传输。',
+    '先降低功放或 DAC 的物理音量，再将软件音量设为 100%（Unity）。',
 
   'audio.reason.dsd_high_rate_pcm_fallback.label': 'DSD 因采样率或驱动限制回退到 PCM',
   'audio.reason.dsd_high_rate_pcm_fallback.explain':

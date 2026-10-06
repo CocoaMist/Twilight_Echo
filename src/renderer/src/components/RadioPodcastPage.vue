@@ -291,7 +291,6 @@ function formatDuration(seconds: number): string {
       <div class="page-heading">
         <span class="page-kicker">ONLINE LISTENING</span>
         <h1>电台与播客</h1>
-        <p>把正在听的内容放在前面，用轻量工具补充新的电台和播客。</p>
       </div>
       <div class="tabs" role="tablist" aria-label="在线音频类型">
         <button
@@ -332,7 +331,6 @@ function formatDuration(seconds: number): string {
             <span class="card-icon"><i class="pi pi-plus"></i></span>
             <div>
               <h2>添加电台</h2>
-              <p>输入名称和直播流地址，保存后即可播放。</p>
             </div>
           </div>
           <label>
@@ -394,7 +392,6 @@ function formatDuration(seconds: number): string {
             <span class="card-icon"><i class="pi pi-search"></i></span>
             <div>
               <h2>发现电台</h2>
-              <p>从 radio-browser.info 搜索新的直播流。</p>
             </div>
           </div>
           <div class="inline-search">
@@ -438,7 +435,6 @@ function formatDuration(seconds: number): string {
           <div>
             <span class="section-kicker">MY LIBRARY</span>
             <h2 id="station-library-title">我的电台</h2>
-            <p>播放是主操作，管理操作保持克制。</p>
           </div>
           <span class="collection-count">{{ radio.stations.value.length }} 个电台</span>
         </div>
@@ -466,7 +462,7 @@ function formatDuration(seconds: number): string {
         <div v-else class="collection-empty">
           <span class="empty-icon"><i class="pi pi-broadcast"></i></span>
           <h3>还没有收藏的电台</h3>
-          <p>从左侧手动添加、导入播放列表，或搜索发现新的电台。</p>
+          <p>添加或导入电台。</p>
         </div>
       </section>
     </section>
@@ -477,7 +473,6 @@ function formatDuration(seconds: number): string {
           <span class="card-icon"><i class="pi pi-rss"></i></span>
           <div>
             <h2>订阅播客</h2>
-            <p>输入 RSS 或 Atom 地址，将新内容收进你的订阅列表。</p>
           </div>
         </div>
         <div class="podcast-subscribe-form">
@@ -584,7 +579,6 @@ function formatDuration(seconds: number): string {
         <div v-else class="episode-empty">
           <span class="empty-icon"><i class="pi pi-microphone"></i></span>
           <h2>选择一个播客</h2>
-          <p>从左侧订阅列表选择播客，查看最新剧集并开始播放。</p>
         </div>
       </div>
     </section>
@@ -593,15 +587,16 @@ function formatDuration(seconds: number): string {
 
 <style scoped>
 .radio-podcast-page {
+  container: radio-podcast / inline-size;
   box-sizing: border-box;
   width: 100%;
-  height: 100vh;
+  height: 100dvh;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 52px clamp(24px, 5vw, 72px) 132px;
+  padding: var(--te-page-top) var(--te-page-gutter) var(--te-page-bottom);
   color: var(--te-text, #0f172a);
   scrollbar-width: thin;
   scrollbar-color: var(--te-scrollbar-thumb) transparent;
@@ -632,7 +627,6 @@ function formatDuration(seconds: number): string {
   margin-bottom: 28px;
 }
 
-.back-btn,
 .tabs button,
 .tool-card button,
 .podcast-subscribe-form button,
@@ -684,9 +678,9 @@ button:disabled {
 }
 .page-heading h1 {
   margin: 5px 0 4px;
-  font-size: clamp(25px, 3vw, 34px);
+  font-size: var(--te-page-title-size);
   letter-spacing: -0.045em;
-  line-height: 1.04;
+  line-height: 1.18;
 }
 .page-heading p,
 .card-heading p,
@@ -1147,9 +1141,9 @@ button.primary {
   background: color-mix(in srgb, var(--te-card-bg) 82%, transparent);
 }
 
-@media (max-width: 880px) {
+@container radio-podcast (max-width: 880px) {
   .page-header {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
   .tabs {
     grid-column: 1 / -1;
@@ -1170,27 +1164,9 @@ button.primary {
   }
 }
 
-@media (max-width: 680px) {
-  .radio-podcast-page {
-    padding: 38px 16px 120px;
-  }
+@container radio-podcast (max-width: 680px) {
   .page-header {
     gap: 14px;
-    padding: 52px 0 0;
-  }
-  .back-btn {
-    inset-block: 0 auto;
-    transform: none;
-  }
-  .back-btn:hover {
-    transform: translateX(-2px);
-  }
-  .page-heading {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-  .tabs {
-    grid-row: 3;
   }
   .radio-tools {
     grid-template-columns: 1fr;
@@ -1219,5 +1195,8 @@ button.primary {
   .episode-actions {
     justify-content: flex-start;
   }
+}
+:global(html[data-te-shell-layout='custom'] .radio-podcast-page) {
+  height: 100%;
 }
 </style>

@@ -25,15 +25,6 @@ import { useLocale } from '../app/useLocale.ts'
 import type { LyricLayerSourceSelection } from '../../../shared/lyricsManagement.ts'
 import CoverImg from './CoverImg.vue'
 import HiFiSidebar from './player-bar/HiFiSidebar.vue'
-import nextTrackIcon from '../assets/icons/next-track.svg'
-import pauseIcon from '../assets/icons/pause.svg'
-import playIcon from '../assets/icons/play.svg'
-import previousTrackIcon from '../assets/icons/previous-track.svg'
-import repeatIcon from '../assets/icons/single-song-repeat.svg'
-import listLoopIcon from '../assets/icons/list-loop-repeat.svg'
-import sequentialIcon from '../assets/icons/sequential-playback.svg'
-import shuffleIcon from '../assets/icons/shuffle.svg'
-import heartModeIcon from '../assets/icons/heart-mode.svg'
 import { useFavoriteButton } from './player-bar/useFavoriteButton'
 import { useFloatingPanels } from './player-bar/useFloatingPanels'
 import { usePlaybarAutoHide } from './player-bar/usePlaybarAutoHide.ts'
@@ -1769,19 +1760,21 @@ onBeforeUnmount(() => {
             @click="onCoverClick"
           >
             <CoverImg
-              v-if="currentTrack.cover || currentTrack.coverSource"
               :cover="currentTrack.cover"
               :cover-source="currentTrack.coverSource"
               :identity="currentTrack.id"
               class="player-cover"
               alt=""
-            />
-            <div v-else class="player-cover-placeholder">
-              <i
-                class="pi pi-wave-pulse"
-                style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); color: #bbb"
-              ></i>
-            </div>
+            >
+              <template #placeholder>
+                <div class="player-cover-placeholder">
+                  <i
+                    class="pi pi-wave-pulse"
+                    style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); color: #bbb"
+                  ></i>
+                </div>
+              </template>
+            </CoverImg>
           </div>
 
           <div v-else-if="control === 'trackInfo'" class="player-track-info">
@@ -1833,18 +1826,18 @@ onBeforeUnmount(() => {
 
           <div v-else-if="control === 'transport'" class="player-controls">
             <button class="ctrl-btn previous-button" aria-label="上一首" @click="prev">
-              <img :src="previousTrackIcon" alt="上一首" />
+              <PlayerControlIcon name="previous" filled />
             </button>
             <button
               class="ctrl-btn btn-play"
               :class="{ 'is-playing': isPlaying }"
-              aria-label="播放/暂停"
+              :aria-label="isPlaying ? '暂停' : '播放'"
               @click="togglePlay"
             >
-              <img :src="isPlaying ? pauseIcon : playIcon" :alt="isPlaying ? '暂停' : '播放'" />
+              <PlayerControlIcon :name="isPlaying ? 'pause' : 'play'" filled />
             </button>
             <button class="ctrl-btn next-button" aria-label="下一首" @click="next">
-              <img :src="nextTrackIcon" alt="下一首" />
+              <PlayerControlIcon name="next" filled />
             </button>
           </div>
 
@@ -1857,7 +1850,7 @@ onBeforeUnmount(() => {
             :aria-label="isPlaying ? '暂停' : '播放'"
             @click="togglePlay"
           >
-            <i :class="isPlaying ? 'pi pi-pause' : 'pi pi-play'" aria-hidden="true"></i>
+            <PlayerControlIcon :name="isPlaying ? 'pause' : 'play'" filled />
           </button>
 
           <span
@@ -1896,11 +1889,7 @@ onBeforeUnmount(() => {
             :aria-label="modeTitle"
             @click="cyclePlayMode"
           >
-            <img v-if="playMode === 'sequential'" :src="sequentialIcon" alt="顺序" />
-            <img v-else-if="playMode === 'listLoop'" :src="listLoopIcon" alt="列表循环" />
-            <img v-else-if="playMode === 'repeat'" :src="repeatIcon" alt="单曲循环" />
-            <img v-else-if="playMode === 'heart'" :src="heartModeIcon" alt="心动模式" />
-            <img v-else :src="shuffleIcon" alt="随机" />
+            <PlayerControlIcon :name="playMode" :filled="playMode === 'heart'" />
           </button>
 
           <div

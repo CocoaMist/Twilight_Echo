@@ -330,7 +330,7 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'colors',
     'settings',
     'color',
-    '#8a8f98',
+    '#626b78',
     '#9b9b9b'
   ),
   token(
@@ -552,8 +552,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'materials',
     'library',
     'shadow',
-    '0 26px 78px rgba(86, 70, 160, 0.1)',
-    '0 26px 78px rgba(86, 70, 160, 0.1)'
+    'none',
+    'none'
   ),
   token(
     'library.row.text',
@@ -778,8 +778,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'materials',
     'global',
     'shadow',
-    '0 16px 42px rgba(15, 23, 42, 0.08)',
-    '0 18px 54px rgba(0, 0, 0, 0.34)'
+    '0 8px 24px rgba(15, 23, 42, 0.1)',
+    '0 8px 24px rgba(0, 0, 0, 0.26)'
   ),
   token(
     'material.surfaceOpacity',
@@ -933,8 +933,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'card',
     'length',
-    '16px',
-    '16px',
+    '21px',
+    '21px',
     {
       min: 0,
       max: 24,
@@ -949,8 +949,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'global',
     'length',
-    '10px',
-    '10px',
+    '13px',
+    '13px',
     {
       min: 0,
       max: 24,
@@ -965,8 +965,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'dialog',
     'length',
-    '8px',
-    '8px',
+    '21px',
+    '21px',
     { min: 0, max: 24, step: 1, unit: 'px' }
   ),
   token(
@@ -976,8 +976,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'search',
     'length',
-    '10px',
-    '10px',
+    '13px',
+    '13px',
     { min: 0, max: 24, step: 1, unit: 'px' }
   ),
   token(
@@ -987,8 +987,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'shape',
     'toast',
     'length',
-    '8px',
-    '8px',
+    '13px',
+    '13px',
     { min: 0, max: 24, step: 1, unit: 'px' }
   ),
   token(
@@ -1164,8 +1164,8 @@ export const THEME_TOKEN_DEFINITIONS: readonly ThemeTokenDefinition[] = Object.f
     'playback',
     'player',
     'shadow',
-    '0 26px 70px rgba(15, 23, 42, 0.28)',
-    '0 26px 70px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.06)'
+    '0 4px 12px rgba(15, 23, 42, 0.08)',
+    '0 4px 12px rgba(0, 0, 0, 0.18)'
   ),
   token(
     'playback.cover.radius',

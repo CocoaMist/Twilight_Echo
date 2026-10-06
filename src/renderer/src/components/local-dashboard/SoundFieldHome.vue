@@ -215,7 +215,7 @@ function seekFromInput(event: Event): void {
               </button>
             </div>
             <p class="sf-current-artist" :title="featured?.artist">
-              {{ featured?.artist || '从一首喜欢的音乐开始' }}
+              {{ featured?.artist || '未知艺术家' }}
             </p>
             <p v-if="featured" class="sf-current-album" :title="featured.album">
               <i class="ph ph-disc" aria-hidden="true"></i
@@ -365,7 +365,6 @@ function seekFromInput(event: Event): void {
           </div>
         </div>
         <div class="sf-session-bottom">
-          <span class="sf-session-caption">留一点时间，<strong>给音乐。</strong></span>
           <button
             v-if="playback && featuredIsCurrent"
             type="button"
@@ -383,9 +382,8 @@ function seekFromInput(event: Event): void {
       <div class="sf-content">
         <header class="sf-masthead">
           <div class="sf-title-group">
-            <p class="sf-kicker">YOUR PERSONAL SOUND SPACE</p>
+            <p class="sf-kicker">本地音乐库</p>
             <h1>{{ greeting }}</h1>
-            <p class="sf-intro">在熟悉的旋律里，找到今天的节奏。</p>
           </div>
           <button v-if="summary.tracks" type="button" class="sf-shuffle" @click="emit('shuffle')">
             <i class="ph ph-shuffle" aria-hidden="true"></i><span>随心播放</span>
@@ -461,7 +459,6 @@ function seekFromInput(event: Event): void {
             <i class="ph ph-disc" aria-hidden="true"></i>
             <div>
               <h3>留一个位置，给喜欢的专辑。</h3>
-              <p>你的音乐收藏，从这里开始。</p>
             </div>
             <button type="button" class="sf-text-link" @click="emit('open-library-settings')">
               添加音乐<i class="ph ph-arrow-up-right" aria-hidden="true"></i>
@@ -506,7 +503,7 @@ function seekFromInput(event: Event): void {
               </button>
             </div>
             <span class="sf-list-caption">{{
-              activity === 'recent' ? '再听一次，依然喜欢' : '新发现，慢慢听'
+              activity === 'recent' ? '最近播放' : '最近添加'
             }}</span>
           </div>
           <div
@@ -617,7 +614,7 @@ function seekFromInput(event: Event): void {
         <footer class="sf-collection" aria-label="音乐库一览">
           <div class="sf-collection-label">
             <i class="ph ph-stack" aria-hidden="true"></i
-            ><span>你的音乐宇宙<small>THE COLLECTION</small></span>
+            ><span>音乐库<small>THE COLLECTION</small></span>
           </div>
           <button type="button" @click="emit('select-view', 'allSongs', null)">
             <strong>{{ summary.tracks.toLocaleString('zh-CN') }}</strong

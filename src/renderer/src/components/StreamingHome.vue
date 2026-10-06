@@ -229,11 +229,8 @@ function playPersonalizedStream(section: RecSection | null): void {
       <div class="invite-notes" aria-hidden="true">
         <i class="pi pi-headphones invite-note-icon"></i>
       </div>
-      <p class="invite-kicker">{{ providerLabel }} · 在线漫游</p>
-      <h2 class="invite-title">听见为你而来的音乐</h2>
-      <p class="invite-desc">
-        登录 {{ providerLabel }} 后，这里会加载此音源提供的个性化推荐与精选歌单。
-      </p>
+      <p class="invite-kicker">{{ providerLabel }}</p>
+      <h2 class="invite-title">登录后查看推荐</h2>
       <button type="button" class="invite-cta" @click="emit('requestLogin')">
         <i class="pi pi-user"></i>
         登录 {{ providerLabel }}
@@ -258,7 +255,7 @@ function playPersonalizedStream(section: RecSection | null): void {
     <!-- ── Error ─────────────────────────────────────────────────────── -->
     <div v-else-if="recsError" class="home-error">
       <span class="home-error-icon"><i class="pi pi-exclamation-triangle"></i></span>
-      <p class="home-error-title">推荐暂时走丢了</p>
+      <p class="home-error-title">推荐加载失败</p>
       <p class="home-error-hint">{{ recsError }}</p>
       <button type="button" class="home-error-retry" @click="emit('loadRecommendations')">
         <i class="pi pi-refresh"></i>
@@ -542,7 +539,7 @@ function playPersonalizedStream(section: RecSection | null): void {
   border: 1px solid var(--home-line);
   background: var(--te-card-bg);
   overflow: hidden;
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
 }
 
 .hero-ambient {
@@ -683,10 +680,9 @@ function playPersonalizedStream(section: RecSection | null): void {
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--home-ink) 26%, transparent);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--home-ink) 12%, transparent);
   transition:
     transform var(--te-motion-return) var(--te-ease-out-quint),
-    box-shadow var(--te-motion-return) var(--te-ease-out-quint),
     background var(--te-motion-hover);
 }
 
@@ -698,7 +694,6 @@ function playPersonalizedStream(section: RecSection | null): void {
   transition-duration: var(--te-motion-settle);
   transform: translateY(-2px);
   background: color-mix(in srgb, var(--home-ink) 86%, var(--te-primary-500));
-  box-shadow: 0 18px 38px color-mix(in srgb, var(--home-ink) 32%, transparent);
 }
 
 .hero-play:active {
@@ -762,9 +757,8 @@ function playPersonalizedStream(section: RecSection | null): void {
   position: absolute;
   border-radius: 18px;
   overflow: hidden;
-  box-shadow:
-    0 22px 48px color-mix(in srgb, var(--te-neutral-900) 24%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--te-card-bg) 40%, transparent);
+  border: 1px solid var(--home-line);
+  box-sizing: border-box;
   transition: transform var(--te-motion-return) var(--te-ease-out-quint);
   will-change: transform;
 }
@@ -885,10 +879,9 @@ function playPersonalizedStream(section: RecSection | null): void {
   text-align: left;
   cursor: pointer;
   overflow: hidden;
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
   transition:
     transform var(--te-motion-return) var(--te-ease-out-quint),
-    box-shadow var(--te-motion-return) var(--te-ease-out-quint),
     border-color var(--te-motion-hover);
 }
 
@@ -924,7 +917,6 @@ function playPersonalizedStream(section: RecSection | null): void {
   transition-duration: var(--te-motion-settle);
   transform: translateY(-3px);
   border-color: color-mix(in srgb, var(--home-ink) 16%, transparent);
-  box-shadow: var(--home-shadow-lift);
 }
 
 .duo-stack {
@@ -941,9 +933,8 @@ function playPersonalizedStream(section: RecSection | null): void {
   height: 60px;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow:
-    0 10px 22px color-mix(in srgb, var(--te-neutral-900) 20%, transparent),
-    0 0 0 2px var(--te-card-bg);
+  border: 2px solid var(--te-card-bg);
+  box-sizing: border-box;
   transition: transform var(--te-motion-return) var(--te-ease-out-quint);
 }
 
@@ -1164,7 +1155,7 @@ function playPersonalizedStream(section: RecSection | null): void {
   border-radius: 10px;
   overflow: hidden;
   background: var(--te-subtle-bg);
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--te-neutral-900) 12%, transparent);
+  box-shadow: none;
 }
 
 .chart-cover :deep(img) {
@@ -1301,10 +1292,8 @@ function playPersonalizedStream(section: RecSection | null): void {
   border-radius: 16px;
   overflow: hidden;
   background: var(--te-subtle-bg);
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--te-neutral-900) 12%, transparent);
-  transition:
-    transform var(--te-motion-return) var(--te-ease-out-quint),
-    box-shadow var(--te-motion-return) var(--te-ease-out-quint);
+  box-shadow: none;
+  transition: transform var(--te-motion-return) var(--te-ease-out-quint);
 }
 
 .shelf-cover :deep(img) {
@@ -1317,13 +1306,12 @@ function playPersonalizedStream(section: RecSection | null): void {
 
 .shelf-tile:hover .shelf-cover {
   transition-duration: var(--te-motion-settle);
-  transform: translateY(-4px);
-  box-shadow: 0 20px 42px color-mix(in srgb, var(--te-neutral-900) 20%, transparent);
+  transform: translateY(-2px);
 }
 
 .shelf-tile:hover .shelf-cover :deep(img) {
   transition-duration: 0.9s;
-  transform: scale(1.06);
+  transform: scale(1.03);
 }
 
 .shelf-cover-empty {
@@ -1389,7 +1377,7 @@ function playPersonalizedStream(section: RecSection | null): void {
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   color: var(--te-neutral-900);
   background: color-mix(in srgb, #ffffff 92%, transparent);
-  box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-900) 30%, transparent);
+  box-shadow: none;
   opacity: 0;
   transform: translateY(6px) scale(0.9);
   transition:
@@ -1444,7 +1432,7 @@ function playPersonalizedStream(section: RecSection | null): void {
   border-radius: var(--home-radius-lg);
   background: var(--te-card-bg);
   overflow: hidden;
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
   animation: home-rise 0.62s var(--te-ease-out-quint) both;
 }
 
@@ -1531,17 +1519,6 @@ function playPersonalizedStream(section: RecSection | null): void {
   color: var(--home-ink);
 }
 
-.invite-desc {
-  position: relative;
-  z-index: 1;
-  max-width: 440px;
-  margin-top: 14px;
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  line-height: 1.75;
-  font-weight: 500;
-  color: var(--home-ink-soft);
-}
-
 .invite-cta {
   position: relative;
   z-index: 1;
@@ -1558,10 +1535,9 @@ function playPersonalizedStream(section: RecSection | null): void {
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 16px 34px color-mix(in srgb, var(--home-ink) 26%, transparent);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--home-ink) 12%, transparent);
   transition:
     transform var(--te-motion-return) var(--te-ease-out-quint),
-    box-shadow var(--te-motion-return) var(--te-ease-out-quint),
     background var(--te-motion-hover);
 }
 
@@ -1569,7 +1545,6 @@ function playPersonalizedStream(section: RecSection | null): void {
   transition-duration: var(--te-motion-settle);
   transform: translateY(-2px);
   background: color-mix(in srgb, var(--home-ink) 84%, var(--te-primary-500));
-  box-shadow: 0 20px 42px color-mix(in srgb, var(--home-ink) 34%, transparent);
 }
 
 .invite-cta:active {
@@ -1663,7 +1638,7 @@ function playPersonalizedStream(section: RecSection | null): void {
   border: 1px solid var(--home-line);
   border-radius: var(--home-radius-lg);
   background: var(--te-card-bg);
-  box-shadow: var(--home-shadow);
+  box-shadow: none;
 }
 
 .home-error-icon {
@@ -1739,7 +1714,6 @@ function playPersonalizedStream(section: RecSection | null): void {
 :global(html[data-theme='dark'] .home-view .shelf-open) {
   color: var(--te-neutral-900);
   background: color-mix(in srgb, var(--te-neutral-50) 55%, transparent);
-  box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-50) 40%, transparent);
 }
 
 /* ══ Responsive ════════════════════════════════════════════════════════ */
@@ -1938,9 +1912,7 @@ html[data-te-surface-material='liquidGlass']
   box-shadow:
     inset 0 0 0 0.5px rgba(255, 255, 255, calc(var(--te-lg-specular, 0.44) * 0.54)),
     inset 0 1px 0.5px rgba(255, 255, 255, calc(var(--te-lg-specular, 0.44) * 0.2)),
-    inset 0 -1px 1px rgba(15, 23, 42, 0.062),
-    0 2px 7px rgba(15, 23, 42, 0.026),
-    0 13px 32px rgba(15, 23, 42, 0.072) !important;
+    inset 0 -1px 1px rgba(15, 23, 42, 0.062) !important;
 }
 
 html[data-te-surface-material='liquidGlass']
@@ -2039,9 +2011,7 @@ html[data-te-surface-material='liquidGlass'] .home-view .duo-card:hover {
   box-shadow:
     inset 0 0 0 0.5px rgba(255, 255, 255, calc(var(--te-lg-specular, 0.44) * 0.54)),
     inset 0 1px 0.5px rgba(255, 255, 255, calc(var(--te-lg-specular, 0.44) * 0.2)),
-    inset 0 -1px 1px rgba(15, 23, 42, 0.062),
-    0 2px 7px rgba(15, 23, 42, 0.026),
-    0 13px 32px rgba(15, 23, 42, 0.072) !important;
+    inset 0 -1px 1px rgba(15, 23, 42, 0.062) !important;
 }
 
 html[data-te-surface-material='liquidGlass'] .home-view .duo-arrow {
@@ -2090,9 +2060,7 @@ html[data-theme='dark'][data-te-surface-material='liquidGlass']
   box-shadow:
     inset 0 0 0 0.5px rgba(255, 255, 255, calc(var(--te-lg-specular, 0.38) * 0.54)),
     inset 0 1px 0.5px rgba(255, 255, 255, calc(var(--te-lg-specular, 0.38) * 0.2)),
-    inset 0 -1px 1px rgba(0, 0, 0, 0.15),
-    0 2px 7px rgba(0, 0, 0, 0.07),
-    0 13px 32px rgba(0, 0, 0, 0.18) !important;
+    inset 0 -1px 1px rgba(0, 0, 0, 0.15) !important;
 }
 
 html[data-theme='dark'][data-te-surface-material='liquidGlass']

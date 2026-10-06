@@ -144,6 +144,11 @@ function onCompositionCancel(): void {
   overflow: hidden;
 }
 
+.animated-input:has(.animated-input-field:focus-visible) {
+  outline: var(--ai-focus-outline, 2px solid var(--te-primary-500));
+  outline-offset: 2px;
+}
+
 .animated-input-field {
   width: 100%;
   min-width: 0;
@@ -161,7 +166,8 @@ function onCompositionCancel(): void {
 }
 
 .animated-input-field::placeholder {
-  color: var(--ai-placeholder, #bbb);
+  color: var(--ai-placeholder, var(--te-neutral-500));
+  -webkit-text-fill-color: var(--ai-placeholder, var(--te-neutral-500));
 }
 
 .animated-input-field::selection {

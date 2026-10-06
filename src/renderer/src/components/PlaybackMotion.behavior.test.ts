@@ -101,17 +101,20 @@ const frame=()=>new Promise(requestAnimationFrame)
 const ipc=window.require('electron').ipcRenderer
 const capture=label=>ipc.invoke('motion-capture',label)
 const clone=value=>JSON.parse(JSON.stringify(value))
-let motionListener=()=>{}, stateListener=()=>{}, rejectSave=false, saveGate=null
+let motionListener=()=>{}, stateListener=()=>{}, rejectSave=false, saveGate=null,saveGateEntries=0
 let disk=cloneMiniPlayerSettings(DEFAULT_MINI_PLAYER_SETTINGS)
 disk.windowWidth=500;disk.windowHeight=190
 const snapshots=[]
 window.api={miniPlayer:{
   onState:cb=>{stateListener=cb;return()=>{}},onSettings:()=>()=>{},onMotionPreference:cb=>{motionListener=cb;return()=>{}},
   getBootstrap:async()=>({settings:clone(disk),motionPreference:'full',state:{...EMPTY_MINI_PLAYER_STATE,isPlaying:true,currentTime:40,duration:180,track:{id:'motion-fixture',title:'Twilight Echo',artist:'静夜 · 测试艺术家',album:'夜的颜色',cover:null,coverSource:null}}}),
-  updateSettings:async next=>{if(saveGate)await saveGate;if(rejectSave){rejectSave=false;throw new Error('保存失败测试')}disk=clone(next);snapshots.push({width:disk.windowWidth,height:disk.windowHeight,panel:!!document.querySelector('.mini-customizer')});await ipc.invoke('motion-resize',disk.windowWidth,disk.windowHeight);return clone(disk)},
+  updateSettings:async next=>{const gate=saveGate;if(gate){saveGateEntries++;await gate}if(rejectSave){rejectSave=false;throw new Error('保存失败测试')}disk=clone(next);snapshots.push({width:disk.windowWidth,height:disk.windowHeight,panel:!!document.querySelector('.mini-customizer')});await ipc.invoke('motion-resize',disk.windowWidth,disk.windowHeight);return clone(disk)},
   command:()=>{},moveTo:()=>{},moveEnd:()=>{},minimize:()=>{},returnToMain:()=>{},chooseBackgroundImage:async()=>null
 }}
 window.runPlaybackMotionTests=async()=>{
+  const unhandled=[]
+  const rejected=event=>unhandled.push(String(event.reason))
+  window.addEventListener('unhandledrejection',rejected)
   let app=createApp(MiniPlayerApp);app.mount('#app')
   await until(()=>document.querySelector('.mini-player-root.is-ready'),'mini bootstrap failed')
   const open=()=>document.querySelector('.tool-customize').click()
@@ -160,19 +163,23 @@ window.runPlaybackMotionTests=async()=>{
   close();await until(()=>!panel()&&disk.windowHeight===190,'retry close failed')
 
   let rejectPending
+  const beforeOpenSave=saveGateEntries
   saveGate=new Promise((_resolve,reject)=>{rejectPending=reject})
-  open();await tick()
+  open();await until(()=>saveGateEntries>beforeOpenSave,'opening did not enter its pending persistence operation')
   window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await tick()
   saveGate=null;rejectPending(new Error('打开期间保存失败'))
   await until(panel,'failed opening/closing left an unreachable editor')
   expect(document.querySelector('.mini-customizer-error'),'opening failure lost actionable error')
   close();await until(()=>!panel()&&disk.windowHeight===190,'opening failure left customizerOpening stuck')
+  expect(unhandled.length===0,'pending save rejection escaped the mini player: '+unhandled.join('; '))
 
   motionListener('full');await tick();open();await until(panel,'delayed restore panel missing');await sleep(240)
   const beforeRestore=document.querySelector('.mini-artwork-wrap').getBoundingClientRect()
   let releaseRestore
+  const beforeRestoreSave=saveGateEntries
   saveGate=new Promise(resolve=>{releaseRestore=resolve})
   close();await until(()=>!panel(),'delayed restore did not finish panel leave');await sleep(100)
+  await until(()=>saveGateEntries>beforeRestoreSave,'native restore did not enter its pending persistence operation')
   expect(document.querySelector('.mini-player-root').classList.contains('is-customizing'),'artwork changed layout before async native restore completed')
   const waitingRestore=document.querySelector('.mini-artwork-wrap').getBoundingClientRect()
   expect(Math.abs(waitingRestore.left-beforeRestore.left)<1&&Math.abs(waitingRestore.width-beforeRestore.width)<1,'artwork jumped while restore persistence was pending')
@@ -222,7 +229,7 @@ window.runPlaybackMotionTests=async()=>{
   const host=ref(null), store=useAppNoticeStore()
   app=createApp({render:()=>h(AppNoticeHost,{ref:host})});app.mount('#app')
   document.documentElement.dataset.teMotion='reduced'
-  store.pushNotice({kind:'info',message:'动效行为验证',sticky:true});await tick();await frame()
+  store.pushNotice({kind:'info',message:'动效行为验证',sticky:true,presentation:'toast'});await tick();await frame()
   const notice=document.querySelector('.app-notice')
   expect(getComputedStyle(notice).transitionDuration==='0.12s','notice reduced fade is missing')
   expect(getComputedStyle(notice).transform==='none','notice reduced enter moved')
@@ -231,5 +238,7 @@ window.runPlaybackMotionTests=async()=>{
   host.value.toggleHistory();await tick();document.documentElement.dataset.teMotion='off';await sleep(200)
   expect(!document.querySelector('.notice-history'),'off mid-close stranded history')
   app.unmount()
+  expect(unhandled.length===0,'playback lifecycle leaked a rejection: '+unhandled.join('; '))
+  window.removeEventListener('unhandledrejection',rejected)
 }
 `

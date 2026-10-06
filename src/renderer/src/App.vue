@@ -171,7 +171,6 @@ onBeforeUnmount(() => {
   updateNotificationsDisposed = true
   stopAppUpdateNotifications?.()
 })
-const noticeHostRef = ref<InstanceType<typeof AppNoticeHost> | null>(null)
 
 // One global back affordance on the title bar. Every full-screen page
 // registers a single base layer here; deeper in-page states (streaming
@@ -307,6 +306,7 @@ async function handleOnboardingFinish(result: OnboardingFinishResult): Promise<v
   } catch (error) {
     pushNotice({
       kind: 'warning',
+      presentation: 'toast',
       message: `保存引导设置失败：${error instanceof Error ? error.message : String(error)}`
     })
   }
@@ -324,6 +324,7 @@ async function handleOnboardingFinish(result: OnboardingFinishResult): Promise<v
     } catch (error) {
       pushNotice({
         kind: 'warning',
+        presentation: 'toast',
         message: `打开迷你播放器失败：${error instanceof Error ? error.message : String(error)}`
       })
     }
@@ -613,11 +614,14 @@ const playbackSessionPersistence = createPlaybackSessionPersistence({
   onAutosaveError: (error) => {
     pushNotice({
       kind: 'warning',
+      presentation: 'toast',
+      dedupeKey: 'playback-session-autosave',
       message: `自动保存播放会话失败：${error instanceof Error ? error.message : String(error)}`
     })
   }
 })
 const {
+  playerBottomClearance,
   sideMenuBottomOffset,
   sideMenuToolsClearance,
   sideMenuInlineEnd,
@@ -630,6 +634,13 @@ const {
   hasPlayerBar,
   menuOpen
 })
+
+watch(
+  playerBottomClearance,
+  (clearance) =>
+    document.documentElement.style.setProperty('--te-playbar-bottom-clearance', `${clearance}px`),
+  { immediate: true }
+)
 
 let removePlaybackSessionSaveListener: (() => void) | null = null
 let removeAppNavigationListener: (() => void) | null = null
@@ -769,6 +780,8 @@ onMounted(async () => {
     console.error('[library] Startup reconciliation failed:', error)
     pushNotice({
       kind: 'warning',
+      presentation: 'center',
+      dedupeKey: 'library-startup-reconciliation',
       message: `启动音乐库核对失败：${error instanceof Error ? error.message : String(error)}`,
       action: {
         label: '打开音乐库设置',
@@ -788,6 +801,8 @@ onMounted(async () => {
     console.warn(`[library] ${dirtyCount} tracks are missing cover art`)
     pushNotice({
       kind: 'warning',
+      presentation: 'center',
+      dedupeKey: 'library-missing-covers',
       message: `检测到 ${dirtyCount} 首缺少封面，可在设置中完整重扫以补全封面。`,
       action: {
         label: '打开音乐库设置',
@@ -807,11 +822,7 @@ onMounted(async () => {
 watch(
   [showLocalSidebar, hasPlayerBar, menuOpen],
   () => {
-    if (
-      showLocalSidebar.value &&
-      hasPlayerBar.value &&
-      (menuOpen.value || sideMenuBottomOffset.value > 0)
-    ) {
+    if (hasPlayerBar.value) {
       nextTick(startSideMenuMonitor)
       return
     }
@@ -973,8 +984,6 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @plugins="togglePluginPage"
         @commands="commandPalette.open"
         @library="selectSidebarPage({ kind: 'local', category: 'allSongs', filter: null })"
-        :notifications-open="noticeHostRef?.historyOpen ?? false"
-        @notifications="noticeHostRef?.toggleHistory($event)"
       />
     </div>
     <div
@@ -1202,7 +1211,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
       @close="queueSessions.open.value = false"
     />
   </NativeDialogTransition>
-  <AppNoticeHost ref="noticeHostRef" />
+  <AppNoticeHost />
 </template>
 
 <style>
@@ -1471,7 +1480,7 @@ body.te-no-blur .login-page-leave-to {
 .page-down-leave-active,
 .page-up-enter-active,
 .page-up-leave-active {
-  will-change: transform, opacity, filter;
+  will-change: transform, opacity;
 }
 .main-content > .page-down-enter-active,
 .main-content > .page-up-enter-active,
@@ -1479,9 +1488,8 @@ body.te-no-blur .login-page-leave-to {
 .page-up-enter-active {
   z-index: 1;
   transition:
-    opacity 0.34s ease,
-    transform 0.48s cubic-bezier(0.16, 1, 0.3, 1),
-    filter 0.42s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    opacity 0.18s ease,
+    transform 0.24s var(--te-ease-out-strong) !important;
 }
 .main-content > .page-down-leave-active,
 .main-content > .page-up-leave-active,
@@ -1490,37 +1498,32 @@ body.te-no-blur .login-page-leave-to {
   z-index: 0;
   pointer-events: none;
   transition:
-    opacity 0.22s ease,
-    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    filter 0.28s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    opacity 0.14s ease,
+    transform 0.18s var(--te-ease-enter) !important;
 }
 
 /* page-down: selected page is lower in the sidebar, new view rises from below */
 .main-content > .page-down-enter-from,
 .page-down-enter-from {
   opacity: 0;
-  transform: translate3d(0, 40px, 0) scale(0.99);
-  filter: blur(8px);
+  transform: translate3d(0, 16px, 0);
 }
 .main-content > .page-down-leave-to,
 .page-down-leave-to {
   opacity: 0;
-  transform: translate3d(0, -28px, 0) scale(0.992);
-  filter: blur(8px);
+  transform: translate3d(0, -12px, 0);
 }
 
 /* page-up: selected page is higher in the sidebar, new view drops from above */
 .main-content > .page-up-enter-from,
 .page-up-enter-from {
   opacity: 0;
-  transform: translate3d(0, -40px, 0) scale(0.99);
-  filter: blur(8px);
+  transform: translate3d(0, -16px, 0);
 }
 .main-content > .page-up-leave-to,
 .page-up-leave-to {
   opacity: 0;
-  transform: translate3d(0, 28px, 0) scale(0.992);
-  filter: blur(8px);
+  transform: translate3d(0, 12px, 0);
 }
 
 /* Explicit application preferences take precedence over the system setting.

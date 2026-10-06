@@ -200,8 +200,7 @@ export const EN_US_MESSAGES: Record<string, string> = {
     'Switch to WASAPI Exclusive, ASIO, or CoreAudio hog mode.',
 
   'audio.reason.output_not_perfect.label': 'The output chain is not verified as passthrough',
-  'audio.reason.output_not_perfect.explain':
-    'The engine has not gathered enough evidence to prove this chain is bit-exact. The chain may well be fine — it is simply unproven.',
+  'audio.reason.output_not_perfect.explain': 'Bit-exact passthrough has not been verified.',
   'audio.reason.output_not_perfect.fix': '',
   'audio.reason.output_released.label': 'Audio device released',
   'audio.reason.output_released.explain':
@@ -211,7 +210,7 @@ export const EN_US_MESSAGES: Record<string, string> = {
   // ══ Source properties ════════════════════════════════════════════════════
   'audio.reason.source_lossy.label': 'The source is lossy, so source-exact is impossible',
   'audio.reason.source_lossy.explain':
-    'Lossy formats (MP3, AAC and so on) decode to a reconstructed waveform; the original samples were discarded at encode time. This is not a player limitation.',
+    'Lossy formats such as MP3 and AAC do not preserve the original samples and cannot be source-exact.',
   'audio.reason.source_lossy.fix': '',
 
   'audio.reason.source_format_differs.label': 'Source format differs from the output chain',
@@ -234,9 +233,9 @@ export const EN_US_MESSAGES: Record<string, string> = {
 
   'audio.reason.dsd_volume_pcm_fallback.label': 'DSD fell back to PCM because volume is not 100%',
   'audio.reason.dsd_volume_pcm_fallback.explain':
-    'Software volume multiplies every sample by a gain factor, and a DSD bitstream cannot carry gain directly, so DSD is demodulated to PCM before the volume is applied. This is unrelated to the DSP chain, and direct mode will not clear it — direct mode deliberately leaves volume alone rather than jumping the loudness to full scale.',
+    'Adjusting software volume converts DSD to PCM. Direct mode leaves volume unchanged and does not prevent this conversion.',
   'audio.reason.dsd_volume_pcm_fallback.fix':
-    'Set software volume to 100% (unity) and control loudness with the physical knob on your amp or DAC; DSD then returns to native transport.',
+    'Lower the physical volume on your amp or DAC before setting software volume to 100% (unity).',
 
   'audio.reason.dsd_high_rate_pcm_fallback.label':
     'DSD fell back to PCM due to rate or driver limits',

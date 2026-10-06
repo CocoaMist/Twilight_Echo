@@ -95,7 +95,7 @@ function openActivity(): void {
           <div class="nh-deck-head">
             <span
               ><span class="nh-status-dot" :class="{ 'is-playing': heroIsPlaying }"></span
-              >{{ hero ? heroLabel : '等待第一张唱片' }}</span
+              >{{ hero ? heroLabel : '暂无本地音乐' }}</span
             >
           </div>
           <div class="nh-deck-body">
@@ -112,9 +112,9 @@ function openActivity(): void {
               />
             </div>
             <div class="nh-deck-copy">
-              <h2 :title="hero?.title">{{ hero?.title || '你的第一张唱片' }}</h2>
-              <p class="nh-artist" :title="hero?.artist">
-                {{ hero?.artist || '一间安静的房间，等一个喜欢的声音。' }}
+              <h2 :title="hero?.title">{{ hero?.title || '添加本地音乐' }}</h2>
+              <p v-if="hero" class="nh-artist" :title="hero.artist">
+                {{ hero.artist || '未知艺术家' }}
               </p>
               <p v-if="hero" class="nh-album-name" :title="hero.album">
                 <i class="ph ph-disc" aria-hidden="true"></i
@@ -198,7 +198,7 @@ function openActivity(): void {
             ></span>
           </button>
           <button v-else type="button" class="nh-shuffle" @click="emit('open-library-settings')">
-            <strong>让音乐住进来。</strong
+            <strong>暂无本地音乐</strong
             ><span class="nh-shuffle-bottom"
               >添加本地音乐文件夹<i class="ph ph-plus" aria-hidden="true"></i
             ></span>
@@ -325,7 +325,7 @@ function openActivity(): void {
         </div>
       </section>
       <footer class="nh-colophon">
-        <span>好音乐，不必急着听完。</span><i class="ph ph-waveform" aria-hidden="true"></i>
+        <i class="ph ph-waveform" aria-hidden="true"></i>
       </footer>
     </div>
   </main>
