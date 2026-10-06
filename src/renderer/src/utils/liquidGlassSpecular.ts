@@ -241,6 +241,7 @@ export function buildSpecularPixels(
 }
 
 const cache = new Map<string, string>()
+const MAX_CACHED_MAPS = 8
 
 /**
  * Renders the map to a data URL, memoized per geometry. Returns an empty string
@@ -253,7 +254,11 @@ export function getSpecularMapUrl(
 ): string {
   const key = `${geometryKey(geometry)}@${angleDegrees}`
   const cached = cache.get(key)
-  if (cached !== undefined) return cached
+  if (cached !== undefined) {
+    cache.delete(key)
+    cache.set(key, cached)
+    return cached
+  }
 
   if (typeof document === 'undefined') return ''
 
@@ -270,6 +275,7 @@ export function getSpecularMapUrl(
 
   const url = canvas.toDataURL()
   cache.set(key, url)
+  if (cache.size > MAX_CACHED_MAPS) cache.delete(cache.keys().next().value!)
   return url
 }
 

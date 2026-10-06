@@ -30,10 +30,19 @@ export function useSmoothedValue(
   let raf = 0
   let lastTime = 0
 
-  const reducedMotion =
+  const mediaQuery =
     typeof window !== 'undefined' &&
     typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    window.matchMedia('(prefers-reduced-motion: reduce)')
+  const ownerDocument = typeof document === 'undefined' ? null : document
+
+  function canAnimate(): boolean {
+    if (ownerDocument?.hidden) return false
+    const mode = ownerDocument?.documentElement.dataset.teMotion
+    if (mode === 'full') return true
+    if (mode === 'reduced' || mode === 'off') return false
+    return !mediaQuery || !mediaQuery.matches
+  }
 
   function stop(): void {
     if (raf) {
@@ -44,6 +53,10 @@ export function useSmoothedValue(
 
   function step(now: number): void {
     raf = 0
+    if (!canAnimate()) {
+      smoothed.value = target.value
+      return
+    }
     const dt = Math.max(0, now - lastTime)
     lastTime = now
     const gap = target.value - smoothed.value
@@ -52,7 +65,11 @@ export function useSmoothedValue(
       return
     }
     smoothed.value += gap * (1 - Math.exp(-dt / tau))
-    raf = requestAnimationFrame(step)
+    if (Math.abs(target.value - smoothed.value) <= epsilon) {
+      smoothed.value = target.value
+    } else {
+      raf = requestAnimationFrame(step)
+    }
   }
 
   function kick(): void {
@@ -61,16 +78,46 @@ export function useSmoothedValue(
     raf = requestAnimationFrame(step)
   }
 
-  watch(target, (value) => {
-    if (reducedMotion || Math.abs(value - smoothed.value) >= snapThreshold) {
+  function syncPolicy(): void {
+    if (!canAnimate()) {
       stop()
-      smoothed.value = value
-      return
+      smoothed.value = target.value
     }
-    kick()
-  })
+  }
 
-  onScopeDispose(stop)
+  const observer =
+    ownerDocument && typeof MutationObserver !== 'undefined'
+      ? new MutationObserver(syncPolicy)
+      : null
+  if (ownerDocument) {
+    observer?.observe(ownerDocument.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-te-motion']
+    })
+    ownerDocument.addEventListener('visibilitychange', syncPolicy)
+  }
+  if (mediaQuery) mediaQuery.addEventListener('change', syncPolicy)
+
+  watch(
+    target,
+    (value) => {
+      const gap = Math.abs(value - smoothed.value)
+      if (!canAnimate() || gap >= snapThreshold || gap <= epsilon) {
+        stop()
+        smoothed.value = value
+        return
+      }
+      kick()
+    },
+    { flush: 'sync' }
+  )
+
+  onScopeDispose(() => {
+    stop()
+    observer?.disconnect()
+    ownerDocument?.removeEventListener('visibilitychange', syncPolicy)
+    if (mediaQuery) mediaQuery.removeEventListener('change', syncPolicy)
+  })
 
   return smoothed
 }

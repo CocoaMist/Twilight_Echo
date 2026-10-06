@@ -13,7 +13,7 @@ import { build } from 'vite'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../', import.meta.url))
 
-test('configured wallpapers remain visible through liquid glass on local and streaming pages', async () => {
+test('wallpapers remain visible and adaptive glass sampling survives duplicate updates and teardown', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-background-'))
   try {
     const [base, home] = await Promise.all([
@@ -35,7 +35,8 @@ test('configured wallpapers remain visible through liquid glass on local and str
       resolve: {
         alias: {
           '@renderer': join(workspace, 'src/renderer/src'),
-          '@shared': join(workspace, 'src/shared')
+          '@shared': join(workspace, 'src/shared'),
+          vue: require.resolve('vue/dist/vue.esm-bundler.js')
         }
       },
       define: { 'process.env.NODE_ENV': '"production"' },
@@ -68,6 +69,7 @@ app.whenReady().then(async()=>{
     const image=await win.webContents.capturePage({x:400,y:300,width:1,height:1})
     const pixel=image.toBitmap()
     if(pixel[0]!==86||pixel[1]!==52||pixel[2]!==18)throw new Error('Home wallpaper is obscured: '+[...pixel])
+    await win.webContents.executeJavaScript('window.runGlassEnvironmentTests()')
     console.log('APP_BACKGROUND_OK')
     app.exit(0)
   }catch(error){console.error(error.stack);app.exit(1)}
@@ -87,6 +89,9 @@ app.whenReady().then(async()=>{
 
 const runtime = `import {bootstrapThemeRuntime,syncThemeSettingsAppearance,useThemeStore} from '@renderer/stores/useThemeStore.ts'
 import {createDefaultThemeLibraryDocument} from '@shared/theme.ts'
+import {LIQUID_GLASS_TUNING_CHANGED_EVENT} from '@shared/liquidGlass.ts'
+import {useLiquidGlassEnvironment} from '@renderer/composables/useLiquidGlassEnvironment.ts'
+import {createApp,h,ref} from 'vue'
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const wallpaper=(color)=>'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"><path fill="'+color+'" d="M0 0h800v600H0z"/></svg>')
 const globalImage=wallpaper('#123456')
@@ -156,5 +161,128 @@ window.runBackgroundTests=async()=>{
   document.body.classList.remove('te-settings-surface')
   await settle()
   checkImage(globalImage,'return from settings')
+}
+window.runGlassEnvironmentTests=async()=>{
+  const nativeImage=window.Image
+  const nativeCreateElement=document.createElement.bind(document)
+  const nativeComputedStyle=window.getComputedStyle.bind(window)
+  const pending=[]
+  const root=document.documentElement
+  const host=document.createElement('div')
+  document.body.append(host)
+  let samples=0,styleReads=0,app=null
+  window.Image=function(){
+    const image=new nativeImage()
+    let source=''
+    Object.defineProperty(image,'src',{configurable:true,get:()=>source,set:value=>{
+      source=value
+      pending.push({image,source})
+    }})
+    return image
+  }
+  document.createElement=(tag,...args)=>{
+    if(tag==='canvas')samples++
+    return nativeCreateElement(tag,...args)
+  }
+  window.getComputedStyle=(target,...args)=>{
+    if(target===root)styleReads++
+    return nativeComputedStyle(target,...args)
+  }
+  const setImage=color=>root.style.setProperty('--te-settings-bg-image','url("'+wallpaper(color)+'")','important')
+  const burst=()=>{for(let i=0;i<12;i++)window.dispatchEvent(new Event(LIQUID_GLASS_TUNING_CHANGED_EVENT))}
+  const release=async(record,fail=false)=>{
+    delete record.image.src
+    if(fail){record.image.onerror(new Event('error'));return}
+    const loaded=new Promise((resolve,reject)=>{
+      record.image.addEventListener('load',resolve,{once:true})
+      record.image.addEventListener('error',reject,{once:true})
+    })
+    record.image.src=record.source
+    await loaded
+    await settle()
+  }
+  const mount=()=>{
+    const active=ref(true)
+    app=createApp({setup(){useLiquidGlassEnvironment({active,page:ref('settings')});return()=>h('span')}})
+    app.mount(host)
+    return active
+  }
+  const expectCleared=label=>{
+    expect(!root.dataset.teLiquidGlassSource,label+': context source was restored')
+    expect(!root.dataset.teLiquidGlassContext,label+': context was restored')
+    expect(!root.style.getPropertyValue('--te-lg-context-luminance'),label+': sample variables were restored')
+  }
+  try{
+    setImage('#080808')
+    const active=mount()
+    await settle()
+    expect(pending.length===1,'initial context image must load once')
+    const before=styleReads
+    burst()
+    await settle()
+    expect(styleReads-before===1,'one tuning burst must read its source only once')
+    expect(pending.length===1,'repeated source must share the pending image')
+    // A separate turn must also preserve the initial in-flight request.
+    burst()
+    await settle()
+    await release(pending[0])
+    expect(root.dataset.teLiquidGlassSource==='image','duplicate refresh discarded the loaded image')
+    expect(root.dataset.teLiquidGlassContext==='dark','real dark image must select dark glass context')
+    expect(root.style.getPropertyValue('--te-lg-context-label-rgb')==='248, 250, 252','dark image must keep readable labels')
+    expect(samples===1,'duplicate refresh must sample only once')
+
+    // New wallpaper wins even when the old request finishes last.
+    setImage('#222222');await settle()
+    expect(pending.length===2,'second wallpaper must start loading: '+pending.length)
+    setImage('#fafafa');await settle()
+    expect(pending.length===3,'third wallpaper must start loading: '+pending.length)
+    await release(pending[2])
+    expect(root.dataset.teLiquidGlassContext==='bright','latest wallpaper did not update context')
+    const afterLatest=samples
+    await release(pending[1])
+    expect(root.dataset.teLiquidGlassContext==='bright','old wallpaper overwrote the latest context')
+    expect(samples===afterLatest,'stale wallpaper must not incur canvas sampling')
+
+    setImage('#121212');await settle()
+    active.value=false;await settle()
+    expectCleared('disabled material')
+    const beforeDisabled=samples
+    await release(pending[3])
+    expectCleared('disabled material load')
+    expect(samples===beforeDisabled,'disabled material must not sample late images')
+    active.value=true;await settle()
+    expect(pending.length===5,'re-enabled material must retry the same wallpaper')
+    await release(pending[4])
+    expect(root.dataset.teLiquidGlassContext==='dark','re-enabled material did not apply its image')
+
+    // Unmount both queued refreshes and a genuinely in-flight request.
+    setImage('#777777');await settle()
+    burst();app.unmount();app=null
+    await settle()
+    expectCleared('unmounted context')
+    const beforeUnmounted=samples
+    await release(pending[5])
+    expectCleared('unmounted context load')
+    expect(samples===beforeUnmounted,'unmounted context must not sample late images')
+    const loadsBeforeImmediateUnmount=pending.length
+    mount();app.unmount();app=null
+    await settle()
+    expect(pending.length===loadsBeforeImmediateUnmount,'queued mount refresh must stop at unmount')
+    expectCleared('immediate unmount')
+
+    // A late failure is equally forbidden from restoring fallback variables.
+    setImage('#333333');mount();await settle()
+    const failed=pending.at(-1)
+    app.unmount();app=null
+    await release(failed,true);await settle()
+    expectCleared('late failure after unmount')
+  }finally{
+    app?.unmount()
+    window.Image=nativeImage
+    document.createElement=nativeCreateElement
+    window.getComputedStyle=nativeComputedStyle
+    root.style.removeProperty('--te-settings-bg-image')
+    host.remove()
+  }
 }
 `

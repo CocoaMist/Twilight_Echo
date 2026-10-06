@@ -35,6 +35,7 @@ import {
 import { extractDominantColor } from '../utils/colorExtractor'
 import { resolveCover } from '../utils/coverLoader'
 import { normalizeNativePlaybackInfo } from '../utils/playerPlaybackInfo.ts'
+import { normalizeOutputConfig } from '../../../shared/audioOutputConfig.ts'
 import { clampSoftwareVolume, cloneAudioProcessingSettings } from '../utils/playerAudioSettings.ts'
 import {
   NATIVE_PLAYBACK_INFO_INTENT_GRACE_MS,
@@ -1746,24 +1747,10 @@ watch(
 watch(
   () => appSettings.value?.audioOutputConfig,
   (config) => {
-    audioOutputConfig.value = {
-      preferredBufferSize:
-        config?.preferredBufferSize ?? defaultAudioOutputConfig.preferredBufferSize,
-      routingMode: config?.routingMode ?? defaultAudioOutputConfig.routingMode,
-      wasapiExclusivePushMode:
-        config?.wasapiExclusivePushMode ?? defaultAudioOutputConfig.wasapiExclusivePushMode,
-      upmixCenterGain: config?.upmixCenterGain ?? defaultAudioOutputConfig.upmixCenterGain,
-      upmixLfeGain: config?.upmixLfeGain ?? defaultAudioOutputConfig.upmixLfeGain,
-      upmixLfeLowpassHz: config?.upmixLfeLowpassHz ?? defaultAudioOutputConfig.upmixLfeLowpassHz,
-      upmixSurroundGain: config?.upmixSurroundGain ?? defaultAudioOutputConfig.upmixSurroundGain,
-      upmixSideGain: config?.upmixSideGain ?? defaultAudioOutputConfig.upmixSideGain,
-      upmixSurroundDelayMs:
-        config?.upmixSurroundDelayMs ?? defaultAudioOutputConfig.upmixSurroundDelayMs
-    }
+    audioOutputConfig.value = normalizeOutputConfig(config, 8192)
   },
   { deep: true, immediate: true }
 )
-
 watch(
   () => currentTrack.value?.id,
   async (id, prevId) => {

@@ -11,7 +11,9 @@ const {
   pauseNotice,
   resumeNotice,
   markHistoryRead,
-  clearHistory
+  clearHistory,
+  pendingActions,
+  runNoticeAction
 } = useAppNoticeStore()
 const historyOpen = ref(false)
 const historyPanel = ref<HTMLElement | null>(null)
@@ -55,15 +57,6 @@ function focusOut(event: FocusEvent, id: number): void {
   )
     return
   resumeNotice(id, 'focus')
-}
-function runAction(id: number, run: () => void): void {
-  const entry = noticeHistory.value.find((notice) => notice.id === id)
-  if (entry) entry.action = undefined
-  try {
-    run()
-  } finally {
-    dismissNotice(id)
-  }
 }
 function timeLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -120,7 +113,8 @@ defineExpose({ historyOpen, toggleHistory })
           v-if="notice.action"
           type="button"
           class="notice-action"
-          @click="runAction(notice.id, notice.action.run)"
+          :disabled="pendingActions.has(notice.id)"
+          @click="runNoticeAction(notice.id)"
         >
           {{ notice.action.label }} <i class="pi pi-arrow-right" aria-hidden="true"></i>
         </button>
@@ -191,7 +185,8 @@ defineExpose({ historyOpen, toggleHistory })
                 v-if="notice.action"
                 type="button"
                 class="notice-action"
-                @click="runAction(notice.id, notice.action.run)"
+                :disabled="pendingActions.has(notice.id)"
+                @click="runNoticeAction(notice.id)"
               >
                 {{ notice.action.label }} <i class="pi pi-arrow-right" aria-hidden="true"></i>
               </button>

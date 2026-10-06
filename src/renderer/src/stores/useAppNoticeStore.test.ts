@@ -199,3 +199,33 @@ test('an in-place update reschedules auto dismissal against the new duration', (
 
   clearNotices()
 })
+
+test('a failed notification action remains retryable and concurrent clicks execute once', async () => {
+  clearNotices()
+  const store = useAppNoticeStore()
+  let calls = 0
+  let finish!: () => void
+  const id = store.pushNotice({
+    message: '恢复播放',
+    action: {
+      label: '重试',
+      run: async () => {
+        calls++
+        if (calls === 1) throw new Error('设备不可用')
+        await new Promise<void>((resolve) => {
+          finish = resolve
+        })
+      }
+    }
+  })
+  assert.equal(await store.runNoticeAction(id), false)
+  assert.ok(store.noticeHistory.value.find((item) => item.id === id)?.action)
+  assert.match(store.noticeHistory.value.at(-1)!.message, /设备不可用/)
+  const retry = store.runNoticeAction(id)
+  assert.equal(await store.runNoticeAction(id), false)
+  assert.equal(calls, 2)
+  finish()
+  assert.equal(await retry, true)
+  assert.equal(store.noticeHistory.value.find((item) => item.id === id)?.action, undefined)
+  clearNotices()
+})

@@ -4,7 +4,7 @@ export type AppNoticeKind = 'info' | 'success' | 'warning' | 'error'
 
 export type AppNoticeAction = {
   label: string
-  run: () => void
+  run: () => void | Promise<unknown>
 }
 
 export type AppNotice = {
@@ -20,6 +20,7 @@ export type AppNotice = {
 
 const notices = ref<AppNotice[]>([])
 const noticeHistory = ref<AppNotice[]>([])
+const pendingActions = ref(new Set<number>())
 let nextNoticeId = 1
 const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const timerState = new Map<number, { remaining: number; started: number; pauses: Set<string> }>()
@@ -57,7 +58,9 @@ function scheduleAutoDismiss(notice: AppNotice, durationMs?: number): void {
 export function useAppNoticeStore() {
   /** Closing a deduped notice suppresses that exact message until it changes. */
   function dismissNotice(id: number): void {
-    const notice = notices.value.find((item) => item.id === id)
+    const notice =
+      notices.value.find((item) => item.id === id) ??
+      noticeHistory.value.find((item) => item.id === id)
     if (notice?.dedupeKey) suppressedDedupeMessages.set(notice.dedupeKey, notice.message)
     clearDismissTimer(id)
     timerState.delete(id)
@@ -142,9 +145,40 @@ export function useAppNoticeStore() {
     return notice.id
   }
 
+  async function runNoticeAction(id: number): Promise<boolean> {
+    const notice =
+      noticeHistory.value.find((item) => item.id === id) ??
+      notices.value.find((item) => item.id === id)
+    const action = notice?.action
+    if (!action || pendingActions.value.has(id)) return false
+    pendingActions.value.add(id)
+    try {
+      await action.run()
+      const current =
+        noticeHistory.value.find((item) => item.id === id) ??
+        notices.value.find((item) => item.id === id)
+      if (current?.action === action) {
+        current.action = undefined
+        dismissNotice(id)
+      }
+      return true
+    } catch (error) {
+      pushNotice({
+        kind: 'error',
+        message: `${action.label}失败：${error instanceof Error ? error.message : '请重试'}`,
+        dedupeKey: `notice-action-${id}`
+      })
+      return false
+    } finally {
+      pendingActions.value.delete(id)
+    }
+  }
+
   return {
     notices,
     noticeHistory,
+    pendingActions,
+    runNoticeAction,
     unreadCount: computed(() => noticeHistory.value.filter((notice) => !notice.read).length),
     markHistoryRead: () => {
       for (const notice of noticeHistory.value) notice.read = true
