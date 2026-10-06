@@ -9,6 +9,7 @@
   color: var(--online-ink);
   font-family: var(--te-font-sans, sans-serif);
   background: transparent;
+  container: te-online-home/inline-size;
 }
 .online-home *,
 .online-home *::before,
@@ -151,13 +152,6 @@
 }
 .online-secondary:hover {
   background: var(--te-hover-bg);
-}
-.online-hero-note {
-  display: block;
-  margin-top: 22px;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  color: var(--online-muted);
 }
 .online-record-stage {
   position: relative;
@@ -556,6 +550,7 @@
 }
 .online-footer {
   padding-top: 20px;
+  justify-content: flex-end;
   border-top: 1px solid var(--te-card-border);
   color: var(--online-muted);
   font-size: 10px;
@@ -626,6 +621,76 @@
   }
 }
 @media (max-width: 480px) {
+  .online-track-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .online-playlist-grid,
+  .online-skeleton {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .online-login-strip {
+    align-items: flex-start;
+  }
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container te-online-home (max-width: 1050px) {
+  .online-track-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .online-playlist-grid,
+  .online-skeleton {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .online-shortcuts button {
+    padding: 16px 12px;
+    gap: 10px;
+  }
+  .online-shortcuts button > i:last-child {
+    display: none;
+  }
+}
+@container te-online-home (max-width: 760px) {
+  .online-home-inner {
+    gap: 26px;
+  }
+  .online-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .online-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .online-record-stage {
+    display: none;
+  }
+  .online-hero-copy {
+    padding: 30px;
+  }
+  .online-shortcuts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .online-shortcuts button > i:last-child {
+    display: block;
+  }
+  .online-shortcuts small {
+    margin-top: 3px;
+  }
+  .online-source-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .online-empty {
+    flex-wrap: wrap;
+    padding: 20px;
+  }
+  .online-empty > div {
+    min-width: 180px;
+  }
+}
+@container te-online-home (max-width: 480px) {
   .online-track-grid {
     grid-template-columns: minmax(0, 1fr);
   }

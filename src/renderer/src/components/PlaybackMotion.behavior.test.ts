@@ -28,6 +28,10 @@ test('mini customizer lifecycle, reduced fades and onboarding parallax honor liv
           name: 'motion-step-fixture',
           enforce: 'pre',
           load(id) {
+            // The dropdown and its transition are real; task data sources are
+            // covered separately by TaskCenter.behavior.test.ts.
+            if (/\/components\/TaskCenter\.vue$/.test(id.replaceAll('\\', '/')))
+              return '<template><div /></template>'
             if (/\/onboarding\/steps\/Step\w+\.vue$/.test(id.replaceAll('\\', '/')))
               return '<template><div class="onb-stage">设置你的聆听体验</div></template>'
             return null
@@ -222,14 +226,14 @@ window.runPlaybackMotionTests=async()=>{
   const host=ref(null), store=useAppNoticeStore()
   app=createApp({render:()=>h(AppNoticeHost,{ref:host})});app.mount('#app')
   document.documentElement.dataset.teMotion='reduced'
-  store.pushNotice({kind:'info',message:'动效行为验证',sticky:true});await tick();await frame()
+  store.pushNotice({kind:'info',message:'动效行为验证',sticky:true,presentation:'toast'});await tick();await frame()
   const notice=document.querySelector('.app-notice')
   expect(getComputedStyle(notice).transitionDuration==='0.12s','notice reduced fade is missing')
   expect(getComputedStyle(notice).transform==='none','notice reduced enter moved')
   await host.value.toggleHistory();await frame()
   expect(getComputedStyle(document.querySelector('.notice-history')).transitionDuration==='0.12s','history reduced fade is missing')
   host.value.toggleHistory();await tick();document.documentElement.dataset.teMotion='off';await sleep(200)
-  expect(!document.querySelector('.notice-history'),'off mid-close stranded history')
+  expect(getComputedStyle(document.querySelector('.notice-history')).display==='none','off mid-close stranded history')
   app.unmount()
 }
 `

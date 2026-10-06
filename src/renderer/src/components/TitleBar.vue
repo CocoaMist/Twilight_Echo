@@ -1,12 +1,10 @@
 <script setup lang="ts">
-import { defineAsyncComponent, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useBackStack } from '../app/useBackStack'
 import { useNcmStore } from '../stores/useNcmStore'
 import TitleBarIcon from './icons/TitleBarIcon.vue'
 import { useWindowChrome } from '../app/useWindowChrome'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
-
-const TaskCenter = defineAsyncComponent(() => import('./TaskCenter.vue'))
 
 const props = withDefaults(
   defineProps<{
@@ -39,7 +37,7 @@ defineEmits<{
 
 const { isLoggedIn, profile } = useNcmStore()
 const { canGoBack, backHint } = useBackStack()
-const { unreadCount } = useAppNoticeStore()
+const { unreadCount, activeTaskCount } = useAppNoticeStore()
 const { maximized } = useWindowChrome(() => props.preview === true)
 const avatarLoadFailed = ref(false)
 watch([() => profile.value?.userId, () => profile.value?.avatarUrl], () => {
@@ -186,13 +184,12 @@ function close(): void {
       </button>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
-      <TaskCenter v-if="!preview" @library="$emit('library')" />
       <button
         v-if="!preview"
         type="button"
         class="control-btn notification-btn"
-        :aria-label="unreadCount ? `通知记录（${unreadCount} 条未读）` : '通知记录'"
-        title="通知记录"
+        :aria-label="`任务与通知（${activeTaskCount} 项进行中，${unreadCount} 条未读）`"
+        :title="activeTaskCount ? `任务与通知 · ${activeTaskCount} 项进行中` : '任务与通知'"
         :aria-expanded="notificationsOpen"
         aria-controls="app-notice-history"
         @click="$emit('notifications', $event)"
@@ -200,6 +197,9 @@ function close(): void {
         <svg class="notification-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
         </svg>
+        <span v-if="activeTaskCount" class="notification-task-count" aria-hidden="true">{{
+          activeTaskCount
+        }}</span>
         <Transition name="notification-dot">
           <span v-if="unreadCount" class="notification-dot" aria-hidden="true"></span>
         </Transition>
@@ -246,6 +246,19 @@ function close(): void {
 </template>
 
 <style scoped>
+.notification-task-count {
+  position: absolute;
+  bottom: 2px;
+  right: 3px;
+  min-width: 13px;
+  padding: 0 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--te-primary-500) 18%, var(--te-app-bg));
+  color: var(--te-settings-text);
+  font-size: 9px;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+}
 .notification-btn {
   position: relative;
 }

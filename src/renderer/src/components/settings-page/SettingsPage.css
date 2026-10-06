@@ -1113,7 +1113,7 @@ html:is(
 }
 
 @media (hover: hover) {
-  html[data-te-motion='full'] .toggle-switch:hover {
+  html[data-te-motion='full'] .toggle-switch:enabled:not([aria-disabled='true'], .disabled):hover {
     scale: 1.05;
   }
 }
@@ -1275,7 +1275,7 @@ html[data-te-motion='full'] .toggle-switch.active::after {
 
 .preview-select.wide {
   width: 160px;
-  background: #f9fafb;
+  background: var(--te-settings-control-bg);
   box-shadow: none;
 }
 
@@ -4003,3 +4003,25 @@ html[data-density='comfortable'] .setting-copy {
  */
 
 /* The picker is driven by the 导入 JSON button, never shown on its own. */
+
+@media (max-width: 1360px) {
+  .settings-preview-nav,
+  .settings-preview-stack,
+  .settings-nav-search-wrap {
+    min-width: 0;
+  }
+}
+@media (max-width: 760px) {
+  .settings-command-bar {
+    flex-wrap: wrap;
+  }
+  .preview-select.wide {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 900px) {
+  .settings-preview-stack {
+    padding-bottom: max(48px, calc(var(--te-playbar-bottom-clearance, 0px) + 16px));
+  }
+}

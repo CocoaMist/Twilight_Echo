@@ -1942,6 +1942,7 @@ onUnmounted(() => {
 
 .field-input {
   --ai-placeholder: var(--lp-muted);
+  min-width: 0;
 }
 
 .field-input:focus,

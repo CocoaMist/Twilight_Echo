@@ -1217,7 +1217,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
           <header class="eq-header">
             <div class="eq-title">
               <h1>图形均衡器</h1>
-              <p>全局频率响应塑形工具，调整此面板将改变最终输出听感。</p>
+              <p>调整此面板会改变最终输出。</p>
             </div>
             <div
               class="master-switch"
@@ -1504,6 +1504,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   padding: 0 0 20px 0;
   border-bottom: 1px solid rgba(15, 23, 42, 0.06);
   margin-bottom: 24px;
+  flex-wrap: wrap;
 }
 
 .eq-command {
@@ -1689,6 +1690,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex-shrink: 0;
 }
 .nav-item {
   display: flex;
@@ -1753,6 +1755,8 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   display: flex;
   flex-direction: column;
   gap: 30px;
+  min-height: 0;
+  min-width: 0;
 }
 .tab-pane {
   display: none;
@@ -1778,6 +1782,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
 }
 .eq-title h1 {
   font-size: calc(var(--te-font-size-body, 14px) * 28 / 14);
@@ -2364,6 +2369,48 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   .instrument-presets .preset-menu {
     left: auto;
     right: 0;
+  }
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@media (max-width: 820px) {
+  .eq-page.is-parametric .eq-content {
+    padding-inline: 8px;
+  }
+  .eq-page.is-parametric .parametric-pane {
+    min-height: 560px;
+  }
+  .instrument-power span {
+    display: none;
+  }
+  .instrument-presets .preset-menu {
+    left: auto;
+    right: 0;
+  }
+}
+@media (max-width: 620px) {
+  .eq-page:not(.is-parametric) .eq-container {
+    flex-direction: column;
+  }
+  .eq-sidebar {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    padding: var(--te-page-top, 55px) var(--te-page-gutter, 16px) 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--te-glass-border);
+  }
+  .eq-sidebar .nav-item {
+    flex-shrink: 0;
+  }
+  .eq-page:not(.is-parametric) .eq-content {
+    padding-top: 20px;
+  }
+}
+
+@media (max-width: 900px) {
+  .eq-content {
+    padding-bottom: max(40px, calc(var(--te-playbar-bottom-clearance, 0px) + 16px));
   }
 }
 </style>

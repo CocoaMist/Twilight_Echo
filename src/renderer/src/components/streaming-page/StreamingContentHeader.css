@@ -363,6 +363,7 @@
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  flex-shrink: 0;
 }
 
 .streaming-header-left {
@@ -437,6 +438,7 @@
   gap: 10px;
   flex: 0 1 auto;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .streaming-search-box {
@@ -445,7 +447,7 @@
   height: 38px;
   width: clamp(220px, 28vw, 360px);
   padding: 0 14px;
-  flex-shrink: 1;
+  flex-shrink: 0;
   min-width: 160px;
   border: 1px solid var(--bar-line);
   border-radius: 999px;
@@ -492,6 +494,8 @@
 .streaming-search-input {
   --ai-placeholder: var(--bar-ink-faint);
   --ai-caret: var(--bar-accent);
+  min-width: 0;
+  min-width: 0;
 }
 
 .streaming-search-spinner {
@@ -632,6 +636,62 @@
     min-height: 0;
     margin-left: 22px;
     margin-right: 22px;
+  }
+
+  .streaming-header-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .streaming-search-box {
+    width: min(100%, 440px);
+    flex: 1 1 auto;
+  }
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container streaming-content (max-width: 900px) {
+  .streaming-content-header,
+  .streaming-content-body,
+  .streaming-search-tabs {
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .streaming-content-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .streaming-header-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .streaming-search-box {
+    width: min(100%, 440px);
+  }
+}
+@container streaming-content (max-width: 900px) {
+  .streaming-content-header,
+  .streaming-content-body,
+  .streaming-search-tabs {
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+@container streaming-content (max-width: 900px) {
+  .streaming-content-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
   }
 
   .streaming-header-right {

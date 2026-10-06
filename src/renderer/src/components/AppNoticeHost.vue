@@ -1,12 +1,28 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch
+} from 'vue'
 import { useAppNoticeStore, type AppNoticeKind } from '../stores/useAppNoticeStore'
-import { useEscapeToClose } from '../app/useDismissLayer'
+import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer'
+import { useDownloadTasks } from '../stores/useDownloadTasks'
+const TaskCenter = defineAsyncComponent(() => import('./TaskCenter.vue'))
+const DownloadResultActions = defineAsyncComponent(
+  () => import('./streaming-page/DownloadResultActions.vue')
+)
+
+const emit = defineEmits<{ library: [] }>()
 
 const {
   notices,
   noticeHistory,
-  unreadCount,
+  centerOpen: historyOpen,
+  activeTaskCount,
   dismissNotice,
   pauseNotice,
   resumeNotice,
@@ -15,9 +31,43 @@ const {
   pendingActions,
   runNoticeAction
 } = useAppNoticeStore()
-const historyOpen = ref(false)
 const historyPanel = ref<HTMLElement | null>(null)
-const history = computed(() => [...noticeHistory.value].reverse())
+const filter = ref<'all' | 'active' | 'attention'>('all')
+const visibleTaskCount = ref(0)
+const pointerOpened = ref(true)
+const panelOrigin = ref('right top')
+const downloads = useDownloadTasks()
+const history = computed(() =>
+  [...noticeHistory.value]
+    .reverse()
+    .filter(
+      (notice) =>
+        filter.value !== 'active' &&
+        (filter.value === 'all' ||
+          notice.kind === 'error' ||
+          notice.kind === 'warning' ||
+          !!notice.action)
+    )
+)
+const downloadResults = computed(
+  () =>
+    new Map(
+      downloads.tasks.value
+        .filter((task) => task.status === 'completed')
+        .map((task) => [task.id, task])
+    )
+)
+const emptyLabel = computed(() =>
+  filter.value === 'active'
+    ? '暂无进行中的任务'
+    : filter.value === 'attention'
+      ? '暂无需要处理的内容'
+      : '暂无任务和通知'
+)
+function openLibrary(): void {
+  closeHistory()
+  emit('library')
+}
 const intents: Record<AppNoticeKind, { label: string; icon: string }> = {
   info: { label: '提示', icon: 'pi-info-circle' },
   success: { label: '已完成', icon: 'pi-check-circle' },
@@ -35,9 +85,17 @@ async function toggleHistory(event?: MouseEvent): Promise<void> {
     event?.currentTarget instanceof HTMLElement
       ? event.currentTarget
       : (document.activeElement as HTMLElement | null)
+  pointerOpened.value = !event || event.detail !== 0
   historyOpen.value = true
-  markHistoryRead()
+  markHistoryRead(history.value.map((notice) => notice.id))
   await nextTick()
+  if (historyPanel.value && historyTrigger) {
+    const panel = historyPanel.value.getBoundingClientRect()
+    const trigger = historyTrigger.getBoundingClientRect()
+    panelOrigin.value =
+      Math.max(16, Math.min(panel.width - 16, trigger.left + trigger.width / 2 - panel.left)) +
+      'px top'
+  }
   historyPanel.value?.focus()
 }
 function dismissOutside(event: PointerEvent): void {
@@ -61,8 +119,9 @@ function focusOut(event: FocusEvent, id: number): void {
 function timeLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
-watch(unreadCount, () => {
-  if (historyOpen.value) markHistoryRead()
+watch([historyOpen, history], () => {
+  if (historyOpen.value)
+    markHistoryRead(history.value.filter((notice) => !notice.read).map((notice) => notice.id))
 })
 watch([historyOpen, notices], () => {
   for (const notice of notices.value) {
@@ -74,8 +133,10 @@ watch([historyOpen, notices], () => {
   }
 })
 useEscapeToClose(historyOpen, closeHistory)
+useFocusTrap(historyPanel, historyOpen)
 onMounted(() => document.addEventListener('pointerdown', dismissOutside))
 onBeforeUnmount(() => {
+  historyOpen.value = false
   document.removeEventListener('pointerdown', dismissOutside)
   for (const notice of notices.value) {
     for (const reason of ['pointer', 'focus', 'history']) resumeNotice(notice.id, reason)
@@ -129,40 +190,64 @@ defineExpose({ historyOpen, toggleHistory })
       </button>
     </div>
   </TransitionGroup>
-  <Transition name="notice-panel">
+  <Transition name="notice-panel" :css="pointerOpened">
     <section
-      v-if="historyOpen"
+      v-show="historyOpen"
       id="app-notice-history"
       ref="historyPanel"
       class="notice-history"
+      :style="{ transformOrigin: panelOrigin }"
       tabindex="-1"
-      role="region"
+      role="dialog"
+      aria-modal="false"
       aria-labelledby="notice-history-title"
     >
       <header class="notice-history-header">
         <div>
           <h2 id="notice-history-title">
-            通知记录 <span class="notice-count">{{ history.length }}</span>
+            任务与通知 <span class="notice-count">{{ noticeHistory.length }}</span>
           </h2>
-          <p>不错过每一次更新</p>
+          <p>{{ activeTaskCount ? `${activeTaskCount} 项任务进行中` : '任务进度与通知记录' }}</p>
         </div>
         <button
           type="button"
           class="notice-icon-button"
-          aria-label="关闭通知记录"
+          aria-label="关闭任务与通知"
           @click="closeHistory()"
         >
           <i class="pi pi-times" aria-hidden="true"></i>
         </button>
       </header>
+      <div class="notice-filters" role="group" aria-label="筛选任务与通知">
+        <button
+          v-for="item in [
+            { value: 'all', label: '全部' },
+            { value: 'active', label: '进行中' },
+            { value: 'attention', label: '需处理' }
+          ] as const"
+          :key="item.value"
+          type="button"
+          :aria-pressed="filter === item.value"
+          @click="filter = item.value"
+        >
+          {{ item.label }}
+        </button>
+      </div>
       <div class="notice-history-body">
+        <TaskCenter
+          :active="historyOpen"
+          :filter="filter"
+          @visible-count="visibleTaskCount = $event"
+          @library="openLibrary"
+        />
         <Transition name="notice-empty">
-          <div v-if="!history.length" class="notice-empty">
+          <div v-if="!history.length && !visibleTaskCount" class="notice-empty">
             <span class="notice-empty-symbol"><i class="pi pi-bell" aria-hidden="true"></i></span>
-            <h3>一切已是最新</h3>
-            <p>新的通知会出现在这里</p>
+            <h3>{{ emptyLabel }}</h3>
+            <p v-if="filter === 'all'">新的通知会出现在这里</p>
           </div>
         </Transition>
+        <h3 v-if="history.length && visibleTaskCount" class="notice-group-title">通知记录</h3>
         <TransitionGroup tag="div" name="notice-record" class="notice-records">
           <article
             v-for="notice in history"
@@ -190,16 +275,20 @@ defineExpose({ historyOpen, toggleHistory })
               >
                 {{ notice.action.label }} <i class="pi pi-arrow-right" aria-hidden="true"></i>
               </button>
+              <DownloadResultActions
+                v-if="notice.downloadTaskId && downloadResults.has(notice.downloadTaskId)"
+                :task="downloadResults.get(notice.downloadTaskId)!"
+              />
             </div>
           </article>
         </TransitionGroup>
       </div>
       <footer class="notice-history-footer">
-        <span>保留最近 50 条通知</span
+        <span>最近 50 条 · 待处理记录保留</span
         ><button
           type="button"
           class="notice-clear"
-          :disabled="!history.length"
+          :disabled="!noticeHistory.length"
           @click="clearHistory"
         >
           清空记录
@@ -215,7 +304,7 @@ defineExpose({ historyOpen, toggleHistory })
   --notice-accent: var(--te-primary-500, #7c4dff);
   --notice-surface: var(--te-surface, var(--te-app-bg, #fff));
   --notice-text: var(--te-text, var(--color-text, #172033));
-  --notice-muted: var(--te-text-secondary, #78808f);
+  --notice-muted: var(--te-settings-text-muted, var(--te-text-secondary, #626b78));
   --notice-border: color-mix(in srgb, var(--te-border, #9ca3af) 28%, transparent);
   position: fixed;
   top: calc(var(--te-titlebar-inset, 35px) + 12px);
@@ -350,6 +439,7 @@ button:focus-visible {
 .notice-history {
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   max-height: min(620px, calc(100dvh - var(--te-titlebar-inset, 35px) - 28px));
   border: 1px solid var(--notice-border);
   border-radius: 18px;
@@ -360,9 +450,10 @@ button:focus-visible {
   backdrop-filter: blur(28px);
   overflow: hidden;
   outline: none;
-  transform-origin: calc(100% - 142px) top;
 }
 .notice-history-header {
+  flex-shrink: 0;
+  gap: 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -397,6 +488,7 @@ button:focus-visible {
   color: var(--notice-muted);
 }
 .notice-history-body {
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   min-height: 0;
@@ -555,5 +647,86 @@ button:focus-visible {
 :global(body.te-no-blur .app-notice) {
   backdrop-filter: none;
   background: var(--notice-surface);
+}
+/* Keep filters and task controls within the existing dropdown surface. */
+.notice-filters {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--notice-border);
+}
+.notice-filters button {
+  border: 0;
+  border-radius: 7px;
+  min-height: 28px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--notice-text);
+  background: transparent;
+  cursor: pointer;
+}
+.notice-filters button:hover,
+.notice-filters button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--notice-accent) 12%, transparent);
+}
+.notice-filters button[aria-pressed='true'] {
+  font-weight: 600;
+}
+.notice-group-title {
+  margin: 16px 20px 0;
+  color: var(--notice-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.notice-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.notice-record-meta {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.notice-record time {
+  flex-shrink: 0;
+}
+.notice-icon-button {
+  flex-basis: 32px;
+  width: 32px;
+  height: 32px;
+}
+.notice-clear {
+  min-height: 28px;
+}
+:global(html[data-te-motion='off'] .notice-history),
+:global(html[data-te-motion='off'] .app-notice),
+:global(html[data-te-motion='off'] .notice-record),
+:global(html[data-te-motion='off'] .notice-empty) {
+  transition: none !important;
+  transform: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .notice-history,
+  .app-notice,
+  .notice-record,
+  .notice-empty {
+    transition-property: opacity !important;
+    transition-duration: 120ms !important;
+    transform: none !important;
+  }
+}
+@media (max-height: 420px) {
+  .notice-history-header {
+    padding-block: 12px;
+  }
+  .notice-history-header p {
+    display: none;
+  }
+  .notice-empty {
+    min-height: 100px;
+    padding: 16px;
+  }
 }
 </style>

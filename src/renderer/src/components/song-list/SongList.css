@@ -46,6 +46,7 @@
   box-sizing: border-box;
   scrollbar-width: thin;
   scrollbar-color: var(--te-scrollbar-thumb) transparent;
+  container: te-song-list/inline-size;
 }
 
 .song-list::-webkit-scrollbar {
@@ -2402,4 +2403,123 @@
   max-width: 100%;
   justify-self: start;
   align-self: flex-start;
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container te-song-list (max-width: 900px) {
+  .card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 16px 14px;
+  }
+}
+@container te-song-list (max-width: 640px) {
+  .card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+    gap: 12px 10px;
+  }
+}
+@container te-song-list (max-width: 900px) {
+  .artist-card,
+  .album-card,
+  .playlist-card {
+    --te-library-card-padding: 10px;
+  }
+}
+@container te-song-list (max-width: 640px) {
+  .artist-card,
+  .album-card,
+  .playlist-card {
+    --te-library-card-padding: 8px;
+  }
+}
+@container te-song-list (max-width: 900px) {
+  .artist-name,
+  .album-name,
+  .playlist-name {
+    font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
+  }
+
+  .artist-count,
+  .album-count,
+  .playlist-count {
+    font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
+  }
+
+  .playlist-source-summary {
+    font-size: calc(var(--te-font-size-body, 14px) * 0.75);
+  }
+}
+@container te-song-list (max-width: 640px) {
+  .artist-name,
+  .album-name,
+  .playlist-name {
+    font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
+  }
+
+  .artist-count,
+  .album-count,
+  .playlist-count {
+    font-size: calc(var(--te-font-size-body, 14px) * 0.75);
+  }
+
+  .playlist-source-summary {
+    font-size: calc(var(--te-font-size-body, 14px) * 0.71429);
+  }
+}
+@container te-song-list (max-width: 640px) {
+  .search-box {
+    max-width: none;
+    width: 100%;
+    order: 2;
+  }
+  .song-list-header {
+    gap: 16px;
+  }
+
+  .unified-search-status {
+    align-items: flex-start;
+    flex-direction: column;
+    margin-inline: 0;
+  }
+
+  .unified-search-summary span {
+    white-space: normal;
+  }
+
+  .header-right {
+    min-width: 0;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+
+  .online-search-toggle {
+    order: 1;
+  }
+
+  .collection-view-controls {
+    width: 100%;
+  }
+
+  .collection-view-controls label,
+  .collection-view-controls select {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  .collection-grid-layout.has-az-index {
+    grid-template-columns: minmax(0, 1fr) 21px;
+    gap: 4px;
+  }
+
+  .az-index {
+    padding-inline: 2px;
+  }
+
+  .az-index button {
+    width: 17px;
+    min-height: 16px;
+    font-size: 8px;
+  }
 }

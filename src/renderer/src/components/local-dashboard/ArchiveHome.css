@@ -872,3 +872,127 @@
     transform: none;
   }
 }
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container (max-width: 760px) {
+  .archive-date {
+    display: none;
+  }
+  .archive-masthead {
+    margin-bottom: 26px;
+    gap: 12px;
+  }
+  .archive-shuffle {
+    gap: 7px;
+    padding: 10px 13px;
+  }
+  .archive-shuffle > i:last-child {
+    display: none;
+  }
+  .archive-stats {
+    gap: 9px;
+    margin-bottom: 24px;
+  }
+  .archive-stats > * {
+    gap: 9px;
+    padding: 15px 11px;
+  }
+  .archive-stats > * > i:first-child {
+    font-size: calc(var(--te-font-size-body, 14px) * 24 / 14);
+  }
+  .archive-stat-caption,
+  .archive-stat-arrow {
+    display: none;
+  }
+  .archive-rotation {
+    padding: 22px 22px 0;
+  }
+  .archive-rotation-head {
+    gap: 23px;
+  }
+  .archive-section-name h2 {
+    font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
+  }
+  .archive-tabs {
+    gap: 17px;
+  }
+  .archive-page-count {
+    display: none;
+  }
+  .archive-records {
+    gap: 15px;
+  }
+  .archive-discover {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .archive-albums {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 22px;
+  }
+  .archive-resume-art {
+    width: 140px;
+  }
+  .archive-resume {
+    gap: 40px;
+  }
+}
+@container (max-width: 480px) {
+  .archive-masthead {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .archive-eyebrow {
+    font-size: 8px;
+  }
+  .archive-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .archive-rotation {
+    padding: 18px 16px 0;
+  }
+  .archive-rotation-head {
+    flex-wrap: wrap;
+    gap: 18px;
+  }
+  .archive-tabs {
+    order: 3;
+    flex-basis: 100%;
+  }
+  .archive-rotation-footer > span {
+    font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
+  }
+  .archive-shelf-empty {
+    flex-direction: column;
+    gap: 25px;
+    text-align: center;
+  }
+  .archive-empty-disc {
+    width: 90px;
+    height: 90px;
+  }
+  .archive-empty-disc i {
+    font-size: 65px;
+  }
+  .archive-shelf-empty h3 {
+    font-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
+  }
+  .archive-resume {
+    gap: 25px;
+    padding: 15px;
+  }
+  .archive-resume-art {
+    width: 95px;
+  }
+  .archive-resume-copy h3 {
+    font-size: calc(var(--te-font-size-body, 14px) * 19 / 14);
+  }
+  .archive-albums {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .archive-colophon > span:nth-child(2) {
+    display: none;
+  }
+  .archive-colophon > i {
+    margin-left: auto;
+  }
+}

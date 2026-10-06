@@ -746,7 +746,10 @@ test('player store prepares native queues before loading or synchronizing them',
     /synchronizeLatestNativeQueue\(\s*nativeQueueRevisionFence,\s*snapshot\.revision,\s*\{[\s\S]*prepare: \(\) =>\s*preparePlayerNativeQueue\(/
   )
   assert.match(syncNativeQueueState, /if \(!synchronized\.applied\) return/)
-  assert.match(syncNativeQueueState, /nativeQueueLoader\.loadPrepared\(preparedQueue, window\.api\.audioEngine\)/)
+  assert.match(
+    syncNativeQueueState,
+    /nativeQueueLoader\.loadPrepared\(preparedQueue, window\.api\.audioEngine\)/
+  )
 })
 
 test('next and previous only use native controls when the native queue is delegated', () => {
@@ -1090,12 +1093,12 @@ test('local dashboard playback keeps a multi-track queue for next and previous c
   )
 })
 
-test('local dashboard keeps the restored editorial masthead in Chinese', () => {
+test('local dashboard keeps a concise Chinese masthead', () => {
   const source = readFileSync(new URL('../components/LocalDashboard.vue', import.meta.url), 'utf8')
 
   assert.match(source, /class="masthead-kicker"/)
   assert.match(source, /class="masthead-title"/)
-  assert.match(source, /class="masthead-sub"/)
+  assert.doesNotMatch(source, /class="masthead-sub"/)
   assert.match(source, /本地音乐库/)
   assert.doesNotMatch(source, /Good (morning|afternoon|evening)/i)
 })

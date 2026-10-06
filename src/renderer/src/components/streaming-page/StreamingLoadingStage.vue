@@ -7,7 +7,7 @@ const props = defineProps<{
   hint?: string
 }>()
 
-const stageTitle = computed(() => props.title ?? '正在唤醒你的云端曲库')
+const stageTitle = computed(() => props.title ?? '正在加载音乐库')
 const stageHint = computed(
   () => props.hint ?? `正在同步 ${props.providerLabel ?? '在线音源'} 的歌单与收藏`
 )
@@ -32,7 +32,6 @@ const stageHint = computed(
       <span class="tls-eq"> <i></i><i></i><i></i><i></i><i></i> </span>
     </div>
 
-    <p class="tls-kicker">Twilight Echo · 在线漫游</p>
     <h2 class="tls-title">{{ stageTitle }}</h2>
     <p class="tls-hint">
       <span>{{ stageHint }}</span>
@@ -299,17 +298,6 @@ const stageHint = computed(
 
 /* ── Copy ──────────────────────────────────────────────────────────── */
 
-.tls-kicker {
-  position: relative;
-  z-index: 1;
-  margin-top: 42px;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  font-weight: 700;
-  letter-spacing: 0.32em;
-  color: var(--tls-ink-soft);
-  animation: tls-rise 0.62s var(--te-ease-out-quint) 0.12s both;
-}
-
 .tls-title {
   position: relative;
   z-index: 1;
@@ -476,7 +464,6 @@ const stageHint = computed(
   .tls-orbit,
   .tls-disc,
   .tls-eq i,
-  .tls-kicker,
   .tls-title,
   .tls-hint,
   .tls-dots i,

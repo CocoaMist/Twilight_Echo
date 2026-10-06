@@ -16,10 +16,14 @@ export type AppNotice = {
   action?: AppNoticeAction
   sticky?: boolean
   dedupeKey?: string
+  presentation: 'toast' | 'center'
+  downloadTaskId?: string
 }
 
 const notices = ref<AppNotice[]>([])
 const noticeHistory = ref<AppNotice[]>([])
+const centerOpen = ref(false)
+const activeTaskCount = ref(0)
 const pendingActions = ref(new Set<number>())
 let nextNoticeId = 1
 const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>()
@@ -41,7 +45,7 @@ function scheduleAutoDismiss(notice: AppNotice, durationMs?: number): void {
   const pauses = timerState.get(notice.id)?.pauses ?? new Set<string>()
   clearDismissTimer(notice.id)
   timerState.delete(notice.id)
-  if (notice.sticky) return
+  if (notice.sticky || notice.presentation === 'center') return
   const delayMs = Math.max(2500, durationMs ?? 7000)
   timerState.set(notice.id, { remaining: delayMs, started: Date.now(), pauses })
   if (pauses.size) return
@@ -53,6 +57,38 @@ function scheduleAutoDismiss(notice: AppNotice, durationMs?: number): void {
       notices.value = notices.value.filter((item) => item.id !== notice.id)
     }, delayMs)
   )
+}
+
+function appendHistory(notice: AppNotice): void {
+  const history = [...noticeHistory.value, notice]
+  while (history.length > 50) {
+    const ordinary = history.findIndex(
+      (item) => !item.action && ['info', 'success'].includes(item.kind)
+    )
+    const index = ordinary >= 0 ? ordinary : history.findIndex((item) => !item.action)
+    if (index < 0) break
+    history.splice(index, 1)
+  }
+  noticeHistory.value = history
+}
+
+function present(notice: AppNotice, durationMs?: number): void {
+  if (notice.presentation === 'center') {
+    clearDismissTimer(notice.id)
+    timerState.delete(notice.id)
+    notices.value = notices.value.filter((item) => item.id !== notice.id)
+    return
+  }
+  const existing = notices.value.some((item) => item.id === notice.id)
+  if (existing) notices.value = notices.value.map((item) => (item.id === notice.id ? notice : item))
+  else {
+    if (notices.value.length >= 4) {
+      clearDismissTimer(notices.value[0].id)
+      timerState.delete(notices.value[0].id)
+    }
+    notices.value = [...notices.value.slice(-3), notice]
+  }
+  scheduleAutoDismiss(notice, durationMs)
 }
 
 export function useAppNoticeStore() {
@@ -87,39 +123,53 @@ export function useAppNoticeStore() {
     sticky?: boolean
     durationMs?: number
     dedupeKey?: string
+    downloadTaskId?: string
+    /** A new task outcome may repeat the text of a previously read result. */
+    fresh?: boolean
+    presentation?: 'toast' | 'center'
   }): number {
     const message = input.message.trim()
     if (!message) return 0
     const dedupeKey = input.dedupeKey?.trim() || undefined
     const kind = input.kind ?? 'info'
     const sticky = input.sticky ?? (kind === 'error' || kind === 'warning' || !!input.action)
+    const presentation =
+      input.presentation ?? (kind === 'error' || input.action ? 'toast' : 'center')
 
     if (dedupeKey) {
-      if (suppressedDedupeMessages.get(dedupeKey) === message) return 0
+      if (!input.fresh && suppressedDedupeMessages.get(dedupeKey) === message) return 0
       suppressedDedupeMessages.delete(dedupeKey)
       // Update in place so a repeating source keeps one stable toast instead of
       // replacing it with a fresh id the user has to chase.
-      const existing = notices.value.find((item) => item.dedupeKey === dedupeKey)
+      const existing =
+        notices.value.find((item) => item.dedupeKey === dedupeKey) ??
+        noticeHistory.value.find((item) => item.dedupeKey === dedupeKey)
       if (existing) {
         const updated: AppNotice = {
           ...existing,
           kind,
           message,
           action: input.action,
-          sticky
+          sticky,
+          presentation,
+          downloadTaskId: input.downloadTaskId
         }
-        if (existing.message !== message || existing.kind !== kind) {
+        if (
+          input.fresh ||
+          existing.message !== message ||
+          existing.kind !== kind ||
+          existing.action?.label !== input.action?.label
+        ) {
           updated.read = false
           updated.createdAt = Date.now()
           if (!noticeHistory.value.some((item) => item.id === existing.id)) {
-            noticeHistory.value = [...noticeHistory.value.slice(-49), updated]
+            appendHistory(updated)
           }
         }
-        notices.value = notices.value.map((item) => (item.id === existing.id ? updated : item))
         noticeHistory.value = noticeHistory.value.map((item) =>
           item.id === existing.id ? updated : item
         )
-        scheduleAutoDismiss(updated, input.durationMs)
+        present(updated, input.durationMs)
         return updated.id
       }
     }
@@ -132,16 +182,12 @@ export function useAppNoticeStore() {
       read: false,
       action: input.action,
       sticky,
-      dedupeKey
+      dedupeKey,
+      presentation,
+      downloadTaskId: input.downloadTaskId
     }
-    const evicted = notices.value.length >= 4 ? notices.value[0] : null
-    if (evicted) {
-      clearDismissTimer(evicted.id)
-      timerState.delete(evicted.id)
-    }
-    notices.value = [...notices.value.slice(-3), notice]
-    noticeHistory.value = [...noticeHistory.value.slice(-49), notice]
-    scheduleAutoDismiss(notice, input.durationMs)
+    appendHistory(notice)
+    present(notice, input.durationMs)
     return notice.id
   }
 
@@ -166,7 +212,8 @@ export function useAppNoticeStore() {
       pushNotice({
         kind: 'error',
         message: `${action.label}失败：${error instanceof Error ? error.message : '请重试'}`,
-        dedupeKey: `notice-action-${id}`
+        dedupeKey: `notice-action-${id}`,
+        presentation: 'center'
       })
       return false
     } finally {
@@ -177,15 +224,22 @@ export function useAppNoticeStore() {
   return {
     notices,
     noticeHistory,
+    centerOpen,
+    activeTaskCount,
     pendingActions,
-    runNoticeAction,
     unreadCount: computed(() => noticeHistory.value.filter((notice) => !notice.read).length),
-    markHistoryRead: () => {
-      for (const notice of noticeHistory.value) notice.read = true
+    markHistoryRead: (ids?: number[]) => {
+      const selected = ids && new Set(ids)
+      for (const notice of noticeHistory.value)
+        if (!selected || selected.has(notice.id)) notice.read = true
     },
     clearHistory: () => {
       noticeHistory.value = []
     },
+    setCenterOpen: (value: boolean) => {
+      centerOpen.value = value
+    },
+    runNoticeAction,
     pauseNotice,
     resumeNotice,
     pushNotice,

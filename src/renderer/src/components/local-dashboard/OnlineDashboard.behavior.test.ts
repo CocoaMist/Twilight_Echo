@@ -153,7 +153,7 @@ window.runOnlineHomeTests=async()=>{
  await pause();expect(document.querySelector('.online-home'),'No online home for empty library: '+(window.runtimeError||document.body.innerHTML.slice(0,500)))
  expect(document.querySelectorAll('.online-playlist').length===6,'Guest discovery not shown')
  expect(!state.requests.some(([,method])=>method==='daily'),'Guest requested personalized data')
- click('发现好歌单');expect(events.at(-1)==='discover','Discovery navigation failed')
+ click('发现歌单');expect(events.at(-1)==='discover','Discovery navigation failed')
  click('添加本地音乐');expect(events.at(-1)==='local-settings','Import entry failed')
  document.querySelector('.online-playlist').click();await pause();expect(events.at(-1)==='login:ncm'&&state.played.length===0,'Guest playback bypassed login')
  state.authenticated.value=true;await remount();expect(document.querySelectorAll('.online-recommendations .online-track').length===6,'Signed-in recommendations missing')

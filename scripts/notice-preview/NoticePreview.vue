@@ -46,7 +46,7 @@ onMounted(async () => {
       <span>Twilight Echo <small> / 通知栏预览</small></span
       ><button
         class="bell"
-        aria-label="通知记录"
+        aria-label="任务与通知"
         :aria-expanded="host?.historyOpen"
         aria-controls="app-notice-history"
         @click="host?.toggleHistory($event)"
@@ -56,8 +56,8 @@ onMounted(async () => {
     </header>
     <section class="preview-copy">
       <span class="eyebrow">NOTIFICATION CENTER</span>
-      <h1>每一条更新，<br />轻轻抵达。</h1>
-      <p>点击右上角铃铛查看记录。<br />试试不同类型的通知，感受展开、收起与卡片补位。</p>
+      <h1>任务与通知<br />下拉面板预览</h1>
+      <p>点击右上角铃铛查看任务和通知。<br />任务操作、筛选、关闭与键盘焦点使用项目的实际组件。</p>
       <div class="preview-actions">
         <button @click="sample('success')">完成通知</button
         ><button @click="sample('info')">普通提示</button
@@ -71,7 +71,7 @@ onMounted(async () => {
       </div>
       <small class="preview-note">此页使用当前项目的真实通知组件；示例不会写入音乐库。</small>
     </section>
-    <AppNoticeHost ref="host" />
+    <AppNoticeHost ref="host" @library="sample('info')" />
   </main>
 </template>
 
@@ -92,6 +92,7 @@ button {
   --te-surface: #fff;
   --te-text: #202534;
   --te-text-secondary: #727c8e;
+  --te-settings-text-muted: #626b78;
   --te-border: #a6afbe;
   --te-primary-500: #8766df;
   --te-titlebar-inset: 52px;
@@ -104,6 +105,7 @@ button {
   --te-surface: #23242c;
   --te-text: #ececf4;
   --te-text-secondary: #9899ae;
+  --te-settings-text-muted: #a4a5b8;
   --te-border: #717184;
   --te-primary-500: #b29aef;
   background: radial-gradient(ellipse at 10% 85%, #282239, transparent 65%), var(--te-app-bg);

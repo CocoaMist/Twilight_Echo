@@ -943,6 +943,8 @@
 .streaming-content {
   position: relative;
   isolation: isolate;
+  overflow-y: auto;
+  container: streaming-content/inline-size;
 }
 
 .streaming-content::before {
@@ -1072,6 +1074,7 @@
 .track-table-wrapper {
   border-radius: 8px;
   overflow: hidden;
+  overflow-x: auto;
 }
 
 .track-table {
@@ -1593,6 +1596,7 @@
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  flex-shrink: 0;
 }
 
 .streaming-header-left {
@@ -1675,7 +1679,7 @@
   height: 38px;
   width: clamp(220px, 28vw, 360px);
   padding: 0 14px;
-  flex-shrink: 1;
+  flex-shrink: 0;
   min-width: 160px;
   border: 1px solid var(--bar-line);
   border-radius: 999px;
@@ -1722,6 +1726,8 @@
 .streaming-search-input {
   --ai-placeholder: var(--bar-ink-faint);
   --ai-caret: var(--bar-accent);
+  min-width: 0;
+  min-width: 0;
 }
 
 .streaming-search-spinner {
@@ -2003,4 +2009,104 @@ html[data-theme='dark'][data-te-surface-material='liquidGlass']:not(
   background-size: cover, cover, cover, cover, cover;
   background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
   background-attachment: fixed, fixed, fixed, fixed, fixed;
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container streaming-content (max-width: 900px) {
+  .streaming-content::before {
+    inset: 12px;
+  }
+
+  .streaming-content-header,
+  .streaming-content-body {
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .streaming-content-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .streaming-header-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .streaming-search-box {
+    width: min(100%, 440px);
+  }
+}
+@container streaming-content (max-width: 900px) {
+  .streaming-content-header,
+  .streaming-content-body {
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+@container streaming-content (max-width: 900px) {
+  .streaming-content-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
+  }
+
+  .streaming-header-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .streaming-search-box {
+    width: min(100%, 440px);
+    flex: 1 1 auto;
+  }
+}
+@container streaming-content (max-width: 900px) {
+  .playlist-grid {
+    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+    gap: 12px 10px;
+  }
+
+  .playlist-grid-card {
+    padding: 9px;
+  }
+
+  .playlist-grid-name {
+    margin-top: 9px;
+    font-size: calc(var(--te-font-size-body, 14px) * 12.5 / 14);
+  }
+
+  .playlist-grid-count {
+    margin-top: 3px;
+    font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
+  }
+}
+@container streaming-content (max-width: 640px) {
+  .playlist-grid {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 10px 8px;
+  }
+
+  .playlist-grid-card {
+    padding: 7px;
+  }
+
+  .playlist-grid-name {
+    margin-top: 7px;
+    font-size: calc(var(--te-font-size-body, 14px) * 11.5 / 14);
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .playlist-grid-count {
+    margin-top: 2px;
+    font-size: calc(var(--te-font-size-body, 14px) * 10.5 / 14);
+  }
 }

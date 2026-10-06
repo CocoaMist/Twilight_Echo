@@ -139,8 +139,7 @@ function clearBackgroundImage(): void {
 <template>
   <section class="onb-stage" data-scene="01">
     <p class="onb-kicker">Twilight Echo</p>
-    <h1 class="onb-title">欢迎来到<em>你的声音空间</em></h1>
-    <p class="onb-subtitle">先把界面调成你喜欢的样子——所有选择之后都可以在设置中随时更改。</p>
+    <h1 class="onb-title">设置<em>外观</em></h1>
     <div class="onb-theme-row" role="radiogroup" aria-label="外观模式">
       <button
         v-for="option in themeOptions"
@@ -249,8 +248,5 @@ function clearBackgroundImage(): void {
         {{ option.label }}
       </button>
     </div>
-    <p class="onb-hint">
-      从上到下：外观模式、主题色、界面密度与应用背景——背景可选纯色，也可以用自己的图片。
-    </p>
   </section>
 </template>

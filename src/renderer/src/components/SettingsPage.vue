@@ -1342,7 +1342,7 @@ html[data-theme='dark'] .settings-preview-page {
      single settings wallpaper painter, so the page stays transparent in every
      theme — a second image copy here would drift into split bands again. */
   background: transparent;
-  color: var(--te-text);
+  color: var(--te-settings-text);
 }
 
 html[data-theme='dark'] .settings-preview-page::-webkit-scrollbar-thumb {
@@ -1540,7 +1540,7 @@ html[data-theme='dark'] .settings-preview-page .update-card strong,
 html[data-theme='dark'] .settings-preview-page .background-editor-head strong,
 html[data-theme='dark'] .settings-preview-page .page-background-copy strong,
 html[data-theme='dark'] .settings-preview-page .signal-node.active .signal-node-name {
-  color: var(--te-text);
+  color: var(--te-settings-text);
 }
 
 html[data-theme='dark'] .settings-preview-page .setting-copy span,
@@ -1611,7 +1611,7 @@ html[data-theme='dark'] .settings-preview-page .dashed-button,
 html[data-theme='dark'] .settings-preview-page .folder-empty-hint {
   border-color: var(--te-card-border);
   background: var(--te-settings-control-bg);
-  color: rgba(203, 213, 225, 0.9);
+  color: var(--te-settings-text);
   box-shadow: none;
 }
 
