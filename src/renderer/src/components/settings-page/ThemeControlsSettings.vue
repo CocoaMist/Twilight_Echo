@@ -75,8 +75,8 @@ async function setPluginTheme(event: Event): Promise<void> {
     <div class="setting-copy">
       <strong>主题创意工坊</strong>
     </div>
-    <button type="button" class="primary-button" @click="emit('openThemeStudio')">
-      <i class="ph ph-swatches"></i>
+    <button type="button" class="soft-button" @click="emit('openThemeStudio')">
+      <i class="ph ph-swatches" aria-hidden="true"></i>
       打开主题创意工坊
     </button>
   </div>
@@ -91,11 +91,11 @@ async function setPluginTheme(event: Event): Promise<void> {
     </div>
     <button
       type="button"
-      class="primary-button"
+      class="soft-button"
       :disabled="!workshopEnabled"
       @click="emit('openThemeWorkshop')"
     >
-      <i class="ph ph-paint-brush"></i>打开主题插件工坊
+      <i class="ph ph-paint-brush" aria-hidden="true"></i>打开主题插件工坊
     </button>
   </div>
   <hr />

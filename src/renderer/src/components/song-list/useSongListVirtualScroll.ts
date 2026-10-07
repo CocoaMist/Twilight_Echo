@@ -83,7 +83,12 @@ export function useSongListVirtualScroll({
       viewportHeight.value = containerRef.value.clientHeight
     }
     if (containerRef.value && tbodyRef.value) {
-      tableOffsetTop.value = tbodyRef.value.offsetTop
+      const container = containerRef.value
+      tableOffsetTop.value =
+        tbodyRef.value.getBoundingClientRect().top -
+        container.getBoundingClientRect().top +
+        container.scrollTop -
+        container.clientTop
     } else {
       tableOffsetTop.value = 0
     }
@@ -111,6 +116,7 @@ export function useSongListVirtualScroll({
     void nextTick(() => {
       updateViewportHeight()
       if (containerRef.value) containerRef.value.scrollTop = scrollTop.value
+      if (containerRef.value) scrollTop.value = containerRef.value.scrollTop
       restorePending = false
     })
   }
@@ -136,7 +142,23 @@ export function useSongListVirtualScroll({
     window.addEventListener('resize', updateViewportHeight)
   })
 
+  let resizeObserver: ResizeObserver | undefined
+  watch(
+    [containerRef, tbodyRef],
+    () => {
+      resizeObserver?.disconnect()
+      if (typeof ResizeObserver === 'undefined' || !containerRef.value) return
+      resizeObserver = new ResizeObserver(updateViewportHeight)
+      resizeObserver.observe(containerRef.value)
+      if (tbodyRef.value) resizeObserver.observe(tbodyRef.value)
+      const view = containerRef.value.firstElementChild
+      if (view) resizeObserver.observe(view)
+    },
+    { flush: 'post' }
+  )
+
   onUnmounted(() => {
+    resizeObserver?.disconnect()
     savePosition()
     window.removeEventListener('resize', updateViewportHeight)
   })

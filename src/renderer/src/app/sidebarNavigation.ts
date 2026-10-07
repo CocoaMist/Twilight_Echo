@@ -52,5 +52,15 @@ export function buildSidebarEntries(pages: NavigationPageDefinition[]): SidebarE
     }
     entry.pages.push(page)
   }
+  const homeIndex = result.findIndex(
+    (entry) => entry.kind === 'page' && entry.page.id === 'local-home'
+  )
+  const searchIndex = result.findIndex(
+    (entry) => entry.kind === 'page' && entry.page.id === 'search'
+  )
+  if (homeIndex >= 0 && searchIndex >= 0 && searchIndex !== homeIndex + 1) {
+    const [search] = result.splice(searchIndex, 1)
+    result.splice(searchIndex < homeIndex ? homeIndex : homeIndex + 1, 0, search)
+  }
   return result
 }

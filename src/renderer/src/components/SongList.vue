@@ -2289,10 +2289,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <th class="col-duration">时长</th>
                 </tr>
               </thead>
-              <tbody
-                ref="tbodyRef"
-                :style="{ height: totalHeight + 'px', position: 'relative', display: 'block' }"
-              >
+              <tbody ref="tbodyRef" :style="{ height: totalHeight + 'px' }">
                 <tr
                   class="virtual-spacer"
                   :style="{ height: paddingTop + 'px' }"

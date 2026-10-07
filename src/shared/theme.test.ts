@@ -408,6 +408,15 @@ test('adaptive accents and contrast enforcement produce bounded readable host co
   assert.equal(fixed['color.primary.500'], '#2563eb')
   assert.equal(fixed['color.primary.rgb'], '37, 99, 235')
   assert.equal(fixed['navigation.indicator'], '#2563eb')
+  const dark = createThemeAccentTokenOverrides('#2563eb', 'dark', '#17181a')
+  assert.equal(dark['navigation.activeSurface'], 'rgba(37, 99, 235, 0.14)')
+  assert.ok(
+    (themeContrastRatio(
+      dark['navigation.activeText'],
+      dark['navigation.activeSurface'],
+      '#17181a'
+    ) ?? 0) >= 4.5
+  )
   const adaptive = createThemeAccentTokenOverrides('#f6f7f8', 'pureWhite', '#ffffff', true)
   assert.equal(adaptive['color.primary.500'], '#2563eb')
   assert.ok((themeContrastRatio('#111827', '#ffffff') ?? 0) >= 4.5)
