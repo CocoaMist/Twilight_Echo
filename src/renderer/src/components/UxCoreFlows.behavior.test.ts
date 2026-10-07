@@ -13,7 +13,7 @@ import { build } from 'vite'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../', import.meta.url))
 
-test('search pagination, native keyboard, download focus, radio races and podcast undo work in Electron', async () => {
+test('import preservation, search pagination, native keyboard, download focus, radio races and podcast undo work in Electron', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-ux-core-'))
   try {
     await build({
@@ -26,13 +26,20 @@ test('search pagination, native keyboard, download focus, radio races and podcas
           enforce: 'pre',
           resolveId(source, importer) {
             if (
-              importer?.replaceAll('\\', '/').endsWith('/RadioPodcastPage.vue') &&
+              importer?.replaceAll('\\', '/').split('?')[0].endsWith('/ImportDialog.vue') &&
+              source === '../stores/useMusicStore'
+            )
+              return '\0ux-import-boundary'
+            if (
+              importer?.replaceAll('\\', '/').split('?')[0].endsWith('/RadioPodcastPage.vue') &&
               source === '../stores/usePlayerStore'
             )
               return '\0ux-audio-boundary'
             return null
           },
           load(id) {
+            if (id === '\0ux-import-boundary')
+              return 'export const useMusicStore = () => window.auditMusic'
             return id === '\0ux-audio-boundary'
               ? 'export const usePlayerStore = () => ({playTrack(){},playTrackFromPosition(){}})'
               : null

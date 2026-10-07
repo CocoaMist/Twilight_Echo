@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer.ts'
 import { useMusicStore } from '../stores/useMusicStore'
 import type { Track } from '../types/music'
 
-defineProps<{
+const props = defineProps<{
   show: boolean
 }>()
 
@@ -11,31 +12,56 @@ const emit = defineEmits<{
   close: []
 }>()
 
-const {
-  scannedFolders,
-  addFolder,
-  addTracks,
-  isScanning,
-  saveLibrary,
-  refreshLibraryIndex,
-  syncFolders
-} = useMusicStore()
+const { scannedFolders, addFolder, addTracks, isScanning, saveLibrary, refreshLibraryIndex } =
+  useMusicStore()
 
 const progress = ref({ current: 0, total: 0 })
 const selectedFolders = ref<Set<string>>(new Set())
 const scanStatus = ref<'idle' | 'scanning' | 'done' | 'empty'>('idle')
 const scannedTrackCount = ref(0)
+const scanError = ref('')
+const dialogRef = ref<HTMLElement | null>(null)
+const choosingFolder = ref(false)
+const newlyAddedFolders = ref<string[]>([])
+const busy = computed(() => isScanning.value || choosingFolder.value)
+const availableFolders = computed(() => [
+  ...new Set([...scannedFolders.value, ...newlyAddedFolders.value])
+])
+
+function close(): void {
+  if (!busy.value) emit('close')
+}
+useEscapeToClose(() => props.show, close)
+useFocusTrap(dialogRef, () => props.show)
 
 let cleanupProgress: (() => void) | null = null
 
-const newlyAddedFolders = ref<string[]>([])
+watch(
+  () => props.show,
+  (show) => {
+    if (!show) return
+    selectedFolders.value = new Set(scannedFolders.value)
+    newlyAddedFolders.value = []
+    scanStatus.value = 'idle'
+    scanError.value = ''
+  },
+  { immediate: true }
+)
 
 async function handleAddNewFolder(): Promise<void> {
-  const path = await window.api.dialog.openFolder()
-  if (path && !scannedFolders.value.includes(path)) {
-    addFolder(path)
-    selectedFolders.value.add(path)
-    newlyAddedFolders.value.push(path)
+  if (busy.value) return
+  choosingFolder.value = true
+  scanError.value = ''
+  try {
+    const path = await window.api.dialog.openFolder()
+    if (path) {
+      if (!availableFolders.value.includes(path)) newlyAddedFolders.value.push(path)
+      selectedFolders.value.add(path)
+    }
+  } catch (error) {
+    scanError.value = `选择文件夹失败：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    choosingFolder.value = false
   }
 }
 
@@ -48,11 +74,11 @@ function toggleFolder(path: string): void {
 }
 
 async function startScan(): Promise<void> {
-  if (isScanning.value) return
+  if (busy.value) return
 
   const foldersToScan = Array.from(selectedFolders.value)
   if (foldersToScan.length === 0) {
-    scanStatus.value = 'empty'
+    scanError.value = '请先选择要扫描的文件夹。'
     return
   }
 
@@ -60,12 +86,13 @@ async function startScan(): Promise<void> {
   scanStatus.value = 'scanning'
   progress.value = { current: 0, total: 0 }
   scannedTrackCount.value = 0
+  scanError.value = ''
 
   try {
-    syncFolders(foldersToScan)
-
     for (const folder of foldersToScan) {
       const tracks = await window.api.fs.scanMusicFiles(folder)
+      // Scan selection never removes unselected roots or their existing tracks.
+      addFolder(folder)
       if (tracks && tracks.length > 0) {
         scannedTrackCount.value += tracks.length
         // 每批导入 500 首，避免一次性更新过重。
@@ -91,7 +118,17 @@ async function startScan(): Promise<void> {
     }
   } catch (err) {
     console.error('扫描音乐文件失败：', err)
+    scanError.value = `扫描失败：${err instanceof Error ? err.message : String(err)}`
     scanStatus.value = 'idle'
+    // Deferred batches from completed folders still need to survive a restart.
+    if (scannedTrackCount.value > 0) {
+      refreshLibraryIndex()
+      try {
+        await saveLibrary()
+      } catch (saveError) {
+        scanError.value += `；保存已导入歌曲失败：${saveError instanceof Error ? saveError.message : String(saveError)}`
+      }
+    }
   } finally {
     isScanning.value = false
     progress.value = { current: 0, total: 0 }
@@ -99,7 +136,6 @@ async function startScan(): Promise<void> {
 }
 
 onMounted(() => {
-  scannedFolders.value.forEach((f) => selectedFolders.value.add(f))
   cleanupProgress = window.api.fs.onScanProgress((data) => {
     progress.value = data
   })
@@ -113,9 +149,28 @@ onUnmounted(() => {
 <template>
   <Teleport to="body">
     <Transition name="fade">
-      <div v-if="show" class="modal-overlay" @click.self="emit('close')">
-        <div class="import-dialog">
-          <div class="dialog-header"></div>
+      <div v-if="show" class="modal-overlay" @click.self="close">
+        <div
+          ref="dialogRef"
+          class="import-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="import-dialog-title"
+          tabindex="-1"
+          :aria-busy="busy"
+        >
+          <div class="dialog-header">
+            <h3 id="import-dialog-title">导入本地音乐</h3>
+            <button
+              type="button"
+              class="btn-close"
+              aria-label="关闭导入窗口"
+              :disabled="busy"
+              @click="close"
+            >
+              <i class="pi pi-times" aria-hidden="true"></i>
+            </button>
+          </div>
 
           <div class="dialog-content">
             <div class="folder-list-section">
@@ -124,23 +179,25 @@ onUnmounted(() => {
               </div>
 
               <div class="folder-list">
-                <div v-if="scannedFolders.length === 0" class="empty-folders">
+                <div v-if="availableFolders.length === 0" class="empty-folders">
                   暂无文件夹，请点击下方按钮添加
                 </div>
-                <div v-for="folder in scannedFolders" :key="folder" class="folder-item">
+                <label v-for="folder in availableFolders" :key="folder" class="folder-item">
                   <i class="pi pi-folder"></i>
                   <span class="folder-path" :title="folder">{{ folder }}</span>
                   <input
                     type="checkbox"
                     :checked="selectedFolders.has(folder)"
-                    :disabled="isScanning"
+                    :disabled="busy"
+                    :aria-label="`扫描文件夹 ${folder}`"
                     @change="toggleFolder(folder)"
                   />
-                </div>
+                </label>
               </div>
             </div>
 
-            <div class="scan-status-slot">
+            <p v-if="scanError" class="scan-error" role="alert">{{ scanError }}</p>
+            <div class="scan-status-slot" role="status" aria-live="polite">
               <Transition name="scan-status">
                 <div v-if="isScanning" key="scanning" class="progress-section">
                   <div class="progress-info">
@@ -164,11 +221,16 @@ onUnmounted(() => {
           </div>
 
           <div class="dialog-footer">
-            <button class="btn-cancel" :disabled="isScanning" @click="handleAddNewFolder">
+            <button type="button" class="btn-cancel" :disabled="busy" @click="handleAddNewFolder">
               添加文件夹
             </button>
-            <button class="btn-start" :disabled="isScanning" @click="startScan">
-              {{ isScanning ? '正在扫描...' : '重新扫描' }}
+            <button
+              type="button"
+              class="btn-start"
+              :disabled="busy || selectedFolders.size === 0"
+              @click="startScan"
+            >
+              {{ isScanning ? '正在扫描...' : '扫描所选文件夹' }}
             </button>
           </div>
         </div>
@@ -244,7 +306,7 @@ html[data-te-motion='off'] .scan-status-leave-to {
   padding: 8px 20px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   min-height: 24px;
 }
 
@@ -252,7 +314,11 @@ html[data-te-motion='off'] .scan-status-leave-to {
   margin: 0;
   font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--te-neutral-900);
+}
+
+.scan-error {
+  color: var(--te-danger-600, #d14343);
 }
 
 .btn-close {

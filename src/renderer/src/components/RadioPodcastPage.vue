@@ -43,6 +43,9 @@ function invalidateDirectorySearch(): void {
   directoryBusy.value = false
 }
 watch([directoryQuery, tab], invalidateDirectorySearch, { flush: 'sync' })
+watch(tab, () => {
+  formError.value = ''
+})
 watch(
   directoryQuery,
   () => {
@@ -70,7 +73,12 @@ onBeforeUnmount(() => {
 })
 
 async function addStation(): Promise<void> {
+  if (formBusy.value) return
   formError.value = ''
+  if (!stationName.value.trim() || !stationUrl.value.trim()) {
+    formError.value = '请填写电台名称和流地址'
+    return
+  }
   formBusy.value = true
   try {
     const url = stationUrl.value.trim()
@@ -175,7 +183,12 @@ async function removeStation(id: string): Promise<void> {
 }
 
 async function subscribeFeed(): Promise<void> {
+  if (formBusy.value) return
   formError.value = ''
+  if (!feedUrl.value.trim()) {
+    formError.value = '请输入 RSS 或 Atom 订阅地址'
+    return
+  }
   formBusy.value = true
   try {
     const sub = await podcast.subscribe(feedUrl.value)
@@ -602,7 +615,7 @@ function formatDuration(seconds: number): string {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   padding: 52px clamp(24px, 5vw, 72px) 132px;
-  color: var(--te-text, #0f172a);
+  color: var(--te-settings-text, #0f172a);
   scrollbar-width: thin;
   scrollbar-color: var(--te-scrollbar-thumb) transparent;
 }
@@ -750,7 +763,7 @@ button.primary {
   border: 1px solid var(--te-card-border, rgba(15, 23, 42, 0.08));
   border-radius: 20px;
   background: color-mix(in srgb, var(--te-card-bg) 90%, transparent);
-  box-shadow: 0 14px 36px color-mix(in srgb, var(--te-text) 5%, transparent);
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--te-settings-text) 5%, transparent);
 }
 .tool-card {
   display: grid;

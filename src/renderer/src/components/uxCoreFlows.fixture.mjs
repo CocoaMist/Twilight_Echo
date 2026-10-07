@@ -3,6 +3,7 @@ import StreamingSearch from './StreamingSearch.vue'
 import RadioPodcastPage from './RadioPodcastPage.vue'
 import ProviderDownloadsPanel from './streaming-page/ProviderDownloadsPanel.vue'
 import AppNoticeHost from './AppNoticeHost.vue'
+import ImportDialog from './ImportDialog.vue'
 import { usePodcastStore } from '../stores/usePodcastStore'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 
@@ -82,6 +83,126 @@ window.api = {
 }
 
 window.runUxCoreTests = async () => {
+  const importMotion = document.createElement('style')
+  importMotion.textContent =
+    '.modal-overlay,.import-dialog{transition:none!important;animation:none!important}'
+  document.head.append(importMotion)
+  const showImport = ref(true)
+  const imported = ['existing-A', 'existing-B']
+  const selectedFolder = 'C:/new'
+  let scanFailure = false
+  let failedFolder = null
+  let importSaves = 0
+  let importRebuilds = 0
+  window.auditMusic = {
+    scannedFolders: ref(['C:/A', 'C:/B']),
+    isScanning: ref(false),
+    addFolder: (folder) => {
+      const roots = window.auditMusic.scannedFolders.value
+      if (!roots.includes(folder)) roots.push(folder)
+    },
+    addTracks: async (tracks) => imported.push(...tracks.map((track) => track.id)),
+    saveLibrary: async () => importSaves++,
+    refreshLibraryIndex: () => importRebuilds++,
+    syncFolders: () => {
+      throw new Error('Import must never prune unselected roots')
+    }
+  }
+  window.api.dialog = { openFolder: async () => selectedFolder }
+  window.api.fs = {
+    onScanProgress: () => () => {},
+    scanMusicFiles: async (folder) => {
+      if (scanFailure || folder === failedFolder) throw new Error('Folder unavailable')
+      return [{ id: `imported:${folder}` }]
+    }
+  }
+  const importOpener = document.querySelector('#opener')
+  importOpener.focus()
+  await mount(ImportDialog, () => ({
+    show: showImport.value,
+    onClose: () => (showImport.value = false)
+  }))
+  await new Promise((resolve) => requestAnimationFrame(resolve))
+  const importDialog = document.querySelector('[role="dialog"]')
+  expect(importDialog.contains(document.activeElement), 'import dialog did not receive focus')
+  const importLast = findButton('扫描所选文件夹')
+  importLast.focus()
+  await window.pressKey('Tab')
+  expect(importDialog.contains(document.activeElement), 'Tab escaped import dialog')
+  await window.pressKey('Escape')
+  await settle()
+  expect(
+    !showImport.value && document.activeElement === importOpener,
+    'Escape did not close and restore focus'
+  )
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  showImport.value = true
+  await settle()
+  findButton('添加文件夹').click()
+  await settle()
+  expect(
+    !window.auditMusic.scannedFolders.value.includes('C:/new'),
+    'choosing a folder persisted before scanning'
+  )
+  document.querySelector('[aria-label="关闭导入窗口"]').click()
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  showImport.value = true
+  await settle()
+  expect(
+    document.querySelectorAll('.folder-item').length === 2,
+    'cancelled folder draft survived reopening'
+  )
+  const checks = [...document.querySelectorAll('.folder-item input')]
+  checks[0].click()
+  findButton('扫描所选文件夹').click()
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  await settle()
+  expect(
+    imported.join('|') === 'existing-A|existing-B|imported:C:/B',
+    'unselected tracks removed or selected root skipped'
+  )
+  expect(
+    window.auditMusic.scannedFolders.value.join('|') === 'C:/A|C:/B',
+    'unselected root removed'
+  )
+  expect(
+    importSaves > 0 && importRebuilds > 0 && !showImport.value,
+    'successful import did not save and close'
+  )
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  showImport.value = true
+  scanFailure = true
+  await settle()
+  findButton('扫描所选文件夹').click()
+  await settle()
+  expect(
+    document.querySelector('[role="alert"]').textContent.includes('Folder unavailable'),
+    'scan error hidden'
+  )
+  expect(
+    !window.auditMusic.isScanning.value && showImport.value,
+    'failed scan left busy state or closed'
+  )
+  scanFailure = false
+  findButton('扫描所选文件夹').click()
+  await new Promise((resolve) => setTimeout(resolve, 180))
+  await settle()
+  expect(!showImport.value, 'failed import could not retry')
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  showImport.value = true
+  failedFolder = 'C:/B'
+  const savesBeforePartial = importSaves
+  await settle()
+  findButton('扫描所选文件夹').click()
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  await settle()
+  expect(
+    showImport.value && importSaves > savesBeforePartial,
+    'completed folder batches were not saved after a later failure'
+  )
+  expect(imported.includes('imported:C:/A'), 'completed folder batches were lost')
+  importMotion.remove()
+
   const offset = ref(0),
     total = ref(31),
     type = ref('playlists'),
@@ -211,6 +332,23 @@ window.runUxCoreTests = async () => {
   expect(!show.value && document.activeElement === opener, 'download Escape/focus restore')
 
   await mount(RadioPodcastPage, () => ({}))
+  findButton('添加到我的电台').click()
+  await settle()
+  expect(
+    document.querySelector('[role="alert"]').textContent.includes('请填写电台名称和流地址'),
+    'empty station form reached IPC'
+  )
+  findButton('播客').click()
+  await settle()
+  expect(!document.querySelector('[role="alert"]'), 'station error leaked into podcast tab')
+  findButton('订阅').click()
+  await settle()
+  expect(
+    document.querySelector('[role="alert"]').textContent.includes('请输入 RSS 或 Atom'),
+    'empty feed reached IPC'
+  )
+  findButton('电台').click()
+  await settle()
   const search = async (query) => {
     const input = document.querySelector('.inline-search input')
     input.value = query

@@ -1418,7 +1418,10 @@ html[data-theme='dark'] .submenu {
 
 html[data-theme='dark'] .artist-card:hover,
 html[data-theme='dark'] .album-card:hover,
-html[data-theme='dark'] .playlist-card:hover {
+html[data-theme='dark'] .playlist-card:hover,
+html[data-theme='dark'] .artist-card:focus-visible,
+html[data-theme='dark'] .album-card:focus-visible,
+html[data-theme='dark'] .playlist-card:focus-visible {
   border-color: rgba(var(--te-primary-rgb), 0.32);
   background: rgba(30, 41, 59, 0.82);
   box-shadow:

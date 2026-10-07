@@ -82,7 +82,11 @@ window.makeSettingsSection = (key) => () =>
               h('div', { class: 'setting-copy' }, [
                 h(
                   'strong',
-                  key === 'performance' && index === 20 ? '硬件加速' : `${key} 设置 ${index}`
+                  key === 'performance' && index === 20
+                    ? '硬件加速'
+                    : key === 'playback' && index === 20
+                      ? '无缝播放 (Gapless Playback)'
+                      : `${key} 设置 ${index}`
                 ),
                 h(
                   'span',
@@ -195,6 +199,19 @@ window.runSettingsScrollTests = async () => {
     'skipping remounted an edited control'
   )
   expect(expanded.value, 'skipping reset disclosure state')
+  for (const query of ['交叉淡化', 'crossfade']) {
+    search.value = query
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    const result = page.querySelector('#settings-search-result-0')
+    expect(result?.textContent.includes('无缝播放'), `${query} could not find crossfade controls`)
+    result.click()
+    await settle()
+    expect(
+      page.querySelector('.search-target-flash')?.textContent.includes('无缝播放'),
+      `${query} did not locate playback controls`
+    )
+  }
   await window.resizeTestWindow(1440)
   await settle()
   nav('播放').click()
