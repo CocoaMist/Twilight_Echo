@@ -214,8 +214,8 @@ async function setPluginTheme(event: Event): Promise<void> {
   padding: 3px 6px;
   border-radius: 5px;
   background: var(--te-settings-search-bg);
-  color: var(--te-settings-text-muted);
-  font-size: 10px;
+  color: var(--te-settings-text);
+  font-size: 11px;
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: 0.5px;
