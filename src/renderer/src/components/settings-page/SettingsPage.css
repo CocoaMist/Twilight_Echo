@@ -301,37 +301,13 @@ html:is(
 }
 
 .settings-preview-page.settings-page-enter-from .settings-preview-stack {
-  transform: translate3d(28px, 0, 0) scale(0.988);
+  transform: translate3d(20px, 0, 0);
   opacity: 0;
 }
 
 .settings-preview-page.settings-page-leave-to .settings-preview-stack {
-  transform: translate3d(18px, 0, 0) scale(0.992);
+  transform: translate3d(14px, 0, 0);
   opacity: 0;
-}
-
-.settings-preview-page.settings-page-enter-active .settings-page-header,
-.settings-preview-page.settings-page-enter-active .settings-command-bar,
-.settings-preview-page.settings-page-enter-active .preview-section {
-  animation: te-settings-arrive var(--te-motion-page) var(--te-ease-soft) both;
-}
-
-.settings-preview-page.settings-page-enter-active .settings-preview-nav {
-  /* Nav-specific arrive keyframes preserve translateY(-50%) centering. */
-  animation: te-settings-nav-arrive var(--te-motion-page) var(--te-ease-soft) both;
-  animation-delay: 0ms;
-}
-
-.settings-preview-page.settings-page-enter-active .settings-page-header {
-  animation-delay: 10ms;
-}
-
-.settings-preview-page.settings-page-enter-active .settings-command-bar {
-  animation-delay: 20ms;
-}
-
-.settings-preview-page.settings-page-enter-active .preview-section {
-  animation-delay: 30ms;
 }
 
 .preview-nav-item {
@@ -3060,31 +3036,6 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
 
   .sponsor-qr-image-shell {
     aspect-ratio: 3 / 2;
-  }
-}
-
-@keyframes te-settings-arrive {
-  from {
-    opacity: 0;
-    transform: translate3d(0, 12px, 0) scale(0.992);
-  }
-
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-}
-
-/* Like te-settings-arrive, but keeps fixed-nav translateY(-50%) on every frame. */
-@keyframes te-settings-nav-arrive {
-  from {
-    opacity: 0;
-    transform: translate3d(0, calc(-50% + 12px), 0) scale(0.992);
-  }
-
-  to {
-    opacity: 1;
-    transform: translate3d(0, -50%, 0) scale(1);
   }
 }
 
