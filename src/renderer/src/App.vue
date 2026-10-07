@@ -1616,29 +1616,23 @@ html[data-te-motion='off']
 /* Settings and plugin pages: shared overlay transition */
 .settings-page-enter-active {
   z-index: 2000;
-  transition:
-    opacity var(--te-motion-panel) ease,
-    transform var(--te-motion-page) var(--te-ease-out-expo);
-  will-change: opacity, transform;
+  transition: opacity var(--te-motion-panel) ease;
+  will-change: opacity;
 }
 
 .settings-page-leave-active {
   z-index: 1999;
   pointer-events: none;
-  transition:
-    opacity var(--te-motion-hover) ease,
-    transform var(--te-motion-panel) var(--te-ease-enter);
-  will-change: opacity, transform;
+  transition: opacity var(--te-motion-hover) ease;
+  will-change: opacity;
 }
 
 .settings-page-enter-from {
   opacity: 0;
-  transform: translate3d(28px, 0, 0) scale(0.988);
 }
 
 .settings-page-leave-to {
   opacity: 0;
-  transform: translate3d(18px, 0, 0) scale(0.992);
 }
 
 /* Onboarding wizard: fade in on first paint, dissolve away over the app */
