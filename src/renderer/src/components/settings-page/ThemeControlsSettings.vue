@@ -83,7 +83,7 @@ async function setPluginTheme(event: Event): Promise<void> {
   <div class="setting-item">
     <div class="setting-copy">
       <strong class="workshop-setting-title"
-        >主题插件工坊<span class="workshop-beta-tag">BETA</span></strong
+        >主题插件工坊<small class="workshop-beta-tag">BETA</small></strong
       ><span>{{
         workshopEnabled
           ? '定制已加载的主题插件，管理素材并导出个人主题。'
