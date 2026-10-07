@@ -82,7 +82,8 @@ async function setPluginTheme(event: Event): Promise<void> {
   </div>
   <div class="setting-item">
     <div class="setting-copy">
-      <strong>主题插件工坊</strong
+      <strong class="workshop-setting-title"
+        >主题插件工坊<span class="workshop-beta-tag">BETA</span></strong
       ><span>{{
         workshopEnabled
           ? '定制已加载的主题插件，管理素材并导出个人主题。'
@@ -201,3 +202,22 @@ async function setPluginTheme(event: Event): Promise<void> {
     </div>
   </div>
 </template>
+
+<style scoped>
+.workshop-setting-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workshop-setting-title .workshop-beta-tag {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--te-settings-search-bg);
+  color: var(--te-settings-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.5px;
+}
+</style>
