@@ -5,8 +5,8 @@
 | 文件 | 覆盖的控件 |
 | --- | --- |
 | `settings-overview-before-after.png` | 设置总览：开关、分段控件、软按钮、字段 |
-| `settings-05-外观-before-after.png` | 外观分区：主按钮（打开主题创意工坊）、开关、分段控件 |
-| `settings-00-常规-before-after.png` | 常规分区：软按钮、图标按钮、下拉框 |
+| `settings-appearance-before-after.png` | 外观分区：主按钮（打开主题创意工坊）、开关、分段控件 |
+| `settings-general-before-after.png` | 常规分区：软按钮、图标按钮、下拉框 |
 | `dialog-import-before-after.png` | 导入对话：对话框圆角统一为 16px |
 | `plugins-extension-center-before-after.png` | 扩展中心：`.badge` 徽标统一 |
 
