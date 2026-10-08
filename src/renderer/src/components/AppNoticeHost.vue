@@ -554,7 +554,7 @@ button:focus-visible {
   height: 18px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 3px #00000021;
+  box-shadow: var(--te-settings-shadow-soft);
 }
 .notice-history-body {
   overflow-x: hidden;

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useResolvedMotionMode } from '../../app/useResolvedMotionMode'
+import { useFocusTrap } from '../../app/useDismissLayer.ts'
 import OnboardingBackdrop from './OnboardingBackdrop.vue'
 import StepWelcome from './steps/StepWelcome.vue'
 import StepUsage from './steps/StepUsage.vue'
@@ -69,6 +70,7 @@ const sceneTotal = computed(() => String(visibleSteps.value.length).padStart(2, 
 
 // Only the two decorative layers receive pointer transforms.
 const rootRef = ref<HTMLElement | null>(null)
+useFocusTrap(rootRef, () => true)
 const motionMode = useResolvedMotionMode(computed(() => settings.value.motionPreference))
 let parallaxFrame = 0
 
@@ -164,6 +166,8 @@ onBeforeUnmount(() => {
     class="onboarding-wizard"
     :data-motion="motionMode"
     role="dialog"
+    aria-modal="true"
+    tabindex="-1"
     aria-label="首次使用引导"
     @pointermove="onPointerMove"
   >

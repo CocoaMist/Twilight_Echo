@@ -517,6 +517,45 @@ test('prefetched NetEase stream URLs survive only inside their freshness window'
   assert.equal(stripped[3], local, 'non-NCM tracks pass through by identity')
 })
 
+test('expired or untracked NetEase audio grants cannot poison a fresh current queue', async () => {
+  const { stripStaleNcmStreamUrls } = await import(
+    new URL('./nativeQueuePreparation.ts', import.meta.url).href
+  )
+  const current = createTrack({
+    id: 'ncm:current',
+    source: 'ncm',
+    filePath: 'ncm:current',
+    streamUrl: 'twilight-media://audio/fresh'
+  })
+  const stale = createTrack({
+    id: 'ncm:stale',
+    source: 'ncm',
+    filePath: 'ncm:stale',
+    streamUrl: 'twilight-media://audio/expired'
+  })
+  const queue = stripStaleNcmStreamUrls([current, stale], {
+    committedAtByTrackId: new Map([[current.id, 1000]]),
+    nowMs: 1001
+  })
+  const prepared = await prepareNativeQueue({
+    queue,
+    currentTrack: current,
+    currentTarget: current.streamUrl!,
+    currentIndex: 0,
+    isAudioFileAuthorized: async () => false
+  })
+  assert.equal(prepared?.delegated, false)
+  assert.deepEqual(
+    prepared?.items.map((item) => item.source),
+    [current.streamUrl]
+  )
+  assert.equal(
+    stale.streamUrl,
+    'twilight-media://audio/expired',
+    'sanitizing must not mutate the queue'
+  )
+})
+
 test('provider-managed local cache paths never get freshness-stripped', async () => {
   const { stripStaleNcmStreamUrls } = await import(
     new URL('./nativeQueuePreparation.ts', import.meta.url).href

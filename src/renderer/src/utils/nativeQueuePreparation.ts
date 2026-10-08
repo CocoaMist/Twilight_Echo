@@ -281,7 +281,7 @@ export interface NcmStreamUrlFreshness {
 
 /**
  * 剥离队列里过期或来路不明的 NCM 远程播放地址：只有提交时间在窗口内的
- * http(s) 地址才允许携带进原生队列；其余一律留空，由渲染层切曲时重解析
+ * http(s) 或 twilight-media 地址才允许携带进原生队列；其余一律留空，由渲染层切曲时重解析
  * （provider 侧的磁盘缓存/TTL 内存缓存会让重解析近乎零成本）。本地缓存路径
  * 等非 http 目标是 provider 托管成品，不参与过期剥离。
  */
@@ -295,7 +295,11 @@ export function stripStaleNcmStreamUrls(
   const items = queue.map((track) => {
     if (getTrackSource(track) !== 'ncm') return track
     const streamUrl = track.streamUrl
-    if (typeof streamUrl !== 'string' || !/^https?:\/\//i.test(streamUrl)) return track
+    if (
+      typeof streamUrl !== 'string' ||
+      (!/^https?:\/\//i.test(streamUrl) && !isTwilightMediaGrantTarget(streamUrl))
+    )
+      return track
     const committedAt = freshness.committedAtByTrackId.get(track.id)
     if (committedAt != null && now - committedAt <= maxAge) return track
     changed = true

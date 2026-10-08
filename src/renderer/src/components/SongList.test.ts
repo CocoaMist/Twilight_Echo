@@ -18,7 +18,7 @@ test('folder view renders explicit empty and filtered-empty states instead of a 
 
   assert.match(source, /category === 'folders' && folders\.length === 0/)
   assert.match(source, /暂无可显示的文件夹/)
-  assert.match(source, /媒体库管理/)
+  assert.match(source, /点击「导入歌曲」选择并扫描音乐文件夹/)
   assert.match(source, /gridTotalCount === 0/)
   assert.match(source, /没有符合搜索条件的内容/)
 })

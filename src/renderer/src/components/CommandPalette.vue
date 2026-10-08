@@ -386,10 +386,10 @@ onBeforeUnmount(() => {
   max-height: calc(100vh - 64px);
   margin: min(12vh, 100px) auto auto;
   padding: 0;
-  border: 1px solid var(--border-color, #8884);
+  border: 1px solid var(--te-card-border, #8884);
   border-radius: 16px;
-  color: var(--text-primary, #202026);
-  background: var(--bg-primary, #fafafa);
+  color: var(--te-settings-text, #202026);
+  background: var(--te-card-bg, #fafafa);
   box-shadow: 0 18px 70px #0003;
   overflow: hidden;
 }
@@ -420,7 +420,7 @@ input {
 header button,
 footer button,
 .palette-error button {
-  border: 1px solid var(--border-color, #8884);
+  border: 1px solid var(--te-card-border, #8884);
   border-radius: 6px;
   padding: 4px 8px;
   background: transparent;
@@ -437,12 +437,12 @@ button:disabled {
   gap: 12px;
   margin: 16px 20px 0;
   padding: 10px 12px;
-  border: 1px solid var(--border-color, #8884);
+  border: 1px solid var(--te-card-border, #8884);
   border-radius: 9px;
 }
 .palette-input:focus-within {
-  border-color: var(--accent-color, #6b5cff);
-  box-shadow: 0 0 0 1px var(--accent-color, #6b5cff);
+  border-color: var(--te-primary-500, #6b5cff);
+  box-shadow: 0 0 0 1px var(--te-primary-500, #6b5cff);
 }
 .palette-input input {
   width: 100%;
@@ -458,10 +458,10 @@ button:disabled {
   margin: 10px 20px;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--text-secondary, #666);
+  color: var(--te-settings-text-muted, #666);
 }
 .palette-error {
-  color: var(--danger-color, #b83a3a);
+  color: var(--te-danger-soft-fg, #b83a3a);
 }
 .palette-results {
   height: min(420px, 50vh);
@@ -488,7 +488,7 @@ button:disabled {
   cursor: pointer;
 }
 .palette-row.selected {
-  background: color-mix(in srgb, var(--accent-color, #6b5cff) 12%, transparent);
+  background: color-mix(in srgb, var(--te-primary-500, #6b5cff) 12%, transparent);
 }
 .palette-row[aria-disabled='true'] {
   opacity: 0.55;
@@ -498,7 +498,7 @@ button:disabled {
   width: 32px;
   flex-shrink: 0;
   font-size: 11px;
-  color: var(--text-secondary, #777);
+  color: var(--te-settings-text-muted, #777);
 }
 .palette-row-copy {
   flex: 1;
@@ -518,27 +518,27 @@ button:disabled {
 }
 .palette-row-copy small {
   font-size: 12px;
-  color: var(--text-secondary, #777);
+  color: var(--te-settings-text-muted, #777);
 }
 .palette-empty {
   padding: 24px 12px;
   margin: 0;
   font-size: 13px;
-  color: var(--text-secondary, #777);
+  color: var(--te-settings-text-muted, #777);
   text-align: center;
 }
 footer {
-  border-top: 1px solid var(--border-color, #8883);
+  border-top: 1px solid var(--te-card-border, #8883);
   padding: 12px 20px;
   font-size: 11px;
-  color: var(--text-secondary, #777);
+  color: var(--te-settings-text-muted, #777);
 }
 footer div {
   display: flex;
   gap: 8px;
 }
 button:focus-visible {
-  outline: 2px solid var(--accent-color, #6b5cff);
+  outline: 2px solid var(--te-primary-500, #6b5cff);
   outline-offset: 2px;
 }
 </style>

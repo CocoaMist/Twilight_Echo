@@ -1,6 +1,7 @@
 /**
  * Idle bookkeeping for plugin host processes.
  *
+ * Only pure providers may hibernate. Background tools stay resident.
  * Provider calls, UI commands and subscribed events restart the countdown.
  * Hosts serving a local playback proxy must stay resident even between calls:
  * issued URLs can still be playing, paused or retained in playback queues. The

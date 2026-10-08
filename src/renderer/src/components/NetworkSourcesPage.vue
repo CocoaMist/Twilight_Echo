@@ -872,7 +872,7 @@ html[data-te-motion='off'] .network-create-form {
   width: 100%;
   min-height: 0;
   padding: 52px clamp(24px, 5vw, 72px) 132px;
-  color: var(--te-text, #0f172a);
+  color: var(--te-settings-text, #0f172a);
   overflow-y: auto;
   height: 100dvh;
   container: network-sources/inline-size;

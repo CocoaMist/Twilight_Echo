@@ -167,18 +167,23 @@ async function loadAll() {
   loading.value = false
 }
 
+function isPluginRequestedEnabled(plugin: TwilightPluginDescriptor): boolean {
+  return plugin.requestedEnabled ?? plugin.enabled
+}
+
 async function togglePlugin(plugin: TwilightPluginDescriptor) {
   if (busyIds.value.has(plugin.id)) return
+  const requestedEnabled = isPluginRequestedEnabled(plugin)
   busyIds.value.add(plugin.id)
   try {
-    if (plugin.enabled) {
+    if (requestedEnabled) {
       await window.api.plugins.disable(plugin.id)
     } else {
       await window.api.plugins.enable(plugin.id)
     }
     await refreshInstalled()
   } catch (e) {
-    errorMsg.value = `${plugin.enabled ? '停用' : '启用'}失败：${e instanceof Error ? e.message : String(e)}`
+    errorMsg.value = `${requestedEnabled ? '停用' : '启用'}失败：${e instanceof Error ? e.message : String(e)}`
   } finally {
     busyIds.value.delete(plugin.id)
   }
@@ -581,13 +586,19 @@ onUnmounted(() => {
                   role="switch"
                   tabindex="0"
                   :aria-label="`启用 ${plugin.name}`"
-                  :aria-checked="plugin.enabled"
+                  :aria-checked="isPluginRequestedEnabled(plugin)"
                   @click="togglePlugin(plugin)"
                   @keydown.enter.prevent="togglePlugin(plugin)"
                   @keydown.space.prevent="togglePlugin(plugin)"
                 >
-                  <div class="switch" :class="{ on: plugin.enabled }"></div>
-                  <span class="switch-label">{{ plugin.enabled ? '已启用' : '已停用' }}</span>
+                  <div class="switch" :class="{ on: isPluginRequestedEnabled(plugin) }"></div>
+                  <span class="switch-label">{{
+                    isPluginRequestedEnabled(plugin)
+                      ? plugin.status === 'failed'
+                        ? '启动失败'
+                        : '已启用'
+                      : '已停用'
+                  }}</span>
                 </div>
                 <div class="plugin-actions">
                   <button

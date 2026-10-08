@@ -482,6 +482,8 @@ export interface TwilightPluginDescriptor {
   permissions: string[]
   status: TwilightPluginStatus
   enabled: boolean
+  /** Persisted user intent, independent of activation success. */
+  requestedEnabled?: boolean
   builtIn: boolean
   error: string | null
   isDsp: boolean

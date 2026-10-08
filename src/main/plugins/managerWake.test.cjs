@@ -4,22 +4,182 @@ const path = require('node:path')
 const { tmpdir } = require('node:os')
 const vm = require('node:vm')
 const { EventEmitter } = require('node:events')
+const { execFile } = require('node:child_process')
+const { promisify } = require('node:util')
 const { pathToFileURL } = require('node:url')
 const test = require('node:test')
 const ts = require('typescript')
+
+test(
+  'real Windows hosts restart background tasks, recover failures and respect user disable',
+  {
+    skip: process.platform !== 'win32',
+    timeout: 45000
+  },
+  async (t) => {
+    const directory = fs.mkdtempSync(path.join(tmpdir(), 'twilight-plugin-startup-'))
+    t.after(() => {
+      assert.equal(path.dirname(directory), path.resolve(tmpdir()))
+      assert.ok(path.basename(directory).startsWith('twilight-plugin-startup-'))
+      fs.rmSync(directory, { recursive: true, force: true })
+    })
+    const root = path.resolve(__dirname, '../../..')
+    const profile = path.join(directory, 'profile')
+    const managerFile = path.join(directory, 'manager.cjs')
+    const hostFile = path.join(directory, 'host.cjs')
+    const esbuild = require(require.resolve('esbuild', { paths: [require.resolve('vite')] }))
+    await Promise.all(
+      ['manager', 'host'].map((name) =>
+        esbuild.build({
+          entryPoints: [path.join(__dirname, `${name}.ts`)],
+          outfile: name === 'manager' ? managerFile : hostFile,
+          bundle: true,
+          platform: 'node',
+          format: 'cjs',
+          external: ['electron'],
+          define: {
+            'import.meta.url': JSON.stringify(
+              pathToFileURL(path.join(__dirname, `${name}.ts`)).href
+            )
+          },
+          logLevel: 'silent'
+        })
+      )
+    )
+    const ids = ['com.example.startup-task', 'com.example.retry-task']
+    const records = {}
+    for (const id of ids) {
+      const pluginRoot = path.join(profile, 'plugins', id, '1.0.0')
+      fs.mkdirSync(pluginRoot, { recursive: true })
+      fs.writeFileSync(
+        path.join(pluginRoot, 'plugin.json'),
+        JSON.stringify({
+          id,
+          name: id,
+          version: '1.0.0',
+          description: 'Startup regression fixture',
+          author: 'Twilight Echo tests',
+          license: 'MIT',
+          apiVersion: 3,
+          engines: { twilightEcho: '*' },
+          type: ['tool'],
+          main: 'index.mjs',
+          permissions: ['filesystem:write']
+        })
+      )
+      fs.writeFileSync(
+        path.join(pluginRoot, 'index.mjs'),
+        `
+      import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+      import { join } from 'node:path'
+      let timer
+      export function activate(context) {
+        const file = join(context.storagePath, 'probe.json')
+        const previous = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
+        const state = { activations: (previous.activations || 0) + 1, ticks: 0 }
+        writeFileSync(file, JSON.stringify(state))
+        if (${JSON.stringify(id)} === 'com.example.retry-task' && state.activations === 1)
+          throw new Error('one-time startup failure')
+        timer = setInterval(() => {
+          state.ticks++
+          writeFileSync(file, JSON.stringify(state))
+        }, 30)
+      }
+      export function deactivate() { clearInterval(timer) }
+    `
+      )
+      records[id] = {
+        enabled: true,
+        source: 'directory',
+        activeVersion: '1.0.0',
+        installedAt: '2026-10-08T00:00:00Z',
+        updatedAt: '2026-10-08T00:00:00Z'
+      }
+    }
+    fs.writeFileSync(path.join(profile, 'plugin-state.json'), JSON.stringify(records))
+    const runner = path.join(directory, 'runner.cjs')
+    fs.writeFileSync(
+      runner,
+      `
+    const assert = require('node:assert/strict')
+    const fs = require('node:fs')
+    const path = require('node:path')
+    const { app } = require('electron')
+    app.setPath('userData', ${JSON.stringify(profile)})
+    app.whenReady().then(async () => {
+      const { TwilightPluginManager } = require(${JSON.stringify(managerFile)})
+      const manager = new TwilightPluginManager({
+        appVersion: '1.2.4', hostEntry: ${JSON.stringify(hostFile)},
+        hostIdleTimeoutMs: 100, getPlaybackInfo: () => ({}),
+        applyNativeDspPluginChain: () => {}, player: {}
+      })
+      const phase = Number(process.argv[2])
+      const ids = ${JSON.stringify(ids)}
+      const probe = (id) => JSON.parse(fs.readFileSync(path.join(
+        ${JSON.stringify(profile)}, 'plugin-data', id, 'probe.json'), 'utf8'))
+      try {
+        await manager.initialize()
+        await new Promise(resolve => setTimeout(resolve, 360))
+        const descriptors = await manager.list()
+        if (phase < 3) {
+          assert.equal(probe(ids[0]).activations, phase)
+          assert.ok(probe(ids[0]).ticks >= 5)
+          assert.equal(manager.isHibernated(ids[0]), false)
+          assert.equal(probe(ids[1]).activations, phase)
+          if (phase === 1) {
+            const failed = descriptors.find(d => d.id === ids[1])
+            assert.equal(failed.status, 'failed')
+            assert.equal(failed.enabled, false)
+            assert.equal(manager.state[ids[1]].enabled, true)
+          } else {
+            assert.ok(probe(ids[1]).ticks >= 5)
+            assert.equal(descriptors.find(d => d.id === ids[1]).status, 'enabled')
+            for (const id of ids) await manager.disable(id)
+            const saved = JSON.parse(fs.readFileSync(path.join(${JSON.stringify(profile)}, 'plugin-state.json')))
+            for (const id of ids) assert.equal(saved[id].enabled, false)
+          }
+        } else {
+          for (const id of ids) {
+            assert.equal(descriptors.find(d => d.id === id).enabled, false)
+            assert.equal(probe(id).activations, 2)
+          }
+        }
+        console.log('STARTUP_PROOF ' + JSON.stringify({ phase, probes: ids.map(probe) }))
+      } finally { await manager.destroy() }
+      app.exit(0)
+    }).catch(error => { console.error(error); app.exit(1) })
+  `
+    )
+    const env = { ...process.env, NODE_PATH: path.join(root, 'node_modules') }
+    delete env.ELECTRON_RUN_AS_NODE
+    for (const phase of [1, 2, 3]) {
+      const { stdout } = await promisify(execFile)(require('electron'), [runner, String(phase)], {
+        cwd: root,
+        env,
+        windowsHide: true,
+        timeout: 12000
+      })
+      assert.match(stdout, /STARTUP_PROOF/)
+      t.diagnostic(stdout.trim())
+    }
+  }
+)
 
 async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId = 'demo' } = {}) {
   const directory = fs.mkdtempSync(path.join(tmpdir(), 'twilight-plugin-wake-'))
   fs.writeFileSync(path.join(directory, 'index.mjs'), 'export function activate() {}\n')
   const importSource = (name) => import(pathToFileURL(path.join(__dirname, name)).href)
-  const [manifest, routing, queue, rpc, idle, media] = await Promise.all([
-    importSource('manifest.ts'),
-    importSource('providerRouting.ts'),
-    importSource('operationQueue.ts'),
-    importSource('rpcCoordinator.ts'),
-    importSource('hostIdle.ts'),
-    importSource('../security/remoteMediaGrants.ts')
-  ])
+  const [manifest, routing, queue, rpc, idle, persistence, dependenciesApi, media] =
+    await Promise.all([
+      importSource('manifest.ts'),
+      importSource('providerRouting.ts'),
+      importSource('operationQueue.ts'),
+      importSource('rpcCoordinator.ts'),
+      importSource('hostIdle.ts'),
+      importSource('statePersistence.ts'),
+      importSource('dependencies.ts'),
+      importSource('../security/remoteMediaGrants.ts')
+    ])
   const children = []
   let notify
   const activationStarted = new Promise((resolve) => {
@@ -69,6 +229,9 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
     './operationQueue.ts': queue,
     './rpcCoordinator.ts': rpc,
     './hostIdle.ts': idle,
+    './statePersistence.ts': persistence,
+    './dependencies': dependenciesApi,
+    './contributionsCache.ts': { PLUGIN_CONTRIBUTIONS_CACHE_FILE: 'plugin-contributions.json' },
     './qishuiAuthBridge.ts': {
       QISHUI_PLUGIN_ID: 'com.twilightecho.provider.qishui',
       QishuiAuthBridge: class {}
@@ -121,6 +284,13 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
       logPath: path.join(directory, 'plugin.log')
     }
   }
+  manager.state[descriptor.id] = {
+    enabled: true,
+    installedAt: '2026-10-08T00:00:00Z',
+    updatedAt: '2026-10-08T00:00:00Z',
+    source: 'directory',
+    activeVersion: descriptor.version
+  }
   manager.findDescriptor = async () => descriptor
   const provider = {
     id: providerId,
@@ -155,8 +325,160 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
     children[0].emit('message', { kind: 'api-event-subscribe', eventName: 'app:ready' })
   }
   const activate = () => children[0].emit('message', { kind: 'activated', pluginId: descriptor.id })
-  return { manager, descriptor, children, activationStarted, register, activate }
+  return { manager, descriptor, children, activationStarted, register, activate, directory }
 }
+
+test('a host failure retains enablement intent and retries once at the next startup', async (t) => {
+  const f = await fixture(t)
+  f.manager.markFailed(f.descriptor.id, 'temporary startup failure', f.descriptor)
+  assert.equal(f.manager.state[f.descriptor.id].enabled, true)
+  await f.manager.saveState()
+  f.manager.state = {}
+  await f.manager.loadState()
+  f.manager.list = async () => [
+    { ...f.descriptor, enabled: false, status: 'failed', error: 'temporary startup failure' }
+  ]
+  const attempted = []
+  f.manager.startPlugin = async (descriptor) => {
+    attempted.push(descriptor.id)
+    f.manager.markStarted(descriptor)
+  }
+  await f.manager.scanAndStartEnabled()
+  assert.deepEqual(attempted, [f.descriptor.id])
+  assert.equal(f.manager.state[f.descriptor.id].lastError, undefined)
+})
+
+test('legacy failure-disabled state recovers but an explicit user disable stays disabled', async (t) => {
+  const f = await fixture(t)
+  f.manager.state[f.descriptor.id].enabled = false
+  f.manager.state[f.descriptor.id].lastError = '插件宿主进程退出：1'
+  await f.manager.saveState()
+  await f.manager.loadState()
+  assert.equal(f.manager.state[f.descriptor.id].enabled, true)
+  f.manager.setEnabled(f.descriptor.id, false)
+  await f.manager.saveState()
+  await f.manager.loadState()
+  assert.equal(f.manager.state[f.descriptor.id].enabled, false)
+  assert.equal(f.manager.state[f.descriptor.id].lastError, undefined)
+})
+
+test('late host errors cannot turn an explicit disable into a recovery request', async (t) => {
+  const f = await fixture(t)
+  const starting = f.manager.startPlugin(f.descriptor)
+  await f.activationStarted
+  f.activate()
+  await starting
+  f.manager.setEnabled(f.descriptor.id, false)
+  await f.manager.handleHostMessage(f.descriptor.id, {
+    kind: 'host-error',
+    message: 'late shutdown error'
+  })
+  await f.manager.saveState()
+  await f.manager.loadState()
+  assert.equal(f.manager.state[f.descriptor.id].enabled, false)
+  assert.equal(f.manager.state[f.descriptor.id].lastError, undefined)
+})
+
+test('failed descriptors preserve the switch intent and can disable next-start recovery', async (t) => {
+  const f = await fixture(t)
+  f.manager.markFailed(f.descriptor.id, 'persistent activation failure', f.descriptor)
+  f.manager.readManifest = async () => f.descriptor
+  const visible = await f.manager.readDescriptor(f.directory, 'directory', {
+    paths: f.descriptor.paths
+  })
+  assert.equal(visible.status, 'failed')
+  assert.equal(visible.enabled, false)
+  assert.equal(visible.requestedEnabled, true)
+  f.manager.syncNativeDspChain = async () => {}
+  await f.manager.disable(visible.id)
+  await f.manager.loadState()
+  const disabled = await f.manager.readDescriptor(f.directory, 'directory', {
+    paths: f.descriptor.paths
+  })
+  assert.equal(disabled.requestedEnabled, false)
+  assert.equal(disabled.status, 'disabled')
+  const starts = []
+  f.manager.list = async () => [disabled]
+  f.manager.startPlugin = async (descriptor) => starts.push(descriptor.id)
+  await f.manager.scanAndStartEnabled()
+  assert.deepEqual(starts, [])
+})
+
+test('background tools, UI and hybrid hosts run at boot and remain resident while idle', async (t) => {
+  const f = await fixture(t)
+  f.manager.hibernated.clear()
+  for (const type of [['tool'], ['ui'], ['theme'], ['dsp'], ['provider', 'tool']]) {
+    const descriptor = { ...f.descriptor, type }
+    assert.equal(f.manager.hibernateFromCache(descriptor), false, type.join(','))
+    f.manager.running.set(descriptor.id, { descriptor, trial: false })
+    assert.equal(f.manager.canHibernatePlugin(descriptor.id), false, type.join(','))
+    f.manager.running.clear()
+  }
+})
+
+test('a failed dependency prevents activation of dependents but independent plugins still start', async (t) => {
+  const f = await fixture(t)
+  f.manager.hibernateFromCache = () => false
+  const dependent = {
+    ...f.descriptor,
+    id: 'com.example.dependent',
+    dependencies: { [f.descriptor.id]: '*' }
+  }
+  const independent = { ...f.descriptor, id: 'com.example.independent' }
+  f.manager.list = async () => [f.descriptor, dependent, independent]
+  const attempted = []
+  f.manager.startPlugin = async (descriptor) => {
+    attempted.push(descriptor.id)
+    if (descriptor.id === f.descriptor.id) throw new Error('base activation failed')
+  }
+  await f.manager.scanAndStartEnabled()
+  assert.deepEqual(attempted.sort(), [f.descriptor.id, independent.id].sort())
+  assert.match(f.manager.state[dependent.id].lastError, /依赖插件.*启动失败/)
+})
+
+test('a queued start cannot create a host after shutdown begins', async (t) => {
+  const f = await fixture(t)
+  let release
+  const stopping = new Promise((resolve) => {
+    release = resolve
+  })
+  f.manager.stopOperations.set(f.descriptor.id, stopping)
+  const starting = f.manager.startPlugin(f.descriptor)
+  const rejected = assert.rejects(starting, /应用正在退出/)
+  await f.manager.destroy()
+  release()
+  await rejected
+  assert.equal(f.children.length, 0)
+  f.manager.stopOperations.clear()
+})
+
+test('enable and disable cannot acknowledge success before state is durable', async (t) => {
+  const f = await fixture(t)
+  f.manager.list = async () => [f.descriptor]
+  f.manager.startPlugin = async () => {}
+  f.manager.syncNativeDspChain = async () => {}
+  let release
+  let writes = 0
+  f.manager.saveState = () => {
+    writes++
+    return new Promise((resolve) => {
+      release = resolve
+    })
+  }
+  let settled = false
+  const enabling = f.manager.enable(f.descriptor.id).then(() => {
+    settled = true
+  })
+  await new Promise(setImmediate)
+  assert.equal(writes, 1)
+  assert.equal(settled, false)
+  release()
+  await enabling
+  f.manager.saveState = async () => {
+    throw new Error('state disk unavailable')
+  }
+  await assert.rejects(f.manager.disable(f.descriptor.id), /state disk unavailable/)
+})
 
 for (const directory of ['ncm-provider', 'theme-workshop']) {
   test(`preview host validates and activates the ${directory} engine range`, async (t) => {

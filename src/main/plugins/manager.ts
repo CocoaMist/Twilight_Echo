@@ -22,7 +22,6 @@ import {
   type ProviderHealthRecord,
   type ProviderMethodHealthRecord
 } from './providerRouting'
-import { isRecoverableBundledPluginFailure } from './stateRecovery'
 import { PluginOperationQueue } from './operationQueue.ts'
 import {
   normalizeInternalNcmRequestOptions,
@@ -125,7 +124,7 @@ export interface TwilightPluginManagerOptions {
   }
   getProxyEnv?: () => Record<string, string>
   /**
-   * Plugin hosts that have had no provider call, UI command, or subscribed
+   * Pure provider hosts that have had no provider call, UI command, or subscribed
    * event for this long are hibernated (their utility process is stopped)
    * and transparently re-activated by the next call. Hosts that have issued
    * local playback proxy URLs stay resident. 0 disables hibernation.
@@ -517,6 +516,7 @@ export class TwilightPluginManager extends EventEmitter {
       this.markFailed(id, error instanceof Error ? error.message : String(error), descriptor)
       throw error
     }
+    await this.saveState()
     return this.findDescriptor(id)
   }
 
@@ -528,6 +528,7 @@ export class TwilightPluginManager extends EventEmitter {
     this.setEnabled(id, false)
     await this.stopPlugin(id)
     await this.syncNativeDspChain()
+    await this.saveState()
     return this.findDescriptor(id)
   }
 
@@ -866,6 +867,10 @@ export class TwilightPluginManager extends EventEmitter {
    */
   private hibernateFromCache(descriptor: TwilightPluginDescriptor): boolean {
     if (!this.hostIdle || descriptor.id === QISHUI_PLUGIN_ID) return false
+    // Background tools and hybrid plugins may own timers/work outside RPCs.
+    // Only pure providers follow the on-demand host lifetime contract.
+    if (descriptor.type.length !== 1 || descriptor.type[0] !== 'provider') return false
+    if (this.state[descriptor.id]?.lastError) return false
     const cached = this.contributionsCache[descriptor.id]
     if (!cached || cached.version !== descriptor.version) return false
     const signature = this.mainFileSignature(descriptor)
@@ -920,6 +925,9 @@ export class TwilightPluginManager extends EventEmitter {
     // including paused playback and prepared queue entries. Hibernation closes
     // the server and invalidates those URLs, so retain it for this host's lifetime.
     if (running.hasPlaybackProxy) return false
+    if (running.descriptor.type.length !== 1 || running.descriptor.type[0] !== 'provider') {
+      return false
+    }
     if (this.stopOperations.has(id) || this.wakeOperations.has(id)) return false
     if (this.rpcCalls.getPendingCount(id) > 0) return false
     for (const key of this.internalNcmRequests.keys()) {
@@ -993,7 +1001,13 @@ export class TwilightPluginManager extends EventEmitter {
   }
 
   private async scanAndStartEnabled(): Promise<void> {
-    const descriptors = await this.list()
+    // A runtime failure stops the host for this session, but does not revoke
+    // the user's enablement. Retry it once on the next application startup.
+    const descriptors = (await this.list()).map((descriptor) =>
+      descriptor.status === 'failed' && this.state[descriptor.id]?.enabled
+        ? { ...descriptor, enabled: true, status: 'enabled' as const, error: null }
+        : descriptor
+    )
     const startupPlan = planPluginStartup(descriptors)
     for (const [id, error] of startupPlan.failures) {
       const descriptor = descriptors.find((candidate) => candidate.id === id)
@@ -1010,7 +1024,6 @@ export class TwilightPluginManager extends EventEmitter {
         depth = Math.max(depth, (startupDepthById.get(dependencyId) ?? -1) + 1)
       }
       startupDepthById.set(descriptor.id, depth)
-      if (!descriptor.main) continue
       const wave = wavesByDepth.get(depth) ?? []
       wave.push(descriptor)
       wavesByDepth.set(depth, wave)
@@ -1019,8 +1032,25 @@ export class TwilightPluginManager extends EventEmitter {
       const wave = wavesByDepth.get(depth) ?? []
       await Promise.all(
         wave.map(async (descriptor) => {
+          const failedDependency = Object.keys(descriptor.dependencies ?? {}).find((id) =>
+            startupPlan.failures.has(id)
+          )
+          if (failedDependency) {
+            const message = `依赖插件 ${failedDependency} 启动失败：${startupPlan.failures.get(failedDependency)}`
+            startupPlan.failures.set(descriptor.id, message)
+            this.markFailed(descriptor.id, message, descriptor)
+            return
+          }
+          if (!descriptor.main) {
+            if (this.state[descriptor.id]?.lastError) this.markStarted(descriptor)
+            return
+          }
           if (this.hibernateFromCache(descriptor)) return
           await this.startPlugin(descriptor).catch((error) => {
+            startupPlan.failures.set(
+              descriptor.id,
+              error instanceof Error ? error.message : String(error)
+            )
             this.markFailed(
               descriptor.id,
               error instanceof Error ? error.message : String(error),
@@ -1049,20 +1079,14 @@ export class TwilightPluginManager extends EventEmitter {
 
         const now = new Date().toISOString()
         const previous = this.state[manifest.id]
-        const shouldRecoverBundledFailure =
-          previous?.enabled === false &&
-          previous?.source === 'bundled' &&
-          isRecoverableBundledPluginFailure(previous.lastError)
         this.state[manifest.id] = {
           ...previous,
-          enabled: shouldRecoverBundledFailure
-            ? bundled.defaultEnabled === true
-            : (previous?.enabled ?? bundled.defaultEnabled === true),
+          enabled: previous?.enabled ?? bundled.defaultEnabled === true,
           installedAt: previous?.installedAt ?? now,
           updatedAt: previous?.updatedAt ?? now,
           source: 'bundled',
           activeVersion: manifest.version,
-          lastError: shouldRecoverBundledFailure ? undefined : previous?.lastError
+          lastError: previous?.lastError
         }
       } catch (error) {
         console.error(
@@ -1125,6 +1149,7 @@ export class TwilightPluginManager extends EventEmitter {
     options: StartPluginOptions = {}
   ): Promise<void> {
     await this.stopOperations.get(descriptor.id)
+    if (this.shuttingDown) throw new Error('应用正在退出，无法启动插件')
     if (this.running.has(descriptor.id)) return
     if (!descriptor.main) throw new Error('JS 插件缺少 main 入口')
     if (!isCompatibleTwilightRange(descriptor.engines.twilightEcho, this.appVersion)) {
@@ -1894,7 +1919,8 @@ export class TwilightPluginManager extends EventEmitter {
             : state?.enabled
               ? 'enabled'
               : 'disabled',
-        enabled: state?.enabled === true && !error,
+        enabled: state?.enabled === true && !error && !state.lastError,
+        requestedEnabled: state?.enabled === true,
         builtIn: this.isBundledPluginId(manifest.id) || descriptorSource === 'bundled',
         error: error ?? state?.lastError ?? null,
         isDsp: manifest.type.includes('dsp'),
@@ -1919,6 +1945,7 @@ export class TwilightPluginManager extends EventEmitter {
         permissions: [],
         status: 'invalid',
         enabled: false,
+        requestedEnabled: this.state[id]?.enabled === true,
         builtIn: this.isBundledPluginId(id),
         error: error instanceof Error ? error.message : String(error),
         isDsp: false,
@@ -2006,9 +2033,11 @@ export class TwilightPluginManager extends EventEmitter {
   private markFailed(id: string, message: string, descriptor?: TwilightPluginDescriptor): void {
     const now = new Date().toISOString()
     const previous = this.state[id]
+    // Late errors during an intentional stop must not request recovery at boot.
+    if (previous?.enabled === false || this.stopOperations.has(id) || this.shuttingDown) return
     this.state[id] = {
       ...previous,
-      enabled: false,
+      enabled: previous?.enabled ?? descriptor?.enabled ?? false,
       installedAt: previous?.installedAt ?? now,
       updatedAt: now,
       source: previous?.source ?? this.defaultStateSource(id),
@@ -2115,6 +2144,11 @@ export class TwilightPluginManager extends EventEmitter {
     try {
       const loaded = await this.statePersistenceFor().load()
       this.state = loaded.state
+      // Older hosts encoded failures as disabled + lastError. An explicit
+      // user disable clears lastError, so preserve that choice during recovery.
+      for (const record of Object.values(this.state)) {
+        if (!record.enabled && record.lastError) record.enabled = true
+      }
       if (loaded.status === 'recovered') {
         this.reportStateIssue('state-recovery-warning', loaded.warning)
         this.notifyStateIssueUser('warning', loaded.warning)

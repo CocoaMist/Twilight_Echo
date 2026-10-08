@@ -28,6 +28,7 @@ export function startAppUpdateNotifications(openUpdates: () => void): () => void
               ? `v${notice.version} 更新包已就绪，可在设置中安装`
               : `发现新版本 v${notice.version}`,
         dedupeKey: 'app-update',
+        fresh: true,
         presentation: notice.kind === 'ready' ? 'toast' : 'center',
         action: { label: '查看更新', run: openUpdates }
       })

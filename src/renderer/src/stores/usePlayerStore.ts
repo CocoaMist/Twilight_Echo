@@ -105,7 +105,7 @@ import { useMusicStore } from './useMusicStore'
 import { type SleepTimerState } from '../../../shared/sleepTimer.ts'
 import { DEFAULT_SOFTWARE_VOLUME } from '../../../shared/audioProcessingOptions.ts'
 import { presentError, presentErrorDetail } from '../../../shared/errors/presentError.ts'
-import { parseAppError } from '../../../shared/errors/appError.ts'
+import { ipcError, parseAppError } from '../../../shared/errors/appError.ts'
 import { translate } from '../../../shared/i18n/translate.ts'
 import { currentLocale } from '../app/useLocale.ts'
 import type { LyricSource } from '../../../shared/lyricsManagement.ts'
@@ -2228,6 +2228,7 @@ async function resolvePlayTarget(track: Track): Promise<string> {
   // Do not reuse a remote NCM URL when a managed disk cache may already exist;
   // the provider is the authority for cache-hit local paths.
   const canReuseNcmStream = source !== 'ncm' || track.streamQuality === ncmPlaybackQuality
+  let force = false
   if (
     source !== 'ncm' &&
     track.streamUrl &&
@@ -2238,7 +2239,12 @@ async function resolvePlayTarget(track: Track): Promise<string> {
     // Never reuse a stale audio grant — re-resolve so protectProviderMedia issues
     // a live token (or the provider returns a fresh cache path / stream URL).
     if (!/^twilight-media:/i.test(track.streamUrl)) {
-      return track.streamUrl
+      if (
+        !isLikelyLocalFilePath(track.streamUrl) ||
+        (await isUsableLocalPlaybackFile(track.streamUrl))
+      )
+        return track.streamUrl
+      force = true
     }
   }
   if (
@@ -2255,12 +2261,14 @@ async function resolvePlayTarget(track: Track): Promise<string> {
     // re-caches on demand. loadAndPlay commits the resolved target back onto
     // the track, so no clearing is needed here.
     if (await isUsableLocalPlaybackFile(track.streamUrl)) return track.streamUrl
+    force = true
   }
 
   await syncPluginProviders()
+  const options = source === 'ncm' ? { quality: ncmPlaybackQuality } : undefined
   let streamUrl = await useMediaProviders().resolvePlaybackUrl(
     track,
-    source === 'ncm' ? { quality: ncmPlaybackQuality } : undefined
+    force ? { ...options, force: true } : options
   )
   if (
     source === 'ncm' &&
@@ -2955,8 +2963,15 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
           },
           window.api.audioEngine
         )
+        if (!isActiveLoad(loadToken, track)) {
+          releaseLoadIfOwned()
+          return
+        }
         if (!preparedQueue) {
-          throw new Error('Native playback target is unavailable')
+          throw ipcError(
+            'audio.playback_target_unavailable',
+            'Playback target is unavailable or unauthorized'
+          )
         }
         for (const item of preparedQueue.items) {
           nativeSourceToTrackId.set(item.source, item.id)
@@ -2996,6 +3011,11 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
         if (!isActiveLoad(loadToken, track)) {
           releaseLoadIfOwned()
           return
+        }
+        // Queue availability failures belong to source recovery. Queue IPC and
+        // output failures still use the configured renderer playback fallback.
+        if (parseAppError(engineErr).code === 'audio.playback_target_unavailable') {
+          throw engineErr
         }
         nativeQueueDelegated = false
         nativeFallbackReason = engineErr instanceof Error ? engineErr.message : String(engineErr)
@@ -3107,7 +3127,15 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
       return
     }
     clearNativePlaybackInfoIntentForLoad(loadToken)
-    if (await handlePlaybackFallback(track, err, loadToken)) return
+    try {
+      if (await handlePlaybackFallback(track, err, loadToken)) return
+    } catch (fallbackError) {
+      console.warn('[audio-engine] Source recovery failed:', fallbackError)
+    }
+    if (!isActiveLoad(loadToken, track)) {
+      releaseLoadIfOwned()
+      return
+    }
     console.error('[audio-engine] Playback failed:', err)
     setAudioEngineError(err instanceof Error ? err.message : String(err))
     autoAdvanceInFlight = false

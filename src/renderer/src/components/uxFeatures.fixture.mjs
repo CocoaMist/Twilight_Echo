@@ -1,12 +1,19 @@
 import { createApp, h, nextTick, ref } from 'vue'
 import '../assets/base.css'
-import TaskCenter from './TaskCenter.vue'
+import AppNoticeHost from './AppNoticeHost.vue'
 import PersonalBackupSection from './settings-page/PersonalBackupSection.vue'
 import { createInitialAppUpdateSnapshot } from '../../../shared/appUpdate'
 import { useDownloadTasks } from '../stores/useDownloadTasks'
 import { applyPersonalRendererRestore } from '../app/personalRestore'
 import { ListeningStatsDatabase } from '../stores/listeningStatsDatabase'
-const durableStatistics=async()=>{const database=new ListeningStatsDatabase(indexedDB);try{return await database.load()}finally{await database.close()}}
+const durableStatistics = async () => {
+  const database = new ListeningStatsDatabase(indexedDB)
+  try {
+    return await database.load()
+  } finally {
+    await database.close()
+  }
+}
 
 const expect = (v, message) => {
   if (!v) throw new Error(message)
@@ -152,7 +159,20 @@ window.api = {
   }
 }
 window.runUxFeatureTests = async () => {
-  await mount(TaskCenter)
+  await mount({
+    setup() {
+      const host = ref(null)
+      return () =>
+        h('div', [
+          h(
+            'button',
+            { class: 'task-entry', onClick: (event) => host.value.toggleHistory(event) },
+            '任务与通知'
+          ),
+          h(AppNoticeHost, { ref: host })
+        ])
+    }
+  })
   const second = useDownloadTasks().connect()
   expect(connects === 1, 'download subscription must be shared')
   downloadChanged([completed, pending])
@@ -163,7 +183,7 @@ window.runUxFeatureTests = async () => {
   document.querySelector('.task-entry').click()
   await settle()
   expect(
-    document.querySelector('.task-center').textContent.includes('已下载歌曲'),
+    document.querySelector('.notice-history').textContent.includes('已下载歌曲'),
     'global center omitted completed download'
   )
   await window.captureFeature('task-center')
@@ -191,21 +211,21 @@ window.runUxFeatureTests = async () => {
   })
   await settle()
   expect(
-    document.querySelector('.task-center').textContent.includes('响度分析'),
+    document.querySelector('.notice-history').textContent.includes('响度分析'),
     'loudness task missing'
   )
-  const filter = document.querySelector('.task-center select')
-  filter.value = 'failed'
-  filter.dispatchEvent(new Event('change'))
-  await settle()
+  await click('需处理')
   expect(
-    document.querySelector('.task-center').textContent.includes('暂无符合条件'),
-    'failed filter incorrect'
+    !document.querySelector('.notice-history progress') &&
+      !document.querySelector('.notice-history').textContent.includes('响度分析') &&
+      button('需处理').getAttribute('aria-pressed') === 'true',
+    'attention filter retained active tasks'
   )
   await window.pressKey('Escape')
   await settle()
   expect(
-    !document.querySelector('.task-center') && document.activeElement.matches('.task-entry'),
+    getComputedStyle(document.querySelector('.notice-history')).display === 'none' &&
+      document.activeElement.matches('.task-entry'),
     'task center Escape/focus restoration broken'
   )
   second()
@@ -241,15 +261,11 @@ window.runUxFeatureTests = async () => {
   }
   await applyPersonalRendererRestore()
   expect(
-    acknowledged === 'migration' &&
-      (await durableStatistics()).days.today === 5,
+    acknowledged === 'migration' && (await durableStatistics()).days.today === 5,
     'renderer statistics restore failed'
   )
   await applyPersonalRendererRestore()
-  expect(
-    (await durableStatistics()).days.today === 5,
-    'repeat restore double-counted statistics'
-  )
+  expect((await durableStatistics()).days.today === 5, 'repeat restore double-counted statistics')
   restoreRequest = {
     id: 'quota-failure',
     conflict: 'use-backup',
@@ -281,15 +297,12 @@ window.runUxFeatureTests = async () => {
     Storage.prototype.setItem = setItem
   }
   expect(
-    rejected &&
-      !acknowledged &&
-      (await durableStatistics()).days.today === 5,
+    rejected && !acknowledged && (await durableStatistics()).days.today === 5,
     'partial localStorage write did not roll back or was acknowledged'
   )
   await applyPersonalRendererRestore()
   expect(
-    acknowledged === 'quota-failure' &&
-      (await durableStatistics()).days.today === 99,
+    acknowledged === 'quota-failure' && (await durableStatistics()).days.today === 99,
     'restore failed to retry after quota recovery'
   )
   app.unmount()

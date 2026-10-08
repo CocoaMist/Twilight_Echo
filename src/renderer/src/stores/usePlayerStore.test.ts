@@ -696,7 +696,10 @@ for (const authorizationFails of [false, true]) {
     const before = { ...f.track }
     const target = await f.resolve(f.track)
     assert.equal(target, grant)
-    assert.deepEqual(f.calls, [{ quality: 'lossless' }, { quality: 'lossless', force: true }])
+    assert.deepEqual(f.calls, [
+      { quality: 'lossless', force: true },
+      { quality: 'lossless', force: true }
+    ])
     assert.deepEqual(f.track, before, 'resolution must not commit state from a superseded load')
     const prepared = await prepareNativeQueue({
       queue: [f.track],

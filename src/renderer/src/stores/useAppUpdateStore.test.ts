@@ -183,17 +183,28 @@ test('a same-version reminder after snooze reappears without leaking notificatio
       notice: { id: 'first', kind: 'available', version: '2.0.0' }
     })
     await tick()
-    assert.equal(notices.notices.value.length, 1)
+    assert.equal(notices.unreadCount.value, 1)
+    assert.equal(
+      notices.notices.value.length,
+      0,
+      'available updates stay in the notification center'
+    )
+    notices.markHistoryRead()
     f.publish({ ...initial, revision: 11, notice: null })
     await tick()
-    assert.equal(notices.notices.value.length, 0)
+    assert.equal(notices.unreadCount.value, 0)
     f.publish({
       ...initial,
       revision: 12,
       notice: { id: 'tomorrow', kind: 'available', version: '2.0.0' }
     })
     await tick()
-    assert.equal(notices.notices.value.length, 1)
+    assert.equal(notices.unreadCount.value, 1)
+    assert.equal(
+      notices.noticeHistory.value.length,
+      1,
+      'a renewed reminder updates its existing row'
+    )
   } finally {
     stop()
     assert.equal(f.listeners.size, 0)

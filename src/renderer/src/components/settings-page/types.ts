@@ -418,7 +418,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
     {
       section: 'playback',
       title: '无缝播放 (Gapless Playback)',
-      terms: '无缝 播放 gapless 间隙 连续 歌曲'
+      terms:
+        '无缝 播放 gapless 间隙 连续 歌曲 交叉淡化 交叉淡入淡出 淡入 淡出 crossfade 等功率 曲线 边界'
     },
     { section: 'playback', title: '启动时恢复播放', terms: '恢复 播放 resume 上次 曲目 位置 启动' },
     {

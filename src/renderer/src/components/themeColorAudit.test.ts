@@ -147,7 +147,7 @@ function collectColorCounts(directory: string): Record<string, number> {
           (match) => match[1]
         ).join('\n')
       : source
-    const count = Array.from(styles.matchAll(colorLiteral)).length
+    const count = Array.from(styles.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(colorLiteral)).length
     if (count > 0) counts[file] = count
   }
   return counts

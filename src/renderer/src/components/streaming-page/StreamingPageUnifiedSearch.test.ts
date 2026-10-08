@@ -286,7 +286,8 @@ test('private FM and radar use a session-fenced queue stream in shuffle mode', (
 test('each streaming destination stays mounted across page switches', () => {
   const appSource = readFileSync(new URL('../../App.vue', import.meta.url), 'utf8')
   assert.match(appSource, /v-for="tab in streamingPageTabs"/)
-  assert.match(appSource, /v-show="showStreamingSurface && streamingTab === tab"/)
+  assert.match(source, /v-show="active !== false"/)
+  assert.doesNotMatch(appSource.match(/<StreamingPage\b[\s\S]*?\/>/)?.[0] ?? '', /v-if=/)
   assert.match(appSource, /:active="showStreamingSurface && streamingTab === tab"/)
   assert.doesNotMatch(source, /<ProviderSidebar/)
   assert.match(source, /async function refreshStreamingSurface/)

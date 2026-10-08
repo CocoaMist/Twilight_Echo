@@ -203,7 +203,7 @@ test('wake activation failure rejects all waiters and removes cached contributio
   assert.equal(manager.hibernated.has(pluginId), false)
   assert.equal(manager.running.has(pluginId), false)
   assert.equal(manager.wakeOperations.size, 0)
-  assert.equal(manager.state[pluginId].enabled, false)
+  assert.equal(manager.state[pluginId].enabled, true, 'retain user intent for the next startup')
   assert.equal(manager.listProviders().length, 0)
 })
 

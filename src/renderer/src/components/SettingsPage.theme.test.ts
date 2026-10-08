@@ -134,22 +134,13 @@ test('native checkboxes inherit the active dark color scheme and theme accent', 
     baseStyles,
     /input\[type='checkbox'\][\s\S]*?accent-color:\s*var\(--te-primary-500\)/
   )
+  assert.match(baseStyles, /:root\[data-theme='dark'\]\s*\{\s*color-scheme:\s*dark/)
+  assert.match(baseStyles, /html input\[type='checkbox'\][\s\S]*?appearance:\s*none/)
   assert.match(
     baseStyles,
-    /html\[data-theme='dark'\] input\[type='checkbox'\][\s\S]*?color-scheme:\s*dark/
+    /html input\[type='checkbox'\]:checked\s*\{[\s\S]*?background-color:\s*var\(--te-primary-500\)/
   )
-  assert.match(
-    baseStyles,
-    /html\[data-theme='dark'\] input\[type='checkbox'\][\s\S]*?appearance:\s*none/
-  )
-  assert.match(
-    baseStyles,
-    /html\[data-theme='dark'\] input\[type='checkbox'\]:checked\s*\{[\s\S]*?background-color:\s*var\(--te-primary-500\)/
-  )
-  assert.match(
-    baseStyles,
-    /html\[data-theme='dark'\] input\[type='checkbox'\]:checked::after\s*\{[\s\S]*?content:\s*''/
-  )
+  assert.match(baseStyles, /html input\[type='checkbox'\]:checked::after\s*\{[\s\S]*?content:\s*''/)
 })
 
 test('settings wallpaper is painted once by the overlay root, never per element', () => {
