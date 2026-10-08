@@ -46,14 +46,29 @@ let failSave = false
 let conflictSave = false
 let failLoad = false
 let saves = 0
+let radioDoc = { schemaVersion: 1, stations: [] }
+let radioRevision = 1
+let failRadioSave = false
+let pendingRadioSave
 const requests = new Map()
 window.api = {
   radio: {
-    loadStations: async () => ({ data: { schemaVersion: 1, stations: [] }, revision: 1 }),
+    loadStations: async () => ({ data: copy(radioDoc), revision: radioRevision }),
+    saveStations: async (next, expectedRevision) => {
+      if (pendingRadioSave) await pendingRadioSave
+      if (failRadioSave) throw new Error('电台保存失败')
+      expect(expectedRevision === radioRevision, 'radio revision mismatch')
+      radioDoc = copy(next)
+      return { data: copy(radioDoc), revision: ++radioRevision }
+    },
+    importPlaylist: async () => copy(radioDoc.stations),
     searchDirectory: ({ query }) =>
       new Promise((resolve, reject) => requests.set(query, { resolve, reject }))
   },
   podcast: {
+    refreshAll: async () => {
+      throw new Error('播客刷新失败')
+    },
     loadSubscriptions: async () => {
       if (failLoad) throw new Error('read failed')
       return { data: copy(doc), revision }
@@ -176,7 +191,7 @@ window.runUxCoreTests = async () => {
   findButton('扫描所选文件夹').click()
   await settle()
   expect(
-    document.querySelector('[role="alert"]').textContent.includes('Folder unavailable'),
+    document.querySelector('[role="alert"]')?.textContent.includes('Folder unavailable'),
     'scan error hidden'
   )
   expect(
@@ -335,7 +350,7 @@ window.runUxCoreTests = async () => {
   findButton('添加到我的电台').click()
   await settle()
   expect(
-    document.querySelector('[role="alert"]').textContent.includes('请填写电台名称和流地址'),
+    document.querySelector('[role="alert"]')?.textContent.includes('请填写电台名称和流地址'),
     'empty station form reached IPC'
   )
   findButton('播客').click()
@@ -344,7 +359,7 @@ window.runUxCoreTests = async () => {
   findButton('订阅').click()
   await settle()
   expect(
-    document.querySelector('[role="alert"]').textContent.includes('请输入 RSS 或 Atom'),
+    document.querySelector('[role="alert"]')?.textContent.includes('请输入 RSS 或 Atom'),
     'empty feed reached IPC'
   )
   findButton('电台').click()
@@ -396,6 +411,64 @@ window.runUxCoreTests = async () => {
   requests.get('pagehide').resolve(station('pagehide result'))
   await settle()
   expect(!document.body.textContent.includes('pagehide result'), 'pagehide request committed')
+
+  const setInput = (selector, value) => {
+    const input = document.querySelector(selector)
+    input.value = value
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  setInput('.radio-tools input[type="text"]', 'Test station')
+  setInput('.radio-tools input[type="url"]', 'https://example.test/radio')
+  findButton('添加到我的电台').click()
+  await settle()
+  expect(radioDoc.stations.length === 1, 'radio addition was not saved')
+  setInput('.radio-tools textarea', '#EXTM3U\nhttps://example.test/radio')
+  await settle()
+  findButton('导入列表').click()
+  await settle()
+  expect(
+    document.querySelector('[role="alert"]')?.textContent.includes('没有新增电台'),
+    'duplicate import claimed new stations'
+  )
+  failRadioSave = true
+  findButton('删除').click()
+  await settle()
+  expect(
+    document.querySelector('[role="alert"]')?.textContent.includes('电台保存失败'),
+    'radio delete failure stayed invisible'
+  )
+  expect(
+    document.querySelector('.station-card') && !findButton('删除').disabled,
+    'failed delete lost station or retry'
+  )
+  let rejectSave
+  pendingRadioSave = new Promise((_resolve, reject) => {
+    rejectSave = reject
+  })
+  findButton('删除').click()
+  await settle()
+  expect(findButton('删除').disabled, 'pending delete remained clickable')
+  findButton('播客').click()
+  await settle()
+  rejectSave(new Error('延迟的电台错误'))
+  await settle()
+  expect(!document.querySelector('[role="alert"]'), 'late radio failure leaked into podcast tab')
+  pendingRadioSave = null
+  failRadioSave = false
+  findButton('刷新全部').click()
+  await settle()
+  expect(
+    document.querySelector('[role="alert"]')?.textContent.includes('播客刷新失败'),
+    'refresh-all failure escaped form handling'
+  )
+  findButton('电台').click()
+  await settle()
+  findButton('删除').click()
+  await settle()
+  expect(
+    radioDoc.stations.length === 0 && !document.querySelector('.station-card'),
+    'radio delete retry failed'
+  )
 
   findButton('播客').click()
   await settle()

@@ -15,16 +15,21 @@ const document = ref<RadioStationsDocument>(cloneRadioStationsDocument(DEFAULT_R
 const revision = ref(0)
 const loading = ref<Promise<void> | null>(null)
 const error = ref('')
+let mutation: Promise<unknown> = Promise.resolve()
+
+function applyDocument(next: RadioStationsDocument, nextRevision: number): void {
+  if (nextRevision < revision.value) return
+  document.value = cloneRadioStationsDocument(next)
+  revision.value = nextRevision
+}
 
 async function ensureLoaded(): Promise<void> {
   if (loading.value) return loading.value
   loading.value = (async () => {
     try {
       const result = await window.api.radio.loadStations()
-      if (result?.data) {
-        document.value = cloneRadioStationsDocument(result.data)
-        revision.value = result.revision
-      }
+      if (!result?.data) throw new Error('无法读取当前电台，请稍后重试')
+      applyDocument(result.data, result.revision)
       error.value = ''
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
@@ -35,23 +40,40 @@ async function ensureLoaded(): Promise<void> {
   return loading.value
 }
 
-async function persist(next: RadioStationsDocument): Promise<void> {
+async function persist(next: RadioStationsDocument, expectedRevision: number): Promise<void> {
   try {
-    const saved = await window.api.radio.saveStations(next, revision.value)
-    document.value = cloneRadioStationsDocument(saved.data)
-    revision.value = saved.revision
+    const saved = await window.api.radio.saveStations(next, expectedRevision)
+    applyDocument(saved.data, saved.revision)
     error.value = ''
   } catch (err) {
-    if (!isPersistentDataRevisionConflict(err)) {
+    if (isPersistentDataRevisionConflict(err) && err.current) {
+      applyDocument(err.current.data as RadioStationsDocument, err.current.revision)
+    }
+    error.value = err instanceof Error ? err.message : String(err)
+    throw err
+  }
+}
+
+/** Serialize read/modify/write operations so rapid actions keep every successful change. */
+function mutateStations(
+  update: (next: RadioStationsDocument) => number | Promise<number>
+): Promise<number> {
+  const result = mutation.then(async () => {
+    try {
+      await ensureLoaded()
+      if (error.value) throw new Error(error.value)
+      const next = cloneRadioStationsDocument(document.value)
+      const expectedRevision = revision.value
+      const changed = await update(next)
+      if (changed) await persist(next, expectedRevision)
+      return changed
+    } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
       throw err
     }
-    const current = err.current
-    if (!current) throw err
-    document.value = cloneRadioStationsDocument(current.data as RadioStationsDocument)
-    revision.value = current.revision
-    throw err
-  }
+  })
+  mutation = result.catch(() => {})
+  return result
 }
 
 export function radioStationToTrack(station: RadioStation): Track {
@@ -81,7 +103,6 @@ export function useRadioStore() {
     tags?: string[]
     allowInsecureHttp?: boolean
   }): Promise<RadioStation> {
-    await ensureLoaded()
     const streamUrl = input.streamUrl.trim()
     if (!isHttpOrHttpsUrl(streamUrl)) throw new Error('电台地址无效')
     if (isInsecureHttpUrl(streamUrl) && !input.allowInsecureHttp) {
@@ -98,17 +119,25 @@ export function useRadioStore() {
       createdAt: now,
       updatedAt: now
     }
-    const next = cloneRadioStationsDocument(document.value)
-    next.stations = [station, ...next.stations].slice(0, MAX_RADIO_STATIONS)
-    await persist(next)
+    await mutateStations((next) => {
+      if (next.stations.some((item) => item.streamUrl === streamUrl)) {
+        throw new Error('该电台已收藏')
+      }
+      if (next.stations.length >= MAX_RADIO_STATIONS) {
+        throw new Error('电台数量已达上限，请先删除其他电台')
+      }
+      next.stations.unshift(station)
+      return 1
+    })
     return station
   }
 
   async function removeStation(id: string): Promise<void> {
-    await ensureLoaded()
-    const next = cloneRadioStationsDocument(document.value)
-    next.stations = next.stations.filter((station) => station.id !== id)
-    await persist(next)
+    await mutateStations((next) => {
+      const before = next.stations.length
+      next.stations = next.stations.filter((station) => station.id !== id)
+      return before - next.stations.length
+    })
   }
 
   async function searchDirectory(
@@ -140,23 +169,25 @@ export function useRadioStore() {
     text: string,
     options: { fileNameHint?: string; allowInsecureHttp?: boolean } = {}
   ): Promise<number> {
-    await ensureLoaded()
-    const imported = await window.api.radio.importPlaylist({
-      text,
-      fileNameHint: options.fileNameHint,
-      allowInsecureHttp: options.allowInsecureHttp
+    return mutateStations(async (next) => {
+      const imported = await window.api.radio.importPlaylist({
+        text,
+        fileNameHint: options.fileNameHint,
+        allowInsecureHttp: options.allowInsecureHttp
+      })
+      const existingUrls = new Set(next.stations.map((station) => station.streamUrl))
+      let added = 0
+      for (const station of imported) {
+        if (existingUrls.has(station.streamUrl)) continue
+        next.stations.unshift(station)
+        existingUrls.add(station.streamUrl)
+        added++
+      }
+      if (next.stations.length > MAX_RADIO_STATIONS) {
+        throw new Error('导入后电台数量将超过上限，请先删除其他电台或减少导入条目')
+      }
+      return added
     })
-    if (imported.length === 0) return 0
-    const next = cloneRadioStationsDocument(document.value)
-    const existingUrls = new Set(next.stations.map((station) => station.streamUrl))
-    for (const station of imported) {
-      if (existingUrls.has(station.streamUrl)) continue
-      next.stations.unshift(station)
-      existingUrls.add(station.streamUrl)
-    }
-    next.stations = next.stations.slice(0, MAX_RADIO_STATIONS)
-    await persist(next)
-    return imported.length
   }
 
   return {
