@@ -232,6 +232,109 @@ test('routine results stay in the center while errors and actions remain immedia
   clearNotices()
 })
 
+test('do not disturb clears active timers and keeps errors, updates and actions in history', async (t) => {
+  clearNotices()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const store = useAppNoticeStore()
+  t.after(() => {
+    store.setDoNotDisturb(false)
+    clearNotices()
+  })
+  const id = pushNotice({ message: '正在连接', dedupeKey: 'quiet-connection', sticky: false })
+  store.pauseNotice(id, 'pointer')
+  store.setDoNotDisturb(true)
+  assert.equal(notices.value.length, 0)
+  assert.equal(store.noticeHistory.value.length, 1)
+  assert.equal(store.doNotDisturb.value, true)
+  let actions = 0
+  const action = store.pushNotice({
+    kind: 'error',
+    message: '静默播放失败',
+    action: {
+      label: '重试',
+      run: () => {
+        actions++
+      }
+    }
+  })
+  store.pushNotice({ message: '更新可以安装', presentation: 'toast', sticky: true })
+  assert.equal(pushNotice({ message: '已连接', dedupeKey: 'quiet-connection' }), id)
+  store.resumeNotice(id, 'pointer')
+  t.mock.timers.tick(60_000)
+  assert.equal(notices.value.length, 0)
+  assert.equal(store.noticeHistory.value.length, 3)
+  assert.equal(store.unreadCount.value, 3)
+  assert.equal(await store.runNoticeAction(action), true)
+  assert.equal(actions, 1)
+  store.clearHistory()
+  assert.equal(store.doNotDisturb.value, true, 'clearing records must preserve the preference')
+  store.pushNotice({ kind: 'error', message: '清空后仍然静默' })
+  store.setDoNotDisturb(false)
+  assert.equal(notices.value.length, 0, 'turning off do not disturb must not replay old alerts')
+  const fresh = pushNotice({ message: '新的提醒', dedupeKey: 'quiet-connection' })
+  assert.equal(notices.value[0].id, fresh)
+  t.mock.timers.tick(7001)
+  assert.equal(notices.value.length, 0, 'new notices still dismiss normally')
+})
+
+test('do not disturb persists both choices and restores them in a fresh store', async (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const preferences = new Map<string, string>()
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => preferences.get(key) ?? null,
+      setItem: (key: string, value: string) => preferences.set(key, value)
+    }
+  })
+  const store = useAppNoticeStore()
+  t.after(() => {
+    store.setDoNotDisturb(false)
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor)
+    else Reflect.deleteProperty(globalThis, 'localStorage')
+    clearNotices()
+  })
+  store.setDoNotDisturb(true)
+  const enabled = await import(new URL('./useAppNoticeStore.ts?dnd-enabled', import.meta.url).href)
+  const restored = enabled.useAppNoticeStore()
+  assert.equal(restored.doNotDisturb.value, true)
+  restored.pushNotice({ kind: 'error', message: '重启后保持静默' })
+  assert.equal(restored.notices.value.length, 0)
+  assert.equal(restored.noticeHistory.value.length, 1)
+  restored.clearNotices()
+  assert.equal(restored.doNotDisturb.value, true)
+  store.setDoNotDisturb(false)
+  const disabled = await import(
+    new URL('./useAppNoticeStore.ts?dnd-disabled', import.meta.url).href
+  )
+  assert.equal(disabled.useAppNoticeStore().doNotDisturb.value, false)
+})
+
+test('unavailable preference storage does not prevent do not disturb from working', async (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    get: () => {
+      throw new Error('Storage is unavailable')
+    }
+  })
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor)
+    else Reflect.deleteProperty(globalThis, 'localStorage')
+  })
+  const module = await import(
+    new URL('./useAppNoticeStore.ts?dnd-blocked-storage', import.meta.url).href
+  )
+  const store = module.useAppNoticeStore()
+  assert.equal(store.doNotDisturb.value, false)
+  assert.doesNotThrow(() => store.setDoNotDisturb(true))
+  store.pushNotice({ kind: 'error', message: '存储不可用时仍然静默' })
+  assert.equal(store.notices.value.length, 0)
+  assert.equal(store.noticeHistory.value.length, 1)
+  store.clearNotices()
+  assert.doesNotThrow(() => store.setDoNotDisturb(false))
+})
+
 test('a failed notification action remains retryable and concurrent clicks execute once', async () => {
   clearNotices()
   const store = useAppNoticeStore()

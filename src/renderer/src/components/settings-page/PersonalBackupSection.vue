@@ -8,7 +8,10 @@ import {
 } from '../../../../shared/personalBackup'
 import { readPersonalRendererData } from '../../app/personalRestore'
 import { useMusicStore } from '../../stores/useMusicStore'
-import { useListeningStatsStore } from '../../stores/useListeningStatsStore'
+import {
+  useListeningStatsStore,
+  waitForListeningStatsReady
+} from '../../stores/useListeningStatsStore'
 import { getMusicVersions } from '../../stores/musicVersions'
 import { useFocusTrap, useEscapeToClose } from '../../app/useDismissLayer'
 
@@ -30,6 +33,7 @@ useEscapeToClose(
   }
 )
 async function rendererData() {
+  await waitForListeningStatsReady()
   const music = useMusicStore()
   await music.flushSaveLibrary()
   if (!(await music.flushPlaylists())) throw new Error('歌单尚未保存成功，请先重试保存')

@@ -10,6 +10,7 @@ export type {
 } from './library/musicStoreTypes.ts'
 import { computed, ref, shallowRef } from 'vue'
 import type { Track } from '../types/music'
+import { equalBpmAnalysis } from '../utils/bpmAnalysisEquality.ts'
 import type {
   LocalLibraryExclusion,
   LocalLibraryRemoveResult,
@@ -988,10 +989,8 @@ export function useMusicStore() {
       (fallbackTrackId ? trackIndexById.get(fallbackTrackId) : undefined) ??
       -1
     if (index < 0) return false
-    const nextTrack = {
-      ...tracks.value[index],
-      bpmAnalysis: analysis
-    }
+    if (equalBpmAnalysis(tracks.value[index].bpmAnalysis, analysis)) return false
+    const nextTrack = { ...tracks.value[index], bpmAnalysis: analysis }
     replaceTrackAtIndex(index, nextTrack)
 
     const playlistBase = clonePlaylistSnapshot()

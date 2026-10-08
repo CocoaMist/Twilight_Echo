@@ -1,4 +1,5 @@
 import { createAbLoopController } from './player/abLoopController.ts'
+import { createRendererPauseFadeController } from './player/rendererPauseFadeController.ts'
 import { createCastController } from './player/castController.ts'
 import { createBpmAnalysisController } from './player/bpmAnalysisController.ts'
 import { createAudioOutputState } from '@renderer/stores/player/audioOutputState.ts'
@@ -71,7 +72,8 @@ import {
 import { NativeQueueLoader } from '../utils/nativeQueueLoader.ts'
 import {
   toPlaybackQueueSnapshot,
-  toPlaybackQueueSnapshots
+  toPlaybackQueueSnapshots,
+  patchPlaybackQueueTrack
 } from '../utils/playbackQueueVirtualization.ts'
 import { clampProviderReliability, findPlaybackFallbackTrack } from '../utils/playbackFallback.ts'
 import { findProviderRematchCandidate } from '../utils/libraryRepair.ts'
@@ -786,6 +788,7 @@ function releasePlaybackObjectUrl(): void {
 
 function stopRendererAudio(clearSource = false): void {
   clearRendererPlaybackWatchdog()
+  rendererPauseFadeController.cancel()
   if (!playbackAudio) return
   playbackAudio.pause()
   if (clearSource) {
@@ -1016,6 +1019,7 @@ async function playWithRendererAudio(
   loadToken: number
 ): Promise<boolean> {
   const audio = getPlaybackAudio()
+  rendererPauseFadeController.cancel()
   audio.pause()
   // Renderer HTMLAudio is a shared-mode Windows stream. Never start it while the
   // native engine (e.g. WASAPI Exclusive) could still be playing, or the same
@@ -1182,13 +1186,8 @@ function rehydrateCurrentTrackFromLibrary(): void {
 }
 
 function patchTrackInQueues(updatedTrack: Track): void {
-  const snapshot = toPlaybackQueueSnapshot(updatedTrack)
-  queue.value = queue.value.map((track) =>
-    track.id === updatedTrack.id ? { ...snapshot, queueEntryId: track.queueEntryId } : track
-  )
-  originalQueue.value = originalQueue.value.map((track) =>
-    track.id === updatedTrack.id ? { ...snapshot, queueEntryId: track.queueEntryId } : track
-  )
+  queue.value = patchPlaybackQueueTrack(queue.value, updatedTrack)
+  originalQueue.value = patchPlaybackQueueTrack(originalQueue.value, updatedTrack)
 }
 
 function findTrackIndexFromPlaybackInfo(info: NativePlaybackInfo): number {
@@ -1661,6 +1660,7 @@ watch(volume, (val) => {
     muted.value = false
   }
   if (playbackAudio) playbackAudio.volume = val
+  rendererPauseFadeController.syncVolume()
   window.api.audioEngine.setVolume(val).catch(() => {})
   if (castTargetName.value) {
     void window.api.remote?.controlCast?.({ volume: val }).catch(() => {})
@@ -1800,6 +1800,7 @@ const playbackQueueController = createPlaybackQueueController({
   prepareSelection: playbackSessionController.prepareQueueSelection,
   exitHeartModeForQueueEdit: () => exitHeartModeForManualQueueReplacement(),
   onQueueNotice: (label, revision) => {
+    if (label === '替换队列') return
     useAppNoticeStore().pushNotice({
       message: `已${label}`,
       dedupeKey: 'queue-edit',
@@ -2257,10 +2258,31 @@ async function resolvePlayTarget(track: Track): Promise<string> {
   }
 
   await syncPluginProviders()
-  const streamUrl = await useMediaProviders().resolvePlaybackUrl(
+  let streamUrl = await useMediaProviders().resolvePlaybackUrl(
     track,
     source === 'ncm' ? { quality: ncmPlaybackQuality } : undefined
   )
+  if (
+    source === 'ncm' &&
+    streamUrl &&
+    isLikelyLocalFilePath(streamUrl) &&
+    !(await isUsableLocalPlaybackFile(streamUrl))
+  ) {
+    // The provider can finish resolving just as its managed cache is cleared.
+    // Bypass its memory cache once to obtain a fresh account-authorized stream
+    // before native queue preparation rejects the missing local target.
+    streamUrl = await useMediaProviders().resolvePlaybackUrl(track, {
+      quality: ncmPlaybackQuality,
+      force: true
+    })
+    if (
+      streamUrl &&
+      isLikelyLocalFilePath(streamUrl) &&
+      !(await isUsableLocalPlaybackFile(streamUrl))
+    ) {
+      throw new Error('网易云缓存文件不可用，重新获取播放地址后仍无法播放，请重试')
+    }
+  }
   if (!streamUrl) {
     if (source === 'ncm') {
       throw new Error('当前网易云账号没有可播放的音质，请检查登录状态、歌曲版权和会员权益')
@@ -2723,6 +2745,7 @@ function disposePlayerStoreRuntime(): void {
   playerIntegrationSideEffectsSetup = false
   clearRendererPlaybackWatchdog()
   clearNativeStreamBufferingTimer()
+  rendererPauseFadeController.cancel()
   disposePlaybackClock()
   playbackHistoryController.dispose()
   clearCrossfadeTimer()
@@ -2963,6 +2986,10 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
           releaseLoadIfOwned()
           return
         }
+        if (playResult?.superseded) {
+          releaseLoadIfOwned()
+          return
+        }
         nativeStarted = playResult?.nativeStarted === true
         nativeFallbackReason = playResult?.fallbackReason ?? ''
       } catch (engineErr) {
@@ -3174,6 +3201,10 @@ async function handlePlayerShortcutAction(
   })
 }
 
+const rendererPauseFadeController = createRendererPauseFadeController({
+  getVolume: () => volume.value
+})
+
 const nativePlaybackToggleController = createNativePlaybackToggleController({
   isPlaying,
   togglePause: () => window.api.audioEngine.togglePause(),
@@ -3212,13 +3243,17 @@ async function togglePlayState(): Promise<void> {
       await nativePlaybackToggleController.togglePause()
     } else {
       const audio = getPlaybackAudio()
-      if (audio.paused) {
+      if (rendererPauseFadeController.isActive()) {
+        rendererPauseFadeController.cancel()
+        isPlaying.value = true
+      } else if (audio.paused) {
         await stopNativeAudio()
         await audio.play()
       } else {
         playbackHistoryController.maybeRecordResumeBookmark(track, getLatestPlaybackTime())
         playbackHistoryController.flushPodcastEpisodeProgress(true)
-        audio.pause()
+        isPlaying.value = false
+        rendererPauseFadeController.begin(audio)
       }
     }
   } catch (err) {

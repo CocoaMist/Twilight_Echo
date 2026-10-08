@@ -112,7 +112,7 @@ test('streaming page keeps third-party providers on the generic provider library
   assert.doesNotMatch(source, /<BilibiliPage/)
   assert.doesNotMatch(source, /showBilibiliView/)
   assert.doesNotMatch(source, /shouldShowBilibiliViewForSidebarProvider/)
-  assert.doesNotMatch(source, /activeProvider\.value === 'bili'/)
+  assert.match(source, /:show-track-likes="showBilibiliTrackLikes"/)
   assert.doesNotMatch(source, /bilibili\.setPinnedFavoriteFolder/)
 })
 
@@ -141,6 +141,55 @@ test('liked playback resolves the complete provider list instead of queueing onl
   assert.match(source, /const tracks = await resolveDetailPlaybackQueue\(\)/)
   // 通过 playStreamingTrack 仍使用完整解析后的列表（同时携带心动模式上下文）。
   assert.match(source, /playStreamingTrack\(tracks\[0\], tracks\)/)
+})
+
+test('external favorite card opens and plays the selected folder instead of the provider default', async () => {
+  const selected = { id: '102', name: '音乐收藏', cover: null, trackCount: 2 }
+  const tracks = [createTrack('bili:one', 'bili'), createTrack('bili:two', 'bili')]
+  const opened: unknown[] = []
+  const played: Track[][] = []
+  const scope = {
+    isExternalActive: { value: true },
+    activeExternalState: { value: { likedPlaylist: { id: '101' } } },
+    libraryFavoritePlaylist: { value: selected },
+    currentDetail: { value: null as { type: string; playlist: typeof selected } | null },
+    openPlaylist: async (playlist: typeof selected, force: boolean) => {
+      opened.push([playlist.id, force])
+      scope.currentDetail.value = { type: 'playlist', playlist }
+    },
+    resolveDetailPlaybackQueue: async () => {
+      assert.equal(scope.currentDetail.value?.playlist.id, selected.id)
+      return tracks
+    },
+    playStreamingTrack: (first: Track, queue: Track[]) => {
+      assert.equal(first, tracks[0])
+      played.push(queue)
+    }
+  }
+  const openSource = source.slice(
+    source.indexOf('async function openLikedTracks('),
+    source.indexOf('async function loadMoreLikedTracks(')
+  )
+  const playSource = source.slice(
+    source.indexOf('async function playLikedSongs('),
+    source.indexOf('async function retryCurrentView(')
+  )
+  const handlers = runInNewContext(
+    `${stripTypeScriptTypes(openSource + playSource)}\n({openLikedTracks, playLikedSongs})`,
+    scope
+  ) as { openLikedTracks: (force?: boolean) => Promise<void>; playLikedSongs: () => Promise<void> }
+  await handlers.openLikedTracks(true)
+  assert.deepEqual(opened, [['102', true]])
+  scope.currentDetail.value = null
+  await handlers.playLikedSongs()
+  assert.deepEqual(opened, [
+    ['102', true],
+    ['102', false]
+  ])
+  assert.equal(played[0], tracks)
+  await handlers.playLikedSongs()
+  assert.equal(opened.length, 2, 'the selected folder already being viewed should not be reloaded')
+  assert.equal(played[1], tracks)
 })
 
 test('recommendations load declared provider sections and fence stale source results', () => {

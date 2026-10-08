@@ -29,6 +29,7 @@ const MINGW_EXPECTED_CTESTS = Object.freeze([
   'twilight_audio_engine_smoke',
   'twilight_dsp_unit',
   'twilight_convolver_unit',
+  'twilight_loudness_realtime_unit',
   'twilight_channel_router_unit',
   'twilight_wsola_unit',
   'twilight_wsola_performance_gate',

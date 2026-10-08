@@ -1068,6 +1068,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         </section>
 
         <!-- ── Recently added ──────────────────────────────────────────── -->
+        <slot name="rankings" />
         <section class="content-block">
           <header class="block-head">
             <div class="block-copy">

@@ -284,6 +284,8 @@ Linux 播放条的 CSS 毛玻璃回退服从减少透明度、高对比度和强
 
 宿主进程按需存在：`TwilightPluginManager` 用 `plugins/hostIdle.ts` 跟踪每个 JS 插件的活动（provider 调用、UI command、已订阅事件）；连续 5 分钟无活动且没有未完成 RPC 的宿主会被休眠（进程停止，provider/UI 贡献与事件订阅保留在内存快照中），下一次 provider 调用、UI command 或已订阅事件到达时透明唤醒，并发调用共享一次唤醒。休眠期间插件在 `list()` 里仍是 `enabled`，`plugin-state.json` 不变。贡献快照同时持久化到 `plugin-contributions.json`（含插件版本和入口文件 size:mtime）；下次启动若版本与入口文件签名都匹配，启用的插件直接以休眠态就绪而不 fork 进程，签名不符则照常冷启动。试激活、汽水音乐（登录态绑定宿主进程）与正在处理内部 NCM 请求的插件不会休眠；已订阅 `app:ready` 的休眠宿主会唤醒并在激活后收到事件，`app:before-quit` 不会唤醒休眠宿主。
 
+成功返回 HTTP(S) 回环播放地址（`127.0.0.0/8`、`localhost`、`::1`）的音源宿主也保持运行：本地媒体代理在 provider RPC 结束后仍服务当前播放、暂停续播和队列中的已准备链接，休眠会关闭服务并使这些链接失效。此保留状态只属于当前进程实例，显式停止或应用退出仍会关闭宿主；普通 CDN 音源继续按空闲窗口休眠。
+
 `audioAnalysisService` 的 worker 池与 `libraryScanService` 同样惰性：分析 worker 只按当前排队/进行中任务数 fork，空闲 60 s 后回收；扫描 worker 在没有扫描进行时 60 s 后回收，下一次扫描重新 fork。
 
 app 仓库允许包含：

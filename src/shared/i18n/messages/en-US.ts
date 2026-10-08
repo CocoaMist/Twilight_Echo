@@ -53,6 +53,10 @@ export const EN_US_MESSAGES: Record<string, string> = {
     'The audio engine reported an unrecognised reason code ({code}). This usually means the engine is newer than the interface — please export an audio diagnostic report and send it in.',
 
   // ══ Playback controls ════════════════════════════════════════════════════
+  'audio.reason.pause_fade_active.label': 'Pause fade',
+  'audio.reason.pause_fade_active.explain':
+    'Pausing fades the sound over 200 ms, temporarily changing sample levels. Resuming restores the configured volume and output state.',
+  'audio.reason.pause_fade_active.fix': '',
   'audio.reason.volume_not_unity.label': 'Software volume is not 100%',
   'audio.reason.volume_not_unity.explain':
     'Software volume multiplies every sample by a factor below 1, which changes the sample values. The 70% default protects your hearing, but bit-perfect playback needs unity (100%).',

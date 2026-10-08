@@ -260,6 +260,8 @@ export interface AudioEngineQueueItem {
 export interface AudioEnginePlayResult {
   nativeStarted: boolean
   fallbackReason: string
+  /** A newer transport action replaced this request; no fallback should start. */
+  superseded?: boolean
 }
 
 export interface VisualizationOptions {
@@ -512,7 +514,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   dsdConversionReason: string
   gaplessActive: boolean
   preloadReady: boolean
-  /** Empty when unblocked; else disabled | dsd_path | typed_passthrough | crossfade | format_mismatch */
+  /** Empty when unblocked; else disabled | dsd_path | crossfade | format_mismatch (legacy: typed_passthrough) */
   gaplessBlockedReason: string
   upcomingTrack: AudioEngineQueueItem | null
   /** Live ICY StreamTitle (radio). Empty when unavailable. */

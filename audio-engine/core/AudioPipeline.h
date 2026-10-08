@@ -6,6 +6,7 @@
 #include "FixedSpscQueue.h"
 #include "../decoder/DopPacker.h"
 #include "DsdMuteGuard.h"
+#include "PauseFade.h"
 #include "../decoder/DsdReader.h"
 #include "../decoder/FFmpegDecoder.h"
 #include "../dsp/DspChain.h"
@@ -81,7 +82,7 @@ struct PipelineStatus {
   bool gaplessActive = false;
   bool preloadReady = false;
   // Empty when gapless path is unblocked; otherwise one of:
-  // disabled | dsd_path | typed_passthrough | crossfade | format_mismatch
+  // disabled | dsd_path | crossfade | format_mismatch
   std::string gaplessBlockedReason;
   std::string perfectReason;
   uint64_t requestedConfigRevision = 0;
@@ -327,6 +328,7 @@ class AudioPipeline {
   bool updatePerfectLocked();
   PipelineStatus buildStatusLocked();
   PipelineStatus fallbackStatus() const;
+  void applyPauseFadeStatus(PipelineStatus& status) const;
   void publishStatusLocked();
   void prepareRenderScratchLocked(size_t maxFrames);
   bool retireDecodeStreamLocked(std::shared_ptr<DecodeStream> stream);
@@ -448,6 +450,7 @@ class AudioPipeline {
   // promotion). Reset on the control path at transport transitions. Stored as
   // bits per the project's portable-atomics convention (no atomic<double>).
   std::atomic<uint64_t> renderVolumeCurrentBits_{std::bit_cast<uint64_t>(-1.0)};
+  PauseFade pauseFade_;
   // A-B loop (seconds). Enabled only when end > start and both finite/non-negative.
   std::atomic<bool> loopEnabled_{false};
   std::atomic<uint64_t> loopStartBits_{std::bit_cast<uint64_t>(0.0)};
@@ -505,7 +508,6 @@ class AudioPipeline {
   int lastDsdMuteRate_ = 0;
   std::vector<float> pcmToDsdFloatScratch_;
   std::vector<uint8_t> pcmToDsdPlanarBytes_;
-  std::vector<uint8_t> pcmToDsdInterleavedBytes_;
   std::vector<uint8_t*> pcmToDsdChannelPtrs_;
   // Sticky reason when the most recent preload attempt failed due to format/config mismatch.
   bool lastPreloadFormatMismatch_ = false;

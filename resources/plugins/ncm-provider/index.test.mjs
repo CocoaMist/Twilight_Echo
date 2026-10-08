@@ -70,6 +70,75 @@ function parseRequest(path) {
   return new URL(path, 'http://twilight.local')
 }
 
+test('public toplists normalize previews, exclude invalid entries and cache until refreshed', async () => {
+  let calls = 0
+  const provider = await activateProvider(async (path, cookie) => {
+    assert.equal(parseRequest(path).pathname, '/toplist/detail')
+    assert.ok(!cookie)
+    calls += 1
+    return {
+      code: 200,
+      list: [
+        {
+          id: 19723756,
+          name: '飙升榜',
+          coverImgUrl: 'https://p1.music.126.net/chart.jpg',
+          trackCount: 100,
+          updateFrequency: '每天更新',
+          updateTime: 1700000000000,
+          tracks: [{ first: `歌曲 ${calls}`, second: '歌手' }, null]
+        },
+        { id: 19723756, name: '重复榜单' },
+        { id: -1, name: '无效榜单' },
+        { id: 8, name: 123 },
+        null,
+        { id: 42, name: '特色榜', tracks: [{ name: '另一首歌' }] }
+      ]
+    }
+  }, new Map())
+  try {
+    const charts = await provider.fetchToplists()
+    assert.equal(charts.length, 2)
+    assert.equal(charts[0].featured, true)
+    assert.equal(charts[0].updateFrequency, '每天更新')
+    assert.equal(charts[0].updatedAt, 1700000000000)
+    assert.ok(charts[0].cover.includes('chart.jpg'))
+    assert.deepEqual(charts[0].previewTracks, [{ title: '歌曲 1', artist: '歌手' }])
+    assert.deepEqual(charts[1].previewTracks, [{ title: '另一首歌', artist: '' }])
+    assert.equal(await provider.fetchToplists(), charts)
+    assert.equal(calls, 1)
+    assert.equal((await provider.fetchToplists(true))[0].previewTracks[0].title, '歌曲 2')
+    assert.equal(calls, 2)
+    const controller = new AbortController()
+    controller.abort()
+    await assert.rejects(
+      provider.fetchToplists(false, { signal: controller.signal }),
+      /abort|cancel/i
+    )
+    assert.equal(calls, 2)
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
+test('malformed toplist responses are recoverable and are never cached as an empty success', async () => {
+  let invalid = true
+  const provider = await activateProvider(
+    async () =>
+      invalid
+        ? { code: 200 }
+        : { code: 200, data: { list: [{ id: 1, name: '榜单', tracks: [] }] } },
+    new Map()
+  )
+  try {
+    await assert.rejects(provider.fetchToplists(), /数据不完整/)
+    invalid = false
+    assert.equal((await provider.fetchToplists())[0].name, '榜单')
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
 test('login checks preserve credentials across failures and provider restarts', async () => {
   const settings = new Map([['cookie', 'MUSIC_U=restart-test;']])
   const failures = [
@@ -717,6 +786,44 @@ test('playback URL memory cache expires after its TTL and re-resolves', async ()
     ncmProvider.deactivate()
   }
 })
+
+for (const cacheState of ['removed', 'replaced', 'lookup-failed']) {
+  test(`playback resumes online when a downloaded cache file is ${cacheState}`, async () => {
+    const cachedPath = 'D:\\Cache\\ncm-cache\\93.current.flac'
+    const streamUrl = 'https://music.example/93.flac'
+    let diskPath = cachedPath
+    let lookupFailed = false
+    let requests = 0
+    const provider = await activateProvider(
+      async () => {
+        requests += 1
+        return { code: 200, data: [{ id: 93, url: streamUrl, code: 200 }] }
+      },
+      undefined,
+      {
+        ncm: {
+          cacheSong: async () => cachedPath,
+          getCachedSong: async () => {
+            if (lookupFailed) throw new Error('cache unavailable')
+            return diskPath
+          }
+        }
+      }
+    )
+
+    try {
+      assert.equal(await provider.getPlaybackUrl({ id: 'ncm:93' }), streamUrl)
+      assert.equal(await provider.getPlaybackUrl({ id: 'ncm:93' }), cachedPath)
+      diskPath = cacheState === 'replaced' ? 'D:\\Cache\\ncm-cache\\93.other.flac' : null
+      lookupFailed = cacheState === 'lookup-failed'
+      assert.equal(await provider.getPlaybackUrl({ id: 'ncm:93' }), streamUrl)
+      assert.equal(await provider.getPlaybackUrl({ id: 'ncm:93' }), streamUrl)
+      assert.equal(requests, 1, 'a still-valid stream does not need a new account request')
+    } finally {
+      ncmProvider.deactivate()
+    }
+  })
+}
 
 test('playback fallback ladder backs off between steps instead of bursting', async () => {
   const requestTimes = []

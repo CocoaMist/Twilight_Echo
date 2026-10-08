@@ -61,7 +61,11 @@ import { redactSensitiveText } from '../security/secureStorage.ts'
 import { protectProviderMedia } from '../security/remoteMediaGrants.ts'
 import { normalizeThemeContribution, normalizeUiContribution } from './themeContribution.ts'
 import { QISHUI_PLUGIN_ID, QishuiAuthBridge } from './qishuiAuthBridge.ts'
-import { DEFAULT_PLUGIN_HOST_IDLE_TIMEOUT_MS, PluginHostIdleTracker } from './hostIdle.ts'
+import {
+  DEFAULT_PLUGIN_HOST_IDLE_TIMEOUT_MS,
+  isPluginHostedPlaybackUrl,
+  PluginHostIdleTracker
+} from './hostIdle.ts'
 import {
   PLUGIN_CONTRIBUTIONS_CACHE_FILE,
   loadPluginContributionsCache,
@@ -123,7 +127,8 @@ export interface TwilightPluginManagerOptions {
   /**
    * Plugin hosts that have had no provider call, UI command, or subscribed
    * event for this long are hibernated (their utility process is stopped)
-   * and transparently re-activated by the next call. 0 disables hibernation.
+   * and transparently re-activated by the next call. Hosts that have issued
+   * local playback proxy URLs stay resident. 0 disables hibernation.
    */
   hostIdleTimeoutMs?: number
 }
@@ -151,6 +156,7 @@ interface RunningPlugin {
   providers: TwilightMediaProviderRegistration[]
   ui: TwilightUiContribution[]
   themes: TwilightThemeContribution[]
+  hasPlaybackProxy: boolean
 }
 
 interface InstallFromPathOptions {
@@ -910,6 +916,10 @@ export class TwilightPluginManager extends EventEmitter {
     // The Qishui auth bridge is bound to the live host process; stopping it
     // would discard the user's login, so that plugin stays resident.
     if (id === QISHUI_PLUGIN_ID) return false
+    // Local media URLs remain usable by the player after the provider RPC ends,
+    // including paused playback and prepared queue entries. Hibernation closes
+    // the server and invalidates those URLs, so retain it for this host's lifetime.
+    if (running.hasPlaybackProxy) return false
     if (this.stopOperations.has(id) || this.wakeOperations.has(id)) return false
     if (this.rpcCalls.getPendingCount(id) > 0) return false
     for (const key of this.internalNcmRequests.keys()) {
@@ -1139,7 +1149,8 @@ export class TwilightPluginManager extends EventEmitter {
       subscriptions: new Set(),
       providers: [],
       ui: [],
-      themes: this.normalizeDeclarativeThemeContributions(descriptor)
+      themes: this.normalizeDeclarativeThemeContributions(descriptor),
+      hasPlaybackProxy: false
     }
     this.running.set(descriptor.id, running)
     child.on('message', (message: PluginHostResponse) => {
@@ -1708,6 +1719,10 @@ export class TwilightPluginManager extends EventEmitter {
         value: protectProviderMedia(message.value, metadata.method)
       })
       if (completion.status !== 'settled') return
+      if (metadata.method === 'getPlaybackUrl' && isPluginHostedPlaybackUrl(message.value)) {
+        const running = this.running.get(pluginId)
+        if (running) running.hasPlaybackProxy = true
+      }
       this.recordProviderCallSuccess(
         completion.metadata.providerId,
         completion.metadata.pluginId,

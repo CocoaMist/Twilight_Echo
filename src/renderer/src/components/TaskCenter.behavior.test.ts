@@ -34,6 +34,10 @@ test('notification dropdown retains tasks, actions and keyboard focus in light a
             replacement: join(directory, 'music.ts')
           },
           {
+            find: /^.*\/stores\/useNcmStore(?:\.ts)?$/,
+            replacement: join(directory, 'music.ts')
+          },
+          {
             find: 'primeicons/primeicons.css',
             replacement: require.resolve('primeicons/primeicons.css')
           },
@@ -84,6 +88,7 @@ test('notification dropdown retains tasks, actions and keyboard focus in light a
 
 const musicFixture = `import {ref} from 'vue'
 export const usePlayerStore=()=>({playTrack:async()=>{calls.push('play')}})
+export const useNcmStore=()=>({isLoggedIn:ref(false),profile:ref(null)})
 export const scan=ref({state:'idle',current:0,total:10,error:''}),metadata=ref({state:'idle',completed:0,failed:0,skipped:0,total:0,error:''}),tracks=ref([]),calls=[]
 export const useMusicStore=()=>({tracks,libraryScanStatus:scan,libraryMetadataEnrichmentStatus:metadata,pauseLibraryScan:async()=>{calls.push('pause');scan.value={...scan.value,state:'paused'}},resumeLibraryScan:async()=>{calls.push('resume');scan.value={...scan.value,state:'running'}},cancelLibraryScan:async()=>{calls.push('cancel');scan.value={...scan.value,state:'cancelled'}},startFullLibraryScan:async()=>{calls.push('retry');scan.value={...scan.value,state:'running',error:''}},cancelLibraryMetadataEnrichment:()=>{}})`
 
@@ -91,6 +96,7 @@ const runtime = `import '@renderer/assets/base.css'
 import 'primeicons/primeicons.css'
 import {createApp,h,nextTick,ref} from 'vue'
 import Host from '@renderer/components/AppNoticeHost.vue'
+import TitleBar from '@renderer/components/TitleBar.vue'
 import {useAppNoticeStore} from '@renderer/stores/useAppNoticeStore'
 import {createInitialAppUpdateSnapshot} from '@renderer/../../shared/appUpdate.ts'
 import {scan,metadata,calls} from './music'
@@ -117,16 +123,16 @@ window.checkTaskViewport=async(width,height)=>{
 }
 window.runTaskCenterTests=async dark=>{
   document.documentElement.dataset.theme=dark?'dark':'pureWhite';document.documentElement.dataset.teMotion='off';
-  const store=useAppNoticeStore();store.clearNotices();store.setCenterOpen(false);scan.value={state:'idle',current:0,total:10,error:''};metadata.value={state:'idle',total:0,completed:0,failed:0,skipped:0};calls.length=0;
+  const store=useAppNoticeStore();store.clearNotices();store.setDoNotDisturb(false);store.setCenterOpen(false);scan.value={state:'idle',current:0,total:10,error:''};metadata.value={state:'idle',total:0,completed:0,failed:0,skipped:0};calls.length=0;
   let downloadsChanged,updateChanged,batchChanged,retries=0,revealed=0,installed=0,library=0,stops=0;
   let snapshot=createInitialAppUpdateSnapshot();
-  window.api={providerDownloads:{list:async()=>[],onChanged:fn=>{downloadsChanged=fn;return()=>stops++},cancel:async()=>{},retry:async()=>{retries++},result:async()=> 'D:/fixture/song.aac'},shell:{showItemInFolder:async()=>{revealed++}},app:{getUpdateState:async()=>snapshot,onUpdateState:fn=>{updateChanged=fn;return()=>stops++},installUpdate:async()=>{installed++}},loudnessAnalysis:{getBatch:async()=>({status:{state:'idle',revision:0}}),onBatchProgress:fn=>{batchChanged=fn;return()=>stops++},cancelBatch:async()=>{}}};
+  window.api={window:{getState:async()=>({maximized:false}),onStateChanged:()=>()=>{}},providerDownloads:{list:async()=>[],onChanged:fn=>{downloadsChanged=fn;return()=>stops++},cancel:async()=>{},retry:async()=>{retries++},result:async()=> 'D:/fixture/song.aac'},shell:{showItemInFolder:async()=>{revealed++}},app:{getUpdateState:async()=>snapshot,onUpdateState:fn=>{updateChanged=fn;return()=>stops++},installUpdate:async()=>{installed++}},loudnessAnalysis:{getBatch:async()=>({status:{state:'idle',revision:0}}),onBatchProgress:fn=>{batchChanged=fn;return()=>stops++},cancelBatch:async()=>{}}};
   const host=ref();
-  const app=createApp({render:()=>h('div',{},[h('button',{id:'fixture-bell',onClick:event=>host.value.toggleHistory(event),style:'position:fixed;right:120px;top:2px;height:32px;'},'任务与通知'),h('button',{id:'outside'},'页面操作'),h(Host,{ref:host,onLibrary:()=>library++})])});app.mount('#app');await tick();
+  const app=createApp({render:()=>h('div',{},[h(TitleBar,{menuOpen:false,hideStart:true,notificationsOpen:store.centerOpen.value,onNotifications:event=>host.value.toggleHistory(event)}),h('button',{id:'outside'},'页面操作'),h(Host,{ref:host,onLibrary:()=>library++})])});app.mount('#app');await tick();
   for(const kind of ['info','success','warning'])store.pushNotice({kind,message:'通知结果 '+kind});await tick();
   expect(!opened(),'notification opened the center automatically');expect(!document.querySelector('.app-notice'),'routine information interrupted the page');expect(store.unreadCount.value===3,'quiet outcomes lost unread state');
   scan.value={state:'running',current:4,total:10,error:''};await tick();expect(store.activeTaskCount.value===1,'closed dropdown stopped task updates');
-  const bell=document.querySelector('#fixture-bell');bell.focus();bell.click();await tick();
+  const bell=document.querySelector('.notification-btn');expect(bell.querySelector('.notification-dot'),'normal unread indicator missing');bell.focus();bell.click();await tick();
   expect(document.querySelectorAll('[role=dialog]').length===1,'notifications and tasks opened separate dialogs');expect(document.querySelectorAll('.notice-history').length===1,'history displayed twice');expect(noticeText().includes('通知结果 success'),'user result unavailable in shared panel');expect(store.unreadCount.value===0,'visible history was not marked read');
   expect(document.querySelector('progress[aria-label="曲库扫描"]').value===0.4,'live scan progress missing');button('.notice-history','暂停').click();await tick();button('.notice-history','继续').click();await tick();expect(calls.join(',')==='pause,resume','task controls lost behavior');
   scan.value={state:'completed',current:10,total:10,error:''};await tick();expect(noticeText().includes('曲库扫描：已完成'),'background completion disappeared');expect(!document.querySelector('.task-record'),'completion duplicated in live tasks');expect(!store.notices.value.length,'background completion became a toast');
@@ -142,6 +148,9 @@ window.runTaskCenterTests=async dark=>{
   window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();expect(!opened()&&document.activeElement===bell,'Escape did not close and restore bell focus');expect(stops===0,'closing dropdown disconnected background services');
   scan.value={state:'completed',current:10,total:10,error:''};await tick();expect(store.activeTaskCount.value===0,'closed dropdown count did not update');
   store.pushNotice({kind:'error',message:'播放被阻止'});await tick();expect([...document.querySelectorAll('.app-notice')].some(el=>el.textContent.includes('播放被阻止')),'necessary playback error was hidden');
+  bell.click();await tick();const dnd=document.querySelector('[role=switch][aria-label="勿扰模式"]');expect(dnd.getAttribute('aria-checked')==='false','do not disturb did not default to off');dnd.click();await tick();expect(dnd.getAttribute('aria-checked')==='true'&&store.doNotDisturb.value,'do not disturb switch did not enable');expect(!store.notices.value.length,'enabling do not disturb retained active alerts');
+  window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();let quietActions=0;store.pushNotice({kind:'error',message:'勿扰期间的错误',action:{label:'静默重试',run:()=>{quietActions++}}});store.pushNotice({message:'勿扰期间更新已就绪',presentation:'toast',sticky:true});await tick();expect(!document.querySelector('.app-notice')&&!bell.querySelector('.notification-dot'),'do not disturb allowed a toast or unread reminder');expect(bell.title.includes('勿扰模式已开启')&&bell.getAttribute('aria-label').includes('勿扰模式已开启'),'bell did not explain muted state');expect(store.unreadCount.value===2,'muted notices lost unread history');
+  bell.click();await tick();expect(noticeText().includes('勿扰期间的错误')&&noticeText().includes('勿扰期间更新已就绪'),'muted results were not retained');button('.notice-history','静默重试').click();await tick();expect(quietActions===1,'muted notification action did not work');dnd.click();await tick();expect(dnd.getAttribute('aria-checked')==='false','do not disturb switch did not disable');window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await tick();expect(!document.querySelector('.app-notice'),'disabling do not disturb replayed old alerts');store.pushNotice({kind:'error',message:'关闭勿扰后恢复提醒'});await tick();expect(document.querySelector('.app-notice')&&bell.querySelector('.notification-dot'),'normal reminders did not resume');
   bell.click();await tick();button('.notice-history','查看曲库').click();await tick();expect(library===1&&!opened(),'library action did not navigate and close dropdown');
   bell.click();await tick();document.querySelector('#outside').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));await tick();expect(!opened(),'outside click did not close dropdown');
   scan.value={state:'running',current:7,total:10,error:''};bell.click();await tick();button('.notice-history','清空记录').click();await tick();expect(scan.value.state==='running'&&!calls.includes('cancel'),'clearing history cancelled a live task');

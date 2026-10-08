@@ -65,7 +65,7 @@ uint32_t readLe32(const uint8_t* data) {
          (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
 }
 
-uint64_t fileSize(std::ifstream& file) {
+uint64_t fileSize(std::istream& file) {
   const auto current = file.tellg();
   file.seekg(0, std::ios::end);
   const auto end = file.tellg();
@@ -73,7 +73,7 @@ uint64_t fileSize(std::ifstream& file) {
   return end < 0 ? 0 : static_cast<uint64_t>(end);
 }
 
-bool readExactAt(std::ifstream& file, uint64_t offset, uint8_t* data, size_t size) {
+bool readExactAt(std::istream& file, uint64_t offset, uint8_t* data, size_t size) {
   file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
   if (!file) return false;
   file.read(reinterpret_cast<char*>(data), static_cast<std::streamsize>(size));
@@ -111,7 +111,7 @@ ParsedSource parseSource(const std::string& source) {
 }
 
 void collectDirectory(
-    std::ifstream& file,
+    std::istream& file,
     uint32_t extent,
     uint32_t size,
     const std::string& parent,
@@ -160,7 +160,7 @@ void collectDirectory(
   }
 }
 
-std::vector<IsoEntry> readIsoEntries(std::ifstream& file) {
+std::vector<IsoEntry> readIsoEntries(std::istream& file) {
   std::vector<IsoEntry> entries;
   std::array<uint8_t, kIsoSectorSize> sector{};
   uint32_t rootExtent = 0;
@@ -280,7 +280,7 @@ bool parseTwilightAreaToc(
   return parsed;
 }
 
-std::vector<uint8_t> readEntryBytes(std::ifstream& file, const IsoEntry& entry) {
+std::vector<uint8_t> readEntryBytes(std::istream& file, const IsoEntry& entry) {
   std::vector<uint8_t> bytes(entry.size);
   if (bytes.empty()) return bytes;
   if (!readExactAt(file, static_cast<uint64_t>(entry.extent) * kIsoSectorSize, bytes.data(), bytes.size())) bytes.clear();
@@ -406,7 +406,7 @@ double dstDurationSecondsForDecodedFrames(const SacdIsoTrackInfo& track, size_t 
 
 struct SacdIsoDemuxer::Impl {
   ParsedSource source;
-  std::ifstream file;
+  SharedInputFile file;
   std::vector<SacdIsoTrackInfo> tracks;
   int currentTrackIndex = -1;
   uint64_t readOffset = 0;

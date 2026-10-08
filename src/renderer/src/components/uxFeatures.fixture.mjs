@@ -5,6 +5,8 @@ import PersonalBackupSection from './settings-page/PersonalBackupSection.vue'
 import { createInitialAppUpdateSnapshot } from '../../../shared/appUpdate'
 import { useDownloadTasks } from '../stores/useDownloadTasks'
 import { applyPersonalRendererRestore } from '../app/personalRestore'
+import { ListeningStatsDatabase } from '../stores/listeningStatsDatabase'
+const durableStatistics=async()=>{const database=new ListeningStatsDatabase(indexedDB);try{return await database.load()}finally{await database.close()}}
 
 const expect = (v, message) => {
   if (!v) throw new Error(message)
@@ -240,12 +242,12 @@ window.runUxFeatureTests = async () => {
   await applyPersonalRendererRestore()
   expect(
     acknowledged === 'migration' &&
-      JSON.parse(localStorage.getItem('twilight-echo:listening-stats:v1')).days.today === 5,
+      (await durableStatistics()).days.today === 5,
     'renderer statistics restore failed'
   )
   await applyPersonalRendererRestore()
   expect(
-    JSON.parse(localStorage.getItem('twilight-echo:listening-stats:v1')).days.today === 5,
+    (await durableStatistics()).days.today === 5,
     'repeat restore double-counted statistics'
   )
   restoreRequest = {
@@ -281,13 +283,13 @@ window.runUxFeatureTests = async () => {
   expect(
     rejected &&
       !acknowledged &&
-      JSON.parse(localStorage.getItem('twilight-echo:listening-stats:v1')).days.today === 5,
+      (await durableStatistics()).days.today === 5,
     'partial localStorage write did not roll back or was acknowledged'
   )
   await applyPersonalRendererRestore()
   expect(
     acknowledged === 'quota-failure' &&
-      JSON.parse(localStorage.getItem('twilight-echo:listening-stats:v1')).days.today === 99,
+      (await durableStatistics()).days.today === 99,
     'restore failed to retry after quota recovery'
   )
   app.unmount()

@@ -1,8 +1,11 @@
 #include "../decoder/FFmpegDecoder.h"
 #include "../decoder/FFmpegDecoderUtils.h"
+#include "../core/SharedInputFile.h"
 #include "../dsp/DspTypes.h"
 #include "AudioFixtureLibrary.h"
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdio>
 #include <filesystem>
@@ -146,6 +149,48 @@ std::filesystem::path pathFromUtf8Bytes(const std::string& utf8) {
   return std::filesystem::path(reinterpret_cast<const char8_t*>(utf8.c_str()));
 }
 
+void assertSharedFilePreservesReadAndSeekAfterDeletion() {
+  const auto path = std::filesystem::temp_directory_path() /
+      pathFromUtf8Bytes("twilight-shared-\xe4\xb8\xad\xe6\x96\x87.bin");
+  std::vector<char> bytes(70000);
+  for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<char>(i % 127);
+  { std::ofstream file(path, std::ios::binary); file.write(bytes.data(), bytes.size()); }
+  SharedInputFile file;
+  auto missing = path;
+  missing += ".missing";
+  file.open(missing);
+  assert(!file);
+  file.open(path);
+  assert(file.is_open());
+  std::array<char, 128> read{};
+  file.read(read.data(), 5);
+  assert(file.tellg() == 5);
+  file.seekg(10, std::ios::cur);
+  assert(file.tellg() == 15);
+  file.read(read.data(), 6);
+  assert(std::equal(read.begin(), read.begin() + 6, bytes.begin() + 15));
+  file.seekg(-4, std::ios::end);
+  file.read(read.data(), 8);
+  assert(file.eof());
+  assert(file.gcount() == 4);
+  file.clear();
+  file.seekg(33333, std::ios::beg);
+  file.read(read.data(), read.size());
+  assert(std::equal(read.begin(), read.end(), bytes.begin() + 33333));
+  auto renamed = path;
+  renamed += ".renamed";
+  std::error_code fsError;
+  std::filesystem::rename(path, renamed, fsError);
+  assert(!fsError);
+  assert(std::filesystem::remove(renamed, fsError));
+  assert(!fsError);
+  file.seekg(64000, std::ios::beg);
+  file.read(read.data(), read.size());
+  assert(file.gcount() == static_cast<std::streamsize>(read.size()));
+  assert(std::equal(read.begin(), read.end(), bytes.begin() + 64000));
+  file.close();
+}
+
 void assertDecoderOpensUtf8Path() {
   const std::string chinesePath = "\xe4\xb8\xad\xe6\x96\x87\xe8\xb7\xaf\xe5\xbe\x84";
   const std::filesystem::path unicodeDir =
@@ -172,6 +217,48 @@ void assertDecoderOpensUtf8Path() {
 
   fixture.cleanup();
   std::filesystem::remove(unicodeDir, fsError);
+}
+
+void assertOpenDecoderAllowsFileRenameAndDeletion() {
+  const auto fixture = writePcmWavFixture(
+      {"twilight-decoder-file-sharing.wav", 48000, 2, 16, 96000, false});
+  FFmpegDecoder decoder;
+  std::string error;
+  assert(decoder.open(fixture.string(), &error));
+  AudioFormat output = decoder.streamInfo().decodedFormat;
+  output.bitDepth = 32;
+  output.sampleFormat = AudioSampleFormat::Float32Interleaved;
+  assert(decoder.setOutputFormat(output, &error));
+  auto renamed = fixture.path();
+  renamed += ".renamed.wav";
+  std::error_code fsError;
+  std::filesystem::rename(fixture.path(), renamed, fsError);
+  if (fsError) std::cerr << "Open decoder blocks rename: " << fsError.message() << std::endl;
+  assert(!fsError);
+  assert(std::filesystem::remove(renamed, fsError));
+  assert(!fsError);
+  // Continue through the original handle, including a seek beyond the IO buffer.
+  assert(decoder.seek(1.0, &error));
+  std::vector<float> samples(1024 * 2);
+  assert(decoder.readFrames(samples.data(), 1024, &error) > 0);
+  decoder.close();
+}
+
+void assertFailedDecoderOpenReleasesFile() {
+  const auto path = std::filesystem::temp_directory_path() / "twilight-decoder-invalid.wav";
+  { std::ofstream file(path, std::ios::binary); file << "invalid audio"; }
+  FFmpegDecoder decoder;
+  std::string error;
+  assert(!decoder.open(path.string(), &error));
+#if defined(_WIN32)
+  // Delete sharing alone could hide a leaked handle. An exclusive open proves
+  // the failed decoder released its input before returning to the caller.
+  const HANDLE exclusive = CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr,
+                                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  assert(exclusive != INVALID_HANDLE_VALUE);
+  CloseHandle(exclusive);
+#endif
+  assert(std::filesystem::remove(path));
 }
 
 #if defined(TAE_HAS_FFMPEG)
@@ -283,6 +370,7 @@ void assertDecoderOpensExternalFixturesWhenProvided() {
 }  // namespace
 
 int main() {
+  assertSharedFilePreservesReadAndSeekAfterDeletion();
   assertDecoderInt24AppendAvoidsUnalignedInt32Reads();
   assertDecoderContinuesWhenResamplerOutputsNoSamples();
   assertDecoderTailZeroHelperPreservesCopiedFrames();
@@ -294,6 +382,8 @@ int main() {
   assertDecoderReportsDsdFallbackWhenSupported();
   assertDecoderSoxrTiersProbeAndFallBackGracefully();
   assertDecoderOpensUtf8Path();
+  assertOpenDecoderAllowsFileRenameAndDeletion();
+  assertFailedDecoderOpenReleasesFile();
   assertDecoderOpensExternalFixturesWhenProvided();
 #endif
   return 0;

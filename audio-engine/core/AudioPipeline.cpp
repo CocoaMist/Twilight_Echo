@@ -2574,8 +2574,7 @@ TAE_Result AudioPipeline::playInternal(
     recomputeDspActiveLocked(requestedPlaybackVolume);
     spectrum_.prepare(decodeFormat_, visualizationFftResolutionForConfig(dspConfig_.fftResolution));
     spectrum_.setEnabled(dspConfig_.fftEnabled);
-    gaplessEnabled_ =
-        gaplessEnabled && !dopPath && !nativeDsdPath && !pcmToDsdPath && !activeStream_->typedPassthrough;
+    gaplessEnabled_ = gaplessEnabled && !dopPath && !nativeDsdPath && !pcmToDsdPath;
     dopPathActive_ = dopPath;
     nativeDsdPathActive_ = nativeDsdPath;
     pcmToDsdPathActive_ = pcmToDsdPath;
@@ -2593,7 +2592,6 @@ TAE_Result AudioPipeline::playInternal(
       for (size_t channel = 0; channel < channels; ++channel) {
         pcmToDsdChannelPtrs_[channel] = pcmToDsdPlanarBytes_.data() + channel * bytesPerChannel;
       }
-      pcmToDsdInterleavedBytes_.clear();
       pcmToDsdModulator_.reset();
       if (dopPathActive_) pcmToDsdDopPacker_.reset();
     }
@@ -2649,7 +2647,7 @@ TAE_Result AudioPipeline::playInternal(
                                    : static_cast<size_t>(std::max(1, outputFormat_.sampleRate / 100));
   active->start();
   active->waitForPreroll(prerollFrames, std::chrono::milliseconds(500));
-  if (gaplessEnabled && !dopPath && !nativeDsdPath && !pcmToDsdPath && !active->typedPassthrough) {
+  if (gaplessEnabled && !dopPath && !nativeDsdPath && !pcmToDsdPath) {
     std::string preloadError;
     preloadNext(upcomingItem, &preloadError);
   }
@@ -2854,12 +2852,28 @@ std::string AudioPipeline::determineDsdPcmFallbackReason(
 }
 
 TAE_Result AudioPipeline::togglePause() {
-  std::lock_guard lock(mutex_);
+  std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
+  std::unique_lock lock(mutex_);
   if (state_ == PipelineState::Playing) {
+    // Fade PCM on the callback, including integer passthrough and PCM-to-DSD
+    // before modulation. Raw DSD/DoP payloads must never be multiplied.
+    if (((!dopPathActive_ && !nativeDsdPathActive_) || pcmToDsdPathActive_) && output_ &&
+        loadAtomicDouble(requestedVolumeBits_) > 0.0) {
+      pauseFade_.begin(pcmToDsdPathActive_ ? renderDecodeFormat_.sampleRate : outputFormat_.sampleRate);
+      lock.unlock();
+      const auto deadline = std::chrono::steady_clock::now() +
+          std::chrono::milliseconds(PauseFade::kDurationMs + 100);
+      while (!pauseFade_.complete() && std::chrono::steady_clock::now() < deadline &&
+             renderState_.load(std::memory_order_acquire) == PipelineState::Playing) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      lock.lock();
+    }
     state_ = PipelineState::Paused;
     renderState_.store(PipelineState::Paused, std::memory_order_release);
     spectrum_.resetCapture();
   } else if (state_ == PipelineState::Paused) {
+    pauseFade_.clear();
     state_ = PipelineState::Playing;
     renderState_.store(PipelineState::Playing, std::memory_order_release);
   }
@@ -2884,6 +2898,7 @@ TAE_Result AudioPipeline::stopUnlocked() {
     dsdMuteGuard_.stop();
     state_ = PipelineState::Stopped;
     renderState_.store(PipelineState::Stopped, std::memory_order_release);
+    pauseFade_.clear();
     output = std::move(output_);
     active = std::move(activeStream_);
     preload = std::move(preloadStream_);
@@ -2962,7 +2977,6 @@ TAE_Result AudioPipeline::stopUnlocked() {
     typedPassthroughActive_ = false;
     pcmToDsdFloatScratch_.clear();
     pcmToDsdPlanarBytes_.clear();
-    pcmToDsdInterleavedBytes_.clear();
     pcmToDsdChannelPtrs_.clear();
     activeUsesPreloadDspChain_ = false;
     crossfadeMixActive_ = false;
@@ -3179,7 +3193,7 @@ void AudioPipeline::setDspConfig(const std::string& dspConfigJson) {
     dspConfig_ = nextConfig;
     renderDitherMode_.store(static_cast<uint32_t>(dspConfig_.ditherMode), std::memory_order_release);
     renderDitherResetRequested_.store(true, std::memory_order_release);
-    gaplessEnabled_ = !dopPathActive_ && !nativeDsdPathActive_ && !typedPassthroughActive_ && dspConfig_.gapless;
+    gaplessEnabled_ = !dopPathActive_ && !nativeDsdPathActive_ && !pcmToDsdPathActive_ && dspConfig_.gapless;
     if (!gaplessEnabled_) {
       disabledPreload = std::move(preloadStream_);
       renderPreloadStream_.store(nullptr, std::memory_order_release);
@@ -3286,7 +3300,7 @@ bool AudioPipeline::applyDspState(
     }
 
     const bool nextGaplessEnabled =
-        !dopPathActive_ && !nativeDsdPathActive_ && !typedPassthroughActive_ && nextConfig.gapless;
+        !dopPathActive_ && !nativeDsdPathActive_ && !pcmToDsdPathActive_ && nextConfig.gapless;
     const DspTrackContext activeContext{stream_, currentItem_};
     const DspTrackContext preloadContext =
         nextGaplessEnabled && preloadStream_
@@ -3847,6 +3861,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
   DspResamplerQuality resamplerQuality = DspResamplerQuality::Native;
   bool continuityFirst = false;
   bool activeIsDsd = false;
+  bool typedPassthrough = false;
   AudioFormat activeSourceFormat;
   {
     std::lock_guard lock(mutex_);
@@ -3858,6 +3873,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
     resamplerQuality = dspConfig_.resamplerQuality;
     continuityFirst = outputConfig_.continuityFirst;
     activeIsDsd = stream_.isDsd;
+    typedPassthrough = activeStream_ && activeStream_->typedPassthrough;
     if (activeStream_) activeSourceFormat = activeStream_->stream.sourceFormat;
   }
   if (!gapless || outputFormat.sampleRate <= 0 || outputFormat.channelCount <= 0) return false;
@@ -3873,18 +3889,21 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
   }
   stream->setResamplerQuality(resamplerQuality);
   const auto& sourceFormat = stream->stream.sourceFormat;
-  if (stream->stream.isDsd || activeIsDsd || (!continuityFirst &&
-      (sourceFormat.sampleRate != activeSourceFormat.sampleRate ||
-       sourceFormat.channelCount != activeSourceFormat.channelCount ||
-       sourceFormat.bitDepth != activeSourceFormat.bitDepth ||
-       sourceFormat.sampleFormat != activeSourceFormat.sampleFormat))) {
+  const bool sourceCompatible = typedPassthrough
+      ? pcmFormatsSemanticallyMatch(sourceFormat, activeSourceFormat) &&
+            pcmFormatsSemanticallyMatch(sourceFormat, outputFormat)
+      : pcmFormatsExactMatch(sourceFormat, activeSourceFormat);
+  if (stream->stream.isDsd || activeIsDsd || (!continuityFirst && !sourceCompatible)) {
     if (error) *error = stream->stream.isDsd || activeIsDsd ? "DSD 不参与 PCM 连续预加载" : "原样优先：相邻来源格式不同";
     std::lock_guard lock(mutex_);
     lastPreloadFormatMismatch_ = true;
     publishStatusLocked();
     return false;
   }
-  if (!stream->configure(outputFormat, 0.0, error)) {
+  // Preserve the device's actual PCM representation for a raw preload, including
+  // packed Int24 / Int24-in-32 containers. Float32 conversion would lose Int32 bits.
+  if (!stream->configure(outputFormat, 0.0, error, typedPassthrough) ||
+      (typedPassthrough && !pcmFormatsExactMatch(stream->bufferFormat(), outputFormat))) {
     std::lock_guard lock(mutex_);
     lastPreloadFormatMismatch_ = true;
     publishStatusLocked();
@@ -3977,6 +3996,18 @@ bool AudioPipeline::skipToPreloaded(const QueueItem& item, std::string* error) {
     retireDecodeStreamLocked(std::move(oldActive));
   }
   return true;
+}
+
+void AudioPipeline::applyPauseFadeStatus(PipelineStatus& status) const {
+  if (!pauseFade_.active()) return;
+  status.sourceExact = false;
+  status.outputPerfect = false;
+  status.outputInfo.sourceExact = false;
+  status.outputInfo.outputPerfect = false;
+  status.outputInfo.pcmPassthrough = false;
+  status.outputInfo.perfectReasonCode = "pause_fade_active";
+  status.outputInfo.perfectReason = "Pause fade changes sample levels temporarily";
+  status.perfectReason = status.outputInfo.perfectReason;
 }
 
 PipelineStatus AudioPipeline::buildStatusLocked() {
@@ -4099,8 +4130,6 @@ PipelineStatus AudioPipeline::buildStatusLocked() {
     status.gaplessBlockedReason = "crossfade";
   } else if (dopPathActive_ || nativeDsdPathActive_) {
     status.gaplessBlockedReason = "dsd_path";
-  } else if (typedPassthroughActive_) {
-    status.gaplessBlockedReason = "typed_passthrough";
   } else if (lastPreloadFormatMismatch_ && !preloadStream_) {
     status.gaplessBlockedReason = "format_mismatch";
   } else if (!gaplessEnabled_) {
@@ -4112,6 +4141,7 @@ PipelineStatus AudioPipeline::buildStatusLocked() {
   status.perfectReason = perfectReason_;
   status.requestedConfigRevision = requestedConfigRevision_.load(std::memory_order_acquire);
   status.appliedConfigRevision = appliedConfigRevision_.load(std::memory_order_acquire);
+  applyPauseFadeStatus(status);
   return status;
 }
 
@@ -4131,6 +4161,7 @@ PipelineStatus AudioPipeline::fallbackStatus() const {
   status.outputInfo.renderPerformance = renderPerformanceSnapshot();
   status.requestedConfigRevision = requestedConfigRevision_.load(std::memory_order_acquire);
   status.appliedConfigRevision = appliedConfigRevision_.load(std::memory_order_acquire);
+  applyPauseFadeStatus(status);
   return status;
 }
 
@@ -4730,7 +4761,7 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
   // higher epoch may still be referenced by this callback and must outlive it.
   renderObservedStreamEpoch_ = retiredStreamEpoch_.load(std::memory_order_acquire);
   const PipelineState state = renderState_.load(std::memory_order_acquire);
-  DecodeStream* const active = renderActiveStream_.load(std::memory_order_acquire);
+  DecodeStream* active = renderActiveStream_.load(std::memory_order_acquire);
   const AudioFormat outputFormat = renderOutputFormat_;
   const bool typedPassthroughActive = renderTypedPassthroughActive_.load(std::memory_order_acquire);
   const bool nativeDsdPathActive = renderNativeDsdPathActive_.load(std::memory_order_acquire);
@@ -4834,6 +4865,7 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
       return output.frames;
     }
 
+    pauseFade_.process(floatScratch, filled, channels);
     spectrum_.capture(floatScratch, filled, channels);
     const size_t bytesPerChannel = pcmToDsdModulator_.outputBytesPerChannel(filled);
     const size_t written = pcmToDsdModulator_.process(
@@ -4845,25 +4877,11 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
     }
 
     renderedFrames_ += filled;
+    const size_t copyFrames = render::packGeneratedDsd(
+        pcmToDsdChannelPtrs_.data(), written, static_cast<size_t>(channels),
+        pcmToDsdModulator_.bitOrder(), output.format.sampleFormat,
+        static_cast<uint8_t*>(output.data), output.byteSize, output.frames, renderDopMarkerIndex_);
     if (isDsdSampleFormat(output.format.sampleFormat)) {
-      DsdStreamInfo info;
-      info.channelCount = channels;
-      info.bitOrder = DsdBitOrder::MsbFirst;
-      info.packing = DsdPacking::DsfPlanarBlocks;
-      info.dsdSampleRate = pcmToDsdModulator_.dsdSampleRate();
-      info.dsdRate = pcmToDsdModulator_.config().targetDsdRate;
-      const size_t planarBytes = written * static_cast<size_t>(channels);
-      const size_t framesOut = dsdBytesToInterleaved(
-          pcmToDsdPlanarBytes_.data(),
-          planarBytes,
-          info,
-          output.format.sampleFormat,
-          &pcmToDsdInterleavedBytes_);
-      const size_t copyFrames = std::min(framesOut, output.frames);
-      const size_t copyBytes = copyFrames * static_cast<size_t>(channels);
-      if (copyBytes > 0) {
-        std::memcpy(output.data, pcmToDsdInterleavedBytes_.data(), std::min(copyBytes, output.byteSize));
-      }
       if (copyFrames < output.frames) {
         fillNativeDsdIdle(output, copyFrames);
       }
@@ -4871,16 +4889,6 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
       return output.frames;
     }
 
-    // DoP carrier packing from planar MSB-first DSD bytes.
-    const size_t planarBytes = written * static_cast<size_t>(channels);
-    const size_t carrierFrames =
-        pcmToDsdDopPacker_.pack(pcmToDsdPlanarBytes_.data(), planarBytes, &pcmToDsdInterleavedBytes_);
-    const size_t copyFrames = std::min(carrierFrames, output.frames);
-    const size_t bytesPerFrame = audioFormatBytesPerFrame(output.format);
-    const size_t copyBytes = copyFrames * bytesPerFrame;
-    if (copyBytes > 0) {
-      std::memcpy(output.data, pcmToDsdInterleavedBytes_.data(), std::min(copyBytes, output.byteSize));
-    }
     finalizeDopCarrier(output, copyFrames, &renderDopMarkerIndex_);
     recordPerformance();
     return output.frames;
@@ -4909,7 +4917,46 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
     return 0;
   }
 
-  const size_t read = active->read(output);
+  size_t read = 0;
+  if (dsdTransportActive) {
+    read = active->read(output);
+    renderedFrames_ += dsdRenderedFrameUnits(read, output.format);
+  } else {
+    DecodeStream* preload = renderPreloadStream_.load(std::memory_order_acquire);
+    const size_t bytesPerFrame = audioFormatBytesPerFrame(output.format);
+    const size_t requestedFrames = bytesPerFrame > 0
+        ? std::min(output.frames, output.byteSize / bytesPerFrame) : 0;
+    // At most the current stream and one published preload are consumed here.
+    // Fill the remainder of the very same device callback with unmodified bytes.
+    while (read < requestedFrames) {
+      PcmBlock remaining = output;
+      remaining.data += read * bytesPerFrame;
+      remaining.frames = requestedFrames - read;
+      remaining.byteSize = remaining.frames * bytesPerFrame;
+      const size_t segmentRead = active->read(remaining);
+      read += segmentRead;
+      renderedFrames_ += dsdRenderedFrameUnits(segmentRead, output.format);
+      if (read == requestedFrames || !active->drained()) break;
+      if (!renderGaplessEnabled_.load(std::memory_order_acquire) || !preload ||
+          !preload->typedPassthrough || !preload->readyForRender() ||
+          !pcmFormatsExactMatch(preload->bufferFormat(), output.format)) break;
+
+      active = preload;
+      preload = nullptr;
+      renderActiveStream_.store(active, std::memory_order_release);
+      renderPreloadStream_.store(nullptr, std::memory_order_release);
+      renderedFrames_ = 0;
+      ended_ = false;
+      const bool usesPreloadDspChain = !renderActiveUsesPreloadDspChain_.load(std::memory_order_relaxed);
+      renderActiveUsesPreloadDspChain_.store(usesPreloadDspChain, std::memory_order_release);
+      renderActiveDspGraph_.store(renderPreloadDspGraph_.load(std::memory_order_acquire), std::memory_order_release);
+      renderPreloadDspGraph_.store(nullptr, std::memory_order_release);
+      // Publish ownership/context before the clock can observe the track change.
+      renderPromotionPending_.store(true, std::memory_order_release);
+      trackStarted_.store(true, std::memory_order_release);
+    }
+  }
+  if (!dsdTransportActive) pauseFade_.process(output);
   if (isDopCarrierFormat(output.format)) {
     if (dsdTransportActive) {
       finalizeDopCarrier(output, read, &renderDopMarkerIndex_);
@@ -4918,7 +4965,6 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
     fillNativeDsdIdle(output, read);
   }
   if (read > 0) {
-    renderedFrames_ += dsdRenderedFrameUnits(read, output.format);
     if (nativeDsdPathActive || isDsdSampleFormat(output.format.sampleFormat)) {
       spectrum_.tryResetCapture();
     } else {
@@ -5280,6 +5326,8 @@ size_t AudioPipeline::render(float* output, size_t frameCount) {
     const size_t samples = virtualSilenceSpanFrames[span] * static_cast<size_t>(channels);
     std::fill(output + offset, output + offset + samples, 0.0f);
   }
+
+  if (!dopPathActive && !nativeDsdPathActive) pauseFade_.process(output, frameCount, channels);
 
   if (positionRead > 0) {
     // renderedFrames_ counts source frames consumed — correct position when rate != 1.

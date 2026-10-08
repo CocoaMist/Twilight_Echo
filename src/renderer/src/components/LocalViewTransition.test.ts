@@ -17,13 +17,21 @@ const execFileAsync = promisify(execFile)
 const workspaceRoot = resolve(fileURLToPath(new URL('../../../../', import.meta.url)))
 
 test('local view transitions complete after leaving the song list, including an open dialog', async () => {
+  await runPageRuntime(runtimeEntrySource())
+})
+
+test('cached streaming pages hide during plugins, including a pending async mount, and restore details', async () => {
+  await runPageRuntime(streamingVisibilityEntrySource())
+})
+
+async function runPageRuntime(entrySource: string): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-local-transition-'))
   try {
     const entryPath = join(directory, 'playlist-lifecycle-entry.ts')
     const bundleDirectory = join(directory, 'bundle')
     const htmlPath = join(directory, 'playlist-lifecycle.html')
     const runnerPath = join(directory, 'playlist-lifecycle-runner.cjs')
-    await writeFile(entryPath, runtimeEntrySource(), 'utf8')
+    await writeFile(entryPath, entrySource, 'utf8')
 
     await build({
       configFile: false,
@@ -68,16 +76,113 @@ test('local view transitions complete after leaving the song list, including an 
     await writeFile(runnerPath, electronRunnerSource(), 'utf8')
 
     const electronPath = require('electron') as string
+    const env = { ...process.env }
+    delete env.ELECTRON_RUN_AS_NODE
     const { stderr } = await execFileAsync(electronPath, ['--no-sandbox', runnerPath, htmlPath], {
       timeout: 60_000,
-      windowsHide: true
+      windowsHide: true,
+      env
     })
     assert.match(stderr, /PLAYLIST_LIFECYCLE_RUNTIME_OK/)
     assert.doesNotMatch(stderr, /PLAYLIST_LIFECYCLE_RUNTIME_FAILED/)
   } finally {
+    assert.equal(resolve(directory, '..'), resolve(tmpdir()))
     await rm(directory, { force: true, recursive: true })
   }
-})
+}
+
+function streamingVisibilityEntrySource(): string {
+  const appSource = readFileSync(join(workspaceRoot, 'src/renderer/src/App.vue'), 'utf8')
+  const streamingSource = readFileSync(
+    join(workspaceRoot, 'src/renderer/src/components/StreamingPage.vue'),
+    'utf8'
+  )
+  const streamingRoot = parse(streamingSource).descriptor.template!.ast!.children.find(
+    (node) => node.type === 1 && node.tag === 'div'
+  )!
+  const rootSource = streamingRoot.loc.source
+  // Compile the production root and its visibility binding; replace provider
+  // content with a stateful detail so this test requires no account or network.
+  const pageTemplate =
+    rootSource.slice(0, rootSource.indexOf('>') + 1) +
+    '<div class="streaming-content" style="height:150px;overflow:auto">' +
+    '<input v-model="detail" /><div style="height:1000px">{{ initialTab }}</div></div></div>'
+  const streamingInvocation = appSource.match(/<StreamingPage\b[\s\S]*?\/>/)![0]
+  const shell = '<div>' + streamingInvocation + '</div>'
+  return `import { createApp, compile, defineAsyncComponent, nextTick, ref, shallowRef, watch } from 'vue'
+import { useAppNavigation } from '@renderer/app/useAppNavigation.ts'
+const expect = (value, message) => { if (!value) throw new Error(message) }
+const settle = async () => { await nextTick(); await new Promise(resolve => setTimeout(resolve, 30)) }
+window.runPlaylistLifecycleRuntime = async () => {
+  const navigation = useAppNavigation()
+  const streamingPageTabs = shallowRef([])
+  watch([navigation.showStreamingPage, navigation.streamingTab], ([visible, tab]) => {
+    if (visible && !streamingPageTabs.value.includes(tab)) streamingPageTabs.value = [...streamingPageTabs.value, tab]
+  }, { immediate: true })
+  let finishLoading
+  let mounts = 0
+  const StreamingShell = {
+    props: ['active', 'initialTab', 'menuOpen', 'hasPlayer'],
+    setup() { mounts++; return { detail: ref('saved detail') } },
+    render: compile(${JSON.stringify(pageTemplate)})
+  }
+  const StreamingPage = defineAsyncComponent(() => new Promise(resolve => { finishLoading = () => resolve(StreamingShell) }))
+  const app = createApp({
+    components: { StreamingPage },
+    setup: () => ({ ...navigation, streamingPageTabs, hasPlayerBar: false, showLocalSidebar: false,
+      streamingRootNavigationRevisions: {}, streamingArtistRequest: null }),
+    render: compile(${JSON.stringify(shell)})
+  })
+  const visiblePages = () => [...document.querySelectorAll('.streaming-page')].filter(page => getComputedStyle(page).display !== 'none')
+  navigation.enterStreamingMode('home')
+  app.mount('#app')
+  await settle()
+  expect(finishLoading, 'async streaming page should start loading')
+  navigation.openPluginPage()
+  finishLoading()
+  await settle()
+  expect(document.querySelector('.streaming-page'), 'pending streaming page should remain cached')
+  expect(visiblePages().length === 0, 'streaming page loaded visibly behind plugins')
+  expect(navigation.showStreamingPage.value === false, 'shell still reports streaming as visible during plugins')
+  navigation.hidePluginPage()
+  await settle()
+  for (const tab of ['home', 'discover', 'library', 'cloud', 'search']) {
+    navigation.enterStreamingMode(tab)
+    await settle()
+    expect(visiblePages().length === 1, 'more than one streaming tab is visible: ' + tab)
+    const page = visiblePages()[0]
+    const scroller = page.querySelector('.streaming-content')
+    const input = page.querySelector('input')
+    input.value = 'detail for ' + tab
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    scroller.scrollTop = 120
+    await settle()
+    const mountedBeforePlugins = mounts
+    navigation.createTogglePluginHandler()()
+    await settle()
+    expect(visiblePages().length === 0, 'streaming page is covered instead of hidden: ' + tab)
+    expect(!navigation.showStreamingPage.value, 'streaming shell flag leaks into plugins: ' + tab)
+    navigation.createTogglePluginHandler()()
+    await settle()
+    expect(visiblePages().length === 1 && visiblePages()[0] === page, 'returning recreated or lost the streaming page: ' + tab)
+    expect(mounts === mountedBeforePlugins, 'returning remounted the cached tab: ' + tab)
+    expect(input.value === 'detail for ' + tab && scroller.scrollTop === 120, 'returning lost detail or scroll: ' + tab)
+    navigation.openSettingsPage()
+    navigation.openPluginPage()
+    await settle()
+    expect(visiblePages().length === 0, 'nested plugins left streaming visible')
+    navigation.hidePluginPage()
+    await settle()
+    expect(navigation.showSettingsPage.value && visiblePages().length === 0, 'closing plugins exposed streaming through settings')
+    navigation.closeSettingsPage()
+    await settle()
+    expect(visiblePages()[0] === page, 'closing settings did not restore the streaming tab')
+  }
+  app.unmount()
+  console.log('PLAYLIST_LIFECYCLE_RUNTIME_OK')
+}
+`
+}
 
 function runtimeEntrySource(): string {
   const source = readFileSync(

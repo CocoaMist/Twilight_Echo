@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   buildPluginProxyEnv,
   createSecureProxyFetch,
+  detectProxy,
   installProxyFetch,
   type ProxyFetchTransport
 } from './proxyBootstrap.ts'
@@ -87,6 +88,44 @@ test('custom mode gives global fetch and plugin HTTP clients the same proxy choi
   assert.equal(childEnv.HTTP_PROXY, childEnv.TWILIGHT_PLUGIN_PROXY_URL)
   assert.equal(childEnv.ALL_PROXY, childEnv.TWILIGHT_PLUGIN_PROXY_URL)
   assert.equal(childEnv.TWILIGHT_PLUGIN_PROXY_ALLOW_DIRECT_FALLBACK, '1')
+})
+
+test('custom mode supports IPv6 proxy hosts and preserves explicit bypass rules', () => {
+  const env = buildPluginProxyEnv(
+    {
+      proxyMode: 'custom',
+      proxyHost: '::1',
+      proxyPort: 7890,
+      proxyAllowDirectFallback: false
+    },
+    { NO_PROXY: 'api.bilibili.com,.hdslb.com' }
+  )
+  assert.equal(env.TWILIGHT_PLUGIN_PROXY_URL, 'http://[::1]:7890/')
+  assert.equal(env.NO_PROXY, 'localhost,127.0.0.1,::1,api.bilibili.com,.hdslb.com')
+  assert.equal(env.no_proxy, env.NO_PROXY)
+})
+
+test('fallback header timeout keeps cancellation attached to a successful response body', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const controller = new AbortController()
+  let upstreamSignal: AbortSignal | undefined
+  const request = createSecureProxyFetch({
+    proxyRequest: async (_url, init) => {
+      upstreamSignal = init.signal
+      return new Response('body')
+    },
+    directRequest: async () => {
+      throw new Error('Unexpected direct request')
+    },
+    passthroughFetch: fetch,
+    allowDirectFallback: true,
+    proxyFallbackTimeoutMs: 50
+  })
+  await request('https://cdn.test/audio', { signal: controller.signal })
+  t.mock.timers.tick(100)
+  assert.equal(upstreamSignal?.aborted, false)
+  controller.abort()
+  assert.equal(upstreamSignal?.aborted, true)
 })
 
 test('rejects a self-signed target certificate through the production proxy dispatcher', async () => {
@@ -287,6 +326,109 @@ test('an aborted proxy request never starts direct fallback', async () => {
     return true
   })
   assert.equal(directRequests, 0)
+})
+
+test('honors explicit NO_PROXY domains and ports without matching unrelated domains', async () => {
+  const proxied: string[] = []
+  const direct: string[] = []
+  const request = createSecureProxyFetch({
+    proxyRequest: async (url) => {
+      proxied.push(url)
+      return new Response('proxy')
+    },
+    directRequest: async (url) => {
+      direct.push(url)
+      return new Response('direct')
+    },
+    passthroughFetch: fetch,
+    noProxy: 'api.bilibili.com, .hdslb.com, example.com:8443'
+  })
+  for (const url of [
+    'https://api.bilibili.com/list',
+    'https://i0.hdslb.com/cover',
+    'https://example.com:8443/data',
+    'https://api.bilibili.com.evil.test/data',
+    'https://evilhdslb.com/data',
+    'https://example.com/data'
+  ])
+    await request(url)
+  assert.equal(direct.length, 3)
+  assert.equal(proxied.length, 3)
+})
+
+test('proxy bypass decisions are reevaluated after cross-origin redirects', async () => {
+  let directCalls = 0
+  const request = createSecureProxyFetch({
+    proxyRequest: async (_url, init) => {
+      assert.equal(init.headers.has('cookie'), false)
+      return new Response('proxy')
+    },
+    directRequest: async () => {
+      directCalls++
+      return new Response(null, { status: 302, headers: { location: 'https://other.test/data' } })
+    },
+    passthroughFetch: fetch,
+    noProxy: 'api.bilibili.com'
+  })
+  assert.equal(
+    await (
+      await request('https://api.bilibili.com/list', { headers: { Cookie: 'private' } })
+    ).text(),
+    'proxy'
+  )
+  assert.equal(directCalls, 1)
+})
+
+test('enabled fallback recovers from a stalled proxy before the caller aborts', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let started: () => void
+  const proxyStarted = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  let directCalls = 0
+  const request = createSecureProxyFetch({
+    proxyRequest: async (_url, init) => {
+      started()
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true })
+      })
+    },
+    directRequest: async () => {
+      directCalls++
+      return new Response('direct')
+    },
+    passthroughFetch: fetch,
+    allowDirectFallback: true,
+    proxyFallbackTimeoutMs: 50
+  })
+  const pending = request('https://api.bilibili.com/list')
+  await proxyStarted
+  t.mock.timers.tick(50)
+  assert.equal(await (await pending).text(), 'direct')
+  assert.equal(directCalls, 1)
+})
+
+test('local proxy candidates are probed concurrently within the startup budget', async () => {
+  const ports: number[] = []
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const pending = detectProxy(
+    'auto',
+    {},
+    {
+      isPortOpen: async (_host, port) => {
+        ports.push(port)
+        await gate
+        return port === 7890
+      },
+      testProxyTunnel: async () => true
+    }
+  )
+  assert.equal(ports.length, 8)
+  release()
+  assert.equal((await pending)?.url, 'http://127.0.0.1:7890')
 })
 
 function policyFetch(

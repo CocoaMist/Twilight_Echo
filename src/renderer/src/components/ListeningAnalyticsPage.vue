@@ -37,6 +37,7 @@ const now = ref(new Date())
 const sort = ref<'seconds' | 'plays'>('seconds')
 const showFormatTable = ref(false)
 const showClearDialog = ref(false)
+const clearingStats = ref(false)
 const clearNotice = ref('')
 const clearActivity = computed(() => ({ ...listeningStats.value }))
 let dayTimer: ReturnType<typeof setInterval> | undefined
@@ -143,12 +144,20 @@ function openArtist(artist: ListeningArtistStat): void {
   if (providerId) emit('open-artist', { name, providerId })
 }
 
-function clearStats(range: ListeningStatsClearRange): void {
-  clearListeningStats(range)
-  showClearDialog.value = false
-  clearNotice.value = range
-    ? `已清除 ${range.startDay} 至 ${range.endDay} 的每日记录及对应曲目明细。`
-    : '已清除全部统计数据。'
+async function clearStats(range: ListeningStatsClearRange): Promise<void> {
+  if (clearingStats.value) return
+  clearingStats.value = true
+  try {
+    const saved = await clearListeningStats(range)
+    showClearDialog.value = false
+    clearNotice.value = !saved
+      ? '记录已清除，保存失败，应用会自动重试。'
+      : range
+        ? `已清除 ${range.startDay} 至 ${range.endDay} 的每日记录及对应曲目明细。`
+        : '已清除全部统计数据。'
+  } finally {
+    clearingStats.value = false
+  }
 }
 </script>
 
@@ -356,6 +365,7 @@ function clearStats(range: ListeningStatsClearRange): void {
         v-if="showClearDialog"
         :stats="clearActivity"
         :now="now"
+        :busy="clearingStats"
         @close="showClearDialog = false"
         @clear="clearStats"
       />

@@ -25,6 +25,7 @@ defineProps<{
 const emit = defineEmits<{
   play: []
   playNext: []
+  copyTrackNames: []
   favorite: []
   like: []
   createPlaylist: []
@@ -72,6 +73,18 @@ const emit = defineEmits<{
         @keydown.space.prevent="emit('playNext')"
       >
         <i class="pi pi-step-forward"></i><span>下一首播放</span>
+      </div>
+      <div
+        class="menu-item"
+        role="menuitem"
+        tabindex="0"
+        data-te-interactive
+        @click="emit('copyTrackNames')"
+        @keydown.enter.prevent="emit('copyTrackNames')"
+        @keydown.space.prevent="emit('copyTrackNames')"
+      >
+        <i class="pi pi-copy"></i>
+        <span>复制歌曲名-作者{{ actionLabel }}</span>
       </div>
       <div
         class="menu-item"

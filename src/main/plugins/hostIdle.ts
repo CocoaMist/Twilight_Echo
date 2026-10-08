@@ -1,9 +1,9 @@
 /**
  * Idle bookkeeping for plugin host processes.
  *
- * A JS plugin's utility process only needs to exist while something talks to
- * it: a provider call, a UI command, or an event it subscribed to. Between
- * those moments the process is a resident Node instance doing nothing. The
+ * Provider calls, UI commands and subscribed events restart the countdown.
+ * Hosts serving a local playback proxy must stay resident even between calls:
+ * issued URLs can still be playing, paused or retained in playback queues. The
  * tracker arms one timer per plugin, resets it on every activity, and asks
  * the owner whether the plugin may hibernate when the timer fires. Plugins
  * that are still busy are simply re-armed.
@@ -18,6 +18,19 @@ export interface PluginHostIdleTrackerOptions {
 }
 
 export const DEFAULT_PLUGIN_HOST_IDLE_TIMEOUT_MS = 5 * 60 * 1000
+
+/** A loopback playback URL depends on a service in the live plugin host. */
+export function isPluginHostedPlaybackUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
+    return hostname === 'localhost' || hostname === '[::1]' || /^127\./.test(hostname)
+  } catch {
+    return false
+  }
+}
 
 export class PluginHostIdleTracker {
   private readonly timers = new Map<string, NodeJS.Timeout>()

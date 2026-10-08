@@ -30,6 +30,8 @@ const PERSONAL_FM_MAX_FALLBACK_BATCHES = 10
 const PERSONAL_RADAR_PLAYLIST_ID = 3136952023
 let likedTracksCache = null
 let playlistCatalogueCache = null
+let toplistCache = null
+const TOPLIST_CACHE_TTL_MS = 5 * 60_000
 let likedSongIdListCache = null
 let cachedUserId = null
 let likedIdsFreshAt = 0
@@ -109,6 +111,7 @@ export async function activate(context) {
     fetchPlaylistCategories,
     fetchDiscoveryPlaylists,
     fetchHighQualityPlaylists,
+    fetchToplists,
     fetchPersonalFm,
     fetchPrivateContent,
     fetchArtistTopSongs,
@@ -214,6 +217,7 @@ function resetCaches() {
   providerWriteResults.clear()
   likedTracksCache = null
   playlistCatalogueCache = null
+  toplistCache = null
   likedSongIdListCache = null
   cachedUserId = null
   likedIdsFreshAt = 0
@@ -1757,7 +1761,7 @@ function rememberStreamUrl(cacheKey, url, songId, fileName) {
   void ncmApi
     .cacheSong(songId, url, fileName)
     .then((cachedPath) => {
-      if (cachedPath && streamUrlCache.get(cacheKey) === entry) entry.url = cachedPath
+      if (cachedPath && streamUrlCache.get(cacheKey) === entry) entry.cachedPath = cachedPath
     })
     .catch(() => {})
 }
@@ -1771,7 +1775,21 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
 
   const cachedStreamEntry = force ? null : streamUrlCache.get(cacheKey)
   if (cachedStreamEntry) {
-    if (cachedStreamEntry.expiresAt > Date.now()) return cachedStreamEntry.url
+    if (cachedStreamEntry.expiresAt > Date.now()) {
+      // Cache clearing, capacity eviction, or a cache-root change can remove a
+      // downloaded file while this URL entry is still fresh. Keep the signed
+      // stream URL and only reuse the exact managed file that still exists.
+      if (cachedStreamEntry.cachedPath) {
+        try {
+          const cachedPath = await ncmApi.getCachedSong(songId)
+          if (cachedPath === cachedStreamEntry.cachedPath) return cachedPath
+        } catch {
+          // A cache lookup failure must not prevent online playback.
+        }
+        cachedStreamEntry.cachedPath = null
+      }
+      return cachedStreamEntry.url
+    }
     streamUrlCache.delete(cacheKey)
   }
 
@@ -1967,6 +1985,57 @@ async function fetchPlaylistCategories() {
   const result = { hotTags, groups }
   playlistCatalogueCache = result
   return result
+}
+
+async function fetchToplists(force = false, requestContext) {
+  throwIfRequestAborted(requestContext)
+  if (!force && toplistCache && Date.now() - toplistCache.at < TOPLIST_CACHE_TTL_MS) {
+    return toplistCache.items
+  }
+  const data = await requestOptionalAuthRead('/toplist/detail', {
+    label: 'music toplists',
+    signal: requestContext?.signal
+  })
+  const list = data.list ?? data.data?.list
+  if (!Array.isArray(list)) throw new Error('网易云排行榜返回的数据不完整，请稍后重试')
+  const seen = new Set()
+  const items = list
+    .filter((item) => {
+      const id = Number(item?.id)
+      if (
+        !Number.isSafeInteger(id) ||
+        id <= 0 ||
+        typeof item?.name !== 'string' ||
+        !item.name.trim() ||
+        seen.has(id)
+      )
+        return false
+      seen.add(id)
+      return true
+    })
+    .map((item) => ({
+      ...normalizeDiscoveryPlaylist(item),
+      description: typeof item.description === 'string' ? item.description : '',
+      updateFrequency: typeof item.updateFrequency === 'string' ? item.updateFrequency : '',
+      updatedAt: Number(item.updateTime) > 0 ? Number(item.updateTime) : undefined,
+      featured:
+        item.ToplistType != null || [19723756, 3779629, 2884035, 3778678].includes(Number(item.id)),
+      previewTracks: (Array.isArray(item.tracks) ? item.tracks : [])
+        .slice(0, 3)
+        .map((track) => ({
+          title:
+            typeof track?.first === 'string'
+              ? track.first
+              : typeof track?.name === 'string'
+                ? track.name
+                : '',
+          artist: typeof track?.second === 'string' ? track.second : ''
+        }))
+        .filter((track) => track.title)
+    }))
+  throwIfRequestAborted(requestContext)
+  toplistCache = { at: Date.now(), items }
+  return items
 }
 
 async function fetchDiscoveryPlaylists(cat = '全部', order = 'hot', limit = 30, offset = 0) {

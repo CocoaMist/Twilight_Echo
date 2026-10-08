@@ -1,13 +1,14 @@
 export function orderPlaylistEntries<T extends { id: string | number; pinned?: boolean }>(
   entries: readonly T[],
   order: readonly string[],
-  pinnedIds: ReadonlySet<string> = new Set()
+  pinnedIds: ReadonlySet<string> = new Set(),
+  prioritizePinned = true
 ): T[] {
   const positions = new Map(order.map((id, index) => [id, index]))
   return [...entries].sort(
     (left, right) =>
-      Number(right.pinned === true || pinnedIds.has(String(right.id))) -
-        Number(left.pinned === true || pinnedIds.has(String(left.id))) ||
+      Number(prioritizePinned && (right.pinned === true || pinnedIds.has(String(right.id)))) -
+        Number(prioritizePinned && (left.pinned === true || pinnedIds.has(String(left.id)))) ||
       (positions.get(String(left.id)) ?? Number.MAX_SAFE_INTEGER) -
         (positions.get(String(right.id)) ?? Number.MAX_SAFE_INTEGER)
   )

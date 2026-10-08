@@ -59,6 +59,7 @@ export interface ReasonCodeEntry {
 export const AUDIO_REASON_CODES: Record<string, ReasonCodeEntry> = {
   // ── Transport controls ────────────────────────────────────────────────────
   volume_not_unity: { severity: 'blocking', origin: 'player', settingsAnchor: 'playback' },
+  pause_fade_active: { severity: 'info', origin: 'player' },
   playback_rate_not_unity: { severity: 'blocking', origin: 'player', settingsAnchor: 'playback' },
 
   // ── Processing chain ─────────────────────────────────────────────────────

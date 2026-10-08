@@ -1,6 +1,12 @@
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type { Track } from '../../types/music.ts'
 import { syncPluginProviders } from '../../providers/index.ts'
+import { useAppNoticeStore } from '../../stores/useAppNoticeStore.ts'
+import {
+  notifyProviderFavoriteChange,
+  providerFavoriteChange,
+  providerFavoriteTrackKey
+} from '../../providers/providerFavoriteChanges.ts'
 import {
   getTrackProviderId,
   resolveProviderTrackId,
@@ -52,6 +58,7 @@ export function useFavoriteButton({
 } {
   const providerFavoriteAvailable = ref(false)
   const providerFavoriteLoading = ref(false)
+  const providerFavoriteReading = ref(false)
   const providerFavoriteLiked = ref(false)
   // 当前 provider 喜欢状态对应的曲目 id：切歌后旧曲目的状态绝不能
   // 显示到新曲目上（心动模式等场景会频繁快速切歌）。
@@ -91,7 +98,12 @@ export function useFavoriteButton({
 
   const favoriteButtonLoading = computed(() => {
     const track = currentTrack.value
-    return !!track && !isLocalTrack(track) && providerFavoriteLoading.value
+    return (
+      !!track &&
+      !isLocalTrack(track) &&
+      (providerFavoriteLoading.value ||
+        (getTrackProviderId(track) === 'bili' && providerFavoriteReading.value))
+    )
   })
 
   const favoriteButtonTitle = computed(() => {
@@ -100,10 +112,11 @@ export function useFavoriteButton({
       track && !isLocalTrack(track)
         ? mediaProviders.get(getTrackProviderId(track) ?? '')?.name
         : null
+    const action = track && getTrackProviderId(track) === 'bili' ? '收藏' : '喜欢'
     return platform
       ? favoriteButtonLiked.value
-        ? '在' + platform + '取消喜欢'
-        : '在' + platform + '喜欢'
+        ? '在' + platform + '取消' + action
+        : '在' + platform + action
       : favoriteButtonLiked.value
         ? '移出应用收藏'
         : '加入应用收藏'
@@ -113,6 +126,7 @@ export function useFavoriteButton({
     const requestId = ++providerFavoriteRequestId
     providerFavoriteAvailable.value = false
     providerFavoriteLiked.value = false
+    providerFavoriteReading.value = false
     providerFavoriteTrackId.value = null
     if (!track || isLocalTrack(track)) return
 
@@ -130,6 +144,7 @@ export function useFavoriteButton({
     providerFavoriteAvailable.value = Boolean(provider?.likeTrack)
     if (!provider?.isTrackLiked) return
 
+    providerFavoriteReading.value = true
     try {
       const liked = await provider.isTrackLiked(providerTrackId)
       if (requestId === providerFavoriteRequestId) {
@@ -138,6 +153,8 @@ export function useFavoriteButton({
       }
     } catch (error) {
       console.warn(`Failed to read ${providerId} favorite state`, error)
+    } finally {
+      if (requestId === providerFavoriteRequestId) providerFavoriteReading.value = false
     }
   }
 
@@ -169,11 +186,12 @@ export function useFavoriteButton({
     if (providerFavoriteLoading.value) return
     const providerId = getTrackProviderId(track)
     if (!providerId) return
+    if (providerId === 'bili' && providerFavoriteReading.value) return
     const providerTrackId = resolveProviderTrackId(track, providerId)
     if (providerTrackId == null) return
 
     const trackId = track.id
-    const nextLiked = !providerFavoriteLiked.value
+    const nextLiked = !favoriteButtonLiked.value
     ++providerFavoriteRequestId
     providerFavoriteLoading.value = true
     try {
@@ -184,12 +202,17 @@ export function useFavoriteButton({
       if (!provider?.likeTrack) return
 
       await provider.likeTrack(providerTrackId, nextLiked)
+      notifyProviderFavoriteChange(providerId, providerTrackId, nextLiked)
       if (currentTrack.value?.id === trackId) {
         providerFavoriteLiked.value = nextLiked
         providerFavoriteTrackId.value = trackId
       }
     } catch (error) {
       console.warn(`Failed to toggle ${providerId} favorite state`, error)
+      useAppNoticeStore().pushNotice({
+        kind: 'error',
+        message: error instanceof Error ? error.message : '修改收藏失败，请稍后重试'
+      })
     } finally {
       providerFavoriteLoading.value = false
     }
@@ -214,6 +237,24 @@ export function useFavoriteButton({
       void refreshProviderFavoriteState(currentTrack.value)
     },
     { immediate: true }
+  )
+
+  watch(
+    providerFavoriteChange,
+    (change) => {
+      const track = currentTrack.value
+      if (!change || !track || getTrackProviderId(track) !== change.providerId) return
+      if (
+        providerFavoriteTrackKey(change.providerId, change.trackId) !==
+        providerFavoriteTrackKey(change.providerId, track.id)
+      )
+        return
+      ++providerFavoriteRequestId
+      providerFavoriteReading.value = false
+      providerFavoriteLiked.value = change.liked
+      providerFavoriteTrackId.value = track.id
+    },
+    { flush: 'sync' }
   )
 
   return {

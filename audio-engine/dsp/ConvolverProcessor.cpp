@@ -16,9 +16,41 @@
 #include <fstream>
 #include <limits>
 #include <numbers>
+#include <mutex>
 
 namespace twilight::audio {
 namespace {
+
+// Control-thread cache. Weak entries do not retain retired IRs/graphs; the
+// bounded index is independent of the number of live processor instances.
+template<class T, class Build>
+std::shared_ptr<const T> cachedPreparation(const std::string& key, Build build) {
+  static std::mutex mutex;
+  static std::unordered_map<std::string, std::weak_ptr<const T>> entries;
+  if (key.empty()) return build();
+  std::lock_guard lock(mutex);
+  if (auto found = entries.find(key); found != entries.end())
+    if (auto value = found->second.lock()) return value;
+  for (auto it = entries.begin(); it != entries.end();)
+    it = it->second.expired() ? entries.erase(it) : std::next(it);
+  if (entries.size() >= 64) entries.erase(entries.begin());
+  std::shared_ptr<const T> result = build();
+  if (result) entries[key] = result;
+  return result;
+}
+
+std::string impulseIdentity(const std::string& path) {
+  std::error_code error;
+  const auto file = std::filesystem::weakly_canonical(utf8Path(path), error);
+  if (error) return {};
+  const auto size = std::filesystem::file_size(file, error);
+  if (error) return {};
+  const auto modified = std::filesystem::last_write_time(file, error);
+  if (error) return {};
+  const auto name = file.u8string();
+  return std::string(reinterpret_cast<const char*>(name.data()), name.size()) + ':' +
+      std::to_string(size) + ':' + std::to_string(modified.time_since_epoch().count());
+}
 
 constexpr uint16_t kWavePcm = 0x0001;
 constexpr uint16_t kWaveFloat = 0x0003;
@@ -130,6 +162,28 @@ struct ConvolverProcessor::FftChannel {
     void forward(std::vector<Complex>& data) const { transform(data, false); }
   };
 
+  struct Kernel {
+    size_t blockSize = 0, irOffset = 0;
+    Plan plan;
+    std::vector<std::vector<Complex>> impulse;
+    Kernel(const std::vector<float>& ir, size_t offset, size_t end, size_t block)
+        : blockSize(block), irOffset(offset) {
+      const size_t n = block * 2, bins = block + 1;
+      plan.prepare(n);
+      const size_t count = std::max<size_t>(1, (end - offset + block - 1) / block);
+      impulse.assign(count, std::vector<Complex>(bins));
+      std::vector<Complex> scratch(n);
+      for (size_t part = 0; part < count; ++part) {
+        std::fill(scratch.begin(), scratch.end(), Complex{});
+        for (size_t i = 0; i < block; ++i) {
+          const size_t index = offset + part * block + i;
+          scratch[i] = Complex(index < end ? ir[index] : 0.0f, 0.0f);
+        }
+        plan.forward(scratch);
+        std::copy_n(scratch.begin(), bins, impulse[part].begin());
+      }
+    }
+  };
   struct Tier {
     enum class Phase { Idle, Input, Forward, History, Product, Reflect, Inverse, Output };
     size_t blockSize = 0, irOffset = 0, inputPos = 0, currentIndex = 0, validHistory = 0;
@@ -138,35 +192,21 @@ struct ConvolverProcessor::FftChannel {
     size_t workPerSample = 0;
     size_t pendingWorkFrames = 0;
     Phase phase = Phase::Idle;
-    Plan plan;
+    std::shared_ptr<const Kernel> kernel;
     std::vector<float> input, jobInput;
-    std::vector<std::vector<Complex>> impulse, history;
+    std::vector<std::vector<Complex>> history;
     std::vector<Complex> product;
-
-    void configure(const std::vector<float>& ir, size_t offset, size_t end, size_t block) {
-      blockSize = block; irOffset = offset;
-      const size_t n = block * 2;
-      plan.prepare(n);
-      const size_t count = std::max<size_t>(1, (end - offset + block - 1) / block);
-      const size_t bins = block + 1;
-      impulse.assign(count, std::vector<Complex>(bins));
+    void configure(std::shared_ptr<const Kernel> prepared) {
+      kernel = std::move(prepared);
+      blockSize = kernel->blockSize; irOffset = kernel->irOffset;
+      const size_t n = blockSize * 2, bins = blockSize + 1;
+      const size_t count = kernel->impulse.size();
       history.assign(count, std::vector<Complex>(bins));
-      input.assign(block, 0.0f); jobInput.assign(block, 0.0f); product.assign(n, Complex{});
-      for (size_t part = 0; part < count; ++part) {
-        std::fill(product.begin(), product.end(), Complex{});
-        for (size_t i = 0; i < block; ++i) {
-          const size_t index = offset + part * block + i;
-          product[i] = Complex(index < end ? ir[index] : 0.0f, 0.0f);
-        }
-        plan.forward(product);
-        std::copy_n(product.begin(), bins, impulse[part].begin());
-      }
+      input.assign(blockSize, 0.0f); jobInput.assign(blockSize, 0.0f); product.assign(n, Complex{});
       size_t levels = 0;
       for (size_t value = n; value > 1; value /= 2) ++levels;
-      // Input + two bit reversals/FFTs + product + overlap-add. Complete
-      // strictly before the next input block, even for callback fragmentation.
       const size_t operations = n * (5 + levels) + bins * count;
-      workPerSample = (operations + block - 2) / (block - 1);
+      workPerSample = (operations + blockSize - 2) / (blockSize - 1);
       reset();
     }
     void reset() {
@@ -175,8 +215,8 @@ struct ConvolverProcessor::FftChannel {
     }
     uint64_t memoryBytes() const {
       uint64_t bytes = sizeof(*this) + (input.capacity() + jobInput.capacity()) * sizeof(float) +
-          (product.capacity() + plan.roots.capacity()) * sizeof(Complex) + plan.reversed.capacity() * sizeof(size_t);
-      for (const auto& value : impulse) bytes += value.capacity() * sizeof(Complex);
+          (product.capacity() + kernel->plan.roots.capacity()) * sizeof(Complex) + kernel->plan.reversed.capacity() * sizeof(size_t);
+      for (const auto& value : kernel->impulse) bytes += value.capacity() * sizeof(Complex);
       for (const auto& value : history) bytes += value.capacity() * sizeof(Complex);
       return bytes;
     }
@@ -190,28 +230,28 @@ struct ConvolverProcessor::FftChannel {
     void startTransform(Phase next) { cursor = 0; fftLength = 0; fftGroup = 0; fftOffset = 0; phase = next; }
     bool transformWork(std::vector<Complex>& data, bool inverse, size_t& operations) {
       if (fftLength == 0) {
-        const size_t count = std::min(operations, plan.size - cursor);
+        const size_t count = std::min(operations, kernel->plan.size - cursor);
         for (size_t end = cursor + count; cursor < end; ++cursor)
-          if (cursor < plan.reversed[cursor]) std::swap(data[cursor], data[plan.reversed[cursor]]);
+          if (cursor < kernel->plan.reversed[cursor]) std::swap(data[cursor], data[kernel->plan.reversed[cursor]]);
         operations -= count;
-        if (cursor != plan.size) return false;
+        if (cursor != kernel->plan.size) return false;
         fftLength = 2; cursor = 0;
       }
-      while (operations > 0 && fftLength <= plan.size) {
+      while (operations > 0 && fftLength <= kernel->plan.size) {
         const size_t count = std::min(operations, fftLength / 2 - fftOffset);
-        const size_t stride = plan.size / fftLength, half = fftLength / 2;
+        const size_t stride = kernel->plan.size / fftLength, half = fftLength / 2;
         for (size_t end = fftOffset + count; fftOffset < end; ++fftOffset)
-          plan.butterfly(data, fftGroup, fftOffset, half, stride, inverse);
+          kernel->plan.butterfly(data, fftGroup, fftOffset, half, stride, inverse);
         operations -= count;
         if (fftOffset == fftLength / 2) {
           fftOffset = 0; fftGroup += fftLength;
-          if (fftGroup == plan.size) { fftGroup = 0; fftLength *= 2; }
+          if (fftGroup == kernel->plan.size) { fftGroup = 0; fftLength *= 2; }
         }
       }
-      return fftLength > plan.size;
+      return fftLength > kernel->plan.size;
     }
     void work(size_t operations, std::vector<float>& output) {
-      const size_t n = plan.size;
+      const size_t n = kernel->plan.size;
       const size_t bins = blockSize + 1;
       const bool synchronous = operations == std::numeric_limits<size_t>::max();
       while (operations > 0 && phase != Phase::Idle) {
@@ -230,7 +270,7 @@ struct ConvolverProcessor::FftChannel {
           // The head finishes in this call; it needs no resumable FFT cursor
           // bookkeeping at each butterfly group. Tail work remains bounded.
           if (synchronous) {
-            plan.forward(product); phase = Phase::History; cursor = 0;
+            kernel->plan.forward(product); phase = Phase::History; cursor = 0;
           } else if (transformWork(product, false, operations)) {
             phase = Phase::History; cursor = 0;
           }
@@ -243,7 +283,7 @@ struct ConvolverProcessor::FftChannel {
         } else if (phase == Phase::Product) {
           const size_t count = std::min(operations, bins - cursor);
           const auto& data = history[(currentIndex + productPartition) % history.size()];
-          const auto& ir = impulse[productPartition];
+          const auto& ir = kernel->impulse[productPartition];
           if (productPartition == 0) {
             for (size_t end = cursor + count; cursor < end; ++cursor) {
               const Complex x = data[cursor], h = ir[cursor];
@@ -267,7 +307,7 @@ struct ConvolverProcessor::FftChannel {
           if (cursor == n) startTransform(Phase::Inverse);
         } else if (phase == Phase::Inverse) {
           if (synchronous) {
-            plan.transform(product, true); phase = Phase::Output; cursor = 0;
+            kernel->plan.transform(product, true); phase = Phase::Output; cursor = 0;
           } else if (transformWork(product, true, operations)) {
             phase = Phase::Output; cursor = 0;
           }
@@ -288,18 +328,25 @@ struct ConvolverProcessor::FftChannel {
   std::vector<Tier> tiers;
   std::vector<float> output;
 
-  void configure(const std::vector<float>& impulse, uint32_t requestedPartitionSize) {
+  using Prepared = std::vector<std::shared_ptr<const Kernel>>;
+  std::shared_ptr<const Prepared> prepared;
+  void configure(const std::vector<float>& impulse, uint32_t requestedPartitionSize, const std::string& key) {
     partitionSize = std::max<uint32_t>(64, requestedPartitionSize);
-    tiers.clear();
-    const size_t firstEnd = std::min(impulse.size(), size_t(partitionSize) * 8);
-    tiers.emplace_back();
-    tiers.back().configure(impulse, 0, firstEnd, partitionSize);
-    size_t offset = firstEnd, block = size_t(partitionSize) * 4;
-    while (offset < impulse.size()) {
-      const size_t end = block >= 65536 ? impulse.size() : std::min(impulse.size(), block * 8);
-      tiers.emplace_back();
-      tiers.back().configure(impulse, offset, end, block);
-      offset = end; block *= 4;
+    prepared = cachedPreparation<Prepared>(key, [&]() {
+      auto result = std::make_shared<Prepared>();
+      const size_t firstEnd = std::min(impulse.size(), size_t(partitionSize) * 8);
+      result->push_back(std::make_shared<Kernel>(impulse, 0, firstEnd, partitionSize));
+      size_t offset = firstEnd, block = size_t(partitionSize) * 4;
+      while (offset < impulse.size()) {
+        const size_t end = block >= 65536 ? impulse.size() : std::min(impulse.size(), block * 8);
+        result->push_back(std::make_shared<Kernel>(impulse, offset, end, block));
+        offset = end; block *= 4;
+      }
+      return result;
+    });
+    tiers.clear(); tiers.reserve(prepared->size());
+    for (const auto& kernel : *prepared) {
+      tiers.emplace_back(); tiers.back().configure(kernel);
     }
     const Tier& last = tiers.back();
     output.assign(last.irOffset + last.blockSize * 2 + partitionSize + 1, 0.0f);
@@ -352,15 +399,22 @@ ConvolverProcessor::ConvolverProcessor() = default;
 ConvolverProcessor::~ConvolverProcessor() = default;
 
 void ConvolverProcessor::configure(const DspConfig& config) {
+  const bool changed = config.enabled != config_.enabled ||
+      config.convolverEnabled != config_.convolverEnabled ||
+      config.convolverWet != config_.convolverWet || config.convolverDry != config_.convolverDry ||
+      config.convolverGainDb != config_.convolverGainDb ||
+      config.convolverPolarityInverted != config_.convolverPolarityInverted ||
+      config.convolverDelayMs != config_.convolverDelayMs ||
+      config.convolverPartitionSize != config_.convolverPartitionSize ||
+      config.convolverMatrix != config_.convolverMatrix;
   config_ = config;
-  rebuild();
+  if (changed) rebuild();
 }
 
 void ConvolverProcessor::prepare(const AudioFormat& format) {
   const bool formatChanged = format.sampleRate != format_.sampleRate || format.channelCount != format_.channelCount;
   format_ = format;
-  if (formatChanged) reset();
-  rebuild();
+  if (formatChanged) rebuild();
 }
 
 void ConvolverProcessor::setTrackContext(const DspTrackContext&) {
@@ -454,13 +508,18 @@ bool ConvolverProcessor::isActive() const {
 }
 
 bool ConvolverProcessor::loadImpulseResponse(const std::string& path, std::string* error) {
-  IrData ir;
-  if (!readImpulse(path, &ir, error)) {
+  const auto identity = impulseIdentity(path);
+  auto ir = cachedPreparation<IrData>(identity, [&]() -> std::shared_ptr<const IrData> {
+    auto loaded = std::make_shared<IrData>();
+    return readImpulse(path, loaded.get(), error) ? loaded : nullptr;
+  });
+  if (!ir) {
     info_.lastError = error && !error->empty() ? *error : "无法读取脉冲响应文件";
     return false;
   }
 
   originalIr_ = std::move(ir);
+  irIdentity_ = identity;
   irCache_.clear();
   info_ = {};
   realtimeBudget_.reset();
@@ -736,7 +795,9 @@ ConvolverProcessor::IrData ConvolverProcessor::resampleIr(const IrData& source, 
 
 void ConvolverProcessor::rebuild() {
   active_ = false;
-  channels_.clear();
+  // Retain old immutable kernels until the replacement has acquired them.
+  // Runtime histories remain private and are destroyed on the control thread.
+  auto previousChannels = std::move(channels_);
   wetDelayBuffer_.clear();
   wetDelayFrames_ = 0;
   wetDelayWriteFrame_ = 0;
@@ -812,10 +873,14 @@ bool ConvolverProcessor::prepareRuntimeIr(std::string* error) {
   const bool needsResample = originalIr_->sampleRate != format_.sampleRate;
   auto cached = irCache_.find(format_.sampleRate);
   if (cached == irCache_.end()) {
-    cached = irCache_.emplace(format_.sampleRate, needsResample ? resampleIr(*originalIr_, format_.sampleRate) : *originalIr_).first;
+    auto prepared = needsResample
+        ? cachedPreparation<IrData>(irIdentity_.empty() ? "" : irIdentity_ + ":rate:" + std::to_string(format_.sampleRate),
+            [&]() { return std::make_shared<IrData>(resampleIr(*originalIr_, format_.sampleRate)); })
+        : originalIr_;
+    cached = irCache_.emplace(format_.sampleRate, std::move(prepared)).first;
   }
 
-  const IrData& ir = cached->second;
+  const IrData& ir = *cached->second;
   if (ir.samples.empty() || ir.frames == 0) {
     if (error) *error = "脉冲响应没有可用采样";
     return false;
@@ -833,7 +898,10 @@ bool ConvolverProcessor::prepareRuntimeIr(std::string* error) {
   channels_.reserve(static_cast<size_t>(format_.channelCount));
   for (int channel = 0; channel < format_.channelCount; ++channel) {
     auto fftChannel = std::make_unique<FftChannel>();
-    fftChannel->configure(impulseForOutputChannel(ir, channel), partitionSize);
+    const int sourceChannel = std::clamp(channel, 0, ir.channels - 1);
+    const auto key = irIdentity_.empty() ? "" : irIdentity_ + ":fft:" +
+        std::to_string(format_.sampleRate) + ':' + std::to_string(partitionSize) + ':' + std::to_string(sourceChannel);
+    fftChannel->configure(impulseForOutputChannel(ir, channel), partitionSize, key);
     channels_.push_back(std::move(fftChannel));
   }
   wetGain_ = std::pow(10.0, std::clamp(config_.convolverGainDb, -60.0, 24.0) / 20.0);
@@ -880,14 +948,14 @@ uint32_t ConvolverProcessor::choosePartitionSize(const IrData& ir) const {
   return 1024;
 }
 
-std::vector<float> ConvolverProcessor::impulseForOutputChannel(const IrData& ir, int outputChannel) const {
-  if (ir.channels <= 1) return ir.samples.empty() ? std::vector<float>{1.0f} : ir.samples[0];
+const std::vector<float>& ConvolverProcessor::impulseForOutputChannel(const IrData& ir, int outputChannel) const {
+  if (ir.channels <= 1) return ir.samples[0];
   const size_t sourceChannel = static_cast<size_t>(std::clamp(outputChannel, 0, ir.channels - 1));
   return ir.samples[std::min(sourceChannel, ir.samples.size() - 1)];
 }
 
 void ConvolverProcessor::updateInfoFromRuntime(const IrData& ir, bool resampled) {
-  info_.loaded = originalIr_.has_value();
+  info_.loaded = static_cast<bool>(originalIr_);
   info_.active = active_;
   info_.irResampled = resampled;
   info_.sampleRate = ir.sampleRate;

@@ -33,6 +33,7 @@ interface VisibilityDocumentLike extends EventTargetLike {
 export interface ListeningStatsPersistenceOptions<T> {
   key: string
   storage: ListeningStatsStorage
+  persistSnapshot?: (snapshot: T) => Promise<void>
   getSnapshot(): T
   beforePersist(): void
   onStatus(status: ListeningStatsPersistenceStatus): void
@@ -63,6 +64,8 @@ export class ListeningStatsPersistence<T> {
   private lastError: string | null = null
   private lastFlush: ListeningStatsFlushMeasurement | undefined
   private lifecycleAttached = false
+  private generation = 0
+  private inFlight: Promise<boolean> | null = null
   private readonly setTimer: typeof globalThis.setTimeout
   private readonly clearTimer: typeof globalThis.clearTimeout
 
@@ -77,15 +80,29 @@ export class ListeningStatsPersistence<T> {
 
   markDirty(): void {
     this.dirty = true
+    this.generation++
     this.attachLifecycle()
-    this.schedule(this.options.flushDelayMs)
+    // A checkpoint is anchored to the first dirty event. Continuous five
+    // second playback ticks must not postpone it forever.
+    if (this.timer === null) this.schedule(this.options.flushDelayMs)
   }
 
-  flush(): boolean {
+  flush(): boolean | Promise<boolean> {
     this.clearScheduledFlush()
+    if (this.inFlight) {
+      return this.inFlight.then((success) => (success && this.dirty ? this.flush() : success))
+    }
     if (!this.dirty) {
       this.publish('idle')
       return true
+    }
+
+    if (this.options.persistSnapshot) {
+      const generation = this.generation
+      this.inFlight = this.flushAsync(generation).finally(() => {
+        this.inFlight = null
+      })
+      return this.inFlight.then((success) => (success && this.dirty ? this.flush() : success))
     }
 
     try {
@@ -113,6 +130,36 @@ export class ListeningStatsPersistence<T> {
       // flush can recover once storage is available again.
       this.dirty = true
       this.failureCount += 1
+      this.lastError = describePersistenceError(error)
+      this.schedule(this.options.retryDelayMs, false)
+      this.publish('error')
+      return false
+    }
+  }
+
+  private async flushAsync(generation: number): Promise<boolean> {
+    try {
+      const started = performance.now()
+      this.options.beforePersist()
+      const prepared = performance.now()
+      await this.options.persistSnapshot!(this.options.getSnapshot())
+      const written = performance.now()
+      this.lastFlush = {
+        preparationMs: prepared - started,
+        serializationMs: 0,
+        storageWriteMs: written - prepared,
+        totalMs: written - started,
+        characters: 0
+      }
+      this.dirty = this.generation !== generation
+      this.failureCount = 0
+      this.lastError = null
+      if (this.dirty && this.timer === null) this.schedule(this.options.flushDelayMs)
+      this.publish(this.dirty ? 'pending' : 'idle')
+      return true
+    } catch (error) {
+      this.dirty = true
+      this.failureCount++
       this.lastError = describePersistenceError(error)
       this.schedule(this.options.retryDelayMs, false)
       this.publish('error')

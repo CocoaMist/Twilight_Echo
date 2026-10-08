@@ -1,0 +1,266 @@
+{
+  "electron": "43.5.0",
+  "chromium": "150.0.7871.250",
+  "cases": [
+    {
+      "count": 1000,
+      "dayCount": 1,
+      "retainedTracks": 1000,
+      "attempts": [
+        {
+          "success": true,
+          "totalMs": 2,
+          "writeMs": 0.699999988079071,
+          "characters": 483381,
+          "measurement": {
+            "preparationMs": 0.20000001788139343,
+            "serializationMs": 1,
+            "storageWriteMs": 0.699999988079071,
+            "totalMs": 1.9000000059604645,
+            "characters": 483381
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 2,
+          "writeMs": 0.800000011920929,
+          "characters": 483381,
+          "measurement": {
+            "preparationMs": 0,
+            "serializationMs": 1.199999988079071,
+            "storageWriteMs": 0.800000011920929,
+            "totalMs": 2,
+            "characters": 483381
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 3,
+          "writeMs": 0.800000011920929,
+          "characters": 483381,
+          "measurement": {
+            "preparationMs": 0.09999999403953552,
+            "serializationMs": 2.0999999940395355,
+            "storageWriteMs": 0.800000011920929,
+            "totalMs": 3,
+            "characters": 483381
+          },
+          "failureCount": 0,
+          "error": null
+        }
+      ]
+    },
+    {
+      "count": 10000,
+      "dayCount": 1,
+      "retainedTracks": 10000,
+      "attempts": [
+        {
+          "success": true,
+          "totalMs": 32.099999994039536,
+          "writeMs": 19.19999998807907,
+          "characters": 4893382,
+          "measurement": {
+            "preparationMs": 1.5,
+            "serializationMs": 11.400000005960464,
+            "storageWriteMs": 19.19999998807907,
+            "totalMs": 32.099999994039536,
+            "characters": 4893382
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 40.39999997615814,
+          "writeMs": 20.5,
+          "characters": 4893382,
+          "measurement": {
+            "preparationMs": 3.199999988079071,
+            "serializationMs": 16.599999994039536,
+            "storageWriteMs": 20.5,
+            "totalMs": 40.29999998211861,
+            "characters": 4893382
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 39.099999994039536,
+          "writeMs": 23.599999994039536,
+          "characters": 4893382,
+          "measurement": {
+            "preparationMs": 3.300000011920929,
+            "serializationMs": 12.099999994039536,
+            "storageWriteMs": 23.69999998807907,
+            "totalMs": 39.099999994039536,
+            "characters": 4893382
+          },
+          "failureCount": 0,
+          "error": null
+        }
+      ]
+    },
+    {
+      "count": 2000,
+      "dayCount": 30,
+      "retainedTracks": 2000,
+      "attempts": [
+        {
+          "success": true,
+          "totalMs": 57.5,
+          "writeMs": 27,
+          "characters": 6315961,
+          "measurement": {
+            "preparationMs": 3.4000000059604645,
+            "serializationMs": 27.099999994039536,
+            "storageWriteMs": 27,
+            "totalMs": 57.5,
+            "characters": 6315961
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 51.5,
+          "writeMs": 27.200000017881393,
+          "characters": 6315961,
+          "measurement": {
+            "preparationMs": 5,
+            "serializationMs": 19.19999998807907,
+            "storageWriteMs": 27.200000017881393,
+            "totalMs": 51.400000005960464,
+            "characters": 6315961
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 52.599999994039536,
+          "writeMs": 30,
+          "characters": 6315961,
+          "measurement": {
+            "preparationMs": 3.300000011920929,
+            "serializationMs": 19.19999998807907,
+            "storageWriteMs": 30,
+            "totalMs": 52.5,
+            "characters": 6315961
+          },
+          "failureCount": 0,
+          "error": null
+        }
+      ]
+    },
+    {
+      "count": 10000,
+      "dayCount": 7,
+      "retainedTracks": 10000,
+      "attempts": [
+        {
+          "success": true,
+          "totalMs": 74.59999999403954,
+          "writeMs": 43.69999998807907,
+          "characters": 10423508,
+          "measurement": {
+            "preparationMs": 1.300000011920929,
+            "serializationMs": 29.5,
+            "storageWriteMs": 43.69999998807907,
+            "totalMs": 74.5,
+            "characters": 10423508
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 78.59999999403954,
+          "writeMs": 43,
+          "characters": 10423508,
+          "measurement": {
+            "preparationMs": 4.199999988079071,
+            "serializationMs": 31.400000005960464,
+            "storageWriteMs": 43,
+            "totalMs": 78.59999999403954,
+            "characters": 10423508
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 83,
+          "writeMs": 45.599999994039536,
+          "characters": 10423508,
+          "measurement": {
+            "preparationMs": 2,
+            "serializationMs": 35.30000001192093,
+            "storageWriteMs": 45.69999998807907,
+            "totalMs": 83,
+            "characters": 10423508
+          },
+          "failureCount": 0,
+          "error": null
+        }
+      ]
+    },
+    {
+      "count": 10000,
+      "dayCount": 8,
+      "retainedTracks": 10000,
+      "attempts": [
+        {
+          "success": true,
+          "totalMs": 105,
+          "writeMs": 64.5,
+          "characters": 11343529,
+          "measurement": {
+            "preparationMs": 2.5,
+            "serializationMs": 37.900000005960464,
+            "storageWriteMs": 64.5,
+            "totalMs": 104.90000000596046,
+            "characters": 11343529
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 104.09999999403954,
+          "writeMs": 51.80000001192093,
+          "characters": 11343529,
+          "measurement": {
+            "preparationMs": 5.199999988079071,
+            "serializationMs": 47,
+            "storageWriteMs": 51.80000001192093,
+            "totalMs": 104,
+            "characters": 11343529
+          },
+          "failureCount": 0,
+          "error": null
+        },
+        {
+          "success": true,
+          "totalMs": 93.59999999403954,
+          "writeMs": 50.900000005960464,
+          "characters": 11343529,
+          "measurement": {
+            "preparationMs": 5.4000000059604645,
+            "serializationMs": 37.29999998211861,
+            "storageWriteMs": 50.900000005960464,
+            "totalMs": 93.59999999403954,
+            "characters": 11343529
+          },
+          "failureCount": 0,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

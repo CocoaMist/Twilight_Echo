@@ -57,13 +57,14 @@ class ConvolverProcessor final : public IAudioProcessor {
   // Returns true when a previously bypassed convolver may try again.
   bool shouldRearmAfterBypass();
   uint32_t choosePartitionSize(const IrData& ir) const;
-  std::vector<float> impulseForOutputChannel(const IrData& ir, int outputChannel) const;
+  const std::vector<float>& impulseForOutputChannel(const IrData& ir, int outputChannel) const;
   void updateInfoFromRuntime(const IrData& ir, bool resampled);
 
   DspConfig config_;
   AudioFormat format_;
-  std::optional<IrData> originalIr_;
-  std::unordered_map<int, IrData> irCache_;
+  std::shared_ptr<const IrData> originalIr_;
+  std::string irIdentity_;
+  std::unordered_map<int, std::shared_ptr<const IrData>> irCache_;
   std::vector<std::unique_ptr<FftChannel>> channels_;
   std::array<float, 8> routedInput_{};
   std::array<float, 8> wetOutput_{};

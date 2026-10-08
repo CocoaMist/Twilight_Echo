@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { watch } from 'vue'
 import ThemeAppearanceControl from '@renderer/components/theme-studio/ThemeAppearanceControl.vue'
 import {
   useThemeStudioEditor,
@@ -15,7 +16,7 @@ import SideMenu from '@renderer/components/SideMenu.vue'
 import TitleBar from '@renderer/components/TitleBar.vue'
 
 const props = defineProps<{ initialDomain?: ThemeStudioDomain }>()
-const emit = defineEmits<{ back: [] }>()
+const emit = defineEmits<{ back: []; domainChange: [domain: ThemeStudioDomain] }>()
 
 const {
   BUILT_IN_THEME_FONTS,
@@ -118,6 +119,7 @@ const {
   initialDomain: props.initialDomain,
   onBack: () => emit('back')
 })
+watch(domain, (value) => emit('domainChange', value), { flush: 'sync' })
 
 // 标题栏返回键必须走 closeStudio：有未应用的修改时它需要弹确认，不能由
 // App 层按页面旗标直接关闭，本页因此不注册 App 层基础层。

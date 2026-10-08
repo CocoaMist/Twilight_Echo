@@ -164,6 +164,7 @@ function trackFormat(track: Track): string {
         </div>
       </section>
 
+      <slot name="rankings" />
       <section ref="shelf" class="archive-rotation" aria-label="最近活动">
         <div class="archive-rotation-head">
           <div class="archive-section-name">

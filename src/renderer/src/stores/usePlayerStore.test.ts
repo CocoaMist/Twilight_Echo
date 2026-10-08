@@ -7,6 +7,10 @@ import { APP_LOCALES } from '../../../shared/i18n/locale.ts'
 import { translate } from '../../../shared/i18n/translate.ts'
 import { ZH_CN_MESSAGES } from '../../../shared/i18n/messages/zh-CN.ts'
 import { EN_US_MESSAGES } from '../../../shared/i18n/messages/en-US.ts'
+import type { Track } from '../types/music'
+import { prepareNativeQueue } from '../utils/nativeQueuePreparation.ts'
+import { getTrackSource, isLikelyLocalFilePath } from '../utils/playerTrackUtils.ts'
+import { shouldReuseResolvedStreamUrl } from '../utils/playbackRouting.ts'
 
 test('each playback load clears stale pending positions before asynchronous work starts', () => {
   const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
@@ -613,6 +617,120 @@ test('cached playback paths are validated before reuse after a cache clear', () 
     source,
     /async function isUsableLocalPlaybackFile[\s\S]*window\.api\?\.fs\?\.isAudioFileAuthorized\?\.\(filePath\)/
   )
+})
+
+function ncmPlaybackResolutionFixture(
+  targets: Array<string | null>,
+  isAuthorized: (path: string) => Promise<boolean> = async () => false
+): {
+  track: Track
+  calls: Array<{ quality?: string; force?: boolean } | undefined>
+  resolve: (track: Track) => Promise<string>
+} {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const calls: Array<{ quality?: string; force?: boolean } | undefined> = []
+  const implementation = ts.transpileModule(
+    ['isUsableLocalPlaybackFile', 'resolvePlayTarget']
+      .map(
+        (name) =>
+          `async function ${name}(${name === 'resolvePlayTarget' ? 'track' : 'filePath'}) {${extractInternalFunctionBody(source, name)}}`
+      )
+      .join('\n'),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
+  ).outputText
+  const resolve = new Function(
+    'window',
+    'appSettings',
+    'useMediaProviders',
+    'syncPluginProviders',
+    'getTrackSource',
+    'isLikelyLocalFilePath',
+    'shouldReuseResolvedStreamUrl',
+    `${implementation}\nreturn resolvePlayTarget`
+  )(
+    { api: { fs: { isAudioFileAuthorized: isAuthorized } } },
+    { value: { ncmPlaybackQuality: 'lossless' } },
+    () => ({
+      resolvePlaybackUrl: async (
+        _track: Track,
+        options?: { quality?: string; force?: boolean }
+      ) => {
+        calls.push(options)
+        return targets[calls.length - 1] ?? null
+      }
+    }),
+    async () => {},
+    getTrackSource,
+    isLikelyLocalFilePath,
+    shouldReuseResolvedStreamUrl
+  ) as (track: Track) => Promise<string>
+  return {
+    track: {
+      id: 'ncm:93',
+      source: 'ncm',
+      title: 'Song',
+      artist: 'Artist',
+      album: 'Album',
+      filePath: 'ncm:93',
+      fileName: '93.flac',
+      duration: 180,
+      size: 0,
+      cover: null,
+      lyrics: null,
+      streamQuality: 'lossless'
+    },
+    calls,
+    resolve
+  }
+}
+
+for (const authorizationFails of [false, true]) {
+  test(`NCM re-resolves an unusable provider cache before native playback (IPC failure: ${authorizationFails})`, async () => {
+    const cachedPath = 'D:\\Cache\\ncm-cache\\93.flac'
+    const grant = 'twilight-media://audio/fresh-ncm-stream'
+    const f = ncmPlaybackResolutionFixture([cachedPath, grant], async () => {
+      if (authorizationFails) throw new Error('cache lookup unavailable')
+      return false
+    })
+    f.track.streamUrl = cachedPath
+    const before = { ...f.track }
+    const target = await f.resolve(f.track)
+    assert.equal(target, grant)
+    assert.deepEqual(f.calls, [{ quality: 'lossless' }, { quality: 'lossless', force: true }])
+    assert.deepEqual(f.track, before, 'resolution must not commit state from a superseded load')
+    const prepared = await prepareNativeQueue({
+      queue: [f.track],
+      currentTrack: f.track,
+      currentTarget: target,
+      currentIndex: 0,
+      isAudioFileAuthorized: async () => false
+    })
+    assert.equal(prepared?.items[0].source, grant)
+  })
+}
+
+test('NCM keeps valid local playback files and fresh online streams without forced requests', async () => {
+  const cachedPath = 'D:\\Cache\\ncm-cache\\93.flac'
+  const f = ncmPlaybackResolutionFixture([cachedPath], async (path) => path === cachedPath)
+  assert.equal(await f.resolve(f.track), cachedPath)
+  assert.deepEqual(f.calls, [{ quality: 'lossless' }])
+  f.track.streamUrl = cachedPath
+  assert.equal(await f.resolve(f.track), cachedPath)
+  assert.equal(f.calls.length, 1, 'an authorized track cache is reused directly')
+
+  const online = ncmPlaybackResolutionFixture(['twilight-media://audio/fresh-ncm-stream'])
+  assert.equal(await online.resolve(online.track), 'twilight-media://audio/fresh-ncm-stream')
+  assert.deepEqual(online.calls, [{ quality: 'lossless' }])
+})
+
+test('NCM stops retrying after one forced resolve and keeps unauthorized files out of playback', async () => {
+  const cachedPath = 'D:\\Untrusted\\93.flac'
+  const f = ncmPlaybackResolutionFixture([cachedPath, cachedPath])
+  await assert.rejects(() => f.resolve(f.track), /网易云缓存文件不可用/)
+  assert.equal(f.calls.length, 2)
+  const unavailable = ncmPlaybackResolutionFixture([cachedPath, null])
+  await assert.rejects(() => unavailable.resolve(unavailable.track), /没有可播放的音质/)
+  assert.equal(unavailable.calls.length, 2)
 })
 
 test('NetEase next-track prefetch wires into playback progress and the native queue', () => {

@@ -81,19 +81,43 @@ export function toPlaybackQueueSnapshots(tracks: readonly Track[]): Track[] {
   })
 }
 
+export function patchPlaybackQueueTrack(tracks: Track[], updatedTrack: Track): Track[] {
+  const snapshot = toPlaybackQueueSnapshot(updatedTrack)
+  let updated: Track[] | null = null
+  for (let index = 0; index < tracks.length; ++index) {
+    const track = tracks[index]
+    if (track.id !== updatedTrack.id || matchesPlaybackQueueSnapshot(track, snapshot)) continue
+    updated ??= tracks.slice()
+    updated[index] = { ...snapshot, queueEntryId: track.queueEntryId }
+  }
+  return updated ?? tracks
+}
+
 // Explicit field reads keep version validation inexpensive on large queues.
-function matchesPlaybackQueueSnapshot(track: Track, snapshot: Track): boolean {
+export function matchesPlaybackQueueSnapshot(track: Track, snapshot: Track): boolean {
   return (
     track.id === snapshot.id &&
     track.title === snapshot.title &&
     track.artist === snapshot.artist &&
-    track.artists === snapshot.artists &&
+    (track.artists === snapshot.artists ||
+      (track.artists?.length === snapshot.artists?.length &&
+        !!track.artists?.every(
+          (artist, i) =>
+            artist.id === snapshot.artists![i].id && artist.name === snapshot.artists![i].name
+        ))) &&
     track.album === snapshot.album &&
     track.filePath === snapshot.filePath &&
     track.fileName === snapshot.fileName &&
     track.dir === snapshot.dir &&
     track.subTrack === snapshot.subTrack &&
-    track.cueRange === snapshot.cueRange &&
+    (track.cueRange === snapshot.cueRange ||
+      (!!track.cueRange &&
+        !!snapshot.cueRange &&
+        track.cueRange.startSeconds === snapshot.cueRange.startSeconds &&
+        track.cueRange.endSeconds === snapshot.cueRange.endSeconds &&
+        track.cueRange.pregapSeconds === snapshot.cueRange.pregapSeconds &&
+        track.cueRange.virtualPregapSeconds === snapshot.cueRange.virtualPregapSeconds &&
+        track.cueRange.sourcePregapSeconds === snapshot.cueRange.sourcePregapSeconds)) &&
     track.cueSheetPath === snapshot.cueSheetPath &&
     track.cueEncoding === snapshot.cueEncoding &&
     track.duration === snapshot.duration &&

@@ -103,5 +103,6 @@ function seekHero(position: number): void {
     @open-album="openAlbum"
     @select-view="(category, filter) => emit('select-view', category, filter)"
     @open-library-settings="emit('open-library-settings')"
-  />
+    ><template #rankings><slot name="rankings" /></template
+  ></NightHarborHome>
 </template>

@@ -170,5 +170,6 @@ async function playPlaylist(playlist: MediaProviderPlaylistSummary): Promise<voi
     @open-radio="emit('open-radio')"
     @open-recent="emit('select-view', 'recent', null)"
     @open-library-settings="emit('open-library-settings')"
-  />
+    ><template #rankings><slot name="rankings" /></template
+  ></OnlineHome>
 </template>

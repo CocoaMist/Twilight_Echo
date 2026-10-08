@@ -9,6 +9,8 @@ export function useHoldReorder(move: (from: string, to: string) => void, delay =
   let group: HTMLElement | null = null
   let scroller: HTMLElement | null = null
   let pointerId = -1
+  let pointerType = ''
+  let pending: string | null = null
   let x = 0
   let y = 0
   let startX = 0
@@ -45,6 +47,17 @@ export function useHoldReorder(move: (from: string, to: string) => void, delay =
     origin = null
     group = null
     scroller = null
+    pending = null
+    pointerType = ''
+  }
+  function activate(): void {
+    if (pending === null || active.value !== null) return
+    clearTimeout(timer)
+    active.value = pending
+    over.value = pending
+    suppressClick = true
+    window.getSelection()?.removeAllRanges()
+    frame = requestAnimationFrame(scroll)
   }
   function keydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') cancel()
@@ -54,14 +67,20 @@ export function useHoldReorder(move: (from: string, to: string) => void, delay =
     x = event.clientX
     y = event.clientY
     if (!active.value) {
-      if (Math.hypot(x - startX, y - startY) > 8) cancel()
-      return
+      if (Math.hypot(x - startX, y - startY) <= 8) return
+      // A mouse starts dragging by moving; touch keeps the hold delay so swipes can scroll.
+      if (pointerType === 'mouse') activate()
+      else cancel()
+      if (!active.value) return
     }
     event.preventDefault()
     hitTest()
   }
   function pointerUp(event: PointerEvent): void {
     if (event.pointerId !== pointerId) return
+    x = event.clientX
+    y = event.clientY
+    if (active.value) hitTest()
     const from = active.value
     const to = over.value
     cancel()
@@ -81,18 +100,13 @@ export function useHoldReorder(move: (from: string, to: string) => void, delay =
     origin = event.currentTarget as HTMLElement
     group = origin.closest('[data-reorder-group]')
     pointerId = event.pointerId
+    pointerType = event.pointerType
+    pending = id
     x = startX = event.clientX
     y = startY = event.clientY
     scroller = origin.parentElement
     while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
       scroller = scroller.parentElement
-    }
-    const activate = (): void => {
-      active.value = id
-      over.value = id
-      suppressClick = true
-      window.getSelection()?.removeAllRanges()
-      frame = requestAnimationFrame(scroll)
     }
     if (delay === 0) activate()
     else timer = setTimeout(activate, delay)

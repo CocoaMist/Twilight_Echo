@@ -9,9 +9,47 @@ import {
   getPlaybackQueueWindow,
   toPlaybackQueueSnapshot,
   toPlaybackQueueSnapshots,
-  createPlaybackQueueSnapshotCache
+  createPlaybackQueueSnapshotCache,
+  patchPlaybackQueueTrack
 } from './playbackQueueVirtualization.ts'
 import { usePlaybackQueueVirtualScroll } from '../components/player-bar/usePlaybackQueueVirtualScroll.ts'
+
+test('queue patches preserve versions for transient/equivalent metadata and update all duplicate entries when meaningful fields change', () => {
+  const selected: Track = {
+    ...track(1),
+    artists: [{ id: 1, name: 'Artist' }],
+    cueRange: { startSeconds: 1, endSeconds: 181, pregapSeconds: 0 }
+  }
+  const queue = toPlaybackQueueSnapshots([selected, track(2), selected])
+  const equivalent = {
+    ...selected,
+    artists: selected.artists!.map((artist) => ({ ...artist })),
+    cueRange: { ...selected.cueRange! },
+    lyrics: 'new lyrics',
+    bpmAnalysis: {
+      bpm: 120,
+      confidence: 0.9,
+      source: 'analyzed' as const,
+      analyzedAt: 'today',
+      algorithmVersion: 1
+    }
+  }
+  assert.equal(patchPlaybackQueueTrack(queue, equivalent), queue)
+  const changed = patchPlaybackQueueTrack(queue, {
+    ...equivalent,
+    title: 'Renamed',
+    cueRange: { ...equivalent.cueRange, endSeconds: 170 }
+  })
+  assert.notEqual(changed, queue)
+  assert.equal(changed[1], queue[1])
+  for (const index of [0, 2]) {
+    assert.equal(changed[index].queueEntryId, queue[index].queueEntryId)
+    assert.equal(changed[index].title, 'Renamed')
+    assert.equal(changed[index].cueRange?.endSeconds, 170)
+    assert.equal(changed[index].bpmAnalysis, undefined)
+    assert.equal(changed[index].lyrics, null)
+  }
+})
 
 function track(index: number, lyrics = 'long lyric payload'): Track {
   return {

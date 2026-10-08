@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, readonly, ref } from 'vue'
 
 export type AppNoticeKind = 'info' | 'success' | 'warning' | 'error'
 
@@ -25,6 +25,8 @@ const noticeHistory = ref<AppNotice[]>([])
 const centerOpen = ref(false)
 const activeTaskCount = ref(0)
 const pendingActions = ref(new Set<number>())
+const DO_NOT_DISTURB_STORAGE_KEY = 'twilight-echo:notice-do-not-disturb'
+const doNotDisturb = ref(readDoNotDisturb())
 let nextNoticeId = 1
 const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const timerState = new Map<number, { remaining: number; started: number; pauses: Set<string> }>()
@@ -33,6 +35,28 @@ const timerState = new Map<number, { remaining: number; started: number; pauses:
 // re-fires on a poll interval must not be able to out-click the user. A changed
 // message is new information, so it releases the suppression.
 const suppressedDedupeMessages = new Map<string, string>()
+
+function readDoNotDisturb(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(DO_NOT_DISTURB_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function setDoNotDisturb(enabled: boolean): void {
+  doNotDisturb.value = enabled
+  if (enabled) {
+    for (const id of dismissTimers.keys()) clearDismissTimer(id)
+    timerState.clear()
+    notices.value = []
+  }
+  try {
+    globalThis.localStorage?.setItem(DO_NOT_DISTURB_STORAGE_KEY, String(enabled))
+  } catch {
+    // Keep the current session quiet even when preference storage is unavailable.
+  }
+}
 
 function clearDismissTimer(id: number): void {
   const timer = dismissTimers.get(id)
@@ -73,7 +97,7 @@ function appendHistory(notice: AppNotice): void {
 }
 
 function present(notice: AppNotice, durationMs?: number): void {
-  if (notice.presentation === 'center') {
+  if (doNotDisturb.value || notice.presentation === 'center') {
     clearDismissTimer(notice.id)
     timerState.delete(notice.id)
     notices.value = notices.value.filter((item) => item.id !== notice.id)
@@ -227,6 +251,8 @@ export function useAppNoticeStore() {
     centerOpen,
     activeTaskCount,
     pendingActions,
+    doNotDisturb: readonly(doNotDisturb),
+    setDoNotDisturb,
     unreadCount: computed(() => noticeHistory.value.filter((notice) => !notice.read).length),
     markHistoryRead: (ids?: number[]) => {
       const selected = ids && new Set(ids)

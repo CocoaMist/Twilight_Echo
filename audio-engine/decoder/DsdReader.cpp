@@ -26,7 +26,7 @@ std::string extensionOf(const std::string& source) {
   return toLower(source.substr(dot + 1));
 }
 
-bool readExact(std::ifstream& file, void* data, size_t size) {
+bool readExact(std::istream& file, void* data, size_t size) {
   file.read(reinterpret_cast<char*>(data), static_cast<std::streamsize>(size));
   return file.good() || static_cast<size_t>(file.gcount()) == size;
 }
@@ -53,12 +53,12 @@ uint64_t readBe64(const uint8_t* data) {
   return value;
 }
 
-bool readChunkHeaderLe(std::ifstream& file, char id[4], uint64_t* size) {
+bool readChunkHeaderLe(std::istream& file, char id[4], uint64_t* size) {
   uint8_t rawSize[8] = {};
   return readExact(file, id, 4) && readExact(file, rawSize, sizeof(rawSize)) && ((*size = readLe64(rawSize)), true);
 }
 
-bool readChunkHeaderBe(std::ifstream& file, char id[4], uint64_t* size) {
+bool readChunkHeaderBe(std::istream& file, char id[4], uint64_t* size) {
   uint8_t rawSize[8] = {};
   return readExact(file, id, 4) && readExact(file, rawSize, sizeof(rawSize)) && ((*size = readBe64(rawSize)), true);
 }
@@ -67,12 +67,12 @@ bool idEquals(const char id[4], const char* expected) {
   return std::memcmp(id, expected, 4) == 0;
 }
 
-uint64_t tell(std::ifstream& file) {
+uint64_t tell(std::istream& file) {
   const auto pos = file.tellg();
   return pos < 0 ? 0 : static_cast<uint64_t>(pos);
 }
 
-void skipTo(std::ifstream& file, uint64_t position) {
+void skipTo(std::istream& file, uint64_t position) {
   file.clear();
   file.seekg(static_cast<std::streamoff>(position), std::ios::beg);
 }

@@ -5,6 +5,8 @@ import {
   mergePersonalDomain,
   type PersonalData
 } from '../../../shared/personalBackup.ts'
+import { ListeningStatsDatabase } from '../stores/listeningStatsDatabase.ts'
+import type { ListeningStats } from '../stores/useListeningStatsStore.ts'
 
 export function readPersonalRendererData(): PersonalData {
   return Object.fromEntries(
@@ -28,19 +30,33 @@ export async function applyPersonalRendererRestore(): Promise<void> {
   if (localStorage.getItem(markerKey) !== request.id) {
     const previous = new Map<string, string | null>()
     const current = readPersonalRendererData()
+    const database =
+      typeof indexedDB === 'undefined' || !('statistics' in request.data)
+        ? null
+        : new ListeningStatsDatabase(indexedDB)
     const writes: [string, string][] = []
-    for (const domain of ['statistics', 'versions'] as const) {
-      if (!(domain in request.data)) continue
-      const result = mergePersonalDomain(
-        domain,
-        current[domain],
-        request.data[domain],
-        request.conflict as 'keep-local' | 'use-backup'
-      )
-      if (!validatePersonalDomain(domain, result)) throw new Error('统计或版本关系恢复校验失败')
-      writes.push([PERSONAL_STORAGE_KEYS[domain], JSON.stringify(result)])
-    }
+    let statistics: ListeningStats | undefined
+    let statisticsCommitted = false
     try {
+      const previousStatistics = await database?.load()
+      if (previousStatistics) current.statistics = previousStatistics
+      for (const domain of ['statistics', 'versions'] as const) {
+        if (!(domain in request.data)) continue
+        const result = mergePersonalDomain(
+          domain,
+          current[domain],
+          request.data[domain],
+          request.conflict as 'keep-local' | 'use-backup'
+        )
+        if (!validatePersonalDomain(domain, result)) throw new Error('统计或版本关系恢复校验失败')
+        if (domain === 'statistics' && database) statistics = result as ListeningStats
+        else writes.push([PERSONAL_STORAGE_KEYS[domain], JSON.stringify(result)])
+      }
+      if (statistics && database) {
+        database.invalidate()
+        await database.save(statistics)
+        statisticsCommitted = true
+      }
       for (const [key, value] of writes) {
         previous.set(key, localStorage.getItem(key))
         localStorage.setItem(key, value)
@@ -51,7 +67,13 @@ export async function applyPersonalRendererRestore(): Promise<void> {
         if (value === null) localStorage.removeItem(key)
         else localStorage.setItem(key, value)
       }
+      if (statisticsCommitted && database) {
+        database.invalidate()
+        await database.save((current.statistics ?? { days: {}, tracks: {} }) as ListeningStats)
+      }
       throw e
+    } finally {
+      await database?.close()
     }
   }
   await window.api.data.acknowledgeRendererRestore(request.id)

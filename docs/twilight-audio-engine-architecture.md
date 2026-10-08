@@ -76,7 +76,7 @@ Stage 1 要求 UI 与引擎对声明可证伪、可操作：
 2. **双 DSP 路径**：经典 `audioProcessing` / `createLegacyDspGraph` 与 DspScene graph 共用同一 `ReplayGainProcessor`；loudnorm 参数 `targetLufs` / `truePeakCeilingDb` 必须在两条入口一致。
 3. **软件音量**：默认 **0.7**（保护听感）；bit-perfect 需要用户显式 **Unity = 1.0**。`volume_not_unity` 时 UI 提供 Unity CTA，禁止静默把默认改成 1.0。
 4. **独立 perfect reason**：`loudnorm_active` 与 `replaygain_active` / `volume_not_unity` 不得互相冒充。
-5. **Gapless 运行态诚实**：意图开关（`audioProcessing.gapless`）与运行态分离。`PlaybackInfo` 上报 `gaplessActive` / `preloadReady` / `gaplessBlockedReason`（`disabled` | `dsd_path` | `typed_passthrough` | `crossfade` | `format_mismatch`，空串表示路径未阻塞）。EOF auto-next 与手动 `next()` 均优先 `skipToPreloaded`（不 reopen 设备）；失败再 `playQueueItem`。crossfade 关闭 true gapless。HiFi 展示 Active / Preload / Blocked 芯片。
+5. **Gapless 运行态诚实**：意图开关（`audioProcessing.gapless`）与运行态分离。`PlaybackInfo` 上报 `gaplessActive` / `preloadReady` / `gaplessBlockedReason`（`disabled` | `dsd_path` | `crossfade` | `format_mismatch`，空串表示路径未阻塞；前端兼容旧引擎的 `typed_passthrough`）。PCM typed passthrough 与 Float32 路径均支持格式兼容的预加载；typed 路径在同一回调中拼接原始字节并保持设备连续运行。EOF auto-next 与手动 `next()` 均优先 `skipToPreloaded`（不 reopen 设备）；失败再 `playQueueItem`。crossfade 关闭 true gapless。HiFi 展示 Active / Preload / Blocked 芯片。
 
 共享文案常量：`HIFI_STATUS_COPY` / `gaplessRuntimeStatusCopy`（Unity / loudnorm / gapless 运行态）。
 

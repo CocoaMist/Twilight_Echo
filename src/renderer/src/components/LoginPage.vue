@@ -86,6 +86,10 @@ const uidCopied = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let cooldownTimer: ReturnType<typeof setInterval> | null = null
 let uidCopiedTimer: ReturnType<typeof setTimeout> | null = null
+let accountsInitialized = false
+let disposed = false
+let providerChangeRevision = 0
+let providerRecoveryPending = false
 
 /**
  * 声明了 login 能力的 provider 都显示在登录页。
@@ -230,6 +234,7 @@ async function refreshAccount(providerId: string): Promise<void> {
   }
   try {
     const state = await providerStore.checkLogin(providerId)
+    if (disposed || !providerStore.hasProvider(providerId)) return
     accountStates.value = {
       ...accountStates.value,
       [providerId]: {
@@ -240,6 +245,7 @@ async function refreshAccount(providerId: string): Promise<void> {
       }
     }
   } catch (error) {
+    if (disposed || !providerStore.hasProvider(providerId)) return
     accountStates.value = {
       ...accountStates.value,
       [providerId]: {
@@ -260,6 +266,7 @@ function delay(ms: number): Promise<void> {
 async function syncSuccessfulLogin(providerId: string, celebrate = false): Promise<void> {
   const revision = loginRevision
   await refreshAccounts()
+  if (disposed || revision !== loginRevision || activeProviderId.value !== providerId) return
   if (providerId === 'ncm') {
     await ncmStore.checkLogin()
   }
@@ -269,9 +276,20 @@ async function syncSuccessfulLogin(providerId: string, celebrate = false): Promi
 }
 
 function openAccount(providerId: string): void {
+  if (!loginProviders.value.some((provider) => provider.id === providerId)) {
+    backToAccounts()
+    openFallbackAccount()
+    return
+  }
+  providerRecoveryPending = false
   loginRevision += 1
   stopPolling()
   lastKeyGenTime.value = 0
+  qrImage.value = ''
+  qrKey.value = ''
+  authUrl.value = ''
+  errorMsg.value = ''
+  clearAccountLoginFeedback()
   activeProviderId.value = providerId
   confirmLogout.value = false
   if (
@@ -301,6 +319,13 @@ function openAccount(providerId: string): void {
   void startQrLogin()
 }
 
+function openFallbackAccount(): void {
+  const available = providerCards.value.filter((card) => card.available)
+  const fallback =
+    (props.forceProfile ? available.find((card) => card.loggedIn) : undefined) ?? available[0]
+  if (fallback) openAccount(fallback.id)
+}
+
 function clearAccountLoginFeedback(): void {
   accountLoginMessage.value = ''
 }
@@ -311,6 +336,8 @@ function setLoginMethod(method: LoginMethod): void {
   stopPolling()
   lastKeyGenTime.value = 0
   loginMethod.value = method
+  accountLoginBusy.value = false
+  captchaBusy.value = false
   clearAccountLoginFeedback()
   if (method === 'qr') {
     if (qrKey.value && (pageState.value === 'qr_ready' || pageState.value === 'qr_scanned')) {
@@ -565,7 +592,8 @@ function normalizeLoginError(error: unknown): string {
 }
 
 async function handleSendCaptcha(): Promise<void> {
-  if (!activeProviderId.value || captchaBusy.value) return
+  const providerId = activeProviderId.value
+  if (!providerId || captchaBusy.value) return
   refreshCooldownRemaining()
   if (isLoginCoolingDown.value) {
     accountLoginMessage.value = `${loginBlockedReason.value || '登录请求正在冷却'}，请 ${loginCooldownText.value} 后再试`
@@ -577,21 +605,24 @@ async function handleSendCaptcha(): Promise<void> {
     accountLoginMessage.value = '请先输入手机号'
     return
   }
+  const revision = loginRevision
   captchaBusy.value = true
   try {
     const result = await providerStore.callProvider<{ code: number; message?: string }>(
-      activeProviderId.value,
+      providerId,
       'sendCaptcha',
       [phone, accountCountryCode.value.trim() || '86']
     )
+    if (revision !== loginRevision || activeProviderId.value !== providerId) return
     accountLoginMessage.value =
       result.code === 200 ? '验证码已发送' : result.message || '验证码发送失败'
     if (result.code !== 200) applyLoginCooldownFromMessage(accountLoginMessage.value)
   } catch (error) {
+    if (revision !== loginRevision || activeProviderId.value !== providerId) return
     accountLoginMessage.value = normalizeLoginError(error)
     applyLoginCooldownFromMessage(accountLoginMessage.value)
   } finally {
-    captchaBusy.value = false
+    if (revision === loginRevision) captchaBusy.value = false
   }
 }
 
@@ -604,6 +635,7 @@ async function handleAccountLogin(): Promise<void> {
   }
   stopPolling()
   clearAccountLoginFeedback()
+  captchaBusy.value = false
   accountLoginBusy.value = true
   const revision = ++loginRevision
   try {
@@ -634,7 +666,7 @@ async function handleAccountLogin(): Promise<void> {
     accountLoginMessage.value = normalizeLoginError(error)
     applyLoginCooldownFromMessage(accountLoginMessage.value)
   } finally {
-    accountLoginBusy.value = false
+    if (revision === loginRevision) accountLoginBusy.value = false
   }
 }
 
@@ -661,7 +693,7 @@ async function handleServerLogin(
   } catch (error) {
     if (revision === loginRevision) accountLoginMessage.value = normalizeLoginError(error)
   } finally {
-    accountLoginBusy.value = false
+    if (revision === loginRevision) accountLoginBusy.value = false
   }
 }
 
@@ -693,6 +725,7 @@ async function copyUid(): Promise<void> {
 }
 
 function backToAccounts(): void {
+  providerRecoveryPending = false
   loginRevision += 1
   lastKeyGenTime.value = 0
   stopPolling()
@@ -703,6 +736,8 @@ function backToAccounts(): void {
   authUrl.value = ''
   errorMsg.value = ''
   confirmLogout.value = false
+  accountLoginBusy.value = false
+  captchaBusy.value = false
   clearAccountLoginFeedback()
 }
 
@@ -726,9 +761,32 @@ watch(view, (next) => {
   if (next !== 'profile') confirmLogout.value = false
 })
 
+watch(
+  () => JSON.stringify(loginProviders.value.map((provider) => provider.id)),
+  async () => {
+    const changeRevision = ++providerChangeRevision
+    if (!accountsInitialized || disposed) return
+    const activeRemoved = activeProviderId.value !== null && activeProvider.value === null
+    if (activeRemoved) {
+      backToAccounts()
+      providerRecoveryPending = true
+    }
+    const revision = loginRevision
+    await refreshAccounts()
+    if (disposed || changeRevision !== providerChangeRevision || revision !== loginRevision) return
+    if (providerRecoveryPending) {
+      providerRecoveryPending = false
+      openFallbackAccount()
+    }
+  },
+  { flush: 'sync' }
+)
+
 onMounted(async () => {
   document.addEventListener('visibilitychange', onDocumentVisibilityChange)
   await refreshAccounts()
+  if (disposed) return
+  accountsInitialized = true
   if (props.initialProviderId && !activeProviderId.value) {
     openAccount(props.initialProviderId)
     return
@@ -742,6 +800,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  disposed = true
   loginRevision += 1
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   stopPolling()
@@ -773,6 +832,9 @@ onUnmounted(() => {
               <h2 class="stage-title">选择你的音乐平台</h2>
               <p class="stage-sub">登录一个平台，把它的曲库接进 Twilight Echo</p>
             </header>
+            <p v-if="providerCards.length === 0" class="stage-muted">
+              暂无可用的登录平台，请在扩展中心启用流媒体插件。
+            </p>
             <div class="provider-list">
               <button
                 v-for="(provider, index) in providerCards"

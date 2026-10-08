@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { toProviderIpcArgs } from '@renderer/providers/mediaProvider'
 import type {
   MediaProviderPlaylistSummary,
+  MediaProviderPlaylistTracksPage,
   MediaProviderProfile,
   MediaProviderQrLogin
 } from '../providers/mediaProvider'
@@ -77,17 +78,32 @@ export type OnlineProviderStore = ReturnType<typeof useProviderStore>
 
 const providers = ref<ProviderInfo[]>([])
 const providerIds = computed(() => new Set(providers.value.map((provider) => provider.id)))
+let providerListRevision = 0
+let providerListSyncing: Promise<void> | null = null
 
 async function syncProviders(): Promise<void> {
-  const list = await window.api.providers.list()
-  providers.value = list.map((provider) => ({
-    id: provider.id,
-    name: provider.name,
-    capabilities: provider.capabilities,
-    supportedMethods: provider.supportedMethods ?? [],
-    ui: provider.ui as ProviderUiMetadata | undefined,
-    health: provider.health as ProviderHealth | undefined
-  }))
+  if (providerListSyncing) return providerListSyncing
+  providerListSyncing = (async () => {
+    try {
+      for (;;) {
+        const revision = providerListRevision
+        const list = await window.api.providers.list()
+        if (revision !== providerListRevision) continue
+        providers.value = list.map((provider) => ({
+          id: provider.id,
+          name: provider.name,
+          capabilities: provider.capabilities,
+          supportedMethods: provider.supportedMethods ?? [],
+          ui: provider.ui as ProviderUiMetadata | undefined,
+          health: provider.health as ProviderHealth | undefined
+        }))
+        return
+      }
+    } finally {
+      providerListSyncing = null
+    }
+  })()
+  return providerListSyncing
 }
 
 // Keep the provider list in sync with the plugin lifecycle so the streaming
@@ -118,6 +134,7 @@ function ensurePluginChangeListener(): void {
   if (typeof window === 'undefined' || !window.api?.plugins?.onChanged) return
   pluginChangeListenerSetup = true
   window.api.plugins.onChanged(() => {
+    providerListRevision += 1
     void syncProviders().catch(() => undefined)
   })
   // Poll provider health so the streaming UI's health badges reflect the
@@ -204,6 +221,21 @@ export function useProviderStore() {
     return callProvider<Track[]>(id, 'fetchPlaylistTracks', [playlistId, force])
   }
 
+  async function fetchPlaylistTracksPage(
+    id: string,
+    playlistId: number | string,
+    offset = 0,
+    limit = 20,
+    force = false
+  ): Promise<MediaProviderPlaylistTracksPage> {
+    return callProvider<MediaProviderPlaylistTracksPage>(id, 'fetchPlaylistTracksPage', [
+      playlistId,
+      offset,
+      limit,
+      force
+    ])
+  }
+
   return {
     providers,
     syncProviders,
@@ -217,6 +249,7 @@ export function useProviderStore() {
     logout,
     callProvider,
     fetchUserLibrary,
-    fetchPlaylistTracks
+    fetchPlaylistTracks,
+    fetchPlaylistTracksPage
   }
 }

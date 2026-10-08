@@ -564,6 +564,7 @@ test('registry updates provider health without replacing method handlers', async
     registry.get('ncm')?.health?.methodStats?.getPlaybackUrl?.lastError,
     'stream expired'
   )
+  assert.equal(registry.getGeneration('ncm'), 1, 'API health changes retain the plugin session')
   assert.equal(
     await registry.get('ncm')?.getPlaybackUrl?.({
       id: 'ncm:1',
@@ -582,11 +583,33 @@ test('registry updates provider health without replacing method handlers', async
   )
 })
 
+test('plugin disable and re-enable still invalidate outstanding provider sessions', () => {
+  const registry = new MediaProviderRegistry()
+  registry.register({ id: 'ncm', name: 'NetEase', source: 'plugin', capabilities: ['login'] })
+  const generation = registry.getGeneration('ncm')
+  const health = {
+    providerId: 'ncm',
+    pluginId: 'com.twilightecho.provider.ncm',
+    pluginStatus: 'disabled',
+    available: false,
+    totalCalls: 0,
+    successfulCalls: 0,
+    failedCalls: 0,
+    successRate: 1,
+    lastError: null,
+    lastCheckedAt: null
+  }
+  registry.update('ncm', { health })
+  assert.equal(registry.getGeneration('ncm'), generation + 1)
+  registry.update('ncm', { health: { ...health, pluginStatus: 'enabled', available: true } })
+  assert.equal(registry.getGeneration('ncm'), generation + 2)
+})
+
 test('renderer provider sync carries host health into registered providers', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
 
   assert.match(source, /health: provider\.health/)
-  assert.match(source, /isEnabled: \(\) => provider\.health\?\.available !== false/)
+  assert.match(source, /isEnabled: \(\) => isPluginProviderEnabled\(provider\.health\)/)
   assert.match(source, /mediaProviders\.update\(provider\.id/)
   assert.match(source, /fetchDiscoveryPlaylists: supports\('fetchDiscoveryPlaylists'\)/)
   assert.match(source, /fetchHighQualityPlaylists: supports\('fetchHighQualityPlaylists'\)/)

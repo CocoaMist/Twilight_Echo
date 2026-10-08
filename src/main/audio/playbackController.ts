@@ -320,9 +320,18 @@ export class PlaybackController {
 
   async play(source: string, startTime = 0): Promise<AudioEnginePlayResult> {
     if (!source) throw audioEngineError('audio.source_empty', 'playback source is empty')
-    this.transportRevision += 1
+    const revision = ++this.transportRevision
+    const isCurrent = () => !this.destroyed && revision === this.transportRevision
+    const superseded: AudioEnginePlayResult = {
+      nativeStarted: false,
+      fallbackReason: '',
+      superseded: true
+    }
     this.invalidateUpcomingTrackCache()
     await this.prepareLoudnormForPlay(source)
+    // Startup preparation can outlive a next/previous/stop or a newer play.
+    // Never dispatch the old source after a newer transport action owns playback.
+    if (!isCurrent()) return superseded
     const current = this.queue[this.playbackInfo.queueIndex]
     const duration = current?.source === source ? (current.duration ?? 0) : 0
     const boundedStartTime = clampQueueItemPosition(current, startTime)
@@ -338,6 +347,7 @@ export class PlaybackController {
       boundedStartTime,
       firstErrorContext.output !== 'asio'
     )
+    if (!isCurrent()) return superseded
     let nativeFallbackReason = ''
     if (!nativeStarted && this.shouldFallbackFromAsio(firstErrorContext.output)) {
       nativeFallbackReason = this.lastNativeError || 'ASIO 输出不可用'
@@ -346,9 +356,11 @@ export class PlaybackController {
       this.exclusiveMode = false
       this.nativeOutputRouteSynced = false
       const fallbackRoute = await this.restoreAudioServiceOutputRoute('ASIO 失败后应用 WASAPI 兜底')
+      if (!isCurrent()) return superseded
       this.nativeOutputRouteSynced = fallbackRoute.synced
       if (fallbackRoute.synced) {
         nativeStarted = await this.tryNativePlay('WASAPI 兜底播放', source, boundedStartTime)
+        if (!isCurrent()) return superseded
       } else {
         this.lastNativeError = fallbackRoute.errors.join('\n') || this.lastNativeError
       }
@@ -371,6 +383,7 @@ export class PlaybackController {
           'SetOutputDevice',
           candidate
         )
+        if (!isCurrent()) return superseded
         if (!deviceSynced) continue
         nativeStarted = await this.tryNativePlay(
           `ALSA 兜底播放 ${candidate}`,
@@ -378,6 +391,7 @@ export class PlaybackController {
           boundedStartTime,
           false
         )
+        if (!isCurrent()) return superseded
         if (nativeStarted) {
           this.device = candidate
           this.nativeOutputRouteSynced = true
@@ -387,6 +401,7 @@ export class PlaybackController {
       if (!nativeStarted) {
         this.device = firstErrorContext.device
         await this.callNativeMaybeAsync('恢复 ALSA 默认输出设备', 'SetOutputDevice', this.device)
+        if (!isCurrent()) return superseded
       }
     }
     if (!nativeStarted && !rendererFallbackAllowed()) {
@@ -458,6 +473,7 @@ export class PlaybackController {
       this.tryNative('播放后应用音量', (native) => native.SetVolume(this.playbackInfo.volume))
     }
     await this.applyNativeDspGraph('播放源格式变更后解析 DSP 场景')
+    if (!isCurrent()) return superseded
     this.lastTick = this.scheduler.now()
     const nativePositionConfirmed =
       nativeInfo?.source === source &&

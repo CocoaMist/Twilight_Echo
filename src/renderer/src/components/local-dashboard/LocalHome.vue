@@ -5,6 +5,7 @@ import { useMusicStore } from '@renderer/stores/useMusicStore'
 import type { StreamingPageTab } from '@renderer/app/navigationPages'
 
 const OnlineDashboard = defineAsyncComponent(() => import('./OnlineDashboard.vue'))
+const NcmToplists = defineAsyncComponent(() => import('./NcmToplists.vue'))
 defineProps<{ preview?: boolean }>()
 const { tracks } = useMusicStore()
 
@@ -40,7 +41,9 @@ const emit = defineEmits<{
       @open-plugins="emit('open-plugins')"
       @open-radio="emit('open-radio')"
       @login="emit('login', $event)"
-    />
+    >
+      <template #rankings><NcmToplists @login="emit('login', 'ncm')" /></template>
+    </OnlineDashboard>
     <component
       v-else
       :is="
@@ -56,7 +59,9 @@ const emit = defineEmits<{
         (category: string, filter: string | null) => emit('select-view', category, filter)
       "
       @open-library-settings="emit('open-library-settings')"
-    />
+    >
+      <template v-if="!preview" #rankings><NcmToplists @login="emit('login', 'ncm')" /></template>
+    </component>
   </div>
 </template>
 

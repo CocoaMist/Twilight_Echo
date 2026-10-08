@@ -352,6 +352,17 @@ if(TAE_BUILD_TESTS)
   add_executable(twilight_convolver_tests tests/convolver_tests.cpp dsp/ConvolverProcessor.cpp dsp/KissFftAdapter.cpp)
   target_include_directories(twilight_convolver_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME twilight_convolver_unit COMMAND twilight_convolver_tests)
+  if(TAE_EBUR128_AVAILABLE)
+    add_executable(twilight_loudness_realtime_tests tests/loudness_realtime_tests.cpp dsp/DspWorkspaceProcessors.cpp)
+    target_compile_definitions(twilight_loudness_realtime_tests PRIVATE TAE_HAS_EBUR128=1)
+    target_include_directories(twilight_loudness_realtime_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${EBUR128_INCLUDE_DIR})
+    target_link_libraries(twilight_loudness_realtime_tests PRIVATE ${EBUR128_LIBRARY})
+    if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      target_compile_definitions(twilight_loudness_realtime_tests PRIVATE TAE_TEST_WRAP_ALLOCATORS=1)
+      target_link_options(twilight_loudness_realtime_tests PRIVATE "-Wl,--wrap=malloc,--wrap=calloc,--wrap=free")
+    endif()
+    add_test(NAME twilight_loudness_realtime_unit COMMAND twilight_loudness_realtime_tests)
+  endif()
 
   add_executable(twilight_channel_router_tests
     tests/channel_router_tests.cpp
@@ -943,6 +954,7 @@ if(TAE_BUILD_TESTS)
     twilight_audio_tests
     twilight_dsp_tests
     twilight_convolver_tests
+    twilight_loudness_realtime_tests
     twilight_channel_router_tests
     twilight_wsola_tests
     twilight_wsola_performance

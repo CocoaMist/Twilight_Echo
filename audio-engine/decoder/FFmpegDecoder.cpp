@@ -1,4 +1,5 @@
 #include "FFmpegDecoder.h"
+#include "FFmpegFileInput.h"
 
 #include "FFmpegDecoderUtils.h"
 #include "FFmpegDsdRate.h"
@@ -239,6 +240,7 @@ struct FFmpegDecoder::Impl {
 
 #if defined(TAE_HAS_FFMPEG)
   AVFormatContext* formatContext = nullptr;
+  FFmpegFileInput fileInput;
   AVCodecContext* codecContext = nullptr;
   AVPacket* packet = nullptr;
   AVFrame* frame = nullptr;
@@ -321,6 +323,7 @@ struct FFmpegDecoder::Impl {
     if (formatContext) {
       avformat_close_input(&formatContext);
     }
+    fileInput.close();
     audioStreamIndex = -1;
     inputEof = false;
     resamplerFlushed = false;
@@ -494,6 +497,9 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
   close();
 
 #if defined(TAE_HAS_FFMPEG)
+  // Every failed open must release its partially allocated IO and decoder.
+  const auto cleanup = [](Impl* impl) { impl->close(); };
+  std::unique_ptr<Impl, decltype(cleanup)> failedOpen(impl_.get(), cleanup);
   if (sourceLooksSacdIso(source)) {
     const SacdIsoEntryProbe probe = probeSacdIsoEntry(source);
     const SacdDstProviderSelection dstProvider = selectSacdDstProvider(avcodec_find_decoder_by_name(kSacdDstCodecName) != nullptr, nullptr);
@@ -545,13 +551,18 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
   const AVInputFormat* inputFormat = nullptr;
   if (!looksHttp && (extensionOf(source) == "wav" || extensionOf(source) == "wave")) {
     std::array<char, 12> header{};
-    std::ifstream input(utf8Path(source), std::ios::binary);
+    SharedInputFile input(utf8Path(source), std::ios::binary);
     input.read(header.data(), header.size());
     if (input.gcount() == static_cast<std::streamsize>(header.size()) &&
         (std::memcmp(header.data(), "RIFF", 4) == 0 || std::memcmp(header.data(), "RF64", 4) == 0 ||
          std::memcmp(header.data(), "RIFX", 4) == 0) && std::memcmp(header.data() + 8, "WAVE", 4) == 0) {
       inputFormat = av_find_input_format("wav");
     }
+  }
+  if (!impl_->fileInput.open(source, &impl_->formatContext)) {
+    av_dict_free(&openOptions);
+    if (error) *error = "无法打开本地音频文件";
+    return false;
   }
   int ret = avformat_open_input(&impl_->formatContext, source.c_str(), inputFormat, &openOptions);
   av_dict_free(&openOptions);
@@ -663,7 +674,9 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     defaultOutput.bitDepth = 32;
     defaultOutput.sampleFormat = AudioSampleFormat::Float32Interleaved;
   }
-  return setOutputFormat(defaultOutput, error);
+  if (!setOutputFormat(defaultOutput, error)) return false;
+  failedOpen.release();
+  return true;
 #else
   (void)source;
   if (error) *error = "当前构建未启用音频解码支持";

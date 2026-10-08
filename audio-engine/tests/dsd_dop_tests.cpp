@@ -671,6 +671,25 @@ void testDsfReader() {
   std::filesystem::remove(path);
 }
 
+void testOpenDsdReaderAllowsFileRenameAndDeletion() {
+  const auto path = writeDsfFixture("twilight-dsd-file-sharing.dsf");
+  DsdReader reader;
+  std::string error;
+  assert(reader.open(path.string(), &error));
+  auto renamed = path;
+  renamed += ".renamed.dsf";
+  std::error_code fsError;
+  std::filesystem::rename(path, renamed, fsError);
+  assert(!fsError);
+  assert(std::filesystem::remove(renamed, fsError));
+  assert(!fsError);
+  assert(reader.seek(0.0, &error));
+  std::array<uint8_t, 16> bytes{};
+  assert(reader.readBytes(bytes.data(), bytes.size()) == bytes.size());
+  assert(bytes[0] == 0x11);
+  reader.close();
+}
+
 void testDsfSeekAlignsToPlanarBlockBoundary() {
   const auto path = writeTwoBlockDsfFixture("twilight-dsd-reader-seek-planar-block.dsf");
   DsdReader reader;
@@ -1051,6 +1070,26 @@ void testSacdIsoDemuxerTracksAndSeek() {
     std::error_code ignored;
     std::filesystem::remove(iso, ignored);
   }
+}
+
+void testOpenSacdDemuxerAllowsFileRenameAndDeletion() {
+  const auto path = writeSacdIsoFixture("twilight-sacd-file-sharing.iso");
+  SacdIsoDemuxer demuxer;
+  std::string error;
+  assert(demuxer.open(path.string(), &error));
+  assert(demuxer.selectTrack("stereo", 1, &error));
+  auto renamed = path;
+  renamed += ".renamed.iso";
+  std::error_code fsError;
+  std::filesystem::rename(path, renamed, fsError);
+  assert(!fsError);
+  assert(std::filesystem::remove(renamed, fsError));
+  assert(!fsError);
+  assert(demuxer.seek(0.0, &error));
+  std::array<uint8_t, 8> bytes{};
+  assert(demuxer.readBytes(bytes.data(), bytes.size()) == bytes.size());
+  assert(bytes[0] == 0x80);
+  demuxer.close();
 }
 
 class RejectingDstProvider final : public SacdDstProvider {
@@ -1766,6 +1805,7 @@ int main() {
   testSacdIsoByteScratchResizePreservesSameSizedScratch();
   testSacdDstDecodePathDoesNotPreclearDecodedFrameBuffer();
   testDsfReader();
+  testOpenDsdReaderAllowsFileRenameAndDeletion();
   testDsfSeekAlignsToPlanarBlockBoundary();
   testDsfReaderRejectsBlockSizeLargerThanDataChunk();
   testDffReader();
@@ -1784,6 +1824,7 @@ int main() {
   testDopPackerInt24In32();
   testSacdIsoProbePlayableEntry();
   testSacdIsoDemuxerTracksAndSeek();
+  testOpenSacdDemuxerAllowsFileRenameAndDeletion();
   testSacdDstProviderSelection();
   testSacdDstTrackPlayableWithProvider();
   testSacdDstReadBytesDrainsOnlyDecodedBytes();

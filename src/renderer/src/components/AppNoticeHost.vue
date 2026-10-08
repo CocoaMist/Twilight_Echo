@@ -23,6 +23,8 @@ const {
   noticeHistory,
   centerOpen: historyOpen,
   activeTaskCount,
+  doNotDisturb,
+  setDoNotDisturb,
   dismissNotice,
   pauseNotice,
   resumeNotice,
@@ -147,7 +149,7 @@ defineExpose({ historyOpen, toggleHistory })
 
 <template>
   <TransitionGroup
-    v-show="!historyOpen"
+    v-show="!historyOpen && !doNotDisturb"
     tag="div"
     name="app-notice"
     class="app-notice-host"
@@ -218,6 +220,27 @@ defineExpose({ historyOpen, toggleHistory })
           <i class="pi pi-times" aria-hidden="true"></i>
         </button>
       </header>
+      <div class="notice-dnd">
+        <div class="notice-dnd-copy">
+          <span class="notice-dnd-label">勿扰模式</span>
+          <p id="notice-dnd-description">
+            {{
+              doNotDisturb ? '已开启 · 通知静默保留，不弹出提醒' : '开启后不弹出提醒，通知仍会保留'
+            }}
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          class="notice-dnd-switch"
+          aria-label="勿扰模式"
+          aria-describedby="notice-dnd-description"
+          :aria-checked="doNotDisturb"
+          @click="setDoNotDisturb(!doNotDisturb)"
+        >
+          <span aria-hidden="true"></span>
+        </button>
+      </div>
       <div class="notice-filters" role="group" aria-label="筛选任务与通知">
         <button
           v-for="item in [
@@ -487,6 +510,52 @@ button:focus-visible {
   font-size: 11px;
   color: var(--notice-muted);
 }
+.notice-dnd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--notice-border);
+}
+.notice-dnd-copy {
+  min-width: 0;
+}
+.notice-dnd-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.notice-dnd-copy p {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--notice-muted);
+}
+.notice-dnd-switch {
+  display: flex;
+  align-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 3px;
+  border: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--notice-muted) 35%, transparent);
+  cursor: pointer;
+}
+.notice-dnd-switch[aria-checked='true'] {
+  justify-content: flex-end;
+  background: var(--notice-accent);
+}
+.notice-dnd-switch span {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px #00000021;
+}
 .notice-history-body {
   overflow-x: hidden;
   overflow-y: auto;
@@ -722,6 +791,14 @@ button:focus-visible {
     padding-block: 12px;
   }
   .notice-history-header p {
+    display: none;
+  }
+  .notice-dnd,
+  .notice-filters,
+  .notice-history-footer {
+    padding-block: 8px;
+  }
+  .notice-dnd-copy p {
     display: none;
   }
   .notice-empty {

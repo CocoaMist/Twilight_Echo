@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PlayerControlIcon from '@renderer/components/player-bar/PlayerControlIcon.vue'
+import { clampVolumePercent, createVolumeWheelStepper } from './player-bar/volumeWheel'
 import type { Track } from '@renderer/types/music'
 import { ref, computed, onMounted, onBeforeUnmount, watch, type ComponentPublicInstance } from 'vue'
 import { usePlayerStore } from '../stores/usePlayerStore'
@@ -157,6 +158,7 @@ const {
   queueSessions,
   toggleExclusiveMode,
   formatTime,
+  setVolume,
   setUnityVolume,
   configureSleepTimer,
   cancelSleepTimer,
@@ -600,12 +602,12 @@ function clampVolume(value: number): number {
   return Math.min(1, Math.max(0, value))
 }
 
+const consumeVolumeWheel = createVolumeWheelStepper()
 function onVolumeWheel(event: WheelEvent): void {
+  if (event.ctrlKey) return
   event.preventDefault()
-  // I2: 滚轮只调音量，不再自动弹开音量抽屉（避免悬停误触弹出面板）。
-  // 抽屉已打开时保持打开，便于看到滑杆反馈。
-  const step = event.shiftKey ? 0.01 : 0.04
-  volume.value = clampVolume(volume.value + (event.deltaY < 0 ? step : -step))
+  const steps = consumeVolumeWheel(event)
+  if (steps !== 0) setVolume(clampVolumePercent(volume.value * 100 + steps) / 100)
 }
 
 function onSleepTimerSelectValue(value: string): void {
@@ -758,16 +760,20 @@ function playQueueEntry(queueEntryId: string): void {
   if (index !== -1) playTrackAt(index)
 }
 
-const queueSummaryText = computed(() => {
-  const total = queue.value.length
-  if (total === 0) return '暂无歌曲，从曲库或流媒体加入几首吧'
+const queueDurationMinutes = computed(() => {
   let totalSeconds = 0
   for (const track of queue.value) {
     if (Number.isFinite(track.duration) && track.duration > 0) totalSeconds += track.duration
   }
+  return Math.round(totalSeconds / 60)
+})
+
+const queueSummaryText = computed(() => {
+  const total = queue.value.length
+  if (total === 0) return '暂无歌曲，从曲库或流媒体加入几首吧'
   const position =
     queueIndex.value >= 0 && queueIndex.value < total ? `正在播放第 ${queueIndex.value + 1} 首` : ''
-  const minutes = Math.round(totalSeconds / 60)
+  const minutes = queueDurationMinutes.value
   const durationText =
     minutes < 1
       ? ''

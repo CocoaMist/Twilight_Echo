@@ -73,6 +73,7 @@ import { getStartupSnapshot } from './app/startupSnapshot'
 import { useExtensionRegistry } from './extensions/registry'
 import { syncPluginProviders, useMediaProviders } from './providers'
 import { useAppNavigation } from './app/useAppNavigation'
+import { createNavigationSessionPersistence } from './app/useNavigationSessionPersistence'
 import { useCommandPalette } from '@renderer/app/useCommandPalette.ts'
 import { useBackStack } from './app/useBackStack'
 import { hasDismissLayer } from '@renderer/app/useDismissLayer'
@@ -105,6 +106,7 @@ type TitleSurface = 'default' | 'settings' | 'streaming'
 let idleLoginCheck: IdleTaskHandle | null = null
 
 const navigation = useAppNavigation()
+const navigationPersistence = createNavigationSessionPersistence(navigation)
 const {
   menuOpen,
   showPlayingPage,
@@ -216,9 +218,13 @@ watch(
   { immediate: true }
 )
 const recentPageMounted = ref(false)
-watch(showRecentPage, (visible) => {
-  if (visible) recentPageMounted.value = true
-})
+watch(
+  showRecentPage,
+  (visible) => {
+    if (visible) recentPageMounted.value = true
+  },
+  { immediate: true }
+)
 const showOnboarding = ref(false)
 
 function applyExternalNavigation(target: 'local' | 'streaming' | 'settings'): void {
@@ -293,7 +299,7 @@ function handleStreamingLogin(providerId?: string | null): void {
 }
 
 function handleTitleLogin(providerId?: string | null): void {
-  openLoginPage(providerId ?? 'ncm')
+  openLoginPage(providerId ?? null)
 }
 
 function handleReopenOnboarding(): void {
@@ -678,6 +684,7 @@ async function flushPlaylistsForExit(): Promise<void> {
 }
 
 function flushPendingPersistenceForExit(): void {
+  navigationPersistence.flush()
   flushSaveLibrary()
   // Browser lifecycle events cannot wait for a Promise. The app-close IPC
   // callback below awaits this same flush before the main process closes.
@@ -688,7 +695,7 @@ function flushPendingPersistenceForExit(): void {
 }
 
 onMounted(async () => {
-  const { setupListeningStatsTracking } = await import('@renderer/stores/useListeningStatsStore')
+  const { setupListeningStatsTracking, flushListeningStatsForExit } = await import('@renderer/stores/useListeningStatsStore')
   setupListeningStatsTracking({ currentTrack, isPlaying, currentTime, duration })
   const startupSnapshot = await getStartupSnapshot()
   await bootstrapThemeRuntime(startupSnapshot ?? undefined)
@@ -711,13 +718,14 @@ onMounted(async () => {
     loadedSettings.libraryFolders.length === 0
   if (needsOnboarding) {
     showOnboarding.value = true
-  } else if (!pendingNavigation) {
+  } else if (!pendingNavigation && !navigationPersistence.restored) {
     if (loadedSettings.startupHomePage === 'streaming') {
       // Enter streaming mode immediately if configured — must not block on
       // library/login/extensions which can take 30s+ (provider timeouts).
       enterStreamingMode()
     }
   }
+  navigationPersistence.start()
 
   // Restore the session before loading the potentially large music library.
   // The main-process data handlers use synchronous file reads, so issuing the
@@ -729,10 +737,12 @@ onMounted(async () => {
     })
     .finally(() => {
       removePlaybackSessionSaveListener = window.api.app.onSavePlaybackSession(async () => {
+        navigationPersistence.flush()
         // This callback is awaited by the main-process close coordinator. It
         // closes the 250ms playlist debounce window before renderer teardown.
         await flushPlaylistsForExit()
         await flushSoftwareVolumePersist()
+        await flushListeningStatsForExit()
         await playbackSessionPersistence.savePlaybackSessionForQuit()
         await queueWorkspace.flush()
       })
@@ -745,7 +755,12 @@ onMounted(async () => {
   const playlistsPromise = loadPlaylists().catch((error) =>
     reportStartupDataError('playlists', error)
   )
-  const extensionsPromise = syncExtensions()
+  const extensionsPromise = syncExtensions().then(() => {
+    navigationPersistence.resolvePluginPages([
+      ...availablePluginPages.value,
+      ...localSidebarItems.value
+    ])
+  })
   if (loadedSettings.autoCheckLogin) {
     idleLoginCheck = scheduleIdleTask(() => {
       idleLoginCheck = null
@@ -878,6 +893,7 @@ watch([availablePluginPages, localSidebarItems], ([pages, local]) =>
 )
 
 onBeforeUnmount(() => {
+  navigationPersistence.stop()
   idleLoginCheck?.cancel()
   idleLoginCheck = null
   playbackSessionPersistence.stop()
@@ -1059,7 +1075,6 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         <StreamingPage
           v-for="tab in streamingPageTabs"
           :key="tab"
-          v-show="showStreamingSurface && streamingTab === tab"
           :active="showStreamingSurface && streamingTab === tab"
           :menu-open="menuOpen && showLocalSidebar"
           :has-player="hasPlayerBar"
@@ -1098,6 +1113,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
           <ThemeStudioPage
             v-if="showThemeStudioPage"
             :initial-domain="themeStudioInitialDomain"
+            @domain-change="navigation.rememberThemeStudioDomain"
             @back="closeThemeStudioPage"
           />
         </Transition>
@@ -1159,6 +1175,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         v-if="showSettingsPage"
         :initial-section="settingsInitialSection"
         :navigation-target="settingsNavigationTarget"
+        @section-change="navigation.rememberSettingsSection"
         @open-equalizer="openEqualizerPage"
         @open-dsp-rack="openDspRackPage"
         @open-theme-studio="openThemeStudioPage"

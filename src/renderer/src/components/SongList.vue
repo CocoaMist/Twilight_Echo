@@ -30,6 +30,7 @@ import {
   useListeningStatsStore
 } from '../stores/useListeningStatsStore'
 import type { Track } from '../types/music'
+import { copyTrackNames } from '../utils/copyTrackNames'
 import { resolveUnifiedRecentTracks } from '../utils/unifiedRecentTracks'
 import { getTrackSearchBlob, normalizeSearchText } from '../utils/localLibrarySearch'
 import { getTrackSource as getLogicalTrackSource } from '../utils/logicalTrackModel'
@@ -1071,6 +1072,13 @@ const contextActionCount = computed(() => contextActionTracks.value.length)
 const contextActionLabel = computed(() =>
   contextActionCount.value > 1 ? ` (${contextActionCount.value})` : ''
 )
+
+async function handleContextCopyTrackNames(): Promise<void> {
+  const tracks = contextActionTracks.value
+  closeContextMenu()
+  await copyTrackNames(tracks)
+}
+
 const contextAllFavorited = computed(() => {
   const targets = contextActionTracks.value
   return targets.length > 0 && targets.every((track) => isFavoriteTrack(track))
@@ -2447,6 +2455,18 @@ function finishViewSwitchAndRestoreScroll(): void {
                 >
                   <i class="pi pi-step-forward"></i>
                   <span>下一首播放</span>
+                </div>
+                <div
+                  class="menu-item"
+                  role="menuitem"
+                  tabindex="0"
+                  data-te-interactive
+                  @click="handleContextCopyTrackNames"
+                  @keydown.enter.prevent="handleContextCopyTrackNames"
+                  @keydown.space.prevent="handleContextCopyTrackNames"
+                >
+                  <i class="pi pi-copy"></i>
+                  <span>复制歌曲名-作者{{ contextActionLabel }}</span>
                 </div>
                 <div
                   v-if="

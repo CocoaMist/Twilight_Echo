@@ -77,6 +77,28 @@ int main() {
   processor.reset();
   const auto silent = render(processor, std::vector<float>(input.size(), 0.0f), {1024});
   for (float value : silent) assert(std::abs(value) < .000001);
+  processor.reset();
+  // Reconfiguration outside this processor and same-format prepare must not
+  // erase the pending convolution tail.
+  std::vector<float> first(32, 0); first[0] = .5f;
+  processor.process(first.data(), first.size());
+  config.eqPreampDb = 3;
+  processor.configure(config); processor.prepare(format);
+  std::vector<float> tail(512, 0);
+  processor.process(tail.data(), tail.size());
+  assert(std::abs(tail[32] - .5f * impulse[0]) < .00002);
+  // Clones share immutable preparation, but do not inherit runtime history.
+  ConvolverProcessor clone; clone.configure(config); clone.prepare(format);
+  assert(clone.loadImpulseResponse(path.string(), &error));
+  const auto independent = render(clone, std::vector<float>(1024, 0), {17, 127});
+  for (float value : independent) assert(std::abs(value) < .000001);
+  impulse[0] = .8f;
+  writeImpulse(path, impulse);
+  std::filesystem::last_write_time(path, std::filesystem::last_write_time(path) + std::chrono::seconds(1));
+  assert(clone.loadImpulseResponse(path.string(), &error));
+  std::vector<float> changed(512, 0); changed[0] = .5f;
+  const auto reloaded = render(clone, changed, {64});
+  assert(std::abs(reloaded[64] - .4f) < .00002);
   std::filesystem::remove(path);
   std::cout << "convolver reference, tier boundaries, fragmentation, reset and periodic budget tests passed\n";
 }

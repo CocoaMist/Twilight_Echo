@@ -4231,6 +4231,104 @@ test('audio service next waits for Next ack before falling back to Play', async 
   manager.destroy()
 })
 
+test('a delayed startup play cannot replace the song selected by next', async (t) => {
+  const native = new FakeNativeBinding()
+  const manager = makeManager(
+    {
+      exclusiveMode: false,
+      audioOutput: 'wasapi',
+      audioDevice: 'auto',
+      audioProcessing: { dspEnabled: true, volumeNormalization: 'loudnorm' }
+    },
+    native
+  )
+  t.after(() => manager.destroy())
+  const queue = [
+    { id: '1', source: 'first.flac' },
+    { id: '2', source: 'second.flac' }
+  ]
+  await manager.loadQueue(queue, 0)
+  let releaseLookup!: (value: null) => void
+  manager.setLoudnessAnalysisManager({
+    peekCached: ({ filePath }: { filePath: string }) =>
+      filePath === queue[0].source
+        ? new Promise((resolve) => {
+            releaseLookup = resolve
+          })
+        : Promise.resolve(null),
+    cancel() {},
+    requestAnalysis: async () => ({ status: 'skipped', reason: 'cancelled' })
+  } as never)
+
+  const startupPlay = manager.play(queue[0].source)
+  await manager.next()
+  releaseLookup(null)
+  assert.equal((await startupPlay).superseded, true)
+
+  assert.deepEqual(
+    native.playCalls.map((call) => call.source),
+    ['second.flac']
+  )
+  assert.equal(native.playbackInfo.source, 'second.flac')
+  assert.equal((await manager.getPlaybackInfo()).source, 'second.flac')
+})
+
+test('a delayed Play acknowledgement cannot publish the previous song after next', async (t) => {
+  const service = new FakeAudioServiceBinding()
+  const manager = new AudioEngineManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    {
+      audioServiceFactory: () => service,
+      scheduler: TEST_SCHEDULER,
+      deviceOptionsProvider: () => DEVICE_OPTIONS
+    }
+  )
+  t.after(() => manager.destroy())
+  const queue = [
+    { id: '1', source: 'first.flac' },
+    { id: '2', source: 'second.flac' }
+  ]
+  await manager.loadQueue(queue, 0)
+  service.Play = (source = '', startTime = 0) => {
+    service.playCalls += 1
+    service.playbackInfo = makePlaybackInfo({
+      state: 'playing',
+      source,
+      position: startTime,
+      queueIndex: service.queueIndex,
+      nativePlaybackActive: true
+    })
+  }
+  let releaseAck!: () => void
+  let notifyStarted!: () => void
+  const ack = new Promise<void>((resolve) => {
+    releaseAck = resolve
+  })
+  const started = new Promise<void>((resolve) => {
+    notifyStarted = resolve
+  })
+  const originalCall = service.callAsync.bind(service)
+  service.callAsync = async (method, args) => {
+    const result = await originalCall(method, args)
+    if (method === 'Play' && args[0] === queue[0].source) {
+      notifyStarted()
+      await ack
+    }
+    return result
+  }
+  const startupPlay = manager.play(queue[0].source)
+  await started
+  await manager.next()
+  const publishedSources: string[] = []
+  manager.on('playback-info', (info) => publishedSources.push(info.source))
+  releaseAck()
+  assert.equal((await startupPlay).superseded, true)
+
+  assert.equal(service.playbackInfo.source, 'second.flac')
+  assert.equal((await manager.getPlaybackInfo()).source, 'second.flac')
+  assert.deepEqual(publishedSources, [])
+})
+
 for (const [direction, startIndex, targetIndex] of [
   ['next', 0, 1],
   ['previous', 1, 0]

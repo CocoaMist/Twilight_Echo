@@ -56,6 +56,10 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
     '音频引擎报告了未收录的原因代码 {code}。这通常说明引擎版本比界面新；请导出音频诊断报告反馈。',
 
   // ── 播放控制 ──────────────────────────────────────────────────────────────
+  'audio.reason.pause_fade_active.label': '暂停淡出',
+  'audio.reason.pause_fade_active.explain':
+    '暂停时声音在 200 毫秒内逐渐减弱；这段过渡会临时改变样本，继续播放后恢复原来的音量与输出状态。',
+  'audio.reason.pause_fade_active.fix': '',
   'audio.reason.volume_not_unity.label': '软件音量不是 100%',
   'audio.reason.volume_not_unity.explain':
     '软件音量会逐样本乘一个小于 1 的系数，样本值因此改变。默认 70% 是为了保护听感，但 bit-perfect 要求 Unity（100%）。',

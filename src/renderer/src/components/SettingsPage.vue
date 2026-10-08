@@ -58,6 +58,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  sectionChange: [section: SectionKey]
   openEqualizer: []
   openDspRack: []
   openThemeStudio: []
@@ -78,6 +79,7 @@ const importSettingsInputRef = ref<HTMLInputElement | null>(null)
 const shortcutStatuses = ref<PlayerShortcutStatus[]>([])
 
 const activeSection = ref<SectionKey>(props.initialSection ?? 'general')
+watch(activeSection, (section) => emit('sectionChange', section), { flush: 'sync' })
 const pageRef = ref<HTMLElement | null>(null)
 
 function setNavigationPressOrigin(event: PointerEvent): void {
