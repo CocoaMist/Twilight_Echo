@@ -1771,7 +1771,13 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
 
   const cachedStreamEntry = force ? null : streamUrlCache.get(cacheKey)
   if (cachedStreamEntry) {
-    if (cachedStreamEntry.expiresAt > Date.now()) return cachedStreamEntry.url
+    if (cachedStreamEntry.expiresAt > Date.now()) {
+      if (/^https?:\/\//i.test(cachedStreamEntry.url)) return cachedStreamEntry.url
+      // A completed download replaces the memory entry with a disk path.
+      // Clearing/moving the managed cache must invalidate that entry too.
+      const cachedPath = await ncmApi.getCachedSong(songId).catch(() => null)
+      if (cachedPath === cachedStreamEntry.url) return cachedPath
+    }
     streamUrlCache.delete(cacheKey)
   }
 

@@ -687,6 +687,41 @@ test('revalidates legacy disk cache through the current account before playback'
   }
 })
 
+test('a memory-cached disk path is revalidated after the managed cache is cleared', async () => {
+  const cachedPath = 'D:\\Cache\\ncm-cache\\190.flac'
+  let present = true,
+    networkCalls = 0
+  const provider = await activateProvider(
+    async () => {
+      networkCalls++
+      return {
+        code: 200,
+        data: [{ id: 190, url: `https://music.example/190.flac?v=${networkCalls}`, code: 200 }]
+      }
+    },
+    undefined,
+    {
+      ncm: {
+        getCachedSong: async () => (present ? cachedPath : null),
+        cacheSong: async () => (present ? cachedPath : null)
+      }
+    }
+  )
+  try {
+    await provider.getPlaybackUrl({ id: 'ncm:190' })
+    await new Promise(setImmediate)
+    assert.equal(await provider.getPlaybackUrl({ id: 'ncm:190' }), cachedPath)
+    present = false
+    assert.equal(
+      await provider.getPlaybackUrl({ id: 'ncm:190' }),
+      'https://music.example/190.flac?v=2'
+    )
+    assert.equal(networkCalls, 2)
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
 test('playback URL memory cache expires after its TTL and re-resolves', async () => {
   let requestNumber = 0
   const provider = await activateProvider(async (path) => {
