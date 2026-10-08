@@ -1,7 +1,7 @@
 /**
  * Idle bookkeeping for plugin host processes.
  *
- * A JS plugin's utility process only needs to exist while something talks to
+ * A pure provider's utility process only needs to exist while something talks to
  * it: a provider call, a UI command, or an event it subscribed to. Between
  * those moments the process is a resident Node instance doing nothing. The
  * tracker arms one timer per plugin, resets it on every activity, and asks
