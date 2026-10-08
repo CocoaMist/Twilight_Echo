@@ -25,11 +25,12 @@ import {
 test('surface material normalization only accepts known values', () => {
   assert.equal(normalizeSurfaceMaterial('liquidGlass'), 'liquidGlass')
   assert.equal(normalizeSurfaceMaterial('standard'), 'standard')
+  assert.equal(normalizeSurfaceMaterial('transparent'), 'transparent')
   assert.equal(normalizeSurfaceMaterial('LiquidGlass'), 'standard')
   assert.equal(normalizeSurfaceMaterial(undefined), 'standard')
   assert.equal(normalizeSurfaceMaterial(null), 'standard')
   assert.equal(normalizeSurfaceMaterial(1), 'standard')
-  assert.deepEqual([...SURFACE_MATERIALS], ['standard', 'liquidGlass'])
+  assert.deepEqual([...SURFACE_MATERIALS], ['standard', 'transparent', 'liquidGlass'])
 })
 
 test('clear glass selector is restricted to the media-rich dashboard hero', () => {

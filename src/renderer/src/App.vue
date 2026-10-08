@@ -13,6 +13,14 @@ import {
   defineAsyncComponent
 } from 'vue'
 import TitleBar from './components/TitleBar.vue'
+import AppBackgroundLayer from './components/AppBackgroundLayer.vue'
+import {
+  appearanceEditorOpen,
+  appearanceFullWindowPreview
+} from './composables/appearanceEditorState.ts'
+const BackgroundAppearanceCustomizer = defineAsyncComponent(
+  () => import('./components/BackgroundAppearanceCustomizer.vue')
+)
 const SideMenu = defineAsyncComponent(() => import('@renderer/components/SideMenu.vue'))
 import {
   buildNavigationPages,
@@ -398,7 +406,7 @@ const {
   visualizerActive
 } = usePlayerStore()
 useDesktopLyricsPublisher()
-const { setAdaptiveMedia } = useThemeStore()
+const { setAdaptiveMedia, effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
 const mediaProviders = useMediaProviders()
 const navigationProviders = useProviderStore()
 const commandPalette = useCommandPalette(navigation, () => navigationPages.value)
@@ -543,7 +551,7 @@ const hasPlayerBar = computed(
   () =>
     !showOnboarding.value &&
     !showLoginPage.value &&
-    !showSettingsPage.value &&
+    (!showSettingsPage.value || appearanceFullWindowPreview.value) &&
     !showThemeStudioPage.value &&
     !showEqualizerPage.value &&
     !showDspRackPage.value &&
@@ -565,7 +573,7 @@ const showLocalSidebar = computed(
   () =>
     !showPlayingPage.value &&
     !showLoginPage.value &&
-    !showSettingsPage.value &&
+    (!showSettingsPage.value || appearanceFullWindowPreview.value) &&
     !showThemeStudioPage.value &&
     !showEqualizerPage.value &&
     !showDspRackPage.value &&
@@ -841,33 +849,12 @@ watch(
 )
 
 watch(
-  showSettingsPage,
-  (visible) => {
+  [showSettingsPage, showPluginPage, showThemeStudioPage, appearanceFullWindowPreview],
+  () => {
     document.body.classList.toggle(
       'te-settings-surface',
-      visible || showPluginPage.value || showThemeStudioPage.value
-    )
-  },
-  { immediate: true }
-)
-
-watch(
-  showPluginPage,
-  (visible) => {
-    document.body.classList.toggle(
-      'te-settings-surface',
-      visible || showSettingsPage.value || showThemeStudioPage.value
-    )
-  },
-  { immediate: true }
-)
-
-watch(
-  showThemeStudioPage,
-  (visible) => {
-    document.body.classList.toggle(
-      'te-settings-surface',
-      visible || showSettingsPage.value || showPluginPage.value
+      !appearanceFullWindowPreview.value &&
+        (showSettingsPage.value || showPluginPage.value || showThemeStudioPage.value)
     )
   },
   { immediate: true }
@@ -924,7 +911,7 @@ onBeforeUnmount(() => {
 const coverTransformOrigin = computed(() => `${coverOrigin.value.x}px ${coverOrigin.value.y}px`)
 const titleSurface = computed<TitleSurface>(() => {
   if (showPlayingPage.value) return 'default'
-  if (showSettingsPage.value) return 'settings'
+  if (showSettingsPage.value && !appearanceFullWindowPreview.value) return 'settings'
   if (showThemeStudioPage.value) return 'settings'
   if (showPluginPage.value) return 'settings'
   if (showStreamingPage.value) return 'streaming'
@@ -934,15 +921,18 @@ const titleSurface = computed<TitleSurface>(() => {
 })
 const liquidGlassChromeActive = computed(
   () =>
-    settings.value.surfaceMaterial === 'liquidGlass' || settings.value.liquidGlass.navigationEnabled
+    effectiveSurfaceMaterial.value !== 'transparent' &&
+    (effectiveSurfaceMaterial.value === 'liquidGlass' ||
+      effectiveLiquidGlass.value.navigationEnabled)
 )
 const liquidGlassActive = computed(
   () =>
-    liquidGlassChromeActive.value ||
-    settings.value.liquidGlass.homeCards.enabled ||
-    settings.value.liquidGlass.playbarEnabled ||
-    settings.value.liquidGlass.settingsNavigationEnabled ||
-    settings.value.liquidGlass.coverage === 'expanded'
+    effectiveSurfaceMaterial.value !== 'transparent' &&
+    (liquidGlassChromeActive.value ||
+      effectiveLiquidGlass.value.homeCards.enabled ||
+      effectiveLiquidGlass.value.playbarEnabled ||
+      effectiveLiquidGlass.value.settingsNavigationEnabled ||
+      effectiveLiquidGlass.value.coverage === 'expanded')
 )
 const liquidGlassBackgroundPage = computed<AppBackgroundPage>(() => {
   if (showPlayingPage.value) return 'player'
@@ -963,8 +953,10 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
 </script>
 
 <template>
+  <AppBackgroundLayer :page="showStreamingSurface ? 'streaming' : 'local'" />
   <div
     class="app-shell"
+    :inert="appearanceFullWindowPreview"
     :style="{
       '--te-side-menu-bottom': `${sideMenuBottomOffset}px`,
       '--te-side-menu-tools-clearance': `${sideMenuToolsClearance}px`
@@ -972,9 +964,13 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
   >
     <LiquidGlassDefs
       :active="liquidGlassActive"
-      :follow-pointer="settings.liquidGlass.followPointer"
-      :home-cards-active="settings.liquidGlass.homeCards.enabled"
-      :expanded-active="settings.liquidGlass.coverage === 'expanded'"
+      :follow-pointer="effectiveLiquidGlass.followPointer"
+      :home-cards-active="
+        effectiveSurfaceMaterial !== 'transparent' && effectiveLiquidGlass.homeCards.enabled
+      "
+      :expanded-active="
+        effectiveSurfaceMaterial !== 'transparent' && effectiveLiquidGlass.coverage === 'expanded'
+      "
     />
     <div class="app-shell-title">
       <TitleBar
@@ -1168,8 +1164,10 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
   </div>
   <div
     class="settings-overlay-root"
+    v-show="!appearanceFullWindowPreview"
     :class="{ 'settings-overlay-root--active': showSettingsPage || showPluginPage }"
   >
+    <AppBackgroundLayer page="settings" embedded />
     <Transition name="settings-page">
       <SettingsPage
         v-if="showSettingsPage"
@@ -1227,6 +1225,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     ref="noticeHostRef"
     @library="selectSidebarPage({ kind: 'local', category: 'allSongs', filter: null })"
   />
+  <BackgroundAppearanceCustomizer v-if="appearanceEditorOpen" />
 </template>
 
 <style>

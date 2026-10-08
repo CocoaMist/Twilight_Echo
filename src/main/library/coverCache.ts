@@ -64,6 +64,9 @@ export function importBackgroundImageBuffer(fileName: string, data: Buffer): str
   if (data.byteLength > MAX_BACKGROUND_IMAGE_BYTES) {
     throw new Error('背景图片过大')
   }
+  if (nativeImage.createFromBuffer(data).isEmpty()) {
+    throw new Error('无法解码背景图片，请选择有效的 JPG、PNG 或 WebP 文件')
+  }
   const hash = createHash('sha256').update(data).digest('hex').slice(0, 24)
   const targetName = `${hash}${ext === '.jpeg' ? '.jpg' : ext}`
   const targetPath = join(ensureBackgroundImageDir(), targetName)

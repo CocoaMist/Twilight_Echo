@@ -7,8 +7,6 @@ import BackgroundEditorSettings from './BackgroundEditorSettings.vue'
 import LyricsStyleSettings from './LyricsStyleSettings.vue'
 import PlayerBarSettings from './PlayerBarSettings.vue'
 import PlayerBarLayoutSettings from './PlayerBarLayoutSettings.vue'
-import LiquidGlassSettings from './LiquidGlassSettings.vue'
-import CardAppearanceSettings from './CardAppearanceSettings.vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { fontFamilyOptions, uiDensityOptions, type BooleanSettingKey } from './types.ts'
 import { normalizeAppFontFamily } from '../../../../shared/appFont.ts'
@@ -109,10 +107,6 @@ function toggleSetting(key: BooleanSettingKey): void {
       <PlayerBarSettings />
       <hr />
       <PlayerBarLayoutSettings />
-      <hr />
-      <LiquidGlassSettings />
-      <hr />
-      <CardAppearanceSettings />
     </div>
   </section>
 </template>

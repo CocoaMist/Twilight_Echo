@@ -299,6 +299,7 @@ export const playerBarPageVisibilityOptions: { value: PlayerBarPageVisibility; l
 export { GITHUB_URL, HOMEPAGE_URL, RELEASES_URL } from '../../../../shared/projectUrls.ts'
 
 export interface SettingsSearchEntry {
+  appearanceArea?: 'background' | 'material' | 'advanced'
   /** 所属设置分区 */
   section: SectionKey
   /** 结果展示标题（设置项名称） */
@@ -517,7 +518,30 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
     { section: 'appearance', title: '插件主题', terms: '插件 主题 plugin theme 扩展' },
     { section: 'appearance', title: '浅色强调色', terms: '强调色 accent 浅色 颜色 主题' },
     { section: 'appearance', title: '深色强调色', terms: '强调色 accent 深色 颜色 主题' },
-    { section: 'appearance', title: '自定义背景', terms: '背景 自定义 壁纸 图片 封面' },
+    {
+      section: 'appearance',
+      title: '背景与界面材质',
+      terms: '背景 自定义 壁纸 图片 封面 材质 外观 整合',
+      appearanceArea: 'background'
+    },
+    {
+      section: 'appearance',
+      title: '透明材质',
+      terms: '透明 全透明 文字 通透 图片 皮肤',
+      appearanceArea: 'material'
+    },
+    {
+      section: 'appearance',
+      title: '文字明暗',
+      terms: '字体 文字 颜色 浅色 深色 对比',
+      appearanceArea: 'background'
+    },
+    {
+      section: 'appearance',
+      title: '画面缩放',
+      terms: '图片 背景 缩放 裁切 大小 zoom scale',
+      appearanceArea: 'background'
+    },
     { section: 'appearance', title: '统一背景', terms: '背景 统一 所有 页面 壁纸' },
     { section: 'appearance', title: '页面背景覆盖', terms: '背景 页面 覆盖 独立 壁纸 图片' },
     { section: 'appearance', title: '封面主题色', terms: '封面 主题色 cover 颜色 专辑' },
@@ -750,6 +774,17 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
   ] satisfies SettingsSearchEntry[]
 ).map((entry) => ({
   ...entry,
+  appearanceArea:
+    entry.appearanceArea ??
+    (entry.section === 'appearance'
+      ? /卡片|玻璃高光|高光跟随|启用液态/.test(entry.title)
+        ? 'advanced'
+        : /液态玻璃材质/.test(entry.title)
+          ? 'material'
+          : /背景/.test(entry.title)
+            ? 'background'
+            : undefined
+      : undefined),
   terms: `${sectionTerms[entry.section]} ${entry.terms}`
 }))
 

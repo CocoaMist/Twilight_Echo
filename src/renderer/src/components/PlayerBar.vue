@@ -5,6 +5,7 @@ import type { Track } from '@renderer/types/music'
 import { ref, computed, onMounted, onBeforeUnmount, watch, type ComponentPublicInstance } from 'vue'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
+import { useThemeStore } from '../stores/useThemeStore'
 import { useMusicStore } from '../stores/useMusicStore'
 import { usePlaybackBookmarks } from '../stores/playbackBookmarks'
 import { useLyricsManagement } from '../stores/lyricsManagement'
@@ -252,6 +253,7 @@ const playerBarButtons = computed(() =>
   uiContributions.value.filter((contribution) => contribution.kind === 'playerBarButton')
 )
 const { settings } = useSettingsStore()
+const { effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
 /* Only the standard bar wears the material. Mini and compact are deliberately
    flat control strips, so they opt out entirely rather than wearing it with the
    refracting layer switched off. `.player-bar-liquid` claims `background`,
@@ -262,7 +264,8 @@ const { settings } = useSettingsStore()
 const liquidGlassActive = computed(
   () =>
     isStandard.value &&
-    (settings.value.surfaceMaterial === 'liquidGlass' || settings.value.liquidGlass.playbarEnabled)
+    effectiveSurfaceMaterial.value !== 'transparent' &&
+    (effectiveSurfaceMaterial.value === 'liquidGlass' || effectiveLiquidGlass.value.playbarEnabled)
 )
 /**
  * Which controls this shape puts in each region, resolved through the shared
@@ -1382,7 +1385,7 @@ function motionAllowsPointer(): boolean {
 function syncGlassPointer(): void {
   const shouldTrack =
     liquidGlassActive.value &&
-    settings.value.liquidGlass.followPointer &&
+    effectiveLiquidGlass.value.followPointer &&
     !props.preview &&
     motionAllowsPointer()
 
@@ -1394,9 +1397,9 @@ function syncGlassPointer(): void {
 watch(
   () => [
     liquidGlassActive.value,
-    settings.value.liquidGlass.followPointer,
-    settings.value.liquidGlass.light.elasticity,
-    settings.value.liquidGlass.dark.elasticity,
+    effectiveLiquidGlass.value.followPointer,
+    effectiveLiquidGlass.value.light.elasticity,
+    effectiveLiquidGlass.value.dark.elasticity,
     settings.value.theme
   ],
   () => {

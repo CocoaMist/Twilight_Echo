@@ -32,6 +32,8 @@ export type {
   StreamingAudioCachePolicy,
   AppBackgroundPage,
   AppBackgroundKind,
+  AppBackgroundEffect,
+  BackgroundTextTone,
   AppBackgroundColorPair,
   AppBackgroundPageOverride,
   AppBackgroundSettings,

@@ -1,6 +1,7 @@
 import { normalizeNavigationPagePreferences } from '../../../shared/navigationPages.ts'
 import { DEFAULT_DOWNLOAD_PREFERENCES } from '../../../shared/downloadPreferences.ts'
 import { computed, ref } from 'vue'
+import { normalizeAppBackgroundSettings } from '../../../shared/appAppearance.ts'
 import {
   DEFAULT_MINI_PLAYER_SETTINGS,
   cloneMiniPlayerSettings
@@ -432,6 +433,10 @@ function applySnapshot(snapshot: SettingsSnapshot): void {
       ...(incoming.cachePolicy ?? {})
     },
     navigationPages: normalizeNavigationPagePreferences(incoming.navigationPages),
+    appBackground: normalizeAppBackgroundSettings(
+      incoming.appBackground,
+      incoming.cardAppearance?.background
+    ),
     lyricsAppearance: normalizeLyricsAppearance(incoming.lyricsAppearance),
     lyricsPresets: normalizeLyricsPresetConfig(incoming.lyricsPresets),
     desktopLyrics: normalizeDesktopLyricsSettings(incoming.desktopLyrics, { resetLegacy: false }),

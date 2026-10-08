@@ -4,6 +4,7 @@ import { scrollMotionBehavior } from '../app/scrollMotion'
 import { createSettingsSectionRendering } from './settings-page/settingsSectionRendering'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
+import { openAppearanceEditor } from '../composables/appearanceEditorState.ts'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
 import DspSettingsSection from './settings-page/DspSettingsSection.vue'
 import PerformanceSettingsSection from './settings-page/PerformanceSettingsSection.vue'
@@ -871,6 +872,10 @@ watch([() => props.initialSection, () => props.navigationTarget], applyNavigatio
 function scrollToSearchResult(entry: SettingsSearchEntry): void {
   settingsSearchQuery.value = ''
   activeSection.value = entry.section
+  if (entry.appearanceArea) {
+    openAppearanceEditor(entry.appearanceArea)
+    return
+  }
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       const sectionEl = document.getElementById(entry.section)

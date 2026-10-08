@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import SettingsDisclosure from './SettingsDisclosure.vue'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
-import { useSettingsStore } from '../../stores/useSettingsStore'
+import type { AppearanceDraft } from '../../../../shared/appAppearance.ts'
 import type {
   CardAppearanceSettings,
   CardAppearanceTheme,
@@ -10,10 +10,21 @@ import type {
   CardShadowStrength
 } from '../../types/settings'
 
-const { settings, updateSettings } = useSettingsStore()
+const props = defineProps<{ modelValue: AppearanceDraft; tone?: 'light' | 'dark' }>()
+const emit = defineEmits<{
+  'update:modelValue': [value: AppearanceDraft]
+  'update:tone': [tone: 'light' | 'dark']
+}>()
+const settings = computed(() => props.modelValue)
+function updateSettings(patch: Partial<AppearanceDraft>): void {
+  emit('update:modelValue', { ...props.modelValue, ...patch })
+}
 
-const cardAppearanceOpen = ref(false)
-const cardAppearanceTab = ref<'light' | 'dark'>('light')
+const cardAppearanceOpen = ref(true)
+const cardAppearanceTab = computed({
+  get: () => props.tone ?? 'light',
+  set: (tone: 'light' | 'dark') => emit('update:tone', tone)
+})
 
 const cardShadowOptions: { value: CardShadowStrength; label: string }[] = [
   { value: 'none', label: '无' },
@@ -49,12 +60,6 @@ function toggleCardAppearance(): void {
   void updateSettings({ cardAppearance })
 }
 
-function toggleCardBackgroundEffect(): void {
-  const cardAppearance = cloneCardAppearance()
-  cardAppearance.background.enabled = !cardAppearance.background.enabled
-  void updateSettings({ cardAppearance })
-}
-
 function setCardField<K extends keyof CardAppearanceTheme>(
   field: K,
   value: CardAppearanceTheme[K]
@@ -62,16 +67,6 @@ function setCardField<K extends keyof CardAppearanceTheme>(
   const cardAppearance = cloneCardAppearance()
   const theme = cardAppearanceTab.value
   cardAppearance[theme][field] = value
-  void updateSettings({ cardAppearance })
-}
-
-function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.background.light>(
-  field: K,
-  value: number
-): void {
-  const cardAppearance = cloneCardAppearance()
-  const theme = cardAppearanceTab.value
-  ;(cardAppearance.background[theme] as any)[field] = value
   void updateSettings({ cardAppearance })
 }
 </script>
@@ -85,8 +80,8 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
     @click="cardAppearanceOpen = !cardAppearanceOpen"
   >
     <span class="setting-copy">
-      <strong>卡片与背景自定义</strong>
-      <span>自由调节卡片模糊、颜色、圆角、阴影及背景模糊等外观。</span>
+      <strong>卡片细节</strong>
+      <span>调节卡片模糊、颜色、圆角、阴影和悬停反馈。</span>
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
@@ -95,15 +90,17 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
     <div class="setting-item">
       <div class="setting-copy">
         <strong>启用自定义外观</strong>
-        <span>开启后应用下方卡片与背景效果。</span>
+        <span>标准材质下应用自定义卡片外观。</span>
       </div>
-      <span
+      <button
+        type="button"
+        aria-label="启用自定义外观"
         class="toggle-switch"
         :class="{ active: settings.cardAppearance.enabled }"
         role="switch"
         :aria-checked="settings.cardAppearance.enabled"
         @click="toggleCardAppearance"
-      ></span>
+      ></button>
     </div>
     <div v-if="settings.cardAppearance.enabled">
       <hr />
@@ -352,7 +349,9 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
           <strong>玻璃高光</strong>
           <span>在卡片顶部添加内描边光泽。</span>
         </div>
-        <span
+        <button
+          type="button"
+          aria-label="玻璃高光"
           class="toggle-switch"
           :class="{ active: settings.cardAppearance[cardAppearanceTab].glassHighlight }"
           role="switch"
@@ -363,103 +362,7 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
               !settings.cardAppearance[cardAppearanceTab].glassHighlight
             )
           "
-        ></span>
-      </div>
-      <hr />
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>背景模糊与暗化</strong>
-          <span>对 App 背景图片施加模糊、亮度调节与暗化遮罩。</span>
-        </div>
-        <span
-          class="toggle-switch"
-          :class="{ active: settings.cardAppearance.background.enabled }"
-          role="switch"
-          :aria-checked="settings.cardAppearance.background.enabled"
-          @click="toggleCardBackgroundEffect"
-        ></span>
-      </div>
-      <div v-if="settings.cardAppearance.background.enabled">
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>背景模糊</strong>
-            <span>模糊背景图片的半径。</span>
-          </div>
-          <div class="range-pill">
-            <span>模糊</span>
-            <input
-              class="range-input"
-              type="range"
-              min="0"
-              max="30"
-              :value="settings.cardAppearance.background[cardAppearanceTab].blur"
-              @input="setBgEffectField('blur', Number(($event.target as HTMLInputElement).value))"
-            />
-            <EditableRangeValue
-              :value="settings.cardAppearance.background[cardAppearanceTab].blur"
-              :min="0"
-              :max="30"
-              suffix="px"
-              aria-label="编辑背景模糊度"
-              @change="setBgEffectField('blur', $event)"
-            />
-          </div>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>背景亮度</strong>
-            <span>调暗或提亮背景图片。</span>
-          </div>
-          <div class="range-pill">
-            <span>亮度</span>
-            <input
-              class="range-input"
-              type="range"
-              min="50"
-              max="120"
-              :value="settings.cardAppearance.background[cardAppearanceTab].brightness"
-              @input="
-                setBgEffectField('brightness', Number(($event.target as HTMLInputElement).value))
-              "
-            />
-            <EditableRangeValue
-              :value="settings.cardAppearance.background[cardAppearanceTab].brightness"
-              :min="50"
-              :max="120"
-              suffix="%"
-              aria-label="编辑背景亮度"
-              @change="setBgEffectField('brightness', $event)"
-            />
-          </div>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>背景暗化遮罩</strong>
-            <span>叠加黑色遮罩使前景更突出。</span>
-          </div>
-          <div class="range-pill">
-            <span>暗化</span>
-            <input
-              class="range-input"
-              type="range"
-              min="0"
-              max="80"
-              :value="settings.cardAppearance.background[cardAppearanceTab].dim"
-              @input="setBgEffectField('dim', Number(($event.target as HTMLInputElement).value))"
-            />
-            <EditableRangeValue
-              :value="settings.cardAppearance.background[cardAppearanceTab].dim"
-              :min="0"
-              :max="80"
-              suffix="%"
-              aria-label="编辑背景暗化遮罩"
-              @change="setBgEffectField('dim', $event)"
-            />
-          </div>
-        </div>
+        ></button>
       </div>
     </div>
   </SettingsDisclosure>

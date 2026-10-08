@@ -2,6 +2,7 @@
 @import './fonts.css';
 @import './base.css';
 @import './theme-layouts/index.css';
+@import './appearance.css';
 
 /* Active lyrics are text-led, not cards. Keep this invariant after every
    built-in theme layout so presets cannot restore a glass capsule. */

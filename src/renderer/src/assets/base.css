@@ -1,4 +1,7 @@
 :root {
+  --te-on-accent: #ffffff;
+  --te-appearance-mask: #000000;
+  --te-appearance-preview-cover: linear-gradient(135deg, #39526a, #906376);
   --te-dialog-backdrop: rgba(0, 0, 0, 0.35);
   --te-primary-500: #7c4dff;
   --te-primary-400: #a885f7;
@@ -2640,7 +2643,7 @@ html[data-card-bg-effect='on'] body::after {
 /* ===== Card appearance: custom card surface overrides ===== */
 /* Keep this list to host-owned card/panel surfaces. Controls and nav pills keep
    their local sizing so sliders, selects and buttons do not inherit card radius. */
-html[data-card-custom='on']
+html[data-te-card-custom='on']
   :is(
     .artist-card,
     .album-card,
@@ -2662,7 +2665,7 @@ html[data-card-custom='on']
   -webkit-backdrop-filter: blur(var(--te-card-blur, 20px)) saturate(var(--te-card-saturate, 150%)) !important;
 }
 
-html[data-card-custom='on'] .streaming-sidebar {
+html[data-te-card-custom='on'] .streaming-sidebar {
   background: var(--te-card-bg) !important;
   border-right-color: var(--te-card-border) !important;
   border-right-style: solid !important;
@@ -2673,7 +2676,7 @@ html[data-card-custom='on'] .streaming-sidebar {
 }
 
 /* ===== Card appearance: hover effects ===== */
-html[data-card-custom='on']
+html[data-te-card-custom='on']
   :is(
     .artist-card,
     .album-card,

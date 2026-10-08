@@ -1205,7 +1205,13 @@ export const THEME_MANAGED_DATA_ATTRIBUTES: readonly `data-te-${string}`[] = Obj
   ...THEME_VISIBILITY_SLOT_IDS.map(visibilityDataAttribute),
   ...THEME_SHELL_MANAGED_DATA_ATTRIBUTES,
   'data-te-preset-layout',
-  'data-te-liquid-glass-coverage'
+  'data-te-liquid-glass-coverage',
+  'data-te-surface-material',
+  'data-te-card-custom',
+  ...['app', 'local', 'settings', 'streaming', 'player'].flatMap(
+    (page) =>
+      [`data-te-${page}-custom-background`, `data-te-${page}-text-tone`] as `data-te-${string}`[]
+  )
 ])
 
 export function themeTokensToCssVariables(tokens: Record<string, string>): Record<string, string> {

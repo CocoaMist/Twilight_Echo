@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppBackgroundLayer from './AppBackgroundLayer.vue'
 import {
   computed,
   nextTick,
@@ -671,6 +672,7 @@ onBeforeUnmount(() => {
     :style="{ '--accent-color': dominantColor }"
     @contextmenu.prevent="openAppearanceMenu"
   >
+    <AppBackgroundLayer page="player" embedded />
     <button
       type="button"
       class="visualizer-toggle-button"

@@ -1,4 +1,11 @@
 import { applyExplicitThemePreferences } from '@renderer/extensions/themeProfilePriority'
+import {
+  backgroundCssVariables,
+  backgroundEffect,
+  cardCssVariables,
+  resolveBackground,
+  type AppearanceDraft
+} from '../../../shared/appAppearance.ts'
 import { documentMotionMode } from '@renderer/app/scrollMotion'
 import { sharedPlayerBarStylesheet } from '../../../shared/themePlayerBar.ts'
 import { computed, nextTick, ref, shallowRef } from 'vue'
@@ -106,8 +113,13 @@ let darkAccentColor = 'blue'
 let uiFontFamily: AppFontFamily = APP_FONT_SYSTEM
 let themePreference: AppSettings['theme'] = 'system'
 let appBackground: AppSettings['appBackground'] | null = null
+let cardAppearance: AppSettings['cardAppearance'] | null = null
+let savedAppearance: SettingsAppearanceInput | null = null
+let appearancePreview: AppearanceDraft | null = null
 let surfaceMaterial: SurfaceMaterial = 'standard'
 let liquidGlass: LiquidGlassSettings = DEFAULT_LIQUID_GLASS
+const effectiveSurfaceMaterial = ref<SurfaceMaterial>('standard')
+const effectiveLiquidGlass = shallowRef<LiquidGlassSettings>(DEFAULT_LIQUID_GLASS)
 const LIQUID_GLASS_RUNTIME_VARIABLES = Object.keys(
   liquidGlassCssVariables(DEFAULT_LIQUID_GLASS.light)
 )
@@ -146,22 +158,35 @@ type SettingsAppearanceInput = Pick<
   | 'appBackground'
   | 'surfaceMaterial'
   | 'liquidGlass'
->
+> & { cardAppearance?: AppSettings['cardAppearance'] }
 
 function cacheSettingsAppearance(settings: SettingsAppearanceInput): void {
+  savedAppearance = settings
+  const appearance = appearancePreview ?? settings
   lightAccentColor = settings.lightAccentColor || settings.accentColor || 'blue'
   darkAccentColor = settings.darkAccentColor || settings.accentColor || 'blue'
   uiFontFamily = normalizeAppFontFamily(settings.fontFamily)
-  appBackground = settings.appBackground
-  surfaceMaterial = normalizeSurfaceMaterial(settings.surfaceMaterial)
-  liquidGlass = settings.liquidGlass ?? DEFAULT_LIQUID_GLASS
+  appBackground = appearance.appBackground
+  cardAppearance = appearance.cardAppearance ?? null
+  surfaceMaterial = normalizeSurfaceMaterial(appearance.surfaceMaterial)
+  liquidGlass = appearance.liquidGlass ?? DEFAULT_LIQUID_GLASS
+  effectiveSurfaceMaterial.value = surfaceMaterial
+  effectiveLiquidGlass.value = liquidGlass
   document.documentElement.dataset.density = settings.uiDensity
 }
 
 export function syncThemeSettingsAppearance(settings: SettingsAppearanceInput): void {
   cacheSettingsAppearance(settings)
   applyLiquidGlassRuntimeVariables(resolveTone())
-  if (loaded.value) queueMicrotask(() => void applyActiveTheme(false))
+  if (loaded.value)
+    queueMicrotask(() => void applyActiveTheme(false, appearancePreview ? 'preview' : 'apply'))
+}
+
+/** Transient settings draft; never changes the confirmed snapshot or startup cache. */
+export async function previewAppearance(draft: AppearanceDraft | null): Promise<void> {
+  appearancePreview = draft
+  if (savedAppearance) cacheSettingsAppearance(savedAppearance)
+  await applyActiveTheme(false, draft ? 'preview' : 'apply')
 }
 
 /**
@@ -190,6 +215,10 @@ function applyLiquidGlassRuntimeVariables(tone: ThemeTone): void {
   for (const name of LIQUID_GLASS_RUNTIME_VARIABLES) root.style.removeProperty(name)
   for (const name of HOME_LIQUID_GLASS_RUNTIME_VARIABLES) root.style.removeProperty(name)
   for (const name of EXPANDED_LIQUID_GLASS_RUNTIME_VARIABLES) root.style.removeProperty(name)
+  if (surfaceMaterial === 'transparent') {
+    window.dispatchEvent(new Event(LIQUID_GLASS_TUNING_CHANGED_EVENT))
+    return
+  }
   if (usesSharedLiquidGlassProfile()) {
     const theme = resolveSharedGlassProfileIsDark(tone) ? liquidGlass.dark : liquidGlass.light
     for (const [name, value] of Object.entries(liquidGlassCssVariables(theme))) {
@@ -223,6 +252,7 @@ export function refreshLiquidGlassRuntimeVariables(): void {
 }
 
 function usesSharedLiquidGlassProfile(): boolean {
+  if (surfaceMaterial === 'transparent') return false
   return (
     surfaceMaterial === 'liquidGlass' ||
     liquidGlass.navigationEnabled ||
@@ -435,20 +465,42 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
       const contribution = selectedPluginTheme
       if (!contribution) {
         if (previewSelection.value) throw new Error('当前插件主题不可用')
+        Object.assign(
+          variables,
+          themeTokensToCssVariables(TWILIGHT_DEFAULT_THEME.variants[tone].tokens)
+        )
+        applyAppBackgroundVariables(tone, variables)
+        applySettingsAccentColor(tone, variables)
+        Object.assign(variables, appFontCssVariables(uiFontFamily))
+        applyLiquidGlassVariables(tone, variables)
+        if (cardAppearance?.enabled && surfaceMaterial === 'standard') {
+          Object.assign(
+            variables,
+            cardCssVariables(cardAppearance[tone === 'dark' ? 'dark' : 'light'])
+          )
+        }
         return {
-          css: '',
-          variables: {},
+          css: `:root {\n${Object.entries(variables)
+            .map(([name, value]) => `  ${name}: ${value} !important;`)
+            .join('\n')}\n}`,
+          variables,
           dataAttributes: {
             ...themeModesToDataAttributes(resolveThemeProfileModes(null)),
+            ...appearanceDataAttributes(tone),
             'data-te-preset-layout': presetLayoutKey(TWILIGHT_DEFAULT_THEME_ID),
             'data-te-surface-material': surfaceMaterial,
-            'data-te-liquid-glass-coverage': liquidGlass.coverage,
-            'data-te-home-liquid-glass': liquidGlass.homeCards.enabled ? 'on' : 'off',
-            'data-te-navigation-liquid-glass': liquidGlass.navigationEnabled ? 'on' : 'off',
-            'data-te-playbar-liquid-glass': liquidGlass.playbarEnabled ? 'on' : 'off',
-            'data-te-settings-navigation-liquid-glass': liquidGlass.settingsNavigationEnabled
-              ? 'on'
-              : 'off'
+            'data-te-liquid-glass-coverage':
+              surfaceMaterial === 'transparent' ? 'functional' : liquidGlass.coverage,
+            'data-te-home-liquid-glass':
+              liquidGlass.homeCards.enabled && surfaceMaterial !== 'transparent' ? 'on' : 'off',
+            'data-te-navigation-liquid-glass':
+              liquidGlass.navigationEnabled && surfaceMaterial !== 'transparent' ? 'on' : 'off',
+            'data-te-playbar-liquid-glass':
+              liquidGlass.playbarEnabled && surfaceMaterial !== 'transparent' ? 'on' : 'off',
+            'data-te-settings-navigation-liquid-glass':
+              liquidGlass.settingsNavigationEnabled && surfaceMaterial !== 'transparent'
+                ? 'on'
+                : 'off'
           },
           activeTheme: TWILIGHT_DEFAULT_THEME_ID,
           presetLayout: presetLayoutKey(TWILIGHT_DEFAULT_THEME_ID),
@@ -486,21 +538,28 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
   applyExplicitThemePreferences(selectedProfile, tone, themedVariables, variables)
   if (appBackground) {
     const global = appBackground.global
+    if (global.customized) {
+      variables['--te-app-bg'] = global[tone === 'dark' ? 'dark' : 'light']
+      variables['--te-app-bg-image'] = toBackgroundImageValue(global)
+    }
     if (global.kind === 'image' && global.image) {
       variables['--te-app-bg-image'] = toBackgroundImageValue(global)
     }
     for (const page of APP_BACKGROUND_PAGES) {
       const override = appBackground.pages[page]
       const background = override.inherit ? global : override
-      if (background.kind === 'image' && background.image) {
-        variables[`--te-${page}-bg-image`] = toBackgroundImageValue(background)
-      } else if (!override.inherit) {
+      if (background.customized || !override.inherit) {
         variables[`--te-${page}-bg`] = background[tone === 'dark' ? 'dark' : 'light']
-        variables[`--te-${page}-bg-image`] = 'none'
+        variables[`--te-${page}-bg-image`] = toBackgroundImageValue(background)
+      } else if (background.kind === 'image' && background.image) {
+        variables[`--te-${page}-bg-image`] = toBackgroundImageValue(background)
       }
     }
   }
   applyLiquidGlassVariables(tone, variables)
+  if (cardAppearance?.enabled && surfaceMaterial === 'standard') {
+    Object.assign(variables, cardCssVariables(cardAppearance[tone === 'dark' ? 'dark' : 'light']))
+  }
   const root = Object.entries({ ...themeShellLayoutToCssVariables(shellLayout), ...variables })
     .map(([name, value]) => `  ${name}: ${value} !important;`)
     .join('\n')
@@ -517,16 +576,20 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
     dataAttributes: {
       ...themeModesToDataAttributes(modes),
       ...themeShellLayoutToDataAttributes(shellLayout),
+      ...appearanceDataAttributes(tone),
       'data-te-preset-layout': resolvePresetLayout(selection, selectedProfile),
       // Settings-owned, so it wins over anything a theme profile declares.
       'data-te-surface-material': surfaceMaterial,
-      'data-te-liquid-glass-coverage': liquidGlass.coverage,
-      'data-te-home-liquid-glass': liquidGlass.homeCards.enabled ? 'on' : 'off',
-      'data-te-navigation-liquid-glass': liquidGlass.navigationEnabled ? 'on' : 'off',
-      'data-te-playbar-liquid-glass': liquidGlass.playbarEnabled ? 'on' : 'off',
-      'data-te-settings-navigation-liquid-glass': liquidGlass.settingsNavigationEnabled
-        ? 'on'
-        : 'off'
+      'data-te-liquid-glass-coverage':
+        surfaceMaterial === 'transparent' ? 'functional' : liquidGlass.coverage,
+      'data-te-home-liquid-glass':
+        liquidGlass.homeCards.enabled && surfaceMaterial !== 'transparent' ? 'on' : 'off',
+      'data-te-navigation-liquid-glass':
+        liquidGlass.navigationEnabled && surfaceMaterial !== 'transparent' ? 'on' : 'off',
+      'data-te-playbar-liquid-glass':
+        liquidGlass.playbarEnabled && surfaceMaterial !== 'transparent' ? 'on' : 'off',
+      'data-te-settings-navigation-liquid-glass':
+        liquidGlass.settingsNavigationEnabled && surfaceMaterial !== 'transparent' ? 'on' : 'off'
     },
     activeTheme: activeThemeKey(selection),
     presetLayout: resolvePresetLayout(selection, selectedProfile),
@@ -540,6 +603,7 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
  * Emits shared and homepage-card glass variables only for their active scopes.
  */
 function applyLiquidGlassVariables(tone: ThemeTone, variables: Record<string, string>): void {
+  if (surfaceMaterial === 'transparent') return
   if (usesSharedLiquidGlassProfile()) {
     const theme = tone === 'dark' || liquidGlass.overLight ? liquidGlass.dark : liquidGlass.light
     Object.assign(variables, liquidGlassCssVariables(theme))
@@ -572,6 +636,40 @@ function applyAppBackgroundVariables(tone: ThemeTone, variables: Record<string, 
     variables[`--te-${page}-bg-image`] = toBackgroundImageValue(resolvedBackground)
   }
   variables['--te-streaming-surface'] = 'var(--te-streaming-bg)'
+  for (const page of ['app', ...APP_BACKGROUND_PAGES] as const) {
+    const background = page === 'app' ? globalBackground : resolveBackground(appBackground, page)
+    for (const [name, value] of Object.entries(backgroundCssVariables(background, colorMode))) {
+      variables[`--te-${page}-background-${name.slice('--appearance-'.length)}`] = value
+    }
+  }
+}
+
+function appearanceDataAttributes(tone: ThemeTone): Record<string, string> {
+  const result: Record<string, string> = {
+    'data-te-card-custom': cardAppearance?.enabled && surfaceMaterial === 'standard' ? 'on' : 'off'
+  }
+  if (!appBackground) return result
+  for (const page of ['app', ...APP_BACKGROUND_PAGES] as const) {
+    const background =
+      page === 'app' ? appBackground.global : resolveBackground(appBackground, page)
+    const effect = backgroundEffect(background, tone === 'dark' ? 'dark' : 'light')
+    const hasEffect =
+      effect.blur !== 0 ||
+      effect.dim !== 0 ||
+      effect.brightness !== 100 ||
+      effect.scale !== 1 ||
+      effect.positionX !== 50 ||
+      effect.positionY !== 50
+    result[`data-te-${page}-custom-background`] =
+      background.customized ||
+      (page !== 'app' && !appBackground.pages[page].inherit) ||
+      (background.kind === 'image' && !!background.image) ||
+      hasEffect
+        ? 'on'
+        : 'off'
+    result[`data-te-${page}-text-tone`] = effect.textTone
+  }
+  return result
 }
 
 function toBackgroundImageValue(background: AppBackgroundColorPair): string {
@@ -884,7 +982,7 @@ export async function applyActiveTheme(
     applyLiquidGlassRuntimeVariables(state.tone)
     document.documentElement.dataset.activeTheme = state.activeTheme
     effectiveVariables.value = state.variables
-    if (operation === 'apply') {
+    if (operation === 'apply' && !appearancePreview) {
       persistThemeRuntimeCache({
         css: state.css,
         attributes: state.dataAttributes,
@@ -1088,6 +1186,9 @@ export function useThemeStore() {
 
   return {
     snapshot,
+    effectiveSurfaceMaterial,
+    effectiveLiquidGlass,
+    previewAppearance,
     effectiveVariables,
     profiles,
     activeTheme,
