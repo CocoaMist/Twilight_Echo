@@ -73,11 +73,70 @@
   --te-background-gradient-angle: 135deg;
   --te-background-cover-blur: 28px;
   --te-background-overlay-opacity: 12%;
-  --te-dialog-radius: 8px;
+  --te-dialog-radius: 16px;
   --te-search-radius: 10px;
   --te-toast-radius: 8px;
   --te-track-title-radius: 6px;
   --te-track-title-opacity: 0%;
+  /* ── Unified control primitives (style unification pass) ────────────────
+     Single source of truth for every interactive control: buttons, selects,
+     inputs, switches, badges, menu items and dialogs. Component styles must
+     consume these instead of re-declaring their own radii / heights / paddings.
+     Values derive from the existing semantic + tone tokens, so light/dark and
+     theme presets keep working unchanged. */
+  --te-control-radius-sm: 8px;
+  --te-control-radius-md: var(--te-radius-global); /* 10px */
+  --te-control-radius-lg: 12px;
+  --te-control-radius-pill: 999px;
+  --te-control-height-sm: 28px;
+  --te-control-height-md: 34px;
+  --te-control-height-lg: 40px;
+  --te-control-height-field: 36px;
+  --te-control-pad-x-sm: 10px;
+  --te-control-pad-x-md: 14px;
+  --te-control-pad-x-lg: 18px;
+  --te-control-gap: 8px;
+  --te-control-font-size: var(--te-font-size-body);
+  --te-control-font-size-sm: 12px;
+  --te-control-font-weight: 500;
+  --te-control-font-weight-strong: 600;
+  --te-control-border-width: 1px;
+  --te-control-focus-width: 2px;
+  --te-control-focus-offset: 2px;
+  --te-control-focus-color: var(--te-navigation-indicator, var(--te-primary-500));
+  --te-control-bg: var(--te-card-bg);
+  --te-control-bg-hover: var(--te-hover-bg);
+  --te-control-bg-active: var(--te-active-bg);
+  --te-control-fg: var(--te-shell-control-text);
+  --te-control-fg-muted: var(--te-settings-text-muted);
+  --te-control-border: var(--te-card-border);
+  --te-control-accent: var(--te-primary-500);
+  --te-control-accent-soft: rgba(var(--te-primary-rgb), 0.1);
+  --te-control-accent-line: rgba(var(--te-primary-rgb), 0.22);
+  --te-control-on-accent: #ffffff;
+  --te-control-danger: #dc2626;
+  --te-control-danger-soft: rgba(220, 38, 38, 0.1);
+  /* Switch geometry — shared by .toggle-switch / .deck-switch / .onb-toggle */
+  --te-switch-width: 40px;
+  --te-switch-height: 22px;
+  --te-switch-inset: 3px;
+  --te-switch-thumb: 16px;
+  --te-switch-travel: 18px;
+  --te-switch-width-lg: 48px;
+  --te-switch-height-lg: 28px;
+  --te-switch-inset-lg: 4px;
+  --te-switch-thumb-lg: 20px;
+  --te-switch-travel-lg: 20px;
+  --te-switch-track: var(--te-neutral-300);
+  --te-switch-track-active: var(--te-primary-500);
+  --te-switch-thumb-bg: var(--te-card-bg);
+  --te-switch-thumb-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  /* Badge / pill geometry — shared by .badge / .stat-badge / .pill-action */
+  --te-badge-radius: var(--te-control-radius-pill);
+  --te-badge-pad-x: 8px;
+  --te-badge-pad-y: 2px;
+  --te-badge-font-size: 12px;
+  --te-badge-font-weight: 600;
   --te-local-bg: var(--te-app-bg);
   --te-local-bg-image: var(--te-app-bg-image);
   --te-settings-bg: #f5f6f8;
@@ -890,6 +949,53 @@ textarea {
 
 button {
   letter-spacing: inherit;
+}
+
+/* ── Unified button baselines (style unification pass) ─────────────────
+   Fallback geometry for the shared button families. Component-scoped rules
+   win at higher specificity; these guarantee an unstyled instance of any
+   shared family lands on the same radius / height / padding / focus instead
+   of the UA default. Colours stay per-variant. */
+:where(
+  .primary-button,
+  .ghost-button,
+  .soft-button,
+  .danger-soft-button,
+  .brand-soft-button,
+  .pill-action,
+  .icon-button,
+  .icon-btn,
+  .selection-btn
+) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--te-control-gap);
+  border-radius: var(--te-control-radius-md);
+  font-size: var(--te-control-font-size);
+  font-weight: var(--te-control-font-weight);
+  cursor: pointer;
+}
+
+.primary-button {
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
+  border: var(--te-control-border-width) solid transparent;
+  border-radius: var(--te-control-radius-md);
+  background: var(--te-control-accent);
+  color: var(--te-control-on-accent);
+  font-weight: var(--te-control-font-weight-strong);
+}
+
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+:where(.icon-button, .icon-btn) {
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
+  padding: 0;
 }
 
 h1,

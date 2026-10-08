@@ -944,38 +944,38 @@ html:is(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  border-radius: 999px;
+  gap: var(--te-control-gap);
+  border-radius: var(--te-control-radius-pill);
   cursor: pointer;
-  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
-  font-weight: 550;
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-strong);
   transition:
-    background 0.16s ease,
-    border-color 0.16s ease,
-    color 0.16s ease,
-    box-shadow 0.16s ease,
-    transform 0.16s ease;
+    background var(--te-motion-hover) var(--te-ease-soft),
+    border-color var(--te-motion-hover) var(--te-ease-soft),
+    color var(--te-motion-hover) var(--te-ease-soft),
+    box-shadow var(--te-motion-hover) var(--te-ease-soft),
+    scale var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .dashed-button {
   width: 100%;
-  min-height: 40px;
-  border: 1px dashed rgba(15, 23, 42, 0.12);
-  border-radius: 14px;
-  background: rgba(249, 250, 251, 0.5);
-  color: var(--te-settings-text-muted, #8a8f98);
+  min-height: var(--te-control-height-lg);
+  border: 1px dashed var(--te-control-border);
+  border-radius: var(--te-control-radius-lg);
+  background: var(--te-subtle-bg);
+  color: var(--te-control-fg-muted);
 }
 
 .dashed-button:hover {
-  border-color: var(--brand-500);
-  background: var(--brand-50);
-  color: var(--brand-600);
+  border-color: var(--te-control-accent);
+  background: var(--te-control-accent-soft);
+  color: var(--te-control-accent);
 }
 
 .soft-button,
 .muted-button {
-  min-height: 34px;
-  padding: 7px 16px;
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
   border: none;
   background: var(--te-settings-search-bg, #eef0f3);
   color: var(--te-settings-text, #1a1a1a);
@@ -983,60 +983,61 @@ html:is(
 }
 
 .soft-button:hover {
-  background: rgba(15, 23, 42, 0.08);
+  background: var(--te-hover-bg);
 }
 
 .muted-button {
   background: var(--te-hover-bg);
-  color: var(--te-settings-text-muted, #8a8f98);
+  color: var(--te-control-fg-muted);
   box-shadow: none;
 }
 
 .danger-soft-button {
-  min-height: 30px;
-  padding: 6px 16px;
-  border: 1px solid #fecaca;
-  background: var(--te-danger-soft-bg);
-  color: #dc2626;
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
+  border: var(--te-control-border-width) solid
+    color-mix(in srgb, var(--te-control-danger) 32%, transparent);
+  background: var(--te-control-danger-soft);
+  color: var(--te-control-danger);
   box-shadow: 0 1px 5px rgba(220, 38, 38, 0.08);
 }
 
 .danger-soft-button:hover,
 .danger-soft-button.solid-hover:hover {
-  background: #fee2e2;
+  background: color-mix(in srgb, var(--te-control-danger) 18%, transparent);
 }
 
 .danger-soft-button.solid-hover:hover {
-  border-color: #ef4444;
-  background: #ef4444;
-  color: #fff;
+  border-color: var(--te-control-danger);
+  background: var(--te-control-danger);
+  color: var(--te-control-on-accent);
 }
 
 .brand-soft-button {
-  min-height: 36px;
-  padding: 8px 16px;
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
   border: none;
-  background: rgba(var(--te-primary-rgb), 0.1);
-  color: var(--brand-700);
+  background: var(--te-control-accent-soft);
+  color: var(--te-control-accent);
   box-shadow: none;
 }
 
 .brand-soft-button:hover {
-  background: rgba(var(--te-primary-rgb), 0.16);
+  background: color-mix(in srgb, var(--te-control-accent) 16%, transparent);
 }
 
 .icon-button {
-  width: 32px;
-  height: 32px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   border: none;
   background: var(--te-settings-search-bg, #eef0f3);
-  color: var(--te-settings-text-muted, #8a8f98);
+  color: var(--te-control-fg-muted);
   box-shadow: none;
 }
 
 .icon-button:hover {
-  background: rgba(15, 23, 42, 0.08);
-  color: var(--brand-600);
+  background: var(--te-hover-bg);
+  color: var(--te-control-accent);
 }
 
 /* Desktop Lyrics controls */
@@ -1054,12 +1055,12 @@ html:is(
   position: relative;
   display: inline-flex;
   flex: 0 0 auto;
-  width: 40px;
-  height: 20px;
+  width: var(--te-switch-width);
+  height: var(--te-switch-height);
   padding: 0;
   border: 0;
-  border-radius: 999px;
-  background: #d1d5db;
+  border-radius: var(--te-control-radius-pill);
+  background: var(--te-switch-track);
   cursor: pointer;
   transition:
     background var(--te-motion-panel) var(--te-ease-soft),
@@ -1068,8 +1069,8 @@ html:is(
 }
 
 .toggle-switch:focus-visible {
-  outline: 2px solid var(--brand-500);
-  outline-offset: 3px;
+  outline: var(--te-control-focus-width) solid var(--te-control-focus-color);
+  outline-offset: var(--te-control-focus-offset);
 }
 
 .settings-preview-page .toggle-switch:focus-visible::after {
@@ -1085,13 +1086,13 @@ html:is(
 .toggle-switch::after {
   content: '';
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
+  top: var(--te-switch-inset);
+  left: var(--te-switch-inset);
+  width: var(--te-switch-thumb);
+  height: var(--te-switch-thumb);
   border-radius: 50%;
-  background: var(--te-card-bg);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background: var(--te-switch-thumb-bg);
+  box-shadow: var(--te-switch-thumb-shadow);
   transition:
     left var(--te-motion-panel) var(--te-ease-soft),
     box-shadow var(--te-motion-panel) var(--te-ease-soft),
@@ -1099,20 +1100,20 @@ html:is(
 }
 
 .toggle-switch.active {
-  background: var(--brand-500);
+  background: var(--te-switch-track-active);
   box-shadow: 0 0 0 3px rgba(var(--te-primary-rgb), 0.12);
 }
 
 .toggle-switch.active::after {
-  left: 22px;
+  left: calc(var(--te-switch-inset) + var(--te-switch-travel));
 }
 
 .toggle-switch.inactive {
-  background: #d1d5db;
+  background: var(--te-switch-track);
 }
 
 .toggle-switch.inactive::after {
-  left: 2px;
+  left: var(--te-switch-inset);
 }
 
 @media (hover: hover) {
@@ -1126,18 +1127,18 @@ html[data-te-motion='full'] .toggle-switch.active::after {
 }
 
 .toggle-switch.large {
-  width: 48px;
-  height: 26px;
+  width: var(--te-switch-width-lg);
+  height: var(--te-switch-height-lg);
 }
 
 .toggle-switch.large::after {
-  top: 3px;
-  width: 20px;
-  height: 20px;
+  top: var(--te-switch-inset-lg);
+  width: var(--te-switch-thumb-lg);
+  height: var(--te-switch-thumb-lg);
 }
 
 .toggle-switch.large.active::after {
-  left: 25px;
+  left: calc(var(--te-switch-inset-lg) + var(--te-switch-travel-lg));
 }
 
 /* 折叠触发器与普通设置项共用 `.setting-item` 的盒模型（内边距、行高、圆角、悬停），
@@ -1232,17 +1233,17 @@ html[data-te-motion='full'] .toggle-switch.active::after {
 
 .preview-select,
 .number-input {
-  height: 36px;
+  height: var(--te-control-height-field);
   flex-shrink: 0;
   max-width: 100%;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border: var(--te-control-border-width) solid var(--te-control-border);
+  border-radius: var(--te-control-radius-sm);
   outline: none;
-  background: var(--te-card-bg);
-  color: #374151;
-  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.05);
-  font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
-  font-weight: 650;
+  background: var(--te-control-bg);
+  color: var(--te-control-fg);
+  box-shadow: var(--te-settings-shadow-soft);
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-strong);
 }
 
 .preview-select {
@@ -1259,13 +1260,13 @@ html[data-te-motion='full'] .toggle-switch.active::after {
 }
 
 .settings-preview-page :is(button, [role='button'], input, select):focus-visible {
-  outline: 2px solid var(--brand-500);
-  outline-offset: 3px;
+  outline: var(--te-control-focus-width) solid var(--te-control-focus-color);
+  outline-offset: var(--te-control-focus-offset);
 }
 
 .settings-preview-page .settings-search-box:focus-within {
-  outline: 2px solid var(--brand-500);
-  outline-offset: 2px;
+  outline: var(--te-control-focus-width) solid var(--te-control-focus-color);
+  outline-offset: var(--te-control-focus-offset);
 }
 
 .settings-preview-page .settings-search-input input:focus-visible {
@@ -1278,7 +1279,7 @@ html[data-te-motion='full'] .toggle-switch.active::after {
 
 .preview-select.wide {
   width: 160px;
-  background: #f9fafb;
+  background: var(--te-subtle-bg);
   box-shadow: none;
 }
 
@@ -1290,7 +1291,7 @@ html[data-te-motion='full'] .toggle-switch.active::after {
 
 .preview-select:focus,
 .number-input:focus {
-  border-color: var(--brand-500);
+  border-color: var(--te-control-accent);
 }
 
 .device-panel {
@@ -1513,30 +1514,30 @@ html[data-te-motion='full'] .toggle-switch.active::after {
   align-items: center;
   gap: 4px;
   padding: 4px;
-  border: 1px solid rgba(229, 231, 235, 0.7);
-  border-radius: 12px;
-  background: rgba(243, 244, 246, 0.8);
-  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.04);
+  border: var(--te-control-border-width) solid var(--te-control-border);
+  border-radius: var(--te-control-radius-lg);
+  background: var(--te-control-bg-hover);
+  box-shadow: var(--te-settings-shadow-soft);
 }
 
 .segmented-control button,
 .theme-segment button {
-  min-height: 32px;
-  padding: 7px 16px;
+  min-height: var(--te-control-height-sm);
+  padding: 0 var(--te-control-pad-x-md);
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--te-control-radius-sm);
   background: transparent;
-  color: #6b7280;
+  color: var(--te-control-fg-muted);
   cursor: pointer;
-  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
-  font-weight: 650;
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-strong);
 }
 
 .segmented-control button.active,
 .theme-segment button.active {
-  background: var(--te-card-bg);
-  color: #1f2937;
-  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.08);
+  background: var(--te-control-bg);
+  color: var(--te-control-fg);
+  box-shadow: var(--te-settings-shadow-soft);
 }
 
 /* An unavailable step (e.g. auto-hide without the mini shape) has to read as
@@ -1819,14 +1820,14 @@ html[data-theme='dark'] .theme-segment button.active {
 .path-control input {
   min-width: 0;
   flex: 1;
-  height: 38px;
-  padding: 0 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  height: var(--te-control-height-field);
+  padding: 0 var(--te-control-pad-x-sm);
+  border: var(--te-control-border-width) solid var(--te-control-border);
+  border-radius: var(--te-control-radius-sm);
   outline: none;
-  background: #f9fafb;
-  color: #6b7280;
-  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
+  background: var(--te-subtle-bg);
+  color: var(--te-control-fg-muted);
+  font-size: var(--te-control-font-size-sm);
 }
 
 .swatch-row {
@@ -2103,24 +2104,24 @@ html[data-te-motion='full'] .swatch.active {
 
 .pill-action {
   display: inline-flex;
-  min-height: 30px;
+  min-height: var(--te-control-height-sm);
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid rgba(var(--te-primary-rgb), 0.22);
-  border-radius: 8px;
-  background: rgba(var(--te-primary-rgb), 0.1);
-  color: var(--brand-600);
+  padding: 6px var(--te-control-pad-x-sm);
+  border: var(--te-control-border-width) solid var(--te-control-accent-line);
+  border-radius: var(--te-control-radius-sm);
+  background: var(--te-control-accent-soft);
+  color: var(--te-control-accent);
   cursor: pointer;
-  font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
-  font-weight: 650;
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-strong);
 }
 
 .pill-action.ghost {
-  border-color: rgba(229, 231, 235, 0.82);
-  background: var(--te-card-bg);
-  color: #6b7280;
+  border-color: var(--te-control-border);
+  background: var(--te-control-bg);
+  color: var(--te-control-fg-muted);
 }
 
 .pill-action:disabled {

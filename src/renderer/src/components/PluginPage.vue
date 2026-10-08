@@ -1272,12 +1272,12 @@ onUnmounted(() => {
 }
 
 .badge {
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  font-weight: 600;
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--te-neutral-600, #4b5563);
-  padding: 4px 10px;
-  border-radius: 100px;
+  font-size: var(--te-badge-font-size);
+  font-weight: var(--te-badge-font-weight);
+  background: var(--te-subtle-bg);
+  color: var(--te-control-fg-muted);
+  padding: 4px var(--te-badge-pad-x);
+  border-radius: var(--te-badge-radius);
 }
 
 .plugin-grid {

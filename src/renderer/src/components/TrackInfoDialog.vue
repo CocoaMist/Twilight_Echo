@@ -104,7 +104,7 @@ useEscapeToClose(
   overflow: auto;
   padding: 28px;
   border: 1px solid var(--te-card-border);
-  border-radius: 20px;
+  border-radius: var(--te-dialog-radius);
   color: var(--te-neutral-900);
   background: var(--te-card-bg, Canvas);
 }

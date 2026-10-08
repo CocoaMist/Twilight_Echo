@@ -857,9 +857,9 @@ html[data-theme='dark'] .deck .deck-card {
 /* ===== 开关 ===== */
 .deck-switch {
   position: relative;
-  width: 40px;
-  height: 22px;
-  border-radius: 999px;
+  width: var(--te-switch-width);
+  height: var(--te-switch-height);
+  border-radius: var(--te-control-radius-pill);
   border: 1px solid var(--d-line-strong);
   background: var(--d-well);
   flex-shrink: 0;
@@ -870,10 +870,10 @@ html[data-theme='dark'] .deck .deck-card {
 
 .deck-switch-knob {
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
+  top: calc(var(--te-switch-inset) - var(--te-control-border-width));
+  left: calc(var(--te-switch-inset) - var(--te-control-border-width));
+  width: var(--te-switch-thumb);
+  height: var(--te-switch-thumb);
   border-radius: 50%;
   transform: translateX(0);
   background: var(--d-faint);
@@ -889,7 +889,7 @@ html[data-theme='dark'] .deck .deck-card {
 }
 
 .deck-switch.active .deck-switch-knob {
-  transform: translateX(18px);
+  transform: translateX(var(--te-switch-travel));
   background: var(--d-accent);
   box-shadow: 0 0 8px var(--d-glow);
 }
