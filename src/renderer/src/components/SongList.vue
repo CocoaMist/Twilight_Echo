@@ -89,6 +89,12 @@ const props = defineProps<{
   returnFromDetail?: () => void
 }>()
 
+function activateCollectionCard(event: KeyboardEvent): void {
+  if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return
+  event.preventDefault()
+  ;(event.currentTarget as HTMLElement).click()
+}
+
 const emit = defineEmits<{
   selectView: [category: string, filter: string | null]
   customizeAppearance: []
@@ -1523,11 +1529,11 @@ function finishViewSwitchAndRestoreScroll(): void {
           </div>
           <div v-if="category === 'artists' && artists.length === 0" class="empty-state">
             <p class="empty-text">暂无艺术家</p>
-            <p class="empty-hint">通过歌单「添加文件夹」导入音乐</p>
+            <p class="empty-hint">打开左侧菜单，点击「导入歌曲」添加本地音乐。</p>
           </div>
           <div v-else-if="category === 'albums' && albums.length === 0" class="empty-state">
             <p class="empty-text">暂无专辑</p>
-            <p class="empty-hint">通过歌单「添加文件夹」导入音乐</p>
+            <p class="empty-hint">打开左侧菜单，点击「导入歌曲」添加本地音乐。</p>
           </div>
           <div v-else-if="isCollectionGrid && gridTotalCount === 0" class="empty-state">
             <p class="empty-text">没有符合条件的{{ category === 'artists' ? '艺术家' : '专辑' }}</p>
@@ -1549,7 +1555,7 @@ function finishViewSwitchAndRestoreScroll(): void {
               <ThemeIcon class="empty-library-icon" icon-slot="library.folder" />
             </div>
             <p class="empty-text">暂无可显示的文件夹</p>
-            <p class="empty-hint">请在设置的“媒体库管理”中添加音乐文件夹，然后执行完整重扫。</p>
+            <p class="empty-hint">打开左侧菜单，点击「导入歌曲」选择并扫描音乐文件夹。</p>
           </div>
           <div v-else-if="gridTotalCount === 0" class="empty-state">
             <p class="empty-text">没有符合搜索条件的内容</p>
@@ -1573,6 +1579,9 @@ function finishViewSwitchAndRestoreScroll(): void {
                   :key="artist.name"
                   class="artist-card"
                   :data-collection-index="gridWindowStart + index"
+                  role="button"
+                  tabindex="0"
+                  @keydown="activateCollectionCard"
                   :data-collection-letter="collectionIndexLetter(artist.name) ?? undefined"
                   data-te-interactive
                   @click="emit('selectView', 'artists', `artist:${artist.name}`)"
@@ -1598,6 +1607,9 @@ function finishViewSwitchAndRestoreScroll(): void {
                   :key="album.id"
                   class="album-card"
                   :data-collection-index="gridWindowStart + index"
+                  role="button"
+                  tabindex="0"
+                  @keydown="activateCollectionCard"
                   :data-collection-letter="collectionIndexLetter(album.name) ?? undefined"
                   data-te-interactive
                   @click="emit('selectView', 'albums', `album:${album.id}`)"
@@ -1622,6 +1634,9 @@ function finishViewSwitchAndRestoreScroll(): void {
                   v-for="genre in visibleGenres"
                   :key="genre.name"
                   class="artist-card"
+                  role="button"
+                  tabindex="0"
+                  @keydown="activateCollectionCard"
                   data-te-interactive
                   @click="emit('selectView', 'genres', `genre:${genre.name}`)"
                 >
@@ -1645,6 +1660,9 @@ function finishViewSwitchAndRestoreScroll(): void {
                 <div
                   v-if="showPlaylistCreateCard"
                   class="playlist-card create-playlist-card"
+                  role="button"
+                  tabindex="0"
+                  @keydown="activateCollectionCard"
                   data-te-interactive
                   @click="openCreatePlaylistDialog()"
                 >
@@ -1715,6 +1733,9 @@ function finishViewSwitchAndRestoreScroll(): void {
                   v-for="folder in visibleFolders"
                   :key="folder.path"
                   class="playlist-card folder-card"
+                  role="button"
+                  tabindex="0"
+                  @keydown="activateCollectionCard"
                   data-te-interactive
                   @click="emit('selectView', 'folders', `folder:${folder.path}`)"
                 >
@@ -2179,8 +2200,26 @@ function finishViewSwitchAndRestoreScroll(): void {
             <div class="empty-icon">
               <ThemeIcon class="empty-library-icon" icon-slot="library.empty" />
             </div>
-            <p class="empty-text">暂无内容</p>
-            <p class="empty-hint">通过左侧菜单「歌单 → 添加文件夹」导入音乐</p>
+            <p class="empty-text">
+              {{
+                searchQuery.trim() || activeLibraryFilterCount > 0
+                  ? '没有匹配的歌曲'
+                  : category === 'recent'
+                    ? '暂无播放记录'
+                    : '暂无歌曲'
+              }}
+            </p>
+            <p class="empty-hint">
+              {{
+                searchQuery.trim() || activeLibraryFilterCount > 0
+                  ? '请更改搜索内容或清除筛选条件。'
+                  : category === 'recent'
+                    ? '播放歌曲后，本机记录会显示在这里。'
+                    : isPlaylistDetail
+                      ? '从歌曲列表或播放队列中添加歌曲到这个歌单。'
+                      : '打开左侧菜单，点击「导入歌曲」添加本地音乐。'
+              }}
+            </p>
           </div>
           <div v-else class="track-table-wrapper">
             <div v-if="hasSelection" class="selection-toolbar">

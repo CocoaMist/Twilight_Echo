@@ -450,6 +450,8 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'error.audio.awaiting_route_confirmation': 'Waiting for structured output route recovery',
   'error.audio.unknown_reason': 'unknown reason',
   'error.audio.native_unavailable': 'The native audio engine is unavailable',
+  'error.audio.playback_target_unavailable':
+    'The playback target is unavailable or unauthorized. Check the file location, whether the cache was cleared, or resolve the source again.',
   'error.audio.native_unavailable_detail': 'The native audio engine is unavailable: {reason}',
   'error.audio.native_fallback':
     'The native audio engine is unavailable; a temporary playback path is in use: {reason}',

@@ -405,6 +405,8 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'error.audio.awaiting_route_confirmation': '等待结构化输出路由恢复确认',
   'error.audio.unknown_reason': '未知原因',
   'error.audio.native_unavailable': '原生音频引擎不可用',
+  'error.audio.playback_target_unavailable':
+    '播放地址不可用或未获授权，请检查文件位置、缓存是否已清理，或重新获取音源地址。',
   'error.audio.native_unavailable_detail': '原生音频引擎不可用：{reason}',
   'error.audio.native_fallback': '原生音频引擎不可用，已启用临时播放通道：{reason}',
   'error.audio.playback_fallback_switched':

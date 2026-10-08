@@ -82,7 +82,11 @@ window.makeSettingsSection = (key) => () =>
               h('div', { class: 'setting-copy' }, [
                 h(
                   'strong',
-                  key === 'performance' && index === 20 ? '硬件加速' : `${key} 设置 ${index}`
+                  key === 'performance' && index === 20
+                    ? '硬件加速'
+                    : key === 'playback' && index === 20
+                      ? '无缝播放 (Gapless Playback)'
+                      : `${key} 设置 ${index}`
                 ),
                 h(
                   'span',
@@ -139,6 +143,36 @@ window.runSettingsScrollTests = async () => {
   nav('常规').click()
   await settle()
   const general = document.querySelector('#general')
+  const fixedNavigation = page.querySelector('.settings-preview-nav')
+  const restingNavTop = fixedNavigation.getBoundingClientRect().top
+  const restingScrollTop = page.scrollTop
+  document.documentElement.dataset.teMotion = 'full'
+  for (const transition of ['settings-page-enter-active', 'settings-page-leave-active']) {
+    page.classList.add(transition)
+    // Inspect the settled nav transform while the page's transition layer still
+    // exists; elapsed timer samples can miss its containing-block change.
+    for (const animation of fixedNavigation.getAnimations()) {
+      animation.pause()
+      animation.currentTime = Number(animation.effect.getTiming().duration)
+    }
+    expect(
+      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
+      `${transition} reanchored the fixed navigation`
+    )
+    page.scrollTo({ top: restingScrollTop + 80, behavior: 'instant' })
+    expect(
+      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
+      `${transition} let page scrolling move the navigation`
+    )
+    page.classList.remove(transition)
+    page.scrollTo({ top: restingScrollTop, behavior: 'instant' })
+    expect(
+      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
+      `${transition} completion rebounded the navigation`
+    )
+  }
+  document.documentElement.dataset.teMotion = 'off'
+  await settle()
   const beforeExpansion = page.scrollHeight
   general.querySelector('.test-disclosure').click()
   await settle()
@@ -195,6 +229,19 @@ window.runSettingsScrollTests = async () => {
     'skipping remounted an edited control'
   )
   expect(expanded.value, 'skipping reset disclosure state')
+  for (const query of ['交叉淡化', 'crossfade']) {
+    search.value = query
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    const result = page.querySelector('#settings-search-result-0')
+    expect(result?.textContent.includes('无缝播放'), `${query} could not find crossfade controls`)
+    result.click()
+    await settle()
+    expect(
+      page.querySelector('.search-target-flash')?.textContent.includes('无缝播放'),
+      `${query} did not locate playback controls`
+    )
+  }
   await window.resizeTestWindow(1440)
   await settle()
   nav('播放').click()

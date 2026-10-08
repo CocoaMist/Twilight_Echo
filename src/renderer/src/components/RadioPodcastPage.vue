@@ -43,6 +43,9 @@ function invalidateDirectorySearch(): void {
   directoryBusy.value = false
 }
 watch([directoryQuery, tab], invalidateDirectorySearch, { flush: 'sync' })
+watch(tab, () => {
+  formError.value = ''
+})
 watch(
   directoryQuery,
   () => {
@@ -53,6 +56,11 @@ watch(
 )
 const feedUrl = ref('')
 const selectedPodcastId = ref<string | null>(null)
+const pageError = computed(
+  () =>
+    formError.value ||
+    (tab.value === 'radio' ? directoryError.value || radio.error.value : podcast.error.value)
+)
 
 const selectedPodcast = computed<PodcastSubscription | null>(() => {
   if (!selectedPodcastId.value) return null
@@ -69,14 +77,30 @@ onBeforeUnmount(() => {
   window.removeEventListener('pagehide', invalidateDirectorySearch)
 })
 
-async function addStation(): Promise<void> {
+async function runFormAction(action: () => Promise<void>): Promise<void> {
+  if (formBusy.value) return
+  const actionTab = tab.value
   formError.value = ''
   formBusy.value = true
   try {
+    await action()
+  } catch (error) {
+    if (tab.value === actionTab) {
+      formError.value = error instanceof Error ? error.message : String(error)
+    }
+  } finally {
+    formBusy.value = false
+  }
+}
+
+function addStation(): Promise<void> {
+  return runFormAction(async () => {
+    if (!stationName.value.trim() || !stationUrl.value.trim()) {
+      throw new Error('请填写电台名称和流地址')
+    }
     const url = stationUrl.value.trim()
     if (isInsecureHttpUrl(url) && !allowHttp.value) {
-      formError.value = '该电台使用 HTTP 明文流，请勾选“允许 HTTP”后再添加'
-      return
+      throw new Error('该电台使用 HTTP 明文流，请勾选“允许 HTTP”后再添加')
     }
     await radio.addStation({
       name: stationName.value,
@@ -86,28 +110,20 @@ async function addStation(): Promise<void> {
     stationName.value = ''
     stationUrl.value = ''
     allowHttp.value = false
-  } catch (error) {
-    formError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    formBusy.value = false
-  }
+  })
 }
 
-async function importPlaylist(): Promise<void> {
-  formError.value = ''
-  formBusy.value = true
-  try {
+function importPlaylist(): Promise<void> {
+  return runFormAction(async () => {
     const count = await radio.importPlaylistText(playlistText.value, {
       fileNameHint: 'import.m3u',
       allowInsecureHttp: allowHttp.value
     })
     playlistText.value = ''
-    if (count === 0) formError.value = '未导入任何有效电台（HTTP 条目需勾选允许）'
-  } catch (error) {
-    formError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    formBusy.value = false
-  }
+    if (count === 0 && tab.value === 'radio') {
+      formError.value = '没有新增电台：条目可能已收藏、地址无效或未允许 HTTP'
+    }
+  })
 }
 
 async function searchDirectory(): Promise<void> {
@@ -136,19 +152,16 @@ async function searchDirectory(): Promise<void> {
   }
 }
 
-async function addDirectoryStation(row: {
+function addDirectoryStation(row: {
   name: string
   urlResolved: string
   homepage?: string
   tags: string[]
 }): Promise<void> {
-  formError.value = ''
-  formBusy.value = true
-  try {
+  return runFormAction(async () => {
     const streamUrl = row.urlResolved
     if (isInsecureHttpUrl(streamUrl) && !allowHttp.value) {
-      formError.value = '该目录电台使用 HTTP 明文流，请勾选“允许 HTTP”后再添加'
-      return
+      throw new Error('该目录电台使用 HTTP 明文流，请勾选“允许 HTTP”后再添加')
     }
     await radio.addStation({
       name: row.name,
@@ -157,11 +170,7 @@ async function addDirectoryStation(row: {
       tags: row.tags,
       allowInsecureHttp: allowHttp.value
     })
-  } catch (error) {
-    formError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    formBusy.value = false
-  }
+  })
 }
 
 function playStation(id: string): void {
@@ -170,32 +179,25 @@ function playStation(id: string): void {
   playTrack(radioStationToTrack(station), [radioStationToTrack(station)])
 }
 
-async function removeStation(id: string): Promise<void> {
-  await radio.removeStation(id)
+function removeStation(id: string): Promise<void> {
+  return runFormAction(() => radio.removeStation(id))
 }
 
-async function subscribeFeed(): Promise<void> {
-  formError.value = ''
-  formBusy.value = true
-  try {
+function subscribeFeed(): Promise<void> {
+  return runFormAction(async () => {
+    if (!feedUrl.value.trim()) {
+      throw new Error('请输入 RSS 或 Atom 订阅地址')
+    }
     const sub = await podcast.subscribe(feedUrl.value)
     feedUrl.value = ''
     selectedPodcastId.value = sub.id
-  } catch (error) {
-    formError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    formBusy.value = false
-  }
+  })
 }
 
-async function refreshSelected(): Promise<void> {
+function refreshSelected(): Promise<void> | undefined {
   if (!selectedPodcastId.value) return
-  formError.value = ''
-  try {
-    await podcast.refresh(selectedPodcastId.value)
-  } catch (error) {
-    formError.value = error instanceof Error ? error.message : String(error)
-  }
+  const id = selectedPodcastId.value
+  return runFormAction(() => podcast.refresh(id))
 }
 
 async function unsubscribePodcast(id: string): Promise<void> {
@@ -317,13 +319,7 @@ function formatDuration(seconds: number): string {
       </div>
     </header>
 
-    <p
-      v-if="formError || directoryError || radio.error.value || podcast.error.value"
-      class="page-error"
-      role="alert"
-    >
-      {{ formError || directoryError || radio.error.value || podcast.error.value }}
-    </p>
+    <p v-if="pageError" class="page-error" role="alert">{{ pageError }}</p>
 
     <section v-if="tab === 'radio'" class="radio-workspace">
       <aside class="radio-tools" aria-label="电台工具">
@@ -457,7 +453,12 @@ function formatDuration(seconds: number): string {
                 <i class="pi pi-play"></i>
                 播放
               </button>
-              <button type="button" class="quiet-button" @click="removeStation(station.id)">
+              <button
+                type="button"
+                class="quiet-button"
+                :disabled="formBusy"
+                @click="removeStation(station.id)"
+              >
                 删除
               </button>
             </div>
@@ -496,7 +497,11 @@ function formatDuration(seconds: number): string {
           >
             订阅
           </button>
-          <button type="button" :disabled="podcast.busy.value" @click="podcast.refreshAll()">
+          <button
+            type="button"
+            :disabled="formBusy || podcast.busy.value"
+            @click="runFormAction(() => podcast.refreshAll())"
+          >
             刷新全部
           </button>
         </div>
@@ -602,7 +607,7 @@ function formatDuration(seconds: number): string {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   padding: 52px clamp(24px, 5vw, 72px) 132px;
-  color: var(--te-text, #0f172a);
+  color: var(--te-settings-text, #0f172a);
   scrollbar-width: thin;
   scrollbar-color: var(--te-scrollbar-thumb) transparent;
 }
@@ -750,7 +755,7 @@ button.primary {
   border: 1px solid var(--te-card-border, rgba(15, 23, 42, 0.08));
   border-radius: 20px;
   background: color-mix(in srgb, var(--te-card-bg) 90%, transparent);
-  box-shadow: 0 14px 36px color-mix(in srgb, var(--te-text) 5%, transparent);
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--te-settings-text) 5%, transparent);
 }
 .tool-card {
   display: grid;

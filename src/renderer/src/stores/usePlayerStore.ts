@@ -101,7 +101,7 @@ import { useMusicStore } from './useMusicStore'
 import { type SleepTimerState } from '../../../shared/sleepTimer.ts'
 import { DEFAULT_SOFTWARE_VOLUME } from '../../../shared/audioProcessingOptions.ts'
 import { presentError, presentErrorDetail } from '../../../shared/errors/presentError.ts'
-import { parseAppError } from '../../../shared/errors/appError.ts'
+import { ipcError, parseAppError } from '../../../shared/errors/appError.ts'
 import { translate } from '../../../shared/i18n/translate.ts'
 import { currentLocale } from '../app/useLocale.ts'
 import type { LyricSource } from '../../../shared/lyricsManagement.ts'
@@ -2235,6 +2235,7 @@ async function resolvePlayTarget(track: Track): Promise<string> {
   // Do not reuse a remote NCM URL when a managed disk cache may already exist;
   // the provider is the authority for cache-hit local paths.
   const canReuseNcmStream = source !== 'ncm' || track.streamQuality === ncmPlaybackQuality
+  let force = false
   if (
     source !== 'ncm' &&
     track.streamUrl &&
@@ -2245,7 +2246,12 @@ async function resolvePlayTarget(track: Track): Promise<string> {
     // Never reuse a stale audio grant — re-resolve so protectProviderMedia issues
     // a live token (or the provider returns a fresh cache path / stream URL).
     if (!/^twilight-media:/i.test(track.streamUrl)) {
-      return track.streamUrl
+      if (
+        !isLikelyLocalFilePath(track.streamUrl) ||
+        (await isUsableLocalPlaybackFile(track.streamUrl))
+      )
+        return track.streamUrl
+      force = true
     }
   }
   if (
@@ -2262,12 +2268,14 @@ async function resolvePlayTarget(track: Track): Promise<string> {
     // re-caches on demand. loadAndPlay commits the resolved target back onto
     // the track, so no clearing is needed here.
     if (await isUsableLocalPlaybackFile(track.streamUrl)) return track.streamUrl
+    force = true
   }
 
   await syncPluginProviders()
+  const options = source === 'ncm' ? { quality: ncmPlaybackQuality } : undefined
   const streamUrl = await useMediaProviders().resolvePlaybackUrl(
     track,
-    source === 'ncm' ? { quality: ncmPlaybackQuality } : undefined
+    force ? { ...options, force: true } : options
   )
   if (!streamUrl) {
     if (source === 'ncm') {
@@ -2913,25 +2921,34 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
     let nativeFallbackReason = ''
 
     if (useNativePlayback) {
-      try {
-        const preparedQueue = await preparePlayerNativeQueue(
-          {
-            // 心动模式：渲染层自行驱动切歌与补拉，原生引擎只加载当前曲目。
-            queue: stripStaleNcmStreamUrls(playMode.value === 'heart' ? [track] : queue.value, {
-              committedAtByTrackId: ncmStreamUrlCommittedAt
-            }),
-            currentTrack: track,
-            currentTarget: playTarget,
-            currentIndex: playMode.value === 'heart' ? 0 : queueIndex.value
-          },
-          {
-            isAudioFileAuthorized: window.api.fs.isAudioFileAuthorized,
-            areAudioFilesAuthorized: window.api.fs.areAudioFilesAuthorized
-          }
-        )
-        if (!preparedQueue) {
-          throw new Error('Native playback target is unavailable')
+      const preparedQueue = await preparePlayerNativeQueue(
+        {
+          // 心动模式：渲染层自行驱动切歌与补拉，原生引擎只加载当前曲目。
+          queue: stripStaleNcmStreamUrls(playMode.value === 'heart' ? [track] : queue.value, {
+            committedAtByTrackId: ncmStreamUrlCommittedAt
+          }),
+          currentTrack: track,
+          currentTarget: playTarget,
+          currentIndex: playMode.value === 'heart' ? 0 : queueIndex.value
+        },
+        {
+          isAudioFileAuthorized: window.api.fs.isAudioFileAuthorized,
+          areAudioFilesAuthorized: window.api.fs.areAudioFilesAuthorized
         }
+      )
+      if (!isActiveLoad(loadToken, track)) {
+        releaseLoadIfOwned()
+        return
+      }
+      // Target validation is a source failure, before any engine operation.
+      // Let it reach source recovery rather than the native-output fallback.
+      if (!preparedQueue) {
+        throw ipcError(
+          'audio.playback_target_unavailable',
+          'Playback target is unavailable or unauthorized'
+        )
+      }
+      try {
         for (const item of preparedQueue.items) {
           nativeSourceToTrackId.set(item.source, item.id)
         }
@@ -3082,7 +3099,15 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
       return
     }
     clearNativePlaybackInfoIntentForLoad(loadToken)
-    if (await handlePlaybackFallback(track, err, loadToken)) return
+    try {
+      if (await handlePlaybackFallback(track, err, loadToken)) return
+    } catch (fallbackError) {
+      console.warn('[audio-engine] Source recovery failed:', fallbackError)
+    }
+    if (!isActiveLoad(loadToken, track)) {
+      releaseLoadIfOwned()
+      return
+    }
     console.error('[audio-engine] Playback failed:', err)
     setAudioEngineError(err instanceof Error ? err.message : String(err))
     autoAdvanceInFlight = false

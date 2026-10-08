@@ -284,6 +284,9 @@ html:is(
 .settings-preview-page.settings-page-leave-active {
   transform: none;
   filter: none;
+  /* Transform prepromotion also creates a containing block for the fixed nav,
+     even with transform:none. Keep it viewport-pinned throughout the fade. */
+  will-change: opacity;
 }
 
 .settings-preview-page.settings-page-enter-from,
