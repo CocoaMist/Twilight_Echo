@@ -4,6 +4,7 @@ import type { GridItem, LocalTransitionName } from './types'
 import {
   estimateGridColumns,
   estimateGridRowStride,
+  estimateAlbumGridRowStride,
   getSongListGridScrollTopForIndex,
   getSongListGridVirtualRange,
   GRID_OVERSCAN_ROWS
@@ -63,6 +64,9 @@ export function useSongListGridRendering({
   const gridRowStride = ref(280)
   const gridOffsetTop = ref(0)
   let measureFrame: number | null = null
+  let layoutObserver: ResizeObserver | null = null
+  let observedGrid: HTMLElement | null = null
+  let observedCard: HTMLElement | null = null
 
   const filteredGridItems = computed(() =>
     filterLocalGridItems(currentGridItems.value, debouncedSearchQuery.value)
@@ -122,7 +126,15 @@ export function useSongListGridRendering({
     const viewportWidth = window.innerWidth || width
     gridColumns.value = estimateGridColumns(width, viewportWidth)
     const columnWidth = width / Math.max(1, gridColumns.value)
-    gridRowStride.value = estimateGridRowStride(columnWidth, viewportWidth)
+    const fontSize = container
+      ? Number.parseFloat(
+          window.getComputedStyle(container).getPropertyValue('--te-font-size-body')
+        ) || 14
+      : 14
+    gridRowStride.value =
+      category() === 'albums'
+        ? estimateAlbumGridRowStride(columnWidth, viewportWidth, fontSize)
+        : estimateGridRowStride(columnWidth, viewportWidth)
   }
 
   function measureGridMetrics(): void {
@@ -141,6 +153,22 @@ export function useSongListGridRendering({
     const columns = template.split(/\s+/).filter(Boolean).length
     if (columns > 0) gridColumns.value = columns
     const firstCard = grid.querySelector<HTMLElement>('.artist-card, .album-card, .playlist-card')
+    if (
+      typeof ResizeObserver !== 'undefined' &&
+      (grid !== observedGrid || firstCard !== observedCard)
+    ) {
+      layoutObserver ??= new ResizeObserver(() => {
+        scheduleMeasure()
+        updateViewportHeight()
+      })
+      layoutObserver.disconnect()
+      layoutObserver.observe(container)
+      layoutObserver.observe(grid)
+      if (container.firstElementChild) layoutObserver.observe(container.firstElementChild)
+      if (firstCard) layoutObserver.observe(firstCard)
+      observedGrid = grid
+      observedCard = firstCard
+    }
     if (firstCard) {
       const gap = Number.parseFloat(window.getComputedStyle(grid).rowGap) || 22
       gridRowStride.value = Math.max(1, firstCard.getBoundingClientRect().height + gap)
@@ -212,6 +240,7 @@ export function useSongListGridRendering({
       window.removeEventListener('resize', scheduleMeasure)
     }
     if (measureFrame !== null) window.cancelAnimationFrame(measureFrame)
+    layoutObserver?.disconnect()
     measureFrame = null
   })
 

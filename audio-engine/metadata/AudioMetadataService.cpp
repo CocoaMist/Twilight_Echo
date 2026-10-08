@@ -277,13 +277,17 @@ std::string readMetadataJson(const std::string& source) {
     metadata.dsdMode = dsdModeToString(DsdMode::Pcm);
     
     SacdIsoDemuxer demuxer;
-    demuxer.open(source, nullptr);
+    std::string error;
+    if (!demuxer.open(source, &error)) {
+      return metadataToJson(metadata, error.empty() ? "Unable to read SACD ISO metadata" : error);
+    }
     
     for (const auto& track : demuxer.tracks()) {
       AudioMetadata trackMeta;
       trackMeta.source = source + "?area=" + track.area + "&track=" + std::to_string(track.trackNumber);
       trackMeta.title = track.title.empty() ? "Track " + std::to_string(track.trackNumber) : track.title;
       trackMeta.artist = track.artist;
+      if (track.year > 0 && track.year <= 9999) trackMeta.year = std::to_string(track.year);
       trackMeta.trackNumber = std::to_string(track.trackNumber);
       trackMeta.durationSeconds = track.durationSeconds;
       trackMeta.channelCount = track.channelCount;

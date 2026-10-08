@@ -78,6 +78,19 @@ export function estimateGridRowStride(columnWidth: number, viewportWidth: number
   return Math.max(1, Math.round(cover + padY + textBlock + rowGap))
 }
 
+export function estimateAlbumGridRowStride(
+  columnWidth: number,
+  viewportWidth: number,
+  bodyFontSize = 14
+): number {
+  // Artwork is edge-to-edge; two title lines and two metadata lines keep cards uniform.
+  const textHeight = bodyFontSize * (2.8 + 0.93 * 1.5 + 0.82 * 1.5)
+  return Math.max(
+    1,
+    Math.ceil(columnWidth + textHeight + 26 + resolveGridLayoutMetrics(viewportWidth).rowGap)
+  )
+}
+
 export function getSongListGridVirtualRange({
   itemCount,
   scrollTop,

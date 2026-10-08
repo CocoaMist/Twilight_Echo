@@ -164,6 +164,9 @@ function normalizeFileIdentity(value: unknown): LocalLibraryFileIdentity | null 
   if (typeof value.cueSignature === 'string' && value.cueSignature) {
     identity.cueSignature = value.cueSignature
   }
+  if (Number.isSafeInteger(value.metadataVersion) && Number(value.metadataVersion) > 0) {
+    identity.metadataVersion = Number(value.metadataVersion)
+  }
   return identity
 }
 
@@ -190,6 +193,7 @@ function sameFileIndexDocument(
       other?.filePath === entry.filePath &&
       other.size === entry.size &&
       other.mtimeMs === entry.mtimeMs &&
+      other.metadataVersion === entry.metadataVersion &&
       other.cueSignature === entry.cueSignature
     )
   })

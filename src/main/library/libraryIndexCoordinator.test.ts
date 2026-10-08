@@ -471,6 +471,7 @@ test('SACD ISO files expand into their playable area tracks before persisting', 
       artist: 'Artist',
       album: 'SACD Album',
       albumArtist: 'Artist',
+      year: '2003',
       trackNumber: source.slice(-1),
       discNumber: '',
       container: 'SACD ISO',
@@ -524,11 +525,69 @@ test('SACD ISO files expand into their playable area tracks before persisting', 
       ]
     )
     assert.equal(isoTracks[0].duration, 182)
+    assert.ok(isoTracks.every((track) => track.releaseDate === '2003'))
     assert.equal(
       tracks.some((track) => track.id === 'iso-container'),
       false
     )
     assert.equal(tracks.filter((track) => track.filePath === flacPath).length, 1)
+    coordinator.destroy()
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+test('legacy SACD backfill uses native years and retains all subtrack identities', async () => {
+  const fixture = createFixture('iso-date-backfill')
+  try {
+    const filePath = join(fixture.root, 'album.iso')
+    const tracks = [1, 2].map((index) => ({
+      ...createTrack(`stable-${index}`, filePath),
+      subTrack: `${filePath}#sacd-stereo-${index}`,
+      cover: 'cover://curated',
+      releaseDate: '1999'
+    }))
+    const identity = { filePath, size: 100, mtimeMs: 200 }
+    fixture.persist(createDocument(1, [fixture.root], tracks))
+    persistLocalLibraryFileIndex(fixture.libraryFile, {
+      version: 1,
+      libraryRevision: 1,
+      updatedAt: '',
+      entries: [identity]
+    })
+    const runner = new ScriptedRunner(async (_call, index) =>
+      scanResult({
+        identities: [identity],
+        releaseDateUpdates: index < 2 ? [{ filePath }] : []
+      })
+    )
+    let reads = 0
+    const coordinator = fixture.coordinator(runner, {
+      readSacdIsoMetadata: async () => {
+        reads++
+        return reads === 1
+          ? ({ error: 'unreadable' } as NativeAudioMetadata)
+          : ({ isoTracks: [{ year: '2008' }] } as unknown as NativeAudioMetadata)
+      }
+    })
+    await coordinator.scanStartup()
+    assert.deepEqual(fixture.load().tracks, tracks)
+    assert.equal(
+      loadLocalLibraryFileIndex(fixture.libraryFile).document.entries[0].metadataVersion,
+      undefined
+    )
+    await coordinator.scanStartup()
+    assert.deepEqual(
+      fixture.load().tracks,
+      tracks.map((track) => ({ ...track, releaseDate: '2008' }))
+    )
+    assert.equal(
+      loadLocalLibraryFileIndex(fixture.libraryFile).document.entries[0].metadataVersion,
+      1
+    )
+    await coordinator.scanStartup()
+    assert.equal(reads, 2)
+    assert.equal(runner.calls[2].request.knownIdentities[0].metadataVersion, 1)
     coordinator.destroy()
   } finally {
     fixture.cleanup()
@@ -568,6 +627,108 @@ test('background worker failure becomes an observable failed status', () => {
     assert.equal(coordinator.getStatus().state, 'failed')
     assert.equal(coordinator.getStatus().error, 'worker exited')
     assert.deepEqual(statuses, ['failed'])
+    coordinator.destroy()
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+test('streamed date backfill retains curated metadata and persists the per-file version across restart', async () => {
+  const fixture = createFixture('date-backfill')
+  try {
+    const filePath = join(fixture.root, 'disc.flac')
+    const existing = {
+      ...createTrack('stable', filePath),
+      addedAt: 123,
+      cover: 'cover://curated',
+      lyrics: '[00:01]local lyrics',
+      metadataMatch: { providerId: 'ncm', trackId: 'matched' }
+    }
+    const identity = { filePath, size: 100, mtimeMs: 200 }
+    fixture.persist(createDocument(1, [fixture.root], [existing]))
+    persistLocalLibraryFileIndex(fixture.libraryFile, {
+      version: 1,
+      libraryRevision: 1,
+      updatedAt: new Date(0).toISOString(),
+      entries: [identity]
+    })
+    const runner = new ScriptedRunner(async (call, index) => {
+      call.onIdentityBatch?.({ identities: [identity] })
+      if (index === 0)
+        call.onBatch?.({
+          parsedTracks: [],
+          parsedFilePaths: [],
+          metadataParsedFilePaths: [filePath],
+          releaseDateUpdates: [{ filePath, releaseDate: '2020-05-12' }]
+        })
+      return scanResult({ identities: [], parsedFileCount: index === 0 ? 1 : 0 })
+    })
+    const coordinator = fixture.coordinator(runner)
+    const result = await coordinator.scanStartup()
+    assert.deepEqual(result.library.tracks, [{ ...existing, releaseDate: '2020-05-12' }])
+    assert.deepEqual(result.updatedTracks, result.library.tracks)
+    assert.equal(
+      loadLocalLibraryFileIndex(fixture.libraryFile).document.entries[0].metadataVersion,
+      1
+    )
+    assert.deepEqual(fixture.load().tracks, result.library.tracks)
+    await coordinator.scanStartup()
+    assert.equal(runner.calls[1].request.knownIdentities[0].metadataVersion, 1)
+    assert.deepEqual(fixture.load().tracks, result.library.tracks)
+    coordinator.destroy()
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+test('failed and cancelled date reads leave legacy files eligible for retry; absent tags complete once', async () => {
+  const fixture = createFixture('date-retry')
+  try {
+    const filePath = join(fixture.root, 'song.flac')
+    const existing = { ...createTrack('stable', filePath), releaseDate: '1999' }
+    const identity = { filePath, size: 1, mtimeMs: 2 }
+    fixture.persist(createDocument(1, [fixture.root], [existing]))
+    persistLocalLibraryFileIndex(fixture.libraryFile, {
+      version: 1,
+      libraryRevision: 1,
+      updatedAt: '',
+      entries: [identity]
+    })
+    const runner = new ScriptedRunner(async (call, index) => {
+      if (index === 0) return scanResult({ identities: [identity] })
+      if (index === 1) {
+        call.onBatch?.({
+          parsedTracks: [],
+          parsedFilePaths: [],
+          metadataParsedFilePaths: [filePath],
+          releaseDateUpdates: [{ filePath, releaseDate: '2020' }]
+        })
+        return scanResult({ identities: [identity], cancelled: true })
+      }
+      return scanResult({
+        identities: [identity],
+        metadataParsedFilePaths: [filePath],
+        releaseDateUpdates: [{ filePath }]
+      })
+    })
+    const coordinator = fixture.coordinator(runner)
+    await coordinator.scanStartup()
+    assert.equal(
+      loadLocalLibraryFileIndex(fixture.libraryFile).document.entries[0].metadataVersion,
+      undefined
+    )
+    await coordinator.scanStartup()
+    assert.deepEqual(fixture.load().tracks, [existing])
+    assert.equal(
+      loadLocalLibraryFileIndex(fixture.libraryFile).document.entries[0].metadataVersion,
+      undefined
+    )
+    const completed = await coordinator.scanStartup()
+    assert.deepEqual(completed.library.tracks, [createTrack('stable', filePath)])
+    assert.equal(
+      loadLocalLibraryFileIndex(fixture.libraryFile).document.entries[0].metadataVersion,
+      1
+    )
     coordinator.destroy()
   } finally {
     fixture.cleanup()

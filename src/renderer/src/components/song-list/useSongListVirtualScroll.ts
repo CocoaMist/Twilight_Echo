@@ -46,6 +46,21 @@ export function useSongListVirtualScroll({
   viewportHeight: Ref<number>
 } {
   const containerRef = ref<HTMLElement | null>(null)
+  let layoutObserver: ResizeObserver | null = null
+  watch(
+    [containerRef, viewKey ?? computed(() => '')],
+    () => {
+      void nextTick(() => {
+        if (typeof ResizeObserver === 'undefined' || !containerRef.value) return
+        layoutObserver ??= new ResizeObserver(updateViewportHeight)
+        layoutObserver.disconnect()
+        layoutObserver.observe(containerRef.value)
+        if (containerRef.value.firstElementChild)
+          layoutObserver.observe(containerRef.value.firstElementChild)
+      })
+    },
+    { flush: 'post' }
+  )
   const tbodyRef = ref<HTMLElement | null>(null)
   const scrollTop = ref(viewKey ? (savedScrollPositions.get(viewKey.value) ?? 0) : 0)
   let restorePending = !!viewKey
@@ -83,7 +98,10 @@ export function useSongListVirtualScroll({
       viewportHeight.value = containerRef.value.clientHeight
     }
     if (containerRef.value && tbodyRef.value) {
-      tableOffsetTop.value = tbodyRef.value.offsetTop
+      tableOffsetTop.value =
+        tbodyRef.value.getBoundingClientRect().top -
+        containerRef.value.getBoundingClientRect().top +
+        containerRef.value.scrollTop
     } else {
       tableOffsetTop.value = 0
     }
@@ -137,6 +155,7 @@ export function useSongListVirtualScroll({
   })
 
   onUnmounted(() => {
+    layoutObserver?.disconnect()
     savePosition()
     window.removeEventListener('resize', updateViewportHeight)
   })

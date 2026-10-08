@@ -335,6 +335,7 @@ void addScarletbookAreaTracks(
     track.title = !sbTrack.title.empty() ? sbTrack.title : "Track " + std::to_string(sbTrack.trackNumber);
     track.artist = !sbTrack.performer.empty() ? sbTrack.performer : albumArtist;
     track.albumTitle = albumTitle;
+    track.year = album.year;
     track.startSector = sbTrack.startLsn;
     track.sectorCount = sbTrack.lengthLsn;
     track.dataOffset = static_cast<uint64_t>(sbTrack.startLsn) * kIsoSectorSize;

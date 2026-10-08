@@ -174,5 +174,22 @@ test('startup planning remains linear for 25000 indexed files', () => {
 })
 
 function identity(filePath: string, size: number, mtimeMs: number): LocalLibraryFileIdentity {
-  return { filePath, size, mtimeMs }
+  return { filePath, size, mtimeMs, metadataVersion: 1 }
 }
+
+test('unchanged legacy files backfill dates once while changed files get a normal parse', () => {
+  const old = { filePath: 'C:\\music\\old.flac', size: 10, mtimeMs: 20 }
+  const current = identity('C:\\music\\current.flac', 11, 21)
+  const changed = { ...old, filePath: 'C:\\music\\changed.flac', mtimeMs: 30 }
+  const plan = createLocalLibraryScanPlan({
+    mode: 'startup',
+    identities: [old, current, changed],
+    knownIdentities: [old, current, { ...changed, mtimeMs: 29 }],
+    knownTrackPaths: [old.filePath, current.filePath, changed.filePath],
+    excludedPaths: [],
+    completeIdentitySnapshot: true
+  })
+  assert.deepEqual(plan.releaseDateFilePaths, [old.filePath])
+  assert.deepEqual(plan.parseFilePaths, [old.filePath, changed.filePath])
+  assert.equal(plan.skippedUnchanged, 1)
+})

@@ -1,6 +1,7 @@
 import type { Track } from '../../types/music'
 import type { DerivedTrackGroup, LibraryItem } from './musicStoreTypes.ts'
 import { splitGenreValues } from '../../../../shared/genreSeparators.ts'
+import { resolveAlbumReleaseDate } from '../../../../shared/releaseDate.ts'
 import {
   compareAlbumTrackOrder,
   deduplicateLibraryPaths,
@@ -71,13 +72,17 @@ export function buildDerivedCollections(
   const albums = Array.from(mergedAlbumMap.entries())
     .map(([id, group]) => {
       const ordered = [...group.tracks].sort(compareAlbumTrackOrder)
+      const coverTrack =
+        ordered.find((track) => track.cover) ?? ordered.find((track) => track.coverSource)
       return {
         id,
         name: ordered[0]?.album || '未知专辑',
         trackCount: ordered.length,
         tracks: ordered,
-        cover: group.cover,
-        artist: group.artist || ordered[0]?.artist || '未知艺术家'
+        cover: coverTrack?.cover ?? null,
+        coverSource: coverTrack?.coverSource,
+        releaseDate: resolveAlbumReleaseDate(ordered),
+        artist: resolveAlbumArtist(ordered)
       }
     })
     .sort((a, b) => a.name.localeCompare(b.name, 'zh') || (a.id ?? '').localeCompare(b.id ?? ''))
@@ -170,4 +175,18 @@ export function buildDerivedCollections(
       (a, b) => a.name.localeCompare(b.name, 'zh') || (a.path ?? '').localeCompare(b.path ?? '')
     )
   return { artists, albums, genres, folders }
+}
+
+function resolveAlbumArtist(tracks: readonly Track[]): string {
+  const meaningful = (value?: string): string => {
+    const text = value?.trim() ?? ''
+    return /^(?:unknown(?: artist)?|未知(?:艺术家|歌手))$/i.test(text) ? '' : text
+  }
+  const owners = new Set(tracks.map((track) => meaningful(track.albumArtist)).filter(Boolean))
+  const artists = new Set(tracks.map((track) => meaningful(track.artist)).filter(Boolean))
+  // Legacy scans copied every track artist into ALBUMARTIST; inconsistent owners
+  // must not turn a compilation into a release owned by its first guest singer.
+  if (owners.size === 1) return [...owners][0]!
+  if (artists.size === 1) return [...artists][0]!
+  return artists.size > 1 ? '群星' : '未知歌手'
 }

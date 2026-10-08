@@ -36,6 +36,8 @@ export interface Track {
   /** 结构化歌手身份（流媒体 provider 提供）；本地扫描曲目没有这个概念。 */
   artists?: TrackArtistRef[]
   album: string
+  /** Local release tag, with year/month/day precision preserved. */
+  releaseDate?: string
   /** Primary genre tag; multi-value tags keep the first non-empty entry. */
   genre?: string | null
   /** Stable album owner for grouping compilation and guest-artist tracks. */

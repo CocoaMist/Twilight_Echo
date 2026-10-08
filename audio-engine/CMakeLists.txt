@@ -486,6 +486,7 @@ if(TAE_BUILD_TESTS)
 
   add_executable(twilight_dsd_dop_tests
     tests/dsd_dop_tests.cpp
+    metadata/AudioMetadataService.cpp
     decoder/DopPacker.cpp
     decoder/DsdReader.cpp
     decoder/SacdIsoDemuxer.cpp

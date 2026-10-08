@@ -16,6 +16,7 @@ struct SacdIsoTrackInfo {
   std::string title;
   std::string artist;
   std::string albumTitle;
+  int year = 0;
   double durationSeconds = 0.0;
   uint64_t startSector = 0;
   uint64_t sectorCount = 0;

@@ -29,6 +29,8 @@ export interface LibraryItem {
   trackCount: number
   tracks: Track[]
   cover: string | null
+  coverSource?: string | null
+  releaseDate?: string
   artist?: string
   path?: string
 }

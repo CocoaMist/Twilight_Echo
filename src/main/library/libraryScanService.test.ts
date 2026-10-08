@@ -188,7 +188,7 @@ test('scan worker tracks sibling CUE dependencies across startup and watcher sca
 
     const unchanged = await sendScan(child, {
       ...baseRequest(root),
-      knownIdentities: [addedIdentity],
+      knownIdentities: [{ ...addedIdentity, metadataVersion: 1 }],
       knownTrackPaths: [filePath],
       mode: 'startup'
     })
@@ -293,6 +293,104 @@ test('vanished watcher additions remove the persisted Track and file index throu
   }
 })
 
+test('real WAV dates backfill without replacing existing metadata and missing tags do not repeat', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'twilight-release-tags-'))
+  const libraryFile = join(root, 'music-library.json')
+  const dated = join(root, 'dated.wav')
+  const undated = join(root, 'undated.wav')
+  const unreadable = join(root, 'broken.flac')
+  writeTaggedWav(dated, '2020-05-12')
+  writeTaggedWav(undated)
+  writeFileSync(unreadable, 'fLaC')
+  const tracks = [dated, undated, unreadable].map((path, index) => ({
+    ...createTrack(String(index), path),
+    cover: 'cover://retained',
+    lyrics: 'retained lyrics'
+  }))
+  persistMusicLibraryDocument(libraryFile, createDocument(1, root, tracks))
+  const identities = [dated, undated, unreadable].map((filePath) => {
+    const info = statSync(filePath)
+    return { filePath, size: info.size, mtimeMs: info.mtimeMs }
+  })
+  persistLocalLibraryFileIndex(libraryFile, {
+    version: 1,
+    libraryRevision: 1,
+    updatedAt: '',
+    entries: identities
+  })
+  const child = await startWorker()
+  const runner = createWorkerRunner(child)
+  const coordinator = new LocalLibraryIndexCoordinator({
+    libraryFilePath: libraryFile,
+    scanRunner: runner,
+    enqueueTransaction: async (operation) => await operation(),
+    loadDocument: () => loadMusicLibraryDocument(libraryFile),
+    persistDocument: (document) => persistMusicLibraryDocument(libraryFile, document),
+    resolveRoots: async (folders) => [...folders],
+    getCoverCacheDir: () => join(root, 'covers')
+  })
+  try {
+    const first = await coordinator.scanStartup()
+    assert.deepEqual(first.library.tracks, [
+      { ...tracks[0], releaseDate: '2020-05-12' },
+      tracks[1],
+      tracks[2]
+    ])
+    const index = loadLocalLibraryFileIndex(libraryFile).document.entries
+    assert.equal(index.find((i) => i.filePath === dated)?.metadataVersion, 1)
+    assert.equal(index.find((i) => i.filePath === undated)?.metadataVersion, 1)
+    assert.equal(index.find((i) => i.filePath === unreadable)?.metadataVersion, undefined)
+    const second = await coordinator.scanStartup()
+    assert.equal(second.skippedUnchanged, 2)
+    assert.deepEqual(second.updatedTracks, [])
+    // Normal scans and derived CUE entries retain the same tagged calendar date.
+    writeFileSync(
+      join(root, 'dated.cue'),
+      'FILE "dated.wav" WAVE\nTRACK 01 AUDIO\nTITLE "Part"\nINDEX 01 00:00:00\n'
+    )
+    const full = await sendScan(child, { ...baseRequest(root), mode: 'full' })
+    assert.equal(full.ok, true)
+    if (full.ok) {
+      const cue = full.value.parsedTracks.find(
+        (t) => (t as Record<string, unknown>).filePath === dated
+      ) as Record<string, unknown>
+      assert.equal(cue.releaseDate, '2020-05-12')
+      assert.ok(cue.cueRange)
+    }
+  } finally {
+    coordinator.destroy()
+    await terminateWorker(child)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+function writeTaggedWav(filePath: string, date?: string): void {
+  const data = Buffer.alloc(16000)
+  const value = Buffer.from(`${date ?? ''}\0`)
+  const tag = date ? Buffer.alloc(20 + value.length + (value.length % 2)) : Buffer.alloc(0)
+  if (date) {
+    tag.write('LIST')
+    tag.writeUInt32LE(tag.length - 8, 4)
+    tag.write('INFOICRD', 8)
+    tag.writeUInt32LE(value.length, 16)
+    value.copy(tag, 20)
+  }
+  const header = Buffer.alloc(44)
+  header.write('RIFF')
+  header.writeUInt32LE(36 + data.length + tag.length, 4)
+  header.write('WAVEfmt ', 8)
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20)
+  header.writeUInt16LE(1, 22)
+  header.writeUInt32LE(8000, 24)
+  header.writeUInt32LE(16000, 28)
+  header.writeUInt16LE(2, 32)
+  header.writeUInt16LE(16, 34)
+  header.write('data', 36)
+  header.writeUInt32LE(data.length, 40)
+  writeFileSync(filePath, Buffer.concat([header, data, tag]))
+}
+
 async function startWorker(): Promise<ChildProcess> {
   const child = fork(fileURLToPath(new URL('./libraryScanService.ts', import.meta.url)), [], {
     execArgv: ['--experimental-strip-types'],
@@ -341,10 +439,19 @@ async function sendScan(
 
 function createWorkerRunner(child: ChildProcess): LocalLibraryScanRunner {
   return {
-    async scan(_jobId, request) {
-      const response = await sendScan(child, request)
-      if (!response.ok) throw new Error(response.error)
-      return response.value
+    async scan(_jobId, request, _onProgress, onBatch, onIdentityBatch) {
+      const receive = (message: LocalLibraryScanWorkerMessage): void => {
+        if (message.kind === 'batch') onBatch?.(message.batch)
+        if (message.kind === 'identity-batch') onIdentityBatch?.(message.batch)
+      }
+      child.on('message', receive)
+      try {
+        const response = await sendScan(child, request)
+        if (!response.ok) throw new Error(response.error)
+        return response.value
+      } finally {
+        child.off('message', receive)
+      }
     },
     pause(requestId) {
       child.send({ kind: 'pause', requestId } satisfies LocalLibraryScanWorkerRequest)

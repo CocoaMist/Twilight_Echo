@@ -40,6 +40,7 @@ import { notifyLocalTracksUnavailable } from '../utils/localTrackRemovalPolicy.t
 import { type PlaylistPersistenceStatus } from './playlistPersistence.ts'
 import {
   isLocalLibraryTrack,
+  isReleaseDateOnlyUpdate,
   normalizePortableLibraryPath,
   nonEmptySnapshots,
   toPlaylistTrackSnapshot
@@ -289,7 +290,7 @@ export function useMusicStore() {
     }
   }
 
-  async function loadLibrary(): Promise<void> {
+  async function loadLibrary(skipDateOnlyEnrichment = false): Promise<void> {
     const saved = await window.api.data.loadMusicLibrary()
     if (!saved) return
 
@@ -310,12 +311,15 @@ export function useMusicStore() {
     }
     // Set tracks immediately so the UI renders local music without waiting for
     // provider metadata enrichment (which can be slow when a provider is unavailable).
+    const enrichmentTracks = skipDateOnlyEnrichment
+      ? loadedTracks.filter((track) => !isReleaseDateOnlyUpdate(trackById.get(track.id), track))
+      : loadedTracks
     setTracks(loadedTracks)
     rebuildDerivedCollections()
     libraryRepairReport.value = null
     // File-system reconciliation is owned by the main-process incremental scan
     // coordinator. Provider enrichment is queued after the first local render.
-    void queueBackgroundMetadataEnrichment(loadedTracks)
+    void queueBackgroundMetadataEnrichment(enrichmentTracks)
   }
 
   function whenLibrarySettled(): Promise<void> {
@@ -356,7 +360,7 @@ export function useMusicStore() {
     }
     if (update.state === 'cancelled') return
     if (update.reloadRequired) {
-      await loadLibrary()
+      await loadLibrary(true)
       return
     }
 
@@ -366,6 +370,9 @@ export function useMusicStore() {
     const removedPaths = new Set(update.removedFilePaths.map(normalizePortableLibraryPath))
     const replacements = [...update.addedTracks, ...update.updatedTracks].filter(
       (track): track is Track => isLocalLibraryTrack(track)
+    )
+    const enrichmentTracks = replacements.filter(
+      (track) => !isReleaseDateOnlyUpdate(trackById.get(track.id), track)
     )
     const replacementPaths = new Set(
       replacements.map((track) => normalizePortableLibraryPath(track.filePath))
@@ -402,7 +409,7 @@ export function useMusicStore() {
     setTracks(nextTracks)
     rebuildDerivedCollections()
     rebuildCount++
-    void queueBackgroundMetadataEnrichment(replacements)
+    void queueBackgroundMetadataEnrichment(enrichmentTracks)
   }
 
   async function startStartupLibraryScan(): Promise<LocalLibraryScanUpdate> {
