@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import vue from '@vitejs/plugin-vue'
+import { parse } from '@vue/compiler-sfc'
 import { build } from 'vite'
 
 const require = createRequire(import.meta.url)
@@ -24,9 +25,14 @@ const sectionKeys: Record<string, string> = {
   About: 'about'
 }
 
-test('settings skip distant content without shifting scroll height or breaking navigation', async () => {
+test('settings preserve transition navigation geometry and skip distant content without scroll shifts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-settings-scroll-'))
   try {
+    const app = parse(await readFile(join(workspace, 'src/renderer/src/App.vue'), 'utf8'))
+    await writeFile(
+      join(directory, 'app.css'),
+      app.descriptor.styles.map((style) => style.content).join('\n')
+    )
     await build({
       configFile: false,
       root: workspace,
@@ -87,7 +93,7 @@ test('settings skip distant content without shifting scroll height or breaking n
         .map((file) => `<link rel="stylesheet" href="bundle/${file}">`)
         .join(
           ''
-        )}<style>body{margin:0;font:14px system-ui}*{box-sizing:border-box}.settings-preview-page{scroll-behavior:auto}</style></head><body><div id="app"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
+        )}<link rel="stylesheet" href="app.css"><style>body{margin:0;font:14px system-ui}*{box-sizing:border-box}.settings-preview-page{scroll-behavior:auto}</style></head><body><div id="app"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),

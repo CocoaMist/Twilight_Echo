@@ -143,6 +143,36 @@ window.runSettingsScrollTests = async () => {
   nav('常规').click()
   await settle()
   const general = document.querySelector('#general')
+  const fixedNavigation = page.querySelector('.settings-preview-nav')
+  const restingNavTop = fixedNavigation.getBoundingClientRect().top
+  const restingScrollTop = page.scrollTop
+  document.documentElement.dataset.teMotion = 'full'
+  for (const transition of ['settings-page-enter-active', 'settings-page-leave-active']) {
+    page.classList.add(transition)
+    // Inspect the settled nav transform while the page's transition layer still
+    // exists; elapsed timer samples can miss its containing-block change.
+    for (const animation of fixedNavigation.getAnimations()) {
+      animation.pause()
+      animation.currentTime = Number(animation.effect.getTiming().duration)
+    }
+    expect(
+      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
+      `${transition} reanchored the fixed navigation`
+    )
+    page.scrollTo({ top: restingScrollTop + 80, behavior: 'instant' })
+    expect(
+      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
+      `${transition} let page scrolling move the navigation`
+    )
+    page.classList.remove(transition)
+    page.scrollTo({ top: restingScrollTop, behavior: 'instant' })
+    expect(
+      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
+      `${transition} completion rebounded the navigation`
+    )
+  }
+  document.documentElement.dataset.teMotion = 'off'
+  await settle()
   const beforeExpansion = page.scrollHeight
   general.querySelector('.test-disclosure').click()
   await settle()
