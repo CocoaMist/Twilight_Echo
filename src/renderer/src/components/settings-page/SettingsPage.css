@@ -3651,21 +3651,22 @@ html[data-te-motion='full'] .signal-line.active::before {
 .preset-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--te-control-gap);
   flex-shrink: 0;
-  padding: 8px 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
+  border: var(--te-control-border-width) solid var(--te-control-border);
+  border-radius: var(--te-control-radius-md);
   background: var(--te-card-bg);
-  color: #6b7280;
+  color: var(--te-control-fg-muted);
   cursor: pointer;
-  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
-  font-weight: 650;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-strong);
+  box-shadow: var(--te-settings-shadow-soft);
   transition:
-    background-color 0.16s var(--te-ease-soft),
-    border-color 0.16s var(--te-ease-soft),
-    color 0.16s var(--te-ease-soft);
+    background-color var(--te-motion-hover) var(--te-ease-soft),
+    border-color var(--te-motion-hover) var(--te-ease-soft),
+    color var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .preset-btn:hover {

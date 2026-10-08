@@ -1221,18 +1221,19 @@ onUnmounted(() => {
 }
 
 .btn {
-  padding: 8px 16px;
-  border-radius: 100px;
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  font-weight: 600;
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
+  border-radius: var(--te-control-radius-pill);
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-strong);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--te-control-gap);
   transition:
-    background-color 0.2s var(--te-ease-soft),
-    border-color 0.2s var(--te-ease-soft),
-    color 0.2s var(--te-ease-soft);
+    background-color var(--te-motion-hover) var(--te-ease-soft),
+    border-color var(--te-motion-hover) var(--te-ease-soft),
+    color var(--te-motion-hover) var(--te-ease-soft);
   border: none;
 }
 
@@ -1529,19 +1530,19 @@ onUnmounted(() => {
 }
 
 .icon-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
+  border-radius: var(--te-control-radius-sm);
   border: none;
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--te-control-bg-hover);
   color: var(--te-neutral-600, #4b5563);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition:
-    background-color 0.2s var(--te-ease-soft),
-    color 0.2s var(--te-ease-soft);
+    background-color var(--te-motion-hover) var(--te-ease-soft),
+    color var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .icon-btn:hover {

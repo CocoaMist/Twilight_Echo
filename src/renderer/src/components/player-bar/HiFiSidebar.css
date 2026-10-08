@@ -896,18 +896,19 @@ html[data-theme='dark'] .deck .deck-card {
 
 /* ===== 按钮 ===== */
 .deck-btn {
-  padding: 7px 13px;
-  border-radius: 10px;
-  border: 1px solid var(--d-line-strong);
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
+  border-radius: var(--te-control-radius-md);
+  border: var(--te-control-border-width) solid var(--d-line-strong);
   background: var(--d-card);
   color: var(--d-ink);
-  font-size: calc(var(--te-font-size-body, 14px) * 11.5 / 14);
-  font-weight: 500;
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight);
   letter-spacing: 0.03em;
   transition:
-    background-color 0.18s var(--te-ease-soft),
-    border-color 0.18s var(--te-ease-soft),
-    color 0.18s var(--te-ease-soft);
+    background-color var(--te-motion-hover) var(--te-ease-soft),
+    border-color var(--te-motion-hover) var(--te-ease-soft),
+    color var(--te-motion-hover) var(--te-ease-soft);
   white-space: nowrap;
 }
 

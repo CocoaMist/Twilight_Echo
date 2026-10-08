@@ -194,22 +194,22 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 0 18px;
-  border-radius: 999px;
-  border: 1px solid transparent;
+  gap: var(--te-control-gap);
+  min-height: var(--te-control-height-lg);
+  padding: 0 var(--te-control-pad-x-lg);
+  border-radius: var(--te-control-radius-pill);
+  border: var(--te-control-border-width) solid transparent;
   font: inherit;
-  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
-  font-weight: 700;
+  font-size: var(--te-control-font-size);
+  font-weight: var(--te-control-font-weight-bold);
   letter-spacing: 0.01em;
   cursor: pointer;
   transition:
-    transform 0.18s var(--stage-ease),
-    background 0.18s,
-    border-color 0.18s,
-    color 0.18s,
-    opacity 0.18s;
+    transform var(--te-motion-hover) var(--stage-ease),
+    background var(--te-motion-hover),
+    border-color var(--te-motion-hover),
+    color var(--te-motion-hover),
+    opacity var(--te-motion-hover);
 }
 
 .stage-btn:disabled {
@@ -325,21 +325,21 @@
 .stage-mini-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--stage-line-strong);
-  border-radius: 999px;
+  gap: var(--te-control-gap);
+  min-height: var(--te-control-height-sm);
+  padding: 0 var(--te-control-pad-x-sm);
+  border: var(--te-control-border-width) solid var(--stage-line-strong);
+  border-radius: var(--te-control-radius-pill);
   background: var(--stage-paper-raised);
   color: var(--stage-ink-soft);
   font: inherit;
-  font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
-  font-weight: 700;
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-bold);
   cursor: pointer;
   transition:
-    background 0.16s,
-    color 0.16s,
-    border-color 0.16s;
+    background var(--te-motion-hover),
+    color var(--te-motion-hover),
+    border-color var(--te-motion-hover);
 }
 
 .stage-mini-btn:hover {
@@ -432,14 +432,14 @@
 
 .row-play-btn {
   position: relative;
-  width: 34px;
-  height: 34px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   margin: 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 50%;
+  border-radius: var(--te-control-radius-pill);
   background: transparent;
   color: var(--stage-ink-faint);
   cursor: pointer;

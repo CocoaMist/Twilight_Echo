@@ -423,11 +423,11 @@
 .analytics-page .an-icon-button {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   padding: 0;
-  border: 1px solid var(--an-line);
-  border-radius: 8px;
+  border: var(--te-control-border-width) solid var(--an-line);
+  border-radius: var(--te-control-radius-sm);
   color: var(--an-secondary);
   flex-shrink: 0;
   font-size: 15px;
@@ -621,10 +621,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 12px 18px;
-  border-radius: 9px;
-  font-size: 12px;
+  gap: var(--te-control-gap);
+  min-height: var(--te-control-height-lg);
+  padding: 0 var(--te-control-pad-x-lg);
+  border-radius: var(--te-control-radius-md);
+  font-size: var(--te-control-font-size-sm);
 }
 .analytics-page .an-button-primary {
   color: var(--an-surface);

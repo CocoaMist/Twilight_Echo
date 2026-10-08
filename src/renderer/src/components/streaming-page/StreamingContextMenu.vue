@@ -261,8 +261,8 @@ const emit = defineEmits<{
   z-index: 4500;
   min-width: 180px;
   padding: 6px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.68);
+  border-radius: var(--te-control-radius-lg);
+  border: var(--te-control-border-width) solid rgba(255, 255, 255, 0.68);
   background: var(--te-glass-bg, rgba(255, 255, 255, 0.92));
   box-shadow: 0 20px 60px rgba(86, 70, 160, 0.18);
   backdrop-filter: blur(20px) saturate(150%);
@@ -273,15 +273,16 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   position: relative;
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
+  border-radius: var(--te-control-radius-md);
+  font-size: var(--te-control-font-size-sm);
   color: var(--te-neutral-800, #1e293b);
   cursor: pointer;
   transition:
-    background 0.15s,
-    color 0.15s,
-    transform 0.15s;
+    background var(--te-motion-hover),
+    color var(--te-motion-hover),
+    transform var(--te-motion-hover);
 }
 
 .streaming-context-menu .menu-item:hover {

@@ -885,19 +885,19 @@ function deleteMenuPlaylist(): void {
 }
 .stat-badge {
   background: rgba(194, 112, 61, 0.06);
-  padding: 7px 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(194, 112, 61, 0.1);
-  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
-  font-weight: 700;
+  padding: 7px var(--te-control-pad-x-md);
+  border-radius: var(--te-control-radius-lg);
+  border: var(--te-control-border-width) solid rgba(194, 112, 61, 0.1);
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-bold);
   color: #2a2118;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--te-control-gap);
   cursor: pointer;
   transition:
-    background-color 0.2s var(--te-ease-soft),
-    border-color 0.2s var(--te-ease-soft);
+    background-color var(--te-motion-hover) var(--te-ease-soft),
+    border-color var(--te-motion-hover) var(--te-ease-soft);
 }
 .stat-badge:hover {
   background: rgba(194, 112, 61, 0.1);

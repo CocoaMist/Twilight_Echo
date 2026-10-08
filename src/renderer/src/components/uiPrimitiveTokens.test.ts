@@ -31,6 +31,18 @@ const queueWorkspace = readFileSync(
   new URL('./player-bar/QueueWorkspaceDialog.vue', import.meta.url),
   'utf8'
 )
+const playerBarCss = readFileSync(new URL('./player-bar/PlayerBar.css', import.meta.url), 'utf8')
+const songListCss = readFileSync(new URL('./song-list/SongList.css', import.meta.url), 'utf8')
+const streamingStage = readFileSync(
+  new URL('./streaming-page/StreamingDetailStage.css', import.meta.url),
+  'utf8'
+)
+const themeStudioCss = readFileSync(
+  new URL('./theme-studio/ThemeStudioPage.css', import.meta.url),
+  'utf8'
+)
+const streamingSearch = readFileSync(new URL('./StreamingSearch.vue', import.meta.url), 'utf8')
+const ncmCloud = readFileSync(new URL('./NcmCloudPanel.vue', import.meta.url), 'utf8')
 
 function rule(source: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -131,5 +143,23 @@ test('dialog surfaces derive their radius from the single dialog token', () => {
       /border-radius:\s*var\(--te-dialog-radius\)/,
       `${name} must use var(--te-dialog-radius)`
     )
+  }
+})
+
+test('secondary control families snap to the shared scale', () => {
+  const cases: Array<[string, string, string, RegExp]> = [
+    ['player icon button', playerBarCss, '.icon-btn', /--te-control-height-md/],
+    ['library selection button', songListCss, '.selection-btn', /--te-control-radius-sm/],
+    ['streaming stage button', streamingStage, '.stage-btn', /--te-control-height-lg/],
+    ['streaming mini button', streamingStage, '.stage-mini-btn', /--te-control-height-sm/],
+    ['deck button', hiFiSidebar, '.deck-btn', /--te-control-radius-md/],
+    ['studio icon button', themeStudioCss, '.studio-icon-button', /--te-control-height-md/],
+    ['song list menu item', songListCss, '.menu-item', /--te-control-height-md/],
+    ['pager button', streamingSearch, '.pager-btn', /--te-control-radius-sm/],
+    ['cloud button', ncmCloud, '.cloud-button', /--te-control-radius-pill/],
+    ['settings preset button', settings, '.preset-btn', /--te-control-height-md/]
+  ]
+  for (const [label, source, selector, pattern] of cases) {
+    assert.match(rule(source, selector), pattern, `${label} (${selector}) must use the shared control scale`)
   }
 })

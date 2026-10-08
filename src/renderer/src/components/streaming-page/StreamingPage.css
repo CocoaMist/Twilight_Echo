@@ -1511,16 +1511,17 @@
 .selection-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--te-control-gap);
+  min-height: var(--te-control-height-sm);
   border: none;
-  border-radius: 8px;
-  padding: 6px 12px;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  font-weight: 500;
+  border-radius: var(--te-control-radius-sm);
+  padding: 0 var(--te-control-pad-x-sm);
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight);
   cursor: pointer;
   color: var(--te-neutral-800, #333);
   background: rgba(255, 255, 255, 0.55);
-  transition: background 0.15s ease;
+  transition: background var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .selection-btn:hover {
