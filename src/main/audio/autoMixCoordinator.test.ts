@@ -7,7 +7,7 @@ import { AutoMixCoordinator, type AutoMixPairSnapshot } from './autoMixCoordinat
 import { AUTO_MIX_MODEL_HASHES, type AutoMixFeatures } from '../../shared/autoMix.ts'
 const feature = (segment: 'head' | 'tail'): AutoMixFeatures => ({
   schemaVersion: 1,
-  analysisVersion: 3,
+  analysisVersion: 4,
   available: true,
   provenance: 'independent-beat-this-yamnet-v1',
   durationSeconds: 100,

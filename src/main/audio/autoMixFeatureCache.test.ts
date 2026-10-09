@@ -14,13 +14,13 @@ import {
 const identity: AutoMixCacheIdentity = {
   contentId: 'provider:track:123',
   quality: 'lossless',
-  analysisVersion: 3,
+  analysisVersion: 4,
   beatThisHash: AUTO_MIX_MODEL_HASHES.beatThis,
   yamnetHash: AUTO_MIX_MODEL_HASHES.yamnet
 }
 const features: AutoMixFeatures = {
   schemaVersion: 1,
-  analysisVersion: 3,
+  analysisVersion: 4,
   available: true,
   provenance: 'independent-beat-this-yamnet-v1',
   durationSeconds: 200,
@@ -54,6 +54,7 @@ test('AutoMix defaults and independent unknown feature contract remain explicit'
   assert.equal(isAutoMixAnalysisResult(features), true)
   assert.equal(isAutoMixAnalysisResult({ ...features, analysisVersion: 1 }), false)
   assert.equal(isAutoMixAnalysisResult({ ...features, analysisVersion: 2 }), false)
+  assert.equal(isAutoMixAnalysisResult({ ...features, analysisVersion: 3 }), false)
   assert.equal(
     isAutoMixAnalysisResult({
       ...features,

@@ -14,12 +14,19 @@ function main() {
     models = option('--models'),
     music = option('--music'),
     output = option('--output'),
-    probe = option('--probe')
-  if (!modulePath || !models || !music || !output || !probe)
+    probe = option('--probe'),
+    reuseManifest = option('--reuse-manifest')
+  if (!output || !probe || (!reuseManifest && (!modulePath || !models || !music)))
     throw new Error(
       'Usage: automix-music-probe --module <addon> --models <assets> --music <folder> --output <evidence-folder> --probe <plan_probe.exe> [--max-tracks 24]'
     )
   fs.mkdirSync(output, { recursive: true })
+  const records = []
+  if (reuseManifest) {
+    const previous = JSON.parse(fs.readFileSync(reuseManifest, 'utf8'))
+    for (const track of previous.tracks)
+      records.push({ ...track, features: JSON.parse(fs.readFileSync(track.featurePath, 'utf8')) })
+  } else {
   process.env.PATH = path.dirname(path.resolve(modulePath)) + path.delimiter + process.env.PATH
   const native = require(path.resolve(modulePath))
   const lock = JSON.parse(fs.readFileSync(path.join(models, 'dependencies.lock.json'), 'utf8'))
@@ -36,7 +43,6 @@ function main() {
   }
   visit(music)
   files.sort((a, b) => a.localeCompare(b, 'en'))
-  const records = []
   for (const source of files.slice(0, limit)) {
     const stats = fs.statSync(source),
       identity = JSON.stringify([
@@ -79,7 +85,12 @@ function main() {
       })
     )
   }
+  }
   const pairs = []
+  const fallbackReasons = {}, selectedStyles = {}, selectedTiers = {}
+  let evaluatedPairs = 0
+  const maxFixtures = Number(option('--max-pair-fixtures', '16'))
+  if(!Number.isInteger(maxFixtures)||maxFixtures<0||maxFixtures>10000)throw new Error('Invalid pair fixture limit')
   for (const outgoing of records)
     for (const incoming of records) {
       if (outgoing === incoming || !outgoing.features.available || !incoming.features.available)
@@ -96,9 +107,15 @@ function main() {
       )
       if (result.status !== 0) throw new Error(result.stderr || 'Native plan probe failed')
       const selected = JSON.parse(result.stdout)
-      if (selected.styleId === 1) continue
-      const pairFile = path.join(output, `pair-${pairs.length}.json`)
-      fs.writeFileSync(
+      evaluatedPairs++
+      selectedStyles[selected.styleId] = (selectedStyles[selected.styleId] ?? 0) + 1
+      selectedTiers[selected.mixTier] = (selectedTiers[selected.mixTier] ?? 0) + 1
+      if (selected.mixTier === 0) {
+        fallbackReasons[selected.reason] = (fallbackReasons[selected.reason] ?? 0) + 1
+        continue
+      }
+      const pairFile = pairs.length < maxFixtures ? path.join(output, `pair-${pairs.length}.json`) : null
+      if(pairFile)fs.writeFileSync(
         pairFile,
         JSON.stringify({
           outgoingSource: outgoing.source,
@@ -107,7 +124,8 @@ function main() {
           incoming: incoming.features
         }) + '\n'
       )
-      pairs.push({ outgoing: outgoing.source, incoming: incoming.source, selected, pairFile })
+      pairs.push({ outgoing: outgoing.source, incoming: incoming.source,
+        outgoingFeatures:outgoing.featurePath,incomingFeatures:incoming.featurePath, selected, pairFile })
     }
   fs.writeFileSync(
     path.join(output, 'manifest.json'),
@@ -116,6 +134,10 @@ function main() {
         format: 1,
         tracks: records.map(({ features: _features, ...record }) => record),
         pairs,
+        evaluatedPairs, selectedStyles, selectedTiers, fallbackReasons,
+        estimatedMusicPairs: (selectedTiers[2] ?? 0) + (selectedTiers[3] ?? 0),
+        boundaryCleanupPairs: selectedTiers[1] ?? 0,
+        evidence: 'input-energy-estimate-only; post-effect prepared evidence required in player',
         listeningQuality: 'not-rated',
         fullSong: 'not-tested',
         releaseGatePassed: false
@@ -127,7 +149,9 @@ function main() {
   console.log(
     JSON.stringify({
       tracks: records.length,
-      intelligentPairs: pairs.length,
+      estimatedMusicPairs: (selectedTiers[2] ?? 0) + (selectedTiers[3] ?? 0),
+      boundaryCleanupPairs: selectedTiers[1] ?? 0,
+      selectedTiers,
       manifest: path.join(output, 'manifest.json')
     })
   )

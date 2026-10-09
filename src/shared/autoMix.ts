@@ -20,9 +20,21 @@ export function autoMixReasonText(reason: string): string {
     feature_identity_mismatch: '分析时长与音源不一致，使用保守淡化',
     analysis_unavailable_conservative_crossfade: '分析未就绪，使用保守淡化',
     insufficient_confident_regions: '没有确认合适的节拍区域，使用保守淡化',
+    beat_events_unavailable: '没有检测到可用拍点，使用保守淡化',
+    stable_regions_unavailable: '节奏暂不稳定，使用保守淡化',
+    independent_quiet_outro: '已确认渐弱尾奏，使用短滤波衔接',
+    independent_silence_boundaries: '已确认首尾静音，保留音乐内容后衔接',
+    tempo_mismatch_conservative: '两首节拍速度不适合对齐，使用保守淡化',
+    tail_beat_coverage_missing: '尾奏已离开稳定节拍，使用保守淡化',
+    intro_beat_coverage_missing: '片头尚无合适的节拍起点，使用保守淡化',
+    vocal_overlap_or_unknown: '人声可能重叠或分析尚不确定，使用保守淡化',
     intelligent_prepare_failed_conservative: '智能转场准备失败，使用已就绪的保守淡化',
     intelligent_prepare_late_conservative: '智能转场准备未及时完成，使用已就绪的保守淡化',
     independent_confident_beat_regions: '已确认适合衔接的节拍区域',
+    independent_beat_tempo_mix: '已对齐稳定拍点，使用等功率节拍混合',
+    independent_musical_overlap: '使用有实际双轨声音的等功率交叠，未对齐拍点',
+    musical_overlap_inaudible: '处理后双轨交叠不足，使用较保守的衔接',
+    mix_evidence_unavailable: '无法验证双轨交叠，保留正常衔接',
     dsp_order_incompatible: '当前 DSP 图无法保持双轨处理顺序',
     album_boundary: '保留专辑连续播放边界',
     cue_boundary: '保留 CUE 分段边界',
@@ -58,6 +70,11 @@ export interface AutoMixStatus {
   progress: number
   transitionSeconds: number
   styleId: number | null
+  mixKind?: 'beat_mix' | 'musical_overlap' | 'boundary_cleanup' | 'conservative' | 'none'
+  audibleOverlapSeconds?: number
+  tempoAdjustmentPercent?: number
+  incomingResumeSeconds?: number
+  outgoingEndSeconds?: number
   reason: string
   configRevision: number
   pairRevision?: number
@@ -71,7 +88,7 @@ export const AUTO_MIX_MODEL_HASHES = Object.freeze({
   beatThis: '10b8a43f58ec08dec4cf3c0df3ae4c62b8c51b4d96449c318af7f2aa76dc574f',
   yamnet: '564a1406a3173634aedc049863403e581c1fabf2b0e2c22515d924d3ffb160e5'
 })
-export const AUTO_MIX_ANALYSIS_VERSION = 3 as const
+export const AUTO_MIX_ANALYSIS_VERSION = 4 as const
 
 export interface AutoMixWindow {
   sourceStart: number
