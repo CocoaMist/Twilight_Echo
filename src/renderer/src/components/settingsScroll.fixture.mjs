@@ -186,6 +186,73 @@ window.runSettingsScrollTests = async () => {
   }
   expect(sections.length === 9, 'missing categories')
   assertPanel('general')
+  // Real Chromium hover must not make labels look selected or move nested controls.
+  const hoverFixture = document.createElement('div')
+  hoverFixture.className = 'setting-item'
+  hoverFixture.innerHTML =
+    '<span class="setting-copy">静态说明</span><button class="toggle-switch" role="switch" aria-checked="false" aria-label="悬停测试"></button><button class="swatch" aria-label="颜色测试"></button>'
+  document.querySelector('#general').prepend(hoverFixture)
+  const switchControl = hoverFixture.querySelector('.toggle-switch')
+  const swatchControl = hoverFixture.querySelector('.swatch')
+  const moveTo = async (element) => {
+    const rect = element.getBoundingClientRect()
+    await window.sendSettingsTestInput({
+      type: 'mouseMove',
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2)
+    })
+    await settle()
+  }
+  const bounds = (element) => {
+    const rect = element.getBoundingClientRect()
+    return [rect.x, rect.y, rect.width, rect.height].join(',')
+  }
+  for (const theme of ['pureWhite', 'dark']) {
+    document.documentElement.dataset.theme = theme
+    for (const motion of ['full', 'reduced', 'off']) {
+      document.documentElement.dataset.teMotion = motion
+      await moveTo(page.querySelector('h1'))
+      const rowStyle = getComputedStyle(hoverFixture)
+      const rowPaint = [rowStyle.backgroundColor, rowStyle.boxShadow].join(',')
+      const switchBounds = bounds(switchControl),
+        swatchBounds = bounds(swatchControl)
+      await moveTo(hoverFixture.querySelector('.setting-copy'))
+      expect(hoverFixture.matches(':hover'), 'hover fixture did not receive pointer')
+      expect(
+        [rowStyle.backgroundColor, rowStyle.boxShadow].join(',') === rowPaint,
+        'hover paints a static settings row'
+      )
+      await moveTo(switchControl)
+      expect(bounds(switchControl) === switchBounds, 'switch moves or scales on hover')
+      switchControl.disabled = true
+      await settle()
+      expect(
+        getComputedStyle(switchControl).filter === 'none',
+        'disabled switch receives hover feedback'
+      )
+      switchControl.disabled = false
+      await moveTo(swatchControl)
+      expect(bounds(swatchControl) === swatchBounds, 'swatch moves or scales on hover')
+      const category = nav('播放'),
+        categoryBounds = bounds(category)
+      await moveTo(category)
+      expect(bounds(category) === categoryBounds, 'category moves on hover')
+      await window.sendSettingsTestInput({ type: 'keyDown', keyCode: 'Tab' })
+      await window.sendSettingsTestInput({ type: 'keyUp', keyCode: 'Tab' })
+      await settle()
+      switchControl.focus()
+      await settle()
+      expect(document.activeElement === switchControl, 'switch cannot receive focus')
+      expect(
+        [rowStyle.backgroundColor, rowStyle.boxShadow].join(',') === rowPaint,
+        'focused control paints the whole row'
+      )
+      switchControl.blur()
+    }
+  }
+  hoverFixture.remove()
+  document.documentElement.dataset.theme = 'pureWhite'
+  document.documentElement.dataset.teMotion = 'off'
   // Slow startup must not undo a user's category choice.
   nav('外观').click()
   await settle()

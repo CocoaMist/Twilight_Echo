@@ -360,8 +360,7 @@ html:is(
     background 0.18s ease,
     border-color 0.18s ease,
     box-shadow 0.18s ease,
-    color 0.18s ease,
-    translate var(--te-motion-hover) var(--te-ease-soft);
+    color 0.18s ease;
 }
 
 .preview-nav-item::before {
@@ -381,10 +380,7 @@ html:is(
   width: 16px;
   text-align: center;
   opacity: 0.88;
-  transition:
-    color var(--te-motion-hover) var(--te-ease-soft),
-    scale var(--te-motion-hover) var(--te-ease-soft),
-    rotate var(--te-motion-hover) var(--te-ease-soft);
+  transition: color var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .preview-nav-item:hover {
@@ -407,17 +403,6 @@ html:is(
 .preview-nav-item.active i {
   color: var(--brand-500);
   scale: 1.08;
-}
-
-@media (hover: hover) {
-  html[data-te-motion='full'] .preview-nav-item:hover {
-    translate: 2px 0;
-  }
-
-  html[data-te-motion='full'] .preview-nav-item:hover i {
-    scale: 1.08;
-    rotate: -5deg;
-  }
 }
 
 /* ── 侧边栏搜索 ─────────────────────────────────────── */
@@ -790,27 +775,9 @@ html:is(
   min-height: 58px;
   padding: 14px 16px;
   border-radius: 12px;
-  transition:
-    background var(--te-motion-hover) var(--te-ease-soft),
-    box-shadow var(--te-motion-hover) var(--te-ease-soft);
 }
 
-@media (hover: hover) and (pointer: fine) {
-  .setting-item:hover {
-    background: var(--te-settings-search-bg, #eef0f3);
-  }
-}
-
-.setting-item:focus-within {
-  background: color-mix(in srgb, var(--te-settings-search-bg, #eef0f3) 82%, var(--te-card-bg));
-  box-shadow: inset 2px 0 0 rgba(var(--te-primary-rgb), 0.54);
-}
-
-@media (hover: hover) {
-  html[data-te-motion='full'] .setting-item:hover {
-    box-shadow: inset 2px 0 0 rgba(var(--te-primary-rgb), 0.32);
-  }
-}
+/* Rows contain labels and nested controls; only the controls signal interaction. */
 
 .setting-item.top-align {
   align-items: flex-start;
@@ -1059,8 +1026,7 @@ html:is(
   cursor: pointer;
   transition:
     background var(--te-motion-panel) var(--te-ease-soft),
-    box-shadow var(--te-motion-panel) var(--te-ease-soft),
-    scale var(--te-motion-hover) var(--te-ease-soft);
+    box-shadow var(--te-motion-panel) var(--te-ease-soft);
 }
 
 .toggle-switch:focus-visible {
@@ -1121,9 +1087,9 @@ html[data-theme='dark'] .settings-preview-layout .toggle-switch::after {
   background: var(--te-settings-text);
 }
 
-@media (hover: hover) {
-  html[data-te-motion='full'] .toggle-switch:hover {
-    scale: 1.05;
+@media (hover: hover) and (pointer: fine) {
+  .toggle-switch:not(:disabled, [aria-disabled='true']):hover {
+    filter: brightness(0.94);
   }
 }
 
@@ -1844,9 +1810,7 @@ html[data-theme='dark'] .theme-segment button.active {
   border-radius: 50%;
   cursor: pointer;
   box-shadow: 0 1px 5px rgba(15, 23, 42, 0.12);
-  transition:
-    scale var(--te-motion-hover) var(--te-ease-soft),
-    box-shadow var(--te-motion-hover) var(--te-ease-soft);
+  transition: box-shadow var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .swatch.active {
@@ -1858,10 +1822,9 @@ html[data-te-motion='full'] .swatch.active {
   animation: te-settings-swatch-select var(--te-motion-panel) var(--te-ease-soft);
 }
 
-@media (hover: hover) {
-  html[data-te-motion='full'] .swatch:hover {
-    scale: 1.14;
-    box-shadow: 0 5px 12px rgba(15, 23, 42, 0.2);
+@media (hover: hover) and (pointer: fine) {
+  .swatch:not(:disabled, [aria-disabled='true']):hover {
+    box-shadow: 0 0 0 1px var(--te-settings-text-muted);
   }
 }
 
@@ -2241,20 +2204,13 @@ html[data-te-motion='full'] .swatch.active {
   transition:
     border-color var(--te-motion-hover) var(--te-ease-soft),
     background var(--te-motion-hover) var(--te-ease-soft),
-    box-shadow var(--te-motion-hover) var(--te-ease-soft),
-    translate var(--te-motion-hover) var(--te-ease-soft);
+    box-shadow var(--te-motion-hover) var(--te-ease-soft);
 }
 
 .range-pill:focus-within {
   border-color: var(--brand-300);
   background: var(--te-card-bg);
   box-shadow: 0 0 0 3px rgba(var(--te-primary-rgb), 0.1);
-}
-
-@media (hover: hover) {
-  html[data-te-motion='full'] .range-pill:hover {
-    translate: 0 -1px;
-  }
 }
 
 .range-pill span {
@@ -2526,11 +2482,6 @@ html[data-te-motion='full'] .swatch.active {
   color: #a16207;
 }
 
-.sponsor-primary-button:hover,
-.sponsor-secondary-button:hover {
-  transform: translateY(-1px);
-}
-
 .sponsor-primary-button:hover {
   background: #d97706;
   border-color: #d97706;
@@ -2540,10 +2491,6 @@ html[data-te-motion='full'] .swatch.active {
 .sponsor-secondary-button:hover {
   border-color: #f59e0b;
   background: #ffffff;
-}
-
-.about-links button:hover {
-  transform: translateY(-1px);
 }
 
 .about-links {
@@ -2780,7 +2727,6 @@ html[data-te-motion='full'] .swatch.active {
 }
 
 .afdian-option:hover {
-  transform: translateY(-1px);
   border-color: rgba(var(--te-primary-rgb), 0.42);
   background: rgba(var(--te-primary-rgb), 0.13);
 }
@@ -3523,9 +3469,7 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
   align-items: center;
   gap: 6px;
   cursor: pointer;
-  transition:
-    opacity var(--te-motion-panel) var(--te-ease-soft),
-    scale var(--te-motion-hover) var(--te-ease-soft);
+  transition: opacity var(--te-motion-panel) var(--te-ease-soft);
   opacity: 0.45;
 }
 
@@ -3550,8 +3494,7 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
   transition:
     border-color var(--te-motion-panel) var(--te-ease-soft),
     background var(--te-motion-panel) var(--te-ease-soft),
-    box-shadow var(--te-motion-panel) var(--te-ease-soft),
-    scale var(--te-motion-hover) var(--te-ease-soft);
+    box-shadow var(--te-motion-panel) var(--te-ease-soft);
 }
 
 .signal-node-circle.active {
@@ -3609,14 +3552,9 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
   background-size: 220% 100%;
 }
 
-@media (hover: hover) {
-  html[data-te-motion='full'] .signal-node:not(.static):hover {
-    scale: 1.05;
+@media (hover: hover) and (pointer: fine) {
+  .signal-node:not(.static, :disabled, [aria-disabled='true']):hover {
     opacity: 1;
-  }
-
-  html[data-te-motion='full'] .signal-node:not(.static):hover .signal-node-circle {
-    scale: 1.08;
   }
 }
 

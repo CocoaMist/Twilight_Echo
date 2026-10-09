@@ -116,10 +116,12 @@ app.whenReady().then(async()=>{
   throw new Error('settings viewport did not reach '+width+'x900');
  };
  ipcMain.handle('settings:resize',(_event,width)=>resizeViewport(width));
+ ipcMain.handle('settings:input',(_event,input)=>{win.webContents.focus();win.webContents.sendInputEvent(input)});
  try {
   await win.loadFile(require('node:path').join(__dirname,'index.html'));
   await resizeViewport(1440);
   await win.webContents.executeJavaScript("window.resizeTestWindow=width=>require('electron').ipcRenderer.invoke('settings:resize',width);void 0");
+  await win.webContents.executeJavaScript("window.sendSettingsTestInput=input=>require('electron').ipcRenderer.invoke('settings:input',input);void 0");
   console.log(await win.webContents.executeJavaScript('window.runSettingsScrollTests()'));
   app.exit(0);
  }catch(error){console.error(error.stack);app.exit(1)}
