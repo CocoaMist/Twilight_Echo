@@ -156,7 +156,7 @@
     "is-fullwidth-code-point": "3.0.0",
     "math-intrinsics": "1.1.0",
     "mime-db": "1.52.0",
-    "music-metadata": "^11.12.3",
+    "music-metadata": "^11.16.0",
     "node-taglib-sharp": "6.0.3",
     "object-inspect": "1.13.4",
     "pend": "1.2.0",
