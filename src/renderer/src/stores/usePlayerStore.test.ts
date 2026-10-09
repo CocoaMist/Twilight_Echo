@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import ts from 'typescript'
+import { effectScope, nextTick, ref, watch } from 'vue'
+import { clampSoftwareVolume } from '../utils/playerAudioSettings.ts'
 import { normalizeAudioDeviceOptions } from './player/audioOutputNormalize.ts'
 import { APP_LOCALES } from '../../../shared/i18n/locale.ts'
 import { translate } from '../../../shared/i18n/translate.ts'
@@ -1154,6 +1156,163 @@ test('player store does not pretend DSP bypass is strict bit-perfect mode', () =
   )
 })
 
+function volumeRestoreFixture(savedVolume: number) {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const file = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true)
+  let volumeWatcher = ''
+  let settingsWatcher = ''
+  let readyCallback = ''
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const target = node.expression.getText(file)
+      const input = node.arguments[0]?.getText(file) ?? ''
+      if (target === 'watch' && input === 'volume') volumeWatcher = node.getText(file)
+      if (target === 'watch' && input.includes('appSettings.value.softwareVolume'))
+        settingsWatcher = node.getText(file)
+      if (target === 'api.onReady') readyCallback = input
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  assert.ok(volumeWatcher && settingsWatcher && readyCallback)
+
+  const volume = ref(0.7)
+  const appSettings = ref({ softwareVolume: 0.7, audioDeviceProfiles: { volumeCeiling: 1 } })
+  const settingsLoaded = ref(false)
+  const forwarded: number[] = []
+  const writes: number[] = []
+  let storedVolume = savedVolume
+  const api = {
+    setVolume: async (value: number) => {
+      forwarded.push(value)
+      // The main-process volume IPC also persists the value it receives.
+      storedVolume = value
+    },
+    setPlaybackRate: async () => {},
+    getPlaybackInfo: async () => ({})
+  }
+  const bindings = {
+    volume,
+    appSettings,
+    settingsLoaded,
+    ref,
+    watch,
+    clampSoftwareVolume,
+    DEFAULT_SOFTWARE_VOLUME: 0.7,
+    queueMicrotask,
+    window: { api: { audioEngine: api } },
+    api,
+    updateSettings: async (patch: { softwareVolume: number }) => {
+      writes.push(patch.softwareVolume)
+      storedVolume = patch.softwareVolume
+    },
+    audioEngineReady: ref(false),
+    audioEngineRecoveryNotice: ref(null),
+    setAudioEngineError: () => {},
+    refreshAudioOutputState: async () => {},
+    playbackRate: ref(1),
+    playbackInfo: ref({}),
+    audioOutputConfig: ref({}),
+    defaultAudioOutputConfig: {},
+    normalizeNativePlaybackInfo: (value: unknown) => value,
+    rendererPauseFadeController: { syncVolume: () => {} }
+  }
+  const helpers = [
+    'persistSoftwareVolume',
+    'scheduleSoftwareVolumePersist',
+    'flushSoftwareVolumePersist',
+    'syncSoftwareVolumeToEngine'
+  ]
+    .map((name) => {
+      const declaration = file.statements.find(
+        (node): node is ts.FunctionDeclaration =>
+          ts.isFunctionDeclaration(node) && node.name?.text === name
+      )
+      assert.ok(declaration)
+      return declaration.getText(file)
+    })
+    .join('\n')
+  const implementation = ts.transpileModule(
+    `let suppressVolumePersist = false
+     const playbackAudio = null
+     const lastAudibleVolume = ref(0.7)
+     const muted = ref(false)
+     const castTargetName = ref('')
+     const softwareVolumePersistence = {
+       schedule: (value) => { void persistSoftwareVolume(value) },
+       flush: (value) => persistSoftwareVolume(value)
+     }
+     ${helpers}
+     ${volumeWatcher}
+     ${settingsWatcher}
+     return { ready: ${readyCallback}, flushSoftwareVolumePersist }`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
+  ).outputText
+  const scope = effectScope()
+  const controls = scope.run(() =>
+    new Function(...Object.keys(bindings), implementation)(...Object.values(bindings))
+  ) as { ready: () => Promise<void>; flushSoftwareVolumePersist: () => Promise<void> }
+  return {
+    ...controls,
+    volume,
+    forwarded,
+    writes,
+    storedVolume: () => storedVolume,
+    hydrate() {
+      appSettings.value = {
+        softwareVolume: storedVolume,
+        audioDeviceProfiles: { volumeCeiling: 1 }
+      }
+      settingsLoaded.value = true
+    },
+    dispose: () => scope.stop()
+  }
+}
+
+test('engine ready before settings hydration cannot overwrite saved volume with 70%', async () => {
+  const fixture = volumeRestoreFixture(0.24)
+  try {
+    await fixture.ready()
+    await fixture.flushSoftwareVolumePersist()
+    assert.deepEqual(fixture.forwarded, [])
+    assert.equal(fixture.storedVolume(), 0.24)
+    fixture.hydrate()
+    await nextTick()
+    assert.equal(fixture.volume.value, 0.24)
+    assert.equal(fixture.forwarded.at(-1), 0.24)
+    assert.equal(fixture.storedVolume(), 0.24)
+    assert.deepEqual(fixture.writes, [])
+  } finally {
+    fixture.dispose()
+  }
+})
+
+for (const savedVolume of [0, 0.7, 0.36]) {
+  test(`settings hydration restores ${savedVolume * 100}% before engine ready and keeps later changes`, async () => {
+    const fixture = volumeRestoreFixture(savedVolume)
+    try {
+      fixture.hydrate()
+      // The ready event can arrive before Vue's queued volume watcher runs.
+      await fixture.ready()
+      await nextTick()
+      assert.equal(fixture.volume.value, savedVolume)
+      assert.ok(fixture.forwarded.length > 0)
+      assert.ok(fixture.forwarded.every((value) => value === savedVolume))
+      assert.equal(fixture.writes.length, 0)
+
+      fixture.volume.value = 0.48
+      await nextTick()
+      await fixture.flushSoftwareVolumePersist()
+      await fixture.ready()
+      assert.equal(fixture.storedVolume(), 0.48)
+      assert.equal(fixture.forwarded.at(-1), 0.48)
+      assert.ok(fixture.writes.includes(0.48))
+    } finally {
+      fixture.dispose()
+    }
+  })
+}
+
 test('player store keeps default volume at 0.7, persists softwareVolume, and exposes setUnityVolume', () => {
   const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
   const settingsSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
@@ -1171,7 +1330,7 @@ test('player store keeps default volume at 0.7, persists softwareVolume, and exp
   assert.match(source, /async function flushSoftwareVolumePersist\(\): Promise<void>/)
   assert.match(appSource, /await flushSoftwareVolumePersist\(\)/)
   assert.match(source, /updateSettings\(\{ softwareVolume: next \}\)/)
-  assert.match(source, /watch\(\s*\(\) => appSettings\.value\.softwareVolume,/)
+  assert.match(source, /watch\(\s*\[settingsLoaded, \(\) => appSettings\.value\.softwareVolume\],/)
   assert.match(settingsSource, /softwareVolume: 0\.7/)
   assert.match(mainSettings, /softwareVolume: DEFAULT_SOFTWARE_VOLUME/)
   assert.match(mainSettings, /softwareVolume: clampNumber\(\s*settings\.softwareVolume/)
