@@ -33,7 +33,7 @@ const emit = defineEmits<{
   <section id="cache" class="glass-card preview-section">
     <div class="section-title-row">
       <i class="pi pi-database"></i>
-      <h2>缓存 (Cache)</h2>
+      <h2>缓存</h2>
     </div>
     <div class="setting-list">
       <div class="setting-item top-align">
@@ -42,7 +42,7 @@ const emit = defineEmits<{
           <span>保存图片、歌词、在线资源和可复用的流媒体缓存；用户固定的离线下载独立保留。</span>
         </div>
         <div class="path-control">
-          <input readonly :value="activeCachePath || '未设置'" />
+          <input aria-label="缓存目录" readonly :value="activeCachePath || '未设置'" />
           <button type="button" class="soft-button" @click="emit('chooseCacheFolder')">
             选择文件夹
           </button>
@@ -103,6 +103,7 @@ const emit = defineEmits<{
           <span>仅在插件和平台规则允许时缓存音频；关闭后不保存音源请求得到的可复用音频。</span>
         </div>
         <select
+          aria-label="流媒体音频缓存"
           class="preview-select compact-select"
           :value="cachePolicy.streamingAudio"
           @change="emit('setStreamingAudioCachePolicy', $event)"

@@ -717,14 +717,6 @@ html:is(
   padding: 28px 28px 24px;
 }
 
-/* Keep controls mounted/searchable, but skip layout and painting of distant cards.
-   The observer seeds real heights before enabling this, preserving the scrollbar.
-   Navigation briefly lays out every card so deep links use current geometry. */
-.settings-preview-page:not(.settings-resolving-navigation) .settings-section-measured {
-  content-visibility: auto;
-  contain-intrinsic-block-size: var(--settings-section-height);
-}
-
 .section-title-row {
   display: flex;
   align-items: center;
@@ -3090,12 +3082,9 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
 @keyframes te-settings-nav-arrive {
   from {
     opacity: 0;
-    transform: translate3d(0, calc(-50% + 12px), 0) scale(0.992);
   }
-
   to {
     opacity: 1;
-    transform: translate3d(0, -50%, 0) scale(1);
   }
 }
 

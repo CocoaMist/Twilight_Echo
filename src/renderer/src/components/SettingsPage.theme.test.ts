@@ -231,15 +231,15 @@ test('plugin center uses the settings wallpaper painter over streaming content',
   assert.match(overlay, /<PluginPage\s+v-if="showPluginPage"/)
 })
 
-test('audio output device cards are opt-in through a closed native checkbox', () => {
+test('audio output device discovery uses a closed expander button', () => {
   assert.match(playbackPageSource, /const audioOutputPanelExpanded = ref\(false\)/)
   assert.match(
     playbackPageSource,
-    /<input[\s\S]{0,260}?v-model="audioOutputPanelExpanded"[\s\S]{0,160}?type="checkbox"[\s\S]{0,200}?aria-controls="audio-output-device-panel"[\s\S]{0,160}?:aria-expanded="audioOutputPanelExpanded"/
+    /<button[\s\S]{0,180}?class="device-panel-disclosure"[\s\S]{0,180}?aria-controls="audio-output-device-panel"[\s\S]{0,160}?:aria-expanded="audioOutputPanelExpanded"/
   )
   assert.match(
     playbackPageSource,
-    /<SettingsDisclosure\s+:open="audioOutputPanelExpanded"\s+trigger-selector='input\[aria-controls="audio-output-device-panel"\]'\s+id="audio-output-device-panel"\s+class="device-panel-content"[\s\S]{0,240}?<div class="device-grid">/
+    /<SettingsDisclosure\s+:open="audioOutputPanelExpanded"\s+trigger-selector='button\[aria-controls="audio-output-device-panel"\]'\s+id="audio-output-device-panel"\s+class="device-panel-content"[\s\S]{0,240}?<div class="device-grid">/
   )
   assert.match(styles, /\.device-panel-disclosure\s*\{[\s\S]*?cursor:\s*pointer/)
   assert.match(

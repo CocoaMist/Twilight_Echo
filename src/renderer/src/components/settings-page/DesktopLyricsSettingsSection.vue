@@ -142,41 +142,66 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
 
 <template>
   <section id="desktopLyrics" class="glass-card preview-section settings-section">
-    <div class="section-heading desktop-lyrics-heading">
+    <div class="section-title-row">
+      <i class="pi pi-window-maximize"></i>
       <h2>桌面歌词</h2>
-      <div class="quick-control-row">
-        <label class="check-field">
-          <input :checked="draft.enabled" type="checkbox" @change="emit('toggle')" />
-          <span>启用桌面歌词</span>
-        </label>
-        <label class="check-field">
-          <input
-            :checked="draft.alwaysOnTop"
-            type="checkbox"
-            @change="update('alwaysOnTop', ($event.target as HTMLInputElement).checked, true)"
-          />
-          <span>始终置顶</span>
-        </label>
-        <label class="check-field">
-          <input
-            :checked="draft.translationVisible"
-            type="checkbox"
-            @change="
-              update('translationVisible', ($event.target as HTMLInputElement).checked, true)
-            "
-          />
-          <span>显示翻译</span>
-        </label>
-        <label class="check-field">
-          <input
-            :checked="draft.romanizationVisible"
-            type="checkbox"
-            @change="
-              update('romanizationVisible', ($event.target as HTMLInputElement).checked, true)
-            "
-          />
-          <span>显示音译</span>
-        </label>
+    </div>
+    <div class="quick-control-row">
+      <div class="setting-item">
+        <div class="setting-copy">
+          <strong>启用桌面歌词</strong><span>在应用窗口之外显示悬浮歌词。</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-switch"
+          role="switch"
+          aria-label="启用桌面歌词"
+          :aria-checked="draft.enabled"
+          :class="{ active: draft.enabled, inactive: !draft.enabled }"
+          @click="emit('toggle')"
+        ></button>
+      </div>
+      <div class="setting-item">
+        <div class="setting-copy">
+          <strong>始终置顶</strong><span>让歌词窗口显示在其他窗口上方。</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-switch"
+          role="switch"
+          aria-label="始终置顶"
+          :aria-checked="draft.alwaysOnTop"
+          :class="{ active: draft.alwaysOnTop, inactive: !draft.alwaysOnTop }"
+          @click="update('alwaysOnTop', !draft.alwaysOnTop, true)"
+        ></button>
+      </div>
+      <div class="setting-item">
+        <div class="setting-copy">
+          <strong>显示翻译</strong><span>歌曲提供翻译时，在原文下方显示。</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-switch"
+          role="switch"
+          aria-label="显示翻译"
+          :aria-checked="draft.translationVisible"
+          :class="{ active: draft.translationVisible, inactive: !draft.translationVisible }"
+          @click="update('translationVisible', !draft.translationVisible, true)"
+        ></button>
+      </div>
+      <div class="setting-item">
+        <div class="setting-copy">
+          <strong>显示音译</strong><span>歌曲提供音译时显示罗马音。</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-switch"
+          role="switch"
+          aria-label="显示音译"
+          :aria-checked="draft.romanizationVisible"
+          :class="{ active: draft.romanizationVisible, inactive: !draft.romanizationVisible }"
+          @click="update('romanizationVisible', !draft.romanizationVisible, true)"
+        ></button>
       </div>
     </div>
 
@@ -286,6 +311,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
         <h3>调整排版样式</h3>
         <div class="layout-control-grid">
           <label class="field">
+            <span>显示行数</span>
             <select
               :value="draft.displayMode"
               aria-label="显示行数"
@@ -303,6 +329,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             </select>
           </label>
           <label class="field">
+            <span>排列方向</span>
             <select
               :value="draft.writingMode"
               aria-label="文字排列方向"
@@ -317,6 +344,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             </select>
           </label>
           <label class="field">
+            <span>对齐方式</span>
             <select
               :value="draft.textAlign"
               aria-label="歌词对齐方式"
@@ -340,6 +368,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
         <h3>更改配色方案</h3>
         <div class="palette-control-grid">
           <label class="field">
+            <span>配色方案</span>
             <select
               :value="draft.palette"
               aria-label="歌词配色方案"
@@ -435,17 +464,23 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
           />
         </label>
       </div>
-      <label class="switch-field">
-        <span><b>锁定并穿透点击</b><small>使用 Ctrl + Alt + L 或托盘菜单解锁</small></span>
-        <input
-          type="checkbox"
-          :checked="draft.locked"
-          @change="update('locked', ($event.target as HTMLInputElement).checked, true)"
-        />
-      </label>
+      <div class="setting-item">
+        <div class="setting-copy">
+          <strong>锁定并穿透点击</strong><span>使用 Ctrl + Alt + L 或托盘菜单解锁。</span>
+        </div>
+        <button
+          type="button"
+          class="toggle-switch"
+          role="switch"
+          aria-label="锁定并穿透点击"
+          :aria-checked="draft.locked"
+          :class="{ active: draft.locked, inactive: !draft.locked }"
+          @click="update('locked', !draft.locked, true)"
+        ></button>
+      </div>
     </div>
 
-    <details class="setting-card advanced">
+    <details class="setting-card advanced settings-advanced-details">
       <summary>高级设置</summary>
       <div class="two-columns advanced-grid">
         <label class="field range-field">

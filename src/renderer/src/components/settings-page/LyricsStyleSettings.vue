@@ -38,6 +38,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
     class="settings-accordion-trigger setting-item"
     :class="{ open }"
     :aria-expanded="open"
+    aria-controls="settings-lyrics-style"
     @click="open = !open"
   >
     <span class="setting-copy">
@@ -46,7 +47,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <SettingsDisclosure :open="open" class="settings-accordion-body">
+  <SettingsDisclosure id="settings-lyrics-style" :open="open" class="settings-accordion-body">
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
@@ -54,6 +55,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
         <span>主播放页歌词使用的字体，默认跟随界面字体。</span>
       </div>
       <select
+        aria-label="歌词字体"
         class="preview-select wide"
         :value="settings.lyricsAppearance.fontFamily"
         @change="
@@ -80,6 +82,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
       </div>
       <div class="segmented-control" role="group" aria-label="歌词对齐">
         <button
+          :aria-pressed="settings.lyricsAppearance.align === option.value"
           v-for="option in lyricAlignOptions"
           :key="option.value"
           type="button"
@@ -99,6 +102,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
       <div class="range-pill">
         <span>字号</span>
         <input
+          aria-label="歌词字号"
           class="range-input"
           type="range"
           :min="lyricsRanges.fontSize.min"
@@ -127,6 +131,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
       <div class="range-pill">
         <span>字重</span>
         <input
+          aria-label="歌词字重"
           class="range-input"
           type="range"
           min="400"
@@ -156,6 +161,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
       <div class="range-pill">
         <span>行距</span>
         <input
+          aria-label="歌词行距"
           class="range-input"
           type="range"
           :min="lyricsRanges.lineHeight.min"
@@ -185,6 +191,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
       <div class="range-pill">
         <span>暗度</span>
         <input
+          aria-label="未播放歌词淡化程度"
           class="range-input"
           type="range"
           :min="lyricsRanges.inactiveOpacity.min"
@@ -216,6 +223,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
       </div>
       <div class="segmented-control density" role="group" aria-label="歌词聚焦行数">
         <button
+          :aria-pressed="settings.lyricsAppearance.focusLineCount === option.value"
           v-for="option in lyricsFocusLineCountOptions"
           :key="option.value"
           type="button"
@@ -253,6 +261,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
       </div>
       <div class="segmented-control" role="group" aria-label="歌词颜色来源">
         <button
+          :aria-pressed="settings.lyricsAppearance.colorMode === 'theme'"
           type="button"
           :class="{ active: settings.lyricsAppearance.colorMode === 'theme' }"
           @click="updateLyricsAppearance('colorMode', 'theme')"
@@ -260,6 +269,7 @@ useSettingsSearchDisclosure('lyricsStyle', open)
           跟随主题
         </button>
         <button
+          :aria-pressed="settings.lyricsAppearance.colorMode === 'custom'"
           type="button"
           :class="{ active: settings.lyricsAppearance.colorMode === 'custom' }"
           @click="updateLyricsAppearance('colorMode', 'custom')"

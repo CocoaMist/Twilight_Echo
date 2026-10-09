@@ -55,7 +55,11 @@ const KEY_LABELS: Record<string, string> = {
   Left: '←',
   Right: '→',
   Up: '↑',
-  Down: '↓'
+  Down: '↓',
+  MediaPreviousTrack: '上一曲键',
+  MediaNextTrack: '下一曲键',
+  MediaPlayPause: '播放 / 暂停键',
+  MediaStop: '停止键'
 }
 
 const recordingKey = ref<BindingKey | null>(null)
@@ -112,7 +116,8 @@ const statusSummary = computed<{ tone: StatusTone; text: string }>(() => {
 })
 
 const conflictTip = computed(() => {
-  if (reservedConflict.value) return 'Ctrl+K / ⌘K 已保留给应用内命令面板，已保留原值'
+  if (reservedConflict.value)
+    return `${IS_MAC ? '⌘K' : 'Ctrl+K'} 已保留给应用内命令面板，已保留原值`
   if (!conflictBinding.value) return ''
   const other = EDITABLE_BINDINGS.find((item) => item.key === conflictWith.value)
   return other ? `与「${other.label}」的组合键重复，已保留原值` : '与其他快捷键冲突，已保留原值'
@@ -268,7 +273,9 @@ function onRecorderBlur(key: BindingKey): void {
       <i class="pi pi-key"></i>
       <h2>快捷键</h2>
     </div>
-    <p class="shortcut-panel-hint">Ctrl+K / ⌘K：打开应用内命令面板。无需启用全局快捷键。</p>
+    <p class="shortcut-panel-hint">
+      {{ IS_MAC ? '⌘K' : 'Ctrl+K' }}：打开应用内命令面板。无需启用全局快捷键。
+    </p>
     <div class="setting-list">
       <div class="setting-item">
         <div class="setting-copy">
@@ -356,7 +363,9 @@ function onRecorderBlur(key: BindingKey): void {
             :title="statusTitleOf(status)"
           ></span>
           <span class="shortcut-label">{{ mediaLabelOf(status.label) }}</span>
-          <kbd class="shortcut-key static">{{ status.accelerator }}</kbd>
+          <kbd class="shortcut-key static" :title="status.accelerator">{{
+            formatAccelerator(status.accelerator)
+          }}</kbd>
         </li>
       </ul>
     </div>

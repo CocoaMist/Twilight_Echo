@@ -91,19 +91,20 @@ const emit = defineEmits<{
   <section id="general" class="glass-card preview-section">
     <div class="section-title-row">
       <i class="pi pi-sliders-h"></i>
-      <h2>常规 (General)</h2>
+      <h2>常规</h2>
     </div>
 
     <div class="section-block">
-      <h3>启动与窗口 (Startup)</h3>
+      <h3>启动与窗口</h3>
       <div class="setting-list">
         <div class="setting-item">
           <div class="setting-copy">
             <strong>启动后进入</strong>
             <span>选择每次打开应用时默认显示的主页。</span>
           </div>
-          <div class="segmented-control">
+          <div role="group" aria-label="启动后进入" class="segmented-control">
             <button
+              :aria-pressed="settings.startupHomePage === option.value"
               v-for="option in startupHomePageOptions"
               :key="option.value"
               type="button"
@@ -137,7 +138,12 @@ const emit = defineEmits<{
             <strong>{{ t('settings.language.title') }}</strong>
             <span>{{ t('settings.language.description') }}</span>
           </div>
-          <select class="preview-select" :value="settings.language" @change="setLanguage">
+          <select
+            :aria-label="t('settings.language.title')"
+            class="preview-select"
+            :value="settings.language"
+            @change="setLanguage"
+          >
             <option value="system">{{ t('settings.language.system') }}</option>
             <option v-for="option in APP_LOCALES" :key="option" :value="option">
               {{ t(`settings.language.${option}`) }}
@@ -151,6 +157,7 @@ const emit = defineEmits<{
             <span>选择点击关闭按钮后的应用行为。</span>
           </div>
           <select
+            aria-label="关闭主窗口时"
             class="preview-select"
             :value="settings.closeWindowBehavior"
             @change="setCloseBehavior"
@@ -194,7 +201,7 @@ const emit = defineEmits<{
     </div>
 
     <div class="section-block">
-      <h3>媒体库管理 (Library & Sync)</h3>
+      <h3>媒体库与下载</h3>
       <div class="setting-list">
         <div class="setting-item top-align">
           <div class="setting-copy">
@@ -424,7 +431,7 @@ const emit = defineEmits<{
     </div>
 
     <div class="section-block">
-      <h3>集成与社交 (Integration & Social)</h3>
+      <h3>系统集成与社交</h3>
       <div class="setting-list">
         <div class="setting-item">
           <div class="setting-copy">
@@ -490,15 +497,16 @@ const emit = defineEmits<{
     />
 
     <div class="section-block">
-      <h3>操作习惯 (Interaction)</h3>
+      <h3>操作习惯</h3>
       <div class="setting-list">
         <div class="setting-item">
           <div class="setting-copy">
             <strong>歌曲列表播放方式</strong>
             <span>选择普通左键单击还是双击播放；右键始终只打开菜单，不改变选中状态。</span>
           </div>
-          <div class="segmented-control">
+          <div role="group" aria-label="歌曲列表播放方式" class="segmented-control">
             <button
+              :aria-pressed="settings.trackActivationMode === option.value"
               v-for="option in trackActivationModeOptions"
               :key="option.value"
               type="button"
@@ -522,7 +530,7 @@ const emit = defineEmits<{
     />
 
     <div v-if="pluginSettingsPanels.length > 0" class="section-block">
-      <h3>插件设置 (Plugin Settings)</h3>
+      <h3>插件设置</h3>
       <div class="setting-list">
         <template
           v-for="(panel, index) in pluginSettingsPanels"
@@ -622,39 +630,42 @@ const emit = defineEmits<{
         </template>
       </div>
     </div>
-    <NetworkProxySettingsSection
-      :proxy-mode="settings.proxyMode"
-      :proxy-host="settings.proxyHost"
-      :proxy-port="settings.proxyPort"
-      :proxy-allow-direct-fallback="settings.proxyAllowDirectFallback"
-      @update:proxy-mode="(value: ProxyMode) => void updateSettings({ proxyMode: value })"
-      @update:proxy-host="(value: string) => void updateSettings({ proxyHost: value })"
-      @update:proxy-port="(value: number) => void updateSettings({ proxyPort: value })"
-      @toggle:allow-direct-fallback="toggleSetting('proxyAllowDirectFallback')"
-    />
+    <details class="settings-advanced-details">
+      <summary>网络与开发者选项</summary>
+      <NetworkProxySettingsSection
+        :proxy-mode="settings.proxyMode"
+        :proxy-host="settings.proxyHost"
+        :proxy-port="settings.proxyPort"
+        :proxy-allow-direct-fallback="settings.proxyAllowDirectFallback"
+        @update:proxy-mode="(value: ProxyMode) => void updateSettings({ proxyMode: value })"
+        @update:proxy-host="(value: string) => void updateSettings({ proxyHost: value })"
+        @update:proxy-port="(value: number) => void updateSettings({ proxyPort: value })"
+        @toggle:allow-direct-fallback="toggleSetting('proxyAllowDirectFallback')"
+      />
 
-    <div class="section-block">
-      <h3>开发者选项 (Developer)</h3>
-      <div class="setting-list">
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>开发者模式</strong>
-            <span>
-              解锁插件中心的「从文件夹安装」，可直接装入未打包的插件目录，方便本地调试；关闭时只能安装
-              .tep 包。默认关闭。
-            </span>
+      <div class="section-block">
+        <h3>开发者选项</h3>
+        <div class="setting-list">
+          <div class="setting-item">
+            <div class="setting-copy">
+              <strong>开发者模式</strong>
+              <span>
+                解锁插件中心的「从文件夹安装」，可直接装入未打包的插件目录，方便本地调试；关闭时只能安装
+                .tep 包。默认关闭。
+              </span>
+            </div>
+            <button
+              type="button"
+              class="toggle-switch"
+              :class="{ active: settings.developerMode, inactive: !settings.developerMode }"
+              role="switch"
+              aria-label="开发者模式"
+              :aria-checked="settings.developerMode"
+              @click="toggleSetting('developerMode')"
+            ></button>
           </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{ active: settings.developerMode, inactive: !settings.developerMode }"
-            role="switch"
-            aria-label="开发者模式"
-            :aria-checked="settings.developerMode"
-            @click="toggleSetting('developerMode')"
-          ></button>
         </div>
       </div>
-    </div>
+    </details>
   </section>
 </template>

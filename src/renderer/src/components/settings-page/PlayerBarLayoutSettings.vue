@@ -128,6 +128,7 @@ useSettingsSearchDisclosure('playerBarLayout', layoutOpen)
     class="settings-accordion-trigger setting-item"
     :class="{ open: layoutOpen }"
     :aria-expanded="layoutOpen"
+    aria-controls="settings-player-bar-layout"
     @click="layoutOpen = !layoutOpen"
   >
     <span class="setting-copy">
@@ -136,15 +137,20 @@ useSettingsSearchDisclosure('playerBarLayout', layoutOpen)
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <SettingsDisclosure :open="layoutOpen" class="settings-accordion-body">
+  <SettingsDisclosure
+    id="settings-player-bar-layout"
+    :open="layoutOpen"
+    class="settings-accordion-body"
+  >
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
         <strong>编辑哪种形态</strong>
         <span>{{ chromeNote[editingShape] }}</span>
       </div>
-      <div class="segmented-control">
+      <div role="group" aria-label="编辑哪种形态" class="segmented-control">
         <button
+          :aria-pressed="editingShape === option.value"
           v-for="option in playerBarModeOptions"
           :key="option.value"
           type="button"

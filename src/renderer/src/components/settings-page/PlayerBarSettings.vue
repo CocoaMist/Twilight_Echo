@@ -99,6 +99,7 @@ useSettingsSearchDisclosure('playerBar', playerBarOpen)
     class="settings-accordion-trigger setting-item"
     :class="{ open: playerBarOpen }"
     :aria-expanded="playerBarOpen"
+    aria-controls="settings-player-bar"
     @click="playerBarOpen = !playerBarOpen"
   >
     <span class="setting-copy">
@@ -110,7 +111,11 @@ useSettingsSearchDisclosure('playerBar', playerBarOpen)
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <SettingsDisclosure :open="playerBarOpen" class="settings-accordion-body">
+  <SettingsDisclosure
+    id="settings-player-bar"
+    :open="playerBarOpen"
+    class="settings-accordion-body"
+  >
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
@@ -120,8 +125,9 @@ useSettingsSearchDisclosure('playerBar', playerBarOpen)
           扁平长进度条；紧凑形态贴着窗口底边通栏，进度走顶边细线。每种形态装哪些按钮见下面的「播放条按钮编排」。</span
         >
       </div>
-      <div class="segmented-control">
+      <div role="group" aria-label="播放条形态" class="segmented-control">
         <button
+          :aria-pressed="settings.playerBar.mode === option.value"
           v-for="option in playerBarModeOptions"
           :key="option.value"
           type="button"
@@ -140,6 +146,7 @@ useSettingsSearchDisclosure('playerBar', playerBarOpen)
         <span>可以只在播放页换一种形态，其余界面保持全局形态。</span>
       </div>
       <select
+        aria-label="播放页形态"
         class="preview-select"
         :value="settings.playerBar.playingPageMode"
         @change="setPlayerBarPlayingPageMode(($event.target as HTMLSelectElement).value)"
@@ -161,8 +168,9 @@ useSettingsSearchDisclosure('playerBar', playerBarOpen)
           常显始终保留播放条；自动隐藏平时收起、鼠标靠近窗口底边时滑出（需细长或紧凑形态）；完全隐藏则不再出现，也不会被鼠标唤出。
         </span>
       </div>
-      <div class="segmented-control">
+      <div role="group" aria-label="播放条可见性" class="segmented-control">
         <button
+          :aria-pressed="settings.playerBar.visibility === option.value"
           v-for="option in playerBarVisibilityOptions"
           :key="option.value"
           type="button"
@@ -186,6 +194,7 @@ useSettingsSearchDisclosure('playerBar', playerBarOpen)
         <span>可以只在播放页自动隐藏或完全隐藏播放条，其余界面保持全局可见性。</span>
       </div>
       <select
+        aria-label="播放页可见性"
         class="preview-select"
         :value="settings.playerBar.playingPageVisibility"
         @change="setPlayerBarPlayingPageVisibility(($event.target as HTMLSelectElement).value)"
@@ -210,6 +219,7 @@ useSettingsSearchDisclosure('playerBar', playerBarOpen)
         <div class="range-pill">
           <span>距离</span>
           <input
+            aria-label="触发距离"
             class="range-input"
             type="range"
             :min="PLAYER_BAR_BOUNDS.revealThresholdPx.min"
@@ -241,6 +251,7 @@ useSettingsSearchDisclosure('playerBar', playerBarOpen)
         <div class="range-pill">
           <span>延迟</span>
           <input
+            aria-label="收起延迟"
             class="range-input"
             type="range"
             :min="PLAYER_BAR_BOUNDS.hideDelayMs.min"

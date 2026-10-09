@@ -73,6 +73,107 @@ async function setPluginTheme(event: Event): Promise<void> {
 <template>
   <div class="setting-item">
     <div class="setting-copy">
+      <strong>主题模式</strong><span>选择浅色、深色，或跟随系统自动切换。</span>
+    </div>
+    <select
+      class="preview-select"
+      :value="settings.theme"
+      aria-label="主题模式"
+      @change="setTheme(($event.target as HTMLSelectElement).value as AppTheme)"
+    >
+      <option v-for="option in colorModeOptions" :key="option.value" :value="option.value">
+        {{ option.label }}
+      </option>
+    </select>
+  </div>
+  <hr />
+  <div class="setting-item">
+    <div class="setting-copy">
+      <strong>界面动效</strong><span>减少或关闭界面过渡动画；跟随系统时遵循系统的动画偏好。</span>
+    </div>
+    <select
+      aria-label="界面动效"
+      class="preview-select wide"
+      :value="settings.motionPreference"
+      @change="setMotionPreference"
+    >
+      <option v-for="option in motionPreferenceOptions" :key="option.value" :value="option.value">
+        {{ option.label }}
+      </option>
+    </select>
+  </div>
+  <hr />
+  <div class="setting-item">
+    <div class="setting-copy">
+      <strong>插件主题</strong
+      ><span>{{
+        pluginThemeOptions.length
+          ? '选择已启用插件提供的主题。'
+          : '暂无可用主题，请先在插件管理中启用主题插件。'
+      }}</span>
+    </div>
+    <select
+      aria-label="插件主题"
+      class="preview-select wide"
+      :value="selectedPluginThemeKey"
+      :disabled="pluginThemeOptions.length === 0"
+      @change="setPluginTheme"
+    >
+      <option value="">不使用插件主题</option>
+      <option v-for="option in pluginThemeOptions" :key="option.value" :value="option.value">
+        {{ option.label }}
+      </option>
+    </select>
+  </div>
+  <hr />
+  <div class="setting-item">
+    <div class="setting-copy">
+      <strong>浅色强调色</strong>
+      <span>浅色模式下设置、本地主页和主要控件使用的主题色。</span>
+    </div>
+    <div class="swatch-row">
+      <button
+        type="button"
+        v-for="option in accentColorOptions"
+        :key="option.value"
+        class="swatch"
+        data-te-interactive
+        :aria-label="option.label"
+        :aria-pressed="settings.lightAccentColor === option.value"
+        :class="[option.class, { active: settings.lightAccentColor === option.value }]"
+        :title="option.label"
+        @click="setAccentColor('light', option.value)"
+      >
+        <i v-if="settings.lightAccentColor === option.value" class="pi pi-check"></i>
+      </button>
+    </div>
+  </div>
+  <hr />
+  <div class="setting-item">
+    <div class="setting-copy">
+      <strong>深色强调色</strong>
+      <span>深色模式下复用同一组选项，可与浅色模式独立保存。</span>
+    </div>
+    <div class="swatch-row">
+      <button
+        type="button"
+        v-for="option in accentColorOptions"
+        :key="option.value"
+        class="swatch"
+        data-te-interactive
+        :aria-label="option.label"
+        :aria-pressed="settings.darkAccentColor === option.value"
+        :class="[option.class, { active: settings.darkAccentColor === option.value }]"
+        :title="option.label"
+        @click="setAccentColor('dark', option.value)"
+      >
+        <i v-if="settings.darkAccentColor === option.value" class="pi pi-check"></i>
+      </button>
+    </div>
+  </div>
+  <hr />
+  <div class="setting-item">
+    <div class="setting-copy">
       <strong>主题创意工坊</strong><span>编辑应用内置主题的颜色、字体和控件样式。</span>
     </div>
     <button type="button" class="soft-button" @click="emit('openThemeStudio')">
@@ -99,110 +200,4 @@ async function setPluginTheme(event: Event): Promise<void> {
     </button>
   </div>
   <hr />
-  <div class="setting-item">
-    <div class="setting-copy">
-      <strong>主题模式</strong><span>选择浅色、深色，或跟随系统自动切换。</span>
-    </div>
-    <div class="theme-segment">
-      <button
-        v-for="option in colorModeOptions"
-        :key="option.value"
-        type="button"
-        :class="{ active: settings.theme === option.value }"
-        @click="setTheme(option.value)"
-      >
-        <i :class="option.icon"></i>
-        {{ option.label }}
-      </button>
-    </div>
-  </div>
-  <hr />
-  <div class="setting-item">
-    <div class="setting-copy">
-      <strong>界面动效</strong><span>减少或关闭界面过渡动画；跟随系统时遵循系统的动画偏好。</span>
-    </div>
-    <select
-      class="preview-select wide"
-      :value="settings.motionPreference"
-      @change="setMotionPreference"
-    >
-      <option v-for="option in motionPreferenceOptions" :key="option.value" :value="option.value">
-        {{ option.label }}
-      </option>
-    </select>
-  </div>
-  <hr />
-  <div class="setting-item">
-    <div class="setting-copy">
-      <strong>插件主题</strong
-      ><span>{{
-        pluginThemeOptions.length
-          ? '选择已启用插件提供的主题。'
-          : '暂无可用主题，请先在插件管理中启用主题插件。'
-      }}</span>
-    </div>
-    <select
-      class="preview-select wide"
-      :value="selectedPluginThemeKey"
-      :disabled="pluginThemeOptions.length === 0"
-      @change="setPluginTheme"
-    >
-      <option value="">不使用插件主题</option>
-      <option v-for="option in pluginThemeOptions" :key="option.value" :value="option.value">
-        {{ option.label }}
-      </option>
-    </select>
-  </div>
-  <hr />
-  <div class="setting-item">
-    <div class="setting-copy">
-      <strong>浅色强调色</strong>
-      <span>浅色模式下设置、本地主页和主要控件使用的主题色。</span>
-    </div>
-    <div class="swatch-row">
-      <span
-        v-for="option in accentColorOptions"
-        :key="option.value"
-        class="swatch"
-        data-te-interactive
-        role="button"
-        tabindex="0"
-        :aria-label="option.label"
-        :aria-pressed="settings.lightAccentColor === option.value"
-        :class="[option.class, { active: settings.lightAccentColor === option.value }]"
-        :title="option.label"
-        @click="setAccentColor('light', option.value)"
-        @keydown.enter.prevent="setAccentColor('light', option.value)"
-        @keydown.space.prevent="setAccentColor('light', option.value)"
-      >
-        <i v-if="settings.lightAccentColor === option.value" class="pi pi-check"></i>
-      </span>
-    </div>
-  </div>
-  <hr />
-  <div class="setting-item">
-    <div class="setting-copy">
-      <strong>深色强调色</strong>
-      <span>深色模式下复用同一组选项，可与浅色模式独立保存。</span>
-    </div>
-    <div class="swatch-row">
-      <span
-        v-for="option in accentColorOptions"
-        :key="option.value"
-        class="swatch"
-        data-te-interactive
-        role="button"
-        tabindex="0"
-        :aria-label="option.label"
-        :aria-pressed="settings.darkAccentColor === option.value"
-        :class="[option.class, { active: settings.darkAccentColor === option.value }]"
-        :title="option.label"
-        @click="setAccentColor('dark', option.value)"
-        @keydown.enter.prevent="setAccentColor('dark', option.value)"
-        @keydown.space.prevent="setAccentColor('dark', option.value)"
-      >
-        <i v-if="settings.darkAccentColor === option.value" class="pi pi-check"></i>
-      </span>
-    </div>
-  </div>
 </template>

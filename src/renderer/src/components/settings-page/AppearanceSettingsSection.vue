@@ -43,7 +43,7 @@ function toggleSetting(key: BooleanSettingKey): void {
   <section id="appearance" class="glass-card preview-section">
     <div class="section-title-row">
       <i class="pi pi-palette"></i>
-      <h2>外观 (Appearance)</h2>
+      <h2>外观</h2>
     </div>
 
     <div class="setting-list">
@@ -74,7 +74,12 @@ function toggleSetting(key: BooleanSettingKey): void {
           <strong>界面字体</strong>
           <span>更换界面的正文、标题与圆体字体；“默认”跟随当前主题自带的字体。</span>
         </div>
-        <select class="preview-select wide" :value="settings.fontFamily" @change="setFontFamily">
+        <select
+          aria-label="界面字体"
+          class="preview-select wide"
+          :value="settings.fontFamily"
+          @change="setFontFamily"
+        >
           <option v-for="option in fontFamilyOptions" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
@@ -91,8 +96,9 @@ function toggleSetting(key: BooleanSettingKey): void {
           <strong>界面密度</strong>
           <span>控制列表项的间距与信息密度。</span>
         </div>
-        <div class="segmented-control density">
+        <div role="group" aria-label="界面密度" class="segmented-control density">
           <button
+            :aria-pressed="settings.uiDensity === option.value"
             v-for="option in uiDensityOptions"
             :key="option.value"
             type="button"

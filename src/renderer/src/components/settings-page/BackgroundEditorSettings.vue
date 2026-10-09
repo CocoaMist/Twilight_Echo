@@ -166,252 +166,252 @@ useSettingsSearchDisclosure('background', customBackgroundOpen)
     accept="image/jpeg,image/png,image/webp"
     @change="handleBackgroundFileSelected"
   />
-  <div class="setting-item top-align">
-    <div class="setting-copy">
-      <strong>自定义背景</strong>
-      <span>控制整个 App 的统一主背景，可上传图片，也可给不同页面单独覆盖。</span>
-    </div>
-    <div class="background-accordion">
-      <button
-        type="button"
-        class="background-accordion-trigger"
-        :class="{ active: customBackgroundOpen }"
-        @click="customBackgroundOpen = !customBackgroundOpen"
-      >
-        <span>
-          {{
-            settings.appBackground.global.kind === 'image' && settings.appBackground.global.image
-              ? '图片背景'
-              : '纯色背景'
-          }}
-        </span>
-        <i class="pi pi-chevron-down"></i>
-      </button>
-      <SettingsDisclosure :open="customBackgroundOpen" class="background-accordion-panel">
-        <section class="background-editor">
-          <div class="background-editor-head">
-            <div>
-              <strong>统一背景</strong>
-              <span>深色模式默认 #17181a，图片模式下颜色会作为回退底色。</span>
-            </div>
-            <div class="background-kind-toggle">
+  <button
+    type="button"
+    class="settings-accordion-trigger setting-item"
+    :class="{ open: customBackgroundOpen }"
+    :aria-expanded="customBackgroundOpen"
+    aria-controls="settings-background-editor"
+    @click="customBackgroundOpen = !customBackgroundOpen"
+  >
+    <span class="setting-copy"
+      ><strong>自定义背景</strong><span>设置整个应用的背景，或单独调整各页面。</span></span
+    >
+    <span class="read-only-pill">{{
+      settings.appBackground.global.kind === 'image' ? '图片背景' : '纯色背景'
+    }}</span>
+    <i class="pi pi-chevron-down" aria-hidden="true"></i>
+  </button>
+  <SettingsDisclosure
+    :open="customBackgroundOpen"
+    class="settings-accordion-body background-accordion-panel"
+    id="settings-background-editor"
+  >
+    <section class="background-editor">
+      <div class="background-editor-head">
+        <div>
+          <strong>统一背景</strong>
+          <span>深色模式默认 #17181a，图片模式下颜色会作为回退底色。</span>
+        </div>
+        <div class="background-kind-toggle">
+          <button
+            :aria-pressed="settings.appBackground.global.kind === 'color'"
+            type="button"
+            :class="{ active: settings.appBackground.global.kind === 'color' }"
+            @click="setGlobalBackgroundKind('color')"
+          >
+            纯色
+          </button>
+          <button
+            :aria-pressed="settings.appBackground.global.kind === 'image'"
+            type="button"
+            :class="{ active: settings.appBackground.global.kind === 'image' }"
+            @click="setGlobalBackgroundKind('image')"
+          >
+            图片
+          </button>
+        </div>
+      </div>
+      <div class="background-color-stack">
+        <label class="color-field">
+          <span>浅色</span>
+          <input
+            type="color"
+            :value="settings.appBackground.global.light"
+            @input="setGlobalBackgroundColor('light', ($event.target as HTMLInputElement).value)"
+          />
+          <code>{{ settings.appBackground.global.light }}</code>
+        </label>
+        <label class="color-field">
+          <span>深色</span>
+          <input
+            type="color"
+            :value="settings.appBackground.global.dark"
+            @input="setGlobalBackgroundColor('dark', ($event.target as HTMLInputElement).value)"
+          />
+          <code>{{ settings.appBackground.global.dark }}</code>
+        </label>
+      </div>
+      <div class="background-image-actions">
+        <span
+          v-if="settings.appBackground.global.image"
+          class="background-image-preview"
+          :style="{
+            backgroundImage: toBackgroundImageStyle(settings.appBackground.global.image)
+          }"
+        ></span>
+        <button type="button" class="pill-action" @click="openBackgroundFilePicker('global')">
+          <i class="pi pi-image"></i>
+          <span>{{ settings.appBackground.global.image ? '更换图片' : '选择图片' }}</span>
+        </button>
+        <button
+          type="button"
+          class="pill-action ghost"
+          :disabled="!settings.appBackground.global.image"
+          @click="clearGlobalBackgroundImage"
+        >
+          移除图片
+        </button>
+        <small>{{
+          settings.appBackground.global.image ? '已选择图片' : '支持 JPG / PNG / WebP'
+        }}</small>
+      </div>
+    </section>
+
+    <section class="background-editor">
+      <div class="background-editor-head">
+        <div>
+          <strong>页面背景覆盖</strong>
+          <span>默认继承统一背景，展开后可给单个页面单独设置纯色或图片。</span>
+        </div>
+      </div>
+      <div class="page-background-list">
+        <div
+          v-for="page in appBackgroundPageOptions"
+          :key="page.value"
+          class="page-background-row"
+          :class="{ expanded: backgroundPageOpen === page.value }"
+        >
+          <button
+            type="button"
+            class="page-background-header"
+            @click="toggleBackgroundPage(page.value)"
+          >
+            <span class="page-background-copy">
+              <strong>{{ page.label }}</strong>
+              <span>{{ page.desc }}</span>
+            </span>
+            <span class="page-background-state">
+              {{
+                settings.appBackground.pages[page.value].inherit
+                  ? '继承'
+                  : settings.appBackground.pages[page.value].kind === 'image'
+                    ? '图片'
+                    : '纯色'
+              }}
+            </span>
+            <i class="pi pi-chevron-down"></i>
+          </button>
+          <SettingsDisclosure
+            :open="backgroundPageOpen === page.value"
+            class="page-background-controls"
+          >
+            <button
+              :aria-pressed="settings.appBackground.pages[page.value].inherit"
+              type="button"
+              class="inherit-toggle"
+              :class="{ active: settings.appBackground.pages[page.value].inherit }"
+              @click="
+                setPageBackgroundInherited(
+                  page.value,
+                  !settings.appBackground.pages[page.value].inherit
+                )
+              "
+            >
+              {{
+                settings.appBackground.pages[page.value].inherit
+                  ? '当前继承统一背景'
+                  : '当前使用自定义背景'
+              }}
+            </button>
+            <div
+              class="background-kind-toggle"
+              :class="{ disabled: settings.appBackground.pages[page.value].inherit }"
+            >
               <button
+                :aria-pressed="settings.appBackground.pages[page.value].kind === 'color'"
                 type="button"
-                :class="{ active: settings.appBackground.global.kind === 'color' }"
-                @click="setGlobalBackgroundKind('color')"
+                :class="{
+                  active: settings.appBackground.pages[page.value].kind === 'color'
+                }"
+                @click="setPageBackgroundKind(page.value, 'color')"
               >
                 纯色
               </button>
               <button
+                :aria-pressed="settings.appBackground.pages[page.value].kind === 'image'"
                 type="button"
-                :class="{ active: settings.appBackground.global.kind === 'image' }"
-                @click="setGlobalBackgroundKind('image')"
+                :class="{
+                  active: settings.appBackground.pages[page.value].kind === 'image'
+                }"
+                @click="setPageBackgroundKind(page.value, 'image')"
               >
                 图片
               </button>
             </div>
-          </div>
-          <div class="background-color-stack">
-            <label class="color-field">
-              <span>浅色</span>
-              <input
-                type="color"
-                :value="settings.appBackground.global.light"
-                @input="
-                  setGlobalBackgroundColor('light', ($event.target as HTMLInputElement).value)
-                "
-              />
-              <code>{{ settings.appBackground.global.light }}</code>
-            </label>
-            <label class="color-field">
-              <span>深色</span>
-              <input
-                type="color"
-                :value="settings.appBackground.global.dark"
-                @input="setGlobalBackgroundColor('dark', ($event.target as HTMLInputElement).value)"
-              />
-              <code>{{ settings.appBackground.global.dark }}</code>
-            </label>
-          </div>
-          <div class="background-image-actions">
-            <span
-              v-if="settings.appBackground.global.image"
-              class="background-image-preview"
-              :style="{
-                backgroundImage: toBackgroundImageStyle(settings.appBackground.global.image)
-              }"
-            ></span>
-            <button type="button" class="pill-action" @click="openBackgroundFilePicker('global')">
-              <i class="pi pi-image"></i>
-              <span>{{ settings.appBackground.global.image ? '更换图片' : '选择图片' }}</span>
-            </button>
-            <button
-              type="button"
-              class="pill-action ghost"
-              :disabled="!settings.appBackground.global.image"
-              @click="clearGlobalBackgroundImage"
-            >
-              移除图片
-            </button>
-            <small>{{
-              settings.appBackground.global.image ? '已选择图片' : '支持 JPG / PNG / WebP'
-            }}</small>
-          </div>
-        </section>
-
-        <section class="background-editor">
-          <div class="background-editor-head">
-            <div>
-              <strong>页面背景覆盖</strong>
-              <span>默认继承统一背景，展开后可给单个页面单独设置纯色或图片。</span>
-            </div>
-          </div>
-          <div class="page-background-list">
             <div
-              v-for="page in appBackgroundPageOptions"
-              :key="page.value"
-              class="page-background-row"
-              :class="{ expanded: backgroundPageOpen === page.value }"
+              class="background-color-stack compact"
+              :class="{ disabled: settings.appBackground.pages[page.value].inherit }"
             >
-              <button
-                type="button"
-                class="page-background-header"
-                @click="toggleBackgroundPage(page.value)"
-              >
-                <span class="page-background-copy">
-                  <strong>{{ page.label }}</strong>
-                  <span>{{ page.desc }}</span>
-                </span>
-                <span class="page-background-state">
-                  {{
-                    settings.appBackground.pages[page.value].inherit
-                      ? '继承'
-                      : settings.appBackground.pages[page.value].kind === 'image'
-                        ? '图片'
-                        : '纯色'
-                  }}
-                </span>
-                <i class="pi pi-chevron-down"></i>
-              </button>
-              <SettingsDisclosure
-                :open="backgroundPageOpen === page.value"
-                class="page-background-controls"
-              >
-                <button
-                  type="button"
-                  class="inherit-toggle"
-                  :class="{ active: settings.appBackground.pages[page.value].inherit }"
-                  @click="
-                    setPageBackgroundInherited(
+              <label class="color-field">
+                <span>浅色</span>
+                <input
+                  type="color"
+                  :value="settings.appBackground.pages[page.value].light"
+                  @input="
+                    setPageBackgroundColor(
                       page.value,
-                      !settings.appBackground.pages[page.value].inherit
+                      'light',
+                      ($event.target as HTMLInputElement).value
                     )
                   "
-                >
-                  {{
-                    settings.appBackground.pages[page.value].inherit
-                      ? '当前继承统一背景'
-                      : '当前使用自定义背景'
-                  }}
-                </button>
-                <div
-                  class="background-kind-toggle"
-                  :class="{ disabled: settings.appBackground.pages[page.value].inherit }"
-                >
-                  <button
-                    type="button"
-                    :class="{
-                      active: settings.appBackground.pages[page.value].kind === 'color'
-                    }"
-                    @click="setPageBackgroundKind(page.value, 'color')"
-                  >
-                    纯色
-                  </button>
-                  <button
-                    type="button"
-                    :class="{
-                      active: settings.appBackground.pages[page.value].kind === 'image'
-                    }"
-                    @click="setPageBackgroundKind(page.value, 'image')"
-                  >
-                    图片
-                  </button>
-                </div>
-                <div
-                  class="background-color-stack compact"
-                  :class="{ disabled: settings.appBackground.pages[page.value].inherit }"
-                >
-                  <label class="color-field">
-                    <span>浅色</span>
-                    <input
-                      type="color"
-                      :value="settings.appBackground.pages[page.value].light"
-                      @input="
-                        setPageBackgroundColor(
-                          page.value,
-                          'light',
-                          ($event.target as HTMLInputElement).value
-                        )
-                      "
-                    />
-                    <code>{{ settings.appBackground.pages[page.value].light }}</code>
-                  </label>
-                  <label class="color-field">
-                    <span>深色</span>
-                    <input
-                      type="color"
-                      :value="settings.appBackground.pages[page.value].dark"
-                      @input="
-                        setPageBackgroundColor(
-                          page.value,
-                          'dark',
-                          ($event.target as HTMLInputElement).value
-                        )
-                      "
-                    />
-                    <code>{{ settings.appBackground.pages[page.value].dark }}</code>
-                  </label>
-                </div>
-                <div
-                  class="background-image-actions"
-                  :class="{ disabled: settings.appBackground.pages[page.value].inherit }"
-                >
-                  <span
-                    v-if="settings.appBackground.pages[page.value].image"
-                    class="background-image-preview"
-                    :style="{
-                      backgroundImage: toBackgroundImageStyle(
-                        settings.appBackground.pages[page.value].image
-                      )
-                    }"
-                  ></span>
-                  <button
-                    type="button"
-                    class="pill-action"
-                    @click="openBackgroundFilePicker(page.value)"
-                  >
-                    <i class="pi pi-image"></i>
-                    <span>{{
-                      settings.appBackground.pages[page.value].image ? '更换图片' : '选择图片'
-                    }}</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="pill-action ghost"
-                    :disabled="!settings.appBackground.pages[page.value].image"
-                    @click="clearPageBackgroundImage(page.value)"
-                  >
-                    移除图片
-                  </button>
-                  <small>{{
-                    settings.appBackground.pages[page.value].image ? '已选择图片' : '未设置图片'
-                  }}</small>
-                </div>
-              </SettingsDisclosure>
+                />
+                <code>{{ settings.appBackground.pages[page.value].light }}</code>
+              </label>
+              <label class="color-field">
+                <span>深色</span>
+                <input
+                  type="color"
+                  :value="settings.appBackground.pages[page.value].dark"
+                  @input="
+                    setPageBackgroundColor(
+                      page.value,
+                      'dark',
+                      ($event.target as HTMLInputElement).value
+                    )
+                  "
+                />
+                <code>{{ settings.appBackground.pages[page.value].dark }}</code>
+              </label>
             </div>
-          </div>
-        </section>
-      </SettingsDisclosure>
-    </div>
-  </div>
+            <div
+              class="background-image-actions"
+              :class="{ disabled: settings.appBackground.pages[page.value].inherit }"
+            >
+              <span
+                v-if="settings.appBackground.pages[page.value].image"
+                class="background-image-preview"
+                :style="{
+                  backgroundImage: toBackgroundImageStyle(
+                    settings.appBackground.pages[page.value].image
+                  )
+                }"
+              ></span>
+              <button
+                type="button"
+                class="pill-action"
+                @click="openBackgroundFilePicker(page.value)"
+              >
+                <i class="pi pi-image"></i>
+                <span>{{
+                  settings.appBackground.pages[page.value].image ? '更换图片' : '选择图片'
+                }}</span>
+              </button>
+              <button
+                type="button"
+                class="pill-action ghost"
+                :disabled="!settings.appBackground.pages[page.value].image"
+                @click="clearPageBackgroundImage(page.value)"
+              >
+                移除图片
+              </button>
+              <small>{{
+                settings.appBackground.pages[page.value].image ? '已选择图片' : '未设置图片'
+              }}</small>
+            </div>
+          </SettingsDisclosure>
+        </div>
+      </div>
+    </section>
+  </SettingsDisclosure>
 </template>

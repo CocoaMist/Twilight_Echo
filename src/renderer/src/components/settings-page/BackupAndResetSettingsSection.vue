@@ -11,7 +11,7 @@ const emit = defineEmits<{
 
 <template>
   <div class="section-block">
-    <h3>备份与恢复 (Backup & Reset)</h3>
+    <h3>备份与恢复</h3>
     <div class="setting-list">
       <div class="setting-item">
         <div class="setting-copy">

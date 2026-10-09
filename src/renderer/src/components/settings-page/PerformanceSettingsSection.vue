@@ -39,7 +39,7 @@ function toggleCompactVisualizer(): void {
   <section id="performance" class="glass-card preview-section">
     <div class="section-title-row">
       <i class="pi pi-bolt"></i>
-      <h2>性能 (Performance)</h2>
+      <h2>性能</h2>
     </div>
     <div class="setting-list">
       <div class="setting-item">
@@ -117,6 +117,7 @@ function toggleCompactVisualizer(): void {
           </div>
           <div class="inline-controls">
             <input
+              aria-label="窗口表面不透明度"
               type="range"
               class="range-input"
               min="0"
@@ -141,6 +142,7 @@ function toggleCompactVisualizer(): void {
           </div>
           <div class="inline-controls">
             <input
+              aria-label="窗口表面模糊度"
               type="range"
               class="range-input"
               min="0"
@@ -166,6 +168,7 @@ function toggleCompactVisualizer(): void {
           </div>
           <div class="inline-controls">
             <input
+              aria-label="窗口内卡片不透明度"
               type="range"
               class="range-input"
               min="0"
@@ -190,6 +193,7 @@ function toggleCompactVisualizer(): void {
           </div>
           <div class="inline-controls">
             <input
+              aria-label="窗口内卡片模糊度"
               type="range"
               class="range-input"
               min="0"

@@ -277,6 +277,13 @@ const vst3HelpersReady = computed(() => {
   )
 })
 const vst3PlatformSupported = computed(() => vst3Helpers.value?.platformSupported !== false)
+const vst3ToggleUnavailable = computed(
+  () =>
+    vst3Busy.value ||
+    !vst3Catalog.value ||
+    !vst3PlatformSupported.value ||
+    (!vst3Enabled.value && !vst3HelpersReady.value)
+)
 const vst3HelpersNotice = computed(() => {
   if (!vst3Catalog.value || vst3HelpersReady.value || !vst3Helpers.value) return ''
   if (!vst3Helpers.value.platformSupported) return '当前系统不支持 VST3 插件运行组件。'
@@ -312,7 +319,7 @@ async function refreshVst3Catalog(): Promise<void> {
 }
 
 async function toggleVst3Enabled(): Promise<void> {
-  if (vst3Busy.value || !vst3Catalog.value || !vst3PlatformSupported.value) return
+  if (!vst3Catalog.value || vst3ToggleUnavailable.value) return
   vst3Busy.value = true
   try {
     vst3Catalog.value = await window.api.audioEngine.setVst3Enabled(!vst3Catalog.value.enabled)
@@ -378,14 +385,18 @@ onMounted(() => {
 
 <template>
   <section id="dsp" class="glass-card preview-section">
-    <div class="section-title-row split">
-      <div>
-        <i class="pi pi-sliders-v"></i>
-        <h2>音效与声音处理（DSP）</h2>
+    <div class="section-title-row">
+      <i class="pi pi-sliders-v"></i>
+      <h2>音效</h2>
+    </div>
+    <div class="setting-item">
+      <div class="setting-copy">
+        <strong>启用 DSP 声音处理</strong>
+        <span>开启均衡器、交叉馈送等模块会同时启用 DSP；格式转换或音效可能改变原始信号。</span>
       </div>
       <button
         type="button"
-        class="toggle-switch large"
+        class="toggle-switch"
         :class="{ active: audioProcessing.dspEnabled, inactive: !audioProcessing.dspEnabled }"
         role="switch"
         :aria-checked="audioProcessing.dspEnabled"
@@ -393,102 +404,101 @@ onMounted(() => {
         aria-label="启用 DSP 声音处理"
       ></button>
     </div>
+    <details class="settings-advanced-details">
+      <summary>音频链路与处理状态</summary>
+      <div class="dsp-signal-chain">
+        <div class="signal-node static" :class="{ active: true }">
+          <div class="signal-node-circle active">
+            <i class="pi pi-file"></i>
+          </div>
+          <span class="signal-node-label">输入</span>
+          <span class="signal-node-name">音源</span>
+        </div>
+        <div class="signal-line" :class="{ active: eqChainActive }"></div>
+        <div
+          class="signal-node"
+          data-te-interactive
+          role="switch"
+          tabindex="0"
+          aria-label="均衡器"
+          :aria-checked="eqChainActive"
+          :class="{ active: eqChainActive }"
+          @click="toggleEqFromDsp"
+          @keydown.enter.prevent="toggleEqFromDsp"
+          @keydown.space.prevent="toggleEqFromDsp"
+        >
+          <div class="signal-node-circle" :class="{ active: eqChainActive }">
+            <i class="pi pi-sliders-h"></i>
+          </div>
+          <span class="signal-node-label">{{ eqChainActive ? '已启用' : '已跳过' }}</span>
+          <span class="signal-node-name">EQ</span>
+        </div>
+        <div class="signal-line" :class="{ active: crossfeedChainActive }"></div>
+        <div
+          class="signal-node"
+          data-te-interactive
+          role="switch"
+          tabindex="0"
+          aria-label="Crossfeed"
+          :aria-checked="crossfeedChainActive"
+          :class="{ active: crossfeedChainActive }"
+          @click="toggleCrossfeedFromDsp"
+          @keydown.enter.prevent="toggleCrossfeedFromDsp"
+          @keydown.space.prevent="toggleCrossfeedFromDsp"
+        >
+          <div class="signal-node-circle" :class="{ active: crossfeedChainActive }">
+            <i class="pi pi-arrows-h"></i>
+          </div>
+          <span class="signal-node-label">{{ crossfeedChainActive ? '已启用' : '已跳过' }}</span>
+          <span class="signal-node-name">CROSSFEED</span>
+        </div>
+        <div class="signal-line" :class="{ active: convolverChainActive }"></div>
+        <div
+          class="signal-node"
+          data-te-interactive
+          role="switch"
+          tabindex="0"
+          aria-label="卷积混响"
+          :aria-checked="convolverChainActive"
+          :class="{ active: convolverChainActive }"
+          @click="toggleConvolver"
+          @keydown.enter.prevent="toggleConvolver"
+          @keydown.space.prevent="toggleConvolver"
+        >
+          <div class="signal-node-circle" :class="{ active: convolverChainActive }">
+            <i class="pi pi-microchip"></i>
+          </div>
+          <span class="signal-node-label">{{ convolverChainActive ? '已启用' : '已跳过' }}</span>
+          <span class="signal-node-name">CONVOLVER</span>
+        </div>
+        <div class="signal-line active"></div>
+        <div class="signal-node static" :class="{ active: true }">
+          <div class="signal-node-circle active">
+            <i class="pi pi-volume-up"></i>
+          </div>
+          <span class="signal-node-label">DAC</span>
+          <span class="signal-node-name">OUTPUT</span>
+        </div>
+      </div>
 
-    <p class="settings-section-description">
-      调整声音处理。开启均衡器、交叉馈送等模块会同时启用 DSP；开启格式转换或音效可能改变原始信号。
-    </p>
-    <div class="dsp-signal-chain">
-      <div class="signal-node static" :class="{ active: true }">
-        <div class="signal-node-circle active">
-          <i class="pi pi-file-audio"></i>
+      <div class="dsp-status-grid">
+        <div class="dsp-meter">
+          <span>输入</span>
+          <strong>{{ dspInputText }}</strong>
+          <small>源信号格式</small>
         </div>
-        <span class="signal-node-label">输入</span>
-        <span class="signal-node-name">音源</span>
-      </div>
-      <div class="signal-line" :class="{ active: eqChainActive }"></div>
-      <div
-        class="signal-node"
-        data-te-interactive
-        role="switch"
-        tabindex="0"
-        aria-label="均衡器"
-        :aria-checked="eqChainActive"
-        :class="{ active: eqChainActive }"
-        @click="toggleEqFromDsp"
-        @keydown.enter.prevent="toggleEqFromDsp"
-        @keydown.space.prevent="toggleEqFromDsp"
-      >
-        <div class="signal-node-circle" :class="{ active: eqChainActive }">
-          <i class="pi pi-sliders-h"></i>
+        <div class="dsp-meter">
+          <span>处理</span>
+          <strong>{{ dspProcessText }}</strong>
+          <small>{{ dspModuleCount }} 个模块激活</small>
         </div>
-        <span class="signal-node-label">{{ eqChainActive ? '已启用' : '已跳过' }}</span>
-        <span class="signal-node-name">EQ</span>
-      </div>
-      <div class="signal-line" :class="{ active: crossfeedChainActive }"></div>
-      <div
-        class="signal-node"
-        data-te-interactive
-        role="switch"
-        tabindex="0"
-        aria-label="Crossfeed"
-        :aria-checked="crossfeedChainActive"
-        :class="{ active: crossfeedChainActive }"
-        @click="toggleCrossfeedFromDsp"
-        @keydown.enter.prevent="toggleCrossfeedFromDsp"
-        @keydown.space.prevent="toggleCrossfeedFromDsp"
-      >
-        <div class="signal-node-circle" :class="{ active: crossfeedChainActive }">
-          <i class="pi pi-arrows-h"></i>
+        <div class="dsp-meter">
+          <span>输出</span>
+          <strong>{{ dspOutputText }}</strong>
+          <small>{{ outputFormatText }}</small>
         </div>
-        <span class="signal-node-label">{{ crossfeedChainActive ? 'Active' : 'Bypass' }}</span>
-        <span class="signal-node-name">CROSSFEED</span>
       </div>
-      <div class="signal-line" :class="{ active: convolverChainActive }"></div>
-      <div
-        class="signal-node"
-        data-te-interactive
-        role="switch"
-        tabindex="0"
-        aria-label="卷积混响"
-        :aria-checked="convolverChainActive"
-        :class="{ active: convolverChainActive }"
-        @click="toggleConvolver"
-        @keydown.enter.prevent="toggleConvolver"
-        @keydown.space.prevent="toggleConvolver"
-      >
-        <div class="signal-node-circle" :class="{ active: convolverChainActive }">
-          <i class="pi pi-microchip"></i>
-        </div>
-        <span class="signal-node-label">{{ convolverChainActive ? 'Active' : 'Bypass' }}</span>
-        <span class="signal-node-name">CONVOLVER</span>
-      </div>
-      <div class="signal-line active"></div>
-      <div class="signal-node static" :class="{ active: true }">
-        <div class="signal-node-circle active">
-          <i class="pi pi-volume-up"></i>
-        </div>
-        <span class="signal-node-label">DAC</span>
-        <span class="signal-node-name">OUTPUT</span>
-      </div>
-    </div>
-
-    <div class="dsp-status-grid">
-      <div class="dsp-meter">
-        <span>Input</span>
-        <strong>{{ dspInputText }}</strong>
-        <small>源信号格式</small>
-      </div>
-      <div class="dsp-meter">
-        <span>处理</span>
-        <strong>{{ dspProcessText }}</strong>
-        <small>{{ dspModuleCount }} 个模块激活</small>
-      </div>
-      <div class="dsp-meter">
-        <span>输出</span>
-        <strong>{{ dspOutputText }}</strong>
-        <small>{{ outputFormatText }}</small>
-      </div>
-    </div>
+    </details>
 
     <div>
       <div class="dsp-actions">
@@ -534,7 +544,7 @@ onMounted(() => {
 
       <div class="dsp-module-grid">
         <div class="dsp-module-card">
-          <h3>基础处理 (Core)</h3>
+          <h3>基础处理</h3>
           <div class="mini-setting">
             <div>
               <strong>削波保护</strong>
@@ -565,6 +575,7 @@ onMounted(() => {
               </span>
             </div>
             <select
+              aria-label="响度均衡（ReplayGain / Loudnorm）"
               class="preview-select"
               :value="audioProcessing.volumeNormalization"
               @change="setReplayGainFromSelect"
@@ -583,6 +594,7 @@ onMounted(() => {
               <span>预增益 (dB)</span>
             </div>
             <input
+              aria-label="响度预增益"
               class="number-input"
               type="number"
               step="0.1"
@@ -596,6 +608,7 @@ onMounted(() => {
               <span>曲目缺少 ReplayGain/R128 标签时使用的增益 (dB)</span>
             </div>
             <input
+              aria-label="缺少响度信息时的增益"
               class="number-input"
               type="number"
               step="0.1"
@@ -626,7 +639,7 @@ onMounted(() => {
         </div>
 
         <div class="dsp-module-card">
-          <h3>空间与声学 (Spatial & Acoustic)</h3>
+          <h3>空间与声学</h3>
           <div class="mini-setting">
             <div>
               <strong>参数均衡器（EQ）</strong>
@@ -658,6 +671,7 @@ onMounted(() => {
             </div>
             <div class="inline-controls">
               <input
+                aria-label="耳机交叉馈送（Crossfeed）"
                 class="range-input"
                 type="range"
                 min="0"
@@ -698,6 +712,7 @@ onMounted(() => {
               <span>左右声道串音延迟，范围 0.05-2.0 ms。</span>
             </div>
             <input
+              aria-label="交叉馈送延迟"
               class="number-input"
               type="number"
               step="0.05"
@@ -713,6 +728,7 @@ onMounted(() => {
               <span>串音低通截止频率，范围 80-4000 Hz。</span>
             </div>
             <input
+              aria-label="交叉馈送截止频率"
               class="number-input"
               type="number"
               step="10"
@@ -860,13 +876,13 @@ onMounted(() => {
           :class="{
             active: vst3Enabled,
             inactive: !vst3Enabled,
-            disabled: !vst3Catalog || !vst3PlatformSupported || vst3Busy
+            disabled: vst3ToggleUnavailable
           }"
           role="switch"
           data-testid="settings-vst3-toggle"
           :aria-checked="vst3Enabled"
-          :aria-disabled="!vst3Catalog || !vst3PlatformSupported || vst3Busy"
-          :disabled="!vst3Catalog || !vst3PlatformSupported || vst3Busy"
+          :aria-disabled="vst3ToggleUnavailable"
+          :disabled="vst3ToggleUnavailable"
           @click="toggleVst3Enabled"
           aria-label="启用 VST3 音效插件"
         ></button>

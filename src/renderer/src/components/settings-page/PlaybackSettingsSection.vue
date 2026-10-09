@@ -454,11 +454,11 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
   <section id="playback" class="glass-card preview-section">
     <div class="section-title-row">
       <i class="pi pi-volume-up"></i>
-      <h2>播放 (Playback)</h2>
+      <h2>播放</h2>
     </div>
 
     <div v-if="audioEngineError" class="engine-error">{{ audioEngineError }}</div>
-    <AudioDeviceProfilesPanel />
+    <AudioDeviceProfilesPanel compact />
 
     <div v-if="playbackInfo" class="output-diagnostic-panel">
       <div class="diagnostic-head">
@@ -503,15 +503,20 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
           <h3>输出设备与链路</h3>
         </div>
         <div class="device-panel-actions">
-          <label class="device-panel-disclosure">
-            <input
-              v-model="audioOutputPanelExpanded"
-              type="checkbox"
-              aria-controls="audio-output-device-panel"
-              :aria-expanded="audioOutputPanelExpanded"
-            />
+          <button
+            type="button"
+            class="device-panel-disclosure"
+            aria-controls="audio-output-device-panel"
+            :aria-expanded="audioOutputPanelExpanded"
+            @click="audioOutputPanelExpanded = !audioOutputPanelExpanded"
+          >
             <span>{{ audioOutputPanelExpanded ? '收起设备列表' : '展开设备列表' }}</span>
-          </label>
+            <i
+              class="pi pi-chevron-down"
+              :class="{ rotated: audioOutputPanelExpanded }"
+              aria-hidden="true"
+            ></i>
+          </button>
           <button
             type="button"
             class="icon-button"
@@ -524,12 +529,13 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
       </div>
       <SettingsDisclosure
         :open="audioOutputPanelExpanded"
-        trigger-selector='input[aria-controls="audio-output-device-panel"]'
+        trigger-selector='button[aria-controls="audio-output-device-panel"]'
         id="audio-output-device-panel"
         class="device-panel-content"
       >
         <div class="device-grid">
           <button
+            :aria-pressed="audioDevice === device.id"
             v-for="device in audioOutputDeviceOptions"
             :key="device.id"
             type="button"
@@ -574,15 +580,16 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
     </div>
 
     <div class="section-block">
-      <h3>播放引擎 (Engine)</h3>
+      <h3>输出设置</h3>
       <div class="setting-list">
         <div class="setting-item">
           <div class="setting-copy">
             <strong>输出模式</strong>
             <span>选择音频后端和系统混音路径。</span>
           </div>
-          <div class="segmented-control">
+          <div role="group" aria-label="输出模式" class="segmented-control">
             <button
+              :aria-pressed="audioOutput === option.id"
               v-for="option in audioOutputOptions"
               :key="option.id"
               type="button"
@@ -594,153 +601,6 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
           </div>
         </div>
         <hr />
-        <div class="setting-item top-align dsd-route-setting">
-          <div class="setting-copy">
-            <strong>DSD 直通路由</strong
-            ><span>仅影响 DSD 音源。高级音频参数与音效页中的“DSD 输出方式”修改的也是此设置。</span>
-          </div>
-          <div
-            class="segmented-control dsd-route-control"
-            role="radiogroup"
-            aria-label="DSD 直通路由"
-          >
-            <button
-              v-for="option in dsdOutputModeOptions"
-              :key="option.value"
-              type="button"
-              role="radio"
-              :class="{ active: audioProcessing.dsdOutputMode === option.value }"
-              :aria-checked="audioProcessing.dsdOutputMode === option.value"
-              :title="option.description"
-              @click="selectDsdOutputMode(option.value)"
-            >
-              {{ option.label }}
-            </button>
-          </div>
-        </div>
-        <hr />
-        <details class="settings-advanced-details">
-          <summary>DSD 独立设备路由（高级）</summary>
-          <div class="setting-item top-align dsd-compat-route">
-            <div class="setting-copy">
-              <strong>DSD 兼容层路由</strong>
-              <span>
-                DAC 自带 ASIO 驱动不接受 DSD 采样类型（或只有 WASAPI）时，DSD 会被迫降级为 DoP /
-                PCM。把 DSD 单独路由到已注册的 DSD 代理 ASIO 驱动可以恢复直通，PCM
-                仍走主输出、不受影响。
-              </span>
-              <small>
-                代理驱动（如 foo_dsd_asio）是独立的系统级 ASIO 驱动，与是否安装 foobar2000
-                无关；本软件不加载任何第三方组件，只按你选定的 后端与设备协商。
-              </small>
-              <span
-                v-if="dsdRouteRuntimeText"
-                class="setting-substatus"
-                :class="{ available: outputInfo?.diagnostics?.dsdRouteOverrideActive }"
-              >
-                {{ dsdRouteRuntimeText }}
-              </span>
-            </div>
-            <button
-              type="button"
-              class="toggle-switch"
-              :class="{ active: dsdRoute.enabled, inactive: !dsdRoute.enabled }"
-              role="switch"
-              :aria-checked="dsdRoute.enabled"
-              aria-label="启用 DSD 兼容层路由"
-              @click="toggleDsdRouteEnabled()"
-            ></button>
-          </div>
-          <template v-if="dsdRoute.enabled">
-            <div class="setting-item compact-row">
-              <div class="setting-copy">
-                <strong>路由后端</strong>
-                <span>留空则沿用主输出后端。</span>
-              </div>
-              <select
-                class="settings-select"
-                :value="dsdRoute.backend"
-                aria-label="DSD 兼容层路由后端"
-                @change="setDsdRouteBackend"
-              >
-                <option value="">跟随主输出（{{ audioOutput }}）</option>
-                <option
-                  v-for="option in dsdRouteBackendOptions"
-                  :key="option.id"
-                  :value="option.id"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </div>
-            <div class="setting-item compact-row">
-              <div class="setting-copy">
-                <strong>路由设备</strong>
-                <span v-if="dsdRouteProxyDevices.length > 0">
-                  检测到 {{ dsdRouteProxyDevices.length }} 个疑似 DSD 代理驱动。
-                </span>
-                <span v-else> 未检测到疑似代理驱动；若已安装仍可手动选择对应设备。 </span>
-              </div>
-              <select
-                class="settings-select"
-                :value="dsdRoute.device"
-                aria-label="DSD 兼容层路由设备"
-                @change="setDsdRouteDevice"
-              >
-                <option value="">跟随主输出设备</option>
-                <option v-for="device in dsdRouteDeviceOptions" :key="device.id" :value="device.id">
-                  {{ device.label }}{{ isDsdProxyDevice(device) ? '（DSD 代理）' : '' }}
-                </option>
-              </select>
-            </div>
-            <div class="setting-item">
-              <div class="setting-copy">
-                <strong>PCM→DSD 上采样也走此路由</strong>
-                <span>关闭则仅 DSD 源使用兼容层，上采样仍走主输出。</span>
-              </div>
-              <button
-                type="button"
-                class="toggle-switch"
-                :class="{
-                  active: dsdRoute.applyToPcmToDsd,
-                  inactive: !dsdRoute.applyToPcmToDsd
-                }"
-                role="switch"
-                :aria-checked="dsdRoute.applyToPcmToDsd"
-                aria-label="PCM 转 DSD 上采样使用兼容层路由"
-                @click="toggleDsdRoutePcmToDsd()"
-              ></button>
-            </div>
-            <div class="setting-item">
-              <div class="setting-copy">
-                <strong>严格直通模式</strong>
-                <span>
-                  开启后无法建立 DSD 直通时报错停止，不静默降级为 PCM。默认关闭，保持自动回退。
-                </span>
-              </div>
-              <button
-                type="button"
-                class="toggle-switch"
-                :class="{
-                  active: dsdRoute.strictPassthrough,
-                  inactive: !dsdRoute.strictPassthrough
-                }"
-                role="switch"
-                :aria-checked="dsdRoute.strictPassthrough"
-                aria-label="DSD 严格直通模式"
-                @click="toggleDsdRouteStrict()"
-              ></button>
-            </div>
-            <div v-if="!dsdRouteActive" class="setting-item">
-              <div class="setting-copy">
-                <span class="setting-substatus">
-                  已启用但未指定后端或设备，当前等同于沿用主输出。
-                </span>
-              </div>
-            </div>
-          </template>
-          <hr />
-        </details>
         <div class="setting-item">
           <div class="setting-copy">
             <strong>独占模式 (Exclusive)</strong>
@@ -969,6 +829,7 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
             >
           </div>
           <select
+            aria-label="记住上次播放"
             class="preview-select"
             :value="settings.playbackResumeMode"
             @change="setPlaybackResumeModeFromSelect"
@@ -992,6 +853,7 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
             >
           </div>
           <select
+            aria-label="上一首按钮行为"
             class="preview-select"
             :value="settings.previousButtonAction"
             @change="setPreviousButtonActionFromSelect"
@@ -1045,6 +907,7 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
             >
           </div>
           <select
+            aria-label="网易云播放音质"
             class="preview-select"
             :value="settings.ncmPlaybackQuality"
             @change="setNcmPlaybackQuality"
@@ -1060,6 +923,152 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
         </div>
       </div>
     </div>
+
+    <details class="settings-advanced-details">
+      <summary>DSD 直通与设备路由</summary>
+      <div class="setting-item top-align dsd-route-setting">
+        <div class="setting-copy">
+          <strong>DSD 直通路由</strong
+          ><span>仅影响 DSD 音源。高级音频参数与音效页中的“DSD 输出方式”修改的也是此设置。</span>
+        </div>
+        <div
+          class="segmented-control dsd-route-control"
+          role="radiogroup"
+          aria-label="DSD 直通路由"
+        >
+          <label
+            v-for="option in dsdOutputModeOptions"
+            :key="option.value"
+            :title="option.description"
+          >
+            <input
+              type="radio"
+              name="settings-dsd-output-mode"
+              :value="option.value"
+              :checked="audioProcessing.dsdOutputMode === option.value"
+              @change="selectDsdOutputMode(option.value)"
+            />
+            <span>{{ option.label }}</span>
+          </label>
+        </div>
+      </div>
+      <hr />
+
+      <div class="setting-item top-align dsd-compat-route">
+        <div class="setting-copy">
+          <strong>DSD 兼容层路由</strong>
+          <span>
+            DAC 自带 ASIO 驱动不接受 DSD 采样类型（或只有 WASAPI）时，DSD 会被迫降级为 DoP / PCM。把
+            DSD 单独路由到已注册的 DSD 代理 ASIO 驱动可以恢复直通，PCM 仍走主输出、不受影响。
+          </span>
+          <small>
+            代理驱动（如 foo_dsd_asio）是独立的系统级 ASIO 驱动，与是否安装 foobar2000
+            无关；本软件不加载任何第三方组件，只按你选定的 后端与设备协商。
+          </small>
+          <span
+            v-if="dsdRouteRuntimeText"
+            class="setting-substatus"
+            :class="{ available: outputInfo?.diagnostics?.dsdRouteOverrideActive }"
+          >
+            {{ dsdRouteRuntimeText }}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="toggle-switch"
+          :class="{ active: dsdRoute.enabled, inactive: !dsdRoute.enabled }"
+          role="switch"
+          :aria-checked="dsdRoute.enabled"
+          aria-label="启用 DSD 兼容层路由"
+          @click="toggleDsdRouteEnabled()"
+        ></button>
+      </div>
+      <template v-if="dsdRoute.enabled">
+        <div class="setting-item compact-row">
+          <div class="setting-copy">
+            <strong>路由后端</strong>
+            <span>留空则沿用主输出后端。</span>
+          </div>
+          <select
+            class="settings-select"
+            :value="dsdRoute.backend"
+            aria-label="DSD 兼容层路由后端"
+            @change="setDsdRouteBackend"
+          >
+            <option value="">跟随主输出（{{ audioOutput }}）</option>
+            <option v-for="option in dsdRouteBackendOptions" :key="option.id" :value="option.id">
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <div class="setting-item compact-row">
+          <div class="setting-copy">
+            <strong>路由设备</strong>
+            <span v-if="dsdRouteProxyDevices.length > 0">
+              检测到 {{ dsdRouteProxyDevices.length }} 个疑似 DSD 代理驱动。
+            </span>
+            <span v-else> 未检测到疑似代理驱动；若已安装仍可手动选择对应设备。 </span>
+          </div>
+          <select
+            class="settings-select"
+            :value="dsdRoute.device"
+            aria-label="DSD 兼容层路由设备"
+            @change="setDsdRouteDevice"
+          >
+            <option value="">跟随主输出设备</option>
+            <option v-for="device in dsdRouteDeviceOptions" :key="device.id" :value="device.id">
+              {{ device.label }}{{ isDsdProxyDevice(device) ? '（DSD 代理）' : '' }}
+            </option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>PCM→DSD 上采样也走此路由</strong>
+            <span>关闭则仅 DSD 源使用兼容层，上采样仍走主输出。</span>
+          </div>
+          <button
+            type="button"
+            class="toggle-switch"
+            :class="{
+              active: dsdRoute.applyToPcmToDsd,
+              inactive: !dsdRoute.applyToPcmToDsd
+            }"
+            role="switch"
+            :aria-checked="dsdRoute.applyToPcmToDsd"
+            aria-label="PCM 转 DSD 上采样使用兼容层路由"
+            @click="toggleDsdRoutePcmToDsd()"
+          ></button>
+        </div>
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>严格直通模式</strong>
+            <span>
+              开启后无法建立 DSD 直通时报错停止，不静默降级为 PCM。默认关闭，保持自动回退。
+            </span>
+          </div>
+          <button
+            type="button"
+            class="toggle-switch"
+            :class="{
+              active: dsdRoute.strictPassthrough,
+              inactive: !dsdRoute.strictPassthrough
+            }"
+            role="switch"
+            :aria-checked="dsdRoute.strictPassthrough"
+            aria-label="DSD 严格直通模式"
+            @click="toggleDsdRouteStrict()"
+          ></button>
+        </div>
+        <div v-if="!dsdRouteActive" class="setting-item">
+          <div class="setting-copy">
+            <span class="setting-substatus">
+              已启用但未指定后端或设备，当前等同于沿用主输出。
+            </span>
+          </div>
+        </div>
+      </template>
+      <hr />
+    </details>
 
     <div class="accordion-preview" :class="{ open: advancedParamsOpen }">
       <button

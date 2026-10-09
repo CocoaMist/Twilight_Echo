@@ -25,7 +25,7 @@ const sectionKeys: Record<string, string> = {
   About: 'about'
 }
 
-test('settings preserve transition navigation geometry and skip distant content without scroll shifts', async () => {
+test('settings categories preserve drafts, keyboard focus and search across responsive layouts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-settings-scroll-'))
   try {
     const app = parse(await readFile(join(workspace, 'src/renderer/src/App.vue'), 'utf8'))

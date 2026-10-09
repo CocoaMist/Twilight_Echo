@@ -166,7 +166,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="section-block">
-    <h3>集成 (Integrations)</h3>
     <div class="setting-list">
       <div class="setting-item">
         <div class="setting-copy">

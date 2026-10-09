@@ -1,7 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { scrollMotionBehavior } from '../app/scrollMotion'
-import { createSettingsSectionRendering } from './settings-page/settingsSectionRendering'
 import {
   provideSettingsSearchDisclosure,
   revealSettingsDetails
@@ -15,7 +14,6 @@ import CacheSettingsSection from './settings-page/CacheSettingsSection.vue'
 import DesktopLyricsSettingsSection from './settings-page/DesktopLyricsSettingsSection.vue'
 import AboutSettingsSection from './settings-page/AboutSettingsSection.vue'
 import ShortcutsSettingsSection from './settings-page/ShortcutsSettingsSection.vue'
-import AnimatedInput from './AnimatedInput.vue'
 import {
   type SectionKey,
   type BooleanSettingKey,
@@ -790,8 +788,6 @@ async function exportAudioDiagnostics(): Promise<void> {
 }
 
 const SETTINGS_SECTION_SCROLL_OFFSET = 24
-let programmaticScrollUntil = 0
-let programmaticScrollTimer: number | null = null
 
 function scrollPageToElement(
   target: HTMLElement,
@@ -799,63 +795,69 @@ function scrollPageToElement(
 ): void {
   const page = pageRef.value
   if (!page) return
-
-  sectionRendering?.prepareNavigation()
-  sectionGeometryDirty = true
-  const block = options.block ?? 'start'
-  const behavior = scrollMotionBehavior(
-    options.behavior ?? 'smooth',
-    Boolean(page.querySelector(':focus-visible'))
-  )
   const pageRect = page.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
-  const targetTop = targetRect.top - pageRect.top + page.scrollTop
   const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
-  const scrollOffset =
+  const stackedNavigation = navigation && navigation.getBoundingClientRect().right > targetRect.left
+  const offset =
     SETTINGS_SECTION_SCROLL_OFFSET +
-    (navigation && getComputedStyle(navigation).position === 'sticky'
-      ? navigation.getBoundingClientRect().height
-      : 0)
-  const maxScrollTop = Math.max(0, page.scrollHeight - page.clientHeight)
-  const nextTop =
-    block === 'center'
-      ? targetTop -
-        scrollOffset -
-        Math.max(0, (page.clientHeight - scrollOffset - targetRect.height) / 2)
-      : targetTop - scrollOffset
-
-  programmaticScrollUntil = performance.now() + (behavior === 'smooth' ? 700 : 0)
-  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
-  programmaticScrollTimer = window.setTimeout(
-    finishProgrammaticScroll,
-    behavior === 'smooth' ? 750 : 0
-  )
-
+    (stackedNavigation ? navigation.getBoundingClientRect().height + 16 : 0)
+  const top = targetRect.top - pageRect.top + page.scrollTop - offset
+  const center =
+    options.block === 'center'
+      ? Math.max(0, (page.clientHeight - offset - targetRect.height) / 2)
+      : 0
   page.scrollTo({
-    top: Math.max(0, Math.min(maxScrollTop, nextTop)),
-    behavior
+    top: Math.max(0, top - center),
+    behavior: scrollMotionBehavior(
+      options.behavior ?? 'smooth',
+      Boolean(page.querySelector(':focus-visible'))
+    )
   })
 }
 
-function finishProgrammaticScroll(): void {
-  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
-  programmaticScrollTimer = null
-  programmaticScrollUntil = 0
-  sectionRendering?.finishNavigation()
-  sectionGeometryDirty = true
-  scheduleActiveSectionUpdate()
-}
+let searchNavigationRevision = 0
 
 function scrollToSection(section: SectionKey): void {
+  searchNavigationRevision++
+  highlightSettingItem(null)
+  settingsSearchQuery.value = ''
   activeSection.value = section
-  const el = document.getElementById(section)
-  if (!el) return
-  scrollPageToElement(el, { block: 'start' })
+  // Keep panels mounted so drafts and disclosure states survive category changes.
+  void nextTick(() => pageRef.value?.scrollTo({ top: 0, behavior: 'instant' }))
 }
 
-function applyNavigationTarget(): void {
+function onCategoryKeydown(event: KeyboardEvent, section: SectionKey): void {
+  const index = sections.findIndex((item) => item.key === section)
+  const nextIndex =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? sections.length - 1
+        : event.key === 'ArrowDown'
+          ? (index + 1) % sections.length
+          : event.key === 'ArrowUp'
+            ? (index + sections.length - 1) % sections.length
+            : -1
+  if (nextIndex < 0) return
+  event.preventDefault()
+  const next = sections[nextIndex].key
+  scrollToSection(next)
+  void nextTick(() =>
+    pageRef.value
+      ?.querySelector<HTMLButtonElement>(`[data-settings-category="${next}"]`)
+      ?.focus({ preventScroll: true })
+  )
+}
+
+async function applyNavigationTarget(): Promise<void> {
   if (!pageRef.value) return
   const target = props.navigationTarget
+  activeSection.value =
+    target?.entry?.section ?? (target?.anchor ? 'playback' : props.initialSection) ?? 'general'
+  const section = activeSection.value
+  await nextTick()
+  if (activeSection.value !== section || settingsDisposed) return
   if (target?.anchor) {
     const element = pageRef.value.querySelector<HTMLDetailsElement>(`#${target.anchor}`)
     if (element) {
@@ -874,11 +876,18 @@ watch([() => props.initialSection, () => props.navigationTarget], applyNavigatio
 })
 
 function scrollToSearchResult(entry: SettingsSearchEntry): void {
+  const revision = ++searchNavigationRevision
   settingsSearchQuery.value = ''
   activeSection.value = entry.section
   revealSearchDisclosures(entry.reveal)
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
+      if (
+        settingsDisposed ||
+        revision !== searchNavigationRevision ||
+        activeSection.value !== entry.section
+      )
+        return
       const sectionEl = document.getElementById(entry.section)
       if (!sectionEl) return
       const directTarget = findSettingItem(sectionEl, entry)
@@ -897,6 +906,12 @@ function scrollToSearchResult(entry: SettingsSearchEntry): void {
         block: target === sectionEl ? 'start' : 'center'
       })
       highlightSettingItem(target === sectionEl ? null : target)
+      const control = target.querySelector<HTMLElement>(
+        'button:not(:disabled), select:not(:disabled), input:not(:disabled), summary'
+      )
+      const focusTarget = control ?? target
+      if (!control) focusTarget.tabIndex = -1
+      focusTarget.focus({ preventScroll: true })
     })
   })
 }
@@ -991,57 +1006,8 @@ async function refreshShortcutStatuses(): Promise<void> {
 }
 
 let settingsDisposed = false
-let sectionFrame = 0
-let sectionGeometryDirty = true
-let sectionRendering: ReturnType<typeof createSettingsSectionRendering> | null = null
-let sectionPositions: { key: SectionKey; top: number }[] = []
-
-function scheduleActiveSectionUpdate(): void {
-  if (sectionFrame || settingsDisposed) return
-  sectionFrame = window.requestAnimationFrame(() => {
-    sectionFrame = 0
-    updateActiveSection()
-  })
-}
-
-function updateActiveSection(): void {
-  if (performance.now() < programmaticScrollUntil) return
-  const page = pageRef.value
-  if (!page) return
-  const scrollTop = page.scrollTop
-  if (sectionGeometryDirty) {
-    const pageTop = page.getBoundingClientRect().top
-    sectionPositions = sections.flatMap((section) => {
-      const el = page.querySelector<HTMLElement>(`#${section.key}`)
-      return el
-        ? [{ key: section.key, top: el.getBoundingClientRect().top - pageTop + scrollTop }]
-        : []
-    })
-    sectionGeometryDirty = false
-  }
-  let closest = activeSection.value
-  let closestDistance = Number.POSITIVE_INFINITY
-  for (const section of sectionPositions) {
-    const distance = Math.abs(section.top - scrollTop - SETTINGS_SECTION_SCROLL_OFFSET)
-    if (distance < closestDistance) {
-      closest = section.key
-      closestDistance = distance
-    }
-  }
-  activeSection.value = closest
-}
-
 onMounted(async () => {
-  // Scroll handling must not wait for cache sizes or plugin/native IPC to finish.
-  const page = pageRef.value
-  if (page) {
-    sectionRendering = createSettingsSectionRendering(page, () => {
-      sectionGeometryDirty = true
-      scheduleActiveSectionUpdate()
-    })
-    page.addEventListener('scroll', scheduleActiveSectionUpdate, { passive: true })
-    page.addEventListener('scrollend', finishProgrammaticScroll, { passive: true })
-  }
+  void applyNavigationTarget()
   await Promise.all([loadSettings(), refreshAudioOutputState(), themeStore.load()])
   if (settingsDisposed) return
   await Promise.all([
@@ -1060,20 +1026,11 @@ onMounted(async () => {
     if (document.visibilityState === 'hidden') return
     void refreshLibraryWatcherStatus()
   }, 5_000)
-  await nextTick()
-  if (settingsDisposed) return
-  applyNavigationTarget()
 })
 
 onBeforeUnmount(() => {
   settingsDisposed = true
-  pageRef.value?.removeEventListener('scroll', scheduleActiveSectionUpdate)
-  pageRef.value?.removeEventListener('scrollend', finishProgrammaticScroll)
-  sectionRendering?.dispose()
-  if (sectionFrame) window.cancelAnimationFrame(sectionFrame)
   if (searchHighlightTimer !== null) window.clearTimeout(searchHighlightTimer)
-  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
-  programmaticScrollUntil = 0
   if (libraryWatcherStatusTimer !== null) {
     window.clearInterval(libraryWatcherStatusTimer)
     libraryWatcherStatusTimer = null
@@ -1082,7 +1039,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main ref="pageRef" class="settings-preview-page">
+  <main ref="pageRef" class="settings-preview-page" data-settings-layout="categories">
     <input
       ref="importSettingsInputRef"
       class="visually-hidden-file-input"
@@ -1099,7 +1056,7 @@ onBeforeUnmount(() => {
         <div class="settings-nav-search-wrap">
           <div class="settings-search-box settings-nav-search">
             <i class="pi pi-search"></i>
-            <AnimatedInput
+            <input
               id="settings-search-input"
               v-model="settingsSearchQuery"
               type="text"
@@ -1159,19 +1116,34 @@ onBeforeUnmount(() => {
             没有找到匹配的设置
           </div>
         </div>
-        <button
-          v-for="section in sections"
-          :key="section.key"
-          type="button"
-          class="preview-nav-item"
-          :class="{ active: activeSection === section.key }"
-          :aria-current="activeSection === section.key ? 'location' : undefined"
-          :title="section.description"
-          @click="scrollToSection(section.key)"
+        <div class="settings-category-items">
+          <button
+            v-for="section in sections"
+            :key="section.key"
+            type="button"
+            class="preview-nav-item"
+            :class="{ active: activeSection === section.key }"
+            :aria-current="activeSection === section.key ? 'page' : undefined"
+            :tabindex="activeSection === section.key ? 0 : -1"
+            :data-settings-category="section.key"
+            @keydown="onCategoryKeydown($event, section.key)"
+            :title="section.description"
+            @click="scrollToSection(section.key)"
+          >
+            <i :class="section.icon"></i>
+            <span>{{ section.label }}</span>
+          </button>
+        </div>
+        <select
+          class="settings-category-select preview-select"
+          aria-label="设置分类"
+          :value="activeSection"
+          @change="scrollToSection(($event.target as HTMLSelectElement).value as SectionKey)"
         >
-          <i :class="section.icon"></i>
-          <span>{{ section.label }}</span>
-        </button>
+          <option v-for="section in sections" :key="section.key" :value="section.key">
+            {{ section.label }}
+          </option>
+        </select>
       </nav>
 
       <div class="settings-preview-stack">
@@ -1181,19 +1153,13 @@ onBeforeUnmount(() => {
             常规开关与选项自动保存；插件表单和设备档案需点击保存。需要重启的选项会明确提示。
           </p>
         </header>
-        <section class="settings-command-bar glass-card">
-          <div class="settings-command-actions">
-            <button type="button" class="soft-button" @click="exportSettingsBackup">
-              <i class="pi pi-download"></i>
-              导出设置
-            </button>
-            <button type="button" class="soft-button" @click="importSettingsBackup">
-              <i class="pi pi-upload"></i>
-              导入设置
-            </button>
+        <section v-if="settingsNotice || settingsError" class="settings-command-bar glass-card">
+          <div v-if="settingsNotice" class="settings-inline-notice" role="status">
+            {{ settingsNotice }}
           </div>
-          <div v-if="settingsNotice" class="settings-inline-notice">{{ settingsNotice }}</div>
-          <div v-if="settingsError" class="settings-inline-error">{{ settingsError }}</div>
+          <div v-if="settingsError" class="settings-inline-error" role="alert">
+            {{ settingsError }}
+          </div>
         </section>
 
         <div v-if="restartRequired" class="restart-banner restart-banner-sticky" role="status">
@@ -1208,6 +1174,7 @@ onBeforeUnmount(() => {
         </div>
 
         <GeneralSettingsSection
+          v-show="activeSection === 'general'"
           :library-watcher-status="libraryWatcherStatus"
           :library-scan-status="libraryScanStatus"
           :library-scan-is-active="libraryScanIsActive"
@@ -1254,14 +1221,16 @@ onBeforeUnmount(() => {
           @reopen-onboarding="emit('reopenOnboarding')"
         />
 
-        <PlaybackSettingsSection />
+        <PlaybackSettingsSection v-show="activeSection === 'playback'" />
 
         <DspSettingsSection
+          v-show="activeSection === 'dsp'"
           @open-equalizer="emit('openEqualizer')"
           @open-dsp-rack="emit('openDspRack')"
         />
 
         <CacheSettingsSection
+          v-show="activeSection === 'cache'"
           :active-cache-path="activeCachePath"
           :cache-policy="settings.cachePolicy"
           :auto-analyze-bpm="settings.autoAnalyzeBpm"
@@ -1282,19 +1251,25 @@ onBeforeUnmount(() => {
           @confirm-clear-cache="confirmClearCache"
         />
 
-        <PerformanceSettingsSection :toggle-setting="toggleSetting" />
+        <PerformanceSettingsSection
+          v-show="activeSection === 'performance'"
+          :toggle-setting="toggleSetting"
+        />
 
         <AppearanceSettingsSection
+          v-show="activeSection === 'appearance'"
           @open-theme-studio="emit('openThemeStudio')"
           @open-theme-workshop="emit('openThemeWorkshop')"
         />
 
         <DesktopLyricsSettingsSection
+          v-show="activeSection === 'desktopLyrics'"
           :desktop-lyrics="settings.desktopLyrics"
           @toggle="toggleDesktopLyrics"
           @update="updateDesktopLyrics"
         />
         <ShortcutsSettingsSection
+          v-show="activeSection === 'shortcuts'"
           :global-shortcuts="settings.globalShortcuts"
           :shortcut-statuses="shortcutStatuses"
           :shortcut-bindings="settings.globalShortcutBindings"
@@ -1303,6 +1278,7 @@ onBeforeUnmount(() => {
         />
 
         <AboutSettingsSection
+          v-show="activeSection === 'about'"
           :app-version="appVersion"
           @export-audio-diagnostics="exportAudioDiagnostics"
         />
@@ -1734,3 +1710,5 @@ html[data-theme='dark'] .settings-preview-page .engine-error {
   font-size: 0.9rem;
 }
 </style>
+
+<style src="./settings-page/SettingsLayout.css"></style>

@@ -167,7 +167,7 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
     <div class="about-glow" aria-hidden="true"></div>
     <div class="section-title-row">
       <i class="pi pi-info-circle"></i>
-      <h2>关于 (About)</h2>
+      <h2>关于</h2>
     </div>
 
     <div class="about-hero">

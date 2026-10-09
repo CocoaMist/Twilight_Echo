@@ -68,6 +68,7 @@ useSettingsSearchDisclosure('miniPlayer', open, () => customization.beginSession
       class="settings-accordion-trigger setting-item"
       :class="{ open }"
       :aria-expanded="open"
+      aria-controls="settings-mini-player"
       @click="toggleOpen"
     >
       <span class="setting-copy">
@@ -79,7 +80,7 @@ useSettingsSearchDisclosure('miniPlayer', open, () => customization.beginSession
       <i class="pi pi-chevron-down"></i>
     </button>
 
-    <SettingsDisclosure :open="open">
+    <SettingsDisclosure id="settings-mini-player" :open="open" class="settings-accordion-body">
       <MiniPlayerCustomizer
         :settings="customization.settings.value"
         mode="inline"

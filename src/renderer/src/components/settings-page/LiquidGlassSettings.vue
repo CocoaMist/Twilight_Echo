@@ -175,6 +175,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
     class="settings-accordion-trigger setting-item"
     :class="{ open: liquidGlassOpen }"
     :aria-expanded="liquidGlassOpen"
+    aria-controls="settings-liquid-glass"
     @click="liquidGlassOpen = !liquidGlassOpen"
   >
     <span class="setting-copy">
@@ -183,7 +184,11 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <SettingsDisclosure :open="liquidGlassOpen" class="settings-accordion-body">
+  <SettingsDisclosure
+    id="settings-liquid-glass"
+    :open="liquidGlassOpen"
+    class="settings-accordion-body"
+  >
     <hr />
     <div class="liquid-glass-reset-row">
       <div class="setting-copy">
@@ -331,8 +336,9 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
           <strong>编辑范围</strong>
           <span>首页媒体焦点可独立保存一套玻璃参数，不影响导航和播放栏。</span>
         </div>
-        <div class="theme-segment">
+        <div role="group" aria-label="编辑范围" class="theme-segment">
           <button
+            :aria-pressed="activeLiquidGlassScope === 'global'"
             v-if="hasSharedLiquidGlassProfile"
             type="button"
             :class="{ active: activeLiquidGlassScope === 'global' }"
@@ -341,6 +347,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
             全局
           </button>
           <button
+            :aria-pressed="activeLiquidGlassScope === 'home'"
             v-if="settings.liquidGlass.homeCards.enabled"
             type="button"
             :class="{ active: activeLiquidGlassScope === 'home' }"
@@ -388,8 +395,9 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
           <strong>编辑主题</strong>
           <span>分别设置浅色与深色模式下的玻璃参数。</span>
         </div>
-        <div class="theme-segment">
+        <div role="group" aria-label="编辑主题" class="theme-segment">
           <button
+            :aria-pressed="liquidGlassTab === 'light'"
             type="button"
             :class="{ active: liquidGlassTab === 'light' }"
             @click="liquidGlassTab = 'light'"
@@ -398,6 +406,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
             浅色
           </button>
           <button
+            :aria-pressed="liquidGlassTab === 'dark'"
             type="button"
             :class="{ active: liquidGlassTab === 'dark' }"
             @click="liquidGlassTab = 'dark'"
@@ -416,6 +425,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>折射</span>
           <input
+            aria-label="折射强度"
             class="range-input"
             type="range"
             min="0"
@@ -446,6 +456,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>色散</span>
           <input
+            aria-label="色散强度"
             class="range-input"
             type="range"
             min="0"
@@ -477,6 +488,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>模糊</span>
           <input
+            aria-label="玻璃模糊"
             class="range-input"
             type="range"
             min="0"
@@ -505,6 +517,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>饱和度</span>
           <input
+            aria-label="玻璃饱和度"
             class="range-input"
             type="range"
             min="80"
@@ -533,6 +546,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>弹性</span>
           <input
+            aria-label="弹性跟随"
             class="range-input"
             type="range"
             min="0"
@@ -561,6 +575,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>高光</span>
           <input
+            aria-label="镜面高光"
             class="range-input"
             type="range"
             min="0"
@@ -592,6 +607,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>着色</span>
           <input
+            aria-label="表面着色"
             class="range-input"
             type="range"
             min="0"

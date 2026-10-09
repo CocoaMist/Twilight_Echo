@@ -84,6 +84,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
     class="settings-accordion-trigger setting-item"
     :class="{ open: cardAppearanceOpen }"
     :aria-expanded="cardAppearanceOpen"
+    aria-controls="settings-card-appearance"
     @click="cardAppearanceOpen = !cardAppearanceOpen"
   >
     <span class="setting-copy">
@@ -92,7 +93,11 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <SettingsDisclosure :open="cardAppearanceOpen" class="settings-accordion-body">
+  <SettingsDisclosure
+    id="settings-card-appearance"
+    :open="cardAppearanceOpen"
+    class="settings-accordion-body"
+  >
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
@@ -116,8 +121,9 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <strong>编辑主题</strong>
           <span>分别设置浅色与深色模式下的卡片外观。</span>
         </div>
-        <div class="theme-segment">
+        <div role="group" aria-label="编辑主题" class="theme-segment">
           <button
+            :aria-pressed="cardAppearanceTab === 'light'"
             type="button"
             :class="{ active: cardAppearanceTab === 'light' }"
             @click="cardAppearanceTab = 'light'"
@@ -126,6 +132,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
             浅色
           </button>
           <button
+            :aria-pressed="cardAppearanceTab === 'dark'"
             type="button"
             :class="{ active: cardAppearanceTab === 'dark' }"
             @click="cardAppearanceTab = 'dark'"
@@ -144,6 +151,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
         <div class="range-pill">
           <span>模糊</span>
           <input
+            aria-label="卡片模糊强度"
             class="range-input"
             type="range"
             min="0"
@@ -170,6 +178,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
         <div class="range-pill">
           <span>饱和度</span>
           <input
+            aria-label="卡片模糊饱和度"
             class="range-input"
             type="range"
             min="80"
@@ -197,6 +206,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
         </div>
         <div class="inline-controls">
           <input
+            aria-label="卡片背景颜色"
             type="color"
             class="color-picker"
             :value="settings.cardAppearance[cardAppearanceTab].backgroundColor"
@@ -205,6 +215,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <div class="range-pill">
             <span>不透明度</span>
             <input
+              aria-label="卡片背景颜色"
               class="range-input"
               type="range"
               min="0"
@@ -233,6 +244,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
         </div>
         <div class="inline-controls">
           <input
+            aria-label="卡片边框"
             type="color"
             class="color-picker"
             :value="settings.cardAppearance[cardAppearanceTab].borderColor"
@@ -241,6 +253,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <div class="range-pill">
             <span>透明度</span>
             <input
+              aria-label="卡片边框"
               class="range-input"
               type="range"
               min="0"
@@ -262,6 +275,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <div class="range-pill">
             <span>宽度</span>
             <input
+              aria-label="卡片边框"
               class="range-input"
               type="range"
               min="0"
@@ -293,6 +307,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
         <div class="range-pill">
           <span>圆角</span>
           <input
+            aria-label="卡片圆角半径"
             class="range-input"
             type="range"
             min="0"
@@ -316,8 +331,11 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <strong>卡片阴影强度</strong>
           <span>控制卡片投影的深浅。</span>
         </div>
-        <div class="segmented-control">
+        <div role="group" aria-label="卡片阴影强度" class="segmented-control">
           <button
+            :aria-pressed="
+              settings.cardAppearance[cardAppearanceTab].shadowStrength === option.value
+            "
             v-for="option in cardShadowOptions"
             :key="option.value"
             type="button"
@@ -336,8 +354,9 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <strong>卡片悬浮效果</strong>
           <span>鼠标悬停时卡片的动效。</span>
         </div>
-        <div class="segmented-control">
+        <div role="group" aria-label="卡片悬浮效果" class="segmented-control">
           <button
+            :aria-pressed="settings.cardAppearance[cardAppearanceTab].hoverEffect === option.value"
             v-for="option in cardHoverOptions"
             :key="option.value"
             type="button"
@@ -397,6 +416,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <div class="range-pill">
             <span>模糊</span>
             <input
+              aria-label="背景模糊"
               class="range-input"
               type="range"
               min="0"
@@ -423,6 +443,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <div class="range-pill">
             <span>亮度</span>
             <input
+              aria-label="背景亮度"
               class="range-input"
               type="range"
               min="50"
@@ -451,6 +472,7 @@ useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
           <div class="range-pill">
             <span>暗化</span>
             <input
+              aria-label="背景暗化遮罩"
               class="range-input"
               type="range"
               min="0"

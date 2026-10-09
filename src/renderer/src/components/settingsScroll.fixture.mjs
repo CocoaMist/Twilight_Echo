@@ -51,6 +51,7 @@ const expanded = ref(false)
 let searchPanel
 window.makeSettingsSection = (key) => {
   const panelOpen = ref(false)
+  const draftValues = ref({})
   useSettingsSearchDisclosure('playerBar', panelOpen)
   if (key === 'appearance') searchPanel = panelOpen
   return () =>
@@ -129,7 +130,25 @@ window.makeSettingsSection = (key) => {
                     )
                   )
                 ]),
-                h('input', { value: '保留的设置值', 'aria-label': `${key}-${index}` })
+                index === 0
+                  ? h('select', { class: 'preview-select', 'aria-label': '测试选择框' }, [
+                      h('option', '跟随系统')
+                    ])
+                  : null,
+                index === 1
+                  ? h('div', { class: 'path-control' }, [
+                      h('input', { readonly: true, value: 'D:\\Music' }),
+                      h('button', '选择文件夹'),
+                      h('button', '恢复默认')
+                    ])
+                  : null,
+                h('input', {
+                  value: draftValues.value[index] ?? '保留的设置值',
+                  'aria-label': `${key}-${index}`,
+                  onInput: (event) => {
+                    draftValues.value[index] = event.target.value
+                  }
+                })
               ]
             )
           )
@@ -140,215 +159,207 @@ window.makeSettingsSection = (key) => {
 
 window.runSettingsScrollTests = async () => {
   const mounted = ref(true)
-  const app = createApp({ render: () => (mounted.value ? h(SettingsPage) : null) })
+  const props = ref({})
+  const app = createApp({ render: () => (mounted.value ? h(SettingsPage, props.value) : null) })
   app.mount('#app')
   await settle()
-  expect(innerWidth === 1440, `unexpected desktop viewport: ${innerWidth}`)
   const page = document.querySelector('.settings-preview-page')
   const sections = [...page.querySelectorAll('.preview-section')]
   const nav = (label) =>
     [...page.querySelectorAll('.preview-nav-item')].find((button) =>
       button.textContent.includes(label)
     )
-  const visibleRows = () =>
-    [...page.querySelectorAll('.setting-item')].filter((row) =>
-      row.checkVisibility({ contentVisibilityAuto: true })
-    ).length
-  expect(sections.length === 9, 'missing section fixtures')
-  expect(
-    sections.every((section) => section.classList.contains('settings-section-measured')),
-    'rendering waited for settings IPC'
-  )
-  const skippedRows = 405 - visibleRows()
-  expect(
-    skippedRows >= 270,
-    `distant controls still participate in rendering: ${skippedRows} skipped`
-  )
-  const height = page.scrollHeight
-  page.classList.add('settings-resolving-navigation')
-  const fullHeight = page.scrollHeight
-  expect(
-    Math.abs(height - fullHeight) <= 2,
-    `skipping changed scroll height: ${height} vs ${fullHeight}`
-  )
-  page.classList.remove('settings-resolving-navigation')
-
+  const visible = () => sections.filter((section) => getComputedStyle(section).display !== 'none')
+  const selected = (label) => nav(label).getAttribute('aria-current') === 'page'
+  const assertPanel = (key) => {
+    expect(
+      visible().length === 1 && visible()[0].id === key,
+      `category ${key} is mixed with another panel`
+    )
+    const hiddenControls = sections
+      .filter((section) => section.id !== key)
+      .flatMap((section) => [...section.querySelectorAll('input,button,select')])
+    expect(
+      hiddenControls.every((control) => !control.checkVisibility()),
+      'inactive controls remain visible/focusable'
+    )
+  }
+  expect(sections.length === 9, 'missing categories')
+  assertPanel('general')
+  // Slow startup must not undo a user's category choice.
+  nav('外观').click()
+  await settle()
   resolveLoad()
   await settle()
+  assertPanel('appearance')
+  expect(selected('外观'), 'loading reset the selected category')
   nav('常规').click()
   await settle()
   const general = document.querySelector('#general')
-  const fixedNavigation = page.querySelector('.settings-preview-nav')
-  const restingNavTop = fixedNavigation.getBoundingClientRect().top
-  const restingScrollTop = page.scrollTop
-  document.documentElement.dataset.teMotion = 'full'
-  for (const transition of ['settings-page-enter-active', 'settings-page-leave-active']) {
-    page.classList.add(transition)
-    // Inspect the settled nav transform while the page's transition layer still
-    // exists; elapsed timer samples can miss its containing-block change.
-    for (const animation of fixedNavigation.getAnimations()) {
-      animation.pause()
-      animation.currentTime = Number(animation.effect.getTiming().duration)
-    }
-    expect(
-      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
-      `${transition} reanchored the fixed navigation`
-    )
-    page.scrollTo({ top: restingScrollTop + 80, behavior: 'instant' })
-    expect(
-      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
-      `${transition} let page scrolling move the navigation`
-    )
-    page.classList.remove(transition)
-    page.scrollTo({ top: restingScrollTop, behavior: 'instant' })
-    expect(
-      Math.abs(fixedNavigation.getBoundingClientRect().top - restingNavTop) <= 2,
-      `${transition} completion rebounded the navigation`
-    )
-  }
-  document.documentElement.dataset.teMotion = 'off'
-  await settle()
-  const beforeExpansion = page.scrollHeight
   general.querySelector('.test-disclosure').click()
   await settle()
-  expect(page.scrollHeight >= beforeExpansion + 360, 'disclosure did not update section size')
   general.querySelector('input').value = '未保存的输入'
-
+  general.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }))
   nav('快捷键').click()
   await settle()
-  const shortcuts = document.querySelector('#shortcuts')
-  expect(
-    Math.abs(shortcuts.getBoundingClientRect().top - page.getBoundingClientRect().top - 24) <= 3,
-    'navigation missed distant card'
-  )
-  expect(
-    nav('快捷键').getAttribute('aria-current') === 'location',
-    'navigation lost active section'
-  )
-
-  // Remembered heights are now stale. Jumping to a section must first resolve
-  // every preceding card at the new width, including skipped cards.
-  await window.resizeTestWindow(760)
+  assertPanel('shortcuts')
+  expect(page.scrollTop === 0 && selected('快捷键'), 'category did not start at its heading')
+  page.scrollTo({ top: 800, behavior: 'instant' })
   await settle()
-  expect(innerWidth === 760, `unexpected narrow viewport: ${innerWidth}`)
-  nav('性能').click()
+  expect(selected('快捷键'), 'scrolling changed the category selection')
+  nav('快捷键').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
   await settle()
-  const performance = document.querySelector('#performance')
-  const navigation = page.querySelector('.settings-preview-nav')
-  const offset = 24 + navigation.getBoundingClientRect().height
+  assertPanel('desktopLyrics')
+  expect(document.activeElement === nav('桌面歌词'), 'arrow navigation lost focus')
   expect(
-    Math.abs(performance.getBoundingClientRect().top - page.getBoundingClientRect().top - offset) <=
-      3,
-    `narrow navigation used stale card heights: top=${performance.getBoundingClientRect().top}, page=${page.getBoundingClientRect().top}, offset=${offset}, scroll=${page.scrollTop}, position=${getComputedStyle(navigation).position}`
+    page.querySelectorAll('.preview-nav-item[tabindex="0"]').length === 1,
+    'navigation has multiple tab stops'
+  )
+  nav('桌面歌词').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+  await settle()
+  assertPanel('general')
+  expect(
+    general.querySelector('input').value === '未保存的输入' && expanded.value,
+    'category change lost drafts or disclosure state'
   )
 
   const search = page.querySelector('#settings-search-input')
-  search.value = '硬件加速'
-  search.dispatchEvent(new Event('input', { bubbles: true }))
-  await settle()
-  page.querySelector('#settings-search-result-0').click()
-  await settle()
-  const target = page.querySelector('.search-target-flash')
-  expect(target?.textContent.includes('硬件加速'), 'search highlight missing')
-  const rect = target.getBoundingClientRect()
+  expect(search.placeholder.length > 0, 'search has no visible prompt')
   expect(
-    rect.top >= page.getBoundingClientRect().top + offset - 2 &&
-      rect.bottom <= page.getBoundingClientRect().bottom,
-    'search result is outside usable viewport'
+    getComputedStyle(search).webkitTextFillColor !== 'rgba(0, 0, 0, 0)',
+    'search text is transparent'
   )
-
-  nav('常规').click()
-  await settle()
-  expect(
-    general.querySelector('input').value === '未保存的输入',
-    'skipping remounted an edited control'
-  )
-  expect(expanded.value, 'skipping reset disclosure state')
-  for (const query of ['交叉淡化', 'crossfade']) {
-    search.value = query
-    search.dispatchEvent(new Event('input', { bubbles: true }))
-    await settle()
-    const result = page.querySelector('#settings-search-result-0')
-    expect(
-      result?.textContent.includes('交叉淡入淡出'),
-      `${query} could not find crossfade controls`
-    )
-    result.click()
-    await settle()
-    expect(
-      page.querySelector('.search-target-flash')?.textContent.includes('交叉淡入淡出'),
-      `${query} did not locate playback controls`
-    )
-  }
   const selectSearch = async (query) => {
     search.value = query
     search.dispatchEvent(new Event('input', { bubbles: true }))
     await settle()
-    page.querySelector('#settings-search-result-0').click()
+    const result = page.querySelector('#settings-search-result-0')
+    expect(result, `no search results for ${query}`)
+    const popup = result.getBoundingClientRect()
+    const hit = document.elementFromPoint(
+      popup.left + popup.width / 2,
+      popup.top + popup.height / 2
+    )
+    expect(result.contains(hit), 'search result is clipped or covered')
+    result.click()
     await settle()
   }
-  expect(!searchPanel.value, 'appearance panel unexpectedly started open')
+  const assertTargetVisible = () => {
+    const target = page.querySelector('.search-target-flash')
+    expect(target && target.checkVisibility(), 'search target is hidden')
+    const rect = target.getBoundingClientRect(),
+      frame = page.getBoundingClientRect()
+    const navigation = page.querySelector('.settings-preview-nav').getBoundingClientRect()
+    const offset = navigation.right > rect.left ? navigation.height + 16 : 0
+    expect(
+      rect.top >= frame.top + offset - 2 && rect.bottom <= frame.bottom + 2,
+      'search target is obscured or offscreen'
+    )
+  }
+  for (const query of ['交叉淡化', 'crossfade']) {
+    await selectSearch(query)
+    assertPanel('playback')
+    expect(
+      page.querySelector('.search-target-flash')?.textContent.includes('交叉淡入淡出'),
+      'crossfade search missed its row'
+    )
+    assertTargetVisible()
+  }
+  // A manual category selection cancels a pending search, even in the same panel.
+  search.value = '交叉淡化'
+  search.dispatchEvent(new Event('input', { bubbles: true }))
+  await settle()
+  page.querySelector('#settings-search-result-0').click()
+  nav('播放').click()
+  await settle()
+  expect(!page.querySelector('.search-target-flash'), 'stale search overrode manual navigation')
+  expect(!searchPanel.value, 'advanced appearance panel started open')
   await selectSearch('播放条可见性')
-  expect(searchPanel.value, 'search did not open an unrendered panel')
-  expect(
-    page.querySelector('.search-target-flash')?.textContent === '播放条可见性',
-    'search did not locate the revealed row'
-  )
+  assertPanel('appearance')
+  expect(searchPanel.value, 'search did not reveal its collapsed panel')
+  assertTargetVisible()
   searchPanel.value = false
   await settle()
   await selectSearch('播放条可见性')
-  expect(searchPanel.value, 'repeating a search did not reopen the panel')
+  expect(searchPanel.value, 'repeated search did not reopen the panel')
   await selectSearch('触发距离')
   expect(
     page.querySelector('.search-target-flash')?.textContent === '播放条可见性',
-    'unavailable control did not locate its prerequisite'
+    'unavailable option missed its prerequisite'
   )
   await selectSearch('DSD 采样率策略')
-  expect(document.querySelector('#dsp details').open, 'search left native advanced details closed')
+  assertPanel('dsp')
+  expect(document.querySelector('#dsp details').open, 'native advanced details stayed closed')
+
+  await window.resizeTestWindow(760)
+  await settle()
+  const picker = page.querySelector('.settings-category-select')
   expect(
-    general.querySelector('input').value === '未保存的输入',
-    'search changed existing edited input'
+    picker.checkVisibility() && !nav('常规').checkVisibility(),
+    'narrow navigation did not adapt'
   )
+  picker.value = 'performance'
+  picker.dispatchEvent(new Event('change', { bubbles: true }))
+  await settle()
+  assertPanel('performance')
+  const selectRect = page.querySelector('#performance .preview-select').getBoundingClientRect()
+  expect(
+    selectRect.height >= 28 && selectRect.height <= 64,
+    'narrow select uses its width as height'
+  )
+  const path = page.querySelector('#performance .path-control')
+  expect(
+    path.parentElement.querySelector('.setting-copy').getBoundingClientRect().width >
+      path.parentElement.clientWidth * 0.7,
+    'narrow folder controls squeeze their explanation'
+  )
+  document.documentElement.style.setProperty('--te-font-size-body', '20px')
+  await selectSearch('硬件加速')
+  assertTargetVisible()
+  expect(page.scrollWidth <= page.clientWidth + 1, 'enlarged text overflows narrow settings')
+  document.documentElement.style.removeProperty('--te-font-size-body')
   await window.resizeTestWindow(1440)
   await settle()
-  nav('播放').click()
-  await settle()
-
-  // Native scroll events must use the position cache, with no card measurements
-  // on each frame once the layout is stable.
-  let reads = 0
-  for (const section of sections) {
-    const read = section.getBoundingClientRect.bind(section)
-    section.getBoundingClientRect = () => {
-      reads++
-      return read()
-    }
+  for (const category of [
+    '常规',
+    '播放',
+    '音效',
+    '缓存',
+    '性能',
+    '外观',
+    '桌面歌词',
+    '快捷键',
+    '关于'
+  ]) {
+    nav(category).click()
+    await settle()
+    expect(
+      visible().length === 1 && selected(category),
+      'rapid navigation did not settle in one category'
+    )
   }
-  for (let frame = 0; frame < 8; frame++) {
-    page.dispatchEvent(new Event('scroll'))
-    await new Promise((resolve) => requestAnimationFrame(resolve))
-  }
-  expect(reads === 0, `scroll frames measured ${reads} section boxes`)
-
-  document.documentElement.dataset.teMotion = 'full'
   nav('关于').click()
   nav('常规').click()
-  await new Promise((resolve) => setTimeout(resolve, 1000))
+  await settle()
+  assertPanel('general')
   expect(
-    !page.classList.contains('settings-resolving-navigation'),
-    'interrupted smooth navigation kept all cards rendered'
+    general.querySelector('input').value === '未保存的输入',
+    'repeated navigation changed a draft'
   )
-  nav('关于').click()
+
+  // External deep links select a hidden category before measuring and focusing it.
+  props.value = {
+    initialSection: 'dsp',
+    navigationTarget: {
+      revision: 1,
+      entry: { section: 'dsp', label: 'DSD 采样率策略', match: 'DSD 采样率策略', keywords: [] }
+    }
+  }
+  await settle()
+  assertPanel('dsp')
+  assertTargetVisible()
   mounted.value = false
   await settle()
-  expect(
-    !page.classList.contains('settings-resolving-navigation'),
-    'unmount retained navigation rendering mode'
-  )
-  expect(
-    sections.every((section) => !section.classList.contains('settings-section-measured')),
-    'unmount retained rendering observers'
-  )
   app.unmount()
-  return `SETTINGS_SCROLL_OK: ${skippedRows}/405 rows skipped; stable height; resize/search/disclosure/input/navigation/cleanup verified`
+  return 'SETTINGS_SCROLL_OK: single-panel navigation; drafts; slow startup; keyboard; scrolling; search; advanced controls; 760/1440 resize; external links; cleanup verified'
 }
