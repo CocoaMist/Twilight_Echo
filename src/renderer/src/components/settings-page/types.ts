@@ -61,18 +61,48 @@ export type BooleanSettingKey =
 export const sectionGroups: {
   key: string
   label: string
-  sections: { key: SectionKey; label: string; icon: string; description?: string }[]
+  sections: { key: SectionKey; label: string; icon: string; description: string }[]
 }[] = [
   {
     key: 'basic',
     label: '基础设置',
     sections: [
-      { key: 'general', label: '常规', icon: 'pi pi-sliders-h' },
-      { key: 'playback', label: '播放', icon: 'pi pi-volume-up' },
-      { key: 'appearance', label: '外观', icon: 'pi pi-palette' },
-      { key: 'desktopLyrics', label: '桌面歌词', icon: 'pi pi-window-maximize' },
-      { key: 'shortcuts', label: '快捷键', icon: 'pi pi-key' },
-      { key: 'about', label: '关于', icon: 'pi pi-info-circle' }
+      {
+        key: 'general',
+        label: '常规',
+        icon: 'pi pi-sliders-h',
+        description: '启动、媒体库和 Windows 集成。'
+      },
+      {
+        key: 'playback',
+        label: '播放',
+        icon: 'pi pi-volume-up',
+        description: '播放衔接、音量与音频输出。'
+      },
+      {
+        key: 'appearance',
+        label: '外观',
+        icon: 'pi pi-palette',
+        description: '主题、界面布局和主播放页歌词。'
+      },
+      {
+        key: 'desktopLyrics',
+        label: '桌面歌词',
+        icon: 'pi pi-window-maximize',
+        description: '桌面悬浮与任务栏歌词的显示和样式。'
+      },
+      {
+        key: 'shortcuts',
+        label: '快捷键',
+        icon: 'pi pi-key',
+        description: '全局组合键与系统媒体键。'
+      },
+      {
+        key: 'about',
+        label: '关于',
+        icon: 'pi pi-info-circle',
+        description: '版本信息、更新和项目支持。'
+      }
     ]
   },
   {
@@ -85,8 +115,18 @@ export const sectionGroups: {
         icon: 'pi pi-sliders-v',
         description: '均衡器、响度与声音处理（DSP）'
       },
-      { key: 'cache', label: '缓存', icon: 'pi pi-database' },
-      { key: 'performance', label: '性能', icon: 'pi pi-bolt' }
+      {
+        key: 'cache',
+        label: '缓存',
+        icon: 'pi pi-database',
+        description: '本地缓存、分析数据与占用空间。'
+      },
+      {
+        key: 'performance',
+        label: '性能',
+        icon: 'pi pi-bolt',
+        description: '硬件加速、窗口透明和资源使用。'
+      }
     ]
   }
 ]
@@ -745,8 +785,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
     },
     {
       section: 'desktopLyrics',
-      title: '字号',
-      match: '字号',
+      title: '桌面悬浮字号',
+      match: '桌面悬浮字号',
       terms: '字体 大小 font size 字号 歌词'
     },
     {
@@ -921,7 +961,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
             : entry.title.startsWith('代理') && entry.title !== '代理模式'
               ? '代理模式'
               : undefined,
-  terms: `${sectionTerms[entry.section]} ${entry.terms} ${entry.title === '记住上次播放' ? '启动时恢复播放' : entry.title === '独立迷你窗口' ? '迷你播放器' : ''}`
+  terms: `${sections.find((section) => section.key === entry.section)?.label ?? ''}${entry.title} ${sectionTerms[entry.section]} ${entry.terms} ${entry.title === '记住上次播放' ? '启动时恢复播放' : entry.title === '独立迷你窗口' ? '迷你播放器' : ''}`
 }))
 
 export const RESET_DESKTOP_LYRICS: DesktopLyricsSettings = DEFAULT_DESKTOP_LYRICS_SETTINGS

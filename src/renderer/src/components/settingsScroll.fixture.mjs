@@ -151,6 +151,15 @@ window.makeSettingsSection = (key) => {
                       h('button', '恢复默认')
                     ])
                   : null,
+                index === 2
+                  ? h('div', { class: 'folder-list' }, [
+                      h('div', { class: 'folder-item' }, [
+                        h('span', 'D:\\Music\\Library'),
+                        h('button', '移除')
+                      ]),
+                      h('button', '添加文件夹')
+                    ])
+                  : null,
                 h('input', {
                   value: draftValues.value[index] ?? '保留的设置值',
                   'aria-label': `${key}-${index}`,
@@ -498,7 +507,18 @@ window.runSettingsScrollTests = async () => {
     path.querySelector('input').getBoundingClientRect().height >= 32,
     'narrow folder input collapses into a thin strip'
   )
+  const folderRow = page.querySelector('#performance .folder-list').parentElement
+  expect(
+    folderRow.querySelector('.setting-copy').getBoundingClientRect().width >
+      folderRow.clientWidth * 0.7,
+    'narrow folder list turns its label into a vertical column'
+  )
   document.documentElement.style.setProperty('--te-font-size-body', '20px')
+  await selectSearch('播放交叉淡入淡出')
+  expect(
+    page.querySelector('.search-target-flash')?.textContent.includes('交叉淡入淡出'),
+    'category-prefixed Chinese query missed its setting'
+  )
   await selectSearch('硬件加速')
   assertTargetVisible()
   expect(page.scrollWidth <= page.clientWidth + 1, 'enlarged text overflows narrow settings')

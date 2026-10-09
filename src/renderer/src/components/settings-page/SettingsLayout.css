@@ -122,9 +122,9 @@ html
     #desktopLyrics .preview-group h3
   ) {
   margin: 0 0 8px;
-  color: var(--te-settings-text-muted);
-  font-size: var(--te-setting-description-size);
-  font-weight: 500;
+  color: var(--te-settings-text);
+  font-size: var(--te-font-size-body, 14px);
+  font-weight: 600;
   line-height: 1.5;
 }
 html
@@ -260,7 +260,7 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-advance
 }
 html
   .settings-preview-page[data-settings-layout='categories']
-  .settings-advanced-details
+  :is(.settings-advanced-details, .device-profiles, .update-notes)
   > summary {
   position: relative;
   padding: 12px 32px 12px 0;
@@ -272,13 +272,13 @@ html
 }
 html
   .settings-preview-page[data-settings-layout='categories']
-  .settings-advanced-details
+  :is(.settings-advanced-details, .device-profiles, .update-notes)
   > summary::-webkit-details-marker {
   display: none;
 }
 html
   .settings-preview-page[data-settings-layout='categories']
-  .settings-advanced-details
+  :is(.settings-advanced-details, .device-profiles, .update-notes)
   > summary::after {
   content: '';
   position: absolute;
@@ -292,7 +292,7 @@ html
 }
 html
   .settings-preview-page[data-settings-layout='categories']
-  .settings-advanced-details[open]
+  :is(.settings-advanced-details, .device-profiles, .update-notes)[open]
   > summary::after {
   transform: rotate(225deg);
 }
@@ -468,5 +468,63 @@ html[data-theme='dark']
   html .settings-preview-page[data-settings-layout='categories'] .setting-item > .preview-select {
     width: 100%;
     max-width: 100%;
+  }
+}
+
+html
+  .settings-preview-page[data-settings-layout='categories']
+  #desktopLyrics
+  .lyrics-typography-details {
+  margin: 0;
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  #desktopLyrics
+  .lyrics-typography-details
+  > summary {
+  border-top: 1px solid var(--te-setting-divider);
+  border-bottom: 1px solid var(--te-setting-divider);
+}
+html .settings-preview-page[data-settings-layout='categories'] .device-profiles > summary {
+  align-items: center;
+}
+
+html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics .lyrics-scope-hint {
+  margin: -10px 0 0;
+  color: color-mix(in srgb, var(--te-settings-text-muted) 75%, var(--te-settings-text));
+  font-size: var(--te-setting-description-size);
+  line-height: 1.7;
+}
+
+/* Keep the logo and version copy together when desktop navigation collapses. */
+@media (max-width: 900px) {
+  html .settings-preview-page[data-settings-layout='categories'] #about .about-hero {
+    flex-direction: row;
+    align-items: center;
+  }
+  html .settings-preview-page[data-settings-layout='categories'] #about .about-copy {
+    justify-items: start;
+    text-align: left;
+  }
+}
+@media (max-width: 600px) {
+  html .settings-preview-page[data-settings-layout='categories'] #about .about-hero {
+    flex-direction: column;
+  }
+  html .settings-preview-page[data-settings-layout='categories'] #about .about-copy {
+    justify-items: center;
+    text-align: center;
+  }
+}
+
+@media (max-width: 900px) {
+  html .settings-preview-page[data-settings-layout='categories'] .setting-item:has(> .folder-list) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  html .settings-preview-page[data-settings-layout='categories'] .setting-item > .folder-list {
+    width: 100%;
+    min-width: 0;
   }
 }

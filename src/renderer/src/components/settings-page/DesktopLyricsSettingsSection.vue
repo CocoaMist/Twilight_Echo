@@ -281,39 +281,72 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
           </select>
         </label>
         <label class="field">
-          <span>字号</span>
-          <select :value="draft.fontSize" @change="update('fontSize', numberValue($event), true)">
+          <span>桌面悬浮字号</span>
+          <select
+            aria-describedby="desktop-lyrics-size-hint"
+            :value="draft.fontSize"
+            @change="update('fontSize', numberValue($event), true)"
+          >
             <option v-for="size in fontSizes" :key="size" :value="size">{{ size }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>字体粗细</span>
-          <select
-            :value="draft.fontWeight"
-            @change="update('fontWeight', numberValue($event), true)"
-          >
-            <option v-for="option in fontWeightOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <label class="field">
-          <span>描边</span>
-          <select
-            :value="draft.textOutline ? 'on' : 'off'"
-            @change="
-              update('textOutline', ($event.target as HTMLSelectElement).value === 'on', true)
-            "
-          >
-            <option value="on">有描边</option>
-            <option value="off">无描边</option>
           </select>
         </label>
       </div>
 
-      <div class="control-group">
-        <h3>调整排版样式</h3>
+      <p id="desktop-lyrics-size-hint" class="lyrics-scope-hint">
+        任务栏歌词的字号与宽度在“显示位置”中单独调整。
+      </p>
+      <div class="preview-group">
+        <h3>桌面悬浮预览</h3>
+        <div
+          class="lyrics-preview"
+          :class="[`is-${draft.displayMode}`, `is-${draft.writingMode}`]"
+          :style="previewStyle"
+          aria-label="桌面歌词外观预览"
+        >
+          <div class="preview-line primary">
+            <span>晚风拂过回响</span>
+            <small v-if="draft.translationVisible">The evening wind carries the echo</small>
+            <small v-if="draft.romanizationVisible" class="romanization"
+              >Wǎnfēng fúguò huíxiǎng</small
+            >
+          </div>
+          <div v-if="draft.displayMode === 'double'" class="preview-line secondary">
+            <span>下一句落在星光里</span>
+            <small v-if="draft.translationVisible">The next line rests in starlight</small>
+            <small v-if="draft.romanizationVisible" class="romanization"
+              >Xià yījù luò zài xīngguāng lǐ</small
+            >
+          </div>
+        </div>
+      </div>
+
+      <details class="lyrics-typography-details settings-advanced-details">
+        <summary>排版与文字细节</summary>
         <div class="layout-control-grid">
+          <label class="field">
+            <span>字体粗细</span>
+            <select
+              :value="draft.fontWeight"
+              @change="update('fontWeight', numberValue($event), true)"
+            >
+              <option v-for="option in fontWeightOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label class="field">
+            <span>描边</span>
+            <select
+              :value="draft.textOutline ? 'on' : 'off'"
+              @change="
+                update('textOutline', ($event.target as HTMLSelectElement).value === 'on', true)
+              "
+            >
+              <option value="on">有描边</option>
+              <option value="off">无描边</option>
+            </select>
+          </label>
+
           <label class="field">
             <span>显示行数</span>
             <select
@@ -366,10 +399,10 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             </select>
           </label>
         </div>
-      </div>
+      </details>
 
       <div class="control-group">
-        <h3>更改配色方案</h3>
+        <h3>配色</h3>
         <div class="palette-control-grid">
           <label class="field">
             <span>配色方案</span>
@@ -413,33 +446,8 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
       </div>
     </div>
 
-    <div class="preview-group">
-      <h3>预览</h3>
-      <div
-        class="lyrics-preview"
-        :class="[`is-${draft.displayMode}`, `is-${draft.writingMode}`]"
-        :style="previewStyle"
-        aria-label="桌面歌词外观预览"
-      >
-        <div class="preview-line primary">
-          <span>晚风拂过回响</span>
-          <small v-if="draft.translationVisible">The evening wind carries the echo</small>
-          <small v-if="draft.romanizationVisible" class="romanization"
-            >Wǎnfēng fúguò huíxiǎng</small
-          >
-        </div>
-        <div v-if="draft.displayMode === 'double'" class="preview-line secondary">
-          <span>下一句落在星光里</span>
-          <small v-if="draft.translationVisible">The next line rests in starlight</small>
-          <small v-if="draft.romanizationVisible" class="romanization"
-            >Xià yījù luò zài xīngguāng lǐ</small
-          >
-        </div>
-      </div>
-    </div>
-
     <div class="setting-card">
-      <h3>窗口</h3>
+      <h3>桌面悬浮窗口</h3>
       <div class="two-columns">
         <label class="field range-field">
           <span
@@ -485,7 +493,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
     </div>
 
     <details class="setting-card advanced settings-advanced-details">
-      <summary>高级设置</summary>
+      <summary>间距、透明度与阴影</summary>
       <div class="two-columns advanced-grid">
         <label class="field range-field">
           <span
