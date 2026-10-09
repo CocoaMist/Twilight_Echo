@@ -3,6 +3,20 @@
 Status: experimental Windows x64, default off. Stable release gates remain
 incomplete. This record describes executed checks; it is not a release approval.
 
+## MSVC build and preparation registration
+
+MSVC Debug and MinGW Release each pass the 35 standalone registered checks.
+Preparation retains every original assertion across 24 template cases, six
+sample rates, mono/stereo resource limits, fractional boundaries and selection.
+Each workload has its own CTest entry under the existing 180-second timeout;
+assertions remain enabled. MSVC takes 330.68 seconds in total with two workers;
+its longest case takes 122.36 seconds. MinGW takes 105.25 seconds in total.
+The standalone checks do not configure original-model parity fixtures.
+
+The MSVC build enables C11 atomics specifically for `Kernels.c`. Embedded JSON
+uses null-terminated byte arrays to preserve the asset bytes without exceeding
+MSVC string-literal limits. No asset or playback policy changes are included.
+
 ## Executed checks
 
 - Recovered arithmetic: 96,000 score cases and 3,000 selection cases compared

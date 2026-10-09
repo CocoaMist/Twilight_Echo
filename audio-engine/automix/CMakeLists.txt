@@ -8,8 +8,11 @@ option(TAE_AM_EXPERIMENTAL_PLAYER "Allow in-app AutoMix experimental playback fo
 set(TAE_AM_RECOVERED
   recovered/am_json.c recovered/am_scoring.c recovered/am_analysis.c
   recovered/am_bridge.c recovered/am_timing.c)
-file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/TransitionStyles.json TAE_AM_CATALOGUE)
-file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/dsp-parameters.json TAE_AM_PARAMETERS)
+# Byte initializers preserve the assets and avoid MSVC's string-literal size limit.
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/TransitionStyles.json TAE_AM_CATALOGUE HEX)
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/dsp-parameters.json TAE_AM_PARAMETERS HEX)
+string(REGEX REPLACE "(..)" "char(0x\\1),\n" TAE_AM_CATALOGUE "${TAE_AM_CATALOGUE}")
+string(REGEX REPLACE "(..)" "char(0x\\1),\n" TAE_AM_PARAMETERS "${TAE_AM_PARAMETERS}")
 configure_file(EmbeddedAssets.h.in EmbeddedAssets.h @ONLY)
 set(TAE_AM_ASM_AVAILABLE OFF)
 if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
@@ -29,7 +32,11 @@ if(TAE_AM_ASM_AVAILABLE)
     target_compile_definitions(twilight_automix PUBLIC TAE_AM_EXPERIMENTAL_PLAYER=1)
   endif()
 endif()
-if(NOT MSVC)
+if(MSVC)
+  # MSVC requires an explicit opt-in for the C11 atomic function pointer in Kernels.c.
+  # Apply this to the source: Visual Studio cannot separate C/C++ target flags.
+  set_property(SOURCE Kernels.c APPEND PROPERTY COMPILE_OPTIONS /experimental:c11atomics)
+else()
   target_compile_options(twilight_automix PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:-fno-fast-math;-ffp-contract=off>)
   target_link_libraries(twilight_automix PUBLIC m)
 endif()
@@ -60,7 +67,21 @@ if(TAE_BUILD_TESTS)
   else()
     target_compile_options(twilight_automix_preparation PRIVATE -UNDEBUG)
   endif()
-  add_test(NAME twilight_automix_preparation COMMAND twilight_automix_preparation)
+  # Keep every preparation assertion, with separate cases so MSVC Debug work
+  # fits the existing per-test timeout and failures identify the exact workload.
+  add_test(NAME twilight_automix_preparation COMMAND twilight_automix_preparation basic 0)
+  foreach(template_index RANGE 0 23)
+    add_test(NAME twilight_automix_preparation_template_${template_index}
+      COMMAND twilight_automix_preparation template ${template_index})
+  endforeach()
+  foreach(rate 44100 48000 88200 96000 176400 192000)
+    add_test(NAME twilight_automix_preparation_rate_${rate}
+      COMMAND twilight_automix_preparation rate ${rate})
+  endforeach()
+  foreach(channels 1 2)
+    add_test(NAME twilight_automix_preparation_budget_${channels}
+      COMMAND twilight_automix_preparation budget ${channels})
+  endforeach()
   add_executable(twilight_automix_candidates tests/candidates.cpp)
   target_compile_features(twilight_automix_candidates PRIVATE cxx_std_20)
   target_link_libraries(twilight_automix_candidates PRIVATE twilight_automix)

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <new>
+#include <string_view>
 #include <vector>
 static thread_local bool realtime=false;
 static std::atomic<size_t> rtAllocations{};
@@ -58,7 +59,19 @@ static TAE_AM_CandidateV1 candidate(int64_t id,double a,double b) {
   TAE_AM_CandidateV1 c{};c.size=sizeof c;c.abi_version=TAE_AM_ABI_VERSION;c.outgoing_start=a;c.incoming_start=b;c.alias_index=1;c.outgoing_bars=c.incoming_bars=8;c.bpm=120;
   am_candidate_input_init(&c.scoring);c.scoring.style_id=id;c.scoring.path=am_default_route(id).path;c.scoring.outgoing_end=a+2;c.scoring.incoming_end=b+2;return c;
 }
-int main() {
+int main(int argc,char** argv) {
+  std::setvbuf(stdout,nullptr,_IONBF,0);
+  const std::string_view group=argc==1?"all":argv[1];
+  unsigned long selected=0;
+  if(argc!=1) {
+    if(argc!=3)return 2;
+    char* end=nullptr;selected=std::strtoul(argv[2],&end,10);
+    if(!argv[2][0]||!end||*end)return 2;
+    if(group=="template") {if(selected>=24)return 2;}
+    else if(group=="rate") {if(selected!=44100&&selected!=48000&&selected!=88200&&selected!=96000&&selected!=176400&&selected!=192000)return 2;}
+    else if(group=="budget") {if(selected!=1&&selected!=2)return 2;}
+    else if(group!="basic"||selected!=0)return 2;
+  }
   TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);assert(config.enabled==0&&config.allow_intelligent_skip==1&&config.max_transition_seconds==12);
   // The shared parameter-default map has process lifetime. Measure it once
   // and retain its actual allocation bytes in every subsequent peak check.
@@ -69,6 +82,7 @@ int main() {
   TAE_AM_PcmViewV1 a{sizeof a,TAE_AM_ABI_VERSION,out.data(),out.size()/2,0,48000,2},b{sizeof b,TAE_AM_ABI_VERSION,in.data(),in.size()/2,0,48000,2};
   size_t count=0;const auto* ids=am_catalog_style_ids(&count);assert(count==24);
   for(size_t i=0;i<count;++i) {
+    if(group!="all"&&(group!="template"||i!=selected))continue;
     auto c=candidate(ids[i],.5,.25);
     TAE_AM_Plan plan{};assert(TAE_AM_Compile(&config,&c,&plan)==TAE_AM_OK&&plan);
     TAE_AM_Prepared prepared{};TAE_AM_PreparedInfoV1 info{};info.size=sizeof info;info.abi_version=TAE_AM_ABI_VERSION;
@@ -89,15 +103,19 @@ int main() {
   }
   // Fractional half-open source boundaries and low budget, without rate change.
   auto c=candidate(1,.50001,.25001);c.scoring.incoming_end=c.incoming_start+1.99999;
-  TAE_AM_Plan plan{};assert(TAE_AM_Compile(&config,&c,&plan)==TAE_AM_OK);
+  TAE_AM_Plan plan{};
   TAE_AM_Prepared prepared{};TAE_AM_PreparedInfoV1 info{sizeof info,TAE_AM_ABI_VERSION};
-  assert(TAE_AM_Prepare(plan,&a,&b,.5f,.25f,&prepared,&info)==TAE_AM_OK);
-  assert(info.incoming_resume_frame==108000);assert(info.outgoing_end_frame==120000);
-  TAE_AM_DestroyPrepared(prepared);TAE_AM_DestroyPlan(plan);
-  config.max_buffer_bytes=1024;assert(TAE_AM_Compile(&config,&c,&plan)==TAE_AM_OK);
-  assert(TAE_AM_Prepare(plan,&a,&b,1,1,&prepared,&info)==TAE_AM_RESOURCE_LIMIT&&prepared==nullptr);TAE_AM_DestroyPlan(plan);
+  if(group=="all"||group=="basic") {
+    assert(TAE_AM_Compile(&config,&c,&plan)==TAE_AM_OK);
+    assert(TAE_AM_Prepare(plan,&a,&b,.5f,.25f,&prepared,&info)==TAE_AM_OK);
+    assert(info.incoming_resume_frame==108000);assert(info.outgoing_end_frame==120000);
+    TAE_AM_DestroyPrepared(prepared);TAE_AM_DestroyPlan(plan);
+    config.max_buffer_bytes=1024;assert(TAE_AM_Compile(&config,&c,&plan)==TAE_AM_OK);
+    assert(TAE_AM_Prepare(plan,&a,&b,1,1,&prepared,&info)==TAE_AM_RESOURCE_LIMIT&&prepared==nullptr);TAE_AM_DestroyPlan(plan);
+  }
   // Bounded pitch-preserving variable-rate preparation, all six target rates.
   for(unsigned rate:{44100u,48000u,88200u,96000u,176400u,192000u}) {
+    if(group!="all"&&(group!="rate"||rate!=selected))continue;
     const unsigned channels=2;std::vector<float> src(rate*3*channels);
     for(size_t i=0;i<src.size();++i) src[i]=static_cast<float>(.05*std::sin(2*3.141592653589793*440*(i/channels)/rate));
     a={sizeof a,TAE_AM_ABI_VERSION,src.data(),src.size()/channels,0,rate,channels};b=a;
@@ -154,6 +172,7 @@ int main() {
   // Largest supported PCM rate, longest allowed transition, mono and stereo.
   // Includes actual Signalsmith/FFT C++ allocations rather than its allowance.
   for(unsigned channels:{1u,2u}) {
+    if(group!="all"&&(group!="budget"||channels!=selected))continue;
     constexpr unsigned rate=192000;std::vector<float> src(rate*13*channels,.01f);
     a={sizeof a,TAE_AM_ABI_VERSION,src.data(),src.size()/channels,0,rate,channels};b=a;
     TAE_AM_DefaultConfig(&config);c=candidate(17,.3,.25);
@@ -166,9 +185,12 @@ int main() {
     TAE_AM_DestroyPrepared(prepared);TAE_AM_DestroyPlan(plan);assert(liveBytes==persistentBytes);
   }
   // Candidate identities are preserved across ABI and selection. No dedup.
-  std::vector<TAE_AM_CandidateV1> inputs(8,candidate(1,1,0));std::vector<am_score_result> scores(inputs.size());
-  TAE_AM_SelectionV1 choice{sizeof choice,TAE_AM_ABI_VERSION};
-  assert(TAE_AM_Select(inputs.data(),inputs.size(),UINT64_MAX,1,scores.data(),&choice)==TAE_AM_OK);
-  assert(choice.generated_count==8&&choice.known_score_count==8&&choice.has_chosen&&choice.chosen_index<8);
-  std::puts("AutoMix prepared: 24 independent templates, SIMD chunk parity, source boundaries, six sample rates, RT zero allocation passed");
+  if(group=="all"||group=="basic") {
+    std::vector<TAE_AM_CandidateV1> inputs(8,candidate(1,1,0));std::vector<am_score_result> scores(inputs.size());
+    TAE_AM_SelectionV1 choice{sizeof choice,TAE_AM_ABI_VERSION};
+    assert(TAE_AM_Select(inputs.data(),inputs.size(),UINT64_MAX,1,scores.data(),&choice)==TAE_AM_OK);
+    assert(choice.generated_count==8&&choice.known_score_count==8&&choice.has_chosen&&choice.chosen_index<8);
+  }
+  if(group=="all")std::puts("AutoMix prepared: 24 independent templates, SIMD chunk parity, source boundaries, six sample rates, RT zero allocation passed");
+  else std::printf("AutoMix preparation %.*s %lu passed\n",static_cast<int>(group.size()),group.data(),selected);
 }
