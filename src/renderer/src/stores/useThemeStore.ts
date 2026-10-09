@@ -285,6 +285,22 @@ function applySettingsAccentColor(tone: ThemeTone, variables: Record<string, str
   )
 }
 
+function applyControlColors(tone: ThemeTone, variables: Record<string, string>): void {
+  const defaults = TWILIGHT_DEFAULT_THEME.variants[tone].tokens
+  const accent = variables['--te-primary-500'] ?? defaults['color.primary.500']
+  const rgb = variables['--te-primary-rgb'] ?? defaults['color.primary.rgb']
+  const surface = variables['--te-card-bg'] ?? defaults['surface.card']
+  variables['--te-control-on-accent'] = ensureThemeTextContrast('#ffffff', accent)
+  // The hover tint is stronger than the resting tint, so protect both states.
+  variables['--te-control-accent-text'] = ensureThemeTextContrast(
+    accent,
+    `rgba(${rgb}, 0.16)`,
+    4.5,
+    surface
+  )
+  variables['--te-control-on-danger'] = ensureThemeTextContrast('#ffffff', '#dc2626')
+}
+
 function applyBootstrapThemeMode(
   bootstrap: Awaited<ReturnType<typeof window.api.settings.get>>
 ): void {
@@ -489,6 +505,7 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
             cardCssVariables(cardAppearance[tone === 'dark' ? 'dark' : 'light'])
           )
         }
+        applyControlColors(tone, variables)
         return {
           css: `:root {\n${Object.entries(variables)
             .map(([name, value]) => `  ${name}: ${value} !important;`)
@@ -572,6 +589,7 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
   if (cardAppearance?.enabled && surfaceMaterial === 'standard') {
     Object.assign(variables, cardCssVariables(cardAppearance[tone === 'dark' ? 'dark' : 'light']))
   }
+  applyControlColors(tone, variables)
   const root = Object.entries({ ...themeShellLayoutToCssVariables(shellLayout), ...variables })
     .map(([name, value]) => `  ${name}: ${value} !important;`)
     .join('\n')

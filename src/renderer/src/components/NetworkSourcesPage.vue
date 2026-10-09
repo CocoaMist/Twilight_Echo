@@ -1135,15 +1135,15 @@ html[data-te-motion='off'] .network-create-form {
   gap: 6px;
 }
 .pill-action {
-  min-height: 30px;
-  border: 1px solid var(--te-settings-control-border);
-  border-radius: 8px;
-  padding: 0 9px;
+  min-height: var(--te-control-height-sm);
+  border: var(--te-control-border-width) solid var(--te-control-border);
+  border-radius: var(--te-control-radius-sm);
+  padding: 0 var(--te-control-pad-x-sm);
   background: transparent;
   color: inherit;
   cursor: pointer;
   font: inherit;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+  font-size: var(--te-control-font-size-sm);
 }
 .pill-action:hover {
   border-color: color-mix(in srgb, var(--te-primary-500) 36%, transparent);

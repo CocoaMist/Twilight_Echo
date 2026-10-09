@@ -480,9 +480,9 @@ button:disabled {
   gap: 12px;
   width: 100%;
   height: 64px;
-  padding: 8px 12px;
+  padding: 8px var(--te-control-pad-x-sm);
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--te-control-radius-sm);
   background: transparent;
   text-align: left;
   cursor: pointer;

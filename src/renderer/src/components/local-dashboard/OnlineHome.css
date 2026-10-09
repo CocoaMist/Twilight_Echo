@@ -65,12 +65,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--te-control-gap);
   border: 0;
   background: transparent;
   color: var(--online-muted);
   padding: 8px 0;
-  font-size: 12px !important;
+  font-size: var(--te-control-font-size-sm) !important;
 }
 .online-text-button:hover {
   color: var(--online-ink);

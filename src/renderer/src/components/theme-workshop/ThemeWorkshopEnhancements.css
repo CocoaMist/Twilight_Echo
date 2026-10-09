@@ -170,8 +170,8 @@
 }
 .workshop-badge {
   font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: var(--te-badge-pad-y) var(--te-badge-pad-x);
+  border-radius: var(--te-control-radius-sm);
   background: var(--te-hover-bg);
   color: var(--te-neutral-700);
 }

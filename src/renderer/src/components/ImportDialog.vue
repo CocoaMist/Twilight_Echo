@@ -289,7 +289,7 @@ html[data-te-motion='off'] .scan-status-leave-to {
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(248, 245, 255, 0.46)),
     rgba(255, 255, 255, 0.52);
-  border-radius: 20px;
+  border-radius: var(--te-dialog-radius);
   box-shadow:
     0 28px 90px rgba(86, 70, 160, 0.24),
     inset 0 1px 0 rgba(255, 255, 255, 0.7);

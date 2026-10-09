@@ -411,16 +411,17 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid color-mix(in srgb, var(--te-neutral-900) 10%, transparent);
-  border-radius: 999px;
+  height: var(--te-control-height-sm);
+  padding: 0 var(--te-control-pad-x-sm);
+  border: var(--te-control-border-width) solid
+    color-mix(in srgb, var(--te-neutral-900) 10%, transparent);
+  border-radius: var(--te-control-radius-pill);
   background: color-mix(in srgb, var(--te-card-bg) 62%, transparent);
   color: var(--te-neutral-700);
   cursor: pointer;
   font: inherit;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  font-weight: 600;
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-strong);
   transition:
     background var(--te-motion-hover) ease,
     border-color var(--te-motion-hover) ease,
@@ -1281,10 +1282,10 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   background: transparent;
   cursor: pointer;
   padding: 6px;
-  border-radius: 50%;
+  border-radius: var(--te-control-radius-pill);
   transition:
-    background 0.16s ease,
-    transform 0.24s var(--te-ease-soft);
+    background var(--te-motion-hover) var(--te-ease-soft),
+    transform var(--te-motion-panel) var(--te-ease-soft);
   color: #555;
 }
 .ctrl-btn:hover {
@@ -1568,18 +1569,18 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   border: none;
   background: transparent;
   cursor: pointer;
-  border-radius: 50%;
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
+  border-radius: var(--te-control-radius-pill);
+  font-size: var(--te-control-font-size);
   color: #888;
   transition:
-    background 0.15s,
-    color 0.15s,
-    transform 0.24s var(--te-ease-soft);
+    background var(--te-motion-hover) var(--te-ease-soft),
+    color var(--te-motion-hover) var(--te-ease-soft),
+    transform var(--te-motion-panel) var(--te-ease-soft);
 }
 .icon-btn:hover {
   background: rgba(37, 99, 235, 0.1);
