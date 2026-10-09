@@ -358,12 +358,12 @@ function progressLabel(task: NcmCloudTransferTask): string {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 0 16px;
-  border-radius: 999px;
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  font-weight: 750;
+  gap: var(--te-control-gap);
+  min-height: var(--te-control-height-lg);
+  padding: 0 var(--te-control-pad-x-md);
+  border-radius: var(--te-control-radius-pill);
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-bold);
 }
 .cloud-button.primary {
   color: #111;
@@ -465,13 +465,13 @@ function progressLabel(task: NcmCloudTransferTask): string {
 }
 .icon-button {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   place-items: center;
-  border-radius: 10px;
+  border-radius: var(--te-control-radius-md);
   color: var(--te-neutral-700);
   background: var(--te-card-bg);
-  border: 1px solid var(--te-card-border);
+  border: var(--te-control-border-width) solid var(--te-card-border);
 }
 .icon-button.danger,
 .task-error {

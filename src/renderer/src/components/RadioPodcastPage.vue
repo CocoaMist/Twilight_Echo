@@ -973,12 +973,12 @@ button.primary {
   align-items: center;
   width: fit-content;
   margin-top: 7px;
-  border-radius: 999px;
-  padding: 2px 7px;
+  border-radius: var(--te-badge-radius);
+  padding: var(--te-badge-pad-y) var(--te-badge-pad-x);
   background: color-mix(in srgb, var(--te-primary-500) 11%, transparent);
   color: var(--te-primary-500);
-  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
-  font-weight: 750;
+  font-size: var(--te-badge-font-size);
+  font-weight: var(--te-badge-font-weight);
 }
 .badge.http {
   background: color-mix(in srgb, #f59e0b 15%, transparent);

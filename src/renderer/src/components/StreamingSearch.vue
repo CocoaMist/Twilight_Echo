@@ -466,12 +466,13 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
 .selection-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--te-control-gap);
+  min-height: var(--te-control-height-sm);
   border: none;
-  border-radius: 8px;
-  padding: 6px 12px;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  font-weight: 500;
+  border-radius: var(--te-control-radius-sm);
+  padding: 0 var(--te-control-pad-x-sm);
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight);
   cursor: pointer;
   color: var(--te-neutral-800, #333);
   background: rgba(255, 255, 255, 0.55);
@@ -768,20 +769,20 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
 
 .search-action-btn,
 .pager-btn {
-  min-height: 34px;
-  padding: 0 16px;
-  border: 1px solid #eef1f6;
-  border-radius: 8px;
+  min-height: var(--te-control-height-md);
+  padding: 0 var(--te-control-pad-x-md);
+  border: var(--te-control-border-width) solid var(--te-control-border);
+  border-radius: var(--te-control-radius-sm);
   background: var(--te-card-bg);
   color: rgba(52, 61, 87, 0.86);
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  font-weight: 700;
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-bold);
   cursor: pointer;
   box-shadow: 0 10px 24px rgba(86, 70, 160, 0.08);
   transition:
-    transform 0.2s var(--te-ease-soft),
-    box-shadow 0.2s,
-    opacity 0.2s;
+    transform var(--te-motion-hover) var(--te-ease-soft),
+    box-shadow var(--te-motion-hover),
+    opacity var(--te-motion-hover);
 }
 
 .search-action-btn:hover,

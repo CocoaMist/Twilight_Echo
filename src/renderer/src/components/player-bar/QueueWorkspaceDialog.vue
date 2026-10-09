@@ -304,7 +304,7 @@ onBeforeUnmount(() => {
   max-height: calc(100vh - 48px);
   padding: 0;
   border: 1px solid var(--border-color, #8884);
-  border-radius: 16px;
+  border-radius: var(--te-dialog-radius);
   color: var(--text-primary, #202026);
   background: var(--bg-primary, #fafafa);
   box-shadow: 0 18px 70px #0003;

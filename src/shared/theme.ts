@@ -981,14 +981,22 @@ export function themeContrastRatio(
 export function ensureThemeTextContrast(
   foreground: string,
   background: string,
-  minimum = 4.5
+  minimum = 4.5,
+  canvas = '#ffffff'
 ): string {
-  const ratio = themeContrastRatio(foreground, background)
+  const ratio = themeContrastRatio(foreground, background, canvas)
   if (ratio != null && ratio >= minimum) return foreground
   const dark = '#111827'
   const light = '#f8fafc'
-  const darkRatio = themeContrastRatio(dark, background) ?? 0
-  const lightRatio = themeContrastRatio(light, background) ?? 0
+  const darkRatio = themeContrastRatio(dark, background, canvas) ?? 0
+  const lightRatio = themeContrastRatio(light, background, canvas) ?? 0
+  if (Math.max(darkRatio, lightRatio) < minimum) {
+    const blackRatio = themeContrastRatio('#000000', background, canvas) ?? 0
+    const whiteRatio = themeContrastRatio('#ffffff', background, canvas) ?? 0
+    if (Math.max(blackRatio, whiteRatio) > Math.max(darkRatio, lightRatio)) {
+      return blackRatio >= whiteRatio ? '#000000' : '#ffffff'
+    }
+  }
   return darkRatio >= lightRatio ? dark : light
 }
 

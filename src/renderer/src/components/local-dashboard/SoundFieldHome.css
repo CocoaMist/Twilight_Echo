@@ -282,13 +282,13 @@
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: var(--te-control-radius-pill);
   background: transparent;
-  transition: transform 140ms ease-out;
+  transition: transform var(--te-motion-hover) ease-out;
 }
 
 .sf-icon-button i {

@@ -312,11 +312,11 @@ button {
 .icon-button {
   display: inline-grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: var(--te-control-height-sm);
+  height: var(--te-control-height-sm);
   padding: 0;
   background: transparent;
-  border-radius: 50%;
+  border-radius: var(--te-control-radius-pill);
   font-size: 17px;
 }
 
