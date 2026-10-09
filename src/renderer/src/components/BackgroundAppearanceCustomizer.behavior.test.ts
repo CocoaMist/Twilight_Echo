@@ -102,7 +102,8 @@ app.whenReady().then(async()=>{
  for(let y=0;y<800;y++)for(let x=0;x<1280;x++){const offset=(y*1280+x)*4;bytes[offset]=90;bytes[offset+1]=60;bytes[offset+2]=40;bytes[offset+3]=255}
  const wallpaper=nativeImage.createFromBitmap(bytes,{width:1280,height:800}).toPNG();
  protocol.handle('background',request=>request.url.includes('missing')?new Response('',{status:404}):new Response(wallpaper,{headers:{'content-type':'image/png'}}));
- const win=new BrowserWindow({show:false,width:1280,height:820,webPreferences:{contextIsolation:false,offscreen:true,backgroundThrottling:false}});
+ // Pixel samples use content coordinates; native Windows borders must not shrink the viewport.
+ const win=new BrowserWindow({show:false,width:1280,height:820,useContentSize:true,webPreferences:{contextIsolation:false,offscreen:true,backgroundThrottling:false}});
  try{
   await win.loadFile(process.argv.at(-1));
   await win.webContents.executeJavaScript('window.runAppearanceTests()');
@@ -116,7 +117,7 @@ app.whenReady().then(async()=>{
   await win.webContents.executeJavaScript('window.prepareMissingBackground()');
   const fallback=(await win.webContents.capturePage({x:600,y:400,width:1,height:1})).toBitmap();
   if(fallback[0]!==86||fallback[1]!==52||fallback[2]!==18)throw new Error('missing image did not fall back to solid color: '+[...fallback]);
-  if(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR){fs.mkdirSync(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,{recursive:true});for(const tone of ['pureWhite','dark']){await win.webContents.executeJavaScript('window.showAppearanceEvidence('+JSON.stringify(tone)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,'appearance-'+tone+'.png'),(await win.webContents.capturePage()).toPNG())}win.setSize(620,820);await win.webContents.executeJavaScript('window.settleAppearance()');if(await win.webContents.executeJavaScript('document.querySelector(".appearance-editor").scrollWidth>document.querySelector(".appearance-editor").clientWidth+1'))throw new Error('narrow editor overflows');fs.writeFileSync(path.join(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,'appearance-narrow.png'),(await win.webContents.capturePage()).toPNG())}
+  if(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR){fs.mkdirSync(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,{recursive:true});for(const tone of ['pureWhite','dark']){await win.webContents.executeJavaScript('window.showAppearanceEvidence('+JSON.stringify(tone)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,'appearance-'+tone+'.png'),(await win.webContents.capturePage()).toPNG())}win.setContentSize(620,820);await win.webContents.executeJavaScript('window.settleAppearance()');if(await win.webContents.executeJavaScript('document.querySelector(".appearance-editor").scrollWidth>document.querySelector(".appearance-editor").clientWidth+1'))throw new Error('narrow editor overflows');fs.writeFileSync(path.join(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,'appearance-narrow.png'),(await win.webContents.capturePage()).toPNG())}
   console.log('APPEARANCE_OK');app.exit(0)
  }catch(error){console.error(error.stack);app.exit(1)}
 })
