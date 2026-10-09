@@ -220,7 +220,9 @@ function playPersonalizedStream(section: RecSection | null): void {
     @play-track="(track, queue) => emit('playTrack', track, queue)"
     @request-login="emit('requestLogin')"
     @open-discovery="emit('openDiscovery')"
-  />
+  >
+    <template v-if="$slots.rankings" #rankings><slot name="rankings" /></template>
+  </ProviderMusicHome>
   <div v-else class="home-view">
     <!-- ── Signed-out invite ─────────────────────────────────────────── -->
     <section v-if="!isLoggedIn" class="hero-invite">
@@ -479,10 +481,15 @@ function playPersonalizedStream(section: RecSection | null): void {
         </div>
       </section>
     </div>
+    <div v-if="$slots.rankings" class="home-rankings"><slot name="rankings" /></div>
   </div>
 </template>
 
 <style scoped>
+.home-rankings {
+  margin-top: 44px;
+}
+
 .home-view {
   min-height: 100%;
   --home-ink: var(--te-neutral-900);

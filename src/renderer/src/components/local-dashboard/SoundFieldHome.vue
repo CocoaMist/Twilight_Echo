@@ -393,7 +393,6 @@ function seekFromInput(event: Event): void {
           </button>
         </header>
 
-        <slot name="rankings" />
         <section class="sf-albums" aria-labelledby="sf-albums-title">
           <div class="sf-section-head">
             <div class="sf-section-title">

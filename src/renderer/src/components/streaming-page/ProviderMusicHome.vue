@@ -331,6 +331,7 @@ function count(value: number | undefined): string {
         </div>
       </section>
     </div>
+    <div v-if="$slots.rankings" class="music-rankings"><slot name="rankings" /></div>
   </div>
 </template>
 

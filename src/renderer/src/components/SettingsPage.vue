@@ -427,6 +427,7 @@ function resetSettingsGroup(group: 'appearance' | 'playback' | 'desktopLyrics'):
         lyricsAppearance: cloneLyricsAppearance(DEFAULT_LYRICS_APPEARANCE),
         playerBar: clonePlayerBarSettings(DEFAULT_PLAYER_BAR_SETTINGS),
         fontFamily: 'system',
+        fontRendering: 'auto',
         uiDensity: 'standard'
       })
       settingsNotice.value = '外观设置已恢复默认'

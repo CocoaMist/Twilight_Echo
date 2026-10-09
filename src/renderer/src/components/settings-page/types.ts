@@ -552,6 +552,11 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
     },
     {
       section: 'appearance',
+      title: '文字渲染',
+      terms: '字体 清晰 平滑 发虚 模糊 渲染 笔画 透明 背景 font rendering crisp smooth'
+    },
+    {
+      section: 'appearance',
       title: '界面排版密度 (UI Density)',
       terms: '密度 ui density 排版 紧凑 宽松'
     },

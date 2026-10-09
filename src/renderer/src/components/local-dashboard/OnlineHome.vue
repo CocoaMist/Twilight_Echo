@@ -154,8 +154,6 @@ const primaryLabel = computed(() => {
         </button>
       </nav>
 
-      <slot name="rankings" />
-
       <section v-if="recent.length" class="online-section">
         <header class="online-section-heading">
           <h2>最近听过</h2>

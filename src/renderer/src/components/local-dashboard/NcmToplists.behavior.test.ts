@@ -13,7 +13,7 @@ import { build } from 'vite'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
-test('homepage charts support browsing, login, playback, dismissal and responsive themes', async () => {
+test('recommendation charts support browsing, login, playback, dismissal and responsive themes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-toplists-'))
   try {
     await writeFile(join(directory, 'entry.ts'), runtime)
@@ -25,6 +25,10 @@ test('homepage charts support browsing, login, playback, dismissal and responsiv
       plugins: [vue()],
       resolve: {
         alias: [
+          {
+            find: '../stores/useSettingsStore',
+            replacement: join(directory, 'fixtures.ts')
+          },
           {
             find: /^@renderer\/stores\/use(?:Provider|Player)Store$/,
             replacement: join(directory, 'fixtures.ts')
@@ -87,6 +91,7 @@ test('homepage charts support browsing, login, playback, dismissal and responsiv
 const fixtures = `import {ref,shallowRef} from 'vue'
 export const source={id:'ncm',name:'网易云音乐',capabilities:['playlist','login','playbackUrl'],supportedMethods:['fetchToplists','fetchPlaylistTracks','searchSongs','fetchDiscoveryPlaylists','fetchUserLibrary']}
 export const providers=ref([source]),currentTrack=shallowRef(null),isPlaying=ref(false)
+export const useSettingsStore=()=>({settings:ref({motionPreference:'off'})})
 export const requests=[],played=[]
 export let authenticated=false,pending=null,failure=false
 export const setAuthenticated=value=>{authenticated=value},setPending=value=>{pending=value},setFailure=value=>{failure=value}
@@ -100,9 +105,9 @@ export const useProviderStore=()=>({providers,checkLogin:async()=>({loggedIn:aut
 export const usePlayerStore=()=>({currentTrack,isPlaying,playTrack:(track,queue)=>{played.push({track,queue});currentTrack.value=track;isPlaying.value=true},togglePlay:()=>{isPlaying.value=!isPlaying.value}})
 `
 
-const runtime = `import {createApp,h,nextTick} from 'vue'
+const runtime = `import {createApp,h,nextTick,ref} from 'vue'
 import NcmToplists from '@renderer/components/local-dashboard/NcmToplists.vue'
-import OnlineHome from '@renderer/components/local-dashboard/OnlineHome.vue'
+import StreamingHome from '@renderer/components/StreamingHome.vue'
 import '@renderer/assets/base.css'
 import '@phosphor-icons/web/src/regular/style.css'
 import '@phosphor-icons/web/src/fill/style.css'
@@ -111,12 +116,15 @@ import * as state from './fixtures.ts'
 const pause=async()=>{await nextTick();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));await new Promise(resolve=>setTimeout(resolve,20))}
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const events=[]
-const app=createApp({render:()=>h(OnlineHome,{providers:[state.source],provider:state.source,loading:false,loggedIn:false,error:'',tracks:[],playlists:[],sectionTitle:'每日推荐',playlistTitle:'精选歌单',recent:[],hero:null,isPlaying:false,pendingPlaylist:null},{rankings:()=>h(NcmToplists,{onLogin:()=>events.push('login')})})})
+const presentation=ref({requiresLogin:false}),recsLoading=ref(false),recsError=ref('')
+const app=createApp({render:()=>h(StreamingHome,{providerLabel:'网易云音乐',presentation:presentation.value,isLoggedIn:false,recsLoading:recsLoading.value,recsError:recsError.value,recSections:[],recommendPlaylists:[]},{rankings:()=>h(NcmToplists,{onLogin:()=>events.push('login')})})})
 app.config.errorHandler=error=>{window.runtimeError=error.stack||String(error)}
 app.mount('#app')
 const click=label=>{const target=[...document.querySelectorAll('button')].find(button=>button.getAttribute('aria-label')===label||button.textContent.trim()===label);expect(target,'Missing button '+label);target.focus();target.click()}
 window.runToplistTests=async()=>{
  await pause();expect(!window.runtimeError,window.runtimeError);expect(document.querySelectorAll('.toplist-card').length===4,'Expected four featured charts');expect(state.requests.length===1&&state.requests[0][1]==='fetchToplists','Summary must not eagerly load songs or login')
+ for(const mode of ['loading','error','locked','fallback']){presentation.value=mode==='fallback'?undefined:{requiresLogin:mode==='locked'};recsLoading.value=mode==='loading';recsError.value=mode==='error'?'推荐暂时不可用':'';await pause();expect(document.querySelectorAll('.toplist-card').length===4,'Public charts missing in '+mode+' recommendations')}
+ presentation.value={requiresLogin:false};recsLoading.value=false;recsError.value='';await pause()
  click('全部榜单');await nextTick();expect(document.querySelectorAll('.toplist-card').length===6,'More charts did not expand');click('收起榜单')
  click('查看飙升榜');await pause();expect(document.querySelectorAll('.toplist-song').length===60,'Complete chart not rendered');expect(state.requests.at(-1)[2][1]===true,'Chart tracks must bypass stale playlist cache');expect(document.querySelector('.toplists-dialog').contains(document.activeElement),'Dialog did not capture focus')
  click('播放全部');await pause();expect(events.length===1&&state.played.length===0,'Guest playback must open login');expect(!document.querySelector('.toplists-dialog'),'Login left a modal above login page')
@@ -129,7 +137,7 @@ window.prepareToplistPreview=async({dark,detail})=>{
  document.documentElement.dataset.theme=dark?'dark':'pureWhite'
  if(detail){click('查看飙升榜');await pause()}else{const close=document.querySelector('[aria-label="关闭排行榜"]');close?.click();await pause()}
 }
-window.toplistGeometry=()=>({overflow:document.querySelector('.online-home').scrollWidth>document.querySelector('.online-home').clientWidth+1,dialogOverflow:!!document.querySelector('.toplists-dialog')&&document.querySelector('.toplists-dialog').scrollWidth>document.querySelector('.toplists-dialog').clientWidth+1,columns:getComputedStyle(document.querySelector('.toplists-grid')).gridTemplateColumns.split(' ').length})
+window.toplistGeometry=()=>({overflow:document.querySelector('.music-home').scrollWidth>document.querySelector('.music-home').clientWidth+1,dialogOverflow:!!document.querySelector('.toplists-dialog')&&document.querySelector('.toplists-dialog').scrollWidth>document.querySelector('.toplists-dialog').clientWidth+1,columns:getComputedStyle(document.querySelector('.toplists-grid')).gridTemplateColumns.split(' ').length})
 `
 
 const runner = `const {app,BrowserWindow}=require('electron'),fs=require('node:fs'),path=require('node:path')

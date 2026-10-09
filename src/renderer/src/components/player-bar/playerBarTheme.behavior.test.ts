@@ -7,23 +7,34 @@ import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
-import { compileStyle } from '@vue/compiler-sfc'
+import { compileStyle, parse } from '@vue/compiler-sfc'
 import { build } from 'vite'
 
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
-test('saved theme colors reach the rendered player controls across tones and bar modes', async () => {
+test('saved theme colors reach the dashboard and player controls across tones and bar modes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-player-theme-'))
   try {
-    const source = await readFile(new URL('./PlayerBar.css', import.meta.url), 'utf8')
-    const style = compileStyle({
-      source,
-      filename: 'PlayerBar.css',
-      id: 'data-v-test',
-      scoped: true
+    const dashboardProgress = await readFile(
+      new URL('../local-dashboard/DashboardPlaybackProgress.vue', import.meta.url),
+      'utf8'
+    )
+    const sources = [
+      await readFile(new URL('./PlayerBar.css', import.meta.url), 'utf8'),
+      await readFile(new URL('../LocalDashboard.css', import.meta.url), 'utf8'),
+      parse(dashboardProgress).descriptor.styles[0].content
+    ]
+    const styles = sources.map((source) => {
+      const style = compileStyle({
+        source,
+        filename: 'Playback.css',
+        id: 'data-v-test',
+        scoped: true
+      })
+      assert.deepEqual(style.errors, [])
+      return style.code
     })
-    assert.deepEqual(style.errors, [])
     await writeFile(join(directory, 'entry.ts'), runtime)
     await build({
       configFile: false,
@@ -50,7 +61,7 @@ test('saved theme colors reach the rendered player controls across tones and bar
     })
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><html><head><meta charset="utf-8"><style>${style.code}</style></head><body><script src="bundle/runtime.js"></script></body></html>`
+      `<!doctype html><html><head><meta charset="utf-8"><style>${styles.join('\n')}</style></head><body><script src="bundle/runtime.js"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),
@@ -62,7 +73,7 @@ app.whenReady().then(async()=>{
   try{
     await win.loadFile(process.argv.at(-1))
     await win.webContents.executeJavaScript('window.runPlayerThemeTests()')
-    for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact'])for(const glass of [false,true]){
+    for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact','dashboard'])for(const glass of [false,true]){
       const rect=await win.webContents.executeJavaScript('window.preparePlayerThemeHover('+JSON.stringify(tone)+','+JSON.stringify(mode)+','+glass+')')
       win.webContents.sendInputEvent({type:'mouseMove',x:Math.round(rect.x),y:Math.round(rect.y)})
       await new Promise(resolve=>setTimeout(resolve,300))
@@ -115,12 +126,16 @@ window.api={
 const boot=()=>bootstrapThemeRuntime({systemTone:'pureWhite',settings:{settings:{theme:'pureWhite',accentColor:'blue',lightAccentColor:'blue',darkAccentColor:'blue',uiDensity:'comfortable'}},themeBootstrap:{library}})
 const store=useThemeStore()
 const colors={
-  pureWhite:{'playback.progress.track':'#123456','playback.progress.fill':'linear-gradient(90deg, #ff0000, #00ff00)','playback.control.surface':'#654321','playback.control.hoverSurface':'#abcdef'},
+  pureWhite:{'playback.progress.track':'rgba(37, 99, 235, 0.16)','playback.progress.fill':'linear-gradient(270deg, rgba(37, 99, 235, 0.58), rgba(240, 128, 230, 0.73))','playback.control.surface':'#654321','playback.control.hoverSurface':'#abcdef'},
   dark:{'playback.progress.track':'#345678','playback.progress.fill':'linear-gradient(90deg, #0000ff, #ff00ff)','playback.control.surface':'#876543','playback.control.hoverSurface':'#fedcba'}
 }
 let bar,button,stripButton,hoverTarget,track,fill
-const mount=(mode,glass=false,live=false)=>{
+const clear=()=>{
   document.querySelector('.player-bar-shell')?.remove()
+  document.querySelector('.home')?.remove()
+}
+const mount=(mode,glass=false,live=false)=>{
+  clear()
   const shell=document.createElement('div')
   shell.className='player-bar-shell'
   shell.dataset.tePlaybarMode=mode
@@ -133,21 +148,43 @@ const mount=(mode,glass=false,live=false)=>{
   track=shell.querySelector('[class$="progress-track"]')
   fill=track.firstElementChild
 }
-const background=(element)=>{
-  const style=getComputedStyle(element)
+const mountDashboard=(glass=false)=>{
+  clear()
+  document.documentElement.dataset.teHomeLiquidGlass=glass?'on':'off'
+  const home=document.createElement('div')
+  home.className='home'
+  home.innerHTML='<div class="hero-progress"><button class="hero-progress-track"><span style="transform:scaleX(0.42)"></span></button></div><div class="hero-actions"><button class="transport-button transport-play">Play</button></div>'
+  for(const element of [home,...home.querySelectorAll('*')])element.setAttribute('data-v-test','')
+  document.body.append(home)
+  bar=home
+  button=home.querySelector('.transport-play')
+  track=home.querySelector('.hero-progress-track')
+  fill=track.firstElementChild
+}
+const background=(element,pseudo)=>{
+  const style=getComputedStyle(element,pseudo)
   return [style.backgroundColor,style.backgroundImage].join('|')
 }
-const checkBackground=(element,value,label)=>{
+const checkBackground=(element,value,label,pseudo)=>{
   const probe=document.createElement('div')
   probe.style.background=value
   document.body.append(probe)
-  expect(background(element)===background(probe),label+': '+background(element)+' expected '+background(probe))
+  expect(background(element,pseudo)===background(probe),label+': '+background(element,pseudo)+' expected '+background(probe))
   probe.remove()
 }
 const settle=()=>new Promise(resolve=>setTimeout(resolve,250))
 const checkColors=async(overrides)=>{
   for(const tone of ['pureWhite','dark']){
     await store.setPreviewTone(tone)
+    for(const glass of [false,true]){
+      mountDashboard(glass)
+      await settle()
+      checkBackground(track,overrides[tone]['playback.progress.track'],tone+' dashboard track','::before')
+      checkBackground(fill,overrides[tone]['playback.progress.fill'],tone+' dashboard fill')
+      checkBackground(button,overrides[tone]['playback.control.surface'],tone+' dashboard play')
+      bar.style.setProperty('--home-accent','#0000aa')
+      checkBackground(fill,overrides[tone]['playback.progress.fill'],tone+' dashboard accent change')
+    }
     for(const mode of ['standard','mini','compact'])for(const glass of [false,true])for(const live of [false,true]){
       mount(mode,glass,live)
       await settle()
@@ -164,6 +201,14 @@ const checkColors=async(overrides)=>{
     }
   }
 }
+const checkDashboardDefaults=()=>{
+  mountDashboard()
+  const style=getComputedStyle(bar)
+  const ink=style.getPropertyValue('--home-ink')
+  checkBackground(track,'color-mix(in srgb, '+ink+' 12%, transparent)','reset restores dashboard track','::before')
+  checkBackground(fill,'linear-gradient(90deg, '+style.getPropertyValue('--home-accent')+', '+style.getPropertyValue('--te-accent-cyan')+')','reset restores dashboard fill')
+  checkBackground(button,ink,'reset restores dashboard play')
+}
 window.runPlayerThemeTests=async()=>{
   await boot()
   const profile=store.createProfile('Player colors')
@@ -176,14 +221,19 @@ window.runPlayerThemeTests=async()=>{
   const preview=structuredClone(profile)
   preview.overrides.dark['playback.progress.track']='#aa00aa'
   await store.preview(preview)
+  mountDashboard()
+  checkBackground(track,'#aa00aa','dashboard preview uses edited track','::before')
   mount('compact',true)
   checkBackground(track,'#aa00aa','preview uses edited track')
   await store.preview(null)
   checkBackground(track,colors.dark['playback.progress.track'],'cancel restores saved track')
+  mountDashboard()
+  checkBackground(track,colors.dark['playback.progress.track'],'dashboard cancel restores saved track','::before')
   const reset=structuredClone(profile)
   reset.overrides={pureWhite:{},dark:{}}
   await store.saveProfile(reset)
   await store.setActive({kind:'user',id:profile.id})
+  checkDashboardDefaults()
   mount('mini')
   checkBackground(fill,'#cc9900','reset restores cover progress color')
   checkBackground(button,'#cc9900','reset restores cover play color')
@@ -191,6 +241,7 @@ window.runPlayerThemeTests=async()=>{
   await store.saveProfile(profile)
   await store.setActive({kind:'user',id:profile.id})
   await store.setActive({kind:'builtin',id:'builtin:twilight-echo-default'})
+  checkDashboardDefaults()
   mount('compact')
   checkBackground(fill,'#cc9900','switching theme clears progress override')
   checkBackground(button,'#cc9900','switching theme clears play override')
@@ -198,8 +249,9 @@ window.runPlayerThemeTests=async()=>{
 }
 window.preparePlayerThemeHover=async(tone,mode,glass)=>{
   await store.setPreviewTone(tone)
-  mount(mode,glass)
-  hoverTarget=mode==='standard'?button:stripButton
+  if(mode==='dashboard')mountDashboard(glass)
+  else mount(mode,glass)
+  hoverTarget=mode==='standard'||mode==='dashboard'?button:stripButton
   const rect=hoverTarget.getBoundingClientRect()
   return {x:rect.x+rect.width/2,y:rect.y+rect.height/2}
 }

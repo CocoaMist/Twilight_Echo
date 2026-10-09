@@ -90,7 +90,7 @@ import {
   DEFAULT_DESKTOP_LYRICS_SETTINGS,
   normalizeDesktopLyricsSettings
 } from '../../shared/desktopLyrics.ts'
-import { normalizeAppFontFamily } from '../../shared/appFont.ts'
+import { normalizeAppFontFamily, normalizeAppFontRendering } from '../../shared/appFont.ts'
 import {
   DEFAULT_LYRICS_PRESET_CONFIG,
   cloneLyricsPresetConfig,
@@ -173,6 +173,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lightAccentColor: 'blue',
   darkAccentColor: 'blue',
   fontFamily: 'system',
+  fontRendering: 'auto',
   uiDensity: 'standard',
   appBackground: {
     global: {
@@ -709,6 +710,7 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     lightAccentColor: normalizeLightAccentColor(settings.lightAccentColor),
     darkAccentColor: normalizeDarkAccentColor(settings.darkAccentColor, settings.accentColor),
     fontFamily: normalizeAppFontFamily(settings.fontFamily),
+    fontRendering: normalizeAppFontRendering(settings.fontRendering),
     uiDensity: normalizeUiDensity(settings.uiDensity),
     appBackground: normalizeAppBackgroundSettings(
       settings.appBackground,

@@ -14,13 +14,6 @@
 .toplists-dialog * {
   box-sizing: border-box;
 }
-:global(.archive-home) .ncm-toplists,
-:global(.night-harbor) .ncm-toplists {
-  margin-block: 36px;
-}
-:global(.sound-field) .ncm-toplists {
-  margin-bottom: 32px;
-}
 .ncm-toplists :is(h2, p, ol),
 .toplists-dialog :is(h2, p, ol) {
   margin: 0;

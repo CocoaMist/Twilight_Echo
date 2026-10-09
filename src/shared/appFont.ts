@@ -8,6 +8,23 @@
  */
 type BuiltinAppFontFamily = 'system' | 'inter' | 'lxgw' | 'sarasa' | 'comic'
 export type AppFontFamily = BuiltinAppFontFamily | `local:${string}`
+export type AppFontRendering = 'auto' | 'crisp' | 'smooth'
+
+export function normalizeAppFontRendering(value: unknown): AppFontRendering {
+  return value === 'crisp' || value === 'smooth' ? value : 'auto'
+}
+
+/** Chromium cannot select Windows ClearType through CSS. A small same-color
+ * stroke improves thin glyphs on glass without changing their layout or adding
+ * a blurred shadow. Smoothing preferences also apply where the OS supports them. */
+export function appFontRenderingCssVariables(value: unknown): Record<string, string> {
+  const mode = normalizeAppFontRendering(value)
+  return {
+    '--te-font-stroke': mode === 'crisp' ? '0.2px' : '0px',
+    '--te-font-smoothing': mode === 'smooth' ? 'antialiased' : 'auto',
+    '--te-font-rendering': mode === 'auto' ? 'auto' : 'optimizeLegibility'
+  }
+}
 
 export const APP_FONT_SYSTEM = 'system' as const
 

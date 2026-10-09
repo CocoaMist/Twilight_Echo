@@ -11,6 +11,30 @@ import {
 } from '../../shared/appAppearance.ts'
 import { DEFAULT_LIQUID_GLASS } from '../../shared/liquidGlass.ts'
 import { loadSettingsFile, writeSettingsFile } from './settingsFile.ts'
+import { normalizeAppFontRendering, type AppFontRendering } from '../../shared/appFont.ts'
+
+test('text rendering persists through disk reload and old settings use automatic', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'twilight-appearance-font-'))
+  try {
+    const file = join(directory, 'settings.json')
+    const defaults = { fontRendering: 'auto' as AppFontRendering }
+    const normalize = (value: Partial<typeof defaults>): typeof defaults => ({
+      fontRendering: normalizeAppFontRendering(value.fontRendering)
+    })
+    writeSettingsFile(file, {})
+    assert.equal(loadSettingsFile(file, defaults, normalize).settings.fontRendering, 'auto')
+    for (const fontRendering of ['crisp', 'smooth', 'auto'] as const) {
+      writeSettingsFile(file, { fontRendering })
+      const result = loadSettingsFile(file, defaults, normalize)
+      assert.equal(result.issue, null)
+      assert.equal(result.settings.fontRendering, fontRendering)
+    }
+  } finally {
+    assert.equal(dirname(resolve(directory)), resolve(tmpdir()))
+    assert.ok(basename(directory).startsWith('twilight-appearance-font-'))
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 test('appearance settings survive disk reloads and legacy migration is applied only once', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-appearance-settings-'))

@@ -19,6 +19,7 @@ import type { PlayerBarSettings } from './playerBar.ts'
 import type { LanguagePreference } from './i18n/locale.ts'
 import type { MotionPreference } from './motion.ts'
 import type { NavigationPagePreferences } from './navigationPages.ts'
+import type { AppFontRendering } from './appFont.ts'
 
 export type {
   DesktopLyricsPalette,
@@ -196,6 +197,7 @@ export interface AppSettings {
   lightAccentColor: string
   darkAccentColor: string
   fontFamily: string
+  fontRendering: AppFontRendering
   uiDensity: UiDensity
   appBackground: AppBackgroundSettings
   cardAppearance: CardAppearanceSettings

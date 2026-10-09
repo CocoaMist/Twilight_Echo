@@ -1,5 +1,15 @@
 ﻿<script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  reactive,
+  ref,
+  shallowRef,
+  watch
+} from 'vue'
 import type { ProviderHomeSectionPresentation } from '../../../shared/providerHome'
 import { useBackHandler } from '../app/useBackStack'
 import type { Track } from '../types/music'
@@ -106,6 +116,8 @@ import { friendlyStreamingError } from './streaming-page/friendlyStreamingError.
 import { useEscapeToClose } from '../app/useDismissLayer.ts'
 import type { ProviderDownloadQuality } from '../../../preload/types'
 import { useDownloadTasks } from '../stores/useDownloadTasks'
+
+const NcmToplists = defineAsyncComponent(() => import('./local-dashboard/NcmToplists.vue'))
 
 interface RecSection extends ProviderHomeSectionPresentation {
   key: string
@@ -3582,7 +3594,11 @@ onMounted(async () => {
             @play-track="playHomeTrack"
             @request-login="emit('login', activeProvider)"
             @open-discovery="selectTab('discover')"
-          />
+          >
+            <template v-if="activeProvider === 'ncm'" #rankings>
+              <NcmToplists @login="emit('login', 'ncm')" />
+            </template>
+          </StreamingHome>
 
           <StreamingDiscovery
             v-else-if="

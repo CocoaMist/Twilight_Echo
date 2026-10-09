@@ -94,12 +94,12 @@ const dateKicker = computed(() => {
 
 const hasLibrary = computed(() => tracks.value.length > 0)
 
-const totalDurationText = computed(() => {
+const totalDuration = computed(() => {
   const seconds = tracks.value.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0)
   const hours = seconds / 3600
-  if (hours >= 24) return `${(hours / 24).toFixed(1)} 天`
-  if (hours >= 1) return `${hours.toFixed(1)} 小时`
-  return `${Math.round(seconds / 60)} 分钟`
+  if (hours >= 24) return { value: (hours / 24).toFixed(1), unit: '天' }
+  if (hours >= 1) return { value: hours.toFixed(1), unit: '小时' }
+  return { value: String(Math.round(seconds / 60)), unit: '分钟' }
 })
 
 interface RankedStat {
@@ -166,11 +166,10 @@ const heroLabel = computed(() => {
   return heroIsCurrent.value && isPlaying.value ? '正在播放' : '上次播放'
 })
 
-const heroMeta = computed(() => {
+const heroAudioMeta = computed(() => {
   const track = heroTrack.value
   if (!track) return ''
   const parts: string[] = []
-  if (track.album) parts.push(track.album)
   if (track.format) parts.push(track.format.toUpperCase())
   if (track.sampleRate) parts.push(`${Math.round(track.sampleRate / 1000)}kHz`)
   return parts.join(' · ')
@@ -889,11 +888,18 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 {{ heroLabel }}
               </span>
 
-              <h2 class="hero-title">{{ nowPlayingTitle }}</h2>
-              <p class="hero-artist">{{ heroTrack?.artist || '未知艺术家' }}</p>
-              <p class="hero-meta">
-                <i class="ph ph-disc" aria-hidden="true"></i>
-                {{ heroMeta || '本地音乐' }}
+              <div class="hero-track-info">
+                <h2 class="hero-title" :title="nowPlayingTitle">{{ nowPlayingTitle }}</h2>
+                <p class="hero-artist" :title="heroTrack?.artist">
+                  {{ heroTrack?.artist || '未知艺术家' }}
+                </p>
+              </div>
+              <p class="hero-meta" :title="heroTrack?.album || '本地音乐'">
+                <span class="hero-release">
+                  <i class="ph ph-disc" aria-hidden="true"></i>
+                  <span class="hero-album">{{ heroTrack?.album || '本地音乐' }}</span>
+                </span>
+                <span v-if="heroAudioMeta" class="hero-audio-meta">{{ heroAudioMeta }}</span>
               </p>
 
               <DashboardPlaybackProgress v-if="heroIsCurrent" />
@@ -933,8 +939,12 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
               </div>
 
               <div v-else class="hero-actions">
-                <button type="button" class="hero-ghost-action" @click="handleHeroPlay">
-                  <i class="ph ph-play"></i>
+                <button
+                  type="button"
+                  class="hero-ghost-action hero-primary-action"
+                  @click="handleHeroPlay"
+                >
+                  <i class="ph ph-play" aria-hidden="true"></i>
                   播放这首
                 </button>
                 <button type="button" class="hero-ghost-action" @click="shuffleAll">
@@ -956,9 +966,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   alt=""
                 />
                 <img v-else :src="DEFAULT_COVER" alt="" />
-                <span v-if="heroTrack?.format" class="hero-format">{{
-                  heroTrack.format.toUpperCase()
-                }}</span>
               </span>
             </div>
           </div>
@@ -967,25 +974,24 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         <!-- ── Library figures ─────────────────────────────────────────── -->
         <section class="figures" aria-label="音乐库一览">
           <button type="button" class="figure" @click="emit('select-view', 'allSongs', null)">
-            <strong>{{ tracks.length }}</strong>
+            <strong>{{ tracks.length.toLocaleString('zh-CN') }}</strong>
             <span>首歌曲</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
-          <span class="figure-sep" aria-hidden="true"></span>
           <button type="button" class="figure" @click="emit('select-view', 'albums', null)">
-            <strong>{{ albums.length }}</strong>
+            <strong>{{ albums.length.toLocaleString('zh-CN') }}</strong>
             <span>张专辑</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
-          <span class="figure-sep" aria-hidden="true"></span>
           <button type="button" class="figure" @click="emit('select-view', 'artists', null)">
-            <strong>{{ artists.length }}</strong>
+            <strong>{{ artists.length.toLocaleString('zh-CN') }}</strong>
             <span>位艺术家</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
-          <span class="figure-sep" aria-hidden="true"></span>
           <div class="figure is-static">
-            <strong>{{ totalDurationText }}</strong>
+            <strong>
+              {{ totalDuration.value }}<small class="figure-unit">{{ totalDuration.unit }}</small>
+            </strong>
             <span>收藏总时长</span>
           </div>
         </section>
@@ -1068,7 +1074,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         </section>
 
         <!-- ── Recently added ──────────────────────────────────────────── -->
-        <slot name="rankings" />
         <section class="content-block">
           <header class="block-head">
             <div class="block-copy">

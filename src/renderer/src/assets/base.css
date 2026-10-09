@@ -713,12 +713,19 @@ body {
     'calt' 1,
     'ss01' 1;
   font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
+  text-rendering: var(--te-font-rendering, auto);
+  -webkit-font-smoothing: var(--te-font-smoothing, auto);
+  -webkit-text-stroke: var(--te-font-stroke, 0px) currentColor;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
   font-size: var(--te-font-size-body);
   letter-spacing: 0;
+}
+
+/* Icon fonts keep their original silhouettes. Lyrics with an explicit stroke
+   continue to use their own appearance settings instead of the inherited UI stroke. */
+:is(.pi, .ph, .ph-bold, .ph-fill, .ph-light, .ph-thin, .ph-duotone) {
+  -webkit-text-stroke: 0;
 }
 
 :root[data-theme='pureWhite'] {

@@ -7,7 +7,10 @@ import {
   type AppearanceDraft
 } from '../../../shared/appAppearance.ts'
 import { documentMotionMode } from '@renderer/app/scrollMotion'
-import { sharedPlayerBarStylesheet } from '../../../shared/themePlayerBar.ts'
+import {
+  explicitPlaybackColorVariables,
+  sharedPlayerBarStylesheet
+} from '../../../shared/themePlayerBar.ts'
 import { computed, nextTick, ref, shallowRef } from 'vue'
 import {
   DEFAULT_THEME_TONE_SCHEDULE,
@@ -53,7 +56,10 @@ import type { AppBackgroundColorPair, AppBackgroundPage, AppSettings } from '../
 import {
   APP_FONT_SYSTEM,
   appFontCssVariables,
+  appFontRenderingCssVariables,
   normalizeAppFontFamily,
+  normalizeAppFontRendering,
+  type AppFontRendering,
   type AppFontFamily
 } from '../../../shared/appFont.ts'
 import {
@@ -111,6 +117,7 @@ let lastAppliedTone: ThemeTone | null = null
 let lightAccentColor = 'blue'
 let darkAccentColor = 'blue'
 let uiFontFamily: AppFontFamily = APP_FONT_SYSTEM
+let uiFontRendering: AppFontRendering = 'auto'
 let themePreference: AppSettings['theme'] = 'system'
 let appBackground: AppSettings['appBackground'] | null = null
 let cardAppearance: AppSettings['cardAppearance'] | null = null
@@ -154,6 +161,7 @@ type SettingsAppearanceInput = Pick<
   | 'lightAccentColor'
   | 'darkAccentColor'
   | 'fontFamily'
+  | 'fontRendering'
   | 'uiDensity'
   | 'appBackground'
   | 'surfaceMaterial'
@@ -166,6 +174,7 @@ function cacheSettingsAppearance(settings: SettingsAppearanceInput): void {
   lightAccentColor = settings.lightAccentColor || settings.accentColor || 'blue'
   darkAccentColor = settings.darkAccentColor || settings.accentColor || 'blue'
   uiFontFamily = normalizeAppFontFamily(settings.fontFamily)
+  uiFontRendering = normalizeAppFontRendering(settings.fontRendering)
   appBackground = appearance.appBackground
   cardAppearance = appearance.cardAppearance ?? null
   surfaceMaterial = normalizeSurfaceMaterial(appearance.surfaceMaterial)
@@ -472,6 +481,7 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
         applyAppBackgroundVariables(tone, variables)
         applySettingsAccentColor(tone, variables)
         Object.assign(variables, appFontCssVariables(uiFontFamily))
+        Object.assign(variables, appFontRenderingCssVariables(uiFontRendering))
         applyLiquidGlassVariables(tone, variables)
         if (cardAppearance?.enabled && surfaceMaterial === 'standard') {
           Object.assign(
@@ -535,7 +545,9 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
   applyAppBackgroundVariables(tone, variables)
   applySettingsAccentColor(tone, variables)
   Object.assign(variables, appFontCssVariables(uiFontFamily))
+  Object.assign(variables, appFontRenderingCssVariables(uiFontRendering))
   applyExplicitThemePreferences(selectedProfile, tone, themedVariables, variables)
+  Object.assign(variables, explicitPlaybackColorVariables(tone, selectedProfile))
   if (appBackground) {
     const global = appBackground.global
     if (global.customized) {

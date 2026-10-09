@@ -205,7 +205,6 @@ function openActivity(): void {
           </button>
         </aside>
       </div>
-      <slot name="rankings" />
       <section class="nh-rotation" aria-labelledby="nh-rotation-title">
         <header class="nh-section-head">
           <div>
