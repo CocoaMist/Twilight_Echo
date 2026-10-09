@@ -4,6 +4,10 @@
 #include "../dsp/DspTypes.h"
 #include "AudioFixtureLibrary.h"
 #include "../automix/AutoMix.h"
+#include "../automix/CandidatePlanner.h"
+extern "C" {
+#include "../automix/recovered/am_json.h"
+}
 
 #include <algorithm>
 #include <array>
@@ -13,6 +17,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -538,10 +544,19 @@ void assertDecoderOpensExternalFixturesWhenProvided() {
   }
 }
 
+#if defined(TAE_HAS_FFMPEG)
+#include "../automix/tests/rendered_pair_probe.inc"
+#endif
 }  // namespace
 
 int main(int argc,char** argv) {
 #if defined(TAE_HAS_FFMPEG)
+  if((argc==3||argc==5) && std::string(argv[1])=="--automix-pair-probe") {
+    try {
+      if(argc==5&&std::string(argv[3])!="--wav")throw std::runtime_error("expected --wav");
+      inspectAutoMixMusicPair(argv[2],argc==5?argv[4]:"");return 0;
+    } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
+  }
   if(argc==3 && std::string(argv[1])=="--precise-seek-probe") {
     assertPreciseSeekMatchesExternalPcm(argv[2]);return 0;
   }

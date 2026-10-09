@@ -60,7 +60,8 @@ bool AudioPipeline::setAutoMixFeatures(const std::string& json,std::string* erro
   // Fix the pair before the earliest possible intelligent transition. Late
   // results are cached by the host for future playback, never replanned here.
   if((autoMixTransition_&&autoMixTransition_->phase.load(std::memory_order_acquire)!=0)||
-      double(renderedFrames_.load(std::memory_order_acquire))/decodeFormat_.sampleRate+autoMixConfig_.max_transition_seconds+2>=activeStream_->autoMixDurationSeconds()) {if(error)*error="feature_deadline_missed";return false;}
+      double(renderedFrames_.load(std::memory_order_acquire))/decodeFormat_.sampleRate+autoMixConfig_.max_transition_seconds+2+
+      (autoMixConfig_.allow_intelligent_skip?std::min(12.,activeStream_->autoMixDurationSeconds()*.1):0)>=activeStream_->autoMixDurationSeconds()) {if(error)*error="feature_deadline_missed";return false;}
   const auto* a=am_jget(out,"features");const auto* b=am_jget(in,"features");
   if(!a||a->type!=AM_JOBJECT||!b||b->type!=AM_JOBJECT) {if(error)*error="invalid_features";return false;}
   const auto* outSource=am_jget(out,"preparationSource");const auto* inSource=am_jget(in,"preparationSource");
@@ -87,10 +88,21 @@ std::string AudioPipeline::autoMixStatusJson() const {
        << "\",\"progress\":" << (transition && transition->info.frames ? std::min(1., double(frames)/transition->info.frames) : 0)
        << ",\"transitionSeconds\":" << (transition ? transition->info.transition_seconds : 0) << ",\"styleId\":";
   if (transition) json << transition->info.style_id; else json << "null";
+  json << ",\"mixKind\":\"" << (transition?(transition->mixTier==3?"beat_mix":transition->mixTier==2?"musical_overlap":transition->mixTier==1?"boundary_cleanup":"conservative"):"none") << '"'
+       << ",\"audibleOverlapSeconds\":" << (transition?transition->mixEvidence.audible_overlap_seconds:0)
+       << ",\"tempoAdjustmentPercent\":" << (transition?100*std::max(std::abs(transition->tempoRatio-1),std::abs(1/transition->tempoRatio-1)):0)
+       << ",\"incomingResumeSeconds\":" << (transition?double(transition->info.incoming_resume_frame)/transition->info.sample_rate:0)
+       << ",\"outgoingEndSeconds\":" << (transition?double(transition->info.outgoing_end_frame)/transition->info.sample_rate:0);
   json << ",\"reason\":\"" << json_utils::escape(autoMixReason_) << "\",\"configRevision\":" << autoMixConfig_.revision
        << ",\"pairRevision\":" << autoMixSerial_.load(std::memory_order_acquire)
        << ",\"featuresDelivered\":" << (!autoMixOutgoingFeatures_.empty()?"true":"false")
-       << ",\"stableRelease\":false,\"intelligentSkipSupported\":false,\"experimentalAllowed\":";
+       << ",\"stableRelease\":false,\"intelligentSkipSupported\":"
+#if defined(TAE_AM_ASM) && defined(TAE_HAS_FFMPEG)
+       << "true"
+#else
+       << "false"
+#endif
+       << ",\"experimentalAllowed\":";
   json<<(TAE_AM_ExperimentalPlayerAllowed()?"true":"false");
   json<<'}';
   return json.str();
@@ -156,17 +168,21 @@ void AudioPipeline::autoMixWorker() {
       const auto channels = static_cast<unsigned>(job->format.channelCount);
       auto pool=twilight::automix::generateCandidates(job->config,job->outgoingDurationSeconds,job->incomingDurationSeconds,job->outgoingFeatures,job->incomingFeatures);
       if(pool.candidates.empty())throw std::runtime_error(pool.reason);
-      std::vector<am_score_result> scores(pool.candidates.size());
-      TAE_AM_SelectionV1 choice{sizeof choice,TAE_AM_ABI_VERSION};
       // Independent deterministic host seed; Apple entropy/seconds rounding
       // has not been recovered. The actual UInt64 weighted selector is exact.
-      if(TAE_AM_Select(pool.candidates.data(),pool.candidates.size(),job->serial,1,scores.data(),&choice)!=TAE_AM_OK||!choice.has_chosen)throw std::runtime_error("candidate_selection_failed");
-      const auto& candidate=pool.candidates[choice.chosen_index];reason=candidate.scoring.style_id==1?pool.reason:"independent_confident_beat_regions";
+      unsigned maximumTier=3;
+      for(;;) {
+      const auto chosen=twilight::automix::selectCandidate(pool,job->serial,maximumTier);
+      const auto& quality=pool.quality[chosen];
+      const auto candidate=twilight::automix::candidateForRendering(pool,chosen);reason=quality.reason?quality.reason:pool.reason;
+      if(quality.tier==0&&maximumTier<3)reason="intelligent_prepare_failed_conservative";
+      try {
       const uint64_t outEnd=static_cast<uint64_t>(std::floor(candidate.scoring.outgoing_end*rate));
       const uint64_t outStart=static_cast<uint64_t>(std::floor(candidate.outgoing_start*rate));
       const uint64_t length=outEnd-outStart;
       if (!length || length >= outEnd) throw std::runtime_error("invalid_transition_range");
       transition = std::make_unique<AutoMixTransition>();
+      transition->mixTier=quality.tier;transition->tempoRatio=quality.tempoRatio;
       transition->outgoing = job->outgoing.get(); transition->incoming = job->incoming.get();
       transition->serial = job->serial; transition->startFrame = outStart;
       TAE_AM_Plan plan=nullptr;
@@ -209,6 +225,9 @@ void AudioPipeline::autoMixWorker() {
       TAE_AM_PcmViewV1 b{sizeof b,TAE_AM_ABI_VERSION,incoming.data(),windows[1].frames,windows[1].source_first_frame,rate,channels};
       const auto preparedResult=TAE_AM_Prepare(plan,&a,&b,1,1,&transition->prepared,&transition->info);
       if(preparedResult!=TAE_AM_OK)throw std::runtime_error(preparedResult==TAE_AM_RESOURCE_LIMIT?"transition_resource_limit":"transition_prepare_failed");
+      if(TAE_AM_InspectPrepared(transition->prepared,&transition->mixEvidence)!=TAE_AM_OK)throw std::runtime_error("mix_evidence_unavailable");
+      if(quality.tier>=2&&(transition->mixEvidence.audible_overlap_seconds<2||transition->mixEvidence.longest_overlap_seconds<1))
+        throw std::runtime_error("musical_overlap_inaudible");
       transition->memoryBytes=transition->info.memory_bytes+
         (std::max<uint64_t>(2ULL*rate,8192)+kDecodeChunkFrames+job->callbackFrames)*channels*sizeof(float);
       transition->resume=makeDecodeStream();
@@ -232,6 +251,15 @@ void AudioPipeline::autoMixWorker() {
       }
       if(!transition->resume->readyForRender())throw std::runtime_error("resume_buffer_unavailable");
       error.clear();
+      break;
+      } catch(const std::exception&) {
+        transition.reset();
+        if(quality.tier<2)throw;
+        // A prepared filter may mask one contribution. Try the next explicit
+        // product tier; never promote a silent overlay to a musical-mix label.
+        maximumTier=quality.tier-1;
+      }
+      }
     } catch(const std::exception& e) { error=e.what();transition.reset(); }
     catch(...) {error="preparation_internal_error";transition.reset();}
     {

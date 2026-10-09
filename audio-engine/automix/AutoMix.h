@@ -50,6 +50,10 @@ typedef struct TAE_AM_SourceWindowV1 {
   uint32_t size, abi_version;
   uint64_t source_first_frame, frames, nominal_first_frame, nominal_end_frame;
 } TAE_AM_SourceWindowV1;
+typedef struct TAE_AM_MixEvidenceV1 {
+  uint32_t size, abi_version;
+  double audible_overlap_seconds, longest_overlap_seconds;
+} TAE_AM_MixEvidenceV1;
 typedef void* TAE_AM_Plan;
 typedef void* TAE_AM_Prepared;
 void TAE_AM_DefaultConfig(TAE_AM_ConfigV1* config);
@@ -72,6 +76,9 @@ TAE_AM_Result TAE_AM_Prepare(TAE_AM_Plan plan, const TAE_AM_PcmViewV1* outgoing,
   const TAE_AM_PcmViewV1* incoming, float outgoing_track_gain, float incoming_track_gain,
   TAE_AM_Prepared* prepared, TAE_AM_PreparedInfoV1* info);
 void TAE_AM_DestroyPrepared(TAE_AM_Prepared prepared);
+/* Preparation-thread inspection after effects and per-track envelopes.
+ * Returns scalar evidence only. Not called by the audio callback. */
+TAE_AM_Result TAE_AM_InspectPrepared(TAE_AM_Prepared prepared,TAE_AM_MixEvidenceV1* evidence);
 /* Realtime-safe: immutable buffer reads, memcpy and assembly only. No clipping
  * or user DSP here. Host executes its output DSP once after this mix. */
 size_t TAE_AM_MixPrepared(TAE_AM_Prepared prepared, uint64_t first_frame,

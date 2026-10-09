@@ -212,6 +212,36 @@ TAE_AM_Result TAE_AM_Prepare(TAE_AM_Plan opaque,const TAE_AM_PcmViewV1* out,cons
   catch(...) {return TAE_AM_INTERNAL;}
 }
 void TAE_AM_DestroyPrepared(TAE_AM_Prepared p) {delete static_cast<Prepared*>(p);}
+TAE_AM_Result TAE_AM_InspectPrepared(TAE_AM_Prepared opaque,TAE_AM_MixEvidenceV1* evidence) {
+  if(!opaque||!version(evidence))return TAE_AM_INVALID;
+  const auto& p=*static_cast<const Prepared*>(opaque);
+  const auto hop=std::max(1u,p.info.sample_rate/50),channels=p.info.channels;
+  const auto energy=[&](uint64_t first,uint64_t end,unsigned side) {
+    const auto& samples=side?p.incoming:p.outgoing;const auto& gain=side?p.inGain:p.outGain;
+    double peakChannel=0;
+    for(unsigned c=0;c<channels;++c) {
+      double sum=0;for(auto f=first;f<end;++f) {const auto i=f*channels+c;const double x=double(samples[i])*gain[i];sum+=x*x;}
+      peakChannel=std::max(peakChannel,sum/(end-first));
+    }
+    return peakChannel;
+  };
+  double peak[2]{};
+  for(uint64_t first=0;first<p.info.frames;first+=hop)for(unsigned side=0;side<2;++side)
+    peak[side]=std::max(peak[side],energy(first,std::min<uint64_t>(first+hop,p.info.frames),side));
+  // Each contribution must exceed -48 dBFS and remain within 24 dB of its
+  // own prepared peak. This is a measurable eligibility floor, not a hearing
+  // or naturalness score; quiet tails cannot inflate the musical-mix count.
+  const double threshold[2]{std::max(std::pow(10.,-4.8),peak[0]*std::pow(10.,-2.4)),
+                            std::max(std::pow(10.,-4.8),peak[1]*std::pow(10.,-2.4))};
+  uint64_t total=0,run=0,longest=0;
+  for(uint64_t first=0;first<p.info.frames;first+=hop) {
+    const auto end=std::min<uint64_t>(first+hop,p.info.frames);
+    if(energy(first,end,0)>=threshold[0]&&energy(first,end,1)>=threshold[1]) {total+=end-first;run+=end-first;longest=std::max(longest,run);}
+    else run=0;
+  }
+  *evidence={sizeof(*evidence),TAE_AM_ABI_VERSION,double(total)/p.info.sample_rate,double(longest)/p.info.sample_rate};
+  return TAE_AM_OK;
+}
 size_t TAE_AM_MixPrepared(TAE_AM_Prepared opaque,uint64_t first,float* output,size_t frames) {
   const auto* p=static_cast<const Prepared*>(opaque);if(!p||!output||first>=p->info.frames) return 0;
   frames=std::min<std::uint64_t>(frames,p->info.frames-first);const auto n=frames*p->info.channels,offset=first*p->info.channels;
