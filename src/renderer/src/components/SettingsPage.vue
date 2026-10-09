@@ -19,6 +19,7 @@ import {
   type BooleanSettingKey,
   type SettingsSearchEntry,
   sections,
+  GENERAL_SETTINGS_SECTIONS,
   sectionGroups,
   startupHomePageOptions,
   trackActivationModeOptions,
@@ -1191,7 +1192,10 @@ onBeforeUnmount(() => {
         </div>
 
         <GeneralSettingsSection
-          v-show="activeSection === 'general'"
+          v-for="category in GENERAL_SETTINGS_SECTIONS"
+          :key="category"
+          :category="category"
+          v-show="activeSection === category"
           :library-watcher-status="libraryWatcherStatus"
           :library-scan-status="libraryScanStatus"
           :library-scan-is-active="libraryScanIsActive"

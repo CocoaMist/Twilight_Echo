@@ -12,7 +12,7 @@ import type {
   StartupHomePage,
   TrackActivationMode
 } from '../../types/settings'
-import type { BooleanSettingKey, PluginSettingsForm } from './types'
+import type { BooleanSettingKey, GeneralSettingsSectionKey, PluginSettingsForm } from './types'
 import { APP_LOCALES, normalizeLanguagePreference } from '../../../../shared/i18n/locale.ts'
 import { useLocale } from '../../app/useLocale.ts'
 
@@ -38,6 +38,7 @@ function toggleMiniPlayerShowInTaskbar(): void {
 }
 
 defineProps<{
+  category: GeneralSettingsSectionKey
   libraryWatcherStatus: LibraryWatcherStatusSnapshot | null
   libraryScanStatus: { state: string; current: number; total: number }
   libraryScanIsActive: boolean
@@ -88,14 +89,9 @@ const emit = defineEmits<{
 }>()
 </script>
 <template>
-  <section id="general" class="glass-card preview-section">
-    <div class="section-title-row">
-      <i class="pi pi-sliders-h"></i>
-      <h2>常规</h2>
-    </div>
-
-    <div class="section-block">
-      <h3>启动与窗口</h3>
+  <section :id="category" class="glass-card preview-section">
+    <div v-if="category === 'general'" class="section-block">
+      <h3>启动与语言</h3>
       <div class="setting-list">
         <div class="setting-item">
           <div class="setting-copy">
@@ -150,7 +146,12 @@ const emit = defineEmits<{
             </option>
           </select>
         </div>
-        <hr />
+      </div>
+    </div>
+
+    <div v-if="category === 'general'" class="section-block">
+      <h3>窗口行为</h3>
+      <div class="setting-list">
         <div class="setting-item">
           <div class="setting-copy">
             <strong>关闭主窗口时</strong>
@@ -186,22 +187,11 @@ const emit = defineEmits<{
             @click="toggleMiniPlayerShowInTaskbar"
           ></button>
         </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>欢迎向导</strong>
-            <span>重新走一遍首次使用引导：外观、听歌偏好、曲库与声音设置。</span>
-          </div>
-          <button type="button" class="soft-button" @click="emit('reopenOnboarding')">
-            <i class="ph ph-sparkle"></i>
-            重新打开
-          </button>
-        </div>
       </div>
     </div>
 
-    <div class="section-block">
-      <h3>媒体库与下载</h3>
+    <div v-if="category === 'library'" class="section-block">
+      <h3>文件夹与同步</h3>
       <div class="setting-list">
         <div class="setting-item top-align">
           <div class="setting-copy">
@@ -231,34 +221,6 @@ const emit = defineEmits<{
             </button>
           </div>
         </div>
-        <hr />
-        <div class="setting-item top-align">
-          <div class="setting-copy">
-            <strong>下载目录</strong>
-            <span>
-              流媒体「下载到本地」的保存位置；留空时沿用第一个扫描文件夹。选在扫描文件夹之外时，下载完成的文件不会自动进入媒体库。
-            </span>
-          </div>
-          <div class="path-control">
-            <input
-              readonly
-              aria-label="下载目录"
-              :value="settings.downloadFolder || '跟随扫描文件夹'"
-            />
-            <button type="button" class="soft-button" @click="chooseDownloadFolder">
-              选择文件夹
-            </button>
-            <button
-              v-if="settings.downloadFolder"
-              type="button"
-              class="muted-button"
-              @click="resetDownloadFolder"
-            >
-              跟随扫描文件夹
-            </button>
-          </div>
-        </div>
-        <DownloadSettingsFields />
         <hr />
         <div class="setting-item">
           <div class="setting-copy">
@@ -430,8 +392,41 @@ const emit = defineEmits<{
       </div>
     </div>
 
-    <div class="section-block">
-      <h3>系统集成与社交</h3>
+    <div v-if="category === 'library'" class="section-block">
+      <h3>下载与保存</h3>
+      <div class="setting-list">
+        <div class="setting-item top-align">
+          <div class="setting-copy">
+            <strong>下载目录</strong>
+            <span>
+              流媒体「下载到本地」的保存位置；留空时沿用第一个扫描文件夹。选在扫描文件夹之外时，下载完成的文件不会自动进入媒体库。
+            </span>
+          </div>
+          <div class="path-control">
+            <input
+              readonly
+              aria-label="下载目录"
+              :value="settings.downloadFolder || '跟随扫描文件夹'"
+            />
+            <button type="button" class="soft-button" @click="chooseDownloadFolder">
+              选择文件夹
+            </button>
+            <button
+              v-if="settings.downloadFolder"
+              type="button"
+              class="muted-button"
+              @click="resetDownloadFolder"
+            >
+              跟随扫描文件夹
+            </button>
+          </div>
+        </div>
+        <DownloadSettingsFields />
+      </div>
+    </div>
+
+    <div v-if="category === 'integrations'" class="section-block">
+      <h3>音源与 Windows</h3>
       <div class="setting-list">
         <div class="setting-item">
           <div class="setting-copy">
@@ -490,13 +485,14 @@ const emit = defineEmits<{
     </div>
 
     <IntegrationsSettingsSection
+      v-if="category === 'integrations'"
       :discord-enabled="settings.discordRpcEnabled"
       :remote-enabled="settings.remoteControlEnabled"
       @update:discord-enabled="(value: boolean) => updateSettings({ discordRpcEnabled: value })"
       @update:remote-enabled="(value: boolean) => updateSettings({ remoteControlEnabled: value })"
     />
 
-    <div class="section-block">
+    <div v-if="category === 'general'" class="section-block">
       <h3>操作习惯</h3>
       <div class="setting-list">
         <div class="setting-item">
@@ -518,10 +514,22 @@ const emit = defineEmits<{
             </button>
           </div>
         </div>
+        <hr />
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>欢迎向导</strong>
+            <span>重新走一遍首次使用引导：外观、听歌偏好、曲库与声音设置。</span>
+          </div>
+          <button type="button" class="soft-button" @click="emit('reopenOnboarding')">
+            <i class="ph ph-sparkle"></i>
+            重新打开
+          </button>
+        </div>
       </div>
     </div>
 
     <BackupAndResetSettingsSection
+      v-if="category === 'backup'"
       @export-settings="exportSettingsBackup"
       @import-settings="importSettingsBackup"
       @reset-group="
@@ -529,9 +537,24 @@ const emit = defineEmits<{
       "
     />
 
-    <div v-if="pluginSettingsPanels.length > 0" class="section-block">
+    <NetworkProxySettingsSection
+      v-if="category === 'extensions'"
+      :proxy-mode="settings.proxyMode"
+      :proxy-host="settings.proxyHost"
+      :proxy-port="settings.proxyPort"
+      :proxy-allow-direct-fallback="settings.proxyAllowDirectFallback"
+      @update:proxy-mode="(value: ProxyMode) => void updateSettings({ proxyMode: value })"
+      @update:proxy-host="(value: string) => void updateSettings({ proxyHost: value })"
+      @update:proxy-port="(value: number) => void updateSettings({ proxyPort: value })"
+      @toggle:allow-direct-fallback="toggleSetting('proxyAllowDirectFallback')"
+    />
+
+    <div v-if="category === 'extensions'" class="section-block">
       <h3>插件设置</h3>
-      <div class="setting-list">
+      <p v-if="pluginSettingsPanels.length === 0" class="plugin-settings-notice">
+        当前已启用的插件没有额外设置。可在插件中心管理插件。
+      </p>
+      <div v-else class="setting-list">
         <template
           v-for="(panel, index) in pluginSettingsPanels"
           :key="`${panel.pluginId}:${panel.id}`"
@@ -630,21 +653,10 @@ const emit = defineEmits<{
         </template>
       </div>
     </div>
-    <details class="settings-advanced-details">
-      <summary>网络与开发者选项</summary>
-      <NetworkProxySettingsSection
-        :proxy-mode="settings.proxyMode"
-        :proxy-host="settings.proxyHost"
-        :proxy-port="settings.proxyPort"
-        :proxy-allow-direct-fallback="settings.proxyAllowDirectFallback"
-        @update:proxy-mode="(value: ProxyMode) => void updateSettings({ proxyMode: value })"
-        @update:proxy-host="(value: string) => void updateSettings({ proxyHost: value })"
-        @update:proxy-port="(value: number) => void updateSettings({ proxyPort: value })"
-        @toggle:allow-direct-fallback="toggleSetting('proxyAllowDirectFallback')"
-      />
+    <details v-if="category === 'extensions'" class="settings-advanced-details">
+      <summary>开发者选项</summary>
 
       <div class="section-block">
-        <h3>开发者选项</h3>
         <div class="setting-list">
           <div class="setting-item">
             <div class="setting-copy">

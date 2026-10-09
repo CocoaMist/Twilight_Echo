@@ -166,6 +166,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="section-block">
+    <h3>社交与远程控制</h3>
     <div class="setting-list">
       <div class="setting-item">
         <div class="setting-copy">

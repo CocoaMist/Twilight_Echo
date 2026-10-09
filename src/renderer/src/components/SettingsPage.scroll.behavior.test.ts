@@ -54,7 +54,9 @@ test('settings categories preserve drafts, keyboard focus and search across resp
           load(id) {
             if (id.startsWith('\0settings-section:')) {
               const key = id.split(':')[1]
-              return `export default {inheritAttrs:false,setup(){return window.makeSettingsSection('${key}')}}`
+              return key === 'general'
+                ? `export default {inheritAttrs:false,props:['category'],setup(props){return window.makeSettingsSection(props.category)}}`
+                : `export default {inheritAttrs:false,setup(){return window.makeSettingsSection('${key}')}}`
             }
             if (id.startsWith('\0settings-store:')) {
               const key = id.split(':')[1]

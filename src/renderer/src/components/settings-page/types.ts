@@ -31,8 +31,18 @@ import type {
 import { DEFAULT_DESKTOP_LYRICS_SETTINGS } from '../../../../shared/desktopLyrics.ts'
 import type { AppFontFamily } from '../../../../shared/appFont.ts'
 
+export const GENERAL_SETTINGS_SECTIONS = [
+  'general',
+  'library',
+  'integrations',
+  'backup',
+  'extensions'
+] as const
+
+export type GeneralSettingsSectionKey = (typeof GENERAL_SETTINGS_SECTIONS)[number]
+
 export type SectionKey =
-  | 'general'
+  | GeneralSettingsSectionKey
   | 'playback'
   | 'dsp'
   | 'cache'
@@ -71,7 +81,13 @@ export const sectionGroups: {
         key: 'general',
         label: '常规',
         icon: 'pi pi-sliders-h',
-        description: '启动、媒体库和 Windows 集成。'
+        description: '启动、语言、窗口与操作习惯。'
+      },
+      {
+        key: 'library',
+        label: '媒体库',
+        icon: 'pi pi-folder',
+        description: '本地音乐文件夹、同步与下载。'
       },
       {
         key: 'playback',
@@ -92,10 +108,22 @@ export const sectionGroups: {
         description: '桌面悬浮与任务栏歌词的显示和样式。'
       },
       {
+        key: 'integrations',
+        label: '系统集成',
+        icon: 'pi pi-desktop',
+        description: 'Windows 媒体控制、听歌状态与远程控制。'
+      },
+      {
         key: 'shortcuts',
         label: '快捷键',
         icon: 'pi pi-key',
         description: '全局组合键与系统媒体键。'
+      },
+      {
+        key: 'backup',
+        label: '备份与恢复',
+        icon: 'pi pi-history',
+        description: '备份设置与个人数据，按需恢复默认。'
       },
       {
         key: 'about',
@@ -126,6 +154,12 @@ export const sectionGroups: {
         label: '性能',
         icon: 'pi pi-bolt',
         description: '硬件加速、窗口透明和资源使用。'
+      },
+      {
+        key: 'extensions',
+        label: '网络与插件',
+        icon: 'pi pi-globe',
+        description: '网络代理、插件选项与开发者模式。'
       }
     ]
   }
@@ -386,7 +420,11 @@ export interface SettingsSearchEntry {
 }
 
 const sectionTerms: Record<SectionKey, string> = {
-  general: '常规 设置 媒体库 启动 集成 网络',
+  general: '常规 设置 启动 语言 窗口 操作',
+  library: '媒体库 本地音乐 文件夹 同步 扫描 下载',
+  integrations: '系统集成 Windows 媒体控制 社交 远程 登录',
+  backup: '备份 恢复 迁移 导入 导出 重置',
+  extensions: '网络 插件 代理 开发者 扩展',
   playback: '播放 输出 引擎',
   dsp: 'DSP 处理器 音效',
   cache: '缓存 存储',
@@ -457,11 +495,11 @@ const searchPanels: Record<string, string> = {
 /** Built-in search entries and aliases. Plugin forms supply their own labels. */
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
   [
-    { section: 'general', title: '下载目录', terms: '下载 保存 文件夹' },
-    { section: 'general', title: '下载文件命名', terms: '文件名 歌手 标题 命名' },
-    { section: 'general', title: '内嵌歌曲信息与封面', terms: '下载 元数据 歌曲 标签 封面' },
-    { section: 'general', title: '同时保存歌词文件', terms: '下载 lrc 歌词' },
-    { section: 'general', title: '个人数据备份与迁移', terms: '备份 数据 歌单 收藏 转移' },
+    { section: 'library', title: '下载目录', terms: '下载 保存 文件夹' },
+    { section: 'library', title: '下载文件命名', terms: '文件名 歌手 标题 命名' },
+    { section: 'library', title: '内嵌歌曲信息与封面', terms: '下载 元数据 歌曲 标签 封面' },
+    { section: 'library', title: '同时保存歌词文件', terms: '下载 lrc 歌词' },
+    { section: 'backup', title: '个人数据备份与迁移', terms: '备份 数据 歌单 收藏 转移' },
     { section: 'general', title: '语言', terms: 'language 中文 English 系统' },
     { section: 'playback', title: '交叉淡入淡出', terms: '交叉淡化 crossfade 过渡 秒 曲线' },
     { section: 'playback', title: '削波保护', terms: 'clip guard 防破音' },
@@ -494,40 +532,52 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
     { section: 'dsp', title: 'SACD 声道版本', terms: 'SACD 立体声 多声道' },
     { section: 'dsp', title: '频谱分析（FFT）', terms: 'FFT 频谱 可视化' },
     { section: 'performance', title: '歌词页底部动态频谱', terms: '歌词 频谱 动画 性能' },
-    { section: 'general', title: '清空媒体库索引', terms: '重置库 重建 reset 清空索引' },
+    { section: 'library', title: '清空媒体库索引', terms: '重置库 重建 reset 清空索引' },
     // ── 常规 ──────────────────────────────────────────────
-    { section: 'general', title: '扫描文件夹', terms: '媒体库 文件夹 目录 扫描 添加 本地 音乐 库' },
-    { section: 'general', title: '流派分隔符', terms: 'genre separator 标签 分隔 元数据' },
+    { section: 'library', title: '扫描文件夹', terms: '媒体库 文件夹 目录 扫描 添加 本地 音乐 库' },
+    { section: 'library', title: '流派分隔符', terms: 'genre separator 标签 分隔 元数据' },
     {
-      section: 'general',
+      section: 'library',
       title: '实时监控文件夹变动',
       terms: 'watch 监控 文件夹 自动 同步 媒体库 监听'
     },
     {
-      section: 'general',
+      section: 'library',
       title: '在线补充缺失歌词',
       terms: '歌词 lyric 回退 provider LRCLIB 在线 搜索'
     },
-    { section: 'general', title: '媒体库监控状态', terms: 'watcher 状态 监控 监听 文件夹 降级' },
-    { section: 'general', title: '完整重扫', terms: 'rescan 重扫 扫描 元数据 封面 刷新 媒体库' },
-    { section: 'general', title: '启动时检查网易云登录', terms: '网易云 ncm 登录 检查 启动 账号' },
+    { section: 'library', title: '媒体库监控状态', terms: 'watcher 状态 监控 监听 文件夹 降级' },
+    { section: 'library', title: '完整重扫', terms: 'rescan 重扫 扫描 元数据 封面 刷新 媒体库' },
     {
-      section: 'general',
+      section: 'integrations',
+      title: '启动时检查网易云登录',
+      terms: '网易云 ncm 登录 检查 启动 账号'
+    },
+    {
+      section: 'integrations',
       title: '系统媒体控制（SMTC）',
       terms: 'smtc 媒体控制 系统 媒体键 集成 windows'
     },
     {
-      section: 'general',
+      section: 'integrations',
       title: '任务栏缩略图按钮',
       terms: '任务栏 taskbar 缩略图 thumbar 上一首 播放 暂停 下一首 windows'
     },
     {
-      section: 'general',
+      section: 'integrations',
       title: 'Discord 听歌状态',
       terms: 'discord 状态 展示 集成 社交 游戏'
     },
-    { section: 'general', title: '局域网远程控制', terms: '远程 遥控 局域网 手机 控制 投送 DLNA' },
-    { section: 'general', title: '配对 PIN / 访问地址', terms: 'pin 配对 访问 地址 远程 安全' },
+    {
+      section: 'integrations',
+      title: '局域网远程控制',
+      terms: '远程 遥控 局域网 手机 控制 投送 DLNA'
+    },
+    {
+      section: 'integrations',
+      title: '配对 PIN / 访问地址',
+      terms: 'pin 配对 访问 地址 远程 安全'
+    },
     { section: 'general', title: '歌曲列表播放方式', terms: '单击 双击 播放 列表 操作 习惯 激活' },
     { section: 'general', title: '启动后进入', terms: 'startup 主页 首页 启动 进入 本地 流媒体' },
     {
@@ -550,24 +600,24 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
       title: '欢迎向导',
       terms: '向导 欢迎 onboarding 首次 引导 任务栏 播放器形态'
     },
-    { section: 'general', title: '设置备份', terms: '备份 backup 导出 导入 恢复 设置' },
-    { section: 'general', title: '按分组恢复默认', terms: '恢复 默认 重置 reset 分组' },
+    { section: 'backup', title: '设置备份', terms: '备份 backup 导出 导入 恢复 设置' },
+    { section: 'backup', title: '按分组恢复默认', terms: '恢复 默认 重置 reset 分组' },
     {
-      section: 'general',
+      section: 'extensions',
       title: '插件设置',
       match: '插件设置',
       terms: '插件 plugin 面板 设置 扩展'
     },
     {
-      section: 'general',
+      section: 'extensions',
       title: '开发者模式',
       terms: '开发者 开发 模式 developer dev debug 调试 插件 目录 文件夹 未打包 unpacked 本地安装'
     },
-    { section: 'general', title: '代理模式', terms: '代理 proxy 模式 网络 系统 关闭' },
-    { section: 'general', title: '代理地址', terms: '代理 proxy 地址 host 服务器' },
-    { section: 'general', title: '代理端口', terms: '代理 proxy 端口 port' },
+    { section: 'extensions', title: '代理模式', terms: '代理 proxy 模式 网络 系统 关闭' },
+    { section: 'extensions', title: '代理地址', terms: '代理 proxy 地址 host 服务器' },
+    { section: 'extensions', title: '代理端口', terms: '代理 proxy 端口 port' },
     {
-      section: 'general',
+      section: 'extensions',
       title: '代理失败时允许直连',
       terms: '代理 proxy 直连 fallback 失败 回退'
     },

@@ -49,6 +49,12 @@ window.settingsScrollMocks = {
 window.api = { library: { getWatcherStatus: async () => null } }
 const expanded = ref(false)
 let searchPanel
+const splitSearchRows = {
+  library: '下载目录',
+  integrations: '系统媒体控制（SMTC）',
+  backup: '设置备份',
+  extensions: '代理模式'
+}
 window.makeSettingsSection = (key) => {
   const panelOpen = ref(false)
   const draftValues = ref({})
@@ -124,13 +130,15 @@ window.makeSettingsSection = (key) => {
                 h('div', { class: 'setting-copy' }, [
                   h(
                     'strong',
-                    key === 'performance' && index === 20
-                      ? '硬件加速'
-                      : key === 'playback' && index === 20
-                        ? '无缝播放 (Gapless Playback)'
-                        : key === 'playback' && index === 21
-                          ? '交叉淡入淡出'
-                          : `${key} 设置 ${index}`
+                    splitSearchRows[key] && index === 20
+                      ? splitSearchRows[key]
+                      : key === 'performance' && index === 20
+                        ? '硬件加速'
+                        : key === 'playback' && index === 20
+                          ? '无缝播放 (Gapless Playback)'
+                          : key === 'playback' && index === 21
+                            ? '交叉淡入淡出'
+                            : `${key} 设置 ${index}`
                   ),
                   h(
                     'span',
@@ -202,7 +210,7 @@ window.runSettingsScrollTests = async () => {
       'inactive controls remain visible/focusable'
     )
   }
-  expect(sections.length === 9, 'missing categories')
+  expect(sections.length === 13, 'missing categories')
   assertPanel('general')
   // Real Chromium hover must not make labels look selected or move nested controls.
   const hoverFixture = document.createElement('div')
@@ -283,11 +291,12 @@ window.runSettingsScrollTests = async () => {
       .map((button) => button.dataset.settingsCategory)
       .join(',')
   expect(
-    groupKeys(categoryGroups[0]) === 'general,playback,appearance,desktopLyrics,shortcuts,about',
+    groupKeys(categoryGroups[0]) ===
+      'general,library,playback,appearance,desktopLyrics,integrations,shortcuts,backup,about',
     'common preferences are mixed with advanced tuning'
   )
   expect(
-    groupKeys(categoryGroups[1]) === 'dsp,cache,performance',
+    groupKeys(categoryGroups[1]) === 'dsp,cache,performance,extensions',
     'advanced categories are missing'
   )
   const pickerGroups = [...page.querySelectorAll('.settings-category-select optgroup')]
@@ -316,7 +325,18 @@ window.runSettingsScrollTests = async () => {
         horizontalBounds(page.querySelector(selector))
       )
       const cardReference = horizontalBounds(visible()[0])
-      for (const category of ['关于', '外观', '音效', '缓存', '性能', '常规']) {
+      for (const category of [
+        '关于',
+        '媒体库',
+        '系统集成',
+        '备份与恢复',
+        '网络与插件',
+        '外观',
+        '音效',
+        '缓存',
+        '性能',
+        '常规'
+      ]) {
         nav(category).click()
         await settle()
         if (category === '关于')
@@ -372,8 +392,8 @@ window.runSettingsScrollTests = async () => {
   expect(document.activeElement === nav('关于'), 'keyboard cannot return to basic settings')
   nav('关于').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
   await settle()
-  assertPanel('performance')
-  nav('性能').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+  assertPanel('extensions')
+  nav('网络与插件').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
   await settle()
   assertPanel('general')
   // Slow startup must not undo a user's category choice.
@@ -399,13 +419,13 @@ window.runSettingsScrollTests = async () => {
   expect(selected('快捷键'), 'scrolling changed the category selection')
   nav('快捷键').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
   await settle()
-  assertPanel('desktopLyrics')
-  expect(document.activeElement === nav('桌面歌词'), 'arrow navigation lost focus')
+  assertPanel('integrations')
+  expect(document.activeElement === nav('系统集成'), 'arrow navigation lost focus')
   expect(
     page.querySelectorAll('.preview-nav-item[tabindex="0"]').length === 1,
     'navigation has multiple tab stops'
   )
-  nav('桌面歌词').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+  nav('系统集成').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
   await settle()
   assertPanel('general')
   expect(
@@ -444,6 +464,26 @@ window.runSettingsScrollTests = async () => {
     expect(
       rect.top >= frame.top + offset - 2 && rect.bottom <= frame.bottom + 2,
       'search target is obscured or offscreen'
+    )
+  }
+  for (const [key, title] of Object.entries(splitSearchRows)) {
+    await selectSearch(title)
+    assertPanel(key)
+    expect(
+      page.querySelector('.search-target-flash')?.textContent.includes(title),
+      'split category search missed its row: ' + key
+    )
+    assertTargetVisible()
+    const draft = page.querySelector('#' + key + ' input[aria-label="' + key + '-20"]')
+    draft.value = key + ' 未保存'
+    draft.dispatchEvent(new Event('input', { bubbles: true }))
+    nav('常规').click()
+    await settle()
+    await selectSearch(title)
+    expect(
+      page.querySelector('#' + key + ' input[aria-label="' + key + '-20"]').value ===
+        key + ' 未保存',
+      'split category lost its draft: ' + key
     )
   }
   for (const query of ['交叉淡化', 'crossfade']) {
@@ -527,6 +567,10 @@ window.runSettingsScrollTests = async () => {
   await settle()
   for (const category of [
     '常规',
+    '媒体库',
+    '系统集成',
+    '备份与恢复',
+    '网络与插件',
     '播放',
     '音效',
     '缓存',
