@@ -42,8 +42,13 @@ export function mountWorkshopDecorations(doc: Document): () => void {
     if (target?.nodeType !== 1) return
     let host: Element | null = target
     while (host) {
-      if (host.matches(selector))
-        (host as HTMLElement).style.setProperty('--te-workshop-scroll-y', target.scrollTop + 'px')
+      if (host.matches(selector)) {
+        const decoration = host.querySelector<HTMLElement>(':scope > .workshop-decoration')
+        const offset = target.scrollTop + 'px'
+        if (decoration && decoration.style.getPropertyValue('--te-workshop-scroll-y') !== offset) {
+          decoration.style.setProperty('--te-workshop-scroll-y', offset)
+        }
+      }
       host = host.parentElement
     }
   }

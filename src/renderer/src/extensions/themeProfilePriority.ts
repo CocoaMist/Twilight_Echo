@@ -24,6 +24,7 @@ export function applyExplicitThemePreferences(
       '--te-primary-rgb',
       '--te-glow-main',
       '--te-active-bg',
+      '--te-navigation-active',
       '--te-navigation-active-text',
       '--te-navigation-indicator',
       '--te-playback-accent'

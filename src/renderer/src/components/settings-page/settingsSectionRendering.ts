@@ -6,21 +6,27 @@ export function createSettingsSectionRendering(
   const sections = new Set(
     page.querySelectorAll<HTMLElement>('.settings-preview-stack > .preview-section')
   )
-  const heights = new WeakMap<Element, number>()
+  const sizes = new WeakMap<Element, { width: number; height: number }>()
   let finishFrame = 0
   const observer = new ResizeObserver((entries) => {
+    let layoutChanged = false
     for (const entry of entries) {
       const section = entry.target as HTMLElement
-      if (!sections.has(section) || heights.get(section) === entry.contentRect.height) continue
-      const height = entry.contentRect.height
-      heights.set(section, height)
+      const { width, height } = entry.contentRect
+      const previous = sizes.get(section)
+      if (previous?.width === width && previous.height === height) continue
+      sizes.set(section, { width, height })
+      layoutChanged = true
+      if (!sections.has(section) || previous?.height === height) continue
       // ResizeObserver supplies content-box sizes without a synchronous layout read.
       // Own the placeholder size: Chromium's remembered `auto` size can survive
       // a navigation measurement and restore stale geometry after a resize.
       section.style.setProperty('--settings-section-height', `${height}px`)
-      section.classList.add('settings-section-measured')
+      if (!section.classList.contains('settings-section-measured')) {
+        section.classList.add('settings-section-measured')
+      }
     }
-    onLayoutChange()
+    if (layoutChanged) onLayoutChange()
   })
   observer.observe(page)
   const layout = page.querySelector('.settings-preview-layout')

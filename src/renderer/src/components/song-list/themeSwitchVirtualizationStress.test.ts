@@ -46,7 +46,7 @@ test('10k SongList stays virtualized while all built-in themes switch during scr
 
         assert.equal(tracks, originalTracks)
         assert.ok(Object.keys(attributes).length > 0)
-        assert.ok(visibleTracks.length <= Math.ceil(VIEWPORT_HEIGHT / ROW_HEIGHT) + 6)
+        assert.ok(visibleTracks.length <= Math.ceil(VIEWPORT_HEIGHT / ROW_HEIGHT) + 12)
       }
     }
   }

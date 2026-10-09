@@ -46,21 +46,6 @@ export function useSongListVirtualScroll({
   viewportHeight: Ref<number>
 } {
   const containerRef = ref<HTMLElement | null>(null)
-  let layoutObserver: ResizeObserver | null = null
-  watch(
-    [containerRef, viewKey ?? computed(() => '')],
-    () => {
-      void nextTick(() => {
-        if (typeof ResizeObserver === 'undefined' || !containerRef.value) return
-        layoutObserver ??= new ResizeObserver(updateViewportHeight)
-        layoutObserver.disconnect()
-        layoutObserver.observe(containerRef.value)
-        if (containerRef.value.firstElementChild)
-          layoutObserver.observe(containerRef.value.firstElementChild)
-      })
-    },
-    { flush: 'post' }
-  )
   const tbodyRef = ref<HTMLElement | null>(null)
   const scrollTop = ref(viewKey ? (savedScrollPositions.get(viewKey.value) ?? 0) : 0)
   let restorePending = !!viewKey
@@ -98,10 +83,12 @@ export function useSongListVirtualScroll({
       viewportHeight.value = containerRef.value.clientHeight
     }
     if (containerRef.value && tbodyRef.value) {
+      const container = containerRef.value
       tableOffsetTop.value =
         tbodyRef.value.getBoundingClientRect().top -
-        containerRef.value.getBoundingClientRect().top +
-        containerRef.value.scrollTop
+        container.getBoundingClientRect().top +
+        container.scrollTop -
+        container.clientTop
     } else {
       tableOffsetTop.value = 0
     }
@@ -129,6 +116,7 @@ export function useSongListVirtualScroll({
     void nextTick(() => {
       updateViewportHeight()
       if (containerRef.value) containerRef.value.scrollTop = scrollTop.value
+      if (containerRef.value) scrollTop.value = containerRef.value.scrollTop
       restorePending = false
     })
   }
@@ -154,8 +142,25 @@ export function useSongListVirtualScroll({
     window.addEventListener('resize', updateViewportHeight)
   })
 
+  let resizeObserver: ResizeObserver | undefined
+  watch(
+    [containerRef, tbodyRef, viewKey ?? computed(() => '')],
+    () => {
+      void nextTick(() => {
+        resizeObserver?.disconnect()
+        if (typeof ResizeObserver === 'undefined' || !containerRef.value) return
+        resizeObserver = new ResizeObserver(updateViewportHeight)
+        resizeObserver.observe(containerRef.value)
+        if (tbodyRef.value) resizeObserver.observe(tbodyRef.value)
+        const view = containerRef.value.firstElementChild
+        if (view) resizeObserver.observe(view)
+      })
+    },
+    { flush: 'post' }
+  )
+
   onUnmounted(() => {
-    layoutObserver?.disconnect()
+    resizeObserver?.disconnect()
     savePosition()
     window.removeEventListener('resize', updateViewportHeight)
   })

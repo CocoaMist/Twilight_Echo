@@ -47,8 +47,11 @@ export function getSongListVirtualRange({
   overscanRows = 6
 }: SongListVirtualWindowInput): { start: number; end: number } {
   const virtualScrollTop = Math.max(0, scrollTop - tableOffsetTop)
-  const start = Math.floor(virtualScrollTop / rowHeight)
-  const count = Math.ceil(viewportHeight / rowHeight) + overscanRows
+  const count = Math.ceil(viewportHeight / rowHeight) + overscanRows * 2
+  const start = Math.min(
+    Math.max(0, trackCount - count),
+    Math.max(0, Math.floor(virtualScrollTop / rowHeight) - overscanRows)
+  )
   return {
     start: Math.max(0, start),
     end: Math.min(trackCount, start + count)

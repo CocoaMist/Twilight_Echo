@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   estimateGridColumns,
+  getSongListVirtualRange,
   getSongListGridScrollTopForIndex,
   getSongListGridVirtualRange,
   GRID_OVERSCAN_ROWS,
@@ -31,6 +32,22 @@ test('grid virtual window mounts only viewport + overscan cards', () => {
     assert.ok(mounted > 0)
     assert.equal(range.start % columns, 0)
   }
+})
+
+test('table window keeps rows above the viewport and clamps stale offsets after filtering', () => {
+  const input = {
+    trackCount: 4000,
+    scrollTop: 5000,
+    viewportHeight: 700,
+    tableOffsetTop: 300,
+    rowHeight: 68
+  }
+  const range = getSongListVirtualRange(input)
+  const firstVisible = Math.floor((input.scrollTop - input.tableOffsetTop) / input.rowHeight)
+  assert.equal(range.start, firstVisible - 6)
+  assert.ok(range.end > firstVisible + Math.ceil(input.viewportHeight / input.rowHeight))
+  assert.deepEqual(getSongListVirtualRange({ ...input, trackCount: 3 }), { start: 0, end: 3 })
+  assert.deepEqual(getSongListVirtualRange({ ...input, trackCount: 0 }), { start: 0, end: 0 })
 })
 
 test('A-Z jump scroll top lands the target index inside the window', () => {

@@ -834,6 +834,7 @@ function scrollPageToElement(
 }
 
 function finishProgrammaticScroll(): void {
+  if (programmaticScrollTimer === null && programmaticScrollUntil === 0) return
   if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
   programmaticScrollTimer = null
   programmaticScrollUntil = 0

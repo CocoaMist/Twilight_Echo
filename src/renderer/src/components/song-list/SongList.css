@@ -1125,6 +1125,12 @@
 .track-table thead tr {
   display: flex;
 }
+.track-table tbody {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow-anchor: none;
+}
 .track-table th {
   text-align: left;
   padding: 2px 14px 12px;
@@ -1147,6 +1153,7 @@
 }
 .track-row {
   position: relative;
+  flex-shrink: 0;
   cursor: pointer;
   transition:
     background 0.22s,
@@ -1214,6 +1221,7 @@
 
 .virtual-spacer {
   display: flex;
+  flex-shrink: 0;
   width: 100%;
   pointer-events: none;
 }

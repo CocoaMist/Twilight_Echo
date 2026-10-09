@@ -1024,7 +1024,8 @@ export function createThemeAccentTokenOverrides(
     'color.primary.rgb': rgb,
     'material.glowMain': `rgba(${rgb}, ${tone === 'dark' ? '0.2' : '0.14'})`,
     'surface.active': `rgba(${rgb}, ${tone === 'dark' ? '0.16' : '0.1'})`,
-    'navigation.activeText': primary,
+    'navigation.activeSurface': `rgba(${rgb}, ${tone === 'dark' ? '0.14' : '0.08'})`,
+    'navigation.activeText': tone === 'dark' ? primary300 : primary,
     'navigation.indicator': primary,
     'playback.accent': primary
   }
