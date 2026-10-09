@@ -71,7 +71,7 @@ async function setPluginTheme(event: Event): Promise<void> {
 </script>
 
 <template>
-  <div class="setting-item">
+  <div data-setting-id="theme-studio" id="setting-theme-studio" class="setting-item">
     <div class="setting-copy">
       <strong>主题创意工坊</strong>
     </div>
@@ -80,7 +80,7 @@ async function setPluginTheme(event: Event): Promise<void> {
       打开主题创意工坊
     </button>
   </div>
-  <div class="setting-item">
+  <div data-setting-id="theme-workshop" class="setting-item">
     <div class="setting-copy">
       <strong class="workshop-setting-title"
         >主题插件工坊<small class="workshop-beta-tag">BETA</small></strong
@@ -100,7 +100,7 @@ async function setPluginTheme(event: Event): Promise<void> {
     </button>
   </div>
   <hr />
-  <div class="setting-item">
+  <div data-setting-id="color-mode" id="setting-color-mode" class="setting-item">
     <div class="setting-copy">
       <strong>深浅色</strong>
     </div>
@@ -118,7 +118,7 @@ async function setPluginTheme(event: Event): Promise<void> {
     </div>
   </div>
   <hr />
-  <div class="setting-item">
+  <div data-setting-id="motion" id="setting-motion" class="setting-item">
     <div class="setting-copy">
       <strong>界面动画</strong>
     </div>
@@ -133,7 +133,7 @@ async function setPluginTheme(event: Event): Promise<void> {
     </select>
   </div>
   <hr />
-  <div class="setting-item">
+  <div data-setting-id="plugin-theme" id="setting-plugin-theme" class="setting-item">
     <div class="setting-copy">
       <strong>插件主题</strong>
     </div>
@@ -150,7 +150,7 @@ async function setPluginTheme(event: Event): Promise<void> {
     </select>
   </div>
   <hr />
-  <div class="setting-item">
+  <div data-setting-id="accent-light" id="setting-accent-light" class="setting-item">
     <div class="setting-copy">
       <strong>浅色强调色</strong>
       <span>浅色模式下设置、本地主页和主要控件使用的主题色。</span>
@@ -176,7 +176,7 @@ async function setPluginTheme(event: Event): Promise<void> {
     </div>
   </div>
   <hr />
-  <div class="setting-item">
+  <div data-setting-id="accent-dark" id="setting-accent-dark" class="setting-item">
     <div class="setting-copy">
       <strong>深色强调色</strong>
       <span>深色模式下复用同一组选项，可与浅色模式独立保存。</span>

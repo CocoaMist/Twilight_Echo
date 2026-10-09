@@ -381,7 +381,7 @@ const visualizationData = shallowRef<NativeVisualizationData>(createInactiveVisu
 // 读取 visualizationData 的已挂载组件数；为 0 时 60ms IPC 轮询不启动。
 const visualizationConsumers = ref(0)
 const visualizationDocumentVisible = ref(typeof document === 'undefined' || !document.hidden)
-const { settings: appSettings, updateSettings } = useSettingsStore()
+const { settings: appSettings, loaded: settingsLoaded, updateSettings } = useSettingsStore()
 const lyricsManagement = useLyricsManagement()
 let playbackAudio: HTMLAudioElement | null = null
 let playbackObjectUrl: string | null = null
@@ -1624,6 +1624,7 @@ async function advanceNativePlayback(direction: 'next' | 'previous'): Promise<vo
 }
 
 async function persistSoftwareVolume(val: number): Promise<void> {
+  if (!settingsLoaded.value) return
   const next = Math.min(
     clampSoftwareVolume(val),
     appSettings.value.audioDeviceProfiles.volumeCeiling
@@ -1640,17 +1641,24 @@ async function persistSoftwareVolume(val: number): Promise<void> {
 const softwareVolumePersistence = createDebouncedVolumePersistence(persistSoftwareVolume)
 
 function scheduleSoftwareVolumePersist(val: number): void {
-  if (!suppressVolumePersist) softwareVolumePersistence.schedule(val)
+  if (settingsLoaded.value && !suppressVolumePersist) softwareVolumePersistence.schedule(val)
 }
 
 async function flushSoftwareVolumePersist(): Promise<void> {
-  if (suppressVolumePersist) return
+  if (!settingsLoaded.value || suppressVolumePersist) return
   try {
     await softwareVolumePersistence.flush(volume.value)
   } catch (err) {
     console.error('[音频引擎] 保存软件音量失败:', err)
     throw err
   }
+}
+
+function syncSoftwareVolumeToEngine(): void {
+  // Engine ready can precede settings hydration. Its volume IPC also persists
+  // the value, so sending the temporary 70% default would overwrite the saved volume.
+  if (!settingsLoaded.value) return
+  window.api.audioEngine.setVolume(volume.value).catch(() => {})
 }
 
 watch(volume, (val) => {
@@ -1668,7 +1676,7 @@ watch(volume, (val) => {
   }
   if (playbackAudio) playbackAudio.volume = val
   rendererPauseFadeController.syncVolume()
-  window.api.audioEngine.setVolume(val).catch(() => {})
+  syncSoftwareVolumeToEngine()
   if (castTargetName.value) {
     void window.api.remote?.controlCast?.({ volume: val }).catch(() => {})
   }
@@ -2652,7 +2660,7 @@ function setupAudioEngineListeners(): void {
       } else {
         setAudioEngineError(null)
       }
-      api.setVolume(volume.value).catch(() => {})
+      syncSoftwareVolumeToEngine()
       api.setPlaybackRate(playbackRate.value).catch(() => {})
       await refreshAudioOutputState()
       try {
@@ -3440,11 +3448,15 @@ function setupPlayerIntegrationSideEffects(): void {
   })
 
   watch(
-    () => appSettings.value.softwareVolume,
-    (savedVolume) => {
+    [settingsLoaded, () => appSettings.value.softwareVolume],
+    ([loaded, savedVolume]) => {
+      if (!loaded) return
       if (typeof savedVolume !== 'number' || !Number.isFinite(savedVolume)) return
       const next = clampSoftwareVolume(savedVolume)
-      if (Math.abs(next - volume.value) < 0.0005) return
+      if (Math.abs(next - volume.value) < 0.0005) {
+        syncSoftwareVolumeToEngine()
+        return
+      }
       suppressVolumePersist = true
       volume.value = next
       if (next > 0) lastAudibleVolume.value = next
@@ -3452,7 +3464,7 @@ function setupPlayerIntegrationSideEffects(): void {
         suppressVolumePersist = false
       })
     },
-    { immediate: true }
+    { immediate: true, flush: 'sync' }
   )
 
   watch(

@@ -22,11 +22,10 @@ int main(int argc,char** argv) {
     const auto outgoing=read(argv[3]),incoming=read(argv[4]);
     const double outDuration=std::stod(argv[1]),inDuration=std::stod(argv[2]);
     const auto pool=twilight::automix::generateCandidates(config,outDuration,inDuration,outgoing,incoming);
-    std::vector<am_score_result> scores(pool.candidates.size());
-    TAE_AM_SelectionV1 choice{sizeof choice,TAE_AM_ABI_VERSION};
-    if(pool.candidates.empty()||TAE_AM_Select(pool.candidates.data(),pool.candidates.size(),0,1,scores.data(),&choice)!=TAE_AM_OK||!choice.has_chosen)throw std::runtime_error("no_chosen_candidate");
-    const auto& candidate=pool.candidates[choice.chosen_index];
-    std::cout<<std::setprecision(15)<<"{\"candidateCount\":"<<pool.candidates.size()<<",\"styleId\":"<<candidate.scoring.style_id
+    const auto chosen=twilight::automix::selectCandidate(pool,0);const auto& quality=pool.quality[chosen];
+    const auto candidate=twilight::automix::candidateForRendering(pool,chosen);
+    std::cout<<std::setprecision(15)<<"{\"reason\":\""<<(quality.reason?quality.reason:pool.reason.c_str())<<"\",\"mixTier\":"<<quality.tier
+      <<",\"estimatedOverlapSeconds\":"<<quality.estimatedOverlapSeconds<<",\"tempoRatio\":"<<quality.tempoRatio<<",\"candidateCount\":"<<pool.candidates.size()<<",\"scoringStyleId\":"<<pool.candidates[chosen].scoring.style_id<<",\"styleId\":"<<candidate.scoring.style_id
       <<",\"outgoingStart\":"<<candidate.outgoing_start<<",\"outgoingEnd\":"<<candidate.scoring.outgoing_end
       <<",\"incomingStart\":"<<candidate.incoming_start<<",\"incomingEnd\":"<<candidate.scoring.incoming_end;
     if(argc==7) {
@@ -34,11 +33,10 @@ int main(int argc,char** argv) {
       if(std::string(argv[5])!="--benchmark"||iterations<1000||iterations>100000)throw std::runtime_error("invalid_benchmark_iterations");
       const auto plan=[&](uint64_t seed) {
         const auto candidates=twilight::automix::generateCandidates(config,outDuration,inDuration,outgoing,incoming);
-        std::vector<am_score_result> values(candidates.candidates.size());
-        TAE_AM_SelectionV1 selected{sizeof selected,TAE_AM_ABI_VERSION};
-        if(TAE_AM_Select(candidates.candidates.data(),candidates.candidates.size(),seed,1,values.data(),&selected)!=TAE_AM_OK||!selected.has_chosen)throw std::runtime_error("benchmark_selection_failed");
+        const auto selected=twilight::automix::selectCandidate(candidates,seed);
         TAE_AM_Plan compiled{};
-        if(TAE_AM_Compile(&config,&candidates.candidates[selected.chosen_index],&compiled)!=TAE_AM_OK)throw std::runtime_error("benchmark_compile_failed");
+        const auto render=twilight::automix::candidateForRendering(candidates,selected);
+        if(TAE_AM_Compile(&config,&render,&compiled)!=TAE_AM_OK)throw std::runtime_error("benchmark_compile_failed");
         TAE_AM_DestroyPlan(compiled);
       };
       for(int i=0;i<20;++i)plan(i);

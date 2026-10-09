@@ -18,7 +18,7 @@ function setRendering(fontRendering: AppFontRendering): void {
 </script>
 
 <template>
-  <div class="setting-item">
+  <div data-setting-id="font-rendering" id="setting-font-rendering" class="setting-item">
     <div class="setting-copy">
       <strong id="font-rendering-label">文字渲染</strong>
       <span id="font-rendering-description">

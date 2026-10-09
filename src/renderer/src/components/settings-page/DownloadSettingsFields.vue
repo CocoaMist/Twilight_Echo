@@ -14,7 +14,7 @@ const preview = computed(
 
 <template>
   <div class="download-options">
-    <div class="setting-item">
+    <div data-setting-id="download-naming" id="setting-download-naming" class="setting-item">
       <div class="setting-copy">
         <strong>下载文件命名</strong><span>{{ preview }}.m4a</span>
       </div>
@@ -37,7 +37,7 @@ const preview = computed(
         <option value="title">歌曲名</option>
       </select>
     </div>
-    <div class="setting-item">
+    <div data-setting-id="download-metadata" id="setting-download-metadata" class="setting-item">
       <div class="setting-copy">
         <strong>内嵌歌曲信息与封面</strong><span>保留已有封面，补充标题、歌手、专辑和可用歌词</span>
       </div>
@@ -58,7 +58,7 @@ const preview = computed(
         "
       />
     </div>
-    <div class="setting-item">
+    <div data-setting-id="download-lyrics" id="setting-download-lyrics" class="setting-item">
       <div class="setting-copy">
         <strong>同时保存歌词文件</strong><span>与歌曲同名；音源有逐字歌词时一并保留</span>
       </div>

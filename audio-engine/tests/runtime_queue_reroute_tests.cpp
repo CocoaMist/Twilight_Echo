@@ -1387,6 +1387,7 @@ TrackProfile buildTrackProfile(const std::string& source) {
     profile.totalFrames = 20 * profile.defaultOutput.sampleRate;
     profile.stream.durationSeconds = 20;
     profile.sampleValue = source.find("incoming") != std::string::npos ? .75f : .25f;
+    if(source.find("automix-silent-")!=std::string::npos)profile.sampleValue=0;
   }
   if (source.find("typed-gapless-") != std::string::npos) {
     if (source.find("-s16-") != std::string::npos) {
@@ -4005,7 +4006,7 @@ void testAutoMixPreparedPromotionAndCancellation() {
   out.id="out";out.source="automix-outgoing.flac";out.durationSeconds=20;
   in.id="in";in.source="automix-incoming.flac";in.durationSeconds=20;
   std::string error;
-  assert(pipeline.play(out,in,15,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
+  assert(pipeline.play(out,in,13,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
   auto backend=waitForLatestStartedBackendState();assert(backend);
   const bool ready=waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");});
   if(!ready)std::cerr<<pipeline.autoMixStatusJson()<<std::endl;
@@ -4023,7 +4024,7 @@ void testAutoMixPreparedPromotionAndCancellation() {
     mixed=mixed||jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"mixing\"");
     assert(std::all_of(samples.begin(),samples.end(),[](float x){return std::isfinite(x)&&std::abs(x)<=1;}));
     promoted=status.currentItem.id==in.id;
-    if(promoted)assert(status.positionSeconds>=2&&status.positionSeconds<2.05);
+    if(promoted)assert(status.positionSeconds>=4&&status.positionSeconds<4.05);
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   assert(mixed&&promoted);
@@ -4031,7 +4032,7 @@ void testAutoMixPreparedPromotionAndCancellation() {
   assert(!pipeline.consumeTrackStarted(&started));
   pipeline.stop();
   // A manual Next adopts the incoming source clock during the audible overlap.
-  assert(pipeline.play(out,in,15,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
+  assert(pipeline.play(out,in,13,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
   backend=waitForLatestStartedBackendState();
   assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
   for(size_t i=0;i<400&&!jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"mixing\"");++i) {
@@ -4060,7 +4061,7 @@ void testAutoMixPreparedPromotionAndCancellation() {
   assert(!pipeline.consumeTrackStarted(&started)||started.id==in.id);
   assert(!pipeline.consumeTrackStarted(&started));
   pipeline.stop();
-  assert(pipeline.play(out,in,15,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
+  assert(pipeline.play(out,in,13,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
   backend=waitForLatestStartedBackendState();
   assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
   pipeline.setLoopRange(0,19);
@@ -4090,10 +4091,12 @@ void testAutoMixPreparedPromotionAndCancellation() {
   // AutoMix owns processed PCM preloading even with saved bit-perfect-first
   // and gapless=false. The incoming file has a different source rate/format.
   in.source="automix-incoming-48k.flac";
-  assert(pipeline.play(out,in,15,"wasapi-exclusive","auto",1,"{\"gapless\":false}",false,&error)==TAE_RESULT_OK);
+  assert(pipeline.play(out,in,13,"wasapi-exclusive","auto",1,"{\"gapless\":false}",false,&error)==TAE_RESULT_OK);
   backend=waitForLatestStartedBackendState();
   pipeline.setDspConfig("{\"gapless\":false}");
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
+  const bool formatReady=waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");});
+  if(!formatReady)std::cerr<<pipeline.autoMixStatusJson()<<std::endl;
+  assert(formatReady);
   bool formatMixed=false;
   for(size_t i=0;i<600&&pipeline.status().currentItem.id!=in.id;++i) {
     renderBackendFrames(backend,1024);
@@ -4105,18 +4108,20 @@ void testAutoMixPreparedPromotionAndCancellation() {
   pipeline.stop();
 }
 
-std::string autoMixTestFeatures(bool outgoing) {
+std::string autoMixTestFeatures(bool outgoing,double bpm=120) {
   std::ostringstream json;
-  json << "{\"schemaVersion\":1,\"analysisVersion\":3,\"available\":true,\"durationSeconds\":20,"
+  json << "{\"schemaVersion\":1,\"analysisVersion\":4,\"available\":true,\"durationSeconds\":20,"
     "\"provenance\":\"independent-beat-this-yamnet-v1\",\"modelHashes\":{"
     "\"beatThis\":\"10b8a43f58ec08dec4cf3c0df3ae4c62b8c51b4d96449c318af7f2aa76dc574f\","
     "\"yamnet\":\"564a1406a3173634aedc049863403e581c1fabf2b0e2c22515d924d3ffb160e5\"},\"windows\":{\""
     << (outgoing ? "tail" : "head") << "\":{\"sourceStart\":0,\"sourceEnd\":20,\"beatKnown\":true,"
-    "\"vocalKnown\":true,\"energyHopSeconds\":0.02,\"energyDbfs\":[-20],\"key\":null,\"phraseBoundaries\":null,\"beats\":[";
-  for(int i=0;i<=40;++i) {if(i)json<<',';json<<i*.5;}
+    "\"vocalKnown\":true,\"energyHopSeconds\":0.02,\"energyDbfs\":[";
+  for(int i=0;i<1000;++i){if(i)json<<',';json<<-20;}
+  json<<"],\"key\":null,\"phraseBoundaries\":null,\"beats\":[";
+  for(int i=0;i<=static_cast<int>(20*bpm/60);++i) {if(i)json<<',';json<<i*60/bpm;}
   json<<"],\"downbeats\":[";
-  for(int i=0;i<=10;++i) {if(i)json<<',';json<<i*2;}
-  json<<"],\"stableRegions\":[{\"start\":0,\"end\":20,\"bpm\":120,\"confidence\":1}],"
+  for(int i=0;i<=static_cast<int>(20*bpm/240);++i) {if(i)json<<',';json<<i*240/bpm;}
+  json<<"],\"stableRegions\":[{\"start\":0,\"end\":20,\"bpm\":"<<bpm<<",\"confidence\":1}],"
     "\"vocalWindows\":[{\"start\":0,\"end\":20,\"probability\":0}]}}}";
   return json.str();
 }
@@ -4156,9 +4161,15 @@ void testAutoMixReplacementRetainsFallbackAndRejectsStaleWorkers() {
     g_autoMixTailSeekRelease=true;
     const char* expected=mode==0 ? "intelligent_prepare_failed_conservative" :
       mode==1 ? "intelligent_prepare_late_conservative" :
-      mode==2 ? "analysis_unavailable_conservative_crossfade" : "independent_confident_beat_regions";
-    assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),expected);}));
-    assert(playbackJsonNumber(pipeline.autoMixStatusJson(),"styleId")== (mode==3?8:1));
+      mode==2 ? "analysis_unavailable_conservative_crossfade" : "independent_beat_tempo_mix";
+    const bool replaced=waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),expected);},6000);
+    if(!replaced)std::cerr<<"replacement mode="<<mode<<" "<<pipeline.autoMixStatusJson()<<std::endl;
+    assert(replaced);
+    assert(playbackJsonNumber(pipeline.autoMixStatusJson(),"styleId")== (mode==3?7:1));
+    if(mode==3) {
+      assert(jsonContains(pipeline.autoMixStatusJson(),"\"mixKind\":\"beat_mix\""));
+      assert(playbackJsonNumber(pipeline.autoMixStatusJson(),"audibleOverlapSeconds")>=2);
+    }
     if(mode==2) {
       assert(!pipeline.setAutoMixFeatures(message,&error));assert(error=="stale_feature_pair");
     } else if(mode<2) {
@@ -4172,9 +4183,48 @@ void testAutoMixReplacementRetainsFallbackAndRejectsStaleWorkers() {
       assert(mixed&&pipeline.status().currentItem.id==in.id);
       assert(pipeline.status().positionSeconds>=2);
     }
-    pipeline.stop();
+    pipeline.stop();g_autoMixTailSeekFail=false;
   }
   g_autoMixTailSeekGate=false;g_autoMixTailSeekFail=false;
+}
+
+void testAutoMixSilenceBoundaryPromotion() {
+  EngineHarness harness;
+  AudioPipeline pipeline;
+  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;config.max_transition_seconds=2;
+  pipeline.setAutoMixConfig(config);
+  QueueItem out,in;out.id="out";out.source="automix-outgoing.flac";out.durationSeconds=20;
+  in.id="in";in.source="automix-incoming.flac";in.durationSeconds=20;
+  std::string error;
+  assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
+  const auto backend=waitForLatestStartedBackendState();assert(backend);
+  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
+  const auto features=[](bool outgoing) {
+    auto text=autoMixTestFeatures(outgoing);
+    std::ostringstream energy;energy<<"\"energyDbfs\":[";
+    for(int i=0;i<1000;++i) {if(i)energy<<',';energy<<(outgoing?(i>=900?-120:-20):(i<50?-120:-20));}
+    energy<<']';const auto at=text.find("\"energyDbfs\":["),end=text.find(']',at);assert(at!=std::string::npos);
+    text.replace(at,end-at+1,energy.str());return text;
+  };
+  const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
+  const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+
+      ",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-outgoing.flac\",\"features\":"+features(true)+
+      "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-incoming.flac\",\"features\":"+features(false)+"}}";
+  assert(pipeline.setAutoMixFeatures(message,&error));
+  assert(waitUntil([&]{return playbackJsonNumber(pipeline.autoMixStatusJson(),"styleId")==5;}));
+  bool mixed=false;double outgoingPosition=0;
+  for(int i=0;i<1000&&pipeline.status().currentItem.id==out.id;++i) {
+    outgoingPosition=pipeline.status().positionSeconds;
+    renderBackendFrames(backend,1024);
+    mixed=mixed||jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"mixing\"");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  const auto status=pipeline.status();
+  assert(mixed&&status.currentItem.id==in.id&&outgoingPosition<18.15);
+  assert(status.positionSeconds>=2.9-1./44100&&status.positionSeconds<3.1);
+  QueueItem started;assert(pipeline.consumeTrackStarted(&started)&&started.id==in.id);
+  assert(!pipeline.consumeTrackStarted(&started));
+  pipeline.stop();
 }
 
 void testAutoMixRefreshedPreparationKeepsLogicalQueueSources() {
@@ -4192,13 +4242,74 @@ void testAutoMixRefreshedPreparationKeepsLogicalQueueSources() {
     "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-incoming.flac\",\"preparationSource\":\"automix-incoming-refreshed.flac\",\"features\":"+autoMixTestFeatures(false)+"}}";
   g_autoMixOriginalSourcesExpired=true;
   assert(pipeline.setAutoMixFeatures(message,&error));
-  assert(waitUntil([&]{return playbackJsonNumber(pipeline.autoMixStatusJson(),"styleId")==8;}));
+  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"mixKind\":\"beat_mix\"");},6000));
   for(size_t i=0;i<1000&&pipeline.status().currentItem.id!=in.id;++i) {
     renderBackendFrames(backend,1024);std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   const auto status=pipeline.status();assert(status.currentItem.id==in.id);
   assert(status.currentItem.source==in.source&&status.stream.source==in.source&&status.positionSeconds>=2);
   pipeline.stop();g_autoMixOriginalSourcesExpired=false;
+}
+
+void testAutoMixTempoMixSourceClocksAndPromotion() {
+  EngineHarness harness;AudioPipeline pipeline;std::string error;
+  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;
+  pipeline.setAutoMixConfig(config);
+  QueueItem out,in;out.id="out";out.source="automix-tone-outgoing.flac";
+  in.id="in";in.source="automix-tone-incoming.flac";
+  assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
+  const auto backend=waitForLatestStartedBackendState();assert(backend);
+  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
+  const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
+  const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+
+    ",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-tone-outgoing.flac\",\"features\":"+autoMixTestFeatures(true)+
+    "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-tone-incoming.flac\",\"features\":"+autoMixTestFeatures(false,126)+"}}";
+  assert(pipeline.setAutoMixFeatures(message,&error));
+  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"mixKind\":\"beat_mix\"");},6000));
+  const auto ready=pipeline.autoMixStatusJson();
+  const double resume=playbackJsonNumber(ready,"incomingResumeSeconds");
+  assert(playbackJsonNumber(ready,"audibleOverlapSeconds")>=2&&playbackJsonNumber(ready,"tempoAdjustmentPercent")>=4.9);
+  bool mixed=false;
+  for(int n=0;n<1100&&pipeline.status().currentItem.id!=in.id;++n) {
+    const auto samples=renderBackendFrames(backend,1024);
+    assert(std::all_of(samples.begin(),samples.end(),[](float x){return std::isfinite(x);}));
+    const auto status=pipeline.status();const auto json=pipeline.autoMixStatusJson();
+    if(status.currentItem.id==out.id&&jsonContains(json,"\"state\":\"mixing\"")) {
+      mixed=true;constexpr double q=1.05;
+      const double h=playbackJsonNumber(json,"transitionSeconds"),t=h*playbackJsonNumber(json,"progress");
+      const double lo=h*(q-1)/std::log(q);
+      const double expected=20-lo+lo*std::expm1((q-1)*t/lo)/(q-1);
+      assert(std::abs(status.positionSeconds-expected)<.0002);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  assert(mixed&&pipeline.status().currentItem.id==in.id);
+  assert(std::abs(pipeline.status().positionSeconds-resume)<.025);
+  QueueItem started;assert(pipeline.consumeTrackStarted(&started)&&started.id==in.id);
+  assert(!pipeline.consumeTrackStarted(&started));
+  renderBackendFrames(backend,4410);
+  assert(pipeline.status().positionSeconds>=resume+.09);
+  pipeline.stop();
+}
+
+void testAutoMixPreparedEvidenceCannotPromoteSilentMusic() {
+  EngineHarness harness;AudioPipeline pipeline;std::string error;
+  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;pipeline.setAutoMixConfig(config);
+  QueueItem out,in;out.id="out";out.source="automix-tone-outgoing.flac";
+  in.id="in";in.source="automix-silent-incoming.flac";
+  assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
+  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");},6000));
+  const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
+  const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+
+    ",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-tone-outgoing.flac\",\"features\":"+autoMixTestFeatures(true)+
+    "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-silent-incoming.flac\",\"features\":"+autoMixTestFeatures(false)+"}}";
+  // Deliberately inconsistent analysis must be caught by actual prepared PCM.
+  assert(pipeline.setAutoMixFeatures(message,&error));
+  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"intelligent_prepare_failed_conservative");},6000));
+  const auto status=pipeline.autoMixStatusJson();
+  assert(jsonContains(status,"\"mixKind\":\"conservative\""));
+  assert(playbackJsonNumber(status,"audibleOverlapSeconds")==0);
+  pipeline.stop();
 }
 
 void testNativeCrossfadeOverlapMixesPreloadAndPromotes(bool equalPower = false) {
@@ -4835,6 +4946,8 @@ size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* 
   for (size_t frame = 0; frame < read; ++frame) {
     for (size_t channel = 0; channel < channels; ++channel) {
       output[frame * channels + channel] = impl_->profile.sampleValue;
+      if(impl_->profile.stream.source.find("automix-tone-")!=std::string::npos)
+        output[frame*channels+channel]=static_cast<float>(.1*std::sin(2*3.141592653589793*1800*(impl_->positionFrames+frame)/impl_->outputFormat.sampleRate));
       if (impl_->profile.stream.source.find("typed-gapless-") != std::string::npos) {
         writeTypedGaplessSample(impl_->profile.stream.source, impl_->outputFormat.sampleFormat,
             impl_->positionFrames + frame, channel,
@@ -4885,10 +4998,12 @@ bool FFmpegDecoder::seek(double seconds, std::string* error) {
       (impl_->profile.stream.source=="automix-outgoing.flac"||impl_->profile.stream.source=="automix-incoming.flac")) {
     if(error)*error="injected_expired_source";return false;
   }
-  if(seconds>16&&impl_->profile.stream.source=="automix-outgoing.flac"&&g_autoMixTailSeekGate.exchange(false)) {
+  if(seconds>0&&impl_->profile.stream.source=="automix-outgoing.flac"&&g_autoMixTailSeekGate.exchange(false)) {
     g_autoMixTailSeekEntered.store(true,std::memory_order_release);
     while(!g_autoMixTailSeekRelease.load(std::memory_order_acquire))std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    if(g_autoMixTailSeekFail.load()) {if(error)*error="injected_tail_seek_failure";return false;}
+  }
+  if(seconds>0&&impl_->profile.stream.source=="automix-outgoing.flac"&&g_autoMixTailSeekFail.load()) {
+    if(error)*error="injected_tail_seek_failure";return false;
   }
   const double clamped = std::max(0.0, seconds);
   {
@@ -4946,7 +5061,10 @@ int main() {
     RUN_RUNTIME_CASE(testAutoMixManualAcceptanceControls());
     RUN_RUNTIME_CASE(testAutoMixPreparedPromotionAndCancellation());
     RUN_RUNTIME_CASE(testAutoMixReplacementRetainsFallbackAndRejectsStaleWorkers());
+    RUN_RUNTIME_CASE(testAutoMixSilenceBoundaryPromotion());
     RUN_RUNTIME_CASE(testAutoMixRefreshedPreparationKeepsLogicalQueueSources());
+    RUN_RUNTIME_CASE(testAutoMixTempoMixSourceClocksAndPromotion());
+    RUN_RUNTIME_CASE(testAutoMixPreparedEvidenceCannotPromoteSilentMusic());
     return 0;
   }
   RUN_RUNTIME_CASE(testFixedSpscQueuePreservesFifoAndReportsFull());
@@ -5073,7 +5191,10 @@ int main() {
   RUN_RUNTIME_CASE(testNativeCrossfadeOverlapMixesPreloadAndPromotes());
   RUN_RUNTIME_CASE(testAutoMixPreparedPromotionAndCancellation());
   RUN_RUNTIME_CASE(testAutoMixReplacementRetainsFallbackAndRejectsStaleWorkers());
+  RUN_RUNTIME_CASE(testAutoMixSilenceBoundaryPromotion());
   RUN_RUNTIME_CASE(testAutoMixRefreshedPreparationKeepsLogicalQueueSources());
+  RUN_RUNTIME_CASE(testAutoMixTempoMixSourceClocksAndPromotion());
+  RUN_RUNTIME_CASE(testAutoMixPreparedEvidenceCannotPromoteSilentMusic());
   RUN_RUNTIME_CASE(testCrossfadeDiscontinuitiesRestartPreloadAtItsBeginning());
   RUN_RUNTIME_CASE(testPreloadedPromotionKeepsRuntimeReplayGainSettings());
   RUN_RUNTIME_CASE(testGaplessBlockedReasonReportsCrossfadeAndDisabled());

@@ -1537,6 +1537,9 @@ struct AudioPipeline::DecodeStreamReaper {
 struct AudioPipeline::AutoMixTransition {
   TAE_AM_Prepared prepared = nullptr;
   TAE_AM_PreparedInfoV1 info{sizeof(TAE_AM_PreparedInfoV1), TAE_AM_ABI_VERSION};
+  TAE_AM_MixEvidenceV1 mixEvidence{sizeof(TAE_AM_MixEvidenceV1),TAE_AM_ABI_VERSION};
+  unsigned mixTier=0;
+  double tempoRatio=1;
   std::shared_ptr<DecodeStream> resume;
   DecodeStream* outgoing = nullptr;
   DecodeStream* incoming = nullptr;

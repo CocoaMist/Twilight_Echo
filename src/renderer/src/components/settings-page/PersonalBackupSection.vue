@@ -92,7 +92,7 @@ function restore() {
 }
 </script>
 <template>
-  <div class="personal-backup">
+  <div data-setting-id="personal-backup" id="setting-personal-backup" class="personal-backup">
     <strong>个人数据备份与迁移</strong>
     <p>
       包含曲库索引、歌单收藏、队列、歌词编辑、书签、统计、版本关系、电台和播客。音频文件、账号登录和插件不随备份迁移；设置可通过上方单独导出。
@@ -187,7 +187,17 @@ function restore() {
 </template>
 <style scoped>
 .personal-backup {
-  padding: 16px 0;
+  padding: 14px 16px;
+}
+.personal-backup > strong {
+  color: var(--te-settings-text);
+  font-size: calc(var(--te-font-size-body, 14px) * 15 / 14);
+  font-weight: 500;
+}
+.personal-backup > p {
+  color: var(--te-settings-text-muted);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+  opacity: 1;
 }
 p {
   font-size: 13px;
@@ -208,7 +218,7 @@ select {
 .restore-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1700;
+  z-index: 2200;
   background: var(--te-dialog-backdrop);
   display: grid;
   place-items: center;

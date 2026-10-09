@@ -26,15 +26,15 @@ void eventsJson(std::ostream& json,const std::vector<double>& times,double offse
   json<<'[';for(size_t i=0;i<times.size();++i) {if(i)json<<',';json<<times[i]+offset;}json<<']';
 }
 #if defined(TAE_HAS_FFMPEG)
-std::vector<float> decode(FFmpegDecoder& decoder,double start,double seconds,unsigned rate) {
-  std::string error;AudioFormat format;format.sampleRate=rate;format.channelCount=1;format.bitDepth=32;format.sampleFormat=AudioSampleFormat::Float32Interleaved;
+std::vector<float> decode(FFmpegDecoder& decoder,double start,double seconds,unsigned rate,unsigned channels=1) {
+  std::string error;AudioFormat format;format.sampleRate=rate;format.channelCount=channels;format.bitDepth=32;format.sampleFormat=AudioSampleFormat::Float32Interleaved;
   if(!decoder.setOutputFormat(format,&error)||!decoder.seekOutputFrame(static_cast<uint64_t>(std::floor(start*rate)),&error)) throw std::runtime_error(error.empty()?"AutoMix source is not seekable":error);
-  const auto count=static_cast<size_t>(std::floor(seconds*rate));std::vector<float> pcm(count);size_t used=0;
+  const auto count=static_cast<size_t>(std::floor(seconds*rate));std::vector<float> pcm(count*channels);size_t used=0;
   while(used<count&&!decoder.eof()) {
-    const auto read=decoder.readFrames(pcm.data()+used,std::min<size_t>(4096,count-used),&error);
+    const auto read=decoder.readFrames(pcm.data()+used*channels,std::min<size_t>(4096,count-used),&error);
     if(!error.empty()) throw std::runtime_error(error);if(!read)break;used+=read;
   }
-  pcm.resize(used);
+  pcm.resize(used*channels);
   if(!std::all_of(pcm.begin(),pcm.end(),[](float x){return std::isfinite(x);}))throw std::runtime_error("AutoMix decoded non-finite PCM");return pcm;
 }
 twilight::automix::ModelRuntime* models(const std::string& path,std::string& error) {
@@ -46,14 +46,18 @@ twilight::automix::ModelRuntime* models(const std::string& path,std::string& err
 }
 std::string windowJson(FFmpegDecoder& decoder,double start,double duration,twilight::automix::ModelRuntime* runtime,const std::string& modelError) {
   const auto pcm=decode(decoder,start,duration,22050);if(pcm.empty())throw std::runtime_error("AutoMix analysis window is empty");
+  const auto sourceFormat=decoder.streamInfo().sourceFormat;
+  if(sourceFormat.channelCount<1||sourceFormat.channelCount>2||sourceFormat.sampleRate<44100||sourceFormat.sampleRate>192000||sourceFormat.sampleRate%50)
+    throw std::runtime_error("unsupported_energy_format");
+  // Silence decisions use full-band source PCM, including both source channels.
+  // The model's mono/downsampled input cannot prove that content is absent.
+  const auto energy=twilight::automix::regionalEnergyDbfs(
+      decode(decoder,start,duration,sourceFormat.sampleRate,sourceFormat.channelCount),sourceFormat.channelCount,sourceFormat.sampleRate);
   std::ostringstream json;json<<std::setprecision(12)<<"{\"sourceStart\":"<<start<<",\"sourceEnd\":"<<start+double(pcm.size())/22050;
   // Independent regional mean-square energy in 20ms cells. This is dBFS,
   // never whole-track LUFS and never Apple's native loudness_map calibration.
   json<<",\"energyDbfs\":[";
-  for(size_t first=0;first<pcm.size();first+=441) {
-    const auto end=std::min(pcm.size(),first+441);double energy=0;for(size_t i=first;i<end;++i)energy+=double(pcm[i])*pcm[i];
-    if(first)json<<',';json<<std::max(-120.,10*std::log10(std::max(1e-12,energy/(end-first))));
-  }
+  for(size_t i=0;i<energy.size();++i) {if(i)json<<',';json<<energy[i];}
   json<<"],\"energyHopSeconds\":0.02,\"key\":null,\"phraseBoundaries\":null";
   twilight::automix::BeatEvents events;std::string beatError=modelError;
   if(runtime) try {auto mel=twilight::automix::beatThisFrontend(pcm);events=runtime->beats(mel);beatError.clear();}catch(const std::exception& e){beatError=e.what();}

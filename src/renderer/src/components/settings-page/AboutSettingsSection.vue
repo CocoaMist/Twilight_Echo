@@ -163,14 +163,13 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
 </script>
 
 <template>
-  <section id="about" class="glass-card preview-section about-section">
-    <div class="about-glow" aria-hidden="true"></div>
+  <div id="about" class="section-block about-section">
     <div class="section-title-row">
       <i class="pi pi-info-circle"></i>
-      <h2>关于 (About)</h2>
+      <h3>版本与关于</h3>
     </div>
 
-    <div class="about-hero">
+    <div data-setting-id="app-version" id="setting-app-version" class="about-hero">
       <div class="logo-shell">
         <div class="logo-mark">
           <img src="/icon.png" alt="Twilight Echo" class="logo-icon" />
@@ -185,7 +184,7 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
     <div class="about-cards">
       <AppUpdatePanel />
 
-      <div class="sponsor-card">
+      <div data-setting-id="project-support" id="setting-project-support" class="sponsor-card">
         <i class="pi pi-heart-fill sponsor-watermark" aria-hidden="true"></i>
         <div>
           <h3><i class="pi pi-heart"></i> 支持项目发展</h3>
@@ -206,7 +205,7 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
 
     <hr />
 
-    <div class="about-links">
+    <div data-setting-id="project-links" id="setting-project-links" class="about-links">
       <button type="button" @click="emit('exportAudioDiagnostics')">
         <i class="pi pi-file-export"></i> 导出音频诊断
       </button>
@@ -390,5 +389,5 @@ useFocusTrap(qqGroupDialogRef, qqGroupDialogOpen)
         </div>
       </Transition>
     </Teleport>
-  </section>
+  </div>
 </template>

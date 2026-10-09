@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, watch } from 'vue'
+import { registerSettingsDisclosure } from './settingsDisclosureRegistry.ts'
+import { computed, onBeforeUnmount, reactive, watch, ref } from 'vue'
 import {
   DEFAULT_DESKTOP_LYRICS_SETTINGS,
   DESKTOP_LYRICS_VERTICAL_WINDOW_SIZE,
@@ -14,6 +15,10 @@ const emit = defineEmits<{
   update: [patch: Partial<DesktopLyricsSettings>]
 }>()
 
+const advancedRef = ref<HTMLDetailsElement | null>(null)
+registerSettingsDisclosure('desktop-lyrics-advanced', () => {
+  if (advancedRef.value) advancedRef.value.open = true
+})
 const draft = reactive<DesktopLyricsSettings>({ ...props.desktopLyrics })
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 let pendingPatch: Partial<DesktopLyricsSettings> = {}
@@ -141,15 +146,15 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
 </script>
 
 <template>
-  <section id="desktopLyrics" class="glass-card preview-section settings-section">
+  <div id="desktopLyrics" class="section-block settings-section">
     <div class="section-heading desktop-lyrics-heading">
-      <h2>桌面歌词</h2>
+      <h3>桌面与任务栏歌词</h3>
       <div class="quick-control-row">
-        <label class="check-field">
+        <label data-setting-id="desktop-enabled" id="setting-desktop-enabled" class="check-field">
           <input :checked="draft.enabled" type="checkbox" @change="emit('toggle')" />
           <span>启用桌面歌词</span>
         </label>
-        <label class="check-field">
+        <label data-setting-id="desktop-on-top" id="setting-desktop-on-top" class="check-field">
           <input
             :checked="draft.alwaysOnTop"
             type="checkbox"
@@ -157,7 +162,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
           />
           <span>启用歌词总在最前</span>
         </label>
-        <label class="check-field">
+        <label
+          data-setting-id="desktop-translation"
+          id="setting-desktop-translation"
+          class="check-field"
+        >
           <input
             :checked="draft.translationVisible"
             type="checkbox"
@@ -167,7 +176,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
           />
           <span>外文歌词显示翻译</span>
         </label>
-        <label class="check-field">
+        <label
+          data-setting-id="desktop-romanization"
+          id="setting-desktop-romanization"
+          class="check-field"
+        >
           <input
             :checked="draft.romanizationVisible"
             type="checkbox"
@@ -240,7 +253,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
     </div>
     <div class="setting-card desktop-lyrics-style-card">
       <div class="style-control-grid">
-        <label class="field">
+        <label data-setting-id="desktop-font" id="setting-desktop-font" class="field">
           <span>字体</span>
           <select
             :value="draft.fontFamily"
@@ -251,13 +264,13 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             </option>
           </select>
         </label>
-        <label class="field">
+        <label data-setting-id="desktop-font-size" id="setting-desktop-font-size" class="field">
           <span>字号</span>
           <select :value="draft.fontSize" @change="update('fontSize', numberValue($event), true)">
             <option v-for="size in fontSizes" :key="size" :value="size">{{ size }}</option>
           </select>
         </label>
-        <label class="field">
+        <label data-setting-id="desktop-font-weight" id="setting-desktop-font-weight" class="field">
           <span>字粗</span>
           <select
             :value="draft.fontWeight"
@@ -268,7 +281,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             </option>
           </select>
         </label>
-        <label class="field">
+        <label data-setting-id="desktop-outline" id="setting-desktop-outline" class="field">
           <span>描边</span>
           <select
             :value="draft.textOutline ? 'on' : 'off'"
@@ -285,7 +298,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
       <div class="control-group">
         <h3>调整排版样式</h3>
         <div class="layout-control-grid">
-          <label class="field">
+          <label data-setting-id="desktop-lines" id="setting-desktop-lines" class="field">
             <select
               :value="draft.displayMode"
               aria-label="显示行数"
@@ -302,7 +315,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               <option value="single">单行显示</option>
             </select>
           </label>
-          <label class="field">
+          <label data-setting-id="desktop-writing" id="setting-desktop-writing" class="field">
             <select
               :value="draft.writingMode"
               aria-label="文字排列方向"
@@ -316,7 +329,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               <option value="vertical">竖排显示</option>
             </select>
           </label>
-          <label class="field">
+          <label data-setting-id="desktop-align" id="setting-desktop-align" class="field">
             <select
               :value="draft.textAlign"
               aria-label="歌词对齐方式"
@@ -339,7 +352,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
       <div class="control-group">
         <h3>更改配色方案</h3>
         <div class="palette-control-grid">
-          <label class="field">
+          <label data-setting-id="desktop-palette" id="setting-desktop-palette" class="field">
             <select
               :value="draft.palette"
               aria-label="歌词配色方案"
@@ -356,7 +369,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               </option>
             </select>
           </label>
-          <label class="palette-color-button">
+          <label
+            data-setting-id="desktop-active-color"
+            id="setting-desktop-active-color"
+            class="palette-color-button"
+          >
             <input
               :value="paletteColors.active"
               type="color"
@@ -366,7 +383,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             <i :style="{ background: paletteColors.active }"></i>
             <span>已播放</span>
           </label>
-          <label class="palette-color-button">
+          <label
+            data-setting-id="desktop-inactive-color"
+            id="setting-desktop-inactive-color"
+            class="palette-color-button"
+          >
             <input
               :value="paletteColors.inactive"
               type="color"
@@ -408,7 +429,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
     <div class="setting-card">
       <h3>窗口</h3>
       <div class="two-columns">
-        <label class="field range-field">
+        <label data-setting-id="desktop-width" id="setting-desktop-width" class="field range-field">
           <span
             >宽度 <b>{{ draft.windowWidth }} px</b></span
           >
@@ -421,7 +442,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             @input="update('windowWidth', numberValue($event))"
           />
         </label>
-        <label class="field range-field">
+        <label
+          data-setting-id="desktop-height"
+          id="setting-desktop-height"
+          class="field range-field"
+        >
           <span
             >高度 <b>{{ draft.windowHeight }} px</b></span
           >
@@ -435,7 +460,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
           />
         </label>
       </div>
-      <label class="switch-field">
+      <label data-setting-id="desktop-locked" id="setting-desktop-locked" class="switch-field">
         <span><b>锁定并穿透点击</b><small>使用 Ctrl + Alt + L 或托盘菜单解锁</small></span>
         <input
           type="checkbox"
@@ -445,10 +470,17 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
       </label>
     </div>
 
-    <details class="setting-card advanced">
-      <summary>高级设置</summary>
+    <details id="desktop-lyrics-advanced" ref="advancedRef" class="setting-card advanced">
+      <summary>
+        高级显示设置
+        <small>{{ draft.lineGap }}px 行距 · {{ draft.backgroundOpacity }}% 背景透明度</small>
+      </summary>
       <div class="two-columns advanced-grid">
-        <label class="field range-field">
+        <label
+          data-setting-id="desktop-line-gap"
+          id="setting-desktop-line-gap"
+          class="field range-field"
+        >
           <span
             >行距 <b>{{ draft.lineGap }} px</b></span
           >
@@ -472,7 +504,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             @input="update('inactiveOpacity', numberValue($event))"
           />
         </label>
-        <label class="field range-field">
+        <label
+          data-setting-id="desktop-background-opacity"
+          id="setting-desktop-background-opacity"
+          class="field range-field"
+        >
           <span
             >背景透明度 <b>{{ draft.backgroundOpacity }}%</b></span
           >
@@ -484,7 +520,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             @input="update('backgroundOpacity', numberValue($event))"
           />
         </label>
-        <label class="field range-field">
+        <label
+          data-setting-id="desktop-shadow"
+          id="setting-desktop-shadow"
+          class="field range-field"
+        >
           <span
             >阴影强度 <b>{{ draft.shadowStrength }}%</b></span
           >
@@ -532,7 +572,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
         />
       </label>
     </details>
-  </section>
+  </div>
 </template>
 
 <style scoped>

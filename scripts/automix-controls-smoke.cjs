@@ -85,8 +85,9 @@ app.whenReady().then(async () => {
     await waitFor(() => evaluate('Boolean(window.api?.audioEngine && document.querySelector(\'button[aria-label="设置"]\'))'), 'renderer API and settings button')
     await evaluate('document.querySelector(\'button[aria-label="设置"]\').click()')
     await waitFor(() => evaluate('Boolean(document.querySelector(\'.preview-nav-item\'))'), 'settings sections')
-    await evaluate('Array.from(document.querySelectorAll(\'.preview-nav-item\')).find(button => button.textContent.trim() === "播放").click()')
+    await evaluate('Array.from(document.querySelectorAll(\'.preview-nav-item\')).find(button => ["播放", "播放与音效"].includes(button.textContent.trim())).click()')
     await waitFor(() => evaluate('Boolean(document.querySelector(\'button[aria-label="AutoMix"]\'))'), 'AutoMix control')
+    await evaluate('(() => {const button=document.querySelector(\'button[aria-label="AutoMix"]\').closest(".settings-group")?.querySelector(".settings-group-trigger");if(button?.getAttribute("aria-expanded")==="false")button.click()})()')
     const control = () => evaluate('(() => { const button = document.querySelector(\'button[aria-label="AutoMix"]\'); return {disabled: button.disabled, checked: button.getAttribute("aria-checked"), text: button.closest(".setting-item").textContent} })()')
     report.before = await waitFor(async () => {
       const state = await control()
@@ -98,6 +99,15 @@ app.whenReady().then(async () => {
     assert.equal(report.initial.autoMix?.experimentalAllowed, true)
     assert.equal(report.initial.autoMix.enabled, false)
     assert.equal(report.initial.state, 'stopped')
+    report.skipControl = await evaluate('(() => {const input=document.querySelector(\'button[aria-label="AutoMix"]\').closest(".setting-item").querySelector(\'input[type="checkbox"]\');return {disabled:input.disabled,checked:input.checked}})()')
+    assert.equal(report.skipControl.disabled, report.initial.autoMix?.intelligentSkipSupported !== true)
+    if (!report.skipControl.disabled) {
+      await evaluate('document.querySelector(\'button[aria-label="AutoMix"]\').closest(".setting-item").querySelector(\'input[type="checkbox"]\').click()')
+      await waitFor(async () => {
+        const processing = await evaluate('window.api.audioEngine.getAudioProcessing()')
+        return processing.autoMix?.allowIntelligentSkip === true && !(await control()).disabled
+      }, 'Intelligent silence skipping setting acknowledgement')
+    }
     await evaluate('document.querySelector(\'button[aria-label="AutoMix"]\').click()')
     report.afterEnable = await waitFor(async () => {
       const info = await evaluate('window.api.audioEngine.getPlaybackInfo()')

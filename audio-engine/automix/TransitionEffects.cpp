@@ -91,6 +91,7 @@ struct Fdn {
 struct TransitionEffects::Impl {
   unsigned rate,channels;const am_side* side;std::uint64_t frames{};
   bool hasLow{},hasHigh{},hasDelay{},hasReverb{},hasRemix{};
+  bool passthrough{true};
   std::vector<Filter> low,high,delayLow,remixA,remixB,noiseLow;
   std::vector<Delay> delay,flanger,repeat;
   std::vector<Fdn> reverb;
@@ -103,6 +104,17 @@ struct TransitionEffects::Impl {
     for(std::size_t i=0;i<s->count;++i) {
       const std::string name=s->processors[i].name;
       hasLow|=name=="LOW_PASS";hasHigh|=name=="HI_PASS";hasDelay|=name=="AUX_DELAY";hasReverb|=name=="AUX_REVERB";hasRemix|=name=="REMIX_FX";
+      if(name!="TIME_STRETCHING"&&name!="RECEIVE_MIXER")passthrough=false;
+      for(std::size_t r=0;r<s->processors[i].count;++r) {
+        const std::string_view parameter=s->processors[i].ramps[r].parameter;
+        if(parameter!="ts_rate"&&parameter!="out_gain")passthrough=false;
+      }
+    }
+    // Clock/stretch and envelope gain run in PrepareSide. A pure envelope
+    // template has no filter/delay/modulation state to evaluate per sample.
+    for(const char* parameter:{"player_gain","fx_mixer_dry"}) {
+      const auto found=defaults.find(parameter);
+      if(found!=defaults.end()&&found->second.value!=1)passthrough=false;
     }
     for(unsigned c=0;c<ch;++c) {
       if(hasDelay||hasRemix) delay.emplace_back(sr*2+4);
@@ -143,7 +155,8 @@ std::size_t TransitionEffects::memoryBytes() const noexcept {
   for(const auto& f:impl_->reverb) total+=sizeof(Fdn)+f.lines.capacity()*sizeof(Delay)+f.bytes();return total;
 }
 void TransitionEffects::process(float* frame,double t,double bpm) {
-  auto& e=*impl_;const bool update=(e.frames++%32)==0;
+  auto& e=*impl_;if(e.passthrough)return;
+  const bool update=(e.frames++%32)==0;
   const bool lowOn=e.hasLow&&e.on("LOW_PASS",t),highOn=e.hasHigh&&e.on("HI_PASS",t);
   const bool delayOn=e.hasDelay&&e.on("AUX_DELAY",t),reverbOn=e.hasReverb&&e.on("AUX_REVERB",t),remix=e.hasRemix&&e.on("REMIX_FX",t);
   bpm=std::clamp(e.v("remixfx_beats_per_minute",t,bpm),20.,300.);

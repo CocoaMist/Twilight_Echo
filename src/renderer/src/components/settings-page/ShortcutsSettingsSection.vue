@@ -263,29 +263,31 @@ function onRecorderBlur(key: BindingKey): void {
 </script>
 
 <template>
-  <section id="shortcuts" class="glass-card preview-section">
+  <div id="shortcuts" class="section-block shortcuts-section">
     <div class="section-title-row">
       <i class="pi pi-key"></i>
-      <h2>快捷键</h2>
+      <h3>快捷键</h3>
     </div>
     <p class="shortcut-panel-hint">Ctrl+K / ⌘K：打开应用内命令面板。无需启用全局快捷键。</p>
     <div class="setting-list">
-      <div class="setting-item">
+      <div data-setting-id="global-shortcuts" id="setting-global-shortcuts" class="setting-item">
         <div class="setting-copy">
-          <strong>全局快捷键 (Global Shortcuts)</strong>
+          <strong>全局快捷键</strong>
           <span>应用位于后台时，依然响应下方组合键与系统媒体键。</span>
         </div>
-        <span
+        <button
+          type="button"
+          aria-label="全局快捷键"
           class="toggle-switch"
           :class="{ active: globalShortcuts, inactive: !globalShortcuts }"
           role="switch"
           :aria-checked="globalShortcuts"
           @click="onToggle"
-        ></span>
+        ></button>
       </div>
     </div>
 
-    <div class="shortcut-panel">
+    <div data-setting-id="shortcut-bindings" id="setting-shortcut-bindings" class="shortcut-panel">
       <div class="shortcut-panel-head">
         <h3>自定义组合键</h3>
         <span class="shortcut-panel-hint">点击右侧按钮后直接按下组合键，Esc 取消</span>
@@ -341,7 +343,12 @@ function onRecorderBlur(key: BindingKey): void {
       <p v-if="conflictBinding" class="shortcut-note failed">{{ conflictTip }}</p>
     </div>
 
-    <div v-if="mediaStatuses.length > 0" class="shortcut-panel">
+    <div
+      data-setting-id="media-keys"
+      id="setting-media-keys"
+      v-if="mediaStatuses.length > 0"
+      class="shortcut-panel"
+    >
       <div class="shortcut-panel-head">
         <h3>系统媒体键</h3>
         <span class="shortcut-panel-hint">键盘与耳机上的播放控制键，固定绑定</span>
@@ -359,8 +366,10 @@ function onRecorderBlur(key: BindingKey): void {
       </ul>
     </div>
 
-    <p class="shortcut-note" :class="statusSummary.tone">{{ statusSummary.text }}</p>
-  </section>
+    <p data-setting-id="shortcut-status" class="shortcut-note" :class="statusSummary.tone">
+      {{ statusSummary.text }}
+    </p>
+  </div>
 </template>
 
 <style scoped>

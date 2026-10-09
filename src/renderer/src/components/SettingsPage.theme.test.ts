@@ -20,10 +20,10 @@ const desktopLyricsSettingsSource = readFileSync(
   'utf8'
 )
 
-test('desktop lyrics is a navigable settings card', () => {
+test('desktop lyrics is an internal block in the lyrics category', () => {
   assert.match(
     desktopLyricsSettingsSource,
-    /<section\s+id="desktopLyrics"\s+class="glass-card preview-section settings-section">/
+    /<div\s+id="desktopLyrics"\s+class="section-block settings-section">/
   )
   for (const label of [
     '启用桌面歌词',
@@ -223,14 +223,17 @@ test('plugin center uses the settings wallpaper painter over streaming content',
 })
 
 test('audio output device cards are opt-in through a closed native checkbox', () => {
-  assert.match(playbackPageSource, /const audioOutputPanelExpanded = ref\(false\)/)
+  assert.match(
+    playbackPageSource,
+    /const audioOutputPanelExpanded = useSettingsDisclosure\('audio-output-device-panel'\)/
+  )
   assert.match(
     playbackPageSource,
     /<input[\s\S]{0,260}?v-model="audioOutputPanelExpanded"[\s\S]{0,160}?type="checkbox"[\s\S]{0,200}?aria-controls="audio-output-device-panel"[\s\S]{0,160}?:aria-expanded="audioOutputPanelExpanded"/
   )
   assert.match(
     playbackPageSource,
-    /<SettingsDisclosure\s+:open="audioOutputPanelExpanded"\s+trigger-selector='input\[aria-controls="audio-output-device-panel"\]'\s+id="audio-output-device-panel"\s+class="device-panel-content"[\s\S]{0,240}?<div class="device-grid">/
+    /<SettingsDisclosure\s+:open="audioOutputPanelExpanded"\s+keep-mounted\s+trigger-selector='input\[aria-controls="audio-output-device-panel"\]'\s+id="audio-output-device-panel"\s+class="device-panel-content"[\s\S]{0,240}?<div class="device-grid">/
   )
   assert.match(styles, /\.device-panel-disclosure\s*\{[\s\S]*?cursor:\s*pointer/)
   assert.match(

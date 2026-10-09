@@ -21,9 +21,14 @@ const option = (name, fallback = '') => {
 const root = resolve(__dirname, '..')
 const outgoing = resolve(option('--out'))
 const incoming = resolve(option('--in'))
+const expectedOutgoingEnd = option('--expect-outgoing-end')
+const expectedIncomingStart = option('--expect-incoming-start')
+for (const value of [expectedOutgoingEnd, expectedIncomingStart])
+  if (value && (!Number.isFinite(Number(value)) || Number(value) < 0))
+    throw new Error('Invalid expected source boundary')
 if (!option('--out') || !option('--in') || !option('--device'))
   throw new Error(
-    'Usage: node scripts/automix-app-playback-smoke.cjs --out <file> --in <file> --device <WASAPI endpoint> [--rounded-duration] [--require-style <id>] [--player-bar] [--report <json>]'
+    'Usage: node scripts/automix-app-playback-smoke.cjs --out <file> --in <file> --device <WASAPI endpoint> [--rounded-duration] [--require-style <id>] [--player-bar] [--expect-outgoing-end <seconds>] [--expect-incoming-start <seconds>] [--report <json>]'
   )
 const work = mkdtempSync(join(tmpdir(), 'twilight-automix-app-playback-'))
 const profile = join(work, 'profile')
@@ -84,6 +89,8 @@ const reportFile = ${JSON.stringify(reportFile)}
 const outgoing = ${JSON.stringify(outgoing)}, incoming = ${JSON.stringify(incoming)}
 const report = {format:1, passed:false, kind:'complete-app-automix-playback',
   isolatedProfile:${JSON.stringify(profile)}, volume:0, listeningQuality:'not-rated',
+  expectedOutgoingEnd:${expectedOutgoingEnd ? Number(expectedOutgoingEnd) : 'null'},
+  expectedIncomingStart:${expectedIncomingStart ? Number(expectedIncomingStart) : 'null'},
   roundedQueueDuration:${args.includes('--rounded-duration')}, observations:[]}
 app.setAppPath(${JSON.stringify(appPath)})
 app.setPath('userData', report.isolatedProfile)
@@ -139,26 +146,57 @@ app.whenReady().then(async () => {
     }
     report.processing = await evaluate('window.api.audioEngine.getAudioProcessing()')
     assert.equal(report.playResult.nativeStarted,true)
+    if (${args.includes('--settings-status')}) {
+      await evaluate('document.querySelector(\'button[aria-label="设置"]\').click()')
+      for(let i=0;i<100;i++) {
+        if(await evaluate('Boolean(document.querySelector(".preview-nav-item"))'))break
+        await pause(100)
+      }
+      await evaluate('Array.from(document.querySelectorAll(".preview-nav-item")).find(b=>["播放","播放与音效"].includes(b.textContent.trim())).click()')
+      for(let i=0;i<100;i++) {
+        if(await evaluate('Boolean(document.querySelector(\'button[aria-label="AutoMix"]\'))'))break
+        await pause(100)
+      }
+    }
     let mixed=false, promoted=false, switches=0, previousIndex=0
     let overlapSeconds=0, incomingObservedAt=0
     const deadline=Date.now()+42000
     while(Date.now()<deadline) {
       const info = await evaluate('window.api.audioEngine.getPlaybackInfo()')
+      const settingsText=${args.includes('--settings-status')} ? await evaluate('document.querySelector(\'button[aria-label="AutoMix"]\')?.closest(".setting-item")?.textContent ?? ""') : undefined
       const playerBar=report.playerBar ? await evaluate('(()=>{const p=window.__autoMixProbePlayer;'+
         'const bar=document.querySelector(".progress-area"),slider=bar?.querySelector(".progress-slider");'+
         'return JSON.parse(JSON.stringify({trackId:p.currentTrack.value?.id,queueIndex:p.queueIndex.value,position:p.currentTime.value,'+
         'clock:p.playbackClockSnapshot.value,domTrackId:bar?.dataset.trackId,'+
         'domPosition:slider?Number(slider.getAttribute("aria-valuenow")):null,'+
         'labels:bar?[...bar.querySelectorAll(".time-label")].map(e=>e.textContent):[]}));})()') : undefined
-      report.observations.push({position:info.position,queueIndex:info.queueIndex,source:info.source,playerBar,
+      report.observations.push({position:info.position,queueIndex:info.queueIndex,source:info.source,playerBar,settingsText,
         autoMix:info.autoMix,perfectReasonCode:info.perfectReasonCode,
         preloadReady:info.preloadReady,gaplessActive:info.gaplessActive,gaplessBlockedReason:info.gaplessBlockedReason,
         upcomingTrack:info.upcomingTrack})
+      if(info.source===outgoing)report.lastOutgoingPosition=info.position
       if(info.autoMix?.state==='mixing') {
         mixed=true
-        overlapSeconds=info.autoMix.transitionSeconds
+        overlapSeconds=info.autoMix.incomingResumeSeconds ?? info.autoMix.transitionSeconds
         const required=${JSON.stringify(option('--require-style'))}
         if(required)assert.equal(info.autoMix.styleId,Number(required))
+        const requiredKind=${JSON.stringify(option('--require-mix-kind'))}
+        if(requiredKind)assert.equal(info.autoMix.mixKind,requiredKind)
+        const minimumOverlap=Number(${JSON.stringify(option('--min-audible-overlap','0'))})
+        assert.ok((info.autoMix.audibleOverlapSeconds ?? 0)>=minimumOverlap,'Prepared dual-track overlap too short')
+        const minimumTempo=Number(${JSON.stringify(option('--min-tempo-adjustment','0'))})
+        assert.ok((info.autoMix.tempoAdjustmentPercent ?? 0)>=minimumTempo,'Tempo compensation was not used')
+        if(settingsText) {
+          const label={beat_mix:'节拍混合',musical_overlap:'音乐交叠',boundary_cleanup:'首尾静音',conservative:'保守淡化'}[info.autoMix.mixKind]
+          if(label&&settingsText.includes(label)&&(!['beat_mix','musical_overlap'].includes(info.autoMix.mixKind)||settingsText.includes('双轨交叠')))
+            report.settingsStatusVerified=true
+        }
+        // Settings intentionally hides PlayerBar. Return after checking its
+        // AutoMix copy so the later source-clock assertion uses the visible bar.
+        if(report.settingsStatusVerified&&report.playerBar&&!report.settingsClosed) {
+          await evaluate('document.querySelector(\'button[aria-label="设置"]\').click()')
+          report.settingsClosed=true
+        }
         if(info.autoMix.progress>.06)assert.equal(info.perfectReasonCode,'automix_active')
       }
       if(info.queueIndex!==previousIndex) {switches++;previousIndex=info.queueIndex}
@@ -179,10 +217,21 @@ app.whenReady().then(async () => {
       await pause(100)
     }
     assert.ok(mixed,'No native AutoMix overlap observed')
+    if(${args.includes('--settings-status')})assert.ok(report.settingsStatusVerified,'Rendered settings did not distinguish the actual musical mix kind')
     assert.ok(promoted,'Incoming track was not promoted')
     if(report.playerBar)assert.ok(report.finalPlayerBar,'Renderer never promoted the incoming track')
     assert.equal(switches,1)
     assert.ok(report.finalPlayback.position>=overlapSeconds-.1,'Incoming audible overlap was replayed')
+    if(report.expectedOutgoingEnd!==null) {
+      assert.ok(Math.abs(report.lastOutgoingPosition-report.expectedOutgoingEnd)<.6,
+        'Handoff did not use the planned outgoing source boundary')
+    }
+    if(report.expectedIncomingStart!==null) {
+      const firstIncoming=report.observations.find(x=>x.source===incoming)
+      const continuation=overlapSeconds
+      assert.ok(firstIncoming.position>=continuation-.1&&firstIncoming.position<continuation+.6,
+        'Incoming handoff did not include both skipped silence and audible overlap')
+    }
     report.passed=true
   } catch(error) { report.error=error.stack }
   finally {

@@ -357,7 +357,7 @@ function handleLoginSuccess(): void {
 
 function handleLoginConfigure(): void {
   closeLoginPage()
-  openSettingsPage()
+  openSettingsPage('connections')
 }
 
 const musicStore = useMusicStore()
@@ -703,7 +703,8 @@ function flushPendingPersistenceForExit(): void {
 }
 
 onMounted(async () => {
-  const { setupListeningStatsTracking, flushListeningStatsForExit } = await import('@renderer/stores/useListeningStatsStore')
+  const { setupListeningStatsTracking, flushListeningStatsForExit } =
+    await import('@renderer/stores/useListeningStatsStore')
   setupListeningStatsTracking({ currentTrack, isPlaying, currentTime, duration })
   const startupSnapshot = await getStartupSnapshot()
   await bootstrapThemeRuntime(startupSnapshot ?? undefined)
@@ -803,7 +804,7 @@ onMounted(async () => {
       message: `启动音乐库核对失败：${error instanceof Error ? error.message : String(error)}`,
       action: {
         label: '打开音乐库设置',
-        run: () => openSettingsPage('general')
+        run: () => openSettingsPage('library', { anchor: 'scan-diagnostics' })
       }
     })
   })
@@ -822,7 +823,7 @@ onMounted(async () => {
       message: `检测到 ${dirtyCount} 首缺少封面，可在设置中完整重扫以补全封面。`,
       action: {
         label: '打开音乐库设置',
-        run: () => openSettingsPage('general')
+        run: () => openSettingsPage('library', { anchor: 'scan-diagnostics' })
       }
     })
   })
@@ -1024,7 +1025,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             v-if="localViewVisible && activeCategory === 'dashboard'"
             key="local-dashboard"
             @select-view="onSelectView"
-            @open-library-settings="openSettingsPage('general')"
+            @open-library-settings="openSettingsPage('library')"
             @open-streaming="enterStreamingMode($event)"
             @open-plugins="navigation.openPluginPage()"
             @open-radio="navigation.enterRadioPodcastMode()"

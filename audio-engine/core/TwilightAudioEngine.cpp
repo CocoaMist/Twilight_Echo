@@ -1956,7 +1956,13 @@ std::string TwilightAudioEngine::engineCapabilitiesJson() const {
        << "false"
 #endif
        << ",\"experimentalAllowed\":" << (TAE_AM_ExperimentalPlayerAllowed()?"true":"false")
-       << ",\"stableRelease\":false,\"offlineRenderSupported\":true,\"modelsRequireVerifiedAssets\":true,\"reason\":\"release_validation_pending\",\"intelligentSkipSupported\":false,\"keyAnalysisSupported\":false,\"phraseAnalysisSupported\":false,\"analysisSupported\":"
+       << ",\"stableRelease\":false,\"offlineRenderSupported\":true,\"modelsRequireVerifiedAssets\":true,\"reason\":\"release_validation_pending\",\"intelligentSkipSupported\":"
+#if defined(TAE_AM_ASM) && defined(TAE_HAS_FFMPEG)
+       << "true"
+#else
+       << "false"
+#endif
+       << ",\"intelligentSkipPolicy\":\"confirmed-boundary-silence\",\"keyAnalysisSupported\":false,\"phraseAnalysisSupported\":false,\"analysisSupported\":"
 #if defined(TAE_HAS_FFMPEG)
        << "true"
 #else

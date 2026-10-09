@@ -186,6 +186,53 @@ int main(int argc,char** argv) {
   }
   // Candidate identities are preserved across ABI and selection. No dedup.
   if(group=="all"||group=="basic") {
+    // Evidence includes effects and envelopes: silence or a filtered-away
+    // contribution cannot be reported as a musical mix.
+    TAE_AM_DefaultConfig(&config);
+    constexpr unsigned rate=48000;
+    std::vector<float> tones(rate*10*2),zeros(tones.size());
+    for(size_t f=0;f<tones.size()/2;++f)for(unsigned ch=0;ch<2;++ch)
+      tones[f*2+ch]=static_cast<float>(.1*std::sin(f*2*3.141592653589793*1800/rate));
+    const TAE_AM_PcmViewV1 tone{sizeof tone,TAE_AM_ABI_VERSION,tones.data(),tones.size()/2,0,rate,2};
+    const TAE_AM_PcmViewV1 silence{sizeof silence,TAE_AM_ABI_VERSION,zeros.data(),zeros.size()/2,0,rate,2};
+    for(double q:{1.,.95,1.05}) {
+      auto mix=candidate(q==1?1:7,.5,.2);mix.scoring.outgoing_end=6.5;mix.scoring.incoming_end=.2+6/q;
+      TAE_AM_Plan musical{};assert(TAE_AM_Compile(&config,&mix,&musical)==TAE_AM_OK);
+      TAE_AM_Prepared pcm{};TAE_AM_PreparedInfoV1 details{sizeof details,TAE_AM_ABI_VERSION};
+      TAE_AM_MixEvidenceV1 evidence{sizeof evidence,TAE_AM_ABI_VERSION};
+      assert(TAE_AM_Prepare(musical,&tone,&tone,1,1,&pcm,&details)==TAE_AM_OK);
+      assert(TAE_AM_InspectPrepared(pcm,&evidence)==TAE_AM_OK);
+      std::printf("mix evidence q=%.4f total=%.4f longest=%.4f\n",q,evidence.audible_overlap_seconds,evidence.longest_overlap_seconds);
+      assert(evidence.audible_overlap_seconds>=2&&evidence.longest_overlap_seconds>=1);
+      if(q==1) {
+        std::vector<float> direct(rate*2);
+        assert(TAE_AM_ReadPreparedSide(pcm,0,0,direct.data(),rate)==rate);
+        assert(std::equal(direct.begin(),direct.end(),tones.begin()+rate));
+      }
+      const double horizon=q==1?6:6*std::log(q)/(q-1);
+      assert(std::abs(details.transition_seconds-horizon)<=1./rate);
+      assert(details.incoming_resume_frame==static_cast<uint64_t>(std::floor((.2+6/q)*rate)));
+      for(uint64_t frame=0;frame<details.frames;frame+=257) {
+        const auto o=TAE_AM_PreparedSourceFrame(pcm,0,frame),i=TAE_AM_PreparedSourceFrame(pcm,1,frame);
+        assert(std::abs((double(o)-.5*rate)-q*(double(i)-.2*rate))<=1+q);
+      }
+      assert(TAE_AM_PreparedSourceFrame(pcm,1,details.frames)==details.incoming_resume_frame);
+      TAE_AM_DestroyPrepared(pcm);
+      assert(TAE_AM_Prepare(musical,&tone,&silence,1,1,&pcm,&details)==TAE_AM_OK);
+      assert(TAE_AM_InspectPrepared(pcm,&evidence)==TAE_AM_OK&&evidence.audible_overlap_seconds==0);
+      TAE_AM_DestroyPrepared(pcm);TAE_AM_DestroyPlan(musical);
+    }
+    // Style 8's high-pass removes a DC-only incoming input; input-side energy
+    // alone would wrongly label this a mix. Post-effect evidence excludes it.
+    std::vector<float> dc(tones.size(),.1f);
+    const TAE_AM_PcmViewV1 dcView{sizeof dcView,TAE_AM_ABI_VERSION,dc.data(),dc.size()/2,0,rate,2};
+    auto filtered=candidate(8,.5,.2);filtered.scoring.outgoing_end=6.5;filtered.scoring.incoming_end=6.2;
+    TAE_AM_Plan filterPlan{};assert(TAE_AM_Compile(&config,&filtered,&filterPlan)==TAE_AM_OK);
+    TAE_AM_Prepared pcm{};TAE_AM_PreparedInfoV1 details{sizeof details,TAE_AM_ABI_VERSION};
+    TAE_AM_MixEvidenceV1 evidence{sizeof evidence,TAE_AM_ABI_VERSION};
+    assert(TAE_AM_Prepare(filterPlan,&tone,&dcView,1,1,&pcm,&details)==TAE_AM_OK);
+    assert(TAE_AM_InspectPrepared(pcm,&evidence)==TAE_AM_OK&&evidence.audible_overlap_seconds<2);
+    TAE_AM_DestroyPrepared(pcm);TAE_AM_DestroyPlan(filterPlan);
     std::vector<TAE_AM_CandidateV1> inputs(8,candidate(1,1,0));std::vector<am_score_result> scores(inputs.size());
     TAE_AM_SelectionV1 choice{sizeof choice,TAE_AM_ABI_VERSION};
     assert(TAE_AM_Select(inputs.data(),inputs.size(),UINT64_MAX,1,scores.data(),&choice)==TAE_AM_OK);

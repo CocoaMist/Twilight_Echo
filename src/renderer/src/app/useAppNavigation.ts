@@ -1,6 +1,12 @@
 import { computed, reactive, ref, shallowRef } from 'vue'
 import type { UiContribution } from '@renderer/extensions/registry'
-import type { SectionKey, SettingsSearchEntry } from '@renderer/components/settings-page/types.ts'
+import {
+  normalizeSettingsSection,
+  LEGACY_SETTINGS_TARGETS,
+  type SettingsSectionInput,
+  type SectionKey,
+  type SettingsSearchEntry
+} from '@renderer/components/settings-page/types.ts'
 import {
   navigationTargetId,
   type NavigationPageTarget,
@@ -18,7 +24,7 @@ export type SettingsSection = SectionKey
 export interface SettingsNavigationTarget {
   revision: number
   entry?: SettingsSearchEntry
-  anchor?: 'device-profiles'
+  anchor?: string
 }
 export type ThemeStudioDomain =
   | 'presets'
@@ -92,8 +98,8 @@ export function useAppNavigation() {
     loginInitialProviderId.value = saved.loginProviderId
   }
 
-  function rememberSettingsSection(section: SettingsSection): void {
-    settingsCurrentSection.value = section
+  function rememberSettingsSection(section: SettingsSectionInput): void {
+    settingsCurrentSection.value = normalizeSettingsSection(section)
   }
 
   function rememberThemeStudioDomain(domain: ThemeStudioDomain): void {
@@ -230,13 +236,18 @@ export function useAppNavigation() {
     loginInitialProviderId.value = null
   }
   function openSettingsPage(
-    section: SettingsSection = 'general',
+    section: SettingsSectionInput = settingsCurrentSection.value,
     target: Omit<SettingsNavigationTarget, 'revision'> = {}
   ): void {
-    settingsInitialSection.value = section
-    settingsCurrentSection.value = section
+    settingsInitialSection.value = normalizeSettingsSection(section)
+    settingsCurrentSection.value = normalizeSettingsSection(section)
     settingsNavigationTarget.value = {
       ...target,
+      ...(!target.anchor && !target.entry && Object.hasOwn(LEGACY_SETTINGS_TARGETS, section)
+        ? {
+            anchor: LEGACY_SETTINGS_TARGETS[section as keyof typeof LEGACY_SETTINGS_TARGETS].anchor
+          }
+        : {}),
       revision: settingsNavigationTarget.value.revision + 1
     }
     openOverlay('settings')
