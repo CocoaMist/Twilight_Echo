@@ -15,6 +15,7 @@ const props = withDefaults(
     tag?: string
     boundary?: string
     triggerSelector?: string
+    keepMounted?: boolean
   }>(),
   { tag: 'div', boundary: '.settings-preview-stack' }
 )
@@ -147,7 +148,7 @@ function leave(element: Element, done: () => void): void {
 }
 function afterLeave(): void {
   if (props.open) return
-  rendered.value = false
+  if (!props.keepMounted) rendered.value = false
   // v-show applies display:none before this tick. Layout changes once; only
   // following content is translated, never the disclosure's height or text.
   void nextTick(() => relocate(120))

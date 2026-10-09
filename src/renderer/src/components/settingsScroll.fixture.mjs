@@ -52,10 +52,12 @@ window.api = { library: { getWatcherStatus: async () => null } }
 const expanded = ref(false)
 window.makeSettingsSection = (key) => () =>
   h(
-    'section',
+    ['general', 'appearance', 'library', 'connections', 'system'].includes(key) ? 'section' : 'div',
     {
       id: key,
-      class: 'glass-card preview-section settings-section'
+      class: ['general', 'appearance', 'library', 'connections', 'system'].includes(key)
+        ? 'glass-card preview-section settings-section'
+        : 'settings-fixture-block'
     },
     [
       h('h2', key),
@@ -80,15 +82,20 @@ window.makeSettingsSection = (key) => () =>
             'div',
             {
               class: 'setting-item',
+              ...(key === 'system' && index === 20
+                ? { 'data-setting-id': 'hardware-acceleration' }
+                : key === 'playback-basics' && index === 20
+                  ? { 'data-setting-id': 'gapless' }
+                  : {}),
               style: { minHeight: '60px' }
             },
             [
               h('div', { class: 'setting-copy' }, [
                 h(
                   'strong',
-                  key === 'performance' && index === 20
+                  key === 'system' && index === 20
                     ? '硬件加速'
-                    : key === 'playback' && index === 20
+                    : key === 'playback-basics' && index === 20
                       ? '无缝播放 (Gapless Playback)'
                       : `${key} 设置 ${index}`
                 ),
@@ -137,12 +144,12 @@ window.runSettingsScrollTests = async () => {
     [...page.querySelectorAll('.setting-item')].filter((row) =>
       row.checkVisibility({ contentVisibilityAuto: true })
     ).length
-  expect(sections.length === 9, 'missing section fixtures')
+  expect(sections.length === 7, 'missing section fixtures')
   expect(
     sections.every((section) => section.classList.contains('settings-section-measured')),
     'rendering waited for settings IPC'
   )
-  const skippedRows = 405 - visibleRows()
+  const skippedRows = page.querySelectorAll('.setting-item').length - visibleRows()
   expect(
     skippedRows >= 270,
     `distant controls still participate in rendering: ${skippedRows} skipped`
@@ -158,7 +165,7 @@ window.runSettingsScrollTests = async () => {
 
   resolveLoad()
   await settle()
-  nav('常规').click()
+  nav('通用').click()
   await settle()
   const general = document.querySelector('#general')
   const fixedNavigation = page.querySelector('.settings-preview-nav')
@@ -213,7 +220,7 @@ window.runSettingsScrollTests = async () => {
       scrollGeometryReads <= sections.length,
       `native scrollend repeatedly measured skipped sections: ${scrollGeometryReads} reads`
     )
-    expect(nav('常规').getAttribute('aria-current') === 'location', 'scroll spy lost its section')
+    expect(nav('通用').getAttribute('aria-current') === 'location', 'scroll spy lost its section')
     expect(
       page.style.getPropertyValue('--te-workshop-scroll-y') === '',
       'decoration scrolling invalidated the settings controls through inheritance'
@@ -231,19 +238,19 @@ window.runSettingsScrollTests = async () => {
   await settle()
   general.querySelector('input').value = '未保存的输入'
 
-  nav('快捷键').click()
+  nav('连接与控制').click()
   await settle()
-  const shortcuts = document.querySelector('#shortcuts')
+  const shortcuts = document.querySelector('#connections')
   expect(
     Math.abs(shortcuts.getBoundingClientRect().top - page.getBoundingClientRect().top - 24) <= 3,
     'navigation missed distant card'
   )
   expect(
-    nav('快捷键').getAttribute('aria-current') === 'location',
+    nav('连接与控制').getAttribute('aria-current') === 'location',
     'navigation lost active section'
   )
   expect(
-    appNavigation.session.value.settingsSection === 'shortcuts',
+    appNavigation.session.value.settingsSection === 'connections',
     'selected section was not remembered'
   )
 
@@ -252,9 +259,9 @@ window.runSettingsScrollTests = async () => {
   await window.resizeTestWindow(760)
   await settle()
   expect(innerWidth === 760, `unexpected narrow viewport: ${innerWidth}`)
-  nav('性能').click()
+  nav('系统与关于').click()
   await settle()
-  const performance = document.querySelector('#performance')
+  const performance = document.querySelector('#system')
   const navigation = page.querySelector('.settings-preview-nav')
   const offset = 24 + navigation.getBoundingClientRect().height
   expect(
@@ -278,7 +285,7 @@ window.runSettingsScrollTests = async () => {
     'search result is outside usable viewport'
   )
 
-  nav('常规').click()
+  nav('通用').click()
   await settle()
   expect(
     general.querySelector('input').value === '未保存的输入',
@@ -300,7 +307,7 @@ window.runSettingsScrollTests = async () => {
   }
   await window.resizeTestWindow(1440)
   await settle()
-  nav('播放').click()
+  nav('播放与音效').click()
   await settle()
 
   // Native scroll events must use the position cache, with no card measurements
@@ -321,7 +328,7 @@ window.runSettingsScrollTests = async () => {
 
   document.documentElement.dataset.teMotion = 'full'
   nav('关于').click()
-  nav('常规').click()
+  nav('通用').click()
   await new Promise((resolve) => setTimeout(resolve, 1000))
   expect(
     !page.classList.contains('settings-resolving-navigation'),
@@ -345,7 +352,7 @@ window.runSettingsScrollTests = async () => {
     persistence.restored && appNavigation.showSettingsPage.value,
     'settings page was not restored'
   )
-  expect(appNavigation.settingsInitialSection.value === 'about', 'last section was not restored')
+  expect(appNavigation.settingsInitialSection.value === 'system', 'last section was not restored')
   mounted.value = true
   await settle()
   const reopenedPage = document.querySelector('.settings-preview-page')

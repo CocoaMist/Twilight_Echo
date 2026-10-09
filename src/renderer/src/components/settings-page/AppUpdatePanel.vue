@@ -103,7 +103,7 @@ function interval(event: Event): void {
 </script>
 
 <template>
-  <div class="app-update-panel">
+  <div data-setting-id="app-update" id="setting-app-update" class="app-update-panel">
     <div class="update-card" :data-status="status" :aria-busy="busy">
       <div class="status-icon">
         <i
@@ -131,7 +131,11 @@ function interval(event: Event): void {
         <span v-else-if="!state.check">检查新版本，获取最新功能与修复。</span>
         <span v-if="state.checkedAt">上次检查：{{ date(state.checkedAt) }}</span>
       </div>
-      <div class="update-actions">
+      <div
+        data-setting-id="app-update-install"
+        id="setting-app-update-install"
+        class="update-actions"
+      >
         <button v-if="canCancel" class="soft-button" type="button" @click="updates.cancel()">
           取消下载
         </button>

@@ -24,7 +24,7 @@ test('开发者模式开关在真实渲染中贯通设置页与插件页的目�
       'twilight-plugin-page-devmode'
     )
     const generalSection = await compileComponent(
-      './settings-page/GeneralSettingsSection.vue',
+      './settings-page/SystemSettingsSection.vue',
       'GeneralSectionComponent',
       'twilight-general-section-devmode'
     )
@@ -161,7 +161,7 @@ function stubScript(): string {
       enabled: false, requestedEnabled: true, status: 'failed', error: 'activation failed'
     }
     window.__useSettingsStore = () => ({ settings, updateSettings })
-    window.__stubComponent = { name: 'FixtureStub', template: '<span class="fixture-stub"></span>' }
+    window.__stubComponent = { name: 'FixtureStub', props: ['id', 'title'], template: '<details :id="id" class="fixture-stub"><summary>{{ title }}</summary><slot /></details>' }
     // i18n 替身：t() 回显 key，语言选择器因此能渲染且断言仍只看结构。
     window.__i18nLocale = {
       APP_LOCALES: ['zh-CN', 'en-US'],

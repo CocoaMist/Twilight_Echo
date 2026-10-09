@@ -1,6 +1,7 @@
 import type { UiContribution } from '../extensions/registry'
 import type { NavigationPageTarget, StreamingPageTab } from './navigationPages.ts'
 import type { SettingsSection, ThemeStudioDomain } from './useAppNavigation'
+import { normalizeSettingsSection } from '../components/settings-page/types.ts'
 
 export type NavigationOverlay =
   | 'playing'
@@ -56,17 +57,6 @@ const overlays = new Set<NavigationOverlay>([
   'plugins',
   'equalizer',
   'dsp'
-])
-const settingsSections = new Set<SettingsSection>([
-  'general',
-  'playback',
-  'dsp',
-  'cache',
-  'performance',
-  'appearance',
-  'desktopLyrics',
-  'shortcuts',
-  'about'
 ])
 const themeDomains = new Set<ThemeStudioDomain>([
   'presets',
@@ -153,9 +143,7 @@ export function normalizeNavigationSession(value: unknown): NavigationSession | 
       ? value.overlayHistory.slice(-20).filter((entry) => entry === null || member(overlays, entry))
       : [],
     menuOpen: value.menuOpen === true,
-    settingsSection: member(settingsSections, value.settingsSection)
-      ? value.settingsSection
-      : 'general',
+    settingsSection: normalizeSettingsSection(value.settingsSection),
     themeStudioDomain: member(themeDomains, value.themeStudioDomain)
       ? value.themeStudioDomain
       : 'presets',

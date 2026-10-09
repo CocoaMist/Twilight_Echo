@@ -15,10 +15,12 @@ const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../', import.meta.url))
 const sectionKeys: Record<string, string> = {
   General: 'general',
-  Playback: 'playback',
+  Playback: 'playback-basics',
   Dsp: 'dsp',
   Cache: 'cache',
-  Performance: 'performance',
+  Library: 'library',
+  Connections: 'connections',
+  System: 'system',
   Appearance: 'appearance',
   DesktopLyrics: 'desktopLyrics',
   Shortcuts: 'shortcuts',
@@ -44,6 +46,8 @@ test('settings preserve transition navigation geometry and skip distant content 
           resolveId(source, importer) {
             if (!importer?.split('?')[0].replaceAll('\\', '/').endsWith('/SettingsPage.vue'))
               return null
+            if (source.endsWith('/LyricsStyleSettings.vue'))
+              return '\0settings-section:playing-lyrics'
             const section = source.match(/\/([A-Za-z]+)SettingsSection\.vue$/)?.[1]
             if (section && sectionKeys[section]) return `\0settings-section:${sectionKeys[section]}`
             const store = source.match(
