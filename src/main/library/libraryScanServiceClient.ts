@@ -301,6 +301,8 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
       if (!pending) return
       this.touchWatchdog(pending)
       for (const filePath of message.batch.parsedFilePaths) pending.completedFilePaths.add(filePath)
+      for (const update of message.batch.releaseDateUpdates ?? [])
+        pending.completedFilePaths.add(update.filePath)
       const trackPaths = new Set(
         message.batch.parsedTracks.flatMap((track) =>
           track &&
@@ -311,7 +313,7 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
             : []
         )
       )
-      pending.parsedFileCount += trackPaths.size
+      pending.parsedFileCount += trackPaths.size + (message.batch.releaseDateUpdates?.length ?? 0)
       pending.onBatch?.(message.batch)
       return
     }

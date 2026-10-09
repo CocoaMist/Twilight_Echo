@@ -1,8 +1,19 @@
 ﻿<script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  reactive,
+  ref,
+  shallowRef,
+  watch
+} from 'vue'
 import type { ProviderHomeSectionPresentation } from '../../../shared/providerHome'
 import { useBackHandler } from '../app/useBackStack'
 import type { Track } from '../types/music'
+import { copyTrackNames } from '../utils/copyTrackNames'
 import {
   useNcmStore,
   captureNcmSession,
@@ -20,6 +31,10 @@ import {
 } from '../stores/usePlayerStore'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useMediaProviders } from '../providers'
+import {
+  providerFavoriteChange,
+  providerFavoriteTrackKey
+} from '../providers/providerFavoriteChanges'
 import { searchUnifiedCollections } from '@renderer/components/streaming-page/unifiedCollectionSearch.ts'
 import { BUILTIN_NAVIGATION_PAGES } from '@renderer/app/navigationPages.ts'
 import type {
@@ -34,10 +49,16 @@ import type {
 import StreamingHome from './StreamingHome.vue'
 import StreamingDiscovery from './StreamingDiscovery.vue'
 import StreamingLibrary from './StreamingLibrary.vue'
+import { useLibraryFavoritePlaylist } from './streaming-page/useLibraryFavoritePlaylist'
+import { useBilibiliFavorites } from './streaming-page/useBilibiliFavorites'
 import NcmCloudPanel from './NcmCloudPanel.vue'
 import StreamingSearch from './StreamingSearch.vue'
 import StreamingDetailStage from './streaming-page/StreamingDetailStage.vue'
 import { useStreamingTrackView } from '@renderer/components/streaming-page/useStreamingTrackView'
+import {
+  usePlaylistTrackPaging,
+  type PlaylistTrackPagingSnapshot
+} from './streaming-page/usePlaylistTrackPaging'
 import StreamingContentHeader from './streaming-page/StreamingContentHeader.vue'
 import StreamingSearchControls from './streaming-page/StreamingSearchControls.vue'
 import StreamingPlaceholder from './streaming-page/StreamingPlaceholder.vue'
@@ -96,6 +117,8 @@ import { useEscapeToClose } from '../app/useDismissLayer.ts'
 import type { ProviderDownloadQuality } from '../../../preload/types'
 import { useDownloadTasks } from '../stores/useDownloadTasks'
 
+const NcmToplists = defineAsyncComponent(() => import('./local-dashboard/NcmToplists.vue'))
+
 interface RecSection extends ProviderHomeSectionPresentation {
   key: string
   title: string
@@ -146,6 +169,7 @@ interface DetailSnapshot {
   artistTab: ArtistDetailTab
   liked: number | null
   likedPaging: { nextOffset: number; total: number | null; hasMore: boolean }
+  playlistPaging?: PlaylistTrackPagingSnapshot
 }
 
 interface DetailStackEntry {
@@ -239,6 +263,9 @@ function beginDetailTransition(): void {
 // shallowRef + whole-array replacement only: liked songs / playlists can hold
 // thousands of tracks and deep reactivity over them is pure overhead.
 const detailTracks = shallowRef<Track[]>([])
+const playlistTrackPaging = usePlaylistTrackPaging(detailTracks, (error) =>
+  friendlyStreamingError(error, '继续加载歌单失败')
+)
 const {
   query: detailQuery,
   sort: detailSort,
@@ -355,6 +382,21 @@ const activeProvider = computed<string>(() => {
 const isExternalActive = computed(() => activeProvider.value !== NCM_PROVIDER_ID)
 const activeExternalState = computed<ExternalProviderState | null>(() =>
   isExternalActive.value ? (externalStates[activeProvider.value] ?? null) : null
+)
+
+const {
+  options: libraryFavoriteOptions,
+  selectedPlaylist: libraryFavoritePlaylist,
+  storageError: libraryFavoriteError,
+  select: selectLibraryFavoritePlaylist
+} = useLibraryFavoritePlaylist(
+  () =>
+    JSON.stringify([
+      activeProvider.value,
+      String(activeExternalState.value?.profile?.userId ?? 'guest')
+    ]),
+  () => activeExternalState.value?.likedPlaylist ?? null,
+  () => activeExternalState.value?.playlists ?? []
 )
 
 const activeProviderInfo = computed(() => providerStore.getProvider(activeProvider.value))
@@ -507,6 +549,7 @@ async function openRecSection(section: RecSection): Promise<void> {
   detailLoadToken++
   beginDetailTransition()
   pushDetail({ type: 'rec', section })
+  playlistTrackPaging.reset()
   detailTracks.value = section.tracks
   detailLoading.value = false
   detailError.value = ''
@@ -973,9 +1016,49 @@ const discovery = useStreamingDiscovery({
 
 // Like button state
 const likingTracks = ref<Set<number>>(new Set())
+const biliFavorites = useBilibiliFavorites(mediaProviders, () =>
+  String(externalStates.bili?.profile?.userId ?? 'guest')
+)
+const showBilibiliTrackLikes = computed(
+  () => activeProvider.value === 'bili' && currentDetail.value?.type === 'playlist'
+)
+
+watch(providerFavoriteChange, (change) => {
+  if (change?.providerId !== 'bili') return
+  const state = externalStates.bili
+  if (state) state.libraryLoaded = false
+  if (change.liked || activeProvider.value !== 'bili') return
+  const key = providerFavoriteTrackKey('bili', change.trackId)
+  const matches = (track: Track): boolean => providerFavoriteTrackKey('bili', track.id) === key
+  for (const entry of detailStack.value) {
+    if (entry.view.type !== 'playlist' || !entry.snapshot?.tracks.some(matches)) continue
+    entry.snapshot.tracks = entry.snapshot.tracks.filter((track) => !matches(track))
+    if (entry.snapshot.playlistPaging?.active) {
+      // Deleting a video shifts every subsequent source page. Resume from
+      // page one and let paging deduplicate the surviving snapshot tracks.
+      entry.snapshot.playlistPaging.nextOffset = 0
+      entry.snapshot.playlistPaging.hasMore = true
+      entry.snapshot.playlistPaging.error = ''
+    }
+  }
+  if (currentDetail.value?.type === 'playlist' && detailTracks.value.some(matches)) {
+    void openPlaylist(currentDetail.value.playlist, true, true)
+  }
+})
 
 async function onLikeTrack(track: Track, event: MouseEvent): Promise<void> {
   event.stopPropagation()
+  if (showBilibiliTrackLikes.value && track.source === 'bili') {
+    try {
+      await biliFavorites.toggle(track)
+    } catch (error) {
+      pushNotice({
+        kind: 'error',
+        message: friendlyStreamingError(error, '修改 Bilibili 收藏失败')
+      })
+    }
+    return
+  }
   const songId = track.ncmSongId
   if (songId == null) {
     if (musicStore.isFavoriteTrack(track)) musicStore.removeFavoriteTrack(track)
@@ -1090,12 +1173,12 @@ const rootLoading = computed(() => {
 
 const likedSummary = computed(() => {
   if (isExternalActive.value) {
-    const state = activeExternalState.value
+    const playlist = libraryFavoritePlaylist.value
     const providerSummary = {
-      name: state?.likedPlaylist?.name ?? '我喜欢的音乐',
-      cover: state?.likedPlaylist?.cover ?? null,
-      coverSource: state?.likedPlaylist?.coverSource ?? null,
-      trackCount: state?.likedPlaylist?.trackCount ?? 0
+      name: playlist?.name ?? '我喜欢的音乐',
+      cover: playlist?.cover ?? null,
+      coverSource: playlist?.coverSource ?? null,
+      trackCount: playlist?.trackCount ?? 0
     }
     return providerSummary
   }
@@ -1172,6 +1255,9 @@ const showDetailOverlayLoading = computed(() => {
   return detailLoading.value && !showDetailInitialLoading.value
 })
 const detailTrackCountLabel = computed(() => {
+  if (playlistTrackPaging.active.value && playlistTrackPaging.hasMore.value) {
+    return `已加载 ${detailTracks.value.length} 首`
+  }
   if (currentDetail.value?.type === 'liked' && likedTracksTotal.value != null) {
     return `${detailTracks.value.length} / ${likedTracksTotal.value} 首`
   }
@@ -1350,6 +1436,7 @@ function captureDetailState(): DetailSnapshot {
     followed: artistFollowed.value,
     artistTab: activeArtistTab.value,
     liked: likedCount.value,
+    playlistPaging: playlistTrackPaging.snapshot(),
     likedPaging: {
       nextOffset: likedTracksNextOffset.value,
       total: likedTracksTotal.value,
@@ -1364,6 +1451,7 @@ function applyDetailState(snapshot: DetailSnapshot | undefined): void {
     return
   }
   detailTracks.value = snapshot.tracks
+  playlistTrackPaging.restore(snapshot.playlistPaging)
   detailUsers.value = snapshot.users
   artistAlbums.value = snapshot.artistAlbumsList
   artistPlaylists.value = snapshot.artistPlaylistsList
@@ -1433,6 +1521,7 @@ function resetDetail(options?: { animate?: boolean }): void {
 }
 
 function resetLikedTracksPaging(): void {
+  playlistTrackPaging.reset()
   likedTracksNextOffset.value = 0
   likedTracksTotal.value = null
   likedTracksHasMore.value = false
@@ -1570,13 +1659,14 @@ async function openLikedTracks(force = false): Promise<void> {
   // (ytm's "LM"), so open it through the generic playlist path rather than the
   // ncm-only fetchLikedTracks.
   if (isExternalActive.value) {
-    const liked = activeExternalState.value?.likedPlaylist
+    const liked = libraryFavoritePlaylist.value
     if (liked) {
       await openPlaylist(liked, force)
       return
     }
     beginDetailTransition()
     pushDetail({ type: 'liked' })
+    playlistTrackPaging.reset()
     detailTracks.value = []
     likedCount.value = 0
     detailError.value = ''
@@ -1658,12 +1748,29 @@ async function ensureLikedTracksScrollable(): Promise<void> {
   await loadMoreLikedTracks()
 }
 
-async function openPlaylist(playlist: MediaProviderPlaylistSummary, force = false): Promise<void> {
+async function openPlaylist(
+  playlist: MediaProviderPlaylistSummary,
+  force = false,
+  replace = false
+): Promise<void> {
   beginDetailTransition()
-  pushDetail({ type: 'playlist', playlist })
+  if (replace) replaceTopDetail({ type: 'playlist', playlist })
+  else pushDetail({ type: 'playlist', playlist })
   const token = beginDetailLoad()
 
   try {
+    const providerId = activeProvider.value
+    if (
+      isExternalActive.value &&
+      providerStore.getProvider(providerId)?.supportedMethods?.includes('fetchPlaylistTracksPage')
+    ) {
+      await playlistTrackPaging.open(
+        (offset, refresh) =>
+          providerStore.fetchPlaylistTracksPage(providerId, playlist.id, offset, 20, refresh),
+        force
+      )
+      return
+    }
     const tracks = isExternalActive.value
       ? await providerStore.fetchPlaylistTracks(activeProvider.value, playlist.id, force)
       : await fetchPlaylistTracks(playlist.id, force)
@@ -1678,6 +1785,14 @@ async function openPlaylist(playlist: MediaProviderPlaylistSummary, force = fals
       detailLoading.value = false
     }
   }
+}
+
+async function loadMoreDetailTracks(): Promise<void> {
+  if (playlistTrackPaging.active.value && currentDetail.value?.type === 'playlist') {
+    await playlistTrackPaging.loadMore()
+    return
+  }
+  await loadMoreLikedTracks()
 }
 
 async function openTrackAlbum(track: Track): Promise<void> {
@@ -2235,6 +2350,12 @@ async function handleContextFavorite(): Promise<void> {
   await favoriteStreamingTracks(tracks)
 }
 
+async function handleContextCopyTrackNames(): Promise<void> {
+  const tracks = streamingContextActionTracks.value
+  closeStreamingContextMenu()
+  await copyTrackNames(tracks)
+}
+
 function handleContextAddToPlaylist(): void {
   const tracks = streamingContextActionTracks.value
   closeStreamingContextMenu()
@@ -2464,16 +2585,36 @@ async function shufflePlayDetailTracks(): Promise<void> {
   playStreamingTrack(shuffled[0], shuffled)
 }
 
+function isDetailRowLiking(track: Track): boolean {
+  if (showBilibiliTrackLikes.value && track.source === 'bili') return biliFavorites.isLoading(track)
+  return track.ncmSongId != null && likingTracks.value.has(track.ncmSongId)
+}
+
+function isDetailRowLiked(track: Track): boolean {
+  if (showBilibiliTrackLikes.value && track.source === 'bili') return biliFavorites.isLiked(track)
+  if (track.ncmSongId == null) return false
+  return isTrackLiked(track.ncmSongId)
+}
+
 function isDetailTrackLiking(ncmSongId?: number | null): boolean {
   return ncmSongId != null && likingTracks.value.has(ncmSongId)
 }
 
 function isDetailTrackLiked(ncmSongId?: number | null): boolean {
-  if (ncmSongId == null) return false
-  return isTrackLiked(ncmSongId)
+  return ncmSongId != null && isTrackLiked(ncmSongId)
 }
 
 const detailLikedFooter = computed(() => {
+  if (playlistTrackPaging.active.value && currentDetail.value?.type === 'playlist') {
+    return {
+      paged: true,
+      loadingMore: playlistTrackPaging.loading.value,
+      hasMore: playlistTrackPaging.hasMore.value,
+      loadMoreError: playlistTrackPaging.error.value,
+      total: playlistTrackPaging.total.value,
+      loaded: detailTracks.value.length
+    }
+  }
   if (currentDetail.value?.type !== 'liked' || isExternalActive.value) return null
   return {
     loadingMore: likedTracksLoadingMore.value,
@@ -2983,6 +3124,14 @@ function onStreamingContentScroll(event: Event): void {
   if (scrollable <= 0) return
   const ratio = (element.scrollTop + element.clientHeight) / element.scrollHeight
 
+  if (playlistTrackPaging.active.value && currentDetail.value?.type === 'playlist') {
+    if (playlistTrackPaging.error.value || playlistTrackPaging.loading.value) return
+    if (element.scrollHeight - element.scrollTop - element.clientHeight <= 160) {
+      void loadMoreDetailTracks()
+    }
+    return
+  }
+
   if (currentDetail.value?.type === 'liked') {
     if (!likedTracksHasMore.value || likedTracksLoadingMore.value) return
     if (ratio >= LIKED_TRACKS_LOAD_THRESHOLD) void loadMoreLikedTracks()
@@ -3018,7 +3167,7 @@ watch(
 async function playLikedSongs(): Promise<void> {
   // For external providers the liked view is a playlist detail; detect it so we
   // don't re-open it on every play click.
-  const likedId = activeExternalState.value?.likedPlaylist?.id
+  const likedId = libraryFavoritePlaylist.value?.id
   const isViewingLiked =
     currentDetail.value?.type === 'liked' ||
     (isExternalActive.value &&
@@ -3287,7 +3436,18 @@ async function refreshStreamingSurface(): Promise<void> {
   }
 }
 
-// StreamingPage stays mounted for the app session (App.vue v-show) so leaving
+watch(ncmNavigationAvailable, (available, wasAvailable) => {
+  if (
+    available &&
+    !wasAvailable &&
+    props.active !== false &&
+    activeProvider.value === NCM_PROVIDER_ID
+  ) {
+    void refreshStreamingSurface()
+  }
+})
+
+// StreamingPage stays mounted for the app session (root v-show) so leaving
 // and re-entering restores the last tab/detail. When the surface becomes
 // visible again after login/settings, refresh auth-bound data without resetting
 // navigation state.
@@ -3308,7 +3468,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="streaming-page" :class="{ 'has-player': hasPlayer, 'menu-open': menuOpen }">
+  <div
+    v-show="active !== false"
+    class="streaming-page"
+    :class="{ 'has-player': hasPlayer, 'menu-open': menuOpen }"
+  >
     <div ref="streamingContentRef" class="streaming-content" @scroll="onStreamingContentScroll">
       <StreamingContentHeader
         :is-detail="!!currentDetail"
@@ -3430,7 +3594,11 @@ onMounted(async () => {
             @play-track="playHomeTrack"
             @request-login="emit('login', activeProvider)"
             @open-discovery="selectTab('discover')"
-          />
+          >
+            <template v-if="activeProvider === 'ncm'" #rankings>
+              <NcmToplists @login="emit('login', 'ncm')" />
+            </template>
+          </StreamingHome>
 
           <StreamingDiscovery
             v-else-if="
@@ -3550,6 +3718,8 @@ onMounted(async () => {
                 :current-track-id="currentTrack?.id ?? null"
                 :track-activation-mode="settingsStore.settings.value.trackActivationMode"
                 :is-external="isExternalActive"
+                :show-track-likes="showBilibiliTrackLikes"
+                :favorite-provider-label="showBilibiliTrackLikes ? 'Bilibili' : '网易云'"
                 :loading="detailLoading && detailTracks.length === 0"
                 :has-selection="hasSelection"
                 :selected-count="selectedCount"
@@ -3558,8 +3728,8 @@ onMounted(async () => {
                 :can-add-to-playlist="canManageNcmPlaylists"
                 :can-remove-from-playlist="canMutateCurrentNcmPlaylist"
                 :is-selected="isSelected"
-                :is-track-liked="isDetailTrackLiked"
-                :is-liking="isDetailTrackLiking"
+                :is-track-liked="isDetailRowLiked"
+                :is-liking="isDetailRowLiking"
                 :format-time="formatTime"
                 :liked-footer="detailLikedFooter"
                 @open-artist="openTrackArtist"
@@ -3574,7 +3744,7 @@ onMounted(async () => {
                 @batch-delete="handleStreamingBatchDelete"
                 @clear-selection="clearSelection"
                 @load-all-liked="resolveDetailPlaybackQueue"
-                @load-more-liked="loadMoreLikedTracks"
+                @load-more-liked="loadMoreDetailTracks"
                 @track-context-menu="onStreamingTrackContextMenu"
               />
             </template>
@@ -3662,6 +3832,9 @@ onMounted(async () => {
             :profile="activeProfile"
             :profile-signature="profileSignature"
             :liked-summary="likedSummary"
+            :liked-playlist-options="libraryFavoriteOptions"
+            :selected-liked-playlist-id="libraryFavoritePlaylist?.id ?? null"
+            :liked-selection-error="isExternalActive ? libraryFavoriteError : ''"
             :library-loaded="activeLibraryLoaded"
             :user-playlist-entries="userPlaylistEntries"
             :show-liked-panel="showActiveLikedPanel"
@@ -3678,6 +3851,7 @@ onMounted(async () => {
             @open-user-list="openUserList"
             @open-liked-tracks="openLikedTracks"
             @play-liked-songs="playLikedSongs"
+            @select-liked-playlist="selectLibraryFavoritePlaylist"
             @open-playlist="openPlaylist"
             @create-playlist="openCreateNcmPlaylistDialog()"
             @open-album="openAlbum"
@@ -3709,6 +3883,7 @@ onMounted(async () => {
       :show-aggregate-submenu="showStreamingAggregateSubmenu"
       @play="handleContextPlayTrack"
       @play-next="handleContextPlayNext"
+      @copy-track-names="handleContextCopyTrackNames"
       @favorite="handleContextFavorite"
       @like="handleContextLikeTrack"
       @create-playlist="handleContextCreatePlaylist"

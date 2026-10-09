@@ -2,6 +2,12 @@
 
 本文记录当前 `PlaybackInfo`、`OutputInfo`、Capabilities、`sourceExact` / `outputPerfect` 与 Recovery diagnostics 的对外语义。
 
+## 暂停淡出
+
+`TAE_Pause` / `audioEngine.togglePause()` 暂停 PCM 播放时，先在音频回调中执行 200 毫秒线性淡出，再提交 paused 状态；继续播放仍使用原来的软件音量。淡出是独立的临时增益，不修改或持久化 `volume`，支持 Float32、整数 PCM 直通及 PCM 转 DSD 调制前的 PCM。独占设备的自动释放发生在淡出结束之后。回调停止或设备异常时，控制线程最多等待 300 毫秒后完成暂停，避免无限等待。
+
+淡出期间和暂停后的输出报告 `pause_fade_active`，`outputPerfect` / `sourceExact` / `pcmPassthrough` 为 false；继续播放后按实际输出路线恢复这些事实。DoP 与原生 DSD 直通保留原有暂停行为，不缩放其传输数据。renderer HTMLAudio 备用播放也执行 200 毫秒淡出，再次播放、换曲或销毁播放器会清理待执行的暂停，并恢复最新音量。外部投放设备仍由自身的播放控制处理暂停。
+
 ## PlaybackInfo 与 OutputInfo
 
 设备档案使用 `window.api.audioEngine.getDeviceProfiles/saveDeviceProfile/deleteDeviceProfile/applyDeviceProfile`，返回 `AudioDeviceProfilesSnapshot`；`onDeviceProfilesChanged` 返回退订函数。载荷唯一类型来自 `shared/audioDeviceProfiles.ts`，由 main 边界校验，单次 `applyDeviceProfile(id)` 完成全部输出与 DSP 事务。快照包含当前可保存配置、设备/场景选项、活动 ID、软件音量上限、逐档案不可用原因及 applying/applied/failed 状态。档案集合上限 64，schema version 为 1；旧设置迁移为空集合。删除活动档案不关闭输出、不释放音量上限，编辑后需再次应用才改变配置。
@@ -46,7 +52,9 @@
 - `crossfadeActive` / `crossfadeSeconds`：播放连续性处理状态。当前 native 会对预加载下一首做 overlap mixing，并参与 bit-perfect 判定；启用 crossfade 时必须报告 `outputPerfect=false`。
 - `gaplessActive`：gapless 意图开启、无 crossfade、且当前存在预加载流时为 `true`（表示 gapless 路径在跑，不等于已 promote）。
 - `preloadReady`：下一首预解码流已 `readyForRender`，可被 `skipToPreloaded` 或 render-path promote 消耗。
-- `gaplessBlockedReason`：gapless 路径阻塞原因；空串表示未阻塞。取值：`disabled`（意图关或内部门控）、`dsd_path`（DoP/Native DSD）、`typed_passthrough`（typed PCM passthrough 关闭 preload）、`crossfade`（交叉淡入关闭 true gapless）、`format_mismatch`（相邻曲目无法在当前输出格式下 promote）。EOF auto-next 与手动 `next()` 均优先 `skipToPreloaded`，失败才走完整 `playQueueItem`/`stop()`。
+- `gaplessBlockedReason`：gapless 路径阻塞原因；空串表示未阻塞。取值：`disabled`（意图关或内部门控）、`dsd_path`（DoP/Native DSD）、`crossfade`（交叉淡入关闭 true gapless）、`format_mismatch`（相邻曲目无法在当前输出格式下 promote）。旧引擎的 `typed_passthrough` 原因保留前端兼容；当前 PCM 直通路径支持格式兼容的预加载。EOF auto-next 与手动 `next()` 均优先 `skipToPreloaded`，失败才走完整 `playQueueItem`/`stop()`。
+
+PCM 直通无缝衔接保留实际设备的 Int16 / Int24 / Int24-in-32 / Int32 / Float32 格式：下一首预解码到相同格式，当前曲耗尽后在同一个设备回调内继续写入下一首的原始 PCM 字节，不插入静音、不经过 Float32 处理、不停止或重新打开设备。采样率、声道数和有效位深必须兼容；24-bit 的打包容器可由解码器无损匹配设备格式。格式不兼容或 DSD 曲目撤下预加载并报告阻断，随后使用正常切歌路径。无缝衔接本身不改变 `pcmPassthrough` / `outputPerfect` 判定；音频文件内原有的静音仍按源内容播放。
 
 ## Visualization API
 

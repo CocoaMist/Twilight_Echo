@@ -1,4 +1,8 @@
-import { MediaProviderRegistry, toProviderIpcArgs } from './mediaProvider.ts'
+import {
+  isPluginProviderEnabled,
+  MediaProviderRegistry,
+  toProviderIpcArgs
+} from './mediaProvider.ts'
 import type {
   MediaProviderArtistSummary,
   MediaProviderAlbumSummary,
@@ -7,6 +11,7 @@ import type {
   MediaProviderHighQualityPlaylistPage,
   MediaProviderPlaylistCatalogue,
   MediaProviderPlaylistSummary,
+  MediaProviderPlaylistTracksPage,
   MediaProviderProfile,
   MediaProviderSearchResult,
   MediaProviderUserSummary
@@ -16,14 +21,26 @@ import type { Track } from '../types/music'
 const mediaProviders = new MediaProviderRegistry()
 let defaultsRegistered = false
 let pluginProvidersSyncing: Promise<void> | null = null
+let pluginProviderRevision = 0
+let pluginChangeListenerSetup = false
 let pluginProviderHealthRefreshing: Promise<void> | null = null
 let pluginProviderHealthRefreshedAt = 0
 const PLUGIN_PROVIDER_HEALTH_REFRESH_INTERVAL_MS = 5_000
 
 export function useMediaProviders(): MediaProviderRegistry {
   registerDefaultProviders()
-  void syncPluginProviders()
+  void syncPluginProviders().catch(() => undefined)
   return mediaProviders
+}
+
+function ensurePluginChangeListener(): void {
+  if (pluginChangeListenerSetup || !window.api?.plugins?.onChanged) return
+  pluginChangeListenerSetup = true
+  window.api.plugins.onChanged(() => {
+    pluginProviderRevision += 1
+    pluginProviderHealthRefreshedAt = 0
+    void syncPluginProviders().catch(() => undefined)
+  })
 }
 
 export function registerDefaultProviders(): void {
@@ -41,16 +58,7 @@ async function refreshPluginProviderHealth(): Promise<void> {
 
   pluginProviderHealthRefreshing = (async () => {
     try {
-      const providers = await api.list()
-      for (const provider of providers) {
-        if (!mediaProviders.get(provider.id)) continue
-        mediaProviders.update(provider.id, {
-          name: provider.name,
-          capabilities: provider.capabilities,
-          health: provider.health as MediaProviderHealth | undefined,
-          isEnabled: () => provider.health?.available !== false
-        })
-      }
+      await syncPluginProviders()
     } catch {
       // Health refresh follows provider calls opportunistically; callers should keep their result.
     } finally {
@@ -63,13 +71,21 @@ async function refreshPluginProviderHealth(): Promise<void> {
 }
 
 export async function syncPluginProviders(): Promise<void> {
+  ensurePluginChangeListener()
   if (pluginProvidersSyncing) return pluginProvidersSyncing
   const api = window.api?.providers
   if (!api) return
 
   pluginProvidersSyncing = (async () => {
     try {
-      const providers = await api.list()
+      let revision = pluginProviderRevision
+      let providers = await api.list()
+      // A registration/disable event can arrive while list() is in flight.
+      // Discard that old snapshot and let all waiting callers use the fresh one.
+      while (revision !== pluginProviderRevision) {
+        revision = pluginProviderRevision
+        providers = await api.list()
+      }
       const activePluginProviderIds = new Set(providers.map((provider) => provider.id))
       mediaProviders.unregisterWhere(
         (provider) => provider.source === 'plugin' && !activePluginProviderIds.has(provider.id)
@@ -80,7 +96,7 @@ export async function syncPluginProviders(): Promise<void> {
             name: provider.name,
             capabilities: provider.capabilities,
             health: provider.health as MediaProviderHealth | undefined,
-            isEnabled: () => provider.health?.available !== false
+            isEnabled: () => isPluginProviderEnabled(provider.health)
           })
           continue
         }
@@ -125,7 +141,7 @@ export async function syncPluginProviders(): Promise<void> {
           source: 'plugin',
           capabilities: provider.capabilities,
           health: provider.health as MediaProviderHealth | undefined,
-          isEnabled: () => provider.health?.available !== false,
+          isEnabled: () => isPluginProviderEnabled(provider.health),
           getPlaybackUrl: provider.capabilities.includes('playbackUrl')
             ? (track, options) => callProvider<string | null>('getPlaybackUrl', [track, options])
             : undefined,
@@ -162,6 +178,15 @@ export async function syncPluginProviders(): Promise<void> {
           fetchPlaylistTracks: provider.capabilities.includes('playlist')
             ? (playlistId, force) =>
                 callProvider<Track[]>('fetchPlaylistTracks', [playlistId, force])
+            : undefined,
+          fetchPlaylistTracksPage: supports('fetchPlaylistTracksPage')
+            ? (playlistId, offset, limit, force) =>
+                callProvider<MediaProviderPlaylistTracksPage>('fetchPlaylistTracksPage', [
+                  playlistId,
+                  offset,
+                  limit,
+                  force
+                ])
             : undefined,
           checkLogin: provider.capabilities.includes('login')
             ? () =>

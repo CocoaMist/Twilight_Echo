@@ -1,4 +1,4 @@
-import { computed, ref, shallowRef } from 'vue'
+import { computed, reactive, ref, shallowRef } from 'vue'
 import type { UiContribution } from '@renderer/extensions/registry'
 import type { SectionKey, SettingsSearchEntry } from '@renderer/components/settings-page/types.ts'
 import {
@@ -6,6 +6,13 @@ import {
   type NavigationPageTarget,
   type StreamingPageTab
 } from '@renderer/app/navigationPages.ts'
+import {
+  navigationHome,
+  saveNavigationTarget,
+  resolveNavigationTarget,
+  type NavigationSession,
+  type NavigationOverlay
+} from './navigationSession.ts'
 
 export type SettingsSection = SectionKey
 export interface SettingsNavigationTarget {
@@ -24,12 +31,8 @@ export type ThemeStudioDomain =
   | 'windows'
   | 'motion'
   | 'advanced'
-type Overlay = 'playing' | 'login' | 'settings' | 'theme' | 'plugins' | 'equalizer' | 'dsp'
-const localHome = (): NavigationPageTarget => ({
-  kind: 'local',
-  category: 'dashboard',
-  filter: null
-})
+type Overlay = NavigationOverlay
+const localHome = navigationHome
 const songlistOrder = [
   'dashboard',
   'allSongs',
@@ -47,16 +50,55 @@ export function useAppNavigation() {
   const menuOpen = ref(false)
   const pageTarget = shallowRef<NavigationPageTarget>(localHome())
   const overlay = ref<Overlay | null>(null)
-  const overlayHistory: Array<Overlay | null> = []
+  const overlayHistory = reactive<Array<Overlay | null>>([])
   const history = shallowRef<NavigationPageTarget[]>([])
-  const lastLocal = shallowRef<NavigationPageTarget>(localHome())
+  const lastLocal = shallowRef<Extract<NavigationPageTarget, { kind: 'local' }>>(localHome())
   const loginPageMode = ref<'login' | 'profile'>('login')
   const loginInitialProviderId = ref<string | null>(null)
   const themeStudioInitialDomain = ref<ThemeStudioDomain>('presets')
   const themeReturn = ref<'playing' | 'settings' | null>(null)
   const settingsInitialSection = ref<SettingsSection>('general')
+  const settingsCurrentSection = ref<SettingsSection>('general')
+  const themeStudioCurrentDomain = ref<ThemeStudioDomain>('presets')
   const settingsNavigationTarget = shallowRef<SettingsNavigationTarget>({ revision: 0 })
   const songlistTransitionName = ref<'page-down' | 'page-up'>('page-down')
+
+  const session = computed<NavigationSession>(() => ({
+    version: 1,
+    pageTarget: saveNavigationTarget(pageTarget.value),
+    history: history.value.map(saveNavigationTarget),
+    lastLocal: lastLocal.value,
+    overlay: overlay.value,
+    overlayHistory: [...overlayHistory],
+    menuOpen: menuOpen.value,
+    settingsSection: settingsCurrentSection.value,
+    themeStudioDomain: themeStudioCurrentDomain.value,
+    themeReturn: themeReturn.value,
+    loginPageMode: loginPageMode.value,
+    loginProviderId: loginInitialProviderId.value
+  }))
+
+  function restoreSession(saved: NavigationSession, pages: UiContribution[] = []): void {
+    pageTarget.value = resolveNavigationTarget(saved.pageTarget, pages) ?? localHome()
+    history.value = saved.history.flatMap((target) => resolveNavigationTarget(target, pages) ?? [])
+    lastLocal.value = saved.lastLocal
+    overlayHistory.splice(0, overlayHistory.length, ...saved.overlayHistory)
+    overlay.value = saved.overlay
+    menuOpen.value = saved.menuOpen
+    settingsInitialSection.value = settingsCurrentSection.value = saved.settingsSection
+    themeStudioInitialDomain.value = themeStudioCurrentDomain.value = saved.themeStudioDomain
+    themeReturn.value = saved.themeReturn
+    loginPageMode.value = saved.loginPageMode
+    loginInitialProviderId.value = saved.loginProviderId
+  }
+
+  function rememberSettingsSection(section: SettingsSection): void {
+    settingsCurrentSection.value = section
+  }
+
+  function rememberThemeStudioDomain(domain: ThemeStudioDomain): void {
+    themeStudioCurrentDomain.value = domain
+  }
 
   function openOverlay(key: Overlay): void {
     if (overlay.value === key) return
@@ -83,12 +125,8 @@ export function useAppNavigation() {
   const showPluginPage = overlayFlag('plugins')
   const showEqualizerPage = overlayFlag('equalizer')
   const showDspRackPage = overlayFlag('dsp')
-  const showStreamingPage = computed(
-    () => pageTarget.value.kind === 'streaming' && overlay.value !== 'login'
-  )
-  const showStreamingSurface = computed(
-    () => pageTarget.value.kind === 'streaming' && !overlay.value
-  )
+  const showStreamingPage = computed(() => pageTarget.value.kind === 'streaming' && !overlay.value)
+  const showStreamingSurface = showStreamingPage
   const showRadioPodcastPage = computed(() => pageTarget.value.kind === 'radio' && !overlay.value)
   const showNetworkSourcesPage = computed(
     () => pageTarget.value.kind === 'network' && !overlay.value
@@ -196,6 +234,7 @@ export function useAppNavigation() {
     target: Omit<SettingsNavigationTarget, 'revision'> = {}
   ): void {
     settingsInitialSection.value = section
+    settingsCurrentSection.value = section
     settingsNavigationTarget.value = {
       ...target,
       revision: settingsNavigationTarget.value.revision + 1
@@ -207,6 +246,7 @@ export function useAppNavigation() {
   }
   function openThemeStudioPage(initialDomain: ThemeStudioDomain = 'presets'): void {
     themeStudioInitialDomain.value = initialDomain
+    themeStudioCurrentDomain.value = initialDomain
     themeReturn.value =
       initialDomain === 'presets' || showSettingsPage.value
         ? 'settings'
@@ -250,11 +290,12 @@ export function useAppNavigation() {
     )
   }
   function closeMissingPluginPage(pages: UiContribution[]): void {
-    history.value = history.value.filter(
+    const nextHistory = history.value.filter(
       (entry) =>
         entry.kind !== 'plugin' ||
         pages.some((page) => page.pluginId === entry.page.pluginId && page.id === entry.page.id)
     )
+    if (nextHistory.length !== history.value.length) history.value = nextHistory
     const target = pageTarget.value
     if (target.kind !== 'plugin') return
     if (
@@ -281,6 +322,10 @@ export function useAppNavigation() {
   }
 
   return {
+    session,
+    restoreSession,
+    rememberSettingsSection,
+    rememberThemeStudioDomain,
     menuOpen,
     pageTarget,
     activePageId,

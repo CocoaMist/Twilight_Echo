@@ -75,8 +75,92 @@ export function toPlaybackQueueSnapshots(tracks: readonly Track[]): Track[] {
       suffix += 1
     }
     assignedIds.add(queueEntryId)
-    return toPlaybackQueueSnapshot({ ...track, queueEntryId })
+    const snapshot = toPlaybackQueueSnapshot(track)
+    snapshot.queueEntryId = queueEntryId
+    return snapshot
   })
+}
+
+export function patchPlaybackQueueTrack(tracks: Track[], updatedTrack: Track): Track[] {
+  const snapshot = toPlaybackQueueSnapshot(updatedTrack)
+  let updated: Track[] | null = null
+  for (let index = 0; index < tracks.length; ++index) {
+    const track = tracks[index]
+    if (track.id !== updatedTrack.id || matchesPlaybackQueueSnapshot(track, snapshot)) continue
+    updated ??= tracks.slice()
+    updated[index] = { ...snapshot, queueEntryId: track.queueEntryId }
+  }
+  return updated ?? tracks
+}
+
+// Explicit field reads keep version validation inexpensive on large queues.
+export function matchesPlaybackQueueSnapshot(track: Track, snapshot: Track): boolean {
+  return (
+    track.id === snapshot.id &&
+    track.title === snapshot.title &&
+    track.artist === snapshot.artist &&
+    (track.artists === snapshot.artists ||
+      (track.artists?.length === snapshot.artists?.length &&
+        !!track.artists?.every(
+          (artist, i) =>
+            artist.id === snapshot.artists![i].id && artist.name === snapshot.artists![i].name
+        ))) &&
+    track.album === snapshot.album &&
+    track.filePath === snapshot.filePath &&
+    track.fileName === snapshot.fileName &&
+    track.dir === snapshot.dir &&
+    track.subTrack === snapshot.subTrack &&
+    (track.cueRange === snapshot.cueRange ||
+      (!!track.cueRange &&
+        !!snapshot.cueRange &&
+        track.cueRange.startSeconds === snapshot.cueRange.startSeconds &&
+        track.cueRange.endSeconds === snapshot.cueRange.endSeconds &&
+        track.cueRange.pregapSeconds === snapshot.cueRange.pregapSeconds &&
+        track.cueRange.virtualPregapSeconds === snapshot.cueRange.virtualPregapSeconds &&
+        track.cueRange.sourcePregapSeconds === snapshot.cueRange.sourcePregapSeconds)) &&
+    track.cueSheetPath === snapshot.cueSheetPath &&
+    track.cueEncoding === snapshot.cueEncoding &&
+    track.duration === snapshot.duration &&
+    track.size === snapshot.size &&
+    track.cover === snapshot.cover &&
+    (track.coverSource ?? null) === snapshot.coverSource &&
+    track.source === snapshot.source &&
+    track.ncmSongId === snapshot.ncmSongId &&
+    track.networkSource === snapshot.networkSource &&
+    (track.streamUrl ?? null) === snapshot.streamUrl &&
+    track.streamQuality === snapshot.streamQuality &&
+    track.format === snapshot.format &&
+    track.sampleRate === snapshot.sampleRate &&
+    track.bitrate === snapshot.bitrate &&
+    track.bitDepth === snapshot.bitDepth &&
+    track.bpm === snapshot.bpm &&
+    track.replayGainTrackGainDb === snapshot.replayGainTrackGainDb &&
+    track.replayGainAlbumGainDb === snapshot.replayGainAlbumGainDb &&
+    track.replayGainTrackPeak === snapshot.replayGainTrackPeak &&
+    track.replayGainAlbumPeak === snapshot.replayGainAlbumPeak &&
+    track.r128TrackGainDb === snapshot.r128TrackGainDb &&
+    track.r128AlbumGainDb === snapshot.r128AlbumGainDb
+  )
+}
+
+/** One retained lightweight queue version; mutable library lists are checked too. */
+export function createPlaybackQueueSnapshotCache() {
+  let snapshots: Track[] | null = null
+  let sourceEntryIds: (string | undefined)[] = []
+  return (tracks: readonly Track[]): Track[] => {
+    const unchanged =
+      snapshots?.length === tracks.length &&
+      tracks.every((track, index) => {
+        const snapshot = snapshots![index]!
+        if (track.queueEntryId !== sourceEntryIds[index]) return false
+        return matchesPlaybackQueueSnapshot(track, snapshot)
+      })
+    if (!unchanged) {
+      snapshots = toPlaybackQueueSnapshots(tracks)
+      sourceEntryIds = tracks.map((track) => track.queueEntryId)
+    }
+    return snapshots!
+  }
 }
 
 export function getPlaybackQueueWindow(

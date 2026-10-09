@@ -4,6 +4,7 @@
 #include "../decoder/SacdIsoDemuxer.h"
 #include "../decoder/SacdIsoDemuxerUtils.h"
 #include "../decoder/SacdIsoProbe.h"
+#include "../metadata/AudioMetadataService.h"
 #include "../core/AudioPipelineDsdUtils.h"
 
 #include <cassert>
@@ -464,7 +465,7 @@ void writeScarletbookAudioSector(
 // SACD directory (probe requirements), Master TOC at LSN 510 ("SACDMTOC"),
 // master text at 511 ("SACDText"), a 2CH area TOC at 520 and an MC area TOC
 // at 530 with SACDTTxt / SACDTRL1 / SACDTRL2 sectors, and audio sectors.
-std::filesystem::path writeScarletbookIsoFixture(const std::string& name, bool dstStereoArea) {
+std::filesystem::path writeScarletbookIsoFixture(const std::string& name, bool dstStereoArea, int year = 2020) {
   const auto path = std::filesystem::temp_directory_path() / name;
   constexpr uint32_t kRootSector = 20;
   constexpr uint32_t kSacdSector = 21;
@@ -519,7 +520,7 @@ std::filesystem::path writeScarletbookIsoFixture(const std::string& name, bool d
   writeBe32To(mtoc + 72, kMcTocLsn);            // area_2_toc_1_start
   writeBe16To(mtoc + 84, 4);                    // area_1_toc_size
   writeBe16To(mtoc + 86, 4);                    // area_2_toc_size
-  writeBe16To(mtoc + 120, 2020);                // disc_date_year
+  writeBe16To(mtoc + 120, static_cast<uint16_t>(year)); // disc_date_year
   mtoc[122] = 6;
   mtoc[123] = 15;
 
@@ -669,6 +670,25 @@ void testDsfReader() {
   assert(bytes[8] == 0x99);
   reader.close();
   std::filesystem::remove(path);
+}
+
+void testOpenDsdReaderAllowsFileRenameAndDeletion() {
+  const auto path = writeDsfFixture("twilight-dsd-file-sharing.dsf");
+  DsdReader reader;
+  std::string error;
+  assert(reader.open(path.string(), &error));
+  auto renamed = path;
+  renamed += ".renamed.dsf";
+  std::error_code fsError;
+  std::filesystem::rename(path, renamed, fsError);
+  assert(!fsError);
+  assert(std::filesystem::remove(renamed, fsError));
+  assert(!fsError);
+  assert(reader.seek(0.0, &error));
+  std::array<uint8_t, 16> bytes{};
+  assert(reader.readBytes(bytes.data(), bytes.size()) == bytes.size());
+  assert(bytes[0] == 0x11);
+  reader.close();
 }
 
 void testDsfSeekAlignsToPlanarBlockBoundary() {
@@ -1051,6 +1071,26 @@ void testSacdIsoDemuxerTracksAndSeek() {
     std::error_code ignored;
     std::filesystem::remove(iso, ignored);
   }
+}
+
+void testOpenSacdDemuxerAllowsFileRenameAndDeletion() {
+  const auto path = writeSacdIsoFixture("twilight-sacd-file-sharing.iso");
+  SacdIsoDemuxer demuxer;
+  std::string error;
+  assert(demuxer.open(path.string(), &error));
+  assert(demuxer.selectTrack("stereo", 1, &error));
+  auto renamed = path;
+  renamed += ".renamed.iso";
+  std::error_code fsError;
+  std::filesystem::rename(path, renamed, fsError);
+  assert(!fsError);
+  assert(std::filesystem::remove(renamed, fsError));
+  assert(!fsError);
+  assert(demuxer.seek(0.0, &error));
+  std::array<uint8_t, 8> bytes{};
+  assert(demuxer.readBytes(bytes.data(), bytes.size()) == bytes.size());
+  assert(bytes[0] == 0x80);
+  demuxer.close();
 }
 
 class RejectingDstProvider final : public SacdDstProvider {
@@ -1598,7 +1638,14 @@ void testScarletbookTocParsesTracksAndMetadata() {
     if (track.area == "stereo") ++stereoCount;
     if (track.area == "multichannel") ++multiCount;
     if (!track.scarletbook) failTest("Scarletbook track missing scarletbook flag");
+    if (track.year != 2020) failTest("Scarletbook disc year did not reach its area tracks");
   }
+  const std::string metadata = readMetadataJson(iso.string());
+  const std::string expectedYear = "\"year\":\"2020\"";
+  size_t yearCount = 0;
+  for (size_t position = metadata.find(expectedYear); position != std::string::npos;
+       position = metadata.find(expectedYear, position + expectedYear.size())) ++yearCount;
+  if (yearCount != tracks.size()) failTest("SACD native metadata omitted an area track release year");
   if (tracks.size() != 3 || stereoCount != 2 || multiCount != 1) {
     std::cerr << "tracks=" << tracks.size() << " stereo=" << stereoCount << " multi=" << multiCount << '\n';
     failTest("Scarletbook TOC produced the wrong track counts");
@@ -1661,6 +1708,36 @@ void testScarletbookTocParsesTracksAndMetadata() {
     std::error_code ignored;
     std::filesystem::remove(iso, ignored);
   }
+}
+
+void testScarletbookMetadataMissingYearAndReadFailure() {
+  for (const int year : {0, 65535}) {
+    const auto iso = writeScarletbookIsoFixture(
+        "twilight-scarletbook-missing-year-" + std::to_string(year) + ".iso", false, year);
+    const std::string metadata = readMetadataJson(iso.string());
+    if (metadata.find("\"isoTracks\":[") == std::string::npos ||
+        !metadata.ends_with("\"error\":\"\"}")) {
+      failTest("SACD missing-year fixture was not successfully read");
+    }
+    if (metadata.find("\"year\":\"" + std::to_string(year) + "\"") != std::string::npos) {
+      failTest("SACD native metadata exported an invalid or missing year");
+    }
+    if (metadata.find("\"year\":\"\"") == std::string::npos) failTest("SACD missing year was invented");
+    std::error_code ignored;
+    std::filesystem::remove(iso, ignored);
+  }
+  const auto broken = std::filesystem::temp_directory_path() / "twilight-scarletbook-unreadable-date.iso";
+  {
+    std::ofstream output(broken, std::ios::binary);
+    output << "not an ISO";
+  }
+  const std::string metadata = readMetadataJson(broken.string());
+  if (metadata.find("\"error\":\"") == std::string::npos ||
+      metadata.find("\"error\":\"\"") != std::string::npos) {
+    failTest("Unreadable SACD metadata was reported as success");
+  }
+  std::error_code ignored;
+  std::filesystem::remove(broken, ignored);
 }
 
 void testScarletbookDstAreaFlagsAndDecode() {
@@ -1766,6 +1843,7 @@ int main() {
   testSacdIsoByteScratchResizePreservesSameSizedScratch();
   testSacdDstDecodePathDoesNotPreclearDecodedFrameBuffer();
   testDsfReader();
+  testOpenDsdReaderAllowsFileRenameAndDeletion();
   testDsfSeekAlignsToPlanarBlockBoundary();
   testDsfReaderRejectsBlockSizeLargerThanDataChunk();
   testDffReader();
@@ -1784,6 +1862,7 @@ int main() {
   testDopPackerInt24In32();
   testSacdIsoProbePlayableEntry();
   testSacdIsoDemuxerTracksAndSeek();
+  testOpenSacdDemuxerAllowsFileRenameAndDeletion();
   testSacdDstProviderSelection();
   testSacdDstTrackPlayableWithProvider();
   testSacdDstReadBytesDrainsOnlyDecodedBytes();
@@ -1792,6 +1871,7 @@ int main() {
   testSacdDstSeekUsesFrameTableForVariableFrames();
   testSacdDstTrackUnplayableWithoutProvider();
   testScarletbookTocParsesTracksAndMetadata();
+  testScarletbookMetadataMissingYearAndReadFailure();
   testScarletbookDstAreaFlagsAndDecode();
   testScarletbookMalformedTocFallsBackGracefully();
   assert(sourceLooksDsfOrDff("song.DSF"));

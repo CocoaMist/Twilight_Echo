@@ -1,4 +1,7 @@
 import { IPC } from '../../shared/ipcChannels.ts'
+import { resolveAuthorizationBatch } from '../security/authorizationBatch.ts'
+import { providerPlaybackSources } from '../security/providerPlaybackSources.ts'
+import { createAutoMixOnlineResolver } from './autoMixOnlineSource.ts'
 import { DspAuditionManager } from './dspAuditionManager.ts'
 import { createDspAuditionHandlers } from './dspAuditionIpc.ts'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
@@ -598,6 +601,15 @@ async function initializeAudioEngineRuntime(): Promise<void> {
     }
   )
   runtime.audioEngineManager.setLoudnessAnalysisManager(runtime.loudnessAnalysisManager)
+  runtime.audioEngineManager.setAutoMixAnalysisService(
+    () => runtime.audioAnalysisService,
+    join(app.getPath('userData'), 'automix-features'),
+    createAutoMixOnlineResolver({
+      registry: providerPlaybackSources,
+      callProvider: async (...args) => runtime.pluginManager?.callProvider(...args) ?? null,
+      authorize: resolveAuthorizedPlaybackSource
+    })
+  )
   runtime.vst3Catalog = new Vst3CatalogService(join(app.getPath('userData'), 'dsp-vst3'), {
     scan: (modulePath) => requireAudioEngine().scanVst3Module(modulePath)
   })
@@ -771,12 +783,11 @@ function registerAudioEngineIpcHandlers(): void {
       if (queue.length !== items.length) {
         throw new Error('Audio queue contains an invalid item')
       }
-      const authorizedQueue = await Promise.all(
-        queue.map(async (item) => ({
-          ...item,
-          source: await resolveAuthorizedPlaybackSource(item.source)
-        }))
+      const sources = await resolveAuthorizationBatch(
+        queue.map((item) => item.source),
+        resolveAuthorizedPlaybackSource
       )
+      const authorizedQueue = queue.map((item) => ({ ...item, source: sources.get(item.source)! }))
       const normalizedStartIndex = normalizeInteger(
         startIndex,
         'queue start index',
@@ -784,11 +795,13 @@ function registerAudioEngineIpcHandlers(): void {
         0,
         Math.max(0, authorizedQueue.length - 1)
       )
-      ;(await ensureAudioEngineRuntime()).loadQueue(authorizedQueue, normalizedStartIndex)
+      const engine = await ensureAudioEngineRuntime()
+      await engine.loadQueue(authorizedQueue, normalizedStartIndex)
       audioDiagnosticRecorder?.record('queue-loaded', {
         items: authorizedQueue.length,
         startIndex: normalizedStartIndex
       })
+      return { queueToken: engine.getQueueToken?.() ?? '' }
     } catch (error) {
       audioDiagnosticRecorder?.record(
         'queue-load-failed',
@@ -801,6 +814,22 @@ function registerAudioEngineIpcHandlers(): void {
       )
       throw error
     }
+  })
+
+  ipcMain.handle(IPC.audioEngine.selectQueueItem, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event, 'audio engine IPC')
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+      throw new Error('Invalid queue selection')
+    const selection = raw as Record<string, unknown>
+    const queueToken = normalizeIpcString(selection.queueToken, 'queue token', 128)
+    const index = normalizeInteger(selection.index, 'queue index', 0, 0, MAX_AUDIO_QUEUE_ITEMS - 1)
+    const id = normalizeIpcString(selection.id, 'queue item id', MAX_AUDIO_SOURCE_LENGTH)
+    const source = await resolveAuthorizedPlaybackSource(
+      normalizeIpcString(selection.source, 'audio source', MAX_AUDIO_SOURCE_LENGTH)
+    )
+    return await (
+      await ensureAudioEngineRuntime()
+    ).selectQueueItem({ queueToken, index, id, source })
   })
 
   ipcMain.handle(IPC.audioEngine.play, async (_event, source: string, startTime?: number) => {

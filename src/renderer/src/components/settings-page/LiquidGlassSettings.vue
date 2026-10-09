@@ -3,17 +3,28 @@ import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import { DEFAULT_LIQUID_GLASS } from '../../../../shared/liquidGlass.ts'
 import EditableRangeValue from '../EditableRangeValue.vue'
-import { useSettingsStore } from '../../stores/useSettingsStore'
+import type { AppearanceDraft } from '../../../../shared/appAppearance.ts'
 import type {
   LiquidGlassCoverage,
   LiquidGlassSettings,
   LiquidGlassTheme
 } from '../../types/settings'
 
-const { settings, updateSettings } = useSettingsStore()
+const props = defineProps<{ modelValue: AppearanceDraft; tone?: 'light' | 'dark' }>()
+const emit = defineEmits<{
+  'update:modelValue': [value: AppearanceDraft]
+  'update:tone': [tone: 'light' | 'dark']
+}>()
+const settings = computed(() => props.modelValue)
+function updateSettings(patch: Partial<AppearanceDraft>): void {
+  emit('update:modelValue', { ...props.modelValue, ...patch })
+}
 
-const liquidGlassOpen = ref(false)
-const liquidGlassTab = ref<'light' | 'dark'>('light')
+const liquidGlassOpen = ref(true)
+const liquidGlassTab = computed({
+  get: () => props.tone ?? 'light',
+  set: (tone: 'light' | 'dark') => emit('update:tone', tone)
+})
 const liquidGlassScope = ref<'global' | 'home'>('global')
 
 const hasSharedLiquidGlassProfile = computed(
@@ -230,13 +241,15 @@ function toggleAdaptiveTone(): void {
         <strong>全局液态玻璃</strong>
         <span>统一启用标题栏、主侧栏、设置导航和播放栏的液态玻璃材质。</span>
       </div>
-      <span
+      <button
+        type="button"
+        aria-label="全局液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.surfaceMaterial === 'liquidGlass' }"
         role="switch"
         :aria-checked="settings.surfaceMaterial === 'liquidGlass'"
         @click="toggleLiquidGlass"
-      ></span>
+      ></button>
     </div>
     <hr />
     <div class="setting-item">
@@ -244,13 +257,15 @@ function toggleAdaptiveTone(): void {
         <strong>主导航液态玻璃</strong>
         <span>独立为标题栏与左侧主导航启用 Regular 材质。</span>
       </div>
-      <span
+      <button
+        type="button"
+        aria-label="主导航液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.liquidGlass.navigationEnabled }"
         role="switch"
         :aria-checked="settings.liquidGlass.navigationEnabled"
         @click="toggleSharedLiquidGlassTarget('navigationEnabled')"
-      ></span>
+      ></button>
     </div>
     <hr />
     <div class="setting-item">
@@ -258,13 +273,15 @@ function toggleAdaptiveTone(): void {
         <strong>播放栏液态玻璃</strong>
         <span>独立为底部播放栏启用液态玻璃，复用全局的外观参数。</span>
       </div>
-      <span
+      <button
+        type="button"
+        aria-label="播放栏液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.liquidGlass.playbarEnabled }"
         role="switch"
         :aria-checked="settings.liquidGlass.playbarEnabled"
         @click="toggleSharedLiquidGlassTarget('playbarEnabled')"
-      ></span>
+      ></button>
     </div>
     <hr />
     <div class="setting-item">
@@ -272,13 +289,15 @@ function toggleAdaptiveTone(): void {
         <strong>设置导航液态玻璃</strong>
         <span>独立为设置页左侧导航启用液态玻璃，并保持文字和选中状态清晰。</span>
       </div>
-      <span
+      <button
+        type="button"
+        aria-label="设置导航液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.liquidGlass.settingsNavigationEnabled }"
         role="switch"
         :aria-checked="settings.liquidGlass.settingsNavigationEnabled"
         @click="toggleSharedLiquidGlassTarget('settingsNavigationEnabled')"
-      ></span>
+      ></button>
     </div>
     <hr />
     <div class="setting-item">
@@ -286,13 +305,15 @@ function toggleAdaptiveTone(): void {
         <strong>首页媒体焦点液态玻璃</strong>
         <span>仅为首页的封面 Hero 使用 Clear 材质，列表和内容卡片保持实体表面。</span>
       </div>
-      <span
+      <button
+        type="button"
+        aria-label="首页媒体焦点液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.liquidGlass.homeCards.enabled }"
         role="switch"
         :aria-checked="settings.liquidGlass.homeCards.enabled"
         @click="toggleHomeCardsLiquidGlass"
-      ></span>
+      ></button>
     </div>
     <div v-if="hasLiquidGlassEnabled">
       <hr />
@@ -301,13 +322,15 @@ function toggleAdaptiveTone(): void {
           <strong>高光跟随指针</strong>
           <span>播放栏与首页媒体焦点的镜面高光随鼠标移动变化。</span>
         </div>
-        <span
+        <button
+          type="button"
+          aria-label="高光跟随指针"
           class="toggle-switch"
           :class="{ active: settings.liquidGlass.followPointer }"
           role="switch"
           :aria-checked="settings.liquidGlass.followPointer"
           @click="toggleLiquidGlassPointer"
-        ></span>
+        ></button>
       </div>
       <hr />
       <div class="setting-item">
@@ -340,13 +363,15 @@ function toggleAdaptiveTone(): void {
           <strong>自适应明暗</strong>
           <span>自动采样页面背景亮度，亮背景时切换到深色玻璃配置。</span>
         </div>
-        <span
+        <button
+          type="button"
+          aria-label="自适应明暗"
           class="toggle-switch"
           :class="{ active: settings.liquidGlass.adaptiveTone }"
           role="switch"
           :aria-checked="settings.liquidGlass.adaptiveTone"
           @click="toggleAdaptiveTone"
-        ></span>
+        ></button>
       </div>
       <hr />
       <div class="setting-item">
@@ -354,13 +379,15 @@ function toggleAdaptiveTone(): void {
           <strong>亮色背景加深</strong>
           <span>浅色背景下使用深色玻璃，让当前编辑范围在亮背景上更清晰。</span>
         </div>
-        <span
+        <button
+          type="button"
+          aria-label="亮色背景加深"
           class="toggle-switch"
           :class="{ active: activeOverLight }"
           role="switch"
           :aria-checked="activeOverLight"
           @click="toggleActiveOverLight"
-        ></span>
+        ></button>
       </div>
       <hr />
       <div class="setting-item">

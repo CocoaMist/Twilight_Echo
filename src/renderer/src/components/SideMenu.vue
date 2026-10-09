@@ -140,9 +140,6 @@ function setPressOrigin(event: PointerEvent): void {
       <img src="/icon.png" alt="" /><span>Twilight Echo</span>
     </div>
     <nav class="menu-items" aria-label="页面">
-      <div class="menu-heading">
-        <span class="menu-caption" aria-hidden="true">音乐空间</span>
-      </div>
       <div class="menu-nav">
         <template v-for="entry in entries" :key="entry.kind === 'page' ? entry.page.id : entry.id">
           <div
@@ -191,13 +188,6 @@ function setPressOrigin(event: PointerEvent): void {
                 :title="page.title"
                 @click="selectPage(page)"
               >
-                <i
-                  v-if="page.customIcon"
-                  class="item-icon"
-                  :class="page.customIcon"
-                  aria-hidden="true"
-                ></i>
-                <ThemeIcon v-else class="item-icon" :icon-slot="page.icon" />
                 <span class="item-label">{{ page.title }}</span>
               </button>
             </div>
@@ -394,22 +384,6 @@ function setPressOrigin(event: PointerEvent): void {
   gap: 6px;
 }
 
-.menu-heading {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  min-height: 32px;
-  margin: 0 0 10px 8px;
-  padding-left: 16px;
-}
-
-.menu-caption {
-  flex-shrink: 0;
-  color: var(--te-navigation-icon);
-  font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
-  letter-spacing: 1.5px;
-}
-
 .menu-group {
   flex-shrink: 0;
 }
@@ -455,12 +429,6 @@ function setPressOrigin(event: PointerEvent): void {
   gap: 10px;
   height: 36px;
   min-height: calc(var(--te-font-size-body, 14px) * 2.3);
-}
-
-.menu-child .item-icon {
-  width: 18px;
-  height: 18px;
-  font-size: var(--te-font-size-body, 14px);
 }
 
 .menu-child .item-label {

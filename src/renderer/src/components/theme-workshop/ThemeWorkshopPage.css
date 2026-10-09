@@ -1,9 +1,14 @@
 @import './ThemeWorkshopEnhancements.css';
 
 .workshop-page {
-  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  height: 100dvh;
   overflow: auto;
-  padding: 24px;
+  padding: calc(32px + 24px) 24px 24px;
   background: var(--te-app-bg);
   color: var(--te-neutral-900);
   font: 14px/1.5 var(--te-font-sans, sans-serif);
@@ -25,7 +30,12 @@
   font-size: 10px;
   letter-spacing: 2px;
 }
-.workshop-header > div {
+.workshop-page > :not(.workshop-workspace) {
+  flex-shrink: 0;
+}
+.workshop-header > div:first-child {
+  flex: 1 1 240px;
+  min-width: 0;
   margin-right: auto;
 }
 .workshop-page button,
@@ -38,6 +48,17 @@
   border: 1px solid var(--te-neutral-200);
   border-radius: 8px;
   padding: 8px 10px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.workshop-page button,
+.workshop-page input:not([type='checkbox']):not([type='range']):not([type='color']),
+.workshop-page select {
+  min-height: 36px;
+}
+.workshop-project-toolbar > select {
+  max-width: 260px;
 }
 .workshop-page button {
   cursor: pointer;
@@ -46,16 +67,20 @@
   opacity: 0.45;
   cursor: default;
 }
-.workshop-page button:hover,
+.workshop-page button:not(:disabled):hover,
 .workshop-page button.active {
   background: var(--te-hover-bg);
 }
 .workshop-workspace {
   display: grid;
-  grid-template-columns: 150px minmax(260px, 1fr) 300px;
+  flex: 1 0 480px;
+  grid-template-columns: 140px minmax(0, 1fr) 300px;
   gap: 16px;
-  height: 720px;
-  min-height: 450px;
+  min-height: 480px;
+}
+.workshop-workspace > * {
+  min-width: 0;
+  min-height: 0;
 }
 .workshop-workspace nav {
   display: flex;
@@ -77,6 +102,7 @@
 }
 .workshop-properties {
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 16px;
   background: var(--te-card-bg);
   border-radius: 12px;
@@ -113,10 +139,33 @@
 }
 @media (max-width: 1000px) {
   .workshop-workspace {
-    grid-template-columns: 105px minmax(200px, 1fr) 230px;
-    gap: 8px;
+    grid-template-columns: 105px minmax(0, 1fr) 250px;
+    gap: 12px;
   }
   .workshop-page {
-    padding: 12px;
+    padding: calc(32px + 16px) 16px 16px;
+  }
+}
+@media (max-width: 760px) {
+  .workshop-page .workshop-workspace {
+    flex: none;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workshop-workspace nav {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    padding-bottom: 4px;
+  }
+  .workshop-workspace nav button {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .workshop-preview {
+    height: min(560px, 75vh);
+    min-height: 360px;
+  }
+  .workshop-properties {
+    max-height: 560px;
   }
 }

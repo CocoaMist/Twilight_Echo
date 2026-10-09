@@ -3,6 +3,11 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { nextTick, ref, shallowRef } from 'vue'
 import type { PlaybackSession, Track } from '../types/music.ts'
+import {
+  createPlaybackSessionController,
+  type PlaybackSessionControllerOptions
+} from '../stores/player/playbackSessionController.ts'
+import { patchPlaybackQueueTrack } from '../utils/playbackQueueVirtualization.ts'
 
 const { createPlaybackSessionPersistence } = (await import(
   new URL('./usePlaybackSessionPersistence.ts', import.meta.url).href
@@ -396,7 +401,7 @@ test('autosave clears, saves track-only, and saves track position according to r
   assert.equal((saved[1] as { position: number }).position, 42)
 })
 
-test('a track change persists immediately instead of retaining the previous debounced track', async () => {
+test('track changes coalesce and quit immediately persists the latest selection', async () => {
   const currentTrack = ref<typeof track | null>(track)
   const savedTrackIds: string[] = []
   const nextTrack = { ...track, id: 'local:next-track', title: 'Next Track' }
@@ -414,7 +419,7 @@ test('a track change persists immediately instead of retaining the previous debo
       position: 0
     }),
     syncPluginProviders: async () => undefined,
-    autosaveDelayMs: 1000,
+    autosaveDelayMs: 20,
     dataApi: {
       clearPlaybackSession: async () => undefined,
       loadPlaybackSession: async () => null,
@@ -429,9 +434,17 @@ test('a track change persists immediately instead of retaining the previous debo
   currentTrack.value = nextTrack
   await nextTick()
   await waitForTimers()
+  assert.deepEqual(savedTrackIds, [track.id])
+  currentTrack.value = { ...nextTrack, id: 'local:final-track' }
+  await nextTick()
+  await new Promise((resolve) => setTimeout(resolve, 35))
+  assert.deepEqual(savedTrackIds, [track.id, 'local:final-track'])
+  currentTrack.value = nextTrack
+  await nextTick()
+  await persistence.savePlaybackSessionForQuit()
   persistence.stop()
 
-  assert.deepEqual(savedTrackIds, [track.id, nextTrack.id])
+  assert.deepEqual(savedTrackIds, [track.id, 'local:final-track', nextTrack.id])
 })
 
 test('captures a track that was selected before autosave watchers were installed', async () => {
@@ -742,8 +755,70 @@ test('shared session producers clone a changed queue only once', async () => {
 
   assert.deepEqual(
     snapshots.map((session) => session.queue?.length),
-    [1, undefined]
+    [1]
   )
+})
+
+test('real store and App autosaves share one timer across rapid selections in a 5000-track queue', async () => {
+  const currentTrack = shallowRef<Track | null>(null)
+  const queue = shallowRef<Track[]>(Array.from({ length: 5000 }, (_, i) => ({ ...track, id: `local:${i}` })))
+  const originalQueue = shallowRef(queue.value.slice())
+  const currentTime = ref(0),
+    isPlaying = ref(false),
+    saved: PlaybackSession[] = []
+  const settings = ref({ playbackResumeMode: 'track' as const })
+  const controller = createPlaybackSessionController({
+    currentTrack,
+    queue,
+    originalQueue,
+    currentTime,
+    queueIndex: ref(0),
+    playMode: ref('sequential'),
+    duration: ref(180),
+    sleepTimerState: ref(null),
+    getAppSettings: () => settings,
+    flushLatestCurrentTime: () => {}
+  } as unknown as PlaybackSessionControllerOptions)
+  const persistence = createPlaybackSessionPersistence({
+    settings,
+    currentTrack,
+    queue,
+    currentTime,
+    isPlaying,
+    restorePlaybackSession: () => {},
+    createPlaybackSession: controller.createPlaybackSession,
+    syncPluginProviders: async () => {},
+    autosaveDelayMs: 20,
+    dataApi: {
+      loadPlaybackSession: async () => null,
+      clearPlaybackSession: async () => {},
+      savePlaybackSession: async (session) => {
+        saved.push(session)
+      }
+    }
+  })
+  await persistence.restoreSavedPlaybackSession('track')
+  persistence.startAutosaveWatchers()
+  const version = queue.value
+  for (let i = 0; i < 12; ++i) {
+    currentTrack.value = { ...queue.value[i], lyrics: `Lyrics ${i}` }
+    queue.value = patchPlaybackQueueTrack(queue.value, currentTrack.value)
+    controller.persistSelectedTrackSession()
+    await nextTick()
+  }
+  await new Promise((resolve) => setTimeout(resolve, 35))
+  assert.equal(queue.value, version)
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0].track.id, 'local:11')
+  assert.equal(saved[0].queue?.length, 5000)
+  currentTrack.value = { ...queue.value[12] }
+  controller.persistSelectedTrackSession()
+  await nextTick()
+  await persistence.savePlaybackSessionForQuit()
+  persistence.stop()
+  assert.equal(saved.length, 2)
+  assert.equal(saved[1].track.id, 'local:12')
+  assert.equal(saved[1].queue, undefined)
 })
 
 test('a failed queue write leaves the next producer responsible for saving that queue', async () => {
@@ -1019,7 +1094,7 @@ test('failed restore leaves autosave available to replace the unusable old sessi
   await persistence.savePlaybackSessionForQuit()
   persistence.stop()
 
-  assert.deepEqual(writes, ['save', 'save', 'save', 'save'])
+  assert.deepEqual(writes, ['save', 'save', 'save'])
 })
 
 async function waitForTimers(): Promise<void> {

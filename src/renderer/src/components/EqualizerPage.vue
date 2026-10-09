@@ -70,6 +70,7 @@ const { setAudioProcessing } = audioOutputDspStore
 // The spectrum overlay and level meters read visualizationData while this page
 // is open; the store poll only runs while at least one consumer holds a handle.
 let releaseVisualizationConsumer: (() => void) | null = null
+let visualizationConsumerPoints = 0
 
 const autoPreampStorageKey = 'twilight-echo:eq-auto-preamp:v1'
 const manualPreampStorageKey = 'twilight-echo:eq-manual-preamp:v1'
@@ -106,9 +107,6 @@ const pendingBandPatches = new Map<number, Partial<EqualizerBand>>()
 let pendingPreamp: number | null = null
 let commitChain: Promise<void> = Promise.resolve()
 let applyFeedbackTimer: number | null = null
-let spectrumPollTimer: number | null = null
-let spectrumPollGeneration = 0
-let spectrumRequestInFlight = false
 let spectrumPollingMounted = false
 const eqHistory = useEqualizerHistory(audioProcessing.value, applyEqualizerSnapshot)
 const { activeSlot, busy: historyBusy, canUndo, canRedo } = eqHistory
@@ -768,33 +766,6 @@ function onEqualizerKeydown(event: KeyboardEvent): void {
   }
 }
 
-async function pollSpectrum(generation: number): Promise<void> {
-  if (spectrumRequestInFlight) return
-  spectrumRequestInFlight = true
-  try {
-    const data = await window.api.audioEngine.getVisualizationData({
-      spectrumPoints: 2048,
-      waveformPoints: 16,
-      spectrogramFrames: 0,
-      oscilloscopePoints: 0
-    })
-    if (generation !== spectrumPollGeneration) return
-    if (!data.active || data.spectrum.length < 2) {
-      spectrumLevels.value = null
-      return
-    }
-    spectrumLevels.value = projectSpectrumLevels(
-      data.spectrum,
-      data.sampleRate || responseSampleRate.value
-    )
-  } catch {
-    if (generation !== spectrumPollGeneration) return
-    spectrumLevels.value = null
-  } finally {
-    spectrumRequestInFlight = false
-  }
-}
-
 function updateSpectrumPolling(): void {
   if (!spectrumVisible.value || responseView.value !== 'dsp' || activeTab.value !== 'parametric')
     spectrumFrozen.value = false
@@ -806,17 +777,27 @@ function updateSpectrumPolling(): void {
     !spectrumFrozen.value &&
     isPlaying.value
   if (!shouldPoll) {
-    spectrumPollGeneration += 1
-    if (spectrumPollTimer !== null) window.clearInterval(spectrumPollTimer)
-    spectrumPollTimer = null
     if (!spectrumFrozen.value) spectrumLevels.value = null
-    return
   }
-  if (spectrumPollTimer !== null) return
-  const generation = ++spectrumPollGeneration
-  void pollSpectrum(generation)
-  spectrumPollTimer = window.setInterval(() => void pollSpectrum(generation), 60)
+  // Spectrum and meters share a single native sample, also consumed by the bar.
+  const points =
+    spectrumPollingMounted && activeTab.value === 'parametric' ? (shouldPoll ? 2048 : 64) : 0
+  if (points === visualizationConsumerPoints) return
+  releaseVisualizationConsumer?.()
+  releaseVisualizationConsumer = points
+    ? acquireVisualizationConsumer({ spectrumPoints: points })
+    : null
+  visualizationConsumerPoints = points
 }
+
+function updateSpectrumFromSample(data: typeof visualizationData.value): void {
+  if (visualizationConsumerPoints !== 2048 || spectrumFrozen.value) return
+  spectrumLevels.value =
+    data.active && data.spectrum.length >= 2
+      ? projectSpectrumLevels(data.spectrum, data.sampleRate || responseSampleRate.value)
+      : null
+}
+watch([visualizationData, responseSampleRate], ([data]) => updateSpectrumFromSample(data))
 
 async function importFrequencyResponse(): Promise<void> {
   if (frequencyResponseImporting.value) return
@@ -1079,7 +1060,6 @@ function selectBand(index: number, indices: number[] = [index]): void {
 
 onMounted(() => {
   spectrumPollingMounted = true
-  releaseVisualizationConsumer = acquireVisualizationConsumer()
   loadAutoPreampPreference()
   void loadAppSettings().then(() => {
     eqHistory.reset(audioProcessing.value)
@@ -1237,7 +1217,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
           <header class="eq-header">
             <div class="eq-title">
               <h1>图形均衡器</h1>
-              <p>全局频率响应塑形工具，调整此面板将改变最终输出听感。</p>
+              <p>调整此面板会改变最终输出。</p>
             </div>
             <div
               class="master-switch"
@@ -1524,6 +1504,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   padding: 0 0 20px 0;
   border-bottom: 1px solid rgba(15, 23, 42, 0.06);
   margin-bottom: 24px;
+  flex-wrap: wrap;
 }
 
 .eq-command {
@@ -1709,6 +1690,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex-shrink: 0;
 }
 .nav-item {
   display: flex;
@@ -1773,6 +1755,8 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   display: flex;
   flex-direction: column;
   gap: 30px;
+  min-height: 0;
+  min-width: 0;
 }
 .tab-pane {
   display: none;
@@ -1798,6 +1782,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
 }
 .eq-title h1 {
   font-size: calc(var(--te-font-size-body, 14px) * 28 / 14);
@@ -2384,6 +2369,48 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   .instrument-presets .preset-menu {
     left: auto;
     right: 0;
+  }
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@media (max-width: 820px) {
+  .eq-page.is-parametric .eq-content {
+    padding-inline: 8px;
+  }
+  .eq-page.is-parametric .parametric-pane {
+    min-height: 560px;
+  }
+  .instrument-power span {
+    display: none;
+  }
+  .instrument-presets .preset-menu {
+    left: auto;
+    right: 0;
+  }
+}
+@media (max-width: 620px) {
+  .eq-page:not(.is-parametric) .eq-container {
+    flex-direction: column;
+  }
+  .eq-sidebar {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    padding: var(--te-page-top, 55px) var(--te-page-gutter, 16px) 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--te-glass-border);
+  }
+  .eq-sidebar .nav-item {
+    flex-shrink: 0;
+  }
+  .eq-page:not(.is-parametric) .eq-content {
+    padding-top: 20px;
+  }
+}
+
+@media (max-width: 900px) {
+  .eq-content {
+    padding-bottom: max(40px, calc(var(--te-playbar-bottom-clearance, 0px) + 16px));
   }
 }
 </style>

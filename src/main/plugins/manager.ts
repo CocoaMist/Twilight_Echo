@@ -58,9 +58,17 @@ import {
 } from './packageSecurity.ts'
 import { redactSensitiveText } from '../security/secureStorage.ts'
 import { protectProviderMedia } from '../security/remoteMediaGrants.ts'
+import {
+  providerAudioIdentity,
+  providerPlaybackSources
+} from '../security/providerPlaybackSources.ts'
 import { normalizeThemeContribution, normalizeUiContribution } from './themeContribution.ts'
 import { QISHUI_PLUGIN_ID, QishuiAuthBridge } from './qishuiAuthBridge.ts'
-import { DEFAULT_PLUGIN_HOST_IDLE_TIMEOUT_MS, PluginHostIdleTracker } from './hostIdle.ts'
+import {
+  DEFAULT_PLUGIN_HOST_IDLE_TIMEOUT_MS,
+  isPluginHostedPlaybackUrl,
+  PluginHostIdleTracker
+} from './hostIdle.ts'
 import {
   PLUGIN_CONTRIBUTIONS_CACHE_FILE,
   loadPluginContributionsCache,
@@ -122,7 +130,8 @@ export interface TwilightPluginManagerOptions {
   /**
    * Pure provider hosts that have had no provider call, UI command, or subscribed
    * event for this long are hibernated (their utility process is stopped)
-   * and transparently re-activated by the next call. 0 disables hibernation.
+   * and transparently re-activated by the next call. Hosts that have issued
+   * local playback proxy URLs stay resident. 0 disables hibernation.
    */
   hostIdleTimeoutMs?: number
 }
@@ -150,6 +159,7 @@ interface RunningPlugin {
   providers: TwilightMediaProviderRegistration[]
   ui: TwilightUiContribution[]
   themes: TwilightThemeContribution[]
+  hasPlaybackProxy: boolean
 }
 
 interface InstallFromPathOptions {
@@ -172,6 +182,8 @@ interface ProviderRpcMetadata {
   providerId: string
   pluginId: string
   method: TwilightMediaProviderMethod
+  playbackArgs?: unknown[]
+  returnSourceIdentity?: boolean
 }
 
 interface UiCommandRpcMetadata {
@@ -184,6 +196,9 @@ export interface TwilightProviderCallOptions {
   idempotencyKey?: string
   /** Cancels queued or active plugin RPC work and propagates cancellation to the provider host. */
   signal?: AbortSignal
+  /** Main-process source refresh must keep the original provider owner. */
+  expectedPluginId?: string
+  returnAutoMixSourceIdentity?: boolean
 }
 
 const STATE_FILE = 'plugin-state.json'
@@ -739,6 +754,22 @@ export class TwilightPluginManager extends EventEmitter {
           : `Provider 未启用：${normalizedProviderId}`
       )
     }
+    if (options.expectedPluginId && options.expectedPluginId !== running.descriptor.id) {
+      throw new Error('Playback source provider owner changed')
+    }
+    const playbackArgs = method === 'getPlaybackUrl' ? structuredClone(args) : undefined
+    const invocationArgs = playbackArgs
+      ? [
+          args[0],
+          {
+            ...(args[1] && typeof args[1] === 'object' && !Array.isArray(args[1])
+              ? (args[1] as Record<string, unknown>)
+              : {}),
+            autoMixSource: true
+          },
+          ...args.slice(2)
+        ]
+      : args
 
     this.hostIdle?.touch(running.descriptor.id)
     const requestId = randomUUID()
@@ -751,7 +782,13 @@ export class TwilightPluginManager extends EventEmitter {
       metadata: {
         providerId: normalizedProviderId,
         pluginId: running.descriptor.id,
-        method
+        method,
+        ...(playbackArgs
+          ? {
+              playbackArgs,
+              returnSourceIdentity: options.returnAutoMixSourceIdentity === true
+            }
+          : {})
       },
       dispatch: () => {
         this.assertRunningPlugin(running)
@@ -760,7 +797,7 @@ export class TwilightPluginManager extends EventEmitter {
           requestId,
           providerId: normalizedProviderId,
           method,
-          args,
+          args: invocationArgs,
           idempotencyKey
         } satisfies PluginHostRequest)
       },
@@ -915,6 +952,10 @@ export class TwilightPluginManager extends EventEmitter {
     // The Qishui auth bridge is bound to the live host process; stopping it
     // would discard the user's login, so that plugin stays resident.
     if (id === QISHUI_PLUGIN_ID) return false
+    // Local media URLs remain usable by the player after the provider RPC ends,
+    // including paused playback and prepared queue entries. Hibernation closes
+    // the server and invalidates those URLs, so retain it for this host's lifetime.
+    if (running.hasPlaybackProxy) return false
     if (running.descriptor.type.length !== 1 || running.descriptor.type[0] !== 'provider') {
       return false
     }
@@ -1164,7 +1205,8 @@ export class TwilightPluginManager extends EventEmitter {
       subscriptions: new Set(),
       providers: [],
       ui: [],
-      themes: this.normalizeDeclarativeThemeContributions(descriptor)
+      themes: this.normalizeDeclarativeThemeContributions(descriptor),
+      hasPlaybackProxy: false
     }
     this.running.set(descriptor.id, running)
     child.on('message', (message: PluginHostResponse) => {
@@ -1728,11 +1770,36 @@ export class TwilightPluginManager extends EventEmitter {
     const metadata = this.rpcCalls.getMetadata<ProviderRpcMetadata>(pluginId, message.requestId)
     if (!metadata) return
     if (message.ok) {
+      let value = protectProviderMedia(message.value, metadata.method)
+      const envelope =
+        metadata.method === 'getPlaybackUrl' &&
+        message.value &&
+        typeof message.value === 'object' &&
+        !Array.isArray(message.value)
+          ? (message.value as Record<string, unknown>)
+          : null
+      const playbackSource = envelope?.streamUrl ?? message.value
+      if (envelope && typeof playbackSource === 'string' && !metadata.returnSourceIdentity) {
+        value = (value as Record<string, unknown>).streamUrl
+      }
       const completion = this.rpcCalls.complete<ProviderRpcMetadata>(pluginId, message.requestId, {
         ok: true,
-        value: protectProviderMedia(message.value, metadata.method)
+        value
       })
       if (completion.status !== 'settled') return
+      const identity = providerAudioIdentity(envelope?.autoMixIdentity)
+      if (typeof playbackSource === 'string' && identity && metadata.playbackArgs) {
+        providerPlaybackSources.register(playbackSource, {
+          providerId: metadata.providerId,
+          pluginId: metadata.pluginId,
+          args: metadata.playbackArgs,
+          identity
+        })
+      }
+      if (metadata.method === 'getPlaybackUrl' && isPluginHostedPlaybackUrl(playbackSource)) {
+        const running = this.running.get(pluginId)
+        if (running) running.hasPlaybackProxy = true
+      }
       this.recordProviderCallSuccess(
         completion.metadata.providerId,
         completion.metadata.pluginId,
@@ -1905,6 +1972,7 @@ export class TwilightPluginManager extends EventEmitter {
               ? 'enabled'
               : 'disabled',
         enabled: state?.enabled === true && !error && !state.lastError,
+        requestedEnabled: state?.enabled === true,
         builtIn: this.isBundledPluginId(manifest.id) || descriptorSource === 'bundled',
         error: error ?? state?.lastError ?? null,
         isDsp: manifest.type.includes('dsp'),
@@ -1929,6 +1997,7 @@ export class TwilightPluginManager extends EventEmitter {
         permissions: [],
         status: 'invalid',
         enabled: false,
+        requestedEnabled: this.state[id]?.enabled === true,
         builtIn: this.isBundledPluginId(id),
         error: error instanceof Error ? error.message : String(error),
         isDsp: false,

@@ -9,6 +9,9 @@ const COMMON_PROXY_PORTS = [7897, 7890, 7891, 1080, 10809, 8080, 2080, 7898]
 const DEFAULT_MAX_REDIRECTS = 5
 const PROXY_CONNECT_TIMEOUT_MS = 10_000
 const PROXY_HEADERS_TIMEOUT_MS = 15_000
+const LOCAL_PROXY_PORT_TIMEOUT_MS = 300
+const LOCAL_PROXY_TUNNEL_TIMEOUT_MS = 1_500
+const DEFAULT_PROXY_FALLBACK_TIMEOUT_MS = 2_000
 const MAX_PROXY_RESPONSE_HEADER_BYTES = 16 * 1024
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const CROSS_ORIGIN_SENSITIVE_HEADERS = [
@@ -49,6 +52,8 @@ export interface SecureProxyFetchOptions {
   passthroughFetch: typeof fetch
   allowDirectFallback?: boolean
   maxRedirects?: number
+  noProxy?: string
+  proxyFallbackTimeoutMs?: number
 }
 
 export interface InstalledProxyFetch {
@@ -72,7 +77,10 @@ const STANDARD_PROXY_ENV_KEYS = [
   'all_proxy'
 ] as const
 
-export function buildPluginProxyEnv(settings: PluginProxySettings): Record<string, string> {
+export function buildPluginProxyEnv(
+  settings: PluginProxySettings,
+  inheritedEnv: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
   const result: Record<string, string> = {
     TWILIGHT_PLUGIN_PROXY_MODE: settings.proxyMode,
     TWILIGHT_PLUGIN_PROXY_ALLOW_DIRECT_FALLBACK: settings.proxyAllowDirectFallback ? '1' : '0'
@@ -85,13 +93,22 @@ export function buildPluginProxyEnv(settings: PluginProxySettings): Record<strin
   }
 
   if (settings.proxyMode === 'custom') {
+    const host =
+      settings.proxyHost.includes(':') && !settings.proxyHost.startsWith('[')
+        ? `[${settings.proxyHost}]`
+        : settings.proxyHost
     const proxyUrl =
       settings.proxyHost && settings.proxyPort > 0
-        ? normalizeProxyUrl(`http://${settings.proxyHost}:${settings.proxyPort}`)
+        ? normalizeProxyUrl(`http://${host}:${settings.proxyPort}`)
         : ''
     result.TWILIGHT_PLUGIN_PROXY_URL = proxyUrl
     for (const key of STANDARD_PROXY_ENV_KEYS) result[key] = proxyUrl
-    result.NO_PROXY = 'localhost,127.0.0.1,::1'
+    result.NO_PROXY = [
+      'localhost,127.0.0.1,::1',
+      inheritedEnv.no_proxy ?? inheritedEnv.NO_PROXY ?? ''
+    ]
+      .filter(Boolean)
+      .join(',')
     result.no_proxy = result.NO_PROXY
   }
 
@@ -194,9 +211,10 @@ function environmentProxyUrl(env: NodeJS.ProcessEnv): string | null {
   return value ? normalizeProxyUrl(value) : null
 }
 
-async function detectProxy(
+export async function detectProxy(
   mode: PluginProxyMode,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  probes = { isPortOpen, testProxyTunnel }
 ): Promise<DetectedProxy | null> {
   if (mode === 'off') return null
 
@@ -214,13 +232,26 @@ async function detectProxy(
     throw new Error('Custom plugin proxy mode requires a valid proxy host and port')
   }
 
-  for (const port of COMMON_PROXY_PORTS) {
-    if (!(await isPortOpen('127.0.0.1', port))) continue
-    if (await testProxyTunnel('127.0.0.1', port, 'www.youtube.com')) {
-      const url = `http://127.0.0.1:${port}`
-      console.log(`[proxy] Detected local proxy ${proxyLabel(url)}`)
-      return { url, source: 'local-probe' }
-    }
+  // The host gives activation 5s. Serial probing can consume that budget on a
+  // single unrelated open port; parallel bounded probes take at most 1.8s.
+  const candidates = await Promise.all(
+    COMMON_PROXY_PORTS.map(async (port) => {
+      if (!(await probes.isPortOpen('127.0.0.1', port, LOCAL_PROXY_PORT_TIMEOUT_MS))) return null
+      return (await probes.testProxyTunnel(
+        '127.0.0.1',
+        port,
+        'www.youtube.com',
+        LOCAL_PROXY_TUNNEL_TIMEOUT_MS
+      ))
+        ? port
+        : null
+    })
+  )
+  const port = candidates.find((candidate) => candidate !== null)
+  if (port != null) {
+    const url = `http://127.0.0.1:${port}`
+    console.log(`[proxy] Detected local proxy ${proxyLabel(url)}`)
+    return { url, source: 'local-probe' }
   }
 
   console.log('[proxy] No proxy detected; plugin requests will use direct connections')
@@ -240,8 +271,23 @@ function isLoopbackHostname(hostname: string): boolean {
   )
 }
 
-function shouldProxyUrl(url: URL): boolean {
-  return url.protocol === 'https:' && !isLoopbackHostname(url.hostname)
+function shouldProxyUrl(url: URL, noProxy = ''): boolean {
+  if (url.protocol !== 'https:' || isLoopbackHostname(url.hostname)) return false
+  const hostname = url.hostname.toLowerCase()
+  const port = url.port || '443'
+  for (const entry of noProxy
+    .toLowerCase()
+    .split(/[,\s]+/)
+    .filter(Boolean)) {
+    if (entry === '*') return false
+    const match = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(entry)
+    if (!match || (match[2] && match[2] !== port)) continue
+    const pattern = match[1]
+    if (pattern.startsWith('*.') || pattern.startsWith('.')) {
+      if (hostname.endsWith(pattern.replace(/^\*/, ''))) return false
+    } else if (hostname === pattern) return false
+  }
+  return true
 }
 
 function assertSafeRedirectTarget(currentUrl: URL, location: string): URL {
@@ -306,7 +352,19 @@ async function sendWithProxyPolicy(
   options: SecureProxyFetchOptions
 ): Promise<Response> {
   throwIfAborted(init.signal)
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
+    // Reserve time for direct recovery only when the user enabled it and the
+    // request is safe to repeat. Keep the caller's signal attached to bodies.
+    if (options.allowDirectFallback && ['GET', 'HEAD'].includes(init.method)) {
+      const timeout = new AbortController()
+      const signal = AbortSignal.any([init.signal, timeout.signal])
+      timer = setTimeout(
+        () => timeout.abort(new Error('Plugin proxy response headers timed out')),
+        options.proxyFallbackTimeoutMs ?? DEFAULT_PROXY_FALLBACK_TIMEOUT_MS
+      )
+      return await options.proxyRequest(url, { ...init, signal })
+    }
     return await options.proxyRequest(url, init)
   } catch (error) {
     if (init.signal.aborted) throw abortReason(init.signal)
@@ -315,6 +373,8 @@ async function sendWithProxyPolicy(
     console.warn('[proxy] Proxy request failed; using explicitly enabled direct fallback')
     throwIfAborted(init.signal)
     return await options.directRequest(url, init)
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 
@@ -327,6 +387,12 @@ export function createSecureProxyFetch(options: SecureProxyFetchOptions): typeof
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS
   if (!Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 20) {
     throw new RangeError('maxRedirects must be an integer between 0 and 20')
+  }
+  if (
+    options.proxyFallbackTimeoutMs != null &&
+    (!Number.isFinite(options.proxyFallbackTimeoutMs) || options.proxyFallbackTimeoutMs <= 0)
+  ) {
+    throw new RangeError('proxyFallbackTimeoutMs must be a positive number')
   }
 
   return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -354,7 +420,7 @@ export function createSecureProxyFetch(options: SecureProxyFetchOptions): typeof
     while (true) {
       throwIfAborted(signal)
       const transportInit = { method, headers, body, redirect: 'manual' as const, signal }
-      const response = shouldProxyUrl(currentUrl)
+      const response = shouldProxyUrl(currentUrl, options.noProxy)
         ? await sendWithProxyPolicy(currentUrl.href, transportInit, options)
         : await options.directRequest(currentUrl.href, transportInit)
       const location = response.headers.get('location')
@@ -398,12 +464,15 @@ function headersToRecord(headers: Headers): Record<string, string> {
 export function installProxyFetch(
   proxyUrl: string,
   originalFetch: typeof fetch,
-  allowDirectFallback = false
+  allowDirectFallback = false,
+  noProxy = ''
 ): InstalledProxyFetch {
   const dispatcher = new ProxyAgent({
     uri: normalizeProxyUrl(proxyUrl),
     connectTimeout: PROXY_CONNECT_TIMEOUT_MS,
-    headersTimeout: PROXY_HEADERS_TIMEOUT_MS
+    headersTimeout: PROXY_HEADERS_TIMEOUT_MS,
+    autoSelectFamily: true,
+    autoSelectFamilyAttemptTimeout: 250
   })
   const directRequest: ProxyFetchTransport = (url, init) =>
     originalFetch(url, {
@@ -430,7 +499,8 @@ export function installProxyFetch(
       proxyRequest,
       directRequest,
       passthroughFetch: originalFetch,
-      allowDirectFallback
+      allowDirectFallback,
+      noProxy
     }),
     close: () => dispatcher.close()
   }
@@ -455,7 +525,12 @@ export async function initProxy(): Promise<void> {
     process.env.TWILIGHT_PLUGIN_PROXY_ALLOW_DIRECT_FALLBACK
   )
   const originalFetch = globalThis.fetch.bind(globalThis)
-  const installed = installProxyFetch(proxy.url, originalFetch, allowDirectFallback)
+  const installed = installProxyFetch(
+    proxy.url,
+    originalFetch,
+    allowDirectFallback,
+    process.env.no_proxy ?? process.env.NO_PROXY ?? ''
+  )
   globalThis.fetch = installed.fetch
 
   console.log(

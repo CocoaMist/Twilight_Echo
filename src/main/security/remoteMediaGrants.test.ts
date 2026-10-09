@@ -86,6 +86,23 @@ test('provider artist and playlist artwork fields use image grants', () => {
   })
 })
 
+test('paged playlist tracks receive the same media protection without changing the provider cursor', () => {
+  const grants = new RemoteMediaGrantService({ createToken: () => 'page-cover' })
+  const result = protectProviderMedia(
+    {
+      tracks: [{ id: 'bili:BV1:1', cover: 'http://127.0.0.1:12345/image/token' }],
+      total: null,
+      nextOffset: 20,
+      hasMore: true
+    },
+    'fetchPlaylistTracksPage',
+    grants
+  ) as { tracks: Array<{ cover: string }>; nextOffset: number; hasMore: boolean }
+  assert.equal(result.tracks[0].cover, 'twilight-media://image/page-cover')
+  assert.equal(result.nextOffset, 20)
+  assert.equal(result.hasMore, true)
+})
+
 test('remote media grants reject credentials, wrong kinds, and malformed tokens', () => {
   const grants = new RemoteMediaGrantService({ createToken: () => 'cover-token' })
   assert.throws(

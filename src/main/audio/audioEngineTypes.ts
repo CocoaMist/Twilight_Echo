@@ -34,6 +34,7 @@ export interface NativeAudioBinding {
   SetOutputBackend: (backend: string) => void
   SetOutputConfig?: (json: string) => void
   LoadQueue?: (queueJson: string, startIndex: number) => void
+  SelectQueueIndex?: (index: number) => void
   Next?: () => void
   Previous?: () => void
   SetPlayMode?: (mode: 'sequential' | 'repeat' | 'shuffle') => void
@@ -67,6 +68,13 @@ export interface NativeAudioBinding {
   GetSpectrumData?: (points?: number) => number[]
   GetVisualizationData?: (optionsJson: string) => string | VisualizationData
   AnalyzeBpm?: (source: string, optionsJson?: string) => string | BpmAnalysisResult
+  AnalyzeAutoMix?: (
+    source: string,
+    optionsJson?: string
+  ) => string | import('../../shared/autoMix.ts').AutoMixAnalysisResult
+  SetAutoMixConfig?: (json: string) => void
+  SetAutoMixFeatures?: (json: string) => void
+  GetAutoMixStatus?: () => string | import('../../shared/autoMix.ts').AutoMixStatus
   AnalyzeLoudness?: (source: string, optionsJson?: string) => string | LoudnessAnalysisResult
   EnumerateDevices?: () => string | AudioDeviceOption[]
   EnumerateBackends?: () => string

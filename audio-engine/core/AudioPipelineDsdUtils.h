@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../decoder/DsdReader.h"
+#include "../decoder/DopPackerUtils.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -24,6 +25,35 @@ inline uint8_t convertDsdByte(uint8_t value, DsdBitOrder sourceOrder, AudioSampl
   const bool targetMsb = targetFormat == AudioSampleFormat::DsdInt8Msb1;
   const bool sourceMsb = sourceOrder == DsdBitOrder::MsbFirst;
   return targetMsb == sourceMsb ? value : reverseDsdBits(value);
+}
+
+// Generated DSD planes may have reserved strides larger than the current
+// block. Use their pointers rather than inferring a stride from byteCount.
+// Pack directly into the backend buffer: the callback needs no resize/copy.
+inline size_t packGeneratedDsd(
+    uint8_t* const* planes, size_t bytesPerChannel, size_t channels,
+    DsdBitOrder bitOrder, AudioSampleFormat format, uint8_t* output,
+    size_t outputBytes, size_t outputFrames, size_t markerIndex) {
+  if (!planes || !output || channels == 0) return 0;
+  for (size_t channel = 0; channel < channels; ++channel)
+    if (!planes[channel]) return 0;
+  if (isDsdSampleFormat(format)) {
+    const size_t frames = std::min({bytesPerChannel, outputFrames, outputBytes / channels});
+    for (size_t frame = 0; frame < frames; ++frame)
+      for (size_t channel = 0; channel < channels; ++channel)
+        output[frame * channels + channel] = convertDsdByte(planes[channel][frame], bitOrder, format);
+    return frames;
+  }
+  const size_t bytesPerSample = dop::dopCarrierBytesPerSample(format);
+  if (bytesPerSample == 0) return 0;
+  const size_t frames = std::min({bytesPerChannel / 2, outputFrames, outputBytes / channels / bytesPerSample});
+  for (size_t frame = 0; frame < frames; ++frame)
+    for (size_t channel = 0; channel < channels; ++channel)
+      dop::writeDopSample(output, frame * channels + channel, bytesPerSample,
+          dop::normalizeDsdByte(planes[channel][frame * 2], bitOrder),
+          dop::normalizeDsdByte(planes[channel][frame * 2 + 1], bitOrder),
+          dop::dopMarkerForFrame(markerIndex + frame));
+  return frames;
 }
 
 inline bool dsdBitOrderMatchesTarget(DsdBitOrder sourceOrder, AudioSampleFormat targetFormat) {

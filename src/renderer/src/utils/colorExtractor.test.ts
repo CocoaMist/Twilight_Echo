@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import { stripTypeScriptTypes } from 'node:module'
+import { runInNewContext } from 'node:vm'
 
 const { clearDominantColorCache, extractDominantColor, extractAverageColor } = (await import(
   new URL('./colorExtractor.ts', import.meta.url).href
@@ -22,6 +25,46 @@ const globalRecord = {
 
 const originalImage = globalRecord.Image
 const originalDocument = globalRecord.document
+
+test('materialized covers retain only fixed-size digest keys and clearing invalidates pending hashes', async () => {
+  const dom = installImageDom(makeImageData(200, 50, 30))
+  try {
+    const source = stripTypeScriptTypes(
+      readFileSync(new URL('./colorExtractor.ts', import.meta.url), 'utf8')
+    ).replace(/\bexport /g, '')
+    let finish!: (digest: ArrayBuffer) => void
+    const api = runInNewContext(
+      `${source}\n({extractDominantColor,clearDominantColorCache,dominantColorCache})`,
+      {
+        Image: globalRecord.Image,
+        document: globalRecord.document,
+        TextEncoder,
+        Uint8Array,
+        crypto: {
+          subtle: {
+            digest: () =>
+              new Promise((resolve) => {
+                finish = resolve
+              })
+          }
+        }
+      }
+    )
+    const cover = 'data:image/png;base64,' + 'a'.repeat(1024 * 1024)
+    const pending = api.extractDominantColor(cover)
+    finish(new Uint8Array(32).buffer)
+    await pending
+    assert.equal(api.dominantColorCache.size, 1)
+    assert.equal([...api.dominantColorCache.keys()][0].length, 64)
+    const late = api.extractDominantColor(cover + 'b')
+    api.clearDominantColorCache()
+    finish(new Uint8Array(32).buffer)
+    await late
+    assert.equal(api.dominantColorCache.size, 0)
+  } finally {
+    dom.restore()
+  }
+})
 
 function makeImageData(r: number, g: number, b: number): Uint8ClampedArray {
   const data = new Uint8ClampedArray(50 * 50 * 4)

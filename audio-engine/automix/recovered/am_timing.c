@@ -1,0 +1,62 @@
+#include "am_timing.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static double clip(double x,double a,double b){return fmin(b,fmax(a,x));}
+#ifdef TAE_AM_ASM
+#define AM_DEF_am_rate_integral am_c_rate_integral
+#else
+#define AM_DEF_am_rate_integral am_rate_integral
+#endif
+double AM_DEF_am_rate_integral(double s,const am_rate_map *m){double ds=fmin(s,m->window.end)-m->window.start;if(ds<=0)return 0;double k=(m->last-m->first)/(m->window.end-m->window.start);if(!isfinite(k)||fabs(k)<1e-6)return ds/((m->first+m->last)*.5);return(log(m->first+k*ds)-log(m->first))/k;}
+#ifdef TAE_AM_ASM
+#define AM_DEF_am_rate_inverse am_c_rate_inverse
+#else
+#define AM_DEF_am_rate_inverse am_rate_inverse
+#endif
+double AM_DEF_am_rate_inverse(double u,const am_rate_map *m){u=fmin(u,am_rate_integral(m->window.end,m));if(u<=0)return 0;double k=(m->last-m->first)/(m->window.end-m->window.start);if(!isfinite(k)||fabs(k)<1e-6)return u*((m->first+m->last)*.5);return(exp(log(m->first)+k*u)-m->first)/k;}
+#ifdef TAE_AM_ASM
+#define AM_DEF_am_playback_from_source am_c_playback_from_source
+#define AM_DEF_am_source_from_playback am_c_source_from_playback
+#else
+#define AM_DEF_am_playback_from_source am_playback_from_source
+#define AM_DEF_am_source_from_playback am_source_from_playback
+#endif
+double AM_DEF_am_playback_from_source(double s,const am_rate_map *m){if(!m->has_rate||s<m->source.start)return m->playback_start+s-m->source.start;return m->playback_start+fmax(fmin(m->window.start,s)-m->source.start,0)/m->first+am_rate_integral(s,m)+fmax(s-m->window.end,0)/m->last;}
+double AM_DEF_am_source_from_playback(double t,const am_rate_map *m){double u=t-m->playback_start;if(!m->has_rate||u<0)return m->source.start+u;double a=am_playback_from_source(m->window.start,m)-m->playback_start,b=am_playback_from_source(m->window.end,m)-m->playback_start;return m->source.start+fmax(fmin(a,u),0)*m->first+am_rate_inverse(u-a,m)+fmax(u-b,0)*m->last;}
+#ifdef TAE_AM_ASM
+#define AM_DEF_am_curve_value am_c_curve_value
+#else
+#define AM_DEF_am_curve_value am_curve_value
+#endif
+double AM_DEF_am_curve_value(const am_ramp *r,double s){if(s>=r->end)return r->last;if(s<=r->start)return r->first;if(r->end<=r->start)return r->last;double p=(s-r->start)/(r->end-r->start),w=p;unsigned group=r->curve>>6,sub=r->curve&63;if(group==0)w=sub==0?1-sqrt(1-p):pow(p,sub==1?2:4);else if(group==1)w=sub==0?sqrt(p):1-pow(1-p,sub==1?2:4);if(r->curve==129)return exp2(log2(r->first)+w*(log2(r->last)-log2(r->first)));return r->first+w*(r->last-r->first);}
+double am_control(const am_side *side,const char *key,double s,double fallback){int initial=0;double earliest=INFINITY,value=fallback;for(size_t i=0;i<side->count;i++)for(size_t j=0;j<side->processors[i].count;j++){const am_ramp *r=&side->processors[i].ramps[j];if(!strcmp(r->parameter,key)&&r->start<earliest){earliest=r->start;value=r->first;initial=1;}}if(!initial)return fallback;for(size_t i=0;i<side->count;i++){const am_processor *p=&side->processors[i];if(s<p->placement.start)continue;for(size_t j=0;j<p->count;j++)if(!strcmp(p->ramps[j].parameter,key)&&s>=p->ramps[j].start)value=am_curve_value(&p->ramps[j],s);}return value;}
+static const am_json *expression(const am_json *v,const am_json *parameters){const char *name=am_jstr(am_jget(v,"parameterName"),NULL);const am_json *supplied=name?am_jget(parameters,name):NULL;return supplied?supplied:am_jget(v,"default");}
+static double time_expression(const am_json *v,am_range range){return clip(range.start+am_jnum(am_jget(v,"relative"),0)*(range.end-range.start)+am_jnum(am_jget(v,"offsetInSeconds"),0),range.start,range.end);}
+static unsigned curve_tag(const char *s){const char *names[]={"ease-in-0.5","ease-in-2","ease-in-4","ease-out-0.5","ease-out-2","ease-out-4","linear","logarithmic"};unsigned tags[]={0,1,2,64,65,66,128,129};for(unsigned i=0;i<8;i++)if(!strcmp(s,names[i]))return tags[i];return 256;}
+void am_compiled_style_free(am_compiled_style *s){if(!s)return;for(unsigned side=0;side<2;side++){if(s->sides[side].processors)for(size_t i=0;i<s->sides[side].count;i++)free(s->sides[side].processors[i].ramps);free(s->sides[side].processors);}memset(s,0,sizeof(*s));}
+int am_compile_style(const am_json *catalog,int64_t id,am_range outgoing,am_range incoming,const am_json *parameters,int unstructured,double out_bars,double in_bars,unsigned alias,am_compiled_style *r,char *error,size_t cap){
+ if(!r||!catalog||catalog->type!=AM_JARRAY){snprintf(error,cap,"Catalog must be an array");return -1;}memset(r,0,sizeof(*r));const am_json *style=NULL;for(size_t i=0;i<catalog->count;i++)if(am_jnum(am_jget(catalog->items[i],"id"),NAN)==(double)id)style=catalog->items[i];if(!style){snprintf(error,cap,"Unknown style ID");return -1;}
+ am_range ranges[]={outgoing,incoming};for(unsigned i=0;i<2;i++)if(!isfinite(ranges[i].start)||!isfinite(ranges[i].end)||ranges[i].end<ranges[i].start){snprintf(error,cap,"Invalid source range");return -1;}
+ r->style_id=id;snprintf(r->name,sizeof(r->name),"%s",am_jstr(am_jget(style,"name"),""));r->maximum_bar_count=am_jnum(am_jget(style,"duration"),8);const am_json *offset=am_jget(style,"offset");r->offset_relative=am_jnum(am_jget(offset,"relative"),0);r->offset_seconds=am_jnum(am_jget(offset,"offsetInSeconds"),0);r->unstructured=!!unstructured;
+ double lo=outgoing.end-outgoing.start,li=incoming.end-incoming.start,q=lo>0&&li>0?lo/li:1;double rates[2][2]={{1,q},{1/q,1}};r->bar_alias_scale=1;
+ if(unstructured){if(alias>2||!isfinite(out_bars)||!isfinite(in_bars)||out_bars<=0||in_bars<=0){snprintf(error,cap,"Unstructured timing requires positive native bar counts and alias index0..2");return -1;}double aliases[]={.5,1,2},m=aliases[alias]*in_bars/out_bars,lprime=li/m;r->bar_alias_scale=m;rates[0][1]=lo>0&&lprime>0?lo/lprime:1;double provisional=lo>0&&lprime>0?lprime/lo:1;am_ramp virtual_ramp={.start=incoming.end-lprime,.end=incoming.end,.first=provisional,.last=1,.curve=128};rates[1][0]=am_curve_value(&virtual_ramp,incoming.start);}
+ const am_json *instructions=am_jget(style,"instructions");const char *side_names[]={"outgoing","incoming"};
+ for(unsigned side=0;side<2;side++){am_rate_map *map=&r->maps[side];map->source=ranges[side];map->first=map->last=1;const am_json *rows=am_jget(instructions,side_names[side]);if(rows&&rows->type!=AM_JARRAY)goto malformed;r->sides[side].count=rows?rows->count:0;r->sides[side].processors=calloc(rows?rows->count:0,sizeof(am_processor));if(rows&&rows->count&&!r->sides[side].processors)goto allocation;
+  for(size_t i=0;rows&&i<rows->count;i++){am_processor *p=&r->sides[side].processors[i];const am_json *row=rows->items[i],*placement=am_jget(row,"placement"),*start=am_jget(placement,"start"),*end=am_jget(placement,"end");snprintf(p->name,sizeof(p->name),"%s",am_jstr(am_jget(row,"name"),""));p->placement.start=start?time_expression(start,ranges[side]):ranges[side].start;p->placement.end=end?time_expression(end,ranges[side]):ranges[side].end;if(p->placement.end<p->placement.start){double middle=(p->placement.start+p->placement.end)*.5;p->placement.start=p->placement.end=middle;}
+   const am_json *autos=am_jget(row,"automations");if(autos&&autos->type!=AM_JARRAY)goto malformed;p->count=autos?autos->count:0;p->ramps=calloc(p->count,sizeof(am_ramp));if(p->count&&!p->ramps)goto allocation;
+   for(size_t j=0;autos&&j<autos->count;j++){const am_json *a=autos->items[j];am_ramp *ramp=&p->ramps[j];snprintf(ramp->parameter,sizeof ramp->parameter,"%s",am_jstr(am_jget(a,"parameterId"),""));ramp->start=time_expression(expression(am_jget(a,"startTime"),parameters),p->placement);ramp->end=time_expression(expression(am_jget(a,"endTime"),parameters),p->placement);ramp->first=am_jnum(expression(am_jget(a,"startValue"),parameters),NAN);ramp->last=am_jnum(expression(am_jget(a,"endValue"),parameters),NAN);ramp->curve=curve_tag(am_jstr(am_jget(a,"interpolation"),"linear"));if(!strcmp(ramp->parameter,"ts_rate")){if(map->has_rate||ramp->curve!=128)goto malformed;ramp->first=rates[side][0];ramp->last=rates[side][1];map->window=(am_range){ramp->start,ramp->end};map->first=ramp->first;map->last=ramp->last;map->has_rate=1;}
+    if(ramp->end<ramp->start||ramp->curve>255||!isfinite(ramp->first)||!isfinite(ramp->last)||(ramp->curve==129&&(ramp->first<=0||ramp->last<=0)))goto malformed;
+   }
+  }if(map->first<=0||map->last<=0)goto malformed;map->duration=am_playback_from_source(map->source.end,map);
+ }
+ r->horizon=unstructured?r->maps[0].duration:fmax(r->maps[0].duration,r->maps[1].duration);r->maps[0].playback_start=0;r->maps[0].playback_end=r->horizon;r->maps[1].playback_start=unstructured?fmax(r->horizon-r->maps[1].duration,0):0;r->maps[1].playback_end=r->horizon;r->reference=(r->maps[1].playback_start+r->horizon)*.5;return 0;
+ malformed:snprintf(error,cap,"Malformed/unresolved automation expression or unsupported rate ramp");am_compiled_style_free(r);return -1;
+ allocation:snprintf(error,cap,"Out of memory compiling style");am_compiled_style_free(r);return -1;
+}
+static am_json *range_json(double a,double b){am_json *v=am_jarray();am_jappend(v,am_jnumber(a));am_jappend(v,am_jnumber(b));return v;}
+am_json *am_style_to_json(const am_compiled_style *s,double step){am_json *o=am_jobject(),*sides=am_jobject();am_jset(o,"template_id",am_jnumber((double)s->style_id));am_jset(o,"template_name",am_jstring(s->name));am_jset(o,"maximum_bar_count",am_jnumber(s->maximum_bar_count));am_jset(o,"stretched_duration",am_jnumber(s->horizon));am_jset(o,"reference_transition_time",am_jnumber(s->reference));am_jset(o,"mode",am_jstring(s->unstructured?"unstructured":"structured"));am_jset(o,"offset_policy",am_jstring("Decoded style.startTime retained; arithmetic consumer unresolved, not applied twice"));am_jset(o,"offset_expression",range_json(s->offset_relative,s->offset_seconds));const char *names[]={"outgoing","incoming"};for(unsigned side=0;side<2;side++){const am_rate_map *m=&s->maps[side];am_json *part=am_jobject(),*ps=am_jarray(),*points=am_jarray();am_jset(part,"source_range",range_json(m->source.start,m->source.end));am_jset(part,"playback_transition_time_range",range_json(m->playback_start,m->playback_end));am_jset(part,"individual_stretched_duration",am_jnumber(m->duration));am_jset(part,"rate_window",m->has_rate?range_json(m->window.start,m->window.end):am_jnull());am_jset(part,"rate_endpoints",range_json(m->first,m->last));for(size_t i=0;i<s->sides[side].count;i++){const am_processor *p=&s->sides[side].processors[i];am_json *pj=am_jobject(),*rs=am_jarray();am_jset(pj,"name",am_jstring(p->name));am_jset(pj,"source_placement",range_json(p->placement.start,p->placement.end));am_jset(pj,"playback_placement",range_json(am_playback_from_source(p->placement.start,m),am_playback_from_source(p->placement.end,m)));for(size_t j=0;j<p->count;j++){const am_ramp *r=&p->ramps[j];am_json *rj=am_jobject();am_jset(rj,"parameter_id",am_jstring(r->parameter));am_jset(rj,"source_time_range",range_json(r->start,r->end));am_jset(rj,"playback_time_range",range_json(am_playback_from_source(r->start,m),am_playback_from_source(r->end,m)));am_jset(rj,"values",range_json(r->first,r->last));am_jset(rj,"curve_tag",am_jnumber(r->curve));am_jappend(rs,rj);}am_jset(pj,"ramps",rs);am_jappend(ps,pj);}am_jset(part,"processors",ps);
+ /* C renderer evaluates the exact map; this is an explicit uniform diagnostic sampler. */
+ if(step>=.0001&&step<=1&&s->horizon/step<100000){size_t n=(size_t)ceil(s->horizon/step);for(size_t i=0;i<=n;i++){double t=fmin(i*step,s->horizon);am_json *point=am_jobject();am_jset(point,"transition_time",am_jnumber(t));am_jset(point,"song_time",am_jnumber(am_source_from_playback(t,m)));am_jset(point,"stretched_song_time",am_jnumber(t-m->playback_start));am_jappend(points,point);}}am_jset(part,"diagnostic_points",points);am_jset(sides,names[side],part);}am_jset(o,"sides",sides);am_jset(o,"curve_clock",am_jstring("source song-time"));am_jset(o,"diagnostic_sampler",am_jstring("Independent uniform sampler; exact analytic map drives render"));return o;}
+double am_parameter_default(const am_json *descriptors,const char *key,double fallback){const am_json *rows=am_jget(descriptors,"parameters");for(size_t i=0;rows&&i<rows->count;i++){const am_json *row=rows->items[i];if(strcmp(am_jstr(am_jget(row,"style_parameter_id"),""),key))continue;const char *id=am_jstr(am_jget(row,"id"),"");if(strlen(id)!=4)return fallback;return am_jnum(am_jget(row,"default_value"),fallback);}return fallback;}

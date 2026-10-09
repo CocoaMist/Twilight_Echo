@@ -75,14 +75,15 @@ async function setPluginTheme(event: Event): Promise<void> {
     <div class="setting-copy">
       <strong>主题创意工坊</strong>
     </div>
-    <button type="button" class="primary-button" @click="emit('openThemeStudio')">
-      <i class="ph ph-swatches"></i>
+    <button type="button" class="soft-button" @click="emit('openThemeStudio')">
+      <i class="ph ph-swatches" aria-hidden="true"></i>
       打开主题创意工坊
     </button>
   </div>
   <div class="setting-item">
     <div class="setting-copy">
-      <strong>主题插件工坊</strong
+      <strong class="workshop-setting-title"
+        >主题插件工坊<small class="workshop-beta-tag">BETA</small></strong
       ><span>{{
         workshopEnabled
           ? '定制已加载的主题插件，管理素材并导出个人主题。'
@@ -91,11 +92,11 @@ async function setPluginTheme(event: Event): Promise<void> {
     </div>
     <button
       type="button"
-      class="primary-button"
+      class="soft-button"
       :disabled="!workshopEnabled"
       @click="emit('openThemeWorkshop')"
     >
-      <i class="ph ph-paint-brush"></i>打开主题插件工坊
+      <i class="ph ph-paint-brush" aria-hidden="true"></i>打开主题插件工坊
     </button>
   </div>
   <hr />
@@ -201,3 +202,22 @@ async function setPluginTheme(event: Event): Promise<void> {
     </div>
   </div>
 </template>
+
+<style scoped>
+.workshop-setting-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workshop-setting-title .workshop-beta-tag {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--te-settings-search-bg);
+  color: var(--te-settings-text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.5px;
+}
+</style>

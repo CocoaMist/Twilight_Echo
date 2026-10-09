@@ -4,11 +4,10 @@ import { useLyricsFontPicker } from '@renderer/composables/useLyricsFontPicker'
 import MiniPlayerSettingsSection from './MiniPlayerSettingsSection.vue'
 import ThemeControlsSettings from './ThemeControlsSettings.vue'
 import BackgroundEditorSettings from './BackgroundEditorSettings.vue'
+import FontRenderingSettings from './FontRenderingSettings.vue'
 import LyricsStyleSettings from './LyricsStyleSettings.vue'
 import PlayerBarSettings from './PlayerBarSettings.vue'
 import PlayerBarLayoutSettings from './PlayerBarLayoutSettings.vue'
-import LiquidGlassSettings from './LiquidGlassSettings.vue'
-import CardAppearanceSettings from './CardAppearanceSettings.vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { fontFamilyOptions, uiDensityOptions, type BooleanSettingKey } from './types.ts'
 import { normalizeAppFontFamily } from '../../../../shared/appFont.ts'
@@ -84,6 +83,8 @@ function toggleSetting(key: BooleanSettingKey): void {
         </select>
       </div>
       <hr />
+      <FontRenderingSettings />
+      <hr />
       <div class="setting-item">
         <div class="setting-copy">
           <strong>界面排版密度 (UI Density)</strong>
@@ -109,10 +110,6 @@ function toggleSetting(key: BooleanSettingKey): void {
       <PlayerBarSettings />
       <hr />
       <PlayerBarLayoutSettings />
-      <hr />
-      <LiquidGlassSettings />
-      <hr />
-      <CardAppearanceSettings />
     </div>
   </section>
 </template>

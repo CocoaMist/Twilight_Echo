@@ -42,7 +42,10 @@ test('workshop opens below the theme studio in settings without a sidebar shortc
     'utf8'
   )
   assert.match(app, /page\.pluginId !== 'com\.twilightecho\.tool\.theme-workshop'/)
-  assert.ok(controls.indexOf('<strong>主题创意工坊') < controls.indexOf('<strong>主题插件工坊'))
+  const titles = [...controls.matchAll(/<strong\b[^>]*>\s*(主题(?:创意|插件)工坊)/g)].map(
+    (match) => match[1]
+  )
+  assert.deepEqual(titles, ['主题创意工坊', '主题插件工坊'])
   assert.match(controls, /:disabled="!workshopEnabled"/)
   assert.match(app, /@open-theme-workshop="openThemeWorkshop"/)
 })

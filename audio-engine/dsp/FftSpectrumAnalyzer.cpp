@@ -326,11 +326,14 @@ std::string FftSpectrumAnalyzer::readVisualizationJson(
     size_t spectrumPoints,
     size_t waveformPoints,
     size_t spectrogramFrames,
-    size_t oscilloscopePoints) const {
+    size_t oscilloscopePoints,
+    size_t visualizerBarCount) const {
   spectrumPoints = std::clamp<size_t>(spectrumPoints == 0 ? 64 : spectrumPoints, 8, 4096);
   waveformPoints = std::clamp<size_t>(waveformPoints == 0 ? 128 : waveformPoints, 16, 512);
   spectrogramFrames = std::clamp<size_t>(spectrogramFrames, 0, 96);
   oscilloscopePoints = std::clamp<size_t>(oscilloscopePoints, 0, 4096);
+  visualizerBarCount = std::clamp<size_t>(visualizerBarCount, 0, 256);
+  if (visualizerBarCount > 0) { spectrogramFrames = 0; oscilloscopePoints = 0; }
 
   bool active = false;
   bool enabled = false;
@@ -390,7 +393,25 @@ std::string FftSpectrumAnalyzer::readVisualizationJson(
 
   std::ostringstream json;
   json << "{\"spectrum\":";
-  fft::writeReducedArrayJson(json, magnitudes, spectrumPoints, active);
+  fft::writeReducedArrayJson(json, magnitudes, visualizerBarCount > 0 ? 0 : spectrumPoints, active);
+  if (visualizerBarCount > 0) {
+    json << ",\"visualizerBars\":[";
+    const double rate = sampleRate > 0 ? sampleRate : 44100;
+    const double ratio = std::max(20.0, std::min(20000.0, rate / 2)) / 20.0;
+    const double binWidth = rate / (spectrumPoints * 2);
+    const auto valueAt = [&](size_t bin) {
+      return active && !magnitudes.empty() ? magnitudes[std::min(bin * magnitudes.size() / spectrumPoints, magnitudes.size() - 1)] : 0.0f;
+    };
+    for (size_t bar = 0; bar < visualizerBarCount; ++bar) {
+      const double frequency = 20.0 * std::pow(ratio, static_cast<double>(bar) / std::max<size_t>(1, visualizerBarCount - 1));
+      const double decimal = frequency / binWidth;
+      const size_t low = std::min(static_cast<size_t>(decimal), spectrumPoints - 1), high = std::min(low + 1, spectrumPoints - 1);
+      const double value = valueAt(low) + (valueAt(high) - valueAt(low)) * (decimal - low);
+      if (bar > 0) json << ',';
+      json << (std::isfinite(value) ? std::clamp(value, 0.0, 1.0) : 0.0);
+    }
+    json << ']';
+  }
   json << ",\"waveform\":";
   fft::writeReducedArrayJson(json, timeDomain, waveformPoints, active, true);
   json << ",\"oscilloscope\":";

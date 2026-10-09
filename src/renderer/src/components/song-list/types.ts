@@ -7,6 +7,8 @@ export type GridItem = {
   name: string
   trackCount?: number
   cover?: string | null
+  coverSource?: string | null
+  releaseDate?: string
   path?: string
   artist?: string
   tracks?: Track[]

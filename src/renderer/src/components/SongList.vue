@@ -30,12 +30,14 @@ import {
   useListeningStatsStore
 } from '../stores/useListeningStatsStore'
 import type { Track } from '../types/music'
+import { copyTrackNames } from '../utils/copyTrackNames'
 import { resolveUnifiedRecentTracks } from '../utils/unifiedRecentTracks'
 import { getTrackSearchBlob, normalizeSearchText } from '../utils/localLibrarySearch'
 import { getTrackSource as getLogicalTrackSource } from '../utils/logicalTrackModel'
 import { useEscapeToClose } from '../app/useDismissLayer.ts'
 import { useBackHandler } from '../app/useBackStack.ts'
 import { buildMetadataMatchCandidates } from '../utils/musicMetadataMatching'
+import { searchMetadataTracks } from '../utils/musicMetadataSearch'
 import {
   applyLibraryCollectionView,
   availableCollectionGenres,
@@ -65,6 +67,8 @@ import {
   type LibraryViewState
 } from '../utils/libraryViewPreferences.ts'
 import CoverImg from './CoverImg.vue'
+import AlbumCard from './song-list/AlbumCard.vue'
+import AlbumDetailHeader from './song-list/AlbumDetailHeader.vue'
 import CreateAggregatePlaylistDialog from './aggregate-playlist/CreateAggregatePlaylistDialog.vue'
 import LocalLibraryTagManager from './LocalLibraryTagManager.vue'
 const LibraryInboxDialog = defineAsyncComponent(
@@ -442,6 +446,21 @@ const isPlaylistDetail = computed(() => currentPlaylistName.value !== null)
 const isAlbumDetail = computed(
   () => props.category === 'albums' && props.filter?.startsWith('album:') === true
 )
+const currentAlbum = computed(() =>
+  isAlbumDetail.value
+    ? (albums.value.find((album) => album.id === props.filter?.slice(6)) ?? null)
+    : null
+)
+const albumDurationText = computed(() => {
+  const seconds =
+    currentAlbum.value?.tracks.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0) ??
+    0
+  const minutes = Math.round(seconds / 60)
+  if (seconds <= 0) return ''
+  if (minutes < 1) return '不足 1 分钟'
+  const hours = Math.floor(minutes / 60)
+  return hours ? `${hours} 小时 ${minutes % 60} 分钟` : `${minutes} 分钟`
+})
 
 function trackListNumber(track: Track, visibleIndex: number): number {
   if (
@@ -844,17 +863,16 @@ async function handleMetadataRematch(track: Track): Promise<void> {
   repairMessage.value = `正在匹配 ${track.title || '当前曲目'} 的流媒体元数据...`
   try {
     await syncPluginProviders()
-    const query = [track.title, track.artist].filter(Boolean).join(' ')
-    const result = await mediaProviders.searchAllSongs({
-      query,
-      localTracks: tracks.value,
-      limit: 20,
-      offset: 0
+    const providerTracks = await searchMetadataTracks([track], async (query, limit, offset) => {
+      const result = await mediaProviders.searchAllSongs({
+        query,
+        localTracks: [],
+        limit,
+        offset
+      })
+      return { items: result.items.map((item) => item.track) }
     })
-    const candidates = buildMetadataMatchCandidates(
-      track,
-      result.items.map((item) => item.track)
-    )
+    const candidates = buildMetadataMatchCandidates(track, providerTracks)
     const best = candidates[0]
     if (!best) {
       repairMessage.value = `未找到可匹配 ${track.title || '当前曲目'} 的流媒体元数据`
@@ -1077,6 +1095,13 @@ const contextActionCount = computed(() => contextActionTracks.value.length)
 const contextActionLabel = computed(() =>
   contextActionCount.value > 1 ? ` (${contextActionCount.value})` : ''
 )
+
+async function handleContextCopyTrackNames(): Promise<void> {
+  const tracks = contextActionTracks.value
+  closeContextMenu()
+  await copyTrackNames(tracks)
+}
+
 const contextAllFavorited = computed(() => {
   const targets = contextActionTracks.value
   return targets.length > 0 && targets.every((track) => isFavoriteTrack(track))
@@ -1602,31 +1627,14 @@ function finishViewSwitchAndRestoreScroll(): void {
               </template>
               <!-- Album Cards -->
               <template v-if="category === 'albums'">
-                <div
+                <AlbumCard
                   v-for="(album, index) in visibleAlbums"
                   :key="album.id"
-                  class="album-card"
+                  :album="album"
                   :data-collection-index="gridWindowStart + index"
-                  role="button"
-                  tabindex="0"
-                  @keydown="activateCollectionCard"
                   :data-collection-letter="collectionIndexLetter(album.name) ?? undefined"
-                  data-te-interactive
-                  @click="emit('selectView', 'albums', `album:${album.id}`)"
-                >
-                  <CoverImg
-                    v-if="album.cover"
-                    :cover="album.cover"
-                    class="album-cover"
-                    alt="cover"
-                    loading="lazy"
-                  />
-                  <div v-else class="album-cover-placeholder">
-                    <ThemeIcon class="library-placeholder-icon" icon-slot="library.album" />
-                  </div>
-                  <div class="album-name">{{ album.name }}</div>
-                  <div class="album-count">{{ album.trackCount }} 首</div>
-                </div>
+                  @open="emit('selectView', 'albums', `album:${album.id}`)"
+                />
               </template>
               <!-- Genre Cards -->
               <template v-if="category === 'genres'">
@@ -1779,7 +1787,7 @@ function finishViewSwitchAndRestoreScroll(): void {
           </div>
         </template>
         <template v-else>
-          <div class="song-list-header">
+          <div class="song-list-header" :class="{ 'album-detail-toolbar': !!currentAlbum }">
             <div class="header-left">
               <button
                 v-if="showDetailBackButton"
@@ -1791,7 +1799,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                 <i class="pi pi-arrow-left" aria-hidden="true"></i>
                 <span>返回</span>
               </button>
-              <div class="title-group">
+              <div v-if="!currentAlbum" class="title-group">
                 <div class="title-line">
                   <h2 class="song-list-title">{{ viewTitle }}</h2>
                   <span v-if="viewStatsText" class="view-stats">{{ viewStatsText }}</span>
@@ -1817,7 +1825,7 @@ function finishViewSwitchAndRestoreScroll(): void {
               <button
                 v-if="category === 'albums'"
                 type="button"
-                class="library-tools-trigger"
+                class="library-tools-trigger album-version-trigger"
                 @click="openMusicVersions"
               >
                 专辑版本管理
@@ -2145,7 +2153,15 @@ function finishViewSwitchAndRestoreScroll(): void {
               </div>
             </div>
           </div>
-          <div class="library-play-actions" aria-label="播放控制">
+          <AlbumDetailHeader
+            v-if="currentAlbum"
+            :album="currentAlbum"
+            :duration-text="albumDurationText"
+            :can-play="displayTracks.length > 0"
+            @play="playAllTracks"
+            @shuffle="shufflePlayTracks"
+          />
+          <div v-if="!currentAlbum" class="library-play-actions" aria-label="播放控制">
             <button
               type="button"
               class="btn-play-all"
@@ -2328,10 +2344,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <th class="col-duration">时长</th>
                 </tr>
               </thead>
-              <tbody
-                ref="tbodyRef"
-                :style="{ height: totalHeight + 'px', position: 'relative', display: 'block' }"
-              >
+              <tbody ref="tbodyRef" :style="{ height: totalHeight + 'px' }">
                 <tr
                   class="virtual-spacer"
                   :style="{ height: paddingTop + 'px' }"
@@ -2486,6 +2499,18 @@ function finishViewSwitchAndRestoreScroll(): void {
                 >
                   <i class="pi pi-step-forward"></i>
                   <span>下一首播放</span>
+                </div>
+                <div
+                  class="menu-item"
+                  role="menuitem"
+                  tabindex="0"
+                  data-te-interactive
+                  @click="handleContextCopyTrackNames"
+                  @keydown.enter.prevent="handleContextCopyTrackNames"
+                  @keydown.space.prevent="handleContextCopyTrackNames"
+                >
+                  <i class="pi pi-copy"></i>
+                  <span>复制歌曲名-作者{{ contextActionLabel }}</span>
                 </div>
                 <div
                   v-if="

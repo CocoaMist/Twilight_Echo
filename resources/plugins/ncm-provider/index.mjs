@@ -30,6 +30,8 @@ const PERSONAL_FM_MAX_FALLBACK_BATCHES = 10
 const PERSONAL_RADAR_PLAYLIST_ID = 3136952023
 let likedTracksCache = null
 let playlistCatalogueCache = null
+let toplistCache = null
+const TOPLIST_CACHE_TTL_MS = 5 * 60_000
 let likedSongIdListCache = null
 let cachedUserId = null
 let likedIdsFreshAt = 0
@@ -109,6 +111,7 @@ export async function activate(context) {
     fetchPlaylistCategories,
     fetchDiscoveryPlaylists,
     fetchHighQualityPlaylists,
+    fetchToplists,
     fetchPersonalFm,
     fetchPrivateContent,
     fetchArtistTopSongs,
@@ -214,6 +217,7 @@ function resetCaches() {
   providerWriteResults.clear()
   likedTracksCache = null
   playlistCatalogueCache = null
+  toplistCache = null
   likedSongIdListCache = null
   cachedUserId = null
   likedIdsFreshAt = 0
@@ -1751,13 +1755,45 @@ function getUnblockedPlaybackUrl(data) {
   return null
 }
 
-function rememberStreamUrl(cacheKey, url, songId, fileName) {
-  const entry = { url, expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS }
+function officialAutoMixIdentity(songId, item) {
+  if (item.freeTrialInfo) return null
+  const md5 = typeof item.md5 === 'string' ? item.md5.toLowerCase() : ''
+  const size = Number(item.size),
+    bitrate = Number(item.br),
+    milliseconds = Number(item.time)
+  const format = normalizeNcmFormat(item.type ?? item.encodeType)
+  if (
+    !/^[a-f0-9]{32}$/.test(md5) ||
+    !Number.isSafeInteger(size) ||
+    size <= 0 ||
+    !Number.isFinite(bitrate) ||
+    bitrate <= 0 ||
+    !Number.isFinite(milliseconds) ||
+    milliseconds <= 0 ||
+    !format
+  )
+    return null
+  return {
+    contentId: `ncm:${songId}:${md5}:${size}`,
+    quality: JSON.stringify([format, bitrate, item.level ?? '']),
+    durationSeconds: milliseconds / 1000,
+    seekable: true
+  }
+}
+
+function autoMixPlaybackResult(url, identity, options) {
+  return options?.autoMixSource === true && identity
+    ? { streamUrl: url, autoMixIdentity: identity }
+    : url
+}
+
+function rememberStreamUrl(cacheKey, url, songId, fileName, autoMixIdentity = null) {
+  const entry = { url, autoMixIdentity, expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS }
   streamUrlCache.set(cacheKey, entry)
   void ncmApi
     .cacheSong(songId, url, fileName)
     .then((cachedPath) => {
-      if (cachedPath && streamUrlCache.get(cacheKey) === entry) entry.url = cachedPath
+      if (cachedPath && streamUrlCache.get(cacheKey) === entry) entry.cachedPath = cachedPath
     })
     .catch(() => {})
 }
@@ -1772,11 +1808,23 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
   const cachedStreamEntry = force ? null : streamUrlCache.get(cacheKey)
   if (cachedStreamEntry) {
     if (cachedStreamEntry.expiresAt > Date.now()) {
-      if (/^https?:\/\//i.test(cachedStreamEntry.url)) return cachedStreamEntry.url
-      // A completed download replaces the memory entry with a disk path.
-      // Clearing/moving the managed cache must invalidate that entry too.
-      const cachedPath = await ncmApi.getCachedSong(songId).catch(() => null)
-      if (cachedPath === cachedStreamEntry.url) return cachedPath
+      // Cache clearing, capacity eviction, or a cache-root change can remove a
+      // downloaded file while this URL entry is still fresh. Keep the signed
+      // stream URL and only reuse the exact managed file that still exists.
+      if (cachedStreamEntry.cachedPath) {
+        try {
+          const cachedPath = await ncmApi.getCachedSong(songId)
+          if (cachedPath === cachedStreamEntry.cachedPath) return cachedPath
+        } catch {
+          // A cache lookup failure must not prevent online playback.
+        }
+        cachedStreamEntry.cachedPath = null
+      }
+      return autoMixPlaybackResult(
+        cachedStreamEntry.url,
+        cachedStreamEntry.autoMixIdentity,
+        options
+      )
     }
     streamUrlCache.delete(cacheKey)
   }
@@ -1799,10 +1847,11 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
       const url = getOfficialPlaybackUrl(data, streamItem)
       if (url) {
         rememberStreamAudioMeta(songId, streamItem)
+        const identity = officialAutoMixIdentity(songId, streamItem)
         if (!streamItem.freeTrialInfo) {
-          rememberStreamUrl(cacheKey, url, songId, track?.fileName)
+          rememberStreamUrl(cacheKey, url, songId, track?.fileName, identity)
         }
-        return url
+        return autoMixPlaybackResult(url, identity, options)
       }
       lastFailureMessage = getPlaybackFailureMessage(data, streamItem) || lastFailureMessage
     } catch (error) {
@@ -1973,6 +2022,57 @@ async function fetchPlaylistCategories() {
   const result = { hotTags, groups }
   playlistCatalogueCache = result
   return result
+}
+
+async function fetchToplists(force = false, requestContext) {
+  throwIfRequestAborted(requestContext)
+  if (!force && toplistCache && Date.now() - toplistCache.at < TOPLIST_CACHE_TTL_MS) {
+    return toplistCache.items
+  }
+  const data = await requestOptionalAuthRead('/toplist/detail', {
+    label: 'music toplists',
+    signal: requestContext?.signal
+  })
+  const list = data.list ?? data.data?.list
+  if (!Array.isArray(list)) throw new Error('网易云排行榜返回的数据不完整，请稍后重试')
+  const seen = new Set()
+  const items = list
+    .filter((item) => {
+      const id = Number(item?.id)
+      if (
+        !Number.isSafeInteger(id) ||
+        id <= 0 ||
+        typeof item?.name !== 'string' ||
+        !item.name.trim() ||
+        seen.has(id)
+      )
+        return false
+      seen.add(id)
+      return true
+    })
+    .map((item) => ({
+      ...normalizeDiscoveryPlaylist(item),
+      description: typeof item.description === 'string' ? item.description : '',
+      updateFrequency: typeof item.updateFrequency === 'string' ? item.updateFrequency : '',
+      updatedAt: Number(item.updateTime) > 0 ? Number(item.updateTime) : undefined,
+      featured:
+        item.ToplistType != null || [19723756, 3779629, 2884035, 3778678].includes(Number(item.id)),
+      previewTracks: (Array.isArray(item.tracks) ? item.tracks : [])
+        .slice(0, 3)
+        .map((track) => ({
+          title:
+            typeof track?.first === 'string'
+              ? track.first
+              : typeof track?.name === 'string'
+                ? track.name
+                : '',
+          artist: typeof track?.second === 'string' ? track.second : ''
+        }))
+        .filter((track) => track.title)
+    }))
+  throwIfRequestAborted(requestContext)
+  toplistCache = { at: Date.now(), items }
+  return items
 }
 
 async function fetchDiscoveryPlaylists(cat = '全部', order = 'hot', limit = 30, offset = 0) {

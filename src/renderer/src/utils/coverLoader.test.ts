@@ -5,6 +5,41 @@ const { clearCoverCache, clearRemoteCoverGrantCache, resolveCover } = (await imp
   new URL('./coverLoader.ts', import.meta.url).href
 )) as typeof import('./coverLoader')
 
+test('clearing display caches prevents late IPC responses from populating a new generation', async () => {
+  const record = globalThis as Record<string, unknown>
+  const previous = record.window
+  let finish!: (value: string) => void
+  let calls = 0
+  record.window = {
+    api: {
+      data: {
+        getCover: () => {
+          calls++
+          return new Promise<string>((resolve) => {
+            finish = resolve
+          })
+        }
+      }
+    }
+  }
+  try {
+    clearCoverCache()
+    const old = resolveCover('cover://pending.jpg')
+    clearCoverCache()
+    finish('data:image/png;base64,old')
+    await old
+    const fresh = resolveCover('cover://pending.jpg')
+    assert.equal(calls, 2)
+    finish('data:image/png;base64,new')
+    assert.equal(await fresh, 'data:image/png;base64,new')
+    assert.equal(await resolveCover('cover://pending.jpg'), 'data:image/png;base64,new')
+    assert.equal(calls, 2)
+  } finally {
+    record.window = previous
+    clearCoverCache()
+  }
+})
+
 test('local cover cache evicts by byte budget and preserves recently read art', async () => {
   clearCoverCache()
   const globalRecord = globalThis as Record<string, unknown>

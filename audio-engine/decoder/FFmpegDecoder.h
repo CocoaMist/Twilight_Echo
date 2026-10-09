@@ -34,6 +34,9 @@ class FFmpegDecoder {
   size_t readFrames(float* output, size_t frameCount, std::string* error);
   size_t readFrames(PcmBlock& output, std::string* error);
   bool seek(double seconds, std::string* error);
+  /** Background-only: align decoded/resampled PCM to an absolute output frame.
+   * Requires continuous frame timestamps; fails instead of inventing a clock. */
+  bool seekOutputFrame(uint64_t frame, std::string* error);
   bool eof() const;
 
   const AudioStreamInfo& streamInfo() const;

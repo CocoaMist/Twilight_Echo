@@ -237,6 +237,15 @@ export interface Track {
   bpm?: number
 }
 
+/** nextOffset is a provider cursor; it need not equal the number of returned tracks. */
+export interface PlaylistTracksPage {
+  tracks: Track[]
+  /** Exact playable track count when known, otherwise null (e.g. multi-part videos). */
+  total: number | null
+  nextOffset: number
+  hasMore: boolean
+}
+
 export interface PlaylistSummary {
   id: string | number
   name: string
@@ -253,6 +262,15 @@ export interface AlbumSummary {
   cover?: string | null
   trackCount?: number
   publishTime?: number
+}
+
+/** Public music charts, including the provider's compact song previews. */
+export interface ToplistSummary extends PlaylistSummary {
+  description?: string
+  updateFrequency?: string
+  updatedAt?: number
+  featured?: boolean
+  previewTracks: Array<{ title: string; artist: string }>
 }
 
 export interface ArtistSummary {
@@ -410,6 +428,13 @@ export interface TwilightMediaProviderRegistration {
     force?: boolean,
     context?: TwilightProviderRequestContext
   ): Promise<Track[]>
+  fetchPlaylistTracksPage?(
+    playlistId: string | number,
+    offset?: number,
+    limit?: number,
+    force?: boolean,
+    context?: TwilightProviderRequestContext
+  ): Promise<PlaylistTracksPage>
   createDownload?(
     request: ProviderDownloadRequest,
     context?: TwilightProviderRequestContext
@@ -503,6 +528,10 @@ export interface TwilightMediaProviderRegistration {
   ): Promise<string>
   fetchRecommendSongs?(context?: TwilightProviderRequestContext): Promise<Track[]>
   fetchRecommendPlaylists?(context?: TwilightProviderRequestContext): Promise<PlaylistSummary[]>
+  fetchToplists?(
+    force?: boolean,
+    context?: TwilightProviderRequestContext
+  ): Promise<ToplistSummary[]>
   fetchPlaylistCategories?(context?: TwilightProviderRequestContext): Promise<{
     hotTags: string[]
     groups: Array<{ id: number; name: string; tags: Array<{ name: string; hot: boolean }> }>

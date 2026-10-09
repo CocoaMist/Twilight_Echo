@@ -343,6 +343,11 @@ export function useNcmStore() {
     try {
       await syncPluginProviders()
       if (request !== loginRequestRevision) return isLoggedIn.value
+      const provider = useMediaProviders().get(NCM_PROVIDER_ID)
+      if (provider && (!provider.isEnabled || (await provider.isEnabled()))) {
+        if (request !== loginRequestRevision) return isLoggedIn.value
+        markProviderAvailable()
+      }
       const isCurrent = captureNcmSession()
       const state = await callNcmProvider<NcmLoginState>('checkLogin')
       if (request !== loginRequestRevision || !isCurrent()) return isLoggedIn.value

@@ -1,4 +1,5 @@
 #include "AudioMetadataService.h"
+#include "../decoder/FFmpegFileInput.h"
 
 #include "AudioMetadataTypes.h"
 
@@ -189,6 +190,7 @@ std::string coverMimeForCodec(AVCodecID codecId) {
 }
 
 struct FormatContextHandle {
+  FFmpegFileInput fileInput;
   AVFormatContext* context = nullptr;
   ~FormatContextHandle() {
     if (context) avformat_close_input(&context);
@@ -275,13 +277,17 @@ std::string readMetadataJson(const std::string& source) {
     metadata.dsdMode = dsdModeToString(DsdMode::Pcm);
     
     SacdIsoDemuxer demuxer;
-    demuxer.open(source, nullptr);
+    std::string error;
+    if (!demuxer.open(source, &error)) {
+      return metadataToJson(metadata, error.empty() ? "Unable to read SACD ISO metadata" : error);
+    }
     
     for (const auto& track : demuxer.tracks()) {
       AudioMetadata trackMeta;
       trackMeta.source = source + "?area=" + track.area + "&track=" + std::to_string(track.trackNumber);
       trackMeta.title = track.title.empty() ? "Track " + std::to_string(track.trackNumber) : track.title;
       trackMeta.artist = track.artist;
+      if (track.year > 0 && track.year <= 9999) trackMeta.year = std::to_string(track.year);
       trackMeta.trackNumber = std::to_string(track.trackNumber);
       trackMeta.durationSeconds = track.durationSeconds;
       trackMeta.channelCount = track.channelCount;
@@ -304,7 +310,8 @@ std::string readMetadataJson(const std::string& source) {
 
 #if defined(TAE_HAS_FFMPEG)
   FormatContextHandle handle;
-  if (avformat_open_input(&handle.context, source.c_str(), nullptr, nullptr) < 0 || !handle.context) {
+  if (!handle.fileInput.open(source, &handle.context) ||
+      avformat_open_input(&handle.context, source.c_str(), nullptr, nullptr) < 0 || !handle.context) {
     return metadataToJson(metadata, "无法打开音频文件");
   }
   if (avformat_find_stream_info(handle.context, nullptr) < 0) {

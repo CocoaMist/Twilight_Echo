@@ -29,6 +29,7 @@ async function component(file: string, name: string): Promise<string> {
     'const $1 = window.fixture.$1;'
   )
   script = script.replace('export default', `window.fixture.${name} =`)
+  script = script.replace(/^import\s+['"][^'"]+\.css['"];?\s*$/gm, '')
   assert.doesNotMatch(script, /^import /m)
   return `(() => { ${script} })();`
 }
@@ -97,6 +98,28 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
         check(artist === 1 && album === 1 && played === 0, 'metadata links must not play');
         document.querySelector('.row-play-btn').click(); check(played === 1, 'play button still plays');
         list.unmount();
+        const biliState = Vue.reactive({ liked: true, loading: false });
+        let favoriteClicks = 0;
+        const biliTrack = { ...track, id: 'bili:BV1:1', source: 'bili' };
+        const biliList = Vue.createApp(fixture.DetailStage, {
+          kind: 'playlist', title: 'Bilibili Favorites', trackCountLabel: '1', tracks: [biliTrack],
+          isExternal: true, showTrackLikes: true, favoriteProviderLabel: 'Bilibili',
+          isSelected: () => false, isTrackLiked: row => row.id === biliTrack.id && biliState.liked,
+          isLiking: () => biliState.loading, formatTime: () => '3:00',
+          onTrackClick: () => played++, onPlayTrack: () => played++,
+          onLikeTrack: row => { check(row.id === biliTrack.id, 'heart identifies the video part'); favoriteClicks++; biliState.loading = true; }
+        });
+        biliList.mount('#list'); await tick();
+        const heart = document.querySelector('#list .row-like');
+        check(heart && heart.classList.contains('liked'), 'Bilibili favorites render red hearts');
+        check(heart.title === '在Bilibili取消收藏' && heart.getAttribute('aria-pressed') === 'true', 'favorite label and accessibility state');
+        check(!document.querySelector('#list .stage-list').classList.contains('no-like'), 'like column keeps the correct grid');
+        heart.click(); await tick();
+        check(favoriteClicks === 1 && played === 1, 'favorite click does not start playback');
+        check(heart.disabled && heart.querySelector('.pi-spinner'), 'pending favorite write disables the heart');
+        biliState.loading = false; biliState.liked = false; await tick();
+        check(!heart.classList.contains('liked') && heart.title === '在Bilibili收藏', 'successful unfavorite clears the heart');
+        biliList.unmount();
         let openedAlbum = null, openedArtist = null;
         const saved = Vue.createApp(fixture.SavedMusicCollections, { userId: 1, providerId: 'ncm', onOpenAlbum: item => openedAlbum = item, onOpenArtist: item => openedArtist = item });
         saved.mount('#saved'); await tick();

@@ -25,7 +25,7 @@ uint32_t readBe32(const uint8_t* data) {
          (static_cast<uint32_t>(data[2]) << 8) | static_cast<uint32_t>(data[3]);
 }
 
-bool readSector(std::ifstream& file, uint64_t fileSize, uint32_t lsn, uint8_t* out) {
+bool readSector(std::istream& file, uint64_t fileSize, uint32_t lsn, uint8_t* out) {
   const uint64_t offset = static_cast<uint64_t>(lsn) * kScarletbookSectorSize;
   if (offset + kScarletbookSectorSize > fileSize) return false;
   file.clear();
@@ -116,7 +116,7 @@ void parseAreaTrackText(const uint8_t* sector, ScarletbookArea* area) {
   }
 }
 
-bool parseAreaToc(std::ifstream& file,
+bool parseAreaToc(std::istream& file,
                   uint64_t fileSize,
                   uint32_t tocLsn,
                   uint32_t tocSizeSectors,
@@ -221,8 +221,8 @@ bool parseAreaToc(std::ifstream& file,
 
 }  // namespace
 
-bool parseScarletbookDisc(std::ifstream& file, uint64_t fileSize, ScarletbookDisc* out) {
-  if (!out || !file.is_open()) return false;
+bool parseScarletbookDisc(std::istream& file, uint64_t fileSize, ScarletbookDisc* out) {
+  if (!out) return false;
   *out = {};
 
   std::vector<uint8_t> sector(kScarletbookSectorSize);

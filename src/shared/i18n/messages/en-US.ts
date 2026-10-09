@@ -53,6 +53,10 @@ export const EN_US_MESSAGES: Record<string, string> = {
     'The audio engine reported an unrecognised reason code ({code}). This usually means the engine is newer than the interface — please export an audio diagnostic report and send it in.',
 
   // ══ Playback controls ════════════════════════════════════════════════════
+  'audio.reason.pause_fade_active.label': 'Pause fade',
+  'audio.reason.pause_fade_active.explain':
+    'Pausing fades the sound over 200 ms, temporarily changing sample levels. Resuming restores the configured volume and output state.',
+  'audio.reason.pause_fade_active.fix': '',
   'audio.reason.volume_not_unity.label': 'Software volume is not 100%',
   'audio.reason.volume_not_unity.explain':
     'Software volume multiplies every sample by a factor below 1, which changes the sample values. The 70% default protects your hearing, but bit-perfect playback needs unity (100%).',
@@ -100,6 +104,11 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'audio.reason.crossfade_active.explain':
     'Crossfade overlaps two streams at track boundaries and applies a gain envelope, rewriting samples in the transition and disabling true gapless.',
   'audio.reason.crossfade_active.fix': 'Set crossfade duration to 0 seconds in playback settings.',
+  'audio.reason.automix_active.label': 'AutoMix is transitioning tracks',
+  'audio.reason.automix_active.explain':
+    'AutoMix is mixing or processing PCM from the outgoing and incoming tracks, changing the output samples.',
+  'audio.reason.automix_active.fix':
+    'Turn off AutoMix in playback settings to restore your latest output preferences.',
 
   'audio.reason.dsd_output_mode_pcm.label': 'DSD output mode is set to PCM',
   'audio.reason.dsd_output_mode_pcm.explain':
@@ -200,8 +209,7 @@ export const EN_US_MESSAGES: Record<string, string> = {
     'Switch to WASAPI Exclusive, ASIO, or CoreAudio hog mode.',
 
   'audio.reason.output_not_perfect.label': 'The output chain is not verified as passthrough',
-  'audio.reason.output_not_perfect.explain':
-    'The engine has not gathered enough evidence to prove this chain is bit-exact. The chain may well be fine — it is simply unproven.',
+  'audio.reason.output_not_perfect.explain': 'Bit-exact passthrough has not been verified.',
   'audio.reason.output_not_perfect.fix': '',
   'audio.reason.output_released.label': 'Audio device released',
   'audio.reason.output_released.explain':
@@ -211,7 +219,7 @@ export const EN_US_MESSAGES: Record<string, string> = {
   // ══ Source properties ════════════════════════════════════════════════════
   'audio.reason.source_lossy.label': 'The source is lossy, so source-exact is impossible',
   'audio.reason.source_lossy.explain':
-    'Lossy formats (MP3, AAC and so on) decode to a reconstructed waveform; the original samples were discarded at encode time. This is not a player limitation.',
+    'Lossy formats such as MP3 and AAC do not preserve the original samples and cannot be source-exact.',
   'audio.reason.source_lossy.fix': '',
 
   'audio.reason.source_format_differs.label': 'Source format differs from the output chain',
@@ -234,9 +242,9 @@ export const EN_US_MESSAGES: Record<string, string> = {
 
   'audio.reason.dsd_volume_pcm_fallback.label': 'DSD fell back to PCM because volume is not 100%',
   'audio.reason.dsd_volume_pcm_fallback.explain':
-    'Software volume multiplies every sample by a gain factor, and a DSD bitstream cannot carry gain directly, so DSD is demodulated to PCM before the volume is applied. This is unrelated to the DSP chain, and direct mode will not clear it — direct mode deliberately leaves volume alone rather than jumping the loudness to full scale.',
+    'Adjusting software volume converts DSD to PCM. Direct mode leaves volume unchanged and does not prevent this conversion.',
   'audio.reason.dsd_volume_pcm_fallback.fix':
-    'Set software volume to 100% (unity) and control loudness with the physical knob on your amp or DAC; DSD then returns to native transport.',
+    'Lower the physical volume on your amp or DAC before setting software volume to 100% (unity).',
 
   'audio.reason.dsd_high_rate_pcm_fallback.label':
     'DSD fell back to PCM due to rate or driver limits',

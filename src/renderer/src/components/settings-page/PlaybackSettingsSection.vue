@@ -16,6 +16,7 @@ import {
 } from '../../../../shared/audioProcessingOptions.ts'
 import { isDsdProxyDevice } from '../../../../shared/dsdProxyDrivers.ts'
 import { resolveReasonCode } from '../../../../shared/audio/reasonCodes.ts'
+import { normalizeAutoMix, autoMixReasonText } from '../../../../shared/autoMix.ts'
 import { useLocale } from '../../app/useLocale.ts'
 import {
   type AudioCapabilitySupportState,
@@ -110,6 +111,40 @@ const showWasapiPushMode = computed(() => audioOutput.value === 'wasapi' && excl
 const advancedParamsOpen = ref(false)
 
 const audioOutputPanelExpanded = ref(false)
+const autoMixConfig = computed(() => normalizeAutoMix(audioProcessing.value.autoMix))
+const autoMixStatus = computed(() => playbackInfo.value?.autoMix)
+const autoMixApplying = ref(false)
+const autoMixAvailable = computed(
+  () =>
+    autoMixStatus.value?.experimentalAllowed === true || autoMixStatus.value?.stableRelease === true
+)
+const autoMixStateText = computed(() => {
+  const status = autoMixStatus.value
+  if (status?.state === 'ready' && status.styleId === 1) return '保守淡化已就绪'
+  return {
+    disabled: '关闭',
+    preparing: '准备中',
+    ready: '智能转场已就绪',
+    mixing: '混音中',
+    degraded: '暂未转场'
+  }[status?.state ?? 'disabled']
+})
+async function patchAutoMix(patch: Partial<ReturnType<typeof normalizeAutoMix>>): Promise<void> {
+  if (autoMixApplying.value) return
+  autoMixApplying.value = true
+  try {
+    await setAudioProcessing({ autoMix: { ...autoMixConfig.value, ...patch } })
+  } catch (error) {
+    audioEngineError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    autoMixApplying.value = false
+  }
+}
+function setAutoMixSeconds(event: Event): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  if (Number.isFinite(value))
+    void patchAutoMix({ maxTransitionSeconds: Math.min(12, Math.max(0.3, value)) })
+}
 
 const outputChainText = computed(() => {
   const info = playbackInfo.value
@@ -913,6 +948,76 @@ function setContinuitySampleRate(event: Event): void {
               :aria-checked="audioProcessing.gapless"
               @click="toggleGaplessPlayback"
             ></span>
+          </div>
+        </div>
+        <hr />
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>AutoMix</strong>
+            <span>在曲目末尾自动衔接下一首，保护专辑和 CUE 边界。{{ autoMixStateText }}。</span>
+            <span v-if="!autoMixAvailable"
+              >当前音频引擎未开放 AutoMix，请使用支持此功能的运行时。</span
+            >
+            <span v-else-if="!autoMixStatus?.stableRelease"
+              >当前为实验版本，尚未完成听感与长时播放验收。</span
+            >
+            <span v-if="autoMixConfig.enabled"
+              >AutoMix 使用 PCM，暂停 Direct 和 DSD 直通；关闭后恢复最新输出偏好。</span
+            >
+            <span v-if="autoMixStatus && autoMixConfig.enabled">
+              {{ autoMixStatus.transitionSeconds.toFixed(1) }} 秒
+              <template v-if="autoMixStatus.state === 'mixing'">
+                · {{ Math.round(autoMixStatus.progress * 100) }}%</template
+              >
+            </span>
+            <span
+              v-if="
+                autoMixStatus && autoMixConfig.enabled && autoMixReasonText(autoMixStatus.reason)
+              "
+              >{{ autoMixReasonText(autoMixStatus.reason) }}。</span
+            >
+          </div>
+          <div class="inline-controls continuity-controls">
+            <label
+              >最长 (秒)
+              <input
+                class="number-input"
+                type="number"
+                min="0.3"
+                max="12"
+                step="0.5"
+                :value="autoMixConfig.maxTransitionSeconds"
+                :disabled="!autoMixAvailable || autoMixApplying"
+                @change="setAutoMixSeconds"
+              />
+            </label>
+            <label
+              ><input
+                type="checkbox"
+                :checked="autoMixConfig.allowIntelligentSkip"
+                :disabled="
+                  !autoMixAvailable ||
+                  autoMixApplying ||
+                  autoMixStatus?.intelligentSkipSupported !== true
+                "
+                @change="
+                  patchAutoMix({ allowIntelligentSkip: !autoMixConfig.allowIntelligentSkip })
+                "
+              />允许智能选段</label
+            >
+            <span v-if="autoMixAvailable && autoMixStatus?.intelligentSkipSupported !== true"
+              >选段能力尚未就绪，当前保留完整内容。</span
+            >
+            <button
+              type="button"
+              class="toggle-switch"
+              :class="{ active: autoMixConfig.enabled }"
+              role="switch"
+              aria-label="AutoMix"
+              :aria-checked="autoMixConfig.enabled"
+              :disabled="(!autoMixAvailable && !autoMixConfig.enabled) || autoMixApplying"
+              @click="patchAutoMix({ enabled: !autoMixConfig.enabled })"
+            ></button>
           </div>
         </div>
         <hr />

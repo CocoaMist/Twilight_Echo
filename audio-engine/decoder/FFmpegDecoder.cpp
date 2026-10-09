@@ -1,16 +1,21 @@
 #include "FFmpegDecoder.h"
+#include "FFmpegFileInput.h"
 
 #include "FFmpegDecoderUtils.h"
 #include "FFmpegDsdRate.h"
 #include "SacdIsoProbe.h"
 #include "../core/DsdRate.h"
+#include "../core/Utf8Path.h"
 #include "../dsp/DspTypes.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <vector>
@@ -236,6 +241,7 @@ struct FFmpegDecoder::Impl {
 
 #if defined(TAE_HAS_FFMPEG)
   AVFormatContext* formatContext = nullptr;
+  FFmpegFileInput fileInput;
   AVCodecContext* codecContext = nullptr;
   AVPacket* packet = nullptr;
   AVFrame* frame = nullptr;
@@ -247,6 +253,11 @@ struct FFmpegDecoder::Impl {
   std::vector<uint8_t> pending;
   std::vector<uint8_t> convertedScratch;
   size_t pendingFrameOffset = 0;
+  bool exactSeek = false;
+  bool exactFromStart = false;
+  uint64_t exactTarget = 0;
+  std::optional<int64_t> exactInputCursor;
+  int64_t exactOutputCursor = 0;
   AVChannelLayout targetLayout{};
 
   static std::string avError(int code) {
@@ -318,12 +329,15 @@ struct FFmpegDecoder::Impl {
     if (formatContext) {
       avformat_close_input(&formatContext);
     }
+    fileInput.close();
     audioStreamIndex = -1;
     inputEof = false;
     resamplerFlushed = false;
     icyEnabled = false;
     eof = false;
     resetPending();
+    exactSeek = false;
+    exactInputCursor.reset();
     streamInfo = {};
     outputFormat = {};
     {
@@ -349,14 +363,54 @@ struct FFmpegDecoder::Impl {
       return false;
     }
 
+    int skip = 0;
+    if (exactSeek) {
+      const auto* stream = formatContext->streams[audioStreamIndex];
+      const int64_t pts = frame->best_effort_timestamp;
+      if (pts == AV_NOPTS_VALUE || codecContext->sample_rate <= 0) {
+        if (error) *error = "Precise PCM seek requires frame timestamps";
+        return false;
+      }
+      const auto origin = stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
+      int64_t first = av_rescale_q_rnd(pts - origin, stream->time_base,
+          AVRational{1, codecContext->sample_rate}, AV_ROUND_NEAR_INF);
+      if (!exactInputCursor) {
+        // Some codecs have already removed priming samples without updating
+        // the first frame PTS (FFmpeg's skipped-samples warning). At source
+        // start the decoded first sample is the same sample as normal open.
+        if (exactFromStart) first = 0;
+        // Start on the global rational resampling grid. After preroll, the
+        // filter phase matches decoding from source time zero.
+        const int period = codecContext->sample_rate /
+            std::gcd(codecContext->sample_rate, outputFormat.sampleRate);
+        const int64_t aligned = std::max<int64_t>(0, first + period - 1) / period * period;
+        if (aligned - first >= frame->nb_samples) return true;
+        skip = static_cast<int>(aligned - first);
+        exactInputCursor = aligned;
+        exactOutputCursor = aligned / period *
+            (outputFormat.sampleRate / std::gcd(codecContext->sample_rate, outputFormat.sampleRate));
+      } else if (std::abs(first - *exactInputCursor) > 1) {
+        if (error) *error = "Precise PCM seek encountered discontinuous timestamps";
+        return false;
+      }
+      *exactInputCursor = first + frame->nb_samples;
+    }
+    const int inputSamples = frame->nb_samples - skip;
     const int outSamples = static_cast<int>(av_rescale_rnd(
-        swr_get_delay(swr, codecContext->sample_rate) + frame->nb_samples,
+        swr_get_delay(swr, codecContext->sample_rate) + inputSamples,
         outputFormat.sampleRate,
         codecContext->sample_rate,
         AV_ROUND_UP));
     if (outSamples <= 0) return true;
-    return convertSamples(
-        const_cast<const uint8_t**>(frame->extended_data), frame->nb_samples, outSamples, error);
+    if (!skip) return convertSamples(
+        const_cast<const uint8_t**>(frame->extended_data), inputSamples, outSamples, error);
+    const bool planar = av_sample_fmt_is_planar(codecContext->sample_fmt);
+    const int planes = planar ? codecContext->ch_layout.nb_channels : 1;
+    std::vector<const uint8_t*> input(planes);
+    const size_t stride = av_get_bytes_per_sample(codecContext->sample_fmt) *
+        (planar ? 1 : codecContext->ch_layout.nb_channels);
+    for (int channel = 0; channel < planes; ++channel) input[channel] = frame->extended_data[channel] + skip * stride;
+    return convertSamples(input.data(), inputSamples, outSamples, error);
   }
 
   // inputData == nullptr / inputSamples == 0 flushes the resampler instead of feeding it.
@@ -390,6 +444,20 @@ struct FFmpegDecoder::Impl {
           actualOutputSamples,
           outputFormat.sampleFormat,
           &pending);
+    }
+    if (exactSeek) {
+      if (exactOutputCursor < 0 || static_cast<uint64_t>(exactOutputCursor) > exactTarget) {
+        if (error) *error = "Precise PCM seek began beyond the requested frame";
+        resetPending(); return false;
+      }
+      const uint64_t remaining = exactTarget - static_cast<uint64_t>(exactOutputCursor);
+      exactOutputCursor += actualSamples;
+      if (remaining >= static_cast<uint64_t>(actualSamples)) {
+        resetPending();
+      } else {
+        pendingFrameOffset = static_cast<size_t>(remaining);
+        exactSeek = false;
+      }
     }
     return true;
   }
@@ -491,6 +559,9 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
   close();
 
 #if defined(TAE_HAS_FFMPEG)
+  // Every failed open must release its partially allocated IO and decoder.
+  const auto cleanup = [](Impl* impl) { impl->close(); };
+  std::unique_ptr<Impl, decltype(cleanup)> failedOpen(impl_.get(), cleanup);
   if (sourceLooksSacdIso(source)) {
     const SacdIsoEntryProbe probe = probeSacdIsoEntry(source);
     const SacdDstProviderSelection dstProvider = selectSacdDstProvider(avcodec_find_decoder_by_name(kSacdDstCodecName) != nullptr, nullptr);
@@ -536,7 +607,26 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     impl_->icyEnabled = true;
   }
 
-  int ret = avformat_open_input(&impl_->formatContext, source.c_str(), nullptr, &openOptions);
+  // Highly periodic PCM can outscore WAV in FFmpeg's generic MPEG-TS probe.
+  // Prefer WAV only after validating the local container signature; a renamed
+  // non-WAV file and all network sources retain ordinary format discovery.
+  const AVInputFormat* inputFormat = nullptr;
+  if (!looksHttp && (extensionOf(source) == "wav" || extensionOf(source) == "wave")) {
+    std::array<char, 12> header{};
+    SharedInputFile input(utf8Path(source), std::ios::binary);
+    input.read(header.data(), header.size());
+    if (input.gcount() == static_cast<std::streamsize>(header.size()) &&
+        (std::memcmp(header.data(), "RIFF", 4) == 0 || std::memcmp(header.data(), "RF64", 4) == 0 ||
+         std::memcmp(header.data(), "RIFX", 4) == 0) && std::memcmp(header.data() + 8, "WAVE", 4) == 0) {
+      inputFormat = av_find_input_format("wav");
+    }
+  }
+  if (!impl_->fileInput.open(source, &impl_->formatContext)) {
+    av_dict_free(&openOptions);
+    if (error) *error = "无法打开本地音频文件";
+    return false;
+  }
+  int ret = avformat_open_input(&impl_->formatContext, source.c_str(), inputFormat, &openOptions);
   av_dict_free(&openOptions);
   if (ret < 0) {
     if (error) *error = "打开音频失败，错误码：" + std::to_string(ret);
@@ -646,7 +736,9 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     defaultOutput.bitDepth = 32;
     defaultOutput.sampleFormat = AudioSampleFormat::Float32Interleaved;
   }
-  return setOutputFormat(defaultOutput, error);
+  if (!setOutputFormat(defaultOutput, error)) return false;
+  failedOpen.release();
+  return true;
 #else
   (void)source;
   if (error) *error = "当前构建未启用音频解码支持";
@@ -859,13 +951,48 @@ bool FFmpegDecoder::seek(double seconds, std::string* error) {
     return false;
   }
   avcodec_flush_buffers(impl_->codecContext);
+  // Decoder flush does not clear swr history from the old playback position.
+  if (impl_->swr) {
+    swr_close(impl_->swr);
+    if (swr_init(impl_->swr) < 0) { if (error) *error = "Unable to reset seek resampler"; return false; }
+  }
   impl_->inputEof = false;
   impl_->resamplerFlushed = false;
   impl_->eof = false;
   impl_->resetPending();
+  impl_->exactSeek = false;
+  impl_->exactInputCursor.reset();
   return true;
 #else
   (void)seconds;
+  if (error) *error = "当前构建未启用音频解码支持";
+  return false;
+#endif
+}
+
+bool FFmpegDecoder::seekOutputFrame(uint64_t frame, std::string* error) {
+#if defined(TAE_HAS_FFMPEG)
+  if (!impl_->formatContext || !impl_->swr || impl_->outputFormat.sampleRate <= 0 ||
+      frame >= static_cast<uint64_t>(INT64_MAX)) return false;
+  // One second supplies codec and resampler history, bounded independent of
+  // song duration. The final trim is in integer output frames, not seconds.
+  const auto rate = static_cast<uint64_t>(impl_->outputFormat.sampleRate);
+  const auto preroll = frame > rate ? frame - rate : 0;
+  if (!seek(static_cast<double>(preroll) / rate, error)) return false;
+  impl_->exactSeek = true;
+  impl_->exactFromStart = preroll == 0;
+  impl_->exactTarget = frame;
+  impl_->exactInputCursor.reset();
+  while (impl_->exactSeek) {
+    if (!impl_->decodeOneFrame(error)) {
+      if (error && error->empty()) *error = "Precise PCM seek reached end of source";
+      impl_->exactSeek = false;
+      return false;
+    }
+  }
+  return true;
+#else
+  (void)frame;
   if (error) *error = "当前构建未启用音频解码支持";
   return false;
 #endif

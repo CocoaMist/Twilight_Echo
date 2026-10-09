@@ -125,7 +125,8 @@ window.runMotionCoverage=async()=>{
       await mount(()=>h('div',{class:'main-content'},[h('article',{class:'page-down-enter-active page-down-enter-from'},'页面内容')]))
       const page=document.querySelector('article'),style=getComputedStyle(page)
       expect(mode==='full'?style.transform!=='none':style.transform==='none','page mode moved incorrectly: '+mode)
-      expect(style.transitionDuration===(mode==='full'?'0.34s, 0.48s, 0.42s':mode==='reduced'?'0.12s':'0s'),'page duration ignored mode: '+mode+' '+style.transitionDuration)
+      expect(style.transitionDuration===(mode==='full'?'0.18s, 0.24s':mode==='reduced'?'0.12s':'0s'),'page duration ignored mode: '+mode+' '+style.transitionDuration)
+      expect(style.filter==='none'&&!style.willChange.includes('filter'),'page transition reintroduced a raster blur: '+mode)
       root.classList.add('te-theme-tone-transition');page.className='glass-card';await nextTick()
       expect(getComputedStyle(page).transitionDuration===(mode==='full'?'0.2s, 0.2s, 0.2s':mode==='reduced'?'0.12s':'0s'),'theme transition ignored mode '+mode+' '+getComputedStyle(page).transitionDuration)
       root.classList.remove('te-theme-tone-transition')
@@ -154,12 +155,12 @@ window.runMotionCoverage=async()=>{
   for(const mode of ['full','reduced','off']){
     await setMode(mode);const expanded=ref(false)
     await mount(()=>h('div',null,[h(StreamingDiscovery,{providerLabel:'音乐',supportsCategories:true,supportsHighQuality:false,catalogue:null,catalogueLoading:true,catalogueError:'',selectedTag:'全部',order:'hot',highQuality:false,panelExpanded:expanded.value,playlists:[playlist],total:1,offset:0,hasMore:false,listLoading:false,listError:'',loadingMore:false,onTogglePanel:()=>expanded.value=!expanded.value}),h('footer',{id:'outside'},'外部区域')]))
-    await flush();const results=document.querySelector('.disc-results'),initial=results.getBoundingClientRect().top
+    await flush();await until(()=>!document.querySelector('.disc').getAnimations().some(a=>a.playState==='running'),'discovery entrance did not settle');const results=document.querySelector('.disc-results'),initial=results.getBoundingClientRect().top
     document.querySelector('.disc-chip-more').click();await nextTick()
     if(mode==='full')expect(Math.abs(results.getBoundingClientRect().top-initial)<4,'discovery results jumped before the animation')
     if(mode!=='full')expect(results.getAnimations().length===0,'reduced/off projected results')
     expect(document.querySelector('#outside').getAnimations().length===0,'disclosure projected outside its boundary')
-    await sleep(230);const expandedTop=results.getBoundingClientRect().top;expect(expandedTop>initial+20,'discovery did not expand')
+    await until(()=>![document.querySelector('#discovery-categories'),results].some(el=>el.getAnimations().some(a=>a.playState==='running')),'discovery animations did not settle');const expandedTop=results.getBoundingClientRect().top;expect(expandedTop>initial+20,'discovery did not expand '+JSON.stringify({mode,initial,expandedTop,panelHeight:document.querySelector('#discovery-categories').getBoundingClientRect().height,panelDisplay:getComputedStyle(document.querySelector('#discovery-categories')).display}))
     if(mode==='full')await capture('discovery-expanded')
     expanded.value=false;await sleep(190)
     if(mode==='full')expect(results.getAnimations().length>0,'collapse skipped result movement')

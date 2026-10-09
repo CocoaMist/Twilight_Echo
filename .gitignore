@@ -96,6 +96,7 @@ CLAUDE.md
 !/.github/ISSUE_TEMPLATE/**
 
 # AI agent session state / local tool state
+.birdview/
 .workbuddy/
 .omo/
 .superpowers/

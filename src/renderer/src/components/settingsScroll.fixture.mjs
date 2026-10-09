@@ -1,5 +1,9 @@
 import { createApp, h, nextTick, ref } from 'vue'
 import SettingsPage from './SettingsPage.vue'
+import { useAppNavigation } from '../app/useAppNavigation'
+import { createNavigationSessionPersistence } from '../app/useNavigationSessionPersistence'
+import { NAVIGATION_SESSION_KEY } from '../app/navigationSession'
+import { mountWorkshopDecorations } from './theme-workshop/workshopDecorations.ts'
 import '../assets/base.css'
 
 const expect = (value, message) => {
@@ -104,8 +108,22 @@ window.makeSettingsSection = (key) => () =>
   )
 
 window.runSettingsScrollTests = async () => {
+  localStorage.removeItem(NAVIGATION_SESSION_KEY)
+  let appNavigation = useAppNavigation()
+  let persistence = createNavigationSessionPersistence(appNavigation)
+  persistence.start()
+  appNavigation.openSettingsPage()
+  const removeDecorations = mountWorkshopDecorations(document)
   const mounted = ref(true)
-  const app = createApp({ render: () => (mounted.value ? h(SettingsPage) : null) })
+  const app = createApp({
+    render: () =>
+      mounted.value
+        ? h(SettingsPage, {
+            initialSection: appNavigation.settingsInitialSection.value,
+            onSectionChange: appNavigation.rememberSettingsSection
+          })
+        : null
+  })
   app.mount('#app')
   await settle()
   expect(innerWidth === 1440, `unexpected desktop viewport: ${innerWidth}`)
@@ -177,6 +195,40 @@ window.runSettingsScrollTests = async () => {
   general.querySelector('.test-disclosure').click()
   await settle()
   expect(page.scrollHeight >= beforeExpansion + 360, 'disclosure did not update section size')
+  const beforeWheel = page.scrollTop
+  const readRect = Element.prototype.getBoundingClientRect
+  let scrollGeometryReads = 0
+  Element.prototype.getBoundingClientRect = function () {
+    if (this === page || sections.includes(this)) scrollGeometryReads++
+    return readRect.call(this)
+  }
+  try {
+    for (let index = 0; index < 25; index++) {
+      page.scrollTop = beforeWheel + index * 8
+      page.dispatchEvent(new Event('scrollend'))
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+    }
+    expect(
+      scrollGeometryReads <= sections.length,
+      `native scrollend repeatedly measured skipped sections: ${scrollGeometryReads} reads`
+    )
+    expect(nav('常规').getAttribute('aria-current') === 'location', 'scroll spy lost its section')
+    expect(
+      page.style.getPropertyValue('--te-workshop-scroll-y') === '',
+      'decoration scrolling invalidated the settings controls through inheritance'
+    )
+    expect(
+      page
+        .querySelector(':scope > .workshop-decoration')
+        ?.style.getPropertyValue('--te-workshop-scroll-y') === `${page.scrollTop}px`,
+      'decoration scroll attachment did not follow the native container'
+    )
+  } finally {
+    Element.prototype.getBoundingClientRect = readRect
+    page.scrollTop = beforeWheel
+  }
+  await settle()
   general.querySelector('input').value = '未保存的输入'
 
   nav('快捷键').click()
@@ -189,6 +241,10 @@ window.runSettingsScrollTests = async () => {
   expect(
     nav('快捷键').getAttribute('aria-current') === 'location',
     'navigation lost active section'
+  )
+  expect(
+    appNavigation.session.value.settingsSection === 'shortcuts',
+    'selected section was not remembered'
   )
 
   // Remembered heights are now stale. Jumping to a section must first resolve
@@ -272,6 +328,7 @@ window.runSettingsScrollTests = async () => {
     'interrupted smooth navigation kept all cards rendered'
   )
   nav('关于').click()
+  persistence.stop()
   mounted.value = false
   await settle()
   expect(
@@ -282,6 +339,22 @@ window.runSettingsScrollTests = async () => {
     sections.every((section) => !section.classList.contains('settings-section-measured')),
     'unmount retained rendering observers'
   )
+  appNavigation = useAppNavigation()
+  persistence = createNavigationSessionPersistence(appNavigation)
+  expect(
+    persistence.restored && appNavigation.showSettingsPage.value,
+    'settings page was not restored'
+  )
+  expect(appNavigation.settingsInitialSection.value === 'about', 'last section was not restored')
+  mounted.value = true
+  await settle()
+  const reopenedPage = document.querySelector('.settings-preview-page')
+  expect(
+    reopenedPage.querySelector('[aria-current="location"]').textContent.includes('关于'),
+    'reopened settings did not navigate to the saved section'
+  )
+  persistence.stop()
   app.unmount()
-  return `SETTINGS_SCROLL_OK: ${skippedRows}/405 rows skipped; stable height; resize/search/disclosure/input/navigation/cleanup verified`
+  removeDecorations()
+  return `SETTINGS_SCROLL_OK: ${skippedRows}/405 rows skipped; stable height; resize/search/disclosure/input/navigation/cleanup/page restore verified`
 }

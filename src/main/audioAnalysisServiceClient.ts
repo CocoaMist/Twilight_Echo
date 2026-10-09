@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import { isAutoMixAnalysisResult, type AutoMixAnalysisResult } from '../shared/autoMix.ts'
 import { EventEmitter } from 'events'
 import { createRequire } from 'module'
 
@@ -269,6 +270,22 @@ export class AudioAnalysisServiceClient extends EventEmitter {
         analysisErrorMessage(value, 'audio analysis worker returned invalid BPM data')
       )
     }
+    return value
+  }
+
+  async analyzeAutoMix(
+    source: string,
+    optionsJson: string,
+    options: AudioAnalysisRequestOptions = {}
+  ): Promise<AutoMixAnalysisResult> {
+    const value = parseAnalysisJson(
+      await this.request('automix', source, optionsJson, { priority: 20, ...options }),
+      'AutoMix'
+    )
+    if (!isAutoMixAnalysisResult(value))
+      throw new Error(
+        analysisErrorMessage(value, 'audio analysis worker returned invalid AutoMix features')
+      )
     return value
   }
 

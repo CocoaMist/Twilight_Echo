@@ -575,6 +575,7 @@ onBeforeUnmount(() => {
 }
 :deep(.rack-header-actions) {
   gap: 8px;
+  flex-wrap: wrap;
 }
 :deep(.rack-message) {
   max-width: 1540px;
@@ -1312,5 +1313,52 @@ onBeforeUnmount(() => {
 ) {
   border: 0;
   background: var(--te-primary-500);
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@media (max-width: 1080px) {
+  :deep(.rack-layout) {
+    grid-template-columns: 200px minmax(380px, 1fr);
+  }
+  :deep(.detail-pane) {
+    grid-column: 1 / -1;
+  }
+  :deep(.detail-pane textarea) {
+    max-height: 140px;
+  }
+}
+@media (max-width: 720px) {
+  :deep(.rack-layout) {
+    display: flex;
+    flex-direction: column;
+  }
+  :deep(.scene-pane),
+  :deep(.graph-pane),
+  :deep(.detail-pane) {
+    width: 100%;
+  }
+  :deep(.graph-pane) {
+    padding: 14px;
+  }
+  :deep(.rack-header) {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  :deep(.scene-toolbar) {
+    align-items: stretch;
+  }
+  :deep(.rack-footer) {
+    flex-wrap: wrap;
+  }
+  :deep(.output-stage) {
+    grid-template-columns: 1fr 1fr;
+  }
+  :deep(.band-grid) {
+    grid-template-columns: 1fr 1fr;
+  }
+  :deep(.vst3-parameter-grid) {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

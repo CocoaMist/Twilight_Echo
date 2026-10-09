@@ -2,6 +2,7 @@
 
 #include "../core/AudioTypes.h"
 #include "SacdIsoDemuxer.h"
+#include "../core/SharedInputFile.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -73,7 +74,7 @@ class DsdReader {
   bool openSacdIso(const std::string& source, std::string* error);
   size_t readDstBytes(uint8_t* output, size_t maxBytes);
 
-  std::ifstream file_;
+  SharedInputFile file_;
   SacdIsoDemuxer sacd_;
   SacdDstDecoderProvider* dstProvider_ = nullptr;
   DsdStreamInfo info_;

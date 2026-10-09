@@ -4,11 +4,18 @@ import { stripTypeScriptTypes } from 'node:module'
 import test from 'node:test'
 import { ref, shallowRef } from 'vue'
 import vm from 'node:vm'
-import { ipcError } from '../../../shared/errors/appError.ts'
+import { ipcError, parseAppError } from '../../../shared/errors/appError.ts'
 import { presentError } from '../../../shared/errors/presentError.ts'
 import { translate } from '../../../shared/i18n/translate.ts'
 import { getTrackSource, isLikelyLocalFilePath } from '../utils/playerTrackUtils.ts'
 import { createPlaybackSessionController } from './player/playbackSessionController.ts'
+import { createPlaybackClockController } from './player/playbackClockController.ts'
+import { evaluateNativePlaybackInfoIntent } from '../utils/nativePlaybackInfoIntent.ts'
+import { findNativeQueueTrackIndex } from '../utils/nativeQueueTrackIndex.ts'
+import {
+  NATIVE_PLAYBACK_INFO_INTENT_GRACE_MS,
+  NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
+} from '../utils/playerConstants.ts'
 
 const source = stripTypeScriptTypes(
   readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
@@ -19,6 +26,177 @@ function productionFunction(name) {
   const end = source.indexOf('\n}', start)
   assert.ok(end > start)
   return source.slice(start, end + 2)
+}
+
+for (const eventOrder of ['info-first', 'start-first']) {
+  test(`AutoMix ${eventOrder}: playbar retains the incoming source position and keeps advancing`, async (t) => {
+    const f = handoffFixture(t)
+    f.context.setNativePlaybackInfoIntent(1, f.outgoing, f.outgoing.filePath, 0)
+    f.context.applyNativePlaybackInfo(f.info(f.outgoing, 0, 170))
+    f.setNow(16000)
+    f.context.applyNativePlaybackInfo(f.info(f.outgoing, 0, 186))
+    const incomingInfo = f.info(f.incoming, 1, 4.18)
+    if (eventOrder === 'start-first') f.startFile()
+    assert.equal(f.context.applyNativePlaybackInfo(incomingInfo), true)
+    if (eventOrder === 'info-first') f.startFile()
+    await Promise.resolve()
+    assert.equal(f.context.currentTrack.value.id, f.incoming.id)
+    assert.equal(f.context.currentTime.value, 4.18)
+    assert.equal(f.clock.playbackClockSnapshot.value.trackId, f.incoming.id)
+    assert.equal(f.context.duration.value, 257)
+    assert.equal(f.context.applyNativePlaybackInfo(f.info(f.outgoing, 0, 186)), false)
+    f.setNow(16300)
+    assert.equal(f.context.applyNativePlaybackInfo(f.info(f.incoming, 1, 4.48)), true)
+    f.clock.flushLatestCurrentTime()
+    assert.ok(Math.abs(f.context.currentTime.value - 4.48) < 0.001)
+  })
+}
+
+test('confirming ordinary playing ticks cannot prolong the previous-track guard', (t) => {
+  const f = handoffFixture(t)
+  f.context.setNativePlaybackInfoIntent(1, f.outgoing, f.outgoing.filePath, 0)
+  assert.equal(f.context.applyNativePlaybackInfo(f.info(f.outgoing, 0, 170)), true)
+  f.setNow(300)
+  assert.equal(f.context.applyNativePlaybackInfo(f.info(f.outgoing, 0, 170.3)), true)
+  assert.equal(f.context.applyNativePlaybackInfo(f.info(f.incoming, 1, 4)), false)
+  for (const time of [2300, 2700, 2990]) {
+    f.setNow(time)
+    assert.equal(f.context.applyNativePlaybackInfo(f.info(f.outgoing, 0, 170 + time / 1000)), true)
+  }
+  f.setNow(3001)
+  assert.equal(f.context.applyNativePlaybackInfo(f.info(f.incoming, 1, 4.2)), true)
+})
+
+function handoffFixture(t) {
+  const outgoing = {
+    id: 'outgoing',
+    filePath: 'D:\\Music\\out.flac',
+    source: 'local',
+    duration: 186
+  }
+  const incoming = {
+    id: 'incoming',
+    filePath: 'D:\\Music\\in.flac',
+    source: 'local',
+    duration: 257
+  }
+  let now = 0
+  const noop = () => {}
+  const context = {
+    currentTrack: shallowRef(outgoing),
+    currentTime: ref(170),
+    duration: ref(186),
+    queue: shallowRef([outgoing, incoming]),
+    queueIndex: ref(0),
+    playbackInfo: shallowRef(null),
+    loadedTrackId: outgoing.id,
+    lastActiveTrack: outgoing,
+    nativePlaybackActive: true,
+    isPlaying: ref(true),
+    isLoading: ref(false),
+    playMode: ref('sequential'),
+    restoredPlaybackPending: false,
+    nativePlaybackInfoIntent: null,
+    intentionalTrackGuard: null,
+    playbackToggleIntent: null,
+    pendingLoadStartTime: 0,
+    nativeHistoryRestartPending: false,
+    activeLoadToken: 1,
+    streamNowPlaying: ref(''),
+    startFilePlaybackInfoRefreshGeneration: 0,
+    NATIVE_PLAYBACK_INFO_INTENT_GRACE_MS,
+    NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS,
+    getNowMs: () => now,
+    getTrackAudioSource: (track) => track.filePath,
+    evaluateNativePlaybackInfoIntent,
+    normalizeNativePlaybackInfo: (info) => info,
+    findTrackIndexFromPlaybackInfo: (info) =>
+      findNativeQueueTrackIndex(
+        context.queue.value,
+        context.queueIndex.value,
+        info,
+        undefined,
+        true
+      ),
+    mergeTrackTransientData: (track) => track,
+    toPlaybackQueueSnapshot: (track) => track,
+    hydratePlaybackTrack: (track) => track,
+    nonEmptyString: (value) => value || '',
+    lyricsLoader: { ensureCurrentTrackLyricsLoaded: noop },
+    cueDuration: (track) => track.duration,
+    clearAbLoop: noop,
+    applyNativePlayingState: noop,
+    applyNativeStreamBufferingFromInfo: noop,
+    playbackHistoryController: { recordPlaybackStart: noop },
+    scheduleCrossfadeIfNeeded: noop,
+    clearPendingNativePause: noop,
+    setPlaybackToggleIntent: noop,
+    // The real snapshot already precedes start-file; isolate the event's immediate
+    // effect so an asynchronous refresh cannot hide a destructive clock reset.
+    refreshPlaybackInfoAfterStartFile: async () => {},
+    window: { setTimeout, clearTimeout, setInterval, clearInterval }
+  }
+  const previousWindow = globalThis.window
+  globalThis.window = context.window
+  const clock = createPlaybackClockController({
+    currentTrack: context.currentTrack,
+    currentTime: context.currentTime,
+    duration: context.duration,
+    playbackRate: ref(1),
+    isPlaying: context.isPlaying,
+    isLoading: context.isLoading,
+    abLoopA: ref(null),
+    abLoopB: ref(null),
+    playMode: context.playMode,
+    getNow: () => now,
+    getPlaybackToggleIntent: () => null,
+    getAbLoopNativeActive: () => false,
+    enforceAbLoop: noop,
+    isCurrentTrackLiveStream: () => false,
+    applyNativePlaybackInfo: (info) => context.applyNativePlaybackInfo(info)
+  })
+  Object.assign(context, clock)
+  t.after(() => {
+    clock.dispose()
+    globalThis.window = previousWindow
+  })
+  vm.createContext(context)
+  for (const name of [
+    'setNativePlaybackInfoIntent',
+    'clearNativePlaybackInfoIntent',
+    'markNativePlaybackInfoIntentConfirmed',
+    'shouldIgnoreNativePlaybackInfo',
+    'applyNativePlaybackInfo'
+  ])
+    vm.runInContext(productionFunction(name), context)
+  const registration = source.match(/api\.onStartFile\(\(\) => \{[\s\S]*?\n    \}\)/)?.[0]
+  assert.ok(registration)
+  let startFile
+  context.api = {
+    onStartFile: (callback) => {
+      startFile = callback
+    }
+  }
+  vm.runInContext(registration, context)
+  clock.beginPlaybackPositionTransition(170)
+  return {
+    context,
+    clock,
+    outgoing,
+    incoming,
+    startFile,
+    setNow: (value) => {
+      now = value
+    },
+    info: (track, index, position) => ({
+      source: track.filePath,
+      queueIndex: index,
+      position,
+      duration: track.duration,
+      state: 'playing',
+      nativePlaybackActive: true
+    })
+  }
 }
 
 test('a missing non-NetEase provider cache is re-resolved with force instead of replayed', async () => {
@@ -72,6 +250,18 @@ test('a rejected recovery settles playback and retains the original failure', as
   assert.match(presentError('zh-CN', f.errors[0]), /播放地址/)
 })
 
+test('queue IPC failures retain output fallback without attempting source recovery', async () => {
+  const f = loadFixture()
+  f.context.nativeQueueLoader.prepareAndLoad = async () => {
+    throw new Error('native queue IPC unavailable')
+  }
+  await f.context.loadAndPlay(f.track)
+  assert.equal(f.fallbacks.length, 0)
+  assert.match(f.errors[0], /native queue IPC unavailable/)
+  assert.equal(f.context.isLoading.value, false)
+  assert.equal(f.context.isPlaying.value, false)
+})
+
 test('an older failed load cannot clear a newer load after waiting for source recovery', async () => {
   let release, notify
   const started = new Promise((resolve) => {
@@ -109,6 +299,7 @@ function loadFixture({ fallback = async () => false } = {}) {
   const noop = () => {}
   const context = {
     ipcError,
+    parseAppError,
     translate,
     currentLocale: () => 'zh-CN',
     getTrackSource,
@@ -138,7 +329,7 @@ function loadFixture({ fallback = async () => false } = {}) {
       token === context.activeLoadToken && item.id === context.currentTrack.value.id,
     shouldUseNativePlayback: () => true,
     stripStaleNcmStreamUrls: (items) => items,
-    preparePlayerNativeQueue: async () => null,
+    nativeQueueLoader: { prepareAndLoad: async () => null },
     handlePlaybackFallback: async (...args) => {
       fallbacks.push(args)
       return fallback(...args)

@@ -1,0 +1,3 @@
+{"kind":"statsTimer","simulatedPlaybackSeconds":300,"dirtyUpdates":60,"writesDuringPlayback":9,"firstWriteSeconds":35,"includingFinalFlush":10}
+{"kind":"rapidSelectionSessionWrites","selections":12,"fullQueueSize":5000,"debouncedWrites":1,"includingQuitWrites":2,"fullQueueWrites":1,"totalQueueEntriesSent":5000,"note":"real Store, App, Vue and writer; disk/IPC stub"}
+{"kind":"bpmDualDelivery","analyses":1,"completionEvents":1,"playbackQueuePatches":1,"libraryApplyCalls":1}

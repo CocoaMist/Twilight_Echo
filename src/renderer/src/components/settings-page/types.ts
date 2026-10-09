@@ -205,7 +205,7 @@ export const appBackgroundPageOptions: { value: AppBackgroundPage; label: string
     { value: 'local', label: '本地主页', desc: '本地音乐首页和资料概览背景。' },
     { value: 'settings', label: '设置与插件', desc: '设置页、插件中心等管理界面背景。' },
     { value: 'streaming', label: '流媒体页', desc: '在线音乐浏览、搜索和详情页背景。' },
-    { value: 'player', label: '播放页', desc: '沉浸式播放页和全屏播放背景。' }
+    { value: 'player', label: '播放页', desc: '播放页和全屏播放背景。' }
   ]
 
 export const lyricAlignOptions: { value: LyricsAppearanceAlign; label: string }[] = [
@@ -299,6 +299,7 @@ export const playerBarPageVisibilityOptions: { value: PlayerBarPageVisibility; l
 export { GITHUB_URL, HOMEPAGE_URL, RELEASES_URL } from '../../../../shared/projectUrls.ts'
 
 export interface SettingsSearchEntry {
+  appearanceArea?: 'background' | 'material' | 'advanced'
   /** 所属设置分区 */
   section: SectionKey
   /** 结果展示标题（设置项名称） */
@@ -424,6 +425,11 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
     { section: 'playback', title: '启动时恢复播放', terms: '恢复 播放 resume 上次 曲目 位置 启动' },
     {
       section: 'playback',
+      title: 'AutoMix',
+      terms: 'automix 自动混音 智能转场 衔接 选段 淡化 实验'
+    },
+    {
+      section: 'playback',
       title: '上一首按钮行为',
       terms: '上一首 按钮 重播 重放 回到 开头 previous restart 行为'
     },
@@ -517,7 +523,30 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
     { section: 'appearance', title: '插件主题', terms: '插件 主题 plugin theme 扩展' },
     { section: 'appearance', title: '浅色强调色', terms: '强调色 accent 浅色 颜色 主题' },
     { section: 'appearance', title: '深色强调色', terms: '强调色 accent 深色 颜色 主题' },
-    { section: 'appearance', title: '自定义背景', terms: '背景 自定义 壁纸 图片 封面' },
+    {
+      section: 'appearance',
+      title: '背景与界面材质',
+      terms: '背景 自定义 壁纸 图片 封面 材质 外观 整合',
+      appearanceArea: 'background'
+    },
+    {
+      section: 'appearance',
+      title: '透明材质',
+      terms: '透明 全透明 文字 通透 图片 皮肤',
+      appearanceArea: 'material'
+    },
+    {
+      section: 'appearance',
+      title: '文字明暗',
+      terms: '字体 文字 颜色 浅色 深色 对比',
+      appearanceArea: 'background'
+    },
+    {
+      section: 'appearance',
+      title: '画面缩放',
+      terms: '图片 背景 缩放 裁切 大小 zoom scale',
+      appearanceArea: 'background'
+    },
     { section: 'appearance', title: '统一背景', terms: '背景 统一 所有 页面 壁纸' },
     { section: 'appearance', title: '页面背景覆盖', terms: '背景 页面 覆盖 独立 壁纸 图片' },
     { section: 'appearance', title: '封面主题色', terms: '封面 主题色 cover 颜色 专辑' },
@@ -525,6 +554,11 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
       section: 'appearance',
       title: '全局字体 (Typography)',
       terms: '字体 font typography 排版 全局 界面字体 正文 标题 霞鹜文楷 更纱黑体 跟随主题'
+    },
+    {
+      section: 'appearance',
+      title: '文字渲染',
+      terms: '字体 清晰 平滑 发虚 模糊 渲染 笔画 透明 背景 font rendering crisp smooth'
     },
     {
       section: 'appearance',
@@ -750,6 +784,17 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
   ] satisfies SettingsSearchEntry[]
 ).map((entry) => ({
   ...entry,
+  appearanceArea:
+    entry.appearanceArea ??
+    (entry.section === 'appearance'
+      ? /卡片|玻璃高光|高光跟随|启用液态/.test(entry.title)
+        ? 'advanced'
+        : /液态玻璃材质/.test(entry.title)
+          ? 'material'
+          : /背景/.test(entry.title)
+            ? 'background'
+            : undefined
+      : undefined),
   terms: `${sectionTerms[entry.section]} ${entry.terms}`
 }))
 

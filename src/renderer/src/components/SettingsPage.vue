@@ -4,6 +4,7 @@ import { scrollMotionBehavior } from '../app/scrollMotion'
 import { createSettingsSectionRendering } from './settings-page/settingsSectionRendering'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
+import { openAppearanceEditor } from '../composables/appearanceEditorState.ts'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
 import DspSettingsSection from './settings-page/DspSettingsSection.vue'
 import PerformanceSettingsSection from './settings-page/PerformanceSettingsSection.vue'
@@ -58,6 +59,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  sectionChange: [section: SectionKey]
   openEqualizer: []
   openDspRack: []
   openThemeStudio: []
@@ -78,6 +80,7 @@ const importSettingsInputRef = ref<HTMLInputElement | null>(null)
 const shortcutStatuses = ref<PlayerShortcutStatus[]>([])
 
 const activeSection = ref<SectionKey>(props.initialSection ?? 'general')
+watch(activeSection, (section) => emit('sectionChange', section), { flush: 'sync' })
 const pageRef = ref<HTMLElement | null>(null)
 
 function setNavigationPressOrigin(event: PointerEvent): void {
@@ -424,6 +427,7 @@ function resetSettingsGroup(group: 'appearance' | 'playback' | 'desktopLyrics'):
         lyricsAppearance: cloneLyricsAppearance(DEFAULT_LYRICS_APPEARANCE),
         playerBar: clonePlayerBarSettings(DEFAULT_PLAYER_BAR_SETTINGS),
         fontFamily: 'system',
+        fontRendering: 'auto',
         uiDensity: 'standard'
       })
       settingsNotice.value = '外观设置已恢复默认'
@@ -831,6 +835,7 @@ function scrollPageToElement(
 }
 
 function finishProgrammaticScroll(): void {
+  if (programmaticScrollTimer === null && programmaticScrollUntil === 0) return
   if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
   programmaticScrollTimer = null
   programmaticScrollUntil = 0
@@ -869,6 +874,10 @@ watch([() => props.initialSection, () => props.navigationTarget], applyNavigatio
 function scrollToSearchResult(entry: SettingsSearchEntry): void {
   settingsSearchQuery.value = ''
   activeSection.value = entry.section
+  if (entry.appearanceArea) {
+    openAppearanceEditor(entry.appearanceArea)
+    return
+  }
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       const sectionEl = document.getElementById(entry.section)
@@ -1342,7 +1351,7 @@ html[data-theme='dark'] .settings-preview-page {
      single settings wallpaper painter, so the page stays transparent in every
      theme — a second image copy here would drift into split bands again. */
   background: transparent;
-  color: var(--te-text);
+  color: var(--te-settings-text);
 }
 
 html[data-theme='dark'] .settings-preview-page::-webkit-scrollbar-thumb {
@@ -1540,7 +1549,7 @@ html[data-theme='dark'] .settings-preview-page .update-card strong,
 html[data-theme='dark'] .settings-preview-page .background-editor-head strong,
 html[data-theme='dark'] .settings-preview-page .page-background-copy strong,
 html[data-theme='dark'] .settings-preview-page .signal-node.active .signal-node-name {
-  color: var(--te-text);
+  color: var(--te-settings-text);
 }
 
 html[data-theme='dark'] .settings-preview-page .setting-copy span,
@@ -1611,7 +1620,7 @@ html[data-theme='dark'] .settings-preview-page .dashed-button,
 html[data-theme='dark'] .settings-preview-page .folder-empty-hint {
   border-color: var(--te-card-border);
   background: var(--te-settings-control-bg);
-  color: rgba(203, 213, 225, 0.9);
+  color: var(--te-settings-text);
   box-shadow: none;
 }
 

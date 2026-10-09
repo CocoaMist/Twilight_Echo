@@ -1,4 +1,5 @@
 import { createAbLoopController } from './player/abLoopController.ts'
+import { createRendererPauseFadeController } from './player/rendererPauseFadeController.ts'
 import { createCastController } from './player/castController.ts'
 import { createBpmAnalysisController } from './player/bpmAnalysisController.ts'
 import { createAudioOutputState } from '@renderer/stores/player/audioOutputState.ts'
@@ -34,7 +35,11 @@ import {
 } from '../../../shared/dspGraph.ts'
 import { extractDominantColor } from '../utils/colorExtractor'
 import { resolveCover } from '../utils/coverLoader'
-import { normalizeNativePlaybackInfo } from '../utils/playerPlaybackInfo.ts'
+import {
+  mergeAutoMixPlaybackInfo,
+  normalizeNativePlaybackInfo
+} from '../utils/playerPlaybackInfo.ts'
+import { normalizeOutputConfig } from '../../../shared/audioOutputConfig.ts'
 import { clampSoftwareVolume, cloneAudioProcessingSettings } from '../utils/playerAudioSettings.ts'
 import {
   NATIVE_PLAYBACK_INFO_INTENT_GRACE_MS,
@@ -67,9 +72,11 @@ import {
   NativeQueueRevisionFence,
   synchronizeLatestNativeQueue
 } from '../utils/nativeQueueRevision.ts'
+import { NativeQueueLoader } from '../utils/nativeQueueLoader.ts'
 import {
   toPlaybackQueueSnapshot,
-  toPlaybackQueueSnapshots
+  toPlaybackQueueSnapshots,
+  patchPlaybackQueueTrack
 } from '../utils/playbackQueueVirtualization.ts'
 import { clampProviderReliability, findPlaybackFallbackTrack } from '../utils/playbackFallback.ts'
 import { findProviderRematchCandidate } from '../utils/libraryRepair.ts'
@@ -356,6 +363,9 @@ const {
   applyAudioOutputState,
   refreshAudioOutputState
 } = createAudioOutputState({
+  applyPlaybackSettingsStatus: (info) => {
+    playbackInfo.value = mergeAutoMixPlaybackInfo(playbackInfo.value, info)
+  },
   audioProcessing,
   dspOutputStage,
   dspStereoImage,
@@ -370,6 +380,7 @@ const outputInfo = computed<NativeOutputInfo | null>(() => playbackInfo.value?.o
 const visualizationData = shallowRef<NativeVisualizationData>(createInactiveVisualizationData())
 // 读取 visualizationData 的已挂载组件数；为 0 时 60ms IPC 轮询不启动。
 const visualizationConsumers = ref(0)
+const visualizationDocumentVisible = ref(typeof document === 'undefined' || !document.hidden)
 const { settings: appSettings, updateSettings } = useSettingsStore()
 const lyricsManagement = useLyricsManagement()
 let playbackAudio: HTMLAudioElement | null = null
@@ -467,6 +478,7 @@ async function prefetchUpcomingNcmStream(): Promise<void> {
 }
 
 const nativeQueueRevisionFence = new NativeQueueRevisionFence()
+const nativeQueueLoader = new NativeQueueLoader()
 let activeLoadToken = 0
 let rendererFallbackInProgress = false
 let rendererPlaybackWatchdogTimer: number | null = null
@@ -542,18 +554,16 @@ function clearNativePlaybackInfoIntentForLoad(loadToken: number): void {
 
 function markNativePlaybackInfoIntentConfirmed(now = getNowMs()): void {
   const intent = nativePlaybackInfoIntent
-  if (!intent) return
-  if (intent.confirmedAt === null) intent.confirmedAt = now
-  // Keep filtering non-matching snapshots through the post-confirmation window.
+  if (!intent || intent.confirmedAt !== null) return
+  intent.confirmedAt = now
+  // Bound the guard to this confirmation. Extending it on every playing tick
+  // also rejects legitimate native AutoMix/gapless advances later in the song.
   intent.expiresAt = Math.max(
     intent.expiresAt,
     now + NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
   )
   if (intentionalTrackGuard && intentionalTrackGuard.trackId === intent.trackId) {
-    intentionalTrackGuard.until = Math.max(
-      intentionalTrackGuard.until,
-      now + NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
-    )
+    intentionalTrackGuard.until = Math.max(intentionalTrackGuard.until, intent.expiresAt)
   }
 }
 
@@ -782,6 +792,7 @@ function releasePlaybackObjectUrl(): void {
 
 function stopRendererAudio(clearSource = false): void {
   clearRendererPlaybackWatchdog()
+  rendererPauseFadeController.cancel()
   if (!playbackAudio) return
   playbackAudio.pause()
   if (clearSource) {
@@ -1012,6 +1023,7 @@ async function playWithRendererAudio(
   loadToken: number
 ): Promise<boolean> {
   const audio = getPlaybackAudio()
+  rendererPauseFadeController.cancel()
   audio.pause()
   // Renderer HTMLAudio is a shared-mode Windows stream. Never start it while the
   // native engine (e.g. WASAPI Exclusive) could still be playing, or the same
@@ -1178,13 +1190,8 @@ function rehydrateCurrentTrackFromLibrary(): void {
 }
 
 function patchTrackInQueues(updatedTrack: Track): void {
-  const snapshot = toPlaybackQueueSnapshot(updatedTrack)
-  queue.value = queue.value.map((track) =>
-    track.id === updatedTrack.id ? { ...snapshot, queueEntryId: track.queueEntryId } : track
-  )
-  originalQueue.value = originalQueue.value.map((track) =>
-    track.id === updatedTrack.id ? { ...snapshot, queueEntryId: track.queueEntryId } : track
-  )
+  queue.value = patchPlaybackQueueTrack(queue.value, updatedTrack)
+  originalQueue.value = patchPlaybackQueueTrack(originalQueue.value, updatedTrack)
 }
 
 function findTrackIndexFromPlaybackInfo(info: NativePlaybackInfo): number {
@@ -1354,7 +1361,10 @@ function applyNativePlaybackInfo(
     duration.value =
       nextDuration > 0 ? nextDuration : currentTrack.value ? cueDuration(currentTrack.value) : 0
     beginPlaybackPositionTransition(nextPosition, { keepRendererClockAlive: true })
-    // Keep the intent/guard confirmed so delayed previous-track ticks still drop.
+    // Native handoffs also need a short guard against delayed outgoing snapshots.
+    if (!nativePlaybackInfoIntent && currentTrack.value) {
+      setNativePlaybackInfoIntent(activeLoadToken, currentTrack.value, info.source, infoIndex)
+    }
     markNativePlaybackInfoIntentConfirmed()
   } else {
     if (nextDuration > 0) {
@@ -1438,7 +1448,7 @@ async function syncNativeQueueState(snapshot: NativeQueueStateSnapshot): Promise
           }
         ),
       loadQueue: (preparedQueue) =>
-        window.api.audioEngine.loadQueue(preparedQueue.items, preparedQueue.startIndex),
+        nativeQueueLoader.loadPrepared(preparedQueue, window.api.audioEngine),
       setPlayMode: () => window.api.audioEngine.setPlayMode(nativePlayMode)
     }
   )
@@ -1657,6 +1667,7 @@ watch(volume, (val) => {
     muted.value = false
   }
   if (playbackAudio) playbackAudio.volume = val
+  rendererPauseFadeController.syncVolume()
   window.api.audioEngine.setVolume(val).catch(() => {})
   if (castTargetName.value) {
     void window.api.remote?.controlCast?.({ volume: val }).catch(() => {})
@@ -1743,24 +1754,10 @@ watch(
 watch(
   () => appSettings.value?.audioOutputConfig,
   (config) => {
-    audioOutputConfig.value = {
-      preferredBufferSize:
-        config?.preferredBufferSize ?? defaultAudioOutputConfig.preferredBufferSize,
-      routingMode: config?.routingMode ?? defaultAudioOutputConfig.routingMode,
-      wasapiExclusivePushMode:
-        config?.wasapiExclusivePushMode ?? defaultAudioOutputConfig.wasapiExclusivePushMode,
-      upmixCenterGain: config?.upmixCenterGain ?? defaultAudioOutputConfig.upmixCenterGain,
-      upmixLfeGain: config?.upmixLfeGain ?? defaultAudioOutputConfig.upmixLfeGain,
-      upmixLfeLowpassHz: config?.upmixLfeLowpassHz ?? defaultAudioOutputConfig.upmixLfeLowpassHz,
-      upmixSurroundGain: config?.upmixSurroundGain ?? defaultAudioOutputConfig.upmixSurroundGain,
-      upmixSideGain: config?.upmixSideGain ?? defaultAudioOutputConfig.upmixSideGain,
-      upmixSurroundDelayMs:
-        config?.upmixSurroundDelayMs ?? defaultAudioOutputConfig.upmixSurroundDelayMs
-    }
+    audioOutputConfig.value = normalizeOutputConfig(config, 8192)
   },
   { deep: true, immediate: true }
 )
-
 watch(
   () => currentTrack.value?.id,
   async (id, prevId) => {
@@ -1810,6 +1807,7 @@ const playbackQueueController = createPlaybackQueueController({
   prepareSelection: playbackSessionController.prepareQueueSelection,
   exitHeartModeForQueueEdit: () => exitHeartModeForManualQueueReplacement(),
   onQueueNotice: (label, revision) => {
+    if (label === '替换队列') return
     useAppNoticeStore().pushNotice({
       message: `已${label}`,
       dedupeKey: 'queue-edit',
@@ -2098,7 +2096,9 @@ function setAudioServiceReadyNotice(event?: {
 const visualizationPolling = createVisualizationPolling({
   data: visualizationData,
   active: visualizerActive,
-  consumers: visualizationConsumers
+  consumers: visualizationConsumers,
+  visible: visualizationDocumentVisible,
+  enabled: () => Boolean(isPlaying.value && audioEngineReady.value && currentTrack.value?.id)
 })
 
 const {
@@ -2273,10 +2273,31 @@ async function resolvePlayTarget(track: Track): Promise<string> {
 
   await syncPluginProviders()
   const options = source === 'ncm' ? { quality: ncmPlaybackQuality } : undefined
-  const streamUrl = await useMediaProviders().resolvePlaybackUrl(
+  let streamUrl = await useMediaProviders().resolvePlaybackUrl(
     track,
     force ? { ...options, force: true } : options
   )
+  if (
+    source === 'ncm' &&
+    streamUrl &&
+    isLikelyLocalFilePath(streamUrl) &&
+    !(await isUsableLocalPlaybackFile(streamUrl))
+  ) {
+    // The provider can finish resolving just as its managed cache is cleared.
+    // Bypass its memory cache once to obtain a fresh account-authorized stream
+    // before native queue preparation rejects the missing local target.
+    streamUrl = await useMediaProviders().resolvePlaybackUrl(track, {
+      quality: ncmPlaybackQuality,
+      force: true
+    })
+    if (
+      streamUrl &&
+      isLikelyLocalFilePath(streamUrl) &&
+      !(await isUsableLocalPlaybackFile(streamUrl))
+    ) {
+      throw new Error('网易云缓存文件不可用，重新获取播放地址后仍无法播放，请重试')
+    }
+  }
   if (!streamUrl) {
     if (source === 'ncm') {
       throw new Error('当前网易云账号没有可播放的音质，请检查登录状态、歌曲版权和会员权益')
@@ -2532,11 +2553,11 @@ function setupAudioEngineListeners(): void {
       // progress so cover and the playbar slider rebind to the new file.
       advancingFromEndedTrackId = ''
       autoAdvanceInFlight = false
-      // Consume pending start once so gapless handoffs / late events cannot
-      // re-apply a stale loadAndPlay start offset and freeze the progress bar.
-      const startAt = pendingLoadStartTime
+      // Only identity-bearing playback-info can start a native track clock.
+      // AutoMix has already played part of the incoming track before start-file;
+      // resetting to zero here discards its confirmed continuation position.
+      // loadAndPlay anchors explicit starts before issuing the native command.
       pendingLoadStartTime = 0
-      beginPlaybackPositionTransition(startAt, { keepRendererClockAlive: true })
       isLoading.value = false
       // start-file is emitted by the native backend when the new file has
       // entered its playback pipeline. Re-open both clocks immediately: a
@@ -2553,6 +2574,7 @@ function setupAudioEngineListeners(): void {
   )
 
   const refreshAfterRendererResume = (): void => {
+    visualizationDocumentVisible.value = document.visibilityState !== 'hidden'
     if (document.visibilityState === 'hidden') return
     void refreshPlaybackAfterRendererResume()
   }
@@ -2589,6 +2611,7 @@ function setupAudioEngineListeners(): void {
   if (api.onServiceCrash) {
     cleanupFns.push(
       api.onServiceCrash(({ reason, fatal }) => {
+        nativeQueueLoader.clear()
         setAudioServiceCrashNotice(reason, { fatal: fatal === true })
       })
     )
@@ -2597,6 +2620,7 @@ function setupAudioEngineListeners(): void {
   if (api.onServiceReady) {
     cleanupFns.push(
       api.onServiceReady((event) => {
+        nativeQueueLoader.clear()
         audioEngineReady.value = true
         if (event.outputRouteSynced) {
           setAudioEngineError(null)
@@ -2736,6 +2760,7 @@ function disposePlayerStoreRuntime(): void {
   playerIntegrationSideEffectsSetup = false
   clearRendererPlaybackWatchdog()
   clearNativeStreamBufferingTimer()
+  rendererPauseFadeController.cancel()
   disposePlaybackClock()
   playbackHistoryController.dispose()
   clearCrossfadeTimer()
@@ -2765,9 +2790,15 @@ watch([isPlaying, playbackRate], ([playing, rate], [previousPlaying, previousRat
 })
 
 watch(
-  [isPlaying, audioEngineReady, () => currentTrack.value?.id, visualizerActive],
-  ([playing, ready, trackId, activeVisualizer]) => {
-    if (playing && ready && trackId && !activeVisualizer) {
+  [
+    isPlaying,
+    audioEngineReady,
+    () => currentTrack.value?.id,
+    visualizerActive,
+    visualizationDocumentVisible
+  ],
+  ([playing, ready, trackId, activeVisualizer, visible]) => {
+    if (playing && ready && trackId && !activeVisualizer && visible) {
       startVisualizationPolling()
       return
     }
@@ -2921,34 +2952,34 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
     let nativeFallbackReason = ''
 
     if (useNativePlayback) {
-      const preparedQueue = await preparePlayerNativeQueue(
-        {
-          // 心动模式：渲染层自行驱动切歌与补拉，原生引擎只加载当前曲目。
-          queue: stripStaleNcmStreamUrls(playMode.value === 'heart' ? [track] : queue.value, {
-            committedAtByTrackId: ncmStreamUrlCommittedAt
-          }),
-          currentTrack: track,
-          currentTarget: playTarget,
-          currentIndex: playMode.value === 'heart' ? 0 : queueIndex.value
-        },
-        {
-          isAudioFileAuthorized: window.api.fs.isAudioFileAuthorized,
-          areAudioFilesAuthorized: window.api.fs.areAudioFilesAuthorized
-        }
-      )
-      if (!isActiveLoad(loadToken, track)) {
-        releaseLoadIfOwned()
-        return
-      }
-      // Target validation is a source failure, before any engine operation.
-      // Let it reach source recovery rather than the native-output fallback.
-      if (!preparedQueue) {
-        throw ipcError(
-          'audio.playback_target_unavailable',
-          'Playback target is unavailable or unauthorized'
-        )
-      }
       try {
+        const preparedQueue = await nativeQueueLoader.prepareAndLoad(
+          {
+            // 心动模式：渲染层自行驱动切歌与补拉，原生引擎只加载当前曲目。
+            queue: stripStaleNcmStreamUrls(playMode.value === 'heart' ? [track] : queue.value, {
+              committedAtByTrackId: ncmStreamUrlCommittedAt
+            }),
+            currentTrack: track,
+            currentTarget: playTarget,
+            currentIndex: playMode.value === 'heart' ? 0 : queueIndex.value,
+            isCurrent: () => isActiveLoad(loadToken, track)
+          },
+          {
+            isAudioFileAuthorized: window.api.fs.isAudioFileAuthorized,
+            areAudioFilesAuthorized: window.api.fs.areAudioFilesAuthorized
+          },
+          window.api.audioEngine
+        )
+        if (!isActiveLoad(loadToken, track)) {
+          releaseLoadIfOwned()
+          return
+        }
+        if (!preparedQueue) {
+          throw ipcError(
+            'audio.playback_target_unavailable',
+            'Playback target is unavailable or unauthorized'
+          )
+        }
         for (const item of preparedQueue.items) {
           nativeSourceToTrackId.set(item.source, item.id)
         }
@@ -2961,11 +2992,6 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
           return
         }
 
-        await window.api.audioEngine.loadQueue(preparedQueue.items, preparedQueue.startIndex)
-        if (!isActiveLoad(loadToken, track)) {
-          releaseLoadIfOwned()
-          return
-        }
         nativeQueueDelegated = preparedQueue.delegated
         // 心动模式由渲染层驱动切歌与补拉，原生队列不代管边界。
         if (playMode.value === 'heart') nativeQueueDelegated = false
@@ -2982,12 +3008,21 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
           releaseLoadIfOwned()
           return
         }
+        if (playResult?.superseded) {
+          releaseLoadIfOwned()
+          return
+        }
         nativeStarted = playResult?.nativeStarted === true
         nativeFallbackReason = playResult?.fallbackReason ?? ''
       } catch (engineErr) {
         if (!isActiveLoad(loadToken, track)) {
           releaseLoadIfOwned()
           return
+        }
+        // Queue availability failures belong to source recovery. Queue IPC and
+        // output failures still use the configured renderer playback fallback.
+        if (parseAppError(engineErr).code === 'audio.playback_target_unavailable') {
+          throw engineErr
         }
         nativeQueueDelegated = false
         nativeFallbackReason = engineErr instanceof Error ? engineErr.message : String(engineErr)
@@ -3201,6 +3236,10 @@ async function handlePlayerShortcutAction(
   })
 }
 
+const rendererPauseFadeController = createRendererPauseFadeController({
+  getVolume: () => volume.value
+})
+
 const nativePlaybackToggleController = createNativePlaybackToggleController({
   isPlaying,
   togglePause: () => window.api.audioEngine.togglePause(),
@@ -3239,13 +3278,17 @@ async function togglePlayState(): Promise<void> {
       await nativePlaybackToggleController.togglePause()
     } else {
       const audio = getPlaybackAudio()
-      if (audio.paused) {
+      if (rendererPauseFadeController.isActive()) {
+        rendererPauseFadeController.cancel()
+        isPlaying.value = true
+      } else if (audio.paused) {
         await stopNativeAudio()
         await audio.play()
       } else {
         playbackHistoryController.maybeRecordResumeBookmark(track, getLatestPlaybackTime())
         playbackHistoryController.flushPodcastEpisodeProgress(true)
-        audio.pause()
+        isPlaying.value = false
+        rendererPauseFadeController.begin(audio)
       }
     }
   } catch (err) {

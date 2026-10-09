@@ -167,18 +167,23 @@ async function loadAll() {
   loading.value = false
 }
 
+function isPluginRequestedEnabled(plugin: TwilightPluginDescriptor): boolean {
+  return plugin.requestedEnabled ?? plugin.enabled
+}
+
 async function togglePlugin(plugin: TwilightPluginDescriptor) {
   if (busyIds.value.has(plugin.id)) return
+  const requestedEnabled = isPluginRequestedEnabled(plugin)
   busyIds.value.add(plugin.id)
   try {
-    if (plugin.enabled) {
+    if (requestedEnabled) {
       await window.api.plugins.disable(plugin.id)
     } else {
       await window.api.plugins.enable(plugin.id)
     }
     await refreshInstalled()
   } catch (e) {
-    errorMsg.value = `${plugin.enabled ? '停用' : '启用'}失败：${e instanceof Error ? e.message : String(e)}`
+    errorMsg.value = `${requestedEnabled ? '停用' : '启用'}失败：${e instanceof Error ? e.message : String(e)}`
   } finally {
     busyIds.value.delete(plugin.id)
   }
@@ -581,13 +586,19 @@ onUnmounted(() => {
                   role="switch"
                   tabindex="0"
                   :aria-label="`启用 ${plugin.name}`"
-                  :aria-checked="plugin.enabled"
+                  :aria-checked="isPluginRequestedEnabled(plugin)"
                   @click="togglePlugin(plugin)"
                   @keydown.enter.prevent="togglePlugin(plugin)"
                   @keydown.space.prevent="togglePlugin(plugin)"
                 >
-                  <div class="switch" :class="{ on: plugin.enabled }"></div>
-                  <span class="switch-label">{{ plugin.enabled ? '已启用' : '已停用' }}</span>
+                  <div class="switch" :class="{ on: isPluginRequestedEnabled(plugin) }"></div>
+                  <span class="switch-label">{{
+                    isPluginRequestedEnabled(plugin)
+                      ? plugin.status === 'failed'
+                        ? '启动失败'
+                        : '已启用'
+                      : '已停用'
+                  }}</span>
                 </div>
                 <div class="plugin-actions">
                   <button
@@ -1016,6 +1027,8 @@ onUnmounted(() => {
   border-right: 1px solid var(--te-border-color, #e5e7eb);
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  flex-shrink: 0;
 }
 
 .sidebar-header {
@@ -1044,6 +1057,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .nav-item {
@@ -1131,6 +1146,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   background: #fafaf9; /* 极浅暖灰背景，区分侧边栏 */
+  min-height: 0;
+  min-width: 0;
 }
 
 .topbar {
@@ -1142,6 +1159,7 @@ onUnmounted(() => {
   border-bottom: 0;
   background: transparent;
   z-index: 10;
+  flex-shrink: 0;
 }
 
 .search-box {
@@ -1152,6 +1170,7 @@ onUnmounted(() => {
   padding: 8px 16px;
   width: 300px;
   transition: background-color 0.2s var(--te-ease-soft);
+  min-width: 0;
 }
 
 .search-box:focus-within {
@@ -1218,6 +1237,7 @@ onUnmounted(() => {
 .top-actions {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -1259,6 +1279,8 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 32px;
+  min-height: 0;
+  min-width: 0;
 }
 
 .page-title {
@@ -1589,5 +1611,63 @@ onUnmounted(() => {
   font-size: 180px;
   opacity: 0.1;
   transform: rotate(-15deg);
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@media (max-width: 900px) {
+  .sidebar {
+    width: 192px;
+  }
+  .topbar {
+    height: auto;
+    min-height: 104px;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-bottom: 20px;
+  }
+  .search-box {
+    width: min(100%, 300px);
+  }
+  .top-actions {
+    justify-content: flex-start;
+  }
+  .plugin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 620px) {
+  .plugin-window {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    padding-top: var(--te-page-top, 55px);
+    border-right: 0;
+    border-bottom: 1px solid var(--te-card-border);
+  }
+  .sidebar-header {
+    display: none;
+  }
+  .nav-menu {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-inline: var(--te-page-gutter, 16px);
+  }
+  .nav-item {
+    flex-shrink: 0;
+  }
+  .sidebar-footer {
+    padding: 8px var(--te-page-gutter, 16px);
+    border-top: 0;
+  }
+  .topbar {
+    padding-top: 20px;
+  }
+}
+
+@media (max-width: 900px) {
+  .scroll-area {
+    padding-bottom: max(32px, calc(var(--te-playbar-bottom-clearance, 0px) + 16px));
+  }
 }
 </style>

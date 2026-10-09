@@ -414,6 +414,49 @@ test('a batch answer that does not match the request falls back to the per-file 
   assert.deepEqual(checked.slice(1).sort(), [first.filePath, second.filePath].sort())
 })
 
+test('fallback authorization limits concurrency and stops dispatching superseded work', async () => {
+  const queue = Array.from({ length: 1000 }, (_, index) =>
+    createTrack({ id: String(index), filePath: `D:/Music/${index}.flac` })
+  )
+  let active = 0,
+    peak = 0,
+    calls = 0,
+    current = true
+  const check = async () => {
+    calls++
+    active++
+    peak = Math.max(peak, active)
+    await new Promise((resolve) => setImmediate(resolve))
+    active--
+    return true
+  }
+  const options = {
+    queue,
+    currentTrack: queue[0],
+    currentTarget: queue[0].filePath,
+    currentIndex: 0,
+    isAudioFileAuthorized: check,
+    areAudioFilesAuthorized: async () => {
+      throw new Error('batch unavailable')
+    }
+  }
+  assert.equal((await prepareNativeQueue(options))?.delegated, true)
+  assert.equal(calls, 1001)
+  assert.equal(peak, 16)
+  calls = 0
+  const prepared = await prepareNativeQueue({
+    ...options,
+    isCurrent: () => current,
+    isAudioFileAuthorized: async () => {
+      const result = await check()
+      if (calls > 1) current = false
+      return result
+    }
+  })
+  assert.equal(prepared, null)
+  assert.ok(calls <= 17)
+})
+
 test('repeated targets are authorized once', async () => {
   const track = createTrack()
   const duplicate = createTrack({ id: 'local:duplicate' })

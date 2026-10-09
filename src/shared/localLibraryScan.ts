@@ -1,6 +1,7 @@
 import type { LocalLibraryExclusion, LocalMusicLibraryDocument } from './localLibrary.ts'
 
 export const LOCAL_LIBRARY_FILE_INDEX_SCHEMA_VERSION = 1 as const
+export const LOCAL_LIBRARY_METADATA_VERSION = 1 as const
 
 export type LocalLibraryScanMode = 'startup' | 'full' | 'watch'
 export type LocalLibraryScanState =
@@ -17,6 +18,8 @@ export interface LocalLibraryFileIdentity {
   mtimeMs: number
   /** Hash of sibling CUE names/sizes/mtimes; omitted when the directory has no CUE sheet. */
   cueSignature?: string
+  /** Tag projection version, independent of file size/mtime and index schema. */
+  metadataVersion?: number
 }
 
 export interface LocalLibraryFileIndexDocument {
@@ -60,6 +63,14 @@ export interface LocalLibraryWorkerScanRequest {
 export interface LocalLibraryScanBatch {
   parsedTracks: unknown[]
   parsedFilePaths: string[]
+  metadataParsedFilePaths?: string[]
+  releaseDateUpdates?: LocalLibraryReleaseDateUpdate[]
+}
+
+export interface LocalLibraryReleaseDateUpdate {
+  filePath: string
+  /** Missing means tags were read successfully but contained no valid date. */
+  releaseDate?: string
 }
 
 export interface LocalLibraryScanIdentityBatch {
@@ -76,6 +87,8 @@ export interface LocalLibraryWorkerScanResult {
   identities: LocalLibraryFileIdentity[]
   parsedTracks: unknown[]
   parsedFilePaths: string[]
+  metadataParsedFilePaths?: string[]
+  releaseDateUpdates?: LocalLibraryReleaseDateUpdate[]
   removedFilePaths: string[]
   skippedUnchanged: number
   parsedFileCount: number

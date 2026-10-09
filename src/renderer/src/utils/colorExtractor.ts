@@ -1,10 +1,20 @@
 const DEFAULT_DOMINANT_COLOR = '#1a73e8'
 const MAX_DOMINANT_COLOR_CACHE_SIZE = 64
 const dominantColorCache = new Map<string, Promise<string>>()
+let cacheGeneration = 0
 
-export function extractDominantColor(imageSrc: string): Promise<string> {
-  const cacheKey = imageSrc.trim()
-  if (!cacheKey) return Promise.resolve(DEFAULT_DOMINANT_COLOR)
+export async function extractDominantColor(imageSrc: string): Promise<string> {
+  const source = imageSrc.trim()
+  if (!source) return DEFAULT_DOMINANT_COLOR
+  const generation = cacheGeneration
+  // Never retain materialized image data as a cache key. Secure renderer contexts
+  // provide Web Crypto; in other contexts decoding without caching is safe.
+  if (!globalThis.crypto?.subtle) return readDominantColor(source)
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source))
+  const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('')
+  if (generation !== cacheGeneration) return readDominantColor(source)
 
   const cached = dominantColorCache.get(cacheKey)
   if (cached) {
@@ -13,13 +23,14 @@ export function extractDominantColor(imageSrc: string): Promise<string> {
     return cached
   }
 
-  const request = readDominantColor(cacheKey)
+  const request = readDominantColor(source)
   dominantColorCache.set(cacheKey, request)
   trimDominantColorCache()
   return request
 }
 
 export function clearDominantColorCache(): void {
+  cacheGeneration += 1
   dominantColorCache.clear()
 }
 

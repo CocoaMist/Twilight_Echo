@@ -43,6 +43,7 @@ export const IPC = {
     isHtmlAudioFallbackAllowed: 'audioEngine:isHtmlAudioFallbackAllowed',
     loadImpulseResponse: 'audioEngine:loadImpulseResponse',
     loadQueue: 'audioEngine:loadQueue',
+    selectQueueItem: 'audioEngine:selectQueueItem',
     loudnormStatus: 'audioEngine:loudnorm-status',
     next: 'audioEngine:next',
     play: 'audioEngine:play',

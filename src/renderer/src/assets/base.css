@@ -1,4 +1,7 @@
 :root {
+  --te-on-accent: #ffffff;
+  --te-appearance-mask: #000000;
+  --te-appearance-preview-cover: linear-gradient(135deg, #39526a, #906376);
   --te-dialog-backdrop: rgba(0, 0, 0, 0.35);
   --te-primary-500: #7c4dff;
   --te-primary-400: #a885f7;
@@ -91,7 +94,7 @@
   --te-shell-control-text: var(--te-neutral-900);
   --te-shell-control-hover: rgba(37, 99, 235, 0.08);
   --te-settings-text: #1a1a1a;
-  --te-settings-text-muted: #8a8f98;
+  --te-settings-text-muted: #626b78;
   --te-settings-control-bg: #ffffff;
   --te-settings-control-border: rgba(15, 23, 42, 0.06);
   --te-settings-panel-border: transparent;
@@ -170,7 +173,7 @@
   --te-settings-bg: #f5f6f8;
   --te-settings-bg-image: none;
   --te-settings-text: #1a1a1a;
-  --te-settings-text-muted: #8a8f98;
+  --te-settings-text-muted: #626b78;
   --te-settings-control-bg: #ffffff;
   --te-settings-control-border: rgba(15, 23, 42, 0.06);
   --te-settings-panel-border: transparent;
@@ -455,6 +458,7 @@ html[data-te-motion='off'] *::after {
 
 :root,
 :root[data-theme='pureWhite'] {
+  color-scheme: light;
   --te-primary-500: #2563eb;
   --te-primary-400: #3b82f6;
   --te-primary-300: #93c5fd;
@@ -630,7 +634,7 @@ input[type='checkbox'] {
   accent-color: var(--te-primary-500);
 }
 
-html[data-theme='dark'] input[type='checkbox'] {
+html input[type='checkbox'] {
   appearance: none;
   -webkit-appearance: none;
   display: inline-grid;
@@ -649,12 +653,12 @@ html[data-theme='dark'] input[type='checkbox'] {
   vertical-align: -0.1em;
 }
 
-html[data-theme='dark'] input[type='checkbox']:checked {
+html input[type='checkbox']:checked {
   border-color: var(--te-primary-500);
   background-color: var(--te-primary-500);
 }
 
-html[data-theme='dark'] input[type='checkbox']:checked::after {
+html input[type='checkbox']:checked::after {
   width: 0.32em;
   height: 0.58em;
   border: solid var(--te-card-bg);
@@ -663,12 +667,12 @@ html[data-theme='dark'] input[type='checkbox']:checked::after {
   transform: translateY(-0.05em) rotate(45deg);
 }
 
-html[data-theme='dark'] input[type='checkbox']:focus-visible {
+html input[type='checkbox']:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--te-primary-500) 72%, transparent);
   outline-offset: 2px;
 }
 
-html[data-theme='dark'] input[type='checkbox']:disabled {
+html input[type='checkbox']:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -709,12 +713,19 @@ body {
     'calt' 1,
     'ss01' 1;
   font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
+  text-rendering: var(--te-font-rendering, auto);
+  -webkit-font-smoothing: var(--te-font-smoothing, auto);
+  -webkit-text-stroke: var(--te-font-stroke, 0px) currentColor;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
   font-size: var(--te-font-size-body);
   letter-spacing: 0;
+}
+
+/* Icon fonts keep their original silhouettes. Lyrics with an explicit stroke
+   continue to use their own appearance settings instead of the inherited UI stroke. */
+:is(.pi, .ph, .ph-bold, .ph-fill, .ph-light, .ph-thin, .ph-duotone) {
+  -webkit-text-stroke: 0;
 }
 
 :root[data-theme='pureWhite'] {
@@ -1495,6 +1506,8 @@ html[data-theme='dark'] .streaming-search-box.focused {
   box-shadow:
     0 0 0 4px rgba(var(--te-primary-rgb), 0.16),
     0 18px 44px rgba(0, 0, 0, 0.28);
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 2px;
 }
 
 html[data-theme='dark'] .search-input,
@@ -2376,7 +2389,7 @@ html[data-theme='dark'] .settings-preview-layout .toggle-switch.inactive {
 }
 
 html[data-theme='dark'] .settings-preview-layout .toggle-switch::after {
-  background: var(--te-card-bg);
+  background: var(--te-settings-text);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.34);
 }
 
@@ -2637,7 +2650,7 @@ html[data-card-bg-effect='on'] body::after {
 /* ===== Card appearance: custom card surface overrides ===== */
 /* Keep this list to host-owned card/panel surfaces. Controls and nav pills keep
    their local sizing so sliders, selects and buttons do not inherit card radius. */
-html[data-card-custom='on']
+html[data-te-card-custom='on']
   :is(
     .artist-card,
     .album-card,
@@ -2659,7 +2672,7 @@ html[data-card-custom='on']
   -webkit-backdrop-filter: blur(var(--te-card-blur, 20px)) saturate(var(--te-card-saturate, 150%)) !important;
 }
 
-html[data-card-custom='on'] .streaming-sidebar {
+html[data-te-card-custom='on'] .streaming-sidebar {
   background: var(--te-card-bg) !important;
   border-right-color: var(--te-card-border) !important;
   border-right-style: solid !important;
@@ -2670,7 +2683,7 @@ html[data-card-custom='on'] .streaming-sidebar {
 }
 
 /* ===== Card appearance: hover effects ===== */
-html[data-card-custom='on']
+html[data-te-card-custom='on']
   :is(
     .artist-card,
     .album-card,
@@ -3701,4 +3714,8 @@ html[data-te-liquid-glass-coverage='expanded']
 .metadata-link:focus-visible {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+:root {
+  --te-page-gutter: clamp(16px, 3vw, 32px);
 }

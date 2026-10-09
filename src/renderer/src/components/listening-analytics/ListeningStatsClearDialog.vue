@@ -12,7 +12,7 @@ import {
   utcDayKey
 } from '@renderer/components/listening-analytics/listeningAnalyticsData'
 
-const props = defineProps<{ stats: ListeningStats; now: Date }>()
+const props = defineProps<{ stats: ListeningStats; now: Date; busy?: boolean }>()
 const emit = defineEmits<{ close: []; clear: [range: ListeningStatsClearRange] }>()
 const dialog = ref<HTMLDialogElement | null>(null)
 const cancel = ref<HTMLButtonElement | null>(null)
@@ -132,7 +132,7 @@ function confirm(): void {
       <p class="stats-clear-note">音乐文件、收藏和歌单不受影响。正在播放的音乐会继续产生新记录。</p>
       <footer class="stats-clear-actions">
         <button ref="cancel" type="button" class="an-button" @click="emit('close')">取消</button>
-        <button type="submit" class="an-button stats-clear-confirm" :disabled="!canClear">
+        <button type="submit" class="an-button stats-clear-confirm" :disabled="!canClear || busy">
           <i class="ph ph-trash" aria-hidden="true"></i>
           {{ preset === 'all' ? '确认清除全部数据' : '确认清除' }}
         </button>

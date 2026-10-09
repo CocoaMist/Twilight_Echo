@@ -71,20 +71,23 @@ export function createLyricPlayheadState(): LyricPlayheadState {
  */
 export function buildLyricTimeline(lines: readonly LyricLine[]): LyricTimelineEntry[] {
   const entries: LyricTimelineEntry[] = []
+  // Next greater timestamp in source order, including unsorted/duplicate input.
+  const nextTimes: (number | null)[] = new Array(lines.length).fill(null)
+  const future: number[] = []
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const time = lines[index]!.time
+    if (time == null || !Number.isFinite(time)) continue
+    while (future.length && future[future.length - 1]! <= time) future.pop()
+    nextTimes[index] = future[future.length - 1] ?? null
+    future.push(time)
+  }
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]
     const time = line.time != null && Number.isFinite(line.time) ? line.time : null
     const timed = line.timed && time != null
 
-    let nextTime: number | null = null
-    for (let ahead = index + 1; ahead < lines.length; ahead += 1) {
-      const candidate = lines[ahead].time
-      if (candidate == null || !Number.isFinite(candidate)) continue
-      if (time != null && candidate <= time) continue
-      nextTime = candidate
-      break
-    }
+    const nextTime = nextTimes[index] ?? null
 
     let endTime: number | null = null
     if (time != null) {
@@ -156,6 +159,14 @@ export function advanceLyricPlayhead(
   const removed = new Set<number>()
   let scrollToIndex = previous.scrollToIndex
   let anchorChanged = false
+  const transition = (changed = anchorChanged): LyricPlayheadTransition => ({
+    hot: setsEqual(hot, previous.hot) ? previous.hot : hot,
+    buffered: setsEqual(buffered, previous.buffered) ? previous.buffered : buffered,
+    scrollToIndex,
+    added,
+    removed,
+    anchorChanged: changed
+  })
 
   const contains = (entry: LyricTimelineEntry): boolean =>
     entry.timed &&
@@ -198,11 +209,11 @@ export function advanceLyricPlayhead(
       const upcoming = firstIndexAtOrAfter(timeline, time)
       setAnchor(upcoming >= 0 ? upcoming : Math.max(0, timeline.length - 1))
     }
-    return { hot, buffered, scrollToIndex, added, removed, anchorChanged: true }
+    return transition(true)
   }
 
   if (added.size === 0 && removed.size === 0) {
-    return { hot, buffered, scrollToIndex, added, removed, anchorChanged }
+    return transition()
   }
 
   if (removed.size === 0) {
@@ -220,7 +231,7 @@ export function advanceLyricPlayhead(
     if (buffered.size > 0) setAnchor(Math.min(...buffered))
   }
 
-  return { hot, buffered, scrollToIndex, added, removed, anchorChanged }
+  return transition()
 }
 
 /**

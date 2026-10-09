@@ -14,6 +14,7 @@ export function getProviderCallTimeoutMs(method: TwilightMediaProviderMethod): n
   if (
     [
       'fetchPlaylistTracks',
+      'fetchPlaylistTracksPage',
       'fetchLikedTracks',
       'fetchLikedTracksPage',
       'fetchCloudSongsPage',
@@ -46,7 +47,8 @@ export function getProviderCallTimeoutMs(method: TwilightMediaProviderMethod): n
       'searchArtists',
       'fetchPlaylistCategories',
       'fetchDiscoveryPlaylists',
-      'fetchHighQualityPlaylists'
+      'fetchHighQualityPlaylists',
+      'fetchToplists'
     ].includes(method)
   ) {
     return PLUGIN_PROVIDER_MEDIUM_TIMEOUT_MS
@@ -240,6 +242,7 @@ export const TWILIGHT_MEDIA_PROVIDER_METHODS = [
   'searchPlaylists',
   'searchArtists',
   'fetchPlaylistTracks',
+  'fetchPlaylistTracksPage',
   'createDownload',
   'getDownloadStatus',
   'getDownloadFile',
@@ -269,6 +272,7 @@ export const TWILIGHT_MEDIA_PROVIDER_METHODS = [
   'fetchPlaylistCategories',
   'fetchDiscoveryPlaylists',
   'fetchHighQualityPlaylists',
+  'fetchToplists',
   'fetchPersonalFm',
   'fetchPrivateContent',
   'fetchArtistTopSongs',
@@ -310,6 +314,7 @@ const PROVIDER_METHOD_CAPABILITIES: Partial<
   searchPlaylists: 'search',
   searchArtists: 'search',
   fetchPlaylistTracks: 'playlist',
+  fetchPlaylistTracksPage: 'playlist',
   createDownload: 'download',
   getDownloadStatus: 'download',
   getDownloadFile: 'download',
@@ -339,6 +344,7 @@ const PROVIDER_METHOD_CAPABILITIES: Partial<
   fetchPlaylistCategories: 'playlist',
   fetchDiscoveryPlaylists: 'playlist',
   fetchHighQualityPlaylists: 'playlist',
+  fetchToplists: 'playlist',
   fetchPersonalFm: 'library',
   fetchPrivateContent: 'library',
   fetchArtistTopSongs: 'library',

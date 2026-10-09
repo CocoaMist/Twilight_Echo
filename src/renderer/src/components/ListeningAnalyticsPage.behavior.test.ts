@@ -81,7 +81,8 @@ const runtime = `import {createApp,h,nextTick,triggerRef} from 'vue'
 import Page from '@renderer/components/ListeningAnalyticsPage.vue'
 import {tracks,artists} from './music'
 import {calls} from './player'
-import {useListeningStatsStore,resetListeningStatsForTest,recordListeningForTest} from '@renderer/stores/useListeningStatsStore'
+import {useListeningStatsStore,resetListeningStatsForTest,recordListeningForTest,waitForListeningStatsReady} from '@renderer/stores/useListeningStatsStore'
+import {ListeningStatsDatabase} from '@renderer/stores/listeningStatsDatabase'
 import {getUnifiedRecentResolverRebuildCount} from '@renderer/utils/unifiedRecentTracks'
 const expect=(ok,message)=>{if(!ok)throw new Error(message)}
 const tick=async()=>{await nextTick();await nextTick()}
@@ -92,6 +93,7 @@ const key=async(el,value)=>{el.focus();el.dispatchEvent(new KeyboardEvent('keydo
 const track=id=>({id:'local-'+id,title:'旋律 '+id,artist:'本地艺人',album:'曲集 '+id,filePath:'D:/fixture/'+id+'.wav',fileName:id+'.wav',duration:180,size:1,cover:null,lyrics:null,source:'local',format:'WAV'})
 const stat=(track,seconds,plays)=>({title:track.title,artist:track.artist,seconds,plays,skips:0,completions:0,lastPlayed:Date.now(),cover:null,track,sourceIds:[{source:track.source,trackId:track.id}]})
 window.runJournalTests=async()=>{
+  await waitForListeningStatsReady()
   resetListeningStatsForTest()
   const {listeningStats,persistenceStatus}=useListeningStatsStore(),views=[],artistViews=[]
   const app=createApp({render:()=>h(Page,{'onSelect-view':(...args)=>views.push(args),'onOpen-artist':value=>artistViews.push(value)})})
@@ -170,7 +172,7 @@ window.runJournalTests=async()=>{
   expect(listeningStats.value.days[earlier]===undefined&&listeningStats.value.days[today]===120,'custom clearing affected dates outside range')
   expect(text('.hero-duration').includes('2')&&text('.rhythm-total').includes('2'),'clearing failed to update hero and child chart')
   expect(text('.journal-notice').includes('已清除'),'clear success feedback missing')
-  expect(JSON.parse(localStorage.getItem('twilight-echo:listening-stats:v1')).days[earlier]===undefined,'clear was not saved immediately')
+  const durable=new ListeningStatsDatabase(indexedDB);expect((await durable.load()).days[earlier]===undefined,'clear was not saved immediately');await durable.close()
   clearEntry.click();await tick();await setPreset('custom');await setDate('开始日期',earlier);await setDate('结束日期',earlier)
   expect(document.querySelector('.stats-clear-confirm').disabled&&text('.stats-clear-preview').includes('没有可清除'),'empty range can be cleared')
   dialog=document.querySelector('.stats-clear-dialog');dialog.dispatchEvent(new Event('cancel',{cancelable:true}));await untilClosed()

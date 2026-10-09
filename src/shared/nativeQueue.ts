@@ -12,3 +12,14 @@
  * rejection happens before `audioEngine:play` is ever reached.
  */
 export const MAX_NATIVE_QUEUE_ITEMS = 5000
+
+export interface NativeQueueCommit {
+  queueToken: string
+}
+
+export interface NativeQueueSelection {
+  queueToken: string
+  index: number
+  id: string
+  source: string
+}

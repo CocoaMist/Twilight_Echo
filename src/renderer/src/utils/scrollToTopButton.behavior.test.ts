@@ -41,6 +41,7 @@ test('the shared back-to-top control reveals, anchors, retargets and themes in a
 })
 
 async function compileController(): Promise<string> {
+  const scrollbars = await readFile(new URL('./autoHideScrollbars.ts', import.meta.url), 'utf8')
   const policy = await readFile(new URL('./scrollToTopPolicy.ts', import.meta.url), 'utf8')
   const runtime = await readFile(new URL('./scrollToTopButton.ts', import.meta.url), 'utf8')
   const motion = await readFile(new URL('../../../shared/motion.ts', import.meta.url), 'utf8')
@@ -59,7 +60,11 @@ async function compileController(): Promise<string> {
     }
   })
   assert.deepEqual(transpiled.diagnostics ?? [], [])
-  return `${transpiled.outputText}\nwindow.installScrollToTopButton = installScrollToTopButton`
+  const autoHide = typescript.transpileModule(scrollbars.replace(/^export /gm, ''), {
+    compilerOptions: { target: typescript.ScriptTarget.ES2022, module: typescript.ModuleKind.None }
+  })
+  assert.deepEqual(autoHide.diagnostics ?? [], [])
+  return `(()=>{${autoHide.outputText}\nwindow.installAutoHideScrollbars=installAutoHideScrollbars})();\n${transpiled.outputText}\nwindow.installScrollToTopButton = installScrollToTopButton`
 }
 
 function electronRunnerSource(): string {
@@ -183,7 +188,8 @@ const showPage = async () => {
 }
 
 window.runScrollTopChecks = async () => {
-  window.installScrollToTopButton()
+  const stopButton = window.installScrollToTopButton()
+  const stopScrollbars = window.installAutoHideScrollbars()
   if (control()) fail('the control was created before anything had scrolled')
 
   page.scrollTop = revealFor(page) - 40
@@ -326,6 +332,36 @@ window.runScrollTopChecks = async () => {
   if (!/opacity/.test(motionStyle.transitionProperty)) fail('opacity is not animated: ' + motionStyle.transitionProperty)
   if (!/[1-9]/.test(motionStyle.transitionDuration)) fail('the reveal has no duration: ' + motionStyle.transitionDuration)
 
+  html.dataset.teMotion = 'off'
+  await showPage()
+  if (!page.classList.contains('is-scrollbar-active')) fail('scrolling did not reveal its thumb')
+  // Model visibility synchronously here so pending frames cannot race the assertion.
+  // The native hide/show lifecycle is covered by the streaming wheel fixture.
+  const hidden = Object.getOwnPropertyDescriptor(document, 'hidden')
+  const nativeFrame = window.requestAnimationFrame
+  let requestedFrames = 0
+  window.requestAnimationFrame = (callback) => { requestedFrames++; return nativeFrame.call(window, callback) }
+  hover(page)
+  Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+  document.dispatchEvent(new Event('visibilitychange'))
+  const beforeHiddenEvents = requestedFrames
+  hover(page)
+  page.dispatchEvent(new Event('scroll'))
+  document.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  if (requestedFrames !== beforeHiddenEvents) fail('hidden scrolling scheduled new frames')
+  if (control().dataset.teScrollTopVisible !== 'false') fail('hidden document retained its back-to-top control')
+  if (page.classList.contains('is-scrollbar-active')) fail('hidden document retained its active thumb')
+  if (hidden) Object.defineProperty(document, 'hidden', hidden)
+  else delete document.hidden
+  window.requestAnimationFrame = nativeFrame
+  document.dispatchEvent(new Event('visibilitychange'))
+  await frames(2)
+  if (!shown()) fail('visible document did not restore the active back-to-top anchor')
+  stopButton(); stopScrollbars()
+  if (control()) fail('cleanup retained the back-to-top control')
+  hover(page); page.dispatchEvent(new Event('scroll'))
+  await frames(2)
+  if (control() || page.classList.contains('is-scrollbar-active')) fail('disposed handlers still responded to scrolling')
   console.log('SCROLL_TOP_OK')
 }
 `

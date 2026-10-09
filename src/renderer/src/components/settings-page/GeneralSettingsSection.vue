@@ -418,7 +418,7 @@ const emit = defineEmits<{
         <div class="setting-item">
           <div class="setting-copy">
             <strong>启动后进入</strong>
-            <span>选择每次打开应用时默认显示的主页。</span>
+            <span>未保存上次页面时使用此主页；重新打开应用会自动回到关闭前的页面。</span>
           </div>
           <div class="segmented-control">
             <button

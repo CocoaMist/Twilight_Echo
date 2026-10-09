@@ -26,6 +26,8 @@ import {
 } from './fileIndex.ts'
 import type { LocalLibraryScanRunner } from './libraryScanServiceClient.ts'
 import { expandSacdIsoTracks, type SacdIsoMetadataReader } from './sacdIsoTracks.ts'
+import { LOCAL_LIBRARY_METADATA_VERSION } from '../../shared/localLibraryScan.ts'
+import { normalizeReleaseDate } from '../../shared/releaseDate.ts'
 
 type LibraryTransaction = <T>(operation: () => Promise<T> | T) => Promise<T>
 
@@ -328,11 +330,17 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
           }
         )
         await batchChain
-        if (workerResult.parsedTracks.length > 0 || workerResult.parsedFilePaths.length > 0) {
+        if (
+          workerResult.parsedTracks.length > 0 ||
+          workerResult.parsedFilePaths.length > 0 ||
+          workerResult.releaseDateUpdates?.length
+        ) {
           await this.prepareBatch(workerResult)
           applyScanBatch(scanAccumulator, {
             parsedTracks: workerResult.parsedTracks,
-            parsedFilePaths: workerResult.parsedFilePaths
+            parsedFilePaths: workerResult.parsedFilePaths,
+            metadataParsedFilePaths: workerResult.metadataParsedFilePaths,
+            releaseDateUpdates: workerResult.releaseDateUpdates
           })
         }
         const effectiveWorkerResult: LocalLibraryWorkerScanResult = {
@@ -377,7 +385,8 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
           const nextIndex = mergeFileIndex(
             loadLocalLibraryFileIndex(this.options.libraryFilePath).document.entries,
             effectiveWorkerResult,
-            currentRoots
+            currentRoots,
+            scanAccumulator.metadataParsedPaths
           )
           persistLocalLibraryFileIndex(this.options.libraryFilePath, {
             version: 1,
@@ -433,14 +442,41 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
     }
   }
 
-  private async prepareBatch(batch: { parsedTracks: unknown[] }): Promise<void> {
+  private async prepareBatch(batch: LocalLibraryScanBatch): Promise<void> {
     const readIsoMetadata = this.options.readSacdIsoMetadata
     if (readIsoMetadata) {
-      const expanded = await expandSacdIsoTracks(batch.parsedTracks, readIsoMetadata)
+      const expanded = await expandSacdIsoTracks(batch.parsedTracks, async (filePath) => {
+        const metadata = await readIsoMetadata(filePath)
+        if (metadata && !metadata.error) (batch.metadataParsedFilePaths ??= []).push(filePath)
+        return metadata
+      })
       if (expanded !== batch.parsedTracks) {
         batch.parsedTracks.length = 0
         for (const track of expanded) batch.parsedTracks.push(track)
       }
+      const updates = [] as NonNullable<LocalLibraryScanBatch['releaseDateUpdates']>
+      for (const update of batch.releaseDateUpdates ?? []) {
+        if (!update.filePath.toLowerCase().endsWith('.iso')) {
+          updates.push(update)
+          continue
+        }
+        try {
+          const metadata = await readIsoMetadata(update.filePath)
+          if (!metadata || metadata.error) continue
+          updates.push({
+            filePath: update.filePath,
+            releaseDate: normalizeReleaseDate(metadata.year || metadata.isoTracks?.[0]?.year)
+          })
+          ;(batch.metadataParsedFilePaths ??= []).push(update.filePath)
+        } catch {
+          /* Unreadable native metadata remains eligible for the next scan. */
+        }
+      }
+      batch.releaseDateUpdates = updates
+    } else {
+      batch.releaseDateUpdates = batch.releaseDateUpdates?.filter(
+        (update) => !update.filePath.toLowerCase().endsWith('.iso')
+      )
     }
     await this.normalizeBatchCovers(batch)
   }
@@ -503,6 +539,7 @@ type ScanAccumulator = {
   inlineDeltaTrackCount: number
   reloadRequired: boolean
   changed: boolean
+  metadataParsedPaths: Set<string>
 }
 
 export function toLocalLibraryScanUpdate(result: LocalLibraryScanResult): LocalLibraryScanUpdate {
@@ -544,7 +581,8 @@ function createScanAccumulator(document: LocalMusicLibraryDocument): ScanAccumul
     updatedTracks: [],
     inlineDeltaTrackCount: 0,
     reloadRequired: false,
-    changed: false
+    changed: false,
+    metadataParsedPaths: new Set()
   }
 }
 
@@ -558,6 +596,23 @@ function collectScanIdentities(
 }
 
 function applyScanBatch(accumulator: ScanAccumulator, batch: LocalLibraryScanBatch): void {
+  for (const filePath of batch.metadataParsedFilePaths ?? []) {
+    accumulator.metadataParsedPaths.add(normalizeLibraryFilePath(filePath))
+  }
+  for (const update of batch.releaseDateUpdates ?? []) {
+    const path = normalizeLibraryFilePath(update.filePath)
+    if (accumulator.excludedPaths.has(path)) continue
+    const previous =
+      accumulator.replacementsByPath.get(path) ?? accumulator.previousByPath.get(path) ?? []
+    const parsed = previous.map((track) => {
+      const { releaseDate: _oldDate, ...rest } = track
+      return update.releaseDate ? { ...rest, releaseDate: update.releaseDate } : rest
+    })
+    if (sameTrackCollection(previous, parsed)) continue
+    accumulator.replacementsByPath.set(path, parsed)
+    accumulator.changed = true
+    appendInlineDelta(accumulator, accumulator.updatedTracks, parsed)
+  }
   const parsedByPath = new Map<string, Record<string, unknown>[]>()
   for (const track of batch.parsedTracks) {
     if (!isTrackRecord(track) || typeof track.filePath !== 'string' || !track.filePath) continue
@@ -729,9 +784,11 @@ function sameTrackCollection(left: unknown[], right: unknown[]): boolean {
 function mergeFileIndex(
   current: LocalLibraryFileIdentity[],
   workerResult: LocalLibraryWorkerScanResult,
-  roots: string[]
+  roots: string[],
+  metadataParsedPaths: Set<string>
 ): LocalLibraryFileIdentity[] {
   const byPath = createLocalLibraryFileIndexMap(current)
+  const previousByPath = new Map(byPath)
   if (workerResult.completeIdentitySnapshot) {
     for (const [key, identity] of byPath) {
       if (roots.some((root) => isWithinRoot(identity.filePath, root))) byPath.delete(key)
@@ -743,7 +800,18 @@ function mergeFileIndex(
   const skippedPaths = new Set((workerResult.skippedFilePaths ?? []).map(normalizeLibraryFilePath))
   for (const identity of workerResult.identities) {
     const key = normalizeLibraryFilePath(identity.filePath)
-    if (!skippedPaths.has(key)) byPath.set(key, identity)
+    if (!skippedPaths.has(key)) {
+      const previous = previousByPath.get(key)
+      const metadataVersion = metadataParsedPaths.has(key)
+        ? LOCAL_LIBRARY_METADATA_VERSION
+        : previous &&
+            previous.size === identity.size &&
+            previous.mtimeMs === identity.mtimeMs &&
+            previous.cueSignature === identity.cueSignature
+          ? previous.metadataVersion
+          : undefined
+      byPath.set(key, { ...identity, ...(metadataVersion ? { metadataVersion } : {}) })
+    }
   }
   for (const key of skippedPaths) byPath.delete(key)
   return Array.from(byPath.values())

@@ -1,6 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { reactive } from 'vue'
+import {
+  backgroundCssVariables,
+  cloneAppearance,
+  defaultCardAppearance,
+  normalizeAppBackgroundSettings
+} from '../../../shared/appAppearance.ts'
+import { DEFAULT_LIQUID_GLASS } from '../../../shared/liquidGlass.ts'
 
 test('background settings updates are applied optimistically and protected from stale snapshots', () => {
   const source = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
@@ -222,7 +230,7 @@ test('about settings expose local-only sponsor payment options and sponsor list'
   assert.match(source, /const AFDIAN_URL = 'https:\/\/ifdian\.net\/a\/pxasen'/)
   assert.match(source, />\s*赞助作者\s*</)
   assert.match(source, />\s*赞助名单\s*</)
-  assert.match(source, /请务必添加我的联系方式，我会将你加入软件的赞助者名单中，感谢你的支持！/)
+  assert.match(source, /如需加入赞助名单，请联系作者。/)
   assert.match(source, /const ALIPAY_QR_URL = '\.\/sponsor\/alipay\.jpg'/)
   assert.match(source, /const WECHAT_QR_URL = '\.\/sponsor\/wechat\.png'/)
   assert.match(source, /name: '江枫Jiang1021'/)
@@ -238,25 +246,35 @@ test('about settings expose local-only sponsor payment options and sponsor list'
   assert.match(gitignore, /^resources\/sponsor\/wechat\.png$/m)
 })
 
-test('settings page quotes background image handles when building css url values', () => {
-  const source = readSettingsPageSources()
-
-  assert.match(source, /function toBackgroundImageStyle\(image: string\): string/)
-  assert.ok(source.includes('return image ? `url("${image.replace(/"/g, \'\\\\"\')}")` : \'none\''))
-  assert.match(source, /backgroundImage: toBackgroundImageStyle\(/)
+test('appearance parser quotes background image handles when building css url values', () => {
+  const background = normalizeAppBackgroundSettings({
+    global: { kind: 'image', image: 'background://one.png' }
+  })
+  assert.equal(
+    backgroundCssVariables(background.global, 'dark')['--appearance-image'],
+    'url("background://one.png")'
+  )
+  const invalid = normalizeAppBackgroundSettings({
+    global: { kind: 'image', image: 'background://one.png")' }
+  })
+  assert.equal(backgroundCssVariables(invalid.global, 'light')['--appearance-image'], 'none')
 })
 
-test('settings page sends plain app background objects through Electron IPC', () => {
-  const source = readSettingsPageSources()
-
-  assert.match(source, /function cloneAppBackground\(\): AppBackgroundSettings/)
-  assert.match(source, /global: \{ \.\.\.background\.global \}/)
-  assert.match(source, /local: \{ \.\.\.background\.pages\.local \}/)
-  assert.match(source, /settings: \{ \.\.\.background\.pages\.settings \}/)
-  assert.match(source, /streaming: \{ \.\.\.background\.pages\.streaming \}/)
-  assert.match(source, /player: \{ \.\.\.background\.pages\.player \}/)
-  assert.doesNotMatch(source, /\.\.\.settings\.value\.appBackground/)
-  assert.doesNotMatch(source, /\.\.\.settings\.value\.appBackground\.pages/)
+test('appearance editor sends independent plain background and material objects through Electron IPC', () => {
+  const confirmed = reactive({
+    appBackground: normalizeAppBackgroundSettings({}),
+    cardAppearance: defaultCardAppearance(),
+    surfaceMaterial: 'transparent' as const,
+    liquidGlass: DEFAULT_LIQUID_GLASS
+  })
+  const patch = cloneAppearance(confirmed)
+  assert.deepEqual(structuredClone(patch), patch)
+  patch.appBackground.global.effects!.dark.scale = 2
+  patch.appBackground.pages.player.effects!.light.dim = 40
+  patch.cardAppearance.dark.blurRadius = 12
+  assert.equal(confirmed.appBackground.global.effects!.dark.scale, 1)
+  assert.equal(confirmed.appBackground.pages.player.effects!.light.dim, 0)
+  assert.equal(confirmed.cardAppearance.dark.blurRadius, 20)
 })
 
 test('startup home page setting is persisted and selectable from general settings', () => {
@@ -436,7 +454,7 @@ test('audio settings expose advanced replaygain, fft, crossfeed, and real loudno
   )
   assert.match(settingsPageSource, /replayGainOptions/)
   assert.match(hifiSidebarSource, /VOLUME_NORMALIZATION_OPTIONS|value: 'loudnorm'/)
-  assert.match(settingsPageSource, /High-Res 当前为自动链路能力/)
+  assert.match(settingsPageSource, /High-Res 暂不支持手动设置/)
   assert.match(settingsPageSource, /function capabilityStateLabel/)
   assert.ok(
     settingsPageSource.includes(
@@ -578,11 +596,8 @@ test('settings page exposes search, backup, cache confirmation, and isolated plu
   assert.match(settingsPageSource, /function resetSettingsGroup/)
   assert.match(settingsPageSource, /function pluginPanelStateKey/)
   assert.match(settingsPageSource, /pluginSettingsResult\[pluginPanelStateKey\(panel\)\]/)
-  assert.match(settingsPageSource, /High-Res 当前为自动链路能力/)
-  assert.doesNotMatch(
-    settingsPageSource,
-    /aria-checked="false"[\s\S]{0,160}当前版本暂未接入原生处理链/
-  )
+  assert.match(settingsPageSource, /High-Res 暂不支持手动设置/)
+  assert.doesNotMatch(settingsPageSource, /aria-checked="false"[\s\S]{0,160}不支持手动设置/)
 })
 
 test('settings backup and shortcut status APIs are exposed to the renderer', () => {

@@ -1,4 +1,5 @@
 import type { CueRange } from './cue.ts'
+import type { AutoMixConfig, AutoMixStatus } from './autoMix.ts'
 import type { DsdRouteSettings } from './audioProcessingOptions.ts'
 
 export type { DsdRouteSettings }
@@ -79,6 +80,7 @@ export interface AudioProcessingSettings {
   crossfadeSeconds: number
   crossfadeCurve?: 'linear' | 'equal-power'
   crossfadeContent?: 'conservative' | 'all' | 'live'
+  autoMix?: AutoMixConfig
 }
 
 export interface AudioOutputOption {
@@ -260,6 +262,8 @@ export interface AudioEngineQueueItem {
 export interface AudioEnginePlayResult {
   nativeStarted: boolean
   fallbackReason: string
+  /** A newer transport action replaced this request; no fallback should start. */
+  superseded?: boolean
 }
 
 export interface VisualizationOptions {
@@ -490,6 +494,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   crossfeedActive: boolean
   crossfadeActive: boolean
   crossfadeMixActive?: boolean
+  autoMix?: AutoMixStatus
   crossfadeEffectiveSeconds?: number
   crossfadeCurve?: 'linear' | 'equal-power'
   crossfadeBlockedReason?: string
@@ -512,7 +517,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   dsdConversionReason: string
   gaplessActive: boolean
   preloadReady: boolean
-  /** Empty when unblocked; else disabled | dsd_path | typed_passthrough | crossfade | format_mismatch */
+  /** Empty when unblocked; else disabled | dsd_path | crossfade | format_mismatch (legacy: typed_passthrough) */
   gaplessBlockedReason: string
   upcomingTrack: AudioEngineQueueItem | null
   /** Live ICY StreamTitle (radio). Empty when unavailable. */

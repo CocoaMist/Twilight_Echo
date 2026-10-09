@@ -82,10 +82,12 @@ class PcmToDsdModulator {
   void injectInstabilityForTest();
 
  private:
-  static constexpr size_t kFilterHistoryLength = 62;  // 32 + 16 + 8 + 6
+  // Mirrored ring histories keep each FIR window contiguous without shifting.
+  static constexpr size_t kFilterHistoryLength = 124;  // 2 * (32 + 16 + 8 + 6)
 
   struct ChannelState {
     std::array<double, kFilterHistoryLength> filterHistory{};
+    std::array<int, kMaxHalfbandStages> historyPositions{};
     std::array<double, 5> integrators{};
     uint8_t pendingByte = 0;
     int pendingBits = 0;

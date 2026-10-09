@@ -31,6 +31,38 @@ interface IndexedMetadataMatch extends MetadataMatch {
 
 const EXACT_DURATION_TOLERANCE_SECONDS = 8
 const LOOSE_DURATION_TOLERANCE_SECONDS = 20
+const METADATA_PLACEHOLDERS = new Set([
+  'unknown',
+  'unknown artist',
+  'unknown album',
+  '未知',
+  '未知艺术家',
+  '未知歌手',
+  '未知专辑'
+])
+
+export function isMetadataPlaceholder(value: string | null | undefined): boolean {
+  const text = normalizeMetadataText(value ?? '')
+  return !text || METADATA_PLACEHOLDERS.has(text)
+}
+
+export function buildMetadataSearchQueries(track: Track): string[] {
+  const title = track.title.normalize('NFKC').trim().replace(/\s+/g, ' ')
+  if (!title) return []
+  const artists = metadataArtistNames(track.artist)
+  const queries = [
+    [title, ...artists].join(' '),
+    [title, artists[0]].filter(Boolean).join(' '),
+    title
+  ]
+  const seen = new Set<string>()
+  return queries.filter((query) => {
+    const key = normalizeMetadataText(query)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
 
 export function findBestMetadataMatch(
   localTrack: Track,
@@ -68,8 +100,9 @@ export function buildMetadataMatchCandidates(
             !metadataAvailable(localTrack.translatedLyrics) &&
             metadataAvailable(candidate.translatedLyrics),
           metadata:
-            (!metadataAvailable(localTrack.artist) && metadataAvailable(candidate.artist)) ||
-            (!metadataAvailable(localTrack.album) && metadataAvailable(candidate.album))
+            (isMetadataPlaceholder(localTrack.artist) &&
+              !isMetadataPlaceholder(candidate.artist)) ||
+            (isMetadataPlaceholder(localTrack.album) && !isMetadataPlaceholder(candidate.album))
         },
         index
       }
@@ -94,8 +127,18 @@ export function enrichLocalTrackMetadata(
     : localTrack.translatedLyrics
   const enriched: Track = {
     ...localTrack,
-    artist: policy.metadata ? localTrack.artist || metadata.artist : localTrack.artist,
-    album: policy.metadata ? localTrack.album || metadata.album : localTrack.album,
+    artist:
+      policy.metadata &&
+      isMetadataPlaceholder(localTrack.artist) &&
+      !isMetadataPlaceholder(metadata.artist)
+        ? metadata.artist
+        : localTrack.artist,
+    album:
+      policy.metadata &&
+      isMetadataPlaceholder(localTrack.album) &&
+      !isMetadataPlaceholder(metadata.album)
+        ? metadata.album
+        : localTrack.album,
     genre: policy.metadata ? localTrack.genre || metadata.genre || null : localTrack.genre,
     cover: policy.cover ? (localTrack.cover ?? metadata.cover ?? null) : localTrack.cover,
     lyrics: nextLyrics,
@@ -154,18 +197,32 @@ function getProviderId(track: Track): string {
 function scoreMetadataMatch(localTrack: Track, candidate: Track): MetadataMatch | null {
   const localTitle = normalizeMetadataText(localTrack.title)
   const candidateTitle = normalizeMetadataText(candidate.title)
-  const localArtist = normalizeMetadataText(localTrack.artist)
-  const candidateArtist = normalizeMetadataText(candidate.artist)
-  if (!localTitle || !candidateTitle || localTitle !== candidateTitle) return null
-  if (localArtist && (!candidateArtist || localArtist !== candidateArtist)) return null
+  if (!localTitle || !candidateTitle) return null
+  const exactTitle = localTitle === candidateTitle
+  // Ignore punctuation variants, but retain every word, including version labels.
+  const punctuationTitle = normalizeTitlePunctuation(localTitle)
+  if (
+    !exactTitle &&
+    (!punctuationTitle || punctuationTitle !== normalizeTitlePunctuation(candidateTitle))
+  )
+    return null
+  const localArtists = new Set(metadataArtistNames(localTrack.artist).map(normalizeMetadataText))
+  const candidateArtists = new Set(metadataArtistNames(candidate.artist).map(normalizeMetadataText))
+  if (candidateArtists.size === 0) return null
+  const localSubset = [...localArtists].every((artist) => candidateArtists.has(artist))
+  const candidateSubset = [...candidateArtists].every((artist) => localArtists.has(artist))
+  if (!localSubset && !candidateSubset) return null
+  const exactArtists = localSubset && candidateSubset
 
   const durationDelta = durationDeltaSeconds(localTrack, candidate)
   if (durationDelta != null && durationDelta > LOOSE_DURATION_TOLERANCE_SECONDS) return null
-  if (!localArtist && durationDelta != null && durationDelta > EXACT_DURATION_TOLERANCE_SECONDS)
+  // Missing/partial credits require timing evidence; a shared guest is insufficient.
+  if (!exactArtists && (durationDelta == null || durationDelta > EXACT_DURATION_TOLERANCE_SECONDS))
     return null
 
   let score = 70
-  if (!localArtist && candidateArtist) score -= 12
+  if (!exactTitle) score -= 4
+  if (!exactArtists) score -= 12
   if (durationDelta == null) {
     score += 5
   } else if (durationDelta <= EXACT_DURATION_TOLERANCE_SECONDS) {
@@ -179,14 +236,33 @@ function scoreMetadataMatch(localTrack: Track, candidate: Track): MetadataMatch 
 
   return {
     track: candidate,
-    confidence: score >= 90 ? 'high' : 'medium',
+    confidence: exactArtists && score >= 90 ? 'high' : 'medium',
     score
   }
 }
 
 function durationDeltaSeconds(left: Track, right: Track): number | null {
-  if (!left.duration || !right.duration) return null
+  if (
+    !Number.isFinite(left.duration) ||
+    left.duration <= 0 ||
+    !Number.isFinite(right.duration) ||
+    right.duration <= 0
+  )
+    return null
   return Math.abs(left.duration - right.duration)
+}
+
+function metadataArtistNames(value: string | undefined): string[] {
+  if (isMetadataPlaceholder(value)) return []
+  return (value ?? '')
+    .normalize('NFKC')
+    .split(/[/,&、;]+|\s+(?:feat\.?|ft\.?|featuring)\s+/i)
+    .map((artist) => artist.trim().replace(/\s+/g, ' '))
+    .filter((artist) => !isMetadataPlaceholder(artist))
+}
+
+function normalizeTitlePunctuation(value: string): string {
+  return value.replace(/\p{P}/gu, '').replace(/\s+/g, ' ').trim()
 }
 
 function metadataAvailable(value: string | null | undefined): boolean {
@@ -194,10 +270,5 @@ function metadataAvailable(value: string | null | undefined): boolean {
 }
 
 function normalizeMetadataText(value: string | undefined): string {
-  return (value ?? '')
-    .normalize('NFKC')
-    .trim()
-    .toLowerCase()
-    .replace(/\s*([/,&、，;；])\s*/g, '$1')
-    .replace(/\s+/g, ' ')
+  return (value ?? '').normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ')
 }

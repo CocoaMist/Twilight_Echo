@@ -248,9 +248,7 @@ function interval(event: Event): void {
         </select></label
       >
     </div>
-    <p class="update-hint">
-      自动检查只提醒新版本，下载和安装由你决定。测试版可能包含尚未稳定的功能。
-    </p>
+    <p class="update-hint">仅自动检查，不自动下载或安装。测试版可能不稳定。</p>
     <div v-if="state.check?.hasUpdate || state.readyVersion" class="update-reminders">
       <button class="soft-button" type="button" :disabled="busy" @click="updates.dismiss('later')">
         明天提醒

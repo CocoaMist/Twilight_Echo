@@ -1,0 +1,3 @@
+#pragma once
+static const char amTransitionCatalogue[] = {@TAE_AM_CATALOGUE@0};
+static const char amParameterDescriptors[] = {@TAE_AM_PARAMETERS@0};

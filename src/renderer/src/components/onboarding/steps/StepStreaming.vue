@@ -33,9 +33,9 @@ const cacheOptions: { value: StreamingAudioCachePolicy; label: string; title: st
   {
     value: 'provider',
     label: '跟随来源规则',
-    title: '由音乐来源决定是否允许缓存，兼容性与体验最均衡'
+    title: '由音乐来源决定是否允许缓存'
   },
-  { value: 'off', label: '不缓存音频', title: '每次播放都实时拉取，占用空间最小' }
+  { value: 'off', label: '不缓存音频', title: '每次播放重新获取音频' }
 ]
 
 function setAudioCachePolicy(streamingAudio: StreamingAudioCachePolicy): void {
@@ -73,9 +73,7 @@ function setProxyPort(event: Event): void {
   <section class="onb-stage" data-scene="04">
     <p class="onb-kicker">流媒体</p>
     <h1 class="onb-title">连接<em>网易云音乐</em></h1>
-    <p class="onb-subtitle">
-      内置的网易云音乐源已经启用。登录后即可同步歌单、收藏与每日推荐；不登录也可以浏览流媒体页面。
-    </p>
+    <p class="onb-subtitle">登录后同步歌单、收藏和每日推荐。也可以跳过。</p>
     <div class="onb-cards" :class="{ 'has-selection': true }" role="radiogroup">
       <button
         type="button"
@@ -192,8 +190,6 @@ function setProxyPort(event: Event): void {
         </div>
       </div>
     </div>
-    <p class="onb-hint">
-      在线播放音质：无损与 Hi-Res 需要对应的会员权益；音频缓存默认尊重各音乐来源的规则。
-    </p>
+    <p class="onb-hint">无损与 Hi-Res 音质需要相应会员权益；音频缓存默认遵循音乐来源的规则。</p>
   </section>
 </template>

@@ -649,7 +649,7 @@ try {
     param([int]$QueueLength)
     return [ordered]@{
       queueLength = $QueueLength; snapshotHeavyBytes = 0
-      limits = [ordered]@{ mountedRows = 18; snapshotP95Ms = 2500; windowP95Ms = 250; windowHeapDeltaBytes = 8388608; snapshotHeavyBytes = 0 }
+      limits = [ordered]@{ mountedRows = 18; snapshotP95Ms = [Math]::Max(16, $QueueLength / 1000 * 4); windowP95Ms = 8; windowHeapDeltaBytes = 8388608; snapshotHeavyBytes = 0 }
       snapshotMetrics = [ordered]@{ samplesMs = @(1, 2, 3); p95Ms = 3; maxHeapDeltaBytes = 1024 }
       windowMetrics = [ordered]@{ samplesMs = @(1, 2, 3); p95Ms = 3; maxHeapDeltaBytes = 1024 }
     }
@@ -694,7 +694,7 @@ try {
 
   $fullPlan = @(Get-FullStagePlan)
   $fullIds = @($fullPlan | ForEach-Object { [string]$_.id })
-  Assert-Equal $fullIds.Count 53 'Full gate plan must retain every mandatory stage'
+  Assert-Equal $fullIds.Count 54 'Full gate plan must retain every mandatory stage'
   Assert-Equal @($fullIds | Sort-Object -Unique).Count $fullIds.Count 'Full gate plan must not contain duplicate IDs'
   Assert-True ($fullIds.IndexOf('renderer-budget') -gt $fullIds.IndexOf('build')) 'Renderer budget verification must run after the production build'
   Assert-Equal $fullIds[-1] 'mandatory-stage-coverage' 'Mandatory stage coverage must close the full plan'

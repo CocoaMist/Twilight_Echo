@@ -27,13 +27,13 @@ const modeOptions: { value: PlayerBarMode; title: string; desc: string; icon: st
   {
     value: 'mini',
     title: '迷你胶囊',
-    desc: '轻量控制占据更少空间，适合日常使用',
+    desc: '胶囊形播放控制',
     icon: 'ph ph-minus-square'
   },
   {
     value: 'compact',
     title: '紧凑模式',
-    desc: '贴边布局，把更多屏幕空间留给音乐内容',
+    desc: '贴边播放控制',
     icon: 'ph ph-rows'
   }
 ]

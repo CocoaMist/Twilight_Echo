@@ -1,5 +1,6 @@
 import { shallowRef, triggerRef, watch, type Ref } from 'vue'
 import type { Track } from '../types/music'
+import { ListeningStatsDatabase } from './listeningStatsDatabase.ts'
 import { getLogicalTrackKey, normalizeLogicalTrackText } from '../utils/logicalTrackIdentity.ts'
 import {
   ListeningStatsPersistence,
@@ -78,6 +79,57 @@ export const LISTENING_STATS_FLUSH_DELAY_MS = 30_000
 export const LISTENING_STATS_RETRY_DELAY_MS = 60_000
 
 const listeningStats = shallowRef<ListeningStats>(loadListeningStats())
+const listeningDatabase =
+  typeof indexedDB === 'undefined' ? null : new ListeningStatsDatabase(indexedDB)
+let hydratingListeningStats = listeningDatabase !== null
+const pendingListeningMutations: Array<(stats: ListeningStats) => void> = []
+let lastCompactedDay = ''
+let listeningStatsHydrationError: unknown = null
+async function hydrateListeningStats(): Promise<void> {
+  if (!listeningDatabase) return
+  const saved = await listeningDatabase.load()
+  if (saved) {
+    const hydrated = {
+      days: normalizeNumberRecord(saved.days),
+      tracks: normalizeTrackStats(saved.tracks)
+    }
+    for (const mutate of pendingListeningMutations) mutate(hydrated)
+    listeningStats.value = hydrated
+    if (pendingListeningMutations.length) listeningDatabase.invalidate()
+  }
+  listeningStatsHydrationError = null
+  hydratingListeningStats = false
+  pendingListeningMutations.length = 0
+  lastCompactedDay = ''
+  if (
+    (!saved &&
+      (Object.keys(listeningStats.value.tracks).length > 0 ||
+        Object.keys(listeningStats.value.days).length > 0)) ||
+    listeningStatsPersistenceStatus.value.dirty
+  )
+    listeningStatsPersistence.markDirty()
+}
+const listeningStatsReady = listeningDatabase
+  ? hydrateListeningStats().catch((error) => {
+      // Never overwrite an unread database with the legacy/empty snapshot.
+      // Keep startup mutations queued and retry hydration before a later save.
+      listeningStatsHydrationError = error
+      listeningStatsPersistence.markDirty()
+    })
+  : Promise.resolve()
+function prepareListeningStats(): void {
+  const today = dayKey(Date.now())
+  if (
+    today === lastCompactedDay &&
+    Object.keys(listeningStats.value.tracks).length <= LISTENING_STATS_MAX_TRACKS
+  )
+    return
+  if (compactListeningStatsForPersistence(listeningStats.value)) {
+    listeningDatabase?.invalidate()
+    triggerRef(listeningStats)
+  }
+  lastCompactedDay = today
+}
 const listeningStatsPersistenceStatus = shallowRef<ListeningStatsPersistenceStatus>({
   state: 'idle',
   dirty: false,
@@ -87,10 +139,22 @@ const listeningStatsPersistenceStatus = shallowRef<ListeningStatsPersistenceStat
 const listeningStatsPersistence = new ListeningStatsPersistence<ListeningStats>({
   key: DASHBOARD_STATS_KEY,
   storage: getListeningStatsStorage(),
+  ...(listeningDatabase
+    ? {
+        persistSnapshot: async (snapshot: ListeningStats) => {
+          await listeningStatsReady
+          if (listeningStatsHydrationError) await hydrateListeningStats()
+          prepareListeningStats()
+          // Hydration may have replaced the original object while awaiting load.
+          await listeningDatabase.save(
+            snapshot === listeningStats.value ? snapshot : listeningStats.value
+          )
+          globalThis.localStorage?.removeItem(DASHBOARD_STATS_KEY)
+        }
+      }
+    : {}),
   getSnapshot: () => listeningStats.value,
-  beforePersist: () => {
-    if (compactListeningStatsForPersistence(listeningStats.value)) triggerRef(listeningStats)
-  },
+  beforePersist: prepareListeningStats,
   onStatus: (status) => {
     listeningStatsPersistenceStatus.value = status
     if (status.state === 'error') {
@@ -246,6 +310,7 @@ export function compactListeningStatsForPersistence(
 }
 
 function commitListeningStats(mutator: (stats: ListeningStats) => void): void {
+  if (hydratingListeningStats) pendingListeningMutations.push(mutator)
   mutator(listeningStats.value)
   triggerRef(listeningStats)
   listeningStatsPersistence.markDirty()
@@ -262,10 +327,10 @@ function addListeningSeconds(track: Track, seconds: number): void {
 function recordListening(track: Track, seconds: number, timestamp: number): void {
   const today = dayKey(timestamp)
   const statKey = getListeningStatKey(track)
+  const plays = lastCountedTrackId === track.id ? 0 : 1
   commitListeningStats((stats) => {
     stats.days[today] = (stats.days[today] ?? 0) + seconds
     const previous = stats.tracks[statKey] ?? createEmptyTrackStat(track)
-    const plays = lastCountedTrackId === track.id ? 0 : 1
     recordListeningTrackDay(previous, timestamp, { seconds, plays })
     stats.tracks[statKey] = {
       ...previous,
@@ -281,6 +346,7 @@ function recordListening(track: Track, seconds: number, timestamp: number): void
       track: cloneTrack(track)
     }
   })
+  listeningDatabase?.markTrack(statKey)
   lastCountedTrackId = track.id
   lastCountedTimestamp = timestamp
 }
@@ -329,6 +395,7 @@ function recordPlaybackOutcome(
       track: cloneTrack(track)
     }
   })
+  listeningDatabase?.markTrack(statKey)
 }
 
 function recordPlaybackTransition({
@@ -583,7 +650,7 @@ export function setupListeningStatsTracking(player: ListeningPlayerState): void 
 export function useListeningStatsStore(): {
   listeningStats: Ref<ListeningStats>
   persistenceStatus: Ref<ListeningStatsPersistenceStatus>
-  clearListeningStats(range: ListeningStatsClearRange): boolean
+  clearListeningStats(range: ListeningStatsClearRange): boolean | Promise<boolean>
 } {
   return {
     listeningStats,
@@ -592,9 +659,10 @@ export function useListeningStatsStore(): {
   }
 }
 
-export function clearListeningStats(range: ListeningStatsClearRange): boolean {
+export function clearListeningStats(range: ListeningStatsClearRange): boolean | Promise<boolean> {
   if (!isListeningStatsClearRange(range)) throw new Error('请选择有效的开始和结束日期')
   commitListeningStats((stats) => clearListeningStatsHistory(stats, range))
+  listeningDatabase?.invalidate()
   const countedDay = dayKey(lastCountedTimestamp)
   if (range === null || (countedDay >= range.startDay && countedDay <= range.endDay)) {
     lastCountedTrackId = ''
@@ -675,6 +743,8 @@ export function getTopArtists(limit = 50): ListeningArtistStat[] {
 export function resetListeningStatsForTest(): void {
   listeningStatsPersistence.resetForTest()
   listeningStats.value = { days: {}, tracks: {} }
+  lastCompactedDay = ''
+  listeningDatabase?.invalidate()
   lastCountedTrackId = ''
   lastCountedTimestamp = 0
   lastOutcomeTrack = null
@@ -682,8 +752,19 @@ export function resetListeningStatsForTest(): void {
   lastOutcomeDuration = 0
 }
 
-export function flushListeningStatsForTest(): boolean {
+export function flushListeningStatsForTest(): boolean | Promise<boolean> {
   return listeningStatsPersistence.flush()
+}
+
+export async function flushListeningStatsForExit(): Promise<void> {
+  await listeningStatsReady
+  if (!(await listeningStatsPersistence.flush()))
+    throw new Error('Listening history could not be saved')
+}
+
+export async function waitForListeningStatsReady(): Promise<void> {
+  await listeningStatsReady
+  if (listeningStatsHydrationError) await hydrateListeningStats()
 }
 
 export function getListeningStatsPersistenceStatusForTest(): ListeningStatsPersistenceStatus {

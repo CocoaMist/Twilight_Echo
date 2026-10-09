@@ -55,11 +55,11 @@ const dateLabel = computed(() =>
 )
 const greeting = computed(() => {
   const hour = now.value.getHours()
-  if (hour < 5) return '夜深了，给自己留一首歌的时间。'
-  if (hour < 11) return '早上好，从喜欢的旋律开始今天。'
-  if (hour < 14) return '午间片刻，让音乐慢慢流淌。'
-  if (hour < 18) return '下午好，找张唱片，放松一下。'
-  return '晚上好，把此刻交给音乐。'
+  if (hour < 5) return '夜深了'
+  if (hour < 11) return '早上好'
+  if (hour < 14) return '中午好'
+  if (hour < 18) return '下午好'
+  return '晚上好'
 })
 let observer: ResizeObserver | undefined
 let clockTimer: number | undefined
@@ -261,19 +261,8 @@ function trackFormat(track: Track): string {
             <span class="archive-empty-disc" aria-hidden="true"><i class="ph ph-disc"></i></span>
             <div>
               <h3>
-                {{
-                  activity === 'recent' && summary.tracks
-                    ? '下一首，就从喜欢的开始。'
-                    : '你的唱片房间，等待第一张收藏。'
-                }}
+                {{ activity === 'recent' && summary.tracks ? '暂无播放记录' : '暂无本地音乐' }}
               </h3>
-              <p>
-                {{
-                  activity === 'recent' && summary.tracks
-                    ? '播放过的音乐会在这里留下足迹。'
-                    : '添加音乐文件夹，让每一张封面都有自己的位置。'
-                }}
-              </p>
               <button
                 type="button"
                 @click="
@@ -294,9 +283,7 @@ function trackFormat(track: Track): string {
         <footer class="archive-rotation-footer">
           <span
             ><i class="ph ph-vinyl-record" aria-hidden="true"></i>
-            {{
-              activity === 'recent' ? '熟悉的旋律，值得再次相遇。' : '新的收藏，新的心动。'
-            }}</span
+            {{ activity === 'recent' ? '最近播放' : '最近添加' }}</span
           ><button type="button" @click="openActivity">
             浏览全部 <i class="ph ph-arrow-right" aria-hidden="true"></i>
           </button>
@@ -344,7 +331,6 @@ function trackFormat(track: Track): string {
           </div>
           <div v-else class="archive-resume-empty">
             <i class="ph ph-headphones" aria-hidden="true"></i>
-            <p>留一点时间，听听自己喜欢的。</p>
             <span>MAKE ROOM FOR MUSIC.</span>
           </div>
         </section>
@@ -377,7 +363,6 @@ function trackFormat(track: Track): string {
           </div>
           <div v-else class="archive-albums-empty">
             <i class="ph ph-stack" aria-hidden="true"></i>
-            <p>好唱片，值得好好收藏。</p>
             <button type="button" @click="emit('open-library-settings')">
               整理我的音乐库 <i class="ph ph-arrow-right" aria-hidden="true"></i>
             </button>

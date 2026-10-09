@@ -1,3 +1,7 @@
+.music-rankings {
+  margin-top: 40px;
+}
+
 .music-home {
   container-type: inline-size;
   color: var(--te-neutral-900);

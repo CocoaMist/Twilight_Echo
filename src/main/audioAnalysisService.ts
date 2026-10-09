@@ -8,6 +8,8 @@ import {
   loadNativeBindingWithDiagnostics
 } from './audio/nativeBinding.ts'
 import type { NativeAudioBinding } from './audio/audioEngineTypes.ts'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 type ParentPort = {
   postMessage: (message: AudioAnalysisWorkerMessage) => void
@@ -60,7 +62,13 @@ if (startupError) {
   servicePort.postMessage({
     kind: 'ready',
     protocolVersion: AUDIO_ANALYSIS_PROTOCOL_VERSION,
-    analyses: ['bpm', 'loudness', 'loudness-batch', 'dsp-audition']
+    analyses: [
+      'bpm',
+      'loudness',
+      'loudness-batch',
+      'dsp-audition',
+      ...(typeof native?.AnalyzeAutoMix === 'function' ? ['automix' as const] : [])
+    ]
   })
 }
 
@@ -81,12 +89,32 @@ function handleRequest(message: AudioAnalysisWorkerRequest): void {
   }
   try {
     const method: keyof NativeAudioBinding =
-      message.analysis === 'bpm' ? 'AnalyzeBpm' : 'AnalyzeLoudness'
+      message.analysis === 'bpm'
+        ? 'AnalyzeBpm'
+        : message.analysis === 'automix'
+          ? 'AnalyzeAutoMix'
+          : 'AnalyzeLoudness'
     const target = native[method]
     if (typeof target !== 'function') throw new Error(`native method unavailable: ${method}`)
+    let optionsJson = message.optionsJson
+    if (message.analysis === 'automix') {
+      const options = JSON.parse(optionsJson || '{}') as Record<string, unknown>
+      if (!options.modelDirectory) {
+        const candidates = [
+          process.env.TAE_AUTOMIX_ASSETS,
+          join(process.resourcesPath || '', 'audio-engine', 'automix'),
+          join(process.cwd(), 'resources', 'audio-engine', 'automix')
+        ]
+        const root = candidates.find(
+          (directory) => directory && existsSync(join(directory, 'assets.json'))
+        )
+        if (root) options.modelDirectory = root
+      }
+      optionsJson = JSON.stringify(options)
+    }
     const value = (target as (source: string, optionsJson: string) => unknown)(
       message.source,
-      message.optionsJson
+      optionsJson
     )
     servicePort.postMessage({ kind: 'response', requestId: message.requestId, ok: true, value })
   } catch (error) {

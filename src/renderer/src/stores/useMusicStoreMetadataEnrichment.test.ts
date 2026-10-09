@@ -196,6 +196,71 @@ test(
   }
 )
 
+test('inline and reload date backfills never request additional online enrichment', async () => {
+  let providerCalls = 0
+  const original = { ...localTrack, album: 'Local Album' }
+  let saved = { ...original, releaseDate: '2020-05' }
+  ;(globalThis as Record<string, unknown>).window = {
+    api: {
+      data: {
+        loadMusicLibrary: async () => ({
+          version: 2,
+          revision: 3,
+          tracks: [saved],
+          folders: [],
+          exclusions: []
+        }),
+        savePlaylists: async () => {},
+        loadPlaylists: async () => []
+      },
+      providers: {
+        list: async () => [
+          {
+            id: 'date-backfill-test',
+            name: 'Date Test',
+            capabilities: ['search'],
+            health: { available: true }
+          }
+        ],
+        call: async () => {
+          providerCalls++
+          return { items: [], total: 0 }
+        }
+      }
+    }
+  }
+  const store = useMusicStore()
+  store.clearTracks()
+  store.tracks.value = [original]
+  store.refreshLibraryIndex()
+  const update = {
+    jobId: 'date-backfill',
+    mode: 'startup' as const,
+    state: 'completed' as const,
+    libraryRevision: 2,
+    exclusions: [],
+    addedTracks: [],
+    updatedTracks: [saved],
+    removedFilePaths: [],
+    parsedFileCount: 1,
+    skippedUnchanged: 0
+  }
+  await store.handleLibraryChange({ kind: 'scan', update })
+  assert.deepEqual(store.tracks.value, [saved])
+  await delay(30)
+  assert.equal(providerCalls, 0)
+  saved = { ...saved, releaseDate: '2020-05-12' }
+  await store.handleLibraryChange({
+    kind: 'scan',
+    update: { ...update, libraryRevision: 3, updatedTracks: [], reloadRequired: true }
+  })
+  assert.deepEqual(store.tracks.value, [saved])
+  await delay(30)
+  assert.equal(providerCalls, 0)
+  assert.equal(store.albums.value[0].releaseDate, '2020-05-12')
+  store.clearTracks()
+})
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 30; attempt += 1) {
     if (predicate()) return

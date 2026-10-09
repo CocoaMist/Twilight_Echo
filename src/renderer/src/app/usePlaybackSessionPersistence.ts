@@ -51,6 +51,7 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
   let restoreGeneration = 0
   const sessionWriter = options.sessionWriter ?? playbackSessionWriter
   const stopHandles: Array<() => void> = []
+  let unregisterAutosaveScheduler: (() => void) | null = null
 
   async function restoreSavedPlaybackSession(mode: PlaybackResumeMode): Promise<void> {
     const generation = ++restoreGeneration
@@ -173,6 +174,9 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
 
   function startAutosaveWatchers(): void {
     if (!playbackSessionWritesEnabled || stopHandles.length > 0) return
+    unregisterAutosaveScheduler = sessionWriter.registerAutosaveScheduler(
+      schedulePlaybackSessionAutosave
+    )
 
     // The first track can be selected while the application is still waiting
     // for startup work. Vue watchers do not replay that change by default.
@@ -197,12 +201,7 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
             return
           }
 
-          lastPlaybackSessionPositionSaveAt = Date.now()
-          clearPlaybackSessionAutosave()
-          void savePlaybackSessionSnapshot().catch((err) => {
-            console.warn('自动保存播放会话失败：', err)
-            options.onAutosaveError?.(err)
-          })
+          schedulePlaybackSessionAutosave()
         },
         { flush: 'post' }
       )
@@ -233,6 +232,8 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
   function stop(): void {
     restoreGeneration++
     clearPlaybackSessionAutosave()
+    unregisterAutosaveScheduler?.()
+    unregisterAutosaveScheduler = null
     while (stopHandles.length > 0) {
       stopHandles.pop()?.()
     }

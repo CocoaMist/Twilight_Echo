@@ -25,7 +25,7 @@ const headline = computed(() => listeningDurationParts(summary.value.seconds))
 const comparisonText = computed(() => {
   const result = comparison.value
   if (result.direction === 'new') return '前期暂无记录'
-  if (result.direction === 'same') return summary.value.seconds ? '与前期持平' : '等待新的旋律'
+  if (result.direction === 'same') return summary.value.seconds ? '与前期持平' : '暂无记录'
   return `${result.direction === 'up' ? '多' : '少'} ${Math.abs(result.percent ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 1 })}%`
 })
 const ceiling = computed(() => {
@@ -169,9 +169,7 @@ function onKeydown(event: KeyboardEvent): void {
               }}<template v-if="selectedIndex === range - 1"> · 今天</template></span
             >
           </div>
-          <p v-if="!summary.seconds && !inspecting" class="rhythm-no-data">
-            这段时间，还没有留下足迹
-          </p>
+          <p v-if="!summary.seconds && !inspecting" class="rhythm-no-data">所选时间内暂无记录</p>
         </div>
         <div class="rhythm-dates" aria-hidden="true">
           <span v-for="day in axisDays" :key="day.key">{{ formatDayLabel(day.key) }}</span>

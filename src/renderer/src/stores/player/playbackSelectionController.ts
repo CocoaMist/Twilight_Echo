@@ -2,7 +2,10 @@ import type { Ref } from 'vue'
 import type { Track } from '@renderer/types/music'
 import type { PlayMode } from '@renderer/types/settings'
 import { shuffleArray } from '@renderer/utils/playerQueueUtils.ts'
-import { toPlaybackQueueSnapshots } from '@renderer/utils/playbackQueueVirtualization.ts'
+import {
+  createPlaybackQueueSnapshotCache,
+  toPlaybackQueueSnapshots
+} from '@renderer/utils/playbackQueueVirtualization.ts'
 
 interface PlaybackSelectionOptions {
   queue: Ref<Track[]>
@@ -18,6 +21,7 @@ interface PlaybackSelectionOptions {
 }
 
 export function createPlaybackSelectionController(options: PlaybackSelectionOptions) {
+  const queueSnapshots = createPlaybackQueueSnapshotCache()
   function playTrackFromPosition(
     track: Track,
     positionSeconds: number,
@@ -30,7 +34,7 @@ export function createPlaybackSelectionController(options: PlaybackSelectionOpti
     }
     if (trackList || !options.isPersonalizedStreamTrack(track)) options.endPersonalizedStream()
     if (trackList) {
-      const snapshots = toPlaybackQueueSnapshots(trackList)
+      const snapshots = queueSnapshots(trackList)
       const selectedIndex = track.queueEntryId
         ? snapshots.findIndex((item) => item.queueEntryId === track.queueEntryId)
         : trackList.indexOf(track)

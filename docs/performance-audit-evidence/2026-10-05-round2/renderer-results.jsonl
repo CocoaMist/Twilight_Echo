@@ -1,0 +1,7 @@
+{"kind":"rendererQueuePreparation","items":5000,"calls":12,"delegated":true,"singles":12,"batches":12,"batchTargets":60000,"medianMs":1.2163000000000181,"peakMs":4.649699999999996}
+{"kind":"rendererQueuePreparation","items":20000,"calls":12,"delegated":false,"singles":12,"batches":0,"batchTargets":0,"medianMs":0.004599999999982174,"peakMs":0.04090000000002192}
+{"kind":"authorizationFallback","items":1000,"singles":1001,"peakConcurrent":1000,"delegated":true}
+{"kind":"unchangedLyricsMetadataRefresh","lines":300,"updates":20,"componentParses":20,"desktopParses":20,"recenterCalls":40,"publishedSessions":20,"publishedCharacters":422252,"medianMs":1.280699999999996,"peakMs":2.63930000000002}
+{"kind":"unchangedLyricsMetadataRefresh","lines":3000,"updates":20,"componentParses":20,"desktopParses":20,"recenterCalls":40,"publishedSessions":20,"publishedCharacters":4486272,"medianMs":8.696100000000001,"peakMs":12.289800000000014}
+{"kind":"fanoutDedupe","positionOnlySuppressed":true,"nativeLastProcessMsOnlySuppressed":true}
+{"kind":"analysisFailureRetention","failedFiles":256,"afterFailures":256,"expiredEntries":256,"retryStatus":"completed","afterSuccessfulRetry":256,"inFlightAfterCompletion":0,"activeGenerationsAfterCompletion":0}

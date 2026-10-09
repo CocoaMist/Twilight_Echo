@@ -31,6 +31,12 @@ export default defineConfig({
       rollupOptions: {
         output: {
           manualChunks: {
+            'media-providers': [resolve('src/renderer/src/providers/index.ts')],
+            'playback-session': [
+              resolve('src/renderer/src/app/playbackSessionWriter.ts'),
+              resolve('src/renderer/src/app/usePlaybackSessionPersistence.ts')
+            ],
+            'listening-stats-storage': [resolve('src/renderer/src/stores/listeningStatsDatabase.ts')],
             'vendor-vue': ['vue'],
             'vendor-music-metadata': ['music-metadata'],
             'vendor-qrcode': ['qrcode'],

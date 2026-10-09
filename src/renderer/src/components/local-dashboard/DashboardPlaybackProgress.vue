@@ -57,14 +57,20 @@ function handleHeroSeek(event: MouseEvent): void {
   position: absolute;
   inset: 5px 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--home-ink) 12%, transparent);
+  background: var(
+    --te-player-bar-progress-track,
+    color-mix(in srgb, var(--home-ink) 12%, transparent)
+  );
 }
 
 .hero-progress-track span {
   position: absolute;
   inset: 5px auto 5px 0;
   width: 100%;
-  background: linear-gradient(90deg, var(--home-accent), var(--te-accent-cyan));
+  background: var(
+    --te-player-bar-progress-fill,
+    linear-gradient(90deg, var(--home-accent), var(--te-accent-cyan))
+  );
   transform: scaleX(0);
   transform-origin: 0 50%;
   will-change: transform;

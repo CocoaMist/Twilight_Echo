@@ -398,21 +398,6 @@
   outline-offset: 3px;
 }
 @media (max-width: 760px) {
-  .workshop-page .workshop-workspace {
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-  .workshop-workspace nav {
-    flex-direction: row;
-    max-height: 110px;
-    flex-wrap: wrap;
-  }
-  .workshop-preview {
-    height: 500px;
-  }
-  .workshop-properties {
-    max-height: 560px;
-  }
   .workshop-template-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

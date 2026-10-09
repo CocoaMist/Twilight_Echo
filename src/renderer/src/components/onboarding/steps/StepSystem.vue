@@ -41,7 +41,7 @@ const closeBehaviorOptions: {
   {
     value: 'miniPlayer',
     title: '切换迷你播放器',
-    desc: '主窗口收起，桌面保留轻量控制',
+    desc: '收起主窗口，显示迷你播放器',
     icon: 'ph ph-picture-in-picture'
   }
 ]
@@ -51,7 +51,6 @@ const closeBehaviorOptions: {
   <section class="onb-stage" data-scene="07">
     <p class="onb-kicker">任务栏与后台</p>
     <h1 class="onb-title">让它<em>融入你的桌面</em></h1>
-    <p class="onb-subtitle">选择关闭窗口后的去向，以及任务栏、托盘与系统媒体控制的分工。</p>
 
     <div
       class="onb-cards onb-close-behavior-cards has-selection"
@@ -111,7 +110,7 @@ const closeBehaviorOptions: {
       <div class="onb-toggle-row">
         <div class="onb-toggle-copy">
           <strong>全局快捷键</strong>
-          <span>在任何应用里用快捷键切歌、暂停，无需切回窗口。</span>
+          <span>在其他应用中切歌或暂停。</span>
         </div>
         <button
           type="button"

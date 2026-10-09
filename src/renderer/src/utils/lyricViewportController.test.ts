@@ -603,6 +603,47 @@ test('lines outside the viewport are marked so they can stop painting', async ()
   )
 })
 
+test('long timelines animate nearby rows and stop visiting settled distant springs', async () => {
+  const { controller, activeIndex, manual } = harness(5000)
+  await controller.follow(0, { mode: 'snap' })
+  activeIndex.value = 1
+  await controller.follow(1)
+  assert.ok(controller.getAnimatingRowCount() > 0)
+  assert.ok(controller.getAnimatingRowCount() < 30)
+  manual.runFrames(600)
+  assert.equal(controller.getAnimatingRowCount(), 0)
+  assert.equal(manual.pendingFrames(), 0)
+  activeIndex.value = 4999
+  await controller.follow(4999)
+  assert.ok(
+    controller.getAnimatingRowCount() < 60,
+    'distant crossed rows do not all animate during a large jump'
+  )
+  manual.runFrames(600)
+  assert.equal(controller.getRowTop(4999), controller.getRowTargetTop(4999))
+})
+
+test('hiding a window settles delayed cascade targets and releases the frame loop', async () => {
+  const record = globalThis as Record<string, unknown>
+  const previous = record.document
+  const { controller, activeIndex, manual } = harness(12)
+  try {
+    record.document = { visibilityState: 'visible' }
+    await controller.follow(0, { mode: 'snap' })
+    activeIndex.value = 1
+    await controller.follow(1)
+    const before = controller.getRowTop(5)
+    record.document = { visibilityState: 'hidden' }
+    manual.runFrame()
+    assert.notEqual(controller.getRowTop(5), before)
+    assert.equal(controller.getAnimatingRowCount(), 0)
+    assert.equal(manual.pendingFrames(), 0)
+  } finally {
+    record.document = previous
+    controller.dispose()
+  }
+})
+
 test('browsing does not wait on the cascade, so lines below move with the wheel', async () => {
   const { controller, activeIndex } = harness(10)
   activeIndex.value = 0

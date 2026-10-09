@@ -529,6 +529,28 @@ window.runLyricsPlayerRuntime = async () => {
     'a stale hand-off pause froze the shared playbar and word-lyric clock after seek'
   )
 
+  let nativePlayCalls = 0
+  let fallbackChecks = 0
+  window.api.fs = { isAudioFileAuthorized: async () => true }
+  Object.assign(window.api.audioEngine, {
+    stop: async () => {}, loadQueue: async () => {}, setPlayMode: async () => {},
+    play: async () => {
+      nativePlayCalls++
+      return { nativeStarted: false, fallbackReason: '', superseded: true }
+    },
+    isHtmlAudioFallbackAllowed: async () => { fallbackChecks++; return true }
+  })
+  const cancelledTrack = {
+    ...track, id: 'local:cancelled', source: 'local', filePath: 'C:/Music/cancelled.flac',
+    lyrics: '', translatedLyrics: null
+  }
+  player.playTrack(cancelledTrack, [cancelledTrack])
+  await waitFor(
+    () => nativePlayCalls === 1 && !player.isLoading.value,
+    'a superseded native play left the renderer waiting for its completion'
+  )
+  expect(fallbackChecks === 0, 'a superseded native play tried to start renderer audio')
+
   console.log('LYRICS_PLAYER_RUNTIME_OK')
 }
 `

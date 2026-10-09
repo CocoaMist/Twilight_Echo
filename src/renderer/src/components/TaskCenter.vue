@@ -1,28 +1,23 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDownloadTasks } from '../stores/useDownloadTasks'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useAppUpdateStore } from '../stores/useAppUpdateStore'
-import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer'
+import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import DownloadResultActions from './streaming-page/DownloadResultActions.vue'
 import { downloadStatusLabel } from './streaming-page/streamingDownloads'
 import type { LoudnessBatchStatus } from '../../../shared/libraryLoudness'
 
 const api = window.api
-const emit = defineEmits<{ library: [] }>()
+const props = withDefaults(
+  defineProps<{ active: boolean; filter?: 'all' | 'active' | 'attention' }>(),
+  { filter: 'all' }
+)
+const emit = defineEmits<{ library: []; visibleCount: [count: number] }>()
+const notices = useAppNoticeStore()
 function openLibrary() {
-  open.value = false
   emit('library')
 }
-const open = ref(false)
-const root = ref<HTMLElement | null>(null)
-useFocusTrap(root, () => open.value)
-useEscapeToClose(
-  () => open.value,
-  () => {
-    open.value = false
-  }
-)
 const downloads = useDownloadTasks()
 const music = useMusicStore()
 const update = useAppUpdateStore()
@@ -31,7 +26,6 @@ const enrichment = music.libraryMetadataEnrichmentStatus
 const loudness = ref<LoudnessBatchStatus | null>(null)
 const actionError = ref('')
 const pending = ref(new Set<string>())
-const filter = ref<'all' | 'active' | 'failed'>('all')
 const activeStates = [
   'queued',
   'preparing',
@@ -134,12 +128,68 @@ const activeCount = computed(
     jobs.value.filter((j) => activeStates.includes(j.state)).length +
     downloads.tasks.value.filter((t) => activeStates.includes(t.status)).length
 )
-const visibleJobs = computed(() => jobs.value.filter((j) => matches(j.state)))
-const visibleDownloads = computed(() => downloads.tasks.value.filter((t) => matches(t.status)))
+const terminal = (state: string) => ['completed', 'failed', 'cancelled', 'error'].includes(state)
+const visibleJobs = computed(() =>
+  jobs.value.filter(
+    (j) =>
+      matches(j.state) &&
+      (j.id === 'update' ||
+        !terminal(j.state) ||
+        !notices.noticeHistory.value.some((n) => n.dedupeKey === 'task-result:' + j.id))
+  )
+)
+const visibleDownloads = computed(() =>
+  downloads.tasks.value.filter(
+    (t) =>
+      matches(t.status) &&
+      (!terminal(t.status) || !notices.noticeHistory.value.some((n) => n.downloadTaskId === t.id))
+  )
+)
+watch(
+  activeCount,
+  (count) => {
+    notices.activeTaskCount.value = count
+  },
+  { immediate: true }
+)
+watch(
+  () => visibleJobs.value.length + visibleDownloads.value.length,
+  (count) => emit('visibleCount', count),
+  { immediate: true }
+)
+watch(jobs, (current, previous) => {
+  for (const job of current) {
+    if (job.id === 'update') continue
+    const key = 'task-result:' + job.id
+    if (!terminal(job.state)) {
+      const old = notices.noticeHistory.value.find((n) => n.dedupeKey === key)
+      if (old) old.action = undefined
+      continue
+    }
+    const before = previous.find((item) => item.id === job.id)
+    if (!before || before.state === job.state) continue
+    notices.pushNotice({
+      kind: ['failed', 'error'].includes(job.state)
+        ? 'error'
+        : job.state === 'completed'
+          ? 'success'
+          : 'info',
+      message: job.title + '：' + (labels[job.state] || job.state) + ' · ' + job.detail,
+      dedupeKey: key,
+      fresh: true,
+      presentation: 'center',
+      action: job.retry
+        ? { label: '重试', run: job.retry }
+        : { label: '查看曲库', run: openLibrary }
+    })
+  }
+})
 function matches(state: string) {
   return (
-    filter.value === 'all' ||
-    (filter.value === 'active' ? activeStates.includes(state) : ['failed', 'error'].includes(state))
+    props.filter === 'all' ||
+    (props.filter === 'active'
+      ? activeStates.includes(state)
+      : ['failed', 'error', 'ready'].includes(state))
   )
 }
 async function run(id: string, action: () => Promise<unknown>) {
@@ -150,269 +200,190 @@ async function run(id: string, action: () => Promise<unknown>) {
     await action()
   } catch (e) {
     actionError.value = e instanceof Error ? e.message : '操作失败，请重试'
+    notices.pushNotice({
+      kind: 'error',
+      message: actionError.value,
+      presentation: 'center',
+      dedupeKey: 'task-action:' + id
+    })
   } finally {
     pending.value.delete(id)
   }
 }
+let disposed = false
 const stops: (() => void)[] = []
 onMounted(() => {
   stops.push(downloads.connect(), update.connect())
   const apply = (s: LoudnessBatchStatus) => {
-    if (!loudness.value || s.revision >= loudness.value.revision) loudness.value = s
+    if (!disposed && (!loudness.value || s.revision >= loudness.value.revision)) loudness.value = s
   }
   stops.push(window.api.loudnessAnalysis.onBatchProgress((e) => apply(e.status)))
   void window.api.loudnessAnalysis
     .getBatch()
     .then((s) => apply(s.status))
     .catch(() => {
-      actionError.value = '响度任务读取失败'
+      if (!disposed) actionError.value = '响度任务读取失败'
     })
 })
-onUnmounted(() => stops.forEach((stop) => stop()))
+onUnmounted(() => {
+  disposed = true
+  stops.forEach((stop) => stop())
+  notices.activeTaskCount.value = 0
+})
 </script>
 
 <template>
-  <button
-    type="button"
-    class="task-entry"
-    :aria-expanded="open"
-    aria-controls="task-center"
-    :aria-label="`后台任务（${activeCount} 项进行中）`"
-    title="后台任务"
-    @click="open = true"
-  >
-    <svg
-      viewBox="0 0 24 24"
-      width="18"
-      height="18"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.7"
-      aria-hidden="true"
+  <section v-if="active" class="notice-tasks" aria-label="后台任务">
+    <h3 v-if="visibleJobs.length || visibleDownloads.length" class="task-group-title">后台任务</h3>
+    <p
+      v-if="
+        actionError || downloads.error.value || update.error.value || update.connectionError.value
+      "
+      class="task-error"
+      role="alert"
     >
-      <path d="m3 6 2 2 3-4M11 6h10M3 13h5m3 0h10M3 20h5m3 0h10" /></svg
-    ><span v-if="activeCount">{{ activeCount }}</span>
-  </button>
-  <Teleport to="body">
-    <div v-if="open" class="task-overlay" @click.self="open = false">
-      <section
-        id="task-center"
-        ref="root"
-        class="task-center"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="task-center-title"
-        tabindex="-1"
-      >
-        <header>
-          <h2 id="task-center-title">后台任务</h2>
-          <button type="button" aria-label="关闭后台任务" @click="open = false">关闭</button>
-        </header>
-        <p>切换页面后仍可查看进度。扫描、信息补全和分析显示最近一次任务。</p>
-        <label
-          >显示
-          <select v-model="filter">
-            <option value="all">全部</option>
-            <option value="active">进行中</option>
-            <option value="failed">失败</option>
-          </select></label
+      {{
+        actionError || downloads.error.value || update.error.value || update.connectionError.value
+      }}
+    </p>
+    <button v-if="downloads.error.value" type="button" @click="downloads.refresh">重新读取</button>
+    <article class="task-record" v-for="job in visibleJobs" :key="job.id">
+      <div class="task-meta">
+        <strong>{{ job.title }}</strong
+        ><span>{{ labels[job.state] || job.state }}</span>
+      </div>
+      <p>{{ job.detail }}</p>
+      <progress
+        v-if="activeStates.includes(job.state)"
+        :value="job.value"
+        max="1"
+        :aria-label="job.title"
+      ></progress>
+      <div class="task-actions">
+        <button v-if="job.id !== 'update'" type="button" @click="openLibrary">查看曲库</button>
+        <button v-if="job.pause" :disabled="pending.has(job.id)" @click="run(job.id, job.pause)">
+          暂停</button
+        ><button v-if="job.resume" :disabled="pending.has(job.id)" @click="run(job.id, job.resume)">
+          继续</button
+        ><button v-if="job.cancel" :disabled="pending.has(job.id)" @click="run(job.id, job.cancel)">
+          取消</button
+        ><button v-if="job.retry" :disabled="pending.has(job.id)" @click="run(job.id, job.retry)">
+          重试</button
+        ><button
+          v-if="job.id === 'update' && job.state === 'ready'"
+          :disabled="pending.has(job.id)"
+          @click="run(job.id, update.install)"
         >
-        <p
-          v-if="
-            actionError ||
-            downloads.error.value ||
-            update.error.value ||
-            update.connectionError.value
-          "
-          role="alert"
-        >
-          {{
-            actionError ||
-            downloads.error.value ||
-            update.error.value ||
-            update.connectionError.value
-          }}
-        </p>
-        <button v-if="downloads.error.value" type="button" @click="downloads.refresh">
-          重新读取
+          安装更新
         </button>
-        <p v-if="!visibleJobs.length && !visibleDownloads.length" class="empty">
-          暂无符合条件的任务
-        </p>
-        <article v-for="job in visibleJobs" :key="job.id">
-          <strong>{{ job.title }}</strong
-          ><span>{{ labels[job.state] || job.state }}</span>
-          <p>{{ job.detail }}</p>
-          <progress
-            v-if="activeStates.includes(job.state)"
-            :value="job.value"
-            max="1"
-            :aria-label="job.title"
-          ></progress>
-          <div class="actions">
-            <button v-if="job.id !== 'update'" type="button" @click="openLibrary">查看曲库</button>
-            <button
-              v-if="job.pause"
-              :disabled="pending.has(job.id)"
-              @click="run(job.id, job.pause)"
-            >
-              暂停</button
-            ><button
-              v-if="job.resume"
-              :disabled="pending.has(job.id)"
-              @click="run(job.id, job.resume)"
-            >
-              继续</button
-            ><button
-              v-if="job.cancel"
-              :disabled="pending.has(job.id)"
-              @click="run(job.id, job.cancel)"
-            >
-              取消</button
-            ><button
-              v-if="job.retry"
-              :disabled="pending.has(job.id)"
-              @click="run(job.id, job.retry)"
-            >
-              重试</button
-            ><button
-              v-if="job.id === 'update' && job.state === 'ready'"
-              :disabled="pending.has(job.id)"
-              @click="run(job.id, update.install)"
-            >
-              安装更新
-            </button>
-          </div>
-        </article>
-        <article v-for="task in visibleDownloads" :key="task.id">
-          <strong>{{ task.track.title }}</strong
-          ><span>{{ downloadStatusLabel(task) }}</span>
-          <p>{{ task.track.artist }}</p>
-          <progress
-            v-if="activeStates.includes(task.status)"
-            :value="task.progress"
-            max="1"
-            aria-label="下载进度"
-          ></progress>
-          <p v-if="task.error || task.warning">{{ task.error || task.warning }}</p>
-          <DownloadResultActions v-if="task.status === 'completed'" :task="task" />
-          <div class="actions">
-            <button
-              v-if="activeStates.includes(task.status)"
-              :disabled="pending.has(task.id)"
-              @click="run(task.id, () => api.providerDownloads.cancel(task.id))"
-            >
-              取消</button
-            ><button
-              v-if="['failed', 'cancelled'].includes(task.status)"
-              :disabled="pending.has(task.id)"
-              @click="run(task.id, () => api.providerDownloads.retry(task.id))"
-            >
-              重新下载
-            </button>
-          </div>
-        </article>
-      </section>
-    </div>
-  </Teleport>
+      </div>
+    </article>
+    <article class="task-record" v-for="task in visibleDownloads" :key="task.id">
+      <div class="task-meta">
+        <strong>{{ task.track.title }}</strong
+        ><span>{{ downloadStatusLabel(task) }}</span>
+      </div>
+      <p>{{ task.track.artist }}</p>
+      <progress
+        v-if="activeStates.includes(task.status)"
+        :value="task.progress"
+        max="1"
+        aria-label="下载进度"
+      ></progress>
+      <p v-if="task.error || task.warning">{{ task.error || task.warning }}</p>
+      <DownloadResultActions v-if="task.status === 'completed'" :task="task" />
+      <div class="task-actions">
+        <button
+          v-if="activeStates.includes(task.status)"
+          :disabled="pending.has(task.id)"
+          @click="run(task.id, () => api.providerDownloads.cancel(task.id))"
+        >
+          取消</button
+        ><button
+          v-if="['failed', 'cancelled'].includes(task.status)"
+          :disabled="pending.has(task.id)"
+          @click="run(task.id, () => api.providerDownloads.retry(task.id))"
+        >
+          重新下载
+        </button>
+      </div>
+    </article>
+  </section>
 </template>
-
 <style scoped>
-.task-entry {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 10px;
-  cursor: pointer;
+.notice-tasks {
+  padding: 0 20px;
+  min-width: 0;
 }
-.task-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1600;
-  background: var(--te-dialog-backdrop);
-  display: grid;
-  place-items: center;
-  padding: 24px;
+.task-group-title {
+  margin: 16px 0 0;
+  color: var(--te-settings-text-muted, var(--te-text-secondary));
+  font-size: 11px;
+  font-weight: 500;
 }
-.task-center {
-  width: min(680px, 100%);
-  max-height: 85dvh;
-  overflow: auto;
-  padding: 24px;
-  border-radius: 16px;
-  background: var(--te-app-bg);
-  color: var(--te-settings-text);
-  box-shadow: var(--te-glass-shadow);
-}
-header,
-.actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-header h2 {
-  margin: 0;
-  font-size: 20px;
-}
-article {
-  padding: 16px 0;
-  border-bottom: 1px solid var(--te-card-border);
+.task-record {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--notice-border);
   overflow-wrap: anywhere;
 }
-article > span {
-  margin-left: 12px;
-  font-size: 12px;
+.task-meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.task-meta strong {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.task-meta span {
+  font-size: 11px;
+  color: var(--te-settings-text-muted, var(--te-text-secondary));
 }
 p {
-  font-size: 13px;
-  opacity: 0.8;
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--te-settings-text-muted, var(--te-text-secondary));
+}
+.task-error {
+  color: var(--te-danger-soft-fg);
 }
 progress {
   width: 100%;
+  height: 5px;
+  margin: 4px 0 6px;
   accent-color: var(--te-primary-500);
 }
-button,
-select {
-  font: inherit;
-  cursor: pointer;
-}
-.actions {
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 6px;
   margin-top: 8px;
 }
-.empty {
-  padding: 32px;
-  text-align: center;
+button {
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--te-primary-500) 10%, transparent);
+  color: var(--te-text, var(--te-settings-text));
+  min-height: 28px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
-button,
-select {
-  border: 1px solid var(--te-card-border);
-  border-radius: 8px;
-  background: var(--te-card-bg);
-  color: var(--te-settings-text);
-  padding: 7px 12px;
-}
-button:hover {
-  background: var(--te-hover-bg);
+button:hover:enabled {
+  background: color-mix(in srgb, var(--te-primary-500) 18%, transparent);
 }
 button:disabled {
   opacity: 0.5;
   cursor: default;
 }
-button:focus-visible,
-select:focus-visible,
-input:focus-visible {
+button:focus-visible {
   outline: 2px solid var(--te-primary-500);
   outline-offset: 2px;
-}
-.task-entry {
-  background: transparent;
-  border: 0;
-  min-height: 32px;
-  padding: 10px;
 }
 </style>

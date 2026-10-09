@@ -123,6 +123,7 @@ function stubScript(): string {
     `
     const chooseAndInstallCalls = []
     const toggleCalls = []
+    const pluginActions = []
     const patches = []
     const settings = Vue.ref({
       developerMode: false,
@@ -153,7 +154,12 @@ function stubScript(): string {
       settings.value = Object.assign({}, settings.value, patch)
       return settings.value
     }
-    window.__store = { settings, updateSettings, patches, toggleCalls, chooseAndInstallCalls }
+    window.__store = { settings, updateSettings, patches, toggleCalls, chooseAndInstallCalls, pluginActions }
+    window.__failedPlugin = {
+      id: 'com.example.failed-tool', name: '失败的后台工具', version: '1.0.0',
+      type: ['tool'], author: 'Fixture', description: '', builtIn: true,
+      enabled: false, requestedEnabled: true, status: 'failed', error: 'activation failed'
+    }
     window.__useSettingsStore = () => ({ settings, updateSettings })
     window.__stubComponent = { name: 'FixtureStub', template: '<span class="fixture-stub"></span>' }
     // i18n 替身：t() 回显 key，语言选择器因此能渲染且断言仍只看结构。
@@ -197,13 +203,19 @@ function stubApiScript(): string {
     }
     window.api = {
       plugins: {
-        list: async () => [],
+        list: async () => [{ ...window.__failedPlugin }],
         listIndex: async () => [],
         refreshIndex: async () => [],
         getIndexStatus: async () => null,
         installFromIndex: async () => null,
-        enable: async () => ({}),
-        disable: async () => ({}),
+        enable: async () => { pluginActions.push('enable'); return {} },
+        disable: async () => {
+          pluginActions.push('disable')
+          window.__failedPlugin.requestedEnabled = false
+          window.__failedPlugin.status = 'disabled'
+          window.__failedPlugin.error = null
+          return { ...window.__failedPlugin }
+        },
         uninstall: async () => {},
         openLog: async () => {},
         getLog: async () => '',
@@ -328,6 +340,18 @@ function checksRunnerScript(): string {
       if (folderButton()) fail('关闭开发者模式后目录安装入口未隐藏')
       if (settingsSwitch.getAttribute('aria-checked') !== 'false') fail('设置页开关未跟随插件页')
       checks.push('plugin-page-writes-back')
+
+      const failedSwitch = document.querySelector('#plugin-page .plugin-card [role="switch"]')
+      if (!failedSwitch || failedSwitch.getAttribute('aria-checked') !== 'true')
+        fail('失败插件的开关必须保留启用意愿')
+      if (!failedSwitch.textContent.includes('启动失败')) fail('失败插件没有显示失败状态')
+      failedSwitch.click()
+      await tick()
+      if (JSON.stringify(store.pluginActions) !== JSON.stringify(['disable']))
+        fail('点击失败插件开关必须停用，不能再次尝试启用')
+      if (failedSwitch.getAttribute('aria-checked') !== 'false' || !failedSwitch.textContent.includes('已停用'))
+        fail('失败插件停用后未刷新开关状态')
+      checks.push('failed-plugin-can-disable-retry')
       return checks.join(',')
     }
   `

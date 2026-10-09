@@ -70,6 +70,7 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
   }
 
   function writeSelectedTrackSession(): void {
+    if (playbackSessionWriter.requestAutosave()) return
     const mode = options.getAppSettings().value.playbackResumeMode
     if (mode === 'off') return
 
@@ -90,6 +91,8 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
 
   function persistSelectedTrackSession(): void {
     cancelPersistSessionDebounce()
+    // Once App persistence is running, both producers use its single timer.
+    if (playbackSessionWriter.requestAutosave()) return
     persistSessionDebounceTimer = setTimeout(() => {
       persistSessionDebounceTimer = null
       writeSelectedTrackSession()

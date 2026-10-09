@@ -445,6 +445,19 @@ export function createPlaybackDiagnosticEvent(input: {
       volume: playback.volume,
       playbackRate: playback.playbackRate ?? 1
     },
+    autoMix: playback.autoMix
+      ? {
+          configuredEnabled: input.processing.autoMix?.enabled === true,
+          enabled: playback.autoMix.enabled,
+          state: playback.autoMix.state,
+          transitionSeconds: playback.autoMix.transitionSeconds,
+          styleId: playback.autoMix.styleId,
+          reason: playback.autoMix.reason,
+          configRevision: playback.autoMix.configRevision,
+          pairRevision: playback.autoMix.pairRevision,
+          featuresDelivered: playback.autoMix.featuresDelivered
+        }
+      : null,
     processing: {
       directMode: input.processing.directMode,
       effectiveGraph: input.sceneState.effectiveGraph ?? input.sceneState.graph,

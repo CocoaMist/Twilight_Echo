@@ -8,9 +8,48 @@ import {
   getPlaybackQueueScrollTopForIndex,
   getPlaybackQueueWindow,
   toPlaybackQueueSnapshot,
-  toPlaybackQueueSnapshots
+  toPlaybackQueueSnapshots,
+  createPlaybackQueueSnapshotCache,
+  patchPlaybackQueueTrack
 } from './playbackQueueVirtualization.ts'
 import { usePlaybackQueueVirtualScroll } from '../components/player-bar/usePlaybackQueueVirtualScroll.ts'
+
+test('queue patches preserve versions for transient/equivalent metadata and update all duplicate entries when meaningful fields change', () => {
+  const selected: Track = {
+    ...track(1),
+    artists: [{ id: 1, name: 'Artist' }],
+    cueRange: { startSeconds: 1, endSeconds: 181, pregapSeconds: 0 }
+  }
+  const queue = toPlaybackQueueSnapshots([selected, track(2), selected])
+  const equivalent = {
+    ...selected,
+    artists: selected.artists!.map((artist) => ({ ...artist })),
+    cueRange: { ...selected.cueRange! },
+    lyrics: 'new lyrics',
+    bpmAnalysis: {
+      bpm: 120,
+      confidence: 0.9,
+      source: 'analyzed' as const,
+      analyzedAt: 'today',
+      algorithmVersion: 1
+    }
+  }
+  assert.equal(patchPlaybackQueueTrack(queue, equivalent), queue)
+  const changed = patchPlaybackQueueTrack(queue, {
+    ...equivalent,
+    title: 'Renamed',
+    cueRange: { ...equivalent.cueRange, endSeconds: 170 }
+  })
+  assert.notEqual(changed, queue)
+  assert.equal(changed[1], queue[1])
+  for (const index of [0, 2]) {
+    assert.equal(changed[index].queueEntryId, queue[index].queueEntryId)
+    assert.equal(changed[index].title, 'Renamed')
+    assert.equal(changed[index].cueRange?.endSeconds, 170)
+    assert.equal(changed[index].bpmAnalysis, undefined)
+    assert.equal(changed[index].lyrics, null)
+  }
+})
 
 function track(index: number, lyrics = 'long lyric payload'): Track {
   return {
@@ -120,8 +159,28 @@ test('player queue state uses shallow snapshots and revision-fenced native synch
 
   assert.match(source, /const queue = shallowRef<Track\[\]>\(\[\]\)/)
   assert.match(source, /const originalQueue = shallowRef<Track\[\]>\(\[\]\)/)
-  assert.match(selectionSource, /toPlaybackQueueSnapshots\(trackList\)/)
+  assert.match(selectionSource, /queueSnapshots\(trackList\)/)
   assert.match(source, /const nativeQueueRevisionFence = new NativeQueueRevisionFence\(\)/)
   assert.match(source, /const snapshot = captureNativeQueueState\(revision\)/)
   assert.match(source, /if \(!nativeQueueRevisionFence\.isCurrent\(snapshot\.revision\)\) return/)
+})
+
+test('snapshot cache invalidates mutable metadata, routing, ordering and duplicate identities', () => {
+  const cached = createPlaybackQueueSnapshotCache()
+  const tracks = [track(1), track(1), track(2)]
+  const first = cached(tracks)
+  assert.equal(cached([...tracks]), first)
+  tracks[0].lyrics = 'new heavy payload'
+  assert.equal(cached(tracks), first)
+  tracks[0].title = 'edited'
+  const edited = cached(tracks)
+  assert.notEqual(edited, first)
+  assert.equal(edited[0].title, 'edited')
+  tracks[0].filePath = 'another.flac'
+  assert.notEqual(cached(tracks), edited)
+  const reversed = cached([...tracks].reverse())
+  assert.equal(reversed[0].id, 'local:2')
+  tracks[0].queueEntryId = 'custom'
+  assert.equal(cached(tracks)[0].queueEntryId, 'custom')
+  assert.equal(cached(tracks.slice(1)).length, 2)
 })

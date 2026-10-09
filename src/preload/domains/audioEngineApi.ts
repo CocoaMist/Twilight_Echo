@@ -174,8 +174,14 @@ export const audioEngineApi = {
       ipcRenderer.on(IPC.audioEngine.deviceProfilesChanged, listener)
       return () => ipcRenderer.removeListener(IPC.audioEngine.deviceProfilesChanged, listener)
     },
-    loadQueue: (items: AudioEngineQueueItem[], startIndex?: number): Promise<void> =>
+    loadQueue: (
+      items: AudioEngineQueueItem[],
+      startIndex?: number
+    ): Promise<import('../../shared/nativeQueue.ts').NativeQueueCommit> =>
       ipcRenderer.invoke(IPC.audioEngine.loadQueue, items, startIndex),
+    selectQueueItem: (
+      selection: import('../../shared/nativeQueue.ts').NativeQueueSelection
+    ): Promise<boolean> => ipcRenderer.invoke(IPC.audioEngine.selectQueueItem, selection),
     play: (filePath: string, startTime?: number): Promise<AudioEnginePlayResult> =>
       ipcRenderer.invoke(IPC.audioEngine.play, filePath, startTime),
     isHtmlAudioFallbackAllowed: (): Promise<boolean> =>

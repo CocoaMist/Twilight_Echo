@@ -2,6 +2,9 @@ import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { normalizeCueRange } from '../shared/cue.ts'
+import { stripTypeScriptTypes } from 'node:module'
+import { runInNewContext } from 'node:vm'
+import { resolveAuthorizationBatch } from './security/authorizationBatch.ts'
 
 function readPreloadSources(): string {
   const root = new URL('../preload/', import.meta.url)
@@ -64,7 +67,8 @@ test('audioEngine IPC normalizes untrusted renderer parameters', () => {
     /normalizeIpcArray\(items, 'audio queue', MAX_AUDIO_QUEUE_ITEMS, toQueueItem\)/
   )
   assert.match(source, /queue\.length !== items\.length/)
-  assert.match(source, /source: await resolveAuthorizedPlaybackSource\(item\.source\)/)
+  assert.match(source, /await resolveAuthorizationBatch\(/)
+  assert.match(source, /source: sources\.get\(item\.source\)!/)
   assert.match(source, /normalizeIpcString\(source, 'audio source'/)
   assert.match(source, /await resolveAuthorizedPlaybackSource\(/)
   assert.match(source, /normalizeFiniteNumber\(time, 'seek time', 0, 0, Number\.MAX_SAFE_INTEGER\)/)
@@ -84,6 +88,64 @@ test('audioEngine IPC normalizes untrusted renderer parameters', () => {
   })
   assert.equal(normalizeCueRange({ startSeconds: 20, endSeconds: 10 }), null)
   assert.equal(normalizeCueRange({ startSeconds: 0, endSeconds: 10, pregapSeconds: -1 }), null)
+})
+
+test('loadQueue authorizes duplicate sources once, retains CUE entries, and awaits native completion', async () => {
+  const start = source.indexOf('ipcMain.handle(IPC.audioEngine.loadQueue')
+  const declaration = source.slice(start, source.indexOf('\n  ipcMain.handle(', start + 1))
+  let handler!: (event: unknown, items: unknown[], index: number) => Promise<void>
+  let finish!: () => void
+  const nativeCompletion = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  let resolutions = 0
+  let received: { id: string; source: string; cueRange: unknown }[] = []
+  const diagnostics: string[] = []
+  runInNewContext(stripTypeScriptTypes(declaration), {
+    IPC: { audioEngine: { loadQueue: 'queue' } },
+    ipcMain: {
+      handle: (_channel: string, callback: typeof handler) => {
+        handler = callback
+      }
+    },
+    assertTrustedIpcSender: () => {},
+    MAX_AUDIO_QUEUE_ITEMS: 5000,
+    normalizeIpcArray: (items: unknown[]) => items,
+    toQueueItem: () => {},
+    normalizeInteger: (index: number) => index,
+    resolveAuthorizationBatch,
+    resolveAuthorizedPlaybackSource: async () => {
+      resolutions++
+      return 'canonical.flac'
+    },
+    ensureAudioEngineRuntime: async () => ({
+      loadQueue: (items: typeof received) => {
+        received = items
+        return nativeCompletion
+      }
+    }),
+    audioDiagnosticRecorder: { record: (kind: string) => diagnostics.push(kind) }
+  })
+  const items = Array.from({ length: 5000 }, (_, index) => ({
+    id: String(index),
+    source: 'same.flac',
+    cueRange: { startSeconds: index }
+  }))
+  let completed = false
+  const pending = handler({}, items, 17).then(() => {
+    completed = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(resolutions, 1)
+  assert.equal(received.length, 5000)
+  assert.equal(received[17].source, 'canonical.flac')
+  assert.equal(received[17].id, '17')
+  assert.equal(received[17].cueRange, items[17].cueRange)
+  assert.equal(completed, false)
+  assert.deepEqual(diagnostics, [])
+  finish()
+  await pending
+  assert.deepEqual(diagnostics, ['queue-loaded'])
 })
 
 test('the native queue ceiling is one shared constant on both sides of the IPC', () => {
@@ -109,6 +171,51 @@ test('the native queue ceiling is one shared constant on both sides of the IPC',
     preparationSource,
     /if \(options\.queue\.length > MAX_NATIVE_QUEUE_ITEMS\) return asCurrentOnly\(currentItem\)/
   )
+})
+
+test('queue cursor IPC freshly authorizes its source before forwarding the main-owned token', async () => {
+  const start = source.indexOf('ipcMain.handle(IPC.audioEngine.selectQueueItem')
+  const declaration = source.slice(start, source.indexOf('\n  ipcMain.handle(', start + 1))
+  let handler!: (event: unknown, selection: unknown) => Promise<boolean>
+  let denied = false
+  const calls: string[] = []
+  const selections: unknown[] = []
+  runInNewContext(stripTypeScriptTypes(declaration), {
+    IPC: { audioEngine: { selectQueueItem: 'select' } },
+    ipcMain: {
+      handle: (_channel: string, callback: typeof handler) => {
+        handler = callback
+      }
+    },
+    assertTrustedIpcSender: () => calls.push('trusted'),
+    MAX_AUDIO_QUEUE_ITEMS: 5000,
+    MAX_AUDIO_SOURCE_LENGTH: 8192,
+    normalizeIpcString: (value: string) => value,
+    normalizeInteger: (value: number) => value,
+    resolveAuthorizedPlaybackSource: async () => {
+      calls.push('authorize')
+      if (denied) throw new Error('denied')
+      return 'canonical.flac'
+    },
+    ensureAudioEngineRuntime: async () => ({
+      selectQueueItem: async (selection: unknown) => {
+        calls.push('select')
+        selections.push(selection)
+        return false // A stale token stays rejected by main.
+      }
+    })
+  })
+  const selection = { queueToken: 'stale', index: 3, id: 'cue:3', source: 'alias.flac' }
+  assert.equal(await handler({}, selection), false)
+  assert.deepEqual(calls, ['trusted', 'authorize', 'select'])
+  assert.equal(
+    JSON.stringify(selections[0]),
+    JSON.stringify({ ...selection, source: 'canonical.flac' })
+  )
+  denied = true
+  await assert.rejects(handler({}, selection), /denied/)
+  assert.equal(selections.length, 1)
+  await assert.rejects(handler({}, []), /Invalid queue selection/)
 })
 
 test('loadQueue outcomes reach the audio diagnostics log', () => {

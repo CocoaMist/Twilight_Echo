@@ -5,6 +5,15 @@ export interface ListeningStatsPersistenceStatus {
   dirty: boolean
   failureCount: number
   lastError: string | null
+  lastFlush?: ListeningStatsFlushMeasurement
+}
+
+export interface ListeningStatsFlushMeasurement {
+  preparationMs: number
+  serializationMs: number
+  storageWriteMs: number
+  totalMs: number
+  characters: number
 }
 
 export interface ListeningStatsStorage {
@@ -24,6 +33,7 @@ interface VisibilityDocumentLike extends EventTargetLike {
 export interface ListeningStatsPersistenceOptions<T> {
   key: string
   storage: ListeningStatsStorage
+  persistSnapshot?: (snapshot: T) => Promise<void>
   getSnapshot(): T
   beforePersist(): void
   onStatus(status: ListeningStatsPersistenceStatus): void
@@ -52,7 +62,10 @@ export class ListeningStatsPersistence<T> {
   private timer: TimerHandle | null = null
   private failureCount = 0
   private lastError: string | null = null
+  private lastFlush: ListeningStatsFlushMeasurement | undefined
   private lifecycleAttached = false
+  private generation = 0
+  private inFlight: Promise<boolean> | null = null
   private readonly setTimer: typeof globalThis.setTimeout
   private readonly clearTimer: typeof globalThis.clearTimeout
 
@@ -67,20 +80,46 @@ export class ListeningStatsPersistence<T> {
 
   markDirty(): void {
     this.dirty = true
+    this.generation++
     this.attachLifecycle()
-    this.schedule(this.options.flushDelayMs)
+    // A checkpoint is anchored to the first dirty event. Continuous five
+    // second playback ticks must not postpone it forever.
+    if (this.timer === null) this.schedule(this.options.flushDelayMs)
   }
 
-  flush(): boolean {
+  flush(): boolean | Promise<boolean> {
     this.clearScheduledFlush()
+    if (this.inFlight) {
+      return this.inFlight.then((success) => (success && this.dirty ? this.flush() : success))
+    }
     if (!this.dirty) {
       this.publish('idle')
       return true
     }
 
+    if (this.options.persistSnapshot) {
+      const generation = this.generation
+      this.inFlight = this.flushAsync(generation).finally(() => {
+        this.inFlight = null
+      })
+      return this.inFlight.then((success) => (success && this.dirty ? this.flush() : success))
+    }
+
     try {
+      const started = performance.now()
       this.options.beforePersist()
-      this.options.storage.setItem(this.options.key, JSON.stringify(this.options.getSnapshot()))
+      const prepared = performance.now()
+      const serialized = JSON.stringify(this.options.getSnapshot())
+      const encoded = performance.now()
+      this.options.storage.setItem(this.options.key, serialized)
+      const written = performance.now()
+      this.lastFlush = {
+        preparationMs: prepared - started,
+        serializationMs: encoded - prepared,
+        storageWriteMs: written - encoded,
+        totalMs: written - started,
+        characters: serialized.length
+      }
       this.dirty = false
       this.failureCount = 0
       this.lastError = null
@@ -98,11 +137,42 @@ export class ListeningStatsPersistence<T> {
     }
   }
 
+  private async flushAsync(generation: number): Promise<boolean> {
+    try {
+      const started = performance.now()
+      this.options.beforePersist()
+      const prepared = performance.now()
+      await this.options.persistSnapshot!(this.options.getSnapshot())
+      const written = performance.now()
+      this.lastFlush = {
+        preparationMs: prepared - started,
+        serializationMs: 0,
+        storageWriteMs: written - prepared,
+        totalMs: written - started,
+        characters: 0
+      }
+      this.dirty = this.generation !== generation
+      this.failureCount = 0
+      this.lastError = null
+      if (this.dirty && this.timer === null) this.schedule(this.options.flushDelayMs)
+      this.publish(this.dirty ? 'pending' : 'idle')
+      return true
+    } catch (error) {
+      this.dirty = true
+      this.failureCount++
+      this.lastError = describePersistenceError(error)
+      this.schedule(this.options.retryDelayMs, false)
+      this.publish('error')
+      return false
+    }
+  }
+
   resetForTest(): void {
     this.clearScheduledFlush()
     this.dirty = false
     this.failureCount = 0
     this.lastError = null
+    this.lastFlush = undefined
     this.publish('idle')
   }
 
@@ -155,7 +225,8 @@ export class ListeningStatsPersistence<T> {
       state,
       dirty: this.dirty,
       failureCount: this.failureCount,
-      lastError: this.lastError
+      lastError: this.lastError,
+      ...(this.lastFlush ? { lastFlush: this.lastFlush } : {})
     })
   }
 }

@@ -870,9 +870,12 @@ html[data-te-motion='off'] .network-create-form {
 .network-sources-page {
   box-sizing: border-box;
   width: 100%;
-  min-height: 100vh;
+  min-height: 0;
   padding: 52px clamp(24px, 5vw, 72px) 132px;
   color: var(--te-settings-text, #0f172a);
+  overflow-y: auto;
+  height: 100dvh;
+  container: network-sources/inline-size;
 }
 .network-page-heading,
 .network-sources-page > section,
@@ -1422,6 +1425,69 @@ html[data-te-motion='off'] .network-create-form {
   .network-browser-toolbar > button,
   .network-profile-actions > button {
     flex: 1;
+  }
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container network-sources (max-width: 760px) {
+  .network-page-heading {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .network-view-toggle {
+    grid-column: 1 / -1;
+    width: fit-content;
+  }
+  .network-browser-context,
+  .network-section-heading,
+  .network-directory-actions,
+  .network-profile-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .network-profile-card {
+    gap: 10px;
+  }
+  .network-profile-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .network-entry,
+  .network-entry-cover {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+  }
+  .network-entry-meta {
+    display: none;
+  }
+  .network-entry-actions {
+    grid-column: 2 / -1;
+    margin-bottom: 5px;
+  }
+}
+@container network-sources (max-width: 460px) {
+  .network-view-toggle {
+    width: 100%;
+  }
+  .network-view-toggle button {
+    flex: 1;
+  }
+  .network-surface {
+    padding: 16px;
+    border-radius: 16px;
+  }
+  .network-browser-toolbar,
+  .network-profile-actions {
+    width: 100%;
+  }
+  .network-browser-toolbar > button,
+  .network-profile-actions > button {
+    flex: 1;
+  }
+}
+
+@media (max-width: 900px) {
+  .network-sources-page {
+    padding-bottom: max(116px, calc(var(--te-playbar-bottom-clearance, 0px) + 16px));
   }
 }
 </style>

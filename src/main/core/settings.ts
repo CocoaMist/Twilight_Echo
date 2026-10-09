@@ -4,6 +4,7 @@ import {
   normalizeDownloadPreferences
 } from '../../shared/downloadPreferences.ts'
 import { app } from 'electron'
+import { normalizeAppBackgroundSettings } from '../../shared/appAppearance.ts'
 import {
   normalizeContinuityOutputConfig,
   normalizeOutputConfig as normalizeSharedOutputConfig
@@ -35,9 +36,7 @@ import {
 import type {
   AppBackgroundKind,
   AppBackgroundPage,
-  AppBackgroundPageOverride,
   AppBackgroundSettings,
-  AppBackgroundColorPair,
   AppSettings,
   AppTheme,
   AudioEqPreset,
@@ -91,7 +90,7 @@ import {
   DEFAULT_DESKTOP_LYRICS_SETTINGS,
   normalizeDesktopLyricsSettings
 } from '../../shared/desktopLyrics.ts'
-import { normalizeAppFontFamily } from '../../shared/appFont.ts'
+import { normalizeAppFontFamily, normalizeAppFontRendering } from '../../shared/appFont.ts'
 import {
   DEFAULT_LYRICS_PRESET_CONFIG,
   cloneLyricsPresetConfig,
@@ -174,6 +173,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lightAccentColor: 'blue',
   darkAccentColor: 'blue',
   fontFamily: 'system',
+  fontRendering: 'auto',
   uiDensity: 'standard',
   appBackground: {
     global: {
@@ -487,33 +487,7 @@ export const APP_BACKGROUND_PAGES: AppBackgroundPage[] = [
 ]
 
 export function normalizeAppBackground(raw: unknown): AppBackgroundSettings {
-  const value = (typeof raw === 'object' && raw !== null ? raw : {}) as {
-    global?: Partial<AppBackgroundColorPair>
-    pages?: Partial<Record<AppBackgroundPage, Partial<AppBackgroundPageOverride>>>
-  }
-  const defaultBackground = DEFAULT_SETTINGS.appBackground
-  const global = {
-    light: normalizeHexColor(value.global?.light, defaultBackground.global.light),
-    dark: normalizeHexColor(value.global?.dark, defaultBackground.global.dark),
-    kind: normalizeBackgroundKind(value.global?.kind),
-    image: normalizeBackgroundImageHandle(value.global?.image)
-  }
-  const pages = APP_BACKGROUND_PAGES.reduce(
-    (acc, page) => {
-      const defaults = defaultBackground.pages[page]
-      const override = value.pages?.[page]
-      acc[page] = {
-        inherit: override?.inherit !== false,
-        light: normalizeHexColor(override?.light, defaults.light),
-        dark: normalizeHexColor(override?.dark, defaults.dark),
-        kind: normalizeBackgroundKind(override?.kind),
-        image: normalizeBackgroundImageHandle(override?.image)
-      }
-      return acc
-    },
-    {} as Record<AppBackgroundPage, AppBackgroundPageOverride>
-  )
-  return { global, pages }
+  return normalizeAppBackgroundSettings(raw)
 }
 
 export const CARD_SHADOW_STRENGTHS: CardShadowStrength[] = ['none', 'subtle', 'medium', 'strong']
@@ -736,8 +710,12 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     lightAccentColor: normalizeLightAccentColor(settings.lightAccentColor),
     darkAccentColor: normalizeDarkAccentColor(settings.darkAccentColor, settings.accentColor),
     fontFamily: normalizeAppFontFamily(settings.fontFamily),
+    fontRendering: normalizeAppFontRendering(settings.fontRendering),
     uiDensity: normalizeUiDensity(settings.uiDensity),
-    appBackground: normalizeAppBackground(settings.appBackground),
+    appBackground: normalizeAppBackgroundSettings(
+      settings.appBackground,
+      settings.cardAppearance?.background
+    ),
     cardAppearance: normalizeCardAppearance(settings.cardAppearance),
     surfaceMaterial: normalizeSurfaceMaterial(settings.surfaceMaterial),
     liquidGlass: normalizeLiquidGlass(settings.liquidGlass),
