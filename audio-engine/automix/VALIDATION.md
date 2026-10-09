@@ -317,9 +317,183 @@ continued incoming progress, delayed outgoing snapshots and bounded guards.
 Application type checks, build and renderer budgets pass. Evidence and logs
 are in `D:\TwilightEchoDependencies\automix\player-bar-*.json` / `player-bar-*.log`.
 
+## Independent candidate expansion (2026-10-09)
+
+The former production generator admitted only filtered-direct style 8, required
+both sides to be non-vocal, and rejected a tail without sufficiently recent
+stable beats. Its single-interval tempo estimator also treated the model's
+20 ms event quantization as tempo/stability variation. These restrictions were
+in the independent generator; the recovered assembly scores were not changed.
+
+Analysis revision 4 uses sliding eight-interval spans, an explicit one-frame
+quantization tolerance and maximum phase residual. Missing/irregular events
+still split stable runs; merged tempo is recomputed over the complete observed
+span. Full-band energy is computed from the louder original PCM channel.
+The ONNX models, model input/output processing and their hashes are unchanged.
+Revision 3 cache entries cannot be reused as revision 4 features.
+
+The generator now also admits recovered soft-skip style 5 (reference dispatcher
+`0x227474a3c`, `automix-c/reference-python/candidate_paths.py` and
+`automix-c/src/am_scoring.c`). This score requires no native key/tempo/loudness
+signals. Its independently chosen source windows support at most two seconds
+of filter/gain overlap for confirmed boundary silence or quiet decay. These
+windows/thresholds are product policy, not recovered Apple region generation.
+Both styles require at least one side to have covered non-vocal classification.
+Only confirmed boundary silence is skipped; active decay remains included.
+No content boundary, incomplete energy or unknown vocal coverage forbids a skip.
+Native capabilities and status now consistently advertise the supported scope
+as confirmed boundary silence; key/phrase capability stays unavailable.
+
+`music-probe-v4-final/manifest.json` records the same 48 source files used by
+`music-probe-v2/manifest.json`, all available for analysis, with 2,256 directed
+non-self pairs. The former policy selected one intelligent pair. Revision 4
+selects 2,162: 2,159 style 5 and three style 8; 94 retain conservative fading
+(88 tempo mismatch and six insufficient tail beat coverage). Of the style 5
+pairs, 2,128 use confirmed silence boundaries and 31 use quiet decay.
+The 95.83% candidate coverage is not a listening-quality success rate. Files
+were the first 48 in the probe's sorted library list, not a random or genre-
+balanced evaluation set. Pair fixtures are capped at 16; the manifest retains
+every selected pair's feature paths and source boundaries for reproduction.
+
+The complete MinGW native CTest run passes 74 cases, with the ASIO ABI cross-DLL
+case skipped. It includes all 24 templates, six PCM rates, model/frontend
+parity registrations, callback performance, resources and differential scoring.
+After the final capability change, engine smoke, runtime queue, callback
+performance, assembly differential and candidate tests were rebuilt and passed
+again. New regressions cover quantized 140 BPM, faulty events, two vocal parts,
+unknown features, whole-window silence, quiet decay versus flat quiet content,
+disable-skip boundaries, duplicate candidates and early queue promotion.
+The promotion test verifies a 20-second source with tail/head silence hands off
+at 18.1 seconds, continues the incoming source around 2.9 seconds, and emits
+one track-start event. A native `AnalyzeAutoMix` synthetic stereo WAV check
+confirms opposite-phase active channels remain approximately -20 dBFS, while
+actual silence is -120 dBFS. Audio management passes 445 tests, focused
+settings/cache/coordinator checks pass 11, and application typecheck, build and
+renderer budgets pass.
+
+Application playback probes use the real store, PlayerBar DOM, main/preload
+and utility process on the user's WASAPI headphones, with rounded display
+durations and validated revision 4 cache entries:
+
+- `candidate-expansion-app-trim.json`: style 5 on Cytus2 Title Mix / Horizon
+  Blue; planned outgoing end 244.574285714 seconds, last observed outgoing
+  position 244.554 seconds, incoming silence start 1.38 seconds plus two
+  seconds of overlap. First incoming observation is 3.56973 seconds; the bar
+  follows that source and continues for another two seconds. One queue switch.
+- `candidate-expansion-app-staged-beat.json`: the actual staged project runtime
+  selects style 8 on Aqu3ra / Horizon Blue with 5.96 seconds of overlap,
+  outgoing end 212.4 seconds and incoming start 1.38 seconds. First incoming
+  observation is 7.51 seconds, and the bar advances to 9.5133 seconds. One
+  queue switch. Polling checks tolerate 0.6 seconds and do not prove sample-
+  exact hardware timing.
+- `candidate-expansion-staged-controls.json`: before the first Play, the
+  settings enable/disable native AutoMix and acknowledge the enabled silence-
+  skipping checkbox. Controls wait for each pending configuration to finish.
+- `candidate-expansion-cached-planning.json`: 1,000 cached native generation,
+  selection and compilation iterations on a measured style 8 pair have p99
+  8.763 ms. Host cache I/O and audio preparation are excluded.
+
+All playback probes are muted (`volume=0`): they prove execution and progress
+handoff, not subjective naturalness, full-song listening or long-run playback.
+Real ASIO remains untested as requested. The release gate is still false.
+Evidence and build/test logs are under `D:\TwilightEchoDependencies\automix`.
+
+The updated DLL is staged in `resources/audio-engine`, SHA-256
+`d7f5aa5ff0b984785269c60ec9feddab4cc857a3eaedb55c167da43e04f702f3`.
+The unchanged addon and model files retain their hashes. Old DLL, capability
+manifests and analysis lock are preserved in
+`D:\TwilightEchoDependencies\automix\backup-before-candidate-expansion-20261009-233725`.
+Same-volume file renames preserve the existing player's mapped old DLL;
+no user process was terminated or loaded image overwritten. Restart the player
+to load the new DLL and built host. Destination manifests were regenerated
+against the complete project runtime, including its existing VST3/SMTC modules,
+and verified against actual files. `candidate-expansion-staging.json` records
+final checksums and the backup. To revert, fully close the player, restore the
+backed-up DLL/manifests/lock and rebuild the host from the matching analysis
+revision; preserve the revision 4 feature cache because it is isolated by version.
+
+## 2026-10-10 musical mixing, candidate policy 4
+
+The earlier 95.8% non-fallback candidate figure mostly represented style-5
+boundary cleanup. It is not evidence of musical mixing or natural listening.
+This iteration separates musical overlap from cleanup in selection, status,
+diagnostics and the settings page. Analysis revision 4 and model hashes remain
+unchanged; existing revision-4 feature caches remain usable.
+
+Natural beat candidates retain recovered style-8 scoring but render the existing
+catalogue's template 7, with complete equal-power envelopes and reciprocal
+pitch-preserving rate ramps. This is an independent product assignment, not a
+recovered Apple style router. The original filtered template 8 yielded only
+0.44 seconds of measured dual-track contribution on one 10.4-second real-file
+plan, whereas template 7 yielded 7.42 seconds on that pair. Source rate and
+reciprocal rate are both bounded to 0.92–1.08. Half/double aliases interpret
+events; they do not double playback speed. No active musical boundary is cut.
+
+Unaligned musical candidates use recovered style-1 envelopes for 4/6/8-second
+windows. Independent eligibility requires complete energy coverage, non-vocal
+coverage on at least one side, and at least two seconds of estimated dual-track
+energy. Prepared contributions, after stretch, effects, gain and envelopes,
+must also pass at least two seconds total and one second continuously in 20 ms
+cells. Each side must exceed -48 dBFS and remain within 24 dB of its regional
+peak. This floor measures contributions; it is not a listening score. Failed
+musical tiers descend to a lower tier and cannot retain a musical label on a
+conservative result. Pure clock/envelope templates bypass unused effect-state
+evaluation; the unity prepared source samples are checked for exact equality.
+
+Evidence under `D:\TwilightEchoDependencies\automix`:
+
+- `musical-mix-plans-final/manifest.json`: the same 48 local tracks, 2,256
+  directed pairs; 22 beat-tempo candidates, 2,025 unaligned musical candidates,
+  144 cleanup candidates and 65 conservative pairs. These are input-side
+  estimates and do not apply album/queue policy or measure listening quality.
+- `musical-mix-rendered/report.json`: 24 selected/systematically sampled real
+  pairs; six prepared beat mixes, 16 prepared unaligned overlaps and two cleanup
+  results. Musical contributions overlap for 2.16–7.42 seconds. PCM is finite.
+  This selected sample is not a library-wide rendered coverage rate.
+- `musical-mix-app-beat_mix.json`, `musical-mix-app-musical_overlap.json`:
+  complete application/IPC/coordinator/native/WASAPI playback, with cached real
+  features and rounded queue durations. Both pass one queue switch, incoming
+  source continuation and visible PlayerBar progress checks. Settings distinguish
+  the actual kind and display measured overlap. The beat case uses 2.85335%
+  maximum tempo adjustment and resumes its incoming source at 10.2609 seconds,
+  rather than at its 10.4059-second playback horizon. All hardware probes are
+  muted and make no listening claim; DOM polling has 0.6-second tolerance.
+- `musical-mix-staged-playback.json`, `musical-mix-staged-controls.json`: the
+  installed project runtime passes the same real beat-mix playback check and
+  settings enable/disable/skip controls. The user's player is not terminated.
+- `musical-mix-native-tests.log`: 74 native tests pass; the existing ASIO ABI
+  cross-DLL fixture is skipped. This includes recovered differential checks,
+  24 templates, six preparation rates, allocation limits and existing controlled
+  performance gates. `musical-mix-final-native-regressions.log` additionally
+  passes full runtime/candidate tests after the final fallback-reason change,
+  including tempo source clocks, one-shot promotion and inconsistent energy
+  features that must not promote silent prepared PCM.
+- `musical-mix-audio-manager.log`: 445 tests pass.
+  `musical-mix-focused-tests.log`: 37 coordinator/cache/settings tests pass.
+  Typecheck, application build and renderer budgets pass.
+- `musical-mix-cached-planning.json`: 1,000 warmed native generation/selection/
+  compilation iterations, p99 14.143 ms; host cache I/O and audio preparation
+  are excluded. This is not the hardware callback performance matrix.
+- `musical-mix-final-report.json`: consolidated scope, evidence and limitations.
+
+Staged DLL SHA-256:
+`0f2cb39e70f4dedb6e074c7784c1141eb303046ea5aaedabad4baf150ad4d484`.
+The full project capability manifests are regenerated and checked. Same-volume
+renames preserve any mapped old image; old DLL/manifests/policy lock are backed
+up in `D:\TwilightEchoDependencies\automix\backup-before-musical-mix-20261010-003752`.
+`musical-mix-staging.json` records checksums. Restart the player to load the new
+runtime. To revert, fully close the player and restore the backed-up files;
+revision-4 features remain valid. Optional local previews contain only the
+transition, at fixed -6 dB gain, and are not full-song acceptance.
+
+Subjective naturalness, 100 fixed full-song pairs, the actual callback matrix,
+24-hour soak, real ASIO and complete Apple/private-effect parity remain untested.
+Stable release remains false; this is the authorized manual-acceptance build.
+
 ## Remaining release gates
 
-Key/phrase estimation; broader validated candidate policy; real online-provider
+Key/phrase estimation; additional validated scored styles and musical-region
+selection; real online-provider
 playback; original-source sample boundary proof across the format matrix and
 stretch; dual-track lyric/listening
 accounting; complete pipeline memory/restart/device-change soak; six rates × four

@@ -41,16 +41,19 @@ from the application asset staging allowlist.
 
 ## Independent analysis and policy
 
-Analysis version 3 deliberately retains unknown key and phrase
+Analysis version 4 deliberately retains unknown key and phrase
 boundaries. Beat This small0 and YAMNet run through the pinned ORT CPU C API, one
 thread per inference without spinning. Analysis runs in the isolated service,
 not the playback process. Current-tail and next-head requests are serialized;
 the service decodes at most 45 seconds for each window. The cache contains only
 validated features, keyed by file identity, analysis version and model hashes.
-Stability retains the last complete eight-interval window and merges touching
-high-confidence intervals at the same tempo. Version 1/2 cache entries are
-rejected. Events beyond the last observed beat are never synthesized.
-Version 3 seeks to integer decoded output frames, with one second of preroll,
+Stability fits observed eight-interval spans on sliding windows, accounts for
+the model's 20 ms endpoint quantization, and rejects individual missing or
+irregular intervals. Merged tempo uses the full observed span. Version 1/2/3
+cache entries are rejected. Events beyond the last beat are never synthesized.
+Regional energy uses the louder original channel at the original PCM rate;
+mono cancellation and high-frequency removal cannot authorize silence skips.
+Precise analysis seeks to integer decoded output frames, with one second of preroll,
 global resampling phase alignment and trimming of codec priming. Discontinuous
 or missing frame timestamps reject intelligent preparation. At most 45 seconds
 are analyzed per window; seek preroll is decoded solely to establish history.
@@ -65,16 +68,58 @@ Short signed URLs are never cache identities. Preparation and continuation
 decode the refreshed URL, while the queue retains its original logical source.
 
 `CandidatePlanner.cpp` is an independent region generator, not an Apple Song
-adapter. Its initial production policy permits filtered-direct style 8 only
-when both windows have stability confidence >=0.8, log tempo distance <=0.01
-(including half/double beat interpretation),
-and covered vocal probability <0.15. It preserves the original source boundaries
-and does not skip content while phrase/key evidence is unavailable. All repeated
+adapter. Its production policy permits filtered-direct style 8 only
+when both windows have stability confidence >=0.8 and reciprocal source-rate
+ramps stay within 0.92–1.08 (including half/double beat interpretation),
+and covered vocal probability <0.15 on at least one side (two concurrent vocal
+parts or unknown overlap remain excluded). All repeated
 stable-region pairs survive. Complex private-AU styles, Apple loudness relation
 codes, native event indexes and native nils are never synthesized.
-Tail coverage may extend at most four beats and at most two seconds beyond its
-last stable interval, retaining the source's decay. This is independent policy;
+The rate ratio is interpreted incoming BPM / outgoing BPM. Source spans use
+`Li=Lo/q`, outgoing rates `1→q`, incoming rates `1/q→1`, and a shared playback
+horizon `Lo*log(q)/(q-1)`. Prefix-aware downbeat alignment preserves the incoming
+music. The adapter's compensated-tempo eligibility is independent product
+policy; Apple's strict-tempo classifier remains unrecovered.
+Tail coverage may extend at most six seconds beyond its last stable interval;
+extension beyond two seconds additionally requires non-vocal coverage and peak
+energy <=-24 dBFS. This retains an observed decay. This is independent policy;
 aliases never double or halve either track's playback speed.
+Selection first admits the highest eligible product tier: beat/tempo mix,
+unaligned musical overlap, boundary cleanup, then conservative fading. Within
+that tier the unchanged recovered assembly scorer/selector chooses from every
+candidate, including duplicate regions. Natural-mode beat candidates retain
+style 8 for recovered scoring but render catalogue template 7, with its complete
+equal-power envelopes and full reciprocal rate ramps. The assignment is our
+product rule; templates, recovered scoring and default routing are unchanged.
+It avoids the strongly masked incoming entry observed with filtered template 8
+on fading real-file tails. Unaligned musical overlap uses the
+recovered style-1 equal-power envelopes at 4/6/8 seconds; it is explicitly labelled
+as unaligned rather than beat mixing. Transition length is capped at half of
+each track's duration, independently of the 10% silence-skip budget.
+Both musical tiers require an input-energy estimate >=2 seconds, then actual
+prepared evidence >=2 seconds total and >=1 second continuously. In 20 ms cells,
+each post-effect/envelope/track-gain contribution must exceed -48 dBFS and remain
+within 24 dB of its own regional peak. This is an eligibility floor, not listening
+quality. A selected tier that fails preparation/evidence falls to a lower tier;
+one candidate is prepared per tier. No extra work is added to the callback.
+Status and diagnostics distinguish `beat_mix`, `musical_overlap`,
+`boundary_cleanup` and `conservative`, with measured overlap, maximum tempo
+adjustment and actual incoming resume/outgoing end source times.
+Recovered soft-skip style 5 is also available for independently confirmed quiet
+decays or verified boundary silence; it needs no fabricated native key, tempo
+or loudness categories. This path is at most two seconds, with the same vocal
+overlap protection. Quiet decay requires a last-second peak <=-35 dBFS and a
+>=6 dB drop from the preceding two seconds. These are independent product
+thresholds, not recovered Apple classifier thresholds.
+
+When intelligent skipping is allowed, only contiguous head/tail cells <=-60
+dBFS with complete non-vocal coverage can be skipped. At least 500 ms of silence
+is required; 100 ms around content is retained. Each side is limited to 12
+seconds and 10% of track duration. A fully silent analysis window with no observed
+content boundary is not skippable. Missing/partial energy, unknown vocals and
+active musical decay preserve their boundaries. Disabling skipping retains
+complete source boundaries. The analysis deadline includes the possible tail
+skip, and a ready fallback remains armed throughout replacement preparation.
 The fallback
 is at most four seconds of constant-power fading, subject to album/CUE/repeat,
 duration, DSP order and output-format checks. All 24 catalogue templates remain
@@ -96,8 +141,9 @@ callback reads immutable PCM, uses assembly mixing/clocks, and applies common
 user DSP once. It performs no decode, inference, allocation, destruction, file
 access or blocking lock for AutoMix. The queue pair, preparation serial, source
 identities, configuration revision and output-format lifetime reject stale work.
-Analysis cannot replace a plan within max-transition-length + two seconds of
-the end or after it starts. The per-pair attempt is fixed at that deadline.
+Analysis cannot replace a plan within the sum of the maximum transition length,
+maximum allowed tail skip and two seconds from the end, or after it starts.
+The per-pair attempt is fixed at that deadline.
 A ready conservative buffer stays available during intelligent preparation.
 Failed or late replacements retain it. Plan revisions reject earlier worker
 results. Replacement withdraws the old render pointer before advancing its
@@ -154,6 +200,14 @@ constitute a statistically adequate performance matrix or listening gate.
 `automix-music-probe.cjs` analyzes local files and uses the native development
 `twilight_automix_plan_probe` to inspect actual candidates. It stores only
 features and source identities, with listening ratings left unassigned.
+`--reuse-manifest <previous manifest>` replans existing features without model
+inference. Its musical coverage counts are estimates, separated from cleanup.
+`twilight_ffmpeg_decoder_tests --automix-pair-probe <pair.json> [--wav <preview.wav>]`
+decodes a real pair, verifies prepared evidence and follows the same tier
+fallback. Optional local WAV previews use fixed -6 dB gain and are not full-song
+or listening acceptance. The application probe supports `--require-mix-kind`,
+`--min-audible-overlap` and `--min-tempo-adjustment`; continuation checks use the
+actual source resume position rather than the stretched playback duration.
 `automix-playback-smoke.cjs --features <pair.json> --require-style 8` verifies
 intelligent playback with those features. The native probe's `--benchmark 1000`
 measures warmed candidate generation, assembly selection and template compile;
