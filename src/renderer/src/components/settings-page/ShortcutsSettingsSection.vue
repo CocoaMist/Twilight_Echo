@@ -272,16 +272,18 @@ function onRecorderBlur(key: BindingKey): void {
     <div class="setting-list">
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>全局快捷键 (Global Shortcuts)</strong>
+          <strong>全局快捷键</strong>
           <span>应用位于后台时，依然响应下方组合键与系统媒体键。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: globalShortcuts, inactive: !globalShortcuts }"
           role="switch"
           :aria-checked="globalShortcuts"
           @click="onToggle"
-        ></span>
+          aria-label="全局快捷键"
+        ></button>
       </div>
     </div>
 

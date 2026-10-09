@@ -31,6 +31,7 @@ export default defineConfig({
       rollupOptions: {
         output: {
           manualChunks: {
+            'settings-options': [resolve('src/renderer/src/components/settings-page/types.ts')],
             'vendor-vue': ['vue'],
             'vendor-music-metadata': ['music-metadata'],
             'vendor-qrcode': ['qrcode'],

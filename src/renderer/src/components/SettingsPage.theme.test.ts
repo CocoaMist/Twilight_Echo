@@ -27,9 +27,9 @@ test('desktop lyrics is a navigable settings card', () => {
   )
   for (const label of [
     '启用桌面歌词',
-    '启用歌词总在最前',
-    '外文歌词显示翻译',
-    '外文歌词显示音译',
+    '始终置顶',
+    '显示翻译',
+    '显示音译',
     '描边',
     '双行显示',
     '横排显示',

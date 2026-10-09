@@ -83,7 +83,8 @@ function setProxyPort(event: Event): void {
             <strong>代理失败时允许直连</strong>
             <span>默认关闭。开启后代理连接失败才会尝试直连；已取消的请求永不回退。</span>
           </div>
-          <span
+          <button
+            type="button"
             class="toggle-switch"
             :class="{
               active: props.proxyAllowDirectFallback,
@@ -92,7 +93,8 @@ function setProxyPort(event: Event): void {
             role="switch"
             :aria-checked="props.proxyAllowDirectFallback"
             @click="emit('toggle:allowDirectFallback')"
-          ></span>
+            aria-label="代理失败时允许直连"
+          ></button>
         </div>
       </template>
     </div>

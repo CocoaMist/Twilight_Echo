@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
 import SettingsDisclosure from './SettingsDisclosure.vue'
 import { ref } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
@@ -74,6 +75,7 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
   ;(cardAppearance.background[theme] as any)[field] = value
   void updateSettings({ cardAppearance })
 }
+useSettingsSearchDisclosure('cardAppearance', cardAppearanceOpen)
 </script>
 
 <template>
@@ -97,13 +99,15 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
         <strong>启用自定义外观</strong>
         <span>开启后应用下方卡片与背景效果。</span>
       </div>
-      <span
+      <button
+        type="button"
         class="toggle-switch"
         :class="{ active: settings.cardAppearance.enabled }"
         role="switch"
         :aria-checked="settings.cardAppearance.enabled"
         @click="toggleCardAppearance"
-      ></span>
+        aria-label="启用自定义外观"
+      ></button>
     </div>
     <div v-if="settings.cardAppearance.enabled">
       <hr />
@@ -352,7 +356,8 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
           <strong>玻璃高光</strong>
           <span>在卡片顶部添加内描边光泽。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: settings.cardAppearance[cardAppearanceTab].glassHighlight }"
           role="switch"
@@ -363,7 +368,8 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
               !settings.cardAppearance[cardAppearanceTab].glassHighlight
             )
           "
-        ></span>
+          aria-label="玻璃高光"
+        ></button>
       </div>
       <hr />
       <div class="setting-item">
@@ -371,13 +377,15 @@ function setBgEffectField<K extends keyof typeof settings.value.cardAppearance.b
           <strong>背景模糊与暗化</strong>
           <span>对 App 背景图片施加模糊、亮度调节与暗化遮罩。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: settings.cardAppearance.background.enabled }"
           role="switch"
           :aria-checked="settings.cardAppearance.background.enabled"
           @click="toggleCardBackgroundEffect"
-        ></span>
+          aria-label="背景模糊与暗化"
+        ></button>
       </div>
       <div v-if="settings.cardAppearance.background.enabled">
         <hr />

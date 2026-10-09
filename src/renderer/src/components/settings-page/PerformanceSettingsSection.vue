@@ -64,7 +64,7 @@ function toggleCompactVisualizer(): void {
       <div class="setting-item">
         <div class="setting-copy">
           <strong>硬件加速</strong>
-          <span>使用 GPU 加速界面渲染、动画与模糊效果。</span>
+          <span>使用显卡加速界面渲染、动画与模糊效果。更改后需重启应用。</span>
         </div>
         <button
           type="button"
@@ -83,9 +83,7 @@ function toggleCompactVisualizer(): void {
         <div class="setting-copy">
           <strong>窗口透明</strong>
           <span
-            >让窗口底层透明，显示系统模糊效果（Windows 11 22H2+ 使用原生亚克力模糊；Linux X11
-            需合成器支持，如 KWin / picom；Linux Wayland、以及 Windows
-            未开启系统透明效果时暂不支持）。更改后需重启。</span
+            >让应用窗口透出桌面背景，需系统支持透明与模糊效果。更改后需重启；与外观分区的卡片玻璃效果独立。</span
           >
         </div>
         <button
@@ -105,14 +103,16 @@ function toggleCompactVisualizer(): void {
         ></button>
       </div>
       <div v-if="transparencyUnsupported" class="settings-inline-warning" role="status">
-        当前系统不支持透明窗口（Linux Wayland，或 Windows
-        未开启系统透明效果），已自动回退为不透明窗口，应用仍可正常使用。
+        当前系统不支持透明窗口，已回退为不透明窗口，应用仍可正常使用。
+      </div>
+      <div v-else-if="!transparencySupported" class="settings-inline-warning" role="status">
+        当前系统未提供透明窗口支持，此选项暂不可用。
       </div>
       <template v-if="settings.windowTransparency && transparencySupported">
         <hr />
         <div class="setting-item">
           <div class="setting-copy">
-            <strong>表面不透明度 (Surface Opacity)</strong>
+            <strong>窗口表面不透明度</strong>
             <span>页面背景表面的不透明程度，越低越通透。</span>
           </div>
           <div class="inline-controls">
@@ -136,7 +136,7 @@ function toggleCompactVisualizer(): void {
         </div>
         <div class="setting-item">
           <div class="setting-copy">
-            <strong>表面模糊度 (Surface Blur)</strong>
+            <strong>窗口表面模糊度</strong>
             <span>页面背景表面的应用内模糊强度。</span>
           </div>
           <div class="inline-controls">
@@ -161,7 +161,7 @@ function toggleCompactVisualizer(): void {
         <hr />
         <div class="setting-item">
           <div class="setting-copy">
-            <strong>卡片不透明度 (Card Opacity)</strong>
+            <strong>窗口内卡片不透明度</strong>
             <span>卡片表面的不透明程度，越低越通透。</span>
           </div>
           <div class="inline-controls">
@@ -185,7 +185,7 @@ function toggleCompactVisualizer(): void {
         </div>
         <div class="setting-item">
           <div class="setting-copy">
-            <strong>卡片模糊度 (Card Blur)</strong>
+            <strong>窗口内卡片模糊度</strong>
             <span>卡片表面的应用内模糊强度。</span>
           </div>
           <div class="inline-controls">

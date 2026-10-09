@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
 import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
@@ -89,6 +90,7 @@ function visibilityOptionDisabled(value: PlayerBarVisibility | PlayerBarPageVisi
 function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
   return value === 'autoHide' && !playingPageShapeCanAutoHide.value
 }
+useSettingsSearchDisclosure('playerBar', playerBarOpen)
 </script>
 
 <template>
@@ -102,7 +104,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
     <span class="setting-copy">
       <strong>播放条形态与可见性</strong>
       <span
-        >标准 / 迷你 / 紧凑三种形态，配合常显 / 自动隐藏 /
+        >标准 / 细长 / 紧凑三种形态，配合常显 / 自动隐藏 /
         完全隐藏三档可见性；两者都可以在播放页单独覆盖。</span
       >
     </span>
@@ -114,7 +116,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
       <div class="setting-copy">
         <strong>播放条形态</strong>
         <span
-          >迷你形态是 40px
+          >细长形态是 40px
           扁平长进度条；紧凑形态贴着窗口底边通栏，进度走顶边细线。每种形态装哪些按钮见下面的「播放条按钮编排」。</span
         >
       </div>
@@ -156,7 +158,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
       <div class="setting-copy">
         <strong>播放条可见性</strong>
         <span>
-          常显始终保留播放条；自动隐藏平时收起、鼠标靠近窗口底边时滑出（需迷你或紧凑形态）；完全隐藏则不再出现，也不会被鼠标唤出。
+          常显始终保留播放条；自动隐藏平时收起、鼠标靠近窗口底边时滑出（需细长或紧凑形态）；完全隐藏则不再出现，也不会被鼠标唤出。
         </span>
       </div>
       <div class="segmented-control">
@@ -169,7 +171,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
             disabled: visibilityOptionDisabled(option.value)
           }"
           :disabled="visibilityOptionDisabled(option.value)"
-          :title="visibilityOptionDisabled(option.value) ? '自动隐藏需要全局形态为迷你或紧凑' : ''"
+          :title="visibilityOptionDisabled(option.value) ? '自动隐藏需要全局形态为细长或紧凑' : ''"
           @click="setPlayerBarVisibility(option.value)"
         >
           <i :class="option.icon"></i>

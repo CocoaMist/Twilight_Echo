@@ -55,46 +55,52 @@ const emit = defineEmits<{
       <div class="setting-item">
         <div class="setting-copy">
           <strong>封面缓存</strong>
-          <span>允许本地库和 Provider 复用已获取的专辑封面。</span>
+          <span>复用已获取的专辑封面，减少重复读取和下载。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: cachePolicy.cover, inactive: !cachePolicy.cover }"
           role="switch"
           :aria-checked="cachePolicy.cover"
           @click="emit('toggleCacheArtifact', 'cover')"
-        ></span>
+          aria-label="封面缓存"
+        ></button>
       </div>
       <div class="setting-item">
         <div class="setting-copy">
           <strong>歌词缓存</strong>
-          <span>缓存 LRC、翻译歌词和 Provider 返回的歌词增强结果。</span>
+          <span>复用已获取的歌词、翻译与音源补充内容。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: cachePolicy.lyrics, inactive: !cachePolicy.lyrics }"
           role="switch"
           :aria-checked="cachePolicy.lyrics"
           @click="emit('toggleCacheArtifact', 'lyrics')"
-        ></span>
+          aria-label="歌词缓存"
+        ></button>
       </div>
       <div class="setting-item">
         <div class="setting-copy">
           <strong>元数据缓存</strong>
           <span>缓存在线匹配得到的艺人、专辑和曲目信息，不覆盖本地文件身份。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: cachePolicy.metadata, inactive: !cachePolicy.metadata }"
           role="switch"
           :aria-checked="cachePolicy.metadata"
           @click="emit('toggleCacheArtifact', 'metadata')"
-        ></span>
+          aria-label="元数据缓存"
+        ></button>
       </div>
       <div class="setting-item">
         <div class="setting-copy">
           <strong>流媒体音频缓存</strong>
-          <span>仅在插件和平台规则允许时缓存音频；关闭后 Provider 请求不会落盘音频。</span>
+          <span>仅在插件和平台规则允许时缓存音频；关闭后不保存音源请求得到的可复用音频。</span>
         </div>
         <select
           class="preview-select compact-select"
@@ -113,16 +119,18 @@ const emit = defineEmits<{
       <hr />
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>BPM 自动分析</strong>
-          <span>首次播放本地音频时在后台精算 BPM，并缓存结果供下次播放直接使用。</span>
+          <strong>自动分析节拍速度（BPM）</strong>
+          <span>首次播放本地音频时在后台估算节拍速度，并缓存结果供下次播放直接使用。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: autoAnalyzeBpm, inactive: !autoAnalyzeBpm }"
           role="switch"
           :aria-checked="autoAnalyzeBpm"
           @click="emit('toggleAutoAnalyzeBpm')"
-        ></span>
+          aria-label="自动分析节拍速度（BPM）"
+        ></button>
       </div>
       <div class="setting-item">
         <div class="setting-copy">
@@ -143,10 +151,10 @@ const emit = defineEmits<{
       </div>
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>Loudnorm / 响度分析缓存</strong>
+          <strong>响度分析缓存（Loudnorm）</strong>
           <span
-            >当前估算：<b>{{ formattedLoudnessAnalysisCacheSize }}</b> · 上限 512 条，命中 identity
-            跳过重测</span
+            >当前估算：<b>{{ formattedLoudnessAnalysisCacheSize }}</b
+            >。清理后下次播放会重新测量响度。</span
           >
         </div>
         <button

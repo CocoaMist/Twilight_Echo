@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
 import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
@@ -118,6 +119,7 @@ const chromeNote: Record<PlayerBarMode, string> = {
   mini: '迷你形态中间那条长进度轨由形态本身渲染，占满中间一列，所以中间通常留空。',
   compact: '紧凑形态的进度线贴在播放条顶边，由形态本身渲染，不在编排范围内。'
 }
+useSettingsSearchDisclosure('playerBarLayout', layoutOpen)
 </script>
 
 <template>

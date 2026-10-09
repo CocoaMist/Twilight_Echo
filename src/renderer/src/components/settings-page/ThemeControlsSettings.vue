@@ -73,9 +73,9 @@ async function setPluginTheme(event: Event): Promise<void> {
 <template>
   <div class="setting-item">
     <div class="setting-copy">
-      <strong>主题创意工坊</strong>
+      <strong>主题创意工坊</strong><span>编辑应用内置主题的颜色、字体和控件样式。</span>
     </div>
-    <button type="button" class="primary-button" @click="emit('openThemeStudio')">
+    <button type="button" class="soft-button" @click="emit('openThemeStudio')">
       <i class="ph ph-swatches"></i>
       打开主题创意工坊
     </button>
@@ -91,7 +91,7 @@ async function setPluginTheme(event: Event): Promise<void> {
     </div>
     <button
       type="button"
-      class="primary-button"
+      class="soft-button"
       :disabled="!workshopEnabled"
       @click="emit('openThemeWorkshop')"
     >
@@ -101,7 +101,7 @@ async function setPluginTheme(event: Event): Promise<void> {
   <hr />
   <div class="setting-item">
     <div class="setting-copy">
-      <strong>深浅色</strong>
+      <strong>主题模式</strong><span>选择浅色、深色，或跟随系统自动切换。</span>
     </div>
     <div class="theme-segment">
       <button
@@ -119,7 +119,7 @@ async function setPluginTheme(event: Event): Promise<void> {
   <hr />
   <div class="setting-item">
     <div class="setting-copy">
-      <strong>界面动画</strong>
+      <strong>界面动效</strong><span>减少或关闭界面过渡动画；跟随系统时遵循系统的动画偏好。</span>
     </div>
     <select
       class="preview-select wide"
@@ -134,7 +134,12 @@ async function setPluginTheme(event: Event): Promise<void> {
   <hr />
   <div class="setting-item">
     <div class="setting-copy">
-      <strong>插件主题</strong>
+      <strong>插件主题</strong
+      ><span>{{
+        pluginThemeOptions.length
+          ? '选择已启用插件提供的主题。'
+          : '暂无可用主题，请先在插件管理中启用主题插件。'
+      }}</span>
     </div>
     <select
       class="preview-select wide"

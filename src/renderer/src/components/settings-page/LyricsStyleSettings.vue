@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
 import SettingsDisclosure from './SettingsDisclosure.vue'
 import { ref } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
@@ -28,6 +29,7 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
   // quick controls here cannot drift from the full editor in the drawer.
   lyricsEditor.setGlobal(key, value)
 }
+useSettingsSearchDisclosure('lyricsStyle', open)
 </script>
 
 <template>
@@ -39,8 +41,8 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
     @click="open = !open"
   >
     <span class="setting-copy">
-      <strong>歌词显示样式 (Lyrics Style)</strong>
-      <span>控制主播放页的排版、聚焦范围和高亮效果。</span>
+      <strong>播放页歌词样式</strong>
+      <span>只影响主播放页的歌词。悬浮桌面歌词在“桌面歌词”分区单独设置。</span>
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
@@ -177,7 +179,7 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
-        <strong>未播放暗度</strong>
+        <strong>未播放歌词淡化程度</strong>
         <span>尚未唱到的歌词行保留多少亮度，数值越低越暗。</span>
       </div>
       <div class="range-pill">
@@ -209,7 +211,7 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
-        <strong>聚焦行数</strong>
+        <strong>突出显示的歌词行数</strong>
         <span>只清晰显示当前行附近的若干行，其余淡出。</span>
       </div>
       <div class="segmented-control density" role="group" aria-label="歌词聚焦行数">
@@ -230,7 +232,8 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
         <strong>逐字高亮</strong>
         <span>按逐字时间戳显示扫光效果。</span>
       </div>
-      <span
+      <button
+        type="button"
         class="toggle-switch"
         :class="{
           active: settings.lyricsAppearance.karaokeEnabled,
@@ -239,7 +242,8 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
         role="switch"
         :aria-checked="settings.lyricsAppearance.karaokeEnabled"
         @click="updateLyricsAppearance('karaokeEnabled', !settings.lyricsAppearance.karaokeEnabled)"
-      ></span>
+        aria-label="逐字高亮"
+      ></button>
     </div>
     <hr />
     <div class="setting-item">
@@ -311,7 +315,7 @@ function updateLyricsAppearance<K extends keyof LyricsAppearanceSettings>(
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
-        <strong>逐层个性化</strong>
+        <strong>分层歌词配色</strong>
         <span>
           分别设置普通、当前、翻译、罗马音四层的字体与字号，以及封面间距、聚焦范围和动效强度。
         </span>

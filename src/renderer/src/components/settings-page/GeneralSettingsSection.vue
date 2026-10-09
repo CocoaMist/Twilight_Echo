@@ -95,6 +95,105 @@ const emit = defineEmits<{
     </div>
 
     <div class="section-block">
+      <h3>启动与窗口 (Startup)</h3>
+      <div class="setting-list">
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>启动后进入</strong>
+            <span>选择每次打开应用时默认显示的主页。</span>
+          </div>
+          <div class="segmented-control">
+            <button
+              v-for="option in startupHomePageOptions"
+              :key="option.value"
+              type="button"
+              :class="{ active: settings.startupHomePage === option.value }"
+              @click="setStartupHomePage(option.value)"
+            >
+              <i :class="option.icon"></i>
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+        <hr />
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>登录系统后启动</strong>
+            <span>登录 Windows 账户后在后台启动应用。</span>
+          </div>
+          <button
+            type="button"
+            class="toggle-switch"
+            :class="{ active: settings.launchAtLogin, inactive: !settings.launchAtLogin }"
+            role="switch"
+            aria-label="登录系统后启动"
+            :aria-checked="settings.launchAtLogin"
+            @click="toggleSetting('launchAtLogin')"
+          ></button>
+        </div>
+        <hr />
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>{{ t('settings.language.title') }}</strong>
+            <span>{{ t('settings.language.description') }}</span>
+          </div>
+          <select class="preview-select" :value="settings.language" @change="setLanguage">
+            <option value="system">{{ t('settings.language.system') }}</option>
+            <option v-for="option in APP_LOCALES" :key="option" :value="option">
+              {{ t(`settings.language.${option}`) }}
+            </option>
+          </select>
+        </div>
+        <hr />
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>关闭主窗口时</strong>
+            <span>选择点击关闭按钮后的应用行为。</span>
+          </div>
+          <select
+            class="preview-select"
+            :value="settings.closeWindowBehavior"
+            @change="setCloseBehavior"
+          >
+            <option value="tray">最小化到系统托盘</option>
+            <option value="miniPlayer">切换为独立迷你窗口</option>
+            <option value="quit">退出应用</option>
+          </select>
+        </div>
+        <hr />
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>独立迷你窗口显示在任务栏</strong>
+            <span>开启后可从任务栏找回独立迷你窗口；关闭后仍显示悬浮小窗。</span>
+          </div>
+          <button
+            type="button"
+            class="toggle-switch"
+            :class="{
+              active: settings.miniPlayer.showInTaskbar,
+              inactive: !settings.miniPlayer.showInTaskbar
+            }"
+            role="switch"
+            aria-label="独立迷你窗口显示在任务栏"
+            :aria-checked="settings.miniPlayer.showInTaskbar"
+            @click="toggleMiniPlayerShowInTaskbar"
+          ></button>
+        </div>
+        <hr />
+        <div class="setting-item">
+          <div class="setting-copy">
+            <strong>欢迎向导</strong>
+            <span>重新走一遍首次使用引导：外观、听歌偏好、曲库与声音设置。</span>
+          </div>
+          <button type="button" class="soft-button" @click="emit('reopenOnboarding')">
+            <i class="ph ph-sparkle"></i>
+            重新打开
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-block">
       <h3>媒体库管理 (Library & Sync)</h3>
       <div class="setting-list">
         <div class="setting-item top-align">
@@ -148,7 +247,7 @@ const emit = defineEmits<{
               class="muted-button"
               @click="resetDownloadFolder"
             >
-              清除
+              跟随扫描文件夹
             </button>
           </div>
         </div>
@@ -157,7 +256,7 @@ const emit = defineEmits<{
         <div class="setting-item">
           <div class="setting-copy">
             <strong>流派分隔符</strong>
-            <span>将标签中的多个字符识别为不同流派；默认支持 ,，;；、/。</span>
+            <span>用这些分隔符拆分流派标签。例如 Rock/Pop 会识别为 Rock 和 Pop 两种流派。</span>
           </div>
           <input
             class="preview-select"
@@ -187,10 +286,10 @@ const emit = defineEmits<{
         </div>
         <div class="setting-item">
           <div class="setting-copy">
-            <strong>在线歌词回退 (LRCLIB)</strong>
+            <strong>在线补充缺失歌词</strong>
             <span
-              >本地与 Provider 均无歌词时，按标题/艺人/时长搜索 LRCLIB
-              作为最后回退。默认关闭。</span
+              >本地文件和音源均没有歌词时，通过歌曲名、歌手和时长向 LRCLIB
+              搜索。默认关闭，匹配结果可能不准确。</span
             >
           </div>
           <button
@@ -212,14 +311,14 @@ const emit = defineEmits<{
         >
           <div class="setting-copy">
             <strong>媒体库监控状态</strong>
-            <span>各根目录的监听状态；Linux 或失败时会自动降级为定时对账扫描。</span>
+            <span>显示各音乐文件夹的同步状态；无法持续监听时会改为定时检查。</span>
           </div>
           <div class="watcher-status-list" aria-live="polite">
             <div
               v-for="item in libraryWatcherStatus?.folders ??
               settings.libraryFolders.map((folder) => ({
                 folder,
-                state: settings.watchLibrary ? 'failed' : 'disabled',
+                state: settings.watchLibrary ? 'pending' : 'disabled',
                 mode: 'none',
                 lastError: null,
                 lastEventAt: null,
@@ -231,10 +330,12 @@ const emit = defineEmits<{
               <span class="watcher-status-path" :title="item.folder">{{ item.folder }}</span>
               <span class="watcher-status-badge" :data-state="item.state">
                 {{ watcherStateLabel(item.state) }}
-                · {{ watcherModeLabel(item.mode) }}
+                <template v-if="item.state !== 'pending'">
+                  · {{ watcherModeLabel(item.mode) }}</template
+                >
               </span>
               <span class="watcher-status-times">
-                事件 {{ formatWatcherTime(item.lastEventAt) }} · 对账
+                最近变动 {{ formatWatcherTime(item.lastEventAt) }} · 检查
                 {{ formatWatcherTime(item.lastReconcileAt) }}
               </span>
               <span v-if="item.lastError" class="watcher-status-error">{{ item.lastError }}</span>
@@ -246,8 +347,7 @@ const emit = defineEmits<{
           <div class="setting-copy">
             <strong>完整重扫</strong>
             <span
-              >显式重新解析全部本地文件的 metadata 与封面；可暂停或取消。同目录 CUE：单音频 + 唯一
-              `.cue`，≤2 MiB，UTF-8/GBK/GB18030。</span
+              >重新读取全部本地歌曲的信息和封面，可暂停或取消。只想同步新增、删除的文件时，无需完整重扫。</span
             >
           </div>
           <div class="library-scan-panel" aria-live="polite">
@@ -302,19 +402,20 @@ const emit = defineEmits<{
                 type="button"
                 class="danger-soft-button"
                 data-testid="settings-library-reset"
+                title="清空索引，不删除音乐文件和播放列表；之后需完整重扫"
                 :disabled="libraryScanIsActive || libraryResetPending"
                 @click="resetLocalLibrary"
               >
-                {{ libraryResetPending ? '重置中…' : '重置库' }}
+                {{ libraryResetPending ? '清空索引中…' : '清空媒体库索引' }}
               </button>
               <button
                 v-if="libraryMetadataEnrichmentIsActive"
                 type="button"
                 class="soft-button"
-                title="丢弃队列中的富化；已发出的 Provider 请求可能仍会完成但不会写回"
+                title="停止后台补全歌曲信息，保留已保存的信息"
                 @click="cancelActiveLibraryMetadataEnrichment"
               >
-                取消富化
+                停止补全信息
               </button>
             </div>
           </div>
@@ -343,7 +444,7 @@ const emit = defineEmits<{
         <hr />
         <div class="setting-item">
           <div class="setting-copy">
-            <strong>原生媒体控制 (SMTC)</strong>
+            <strong>系统媒体控制（SMTC）</strong>
             <span
               >响应键盘多媒体按键，在系统媒体面板及 FluentFlyout
               等兼容工具中显示歌曲、封面和播放控制。</span
@@ -408,105 +509,6 @@ const emit = defineEmits<{
               {{ option.label }}
             </button>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="section-block">
-      <h3>启动与窗口 (Startup)</h3>
-      <div class="setting-list">
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>启动后进入</strong>
-            <span>选择每次打开应用时默认显示的主页。</span>
-          </div>
-          <div class="segmented-control">
-            <button
-              v-for="option in startupHomePageOptions"
-              :key="option.value"
-              type="button"
-              :class="{ active: settings.startupHomePage === option.value }"
-              @click="setStartupHomePage(option.value)"
-            >
-              <i :class="option.icon"></i>
-              {{ option.label }}
-            </button>
-          </div>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>开机自动启动</strong>
-            <span>在系统启动时自动在后台运行。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{ active: settings.launchAtLogin, inactive: !settings.launchAtLogin }"
-            role="switch"
-            aria-label="开机启动"
-            :aria-checked="settings.launchAtLogin"
-            @click="toggleSetting('launchAtLogin')"
-          ></button>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>{{ t('settings.language.title') }}</strong>
-            <span>{{ t('settings.language.description') }}</span>
-          </div>
-          <select class="preview-select" :value="settings.language" @change="setLanguage">
-            <option value="system">{{ t('settings.language.system') }}</option>
-            <option v-for="option in APP_LOCALES" :key="option" :value="option">
-              {{ t(`settings.language.${option}`) }}
-            </option>
-          </select>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>关闭主窗口时</strong>
-            <span>选择点击关闭按钮后的应用行为。</span>
-          </div>
-          <select
-            class="preview-select"
-            :value="settings.closeWindowBehavior"
-            @change="setCloseBehavior"
-          >
-            <option value="tray">最小化到系统托盘</option>
-            <option value="miniPlayer">切换为迷你播放器</option>
-            <option value="quit">退出应用</option>
-          </select>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>迷你播放器显示在任务栏</strong>
-            <span>开启后可从任务栏独立唤回迷你播放器；关闭后仅剩下悬浮小窗。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{
-              active: settings.miniPlayer.showInTaskbar,
-              inactive: !settings.miniPlayer.showInTaskbar
-            }"
-            role="switch"
-            aria-label="迷你播放器显示在任务栏"
-            :aria-checked="settings.miniPlayer.showInTaskbar"
-            @click="toggleMiniPlayerShowInTaskbar"
-          ></button>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>欢迎向导</strong>
-            <span>重新走一遍首次使用引导：外观、听歌偏好、曲库与声音设置。</span>
-          </div>
-          <button type="button" class="soft-button" @click="emit('reopenOnboarding')">
-            <i class="ph ph-sparkle"></i>
-            重新打开
-          </button>
         </div>
       </div>
     </div>

@@ -58,18 +58,20 @@ function toggleSetting(key: BooleanSettingKey): void {
           <strong>封面主题色</strong>
           <span>播放页和底栏使用当前专辑封面提取的主题色。</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: settings.useCoverTheme, inactive: !settings.useCoverTheme }"
           role="switch"
           :aria-checked="settings.useCoverTheme"
           @click="toggleSetting('useCoverTheme')"
-        ></span>
+          aria-label="封面主题色"
+        ></button>
       </div>
       <hr />
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>全局字体 (Typography)</strong>
+          <strong>界面字体</strong>
           <span>更换界面的正文、标题与圆体字体；“默认”跟随当前主题自带的字体。</span>
         </div>
         <select class="preview-select wide" :value="settings.fontFamily" @change="setFontFamily">
@@ -86,7 +88,7 @@ function toggleSetting(key: BooleanSettingKey): void {
       <hr />
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>界面排版密度 (UI Density)</strong>
+          <strong>界面密度</strong>
           <span>控制列表项的间距与信息密度。</span>
         </div>
         <div class="segmented-control density">

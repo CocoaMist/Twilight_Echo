@@ -1,5 +1,7 @@
 import { createApp, h, nextTick, ref } from 'vue'
 import SettingsPage from './SettingsPage.vue'
+import SettingsDisclosure from './settings-page/SettingsDisclosure.vue'
+import { useSettingsSearchDisclosure } from './settings-page/settingsSearchDisclosure'
 import '../assets/base.css'
 
 const expect = (value, message) => {
@@ -46,62 +48,95 @@ window.settingsScrollMocks = {
 }
 window.api = { library: { getWatcherStatus: async () => null } }
 const expanded = ref(false)
-window.makeSettingsSection = (key) => () =>
-  h(
-    'section',
-    {
-      id: key,
-      class: 'glass-card preview-section settings-section'
-    },
-    [
-      h('h2', key),
-      h(
-        'button',
-        {
-          class: 'test-disclosure',
-          onClick: () => {
-            expanded.value = !expanded.value
-          }
-        },
-        '展开'
-      ),
-      key === 'general' && expanded.value
-        ? h('div', { style: { height: '370px' } }, '更多设置')
-        : null,
-      h(
-        'div',
-        { class: 'setting-list' },
-        Array.from({ length: 45 }, (_, index) =>
-          h(
-            'div',
-            {
-              class: 'setting-item',
-              style: { minHeight: '60px' }
-            },
-            [
-              h('div', { class: 'setting-copy' }, [
-                h(
-                  'strong',
-                  key === 'performance' && index === 20
-                    ? '硬件加速'
-                    : key === 'playback' && index === 20
-                      ? '无缝播放 (Gapless Playback)'
-                      : `${key} 设置 ${index}`
-                ),
-                h(
-                  'span',
-                  '这是一段测试设置说明，用来验证调整窗口宽度和字体之后，设置卡片仍能按正确的位置滚动和定位。'.repeat(
-                    2
+let searchPanel
+window.makeSettingsSection = (key) => {
+  const panelOpen = ref(false)
+  useSettingsSearchDisclosure('playerBar', panelOpen)
+  if (key === 'appearance') searchPanel = panelOpen
+  return () =>
+    h(
+      'section',
+      {
+        id: key,
+        class: 'glass-card preview-section settings-section'
+      },
+      [
+        h('h2', key),
+        key === 'appearance'
+          ? h(
+              SettingsDisclosure,
+              { open: panelOpen.value },
+              {
+                default: () => [
+                  h('div', { class: 'setting-item' }, [
+                    h('div', { class: 'setting-copy' }, [h('strong', '播放条可见性')])
+                  ]),
+                  h('div', { class: 'setting-item' }, [
+                    h('div', { class: 'setting-copy' }, [h('strong', '背景模糊与暗化')])
+                  ]),
+                  h('div', { class: 'setting-item' }, [
+                    h('div', { class: 'setting-copy' }, [h('strong', '背景模糊')])
+                  ])
+                ]
+              }
+            )
+          : null,
+        key === 'dsp'
+          ? h('details', [
+              h('summary', '格式与频谱（高级）'),
+              h('label', [h('span', 'DSD 采样率策略'), h('select', [h('option', '自动')])])
+            ])
+          : null,
+        h(
+          'button',
+          {
+            class: 'test-disclosure',
+            onClick: () => {
+              expanded.value = !expanded.value
+            }
+          },
+          '展开'
+        ),
+        key === 'general' && expanded.value
+          ? h('div', { style: { height: '370px' } }, '更多设置')
+          : null,
+        h(
+          'div',
+          { class: 'setting-list' },
+          Array.from({ length: 45 }, (_, index) =>
+            h(
+              'div',
+              {
+                class: 'setting-item',
+                style: { minHeight: '60px' }
+              },
+              [
+                h('div', { class: 'setting-copy' }, [
+                  h(
+                    'strong',
+                    key === 'performance' && index === 20
+                      ? '硬件加速'
+                      : key === 'playback' && index === 20
+                        ? '无缝播放 (Gapless Playback)'
+                        : key === 'playback' && index === 21
+                          ? '交叉淡入淡出'
+                          : `${key} 设置 ${index}`
+                  ),
+                  h(
+                    'span',
+                    '这是一段测试设置说明，用来验证调整窗口宽度和字体之后，设置卡片仍能按正确的位置滚动和定位。'.repeat(
+                      2
+                    )
                   )
-                )
-              ]),
-              h('input', { value: '保留的设置值', 'aria-label': `${key}-${index}` })
-            ]
+                ]),
+                h('input', { value: '保留的设置值', 'aria-label': `${key}-${index}` })
+              ]
+            )
           )
         )
-      )
-    ]
-  )
+      ]
+    )
+}
 
 window.runSettingsScrollTests = async () => {
   const mounted = ref(true)
@@ -234,14 +269,46 @@ window.runSettingsScrollTests = async () => {
     search.dispatchEvent(new Event('input', { bubbles: true }))
     await settle()
     const result = page.querySelector('#settings-search-result-0')
-    expect(result?.textContent.includes('无缝播放'), `${query} could not find crossfade controls`)
+    expect(
+      result?.textContent.includes('交叉淡入淡出'),
+      `${query} could not find crossfade controls`
+    )
     result.click()
     await settle()
     expect(
-      page.querySelector('.search-target-flash')?.textContent.includes('无缝播放'),
+      page.querySelector('.search-target-flash')?.textContent.includes('交叉淡入淡出'),
       `${query} did not locate playback controls`
     )
   }
+  const selectSearch = async (query) => {
+    search.value = query
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    page.querySelector('#settings-search-result-0').click()
+    await settle()
+  }
+  expect(!searchPanel.value, 'appearance panel unexpectedly started open')
+  await selectSearch('播放条可见性')
+  expect(searchPanel.value, 'search did not open an unrendered panel')
+  expect(
+    page.querySelector('.search-target-flash')?.textContent === '播放条可见性',
+    'search did not locate the revealed row'
+  )
+  searchPanel.value = false
+  await settle()
+  await selectSearch('播放条可见性')
+  expect(searchPanel.value, 'repeating a search did not reopen the panel')
+  await selectSearch('触发距离')
+  expect(
+    page.querySelector('.search-target-flash')?.textContent === '播放条可见性',
+    'unavailable control did not locate its prerequisite'
+  )
+  await selectSearch('DSD 采样率策略')
+  expect(document.querySelector('#dsp details').open, 'search left native advanced details closed')
+  expect(
+    general.querySelector('input').value === '未保存的输入',
+    'search changed existing edited input'
+  )
   await window.resizeTestWindow(1440)
   await settle()
   nav('播放').click()

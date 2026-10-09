@@ -2,6 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { scrollMotionBehavior } from '../app/scrollMotion'
 import { createSettingsSectionRendering } from './settings-page/settingsSectionRendering'
+import {
+  provideSettingsSearchDisclosure,
+  revealSettingsDetails
+} from './settings-page/settingsSearchDisclosure'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
@@ -72,6 +76,7 @@ const pluginSettingsError = ref<Record<string, string>>({})
 const pluginSettingsForms = ref<Record<string, PluginSettingsForm | null>>({})
 const pluginSettingsValues = ref<Record<string, Record<string, string>>>({})
 const settingsSearchQuery = ref('')
+const revealSearchDisclosures = provideSettingsSearchDisclosure()
 const settingsNotice = ref('')
 const settingsError = ref('')
 const importSettingsInputRef = ref<HTMLInputElement | null>(null)
@@ -160,27 +165,29 @@ const libraryScanProgressText = computed(() => {
     return `已完成：解析 ${status.parsedFileCount} 个文件，跳过 ${status.skippedUnchanged} 个未变化文件`
   }
   if (status.state === 'cancelled') return '扫描已取消，未提交未完成的结果'
-  return '启动时仅核对 path、size 与 mtime；完整元数据重扫只由此处触发。'
+  return '启动时快速检查文件变化；需要重新读取所有歌曲信息时，请点击“完整重扫”。'
 })
 const libraryMetadataEnrichmentText = computed(() => {
   const status = libraryMetadataEnrichmentStatus.value
   if (status.state === 'enriching') {
-    return `后台富化中：已处理 ${status.completed + status.failed} / ${status.total} 首，${status.active} 项并发`
+    return `正在补全歌曲信息：已处理 ${status.completed + status.failed} / ${status.total} 首`
   }
-  if (status.state === 'failed') return status.error || '后台元数据富化失败'
+  if (status.state === 'failed') return status.error || '补全歌曲信息失败'
   if (status.state === 'completed') {
-    return `后台富化完成：成功 ${status.completed} 首，跳过 ${status.skipped} 首`
+    return `歌曲信息补全完成：成功 ${status.completed} 首，跳过 ${status.skipped} 首`
   }
-  if (status.state === 'cancelled') return '后台元数据富化已取消，迟到结果不会写回媒体库'
-  return '新曲目会先显示，再在后台补齐封面、歌词和在线 metadata。'
+  if (status.state === 'cancelled') return '已停止补全歌曲信息，已保存的信息仍会保留'
+  return '添加歌曲后，会在后台补齐可获取的封面、歌词和歌曲信息。'
 })
 
 function watcherStateLabel(state: string): string {
   switch (state) {
+    case 'pending':
+      return '状态尚未获取'
     case 'active':
-      return '活跃'
+      return '正常'
     case 'degraded':
-      return '降级轮询'
+      return '定时检查'
     case 'failed':
       return '失败'
     case 'disabled':
@@ -193,9 +200,9 @@ function watcherStateLabel(state: string): string {
 function watcherModeLabel(mode: string): string {
   switch (mode) {
     case 'recursive':
-      return '递归监听'
+      return '自动监听'
     case 'polling':
-      return '定时对账'
+      return '定时检查'
     case 'none':
       return '未监听'
     default:
@@ -240,7 +247,7 @@ async function resetLocalLibrary(): Promise<void> {
   libraryResetMessage.value = ''
   if (
     !window.confirm(
-      '将清空本地媒体库索引和当前界面中的全部本地曲目。\n\n不会删除磁盘上的音乐文件，也不会删除播放列表；之后可通过“完整重扫”重新建立媒体库。\n\n确定重置吗？'
+      '将清空本地媒体库索引和当前界面中的全部本地曲目。\n\n不会删除磁盘上的音乐文件，也不会删除播放列表；之后可通过“完整重扫”重新建立媒体库。\n\n确定清空媒体库索引吗？'
     )
   ) {
     return
@@ -869,11 +876,23 @@ watch([() => props.initialSection, () => props.navigationTarget], applyNavigatio
 function scrollToSearchResult(entry: SettingsSearchEntry): void {
   settingsSearchQuery.value = ''
   activeSection.value = entry.section
+  revealSearchDisclosures(entry.reveal)
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       const sectionEl = document.getElementById(entry.section)
       if (!sectionEl) return
-      const target = findSettingItem(sectionEl, entry) ?? sectionEl
+      const directTarget = findSettingItem(sectionEl, entry)
+      const fallback =
+        !directTarget && entry.fallback
+          ? findSettingItem(sectionEl, { ...entry, match: entry.fallback })
+          : null
+      const target = directTarget ?? fallback ?? sectionEl
+      if (fallback)
+        pushNotice({
+          kind: 'info',
+          message: '此选项需要先启用相关功能；已定位到对应开关。搜索不会改变您的设置。'
+        })
+      revealSettingsDetails(target)
       scrollPageToElement(target, {
         block: target === sectionEl ? 'start' : 'center'
       })
@@ -885,11 +904,10 @@ function scrollToSearchResult(entry: SettingsSearchEntry): void {
 function findSettingItem(sectionEl: HTMLElement, entry: SettingsSearchEntry): HTMLElement | null {
   const matchText = (entry.match ?? entry.title).trim().toLowerCase()
   // 优先匹配 .setting-item（常规设置项）
-  const settingItems = sectionEl.querySelectorAll<HTMLElement>('.setting-item')
+  const settingItems = sectionEl.querySelectorAll<HTMLElement>('.setting-item, .mini-setting')
   for (const item of settingItems) {
-    const copy = item.querySelector('.setting-copy')
-    const strong = copy?.querySelector('strong')
-    if (strong && strong.textContent?.trim().toLowerCase().includes(matchText)) {
+    const strong = item.querySelector('.setting-copy strong, strong')
+    if (strong && strong.textContent?.trim().toLowerCase() === matchText) {
       return item
     }
   }
@@ -901,10 +919,17 @@ function findSettingItem(sectionEl: HTMLElement, entry: SettingsSearchEntry): HT
     }
   }
   // 再回退：匹配任意 strong / span / button 文本（about 的更新卡、赞助卡等）
-  const fallbacks = sectionEl.querySelectorAll<HTMLElement>('strong, span, button')
+  const labelledControl = Array.from(sectionEl.querySelectorAll<HTMLElement>('[aria-label]')).find(
+    (element) => element.getAttribute('aria-label')?.trim().toLowerCase() === matchText
+  )
+  if (labelledControl)
+    return (
+      labelledControl.closest<HTMLElement>('label, .setting-item, .mini-setting') ?? labelledControl
+    )
+  const fallbacks = sectionEl.querySelectorAll<HTMLElement>('strong, span, button, summary, label')
   for (const el of fallbacks) {
-    if (el.textContent?.trim().toLowerCase().includes(matchText)) {
-      return el
+    if (el.textContent?.trim().toLowerCase() === matchText) {
+      return el.closest<HTMLElement>('label, .setting-item, .mini-setting') ?? el
     }
   }
   return null
@@ -917,7 +942,7 @@ function highlightSettingItem(item: HTMLElement | null): void {
     window.clearTimeout(searchHighlightTimer)
     searchHighlightTimer = null
   }
-  document.querySelectorAll('.setting-item.search-target-flash').forEach((el) => {
+  document.querySelectorAll('.search-target-flash').forEach((el) => {
     el.classList.remove('search-target-flash')
   })
   if (!item) return
@@ -1141,6 +1166,7 @@ onBeforeUnmount(() => {
           class="preview-nav-item"
           :class="{ active: activeSection === section.key }"
           :aria-current="activeSection === section.key ? 'location' : undefined"
+          :title="section.description"
           @click="scrollToSection(section.key)"
         >
           <i :class="section.icon"></i>
@@ -1151,6 +1177,9 @@ onBeforeUnmount(() => {
       <div class="settings-preview-stack">
         <header class="settings-page-header">
           <h1 class="settings-page-title">设置</h1>
+          <p class="settings-page-description">
+            常规开关与选项自动保存；插件表单和设备档案需点击保存。需要重启的选项会明确提示。
+          </p>
         </header>
         <section class="settings-command-bar glass-card">
           <div class="settings-command-actions">

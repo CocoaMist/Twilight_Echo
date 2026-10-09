@@ -155,7 +155,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             type="checkbox"
             @change="update('alwaysOnTop', ($event.target as HTMLInputElement).checked, true)"
           />
-          <span>启用歌词总在最前</span>
+          <span>始终置顶</span>
         </label>
         <label class="check-field">
           <input
@@ -165,7 +165,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               update('translationVisible', ($event.target as HTMLInputElement).checked, true)
             "
           />
-          <span>外文歌词显示翻译</span>
+          <span>显示翻译</span>
         </label>
         <label class="check-field">
           <input
@@ -175,7 +175,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               update('romanizationVisible', ($event.target as HTMLInputElement).checked, true)
             "
           />
-          <span>外文歌词显示音译</span>
+          <span>显示音译</span>
         </label>
       </div>
     </div>
@@ -258,7 +258,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
           </select>
         </label>
         <label class="field">
-          <span>字粗</span>
+          <span>字体粗细</span>
           <select
             :value="draft.fontWeight"
             @change="update('fontWeight', numberValue($event), true)"
@@ -410,7 +410,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
       <div class="two-columns">
         <label class="field range-field">
           <span
-            >宽度 <b>{{ draft.windowWidth }} px</b></span
+            >窗口宽度 <b>{{ draft.windowWidth }} px</b></span
           >
           <input
             type="range"
@@ -423,7 +423,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
         </label>
         <label class="field range-field">
           <span
-            >高度 <b>{{ draft.windowHeight }} px</b></span
+            >窗口高度 <b>{{ draft.windowHeight }} px</b></span
           >
           <input
             type="range"

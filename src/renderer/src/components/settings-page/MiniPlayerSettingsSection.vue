@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
 import SettingsDisclosure from './SettingsDisclosure.vue'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { cloneMiniPlayerSettings, type MiniPlayerSettings } from '../../../../shared/miniPlayer.ts'
@@ -57,6 +58,7 @@ onBeforeUnmount(() => {
   customization.dispose()
   void pendingFlush.catch(() => undefined)
 })
+useSettingsSearchDisclosure('miniPlayer', open, () => customization.beginSession())
 </script>
 
 <template>
@@ -69,8 +71,10 @@ onBeforeUnmount(() => {
       @click="toggleOpen"
     >
       <span class="setting-copy">
-        <strong>迷你播放器</strong>
-        <span>自定义迷你播放器窗口的主题、背景与布局。</span>
+        <strong>独立迷你窗口</strong>
+        <span
+          >自定义独立悬浮窗口的主题、背景与布局。应用底部播放条在“播放条形态与可见性”中单独设置。</span
+        >
       </span>
       <i class="pi pi-chevron-down"></i>
     </button>

@@ -425,18 +425,18 @@ test('audio settings expose advanced replaygain, fft, crossfeed, and real loudno
   assert.match(settingsPageSource, /function toggleFftEnabled\(\): void/)
   assert.match(settingsPageSource, /function setCrossfeedDelay\(event: Event\): void/)
   assert.match(settingsPageSource, /function setCrossfeedCutoff\(event: Event\): void/)
-  assert.match(settingsPageSource, /Fallback Gain/)
-  assert.match(settingsPageSource, /ReplayGain Clip/)
-  assert.match(settingsPageSource, /FFT Capture/)
-  assert.match(settingsPageSource, /Crossfeed Delay/)
-  assert.match(settingsPageSource, /Crossfeed Cutoff/)
+  assert.match(settingsPageSource, /缺少响度信息时的增益/)
+  assert.match(settingsPageSource, /响度均衡后的削波限制/)
+  assert.match(settingsPageSource, /频谱分析（FFT）/)
+  assert.match(settingsPageSource, /交叉馈送延迟/)
+  assert.match(settingsPageSource, /交叉馈送截止频率/)
   assert.match(
     settingsPageSource,
     /VOLUME_NORMALIZATION_OPTIONS|replayGainOptions = VOLUME_NORMALIZATION_OPTIONS/
   )
   assert.match(settingsPageSource, /replayGainOptions/)
   assert.match(hifiSidebarSource, /VOLUME_NORMALIZATION_OPTIONS|value: 'loudnorm'/)
-  assert.match(settingsPageSource, /High-Res 当前为自动链路能力/)
+  assert.match(settingsPageSource, /由音源格式和输出设备自动决定/)
   assert.match(settingsPageSource, /function capabilityStateLabel/)
   assert.ok(
     settingsPageSource.includes(
@@ -481,7 +481,7 @@ test('audio settings do not expose DSP bypass as strict bit-perfect mode', () =>
   assert.doesNotMatch(settingsPageSource, /function toggleStrictBitPerfectMode\(\): void/)
   assert.doesNotMatch(settingsPageSource, /updateSettings\(\{ strictBitPerfectMode: next \}\)/)
   assert.doesNotMatch(settingsPageSource, /严格 Bit-Perfect/)
-  assert.match(settingsPageSource, /DSP 旁路 \(DSP Bypass\)/)
+  assert.match(settingsPageSource, /关闭 DSP 处理/)
 })
 
 test('cache strategy settings expose separate artifact and provider-controlled audio policies', () => {
@@ -557,10 +557,10 @@ test('cache strategy settings expose separate artifact and provider-controlled a
   assert.match(settingsPageSource, /歌词缓存/)
   assert.match(settingsPageSource, /元数据缓存/)
   assert.match(settingsPageSource, /流媒体音频缓存/)
-  assert.match(settingsPageSource, /BPM 自动分析/)
+  assert.match(settingsPageSource, /自动分析节拍速度（BPM）/)
   assert.match(settingsPageSource, /BPM 分析缓存/)
   assert.match(settingsPageSource, /Loudnorm \/ 响度分析缓存/)
-  assert.match(settingsPageSource, /由 Provider 规则控制/)
+  assert.match(settingsPageSource, /按音源规则缓存/)
   assert.match(pluginIpcSource, /runtime\.appSettings\.cachePolicy\.streamingAudio !== 'provider'/)
   assert.match(pluginIpcSource, /return null/)
 })
@@ -578,7 +578,7 @@ test('settings page exposes search, backup, cache confirmation, and isolated plu
   assert.match(settingsPageSource, /function resetSettingsGroup/)
   assert.match(settingsPageSource, /function pluginPanelStateKey/)
   assert.match(settingsPageSource, /pluginSettingsResult\[pluginPanelStateKey\(panel\)\]/)
-  assert.match(settingsPageSource, /High-Res 当前为自动链路能力/)
+  assert.match(settingsPageSource, /由音源格式和输出设备自动决定/)
   assert.doesNotMatch(
     settingsPageSource,
     /aria-checked="false"[\s\S]{0,160}当前版本暂未接入原生处理链/
@@ -671,9 +671,9 @@ test('settings page warns and disables transparency controls on unsupported plat
 
   assert.match(source, /const transparencyUnsupported = computed/)
   assert.match(source, /windowTransparencySupported\.value === false/)
-  // Prettier wraps this string in the template, so the assertion has to tolerate
-  // a line break where the source happens to fold it.
-  assert.match(source, /当前系统不支持透明窗口（Linux Wayland，或 Windows\s+未开启系统透明效果）/)
+  assert.match(source, /当前系统不支持透明窗口，已回退为不透明窗口/)
+  assert.match(source, /v-else-if="!transparencySupported"/)
+  assert.match(source, /当前系统未提供透明窗口支持，此选项暂不可用/)
   assert.match(source, /toggleSetting\('windowTransparency'\)/)
   assert.match(source, /aria-disabled="!transparencySupported"/)
 })

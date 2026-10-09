@@ -16,7 +16,9 @@ const emit = defineEmits<{
       <div class="setting-item">
         <div class="setting-copy">
           <strong>设置备份</strong>
-          <span>导出当前设置为 JSON，或从备份文件恢复；导入前会二次确认。</span>
+          <span
+            >保存或恢复应用设置，不包含歌曲文件和个人曲库数据。导入会覆盖当前设置，并要求确认。</span
+          >
         </div>
         <div class="inline-controls">
           <button type="button" class="soft-button" @click="emit('exportSettings')">
@@ -39,13 +41,13 @@ const emit = defineEmits<{
         </div>
         <div class="inline-controls reset-group-actions">
           <button type="button" class="muted-button" @click="emit('resetGroup', 'appearance')">
-            外观
+            恢复外观默认
           </button>
           <button type="button" class="muted-button" @click="emit('resetGroup', 'playback')">
-            播放
+            恢复播放默认
           </button>
           <button type="button" class="muted-button" @click="emit('resetGroup', 'desktopLyrics')">
-            桌面歌词
+            恢复桌面歌词默认
           </button>
         </div>
       </div>

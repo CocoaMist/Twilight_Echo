@@ -170,17 +170,19 @@ onBeforeUnmount(() => {
     <div class="setting-list">
       <div class="setting-item">
         <div class="setting-copy">
-          <strong>Discord Rich Presence <i class="pi pi-discord discord-icon"></i></strong>
+          <strong>Discord 听歌状态 <i class="pi pi-discord discord-icon"></i></strong>
           <span>在 Discord 状态中向好友展示您正在播放的音乐。</span>
           <span class="setting-substatus" aria-live="polite">{{ discordStatusText }}</span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{ active: props.discordEnabled, inactive: !props.discordEnabled }"
           role="switch"
           :aria-checked="props.discordEnabled"
           @click="toggleDiscord"
-        ></span>
+          aria-label="Discord 听歌状态"
+        ></button>
       </div>
       <hr />
       <div class="setting-item top-align">
@@ -190,7 +192,8 @@ onBeforeUnmount(() => {
             默认关闭。开启后在局域网提供 Web 遥控页（PIN 配对 + Token），并支持 DLNA 投送。
           </span>
         </div>
-        <span
+        <button
+          type="button"
           class="toggle-switch"
           :class="{
             active: props.remoteEnabled,
@@ -200,7 +203,8 @@ onBeforeUnmount(() => {
           :aria-checked="props.remoteEnabled"
           :aria-busy="remoteBusy"
           @click="toggleRemote"
-        ></span>
+          aria-label="局域网远程控制"
+        ></button>
       </div>
       <div v-if="props.remoteEnabled" class="setting-item top-align remote-control-panel">
         <div class="setting-copy">

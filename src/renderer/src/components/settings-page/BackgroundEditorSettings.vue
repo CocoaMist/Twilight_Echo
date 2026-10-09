@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
 import SettingsDisclosure from './SettingsDisclosure.vue'
 import { ref } from 'vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
@@ -154,6 +155,7 @@ function clearPageBackgroundImage(page: AppBackgroundPage): void {
 function toggleBackgroundPage(page: AppBackgroundPage): void {
   backgroundPageOpen.value = backgroundPageOpen.value === page ? null : page
 }
+useSettingsSearchDisclosure('background', customBackgroundOpen)
 </script>
 
 <template>
