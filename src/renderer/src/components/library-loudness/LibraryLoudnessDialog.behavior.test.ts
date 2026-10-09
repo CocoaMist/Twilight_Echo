@@ -135,11 +135,13 @@ window.runLoudnessTests=async()=>{
   expect(document.querySelector('[role="alert"]').textContent.includes('fixture offline'),'query failure not explained')
   failQuery=false;await click('重试操作');await until(()=>!document.querySelector('[role="alert"]')&&enabled('开始分析'),'query retry failed')
   document.querySelector('input[value="track"]').click();selection.value=null;library.value=Array.from({length:10000},(_,index)=>track(String(index)));await until(()=>document.querySelector('[role="grid"]').getAttribute('aria-rowcount')==='10000'&&enabled('刷新结果'),'large scope did not load')
-  expect(document.querySelectorAll('.loudness-row').length<=12,'large results mounted unbounded rows')
-  const grid=document.querySelector('[role="grid"]');grid.focus();grid.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}));await pause()
+  const grid=document.querySelector('[role="grid"]')
+  const maxMountedRows=Math.ceil(grid.clientHeight/64)+8
+  expect(document.querySelectorAll('.loudness-row').length<=maxMountedRows,'large results mounted unbounded rows')
+  grid.focus();grid.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}));await pause()
   expect(grid.scrollTop>600000,'End did not reach the virtual tail')
   expect(document.querySelector('[aria-selected="true"]').textContent.includes('曲目 9999'),'keyboard selection lost last row')
-  expect(document.querySelectorAll('.loudness-row').length<=12,'tail rendered unbounded rows')
+  expect(document.querySelectorAll('.loudness-row').length<=maxMountedRows,'tail rendered unbounded rows')
   library.value=[track('one'),track('two')];selection.value=[library.value[0]];albums.value=[{id:'id:release',name:'示例专辑',tracks:library.value,trackCount:2,cover:null}]
   records.set(group.id,{id:group.id,status:'measured',measurement:measured(-21),tracks:[measured(-20),measured(-24)]});document.querySelector('input[value="album"]').click();await until(()=>document.querySelector('.loudness-results').textContent.includes('-21.00'),'final preview did not load')
   await click('开始分析');await until(()=>enabled('取消分析'),'remeasure did not start')

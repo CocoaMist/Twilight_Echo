@@ -8,6 +8,8 @@ export default defineConfig(
   {
     ignores: [
       '**/node_modules/**',
+      '**/.cache/**',
+      '**/.birdview/**',
       '**/.workbuddy/**',
       '**/.codex-tools/**',
       '**/dist/**',
