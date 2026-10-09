@@ -2,6 +2,8 @@
    search, disclosure access and responsive control geometry. */
 html .settings-preview-page[data-settings-layout='categories'] {
   padding: 28px 32px 48px;
+  /* Long and short categories keep the same available width and centered origin. */
+  scrollbar-gutter: stable;
 }
 html .settings-preview-page[data-settings-layout='categories'] .settings-preview-layout {
   display: grid;
@@ -18,6 +20,8 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-preview
   width: 100%;
   max-height: calc(100vh - 96px);
   overflow: visible;
+  flex-direction: column;
+  flex-wrap: nowrap;
   align-items: stretch;
   justify-content: flex-start;
 }
@@ -31,9 +35,23 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-command
 }
 html .settings-preview-page[data-settings-layout='categories'] .settings-category-items {
   display: grid;
-  gap: 6px;
+  width: 100%;
+  gap: 16px;
+  scrollbar-gutter: stable;
   max-height: calc(100vh - 176px);
   overflow-y: auto;
+}
+html .settings-preview-page[data-settings-layout='categories'] .settings-category-group {
+  display: grid;
+  gap: 6px;
+}
+html .settings-preview-page[data-settings-layout='categories'] .settings-category-group-title {
+  margin: 0;
+  padding: 4px 16px;
+  color: var(--te-settings-text-muted);
+  font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
+  font-weight: 500;
+  line-height: 1.5;
 }
 html .settings-preview-page[data-settings-layout='categories'] .settings-category-select {
   display: none;

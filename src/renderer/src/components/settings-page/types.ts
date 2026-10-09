@@ -58,22 +58,41 @@ export type BooleanSettingKey =
   | 'remoteControlEnabled'
   | 'developerMode'
 
-export const sections: { key: SectionKey; label: string; icon: string; description?: string }[] = [
-  { key: 'general', label: '常规', icon: 'pi pi-sliders-h' },
-  { key: 'playback', label: '播放', icon: 'pi pi-volume-up' },
+export const sectionGroups: {
+  key: string
+  label: string
+  sections: { key: SectionKey; label: string; icon: string; description?: string }[]
+}[] = [
   {
-    key: 'dsp',
-    label: '音效',
-    icon: 'pi pi-sliders-v',
-    description: '均衡器、响度与声音处理（DSP）'
+    key: 'basic',
+    label: '基础设置',
+    sections: [
+      { key: 'general', label: '常规', icon: 'pi pi-sliders-h' },
+      { key: 'playback', label: '播放', icon: 'pi pi-volume-up' },
+      { key: 'appearance', label: '外观', icon: 'pi pi-palette' },
+      { key: 'desktopLyrics', label: '桌面歌词', icon: 'pi pi-window-maximize' },
+      { key: 'shortcuts', label: '快捷键', icon: 'pi pi-key' },
+      { key: 'about', label: '关于', icon: 'pi pi-info-circle' }
+    ]
   },
-  { key: 'cache', label: '缓存', icon: 'pi pi-database' },
-  { key: 'performance', label: '性能', icon: 'pi pi-bolt' },
-  { key: 'appearance', label: '外观', icon: 'pi pi-palette' },
-  { key: 'desktopLyrics', label: '桌面歌词', icon: 'pi pi-window-maximize' },
-  { key: 'shortcuts', label: '快捷键', icon: 'pi pi-key' },
-  { key: 'about', label: '关于', icon: 'pi pi-info-circle' }
+  {
+    key: 'advanced',
+    label: '高级设置',
+    sections: [
+      {
+        key: 'dsp',
+        label: '音效',
+        icon: 'pi pi-sliders-v',
+        description: '均衡器、响度与声音处理（DSP）'
+      },
+      { key: 'cache', label: '缓存', icon: 'pi pi-database' },
+      { key: 'performance', label: '性能', icon: 'pi pi-bolt' }
+    ]
+  }
 ]
+
+// Search, keyboard traversal and both navigation layouts share one visual order.
+export const sections = sectionGroups.flatMap((group) => group.sections)
 
 export const colorModeOptions: { value: AppTheme; label: string; icon: string }[] = [
   { value: 'system', label: '系统', icon: 'pi pi-desktop' },

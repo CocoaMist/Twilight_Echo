@@ -104,7 +104,7 @@ window.makeSettingsSection = (key) => {
         h(
           'div',
           { class: 'setting-list' },
-          Array.from({ length: 45 }, (_, index) =>
+          Array.from({ length: key === 'about' ? 1 : 45 }, (_, index) =>
             h(
               'div',
               {
@@ -253,6 +253,90 @@ window.runSettingsScrollTests = async () => {
   hoverFixture.remove()
   document.documentElement.dataset.theme = 'pureWhite'
   document.documentElement.dataset.teMotion = 'off'
+  const categoryGroups = [...page.querySelectorAll('.settings-category-group')]
+  expect(categoryGroups.length === 2, 'settings navigation is missing its two groups')
+  expect(
+    categoryGroups.map((group) => group.querySelector('h2').textContent.trim()).join(',') ===
+      '基础设置,高级设置',
+    'group labels are missing or reordered'
+  )
+  const groupKeys = (group) =>
+    [...group.querySelectorAll('[data-settings-category]')]
+      .map((button) => button.dataset.settingsCategory)
+      .join(',')
+  expect(
+    groupKeys(categoryGroups[0]) === 'general,playback,appearance,desktopLyrics,shortcuts,about',
+    'common preferences are mixed with advanced tuning'
+  )
+  expect(
+    groupKeys(categoryGroups[1]) === 'dsp,cache,performance',
+    'advanced categories are missing'
+  )
+  const pickerGroups = [...page.querySelectorAll('.settings-category-select optgroup')]
+  expect(
+    pickerGroups.map((group) => group.label).join(',') === '基础设置,高级设置',
+    'narrow picker loses navigation groups'
+  )
+  // A short category must not shift the nav, heading, card or content column.
+  const horizontalBounds = (element) => {
+    const rect = element.getBoundingClientRect()
+    return [rect.x, rect.width]
+  }
+  for (const theme of ['pureWhite', 'dark']) {
+    document.documentElement.dataset.theme = theme
+    for (const width of [760, 1000, 1440]) {
+      await window.resizeTestWindow(width)
+      nav('常规').click()
+      await settle()
+      expect(page.scrollHeight > page.clientHeight, 'long category fixture does not scroll')
+      const layoutElements = [
+        '.settings-preview-nav',
+        '.settings-preview-stack',
+        '.settings-page-header'
+      ]
+      const reference = layoutElements.map((selector) =>
+        horizontalBounds(page.querySelector(selector))
+      )
+      const cardReference = horizontalBounds(visible()[0])
+      for (const category of ['关于', '外观', '音效', '缓存', '性能', '常规']) {
+        nav(category).click()
+        await settle()
+        if (category === '关于')
+          expect(page.scrollHeight <= page.clientHeight, 'short category fixture still scrolls')
+        const current = layoutElements.map((selector) =>
+          horizontalBounds(page.querySelector(selector))
+        )
+        expect(
+          current.every((bounds, index) =>
+            bounds.every((value, axis) => Math.abs(value - reference[index][axis]) < 0.5)
+          ),
+          'category shifts navigation or content: ' + theme + '/' + width + '/' + category
+        )
+        expect(
+          horizontalBounds(visible()[0]).every(
+            (value, axis) => Math.abs(value - cardReference[axis]) < 0.5
+          ),
+          'category changes card width: ' + theme + '/' + width + '/' + category
+        )
+      }
+    }
+  }
+  await window.resizeTestWindow(1440)
+  document.documentElement.dataset.theme = 'pureWhite'
+  nav('关于').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  await settle()
+  assertPanel('dsp')
+  expect(document.activeElement === nav('音效'), 'keyboard cannot cross into advanced settings')
+  nav('音效').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+  await settle()
+  assertPanel('about')
+  expect(document.activeElement === nav('关于'), 'keyboard cannot return to basic settings')
+  nav('关于').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
+  await settle()
+  assertPanel('performance')
+  nav('性能').dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+  await settle()
+  assertPanel('general')
   // Slow startup must not undo a user's category choice.
   nav('外观').click()
   await settle()
@@ -428,5 +512,5 @@ window.runSettingsScrollTests = async () => {
   mounted.value = false
   await settle()
   app.unmount()
-  return 'SETTINGS_SCROLL_OK: single-panel navigation; drafts; slow startup; keyboard; scrolling; search; advanced controls; 760/1440 resize; external links; cleanup verified'
+  return 'SETTINGS_SCROLL_OK: single-panel navigation; drafts; slow startup; keyboard; scrolling; search; advanced controls; 760/1000/1440 stable widths; grouped keyboard traversal; external links; cleanup verified'
 }

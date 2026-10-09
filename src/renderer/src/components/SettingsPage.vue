@@ -19,6 +19,7 @@ import {
   type BooleanSettingKey,
   type SettingsSearchEntry,
   sections,
+  sectionGroups,
   startupHomePageOptions,
   trackActivationModeOptions,
   streamingAudioCachePolicyOptions,
@@ -1117,22 +1118,33 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="settings-category-items">
-          <button
-            v-for="section in sections"
-            :key="section.key"
-            type="button"
-            class="preview-nav-item"
-            :class="{ active: activeSection === section.key }"
-            :aria-current="activeSection === section.key ? 'page' : undefined"
-            :tabindex="activeSection === section.key ? 0 : -1"
-            :data-settings-category="section.key"
-            @keydown="onCategoryKeydown($event, section.key)"
-            :title="section.description"
-            @click="scrollToSection(section.key)"
+          <div
+            v-for="group in sectionGroups"
+            :key="group.key"
+            class="settings-category-group"
+            role="group"
+            :aria-labelledby="`settings-category-group-${group.key}`"
           >
-            <i :class="section.icon"></i>
-            <span>{{ section.label }}</span>
-          </button>
+            <h2 :id="`settings-category-group-${group.key}`" class="settings-category-group-title">
+              {{ group.label }}
+            </h2>
+            <button
+              v-for="section in group.sections"
+              :key="section.key"
+              type="button"
+              class="preview-nav-item"
+              :class="{ active: activeSection === section.key }"
+              :aria-current="activeSection === section.key ? 'page' : undefined"
+              :tabindex="activeSection === section.key ? 0 : -1"
+              :data-settings-category="section.key"
+              @keydown="onCategoryKeydown($event, section.key)"
+              :title="section.description"
+              @click="scrollToSection(section.key)"
+            >
+              <i :class="section.icon"></i>
+              <span>{{ section.label }}</span>
+            </button>
+          </div>
         </div>
         <select
           class="settings-category-select preview-select"
@@ -1140,9 +1152,11 @@ onBeforeUnmount(() => {
           :value="activeSection"
           @change="scrollToSection(($event.target as HTMLSelectElement).value as SectionKey)"
         >
-          <option v-for="section in sections" :key="section.key" :value="section.key">
-            {{ section.label }}
-          </option>
+          <optgroup v-for="group in sectionGroups" :key="group.key" :label="group.label">
+            <option v-for="section in group.sections" :key="section.key" :value="section.key">
+              {{ section.label }}
+            </option>
+          </optgroup>
         </select>
       </nav>
 
