@@ -501,26 +501,16 @@ onMounted(() => {
     </details>
 
     <div>
-      <div class="dsp-actions">
-        <button class="brand-soft-button" type="button" @click="openDspRackFromDsp">
-          <i class="pi pi-th-large"></i>
-          打开音效面板（DSP Rack）
-        </button>
-        <button class="brand-soft-button" type="button" @click="openEqualizerFromDsp">
-          <i class="pi pi-sliders-h"></i>
-          打开均衡器
-        </button>
-        <button class="soft-button" type="button" @click="selectImpulseResponse">
-          <i class="pi pi-folder-open"></i>
-          载入脉冲文件 · {{ convolverPathLabel }}
-        </button>
-        <button class="soft-button" type="button" @click="clearImpulseResponse">
-          <i class="pi pi-undo"></i>
-          移除脉冲文件
-        </button>
+      <div class="setting-item">
+        <div class="setting-copy">
+          <strong>音效面板</strong>
+          <span>编辑完整的声音处理链，调整模块顺序与参数。</span>
+        </div>
+        <button class="soft-button" type="button" @click="openDspRackFromDsp">打开音效面板</button>
       </div>
 
-      <div class="dsp-presets">
+      <h3 class="settings-group-heading">快速预设</h3>
+      <div class="dsp-presets" role="group" aria-label="快速预设">
         <button
           class="preset-btn"
           type="button"
@@ -750,6 +740,14 @@ onMounted(() => {
               <button class="soft-button compact" type="button" @click="selectImpulseResponse">
                 <i class="pi pi-folder-open"></i>
                 选择文件
+              </button>
+              <button
+                v-if="audioProcessing.convolverIrPath"
+                class="soft-button compact"
+                type="button"
+                @click="clearImpulseResponse"
+              >
+                移除文件
               </button>
               <button
                 type="button"

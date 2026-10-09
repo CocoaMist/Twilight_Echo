@@ -62,7 +62,7 @@ window.makeSettingsSection = (key) => {
         class: 'glass-card preview-section settings-section'
       },
       [
-        h('h2', key),
+        h('div', { class: 'section-title-row' }, [h('h2', key)]),
         key === 'appearance'
           ? h(
               SettingsDisclosure,
@@ -81,6 +81,15 @@ window.makeSettingsSection = (key) => {
                 ]
               }
             )
+          : null,
+        key === 'dsp'
+          ? h('div', { class: 'dsp-module-card' }, [
+              h('h3', '基础处理'),
+              h('div', { class: 'mini-setting' }, [
+                h('div', [h('strong', '响度均衡'), h('span', '声音处理选项')]),
+                h('select', { class: 'preview-select' }, [h('option', '关闭')])
+              ])
+            ])
           : null,
         key === 'dsp'
           ? h('details', [
@@ -303,6 +312,27 @@ window.runSettingsScrollTests = async () => {
         await settle()
         if (category === '关于')
           expect(page.scrollHeight <= page.clientHeight, 'short category fixture still scrolls')
+        expect(
+          page.querySelector('.settings-page-title').textContent === category,
+          'page heading does not identify the selected category'
+        )
+        expect(
+          !visible()[0].querySelector('.section-title-row').checkVisibility(),
+          'category repeats its page heading inside the panel'
+        )
+        if (category === '音效') {
+          const module = visible()[0].querySelector('.dsp-module-card')
+          const moduleStyle = getComputedStyle(module)
+          expect(
+            moduleStyle.backgroundColor === 'rgba(0, 0, 0, 0)' && moduleStyle.boxShadow === 'none',
+            'nested audio group restores a competing card surface: ' + theme
+          )
+          expect(
+            getComputedStyle(module.querySelector('strong')).fontSize ===
+              getComputedStyle(page.querySelector('#general .setting-copy strong')).fontSize,
+            'audio options use a different label size: ' + theme
+          )
+        }
         const current = layoutElements.map((selector) =>
           horizontalBounds(page.querySelector(selector))
         )
@@ -463,6 +493,10 @@ window.runSettingsScrollTests = async () => {
     path.parentElement.querySelector('.setting-copy').getBoundingClientRect().width >
       path.parentElement.clientWidth * 0.7,
     'narrow folder controls squeeze their explanation'
+  )
+  expect(
+    path.querySelector('input').getBoundingClientRect().height >= 32,
+    'narrow folder input collapses into a thin strip'
   )
   document.documentElement.style.setProperty('--te-font-size-body', '20px')
   await selectSearch('硬件加速')

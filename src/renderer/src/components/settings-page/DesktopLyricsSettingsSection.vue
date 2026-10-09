@@ -227,8 +227,10 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
         <p>
           歌词浮层显示在主屏任务栏区域，支持显示翻译，鼠标可穿透。调整位置避开应用图标；自动隐藏任务栏时显示在屏幕底部。
         </p>
-        <label
-          >横向位置
+        <label class="field range-field">
+          <span
+            >横向位置 <b>{{ draft.taskbarOffset ?? 8 }} %</b></span
+          >
           <input
             type="range"
             min="0"
@@ -236,10 +238,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             :value="draft.taskbarOffset ?? 8"
             @input="update('taskbarOffset', numberValue($event))"
           />
-          {{ draft.taskbarOffset ?? 8 }}%</label
-        >
-        <label
-          >显示宽度
+        </label>
+        <label class="field range-field">
+          <span
+            >显示宽度 <b>{{ draft.taskbarWidth ?? 320 }} px</b></span
+          >
           <input
             type="range"
             min="160"
@@ -248,10 +251,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             :value="draft.taskbarWidth ?? 320"
             @input="update('taskbarWidth', numberValue($event))"
           />
-          {{ draft.taskbarWidth ?? 320 }}px</label
-        >
-        <label
-          >任务栏字号
+        </label>
+        <label class="field range-field">
+          <span
+            >任务栏字号 <b>{{ draft.taskbarFontSize ?? 18 }} px</b></span
+          >
           <input
             type="range"
             min="12"
@@ -259,11 +263,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             :value="draft.taskbarFontSize ?? 18"
             @input="update('taskbarFontSize', numberValue($event))"
           />
-          {{ draft.taskbarFontSize ?? 18 }}px</label
-        >
+        </label>
       </template>
     </div>
     <div class="setting-card desktop-lyrics-style-card">
+      <h3>字体与外观</h3>
       <div class="style-control-grid">
         <label class="field">
           <span>字体</span>
@@ -571,26 +575,10 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
 </template>
 
 <style scoped>
-.lyrics-placement-controls {
-  display: grid;
-  gap: 16px;
-  margin-bottom: 24px;
-}
 .lyrics-placement-controls p {
   font-size: 0.85em;
   opacity: 0.7;
   line-height: 1.6;
-}
-.lyrics-placement-controls label {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.lyrics-placement-controls input[type='range'] {
-  flex: 1;
-  min-width: 120px;
-  accent-color: var(--te-primary-500);
 }
 
 .settings-section {

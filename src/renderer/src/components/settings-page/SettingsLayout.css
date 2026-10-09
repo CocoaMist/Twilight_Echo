@@ -1,6 +1,11 @@
-/* Keep the original settings skin. These rules only stabilize category layout,
-   search, disclosure access and responsive control geometry. */
+/* Shared settings hierarchy and geometry retain the original theme material,
+   outer panels and functional previews. */
 html .settings-preview-page[data-settings-layout='categories'] {
+  --te-setting-label-size: calc(var(--te-font-size-body, 14px) * 15 / 14);
+  --te-setting-description-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+  --te-setting-row-height: 58px;
+  --te-setting-row-padding: 14px;
+  --te-setting-divider: color-mix(in srgb, var(--te-settings-text) 9%, transparent);
   padding: 28px 32px 48px;
   /* Long and short categories keep the same available width and centered origin. */
   scrollbar-gutter: stable;
@@ -37,7 +42,6 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-categor
   display: grid;
   width: 100%;
   gap: 16px;
-  scrollbar-gutter: stable;
   max-height: calc(100vh - 176px);
   overflow-y: auto;
 }
@@ -52,6 +56,192 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-categor
   font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
   font-weight: 500;
   line-height: 1.5;
+}
+/* One hierarchy and row rhythm for the nine settings panels. Theme material,
+   fonts, outer panels and functional previews retain their existing skin. */
+html .settings-preview-page[data-settings-layout='categories'] .settings-page-title {
+  font-size: calc(var(--te-font-size-body, 14px) * 2);
+}
+html .settings-preview-page[data-settings-layout='categories'] .settings-page-description {
+  margin: 8px 0 0;
+  font-size: var(--te-setting-description-size);
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  .preview-section
+  > .section-title-row {
+  display: none;
+}
+html .settings-preview-page[data-settings-layout='categories'] .setting-list {
+  margin-inline: 0;
+  overflow: visible;
+}
+html .settings-preview-page[data-settings-layout='categories'] .setting-list hr {
+  width: 100%;
+  margin-inline: 0;
+  background: var(--te-setting-divider);
+}
+html .settings-preview-page[data-settings-layout='categories'] :is(.setting-item, .mini-setting) {
+  min-height: var(--te-setting-row-height);
+  padding: var(--te-setting-row-padding) 0;
+  gap: 24px;
+}
+html .settings-preview-page[data-settings-layout='categories'] .mini-setting + .mini-setting {
+  margin-top: 0;
+  border-top-color: var(--te-setting-divider);
+}
+html .settings-preview-page[data-settings-layout='categories'] .mini-setting > div:first-child {
+  min-width: 0;
+  flex: 1 1 0;
+  gap: 4px;
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  :is(.setting-copy, .mini-setting > div)
+  > strong {
+  color: var(--te-settings-text);
+  font-size: var(--te-setting-label-size);
+  font-weight: 500;
+  line-height: 1.4;
+}
+html .settings-preview-page[data-settings-layout='categories'] .mini-setting > div > span {
+  color: color-mix(in srgb, var(--te-settings-text-muted) 75%, var(--te-settings-text));
+  font-size: var(--te-setting-description-size);
+  font-weight: 400;
+  line-height: 1.7;
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  :is(
+    .section-block h3,
+    .dsp-module-card h3,
+    .settings-group-heading,
+    .shortcut-panel-head h3,
+    #desktopLyrics .control-group h3,
+    #desktopLyrics .setting-card h3,
+    #desktopLyrics .preview-group h3
+  ) {
+  margin: 0 0 8px;
+  color: var(--te-settings-text-muted);
+  font-size: var(--te-setting-description-size);
+  font-weight: 500;
+  line-height: 1.5;
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  :is(.dsp-module-card, #desktopLyrics .setting-card, #shortcuts .shortcut-panel) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  :is(.preview-select, .settings-select, .path-control input, #desktopLyrics .field select) {
+  flex: 0 0 auto;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--te-settings-control-border);
+  border-radius: 8px;
+  background: var(--te-settings-control-bg);
+  color: var(--te-settings-text);
+  font-size: var(--te-setting-description-size);
+  font-weight: 500;
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  :is(.setting-item, .mini-setting)
+  > :is(.preview-select, .settings-select) {
+  width: 200px;
+  max-width: 45%;
+}
+html .settings-preview-page[data-settings-layout='categories'] .path-control input {
+  flex: 1 1 auto;
+}
+html .settings-preview-page[data-settings-layout='categories'] .settings-accordion-trigger > i {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--te-settings-text-muted);
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  #desktopLyrics
+  :is(.style-control-grid, .layout-control-grid) {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics .field:has(> select) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  align-items: center;
+  gap: 24px;
+  min-height: var(--te-setting-row-height);
+  padding-block: var(--te-setting-row-padding);
+  color: var(--te-settings-text);
+  font-size: var(--te-setting-label-size);
+  font-weight: 500;
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  #desktopLyrics
+  .palette-control-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  #desktopLyrics
+  .palette-control-grid
+  > .field {
+  grid-column: 1 / -1;
+}
+html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics .check-field {
+  display: flex;
+  justify-content: space-between;
+  min-height: var(--te-setting-row-height);
+  padding-block: var(--te-setting-row-padding);
+  color: var(--te-settings-text);
+  font-size: var(--te-setting-label-size);
+  font-weight: 500;
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  #desktopLyrics
+  .check-field
+  > select {
+  width: 200px;
+  max-width: 45%;
+}
+html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics .range-field {
+  color: var(--te-settings-text);
+  font-size: var(--te-setting-label-size);
+  font-weight: 500;
+}
+html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics .range-field b {
+  color: var(--te-settings-text-muted);
+  font-size: var(--te-setting-description-size);
+}
+html
+  .settings-preview-page[data-settings-layout='categories']
+  #desktopLyrics
+  .palette-color-button {
+  border: 1px solid var(--te-settings-control-border);
+  border-radius: 8px;
+  background: var(--te-settings-control-bg);
+  color: var(--te-settings-text);
+  font-size: var(--te-setting-description-size);
+}
+html[data-density='compact'] .settings-preview-page[data-settings-layout='categories'] {
+  --te-setting-row-height: 50px;
+  --te-setting-row-padding: 10px;
+}
+html[data-density='comfortable'] .settings-preview-page[data-settings-layout='categories'] {
+  --te-setting-row-height: 66px;
+  --te-setting-row-padding: 18px;
 }
 html .settings-preview-page[data-settings-layout='categories'] .settings-category-select {
   display: none;
@@ -78,6 +268,7 @@ html
   cursor: pointer;
   list-style: none;
   font-weight: 500;
+  font-size: var(--te-setting-label-size);
 }
 html
   .settings-preview-page[data-settings-layout='categories']
@@ -133,7 +324,7 @@ html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics {
 }
 html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics .quick-control-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   align-items: stretch;
   gap: 0 16px;
 }
@@ -153,13 +344,20 @@ html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics .p
 }
 html .settings-preview-page[data-settings-layout='categories'] #shortcuts .shortcut-rows {
   grid-template-columns: 1fr;
+  gap: 0;
+}
+html .settings-preview-page[data-settings-layout='categories'] #shortcuts .shortcut-row {
+  min-height: var(--te-setting-row-height);
+  padding: var(--te-setting-row-padding) 0;
 }
 html .settings-preview-page[data-settings-layout='categories'] #shortcuts .shortcut-label {
-  font-size: var(--te-font-size-body, 14px);
+  font-size: var(--te-setting-label-size);
   white-space: normal;
 }
 html .settings-preview-page[data-settings-layout='categories'] #shortcuts .shortcut-key {
-  min-height: 32px;
+  width: 200px;
+  max-width: 45%;
+  min-height: 36px;
   height: auto;
   padding: 6px 12px;
   font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
@@ -228,6 +426,18 @@ html[data-theme='dark']
     width: 100%;
     min-width: 0;
     max-width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  html .settings-preview-page[data-settings-layout='categories'] .path-control input {
+    grid-column: 1 / -1;
+    flex: none;
+    width: 100%;
+  }
+  html .settings-preview-page[data-settings-layout='categories'] .path-control button {
+    width: auto;
+    justify-self: end;
   }
   html .settings-preview-page[data-settings-layout='categories'] .setting-item > .preview-select {
     width: 200px;

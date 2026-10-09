@@ -82,6 +82,9 @@ const importSettingsInputRef = ref<HTMLInputElement | null>(null)
 const shortcutStatuses = ref<PlayerShortcutStatus[]>([])
 
 const activeSection = ref<SectionKey>(props.initialSection ?? 'general')
+const activeSectionLabel = computed(
+  () => sections.find((section) => section.key === activeSection.value)?.label ?? '常规'
+)
 const pageRef = ref<HTMLElement | null>(null)
 
 function setNavigationPressOrigin(event: PointerEvent): void {
@@ -1162,9 +1165,9 @@ onBeforeUnmount(() => {
 
       <div class="settings-preview-stack">
         <header class="settings-page-header">
-          <h1 class="settings-page-title">设置</h1>
+          <h1 class="settings-page-title">{{ activeSectionLabel }}</h1>
           <p class="settings-page-description">
-            常规开关与选项自动保存；插件表单和设备档案需点击保存。需要重启的选项会明确提示。
+            设置自动保存；表单与设备档案按提示保存。需要重启的选项会明确提示。
           </p>
         </header>
         <section v-if="settingsNotice || settingsError" class="settings-command-bar glass-card">
