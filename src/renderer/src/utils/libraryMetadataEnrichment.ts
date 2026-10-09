@@ -1,10 +1,13 @@
 import type { MediaProviderSearchResult } from '../providers/mediaProvider.ts'
 import type { Track } from '../types/music'
 import {
+  buildMetadataSearchQueries,
   enrichLocalTrackMetadata,
   findBestMetadataMatch,
+  isMetadataPlaceholder,
   type MetadataEnrichmentPolicy
 } from './musicMetadataMatching.ts'
+import { searchMetadataTracks } from './musicMetadataSearch.ts'
 
 export interface LibraryMetadataEnrichmentProvider {
   searchSongs: (
@@ -67,7 +70,6 @@ export interface LibraryMetadataEnrichmentBenchmarkResult {
 type QueueEntry = {
   key: string
   queryKey: string
-  query: string
   tracks: Map<string, { track: Track; policy: MetadataEnrichmentPolicy }>
 }
 
@@ -141,7 +143,6 @@ export class LibraryMetadataEnrichmentQueue {
         this.activeEntries.get(queryKey) ?? {
           key: queryKey,
           queryKey,
-          query,
           tracks: new Map<string, { track: Track; policy: MetadataEnrichmentPolicy }>()
         }
       if (!entry.tracks.has(track.id)) {
@@ -189,6 +190,8 @@ export class LibraryMetadataEnrichmentQueue {
     }
     this.activeAbortControllers.delete(cancelledGeneration)
     this.entries.clear()
+    // A new run must not attach work to a request from the cancelled generation.
+    this.activeEntries.clear()
     this.status = {
       ...this.status,
       state: 'cancelled',
@@ -227,11 +230,15 @@ export class LibraryMetadataEnrichmentQueue {
     controllers.add(controller)
     this.activeAbortControllers.set(generation, controllers)
     try {
-      const result = await this.provider.searchSongs(entry.query, 8, 0, controller.signal)
+      const candidates = await searchMetadataTracks(
+        Array.from(entry.tracks.values(), ({ track }) => track),
+        (query, limit, offset, signal) => this.provider.searchSongs(query, limit, offset, signal),
+        { signal: controller.signal }
+      )
       if (generation !== this.generation) return
       this.failures.delete(entry.queryKey)
       for (const { track, policy } of entry.tracks.values()) {
-        const match = findBestMetadataMatch(track, result.items)
+        const match = findBestMetadataMatch(track, candidates)
         const enriched = enrichLocalTrackMetadata(track, match, policy)
         if (enriched !== track) this.onTrackEnriched?.({ source: track, track: enriched })
       }
@@ -385,8 +392,10 @@ async function enrichOneLocalTrack(
   if (!isLocalTrack(track) || !needsMetadataEnrichment(track, policy)) return track
 
   try {
-    const result = await provider.searchSongs(buildMetadataSearchQuery(track), 8, 0)
-    const match = findBestMetadataMatch(track, result.items)
+    const candidates = await searchMetadataTracks([track], (query, limit, offset, signal) =>
+      provider.searchSongs(query, limit, offset, signal)
+    )
+    const match = findBestMetadataMatch(track, candidates)
     return enrichLocalTrackMetadata(track, match, policy)
   } catch {
     return track
@@ -399,17 +408,17 @@ function isLocalTrack(track: Track): boolean {
 
 function needsMetadataEnrichment(track: Track, policy: MetadataEnrichmentPolicy): boolean {
   return (
-    (policy.metadata && (!track.album || !track.genre)) ||
+    (policy.metadata &&
+      (isMetadataPlaceholder(track.artist) ||
+        isMetadataPlaceholder(track.album) ||
+        !track.genre)) ||
     (policy.cover && !track.cover) ||
     (policy.lyrics && (!track.lyrics || !track.translatedLyrics))
   )
 }
 
 function buildMetadataSearchQuery(track: Track): string {
-  return [track.title, track.artist]
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(' ')
+  return buildMetadataSearchQueries(track)[0] ?? ''
 }
 
 function normalizeMetadataQuery(value: string): string {

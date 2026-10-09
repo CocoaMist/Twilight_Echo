@@ -37,6 +37,7 @@ import { getTrackSource as getLogicalTrackSource } from '../utils/logicalTrackMo
 import { useEscapeToClose } from '../app/useDismissLayer.ts'
 import { useBackHandler } from '../app/useBackStack.ts'
 import { buildMetadataMatchCandidates } from '../utils/musicMetadataMatching'
+import { searchMetadataTracks } from '../utils/musicMetadataSearch'
 import {
   applyLibraryCollectionView,
   availableCollectionGenres,
@@ -862,17 +863,16 @@ async function handleMetadataRematch(track: Track): Promise<void> {
   repairMessage.value = `正在匹配 ${track.title || '当前曲目'} 的流媒体元数据...`
   try {
     await syncPluginProviders()
-    const query = [track.title, track.artist].filter(Boolean).join(' ')
-    const result = await mediaProviders.searchAllSongs({
-      query,
-      localTracks: tracks.value,
-      limit: 20,
-      offset: 0
+    const providerTracks = await searchMetadataTracks([track], async (query, limit, offset) => {
+      const result = await mediaProviders.searchAllSongs({
+        query,
+        localTracks: [],
+        limit,
+        offset
+      })
+      return { items: result.items.map((item) => item.track) }
     })
-    const candidates = buildMetadataMatchCandidates(
-      track,
-      result.items.map((item) => item.track)
-    )
+    const candidates = buildMetadataMatchCandidates(track, providerTracks)
     const best = candidates[0]
     if (!best) {
       repairMessage.value = `未找到可匹配 ${track.title || '当前曲目'} 的流媒体元数据`
