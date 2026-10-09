@@ -359,7 +359,10 @@ test('provider results replace approved remote media URLs before returning to th
     managerSource,
     /import \{ protectProviderMedia \} from '\.\.\/security\/remoteMediaGrants\.ts'/
   )
-  assert.match(managerSource, /value: protectProviderMedia\(message\.value, metadata\.method\)/)
+  assert.match(
+    managerSource,
+    /let value = protectProviderMedia\(message\.value, metadata\.method\)/
+  )
 })
 
 test('plugin host logs rotate at a bounded size and append through a serialized write chain', () => {

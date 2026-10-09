@@ -70,6 +70,7 @@ export const AUDIO_REASON_CODES: Record<string, ReasonCodeEntry> = {
   convolver_active: { severity: 'blocking', origin: 'processing', settingsAnchor: 'dsp' },
   crossfeed_active: { severity: 'blocking', origin: 'processing', settingsAnchor: 'dsp' },
   crossfade_active: { severity: 'blocking', origin: 'processing', settingsAnchor: 'playback' },
+  automix_active: { severity: 'info', origin: 'processing', settingsAnchor: 'playback' },
   dsd_output_mode_pcm: { severity: 'degraded', origin: 'processing', settingsAnchor: 'playback' },
 
   // ── DSP scene / output stage ─────────────────────────────────────────────

@@ -156,6 +156,9 @@ struct OutputInfo {
     uint64_t peakCallbackNanoseconds = 0;
     uint64_t totalDeadlineNanoseconds = 0;
     uint64_t deadlineMissCount = 0;
+    double p999DeadlineRatioUpper = 0;
+    uint64_t autoMixSegmentCount = 0;
+    double autoMixP999DeadlineRatioUpper = 0;
   };
 
   struct LatencyInfo {

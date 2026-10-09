@@ -1,7 +1,28 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { normalizeDsdState, normalizeNativePlaybackInfo } from './playerPlaybackInfo.ts'
+import {
+  mergeAutoMixPlaybackInfo,
+  normalizeDsdState,
+  normalizeNativePlaybackInfo
+} from './playerPlaybackInfo.ts'
 import type { PlaybackInfo } from '../../../preload/types'
+
+test('AutoMix settings refresh preserves the current transport snapshot', () => {
+  const current = makeInfo({
+    state: 'paused',
+    source: 'restored.flac',
+    position: 57,
+    queueIndex: 4
+  })
+  const autoMix = { enabled: false, state: 'disabled', experimentalAllowed: true }
+  const incoming = makeInfo({ state: 'stopped', source: '', position: 0, queueIndex: -1, autoMix })
+  const updated = mergeAutoMixPlaybackInfo(current, incoming)
+  assert.deepEqual(updated, { ...current, autoMix })
+  assert.notEqual(updated, current)
+  assert.equal(current.autoMix, undefined)
+  assert.deepEqual(mergeAutoMixPlaybackInfo(null, incoming), normalizeNativePlaybackInfo(incoming))
+  assert.equal(mergeAutoMixPlaybackInfo(updated, makeInfo()).autoMix, undefined)
+})
 
 function makeInfo(partial: Record<string, unknown> = {}): PlaybackInfo {
   return {

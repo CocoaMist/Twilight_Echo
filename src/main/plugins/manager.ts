@@ -58,6 +58,10 @@ import {
 } from './packageSecurity.ts'
 import { redactSensitiveText } from '../security/secureStorage.ts'
 import { protectProviderMedia } from '../security/remoteMediaGrants.ts'
+import {
+  providerAudioIdentity,
+  providerPlaybackSources
+} from '../security/providerPlaybackSources.ts'
 import { normalizeThemeContribution, normalizeUiContribution } from './themeContribution.ts'
 import { QISHUI_PLUGIN_ID, QishuiAuthBridge } from './qishuiAuthBridge.ts'
 import {
@@ -178,6 +182,8 @@ interface ProviderRpcMetadata {
   providerId: string
   pluginId: string
   method: TwilightMediaProviderMethod
+  playbackArgs?: unknown[]
+  returnSourceIdentity?: boolean
 }
 
 interface UiCommandRpcMetadata {
@@ -190,6 +196,9 @@ export interface TwilightProviderCallOptions {
   idempotencyKey?: string
   /** Cancels queued or active plugin RPC work and propagates cancellation to the provider host. */
   signal?: AbortSignal
+  /** Main-process source refresh must keep the original provider owner. */
+  expectedPluginId?: string
+  returnAutoMixSourceIdentity?: boolean
 }
 
 const STATE_FILE = 'plugin-state.json'
@@ -745,6 +754,22 @@ export class TwilightPluginManager extends EventEmitter {
           : `Provider 未启用：${normalizedProviderId}`
       )
     }
+    if (options.expectedPluginId && options.expectedPluginId !== running.descriptor.id) {
+      throw new Error('Playback source provider owner changed')
+    }
+    const playbackArgs = method === 'getPlaybackUrl' ? structuredClone(args) : undefined
+    const invocationArgs = playbackArgs
+      ? [
+          args[0],
+          {
+            ...(args[1] && typeof args[1] === 'object' && !Array.isArray(args[1])
+              ? (args[1] as Record<string, unknown>)
+              : {}),
+            autoMixSource: true
+          },
+          ...args.slice(2)
+        ]
+      : args
 
     this.hostIdle?.touch(running.descriptor.id)
     const requestId = randomUUID()
@@ -757,7 +782,13 @@ export class TwilightPluginManager extends EventEmitter {
       metadata: {
         providerId: normalizedProviderId,
         pluginId: running.descriptor.id,
-        method
+        method,
+        ...(playbackArgs
+          ? {
+              playbackArgs,
+              returnSourceIdentity: options.returnAutoMixSourceIdentity === true
+            }
+          : {})
       },
       dispatch: () => {
         this.assertRunningPlugin(running)
@@ -766,7 +797,7 @@ export class TwilightPluginManager extends EventEmitter {
           requestId,
           providerId: normalizedProviderId,
           method,
-          args,
+          args: invocationArgs,
           idempotencyKey
         } satisfies PluginHostRequest)
       },
@@ -1739,12 +1770,33 @@ export class TwilightPluginManager extends EventEmitter {
     const metadata = this.rpcCalls.getMetadata<ProviderRpcMetadata>(pluginId, message.requestId)
     if (!metadata) return
     if (message.ok) {
+      let value = protectProviderMedia(message.value, metadata.method)
+      const envelope =
+        metadata.method === 'getPlaybackUrl' &&
+        message.value &&
+        typeof message.value === 'object' &&
+        !Array.isArray(message.value)
+          ? (message.value as Record<string, unknown>)
+          : null
+      const playbackSource = envelope?.streamUrl ?? message.value
+      if (envelope && typeof playbackSource === 'string' && !metadata.returnSourceIdentity) {
+        value = (value as Record<string, unknown>).streamUrl
+      }
       const completion = this.rpcCalls.complete<ProviderRpcMetadata>(pluginId, message.requestId, {
         ok: true,
-        value: protectProviderMedia(message.value, metadata.method)
+        value
       })
       if (completion.status !== 'settled') return
-      if (metadata.method === 'getPlaybackUrl' && isPluginHostedPlaybackUrl(message.value)) {
+      const identity = providerAudioIdentity(envelope?.autoMixIdentity)
+      if (typeof playbackSource === 'string' && identity && metadata.playbackArgs) {
+        providerPlaybackSources.register(playbackSource, {
+          providerId: metadata.providerId,
+          pluginId: metadata.pluginId,
+          args: metadata.playbackArgs,
+          identity
+        })
+      }
+      if (metadata.method === 'getPlaybackUrl' && isPluginHostedPlaybackUrl(playbackSource)) {
         const running = this.running.get(pluginId)
         if (running) running.hasPlaybackProxy = true
       }

@@ -864,6 +864,40 @@ napi_value AnalyzeBpm(napi_env env, napi_callback_info info) {
   return json;
 }
 
+napi_value AnalyzeAutoMix(napi_env env, napi_callback_info info) {
+  ensureEngine();
+  clearLastError();
+  size_t argc = 2; napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 1) { napi_throw_type_error(env, nullptr, "AutoMix 分析需要音源路径"); return makeUndefined(env); }
+  const auto source = getStringArg(env, argv[0]);
+  const auto options = argc > 1 ? getStringArg(env, argv[1]) : "{}";
+  size_t required = 0;
+  auto result = TAE_AnalyzeAutoMix(g_engine, source.c_str(), options.c_str(), nullptr, 0, &required);
+  if (result != TAE_RESULT_OK) return throwOnError(env, result);
+  std::vector<char> buffer(required == 0 ? 1 : required);
+  result = TAE_AnalyzeAutoMix(g_engine, source.c_str(), options.c_str(), buffer.data(), buffer.size(), &required);
+  if (result != TAE_RESULT_OK) return throwOnError(env, result);
+  napi_value json; napi_create_string_utf8(env, buffer.data(), NAPI_AUTO_LENGTH, &json); return json;
+}
+
+napi_value SetAutoMixConfig(napi_env env, napi_callback_info info) {
+  ensureEngine(); clearLastError();
+  size_t argc = 1; napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  return throwOnError(env, TAE_SetAutoMixConfig(g_engine, argc ? getStringArg(env, argv[0]).c_str() : "{}"));
+}
+
+napi_value GetAutoMixStatus(napi_env env, napi_callback_info) {
+  return readJson(env, TAE_GetAutoMixStatus);
+}
+
+napi_value SetAutoMixFeatures(napi_env env,napi_callback_info info) {
+  ensureEngine();clearLastError();
+  size_t argc=1;napi_value argv[1];napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr);
+  return throwOnError(env,TAE_SetAutoMixFeatures(g_engine,argc?getStringArg(env,argv[0]).c_str():"{}"));
+}
+
 napi_value AnalyzeLoudness(napi_env env, napi_callback_info info) {
   ensureEngine();
   clearLastError();
@@ -944,6 +978,10 @@ napi_value Init(napi_env env, napi_value exports) {
   define(env, exports, "GetSpectrumData", GetSpectrumData);
   define(env, exports, "GetVisualizationData", GetVisualizationData);
   define(env, exports, "AnalyzeBpm", AnalyzeBpm);
+  define(env, exports, "AnalyzeAutoMix", AnalyzeAutoMix);
+  define(env, exports, "SetAutoMixConfig", SetAutoMixConfig);
+  define(env, exports, "SetAutoMixFeatures", SetAutoMixFeatures);
+  define(env, exports, "GetAutoMixStatus", GetAutoMixStatus);
   define(env, exports, "AnalyzeLoudness", AnalyzeLoudness);
   return exports;
 }

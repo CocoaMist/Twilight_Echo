@@ -17,6 +17,7 @@ export {
   normalizeOutputConfig
 } from '../../shared/audioOutputConfig.ts'
 import { readFileSync } from 'fs'
+import { DEFAULT_AUTO_MIX, normalizeAutoMix } from '../../shared/autoMix.ts'
 import type {
   AudioDeviceOption,
   AudioEngineQueueItem,
@@ -132,7 +133,8 @@ export const DEFAULT_AUDIO_PROCESSING: AudioProcessingSettings = {
   crossfeedDelayMs: 0.35,
   crossfeedCutoffHz: 700,
   gapless: true,
-  crossfadeSeconds: 0
+  crossfadeSeconds: 0,
+  autoMix: { ...DEFAULT_AUTO_MIX }
 }
 
 export const DEFAULT_OUTPUT_CONFIG: OutputConfig = {
@@ -424,6 +426,14 @@ export function createPlaybackInfoFanoutSignature(
     outputInfo.deviceRecovered,
     outputInfo.recoveryCount,
     nativeDspPluginFanoutSignature(outputInfo.nativeDsp),
+    info.autoMix?.enabled,
+    info.autoMix?.state,
+    info.autoMix?.styleId,
+    info.autoMix?.reason,
+    info.autoMix?.transitionSeconds,
+    info.autoMix?.experimentalAllowed,
+    info.autoMix?.configRevision,
+    Math.round((info.autoMix?.progress ?? 0) * 100),
     outputInfo.isDsd,
     outputInfo.dsdMode,
     outputInfo.dsdRate
@@ -559,7 +569,12 @@ export function audioProcessingSettingsEqual(
   left: AudioProcessingSettings,
   right: AudioProcessingSettings
 ): boolean {
+  const leftMix = normalizeAutoMix(left.autoMix),
+    rightMix = normalizeAutoMix(right.autoMix)
   return (
+    leftMix.enabled === rightMix.enabled &&
+    leftMix.allowIntelligentSkip === rightMix.allowIntelligentSkip &&
+    leftMix.maxTransitionSeconds === rightMix.maxTransitionSeconds &&
     left.dspEnabled === right.dspEnabled &&
     left.directMode === right.directMode &&
     left.clipGuard === right.clipGuard &&
@@ -848,6 +863,7 @@ export function normalizeAudioProcessingSettings(
     crossfeedDelayMs: clampNumber(settings?.crossfeedDelayMs, 0.05, 2, 0.35),
     crossfeedCutoffHz: clampNumber(settings?.crossfeedCutoffHz, 80, 4000, 700),
     gapless: settings?.gapless !== false,
+    autoMix: normalizeAutoMix(settings?.autoMix),
     crossfadeSeconds: clampNumber(settings?.crossfadeSeconds, 0, 12, 0),
     crossfadeCurve: settings?.crossfadeCurve === 'equal-power' ? 'equal-power' : 'linear',
     crossfadeContent:

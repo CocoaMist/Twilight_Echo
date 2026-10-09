@@ -1,0 +1,267 @@
+{
+  "format": 1,
+  "referencePackage": "automix-c",
+  "referenceLicense": "not-specified-in-reference-package",
+  "baseline": "raw evidence disassembly; compiled-asm is not behavioral evidence",
+  "scoring": [
+    {
+      "name": "dance-original",
+      "address": "0x22745b338",
+      "evidence": "evidence/implementation/dance-original-score.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "dance-shifted",
+      "address": "0x22745b980",
+      "evidence": "evidence/implementation/dance-shifted-score.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "filtered-direct",
+      "address": "0x227461768",
+      "evidence": "evidence/candidate-paths/filtered-direct.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "filtered-shifted",
+      "address": "0x227461f04",
+      "evidence": "evidence/implementation/filtered-shifted-score.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "hiphop-direct",
+      "address": "0x227466860",
+      "evidence": "evidence/candidate-paths/hiphop-direct.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "hiphop-shifted",
+      "address": "0x227466f28",
+      "evidence": "evidence/candidate-paths/hiphop-shifted.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "pop-scaled-shifted",
+      "address": "0x227469f58",
+      "evidence": "evidence/candidate-paths/pop-shifted.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "smart-crossfade",
+      "address": "0x227470e0c",
+      "evidence": "evidence/candidate-paths/smart-direct.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "dead-air",
+      "address": "0x22746ad10",
+      "evidence": "evidence/candidate-paths/deadair-style.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "fallback-crossfade",
+      "address": "0x22746c7a4",
+      "evidence": "evidence/candidate-paths/fallback-root.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    },
+    {
+      "name": "soft-skip",
+      "address": "0x227474a3c",
+      "evidence": "evidence/candidate-paths/softskip-root.asm",
+      "implementation": "x64/scoring.S",
+      "oracle": "recovered/am_scoring.c",
+      "validation": "tests/differential.cpp",
+      "scope": "recovered arithmetic; upstream analysis is separate"
+    }
+  ],
+  "groups": {
+    "selection": [
+      "v4-selection-final/weighted-score-selection.asm",
+      "v4-selection-final/uniform-range-selection.asm",
+      "v4-selection-final/preferred-results.asm",
+      "v4-selection-final/sort-score-comparator.asm"
+    ],
+    "timing": [
+      "implementation/continuous-playback-rate.asm",
+      "implementation/continuous-transition-time.asm",
+      "implementation/automation-ramp-value.asm",
+      "implementation/automation-easing.asm"
+    ],
+    "catalogue": [
+      "template-call-map.json",
+      "template-curve-id.asm",
+      "template-curve-easing-id.asm"
+    ],
+    "scoreFold": [
+      "score-core.asm"
+    ]
+  },
+  "files": [
+    {
+      "path": "evidence/candidate-paths/deadair-style.asm",
+      "bytes": 3033,
+      "sha256": "3b465ce4ee2a5bf129a2b3a11729a3fc393605bc08a7f010f7745c3900aab229"
+    },
+    {
+      "path": "evidence/candidate-paths/fallback-root.asm",
+      "bytes": 30973,
+      "sha256": "dafade54579d47ebeffd44f342c07bcf347874608fce6cba89e431bdd58041b2"
+    },
+    {
+      "path": "evidence/candidate-paths/filtered-direct.asm",
+      "bytes": 21349,
+      "sha256": "1418e63b3dec6de46863f131525c066c465baae98c60f47f8033536f0f56faba"
+    },
+    {
+      "path": "evidence/candidate-paths/hiphop-direct.asm",
+      "bytes": 18786,
+      "sha256": "e24d2babdc621485577a2f35b473ea162c629bb9a5696e2f56ea9b7a5d7d128e"
+    },
+    {
+      "path": "evidence/candidate-paths/hiphop-shifted.asm",
+      "bytes": 15046,
+      "sha256": "b3c3e931eeb8295d309ac5687f2f9ac532a4cbb9927a2185d885fd991b8ba898"
+    },
+    {
+      "path": "evidence/candidate-paths/pop-shifted.asm",
+      "bytes": 18309,
+      "sha256": "a7ed050c5b7ac6f63c7e1c28c5f34a9680a3244edd44073b23852fd2f43a7b2d"
+    },
+    {
+      "path": "evidence/candidate-paths/smart-direct.asm",
+      "bytes": 14773,
+      "sha256": "0da684025d9f87c750bc60dcb39532acc92b13cfa67326348d4236e8c2400b0a"
+    },
+    {
+      "path": "evidence/candidate-paths/softskip-root.asm",
+      "bytes": 28612,
+      "sha256": "47acf16d6b97e830d6c355beb6212405b82c7b7c1290bc32462efc3c00f5cfef"
+    },
+    {
+      "path": "evidence/implementation/automation-easing.asm",
+      "bytes": 2071,
+      "sha256": "79e07c5ce8a632e16d25b3dadeaac29e58756be7a7855669b065a2efab59acbc"
+    },
+    {
+      "path": "evidence/implementation/automation-ramp-value.asm",
+      "bytes": 3461,
+      "sha256": "c5ef035bbe2039d4e713c7e4338bf2e8b370f1991845c8d6ff9e081d3ef4717a"
+    },
+    {
+      "path": "evidence/implementation/continuous-playback-rate.asm",
+      "bytes": 2024,
+      "sha256": "243fbd9cddd19baeb1ac963421746c4d840c4ab5766b31cadbb6999dd98ea221"
+    },
+    {
+      "path": "evidence/implementation/continuous-transition-time.asm",
+      "bytes": 1565,
+      "sha256": "03e463fb050d3ea6acd6dc739569b2e90fa9f9a78df520ae297d02a4ef9195c6"
+    },
+    {
+      "path": "evidence/implementation/dance-original-score.asm",
+      "bytes": 16562,
+      "sha256": "e430cb292bbb16bea2a627d38f0f3fb2f7d3d029ba326298b537e89b332533e0"
+    },
+    {
+      "path": "evidence/implementation/dance-shifted-score.asm",
+      "bytes": 11278,
+      "sha256": "c55b942508d911e7f261ee25c6224e8d6bc6d9f0f016041abc137692a8e658ae"
+    },
+    {
+      "path": "evidence/implementation/filtered-shifted-score.asm",
+      "bytes": 11643,
+      "sha256": "4e8731e633b0857ce02bd064ef28eae9b72fc457dd659ccd6302e32e49919b5e"
+    },
+    {
+      "path": "evidence/score-core.asm",
+      "bytes": 1198,
+      "sha256": "a8eda3d8e92ce7933f3588b7df5f151fe97f325bd961acc07549ee8e74c9dd26"
+    },
+    {
+      "path": "evidence/template-call-map.json",
+      "bytes": 1571,
+      "sha256": "53a039cfce73c96f8dacca53039051e7baf172c14d605348566e77eef1c47eb4"
+    },
+    {
+      "path": "evidence/template-curve-easing-id.asm",
+      "bytes": 868,
+      "sha256": "6e7f60bd41b4e9211fd3b082409bc6f38b638741d7fa78ce417bd58e448c1340"
+    },
+    {
+      "path": "evidence/template-curve-id.asm",
+      "bytes": 3698,
+      "sha256": "e052a7f3dcbc8d734f9aaddb4dcf488054acab71232c5c2ea7c6fbe30aac838f"
+    },
+    {
+      "path": "evidence/v4-selection-final/preferred-results.asm",
+      "bytes": 26777,
+      "sha256": "28486a13769a0a52d316287387c00d1409c8342f8c33b74da29d9775c41bc740"
+    },
+    {
+      "path": "evidence/v4-selection-final/sort-score-comparator.asm",
+      "bytes": 907,
+      "sha256": "0e522d9facde04a25ea2bc9dfe307aaf66f8629e9442cc7557114e371376ab5f"
+    },
+    {
+      "path": "evidence/v4-selection-final/uniform-range-selection.asm",
+      "bytes": 646,
+      "sha256": "9d86e2d765bd29d86b65e467858eaf96d7d009bbb3b8b9a91a668bd39b0297aa"
+    },
+    {
+      "path": "evidence/v4-selection-final/weighted-score-selection.asm",
+      "bytes": 17090,
+      "sha256": "606adfcb2e2eb47bfa3a457762c5e40d89fb4e4de4eb2721366ebfa3fb896e41"
+    }
+  ],
+  "independent": [
+    "CandidatePlanner.cpp",
+    "FeatureFrontend.cpp",
+    "ModelRuntime.cpp",
+    "TransitionEffects.cpp",
+    "AutoMixAnalyzer.cpp"
+  ],
+  "unresolved": [
+    "native entropy/seconds-to-milliseconds environment",
+    "Apple regional loudness calibration",
+    "private AU effect sound and ordinal mapping",
+    "original Song structure/model parity"
+  ],
+  "distributionExclusions": [
+    "raw evidence snapshots",
+    "Apple framework binaries",
+    "Apple original executable/models",
+    "compiled-asm reference output",
+    "oracle library",
+    "conversion fixtures"
+  ]
+}

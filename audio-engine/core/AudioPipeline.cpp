@@ -9,6 +9,10 @@
 #include "../decoder/SacdIsoProbe.h"
 #include "../output/OutputBackendFactory.h"
 #include "../utils/JsonUtils.h"
+#include "../automix/CandidatePlanner.h"
+extern "C" {
+#include "../automix/recovered/am_json.h"
+}
 
 #include <algorithm>
 #include <bit>
@@ -18,6 +22,8 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <sstream>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -753,6 +759,7 @@ struct AudioPipeline::DecodeStream {
 
   QueueItem item;
   AudioStreamInfo stream;
+  double decodedSourceDurationSeconds = 0;
   AudioFormat decodeFormat;
   std::unique_ptr<FFmpegDecoder> decoder;
   std::unique_ptr<DsdReader> dsdReader;
@@ -762,6 +769,7 @@ struct AudioPipeline::DecodeStream {
   DopPacker dopPacker;
   DsdDownrateProcessor dsdDownrateProcessor;
   bool dsdDownrateActive = false;
+  bool precisePcmSeek = false;
   int targetDsdRate = 0;
   int actualDsdSampleRate = 0;
   AudioBuffer buffer;
@@ -769,6 +777,7 @@ struct AudioPipeline::DecodeStream {
   std::atomic<bool> running{false};
   std::atomic<bool> eof{false};
   std::atomic<uint64_t> crossfadeConsumedFrames{0};
+  std::atomic<uint64_t> renderDiscardDebt{0};
   std::thread decodeThread;
   Mode mode = Mode::Pcm;
   bool typedPassthrough = false;
@@ -791,6 +800,7 @@ struct AudioPipeline::DecodeStream {
       return false;
     }
     stream = decoder->streamInfo();
+    decodedSourceDurationSeconds = stream.durationSeconds;
     stream.source = item.source;
     if (hasCueRange()) {
       stream.durationSeconds = cueLogicalDurationSeconds();
@@ -800,6 +810,13 @@ struct AudioPipeline::DecodeStream {
     // Host-injected library RG/R128 and loudnorm measurement overlay decode-time tags.
     applyQueueReplayGainTags(item, stream.replayGain);
     return true;
+  }
+
+  double autoMixDurationSeconds() const {
+    // Queue metadata is a display hint and can be rounded to whole seconds.
+    // Model identity and prepared sample windows use the decoder's source time.
+    return !hasCueRange() && decodedSourceDurationSeconds > 0
+        ? decodedSourceDurationSeconds : stream.durationSeconds;
   }
 
   void setResamplerQuality(DspResamplerQuality quality) {
@@ -895,7 +912,9 @@ struct AudioPipeline::DecodeStream {
     stream.decodedFormat = decodeFormat;
     const double logicalStart = clampLogicalSegmentPosition(startTimeSeconds);
     const double sourceStart = sourcePositionForLogicalPosition(logicalStart);
-    if (sourceStart > 0.0 && !decoder->seek(sourceStart, error)) return false;
+    if (sourceStart > 0.0 && !(precisePcmSeek
+        ? decoder->seekOutputFrame(static_cast<uint64_t>(std::floor(sourceStart * decodeFormat.sampleRate)), error)
+        : decoder->seek(sourceStart, error))) return false;
 
     if (hasCueRange()) {
       remainingSegmentFrames = remainingFramesForSourcePosition(sourceStart);
@@ -1083,6 +1102,12 @@ struct AudioPipeline::DecodeStream {
 
   size_t readFloat(float* output, size_t frameCount) {
     if (!output || frameCount == 0) return 0;
+    const auto debt = renderDiscardDebt.load(std::memory_order_acquire);
+    if (debt) {
+      const auto skipped = buffer.discard(debt);
+      renderDiscardDebt.fetch_sub(skipped,std::memory_order_acq_rel);
+      if (skipped < debt) return 0;
+    }
     const AudioFormat bufferFormat = buffer.format();
     if (bufferFormat.sampleFormat == AudioSampleFormat::Float32Interleaved) {
       return buffer.read(output, frameCount);
@@ -1509,6 +1534,34 @@ struct AudioPipeline::DecodeStreamReaper {
   bool stopping = false;
 };
 
+struct AudioPipeline::AutoMixTransition {
+  TAE_AM_Prepared prepared = nullptr;
+  TAE_AM_PreparedInfoV1 info{sizeof(TAE_AM_PreparedInfoV1), TAE_AM_ABI_VERSION};
+  std::shared_ptr<DecodeStream> resume;
+  DecodeStream* outgoing = nullptr;
+  DecodeStream* incoming = nullptr;
+  uint64_t startFrame = 0, serial = 0, retiredEpoch = 0, memoryBytes = 0;
+  // 0 armed, 1 mixing, 2 committing, 3 committed, 4 canceled,
+  // 5 manual Next plays the prepared incoming remainder, 6 remainder complete.
+  std::atomic<unsigned> phase{0};
+  ~AutoMixTransition() { TAE_AM_DestroyPrepared(prepared); }
+};
+
+struct AudioPipeline::AutoMixJob {
+  std::shared_ptr<DecodeStream> outgoing, incoming;
+  double outgoingDurationSeconds = 0, incomingDurationSeconds = 0;
+  TAE_AM_ConfigV1 config{};
+  AudioFormat format;
+  DspConfig dsp;
+  uint64_t serial = 0;
+  uint64_t planRevision = 0;
+  size_t callbackFrames = 0;
+  std::string outgoingFeatures, incomingFeatures;
+  std::string outgoingPreparationSource,incomingPreparationSource;
+};
+
+#include "AutoMixPipeline.inc"
+
 AudioPipeline::AudioPipeline()
     : dspChain_(std::make_unique<DspChain>()),
       preloadDspChain_(std::make_unique<DspChain>()) {
@@ -1516,11 +1569,13 @@ AudioPipeline::AudioPipeline()
   // succeeds. Keeping this fixed-capacity retirement window reserved makes
   // the ownership hand-off deterministic.
   renderDspGraphs_.reserve(kMaxRenderDspGraphGenerations);
+  retiredAutoMix_.reserve(kMaxRenderDspGraphGenerations);
   // activeDspChainLocked() can return either chain, so both have to observe the same
   // realtime convolver telemetry.
   if (dspChain_ && preloadDspChain_) {
     preloadDspChain_->setConvolverRealtimeState(dspChain_->convolverRealtimeState());
   }
+  autoMixThread_ = std::thread([this] { autoMixWorker(); });
 }
 
 void AudioPipeline::LatestControlCommandSlot::publish(const ControlCommand& command) noexcept {
@@ -1616,6 +1671,12 @@ bool AudioPipeline::LatestDspGraphCommandSlot::read(ControlCommand* command) con
 
 AudioPipeline::~AudioPipeline() {
   stop();
+  {
+    std::lock_guard lock(mutex_);
+    autoMixShutdown_ = true;
+    autoMixWake_.notify_one();
+  }
+  if (autoMixThread_.joinable()) autoMixThread_.join();
 }
 
 std::shared_ptr<AudioPipeline::DecodeStream> AudioPipeline::makeDecodeStream() {
@@ -1827,19 +1888,26 @@ TAE_Result AudioPipeline::playInternal(
 
   OutputConfig outputConfig;
   std::string dspGraphJson;
+  bool autoMixEnabled = false;
   {
     std::lock_guard lock(mutex_);
     outputConfig = outputConfig_;
     dspGraphJson = dspGraphJson_;
+    autoMixEnabled = autoMixConfig_.enabled != 0;
   }
 
   const DspConfig requestedDspConfig = DspChain::parseConfigJson(dspConfigJson);
+  if (autoMixEnabled) {
+    allowNativeDsd = false;
+    allowDop = false;
+    outputConfig.pcmToDsdMode = PcmToDsdMode::Off;
+  }
   const DspOutputStageRequest outputStageRequest = outputStageRequestFromGraphJson(dspGraphJson);
   // The DSD routes are decided against the graph that will run, not the legacy
   // module toggles that ride along with it.
   const std::optional<bool> graphProcessingActive = graphStateProcessingActive(dspGraphJson);
   const bool processingRequiresPcm =
-      dspConfigProcessingRequiresPcm(
+      autoMixEnabled || dspConfigProcessingRequiresPcm(
           requestedDspConfig, outputConfig, requestedPlaybackVolume, requestedPlaybackRate,
           graphProcessingActive);
 
@@ -2574,7 +2642,7 @@ TAE_Result AudioPipeline::playInternal(
     recomputeDspActiveLocked(requestedPlaybackVolume);
     spectrum_.prepare(decodeFormat_, visualizationFftResolutionForConfig(dspConfig_.fftResolution));
     spectrum_.setEnabled(dspConfig_.fftEnabled);
-    gaplessEnabled_ = gaplessEnabled && !dopPath && !nativeDsdPath && !pcmToDsdPath;
+    gaplessEnabled_ = (gaplessEnabled || autoMixEnabled) && !dopPath && !nativeDsdPath && !pcmToDsdPath;
     dopPathActive_ = dopPath;
     nativeDsdPathActive_ = nativeDsdPath;
     pcmToDsdPathActive_ = pcmToDsdPath;
@@ -2647,7 +2715,7 @@ TAE_Result AudioPipeline::playInternal(
                                    : static_cast<size_t>(std::max(1, outputFormat_.sampleRate / 100));
   active->start();
   active->waitForPreroll(prerollFrames, std::chrono::milliseconds(500));
-  if (gaplessEnabled && !dopPath && !nativeDsdPath && !pcmToDsdPath) {
+  if ((gaplessEnabled || autoMixEnabled) && !dopPath && !nativeDsdPath && !pcmToDsdPath) {
     std::string preloadError;
     preloadNext(upcomingItem, &preloadError);
   }
@@ -2896,6 +2964,7 @@ TAE_Result AudioPipeline::stopUnlocked() {
   {
     std::lock_guard lock(mutex_);
     dsdMuteGuard_.stop();
+    cancelAutoMixLocked("stopped");
     state_ = PipelineState::Stopped;
     renderState_.store(PipelineState::Stopped, std::memory_order_release);
     pauseFade_.clear();
@@ -2988,6 +3057,8 @@ TAE_Result AudioPipeline::stopUnlocked() {
     publishedActiveDspGraph_ = nullptr;
     publishedPreloadDspGraph_ = nullptr;
     renderDspGraphs_.clear();
+    autoMixTransition_.reset();
+    retiredAutoMix_.clear();
     spectrum_.resetCapture();
     publishStatusLocked();
   }
@@ -2999,12 +3070,14 @@ TAE_Result AudioPipeline::seek(double seconds, std::string* error) {
   {
     std::lock_guard lock(mutex_);
     synchronizeRenderPromotionLocked();
+    cancelAutoMixLocked("seek");
     if (!activeStream_ || outputFormat_.sampleRate <= 0) return TAE_RESULT_NOT_INITIALIZED;
     active = activeStream_;
   }
 
   const double boundedSeconds = active->clampRelativePosition(seconds);
   if (!active->seek(boundedSeconds, error)) return TAE_RESULT_INTERNAL_ERROR;
+  active->renderDiscardDebt.store(0,std::memory_order_release);
   resetPreloadOverlap();
 
   {
@@ -3063,12 +3136,14 @@ void AudioPipeline::setLoopRange(double startSeconds, double endSeconds) {
   storeAtomicDouble(loopStartBits_, startSeconds, std::memory_order_release);
   storeAtomicDouble(loopEndBits_, endSeconds, std::memory_order_release);
   loopEnabled_.store(true, std::memory_order_release);
+  { std::lock_guard lock(mutex_); cancelAutoMixLocked("ab_loop"); }
 }
 
 void AudioPipeline::clearLoopRange() {
   loopEnabled_.store(false, std::memory_order_release);
   storeAtomicDouble(loopStartBits_, 0.0, std::memory_order_release);
   storeAtomicDouble(loopEndBits_, 0.0, std::memory_order_release);
+  { std::lock_guard lock(mutex_); scheduleAutoMixLocked(); }
 }
 
 bool AudioPipeline::enforceLoopRange(std::string* error) {
@@ -3193,7 +3268,7 @@ void AudioPipeline::setDspConfig(const std::string& dspConfigJson) {
     dspConfig_ = nextConfig;
     renderDitherMode_.store(static_cast<uint32_t>(dspConfig_.ditherMode), std::memory_order_release);
     renderDitherResetRequested_.store(true, std::memory_order_release);
-    gaplessEnabled_ = !dopPathActive_ && !nativeDsdPathActive_ && !pcmToDsdPathActive_ && dspConfig_.gapless;
+    gaplessEnabled_ = !dopPathActive_ && !nativeDsdPathActive_ && !pcmToDsdPathActive_ && (dspConfig_.gapless || autoMixConfig_.enabled);
     if (!gaplessEnabled_) {
       disabledPreload = std::move(preloadStream_);
       renderPreloadStream_.store(nullptr, std::memory_order_release);
@@ -3300,7 +3375,7 @@ bool AudioPipeline::applyDspState(
     }
 
     const bool nextGaplessEnabled =
-        !dopPathActive_ && !nativeDsdPathActive_ && !pcmToDsdPathActive_ && nextConfig.gapless;
+        !dopPathActive_ && !nativeDsdPathActive_ && !pcmToDsdPathActive_ && (nextConfig.gapless || autoMixConfig_.enabled);
     const DspTrackContext activeContext{stream_, currentItem_};
     const DspTrackContext preloadContext =
         nextGaplessEnabled && preloadStream_
@@ -3421,7 +3496,25 @@ OutputInfo::RenderPerformanceSnapshot AudioPipeline::renderPerformanceSnapshot()
   snapshot.peakCallbackNanoseconds = renderPeakCallbackNanoseconds_.load(std::memory_order_relaxed);
   snapshot.totalDeadlineNanoseconds = renderTotalDeadlineNanoseconds_.load(std::memory_order_relaxed);
   snapshot.deadlineMissCount = renderDeadlineMissCount_.load(std::memory_order_relaxed);
+  const auto percentile=[](const auto& histogram,uint64_t* count=nullptr) {
+    std::array<uint64_t,1002> values{};uint64_t total=0;
+    for(size_t i=0;i<values.size();++i)total+=(values[i]=histogram[i].load(std::memory_order_relaxed));
+    if(count)*count=total;
+    const uint64_t target=total-total/1000;uint64_t sum=0;
+    for(size_t i=0;total&&i<values.size();++i)if((sum+=values[i])>=target)return i/1000.;
+    return 0.;
+  };
+  snapshot.p999DeadlineRatioUpper=percentile(renderDeadlineHistogram_);
+  snapshot.autoMixP999DeadlineRatioUpper=percentile(autoMixDeadlineHistogram_,&snapshot.autoMixSegmentCount);
   return snapshot;
+}
+
+void AudioPipeline::recordAutoMixPerformance(size_t frames,int rate,uint64_t ns) noexcept {
+  if(!frames||rate<=0)return;
+  const auto deadline=uint64_t(frames)*1000000000ULL/uint64_t(rate);
+  if(!deadline)return;
+  const auto bucket=ns>deadline?1001:static_cast<size_t>((ns*1000+deadline-1)/deadline);
+  autoMixDeadlineHistogram_[bucket].fetch_add(1,std::memory_order_relaxed);
 }
 
 void AudioPipeline::recordRenderPerformance(
@@ -3450,6 +3543,8 @@ void AudioPipeline::recordRenderPerformance(
   const uint64_t deadlineNanoseconds =
       (static_cast<uint64_t>(frameCount) * 1000000000ULL) / static_cast<uint64_t>(sampleRate);
   if (deadlineNanoseconds == 0) return;
+  const auto bucket=elapsedNanoseconds>deadlineNanoseconds?1001:static_cast<size_t>((elapsedNanoseconds*1000+deadlineNanoseconds-1)/deadlineNanoseconds);
+  renderDeadlineHistogram_[bucket].fetch_add(1,std::memory_order_relaxed);
   renderTotalDeadlineNanoseconds_.fetch_add(deadlineNanoseconds, std::memory_order_relaxed);
   if (elapsedNanoseconds > deadlineNanoseconds) {
     renderDeadlineMissCount_.fetch_add(1, std::memory_order_relaxed);
@@ -3839,6 +3934,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
     {
       std::lock_guard lock(mutex_);
       synchronizeRenderPromotionLocked();
+      cancelAutoMixLocked("queue_changed");
       previous = std::move(preloadStream_);
       renderPreloadStream_.store(nullptr, std::memory_order_release);
       publishRenderDspPointerTransitionLocked(
@@ -3866,12 +3962,17 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
   {
     std::lock_guard lock(mutex_);
     synchronizeRenderPromotionLocked();
-    if (preloadStream_ && sameQueueSegment(preloadStream_->item, *item)) return true;
+    if (preloadStream_ && sameQueueSegment(preloadStream_->item, *item)) {
+      scheduleAutoMixLocked();
+      return true;
+    }
     outputFormat = outputFormat_;
     gapless = gaplessEnabled_;
     bufferSizeFrames = outputInfo_.bufferSizeFrames;
     resamplerQuality = dspConfig_.resamplerQuality;
-    continuityFirst = outputConfig_.continuityFirst;
+    // AutoMix already opts into processed PCM. Both sources must be converted
+    // to the current render format, including when bit-perfect-first is saved.
+    continuityFirst = outputConfig_.continuityFirst || autoMixConfig_.enabled;
     activeIsDsd = stream_.isDsd;
     typedPassthrough = activeStream_ && activeStream_->typedPassthrough;
     if (activeStream_) activeSourceFormat = activeStream_->stream.sourceFormat;
@@ -3937,6 +4038,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
       lastPreloadFormatMismatch_ = true;
     } else {
       renderPreloadStream_.store(preloadStream_.get(), std::memory_order_release);
+      scheduleAutoMixLocked();
     }
     publishStatusLocked();
   }
@@ -3949,6 +4051,60 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
 
 bool AudioPipeline::skipToPreloaded(const QueueItem& item, std::string* error) {
   std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
+  IOutputBackend* suspendedOutput = nullptr;
+  uint64_t handoverFrame = 0;
+  std::shared_ptr<DecodeStream> handover;
+  const auto restartSuspended = [&]() {
+    return !suspendedOutput || suspendedOutput->startTyped(
+        [this](PcmBlock& block){return renderTyped(block);},
+        [this](float* data,size_t frames){return render(data,frames);},
+        [this](OutputBackendEvent event,const std::string& message){
+          std::lock_guard lock(mutex_);outputEventMessage_=message;
+          if(event==OutputBackendEvent::DeviceInvalidated)deviceInvalidated_=true;else renderError_=true;
+          state_=PipelineState::Stopped;renderState_.store(PipelineState::Stopped,std::memory_order_release);
+        },error);
+  };
+  {
+    std::lock_guard lock(mutex_);
+    synchronizeRenderPromotionLocked();
+    if (autoMixTransition_ && renderAutoMixStarted_.load(std::memory_order_acquire) &&
+        preloadStream_ && sameQueueSegment(preloadStream_->item,item)) {
+      suspendedOutput = output_.get();
+      handover = autoMixTransition_->resume;
+    }
+  }
+  if(suspendedOutput) {
+    // Stop joins the backend callback before sampling the incoming clock.
+    // This explicit transport action may seek/preroll on the control thread.
+    // The device remains open; no already-audible incoming prefix is replayed.
+    suspendedOutput->stop();
+    {
+      std::lock_guard lock(mutex_);
+      synchronizeRenderPromotionLocked();
+      if(autoMixTransition_) {
+        handoverFrame=TAE_AM_PreparedSourceFrame(autoMixTransition_->prepared,1,
+            renderAutoMixFrames_.load(std::memory_order_acquire));
+        // Continue the immutable incoming PCM at the actual audible position;
+        // no second seek or expiring URL can make Next replay/skip its prefix.
+        retireDecodeStreamLocked(std::move(activeStream_));
+        activeStream_=handover;
+        stream_=handover->stream;currentItem_=handover->item;
+        renderedFrames_.store(handoverFrame,std::memory_order_release);
+        renderActiveStream_.store(handover.get(),std::memory_order_release);
+      retireDecodeStreamLocked(std::move(preloadStream_));
+        renderPreloadStream_.store(nullptr,std::memory_order_release);
+        activeUsesPreloadDspChain_=!activeUsesPreloadDspChain_;
+        renderActiveUsesPreloadDspChain_.store(activeUsesPreloadDspChain_,std::memory_order_release);
+        publishRenderDspPointerTransitionLocked(publishedPreloadDspGraph_,nullptr);
+        dspStatus_=preloadDspStatus_;preloadDspStatus_={};
+        trackStarted_=true;ended_=false;
+        autoMixTransition_->phase.store(5,std::memory_order_release);
+        autoMixReason_="manual_next_handover";
+        recomputeDspActiveLocked();updatePerfectLocked();publishStatusLocked();
+      }
+    }
+    return restartSuspended();
+  }
   std::shared_ptr<DecodeStream> oldActive;
   {
     std::lock_guard lock(mutex_);
@@ -3956,8 +4112,8 @@ bool AudioPipeline::skipToPreloaded(const QueueItem& item, std::string* error) {
     // The live overlap state lives on the render thread. crossfadeMixActive_ is
     // the control-side mirror and is never set, so reading it here let a
     // mid-overlap promotion skip already-consumed preload frames.
-    if (renderCrossfadeMixActive_.load(std::memory_order_acquire) ||
-        (preloadStream_ && preloadStream_->crossfadeConsumedFrames.load(std::memory_order_acquire) > 0)) {
+    if (!handover && (renderCrossfadeMixActive_.load(std::memory_order_acquire) ||
+        (preloadStream_ && preloadStream_->crossfadeConsumedFrames.load(std::memory_order_acquire) > 0))) {
       if (error) *error = "crossfade overlap 已经消耗了预加载流起始数据";
       return false;
     }
@@ -3972,7 +4128,7 @@ bool AudioPipeline::skipToPreloaded(const QueueItem& item, std::string* error) {
     renderPreloadStream_.store(nullptr, std::memory_order_release);
     stream_ = activeStream_->stream;
     currentItem_ = activeStream_->item;
-    renderedFrames_ = 0;
+    renderedFrames_ = handover ? handoverFrame : 0;
     renderVolumeCurrentBits_.store(doubleBits(-1.0), std::memory_order_relaxed);
     resetRateResampler();
     ended_ = false;
@@ -3995,7 +4151,7 @@ bool AudioPipeline::skipToPreloaded(const QueueItem& item, std::string* error) {
     std::lock_guard lock(mutex_);
     retireDecodeStreamLocked(std::move(oldActive));
   }
-  return true;
+  return restartSuspended();
 }
 
 void AudioPipeline::applyPauseFadeStatus(PipelineStatus& status) const {
@@ -4089,14 +4245,14 @@ PipelineStatus AudioPipeline::buildStatusLocked() {
   status.convolverActive = dspStatus_.convolverActive;
   status.crossfeedActive = dspStatus_.crossfeedActive;
   status.nativeDspActive = dspStatus_.nativeDspActive;
-  status.crossfadeActive = dspStatus_.crossfadeActive || dspConfig_.crossfadeSeconds > 0.0001;
+  status.crossfadeActive = !autoMixConfig_.enabled && (dspStatus_.crossfadeActive || dspConfig_.crossfadeSeconds > 0.0001);
   status.fftActive = spectrum_.isActive();
   status.irResampled = dspStatus_.irResampled;
   status.replayGainDb = dspStatus_.replayGainDb;
   status.crossfeedStrength = dspStatus_.crossfeedStrength;
   status.crossfadeSeconds = status.crossfadeActive ? dspConfig_.crossfadeSeconds : 0.0;
   const auto crossfadeDecision = decideCrossfade(
-      dspConfig_.crossfadeSeconds, dspConfig_.crossfadeContent, currentItem_,
+      autoMixConfig_.enabled?0.:dspConfig_.crossfadeSeconds, dspConfig_.crossfadeContent, currentItem_,
       preloadStream_ ? &preloadStream_->item : nullptr, stream_.durationSeconds,
       preloadStream_ ? preloadStream_->stream.durationSeconds : 0, stream_.isDsd,
       loadAtomicDouble(requestedPlaybackRateBits_));
@@ -4141,6 +4297,13 @@ PipelineStatus AudioPipeline::buildStatusLocked() {
   status.perfectReason = perfectReason_;
   status.requestedConfigRevision = requestedConfigRevision_.load(std::memory_order_acquire);
   status.appliedConfigRevision = appliedConfigRevision_.load(std::memory_order_acquire);
+  if(renderAutoMixStarted_.load(std::memory_order_acquire)&&renderAutoMix_.load(std::memory_order_acquire)) {
+    status.sourceExact=false;status.outputPerfect=false;status.dspActive=true;
+    status.outputInfo.sourceExact=false;status.outputInfo.outputPerfect=false;status.outputInfo.pcmPassthrough=false;
+    status.outputInfo.perfectReasonCode="automix_active";
+    status.outputInfo.perfectReason="AutoMix mixes two independently processed source tracks";
+    status.perfectReason=status.outputInfo.perfectReason;
+  }
   applyPauseFadeStatus(status);
   return status;
 }
@@ -4223,7 +4386,7 @@ bool AudioPipeline::isNativeDsdPathActive() const {
  */
 bool AudioPipeline::processingForcesDsdPcmFallback() const {
   std::lock_guard lock(mutex_);
-  return dspConfigProcessingRequiresPcm(
+  return autoMixConfig_.enabled || dspConfigProcessingRequiresPcm(
       dspConfig_,
       outputConfig_,
       loadAtomicDouble(requestedVolumeBits_),
@@ -4234,7 +4397,7 @@ bool AudioPipeline::processingForcesDsdPcmFallback() const {
 bool AudioPipeline::needsPcmFallback(std::string* reason) const {
   std::lock_guard lock(mutex_);
   const bool processingActive =
-      dspStatus_.replayGainActive || dspStatus_.eqActive || dspStatus_.convolverActive || dspStatus_.crossfeedActive ||
+      autoMixConfig_.enabled || dspStatus_.replayGainActive || dspStatus_.eqActive || dspStatus_.convolverActive || dspStatus_.crossfeedActive ||
       dspStatus_.nativeDspActive || dspStatus_.crossfadeActive || dspConfig_.crossfadeSeconds > 0.0001 ||
       std::abs(loadAtomicDouble(requestedVolumeBits_) - 1.0) > kUnityVolumeEpsilon ||
       std::abs(loadAtomicDouble(requestedPlaybackRateBits_) - 1.0) > kUnityVolumeEpsilon ||
@@ -4411,7 +4574,7 @@ bool AudioPipeline::updatePerfectLocked() {
   evaluation.convolverActive = dspStatus_.convolverActive;
   evaluation.crossfeedActive = dspStatus_.crossfeedActive;
   evaluation.nativeDspActive = dspStatus_.nativeDspActive;
-  evaluation.crossfadeActive = dspStatus_.crossfadeActive || dspConfig_.crossfadeSeconds > 0.0001;
+  evaluation.crossfadeActive = !autoMixConfig_.enabled && (dspStatus_.crossfadeActive || dspConfig_.crossfadeSeconds > 0.0001);
   evaluation.routingMode = outputConfig_.routingMode;
   evaluation.pcmPassthrough =
       !stream_.isDsd && typedPassthroughActive_ &&
@@ -4536,6 +4699,7 @@ void AudioPipeline::commitPreparedRenderDspGraphsLocked(
     std::unique_ptr<DspChain> activeGraph,
     std::unique_ptr<DspChain> preloadGraph,
     std::string graphStatusJson) noexcept {
+  if (autoMixConfig_.enabled) cancelAutoMixLocked("dsp_config_changed");
   if (!activeGraph || !preloadGraph) {
     appliedDspGraphStatusJson_ = std::move(graphStatusJson);
     appliedDspGraphStatusEpoch_ = appliedRenderDspEpoch_.load(std::memory_order_acquire);
@@ -4593,6 +4757,10 @@ void AudioPipeline::commitPreparedRenderDspGraphsLocked(
   } else {
     enqueueControlCommand(command);
   }
+  // The graph commit withdrew the old pair above. Prepare a new conservative
+  // buffer against the newly published graph immediately; analysis may arrive
+  // after its deadline and must never be required for basic overlap playback.
+  scheduleAutoMixLocked();
 }
 
 bool AudioPipeline::publishPreparedRenderDspGraphsLocked(uint64_t revision, std::string* error) {
@@ -4696,9 +4864,20 @@ void AudioPipeline::publishRenderDspPointerTransitionLocked(
 }
 
 void AudioPipeline::synchronizeRenderPromotionLocked() {
+  if(autoMixTransition_) {
+    while(autoMixTransition_->phase.load(std::memory_order_acquire)==2)std::this_thread::yield();
+    if(autoMixTransition_->phase.load(std::memory_order_acquire)==6) {
+      cancelAutoMixLocked("manual_handover_completed");scheduleAutoMixLocked();
+    }
+  }
   if (!renderPromotionPending_.exchange(false, std::memory_order_acq_rel)) return;
 
   DecodeStream* const promoted = renderActiveStream_.load(std::memory_order_acquire);
+  if (promoted && autoMixTransition_ && autoMixTransition_->resume.get() == promoted) {
+    retireDecodeStreamLocked(std::move(preloadStream_));
+    preloadStream_ = autoMixTransition_->resume;
+    cancelAutoMixLocked("pair_completed");
+  }
   if (!promoted || !preloadStream_ || preloadStream_.get() != promoted) return;
 
   std::shared_ptr<DecodeStream> previous = std::move(activeStream_);
@@ -4999,8 +5178,11 @@ size_t AudioPipeline::render(float* output, size_t frameCount) {
   if (!output || frameCount == 0) return 0;
   enableDenormalFlushToZero();
   const auto renderStarted = std::chrono::steady_clock::now();
-  const auto recordPerformance = [this, frameCount, renderStarted]() noexcept {
+  uint64_t autoMixElapsedNanoseconds=0;
+  bool autoMixMeasured=false;
+  const auto recordPerformance = [this, frameCount, renderStarted,&autoMixElapsedNanoseconds,&autoMixMeasured]() noexcept {
     const auto elapsed = std::chrono::steady_clock::now() - renderStarted;
+    if(autoMixMeasured)recordAutoMixPerformance(frameCount,renderOutputFormat_.sampleRate,autoMixElapsedNanoseconds);
     recordRenderPerformance(
         frameCount,
         renderOutputFormat_.sampleRate,
@@ -5024,7 +5206,8 @@ size_t AudioPipeline::render(float* output, size_t frameCount) {
   const int channels = std::max(1, outputFormat.channelCount);
   DecodeStream* active = renderActiveStream_.load(std::memory_order_acquire);
   DecodeStream* preload = renderPreloadStream_.load(std::memory_order_acquire);
-  const double crossfadeSeconds = loadAtomicDouble(renderCrossfadeSecondsBits_, std::memory_order_acquire);
+  AutoMixTransition* autoMix = renderAutoMix_.load(std::memory_order_acquire);
+  const double crossfadeSeconds = renderAutoMixEnabled_.load(std::memory_order_acquire) ? 0.0 : loadAtomicDouble(renderCrossfadeSecondsBits_, std::memory_order_acquire);
   const bool dopPathActive = renderDopPathActive_.load(std::memory_order_acquire);
   const bool nativeDsdPathActive = renderNativeDsdPathActive_.load(std::memory_order_acquire);
   bool activeUsesPreloadDspChain = renderActiveUsesPreloadDspChain_.load(std::memory_order_acquire);
@@ -5082,12 +5265,89 @@ size_t AudioPipeline::render(float* output, size_t frameCount) {
     if (!active || !dest || requestedFrames == 0) return 0;
     size_t filled = 0;
     while (filled < requestedFrames) {
+      const uint64_t sourcePosition = renderedFrames_.load(std::memory_order_relaxed) + positionRead;
+      const bool manualMatches=autoMix&&autoMix->serial==autoMixSerial_.load(std::memory_order_acquire)&&autoMix->resume.get()==active&&autoMix->phase.load(std::memory_order_acquire)==5;
+      if(manualMatches) {
+        const auto mixStarted=std::chrono::steady_clock::now();
+        const auto cursor=renderAutoMixFrames_.load(std::memory_order_relaxed);
+        const auto copied=TAE_AM_ReadPreparedSide(autoMix->prepared,1,cursor,dest+filled*static_cast<size_t>(channels),requestedFrames-filled);
+        if(!copied)break;
+        const auto dspStarted=std::chrono::steady_clock::now();
+        if(activeDspChain)activeDspChain->processCommon(dest+filled*static_cast<size_t>(channels),copied);
+        const auto dspElapsed=std::chrono::steady_clock::now()-dspStarted;
+        const auto next=cursor+copied;
+        const auto source=TAE_AM_PreparedSourceFrame(autoMix->prepared,1,next);
+        positionRead+=source>sourcePosition?source-sourcePosition:0;
+        filled+=copied;renderAutoMixFrames_.store(next,std::memory_order_release);
+        if(next==autoMix->info.frames) {
+          renderAutoMix_.store(nullptr,std::memory_order_release);
+          renderAutoMixStarted_.store(false,std::memory_order_release);
+          autoMix->phase.store(6,std::memory_order_release);autoMix=nullptr;
+        }
+        autoMixMeasured=true;
+        autoMixElapsedNanoseconds+=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-mixStarted-dspElapsed).count());
+        continue;
+      }
+      const bool preparedMatches = autoMix && autoMix->serial == autoMixSerial_.load(std::memory_order_acquire) && autoMix->outgoing == active && autoMix->incoming == preload && !rateActive;
+      if (preparedMatches && sourcePosition >= autoMix->startFrame) {
+        const auto mixStarted=std::chrono::steady_clock::now();
+        unsigned phase=0;
+        autoMix->phase.compare_exchange_strong(phase,1,std::memory_order_acq_rel);
+        if(autoMix->phase.load(std::memory_order_acquire)!=1) {autoMix=nullptr;continue;}
+        const auto cursor = renderAutoMixFrames_.load(std::memory_order_relaxed);
+        // Immutable PCM, analytic assembly clock, and the shared output graph.
+        // No decoder read or resource ownership operation in this branch.
+        const auto mixed = TAE_AM_MixPrepared(autoMix->prepared,cursor,
+            dest+filled*static_cast<size_t>(channels),requestedFrames-filled);
+        if (!mixed) break;
+        renderAutoMixStarted_.store(true,std::memory_order_release);
+        const auto dspStarted=std::chrono::steady_clock::now();
+        if (activeDspChain) activeDspChain->processCommon(dest+filled*static_cast<size_t>(channels),mixed);
+        const auto dspElapsed=std::chrono::steady_clock::now()-dspStarted;
+        const auto recordMix=[&]() noexcept {
+          const auto duration=std::chrono::steady_clock::now()-mixStarted-dspElapsed;
+          autoMixMeasured=true;
+          autoMixElapsedNanoseconds+=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
+        };
+        const auto nextCursor=cursor+mixed;
+        const auto nextSource=TAE_AM_PreparedSourceFrame(autoMix->prepared,0,nextCursor);
+        const auto advanced=nextSource>sourcePosition ? nextSource-sourcePosition : 0;
+        positionRead+=advanced;
+        // Keep the outgoing decoder's cursor aligned for cancellation. Only
+        // ring cursors move; the callback never decodes or reads discarded PCM.
+        const auto debt=active->renderDiscardDebt.load(std::memory_order_relaxed)+advanced;
+        active->renderDiscardDebt.store(debt-active->buffer.discard(debt),std::memory_order_release);
+        filled+=mixed;
+        renderAutoMixFrames_.store(nextCursor,std::memory_order_release);
+        if(nextCursor<autoMix->info.frames) {recordMix();continue;}
+        phase=1;
+        if(!autoMix->phase.compare_exchange_strong(phase,2,std::memory_order_acq_rel)) {recordMix();autoMix=nullptr;continue;}
+        active=autoMix->resume.get();preload=nullptr;
+        renderActiveStream_.store(active,std::memory_order_release);
+        renderPreloadStream_.store(nullptr,std::memory_order_release);
+        renderedFrames_.store(autoMix->info.incoming_resume_frame,std::memory_order_release);
+        positionRead=0;
+        ended_=false;trackStarted_=true;
+        activeUsesPreloadDspChain=!activeUsesPreloadDspChain;
+        renderActiveUsesPreloadDspChain_.store(activeUsesPreloadDspChain,std::memory_order_release);
+        activeDspChain=preloadDspChain;preloadDspChain=nullptr;
+        renderActiveDspGraph_.store(activeDspChain,std::memory_order_release);
+        renderPreloadDspGraph_.store(nullptr,std::memory_order_release);
+        renderAutoMix_.store(nullptr,std::memory_order_release);
+        renderAutoMixStarted_.store(false,std::memory_order_release);
+        renderPromotionPending_.store(true,std::memory_order_release);
+        autoMix->phase.store(3,std::memory_order_release);
+        recordMix();
+        autoMix=nullptr;
+        continue;
+      }
       const int decodeChannels = std::max(1, decodeFormat.channelCount);
       const bool routingRequired = !dopPathActive && !nativeDsdPathActive &&
                                    (decodeChannels != channels || routingMode != ChannelRoutingMode::Auto);
 
       size_t want = requestedFrames - filled;
       const uint64_t logicalPosition = renderedFrames_.load() + positionRead;
+      if(preparedMatches && logicalPosition < autoMix->startFrame) want=std::min<uint64_t>(want,autoMix->startFrame-logicalPosition);
       if (wantsCrossfade && !crossfadeMixActive && outputFormat.sampleRate > 0) {
         const uint64_t startFrame = static_cast<uint64_t>(std::max(0.0,
             (active->stream.durationSeconds - crossfadeDecision.seconds) * outputFormat.sampleRate));
@@ -5219,7 +5479,7 @@ size_t AudioPipeline::render(float* output, size_t frameCount) {
         continue;
       }
 
-      const bool canPromotePreload = preload && preload->readyForRender();
+      const bool canPromotePreload = preload && renderPreloadStream_.load(std::memory_order_acquire)==preload && preload->readyForRender();
       if ((!renderGaplessEnabled_.load(std::memory_order_acquire) && !renderCrossfadeMixActive_) ||
           !canPromotePreload) {
         break;

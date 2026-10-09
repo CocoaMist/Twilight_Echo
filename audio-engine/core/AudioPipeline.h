@@ -7,6 +7,7 @@
 #include "../decoder/DopPacker.h"
 #include "DsdMuteGuard.h"
 #include "PauseFade.h"
+#include "../automix/AutoMix.h"
 #include "../decoder/DsdReader.h"
 #include "../decoder/FFmpegDecoder.h"
 #include "../dsp/DspChain.h"
@@ -21,6 +22,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -157,6 +159,9 @@ class AudioPipeline {
   bool preloadNext(const std::optional<QueueItem>& item, std::string* error);
   void resetPreloadOverlap();
   bool skipToPreloaded(const QueueItem& item, std::string* error);
+  void setAutoMixConfig(const TAE_AM_ConfigV1& config);
+  bool setAutoMixFeatures(const std::string& json, std::string* error);
+  std::string autoMixStatusJson() const;
 
   PipelineStatus status();
   bool consumeEnded();
@@ -256,6 +261,12 @@ class AudioPipeline {
 
   struct DecodeStream;
   struct DecodeStreamReaper;
+  struct AutoMixTransition;
+  struct AutoMixJob;
+  void autoMixWorker();
+  void scheduleAutoMixLocked();
+  void cancelAutoMixLocked(const char* reason);
+  void reclaimAutoMixLocked();
 
   struct RenderDspGraphGeneration {
     uint64_t epoch = 0;
@@ -380,6 +391,23 @@ class AudioPipeline {
   std::unique_ptr<IOutputBackend> output_;
   std::shared_ptr<DecodeStream> activeStream_;
   std::shared_ptr<DecodeStream> preloadStream_;
+  TAE_AM_ConfigV1 autoMixConfig_{sizeof(TAE_AM_ConfigV1), TAE_AM_ABI_VERSION, 0, 0, 1, 12, 128ULL*1024*1024};
+  std::unique_ptr<AutoMixJob> autoMixJob_;
+  std::unique_ptr<AutoMixTransition> autoMixTransition_;
+  std::vector<std::unique_ptr<AutoMixTransition>> retiredAutoMix_;
+  std::thread autoMixThread_;
+  std::condition_variable autoMixWake_;
+  bool autoMixShutdown_ = false;
+  std::atomic<uint64_t> autoMixSerial_{0};
+  std::string autoMixReason_ = "disabled";
+  std::string autoMixOutgoingFeatures_, autoMixIncomingFeatures_;
+  uint64_t autoMixScheduledSerial_ = UINT64_MAX;
+  std::string autoMixOutgoingPreparationSource_,autoMixIncomingPreparationSource_;
+  uint64_t autoMixPlanRevision_ = 0;
+  std::atomic<AutoMixTransition*> renderAutoMix_{nullptr};
+  std::atomic<uint64_t> renderAutoMixFrames_{0};
+  std::atomic<bool> renderAutoMixStarted_{false};
+  std::atomic<bool> renderAutoMixEnabled_{false};
   mutable std::array<RetiredDecodeStream, kRetiredStreamSlots> retiredStreams_;
   mutable size_t retiredStreamCount_ = 0;
   mutable std::vector<RetiredDecodeStream> deferredRetiredStreams_;
@@ -462,6 +490,11 @@ class AudioPipeline {
   std::atomic<uint64_t> renderPeakCallbackNanoseconds_{0};
   std::atomic<uint64_t> renderTotalDeadlineNanoseconds_{0};
   std::atomic<uint64_t> renderDeadlineMissCount_{0};
+  // Ceil to 0.1% of the buffer period. Bucket 1001 means above deadline,
+  // sufficient to fail every release threshold; no unbounded event log.
+  std::array<std::atomic<uint64_t>,1002> renderDeadlineHistogram_{};
+  std::array<std::atomic<uint64_t>,1002> autoMixDeadlineHistogram_{};
+  void recordAutoMixPerformance(size_t frames,int rate,uint64_t ns) noexcept;
   // The output callback owns these values. The control thread only publishes
   // primitive hand-off values or retains the DecodeStream lifetime.
   std::atomic<PipelineState> renderState_{PipelineState::Stopped};

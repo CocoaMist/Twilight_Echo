@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(TwilightAudioEngine VERSION 0.1.0 LANGUAGES CXX)
+project(TwilightAudioEngine VERSION 0.1.0 LANGUAGES C CXX)
 
 option(TAE_BUILD_NAPI "Build the Node-API bridge" OFF)
 option(TAE_BUILD_TESTS "Build Twilight Audio Engine tests" ON)
@@ -9,6 +9,11 @@ option(TAE_ENABLE_ASIO "Enable the Windows x64 ASIO compatibility backend" ON)
 option(TAE_ENABLE_COREAUDIO "Enable the macOS CoreAudio backend" ON)
 option(TAE_ENABLE_ALSA "Enable the Linux ALSA backend" ON)
 option(TAE_ENABLE_MINIAUDIO "Enable the miniaudio Shared/default PCM provider PoC" OFF)
+
+if(TAE_BUILD_TESTS)
+  enable_testing()
+endif()
+add_subdirectory(automix)
 
 set(TAE_DEFAULT_PCM_PROVIDER "legacy" CACHE STRING
   "Default Windows Shared/default PCM provider when TWILIGHT_AUDIO_PCM_PROVIDER is unset")
@@ -71,6 +76,7 @@ set(TAE_ENGINE_SOURCES
   core/TwilightAudioEngine.cpp
   analysis/BpmAnalyzer.cpp
   analysis/LoudnessAnalyzer.cpp
+  automix/AutoMixAnalyzer.cpp
   decoder/DopPacker.cpp
   decoder/DsdReader.cpp
   decoder/DstDecoder.cpp
@@ -117,6 +123,7 @@ target_compile_definitions(
     TAE_DEFAULT_PCM_PROVIDER_MINIAUDIO=${TAE_DEFAULT_PCM_PROVIDER_MINIAUDIO}
 )
 target_link_libraries(twilight_audio_engine PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(twilight_audio_engine PRIVATE twilight_automix)
 if(UNIX AND NOT APPLE)
   target_link_options(twilight_audio_engine PRIVATE "-Wl,-Bsymbolic")
 endif()
@@ -477,6 +484,7 @@ if(TAE_BUILD_TESTS)
     core/AudioTypes.cpp
   )
   target_include_directories(twilight_ffmpeg_decoder_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(twilight_ffmpeg_decoder_tests PRIVATE twilight_automix)
   if(FFMPEG_FOUND)
     target_compile_definitions(twilight_ffmpeg_decoder_tests PRIVATE TAE_HAS_FFMPEG=1)
     target_include_directories(twilight_ffmpeg_decoder_tests PRIVATE ${FFMPEG_INCLUDE_DIRS})
@@ -836,6 +844,8 @@ if(TAE_BUILD_TESTS)
     target_link_libraries(twilight_runtime_queue_reroute_tests PRIVATE ${EBUR128_LIBRARY})
   endif()
   add_test(NAME twilight_runtime_queue_reroute_unit COMMAND twilight_runtime_queue_reroute_tests)
+  target_sources(twilight_runtime_queue_reroute_tests PRIVATE automix/AutoMixAnalyzer.cpp)
+  target_link_libraries(twilight_runtime_queue_reroute_tests PRIVATE twilight_automix)
 
   # This is deliberately a native behavior gate, not an array-fill benchmark.
   # It drives the production AudioPipeline and FFmpeg decoder through a
@@ -878,7 +888,7 @@ if(TAE_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
   # NDEBUG is stripped from every test target at the end of this block.
-  target_link_libraries(twilight_audio_performance_gate PRIVATE ${CMAKE_DL_LIBS})
+  target_link_libraries(twilight_audio_performance_gate PRIVATE ${CMAKE_DL_LIBS} twilight_automix)
   if(FFMPEG_FOUND)
     target_compile_definitions(twilight_audio_performance_gate PRIVATE TAE_HAS_FFMPEG=1)
     target_include_directories(twilight_audio_performance_gate PRIVATE ${FFMPEG_INCLUDE_DIRS})

@@ -104,6 +104,11 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'audio.reason.crossfade_active.explain':
     'Crossfade overlaps two streams at track boundaries and applies a gain envelope, rewriting samples in the transition and disabling true gapless.',
   'audio.reason.crossfade_active.fix': 'Set crossfade duration to 0 seconds in playback settings.',
+  'audio.reason.automix_active.label': 'AutoMix is transitioning tracks',
+  'audio.reason.automix_active.explain':
+    'AutoMix is mixing or processing PCM from the outgoing and incoming tracks, changing the output samples.',
+  'audio.reason.automix_active.fix':
+    'Turn off AutoMix in playback settings to restore your latest output preferences.',
 
   'audio.reason.dsd_output_mode_pcm.label': 'DSD output mode is set to PCM',
   'audio.reason.dsd_output_mode_pcm.explain':

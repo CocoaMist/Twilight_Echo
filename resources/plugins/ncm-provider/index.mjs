@@ -1755,8 +1755,40 @@ function getUnblockedPlaybackUrl(data) {
   return null
 }
 
-function rememberStreamUrl(cacheKey, url, songId, fileName) {
-  const entry = { url, expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS }
+function officialAutoMixIdentity(songId, item) {
+  if (item.freeTrialInfo) return null
+  const md5 = typeof item.md5 === 'string' ? item.md5.toLowerCase() : ''
+  const size = Number(item.size),
+    bitrate = Number(item.br),
+    milliseconds = Number(item.time)
+  const format = normalizeNcmFormat(item.type ?? item.encodeType)
+  if (
+    !/^[a-f0-9]{32}$/.test(md5) ||
+    !Number.isSafeInteger(size) ||
+    size <= 0 ||
+    !Number.isFinite(bitrate) ||
+    bitrate <= 0 ||
+    !Number.isFinite(milliseconds) ||
+    milliseconds <= 0 ||
+    !format
+  )
+    return null
+  return {
+    contentId: `ncm:${songId}:${md5}:${size}`,
+    quality: JSON.stringify([format, bitrate, item.level ?? '']),
+    durationSeconds: milliseconds / 1000,
+    seekable: true
+  }
+}
+
+function autoMixPlaybackResult(url, identity, options) {
+  return options?.autoMixSource === true && identity
+    ? { streamUrl: url, autoMixIdentity: identity }
+    : url
+}
+
+function rememberStreamUrl(cacheKey, url, songId, fileName, autoMixIdentity = null) {
+  const entry = { url, autoMixIdentity, expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS }
   streamUrlCache.set(cacheKey, entry)
   void ncmApi
     .cacheSong(songId, url, fileName)
@@ -1788,7 +1820,11 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
         }
         cachedStreamEntry.cachedPath = null
       }
-      return cachedStreamEntry.url
+      return autoMixPlaybackResult(
+        cachedStreamEntry.url,
+        cachedStreamEntry.autoMixIdentity,
+        options
+      )
     }
     streamUrlCache.delete(cacheKey)
   }
@@ -1811,10 +1847,11 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
       const url = getOfficialPlaybackUrl(data, streamItem)
       if (url) {
         rememberStreamAudioMeta(songId, streamItem)
+        const identity = officialAutoMixIdentity(songId, streamItem)
         if (!streamItem.freeTrialInfo) {
-          rememberStreamUrl(cacheKey, url, songId, track?.fileName)
+          rememberStreamUrl(cacheKey, url, songId, track?.fileName, identity)
         }
-        return url
+        return autoMixPlaybackResult(url, identity, options)
       }
       lastFailureMessage = getPlaybackFailureMessage(data, streamItem) || lastFailureMessage
     } catch (error) {

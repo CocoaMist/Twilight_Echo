@@ -1,5 +1,7 @@
 import { IPC } from '../../shared/ipcChannels.ts'
 import { resolveAuthorizationBatch } from '../security/authorizationBatch.ts'
+import { providerPlaybackSources } from '../security/providerPlaybackSources.ts'
+import { createAutoMixOnlineResolver } from './autoMixOnlineSource.ts'
 import { DspAuditionManager } from './dspAuditionManager.ts'
 import { createDspAuditionHandlers } from './dspAuditionIpc.ts'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
@@ -599,6 +601,15 @@ async function initializeAudioEngineRuntime(): Promise<void> {
     }
   )
   runtime.audioEngineManager.setLoudnessAnalysisManager(runtime.loudnessAnalysisManager)
+  runtime.audioEngineManager.setAutoMixAnalysisService(
+    () => runtime.audioAnalysisService,
+    join(app.getPath('userData'), 'automix-features'),
+    createAutoMixOnlineResolver({
+      registry: providerPlaybackSources,
+      callProvider: async (...args) => runtime.pluginManager?.callProvider(...args) ?? null,
+      authorize: resolveAuthorizedPlaybackSource
+    })
+  )
   runtime.vst3Catalog = new Vst3CatalogService(join(app.getPath('userData'), 'dsp-vst3'), {
     scan: (modulePath) => requireAudioEngine().scanVst3Module(modulePath)
   })

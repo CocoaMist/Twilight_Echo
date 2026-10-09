@@ -1052,7 +1052,10 @@ test('native queue switching guards the target track before applying playback-in
     setupAudioEngineListeners,
     /api\.onPlaybackInfo\(\(info\) => \{\s*applyNativePlaybackInfo\(info\)\s*\}\)/
   )
-  assert.match(setupAudioEngineListeners, /const startAt = pendingLoadStartTime/)
+  assert.doesNotMatch(
+    setupAudioEngineListeners.match(/api\.onStartFile\(\(\) => \{[\s\S]*?\n    \}\)/)?.[0] ?? '',
+    /beginPlaybackPositionTransition\(/
+  )
   assert.match(setupAudioEngineListeners, /pendingLoadStartTime = 0/)
   // Gapless auto-advance must refresh track identity even when nativePlaybackActive
   // briefly lags, otherwise cover + progress stick on the previous track.

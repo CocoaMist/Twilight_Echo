@@ -42,6 +42,7 @@ import { playModeWrapsAtQueueEnd } from '../../shared/playbackModes.ts'
 import { audioEngineError, nativeAudioError } from './engineErrors.ts'
 import { rendererFallbackAllowed } from './nativeBinding.ts'
 import type { DspGraphConfig } from '../../shared/dspGraph.ts'
+import type { AutoMixStatus } from '../../shared/autoMix.ts'
 
 export interface PlaybackControllerHost {
   getNative(): NativeAudioBinding | null
@@ -120,6 +121,7 @@ export class PlaybackController {
   lastTick = 0
   lastNativePlaybackInfoTickReadAt = Number.NEGATIVE_INFINITY
   nativeIdlePollTick = 0
+  private autoMixStatusRequestRevision = 0
   lastNativeReportedPosition = Number.NaN
   pendingNativePositionTarget: number | null = null
   nativeConfigRevisionObserved = false
@@ -309,6 +311,8 @@ export class PlaybackController {
   }
 
   resetCachesOnServiceCrash(): void {
+    ++this.autoMixStatusRequestRevision
+    this.playbackInfo.autoMix = undefined
     this.lastVisualizationCache = null
     this.lastSpectrumCache = null
     this.invalidateUpcomingTrackCache()
@@ -890,7 +894,39 @@ export class PlaybackController {
     }
   }
 
+  async refreshAutoMixStatus(): Promise<boolean> {
+    const native = this.native
+    if (typeof native?.GetAutoMixStatus !== 'function') return false
+    const revision = ++this.autoMixStatusRequestRevision
+    try {
+      // The service's synchronous getter is a cached value. Settings need the
+      // actual permission/config even when no transport has started yet.
+      const raw =
+        typeof native.callAsync === 'function'
+          ? await native.callAsync('GetAutoMixStatus', [])
+          : native.GetAutoMixStatus()
+      if (this.destroyed || revision !== this.autoMixStatusRequestRevision) return false
+      const status = parseNativeJson(
+        raw as string | AutoMixStatus | undefined,
+        null as AutoMixStatus | null
+      )
+      if (!status || typeof status.enabled !== 'boolean' || typeof status.state !== 'string')
+        return false
+      const changed = JSON.stringify(this.playbackInfo.autoMix) !== JSON.stringify(status)
+      // Read only this independent status: a stopped engine snapshot must not
+      // overwrite a restored queue/source/position or the saved software volume.
+      this.playbackInfo.autoMix = status
+      return changed
+    } catch {
+      if (this.destroyed || revision !== this.autoMixStatusRequestRevision) return false
+      const changed = this.playbackInfo.autoMix !== undefined
+      this.playbackInfo.autoMix = undefined
+      return changed
+    }
+  }
+
   async getPlaybackInfo(): Promise<PlaybackInfo> {
+    if (!this.nativePlaybackActive) await this.refreshAutoMixStatus()
     const now = this.scheduler.now()
     if (
       this.nativePlaybackActive &&
@@ -1371,6 +1407,7 @@ export class PlaybackController {
       outputBitDepth: outputInfo.outputBitDepth,
       channelCount: outputInfo.actualChannels || info.channelCount || 0,
       outputPerfect,
+      autoMix: info.autoMix,
       pcmPassthrough: outputInfo.pcmPassthrough === true,
       isDsd,
       dsdMode,
@@ -1471,11 +1508,13 @@ export class PlaybackController {
           this.invalidateAudioDeviceOptionsCache('native-output-diagnostics-changed')
         }
         this.lastNativePlaybackInfoTickReadAt = now
+        // Publish track identity with its source position before scalar progress
+        // events. An AutoMix continuation is a rewind only in the outgoing clock.
+        this.publishPlaybackInfo({ dedupePositionOnly: true })
         this.publishProperty('time-pos', this.playbackInfo.position)
         if (this.playbackInfo.duration > 0) {
           this.publishDuration(this.playbackInfo.duration)
         }
-        this.publishPlaybackInfo({ dedupePositionOnly: true })
         const switchedTrack =
           !nativeIdentityPending &&
           nativeInfo.state !== 'stopped' &&

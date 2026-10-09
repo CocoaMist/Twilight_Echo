@@ -425,6 +425,11 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = (
     { section: 'playback', title: '启动时恢复播放', terms: '恢复 播放 resume 上次 曲目 位置 启动' },
     {
       section: 'playback',
+      title: 'AutoMix',
+      terms: 'automix 自动混音 智能转场 衔接 选段 淡化 实验'
+    },
+    {
+      section: 'playback',
       title: '上一首按钮行为',
       terms: '上一首 按钮 重播 重放 回到 开头 previous restart 行为'
     },

@@ -70,6 +70,116 @@ function parseRequest(path) {
   return new URL(path, 'http://twilight.local')
 }
 
+test('AutoMix identity describes the authorized actual format and survives URL cache and force refresh', async () => {
+  let calls = 0
+  const provider = await activateProvider(async () => ({
+    code: 200,
+    data: [
+      {
+        code: 200,
+        url: `https://music.example/automix-${++calls}.mp3`,
+        md5: 'A'.repeat(32),
+        size: 123456,
+        br: 128000,
+        time: 180000,
+        type: 'mp3',
+        level: 'standard'
+      }
+    ]
+  }))
+  try {
+    const options = { quality: 'hires', autoMixSource: true }
+    const first = await provider.getPlaybackUrl({ id: 'ncm:177' }, options)
+    assert.deepEqual(first, {
+      streamUrl: 'https://music.example/automix-1.mp3',
+      autoMixIdentity: {
+        contentId: `ncm:177:${'a'.repeat(32)}:123456`,
+        quality: JSON.stringify(['mp3', 128000, 'standard']),
+        durationSeconds: 180,
+        seekable: true
+      }
+    })
+    assert.deepEqual(await provider.getPlaybackUrl({ id: 'ncm:177' }, options), first)
+    assert.equal(
+      await provider.getPlaybackUrl({ id: 'ncm:177' }, { quality: 'hires' }),
+      first.streamUrl
+    )
+    const refreshed = await provider.getPlaybackUrl({ id: 'ncm:177' }, { ...options, force: true })
+    assert.equal(refreshed.streamUrl, 'https://music.example/automix-2.mp3')
+    assert.deepEqual(refreshed.autoMixIdentity, first.autoMixIdentity)
+    assert.equal(calls, 2)
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
+test('trial and incomplete official identities keep the ordinary playback URL contract', async () => {
+  const complete = {
+    code: 200,
+    url: 'https://music.example/plain.mp3',
+    md5: 'b'.repeat(32),
+    size: 123456,
+    br: 128000,
+    time: 180000,
+    type: 'mp3'
+  }
+  for (const change of [
+    { freeTrialInfo: { start: 0, end: 30 } },
+    { md5: null },
+    { size: 0 },
+    { br: 0 },
+    { time: 0 },
+    { type: null }
+  ]) {
+    const provider = await activateProvider(async () => ({
+      code: 200,
+      data: [{ ...complete, ...change }]
+    }))
+    try {
+      assert.equal(
+        await provider.getPlaybackUrl({ id: 'ncm:178' }, { autoMixSource: true }),
+        complete.url
+      )
+    } finally {
+      ncmProvider.deactivate()
+    }
+  }
+})
+
+test('a downloaded managed cache file remains a local source when AutoMix metadata is requested', async () => {
+  const cachedPath = 'D:\\cache\\automix.flac'
+  const provider = await activateProvider(
+    async () => ({
+      code: 200,
+      data: [
+        {
+          code: 200,
+          url: 'https://music.example/automix.flac',
+          md5: 'c'.repeat(32),
+          size: 123456,
+          br: 900000,
+          time: 180000,
+          type: 'flac',
+          level: 'lossless'
+        }
+      ]
+    }),
+    undefined,
+    { ncm: { cacheSong: async () => cachedPath, getCachedSong: async () => cachedPath } }
+  )
+  try {
+    const first = await provider.getPlaybackUrl({ id: 'ncm:179' }, { autoMixSource: true })
+    assert.equal(first.autoMixIdentity.seekable, true)
+    await new Promise((done) => setImmediate(done))
+    assert.equal(
+      await provider.getPlaybackUrl({ id: 'ncm:179' }, { autoMixSource: true }),
+      cachedPath
+    )
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
 test('public toplists normalize previews, exclude invalid entries and cache until refreshed', async () => {
   let calls = 0
   const provider = await activateProvider(async (path, cookie) => {

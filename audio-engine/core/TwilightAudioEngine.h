@@ -78,6 +78,7 @@ struct PlaybackInfo {
   double crossfeedStrength = 0.0;
   double crossfadeSeconds = 0.0;
   bool crossfadeMixActive = false;
+  std::string autoMixJson = "{}";
   double crossfadeEffectiveSeconds = 0.0;
   std::string crossfadeCurve = "linear";
   std::string crossfadeBlockedReason;
@@ -128,6 +129,9 @@ class TwilightAudioEngine {
   TAE_Result setPlayMode(const std::string& mode);
 
   TAE_Result setDspConfig(const std::string& dspJson);
+  TAE_Result setAutoMixConfig(const std::string& configJson);
+  TAE_Result setAutoMixFeatures(const std::string& featuresJson);
+  std::string getAutoMixStatusJson() const;
   TAE_Result setDspGraph(const std::string& graphJson);
   TAE_Result applyDspState(uint64_t revision, const std::string& stateJson);
   TAE_Result setOutputConfig(const std::string& outputConfigJson);
@@ -199,6 +203,10 @@ class TwilightAudioEngine {
   PlaybackInfo info_;
   QueueManager queue_;
   std::string dspConfigJson_ = "{}";
+  bool autoMixAllowSkip_ = true;
+  bool autoMixEnabled_ = false;
+  double autoMixMaximumSeconds_ = 12;
+  uint64_t autoMixConfigRevision_ = 0;
   std::string dspGraphJson_;
   DspConfig dspConfig_;
   std::string nativeDspPluginChainJson_ = "{\"plugins\":[]}";

@@ -35,7 +35,10 @@ import {
 } from '../../../shared/dspGraph.ts'
 import { extractDominantColor } from '../utils/colorExtractor'
 import { resolveCover } from '../utils/coverLoader'
-import { normalizeNativePlaybackInfo } from '../utils/playerPlaybackInfo.ts'
+import {
+  mergeAutoMixPlaybackInfo,
+  normalizeNativePlaybackInfo
+} from '../utils/playerPlaybackInfo.ts'
 import { normalizeOutputConfig } from '../../../shared/audioOutputConfig.ts'
 import { clampSoftwareVolume, cloneAudioProcessingSettings } from '../utils/playerAudioSettings.ts'
 import {
@@ -360,6 +363,9 @@ const {
   applyAudioOutputState,
   refreshAudioOutputState
 } = createAudioOutputState({
+  applyPlaybackSettingsStatus: (info) => {
+    playbackInfo.value = mergeAutoMixPlaybackInfo(playbackInfo.value, info)
+  },
   audioProcessing,
   dspOutputStage,
   dspStereoImage,
@@ -548,18 +554,16 @@ function clearNativePlaybackInfoIntentForLoad(loadToken: number): void {
 
 function markNativePlaybackInfoIntentConfirmed(now = getNowMs()): void {
   const intent = nativePlaybackInfoIntent
-  if (!intent) return
-  if (intent.confirmedAt === null) intent.confirmedAt = now
-  // Keep filtering non-matching snapshots through the post-confirmation window.
+  if (!intent || intent.confirmedAt !== null) return
+  intent.confirmedAt = now
+  // Bound the guard to this confirmation. Extending it on every playing tick
+  // also rejects legitimate native AutoMix/gapless advances later in the song.
   intent.expiresAt = Math.max(
     intent.expiresAt,
     now + NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
   )
   if (intentionalTrackGuard && intentionalTrackGuard.trackId === intent.trackId) {
-    intentionalTrackGuard.until = Math.max(
-      intentionalTrackGuard.until,
-      now + NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
-    )
+    intentionalTrackGuard.until = Math.max(intentionalTrackGuard.until, intent.expiresAt)
   }
 }
 
@@ -1357,7 +1361,10 @@ function applyNativePlaybackInfo(
     duration.value =
       nextDuration > 0 ? nextDuration : currentTrack.value ? cueDuration(currentTrack.value) : 0
     beginPlaybackPositionTransition(nextPosition, { keepRendererClockAlive: true })
-    // Keep the intent/guard confirmed so delayed previous-track ticks still drop.
+    // Native handoffs also need a short guard against delayed outgoing snapshots.
+    if (!nativePlaybackInfoIntent && currentTrack.value) {
+      setNativePlaybackInfoIntent(activeLoadToken, currentTrack.value, info.source, infoIndex)
+    }
     markNativePlaybackInfoIntentConfirmed()
   } else {
     if (nextDuration > 0) {
@@ -2546,11 +2553,11 @@ function setupAudioEngineListeners(): void {
       // progress so cover and the playbar slider rebind to the new file.
       advancingFromEndedTrackId = ''
       autoAdvanceInFlight = false
-      // Consume pending start once so gapless handoffs / late events cannot
-      // re-apply a stale loadAndPlay start offset and freeze the progress bar.
-      const startAt = pendingLoadStartTime
+      // Only identity-bearing playback-info can start a native track clock.
+      // AutoMix has already played part of the incoming track before start-file;
+      // resetting to zero here discards its confirmed continuation position.
+      // loadAndPlay anchors explicit starts before issuing the native command.
       pendingLoadStartTime = 0
-      beginPlaybackPositionTransition(startAt, { keepRendererClockAlive: true })
       isLoading.value = false
       // start-file is emitted by the native backend when the new file has
       // entered its playback pipeline. Re-open both clocks immediately: a

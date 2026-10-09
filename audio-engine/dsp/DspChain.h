@@ -27,6 +27,10 @@ class DspChain {
   void prepare(const AudioFormat& format);
   void setTrackContext(const DspTrackContext& context);
   void process(float* samples, size_t frameCount);
+  // A transition may split only a leading normalization stage. Explicit graph
+  // order is never changed. Both methods are used on a published render clone.
+  bool supportsAutoMixSplit() const;
+  void processCommon(float* samples, size_t frameCount);
   void reset();
   DspStatus status();
   DspConfig config() const;

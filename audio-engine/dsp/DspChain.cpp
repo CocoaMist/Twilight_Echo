@@ -733,6 +733,28 @@ void DspChain::process(float* samples, size_t frameCount) {
   }
 }
 
+bool DspChain::supportsAutoMixSplit() const {
+  if (auditionTransition_) return false;
+  if (!graphConfigured_) return true;
+  bool commonSeen = false;
+  size_t normalizationCount = 0;
+  for (const auto& node : graphNodes_) {
+    if (!node.enabled || !node.processor) continue;
+    if (node.processor == replayGain_) {
+      if (commonSeen || ++normalizationCount > 1) return false;
+    } else commonSeen = true;
+  }
+  return true;
+}
+
+void DspChain::processCommon(float* samples, size_t frameCount) {
+  if (!samples || frameCount == 0) return;
+  for (IAudioProcessor* processor : activeProcessors_) {
+    if (processor != replayGain_) processor->process(samples, frameCount);
+  }
+  if (config_.clipGuard && config_.outputSafetyClamp && status_.dspActive) clampOutput(samples, frameCount);
+}
+
 void DspChain::reset() {
   std::lock_guard lock(mutex_);
   for (auto& processor : processors_) {

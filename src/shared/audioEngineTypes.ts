@@ -1,4 +1,5 @@
 import type { CueRange } from './cue.ts'
+import type { AutoMixConfig, AutoMixStatus } from './autoMix.ts'
 import type { DsdRouteSettings } from './audioProcessingOptions.ts'
 
 export type { DsdRouteSettings }
@@ -79,6 +80,7 @@ export interface AudioProcessingSettings {
   crossfadeSeconds: number
   crossfadeCurve?: 'linear' | 'equal-power'
   crossfadeContent?: 'conservative' | 'all' | 'live'
+  autoMix?: AutoMixConfig
 }
 
 export interface AudioOutputOption {
@@ -492,6 +494,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   crossfeedActive: boolean
   crossfadeActive: boolean
   crossfadeMixActive?: boolean
+  autoMix?: AutoMixStatus
   crossfadeEffectiveSeconds?: number
   crossfadeCurve?: 'linear' | 'equal-power'
   crossfadeBlockedReason?: string

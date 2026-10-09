@@ -1,0 +1,320 @@
+# AutoMix validation record — 2026-10-09
+
+Status: experimental Windows x64, default off. Stable release gates remain
+incomplete. This record describes executed checks; it is not a release approval.
+
+## Executed checks
+
+- Recovered arithmetic: 96,000 score cases and 3,000 selection cases compared
+  with the C oracle; 24 template compilation, 10,000 clock round trips and
+  SSE2/AVX2 guards/chunk parity pass.
+- Native preparation: 24 templates, six PCM sample rates, actual C++ allocation
+  tracking and realtime mix `new`/`delete` checks pass. At 192 kHz, the long mono
+  case peaks at 57,054,312 allocated bytes plus 19,968,000 borrowed PCM bytes.
+  The corresponding stereo case is rejected by the resource preflight; its
+  measured partial allocation peak is 90,779,748 plus 39,936,000 borrowed bytes.
+  Codec/OS/allocator metadata is outside this allocation audit.
+- Pair lifecycle: promotion, manual Next with prepared continuation, cancellation,
+  feature revisions, intelligent replacement failure/deadline/seek and successful
+  replacement pass. Ready fallback buffers survive failed/late replacements.
+- Clock lifecycle: deterministic tests cover pause and PCM-to-DoP reroute while
+  a `config-applied` callback is in progress. The clock refreshes its snapshot
+  and reads lifecycle flags after regaining the transport lock.
+- Analysis revision 3: last complete beat window, confident contiguous-region
+  merging, tempo discontinuities, short/invalid inputs and half/double beat
+  interpretation pass. Revision 1/2 feature cache entries are rejected.
+- Precise PCM seek: WAV continuous-decode parity covers six rates, Native/Ultra
+  resampling, five positions including EOF and repeated seeks. Actual FLAC
+  (`Cloudier - Set Free`) and MP3 (`ak+q - Axium Crisis`) compare four positions
+  at each of the six rates, with maximum PCM error zero in both files. Codec
+  priming is handled at source start. Missing/discontinuous frame timestamps
+  reject precise seek. This is evidence for these files/codecs, not proof for
+  every compressed container or the complete stretch boundary.
+- Preparation context/continuation: WAV and the actual FLAC/MP3 files above
+  pass six rates and four templates (0, 1, 8, 17). Each real file tests head and
+  tail source windows. Independently positioned decode is compared with
+  continuous decode; the prepared mix is compared with the continuous-source
+  render, and the continuation begins at the exact nominal incoming end.
+  Maximum decoded and rendered PCM errors are zero in these runs. Unity
+  processing also joins the last half-open source sample to the next sample.
+  Minimum-context and larger-view renders are identical; insufficient stretch
+  context is rejected. These checks prove the tested source/clock boundaries,
+  not perceptual stretch quality or Apple effect sound parity.
+- Beat This/YAMNet fixed original-model fixtures pass native frontend, inference
+  and event parity. Model assets remain pinned to the lock file SHA-256 values.
+- Online identity/coordinator/manager checks: 15 pass; ordinary plugin suite:
+  493 registered, 492 pass and one skip, plus nine font-registry checks pass.
+  NCM official actual-quality identity, URL-cache refresh, trial/incomplete
+  metadata fallback and managed-local-file checks are included (74 NCM tests).
+  Audio-manager suite: 441 pass on the final delivery-refresh sources in the
+  completed no-device aggregate.
+  Staging/toolchain:
+  55 pass. Node/web type checks and application build/renderer budgets pass.
+- Full native registration: 43 tests; 42 execute and pass, one ASIO cross-DLL
+  test is skipped. A PCM/DoP clock-snapshot race observed during one run was
+  repaired and given a deterministic regression test. The complete project
+  `test:no-real-device` aggregate passes on the context/continuation sources;
+  its native segment takes 254.79 seconds. Type checks, application build and
+  renderer budgets pass (625 files, 8,907,800 font bytes). The deprecated
+  mini-player structural assertion was updated to the effective-theme contract;
+  the player material behavior was preserved. Packaged distribution validation
+  remains separate and incomplete.
+
+## Actual music and WASAPI
+
+Music root: `D:\Music`. First 48 sorted files analyzed with revision 2; the
+native candidate generator admits one ordered pair under current conservative
+policy. No listening ratings are assigned by the probe.
+Those revision-2 features are historical evidence and are not accepted by
+revision 3. The HTTP fixture below freshly analyzes the selected pair with
+revision 3.
+
+Headphone: `耳机 (2- FRANSUN CX31993 HiFi-Audio)`.
+Endpoint: `{0.0.0.00000000}.{066e3c32-e9ce-418d-9122-a558f1837123}`.
+
+Intelligent smoke: `Cloudier - Set Free.flac` → `Avans - All In.flac`, style 8,
+approximately 3.18 seconds. It observes mixing, canonical `automix_active`, one
+queue promotion and incoming continuation after the already played overlap.
+Volume is 0.02. The short run records 1,094 callbacks, 319 callbacks with measured
+AutoMix work and no deadline miss. p99.9 histogram upper bounds are 0.3% of the
+callback period for the full callback and 0.2% for AutoMix, excluding common DSP.
+These are short-run measurements, **not release performance passes**.
+
+The requested shared-mode buffer is 256 frames at 48 kHz. The device reports
+4,800 frames of output buffering and observed callback periods average about
+10 ms. It must not be counted as hardware validation of a 256-frame callback.
+
+Warmed native candidate generation, selection and template compilation for the
+same pair: 1,000 iterations, p99 10.668 ms and maximum 10.946 ms. Host cache I/O,
+authorization, IPC and audio preparation are excluded from this measurement.
+
+## Development online fixture
+
+`http-online-smoke-v3.json`: actual music served by a local HTTP Range server;
+original URLs expire before delivery. The main-process registry, online resolver
+and coordinator refresh the actual content/quality identity before cache access
+and final delivery; native preparation and continuation read the refreshed URL.
+The test observes style 8 mixing, canonical output diagnosis, exactly one queue
+promotion and continuation with the original logical queue source. It passes
+with 41 refreshed Range requests. Two actual native model analyses take about
+2–3 seconds each on this machine. Features remain in memory in this fixture.
+No real online provider account/playback, subjective quality, full song or
+24-hour playback is covered by this test.
+The latest context-enabled build is rechecked in
+`http-online-smoke-v3-context.json`, also passing with 41 refreshed Range requests.
+
+## Evidence files on this machine
+
+`D:\TwilightEchoDependencies\automix\` contains:
+
+- `latest-native-tests.log`, `latest-automix-runtime-tests.log`,
+  `latest-clock-race-tests.log`, `latest-preparation-audit.log`.
+- `latest-automix-ts-tests.log`, `latest-staging-tests.log`,
+  `latest-typecheck.log`, `latest-app-build.log`.
+- `music-probe-v2/manifest.json`, `wasapi-intelligent-latest.json`,
+  `cached-native-planning.json`, `listening-100-pairs.json`.
+- `latest-online-tests.log`, `latest-plugin-suite.log`,
+  `latest-ncm-online-tests.log`, `precise-seek-flac.log`, `precise-seek-mp3.log`,
+  `http-online-smoke-v3.json`, `latest-no-real-device.log`.
+- `latest-context-preparation.log`, `latest-pcm-boundaries.log`,
+  `boundary-flac-v1.log`, `boundary-mp3-v1.log`,
+  `latest-context-runtime.log`, `latest-no-real-device-resume2.log`,
+  `latest-no-real-device-final.log`, `http-online-smoke-v3-context.json`,
+  `validation-2026-10-09.json` (artifact hashes and executed-gate inventory).
+- `staged-runtime/`: separately staged native binaries, dependency closure,
+  capability manifests and verified AutoMix assets. Refresh staging after a
+  new native build before using these artifacts.
+
+The earlier default staging attempt was blocked by the running player's DLL
+lock. After the player exited, the user requested DLL staging and in-app manual
+acceptance. The new runtime is now staged into `resources/audio-engine`, with
+verified model assets and refreshed capability manifests. Existing SMTC/VST3
+helpers are preserved. The previous runtime is backed up at
+`D:\TwilightEchoDependencies\automix\backup-before-manual-acceptance-20261009\audio-engine`.
+
+## In-app manual acceptance build
+
+The Windows x64 build uses `TAE_AM_EXPERIMENTAL_PLAYER=ON`. AutoMix is available
+in Settings → Playback and through settings search without a startup environment
+variable. Its saved configuration defaults to off and `stableRelease` remains
+false. Ordinary clean builds default the compile option to OFF. A startup
+`TAE_AUTOMIX_EXPERIMENTAL=0` disables this build's experimental permission.
+
+The staged addon was checked in separate fresh Node processes with no startup
+flag and with the explicit disable flag. Initial playback information exposes
+the permission before the first Play; enabling and disabling immediately update
+both AutoMix status and playback information. The disabled process rejects
+enablement. These checks do not start playback or alter saved user settings.
+Asset hashes are verified against the repository lock, analysis revision 3.
+
+For this build, application type checks/build and renderer budgets pass, as do
+441 audio-manager tests and 21 DSP/mini-player tests. Native controls pass both
+with the default build permission and the startup disable override. AutoMix
+promotion/cancellation/replacement/source-refresh cases and the two clock-race
+regressions pass. The arithmetic differential suite passes again (96,000 scores,
+3,000 selections, 24 templates, clock and SIMD checks). Build, application-stage
+and isolated-stage DLL/addon/helper hashes match. A compiler subprocess launch
+failure during the first build attempt was resolved by retrying with four
+parallel jobs. Detailed per-build evidence is in `manual-acceptance-runtime.json`
+and `latest-manual-acceptance-*.log` under
+the evidence directory above. The earlier complete no-device aggregate remains
+historical evidence for its recorded build; it is not counted as a full rerun
+of the manual-acceptance build.
+
+Manual listening is pending. Current automatic playback selects the validated
+style-8 policy or conservative style-1 fade; intelligent skipping remains
+unavailable. Album/CUE boundaries and repeat modes can intentionally prevent
+a transition. No new hardware playback was performed for this staging request.
+
+### Idle settings integration repair
+
+The first staged build passed native binding checks but its application manager
+did not read AutoMix status while `nativePlaybackActive=false`. The renderer
+therefore received no experimental permission before the first Play and disabled
+the switch. Two regression cases reproduce that missing status on the old host
+code. The host now reads fresh independent status through service RPC while
+idle and after startup, service readiness and configuration changes. It retains
+the app's source/queue/position/volume and discards responses from before a
+service crash.
+
+The repaired application passes 444 audio-manager checks, including three
+AutoMix idle/service/restart regressions; four playback-settings checks and the
+application type checks/build also pass. `scripts/automix-controls-smoke.cjs`
+starts the complete built application with an isolated temporary profile and
+the real staged runtime. It verifies a clickable AutoMix settings switch before
+the first Play, then clicks enable/disable and checks agreement between DOM
+state and native status. No music is played and the user's settings are not
+modified. The report is `manual-acceptance-idle-ui.json`, with
+`latest-manual-acceptance-idle-*.log` recording the host regression and build
+checks. This is controls/integration evidence, not listening or hardware
+performance acceptance.
+
+### Development renderer startup repair
+
+The user's `pnpm dev` process loads the staged DLL at the expected application
+path. The same local development renderer reproduced the remaining failure:
+native status reported `experimentalAllowed=true` while the real AutoMix DOM
+control stayed disabled. Its renderer subscribed after startup readiness events
+and never fetched the missing playback settings status. The earlier built-app
+fixture did not cover this development startup ordering.
+
+The renderer's output-state initialization and refresh now fetch playback
+settings status directly. AutoMix-only merging preserves an existing source,
+position, queue index, volume and transport state. The regression is registered
+in `test:playback-routing`. The focused renderer/controller/HMR suite passes
+92 checks and test-ownership/gate checks pass 13; application type checks/build
+and renderer budgets pass again.
+
+`manual-acceptance-dev-ui-before.json` records the native-allowed/UI-disabled
+failure, and `manual-acceptance-dev-ui-after.json` records the successful fix on
+the user's development server. Separate complete application fixtures verify
+both a development renderer and the built renderer with 1,500 ms delayed page
+loading. In both fixtures the control is usable before Play, and real DOM
+enable/disable agrees with native status. Their reports are
+`manual-acceptance-dev-ui-delayed.json` and
+`manual-acceptance-build-ui-delayed.json`; corresponding logs use
+`latest-manual-acceptance-dev-*.log` and
+`latest-manual-acceptance-build-ui-delayed.log`. Fixtures use temporary profiles
+and perform no music playback. The delayed development fixture uses an isolated
+local Vite server; it does not require the user's development process to remain
+running during the test.
+
+## Application playback repair (2026-10-09)
+
+A complete application probe reproduced saved AutoMix enablement while native
+status remained disabled (`configRevision=0`), followed by a separate preload
+failure under the saved bit-perfect-first policy (`gaplessBlockedReason=format_mismatch`).
+DSP commits could also withdraw a ready pair without scheduling its replacement.
+Earlier controls-only probes did not exercise these playback paths.
+
+Successful DSP acknowledgements now synchronize native AutoMix independently of
+decorated graph revision state. Concurrent startup acknowledgements do not send
+duplicate configs, and service recovery reapplies the saved config. Native graph
+commits immediately rebuild the conservative pair. AutoMix permits both sources
+to convert to the common PCM render format under bit-perfect-first, and retains
+its preload when the separate gapless preference is disabled. Feature identity,
+deadlines and source windows use decoder duration rather than rounded queue
+display metadata. Application diagnostics now record configured and actual
+AutoMix state, pair revision, style, duration, reason and feature delivery.
+
+`scripts/automix-app-playback-smoke.cjs` runs the real built application, renderer
+IPC, coordinator, analysis/cache and utility service with a temporary profile.
+It accepts an isolated runtime for verification without changing the user's app.
+`manual-acceptance-app-playback-before.json` captures disabled native playback;
+`manual-acceptance-app-smart-diagnostics.json` captures the format blocker.
+`manual-acceptance-app-smart-after-format.json` confirms style 8, 3.24 seconds of
+mixing, one queue promotion and incoming continuation at 3.41248 seconds, with
+rounded queue durations and the same WASAPI headphones. Playback probes are
+muted (`volume=0`); they verify render execution, not subjective listening quality.
+
+The audio-manager suite passes 444 checks, the focused DSP suite passes four,
+and application typechecking/build/budgets pass. The native suite passed all
+43 registrations before the final format change, with the ASIO ABI cross-DLL
+case skipped. After the final native changes, the complete runtime queue suite,
+callback performance gate and assembly differential suite were rebuilt and
+passed again. New native regressions cover DSP rearming, different source
+formats with gapless disabled, and rounded metadata with analyzed style 8.
+
+The staged DLL SHA-256 is
+`1f7d3313b4f4c4b37ab377b636b45673dffc7dd144d7c88e30f740b30277f3ac`.
+The previous DLL/addon/manifests are backed up under
+`D:\TwilightEchoDependencies\automix\backup-before-playback-fix-20261009`.
+The pending listening, music-pair matrix, real ASIO and long-run gates below
+remain unclaimed.
+
+`manual-acceptance-app-staged-conservative.json` verifies the application using
+the updated project runtime: style 1, a four-second overlap, and incoming
+continuation at 4.05962 seconds for the user's earlier MP3/FLAC track pair.
+The staged settings-controls probe also passes. These probes are muted and
+retain the same listening limitations. `manual-acceptance-playback-fix-runtime.json`
+records final runtime hashes, backup location and verification coverage.
+
+## Playback bar handoff repair (2026-10-09)
+
+The real renderer store and PlayerBar DOM reproduced an AutoMix handoff in
+which native playback had continued at 4.18 seconds in the incoming track,
+but a later `start-file` notification reset the renderer clock to zero.
+The clock then rejected the incoming timestamps during its transition guard.
+The previous application probe directly loaded the engine queue and therefore
+did not establish a renderer queue or verify the playback bar.
+
+Native tick fanout now publishes the identity-bearing playback snapshot before
+scalar time/duration notifications. `start-file` requests a fresh snapshot and
+retains the position already confirmed by that snapshot. The intentional-track
+guard expires relative to its first confirmation rather than extending with
+every playing tick; accepted native handoffs guard their incoming identity
+against delayed outgoing snapshots. Queue promotion and source-clock mapping
+remain native operations; this repair does not change audio rendering or trim
+policy and requires no DLL replacement.
+
+`scripts/automix-app-playback-smoke.cjs --player-bar` starts an isolated Vite
+renderer and the built main/preload application with a temporary user profile.
+It calls the actual store's `playTrackFromPosition`, observes the standard bar's
+track identity, slider and time labels, and checks continuation for two seconds
+after promotion. `player-bar-before.json` records the failing DOM clock;
+`player-bar-final.json` records the corrected handoff for
+Kobaryo - Vicious Heroism -Traitor Version- / Kobaryo,USAO - Sulyvahn, with
+rounded queue durations and the user's WASAPI headphones. The probe is muted;
+it verifies application playback synchronization, not listening quality.
+
+Playback routing passes 705 checks and audio management passes 445. The focused
+handoff/store/clock/manager suite passes 262 checks, including both event orders,
+continued incoming progress, delayed outgoing snapshots and bounded guards.
+Application type checks, build and renderer budgets pass. Evidence and logs
+are in `D:\TwilightEchoDependencies\automix\player-bar-*.json` / `player-bar-*.log`.
+
+## Remaining release gates
+
+Key/phrase estimation; broader validated candidate policy; real online-provider
+playback; original-source sample boundary proof across the format matrix and
+stretch; dual-track lyric/listening
+accounting; complete pipeline memory/restart/device-change soak; six rates × four
+actual callback sizes with adequate tail samples; full host cached-planning p99;
+100 classified music pairs with full-song/manual assessment and >=95% natural
+transitions; at least 24 hours of real-device playback; packaging and release
+manifest gates. Real ASIO validation is deferred at the user's request.
+
+Until these gates pass, `stableRelease` stays false. The manual-acceptance build
+allows experimental in-app use; other test processes can opt in with startup
+`TAE_AUTOMIX_EXPERIMENTAL=1`. Disabling AutoMix restores the latest saved output
+preferences and normal playback.

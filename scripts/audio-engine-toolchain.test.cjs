@@ -1032,6 +1032,38 @@ test('MinGW staging rejects an explicitly selected build directory instead of us
   assert.equal(existsSync(join(fixtureRoot, 'resources', 'audio-engine', nativeLibrary)), false)
 })
 
+test('explicit staging output keeps the current player runtime intact', (t) => {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'twilight-audio-stage-isolated-'))
+  t.after(() => rmSync(fixtureRoot, { recursive: true, force: true }))
+  const fixtureScripts = join(fixtureRoot, 'scripts')
+  copyStagingScripts(fixtureScripts)
+  const buildDir = join(fixtureRoot, 'selected-build')
+  const currentDir = join(fixtureRoot, 'resources', 'audio-engine')
+  const targetDir = join(fixtureRoot, 'prepared-runtime')
+  mkdirSync(buildDir, { recursive: true })
+  mkdirSync(currentDir, { recursive: true })
+  for (const file of runtimeFileNames())
+    writeRuntimeFixture(buildDir, file, { trailer: 'new artifact' })
+  const current = join(currentDir, nativeLibraryName())
+  writeFileSync(current, 'running player artifact')
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(fixtureScripts, 'stage-audio-engine.cjs'),
+      '--build-dir',
+      buildDir,
+      '--output-dir',
+      targetDir
+    ],
+    { cwd: fixtureRoot, encoding: 'utf8' }
+  )
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+  assert.equal(readFileSync(current, 'utf8'), 'running player artifact')
+  for (const file of runtimeFileNames())
+    assert.deepEqual(readFileSync(join(targetDir, file)), readFileSync(join(buildDir, file)))
+  assert.ok(existsSync(join(targetDir, 'audio-capabilities.json')))
+})
+
 for (const fallbackName of ['windows-msvc', 'default']) {
   test(`generic audio staging discovers ${fallbackName} runtime artifacts`, (t) => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), 'twilight audio stage-'))

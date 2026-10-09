@@ -108,7 +108,11 @@ async function handleRequest(message: AudioServiceRequest): Promise<void> {
     return
   }
   try {
-    if (message.method === 'AnalyzeBpm' || message.method === 'AnalyzeLoudness') {
+    if (
+      message.method === 'AnalyzeBpm' ||
+      message.method === 'AnalyzeLoudness' ||
+      message.method === 'AnalyzeAutoMix'
+    ) {
       throw new Error(`${String(message.method)} must use the isolated audio analysis service`)
     }
     const method = native[message.method]

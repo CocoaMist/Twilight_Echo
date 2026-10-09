@@ -70,19 +70,23 @@ test(
       fs.writeFileSync(
         path.join(pluginRoot, 'index.mjs'),
         `
-      import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+      import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
       import { join } from 'node:path'
       let timer
       export function activate(context) {
         const file = join(context.storagePath, 'probe.json')
         const previous = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
         const state = { activations: (previous.activations || 0) + 1, ticks: 0 }
-        writeFileSync(file, JSON.stringify(state))
+        const persist = () => {
+          writeFileSync(file + '.tmp', JSON.stringify(state))
+          renameSync(file + '.tmp', file)
+        }
+        persist()
         if (${JSON.stringify(id)} === 'com.example.retry-task' && state.activations === 1)
           throw new Error('one-time startup failure')
         timer = setInterval(() => {
           state.ticks++
-          writeFileSync(file, JSON.stringify(state))
+          persist()
         }, 30)
       }
       export function deactivate() { clearInterval(timer) }
@@ -169,17 +173,27 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
   const directory = fs.mkdtempSync(path.join(tmpdir(), 'twilight-plugin-wake-'))
   fs.writeFileSync(path.join(directory, 'index.mjs'), 'export function activate() {}\n')
   const importSource = (name) => import(pathToFileURL(path.join(__dirname, name)).href)
-  const [manifest, routing, queue, rpc, idle, persistence, dependenciesApi, media] =
-    await Promise.all([
-      importSource('manifest.ts'),
-      importSource('providerRouting.ts'),
-      importSource('operationQueue.ts'),
-      importSource('rpcCoordinator.ts'),
-      importSource('hostIdle.ts'),
-      importSource('statePersistence.ts'),
-      importSource('dependencies.ts'),
-      importSource('../security/remoteMediaGrants.ts')
-    ])
+  const [
+    manifest,
+    routing,
+    queue,
+    rpc,
+    idle,
+    persistence,
+    dependenciesApi,
+    media,
+    playbackSources
+  ] = await Promise.all([
+    importSource('manifest.ts'),
+    importSource('providerRouting.ts'),
+    importSource('operationQueue.ts'),
+    importSource('rpcCoordinator.ts'),
+    importSource('hostIdle.ts'),
+    importSource('statePersistence.ts'),
+    importSource('dependencies.ts'),
+    importSource('../security/remoteMediaGrants.ts'),
+    importSource('../security/providerPlaybackSources.ts')
+  ])
   const children = []
   let notify
   const activationStarted = new Promise((resolve) => {
@@ -237,7 +251,8 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
       QishuiAuthBridge: class {}
     },
     './packageSecurity.ts': { resolvePluginFile: (file) => file },
-    '../security/remoteMediaGrants.ts': media
+    '../security/remoteMediaGrants.ts': media,
+    '../security/providerPlaybackSources.ts': playbackSources
   }
   const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, 'manager.ts'), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
@@ -251,6 +266,7 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
       return require(id)
     },
     Buffer,
+    structuredClone,
     process,
     setTimeout,
     clearTimeout,

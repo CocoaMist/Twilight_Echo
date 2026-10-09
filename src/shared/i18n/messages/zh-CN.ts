@@ -104,6 +104,10 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'audio.reason.crossfade_active.explain':
     '淡入淡出在曲目衔接处叠加两条流并施加增益包络，衔接段的样本被改写，同时会关闭 true gapless。',
   'audio.reason.crossfade_active.fix': '把播放设置里的交叉淡入淡出时长设为 0 秒。',
+  'audio.reason.automix_active.label': 'AutoMix 正在衔接曲目',
+  'audio.reason.automix_active.explain':
+    'AutoMix 正在混合或处理两首曲目的 PCM 音频，当前输出样本已改变。',
+  'audio.reason.automix_active.fix': '关闭播放设置中的 AutoMix 后恢复最新输出偏好。',
 
   'audio.reason.dsd_output_mode_pcm.label': 'DSD 输出模式被设为 PCM',
   'audio.reason.dsd_output_mode_pcm.explain':
