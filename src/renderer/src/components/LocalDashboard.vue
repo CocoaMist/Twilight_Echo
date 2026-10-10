@@ -23,7 +23,6 @@ import type { Track } from '../types/music'
 import { createUnifiedRecentTrackResolver } from '../utils/unifiedRecentTracks'
 import { resolveTimeGreeting } from '@renderer/utils/timeGreeting'
 import CoverImg from './CoverImg.vue'
-import { normalizeAccentColor } from '../utils/colorExtractor'
 
 const emit = defineEmits<{
   (event: 'select-view', category: string, filter: string | null): void
@@ -44,8 +43,7 @@ const tracks = computed(() => props.previewTracks ?? libraryTracks.value)
 const { listeningStats } = useListeningStatsStore()
 const playbackStore = usePlayerStore()
 const audioOutputDspStore = useAudioOutputDspStore()
-const { currentTrack, isPlaying, dominantColor } = playbackStore
-const playButtonColor = computed(() => normalizeAccentColor(dominantColor.value))
+const { currentTrack, isPlaying } = playbackStore
 const { audioProcessing, playbackInfo, outputInfo } = storeToRefs(audioOutputDspStore)
 const { playTrack, togglePlay, next, prev, setPlayMode } = playbackStore
 
@@ -913,7 +911,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <button
                   type="button"
                   class="transport-button transport-play"
-                  :style="{ '--play-button-color': playButtonColor }"
                   :title="heroIsCurrent && isPlaying ? '暂停' : '播放'"
                   :aria-label="heroIsCurrent && isPlaying ? '暂停' : '播放'"
                   @click="heroIsCurrent ? togglePlay() : playDashboardTrack(heroTrack)"

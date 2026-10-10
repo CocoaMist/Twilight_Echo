@@ -162,12 +162,12 @@ window.api={
 const boot=()=>bootstrapThemeRuntime({systemTone:'pureWhite',settings:{settings:{theme:'pureWhite',accentColor:'blue',lightAccentColor:'blue',darkAccentColor:'blue',uiDensity:'comfortable'}},themeBootstrap:{library}})
 const store=useThemeStore()
 const colors={
-  pureWhite:{'playback.progress.track':'rgba(37, 99, 235, 0.16)','playback.progress.fill':'linear-gradient(270deg, rgba(37, 99, 235, 0.58), rgba(240, 128, 230, 0.73))','playback.control.surface':'#654321','playback.control.hoverSurface':'#abcdef'},
-  dark:{'playback.progress.track':'#345678','playback.progress.fill':'linear-gradient(90deg, #0000ff, #ff00ff)','playback.control.surface':'#876543','playback.control.hoverSurface':'#fedcba'}
+  pureWhite:{'playback.progress.track':'rgba(37, 99, 235, 0.16)','playback.progress.fill':'linear-gradient(270deg, rgba(37, 99, 235, 0.58), rgba(240, 128, 230, 0.73))','playback.control.surface':'#654321','playback.control.hoverSurface':'#abcdef','playback.control.text':'#ffffff','playback.control.hoverText':'#112233'},
+  dark:{'playback.progress.track':'#345678','playback.progress.fill':'linear-gradient(90deg, #0000ff, #ff00ff)','playback.control.surface':'#876543','playback.control.hoverSurface':'#fedcba','playback.control.text':'#fafafa','playback.control.hoverText':'#223344'}
 }
 let bar,button,stripButton,hoverTarget,track,fill
 const iconHosts=[]
-const mountIcon=(host,name)=>{render(h(PlaybackIcon,{name}),host);host.firstElementChild?.setAttribute('data-v-test','');iconHosts.push(host)}
+const mountIcon=(host,name)=>{render(null,host);host.replaceChildren();render(h(PlaybackIcon,{name}),host);host.firstElementChild?.setAttribute('data-v-test','');iconHosts.push(host)}
 const clear=()=>{
   for(const host of iconHosts)render(null,host)
   iconHosts.length=0
@@ -222,6 +222,11 @@ const checkBackground=(element,value,label,pseudo)=>{
   probe.remove()
 }
 const settle=()=>new Promise(resolve=>setTimeout(resolve,250))
+const checkIconColor=(element,value)=>{
+  const probe=document.createElement('span');probe.style.color=value;document.body.append(probe)
+  expect(getComputedStyle(element.querySelector('svg')).color===getComputedStyle(probe).color,'explicit transport icon color reaches the glyph')
+  probe.remove()
+}
 const checkColors=async(overrides)=>{
   for(const tone of ['pureWhite','dark']){
     await store.setPreviewTone(tone)
@@ -231,6 +236,7 @@ const checkColors=async(overrides)=>{
       checkBackground(track,overrides[tone]['playback.progress.track'],tone+' dashboard track','::before')
       checkBackground(fill,overrides[tone]['playback.progress.fill'],tone+' dashboard fill')
       checkBackground(button,overrides[tone]['playback.control.surface'],tone+' dashboard play')
+      checkIconColor(button,overrides[tone]['playback.control.text'])
       bar.style.setProperty('--home-accent','#0000aa')
       checkBackground(fill,overrides[tone]['playback.progress.fill'],tone+' dashboard accent change')
     }
@@ -241,6 +247,7 @@ const checkColors=async(overrides)=>{
       checkBackground(track,overrides[tone]['playback.progress.track'],label+' track')
       checkBackground(fill,overrides[tone]['playback.progress.fill'],label+' fill')
       checkBackground(button,overrides[tone]['playback.control.surface'],label+' play')
+      if(mode==='standard')checkIconColor(button,overrides[tone]['playback.control.text'])
       if(mode!=='standard')checkBackground(stripButton,overrides[tone]['playback.control.surface'],label+' standalone play')
       bar.style.setProperty('--accent-color','#0000aa')
       bar.style.setProperty('--play-button-color','#0000aa')
@@ -256,7 +263,7 @@ const checkDashboardDefaults=()=>{
   const ink=style.getPropertyValue('--home-ink')
   checkBackground(track,'color-mix(in srgb, '+ink+' 12%, transparent)','reset restores dashboard track','::before')
   checkBackground(fill,'linear-gradient(90deg, '+style.getPropertyValue('--home-accent')+', '+style.getPropertyValue('--te-accent-cyan')+')','reset restores dashboard fill')
-  checkBackground(button,'#cc9900','reset restores cover play color on dashboard')
+  checkBackground(button,'var(--te-transport-play-surface)','reset restores quiet dashboard play surface')
 }
 window.runPlayerThemeTests=async()=>{
   await boot()
@@ -266,11 +273,16 @@ window.runPlayerThemeTests=async()=>{
       mount('standard')
       bar.style.setProperty('--play-button-color',cover)
       await settle()
+      const rect=button.getBoundingClientRect()
+      expect(rect.width>=rect.height*1.6&&rect.height>=44,'standard transport is a capsule with a usable hit target')
+      checkBackground(button,'var(--te-transport-play-surface)','default standard play surface stays neutral across covers')
       const expected=background(button)
       const expectedIcon=getComputedStyle(button).color
       mountDashboard()
       bar.style.setProperty('--play-button-color',cover)
       await settle()
+      const homeRect=button.getBoundingClientRect()
+      expect(Math.abs(homeRect.width-rect.width)<0.6&&Math.abs(homeRect.height-rect.height)<0.6,'dashboard and standard capsule dimensions match')
       expect(background(button)===expected,tone+' dashboard and standard play colors match after cover changes')
       expect(getComputedStyle(button).color===expectedIcon,tone+' dashboard and standard play icon colors match')
     }
@@ -333,6 +345,9 @@ window.checkStandardPlayerGeometry=async()=>{
     const progress=bar.querySelector('.progress-track').getBoundingClientRect()
     expect(controls.top-frame.top>=15.9,'transport has at least 16px top clearance: '+(controls.top-frame.top))
     expect(frame.bottom-progress.bottom>=7.9,'progress has at least 8px bottom clearance')
+    const play=button.getBoundingClientRect(),glyph=button.querySelector('svg').getBoundingClientRect()
+    expect(play.width>=play.height*1.6,'play capsule remains horizontal at every width and font size')
+    expect(Math.abs(glyph.x+glyph.width/2-play.x-play.width/2)<0.6&&Math.abs(glyph.y+glyph.height/2-play.y-play.height/2)<0.6,'transport glyph stays centered in the capsule: '+JSON.stringify({tone,glass,fontSize,width:innerWidth,play:play.toJSON(),glyph:glyph.toJSON(),display:getComputedStyle(button).display,align:getComputedStyle(button).alignItems}))
   }
 }
 window.checkNavigationProportions=async()=>{
@@ -367,11 +382,12 @@ window.checkSharedPlaybackGlyphs=async()=>{
       mount('standard')
       mountIcon(button,name)
       const standard=button.querySelector('svg').innerHTML
-      expect(getComputedStyle(button.querySelector('svg')).color==='rgb(255, 255, 255)','standard glyph keeps its white foreground')
+      const foreground=getComputedStyle(button.querySelector('svg')).color
+      expect(foreground===getComputedStyle(button).color,'standard glyph inherits the transport foreground')
       mountDashboard()
       mountIcon(button,name)
       expect(button.querySelector('svg').innerHTML===standard,'dashboard '+name+' has the standard bar shape')
-      expect(getComputedStyle(button.querySelector('svg')).color==='rgb(255, 255, 255)','dashboard glyph keeps its white foreground')
+      expect(getComputedStyle(button.querySelector('svg')).color===foreground,'dashboard glyph uses the same transport foreground')
     }
     const tile=document.createElement('button')
     tile.className='fresh-tile'
@@ -457,6 +473,7 @@ window.checkPlayerThemeHover=()=>{
   const hoverRect=hoverTarget.getBoundingClientRect()
   expect(hoverTarget.matches(':hover'),'play button receives hover: '+document.documentElement.dataset.theme+' '+bar.className+' '+JSON.stringify({x:hoverRect.x,y:hoverRect.y,w:hoverRect.width,h:hoverRect.height,hit:document.elementFromPoint(hoverRect.x+hoverRect.width/2,hoverRect.y+hoverRect.height/2)?.outerHTML.slice(0,200)}))
   checkBackground(hoverTarget,colors[document.documentElement.dataset.theme]['playback.control.hoverSurface'],'custom play hover '+bar.className+' '+getComputedStyle(hoverTarget).getPropertyValue('--te-player-bar-play-hover-surface'))
+  if(bar.classList.contains('home')||(!bar.classList.contains('player-bar-mini')&&!bar.classList.contains('player-bar-compact')))checkIconColor(hoverTarget,colors[document.documentElement.dataset.theme]['playback.control.hoverText'])
 }
 window.checkReloadedPlayerTheme=async()=>{
   await boot()

@@ -1904,6 +1904,38 @@ html[data-te-motion='off'] .player-bar :deep(.ab-loop-range) {
   height: var(--te-player-play-size, 44px);
 }
 
+/* Keep the Windows transport easy to hit without a prominent colored disc. */
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play {
+  width: calc(var(--te-player-play-size, 44px) * 18 / 11);
+  border: 0;
+  border-radius: 999px;
+  background: var(--te-player-bar-play-surface, var(--te-transport-play-surface));
+  color: var(--te-player-bar-play-text, var(--te-transport-play-text));
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact).player-bar-glass {
+  --te-transport-play-text: #fff;
+  --te-transport-play-surface: rgba(255, 255, 255, 0.08);
+  --te-transport-play-hover-surface: rgba(255, 255, 255, 0.13);
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play:hover,
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play:active {
+  background: var(
+    --te-player-bar-play-hover-surface,
+    var(--te-player-bar-play-surface, var(--te-transport-play-hover-surface))
+  );
+  color: var(
+    --te-player-bar-play-hover-text,
+    var(--te-player-bar-play-text, var(--te-transport-play-text))
+  );
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 3px;
+}
+
 .player-bar :deep(.progress-track) {
   height: var(--te-player-progress-height, 6px);
   border-radius: var(--te-player-progress-radius, 999px);
@@ -2591,7 +2623,7 @@ html[data-theme='dark'] .player-bar-mini .mini-progress-track {
 .player-controls .btn-play .playback-icon {
   width: 21px;
   height: 21px;
-  color: #fff;
+  color: inherit;
   opacity: 1;
 }
 

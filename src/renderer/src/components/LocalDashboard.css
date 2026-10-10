@@ -617,23 +617,42 @@
   transform: scale(var(--te-motion-press-scale));
 }
 
-/* Match the standard playbar's cover color and theme overrides, without changing navigation buttons. */
+/* The same quiet capsule as the standard bar, including explicit theme colors. */
 .home .transport-button.transport-play {
-  width: 56px;
-  height: 56px;
+  width: 72px;
+  height: 44px;
   border: none;
   font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
-  color: #fff;
+  color: var(--te-player-bar-play-text, var(--te-transport-play-text));
   -webkit-text-fill-color: currentColor;
-  background: var(--te-player-bar-play-surface, var(--play-button-color, var(--te-primary-500)));
+  background: var(--te-player-bar-play-surface, var(--te-transport-play-surface));
   box-shadow: none;
 }
 
 .home .transport-button.transport-play:hover {
+  transform: none;
+  color: var(
+    --te-player-bar-play-hover-text,
+    var(--te-player-bar-play-text, var(--te-transport-play-text))
+  );
   background: var(
     --te-player-bar-play-hover-surface,
-    var(--te-player-bar-play-surface, var(--play-button-color, var(--te-primary-500)))
+    var(--te-player-bar-play-surface, var(--te-transport-play-hover-surface))
   );
+}
+
+.home .transport-button.transport-play:active {
+  transform: scale(var(--te-motion-press-scale));
+}
+
+.home .transport-button.transport-play:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 3px;
+}
+
+.home .transport-button.transport-play .playback-icon {
+  width: 21px;
+  height: 21px;
 }
 
 /* Hero art: offset echo + big cover */
