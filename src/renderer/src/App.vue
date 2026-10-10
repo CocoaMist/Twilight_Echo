@@ -975,10 +975,8 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     />
     <div class="app-shell-title">
       <TitleBar
-        :glass="showPlayingPage"
         :liquid-material="liquidGlassChromeActive"
         :streaming="showStreamingPage && !showPlayingPage"
-        :hide-start="showThemeStudioPage || showLoginPage"
         :title-surface="titleSurface"
         :active-tool="showPluginPage ? 'plugins' : showSettingsPage ? 'settings' : null"
         :menu-open="titleMenuOpen"

@@ -277,7 +277,7 @@ function setPressOrigin(event: PointerEvent): void {
   position: fixed;
   display: flex;
   flex-direction: column;
-  top: 32px;
+  top: var(--te-titlebar-inset, 45px);
   left: 0;
   /* App.vue measures how much of the bottom edge the playbar covers and publishes
      it on `.app-shell-navigation`; the menu ends above the bar instead of running

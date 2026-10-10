@@ -13,7 +13,6 @@ const props = withDefaults(
     glass?: boolean
     liquidMaterial?: boolean
     streaming?: boolean
-    hideStart?: boolean
     titleSurface?: 'default' | 'settings' | 'streaming'
     activeTool?: 'settings' | 'plugins' | null
     preview?: boolean
@@ -116,38 +115,16 @@ function close(): void {
   >
     <div class="title-bar-background" aria-hidden="true"></div>
     <div class="title-bar-start no-drag" @pointerdown="setPressOrigin">
-      <template v-if="!glass && !hideStart">
-        <button
-          type="button"
-          aria-label="菜单"
-          class="menu-btn"
-          :title="menuOpen ? '收起导航' : '展开导航'"
-          :aria-expanded="menuOpen"
-          @click="$emit('toggleMenu')"
-        >
-          <TitleBarIcon name="navigation" />
-        </button>
-        <button
-          type="button"
-          aria-label="设置"
-          :aria-pressed="activeTool === 'settings'"
-          class="settings-btn"
-          title="设置"
-          @click="$emit('settings')"
-        >
-          <TitleBarIcon name="settings" />
-        </button>
-        <button
-          type="button"
-          aria-label="扩展中心"
-          :aria-pressed="activeTool === 'plugins'"
-          class="plugins-btn"
-          title="扩展中心"
-          @click="$emit('plugins')"
-        >
-          <TitleBarIcon name="puzzle_piece" />
-        </button>
-      </template>
+      <button
+        type="button"
+        aria-label="菜单"
+        class="menu-btn"
+        :title="menuOpen ? '收起导航' : '展开导航'"
+        :aria-expanded="menuOpen"
+        @click="$emit('toggleMenu')"
+      >
+        <TitleBarIcon name="navigation" />
+      </button>
       <button
         type="button"
         :aria-label="loginLabel"
@@ -189,74 +166,98 @@ function close(): void {
       </Transition>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
-      <button
-        v-if="!preview"
-        type="button"
-        class="control-btn notification-btn"
-        :aria-label="`任务与通知${doNotDisturb ? ' · 勿扰模式已开启' : ''}（${activeTaskCount} 项进行中，${unreadCount} 条未读）`"
-        :title="
-          doNotDisturb
-            ? '任务与通知 · 勿扰模式已开启'
-            : activeTaskCount
-              ? `任务与通知 · ${activeTaskCount} 项进行中`
-              : '任务与通知'
-        "
-        :aria-expanded="notificationsOpen"
-        aria-controls="app-notice-history"
-        @click="$emit('notifications', $event)"
-      >
-        <svg class="notification-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
-          <path v-if="doNotDisturb" d="m3 3 18 18" />
-        </svg>
-        <span v-if="activeTaskCount" class="notification-task-count" aria-hidden="true">{{
-          activeTaskCount
-        }}</span>
-        <Transition name="notification-dot">
-          <span
-            v-if="unreadCount && !doNotDisturb"
-            class="notification-dot"
-            aria-hidden="true"
-          ></span>
-        </Transition>
-      </button>
-      <button
-        type="button"
-        :disabled="preview"
-        aria-label="最小化"
-        class="control-btn minimize"
-        title="最小化"
-        @click="minimize"
-      >
-        <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M2 8.5h12" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        :aria-label="maximized ? '还原窗口' : '最大化窗口'"
-        class="control-btn maximize"
-        :title="maximized ? '还原窗口' : '最大化窗口'"
-        :disabled="preview"
-        @click="toggleMaximize"
-      >
-        <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
-          <path v-if="maximized" d="M4.5 4.5v-2h9v9h-2M2.5 4.5h9v9h-9Z" />
-          <rect v-else x="2.5" y="2.5" width="11" height="11" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        :disabled="preview"
-        class="control-btn close"
-        title="关闭窗口"
-        aria-label="关闭窗口"
-        @click="close"
-      >
-        <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="m2.5 2.5 11 11m0-11-11 11" />
-        </svg>
-      </button>
+      <div class="title-bar-tools" role="group" aria-label="应用工具">
+        <button
+          type="button"
+          aria-label="扩展中心"
+          :aria-pressed="activeTool === 'plugins'"
+          class="plugins-btn"
+          title="扩展中心"
+          @click="$emit('plugins')"
+        >
+          <TitleBarIcon name="puzzle_piece" />
+        </button>
+        <button
+          type="button"
+          aria-label="设置"
+          :aria-pressed="activeTool === 'settings'"
+          class="settings-btn"
+          title="设置"
+          @click="$emit('settings')"
+        >
+          <TitleBarIcon name="settings" />
+        </button>
+        <button
+          type="button"
+          :disabled="preview"
+          class="control-btn notification-btn"
+          :aria-label="`任务与通知${doNotDisturb ? ' · 勿扰模式已开启' : ''}（${activeTaskCount} 项进行中，${unreadCount} 条未读）`"
+          :title="
+            doNotDisturb
+              ? '任务与通知 · 勿扰模式已开启'
+              : activeTaskCount
+                ? `任务与通知 · ${activeTaskCount} 项进行中`
+                : '任务与通知'
+          "
+          :aria-expanded="notificationsOpen"
+          aria-controls="app-notice-history"
+          @click="$emit('notifications', $event)"
+        >
+          <svg class="notification-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+            <path v-if="doNotDisturb" d="m3 3 18 18" />
+          </svg>
+          <span v-if="activeTaskCount" class="notification-task-count" aria-hidden="true">{{
+            activeTaskCount
+          }}</span>
+          <Transition name="notification-dot">
+            <span
+              v-if="unreadCount && !doNotDisturb"
+              class="notification-dot"
+              aria-hidden="true"
+            ></span>
+          </Transition>
+        </button>
+      </div>
+      <div class="title-bar-window-controls" role="group" aria-label="窗口控制">
+        <button
+          type="button"
+          :disabled="preview"
+          aria-label="最小化"
+          class="control-btn minimize"
+          title="最小化"
+          @click="minimize"
+        >
+          <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M2 8.5h12" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          :aria-label="maximized ? '还原窗口' : '最大化窗口'"
+          class="control-btn maximize"
+          :title="maximized ? '还原窗口' : '最大化窗口'"
+          :disabled="preview"
+          @click="toggleMaximize"
+        >
+          <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path v-if="maximized" d="M4.5 4.5v-2h9v9h-2M2.5 4.5h9v9h-9Z" />
+            <rect v-else x="2.5" y="2.5" width="11" height="11" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          :disabled="preview"
+          class="control-btn close"
+          title="关闭窗口"
+          aria-label="关闭窗口"
+          @click="close"
+        >
+          <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m2.5 2.5 11 11m0-11-11 11" />
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -324,6 +325,7 @@ function close(): void {
   color: var(--te-primary-500);
 }
 .title-bar {
+  --te-titlebar-height: 45px;
   --te-titlebar-material-surface: var(--te-app-bg);
   --te-titlebar-material-ink: var(--te-shell-control-text);
   --te-titlebar-icon-size: 16px;
@@ -331,7 +333,9 @@ function close(): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: var(--te-titlebar-height, 35px);
+  height: 45px;
+  min-height: 45px;
+  max-height: 45px;
   box-sizing: border-box;
   flex-shrink: 0;
   background: transparent !important;
@@ -365,7 +369,7 @@ function close(): void {
       color-mix(in srgb, var(--te-titlebar-material-ink) 4%, transparent),
       transparent
     ),
-    color-mix(in srgb, var(--te-titlebar-material-surface) 84%, transparent);
+    color-mix(in srgb, var(--te-titlebar-material-surface) 66%, transparent);
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--te-titlebar-material-ink) 8%, transparent);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
@@ -381,7 +385,8 @@ function close(): void {
 }
 
 .title-bar-start,
-.title-bar-back {
+.title-bar-back,
+.title-bar-tools {
   --te-titlebar-icon-size: 18px;
 }
 
@@ -396,17 +401,16 @@ function close(): void {
 .title-bar-back {
   display: flex;
   align-items: center;
-  width: 0;
+  width: var(--te-titlebar-control-width, 46px);
   height: 100%;
   overflow: hidden;
   position: relative;
   z-index: 1;
   flex-shrink: 0;
-  transition: width 0.2s var(--te-ease-soft, ease);
 }
 
 .title-bar-back-visible {
-  width: var(--te-titlebar-control-width, 46px);
+  overflow: visible;
 }
 
 .back-btn {
@@ -551,11 +555,11 @@ html[data-theme='dark'] .title-bar :is(.settings-btn, .plugins-btn)[aria-pressed
   object-fit: cover;
 }
 
-.title-bar-glass .settings-btn {
+.title-bar-glass :is(.menu-btn, .settings-btn, .plugins-btn) {
   color: #fff;
 }
 
-.title-bar-glass .settings-btn:hover {
+.title-bar-glass :is(.menu-btn, .settings-btn, .plugins-btn):hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -574,6 +578,30 @@ html[data-theme='dark'] .title-bar :is(.settings-btn, .plugins-btn)[aria-pressed
   margin-left: auto;
   position: relative;
   z-index: 1;
+}
+
+.title-bar-tools,
+.title-bar-window-controls {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.title-bar-window-controls {
+  margin-left: 12px;
+}
+
+.title-bar-tools::after {
+  content: '';
+  width: 1px;
+  height: 16px;
+  background: color-mix(in srgb, var(--te-shell-control-text) 12%, transparent);
+  pointer-events: none;
+}
+
+.title-bar :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn):focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: -3px;
 }
 
 .control-btn {
@@ -664,19 +692,6 @@ html[data-theme='pureWhite'] .title-bar .control-btn.close:hover,
       transparent 82%
     ),
     var(--te-lg-context-material) !important;
-}
-
-html[data-te-liquid-glass-scrolled='on'] .title-bar-liquid .title-bar-background {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 24%, transparent),
-      transparent 66%
-    ),
-    color-mix(in srgb, var(--te-lg-context-surface) 72%, transparent) !important;
-  box-shadow:
-    inset 0 -1px 0 color-mix(in srgb, var(--te-lg-context-label) 13%, transparent),
-    0 6px 18px color-mix(in srgb, var(--te-lg-context-label) 8%, transparent);
 }
 
 .title-bar-liquid :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn) {

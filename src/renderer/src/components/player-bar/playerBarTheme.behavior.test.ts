@@ -364,6 +364,7 @@ window.checkNavigationProportions=async()=>{
     document.documentElement.style.setProperty('--te-font-size-body',size+'px','important')
     await new Promise(requestAnimationFrame)
     const frame=menu.getBoundingClientRect(),row=item.getBoundingClientRect(),glyph=icon.getBoundingClientRect()
+    expect(Math.abs(frame.top-45)<0.6,'sidebar begins below the fixed 45px title bar')
     const expected=style==='rail'?72:style==='compact'?size*192/14:Math.max(size*224/14,Math.min(innerWidth*.18,size*260/14))
     expect(Math.abs(frame.width-expected)<1,'navigation mode width survives inline theme tokens: '+style+' '+frame.width+'/'+expected)
     expect(Math.abs(parseFloat(getComputedStyle(main).paddingLeft)-(innerWidth>900?frame.width:0))<1,'content reserves sidebar width on desktop and overlays at narrow widths: '+JSON.stringify({style,width:frame.width,padding:getComputedStyle(main).paddingLeft,window:innerWidth}))

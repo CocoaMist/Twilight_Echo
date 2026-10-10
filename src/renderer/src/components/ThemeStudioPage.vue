@@ -339,9 +339,7 @@ void editorPaneRef.value
             <TitleBar
               preview
               :menu-open="previewNavigationOpen"
-              :glass="previewSurface === 'player'"
               :streaming="false"
-              :hide-start="false"
               title-surface="default"
             />
             <SideMenu

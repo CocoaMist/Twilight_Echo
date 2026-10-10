@@ -229,7 +229,6 @@ onBeforeUnmount(() => {
             :menu-open="true"
             :glass="false"
             :streaming="false"
-            :hide-start="false"
             title-surface="default"
           />
         </div>

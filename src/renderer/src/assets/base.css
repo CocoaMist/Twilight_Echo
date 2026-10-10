@@ -1,4 +1,6 @@
 :root {
+  --te-titlebar-height: 45px;
+  --te-titlebar-inset: 45px;
   --te-transport-play-text: var(--te-shell-control-text);
   --te-transport-play-surface: color-mix(in srgb, var(--te-transport-play-text) 8%, transparent);
   --te-transport-play-hover-surface: color-mix(

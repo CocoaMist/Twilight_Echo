@@ -72,7 +72,7 @@ test('login and title bar recover from disabled providers in real Electron rende
     ])
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><meta charset="utf-8"><style>${baseStyle}\n${appearanceStyle}\n${titleStyle}\n${iconStyle}</style><div id="title"></div><div id="app"></div>
+      `<!doctype html><meta charset="utf-8"><style>${baseStyle}\n${appearanceStyle}\n${await readFile(new URL('../../assets/theme-layouts/obsidian-glass.css', import.meta.url), 'utf8')}\n${await readFile(new URL('../../assets/theme-layouts/paper-light.css', import.meta.url), 'utf8')}\n${titleStyle}\n${iconStyle}</style><div id="title"></div><div id="app"></div>
       <script>${vue}</script><script>${runtime}</script>
       <script>
         const load = source => {
@@ -266,20 +266,22 @@ window.runProviderFallbackTests = async () => {
   button.click(); expect(selected === 'bili', 'title bar selected disabled NCM');
   await replaceProviders([ncm, bili]); button.click();
   expect(selected === 'ncm' && button.title === '旧网易云账号', 'NCM account entry was not preserved');
-  // Keep the account entry across main surfaces, including surfaces that hide commands.
+  // Navigation, account and tools keep their positions across every main surface.
   const surfaces = [
     { streaming: false },
     { streaming: false, titleSurface: 'settings' },
     { streaming: true, titleSurface: 'streaming' },
-    { hideStart: true },
     { glass: true },
-    { preview: true, hideStart: true }
+    { preview: true }
   ];
   for (const surface of surfaces) {
     titleProps.value = surface; await settle();
     button = document.querySelector('#title .login-btn');
     expect(button && button.getBoundingClientRect().width === 46, 'account entry disappeared on ' + JSON.stringify(surface));
-    expect(!!document.querySelector('#title .menu-btn') === !(surface.hideStart || surface.glass), 'command visibility changed');
+    expect(document.querySelector('#title .menu-btn') && document.querySelector('#title .title-bar-tools .settings-btn') && document.querySelector('#title .title-bar-tools .plugins-btn'), 'persistent title commands disappeared');
+    const frame = document.querySelector('#title .title-bar').getBoundingClientRect();
+    const tools = document.querySelector('#title .title-bar-tools').getBoundingClientRect();
+    expect(frame.height === 45 && tools.right > frame.width / 2, 'title height or right tool placement changed');
     button.click(); expect(selected === 'ncm', 'persistent account lost its enabled provider');
   }
   titleProps.value = { streaming: false }; await settle();
@@ -291,7 +293,7 @@ window.runProviderFallbackTests = async () => {
     const menu = document.querySelector('#title .menu-btn').getBoundingClientRect();
     const close = document.querySelector('#title .close').getBoundingClientRect();
     expect(!document.querySelector('#title .command-palette-trigger') && !document.querySelector('#title [data-icon="search"]'), 'title search entry remains');
-    expect(document.querySelector('#title .title-bar-start').children.length === 4, 'removed search left a command slot');
+    expect(document.querySelector('#title .title-bar-start').children.length === 2, 'left group contains tools or an empty search slot');
     for (const surface of ['default', 'settings', 'streaming']) for (const transparent of [false, true]) {
       titleProps.value = { titleSurface: surface }; await settle();
       document.documentElement.dataset.windowTransparent = transparent ? 'on' : 'off';
@@ -304,14 +306,30 @@ window.runProviderFallbackTests = async () => {
     titleProps.value = { streaming: false }; await settle();
     delete document.documentElement.dataset.windowTransparent;
     delete document.documentElement.dataset.teSurfaceMaterial;
-    expect(bar.height === 35 && menu.width === close.width && close.width === 46, 'caption geometry differs');
+    expect(bar.height === 45 && menu.width === close.width && close.width === 46, 'caption geometry differs');
     expect(menu.left - bar.left === bar.right - close.right, 'outer margins differ');
     expect(menu.left + menu.width / 2 - bar.left === bar.right - close.left - close.width / 2, 'outer icon centers differ');
     expect(document.querySelector('#title .menu-btn svg').getBoundingClientRect().width === 18, 'left icon size did not grow');
+    expect(document.querySelector('#title .settings-btn svg').getBoundingClientRect().width === 18, 'right application icon differs from left application icons');
     expect(document.querySelector('#title .close svg').getBoundingClientRect().width === 16, 'caption icon size changed');
+    const controlPositions = [...document.querySelectorAll('#title .plugins-btn, #title .settings-btn, #title .notification-btn, #title .minimize, #title .maximize, #title .close')].map(element => element.getBoundingClientRect().left);
+    const tools = document.querySelector('#title .title-bar-tools').getBoundingClientRect();
+    const windows = document.querySelector('#title .title-bar-window-controls').getBoundingClientRect();
+    expect(windows.left - tools.right >= 12, 'application tools crowd window controls');
+    for (const layout of ['default', 'obsidian-glass', 'paper-light']) {
+      document.documentElement.dataset.tePresetLayout = layout;
+      await settle();
+      const frame = document.querySelector('#title .title-bar').getBoundingClientRect();
+      const icon = document.querySelector('#title .menu-btn svg').getBoundingClientRect();
+      expect(frame.height === 45 && Math.abs(icon.top + icon.height / 2 - frame.top - frame.height / 2) < .6, 'theme changed title height or vertical alignment: ' + layout);
+    }
+    delete document.documentElement.dataset.tePresetLayout;
+    const backSlot = document.querySelector('#title .title-bar-back').getBoundingClientRect();
     const accountLeft = button.getBoundingClientRect().left;
     canGoBack.value = true; await settle();
     expect(button.getBoundingClientRect().left === accountLeft && document.querySelector('#title .back-btn'), 'return shifted account entry');
+    expect(document.querySelector('#title .title-bar-back').getBoundingClientRect().width === backSlot.width, 'return changed its reserved width');
+    expect([...document.querySelectorAll('#title .plugins-btn, #title .settings-btn, #title .notification-btn, #title .minimize, #title .maximize, #title .close')].every((element, index) => element.getBoundingClientRect().left === controlPositions[index]), 'return shifted right controls');
     canGoBack.value = false; await settle();
   }
 
