@@ -11,6 +11,7 @@ const props = withDefaults(
   defineProps<{
     menuOpen: boolean
     glass?: boolean
+    immersive?: boolean
     liquidMaterial?: boolean
     streaming?: boolean
     titleSurface?: 'default' | 'settings' | 'streaming'
@@ -107,7 +108,8 @@ function close(): void {
       'drag-region': !preview,
       'no-drag': preview,
       'title-bar-glass': glass,
-      'title-bar-liquid': liquidMaterial,
+      'title-bar-liquid': liquidMaterial && !immersive,
+      'title-bar-immersive': immersive,
       'title-bar-settings': titleSurface === 'settings',
       'title-bar-streaming': titleSurface === 'streaming',
       'title-bar-menu-open': menuOpen
@@ -382,6 +384,21 @@ function close(): void {
 .title-bar-glass {
   --te-titlebar-material-surface: #17181a;
   --te-titlebar-material-ink: #fff;
+}
+
+/* Playback paints one continuous backdrop, including the caption strip. */
+.title-bar-immersive {
+  --te-shell-control-text: var(--te-playback-page-text, #f4f7fb);
+  --te-shell-control-hover: color-mix(in srgb, var(--te-shell-control-text) 8%, transparent);
+  --te-titlebar-material-surface: var(--te-player-bg);
+  --te-titlebar-material-ink: var(--te-shell-control-text);
+}
+
+.title-bar-immersive .title-bar-background {
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .title-bar-start,
@@ -663,6 +680,30 @@ html[data-theme='pureWhite'] .title-bar .control-btn.close:hover,
 .title-bar-liquid .control-btn.close:hover {
   background: #e81123;
   color: #fff;
+}
+
+html
+  .title-bar-immersive
+  :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn) {
+  color: var(--te-shell-control-text);
+  /* Match the playback surface as soon as it appears, without a light-theme tween. */
+  transition-property: background-color;
+}
+
+html
+  .title-bar-immersive
+  :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn):not(
+    .close
+  ):hover {
+  background: var(--te-shell-control-hover);
+  color: var(--te-shell-control-text);
+  transform: none;
+}
+
+html
+  .title-bar-immersive
+  :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn):focus-visible {
+  outline-color: var(--te-shell-control-text);
 }
 
 .title-bar-liquid {

@@ -975,6 +975,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     />
     <div class="app-shell-title">
       <TitleBar
+        :immersive="showPlayingPage"
         :liquid-material="liquidGlassChromeActive"
         :streaming="showStreamingPage && !showPlayingPage"
         :title-surface="titleSurface"

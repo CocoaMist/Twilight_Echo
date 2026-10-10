@@ -259,7 +259,7 @@ window.runProviderFallbackTests = async () => {
   // Title bar target and label track plugin availability, ignoring cached NCM profiles.
   let selected;
   loggedIn.value = true; profile.value = { nickname: '旧网易云账号', avatarUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', userId: 1 };
-  titleApp = createApp({ render: () => h(window.TitleBar, { menuOpen: false, ...titleProps.value, preview: false, onLogin: id => selected = id }) });
+  titleApp = createApp({ render: () => h(window.TitleBar, { menuOpen: false, preview: false, ...titleProps.value, onLogin: id => selected = id }) });
   titleApp.mount('#title'); await replaceProviders([searchOnly, bili]);
   let button = document.querySelector('#title .login-btn');
   expect(button.title === '哔哩哔哩登录' && !button.querySelector('img'), 'disabled NCM still shown in title bar');
@@ -272,6 +272,7 @@ window.runProviderFallbackTests = async () => {
     { streaming: false, titleSurface: 'settings' },
     { streaming: true, titleSurface: 'streaming' },
     { glass: true },
+    { immersive: true },
     { preview: true }
   ];
   for (const surface of surfaces) {
@@ -306,6 +307,24 @@ window.runProviderFallbackTests = async () => {
     titleProps.value = { streaming: false }; await settle();
     delete document.documentElement.dataset.windowTransparent;
     delete document.documentElement.dataset.teSurfaceMaterial;
+    const normalColor = getComputedStyle(document.querySelector('#title .menu-btn')).color;
+    const restingPositions = [...document.querySelectorAll('#title button')].map(element => element.getBoundingClientRect().left);
+    for (const playerText of ['rgb(244, 247, 251)', 'rgb(20, 25, 32)']) for (const liquid of [false, true]) for (const preview of [false, true]) {
+      document.documentElement.style.setProperty('--te-playback-page-text', playerText);
+      titleProps.value = { immersive: true, liquidMaterial: liquid, preview }; await settle();
+      const frame = document.querySelector('#title .title-bar');
+      const material = getComputedStyle(frame.querySelector('.title-bar-background'));
+      expect(!frame.classList.contains('title-bar-liquid'), 'liquid material overrides immersive playback');
+      expect(material.backgroundColor === 'rgba(0, 0, 0, 0)' && material.backgroundImage === 'none' && material.boxShadow === 'none' && material.backdropFilter === 'none', 'playback caption still paints a separate strip: ' + theme + '/' + liquid + '/' + preview);
+      expect(frame.getBoundingClientRect().height === 45, 'immersive title changed its height');
+      expect([...frame.querySelectorAll('button')].every((element,index) => getComputedStyle(element).color === playerText && element.getBoundingClientRect().left === restingPositions[index]), 'immersive controls lost playback colors or moved: ' + JSON.stringify({theme,liquid,preview,playerText,controls:[...frame.querySelectorAll('button')].map((element,index)=>({name:element.className,color:getComputedStyle(element).color,left:element.getBoundingClientRect().left,expectedLeft:restingPositions[index]}))}));
+      expect(getComputedStyle(frame.querySelector('.title-bar-background')).pointerEvents === 'none', 'immersive backdrop intercepts controls');
+    }
+    document.documentElement.style.removeProperty('--te-playback-page-text');
+    titleProps.value = { streaming: false }; await settle();
+    await new Promise(resolve => setTimeout(resolve, 350));
+    const restoredMaterial = getComputedStyle(document.querySelector('#title .title-bar-background'));
+    expect(restoredMaterial.backgroundColor !== 'rgba(0, 0, 0, 0)' && restoredMaterial.backdropFilter.includes('blur(20px)') && getComputedStyle(document.querySelector('#title .menu-btn')).color === normalColor, 'leaving playback did not restore normal chrome');
     expect(bar.height === 45 && menu.width === close.width && close.width === 46, 'caption geometry differs');
     expect(menu.left - bar.left === bar.right - close.right, 'outer margins differ');
     expect(menu.left + menu.width / 2 - bar.left === bar.right - close.left - close.width / 2, 'outer icon centers differ');

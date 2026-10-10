@@ -226,6 +226,7 @@ onBeforeUnmount(() => {
         <div class="app-shell-title" inert>
           <TitleBar
             preview
+            :immersive="surface === 'player'"
             :menu-open="true"
             :glass="false"
             :streaming="false"
