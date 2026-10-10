@@ -20,6 +20,7 @@ test('saved theme colors reach the dashboard and player controls across tones an
       new URL('../local-dashboard/DashboardPlaybackProgress.vue', import.meta.url),
       'utf8'
     )
+    const baseStyles = await readFile(new URL('../../assets/base.css', import.meta.url), 'utf8')
     const sources = [
       await readFile(new URL('./PlayerBar.css', import.meta.url), 'utf8'),
       await readFile(new URL('../LocalDashboard.css', import.meta.url), 'utf8'),
@@ -61,7 +62,7 @@ test('saved theme colors reach the dashboard and player controls across tones an
     })
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><html><head><meta charset="utf-8"><style>${styles.join('\n')}</style></head><body><script src="bundle/runtime.js"></script></body></html>`
+      `<!doctype html><html><head><meta charset="utf-8"><style>${baseStyles}\n${styles.join('\n')}</style></head><body><script src="bundle/runtime.js"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),
@@ -153,6 +154,7 @@ const mountDashboard=(glass=false)=>{
   document.documentElement.dataset.teHomeLiquidGlass=glass?'on':'off'
   const home=document.createElement('div')
   home.className='home'
+  home.style.setProperty('--play-button-color','#cc9900')
   home.innerHTML='<div class="hero-progress"><button class="hero-progress-track"><span style="transform:scaleX(0.42)"></span></button></div><div class="hero-actions"><button class="transport-button transport-play">Play</button></div>'
   for(const element of [home,...home.querySelectorAll('*')])element.setAttribute('data-v-test','')
   document.body.append(home)
@@ -207,10 +209,25 @@ const checkDashboardDefaults=()=>{
   const ink=style.getPropertyValue('--home-ink')
   checkBackground(track,'color-mix(in srgb, '+ink+' 12%, transparent)','reset restores dashboard track','::before')
   checkBackground(fill,'linear-gradient(90deg, '+style.getPropertyValue('--home-accent')+', '+style.getPropertyValue('--te-accent-cyan')+')','reset restores dashboard fill')
-  checkBackground(button,ink,'reset restores dashboard play')
+  checkBackground(button,'#cc9900','reset restores cover play color on dashboard')
 }
 window.runPlayerThemeTests=async()=>{
   await boot()
+  for(const tone of ['pureWhite','dark']){
+    await store.setPreviewTone(tone)
+    for(const cover of ['#cc9900','#7c4dff']){
+      mount('standard')
+      bar.style.setProperty('--play-button-color',cover)
+      await settle()
+      const expected=background(button)
+      const expectedIcon=getComputedStyle(button).color
+      mountDashboard()
+      bar.style.setProperty('--play-button-color',cover)
+      await settle()
+      expect(background(button)===expected,tone+' dashboard and standard play colors match after cover changes')
+      expect(getComputedStyle(button).color===expectedIcon,tone+' dashboard and standard play icon colors match')
+    }
+  }
   const profile=store.createProfile('Player colors')
   profile.overrides=structuredClone(colors)
   await store.preview(profile)

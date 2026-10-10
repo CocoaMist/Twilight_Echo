@@ -22,6 +22,7 @@ import type { Track } from '../types/music'
 import { createUnifiedRecentTrackResolver } from '../utils/unifiedRecentTracks'
 import { resolveTimeGreeting } from '@renderer/utils/timeGreeting'
 import CoverImg from './CoverImg.vue'
+import { normalizeAccentColor } from '../utils/colorExtractor'
 
 const emit = defineEmits<{
   (event: 'select-view', category: string, filter: string | null): void
@@ -42,7 +43,8 @@ const tracks = computed(() => props.previewTracks ?? libraryTracks.value)
 const { listeningStats } = useListeningStatsStore()
 const playbackStore = usePlayerStore()
 const audioOutputDspStore = useAudioOutputDspStore()
-const { currentTrack, isPlaying } = playbackStore
+const { currentTrack, isPlaying, dominantColor } = playbackStore
+const playButtonColor = computed(() => normalizeAccentColor(dominantColor.value))
 const { audioProcessing, playbackInfo, outputInfo } = storeToRefs(audioOutputDspStore)
 const { playTrack, togglePlay, next, prev, setPlayMode } = playbackStore
 
@@ -213,14 +215,6 @@ function playDashboardTrack(track: Track | null | undefined): void {
   const end = Math.min(tracks.value.length, start + DASHBOARD_QUEUE_WINDOW)
   const queueStart = Math.max(0, end - DASHBOARD_QUEUE_WINDOW)
   playTrack(track, tracks.value.slice(queueStart, end))
-}
-
-function handleHeroPlay(): void {
-  if (heroIsCurrent.value) {
-    togglePlay()
-    return
-  }
-  playDashboardTrack(heroTrack.value)
 }
 
 function shuffleAll(): void {
@@ -917,6 +911,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <button
                   type="button"
                   class="transport-button transport-play"
+                  :style="{ '--play-button-color': playButtonColor }"
                   :title="isPlaying ? '暂停' : '播放'"
                   :aria-label="isPlaying ? '暂停' : '播放'"
                   @click="togglePlay"
@@ -931,25 +926,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   @click="next"
                 >
                   <i class="ph ph-skip-forward"></i>
-                </button>
-                <button type="button" class="hero-ghost-action" @click="shuffleAll">
-                  <i class="ph ph-shuffle"></i>
-                  随机畅听
-                </button>
-              </div>
-
-              <div v-else class="hero-actions">
-                <button
-                  type="button"
-                  class="hero-ghost-action hero-primary-action"
-                  @click="handleHeroPlay"
-                >
-                  <i class="ph ph-play" aria-hidden="true"></i>
-                  播放这首
-                </button>
-                <button type="button" class="hero-ghost-action" @click="shuffleAll">
-                  <i class="ph ph-shuffle"></i>
-                  随机畅听
                 </button>
               </div>
             </div>

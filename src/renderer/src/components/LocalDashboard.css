@@ -617,57 +617,23 @@
   transform: scale(var(--te-motion-press-scale));
 }
 
+/* Match the standard playbar's cover color and theme overrides, without changing navigation buttons. */
 .home .transport-button.transport-play {
   width: 56px;
   height: 56px;
   border: none;
   font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
-  color: var(--home-card);
+  color: #fff;
   -webkit-text-fill-color: currentColor;
-  background: var(--te-player-bar-play-surface, var(--home-ink));
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--home-ink) 26%, transparent);
+  background: var(--te-player-bar-play-surface, var(--play-button-color, var(--te-primary-500)));
+  box-shadow: none;
 }
 
 .home .transport-button.transport-play:hover {
   background: var(
     --te-player-bar-play-hover-surface,
-    var(--te-player-bar-play-surface, color-mix(in srgb, var(--home-ink) 84%, var(--home-accent)))
+    var(--te-player-bar-play-surface, var(--play-button-color, var(--te-primary-500)))
   );
-}
-
-.hero-ghost-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 0 20px;
-  border: 1px solid color-mix(in srgb, var(--home-ink) 18%, transparent);
-  border-radius: 12px;
-  background: transparent;
-  color: var(--home-ink);
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    border-color var(--te-motion-hover),
-    background var(--te-motion-hover),
-    transform var(--te-motion-hover) var(--te-ease-soft);
-}
-
-.home .hero-ghost-action.hero-primary-action {
-  border-color: transparent;
-  color: var(--home-card);
-  -webkit-text-fill-color: currentColor;
-  background: var(--home-ink);
-}
-
-.home .hero-ghost-action.hero-primary-action:hover {
-  background: color-mix(in srgb, var(--home-ink) 90%, var(--home-accent));
-}
-
-.hero-ghost-action:hover {
-  border-color: color-mix(in srgb, var(--home-ink) 34%, transparent);
-  background: var(--home-hover);
 }
 
 /* Hero art: offset echo + big cover */
@@ -2442,7 +2408,6 @@
   transition: none;
 }
 
-.hero-ghost-action:active:not(:focus-visible),
 .block-more:active:not(:focus-visible) {
   transform: scale(0.97);
 }

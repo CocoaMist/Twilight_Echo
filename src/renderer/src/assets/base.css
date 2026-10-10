@@ -1276,7 +1276,7 @@ html[data-theme='pureWhite'] .more-drawer:not(.drawer-glass) {
   -webkit-backdrop-filter: blur(12px) saturate(120%);
 }
 
-html[data-theme='pureWhite'] .ctrl-btn:hover,
+html[data-theme='pureWhite'] .ctrl-btn:not(.btn-play):hover,
 html[data-theme='pureWhite'] .icon-btn:hover,
 html[data-theme='pureWhite'] .icon-btn.active,
 html[data-theme='pureWhite'] .more-action:hover,
@@ -1842,13 +1842,13 @@ html[data-theme='dark'] .audio-device-mini-select {
   color: rgba(203, 213, 225, 0.88);
 }
 
-html[data-theme='dark'] .ctrl-btn,
+html[data-theme='dark'] .ctrl-btn:not(.btn-play),
 html[data-theme='dark'] .icon-btn,
 html[data-theme='dark'] .mode-btn-right {
   color: rgba(203, 213, 225, 0.82);
 }
 
-html[data-theme='dark'] .ctrl-btn:hover,
+html[data-theme='dark'] .ctrl-btn:not(.btn-play):hover,
 html[data-theme='dark'] .icon-btn:hover,
 html[data-theme='dark'] .icon-btn.active,
 html[data-theme='dark'] .mode-btn-right:hover {
@@ -1856,7 +1856,7 @@ html[data-theme='dark'] .mode-btn-right:hover {
   color: rgba(248, 250, 252, 0.94);
 }
 
-html[data-theme='dark'] .player-bar:not(.player-bar-glass) .ctrl-btn img,
+html[data-theme='dark'] .player-bar:not(.player-bar-glass) .ctrl-btn:not(.btn-play) img,
 html[data-theme='dark'] .player-bar:not(.player-bar-glass) .mode-btn-right img {
   filter: invert(1);
   opacity: 0.68;
@@ -1864,7 +1864,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .mode-btn-right img {
 
 /* Pressed and toggled-on playbar controls must stay visible on the dark bar:
    the old 7.5% white wash made active/pressed buttons melt into the surface. */
-html[data-theme='dark'] .ctrl-btn:active,
+html[data-theme='dark'] .ctrl-btn:not(.btn-play):active,
 html[data-theme='dark'] .icon-btn:active,
 html[data-theme='dark'] .mode-btn-right:active {
   background: rgba(255, 255, 255, 0.18);
