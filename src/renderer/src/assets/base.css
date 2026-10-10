@@ -2963,8 +2963,7 @@ html[data-window-transparent='on'] body.te-settings-surface {
 html[data-window-transparent='on'] .title-bar,
 html[data-window-transparent='on'] .title-bar.title-bar-streaming,
 html[data-window-transparent='on'] .title-bar.title-bar-menu-open,
-html[data-window-transparent='on'] .title-bar.title-bar-glass,
-html[data-window-transparent='on'] .title-bar-background {
+html[data-window-transparent='on'] .title-bar.title-bar-glass {
   background-color: transparent !important;
   background-image: none !important;
   backdrop-filter: none !important;

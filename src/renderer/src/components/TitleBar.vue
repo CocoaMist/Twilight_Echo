@@ -31,7 +31,6 @@ defineEmits<{
   login: [providerId?: string | null]
   settings: []
   plugins: []
-  commands: []
   library: []
   notifications: [event: MouseEvent]
 }>()
@@ -127,16 +126,6 @@ function close(): void {
           @click="$emit('toggleMenu')"
         >
           <TitleBarIcon name="navigation" />
-        </button>
-        <button
-          type="button"
-          class="settings-btn command-palette-trigger"
-          title="命令面板 (Ctrl+K / ⌘K)"
-          aria-label="打开命令面板"
-          aria-keyshortcuts="Control+K Meta+K"
-          @click="$emit('commands')"
-        >
-          <TitleBarIcon name="search" />
         </button>
         <button
           type="button"
@@ -335,6 +324,8 @@ function close(): void {
   color: var(--te-primary-500);
 }
 .title-bar {
+  --te-titlebar-material-surface: var(--te-app-bg);
+  --te-titlebar-material-ink: var(--te-shell-control-text);
   --te-titlebar-icon-size: 16px;
   --te-titlebar-control-width: 46px;
   display: flex;
@@ -346,6 +337,7 @@ function close(): void {
   background: transparent !important;
   user-select: none;
   position: fixed;
+  isolation: isolate;
   top: 0;
   left: 0;
   right: 0;
@@ -368,50 +360,24 @@ function close(): void {
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  background: transparent !important;
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--te-titlebar-material-ink) 4%, transparent),
+      transparent
+    ),
+    color-mix(in srgb, var(--te-titlebar-material-surface) 84%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--te-titlebar-material-ink) 8%, transparent);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
 
 .title-bar::before {
   display: none;
 }
 
-.title-bar-glass,
-.title-bar.title-bar-streaming,
-.title-bar.title-bar-menu-open:not(.title-bar-glass):not(.title-bar-settings),
-.title-bar.title-bar-streaming.title-bar-menu-open:not(.title-bar-glass):not(.title-bar-settings) {
-  background: transparent !important;
-  border-bottom-color: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-.title-bar.title-bar-settings::before,
-.title-bar.title-bar-glass::before {
-  display: none;
-}
-
-/* The settings title strip stays transparent: the settings overlay below it is
-   the single wallpaper painter and spans the full window, so the image reads as
-   one continuous surface through the strip. The bar keeps its own higher
-   stacking context, so the controls remain clickable. */
-.title-bar.title-bar-settings,
-.title-bar.title-bar-settings .title-bar-background {
-  background: transparent !important;
-}
-
-/* Dark tone must not wrap the whole chain in `:global()`: Vue's scoped transform
-   rewrites only the last compound, so `:global(html .title-bar…)` compiles to the
-   bare ancestor and the declarations land on <html> instead of this component.
-   Both compounds here belong to this component; scoping appends the id to the
-   subject and leaves the document-level ancestor alone — same contract as the
-   playbar glass rules in PlayerBar.css. */
-html[data-theme='dark'] .title-bar,
-html[data-theme='dark'] .title-bar.title-bar-streaming,
-html[data-theme='dark']
-  .title-bar.title-bar-streaming.title-bar-menu-open:not(.title-bar-glass):not(.title-bar-settings),
-html[data-theme='dark'] .title-bar.title-bar-glass {
-  background: transparent !important;
+.title-bar-glass {
+  --te-titlebar-material-surface: #17181a;
+  --te-titlebar-material-ink: #fff;
 }
 
 .title-bar-start,
@@ -746,6 +712,11 @@ html[data-te-liquid-glass-scrolled='on'] .title-bar-liquid .title-bar-background
 }
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .title-bar-background {
+    background: var(--te-titlebar-material-surface) !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
   .title-bar-liquid .title-bar-background {
     background: var(--te-lg-context-surface-solid) !important;
     border-bottom: 1px solid var(--te-lg-context-label);
@@ -755,7 +726,7 @@ html[data-te-liquid-glass-scrolled='on'] .title-bar-liquid .title-bar-background
 }
 
 @media (forced-colors: active) {
-  .title-bar-liquid .title-bar-background {
+  .title-bar .title-bar-background {
     background: Canvas !important;
     border-bottom: 1px solid CanvasText;
     box-shadow: none;

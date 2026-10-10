@@ -53,7 +53,9 @@ test('login and title bar recover from disabled providers in real Electron rende
       titleStyle,
       titleIcon,
       iconStyle,
-      iconPaths
+      iconPaths,
+      baseStyle,
+      appearanceStyle
     ] = await Promise.all([
       readFile(require.resolve('vue/dist/vue.global.prod.js'), 'utf8'),
       component('../LoginPage.vue'),
@@ -64,11 +66,13 @@ test('login and title bar recover from disabled providers in real Electron rende
       componentStyle('../TitleBar.vue'),
       component('../icons/TitleBarIcon.vue'),
       componentStyle('../icons/TitleBarIcon.vue'),
-      readFile(new URL('../icons/titleBarIconPaths.ts', import.meta.url), 'utf8')
+      readFile(new URL('../icons/titleBarIconPaths.ts', import.meta.url), 'utf8'),
+      readFile(new URL('../../assets/base.css', import.meta.url), 'utf8'),
+      readFile(new URL('../../assets/appearance.css', import.meta.url), 'utf8')
     ])
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><meta charset="utf-8"><style>${titleStyle}\n${iconStyle}</style><div id="title"></div><div id="app"></div>
+      `<!doctype html><meta charset="utf-8"><style>${baseStyle}\n${appearanceStyle}\n${titleStyle}\n${iconStyle}</style><div id="title"></div><div id="app"></div>
       <script>${vue}</script><script>${runtime}</script>
       <script>
         const load = source => {
@@ -281,11 +285,25 @@ window.runProviderFallbackTests = async () => {
   titleProps.value = { streaming: false }; await settle();
 
   // Check rendered symmetry and separate command/caption icon sizes in both color schemes.
-  for (const theme of ['light', 'dark']) {
+  for (const theme of ['pureWhite', 'dark']) {
     document.documentElement.dataset.theme = theme;
     const bar = document.querySelector('#title .title-bar').getBoundingClientRect();
     const menu = document.querySelector('#title .menu-btn').getBoundingClientRect();
     const close = document.querySelector('#title .close').getBoundingClientRect();
+    expect(!document.querySelector('#title .command-palette-trigger') && !document.querySelector('#title [data-icon="search"]'), 'title search entry remains');
+    expect(document.querySelector('#title .title-bar-start').children.length === 4, 'removed search left a command slot');
+    for (const surface of ['default', 'settings', 'streaming']) for (const transparent of [false, true]) {
+      titleProps.value = { titleSurface: surface }; await settle();
+      document.documentElement.dataset.windowTransparent = transparent ? 'on' : 'off';
+      document.documentElement.dataset.teSurfaceMaterial = transparent ? 'transparent' : 'theme';
+      const material = getComputedStyle(document.querySelector('#title .title-bar-background'));
+      expect(material.display !== 'none' && material.backgroundColor !== 'rgba(0, 0, 0, 0)', 'title tint disappeared: ' + theme + '/' + surface + '/' + transparent);
+      expect(material.backdropFilter.includes('blur(20px)'), 'title backdrop lost its blur: ' + theme + '/' + surface + '/' + transparent);
+      expect(material.pointerEvents === 'none', 'material blocks title commands');
+    }
+    titleProps.value = { streaming: false }; await settle();
+    delete document.documentElement.dataset.windowTransparent;
+    delete document.documentElement.dataset.teSurfaceMaterial;
     expect(bar.height === 35 && menu.width === close.width && close.width === 46, 'caption geometry differs');
     expect(menu.left - bar.left === bar.right - close.right, 'outer margins differ');
     expect(menu.left + menu.width / 2 - bar.left === bar.right - close.left - close.width / 2, 'outer icon centers differ');
