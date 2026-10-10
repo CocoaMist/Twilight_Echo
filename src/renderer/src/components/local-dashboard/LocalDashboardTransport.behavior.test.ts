@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -8,16 +8,47 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import vue from '@vitejs/plugin-vue'
+import { parse } from '@vue/compiler-sfc'
 import { build } from 'vite'
 
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
-test('homepage transport starts the featured track after launch and then controls the active queue', async () => {
+test('homepage playback and return geometry remain stable across routes and motion modes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-home-transport-'))
   try {
     await writeFile(join(directory, 'entry.ts'), runtime)
     await writeFile(join(directory, 'fixtures.ts'), fixtures)
+    const appSource = await readFile(join(workspace, 'src/renderer/src/App.vue'), 'utf8')
+    const appDescriptor = parse(appSource).descriptor
+    const template = appDescriptor.template!.content
+    const mainTag = template.match(/<div\s+class="main-content"[\s\S]*?>/)![0]
+    const localTransition = template.match(/<Transition\s+:name=[\s\S]*?<\/Transition>/)![0]
+    const sidebarVisibility = appSource.slice(
+      appSource.indexOf('const showLocalSidebar = computed('),
+      appSource.indexOf('const sideMenuActiveKey')
+    )
+    await writeFile(
+      join(directory, 'NavigationFixture.vue'),
+      `<script setup>
+import {computed,defineComponent,h,ref} from 'vue'
+import {useAppNavigation} from '@renderer/app/useAppNavigation.ts'
+import LocalDashboard from '@renderer/components/local-dashboard/LocalHome.vue'
+const navigation=useAppNavigation()
+window.homeNavigation=navigation
+const {menuOpen,pageTarget,localViewVisible,activeCategory,activeFilter,songlistTransitionName,
+ showPlayingPage,showPluginPage,showDspRackPage,showRadioPodcastPage,showLoginPage,
+ showSettingsPage,showThemeStudioPage,showEqualizerPage,onSelectView}=navigation
+const appearanceFullWindowPreview=ref(false)
+${sidebarVisibility}
+const hasPlayerBar=ref(false), mainContentMinHeight='100vh'
+const SongList=defineComponent({render:()=>h('article',{class:'list-fixture'},'Music library')})
+const ApplicationPlaylistsPage=SongList, ListeningAnalyticsPage=SongList
+const openSettingsPage=()=>{}, enterStreamingMode=()=>{}, handleStreamingLogin=()=>{}
+</script><template>${mainTag}${localTransition}</div></template>`
+    )
+    const baseStyles = await readFile(join(workspace, 'src/renderer/src/assets/base.css'), 'utf8')
+    const appStyles = appDescriptor.styles.map((style) => style.content).join('\n')
     await build({
       configFile: false,
       logLevel: 'error',
@@ -36,11 +67,15 @@ test('homepage transport starts the featured track after launch and then control
       resolve: {
         alias: [
           {
-            find: /^(?:\.\.\/stores\/use(?:Music|Player|ListeningStats|AudioOutputDsp)Store|\.\.\/utils\/unifiedRecentTracks|pinia)$/,
+            find: /^(?:\.\.\/stores\/use(?:Music|Player|ListeningStats|AudioOutputDsp)Store|@renderer\/stores\/use(?:Music|Theme)Store|\.\.\/utils\/unifiedRecentTracks|pinia)$/,
             replacement: join(directory, 'fixtures.ts')
           },
           {
-            find: /^\.\/(?:CoverImg|local-dashboard\/DashboardPlaybackProgress)\.vue$/,
+            find: /^\.\/(?:CoverImg|local-dashboard\/DashboardPlaybackProgress|OnlineDashboard|ArchiveDashboard|NightHarborDashboard|SoundFieldDashboard)\.vue$/,
+            replacement: '\0home-transport-child-stub'
+          },
+          {
+            find: /^@renderer\/components\/local-dashboard\/(?:Archive|NightHarbor|SoundField)Dashboard\.vue$/,
             replacement: '\0home-transport-child-stub'
           },
           { find: '@renderer', replacement: join(workspace, 'src/renderer/src') },
@@ -72,7 +107,7 @@ test('homepage transport starts the featured track after launch and then control
         .map((file) => `<link rel="stylesheet" href="bundle/${file}">`)
         .join(
           ''
-        )}<style>body{margin:0;background:var(--te-bg-primary,#f8f9fc)}#app{height:100vh}</style></head><body><div id="app"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
+        )}<style>${baseStyles}\n${appStyles}\nbody{margin:0;background:var(--te-bg-primary,#f8f9fc)}#app{height:100vh}</style></head><body><div id="app"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
     )
     await writeFile(join(directory, 'runner.cjs'), electronRunner)
     const result = await promisify(execFile)(
@@ -91,6 +126,7 @@ test('homepage transport starts the featured track after launch and then control
 })
 
 const electronRunner = `const {app,BrowserWindow}=require('electron')
+app.setPath('userData',require('node:path').join(__dirname,'profile'))
 app.whenReady().then(async()=>{
  const win=new BrowserWindow({show:false,width:1200,height:900,webPreferences:{contextIsolation:false,backgroundThrottling:false,offscreen:true}})
  win.webContents.on('console-message',event=>{if(event.level==='error')console.error(event.message)})
@@ -110,6 +146,7 @@ const player={currentTrack:state.currentTrack,isPlaying:state.isPlaying,dominant
  togglePlay(){state.calls.push(['toggle']);state.isPlaying.value=!state.isPlaying.value},
  next(){state.calls.push(['next'])},prev(){state.calls.push(['previous'])},setPlayMode(mode){state.calls.push(['mode',mode])}}
 export const useMusicStore=()=>({tracks:state.tracks,albums:ref([]),artists:ref([])})
+export const useThemeStore=()=>({presetLayout:ref('default')})
 export const usePlayerStore=()=>player
 export const useListeningStatsStore=()=>({listeningStats:ref({days:{}})})
 export const getMostListenedTracks=()=>[]
@@ -121,6 +158,7 @@ export const storeToRefs=store=>store
 
 const runtime = `import {createApp,h,nextTick} from 'vue'
 import LocalDashboard from '@renderer/components/LocalDashboard.vue'
+import NavigationFixture from './NavigationFixture.vue'
 import {state} from './fixtures.ts'
 window.api={audioEngine:{getDspGraphStatus:async()=>null,getDspSceneState:async()=>null}}
 const expect=(value,message)=>{if(!value)throw new Error(message)}
@@ -155,5 +193,49 @@ window.runHomeTransportTests=async()=>{
  state.currentTrack.value=null;state.isPlaying.value=false;state.recent.value=null;state.tracks.value=[];await settle()
  expect(!play()&&document.querySelector('.empty-cta'),'empty library must show import instead of an unusable play control')
  app.unmount()
+ await runHomeReturnTests()
+}
+const frame=()=>new Promise(requestAnimationFrame)
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))
+const until=async(predicate)=>{for(let i=0;i<150;i++){if(predicate())return;await sleep(10)}throw Error('homepage did not settle: '+document.querySelector('#app').innerHTML.slice(0,900))}
+async function runHomeReturnTests(){
+ state.tracks.value=[{id:'one',title:'First',artist:'Artist',album:'Album',duration:100}]
+ const routeApp=createApp(NavigationFixture);routeApp.mount('#app')
+ const navigation=window.homeNavigation
+ navigation.menuOpen.value=true
+ await until(()=>document.querySelector('.feature-card'))
+ await sleep(400)
+ const measure=()=>{const el=document.querySelector('.feature-card');if(!el)return null;const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}}
+ const returns=[
+  ['library',()=>navigation.onSelectView('allSongs',null),()=>navigation.selectSidebarPage({kind:'local',category:'dashboard',filter:null})],
+  ['recent',()=>navigation.navigate({kind:'recent',scope:'device'}),()=>navigation.goBackPage()],
+  ['streaming',()=>navigation.enterStreamingMode(),()=>navigation.returnToLocalMode()],
+  ['settings',()=>navigation.openSettingsPage(),()=>navigation.closeSettingsPage()],
+  ['plugins',()=>navigation.openPluginPage(),()=>navigation.createTogglePluginHandler()()],
+  ['player',()=>navigation.openPlayingPage(),()=>navigation.closePlayingPage()]
+ ]
+ for(const tone of ['light','dark'])for(const motion of ['full','reduced','off']){
+  document.documentElement.dataset.theme=tone
+  document.documentElement.dataset.teMotion=motion
+  for(const [name,leave,back] of returns){
+   const before=measure();leave();await nextTick();await sleep(350)
+   expect(!document.querySelector('.feature-card'),'home must leave for '+name)
+   back();await nextTick()
+   const samples=[]
+   for(let i=0;i<40;i++){const sample=measure();if(sample)samples.push(sample);await frame()}
+   expect(samples.length>5,'homepage did not reappear '+name)
+   const final=measure()
+   for(const sample of samples)for(const axis of ['x','y','width','height'])
+    expect(Math.abs(sample[axis]-final[axis])<0.75,'home return moved '+axis+' from '+name+' in '+tone+'/'+motion+': '+JSON.stringify({sample,final}))
+   expect(Math.abs(before.x-final.x)<0.75&&Math.abs(before.width-final.width)<0.75,'return changed the settled sidebar clearance '+name)
+   expect(play()?.getBoundingClientRect().width>0,'return lost the play control '+name)
+  }
+ }
+ // Explicit sidebar toggles still animate, unlike restoration of a hidden sidebar.
+ document.documentElement.dataset.teMotion='full'
+ navigation.menuOpen.value=false;await nextTick();await frame()
+ expect(document.querySelector('.main-content').getAnimations().some(a=>a.transitionProperty==='padding-left'),'manual sidebar toggle lost its transition')
+ await sleep(350)
+ routeApp.unmount()
 }
 `
