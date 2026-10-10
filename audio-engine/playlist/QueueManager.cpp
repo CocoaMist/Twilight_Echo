@@ -382,6 +382,10 @@ std::string itemsToJson(const std::vector<QueueItem>& items) {
 }  // namespace
 
 bool QueueManager::loadFromJson(const std::string& queueJson, int startIndex, std::string* error) {
+  if (!items_.empty() && queueJson == rawQueueJson_) {
+    setCurrentIndex(std::clamp(startIndex, 0, static_cast<int>(items_.size() - 1)));
+    return true;
+  }
   rawQueueJson_ = queueJson.empty() ? "[]" : queueJson;
   items_.clear();
 

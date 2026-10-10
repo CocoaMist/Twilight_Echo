@@ -258,9 +258,11 @@ onBeforeUnmount(() => {
 }
 
 .progress-slider {
+  box-sizing: border-box;
   display: block;
   width: 100%;
-  height: 4px;
+  height: 24px;
+  padding: 10px 0;
   margin: 0;
   accent-color: var(--te-primary-400);
   cursor: pointer;
@@ -310,11 +312,11 @@ button {
 .icon-button {
   display: inline-grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: var(--te-control-height-sm);
+  height: var(--te-control-height-sm);
   padding: 0;
   background: transparent;
-  border-radius: 50%;
+  border-radius: var(--te-control-radius-pill);
   font-size: 17px;
 }
 
@@ -334,7 +336,11 @@ button {
 button:hover:not(:disabled),
 button:focus-visible {
   background-color: var(--te-navigation-hover);
-  outline: none;
+}
+
+.progress-slider:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 2px;
 }
 
 .play-button:hover:not(:disabled),

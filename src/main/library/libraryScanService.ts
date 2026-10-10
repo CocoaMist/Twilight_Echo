@@ -6,6 +6,7 @@ import { parseFromTokenizer, type IAudioMetadata } from 'music-metadata'
 import { fromFile } from 'strtok3'
 import {
   type LocalLibraryFileIdentity,
+  type LocalLibraryReleaseDateUpdate,
   type LocalLibraryScanWorkerMessage,
   type LocalLibraryScanWorkerRequest,
   type LocalLibraryWorkerScanRequest,
@@ -15,6 +16,7 @@ import { SUPPORTED_EXTENSIONS } from './libraryFiles.ts'
 import { deriveCueTracks } from './cueLibrary.ts'
 import { readMp4AlacFormat } from './mp4AlacFormat.ts'
 import { createLocalLibraryScanPlan } from './scanPlanner.ts'
+import { readLocalReleaseDate } from '../../shared/releaseDate.ts'
 
 type ParentPort = {
   postMessage: (message: LocalLibraryScanWorkerMessage) => void
@@ -142,8 +144,13 @@ async function runScan(
   const streamResults = request.streamResults === true
   const parsedTracks: unknown[] = []
   const parsedFilePaths: string[] = []
+  const metadataParsedFilePaths: string[] = []
+  const releaseDateUpdates: LocalLibraryReleaseDateUpdate[] = []
   let pendingTracks: unknown[] = []
   let pendingFilePaths: string[] = []
+  let pendingMetadataPaths: string[] = []
+  let pendingDateUpdates: LocalLibraryReleaseDateUpdate[] = []
+  const dateOnlyPaths = new Set(plan.releaseDateFilePaths.map(normalizePath))
   let parsedFileCount = checkpoint?.parsedFileCount ?? 0
   const completedPaths = new Set((checkpoint?.completedFilePaths ?? []).map(normalizePath))
   const skipParsePaths = new Set((request.skipParsePaths ?? []).map(normalizePath))
@@ -190,31 +197,72 @@ async function runScan(
     const results = await Promise.all(
       paths.map(async (filePath) => {
         const identity = collected.byPath.get(normalizePath(filePath))
+        const dateOnly = dateOnlyPaths.has(normalizePath(filePath))
+        if (dateOnly) {
+          // ISO tags are read by the existing native reader in the coordinator.
+          if (filePath.toLowerCase().endsWith('.iso')) {
+            return {
+              filePath,
+              dateOnly,
+              tracks: [],
+              metadataRead: false,
+              dateUpdate: { filePath, releaseDate: undefined }
+            }
+          }
+          try {
+            const metadata = await parseAudioMetadata(filePath, true)
+            return {
+              filePath,
+              dateOnly,
+              tracks: [],
+              metadataRead: true,
+              dateUpdate: { filePath, releaseDate: readLocalReleaseDate(metadata.common) }
+            }
+          } catch {
+            return { filePath, dateOnly, tracks: [], metadataRead: false, dateUpdate: undefined }
+          }
+        }
+        const parsed = identity
+          ? await parseTrack(identity, request.coverCacheDir)
+          : { tracks: [], metadataRead: false }
         return {
           filePath,
-          tracks: identity ? await parseTrack(identity, request.coverCacheDir) : []
+          dateOnly,
+          ...parsed,
+          dateUpdate: undefined
         }
       })
     )
     if (control.cancelled) return cancelledResult(request.mode, collected.completeIdentitySnapshot)
 
     for (const result of results) {
-      if (result.tracks.length > 0) parsedFileCount += 1
+      if (result.tracks.length > 0 || result.metadataRead) parsedFileCount += 1
       if (streamResults) {
         pendingTracks.push(...result.tracks)
-        pendingFilePaths.push(result.filePath)
-        if (pendingFilePaths.length >= SCAN_BATCH_SIZE) {
+        if (!result.dateOnly) pendingFilePaths.push(result.filePath)
+        if (result.metadataRead) pendingMetadataPaths.push(result.filePath)
+        if (result.dateUpdate) pendingDateUpdates.push(result.dateUpdate)
+        if (pendingFilePaths.length + pendingDateUpdates.length >= SCAN_BATCH_SIZE) {
           servicePort.postMessage({
             kind: 'batch',
             requestId,
-            batch: { parsedTracks: pendingTracks, parsedFilePaths: pendingFilePaths }
+            batch: {
+              parsedTracks: pendingTracks,
+              parsedFilePaths: pendingFilePaths,
+              metadataParsedFilePaths: pendingMetadataPaths,
+              releaseDateUpdates: pendingDateUpdates
+            }
           })
           pendingTracks = []
           pendingFilePaths = []
+          pendingMetadataPaths = []
+          pendingDateUpdates = []
         }
       } else {
         parsedTracks.push(...result.tracks)
-        parsedFilePaths.push(result.filePath)
+        if (!result.dateOnly) parsedFilePaths.push(result.filePath)
+        if (result.metadataRead) metadataParsedFilePaths.push(result.filePath)
+        if (result.dateUpdate) releaseDateUpdates.push(result.dateUpdate)
       }
     }
 
@@ -232,11 +280,16 @@ async function runScan(
     await yieldToEventLoop()
   }
 
-  if (streamResults && pendingFilePaths.length > 0) {
+  if (streamResults && (pendingFilePaths.length > 0 || pendingDateUpdates.length > 0)) {
     servicePort.postMessage({
       kind: 'batch',
       requestId,
-      batch: { parsedTracks: pendingTracks, parsedFilePaths: pendingFilePaths }
+      batch: {
+        parsedTracks: pendingTracks,
+        parsedFilePaths: pendingFilePaths,
+        metadataParsedFilePaths: pendingMetadataPaths,
+        releaseDateUpdates: pendingDateUpdates
+      }
     })
   }
   if (parseFilePaths.length === 0) {
@@ -258,6 +311,8 @@ async function runScan(
     identities: streamResults ? [] : collected.identities,
     parsedTracks: streamResults ? [] : parsedTracks,
     parsedFilePaths: streamResults ? [] : parsedFilePaths,
+    metadataParsedFilePaths: streamResults ? [] : metadataParsedFilePaths,
+    releaseDateUpdates: streamResults ? [] : releaseDateUpdates,
     removedFilePaths: Array.from(
       new Set([...plan.removedFilePaths, ...collected.disappearedFilePaths])
     ),
@@ -492,14 +547,18 @@ async function yieldToEventLoop(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve))
 }
 
-async function parseAudioMetadata(filePath: string): Promise<IAudioMetadata> {
+async function parseAudioMetadata(filePath: string, skipCovers = false): Promise<IAudioMetadata> {
   const tokenizer = await fromFile(filePath)
   try {
-    return await withTimeout(
-      parseFromTokenizer(tokenizer, { skipCovers: false }),
+    const metadata = await withTimeout(
+      parseFromTokenizer(tokenizer, { skipCovers }),
       PARSE_TIMEOUT_MS,
       'metadata parsing'
     )
+    if (!metadata.format.container && metadata.format.tagTypes.length === 0) {
+      throw new Error('No readable audio metadata')
+    }
+    return metadata
   } finally {
     await tokenizer.close()
   }
@@ -523,7 +582,7 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: s
 async function parseTrack(
   file: LocalLibraryFileIdentity,
   coverCacheDir: string
-): Promise<Record<string, unknown>[]> {
+): Promise<{ tracks: Record<string, unknown>[]; metadataRead: boolean }> {
   const filePath = file.filePath
   const fileName = basename(filePath)
   const dir = dirname(filePath)
@@ -574,6 +633,7 @@ async function parseTrack(
       title: metadata.common.title || fallback.title,
       artist: metadata.common.artist || metadata.common.albumartist || fallback.artist,
       album: metadata.common.album || 'Unknown Album',
+      releaseDate: readLocalReleaseDate(metadata.common),
       // Only persist a real ALBUMARTIST tag. Inventing it from track artist
       // fragmented multi-artist albums in the local library album grid.
       ...(metadata.common.albumartist ? { albumArtist: metadata.common.albumartist } : {}),
@@ -598,10 +658,10 @@ async function parseTrack(
           SUPPORTED_EXTENSIONS
         )
       : null
-    if (cueTracks) return cueTracks
-    return [track]
+    if (cueTracks) return { tracks: cueTracks, metadataRead: true }
+    return { tracks: [track], metadataRead: true }
   } catch {
-    return [baseTrack]
+    return { tracks: [baseTrack], metadataRead: false }
   }
 }
 

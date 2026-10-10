@@ -20,6 +20,21 @@ const PLAYER_BAR_COLOR_VARIABLES = {
   'playback.control.hoverSurface': '--te-player-bar-play-hover-surface'
 } as const
 
+/** Shared explicit edits; each playback surface keeps its own default colors. */
+export function explicitPlaybackColorVariables(
+  tone: ThemeTone,
+  profile: ThemeProfileV2 | null = null
+): Record<string, string> {
+  const variables: Record<string, string> = {}
+  if (profile && !isBuiltInThemePresetId(profile.id)) {
+    for (const [id, variable] of Object.entries(PLAYER_BAR_COLOR_VARIABLES)) {
+      const value = profile.overrides[tone][id]
+      if (value != null) variables[variable] = value
+    }
+  }
+  return variables
+}
+
 export function sharedPlayerBarStylesheet(
   tone: ThemeTone,
   profile: ThemeProfileV2 | null = null
@@ -30,12 +45,7 @@ export function sharedPlayerBarStylesheet(
     )
   )
   const variables = themeTokensToCssVariables(tokens)
-  if (profile && !isBuiltInThemePresetId(profile.id)) {
-    for (const [id, variable] of Object.entries(PLAYER_BAR_COLOR_VARIABLES)) {
-      const value = profile.overrides[tone][id]
-      if (value != null) variables[variable] = value
-    }
-  }
+  Object.assign(variables, explicitPlaybackColorVariables(tone, profile))
   const declarations = Object.entries(variables)
     .map(([name, value]) => `${name}: ${value};`)
     .join('\n')

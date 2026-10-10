@@ -2,11 +2,17 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import ts from 'typescript'
+import { effectScope, nextTick, ref, watch } from 'vue'
+import { clampSoftwareVolume } from '../utils/playerAudioSettings.ts'
 import { normalizeAudioDeviceOptions } from './player/audioOutputNormalize.ts'
 import { APP_LOCALES } from '../../../shared/i18n/locale.ts'
 import { translate } from '../../../shared/i18n/translate.ts'
 import { ZH_CN_MESSAGES } from '../../../shared/i18n/messages/zh-CN.ts'
 import { EN_US_MESSAGES } from '../../../shared/i18n/messages/en-US.ts'
+import type { Track } from '../types/music'
+import { prepareNativeQueue } from '../utils/nativeQueuePreparation.ts'
+import { getTrackSource, isLikelyLocalFilePath } from '../utils/playerTrackUtils.ts'
+import { shouldReuseResolvedStreamUrl } from '../utils/playbackRouting.ts'
 
 test('each playback load clears stale pending positions before asynchronous work starts', () => {
   const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
@@ -615,6 +621,123 @@ test('cached playback paths are validated before reuse after a cache clear', () 
   )
 })
 
+function ncmPlaybackResolutionFixture(
+  targets: Array<string | null>,
+  isAuthorized: (path: string) => Promise<boolean> = async () => false
+): {
+  track: Track
+  calls: Array<{ quality?: string; force?: boolean } | undefined>
+  resolve: (track: Track) => Promise<string>
+} {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const calls: Array<{ quality?: string; force?: boolean } | undefined> = []
+  const implementation = ts.transpileModule(
+    ['isUsableLocalPlaybackFile', 'resolvePlayTarget']
+      .map(
+        (name) =>
+          `async function ${name}(${name === 'resolvePlayTarget' ? 'track' : 'filePath'}) {${extractInternalFunctionBody(source, name)}}`
+      )
+      .join('\n'),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
+  ).outputText
+  const resolve = new Function(
+    'window',
+    'appSettings',
+    'useMediaProviders',
+    'syncPluginProviders',
+    'getTrackSource',
+    'isLikelyLocalFilePath',
+    'shouldReuseResolvedStreamUrl',
+    `${implementation}\nreturn resolvePlayTarget`
+  )(
+    { api: { fs: { isAudioFileAuthorized: isAuthorized } } },
+    { value: { ncmPlaybackQuality: 'lossless' } },
+    () => ({
+      resolvePlaybackUrl: async (
+        _track: Track,
+        options?: { quality?: string; force?: boolean }
+      ) => {
+        calls.push(options)
+        return targets[calls.length - 1] ?? null
+      }
+    }),
+    async () => {},
+    getTrackSource,
+    isLikelyLocalFilePath,
+    shouldReuseResolvedStreamUrl
+  ) as (track: Track) => Promise<string>
+  return {
+    track: {
+      id: 'ncm:93',
+      source: 'ncm',
+      title: 'Song',
+      artist: 'Artist',
+      album: 'Album',
+      filePath: 'ncm:93',
+      fileName: '93.flac',
+      duration: 180,
+      size: 0,
+      cover: null,
+      lyrics: null,
+      streamQuality: 'lossless'
+    },
+    calls,
+    resolve
+  }
+}
+
+for (const authorizationFails of [false, true]) {
+  test(`NCM re-resolves an unusable provider cache before native playback (IPC failure: ${authorizationFails})`, async () => {
+    const cachedPath = 'D:\\Cache\\ncm-cache\\93.flac'
+    const grant = 'twilight-media://audio/fresh-ncm-stream'
+    const f = ncmPlaybackResolutionFixture([cachedPath, grant], async () => {
+      if (authorizationFails) throw new Error('cache lookup unavailable')
+      return false
+    })
+    f.track.streamUrl = cachedPath
+    const before = { ...f.track }
+    const target = await f.resolve(f.track)
+    assert.equal(target, grant)
+    assert.deepEqual(f.calls, [
+      { quality: 'lossless', force: true },
+      { quality: 'lossless', force: true }
+    ])
+    assert.deepEqual(f.track, before, 'resolution must not commit state from a superseded load')
+    const prepared = await prepareNativeQueue({
+      queue: [f.track],
+      currentTrack: f.track,
+      currentTarget: target,
+      currentIndex: 0,
+      isAudioFileAuthorized: async () => false
+    })
+    assert.equal(prepared?.items[0].source, grant)
+  })
+}
+
+test('NCM keeps valid local playback files and fresh online streams without forced requests', async () => {
+  const cachedPath = 'D:\\Cache\\ncm-cache\\93.flac'
+  const f = ncmPlaybackResolutionFixture([cachedPath], async (path) => path === cachedPath)
+  assert.equal(await f.resolve(f.track), cachedPath)
+  assert.deepEqual(f.calls, [{ quality: 'lossless' }])
+  f.track.streamUrl = cachedPath
+  assert.equal(await f.resolve(f.track), cachedPath)
+  assert.equal(f.calls.length, 1, 'an authorized track cache is reused directly')
+
+  const online = ncmPlaybackResolutionFixture(['twilight-media://audio/fresh-ncm-stream'])
+  assert.equal(await online.resolve(online.track), 'twilight-media://audio/fresh-ncm-stream')
+  assert.deepEqual(online.calls, [{ quality: 'lossless' }])
+})
+
+test('NCM stops retrying after one forced resolve and keeps unauthorized files out of playback', async () => {
+  const cachedPath = 'D:\\Untrusted\\93.flac'
+  const f = ncmPlaybackResolutionFixture([cachedPath, cachedPath])
+  await assert.rejects(() => f.resolve(f.track), /网易云缓存文件不可用/)
+  assert.equal(f.calls.length, 2)
+  const unavailable = ncmPlaybackResolutionFixture([cachedPath, null])
+  await assert.rejects(() => unavailable.resolve(unavailable.track), /没有可播放的音质/)
+  assert.equal(unavailable.calls.length, 2)
+})
+
 test('NetEase next-track prefetch wires into playback progress and the native queue', () => {
   const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
   const prefetch = extractInternalFunctionBody(source, 'prefetchUpcomingNcmStream')
@@ -718,7 +841,7 @@ test('provider queues use native for resolved current targets without native que
     loadAndPlay,
     /const useNativePlayback = shouldUseNativePlayback\(track, playTarget\)/
   )
-  assert.match(loadAndPlay, /if \(useNativePlayback\) \{[\s\S]*window\.api\.audioEngine\.loadQueue/)
+  assert.match(loadAndPlay, /if \(useNativePlayback\) \{[\s\S]*nativeQueueLoader\.prepareAndLoad/)
 })
 
 test('player store prepares native queues before loading or synchronizing them', () => {
@@ -730,24 +853,26 @@ test('player store prepares native queues before loading or synchronizing them',
     source,
     /import \{[\s\S]*preparePlayerNativeQueue[\s\S]*\} from '\.\.\/utils\/nativeQueuePreparation\.ts'/
   )
-  assert.match(loadAndPlay, /const preparedQueue = await preparePlayerNativeQueue\(/)
+  assert.match(loadAndPlay, /const preparedQueue = await nativeQueueLoader\.prepareAndLoad\(/)
   assert.match(loadAndPlay, /isAudioFileAuthorized: window\.api\.fs\.isAudioFileAuthorized/)
   // The queue's local targets are authorized in one round-trip; a per-track invoke
   // cost one IPC hop per queue entry before playback could start.
   assert.match(loadAndPlay, /areAudioFilesAuthorized: window\.api\.fs\.areAudioFilesAuthorized/)
   assert.match(
     loadAndPlay,
-    /if \(!isActiveLoad\(loadToken, track\)\) \{[\s\S]*?return[\s\S]*?\}\s*await window\.api\.audioEngine\.loadQueue/,
+    /isCurrent: \(\) => isActiveLoad\(loadToken, track\)/,
     'an old async queue preparation must not reach native LoadQueue'
   )
-  assert.match(loadAndPlay, /preparedQueue\.items,\s*preparedQueue\.startIndex/)
   assert.match(loadAndPlay, /nativeQueueDelegated = preparedQueue\.delegated/)
   assert.match(
     syncNativeQueueState,
     /synchronizeLatestNativeQueue\(\s*nativeQueueRevisionFence,\s*snapshot\.revision,\s*\{[\s\S]*prepare: \(\) =>\s*preparePlayerNativeQueue\(/
   )
   assert.match(syncNativeQueueState, /if \(!synchronized\.applied\) return/)
-  assert.match(syncNativeQueueState, /preparedQueue\.items, preparedQueue\.startIndex/)
+  assert.match(
+    syncNativeQueueState,
+    /nativeQueueLoader\.loadPrepared\(preparedQueue, window\.api\.audioEngine\)/
+  )
 })
 
 test('next and previous only use native controls when the native queue is delegated', () => {
@@ -929,7 +1054,10 @@ test('native queue switching guards the target track before applying playback-in
     setupAudioEngineListeners,
     /api\.onPlaybackInfo\(\(info\) => \{\s*applyNativePlaybackInfo\(info\)\s*\}\)/
   )
-  assert.match(setupAudioEngineListeners, /const startAt = pendingLoadStartTime/)
+  assert.doesNotMatch(
+    setupAudioEngineListeners.match(/api\.onStartFile\(\(\) => \{[\s\S]*?\n    \}\)/)?.[0] ?? '',
+    /beginPlaybackPositionTransition\(/
+  )
   assert.match(setupAudioEngineListeners, /pendingLoadStartTime = 0/)
   // Gapless auto-advance must refresh track identity even when nativePlaybackActive
   // briefly lags, otherwise cover + progress stick on the previous track.
@@ -1028,6 +1156,163 @@ test('player store does not pretend DSP bypass is strict bit-perfect mode', () =
   )
 })
 
+function volumeRestoreFixture(savedVolume: number) {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const file = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true)
+  let volumeWatcher = ''
+  let settingsWatcher = ''
+  let readyCallback = ''
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const target = node.expression.getText(file)
+      const input = node.arguments[0]?.getText(file) ?? ''
+      if (target === 'watch' && input === 'volume') volumeWatcher = node.getText(file)
+      if (target === 'watch' && input.includes('appSettings.value.softwareVolume'))
+        settingsWatcher = node.getText(file)
+      if (target === 'api.onReady') readyCallback = input
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  assert.ok(volumeWatcher && settingsWatcher && readyCallback)
+
+  const volume = ref(0.7)
+  const appSettings = ref({ softwareVolume: 0.7, audioDeviceProfiles: { volumeCeiling: 1 } })
+  const settingsLoaded = ref(false)
+  const forwarded: number[] = []
+  const writes: number[] = []
+  let storedVolume = savedVolume
+  const api = {
+    setVolume: async (value: number) => {
+      forwarded.push(value)
+      // The main-process volume IPC also persists the value it receives.
+      storedVolume = value
+    },
+    setPlaybackRate: async () => {},
+    getPlaybackInfo: async () => ({})
+  }
+  const bindings = {
+    volume,
+    appSettings,
+    settingsLoaded,
+    ref,
+    watch,
+    clampSoftwareVolume,
+    DEFAULT_SOFTWARE_VOLUME: 0.7,
+    queueMicrotask,
+    window: { api: { audioEngine: api } },
+    api,
+    updateSettings: async (patch: { softwareVolume: number }) => {
+      writes.push(patch.softwareVolume)
+      storedVolume = patch.softwareVolume
+    },
+    audioEngineReady: ref(false),
+    audioEngineRecoveryNotice: ref(null),
+    setAudioEngineError: () => {},
+    refreshAudioOutputState: async () => {},
+    playbackRate: ref(1),
+    playbackInfo: ref({}),
+    audioOutputConfig: ref({}),
+    defaultAudioOutputConfig: {},
+    normalizeNativePlaybackInfo: (value: unknown) => value,
+    rendererPauseFadeController: { syncVolume: () => {} }
+  }
+  const helpers = [
+    'persistSoftwareVolume',
+    'scheduleSoftwareVolumePersist',
+    'flushSoftwareVolumePersist',
+    'syncSoftwareVolumeToEngine'
+  ]
+    .map((name) => {
+      const declaration = file.statements.find(
+        (node): node is ts.FunctionDeclaration =>
+          ts.isFunctionDeclaration(node) && node.name?.text === name
+      )
+      assert.ok(declaration)
+      return declaration.getText(file)
+    })
+    .join('\n')
+  const implementation = ts.transpileModule(
+    `let suppressVolumePersist = false
+     const playbackAudio = null
+     const lastAudibleVolume = ref(0.7)
+     const muted = ref(false)
+     const castTargetName = ref('')
+     const softwareVolumePersistence = {
+       schedule: (value) => { void persistSoftwareVolume(value) },
+       flush: (value) => persistSoftwareVolume(value)
+     }
+     ${helpers}
+     ${volumeWatcher}
+     ${settingsWatcher}
+     return { ready: ${readyCallback}, flushSoftwareVolumePersist }`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
+  ).outputText
+  const scope = effectScope()
+  const controls = scope.run(() =>
+    new Function(...Object.keys(bindings), implementation)(...Object.values(bindings))
+  ) as { ready: () => Promise<void>; flushSoftwareVolumePersist: () => Promise<void> }
+  return {
+    ...controls,
+    volume,
+    forwarded,
+    writes,
+    storedVolume: () => storedVolume,
+    hydrate() {
+      appSettings.value = {
+        softwareVolume: storedVolume,
+        audioDeviceProfiles: { volumeCeiling: 1 }
+      }
+      settingsLoaded.value = true
+    },
+    dispose: () => scope.stop()
+  }
+}
+
+test('engine ready before settings hydration cannot overwrite saved volume with 70%', async () => {
+  const fixture = volumeRestoreFixture(0.24)
+  try {
+    await fixture.ready()
+    await fixture.flushSoftwareVolumePersist()
+    assert.deepEqual(fixture.forwarded, [])
+    assert.equal(fixture.storedVolume(), 0.24)
+    fixture.hydrate()
+    await nextTick()
+    assert.equal(fixture.volume.value, 0.24)
+    assert.equal(fixture.forwarded.at(-1), 0.24)
+    assert.equal(fixture.storedVolume(), 0.24)
+    assert.deepEqual(fixture.writes, [])
+  } finally {
+    fixture.dispose()
+  }
+})
+
+for (const savedVolume of [0, 0.7, 0.36]) {
+  test(`settings hydration restores ${savedVolume * 100}% before engine ready and keeps later changes`, async () => {
+    const fixture = volumeRestoreFixture(savedVolume)
+    try {
+      fixture.hydrate()
+      // The ready event can arrive before Vue's queued volume watcher runs.
+      await fixture.ready()
+      await nextTick()
+      assert.equal(fixture.volume.value, savedVolume)
+      assert.ok(fixture.forwarded.length > 0)
+      assert.ok(fixture.forwarded.every((value) => value === savedVolume))
+      assert.equal(fixture.writes.length, 0)
+
+      fixture.volume.value = 0.48
+      await nextTick()
+      await fixture.flushSoftwareVolumePersist()
+      await fixture.ready()
+      assert.equal(fixture.storedVolume(), 0.48)
+      assert.equal(fixture.forwarded.at(-1), 0.48)
+      assert.ok(fixture.writes.includes(0.48))
+    } finally {
+      fixture.dispose()
+    }
+  })
+}
+
 test('player store keeps default volume at 0.7, persists softwareVolume, and exposes setUnityVolume', () => {
   const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
   const settingsSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
@@ -1045,7 +1330,7 @@ test('player store keeps default volume at 0.7, persists softwareVolume, and exp
   assert.match(source, /async function flushSoftwareVolumePersist\(\): Promise<void>/)
   assert.match(appSource, /await flushSoftwareVolumePersist\(\)/)
   assert.match(source, /updateSettings\(\{ softwareVolume: next \}\)/)
-  assert.match(source, /watch\(\s*\(\) => appSettings\.value\.softwareVolume,/)
+  assert.match(source, /watch\(\s*\[settingsLoaded, \(\) => appSettings\.value\.softwareVolume\],/)
   assert.match(settingsSource, /softwareVolume: 0\.7/)
   assert.match(mainSettings, /softwareVolume: DEFAULT_SOFTWARE_VOLUME/)
   assert.match(mainSettings, /softwareVolume: clampNumber\(\s*settings\.softwareVolume/)
@@ -1091,12 +1376,12 @@ test('local dashboard playback keeps a multi-track queue for next and previous c
   )
 })
 
-test('local dashboard keeps the restored editorial masthead in Chinese', () => {
+test('local dashboard keeps a concise Chinese masthead', () => {
   const source = readFileSync(new URL('../components/LocalDashboard.vue', import.meta.url), 'utf8')
 
   assert.match(source, /class="masthead-kicker"/)
   assert.match(source, /class="masthead-title"/)
-  assert.match(source, /class="masthead-sub"/)
+  assert.doesNotMatch(source, /class="masthead-sub"/)
   assert.match(source, /本地音乐库/)
   assert.doesNotMatch(source, /Good (morning|afternoon|evening)/i)
 })
@@ -1508,8 +1793,8 @@ test('player bar visualization polling stays light and stops behind the full vis
   // No renderer consumer reads oscilloscope / spectrogram from the store poll.
   assert.match(pollingSource, /spectrogramFrames: 0/)
   assert.match(pollingSource, /oscilloscopePoints: 0/)
-  assert.match(pollingSource, /if \(options\.active\.value\) return/)
-  assert.match(pollingSource, /if \(options\.consumers\.value <= 0\) return/)
+  assert.match(pollingSource, /!options\.active\.value &&\s*options\.consumers\.value > 0/)
+  assert.match(pollingSource, /options\.visible\?\.value/)
   assert.match(source, /const visualizationConsumers = ref\(0\)/)
   assert.match(source, /watch\(visualizationConsumers,/)
   assert.match(pollingSource, /let pollingGeneration = 0/)
@@ -1521,7 +1806,7 @@ test('player bar visualization polling stays light and stops behind the full vis
   assert.match(source, /startVisualizationPolling\(/)
   assert.match(
     source,
-    /\[isPlaying, audioEngineReady, \(\) => currentTrack\.value\?\.id, visualizerActive\]/
+    /\[\s*isPlaying,\s*audioEngineReady,\s*\(\) => currentTrack\.value\?\.id,\s*visualizerActive,\s*visualizationDocumentVisible\s*\]/
   )
 })
 

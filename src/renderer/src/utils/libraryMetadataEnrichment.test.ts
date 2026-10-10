@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Track } from '../types/music'
+import { searchMetadataTracks } from './musicMetadataSearch.ts'
 
 const {
   enrichLocalTracksFromProviders,
@@ -206,6 +207,92 @@ test('metadata enrichment queue deduplicates matching queries and updates every 
   assert.equal(queue.getStatus().completed, 2)
 })
 
+test('metadata searches retry by title when combined keywords return no usable match', async () => {
+  const queries: string[] = []
+  const enriched = await enrichLocalTracksFromProviders([localTrack], {
+    searchSongs: async (query) => {
+      queries.push(query)
+      return {
+        items: query === localTrack.title ? [createProviderTrack(localTrack)] : [],
+        total: 1
+      }
+    }
+  })
+  assert.deepEqual(queries, ['Moon River Audrey', 'Moon River'])
+  assert.equal(enriched[0].metadataMatch?.providerId, 'ncm')
+})
+
+test('manual metadata search retries the lead artist with a larger bounded candidate page', async () => {
+  const track = { ...localTrack, artist: 'Audrey;Guest' }
+  const candidate = createProviderTrack({ ...localTrack, artist: 'Guest / Audrey' })
+  const queries: string[] = []
+  const candidates = await searchMetadataTracks([track], async (query, limit, offset) => {
+    queries.push(query)
+    assert.equal(limit, 30)
+    assert.equal(offset, 0)
+    return { items: query === 'Moon River Audrey' ? [candidate] : [] }
+  })
+  assert.deepEqual(queries, ['Moon River Audrey Guest', 'Moon River Audrey'])
+  assert.deepEqual(candidates, [candidate])
+})
+
+test('metadata search cancellation prevents fallback requests after a late response', async () => {
+  const controller = new AbortController()
+  let calls = 0
+  await assert.rejects(
+    searchMetadataTracks(
+      [localTrack],
+      async (_query, _limit, _offset, signal) => {
+        calls += 1
+        assert.equal(signal, controller.signal)
+        controller.abort()
+        return { items: [] }
+      },
+      { signal: controller.signal }
+    ),
+    { name: 'AbortError' }
+  )
+  assert.equal(calls, 1)
+})
+
+test('metadata enrichment searches real title without Unknown Artist and fills placeholders', async () => {
+  const track = { ...localTrack, artist: 'Unknown Artist', album: 'Unknown Album' }
+  const queries: string[] = []
+  const enriched = await enrichLocalTracksFromProviders([track], {
+    searchSongs: async (query) => {
+      queries.push(query)
+      return { items: [createProviderTrack(localTrack)], total: 1 }
+    }
+  })
+  assert.deepEqual(queries, ['Moon River'])
+  assert.equal(enriched[0].artist, 'Audrey')
+  assert.equal(enriched[0].album, 'Online Album')
+})
+
+test('metadata queue shares fallback searches for duplicate tracks and still rejects wrong artists', async () => {
+  const queries: string[] = []
+  const updates: Track[] = []
+  const queue = new LibraryMetadataEnrichmentQueue({
+    provider: {
+      searchSongs: async (query) => {
+        queries.push(query)
+        return {
+          items: [
+            { ...createProviderTrack(localTrack), id: 'ncm:wrong', artist: 'Other Singer' },
+            ...(query === localTrack.title ? [createProviderTrack(localTrack)] : [])
+          ],
+          total: 2
+        }
+      }
+    },
+    onTrackEnriched: ({ track }) => updates.push(track)
+  })
+  await queue.enqueue([localTrack, { ...localTrack, id: 'local:copy' }])
+  assert.deepEqual(queries, ['Moon River Audrey', 'Moon River'])
+  assert.equal(updates.length, 2)
+  assert.ok(updates.every((track) => track.metadataMatch?.trackId === `ncm:${localTrack.id}`))
+})
+
 test('metadata enrichment deduplicates an active query while retaining each track policy', async () => {
   let searches = 0
   let resolveSearch: ((value: { items: Track[]; total: number }) => void) | null = null
@@ -304,6 +391,32 @@ test('metadata enrichment cancellation drops late provider results', async () =>
 
   assert.equal(queue.getStatus().state, 'cancelled')
   assert.deepEqual(updates, [])
+})
+
+test('a cancelled query can immediately restart while its old provider response is still pending', async () => {
+  const responses: Array<(value: { items: Track[]; total: number }) => void> = []
+  const updates: Track[] = []
+  const queue = new LibraryMetadataEnrichmentQueue({
+    provider: {
+      searchSongs: async () =>
+        await new Promise((resolve) => {
+          responses.push(resolve)
+        })
+    },
+    onTrackEnriched: ({ track }) => updates.push(track)
+  })
+  const firstRun = queue.enqueue([localTrack])
+  await waitFor(() => responses.length === 1)
+  assert.equal(queue.cancel(), true)
+  await firstRun
+  const secondRun = queue.enqueue([localTrack])
+  await waitFor(() => responses.length === 2)
+  responses[0]({ items: [createProviderTrack(localTrack)], total: 1 })
+  responses[1]({ items: [createProviderTrack(localTrack)], total: 1 })
+  await secondRun
+  assert.equal(updates.length, 1)
+  assert.equal(queue.getStatus().completed, 1)
+  assert.equal(queue.getStatus().state, 'completed')
 })
 
 test('metadata enrichment cancellation aborts providers that expose AbortSignal support', async () => {

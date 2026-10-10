@@ -85,7 +85,7 @@ struct ScarletbookDisc {
 // image. Returns true when the Master TOC signature is present and at least
 // one audio area yields a non-empty track list. Never throws; malformed input
 // returns false.
-bool parseScarletbookDisc(std::ifstream& file, uint64_t fileSize, ScarletbookDisc* out);
+bool parseScarletbookDisc(std::istream& file, uint64_t fileSize, ScarletbookDisc* out);
 
 // One multiplexed packet inside a 2048-byte Scarletbook audio sector.
 struct ScarletbookPacket {

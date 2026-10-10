@@ -266,18 +266,18 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 36px;
-  padding: 0 10px;
+  min-height: var(--te-control-height-field);
+  padding: 0 var(--te-control-pad-x-sm);
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--te-control-radius-sm);
   background: transparent;
   color: var(--te-neutral-900);
   font: inherit;
   text-align: left;
   cursor: pointer;
   transition:
-    background 0.16s,
-    color 0.16s;
+    background var(--te-motion-hover),
+    color var(--te-motion-hover);
 }
 
 .provider-switcher-option:hover,

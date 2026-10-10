@@ -1,0 +1,8 @@
+# Development conversion only; no Python environment is shipped.
+torch==2.6.0
+torchaudio==2.6.0
+numpy==1.26.4
+einops==0.8.0
+rotary_embedding_torch==0.6.4
+onnx==1.17.0
+onnxruntime==1.20.1

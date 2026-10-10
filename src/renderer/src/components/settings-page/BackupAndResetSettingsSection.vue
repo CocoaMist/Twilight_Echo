@@ -1,24 +1,22 @@
 <script setup lang="ts">
 import PersonalBackupSection from './PersonalBackupSection.vue'
-type SettingsGroup = 'appearance' | 'playback' | 'desktopLyrics'
+import type { SettingsResetGroup } from './types.ts'
 
 const emit = defineEmits<{
   exportSettings: []
   importSettings: []
-  resetGroup: [group: SettingsGroup]
+  resetGroup: [group: SettingsResetGroup]
 }>()
 </script>
 
 <template>
   <div class="section-block">
-    <h3>备份与迁移</h3>
+    <h3>备份与恢复</h3>
     <div class="setting-list">
-      <div class="setting-item">
+      <div data-setting-id="settings-backup" id="setting-settings-backup" class="setting-item">
         <div class="setting-copy">
           <strong>设置备份</strong>
-          <span
-            >保存或恢复应用设置，不包含歌曲文件和个人曲库数据。导入会覆盖当前设置，并要求确认。</span
-          >
+          <span>导出当前设置为 JSON，或从备份文件恢复；导入前会二次确认。</span>
         </div>
         <div class="inline-controls">
           <button type="button" class="soft-button" @click="emit('exportSettings')">
@@ -33,25 +31,28 @@ const emit = defineEmits<{
       </div>
       <hr />
       <PersonalBackupSection />
-    </div>
-  </div>
-  <div class="section-block">
-    <h3>恢复默认</h3>
-    <div class="setting-list">
-      <div class="setting-item top-align">
+      <hr />
+      <div
+        data-setting-id="reset-settings"
+        id="setting-reset-settings"
+        class="setting-item top-align"
+      >
         <div class="setting-copy">
           <strong>按分组恢复默认</strong>
           <span>只重置选中的设置分组，不清空媒体库、插件和本地数据。</span>
         </div>
         <div class="inline-controls reset-group-actions">
           <button type="button" class="muted-button" @click="emit('resetGroup', 'appearance')">
-            恢复外观默认
+            外观与播放条
           </button>
           <button type="button" class="muted-button" @click="emit('resetGroup', 'playback')">
-            恢复播放默认
+            播放与音效
+          </button>
+          <button type="button" class="muted-button" @click="emit('resetGroup', 'lyrics')">
+            播放页歌词
           </button>
           <button type="button" class="muted-button" @click="emit('resetGroup', 'desktopLyrics')">
-            恢复桌面歌词默认
+            桌面歌词
           </button>
         </div>
       </div>

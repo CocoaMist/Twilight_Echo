@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -254,6 +255,94 @@ std::filesystem::path writePcmWav(
   }
   assert(out.good());
   return path;
+}
+
+std::vector<uint8_t> writeTypedGaplessWav(
+    const std::filesystem::path& path, int bitsPerSample, bool floatingPoint,
+    size_t firstFrame, size_t frameCount) {
+  const size_t bytesPerSample = static_cast<size_t>(bitsPerSample / 8);
+  const size_t bytesPerFrame = kChannels * bytesPerSample;
+  std::vector<uint8_t> payload(frameCount * bytesPerFrame);
+  for (size_t frame = 0; frame < frameCount; ++frame) {
+    for (size_t channel = 0; channel < kChannels; ++channel) {
+      const uint32_t ordinal = static_cast<uint32_t>((firstFrame + frame) * kChannels + channel);
+      uint32_t bits = ordinal * 100003u + 12345u;
+      if (floatingPoint) bits = 0x3e000000u | (bits & 0x007fffffu) | ((ordinal & 1u) << 31);
+      for (size_t byte = 0; byte < bytesPerSample; ++byte) {
+        payload[frame * bytesPerFrame + channel * bytesPerSample + byte] =
+            static_cast<uint8_t>(bits >> (byte * 8));
+      }
+    }
+  }
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  assert(out.good());
+  out.write("RIFF", 4);
+  writeLe32(out, static_cast<uint32_t>(36 + payload.size()));
+  out.write("WAVEfmt ", 8);
+  writeLe32(out, 16);
+  writeLe16(out, floatingPoint ? 3 : 1);
+  writeLe16(out, kChannels);
+  writeLe32(out, kSampleRate);
+  writeLe32(out, static_cast<uint32_t>(kSampleRate * bytesPerFrame));
+  writeLe16(out, static_cast<uint16_t>(bytesPerFrame));
+  writeLe16(out, static_cast<uint16_t>(bitsPerSample));
+  out.write("data", 4);
+  writeLe32(out, static_cast<uint32_t>(payload.size()));
+  out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+  // Stereo fixtures have even-sized payloads, so no RIFF pad byte is needed.
+  assert(out.good());
+  return payload;
+}
+
+void verifyTypedGaplessWithRealDecoder(const std::filesystem::path& fixtureRoot) {
+  for (const auto& format : {std::pair{16, false}, std::pair{24, false},
+                             std::pair{32, false}, std::pair{32, true}}) {
+    const auto firstPath = fixtureRoot / "typed-gapless-first.wav";
+    const auto nextPath = fixtureRoot / "typed-gapless-next.wav";
+    auto expected = writeTypedGaplessWav(firstPath, format.first, format.second, 0, 1031);
+    const auto nextPayload = writeTypedGaplessWav(nextPath, format.first, format.second, 1031, 8193);
+    expected.insert(expected.end(), nextPayload.begin(), nextPayload.end());
+    const size_t bytesPerFrame = kChannels * static_cast<size_t>(format.first / 8);
+    expected.resize(3 * kCallbackFrames * bytesPerFrame);
+
+    resetBackend();
+    AudioPipeline pipeline;
+    QueueItem first, next;
+    first.id = "first";
+    first.source = firstPath.string();
+    next.id = "next";
+    next.source = nextPath.string();
+    std::string error;
+    // The injected pump captures bytes from the real decoder and pipeline;
+    // the requested backend exercises typed routing without a hardware claim.
+    assert(pipeline.play(first, next, 0, "wasapi-exclusive", "controlled", 1.0,
+                         "{\"gapless\":true,\"fftEnabled\":false}", true, &error) == TAE_RESULT_OK);
+    const auto backend = latestBackend();
+    assert(backend);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!pipeline.status().preloadReady && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(pipeline.status().gaplessActive);
+    std::vector<uint8_t> actual(expected.size(), 0xff);
+    for (size_t callback = 0; callback < 3; ++callback) {
+      PcmBlock output;
+      output.format = backend->format;
+      output.frames = kCallbackFrames;
+      output.byteSize = kCallbackFrames * bytesPerFrame;
+      output.data = actual.data() + callback * output.byteSize;
+      assert(backend->typedRender(output) == kCallbackFrames);
+    }
+    assert(actual == expected);
+    assert(latestBackend() == backend);
+    const auto status = pipeline.status();
+    assert(status.currentItem.id == next.id);
+    assert(status.outputInfo.pcmPassthrough);
+    assert(!status.outputInfo.resampled);
+    assert(std::abs(status.positionSeconds - 505.0 / kSampleRate) < 1e-9);
+    assert(!pipeline.consumeEnded());
+    pipeline.stop();
+  }
 }
 
 struct ProcessMemorySnapshot {
@@ -593,6 +682,7 @@ int main() {
   std::error_code ignored;
   std::filesystem::remove_all(fixtureRoot, ignored);
   std::filesystem::create_directories(fixtureRoot);
+  verifyTypedGaplessWithRealDecoder(fixtureRoot);
 
   const auto pcmLong = writePcmWav(fixtureRoot / "pcm-long.wav", kLongScenarioAudioSeconds + 4.0, false, 311.0);
   const auto gaplessA = writePcmWav(fixtureRoot / "gapless-a.wav", 8.0, false, 421.0);

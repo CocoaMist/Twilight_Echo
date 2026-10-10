@@ -4,6 +4,23 @@ New or changed local tracks are committed to the renderer immediately. Cover art
 provider metadata are then requested by a background queue; enrichment must never delay the
 first local-library render or change a local track into a provider track.
 
+## Local Album Release Dates
+
+Album cards and detail headers use local `releasedate`, `date`, then `year` tags. Invalid
+calendar dates fall through to the next tag. Persisted `releaseDate` retains only the available
+precision (`YYYY`, `YYYY-MM`, or `YYYY-MM-DD`); timezone suffixes never shift the calendar day.
+Albums select the most frequent valid year, then the most precise date within that year.
+Equal precision uses frequency, with album track order breaking ties. Collection identities
+and sorting are unchanged. CUE subtracks inherit their source date; SACD ISO tracks use native years.
+
+After the existing library first renders, the startup scan reads unchanged legacy files in
+the background. The existing pause, cancel, and progress controls own this work. Successful
+tag reads set file-index `metadataVersion: 1`, including files without a date. Failed reads
+remain eligible for retry; cancellation commits neither date changes nor completion markers.
+Unchanged files merge only `releaseDate`, retaining titles, artists, artwork, lyrics, track
+identities, and provider matches. Date-only changes do not enqueue additional online enrichment.
+New or actually changed files continue through the normal scan and enrichment flow.
+
 ## Library Organization Inbox
 
 The local-library tools menu opens **曲库整理收件箱**. Opening it derives issues from the

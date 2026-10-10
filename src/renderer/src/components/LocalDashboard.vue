@@ -94,12 +94,12 @@ const dateKicker = computed(() => {
 
 const hasLibrary = computed(() => tracks.value.length > 0)
 
-const totalDurationText = computed(() => {
+const totalDuration = computed(() => {
   const seconds = tracks.value.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0)
   const hours = seconds / 3600
-  if (hours >= 24) return `${(hours / 24).toFixed(1)} 天`
-  if (hours >= 1) return `${hours.toFixed(1)} 小时`
-  return `${Math.round(seconds / 60)} 分钟`
+  if (hours >= 24) return { value: (hours / 24).toFixed(1), unit: '天' }
+  if (hours >= 1) return { value: hours.toFixed(1), unit: '小时' }
+  return { value: String(Math.round(seconds / 60)), unit: '分钟' }
 })
 
 interface RankedStat {
@@ -166,11 +166,10 @@ const heroLabel = computed(() => {
   return heroIsCurrent.value && isPlaying.value ? '正在播放' : '上次播放'
 })
 
-const heroMeta = computed(() => {
+const heroAudioMeta = computed(() => {
   const track = heroTrack.value
   if (!track) return ''
   const parts: string[] = []
-  if (track.album) parts.push(track.album)
   if (track.format) parts.push(track.format.toUpperCase())
   if (track.sampleRate) parts.push(`${Math.round(track.sampleRate / 1000)}kHz`)
   return parts.join(' · ')
@@ -830,17 +829,18 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         <div class="masthead-copy">
           <p class="masthead-kicker">{{ dateKicker }} · 本地音乐库</p>
           <h1 class="masthead-title">{{ greeting }}</h1>
-          <p class="masthead-sub">让熟悉的旋律，陪你度过此刻。</p>
         </div>
-        <button v-if="hasLibrary" type="button" class="masthead-shuffle" @click="shuffleAll">
+        <button
+          v-if="hasLibrary"
+          type="button"
+          class="masthead-shuffle"
+          :title="`从 ${tracks.length} 首歌曲中随机播放`"
+          @click="shuffleAll"
+        >
           <span class="masthead-shuffle-icon" aria-hidden="true"
             ><i class="ph ph-shuffle"></i
           ></span>
-          <span class="masthead-shuffle-copy">
-            <strong>随机漫游</strong>
-            <small>从 {{ tracks.length }} 首收藏里抽一首</small>
-          </span>
-          <i class="ph ph-arrow-up-right masthead-shuffle-arrow" aria-hidden="true"></i>
+          <span class="masthead-shuffle-label">随机播放</span>
         </button>
       </header>
 
@@ -849,11 +849,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         <div class="empty-orb empty-orb-a" aria-hidden="true"></div>
         <div class="empty-orb empty-orb-b" aria-hidden="true"></div>
         <span class="empty-badge" aria-hidden="true"><i class="ph ph-music-note"></i></span>
-        <p class="empty-kicker">Twilight Echo · 唱片房间</p>
-        <h2 class="empty-title">这里还很安静</h2>
-        <p class="empty-desc">
-          添加本地音乐文件夹后，封面、专辑与听歌足迹会自动在这里生长成你的唱片房间。
-        </p>
+        <h2 class="empty-title">暂无本地音乐</h2>
         <button type="button" class="empty-cta" @click="emit('open-library-settings')">
           <span class="empty-cta-content">
             <i class="ph ph-folder-simple-plus" aria-hidden="true"></i>
@@ -892,11 +888,18 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 {{ heroLabel }}
               </span>
 
-              <h2 class="hero-title">{{ nowPlayingTitle }}</h2>
-              <p class="hero-artist">{{ heroTrack?.artist || '未知艺术家' }}</p>
-              <p class="hero-meta">
-                <i class="ph ph-disc" aria-hidden="true"></i>
-                {{ heroMeta || '本地音乐' }}
+              <div class="hero-track-info">
+                <h2 class="hero-title" :title="nowPlayingTitle">{{ nowPlayingTitle }}</h2>
+                <p class="hero-artist" :title="heroTrack?.artist">
+                  {{ heroTrack?.artist || '未知艺术家' }}
+                </p>
+              </div>
+              <p class="hero-meta" :title="heroTrack?.album || '本地音乐'">
+                <span class="hero-release">
+                  <i class="ph ph-disc" aria-hidden="true"></i>
+                  <span class="hero-album">{{ heroTrack?.album || '本地音乐' }}</span>
+                </span>
+                <span v-if="heroAudioMeta" class="hero-audio-meta">{{ heroAudioMeta }}</span>
               </p>
 
               <DashboardPlaybackProgress v-if="heroIsCurrent" />
@@ -936,8 +939,12 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
               </div>
 
               <div v-else class="hero-actions">
-                <button type="button" class="hero-ghost-action" @click="handleHeroPlay">
-                  <i class="ph ph-play"></i>
+                <button
+                  type="button"
+                  class="hero-ghost-action hero-primary-action"
+                  @click="handleHeroPlay"
+                >
+                  <i class="ph ph-play" aria-hidden="true"></i>
                   播放这首
                 </button>
                 <button type="button" class="hero-ghost-action" @click="shuffleAll">
@@ -959,9 +966,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   alt=""
                 />
                 <img v-else :src="DEFAULT_COVER" alt="" />
-                <span v-if="heroTrack?.format" class="hero-format">{{
-                  heroTrack.format.toUpperCase()
-                }}</span>
               </span>
             </div>
           </div>
@@ -970,25 +974,24 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         <!-- ── Library figures ─────────────────────────────────────────── -->
         <section class="figures" aria-label="音乐库一览">
           <button type="button" class="figure" @click="emit('select-view', 'allSongs', null)">
-            <strong>{{ tracks.length }}</strong>
+            <strong>{{ tracks.length.toLocaleString('zh-CN') }}</strong>
             <span>首歌曲</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
-          <span class="figure-sep" aria-hidden="true"></span>
           <button type="button" class="figure" @click="emit('select-view', 'albums', null)">
-            <strong>{{ albums.length }}</strong>
+            <strong>{{ albums.length.toLocaleString('zh-CN') }}</strong>
             <span>张专辑</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
-          <span class="figure-sep" aria-hidden="true"></span>
           <button type="button" class="figure" @click="emit('select-view', 'artists', null)">
-            <strong>{{ artists.length }}</strong>
+            <strong>{{ artists.length.toLocaleString('zh-CN') }}</strong>
             <span>位艺术家</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
-          <span class="figure-sep" aria-hidden="true"></span>
           <div class="figure is-static">
-            <strong>{{ totalDurationText }}</strong>
+            <strong>
+              {{ totalDuration.value }}<small class="figure-unit">{{ totalDuration.unit }}</small>
+            </strong>
             <span>收藏总时长</span>
           </div>
         </section>
@@ -1075,7 +1078,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           <header class="block-head">
             <div class="block-copy">
               <h3>最近添加</h3>
-              <p>刚收进音乐库的声音，先听为敬。</p>
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'allSongs', null)">
               全部歌曲
@@ -1115,7 +1117,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           <header class="block-head">
             <div class="block-copy">
               <h3>聆听足迹</h3>
-              <p>每一次重播，都在慢慢画出你的音乐偏好。</p>
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'recent', null)">
               最近播放
@@ -1221,7 +1222,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
           <header class="block-head">
             <div class="block-copy">
               <h3>专辑精选</h3>
-              <p>从头到尾听完一张专辑，是留给音乐最温柔的时间。</p>
             </div>
             <button type="button" class="block-more" @click="emit('select-view', 'albums', null)">
               全部专辑

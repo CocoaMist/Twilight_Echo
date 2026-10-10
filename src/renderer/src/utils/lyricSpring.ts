@@ -210,6 +210,11 @@ export class LyricSpring {
     return this.targetPosition
   }
 
+  /** Final destination also includes a cascade target whose delay has not elapsed. */
+  getDestinationPosition(): number {
+    return this.queuedPosition?.position ?? this.targetPosition
+  }
+
   getCurrentVelocity(): number {
     return this.getVelocity(this.currentTime)
   }

@@ -282,13 +282,13 @@
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   padding: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: var(--te-control-radius-pill);
   background: transparent;
-  transition: transform 140ms ease-out;
+  transition: transform var(--te-motion-hover) ease-out;
 }
 
 .sf-icon-button i {
@@ -326,20 +326,10 @@
 
 .sf-session-bottom {
   gap: 12px;
+  justify-content: flex-end;
   margin-top: auto;
   padding-top: 16px;
   color: var(--sf-console-muted);
-}
-
-.sf-session-caption {
-  font:
-    400 11px / 1.8 'Space Grotesk',
-    var(--te-font-sans);
-}
-
-.sf-session-caption strong {
-  color: var(--sf-console-ink);
-  font-weight: 400;
 }
 
 .sf-session-bottom > i {
@@ -371,13 +361,6 @@
   font-size: calc(var(--te-font-size-body, 14px) * 36 / 14);
   font-weight: 550;
   line-height: 1.2;
-}
-
-.sf-intro {
-  margin: 12px 0 0;
-  color: var(--sf-muted);
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  line-height: 1.6;
 }
 
 .sf-shuffle {
@@ -1184,4 +1167,175 @@
 .sf-session .sf-icon-button:hover {
   color: var(--sf-console-ink);
   background: var(--sf-console-line);
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container (max-width: 1100px) {
+  .sf-layout {
+    grid-template-columns: 252px minmax(0, 1fr);
+    gap: 24px;
+  }
+
+  .sf-session {
+    padding: 18px;
+  }
+  .sf-albums {
+    padding: 18px;
+  }
+  .sf-album-grid {
+    gap: 12px;
+  }
+  .sf-section-en,
+  .sf-list-caption {
+    display: none;
+  }
+  .sf-collection {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .sf-collection-label {
+    grid-column: 1 / -1;
+  }
+  .sf-collection > button:nth-child(2) {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+@container (max-width: 820px) {
+  .sf-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+  }
+
+  .sf-session {
+    position: relative;
+    top: auto;
+    max-height: none;
+    padding: 22px;
+  }
+  .sf-session-main {
+    display: grid;
+    grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.4fr);
+    align-items: center;
+    gap: 28px;
+  }
+
+  .sf-cover-mount {
+    width: 100%;
+    max-width: 240px;
+    margin: 0 auto;
+  }
+  .sf-session-bottom,
+  .sf-player-tools {
+    display: none;
+  }
+  .sf-content {
+    padding: 0;
+  }
+  .sf-masthead {
+    padding-bottom: 24px;
+  }
+  .sf-transport {
+    margin-top: 12px;
+  }
+  .sf-transport-buttons {
+    margin-top: 12px;
+  }
+  .sf-play-button {
+    width: 48px;
+    height: 48px;
+  }
+}
+@container (max-width: 540px) {
+  .sf-session {
+    padding: 16px;
+    border-radius: 16px;
+  }
+  .sf-session-main {
+    grid-template-columns: 90px minmax(0, 1fr);
+    align-items: start;
+    gap: 16px;
+  }
+  .sf-session h2 {
+    font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
+  }
+  .sf-current-artist {
+    font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+  }
+  .sf-current-album,
+  .sf-quality {
+    display: none;
+  }
+  .sf-transport-buttons {
+    gap: 2px;
+  }
+  .sf-transport-buttons .sf-icon-button {
+    width: 26px;
+    height: 32px;
+  }
+  .sf-play-button {
+    width: 38px;
+    height: 38px;
+  }
+  .sf-masthead {
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .sf-masthead h1 {
+    gap: 12px;
+  }
+  .sf-shuffle {
+    min-height: 40px;
+    padding: 0 16px;
+  }
+  .sf-albums {
+    padding: 16px;
+  }
+  .sf-section-head {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .sf-section-title h2 {
+    font-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
+  }
+  .sf-section-actions {
+    gap: 10px;
+  }
+  .sf-album-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 22px 14px;
+  }
+  .sf-track-labels,
+  .sf-track {
+    grid-template-columns: 20px minmax(0, 1fr) 36px 16px;
+    gap: 7px;
+    padding-right: 4px;
+    padding-left: 4px;
+  }
+
+  .sf-track-album,
+  .sf-track-labels > :nth-child(3) {
+    display: none;
+  }
+  .sf-track-identity {
+    gap: 9px;
+  }
+  .sf-collection {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 22px;
+  }
+  .sf-collection > button:nth-child(4) {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .sf-empty-albums {
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .sf-empty-albums h3 {
+    font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
+  }
+  .sf-empty-albums > button {
+    margin-left: 0;
+  }
 }

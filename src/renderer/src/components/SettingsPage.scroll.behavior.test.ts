@@ -15,17 +15,19 @@ const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../', import.meta.url))
 const sectionKeys: Record<string, string> = {
   General: 'general',
-  Playback: 'playback',
+  Playback: 'playback-basics',
   Dsp: 'dsp',
   Cache: 'cache',
-  Performance: 'performance',
+  Library: 'library',
+  Connections: 'connections',
+  System: 'system',
   Appearance: 'appearance',
   DesktopLyrics: 'desktopLyrics',
   Shortcuts: 'shortcuts',
   About: 'about'
 }
 
-test('settings categories preserve drafts, keyboard focus and search across responsive layouts', async () => {
+test('settings preserve transition navigation geometry and skip distant content without scroll shifts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-settings-scroll-'))
   try {
     const app = parse(await readFile(join(workspace, 'src/renderer/src/App.vue'), 'utf8'))
@@ -44,6 +46,8 @@ test('settings categories preserve drafts, keyboard focus and search across resp
           resolveId(source, importer) {
             if (!importer?.split('?')[0].replaceAll('\\', '/').endsWith('/SettingsPage.vue'))
               return null
+            if (source.endsWith('/LyricsStyleSettings.vue'))
+              return '\0settings-section:playing-lyrics'
             const section = source.match(/\/([A-Za-z]+)SettingsSection\.vue$/)?.[1]
             if (section && sectionKeys[section]) return `\0settings-section:${sectionKeys[section]}`
             const store = source.match(
@@ -54,9 +58,7 @@ test('settings categories preserve drafts, keyboard focus and search across resp
           load(id) {
             if (id.startsWith('\0settings-section:')) {
               const key = id.split(':')[1]
-              return key === 'general'
-                ? `export default {inheritAttrs:false,props:['category'],setup(props){return window.makeSettingsSection(props.category)}}`
-                : `export default {inheritAttrs:false,setup(){return window.makeSettingsSection('${key}')}}`
+              return `export default {inheritAttrs:false,setup(){return window.makeSettingsSection('${key}')}}`
             }
             if (id.startsWith('\0settings-store:')) {
               const key = id.split(':')[1]
@@ -118,12 +120,10 @@ app.whenReady().then(async()=>{
   throw new Error('settings viewport did not reach '+width+'x900');
  };
  ipcMain.handle('settings:resize',(_event,width)=>resizeViewport(width));
- ipcMain.handle('settings:input',(_event,input)=>{win.webContents.focus();win.webContents.sendInputEvent(input)});
  try {
   await win.loadFile(require('node:path').join(__dirname,'index.html'));
   await resizeViewport(1440);
   await win.webContents.executeJavaScript("window.resizeTestWindow=width=>require('electron').ipcRenderer.invoke('settings:resize',width);void 0");
-  await win.webContents.executeJavaScript("window.sendSettingsTestInput=input=>require('electron').ipcRenderer.invoke('settings:input',input);void 0");
   console.log(await win.webContents.executeJavaScript('window.runSettingsScrollTests()'));
   app.exit(0);
  }catch(error){console.error(error.stack);app.exit(1)}

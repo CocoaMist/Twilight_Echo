@@ -56,6 +56,10 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
     '音频引擎报告了未收录的原因代码 {code}。这通常说明引擎版本比界面新；请导出音频诊断报告反馈。',
 
   // ── 播放控制 ──────────────────────────────────────────────────────────────
+  'audio.reason.pause_fade_active.label': '暂停淡出',
+  'audio.reason.pause_fade_active.explain':
+    '暂停时声音在 200 毫秒内逐渐减弱；这段过渡会临时改变样本，继续播放后恢复原来的音量与输出状态。',
+  'audio.reason.pause_fade_active.fix': '',
   'audio.reason.volume_not_unity.label': '软件音量不是 100%',
   'audio.reason.volume_not_unity.explain':
     '软件音量会逐样本乘一个小于 1 的系数，样本值因此改变。默认 70% 是为了保护听感，但 bit-perfect 要求 Unity（100%）。',
@@ -100,6 +104,10 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'audio.reason.crossfade_active.explain':
     '淡入淡出在曲目衔接处叠加两条流并施加增益包络，衔接段的样本被改写，同时会关闭 true gapless。',
   'audio.reason.crossfade_active.fix': '把播放设置里的交叉淡入淡出时长设为 0 秒。',
+  'audio.reason.automix_active.label': 'AutoMix 正在衔接曲目',
+  'audio.reason.automix_active.explain':
+    'AutoMix 正在混合或处理两首曲目的 PCM 音频，当前输出样本已改变。',
+  'audio.reason.automix_active.fix': '关闭播放设置中的 AutoMix 后恢复最新输出偏好。',
 
   'audio.reason.dsd_output_mode_pcm.label': 'DSD 输出模式被设为 PCM',
   'audio.reason.dsd_output_mode_pcm.explain':
@@ -189,8 +197,7 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'audio.reason.backend_not_output_perfect.fix': '切换到 WASAPI Exclusive、ASIO 或 CoreAudio Hog。',
 
   'audio.reason.output_not_perfect.label': '当前输出链尚未验证为直通',
-  'audio.reason.output_not_perfect.explain':
-    '引擎还没有取得足够证据证明这条链是逐位直通的。链路本身可能没问题，只是未被证明。',
+  'audio.reason.output_not_perfect.explain': '尚未取得逐位直通的验证结果。',
   'audio.reason.output_not_perfect.fix': '',
   'audio.reason.output_released.label': '音频设备已释放',
   'audio.reason.output_released.explain': '播放已暂停或结束，音频设备当前未被占用。',
@@ -199,7 +206,7 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   // ── 源文件属性 ────────────────────────────────────────────────────────────
   'audio.reason.source_lossy.label': '源文件是有损格式，不能 Source Exact',
   'audio.reason.source_lossy.explain':
-    '有损格式（MP3、AAC 等）解码出来的是重建波形，原始样本已在编码时丢失，Source Exact 无从谈起。这不是播放器的问题。',
+    'MP3、AAC 等有损格式未保留原始样本，无法验证为 Source Exact。',
   'audio.reason.source_lossy.fix': '',
 
   'audio.reason.source_format_differs.label': '源格式与输出链不一致',
@@ -220,9 +227,9 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
 
   'audio.reason.dsd_volume_pcm_fallback.label': 'DSD 因软件音量不是 100% 而回退到 PCM',
   'audio.reason.dsd_volume_pcm_fallback.explain':
-    '软件音量要逐样本乘一个增益系数，而 DSD 位流无法直接承载增益，所以 DSD 先被解调成 PCM 才能调音量。这与 DSP 处理链无关，开启直通模式也不会解除——直通模式刻意不动音量，避免响度突然跳到满刻度。',
+    '调整软件音量需要将 DSD 转为 PCM。直通模式不会修改音量，也不会取消此转换。',
   'audio.reason.dsd_volume_pcm_fallback.fix':
-    '把软件音量设为 100%（Unity），改用功放或 DAC 上的物理旋钮控制响度，DSD 即可恢复原生传输。',
+    '先降低功放或 DAC 的物理音量，再将软件音量设为 100%（Unity）。',
 
   'audio.reason.dsd_high_rate_pcm_fallback.label': 'DSD 因采样率或驱动限制回退到 PCM',
   'audio.reason.dsd_high_rate_pcm_fallback.explain':

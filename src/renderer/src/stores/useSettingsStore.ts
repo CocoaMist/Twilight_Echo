@@ -1,6 +1,8 @@
 import { normalizeNavigationPagePreferences } from '../../../shared/navigationPages.ts'
 import { DEFAULT_DOWNLOAD_PREFERENCES } from '../../../shared/downloadPreferences.ts'
 import { computed, ref } from 'vue'
+import { normalizeAppBackgroundSettings } from '../../../shared/appAppearance.ts'
+import { normalizeAppFontRendering } from '../../../shared/appFont.ts'
 import {
   DEFAULT_MINI_PLAYER_SETTINGS,
   cloneMiniPlayerSettings
@@ -83,7 +85,8 @@ const fallbackAudioProcessing: AudioProcessingSettings = {
   crossfeedDelayMs: 0.35,
   crossfeedCutoffHz: 700,
   gapless: true,
-  crossfadeSeconds: 0
+  crossfadeSeconds: 0,
+  autoMix: { enabled: false, allowIntelligentSkip: true, maxTransitionSeconds: 12 }
 }
 
 const fallbackHeadphoneCompensation = {
@@ -161,6 +164,7 @@ const fallbackSettings: AppSettings = {
   lightAccentColor: 'blue',
   darkAccentColor: 'blue',
   fontFamily: 'system',
+  fontRendering: 'auto',
   uiDensity: 'standard',
   appBackground: {
     global: {
@@ -432,6 +436,11 @@ function applySnapshot(snapshot: SettingsSnapshot): void {
       ...(incoming.cachePolicy ?? {})
     },
     navigationPages: normalizeNavigationPagePreferences(incoming.navigationPages),
+    fontRendering: normalizeAppFontRendering(incoming.fontRendering),
+    appBackground: normalizeAppBackgroundSettings(
+      incoming.appBackground,
+      incoming.cardAppearance?.background
+    ),
     lyricsAppearance: normalizeLyricsAppearance(incoming.lyricsAppearance),
     lyricsPresets: normalizeLyricsPresetConfig(incoming.lyricsPresets),
     desktopLyrics: normalizeDesktopLyricsSettings(incoming.desktopLyrics, { resetLegacy: false }),
@@ -544,6 +553,13 @@ export function useSettingsStore() {
       settings.value = {
         ...settings.value,
         liquidGlass: normalizeLiquidGlass(patch.liquidGlass)
+      }
+      applyDomSettings()
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'fontRendering')) {
+      settings.value = {
+        ...settings.value,
+        fontRendering: normalizeAppFontRendering(patch.fontRendering)
       }
       applyDomSettings()
     }

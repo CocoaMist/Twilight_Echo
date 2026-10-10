@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, watch } from 'vue'
+import { registerSettingsDisclosure } from './settingsDisclosureRegistry.ts'
+import { computed, onBeforeUnmount, reactive, watch, ref } from 'vue'
 import {
   DEFAULT_DESKTOP_LYRICS_SETTINGS,
   DESKTOP_LYRICS_VERTICAL_WINDOW_SIZE,
@@ -14,6 +15,10 @@ const emit = defineEmits<{
   update: [patch: Partial<DesktopLyricsSettings>]
 }>()
 
+const advancedRef = ref<HTMLDetailsElement | null>(null)
+registerSettingsDisclosure('desktop-lyrics-advanced', () => {
+  if (advancedRef.value) advancedRef.value.open = true
+})
 const draft = reactive<DesktopLyricsSettings>({ ...props.desktopLyrics })
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 let pendingPatch: Partial<DesktopLyricsSettings> = {}
@@ -141,67 +146,50 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
 </script>
 
 <template>
-  <section id="desktopLyrics" class="glass-card preview-section settings-section">
-    <div class="section-title-row">
-      <i class="pi pi-window-maximize"></i>
-      <h2>桌面歌词</h2>
-    </div>
-    <div class="quick-control-row">
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>启用桌面歌词</strong><span>在应用窗口之外显示悬浮歌词。</span>
-        </div>
-        <button
-          type="button"
-          class="toggle-switch"
-          role="switch"
-          aria-label="启用桌面歌词"
-          :aria-checked="draft.enabled"
-          :class="{ active: draft.enabled, inactive: !draft.enabled }"
-          @click="emit('toggle')"
-        ></button>
-      </div>
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>始终置顶</strong><span>让歌词窗口显示在其他窗口上方。</span>
-        </div>
-        <button
-          type="button"
-          class="toggle-switch"
-          role="switch"
-          aria-label="始终置顶"
-          :aria-checked="draft.alwaysOnTop"
-          :class="{ active: draft.alwaysOnTop, inactive: !draft.alwaysOnTop }"
-          @click="update('alwaysOnTop', !draft.alwaysOnTop, true)"
-        ></button>
-      </div>
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>显示翻译</strong><span>歌曲提供翻译时，在原文下方显示。</span>
-        </div>
-        <button
-          type="button"
-          class="toggle-switch"
-          role="switch"
-          aria-label="显示翻译"
-          :aria-checked="draft.translationVisible"
-          :class="{ active: draft.translationVisible, inactive: !draft.translationVisible }"
-          @click="update('translationVisible', !draft.translationVisible, true)"
-        ></button>
-      </div>
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>显示音译</strong><span>歌曲提供音译时显示罗马音。</span>
-        </div>
-        <button
-          type="button"
-          class="toggle-switch"
-          role="switch"
-          aria-label="显示音译"
-          :aria-checked="draft.romanizationVisible"
-          :class="{ active: draft.romanizationVisible, inactive: !draft.romanizationVisible }"
-          @click="update('romanizationVisible', !draft.romanizationVisible, true)"
-        ></button>
+  <div id="desktopLyrics" class="section-block settings-section">
+    <div class="section-heading desktop-lyrics-heading">
+      <h3>桌面与任务栏歌词</h3>
+      <div class="quick-control-row">
+        <label data-setting-id="desktop-enabled" id="setting-desktop-enabled" class="check-field">
+          <input :checked="draft.enabled" type="checkbox" @change="emit('toggle')" />
+          <span>启用桌面歌词</span>
+        </label>
+        <label data-setting-id="desktop-on-top" id="setting-desktop-on-top" class="check-field">
+          <input
+            :checked="draft.alwaysOnTop"
+            type="checkbox"
+            @change="update('alwaysOnTop', ($event.target as HTMLInputElement).checked, true)"
+          />
+          <span>启用歌词总在最前</span>
+        </label>
+        <label
+          data-setting-id="desktop-translation"
+          id="setting-desktop-translation"
+          class="check-field"
+        >
+          <input
+            :checked="draft.translationVisible"
+            type="checkbox"
+            @change="
+              update('translationVisible', ($event.target as HTMLInputElement).checked, true)
+            "
+          />
+          <span>外文歌词显示翻译</span>
+        </label>
+        <label
+          data-setting-id="desktop-romanization"
+          id="setting-desktop-romanization"
+          class="check-field"
+        >
+          <input
+            :checked="draft.romanizationVisible"
+            type="checkbox"
+            @change="
+              update('romanizationVisible', ($event.target as HTMLInputElement).checked, true)
+            "
+          />
+          <span>外文歌词显示音译</span>
+        </label>
       </div>
     </div>
 
@@ -227,10 +215,8 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
         <p>
           歌词浮层显示在主屏任务栏区域，支持显示翻译，鼠标可穿透。调整位置避开应用图标；自动隐藏任务栏时显示在屏幕底部。
         </p>
-        <label class="field range-field">
-          <span
-            >横向位置 <b>{{ draft.taskbarOffset ?? 8 }} %</b></span
-          >
+        <label
+          >横向位置
           <input
             type="range"
             min="0"
@@ -238,11 +224,10 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             :value="draft.taskbarOffset ?? 8"
             @input="update('taskbarOffset', numberValue($event))"
           />
-        </label>
-        <label class="field range-field">
-          <span
-            >显示宽度 <b>{{ draft.taskbarWidth ?? 320 }} px</b></span
-          >
+          {{ draft.taskbarOffset ?? 8 }}%</label
+        >
+        <label
+          >显示宽度
           <input
             type="range"
             min="160"
@@ -251,11 +236,10 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             :value="draft.taskbarWidth ?? 320"
             @input="update('taskbarWidth', numberValue($event))"
           />
-        </label>
-        <label class="field range-field">
-          <span
-            >任务栏字号 <b>{{ draft.taskbarFontSize ?? 18 }} px</b></span
-          >
+          {{ draft.taskbarWidth ?? 320 }}px</label
+        >
+        <label
+          >任务栏字号
           <input
             type="range"
             min="12"
@@ -263,13 +247,13 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             :value="draft.taskbarFontSize ?? 18"
             @input="update('taskbarFontSize', numberValue($event))"
           />
-        </label>
+          {{ draft.taskbarFontSize ?? 18 }}px</label
+        >
       </template>
     </div>
     <div class="setting-card desktop-lyrics-style-card">
-      <h3>字体与外观</h3>
       <div class="style-control-grid">
-        <label class="field">
+        <label data-setting-id="desktop-font" id="setting-desktop-font" class="field">
           <span>字体</span>
           <select
             :value="draft.fontFamily"
@@ -280,75 +264,41 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             </option>
           </select>
         </label>
-        <label class="field">
-          <span>桌面悬浮字号</span>
-          <select
-            aria-describedby="desktop-lyrics-size-hint"
-            :value="draft.fontSize"
-            @change="update('fontSize', numberValue($event), true)"
-          >
+        <label data-setting-id="desktop-font-size" id="setting-desktop-font-size" class="field">
+          <span>字号</span>
+          <select :value="draft.fontSize" @change="update('fontSize', numberValue($event), true)">
             <option v-for="size in fontSizes" :key="size" :value="size">{{ size }}</option>
+          </select>
+        </label>
+        <label data-setting-id="desktop-font-weight" id="setting-desktop-font-weight" class="field">
+          <span>字粗</span>
+          <select
+            :value="draft.fontWeight"
+            @change="update('fontWeight', numberValue($event), true)"
+          >
+            <option v-for="option in fontWeightOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label data-setting-id="desktop-outline" id="setting-desktop-outline" class="field">
+          <span>描边</span>
+          <select
+            :value="draft.textOutline ? 'on' : 'off'"
+            @change="
+              update('textOutline', ($event.target as HTMLSelectElement).value === 'on', true)
+            "
+          >
+            <option value="on">有描边</option>
+            <option value="off">无描边</option>
           </select>
         </label>
       </div>
 
-      <p id="desktop-lyrics-size-hint" class="lyrics-scope-hint">
-        任务栏歌词的字号与宽度在“显示位置”中单独调整。
-      </p>
-      <div class="preview-group">
-        <h3>桌面悬浮预览</h3>
-        <div
-          class="lyrics-preview"
-          :class="[`is-${draft.displayMode}`, `is-${draft.writingMode}`]"
-          :style="previewStyle"
-          aria-label="桌面歌词外观预览"
-        >
-          <div class="preview-line primary">
-            <span>晚风拂过回响</span>
-            <small v-if="draft.translationVisible">The evening wind carries the echo</small>
-            <small v-if="draft.romanizationVisible" class="romanization"
-              >Wǎnfēng fúguò huíxiǎng</small
-            >
-          </div>
-          <div v-if="draft.displayMode === 'double'" class="preview-line secondary">
-            <span>下一句落在星光里</span>
-            <small v-if="draft.translationVisible">The next line rests in starlight</small>
-            <small v-if="draft.romanizationVisible" class="romanization"
-              >Xià yījù luò zài xīngguāng lǐ</small
-            >
-          </div>
-        </div>
-      </div>
-
-      <details class="lyrics-typography-details settings-advanced-details">
-        <summary>排版与文字细节</summary>
+      <div class="control-group">
+        <h3>调整排版样式</h3>
         <div class="layout-control-grid">
-          <label class="field">
-            <span>字体粗细</span>
-            <select
-              :value="draft.fontWeight"
-              @change="update('fontWeight', numberValue($event), true)"
-            >
-              <option v-for="option in fontWeightOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-          <label class="field">
-            <span>描边</span>
-            <select
-              :value="draft.textOutline ? 'on' : 'off'"
-              @change="
-                update('textOutline', ($event.target as HTMLSelectElement).value === 'on', true)
-              "
-            >
-              <option value="on">有描边</option>
-              <option value="off">无描边</option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span>显示行数</span>
+          <label data-setting-id="desktop-lines" id="setting-desktop-lines" class="field">
             <select
               :value="draft.displayMode"
               aria-label="显示行数"
@@ -365,8 +315,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               <option value="single">单行显示</option>
             </select>
           </label>
-          <label class="field">
-            <span>排列方向</span>
+          <label data-setting-id="desktop-writing" id="setting-desktop-writing" class="field">
             <select
               :value="draft.writingMode"
               aria-label="文字排列方向"
@@ -380,8 +329,7 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               <option value="vertical">竖排显示</option>
             </select>
           </label>
-          <label class="field">
-            <span>对齐方式</span>
+          <label data-setting-id="desktop-align" id="setting-desktop-align" class="field">
             <select
               :value="draft.textAlign"
               aria-label="歌词对齐方式"
@@ -399,13 +347,12 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             </select>
           </label>
         </div>
-      </details>
+      </div>
 
       <div class="control-group">
-        <h3>配色</h3>
+        <h3>更改配色方案</h3>
         <div class="palette-control-grid">
-          <label class="field">
-            <span>配色方案</span>
+          <label data-setting-id="desktop-palette" id="setting-desktop-palette" class="field">
             <select
               :value="draft.palette"
               aria-label="歌词配色方案"
@@ -422,7 +369,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
               </option>
             </select>
           </label>
-          <label class="palette-color-button">
+          <label
+            data-setting-id="desktop-active-color"
+            id="setting-desktop-active-color"
+            class="palette-color-button"
+          >
             <input
               :value="paletteColors.active"
               type="color"
@@ -432,7 +383,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             <i :style="{ background: paletteColors.active }"></i>
             <span>已播放</span>
           </label>
-          <label class="palette-color-button">
+          <label
+            data-setting-id="desktop-inactive-color"
+            id="setting-desktop-inactive-color"
+            class="palette-color-button"
+          >
             <input
               :value="paletteColors.inactive"
               type="color"
@@ -446,12 +401,37 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
       </div>
     </div>
 
+    <div class="preview-group">
+      <h3>预览</h3>
+      <div
+        class="lyrics-preview"
+        :class="[`is-${draft.displayMode}`, `is-${draft.writingMode}`]"
+        :style="previewStyle"
+        aria-label="桌面歌词外观预览"
+      >
+        <div class="preview-line primary">
+          <span>晚风拂过回响</span>
+          <small v-if="draft.translationVisible">The evening wind carries the echo</small>
+          <small v-if="draft.romanizationVisible" class="romanization"
+            >Wǎnfēng fúguò huíxiǎng</small
+          >
+        </div>
+        <div v-if="draft.displayMode === 'double'" class="preview-line secondary">
+          <span>下一句落在星光里</span>
+          <small v-if="draft.translationVisible">The next line rests in starlight</small>
+          <small v-if="draft.romanizationVisible" class="romanization"
+            >Xià yījù luò zài xīngguāng lǐ</small
+          >
+        </div>
+      </div>
+    </div>
+
     <div class="setting-card">
-      <h3>桌面悬浮窗口</h3>
+      <h3>窗口</h3>
       <div class="two-columns">
-        <label class="field range-field">
+        <label data-setting-id="desktop-width" id="setting-desktop-width" class="field range-field">
           <span
-            >窗口宽度 <b>{{ draft.windowWidth }} px</b></span
+            >宽度 <b>{{ draft.windowWidth }} px</b></span
           >
           <input
             type="range"
@@ -462,9 +442,13 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             @input="update('windowWidth', numberValue($event))"
           />
         </label>
-        <label class="field range-field">
+        <label
+          data-setting-id="desktop-height"
+          id="setting-desktop-height"
+          class="field range-field"
+        >
           <span
-            >窗口高度 <b>{{ draft.windowHeight }} px</b></span
+            >高度 <b>{{ draft.windowHeight }} px</b></span
           >
           <input
             type="range"
@@ -476,26 +460,27 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
           />
         </label>
       </div>
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>锁定并穿透点击</strong><span>使用 Ctrl + Alt + L 或托盘菜单解锁。</span>
-        </div>
-        <button
-          type="button"
-          class="toggle-switch"
-          role="switch"
-          aria-label="锁定并穿透点击"
-          :aria-checked="draft.locked"
-          :class="{ active: draft.locked, inactive: !draft.locked }"
-          @click="update('locked', !draft.locked, true)"
-        ></button>
-      </div>
+      <label data-setting-id="desktop-locked" id="setting-desktop-locked" class="switch-field">
+        <span><b>锁定并穿透点击</b><small>使用 Ctrl + Alt + L 或托盘菜单解锁</small></span>
+        <input
+          type="checkbox"
+          :checked="draft.locked"
+          @change="update('locked', ($event.target as HTMLInputElement).checked, true)"
+        />
+      </label>
     </div>
 
-    <details class="setting-card advanced settings-advanced-details">
-      <summary>间距、透明度与阴影</summary>
+    <details id="desktop-lyrics-advanced" ref="advancedRef" class="setting-card advanced">
+      <summary>
+        高级显示设置
+        <small>{{ draft.lineGap }}px 行距 · {{ draft.backgroundOpacity }}% 背景透明度</small>
+      </summary>
       <div class="two-columns advanced-grid">
-        <label class="field range-field">
+        <label
+          data-setting-id="desktop-line-gap"
+          id="setting-desktop-line-gap"
+          class="field range-field"
+        >
           <span
             >行距 <b>{{ draft.lineGap }} px</b></span
           >
@@ -519,7 +504,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             @input="update('inactiveOpacity', numberValue($event))"
           />
         </label>
-        <label class="field range-field">
+        <label
+          data-setting-id="desktop-background-opacity"
+          id="setting-desktop-background-opacity"
+          class="field range-field"
+        >
           <span
             >背景透明度 <b>{{ draft.backgroundOpacity }}%</b></span
           >
@@ -531,7 +520,11 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
             @input="update('backgroundOpacity', numberValue($event))"
           />
         </label>
-        <label class="field range-field">
+        <label
+          data-setting-id="desktop-shadow"
+          id="setting-desktop-shadow"
+          class="field range-field"
+        >
           <span
             >阴影强度 <b>{{ draft.shadowStrength }}%</b></span
           >
@@ -579,14 +572,30 @@ function updatePaletteColor(key: 'customActiveColor' | 'customInactiveColor', ev
         />
       </label>
     </details>
-  </section>
+  </div>
 </template>
 
 <style scoped>
+.lyrics-placement-controls {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 24px;
+}
 .lyrics-placement-controls p {
   font-size: 0.85em;
   opacity: 0.7;
   line-height: 1.6;
+}
+.lyrics-placement-controls label {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.lyrics-placement-controls input[type='range'] {
+  flex: 1;
+  min-width: 120px;
+  accent-color: var(--te-primary-500);
 }
 
 .settings-section {

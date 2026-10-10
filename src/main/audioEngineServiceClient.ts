@@ -15,6 +15,7 @@ import type {
   VolumeNormalizationMode
 } from './audioEngineManager'
 import type { BpmAnalysisResult } from './bpm/bpmCache'
+import type { AutoMixStatus } from '../shared/autoMix.ts'
 import type { DspGraphStatus } from '../shared/dspGraph.ts'
 import { getNativeAddonCandidates } from './audio/nativeBinding.ts'
 import { tryParseJsonWithNestingLimit } from './security/jsonSafety.ts'
@@ -185,6 +186,8 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
   private cacheRequestsInFlight = new Set<string>()
   private lastPlaybackInfo: string | PlaybackInfo | null = null
   private lastDspStatus: string | { plugins: unknown[] } = { plugins: [] }
+  private lastAutoMixStatus: string | AutoMixStatus =
+    '{"enabled":false,"state":"disabled","progress":0,"transitionSeconds":0,"styleId":null,"reason":"not_connected","configRevision":0}'
   private lastDspGraphStatus: DspGraphStatus = createEmptyDspGraphStatus()
   private serviceCapabilities: AudioServiceCapabilities | null = null
   private lastConvolverInfo: string | ConvolverInfo | null = null
@@ -221,7 +224,7 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
    * 用于 play/pause 等需要确认真实状态的控制命令。
    */
   callAsync(method: string, args: unknown[]): Promise<unknown> {
-    if (method === 'AnalyzeBpm' || method === 'AnalyzeLoudness') {
+    if (method === 'AnalyzeBpm' || method === 'AnalyzeLoudness' || method === 'AnalyzeAutoMix') {
       return Promise.reject(new Error(`${method} must use the isolated audio analysis service`))
     }
     return this.call(method as keyof NativeAudioBinding, args)
@@ -269,6 +272,10 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
 
   LoadQueue(queueJson: string, startIndex: number): void {
     this.fireAndForget('LoadQueue', [queueJson, startIndex])
+  }
+
+  SelectQueueIndex(index: number): void {
+    this.fireAndForget('SelectQueueIndex', [index])
   }
 
   Next(): void {
@@ -402,6 +409,21 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
 
   SetDspPluginChain(json: string): void {
     this.fireAndForget('SetDspPluginChain', [json])
+  }
+
+  SetAutoMixConfig(json: string): void {
+    this.fireAndForget('SetAutoMixConfig', [json])
+  }
+
+  SetAutoMixFeatures(json: string): void {
+    this.fireAndForget('SetAutoMixFeatures', [json])
+  }
+
+  GetAutoMixStatus(): string | AutoMixStatus {
+    this.refreshCache('GetAutoMixStatus', [], (value) => {
+      this.lastAutoMixStatus = value as string | AutoMixStatus
+    })
+    return this.lastAutoMixStatus
   }
 
   GetDspPluginStatus(): string | { plugins: unknown[] } {

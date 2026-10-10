@@ -64,6 +64,14 @@ export interface MediaProviderPlaylistCatalogue {
   }>
 }
 
+export interface MediaProviderToplistSummary extends MediaProviderPlaylistSummary {
+  description?: string
+  updateFrequency?: string
+  updatedAt?: number
+  featured?: boolean
+  previewTracks: Array<{ title: string; artist: string }>
+}
+
 export interface MediaProviderDiscoveryPlaylistPage {
   items: MediaProviderPlaylistSummary[]
   total: number
@@ -155,6 +163,14 @@ export interface MediaProviderUserSummary {
   followed?: boolean
 }
 
+export interface MediaProviderPlaylistTracksPage {
+  tracks: Track[]
+  total: number | null
+  /** Provider cursor, independent of filtered or expanded track count. */
+  nextOffset: number
+  hasMore: boolean
+}
+
 export interface MediaProvider {
   id: string
   name: string
@@ -183,6 +199,13 @@ export interface MediaProvider {
     options?: MediaProviderCallOptions
   ) => Promise<MediaProviderSearchResult<MediaProviderArtistSummary>>
   fetchPlaylistTracks?: (playlistId: number | string, force?: boolean) => Promise<Track[]>
+  fetchToplists?: (force?: boolean) => Promise<MediaProviderToplistSummary[]>
+  fetchPlaylistTracksPage?: (
+    playlistId: number | string,
+    offset?: number,
+    limit?: number,
+    force?: boolean
+  ) => Promise<MediaProviderPlaylistTracksPage>
   checkLogin?: () => Promise<{ loggedIn: boolean; profile: MediaProviderProfile | null }>
   getProfile?: () => Promise<MediaProviderProfile | null>
   logout?: () => Promise<void>
@@ -254,6 +277,12 @@ export interface MediaProvider {
   ) => Promise<void>
 }
 
+export function isPluginProviderEnabled(health?: MediaProviderHealth): boolean {
+  // API failures describe service health; they must not disable retries or
+  // invalidate requests that still belong to the same enabled plugin.
+  return health?.pluginStatus ? health.pluginStatus === 'enabled' : health?.available !== false
+}
+
 export class MediaProviderRegistry {
   private providers = new Map<string, MediaProvider>()
   private generations = new Map<string, number>()
@@ -280,7 +309,7 @@ export class MediaProviderRegistry {
     if (!current) return false
     if (
       patch.health &&
-      (current.health?.available !== false) !== (patch.health.available !== false)
+      isPluginProviderEnabled(current.health) !== isPluginProviderEnabled(patch.health)
     ) {
       this.invalidate(normalizedId)
     }

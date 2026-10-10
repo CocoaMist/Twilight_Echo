@@ -3,11 +3,13 @@ import type {
   LocalLibraryScanMode,
   LocalLibraryWatchChange
 } from '../../shared/localLibraryScan.ts'
+import { LOCAL_LIBRARY_METADATA_VERSION } from '../../shared/localLibraryScan.ts'
 import { normalizeLibraryFilePath } from './libraryRepository.ts'
 import { createLocalLibraryFileIndexMap, sameLocalLibraryFileIdentity } from './fileIndex.ts'
 
 export interface LocalLibraryScanPlan {
   parseFilePaths: string[]
+  releaseDateFilePaths: string[]
   skippedUnchanged: number
   removedFilePaths: string[]
 }
@@ -27,6 +29,7 @@ export function createLocalLibraryScanPlan(options: {
   const excludedPaths = new Set(options.excludedPaths.map(normalizeLibraryFilePath))
   const identitiesByPath = createLocalLibraryFileIndexMap(options.identities)
   const parseFilePaths: string[] = []
+  const releaseDateFilePaths: string[] = []
   let skippedUnchanged = 0
 
   for (const identity of options.identities) {
@@ -44,7 +47,10 @@ export function createLocalLibraryScanPlan(options: {
       !sameLocalLibraryFileIdentity(known, identity)
 
     if (needsParse) parseFilePaths.push(identity.filePath)
-    else skippedUnchanged++
+    else if ((known?.metadataVersion ?? 0) < LOCAL_LIBRARY_METADATA_VERSION) {
+      parseFilePaths.push(identity.filePath)
+      releaseDateFilePaths.push(identity.filePath)
+    } else skippedUnchanged++
   }
 
   const removed = new Set<string>()
@@ -69,6 +75,7 @@ export function createLocalLibraryScanPlan(options: {
 
   return {
     parseFilePaths,
+    releaseDateFilePaths,
     skippedUnchanged,
     removedFilePaths: Array.from(removed)
   }

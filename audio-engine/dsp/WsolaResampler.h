@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -66,9 +67,13 @@ class WsolaResampler {
   int searchRadius_ = 0;
   std::vector<float> window_;
   std::vector<float> grainA_;
-  std::vector<float> grainB_;  // OLA mix staging (length >= 2 * window)
+  std::vector<float> grainB_;  // One completed output hop, drained across callbacks.
   std::vector<float> olaTail_;
   int olaTailFrames_ = 0;
+  std::vector<float> overlapReference_;
+  bool referenceReady_ = false;
+  size_t readyRead_ = 0;
+  size_t readyFrames_ = 0;
   double sourceCursor_ = 0.0;
   std::vector<float> pullScratch_;
 };
@@ -122,85 +127,49 @@ size_t WsolaResampler::processImpl(float* output, size_t outFrames, PullFn&& pul
   const int grainLen = windowFrames_;
   const int hopOut = analysisHop_;
   const double hopIn = static_cast<double>(hopOut) * rate_;
-
   size_t filled = 0;
   while (filled < outFrames) {
-    if (olaTailFrames_ > 0) {
-      const size_t take = static_cast<size_t>(olaTailFrames_) < (outFrames - filled)
-                              ? static_cast<size_t>(olaTailFrames_)
-                              : (outFrames - filled);
-      for (size_t i = 0; i < take; ++i) {
-        float* dst = output + (filled + i) * static_cast<size_t>(ch);
-        const float* src = olaTail_.data() + i * static_cast<size_t>(ch);
-        for (int c = 0; c < ch; ++c) dst[c] = src[c];
-      }
-      const int remain = olaTailFrames_ - static_cast<int>(take);
-      if (remain > 0) {
-        for (int i = 0; i < remain * ch; ++i) {
-          olaTail_[static_cast<size_t>(i)] = olaTail_[take * static_cast<size_t>(ch) + static_cast<size_t>(i)];
-        }
-      }
-      olaTailFrames_ = remain;
+    if (readyFrames_ > 0) {
+      const size_t take = std::min(readyFrames_, outFrames - filled);
+      std::copy_n(grainB_.data() + readyRead_ * ch, take * ch, output + filled * ch);
+      readyRead_ += take;
+      readyFrames_ -= take;
       filled += take;
       continue;
     }
-
-    const size_t need = static_cast<size_t>(grainLen + searchRadius_ * 2 + 64);
-    ensureInput(need, pull);
-    if (inputCount_ < static_cast<size_t>(grainLen + 2)) {
-      const size_t chs = static_cast<size_t>(ch);
-      for (size_t i = filled * chs; i < outFrames * chs; ++i) output[i] = 0.0f;
-      break;
-    }
-
-    const size_t natural = sourceCursor_ > 0.0 ? static_cast<size_t>(sourceCursor_) : 0;
-    const size_t maxCenter =
-        inputCount_ > static_cast<size_t>(grainLen) ? inputCount_ - static_cast<size_t>(grainLen) : 0;
-    const size_t searchCenter = natural < maxCenter ? natural : maxCenter;
-    const int templateLen = grainLen / 2 > 16 ? grainLen / 2 : 16;
-    const int bestOffset = findBestOffset(searchCenter, searchRadius_, templateLen);
-    int grainStart = static_cast<int>(searchCenter) + bestOffset;
-    if (grainStart < 0) grainStart = 0;
-    if (grainStart + grainLen > static_cast<int>(inputCount_)) {
-      grainStart = static_cast<int>(inputCount_) - grainLen;
-    }
-    if (grainStart < 0) grainStart = 0;
-
-    synthesizeGrain(grainA_.data(), grainLen, static_cast<size_t>(grainStart));
-
-    const int mixLen = olaTailFrames_ > grainLen ? olaTailFrames_ : grainLen;
-    // grainB_ sized for 2*window in prepare
-    for (int i = 0; i < mixLen * ch; ++i) grainB_[static_cast<size_t>(i)] = 0.0f;
-    for (int i = 0; i < olaTailFrames_; ++i) {
-      for (int c = 0; c < ch; ++c) {
-        grainB_[static_cast<size_t>(i * ch + c)] = olaTail_[static_cast<size_t>(i * ch + c)];
-      }
-    }
-    for (int i = 0; i < grainLen; ++i) {
-      for (int c = 0; c < ch; ++c) {
-        grainB_[static_cast<size_t>(i * ch + c)] += grainA_[static_cast<size_t>(i * ch + c)];
-      }
-    }
-
-    const int writeFrames =
-        hopOut < static_cast<int>(outFrames - filled) ? hopOut : static_cast<int>(outFrames - filled);
-    for (int i = 0; i < writeFrames; ++i) {
-      float* dst = output + (filled + static_cast<size_t>(i)) * static_cast<size_t>(ch);
-      for (int c = 0; c < ch; ++c) dst[c] = grainB_[static_cast<size_t>(i * ch + c)];
-    }
-
-    const int newTailStart = writeFrames;
-    const int newTailLen = mixLen - newTailStart;
-    if (newTailLen > 0) {
-      for (int i = 0; i < newTailLen * ch; ++i) {
-        olaTail_[static_cast<size_t>(i)] =
-            grainB_[static_cast<size_t>(newTailStart * ch + i)];
-      }
-      olaTailFrames_ = newTailLen;
-    } else {
+    size_t natural = static_cast<size_t>(sourceCursor_);
+    ensureInput(natural + static_cast<size_t>(grainLen + searchRadius_), pull);
+    // A gapless stream promotion can reset the resampler from inside pull().
+    natural = static_cast<size_t>(sourceCursor_);
+    if (inputCount_ <= natural) {
+      if (olaTailFrames_ == 0) break;
+      // Drain the final overlap once, including sources shorter than one window.
+      std::copy_n(olaTail_.data(), static_cast<size_t>(olaTailFrames_ * ch), grainB_.data());
+      readyRead_ = 0;
+      readyFrames_ = static_cast<size_t>(olaTailFrames_);
       olaTailFrames_ = 0;
+      referenceReady_ = false;
+      popInput(inputCount_);
+      sourceCursor_ = 0.0;
+      continue;
     }
-    filled += static_cast<size_t>(writeFrames);
+    const int offset = findBestOffset(natural, searchRadius_, hopOut);
+    const size_t grainStart = static_cast<size_t>(static_cast<int>(natural) + offset);
+    synthesizeGrain(grainA_.data(), grainLen, grainStart);
+    for (int i = 0; i < hopOut; ++i) {
+      const size_t referenceFrame = grainStart + static_cast<size_t>(hopOut + i);
+      const float* reference = referenceFrame < inputCount_ ? inputFrame(referenceFrame) : nullptr;
+      for (int c = 0; c < ch; ++c) {
+        const size_t slot = static_cast<size_t>(i * ch + c);
+        grainB_[slot] = grainA_[slot] + (olaTailFrames_ > 0 ? olaTail_[slot] : 0.0f);
+        olaTail_[slot] = grainA_[slot + static_cast<size_t>(hopOut * ch)];
+        overlapReference_[slot] = reference ? reference[c] : 0.0f;
+      }
+    }
+    olaTailFrames_ = hopOut;
+    referenceReady_ = true;
+    readyRead_ = 0;
+    readyFrames_ = static_cast<size_t>(hopOut);
     advanceRead(hopIn);
   }
   return filled;

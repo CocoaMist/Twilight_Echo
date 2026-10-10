@@ -168,24 +168,28 @@ onBeforeUnmount(() => {
   <div class="section-block">
     <h3>社交与远程控制</h3>
     <div class="setting-list">
-      <div class="setting-item">
+      <div data-setting-id="discord" id="setting-discord" class="setting-item">
         <div class="setting-copy">
-          <strong>Discord 听歌状态 <i class="pi pi-discord discord-icon"></i></strong>
+          <strong>Discord Rich Presence <i class="pi pi-discord discord-icon"></i></strong>
           <span>在 Discord 状态中向好友展示您正在播放的音乐。</span>
           <span class="setting-substatus" aria-live="polite">{{ discordStatusText }}</span>
         </div>
         <button
           type="button"
+          aria-label="Discord Rich Presence"
           class="toggle-switch"
           :class="{ active: props.discordEnabled, inactive: !props.discordEnabled }"
           role="switch"
           :aria-checked="props.discordEnabled"
           @click="toggleDiscord"
-          aria-label="Discord 听歌状态"
         ></button>
       </div>
       <hr />
-      <div class="setting-item top-align">
+      <div
+        data-setting-id="remote-control"
+        id="setting-remote-control"
+        class="setting-item top-align"
+      >
         <div class="setting-copy">
           <strong>局域网远程控制</strong>
           <span>
@@ -194,6 +198,7 @@ onBeforeUnmount(() => {
         </div>
         <button
           type="button"
+          aria-label="局域网远程控制"
           class="toggle-switch"
           :class="{
             active: props.remoteEnabled,
@@ -203,10 +208,14 @@ onBeforeUnmount(() => {
           :aria-checked="props.remoteEnabled"
           :aria-busy="remoteBusy"
           @click="toggleRemote"
-          aria-label="局域网远程控制"
         ></button>
       </div>
-      <div v-if="props.remoteEnabled" class="setting-item top-align remote-control-panel">
+      <div
+        data-setting-id="remote-pairing"
+        id="setting-remote-pairing"
+        v-if="props.remoteEnabled"
+        class="setting-item top-align remote-control-panel"
+      >
         <div class="setting-copy">
           <strong>配对 PIN / 访问地址</strong>
           <span>

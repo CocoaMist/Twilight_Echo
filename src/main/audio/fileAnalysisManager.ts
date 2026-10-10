@@ -11,6 +11,7 @@ interface FileAnalysisRequest {
   trackId: string
   filePath: string
 }
+const MAX_FAILURE_RECORDS = 1024
 interface AnalysisCache<Identity, Analysis> {
   get: (identity: Identity) => Promise<Analysis | null>
   set: (identity: Identity, analysis: Analysis) => Promise<void>
@@ -71,6 +72,7 @@ export class FileAnalysisManager<
   private failures = new Map<string, { failedAt: number; reason: string }>()
   private activeGenerations = new Map<string, number>()
   private nextGeneration = 0
+  private requestsSinceFailureSweep = 0
 
   constructor(options: FileAnalysisManagerOptions<Request, Analysis, Identity, Unavailable>) {
     this.cache = options.cache
@@ -90,10 +92,18 @@ export class FileAnalysisManager<
     const existing = this.inFlight.get(request.filePath)
     if (existing) return existing
 
+    if (++this.requestsSinceFailureSweep >= 64) {
+      this.requestsSinceFailureSweep = 0
+      const now = this.now()
+      for (const [path, failure] of this.failures) {
+        if (now - failure.failedAt >= this.failureCooldownMs) this.failures.delete(path)
+      }
+    }
     const failure = this.failures.get(request.filePath)
     if (failure && this.now() - failure.failedAt < this.failureCooldownMs) {
       return Promise.resolve({ status: 'skipped', reason: failure.reason })
     }
+    if (failure) this.failures.delete(request.filePath)
 
     const generation = ++this.nextGeneration
     this.activeGenerations.set(request.filePath, generation)
@@ -144,7 +154,10 @@ export class FileAnalysisManager<
     if (!this.isCurrent(request.filePath, generation)) {
       return { status: 'skipped', reason: 'cancelled' }
     }
-    if (cached) return { status: 'cached', analysis: cached }
+    if (cached) {
+      this.failures.delete(request.filePath)
+      return { status: 'cached', analysis: cached }
+    }
 
     try {
       if (!this.isCurrent(request.filePath, generation)) {
@@ -155,7 +168,7 @@ export class FileAnalysisManager<
         return { status: 'skipped', reason: 'cancelled' }
       }
       if (!analysis) {
-        this.failures.set(request.filePath, { failedAt: this.now(), reason: 'no-analysis' })
+        this.rememberFailure(request.filePath, 'no-analysis')
         return { status: 'failed', reason: 'no-analysis' }
       }
       const rejected = this.rejectAnalysis?.(analysis)
@@ -166,19 +179,29 @@ export class FileAnalysisManager<
         return await this.finishCancelledCacheWrite(identity, analysis)
       }
       this.onComplete?.({ trackId: request.trackId, filePath: request.filePath, analysis })
+      this.failures.delete(request.filePath)
       return { status: 'completed', analysis }
     } catch (error) {
       if (!this.isCurrent(request.filePath, generation)) {
         return await this.finishCancelledCacheWrite(identity, cacheCandidate ?? undefined)
       }
       const reason = error instanceof Error ? error.message : String(error)
-      this.failures.set(request.filePath, { failedAt: this.now(), reason })
+      this.rememberFailure(request.filePath, reason)
       return { status: 'failed', reason }
     }
   }
 
   private isCurrent(filePath: string, generation: number): boolean {
     return this.activeGenerations.get(filePath) === generation
+  }
+
+  private rememberFailure(filePath: string, reason: string): void {
+    this.failures.delete(filePath)
+    if (this.failures.size >= MAX_FAILURE_RECORDS) {
+      const oldest = this.failures.keys().next().value
+      if (oldest !== undefined) this.failures.delete(oldest)
+    }
+    this.failures.set(filePath, { failedAt: this.now(), reason })
   }
 
   private async finishCancelledCacheWrite(

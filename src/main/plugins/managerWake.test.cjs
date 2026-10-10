@@ -70,19 +70,23 @@ test(
       fs.writeFileSync(
         path.join(pluginRoot, 'index.mjs'),
         `
-      import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+      import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
       import { join } from 'node:path'
       let timer
       export function activate(context) {
         const file = join(context.storagePath, 'probe.json')
         const previous = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
         const state = { activations: (previous.activations || 0) + 1, ticks: 0 }
-        writeFileSync(file, JSON.stringify(state))
+        const persist = () => {
+          writeFileSync(file + '.tmp', JSON.stringify(state))
+          renameSync(file + '.tmp', file)
+        }
+        persist()
         if (${JSON.stringify(id)} === 'com.example.retry-task' && state.activations === 1)
           throw new Error('one-time startup failure')
         timer = setInterval(() => {
           state.ticks++
-          writeFileSync(file, JSON.stringify(state))
+          persist()
         }, 30)
       }
       export function deactivate() { clearInterval(timer) }
@@ -165,18 +169,30 @@ test(
   }
 )
 
-async function fixture(t, { appVersion = '1.2.4', engineRange = '*' } = {}) {
+async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId = 'demo' } = {}) {
   const directory = fs.mkdtempSync(path.join(tmpdir(), 'twilight-plugin-wake-'))
   fs.writeFileSync(path.join(directory, 'index.mjs'), 'export function activate() {}\n')
   const importSource = (name) => import(pathToFileURL(path.join(__dirname, name)).href)
-  const [manifest, routing, queue, rpc, idle, persistence, dependenciesApi] = await Promise.all([
+  const [
+    manifest,
+    routing,
+    queue,
+    rpc,
+    idle,
+    persistence,
+    dependenciesApi,
+    media,
+    playbackSources
+  ] = await Promise.all([
     importSource('manifest.ts'),
     importSource('providerRouting.ts'),
     importSource('operationQueue.ts'),
     importSource('rpcCoordinator.ts'),
     importSource('hostIdle.ts'),
     importSource('statePersistence.ts'),
-    importSource('dependencies.ts')
+    importSource('dependencies.ts'),
+    importSource('../security/remoteMediaGrants.ts'),
+    importSource('../security/providerPlaybackSources.ts')
   ])
   const children = []
   let notify
@@ -235,7 +251,8 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*' } = {}) {
       QishuiAuthBridge: class {}
     },
     './packageSecurity.ts': { resolvePluginFile: (file) => file },
-    '../security/remoteMediaGrants.ts': { protectProviderMedia: (value) => value }
+    '../security/remoteMediaGrants.ts': media,
+    '../security/providerPlaybackSources.ts': playbackSources
   }
   const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, 'manager.ts'), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
@@ -249,6 +266,7 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*' } = {}) {
       return require(id)
     },
     Buffer,
+    structuredClone,
     process,
     setTimeout,
     clearTimeout,
@@ -291,10 +309,10 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*' } = {}) {
   }
   manager.findDescriptor = async () => descriptor
   const provider = {
-    id: 'demo',
+    id: providerId,
     name: 'Demo',
-    capabilities: ['search'],
-    supportedMethods: ['searchSongs']
+    capabilities: ['search', 'playbackUrl'],
+    supportedMethods: ['searchSongs', 'getPlaybackUrl']
   }
   const info = fs.statSync(path.join(directory, 'index.mjs'))
   manager.contributionsCache[descriptor.id] = {
@@ -375,6 +393,31 @@ test('late host errors cannot turn an explicit disable into a recovery request',
   await f.manager.loadState()
   assert.equal(f.manager.state[f.descriptor.id].enabled, false)
   assert.equal(f.manager.state[f.descriptor.id].lastError, undefined)
+})
+
+test('failed descriptors preserve the switch intent and can disable next-start recovery', async (t) => {
+  const f = await fixture(t)
+  f.manager.markFailed(f.descriptor.id, 'persistent activation failure', f.descriptor)
+  f.manager.readManifest = async () => f.descriptor
+  const visible = await f.manager.readDescriptor(f.directory, 'directory', {
+    paths: f.descriptor.paths
+  })
+  assert.equal(visible.status, 'failed')
+  assert.equal(visible.enabled, false)
+  assert.equal(visible.requestedEnabled, true)
+  f.manager.syncNativeDspChain = async () => {}
+  await f.manager.disable(visible.id)
+  await f.manager.loadState()
+  const disabled = await f.manager.readDescriptor(f.directory, 'directory', {
+    paths: f.descriptor.paths
+  })
+  assert.equal(disabled.requestedEnabled, false)
+  assert.equal(disabled.status, 'disabled')
+  const starts = []
+  f.manager.list = async () => [disabled]
+  f.manager.startPlugin = async (descriptor) => starts.push(descriptor.id)
+  await f.manager.scanAndStartEnabled()
+  assert.deepEqual(starts, [])
 })
 
 test('background tools, UI and hybrid hosts run at boot and remain resident while idle', async (t) => {
@@ -569,4 +612,98 @@ test('failed activation rejects concurrent callers and removes cached routes', a
     f.manager.listProviders().map((provider) => provider.id),
     []
   )
+})
+
+test('local playback proxies survive the five-minute idle boundary without player subscriptions', async (t) => {
+  for (const url of [
+    'http://127.0.0.1:32100/stream/current',
+    'http://127.0.0.2:32100/stream/current',
+    'http://localhost:32100/stream/current',
+    'http://[::1]:32100/stream/current',
+    'https://LOCALHOST.:32100/stream/current'
+  ]) {
+    await t.test(url, async (t) => {
+      t.mock.timers.enable({ apis: ['setTimeout'] })
+      const f = await fixture(t, { providerId: 'bili' })
+      const playback = f.manager.callProvider('bili', 'getPlaybackUrl', [url])
+      await f.activationStarted
+      f.register()
+      f.activate()
+      assert.match(await playback, /^twilight-media:\/\/audio\//)
+      assert.equal(f.manager.rpcCalls.getPendingCount(f.descriptor.id), 0)
+
+      t.mock.timers.tick(299999)
+      await new Promise(setImmediate)
+      assert.equal(f.manager.running.has(f.descriptor.id), true)
+      t.mock.timers.tick(1)
+      await new Promise(setImmediate)
+      assert.equal(
+        f.manager.running.has(f.descriptor.id),
+        true,
+        'the stream host must survive 5:00'
+      )
+      assert.equal(f.manager.isHibernated(f.descriptor.id), false)
+
+      // A paused track or a prepared queue URL has no RPCs or subscribed events
+      // either, but still needs the same proxy when it resumes or starts.
+      t.mock.timers.tick(6 * 300000)
+      await new Promise(setImmediate)
+      await f.manager.hibernatePlugin(f.descriptor.id)
+      assert.equal(f.manager.running.has(f.descriptor.id), true)
+      assert.equal(
+        f.children[0].messages.some((message) => message.kind === 'deactivate'),
+        false
+      )
+
+      // Explicit stop/disable must still shut down a resident media proxy.
+      await f.manager.stopPlugin(f.descriptor.id)
+      assert.equal(f.manager.running.has(f.descriptor.id), false)
+      assert.equal(
+        f.children[0].messages.some((message) => message.kind === 'deactivate'),
+        true
+      )
+
+      const restarting = f.manager.startPlugin(f.descriptor)
+      await new Promise(setImmediate)
+      f.children[1].emit('message', { kind: 'activated', pluginId: f.descriptor.id })
+      await restarting
+      assert.equal(
+        f.manager.canHibernatePlugin(f.descriptor.id),
+        true,
+        'residency belongs to one host instance'
+      )
+    })
+  }
+})
+
+test('CDN playback URLs and non-playback loopback results still allow idle hibernation', async (t) => {
+  for (const [method, value] of [
+    ['getPlaybackUrl', 'https://audio.example.com/song.m4a'],
+    ['getPlaybackUrl', 'https://localhost.example.com/song.m4a'],
+    ['getPlaybackUrl', 'D:\\Music\\cached.flac'],
+    ['getPlaybackUrl', null],
+    ['searchSongs', 'http://127.0.0.1:32100/image/cover']
+  ]) {
+    await t.test(`${method}: ${value}`, async (t) => {
+      t.mock.timers.enable({ apis: ['setTimeout'] })
+      const f = await fixture(t)
+      const call = f.manager.callProvider('demo', method, [value])
+      await f.activationStarted
+      f.register()
+      f.activate()
+      await call
+
+      t.mock.timers.tick(299999)
+      await new Promise(setImmediate)
+      assert.equal(f.manager.running.has(f.descriptor.id), true)
+      t.mock.timers.tick(1)
+      await new Promise(setImmediate)
+      assert.equal(f.manager.running.has(f.descriptor.id), false)
+      assert.equal(f.manager.isHibernated(f.descriptor.id), true)
+      assert.equal(
+        f.children[0].messages.some((message) => message.kind === 'deactivate'),
+        true
+      )
+    })
+  }
 })

@@ -8,13 +8,16 @@ import {
 export function usePlaylistLibraryView(
   source: () => MediaProviderPlaylistSummary[],
   scope: () => string,
-  pinnedIds: () => ReadonlySet<string> = () => new Set()
+  pinnedIds: () => ReadonlySet<string> = () => new Set(),
+  prioritizePinned: () => boolean = () => true
 ) {
   const order = shallowRef<string[]>([])
   const category = ref<'all' | 'owned' | 'saved'>('all')
   const limit = ref(48)
   const storageError = ref('')
-  const ordered = computed(() => orderPlaylistEntries(source(), order.value, pinnedIds()))
+  const ordered = computed(() =>
+    orderPlaylistEntries(source(), order.value, pinnedIds(), prioritizePinned())
+  )
   const filtered = computed(() =>
     ordered.value.filter(
       (entry) =>

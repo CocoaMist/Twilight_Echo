@@ -13,6 +13,14 @@ import {
   defineAsyncComponent
 } from 'vue'
 import TitleBar from './components/TitleBar.vue'
+import AppBackgroundLayer from './components/AppBackgroundLayer.vue'
+import {
+  appearanceEditorOpen,
+  appearanceFullWindowPreview
+} from './composables/appearanceEditorState.ts'
+const BackgroundAppearanceCustomizer = defineAsyncComponent(
+  () => import('./components/BackgroundAppearanceCustomizer.vue')
+)
 const SideMenu = defineAsyncComponent(() => import('@renderer/components/SideMenu.vue'))
 import {
   buildNavigationPages,
@@ -73,6 +81,7 @@ import { getStartupSnapshot } from './app/startupSnapshot'
 import { useExtensionRegistry } from './extensions/registry'
 import { syncPluginProviders, useMediaProviders } from './providers'
 import { useAppNavigation } from './app/useAppNavigation'
+import { createNavigationSessionPersistence } from './app/useNavigationSessionPersistence'
 import { useCommandPalette } from '@renderer/app/useCommandPalette.ts'
 import { useBackStack } from './app/useBackStack'
 import { hasDismissLayer } from '@renderer/app/useDismissLayer'
@@ -105,6 +114,7 @@ type TitleSurface = 'default' | 'settings' | 'streaming'
 let idleLoginCheck: IdleTaskHandle | null = null
 
 const navigation = useAppNavigation()
+const navigationPersistence = createNavigationSessionPersistence(navigation)
 const {
   menuOpen,
   showPlayingPage,
@@ -216,9 +226,13 @@ watch(
   { immediate: true }
 )
 const recentPageMounted = ref(false)
-watch(showRecentPage, (visible) => {
-  if (visible) recentPageMounted.value = true
-})
+watch(
+  showRecentPage,
+  (visible) => {
+    if (visible) recentPageMounted.value = true
+  },
+  { immediate: true }
+)
 const showOnboarding = ref(false)
 
 function applyExternalNavigation(target: 'local' | 'streaming' | 'settings'): void {
@@ -293,7 +307,7 @@ function handleStreamingLogin(providerId?: string | null): void {
 }
 
 function handleTitleLogin(providerId?: string | null): void {
-  openLoginPage(providerId ?? 'ncm')
+  openLoginPage(providerId ?? null)
 }
 
 function handleReopenOnboarding(): void {
@@ -343,7 +357,7 @@ function handleLoginSuccess(): void {
 
 function handleLoginConfigure(): void {
   closeLoginPage()
-  openSettingsPage()
+  openSettingsPage('connections')
 }
 
 const musicStore = useMusicStore()
@@ -392,7 +406,7 @@ const {
   visualizerActive
 } = usePlayerStore()
 useDesktopLyricsPublisher()
-const { setAdaptiveMedia } = useThemeStore()
+const { setAdaptiveMedia, effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
 const mediaProviders = useMediaProviders()
 const navigationProviders = useProviderStore()
 const commandPalette = useCommandPalette(navigation, () => navigationPages.value)
@@ -537,7 +551,7 @@ const hasPlayerBar = computed(
   () =>
     !showOnboarding.value &&
     !showLoginPage.value &&
-    !showSettingsPage.value &&
+    (!showSettingsPage.value || appearanceFullWindowPreview.value) &&
     !showThemeStudioPage.value &&
     !showEqualizerPage.value &&
     !showDspRackPage.value &&
@@ -559,7 +573,7 @@ const showLocalSidebar = computed(
   () =>
     !showPlayingPage.value &&
     !showLoginPage.value &&
-    !showSettingsPage.value &&
+    (!showSettingsPage.value || appearanceFullWindowPreview.value) &&
     !showThemeStudioPage.value &&
     !showEqualizerPage.value &&
     !showDspRackPage.value &&
@@ -618,6 +632,7 @@ const playbackSessionPersistence = createPlaybackSessionPersistence({
   }
 })
 const {
+  playerBottomClearance,
   sideMenuBottomOffset,
   sideMenuToolsClearance,
   sideMenuInlineEnd,
@@ -630,6 +645,13 @@ const {
   hasPlayerBar,
   menuOpen
 })
+
+watch(
+  playerBottomClearance,
+  (clearance) =>
+    document.documentElement.style.setProperty('--te-playbar-bottom-clearance', clearance + 'px'),
+  { immediate: true }
+)
 
 let removePlaybackSessionSaveListener: (() => void) | null = null
 let removeAppNavigationListener: (() => void) | null = null
@@ -670,6 +692,7 @@ async function flushPlaylistsForExit(): Promise<void> {
 }
 
 function flushPendingPersistenceForExit(): void {
+  navigationPersistence.flush()
   flushSaveLibrary()
   // Browser lifecycle events cannot wait for a Promise. The app-close IPC
   // callback below awaits this same flush before the main process closes.
@@ -680,7 +703,8 @@ function flushPendingPersistenceForExit(): void {
 }
 
 onMounted(async () => {
-  const { setupListeningStatsTracking } = await import('@renderer/stores/useListeningStatsStore')
+  const { setupListeningStatsTracking, flushListeningStatsForExit } =
+    await import('@renderer/stores/useListeningStatsStore')
   setupListeningStatsTracking({ currentTrack, isPlaying, currentTime, duration })
   const startupSnapshot = await getStartupSnapshot()
   await bootstrapThemeRuntime(startupSnapshot ?? undefined)
@@ -703,13 +727,14 @@ onMounted(async () => {
     loadedSettings.libraryFolders.length === 0
   if (needsOnboarding) {
     showOnboarding.value = true
-  } else if (!pendingNavigation) {
+  } else if (!pendingNavigation && !navigationPersistence.restored) {
     if (loadedSettings.startupHomePage === 'streaming') {
       // Enter streaming mode immediately if configured — must not block on
       // library/login/extensions which can take 30s+ (provider timeouts).
       enterStreamingMode()
     }
   }
+  navigationPersistence.start()
 
   // Restore the session before loading the potentially large music library.
   // The main-process data handlers use synchronous file reads, so issuing the
@@ -721,10 +746,12 @@ onMounted(async () => {
     })
     .finally(() => {
       removePlaybackSessionSaveListener = window.api.app.onSavePlaybackSession(async () => {
+        navigationPersistence.flush()
         // This callback is awaited by the main-process close coordinator. It
         // closes the 250ms playlist debounce window before renderer teardown.
         await flushPlaylistsForExit()
         await flushSoftwareVolumePersist()
+        await flushListeningStatsForExit()
         await playbackSessionPersistence.savePlaybackSessionForQuit()
         await queueWorkspace.flush()
       })
@@ -737,7 +764,12 @@ onMounted(async () => {
   const playlistsPromise = loadPlaylists().catch((error) =>
     reportStartupDataError('playlists', error)
   )
-  const extensionsPromise = syncExtensions()
+  const extensionsPromise = syncExtensions().then(() => {
+    navigationPersistence.resolvePluginPages([
+      ...availablePluginPages.value,
+      ...localSidebarItems.value
+    ])
+  })
   if (loadedSettings.autoCheckLogin) {
     idleLoginCheck = scheduleIdleTask(() => {
       idleLoginCheck = null
@@ -772,7 +804,7 @@ onMounted(async () => {
       message: `启动音乐库核对失败：${error instanceof Error ? error.message : String(error)}`,
       action: {
         label: '打开音乐库设置',
-        run: () => openSettingsPage('general')
+        run: () => openSettingsPage('library', { anchor: 'scan-diagnostics' })
       }
     })
   })
@@ -791,7 +823,7 @@ onMounted(async () => {
       message: `检测到 ${dirtyCount} 首缺少封面，可在设置中完整重扫以补全封面。`,
       action: {
         label: '打开音乐库设置',
-        run: () => openSettingsPage('general')
+        run: () => openSettingsPage('library', { anchor: 'scan-diagnostics' })
       }
     })
   })
@@ -807,11 +839,7 @@ onMounted(async () => {
 watch(
   [showLocalSidebar, hasPlayerBar, menuOpen],
   () => {
-    if (
-      showLocalSidebar.value &&
-      hasPlayerBar.value &&
-      (menuOpen.value || sideMenuBottomOffset.value > 0)
-    ) {
+    if (hasPlayerBar.value) {
       nextTick(startSideMenuMonitor)
       return
     }
@@ -822,33 +850,12 @@ watch(
 )
 
 watch(
-  showSettingsPage,
-  (visible) => {
+  [showSettingsPage, showPluginPage, showThemeStudioPage, appearanceFullWindowPreview],
+  () => {
     document.body.classList.toggle(
       'te-settings-surface',
-      visible || showPluginPage.value || showThemeStudioPage.value
-    )
-  },
-  { immediate: true }
-)
-
-watch(
-  showPluginPage,
-  (visible) => {
-    document.body.classList.toggle(
-      'te-settings-surface',
-      visible || showSettingsPage.value || showThemeStudioPage.value
-    )
-  },
-  { immediate: true }
-)
-
-watch(
-  showThemeStudioPage,
-  (visible) => {
-    document.body.classList.toggle(
-      'te-settings-surface',
-      visible || showSettingsPage.value || showPluginPage.value
+      !appearanceFullWindowPreview.value &&
+        (showSettingsPage.value || showPluginPage.value || showThemeStudioPage.value)
     )
   },
   { immediate: true }
@@ -874,6 +881,7 @@ watch([availablePluginPages, localSidebarItems], ([pages, local]) =>
 )
 
 onBeforeUnmount(() => {
+  navigationPersistence.stop()
   idleLoginCheck?.cancel()
   idleLoginCheck = null
   playbackSessionPersistence.stop()
@@ -904,7 +912,7 @@ onBeforeUnmount(() => {
 const coverTransformOrigin = computed(() => `${coverOrigin.value.x}px ${coverOrigin.value.y}px`)
 const titleSurface = computed<TitleSurface>(() => {
   if (showPlayingPage.value) return 'default'
-  if (showSettingsPage.value) return 'settings'
+  if (showSettingsPage.value && !appearanceFullWindowPreview.value) return 'settings'
   if (showThemeStudioPage.value) return 'settings'
   if (showPluginPage.value) return 'settings'
   if (showStreamingPage.value) return 'streaming'
@@ -914,15 +922,18 @@ const titleSurface = computed<TitleSurface>(() => {
 })
 const liquidGlassChromeActive = computed(
   () =>
-    settings.value.surfaceMaterial === 'liquidGlass' || settings.value.liquidGlass.navigationEnabled
+    effectiveSurfaceMaterial.value !== 'transparent' &&
+    (effectiveSurfaceMaterial.value === 'liquidGlass' ||
+      effectiveLiquidGlass.value.navigationEnabled)
 )
 const liquidGlassActive = computed(
   () =>
-    liquidGlassChromeActive.value ||
-    settings.value.liquidGlass.homeCards.enabled ||
-    settings.value.liquidGlass.playbarEnabled ||
-    settings.value.liquidGlass.settingsNavigationEnabled ||
-    settings.value.liquidGlass.coverage === 'expanded'
+    effectiveSurfaceMaterial.value !== 'transparent' &&
+    (liquidGlassChromeActive.value ||
+      effectiveLiquidGlass.value.homeCards.enabled ||
+      effectiveLiquidGlass.value.playbarEnabled ||
+      effectiveLiquidGlass.value.settingsNavigationEnabled ||
+      effectiveLiquidGlass.value.coverage === 'expanded')
 )
 const liquidGlassBackgroundPage = computed<AppBackgroundPage>(() => {
   if (showPlayingPage.value) return 'player'
@@ -943,8 +954,10 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
 </script>
 
 <template>
+  <AppBackgroundLayer :page="showStreamingSurface ? 'streaming' : 'local'" />
   <div
     class="app-shell"
+    :inert="appearanceFullWindowPreview"
     :style="{
       '--te-side-menu-bottom': `${sideMenuBottomOffset}px`,
       '--te-side-menu-tools-clearance': `${sideMenuToolsClearance}px`
@@ -952,9 +965,13 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
   >
     <LiquidGlassDefs
       :active="liquidGlassActive"
-      :follow-pointer="settings.liquidGlass.followPointer"
-      :home-cards-active="settings.liquidGlass.homeCards.enabled"
-      :expanded-active="settings.liquidGlass.coverage === 'expanded'"
+      :follow-pointer="effectiveLiquidGlass.followPointer"
+      :home-cards-active="
+        effectiveSurfaceMaterial !== 'transparent' && effectiveLiquidGlass.homeCards.enabled
+      "
+      :expanded-active="
+        effectiveSurfaceMaterial !== 'transparent' && effectiveLiquidGlass.coverage === 'expanded'
+      "
     />
     <div class="app-shell-title">
       <TitleBar
@@ -1008,7 +1025,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             v-if="localViewVisible && activeCategory === 'dashboard'"
             key="local-dashboard"
             @select-view="onSelectView"
-            @open-library-settings="openSettingsPage('general')"
+            @open-library-settings="openSettingsPage('library')"
             @open-streaming="enterStreamingMode($event)"
             @open-plugins="navigation.openPluginPage()"
             @open-radio="navigation.enterRadioPodcastMode()"
@@ -1055,7 +1072,6 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         <StreamingPage
           v-for="tab in streamingPageTabs"
           :key="tab"
-          v-show="showStreamingSurface && streamingTab === tab"
           :active="showStreamingSurface && streamingTab === tab"
           :menu-open="menuOpen && showLocalSidebar"
           :has-player="hasPlayerBar"
@@ -1094,6 +1110,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
           <ThemeStudioPage
             v-if="showThemeStudioPage"
             :initial-domain="themeStudioInitialDomain"
+            @domain-change="navigation.rememberThemeStudioDomain"
             @back="closeThemeStudioPage"
           />
         </Transition>
@@ -1148,13 +1165,16 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
   </div>
   <div
     class="settings-overlay-root"
+    v-show="!appearanceFullWindowPreview"
     :class="{ 'settings-overlay-root--active': showSettingsPage || showPluginPage }"
   >
+    <AppBackgroundLayer page="settings" embedded />
     <Transition name="settings-page">
       <SettingsPage
         v-if="showSettingsPage"
         :initial-section="settingsInitialSection"
         :navigation-target="settingsNavigationTarget"
+        @section-change="navigation.rememberSettingsSection"
         @open-equalizer="openEqualizerPage"
         @open-dsp-rack="openDspRackPage"
         @open-theme-studio="openThemeStudioPage"
@@ -1202,7 +1222,11 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
       @close="queueSessions.open.value = false"
     />
   </NativeDialogTransition>
-  <AppNoticeHost ref="noticeHostRef" />
+  <AppNoticeHost
+    ref="noticeHostRef"
+    @library="selectSidebarPage({ kind: 'local', category: 'allSongs', filter: null })"
+  />
+  <BackgroundAppearanceCustomizer v-if="appearanceEditorOpen" />
 </template>
 
 <style>
@@ -1471,7 +1495,7 @@ body.te-no-blur .login-page-leave-to {
 .page-down-leave-active,
 .page-up-enter-active,
 .page-up-leave-active {
-  will-change: transform, opacity, filter;
+  will-change: transform, opacity;
 }
 .main-content > .page-down-enter-active,
 .main-content > .page-up-enter-active,
@@ -1479,9 +1503,8 @@ body.te-no-blur .login-page-leave-to {
 .page-up-enter-active {
   z-index: 1;
   transition:
-    opacity 0.34s ease,
-    transform 0.48s cubic-bezier(0.16, 1, 0.3, 1),
-    filter 0.42s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    opacity 0.18s ease,
+    transform 0.24s var(--te-ease-out-strong) !important;
 }
 .main-content > .page-down-leave-active,
 .main-content > .page-up-leave-active,
@@ -1490,37 +1513,32 @@ body.te-no-blur .login-page-leave-to {
   z-index: 0;
   pointer-events: none;
   transition:
-    opacity 0.22s ease,
-    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    filter 0.28s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    opacity 0.14s ease,
+    transform 0.18s var(--te-ease-enter) !important;
 }
 
 /* page-down: selected page is lower in the sidebar, new view rises from below */
 .main-content > .page-down-enter-from,
 .page-down-enter-from {
   opacity: 0;
-  transform: translate3d(0, 40px, 0) scale(0.99);
-  filter: blur(8px);
+  transform: translate3d(0, 16px, 0);
 }
 .main-content > .page-down-leave-to,
 .page-down-leave-to {
   opacity: 0;
-  transform: translate3d(0, -28px, 0) scale(0.992);
-  filter: blur(8px);
+  transform: translate3d(0, -12px, 0);
 }
 
 /* page-up: selected page is higher in the sidebar, new view drops from above */
 .main-content > .page-up-enter-from,
 .page-up-enter-from {
   opacity: 0;
-  transform: translate3d(0, -40px, 0) scale(0.99);
-  filter: blur(8px);
+  transform: translate3d(0, -16px, 0);
 }
 .main-content > .page-up-leave-to,
 .page-up-leave-to {
   opacity: 0;
-  transform: translate3d(0, 28px, 0) scale(0.992);
-  filter: blur(8px);
+  transform: translate3d(0, 12px, 0);
 }
 
 /* Explicit application preferences take precedence over the system setting.
@@ -1622,29 +1640,23 @@ html[data-te-motion='off']
 /* Settings and plugin pages: shared overlay transition */
 .settings-page-enter-active {
   z-index: 2000;
-  transition:
-    opacity var(--te-motion-panel) ease,
-    transform var(--te-motion-page) var(--te-ease-out-expo);
-  will-change: opacity, transform;
+  transition: opacity var(--te-motion-panel) ease;
+  will-change: opacity;
 }
 
 .settings-page-leave-active {
   z-index: 1999;
   pointer-events: none;
-  transition:
-    opacity var(--te-motion-hover) ease,
-    transform var(--te-motion-panel) var(--te-ease-enter);
-  will-change: opacity, transform;
+  transition: opacity var(--te-motion-hover) ease;
+  will-change: opacity;
 }
 
 .settings-page-enter-from {
   opacity: 0;
-  transform: translate3d(28px, 0, 0) scale(0.988);
 }
 
 .settings-page-leave-to {
   opacity: 0;
-  transform: translate3d(18px, 0, 0) scale(0.992);
 }
 
 /* Onboarding wizard: fade in on first paint, dissolve away over the app */

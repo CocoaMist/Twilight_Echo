@@ -8,6 +8,14 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const server = await createServer({
   configFile: false,
   root,
+  resolve: {
+    alias: [
+      {
+        find: /^.*\/stores\/use(?:Music|Player)Store(?:\.ts)?$/,
+        replacement: fileURLToPath(new URL('./notice-preview/fixtures.mjs', import.meta.url))
+      }
+    ]
+  },
   plugins: [
     vue(),
     {
@@ -22,7 +30,9 @@ const server = await createServer({
           <body><div id="app"></div><script type="module">
           import { createApp } from 'vue';
           import Preview from '/scripts/notice-preview/NoticePreview.vue';
+          import { installPreviewApi } from '/scripts/notice-preview/fixtures.mjs';
           import '/node_modules/primeicons/primeicons.css';
+          installPreviewApi();
           createApp(Preview).mount('#app');
           </script></body></html>`
           )

@@ -65,8 +65,11 @@ test('expanded coverage is opt-in and excludes dense rows and nested surfaces', 
     LIQUID_GLASS_EXPANDED_SURFACE_SELECTOR,
     '.artist-card,.album-card,.playlist-card,.glass-card,.signal-card,.chart-card,.profile-card,.recent-card,.ranking-card'
   )
-  assert.match(app, /settings\.value\.liquidGlass\.coverage === 'expanded'/)
-  assert.match(app, /:expanded-active="settings\.liquidGlass\.coverage === 'expanded'"/)
+  assert.match(app, /effectiveLiquidGlass\.value\.coverage === 'expanded'/)
+  assert.match(
+    app,
+    /:expanded-active="\s*effectiveSurfaceMaterial !== 'transparent' && effectiveLiquidGlass\.coverage === 'expanded'\s*"/
+  )
   assert.match(baseStyle, /data-te-liquid-glass-coverage='expanded'/)
   assert.doesNotMatch(
     baseStyle,
@@ -281,6 +284,9 @@ test('playbar pointer tracking remains element-local', () => {
   assert.match(playerBar, /@pointermove="onGlassPointerMove"/)
   assert.match(playerBar, /playerBarRef\.value/)
   assert.doesNotMatch(playerBar, /document\.elementFromPoint/)
+  assert.match(playerBar, /effectiveSurfaceMaterial\.value !== 'transparent'/)
+  assert.match(playerBar, /effectiveLiquidGlass\.value\.followPointer/)
+  assert.doesNotMatch(playerBar, /settings\.value\.(surfaceMaterial|liquidGlass)/)
 })
 
 test('Linux playbar accessibility preferences override the backdrop fallback', async () => {

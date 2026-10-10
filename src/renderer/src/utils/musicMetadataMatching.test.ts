@@ -101,6 +101,68 @@ test('findBestMetadataMatch normalizes spacing around artist separators', () => 
   assert.equal(match?.confidence, 'high')
 })
 
+test('metadata matching recognizes the same artist credits across separators and order', () => {
+  const candidate = {
+    ...localTrack,
+    id: 'ncm:collaboration',
+    source: 'ncm',
+    title: '千里之外',
+    artist: '周杰伦 / 费玉清'
+  }
+  for (const artist of ['周杰伦;费玉清', '费玉清、周杰伦', '周杰伦 & 费玉清']) {
+    const match = findBestMetadataMatch({ ...localTrack, title: '千里之外', artist }, [candidate])
+    assert.equal(match?.track.id, candidate.id, artist)
+    assert.equal(match?.confidence, 'high')
+  }
+})
+
+test('metadata matching accepts a missing guest credit only with close known duration', () => {
+  const candidate = { ...localTrack, id: 'ncm:guest', source: 'ncm', artist: 'Audrey / Guest' }
+  const match = findBestMetadataMatch(localTrack, [candidate])
+  assert.equal(match?.track.id, candidate.id)
+  assert.equal(match?.confidence, 'medium')
+  for (const duration of [0, Number.NaN, localTrack.duration + 12]) {
+    assert.equal(findBestMetadataMatch(localTrack, [{ ...candidate, duration }]), null)
+  }
+  assert.equal(
+    findBestMetadataMatch({ ...localTrack, artist: 'Audrey / Other' }, [candidate]),
+    null,
+    'a shared artist alone must not match different collaborations'
+  )
+})
+
+test('metadata matching treats scanner placeholders as missing metadata and fills them', () => {
+  const candidate = { ...localTrack, id: 'ncm:123', source: 'ncm', album: 'Online Album' }
+  for (const artist of ['Unknown Artist', '未知艺术家', '未知歌手']) {
+    const track = { ...localTrack, artist, album: 'Unknown Album' }
+    const match = findBestMetadataMatch(track, [candidate])
+    assert.equal(match?.track.id, candidate.id)
+    assert.equal(match?.confidence, 'medium')
+    assert.equal(buildMetadataMatchCandidates(track, [candidate])[0].fills.metadata, true)
+    const enriched = enrichLocalTrackMetadata(track, match)
+    assert.equal(enriched.artist, 'Audrey')
+    assert.equal(enriched.album, 'Online Album')
+    assert.equal(enriched.id, localTrack.id)
+    assert.equal(enriched.filePath, localTrack.filePath)
+    assert.equal(findBestMetadataMatch({ ...track, duration: 0 }, [candidate]), null)
+  }
+})
+
+test('metadata matching tolerates title punctuation without merging versions or covers', () => {
+  const track = { ...localTrack, title: 'Don’t Stop' }
+  const candidate = { ...localTrack, id: 'ncm:123', source: 'ncm', title: "Don't Stop" }
+  assert.equal(findBestMetadataMatch(track, [candidate])?.track.id, candidate.id)
+  for (const title of ["Don't Stop (Live)", "Don't Stop (Remix)", "Don't Stop (Instrumental)"]) {
+    assert.equal(findBestMetadataMatch(track, [{ ...candidate, title }]), null)
+  }
+  assert.equal(findBestMetadataMatch(track, [{ ...candidate, artist: 'Other Singer' }]), null)
+  assert.equal(
+    findBestMetadataMatch({ ...track, title: '???' }, [{ ...candidate, title: '!!!' }]),
+    null,
+    'punctuation alone provides no title identity'
+  )
+})
+
 test('buildMetadataMatchCandidates ranks provider candidates and exposes enrichment hints', () => {
   const candidates = buildMetadataMatchCandidates(localTrack, [
     {

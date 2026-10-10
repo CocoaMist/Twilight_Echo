@@ -20,16 +20,16 @@ const desktopLyricsSettingsSource = readFileSync(
   'utf8'
 )
 
-test('desktop lyrics is a navigable settings card', () => {
+test('desktop lyrics is an internal block in the lyrics category', () => {
   assert.match(
     desktopLyricsSettingsSource,
-    /<section\s+id="desktopLyrics"\s+class="glass-card preview-section settings-section">/
+    /<div\s+id="desktopLyrics"\s+class="section-block settings-section">/
   )
   for (const label of [
     '启用桌面歌词',
-    '始终置顶',
-    '显示翻译',
-    '显示音译',
+    '启用歌词总在最前',
+    '外文歌词显示翻译',
+    '外文歌词显示音译',
     '描边',
     '双行显示',
     '横排显示',
@@ -134,22 +134,13 @@ test('native checkboxes inherit the active dark color scheme and theme accent', 
     baseStyles,
     /input\[type='checkbox'\][\s\S]*?accent-color:\s*var\(--te-primary-500\)/
   )
+  assert.match(baseStyles, /:root\[data-theme='dark'\]\s*\{\s*color-scheme:\s*dark/)
+  assert.match(baseStyles, /html input\[type='checkbox'\][\s\S]*?appearance:\s*none/)
   assert.match(
     baseStyles,
-    /html\[data-theme='dark'\] input\[type='checkbox'\][\s\S]*?color-scheme:\s*dark/
+    /html input\[type='checkbox'\]:checked\s*\{[\s\S]*?background-color:\s*var\(--te-primary-500\)/
   )
-  assert.match(
-    baseStyles,
-    /html\[data-theme='dark'\] input\[type='checkbox'\][\s\S]*?appearance:\s*none/
-  )
-  assert.match(
-    baseStyles,
-    /html\[data-theme='dark'\] input\[type='checkbox'\]:checked\s*\{[\s\S]*?background-color:\s*var\(--te-primary-500\)/
-  )
-  assert.match(
-    baseStyles,
-    /html\[data-theme='dark'\] input\[type='checkbox'\]:checked::after\s*\{[\s\S]*?content:\s*''/
-  )
+  assert.match(baseStyles, /html input\[type='checkbox'\]:checked::after\s*\{[\s\S]*?content:\s*''/)
 })
 
 test('settings wallpaper is painted once by the overlay root, never per element', () => {
@@ -231,15 +222,18 @@ test('plugin center uses the settings wallpaper painter over streaming content',
   assert.match(overlay, /<PluginPage\s+v-if="showPluginPage"/)
 })
 
-test('audio output device discovery uses a closed expander button', () => {
-  assert.match(playbackPageSource, /const audioOutputPanelExpanded = ref\(false\)/)
+test('audio output device cards are opt-in through a closed native checkbox', () => {
   assert.match(
     playbackPageSource,
-    /<button[\s\S]{0,180}?class="device-panel-disclosure"[\s\S]{0,180}?aria-controls="audio-output-device-panel"[\s\S]{0,160}?:aria-expanded="audioOutputPanelExpanded"/
+    /const audioOutputPanelExpanded = useSettingsDisclosure\('audio-output-device-panel'\)/
   )
   assert.match(
     playbackPageSource,
-    /<SettingsDisclosure\s+:open="audioOutputPanelExpanded"\s+trigger-selector='button\[aria-controls="audio-output-device-panel"\]'\s+id="audio-output-device-panel"\s+class="device-panel-content"[\s\S]{0,240}?<div class="device-grid">/
+    /<input[\s\S]{0,260}?v-model="audioOutputPanelExpanded"[\s\S]{0,160}?type="checkbox"[\s\S]{0,200}?aria-controls="audio-output-device-panel"[\s\S]{0,160}?:aria-expanded="audioOutputPanelExpanded"/
+  )
+  assert.match(
+    playbackPageSource,
+    /<SettingsDisclosure\s+:open="audioOutputPanelExpanded"\s+keep-mounted\s+trigger-selector='input\[aria-controls="audio-output-device-panel"\]'\s+id="audio-output-device-panel"\s+class="device-panel-content"[\s\S]{0,240}?<div class="device-grid">/
   )
   assert.match(styles, /\.device-panel-disclosure\s*\{[\s\S]*?cursor:\s*pointer/)
   assert.match(

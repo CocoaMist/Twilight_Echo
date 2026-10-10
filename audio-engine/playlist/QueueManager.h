@@ -28,6 +28,7 @@ class QueueManager {
   std::string playModeId() const;
 
   bool empty() const;
+  size_t size() const { return items_.size(); }
   int currentIndex() const;
   void setCurrentIndex(int index);
 

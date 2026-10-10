@@ -369,11 +369,73 @@ void testProcessRejectsBadArguments() {
   assert(modulator.process(input.data(), 0, channelOutputs, output.size()) == 0);
 }
 
+void testIndependentChannelsAndGeneratedPacking() {
+  for (int rate : {44100, 48000, 192000}) for (int target : {64, 128, 256})
+  for (int channels : {1, 2, 3, 8}) for (auto order : {DsdBitOrder::MsbFirst, DsdBitOrder::LsbFirst}) {
+    PcmToDsdModulator multi;
+    PcmToDsdModulatorConfig config{rate, channels, target, order};
+    std::string error;
+    if (!multi.configure(config, &error)) failTest(error.c_str());
+    std::vector<PcmToDsdModulator> mono(channels);
+    config.channelCount = 1;
+    for (auto& modulator : mono) if (!modulator.configure(config, &error)) failTest(error.c_str());
+    const size_t stride = multi.outputBytesPerChannel(256);
+    std::vector<uint8_t> padded(stride * channels, 0xee);
+    std::vector<uint8_t*> planes(channels);
+    for (int c = 0; c < channels; ++c) planes[c] = padded.data() + stride * c;
+    size_t position = 0;
+    for (size_t frames : {size_t(17), size_t(3), size_t(64), size_t(1)}) {
+      std::vector<float> input(frames * channels);
+      for (size_t f = 0; f < frames; ++f) for (int c = 0; c < channels; ++c)
+        input[f * channels + c] = static_cast<float>(.4 * std::sin((position + f) * .17 + c));
+      const size_t written = multi.process(input.data(), frames, planes.data(), stride);
+      for (int c = 0; c < channels; ++c) {
+        std::vector<float> single(frames);
+        for (size_t f = 0; f < frames; ++f) single[f] = input[f * channels + c];
+        std::vector<uint8_t> expected(written);
+        uint8_t* pointer = expected.data();
+        assert(mono[c].process(single.data(), frames, &pointer, written) == written);
+        if (!std::equal(expected.begin(), expected.end(), planes[c])) failTest("Paired quantizer changed channel bits");
+      }
+      for (auto format : {AudioSampleFormat::DsdInt8Msb1, AudioSampleFormat::DsdInt8Lsb1,
+                          AudioSampleFormat::DsdInt8Ner8, AudioSampleFormat::Int24Interleaved,
+                          AudioSampleFormat::Int24In32Interleaved}) {
+        const bool native = isDsdSampleFormat(format);
+        const size_t available = native ? written : written / 2;
+        const size_t count = std::min<size_t>(available, 3); // partial callback, including odd marker phase
+        const size_t sampleBytes = native ? 1 : dop::dopCarrierBytesPerSample(format);
+        std::vector<uint8_t> packed(count * channels * sampleBytes + 8, 0xdd);
+        assert(render::packGeneratedDsd(planes.data(), written, channels, order, format,
+            packed.data(), packed.size() - 8, count, 1) == count);
+        for (size_t f = 0; f < count; ++f) for (int c = 0; c < channels; ++c) {
+          if (native) assert(packed[f * channels + c] == render::convertDsdByte(planes[c][f], order, format));
+          else {
+            uint8_t expected[4]{};
+            dop::writeDopSample(expected, 0, sampleBytes, dop::normalizeDsdByte(planes[c][2 * f], order),
+                dop::normalizeDsdByte(planes[c][2 * f + 1], order), dop::dopMarkerForFrame(1 + f));
+            assert(std::equal(expected, expected + sampleBytes, packed.data() + (f * channels + c) * sampleBytes));
+          }
+        }
+        assert(std::all_of(packed.end() - 8, packed.end(), [](uint8_t byte) { return byte == 0xdd; }));
+      }
+      position += frames;
+    }
+    // The SIMD and scalar guards both recover independently for odd layouts.
+    multi.injectInstabilityForTest();
+    std::vector<float> silence(channels);
+    multi.process(silence.data(), 1, planes.data(), stride);
+    assert(multi.instabilityResetCount() >= static_cast<uint64_t>(channels));
+    multi.reset();
+    assert(multi.instabilityResetCount() == 0);
+  }
+}
+
 }  // namespace
 
 int main() {
   testRateFamilyMapping();
   testProcessRejectsBadArguments();
+  testIndependentChannelsAndGeneratedPacking();
   testSilenceBitDensityIsBalanced();
   testBitOrderMatchesEngineConvention();
   testInstabilityGuardRecovers();

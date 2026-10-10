@@ -851,11 +851,11 @@ html[data-theme='dark'] .lyrics-customizer {
   line-height: 1.6;
 }
 .icon-button {
-  width: 38px;
-  height: 38px;
+  width: var(--te-control-height-lg);
+  height: var(--te-control-height-lg);
   flex: 0 0 auto;
-  border: 1px solid var(--te-card-border);
-  border-radius: 12px;
+  border: var(--te-control-border-width) solid var(--te-card-border);
+  border-radius: var(--te-control-radius-lg);
   color: inherit;
   background: var(--te-card-bg);
   cursor: pointer;

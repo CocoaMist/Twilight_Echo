@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import type { NativeQueueSelection } from '../../shared/nativeQueue.ts'
 import type {
   AudioEnginePlayResult,
   AudioEngineQueueItem,
@@ -40,6 +42,7 @@ import { playModeWrapsAtQueueEnd } from '../../shared/playbackModes.ts'
 import { audioEngineError, nativeAudioError } from './engineErrors.ts'
 import { rendererFallbackAllowed } from './nativeBinding.ts'
 import type { DspGraphConfig } from '../../shared/dspGraph.ts'
+import type { AutoMixStatus } from '../../shared/autoMix.ts'
 
 export interface PlaybackControllerHost {
   getNative(): NativeAudioBinding | null
@@ -110,6 +113,7 @@ const NATIVE_IDLE_POLL_INTERVAL_TICKS = 4
 
 export class PlaybackController {
   queue: AudioEngineQueueItem[] = []
+  queueToken = ''
   queueJson = '[]'
   playbackInfo: PlaybackInfo
   private transportRevision = 0
@@ -117,6 +121,7 @@ export class PlaybackController {
   lastTick = 0
   lastNativePlaybackInfoTickReadAt = Number.NEGATIVE_INFINITY
   nativeIdlePollTick = 0
+  private autoMixStatusRequestRevision = 0
   lastNativeReportedPosition = Number.NaN
   pendingNativePositionTarget: number | null = null
   nativeConfigRevisionObserved = false
@@ -306,6 +311,8 @@ export class PlaybackController {
   }
 
   resetCachesOnServiceCrash(): void {
+    ++this.autoMixStatusRequestRevision
+    this.playbackInfo.autoMix = undefined
     this.lastVisualizationCache = null
     this.lastSpectrumCache = null
     this.invalidateUpcomingTrackCache()
@@ -317,9 +324,18 @@ export class PlaybackController {
 
   async play(source: string, startTime = 0): Promise<AudioEnginePlayResult> {
     if (!source) throw audioEngineError('audio.source_empty', 'playback source is empty')
-    this.transportRevision += 1
+    const revision = ++this.transportRevision
+    const isCurrent = () => !this.destroyed && revision === this.transportRevision
+    const superseded: AudioEnginePlayResult = {
+      nativeStarted: false,
+      fallbackReason: '',
+      superseded: true
+    }
     this.invalidateUpcomingTrackCache()
     await this.prepareLoudnormForPlay(source)
+    // Startup preparation can outlive a next/previous/stop or a newer play.
+    // Never dispatch the old source after a newer transport action owns playback.
+    if (!isCurrent()) return superseded
     const current = this.queue[this.playbackInfo.queueIndex]
     const duration = current?.source === source ? (current.duration ?? 0) : 0
     const boundedStartTime = clampQueueItemPosition(current, startTime)
@@ -335,6 +351,7 @@ export class PlaybackController {
       boundedStartTime,
       firstErrorContext.output !== 'asio'
     )
+    if (!isCurrent()) return superseded
     let nativeFallbackReason = ''
     if (!nativeStarted && this.shouldFallbackFromAsio(firstErrorContext.output)) {
       nativeFallbackReason = this.lastNativeError || 'ASIO 输出不可用'
@@ -343,9 +360,11 @@ export class PlaybackController {
       this.exclusiveMode = false
       this.nativeOutputRouteSynced = false
       const fallbackRoute = await this.restoreAudioServiceOutputRoute('ASIO 失败后应用 WASAPI 兜底')
+      if (!isCurrent()) return superseded
       this.nativeOutputRouteSynced = fallbackRoute.synced
       if (fallbackRoute.synced) {
         nativeStarted = await this.tryNativePlay('WASAPI 兜底播放', source, boundedStartTime)
+        if (!isCurrent()) return superseded
       } else {
         this.lastNativeError = fallbackRoute.errors.join('\n') || this.lastNativeError
       }
@@ -368,6 +387,7 @@ export class PlaybackController {
           'SetOutputDevice',
           candidate
         )
+        if (!isCurrent()) return superseded
         if (!deviceSynced) continue
         nativeStarted = await this.tryNativePlay(
           `ALSA 兜底播放 ${candidate}`,
@@ -375,6 +395,7 @@ export class PlaybackController {
           boundedStartTime,
           false
         )
+        if (!isCurrent()) return superseded
         if (nativeStarted) {
           this.device = candidate
           this.nativeOutputRouteSynced = true
@@ -384,6 +405,7 @@ export class PlaybackController {
       if (!nativeStarted) {
         this.device = firstErrorContext.device
         await this.callNativeMaybeAsync('恢复 ALSA 默认输出设备', 'SetOutputDevice', this.device)
+        if (!isCurrent()) return superseded
       }
     }
     if (!nativeStarted && !rendererFallbackAllowed()) {
@@ -455,6 +477,7 @@ export class PlaybackController {
       this.tryNative('播放后应用音量', (native) => native.SetVolume(this.playbackInfo.volume))
     }
     await this.applyNativeDspGraph('播放源格式变更后解析 DSP 场景')
+    if (!isCurrent()) return superseded
     this.lastTick = this.scheduler.now()
     const nativePositionConfirmed =
       nativeInfo?.source === source &&
@@ -640,11 +663,17 @@ export class PlaybackController {
     const nextQueueIndex =
       nextQueue.length > 0 ? Math.min(Math.max(0, startIndex), nextQueue.length - 1) : -1
     const nextQueueJson = JSON.stringify(nextQueue)
-    if (nextQueueJson === this.queueJson && nextQueueIndex === this.playbackInfo.queueIndex) return
+    if (
+      this.queueToken &&
+      nextQueueJson === this.queueJson &&
+      nextQueueIndex === this.playbackInfo.queueIndex
+    )
+      return
 
     const previousQueueJson = this.queueJson
     const previousQueueIndex = this.playbackInfo.queueIndex
     const hasPreviousQueue = this.queue.length > 0
+    this.queueToken = ''
     try {
       const queueLoaded = await this.callNativeMaybeAsync(
         '加载队列',
@@ -684,9 +713,38 @@ export class PlaybackController {
 
     this.queue = nextQueue
     this.queueJson = nextQueueJson
+    this.queueToken = randomUUID()
     this.playbackInfo.queueIndex = nextQueueIndex
     this.invalidateUpcomingTrackCache()
     this.emit('queue-change', this.queue)
+  }
+
+  async selectQueueItem(selection: NativeQueueSelection): Promise<boolean> {
+    const item = this.queue[selection.index]
+    if (
+      !this.queueToken ||
+      selection.queueToken !== this.queueToken ||
+      !item ||
+      item.id !== selection.id ||
+      item.source !== selection.source ||
+      typeof this.native?.SelectQueueIndex !== 'function'
+    )
+      return false
+    const revision = ++this.transportRevision
+    const selected = await this.callNativeMaybeAsync(
+      '选择已加载队列条目',
+      'SelectQueueIndex',
+      selection.index
+    )
+    if (
+      !selected ||
+      revision !== this.transportRevision ||
+      selection.queueToken !== this.queueToken
+    )
+      return false
+    this.playbackInfo.queueIndex = selection.index
+    this.invalidateUpcomingTrackCache()
+    return true
   }
 
   private rollbackQueueAfterFailedLoad(queueJson: string, queueIndex: number): void {
@@ -836,7 +894,39 @@ export class PlaybackController {
     }
   }
 
+  async refreshAutoMixStatus(): Promise<boolean> {
+    const native = this.native
+    if (typeof native?.GetAutoMixStatus !== 'function') return false
+    const revision = ++this.autoMixStatusRequestRevision
+    try {
+      // The service's synchronous getter is a cached value. Settings need the
+      // actual permission/config even when no transport has started yet.
+      const raw =
+        typeof native.callAsync === 'function'
+          ? await native.callAsync('GetAutoMixStatus', [])
+          : native.GetAutoMixStatus()
+      if (this.destroyed || revision !== this.autoMixStatusRequestRevision) return false
+      const status = parseNativeJson(
+        raw as string | AutoMixStatus | undefined,
+        null as AutoMixStatus | null
+      )
+      if (!status || typeof status.enabled !== 'boolean' || typeof status.state !== 'string')
+        return false
+      const changed = JSON.stringify(this.playbackInfo.autoMix) !== JSON.stringify(status)
+      // Read only this independent status: a stopped engine snapshot must not
+      // overwrite a restored queue/source/position or the saved software volume.
+      this.playbackInfo.autoMix = status
+      return changed
+    } catch {
+      if (this.destroyed || revision !== this.autoMixStatusRequestRevision) return false
+      const changed = this.playbackInfo.autoMix !== undefined
+      this.playbackInfo.autoMix = undefined
+      return changed
+    }
+  }
+
   async getPlaybackInfo(): Promise<PlaybackInfo> {
+    if (!this.nativePlaybackActive) await this.refreshAutoMixStatus()
     const now = this.scheduler.now()
     if (
       this.nativePlaybackActive &&
@@ -1317,6 +1407,7 @@ export class PlaybackController {
       outputBitDepth: outputInfo.outputBitDepth,
       channelCount: outputInfo.actualChannels || info.channelCount || 0,
       outputPerfect,
+      autoMix: info.autoMix,
       pcmPassthrough: outputInfo.pcmPassthrough === true,
       isDsd,
       dsdMode,
@@ -1417,11 +1508,13 @@ export class PlaybackController {
           this.invalidateAudioDeviceOptionsCache('native-output-diagnostics-changed')
         }
         this.lastNativePlaybackInfoTickReadAt = now
+        // Publish track identity with its source position before scalar progress
+        // events. An AutoMix continuation is a rewind only in the outgoing clock.
+        this.publishPlaybackInfo({ dedupePositionOnly: true })
         this.publishProperty('time-pos', this.playbackInfo.position)
         if (this.playbackInfo.duration > 0) {
           this.publishDuration(this.playbackInfo.duration)
         }
-        this.publishPlaybackInfo({ dedupePositionOnly: true })
         const switchedTrack =
           !nativeIdentityPending &&
           nativeInfo.state !== 'stopped' &&

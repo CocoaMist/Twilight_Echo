@@ -10,6 +10,7 @@
 .search-type-group {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .search-tab-pill {
@@ -223,6 +224,7 @@
 .streaming-search-tabs {
   gap: 8px;
   padding: 10px clamp(36px, 6vw, 84px) 12px;
+  flex-wrap: wrap;
 }
 
 .search-tab-pill {
@@ -298,6 +300,16 @@
   .streaming-search-tabs {
     margin-left: 22px;
     margin-right: 22px;
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container streaming-content (max-width: 900px) {
+  .streaming-search-tabs {
+    margin-left: var(--te-page-gutter);
+    margin-right: var(--te-page-gutter);
     padding-left: 0;
     padding-right: 0;
   }

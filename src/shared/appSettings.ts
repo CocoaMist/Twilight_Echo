@@ -19,6 +19,7 @@ import type { PlayerBarSettings } from './playerBar.ts'
 import type { LanguagePreference } from './i18n/locale.ts'
 import type { MotionPreference } from './motion.ts'
 import type { NavigationPagePreferences } from './navigationPages.ts'
+import type { AppFontRendering } from './appFont.ts'
 
 export type {
   DesktopLyricsPalette,
@@ -40,11 +41,23 @@ export type StreamingAudioCachePolicy = 'off' | 'provider'
 export type AppBackgroundPage = 'local' | 'settings' | 'streaming' | 'player'
 export type AppBackgroundKind = 'color' | 'image'
 
+export type BackgroundTextTone = 'theme' | 'light' | 'dark'
+export interface AppBackgroundEffect extends BackgroundEffectTheme {
+  scale: number
+  positionX: number
+  positionY: number
+  textTone: BackgroundTextTone
+}
+
 export interface AppBackgroundColorPair {
   light: string
   dark: string
   kind: AppBackgroundKind
   image: string
+  /** Distinguishes an explicitly edited solid background from theme defaults. */
+  customized?: boolean
+  /** Optional on legacy settings; normalized before editing or rendering. */
+  effects?: Record<'light' | 'dark', AppBackgroundEffect>
 }
 
 export interface AppBackgroundPageOverride extends AppBackgroundColorPair {
@@ -89,6 +102,7 @@ export interface CardAppearanceSettings {
   enabled: boolean
   light: CardAppearanceTheme
   dark: CardAppearanceTheme
+  /** Legacy import only. Background effects now belong to appBackground. */
   background: BackgroundEffectSettings
 }
 
@@ -183,6 +197,7 @@ export interface AppSettings {
   lightAccentColor: string
   darkAccentColor: string
   fontFamily: string
+  fontRendering: AppFontRendering
   uiDensity: UiDensity
   appBackground: AppBackgroundSettings
   cardAppearance: CardAppearanceSettings

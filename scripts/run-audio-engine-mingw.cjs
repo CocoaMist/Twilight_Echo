@@ -71,13 +71,15 @@ const result = spawnSync(command[0], command[1], {
 })
 if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1)
 if (action === 'build') {
-  const stage = spawnSync(
-    process.execPath,
-    [resolve(__dirname, 'stage-audio-engine.cjs'), '--build-dir', layout.buildDir],
-    {
-      cwd: root,
-      stdio: 'inherit'
-    }
-  )
+  const stageArgs = [resolve(__dirname, 'stage-audio-engine.cjs'), '--build-dir', layout.buildDir]
+  // Explicit isolated staging lets validation run while the app owns its DLL.
+  // The default still stages into resources/audio-engine for normal builds.
+  if (process.env.TAE_AUDIO_ENGINE_STAGE_DIR) {
+    stageArgs.push('--output-dir', resolve(process.env.TAE_AUDIO_ENGINE_STAGE_DIR))
+  }
+  const stage = spawnSync(process.execPath, stageArgs, {
+    cwd: root,
+    stdio: 'inherit'
+  })
   process.exit(stage.status ?? 1)
 }

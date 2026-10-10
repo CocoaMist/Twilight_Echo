@@ -215,6 +215,7 @@ function play(track: Track): void {
   gap: 8px;
   flex-shrink: 0;
   padding: 52px clamp(24px, 4vw, 60px) 0;
+  flex-wrap: wrap;
 }
 button,
 select {

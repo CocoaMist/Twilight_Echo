@@ -110,3 +110,48 @@ test('disabled analysis, existing analysis and remote URLs never schedule work',
   await state.requestBpmAnalysisForTrack(track('disabled'))
   assert.equal(calls, 0)
 })
+
+test('completion event and request result apply one library update, with content/version changes preserved', async () => {
+  let finish!: (result: Awaited<ReturnType<typeof window.api.bpmAnalysis.request>>) => void
+  const state = fixture(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      })
+  )
+  const selected = state.currentTrack.value!
+  const request = state.requestBpmAnalysisForTrack(selected)
+  state.applyBpmAnalysisToTrack(selected.id, selected.filePath, analysis)
+  const applied = state.currentTrack.value
+  finish({ status: 'completed', analysis: { ...analysis } })
+  await request
+  assert.equal(state.currentTrack.value, applied)
+  assert.equal(state.patches.length, 1)
+  assert.equal(state.writes.length, 1)
+  state.applyBpmAnalysisToTrack(selected.id, selected.filePath, {
+    ...analysis,
+    algorithmVersion: 2
+  })
+  state.applyBpmAnalysisToTrack(selected.id, selected.filePath, {
+    ...analysis,
+    algorithmVersion: 2,
+    tempoMap: [{ startMs: 0, endMs: 1000, bpm: 122, confidence: 0.8 }]
+  })
+  assert.equal(state.writes.length, 3)
+  state.clearBpmAnalysisFromPlaybackState()
+  state.applyBpmAnalysisToTrack(selected.id, selected.filePath, analysis)
+  assert.equal(state.patches.length, 4)
+})
+
+test('later cached results consult a reloaded library without replacing unchanged playback state', async () => {
+  const state = fixture(async () => ({ status: 'cached', analysis: { ...analysis } }))
+  const selected = state.currentTrack.value!
+  await state.requestBpmAnalysisForTrack(selected)
+  const applied = state.currentTrack.value
+  // The fixture accepts library writes, representing a library reloaded from
+  // a snapshot without BPM. Playback can already contain the same analysis.
+  await state.requestBpmAnalysisForTrack(selected)
+  assert.equal(state.writes.length, 2)
+  assert.equal(state.currentTrack.value, applied)
+  assert.equal(state.patches.length, 1)
+})

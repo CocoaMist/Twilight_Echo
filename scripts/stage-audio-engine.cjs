@@ -15,7 +15,6 @@ const { readStagedAudioRuntimeObservation } = require('./staged-audio-runtime-ob
 const { bundleMacOSRuntimeDependencies } = require('./macos-audio-runtime.cjs')
 
 const root = join(__dirname, '..')
-const outputDir = join(root, 'resources', 'audio-engine')
 function optionValue(flag) {
   const index = process.argv.indexOf(flag)
   if (index === -1) return { provided: false, value: '' }
@@ -24,13 +23,18 @@ function optionValue(flag) {
 }
 const buildDirOption = optionValue('--build-dir')
 const runtimeDirOption = optionValue('--runtime-dir')
+const outputDirOption = optionValue('--output-dir')
+const outputDir = outputDirOption.provided
+  ? outputDirOption.value
+  : join(root, 'resources', 'audio-engine')
 const selectedBuildDir = buildDirOption.value
 if (
   (buildDirOption.provided && !selectedBuildDir) ||
-  (runtimeDirOption.provided && !runtimeDirOption.value)
+  (runtimeDirOption.provided && !runtimeDirOption.value) ||
+  (outputDirOption.provided && !outputDirOption.value)
 ) {
   console.error(
-    'Usage: node scripts/stage-audio-engine.cjs [--build-dir <path>] [--runtime-dir <toolchain bin>]'
+    'Usage: node scripts/stage-audio-engine.cjs [--build-dir <path>] [--runtime-dir <toolchain bin>] [--output-dir <path>]'
   )
   process.exit(1)
 }

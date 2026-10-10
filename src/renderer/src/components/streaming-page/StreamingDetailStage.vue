@@ -43,6 +43,8 @@ const props = withDefaults(
     currentTrackId?: string | null
     trackActivationMode?: 'singleClick' | 'doubleClick'
     isExternal?: boolean
+    showTrackLikes?: boolean
+    favoriteProviderLabel?: string
     loading?: boolean
     showFollow?: boolean
     followLabel?: string
@@ -58,10 +60,11 @@ const props = withDefaults(
     canAddToPlaylist?: boolean
     canRemoveFromPlaylist?: boolean
     isSelected: (id: string) => boolean
-    isTrackLiked: (ncmSongId?: number | null) => boolean
-    isLiking: (ncmSongId?: number | null) => boolean
+    isTrackLiked: (track: Track) => boolean
+    isLiking: (track: Track) => boolean
     formatTime: (seconds: number) => string
     likedFooter?: {
+      paged?: boolean
       loadingMore?: boolean
       hasMore?: boolean
       loadMoreError?: string
@@ -81,6 +84,8 @@ const props = withDefaults(
     icon: 'pi pi-list',
     trackActivationMode: 'singleClick',
     isExternal: false,
+    showTrackLikes: false,
+    favoriteProviderLabel: '网易云',
     loading: false,
     showFollow: false,
     followLabel: '关注',
@@ -228,6 +233,11 @@ function shuffleAndPlay(): void {
   if (!canPlay.value) return
   emit('shufflePlay')
 }
+
+function loadNextTracks(): void {
+  if (props.likedFooter?.paged) emit('loadMoreLiked')
+  else emit('loadAllLiked')
+}
 const infoTrack = shallowRef<Track | null>(null)
 </script>
 
@@ -291,7 +301,9 @@ const infoTrack = shallowRef<Track | null>(null)
               @click="emit('playAll')"
             >
               <i class="pi pi-play"></i>
-              <span>播放全部</span>
+              <span>{{
+                likedFooter?.paged && likedFooter.hasMore ? '播放已加载' : '播放全部'
+              }}</span>
             </button>
             <button
               type="button"
@@ -327,15 +339,16 @@ const infoTrack = shallowRef<Track | null>(null)
     />
     <div v-if="likedFooter?.hasMore" class="stage-footer" role="status">
       <span class="stage-footer-msg">
-        搜索与排序范围：已加载 {{ likedFooter.loaded }} / {{ likedFooter.total ?? '—' }} 首
+        搜索与排序范围：已加载 {{ likedFooter.loaded
+        }}{{ likedFooter.total != null ? ` / ${likedFooter.total}` : '' }} 首
       </span>
       <button
         type="button"
         class="stage-mini-btn"
         :disabled="likedFooter.loadingMore"
-        @click="emit('loadAllLiked')"
+        @click="loadNextTracks"
       >
-        {{ likedFooter.loadingMore ? '正在加载' : '加载全部' }}
+        {{ likedFooter.loadingMore ? '正在加载' : likedFooter.paged ? '加载更多' : '加载全部' }}
       </button>
       <span v-if="likedFooter.loadMoreError" class="stage-footer-msg">{{
         likedFooter.loadMoreError
@@ -353,13 +366,13 @@ const infoTrack = shallowRef<Track | null>(null)
     <div
       v-if="loading && tracks.length === 0"
       class="stage-list stage-list-skeleton"
-      :class="{ 'no-like': isExternal }"
+      :class="{ 'no-like': isExternal && !showTrackLikes }"
       aria-live="polite"
     >
       <div class="stage-list-head">
         <span class="col-index">#</span>
         <span class="col-title">曲目</span>
-        <span v-if="!isExternal" class="col-like"></span>
+        <span v-if="!isExternal || showTrackLikes" class="col-like"></span>
         <span class="col-album">专辑</span>
         <span class="col-time">时长</span>
       </div>
@@ -372,14 +385,18 @@ const infoTrack = shallowRef<Track | null>(null)
             <span class="sk sk-line narrow"></span>
           </span>
         </div>
-        <div v-if="!isExternal" class="col-like"></div>
+        <div v-if="!isExternal || showTrackLikes" class="col-like"></div>
         <div class="col-album"><span class="sk sk-line mid"></span></div>
         <div class="col-time"><span class="sk sk-line short"></span></div>
       </div>
     </div>
 
     <!-- Track list -->
-    <div v-else-if="tracks.length > 0" class="stage-list" :class="{ 'no-like': isExternal }">
+    <div
+      v-else-if="tracks.length > 0"
+      class="stage-list"
+      :class="{ 'no-like': isExternal && !showTrackLikes }"
+    >
       <div v-if="hasSelection" class="stage-selection" role="toolbar" aria-label="批量操作">
         <div class="stage-selection-left">
           <span class="stage-selection-dot" aria-hidden="true"></span>
@@ -415,7 +432,7 @@ const infoTrack = shallowRef<Track | null>(null)
       <div class="stage-list-head" aria-hidden="true">
         <span class="col-index">#</span>
         <span class="col-title">曲目</span>
-        <span v-if="!isExternal" class="col-like"></span>
+        <span v-if="!isExternal || showTrackLikes" class="col-like"></span>
         <span class="col-album">专辑</span>
         <span class="col-time">时长</span>
       </div>
@@ -493,23 +510,22 @@ const infoTrack = shallowRef<Track | null>(null)
             </div>
           </div>
 
-          <div v-if="!isExternal" class="col-like">
+          <div v-if="!isExternal || showTrackLikes" class="col-like">
             <button
               type="button"
               class="row-like"
               :class="{
-                liked: isTrackLiked(track.ncmSongId),
-                loading: isLiking(track.ncmSongId)
+                liked: isTrackLiked(track),
+                loading: isLiking(track)
               }"
-              :disabled="isLiking(track.ncmSongId)"
-              :title="isTrackLiked(track.ncmSongId) ? '在网易云取消喜欢' : '在网易云喜欢'"
+              :disabled="isLiking(track)"
+              :title="`在${favoriteProviderLabel}${isTrackLiked(track) ? '取消' : ''}${isExternal ? '收藏' : '喜欢'}`"
+              :aria-label="`在${favoriteProviderLabel}${isTrackLiked(track) ? '取消' : ''}${isExternal ? '收藏' : '喜欢'}`"
+              :aria-pressed="isTrackLiked(track)"
               @click="onLike(track, $event)"
             >
-              <i v-if="isLiking(track.ncmSongId)" class="pi pi-spin pi-spinner"></i>
-              <i
-                v-else
-                :class="isTrackLiked(track.ncmSongId) ? 'pi pi-heart-fill' : 'pi pi-heart'"
-              ></i>
+              <i v-if="isLiking(track)" class="pi pi-spin pi-spinner"></i>
+              <i v-else :class="isTrackLiked(track) ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
             </button>
           </div>
 
@@ -544,13 +560,16 @@ const infoTrack = shallowRef<Track | null>(null)
           <i class="pi pi-refresh"></i>
           <span>继续加载</span>
         </button>
-        <span v-else-if="likedFooter.hasMore" class="stage-footer-msg"> 继续向下滚动加载更多 </span>
-        <span
-          v-else-if="likedFooter.total != null && (likedFooter.loaded ?? 0) > 0"
-          class="stage-footer-msg"
+        <button
+          v-else-if="likedFooter.hasMore && likedFooter.paged"
+          type="button"
+          class="stage-mini-btn"
+          @click="emit('loadMoreLiked')"
         >
-          已加载全部
-        </span>
+          加载更多
+        </button>
+        <span v-else-if="likedFooter.hasMore" class="stage-footer-msg"> 继续向下滚动加载更多 </span>
+        <span v-else-if="(likedFooter.loaded ?? 0) > 0" class="stage-footer-msg"> 已加载全部 </span>
       </div>
     </div>
   </section>

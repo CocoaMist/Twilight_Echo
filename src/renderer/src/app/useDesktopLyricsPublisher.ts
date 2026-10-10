@@ -1,4 +1,4 @@
-import { onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   DESKTOP_LYRICS_CLOCK_INTERVAL_MS,
   type DesktopLyricsClockSnapshot,
@@ -9,7 +9,8 @@ import { projectManagedLyrics } from '../../../shared/lyricsManagement.ts'
 import { useLyricsManagement } from '../stores/lyricsManagement.ts'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useSettingsStore } from '../stores/useSettingsStore.ts'
-import { buildLyricLines } from '../utils/lyrics.ts'
+import { createLyricContentCache } from '../utils/lyricContentCache.ts'
+import type { LyricLine } from '../utils/lyricTypes.ts'
 import { projectDesktopLyricsLines } from '../utils/desktopLyricsProjection.ts'
 
 function transportState(state: string): DesktopLyricsTransportState {
@@ -35,7 +36,7 @@ export function useDesktopLyricsPublisher(): void {
   let lastEpoch = -1
   let lastState = ''
   let clockTimer: ReturnType<typeof setTimeout> | null = null
-  let publishingEnabled = settingsStore.settings.value.desktopLyrics.enabled
+  const publishingEnabled = ref(settingsStore.settings.value.desktopLyrics.enabled)
   const disposers: Array<() => void> = []
 
   function ensureSessionId(trackId: string): void {
@@ -47,14 +48,15 @@ export function useDesktopLyricsPublisher(): void {
     sessionId = `desktop-lyrics:${activation}:${trackId || 'idle'}`.slice(0, 160)
   }
 
-  function buildSession(): DesktopLyricsSession {
+  const buildCachedLyricLines = createLyricContentCache()
+  let parsedLines: LyricLine[] | null = null
+  let projectedLines: DesktopLyricsSession['lines'] = []
+  type SessionContent = Pick<DesktopLyricsSession, 'track' | 'status' | 'lyricOffsetMs' | 'lines'>
+  const sessionContent = computed<SessionContent>((previous) => {
     const track = player.currentTrack.value
-    ensureSessionId(track?.id ?? '')
     if (!track) {
+      if (previous?.track === null) return previous
       return {
-        schemaVersion: 1,
-        sessionId,
-        contentRevision: ++contentRevision,
         track: null,
         status: 'idle',
         lyricOffsetMs: 0,
@@ -73,16 +75,24 @@ export function useDesktopLyricsPublisher(): void {
       },
       override
     )
-    const lines = projectDesktopLyricsLines(
-      buildLyricLines(managed.original, managed.translation, managed.romanization, {
+    const nextParsed = buildCachedLyricLines(
+      managed.original,
+      managed.translation,
+      managed.romanization,
+      {
         replaceTtmlTranslation:
           override?.translationSelection === 'manual' ||
           (override?.translationSelection == null && override?.source === 'manual'),
         replaceTtmlRomanization:
           override?.romanizationSelection === 'manual' ||
           (override?.romanizationSelection == null && override?.source === 'manual')
-      })
+      }
     )
+    if (nextParsed !== parsedLines) {
+      parsedLines = nextParsed
+      projectedLines = projectDesktopLyricsLines(nextParsed)
+    }
+    const lines = projectedLines
     const loadState = player.lyricsLoadState.value
     const status =
       loadState.trackId === track.id && loadState.status === 'loading'
@@ -92,24 +102,38 @@ export function useDesktopLyricsPublisher(): void {
           : lines.length > 0
             ? 'ready'
             : 'empty'
+    const lyricOffsetMs = Math.round(management.effectiveOffsetSeconds(track.id) * 1000)
+    if (
+      previous?.track?.id === track.id &&
+      previous.track.title === (track.title || '') &&
+      previous.track.artist === (track.artist || '') &&
+      previous.status === status &&
+      previous.lyricOffsetMs === lyricOffsetMs &&
+      previous.lines === lines
+    )
+      return previous
     return {
+      track: { id: track.id, title: track.title || '', artist: track.artist || '' },
+      status,
+      lyricOffsetMs,
+      lines
+    }
+  })
+
+  function publishSession(force = false): void {
+    if (!publishingEnabled.value && !force) return
+    const content = sessionContent.value
+    ensureSessionId(content.track?.id ?? '')
+    api.publishSession({
       schemaVersion: 1,
       sessionId,
       contentRevision: ++contentRevision,
-      track: { id: track.id, title: track.title || '', artist: track.artist || '' },
-      status,
-      lyricOffsetMs: Math.round(management.effectiveOffsetSeconds(track.id) * 1000),
-      lines
-    }
-  }
-
-  function publishSession(force = false): void {
-    if (!publishingEnabled && !force) return
-    api.publishSession(buildSession())
+      ...content
+    })
   }
 
   function publishClock(force = false): void {
-    if (!publishingEnabled && !force) return
+    if (!publishingEnabled.value && !force) return
     const snapshot = player.playbackClockSnapshot.value
     ensureSessionId(player.currentTrack.value?.id ?? '')
     const now = performance.now()
@@ -146,7 +170,7 @@ export function useDesktopLyricsPublisher(): void {
   }
 
   watch(
-    [player.currentTrack, management.document, player.lyricsLoadState],
+    () => (publishingEnabled.value ? sessionContent.value : null),
     () => publishSession(),
     { immediate: true }
   )
@@ -154,17 +178,25 @@ export function useDesktopLyricsPublisher(): void {
   watch(
     () => settingsStore.settings.value.desktopLyrics.enabled,
     (enabled) => {
-      publishingEnabled = enabled
-      if (!enabled) return
-      publishSession(true)
+      publishingEnabled.value = enabled
+      if (!enabled) {
+        if (clockTimer != null) clearTimeout(clockTimer)
+        clockTimer = null
+        return
+      }
       publishClock(true)
     }
   )
   disposers.push(
     api.onEnabledChanged((enabled) => {
-      publishingEnabled = enabled
-      if (!enabled) return
-      publishSession(true)
+      const alreadyEnabled = publishingEnabled.value
+      publishingEnabled.value = enabled
+      if (!enabled) {
+        if (clockTimer != null) clearTimeout(clockTimer)
+        clockTimer = null
+        return
+      }
+      if (alreadyEnabled) publishSession(true)
       publishClock(true)
     }),
     api.onResyncRequested(() => {

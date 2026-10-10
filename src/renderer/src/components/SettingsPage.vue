@@ -1,26 +1,32 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { scrollMotionBehavior } from '../app/scrollMotion'
-import {
-  provideSettingsSearchDisclosure,
-  revealSettingsDetails
-} from './settings-page/settingsSearchDisclosure'
+import { createSettingsSectionRendering } from './settings-page/settingsSectionRendering'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
+import { openAppearanceEditor } from '../composables/appearanceEditorState.ts'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
 import DspSettingsSection from './settings-page/DspSettingsSection.vue'
-import PerformanceSettingsSection from './settings-page/PerformanceSettingsSection.vue'
+import LibrarySettingsSection from './settings-page/LibrarySettingsSection.vue'
+import ConnectionsSettingsSection from './settings-page/ConnectionsSettingsSection.vue'
+import SystemSettingsSection from './settings-page/SystemSettingsSection.vue'
+import LyricsStyleSettings from './settings-page/LyricsStyleSettings.vue'
 import CacheSettingsSection from './settings-page/CacheSettingsSection.vue'
 import DesktopLyricsSettingsSection from './settings-page/DesktopLyricsSettingsSection.vue'
 import AboutSettingsSection from './settings-page/AboutSettingsSection.vue'
 import ShortcutsSettingsSection from './settings-page/ShortcutsSettingsSection.vue'
+import AnimatedInput from './AnimatedInput.vue'
+import { provideSettingsDisclosures } from './settings-page/settingsDisclosureRegistry.ts'
 import {
   type SectionKey,
+  type SettingsSectionInput,
+  type SettingsResetGroup,
+  LEGACY_SETTINGS_TARGETS,
+  normalizeSettingsSection,
+  resolveSettingsSearchEntry,
   type BooleanSettingKey,
   type SettingsSearchEntry,
   sections,
-  GENERAL_SETTINGS_SECTIONS,
-  sectionGroups,
   startupHomePageOptions,
   trackActivationModeOptions,
   streamingAudioCachePolicyOptions,
@@ -57,11 +63,12 @@ import {
 import { DEFAULT_PLAYER_BAR_SETTINGS, clonePlayerBarSettings } from '../../../shared/playerBar.ts'
 
 const props = defineProps<{
-  initialSection?: SectionKey
+  initialSection?: SettingsSectionInput
   navigationTarget?: SettingsNavigationTarget
 }>()
 
 const emit = defineEmits<{
+  sectionChange: [section: SectionKey]
   openEqualizer: []
   openDspRack: []
   openThemeStudio: []
@@ -76,16 +83,14 @@ const pluginSettingsError = ref<Record<string, string>>({})
 const pluginSettingsForms = ref<Record<string, PluginSettingsForm | null>>({})
 const pluginSettingsValues = ref<Record<string, Record<string, string>>>({})
 const settingsSearchQuery = ref('')
-const revealSearchDisclosures = provideSettingsSearchDisclosure()
 const settingsNotice = ref('')
 const settingsError = ref('')
 const importSettingsInputRef = ref<HTMLInputElement | null>(null)
 const shortcutStatuses = ref<PlayerShortcutStatus[]>([])
 
-const activeSection = ref<SectionKey>(props.initialSection ?? 'general')
-const activeSectionInfo = computed(
-  () => sections.find((section) => section.key === activeSection.value) ?? sections[0]
-)
+const disclosures = provideSettingsDisclosures()
+const activeSection = ref<SectionKey>(normalizeSettingsSection(props.initialSection))
+watch(activeSection, (section) => emit('sectionChange', section), { flush: 'sync' })
 const pageRef = ref<HTMLElement | null>(null)
 
 function setNavigationPressOrigin(event: PointerEvent): void {
@@ -168,29 +173,27 @@ const libraryScanProgressText = computed(() => {
     return `已完成：解析 ${status.parsedFileCount} 个文件，跳过 ${status.skippedUnchanged} 个未变化文件`
   }
   if (status.state === 'cancelled') return '扫描已取消，未提交未完成的结果'
-  return '启动时快速检查文件变化；需要重新读取所有歌曲信息时，请点击“完整重扫”。'
+  return '启动时仅核对 path、size 与 mtime；完整元数据重扫只由此处触发。'
 })
 const libraryMetadataEnrichmentText = computed(() => {
   const status = libraryMetadataEnrichmentStatus.value
   if (status.state === 'enriching') {
-    return `正在补全歌曲信息：已处理 ${status.completed + status.failed} / ${status.total} 首`
+    return `后台富化中：已处理 ${status.completed + status.failed} / ${status.total} 首，${status.active} 项并发`
   }
-  if (status.state === 'failed') return status.error || '补全歌曲信息失败'
+  if (status.state === 'failed') return status.error || '后台元数据富化失败'
   if (status.state === 'completed') {
-    return `歌曲信息补全完成：成功 ${status.completed} 首，跳过 ${status.skipped} 首`
+    return `后台富化完成：成功 ${status.completed} 首，跳过 ${status.skipped} 首`
   }
-  if (status.state === 'cancelled') return '已停止补全歌曲信息，已保存的信息仍会保留'
-  return '添加歌曲后，会在后台补齐可获取的封面、歌词和歌曲信息。'
+  if (status.state === 'cancelled') return '后台元数据富化已取消，迟到结果不会写回媒体库'
+  return '新曲目会先显示，再在后台补齐封面、歌词和在线 metadata。'
 })
 
 function watcherStateLabel(state: string): string {
   switch (state) {
-    case 'pending':
-      return '状态尚未获取'
     case 'active':
-      return '正常'
+      return '活跃'
     case 'degraded':
-      return '定时检查'
+      return '降级轮询'
     case 'failed':
       return '失败'
     case 'disabled':
@@ -203,9 +206,9 @@ function watcherStateLabel(state: string): string {
 function watcherModeLabel(mode: string): string {
   switch (mode) {
     case 'recursive':
-      return '自动监听'
+      return '递归监听'
     case 'polling':
-      return '定时检查'
+      return '定时对账'
     case 'none':
       return '未监听'
     default:
@@ -250,7 +253,7 @@ async function resetLocalLibrary(): Promise<void> {
   libraryResetMessage.value = ''
   if (
     !window.confirm(
-      '将清空本地媒体库索引和当前界面中的全部本地曲目。\n\n不会删除磁盘上的音乐文件，也不会删除播放列表；之后可通过“完整重扫”重新建立媒体库。\n\n确定清空媒体库索引吗？'
+      '将清空本地媒体库索引和当前界面中的全部本地曲目。\n\n不会删除磁盘上的音乐文件，也不会删除播放列表；之后可通过“完整重扫”重新建立媒体库。\n\n确定重置吗？'
     )
   ) {
     return
@@ -414,10 +417,10 @@ async function toggleDesktopLyrics(): Promise<void> {
   await updateSettings({ desktopLyrics: { ...settings.value.desktopLyrics, enabled } })
 }
 
-function resetSettingsGroup(group: 'appearance' | 'playback' | 'desktopLyrics'): void {
+function resetSettingsGroup(group: SettingsResetGroup): void {
   if (
     !window.confirm(
-      `恢复${group === 'appearance' ? '外观' : group === 'playback' ? '播放' : '桌面歌词'}设置为默认值？`
+      `恢复${{ appearance: '外观与播放条', playback: '播放与音效', lyrics: '播放页歌词', desktopLyrics: '桌面歌词' }[group]}设置为默认值？`
     )
   )
     return
@@ -431,15 +434,25 @@ function resetSettingsGroup(group: 'appearance' | 'playback' | 'desktopLyrics'):
         motionPreference: 'system',
         blurEffect: true,
         useCoverTheme: true,
-        lyricsAppearance: cloneLyricsAppearance(DEFAULT_LYRICS_APPEARANCE),
         playerBar: clonePlayerBarSettings(DEFAULT_PLAYER_BAR_SETTINGS),
         fontFamily: 'system',
+        fontRendering: 'auto',
         uiDensity: 'standard'
       })
       settingsNotice.value = '外观设置已恢复默认'
     })().catch((cause) => {
       settingsError.value = cause instanceof Error ? cause.message : '外观设置恢复失败'
     })
+    return
+  }
+  if (group === 'lyrics') {
+    void updateSettings({ lyricsAppearance: cloneLyricsAppearance(DEFAULT_LYRICS_APPEARANCE) })
+      .then(() => {
+        settingsNotice.value = '播放页歌词已恢复默认'
+      })
+      .catch((cause) => {
+        settingsError.value = cause instanceof Error ? cause.message : '歌词设置恢复失败'
+      })
     return
   }
   if (group === 'playback') {
@@ -793,6 +806,8 @@ async function exportAudioDiagnostics(): Promise<void> {
 }
 
 const SETTINGS_SECTION_SCROLL_OFFSET = 24
+let programmaticScrollUntil = 0
+let programmaticScrollTimer: number | null = null
 
 function scrollPageToElement(
   target: HTMLElement,
@@ -800,134 +815,212 @@ function scrollPageToElement(
 ): void {
   const page = pageRef.value
   if (!page) return
+
+  sectionRendering?.prepareNavigation()
+  sectionGeometryDirty = true
+  const block = options.block ?? 'start'
+  const behavior = scrollMotionBehavior(
+    options.behavior ?? 'smooth',
+    Boolean(page.querySelector(':focus-visible'))
+  )
   const pageRect = page.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
+  const targetTop = targetRect.top - pageRect.top + page.scrollTop
   const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
-  const stackedNavigation = navigation && navigation.getBoundingClientRect().right > targetRect.left
-  const offset =
+  const scrollOffset =
     SETTINGS_SECTION_SCROLL_OFFSET +
-    (stackedNavigation ? navigation.getBoundingClientRect().height + 16 : 0)
-  const top = targetRect.top - pageRect.top + page.scrollTop - offset
-  const center =
-    options.block === 'center'
-      ? Math.max(0, (page.clientHeight - offset - targetRect.height) / 2)
-      : 0
+    (navigation && getComputedStyle(navigation).position === 'sticky'
+      ? navigation.getBoundingClientRect().height
+      : 0)
+  const maxScrollTop = Math.max(0, page.scrollHeight - page.clientHeight)
+  const category = target.closest<HTMLElement>('.preview-section')
+  const categoryTop = category
+    ? category.getBoundingClientRect().top - pageRect.top + page.scrollTop - scrollOffset
+    : 0
+  const nextTop =
+    block === 'center'
+      ? targetTop -
+        scrollOffset -
+        Math.max(0, (page.clientHeight - scrollOffset - targetRect.height) / 2)
+      : targetTop - scrollOffset
+
+  programmaticScrollUntil = performance.now() + (behavior === 'smooth' ? 700 : 0)
+  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
+  programmaticScrollTimer = window.setTimeout(
+    finishProgrammaticScroll,
+    behavior === 'smooth' ? 750 : 0
+  )
+
   page.scrollTo({
-    top: Math.max(0, top - center),
-    behavior: scrollMotionBehavior(
-      options.behavior ?? 'smooth',
-      Boolean(page.querySelector(':focus-visible'))
-    )
+    // Early rows should keep their category heading in view; otherwise a centered
+    // target lands in the preceding category and scroll-spy selects the wrong tab.
+    top: Math.max(0, Math.min(maxScrollTop, Math.max(categoryTop, nextTop))),
+    behavior
   })
 }
 
-let searchNavigationRevision = 0
+function finishProgrammaticScroll(): void {
+  if (programmaticScrollTimer === null && programmaticScrollUntil === 0) return
+  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
+  programmaticScrollTimer = null
+  programmaticScrollUntil = 0
+  sectionRendering?.finishNavigation()
+  sectionGeometryDirty = true
+  scheduleActiveSectionUpdate()
+}
 
 function scrollToSection(section: SectionKey): void {
-  searchNavigationRevision++
-  highlightSettingItem(null)
-  settingsSearchQuery.value = ''
+  ++settingsNavigationRevision
   activeSection.value = section
-  // Keep panels mounted so drafts and disclosure states survive category changes.
-  void nextTick(() => pageRef.value?.scrollTo({ top: 0, behavior: 'instant' }))
+  const el = document.getElementById(section)
+  if (!el) return
+  scrollPageToElement(el, { block: 'start' })
+  revealActiveNavigationItem()
 }
 
-function onCategoryKeydown(event: KeyboardEvent, section: SectionKey): void {
-  const index = sections.findIndex((item) => item.key === section)
-  const nextIndex =
-    event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? sections.length - 1
-        : event.key === 'ArrowDown'
-          ? (index + 1) % sections.length
-          : event.key === 'ArrowUp'
-            ? (index + sections.length - 1) % sections.length
-            : -1
-  if (nextIndex < 0) return
-  event.preventDefault()
-  const next = sections[nextIndex].key
-  scrollToSection(next)
-  void nextTick(() =>
-    pageRef.value
-      ?.querySelector<HTMLButtonElement>(`[data-settings-category="${next}"]`)
-      ?.focus({ preventScroll: true })
-  )
+function revealActiveNavigationItem(): void {
+  void nextTick(() => {
+    const strip = pageRef.value?.querySelector<HTMLElement>('.settings-nav-categories')
+    const item = strip?.querySelector<HTMLElement>('[aria-current="location"]')
+    if (!strip || !item || strip.scrollWidth <= strip.clientWidth) return
+    const left = item.offsetLeft
+    if (left < strip.scrollLeft) strip.scrollLeft = left
+    else if (left + item.offsetWidth > strip.scrollLeft + strip.clientWidth)
+      strip.scrollLeft = left + item.offsetWidth - strip.clientWidth
+  })
 }
+watch(activeSection, revealActiveNavigationItem)
 
 async function applyNavigationTarget(): Promise<void> {
   if (!pageRef.value) return
+  const revision = ++settingsNavigationRevision
   const target = props.navigationTarget
-  activeSection.value =
-    target?.entry?.section ?? (target?.anchor ? 'playback' : props.initialSection) ?? 'general'
-  const section = activeSection.value
-  await nextTick()
-  if (activeSection.value !== section || settingsDisposed) return
-  if (target?.anchor) {
-    const element = pageRef.value.querySelector<HTMLDetailsElement>(`#${target.anchor}`)
+  const legacy =
+    props.initialSection && Object.hasOwn(LEGACY_SETTINGS_TARGETS, props.initialSection)
+      ? LEGACY_SETTINGS_TARGETS[props.initialSection as keyof typeof LEGACY_SETTINGS_TARGETS]
+      : null
+  const anchor = target?.anchor ?? (!target?.entry ? legacy?.anchor : undefined)
+  if (anchor) {
+    await disclosures.reveal(anchor)
+    if (revision !== settingsNavigationRevision || !pageRef.value) return
+    const element = pageRef.value.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`)
     if (element) {
-      element.open = true
+      if (element instanceof HTMLDetailsElement) element.open = true
+      await settleSettingsNavigation(element)
+      if (revision !== settingsNavigationRevision || !pageRef.value) return
+      activeSection.value = normalizeSettingsSection(props.initialSection)
       scrollPageToElement(element, { block: 'center' })
-      element.querySelector('summary')?.focus({ preventScroll: true })
+      focusSetting(element)
       return
     }
   }
-  if (target?.entry) scrollToSearchResult(target.entry)
-  else scrollToSection(props.initialSection ?? 'general')
+  if (target?.entry) await scrollToSearchResult(target.entry)
+  else scrollToSection(normalizeSettingsSection(props.initialSection))
 }
 
 watch([() => props.initialSection, () => props.navigationTarget], applyNavigationTarget, {
   flush: 'post'
 })
 
-function scrollToSearchResult(entry: SettingsSearchEntry): void {
-  const revision = ++searchNavigationRevision
-  settingsSearchQuery.value = ''
-  activeSection.value = entry.section
-  revealSearchDisclosures(entry.reveal)
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      if (
-        settingsDisposed ||
-        revision !== searchNavigationRevision ||
-        activeSection.value !== entry.section
-      )
-        return
-      const sectionEl = document.getElementById(entry.section)
-      if (!sectionEl) return
-      const directTarget = findSettingItem(sectionEl, entry)
-      const fallback =
-        !directTarget && entry.fallback
-          ? findSettingItem(sectionEl, { ...entry, match: entry.fallback })
-          : null
-      const target = directTarget ?? fallback ?? sectionEl
-      if (fallback)
-        pushNotice({
-          kind: 'info',
-          message: '此选项需要先启用相关功能；已定位到对应开关。搜索不会改变您的设置。'
-        })
-      revealSettingsDetails(target)
-      scrollPageToElement(target, {
-        block: target === sectionEl ? 'start' : 'center'
+let settingsNavigationRevision = 0
+async function settleSettingsNavigation(scope: HTMLElement | null): Promise<void> {
+  await nextTick()
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  const animations =
+    scope?.getAnimations({ subtree: true }).filter((animation) => {
+      const timing = animation.effect?.getComputedTiming()
+      return timing && timing.iterations !== Infinity && Number(timing.duration) <= 300
+    }) ?? []
+  // Offscreen CSS transitions can remain pending until their surface is painted.
+  // Bound the layout wait to the disclosure duration, and ignore unrelated UI.
+  if (animations.length) {
+    let timer: number | undefined
+    await Promise.race([
+      Promise.all(animations.map((animation) => animation.finished.catch(() => undefined))),
+      new Promise<void>((resolve) => {
+        timer = window.setTimeout(resolve, 300)
       })
-      highlightSettingItem(target === sectionEl ? null : target)
-      const control = target.querySelector<HTMLElement>(
-        'button:not(:disabled), select:not(:disabled), input:not(:disabled), summary'
-      )
-      const focusTarget = control ?? target
-      if (!control) focusTarget.tabIndex = -1
-      focusTarget.focus({ preventScroll: true })
-    })
-  })
+    ])
+    window.clearTimeout(timer)
+  }
+}
+
+function focusSetting(target: HTMLElement): void {
+  const selector =
+    'summary, button:not(:disabled), select:not(:disabled), input:not(:disabled):not([readonly]), [tabindex="0"]'
+  const control = [
+    target,
+    target.closest<HTMLElement>(selector),
+    ...target.querySelectorAll<HTMLElement>(selector)
+  ].find(
+    (element) =>
+      element?.matches(selector) && element.getClientRects().length && !element.closest('[inert]')
+  )
+  if (control) control.focus({ preventScroll: true })
+  else {
+    target.tabIndex = -1
+    target.focus({ preventScroll: true })
+  }
+}
+
+async function scrollToSearchResult(input: SettingsSearchEntry): Promise<void> {
+  const revision = ++settingsNavigationRevision
+  const entry = resolveSettingsSearchEntry(input)
+  settingsSearchQuery.value = ''
+  activeSection.value = normalizeSettingsSection(entry.section)
+  revealActiveNavigationItem()
+  if (entry.appearanceArea) {
+    openAppearanceEditor(entry.appearanceArea)
+    return
+  }
+  if (entry.disclosureId) await disclosures.reveal(entry.disclosureId)
+  await settleSettingsNavigation(
+    entry.disclosureId
+      ? (pageRef.value?.querySelector<HTMLElement>(`#${CSS.escape(entry.disclosureId)}`) ?? null)
+      : null
+  )
+  if (revision !== settingsNavigationRevision || !pageRef.value) return
+  const sectionEl = pageRef.value.querySelector<HTMLElement>(
+    `#${normalizeSettingsSection(entry.section)}`
+  )
+  if (!sectionEl) return
+  const exact = findSettingItem(sectionEl, entry)
+  const fallback = entry.fallbackId
+    ? findSettingItem(sectionEl, { ...entry, id: entry.fallbackId })
+    : null
+  const group = entry.disclosureId
+    ? sectionEl.querySelector<HTMLElement>(`#${CSS.escape(entry.disclosureId)}`)
+    : null
+  const target =
+    exact?.getClientRects().length && !exact.closest('[inert]')
+      ? exact
+      : fallback?.getClientRects().length
+        ? fallback
+        : (group ?? sectionEl)
+  if (target !== exact)
+    settingsNotice.value =
+      entry.fallbackReason ?? `“${entry.title}”需要先启用或配置相关功能，请查看此处的说明。`
+  else {
+    const reason = exact.querySelector<HTMLElement>(':disabled[title]')?.title
+    if (reason) settingsNotice.value = `“${entry.title}”：${reason}。`
+  }
+  scrollPageToElement(target, { block: target === sectionEl ? 'start' : 'center' })
+  highlightSettingItem(target === sectionEl ? null : target)
+  focusSetting(target)
 }
 
 function findSettingItem(sectionEl: HTMLElement, entry: SettingsSearchEntry): HTMLElement | null {
+  if (entry.id)
+    return sectionEl.querySelector<HTMLElement>(
+      `[data-setting-id="${CSS.escape(entry.id)}"], #${CSS.escape(entry.id)}`
+    )
   const matchText = (entry.match ?? entry.title).trim().toLowerCase()
   // 优先匹配 .setting-item（常规设置项）
-  const settingItems = sectionEl.querySelectorAll<HTMLElement>('.setting-item, .mini-setting')
+  const settingItems = sectionEl.querySelectorAll<HTMLElement>('.setting-item')
   for (const item of settingItems) {
-    const strong = item.querySelector('.setting-copy strong, strong')
-    if (strong && strong.textContent?.trim().toLowerCase() === matchText) {
+    const copy = item.querySelector('.setting-copy')
+    const strong = copy?.querySelector('strong')
+    if (strong && strong.textContent?.trim().toLowerCase().includes(matchText)) {
       return item
     }
   }
@@ -939,17 +1032,10 @@ function findSettingItem(sectionEl: HTMLElement, entry: SettingsSearchEntry): HT
     }
   }
   // 再回退：匹配任意 strong / span / button 文本（about 的更新卡、赞助卡等）
-  const labelledControl = Array.from(sectionEl.querySelectorAll<HTMLElement>('[aria-label]')).find(
-    (element) => element.getAttribute('aria-label')?.trim().toLowerCase() === matchText
-  )
-  if (labelledControl)
-    return (
-      labelledControl.closest<HTMLElement>('label, .setting-item, .mini-setting') ?? labelledControl
-    )
-  const fallbacks = sectionEl.querySelectorAll<HTMLElement>('strong, span, button, summary, label')
+  const fallbacks = sectionEl.querySelectorAll<HTMLElement>('strong, span, button')
   for (const el of fallbacks) {
-    if (el.textContent?.trim().toLowerCase() === matchText) {
-      return el.closest<HTMLElement>('label, .setting-item, .mini-setting') ?? el
+    if (el.textContent?.trim().toLowerCase().includes(matchText)) {
+      return el
     }
   }
   return null
@@ -962,7 +1048,7 @@ function highlightSettingItem(item: HTMLElement | null): void {
     window.clearTimeout(searchHighlightTimer)
     searchHighlightTimer = null
   }
-  document.querySelectorAll('.search-target-flash').forEach((el) => {
+  pageRef.value?.querySelectorAll('.search-target-flash').forEach((el) => {
     el.classList.remove('search-target-flash')
   })
   if (!item) return
@@ -1011,8 +1097,62 @@ async function refreshShortcutStatuses(): Promise<void> {
 }
 
 let settingsDisposed = false
+let sectionFrame = 0
+let sectionGeometryDirty = true
+let sectionRendering: ReturnType<typeof createSettingsSectionRendering> | null = null
+let sectionPositions: { key: SectionKey; top: number }[] = []
+let sectionScrollOffset = SETTINGS_SECTION_SCROLL_OFFSET
+
+function scheduleActiveSectionUpdate(): void {
+  if (sectionFrame || settingsDisposed) return
+  sectionFrame = window.requestAnimationFrame(() => {
+    sectionFrame = 0
+    updateActiveSection()
+  })
+}
+
+function updateActiveSection(): void {
+  if (performance.now() < programmaticScrollUntil) return
+  const page = pageRef.value
+  if (!page) return
+  const scrollTop = page.scrollTop
+  if (sectionGeometryDirty) {
+    const pageTop = page.getBoundingClientRect().top
+    sectionPositions = sections.flatMap((section) => {
+      const el = page.querySelector<HTMLElement>(`#${section.key}`)
+      return el
+        ? [{ key: section.key, top: el.getBoundingClientRect().top - pageTop + scrollTop }]
+        : []
+    })
+    const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
+    sectionScrollOffset =
+      SETTINGS_SECTION_SCROLL_OFFSET +
+      (navigation && getComputedStyle(navigation).position === 'sticky'
+        ? navigation.offsetHeight
+        : 0)
+    sectionGeometryDirty = false
+  }
+  // A long category owns the entire interval up to the next category. Comparing
+  // distances to headings incorrectly selects the next category halfway through.
+  let closest = sectionPositions[0]?.key ?? activeSection.value
+  for (const section of sectionPositions) {
+    if (section.top > scrollTop + sectionScrollOffset + 4) break
+    closest = section.key
+  }
+  activeSection.value = closest
+}
+
 onMounted(async () => {
-  void applyNavigationTarget()
+  // Scroll handling must not wait for cache sizes or plugin/native IPC to finish.
+  const page = pageRef.value
+  if (page) {
+    sectionRendering = createSettingsSectionRendering(page, () => {
+      sectionGeometryDirty = true
+      scheduleActiveSectionUpdate()
+    })
+    page.addEventListener('scroll', scheduleActiveSectionUpdate, { passive: true })
+    page.addEventListener('scrollend', finishProgrammaticScroll, { passive: true })
+  }
   await Promise.all([loadSettings(), refreshAudioOutputState(), themeStore.load()])
   if (settingsDisposed) return
   await Promise.all([
@@ -1031,11 +1171,21 @@ onMounted(async () => {
     if (document.visibilityState === 'hidden') return
     void refreshLibraryWatcherStatus()
   }, 5_000)
+  await nextTick()
+  if (settingsDisposed) return
+  applyNavigationTarget()
 })
 
 onBeforeUnmount(() => {
   settingsDisposed = true
+  ++settingsNavigationRevision
+  pageRef.value?.removeEventListener('scroll', scheduleActiveSectionUpdate)
+  pageRef.value?.removeEventListener('scrollend', finishProgrammaticScroll)
+  sectionRendering?.dispose()
+  if (sectionFrame) window.cancelAnimationFrame(sectionFrame)
   if (searchHighlightTimer !== null) window.clearTimeout(searchHighlightTimer)
+  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
+  programmaticScrollUntil = 0
   if (libraryWatcherStatusTimer !== null) {
     window.clearInterval(libraryWatcherStatusTimer)
     libraryWatcherStatusTimer = null
@@ -1044,7 +1194,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main ref="pageRef" class="settings-preview-page" data-settings-layout="categories">
+  <main ref="pageRef" class="settings-preview-page">
     <input
       ref="importSettingsInputRef"
       class="visually-hidden-file-input"
@@ -1061,7 +1211,7 @@ onBeforeUnmount(() => {
         <div class="settings-nav-search-wrap">
           <div class="settings-search-box settings-nav-search">
             <i class="pi pi-search"></i>
-            <input
+            <AnimatedInput
               id="settings-search-input"
               v-model="settingsSearchQuery"
               type="text"
@@ -1121,63 +1271,33 @@ onBeforeUnmount(() => {
             没有找到匹配的设置
           </div>
         </div>
-        <div class="settings-category-items">
-          <div
-            v-for="group in sectionGroups"
-            :key="group.key"
-            class="settings-category-group"
-            role="group"
-            :aria-labelledby="`settings-category-group-${group.key}`"
+        <div class="settings-nav-categories">
+          <button
+            v-for="section in sections"
+            :key="section.key"
+            type="button"
+            class="preview-nav-item"
+            :class="{ active: activeSection === section.key }"
+            :aria-current="activeSection === section.key ? 'location' : undefined"
+            @click="scrollToSection(section.key)"
           >
-            <h2 :id="`settings-category-group-${group.key}`" class="settings-category-group-title">
-              {{ group.label }}
-            </h2>
-            <button
-              v-for="section in group.sections"
-              :key="section.key"
-              type="button"
-              class="preview-nav-item"
-              :class="{ active: activeSection === section.key }"
-              :aria-current="activeSection === section.key ? 'page' : undefined"
-              :tabindex="activeSection === section.key ? 0 : -1"
-              :data-settings-category="section.key"
-              @keydown="onCategoryKeydown($event, section.key)"
-              :title="section.description"
-              @click="scrollToSection(section.key)"
-            >
-              <i :class="section.icon"></i>
-              <span>{{ section.label }}</span>
-            </button>
-          </div>
+            <i :class="section.icon"></i>
+            <span>{{ section.label }}</span>
+          </button>
         </div>
-        <select
-          class="settings-category-select preview-select"
-          aria-label="设置分类"
-          :value="activeSection"
-          @change="scrollToSection(($event.target as HTMLSelectElement).value as SectionKey)"
-        >
-          <optgroup v-for="group in sectionGroups" :key="group.key" :label="group.label">
-            <option v-for="section in group.sections" :key="section.key" :value="section.key">
-              {{ section.label }}
-            </option>
-          </optgroup>
-        </select>
       </nav>
 
       <div class="settings-preview-stack">
         <header class="settings-page-header">
-          <h1 class="settings-page-title">{{ activeSectionInfo.label }}</h1>
-          <p class="settings-page-description">
-            {{ activeSectionInfo.description }} 设置自动保存；表单与设备档案按提示保存。
-          </p>
+          <h1 class="settings-page-title">设置</h1>
         </header>
-        <section v-if="settingsNotice || settingsError" class="settings-command-bar glass-card">
-          <div v-if="settingsNotice" class="settings-inline-notice" role="status">
-            {{ settingsNotice }}
-          </div>
-          <div v-if="settingsError" class="settings-inline-error" role="alert">
-            {{ settingsError }}
-          </div>
+        <section
+          v-if="settingsNotice || settingsError"
+          class="settings-command-bar"
+          aria-live="polite"
+        >
+          <div v-if="settingsNotice" class="settings-inline-notice">{{ settingsNotice }}</div>
+          <div v-if="settingsError" class="settings-inline-error">{{ settingsError }}</div>
         </section>
 
         <div v-if="restartRequired" class="restart-banner restart-banner-sticky" role="status">
@@ -1192,38 +1312,91 @@ onBeforeUnmount(() => {
         </div>
 
         <GeneralSettingsSection
-          v-for="category in GENERAL_SETTINGS_SECTIONS"
-          :key="category"
-          :category="category"
-          v-show="activeSection === category"
+          :track-activation-mode-options="trackActivationModeOptions"
+          :startup-home-page-options="startupHomePageOptions"
+          :toggle-setting="toggleSetting"
+          :set-track-activation-mode="setTrackActivationMode"
+          :set-startup-home-page="setStartupHomePage"
+          :set-close-behavior="setCloseBehavior"
+          @reopen-onboarding="emit('reopenOnboarding')"
+        />
+        <AppearanceSettingsSection
+          @open-theme-studio="emit('openThemeStudio')"
+          @open-theme-workshop="emit('openThemeWorkshop')"
+        />
+        <section id="playback" class="glass-card preview-section">
+          <div class="section-title-row">
+            <i class="pi pi-volume-up" aria-hidden="true" />
+            <h2>播放与音效</h2>
+          </div>
+          <p class="settings-section-description">调整播放习惯、输出设备和声音处理。</p>
+          <PlaybackSettingsSection
+            :auto-analyze-bpm="settings.autoAnalyzeBpm"
+            @toggle-auto-analyze-bpm="toggleAutoAnalyzeBpm"
+          /><DspSettingsSection
+            @open-equalizer="emit('openEqualizer')"
+            @open-dsp-rack="emit('openDspRack')"
+          />
+        </section>
+        <section id="lyrics" class="glass-card preview-section">
+          <div class="section-title-row">
+            <i class="pi pi-align-left" aria-hidden="true" />
+            <h2>歌词</h2>
+          </div>
+          <p class="settings-section-description">设置歌词来源与播放页、桌面上的显示方式。</p>
+          <div class="section-block">
+            <h3>歌词来源</h3>
+            <div class="setting-list">
+              <div
+                data-setting-id="lyrics-fallback"
+                id="setting-lyrics-fallback"
+                class="setting-item"
+              >
+                <div class="setting-copy">
+                  <strong>在线歌词回退</strong>
+                  <span>本地歌词不可用时尝试在线搜索，找到后自动显示。默认关闭。</span>
+                </div>
+                <button
+                  type="button"
+                  class="toggle-switch"
+                  :class="{
+                    active: settings.onlineLyricsFallback,
+                    inactive: !settings.onlineLyricsFallback
+                  }"
+                  role="switch"
+                  aria-label="在线歌词回退"
+                  :aria-checked="settings.onlineLyricsFallback"
+                  @click="toggleSetting('onlineLyricsFallback')"
+                ></button>
+              </div>
+            </div>
+          </div>
+          <LyricsStyleSettings />
+          <DesktopLyricsSettingsSection
+            :desktop-lyrics="settings.desktopLyrics"
+            @toggle="toggleDesktopLyrics"
+            @update="updateDesktopLyrics"
+          />
+        </section>
+        <LibrarySettingsSection
           :library-watcher-status="libraryWatcherStatus"
           :library-scan-status="libraryScanStatus"
           :library-scan-is-active="libraryScanIsActive"
           :library-scan-progress-text="libraryScanProgressText"
           :library-metadata-enrichment-text="libraryMetadataEnrichmentText"
           :library-metadata-enrichment-is-active="libraryMetadataEnrichmentIsActive"
+          :library-metadata-enrichment-error="
+            libraryMetadataEnrichmentStatus.state === 'failed' ? libraryMetadataEnrichmentText : ''
+          "
           :library-reset-message="libraryResetMessage"
           :library-scan-command-error="libraryScanCommandError"
           :library-reset-pending="libraryResetPending"
-          :plugin-settings-panels="pluginSettingsPanels"
-          :plugin-settings-result="pluginSettingsResult"
-          :plugin-settings-error="pluginSettingsError"
-          :plugin-settings-forms="pluginSettingsForms"
-          :plugin-settings-values="pluginSettingsValues"
-          :running-plugin-settings-command="runningPluginSettingsCommand"
-          :plugin-panel-state-key="pluginPanelStateKey"
-          :track-activation-mode-options="trackActivationModeOptions"
-          :startup-home-page-options="startupHomePageOptions"
-          :update-settings="updateSettings"
           :add-library-folder="addLibraryFolder"
           :remove-library-folder="removeLibraryFolder"
           :choose-download-folder="chooseDownloadFolder"
           :reset-download-folder="resetDownloadFolder"
           :toggle-setting="toggleSetting"
           :set-genre-separators="setGenreSeparators"
-          :set-track-activation-mode="setTrackActivationMode"
-          :set-startup-home-page="setStartupHomePage"
-          :set-close-behavior="setCloseBehavior"
           :watcher-state-label="watcherStateLabel"
           :watcher-mode-label="watcherModeLabel"
           :format-watcher-time="formatWatcherTime"
@@ -1233,76 +1406,59 @@ onBeforeUnmount(() => {
           :cancel-active-library-scan="cancelActiveLibraryScan"
           :reset-local-library="resetLocalLibrary"
           :cancel-active-library-metadata-enrichment="cancelActiveLibraryMetadataEnrichment"
+        >
+          <CacheSettingsSection
+            :active-cache-path="activeCachePath"
+            :cache-policy="settings.cachePolicy"
+            :streaming-audio-cache-policy-options="streamingAudioCachePolicyOptions"
+            :formatted-bpm-analysis-cache-size="formattedBpmAnalysisCacheSize"
+            :clearing-bpm-analysis-cache="clearingBpmAnalysisCache"
+            :formatted-loudness-analysis-cache-size="formattedLoudnessAnalysisCacheSize"
+            :clearing-loudness-analysis-cache="clearingLoudnessAnalysisCache"
+            :formatted-cache-size="formattedCacheSize"
+            :clearing-cache="clearingCache"
+            @choose-cache-folder="chooseCacheFolder"
+            @reset-cache-folder="resetCacheFolder"
+            @toggle-cache-artifact="toggleCacheArtifact"
+            @set-streaming-audio-cache-policy="setStreamingAudioCachePolicy"
+            @confirm-clear-bpm-analysis-cache="confirmClearBpmAnalysisCache"
+            @confirm-clear-loudness-analysis-cache="confirmClearLoudnessAnalysisCache"
+            @confirm-clear-cache="confirmClearCache"
+          />
+        </LibrarySettingsSection>
+        <ConnectionsSettingsSection
+          :update-settings="updateSettings"
+          :toggle-setting="toggleSetting"
+        >
+          <ShortcutsSettingsSection
+            :global-shortcuts="settings.globalShortcuts"
+            :shortcut-statuses="shortcutStatuses"
+            :shortcut-bindings="settings.globalShortcutBindings"
+            @update:global-shortcuts="toggleGlobalShortcuts"
+            @update:shortcut-bindings="onUpdateShortcutBindings"
+          />
+        </ConnectionsSettingsSection>
+        <SystemSettingsSection
+          :plugin-settings-panels="pluginSettingsPanels"
+          :plugin-settings-result="pluginSettingsResult"
+          :plugin-settings-error="pluginSettingsError"
+          :plugin-settings-forms="pluginSettingsForms"
+          :plugin-settings-values="pluginSettingsValues"
+          :running-plugin-settings-command="runningPluginSettingsCommand"
+          :plugin-panel-state-key="pluginPanelStateKey"
+          :toggle-setting="toggleSetting"
           :export-settings-backup="exportSettingsBackup"
           :import-settings-backup="importSettingsBackup"
           :reset-settings-group="resetSettingsGroup"
           :run-plugin-settings-panel="runPluginSettingsPanel"
           :set-plugin-settings-field="setPluginSettingsField"
           :submit-plugin-settings-form="submitPluginSettingsForm"
-          @reopen-onboarding="emit('reopenOnboarding')"
-        />
-
-        <PlaybackSettingsSection v-show="activeSection === 'playback'" />
-
-        <DspSettingsSection
-          v-show="activeSection === 'dsp'"
-          @open-equalizer="emit('openEqualizer')"
-          @open-dsp-rack="emit('openDspRack')"
-        />
-
-        <CacheSettingsSection
-          v-show="activeSection === 'cache'"
-          :active-cache-path="activeCachePath"
-          :cache-policy="settings.cachePolicy"
-          :auto-analyze-bpm="settings.autoAnalyzeBpm"
-          :streaming-audio-cache-policy-options="streamingAudioCachePolicyOptions"
-          :formatted-bpm-analysis-cache-size="formattedBpmAnalysisCacheSize"
-          :clearing-bpm-analysis-cache="clearingBpmAnalysisCache"
-          :formatted-loudness-analysis-cache-size="formattedLoudnessAnalysisCacheSize"
-          :clearing-loudness-analysis-cache="clearingLoudnessAnalysisCache"
-          :formatted-cache-size="formattedCacheSize"
-          :clearing-cache="clearingCache"
-          @choose-cache-folder="chooseCacheFolder"
-          @reset-cache-folder="resetCacheFolder"
-          @toggle-cache-artifact="toggleCacheArtifact"
-          @set-streaming-audio-cache-policy="setStreamingAudioCachePolicy"
-          @toggle-auto-analyze-bpm="toggleAutoAnalyzeBpm"
-          @confirm-clear-bpm-analysis-cache="confirmClearBpmAnalysisCache"
-          @confirm-clear-loudness-analysis-cache="confirmClearLoudnessAnalysisCache"
-          @confirm-clear-cache="confirmClearCache"
-        />
-
-        <PerformanceSettingsSection
-          v-show="activeSection === 'performance'"
-          :toggle-setting="toggleSetting"
-        />
-
-        <AppearanceSettingsSection
-          v-show="activeSection === 'appearance'"
-          @open-theme-studio="emit('openThemeStudio')"
-          @open-theme-workshop="emit('openThemeWorkshop')"
-        />
-
-        <DesktopLyricsSettingsSection
-          v-show="activeSection === 'desktopLyrics'"
-          :desktop-lyrics="settings.desktopLyrics"
-          @toggle="toggleDesktopLyrics"
-          @update="updateDesktopLyrics"
-        />
-        <ShortcutsSettingsSection
-          v-show="activeSection === 'shortcuts'"
-          :global-shortcuts="settings.globalShortcuts"
-          :shortcut-statuses="shortcutStatuses"
-          :shortcut-bindings="settings.globalShortcutBindings"
-          @update:global-shortcuts="toggleGlobalShortcuts"
-          @update:shortcut-bindings="onUpdateShortcutBindings"
-        />
-
-        <AboutSettingsSection
-          v-show="activeSection === 'about'"
-          :app-version="appVersion"
-          @export-audio-diagnostics="exportAudioDiagnostics"
-        />
+        >
+          <AboutSettingsSection
+            :app-version="appVersion"
+            @export-audio-diagnostics="exportAudioDiagnostics"
+          />
+        </SystemSettingsSection>
       </div>
     </div>
   </main>
@@ -1368,7 +1524,7 @@ html[data-theme='dark'] .settings-preview-page {
      single settings wallpaper painter, so the page stays transparent in every
      theme — a second image copy here would drift into split bands again. */
   background: transparent;
-  color: var(--te-text);
+  color: var(--te-settings-text);
 }
 
 html[data-theme='dark'] .settings-preview-page::-webkit-scrollbar-thumb {
@@ -1480,7 +1636,7 @@ html[data-theme='dark'] .settings-preview-page .background-accordion-trigger,
 html[data-theme='dark'] .settings-preview-page .background-kind-toggle button,
 html[data-theme='dark'] .settings-preview-page .page-background-header,
 html[data-theme='dark'] .settings-preview-page .settings-search-box .settings-search-input {
-  color: rgba(148, 163, 184, 0.88);
+  color: var(--te-settings-text-muted);
 }
 
 html[data-theme='dark'] .settings-preview-page .segmented-control button.active,
@@ -1566,7 +1722,7 @@ html[data-theme='dark'] .settings-preview-page .update-card strong,
 html[data-theme='dark'] .settings-preview-page .background-editor-head strong,
 html[data-theme='dark'] .settings-preview-page .page-background-copy strong,
 html[data-theme='dark'] .settings-preview-page .signal-node.active .signal-node-name {
-  color: var(--te-text);
+  color: var(--te-settings-text);
 }
 
 html[data-theme='dark'] .settings-preview-page .setting-copy span,
@@ -1595,7 +1751,7 @@ html[data-theme='dark'] .settings-preview-page .crossfeed-percent,
 html[data-theme='dark'] .settings-preview-page .diagnostic-chain,
 html[data-theme='dark'] .settings-preview-page .diagnostic-meta,
 html[data-theme='dark'] .settings-preview-page .mini-highres small {
-  color: rgba(148, 163, 184, 0.82);
+  color: var(--te-settings-text-muted);
 }
 
 html[data-theme='dark'] .settings-preview-page .background-options span {
@@ -1637,7 +1793,7 @@ html[data-theme='dark'] .settings-preview-page .dashed-button,
 html[data-theme='dark'] .settings-preview-page .folder-empty-hint {
   border-color: var(--te-card-border);
   background: var(--te-settings-control-bg);
-  color: rgba(203, 213, 225, 0.9);
+  color: var(--te-settings-text);
   box-shadow: none;
 }
 
@@ -1731,5 +1887,3 @@ html[data-theme='dark'] .settings-preview-page .engine-error {
   font-size: 0.9rem;
 }
 </style>
-
-<style src="./settings-page/SettingsLayout.css"></style>

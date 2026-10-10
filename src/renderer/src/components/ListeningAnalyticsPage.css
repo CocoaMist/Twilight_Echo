@@ -90,6 +90,7 @@
   gap: 24px;
   padding-bottom: 28px;
   border-bottom: 1px solid var(--an-line);
+  flex-wrap: wrap;
 }
 .analytics-page .journal-header h1 {
   margin: 0 0 8px;
@@ -121,6 +122,8 @@
   justify-items: end;
   gap: 16px;
   flex-shrink: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 .analytics-page .journal-clear {
   border: 1px solid var(--an-line);
@@ -194,14 +197,9 @@
   font-size: 15px;
   white-space: nowrap;
 }
-.analytics-page .hero-note {
-  font-size: 11px;
-  color: var(--an-muted);
-  margin: 10px 0 25px;
-  letter-spacing: 0.06em;
-}
 .analytics-page .hero-totals {
   display: flex;
+  margin-top: 16px;
   align-items: center;
   gap: 20px;
   flex-wrap: wrap;
@@ -423,11 +421,11 @@
 .analytics-page .an-icon-button {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   padding: 0;
-  border: 1px solid var(--an-line);
-  border-radius: 8px;
+  border: var(--te-control-border-width) solid var(--an-line);
+  border-radius: var(--te-control-radius-sm);
   color: var(--an-secondary);
   flex-shrink: 0;
   font-size: 15px;
@@ -621,10 +619,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 12px 18px;
-  border-radius: 9px;
-  font-size: 12px;
+  gap: var(--te-control-gap);
+  min-height: var(--te-control-height-lg);
+  padding: 0 var(--te-control-pad-x-lg);
+  border-radius: var(--te-control-radius-md);
+  font-size: var(--te-control-font-size-sm);
 }
 .analytics-page .an-button-primary {
   color: var(--an-surface);
@@ -835,5 +834,65 @@
   }
   .analytics-page .an-segments button[aria-pressed='true'] {
     outline: 1px solid Highlight;
+  }
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@container listening-journal (max-width: 580px) {
+  .analytics-page .journal-edition > span {
+    font-size: 24px;
+  }
+  .analytics-page .journal-edition {
+    column-gap: 8px;
+  }
+  .analytics-page .journal-edition time {
+    padding-left: 8px;
+  }
+  .analytics-page .journal-edition small {
+    display: none;
+  }
+  .analytics-page .journal-header p {
+    font-size: 11px;
+  }
+  .analytics-page .journal-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    padding-top: 28px;
+  }
+  .analytics-page .hero-duration strong {
+    font-size: 72px;
+  }
+  .analytics-page .hero-favorite {
+    padding: 18px;
+    gap: 28px;
+    background: var(--an-tint);
+  }
+  .analytics-page .favorite-artwork {
+    width: 100px;
+    height: 103px;
+  }
+  .analytics-page .favorite-copy h2 {
+    margin-top: 5px;
+  }
+  .analytics-page .favorite-play {
+    margin-top: 10px;
+  }
+  .analytics-page .favorite-copy .an-eyebrow {
+    margin-bottom: 6px;
+  }
+  .analytics-page .an-panel {
+    padding: 20px 18px;
+  }
+  .analytics-page .an-section-head {
+    gap: 10px;
+  }
+  .analytics-page .an-section-head h2 {
+    font-size: 16px;
+  }
+  .analytics-page .an-segments button {
+    padding: 6px 7px;
+  }
+  .analytics-page .an-eyebrow {
+    font-size: 8px;
   }
 }

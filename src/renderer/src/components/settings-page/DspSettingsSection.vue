@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsGroup from './SettingsGroup.vue'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
@@ -199,10 +200,6 @@ function toggleFftEnabled(): void {
   updateAudioProcessing({ fftEnabled: !audioProcessing.value.fftEnabled })
 }
 
-function toggleClipGuard(): void {
-  updateAudioProcessing({ clipGuard: !audioProcessing.value.clipGuard })
-}
-
 function toggleConvolver(): void {
   updateAudioProcessing({
     dspEnabled: true,
@@ -277,18 +274,12 @@ const vst3HelpersReady = computed(() => {
   )
 })
 const vst3PlatformSupported = computed(() => vst3Helpers.value?.platformSupported !== false)
-const vst3ToggleUnavailable = computed(
-  () =>
-    vst3Busy.value ||
-    !vst3Catalog.value ||
-    !vst3PlatformSupported.value ||
-    (!vst3Enabled.value && !vst3HelpersReady.value)
-)
 const vst3HelpersNotice = computed(() => {
   if (!vst3Catalog.value || vst3HelpersReady.value || !vst3Helpers.value) return ''
-  if (!vst3Helpers.value.platformSupported) return '当前系统不支持 VST3 插件运行组件。'
+  if (!vst3Helpers.value.platformSupported)
+    return 'VST3 仅当 Windows x64 包暂存宿主和扫描组件时可用。'
   if (!vst3Helpers.value.scannerPresent || !vst3Helpers.value.hostPresent) {
-    return '此版本未包含 VST3 运行或扫描组件。请安装包含这些组件的完整 Windows 版本。'
+    return '本构建未包含 VST3 扫描/宿主组件。开发环境请执行 pnpm run stage:vst3-msvc，或安装完整 Windows 签名包。'
   }
   return ''
 })
@@ -319,7 +310,7 @@ async function refreshVst3Catalog(): Promise<void> {
 }
 
 async function toggleVst3Enabled(): Promise<void> {
-  if (!vst3Catalog.value || vst3ToggleUnavailable.value) return
+  if (vst3Busy.value || !vst3Catalog.value || !vst3PlatformSupported.value) return
   vst3Busy.value = true
   try {
     vst3Catalog.value = await window.api.audioEngine.setVst3Enabled(!vst3Catalog.value.enabled)
@@ -384,562 +375,573 @@ onMounted(() => {
 </script>
 
 <template>
-  <section id="dsp" class="glass-card preview-section">
-    <div class="section-title-row">
-      <i class="pi pi-sliders-v"></i>
-      <h2>音效</h2>
-    </div>
-    <div class="setting-item">
-      <div class="setting-copy">
-        <strong>启用 DSP 声音处理</strong>
-        <span>开启均衡器、交叉馈送等模块会同时启用 DSP；格式转换或音效可能改变原始信号。</span>
+  <div id="dsp" class="section-block">
+    <div data-setting-id="dsp-master" class="section-title-row split">
+      <div>
+        <i class="pi pi-sliders-v"></i>
+        <h3>DSP 音效</h3>
       </div>
       <button
         type="button"
-        class="toggle-switch"
+        aria-label="DSP 音效"
+        class="toggle-switch large"
         :class="{ active: audioProcessing.dspEnabled, inactive: !audioProcessing.dspEnabled }"
         role="switch"
         :aria-checked="audioProcessing.dspEnabled"
         @click="toggleDspMaster"
-        aria-label="启用 DSP 声音处理"
       ></button>
     </div>
-    <details class="settings-advanced-details">
-      <summary>音频链路与处理状态</summary>
-      <div class="dsp-signal-chain">
-        <div class="signal-node static" :class="{ active: true }">
-          <div class="signal-node-circle active">
-            <i class="pi pi-file"></i>
-          </div>
-          <span class="signal-node-label">输入</span>
-          <span class="signal-node-name">音源</span>
+
+    <div class="dsp-signal-chain">
+      <div class="signal-node static" :class="{ active: true }">
+        <div class="signal-node-circle active">
+          <i class="pi pi-file-audio"></i>
         </div>
-        <div class="signal-line" :class="{ active: eqChainActive }"></div>
-        <div
-          class="signal-node"
-          data-te-interactive
-          role="switch"
-          tabindex="0"
-          aria-label="均衡器"
-          :aria-checked="eqChainActive"
-          :class="{ active: eqChainActive }"
-          @click="toggleEqFromDsp"
-          @keydown.enter.prevent="toggleEqFromDsp"
-          @keydown.space.prevent="toggleEqFromDsp"
-        >
-          <div class="signal-node-circle" :class="{ active: eqChainActive }">
-            <i class="pi pi-sliders-h"></i>
-          </div>
-          <span class="signal-node-label">{{ eqChainActive ? '已启用' : '已跳过' }}</span>
-          <span class="signal-node-name">EQ</span>
-        </div>
-        <div class="signal-line" :class="{ active: crossfeedChainActive }"></div>
-        <div
-          class="signal-node"
-          data-te-interactive
-          role="switch"
-          tabindex="0"
-          aria-label="Crossfeed"
-          :aria-checked="crossfeedChainActive"
-          :class="{ active: crossfeedChainActive }"
-          @click="toggleCrossfeedFromDsp"
-          @keydown.enter.prevent="toggleCrossfeedFromDsp"
-          @keydown.space.prevent="toggleCrossfeedFromDsp"
-        >
-          <div class="signal-node-circle" :class="{ active: crossfeedChainActive }">
-            <i class="pi pi-arrows-h"></i>
-          </div>
-          <span class="signal-node-label">{{ crossfeedChainActive ? '已启用' : '已跳过' }}</span>
-          <span class="signal-node-name">CROSSFEED</span>
-        </div>
-        <div class="signal-line" :class="{ active: convolverChainActive }"></div>
-        <div
-          class="signal-node"
-          data-te-interactive
-          role="switch"
-          tabindex="0"
-          aria-label="卷积混响"
-          :aria-checked="convolverChainActive"
-          :class="{ active: convolverChainActive }"
-          @click="toggleConvolver"
-          @keydown.enter.prevent="toggleConvolver"
-          @keydown.space.prevent="toggleConvolver"
-        >
-          <div class="signal-node-circle" :class="{ active: convolverChainActive }">
-            <i class="pi pi-microchip"></i>
-          </div>
-          <span class="signal-node-label">{{ convolverChainActive ? '已启用' : '已跳过' }}</span>
-          <span class="signal-node-name">CONVOLVER</span>
-        </div>
-        <div class="signal-line active"></div>
-        <div class="signal-node static" :class="{ active: true }">
-          <div class="signal-node-circle active">
-            <i class="pi pi-volume-up"></i>
-          </div>
-          <span class="signal-node-label">DAC</span>
-          <span class="signal-node-name">OUTPUT</span>
-        </div>
+        <span class="signal-node-label">Input</span>
+        <span class="signal-node-name">SOURCE</span>
       </div>
-
-      <div class="dsp-status-grid">
-        <div class="dsp-meter">
-          <span>输入</span>
-          <strong>{{ dspInputText }}</strong>
-          <small>源信号格式</small>
+      <div class="signal-line" :class="{ active: eqChainActive }"></div>
+      <div
+        class="signal-node"
+        data-te-interactive
+        role="switch"
+        tabindex="0"
+        aria-label="均衡器"
+        :aria-checked="eqChainActive"
+        :class="{ active: eqChainActive }"
+        @click="toggleEqFromDsp"
+        @keydown.enter.prevent="toggleEqFromDsp"
+        @keydown.space.prevent="toggleEqFromDsp"
+      >
+        <div class="signal-node-circle" :class="{ active: eqChainActive }">
+          <i class="pi pi-sliders-h"></i>
         </div>
-        <div class="dsp-meter">
-          <span>处理</span>
-          <strong>{{ dspProcessText }}</strong>
-          <small>{{ dspModuleCount }} 个模块激活</small>
-        </div>
-        <div class="dsp-meter">
-          <span>输出</span>
-          <strong>{{ dspOutputText }}</strong>
-          <small>{{ outputFormatText }}</small>
-        </div>
+        <span class="signal-node-label">{{ eqChainActive ? 'Active' : 'Bypass' }}</span>
+        <span class="signal-node-name">EQ</span>
       </div>
-    </details>
-
-    <div>
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>音效面板</strong>
-          <span>编辑完整的声音处理链，调整模块顺序与参数。</span>
+      <div class="signal-line" :class="{ active: crossfeedChainActive }"></div>
+      <div
+        class="signal-node"
+        data-te-interactive
+        role="switch"
+        tabindex="0"
+        aria-label="Crossfeed"
+        :aria-checked="crossfeedChainActive"
+        :class="{ active: crossfeedChainActive }"
+        @click="toggleCrossfeedFromDsp"
+        @keydown.enter.prevent="toggleCrossfeedFromDsp"
+        @keydown.space.prevent="toggleCrossfeedFromDsp"
+      >
+        <div class="signal-node-circle" :class="{ active: crossfeedChainActive }">
+          <i class="pi pi-arrows-h"></i>
         </div>
-        <button class="soft-button" type="button" @click="openDspRackFromDsp">打开音效面板</button>
+        <span class="signal-node-label">{{ crossfeedChainActive ? 'Active' : 'Bypass' }}</span>
+        <span class="signal-node-name">CROSSFEED</span>
       </div>
-
-      <h3 class="settings-group-heading">快速预设</h3>
-      <div class="dsp-presets" role="group" aria-label="快速预设">
-        <button
-          class="preset-btn"
-          type="button"
-          title="启用交叉馈送，强度 40%，关闭均衡器"
-          @click="applyDspPreset('headphone')"
-        >
-          <i class="pi pi-headphones"></i> 耳机交叉馈送
-        </button>
-        <button
-          class="preset-btn"
-          type="button"
-          title="启用当前均衡器曲线，关闭交叉馈送"
-          @click="applyDspPreset('dynamic')"
-        >
-          <i class="pi pi-bolt"></i> 使用当前均衡器
-        </button>
-        <button class="preset-btn" type="button" @click="applyDspPreset('bypass')">
-          <i class="pi pi-stop-circle"></i> 关闭 DSP 处理
-        </button>
+      <div class="signal-line" :class="{ active: convolverChainActive }"></div>
+      <div
+        class="signal-node"
+        data-te-interactive
+        role="switch"
+        tabindex="0"
+        aria-label="卷积混响"
+        :aria-checked="convolverChainActive"
+        :class="{ active: convolverChainActive }"
+        @click="toggleConvolver"
+        @keydown.enter.prevent="toggleConvolver"
+        @keydown.space.prevent="toggleConvolver"
+      >
+        <div class="signal-node-circle" :class="{ active: convolverChainActive }">
+          <i class="pi pi-microchip"></i>
+        </div>
+        <span class="signal-node-label">{{ convolverChainActive ? 'Active' : 'Bypass' }}</span>
+        <span class="signal-node-name">CONVOLVER</span>
       </div>
-
-      <div class="dsp-module-grid">
-        <div class="dsp-module-card">
-          <h3>基础处理</h3>
-          <div class="mini-setting">
-            <div>
-              <strong>削波保护</strong>
-              <span>动态压缩超载信号，防止数字削波失真</span>
-            </div>
-            <button
-              type="button"
-              class="toggle-switch"
-              :class="{
-                active: audioProcessing.clipGuard,
-                inactive: !audioProcessing.clipGuard
-              }"
-              role="switch"
-              :aria-checked="audioProcessing.clipGuard"
-              @click="toggleClipGuard"
-              aria-label="削波保护"
-            ></button>
-          </div>
-          <div class="mini-setting">
-            <div>
-              <strong>响度均衡（ReplayGain / Loudnorm）</strong>
-              <span>
-                {{
-                  audioProcessing.volumeNormalization === 'loudnorm'
-                    ? `EBU R128 Loudnorm · 缓存命中用测量增益（${LOUDNORM_TARGET_LUFS} LUFS / ${LOUDNORM_TRUE_PEAK_CEILING_DB} dBTP）；首次播放无缓存时用 Fallback 并后台测量`
-                    : `响度归一化 · ${replayGainModeLabel}`
-                }}
-              </span>
-            </div>
-            <select
-              aria-label="响度均衡（ReplayGain / Loudnorm）"
-              class="preview-select"
-              :value="audioProcessing.volumeNormalization"
-              @change="setReplayGainFromSelect"
-            >
-              <option v-for="option in replayGainOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-          </div>
-          <p v-if="loudnormStatusText" class="setting-hint" data-testid="settings-loudnorm-status">
-            {{ loudnormStatusText }}
-          </p>
-          <div class="mini-setting">
-            <div>
-              <strong>响度预增益</strong>
-              <span>预增益 (dB)</span>
-            </div>
-            <input
-              aria-label="响度预增益"
-              class="number-input"
-              type="number"
-              step="0.1"
-              :value="audioProcessing.replayGainPreamp"
-              @input="setReplayGainPreamp"
-            />
-          </div>
-          <div class="mini-setting">
-            <div>
-              <strong>缺少响度信息时的增益</strong>
-              <span>曲目缺少 ReplayGain/R128 标签时使用的增益 (dB)</span>
-            </div>
-            <input
-              aria-label="缺少响度信息时的增益"
-              class="number-input"
-              type="number"
-              step="0.1"
-              min="-12"
-              max="12"
-              :value="audioProcessing.replayGainFallback"
-              @input="setReplayGainFallback"
-            />
-          </div>
-          <div class="mini-setting">
-            <div>
-              <strong>响度均衡后的削波限制</strong>
-              <span>应用 ReplayGain 后限制到 [-1, 1]，避免标准化造成数字削波。</span>
-            </div>
-            <button
-              type="button"
-              class="toggle-switch"
-              :class="{
-                active: audioProcessing.replayGainClip,
-                inactive: !audioProcessing.replayGainClip
-              }"
-              role="switch"
-              :aria-checked="audioProcessing.replayGainClip"
-              @click="toggleReplayGainClip"
-              aria-label="响度均衡后的削波限制"
-            ></button>
-          </div>
+      <div class="signal-line active"></div>
+      <div class="signal-node static" :class="{ active: true }">
+        <div class="signal-node-circle active">
+          <i class="pi pi-volume-up"></i>
         </div>
-
-        <div class="dsp-module-card">
-          <h3>空间与声学</h3>
-          <div class="mini-setting">
-            <div>
-              <strong>参数均衡器（EQ）</strong>
-              <span>{{ eqSummaryText }}</span>
-            </div>
-            <div class="inline-controls">
-              <button
-                type="button"
-                class="toggle-switch"
-                :class="{
-                  active: audioProcessing.eqEnabled,
-                  inactive: !audioProcessing.eqEnabled
-                }"
-                role="switch"
-                :aria-checked="audioProcessing.eqEnabled"
-                @click="toggleEqFromDsp"
-                aria-label="参数均衡器（EQ）"
-              ></button>
-              <button class="soft-button compact" type="button" @click="openEqualizerFromDsp">
-                <i class="pi pi-sliders-h"></i>
-                打开面板
-              </button>
-            </div>
-          </div>
-          <div class="mini-setting">
-            <div>
-              <strong>耳机交叉馈送（Crossfeed）</strong>
-              <span>将少量左右声道互相混合，减轻耳机声像过宽。此功能不提供听力保护。</span>
-            </div>
-            <div class="inline-controls">
-              <input
-                aria-label="耳机交叉馈送（Crossfeed）"
-                class="range-input"
-                type="range"
-                min="0"
-                max="100"
-                :value="crossfeedPercent"
-                @input="setCrossfeedFromInput"
-              />
-              <EditableRangeValue
-                :value="crossfeedPercent"
-                :min="0"
-                :max="100"
-                suffix="%"
-                aria-label="编辑耳机交叉馈电强度"
-                @change="setCrossfeedPercent"
-              />
-              <button
-                type="button"
-                class="toggle-switch"
-                :class="{
-                  active: audioProcessing.crossfeedEnabled,
-                  inactive: !audioProcessing.crossfeedEnabled
-                }"
-                role="switch"
-                :aria-checked="audioProcessing.crossfeedEnabled"
-                @click="
-                  updateAudioProcessing({
-                    dspEnabled: true,
-                    crossfeedEnabled: !audioProcessing.crossfeedEnabled
-                  })
-                "
-                aria-label="耳机交叉馈送（Crossfeed）"
-              ></button>
-            </div>
-          </div>
-          <div class="mini-setting">
-            <div>
-              <strong>交叉馈送延迟</strong>
-              <span>左右声道串音延迟，范围 0.05-2.0 ms。</span>
-            </div>
-            <input
-              aria-label="交叉馈送延迟"
-              class="number-input"
-              type="number"
-              step="0.05"
-              min="0.05"
-              max="2"
-              :value="audioProcessing.crossfeedDelayMs"
-              @input="setCrossfeedDelay"
-            />
-          </div>
-          <div class="mini-setting">
-            <div>
-              <strong>交叉馈送截止频率</strong>
-              <span>串音低通截止频率，范围 80-4000 Hz。</span>
-            </div>
-            <input
-              aria-label="交叉馈送截止频率"
-              class="number-input"
-              type="number"
-              step="10"
-              min="80"
-              max="4000"
-              :value="audioProcessing.crossfeedCutoffHz"
-              @input="setCrossfeedCutoff"
-            />
-          </div>
-          <div class="mini-setting">
-            <div>
-              <strong>
-                卷积脉冲响应 (Convolver)
-                <span class="compute-badge"><i class="pi pi-microchip"></i> 高算力消耗</span>
-              </strong>
-              <span>加载 IR 脉冲文件用于空间音效。当前路径：{{ convolverPathLabel }}</span>
-            </div>
-            <div class="inline-controls">
-              <button class="soft-button compact" type="button" @click="selectImpulseResponse">
-                <i class="pi pi-folder-open"></i>
-                选择文件
-              </button>
-              <button
-                v-if="audioProcessing.convolverIrPath"
-                class="soft-button compact"
-                type="button"
-                @click="clearImpulseResponse"
-              >
-                移除文件
-              </button>
-              <button
-                type="button"
-                class="toggle-switch"
-                :class="{
-                  active: audioProcessing.convolverEnabled,
-                  inactive: !audioProcessing.convolverEnabled
-                }"
-                role="switch"
-                :aria-checked="audioProcessing.convolverEnabled"
-                @click="toggleConvolver"
-                aria-label="启用卷积脉冲响应"
-              ></button>
-            </div>
-          </div>
-        </div>
-
-        <details class="dsp-module-card settings-advanced-details">
-          <summary>格式与频谱（高级）</summary>
-          <p class="setting-hint">
-            DSD 输出方式与播放设置共用同一选项。频谱分析用于可视化，不会提升音质。
-          </p>
-          <div class="decode-grid">
-            <label>
-              <span>DSD 输出方式</span>
-              <select
-                class="preview-select"
-                :value="audioProcessing.dsdOutputMode"
-                @change="setDsdOutputMode"
-              >
-                <option
-                  v-for="option in dsdOutputModeOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>DSD 采样率策略</span>
-              <select
-                class="preview-select"
-                :value="audioProcessing.dsdRatePolicy"
-                @change="setDsdRatePolicy"
-              >
-                <option
-                  v-for="option in dsdRatePolicyOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>SACD 声道版本</span>
-              <select
-                class="preview-select"
-                :value="audioProcessing.sacdProgramMode"
-                @change="setSacdProgramMode"
-              >
-                <option
-                  v-for="option in sacdProgramModeOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>频谱分析（FFT）</span>
-              <div class="mini-highres">
-                <select
-                  class="preview-select"
-                  :value="audioProcessing.fftResolution"
-                  :disabled="!audioProcessing.fftEnabled"
-                  @change="setFftResolution"
-                >
-                  <option v-for="option in fftResolutionOptions" :key="option" :value="option">
-                    {{ option }}
-                  </option>
-                </select>
-                <button
-                  type="button"
-                  class="toggle-switch"
-                  :class="{
-                    active: audioProcessing.fftEnabled,
-                    inactive: !audioProcessing.fftEnabled
-                  }"
-                  role="switch"
-                  :aria-checked="audioProcessing.fftEnabled"
-                  @click="toggleFftEnabled"
-                  aria-label="启用频谱分析"
-                ></button>
-              </div>
-            </label>
-            <label class="decode-highres">
-              <span>高解析度处理 (High-Res)</span>
-              <div class="mini-highres">
-                <small>由音源格式和输出设备自动决定，当前没有手动开关。</small>
-                <span class="read-only-pill" title="当前版本暂未接入原生处理链">自动</span>
-              </div>
-            </label>
-          </div>
-        </details>
+        <span class="signal-node-label">DAC</span>
+        <span class="signal-node-name">OUTPUT</span>
       </div>
     </div>
 
-    <div class="dsp-module-card vst3-settings-card" data-testid="settings-vst3-card">
-      <h3>VST3 插件 (VST3 Host)</h3>
-      <div class="mini-setting">
-        <div>
-          <strong>启用 VST3 音效插件</strong>
-          <span
-            >在音效面板中使用已扫描到的 VST3
-            插件。需要此版本包含插件运行与扫描组件；不可用时请查看下方状态。</span
-          >
-        </div>
-        <button
-          type="button"
-          class="toggle-switch"
-          :class="{
-            active: vst3Enabled,
-            inactive: !vst3Enabled,
-            disabled: vst3ToggleUnavailable
-          }"
-          role="switch"
-          data-testid="settings-vst3-toggle"
-          :aria-checked="vst3Enabled"
-          :aria-disabled="vst3ToggleUnavailable"
-          :disabled="vst3ToggleUnavailable"
-          @click="toggleVst3Enabled"
-          aria-label="启用 VST3 音效插件"
-        ></button>
+    <div class="dsp-status-grid">
+      <div class="dsp-meter">
+        <span>Input</span>
+        <strong>{{ dspInputText }}</strong>
+        <small>源信号格式</small>
       </div>
-      <p v-if="vst3HelpersNotice" class="setting-hint" data-testid="settings-vst3-helpers">
-        {{ vst3HelpersNotice }}
-      </p>
-      <div class="mini-setting top-align">
-        <div>
-          <strong>搜索目录</strong>
-          <span>扫描 VST3 模块的目录列表。修改后需重新扫描才会生效。</span>
-        </div>
-        <div class="folder-list" data-testid="settings-vst3-paths">
-          <div v-for="path in vst3SearchPaths" :key="path" class="folder-chip">
-            <span :title="path">{{ path }}</span>
-            <i
-              class="pi pi-times"
-              data-te-interactive
-              role="button"
-              tabindex="0"
-              :aria-label="`移除 VST3 搜索目录 ${path}`"
-              @click="removeVst3SearchPath(path)"
-              @keydown.enter.prevent="removeVst3SearchPath(path)"
-              @keydown.space.prevent="removeVst3SearchPath(path)"
-            ></i>
+      <div class="dsp-meter">
+        <span>Process</span>
+        <strong>{{ dspProcessText }}</strong>
+        <small>{{ dspModuleCount }} 个模块激活</small>
+      </div>
+      <div class="dsp-meter">
+        <span>Output</span>
+        <strong>{{ dspOutputText }}</strong>
+        <small>{{ outputFormatText }}</small>
+      </div>
+    </div>
+
+    <div
+      :inert="!audioProcessing.dspEnabled"
+      :class="{ 'dsp-disabled-content': !audioProcessing.dspEnabled }"
+    >
+      <div class="dsp-actions">
+        <button class="brand-soft-button" type="button" @click="openDspRackFromDsp">
+          <i class="pi pi-th-large"></i>
+          打开 DSP Rack
+        </button>
+        <button class="brand-soft-button" type="button" @click="openEqualizerFromDsp">
+          <i class="pi pi-sliders-h"></i>
+          打开均衡器
+        </button>
+        <button class="soft-button" type="button" @click="selectImpulseResponse">
+          <i class="pi pi-folder-open"></i>
+          载入 IR · {{ convolverPathLabel }}
+        </button>
+        <button class="soft-button" type="button" @click="clearImpulseResponse">
+          <i class="pi pi-undo"></i>
+          重置
+        </button>
+      </div>
+
+      <div class="dsp-presets">
+        <button class="preset-btn" type="button" @click="applyDspPreset('headphone')">
+          <i class="pi pi-headphones"></i> 耳机护耳模式
+        </button>
+        <button class="preset-btn" type="button" @click="applyDspPreset('dynamic')">
+          <i class="pi pi-bolt"></i> 动态增强
+        </button>
+        <button class="preset-btn" type="button" @click="applyDspPreset('bypass')">
+          <i class="pi pi-stop-circle"></i> DSP 旁路 (DSP Bypass)
+        </button>
+      </div>
+    </div>
+    <SettingsGroup
+      id="dsp-details"
+      title="DSP 详细参数"
+      :summary="replayGainModeLabel + ' · ' + dspModuleCount + ' 个音效模块'"
+      :attention="
+        !audioProcessing.dspEnabled ? 'DSP 已关闭；开启后可调整详细参数' : loudnormStatusText
+      "
+      ><div
+        class="settings-dsp-details"
+        :inert="!audioProcessing.dspEnabled"
+        :class="{ 'dsp-disabled-content': !audioProcessing.dspEnabled }"
+      >
+        <div class="dsp-module-grid">
+          <div class="dsp-module-card">
+            <h4>响度与增益</h4>
+            <div
+              data-setting-id="volume-normalization"
+              id="setting-volume-normalization"
+              class="mini-setting"
+            >
+              <div>
+                <strong>音量标准化 (ReplayGain / Loudnorm)</strong>
+                <span>
+                  {{
+                    audioProcessing.volumeNormalization === 'loudnorm'
+                      ? `EBU R128 Loudnorm · 缓存命中用测量增益（${LOUDNORM_TARGET_LUFS} LUFS / ${LOUDNORM_TRUE_PEAK_CEILING_DB} dBTP）；首次播放无缓存时用 Fallback 并后台测量`
+                      : `响度归一化 · ${replayGainModeLabel}`
+                  }}
+                </span>
+              </div>
+              <select
+                class="preview-select"
+                :value="audioProcessing.volumeNormalization"
+                @change="setReplayGainFromSelect"
+              >
+                <option
+                  v-for="option in replayGainOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            </div>
+            <p
+              v-if="loudnormStatusText"
+              class="setting-hint"
+              data-testid="settings-loudnorm-status"
+            >
+              {{ loudnormStatusText }}
+            </p>
+            <div
+              data-setting-id="replaygain-preamp"
+              id="setting-replaygain-preamp"
+              class="mini-setting"
+            >
+              <div>
+                <strong>Preamp</strong>
+                <span>预增益 (dB)</span>
+              </div>
+              <input
+                class="number-input"
+                type="number"
+                step="0.1"
+                :value="audioProcessing.replayGainPreamp"
+                @input="setReplayGainPreamp"
+              />
+            </div>
+            <div
+              data-setting-id="replaygain-fallback"
+              id="setting-replaygain-fallback"
+              class="mini-setting"
+            >
+              <div>
+                <strong>Fallback Gain</strong>
+                <span>曲目缺少 ReplayGain/R128 标签时使用的增益 (dB)</span>
+              </div>
+              <input
+                class="number-input"
+                type="number"
+                step="0.1"
+                min="-12"
+                max="12"
+                :value="audioProcessing.replayGainFallback"
+                @input="setReplayGainFallback"
+              />
+            </div>
+            <div
+              data-setting-id="replaygain-clip"
+              id="setting-replaygain-clip"
+              class="mini-setting"
+            >
+              <div>
+                <strong>ReplayGain Clip</strong>
+                <span>应用 ReplayGain 后限制到 [-1, 1]，避免标准化造成数字削波。</span>
+              </div>
+              <button
+                type="button"
+                aria-label="ReplayGain Clip"
+                class="toggle-switch"
+                :class="{
+                  active: audioProcessing.replayGainClip,
+                  inactive: !audioProcessing.replayGainClip
+                }"
+                role="switch"
+                :aria-checked="audioProcessing.replayGainClip"
+                @click="toggleReplayGainClip"
+              ></button>
+            </div>
           </div>
-          <div v-if="vst3SearchPaths.length === 0" class="folder-empty-hint">
-            暂未配置任何搜索目录
+
+          <div class="dsp-module-card">
+            <h4>空间与声学</h4>
+            <div data-setting-id="parametric-eq" id="setting-parametric-eq" class="mini-setting">
+              <div>
+                <strong>Parametric EQ</strong>
+                <span>{{ eqSummaryText }}</span>
+              </div>
+              <div class="inline-controls">
+                <button
+                  type="button"
+                  aria-label="Parametric EQ"
+                  class="toggle-switch"
+                  :class="{
+                    active: audioProcessing.eqEnabled,
+                    inactive: !audioProcessing.eqEnabled
+                  }"
+                  role="switch"
+                  :aria-checked="audioProcessing.eqEnabled"
+                  @click="toggleEqFromDsp"
+                ></button>
+                <button class="soft-button compact" type="button" @click="openEqualizerFromDsp">
+                  <i class="pi pi-sliders-h"></i>
+                  打开面板
+                </button>
+              </div>
+            </div>
+            <div data-setting-id="crossfeed" id="setting-crossfeed" class="mini-setting">
+              <div>
+                <strong>耳机交叉馈电 (Crossfeed)</strong>
+                <span>减轻耳机声像过宽的"头中效应"。</span>
+              </div>
+              <div class="inline-controls">
+                <input
+                  class="range-input"
+                  type="range"
+                  min="0"
+                  max="100"
+                  :value="crossfeedPercent"
+                  @input="setCrossfeedFromInput"
+                />
+                <EditableRangeValue
+                  :value="crossfeedPercent"
+                  :min="0"
+                  :max="100"
+                  suffix="%"
+                  aria-label="编辑耳机交叉馈电强度"
+                  @change="setCrossfeedPercent"
+                />
+                <button
+                  type="button"
+                  aria-label="耳机交叉馈电 (Crossfeed)"
+                  class="toggle-switch"
+                  :class="{
+                    active: audioProcessing.crossfeedEnabled,
+                    inactive: !audioProcessing.crossfeedEnabled
+                  }"
+                  role="switch"
+                  :aria-checked="audioProcessing.crossfeedEnabled"
+                  @click="
+                    updateAudioProcessing({
+                      dspEnabled: true,
+                      crossfeedEnabled: !audioProcessing.crossfeedEnabled
+                    })
+                  "
+                ></button>
+              </div>
+            </div>
+            <div
+              data-setting-id="crossfeed-delay"
+              id="setting-crossfeed-delay"
+              class="mini-setting"
+            >
+              <div>
+                <strong>Crossfeed Delay</strong>
+                <span>左右声道串音延迟，范围 0.05-2.0 ms。</span>
+              </div>
+              <input
+                class="number-input"
+                type="number"
+                step="0.05"
+                min="0.05"
+                max="2"
+                :value="audioProcessing.crossfeedDelayMs"
+                @input="setCrossfeedDelay"
+              />
+            </div>
+            <div
+              data-setting-id="crossfeed-cutoff"
+              id="setting-crossfeed-cutoff"
+              class="mini-setting"
+            >
+              <div>
+                <strong>Crossfeed Cutoff</strong>
+                <span>串音低通截止频率，范围 80-4000 Hz。</span>
+              </div>
+              <input
+                class="number-input"
+                type="number"
+                step="10"
+                min="80"
+                max="4000"
+                :value="audioProcessing.crossfeedCutoffHz"
+                @input="setCrossfeedCutoff"
+              />
+            </div>
+            <div class="mini-setting">
+              <div>
+                <strong>
+                  卷积脉冲响应 (Convolver)
+                  <span class="compute-badge"><i class="pi pi-microchip"></i> 高算力消耗</span>
+                </strong>
+                <span>加载 IR 脉冲文件用于空间音效。当前路径：{{ convolverPathLabel }}</span>
+              </div>
+              <div class="inline-controls">
+                <button class="soft-button compact" type="button" @click="selectImpulseResponse">
+                  <i class="pi pi-folder-open"></i>
+                  选择文件
+                </button>
+                <button
+                  type="button"
+                  aria-label="卷积脉冲响应 (Convolver)"
+                  class="toggle-switch"
+                  :class="{
+                    active: audioProcessing.convolverEnabled,
+                    inactive: !audioProcessing.convolverEnabled
+                  }"
+                  role="switch"
+                  :aria-checked="audioProcessing.convolverEnabled"
+                  @click="toggleConvolver"
+                ></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="dsp-module-card">
+            <h4>解码与频谱</h4>
+            <div class="decode-grid">
+              <label>
+                <span>DSD Mode</span>
+                <select
+                  class="preview-select"
+                  :value="audioProcessing.dsdOutputMode"
+                  @change="setDsdOutputMode"
+                >
+                  <option
+                    v-for="option in dsdOutputModeOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
+              <label data-setting-id="dsd-rate-policy">
+                <span>DSD Rate Policy</span>
+                <select
+                  class="preview-select"
+                  :value="audioProcessing.dsdRatePolicy"
+                  @change="setDsdRatePolicy"
+                >
+                  <option
+                    v-for="option in dsdRatePolicyOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
+              <label data-setting-id="sacd-program">
+                <span>SACD Program</span>
+                <select
+                  class="preview-select"
+                  :value="audioProcessing.sacdProgramMode"
+                  @change="setSacdProgramMode"
+                >
+                  <option
+                    v-for="option in sacdProgramModeOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </label>
+              <label data-setting-id="fft-capture">
+                <span>FFT Capture</span>
+                <div class="mini-highres">
+                  <select
+                    class="preview-select"
+                    :value="audioProcessing.fftResolution"
+                    :disabled="!audioProcessing.fftEnabled"
+                    @change="setFftResolution"
+                  >
+                    <option v-for="option in fftResolutionOptions" :key="option" :value="option">
+                      {{ option }}
+                    </option>
+                  </select>
+                  <button
+                    type="button"
+                    aria-label="硬核解码 (Decoding)"
+                    class="toggle-switch"
+                    :class="{
+                      active: audioProcessing.fftEnabled,
+                      inactive: !audioProcessing.fftEnabled
+                    }"
+                    role="switch"
+                    :aria-checked="audioProcessing.fftEnabled"
+                    @click="toggleFftEnabled"
+                  ></button>
+                </div>
+              </label>
+              <label class="decode-highres">
+                <span>高解析度处理 (High-Res)</span>
+                <div class="mini-highres">
+                  <small>High-Res 暂不支持手动设置。</small>
+                  <span class="read-only-pill" title="不支持手动设置">自动</span>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div></SettingsGroup
+    >
+    <SettingsGroup
+      id="vst3-settings"
+      title="VST3 插件"
+      :summary="vst3ScanSummary"
+      :attention="vst3Error || (vst3Scanning ? '正在扫描插件…' : '')"
+      ><div class="dsp-module-card vst3-settings-card" data-testid="settings-vst3-card">
+        <div data-setting-id="vst3-enabled" id="setting-vst3-enabled" class="mini-setting">
+          <div>
+            <strong>仅当已暂存宿主和扫描组件时启用 VST3 宿主</strong>
+            <span
+              >允许在 DSP Rack 中加载扫描到的 VST3 效果插件。仅当 Windows x64
+              包暂存宿主和扫描组件时可用。</span
+            >
           </div>
           <button
             type="button"
-            class="dashed-button"
-            :disabled="!vst3Catalog || vst3Busy"
-            @click="addVst3SearchPath"
+            aria-label="仅当已暂存宿主和扫描组件时启用 VST3 宿主"
+            :disabled="!vst3Catalog || !vst3PlatformSupported || vst3Busy"
+            class="toggle-switch"
+            :class="{
+              active: vst3Enabled,
+              inactive: !vst3Enabled,
+              disabled: !vst3Catalog || !vst3PlatformSupported || vst3Busy
+            }"
+            role="switch"
+            data-testid="settings-vst3-toggle"
+            :aria-checked="vst3Enabled"
+            :aria-disabled="!vst3Catalog || !vst3PlatformSupported || vst3Busy"
+            @click="toggleVst3Enabled"
+          ></button>
+        </div>
+        <p v-if="vst3HelpersNotice" class="setting-hint" data-testid="settings-vst3-helpers">
+          {{ vst3HelpersNotice }}
+        </p>
+        <div data-setting-id="vst3-paths" id="setting-vst3-paths" class="mini-setting top-align">
+          <div>
+            <strong>搜索目录</strong>
+            <span>扫描 VST3 模块的目录列表。修改后需重新扫描才会生效。</span>
+          </div>
+          <div class="folder-list" data-testid="settings-vst3-paths">
+            <div v-for="path in vst3SearchPaths" :key="path" class="folder-chip">
+              <span :title="path">{{ path }}</span>
+              <i
+                class="pi pi-times"
+                data-te-interactive
+                role="button"
+                tabindex="0"
+                :aria-label="`移除 VST3 搜索目录 ${path}`"
+                @click="removeVst3SearchPath(path)"
+                @keydown.enter.prevent="removeVst3SearchPath(path)"
+                @keydown.space.prevent="removeVst3SearchPath(path)"
+              ></i>
+            </div>
+            <div v-if="vst3SearchPaths.length === 0" class="folder-empty-hint">
+              暂未配置任何搜索目录
+            </div>
+            <button
+              type="button"
+              class="dashed-button"
+              :disabled="!vst3Catalog || vst3Busy"
+              @click="addVst3SearchPath"
+            >
+              <i class="pi pi-plus"></i>
+              添加目录
+            </button>
+          </div>
+        </div>
+        <div data-setting-id="vst3-catalog" id="setting-vst3-catalog" class="mini-setting">
+          <div>
+            <strong>插件目录状态</strong>
+            <span data-testid="settings-vst3-summary">{{ vst3ScanSummary }}</span>
+          </div>
+          <button
+            class="soft-button compact"
+            type="button"
+            data-testid="settings-vst3-rescan"
+            :disabled="!vst3Enabled || vst3Scanning || !vst3HelpersReady"
+            @click="rescanVst3Plugins"
           >
-            <i class="pi pi-plus"></i>
-            添加目录
+            <i class="pi pi-refresh" :class="{ 'pi-spin': vst3Scanning }"></i>
+            {{ vst3Scanning ? '扫描中…' : '重新扫描' }}
           </button>
         </div>
-      </div>
-      <div class="mini-setting">
-        <div>
-          <strong>插件目录状态</strong>
-          <span data-testid="settings-vst3-summary">{{ vst3ScanSummary }}</span>
-        </div>
-        <button
-          class="soft-button compact"
-          type="button"
-          data-testid="settings-vst3-rescan"
-          :disabled="!vst3Enabled || vst3Scanning || !vst3HelpersReady"
-          @click="rescanVst3Plugins"
-        >
-          <i class="pi pi-refresh" :class="{ 'pi-spin': vst3Scanning }"></i>
-          {{ vst3Scanning ? '扫描中…' : '重新扫描' }}
-        </button>
-      </div>
-      <p v-if="vst3Error" class="setting-hint" data-testid="settings-vst3-error">
-        {{ vst3Error }}
-      </p>
-    </div>
-  </section>
+        <p v-if="vst3Error" class="setting-hint" data-testid="settings-vst3-error">
+          {{ vst3Error }}
+        </p>
+      </div></SettingsGroup
+    >
+  </div>
 </template>

@@ -17,7 +17,7 @@ test('the default sidebar collects streaming and local pages into two compact br
   const entries = buildSidebarEntries(visible)
   assert.deepEqual(
     entries.map((entry) => (entry.kind === 'page' ? entry.page.id : entry.id)),
-    ['local-home', 'streaming', 'local-library', 'search', 'recent']
+    ['local-home', 'search', 'streaming', 'local-library', 'recent']
   )
   assert.deepEqual(
     entries
@@ -60,4 +60,26 @@ test('hidden children and empty branches disappear, plugin pages retain independ
   assert.equal(sidebarGroupId('plugin:extension:cloud'), undefined)
   assert.equal(entries.at(-1)?.kind, 'page')
   assert.deepEqual(buildSidebarEntries([]), [])
+})
+
+test('search follows home with a saved order while hidden entries and the input remain unchanged', () => {
+  const pages = [
+    visible.find((page) => page.id === 'search')!,
+    ...visible.filter((page) => page.id !== 'search')
+  ]
+  const original = pages.map((page) => page.id)
+  const entries = buildSidebarEntries(pages)
+  assert.deepEqual(
+    entries.slice(0, 2).map((entry) => entry.kind === 'page' && entry.page.id),
+    ['local-home', 'search']
+  )
+  assert.deepEqual(
+    pages.map((page) => page.id),
+    original
+  )
+  assert.ok(
+    buildSidebarEntries(pages.filter((page) => page.id !== 'search')).every(
+      (entry) => entry.kind !== 'page' || entry.page.id !== 'search'
+    )
+  )
 })

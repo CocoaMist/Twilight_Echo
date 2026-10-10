@@ -40,9 +40,16 @@ export interface VisualizationPollingOptions {
   active: Ref<boolean>
   /** Mounted components that read `data`; the poll only runs while this is > 0. */
   consumers: Ref<number>
+  visible?: Ref<boolean>
+  enabled?: () => boolean
   setInterval?: (callback: () => void, delayMs: number) => number
   clearInterval?: (handle: number) => void
-  fetch?: () => Promise<NativeVisualizationData>
+  fetch?: (request: VisualizationConsumerOptions) => Promise<NativeVisualizationData>
+}
+
+export interface VisualizationConsumerOptions {
+  spectrumPoints?: number
+  waveformPoints?: number
 }
 
 export function createVisualizationPolling(options: VisualizationPollingOptions) {
@@ -50,18 +57,44 @@ export function createVisualizationPolling(options: VisualizationPollingOptions)
     options.setInterval ?? ((callback, delayMs) => window.setInterval(callback, delayMs))
   const cancel = options.clearInterval ?? ((handle) => window.clearInterval(handle))
   const fetchData =
-    options.fetch ?? (() => window.api.audioEngine.getVisualizationData(visualizationOptions))
+    options.fetch ??
+    ((request) =>
+      window.api.audioEngine.getVisualizationData({ ...visualizationOptions, ...request }))
+  const requests = new Set<VisualizationConsumerOptions>()
   let timer: number | null = null
   let requestInFlight = false
   let pollingGeneration = 0
 
+  function canPoll(): boolean {
+    return (
+      !options.active.value &&
+      options.consumers.value > 0 &&
+      (options.visible?.value ?? (typeof document === 'undefined' || !document.hidden)) &&
+      (options.enabled?.() ?? true)
+    )
+  }
+
+  function requestOptions(): VisualizationConsumerOptions {
+    let spectrumPoints: number = visualizationOptions.spectrumPoints
+    let waveformPoints: number = visualizationOptions.waveformPoints
+    for (const request of requests) {
+      spectrumPoints = Math.max(spectrumPoints, request.spectrumPoints ?? 0)
+      waveformPoints = Math.max(waveformPoints, request.waveformPoints ?? 0)
+    }
+    return { spectrumPoints, waveformPoints }
+  }
+
   async function refresh(): Promise<void> {
+    if (!canPoll()) {
+      stop()
+      return
+    }
     if (requestInFlight) return
     const generation = pollingGeneration
     requestInFlight = true
     try {
-      const next = await fetchData()
-      if (generation !== pollingGeneration) return
+      const next = await fetchData(requestOptions())
+      if (generation !== pollingGeneration || !canPoll()) return
       options.data.value = next
     } catch {
       if (generation !== pollingGeneration) return
@@ -81,8 +114,7 @@ export function createVisualizationPolling(options: VisualizationPollingOptions)
   }
 
   function start(): void {
-    if (options.active.value) return
-    if (options.consumers.value <= 0) return
+    if (!canPoll()) return
     if (timer !== null) return
     void refresh()
     timer = schedule(() => void refresh(), VISUALIZATION_UPDATE_INTERVAL_MS)
@@ -93,13 +125,17 @@ export function createVisualizationPolling(options: VisualizationPollingOptions)
    * function; callers pair it with onMounted / onBeforeUnmount so a hidden
    * player bar or a closed equalizer never keeps the IPC poll alive.
    */
-  function acquireConsumer(): () => void {
+  function acquireConsumer(request: VisualizationConsumerOptions = {}): () => void {
     let released = false
+    const owned = { ...request }
+    requests.add(owned)
     options.consumers.value += 1
     return () => {
       if (released) return
       released = true
+      requests.delete(owned)
       options.consumers.value = Math.max(0, options.consumers.value - 1)
+      if (options.consumers.value === 0) stop(true)
     }
   }
 

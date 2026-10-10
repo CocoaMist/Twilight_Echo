@@ -1,11 +1,30 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { nextTick } from 'vue'
 import { BUILTIN_NAVIGATION_PAGES } from './navigationPages.ts'
+import {
+  NAVIGATION_SESSION_KEY,
+  normalizeNavigationSession,
+  type NavigationSessionStorage
+} from './navigationSession.ts'
 
 const { useAppNavigation } = (await import(
   new URL('./useAppNavigation.ts', import.meta.url).href
 )) as typeof import('./useAppNavigation')
+const { createNavigationSessionPersistence } = (await import(
+  new URL('./useNavigationSessionPersistence.ts', import.meta.url).href
+)) as typeof import('./useNavigationSessionPersistence')
+
+function memoryStorage(): NavigationSessionStorage {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => {
+      values.set(key, value)
+    }
+  }
+}
 
 test('the menu starts closed and stays shared across local and streaming pages', () => {
   const navigation = useAppNavigation()
@@ -133,6 +152,27 @@ test('nested foreground tools restore their originating surface before returning
   assert.equal(navigation.showRecentPage.value, true)
 })
 
+test('opening plugins hides every streaming tab and closing restores the original destination', () => {
+  for (const tab of ['home', 'discover', 'library', 'cloud', 'search'] as const) {
+    const navigation = useAppNavigation()
+    navigation.enterStreamingMode(tab)
+    const destination = navigation.pageTarget.value
+    const togglePlugins = navigation.createTogglePluginHandler()
+
+    togglePlugins()
+    assert.equal(navigation.showPluginPage.value, true)
+    assert.equal(navigation.showStreamingPage.value, false, tab)
+    assert.equal(navigation.showStreamingSurface.value, false, tab)
+    assert.equal(navigation.pageTarget.value, destination)
+
+    togglePlugins()
+    assert.equal(navigation.showPluginPage.value, false)
+    assert.equal(navigation.showStreamingPage.value, true, tab)
+    assert.equal(navigation.showStreamingSurface.value, true, tab)
+    assert.equal(navigation.pageTarget.value, destination)
+  }
+})
+
 test('network sources page is mutually exclusive with streaming and radio pages', () => {
   const navigation = useAppNavigation()
 
@@ -166,7 +206,7 @@ test('settings, plugin, equalizer, and extension pages are mutually exclusive', 
   navigation.enterStreamingMode()
   navigation.openSettingsPage('dsp')
   assert.equal(navigation.showSettingsPage.value, true)
-  assert.equal(navigation.showStreamingPage.value, true)
+  assert.equal(navigation.showStreamingPage.value, false)
   assert.equal(navigation.showPluginPage.value, false)
 
   navigation.openPluginPage()
@@ -317,4 +357,226 @@ test('command destinations replace foreground overlays and repeated settings tar
   const first = navigation.settingsNavigationTarget.value.revision
   navigation.openSettingsPage('playback', { anchor: 'device-profiles' })
   assert.equal(navigation.settingsNavigationTarget.value.revision, first + 1)
+})
+
+test('reopening restores every built-in page and local details without waiting for shutdown', async () => {
+  for (const page of BUILTIN_NAVIGATION_PAGES) {
+    const storage = memoryStorage()
+    const navigation = useAppNavigation()
+    const persistence = createNavigationSessionPersistence(navigation, storage)
+    assert.equal(persistence.restored, false)
+    persistence.start()
+    navigation.selectSidebarPage(page.target)
+    await nextTick()
+    const reopened = useAppNavigation()
+    const reopenedPersistence = createNavigationSessionPersistence(reopened, storage)
+    assert.equal(reopenedPersistence.restored, true, page.id)
+    assert.deepEqual(reopened.pageTarget.value, page.target, page.id)
+    reopenedPersistence.stop()
+    persistence.stop()
+  }
+
+  const storage = memoryStorage()
+  const navigation = useAppNavigation()
+  const persistence = createNavigationSessionPersistence(navigation, storage)
+  persistence.start()
+  navigation.selectSidebarPage({ kind: 'local', category: 'artists', filter: null })
+  navigation.onSelectView('artists', 'artist:测试歌手')
+  navigation.onSelectView('albums', 'album:测试专辑')
+  navigation.menuOpen.value = true
+  // Close before Vue's queued watcher runs: the exit flush must capture this page.
+  persistence.flush()
+  const reopened = useAppNavigation()
+  const reopenedPersistence = createNavigationSessionPersistence(reopened, storage)
+  assert.equal(reopened.activeFilter.value, 'album:测试专辑')
+  assert.equal(reopened.menuOpen.value, true)
+  reopened.goBackPage()
+  assert.equal(reopened.activeFilter.value, 'artist:测试歌手')
+  reopened.goBackPage()
+  assert.equal(reopened.activeCategory.value, 'artists')
+  assert.equal(reopened.canGoBackPage.value, false)
+  reopenedPersistence.stop()
+  persistence.stop()
+})
+
+test('reopening restores foreground tools, current sections, and their return path', () => {
+  const storage = memoryStorage()
+  const navigation = useAppNavigation()
+  const persistence = createNavigationSessionPersistence(navigation, storage)
+  persistence.start()
+  navigation.onSelectView('playlists', 'playlist:工作')
+  navigation.enterStreamingMode('library')
+  navigation.openPlayingPage()
+  navigation.openSettingsPage('general')
+  navigation.rememberSettingsSection('shortcuts')
+  navigation.openThemeStudioPage('presets')
+  navigation.rememberThemeStudioDomain('typography')
+  persistence.stop()
+
+  const reopened = useAppNavigation()
+  const reopenedPersistence = createNavigationSessionPersistence(reopened, storage)
+  assert.equal(reopened.showThemeStudioPage.value, true)
+  assert.equal(reopened.themeStudioInitialDomain.value, 'typography')
+  assert.equal(reopened.settingsInitialSection.value, 'connections')
+  reopened.closeThemeStudioPage()
+  assert.equal(reopened.showSettingsPage.value, true)
+  reopened.closeSettingsPage()
+  assert.equal(reopened.showPlayingPage.value, true)
+  reopened.closePlayingPage()
+  assert.equal(reopened.showStreamingSurface.value, true)
+  reopened.returnToLocalMode()
+  assert.equal(reopened.activeFilter.value, 'playlist:工作')
+  reopenedPersistence.stop()
+})
+
+test('login, equalizer, DSP, and plugin management surfaces survive reopening', () => {
+  for (const open of [
+    (navigation: ReturnType<typeof useAppNavigation>) =>
+      navigation.openLoginPage('ncm', { profile: true }),
+    (navigation: ReturnType<typeof useAppNavigation>) => navigation.openEqualizerPage(),
+    (navigation: ReturnType<typeof useAppNavigation>) => navigation.openDspRackPage(),
+    (navigation: ReturnType<typeof useAppNavigation>) => navigation.openPluginPage()
+  ]) {
+    const storage = memoryStorage()
+    const navigation = useAppNavigation()
+    const persistence = createNavigationSessionPersistence(navigation, storage)
+    persistence.start()
+    open(navigation)
+    persistence.stop()
+    const reopened = useAppNavigation()
+    const reopenedPersistence = createNavigationSessionPersistence(reopened, storage)
+    assert.deepEqual(reopened.session.value, navigation.session.value)
+    reopenedPersistence.stop()
+  }
+})
+
+test('corrupt, unsupported, and invalid saved pages fall back without breaking startup', () => {
+  for (const raw of [
+    '{',
+    'null',
+    '[]',
+    '{"version":2}',
+    '{"version":1,"pageTarget":{"kind":"local","category":"invalid","filter":null}}'
+  ]) {
+    const storage = memoryStorage()
+    storage.setItem(NAVIGATION_SESSION_KEY, raw)
+    const navigation = useAppNavigation()
+    const persistence = createNavigationSessionPersistence(navigation, storage)
+    assert.equal(persistence.restored, false)
+    assert.equal(navigation.activePageId.value, 'local-home')
+    persistence.stop()
+  }
+  const saved = useAppNavigation().session.value
+  const normalized = normalizeNavigationSession({
+    ...saved,
+    settingsSection: 'invalid',
+    themeStudioDomain: 'invalid',
+    overlay: 'invalid',
+    history: [null, { kind: 'streaming', tab: 'invalid' }, { kind: 'network' }],
+    overlayHistory: [null, 'playing', 'invalid'],
+    menuOpen: 'true'
+  })!
+  assert.equal(normalized.settingsSection, 'general')
+  assert.equal(normalized.themeStudioDomain, 'presets')
+  assert.equal(normalized.overlay, null)
+  assert.equal(normalized.menuOpen, false)
+  assert.deepEqual(normalized.history, [{ kind: 'network' }])
+  assert.deepEqual(normalized.overlayHistory, [null, 'playing'])
+})
+
+test('blocked storage is harmless and failed writes are retried at exit', () => {
+  const navigation = useAppNavigation()
+  const broken = createNavigationSessionPersistence(navigation, {
+    getItem() {
+      throw new Error('blocked')
+    },
+    setItem() {
+      throw new Error('full')
+    }
+  })
+  assert.doesNotThrow(() => {
+    broken.start()
+    navigation.enterStreamingMode('search')
+    broken.stop()
+  })
+
+  const storage = memoryStorage()
+  let fail = true
+  const persistence = createNavigationSessionPersistence(navigation, {
+    getItem: storage.getItem,
+    setItem(key, value) {
+      if (fail) throw new Error('temporary failure')
+      storage.setItem(key, value)
+    }
+  })
+  persistence.start()
+  assert.equal(storage.getItem(NAVIGATION_SESSION_KEY), null)
+  fail = false
+  persistence.stop()
+  assert.equal(JSON.parse(storage.getItem(NAVIGATION_SESSION_KEY)!).pageTarget.tab, 'search')
+})
+
+test('plugin pages wait for current contributions and persist only stable identifiers', () => {
+  const storage = memoryStorage()
+  const page = {
+    pluginId: 'tool',
+    id: 'page',
+    kind: 'sidebarPage',
+    title: 'Old tool',
+    command: 'old.open'
+  } as const
+  const navigation = useAppNavigation()
+  const persistence = createNavigationSessionPersistence(navigation, storage)
+  persistence.start()
+  navigation.onSelectPluginPage(page)
+  persistence.stop()
+  const raw = storage.getItem(NAVIGATION_SESSION_KEY)!
+  assert.doesNotMatch(raw, /Old tool|old\.open/)
+
+  const reopened = useAppNavigation()
+  const reopenedPersistence = createNavigationSessionPersistence(reopened, storage)
+  assert.equal(reopened.activePluginPage.value, null)
+  reopenedPersistence.start()
+  // Quitting while plugins load must retain the intended plugin page.
+  reopenedPersistence.flush()
+  assert.equal(JSON.parse(storage.getItem(NAVIGATION_SESSION_KEY)!).pageTarget.kind, 'plugin')
+  // App's registry watcher prunes removed pages before the startup promise resolves.
+  reopened.closeMissingPluginPage([{ ...page, title: 'Current tool', command: 'new.open' }])
+  reopenedPersistence.resolvePluginPages([{ ...page, title: 'Current tool', command: 'new.open' }])
+  assert.deepEqual(reopened.activePluginPage.value, {
+    ...page,
+    title: 'Current tool',
+    command: 'new.open'
+  })
+  reopenedPersistence.stop()
+
+  const missing = useAppNavigation()
+  const missingPersistence = createNavigationSessionPersistence(missing, storage)
+  missingPersistence.start()
+  missingPersistence.resolvePluginPages([])
+  assert.equal(missing.activePageId.value, 'local-home')
+  assert.equal(JSON.parse(storage.getItem(NAVIGATION_SESSION_KEY)!).pageTarget.kind, 'local')
+  missingPersistence.stop()
+})
+
+test('explicit navigation during startup overrides a saved plugin destination', () => {
+  const storage = memoryStorage()
+  storage.setItem(
+    NAVIGATION_SESSION_KEY,
+    JSON.stringify({
+      ...useAppNavigation().session.value,
+      pageTarget: { kind: 'plugin', pluginId: 'tool', pageId: 'page' }
+    })
+  )
+  const navigation = useAppNavigation()
+  const persistence = createNavigationSessionPersistence(navigation, storage)
+  navigation.openSettingsPage('about')
+  persistence.start()
+  persistence.resolvePluginPages([
+    { pluginId: 'tool', id: 'page', kind: 'sidebarPage', title: 'Tool' }
+  ])
+  assert.equal(navigation.showSettingsPage.value, true)
+  assert.equal(navigation.settingsInitialSection.value, 'system')
+  assert.equal(navigation.activePluginPage.value, null)
+  persistence.stop()
 })

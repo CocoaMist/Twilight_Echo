@@ -107,11 +107,11 @@ html[data-te-shell-layout='custom'] .theme-studio-page {
 .studio-icon-button {
   display: inline-grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--te-control-height-md);
+  height: var(--te-control-height-md);
   padding: 0;
-  border-radius: 6px;
-  font-size: calc(var(--te-font-size-body, 14px) * 1.21429);
+  border-radius: var(--te-control-radius-sm);
+  font-size: var(--te-control-font-size);
 }
 
 .studio-icon-button:hover,

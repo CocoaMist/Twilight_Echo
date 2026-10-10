@@ -32,6 +32,8 @@ class AudioBuffer {
   size_t writeBlocking(const PcmBlock& block, const std::atomic<bool>& running);
   size_t read(float* data, size_t frames);
   size_t read(PcmBlock& block);
+  /** Advance the consumer cursor without reading PCM (prepared transitions). */
+  size_t discard(size_t frames) noexcept;
   size_t waitForAvailableFrames(
       size_t targetFrames,
       std::chrono::milliseconds timeout,

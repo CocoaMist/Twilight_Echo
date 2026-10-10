@@ -244,6 +244,20 @@ size_t AudioBuffer::readFrames(PcmBlock& block, size_t targetBytesPerFrame) {
   return copied;
 }
 
+size_t AudioBuffer::discard(size_t frames) noexcept {
+  if (!frames || !tryBeginRead()) return 0;
+  const auto read = readPosition_.load(std::memory_order_relaxed);
+  const auto write = writePosition_.load(std::memory_order_acquire);
+  const auto skipped = std::min(frames,write-read);
+  readPosition_.store(read+skipped,std::memory_order_release);
+  endRead();
+  if (skipped) {
+    producerWakeEpoch_.fetch_add(1,std::memory_order_release);
+    producerWakeEpoch_.notify_one();
+  }
+  return skipped;
+}
+
 size_t AudioBuffer::waitForAvailableFrames(
     size_t targetFrames,
     std::chrono::milliseconds timeout,

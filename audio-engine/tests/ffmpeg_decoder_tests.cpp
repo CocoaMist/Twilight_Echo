@@ -1,13 +1,24 @@
 #include "../decoder/FFmpegDecoder.h"
 #include "../decoder/FFmpegDecoderUtils.h"
+#include "../core/SharedInputFile.h"
 #include "../dsp/DspTypes.h"
 #include "AudioFixtureLibrary.h"
+#include "../automix/AutoMix.h"
+#include "../automix/CandidatePlanner.h"
+extern "C" {
+#include "../automix/recovered/am_json.h"
+}
 
+#include <algorithm>
+#include <array>
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -146,6 +157,48 @@ std::filesystem::path pathFromUtf8Bytes(const std::string& utf8) {
   return std::filesystem::path(reinterpret_cast<const char8_t*>(utf8.c_str()));
 }
 
+void assertSharedFilePreservesReadAndSeekAfterDeletion() {
+  const auto path = std::filesystem::temp_directory_path() /
+      pathFromUtf8Bytes("twilight-shared-\xe4\xb8\xad\xe6\x96\x87.bin");
+  std::vector<char> bytes(70000);
+  for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<char>(i % 127);
+  { std::ofstream file(path, std::ios::binary); file.write(bytes.data(), bytes.size()); }
+  SharedInputFile file;
+  auto missing = path;
+  missing += ".missing";
+  file.open(missing);
+  assert(!file);
+  file.open(path);
+  assert(file.is_open());
+  std::array<char, 128> read{};
+  file.read(read.data(), 5);
+  assert(file.tellg() == 5);
+  file.seekg(10, std::ios::cur);
+  assert(file.tellg() == 15);
+  file.read(read.data(), 6);
+  assert(std::equal(read.begin(), read.begin() + 6, bytes.begin() + 15));
+  file.seekg(-4, std::ios::end);
+  file.read(read.data(), 8);
+  assert(file.eof());
+  assert(file.gcount() == 4);
+  file.clear();
+  file.seekg(33333, std::ios::beg);
+  file.read(read.data(), read.size());
+  assert(std::equal(read.begin(), read.end(), bytes.begin() + 33333));
+  auto renamed = path;
+  renamed += ".renamed";
+  std::error_code fsError;
+  std::filesystem::rename(path, renamed, fsError);
+  assert(!fsError);
+  assert(std::filesystem::remove(renamed, fsError));
+  assert(!fsError);
+  file.seekg(64000, std::ios::beg);
+  file.read(read.data(), read.size());
+  assert(file.gcount() == static_cast<std::streamsize>(read.size()));
+  assert(std::equal(read.begin(), read.end(), bytes.begin() + 64000));
+  file.close();
+}
+
 void assertDecoderOpensUtf8Path() {
   const std::string chinesePath = "\xe4\xb8\xad\xe6\x96\x87\xe8\xb7\xaf\xe5\xbe\x84";
   const std::filesystem::path unicodeDir =
@@ -174,7 +227,218 @@ void assertDecoderOpensUtf8Path() {
   std::filesystem::remove(unicodeDir, fsError);
 }
 
+void assertOpenDecoderAllowsFileRenameAndDeletion() {
+  const auto fixture = writePcmWavFixture(
+      {"twilight-decoder-file-sharing.wav", 48000, 2, 16, 96000, false});
+  FFmpegDecoder decoder;
+  std::string error;
+  assert(decoder.open(fixture.string(), &error));
+  AudioFormat output = decoder.streamInfo().decodedFormat;
+  output.bitDepth = 32;
+  output.sampleFormat = AudioSampleFormat::Float32Interleaved;
+  assert(decoder.setOutputFormat(output, &error));
+  auto renamed = fixture.path();
+  renamed += ".renamed.wav";
+  std::error_code fsError;
+  std::filesystem::rename(fixture.path(), renamed, fsError);
+  if (fsError) std::cerr << "Open decoder blocks rename: " << fsError.message() << std::endl;
+  assert(!fsError);
+  assert(std::filesystem::remove(renamed, fsError));
+  assert(!fsError);
+  // Continue through the original handle, including a seek beyond the IO buffer.
+  assert(decoder.seek(1.0, &error));
+  std::vector<float> samples(1024 * 2);
+  assert(decoder.readFrames(samples.data(), 1024, &error) > 0);
+  decoder.close();
+}
+
+void assertFailedDecoderOpenReleasesFile() {
+  const auto path = std::filesystem::temp_directory_path() / "twilight-decoder-invalid.wav";
+  { std::ofstream file(path, std::ios::binary); file << "invalid audio"; }
+  FFmpegDecoder decoder;
+  std::string error;
+  assert(!decoder.open(path.string(), &error));
+#if defined(_WIN32)
+  // Delete sharing alone could hide a leaked handle. An exclusive open proves
+  // the failed decoder released its input before returning to the caller.
+  const HANDLE exclusive = CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr,
+                                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  assert(exclusive != INVALID_HANDLE_VALUE);
+  CloseHandle(exclusive);
+#endif
+  assert(std::filesystem::remove(path));
+}
+
 #if defined(TAE_HAS_FFMPEG)
+void assertPreciseSeekMatchesContinuousPcm() {
+  constexpr int sourceRate = 44100;
+  constexpr size_t sourceFrames = sourceRate * 3 + 137;
+  const auto fixture = writePcmWavFixture({"twilight-precise-seek.wav", sourceRate, 2, 16,
+      static_cast<int>(sourceFrames), false});
+  for (const int targetRate : {44100, 48000, 88200, 96000, 176400, 192000}) {
+    for (const auto quality : {FFmpegDecoder::ResamplerQuality::Native, FFmpegDecoder::ResamplerQuality::Ultra}) {
+      FFmpegDecoder decoder;
+      std::string error;
+      assert(decoder.open(fixture.string(), &error));
+      AudioFormat format = decoder.outputFormat();
+      format.sampleRate = targetRate; format.bitDepth = 32;
+      format.sampleFormat = AudioSampleFormat::Float32Interleaved;
+      decoder.setResamplerQuality(quality);
+      assert(decoder.setOutputFormat(format, &error));
+      std::vector<float> reference((targetRate * 4) * 2);
+      const auto count = decoder.readFrames(reference.data(), reference.size()/2, &error);
+      assert(count > static_cast<size_t>(targetRate * 3));
+      reference.resize(count * 2);
+      for (const uint64_t first : {uint64_t(0), uint64_t(1), uint64_t(1023),
+          uint64_t(targetRate * 2 + 37), uint64_t(count - 123)}) {
+        assert(decoder.seekOutputFrame(first, &error));
+        std::vector<float> actual(257 * 2);
+        const auto got = decoder.readFrames(actual.data(), 257, &error);
+        assert(got == std::min<size_t>(257, count - first));
+        for (size_t i = 0; i < got*2; ++i) {
+          if (std::abs(actual[i] - reference[first*2+i]) > 1e-5f) {
+            std::fprintf(stderr, "precise seek mismatch rate=%d frame=%llu sample=%zu actual=%g expected=%g\n",
+                targetRate, (unsigned long long)first, i, actual[i], reference[first*2+i]);
+            std::abort();
+          }
+        }
+      }
+    }
+  }
+}
+
+void assertAutoMixDecodeAndContinuation(const std::string& source, bool includeTail) {
+  for(const unsigned rate:{44100u,48000u,88200u,96000u,176400u,192000u}) {
+    FFmpegDecoder continuous;
+    std::string error;
+    assert(continuous.open(source,&error));
+    auto format=continuous.outputFormat();
+    format.sampleRate=rate;format.bitDepth=32;format.sampleFormat=AudioSampleFormat::Float32Interleaved;
+    assert(format.channelCount>=1&&format.channelCount<=2);
+    assert(continuous.setOutputFormat(format,&error));
+    const unsigned channels=format.channelCount;
+    const double duration=continuous.streamInfo().durationSeconds;
+    std::vector<uint64_t> bases{0};
+    if(includeTail) {assert(duration>6);bases.push_back(static_cast<uint64_t>(std::floor((duration-3.1)*rate)));}
+    uint64_t cursor=0;
+    float maximumPcmError=0,maximumPreparedError=0;
+    std::vector<float> scratch(4096*channels);
+    for(const auto base:bases) {
+      while(cursor<base) {
+        const auto count=std::min<uint64_t>(4096,base-cursor);
+        assert(continuous.readFrames(scratch.data(),count,&error)==count);cursor+=count;
+      }
+      std::vector<float> reference(3*rate*channels);
+      assert(continuous.readFrames(reference.data(),3*rate,&error)==3*rate);cursor+=3*rate;
+      for(const int64_t style:{0,1,8,17}) {
+        TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);
+        TAE_AM_CandidateV1 candidate{};candidate.size=sizeof candidate;candidate.abi_version=TAE_AM_ABI_VERSION;
+        candidate.outgoing_start=(base+rate/2+.37)/rate;candidate.incoming_start=(base+rate*2/5+.73)/rate;
+        candidate.alias_index=1;candidate.outgoing_bars=candidate.incoming_bars=8;candidate.bpm=120;
+        am_candidate_input_init(&candidate.scoring);candidate.scoring.style_id=style;
+        candidate.scoring.path=am_default_route(style).path;
+        candidate.scoring.outgoing_end=candidate.outgoing_start+2;
+        candidate.scoring.incoming_end=candidate.incoming_start+(style==17?2.05:2);
+        TAE_AM_Plan plan{};assert(TAE_AM_Compile(&config,&candidate,&plan)==TAE_AM_OK);
+        TAE_AM_PcmViewV1 full{sizeof full,TAE_AM_ABI_VERSION,reference.data(),3*rate,base,rate,channels};
+        TAE_AM_PcmViewV1 views[2];std::vector<float> decoded[2];
+        for(unsigned side=0;side<2;++side) {
+          TAE_AM_SourceWindowV1 window{sizeof window,TAE_AM_ABI_VERSION};
+          assert(TAE_AM_GetSourceWindow(plan,side,rate,&window)==TAE_AM_OK);
+          assert(window.source_first_frame>=base&&window.source_first_frame+window.frames<=base+3*rate);
+          FFmpegDecoder positioned;assert(positioned.open(source,&error));assert(positioned.setOutputFormat(format,&error));
+          assert(positioned.seekOutputFrame(window.source_first_frame,&error));
+          decoded[side].resize(window.frames*channels);
+          assert(positioned.readFrames(decoded[side].data(),window.frames,&error)==window.frames);
+          for(size_t i=0;i<decoded[side].size();++i) {
+            const auto difference=std::abs(decoded[side][i]-reference[(window.source_first_frame-base)*channels+i]);
+            maximumPcmError=std::max(maximumPcmError,difference);assert(difference<=1e-5f);
+          }
+          views[side]={sizeof(TAE_AM_PcmViewV1),TAE_AM_ABI_VERSION,decoded[side].data(),window.frames,window.source_first_frame,rate,channels};
+        }
+        TAE_AM_Prepared expected{},actual{};
+        TAE_AM_PreparedInfoV1 expectedInfo{sizeof expectedInfo,TAE_AM_ABI_VERSION},actualInfo{sizeof actualInfo,TAE_AM_ABI_VERSION};
+        assert(TAE_AM_Prepare(plan,&full,&full,1,1,&expected,&expectedInfo)==TAE_AM_OK);
+        assert(TAE_AM_Prepare(plan,&views[0],&views[1],1,1,&actual,&actualInfo)==TAE_AM_OK);
+        assert(actualInfo.frames==expectedInfo.frames&&actualInfo.incoming_resume_frame==expectedInfo.incoming_resume_frame);
+        assert(actualInfo.incoming_resume_frame==static_cast<uint64_t>(std::floor(candidate.scoring.incoming_end*rate)));
+        std::vector<float> expectedPcm(257*channels),actualPcm(expectedPcm.size());
+        for(uint64_t frame=0;frame<actualInfo.frames;frame+=257) {
+          const auto count=std::min<uint64_t>(257,actualInfo.frames-frame);
+          assert(TAE_AM_MixPrepared(expected,frame,expectedPcm.data(),count)==count);
+          assert(TAE_AM_MixPrepared(actual,frame,actualPcm.data(),count)==count);
+          for(size_t i=0;i<count*channels;++i) {
+            const auto difference=std::abs(expectedPcm[i]-actualPcm[i]);
+            maximumPreparedError=std::max(maximumPreparedError,difference);assert(difference<=1e-5f);
+          }
+        }
+        FFmpegDecoder continuation;assert(continuation.open(source,&error));assert(continuation.setOutputFormat(format,&error));
+        assert(continuation.seekOutputFrame(actualInfo.incoming_resume_frame,&error));
+        assert(continuation.readFrames(actualPcm.data(),257,&error)==257);
+        for(size_t i=0;i<actualPcm.size();++i)
+          assert(std::abs(actualPcm[i]-reference[(actualInfo.incoming_resume_frame-base)*channels+i])<=1e-5f);
+        if(style==0) {
+          // Unity processing reaches the last half-open source sample and
+          // resumes at the next one, with neither a repeated nor lost frame.
+          const auto last=actualInfo.incoming_resume_frame-1;
+          assert(TAE_AM_ReadPreparedSide(actual,1,actualInfo.frames-1,expectedPcm.data(),1)==1);
+          for(unsigned channel=0;channel<channels;++channel)
+            assert(std::abs(expectedPcm[channel]-reference[(last-base)*channels+channel])<=1e-5f);
+        }
+        TAE_AM_DestroyPrepared(actual);TAE_AM_DestroyPrepared(expected);TAE_AM_DestroyPlan(plan);
+      }
+    }
+    std::cout<<"{\"boundaryRate\":"<<rate<<",\"sourceWindows\":"<<bases.size()
+      <<",\"styles\":4,\"maximumDecodedError\":"<<maximumPcmError
+      <<",\"maximumPreparedError\":"<<maximumPreparedError<<"}"<<std::endl;
+  }
+}
+
+void assertPreciseSeekMatchesExternalPcm(const std::string& source) {
+  for (const int rate : {44100, 48000, 88200, 96000, 176400, 192000}) {
+    FFmpegDecoder reference, seeked;
+    std::string error;
+    assert(reference.open(source, &error));
+    assert(seeked.open(source, &error));
+    AudioFormat format = reference.outputFormat();
+    format.sampleRate = rate; format.bitDepth = 32; format.sampleFormat = AudioSampleFormat::Float32Interleaved;
+    assert(reference.setOutputFormat(format, &error));
+    assert(seeked.setOutputFormat(format, &error));
+    const double duration = reference.streamInfo().durationSeconds;
+    assert(duration > 10 && format.channelCount <= 2);
+    const std::vector<uint64_t> positions{0, 1, static_cast<uint64_t>(2ULL * rate + 37),
+        static_cast<uint64_t>(std::floor((duration-4) * rate)) + 17};
+    const auto channels = static_cast<size_t>(format.channelCount);
+    std::vector<float> scratch(4096 * channels), expected(257 * channels), actual(expected.size());
+    uint64_t cursor = 0;
+    float maximumError = 0;
+    for (const auto first : positions) {
+      if (first < cursor) {
+        reference.close(); assert(reference.open(source, &error));
+        assert(reference.setOutputFormat(format, &error)); cursor = 0;
+      }
+      while (cursor < first) {
+        const auto request = std::min<uint64_t>(4096, first-cursor);
+        const auto got = reference.readFrames(scratch.data(),request,&error);
+        assert(got == request); cursor += got;
+      }
+      assert(reference.readFrames(expected.data(),257,&error) == 257); cursor += 257;
+      if (!seeked.seekOutputFrame(first,&error)) {
+        std::fprintf(stderr,"precise seek failed rate=%d frame=%llu error=%s\n",rate,(unsigned long long)first,error.c_str());std::abort();
+      }
+      assert(seeked.readFrames(actual.data(),257,&error) == 257);
+      for (size_t i=0;i<actual.size();++i) {
+        maximumError=std::max(maximumError,std::abs(actual[i]-expected[i]));
+        if (std::abs(actual[i]-expected[i])>1e-5f) {
+          std::fprintf(stderr,"compressed precise seek mismatch rate=%d frame=%llu sample=%zu actual=%g expected=%g\n",
+              rate,(unsigned long long)first,i,actual[i],expected[i]);std::abort();
+        }
+      }
+    }
+    std::cout << "{\"rate\":" << rate << ",\"positions\":4,\"maximumPcmError\":" << maximumError << "}" << std::endl;
+  }
+}
+
 void assertDecoderResamplesWithQualityTier(
     FFmpegDecoder::ResamplerQuality quality,
     const char* fixtureName) {
@@ -280,9 +544,27 @@ void assertDecoderOpensExternalFixturesWhenProvided() {
   }
 }
 
+#if defined(TAE_HAS_FFMPEG)
+#include "../automix/tests/rendered_pair_probe.inc"
+#endif
 }  // namespace
 
-int main() {
+int main(int argc,char** argv) {
+#if defined(TAE_HAS_FFMPEG)
+  if((argc==3||argc==5) && std::string(argv[1])=="--automix-pair-probe") {
+    try {
+      if(argc==5&&std::string(argv[3])!="--wav")throw std::runtime_error("expected --wav");
+      inspectAutoMixMusicPair(argv[2],argc==5?argv[4]:"");return 0;
+    } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
+  }
+  if(argc==3 && std::string(argv[1])=="--precise-seek-probe") {
+    assertPreciseSeekMatchesExternalPcm(argv[2]);return 0;
+  }
+  if(argc==3 && std::string(argv[1])=="--automix-boundary-probe") {
+    assertAutoMixDecodeAndContinuation(argv[2],true);return 0;
+  }
+#endif
+  assertSharedFilePreservesReadAndSeekAfterDeletion();
   assertDecoderInt24AppendAvoidsUnalignedInt32Reads();
   assertDecoderContinuesWhenResamplerOutputsNoSamples();
   assertDecoderTailZeroHelperPreservesCopiedFrames();
@@ -293,7 +575,14 @@ int main() {
   assertDecoderReportsPcm("twilight-fixture-s32.wav", 32);
   assertDecoderReportsDsdFallbackWhenSupported();
   assertDecoderSoxrTiersProbeAndFallBackGracefully();
+  assertPreciseSeekMatchesContinuousPcm();
+  {
+    const auto fixture=writePcmWavFixture({"twilight-automix-boundaries.wav",44100,2,16,44100*3+137,false});
+    assertAutoMixDecodeAndContinuation(fixture.string(),false);
+  }
   assertDecoderOpensUtf8Path();
+  assertOpenDecoderAllowsFileRenameAndDeletion();
+  assertFailedDecoderOpenReleasesFile();
   assertDecoderOpensExternalFixturesWhenProvided();
 #endif
   return 0;

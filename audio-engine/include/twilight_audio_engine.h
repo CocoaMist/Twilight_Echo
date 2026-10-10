@@ -65,6 +65,7 @@ TAE_API TAE_Result TAE_SetOutputDevice(TAE_EngineHandle engine, const char* devi
 TAE_API TAE_Result TAE_SetOutputBackend(TAE_EngineHandle engine, const char* backend_id);
 
 TAE_API TAE_Result TAE_LoadQueue(TAE_EngineHandle engine, const char* queue_json, int start_index);
+TAE_API TAE_Result TAE_SelectQueueIndex(TAE_EngineHandle engine, int index);
 TAE_API TAE_Result TAE_Next(TAE_EngineHandle engine);
 TAE_API TAE_Result TAE_Previous(TAE_EngineHandle engine);
 TAE_API TAE_Result TAE_SetPlayMode(TAE_EngineHandle engine, const char* mode);
@@ -141,6 +142,16 @@ TAE_API TAE_Result TAE_AnalyzeLoudness(
     char* buffer,
     size_t buffer_size,
     size_t* required_size);
+/* Independent, bounded head/tail feature analysis; never returns native Song
+ * indexes. Call from the isolated analysis process, not a playback callback. */
+TAE_API TAE_Result TAE_AnalyzeAutoMix(TAE_EngineHandle engine, const char* source,
+    const char* options_json, char* buffer, size_t buffer_size, size_t* required_size);
+TAE_API TAE_Result TAE_SetAutoMixConfig(TAE_EngineHandle engine, const char* config_json);
+/* Internal host feature delivery. Contains identities and pairRevision from
+ * GetAutoMixStatus; late/stale pairs are rejected. No PCM crosses this API. */
+TAE_API TAE_Result TAE_SetAutoMixFeatures(TAE_EngineHandle engine, const char* features_json);
+TAE_API TAE_Result TAE_GetAutoMixStatus(TAE_EngineHandle engine, char* buffer,
+    size_t buffer_size, size_t* required_size);
 /* Diagnostic counter: number of actual analyzer executions, excluding cached size-probe reads. */
 TAE_API uint64_t TAE_GetAnalysisExecutionCount(const char* analysis_kind);
 TAE_API const char* TAE_GetVersion(void);

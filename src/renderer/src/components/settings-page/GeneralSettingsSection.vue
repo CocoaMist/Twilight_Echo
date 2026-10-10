@@ -1,106 +1,66 @@
 <script setup lang="ts">
 import { useSettingsStore } from '../../stores/useSettingsStore'
-import DownloadSettingsFields from '@renderer/components/settings-page/DownloadSettingsFields.vue'
-import IntegrationsSettingsSection from './IntegrationsSettingsSection.vue'
-import BackupAndResetSettingsSection from './BackupAndResetSettingsSection.vue'
-import NetworkProxySettingsSection from './NetworkProxySettingsSection.vue'
-import type { UiContribution } from '../../extensions/registry'
-import type { LibraryWatcherStatusSnapshot } from '../../../../shared/localLibraryScan.ts'
-import type {
-  AppSettings,
-  ProxyMode,
-  StartupHomePage,
-  TrackActivationMode
-} from '../../types/settings'
-import type { BooleanSettingKey, GeneralSettingsSectionKey, PluginSettingsForm } from './types'
 import { APP_LOCALES, normalizeLanguagePreference } from '../../../../shared/i18n/locale.ts'
 import { useLocale } from '../../app/useLocale.ts'
-
+import type { StartupHomePage, TrackActivationMode } from '../../types/settings'
+import type { BooleanSettingKey } from './types.ts'
 const { settings, updateSettings: persistSettings } = useSettingsStore()
 const { t } = useLocale()
-
-/**
- * Switching language takes effect immediately: the locale is a computed off this
- * setting, so every surface re-renders without a restart.
- */
 function setLanguage(event: Event): void {
   const value = normalizeLanguagePreference((event.target as HTMLSelectElement).value)
   void persistSettings({ language: value })
 }
 
-function toggleMiniPlayerShowInTaskbar(): void {
-  void persistSettings({
-    miniPlayer: {
-      ...settings.value.miniPlayer,
-      showInTaskbar: !settings.value.miniPlayer.showInTaskbar
-    }
-  })
-}
-
+const emit = defineEmits<{ reopenOnboarding: [] }>()
 defineProps<{
-  category: GeneralSettingsSectionKey
-  libraryWatcherStatus: LibraryWatcherStatusSnapshot | null
-  libraryScanStatus: { state: string; current: number; total: number }
-  libraryScanIsActive: boolean
-  libraryScanProgressText: string
-  libraryMetadataEnrichmentText: string
-  libraryMetadataEnrichmentIsActive: boolean
-  libraryResetMessage: string
-  libraryScanCommandError: string
-  libraryResetPending: boolean
-  pluginSettingsPanels: UiContribution[]
-  pluginSettingsResult: Record<string, string>
-  pluginSettingsError: Record<string, string>
-  pluginSettingsForms: Record<string, PluginSettingsForm | null>
-  pluginSettingsValues: Record<string, Record<string, string>>
-  runningPluginSettingsCommand: string
-  pluginPanelStateKey: (panel: UiContribution) => string
   trackActivationModeOptions: readonly { value: TrackActivationMode; label: string; icon: string }[]
   startupHomePageOptions: readonly { value: StartupHomePage; label: string; icon: string }[]
-  updateSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>
-  addLibraryFolder: () => void
-  removeLibraryFolder: (folder: string) => void
-  chooseDownloadFolder: () => void
-  resetDownloadFolder: () => void
   toggleSetting: (key: BooleanSettingKey) => void
-  setGenreSeparators: (event: Event) => void
   setTrackActivationMode: (mode: TrackActivationMode) => void
   setStartupHomePage: (page: StartupHomePage) => void
   setCloseBehavior: (event: Event) => void
-  watcherStateLabel: (state: string) => string
-  watcherModeLabel: (mode: string) => string
-  formatWatcherTime: (iso: string | null | undefined) => string
-  runFullLibraryScan: () => void
-  pauseActiveLibraryScan: () => void
-  resumeActiveLibraryScan: () => void
-  cancelActiveLibraryScan: () => void
-  resetLocalLibrary: () => void
-  cancelActiveLibraryMetadataEnrichment: () => void
-  exportSettingsBackup: () => void
-  importSettingsBackup: () => void
-  resetSettingsGroup: (group: 'appearance' | 'playback' | 'desktopLyrics') => void
-  runPluginSettingsPanel: (panel: UiContribution) => void
-  setPluginSettingsField: (panel: UiContribution, key: string, value: string) => void
-  submitPluginSettingsForm: (panel: UiContribution) => void
-}>()
-
-const emit = defineEmits<{
-  reopenOnboarding: []
 }>()
 </script>
 <template>
-  <section :id="category" class="glass-card preview-section">
-    <div v-if="category === 'general'" class="section-block">
-      <h3>启动与语言</h3>
+  <section id="general" class="glass-card preview-section">
+    <div class="section-title-row">
+      <i class="pi pi-sliders-h" aria-hidden="true" />
+      <h2>通用</h2>
+    </div>
+    <p class="settings-section-description">选择适合你的语言、启动方式和操作习惯。</p>
+    <div class="section-block">
+      <h3>操作习惯</h3>
       <div class="setting-list">
-        <div class="setting-item">
+        <div data-setting-id="track-activation" id="setting-track-activation" class="setting-item">
+          <div class="setting-copy">
+            <strong>歌曲列表播放方式</strong>
+            <span>选择普通左键单击还是双击播放；右键始终只打开菜单，不改变选中状态。</span>
+          </div>
+          <div class="segmented-control">
+            <button
+              v-for="option in trackActivationModeOptions"
+              :key="option.value"
+              type="button"
+              :class="{ active: settings.trackActivationMode === option.value }"
+              @click="setTrackActivationMode(option.value)"
+            >
+              <i :class="option.icon"></i>
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="section-block">
+      <h3>启动与窗口</h3>
+      <div class="setting-list">
+        <div data-setting-id="startup-home" id="setting-startup-home" class="setting-item">
           <div class="setting-copy">
             <strong>启动后进入</strong>
-            <span>选择每次打开应用时默认显示的主页。</span>
+            <span>未保存上次页面时使用此主页；重新打开应用会自动回到关闭前的页面。</span>
           </div>
-          <div role="group" aria-label="启动后进入" class="segmented-control">
+          <div class="segmented-control">
             <button
-              :aria-pressed="settings.startupHomePage === option.value"
               v-for="option in startupHomePageOptions"
               :key="option.value"
               type="button"
@@ -113,409 +73,52 @@ const emit = defineEmits<{
           </div>
         </div>
         <hr />
-        <div class="setting-item">
+        <div data-setting-id="launch-at-login" id="setting-launch-at-login" class="setting-item">
           <div class="setting-copy">
-            <strong>登录系统后启动</strong>
-            <span>登录 Windows 账户后在后台启动应用。</span>
+            <strong>开机自动启动</strong>
+            <span>在系统启动时自动在后台运行。</span>
           </div>
           <button
             type="button"
             class="toggle-switch"
             :class="{ active: settings.launchAtLogin, inactive: !settings.launchAtLogin }"
             role="switch"
-            aria-label="登录系统后启动"
+            aria-label="开机启动"
             :aria-checked="settings.launchAtLogin"
             @click="toggleSetting('launchAtLogin')"
           ></button>
         </div>
         <hr />
-        <div class="setting-item">
+        <div data-setting-id="language" id="setting-language" class="setting-item">
           <div class="setting-copy">
             <strong>{{ t('settings.language.title') }}</strong>
             <span>{{ t('settings.language.description') }}</span>
           </div>
-          <select
-            :aria-label="t('settings.language.title')"
-            class="preview-select"
-            :value="settings.language"
-            @change="setLanguage"
-          >
+          <select class="preview-select" :value="settings.language" @change="setLanguage">
             <option value="system">{{ t('settings.language.system') }}</option>
             <option v-for="option in APP_LOCALES" :key="option" :value="option">
               {{ t(`settings.language.${option}`) }}
             </option>
           </select>
         </div>
-      </div>
-    </div>
-
-    <div v-if="category === 'general'" class="section-block">
-      <h3>窗口行为</h3>
-      <div class="setting-list">
-        <div class="setting-item">
+        <hr />
+        <div data-setting-id="close-window" id="setting-close-window" class="setting-item">
           <div class="setting-copy">
             <strong>关闭主窗口时</strong>
             <span>选择点击关闭按钮后的应用行为。</span>
           </div>
           <select
-            aria-label="关闭主窗口时"
             class="preview-select"
             :value="settings.closeWindowBehavior"
             @change="setCloseBehavior"
           >
             <option value="tray">最小化到系统托盘</option>
-            <option value="miniPlayer">切换为独立迷你窗口</option>
+            <option value="miniPlayer">切换为迷你播放器</option>
             <option value="quit">退出应用</option>
           </select>
         </div>
         <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>独立迷你窗口显示在任务栏</strong>
-            <span>开启后可从任务栏找回独立迷你窗口；关闭后仍显示悬浮小窗。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{
-              active: settings.miniPlayer.showInTaskbar,
-              inactive: !settings.miniPlayer.showInTaskbar
-            }"
-            role="switch"
-            aria-label="独立迷你窗口显示在任务栏"
-            :aria-checked="settings.miniPlayer.showInTaskbar"
-            @click="toggleMiniPlayerShowInTaskbar"
-          ></button>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="category === 'library'" class="section-block">
-      <h3>文件夹与同步</h3>
-      <div class="setting-list">
-        <div class="setting-item top-align">
-          <div class="setting-copy">
-            <strong>扫描文件夹</strong>
-            <span>添加包含您本地音乐文件的目录。</span>
-          </div>
-          <div class="folder-list">
-            <div v-for="folder in settings.libraryFolders" :key="folder" class="folder-chip">
-              <span :title="folder">{{ folder }}</span>
-              <i
-                class="pi pi-times"
-                data-te-interactive
-                role="button"
-                tabindex="0"
-                :aria-label="`移除文件夹 ${folder}`"
-                @click="removeLibraryFolder(folder)"
-                @keydown.enter.prevent="removeLibraryFolder(folder)"
-                @keydown.space.prevent="removeLibraryFolder(folder)"
-              ></i>
-            </div>
-            <div v-if="settings.libraryFolders.length === 0" class="folder-empty-hint">
-              暂未添加任何文件夹
-            </div>
-            <button type="button" class="dashed-button" @click="addLibraryFolder">
-              <i class="pi pi-plus"></i>
-              添加文件夹
-            </button>
-          </div>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>流派分隔符</strong>
-            <span>用这些分隔符拆分流派标签。例如 Rock/Pop 会识别为 Rock 和 Pop 两种流派。</span>
-          </div>
-          <input
-            class="preview-select"
-            type="text"
-            maxlength="32"
-            :value="settings.genreSeparators"
-            aria-label="流派分隔符"
-            placeholder=",，;；、/"
-            @change="setGenreSeparators"
-          />
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>实时监控文件夹变动</strong>
-            <span>当添加新音乐时自动同步到媒体库，无需手动刷新。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{ active: settings.watchLibrary, inactive: !settings.watchLibrary }"
-            role="switch"
-            aria-label="实时监控文件夹变动"
-            :aria-checked="settings.watchLibrary"
-            @click="toggleSetting('watchLibrary')"
-          ></button>
-        </div>
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>在线补充缺失歌词</strong>
-            <span
-              >本地文件和音源均没有歌词时，通过歌曲名、歌手和时长向 LRCLIB
-              搜索。默认关闭，匹配结果可能不准确。</span
-            >
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{
-              active: settings.onlineLyricsFallback,
-              inactive: !settings.onlineLyricsFallback
-            }"
-            role="switch"
-            aria-label="在线歌词回退"
-            :aria-checked="settings.onlineLyricsFallback"
-            @click="toggleSetting('onlineLyricsFallback')"
-          ></button>
-        </div>
-        <div
-          v-if="settings.libraryFolders.length > 0"
-          class="setting-item top-align watcher-status-panel"
-        >
-          <div class="setting-copy">
-            <strong>媒体库监控状态</strong>
-            <span>显示各音乐文件夹的同步状态；无法持续监听时会改为定时检查。</span>
-          </div>
-          <div class="watcher-status-list" aria-live="polite">
-            <div
-              v-for="item in libraryWatcherStatus?.folders ??
-              settings.libraryFolders.map((folder) => ({
-                folder,
-                state: settings.watchLibrary ? 'pending' : 'disabled',
-                mode: 'none',
-                lastError: null,
-                lastEventAt: null,
-                lastReconcileAt: null
-              }))"
-              :key="item.folder"
-              class="watcher-status-row"
-            >
-              <span class="watcher-status-path" :title="item.folder">{{ item.folder }}</span>
-              <span class="watcher-status-badge" :data-state="item.state">
-                {{ watcherStateLabel(item.state) }}
-                <template v-if="item.state !== 'pending'">
-                  · {{ watcherModeLabel(item.mode) }}</template
-                >
-              </span>
-              <span class="watcher-status-times">
-                最近变动 {{ formatWatcherTime(item.lastEventAt) }} · 检查
-                {{ formatWatcherTime(item.lastReconcileAt) }}
-              </span>
-              <span v-if="item.lastError" class="watcher-status-error">{{ item.lastError }}</span>
-            </div>
-          </div>
-        </div>
-        <hr />
-        <div class="setting-item top-align">
-          <div class="setting-copy">
-            <strong>完整重扫</strong>
-            <span
-              >重新读取全部本地歌曲的信息和封面，可暂停或取消。只想同步新增、删除的文件时，无需完整重扫。</span
-            >
-          </div>
-          <div class="library-scan-panel" aria-live="polite">
-            <progress
-              v-if="libraryScanIsActive"
-              class="library-scan-progress"
-              :value="libraryScanStatus.total > 0 ? libraryScanStatus.current : undefined"
-              :max="libraryScanStatus.total > 0 ? libraryScanStatus.total : 1"
-            ></progress>
-            <span class="library-scan-copy">{{ libraryScanProgressText }}</span>
-            <span class="library-scan-copy">{{ libraryMetadataEnrichmentText }}</span>
-            <span v-if="libraryResetMessage" class="library-scan-copy success-copy">
-              {{ libraryResetMessage }}
-            </span>
-            <span v-if="libraryScanCommandError" class="library-scan-error">
-              {{ libraryScanCommandError }}
-            </span>
-            <div class="library-scan-actions">
-              <button
-                type="button"
-                class="brand-soft-button"
-                :disabled="libraryScanIsActive"
-                @click="runFullLibraryScan"
-              >
-                完整重扫
-              </button>
-              <button
-                v-if="libraryScanStatus.state === 'running'"
-                type="button"
-                class="soft-button"
-                @click="pauseActiveLibraryScan"
-              >
-                暂停
-              </button>
-              <button
-                v-if="libraryScanStatus.state === 'paused'"
-                type="button"
-                class="soft-button"
-                @click="resumeActiveLibraryScan"
-              >
-                继续
-              </button>
-              <button
-                v-if="libraryScanIsActive"
-                type="button"
-                class="danger-soft-button"
-                @click="cancelActiveLibraryScan"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                class="danger-soft-button"
-                data-testid="settings-library-reset"
-                title="清空索引，不删除音乐文件和播放列表；之后需完整重扫"
-                :disabled="libraryScanIsActive || libraryResetPending"
-                @click="resetLocalLibrary"
-              >
-                {{ libraryResetPending ? '清空索引中…' : '清空媒体库索引' }}
-              </button>
-              <button
-                v-if="libraryMetadataEnrichmentIsActive"
-                type="button"
-                class="soft-button"
-                title="停止后台补全歌曲信息，保留已保存的信息"
-                @click="cancelActiveLibraryMetadataEnrichment"
-              >
-                停止补全信息
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="category === 'library'" class="section-block">
-      <h3>下载与保存</h3>
-      <div class="setting-list">
-        <div class="setting-item top-align">
-          <div class="setting-copy">
-            <strong>下载目录</strong>
-            <span>
-              流媒体「下载到本地」的保存位置；留空时沿用第一个扫描文件夹。选在扫描文件夹之外时，下载完成的文件不会自动进入媒体库。
-            </span>
-          </div>
-          <div class="path-control">
-            <input
-              readonly
-              aria-label="下载目录"
-              :value="settings.downloadFolder || '跟随扫描文件夹'"
-            />
-            <button type="button" class="soft-button" @click="chooseDownloadFolder">
-              选择文件夹
-            </button>
-            <button
-              v-if="settings.downloadFolder"
-              type="button"
-              class="muted-button"
-              @click="resetDownloadFolder"
-            >
-              跟随扫描文件夹
-            </button>
-          </div>
-        </div>
-        <DownloadSettingsFields />
-      </div>
-    </div>
-
-    <div v-if="category === 'integrations'" class="section-block">
-      <h3>音源与 Windows</h3>
-      <div class="setting-list">
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>启动时检查网易云登录</strong>
-            <span>应用启动后自动刷新内置网易云音源的登录状态。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{ active: settings.autoCheckLogin, inactive: !settings.autoCheckLogin }"
-            role="switch"
-            aria-label="启动时检查网易云登录"
-            :aria-checked="settings.autoCheckLogin"
-            @click="toggleSetting('autoCheckLogin')"
-          ></button>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>系统媒体控制（SMTC）</strong>
-            <span
-              >响应键盘多媒体按键，在系统媒体面板及 FluentFlyout
-              等兼容工具中显示歌曲、封面和播放控制。</span
-            >
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{ active: settings.smtcEnabled, inactive: !settings.smtcEnabled }"
-            role="switch"
-            aria-label="原生媒体控制"
-            :aria-checked="settings.smtcEnabled"
-            @click="toggleSetting('smtcEnabled')"
-          ></button>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>任务栏缩略图按钮</strong>
-            <span>在 Windows 任务栏窗口预览中直接控制上一首、播放与下一首。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{
-              active: settings.taskbarThumbarButtonsEnabled,
-              inactive: !settings.taskbarThumbarButtonsEnabled
-            }"
-            role="switch"
-            aria-label="任务栏缩略图播放按钮"
-            :aria-checked="settings.taskbarThumbarButtonsEnabled"
-            @click="toggleSetting('taskbarThumbarButtonsEnabled')"
-          ></button>
-        </div>
-      </div>
-    </div>
-
-    <IntegrationsSettingsSection
-      v-if="category === 'integrations'"
-      :discord-enabled="settings.discordRpcEnabled"
-      :remote-enabled="settings.remoteControlEnabled"
-      @update:discord-enabled="(value: boolean) => updateSettings({ discordRpcEnabled: value })"
-      @update:remote-enabled="(value: boolean) => updateSettings({ remoteControlEnabled: value })"
-    />
-
-    <div v-if="category === 'general'" class="section-block">
-      <h3>操作习惯</h3>
-      <div class="setting-list">
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>歌曲列表播放方式</strong>
-            <span>选择普通左键单击还是双击播放；右键始终只打开菜单，不改变选中状态。</span>
-          </div>
-          <div role="group" aria-label="歌曲列表播放方式" class="segmented-control">
-            <button
-              :aria-pressed="settings.trackActivationMode === option.value"
-              v-for="option in trackActivationModeOptions"
-              :key="option.value"
-              type="button"
-              :class="{ active: settings.trackActivationMode === option.value }"
-              @click="setTrackActivationMode(option.value)"
-            >
-              <i :class="option.icon"></i>
-              {{ option.label }}
-            </button>
-          </div>
-        </div>
-        <hr />
-        <div class="setting-item">
+        <div data-setting-id="onboarding" id="setting-onboarding" class="setting-item">
           <div class="setting-copy">
             <strong>欢迎向导</strong>
             <span>重新走一遍首次使用引导：外观、听歌偏好、曲库与声音设置。</span>
@@ -527,157 +130,5 @@ const emit = defineEmits<{
         </div>
       </div>
     </div>
-
-    <BackupAndResetSettingsSection
-      v-if="category === 'backup'"
-      @export-settings="exportSettingsBackup"
-      @import-settings="importSettingsBackup"
-      @reset-group="
-        (group: 'appearance' | 'playback' | 'desktopLyrics') => resetSettingsGroup(group)
-      "
-    />
-
-    <NetworkProxySettingsSection
-      v-if="category === 'extensions'"
-      :proxy-mode="settings.proxyMode"
-      :proxy-host="settings.proxyHost"
-      :proxy-port="settings.proxyPort"
-      :proxy-allow-direct-fallback="settings.proxyAllowDirectFallback"
-      @update:proxy-mode="(value: ProxyMode) => void updateSettings({ proxyMode: value })"
-      @update:proxy-host="(value: string) => void updateSettings({ proxyHost: value })"
-      @update:proxy-port="(value: number) => void updateSettings({ proxyPort: value })"
-      @toggle:allow-direct-fallback="toggleSetting('proxyAllowDirectFallback')"
-    />
-
-    <div v-if="category === 'extensions'" class="section-block">
-      <h3>插件设置</h3>
-      <p v-if="pluginSettingsPanels.length === 0" class="plugin-settings-notice">
-        当前已启用的插件没有额外设置。可在插件中心管理插件。
-      </p>
-      <div v-else class="setting-list">
-        <template
-          v-for="(panel, index) in pluginSettingsPanels"
-          :key="`${panel.pluginId}:${panel.id}`"
-        >
-          <hr v-if="index > 0" />
-          <div class="setting-item top-align">
-            <div class="setting-copy">
-              <strong>{{ panel.title }}</strong>
-              <span>{{ panel.description || panel.pluginId }}</span>
-              <small
-                v-if="pluginSettingsResult[pluginPanelStateKey(panel)]"
-                class="plugin-command-result"
-              >
-                {{ pluginSettingsResult[pluginPanelStateKey(panel)] }}
-              </small>
-              <small
-                v-if="pluginSettingsError[pluginPanelStateKey(panel)]"
-                class="plugin-command-error"
-              >
-                {{ pluginSettingsError[pluginPanelStateKey(panel)] }}
-              </small>
-            </div>
-            <button
-              type="button"
-              class="soft-button"
-              :disabled="!panel.command || Boolean(runningPluginSettingsCommand)"
-              @click="runPluginSettingsPanel(panel)"
-            >
-              <i v-if="panel.icon" :class="panel.icon"></i>
-              {{
-                runningPluginSettingsCommand === pluginPanelStateKey(panel)
-                  ? '执行中…'
-                  : pluginSettingsForms[pluginPanelStateKey(panel)]
-                    ? '重新载入'
-                    : '打开设置'
-              }}
-            </button>
-          </div>
-          <div v-if="pluginSettingsForms[pluginPanelStateKey(panel)]" class="plugin-settings-form">
-            <p
-              v-if="pluginSettingsForms[pluginPanelStateKey(panel)]?.notice"
-              class="plugin-settings-notice"
-            >
-              {{ pluginSettingsForms[pluginPanelStateKey(panel)]?.notice }}
-            </p>
-            <label
-              v-for="field in pluginSettingsForms[pluginPanelStateKey(panel)]?.fields"
-              :key="field.key"
-              class="plugin-settings-field"
-            >
-              <span>{{ field.label }}<b v-if="field.required"> *</b></span>
-              <select
-                v-if="field.type === 'select'"
-                class="preview-select"
-                :value="pluginSettingsValues[pluginPanelStateKey(panel)]?.[field.key] ?? ''"
-                @change="
-                  setPluginSettingsField(
-                    panel,
-                    field.key,
-                    ($event.target as HTMLSelectElement).value
-                  )
-                "
-              >
-                <option v-for="option in field.options" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-              <input
-                v-else
-                class="preview-select"
-                :type="field.type"
-                :required="field.required"
-                :placeholder="field.placeholder"
-                :autocomplete="field.type === 'password' ? 'new-password' : 'off'"
-                :value="pluginSettingsValues[pluginPanelStateKey(panel)]?.[field.key] ?? ''"
-                @input="
-                  setPluginSettingsField(
-                    panel,
-                    field.key,
-                    ($event.target as HTMLInputElement).value
-                  )
-                "
-              />
-            </label>
-            <button
-              type="button"
-              class="soft-button plugin-settings-submit"
-              :disabled="Boolean(runningPluginSettingsCommand)"
-              @click="submitPluginSettingsForm(panel)"
-            >
-              {{
-                runningPluginSettingsCommand === pluginPanelStateKey(panel) ? '保存中…' : '保存设置'
-              }}
-            </button>
-          </div>
-        </template>
-      </div>
-    </div>
-    <details v-if="category === 'extensions'" class="settings-advanced-details">
-      <summary>开发者选项</summary>
-
-      <div class="section-block">
-        <div class="setting-list">
-          <div class="setting-item">
-            <div class="setting-copy">
-              <strong>开发者模式</strong>
-              <span>
-                解锁插件中心的「从文件夹安装」，可直接装入未打包的插件目录，方便本地调试；关闭时只能安装
-                .tep 包。默认关闭。
-              </span>
-            </div>
-            <button
-              type="button"
-              class="toggle-switch"
-              :class="{ active: settings.developerMode, inactive: !settings.developerMode }"
-              role="switch"
-              aria-label="开发者模式"
-              :aria-checked="settings.developerMode"
-              @click="toggleSetting('developerMode')"
-            ></button>
-          </div>
-        </div>
-      </div>
-    </details>
   </section>
 </template>

@@ -5,6 +5,124 @@ import { createDefaultPlaybackInfo } from './audioEngineHelpers.ts'
 import type { DspStatePayload } from '../../shared/audioServiceContract.ts'
 import { compensatedAuditionGraph } from '../../shared/dspAudition.ts'
 import { DEFAULT_DSP_OUTPUT_STAGE, type DspGraphConfig } from '../../shared/dspGraph.ts'
+import { DEFAULT_AUTO_MIX } from '../../shared/autoMix.ts'
+
+test('AutoMix suspends Direct without changing the saved preference and rolls back rejected enablement', async () => {
+  const info = createDefaultPlaybackInfo('wasapi', 'auto', false, {
+    routingMode: 'auto',
+    preferredBufferSize: 0
+  })
+  const overrides: boolean[] = []
+  const configurations: string[] = []
+  let accepts = true
+  const host = {
+    getPlaybackInfo: () => info,
+    getDevice: () => 'auto',
+    getOutput: () => 'wasapi',
+    getNative: () => ({ SetAutoMixConfig: () => {} }),
+    setLastNativeError: () => {},
+    getLastNativeError: () => '',
+    tryNative: () => true,
+    updateOutputPerfect: () => {},
+    publishPlaybackInfo: () => {},
+    syncPlaybackOutputMirrorsFromOutputInfo: () => {},
+    syncLoudnormModeTransition: async () => {},
+    applyDirectModeRuntimeOverrides: async (value: boolean) => {
+      overrides.push(value)
+    },
+    callNativeMaybeAsync: async (_: string, method: string, json: string) => {
+      if (method === 'SetAutoMixConfig') {
+        configurations.push(json)
+        return accepts
+      }
+      return true
+    },
+    getAudioServiceBinding: () => ({
+      applyDspState: async (revision: number) => ({
+        revision,
+        activeSceneId: 'default',
+        totalLatencyFrames: 0,
+        totalTailFrames: 0,
+        nodes: [],
+        compileState: 'ready'
+      })
+    })
+  } as unknown as DspOrchestratorHost
+  const dsp = new DspOrchestrator(
+    host,
+    { audioProcessing: { dspEnabled: false, directMode: true } },
+    {}
+  )
+  await dsp.setAudioProcessing({ autoMix: { ...DEFAULT_AUTO_MIX, enabled: true } })
+  assert.equal(dsp.processing.directMode, true)
+  assert.equal(dsp.getDspSceneState().directMode, false)
+  assert.deepEqual(overrides, [false])
+  await dsp.setAudioProcessing({ autoMix: { ...DEFAULT_AUTO_MIX, enabled: false } })
+  assert.equal(dsp.getDspSceneState().directMode, true)
+  assert.deepEqual(overrides, [false, true])
+  accepts = false
+  await assert.rejects(
+    dsp.setAudioProcessing({ autoMix: { ...DEFAULT_AUTO_MIX, enabled: true } }),
+    /not accepted/
+  )
+  assert.equal(dsp.processing.autoMix?.enabled, false)
+  assert.equal(dsp.processing.directMode, true)
+  assert.deepEqual(overrides, [false, true, false, true])
+  assert.equal(configurations.length, 3)
+})
+
+test('saved AutoMix reaches native on overlapping startup graphs and is reapplied after service recovery', async () => {
+  const info = createDefaultPlaybackInfo('wasapi', 'auto', false, {
+    routingMode: 'auto',
+    preferredBufferSize: 0
+  })
+  const configurations: string[] = []
+  let releaseFirst!: () => void
+  const firstAck = new Promise<void>((resolve) => {
+    releaseFirst = resolve
+  })
+  const host = {
+    getPlaybackInfo: () => info,
+    getDevice: () => 'auto',
+    getOutput: () => 'wasapi',
+    getNative: () => ({ SetAutoMixConfig: () => {} }),
+    setLastNativeError: () => {},
+    getLastNativeError: () => '',
+    callNativeMaybeAsync: async (_: string, method: string, json: string) => {
+      if (method === 'SetAutoMixConfig') configurations.push(json)
+      return true
+    },
+    getAudioServiceBinding: () => ({
+      applyDspState: async (revision: number) => {
+        if (revision === 1) await firstAck
+        return {
+          revision,
+          activeSceneId: 'default',
+          totalLatencyFrames: 0,
+          totalTailFrames: 0,
+          nodes: [],
+          compileState: 'ready'
+        }
+      }
+    })
+  } as unknown as DspOrchestratorHost
+  const dsp = new DspOrchestrator(
+    host,
+    { audioProcessing: { autoMix: { ...DEFAULT_AUTO_MIX, enabled: true } } },
+    {}
+  )
+  const startup = dsp.applyNativeDspSettings('startup', {}, false)
+  await dsp.applyNativeDspGraph('service ready')
+  releaseFirst()
+  await startup
+  assert.equal(configurations.length, 1)
+  assert.equal(JSON.parse(configurations[0]).enabled, true)
+  await dsp.applyNativeDspGraph('scene refresh')
+  assert.equal(configurations.length, 1) // Keep the current native pair armed.
+  dsp.resetAfterServiceCrash('service restarted')
+  await dsp.applyNativeDspGraph('recovery')
+  assert.equal(configurations.length, 2)
+})
 
 test('device profile processing reaches the native graph and rollback restores the previous values', async () => {
   const info = createDefaultPlaybackInfo('wasapi', 'auto', false, {

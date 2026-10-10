@@ -37,6 +37,7 @@ const now = ref(new Date())
 const sort = ref<'seconds' | 'plays'>('seconds')
 const showFormatTable = ref(false)
 const showClearDialog = ref(false)
+const clearingStats = ref(false)
 const clearNotice = ref('')
 const clearActivity = computed(() => ({ ...listeningStats.value }))
 let dayTimer: ReturnType<typeof setInterval> | undefined
@@ -143,12 +144,20 @@ function openArtist(artist: ListeningArtistStat): void {
   if (providerId) emit('open-artist', { name, providerId })
 }
 
-function clearStats(range: ListeningStatsClearRange): void {
-  clearListeningStats(range)
-  showClearDialog.value = false
-  clearNotice.value = range
-    ? `已清除 ${range.startDay} 至 ${range.endDay} 的每日记录及对应曲目明细。`
-    : '已清除全部统计数据。'
+async function clearStats(range: ListeningStatsClearRange): Promise<void> {
+  if (clearingStats.value) return
+  clearingStats.value = true
+  try {
+    const saved = await clearListeningStats(range)
+    showClearDialog.value = false
+    clearNotice.value = !saved
+      ? '记录已清除，保存失败，应用会自动重试。'
+      : range
+        ? `已清除 ${range.startDay} 至 ${range.endDay} 的每日记录及对应曲目明细。`
+        : '已清除全部统计数据。'
+  } finally {
+    clearingStats.value = false
+  }
 }
 </script>
 
@@ -157,8 +166,7 @@ function clearStats(range: ListeningStatsClearRange): void {
     <div class="analytics-journal">
       <header class="journal-header">
         <div>
-          <h1>聆听年鉴<span class="journal-title-dot">.</span></h1>
-          <p>有些旋律，值得把时间留给它。</p>
+          <h1>听歌统计<span class="journal-title-dot">.</span></h1>
         </div>
         <div class="journal-header-tools">
           <div class="journal-edition">
@@ -200,9 +208,7 @@ function clearStats(range: ListeningStatsClearRange): void {
         <div class="empty-record" aria-hidden="true">
           <span><i class="ph ph-music-note"></i></span>
         </div>
-        <span class="an-eyebrow">YOUR STORY STARTS HERE</span>
-        <h2 id="journal-empty-title">第一首歌，就是序章。</h2>
-        <p>播放喜欢的音乐，时长、偏好与每一天的聆听足迹<br />会在这里，慢慢成为你的音乐年鉴。</p>
+        <h2 id="journal-empty-title">暂无听歌记录</h2>
         <button
           type="button"
           class="an-button an-button-primary"
@@ -223,7 +229,6 @@ function clearStats(range: ListeningStatsClearRange): void {
               <strong>{{ totalDuration.value }}</strong
               ><span>{{ totalDuration.unit }}</span>
             </div>
-            <p class="hero-note">耳机里的时间，自有意义。</p>
             <div class="hero-totals">
               <div>
                 <strong>{{ recorded.plays.toLocaleString('zh-CN') }}</strong
@@ -252,7 +257,7 @@ function clearStats(range: ListeningStatsClearRange): void {
             </div>
             <div class="favorite-copy">
               <span class="an-eyebrow">ON REPEAT / 01</span>
-              <span class="favorite-caption">把最多的时间，留给了</span>
+              <span class="favorite-caption">播放最多</span>
               <h2 :title="favorite.title">{{ favorite.title }}</h2>
               <p :title="favorite.artist">{{ favorite.artist }}</p>
               <button
@@ -350,7 +355,6 @@ function clearStats(range: ListeningStatsClearRange): void {
         <ListeningFootprint :activity="activity" :now="now" />
       </template>
       <footer class="journal-footer">
-        <span><i class="ph ph-lock-simple" aria-hidden="true"></i> 只记录音乐，不定义品味。</span>
         <p>
           汇总本机各音源的聆听记录 · 每日时长保留 730 天，曲目记录最多 10,000 首。<br />累计榜单不随时长范围变化；记录可能因保留策略而不完整。
         </p>
@@ -361,6 +365,7 @@ function clearStats(range: ListeningStatsClearRange): void {
         v-if="showClearDialog"
         :stats="clearActivity"
         :now="now"
+        :busy="clearingStats"
         @close="showClearDialog = false"
         @clear="clearStats"
       />

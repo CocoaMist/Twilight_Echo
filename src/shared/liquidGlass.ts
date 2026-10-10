@@ -12,10 +12,14 @@
  * computed style and binds them as attributes.
  */
 
-export type SurfaceMaterial = 'standard' | 'liquidGlass'
+export type SurfaceMaterial = 'standard' | 'transparent' | 'liquidGlass'
 export type LiquidGlassCoverage = 'functional' | 'expanded'
 
-export const SURFACE_MATERIALS: readonly SurfaceMaterial[] = ['standard', 'liquidGlass']
+export const SURFACE_MATERIALS: readonly SurfaceMaterial[] = [
+  'standard',
+  'transparent',
+  'liquidGlass'
+]
 
 /** Filter ids referenced from CSS. Cards and the playbar differ in aspect ratio. */
 export const LIQUID_GLASS_CARD_FILTER_ID = 'te-lg-card'
@@ -180,7 +184,7 @@ function clamp(value: unknown, bound: Bound, fallback: number): number {
 }
 
 export function normalizeSurfaceMaterial(value: unknown): SurfaceMaterial {
-  return value === 'liquidGlass' ? 'liquidGlass' : 'standard'
+  return value === 'liquidGlass' || value === 'transparent' ? value : 'standard'
 }
 
 export function normalizeLiquidGlassCoverage(value: unknown): LiquidGlassCoverage {

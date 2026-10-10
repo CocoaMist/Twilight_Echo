@@ -130,9 +130,10 @@ watch(
 
 <style scoped>
 .plugin-extension-page {
-  min-height: 100vh;
+  min-height: 0;
   padding: calc(32px + 46px) clamp(24px, 5vw, 76px) 120px;
   background: var(--te-subtle-bg);
+  min-width: 0;
 }
 
 .plugin-extension-header {
@@ -143,6 +144,7 @@ watch(
   gap: 16px;
   max-width: 960px;
   margin: 0 auto 20px;
+  flex-shrink: 0;
 }
 
 .plugin-extension-icon {
@@ -205,6 +207,8 @@ watch(
 .plugin-extension-body {
   max-width: 960px;
   margin: 0 auto;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .plugin-extension-loading,
@@ -301,5 +305,17 @@ watch(
   font-weight: 800;
   cursor: pointer;
   width: fit-content;
+}
+
+/* Responsive fixes selected from PR #115; desktop styling stays in the rules above. */
+@media (max-width: 620px) {
+  .plugin-extension-header {
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 12px;
+  }
+  .plugin-extension-action {
+    grid-column: 2;
+    justify-self: start;
+  }
 }
 </style>

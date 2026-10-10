@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import type { NativeAudioMetadata } from '../../shared/audioEngineTypes.ts'
+import { normalizeReleaseDate } from '../../shared/releaseDate.ts'
 
 export type SacdIsoMetadataReader = (filePath: string) => Promise<NativeAudioMetadata | null>
 
@@ -29,6 +30,7 @@ function toIsoTrack(container: TrackRecord, isoTrack: NativeAudioMetadata): Trac
     title: isoTrack.title || 'Unknown Track',
     artist: isoTrack.artist || 'Unknown Artist',
     album: isoTrack.album || 'Unknown Album',
+    releaseDate: normalizeReleaseDate(isoTrack.year),
     filePath: container.filePath,
     fileName: container.fileName,
     dir: container.dir,

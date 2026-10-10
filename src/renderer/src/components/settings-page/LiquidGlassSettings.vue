@@ -1,20 +1,30 @@
 <script setup lang="ts">
-import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
 import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import { DEFAULT_LIQUID_GLASS } from '../../../../shared/liquidGlass.ts'
 import EditableRangeValue from '../EditableRangeValue.vue'
-import { useSettingsStore } from '../../stores/useSettingsStore'
+import type { AppearanceDraft } from '../../../../shared/appAppearance.ts'
 import type {
   LiquidGlassCoverage,
   LiquidGlassSettings,
   LiquidGlassTheme
 } from '../../types/settings'
 
-const { settings, updateSettings } = useSettingsStore()
+const props = defineProps<{ modelValue: AppearanceDraft; tone?: 'light' | 'dark' }>()
+const emit = defineEmits<{
+  'update:modelValue': [value: AppearanceDraft]
+  'update:tone': [tone: 'light' | 'dark']
+}>()
+const settings = computed(() => props.modelValue)
+function updateSettings(patch: Partial<AppearanceDraft>): void {
+  emit('update:modelValue', { ...props.modelValue, ...patch })
+}
 
-const liquidGlassOpen = ref(false)
-const liquidGlassTab = ref<'light' | 'dark'>('light')
+const liquidGlassOpen = ref(true)
+const liquidGlassTab = computed({
+  get: () => props.tone ?? 'light',
+  set: (tone: 'light' | 'dark') => emit('update:tone', tone)
+})
 const liquidGlassScope = ref<'global' | 'home'>('global')
 
 const hasSharedLiquidGlassProfile = computed(
@@ -166,7 +176,6 @@ function toggleAdaptiveTone(): void {
   liquidGlass.adaptiveTone = !liquidGlass.adaptiveTone
   void updateSettings({ liquidGlass })
 }
-useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
 </script>
 
 <template>
@@ -175,7 +184,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
     class="settings-accordion-trigger setting-item"
     :class="{ open: liquidGlassOpen }"
     :aria-expanded="liquidGlassOpen"
-    aria-controls="settings-liquid-glass"
     @click="liquidGlassOpen = !liquidGlassOpen"
   >
     <span class="setting-copy">
@@ -184,11 +192,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>
-  <SettingsDisclosure
-    id="settings-liquid-glass"
-    :open="liquidGlassOpen"
-    class="settings-accordion-body"
-  >
+  <SettingsDisclosure :open="liquidGlassOpen" class="settings-accordion-body">
     <hr />
     <div class="liquid-glass-reset-row">
       <div class="setting-copy">
@@ -210,7 +214,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
     <div class="setting-item">
       <div class="setting-copy">
         <strong>覆盖范围</strong>
-        <span>默认只作用于导航和播放控件；实验模式额外覆盖部分内容卡片。</span>
+        <span>Apple 功能层保持内容稳定可读；扩展实验仅为显式注册的卡片启用低强度玻璃。</span>
       </div>
       <div class="theme-segment" role="group" aria-label="液态玻璃覆盖范围">
         <button
@@ -219,7 +223,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
           :aria-pressed="settings.liquidGlass.coverage === 'functional'"
           @click="setLiquidGlassCoverage('functional')"
         >
-          导航与播放控件
+          Apple 功能层
         </button>
         <button
           type="button"
@@ -227,7 +231,7 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
           :aria-pressed="settings.liquidGlass.coverage === 'expanded'"
           @click="setLiquidGlassCoverage('expanded')"
         >
-          更多卡片（实验）
+          扩展实验
         </button>
       </div>
     </div>
@@ -235,18 +239,16 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
     <div class="setting-item">
       <div class="setting-copy">
         <strong>全局液态玻璃</strong>
-        <span
-          >统一启用标题栏、主侧栏、设置导航和播放栏。关闭全局后，下方单独启用的区域仍会保留效果。</span
-        >
+        <span>统一启用标题栏、主侧栏、设置导航和播放栏的液态玻璃材质。</span>
       </div>
       <button
         type="button"
+        aria-label="全局液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.surfaceMaterial === 'liquidGlass' }"
         role="switch"
         :aria-checked="settings.surfaceMaterial === 'liquidGlass'"
         @click="toggleLiquidGlass"
-        aria-label="全局液态玻璃"
       ></button>
     </div>
     <hr />
@@ -257,12 +259,12 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
       </div>
       <button
         type="button"
+        aria-label="主导航液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.liquidGlass.navigationEnabled }"
         role="switch"
         :aria-checked="settings.liquidGlass.navigationEnabled"
         @click="toggleSharedLiquidGlassTarget('navigationEnabled')"
-        aria-label="主导航液态玻璃"
       ></button>
     </div>
     <hr />
@@ -273,12 +275,12 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
       </div>
       <button
         type="button"
+        aria-label="播放栏液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.liquidGlass.playbarEnabled }"
         role="switch"
         :aria-checked="settings.liquidGlass.playbarEnabled"
         @click="toggleSharedLiquidGlassTarget('playbarEnabled')"
-        aria-label="播放栏液态玻璃"
       ></button>
     </div>
     <hr />
@@ -289,28 +291,28 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
       </div>
       <button
         type="button"
+        aria-label="设置导航液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.liquidGlass.settingsNavigationEnabled }"
         role="switch"
         :aria-checked="settings.liquidGlass.settingsNavigationEnabled"
         @click="toggleSharedLiquidGlassTarget('settingsNavigationEnabled')"
-        aria-label="设置导航液态玻璃"
       ></button>
     </div>
     <hr />
     <div class="setting-item">
       <div class="setting-copy">
         <strong>首页媒体焦点液态玻璃</strong>
-        <span>仅让首页的大封面区域使用透明玻璃材质，列表保持原来的背景。</span>
+        <span>仅为首页的封面 Hero 使用 Clear 材质，列表和内容卡片保持实体表面。</span>
       </div>
       <button
         type="button"
+        aria-label="首页媒体焦点液态玻璃"
         class="toggle-switch"
         :class="{ active: settings.liquidGlass.homeCards.enabled }"
         role="switch"
         :aria-checked="settings.liquidGlass.homeCards.enabled"
         @click="toggleHomeCardsLiquidGlass"
-        aria-label="首页媒体焦点液态玻璃"
       ></button>
     </div>
     <div v-if="hasLiquidGlassEnabled">
@@ -322,12 +324,12 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         </div>
         <button
           type="button"
+          aria-label="高光跟随指针"
           class="toggle-switch"
           :class="{ active: settings.liquidGlass.followPointer }"
           role="switch"
           :aria-checked="settings.liquidGlass.followPointer"
           @click="toggleLiquidGlassPointer"
-          aria-label="高光跟随指针"
         ></button>
       </div>
       <hr />
@@ -336,9 +338,8 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
           <strong>编辑范围</strong>
           <span>首页媒体焦点可独立保存一套玻璃参数，不影响导航和播放栏。</span>
         </div>
-        <div role="group" aria-label="编辑范围" class="theme-segment">
+        <div class="theme-segment">
           <button
-            :aria-pressed="activeLiquidGlassScope === 'global'"
             v-if="hasSharedLiquidGlassProfile"
             type="button"
             :class="{ active: activeLiquidGlassScope === 'global' }"
@@ -347,7 +348,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
             全局
           </button>
           <button
-            :aria-pressed="activeLiquidGlassScope === 'home'"
             v-if="settings.liquidGlass.homeCards.enabled"
             type="button"
             :class="{ active: activeLiquidGlassScope === 'home' }"
@@ -365,12 +365,12 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         </div>
         <button
           type="button"
+          aria-label="自适应明暗"
           class="toggle-switch"
           :class="{ active: settings.liquidGlass.adaptiveTone }"
           role="switch"
           :aria-checked="settings.liquidGlass.adaptiveTone"
           @click="toggleAdaptiveTone"
-          aria-label="自适应明暗"
         ></button>
       </div>
       <hr />
@@ -381,12 +381,12 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         </div>
         <button
           type="button"
+          aria-label="亮色背景加深"
           class="toggle-switch"
           :class="{ active: activeOverLight }"
           role="switch"
           :aria-checked="activeOverLight"
           @click="toggleActiveOverLight"
-          aria-label="亮色背景加深"
         ></button>
       </div>
       <hr />
@@ -395,9 +395,8 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
           <strong>编辑主题</strong>
           <span>分别设置浅色与深色模式下的玻璃参数。</span>
         </div>
-        <div role="group" aria-label="编辑主题" class="theme-segment">
+        <div class="theme-segment">
           <button
-            :aria-pressed="liquidGlassTab === 'light'"
             type="button"
             :class="{ active: liquidGlassTab === 'light' }"
             @click="liquidGlassTab = 'light'"
@@ -406,7 +405,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
             浅色
           </button>
           <button
-            :aria-pressed="liquidGlassTab === 'dark'"
             type="button"
             :class="{ active: liquidGlassTab === 'dark' }"
             @click="liquidGlassTab = 'dark'"
@@ -425,7 +423,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>折射</span>
           <input
-            aria-label="折射强度"
             class="range-input"
             type="range"
             min="0"
@@ -456,7 +453,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>色散</span>
           <input
-            aria-label="色散强度"
             class="range-input"
             type="range"
             min="0"
@@ -488,7 +484,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>模糊</span>
           <input
-            aria-label="玻璃模糊"
             class="range-input"
             type="range"
             min="0"
@@ -517,7 +512,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>饱和度</span>
           <input
-            aria-label="玻璃饱和度"
             class="range-input"
             type="range"
             min="80"
@@ -546,7 +540,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>弹性</span>
           <input
-            aria-label="弹性跟随"
             class="range-input"
             type="range"
             min="0"
@@ -575,7 +568,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>高光</span>
           <input
-            aria-label="镜面高光"
             class="range-input"
             type="range"
             min="0"
@@ -607,7 +599,6 @@ useSettingsSearchDisclosure('liquidGlass', liquidGlassOpen)
         <div class="range-pill">
           <span>着色</span>
           <input
-            aria-label="表面着色"
             class="range-input"
             type="range"
             min="0"

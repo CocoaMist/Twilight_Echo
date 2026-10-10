@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IAudioProcessor.h"
+#include "ConvolverRealtimeBudget.h"
 
 #include <array>
 #include <chrono>
@@ -56,13 +57,14 @@ class ConvolverProcessor final : public IAudioProcessor {
   // Returns true when a previously bypassed convolver may try again.
   bool shouldRearmAfterBypass();
   uint32_t choosePartitionSize(const IrData& ir) const;
-  std::vector<float> impulseForOutputChannel(const IrData& ir, int outputChannel) const;
+  const std::vector<float>& impulseForOutputChannel(const IrData& ir, int outputChannel) const;
   void updateInfoFromRuntime(const IrData& ir, bool resampled);
 
   DspConfig config_;
   AudioFormat format_;
-  std::optional<IrData> originalIr_;
-  std::unordered_map<int, IrData> irCache_;
+  std::shared_ptr<const IrData> originalIr_;
+  std::string irIdentity_;
+  std::unordered_map<int, std::shared_ptr<const IrData>> irCache_;
   std::vector<std::unique_ptr<FftChannel>> channels_;
   std::array<float, 8> routedInput_{};
   std::array<float, 8> wetOutput_{};
@@ -71,7 +73,7 @@ class ConvolverProcessor final : public IAudioProcessor {
   size_t wetDelayFrames_ = 0;
   size_t wetDelayWriteFrame_ = 0;
   ConvolverInfo info_;
-  uint64_t consecutiveOverruns_ = 0;
+  convolver::RealtimeBudget realtimeBudget_;
   // Successive bypasses back off exponentially so a genuinely too-heavy IR settles into
   // "off" instead of thrashing, while a one-off scheduling hiccup recovers quickly.
   uint32_t bypassGeneration_ = 0;

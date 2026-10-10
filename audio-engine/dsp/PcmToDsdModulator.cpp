@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <cstring>
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+#include <emmintrin.h>
+#endif
 
 namespace twilight::audio {
 namespace {
@@ -48,9 +51,23 @@ struct HalfbandStageSpec {
 
 constexpr HalfbandStageSpec kStages[PcmToDsdModulator::kMaxHalfbandStages] = {
     {kStage0Taps, 32, 0},
-    {kStage1Taps, 16, 32},
-    {kStage2Taps, 8, 48},
-    {kStage3Taps, 6, 56}};
+    {kStage1Taps, 16, 64},
+    {kStage2Taps, 8, 96},
+    {kStage3Taps, 6, 112}};
+
+template<int N>
+void interpolate(const double* taps, double* history, int& position,
+    const double* input, double* output, int count) {
+  for (int i = 0; i < count; ++i) {
+    position = position == 0 ? N - 1 : position - 1;
+    history[position] = history[position + N] = input[i];
+    const double* window = history + position;
+    output[2 * i] = window[N / 2];
+    double acc = 0.0;
+    for (int k = 0; k < N; ++k) acc += taps[k] * window[k];
+    output[2 * i + 1] = 2.0 * acc;
+  }
+}
 
 // 5th-order CIFB feedback coefficients derived from a Butterworth NTF with
 // out-of-band gain Hinf = 1.5 (Lee criterion). Stable for inputs up to
@@ -62,6 +79,59 @@ constexpr double kFeedback[5] = {
 // largest state below ~2; anything past this bound means the loop has gone
 // unstable and must be re-centered instead of emitting garbage.
 constexpr double kStateGuardLimit = 20.0;
+
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+// Two independent channels share instructions, never filter/quantizer state.
+// Keep double precision and the original operation order; ordered comparisons
+// reject NaNs as well as infinities and out-of-range integrators.
+void quantizePair(const double* left, const double* right, int samples, int hold,
+    double* leftState, double* rightState, uint8_t* leftOutput, uint8_t* rightOutput,
+    bool msb, uint64_t& resets) {
+  __m128d s[5], k[5];
+  for (int i = 0; i < 5; ++i) {
+    s[i] = _mm_set_pd(rightState[i], leftState[i]);
+    k[i] = _mm_set1_pd(kFeedback[i]);
+  }
+  const __m128d zero = _mm_setzero_pd(), one = _mm_set1_pd(1.0);
+  const __m128d sign = _mm_set1_pd(-0.0), limit = _mm_set1_pd(kStateGuardLimit);
+  const __m128d headroom = _mm_set1_pd(PcmToDsdModulator::kInputHeadroomScale);
+  size_t written = 0;
+  uint8_t l = 0, r = 0;
+  int bits = 0;
+  for (int i = 0; i < samples; ++i) {
+    const __m128d u = _mm_max_pd(_mm_sub_pd(zero, headroom),
+        _mm_min_pd(headroom, _mm_set_pd(right[i], left[i])));
+    for (int h = 0; h < hold; ++h) {
+      const __m128d positive = _mm_cmpge_pd(s[4], zero);
+      const int mask = _mm_movemask_pd(positive);
+      const __m128d feedback = _mm_or_pd(_mm_and_pd(positive, one),
+          _mm_andnot_pd(positive, _mm_set1_pd(-1.0)));
+      for (int j = 4; j > 0; --j)
+        s[j] = _mm_sub_pd(_mm_add_pd(s[j], s[j - 1]), _mm_mul_pd(k[j], feedback));
+      s[0] = _mm_sub_pd(_mm_add_pd(s[0], _mm_mul_pd(k[0], u)), _mm_mul_pd(k[0], feedback));
+      __m128d valid = _mm_cmple_pd(_mm_andnot_pd(sign, s[0]), limit);
+      for (int j = 1; j < 5; ++j)
+        valid = _mm_and_pd(valid, _mm_cmple_pd(_mm_andnot_pd(sign, s[j]), limit));
+      const int validMask = _mm_movemask_pd(valid);
+      if (validMask != 3) {
+        for (auto& state : s) state = _mm_and_pd(state, valid);
+        resets += (validMask & 1 ? 0 : 1) + (validMask & 2 ? 0 : 1);
+      }
+      const int shift = msb ? 7 - bits : bits;
+      l |= static_cast<uint8_t>((mask & 1) << shift);
+      r |= static_cast<uint8_t>(((mask >> 1) & 1) << shift);
+      if (++bits == 8) {
+        leftOutput[written] = l; rightOutput[written++] = r;
+        bits = 0; l = 0; r = 0;
+      }
+    }
+  }
+  for (int i = 0; i < 5; ++i) {
+    double values[2]; _mm_storeu_pd(values, s[i]);
+    leftState[i] = values[0]; rightState[i] = values[1];
+  }
+}
+#endif
 
 constexpr int kBaseRate441 = 44100;
 constexpr int kBaseRate48 = 48000;
@@ -145,6 +215,7 @@ void PcmToDsdModulator::injectInstabilityForTest() {
 void PcmToDsdModulator::reset() {
   for (auto& channel : channels_) {
     channel.filterHistory.fill(0.0);
+    channel.historyPositions.fill(0);
     channel.integrators.fill(0.0);
     channel.pendingByte = 0;
     channel.pendingBits = 0;
@@ -168,7 +239,7 @@ size_t PcmToDsdModulator::process(
 
   // Ping-pong expansion buffers sized for the maximum halfband output
   // (1 << kMaxHalfbandStages samples per input frame).
-  double bufferA[1 << kMaxHalfbandStages];
+  double bufferA[2][1 << kMaxHalfbandStages];
   double bufferB[1 << kMaxHalfbandStages];
   size_t written[kMaxChannels] = {};
 
@@ -177,36 +248,56 @@ size_t PcmToDsdModulator::process(
   for (size_t frame = 0; frame < frames; ++frame) {
     for (size_t channel = 0; channel < channelCount; ++channel) {
       ChannelState& state = channels_[channel];
-      double sample =
-          static_cast<double>(interleavedInput[frame * channelCount + channel]);
-      if (!std::isfinite(sample)) sample = 0.0;
-      sample *= kInputHeadroomScale;
-      if (sample > kInputHeadroomScale) sample = kInputHeadroomScale;
-      if (sample < -kInputHeadroomScale) sample = -kInputHeadroomScale;
+      int lanes = 1;
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+      if (channel + 1 < channelCount) lanes = 2;
+#endif
+      for (int lane = 0; lane < lanes; ++lane) {
+        auto& filterState = channels_[channel + static_cast<size_t>(lane)];
+        double sample =
+            static_cast<double>(interleavedInput[frame * channelCount + channel + lane]);
+        if (!std::isfinite(sample)) sample = 0.0;
+        sample *= kInputHeadroomScale;
+        if (sample > kInputHeadroomScale) sample = kInputHeadroomScale;
+        if (sample < -kInputHeadroomScale) sample = -kInputHeadroomScale;
 
-      // Halfband cascade: expand one input sample into (1 << stageCount).
-      double* current = bufferA;
-      double* next = bufferB;
-      current[0] = sample;
-      int sampleCount = 1;
-      for (int stage = 0; stage < halfbandStageCount_; ++stage) {
-        const HalfbandStageSpec& spec = kStages[stage];
-        double* history = state.filterHistory.data() + spec.historyOffset;
-        const int tapCount = spec.tapCount;
-        const int evenDelay = tapCount / 2;
-        for (int i = 0; i < sampleCount; ++i) {
-          std::memmove(history + 1, history, sizeof(double) * static_cast<size_t>(tapCount - 1));
-          history[0] = current[i];
-          next[2 * i] = history[evenDelay];
-          double acc = 0.0;
-          for (int k = 0; k < tapCount; ++k) acc += spec.taps[k] * history[k];
-          next[2 * i + 1] = 2.0 * acc;
+        // Halfband cascade: expand one input sample into (1 << stageCount).
+        double* current = bufferA[lane];
+        double* next = bufferB;
+        current[0] = sample;
+        int sampleCount = 1;
+        for (int stage = 0; stage < halfbandStageCount_; ++stage) {
+          const HalfbandStageSpec& spec = kStages[stage];
+          double* history = filterState.filterHistory.data() + spec.historyOffset;
+          int& position = filterState.historyPositions[stage];
+          switch (stage) {
+            case 0: interpolate<32>(spec.taps, history, position, current, next, sampleCount); break;
+            case 1: interpolate<16>(spec.taps, history, position, current, next, sampleCount); break;
+            case 2: interpolate<8>(spec.taps, history, position, current, next, sampleCount); break;
+            case 3: interpolate<6>(spec.taps, history, position, current, next, sampleCount); break;
+          }
+          double* swap = current;
+          current = next;
+          next = swap;
+          sampleCount *= 2;
         }
-        double* swap = current;
-        current = next;
-        next = swap;
-        sampleCount *= 2;
+        if (current != bufferA[lane])
+          std::memcpy(bufferA[lane], current, static_cast<size_t>(sampleCount) * sizeof(double));
       }
+      const int sampleCount = 1 << halfbandStageCount_;
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+      if (lanes == 2) {
+        quantizePair(bufferA[0], bufferA[1], sampleCount, holdFactor_,
+            state.integrators.data(), channels_[channel + 1].integrators.data(),
+            channelOutputs[channel] + written[channel], channelOutputs[channel + 1] + written[channel + 1],
+            msbFirst, instabilityResets_);
+        const size_t count = static_cast<size_t>(upsampleRatio_) / 8;
+        written[channel] += count; written[channel + 1] += count;
+        ++channel;
+        continue;
+      }
+#endif
+      const double* current = bufferA[0];
 
       // Sigma-delta at full DSD rate; zero-order hold for the residual ratio.
       double* integrators = state.integrators.data();

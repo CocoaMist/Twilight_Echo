@@ -128,7 +128,10 @@ void destroyEburState(void*& state) {
 void createEburState(void*& state, const AudioFormat& format, bool active) {
   destroyEburState(state);
   if (!active || format.sampleRate <= 0 || format.channelCount <= 0) return;
-  constexpr int kMeterModes = EBUR128_MODE_I | EBUR128_MODE_LRA | EBUR128_MODE_M | EBUR128_MODE_S;
+  // Fixed loudness histograms avoid libebur128 allocating a history node on
+  // the audio thread for every gated block throughout an unbounded session.
+  constexpr int kMeterModes = EBUR128_MODE_I | EBUR128_MODE_LRA | EBUR128_MODE_M |
+      EBUR128_MODE_S | EBUR128_MODE_HISTOGRAM;
   state = ebur128_init(
       static_cast<unsigned int>(std::clamp(format.channelCount, 1, 8)),
       static_cast<unsigned long>(format.sampleRate),

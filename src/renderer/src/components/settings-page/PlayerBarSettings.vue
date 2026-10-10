@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
-import SettingsDisclosure from './SettingsDisclosure.vue'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import {
@@ -22,8 +20,6 @@ import {
 } from './types.ts'
 
 const { settings, updateSettings } = useSettingsStore()
-
-const playerBarOpen = ref(false)
 
 function setPlayerBarMode(mode: PlayerBarMode): void {
   if (settings.value.playerBar.mode === mode && settings.value.playerBar.modeSource === 'user')
@@ -90,189 +86,167 @@ function visibilityOptionDisabled(value: PlayerBarVisibility | PlayerBarPageVisi
 function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
   return value === 'autoHide' && !playingPageShapeCanAutoHide.value
 }
-useSettingsSearchDisclosure('playerBar', playerBarOpen)
 </script>
 
 <template>
-  <button
-    type="button"
-    class="settings-accordion-trigger setting-item"
-    :class="{ open: playerBarOpen }"
-    :aria-expanded="playerBarOpen"
-    aria-controls="settings-player-bar"
-    @click="playerBarOpen = !playerBarOpen"
-  >
-    <span class="setting-copy">
-      <strong>播放条形态与可见性</strong>
+  <hr />
+  <div data-setting-id="player-bar-mode" id="setting-player-bar-mode" class="setting-item">
+    <div class="setting-copy">
+      <strong>播放条形态</strong>
       <span
-        >标准 / 细长 / 紧凑三种形态，配合常显 / 自动隐藏 /
-        完全隐藏三档可见性；两者都可以在播放页单独覆盖。</span
+        >迷你形态是 40px
+        扁平长进度条；紧凑形态贴着窗口底边通栏，进度走顶边细线。每种形态装哪些按钮见下面的「播放条按钮编排」。</span
       >
-    </span>
-    <i class="pi pi-chevron-down"></i>
-  </button>
-  <SettingsDisclosure
-    id="settings-player-bar"
-    :open="playerBarOpen"
-    class="settings-accordion-body"
+    </div>
+    <div class="segmented-control">
+      <button
+        v-for="option in playerBarModeOptions"
+        :key="option.value"
+        type="button"
+        :class="{ active: settings.playerBar.mode === option.value }"
+        @click="setPlayerBarMode(option.value)"
+      >
+        <i :class="option.icon"></i>
+        {{ option.label }}
+      </button>
+    </div>
+  </div>
+  <hr />
+  <div data-setting-id="player-page-mode" id="setting-player-page-mode" class="setting-item">
+    <div class="setting-copy">
+      <strong>播放页形态</strong>
+      <span>可以只在播放页换一种形态，其余界面保持全局形态。</span>
+    </div>
+    <select
+      class="preview-select"
+      :value="settings.playerBar.playingPageMode"
+      @change="setPlayerBarPlayingPageMode(($event.target as HTMLSelectElement).value)"
+    >
+      <option v-for="option in playerBarPageModeOptions" :key="option.value" :value="option.value">
+        {{ option.label }}
+      </option>
+    </select>
+  </div>
+  <hr />
+  <div
+    data-setting-id="player-bar-visibility"
+    id="setting-player-bar-visibility"
+    class="setting-item"
   >
-    <hr />
-    <div class="setting-item">
-      <div class="setting-copy">
-        <strong>播放条形态</strong>
-        <span
-          >细长形态是 40px
-          扁平长进度条；紧凑形态贴着窗口底边通栏，进度走顶边细线。每种形态装哪些按钮见下面的「播放条按钮编排」。</span
-        >
-      </div>
-      <div role="group" aria-label="播放条形态" class="segmented-control">
-        <button
-          :aria-pressed="settings.playerBar.mode === option.value"
-          v-for="option in playerBarModeOptions"
-          :key="option.value"
-          type="button"
-          :class="{ active: settings.playerBar.mode === option.value }"
-          @click="setPlayerBarMode(option.value)"
-        >
-          <i :class="option.icon"></i>
-          {{ option.label }}
-        </button>
-      </div>
+    <div class="setting-copy">
+      <strong>播放条可见性</strong>
+      <span>
+        常显始终保留播放条；自动隐藏平时收起、鼠标靠近窗口底边时滑出（需迷你或紧凑形态）；完全隐藏则不再出现，也不会被鼠标唤出。
+      </span>
     </div>
-    <hr />
-    <div class="setting-item">
-      <div class="setting-copy">
-        <strong>播放页形态</strong>
-        <span>可以只在播放页换一种形态，其余界面保持全局形态。</span>
-      </div>
-      <select
-        aria-label="播放页形态"
-        class="preview-select"
-        :value="settings.playerBar.playingPageMode"
-        @change="setPlayerBarPlayingPageMode(($event.target as HTMLSelectElement).value)"
+    <div class="segmented-control">
+      <button
+        v-for="option in playerBarVisibilityOptions"
+        :key="option.value"
+        type="button"
+        :class="{
+          active: settings.playerBar.visibility === option.value,
+          disabled: visibilityOptionDisabled(option.value)
+        }"
+        :disabled="visibilityOptionDisabled(option.value)"
+        :title="visibilityOptionDisabled(option.value) ? '自动隐藏需要全局形态为迷你或紧凑' : ''"
+        @click="setPlayerBarVisibility(option.value)"
       >
-        <option
-          v-for="option in playerBarPageModeOptions"
-          :key="option.value"
-          :value="option.value"
-        >
-          {{ option.label }}
-        </option>
-      </select>
+        <i :class="option.icon"></i>
+        {{ option.label }}
+      </button>
     </div>
-    <hr />
-    <div class="setting-item">
-      <div class="setting-copy">
-        <strong>播放条可见性</strong>
-        <span>
-          常显始终保留播放条；自动隐藏平时收起、鼠标靠近窗口底边时滑出（需细长或紧凑形态）；完全隐藏则不再出现，也不会被鼠标唤出。
-        </span>
-      </div>
-      <div role="group" aria-label="播放条可见性" class="segmented-control">
-        <button
-          :aria-pressed="settings.playerBar.visibility === option.value"
-          v-for="option in playerBarVisibilityOptions"
-          :key="option.value"
-          type="button"
-          :class="{
-            active: settings.playerBar.visibility === option.value,
-            disabled: visibilityOptionDisabled(option.value)
-          }"
-          :disabled="visibilityOptionDisabled(option.value)"
-          :title="visibilityOptionDisabled(option.value) ? '自动隐藏需要全局形态为细长或紧凑' : ''"
-          @click="setPlayerBarVisibility(option.value)"
-        >
-          <i :class="option.icon"></i>
-          {{ option.label }}
-        </button>
-      </div>
+  </div>
+  <hr />
+  <div
+    data-setting-id="player-page-visibility"
+    id="setting-player-page-visibility"
+    class="setting-item"
+  >
+    <div class="setting-copy">
+      <strong>播放页可见性</strong>
+      <span>可以只在播放页自动隐藏或完全隐藏播放条，其余界面保持全局可见性。</span>
     </div>
-    <hr />
-    <div class="setting-item">
-      <div class="setting-copy">
-        <strong>播放页可见性</strong>
-        <span>可以只在播放页自动隐藏或完全隐藏播放条，其余界面保持全局可见性。</span>
-      </div>
-      <select
-        aria-label="播放页可见性"
-        class="preview-select"
-        :value="settings.playerBar.playingPageVisibility"
-        @change="setPlayerBarPlayingPageVisibility(($event.target as HTMLSelectElement).value)"
+    <select
+      class="preview-select"
+      :value="settings.playerBar.playingPageVisibility"
+      @change="setPlayerBarPlayingPageVisibility(($event.target as HTMLSelectElement).value)"
+    >
+      <option
+        v-for="option in playerBarPageVisibilityOptions"
+        :key="option.value"
+        :value="option.value"
+        :disabled="pageVisibilityOptionDisabled(option.value)"
       >
-        <option
-          v-for="option in playerBarPageVisibilityOptions"
-          :key="option.value"
-          :value="option.value"
-          :disabled="pageVisibilityOptionDisabled(option.value)"
-        >
-          {{ option.label }}
-        </option>
-      </select>
+        {{ option.label }}
+      </option>
+    </select>
+  </div>
+  <template v-if="autoHideAppliesAnywhere">
+    <hr />
+    <div
+      data-setting-id="player-bar-threshold"
+      id="setting-player-bar-threshold"
+      class="setting-item"
+    >
+      <div class="setting-copy">
+        <strong>触发距离</strong>
+        <span>鼠标距窗口底边多少像素内触发滑出。</span>
+      </div>
+      <div class="range-pill">
+        <span>距离</span>
+        <input
+          class="range-input"
+          type="range"
+          :min="PLAYER_BAR_BOUNDS.revealThresholdPx.min"
+          :max="PLAYER_BAR_BOUNDS.revealThresholdPx.max"
+          :value="settings.playerBar.revealThresholdPx"
+          @input="
+            setPlayerBarNumber(
+              'revealThresholdPx',
+              Number(($event.target as HTMLInputElement).value)
+            )
+          "
+        />
+        <EditableRangeValue
+          :value="settings.playerBar.revealThresholdPx"
+          :min="PLAYER_BAR_BOUNDS.revealThresholdPx.min"
+          :max="PLAYER_BAR_BOUNDS.revealThresholdPx.max"
+          suffix="px"
+          aria-label="编辑触发距离"
+          @change="setPlayerBarNumber('revealThresholdPx', $event)"
+        />
+      </div>
     </div>
-    <template v-if="autoHideAppliesAnywhere">
-      <hr />
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>触发距离</strong>
-          <span>鼠标距窗口底边多少像素内触发滑出。</span>
-        </div>
-        <div class="range-pill">
-          <span>距离</span>
-          <input
-            aria-label="触发距离"
-            class="range-input"
-            type="range"
-            :min="PLAYER_BAR_BOUNDS.revealThresholdPx.min"
-            :max="PLAYER_BAR_BOUNDS.revealThresholdPx.max"
-            :value="settings.playerBar.revealThresholdPx"
-            @input="
-              setPlayerBarNumber(
-                'revealThresholdPx',
-                Number(($event.target as HTMLInputElement).value)
-              )
-            "
-          />
-          <EditableRangeValue
-            :value="settings.playerBar.revealThresholdPx"
-            :min="PLAYER_BAR_BOUNDS.revealThresholdPx.min"
-            :max="PLAYER_BAR_BOUNDS.revealThresholdPx.max"
-            suffix="px"
-            aria-label="编辑触发距离"
-            @change="setPlayerBarNumber('revealThresholdPx', $event)"
-          />
-        </div>
+    <hr />
+    <div data-setting-id="player-bar-delay" id="setting-player-bar-delay" class="setting-item">
+      <div class="setting-copy">
+        <strong>收起延迟</strong>
+        <span>鼠标离开触发区后延迟多久收起播放条。</span>
       </div>
-      <hr />
-      <div class="setting-item">
-        <div class="setting-copy">
-          <strong>收起延迟</strong>
-          <span>鼠标离开触发区后延迟多久收起播放条。</span>
-        </div>
-        <div class="range-pill">
-          <span>延迟</span>
-          <input
-            aria-label="收起延迟"
-            class="range-input"
-            type="range"
-            :min="PLAYER_BAR_BOUNDS.hideDelayMs.min"
-            :max="PLAYER_BAR_BOUNDS.hideDelayMs.max"
-            step="50"
-            :value="settings.playerBar.hideDelayMs"
-            @input="
-              setPlayerBarNumber('hideDelayMs', Number(($event.target as HTMLInputElement).value))
-            "
-          />
-          <EditableRangeValue
-            :value="settings.playerBar.hideDelayMs"
-            :min="PLAYER_BAR_BOUNDS.hideDelayMs.min"
-            :max="PLAYER_BAR_BOUNDS.hideDelayMs.max"
-            :step="50"
-            suffix="ms"
-            aria-label="编辑收起延迟"
-            @change="setPlayerBarNumber('hideDelayMs', $event)"
-          />
-        </div>
+      <div class="range-pill">
+        <span>延迟</span>
+        <input
+          class="range-input"
+          type="range"
+          :min="PLAYER_BAR_BOUNDS.hideDelayMs.min"
+          :max="PLAYER_BAR_BOUNDS.hideDelayMs.max"
+          step="50"
+          :value="settings.playerBar.hideDelayMs"
+          @input="
+            setPlayerBarNumber('hideDelayMs', Number(($event.target as HTMLInputElement).value))
+          "
+        />
+        <EditableRangeValue
+          :value="settings.playerBar.hideDelayMs"
+          :min="PLAYER_BAR_BOUNDS.hideDelayMs.min"
+          :max="PLAYER_BAR_BOUNDS.hideDelayMs.max"
+          :step="50"
+          suffix="ms"
+          aria-label="编辑收起延迟"
+          @change="setPlayerBarNumber('hideDelayMs', $event)"
+        />
       </div>
-    </template>
-  </SettingsDisclosure>
+    </div>
+  </template>
 </template>

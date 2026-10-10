@@ -1,0 +1,3 @@
+{"kind":"statsTimer","simulatedPlaybackSeconds":300,"dirtyUpdates":60,"writesDuringPlayback":0,"firstWriteSeconds":330}
+{"kind":"rapidSelectionSessionWrites","selections":12,"fullQueueSize":5000,"immediateWrites":12,"fullQueueWrites":12,"totalQueueEntriesSent":60000,"note":"real queue patch, Vue post watchers and writer; disk/IPC replaced by receipt stub; store debounce not invoked"}
+{"kind":"bpmDualDelivery","analyses":1,"completionEvents":1,"playbackQueuePatches":2,"libraryApplyCalls":2,"note":"real file identity, main manager and renderer controller; analysis, cache, IPC transport and library are stubs"}

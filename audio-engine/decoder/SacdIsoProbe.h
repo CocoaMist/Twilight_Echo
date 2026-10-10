@@ -1,4 +1,5 @@
 #pragma once
+#include "../core/SharedInputFile.h"
 
 #include "../core/Utf8Path.h"
 
@@ -164,7 +165,7 @@ inline uint32_t sacdReadLe32(const uint8_t* data) {
          (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
 }
 
-inline bool sacdReadExactAt(std::ifstream& file, uint64_t offset, uint8_t* data, size_t size) {
+inline bool sacdReadExactAt(std::istream& file, uint64_t offset, uint8_t* data, size_t size) {
   file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
   if (!file) return false;
   file.read(reinterpret_cast<char*>(data), static_cast<std::streamsize>(size));
@@ -204,7 +205,7 @@ inline bool sacdPathLooksUncompressedDsdMarker(const std::string& path) {
 }
 
 inline void sacdCollectIsoDirectory(
-    std::ifstream& file,
+    std::istream& file,
     uint32_t extent,
     uint32_t size,
     const std::string& parent,
@@ -269,7 +270,7 @@ inline SacdIsoEntryProbe probeSacdIsoEntry(const std::string& source) {
     cleanSource = cleanSource.substr(0, qm);
   }
 
-  std::ifstream file(utf8Path(cleanSource), std::ios::binary);
+  SharedInputFile file(utf8Path(cleanSource), std::ios::binary);
   if (!file) {
     probe.reasonCode = kSacdIsoOpenFailedReasonCode;
     probe.reason = "Unable to open ISO image";

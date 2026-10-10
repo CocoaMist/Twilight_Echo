@@ -30,6 +30,9 @@ const props = defineProps<{
   profile: MediaProviderProfile | null
   profileSignature: string
   likedSummary: { name: string; trackCount: number; cover: string | null }
+  likedPlaylistOptions?: MediaProviderPlaylistSummary[]
+  selectedLikedPlaylistId?: string | number | null
+  likedSelectionError?: string
   libraryLoaded: boolean
   userPlaylistEntries: MediaProviderPlaylistSummary[]
   showLikedPanel?: boolean
@@ -66,7 +69,9 @@ const {
   () => props.userPlaylistEntries,
   () =>
     `${props.activeProvider ?? props.providerLabel ?? 'ncm'}:${props.profile?.userId ?? 'guest'}`,
-  () => new Set((props.pinnedPlaylistIds ?? []).map(String))
+  () => new Set((props.pinnedPlaylistIds ?? []).map(String)),
+  // Legacy provider pins must not override manual ordering when pin controls are unavailable.
+  () => props.allowPinPlaylists === true
 )
 
 const playlistReorder = useHoldReorder(movePlaylist)
@@ -79,6 +84,7 @@ const emit = defineEmits<{
   openUserList: [type: 'follows' | 'followers']
   openLikedTracks: []
   playLikedSongs: []
+  selectLikedPlaylist: [playlistId: string]
   openPlaylist: [playlist: MediaProviderPlaylistSummary]
   openAlbum: [album: MediaProviderAlbumSummary]
   openArtist: [artist: MediaProviderArtistSummary]
@@ -343,9 +349,36 @@ function deleteMenuPlaylist(): void {
         role="button"
         tabindex="0"
         @click="emit('openLikedTracks')"
+        @keydown.enter.self.prevent="emit('openLikedTracks')"
+        @keydown.space.self.prevent="emit('openLikedTracks')"
       >
         <div class="favorites-info">
-          <span class="tag">我的收藏</span>
+          <div class="favorites-heading">
+            <span class="tag">我的收藏</span>
+            <label
+              v-if="(likedPlaylistOptions?.length ?? 0) > 1"
+              class="favorites-picker"
+              @click.stop
+              @keydown.stop
+            >
+              <span>切换收藏夹</span>
+              <i class="pi pi-chevron-down" aria-hidden="true"></i>
+              <select
+                :value="String(selectedLikedPlaylistId ?? '')"
+                aria-label="切换展示的收藏夹"
+                :title="`当前收藏夹：${likedSummary.name}`"
+                @change="emit('selectLikedPlaylist', ($event.target as HTMLSelectElement).value)"
+              >
+                <option
+                  v-for="playlist in likedPlaylistOptions"
+                  :key="String(playlist.id)"
+                  :value="String(playlist.id)"
+                >
+                  {{ playlist.name }}（{{ playlist.trackCount }} 首）
+                </option>
+              </select>
+            </label>
+          </div>
           <h2>{{ likedSummary.name || '我喜欢' }}</h2>
           <p>{{ likedSummary.trackCount }} 首歌曲</p>
           <button class="btn-play" @click.stop="emit('playLikedSongs')">
@@ -373,6 +406,13 @@ function deleteMenuPlaylist(): void {
         </div>
       </div>
     </section>
+    <p
+      v-if="likedSelectionError && showLikedPanel !== false"
+      role="status"
+      class="playlist-order-hint"
+    >
+      {{ likedSelectionError }}
+    </p>
 
     <!-- Feature Cards: Recent & Ranking portals (ncm only — external providers don't implement these) -->
     <section class="feature-cards" v-if="isLoggedIn && showFeatureCards !== false">
@@ -460,7 +500,10 @@ function deleteMenuPlaylist(): void {
           </button>
         </div>
       </div>
-      <p class="playlist-order-hint">长按歌单拖动排序；置顶优先。键盘可用 Alt + ↑ / ↓ 调整。</p>
+      <p class="playlist-order-hint">
+        拖动歌单排序（触屏需长按）；<template v-if="allowPinPlaylists">置顶优先。</template>键盘可用
+        Alt + ↑ / ↓ 调整。
+      </p>
       <p v-if="playlistOrderError" role="status" class="playlist-order-hint">
         {{ playlistOrderError }}
       </p>
@@ -885,19 +928,19 @@ function deleteMenuPlaylist(): void {
 }
 .stat-badge {
   background: rgba(194, 112, 61, 0.06);
-  padding: 7px 16px;
-  border-radius: 12px;
-  border: 1px solid rgba(194, 112, 61, 0.1);
-  font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
-  font-weight: 700;
+  padding: 7px var(--te-control-pad-x-md);
+  border-radius: var(--te-control-radius-lg);
+  border: var(--te-control-border-width) solid rgba(194, 112, 61, 0.1);
+  font-size: var(--te-control-font-size-sm);
+  font-weight: var(--te-control-font-weight-bold);
   color: #2a2118;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--te-control-gap);
   cursor: pointer;
   transition:
-    background-color 0.2s var(--te-ease-soft),
-    border-color 0.2s var(--te-ease-soft);
+    background-color var(--te-motion-hover) var(--te-ease-soft),
+    border-color var(--te-motion-hover) var(--te-ease-soft);
 }
 .stat-badge:hover {
   background: rgba(194, 112, 61, 0.1);
@@ -934,6 +977,47 @@ function deleteMenuPlaylist(): void {
 .favorites-info {
   flex: 1;
   min-width: 0;
+}
+.favorites-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+.favorites-info .favorites-heading .tag {
+  margin-bottom: 0;
+}
+.favorites-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--te-neutral-500, #64748b);
+  font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
+  cursor: pointer;
+}
+.favorites-picker:hover,
+.favorites-picker:focus-within {
+  color: var(--te-primary-500);
+  background: var(--te-active-bg);
+}
+.favorites-picker:focus-within {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 2px;
+}
+.favorites-picker i {
+  font-size: 10px;
+}
+.favorites-picker select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 .favorites-info .tag {
   display: inline-block;

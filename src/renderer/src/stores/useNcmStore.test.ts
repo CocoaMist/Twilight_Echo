@@ -17,10 +17,17 @@ let handler: (method: string) => Promise<unknown> = async () => undefined
 let chooseFiles: () => Promise<unknown[]> = async () => []
 const provider = { id: 'ncm', name: 'Test NCM', capabilities: [], supportedMethods: [] }
 let listProviders = async () => [provider]
+const pluginChangeListeners = new Set<() => void>()
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
   value: {
     api: {
+      plugins: {
+        onChanged: (listener: () => void) => {
+          pluginChangeListeners.add(listener)
+          return () => pluginChangeListeners.delete(listener)
+        }
+      },
       providers: {
         list: () => listProviders(),
         call: async (_id: string, method: string) => handler(method)
@@ -71,6 +78,167 @@ test('NCM startup login waits for actual provider registration', async () => {
     assert.equal(calls, 1)
   } finally {
     listProviders = async () => [provider]
+  }
+})
+
+test('registration during a pending startup snapshot refreshes before login', async () => {
+  await syncPluginProviders()
+  const registry = useMediaProviders()
+  await syncPluginProviders()
+  registry.unregister('ncm')
+  const staleSnapshot = deferred<Array<typeof provider>>()
+  const listingStarted = deferred<void>()
+  let lists = 0
+  let calls = 0
+  listProviders = () => {
+    lists++
+    listingStarted.resolve()
+    return lists === 1 ? staleSnapshot.promise : Promise.resolve([provider])
+  }
+  handler = async () => {
+    calls++
+    return { loggedIn: true, profile: account(1) }
+  }
+  try {
+    const restored = store.checkLogin()
+    await listingStarted.promise
+    for (const listener of pluginChangeListeners) listener()
+    staleSnapshot.resolve([])
+    assert.equal(await restored, true)
+    assert.equal(calls, 1)
+    assert.equal(store.providerAvailable.value, true)
+    assert.equal(store.providerError.value, '')
+  } finally {
+    listProviders = async () => [provider]
+    await syncPluginProviders()
+  }
+})
+
+test('an enabled provider can recover from failed startup health without a plugin restart', async () => {
+  listProviders = async () => [
+    {
+      ...provider,
+      health: {
+        providerId: 'ncm',
+        pluginId: 'com.twilightecho.provider.ncm',
+        pluginStatus: 'enabled',
+        available: false,
+        totalCalls: 1,
+        successfulCalls: 0,
+        failedCalls: 1,
+        successRate: 0,
+        lastError: 'temporary network failure',
+        lastCheckedAt: null
+      }
+    }
+  ]
+  handler = async () => ({ loggedIn: true, profile: account(1) })
+  try {
+    assert.equal(await store.checkLogin(), true)
+    assert.equal(store.providerAvailable.value, true)
+    assert.equal(store.providerError.value, '')
+  } finally {
+    listProviders = async () => [provider]
+    await syncPluginProviders()
+  }
+})
+
+test('provider registration clears stale disabled UI even when login checking fails', async () => {
+  await syncPluginProviders()
+  listProviders = async () => []
+  try {
+    assert.equal(await store.checkLogin(), false)
+    assert.equal(store.providerAvailable.value, false)
+    listProviders = async () => [provider]
+    handler = async () => {
+      throw new Error('temporary login gateway failure')
+    }
+    assert.equal(await store.checkLogin(), false)
+    assert.equal(store.providerAvailable.value, true)
+    assert.equal(store.providerError.value, '')
+  } finally {
+    listProviders = async () => [provider]
+    await syncPluginProviders()
+  }
+})
+
+test('health recovery does not discard the first library load after startup login', async () => {
+  let healthy = false
+  listProviders = async () => [
+    {
+      ...provider,
+      health: {
+        providerId: 'ncm',
+        pluginId: 'com.twilightecho.provider.ncm',
+        pluginStatus: 'enabled',
+        available: healthy,
+        totalCalls: 1,
+        successfulCalls: healthy ? 1 : 0,
+        failedCalls: healthy ? 0 : 1,
+        successRate: healthy ? 1 : 0,
+        lastError: healthy ? null : 'temporary login gateway failure',
+        lastCheckedAt: null
+      }
+    }
+  ]
+  handler = async (method) => {
+    if (method === 'checkLogin') {
+      healthy = true
+      return { loggedIn: true, profile: account(1) }
+    }
+    return { likedPlaylist: playlist, playlists: [playlist] }
+  }
+  try {
+    assert.equal(await store.checkLogin(), true)
+    await store.fetchUserLibrary()
+    assert.equal(store.libraryLoaded.value, true)
+    assert.equal(store.userPlaylists.value[0]?.id, playlist.id)
+  } finally {
+    listProviders = async () => [provider]
+    await syncPluginProviders()
+  }
+})
+
+test('plugin changes update routes automatically and keep a disabled provider blocked', async () => {
+  const registry = useMediaProviders()
+  await syncPluginProviders()
+  assert.equal(pluginChangeListeners.size, 1)
+  listProviders = async () => []
+  try {
+    for (const listener of pluginChangeListeners) listener()
+    await new Promise<void>((done) => setImmediate(done))
+    assert.equal(registry.get('ncm'), null)
+
+    listProviders = async () => [
+      {
+        ...provider,
+        health: {
+          providerId: 'ncm',
+          pluginId: 'com.twilightecho.provider.ncm',
+          pluginStatus: 'disabled',
+          available: false,
+          totalCalls: 0,
+          successfulCalls: 0,
+          failedCalls: 0,
+          successRate: 1,
+          lastError: null,
+          lastCheckedAt: null
+        }
+      }
+    ]
+    for (const listener of pluginChangeListeners) listener()
+    await new Promise<void>((done) => setImmediate(done))
+    let calls = 0
+    handler = async () => {
+      calls++
+      return { loggedIn: true, profile: account(1) }
+    }
+    assert.equal(await store.checkLogin(), false)
+    assert.equal(calls, 0)
+    assert.equal(store.providerAvailable.value, false)
+  } finally {
+    listProviders = async () => [provider]
+    await syncPluginProviders()
   }
 })
 

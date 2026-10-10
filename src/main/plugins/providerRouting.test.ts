@@ -25,7 +25,9 @@ type TestRunningProvider = {
     capabilities: Array<
       'search' | 'playbackUrl' | 'lyrics' | 'cover' | 'playlist' | 'library' | 'login' | 'download'
     >
-    supportedMethods?: Array<'fetchPlaylistTracks' | 'fetchDiscoveryPlaylists'>
+    supportedMethods?: Array<
+      'fetchPlaylistTracks' | 'fetchPlaylistTracksPage' | 'fetchDiscoveryPlaylists'
+    >
   }>
 }
 
@@ -50,6 +52,31 @@ const fullProvider: TestRunningProvider = {
     }
   ]
 }
+
+test('playlist paging requires an advertised handler and playlist capability through host routing', () => {
+  const provider: TestRunningProvider['providers'][number] = {
+    id: 'bili',
+    name: 'Bilibili',
+    capabilities: ['playlist'],
+    supportedMethods: ['fetchPlaylistTracks', 'fetchPlaylistTracksPage']
+  }
+  assert.equal(providerSupportsMethod(provider, 'fetchPlaylistTracksPage'), true)
+  assert.equal(
+    providerSupportsMethod({ ...provider, capabilities: [] }, 'fetchPlaylistTracksPage'),
+    false
+  )
+  assert.equal(
+    providerSupportsMethod(
+      { ...provider, supportedMethods: ['fetchPlaylistTracks'] },
+      'fetchPlaylistTracksPage'
+    ),
+    false
+  )
+  assert.equal(
+    getProviderCallTimeoutMs('fetchPlaylistTracksPage'),
+    getProviderCallTimeoutMs('fetchPlaylistTracks')
+  )
+})
 
 test('routes provider calls to a plugin that declares the required method capability', () => {
   assert.equal(providerSupportsMethod(skeleton.providers[0], 'getQrLogin'), false)

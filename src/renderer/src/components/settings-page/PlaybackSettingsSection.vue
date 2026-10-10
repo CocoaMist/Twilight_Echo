@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
 import SettingsDisclosure from './SettingsDisclosure.vue'
+import SettingsGroup from './SettingsGroup.vue'
+import { useSettingsDisclosure } from './settingsDisclosureRegistry.ts'
 import { storeToRefs } from 'pinia'
 import AudioDeviceProfilesPanel from '@renderer/components/settings-page/AudioDeviceProfilesPanel.vue'
 import { computed, ref } from 'vue'
@@ -17,6 +18,7 @@ import {
 } from '../../../../shared/audioProcessingOptions.ts'
 import { isDsdProxyDevice } from '../../../../shared/dsdProxyDrivers.ts'
 import { resolveReasonCode } from '../../../../shared/audio/reasonCodes.ts'
+import { normalizeAutoMix, autoMixReasonText } from '../../../../shared/autoMix.ts'
 import { useLocale } from '../../app/useLocale.ts'
 import {
   type AudioCapabilitySupportState,
@@ -40,6 +42,9 @@ import {
   previousButtonActionOptions,
   routingModeOptions
 } from './types.ts'
+
+withDefaults(defineProps<{ autoAnalyzeBpm?: boolean }>(), { autoAnalyzeBpm: false })
+const emit = defineEmits<{ toggleAutoAnalyzeBpm: [] }>()
 
 const { settings, updateSettings } = useSettingsStore()
 const { locale, t } = useLocale()
@@ -108,9 +113,50 @@ const isUpmixActive = computed(
 )
 const showWasapiPushMode = computed(() => audioOutput.value === 'wasapi' && exclusiveMode.value)
 
-const advancedParamsOpen = ref(false)
-
-const audioOutputPanelExpanded = ref(false)
+const audioOutputPanelExpanded = useSettingsDisclosure('audio-output-device-panel')
+const autoMixConfig = computed(() => normalizeAutoMix(audioProcessing.value.autoMix))
+const autoMixStatus = computed(() => playbackInfo.value?.autoMix)
+const autoMixApplying = ref(false)
+const autoMixAvailable = computed(
+  () =>
+    autoMixStatus.value?.experimentalAllowed === true || autoMixStatus.value?.stableRelease === true
+)
+const autoMixStateText = computed(() => {
+  const status = autoMixStatus.value
+  if (status?.state === 'ready' || status?.state === 'mixing') {
+    const kind = {
+      beat_mix: '节拍混合',
+      musical_overlap: '音乐交叠（未对齐拍点）',
+      boundary_cleanup: '首尾静音／尾奏衔接',
+      conservative: '保守淡化',
+      none: '转场'
+    }[status.mixKind ?? (status.styleId === 1 ? 'conservative' : 'none')]
+    return `${kind}${status.state === 'ready' ? '已就绪' : '进行中'}`
+  }
+  return {
+    disabled: '关闭',
+    preparing: '准备中',
+    ready: '智能转场已就绪',
+    mixing: '混音中',
+    degraded: '暂未转场'
+  }[status?.state ?? 'disabled']
+})
+async function patchAutoMix(patch: Partial<ReturnType<typeof normalizeAutoMix>>): Promise<void> {
+  if (autoMixApplying.value) return
+  autoMixApplying.value = true
+  try {
+    await setAudioProcessing({ autoMix: { ...autoMixConfig.value, ...patch } })
+  } catch (error) {
+    audioEngineError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    autoMixApplying.value = false
+  }
+}
+function setAutoMixSeconds(event: Event): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  if (Number.isFinite(value))
+    void patchAutoMix({ maxTransitionSeconds: Math.min(12, Math.max(0.3, value)) })
+}
 
 const outputChainText = computed(() => {
   const info = playbackInfo.value
@@ -446,20 +492,275 @@ function setContinuitySampleRate(event: Event): void {
     ) as OutputConfig['continuitySampleRate']
   })
 }
-useSettingsSearchDisclosure('advancedEngine', advancedParamsOpen)
-useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
 </script>
 
 <template>
-  <section id="playback" class="glass-card preview-section">
-    <div class="section-title-row">
-      <i class="pi pi-volume-up"></i>
-      <h2>播放</h2>
+  <div id="playback-basics" class="settings-playback-content">
+    <div class="section-block">
+      <h3>日常播放</h3>
+      <div class="setting-list">
+        <div data-setting-id="playback-resume" id="setting-playback-resume" class="setting-item">
+          <div class="setting-copy">
+            <strong>启动时恢复播放</strong>
+            <span
+              >默认关闭。开启后下次启动会恢复队列与曲目（可选进度）；不会自动开始播放，需手动点播放。</span
+            >
+          </div>
+          <select
+            class="preview-select"
+            :value="settings.playbackResumeMode"
+            @change="setPlaybackResumeModeFromSelect"
+          >
+            <option
+              v-for="option in playbackResumeOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <hr />
+        <div data-setting-id="previous-action" id="setting-previous-action" class="setting-item">
+          <div class="setting-copy">
+            <strong>上一首按钮行为</strong>
+            <span
+              >播放超过 3 秒时点击“上一首”，是回到当前歌曲开头，还是直接切到上一首曲目；不超过 3
+              秒时总是切歌。</span
+            >
+          </div>
+          <select
+            class="preview-select"
+            :value="settings.previousButtonAction"
+            @change="setPreviousButtonActionFromSelect"
+          >
+            <option
+              v-for="option in previousButtonActionOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <hr />
+        <div
+          data-setting-id="sleep-timer"
+          id="setting-sleep-timer"
+          class="setting-item compact-row"
+        >
+          <div class="setting-copy">
+            <strong>睡眠定时器</strong>
+            <span>播放器可按默认时长停止，或等待当前曲目、队列结束。</span>
+          </div>
+          <div class="inline-controls">
+            <label class="crossfade-group">
+              <span>默认分钟</span>
+              <input
+                class="number-input"
+                type="number"
+                min="1"
+                max="720"
+                :value="settings.sleepTimer.defaultMinutes"
+                @input="setSleepTimerDefaultMinutes"
+              />
+            </label>
+            <label class="crossfade-group">
+              <span>淡出秒数</span>
+              <input
+                class="number-input"
+                type="number"
+                min="0"
+                max="120"
+                :value="settings.sleepTimer.fadeSeconds"
+                @input="setSleepTimerFadeSeconds"
+              />
+            </label>
+          </div>
+        </div>
+        <hr />
+        <div
+          data-setting-id="streaming-quality"
+          id="setting-streaming-quality"
+          class="setting-item"
+        >
+          <div class="setting-copy">
+            <strong>网易云播放音质</strong>
+            <span>自动按 Hi-Res、无损、极高和标准依次回退；也可固定为其中一档。</span>
+          </div>
+          <select
+            class="preview-select"
+            :value="settings.ncmPlaybackQuality"
+            @change="setNcmPlaybackQuality"
+          >
+            <option
+              v-for="option in ncmPlaybackQualityOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <hr />
+        <div data-setting-id="gapless" id="setting-gapless" class="setting-item">
+          <div class="setting-copy">
+            <strong>无缝播放</strong>
+            <span>{{ HIFI_STATUS_COPY.gaplessNote }}</span>
+            <span
+              >交叉淡化会改变 PCM
+              信号。等功率曲线仍可能削波；CUE、未知时长和变速播放始终保留边界。</span
+            >
+            <span v-if="audioProcessing.crossfadeSeconds > 0 && playbackInfo">
+              {{ playbackInfo.crossfadeCurve === 'equal-power' ? '等功率' : '线性' }} ·
+              {{ playbackInfo.crossfadeMixActive ? '正在混合' : '等待交接' }} · 可用重叠
+              {{ playbackInfo.crossfadeEffectiveSeconds ?? 0 }} 秒。
+              {{ crossfadeBlockedReasonCopy(playbackInfo.crossfadeBlockedReason) }}
+            </span>
+          </div>
+          <div class="inline-controls continuity-controls">
+            <div class="crossfade-group">
+              <span>交叉淡入淡出 (秒)</span>
+              <input
+                class="number-input"
+                type="number"
+                min="0"
+                max="12"
+                step="0.5"
+                :value="audioProcessing.crossfadeSeconds"
+                @input="setCrossfadeSeconds"
+              />
+            </div>
+            <select
+              class="preview-select"
+              aria-label="交叉淡化曲线"
+              :value="audioProcessing.crossfadeCurve ?? 'linear'"
+              @change="setCrossfadeCurve"
+            >
+              <option value="linear">线性</option>
+              <option value="equal-power">等功率</option>
+            </select>
+            <select
+              class="preview-select"
+              aria-label="交叉淡化内容规则"
+              :value="audioProcessing.crossfadeContent ?? 'conservative'"
+              @change="setCrossfadeContent"
+            >
+              <option value="conservative">保留同专辑与短曲边界</option>
+              <option value="all">允许同专辑与短曲淡化</option>
+              <option value="live">现场内容：保留边界</option>
+            </select>
+            <button
+              type="button"
+              aria-label="无缝播放"
+              class="toggle-switch"
+              :class="{ active: audioProcessing.gapless, inactive: !audioProcessing.gapless }"
+              role="switch"
+              :aria-checked="audioProcessing.gapless"
+              @click="toggleGaplessPlayback"
+            ></button>
+          </div>
+        </div>
+        <hr />
+        <div data-setting-id="automix" id="setting-automix" class="setting-item">
+          <div class="setting-copy">
+            <strong>AutoMix</strong>
+            <span>在曲目末尾自动衔接下一首，保护专辑和 CUE 边界。{{ autoMixStateText }}。</span>
+            <span v-if="!autoMixAvailable"
+              >当前音频引擎未开放 AutoMix，请使用支持此功能的运行时。</span
+            >
+            <span v-else-if="!autoMixStatus?.stableRelease"
+              >当前为实验版本，尚未完成听感与长时播放验收。</span
+            >
+            <span v-if="autoMixConfig.enabled"
+              >AutoMix 使用 PCM，暂停 Direct 和 DSD 直通；关闭后恢复最新输出偏好。</span
+            >
+            <span v-if="autoMixStatus && autoMixConfig.enabled">
+              {{ autoMixStatus.transitionSeconds.toFixed(1) }} 秒
+              <template
+                v-if="['beat_mix', 'musical_overlap'].includes(autoMixStatus.mixKind ?? '')"
+              >
+                · 双轨交叠 {{ (autoMixStatus.audibleOverlapSeconds ?? 0).toFixed(1) }} 秒
+              </template>
+              <template v-if="(autoMixStatus.tempoAdjustmentPercent ?? 0) > 0.1">
+                · 最大变速 {{ autoMixStatus.tempoAdjustmentPercent?.toFixed(1) }}%
+              </template>
+              <template v-if="autoMixStatus.state === 'mixing'">
+                · {{ Math.round(autoMixStatus.progress * 100) }}%</template
+              >
+            </span>
+            <span
+              v-if="
+                autoMixStatus && autoMixConfig.enabled && autoMixReasonText(autoMixStatus.reason)
+              "
+              >{{ autoMixReasonText(autoMixStatus.reason) }}。</span
+            >
+          </div>
+          <div class="inline-controls continuity-controls">
+            <label
+              >最长 (秒)
+              <input
+                class="number-input"
+                type="number"
+                min="0.3"
+                max="12"
+                step="0.5"
+                :value="autoMixConfig.maxTransitionSeconds"
+                :disabled="!autoMixAvailable || autoMixApplying"
+                @change="setAutoMixSeconds"
+              />
+            </label>
+            <label
+              ><input
+                type="checkbox"
+                :checked="autoMixConfig.allowIntelligentSkip"
+                :disabled="
+                  !autoMixAvailable ||
+                  autoMixApplying ||
+                  autoMixStatus?.intelligentSkipSupported !== true
+                "
+                @change="
+                  patchAutoMix({ allowIntelligentSkip: !autoMixConfig.allowIntelligentSkip })
+                "
+              />允许智能选段</label
+            >
+            <span v-if="autoMixAvailable && autoMixStatus?.intelligentSkipSupported !== true"
+              >选段能力尚未就绪，当前保留完整内容。</span
+            >
+            <span v-else-if="autoMixAvailable"
+              >仅跳过已确认的首尾静音，每侧最多 12 秒且不超过曲长的 10%。</span
+            >
+            <button
+              type="button"
+              class="toggle-switch"
+              :class="{ active: autoMixConfig.enabled }"
+              role="switch"
+              aria-label="AutoMix"
+              :aria-checked="autoMixConfig.enabled"
+              :disabled="(!autoMixAvailable && !autoMixConfig.enabled) || autoMixApplying"
+              @click="patchAutoMix({ enabled: !autoMixConfig.enabled })"
+            ></button>
+          </div>
+        </div>
+        <div data-setting-id="bpm-analysis" id="setting-bpm-analysis" class="setting-item">
+          <div class="setting-copy">
+            <strong>BPM 自动分析</strong
+            ><span>首次播放本地歌曲时在后台分析节拍，并保存结果供下次使用。</span>
+          </div>
+          <button
+            type="button"
+            class="toggle-switch"
+            role="switch"
+            aria-label="BPM 自动分析"
+            :aria-checked="autoAnalyzeBpm"
+            :class="{ active: autoAnalyzeBpm, inactive: !autoAnalyzeBpm }"
+            @click="emit('toggleAutoAnalyzeBpm')"
+          />
+        </div>
+      </div>
     </div>
-
     <div v-if="audioEngineError" class="engine-error">{{ audioEngineError }}</div>
-    <AudioDeviceProfilesPanel compact />
-
+    <AudioDeviceProfilesPanel />
     <div v-if="playbackInfo" class="output-diagnostic-panel">
       <div class="diagnostic-head">
         <span class="diagnostic-label">{{ t('diagnostics.panel.title') }}</span>
@@ -495,7 +796,6 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
         </span>
       </div>
     </div>
-
     <div class="device-panel">
       <div class="device-panel-head">
         <div>
@@ -503,20 +803,15 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
           <h3>输出设备与链路</h3>
         </div>
         <div class="device-panel-actions">
-          <button
-            type="button"
-            class="device-panel-disclosure"
-            aria-controls="audio-output-device-panel"
-            :aria-expanded="audioOutputPanelExpanded"
-            @click="audioOutputPanelExpanded = !audioOutputPanelExpanded"
-          >
+          <label class="device-panel-disclosure">
+            <input
+              v-model="audioOutputPanelExpanded"
+              type="checkbox"
+              aria-controls="audio-output-device-panel"
+              :aria-expanded="audioOutputPanelExpanded"
+            />
             <span>{{ audioOutputPanelExpanded ? '收起设备列表' : '展开设备列表' }}</span>
-            <i
-              class="pi pi-chevron-down"
-              :class="{ rotated: audioOutputPanelExpanded }"
-              aria-hidden="true"
-            ></i>
-          </button>
+          </label>
           <button
             type="button"
             class="icon-button"
@@ -529,13 +824,13 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
       </div>
       <SettingsDisclosure
         :open="audioOutputPanelExpanded"
-        trigger-selector='button[aria-controls="audio-output-device-panel"]'
+        keep-mounted
+        trigger-selector='input[aria-controls="audio-output-device-panel"]'
         id="audio-output-device-panel"
         class="device-panel-content"
       >
         <div class="device-grid">
           <button
-            :aria-pressed="audioDevice === device.id"
             v-for="device in audioOutputDeviceOptions"
             :key="device.id"
             type="button"
@@ -578,18 +873,16 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
         </p>
       </SettingsDisclosure>
     </div>
-
     <div class="section-block">
-      <h3>输出设置</h3>
+      <h3>输出方式</h3>
       <div class="setting-list">
-        <div class="setting-item">
+        <div data-setting-id="audio-output" id="setting-audio-output" class="setting-item">
           <div class="setting-copy">
             <strong>输出模式</strong>
             <span>选择音频后端和系统混音路径。</span>
           </div>
-          <div role="group" aria-label="输出模式" class="segmented-control">
+          <div class="segmented-control">
             <button
-              :aria-pressed="audioOutput === option.id"
               v-for="option in audioOutputOptions"
               :key="option.id"
               type="button"
@@ -601,13 +894,14 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
           </div>
         </div>
         <hr />
-        <div class="setting-item">
+        <div data-setting-id="exclusive-mode" id="setting-exclusive-mode" class="setting-item">
           <div class="setting-copy">
-            <strong>独占模式 (Exclusive)</strong>
-            <span>独占音频设备，可能让其他应用暂时无法发声。仅支持此功能的输出后端可用。</span>
+            <strong>独占模式</strong>
+            <span>尝试绕过系统混音器以获得更直接的输出链路。</span>
           </div>
           <button
             type="button"
+            aria-label="独占模式"
             class="toggle-switch"
             :class="{ active: exclusiveMode, inactive: !exclusiveMode }"
             role="switch"
@@ -615,10 +909,14 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
             :disabled="!exclusiveAvailable"
             :title="exclusiveAvailable ? '' : '当前后端不支持独占模式'"
             @click="exclusiveAvailable && toggleExclusiveMode()"
-            aria-label="独占模式 (Exclusive)"
           ></button>
         </div>
-        <div class="setting-item">
+        <hr />
+        <div
+          data-setting-id="exclusive-release"
+          id="setting-exclusive-release"
+          class="setting-item"
+        >
           <div class="setting-copy">
             <strong>独占模式自动启停</strong>
             <span>暂停时释放音频设备，继续播放时重新获取。</span>
@@ -647,11 +945,19 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
             @click="toggleExclusiveAutoRelease"
           ></button>
         </div>
-        <hr />
-        <div class="setting-item compact-row">
+      </div>
+    </div>
+    <div class="section-block">
+      <h3>音量与保护</h3>
+      <div class="setting-list">
+        <div
+          data-setting-id="software-volume"
+          id="setting-software-volume"
+          class="setting-item compact-row"
+        >
           <div class="setting-copy">
-            <strong>播放音量</strong>
-            <span>调整应用内音量；100% 不降低软件音量。请结合系统和设备音量控制实际听感。</span>
+            <strong>软件音量</strong>
+            <span> {{ HIFI_STATUS_COPY.volumeNotUnityHint }}。低于 100% 会改变样本值。 </span>
           </div>
           <div class="inline-controls">
             <input
@@ -659,7 +965,6 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
               type="number"
               min="0"
               max="100"
-              aria-label="播放音量（%）"
               :value="volumePercent"
               @input="setVolumeFromInput"
             />
@@ -674,27 +979,196 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
             </button>
           </div>
         </div>
-        <hr />
-        <div class="setting-item">
+        <div data-setting-id="clip-guard" id="setting-clip-guard" class="setting-item">
           <div class="setting-copy">
-            <strong>削波保护</strong
-            ><span>减轻音量过大造成的数字失真。与音效页的削波保护共用同一设置。</span>
+            <strong>防破音保护</strong><span>压缩过载信号，减少数字削波失真。</span>
           </div>
           <button
             type="button"
             class="toggle-switch"
-            :class="{
-              active: audioProcessing.clipGuard,
-              inactive: !audioProcessing.clipGuard
-            }"
             role="switch"
+            aria-label="防破音保护"
             :aria-checked="audioProcessing.clipGuard"
-            title="削波保护"
+            :class="{ active: audioProcessing.clipGuard, inactive: !audioProcessing.clipGuard }"
             @click="toggleClipGuard"
-            aria-label="削波保护"
+          />
+        </div>
+      </div>
+    </div>
+    <SettingsGroup
+      id="dsd-routing"
+      title="DSD 路由"
+      :summary="
+        audioProcessing.dsdOutputMode + (dsdRoute.enabled ? ' · 已启用兼容层路由' : ' · 主输出路由')
+      "
+      :attention="dsdRouteRuntimeText"
+      ><div class="setting-list">
+        <div
+          data-setting-id="dsd-output-mode"
+          id="setting-dsd-output-mode"
+          class="setting-item top-align dsd-route-setting"
+        >
+          <div class="setting-copy">
+            <strong>DSD 直通路由</strong>
+          </div>
+          <div
+            class="segmented-control dsd-route-control"
+            role="radiogroup"
+            aria-label="DSD 直通路由"
+          >
+            <button
+              v-for="option in dsdOutputModeOptions"
+              :key="option.value"
+              type="button"
+              role="radio"
+              :class="{ active: audioProcessing.dsdOutputMode === option.value }"
+              :aria-checked="audioProcessing.dsdOutputMode === option.value"
+              :title="option.description"
+              @click="selectDsdOutputMode(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+        <div
+          data-setting-id="dsd-compatible-route"
+          id="setting-dsd-compatible-route"
+          class="setting-item top-align dsd-compat-route"
+        >
+          <div class="setting-copy">
+            <strong>DSD 兼容层路由</strong>
+            <span>
+              DAC 自带 ASIO 驱动不接受 DSD 采样类型（或只有 WASAPI）时，DSD 会被迫降级为 DoP /
+              PCM。把 DSD 单独路由到已注册的 DSD 代理 ASIO 驱动可以恢复直通，PCM
+              仍走主输出、不受影响。
+            </span>
+            <small>
+              代理驱动（如 foo_dsd_asio）是独立的系统级 ASIO 驱动，与是否安装 foobar2000
+              无关；本软件不加载任何第三方组件，只按你选定的 后端与设备协商。
+            </small>
+            <span
+              v-if="dsdRouteRuntimeText"
+              class="setting-substatus"
+              :class="{ available: outputInfo?.diagnostics?.dsdRouteOverrideActive }"
+            >
+              {{ dsdRouteRuntimeText }}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="toggle-switch"
+            :class="{ active: dsdRoute.enabled, inactive: !dsdRoute.enabled }"
+            role="switch"
+            :aria-checked="dsdRoute.enabled"
+            aria-label="启用 DSD 兼容层路由"
+            @click="toggleDsdRouteEnabled()"
           ></button>
         </div>
-        <hr />
+        <template v-if="dsdRoute.enabled">
+          <div
+            data-setting-id="dsd-route-backend"
+            id="setting-dsd-route-backend"
+            class="setting-item compact-row"
+          >
+            <div class="setting-copy">
+              <strong>路由后端</strong>
+              <span>留空则沿用主输出后端。</span>
+            </div>
+            <select
+              class="settings-select"
+              :value="dsdRoute.backend"
+              aria-label="DSD 兼容层路由后端"
+              @change="setDsdRouteBackend"
+            >
+              <option value="">跟随主输出（{{ audioOutput }}）</option>
+              <option v-for="option in dsdRouteBackendOptions" :key="option.id" :value="option.id">
+                {{ option.label }}
+              </option>
+            </select>
+          </div>
+          <div
+            data-setting-id="dsd-route-device"
+            id="setting-dsd-route-device"
+            class="setting-item compact-row"
+          >
+            <div class="setting-copy">
+              <strong>路由设备</strong>
+              <span v-if="dsdRouteProxyDevices.length > 0">
+                检测到 {{ dsdRouteProxyDevices.length }} 个疑似 DSD 代理驱动。
+              </span>
+              <span v-else> 未检测到疑似代理驱动；若已安装仍可手动选择对应设备。 </span>
+            </div>
+            <select
+              class="settings-select"
+              :value="dsdRoute.device"
+              aria-label="DSD 兼容层路由设备"
+              @change="setDsdRouteDevice"
+            >
+              <option value="">跟随主输出设备</option>
+              <option v-for="device in dsdRouteDeviceOptions" :key="device.id" :value="device.id">
+                {{ device.label }}{{ isDsdProxyDevice(device) ? '（DSD 代理）' : '' }}
+              </option>
+            </select>
+          </div>
+          <div
+            data-setting-id="dsd-route-upsampling"
+            id="setting-dsd-route-upsampling"
+            class="setting-item"
+          >
+            <div class="setting-copy">
+              <strong>PCM→DSD 上采样也走此路由</strong>
+              <span>关闭则仅 DSD 源使用兼容层，上采样仍走主输出。</span>
+            </div>
+            <button
+              type="button"
+              class="toggle-switch"
+              :class="{
+                active: dsdRoute.applyToPcmToDsd,
+                inactive: !dsdRoute.applyToPcmToDsd
+              }"
+              role="switch"
+              :aria-checked="dsdRoute.applyToPcmToDsd"
+              aria-label="PCM 转 DSD 上采样使用兼容层路由"
+              @click="toggleDsdRoutePcmToDsd()"
+            ></button>
+          </div>
+          <div
+            data-setting-id="dsd-route-strict"
+            id="setting-dsd-route-strict"
+            class="setting-item"
+          >
+            <div class="setting-copy">
+              <strong>严格直通模式</strong>
+              <span>
+                开启后无法建立 DSD 直通时报错停止，不静默降级为 PCM。默认关闭，保持自动回退。
+              </span>
+            </div>
+            <button
+              type="button"
+              class="toggle-switch"
+              :class="{
+                active: dsdRoute.strictPassthrough,
+                inactive: !dsdRoute.strictPassthrough
+              }"
+              role="switch"
+              :aria-checked="dsdRoute.strictPassthrough"
+              aria-label="DSD 严格直通模式"
+              @click="toggleDsdRouteStrict()"
+            ></button>
+          </div>
+          <div v-if="!dsdRouteActive" class="setting-item">
+            <div class="setting-copy">
+              <span class="setting-substatus">
+                已启用但未指定后端或设备，当前等同于沿用主输出。
+              </span>
+            </div>
+          </div>
+        </template>
+      </div></SettingsGroup
+    >
+    <div class="section-block">
+      <h3 data-setting-id="playback-policy" id="setting-playback-policy">连续播放策略</h3>
+      <div class="setting-list">
         <div class="setting-item">
           <div class="setting-copy">
             <strong>连续播放策略</strong>
@@ -745,507 +1219,174 @@ useSettingsSearchDisclosure('audioOutput', audioOutputPanelExpanded)
             </select>
           </div>
         </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>无缝播放 (Gapless Playback)</strong
-            ><span>同格式专辑连续播放时尝试无缝衔接；开启交叉淡入淡出后，将使用重叠过渡。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{ active: audioProcessing.gapless, inactive: !audioProcessing.gapless }"
-            role="switch"
-            :aria-checked="audioProcessing.gapless"
-            @click="toggleGaplessPlayback"
-            aria-label="无缝播放 (Gapless Playback)"
-          ></button>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>交叉淡入淡出</strong
-            ><span>前后两首歌曲重叠过渡；设为 0 秒关闭。曲线与内容规则仅在时长大于 0 时生效。</span>
-            <span
-              >交叉淡化会改变 PCM
-              信号。等功率曲线仍可能削波；CUE、未知时长和变速播放始终保留边界。</span
-            >
-            <span v-if="audioProcessing.crossfadeSeconds > 0 && playbackInfo">
-              {{ playbackInfo.crossfadeCurve === 'equal-power' ? '等功率' : '线性' }} ·
-              {{ playbackInfo.crossfadeMixActive ? '正在混合' : '等待交接' }} · 可用重叠
-              {{ playbackInfo.crossfadeEffectiveSeconds ?? 0 }} 秒。
-              {{ crossfadeBlockedReasonCopy(playbackInfo.crossfadeBlockedReason) }}
-            </span>
-          </div>
-          <div class="settings-crossfade-controls">
-            <label>
-              <span>时长（秒）</span>
-              <input
-                class="number-input"
-                type="number"
-                min="0"
-                max="12"
-                step="0.5"
-                aria-label="交叉淡入淡出时长（秒）"
-                :value="audioProcessing.crossfadeSeconds"
-                @input="setCrossfadeSeconds"
-              />
-            </label>
-            <label>
-              <span>曲线</span>
-              <select
-                class="preview-select"
-                :disabled="audioProcessing.crossfadeSeconds <= 0"
-                aria-label="交叉淡化曲线"
-                :value="audioProcessing.crossfadeCurve ?? 'linear'"
-                @change="setCrossfadeCurve"
-              >
-                <option value="linear">线性</option>
-                <option value="equal-power">等功率</option>
-              </select>
-            </label>
-            <label>
-              <span>内容规则</span>
-              <select
-                class="preview-select"
-                :disabled="audioProcessing.crossfadeSeconds <= 0"
-                aria-label="交叉淡化内容规则"
-                :value="audioProcessing.crossfadeContent ?? 'conservative'"
-                @change="setCrossfadeContent"
-              >
-                <option value="conservative">保留同专辑与短曲边界</option>
-                <option value="all">允许同专辑与短曲淡化</option>
-                <option value="live">现场内容：保留边界</option>
-              </select>
-            </label>
-          </div>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>记住上次播放</strong>
-            <span
-              >默认关闭。开启后下次启动会恢复队列与曲目（可选进度）；不会自动开始播放，需手动点播放。</span
-            >
-          </div>
-          <select
-            aria-label="记住上次播放"
-            class="preview-select"
-            :value="settings.playbackResumeMode"
-            @change="setPlaybackResumeModeFromSelect"
-          >
-            <option
-              v-for="option in playbackResumeOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>上一首按钮行为</strong>
-            <span
-              >播放超过 3 秒时点击“上一首”，是回到当前歌曲开头，还是直接切到上一首曲目；不超过 3
-              秒时总是切歌。</span
-            >
-          </div>
-          <select
-            aria-label="上一首按钮行为"
-            class="preview-select"
-            :value="settings.previousButtonAction"
-            @change="setPreviousButtonActionFromSelect"
-          >
-            <option
-              v-for="option in previousButtonActionOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
-        <hr />
-        <div class="setting-item compact-row">
-          <div class="setting-copy">
-            <strong>睡眠定时器</strong>
-            <span>这里只设置默认分钟数和淡出时长；请在播放器中开启定时器，才会开始计时。</span>
-          </div>
-          <div class="inline-controls">
-            <label class="crossfade-group">
-              <span>默认分钟</span>
-              <input
-                class="number-input"
-                type="number"
-                min="1"
-                max="720"
-                :value="settings.sleepTimer.defaultMinutes"
-                @input="setSleepTimerDefaultMinutes"
-              />
-            </label>
-            <label class="crossfade-group">
-              <span>淡出秒数</span>
-              <input
-                class="number-input"
-                type="number"
-                min="0"
-                max="120"
-                :value="settings.sleepTimer.fadeSeconds"
-                @input="setSleepTimerFadeSeconds"
-              />
-            </label>
-          </div>
-        </div>
-        <hr />
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>网易云播放音质</strong>
-            <span
-              >请求所选音质，实际音质受账号权限和音源可用性限制。自动模式按最高可用音质回退。</span
-            >
-          </div>
-          <select
-            aria-label="网易云播放音质"
-            class="preview-select"
-            :value="settings.ncmPlaybackQuality"
-            @change="setNcmPlaybackQuality"
-          >
-            <option
-              v-for="option in ncmPlaybackQualityOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
       </div>
     </div>
-
-    <details class="settings-advanced-details">
-      <summary>DSD 直通与设备路由</summary>
-      <div class="setting-item top-align dsd-route-setting">
-        <div class="setting-copy">
-          <strong>DSD 直通路由</strong
-          ><span>仅影响 DSD 音源。高级音频参数与音效页中的“DSD 输出方式”修改的也是此设置。</span>
-        </div>
-        <div
-          class="segmented-control dsd-route-control"
-          role="radiogroup"
-          aria-label="DSD 直通路由"
-        >
-          <label
-            v-for="option in dsdOutputModeOptions"
-            :key="option.value"
-            :title="option.description"
-          >
-            <input
-              type="radio"
-              name="settings-dsd-output-mode"
-              :value="option.value"
-              :checked="audioProcessing.dsdOutputMode === option.value"
-              @change="selectDsdOutputMode(option.value)"
-            />
-            <span>{{ option.label }}</span>
-          </label>
-        </div>
+    <SettingsGroup
+      id="advanced-engine-parameters"
+      title="高级引擎参数"
+      :summary="
+        (audioOutputConfig.preferredBufferSize || '自动缓冲') +
+        ' · ' +
+        audioOutputConfig.routingMode +
+        ' · ' +
+        audioProcessing.dsdOutputMode
+      "
+      :attention="
+        audioEngineError ||
+        (audioOutputConfigApplyStatus.state === 'pending' ? '正在应用输出参数…' : '')
+      "
+    >
+      <div class="engine-warning">
+        <i class="pi pi-exclamation-triangle"></i>
+        <span>警告：以下参数直接与声卡底层交互，调节不当可能导致音频卡顿、无声或爆音。</span>
       </div>
-      <hr />
-
-      <div class="setting-item top-align dsd-compat-route">
-        <div class="setting-copy">
-          <strong>DSD 兼容层路由</strong>
-          <span>
-            DAC 自带 ASIO 驱动不接受 DSD 采样类型（或只有 WASAPI）时，DSD 会被迫降级为 DoP / PCM。把
-            DSD 单独路由到已注册的 DSD 代理 ASIO 驱动可以恢复直通，PCM 仍走主输出、不受影响。
-          </span>
-          <small>
-            代理驱动（如 foo_dsd_asio）是独立的系统级 ASIO 驱动，与是否安装 foobar2000
-            无关；本软件不加载任何第三方组件，只按你选定的 后端与设备协商。
-          </small>
-          <span
-            v-if="dsdRouteRuntimeText"
-            class="setting-substatus"
-            :class="{ available: outputInfo?.diagnostics?.dsdRouteOverrideActive }"
+      <div class="advanced-grid">
+        <label data-setting-id="buffer-size">
+          <span>Buffer Size</span>
+          <select
+            class="preview-select"
+            :value="audioOutputConfig.preferredBufferSize"
+            :disabled="audioOutputConfigApplyStatus.state === 'pending'"
+            @change="setPreferredBufferSize"
           >
-            {{ dsdRouteRuntimeText }}
-          </span>
+            <option v-for="option in bufferSizeOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label data-setting-id="channel-routing">
+          <span>Routing</span>
+          <select
+            class="preview-select"
+            :value="audioOutputConfig.routingMode"
+            @change="setRoutingMode"
+          >
+            <option v-for="option in routingModeOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label>
+          <span>DSD Output</span>
+          <select
+            class="preview-select"
+            :value="audioProcessing.dsdOutputMode"
+            @change="setDsdOutputMode"
+          >
+            <option
+              v-for="option in dsdOutputModeOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label data-setting-id="pcm-to-dsd">
+          <span>PCM → DSD</span>
+          <select
+            class="preview-select"
+            :value="audioOutputConfig.pcmToDsdMode ?? 'off'"
+            :disabled="audioOutputConfigApplyStatus.state === 'pending'"
+            @change="setPcmToDsdMode"
+          >
+            <option v-for="option in pcmToDsdModeOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+      </div>
+      <p class="setting-hint">
+        PCM → DSD 在解码/DSP 之后将 PCM 调制为 DSD，经 Native DSD 或 DoP 输出；源文件已是 DSD
+        时不受影响。
+      </p>
+      <div v-if="isUpmixActive" class="advanced-grid">
+        <label>
+          <span>Center Gain</span>
+          <input
+            class="number-input"
+            type="number"
+            step="0.1"
+            :value="audioOutputConfig.upmixCenterGain ?? 0"
+            @input="(e) => setUpmixParam('upmixCenterGain', e)"
+          />
+        </label>
+        <label>
+          <span>LFE Gain</span>
+          <input
+            class="number-input"
+            type="number"
+            step="0.1"
+            :value="audioOutputConfig.upmixLfeGain ?? 0"
+            @input="(e) => setUpmixParam('upmixLfeGain', e)"
+          />
+        </label>
+        <label>
+          <span>LFE Lowpass (Hz)</span>
+          <input
+            class="number-input"
+            type="number"
+            step="1"
+            :value="audioOutputConfig.upmixLfeLowpassHz ?? 80"
+            @input="(e) => setUpmixParam('upmixLfeLowpassHz', e)"
+          />
+        </label>
+        <label>
+          <span>Surround Gain</span>
+          <input
+            class="number-input"
+            type="number"
+            step="0.1"
+            :value="audioOutputConfig.upmixSurroundGain ?? 0"
+            @input="(e) => setUpmixParam('upmixSurroundGain', e)"
+          />
+        </label>
+        <label>
+          <span>Side Gain</span>
+          <input
+            class="number-input"
+            type="number"
+            step="0.1"
+            :value="audioOutputConfig.upmixSideGain ?? 0"
+            @input="(e) => setUpmixParam('upmixSideGain', e)"
+          />
+        </label>
+        <label>
+          <span>Surround Delay (ms)</span>
+          <input
+            class="number-input"
+            type="number"
+            step="0.1"
+            :value="audioOutputConfig.upmixSurroundDelayMs ?? 0"
+            @input="(e) => setUpmixParam('upmixSurroundDelayMs', e)"
+          />
+        </label>
+      </div>
+      <div
+        data-setting-id="wasapi-push"
+        id="setting-wasapi-push"
+        v-if="showWasapiPushMode"
+        class="setting-item wasapi-push-row"
+      >
+        <div class="setting-copy">
+          <strong>WASAPI 独占推送模式</strong>
+          <span>事件驱动不兼容时切换到定时器驱动，可解决部分声卡无声/爆音。</span>
         </div>
         <button
           type="button"
+          aria-label="WASAPI 独占推送模式"
+          :disabled="audioOutputConfigApplyStatus.state === 'pending'"
           class="toggle-switch"
-          :class="{ active: dsdRoute.enabled, inactive: !dsdRoute.enabled }"
+          :class="{
+            active: !!audioOutputConfig.wasapiExclusivePushMode,
+            inactive: !audioOutputConfig.wasapiExclusivePushMode
+          }"
           role="switch"
-          :aria-checked="dsdRoute.enabled"
-          aria-label="启用 DSD 兼容层路由"
-          @click="toggleDsdRouteEnabled()"
+          :aria-checked="!!audioOutputConfig.wasapiExclusivePushMode"
+          :aria-disabled="audioOutputConfigApplyStatus.state === 'pending'"
+          @click="toggleWasapiExclusivePushMode"
         ></button>
       </div>
-      <template v-if="dsdRoute.enabled">
-        <div class="setting-item compact-row">
-          <div class="setting-copy">
-            <strong>路由后端</strong>
-            <span>留空则沿用主输出后端。</span>
-          </div>
-          <select
-            class="settings-select"
-            :value="dsdRoute.backend"
-            aria-label="DSD 兼容层路由后端"
-            @change="setDsdRouteBackend"
-          >
-            <option value="">跟随主输出（{{ audioOutput }}）</option>
-            <option v-for="option in dsdRouteBackendOptions" :key="option.id" :value="option.id">
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
-        <div class="setting-item compact-row">
-          <div class="setting-copy">
-            <strong>路由设备</strong>
-            <span v-if="dsdRouteProxyDevices.length > 0">
-              检测到 {{ dsdRouteProxyDevices.length }} 个疑似 DSD 代理驱动。
-            </span>
-            <span v-else> 未检测到疑似代理驱动；若已安装仍可手动选择对应设备。 </span>
-          </div>
-          <select
-            class="settings-select"
-            :value="dsdRoute.device"
-            aria-label="DSD 兼容层路由设备"
-            @change="setDsdRouteDevice"
-          >
-            <option value="">跟随主输出设备</option>
-            <option v-for="device in dsdRouteDeviceOptions" :key="device.id" :value="device.id">
-              {{ device.label }}{{ isDsdProxyDevice(device) ? '（DSD 代理）' : '' }}
-            </option>
-          </select>
-        </div>
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>PCM→DSD 上采样也走此路由</strong>
-            <span>关闭则仅 DSD 源使用兼容层，上采样仍走主输出。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{
-              active: dsdRoute.applyToPcmToDsd,
-              inactive: !dsdRoute.applyToPcmToDsd
-            }"
-            role="switch"
-            :aria-checked="dsdRoute.applyToPcmToDsd"
-            aria-label="PCM 转 DSD 上采样使用兼容层路由"
-            @click="toggleDsdRoutePcmToDsd()"
-          ></button>
-        </div>
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>严格直通模式</strong>
-            <span>
-              开启后无法建立 DSD 直通时报错停止，不静默降级为 PCM。默认关闭，保持自动回退。
-            </span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{
-              active: dsdRoute.strictPassthrough,
-              inactive: !dsdRoute.strictPassthrough
-            }"
-            role="switch"
-            :aria-checked="dsdRoute.strictPassthrough"
-            aria-label="DSD 严格直通模式"
-            @click="toggleDsdRouteStrict()"
-          ></button>
-        </div>
-        <div v-if="!dsdRouteActive" class="setting-item">
-          <div class="setting-copy">
-            <span class="setting-substatus">
-              已启用但未指定后端或设备，当前等同于沿用主输出。
-            </span>
-          </div>
-        </div>
-      </template>
-      <hr />
-    </details>
-
-    <div class="accordion-preview" :class="{ open: advancedParamsOpen }">
-      <button
-        type="button"
-        class="accordion-head"
-        :aria-expanded="advancedParamsOpen"
-        aria-controls="advanced-engine-parameters"
-        @click="advancedParamsOpen = !advancedParamsOpen"
-      >
-        <div>
-          <strong>高级音频参数</strong>
-          <span>输出缓冲、声道路由与 DSD 格式转换；一般保留默认值。</span>
-        </div>
-        <i class="pi pi-chevron-down" :class="{ rotated: advancedParamsOpen }"></i>
-      </button>
-      <SettingsDisclosure
-        :open="advancedParamsOpen"
-        class="accordion-body"
-        id="advanced-engine-parameters"
-      >
-        <div class="engine-warning">
-          <i class="pi pi-exclamation-triangle"></i>
-          <span
-            >遇到卡顿、设备不兼容或需要指定输出格式时再调整。缓冲越大通常越稳定，延迟也更大；不当设置可能导致无声。</span
-          >
-        </div>
-        <div class="advanced-grid">
-          <label>
-            <span>输出缓冲（帧）</span>
-            <select
-              class="preview-select"
-              :value="audioOutputConfig.preferredBufferSize"
-              :disabled="audioOutputConfigApplyStatus.state === 'pending'"
-              @change="setPreferredBufferSize"
-            >
-              <option v-for="option in bufferSizeOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-          <label>
-            <span>声道路由</span>
-            <select
-              class="preview-select"
-              :value="audioOutputConfig.routingMode"
-              @change="setRoutingMode"
-            >
-              <option
-                v-for="option in routingModeOptions"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-          <label>
-            <span>DSD 输出方式</span>
-            <select
-              class="preview-select"
-              :value="audioProcessing.dsdOutputMode"
-              @change="setDsdOutputMode"
-            >
-              <option
-                v-for="option in dsdOutputModeOptions"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-          <label>
-            <span>PCM → DSD</span>
-            <select
-              class="preview-select"
-              :value="audioOutputConfig.pcmToDsdMode ?? 'off'"
-              :disabled="audioOutputConfigApplyStatus.state === 'pending'"
-              @change="setPcmToDsdMode"
-            >
-              <option
-                v-for="option in pcmToDsdModeOptions"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-        </div>
-        <p class="setting-hint">
-          PCM → DSD 在解码/DSP 之后将 PCM 调制为 DSD，经 Native DSD 或 DoP 输出；源文件已是 DSD
-          时不受影响。
-        </p>
-        <div v-if="isUpmixActive" class="advanced-grid">
-          <label>
-            <span>中置声道增益</span>
-            <input
-              class="number-input"
-              type="number"
-              step="0.1"
-              :value="audioOutputConfig.upmixCenterGain ?? 0"
-              @input="(e) => setUpmixParam('upmixCenterGain', e)"
-            />
-          </label>
-          <label>
-            <span>低频声道增益</span>
-            <input
-              class="number-input"
-              type="number"
-              step="0.1"
-              :value="audioOutputConfig.upmixLfeGain ?? 0"
-              @input="(e) => setUpmixParam('upmixLfeGain', e)"
-            />
-          </label>
-          <label>
-            <span>低频截止频率（Hz）</span>
-            <input
-              class="number-input"
-              type="number"
-              step="1"
-              :value="audioOutputConfig.upmixLfeLowpassHz ?? 80"
-              @input="(e) => setUpmixParam('upmixLfeLowpassHz', e)"
-            />
-          </label>
-          <label>
-            <span>后环绕声道增益</span>
-            <input
-              class="number-input"
-              type="number"
-              step="0.1"
-              :value="audioOutputConfig.upmixSurroundGain ?? 0"
-              @input="(e) => setUpmixParam('upmixSurroundGain', e)"
-            />
-          </label>
-          <label>
-            <span>侧环绕声道增益</span>
-            <input
-              class="number-input"
-              type="number"
-              step="0.1"
-              :value="audioOutputConfig.upmixSideGain ?? 0"
-              @input="(e) => setUpmixParam('upmixSideGain', e)"
-            />
-          </label>
-          <label>
-            <span>环绕延迟（毫秒）</span>
-            <input
-              class="number-input"
-              type="number"
-              step="0.1"
-              :value="audioOutputConfig.upmixSurroundDelayMs ?? 0"
-              @input="(e) => setUpmixParam('upmixSurroundDelayMs', e)"
-            />
-          </label>
-        </div>
-        <div v-if="showWasapiPushMode" class="setting-item wasapi-push-row">
-          <div class="setting-copy">
-            <strong>WASAPI 独占推送模式</strong>
-            <span>事件驱动不兼容时切换到定时器驱动，可解决部分声卡无声/爆音。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{
-              active: !!audioOutputConfig.wasapiExclusivePushMode,
-              inactive: !audioOutputConfig.wasapiExclusivePushMode
-            }"
-            role="switch"
-            :aria-checked="!!audioOutputConfig.wasapiExclusivePushMode"
-            :aria-disabled="audioOutputConfigApplyStatus.state === 'pending'"
-            :disabled="audioOutputConfigApplyStatus.state === 'pending'"
-            @click="toggleWasapiExclusivePushMode"
-            aria-label="WASAPI 独占推送模式"
-          ></button>
-        </div>
-      </SettingsDisclosure>
-    </div>
-  </section>
+    </SettingsGroup>
+  </div>
 </template>

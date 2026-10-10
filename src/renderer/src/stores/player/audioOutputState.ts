@@ -19,6 +19,7 @@ import {
   normalizeAudioDeviceOptions,
   normalizeAudioOutputOptions
 } from '@renderer/stores/player/audioOutputNormalize.ts'
+import type { PlaybackInfo } from '../../../../shared/audioEngineTypes.ts'
 type AudioOutputState = Awaited<ReturnType<typeof window.api.audioEngine.getAudioOutputState>>
 
 export function createAudioOutputState(options: {
@@ -27,6 +28,7 @@ export function createAudioOutputState(options: {
   dspStereoImage: Ref<DspStereoImageConfig>
   audioEngineReady: Ref<boolean>
   setAudioEngineError: (message: string | null) => void
+  applyPlaybackSettingsStatus?: (info: PlaybackInfo) => void
 }) {
   const { audioProcessing, dspOutputStage, dspStereoImage, audioEngineReady, setAudioEngineError } =
     options
@@ -65,13 +67,16 @@ export function createAudioOutputState(options: {
     audioEngineStateRequest = (async () => {
       audioEngineStateRefreshQueued = false
       try {
-        const [outputState, processingSettings, sceneState] = await Promise.all([
-          api.getAudioOutputState(),
-          api.getAudioProcessing(),
-          api.getDspSceneState?.() ?? Promise.resolve(null)
-        ])
+        const [outputState, processingSettings, sceneState, playbackSettingsInfo] =
+          await Promise.all([
+            api.getAudioOutputState(),
+            api.getAudioProcessing(),
+            api.getDspSceneState?.() ?? Promise.resolve(null),
+            options.applyPlaybackSettingsStatus ? api.getPlaybackInfo() : Promise.resolve(null)
+          ])
         applyAudioOutputState(outputState)
         audioProcessing.value = processingSettings
+        if (playbackSettingsInfo) options.applyPlaybackSettingsStatus?.(playbackSettingsInfo)
         if (sceneState) {
           const defaultScene = sceneState.scenes?.find((scene) => scene.id === 'default')
           const graph = sceneState.graph ?? defaultScene?.graph

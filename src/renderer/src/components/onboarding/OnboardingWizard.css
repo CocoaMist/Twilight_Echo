@@ -1474,12 +1474,12 @@ body.te-no-blur .onb-panel {
 .onb-toggle {
   position: relative;
   flex: 0 0 auto;
-  width: 42px;
-  height: 22px;
+  width: var(--te-switch-width);
+  height: var(--te-switch-height);
   padding: 0;
   border: none;
-  border-radius: 999px;
-  background: rgba(120, 128, 140, 0.35);
+  border-radius: var(--te-control-radius-pill);
+  background: var(--te-switch-track);
   cursor: pointer;
   transition:
     background var(--te-motion-panel) var(--te-ease-soft),
@@ -1489,13 +1489,13 @@ body.te-no-blur .onb-panel {
 .onb-toggle::after {
   content: '';
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
+  top: var(--te-switch-inset);
+  left: var(--te-switch-inset);
+  width: var(--te-switch-thumb);
+  height: var(--te-switch-thumb);
   border-radius: 50%;
-  background: #ffffff;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.25);
+  background: var(--te-switch-thumb-bg);
+  box-shadow: var(--te-switch-thumb-shadow);
   transition:
     transform var(--te-motion-panel) var(--te-ease-spring),
     width var(--te-motion-hover) var(--te-ease-soft);
@@ -1503,11 +1503,11 @@ body.te-no-blur .onb-panel {
 
 /* The knob stretches while pressed, then springs to the far side. */
 .onb-toggle:active::after {
-  width: 24px;
+  width: calc(var(--te-switch-thumb) + 6px);
 }
 
 .onb-toggle.is-on:active::after {
-  transform: translateX(14px);
+  transform: translateX(calc(var(--te-switch-travel) - 6px));
 }
 
 .onb-toggle.is-on {
@@ -1516,7 +1516,7 @@ body.te-no-blur .onb-panel {
 }
 
 .onb-toggle.is-on::after {
-  transform: translateX(20px);
+  transform: translateX(var(--te-switch-travel));
 }
 
 /* ══ Finish scene ══════════════════════════════════════════════════════ */

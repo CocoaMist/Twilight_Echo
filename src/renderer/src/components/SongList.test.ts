@@ -305,16 +305,16 @@ test('library playback controls render below the table header', () => {
   )
 
   assert.doesNotMatch(source, /class="header-play-actions"/)
-  const tableHeaderStart = source.lastIndexOf('<div class="song-list-header">')
+  const tableHeaderStart = source.lastIndexOf('<div class="song-list-header"')
+  const albumHeaderIndex = source.indexOf('<AlbumDetailHeader', tableHeaderStart)
   const playActionsIndex = source.indexOf('class="library-play-actions"', tableHeaderStart)
-  const tableHeaderEnd = source.indexOf(
-    '</div>\n          <div class="library-play-actions"',
-    tableHeaderStart
-  )
+  const tableHeaderEnd = source.lastIndexOf('</div>', albumHeaderIndex)
 
   assert.ok(tableHeaderStart > 0)
   assert.ok(tableHeaderEnd > tableHeaderStart)
+  assert.ok(albumHeaderIndex > tableHeaderEnd)
   assert.ok(playActionsIndex > tableHeaderEnd)
+  assert.match(source, /<div v-if="!currentAlbum" class="library-play-actions"/)
 })
 
 test('song list context menu exposes play next, view artist, and view album actions', () => {

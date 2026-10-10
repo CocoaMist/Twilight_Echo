@@ -163,6 +163,7 @@ export function toPlaylistTrackSnapshot(track: Track): Track {
     artist: track.artist,
     ...(track.artists !== undefined ? { artists: track.artists.map((item) => ({ ...item })) } : {}),
     album: track.album,
+    ...(track.releaseDate !== undefined ? { releaseDate: track.releaseDate } : {}),
     ...(track.genre !== undefined ? { genre: track.genre } : {}),
     ...(track.albumArtist !== undefined ? { albumArtist: track.albumArtist } : {}),
     ...(track.albumId !== undefined ? { albumId: track.albumId } : {}),
@@ -397,6 +398,14 @@ export function playlistDataEqual(left: unknown, right: unknown): boolean {
     if (leftRecord[key] === undefined) return false
   }
   return true
+}
+
+/** A date backfill must not restart online cover/lyrics/provider enrichment. */
+export function isReleaseDateOnlyUpdate(previous: Track | undefined, next: Track): boolean {
+  if (!previous) return false
+  const { releaseDate: _previousDate, ...before } = previous
+  const { releaseDate: _nextDate, ...after } = next
+  return playlistDataEqual(before, after)
 }
 
 export function normalizePortableLibraryPath(filePath: string): string {

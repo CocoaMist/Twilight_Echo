@@ -4,9 +4,7 @@ import { normalizeLocalPath } from '../security/ipcValidation.ts'
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
 import { encodeAudioFileUrlPath } from '../library/audioFileUrl.ts'
 import { MAX_NATIVE_QUEUE_ITEMS } from '../../shared/nativeQueue.ts'
-
-/** Bounds concurrent filesystem resolution while a queue-sized batch is verified. */
-const AUTHORIZATION_BATCH_CONCURRENCY = 16
+import { resolveAuthorizationBatch } from '../security/authorizationBatch.ts'
 
 async function isAudioFileAuthorized(filePath: unknown): Promise<boolean> {
   try {
@@ -43,28 +41,8 @@ export function registerFilesystemIpc(ipcMain: IpcMain): void {
     // Resolution hits the real filesystem per path (realpath + existence) and
     // refreshes the declared roots whenever a path falls outside them, so the
     // batch dedupes and stays bounded instead of flooding the main process.
-    const verdicts = new Map<string, boolean>()
-    const unique: string[] = []
-    for (const filePath of filePaths) {
-      const key = typeof filePath === 'string' ? filePath : String(filePath)
-      if (verdicts.has(key)) continue
-      verdicts.set(key, false)
-      unique.push(key)
-    }
-    let cursor = 0
-    const workers = Array.from(
-      { length: Math.min(AUTHORIZATION_BATCH_CONCURRENCY, unique.length) },
-      async () => {
-        while (cursor < unique.length) {
-          const key = unique[cursor++]
-          verdicts.set(key, await isAudioFileAuthorized(key))
-        }
-      }
-    )
-    await Promise.all(workers)
-    return filePaths.map(
-      (filePath) =>
-        verdicts.get(typeof filePath === 'string' ? filePath : String(filePath)) === true
-    )
+    const keys = filePaths.map((path) => (typeof path === 'string' ? path : String(path)))
+    const verdicts = await resolveAuthorizationBatch(keys, isAudioFileAuthorized)
+    return keys.map((key) => verdicts.get(key) === true)
   })
 }

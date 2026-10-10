@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { defineAsyncComponent, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useBackStack } from '../app/useBackStack'
 import { useNcmStore } from '../stores/useNcmStore'
+import { useProviderStore } from '../stores/useProviderStore'
 import TitleBarIcon from './icons/TitleBarIcon.vue'
 import { useWindowChrome } from '../app/useWindowChrome'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
-
-const TaskCenter = defineAsyncComponent(() => import('./TaskCenter.vue'))
 
 const props = withDefaults(
   defineProps<{
@@ -38,8 +37,23 @@ defineEmits<{
 }>()
 
 const { isLoggedIn, profile } = useNcmStore()
+const providerStore = useProviderStore()
+const loginProvider = computed(() => {
+  const providers = providerStore.providers.value.filter((provider) =>
+    provider.capabilities.includes('login')
+  )
+  return providers.find((provider) => provider.id === 'ncm') ?? providers[0]
+})
+const showNcmProfile = computed(() => loginProvider.value?.id === 'ncm' && isLoggedIn.value)
+const loginLabel = computed(() =>
+  showNcmProfile.value
+    ? profile.value?.nickname || '个人详情'
+    : loginProvider.value
+      ? `${loginProvider.value.name}登录`
+      : '流媒体登录'
+)
 const { canGoBack, backHint } = useBackStack()
-const { unreadCount } = useAppNoticeStore()
+const { unreadCount, activeTaskCount, doNotDisturb } = useAppNoticeStore()
 const { maximized } = useWindowChrome(() => props.preview === true)
 const avatarLoadFailed = ref(false)
 watch([() => profile.value?.userId, () => profile.value?.avatarUrl], () => {
@@ -169,14 +183,14 @@ function close(): void {
       </button>
       <button
         type="button"
-        :aria-label="isLoggedIn ? profile?.nickname || '个人详情' : '网易云登录'"
+        :aria-label="loginLabel"
         v-if="streaming"
         class="login-btn"
-        :title="isLoggedIn ? profile?.nickname || '个人详情' : '网易云登录'"
-        @click="$emit('login', 'ncm')"
+        :title="loginLabel"
+        @click="$emit('login', loginProvider?.id ?? null)"
       >
         <img
-          v-if="isLoggedIn && profile?.avatarUrl && !avatarLoadFailed"
+          v-if="showNcmProfile && profile?.avatarUrl && !avatarLoadFailed"
           :src="profile.avatarUrl"
           class="user-avatar"
           alt=""
@@ -186,22 +200,35 @@ function close(): void {
       </button>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
-      <TaskCenter v-if="!preview" @library="$emit('library')" />
       <button
         v-if="!preview"
         type="button"
         class="control-btn notification-btn"
-        :aria-label="unreadCount ? `通知记录（${unreadCount} 条未读）` : '通知记录'"
-        title="通知记录"
+        :aria-label="`任务与通知${doNotDisturb ? ' · 勿扰模式已开启' : ''}（${activeTaskCount} 项进行中，${unreadCount} 条未读）`"
+        :title="
+          doNotDisturb
+            ? '任务与通知 · 勿扰模式已开启'
+            : activeTaskCount
+              ? `任务与通知 · ${activeTaskCount} 项进行中`
+              : '任务与通知'
+        "
         :aria-expanded="notificationsOpen"
         aria-controls="app-notice-history"
         @click="$emit('notifications', $event)"
       >
         <svg class="notification-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+          <path v-if="doNotDisturb" d="m3 3 18 18" />
         </svg>
+        <span v-if="activeTaskCount" class="notification-task-count" aria-hidden="true">{{
+          activeTaskCount
+        }}</span>
         <Transition name="notification-dot">
-          <span v-if="unreadCount" class="notification-dot" aria-hidden="true"></span>
+          <span
+            v-if="unreadCount && !doNotDisturb"
+            class="notification-dot"
+            aria-hidden="true"
+          ></span>
         </Transition>
       </button>
       <button
@@ -246,6 +273,19 @@ function close(): void {
 </template>
 
 <style scoped>
+.notification-task-count {
+  position: absolute;
+  bottom: 2px;
+  right: 3px;
+  min-width: 13px;
+  padding: 0 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--te-primary-500) 18%, var(--te-app-bg));
+  color: var(--te-settings-text);
+  font-size: 9px;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+}
 .notification-btn {
   position: relative;
 }

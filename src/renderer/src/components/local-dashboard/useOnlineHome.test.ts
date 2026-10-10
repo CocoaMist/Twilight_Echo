@@ -60,7 +60,7 @@ test('signed-out home loads public discovery without requesting personalized end
     assert.deepEqual(state.calls, ['ncm:fetchDiscoveryPlaylists'])
     assert.equal(state.home.loggedIn.value, false)
     assert.equal(state.home.playlists.value[0].id, 1)
-    assert.equal(state.home.playlistTitle.value, '发现好歌单')
+    assert.equal(state.home.playlistTitle.value, '发现歌单')
   } finally {
     state.scope.stop()
   }
@@ -294,7 +294,7 @@ test('successful empty refresh replaces retained recommendations with the empty 
     assert.deepEqual(state.home.tracks.value, [])
     assert.deepEqual(state.home.playlists.value, [])
     assert.equal(state.home.error.value, '')
-    assert.equal(state.home.playlistTitle.value, '发现好歌单')
+    assert.equal(state.home.playlistTitle.value, '发现歌单')
   } finally {
     state.scope.stop()
   }

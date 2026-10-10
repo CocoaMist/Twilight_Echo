@@ -220,7 +220,9 @@ function playPersonalizedStream(section: RecSection | null): void {
     @play-track="(track, queue) => emit('playTrack', track, queue)"
     @request-login="emit('requestLogin')"
     @open-discovery="emit('openDiscovery')"
-  />
+  >
+    <template v-if="$slots.rankings" #rankings><slot name="rankings" /></template>
+  </ProviderMusicHome>
   <div v-else class="home-view">
     <!-- ── Signed-out invite ─────────────────────────────────────────── -->
     <section v-if="!isLoggedIn" class="hero-invite">
@@ -229,11 +231,8 @@ function playPersonalizedStream(section: RecSection | null): void {
       <div class="invite-notes" aria-hidden="true">
         <i class="pi pi-headphones invite-note-icon"></i>
       </div>
-      <p class="invite-kicker">{{ providerLabel }} · 在线漫游</p>
-      <h2 class="invite-title">听见为你而来的音乐</h2>
-      <p class="invite-desc">
-        登录 {{ providerLabel }} 后，这里会加载此音源提供的个性化推荐与精选歌单。
-      </p>
+      <p class="invite-kicker">{{ providerLabel }}</p>
+      <h2 class="invite-title">登录后查看推荐</h2>
       <button type="button" class="invite-cta" @click="emit('requestLogin')">
         <i class="pi pi-user"></i>
         登录 {{ providerLabel }}
@@ -258,7 +257,7 @@ function playPersonalizedStream(section: RecSection | null): void {
     <!-- ── Error ─────────────────────────────────────────────────────── -->
     <div v-else-if="recsError" class="home-error">
       <span class="home-error-icon"><i class="pi pi-exclamation-triangle"></i></span>
-      <p class="home-error-title">推荐暂时走丢了</p>
+      <p class="home-error-title">推荐加载失败</p>
       <p class="home-error-hint">{{ recsError }}</p>
       <button type="button" class="home-error-retry" @click="emit('loadRecommendations')">
         <i class="pi pi-refresh"></i>
@@ -482,10 +481,15 @@ function playPersonalizedStream(section: RecSection | null): void {
         </div>
       </section>
     </div>
+    <div v-if="$slots.rankings" class="home-rankings"><slot name="rankings" /></div>
   </div>
 </template>
 
 <style scoped>
+.home-rankings {
+  margin-top: 44px;
+}
+
 .home-view {
   min-height: 100%;
   --home-ink: var(--te-neutral-900);
@@ -1529,17 +1533,6 @@ function playPersonalizedStream(section: RecSection | null): void {
   font-weight: 900;
   letter-spacing: -0.01em;
   color: var(--home-ink);
-}
-
-.invite-desc {
-  position: relative;
-  z-index: 1;
-  max-width: 440px;
-  margin-top: 14px;
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  line-height: 1.75;
-  font-weight: 500;
-  color: var(--home-ink-soft);
 }
 
 .invite-cta {

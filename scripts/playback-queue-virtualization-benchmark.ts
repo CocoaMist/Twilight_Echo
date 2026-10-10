@@ -221,8 +221,8 @@ function benchmarkSize(
   const limits = {
     mountedRows:
       Math.ceil(VIEWPORT_HEIGHT / PLAYBACK_QUEUE_ROW_HEIGHT) + PLAYBACK_QUEUE_OVERSCAN * 2,
-    snapshotP95Ms: 2_500,
-    windowP95Ms: 250,
+    snapshotP95Ms: Math.max(16, (queueLength / 1_000) * 4),
+    windowP95Ms: 8,
     windowHeapDeltaBytes: 8 * 1024 * 1024,
     snapshotHeavyBytes: 0
   }

@@ -7,9 +7,19 @@ import {
   APP_FONT_SYSTEM,
   APP_FONT_VARIABLES,
   appFontCssVariables,
+  normalizeAppFontRendering,
   normalizeAppFontFamily,
   resolveAppFontStack
 } from './appFont.ts'
+
+test('legacy and invalid text rendering preferences fall back to automatic', () => {
+  for (const value of [undefined, null, '', 'ClearType', 'crisp; color:red', 1, {}]) {
+    assert.equal(normalizeAppFontRendering(value), 'auto')
+  }
+  for (const value of ['auto', 'crisp', 'smooth']) {
+    assert.equal(normalizeAppFontRendering(value), value)
+  }
+})
 
 test('installed font names survive normalization and use the CJK fallback stack', () => {
   assert.equal(normalizeAppFontFamily('local:霞鹜文楷'), 'local:霞鹜文楷')

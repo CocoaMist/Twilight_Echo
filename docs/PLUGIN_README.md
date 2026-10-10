@@ -162,6 +162,10 @@ JS 插件实现两个函数：
 
 内置 NCM provider 的前缀固定是 `ncm`。第三方 provider 用各自 manifest 里约定的前缀。多音源数据模型见 [spec §4.5](./twilight-echo-plugin-spec.md#45-多音源数据模型)。
 
+大歌单可实现可选的 `fetchPlaylistTracksPage(playlistId, offset = 0, limit = 20, force = false, context?)`，声明 `playlist` 能力。宿主识别注册时上报的实际方法后，优先使用分页接口；只有首屏、接近滚动底部或手动「加载更多」时才读取一页。原有 `fetchPlaylistTracks` 保留，供旧宿主或未提供分页方法的音源使用。
+
+返回 `{ tracks, total, nextOffset, hasMore }`：`total` 是准确的可播放歌曲总数，无法确定时为 `null`；`nextOffset` 是音源游标，不必等于已返回歌曲数。例如 Bilibili 的失效视频过滤和多 P 展开不改变视频分页位置。`hasMore: true` 时游标必须前进，空的过滤结果仍可继续下一页。后续页失败会保留已加载歌曲，并停止滚动自动重试；播放、搜索和排序使用已加载范围。
+
 ## 9. UI 扩展点
 
 `ui` 类型插件贡献受控扩展点，均需 `ui:inject` 权限：

@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { useSettingsSearchDisclosure } from './settingsSearchDisclosure'
-import SettingsDisclosure from './SettingsDisclosure.vue'
 import { computed, ref } from 'vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { PLAYER_BAR_MODES, type PlayerBarMode } from '../../../../shared/playerBar.ts'
@@ -17,7 +15,6 @@ import { playerBarControlOptions, playerBarModeOptions, playerBarRegionOptions }
 
 const { settings, updateSettings } = useSettingsStore()
 
-const layoutOpen = ref(false)
 /**
  * Which shape's arrangement is being edited. Starts on the global shape so the
  * panel opens on the arrangement the user is actually looking at, but it is a
@@ -119,144 +116,120 @@ const chromeNote: Record<PlayerBarMode, string> = {
   mini: '迷你形态中间那条长进度轨由形态本身渲染，占满中间一列，所以中间通常留空。',
   compact: '紧凑形态的进度线贴在播放条顶边，由形态本身渲染，不在编排范围内。'
 }
-useSettingsSearchDisclosure('playerBarLayout', layoutOpen)
 </script>
 
 <template>
-  <button
-    type="button"
-    class="settings-accordion-trigger setting-item"
-    :class="{ open: layoutOpen }"
-    :aria-expanded="layoutOpen"
-    aria-controls="settings-player-bar-layout"
-    @click="layoutOpen = !layoutOpen"
-  >
-    <span class="setting-copy">
-      <strong>播放条按钮编排</strong>
-      <span>为每种形态分别决定左侧、中间、右侧各放哪些按钮，以及它们的先后顺序。</span>
-    </span>
-    <i class="pi pi-chevron-down"></i>
-  </button>
-  <SettingsDisclosure
-    id="settings-player-bar-layout"
-    :open="layoutOpen"
-    class="settings-accordion-body"
-  >
-    <hr />
-    <div class="setting-item">
-      <div class="setting-copy">
-        <strong>编辑哪种形态</strong>
-        <span>{{ chromeNote[editingShape] }}</span>
-      </div>
-      <div role="group" aria-label="编辑哪种形态" class="segmented-control">
-        <button
-          :aria-pressed="editingShape === option.value"
-          v-for="option in playerBarModeOptions"
-          :key="option.value"
-          type="button"
-          :class="{ active: editingShape === option.value }"
-          @click="editingShape = option.value"
-        >
-          <i :class="option.icon"></i>
-          {{ option.label }}
-        </button>
-      </div>
+  <h4 data-setting-id="player-bar-layout" id="player-bar-layout">播放条按钮编排</h4>
+
+  <hr />
+  <div class="setting-item">
+    <div class="setting-copy">
+      <strong>编辑哪种形态</strong>
+      <span>{{ chromeNote[editingShape] }}</span>
     </div>
-    <hr />
-    <div class="playbar-layout-regions">
-      <section
-        v-for="region in playerBarRegionOptions"
-        :key="region.value"
-        class="playbar-layout-region"
-        :aria-label="`${shapeLabel}形态的${region.label}按钮`"
+    <div class="segmented-control">
+      <button
+        v-for="option in playerBarModeOptions"
+        :key="option.value"
+        type="button"
+        :class="{ active: editingShape === option.value }"
+        @click="editingShape = option.value"
       >
-        <header class="playbar-layout-region-head">
-          <strong>{{ region.label }}</strong>
-          <span>{{ regions[region.value].length }} 个</span>
-        </header>
-        <p v-if="regions[region.value].length === 0" class="playbar-layout-empty">这一侧是空的</p>
-        <ul v-else class="playbar-layout-list">
-          <li
-            v-for="(control, index) in regions[region.value]"
-            :key="control"
-            class="playbar-layout-item"
-          >
-            <i :class="describe(control).icon" aria-hidden="true"></i>
-            <span class="playbar-layout-item-copy">
-              <span class="playbar-layout-item-label">{{ describe(control).label }}</span>
-              <span v-if="describe(control).hint" class="playbar-layout-item-hint">
-                {{ describe(control).hint }}
-              </span>
-            </span>
-            <span class="playbar-layout-item-tools">
-              <button
-                type="button"
-                :disabled="index === 0"
-                :title="`把「${describe(control).label}」往前移`"
-                :aria-label="`把${describe(control).label}往前移`"
-                @click="moveControl(region.value, index, -1)"
-              >
-                <i class="pi pi-chevron-up" aria-hidden="true"></i>
-              </button>
-              <button
-                type="button"
-                :disabled="index === regions[region.value].length - 1"
-                :title="`把「${describe(control).label}」往后移`"
-                :aria-label="`把${describe(control).label}往后移`"
-                @click="moveControl(region.value, index, 1)"
-              >
-                <i class="pi pi-chevron-down" aria-hidden="true"></i>
-              </button>
-              <button
-                type="button"
-                class="playbar-layout-remove"
-                :title="`移除「${describe(control).label}」`"
-                :aria-label="`移除${describe(control).label}`"
-                @click="removeControl(region.value, index)"
-              >
-                <i class="pi pi-times" aria-hidden="true"></i>
-              </button>
-            </span>
-          </li>
-        </ul>
-        <select
-          class="preview-select"
-          :aria-label="`往${region.label}添加按钮`"
-          :disabled="addableTo(region.value).length === 0"
-          value=""
-          @change="
-            placeControl(region.value, ($event.target as HTMLSelectElement).value)
-            ;($event.target as HTMLSelectElement).value = ''
-          "
-        >
-          <option value="">添加按钮…</option>
-          <option
-            v-for="option in addableTo(region.value)"
-            :key="option.value"
-            :value="option.value"
-          >
-            {{ option.label }}
-          </option>
-        </select>
-      </section>
-    </div>
-    <hr />
-    <div class="setting-item">
-      <div class="setting-copy">
-        <strong>恢复默认编排</strong>
-        <span
-          >只重置「{{ shapeLabel }}」这一种形态，其余形态的编排不动。已经是默认时按钮不可用。</span
-        >
-      </div>
-      <button type="button" class="preview-select" :disabled="shapeIsDefault" @click="resetShape">
-        恢复默认
+        <i :class="option.icon"></i>
+        {{ option.label }}
       </button>
     </div>
-    <p class="playbar-layout-note">
-      同一个按钮只会出现在一处：把它添加到别的一侧，就等于从原来那一侧移过去。播放控制至少要留一个，全部移除后会自动补回。
-      共 {{ PLAYER_BAR_MODES.length }} 种形态，各自独立编排。
-    </p>
-  </SettingsDisclosure>
+  </div>
+  <hr />
+  <div class="playbar-layout-regions">
+    <section
+      v-for="region in playerBarRegionOptions"
+      :key="region.value"
+      class="playbar-layout-region"
+      :aria-label="`${shapeLabel}形态的${region.label}按钮`"
+    >
+      <header class="playbar-layout-region-head">
+        <strong>{{ region.label }}</strong>
+        <span>{{ regions[region.value].length }} 个</span>
+      </header>
+      <p v-if="regions[region.value].length === 0" class="playbar-layout-empty">这一侧是空的</p>
+      <ul v-else class="playbar-layout-list">
+        <li
+          v-for="(control, index) in regions[region.value]"
+          :key="control"
+          class="playbar-layout-item"
+        >
+          <i :class="describe(control).icon" aria-hidden="true"></i>
+          <span class="playbar-layout-item-copy">
+            <span class="playbar-layout-item-label">{{ describe(control).label }}</span>
+            <span v-if="describe(control).hint" class="playbar-layout-item-hint">
+              {{ describe(control).hint }}
+            </span>
+          </span>
+          <span class="playbar-layout-item-tools">
+            <button
+              type="button"
+              :disabled="index === 0"
+              :title="`把「${describe(control).label}」往前移`"
+              :aria-label="`把${describe(control).label}往前移`"
+              @click="moveControl(region.value, index, -1)"
+            >
+              <i class="pi pi-chevron-up" aria-hidden="true"></i>
+            </button>
+            <button
+              type="button"
+              :disabled="index === regions[region.value].length - 1"
+              :title="`把「${describe(control).label}」往后移`"
+              :aria-label="`把${describe(control).label}往后移`"
+              @click="moveControl(region.value, index, 1)"
+            >
+              <i class="pi pi-chevron-down" aria-hidden="true"></i>
+            </button>
+            <button
+              type="button"
+              class="playbar-layout-remove"
+              :title="`移除「${describe(control).label}」`"
+              :aria-label="`移除${describe(control).label}`"
+              @click="removeControl(region.value, index)"
+            >
+              <i class="pi pi-times" aria-hidden="true"></i>
+            </button>
+          </span>
+        </li>
+      </ul>
+      <select
+        class="preview-select"
+        :aria-label="`往${region.label}添加按钮`"
+        :disabled="addableTo(region.value).length === 0"
+        value=""
+        @change="
+          placeControl(region.value, ($event.target as HTMLSelectElement).value)
+          ;($event.target as HTMLSelectElement).value = ''
+        "
+      >
+        <option value="">添加按钮…</option>
+        <option v-for="option in addableTo(region.value)" :key="option.value" :value="option.value">
+          {{ option.label }}
+        </option>
+      </select>
+    </section>
+  </div>
+  <hr />
+  <div class="setting-item">
+    <div class="setting-copy">
+      <strong>恢复默认编排</strong>
+      <span
+        >只重置「{{ shapeLabel }}」这一种形态，其余形态的编排不动。已经是默认时按钮不可用。</span
+      >
+    </div>
+    <button type="button" class="preview-select" :disabled="shapeIsDefault" @click="resetShape">
+      恢复默认
+    </button>
+  </div>
+  <p class="playbar-layout-note">
+    同一个按钮只会出现在一处：把它添加到别的一侧，就等于从原来那一侧移过去。播放控制至少要留一个，全部移除后会自动补回。
+    共 {{ PLAYER_BAR_MODES.length }} 种形态，各自独立编排。
+  </p>
 </template>
 
 <style scoped>

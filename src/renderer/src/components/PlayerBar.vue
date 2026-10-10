@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import PlayerControlIcon from '@renderer/components/player-bar/PlayerControlIcon.vue'
+import { clampVolumePercent, createVolumeWheelStepper } from './player-bar/volumeWheel'
 import type { Track } from '@renderer/types/music'
 import { ref, computed, onMounted, onBeforeUnmount, watch, type ComponentPublicInstance } from 'vue'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
+import { useThemeStore } from '../stores/useThemeStore'
 import { useMusicStore } from '../stores/useMusicStore'
 import { usePlaybackBookmarks } from '../stores/playbackBookmarks'
 import { useLyricsManagement } from '../stores/lyricsManagement'
@@ -157,6 +159,7 @@ const {
   queueSessions,
   toggleExclusiveMode,
   formatTime,
+  setVolume,
   setUnityVolume,
   configureSleepTimer,
   cancelSleepTimer,
@@ -208,7 +211,7 @@ const currentSourceInfo = computed(() => {
 // Keep the visualization poll alive only while the compact skyline is mounted.
 let releaseVisualizationConsumer: (() => void) | null = null
 watch(
-  showCompactVisualizer,
+  () => showCompactVisualizer.value && !props.hiddenBar,
   (visible) => {
     if (visible && !props.preview) {
       releaseVisualizationConsumer ??= acquireVisualizationConsumer()
@@ -250,6 +253,7 @@ const playerBarButtons = computed(() =>
   uiContributions.value.filter((contribution) => contribution.kind === 'playerBarButton')
 )
 const { settings } = useSettingsStore()
+const { effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
 /* Only the standard bar wears the material. Mini and compact are deliberately
    flat control strips, so they opt out entirely rather than wearing it with the
    refracting layer switched off. `.player-bar-liquid` claims `background`,
@@ -260,7 +264,8 @@ const { settings } = useSettingsStore()
 const liquidGlassActive = computed(
   () =>
     isStandard.value &&
-    (settings.value.surfaceMaterial === 'liquidGlass' || settings.value.liquidGlass.playbarEnabled)
+    effectiveSurfaceMaterial.value !== 'transparent' &&
+    (effectiveSurfaceMaterial.value === 'liquidGlass' || effectiveLiquidGlass.value.playbarEnabled)
 )
 /**
  * Which controls this shape puts in each region, resolved through the shared
@@ -600,12 +605,12 @@ function clampVolume(value: number): number {
   return Math.min(1, Math.max(0, value))
 }
 
+const consumeVolumeWheel = createVolumeWheelStepper()
 function onVolumeWheel(event: WheelEvent): void {
+  if (event.ctrlKey) return
   event.preventDefault()
-  // I2: 滚轮只调音量，不再自动弹开音量抽屉（避免悬停误触弹出面板）。
-  // 抽屉已打开时保持打开，便于看到滑杆反馈。
-  const step = event.shiftKey ? 0.01 : 0.04
-  volume.value = clampVolume(volume.value + (event.deltaY < 0 ? step : -step))
+  const steps = consumeVolumeWheel(event)
+  if (steps !== 0) setVolume(clampVolumePercent(volume.value * 100 + steps) / 100)
 }
 
 function onSleepTimerSelectValue(value: string): void {
@@ -758,16 +763,20 @@ function playQueueEntry(queueEntryId: string): void {
   if (index !== -1) playTrackAt(index)
 }
 
-const queueSummaryText = computed(() => {
-  const total = queue.value.length
-  if (total === 0) return '暂无歌曲，从曲库或流媒体加入几首吧'
+const queueDurationMinutes = computed(() => {
   let totalSeconds = 0
   for (const track of queue.value) {
     if (Number.isFinite(track.duration) && track.duration > 0) totalSeconds += track.duration
   }
+  return Math.round(totalSeconds / 60)
+})
+
+const queueSummaryText = computed(() => {
+  const total = queue.value.length
+  if (total === 0) return '暂无歌曲，从曲库或流媒体加入几首吧'
   const position =
     queueIndex.value >= 0 && queueIndex.value < total ? `正在播放第 ${queueIndex.value + 1} 首` : ''
-  const minutes = Math.round(totalSeconds / 60)
+  const minutes = queueDurationMinutes.value
   const durationText =
     minutes < 1
       ? ''
@@ -1376,7 +1385,7 @@ function motionAllowsPointer(): boolean {
 function syncGlassPointer(): void {
   const shouldTrack =
     liquidGlassActive.value &&
-    settings.value.liquidGlass.followPointer &&
+    effectiveLiquidGlass.value.followPointer &&
     !props.preview &&
     motionAllowsPointer()
 
@@ -1388,9 +1397,9 @@ function syncGlassPointer(): void {
 watch(
   () => [
     liquidGlassActive.value,
-    settings.value.liquidGlass.followPointer,
-    settings.value.liquidGlass.light.elasticity,
-    settings.value.liquidGlass.dark.elasticity,
+    effectiveLiquidGlass.value.followPointer,
+    effectiveLiquidGlass.value.light.elasticity,
+    effectiveLiquidGlass.value.dark.elasticity,
     settings.value.theme
   ],
   () => {

@@ -61,7 +61,7 @@ test('the expanded visualizer is mounted only for compact on the lyrics page', (
   assert.match(playerBar, /<CompactPlayerBarVisualizer\s+v-if="showCompactVisualizer"/)
   assert.match(
     playerBar,
-    /watch\(\s*showCompactVisualizer,[\s\S]*?releaseVisualizationConsumer\?\.\(\)/
+    /watch\(\s*\(\) => showCompactVisualizer\.value && !props\.hiddenBar,[\s\S]*?releaseVisualizationConsumer\?\.\(\)/
   )
 
   const plainCompact = playerBarCss.match(

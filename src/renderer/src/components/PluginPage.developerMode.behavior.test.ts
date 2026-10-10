@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
 
 // 这个用例在真实 Electron 窗口里挂载真实的 SFC，而不是用简化替身断言：
-// 「设置 → 网络与插件 → 开发者选项」的开关与插件页侧栏开关必须是同一个持久化设置，
+// 「设置 → 常规 → 开发者选项」的开关与插件页侧栏开关必须是同一个持久化设置，
 // 且只有开启后插件页才出现「从文件夹安装（开发）」并以 'directory' 调用 IPC。
 test('开发者模式开关在真实渲染中贯通设置页与插件页的目录安装入口', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-developer-mode-'))
@@ -24,7 +24,7 @@ test('开发者模式开关在真实渲染中贯通设置页与插件页的目�
       'twilight-plugin-page-devmode'
     )
     const generalSection = await compileComponent(
-      './settings-page/GeneralSettingsSection.vue',
+      './settings-page/SystemSettingsSection.vue',
       'GeneralSectionComponent',
       'twilight-general-section-devmode'
     )
@@ -70,7 +70,7 @@ async function compileComponent(
   )
   compiled = compiled.replace(
     /import\s+(\w+)\s+from\s+['"][^'"]+\.vue['"]\s*/g,
-    'const $1 = window.__settingsBoundary("$1")\n'
+    'const $1 = window.__stubComponent\n'
   )
   compiled = compiled.replace(
     /import\s+\{[\s\S]*?\}\s+from\s+['"]@renderer\/utils\/pluginTrustPresentation['"]\s*/g,
@@ -123,6 +123,7 @@ function stubScript(): string {
     `
     const chooseAndInstallCalls = []
     const toggleCalls = []
+    const pluginActions = []
     const patches = []
     const settings = Vue.ref({
       developerMode: false,
@@ -153,16 +154,14 @@ function stubScript(): string {
       settings.value = Object.assign({}, settings.value, patch)
       return settings.value
     }
-    window.__store = { settings, updateSettings, patches, toggleCalls, chooseAndInstallCalls }
+    window.__store = { settings, updateSettings, patches, toggleCalls, chooseAndInstallCalls, pluginActions }
+    window.__failedPlugin = {
+      id: 'com.example.failed-tool', name: '失败的后台工具', version: '1.0.0',
+      type: ['tool'], author: 'Fixture', description: '', builtIn: true,
+      enabled: false, requestedEnabled: true, status: 'failed', error: 'activation failed'
+    }
     window.__useSettingsStore = () => ({ settings, updateSettings })
-    window.__boundaryMounts = {}
-    window.__settingsBoundary = (name) => ({
-      name,
-      setup() {
-        Vue.onMounted(() => { window.__boundaryMounts[name] = (window.__boundaryMounts[name] || 0) + 1 })
-        return () => Vue.h('span', { class: 'fixture-stub', 'data-boundary': name })
-      }
-    })
+    window.__stubComponent = { name: 'FixtureStub', props: ['id', 'title'], template: '<details :id="id" class="fixture-stub"><summary>{{ title }}</summary><slot /></details>' }
     // i18n 替身：t() 回显 key，语言选择器因此能渲染且断言仍只看结构。
     window.__i18nLocale = {
       APP_LOCALES: ['zh-CN', 'en-US'],
@@ -204,13 +203,19 @@ function stubApiScript(): string {
     }
     window.api = {
       plugins: {
-        list: async () => [],
+        list: async () => [{ ...window.__failedPlugin }],
         listIndex: async () => [],
         refreshIndex: async () => [],
         getIndexStatus: async () => null,
         installFromIndex: async () => null,
-        enable: async () => ({}),
-        disable: async () => ({}),
+        enable: async () => { pluginActions.push('enable'); return {} },
+        disable: async () => {
+          pluginActions.push('disable')
+          window.__failedPlugin.requestedEnabled = false
+          window.__failedPlugin.status = 'disabled'
+          window.__failedPlugin.error = null
+          return { ...window.__failedPlugin }
+        },
         uninstall: async () => {},
         openLog: async () => {},
         getLog: async () => '',
@@ -240,10 +245,10 @@ function checksScript(): string {
       libraryResetMessage: '',
       libraryScanCommandError: '',
       libraryResetPending: false,
-      pluginSettingsPanels: [{ pluginId: 'fixture', id: 'options', title: '测试插件', command: 'settings' }],
+      pluginSettingsPanels: [],
       pluginSettingsResult: {},
       pluginSettingsError: {},
-      pluginSettingsForms: { panel: { fields: [{ key: 'draft', label: '未保存设置', type: 'text' }] } },
+      pluginSettingsForms: {},
       pluginSettingsValues: {},
       runningPluginSettingsCommand: '',
       pluginPanelStateKey: () => 'panel',
@@ -252,14 +257,12 @@ function checksScript(): string {
       updateSettings: store.updateSettings,
       addLibraryFolder: () => {},
       removeLibraryFolder: () => {},
-      chooseDownloadFolder: () => {},
-      resetDownloadFolder: () => {},
       // 与 SettingsPage.toggleSetting 同构：翻转当前布尔值后走 updateSettings。
       toggleSetting: (key) => {
         store.toggleCalls.push(key)
         void store.updateSettings({ [key]: !store.settings.value[key] })
       },
-      setGenreSeparators: (event) => { void store.updateSettings({ genreSeparators: event.target.value }) },
+      setGenreSeparators: () => {},
       setTrackActivationMode: () => {},
       setStartupHomePage: () => {},
       setCloseBehavior: () => {},
@@ -276,7 +279,7 @@ function checksScript(): string {
       importSettingsBackup: () => {},
       resetSettingsGroup: () => {},
       runPluginSettingsPanel: () => {},
-      setPluginSettingsField: (_panel, key, value) => { generalProps.pluginSettingsValues.panel = { [key]: value } },
+      setPluginSettingsField: () => {},
       submitPluginSettingsForm: () => {}
     }
   ` + checksRunnerScript()
@@ -297,50 +300,11 @@ function checksRunnerScript(): string {
     window.runDeveloperModeChecks = async () => {
       const checks = []
       createApp({ render: () => h(window.PluginPageComponent) }).mount('#plugin-page')
-      const activeCategory = Vue.ref('general')
-      const keys = ['general', 'library', 'integrations', 'backup', 'extensions']
-      createApp({ render: () => keys.map(category => h(window.GeneralSectionComponent, {
-        ...generalProps, category, key: category, style: { display: activeCategory.value === category ? '' : 'none' }
-      })) }).mount('#general-section')
+      createApp({ render: () => h(window.GeneralSectionComponent, generalProps) }).mount('#general-section')
       await tick()
 
-      const panel = key => document.getElementById(key)
-      const visibleRow = (key, label) => [...panel(key).querySelectorAll('.setting-item')].find(item => item.querySelector('strong')?.textContent.trim() === label)
-      if (panel('general').querySelectorAll('.setting-item').length !== 7) fail('常规未收敛到七个基础选项')
-      for (const label of ['扫描文件夹', '系统媒体控制（SMTC）', '开发者模式']) {
-        if (visibleRow('general', label)) fail('常规仍混入其他分类：' + label)
-      }
-      if (!visibleRow('library', '扫描文件夹') || !visibleRow('library', '下载目录')) fail('媒体库缺少文件夹或下载选项')
-      if (!visibleRow('integrations', '系统媒体控制（SMTC）')) fail('系统集成缺少媒体控制')
-      for (const boundary of ['DownloadSettingsFields', 'IntegrationsSettingsSection', 'BackupAndResetSettingsSection', 'NetworkProxySettingsSection']) {
-        if (window.__boundaryMounts[boundary] !== 1) fail('分类拆分重复初始化：' + boundary)
-      }
-      const genre = panel('library').querySelector('[aria-label="流派分隔符"]')
-      genre.value = ';/'
-      genre.dispatchEvent(new Event('change', { bubbles: true }))
-      await tick()
-      if (store.settings.value.genreSeparators !== ';/') fail('媒体库字段不再保存')
-      const smtc = visibleRow('integrations', '系统媒体控制（SMTC）').querySelector('[role="switch"]')
-      smtc.click()
-      await tick()
-      if (!store.settings.value.smtcEnabled) fail('系统集成开关不再保存')
-      activeCategory.value = 'extensions'
-      await tick()
-      const draft = panel('extensions').querySelector('.plugin-settings-field input')
-      draft.value = '保留插件草稿'
-      draft.dispatchEvent(new Event('input', { bubbles: true }))
-      panel('extensions').querySelector('details').open = true
-      activeCategory.value = 'general'
-      await tick()
-      activeCategory.value = 'extensions'
-      await tick()
-      if (panel('extensions').querySelector('.plugin-settings-field input') !== draft || draft.value !== '保留插件草稿') fail('切换分类丢失插件草稿')
-      if (!panel('extensions').querySelector('details').open) fail('切换分类丢失折叠状态')
-      if (store.settings.value.developerMode) fail('分类切换擅自开启开发者模式')
-      store.toggleCalls.length = 0
-      checks.push('split-panels-single-initialization', 'library-and-integrations-save', 'plugin-draft-and-disclosure-preserved')
       const row = settingRow('开发者模式')
-      if (!row) fail('设置页「网络与插件」缺少开发者模式设置项')
+      if (!row) fail('设置页「常规」缺少开发者模式设置项')
       const settingsSwitch = row.querySelector('[role="switch"]')
       if (!settingsSwitch) fail('开发者模式设置项没有渲染 switch 控件')
       const pluginSwitch = document.querySelector('#plugin-page .dev-mode-toggle [role="switch"]')
@@ -376,6 +340,18 @@ function checksRunnerScript(): string {
       if (folderButton()) fail('关闭开发者模式后目录安装入口未隐藏')
       if (settingsSwitch.getAttribute('aria-checked') !== 'false') fail('设置页开关未跟随插件页')
       checks.push('plugin-page-writes-back')
+
+      const failedSwitch = document.querySelector('#plugin-page .plugin-card [role="switch"]')
+      if (!failedSwitch || failedSwitch.getAttribute('aria-checked') !== 'true')
+        fail('失败插件的开关必须保留启用意愿')
+      if (!failedSwitch.textContent.includes('启动失败')) fail('失败插件没有显示失败状态')
+      failedSwitch.click()
+      await tick()
+      if (JSON.stringify(store.pluginActions) !== JSON.stringify(['disable']))
+        fail('点击失败插件开关必须停用，不能再次尝试启用')
+      if (failedSwitch.getAttribute('aria-checked') !== 'false' || !failedSwitch.textContent.includes('已停用'))
+        fail('失败插件停用后未刷新开关状态')
+      checks.push('failed-plugin-can-disable-retry')
       return checks.join(',')
     }
   `
