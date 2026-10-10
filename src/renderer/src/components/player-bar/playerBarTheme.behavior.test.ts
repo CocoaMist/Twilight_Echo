@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import test from 'node:test'
 import { compileStyle, parse } from '@vue/compiler-sfc'
 import { build } from 'vite'
+import vue from '@vitejs/plugin-vue'
 
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
@@ -24,11 +25,16 @@ test('saved theme colors reach the dashboard and player controls across tones an
     const sources = [
       await readFile(new URL('./PlayerBar.css', import.meta.url), 'utf8'),
       await readFile(new URL('../LocalDashboard.css', import.meta.url), 'utf8'),
-      parse(dashboardProgress).descriptor.styles[0].content
+      await readFile(new URL('../streaming-page/ProviderMusicHome.css', import.meta.url), 'utf8'),
+      parse(dashboardProgress).descriptor.styles[0].content,
+      parse(await readFile(new URL('../TitleBar.vue', import.meta.url), 'utf8')).descriptor
+        .styles[0].content,
+      parse(await readFile(new URL('../icons/PlaybackIcon.vue', import.meta.url), 'utf8'))
+        .descriptor.styles[0].content
     ]
     const styles = sources.map((source) => {
       const style = compileStyle({
-        source,
+        source: source.replace(/^\uFEFF/, ''),
         filename: 'Playback.css',
         id: 'data-v-test',
         scoped: true
@@ -41,8 +47,10 @@ test('saved theme colors reach the dashboard and player controls across tones an
       configFile: false,
       logLevel: 'error',
       root: workspace,
+      plugins: [vue()],
       resolve: {
         alias: {
+          vue: require.resolve('vue/dist/vue.runtime.esm-bundler.js'),
           '@renderer': join(workspace, 'src/renderer/src'),
           '@shared': join(workspace, 'src/shared')
         }
@@ -85,6 +93,16 @@ app.whenReady().then(async()=>{
       await win.webContents.executeJavaScript('window.checkPlayerThemeHover()')
       win.webContents.sendInputEvent({type:'mouseMove',x:0,y:0})
     }
+    win.setSize(1380,900)
+    await win.webContents.executeJavaScript('window.checkSharedPlaybackGlyphs()')
+    await win.webContents.executeJavaScript('window.checkSidebarTransition()')
+    for(const kind of ['settings','plugins','menu','close']){
+      const rect=await win.webContents.executeJavaScript('window.prepareDarkTitlebarControl('+JSON.stringify(kind)+')')
+      win.webContents.sendInputEvent({type:'mouseMove',x:Math.round(rect.x),y:Math.round(rect.y)})
+      await new Promise(resolve=>setTimeout(resolve,200))
+      await win.webContents.executeJavaScript('window.checkDarkTitlebarControl('+JSON.stringify(kind)+')')
+      win.webContents.sendInputEvent({type:'mouseMove',x:300,y:200})
+    }
     await win.loadFile(process.argv.at(-1))
     await win.webContents.executeJavaScript('window.checkReloadedPlayerTheme()')
     console.log('PLAYER_THEME_COLORS_OK')
@@ -104,7 +122,9 @@ app.whenReady().then(async()=>{
   }
 })
 
-const runtime = `import {bootstrapThemeRuntime,useThemeStore} from '@renderer/stores/useThemeStore.ts'
+const runtime = `import {h,render} from 'vue'
+import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
+import {bootstrapThemeRuntime,useThemeStore} from '@renderer/stores/useThemeStore.ts'
 import {createDefaultThemeLibraryDocument,normalizeThemeProfile} from '@shared/theme.ts'
 const storageKey='player-theme-test-library'
 let library=JSON.parse(localStorage.getItem(storageKey)||'null')||{version:2,revision:0,savedAt:new Date(0).toISOString(),data:createDefaultThemeLibraryDocument()}
@@ -135,7 +155,11 @@ const colors={
   dark:{'playback.progress.track':'#345678','playback.progress.fill':'linear-gradient(90deg, #0000ff, #ff00ff)','playback.control.surface':'#876543','playback.control.hoverSurface':'#fedcba'}
 }
 let bar,button,stripButton,hoverTarget,track,fill
+const iconHosts=[]
+const mountIcon=(host,name)=>{render(h(PlaybackIcon,{name}),host);host.firstElementChild?.setAttribute('data-v-test','');iconHosts.push(host)}
 const clear=()=>{
+  for(const host of iconHosts)render(null,host)
+  iconHosts.length=0
   document.querySelector('.player-bar-shell')?.remove()
   document.querySelector('.home')?.remove()
 }
@@ -150,6 +174,8 @@ const mount=(mode,glass=false,live=false)=>{
     const rail=shell.querySelector('.progress-slider-wrap')
     rail.outerHTML='<div class="progress-area"><span class="time-label">0:24</span>'+rail.outerHTML+'<span class="time-label">2:41</span></div>'
   }
+  mountIcon(shell.querySelector('.btn-play'),'play')
+  if(mode!=='standard')mountIcon(shell.querySelector('.mini-play-button'),'play')
   for(const element of [shell,...shell.querySelectorAll('*')])element.setAttribute('data-v-test','')
   document.body.append(shell)
   bar=shell.querySelector('.player-bar')
@@ -165,6 +191,7 @@ const mountDashboard=(glass=false)=>{
   home.className='home'
   home.style.setProperty('--play-button-color','#cc9900')
   home.innerHTML='<div class="hero-progress"><button class="hero-progress-track"><span style="transform:scaleX(0.42)"></span></button></div><div class="hero-actions"><button class="transport-button transport-play">Play</button></div>'
+  mountIcon(home.querySelector('.transport-play'),'play')
   for(const element of [home,...home.querySelectorAll('*')])element.setAttribute('data-v-test','')
   document.body.append(home)
   bar=home
@@ -295,6 +322,91 @@ window.checkStandardPlayerGeometry=async()=>{
     const progress=bar.querySelector('.progress-area').getBoundingClientRect()
     expect(controls.top-frame.top>=15.9,'transport has at least 16px top clearance: '+(controls.top-frame.top))
     expect(frame.bottom-progress.bottom>=7.9,'progress has at least 8px bottom clearance')
+  }
+}
+window.checkSharedPlaybackGlyphs=async()=>{
+  for(const tone of ['pureWhite','dark']){
+    await store.setPreviewTone(tone)
+    for(const name of ['play','pause','previous','next']){
+      mount('standard')
+      mountIcon(button,name)
+      const standard=button.querySelector('svg').innerHTML
+      expect(getComputedStyle(button.querySelector('svg')).color==='rgb(255, 255, 255)','standard glyph keeps its white foreground')
+      mountDashboard()
+      mountIcon(button,name)
+      expect(button.querySelector('svg').innerHTML===standard,'dashboard '+name+' has the standard bar shape')
+      expect(getComputedStyle(button.querySelector('svg')).color==='rgb(255, 255, 255)','dashboard glyph keeps its white foreground')
+    }
+    const tile=document.createElement('button')
+    tile.className='fresh-tile'
+    tile.innerHTML='<span class="fresh-play"></span><span class="gallery-play"></span>'
+    for(const e of [tile,...tile.querySelectorAll('*')])e.setAttribute('data-v-test','')
+    bar.append(tile)
+    for(const plate of tile.children){
+      mountIcon(plate,'play')
+      expect(getComputedStyle(plate.querySelector('svg')).color==='rgb(17, 24, 39)',tone+' white overlay keeps a dark play glyph')
+    }
+    const row=document.createElement('button')
+    row.className='music-track'
+    row.innerHTML='<span class="music-track-cover"><span class="music-track-play"></span></span>'
+    for(const e of [row,...row.querySelectorAll('*')])e.setAttribute('data-v-test','')
+    bar.append(row)
+    const cover=row.firstElementChild
+    mountIcon(cover.firstElementChild,'play')
+    const frame=cover.getBoundingClientRect(),overlay=cover.firstElementChild.getBoundingClientRect(),glyph=cover.querySelector('svg').getBoundingClientRect()
+    expect(Math.abs(frame.width-45)<0.6&&Math.abs(frame.height-45)<0.6,'provider artwork fixture retains its real flex layout')
+    expect(Math.abs(frame.width-overlay.width)<0.6&&Math.abs(frame.height-overlay.height)<0.6,'provider hover overlay still covers the whole artwork')
+    expect(Math.abs(glyph.left+glyph.width/2-frame.left-frame.width/2)<0.6&&Math.abs(glyph.top+glyph.height/2-frame.top-frame.height/2)<0.6,'provider play glyph stays centered inside the overlay: '+JSON.stringify({frame:{x:frame.x,y:frame.y,w:frame.width,h:frame.height},glyph:{x:glyph.x,y:glyph.y,w:glyph.width,h:glyph.height}}))
+
+  }
+}
+window.checkSidebarTransition=async()=>{
+  for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact']){
+    await store.setPreviewTone(tone)
+    mount(mode)
+    document.documentElement.dataset.teMotion='full'
+    const shell=bar.parentElement
+    const duration=parseFloat(getComputedStyle(shell).transitionDuration)*1000
+    expect(duration>0,'sidebar has a position transition in full motion: '+mode+' '+getComputedStyle(shell).transition+' / '+getComputedStyle(shell).getPropertyValue('--te-motion-panel')+' / '+getComputedStyle(shell).getPropertyValue('--te-ease-soft'))
+    for(const open of [true,false,true,false]){
+      const before=bar.getBoundingClientRect()
+      shell.classList.toggle('menu-open',open)
+      const immediate=bar.getBoundingClientRect()
+      expect(Math.abs(immediate.left-before.left)<1&&Math.abs(immediate.width-before.width)<1,mode+' sidebar toggle must not instantly change max width or margins')
+      const started=performance.now()
+      do{
+        await new Promise(requestAnimationFrame)
+        const rect=bar.getBoundingClientRect()
+        expect(Math.abs(rect.top-before.top)<0.6&&Math.abs(rect.height-before.height)<0.6,mode+' sidebar toggle preserves vertical position and height')
+      }while(performance.now()-started<duration+40)
+    }
+  }
+}
+window.prepareDarkTitlebarControl=async(kind)=>{
+  await store.setPreviewTone('dark')
+  clear()
+  document.querySelector('.title-bar')?.remove()
+  const title=document.createElement('div')
+  title.className='title-bar'
+  title.style.setProperty('--te-active-bg','rgba(180, 80, 0, 0.2)')
+  title.style.setProperty('--te-shell-control-hover','rgba(180, 80, 0, 0.2)')
+  title.innerHTML='<div class="title-bar-start"><button class="menu-btn">Menu</button><button class="settings-btn" aria-pressed="true">Settings</button><button class="plugins-btn" aria-pressed="true">Plugins</button></div><div class="title-bar-controls"><button class="control-btn close">Close</button></div>'
+  for(const e of [title,...title.querySelectorAll('*')])e.setAttribute('data-v-test','')
+  document.body.append(title)
+  hoverTarget=title.querySelector(kind==='close'?'.close':'.'+kind+'-btn')
+  const rect=hoverTarget.getBoundingClientRect()
+  return {x:rect.x+rect.width/2,y:rect.y+rect.height/2}
+}
+window.checkDarkTitlebarControl=(kind)=>{
+  expect(hoverTarget.matches(':hover'),'titlebar '+kind+' receives the real pointer')
+  const selected=kind==='settings'||kind==='plugins'
+  checkBackground(hoverTarget,kind==='close'?'#e81123':'color-mix(in srgb, var(--te-shell-control-text) '+(selected?'11%':'6%')+', transparent)','dark titlebar '+kind+' avoids the album wash')
+  if(selected){
+    const probe=document.createElement('span')
+    probe.style.color='var(--te-primary-400)'
+    document.body.append(probe)
+    expect(getComputedStyle(hoverTarget).color===getComputedStyle(probe).color,'selected dark titlebar glyph uses the lighter accent')
+    probe.remove()
   }
 }
 window.preparePlayerThemeHover=async(tone,mode,glass)=>{

@@ -1199,7 +1199,7 @@
   height: 36px;
   border-radius: 999px;
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  color: var(--te-neutral-900);
+  color: #111827;
   background: color-mix(in srgb, #ffffff 92%, transparent);
   box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-900) 30%, transparent);
   opacity: 0;
@@ -1659,7 +1659,7 @@
   height: 40px;
   border-radius: 999px;
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  color: var(--te-neutral-900);
+  color: #111827;
   background: color-mix(in srgb, #ffffff 92%, transparent);
   box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-900) 30%, transparent);
   opacity: 0;

@@ -36,12 +36,6 @@
   z-index: 999;
 }
 
-.player-bar-shell.menu-open .player-bar {
-  width: 100%;
-  max-width: none;
-  margin: 0;
-}
-
 .player-panel-dismiss {
   position: fixed;
   inset: 0;
@@ -2535,6 +2529,34 @@ html[data-theme='dark'] .player-bar-mini .mini-progress-track {
 .player-bar-glass .compact-progress-fill,
 .player-bar-glass .mini-progress-fill {
   background: var(--te-player-bar-progress-fill, rgba(255, 255, 255, 0.9));
+}
+
+/* Shared transport glyphs inherit color directly; SVG images' invert filters do not apply. */
+.player-controls .playback-icon {
+  width: 18px;
+  height: 18px;
+  opacity: 0.8;
+}
+
+.player-controls .btn-play .playback-icon {
+  width: 21px;
+  height: 21px;
+  color: #fff;
+  opacity: 1;
+}
+
+.mini-play-button .playback-icon {
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+}
+
+.player-bar-compact .player-controls .ctrl-btn .playback-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.player-bar-compact .player-controls .btn-play .playback-icon {
+  width: 16px;
+  height: 16px;
 }
 
 /* Dark themes park the card colour a step or two from the page background —

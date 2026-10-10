@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useMusicStore } from '../stores/useMusicStore'
@@ -906,7 +907,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   aria-label="上一首"
                   @click="prev"
                 >
-                  <i class="ph ph-skip-back"></i>
+                  <PlaybackIcon name="previous" />
                 </button>
                 <button
                   type="button"
@@ -916,7 +917,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   :aria-label="isPlaying ? '暂停' : '播放'"
                   @click="togglePlay"
                 >
-                  <i :class="isPlaying ? 'ph ph-pause' : 'ph ph-play'"></i>
+                  <PlaybackIcon :name="isPlaying ? 'pause' : 'play'" />
                 </button>
                 <button
                   type="button"
@@ -925,7 +926,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   aria-label="下一首"
                   @click="next"
                 >
-                  <i class="ph ph-skip-forward"></i>
+                  <PlaybackIcon name="next" />
                 </button>
               </div>
             </div>
@@ -1080,7 +1081,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <span v-if="track.format" class="fresh-format">{{
                   track.format.toUpperCase()
                 }}</span>
-                <span class="fresh-play" aria-hidden="true"><i class="ph ph-play"></i></span>
+                <span class="fresh-play" aria-hidden="true"><PlaybackIcon name="play" /></span>
               </span>
               <span class="fresh-name">{{ track.title }}</span>
               <span class="fresh-artist">{{ track.artist || '未知艺术家' }}</span>
@@ -1217,7 +1218,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <CoverImg :cover="album.cover" :fallback="DEFAULT_COVER" :alt="album.name" />
                 <span class="gallery-scrim" aria-hidden="true"></span>
                 <span class="gallery-count">{{ album.trackCount }} 首</span>
-                <span class="gallery-play" aria-hidden="true"><i class="ph ph-play"></i></span>
+                <span class="gallery-play" aria-hidden="true"><PlaybackIcon name="play" /></span>
               </span>
               <span class="gallery-name">{{ album.name }}</span>
               <span class="gallery-artist">{{ album.artist || '未知艺术家' }}</span>

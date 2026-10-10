@@ -560,6 +560,24 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   background: var(--te-shell-control-hover);
 }
 
+/* Use a neutral wash for dark caption feedback so album accents cannot tint the chrome. */
+html[data-theme='dark']
+  .title-bar
+  :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn):not(
+    .close
+  ):hover {
+  background: color-mix(in srgb, var(--te-shell-control-text) 6%, transparent);
+}
+
+html[data-theme='dark'] .title-bar :is(.settings-btn, .plugins-btn)[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--te-shell-control-text) 8%, transparent);
+  color: var(--te-primary-400);
+}
+
+html[data-theme='dark'] .title-bar :is(.settings-btn, .plugins-btn)[aria-pressed='true']:hover {
+  background: color-mix(in srgb, var(--te-shell-control-text) 11%, transparent);
+}
+
 .user-avatar {
   width: var(--te-titlebar-icon-size, 18px);
   height: var(--te-titlebar-icon-size, 18px);

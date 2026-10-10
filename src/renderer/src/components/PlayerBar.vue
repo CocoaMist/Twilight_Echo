@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import PlayerControlIcon from '@renderer/components/player-bar/PlayerControlIcon.vue'
 import { clampVolumePercent, createVolumeWheelStepper } from './player-bar/volumeWheel'
 import type { Track } from '@renderer/types/music'
@@ -27,10 +28,6 @@ import { useLocale } from '../app/useLocale.ts'
 import type { LyricLayerSourceSelection } from '../../../shared/lyricsManagement.ts'
 import CoverImg from './CoverImg.vue'
 import HiFiSidebar from './player-bar/HiFiSidebar.vue'
-import nextTrackIcon from '../assets/icons/next-track.svg'
-import pauseIcon from '../assets/icons/pause.svg'
-import playIcon from '../assets/icons/play.svg'
-import previousTrackIcon from '../assets/icons/previous-track.svg'
 import repeatIcon from '../assets/icons/single-song-repeat.svg'
 import listLoopIcon from '../assets/icons/list-loop-repeat.svg'
 import sequentialIcon from '../assets/icons/sequential-playback.svg'
@@ -1644,7 +1641,7 @@ onBeforeUnmount(() => {
                     :aria-label="`将 ${item.title} 设为下一首`"
                     @click="playQueueEntryNext(item.queueEntryId)"
                   >
-                    <i class="pi pi-step-forward" aria-hidden="true"></i>
+                    <PlaybackIcon name="next" aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -1842,18 +1839,18 @@ onBeforeUnmount(() => {
 
           <div v-else-if="control === 'transport'" class="player-controls">
             <button class="ctrl-btn previous-button" aria-label="上一首" @click="prev">
-              <img :src="previousTrackIcon" alt="上一首" />
+              <PlaybackIcon name="previous" />
             </button>
             <button
               class="ctrl-btn btn-play"
               :class="{ 'is-playing': isPlaying }"
-              aria-label="播放/暂停"
+              :aria-label="isPlaying ? '暂停' : '播放'"
               @click="togglePlay"
             >
-              <img :src="isPlaying ? pauseIcon : playIcon" :alt="isPlaying ? '暂停' : '播放'" />
+              <PlaybackIcon :name="isPlaying ? 'pause' : 'play'" />
             </button>
             <button class="ctrl-btn next-button" aria-label="下一首" @click="next">
-              <img :src="nextTrackIcon" alt="下一首" />
+              <PlaybackIcon name="next" />
             </button>
           </div>
 
@@ -1866,7 +1863,7 @@ onBeforeUnmount(() => {
             :aria-label="isPlaying ? '暂停' : '播放'"
             @click="togglePlay"
           >
-            <i :class="isPlaying ? 'pi pi-pause' : 'pi pi-play'" aria-hidden="true"></i>
+            <PlaybackIcon :name="isPlaying ? 'pause' : 'play'" aria-hidden="true" />
           </button>
 
           <span
