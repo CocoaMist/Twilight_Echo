@@ -116,51 +116,52 @@ function close(): void {
     }"
   >
     <div class="title-bar-background" aria-hidden="true"></div>
-    <div v-if="!glass && !hideStart" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
-      <button
-        type="button"
-        aria-label="菜单"
-        class="menu-btn"
-        :title="menuOpen ? '收起导航' : '展开导航'"
-        :aria-expanded="menuOpen"
-        @click="$emit('toggleMenu')"
-      >
-        <TitleBarIcon name="navigation" />
-      </button>
-      <button
-        type="button"
-        class="settings-btn command-palette-trigger"
-        title="命令面板 (Ctrl+K / ⌘K)"
-        aria-label="打开命令面板"
-        aria-keyshortcuts="Control+K Meta+K"
-        @click="$emit('commands')"
-      >
-        <TitleBarIcon name="search" />
-      </button>
-      <button
-        type="button"
-        aria-label="设置"
-        :aria-pressed="activeTool === 'settings'"
-        class="settings-btn"
-        title="设置"
-        @click="$emit('settings')"
-      >
-        <TitleBarIcon name="settings" />
-      </button>
-      <button
-        type="button"
-        aria-label="扩展中心"
-        :aria-pressed="activeTool === 'plugins'"
-        class="plugins-btn"
-        title="扩展中心"
-        @click="$emit('plugins')"
-      >
-        <TitleBarIcon name="puzzle_piece" />
-      </button>
+    <div class="title-bar-start no-drag" @pointerdown="setPressOrigin">
+      <template v-if="!glass && !hideStart">
+        <button
+          type="button"
+          aria-label="菜单"
+          class="menu-btn"
+          :title="menuOpen ? '收起导航' : '展开导航'"
+          :aria-expanded="menuOpen"
+          @click="$emit('toggleMenu')"
+        >
+          <TitleBarIcon name="navigation" />
+        </button>
+        <button
+          type="button"
+          class="settings-btn command-palette-trigger"
+          title="命令面板 (Ctrl+K / ⌘K)"
+          aria-label="打开命令面板"
+          aria-keyshortcuts="Control+K Meta+K"
+          @click="$emit('commands')"
+        >
+          <TitleBarIcon name="search" />
+        </button>
+        <button
+          type="button"
+          aria-label="设置"
+          :aria-pressed="activeTool === 'settings'"
+          class="settings-btn"
+          title="设置"
+          @click="$emit('settings')"
+        >
+          <TitleBarIcon name="settings" />
+        </button>
+        <button
+          type="button"
+          aria-label="扩展中心"
+          :aria-pressed="activeTool === 'plugins'"
+          class="plugins-btn"
+          title="扩展中心"
+          @click="$emit('plugins')"
+        >
+          <TitleBarIcon name="puzzle_piece" />
+        </button>
+      </template>
       <button
         type="button"
         :aria-label="loginLabel"
-        v-if="streaming"
         class="login-btn"
         :title="loginLabel"
         @click="$emit('login', loginProvider?.id ?? null)"
@@ -335,14 +336,12 @@ function close(): void {
 }
 .title-bar {
   --te-titlebar-icon-size: 16px;
+  --te-titlebar-control-width: 46px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: var(--te-titlebar-height, 35px);
   box-sizing: border-box;
-  /* Match the outer icon centers: 36px commands, 46px Windows caption buttons.
-     Caption hit areas stay flush to the right edge for Windows pointer targets. */
-  padding-inline-start: 5px;
   flex-shrink: 0;
   background: transparent !important;
   user-select: none;
@@ -415,6 +414,11 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   background: transparent !important;
 }
 
+.title-bar-start,
+.title-bar-back {
+  --te-titlebar-icon-size: 18px;
+}
+
 .title-bar-start {
   display: flex;
   flex-shrink: 0;
@@ -436,15 +440,15 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 }
 
 .title-bar-back-visible {
-  width: 36px;
+  width: var(--te-titlebar-control-width, 46px);
 }
 
 .back-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  min-width: 36px;
+  width: var(--te-titlebar-control-width, 46px);
+  min-width: var(--te-titlebar-control-width, 46px);
   height: 100%;
   border: none;
   background: transparent;
@@ -481,7 +485,7 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
+  width: var(--te-titlebar-control-width, 46px);
   height: 100%;
   border: none;
   background: transparent;
@@ -500,7 +504,7 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
+  width: var(--te-titlebar-control-width, 46px);
   height: 100%;
   border: none;
   background: transparent;
@@ -520,7 +524,7 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
+  width: var(--te-titlebar-control-width, 46px);
   height: 100%;
   border: none;
   background: transparent;
@@ -540,7 +544,7 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
+  width: var(--te-titlebar-control-width, 46px);
   height: 100%;
   border: none;
   background: transparent;
@@ -557,8 +561,8 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 }
 
 .user-avatar {
-  width: 16px;
-  height: 16px;
+  width: var(--te-titlebar-icon-size, 18px);
+  height: var(--te-titlebar-icon-size, 18px);
   border-radius: 50%;
   object-fit: cover;
 }
@@ -592,8 +596,8 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
-  min-width: 46px;
+  width: var(--te-titlebar-control-width, 46px);
+  min-width: var(--te-titlebar-control-width, 46px);
   height: 100%;
   flex-shrink: 0;
   border: none;

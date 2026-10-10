@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import test from 'node:test'
-import { compileScript, parse } from '@vue/compiler-sfc'
+import { compileScript, compileStyle, parse } from '@vue/compiler-sfc'
 import ts from 'typescript'
 
 const require = createRequire(import.meta.url)
@@ -18,6 +18,22 @@ async function component(path: string): Promise<string> {
   return commonJs(compileScript(descriptor, { id: path, inlineTemplate: true }).content)
 }
 
+async function componentStyle(path: string): Promise<string> {
+  const { descriptor } = parse(await readFile(new URL(path, import.meta.url), 'utf8'))
+  return descriptor.styles
+    .map((style) => {
+      const result = compileStyle({
+        source: style.content,
+        filename: path,
+        id: 'titlebar-fixture',
+        scoped: false
+      })
+      assert.deepEqual(result.errors, [])
+      return result.code
+    })
+    .join('\n')
+}
+
 function commonJs(source: string): string {
   return ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }
@@ -27,17 +43,32 @@ function commonJs(source: string): string {
 test('login and title bar recover from disabled providers in real Electron rendering', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-login-provider-fallback-'))
   try {
-    const [vue, login, title, serverForm, providerStore, visibilityPolling] = await Promise.all([
+    const [
+      vue,
+      login,
+      title,
+      serverForm,
+      providerStore,
+      visibilityPolling,
+      titleStyle,
+      titleIcon,
+      iconStyle,
+      iconPaths
+    ] = await Promise.all([
       readFile(require.resolve('vue/dist/vue.global.prod.js'), 'utf8'),
       component('../LoginPage.vue'),
       component('../TitleBar.vue'),
       component('./ServerLoginForm.vue'),
       readFile(new URL('../../stores/useProviderStore.ts', import.meta.url), 'utf8'),
-      readFile(new URL('../../utils/visibilityPolling.ts', import.meta.url), 'utf8')
+      readFile(new URL('../../utils/visibilityPolling.ts', import.meta.url), 'utf8'),
+      componentStyle('../TitleBar.vue'),
+      component('../icons/TitleBarIcon.vue'),
+      componentStyle('../icons/TitleBarIcon.vue'),
+      readFile(new URL('../icons/titleBarIconPaths.ts', import.meta.url), 'utf8')
     ])
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><meta charset="utf-8"><div id="title"></div><div id="app"></div>
+      `<!doctype html><meta charset="utf-8"><style>${titleStyle}\n${iconStyle}</style><div id="title"></div><div id="app"></div>
       <script>${vue}</script><script>${runtime}</script>
       <script>
         const load = source => {
@@ -49,6 +80,8 @@ test('login and title bar recover from disabled providers in real Electron rende
         window.providerStoreModule = load(${JSON.stringify(commonJs(providerStore))});
         window.ServerLoginForm = load(${JSON.stringify(serverForm)}).default;
         window.LoginPage = load(${JSON.stringify(login)}).default;
+        window.titleBarIconPaths = load(${JSON.stringify(commonJs(iconPaths))});
+        window.TitleBarIcon = load(${JSON.stringify(titleIcon)}).default;
         window.TitleBar = load(${JSON.stringify(title)}).default;
       </script>`
     )
@@ -71,7 +104,7 @@ test('login and title bar recover from disabled providers in real Electron rende
       ['--no-sandbox', join(directory, 'runner.cjs'), join(directory, 'index.html')],
       { windowsHide: true, timeout: 60_000 }
     )
-    assert.match(stdout, /LOGIN_PROVIDER_FALLBACK_OK 11/)
+    assert.match(stdout, /LOGIN_PROVIDER_FALLBACK_OK 14/)
   } finally {
     const target = resolve(directory)
     assert.ok(
@@ -93,7 +126,7 @@ const bili = { id: 'bili', name: '哔哩哔哩', capabilities: ['login'], suppor
 const server = { id: 'jellyfin', name: 'Jellyfin', capabilities: ['login'], supportedMethods: ['loginWithServer'], ui: { authType: 'settings' } };
 const settings = { id: 'apple', name: 'Apple Music', capabilities: ['login'], supportedMethods: [], ui: { authType: 'settings' } };
 const searchOnly = { id: 'search', name: '搜索', capabilities: ['search'], supportedMethods: [] };
-const loggedIn = ref(false), profile = ref(null);
+const loggedIn = ref(false), profile = ref(null), canGoBack = ref(false), titleProps = ref({ streaming: true });
 let available = [], calls = [], changed, handler, loginApp, titleApp, success = 0, configure = 0;
 const timers = new Map();
 let timerId = 0;
@@ -123,12 +156,14 @@ window.fixtureRequire = id => {
   if (id === 'qrcode') return { default: { toDataURL: async () => 'fixture-qr' } };
   if (id.endsWith('.css')) return {};
   if (id.endsWith('/ServerLoginForm.vue')) return { default: window.ServerLoginForm };
+  if (id.endsWith('/TitleBarIcon.vue')) return { default: window.TitleBarIcon };
+  if (id.includes('titleBarIconPaths')) return window.titleBarIconPaths;
   if (id.endsWith('.vue')) return { default: { render: () => h('span') } };
   if (id.includes('useProviderStore')) return window.providerStoreModule;
   if (id.includes('visibilityPolling')) return window.visibilityPolling;
   if (id.includes('mediaProvider')) return { toProviderIpcArgs: args => args };
   if (id.includes('useNcmStore')) return { useNcmStore: () => ({ isLoggedIn: loggedIn, profile, checkLogin: async () => { calls.push({ id: 'ncm', method: 'ncmCheckLogin' }); } }) };
-  if (id.includes('useBackStack')) return { useBackHandler() {}, useBackStack: () => ({ canGoBack: ref(false), backHint: ref(null) }) };
+  if (id.includes('useBackStack')) return { useBackHandler() {}, useBackStack: () => ({ canGoBack, backHint: ref(null) }) };
   if (id.includes('useWindowChrome')) return { useWindowChrome: () => ({ maximized: ref(false) }) };
   if (id.includes('useAppNoticeStore')) return { useAppNoticeStore: () => ({ unreadCount: ref(0), activeTaskCount: ref(0), doNotDisturb: ref(false) }) };
   throw new Error('Unexpected dependency: ' + id);
@@ -219,14 +254,58 @@ window.runProviderFallbackTests = async () => {
 
   // Title bar target and label track plugin availability, ignoring cached NCM profiles.
   let selected;
-  loggedIn.value = true; profile.value = { nickname: '旧网易云账号', avatarUrl: 'fixture-avatar', userId: 1 };
-  titleApp = createApp({ render: () => h(window.TitleBar, { menuOpen: false, streaming: true, preview: true, onLogin: id => selected = id }) });
+  loggedIn.value = true; profile.value = { nickname: '旧网易云账号', avatarUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', userId: 1 };
+  titleApp = createApp({ render: () => h(window.TitleBar, { menuOpen: false, ...titleProps.value, preview: false, onLogin: id => selected = id }) });
   titleApp.mount('#title'); await replaceProviders([searchOnly, bili]);
   let button = document.querySelector('#title .login-btn');
   expect(button.title === '哔哩哔哩登录' && !button.querySelector('img'), 'disabled NCM still shown in title bar');
   button.click(); expect(selected === 'bili', 'title bar selected disabled NCM');
   await replaceProviders([ncm, bili]); button.click();
   expect(selected === 'ncm' && button.title === '旧网易云账号', 'NCM account entry was not preserved');
+  // Keep the account entry across main surfaces, including surfaces that hide commands.
+  const surfaces = [
+    { streaming: false },
+    { streaming: false, titleSurface: 'settings' },
+    { streaming: true, titleSurface: 'streaming' },
+    { hideStart: true },
+    { glass: true },
+    { preview: true, hideStart: true }
+  ];
+  for (const surface of surfaces) {
+    titleProps.value = surface; await settle();
+    button = document.querySelector('#title .login-btn');
+    expect(button && button.getBoundingClientRect().width === 46, 'account entry disappeared on ' + JSON.stringify(surface));
+    expect(!!document.querySelector('#title .menu-btn') === !(surface.hideStart || surface.glass), 'command visibility changed');
+    button.click(); expect(selected === 'ncm', 'persistent account lost its enabled provider');
+  }
+  titleProps.value = { streaming: false }; await settle();
+
+  // Check rendered symmetry and separate command/caption icon sizes in both color schemes.
+  for (const theme of ['light', 'dark']) {
+    document.documentElement.dataset.theme = theme;
+    const bar = document.querySelector('#title .title-bar').getBoundingClientRect();
+    const menu = document.querySelector('#title .menu-btn').getBoundingClientRect();
+    const close = document.querySelector('#title .close').getBoundingClientRect();
+    expect(bar.height === 35 && menu.width === close.width && close.width === 46, 'caption geometry differs');
+    expect(menu.left - bar.left === bar.right - close.right, 'outer margins differ');
+    expect(menu.left + menu.width / 2 - bar.left === bar.right - close.left - close.width / 2, 'outer icon centers differ');
+    expect(document.querySelector('#title .menu-btn svg').getBoundingClientRect().width === 18, 'left icon size did not grow');
+    expect(document.querySelector('#title .close svg').getBoundingClientRect().width === 16, 'caption icon size changed');
+    const accountLeft = button.getBoundingClientRect().left;
+    canGoBack.value = true; await settle();
+    expect(button.getBoundingClientRect().left === accountLeft && document.querySelector('#title .back-btn'), 'return shifted account entry');
+    canGoBack.value = false; await settle();
+  }
+
+  // A failed avatar must keep a usable fallback; a changed profile retries its image.
+  let avatar = button.querySelector('img');
+  expect(avatar && avatar.getBoundingClientRect().width === 18, 'connected avatar is missing');
+  avatar.dispatchEvent(new Event('error')); await settle();
+  expect(!button.querySelector('img') && button.querySelector('svg'), 'failed avatar lost its fallback');
+  profile.value = { ...profile.value, userId: 2 }; await settle();
+  expect(button.querySelector('img'), 'new profile did not retry avatar');
+  loggedIn.value = false; await settle();
+  expect(button.title === '网易云音乐登录' && !button.querySelector('img') && button.querySelector('svg'), 'logged-out account disappeared');
   await replaceProviders([searchOnly]); button.click();
   expect(selected === null && button.title === '流媒体登录', 'empty title bar selected an unavailable provider');
   titleApp.unmount(); titleApp = null;
@@ -239,6 +318,6 @@ window.runProviderFallbackTests = async () => {
   finishCheck({ loggedIn: false, profile: null }); await settle();
   expect(calls.length === beforeUnmountedResult && qrPolls().length === 0 && configure === 0, 'unmounted login resumed authentication');
   store().stopProviderHealthPolling();
-  return 11;
+  return 14;
 };
 `
