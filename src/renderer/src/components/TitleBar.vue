@@ -238,8 +238,8 @@ function close(): void {
         title="最小化"
         @click="minimize"
       >
-        <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
-          <path d="M1 6.5h10" />
+        <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 8.5h12" />
         </svg>
       </button>
       <button
@@ -250,9 +250,9 @@ function close(): void {
         :disabled="preview"
         @click="toggleMaximize"
       >
-        <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
-          <path v-if="maximized" d="M3.5 3.5v-2h7v7h-2M1.5 3.5h7v7h-7Z" />
-          <rect v-else x="1.5" y="1.5" width="9" height="9" />
+        <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path v-if="maximized" d="M4.5 4.5v-2h9v9h-2M2.5 4.5h9v9h-9Z" />
+          <rect v-else x="2.5" y="2.5" width="11" height="11" />
         </svg>
       </button>
       <button
@@ -263,8 +263,8 @@ function close(): void {
         aria-label="关闭窗口"
         @click="close"
       >
-        <svg class="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
-          <path d="m1.5 1.5 9 9m0-9-9 9" />
+        <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m2.5 2.5 11 11m0-11-11 11" />
         </svg>
       </button>
     </div>
@@ -293,8 +293,8 @@ function close(): void {
   background: var(--te-shell-control-hover);
 }
 .notification-icon {
-  width: 17px;
-  height: 17px;
+  width: var(--te-titlebar-icon-size, 16px);
+  height: var(--te-titlebar-icon-size, 16px);
   stroke: currentColor;
   stroke-width: 1.65;
   stroke-linecap: round;
@@ -334,6 +334,7 @@ function close(): void {
   color: var(--te-primary-500);
 }
 .title-bar {
+  --te-titlebar-icon-size: 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -619,8 +620,8 @@ html[data-theme='dark'] .title-bar.title-bar-glass {
 
 .window-control-icon {
   display: block;
-  width: 12px;
-  height: 12px;
+  width: var(--te-titlebar-icon-size, 16px);
+  height: var(--te-titlebar-icon-size, 16px);
   flex-shrink: 0;
   fill: none;
   stroke: currentColor;
