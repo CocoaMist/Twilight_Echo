@@ -74,6 +74,10 @@ app.whenReady().then(async()=>{
   try{
     await win.loadFile(process.argv.at(-1))
     await win.webContents.executeJavaScript('window.runPlayerThemeTests()')
+    for(const width of [1380,900,760]){
+      win.setSize(width,900)
+      await win.webContents.executeJavaScript('window.checkStandardPlayerGeometry()')
+    }
     for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact','dashboard'])for(const glass of [false,true]){
       const rect=await win.webContents.executeJavaScript('window.preparePlayerThemeHover('+JSON.stringify(tone)+','+JSON.stringify(mode)+','+glass+')')
       win.webContents.sendInputEvent({type:'mouseMove',x:Math.round(rect.x),y:Math.round(rect.y)})
@@ -141,6 +145,11 @@ const mount=(mode,glass=false,live=false)=>{
   shell.className='player-bar-shell'
   shell.dataset.tePlaybarMode=mode
   shell.innerHTML='<div class="player-bar '+(mode==='standard'?'':'player-bar-'+mode)+(glass?' player-bar-glass':'')+'" style="--accent-color:#cc9900;--play-button-color:#cc9900"><div class="player-left"><button class="mini-play-button">Play</button></div><div class="player-center"><div class="player-controls"><button class="ctrl-btn btn-play">Play</button></div><div class="'+(mode==='standard'?'progress-slider-wrap':mode+'-progress-rail')+'"><div class="'+(mode==='standard'?'':mode+'-')+'progress-track"><div class="'+(mode==='standard'?'':mode+'-')+'progress-fill'+(live?' live':'')+'"></div></div></div></div><div class="player-right"></div></div>'
+  if(mode==='standard'){
+    shell.querySelector('.player-left').innerHTML='<div class="player-cover-slot"><img class="player-cover" alt="" /></div>'
+    const rail=shell.querySelector('.progress-slider-wrap')
+    rail.outerHTML='<div class="progress-area"><span class="time-label">0:24</span>'+rail.outerHTML+'<span class="time-label">2:41</span></div>'
+  }
   for(const element of [shell,...shell.querySelectorAll('*')])element.setAttribute('data-v-test','')
   document.body.append(shell)
   bar=shell.querySelector('.player-bar')
@@ -263,6 +272,30 @@ window.runPlayerThemeTests=async()=>{
   checkBackground(fill,'#cc9900','switching theme clears progress override')
   checkBackground(button,'#cc9900','switching theme clears play override')
   await store.setActive({kind:'user',id:profile.id})
+}
+window.checkStandardPlayerGeometry=async()=>{
+  for(const tone of ['pureWhite','dark'])for(const glass of [false,true])for(const fontSize of [14,18])for(const placeholder of [false,true]){
+    await store.setPreviewTone(tone)
+    mount('standard',glass)
+    bar.style.setProperty('--te-font-size-body',fontSize+'px')
+    const slot=bar.querySelector('.player-cover-slot')
+    if(placeholder)slot.innerHTML='<div class="player-cover-placeholder" data-v-test></div>'
+    const frame=bar.getBoundingClientRect()
+    const art=slot.getBoundingClientRect()
+    const insetX=art.left-frame.left
+    const insetY=art.top-frame.top
+    const radius=parseFloat(getComputedStyle(bar).borderTopLeftRadius)
+    const innerRadius=parseFloat(getComputedStyle(slot).borderTopLeftRadius)
+    expect(Math.abs(insetX-insetY)<0.6,'cover has equal horizontal and vertical insets: '+insetX+'/'+insetY)
+    expect(Math.abs(insetX+innerRadius-radius)<0.6,'cover and bar corner centers align')
+    const innerArt=slot.firstElementChild.getBoundingClientRect()
+    expect(Math.abs(innerArt.width-art.width)<0.6&&Math.abs(innerArt.height-art.height)<0.6,'image and fallback fill the same artwork frame')
+    expect(Math.abs(parseFloat(getComputedStyle(slot.firstElementChild).borderTopLeftRadius)-innerRadius)<0.6,'image and fallback use the frame radius')
+    const controls=bar.querySelector('.player-controls').getBoundingClientRect()
+    const progress=bar.querySelector('.progress-area').getBoundingClientRect()
+    expect(controls.top-frame.top>=7.9,'transport has at least 8px top clearance: '+(controls.top-frame.top))
+    expect(frame.bottom-progress.bottom>=7.9,'progress has at least 8px bottom clearance')
+  }
 }
 window.preparePlayerThemeHover=async(tone,mode,glass)=>{
   await store.setPreviewTone(tone)

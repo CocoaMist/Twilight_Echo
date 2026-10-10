@@ -841,6 +841,23 @@
     box-shadow 0.3s;
 }
 
+/* Standard bar: 12px artwork inset and 22px/10px concentric corners.
+   Reserve 8px above and below transport + progress, including enlarged type. */
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) {
+  --te-standard-bar-height: calc(
+    max(var(--te-player-play-size, 44px), var(--te-player-control-size, 32px)) +
+      max(24px, calc(var(--te-font-size-body, 14px) * 11 / 14 * 1.65 + 6px)) + 16px
+  );
+  --te-standard-cover-size: calc(var(--te-standard-bar-height) - 24px);
+  --te-standard-cover-radius: 10px;
+  height: var(--te-standard-bar-height);
+  padding-inline: 11px;
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) > .player-center {
+  transform: none;
+}
+
 .player-bar > .player-left {
   grid-area: 1 / 1;
 }
@@ -961,20 +978,20 @@
   max-width: 100%;
 }
 .player-cover-slot {
-  width: 48px;
-  height: 48px;
+  width: var(--te-standard-cover-size, 48px);
+  height: var(--te-standard-cover-size, 48px);
   flex-shrink: 0;
   cursor: pointer;
-  border-radius: 12px;
+  border-radius: var(--te-standard-cover-radius, 12px);
   overflow: hidden;
   background: rgba(15, 23, 42, 0.04);
 }
 .player-cover-slot img.player-cover,
 .player-cover-slot :deep(img.player-cover),
 .player-cover {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: var(--te-standard-cover-size, 48px);
+  height: var(--te-standard-cover-size, 48px);
+  border-radius: var(--te-standard-cover-radius, 12px);
   object-fit: cover;
   flex-shrink: 0;
   cursor: pointer;
@@ -993,9 +1010,9 @@
   filter: saturate(1.08);
 }
 .player-cover-placeholder {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: var(--te-standard-cover-size, 48px);
+  height: var(--te-standard-cover-size, 48px);
+  border-radius: var(--te-standard-cover-radius, 12px);
   background:
     radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.9), transparent 36%),
     linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(13, 148, 136, 0.12));
