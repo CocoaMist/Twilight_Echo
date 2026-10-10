@@ -30,7 +30,12 @@ test('saved theme colors reach the dashboard and player controls across tones an
       parse(await readFile(new URL('../TitleBar.vue', import.meta.url), 'utf8')).descriptor
         .styles[0].content,
       parse(await readFile(new URL('../icons/PlaybackIcon.vue', import.meta.url), 'utf8'))
-        .descriptor.styles[0].content
+        .descriptor.styles[0].content,
+      parse(await readFile(new URL('../SideMenu.vue', import.meta.url), 'utf8')).descriptor
+        .styles[0].content,
+      ...parse(
+        await readFile(new URL('../../App.vue', import.meta.url), 'utf8')
+      ).descriptor.styles.map((style) => style.content)
     ]
     const styles = sources.map((source) => {
       const style = compileStyle({
@@ -86,6 +91,12 @@ app.whenReady().then(async()=>{
       win.setSize(width,900)
       await win.webContents.executeJavaScript('window.checkStandardPlayerGeometry()')
     }
+    for(const width of [760,960,1380,1920]){
+      win.setSize(width,900)
+      await new Promise(resolve=>setTimeout(resolve,100))
+      await win.webContents.executeJavaScript('window.checkNavigationProportions()')
+    }
+    win.setSize(1380,900)
     for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact','dashboard'])for(const glass of [false,true]){
       const rect=await win.webContents.executeJavaScript('window.preparePlayerThemeHover('+JSON.stringify(tone)+','+JSON.stringify(mode)+','+glass+')')
       win.webContents.sendInputEvent({type:'mouseMove',x:Math.round(rect.x),y:Math.round(rect.y)})
@@ -323,6 +334,31 @@ window.checkStandardPlayerGeometry=async()=>{
     expect(controls.top-frame.top>=15.9,'transport has at least 16px top clearance: '+(controls.top-frame.top))
     expect(frame.bottom-progress.bottom>=7.9,'progress has at least 8px bottom clearance')
   }
+}
+window.checkNavigationProportions=async()=>{
+  clear()
+  const host=document.createElement('div')
+  host.innerHTML='<aside class="side-menu open" data-v-test><nav class="menu-items" data-v-test><div class="menu-nav" data-v-test><button class="menu-item" data-v-test><span class="item-icon" data-v-test>+</span><span class="item-label" data-v-test>流媒体音乐</span><i class="group-chevron" data-v-test>›</i></button></div></nav></aside><main class="main-content menu-open" data-v-test></main>'
+  document.body.append(host)
+  const menu=host.querySelector('.side-menu'),item=host.querySelector('.menu-item'),icon=host.querySelector('.item-icon'),label=host.querySelector('.item-label'),main=host.querySelector('.main-content')
+  for(const tone of ['pureWhite','dark'])for(const style of ['expanded','compact','rail'])for(const size of [14,18]){
+    const profile=store.createProfile('Navigation proportions')
+    profile.modes={...profile.modes,navigation:{...profile.modes?.navigation,style}}
+    await store.preview(profile);await store.setPreviewTone(tone)
+    document.documentElement.dataset.teMotion='off'
+    document.documentElement.style.setProperty('--te-font-size-body',size+'px','important')
+    await new Promise(requestAnimationFrame)
+    const frame=menu.getBoundingClientRect(),row=item.getBoundingClientRect(),glyph=icon.getBoundingClientRect()
+    const expected=style==='rail'?72:style==='compact'?size*192/14:Math.max(size*224/14,Math.min(innerWidth*.18,size*260/14))
+    expect(Math.abs(frame.width-expected)<1,'navigation mode width survives inline theme tokens: '+style+' '+frame.width+'/'+expected)
+    expect(Math.abs(parseFloat(getComputedStyle(main).paddingLeft)-(innerWidth>900?frame.width:0))<1,'content reserves sidebar width on desktop and overlays at narrow widths: '+JSON.stringify({style,width:frame.width,padding:getComputedStyle(main).paddingLeft,window:innerWidth}))
+    expect(glyph.left>=frame.left+8&&glyph.right<=frame.right-8,'navigation icon stays inside sidebar padding')
+    expect(row.left>=frame.left+7&&row.right<=frame.right-7,'navigation row has balanced inset')
+    if(style!=='rail')expect(label.scrollWidth<=label.clientWidth+1,'normal navigation label remains readable')
+    expect(frame.width<innerWidth*.4,'navigation leaves room for main content')
+  }
+  host.remove();document.documentElement.style.removeProperty('--te-font-size-body')
+  await store.preview(null)
 }
 window.checkSharedPlaybackGlyphs=async()=>{
   for(const tone of ['pureWhite','dark']){

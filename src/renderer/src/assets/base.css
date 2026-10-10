@@ -49,7 +49,7 @@
   --te-motion-press-scale: 0.97;
   --te-motion-hover-translate: -1px;
   --te-ui-scale: 0.94;
-  --te-menu-width: clamp(132px, 18vw, 216px);
+  --te-menu-width: clamp(224px, 18vw, 260px);
   --te-radius-global: 10px;
   --te-surface-opacity: 100%;
   /* Latin: Inter. CJK: packaged MiSans unicode-range subsets. */
