@@ -273,8 +273,8 @@
   --te-warning-soft-fg: #d97706;
   --te-danger-soft-bg: #fef2f2;
   --te-danger-soft-fg: #b91c1c;
-  --te-scrollbar-thumb: rgba(71, 85, 105, 0.34);
-  --te-scrollbar-thumb-hover: rgba(51, 65, 85, 0.56);
+  --te-scrollbar-thumb: rgba(71, 85, 105, 0.28);
+  --te-scrollbar-thumb-hover: rgba(51, 65, 85, 0.48);
   --te-back-button-bg: rgba(255, 255, 255, 0.9);
   --te-back-button-bg-hover: #ffffff;
   --te-back-button-border: rgba(15, 23, 42, 0.12);
@@ -294,8 +294,15 @@
 }
 
 :where(*)::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  /* Keep a fixed pointer target; only the painted thumb changes width. */
+  width: 10px !important;
+  height: 10px !important;
+}
+
+:where(*)::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 :where(*)::-webkit-scrollbar-track,
@@ -305,7 +312,7 @@
 
 :where(*)::-webkit-scrollbar-thumb {
   border: 3px solid transparent !important;
-  border-radius: 999px;
+  border-radius: 999px !important;
   background: transparent !important;
   background-clip: content-box !important;
   transition:
@@ -321,18 +328,33 @@
   .te-auto-scrollbar.is-scrollbar-near,
   .te-auto-scrollbar.is-scrollbar-active
 )::-webkit-scrollbar-thumb {
-  border-width: 2px !important;
+  border-width: 3px !important;
   background: var(--te-scrollbar-thumb) !important;
   background-clip: content-box !important;
+}
+
+:where(.te-auto-scrollbar.is-scrollbar-near)::-webkit-scrollbar-thumb {
+  border-width: 2px !important;
 }
 
 :where(
     .te-auto-scrollbar.is-scrollbar-near,
     .te-auto-scrollbar.is-scrollbar-active
   )::-webkit-scrollbar-thumb:hover {
-  border-width: 1px !important;
+  border-width: 2px !important;
   background: var(--te-scrollbar-thumb-hover) !important;
   background-clip: content-box !important;
+}
+
+/* Chromium ignores custom thumb geometry when the standard properties are
+   non-auto. Use the rounded painter here, retaining the standard fallback above.
+   Explicit `none !important` surfaces (lyrics, onboarding, compact navigation)
+   still opt out without changing their layout or scrolling behavior. */
+@supports selector(::-webkit-scrollbar) {
+  :where(*) {
+    scrollbar-color: auto !important;
+    scrollbar-width: auto !important;
+  }
 }
 
 /* Back controls use quiet neutral surfaces and a restrained blue navigation cue. */
@@ -600,8 +622,8 @@ html[data-te-motion='off'] *::after {
   --te-hover-bg: rgba(255, 255, 255, 0.065);
   --te-active-bg: rgba(245, 158, 11, 0.16);
   --te-shell-control-text: #f7f7f2;
-  --te-scrollbar-thumb: rgba(212, 212, 216, 0.34);
-  --te-scrollbar-thumb-hover: rgba(244, 244, 245, 0.58);
+  --te-scrollbar-thumb: rgba(212, 212, 216, 0.28);
+  --te-scrollbar-thumb-hover: rgba(244, 244, 245, 0.5);
   --te-back-button-bg: rgba(24, 24, 27, 0.88);
   --te-back-button-bg-hover: rgba(39, 39, 42, 0.96);
   --te-back-button-border: rgba(255, 255, 255, 0.14);
