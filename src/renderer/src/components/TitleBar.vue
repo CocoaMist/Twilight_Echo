@@ -116,30 +116,6 @@ function close(): void {
     }"
   >
     <div class="title-bar-background" aria-hidden="true"></div>
-    <!-- Keep the existing back affordance at the left edge, visible only while
-         the active surface has a return handler. -->
-    <div
-      class="title-bar-back"
-      :class="{
-        'title-bar-back-visible': canGoBack && !preview,
-        'no-drag': canGoBack && !preview
-      }"
-      :inert="!canGoBack || preview"
-      @pointerdown="setPressOrigin"
-    >
-      <Transition name="title-back-fade">
-        <button
-          type="button"
-          v-if="canGoBack && !preview"
-          class="back-btn"
-          :title="backHint ?? '返回'"
-          aria-label="返回"
-          @click="canGoBack && $emit('back')"
-        >
-          <TitleBarIcon name="arrow_left" />
-        </button>
-      </Transition>
-    </div>
     <div v-if="!glass && !hideStart" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
       <button
         type="button"
@@ -198,6 +174,29 @@ function close(): void {
         />
         <TitleBarIcon v-else name="person" />
       </button>
+    </div>
+    <!-- Keep commands anchored when a return handler becomes available. -->
+    <div
+      class="title-bar-back"
+      :class="{
+        'title-bar-back-visible': canGoBack && !preview,
+        'no-drag': canGoBack && !preview
+      }"
+      :inert="!canGoBack || preview"
+      @pointerdown="setPressOrigin"
+    >
+      <Transition name="title-back-fade">
+        <button
+          type="button"
+          v-if="canGoBack && !preview"
+          class="back-btn"
+          :title="backHint ?? '返回'"
+          aria-label="返回"
+          @click="canGoBack && $emit('back')"
+        >
+          <TitleBarIcon name="arrow_left" />
+        </button>
+      </Transition>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
       <button
@@ -339,6 +338,10 @@ function close(): void {
   align-items: center;
   justify-content: space-between;
   height: var(--te-titlebar-height, 35px);
+  box-sizing: border-box;
+  /* Match the outer icon centers: 36px commands, 46px Windows caption buttons.
+     Caption hit areas stay flush to the right edge for Windows pointer targets. */
+  padding-inline-start: 5px;
   flex-shrink: 0;
   background: transparent !important;
   user-select: none;
