@@ -899,9 +899,10 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
 
               <DashboardPlaybackProgress v-if="heroIsCurrent" />
 
-              <div v-if="heroIsCurrent" class="hero-actions">
+              <div v-if="heroTrack" class="hero-actions">
                 <button
                   type="button"
+                  v-if="heroIsCurrent"
                   class="transport-button"
                   title="上一首"
                   aria-label="上一首"
@@ -913,14 +914,15 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   type="button"
                   class="transport-button transport-play"
                   :style="{ '--play-button-color': playButtonColor }"
-                  :title="isPlaying ? '暂停' : '播放'"
-                  :aria-label="isPlaying ? '暂停' : '播放'"
-                  @click="togglePlay"
+                  :title="heroIsCurrent && isPlaying ? '暂停' : '播放'"
+                  :aria-label="heroIsCurrent && isPlaying ? '暂停' : '播放'"
+                  @click="heroIsCurrent ? togglePlay() : playDashboardTrack(heroTrack)"
                 >
-                  <PlaybackIcon :name="isPlaying ? 'pause' : 'play'" />
+                  <PlaybackIcon :name="heroIsCurrent && isPlaying ? 'pause' : 'play'" />
                 </button>
                 <button
                   type="button"
+                  v-if="heroIsCurrent"
                   class="transport-button"
                   title="下一首"
                   aria-label="下一首"
