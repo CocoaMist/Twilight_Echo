@@ -22,6 +22,7 @@ import {
 import { useMediaProviders } from '../providers'
 import { normalizeAccentColor } from '../utils/colorExtractor'
 import SmoothedProgressFill from './SmoothedProgressFill.vue'
+import PlayerSeekProgress from './player-bar/PlayerSeekProgress.vue'
 import { HIFI_STATUS_COPY } from '../../../shared/audioProcessingOptions.ts'
 import { resolveReasonCode } from '../../../shared/audio/reasonCodes.ts'
 import { useLocale } from '../app/useLocale.ts'
@@ -371,12 +372,6 @@ function onTrackTitleClick(event: Event): void {
   emitOpenPlayingPage(event.currentTarget instanceof HTMLElement ? event.currentTarget : null)
 }
 
-function onProgressInput(event: Event): void {
-  if (isLiveStream.value) return
-  const target = event.target as HTMLInputElement
-  seek(Number(target.value))
-}
-
 /**
  * The flat rails carry a 0..1 ratio so their width never has to match the
  * timeline. Shared by mini's long middle rail and compact's top-edge hairline.
@@ -455,16 +450,6 @@ function cyclePlaybackRate(): void {
   const next = RATE_PRESETS[(idx + 1) % RATE_PRESETS.length] ?? 1
   void setPlaybackRate(next)
 }
-
-const abLoopRangeStyle = computed(() => {
-  const total = effectiveDuration.value || 1
-  const a = Math.max(0, Math.min(abLoopA.value ?? 0, total))
-  const b = Math.max(a, Math.min(abLoopB.value ?? a, total))
-  return {
-    left: `${(a / total) * 100}%`,
-    width: `${((b - a) / total) * 100}%`
-  }
-})
 
 const activeResumeOffer = computed(() => {
   const offer = resumeOffer.value
@@ -2037,46 +2022,19 @@ onBeforeUnmount(() => {
           <button type="button" class="resume-offer__action" @click="onAcceptResume">继续</button>
           <button type="button" class="resume-offer__dismiss" @click="onDismissResume">忽略</button>
         </div>
-        <div
+        <PlayerSeekProgress
           v-if="region.name === 'center' && isStandard"
           :key="`progress:${currentTrack.id}:${currentTrack.queueEntryId || ''}`"
-          class="progress-area"
+          :position="currentTime"
+          :duration="effectiveDuration"
+          :live="isLiveStream"
+          :ab-start="abLoopA"
+          :ab-end="abLoopB"
+          :format-time="formatTime"
           :data-track-id="currentTrack.id"
           :data-entry-id="currentTrack.queueEntryId || ''"
-        >
-          <span class="time-label">{{ isLiveStream ? 'LIVE' : formatTime(currentTime) }}</span>
-          <div class="progress-slider-wrap">
-            <div class="progress-track" aria-hidden="true">
-              <SmoothedProgressFill
-                class="progress-fill"
-                :class="{ live: isLiveStream }"
-                :percent="progressPercent"
-              />
-            </div>
-            <div
-              v-if="abLoopA != null && abLoopB != null && effectiveDuration > 0 && !isLiveStream"
-              class="ab-loop-range"
-              :style="abLoopRangeStyle"
-              aria-hidden="true"
-            ></div>
-            <input
-              type="range"
-              :value="isLiveStream ? 0 : currentTime"
-              min="0"
-              :max="effectiveDuration || 1"
-              step="0.1"
-              class="progress-slider"
-              :class="{ live: isLiveStream }"
-              :disabled="isLiveStream"
-              :aria-valuenow="isLiveStream ? 0 : currentTime"
-              :aria-valuetext="isLiveStream ? 'LIVE' : formatTime(currentTime)"
-              @input="onProgressInput"
-            />
-          </div>
-          <span class="time-label">{{
-            isLiveStream ? 'LIVE' : formatTime(effectiveDuration)
-          }}</span>
-        </div>
+          @seek="seek"
+        />
         <div v-if="region.name === 'center' && isMini" class="mini-progress-rail">
           <div class="mini-progress-track" aria-hidden="true">
             <SmoothedProgressFill class="mini-progress-fill" :percent="progressPercent" />

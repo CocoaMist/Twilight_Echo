@@ -319,7 +319,7 @@ window.checkStandardPlayerGeometry=async()=>{
     expect(Math.abs(innerArt.width-art.width)<0.6&&Math.abs(innerArt.height-art.height)<0.6,'image and fallback fill the same artwork frame')
     expect(Math.abs(parseFloat(getComputedStyle(slot.firstElementChild).borderTopLeftRadius)-innerRadius)<0.6,'image and fallback use the frame radius')
     const controls=bar.querySelector('.player-controls').getBoundingClientRect()
-    const progress=bar.querySelector('.progress-area').getBoundingClientRect()
+    const progress=bar.querySelector('.progress-track').getBoundingClientRect()
     expect(controls.top-frame.top>=15.9,'transport has at least 16px top clearance: '+(controls.top-frame.top))
     expect(frame.bottom-progress.bottom>=7.9,'progress has at least 8px bottom clearance')
   }
@@ -418,7 +418,8 @@ window.preparePlayerThemeHover=async(tone,mode,glass)=>{
   return {x:rect.x+rect.width/2,y:rect.y+rect.height/2}
 }
 window.checkPlayerThemeHover=()=>{
-  expect(hoverTarget.matches(':hover'),'play button receives hover')
+  const hoverRect=hoverTarget.getBoundingClientRect()
+  expect(hoverTarget.matches(':hover'),'play button receives hover: '+document.documentElement.dataset.theme+' '+bar.className+' '+JSON.stringify({x:hoverRect.x,y:hoverRect.y,w:hoverRect.width,h:hoverRect.height,hit:document.elementFromPoint(hoverRect.x+hoverRect.width/2,hoverRect.y+hoverRect.height/2)?.outerHTML.slice(0,200)}))
   checkBackground(hoverTarget,colors[document.documentElement.dataset.theme]['playback.control.hoverSurface'],'custom play hover '+bar.className+' '+getComputedStyle(hoverTarget).getPropertyValue('--te-player-bar-play-hover-surface'))
 }
 window.checkReloadedPlayerTheme=async()=>{
