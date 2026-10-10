@@ -842,11 +842,11 @@
 }
 
 /* Standard bar: 12px artwork inset and 22px/10px concentric corners.
-   Reserve 8px above and below transport + progress, including enlarged type. */
+   Reserve 16px above transport and 8px below progress, including enlarged type. */
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) {
   --te-standard-bar-height: calc(
     max(var(--te-player-play-size, 44px), var(--te-player-control-size, 32px)) +
-      max(24px, calc(var(--te-font-size-body, 14px) * 11 / 14 * 1.65 + 6px)) + 16px
+      max(24px, calc(var(--te-font-size-body, 14px) * 11 / 14 * 1.65 + 6px)) + 24px
   );
   --te-standard-cover-size: calc(var(--te-standard-bar-height) - 24px);
   --te-standard-cover-radius: 10px;
@@ -855,6 +855,7 @@
 }
 
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) > .player-center {
+  padding-top: 8px;
   transform: none;
 }
 

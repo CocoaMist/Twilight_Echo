@@ -293,7 +293,7 @@ window.checkStandardPlayerGeometry=async()=>{
     expect(Math.abs(parseFloat(getComputedStyle(slot.firstElementChild).borderTopLeftRadius)-innerRadius)<0.6,'image and fallback use the frame radius')
     const controls=bar.querySelector('.player-controls').getBoundingClientRect()
     const progress=bar.querySelector('.progress-area').getBoundingClientRect()
-    expect(controls.top-frame.top>=7.9,'transport has at least 8px top clearance: '+(controls.top-frame.top))
+    expect(controls.top-frame.top>=15.9,'transport has at least 16px top clearance: '+(controls.top-frame.top))
     expect(frame.bottom-progress.bottom>=7.9,'progress has at least 8px bottom clearance')
   }
 }
