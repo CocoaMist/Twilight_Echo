@@ -38,26 +38,26 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-preview
 html .settings-preview-page[data-settings-layout='categories'] .settings-command-bar {
   padding: 0;
 }
-html .settings-preview-page[data-settings-layout='categories'] .settings-category-items {
+html .settings-preview-page[data-settings-layout='categories'] .settings-nav-categories {
   display: grid;
   width: 100%;
-  gap: 16px;
+  gap: 6px;
+  padding: 0;
   max-height: calc(100vh - 176px);
   overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
 }
-html .settings-preview-page[data-settings-layout='categories'] .settings-category-group {
-  display: grid;
-  gap: 6px;
+html
+  .settings-preview-page[data-settings-layout='categories']
+  .settings-nav-categories::-webkit-scrollbar {
+  display: block;
+  width: 4px;
 }
-html .settings-preview-page[data-settings-layout='categories'] .settings-category-group-title {
-  margin: 0;
-  padding: 4px 16px;
-  color: var(--te-settings-text-muted);
-  font-size: calc(var(--te-font-size-body, 14px) * 0.85714);
-  font-weight: 500;
-  line-height: 1.5;
+html .settings-preview-page[data-settings-layout='categories'] .preview-nav-item {
+  width: 100%;
 }
-/* One hierarchy and row rhythm for the nine settings panels. Theme material,
+/* One hierarchy and row rhythm for the seven settings panels. Theme material,
    fonts, outer panels and functional previews retain their existing skin. */
 html .settings-preview-page[data-settings-layout='categories'] .settings-page-title {
   font-size: calc(var(--te-font-size-body, 14px) * 2);
@@ -69,7 +69,7 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-page-de
 html
   .settings-preview-page[data-settings-layout='categories']
   .preview-section
-  > .section-title-row {
+  > :is(.section-title-row, .settings-section-description) {
   display: none;
 }
 html .settings-preview-page[data-settings-layout='categories'] .setting-list {
@@ -391,7 +391,7 @@ html[data-theme='dark']
     border-radius: 20px;
     gap: 8px;
   }
-  html .settings-preview-page[data-settings-layout='categories'] .settings-category-items {
+  html .settings-preview-page[data-settings-layout='categories'] .settings-nav-categories {
     display: none;
   }
   html .settings-preview-page[data-settings-layout='categories'] .settings-category-select {
@@ -527,4 +527,21 @@ html .settings-preview-page[data-settings-layout='categories'] #desktopLyrics .l
     width: 100%;
     min-width: 0;
   }
+}
+
+/* Navigation feedback changes its surface without shifting nearby labels. */
+html
+  .settings-preview-page[data-settings-layout='categories']
+  .preview-nav-item:is(:hover, :active),
+html
+  .settings-preview-page[data-settings-layout='categories']
+  .preview-nav-item:is(:hover, :active)
+  :is(i, span) {
+  transform: none;
+  translate: none;
+  scale: 1;
+}
+html .settings-preview-page[data-settings-layout='categories'] .preview-nav-item:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: -2px;
 }
