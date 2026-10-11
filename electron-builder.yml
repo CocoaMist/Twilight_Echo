@@ -48,7 +48,56 @@ extraResources:
   - from: resources/audio-engine
     to: audio-engine
     filter:
-      - '**/*'
+      - twilight-audio-engine.dll
+      - libtwilight-audio-engine.so
+      - libtwilight-audio-engine.dylib
+      - twilight_audio_node.node
+      - twilight_smtc_node.node
+      - twilight-asio-helper.exe
+      - twilight-vst3-host.exe
+      - twilight-vst3-scanner.exe
+      - audio-capabilities.json
+      - release-capability-status.json
+      - 'msvcp140*.dll'
+      - 'vcruntime140*.dll'
+      - libstdc++-6.dll
+      - libgcc_s_seh-1.dll
+      - libwinpthread-1.dll
+      - 'libmcfgthread-*.dll'
+      - 'libavcodec*'
+      - 'libavformat*'
+      - 'libavutil*'
+      - 'libavfilter*'
+      - 'libswresample*'
+      - 'libswscale*'
+      - 'avcodec-*.dll'
+      - 'avformat-*.dll'
+      - 'avutil-*.dll'
+      - 'swresample-*.dll'
+      - 'libebur128*'
+      - 'libsoxr*'
+      - 'libavdevice*'
+      - 'libavresample*'
+      - 'libssl.*.dylib'
+      - 'libcrypto.*.dylib'
+      - 'libx264.*.dylib'
+      - 'libx265.*.dylib'
+      - 'libvpx.*.dylib'
+      - 'libopus.*.dylib'
+      - 'libmp3lame.*.dylib'
+      - 'libvorbis*.dylib'
+      - 'libogg.*.dylib'
+      - 'libaom.*.dylib'
+      - 'libdav1d.*.dylib'
+      - 'libsnappy.*.dylib'
+      - 'liblzma.*.dylib'
+      - automix-native/beat-this.tamg
+      - automix-native/yamnet.tamg
+      - automix-native/manifest.json
+      - automix-native/Beat-This-LICENSE.txt
+      - automix-native/YAMNet-LICENSE.txt
+      - automix-native/Signalsmith-Stretch-LICENSE.txt
+      - automix-native/Signalsmith-Linear-LICENSE.txt
   - from: resources/plugins
     to: plugins
     filter:
