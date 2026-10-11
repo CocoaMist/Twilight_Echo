@@ -110,11 +110,3 @@ export function normalizeNativePlaybackInfo<T extends PlaybackInfo>(info: T): T 
     dsdRate
   } as T
 }
-
-export function mergeAutoMixPlaybackInfo(
-  current: PlaybackInfo | null,
-  incoming: PlaybackInfo
-): PlaybackInfo {
-  // Settings capability refreshes must not move a restored or playing track.
-  return current ? { ...current, autoMix: incoming.autoMix } : normalizeNativePlaybackInfo(incoming)
-}

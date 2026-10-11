@@ -1,7 +1,6 @@
+import { AutoMixStemService, findAutoMixStemPack } from './autoMixStemService.ts'
 import { IPC } from '../../shared/ipcChannels.ts'
 import { resolveAuthorizationBatch } from '../security/authorizationBatch.ts'
-import { providerPlaybackSources } from '../security/providerPlaybackSources.ts'
-import { createAutoMixOnlineResolver } from './autoMixOnlineSource.ts'
 import { DspAuditionManager } from './dspAuditionManager.ts'
 import { createDspAuditionHandlers } from './dspAuditionIpc.ts'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
@@ -78,6 +77,10 @@ import {
 } from '../security/ipcValidation.ts'
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
 import { remoteMediaGrants } from '../security/remoteMediaGrants.ts'
+import { TwilightAutoMixCoordinator } from './twilightAutoMixCoordinator.ts'
+import { TwilightAutoMixWindowCache } from './twilightAutoMixCache.ts'
+import { providerPlaybackIdentities } from './providerPlaybackIdentity.ts'
+import { TWILIGHT_AUTOMIX_AVAILABLE, effectiveAutoMixMode } from '../../shared/twilightAutoMix.ts'
 import {
   grantUserSelectedImpulseResponse,
   grantUserSelectedVst3SearchPath,
@@ -323,6 +326,7 @@ function initializeAudioDiagnostics(): AudioDiagnosticRecorder {
     }
   })
   recorder.record('session-start', {
+    nativeRuntime: runtime.audioEngineManager?.getNativeRuntimeIdentity(),
     selectedOutput: {
       output: runtime.appSettings.audioOutput,
       device: runtime.appSettings.audioDevice,
@@ -601,15 +605,67 @@ async function initializeAudioEngineRuntime(): Promise<void> {
     }
   )
   runtime.audioEngineManager.setLoudnessAnalysisManager(runtime.loudnessAnalysisManager)
-  runtime.audioEngineManager.setAutoMixAnalysisService(
-    () => runtime.audioAnalysisService,
-    join(app.getPath('userData'), 'automix-features'),
-    createAutoMixOnlineResolver({
-      registry: providerPlaybackSources,
-      callProvider: async (...args) => runtime.pluginManager?.callProvider(...args) ?? null,
-      authorize: resolveAuthorizedPlaybackSource
+  const mixEngine = runtime.audioEngineManager
+  const stemService = new AutoMixStemService(
+    join(app.getPath('userData'), 'automix-stems-v2'),
+    () =>
+      findAutoMixStemPack([
+        ...(process.env.TWILIGHT_AUTOMIX_STEM_PACK ? [process.env.TWILIGHT_AUTOMIX_STEM_PACK] : []),
+        join(app.getPath('exe'), '..', 'automix-enhancement'),
+        join(process.resourcesPath, '..', 'automix-enhancement')
+      ]),
+    () => runtime.appSettings.autoMixStemMode === 'auto',
+    (resources) => audioDiagnosticRecorder?.record('automix-stems', resources),
+    () => runtime.appSettings.autoMixStemCacheMiB
+  )
+  mixEngine.setAutoMixCoordinator(
+    new TwilightAutoMixCoordinator({
+      context: () => mixEngine.getAutoMixContext(),
+      authorize: resolveAuthorizedPlaybackSource,
+      sourceRevision: (source) => providerPlaybackIdentities.revision(source),
+      assertSource: (source) => providerPlaybackIdentities.assertCurrent(source),
+      onState: (state, reason) => mixEngine.reportAutoMixAnalysisState(state, reason),
+      onNativePreparation: () => mixEngine.clearAutoMixAnalysisState(),
+      scopedCancellation: true,
+      select: (request) => stemService.select(request, (json) => mixEngine.selectAutoMix(json)),
+      stems: (selection, _request, signal) =>
+        stemService.prepare(
+          selection,
+          () => mixEngine.getAutoMixContext()?.info.position ?? 0,
+          signal
+        ),
+      releaseMaterials: (selection) => stemService.release(selection),
+      onDiagnostic: (entry) => audioDiagnosticRecorder?.record('automix-prepare', entry),
+      analyze: (source, options, priority, signal) => {
+        if (!runtime.audioAnalysisService)
+          return Promise.reject(new Error('analysis_service_unavailable'))
+        return runtime.audioAnalysisService.analyzeAutoMix(source, options, {
+          priority: priority === 'boundary' ? 90 : -20,
+          signal
+        })
+      },
+      cancelAnalysis: (source) => {
+        runtime.audioAnalysisService?.cancelBySource(source, 'automix')
+      },
+      prepare: (request) => mixEngine.prepareAutoMix(request),
+      submit: (id) => mixEngine.submitAutoMix(id),
+      cancel: () => mixEngine.cancelAutoMix(),
+      status: () => mixEngine.getAutoMixNativeStatus(),
+      cache: new TwilightAutoMixWindowCache(
+        join(app.getPath('userData'), 'twilight-automix-windows.json')
+      )
     })
   )
+  providerPlaybackIdentities.on('changed', (sources: string[]) => {
+    const context = mixEngine.getAutoMixContext()
+    if (
+      context &&
+      sources.some((source) => source === context.current.source || source === context.next.source)
+    )
+      mixEngine.invalidateAutoMixSource()
+  })
+  if (TWILIGHT_AUTOMIX_AVAILABLE)
+    await mixEngine.setAutoMixMode(effectiveAutoMixMode(runtime.appSettings.autoMixMode))
   runtime.vst3Catalog = new Vst3CatalogService(join(app.getPath('userData'), 'dsp-vst3'), {
     scan: (modulePath) => requireAudioEngine().scanVst3Module(modulePath)
   })

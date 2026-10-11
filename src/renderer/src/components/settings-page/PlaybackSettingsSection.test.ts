@@ -96,7 +96,10 @@ test('playback policy and target rate survive settings reload and component reop
           pinia: resolve(require.resolve('pinia'), '../dist/pinia.mjs')
         }
       },
-      define: { 'process.env.NODE_ENV': '"production"' },
+      define: {
+        'process.env.NODE_ENV': '"production"',
+        __TWILIGHT_AUTOMIX_EVALUATION__: 'true'
+      },
       build: {
         outDir: 'bundle',
         minify: false,
@@ -140,7 +143,7 @@ import {normalizeOutputConfig} from '@shared/audioOutputConfig.ts'
 import {createAudioOutputController} from '@renderer/stores/player/audioOutputController.ts'
 export const persisted=ref(normalizeOutputConfig({pcmToDsdMode:'dsd128',dsdMutePreRollFrames:1024}))
 export const engine=ref({...persisted.value})
-export const appSettings=ref({audioOutputConfig:{...persisted.value},sleepTimer:{defaultMinutes:30,fadeSeconds:0}})
+export const appSettings=ref({autoMixMode:'off',autoMixStemMode:'auto',autoMixStemCacheMiB:512,audioOutputConfig:{...persisted.value},sleepTimer:{defaultMinutes:30,fadeSeconds:0}})
 export const audioOutputConfig=ref(normalizeOutputConfig())
 /* ACTUAL_WATCHER */
 const audioProcessing=ref(/* ACTUAL_PROCESSING */)
@@ -148,7 +151,7 @@ const exclusiveMode=ref(false)
 const audioOutputConfigApplyStatus=ref({state:'idle',requestedRevision:0,appliedRevision:0,failedRevision:0,error:''})
 const controller=createAudioOutputController({exclusiveMode,audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,dspOutputStage:ref({}),dspStereoImage:ref({}),getAudioEngineApi:()=>({setOutputConfig:async config=>{engine.value=normalizeOutputConfig(config);persisted.value={...engine.value};return {...engine.value}},getOutputConfigApplyStatus:async()=>({state:'applied',requestedRevision:1,appliedRevision:1,failedRevision:0,error:''})}),setAudioEngineError:()=>{},refreshPlaybackInfo:async()=>{},scheduleCrossfadeIfNeeded:()=>{}})
 export const useAudioOutputDspStore=defineStore('policy-output',()=>({exclusiveMode,audioOutput:ref('wasapi'),audioDevice:ref('auto'),audioOutputOptions:ref([]),audioDeviceOptions:ref([]),audioOutputDeviceOptions:ref([]),audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,playbackInfo:ref(null),outputInfo:ref(null),audioEngineError:ref(null),...controller,refreshAudioOutputState:async()=>{}}))
-export const useSettingsStore=()=>({settings:appSettings,updateSettings:async()=>{}})
+export const useSettingsStore=()=>({settings:appSettings,updateSettings:async patch=>{appSettings.value={...appSettings.value,...patch}}})
 export const usePlayerStore=()=>({volume:ref(.7),setVolume:()=>{},setUnityVolume:()=>{}})
 export const reload=()=>{appSettings.value={...appSettings.value,audioOutputConfig:JSON.parse(JSON.stringify(persisted.value))}}
 `
@@ -166,7 +169,24 @@ window.runPolicyTests=async()=>{
  app.use(createPinia());app.mount('#app');await settle()
  const policy=()=>document.querySelector('select[aria-label="连续播放策略"]')
  const rate=()=>document.querySelector('select[aria-label="连续播放目标采样率"]')
+ const autoMix=()=>document.querySelector('select[aria-label="Twilight AutoMix 模式"]')
+ const stemCache=()=>document.querySelector('select[aria-label="分轨缓存容量"]')
  const change=async(select,value)=>{select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}));await settle()}
+ expect(autoMix()&&!autoMix().disabled&&autoMix().value==='off','evaluation must expose an initially disabled-by-choice AutoMix selector')
+ expect(document.body.textContent.includes('人工验收版本'),'evaluation status must remain distinct from release acceptance')
+ expect(stemCache().value==='512','stem cache default must be 512 MiB')
+ for(const capacity of ['0','256','512','1024','2048']){
+  await change(stemCache(),capacity)
+  expect(appSettings.value.autoMixStemCacheMiB===Number(capacity),'stem cache choice did not persist')
+  open.value=false;await settle();reload();await settle();open.value=true;await settle()
+  expect(stemCache().value===capacity,'stem cache choice was lost on component reopen')
+ }
+ for(const desired of ['natural','dj','off']){
+  await change(autoMix(),desired)
+  expect(appSettings.value.autoMixMode===desired,'manual AutoMix choice did not reach the settings boundary')
+  open.value=false;await settle();reload();await settle();open.value=true;await settle()
+  expect(autoMix().value===desired&&!autoMix().disabled,'manual AutoMix choice was lost on component reopen')
+ }
  for(const desired of ['continuity-first','bit-perfect-first','continuity-first']){
   await change(policy(),desired)
   if(desired==='continuity-first')await change(rate(),'96000')

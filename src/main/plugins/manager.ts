@@ -1,5 +1,6 @@
 import { app, dialog, shell, utilityProcess, type UtilityProcess } from 'electron'
 import { randomUUID } from 'crypto'
+import { providerPlaybackIdentities } from '../audio/providerPlaybackIdentity.ts'
 import { existsSync, mkdirSync, statSync } from 'fs'
 import { cp, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { basename, dirname, extname, join, resolve } from 'path'
@@ -58,10 +59,6 @@ import {
 } from './packageSecurity.ts'
 import { redactSensitiveText } from '../security/secureStorage.ts'
 import { protectProviderMedia } from '../security/remoteMediaGrants.ts'
-import {
-  providerAudioIdentity,
-  providerPlaybackSources
-} from '../security/providerPlaybackSources.ts'
 import { normalizeThemeContribution, normalizeUiContribution } from './themeContribution.ts'
 import { QISHUI_PLUGIN_ID, QishuiAuthBridge } from './qishuiAuthBridge.ts'
 import {
@@ -115,7 +112,14 @@ export interface TwilightPluginManagerOptions {
     officialLogin: () => Promise<string>
     getCachedSong: (songId: number) => Promise<string | null>
     cacheSong: (songId: number, url: string, fileName?: string) => Promise<string | null>
+    prepareAutoMixSong?: (
+      songId: number,
+      url: string,
+      fileName: string | undefined,
+      options: { signal?: AbortSignal; expiresAt?: number | null; expectedBytes?: number | null }
+    ) => Promise<string | null>
   }
+  autoMixEnabled?: () => boolean
   getPlaybackInfo: () => Promise<unknown> | unknown
   applyNativeDspPluginChain: (chainJson: string) => Promise<void> | void
   player: {
@@ -182,8 +186,8 @@ interface ProviderRpcMetadata {
   providerId: string
   pluginId: string
   method: TwilightMediaProviderMethod
-  playbackArgs?: unknown[]
-  returnSourceIdentity?: boolean
+  playbackTrackId?: string
+  playbackQuality?: string
 }
 
 interface UiCommandRpcMetadata {
@@ -196,9 +200,6 @@ export interface TwilightProviderCallOptions {
   idempotencyKey?: string
   /** Cancels queued or active plugin RPC work and propagates cancellation to the provider host. */
   signal?: AbortSignal
-  /** Main-process source refresh must keep the original provider owner. */
-  expectedPluginId?: string
-  returnAutoMixSourceIdentity?: boolean
 }
 
 const STATE_FILE = 'plugin-state.json'
@@ -236,6 +237,7 @@ export class TwilightPluginManager extends EventEmitter {
   private readonly bundledPlugins: NonNullable<TwilightPluginManagerOptions['bundledPlugins']>
   private readonly ncm: TwilightPluginManagerOptions['ncm']
   private readonly getPlaybackInfo: TwilightPluginManagerOptions['getPlaybackInfo']
+  private readonly autoMixEnabled: TwilightPluginManagerOptions['autoMixEnabled']
   private readonly applyNativeDspPluginChain: TwilightPluginManagerOptions['applyNativeDspPluginChain']
   private readonly player: TwilightPluginManagerOptions['player']
   private readonly getProxyEnv: TwilightPluginManagerOptions['getProxyEnv']
@@ -271,6 +273,7 @@ export class TwilightPluginManager extends EventEmitter {
     this.bundledPlugins = options.bundledPlugins ?? []
     this.ncm = options.ncm
     this.getPlaybackInfo = options.getPlaybackInfo
+    this.autoMixEnabled = options.autoMixEnabled
     this.applyNativeDspPluginChain = options.applyNativeDspPluginChain
     this.player = options.player
     this.getProxyEnv = options.getProxyEnv
@@ -754,23 +757,6 @@ export class TwilightPluginManager extends EventEmitter {
           : `Provider 未启用：${normalizedProviderId}`
       )
     }
-    if (options.expectedPluginId && options.expectedPluginId !== running.descriptor.id) {
-      throw new Error('Playback source provider owner changed')
-    }
-    const playbackArgs = method === 'getPlaybackUrl' ? structuredClone(args) : undefined
-    const invocationArgs = playbackArgs
-      ? [
-          args[0],
-          {
-            ...(args[1] && typeof args[1] === 'object' && !Array.isArray(args[1])
-              ? (args[1] as Record<string, unknown>)
-              : {}),
-            autoMixSource: true
-          },
-          ...args.slice(2)
-        ]
-      : args
-
     this.hostIdle?.touch(running.descriptor.id)
     const requestId = randomUUID()
     const idempotencyKey = resolveProviderIdempotencyKey(method, options.idempotencyKey)
@@ -783,10 +769,10 @@ export class TwilightPluginManager extends EventEmitter {
         providerId: normalizedProviderId,
         pluginId: running.descriptor.id,
         method,
-        ...(playbackArgs
+        ...(method === 'getPlaybackUrl'
           ? {
-              playbackArgs,
-              returnSourceIdentity: options.returnAutoMixSourceIdentity === true
+              playbackTrackId: String((args[0] as { id?: unknown } | null)?.id ?? ''),
+              playbackQuality: String((args[1] as { quality?: unknown } | null)?.quality ?? 'auto')
             }
           : {})
       },
@@ -797,7 +783,17 @@ export class TwilightPluginManager extends EventEmitter {
           requestId,
           providerId: normalizedProviderId,
           method,
-          args: invocationArgs,
+          args:
+            method === 'getPlaybackUrl' && running.descriptor.id === 'com.twilightecho.provider.ncm'
+              ? [
+                  args[0],
+                  {
+                    ...(args[1] && typeof args[1] === 'object' ? args[1] : {}),
+                    _twilightSourceIdentity: true,
+                    _twilightAutoMixPrepare: this.autoMixEnabled?.() === true
+                  }
+                ]
+              : args,
           idempotencyKey
         } satisfies PluginHostRequest)
       },
@@ -1410,7 +1406,8 @@ export class TwilightPluginManager extends EventEmitter {
     }
     if (message.kind === 'api-call') {
       const controller =
-        message.namespace === 'internal' && message.method === 'ncmRequest'
+        message.namespace === 'internal' &&
+        (message.method === 'ncmRequest' || message.method === 'ncmPrepareAutoMixSong')
           ? new AbortController()
           : null
       const requestKey = controller ? this.internalNcmRequestKey(id, message.requestId) : null
@@ -1635,6 +1632,26 @@ export class TwilightPluginManager extends EventEmitter {
       if (typeof url !== 'string') throw new Error('ncmCacheSong url 必须是字符串')
       return this.ncm.cacheSong(songId, url, typeof fileName === 'string' ? fileName : undefined)
     }
+    if (message.method === 'ncmPrepareAutoMixSong') {
+      if (this.autoMixEnabled?.() !== true || !this.ncm.prepareAutoMixSong) return null
+      const [rawId, url, fileName, rawMeta] = message.args
+      const songId = Number(rawId)
+      if (!Number.isSafeInteger(songId) || songId <= 0 || typeof url !== 'string') return null
+      const meta =
+        rawMeta && typeof rawMeta === 'object' ? (rawMeta as Record<string, unknown>) : {}
+      const positive = (value: unknown): number | null =>
+        typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+      return this.ncm.prepareAutoMixSong(
+        songId,
+        url,
+        typeof fileName === 'string' ? fileName : undefined,
+        {
+          signal,
+          expiresAt: positive(meta.expiresAt),
+          expectedBytes: positive(meta.expectedBytes)
+        }
+      )
+    }
     throw new Error('未知内部 API')
   }
 
@@ -1779,7 +1796,7 @@ export class TwilightPluginManager extends EventEmitter {
           ? (message.value as Record<string, unknown>)
           : null
       const playbackSource = envelope?.streamUrl ?? message.value
-      if (envelope && typeof playbackSource === 'string' && !metadata.returnSourceIdentity) {
+      if (envelope && typeof playbackSource === 'string') {
         value = (value as Record<string, unknown>).streamUrl
       }
       const completion = this.rpcCalls.complete<ProviderRpcMetadata>(pluginId, message.requestId, {
@@ -1787,14 +1804,13 @@ export class TwilightPluginManager extends EventEmitter {
         value
       })
       if (completion.status !== 'settled') return
-      const identity = providerAudioIdentity(envelope?.autoMixIdentity)
-      if (typeof playbackSource === 'string' && identity && metadata.playbackArgs) {
-        providerPlaybackSources.register(playbackSource, {
-          providerId: metadata.providerId,
-          pluginId: metadata.pluginId,
-          args: metadata.playbackArgs,
-          identity
-        })
+      if (metadata.method === 'getPlaybackUrl' && metadata.playbackTrackId) {
+        providerPlaybackIdentities.record(
+          metadata.providerId,
+          metadata.playbackTrackId,
+          metadata.playbackQuality ?? 'auto',
+          message.value
+        )
       }
       if (metadata.method === 'getPlaybackUrl' && isPluginHostedPlaybackUrl(playbackSource)) {
         const running = this.running.get(pluginId)

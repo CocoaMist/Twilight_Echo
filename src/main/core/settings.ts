@@ -1,5 +1,10 @@
 import { normalizeNavigationPagePreferences } from '../../shared/navigationPages.ts'
 import {
+  normalizeAutoMixMode,
+  normalizeAutoMixStemMode,
+  normalizeAutoMixStemCacheMiB
+} from '../../shared/twilightAutoMix.ts'
+import {
   DEFAULT_DOWNLOAD_PREFERENCES,
   normalizeDownloadPreferences
 } from '../../shared/downloadPreferences.ts'
@@ -238,6 +243,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   audioDevice: 'auto',
   audioExclusiveMode: false,
   audioExclusiveAutoRelease: false,
+  autoMixMode: 'off',
+  autoMixStemMode: 'auto',
+  autoMixStemCacheMiB: 512,
   audioOutputConfig: {
     ...normalizeContinuityOutputConfig({}),
     preferredBufferSize: 0,
@@ -736,6 +744,9 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     audioDevice: normalizeAudioDevice(settings.audioDevice),
     audioExclusiveMode: settings.audioExclusiveMode === true,
     audioExclusiveAutoRelease: settings.audioExclusiveAutoRelease === true,
+    autoMixMode: normalizeAutoMixMode(settings.autoMixMode),
+    autoMixStemMode: normalizeAutoMixStemMode(settings.autoMixStemMode),
+    autoMixStemCacheMiB: normalizeAutoMixStemCacheMiB(settings.autoMixStemCacheMiB),
     audioOutputConfig: normalizeOutputConfig(settings.audioOutputConfig),
     audioDeviceProfiles: deviceProfiles,
     audioProcessing,

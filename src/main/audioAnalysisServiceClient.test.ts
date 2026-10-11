@@ -39,6 +39,55 @@ const measurement = {
   analyzedAt: '2026-09-14T00:00:00Z'
 }
 
+test('AutoMix stays single concurrency in a four-worker pool while other analysis can proceed', async () => {
+  const children: Worker[] = []
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    maxConcurrency: 4,
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const child = new Worker()
+          children.push(child)
+          return child
+        }
+      }
+    }
+  })
+  const unavailable = {
+    ok: false,
+    algorithm: 'Twilight AutoMix',
+    reason: 'public_assets_unavailable'
+  }
+  try {
+    const first = service.analyzeAutoMix('first.flac', '{}')
+    const second = service.analyzeAutoMix('second.flac', '{}')
+    const third = service.analyzeAutoMix('third.flac', '{}')
+    assert.equal(children.length, 1)
+    children[0].ready()
+    const loudness = service.analyzeLoudness('other.flac', '{}')
+    assert.equal(children.length, 2)
+    children[1].ready()
+    assert.equal(service.getStatus().active, 2)
+    assert.equal(service.getStatus().queued, 2)
+    assert.equal((children[1].messages[0] as AudioAnalysisWorkerRequest).analysis, 'loudness')
+    children[1].respond(0, measurement)
+    await loudness
+    assert.equal(children[1].messages.length, 1)
+    children[0].respond(0, unavailable)
+    await first
+    assert.equal((children[0].messages[1] as AudioAnalysisWorkerRequest).source, 'second.flac')
+    assert.equal(children[1].messages.length, 1)
+    children[0].respond(1, unavailable)
+    await second
+    children[0].respond(2, unavailable)
+    await third
+    assert.equal(service.getStatus().active, 0)
+  } finally {
+    service.destroy()
+  }
+})
+
 test('DSP audition rejects unprocessed native results and cancellation is isolated from loudnorm', async () => {
   const worker = new Worker()
   const service = new AudioAnalysisServiceClient({
@@ -228,3 +277,72 @@ test('analysis workers fork only for waiting demand and are reclaimed after idli
 function worker0Respond(worker: Worker, index: number): void {
   worker.respond(index, measurement)
 }
+
+test('request cancellation retires only its ID even when a new task uses the same source', async () => {
+  const workers: Worker[] = []
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    maxConcurrency: 1,
+    restartDelayMs: 1,
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const w = new Worker()
+          workers.push(w)
+          return w
+        }
+      }
+    }
+  })
+  try {
+    const abort = new AbortController()
+    const first = service.analyzeAutoMix('same.flac', '{}', { signal: abort.signal })
+    const rejected = assert.rejects(first, (e: any) => e.code === 'ERR_AUDIO_ANALYSIS_CANCELLED')
+    workers[0].ready()
+    const second = service.analyzeAutoMix('same.flac', '{}', { priority: 90 })
+    abort.abort()
+    await rejected
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(workers.length, 2)
+    workers[1].ready()
+    const fallback = { ok: false, algorithm: 'Twilight AutoMix', reason: 'missing_boundary_beats' }
+    workers[1].respond(0, fallback)
+    assert.deepEqual(await second, fallback)
+  } finally {
+    service.destroy()
+  }
+})
+
+test('new boundary preempts background AutoMix and survives late worker responses', async () => {
+  const workers: Worker[] = []
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    maxConcurrency: 1,
+    restartDelayMs: 1,
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const w = new Worker()
+          workers.push(w)
+          return w
+        }
+      }
+    }
+  })
+  try {
+    const old = service.analyzeAutoMix('old.flac', '{}', { priority: -20 })
+    const rejected = assert.rejects(old, (e: any) => e.code === 'ERR_AUDIO_ANALYSIS_PREEMPTED')
+    workers[0].ready()
+    const boundary = service.analyzeAutoMix('new.flac', '{}', { priority: 90 })
+    await rejected
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(workers[0].kills, 1)
+    workers[1].ready()
+    const fallback = { ok: false, algorithm: 'Twilight AutoMix', reason: 'low_beat_confidence' }
+    workers[0].respond(0, { ok: false, algorithm: 'Twilight AutoMix', reason: 'stale' })
+    workers[1].respond(0, fallback)
+    assert.deepEqual(await boundary, fallback)
+  } finally {
+    service.destroy()
+  }
+})

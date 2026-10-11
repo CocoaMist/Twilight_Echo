@@ -16,7 +16,6 @@ import {
   type Vst3ScanDescriptor
 } from '../../shared/dspGraph.ts'
 import type { DspStatePayload } from '../../shared/audioServiceContract.ts'
-import { normalizeAutoMix } from '../../shared/autoMix.ts'
 import type {
   AudioEngineConfig,
   AudioEngineManagerDependencies,
@@ -90,9 +89,6 @@ export class DspOrchestrator {
   private readonly vst3ModuleResolver?: AudioEngineManagerDependencies['vst3ModuleResolver']
   private readonly vst3StateAssetResolver?: AudioEngineManagerDependencies['vst3StateAssetResolver']
   private masterSwitchExplicit = false
-  private nativeAutoMixConfigJson = ''
-  private nativeAutoMixGeneration = 0
-  private autoMixConfigSync: Promise<void> = Promise.resolve()
   outputStageOverride: DspOutputStageConfig | null = null
   lastNativeDspPluginStatusCache: {
     readAt: number
@@ -228,8 +224,6 @@ export class DspOrchestrator {
   }
 
   resetAfterServiceCrash(reason: string): void {
-    ++this.nativeAutoMixGeneration
-    this.nativeAutoMixConfigJson = ''
     this.dspGraphAppliedRevision = 0
     this.dspGraphApplyState = 'failed'
     this.dspGraphApplyError = reason
@@ -333,10 +327,7 @@ export class DspOrchestrator {
   }
 
   private graphWithRuntimeModuleGates(graph: DspGraphConfig): DspGraphConfig {
-    if (
-      !this.processing.dspEnabled ||
-      (this.processing.directMode && !this.processing.autoMix?.enabled)
-    ) {
+    if (!this.processing.dspEnabled || this.processing.directMode) {
       return {
         version: graph.version,
         nodes: [],
@@ -384,7 +375,7 @@ export class DspOrchestrator {
   }
 
   private effectiveProcessingForPayload(): AudioProcessingSettings {
-    const directMode = this.processing.directMode && !this.processing.autoMix?.enabled
+    const directMode = this.processing.directMode
     if (this.processing.dspEnabled && !directMode) return { ...this.processing, directMode }
     return {
       ...this.processing,
@@ -408,10 +399,9 @@ export class DspOrchestrator {
       resolution.requiresPcmFallback &&
       resolution.scene?.allowDsdPcmFallback === true &&
       this.processing.dsdOutputMode === 'pcm'
-    const directBypass = this.processing.directMode && !this.processing.autoMix?.enabled
+    const directBypass = this.processing.directMode
     const masterBypass = !this.processing.dspEnabled
-    const dsdBypass =
-      resolution.requiresPcmFallback && !dsdPcmFallbackApplied && !this.processing.autoMix?.enabled
+    const dsdBypass = resolution.requiresPcmFallback && !dsdPcmFallbackApplied
     const bypassReason = directBypass
       ? 'Direct mode bypasses the DSP graph and output stage'
       : masterBypass
@@ -639,10 +629,6 @@ export class DspOrchestrator {
       if (status.compileState === 'failed') {
         throw new Error(status.compileError || `DSP graph revision ${revision} failed to compile`)
       }
-      // Startup, scene refresh and service recovery also apply graphs. Bind the
-      // independent native AutoMix config to every successful graph ACK, even
-      // when a newer graph revision makes this caller's decorated state pending.
-      await this.syncNativeAutoMixConfig()
       this.observeNativeDspGraphStatus(status)
       this.lastNativeError = ''
       return this.decorateDspGraphStatus(status)
@@ -689,7 +675,7 @@ export class DspOrchestrator {
       graph: this.activeDspGraph,
       effectiveGraph: payload.graph,
       effectiveBypassReason: payload.bypassReason,
-      directMode: this.processing.directMode && !this.processing.autoMix?.enabled,
+      directMode: this.processing.directMode,
       requiresPcmFallback: payload.requiresPcmFallback,
       dsdPcmFallbackApplied: payload.dsdPcmFallbackApplied
     }
@@ -701,10 +687,10 @@ export class DspOrchestrator {
     outputStage: DspOutputStageConfig | null
   ): Promise<void> {
     const previousProcessing = this.processing
-    const previousDirect = this.processing.directMode && !this.processing.autoMix?.enabled
+    const previousDirect = this.processing.directMode
     const previousMode = this.processing.volumeNormalization
     const nextProcessing = this.mergeAudioProcessingSettings(processing)
-    const nextDirect = nextProcessing.directMode && !nextProcessing.autoMix?.enabled
+    const nextDirect = nextProcessing.directMode
     if (previousDirect && !nextDirect) await this.applyDirectModeRuntimeOverrides(false)
     this.processing = nextProcessing
     this.syncDefaultSceneProcessing()
@@ -959,8 +945,8 @@ export class DspOrchestrator {
     const defaultScene = this.dspScenes.find((scene) => scene.id === 'default')
     const previousDefaultGraph = defaultScene?.graph
     const previousOutputInfo = this.playbackInfo.outputInfo
-    const previousDirect = previousProcessing.directMode && !previousProcessing.autoMix?.enabled
-    const nextDirect = nextProcessing.directMode && !nextProcessing.autoMix?.enabled
+    const previousDirect = previousProcessing.directMode
+    const nextDirect = nextProcessing.directMode
     const directModeChanged = previousDirect !== nextDirect
 
     // Restore the saved rate/routing before the stored graph can become active again.
@@ -1147,9 +1133,7 @@ export class DspOrchestrator {
   }
 
   getEffectiveNativeDspPluginChainJson(): string {
-    return this.processing.directMode && !this.processing.autoMix?.enabled
-      ? '{"plugins":[]}'
-      : this.nativeDspPluginChainJson
+    return this.processing.directMode ? '{"plugins":[]}' : this.nativeDspPluginChainJson
   }
 
   private syncNativeDspPluginChain(): void {
@@ -1178,8 +1162,7 @@ export class DspOrchestrator {
   ): AudioProcessingSettings {
     const normalized = normalizeAudioProcessingSettings({
       ...this.processing,
-      ...settings,
-      autoMix: { ...normalizeAutoMix(this.processing.autoMix), ...settings.autoMix }
+      ...settings
     })
     const { dspEnabled, directMode } = resolveProcessingMasterState(
       normalized,
@@ -1207,31 +1190,5 @@ export class DspOrchestrator {
       }
       return status
     })
-  }
-
-  private syncNativeAutoMixConfig(): Promise<void> {
-    const generation = this.nativeAutoMixGeneration
-    // Overlapping startup/refresh ACKs must not send duplicate configs: native
-    // config application cancels the current pair and may reopen playback.
-    const sync = this.autoMixConfigSync
-      .catch(() => {})
-      .then(async () => {
-        if (generation !== this.nativeAutoMixGeneration) return
-        const config = normalizeAutoMix(this.processing.autoMix)
-        const json = JSON.stringify(config)
-        if (json === this.nativeAutoMixConfigJson) return
-        if (!config.enabled && !this.nativeAutoMixConfigJson) return
-        if (
-          typeof this.native?.SetAutoMixConfig !== 'function' ||
-          !(await this.host.callNativeMaybeAsync('更新 AutoMix 配置', 'SetAutoMixConfig', json))
-        ) {
-          throw new Error('AutoMix configuration was not accepted by the native playback engine')
-        }
-        if (generation !== this.nativeAutoMixGeneration)
-          throw new Error('AutoMix audio service changed before configuration acknowledgement')
-        this.nativeAutoMixConfigJson = json
-      })
-    this.autoMixConfigSync = sync
-    return sync
   }
 }

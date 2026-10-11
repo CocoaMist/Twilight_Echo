@@ -169,31 +169,32 @@ test(
   }
 )
 
-async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId = 'demo' } = {}) {
+async function fixture(
+  t,
+  {
+    appVersion = '1.2.4',
+    engineRange = '*',
+    providerId = 'demo',
+    pluginId = 'com.example.demo',
+    autoMixEnabled = () => false,
+    ncm
+  } = {}
+) {
   const directory = fs.mkdtempSync(path.join(tmpdir(), 'twilight-plugin-wake-'))
   fs.writeFileSync(path.join(directory, 'index.mjs'), 'export function activate() {}\n')
   const importSource = (name) => import(pathToFileURL(path.join(__dirname, name)).href)
-  const [
-    manifest,
-    routing,
-    queue,
-    rpc,
-    idle,
-    persistence,
-    dependenciesApi,
-    media,
-    playbackSources
-  ] = await Promise.all([
-    importSource('manifest.ts'),
-    importSource('providerRouting.ts'),
-    importSource('operationQueue.ts'),
-    importSource('rpcCoordinator.ts'),
-    importSource('hostIdle.ts'),
-    importSource('statePersistence.ts'),
-    importSource('dependencies.ts'),
-    importSource('../security/remoteMediaGrants.ts'),
-    importSource('../security/providerPlaybackSources.ts')
-  ])
+  const [manifest, routing, queue, rpc, idle, persistence, dependenciesApi, media, identities] =
+    await Promise.all([
+      importSource('manifest.ts'),
+      importSource('providerRouting.ts'),
+      importSource('operationQueue.ts'),
+      importSource('rpcCoordinator.ts'),
+      importSource('hostIdle.ts'),
+      importSource('statePersistence.ts'),
+      importSource('dependencies.ts'),
+      importSource('../security/remoteMediaGrants.ts'),
+      importSource('../audio/providerPlaybackIdentity.ts')
+    ])
   const children = []
   let notify
   const activationStarted = new Promise((resolve) => {
@@ -252,7 +253,7 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
     },
     './packageSecurity.ts': { resolvePluginFile: (file) => file },
     '../security/remoteMediaGrants.ts': media,
-    '../security/providerPlaybackSources.ts': playbackSources
+    '../audio/providerPlaybackIdentity.ts': identities
   }
   const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, 'manager.ts'), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
@@ -267,6 +268,7 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
     },
     Buffer,
     structuredClone,
+    AbortController,
     process,
     setTimeout,
     clearTimeout,
@@ -277,6 +279,8 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
     hostEntry: 'unused',
     hostIdleTimeoutMs: 300000,
     getPlaybackInfo: () => ({}),
+    autoMixEnabled,
+    ncm,
     applyNativeDspPluginChain: () => {},
     player: {}
   })
@@ -284,7 +288,7 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
   manager.queueContributionsSave = () => {}
   manager.queueStateSave = () => {}
   const descriptor = {
-    id: 'com.example.demo',
+    id: pluginId,
     name: 'Demo',
     version: '1.0.0',
     enabled: true,
@@ -343,6 +347,87 @@ async function fixture(t, { appVersion = '1.2.4', engineRange = '*', providerId 
   const activate = () => children[0].emit('message', { kind: 'activated', pluginId: descriptor.id })
   return { manager, descriptor, children, activationStarted, register, activate, directory }
 }
+
+test('only the host enables AutoMix preparation for the bundled provider', async (t) => {
+  let enabled = true
+  const f = await fixture(t, {
+    pluginId: 'com.twilightecho.provider.ncm',
+    providerId: 'ncm',
+    autoMixEnabled: () => enabled
+  })
+  const first = f.manager.callProvider('ncm', 'getPlaybackUrl', [{ id: 'ncm:991' }, {}])
+  await f.activationStarted
+  f.register()
+  f.activate()
+  await first
+  let message = f.children[0].messages.filter((m) => m.kind === 'provider-call').at(-1)
+  assert.equal(message.args[1]._twilightAutoMixPrepare, true)
+  assert.equal(message.args[1]._twilightSourceIdentity, true)
+  enabled = false
+  await f.manager.callProvider('ncm', 'getPlaybackUrl', [
+    { id: 'ncm:991' },
+    {
+      _twilightAutoMixPrepare: true
+    }
+  ])
+  message = f.children[0].messages.filter((m) => m.kind === 'provider-call').at(-1)
+  assert.equal(message.args[1]._twilightAutoMixPrepare, false)
+})
+
+test('AutoMix materialization is bundled-only, cancellable and gated by the current mode', async (t) => {
+  let enabled = true,
+    started,
+    signalSeen
+  const begun = new Promise((resolve) => {
+    started = resolve
+  })
+  const f = await fixture(t, {
+    pluginId: 'com.twilightecho.provider.ncm',
+    providerId: 'ncm',
+    autoMixEnabled: () => enabled,
+    ncm: {
+      prepareAutoMixSong: async (_id, _url, _fileName, { signal }) => {
+        signalSeen = signal
+        started()
+        return new Promise((_resolve, reject) =>
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        )
+      }
+    }
+  })
+  const activate = f.manager.callProvider('ncm', 'searchSongs', ['wake'])
+  await f.activationStarted
+  f.register()
+  f.activate()
+  await activate
+  const call = {
+    kind: 'api-call',
+    namespace: 'internal',
+    method: 'ncmPrepareAutoMixSong',
+    requestId: 'prepare-cache',
+    args: [991, 'https://music.example/991.flac', undefined, {}]
+  }
+  const pending = f.manager.handleHostMessage(f.descriptor.id, call)
+  await begun
+  await f.manager.handleHostMessage(f.descriptor.id, {
+    kind: 'api-cancel',
+    requestId: call.requestId,
+    reason: 'queue_changed'
+  })
+  await pending
+  assert.equal(signalSeen.aborted, true)
+  assert.equal(f.manager.internalNcmRequests.size, 0)
+  assert.equal(
+    f.children[0].messages
+      .filter((m) => m.kind === 'api-result' && m.requestId === call.requestId)
+      .at(-1).ok,
+    false
+  )
+  enabled = false
+  assert.equal((await f.manager.handleApiCall(f.descriptor.id, call)).value, null)
+  const foreign = await f.manager.handleApiCall('com.example.foreign', call)
+  assert.equal(foreign.ok, false)
+})
 
 test('a host failure retains enablement intent and retries once at the next startup', async (t) => {
   const f = await fixture(t)

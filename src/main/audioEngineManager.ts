@@ -66,10 +66,10 @@ import {
   type AudioDeviceProfilesSnapshot
 } from '../shared/audioDeviceProfiles.ts'
 import { PlaybackController } from './audio/playbackController.ts'
-import { AutoMixCoordinator, type AutoMixOnlineSource } from './audio/autoMixCoordinator.ts'
-import { AutoMixFeatureCache } from './audio/autoMixFeatureCache.ts'
-import type { AudioAnalysisServiceClient } from './audioAnalysisServiceClient.ts'
-import type { AutoMixStatus } from '../shared/autoMix.ts'
+import type {
+  TwilightAutoMixCoordinator,
+  TwilightAutoMixContext
+} from './audio/twilightAutoMixCoordinator.ts'
 
 export type {
   AudioCapabilitySupportState,
@@ -135,6 +135,18 @@ export class AudioEngineManager extends EventEmitter {
   private readonly deviceProfiles: DeviceProfiles
   private readonly dsp: DspOrchestrator
   private readonly playback: PlaybackController
+  private autoMixCoordinator: TwilightAutoMixCoordinator | null = null
+  private autoMixMode: import('../shared/twilightAutoMix.ts').AutoMixMode = 'off'
+  private autoMixAnalysisStatus: {
+    state: 'preparing' | 'ready' | 'degraded' | 'off'
+    reason: string
+  } | null = null
+  private readonly observeAutoMix = (): void => {
+    this.autoMixCoordinator?.observe()
+  }
+  private readonly invalidateAutoMixService = (): void => {
+    this.autoMixCoordinator?.invalidate('service_changed')
+  }
   private scheduler: AudioEngineScheduler
   private loudnessAnalysisManager: LoudnessAnalysisManager | null = null
   private loudnormStatus: LoudnormStatus = 'idle'
@@ -147,10 +159,6 @@ export class AudioEngineManager extends EventEmitter {
     }
   >()
   private destroyed = false
-  private autoMixCoordinator: AutoMixCoordinator | null = null
-  private readonly updateAutoMix = ({ name }: { name: string }): void => {
-    if (name === 'time-pos') void this.autoMixCoordinator?.update()
-  }
   private nativePlaybackActive = false
   private nativeOutputRouteSynced = false
   private nativeVolumeSynced = false
@@ -271,6 +279,7 @@ export class AudioEngineManager extends EventEmitter {
         invalidateAudioDeviceOptionsCache: (reason) =>
           this.invalidateAudioDeviceOptionsCache(reason),
         getProcessing: () => this.processing,
+        getAutoMixAnalysisStatus: () => this.autoMixAnalysisStatus,
         getActiveDspGraph: () => this.dsp.activeDspGraph,
         getNativeBackendId: () => this.getNativeBackendId(),
         shouldFallbackFromAsio: (output) => this.shouldFallbackFromAsio(output),
@@ -552,6 +561,7 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   private handleAudioServiceReady(): void {
+    this.invalidateAutoMixService()
     this.playback.queueToken = ''
     const restoreSerial = ++this.audioServiceReadyRestoreSerial
     this.nativeOutputRouteSynced = false
@@ -570,11 +580,20 @@ export class AudioEngineManager extends EventEmitter {
         }
         this.publishPlaybackInfo()
         this.emit('audio-service-ready', {
+          nativeRuntime: this.getNativeRuntimeIdentity(),
           manualResumeRequired: true,
           outputRouteSynced: result.outputRouteSynced,
           restoreErrors: result.errors
         })
       })
+  }
+
+  getNativeRuntimeIdentity(): Record<string, string> | null {
+    try {
+      return JSON.parse(this.native?.GetEngineCapabilities?.() ?? '{}').nativeRuntime ?? null
+    } catch {
+      return null
+    }
   }
 
   private async restoreAudioServiceReadyState(): Promise<{
@@ -588,7 +607,6 @@ export class AudioEngineManager extends EventEmitter {
     // engine loud while the manager still reports the saved volume (renderer
     // pushes are then no-ops because playbackInfo already matches).
     const stateRestore = await this.restoreAudioServicePlaybackState()
-    await this.playback.refreshAutoMixStatus()
     return {
       outputRouteSynced: routeRestore.synced && stateRestore.synced,
       errors: [...routeRestore.errors, ...stateRestore.errors]
@@ -658,6 +676,16 @@ export class AudioEngineManager extends EventEmitter {
         this.playbackInfo.playbackRate ?? 1
       )
     )
+    if (this.autoMixMode !== 'off') {
+      results.push(
+        await this.restoreAudioServiceOutputRouteStep(
+          'auto-mix-mode',
+          '音频服务恢复后应用 AutoMix 模式',
+          'SetAutoMixMode',
+          this.autoMixMode
+        )
+      )
+    }
     return {
       synced: results.every((result) => result.ok),
       errors: results.filter((result) => !result.ok).map((result) => result.error)
@@ -676,9 +704,7 @@ export class AudioEngineManager extends EventEmitter {
       this.playbackInfo.volume
     )
     this.nativeVolumeSynced = volumeStep.ok
-    if (this.processing.directMode && !this.processing.autoMix?.enabled)
-      await this.applyDirectModeRuntimeOverrides(true)
-    await this.playback.refreshAutoMixStatus()
+    if (this.processing.directMode) await this.applyDirectModeRuntimeOverrides(true)
     this.startClock()
     this.scheduler.setImmediate(() => this.emit('ready'))
   }
@@ -1017,7 +1043,6 @@ export class AudioEngineManager extends EventEmitter {
   ): Promise<AudioProcessingSettings> {
     return this.changeAudioConfiguration(async () => {
       const processing = await this.dsp.setAudioProcessing(settings)
-      if (await this.playback.refreshAutoMixStatus()) this.publishPlaybackInfo()
       return processing
     })
   }
@@ -1218,6 +1243,7 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   async play(source: string, startTime = 0): Promise<AudioEnginePlayResult> {
+    this.autoMixCoordinator?.invalidate('playback_changed')
     return this.playback.play(source, startTime)
   }
 
@@ -1230,6 +1256,7 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   async seek(time: number): Promise<void> {
+    this.autoMixCoordinator?.invalidate('seek')
     return this.playback.seek(time)
   }
 
@@ -1240,7 +1267,8 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   async setPlaybackRate(rate: number): Promise<void> {
-    if (this.processing.directMode && !this.processing.autoMix?.enabled) {
+    this.autoMixCoordinator?.invalidate('playback_rate_changed')
+    if (this.processing.directMode) {
       this.directModePlaybackRateRestore = clampNumber(rate, 0.5, 2, 1)
       return this.playback.setPlaybackRate(1)
     }
@@ -1248,85 +1276,125 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   async setLoopRange(startSeconds: number, endSeconds: number): Promise<boolean> {
+    this.autoMixCoordinator?.invalidate('loop_changed')
     return this.playback.setLoopRange(startSeconds, endSeconds)
+  }
+  async setAutoMixMode(mode: import('../shared/twilightAutoMix.ts').AutoMixMode): Promise<boolean> {
+    const ok = await this.callNativeMaybeAsync('Twilight AutoMix mode', 'SetAutoMixMode', mode)
+    if (ok) {
+      this.autoMixMode = mode
+      this.autoMixCoordinator?.setMode(mode)
+    }
+    return ok
+  }
+  async selectAutoMix(
+    requestJson: string
+  ): Promise<import('../shared/twilightAutoMix.ts').AutoMixSelection> {
+    if (!this.native) throw new Error('audio_service_unavailable')
+    const result = this.native.callAsync
+      ? await this.native.callAsync('SelectAutoMix', [requestJson])
+      : await this.native.SelectAutoMix?.(requestJson)
+    if (typeof result !== 'string') throw new Error('candidate_selection_failed')
+    return JSON.parse(result)
+  }
+  async prepareAutoMix(requestJson: string): Promise<boolean> {
+    return this.callNativeMaybeAsync('Twilight AutoMix preparation', 'PrepareAutoMix', requestJson)
+  }
+  async submitAutoMix(planId: number): Promise<boolean> {
+    return this.callNativeMaybeAsync('Twilight AutoMix submit', 'SubmitAutoMix', planId)
+  }
+  async cancelAutoMix(): Promise<boolean> {
+    return this.callNativeMaybeAsync('Twilight AutoMix cancel', 'CancelAutoMix')
+  }
+  async getAutoMixNativeStatus(): Promise<PlaybackInfo> {
+    const info = await this.playback.readNativePlaybackInfoAsync()
+    if (!info) throw new Error('native_status_unavailable')
+    return info
+  }
+  invalidateAutoMixSource(): void {
+    this.autoMixCoordinator?.invalidate('provider_source_resolution_changed')
+    this.autoMixCoordinator?.observe()
+  }
+  reportAutoMixAnalysisState(
+    state: 'preparing' | 'ready' | 'degraded' | 'off',
+    reason: string
+  ): void {
+    this.autoMixAnalysisStatus = { state, reason }
+    this.playbackInfo = {
+      ...this.playbackInfo,
+      autoMixMode: this.autoMixMode,
+      autoMixState: state,
+      autoMixReason: reason
+    }
+    this.publishPlaybackInfo()
+  }
+  clearAutoMixAnalysisState(): void {
+    this.autoMixAnalysisStatus = null
   }
 
   async stop(): Promise<void> {
+    this.autoMixCoordinator?.invalidate('stopped')
     return this.playback.stop()
   }
 
   async loadQueue(items: AudioEngineQueueItem[], startIndex = 0): Promise<void> {
+    this.autoMixCoordinator?.invalidate('queue_changed')
     return this.playback.loadQueue(items, startIndex)
   }
 
   getQueueToken(): string {
     return this.playback.queueToken
   }
-
-  setAutoMixAnalysisService(
-    service: () => AudioAnalysisServiceClient | null,
-    cacheDirectory: string,
-    resolveOnline?: (track: { id?: string; source: string }) => Promise<AutoMixOnlineSource | null>
-  ): void {
+  setAutoMixCoordinator(coordinator: TwilightAutoMixCoordinator): void {
     this.autoMixCoordinator?.destroy()
-    this.autoMixCoordinator = new AutoMixCoordinator(
-      {
-        resolveOnline,
-        snapshot: async () => {
-          if (
-            !this.processing.autoMix?.enabled ||
-            !this.native?.GetAutoMixStatus ||
-            this.playbackInfo.state === 'stopped'
-          )
-            return null
-          const raw = this.native.callAsync
-            ? await this.native.callAsync('GetAutoMixStatus', [])
-            : this.native.GetAutoMixStatus()
-          const status = parseNativeJson<AutoMixStatus | null>(raw as string | AutoMixStatus, null)
-          const outgoing = this.queue[this.playbackInfo.queueIndex]
-          const incoming = this.getUpcomingTrack()
-          if (
-            !status?.enabled ||
-            !outgoing ||
-            outgoing.source !== this.playbackInfo.source ||
-            !incoming
-          )
-            return null
-          return { queueToken: this.playback.queueToken, outgoing, incoming, status }
-        },
-        analyze: async (source, options) => {
-          const client = service()
-          if (!client) throw new Error('AutoMix analysis service is unavailable')
-          return client.analyzeAutoMix(source, options, { priority: 20 })
-        },
-        deliver: async (json) => {
-          if (!this.native?.SetAutoMixFeatures)
-            throw new Error('AutoMix feature delivery is unsupported')
-          if (this.native.callAsync) await this.native.callAsync('SetAutoMixFeatures', [json])
-          else this.native.SetAutoMixFeatures(json)
-        }
-      },
-      new AutoMixFeatureCache(cacheDirectory)
+    this.off('playback-info', this.observeAutoMix)
+    this.off('audio-service-crash', this.invalidateAutoMixService)
+    this.autoMixCoordinator = coordinator
+    coordinator.setMode(this.autoMixMode)
+    this.on('playback-info', this.observeAutoMix)
+    this.on('audio-service-crash', this.invalidateAutoMixService)
+  }
+  getAutoMixContext(): TwilightAutoMixContext | null {
+    const info = this.playback.playbackInfo
+    const current = this.playback.queue[info.queueIndex]
+    const next = info.upcomingTrack
+    // Queue/library durations may be rounded. Only the decoded current and
+    // preloaded next streams supply source boundaries suitable for a plan.
+    if (
+      this.pendingNativeSource ||
+      !current ||
+      !next ||
+      current.source !== info.source ||
+      !info.preloadReady
     )
-    this.off('property-change', this.updateAutoMix)
-    this.on('property-change', this.updateAutoMix)
+      return null
+    return {
+      queueToken: this.playback.queueToken,
+      current: structuredClone(current),
+      next: structuredClone(next),
+      info: structuredClone(info)
+    }
   }
 
   async selectQueueItem(
     selection: import('../shared/nativeQueue.ts').NativeQueueSelection
   ): Promise<boolean> {
+    this.autoMixCoordinator?.invalidate('queue_selection_changed')
     return this.playback.selectQueueItem(selection)
   }
 
   async next(): Promise<void> {
+    this.autoMixCoordinator?.invalidate('manual_skip')
     return this.playback.next()
   }
 
   async previous(): Promise<void> {
+    this.autoMixCoordinator?.invalidate('manual_skip')
     return this.playback.previous()
   }
 
   async setPlayMode(mode: PlayMode): Promise<void> {
+    this.autoMixCoordinator?.invalidate('queue_mode_changed')
     return this.playback.setPlayMode(mode)
   }
 
@@ -1407,6 +1475,8 @@ export class AudioEngineManager extends EventEmitter {
 
   destroy(): void {
     this.autoMixCoordinator?.destroy()
+    this.off('playback-info', this.observeAutoMix)
+    this.off('audio-service-crash', this.invalidateAutoMixService)
     if (this.destroyed) return
 
     this.destroyed = true
@@ -1588,9 +1658,8 @@ export class AudioEngineManager extends EventEmitter {
     const sceneDspActive =
       graphHasEnabledProcessing(effectiveGraph) &&
       !(sceneState.requiresPcmFallback && this.processing.dsdOutputMode !== 'pcm')
-    const directMode = this.processing.directMode && !this.processing.autoMix?.enabled
-    const crossfadeSeconds =
-      directMode || this.processing.autoMix?.enabled ? 0 : this.processing.crossfadeSeconds
+    const directMode = this.processing.directMode
+    const crossfadeSeconds = directMode ? 0 : this.processing.crossfadeSeconds
     const dspActive =
       sceneDspActive ||
       crossfadeSeconds > 0 ||

@@ -18,8 +18,16 @@ import {
 } from '../../../../shared/audioProcessingOptions.ts'
 import { isDsdProxyDevice } from '../../../../shared/dsdProxyDrivers.ts'
 import { resolveReasonCode } from '../../../../shared/audio/reasonCodes.ts'
-import { normalizeAutoMix, autoMixReasonText } from '../../../../shared/autoMix.ts'
 import { useLocale } from '../../app/useLocale.ts'
+import {
+  normalizeAutoMixMode,
+  normalizeAutoMixStemCacheMiB,
+  autoMixStatusKeys,
+  effectiveAutoMixMode,
+  TWILIGHT_AUTOMIX_AVAILABLE,
+  TWILIGHT_AUTOMIX_EVALUATION_AVAILABLE,
+  TWILIGHT_AUTOMIX_RELEASE_READY
+} from '../../../../shared/twilightAutoMix.ts'
 import {
   type AudioCapabilitySupportState,
   type AudioDeviceOption,
@@ -91,6 +99,36 @@ const selectedAudioOutput = computed(() =>
 )
 const exclusiveAvailable = computed(() => selectedAudioOutput.value?.supportsExclusive ?? false)
 const exclusiveAutoReleaseApplying = ref(false)
+const autoMixModeApplying = ref(false)
+const autoMixStatusText = computed(() => {
+  const info = playbackInfo.value
+  if (!info?.autoMixState) return ''
+  const keys = autoMixStatusKeys(info.autoMixState, info.autoMixReason, info.autoMixStrategy)
+  return [
+    t(keys.phase),
+    keys.strategy ? t(keys.strategy) : '',
+    info.autoMixDurationSeconds ? info.autoMixDurationSeconds.toFixed(1) + 's' : '',
+    info.autoMixStemEnhanced ? t('automix.stems.active') : '',
+    keys.reason ? t(keys.reason) : ''
+  ]
+    .filter(Boolean)
+    .join(' · ')
+})
+async function setAutoMixMode(event: Event): Promise<void> {
+  if (!TWILIGHT_AUTOMIX_AVAILABLE || autoMixModeApplying.value) return
+  const select = event.target as HTMLSelectElement
+  autoMixModeApplying.value = true
+  try {
+    await updateSettings({
+      autoMixMode: normalizeAutoMixMode(select.value)
+    })
+  } catch (error) {
+    audioEngineError.value = error instanceof Error ? error.message : String(error)
+    select.value = effectiveAutoMixMode(settings.value.autoMixMode)
+  } finally {
+    autoMixModeApplying.value = false
+  }
+}
 
 async function toggleExclusiveAutoRelease(): Promise<void> {
   if (!exclusiveAvailable.value || !exclusiveMode.value || exclusiveAutoReleaseApplying.value)
@@ -114,50 +152,6 @@ const isUpmixActive = computed(
 const showWasapiPushMode = computed(() => audioOutput.value === 'wasapi' && exclusiveMode.value)
 
 const audioOutputPanelExpanded = useSettingsDisclosure('audio-output-device-panel')
-const autoMixConfig = computed(() => normalizeAutoMix(audioProcessing.value.autoMix))
-const autoMixStatus = computed(() => playbackInfo.value?.autoMix)
-const autoMixApplying = ref(false)
-const autoMixAvailable = computed(
-  () =>
-    autoMixStatus.value?.experimentalAllowed === true || autoMixStatus.value?.stableRelease === true
-)
-const autoMixStateText = computed(() => {
-  const status = autoMixStatus.value
-  if (status?.state === 'ready' || status?.state === 'mixing') {
-    const kind = {
-      beat_mix: '节拍混合',
-      musical_overlap: '音乐交叠（未对齐拍点）',
-      boundary_cleanup: '首尾静音／尾奏衔接',
-      conservative: '保守淡化',
-      none: '转场'
-    }[status.mixKind ?? (status.styleId === 1 ? 'conservative' : 'none')]
-    return `${kind}${status.state === 'ready' ? '已就绪' : '进行中'}`
-  }
-  return {
-    disabled: '关闭',
-    preparing: '准备中',
-    ready: '智能转场已就绪',
-    mixing: '混音中',
-    degraded: '暂未转场'
-  }[status?.state ?? 'disabled']
-})
-async function patchAutoMix(patch: Partial<ReturnType<typeof normalizeAutoMix>>): Promise<void> {
-  if (autoMixApplying.value) return
-  autoMixApplying.value = true
-  try {
-    await setAudioProcessing({ autoMix: { ...autoMixConfig.value, ...patch } })
-  } catch (error) {
-    audioEngineError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    autoMixApplying.value = false
-  }
-}
-function setAutoMixSeconds(event: Event): void {
-  const value = Number((event.target as HTMLInputElement).value)
-  if (Number.isFinite(value))
-    void patchAutoMix({ maxTransitionSeconds: Math.min(12, Math.max(0.3, value)) })
-}
-
 const outputChainText = computed(() => {
   const info = playbackInfo.value
   if (!info) return '等待音频引擎'
@@ -603,6 +597,82 @@ function setContinuitySampleRate(event: Event): void {
           </select>
         </div>
         <hr />
+        <div data-setting-id="autoMixMode" class="setting-item">
+          <div class="setting-copy">
+            <strong>Twilight AutoMix</strong>
+            <span>自然模式保留歌曲内容；DJ 模式加入更长对拍和退出效果。</span>
+            <span v-if="TWILIGHT_AUTOMIX_EVALUATION_AVAILABLE && !TWILIGHT_AUTOMIX_RELEASE_READY"
+              >人工验收版本：可以开启试听，正式验收尚未完成。请先选择模式，再开始播放队列。</span
+            >
+            <span v-else-if="!TWILIGHT_AUTOMIX_AVAILABLE"
+              >正式验收尚未完成，请使用人工验收版本试听。</span
+            >
+            <span v-if="TWILIGHT_AUTOMIX_AVAILABLE && playbackInfo?.autoMixState">{{
+              autoMixStatusText
+            }}</span>
+          </div>
+          <select
+            :value="effectiveAutoMixMode(settings.autoMixMode)"
+            :disabled="!TWILIGHT_AUTOMIX_AVAILABLE || autoMixModeApplying"
+            aria-label="Twilight AutoMix 模式"
+            @change="setAutoMixMode"
+          >
+            <option value="off">关闭</option>
+            <option value="natural">自然</option>
+            <option value="dj">DJ</option>
+          </select>
+        </div>
+        <div
+          v-if="TWILIGHT_AUTOMIX_AVAILABLE"
+          data-setting-id="autoMixStemMode"
+          class="setting-item"
+        >
+          <div class="setting-info">
+            <strong>{{ t('automix.stems.title') }}</strong>
+            <span>{{ t('automix.stems.description') }}</span>
+          </div>
+          <select
+            :value="settings.autoMixStemMode"
+            :aria-label="t('automix.stems.title')"
+            @change="
+              updateSettings({
+                autoMixStemMode:
+                  ($event.target as HTMLSelectElement).value === 'off' ? 'off' : 'auto'
+              })
+            "
+          >
+            <option value="off">{{ t('automix.stems.off') }}</option>
+            <option value="auto">{{ t('automix.stems.auto') }}</option>
+          </select>
+        </div>
+
+        <div
+          v-if="TWILIGHT_AUTOMIX_AVAILABLE"
+          data-setting-id="autoMixStemCacheMiB"
+          class="setting-item"
+        >
+          <div class="setting-info">
+            <strong>{{ t('automix.stems.cache.title') }}</strong>
+            <span>{{ t('automix.stems.cache.description') }}</span>
+          </div>
+          <select
+            :value="settings.autoMixStemCacheMiB"
+            :aria-label="t('automix.stems.cache.title')"
+            @change="
+              updateSettings({
+                autoMixStemCacheMiB: normalizeAutoMixStemCacheMiB(
+                  Number(($event.target as HTMLSelectElement).value)
+                )
+              })
+            "
+          >
+            <option :value="0">{{ t('automix.stems.off') }}</option>
+            <option v-for="capacity in [256, 512, 1024, 2048]" :key="capacity" :value="capacity">
+              {{ capacity }} MiB
+            </option>
+          </select>
+        </div>
+
         <div data-setting-id="gapless" id="setting-gapless" class="setting-item">
           <div class="setting-copy">
             <strong>无缝播放</strong>
@@ -662,86 +732,6 @@ function setContinuitySampleRate(event: Event): void {
           </div>
         </div>
         <hr />
-        <div data-setting-id="automix" id="setting-automix" class="setting-item">
-          <div class="setting-copy">
-            <strong>AutoMix</strong>
-            <span>在曲目末尾自动衔接下一首，保护专辑和 CUE 边界。{{ autoMixStateText }}。</span>
-            <span v-if="!autoMixAvailable"
-              >当前音频引擎未开放 AutoMix，请使用支持此功能的运行时。</span
-            >
-            <span v-else-if="!autoMixStatus?.stableRelease"
-              >当前为实验版本，尚未完成听感与长时播放验收。</span
-            >
-            <span v-if="autoMixConfig.enabled"
-              >AutoMix 使用 PCM，暂停 Direct 和 DSD 直通；关闭后恢复最新输出偏好。</span
-            >
-            <span v-if="autoMixStatus && autoMixConfig.enabled">
-              {{ autoMixStatus.transitionSeconds.toFixed(1) }} 秒
-              <template
-                v-if="['beat_mix', 'musical_overlap'].includes(autoMixStatus.mixKind ?? '')"
-              >
-                · 双轨交叠 {{ (autoMixStatus.audibleOverlapSeconds ?? 0).toFixed(1) }} 秒
-              </template>
-              <template v-if="(autoMixStatus.tempoAdjustmentPercent ?? 0) > 0.1">
-                · 最大变速 {{ autoMixStatus.tempoAdjustmentPercent?.toFixed(1) }}%
-              </template>
-              <template v-if="autoMixStatus.state === 'mixing'">
-                · {{ Math.round(autoMixStatus.progress * 100) }}%</template
-              >
-            </span>
-            <span
-              v-if="
-                autoMixStatus && autoMixConfig.enabled && autoMixReasonText(autoMixStatus.reason)
-              "
-              >{{ autoMixReasonText(autoMixStatus.reason) }}。</span
-            >
-          </div>
-          <div class="inline-controls continuity-controls">
-            <label
-              >最长 (秒)
-              <input
-                class="number-input"
-                type="number"
-                min="0.3"
-                max="12"
-                step="0.5"
-                :value="autoMixConfig.maxTransitionSeconds"
-                :disabled="!autoMixAvailable || autoMixApplying"
-                @change="setAutoMixSeconds"
-              />
-            </label>
-            <label
-              ><input
-                type="checkbox"
-                :checked="autoMixConfig.allowIntelligentSkip"
-                :disabled="
-                  !autoMixAvailable ||
-                  autoMixApplying ||
-                  autoMixStatus?.intelligentSkipSupported !== true
-                "
-                @change="
-                  patchAutoMix({ allowIntelligentSkip: !autoMixConfig.allowIntelligentSkip })
-                "
-              />允许智能选段</label
-            >
-            <span v-if="autoMixAvailable && autoMixStatus?.intelligentSkipSupported !== true"
-              >选段能力尚未就绪，当前保留完整内容。</span
-            >
-            <span v-else-if="autoMixAvailable"
-              >仅跳过已确认的首尾静音，每侧最多 12 秒且不超过曲长的 10%。</span
-            >
-            <button
-              type="button"
-              class="toggle-switch"
-              :class="{ active: autoMixConfig.enabled }"
-              role="switch"
-              aria-label="AutoMix"
-              :aria-checked="autoMixConfig.enabled"
-              :disabled="(!autoMixAvailable && !autoMixConfig.enabled) || autoMixApplying"
-              @click="patchAutoMix({ enabled: !autoMixConfig.enabled })"
-            ></button>
-          </div>
-        </div>
         <div data-setting-id="bpm-analysis" id="setting-bpm-analysis" class="setting-item">
           <div class="setting-copy">
             <strong>BPM 自动分析</strong

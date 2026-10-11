@@ -1,5 +1,4 @@
 import { randomUUID } from 'crypto'
-import { isAutoMixAnalysisResult, type AutoMixAnalysisResult } from '../shared/autoMix.ts'
 import { EventEmitter } from 'events'
 import { createRequire } from 'module'
 
@@ -21,6 +20,7 @@ import {
   MAX_UTILITY_PROCESS_ERROR_TEXT_BYTES
 } from './security/utilityProcessSafety.ts'
 import { isLoudnessAnalysisResult, type LoudnessAnalysisResult } from './audio/loudnessCache.ts'
+import { isAutoMixAnalysisResult, type AutoMixAnalysisResult } from '../shared/twilightAutoMix.ts'
 import {
   isLoudnessGroupMeasurement,
   type LoudnessGroupMeasurement,
@@ -65,6 +65,7 @@ type AnalysisTask = {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timer: NodeJS.Timeout | null
+  detachAbort?: () => void
 }
 
 type AnalysisWorker = {
@@ -107,6 +108,7 @@ export interface AudioAnalysisRequestOptions {
   priority?: number
   /** Per-task worker deadline; whole-file analyses override the short default. */
   timeoutMs?: number
+  signal?: AbortSignal
 }
 
 export interface AudioAnalysisServiceStatus {
@@ -273,22 +275,6 @@ export class AudioAnalysisServiceClient extends EventEmitter {
     return value
   }
 
-  async analyzeAutoMix(
-    source: string,
-    optionsJson: string,
-    options: AudioAnalysisRequestOptions = {}
-  ): Promise<AutoMixAnalysisResult> {
-    const value = parseAnalysisJson(
-      await this.request('automix', source, optionsJson, { priority: 20, ...options }),
-      'AutoMix'
-    )
-    if (!isAutoMixAnalysisResult(value))
-      throw new Error(
-        analysisErrorMessage(value, 'audio analysis worker returned invalid AutoMix features')
-      )
-    return value
-  }
-
   async analyzeLoudness(
     source: string,
     optionsJson: string,
@@ -318,6 +304,27 @@ export class AudioAnalysisServiceClient extends EventEmitter {
     )
   }
 
+  async analyzeAutoMix(
+    source: string,
+    optionsJson = '{}',
+    options: AudioAnalysisRequestOptions = {}
+  ): Promise<AutoMixAnalysisResult> {
+    const value = parseAnalysisJson(
+      await this.request('automix', source, optionsJson, {
+        priority: 90,
+        timeoutMs: 30_000,
+        ...options
+      }),
+      'Twilight AutoMix'
+    )
+    if (!isAutoMixAnalysisResult(value))
+      throw createAnalysisError(
+        AUDIO_ANALYSIS_INVALID_RESPONSE_CODE,
+        'invalid Twilight AutoMix analysis result'
+      )
+    return value
+  }
+
   cancelBySource(source: string, analysis?: AudioAnalysisKind): number {
     const normalized = source.trim()
     if (!normalized) return 0
@@ -331,6 +338,20 @@ export class AudioAnalysisServiceClient extends EventEmitter {
       this.terminateWorker(
         worker,
         createAnalysisError('ERR_AUDIO_ANALYSIS_CANCELLED', `analysis cancelled: ${normalized}`),
+        true
+      )
+    }
+    return cancelled
+  }
+
+  cancelRequest(requestId: string): number {
+    let cancelled = this.cancelQueued((task) => task.id === requestId)
+    for (const worker of this.workers) {
+      if (worker.taskId !== requestId) continue
+      cancelled++
+      this.terminateWorker(
+        worker,
+        createAnalysisError('ERR_AUDIO_ANALYSIS_CANCELLED', 'analysis request cancelled'),
         true
       )
     }
@@ -389,6 +410,10 @@ export class AudioAnalysisServiceClient extends EventEmitter {
     optionsJson: string,
     options: AudioAnalysisRequestOptions
   ): Promise<unknown> {
+    if (options.signal?.aborted)
+      return Promise.reject(
+        createAnalysisError('ERR_AUDIO_ANALYSIS_CANCELLED', 'analysis request cancelled')
+      )
     if (this.stopped) {
       return Promise.reject(
         createAnalysisError('ERR_AUDIO_ANALYSIS_STOPPED', 'audio analysis service stopped')
@@ -413,9 +438,38 @@ export class AudioAnalysisServiceClient extends EventEmitter {
         timeoutMs: clampInteger(options.timeoutMs, 1000, MAX_TASK_TIMEOUT_MS, this.taskTimeoutMs),
         sequence: this.sequence++,
         queuedAt: now,
-        resolve,
-        reject,
+        resolve: (value) => {
+          task.detachAbort?.()
+          resolve(value)
+        },
+        reject: (error) => {
+          task.detachAbort?.()
+          reject(error)
+        },
         timer: null
+      }
+      if (options.signal) {
+        const abort = () => {
+          this.cancelRequest(task.id)
+        }
+        options.signal.addEventListener('abort', abort, { once: true })
+        task.detachAbort = () => options.signal?.removeEventListener('abort', abort)
+      }
+      // A new boundary request may preempt only AutoMix background work.
+      // Termination retires its specific task; other analyses keep their lease.
+      if (analysis === 'automix' && task.priority >= 90) {
+        for (const worker of this.workers) {
+          const active = worker.taskId ? this.active.get(worker.taskId) : undefined
+          if (active?.analysis === 'automix' && active.priority < 0)
+            this.terminateWorker(
+              worker,
+              createAnalysisError(
+                'ERR_AUDIO_ANALYSIS_PREEMPTED',
+                'background analysis preempted by boundary'
+              ),
+              true
+            )
+        }
       }
       if (!this.admitTask(task, now)) return
       this.ensureWorkerCapacity()
@@ -432,7 +486,13 @@ export class AudioAnalysisServiceClient extends EventEmitter {
    */
   private ensureWorkerCapacity(): void {
     if (this.stopped || this.unavailableError) return
-    const demand = this.queued.length + this.active.size
+    const activeAutoMix = [...this.active.values()].some((task) => task.analysis === 'automix')
+    const autoMixWaiting = this.queued.filter((task) => task.analysis === 'automix').length
+    const demand =
+      this.active.size +
+      this.queued.length -
+      autoMixWaiting +
+      (autoMixWaiting > 0 && !activeAutoMix ? 1 : 0)
     let capacity = this.workers.filter((worker) => worker.child || worker.restartTimer).length
     for (const worker of this.workers) {
       if (capacity >= demand) break
@@ -837,14 +897,17 @@ export class AudioAnalysisServiceClient extends EventEmitter {
 
   private takeNextTask(now: number): AnalysisTask | undefined {
     if (this.queued.length === 0) return undefined
-    let bestIndex = 0
-    for (let index = 1; index < this.queued.length; index += 1) {
+    const autoMixActive = [...this.active.values()].some((task) => task.analysis === 'automix')
+    let bestIndex = -1
+    for (let index = 0; index < this.queued.length; index += 1) {
       const candidate = this.queued[index]
       const best = this.queued[bestIndex]
-      if (candidate && best && this.compareTaskPrecedence(candidate, best, now) < 0) {
+      if (candidate?.analysis === 'automix' && autoMixActive) continue
+      if (candidate && (!best || this.compareTaskPrecedence(candidate, best, now) < 0)) {
         bestIndex = index
       }
     }
+    if (bestIndex < 0) return undefined
     return this.queued.splice(bestIndex, 1)[0]
   }
 

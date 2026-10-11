@@ -12,6 +12,38 @@
  */
 
 export const ZH_CN_MESSAGES: Record<string, string> = {
+  'automix.phase.off': '已关闭',
+  'automix.phase.preparing': '正在分析并准备下一次过渡',
+  'automix.phase.ready': '过渡已就绪，将在曲尾自动混音',
+  'automix.phase.mixing': '正在混音',
+  'automix.phase.completed': '过渡已完成',
+  'automix.phase.degraded': '本次使用常规播放',
+  'automix.strategy.beat-aligned': '节拍对齐过渡',
+  'automix.strategy.content-boundary': '非人声尾奏过渡（保持原速）',
+  'automix.reason.waiting': '等待新的过渡准备',
+  'automix.reason.beats': '节拍不够稳定，暂不对拍',
+  'automix.reason.tempo': '两曲速度差超出当前模式范围',
+  'automix.reason.boundary': '未找到合适的重叠位置',
+  'automix.reason.gapless': '连续专辑优先无缝播放',
+  'automix.reason.transport': '当前播放处理或音频格式不支持智能过渡',
+  'automix.reason.range': '音源时间范围不一致，请重新开始播放',
+  'automix.reason.timeout': '准备未赶上本次过渡',
+  'automix.reason.source': '音源已变化或尚未准备好',
+  'automix.reason.retrying': '服务暂时忙碌，正在重试',
+  'automix.reason.cache': '缓存不可用，正在使用有效分析',
+  'automix.reason.decode': '音频边界解码或续播准备失败',
+  'automix.reason.model': '增强模型不可用，使用基础混音',
+  'automix.reason.service': '分析或音频服务暂时不可用',
+  'automix.reason.unsuitable': '此歌曲组合不适合混音',
+  'automix.reason.analysis': '音乐分析失败',
+  'automix.stems.active': '已使用分轨增强',
+  'automix.stems.cache.title': '分轨缓存容量',
+  'automix.stems.cache.description': '复用已完成的分轨。按最近使用顺序清理；关闭后不保留声部缓存。',
+  'automix.stems.title': '分轨增强',
+  'automix.stems.description': '安装独立增强包后自动使用人声和贝斯交接；准备超时则使用基础混音。',
+  'automix.stems.off': '关闭',
+  'automix.stems.auto': '自动（需要增强包）',
+  'automix.reason.failed': '过渡准备失败',
   // ── 通用动作 ──────────────────────────────────────────────────────────────
   // Label/value separator. Locale-dependent: CJK uses the fullwidth form, and a
   // fullwidth colon in English copy reads as a typo, so it cannot be hardcoded
@@ -104,11 +136,11 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'audio.reason.crossfade_active.explain':
     '淡入淡出在曲目衔接处叠加两条流并施加增益包络，衔接段的样本被改写，同时会关闭 true gapless。',
   'audio.reason.crossfade_active.fix': '把播放设置里的交叉淡入淡出时长设为 0 秒。',
-  'audio.reason.automix_active.label': 'AutoMix 正在衔接曲目',
-  'audio.reason.automix_active.explain':
-    'AutoMix 正在混合或处理两首曲目的 PCM 音频，当前输出样本已改变。',
-  'audio.reason.automix_active.fix': '关闭播放设置中的 AutoMix 后恢复最新输出偏好。',
-
+  'audio.reason.automix_processing.label': 'AutoMix 正在处理歌曲过渡',
+  'audio.reason.automix_processing.explain':
+    'AutoMix 在歌曲过渡时调整增益、速度或混合两曲，输出样本因此改变。',
+  'audio.reason.automix_processing.fix':
+    '若需要原样输出，请在播放设置中关闭 AutoMix 并重新播放歌曲。',
   'audio.reason.dsd_output_mode_pcm.label': 'DSD 输出模式被设为 PCM',
   'audio.reason.dsd_output_mode_pcm.explain':
     '当前设置强制把 DSD 转成 PCM，不会尝试 Native DSD 或 DoP 直通。',

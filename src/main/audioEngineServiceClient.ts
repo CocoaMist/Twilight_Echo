@@ -15,7 +15,6 @@ import type {
   VolumeNormalizationMode
 } from './audioEngineManager'
 import type { BpmAnalysisResult } from './bpm/bpmCache'
-import type { AutoMixStatus } from '../shared/autoMix.ts'
 import type { DspGraphStatus } from '../shared/dspGraph.ts'
 import { getNativeAddonCandidates } from './audio/nativeBinding.ts'
 import { tryParseJsonWithNestingLimit } from './security/jsonSafety.ts'
@@ -76,6 +75,9 @@ const AUDIO_SERVICE_BUSY_CODE = 'ERR_AUDIO_SERVICE_BUSY'
 const AUDIO_SERVICE_TIMEOUT_CODE = 'ERR_AUDIO_SERVICE_TIMEOUT'
 const MAX_AUDIO_SERVICE_DEFAULT_RESPONSE_BYTES = 1024 * 1024
 const MAX_AUDIO_SERVICE_VISUALIZATION_RESPONSE_BYTES = 8 * 1024 * 1024
+// Embedded cover art is base64 in metadata; ordinary album covers routinely
+// exceed the 1 MiB control-response budget. Keep this allowance method scoped.
+const MAX_AUDIO_SERVICE_METADATA_RESPONSE_BYTES = 8 * 1024 * 1024
 const AUDIO_SERVICE_INVALID_MESSAGE = 'audio service returned an invalid or oversized message'
 
 // Native calls that may legally block the audio service's single JS thread far
@@ -110,7 +112,9 @@ const SLOW_NATIVE_METHODS = new Set<string>([
   'EnumerateDevices',
   'EnumerateBackends',
   'GetEngineCapabilities',
-  'ScanVst3Module'
+  'ScanVst3Module',
+  'SelectAutoMix',
+  'PrepareAutoMix'
 ])
 
 // A child that survives this long is considered stable: the exponential
@@ -186,8 +190,6 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
   private cacheRequestsInFlight = new Set<string>()
   private lastPlaybackInfo: string | PlaybackInfo | null = null
   private lastDspStatus: string | { plugins: unknown[] } = { plugins: [] }
-  private lastAutoMixStatus: string | AutoMixStatus =
-    '{"enabled":false,"state":"disabled","progress":0,"transitionSeconds":0,"styleId":null,"reason":"not_connected","configRevision":0}'
   private lastDspGraphStatus: DspGraphStatus = createEmptyDspGraphStatus()
   private serviceCapabilities: AudioServiceCapabilities | null = null
   private lastConvolverInfo: string | ConvolverInfo | null = null
@@ -224,7 +226,7 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
    * 用于 play/pause 等需要确认真实状态的控制命令。
    */
   callAsync(method: string, args: unknown[]): Promise<unknown> {
-    if (method === 'AnalyzeBpm' || method === 'AnalyzeLoudness' || method === 'AnalyzeAutoMix') {
+    if (method === 'AnalyzeBpm' || method === 'AnalyzeLoudness') {
       return Promise.reject(new Error(`${method} must use the isolated audio analysis service`))
     }
     return this.call(method as keyof NativeAudioBinding, args)
@@ -252,6 +254,21 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
 
   SetPlaybackRate(rate: number): void {
     this.coalescedFireAndForget('SetPlaybackRate', [rate])
+  }
+  SetAutoMixMode(mode: import('../shared/twilightAutoMix.ts').AutoMixMode): void {
+    this.fireAndForget('SetAutoMixMode', [mode])
+  }
+  SelectAutoMix(requestJson: string): Promise<unknown> {
+    return this.call('SelectAutoMix', [requestJson])
+  }
+  PrepareAutoMix(requestJson: string): void {
+    this.fireAndForget('PrepareAutoMix', [requestJson])
+  }
+  SubmitAutoMix(planId: number): void {
+    this.fireAndForget('SubmitAutoMix', [planId])
+  }
+  CancelAutoMix(): void {
+    this.fireAndForget('CancelAutoMix', [])
   }
 
   SetLoopRange(startSeconds: number, endSeconds: number): void {
@@ -411,21 +428,6 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
     this.fireAndForget('SetDspPluginChain', [json])
   }
 
-  SetAutoMixConfig(json: string): void {
-    this.fireAndForget('SetAutoMixConfig', [json])
-  }
-
-  SetAutoMixFeatures(json: string): void {
-    this.fireAndForget('SetAutoMixFeatures', [json])
-  }
-
-  GetAutoMixStatus(): string | AutoMixStatus {
-    this.refreshCache('GetAutoMixStatus', [], (value) => {
-      this.lastAutoMixStatus = value as string | AutoMixStatus
-    })
-    return this.lastAutoMixStatus
-  }
-
   GetDspPluginStatus(): string | { plugins: unknown[] } {
     this.refreshCache('GetDspPluginStatus', [], (value) => {
       this.lastDspStatus = value as string | { plugins: unknown[] }
@@ -499,7 +501,8 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
       nativeDsp: true,
       audioService: true,
       audioServiceProtocolVersion: this.serviceCapabilities?.protocolVersion ?? null,
-      dspGraphRevisionAck: this.serviceCapabilities?.dspGraphRevisionAck === true
+      dspGraphRevisionAck: this.serviceCapabilities?.dspGraphRevisionAck === true,
+      nativeRuntime: this.serviceCapabilities?.nativeRuntime
     })
   }
 
@@ -724,8 +727,15 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
     clearTimeout(pending.timer)
     this.pending.delete(response.requestId)
     if (pending.slow) this.slowPendingCount -= 1
-    if (response.ok) pending.resolve(response.value)
-    else pending.reject(new Error(response.error ?? '音频服务调用失败'))
+    if (response.ok) {
+      // Explicit reads after transport/preparation must refresh the same cache
+      // that regular playback ticks consume, before the caller resumes.
+      if (pending.method === 'GetPlaybackInfo')
+        this.lastPlaybackInfo = response.value as string | PlaybackInfo
+      if (pending.method === 'GetUpcomingTrack')
+        this.lastUpcomingTrack = response.value as string | AudioEngineQueueItem | null
+      pending.resolve(response.value)
+    } else pending.reject(new Error(response.error ?? '音频服务调用失败'))
   }
 
   private handleProtocolViolation(reason: string): void {
@@ -1080,6 +1090,7 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
   }
 
   private responseByteLimitForMethod(method: keyof NativeAudioBinding): number {
+    if (method === 'GetMetadata') return MAX_AUDIO_SERVICE_METADATA_RESPONSE_BYTES
     return method === 'GetVisualizationData'
       ? MAX_AUDIO_SERVICE_VISUALIZATION_RESPONSE_BYTES
       : MAX_AUDIO_SERVICE_DEFAULT_RESPONSE_BYTES

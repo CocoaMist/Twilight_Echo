@@ -42,7 +42,6 @@ import { playModeWrapsAtQueueEnd } from '../../shared/playbackModes.ts'
 import { audioEngineError, nativeAudioError } from './engineErrors.ts'
 import { rendererFallbackAllowed } from './nativeBinding.ts'
 import type { DspGraphConfig } from '../../shared/dspGraph.ts'
-import type { AutoMixStatus } from '../../shared/autoMix.ts'
 
 export interface PlaybackControllerHost {
   getNative(): NativeAudioBinding | null
@@ -68,6 +67,10 @@ export interface PlaybackControllerHost {
   createDeviceCapabilityRefreshSignature(info: PlaybackInfo): string
   invalidateAudioDeviceOptionsCache(reason: string): void
   getProcessing(): AudioProcessingSettings
+  getAutoMixAnalysisStatus?(): {
+    state: 'preparing' | 'ready' | 'degraded' | 'off'
+    reason: string
+  } | null
   getActiveDspGraph(): DspGraphConfig
   getNativeBackendId(): string
   shouldFallbackFromAsio(output: AudioOutputId): boolean
@@ -121,7 +124,6 @@ export class PlaybackController {
   lastTick = 0
   lastNativePlaybackInfoTickReadAt = Number.NEGATIVE_INFINITY
   nativeIdlePollTick = 0
-  private autoMixStatusRequestRevision = 0
   lastNativeReportedPosition = Number.NaN
   pendingNativePositionTarget: number | null = null
   nativeConfigRevisionObserved = false
@@ -311,8 +313,6 @@ export class PlaybackController {
   }
 
   resetCachesOnServiceCrash(): void {
-    ++this.autoMixStatusRequestRevision
-    this.playbackInfo.autoMix = undefined
     this.lastVisualizationCache = null
     this.lastSpectrumCache = null
     this.invalidateUpcomingTrackCache()
@@ -417,7 +417,8 @@ export class PlaybackController {
     }
     this.nativePlaybackActive = nativeStarted
     this.pendingNativeSource = nativeStarted ? source : null
-    const nativeInfo = nativeStarted ? this.readNativePlaybackInfo() : null
+    const nativeInfo = nativeStarted ? await this.readNativePlaybackInfoAsync() : null
+    if (!isCurrent()) return superseded
     if (nativeInfo?.source === source) {
       this.pendingNativeSource = null
     }
@@ -444,7 +445,8 @@ export class PlaybackController {
       ...nativeInfo,
       state: 'playing',
       position: boundedStartTime,
-      duration,
+      duration:
+        nativeInfo?.source === source && nativeInfo.duration > 0 ? nativeInfo.duration : duration,
       source,
       queueIndex: sourceQueueIndex >= 0 ? sourceQueueIndex : this.playbackInfo.queueIndex,
       codec: inferCodec(source),
@@ -894,39 +896,7 @@ export class PlaybackController {
     }
   }
 
-  async refreshAutoMixStatus(): Promise<boolean> {
-    const native = this.native
-    if (typeof native?.GetAutoMixStatus !== 'function') return false
-    const revision = ++this.autoMixStatusRequestRevision
-    try {
-      // The service's synchronous getter is a cached value. Settings need the
-      // actual permission/config even when no transport has started yet.
-      const raw =
-        typeof native.callAsync === 'function'
-          ? await native.callAsync('GetAutoMixStatus', [])
-          : native.GetAutoMixStatus()
-      if (this.destroyed || revision !== this.autoMixStatusRequestRevision) return false
-      const status = parseNativeJson(
-        raw as string | AutoMixStatus | undefined,
-        null as AutoMixStatus | null
-      )
-      if (!status || typeof status.enabled !== 'boolean' || typeof status.state !== 'string')
-        return false
-      const changed = JSON.stringify(this.playbackInfo.autoMix) !== JSON.stringify(status)
-      // Read only this independent status: a stopped engine snapshot must not
-      // overwrite a restored queue/source/position or the saved software volume.
-      this.playbackInfo.autoMix = status
-      return changed
-    } catch {
-      if (this.destroyed || revision !== this.autoMixStatusRequestRevision) return false
-      const changed = this.playbackInfo.autoMix !== undefined
-      this.playbackInfo.autoMix = undefined
-      return changed
-    }
-  }
-
   async getPlaybackInfo(): Promise<PlaybackInfo> {
-    if (!this.nativePlaybackActive) await this.refreshAutoMixStatus()
     const now = this.scheduler.now()
     if (
       this.nativePlaybackActive &&
@@ -1116,12 +1086,19 @@ export class PlaybackController {
         ? clampNumber(nativeInfo.playbackRate, 0.5, 2, this.playbackInfo.playbackRate ?? 1)
         : (this.playbackInfo.playbackRate ?? 1)
     const previousPosition = this.playbackInfo.position
-    const resolvedPosition = this.resolveNativeTickPosition(
-      typeof nativeInfo.position === 'number' ? nativeInfo.position : previousPosition,
-      previousPosition,
-      (!this.pendingNativeSource || nativeInfo.source === this.pendingNativeSource) &&
-        nativeInfo.state !== 'stopped'
-    )
+    const mappedAutoMixPosition =
+      nativeInfo.autoMixState === 'mixing' || this.playbackInfo.autoMixState === 'mixing'
+    const resolvedPosition =
+      mappedAutoMixPosition &&
+      this.pendingNativePositionTarget === null &&
+      Number.isFinite(nativeInfo.position)
+        ? Math.max(0, nativeInfo.position)
+        : this.resolveNativeTickPosition(
+            typeof nativeInfo.position === 'number' ? nativeInfo.position : previousPosition,
+            previousPosition,
+            (!this.pendingNativeSource || nativeInfo.source === this.pendingNativeSource) &&
+              nativeInfo.state !== 'stopped'
+          )
     const waitingForNativePosition = this.pendingNativePositionTarget !== null
 
     if (!this.pendingNativeSource) {
@@ -1362,6 +1339,13 @@ export class PlaybackController {
     outputInfo.recoveryCount = canonicalOutput?.recoveryCount ?? info.recoveryCount ?? 0
     outputInfo.latencyInfo = latencyInfo
     outputInfo.diagnostics = diagnostics
+    const analysisStatus = this.host.getAutoMixAnalysisStatus?.()
+    const showAnalysisStatus =
+      info.autoMixMode &&
+      info.autoMixMode !== 'off' &&
+      info.autoMixState === 'degraded' &&
+      analysisStatus &&
+      analysisStatus.state !== 'ready'
     const playbackRate =
       typeof info.playbackRate === 'number' && Number.isFinite(info.playbackRate)
         ? clampNumber(info.playbackRate, 0.5, 2, this.playbackInfo.playbackRate ?? 1)
@@ -1407,7 +1391,6 @@ export class PlaybackController {
       outputBitDepth: outputInfo.outputBitDepth,
       channelCount: outputInfo.actualChannels || info.channelCount || 0,
       outputPerfect,
-      autoMix: info.autoMix,
       pcmPassthrough: outputInfo.pcmPassthrough === true,
       isDsd,
       dsdMode,
@@ -1422,7 +1405,10 @@ export class PlaybackController {
         typeof info.gaplessBlockedReason === 'string' ? info.gaplessBlockedReason : '',
       streamTitle: typeof info.streamTitle === 'string' ? info.streamTitle : '',
       perfectReason: outputInfo.perfectReason,
-      nativePlaybackActive: this.nativePlaybackActive
+      nativePlaybackActive: this.nativePlaybackActive,
+      ...(showAnalysisStatus
+        ? { autoMixState: analysisStatus.state, autoMixReason: analysisStatus.reason }
+        : {})
     }
   }
 
@@ -1487,7 +1473,7 @@ export class PlaybackController {
       const now = this.scheduler.now()
       const elapsed = (now - this.lastTick) / 1000
       const rate = this.playbackInfo.playbackRate ?? 1
-      if (this.playbackInfo.state === 'playing') {
+      if (this.playbackInfo.state === 'playing' && this.playbackInfo.autoMixState !== 'mixing') {
         this.playbackInfo.position = advanceSoftPlaybackPosition(
           previousPosition,
           elapsed,
@@ -1508,8 +1494,7 @@ export class PlaybackController {
           this.invalidateAudioDeviceOptionsCache('native-output-diagnostics-changed')
         }
         this.lastNativePlaybackInfoTickReadAt = now
-        // Publish track identity with its source position before scalar progress
-        // events. An AutoMix continuation is a rewind only in the outgoing clock.
+        // Publish track identity with its source position before scalar progress events.
         this.publishPlaybackInfo({ dedupePositionOnly: true })
         this.publishProperty('time-pos', this.playbackInfo.position)
         if (this.playbackInfo.duration > 0) {

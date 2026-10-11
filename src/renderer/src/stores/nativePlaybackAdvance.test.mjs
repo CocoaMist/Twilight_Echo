@@ -29,7 +29,7 @@ function productionFunction(name) {
 }
 
 for (const eventOrder of ['info-first', 'start-first']) {
-  test(`AutoMix ${eventOrder}: playbar retains the incoming source position and keeps advancing`, async (t) => {
+  test(`Native queue ${eventOrder}: playbar retains the incoming source position and keeps advancing`, async (t) => {
     const f = handoffFixture(t)
     f.context.setNativePlaybackInfoIntent(1, f.outgoing, f.outgoing.filePath, 0)
     f.context.applyNativePlaybackInfo(f.info(f.outgoing, 0, 170))

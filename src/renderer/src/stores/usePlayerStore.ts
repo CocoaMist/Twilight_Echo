@@ -35,10 +35,7 @@ import {
 } from '../../../shared/dspGraph.ts'
 import { extractDominantColor } from '../utils/colorExtractor'
 import { resolveCover } from '../utils/coverLoader'
-import {
-  mergeAutoMixPlaybackInfo,
-  normalizeNativePlaybackInfo
-} from '../utils/playerPlaybackInfo.ts'
+import { normalizeNativePlaybackInfo } from '../utils/playerPlaybackInfo.ts'
 import { normalizeOutputConfig } from '../../../shared/audioOutputConfig.ts'
 import { clampSoftwareVolume, cloneAudioProcessingSettings } from '../utils/playerAudioSettings.ts'
 import {
@@ -363,9 +360,6 @@ const {
   applyAudioOutputState,
   refreshAudioOutputState
 } = createAudioOutputState({
-  applyPlaybackSettingsStatus: (info) => {
-    playbackInfo.value = mergeAutoMixPlaybackInfo(playbackInfo.value, info)
-  },
   audioProcessing,
   dspOutputStage,
   dspStereoImage,
@@ -557,7 +551,7 @@ function markNativePlaybackInfoIntentConfirmed(now = getNowMs()): void {
   if (!intent || intent.confirmedAt !== null) return
   intent.confirmedAt = now
   // Bound the guard to this confirmation. Extending it on every playing tick
-  // also rejects legitimate native AutoMix/gapless advances later in the song.
+  // also rejects legitimate native gapless advances later in the song.
   intent.expiresAt = Math.max(
     intent.expiresAt,
     now + NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
@@ -2562,8 +2556,7 @@ function setupAudioEngineListeners(): void {
       advancingFromEndedTrackId = ''
       autoAdvanceInFlight = false
       // Only identity-bearing playback-info can start a native track clock.
-      // AutoMix has already played part of the incoming track before start-file;
-      // resetting to zero here discards its confirmed continuation position.
+      // Resetting to zero here discards the confirmed position of the incoming track.
       // loadAndPlay anchors explicit starts before issuing the native command.
       pendingLoadStartTime = 0
       isLoading.value = false

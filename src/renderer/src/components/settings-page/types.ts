@@ -556,12 +556,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     terms: '播放 输出 引擎 DSP 音效 恢复 播放 resume 上次 曲目 位置 启动 启动时恢复播放'
   },
   {
-    id: 'automix',
-    section: 'playback',
-    title: 'AutoMix',
-    terms: '播放 输出 引擎 DSP 音效 automix 自动混音 智能转场 衔接 选段 淡化 实验 AutoMix'
-  },
-  {
     id: 'previous-action',
     section: 'playback',
     title: '上一首按钮行为',

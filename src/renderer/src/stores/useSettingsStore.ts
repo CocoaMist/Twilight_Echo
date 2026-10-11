@@ -85,8 +85,7 @@ const fallbackAudioProcessing: AudioProcessingSettings = {
   crossfeedDelayMs: 0.35,
   crossfeedCutoffHz: 700,
   gapless: true,
-  crossfadeSeconds: 0,
-  autoMix: { enabled: false, allowIntelligentSkip: true, maxTransitionSeconds: 12 }
+  crossfadeSeconds: 0
 }
 
 const fallbackHeadphoneCompensation = {
@@ -220,6 +219,9 @@ const fallbackSettings: AppSettings = {
   nowPlayingBackground: 'blur',
   playbackResumeMode: 'off',
   previousButtonAction: 'restart',
+  autoMixMode: 'off',
+  autoMixStemMode: 'auto',
+  autoMixStemCacheMiB: 512,
   sleepTimer: DEFAULT_SLEEP_TIMER_SETTINGS,
   ncmPlaybackQuality: 'auto',
   playMode: 'sequential',

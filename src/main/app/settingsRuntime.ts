@@ -1,5 +1,6 @@
 import { app, nativeTheme } from 'electron'
 import { runtime } from '../core/runtime'
+import { effectiveAutoMixMode } from '../../shared/twilightAutoMix.ts'
 import type { AppSettings, SettingsSnapshot } from '../core/types'
 import { createSettingsSnapshot, normalizeAppSettings, writeAppSettings } from '../core/settings'
 import type { AudioOutputState } from '../../shared/audioEngineTypes.ts'
@@ -17,6 +18,15 @@ import { applyLibraryWatchers } from '../library/watcher'
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
   const nextSettings = normalizeAppSettings({ ...runtime.appSettings, ...patch })
+  if (Object.prototype.hasOwnProperty.call(patch, 'autoMixMode')) {
+    const accepted = await runtime.audioEngineManager?.setAutoMixMode(
+      effectiveAutoMixMode(nextSettings.autoMixMode)
+    )
+    if (accepted === false)
+      throw new Error('音频引擎未能应用 AutoMix 模式，请检查音频服务状态后重试。')
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'autoMixStemMode'))
+    runtime.audioEngineManager?.invalidateAutoMixSource()
   if (Object.prototype.hasOwnProperty.call(patch, 'audioExclusiveAutoRelease')) {
     await runtime.audioEngineManager?.setExclusiveAutoRelease(
       nextSettings.audioExclusiveAutoRelease

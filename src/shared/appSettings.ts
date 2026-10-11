@@ -210,6 +210,9 @@ export interface AppSettings {
   playbackResumeMode: PlaybackResumeMode
   /** restart: previous button replays the current track first; previous: always jump to the previous track. */
   previousButtonAction: PreviousButtonAction
+  autoMixMode: import('./twilightAutoMix.ts').AutoMixMode
+  autoMixStemMode: import('./twilightAutoMix.ts').AutoMixStemMode
+  autoMixStemCacheMiB: import('./twilightAutoMix.ts').AutoMixStemCacheMiB
   sleepTimer: SleepTimerSettings
   ncmPlaybackQuality: NcmPlaybackQuality
   playMode: PlayMode

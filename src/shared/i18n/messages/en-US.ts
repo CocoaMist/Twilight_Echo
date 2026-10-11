@@ -10,6 +10,40 @@
  */
 
 export const EN_US_MESSAGES: Record<string, string> = {
+  'automix.phase.off': 'Off',
+  'automix.phase.preparing': 'Analyzing and preparing the next transition',
+  'automix.phase.ready': 'Ready to mix near the end of this song',
+  'automix.phase.mixing': 'Mixing',
+  'automix.phase.completed': 'Transition complete',
+  'automix.phase.degraded': 'Using regular playback for this transition',
+  'automix.strategy.beat-aligned': 'Beat-aligned transition',
+  'automix.strategy.content-boundary': 'Instrumental outro transition at original speed',
+  'automix.reason.waiting': 'Waiting for a new transition',
+  'automix.reason.beats': 'Beats are insufficiently stable for alignment',
+  'automix.reason.tempo': 'Tempo difference exceeds the selected mode limit',
+  'automix.reason.boundary': 'No suitable overlap position found',
+  'automix.reason.gapless': 'Gapless playback preferred for a continuous album',
+  'automix.reason.transport': 'Current processing or audio format prevents intelligent transitions',
+  'automix.reason.range': 'Source timelines differ; restart playback',
+  'automix.reason.timeout': 'Preparation missed this transition',
+  'automix.reason.source': 'Source changed or is not ready',
+  'automix.reason.retrying': 'Service temporarily busy; retrying',
+  'automix.reason.cache': 'Cache unavailable; using valid analysis',
+  'automix.reason.decode': 'Boundary decode or continuation failed',
+  'automix.reason.model': 'Enhancement unavailable; using the basic mix',
+  'automix.reason.service': 'Analysis or audio service temporarily unavailable',
+  'automix.reason.unsuitable': 'This pair is unsuitable for mixing',
+  'automix.reason.analysis': 'Music analysis failed',
+  'automix.stems.active': 'Stems active',
+  'automix.stems.cache.title': 'Stem cache capacity',
+  'automix.stems.cache.description':
+    'Reuse completed stems. Oldest entries are removed first; Off keeps no stem cache.',
+  'automix.stems.title': 'Stem enhancement',
+  'automix.stems.description':
+    'Use vocal and bass handoffs when the optional pack is installed. Fall back to the basic mix on timeout.',
+  'automix.stems.off': 'Off',
+  'automix.stems.auto': 'Auto (requires enhancement pack)',
+  'automix.reason.failed': 'Transition preparation failed',
   // ══ Language setting ═════════════════════════════════════════════════════
   'settings.language.title': 'Language',
   'settings.language.description': 'Language used for the interface and error messages.',
@@ -104,12 +138,11 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'audio.reason.crossfade_active.explain':
     'Crossfade overlaps two streams at track boundaries and applies a gain envelope, rewriting samples in the transition and disabling true gapless.',
   'audio.reason.crossfade_active.fix': 'Set crossfade duration to 0 seconds in playback settings.',
-  'audio.reason.automix_active.label': 'AutoMix is transitioning tracks',
-  'audio.reason.automix_active.explain':
-    'AutoMix is mixing or processing PCM from the outgoing and incoming tracks, changing the output samples.',
-  'audio.reason.automix_active.fix':
-    'Turn off AutoMix in playback settings to restore your latest output preferences.',
-
+  'audio.reason.automix_processing.label': 'AutoMix is processing the song transition',
+  'audio.reason.automix_processing.explain':
+    'AutoMix adjusts gain, tempo or blends two songs during a transition, changing the output samples.',
+  'audio.reason.automix_processing.fix':
+    'For unprocessed output, turn off AutoMix in playback settings and restart playback.',
   'audio.reason.dsd_output_mode_pcm.label': 'DSD output mode is set to PCM',
   'audio.reason.dsd_output_mode_pcm.explain':
     'The current setting forces DSD to PCM conversion and never attempts native DSD or DoP passthrough.',
