@@ -61,7 +61,7 @@ export function useBackgroundAppearanceEditor() {
     { value: 'theme', label: '跟随主题', icon: 'pi pi-palette' },
     { value: 'transparent', label: '透明', icon: 'pi pi-eye' },
     { value: 'frosted', label: '毛玻璃', icon: 'pi pi-cloud' },
-    { value: 'liquidGlass', label: '波尔玻璃', icon: 'pi pi-sparkles' }
+    { value: 'liquidGlass', label: '液态玻璃', icon: 'pi pi-sparkles' }
   ]
   const activeBackground = computed(() =>
     target.value === 'global'

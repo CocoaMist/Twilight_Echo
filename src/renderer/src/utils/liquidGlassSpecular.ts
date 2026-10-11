@@ -201,7 +201,8 @@ export function bayerOffset(x: number, y: number): number {
  */
 export function buildSpecularPixels(
   geometry: DisplacementGeometry,
-  angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG
+  angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG,
+  rasterScale: number = 1
 ): SpecularRaster {
   if (
     !Number.isFinite(geometry.width) ||
@@ -214,7 +215,15 @@ export function buildSpecularPixels(
 
   // Same resolver as the displacement map, so the highlight lands on exactly the
   // rim the refraction bends.
-  const { width, height, shape, blurRadius } = resolveRasterGeometry(geometry)
+  const resolved = resolveRasterGeometry(geometry)
+  // The independently composited playback reflection needs more than one sample
+  // per CSS pixel. Keep the optical field in its original units and bound memory.
+  const scale = Number.isFinite(rasterScale) ? Math.max(1, Math.min(2, rasterScale)) : 1
+  const width = Math.round(resolved.width * scale)
+  const height = Math.round(resolved.height * scale)
+  const { shape, blurRadius } = resolved
+  const scaleX = width / resolved.width
+  const scaleY = height / resolved.height
   const rimWidth = blurRadius
   const lightVector = lightVectorFromAngle(angleDegrees)
 
@@ -222,10 +231,23 @@ export function buildSpecularPixels(
 
   for (let y = 0; y < height; y++) {
     // Sample at pixel centers so the field stays symmetric for any size.
-    const py = y + 0.5 - height / 2
+    const py = (y + 0.5) / scaleY - resolved.height / 2
     for (let x = 0; x < width; x++) {
-      const px = x + 0.5 - width / 2
-      const intensity = specularIntensity(px, py, shape, rimWidth, lightVector)
+      const px = (x + 0.5) / scaleX - resolved.width / 2
+      const distance = roundedRectSDF(px, py, shape.halfWidth, shape.halfHeight, shape.radius)
+      let intensity = specularIntensity(px, py, shape, rimWidth, lightVector)
+      // Integrate coverage across a boundary pixel instead of deciding its alpha
+      // from one point. Only the narrow contour pays for the additional samples.
+      if (Math.abs(distance) < Math.hypot(0.5 / scaleX, 0.5 / scaleY)) {
+        intensity = 0
+        for (const dy of [-0.375, -0.125, 0.125, 0.375]) {
+          for (const dx of [-0.375, -0.125, 0.125, 0.375]) {
+            intensity +=
+              specularIntensity(px + dx / scaleX, py + dy / scaleY, shape, rimWidth, lightVector) /
+              16
+          }
+        }
+      }
 
       const p = (y * width + x) * 4
       pixels[p] = 255
@@ -250,9 +272,10 @@ const MAX_CACHED_MAPS = 8
  */
 export function getSpecularMapUrl(
   geometry: DisplacementGeometry,
-  angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG
+  angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG,
+  rasterScale: number = 1
 ): string {
-  const key = `${geometryKey(geometry)}@${angleDegrees}`
+  const key = `${geometryKey(geometry)}@${angleDegrees}@${rasterScale}`
   const cached = cache.get(key)
   if (cached !== undefined) {
     cache.delete(key)
@@ -262,7 +285,7 @@ export function getSpecularMapUrl(
 
   if (typeof document === 'undefined') return ''
 
-  const raster = buildSpecularPixels(geometry, angleDegrees)
+  const raster = buildSpecularPixels(geometry, angleDegrees, rasterScale)
   const canvas = document.createElement('canvas')
   canvas.width = raster.width
   canvas.height = raster.height

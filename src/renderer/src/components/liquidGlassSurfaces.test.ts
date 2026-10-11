@@ -257,7 +257,7 @@ test('a zero-strength highlight drops out of the chain instead of compositing a 
   assert.match(defs, /resolveSpecularMapStrength/)
   // Both rasters are baked from the measured geometry, so the highlight lands on
   // exactly the rim the refraction bends.
-  assert.match(defs, /getSpecularMapUrl\(playbar\)/)
+  assert.match(defs, /getSpecularMapUrl\(playbar, undefined, 2\)/)
   assert.match(defs, /getSpecularMapUrl\(card\)/)
 })
 

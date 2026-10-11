@@ -250,7 +250,7 @@ function ensureMaps(): void {
   const playbar = measureSelector(LIQUID_GLASS_PLAYBAR_SELECTOR, NOMINAL_PLAYBAR_GEOMETRY)
   playbarGeometry.value = playbar
   playbarMapUrl.value = getDisplacementMapUrl(playbar)
-  playbarSpecularUrl.value = getSpecularMapUrl(playbar)
+  playbarSpecularUrl.value = getSpecularMapUrl(playbar, undefined, 2)
 
   // Cards are many elements sharing one filter, so they cannot each carry their
   // own raster. The first visible card stands in for the class; they are laid out

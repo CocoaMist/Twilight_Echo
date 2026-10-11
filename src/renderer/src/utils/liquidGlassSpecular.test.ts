@@ -510,6 +510,49 @@ test('map url generation degrades to empty string without a DOM', () => {
   assert.equal(getSpecularMapUrl(NOMINAL_CARD_GEOMETRY), '')
 })
 
+test('corner pixels integrate partial coverage instead of drawing a staircase', () => {
+  const geometry = { width: 32, height: 16, radius: 4 }
+  const raster = buildSpecularRaster(geometry)
+  const shape = { halfWidth: 16, halfHeight: 8, radius: 4 }
+  for (const [x, y] of [
+    [0, 2],
+    [1, 1],
+    [2, 0]
+  ]) {
+    let reference = 0
+    let covered = 0
+    for (let sy = 0; sy < 64; sy++) {
+      for (let sx = 0; sx < 64; sx++) {
+        const px = x + (sx + 0.5) / 64 - 16
+        const py = y + (sy + 0.5) / 64 - 8
+        if (roundedRectSDF(px, py, 16, 8, 4) <= 0) covered++
+        reference += specularIntensity(px, py, shape, 4, LIGHT) / 4096
+      }
+    }
+    assert.ok(covered > 0 && covered < 4096, 'test pixel crosses the curved contour')
+    assert.ok(Math.abs(alphaAt(raster.pixels, 32, x, y) - reference * 255) < 8)
+  }
+})
+
+test('playback reflection increases sample density without changing its optical width', () => {
+  const geometry = { width: 128, height: 32, radius: 10 }
+  const normal = buildSpecularRaster(geometry)
+  const dense = buildSpecularRaster(geometry, undefined, 2)
+  assert.equal(dense.width, normal.width * 2)
+  assert.equal(dense.height, normal.height * 2)
+  // Average the dense pixels over the same CSS pixel inside the top shoulder.
+  const denseAlpha =
+    [
+      alphaAt(dense.pixels, dense.width, 128, 4),
+      alphaAt(dense.pixels, dense.width, 129, 4),
+      alphaAt(dense.pixels, dense.width, 128, 5),
+      alphaAt(dense.pixels, dense.width, 129, 5)
+    ].reduce((sum, value) => sum + value, 0) / 4
+  assert.ok(Math.abs(denseAlpha - alphaAt(normal.pixels, normal.width, 64, 2)) < 3)
+  const capped = buildSpecularRaster({ width: 4000, height: 72, radius: 20 }, undefined, 100)
+  assert.equal(capped.width, 2048, 'density stays within the bounded raster budget')
+})
+
 test('highlight cache keeps eight recent maps and refreshes recency on a hit', (t) => {
   clearSpecularMapCache()
   let encodes = 0
@@ -542,4 +585,8 @@ test('highlight cache keeps eight recent maps and refreshes recency on a hit', (
   assert.equal(getSpecularMapUrl(geometry, 0), first, 'recent hit survives eviction')
   getSpecularMapUrl(geometry, 1)
   assert.equal(encodes, 10, 'oldest map is regenerated after eviction')
+  const dense = getSpecularMapUrl(geometry, 0, 2)
+  assert.notEqual(dense, first, 'sample density has a separate cache entry')
+  assert.equal(getSpecularMapUrl(geometry, 0, 2), dense, 'dense maps are also reused')
+  assert.equal(encodes, 11)
 })

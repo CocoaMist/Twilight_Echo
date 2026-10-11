@@ -64,7 +64,7 @@ test('Bohr reflections survive body diffusion, preserve input, and clean up with
       .settings-preview-nav{top:390px;left:70px;transform:none}
       </style></head><body>
       <div class="title-bar" data-v-bohr><div class="title-bar-background" data-v-bohr></div></div>
-      <div class="backdrop">波尔 · 透光的体积<br><small>温润弧面 · 清晰内容 · 柔和光影</small></div>
+      <div class="backdrop">透光的体积<br><small>温润弧面 · 清晰内容 · 柔和光影</small></div>
       <div class="player-bar player-bar-liquid" data-v-bohr>
         <span class="player-bar-warp" data-v-bohr aria-hidden="true"></span>
         <span class="player-bar-optics" data-v-bohr aria-hidden="true"></span>
@@ -86,6 +86,11 @@ app.whenReady().then(async()=>{
   await win.loadFile(process.argv.at(-1));
   await win.webContents.executeJavaScript('window.runBohrTests()');
   win.webContents.debugger.attach('1.3');
+  for(const deviceScaleFactor of [1,1.25,1.5,2]){
+   await win.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride',{width:1100,height:700,deviceScaleFactor,mobile:false});
+   await win.webContents.executeJavaScript('window.runBohrTests()');
+  }
+  await win.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride');
   for(const [name,value] of [['prefers-contrast','more'],['prefers-reduced-transparency','reduce'],['forced-colors','active']]){
    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[{name,value}]});
    await win.webContents.executeJavaScript('window.checkBohrAccessibility()');
@@ -132,6 +137,9 @@ window.runBohrTests=async()=>{
  expect(Number(reflection().opacity)>0,'reflection is visible')
  expect(reflection().filter==='none'&&reflection().backdropFilter==='none','surface light is never blurred or dimmed with the backdrop')
  expect(getComputedStyle(optics).pointerEvents==='none','optical layers do not intercept input')
+ expect(getComputedStyle(optics,'::before').maskImage==='none','rounded contour uses native antialiasing instead of subtractive masks')
+ const opticalRect=optics.getBoundingClientRect(),barRect=bar.getBoundingClientRect()
+ expect(opticalRect.width===barRect.width&&opticalRect.height===barRect.height,'reflection uses the measured outer contour, including its border')
  const button=document.getElementById('play'),rect=button.getBoundingClientRect()
  expect(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===button,'play target remains above the optical layer: '+JSON.stringify({x:rect.x,y:rect.y,w:rect.width,h:rect.height,hit:document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)?.outerHTML.slice(0,100)}))
  const geometry=bar.getBoundingClientRect()
@@ -145,6 +153,7 @@ window.runBohrTests=async()=>{
  expect(Number(reflection().opacity)===0,'zero highlight preserves user preference')
  for(const tone of ['pureWhite','dark']){
   root.setAttribute('data-theme',tone)
+  expect(getComputedStyle(document.querySelector('.title-bar-background')).boxShadow==='none','caption material has no dark separator')
   expect(getComputedStyle(bar).boxShadow.includes(tone==='dark'?'0, 0, 0':'18, 24, 32'),'elevation follows theme tone')
   const after=bar.getBoundingClientRect()
   expect(after.height===geometry.height&&after.width===geometry.width,'material does not change bar geometry')

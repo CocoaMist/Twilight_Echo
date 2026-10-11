@@ -2141,7 +2141,8 @@ html[data-te-motion='off'] .player-bar :deep(.ab-loop-range) {
 
 .player-bar-liquid .player-bar-warp {
   position: absolute;
-  inset: 0;
+  /* Include the parent border so raster geometry and the visible arc coincide. */
+  inset: -1px;
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
@@ -2334,7 +2335,7 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
 /* Bohr optical shoulder: no layout, hit testing, blur or pointer animation. */
 .player-bar-optics {
   position: absolute;
-  inset: 0;
+  inset: -1px;
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
@@ -2354,18 +2355,11 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(
-    145deg,
-    var(--te-bohr-light),
-    transparent 38%,
-    transparent 65%,
-    var(--te-bohr-edge)
-  );
-  mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  mask-composite: exclude;
+  /* Native rounded borders have one antialiased contour. Subtracting two masks
+     produced a stepped one-pixel ring, especially at fractional display scales. */
+  border: 1px solid var(--te-bohr-shoulder);
+  border-top-color: var(--te-bohr-light);
+  border-bottom-color: var(--te-bohr-edge);
 }
 
 .player-bar-liquid .player-bar-optics::after {
