@@ -355,7 +355,7 @@ function close(): void {
       transparent
     ),
     color-mix(in srgb, var(--te-titlebar-material-surface) 66%, transparent);
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--te-titlebar-material-ink) 8%, transparent);
+  box-shadow: var(--te-bohr-attached-shadow);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
@@ -363,12 +363,12 @@ function close(): void {
 /* Dark chrome has a soft surface, without a pale outline around the strip. */
 html[data-theme='dark'] .title-bar:not(.title-bar-immersive) .title-bar-background {
   background: color-mix(in srgb, var(--te-titlebar-material-surface) 72%, transparent);
-  box-shadow: none;
+  box-shadow: var(--te-bohr-attached-shadow);
 }
 
 html[data-theme='dark'] .title-bar-liquid .title-bar-background {
   background: color-mix(in srgb, var(--te-lg-context-surface) 64%, transparent);
-  box-shadow: none;
+  box-shadow: var(--te-bohr-attached-shadow);
 }
 
 .title-bar::before {
@@ -714,7 +714,7 @@ html
       transparent 82%
     ),
     color-mix(in srgb, var(--te-lg-context-surface) 56%, transparent);
-  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--te-lg-context-label) 8%, transparent);
+  box-shadow: var(--te-bohr-attached-shadow);
   backdrop-filter: blur(var(--te-lg-context-diffusion, 16px)) saturate(124%);
   -webkit-backdrop-filter: blur(var(--te-lg-context-diffusion, 16px)) saturate(124%);
 }

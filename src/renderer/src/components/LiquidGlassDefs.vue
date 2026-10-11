@@ -144,9 +144,21 @@ const expandedSpecularStrength = computed(() =>
 const cardSpecularActive = computed(
   () => specularStrength.value > 0 && Boolean(cardSpecularUrl.value)
 )
-const playbarSpecularActive = computed(
-  () => specularStrength.value > 0 && Boolean(playbarSpecularUrl.value)
-)
+// Bohr reflects light above the transmitted backdrop. Keeping the measured
+// highlight out of the SVG backdrop chain preserves it through blur and dimming.
+function syncPlaybarReflection(): void {
+  const style = document.documentElement.style
+  if (props.active && playbarSpecularUrl.value && specularStrength.value > 0) {
+    style.setProperty('--te-bohr-playbar-specular-map', `url("${playbarSpecularUrl.value}")`)
+    style.setProperty('--te-bohr-playbar-specular-strength', String(specularStrength.value))
+  } else {
+    style.removeProperty('--te-bohr-playbar-specular-map')
+    style.removeProperty('--te-bohr-playbar-specular-strength')
+  }
+}
+watch([playbarSpecularUrl, specularStrength, () => props.active], syncPlaybarReflection, {
+  flush: 'post'
+})
 const homeSpecularActive = computed(
   () => homeSpecularStrength.value > 0 && Boolean(cardSpecularUrl.value)
 )
@@ -681,6 +693,8 @@ onBeforeUnmount(() => {
   clearGeometryObservers()
   motionObserver?.disconnect()
   motionObserver = null
+  document.documentElement.style.removeProperty('--te-bohr-playbar-specular-map')
+  document.documentElement.style.removeProperty('--te-bohr-playbar-specular-strength')
 })
 
 watch(
@@ -1065,24 +1079,7 @@ watch(
         <feBlend in="RED_CHANNEL" in2="GB_COMBINED" mode="screen" result="RGB_COMBINED" />
         <feGaussianBlur in="RGB_COMBINED" :stdDeviation="aberrationBlur" result="REFRACTED" />
 
-        <!-- Wide-strip highlight, so the playbar's rim light keeps the same
-             physical thickness on its short axis as the cards do. -->
-        <template v-if="playbarSpecularActive">
-          <feImage
-            x="0"
-            y="0"
-            width="100%"
-            height="100%"
-            result="SPECULAR_RAW"
-            preserveAspectRatio="none"
-            :href="playbarSpecularUrl"
-          />
-          <feComponentTransfer in="SPECULAR_RAW" result="SPECULAR">
-            <feFuncA type="linear" :slope="specularStrength" intercept="0" />
-          </feComponentTransfer>
-          <feComposite in="SPECULAR" in2="SourceGraphic" operator="in" result="SPECULAR_CLIPPED" />
-          <feBlend in="REFRACTED" in2="SPECULAR_CLIPPED" mode="screen" />
-        </template>
+        <!-- Surface reflection is composited above this backdrop by PlayerBar. -->
       </filter>
     </defs>
   </svg>

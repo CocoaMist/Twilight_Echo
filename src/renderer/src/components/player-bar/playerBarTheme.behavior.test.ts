@@ -21,7 +21,9 @@ test('saved theme colors reach the dashboard and player controls across tones an
       new URL('../local-dashboard/DashboardPlaybackProgress.vue', import.meta.url),
       'utf8'
     )
-    const baseStyles = await readFile(new URL('../../assets/base.css', import.meta.url), 'utf8')
+    const baseStyles =
+      (await readFile(new URL('../../assets/base.css', import.meta.url), 'utf8')) +
+      (await readFile(new URL('../../assets/bohr.css', import.meta.url), 'utf8'))
     const sources = [
       await readFile(new URL('./PlayerBar.css', import.meta.url), 'utf8'),
       await readFile(new URL('../LocalDashboard.css', import.meta.url), 'utf8'),

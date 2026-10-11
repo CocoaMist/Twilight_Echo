@@ -113,7 +113,9 @@ import {
 type TitleSurface = 'default' | 'settings' | 'streaming'
 let idleLoginCheck: IdleTaskHandle | null = null
 
-const navigation = useAppNavigation()
+const navigation = useAppNavigation({
+  appearancePreviewActive: () => appearanceFullWindowPreview.value
+})
 const navigationPersistence = createNavigationSessionPersistence(navigation)
 const {
   menuOpen,

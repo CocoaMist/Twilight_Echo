@@ -7,7 +7,7 @@ const material = computed(() =>
   settings.value.surfaceMaterial === 'transparent'
     ? '透明'
     : settings.value.surfaceMaterial === 'liquidGlass'
-      ? '液态玻璃'
+      ? '波尔玻璃'
       : settings.value.cardAppearance.enabled
         ? '自定义卡片'
         : '跟随主题'

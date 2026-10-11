@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
 import { BUILTIN_NAVIGATION_PAGES } from './navigationPages.ts'
 import {
   NAVIGATION_SESSION_KEY,
@@ -25,6 +25,45 @@ function memoryStorage(): NavigationSessionStorage {
     }
   }
 }
+
+test('appearance preview exposes the retained page and preserves Settings navigation', () => {
+  const preview = ref(false)
+  const navigation = useAppNavigation({ appearancePreviewActive: () => preview.value })
+  const cases = [
+    {
+      target: { kind: 'local', category: 'albums', filter: 'album:one' },
+      visible: navigation.localViewVisible
+    },
+    { target: { kind: 'streaming', tab: 'search' }, visible: navigation.showStreamingSurface },
+    { target: { kind: 'radio' }, visible: navigation.showRadioPodcastPage },
+    { target: { kind: 'network' }, visible: navigation.showNetworkSourcesPage },
+    { target: { kind: 'recent', scope: 'device' }, visible: navigation.showRecentPage }
+  ] as const
+  for (const { target, visible } of cases) {
+    navigation.navigate(target)
+    navigation.openSettingsPage('appearance')
+    const retainedSession = JSON.stringify(navigation.session.value)
+    assert.equal(visible.value, false, target.kind)
+    preview.value = true
+    assert.equal(visible.value, true, target.kind)
+    assert.equal(navigation.showSettingsPage.value, true)
+    assert.equal(JSON.stringify(navigation.session.value), retainedSession)
+    preview.value = false
+    assert.equal(visible.value, false, target.kind)
+    assert.equal(JSON.stringify(navigation.session.value), retainedSession)
+    navigation.closeSettingsPage()
+    assert.equal(visible.value, true, target.kind)
+    assert.deepEqual(navigation.pageTarget.value, target)
+  }
+})
+
+test('appearance preview does not expose page content behind other foreground tools', () => {
+  const navigation = useAppNavigation({ appearancePreviewActive: () => true })
+  navigation.openPlayingPage()
+  assert.equal(navigation.localViewVisible.value, false)
+  navigation.openPluginPage()
+  assert.equal(navigation.localViewVisible.value, false)
+})
 
 test('the menu starts closed and stays shared across local and streaming pages', () => {
   const navigation = useAppNavigation()

@@ -187,8 +187,8 @@ function toggleAdaptiveTone(): void {
     @click="liquidGlassOpen = !liquidGlassOpen"
   >
     <span class="setting-copy">
-      <strong>液态玻璃材质</strong>
-      <span>为导航和播放控件启用自适应材质层，可选开启受控的内容卡片实验。</span>
+      <strong>波尔材质 · 液态玻璃</strong>
+      <span>透色的玻璃、柔和的弧面边缘与光影，为导航和播放控件增加层次。</span>
     </span>
     <i class="pi pi-chevron-down"></i>
   </button>

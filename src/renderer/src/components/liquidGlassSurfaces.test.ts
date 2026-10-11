@@ -183,13 +183,17 @@ test('all SVG filters remain defined once and referenced from their intended sur
   )
 })
 
-test('every filter chain lands the baked highlight after refraction resolves', () => {
+test('content filters place highlights after refraction; the playbar reflects above diffusion', () => {
   // The highlight is a lerp toward white, so it has to sit on top of the resolved
   // refraction rather than being displaced along with the source.
   const chains = defs.match(/<filter[\s\S]*?<\/filter>/g) ?? []
   assert.equal(chains.length, 4, 'all four shared chains must be present')
 
   for (const chain of chains) {
+    if (chain.includes(':id="LIQUID_GLASS_PLAYBAR_FILTER_ID"')) {
+      assert.doesNotMatch(chain, /SPECULAR/, 'media reflections stay outside the blurred backdrop')
+      continue
+    }
     const refracted = chain.indexOf('result="REFRACTED"')
     const specular = chain.indexOf('result="SPECULAR_RAW"')
     assert.ok(refracted >= 0, 'refraction must be a named result')
@@ -245,12 +249,7 @@ test('no chain masks refraction against an feImage-derived alpha', () => {
 })
 
 test('a zero-strength highlight drops out of the chain instead of compositing a no-op', () => {
-  for (const flag of [
-    'cardSpecularActive',
-    'expandedSpecularActive',
-    'homeSpecularActive',
-    'playbarSpecularActive'
-  ]) {
+  for (const flag of ['cardSpecularActive', 'expandedSpecularActive', 'homeSpecularActive']) {
     assert.match(defs, new RegExp(`<template v-if="${flag}">`))
     // Both halves matter: zero strength, and an empty URL from a canvas-less context.
     assert.match(defs, new RegExp(`const ${flag} = computed\\(`))
@@ -271,12 +270,10 @@ test('the expanded and dashboard chains scale the highlight by their own profile
   }
 
   assert.match(byId('LIQUID_GLASS_CARD_FILTER_ID'), /:slope="specularStrength"/)
-  assert.match(byId('LIQUID_GLASS_PLAYBAR_FILTER_ID'), /:slope="specularStrength"/)
   // Broad content panes turn to white plastic long before compact chrome does.
   assert.match(byId('LIQUID_GLASS_EXPANDED_CARD_FILTER_ID'), /:slope="expandedSpecularStrength"/)
   assert.match(byId('LIQUID_GLASS_HOME_CARD_FILTER_ID'), /:slope="homeSpecularStrength"/)
   // The playbar's short axis needs the wide-strip bake, not the square one.
-  assert.match(byId('LIQUID_GLASS_PLAYBAR_FILTER_ID'), /:href="playbarSpecularUrl"/)
   assert.match(byId('LIQUID_GLASS_CARD_FILTER_ID'), /:href="cardSpecularUrl"/)
 })
 

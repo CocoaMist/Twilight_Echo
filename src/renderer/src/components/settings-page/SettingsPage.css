@@ -92,11 +92,7 @@ html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-l
   border-radius: 20px;
   padding: 8px;
   background: transparent;
-  box-shadow:
-    inset 0 1px 0.5px color-mix(in srgb, var(--te-lg-context-rim) 28%, transparent),
-    inset 0 -1px 1px rgb(0 0 0 / 12%),
-    0 2px 7px rgb(0 0 0 / 5%),
-    0 13px 32px var(--te-lg-context-shadow);
+  box-shadow: var(--te-bohr-raised-shadow);
 }
 
 html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-liquid-glass='on'])
@@ -188,11 +184,7 @@ html[data-te-liquid-glass-scrolled='on']:is(
     [data-te-settings-navigation-liquid-glass='on']
   )
   .settings-preview-nav {
-  box-shadow:
-    inset 0 0 0 0.5px color-mix(in srgb, var(--te-lg-context-rim) 40%, transparent),
-    inset 0 1px 0.5px color-mix(in srgb, var(--te-lg-context-rim) 16%, transparent),
-    inset 0 -1px 1px color-mix(in srgb, var(--te-lg-context-label) 10%, transparent),
-    0 8px 26px var(--te-lg-context-shadow);
+  box-shadow: var(--te-bohr-raised-shadow);
 }
 
 html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-liquid-glass='on'])

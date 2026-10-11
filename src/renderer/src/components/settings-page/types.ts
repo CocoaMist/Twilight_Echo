@@ -1075,9 +1075,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: 'appearance-editor-105',
     section: 'appearance',
-    title: '液态玻璃材质',
+    title: '波尔材质 · 液态玻璃',
     terms:
-      '外观 主题 界面 液态玻璃 玻璃 透明 透明化 折射 材质 质感 liquid glass 卡片 播放条 播放栏 playbar 毛玻璃 液态玻璃材质',
+      '波尔 bohr 外观 主题 界面 液态玻璃 玻璃 透明 透明化 折射 材质 质感 liquid glass 卡片 播放条 播放栏 playbar 毛玻璃 液态玻璃材质',
     appearanceArea: 'material'
   },
   {

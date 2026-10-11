@@ -1705,6 +1705,7 @@ onBeforeUnmount(() => {
       <!-- Refracting layer. Absolute so it stays out of the grid flow, and behind
            content so controls and text are never displaced by the filter. -->
       <span v-if="liquidGlassActive" class="player-bar-warp" aria-hidden="true"></span>
+      <span v-if="isStandard" class="player-bar-optics" aria-hidden="true"></span>
 
       <CompactPlayerBarVisualizer
         v-if="showCompactVisualizer"
