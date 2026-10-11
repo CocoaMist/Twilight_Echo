@@ -1,22 +1,19 @@
 # Twilight AutoMix native core
 
-The latest evaluation is **1.3.0-automix.5**, using `twilight-rules-4`.
-On the unchanged 36-pair corpus, intelligent preparation remains 26/36 Natural
-and 34/36 DJ. DJ transitions lasting at least 16 seconds rise from 19 to 22:
-19 beat-aligned long mixes and three original-speed tail overlaps. Twelve DJ
-pairs retain original-speed short handoffs; two retain speed-limit fallback.
-Natural still includes 25 original-speed content handoffs and one beat-aligned
-transition. See [EVALUATION-V5.md](EVALUATION-V5.md) for the reference findings,
-route eligibility, reproduction and executed
-checks. These are preparation/rendering counts, with human listening and
-preannotated suitable-pair coverage still pending.
+The latest evaluation is **1.3.0-automix.8**, using `twilight-rules-5`.
+On the unchanged 36-pair corpus, intelligent preparation is 27/36 Natural
+and 34/36 DJ; 22 DJ transitions last at least 16 seconds. A new original-speed
+short release route requires nearby positive music, uninterrupted decay,
+known voice coverage and a verified mixed envelope. Existing successful
+plans retain their strategy and source mapping. See [EVALUATION-V8.md](EVALUATION-V8.md)
+for eligibility, reference findings, reproduction and executed checks.
+These are preparation/rendering counts; human listening and preannotated
+suitable-pair coverage remain pending.
 
-The .5 unpacked package and ZIP contain the tested engine. The ignored
-development `resources/audio-engine` runtime has also been updated after the
-development player was closed, with matching build digests and a rule-version
-probe. The package is ready for independent evaluation. The records below
-and [EVALUATION-V4.md](EVALUATION-V4.md) describe earlier acceptance work and
-retain their original limitations.
+The optional paired-stem arrangement and detected Auto/GPU/CPU controls remain
+available; see [EVALUATION-V6.md](EVALUATION-V6.md) and [EVALUATION-V7.md](EVALUATION-V7.md).
+The records below and earlier evaluation documents retain their original
+limitations. The current tested runtime is shipped in the .8 evaluation package.
 
 Production numerical kernels are handwritten Win64 NASM, with a complete C11
 reference and explicit SSE2/AVX2 dispatch. The existing engine owns transport;

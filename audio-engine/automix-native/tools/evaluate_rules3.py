@@ -133,7 +133,7 @@ def main():
                 assert max(entry_error, exit_error) <= 1e-6 and peak <= .9801
                 entry['modes'][mode] = {**plan, 'prepareMs': timings, 'maxCpuSampleError': maximum,
                                        'entrySampleError': entry_error, 'exitSampleError': exit_error, 'bodyPeak': peak}
-                if plan.get('strategy') == 'tail-overlap':
+                if plan.get('strategy') in ('tail-overlap', 'release-boundary'):
                     # An independent witness from decoded stereo PCM at full
                     # output rate, using the renderer's exact gain correction.
                     frames = plan['outputFrames']; size = frames // 960
@@ -153,11 +153,22 @@ def main():
                     endpoint = max(float(np.mean(lanes[0][:48000].astype(np.float64)**2)),float(np.mean(lanes[1][-48000:].astype(np.float64)**2)))
                     audible = max(10**(-55/10), endpoint*10**(-24/10))
                     joint = float(np.sum((powers[0]>=audible)&(powers[1]>=audible))*.02)
-                    assert joint >= frames/48000*.5, (item['id'], 'real PCM jointly audible', joint)
+                    required_joint = 1 if plan['strategy'] == 'release-boundary' else frames/48000*.5
+                    assert joint >= required_joint, (item['id'], 'real PCM jointly audible', joint)
                     entry['modes'][mode]['pcmJointAudibleSeconds'] = round(joint, 3)
                     entry['modes'][mode]['pcmJointThresholdDb'] = round(10*np.log10(audible), 3)
                     entry['modes'][mode]['pcmEvidenceStage'] = 'decoded stereo, exact gain curve and verified prepared shared headroom'
                     entry['modes'][mode]['pcmHeadroomWitnessError'] = residual
+                    if plan['strategy'] == 'release-boundary':
+                        seconds = frames // 48000
+                        full_bins = np.mean(reference.astype(np.float64).reshape(seconds,48000,2)**2,axis=(1,2))
+                        endpoints = [np.mean(lanes[0][:48000].astype(np.float64)**2),
+                                     np.mean(lanes[1][-48000:].astype(np.float64)**2)]
+                        endpoint_db = 10*np.log10(np.maximum(endpoints,1e-16))
+                        expected = np.linspace(*endpoint_db,seconds)
+                        ripple = float(np.max(np.abs(10*np.log10(np.maximum(full_bins,1e-16))-expected)))
+                        assert ripple <= 5, (item['id'], 'real PCM release envelope', ripple)
+                        entry['modes'][mode]['pcmEnvelopeRippleDb'] = round(ripple,3)
                 after = np.concatenate([pcm[0][:chosen['currentStart']-origins[0]], reference, pcm[1][chosen['nextEnd']-origins[1]:]])
             else:
                 entry['modes'][mode] = chosen

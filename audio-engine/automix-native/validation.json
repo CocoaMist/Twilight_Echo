@@ -1412,5 +1412,130 @@
     ],
     "previousEvaluationRecordsPreserved": true,
     "pushed": false
+  },
+  "evaluationV8": {
+    "version": "1.3.0-automix.8",
+    "ruleVersion": "twilight-rules-5",
+    "implementationCommit": "ddf1fc2c",
+    "releaseReady": false,
+    "defaultMode": "off",
+    "referenceSourceTransplanted": false,
+    "corpusSha256": "ee2c8f460725307331ee76fe866ef0a4b1d9ea332083eb6b8fc595827cb31520",
+    "rawAnalysisReused": true,
+    "plansChecked": 72,
+    "summary": {
+      "natural": 27,
+      "dj": 34,
+      "djLong": 22
+    },
+    "unchangedExistingSuccessfulPlans": 60,
+    "changedPlans": [
+      {
+        "id": "pair-27",
+        "mode": "natural",
+        "plan": {
+          "intelligent": true,
+          "reason": "",
+          "stemEnhanced": false,
+          "strategy": "release-boundary",
+          "effect": 0,
+          "outputFrames": 384000,
+          "currentStart": 8394959,
+          "currentEnd": 8778959,
+          "nextStart": 9600,
+          "nextEnd": 393600,
+          "currentRate": 1,
+          "nextRate": 1,
+          "score": 1.01748216,
+          "confidence": 0,
+          "bpm": 0,
+          "nextGain": 0.5,
+          "preparedBytes": 12288000,
+          "prepareMs": [
+            31,
+            32,
+            31
+          ],
+          "maxCpuSampleError": 1.1920928955078125e-07,
+          "entrySampleError": 0.0,
+          "exitSampleError": 0.0,
+          "bodyPeak": 0.9792026877403259,
+          "pcmJointAudibleSeconds": 4.5,
+          "pcmJointThresholdDb": -36.85,
+          "pcmEvidenceStage": "decoded stereo, exact gain curve and verified prepared shared headroom",
+          "pcmHeadroomWitnessError": 5.922140156044975e-08,
+          "pcmEnvelopeRippleDb": 3.99,
+          "sharedComparisonGain": 0.7953004880539534
+        }
+      }
+    ],
+    "nativeRenders": 183,
+    "wavFiles": 144,
+    "rendererSha256": "f27c634a549a8a62f15f194c81ba5424e1622bc1fbd8097ef03e6f5be2652ec3",
+    "windowsProbeSha256": "9d43513c2c94512a221380e5244d9249c4c157a4797cf2b6e2c02205187fe1ae",
+    "package": {
+      "passed": true,
+      "version": "1.3.0-automix.8",
+      "archiveSha256": "8f59f21ac8740a937a7b58d14b8f12e82c3bcf14c80beb6f049667742001a397",
+      "exeSha256": "2451b2eb83d5c112c46e9822ce4abccaeffc0f4738854801356d182c8a28b621",
+      "dllSha256": "b510ac5e3242a4129e259b0e6e0b12dd056ee9dab80318fbe6409aee418ccfeb",
+      "nativeBinaries": [
+        "twilight-audio-engine.dll",
+        "twilight_audio_node.node",
+        "twilight-asio-helper.exe",
+        "twilight-vst3-host.exe",
+        "twilight-vst3-scanner.exe",
+        "twilight_smtc_node.node"
+      ],
+      "runtimeDependencies": [],
+      "workers": {
+        "worker.py": "d4efa4baceae098a5cc4f7d32ebde23134bde5106ee0becc98ad6d7436cbac31",
+        "arrangement.py": "53f91e9184328161407d2c48e5b3f94a74b02e7c9d2e27329042519645aa43c5",
+        "probe.py": "db2211d8ef04c84dd0919d299aa323beca98256be7688bc6e3cb787f5720714c"
+      },
+      "unchangedBaseGraphs": true,
+      "enhancementPackDuplicated": false
+    },
+    "archive": {
+      "file": "TwilightEcho-1.3.0-automix.8-Windows-x64.zip",
+      "bytes": 190506355,
+      "sha256": "b2085a4931f0057211effae55aa062a91374e2ded0314f539de183203f83e1f2",
+      "integrityPassed": true
+    },
+    "checks": {
+      "autoMixSettingsTestsPassed": 39,
+      "autoMixChainTestsPassed": 43,
+      "settingsChainTestsOverlap": true,
+      "audioManagerTestsPassed": 445,
+      "fullNativeCTestInitiallyPassed": 47,
+      "fullNativeCTestSkipped": 1,
+      "fullNativeCTestInitialFailures": [
+        "twilight_wsola_performance_gate: one deadline miss during concurrent rendering/build"
+      ],
+      "finalNativeAutoMixAndPerformanceRetestPassed": 9,
+      "allNativeFailuresResolved": true,
+      "unchangedSkip": "ASIO cross-DLL environment fixture",
+      "typecheckBuildPassed": true,
+      "lintPassed": true,
+      "packagedRealModelHandoffs": 2,
+      "realPlaybackUnderruns": 0,
+      "realPlaybackDeadlineMisses": 0,
+      "packagedSettingsRestorePassed": true,
+      "pageDesktopMobilePassed": true,
+      "developmentRuntimeUpdated": true
+    },
+    "compatibleEnhancementPack": "2.2",
+    "stemArrangementVersion": "twilight-stem-arrangement-1",
+    "stemCoverageMeasuredThisIteration": false,
+    "pendingGates": [
+      "human listening",
+      "preannotated suitable-pair coverage",
+      "all 36 pairs stem evaluation",
+      "24-hour device/application stress",
+      "real online account acceptance",
+      "formal publication"
+    ],
+    "pushed": false,
+    "previousEvaluationRecordsPreserved": true
   }
 }
