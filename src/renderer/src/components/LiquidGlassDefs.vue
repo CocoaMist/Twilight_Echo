@@ -40,6 +40,7 @@ import {
   type DisplacementGeometry
 } from '../utils/liquidGlassDisplacement.ts'
 import { getSpecularMapUrl } from '../utils/liquidGlassSpecular.ts'
+import { glassRasterDensity, observeDevicePixelRatio } from '../utils/glassRasterDensity.ts'
 import {
   createFrameCoalescer,
   LIQUID_GLASS_POINTER_FRAME_INTERVAL_MS,
@@ -246,19 +247,20 @@ function measureSelector(selector: string, fallback: DisplacementGeometry): Disp
  */
 function ensureMaps(): void {
   if (!props.active) return
+  const density = glassRasterDensity(window.devicePixelRatio)
 
   const playbar = measureSelector(LIQUID_GLASS_PLAYBAR_SELECTOR, NOMINAL_PLAYBAR_GEOMETRY)
   playbarGeometry.value = playbar
-  playbarMapUrl.value = getDisplacementMapUrl(playbar)
-  playbarSpecularUrl.value = getSpecularMapUrl(playbar, undefined, 2)
+  playbarMapUrl.value = getDisplacementMapUrl(playbar, density)
+  playbarSpecularUrl.value = getSpecularMapUrl(playbar, undefined, density)
 
   // Cards are many elements sharing one filter, so they cannot each carry their
   // own raster. The first visible card stands in for the class; they are laid out
   // on a uniform grid, so one measurement is representative.
   const card = measureSelector(LIQUID_GLASS_CARD_SELECTOR, NOMINAL_CARD_GEOMETRY)
   cardGeometry.value = card
-  cardMapUrl.value = getDisplacementMapUrl(card)
-  cardSpecularUrl.value = getSpecularMapUrl(card)
+  cardMapUrl.value = getDisplacementMapUrl(card, density)
+  cardSpecularUrl.value = getSpecularMapUrl(card, undefined, density)
 }
 
 /**
@@ -272,6 +274,7 @@ const geometryFrames = createFrameCoalescer<void>(() => ensureMaps(), {
 
 let geometryObserver: ResizeObserver | null = null
 let geometryMutationObserver: MutationObserver | null = null
+let stopObservingPixelRatio: (() => void) | null = null
 
 /**
  * The surface currently being watched for each measured class. Exactly one
@@ -660,6 +663,9 @@ function syncSurfaceVisibility(): void {
 
 onMounted(() => {
   ensureMaps()
+  stopObservingPixelRatio = observeDevicePixelRatio(() => {
+    if (props.active) geometryFrames.schedule(undefined)
+  }, window)
   syncFilterInputs()
   writePointerVariables(staticPointerCssVariables(), document.documentElement)
   syncPointerTracking()
@@ -686,6 +692,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopObservingPixelRatio?.()
+  stopObservingPixelRatio = null
   window.removeEventListener(LIQUID_GLASS_TUNING_CHANGED_EVENT, onTuningChanged)
   detachPointer()
   clearSurfaceVisibility()

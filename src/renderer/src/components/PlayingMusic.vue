@@ -1587,7 +1587,7 @@ html[data-te-motion='off'] .backdrop-fluid::before {
   display: inline-block;
   padding: 0.35em;
   margin: -0.35em;
-  will-change: transform;
+  /* Active word animations manage their own compositing lifetime. */
   backface-visibility: hidden;
 }
 

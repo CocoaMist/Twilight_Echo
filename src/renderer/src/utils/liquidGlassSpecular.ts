@@ -44,11 +44,13 @@
  */
 
 import {
-  geometryKey,
+  clearRasterRowSpan,
+  rasterSamplingKey,
   liquidRel,
-  resolveRasterGeometry,
+  resolveRasterSampling,
   roundedRectSDF,
   sdfNormal,
+  straightRasterRowSpan,
   type DisplacementGeometry,
   type DisplacementRaster,
   type DisplacementVector,
@@ -143,6 +145,7 @@ export function specularTerms(
   if (signedDistance > 0) return { rim: 0, sheen: 0 }
 
   const depth = -signedDistance
+  if (depth >= Math.max(rimWidth, SPECULAR_EDGE_BAND_PX)) return { rim: 0, sheen: 0 }
   const t = Math.min(1, depth / Math.max(1e-6, rimWidth))
 
   const normal = sdfNormal(x, y, shape)
@@ -215,38 +218,58 @@ export function buildSpecularPixels(
 
   // Same resolver as the displacement map, so the highlight lands on exactly the
   // rim the refraction bends.
-  const resolved = resolveRasterGeometry(geometry)
-  // The independently composited playback reflection needs more than one sample
-  // per CSS pixel. Keep the optical field in its original units and bound memory.
-  const scale = Number.isFinite(rasterScale) ? Math.max(1, Math.min(2, rasterScale)) : 1
-  const width = Math.round(resolved.width * scale)
-  const height = Math.round(resolved.height * scale)
-  const { shape, blurRadius } = resolved
-  const scaleX = width / resolved.width
-  const scaleY = height / resolved.height
+  const { width, height, shape, blurRadius, scaleX, scaleY } = resolveRasterSampling(
+    geometry,
+    rasterScale
+  )
   const rimWidth = blurRadius
   const lightVector = lightVectorFromAngle(angleDegrees)
 
   const pixels = new Uint8ClampedArray(width * height * 4)
+  const verticalIntensity = new Float64Array(width).fill(-1)
+  pixels.fill(255)
+  for (let p = 3; p < pixels.length; p += 4) pixels[p] = 0
 
   for (let y = 0; y < height; y++) {
     // Sample at pixel centers so the field stays symmetric for any size.
-    const py = (y + 0.5) / scaleY - resolved.height / 2
+    const py = (y + 0.5) / scaleY - shape.halfHeight
+    const [clearStart, clearEnd] = clearRasterRowSpan(
+      shape,
+      Math.max(rimWidth, SPECULAR_EDGE_BAND_PX),
+      py,
+      scaleX,
+      scaleY
+    )
+    const [straightStart, straightEnd] = straightRasterRowSpan(shape, py, scaleX, scaleY)
     for (let x = 0; x < width; x++) {
-      const px = (x + 0.5) / scaleX - resolved.width / 2
-      const distance = roundedRectSDF(px, py, shape.halfWidth, shape.halfHeight, shape.radius)
-      let intensity = specularIntensity(px, py, shape, rimWidth, lightVector)
-      // Integrate coverage across a boundary pixel instead of deciding its alpha
-      // from one point. Only the narrow contour pays for the additional samples.
-      if (Math.abs(distance) < Math.hypot(0.5 / scaleX, 0.5 / scaleY)) {
-        intensity = 0
-        for (const dy of [-0.375, -0.125, 0.125, 0.375]) {
-          for (const dx of [-0.375, -0.125, 0.125, 0.375]) {
-            intensity +=
-              specularIntensity(px + dx / scaleX, py + dy / scaleY, shape, rimWidth, lightVector) /
-              16
+      if (x >= clearStart && x < clearEnd) {
+        x = clearEnd - 1
+        continue
+      }
+      const px = (x + 0.5) / scaleX - shape.halfWidth
+      const verticalEdge = clearEnd > clearStart
+      let intensity = verticalEdge ? verticalIntensity[x] : -1
+      if (intensity < 0) {
+        const distance = roundedRectSDF(px, py, shape.halfWidth, shape.halfHeight, shape.radius)
+        intensity = specularIntensity(px, py, shape, rimWidth, lightVector)
+        // Integrate coverage across a boundary pixel instead of deciding its alpha
+        // from one point. Only the narrow contour pays for the additional samples.
+        if (Math.abs(distance) < Math.hypot(0.5 / scaleX, 0.5 / scaleY)) {
+          intensity = 0
+          for (const dy of [-0.375, -0.125, 0.125, 0.375]) {
+            for (const dx of [-0.375, -0.125, 0.125, 0.375]) {
+              intensity +=
+                specularIntensity(
+                  px + dx / scaleX,
+                  py + dy / scaleY,
+                  shape,
+                  rimWidth,
+                  lightVector
+                ) / 16
+            }
           }
         }
+        if (verticalEdge) verticalIntensity[x] = intensity
       }
 
       const p = (y * width + x) * 4
@@ -256,6 +279,14 @@ export function buildSpecularPixels(
       // Dither only where there is a gradient to band; leave the dead interior
       // exactly transparent so the middle of a surface stays untouched.
       pixels[p + 3] = intensity <= 0 ? 0 : intensity * 255 + bayerOffset(x, y)
+      if (x === straightStart && straightEnd > straightStart) {
+        // Preserve the per-pixel dither while reusing the constant optical field.
+        for (let nextX = x + 1; nextX < straightEnd; nextX++) {
+          pixels[(y * width + nextX) * 4 + 3] =
+            intensity <= 0 ? 0 : intensity * 255 + bayerOffset(nextX, y)
+        }
+        x = straightEnd - 1
+      }
     }
   }
 
@@ -275,7 +306,7 @@ export function getSpecularMapUrl(
   angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG,
   rasterScale: number = 1
 ): string {
-  const key = `${geometryKey(geometry)}@${angleDegrees}@${rasterScale}`
+  const key = `${rasterSamplingKey(geometry, rasterScale)}@${angleDegrees}`
   const cached = cache.get(key)
   if (cached !== undefined) {
     cache.delete(key)

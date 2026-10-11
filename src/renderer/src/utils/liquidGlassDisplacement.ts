@@ -65,6 +65,9 @@ const REL_OUTER_EXPONENT = 2
  * visible while the corners stay proportionate.
  */
 export const MAX_DISPLACEMENT_MAP_AXIS = 1024
+/** Dense maps remain bounded: at most 2048 per axis and 8 MiB of decoded RGBA. */
+export const MAX_GLASS_RASTER_AXIS = 2048
+export const MAX_GLASS_RASTER_PIXELS = 2 * 1024 * 1024
 
 /** Signed distance to a rounded rectangle centered on the origin. */
 export function roundedRectSDF(
@@ -153,6 +156,9 @@ export function refractionOffset(
   const signedDistance = roundedRectSDF(x, y, shape.halfWidth, shape.halfHeight, shape.radius)
   // Outside the shape entirely; the filter clips this away regardless.
   if (signedDistance > 0 || shape.radius <= 0) return { x: 0, y: 0, magnitude: 0 }
+  if (signedDistance <= -Math.min(shape.radius, blurRadius)) {
+    return { x: 0, y: 0, magnitude: 0 }
+  }
 
   const distance = refractionDistance(signedDistance, shape.radius)
   const depth = -signedDistance
@@ -218,6 +224,59 @@ export function resolveRasterGeometry(geometry: DisplacementGeometry): {
   }
 }
 
+/** Shared physical-pixel sampling for refraction and reflection, in optical units. */
+export function resolveRasterSampling(geometry: DisplacementGeometry, density = 1) {
+  const resolved = resolveRasterGeometry(geometry)
+  const requested = Number.isFinite(density) ? Math.max(1, Math.min(3, density)) : 1
+  const scale = Math.min(
+    requested,
+    MAX_GLASS_RASTER_AXIS / Math.max(resolved.width, resolved.height),
+    Math.sqrt(MAX_GLASS_RASTER_PIXELS / (resolved.width * resolved.height))
+  )
+  const width = Math.max(1, Math.floor(resolved.width * scale))
+  const height = Math.max(1, Math.floor(resolved.height * scale))
+  return {
+    ...resolved,
+    width,
+    height,
+    scaleX: width / resolved.width,
+    scaleY: height / resolved.height
+  }
+}
+
+/** Key the effective sampling size, so clamped density requests reuse one map. */
+export function rasterSamplingKey(geometry: DisplacementGeometry, density = 1): string {
+  const { width, height } = resolveRasterSampling(geometry, density)
+  return `${geometryKey(geometry)}@${width}x${height}`
+}
+
+/** A rectangle guaranteed to be clear, including a guard for contour sampling. */
+export function clearRasterRowSpan(
+  shape: RoundedRectShape,
+  band: number,
+  py: number,
+  scaleX: number,
+  scaleY: number
+): readonly [number, number] {
+  const inset = Math.max(shape.radius, band)
+  if (Math.abs(py) >= shape.halfHeight - inset - 1 / scaleY) return [0, 0]
+  return [Math.ceil(inset * scaleX + 1), Math.floor((shape.halfWidth * 2 - inset) * scaleX - 1)]
+}
+
+/** Along a horizontal straight edge the optical field is constant across X. */
+export function straightRasterRowSpan(
+  shape: RoundedRectShape,
+  py: number,
+  scaleX: number,
+  scaleY: number
+): readonly [number, number] {
+  if (Math.abs(py) <= shape.halfHeight - shape.radius + 1 / scaleY) return [0, 0]
+  return [
+    Math.ceil(shape.radius * scaleX + 1),
+    Math.floor((shape.halfWidth * 2 - shape.radius) * scaleX - 1)
+  ]
+}
+
 /**
  * Builds RGBA bytes for the displacement map. R holds X offset, G and B both hold
  * Y offset — the filter selects R and B, and G is kept in sync so the map is also
@@ -234,7 +293,10 @@ export function resolveRasterGeometry(geometry: DisplacementGeometry): {
  * feImage-derived alpha makes Chromium drop the whole backdrop-filter — see
  * `scripts/backdrop-filter-url-probe.test.cjs`), so nothing reads alpha now.
  */
-export function buildDisplacementPixels(geometry: DisplacementGeometry): DisplacementRaster {
+export function buildDisplacementPixels(
+  geometry: DisplacementGeometry,
+  density = 1
+): DisplacementRaster {
   if (
     !Number.isFinite(geometry.width) ||
     !Number.isFinite(geometry.height) ||
@@ -244,15 +306,48 @@ export function buildDisplacementPixels(geometry: DisplacementGeometry): Displac
     throw new Error(`invalid displacement map size: ${geometry.width}x${geometry.height}`)
   }
 
-  const { width, height, shape, blurRadius } = resolveRasterGeometry(geometry)
+  const { width, height, shape, blurRadius, scaleX, scaleY } = resolveRasterSampling(
+    geometry,
+    density
+  )
   const pixels = new Uint8ClampedArray(width * height * 4)
+  const pixelWords = new Uint32Array(pixels.buffer)
+  // Straight vertical edges repeat the same encoded pixel across rows. Zero is
+  // an unused cache sentinel because every displacement pixel is fully opaque.
+  const verticalPixelWords = new Uint32Array(width)
+  pixels.fill(NEUTRAL_BYTE)
+  for (let p = 3; p < pixels.length; p += 4) pixels[p] = 255
 
   for (let y = 0; y < height; y++) {
     // Sample at pixel centers so the field stays symmetric for any size.
-    const py = y + 0.5 - height / 2
+    const py = (y + 0.5) / scaleY - shape.halfHeight
+    const [clearStart, clearEnd] = clearRasterRowSpan(shape, blurRadius, py, scaleX, scaleY)
+    const [straightStart, straightEnd] = straightRasterRowSpan(shape, py, scaleX, scaleY)
     for (let x = 0; x < width; x++) {
-      const px = x + 0.5 - width / 2
-      const sample = refractionOffset(px, py, shape, blurRadius)
+      if (x >= clearStart && x < clearEnd) {
+        x = clearEnd - 1
+        continue
+      }
+      const verticalEdge = clearEnd > clearStart
+      if (verticalEdge && verticalPixelWords[x] !== 0) {
+        pixelWords[y * width + x] = verticalPixelWords[x]
+        continue
+      }
+      const px = (x + 0.5) / scaleX - shape.halfWidth
+      let sample = refractionOffset(px, py, shape, blurRadius)
+      const distance = roundedRectSDF(px, py, shape.halfWidth, shape.halfHeight, shape.radius)
+      // Integrate only the curved contour's partial coverage. Alpha must remain
+      // opaque; uncovered subpixels contribute the neutral displacement instead.
+      if (Math.abs(distance) < Math.hypot(0.5 / scaleX, 0.5 / scaleY)) {
+        sample = { x: 0, y: 0, magnitude: 0 }
+        for (const dy of [-0.375, -0.125, 0.125, 0.375]) {
+          for (const dx of [-0.375, -0.125, 0.125, 0.375]) {
+            const part = refractionOffset(px + dx / scaleX, py + dy / scaleY, shape, blurRadius)
+            sample.x += part.x / 16
+            sample.y += part.y / 16
+          }
+        }
+      }
 
       // Map [-1, 1] onto the byte range around neutral.
       const r = sample.x * 0.5 + 0.5
@@ -263,6 +358,13 @@ export function buildDisplacementPixels(geometry: DisplacementGeometry): Displac
       pixels[p + 1] = g * 255
       pixels[p + 2] = g * 255
       pixels[p + 3] = 255
+      if (verticalEdge) verticalPixelWords[x] = pixelWords[p / 4]
+      if (x === straightStart && straightEnd > straightStart) {
+        // Read the encoded word in native byte order, then repeat it without
+        // recomputing the same straight-edge profile for every pixel.
+        pixelWords.fill(pixelWords[p / 4], p / 4 + 1, y * width + straightEnd)
+        x = straightEnd - 1
+      }
     }
   }
 
@@ -270,7 +372,7 @@ export function buildDisplacementPixels(geometry: DisplacementGeometry): Displac
 }
 
 const cache = new Map<string, string>()
-/** Each entry is a data-URL raster up to 1024 px square; a handful covers every live surface size. */
+/** A handful of bounded rasters covers the recently used surface sizes. */
 const MAX_CACHED_MAPS = 8
 
 function rememberMap(key: string, url: string): void {
@@ -293,14 +395,17 @@ export function geometryKey(geometry: DisplacementGeometry): string {
  * when canvas is unavailable (non-DOM context), letting callers skip the filter
  * rather than throw.
  */
-export function getDisplacementMapUrl(geometry: DisplacementGeometry): string {
-  const key = geometryKey(geometry)
+export function getDisplacementMapUrl(geometry: DisplacementGeometry, density = 1): string {
+  const key = rasterSamplingKey(geometry, density)
   const cached = cache.get(key)
-  if (cached !== undefined) return cached
+  if (cached !== undefined) {
+    rememberMap(key, cached)
+    return cached
+  }
 
   if (typeof document === 'undefined') return ''
 
-  const raster = buildDisplacementPixels(geometry)
+  const raster = buildDisplacementPixels(geometry, density)
   const canvas = document.createElement('canvas')
   canvas.width = raster.width
   canvas.height = raster.height

@@ -6,6 +6,7 @@ import {
   NOMINAL_CARD_GEOMETRY,
   NOMINAL_PLAYBAR_GEOMETRY,
   roundedRectSDF,
+  resolveRasterSampling,
   type RoundedRectShape
 } from './liquidGlassDisplacement.ts'
 import {
@@ -589,4 +590,36 @@ test('highlight cache keeps eight recent maps and refreshes recency on a hit', (
   assert.notEqual(dense, first, 'sample density has a separate cache entry')
   assert.equal(getSpecularMapUrl(geometry, 0, 2), dense, 'dense maps are also reused')
   assert.equal(encodes, 11)
+})
+
+test('clear-interior skipping preserves optical samples for shallow, deep and capsule rims', () => {
+  for (const geometry of [
+    { width: 64, height: 44, radius: 8, blurRadius: 4 },
+    { width: 64, height: 44, radius: 20, blurRadius: 3 },
+    { width: 18, height: 11, radius: 999, blurRadius: 100 }
+  ]) {
+    const density = 2
+    const raster = buildSpecularRaster(geometry, DEFAULT_SPECULAR_ANGLE_DEG, density)
+    const { shape, blurRadius, scaleX, scaleY } = resolveRasterSampling(geometry, density)
+    const light = lightVectorFromAngle(DEFAULT_SPECULAR_ANGLE_DEG)
+    const displacement = buildDisplacementPixels(geometry, density)
+    for (let y = 0; y < raster.height; y++) {
+      for (let x = 0; x < raster.width; x++) {
+        const px = (x + 0.5) / scaleX - shape.halfWidth
+        const py = (y + 0.5) / scaleY - shape.halfHeight
+        const distance = roundedRectSDF(px, py, shape.halfWidth, shape.halfHeight, shape.radius)
+        if (Math.abs(distance) < Math.hypot(0.5 / scaleX, 0.5 / scaleY)) continue
+        const intensity = specularIntensity(px, py, shape, blurRadius, light)
+        const expected = new Uint8ClampedArray([
+          intensity <= 0 ? 0 : intensity * 255 + bayerOffset(x, y)
+        ])[0]
+        assert.equal(alphaAt(raster.pixels, raster.width, x, y), expected)
+        if (distance < -Math.max(shape.radius, blurRadius)) {
+          const p = (y * raster.width + x) * 4
+          assert.equal(displacement.pixels[p], 128)
+          assert.equal(displacement.pixels[p + 3], 255)
+        }
+      }
+    }
+  }
 })
