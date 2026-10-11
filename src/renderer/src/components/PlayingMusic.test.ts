@@ -455,7 +455,7 @@ test('visualizer toggle sits top-left with the frosted time-chip style', () => {
     assert.match(
       source,
       new RegExp(
-        `\\.${selector} \\{[\\s\\S]*?top: calc\\(var\\(--te-titlebar-inset, 45px\\) \\+ 16px\\)`
+        `\\.${selector} \\{[\\s\\S]*?top: calc\\(var\\(--te-titlebar-inset, 40px\\) \\+ 16px\\)`
       )
     )
   }

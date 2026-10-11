@@ -146,7 +146,7 @@ test('native checkboxes inherit the active dark color scheme and theme accent', 
 test('settings wallpaper is painted once by the overlay root, never per element', () => {
   assert.match(
     styles,
-    /\.settings-preview-page\s*\{[\s\S]*?inset:\s*var\(--te-titlebar-inset, 45px\) 0 0;[\s\S]*?z-index:\s*2000;[\s\S]*?height:\s*auto/
+    /\.settings-preview-page\s*\{[\s\S]*?inset:\s*var\(--te-titlebar-inset, 40px\) 0 0;[\s\S]*?z-index:\s*2000;[\s\S]*?height:\s*auto/
   )
   // The page stays transparent: per-element wallpaper copies relied on
   // `background-attachment: fixed`, which composited layers silently unpin —

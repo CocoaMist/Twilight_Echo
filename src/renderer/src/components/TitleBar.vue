@@ -310,7 +310,7 @@ function close(): void {
   color: var(--te-primary-500);
 }
 .title-bar {
-  --te-titlebar-height: 45px;
+  --te-titlebar-height: 40px;
   --te-titlebar-material-surface: var(--te-app-bg);
   --te-titlebar-material-ink: var(--te-shell-control-text);
   --te-titlebar-icon-size: 16px;
@@ -318,9 +318,9 @@ function close(): void {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 45px;
-  min-height: 45px;
-  max-height: 45px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
   box-sizing: border-box;
   flex-shrink: 0;
   background: transparent !important;

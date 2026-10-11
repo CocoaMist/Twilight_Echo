@@ -1,7 +1,7 @@
 .settings-preview-page {
   position: fixed;
   /* Reserve the native title-bar strip so its controls always remain clickable. */
-  inset: var(--te-titlebar-inset, 45px) 0 0;
+  inset: var(--te-titlebar-inset, 40px) 0 0;
   z-index: 2000;
   width: 100%;
   height: auto;
