@@ -4,7 +4,7 @@ import SettingsGroup from './SettingsGroup.vue'
 import { useSettingsDisclosure } from './settingsDisclosureRegistry.ts'
 import { storeToRefs } from 'pinia'
 import AudioDeviceProfilesPanel from '@renderer/components/settings-page/AudioDeviceProfilesPanel.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useAudioOutputDspStore } from '../../stores/useAudioOutputDspStore'
 import { usePlayerStore } from '../../stores/usePlayerStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
@@ -22,6 +22,8 @@ import { useLocale } from '../../app/useLocale.ts'
 import {
   normalizeAutoMixMode,
   normalizeAutoMixStemCacheMiB,
+  normalizeAutoMixStemDevice,
+  type AutoMixStemCapabilities,
   autoMixStatusKeys,
   effectiveAutoMixMode,
   TWILIGHT_AUTOMIX_AVAILABLE,
@@ -100,6 +102,99 @@ const selectedAudioOutput = computed(() =>
 const exclusiveAvailable = computed(() => selectedAudioOutput.value?.supportsExclusive ?? false)
 const exclusiveAutoReleaseApplying = ref(false)
 const autoMixModeApplying = ref(false)
+const stemCapabilities = ref<AutoMixStemCapabilities>({
+  status: 'missing',
+  cpu: false,
+  gpu: false,
+  packs: []
+})
+const stemChecking = ref(false)
+const stemApplying = ref(false)
+const stemAvailable = computed(() => stemCapabilities.value.status === 'ready')
+const stemDeviceAvailable = computed(() =>
+  settings.value.autoMixStemDevice === 'gpu'
+    ? stemCapabilities.value.gpu
+    : settings.value.autoMixStemDevice === 'cpu'
+      ? stemCapabilities.value.cpu
+      : stemAvailable.value
+)
+const stemEnabled = computed(
+  () => settings.value.autoMixStemMode === 'auto' && stemDeviceAvailable.value
+)
+const stemDetectionText = computed(() => {
+  if (stemChecking.value) return t('automix.stems.checking')
+  const capabilities = stemCapabilities.value
+  if (capabilities.status === 'missing') return t('automix.stems.missing')
+  if (capabilities.status === 'unavailable')
+    return t(`automix.stems.${capabilities.reason ?? 'runtime_unavailable'}`)
+  if (!stemDeviceAvailable.value) return t('automix.stems.deviceUnavailable')
+  if (!capabilities.gpu) return t('automix.stems.cpuReady')
+  const names = [
+    ...new Set(
+      capabilities.packs
+        .filter((pack) => pack.gpu)
+        .map((pack) => pack.gpuName)
+        .filter(Boolean)
+    )
+  ]
+  return `${t('automix.stems.gpuReady')}${names.length ? ' · ' + names.join(', ') : ''}`
+})
+async function detectStems(refresh = false): Promise<void> {
+  if (stemChecking.value) return
+  stemChecking.value = true
+  try {
+    stemCapabilities.value = await window.api.audioEngine.getAutoMixStemCapabilities(refresh)
+  } catch {
+    stemCapabilities.value = {
+      status: 'unavailable',
+      cpu: false,
+      gpu: false,
+      packs: [],
+      reason: 'runtime_unavailable'
+    }
+  } finally {
+    stemChecking.value = false
+  }
+}
+onMounted(() => {
+  if (TWILIGHT_AUTOMIX_AVAILABLE) void detectStems()
+})
+async function toggleStems(): Promise<void> {
+  if (stemChecking.value || stemApplying.value || !stemDeviceAvailable.value) return
+  stemApplying.value = true
+  try {
+    await updateSettings({
+      autoMixStemMode: settings.value.autoMixStemMode === 'off' ? 'auto' : 'off'
+    })
+  } catch (error) {
+    audioEngineError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    stemApplying.value = false
+  }
+}
+async function setStemDevice(event: Event): Promise<void> {
+  const select = event.target as HTMLSelectElement
+  const device = normalizeAutoMixStemDevice(select.value)
+  if (
+    stemChecking.value ||
+    stemApplying.value ||
+    !stemAvailable.value ||
+    (device === 'gpu' && !stemCapabilities.value.gpu) ||
+    (device === 'cpu' && !stemCapabilities.value.cpu)
+  ) {
+    select.value = settings.value.autoMixStemDevice
+    return
+  }
+  stemApplying.value = true
+  try {
+    await updateSettings({ autoMixStemDevice: device })
+  } catch (error) {
+    audioEngineError.value = error instanceof Error ? error.message : String(error)
+    select.value = settings.value.autoMixStemDevice
+  } finally {
+    stemApplying.value = false
+  }
+}
 const autoMixStatusText = computed(() => {
   const info = playbackInfo.value
   if (!info?.autoMixState) return ''
@@ -627,22 +722,52 @@ function setContinuitySampleRate(event: Event): void {
           data-setting-id="autoMixStemMode"
           class="setting-item"
         >
-          <div class="setting-info">
+          <div class="setting-copy">
             <strong>{{ t('automix.stems.title') }}</strong>
             <span>{{ t('automix.stems.description') }}</span>
+            <span role="status" aria-live="polite">{{ stemDetectionText }}</span>
+          </div>
+          <div class="inline-controls">
+            <button
+              type="button"
+              class="preset-btn"
+              :disabled="stemChecking || stemApplying"
+              @click="detectStems(true)"
+            >
+              {{ t('automix.stems.refresh') }}
+            </button>
+            <button
+              type="button"
+              class="toggle-switch"
+              :class="{ active: stemEnabled, inactive: !stemEnabled }"
+              role="switch"
+              :aria-label="t('automix.stems.title')"
+              :aria-checked="stemEnabled"
+              :disabled="stemChecking || stemApplying || !stemDeviceAvailable"
+              :title="stemDetectionText"
+              @click="toggleStems"
+            ></button>
+          </div>
+        </div>
+        <div
+          v-if="TWILIGHT_AUTOMIX_AVAILABLE"
+          data-setting-id="autoMixStemDevice"
+          class="setting-item"
+        >
+          <div class="setting-copy">
+            <strong>{{ t('automix.stems.device') }}</strong>
+            <span>{{ t('automix.stems.deviceDescription') }}</span>
           </div>
           <select
-            :value="settings.autoMixStemMode"
-            :aria-label="t('automix.stems.title')"
-            @change="
-              updateSettings({
-                autoMixStemMode:
-                  ($event.target as HTMLSelectElement).value === 'off' ? 'off' : 'auto'
-              })
-            "
+            class="preview-select"
+            :value="settings.autoMixStemDevice"
+            :aria-label="t('automix.stems.device')"
+            :disabled="!stemAvailable || stemChecking || stemApplying"
+            @change="setStemDevice"
           >
-            <option value="off">{{ t('automix.stems.off') }}</option>
-            <option value="auto">{{ t('automix.stems.auto') }}</option>
+            <option value="auto">{{ t('automix.stems.deviceAuto') }}</option>
+            <option value="gpu" :disabled="!stemCapabilities.gpu">GPU</option>
+            <option value="cpu" :disabled="!stemCapabilities.cpu">CPU</option>
           </select>
         </div>
 
@@ -651,7 +776,7 @@ function setContinuitySampleRate(event: Event): void {
           data-setting-id="autoMixStemCacheMiB"
           class="setting-item"
         >
-          <div class="setting-info">
+          <div class="setting-copy">
             <strong>{{ t('automix.stems.cache.title') }}</strong>
             <span>{{ t('automix.stems.cache.description') }}</span>
           </div>

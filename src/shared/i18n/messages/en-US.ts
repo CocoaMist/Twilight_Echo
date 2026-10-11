@@ -40,8 +40,25 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'automix.stems.cache.description':
     'Reuse completed stems. Oldest entries are removed first; Off keeps no stem cache.',
   'automix.stems.title': 'Stem enhancement',
+  'automix.stems.device': 'Stem compute device',
+  'automix.stems.deviceDescription':
+    'Auto prefers GPU and falls back to CPU when GPU memory runs out. GPU mode uses basic AutoMix on failure. Existing stems can be reused from cache.',
+  'automix.stems.deviceAuto': 'Auto (prefer GPU)',
+  'automix.stems.checking': 'Detecting stem separator and compute devices…',
+  'automix.stems.missing':
+    'No stem separator detected. Place the automix-enhancement folder in the player directory, then select Detect again.',
+  'automix.stems.cpuReady': 'Stem separator detected · CPU available, GPU unavailable',
+  'automix.stems.gpuReady': 'Stem separator detected · GPU / CPU available',
+  'automix.stems.deviceUnavailable':
+    'The saved compute device is unavailable. Select an available device.',
+  'automix.stems.pack_invalid':
+    'The stem pack is incomplete or incompatible. Check the enhancement pack and detect again.',
+  'automix.stems.runtime_unavailable':
+    'The stem runtime check failed. Check the enhancement pack and detect again.',
+  'automix.stems.probe_timeout': 'Stem detection timed out. Try detecting again later.',
+  'automix.stems.refresh': 'Detect again',
   'automix.stems.description':
-    'Use vocal and bass handoffs when the optional pack is installed. Fall back to the basic mix on timeout.',
+    'Use vocal and bass stems to assist handoffs when enabled. Use basic AutoMix when disabled or preparation is incomplete.',
   'automix.stems.off': 'Off',
   'automix.stems.auto': 'Auto (requires enhancement pack)',
   'automix.reason.failed': 'Transition preparation failed',

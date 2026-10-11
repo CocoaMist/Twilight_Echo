@@ -114,6 +114,38 @@ async function runElectron(options) {
     // readiness. No renderer/main/native boundary is mocked.
     const initial = await evaluate('window.api.settings.get()')
     assert.equal(initial.settings.autoMixStemCacheMiB, 512, 'Legacy profile cache migration failed')
+    assert.equal(
+      initial.settings.autoMixStemDevice,
+      'auto',
+      'Stem device preference was not restored'
+    )
+    assert.equal(
+      initial.settings.autoMixStemMode,
+      'auto',
+      'Stem switch preference was not restored'
+    )
+    report.stemCapabilities = await evaluate(
+      'window.api.audioEngine.getAutoMixStemCapabilities(true)'
+    )
+    assert.ok(['missing', 'ready', 'unavailable'].includes(report.stemCapabilities.status))
+    if (process.env.TWILIGHT_AUTOMIX_STEM_PACK)
+      assert.equal(report.stemCapabilities.status, 'ready')
+    report.stemPreferences = []
+    for (const [device, mode] of [
+      ['cpu', 'off'],
+      ['gpu', 'auto'],
+      ['auto', 'auto']
+    ]) {
+      const saved = await evaluate(
+        `window.api.settings.update(${JSON.stringify({ autoMixStemDevice: device, autoMixStemMode: mode })})`
+      )
+      assert.equal(saved.settings.autoMixStemDevice, device)
+      assert.equal(saved.settings.autoMixStemMode, mode)
+      const disk = JSON.parse(fs.readFileSync(path.join(options.profile, 'settings.json'), 'utf8'))
+      assert.equal(disk.autoMixStemDevice, device)
+      assert.equal(disk.autoMixStemMode, mode)
+      report.stemPreferences.push({ device, mode })
+    }
     report.stemCacheCapacities = []
     for (const capacity of [0, 256, 512, 1024, 2048, 512]) {
       const saved = await evaluate(

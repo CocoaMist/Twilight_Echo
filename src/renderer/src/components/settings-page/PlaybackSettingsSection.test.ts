@@ -143,7 +143,9 @@ import {normalizeOutputConfig} from '@shared/audioOutputConfig.ts'
 import {createAudioOutputController} from '@renderer/stores/player/audioOutputController.ts'
 export const persisted=ref(normalizeOutputConfig({pcmToDsdMode:'dsd128',dsdMutePreRollFrames:1024}))
 export const engine=ref({...persisted.value})
-export const appSettings=ref({autoMixMode:'off',autoMixStemMode:'auto',autoMixStemCacheMiB:512,audioOutputConfig:{...persisted.value},sleepTimer:{defaultMinutes:30,fadeSeconds:0}})
+export const appSettings=ref({autoMixMode:'off',autoMixStemMode:'auto',autoMixStemDevice:'auto',autoMixStemCacheMiB:512,audioOutputConfig:{...persisted.value},sleepTimer:{defaultMinutes:30,fadeSeconds:0}})
+export const stemCapabilities=ref({status:'missing',cpu:false,gpu:false,packs:[]})
+export const rejectSettings=ref(false)
 export const audioOutputConfig=ref(normalizeOutputConfig())
 /* ACTUAL_WATCHER */
 const audioProcessing=ref(/* ACTUAL_PROCESSING */)
@@ -151,7 +153,7 @@ const exclusiveMode=ref(false)
 const audioOutputConfigApplyStatus=ref({state:'idle',requestedRevision:0,appliedRevision:0,failedRevision:0,error:''})
 const controller=createAudioOutputController({exclusiveMode,audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,dspOutputStage:ref({}),dspStereoImage:ref({}),getAudioEngineApi:()=>({setOutputConfig:async config=>{engine.value=normalizeOutputConfig(config);persisted.value={...engine.value};return {...engine.value}},getOutputConfigApplyStatus:async()=>({state:'applied',requestedRevision:1,appliedRevision:1,failedRevision:0,error:''})}),setAudioEngineError:()=>{},refreshPlaybackInfo:async()=>{},scheduleCrossfadeIfNeeded:()=>{}})
 export const useAudioOutputDspStore=defineStore('policy-output',()=>({exclusiveMode,audioOutput:ref('wasapi'),audioDevice:ref('auto'),audioOutputOptions:ref([]),audioDeviceOptions:ref([]),audioOutputDeviceOptions:ref([]),audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,playbackInfo:ref(null),outputInfo:ref(null),audioEngineError:ref(null),...controller,refreshAudioOutputState:async()=>{}}))
-export const useSettingsStore=()=>({settings:appSettings,updateSettings:async patch=>{appSettings.value={...appSettings.value,...patch}}})
+export const useSettingsStore=()=>({settings:appSettings,updateSettings:async patch=>{if(rejectSettings.value)throw Error('settings failure');appSettings.value={...appSettings.value,...patch}}})
 export const usePlayerStore=()=>({volume:ref(.7),setVolume:()=>{},setUnityVolume:()=>{}})
 export const reload=()=>{appSettings.value={...appSettings.value,audioOutputConfig:JSON.parse(JSON.stringify(persisted.value))}}
 `
@@ -160,10 +162,12 @@ const policyRuntime = `
 import {createApp,h,nextTick,ref} from 'vue'
 import {createPinia} from 'pinia'
 import PlaybackSettingsSection from '@renderer/components/settings-page/PlaybackSettingsSection.vue'
-import {reload,audioOutputConfig,persisted,engine,appSettings} from 'policy-state'
+import {reload,audioOutputConfig,persisted,engine,appSettings,stemCapabilities,rejectSettings} from 'policy-state'
 const expect=(value,message)=>{if(!value)throw Error(message)}
 const settle=async()=>{await nextTick();await new Promise(resolve=>requestAnimationFrame(resolve));await nextTick()}
 window.runPolicyTests=async()=>{
+ let detectionCalls=0
+ window.api={audioEngine:{getAutoMixStemCapabilities:async()=>{detectionCalls++;return JSON.parse(JSON.stringify(stemCapabilities.value))}}}
  const open=ref(true)
  const app=createApp({render:()=>open.value?h(PlaybackSettingsSection):null})
  app.use(createPinia());app.mount('#app');await settle()
@@ -171,9 +175,45 @@ window.runPolicyTests=async()=>{
  const rate=()=>document.querySelector('select[aria-label="连续播放目标采样率"]')
  const autoMix=()=>document.querySelector('select[aria-label="Twilight AutoMix 模式"]')
  const stemCache=()=>document.querySelector('select[aria-label="分轨缓存容量"]')
+ const stemSwitch=()=>document.querySelector('button[role="switch"][aria-label="分轨增强"]')
+ const stemDevice=()=>document.querySelector('select[aria-label="分轨计算设备"]')
+ const refreshStems=async()=>{[...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='重新检测').click();await settle()}
  const change=async(select,value)=>{select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}));await settle()}
  expect(autoMix()&&!autoMix().disabled&&autoMix().value==='off','evaluation must expose an initially disabled-by-choice AutoMix selector')
  expect(document.body.textContent.includes('人工验收版本'),'evaluation status must remain distinct from release acceptance')
+ expect(stemSwitch().disabled&&stemSwitch().getAttribute('aria-checked')==='false','missing pack must disable stem switch')
+ expect(stemDevice().disabled&&document.body.textContent.includes('未检测到分轨器'),'missing pack must explain installation')
+ expect(appSettings.value.autoMixStemMode==='auto','missing pack must retain saved enable preference')
+ stemCapabilities.value={status:'ready',cpu:true,gpu:false,packs:[{directory:'cpu',cpu:true,gpu:false}]}
+ await refreshStems()
+ expect(detectionCalls===2&&!stemSwitch().disabled,'manual detection must discover newly installed pack')
+ expect(stemDevice().querySelector('option[value="gpu"]').disabled&&!stemDevice().querySelector('option[value="cpu"]').disabled,'CPU-only runtime must disable GPU choice')
+ await change(stemDevice(),'cpu')
+ expect(appSettings.value.autoMixStemDevice==='cpu','CPU choice must reach settings')
+ stemSwitch().click();await settle()
+ expect(appSettings.value.autoMixStemMode==='off'&&stemSwitch().getAttribute('aria-checked')==='false','switch must persist Off')
+ open.value=false;await settle();reload();open.value=true;await settle()
+ expect(stemDevice().value==='cpu'&&stemSwitch().getAttribute('aria-checked')==='false','device and Off must survive reopen')
+ stemSwitch().click();await settle()
+ expect(appSettings.value.autoMixStemMode==='auto','switch must enable stem preparation')
+ stemCapabilities.value={status:'ready',cpu:true,gpu:true,packs:[{directory:'gpu',cpu:true,gpu:true,gpuName:'Test GPU'}]}
+ await refreshStems()
+ expect(!stemDevice().querySelector('option[value="gpu"]').disabled&&document.body.textContent.includes('Test GPU'),'GPU detection must expose GPU name and choice')
+ await change(stemDevice(),'gpu')
+ open.value=false;await settle();reload();open.value=true;await settle()
+ expect(stemDevice().value==='gpu'&&stemSwitch().getAttribute('aria-checked')==='true','GPU and On must survive reopen')
+ rejectSettings.value=true
+ await change(stemDevice(),'cpu')
+ expect(appSettings.value.autoMixStemDevice==='gpu'&&stemDevice().value==='gpu','failed device update must restore saved selection')
+ stemSwitch().click();await settle()
+ expect(stemSwitch().getAttribute('aria-checked')==='true','failed switch update must retain saved state')
+ rejectSettings.value=false
+ stemCapabilities.value={status:'ready',cpu:true,gpu:false,packs:[{directory:'cpu',cpu:true,gpu:false}]}
+ await refreshStems()
+ expect(stemSwitch().disabled&&stemSwitch().getAttribute('aria-checked')==='false'&&stemDevice().value==='gpu','unavailable saved GPU must not silently enable CPU')
+ expect(appSettings.value.autoMixStemDevice==='gpu','hardware change must retain user preference')
+ await change(stemDevice(),'auto')
+ expect(!stemSwitch().disabled&&stemSwitch().getAttribute('aria-checked')==='true','Auto choice must restore usable CPU enhancement')
  expect(stemCache().value==='512','stem cache default must be 512 MiB')
  for(const capacity of ['0','256','512','1024','2048']){
   await change(stemCache(),capacity)

@@ -41,7 +41,22 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'automix.stems.cache.title': '分轨缓存容量',
   'automix.stems.cache.description': '复用已完成的分轨。按最近使用顺序清理；关闭后不保留声部缓存。',
   'automix.stems.title': '分轨增强',
-  'automix.stems.description': '安装独立增强包后自动使用人声和贝斯交接；准备超时则使用基础混音。',
+  'automix.stems.description':
+    '开启后使用人声和贝斯分轨辅助交接；关闭或准备未完成时使用基础 AutoMix。',
+  'automix.stems.device': '分轨计算设备',
+  'automix.stems.deviceDescription':
+    '自动优先使用 GPU，显存不足时回退 CPU；指定 GPU 时失败会使用基础 AutoMix。已有分轨缓存可直接复用。',
+  'automix.stems.deviceAuto': '自动（优先 GPU）',
+  'automix.stems.checking': '正在检测分轨器和计算设备…',
+  'automix.stems.missing':
+    '未检测到分轨器。将 automix-enhancement 文件夹放在播放器目录后，点击“重新检测”。',
+  'automix.stems.cpuReady': '已检测到分轨器 · CPU 可用，GPU 不可用',
+  'automix.stems.gpuReady': '已检测到分轨器 · GPU / CPU 可用',
+  'automix.stems.deviceUnavailable': '已保存的计算设备当前不可用，请选择可用设备。',
+  'automix.stems.pack_invalid': '分轨器文件不完整或版本不兼容，请检查增强包后重新检测。',
+  'automix.stems.runtime_unavailable': '分轨器运行检测失败，请检查增强包后重新检测。',
+  'automix.stems.probe_timeout': '分轨器检测超时，请稍后重新检测。',
+  'automix.stems.refresh': '重新检测',
   'automix.stems.off': '关闭',
   'automix.stems.auto': '自动（需要增强包）',
   'automix.reason.failed': '过渡准备失败',
