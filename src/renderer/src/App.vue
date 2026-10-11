@@ -609,13 +609,6 @@ const navigationPages = computed(() => {
 })
 const mainContentMinHeight = computed(() => '100vh')
 
-const sidebarMenuOpen = computed(() => {
-  // PlayingMusic hides the local sidebar, so its preserved open state must not
-  // shift the full-width compact bar and leave a blank gutter on the left.
-  if (showPlayingPage.value) return false
-  return menuOpen.value && showLocalSidebar.value
-})
-
 const playbackSessionPersistence = createPlaybackSessionPersistence({
   settings,
   currentTrack,
@@ -637,15 +630,13 @@ const {
   playerBottomClearance,
   sideMenuBottomOffset,
   sideMenuToolsClearance,
-  sideMenuInlineEnd,
   startSideMenuMonitor,
   stopSideMenuMonitor,
   resetSideMenuClearance,
   dispose: disposeSideMenuClearance
 } = useSideMenuClearance({
   showLocalSidebar,
-  hasPlayerBar,
-  menuOpen
+  hasPlayerBar
 })
 
 watch(
@@ -1139,21 +1130,12 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         </Transition>
       </div>
     </div>
-    <!-- Where the open side menu's right edge actually lands, measured rather than
-         derived: `--te-menu-width` is only the menu's width, and a preset layout
-         may inset the menu from the window edge, which leaves a width-based
-         `left` short by that inset. The edge-to-edge shapes start after this so
-         they never cover the menu. -->
-    <div
-      class="app-shell-player"
-      :style="{ '--te-side-menu-inline-end': `${sideMenuInlineEnd}px` }"
-    >
+    <div class="app-shell-player">
       <PlayerBar
         v-if="hasPlayerBar"
         ref="playerBarRef"
         :glass="showPlayingPage"
         :visualizer-visible="showPlayingPage && settings.playerBar.compactVisualizerEnabled"
-        :menu-open="sidebarMenuOpen"
         :mode="playerBarPresentation.mode"
         :auto-hide="playerBarPresentation.autoHide"
         :hidden-bar="playerBarPresentation.hidden || soundFieldSidebarActive"

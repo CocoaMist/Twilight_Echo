@@ -63,6 +63,7 @@ import type {
 const props = withDefaults(
   defineProps<{
     glass?: boolean
+    /** @deprecated Navigation no longer controls player geometry. */
     menuOpen?: boolean
     preview?: boolean
     previewTrack?: Track
@@ -1445,20 +1446,6 @@ watch(
   }
 )
 
-const geometryAnimating = ref(false)
-let geometryAnimTimer: number | null = null
-watch(
-  () => props.menuOpen,
-  () => {
-    geometryAnimating.value = true
-    if (geometryAnimTimer !== null) window.clearTimeout(geometryAnimTimer)
-    geometryAnimTimer = window.setTimeout(() => {
-      geometryAnimating.value = false
-      geometryAnimTimer = null
-    }, 340)
-  }
-)
-
 onMounted(() => {
   if (!props.preview) void syncExtensions()
   syncGlassPointer()
@@ -1468,8 +1455,6 @@ onBeforeUnmount(() => {
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = null
   stopResizeSidebar()
-  if (geometryAnimTimer !== null) window.clearTimeout(geometryAnimTimer)
-  geometryAnimTimer = null
   glassPointerEnabled = false
   resetGlassPointer()
 })
@@ -1481,8 +1466,6 @@ onBeforeUnmount(() => {
     ref="playerBarShellRef"
     class="player-bar-shell"
     :class="{
-      'menu-open': menuOpen,
-      'is-geometry-animating': geometryAnimating,
       'compact-visualizer-active': showCompactVisualizer
     }"
     v-bind="shellDataAttrs"

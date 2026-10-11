@@ -1,19 +1,8 @@
-﻿/* ===== Shell =====
-
-   Clearing the open side menu animates `left` — this shell's own inset — and
-   never `transform`. Both insets are pinned, so the distance between them *is*
-   the bar's width: a translate carries the right edge along with the left,
-   which starts the already-narrowed bar a full menu-width inside the frame and
-   sweeps it back out. That read as the bar flinching on its right side. The
-   inset transition costs a layout pass per frame instead, and it is a small
-   subtree — `.is-geometry-animating` below drops the glass blur for the
-   duration so the per-frame cost stays in layout rather than re-compositing.
-
-   Never add `will-change: transform` here. With a transform-like value this
-   shell becomes a permanent containing block for its `position: fixed`
-   descendants — the full-height `.hifi-overlay` and the viewport-wide
-   `.player-panel-dismiss` — collapsing both into this bottom strip. That is
-   what once made the HiFi deck open as a sliver across the playbar. */
+/* ===== Shell =====
+   The viewport owns player geometry. Navigation only reserves space below it;
+   opening a sidebar must not resize, move or disable the material.
+   Keep this shell free of transforms and filters so fixed HiFi and dismiss
+   overlays retain the viewport as their containing block. */
 .player-bar-shell {
   position: fixed;
   bottom: 14px;
@@ -21,19 +10,6 @@
   right: 18px;
   z-index: 1002;
   pointer-events: none;
-  transition: left var(--te-motion-panel) var(--te-ease-soft);
-}
-
-.player-bar-shell.is-geometry-animating .player-bar,
-.player-bar-shell.is-geometry-animating .player-bar-liquid .player-bar-warp {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-.player-bar-shell.menu-open {
-  left: calc(var(--te-menu-width) + 18px);
-  right: 18px;
-  z-index: 999;
 }
 
 .player-panel-dismiss {
@@ -856,10 +832,12 @@
   grid-template-columns: minmax(0, 1fr) minmax(220px, 1.8fr) minmax(max-content, 1fr);
   height: var(--te-standard-bar-height);
   border-radius: 20px;
-  /* Reserve the border's layout space without painting a second hard contour. */
-  border-color: transparent;
+  /* A 1px border snaps differently at fractional DPI; fixed -1px optical insets
+     then overshoot it. Reserve the same content space with padding and align all
+     optical layers directly to this borderless outer box. */
+  border: 0;
   box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation);
-  padding-inline: 9px;
+  padding: 1px 10px;
 }
 
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) > .player-center {
@@ -2148,8 +2126,8 @@ html[data-te-motion='off'] .player-bar :deep(.ab-loop-range) {
 
 .player-bar-liquid .player-bar-warp {
   position: absolute;
-  /* Include the parent border so raster geometry and the visible arc coincide. */
-  inset: -1px;
+  /* Match the borderless outer box at every physical pixel density. */
+  inset: 0;
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
@@ -2342,7 +2320,7 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
 /* Bohr optical shoulder: no layout, hit testing, blur or pointer animation. */
 .player-bar-optics {
   position: absolute;
-  inset: -1px;
+  inset: 0;
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
@@ -2952,17 +2930,6 @@ html[data-theme='dark']
   left: 0;
   right: 0;
   bottom: 0;
-}
-
-/* Start after the open menu's real right edge, not after its width. A preset may
-   inset the menu from the window edge, which puts its edge that much further
-   right than `--te-menu-width` implies, and a width-based `left` left the strip
-   covering that gap. App.vue publishes the measured edge on the player wrapper;
-   the token is the fallback for the first frame, before the measurement lands,
-   and for any consumer that renders the bar without the clearance monitor. */
-.player-bar-shell[data-te-playbar-mode='compact'].player-bar-shell.player-bar-shell.menu-open {
-  left: max(var(--te-side-menu-inline-end, 0px), var(--te-menu-width));
-  right: 0;
 }
 
 .player-bar-shell[data-te-playbar-mode='compact'].compact-visualizer-active {

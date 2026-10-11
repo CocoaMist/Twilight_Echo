@@ -133,13 +133,19 @@ function checkCornerLight(image,box,density,bottom){
  }
  return records;
 }
+app.on('window-all-closed',()=>{});
 app.whenReady().then(async()=>{
- const win=new BrowserWindow({show:false,width:1112,height:210,useContentSize:true,webPreferences:{offscreen:true,backgroundThrottling:false}});
- try{
+ let win;
+ const loadDensity=async(density)=>{
+  win?.destroy();
+  win=new BrowserWindow({show:false,width:1112,height:210,useContentSize:true,webPreferences:{offscreen:{deviceScaleFactor:density},backgroundThrottling:false}});
   await win.loadFile(path.join(__dirname,'index.html'));win.webContents.debugger.attach('1.3');
+  if(Math.abs(await win.webContents.executeJavaScript('devicePixelRatio')-density)>.001)throw Error('renderer backing density differs from requested DPI');
+ };
+ try{
   const results=[];
   for(const density of [1,1.25,1.5,2,2.5,3]){
-   await win.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride',{width:1112,height:210,deviceScaleFactor:density,mobile:false});
+   await loadDensity(density);
    for(const tone of ['dark','pureWhite'])for(const material of ['regular','glass','liquid'])for(const offset of [0,.375])for(const hover of [false,true]){
     await win.webContents.executeJavaScript('document.body.classList.toggle("cover-hover",'+hover+')');
     const boxes=await win.webContents.executeJavaScript('(()=>{const tone='+JSON.stringify(tone)+',material='+JSON.stringify(material)+',offset='+offset+';document.documentElement.dataset.theme=tone;const bar=document.querySelector(".player-bar");bar.className="player-bar"+(material==="glass"?" player-bar-glass":material==="liquid"?" player-bar-liquid":"");bar.style.left=(7+offset)+"px";bar.style.top=(28+offset)+"px";const cover=document.querySelector(".player-cover-slot");cover.style.left=(7+offset)+"px";cover.style.top=(128+offset)+"px";const box=element=>{const r=element.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,radius:parseFloat(getComputedStyle(element).borderTopLeftRadius)}};return{bar:box(document.querySelector(".player-bar-optics")),cover:box(cover)}})()');
@@ -159,10 +165,10 @@ app.whenReady().then(async()=>{
   }
   console.log('CONTOUR_PIXEL_OK '+results.length+' cases, four corners each');
   if(process.env.TE_CONTOUR_EVIDENCE_DIR)fs.writeFileSync(path.join(process.env.TE_CONTOUR_EVIDENCE_DIR,'contour-pixels.json'),JSON.stringify(results,null,2));
-  await win.webContents.executeJavaScript('document.getElementById("coverage-paint").remove();document.body.className="";document.querySelector(".player-bar").className="player-bar";document.querySelector(".player-cover-slot").style.visibility="hidden"');
   const lights=[];
   for(const density of [1,1.25,1.5,2,2.5,3]){
-   await win.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride',{width:1112,height:210,deviceScaleFactor:density,mobile:false});
+   await loadDensity(density);
+   await win.webContents.executeJavaScript('document.getElementById("coverage-paint").remove();document.querySelector(".player-cover-slot").style.visibility="hidden"');
    for(const offset of [0,.375])for(const bottom of [false,true]){
     const box=await win.webContents.executeJavaScript('(()=>{const bar=document.querySelector(".player-bar");bar.style.left="'+(7+offset)+'px";bar.style.top="'+(28+offset)+'px";bar.style.setProperty("--te-bohr-light","'+(bottom?'transparent':'white')+'");bar.style.setProperty("--te-bohr-edge","'+(bottom?'white':'transparent')+'");bar.style.setProperty("--te-bohr-shoulder","transparent");const r=bar.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,radius:parseFloat(getComputedStyle(bar).borderTopLeftRadius)}})()');
     await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');

@@ -449,26 +449,36 @@ window.checkSharedPlaybackGlyphs=async()=>{
   }
 }
 window.checkSidebarTransition=async()=>{
-  for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact']){
-    await store.setPreviewTone(tone)
-    mount(mode)
-    document.documentElement.dataset.teMotion='full'
-    const shell=bar.parentElement
-    const duration=parseFloat(getComputedStyle(shell).transitionDuration)*1000
-    expect(duration>0,'sidebar has a position transition in full motion: '+mode+' '+getComputedStyle(shell).transition+' / '+getComputedStyle(shell).getPropertyValue('--te-motion-panel')+' / '+getComputedStyle(shell).getPropertyValue('--te-ease-soft'))
-    for(const open of [true,false,true,false]){
+  const sidebar=document.createElement('aside')
+  sidebar.style.cssText='position:fixed;inset:40px auto 0 0;width:216px;z-index:1000;background:#456;transition:transform .32s;'
+  document.body.append(sidebar)
+  try{
+    for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact']){
+      await store.setPreviewTone(tone)
+      mount(mode,true)
+      document.documentElement.dataset.teMotion='full'
+      const shell=bar.parentElement
       const before=bar.getBoundingClientRect()
-      shell.classList.toggle('menu-open',open)
-      const immediate=bar.getBoundingClientRect()
-      expect(Math.abs(immediate.left-before.left)<1&&Math.abs(immediate.width-before.width)<1,mode+' sidebar toggle must not instantly change max width or margins')
-      const started=performance.now()
-      do{
-        await new Promise(requestAnimationFrame)
-        const rect=bar.getBoundingClientRect()
-        expect(Math.abs(rect.top-before.top)<0.6&&Math.abs(rect.height-before.height)<0.6,mode+' sidebar toggle preserves vertical position and height')
-      }while(performance.now()-started<duration+40)
+      const backdrop=getComputedStyle(bar).backdropFilter
+      expect(Number(getComputedStyle(shell).zIndex)>Number(getComputedStyle(sidebar).zIndex),'player stays above navigation: '+mode)
+      for(const open of [true,false,true,false]){
+        sidebar.style.transform=open?'translateX(0)':'translateX(-100%)'
+        // Old integrations may still toggle this class; it must have no effect.
+        shell.classList.toggle('menu-open',open)
+        const started=performance.now()
+        do{
+          await new Promise(requestAnimationFrame)
+          const rect=bar.getBoundingClientRect()
+          for(const key of ['left','top','width','height'])expect(Math.abs(rect[key]-before[key])<.1,mode+' sidebar changed '+key)
+          expect(getComputedStyle(bar).backdropFilter===backdrop,mode+' sidebar switched the material')
+          if(open){
+            const x=rect.left+20,y=rect.top+rect.height/2
+            expect(shell.contains(document.elementFromPoint(x,y)),mode+' overlapping navigation intercepts player input')
+          }
+        }while(performance.now()-started<360)
+      }
     }
-  }
+  }finally{sidebar.remove()}
 }
 window.prepareDarkTitlebarControl=async(kind)=>{
   await store.setPreviewTone('dark')

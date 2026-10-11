@@ -23,7 +23,9 @@ test('Bohr reflections survive body diffusion, preserve input, and clean up with
       (await read('src/renderer/src/assets/bohr.css')) +
       (await read('src/renderer/src/assets/appearance.css'))
     const styles = [
-      await read('src/renderer/src/components/player-bar/PlayerBar.css'),
+      process.env.TE_MATERIAL_BASELINE
+        ? await readFile(process.env.TE_MATERIAL_BASELINE, 'utf8')
+        : await read('src/renderer/src/components/player-bar/PlayerBar.css'),
       await read('src/renderer/src/components/settings-page/SettingsPage.css'),
       await read('src/renderer/src/components/song-list/SongList.css'),
       parse(await read('src/renderer/src/components/TitleBar.vue')).descriptor.styles[0].content
@@ -83,20 +85,38 @@ test('Bohr reflections survive body diffusion, preserve input, and clean up with
     )
     await writeFile(
       join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');
+      `const {app,BrowserWindow,nativeImage}=require('electron');const fs=require('node:fs');
 app.setPath('userData',require('node:path').join(__dirname,'profile'));
+app.on('window-all-closed',()=>{});
 app.whenReady().then(async()=>{
- const win=new BrowserWindow({show:false,width:1100,height:700,webPreferences:{contextIsolation:false,backgroundThrottling:false}});
+ let win=new BrowserWindow({show:false,width:1100,height:700,webPreferences:{contextIsolation:false,backgroundThrottling:false}});
  win.webContents.on('console-message',event=>console.error(event.message));
  try{
   await win.loadFile(process.argv.at(-1));
   await win.webContents.executeJavaScript('window.runBohrTests()');
   win.webContents.debugger.attach('1.3');
+  const captures=[];
   for(const deviceScaleFactor of [1,1.25,1.5,2,2.5,3]){
-   await win.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride',{width:1100,height:700,deviceScaleFactor,mobile:false});
+   win.destroy();
+   win=new BrowserWindow({show:false,width:1100,height:700,useContentSize:true,webPreferences:{offscreen:{deviceScaleFactor},contextIsolation:false,backgroundThrottling:false}});
+   await win.loadFile(process.argv.at(-1));
+   win.webContents.debugger.attach('1.3');
+   await win.webContents.executeJavaScript('window.runBohrTests()');
+   if(Math.abs(await win.webContents.executeJavaScript('devicePixelRatio')-deviceScaleFactor)>.001)throw Error('material backing density differs from requested DPI');
    await win.webContents.executeJavaScript('window.checkPixelRatioUpdate()');
    await win.webContents.executeJavaScript('window.runBohrTests()');
+   for(const tone of ['dark','pureWhite'])for(const material of ['regular','glass','liquid']){
+    const geometry=await win.webContents.executeJavaScript('window.prepareFullMaterialRaster('+JSON.stringify(tone)+','+JSON.stringify(material)+')');
+    const capture=await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true});
+    const image=nativeImage.createFromBuffer(Buffer.from(capture.data,'base64'));
+    if(image.getSize().width!==Math.round(1100*deviceScaleFactor))throw Error('material screenshot did not preserve physical DPI');
+    captures.push({deviceScaleFactor,tone,material,geometry,pixels:image.getSize()});
+    if(process.env.TE_BOHR_EVIDENCE_DIR)fs.writeFileSync(require('node:path').join(process.env.TE_BOHR_EVIDENCE_DIR,'material-'+tone+'-'+material+'-'+deviceScaleFactor+'.png'),image.toPNG());
+   }
   }
+  console.error('FULL_MATERIAL_RASTER_OK '+captures.length+' explicit-DPI frames');
+  if(process.env.TE_BOHR_EVIDENCE_DIR)fs.writeFileSync(require('node:path').join(process.env.TE_BOHR_EVIDENCE_DIR,'material-raster.json'),JSON.stringify({captures,gpu:app.getGPUFeatureStatus()},null,2));
+  await win.webContents.executeJavaScript('window.prepareFullMaterialRaster("dark","liquid")');
   await win.webContents.debugger.sendCommand('Emulation.clearDeviceMetricsOverride');
   for(const [name,value] of [['prefers-contrast','more'],['prefers-reduced-transparency','reduce'],['forced-colors','active']]){
    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[{name,value}]});
@@ -107,7 +127,7 @@ app.whenReady().then(async()=>{
    for(const tone of ['dark','pureWhite']){
     await win.webContents.executeJavaScript('window.prepareBohrEvidence('+JSON.stringify(tone)+')');
     await new Promise(resolve=>setTimeout(resolve,200));
-    fs.writeFileSync(require('node:path').join(process.env.TE_BOHR_EVIDENCE_DIR,'bohr-'+tone+'.png'),(await win.webContents.capturePage()).toPNG());
+    fs.writeFileSync(require('node:path').join(process.env.TE_BOHR_EVIDENCE_DIR,'bohr-'+tone+'.png'),Buffer.from((await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true})).data,'base64'));
    }
   }
   await win.webContents.executeJavaScript('window.unmountBohr()');
@@ -121,6 +141,7 @@ app.whenReady().then(async()=>{
       { windowsHide: true, timeout: 120_000 }
     )
     assert.match(stderr, /BOHR_MATERIAL_OK/)
+    assert.match(stderr, /FULL_MATERIAL_RASTER_OK 36 explicit-DPI frames/)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -136,6 +157,19 @@ const expect=(value,message)=>{if(!value)throw new Error(message)}
 const settle=async()=>{await nextTick();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))}
 const mount=async(active)=>{render(h(LiquidGlassDefs,{active,followPointer:false,homeCardsActive:false,expandedActive:false}),host);await settle()}
 const reflection=()=>getComputedStyle(optics,'::after')
+window.prepareFullMaterialRaster=async(tone,material)=>{
+ await window.prepareBohrEvidence(tone)
+ bar.className='player-bar'+(material==='liquid'?' player-bar-liquid':material==='glass'?' player-bar-glass':'')
+ await settle()
+ const r=bar.getBoundingClientRect(),body=getComputedStyle(bar),warp=getComputedStyle(bar.querySelector('.player-bar-warp'))
+ const filter=material==='liquid'?warp.backdropFilter:body.backdropFilter
+ expect(filter!=='none','complete material probe retains actual backdrop diffusion: '+material)
+ if(material==='liquid'){
+  expect(filter.includes('te-lg-playbar'),'complete material probe retains the refraction filter')
+  expect(reflection().maskImage!=='none'&&Number(reflection().opacity)>0,'complete material probe retains its sampled reflection')
+ }
+ return {x:r.x,y:r.y,width:r.width,height:r.height,radius:parseFloat(body.borderTopLeftRadius),filter}
+}
 window.checkPixelRatioUpdate=async()=>{
  // CDP changes devicePixelRatio without a Windows monitor-change resize event.
  window.dispatchEvent(new Event('resize'))
@@ -157,13 +191,16 @@ window.runBohrTests=async()=>{
  expect(reflection().filter==='none'&&reflection().backdropFilter==='none','surface light is never blurred or dimmed with the backdrop')
  expect(getComputedStyle(optics).pointerEvents==='none','optical layers do not intercept input')
  expect(getComputedStyle(optics,'::before').maskImage==='none','rounded contour uses native antialiasing instead of subtractive masks')
- const opticalRect=optics.getBoundingClientRect(),barRect=bar.getBoundingClientRect()
- expect(opticalRect.width===barRect.width&&opticalRect.height===barRect.height,'reflection uses the measured outer contour, including its border')
+ const barRect=bar.getBoundingClientRect()
+ for(const layer of [optics,bar.querySelector('.player-bar-warp')]){
+  const r=layer.getBoundingClientRect()
+  for(const key of ['x','y','width','height'])expect(Math.abs(r[key]-barRect[key])<.02,'optical layer diverged from outer contour: '+JSON.stringify({dpi:devicePixelRatio,key,bar:barRect[key],layer:r[key]}))
+ }
  const button=document.getElementById('play'),rect=button.getBoundingClientRect()
  expect(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===button,'play target remains above the optical layer: '+JSON.stringify({x:rect.x,y:rect.y,w:rect.width,h:rect.height,hit:document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)?.outerHTML.slice(0,100)}))
  const row=document.querySelector('.track-row'),outline=getComputedStyle(row,'::after')
  expect(outline.maskImage==='none'&&outline.backgroundImage==='none','playing outline uses one native contour')
- expect(outline.borderTopStyle==='solid'&&outline.borderTopWidth==='1px','playing state retains a visible border')
+ expect(outline.borderTopStyle==='solid'&&parseFloat(outline.borderTopWidth)>0&&parseFloat(outline.borderTopWidth)<=1,'playing state retains a visible border')
  const rowButton=document.getElementById('row-action'),rowRect=rowButton.getBoundingClientRect()
  expect(document.elementFromPoint(rowRect.x+rowRect.width/2,rowRect.y+rowRect.height/2)===rowButton,'row outline never covers or intercepts its actions: '+JSON.stringify({rect:[rowRect.x,rowRect.y,rowRect.width,rowRect.height],hit:document.elementFromPoint(rowRect.x+rowRect.width/2,rowRect.y+rowRect.height/2)?.outerHTML.slice(0,140)}))
  row.classList.add('track-selected')

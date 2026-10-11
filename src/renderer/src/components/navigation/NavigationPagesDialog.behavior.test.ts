@@ -185,7 +185,7 @@ window.checkAdjacentNavigation=async({tone})=>{
   document.documentElement.dataset.theme=tone;document.documentElement.style.setProperty('--te-font-size-body','14px')
   const host=document.querySelector('#app'),menu=document.querySelector('.side-menu'),bar=document.querySelector('.playbar-fixture')
   host.style.setProperty('--te-side-menu-bottom','0px');bar.classList.add('player-bar-shell','menu-open');bar.style.left=(menu.offsetLeft+menu.offsetWidth+18)+'px';bar.style.height='84px';await pause(350)
-  const clearance=useSideMenuClearance({showLocalSidebar:visible,hasPlayerBar:ref(true),menuOpen:open});clearance.measureSideMenuClearance()
+  const clearance=useSideMenuClearance({showLocalSidebar:visible,hasPlayerBar:ref(true)});clearance.measureSideMenuClearance()
   host.style.setProperty('--te-side-menu-bottom',clearance.sideMenuBottomOffset.value+'px');host.style.setProperty('--te-side-menu-tools-clearance',clearance.sideMenuToolsClearance.value+'px');await nextTick()
   expect(clearance.sideMenuBottomOffset.value===0&&clearance.sideMenuToolsClearance.value===0,'adjacent playbar reserves empty space under the tools')
   expect(Math.abs(menu.getBoundingClientRect().bottom-window.innerHeight)<=1,'adjacent playbar shortens the sidebar')

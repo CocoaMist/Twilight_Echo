@@ -85,8 +85,7 @@ function measure(options: Parameters<typeof installDom>[0]): number {
   installDom(options)
   const clearance = useSideMenuClearance({
     showLocalSidebar: ref(true),
-    hasPlayerBar: ref(true),
-    menuOpen: ref(true)
+    hasPlayerBar: ref(true)
   })
   clearance.measureSideMenuClearance()
   const offset = clearance.sideMenuBottomOffset.value
@@ -103,20 +102,19 @@ test('sidebar clearance drops to zero once the mini bar is tucked away', () => {
   assert.equal(measure({ playerBarHidden: 'true' }), 0)
 })
 
-test('the open local menu keeps its full height while the bar moves beside it', () => {
-  assert.equal(measure({ playerBarMenuOpen: true }), 0)
+test('legacy menu-open state does not bypass actual overlap clearance', () => {
+  assert.equal(measure({ playerBarMenuOpen: true }), 110)
 })
 
-test('navigation tools stay at the bottom while the playbar moves beside the menu', () => {
+test('navigation tools clear the overlaid player and remain flush for adjacent custom layouts', () => {
   installDom({ playerBarMenuOpen: true })
   const clearance = useSideMenuClearance({
     showLocalSidebar: ref(true),
-    hasPlayerBar: ref(true),
-    menuOpen: ref(true)
+    hasPlayerBar: ref(true)
   })
   clearance.measureSideMenuClearance()
-  assert.equal(clearance.sideMenuBottomOffset.value, 0)
-  assert.equal(clearance.sideMenuToolsClearance.value, 0)
+  assert.equal(clearance.sideMenuBottomOffset.value, 110)
+  assert.equal(clearance.sideMenuToolsClearance.value, 70)
 
   // Once the transition completes, adjacent bars also need no padding when a
   // custom shell owns their positioning or the menu-open class is absent.
@@ -152,8 +150,7 @@ test('navigation tools do not reserve the playback band twice in an inset shell'
   })
   const clearance = useSideMenuClearance({
     showLocalSidebar: ref(true),
-    hasPlayerBar: ref(true),
-    menuOpen: ref(true)
+    hasPlayerBar: ref(true)
   })
   clearance.measureSideMenuClearance()
   assert.equal(clearance.sideMenuToolsClearance.value, 0)
@@ -166,36 +163,6 @@ test('overlay navigation at 760px reserves room above the full-width playbar', (
 
 test('temporary navigation in a wide custom shell clears its grid-positioned playbar', () => {
   assert.equal(measure({ playerBarMenuOpen: true, shellLayout: 'custom' }), 110)
-})
-
-/**
- * An edge-to-edge bar has to start after the menu's *right edge*, and CSS cannot
- * name that: `--te-menu-width` is the menu's width alone, so a preset that insets
- * the menu from the window edge puts its edge that much further right, and a
- * width-based `left` leaves the bar covering the gap. Measured from the
- * untransformed box so the value does not sweep while the menu slides in.
- */
-test('the measured menu edge follows a preset that insets the menu', () => {
-  function inlineEnd(options: Parameters<typeof installDom>[0]): number {
-    installDom(options)
-    const clearance = useSideMenuClearance({
-      showLocalSidebar: ref(true),
-      hasPlayerBar: ref(true),
-      menuOpen: ref(true)
-    })
-    clearance.measureSideMenuClearance()
-    const edge = clearance.sideMenuInlineEnd.value
-    clearance.dispose()
-    return edge
-  }
-
-  // Flush against the window edge: the edge is just the width.
-  assert.equal(inlineEnd({}), 216)
-  // Inset menu: 21px further right than the token says.
-  assert.equal(inlineEnd({ sideMenuInset: 21 }), 237)
-  // A tucked-away bar must not suppress the edge — the menu is still there, and
-  // the shape that reads this can be revealed again at any moment.
-  assert.equal(inlineEnd({ sideMenuInset: 21, playerBarHidden: 'true' }), 237)
 })
 
 test('sidebar clearance still handles a missing playbar and a non-overlapping one', () => {
@@ -254,8 +221,7 @@ test('sidebar clearance settles instead of oscillating once the menu is lifted',
 
   const clearance = useSideMenuClearance({
     showLocalSidebar: ref(true),
-    hasPlayerBar: ref(true),
-    menuOpen: ref(true)
+    hasPlayerBar: ref(true)
   })
   const passes: number[] = []
   for (let pass = 0; pass < 4; pass += 1) {
