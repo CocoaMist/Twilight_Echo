@@ -224,17 +224,38 @@ window.runUxCoreTests = async () => {
     loading = ref(false)
   let opened = 0,
     activated = 0,
-    liked = 0
+    liked = 0,
+    rowClicks = 0
+  const openedAlbums = []
+  const artistRequests = []
+  const albumRequests = []
+  const activationMode = ref('doubleClick')
   const tracks = Array.from({ length: 61 }, (_, index) => ({
     id: String(index),
     title: `Song ${index}`,
     artist: 'Artist',
+    artists: [
+      { id: 101, name: 'Artist' },
+      { id: 202, name: 'Guest Artist' }
+    ],
     album: 'Album',
+    albumId: '303',
     duration: 180
   }))
   const props = () => ({
     searchType: type.value,
     searchResults: tracks.slice(offset.value, Math.min(total.value, offset.value + 30)),
+    searchAlbumsResults: tracks
+      .slice(offset.value, Math.min(total.value, offset.value + 30))
+      .map((track) => ({
+        id: String(Math.floor(Number(track.id) / 2)),
+        name: '同名专辑',
+        artist: '专辑艺术家',
+        cover: null,
+        trackCount: 3,
+        providerId: Number(track.id) % 2 ? 'ncm' : 'local',
+        providerName: Number(track.id) % 2 ? '网易云音乐' : '本地音乐'
+      })),
     searchPlaylistsResults: tracks
       .slice(offset.value, Math.min(total.value, offset.value + 30))
       .map((track) => ({ id: track.id, name: track.title, trackCount: 3 })),
@@ -246,18 +267,24 @@ window.runUxCoreTests = async () => {
     searchLoading: loading.value,
     searchError: '',
     currentTrack: null,
-    trackActivationMode: 'doubleClick',
+    trackActivationMode: activationMode.value,
     likingTracks: new Set(),
     isTrackLiked: () => false,
     formatTime: () => '3:00',
     onPageChange: (event) => (offset.value = event.first),
     onOpenPlaylist: () => opened++,
     onOpenArtist: () => opened++,
+    onOpenAlbum: (album) => openedAlbums.push([album.providerId, album.id]),
+    canOpenTrackArtist: (track) => track.id !== '1',
+    canOpenTrackAlbum: (track) => Boolean(track.albumId),
+    onOpenTrackArtist: (track, artist) => artistRequests.push({ track, artist }),
+    onOpenTrackAlbum: (track) => albumRequests.push(track),
+    onSearchTrackClick: () => rowClicks++,
     onSearchTrackActivate: () => activated++,
     onLikeTrack: () => liked++
   })
   await mount(StreamingSearch, props)
-  for (const searchType of ['songs', 'playlists', 'artists']) {
+  for (const searchType of ['songs', 'albums', 'playlists', 'artists']) {
     type.value = searchType
     for (const count of [0, 1, 29, 30, 31, 59, 60, 61]) {
       total.value = count
@@ -288,6 +315,26 @@ window.runUxCoreTests = async () => {
       }
     }
   }
+  type.value = 'albums'
+  total.value = 2
+  offset.value = 0
+  await settle()
+  const albumCards = document.querySelectorAll('.album-search-card')
+  expect(albumCards.length === 2, 'same-id albums from different sources were merged')
+  expect(albumCards[0].textContent.includes('本地音乐'), 'local album source is missing')
+  expect(albumCards[1].textContent.includes('网易云音乐'), 'online album source is missing')
+  albumCards[0].focus()
+  await window.pressKey('Enter')
+  albumCards[1].focus()
+  await window.pressKey('Space')
+  expect(
+    JSON.stringify(openedAlbums) ===
+      JSON.stringify([
+        ['local', '0'],
+        ['ncm', '0']
+      ]),
+    'album keyboard navigation lost source identity'
+  )
   type.value = 'playlists'
   total.value = 31
   offset.value = 0
@@ -320,9 +367,49 @@ window.runUxCoreTests = async () => {
   expect(activated === 2, 'song activation in double-click mode')
   await window.pressKey('ArrowDown')
   expect(document.activeElement === row.nextElementSibling, 'row arrow navigation')
-  row.querySelector('button').focus()
+  row.querySelector('.btn-like').focus()
   await window.pressKey('Space')
   expect(liked === 1 && activated === 2, 'favorite key bubbled into playback')
+
+  for (const mode of ['singleClick', 'doubleClick']) {
+    activationMode.value = mode
+    await settle()
+    const artistLink = row.querySelectorAll('.track-artist button')[1]
+    const albumLink = row.querySelector('.col-album button')
+    for (const link of [artistLink, albumLink]) {
+      link.click()
+      link.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+      link.focus()
+      await window.pressKey('Enter')
+      await window.pressKey('Space')
+    }
+    expect(rowClicks === 0 && activated === 2, `${mode} metadata links triggered playback`)
+  }
+  expect(
+    artistRequests.length === 6 &&
+      artistRequests.every(({ track, artist }) => track.id === '0' && artist.id === 202),
+    'guest artist link opened the wrong artist or emitted duplicate requests'
+  )
+  expect(
+    albumRequests.length === 6 && albumRequests.every((track) => track.albumId === '303'),
+    'album link lost the track album identity'
+  )
+  expect(
+    row.nextElementSibling.querySelectorAll('.track-artist button').length === 0 &&
+      row.nextElementSibling.querySelector('.track-artist').textContent.includes('Guest Artist'),
+    'unsupported artist links must remain readable text'
+  )
+  delete tracks[0].artists
+  delete tracks[0].albumId
+  await mount(StreamingSearch, props)
+  const legacyRow = document.querySelector('.track-row')
+  legacyRow.querySelector('.track-artist button').click()
+  expect(artistRequests.at(-1).artist === undefined, 'legacy artist lookup must use the track name')
+  expect(
+    !legacyRow.querySelector('.col-album button') &&
+      legacyRow.querySelector('.col-album').textContent.trim() === 'Album',
+    'missing album IDs must remain readable text'
+  )
 
   const show = ref(true)
   const opener = document.querySelector('#opener')

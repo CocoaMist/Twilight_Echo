@@ -4,16 +4,216 @@ import test from 'node:test'
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { compileStyle } from '@vue/compiler-sfc'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { LocalLibraryRemoveResult } from '../../../../shared/localLibrary.ts'
-import type { Track } from '../../types/music.ts'
+import type { Track, TrackArtistRef } from '../../types/music.ts'
+import type {
+  MediaProviderAlbumSummary,
+  MediaProviderArtistSummary
+} from '../../providers/mediaProvider.ts'
 import { appendUniqueTracks } from './streamingPageModel.ts'
+import { createNcmPlaylistEditor } from './ncmPlaylistEditor.ts'
 import { getTrackSource } from '../../utils/logicalTrackModel.ts'
+import {
+  findStreamingArtistById,
+  matchStreamingArtistsByName
+} from '../../utils/streamingArtistResolution.ts'
 
 const source = readFileSync(new URL('../StreamingPage.vue', import.meta.url), 'utf8')
 const homeSource = readFileSync(new URL('../StreamingHome.vue', import.meta.url), 'utf8')
 const discoverySource = readFileSync(new URL('../StreamingDiscovery.vue', import.meta.url), 'utf8')
 const providerHomeSource = readFileSync(new URL('./ProviderMusicHome.vue', import.meta.url), 'utf8')
 const headerSource = readFileSync(new URL('./StreamingContentHeader.vue', import.meta.url), 'utf8')
+
+function createAlbumPlaylistHarness() {
+  const owned = source.match(/const ownedUserPlaylists = computed\([\s\S]*?\n\)/)?.[0]
+  assert.ok(owned)
+  const watcher = source.slice(
+    source.indexOf('watch([currentDetail, isLoggedIn]'),
+    source.indexOf('function openCreateNcmPlaylistDialog(')
+  )
+  assert.ok(watcher.startsWith('watch('))
+  const notices: Array<{ message: string }> = []
+  const externalPlaylist = { id: 222, name: 'QQ playlist', owned: true }
+  const scope = {
+    computed,
+    watch,
+    currentDetail: ref<{ type: string; providerId: string } | null>(null),
+    isLoggedIn: ref(true),
+    NCM_PROVIDER_ID: 'ncm',
+    libraryLoaded: ref(false),
+    libraryLoading: ref(false),
+    userPlaylists: ref<Array<{ id: number; name: string; owned: boolean }>>([]),
+    userPlaylistEntries: ref([externalPlaylist]),
+    fetchUserLibrary: async () => {},
+    pushNotice: (notice: { message: string }) => notices.push(notice),
+    friendlyStreamingError: (error: Error, fallback: string) => `${fallback}：${error.message}`
+  }
+  const runtime = runInNewContext(
+    `${stripTypeScriptTypes(owned)}\nconst stop = ${stripTypeScriptTypes(watcher)}\n;({ ownedUserPlaylists, stop })`,
+    scope
+  ) as {
+    ownedUserPlaylists: { value: Array<{ id: number; name: string; owned: boolean }> }
+    stop: () => void
+  }
+  return { scope, notices, runtime, externalPlaylist }
+}
+
+test('NetEase album playlist writes use the NetEase account library while browsing another source', async (t) => {
+  const h = createAlbumPlaylistHarness()
+  t.after(h.runtime.stop)
+  const ncmPlaylist = { id: 111, name: 'NCM playlist', owned: true }
+  const calls: number[] = []
+  h.scope.fetchUserLibrary = async () => {
+    calls.push(1)
+    h.scope.userPlaylists.value = [ncmPlaylist, { id: 333, name: 'Subscribed', owned: false }]
+    h.scope.libraryLoaded.value = true
+  }
+  assert.equal(h.runtime.ownedUserPlaylists.value.length, 0)
+  h.scope.currentDetail.value = { type: 'album', providerId: 'ncm' }
+  await nextTick()
+  assert.equal(calls.length, 1)
+  assert.deepEqual(h.runtime.ownedUserPlaylists.value, [ncmPlaylist])
+  const writes: Array<[number | string, number[]]> = []
+  const editor = createNcmPlaylistEditor({
+    canManage: () => true,
+    captureContext: () => () => true,
+    create: async () => ({ id: 999 }),
+    add: async (id, ids) => {
+      writes.push([id, ids])
+    },
+    describeError: (error) => String(error)
+  })
+  t.after(editor.dispose)
+  assert.equal(editor.openAdd([{ ...createTrack('ncm:123', 'ncm'), ncmSongId: 123 }]), true)
+  await editor.confirmAdd(h.runtime.ownedUserPlaylists.value[0].id)
+  assert.deepEqual(writes, [[111, [123]]])
+  assert.notEqual(writes[0][0], h.externalPlaylist.id)
+})
+
+test('anonymous and local albums do not fetch the NetEase account library or surface obsolete failures', async (t) => {
+  const h = createAlbumPlaylistHarness()
+  t.after(h.runtime.stop)
+  let calls = 0
+  let rejectLibrary!: (error: Error) => void
+  h.scope.fetchUserLibrary = async () => {
+    calls++
+    return new Promise<void>((_resolve, reject) => {
+      rejectLibrary = reject
+    })
+  }
+  h.scope.isLoggedIn.value = false
+  h.scope.currentDetail.value = { type: 'album', providerId: 'ncm' }
+  await nextTick()
+  h.scope.currentDetail.value = { type: 'album', providerId: 'local' }
+  h.scope.isLoggedIn.value = true
+  await nextTick()
+  assert.equal(calls, 0)
+  h.scope.currentDetail.value = { type: 'album', providerId: 'ncm' }
+  await nextTick()
+  assert.equal(calls, 1)
+  h.scope.currentDetail.value = { type: 'album', providerId: 'local' }
+  rejectLibrary(new Error('late account failure'))
+  await nextTick()
+  assert.deepEqual(h.notices, [])
+})
+
+test('album search detail opens the result source, retries in place and ignores stale detail loads', async () => {
+  const code = source.match(
+    /async function openSearchAlbum[\s\S]*?(?=\nasync function openArtist)/
+  )?.[0]
+  assert.ok(code)
+  assert.match(source, /@open-album="openSearchAlbum"/)
+  const stack: Array<{ providerId: string }> = []
+  const local = [createTrack('local:1', 'local')]
+  let finishRemote!: (tracks: Track[]) => void
+  let token = 0
+  const calls: Array<{ providerId: string; id: string }> = []
+  const scope = {
+    activeProvider: { value: 'another-provider' },
+    beginDetailTransition: () => {},
+    pushDetail: (view: { providerId: string }) => stack.push(view),
+    replaceTopDetail: (view: { providerId: string }) => {
+      stack[stack.length - 1] = view
+    },
+    beginDetailLoad: () => {
+      scope.detailLoading.value = true
+      return ++token
+    },
+    isActiveDetailLoad: (request: number) => request === token,
+    albumSearch: {
+      loadAlbumTracks: async (album: { providerId: string; id: string }) => {
+        calls.push(album)
+        if (album.providerId === 'local') return local
+        return new Promise<Track[]>((resolve) => {
+          finishRemote = resolve
+        })
+      }
+    },
+    detailTracks: { value: [] as Track[] },
+    detailLoading: { value: false },
+    detailError: { value: '' },
+    friendlyStreamingError: (error: Error) => error.message
+  }
+  const handlers = runInNewContext(
+    `${stripTypeScriptTypes(code)}\n({openSearchAlbum, openAlbum})`,
+    scope
+  )
+  const album = {
+    id: '1',
+    name: 'Album',
+    trackCount: 1,
+    cover: null,
+    providerName: 'Local',
+    providerId: 'local'
+  }
+  const remote = handlers.openSearchAlbum({ ...album, providerId: 'ncm' })
+  await handlers.openSearchAlbum(album)
+  finishRemote([createTrack('ncm:1', 'ncm')])
+  await remote
+  assert.equal(scope.detailTracks.value, local)
+  assert.equal(scope.activeProvider.value, 'another-provider')
+  assert.equal(scope.detailLoading.value, false)
+  assert.equal(scope.detailError.value, '')
+  assert.equal(stack.at(-1)?.providerId, 'local')
+  const depth = stack.length
+  await handlers.openAlbum(album, 'local', true)
+  assert.equal(stack.length, depth)
+  assert.deepEqual(
+    calls.map((call) => call.providerId),
+    ['ncm', 'local', 'local']
+  )
+})
+test('album links retain native local release navigation and online source', async () => {
+  const code = source.match(
+    /async function openTrackAlbum[\s\S]*?(?=\nfunction openTrackArtist)/
+  )?.[0]
+  assert.ok(code)
+  const track = createTrack('local:1', 'local')
+  const opened: Array<{ providerId: string; id: string | number }> = []
+  const localViews: unknown[][] = []
+  const handler = runInNewContext(`${stripTypeScriptTypes(code)}\nopenTrackAlbum`, {
+    detailNavigationToken: 0,
+    getTrackSource,
+    canOpenTrackAlbum: () => true,
+    selectDetailProvider: async () => undefined,
+    isCurrentDetailNavigation: () => true,
+    emit: (...args: unknown[]) => localViews.push(args),
+    musicStore: {
+      albums: {
+        value: [{ id: 'release:1', name: 'Album', tracks: [track], cover: null, trackCount: 1 }]
+      }
+    },
+    openAlbum: async (album: { id: string | number }, providerId: string) =>
+      opened.push({ providerId, id: album.id }),
+    pushNotice: () => assert.fail('the local library supplies the album identity')
+  })
+  await handler(track)
+  await handler({ ...createTrack('ncm:1', 'ncm'), albumId: '1' })
+  assert.deepEqual(localViews, [['selectView', 'albums', 'album:release:1']])
+  assert.deepEqual(opened, [{ providerId: 'ncm', id: '1' }])
+})
+
 const providerSwitcherSource = readFileSync(
   new URL('./StreamingProviderSwitcher.vue', import.meta.url),
   'utf8'
@@ -106,6 +306,322 @@ test('same-named artists are separated by provider artist id, never by search or
   // 绝不能退回“搜索结果里第一个同名者即命中”——那正是同名歌手跳错页的成因。
   assert.doesNotMatch(source, /findBestStreamingArtistMatch\(artistName, result\.items\)/)
 })
+
+function createTrackMetadataNavigationHarness() {
+  const track: Track = {
+    ...createTrack('ncm:123', 'ncm'),
+    artist: 'First Artist / Shared Name',
+    artists: [
+      { id: 11, name: 'First Artist' },
+      { id: 22, name: 'Shared Name' }
+    ],
+    albumId: '456'
+  }
+  const searchResults = ref([track])
+  const searchQuery = ref('test song')
+  const searchType = ref('songs')
+  const searchSource = ref('all')
+  const searchOffset = ref(60)
+  const detailStack = ref<Array<{ view: { type: string } }>>([])
+  const openedArtists: MediaProviderArtistSummary[] = []
+  const openedAlbums: MediaProviderAlbumSummary[] = []
+  const localViews: unknown[][] = []
+  const providerSelections: Array<[string, boolean]> = []
+  const methods = ['fetchArtistTopSongs', 'searchArtists', 'fetchAlbumTracks']
+  const scope = {
+    getTrackSource,
+    findStreamingArtistById,
+    matchStreamingArtistsByName,
+    nextTick,
+    watch,
+    activeProvider: ref('other'),
+    activeTab: ref('search'),
+    props: reactive({ active: true }),
+    NCM_PROVIDER_ID: 'ncm',
+    providerStore: {
+      syncProviders: async (): Promise<void> => undefined,
+      getProvider: (id: string) => ({ supportedMethods: id === 'ncm' ? methods : [] })
+    },
+    mediaProviders: {
+      get: () => ({ name: 'NetEase', fetchArtistTopSongs() {}, searchArtists() {} }),
+      searchArtists: async () => ({
+        items: [
+          { id: 99, name: 'Shared Name', picUrl: null },
+          { id: 22, name: 'Shared Name', picUrl: 'artist-cover' }
+        ]
+      })
+    },
+    musicStore: { albums: { value: [{ id: 'local-release', tracks: [] as Track[] }] } },
+    selectProvider: (id: string, persist = true) => {
+      providerSelections.push([id, persist])
+      scope.activeProvider.value = id
+    },
+    emit: (...args: unknown[]) => localViews.push(args),
+    pushNotice: (notice: unknown) => {
+      throw new Error(JSON.stringify(notice))
+    },
+    friendlyStreamingError: (error: Error) => error.message,
+    openArtist: async (artist: MediaProviderArtistSummary) => {
+      openedArtists.push(artist)
+      runtime.pushDetail({ type: 'artist' })
+    },
+    openAlbum: async (album: MediaProviderAlbumSummary) => {
+      openedAlbums.push(album)
+      runtime.pushDetail({ type: 'album' })
+    },
+    detailStack,
+    detailLoadToken: 0,
+    streamingTransitionName: ref(''),
+    streamingContentRef: ref(null),
+    applyDetailState() {},
+    captureDetailState: () => ({}),
+    clearDetailState() {},
+    currentDetail: computed(() => detailStack.value.at(-1)?.view ?? null),
+    searchQuery,
+    searchType,
+    searchSource,
+    clearSearch: () => {
+      searchQuery.value = ''
+      searchOffset.value = 0
+      searchResults.value = []
+    },
+    recommendationRequestId: 0,
+    recommendationProviderId: ref(''),
+    homeSectionDefinitions: ref([]),
+    recommendationTracks: ref({}),
+    recommendationErrors: ref({}),
+    recsError: ref(''),
+    recsLoading: ref(false),
+    recommendPlaylists: ref([]),
+    activeProviderRequiresLogin: ref(false)
+  }
+  const handlers = source.slice(
+    source.indexOf('function canOpenTrackArtist('),
+    source.indexOf('async function openAlbum(')
+  )
+  const artistResolution = source.slice(
+    source.indexOf('async function openRequestedArtist('),
+    source.indexOf('async function openUserList(')
+  )
+  const push = source.slice(
+    source.indexOf('function pushDetail('),
+    source.indexOf('function replaceTopDetail(')
+  )
+  const reset = source.slice(
+    source.indexOf('function resetDetail('),
+    source.indexOf('function resetLikedTracksPaging(')
+  )
+  const back = source.slice(
+    source.indexOf('function popDetail('),
+    source.indexOf('function removeDetailEntries(')
+  )
+  const providerWatcher = source.slice(
+    source.indexOf('watch(activeProvider,'),
+    source.indexOf('watch(activeTab,')
+  )
+  const navigationWatcher = source.slice(
+    source.indexOf('watch([searchQuery, searchType, searchSource,'),
+    source.indexOf('watch(isSearching,')
+  )
+  const runtime = runInNewContext(
+    stripTypeScriptTypes(
+      `let detailNavigationToken = 0\n${handlers}\n${artistResolution}\n${push}\n${back}\n${reset}\nconst stopProvider = ${providerWatcher}\nconst stopNavigation = ${navigationWatcher}\nconst stop = () => { stopProvider(); stopNavigation() }\n;({ canOpenTrackArtist, canOpenTrackAlbum, openTrackArtist, openTrackAlbum, pushDetail, popDetail, resetDetail, stop })`
+    ),
+    scope
+  ) as {
+    canOpenTrackArtist: (track: Track, artist?: TrackArtistRef) => boolean
+    canOpenTrackAlbum: (track: Track) => boolean
+    openTrackArtist: (track: Track, artist?: TrackArtistRef) => void
+    openTrackAlbum: (track: Track) => Promise<void>
+    pushDetail: (view: { type: string }) => void
+    popDetail: () => void
+    resetDetail: () => void
+    stop: () => void
+  }
+  return {
+    track,
+    searchQuery,
+    searchOffset,
+    searchResults,
+    detailStack,
+    openedArtists,
+    openedAlbums,
+    localViews,
+    providerSelections,
+    scope,
+    runtime
+  }
+}
+
+for (const kind of ['artist', 'album'] as const) {
+  test(`song search opens the result's ${kind} provider and returns to the same search page`, async (t) => {
+    const h = createTrackMetadataNavigationHarness()
+    t.after(h.runtime.stop)
+    const results = h.searchResults.value
+    if (kind === 'artist') {
+      h.runtime.openTrackArtist(h.track, h.track.artists![1])
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      assert.equal(
+        h.openedArtists[0]?.id,
+        22,
+        'the selected guest must win over the first same-named search result'
+      )
+      assert.equal(h.openedArtists[0]?.picUrl, 'artist-cover')
+    } else {
+      await h.runtime.openTrackAlbum(h.track)
+      assert.equal(h.openedAlbums[0]?.id, '456')
+      assert.equal(h.openedAlbums[0]?.name, h.track.album)
+    }
+    assert.equal(h.scope.activeProvider.value, 'ncm')
+    assert.deepEqual(h.providerSelections, [['ncm', false]])
+    assert.equal(h.detailStack.value.at(-1)?.view.type, kind)
+    h.runtime.popDetail()
+    assert.equal(h.detailStack.value.length, 0)
+    assert.equal(h.searchQuery.value, 'test song')
+    assert.equal(h.searchOffset.value, 60)
+    assert.equal(h.searchResults.value, results)
+
+    h.scope.selectProvider('other')
+    await nextTick()
+    assert.equal(h.searchQuery.value, '', 'an explicit provider change must still reset search')
+  })
+}
+
+test('metadata navigation uses local library identities and exposes only supported online links', async (t) => {
+  const h = createTrackMetadataNavigationHarness()
+  t.after(h.runtime.stop)
+  assert.equal(h.runtime.canOpenTrackArtist(h.track), true)
+  assert.equal(h.runtime.canOpenTrackAlbum(h.track), true)
+  assert.equal(h.runtime.canOpenTrackAlbum({ ...h.track, albumId: undefined }), false)
+  assert.equal(h.runtime.canOpenTrackArtist({ ...h.track, source: 'unsupported' }), false)
+  assert.equal(h.runtime.canOpenTrackAlbum({ ...h.track, source: 'unsupported' }), false)
+
+  const local = { ...createTrack('local-file', 'local'), albumId: undefined }
+  h.scope.musicStore.albums.value[0].tracks = [local]
+  assert.equal(h.runtime.canOpenTrackArtist(local), true)
+  assert.equal(h.runtime.canOpenTrackAlbum(local), true)
+  h.runtime.openTrackArtist(local)
+  await h.runtime.openTrackAlbum(local)
+  assert.deepEqual(h.localViews, [
+    ['selectView', 'artists', 'artist:Test Artist'],
+    ['selectView', 'albums', 'album:local-release']
+  ])
+  assert.equal(h.providerSelections.length, 0)
+})
+
+async function holdArtistNavigation(
+  h: ReturnType<typeof createTrackMetadataNavigationHarness>,
+  phase: 'providers' | 'search'
+): Promise<() => Promise<void>> {
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  if (phase === 'providers') h.scope.providerStore.syncProviders = () => pending
+  else {
+    const searchArtists = h.scope.mediaProviders.searchArtists
+    h.scope.mediaProviders.searchArtists = async () => {
+      await pending
+      return searchArtists()
+    }
+  }
+  h.runtime.openTrackArtist(h.track, h.track.artists![1])
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  return async () => {
+    release()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+}
+
+for (const phase of ['providers', 'search'] as const) {
+  for (const providerId of ['ncm', 'other']) {
+    test(`album navigation supersedes artist navigation pending ${phase} on ${providerId}`, async (t) => {
+      const h = createTrackMetadataNavigationHarness()
+      t.after(h.runtime.stop)
+      h.scope.providerStore.getProvider = () => ({
+        supportedMethods: ['fetchArtistTopSongs', 'searchArtists', 'fetchAlbumTracks']
+      })
+      const release = await holdArtistNavigation(h, phase)
+      await h.runtime.openTrackAlbum({ ...h.track, source: providerId, albumId: 'new-album' })
+      await release()
+      assert.equal(h.openedArtists.length, 0, 'the obsolete artist must never open or fetch tracks')
+      assert.equal(h.openedAlbums[0]?.id, 'new-album')
+      assert.equal(h.scope.activeProvider.value, providerId)
+      assert.equal(h.detailStack.value.at(-1)?.view.type, 'album')
+    })
+  }
+
+  for (const kind of ['artist', 'album'] as const) {
+    test(`local ${kind} navigation supersedes artist navigation pending ${phase}`, async (t) => {
+      const h = createTrackMetadataNavigationHarness()
+      t.after(h.runtime.stop)
+      const local = createTrack('local-file', 'local')
+      h.scope.musicStore.albums.value[0].tracks = [local]
+      const release = await holdArtistNavigation(h, phase)
+      if (kind === 'artist') h.runtime.openTrackArtist(local)
+      else await h.runtime.openTrackAlbum(local)
+      await release()
+      assert.equal(h.openedArtists.length, 0)
+      assert.equal(h.localViews[0]?.[0], 'selectView')
+      assert.equal(h.localViews[0]?.[1], kind === 'artist' ? 'artists' : 'albums')
+    })
+  }
+}
+
+for (const destination of ['back', 'root', 'playlist', 'query', 'source', 'hidden'] as const) {
+  test(`leaving an artist lookup for ${destination} ignores its late response`, async (t) => {
+    const h = createTrackMetadataNavigationHarness()
+    t.after(h.runtime.stop)
+    const release = await holdArtistNavigation(h, 'search')
+    switch (destination) {
+      case 'back':
+        h.runtime.popDetail()
+        break
+      case 'root':
+        h.runtime.resetDetail()
+        break
+      case 'playlist':
+        h.runtime.pushDetail({ type: 'playlist' })
+        break
+      case 'query':
+        h.scope.clearSearch()
+        break
+      case 'source':
+        h.scope.searchSource.value = 'local'
+        break
+      case 'hidden':
+        h.scope.props.active = false
+        break
+    }
+    await nextTick()
+    await release()
+    assert.equal(h.openedArtists.length, 0)
+    assert.equal(
+      h.detailStack.value.at(-1)?.view.type,
+      destination === 'playlist' ? 'playlist' : undefined
+    )
+  })
+}
+
+for (const phase of ['providers', 'search'] as const) {
+  test(`a newer artist request wins over an older lookup pending ${phase}`, async (t) => {
+    const h = createTrackMetadataNavigationHarness()
+    t.after(h.runtime.stop)
+    const syncProviders = h.scope.providerStore.syncProviders
+    const searchArtists = h.scope.mediaProviders.searchArtists
+    const release = await holdArtistNavigation(h, phase)
+    h.scope.providerStore.syncProviders = syncProviders
+    h.scope.mediaProviders.searchArtists = searchArtists
+    h.runtime.openTrackArtist(h.track, h.track.artists![0])
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await release()
+    assert.deepEqual(
+      h.openedArtists.map((artist) => artist.id),
+      [11]
+    )
+    assert.equal(h.scope.activeProvider.value, 'ncm')
+  })
+}
 
 test('streaming page keeps third-party providers on the generic provider library surface', () => {
   assert.doesNotMatch(source, /import BilibiliPage/)

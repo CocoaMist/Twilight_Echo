@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { Track } from '../types/music'
+import type { Track, TrackArtistRef } from '../types/music'
 import type {
   MediaProviderPlaylistSummary,
   MediaProviderArtistSummary
 } from '../providers/mediaProvider'
 import type { SearchType } from './streaming-page/useStreamingSearch'
+import { albumSearchKey, type AlbumSearchItem } from './streaming-page/albumSearch.ts'
 import CoverImg from './CoverImg.vue'
 
 interface PageState {
@@ -17,6 +18,7 @@ interface PageState {
 const props = defineProps<{
   searchType: SearchType
   searchResults: Track[]
+  searchAlbumsResults?: AlbumSearchItem[]
   searchPlaylistsResults: MediaProviderPlaylistSummary[]
   searchArtistsResults: MediaProviderArtistSummary[]
   searchTotal: number
@@ -35,6 +37,8 @@ const props = defineProps<{
   favoriteLabel?: string
   isTrackFavorited?: (track: Track) => boolean
   canAddToPlaylist?: boolean
+  canOpenTrackArtist?: (track: Track, artist?: TrackArtistRef) => boolean
+  canOpenTrackAlbum?: (track: Track) => boolean
 }>()
 
 const emit = defineEmits<{
@@ -42,7 +46,10 @@ const emit = defineEmits<{
   searchTrackActivate: [track: Track]
   likeTrack: [track: Track, event: MouseEvent]
   openPlaylist: [playlist: MediaProviderPlaylistSummary]
+  openAlbum: [album: AlbumSearchItem]
   openArtist: [artist: MediaProviderArtistSummary]
+  openTrackArtist: [track: Track, artist?: TrackArtistRef]
+  openTrackAlbum: [track: Track]
   pageChange: [event: PageState]
   retry: []
   batchFavorite: []
@@ -199,7 +206,35 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
                 </td>
                 <td class="col-info">
                   <div class="track-title">{{ track.title }}</div>
-                  <div class="track-artist">{{ track.artist }}</div>
+                  <div class="track-artist">
+                    <template v-if="track.artists?.length">
+                      <template v-for="(artist, artistIndex) in track.artists" :key="artistIndex">
+                        <span v-if="artistIndex > 0"> / </span>
+                        <button
+                          v-if="canOpenTrackArtist?.(track, artist)"
+                          type="button"
+                          class="metadata-link"
+                          :title="`查看歌手：${artist.name}`"
+                          @click.stop="emit('openTrackArtist', track, artist)"
+                          @dblclick.stop
+                        >
+                          {{ artist.name }}
+                        </button>
+                        <span v-else>{{ artist.name }}</span>
+                      </template>
+                    </template>
+                    <button
+                      v-else-if="canOpenTrackArtist?.(track)"
+                      type="button"
+                      class="metadata-link"
+                      :title="`查看歌手：${track.artist}`"
+                      @click.stop="emit('openTrackArtist', track)"
+                      @dblclick.stop
+                    >
+                      {{ track.artist }}
+                    </button>
+                    <span v-else>{{ track.artist }}</span>
+                  </div>
                 </td>
                 <td class="col-like">
                   <button
@@ -232,32 +267,55 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
                     ></i>
                   </button>
                 </td>
-                <td class="col-album">{{ track.album }}</td>
+                <td class="col-album">
+                  <button
+                    v-if="canOpenTrackAlbum?.(track)"
+                    type="button"
+                    class="metadata-link"
+                    :title="`查看专辑：${track.album}`"
+                    @click.stop="emit('openTrackAlbum', track)"
+                    @dblclick.stop
+                  >
+                    {{ track.album }}
+                  </button>
+                  <span v-else>{{ track.album }}</span>
+                </td>
                 <td class="col-duration">{{ formatTime(track.duration) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div v-if="searchTotal > 30" class="search-paginator">
+      </div>
+      <div v-else-if="searchType === 'albums'" class="rec-sections">
+        <div class="playlist-grid album-search-grid">
           <button
+            v-for="album in searchAlbumsResults"
+            :key="albumSearchKey(album)"
             type="button"
-            class="pager-btn"
-            :disabled="searchLoading || searchOffset <= 0"
-            @click="emitPage(searchOffset - pageSize)"
+            class="playlist-grid-card album-search-card"
+            data-te-interactive
+            @click="emit('openAlbum', album)"
           >
-            上一页
-          </button>
-          <span class="pager-text">
-            {{ Math.floor(searchOffset / pageSize) + 1 }} /
-            {{ Math.ceil(searchTotal / pageSize) }}
-          </span>
-          <button
-            type="button"
-            class="pager-btn"
-            :disabled="searchLoading || searchOffset + pageSize >= searchTotal"
-            @click="emitPage(searchOffset + pageSize)"
-          >
-            下一页
+            <CoverImg
+              v-if="album.cover || album.coverSmall"
+              :cover="album.coverSmall || album.cover"
+              :cover-source="album.coverSmallSource || album.coverSource"
+              class="playlist-grid-cover"
+              alt=""
+            />
+            <div v-else class="playlist-grid-cover-placeholder">
+              <i class="pi pi-headphones" aria-hidden="true"></i>
+            </div>
+            <div class="playlist-grid-name" :title="album.name">{{ album.name }}</div>
+            <div class="album-search-artist" :title="album.artist || '未知艺术家'">
+              {{ album.artist || '未知艺术家' }}
+            </div>
+            <div class="album-search-meta">
+              <span>{{ album.trackCount }} 首</span>
+              <span class="album-search-source" :title="album.providerName">{{
+                album.providerName
+              }}</span>
+            </div>
           </button>
         </div>
       </div>
@@ -288,28 +346,6 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
             <div class="playlist-grid-count">{{ playlist.trackCount }} 首</div>
           </button>
         </div>
-        <div v-if="searchTotal > 30" class="search-paginator">
-          <button
-            type="button"
-            class="pager-btn"
-            :disabled="searchLoading || searchOffset <= 0"
-            @click="emitPage(searchOffset - pageSize)"
-          >
-            上一页
-          </button>
-          <span class="pager-text">
-            {{ Math.floor(searchOffset / pageSize) + 1 }} /
-            {{ Math.ceil(searchTotal / pageSize) }}
-          </span>
-          <button
-            type="button"
-            class="pager-btn"
-            :disabled="searchLoading || searchOffset + pageSize >= searchTotal"
-            @click="emitPage(searchOffset + pageSize)"
-          >
-            下一页
-          </button>
-        </div>
       </div>
       <div v-else-if="searchType === 'artists'" class="rec-sections">
         <div class="playlist-grid">
@@ -338,28 +374,28 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
             <div class="playlist-grid-count">{{ artist.musicSize ?? 0 }} 首单曲</div>
           </button>
         </div>
-        <div v-if="searchTotal > 30" class="search-paginator">
-          <button
-            type="button"
-            class="pager-btn"
-            :disabled="searchLoading || searchOffset <= 0"
-            @click="emitPage(searchOffset - pageSize)"
-          >
-            上一页
-          </button>
-          <span class="pager-text">
-            {{ Math.floor(searchOffset / pageSize) + 1 }} /
-            {{ Math.ceil(searchTotal / pageSize) }}
-          </span>
-          <button
-            type="button"
-            class="pager-btn"
-            :disabled="searchLoading || searchOffset + pageSize >= searchTotal"
-            @click="emitPage(searchOffset + pageSize)"
-          >
-            下一页
-          </button>
-        </div>
+      </div>
+      <div v-if="searchTotal > pageSize" class="search-paginator">
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="searchLoading || searchOffset <= 0"
+          @click="emitPage(searchOffset - pageSize)"
+        >
+          上一页
+        </button>
+        <span class="pager-text">
+          {{ Math.floor(searchOffset / pageSize) + 1 }} /
+          {{ Math.ceil(searchTotal / pageSize) }}
+        </span>
+        <button
+          type="button"
+          class="pager-btn"
+          :disabled="searchLoading || searchOffset + pageSize >= searchTotal"
+          @click="emitPage(searchOffset + pageSize)"
+        >
+          下一页
+        </button>
       </div>
     </div>
   </div>
@@ -581,6 +617,10 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
   color: rgba(82, 90, 122, 0.58);
 }
 
+.track-artist .metadata-link {
+  display: inline;
+}
+
 .col-like,
 .col-like-header {
   width: 44px;
@@ -749,6 +789,53 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   color: rgba(82, 90, 122, 0.62);
   font-weight: 750;
+}
+
+.album-search-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.album-search-card .playlist-grid-cover-placeholder {
+  color: var(--te-primary-500);
+  font-size: 28px;
+}
+
+.album-search-card .playlist-grid-name {
+  color: var(--te-neutral-900);
+}
+
+.album-search-card:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 3px;
+}
+
+.album-search-artist,
+.album-search-meta {
+  margin-top: 6px;
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+  color: var(--te-neutral-700);
+}
+
+.album-search-artist,
+.album-search-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-search-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.album-search-meta > :first-child {
+  flex-shrink: 0;
 }
 
 .artist-card {
