@@ -72,7 +72,6 @@ const GEOMETRY_REMEASURE_INTERVAL_MS = 120
 const cardMapUrl = ref('')
 const playbarMapUrl = ref('')
 const cardSpecularUrl = ref('')
-const playbarSpecularUrl = ref('')
 const specularOpacity = ref(DEFAULT_LIQUID_GLASS_LIGHT.specularOpacity)
 const homeSpecularOpacity = ref(DEFAULT_LIQUID_GLASS_HOME_CARDS.light.specularOpacity)
 const expandedSpecularOpacity = ref(36)
@@ -145,21 +144,6 @@ const expandedSpecularStrength = computed(() =>
 const cardSpecularActive = computed(
   () => specularStrength.value > 0 && Boolean(cardSpecularUrl.value)
 )
-// Bohr reflects light above the transmitted backdrop. Keeping the measured
-// highlight out of the SVG backdrop chain preserves it through blur and dimming.
-function syncPlaybarReflection(): void {
-  const style = document.documentElement.style
-  if (props.active && playbarSpecularUrl.value && specularStrength.value > 0) {
-    style.setProperty('--te-bohr-playbar-specular-map', `url("${playbarSpecularUrl.value}")`)
-    style.setProperty('--te-bohr-playbar-specular-strength', String(specularStrength.value))
-  } else {
-    style.removeProperty('--te-bohr-playbar-specular-map')
-    style.removeProperty('--te-bohr-playbar-specular-strength')
-  }
-}
-watch([playbarSpecularUrl, specularStrength, () => props.active], syncPlaybarReflection, {
-  flush: 'post'
-})
 const homeSpecularActive = computed(
   () => homeSpecularStrength.value > 0 && Boolean(cardSpecularUrl.value)
 )
@@ -252,7 +236,6 @@ function ensureMaps(): void {
   const playbar = measureSelector(LIQUID_GLASS_PLAYBAR_SELECTOR, NOMINAL_PLAYBAR_GEOMETRY)
   playbarGeometry.value = playbar
   playbarMapUrl.value = getDisplacementMapUrl(playbar, density)
-  playbarSpecularUrl.value = getSpecularMapUrl(playbar, undefined, density)
 
   // Cards are many elements sharing one filter, so they cannot each carry their
   // own raster. The first visible card stands in for the class; they are laid out
@@ -1087,7 +1070,7 @@ watch(
         <feBlend in="RED_CHANNEL" in2="GB_COMBINED" mode="screen" result="RGB_COMBINED" />
         <feGaussianBlur in="RGB_COMBINED" :stdDeviation="aberrationBlur" result="REFRACTED" />
 
-        <!-- Surface reflection is composited above this backdrop by PlayerBar. -->
+        <!-- Playback controls use transmission only, without edge reflections. -->
       </filter>
     </defs>
   </svg>

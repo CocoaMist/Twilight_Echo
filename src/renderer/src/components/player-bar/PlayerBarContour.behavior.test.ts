@@ -12,7 +12,7 @@ import { compileStyle } from '@vue/compiler-sfc'
 const require = createRequire(import.meta.url)
 const root = fileURLToPath(new URL('../../../../../', import.meta.url))
 
-test('playbar contours use single pixel coverage and continuous corner lighting across DPI', async () => {
+test('playbar body and artwork use single pixel coverage across DPI', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-contour-'))
   try {
     const source = await readFile(
@@ -37,8 +37,7 @@ test('playbar contours use single pixel coverage and continuous corner lighting 
       *,*::before,*::after{transition:none!important}
       html,body{margin:0;background:black!important}
       .player-bar[data-v-contour]{position:absolute;left:7px;top:28px;width:1088px;max-width:none;height:72px;
-        background:transparent!important;border-color:transparent!important;box-shadow:none!important;backdrop-filter:none!important}
-      .player-bar-optics[data-v-contour]{background:transparent!important;box-shadow:none!important}
+        background:white!important;border-color:transparent!important;box-shadow:none!important;backdrop-filter:none!important}
       .player-bar-warp[data-v-contour]{background:transparent!important;backdrop-filter:none!important}
       .player-cover-slot[data-v-contour]{position:absolute;left:7px;top:128px;background:transparent!important;
         --te-standard-cover-size:52px;--te-standard-cover-radius:10px}
@@ -46,15 +45,11 @@ test('playbar contours use single pixel coverage and continuous corner lighting 
       .reference{position:absolute;box-sizing:border-box;visibility:hidden;pointer-events:none}
       .reference-mode .player-bar,.reference-mode .player-cover-slot{visibility:hidden!important}
       .reference-mode .reference{visibility:visible}
-      #reference-bar{border:1px solid white}
+      #reference-bar{background:white}
       #reference-cover{overflow:hidden}
       #reference-cover img{display:block;width:100%;height:100%;border-radius:0}
       .cover-hover .player-cover-slot .player-cover,.cover-hover #reference-cover img{transform:translateY(-2px) scale(1.05)!important}
-      </style><style id="coverage-paint">
-      /* Isolate clip coverage first; remove this override for the real lighting probe. */
-      .player-bar-optics[data-v-contour]::before{border:1px solid white!important;box-shadow:none!important}
       </style><body><div class="player-bar" data-v-contour>
-        <span class="player-bar-warp" data-v-contour></span><span class="player-bar-optics" data-v-contour></span>
       </div><div class="player-cover-slot" data-v-contour>
         <img class="player-cover" data-v-contour src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='52' height='52'%3E%3Cpath fill='white' d='M0 0h52v52H0z'/%3E%3C/svg%3E">
       </div><div class="reference" id="reference-bar"></div><div class="reference" id="reference-cover"></div>
@@ -73,7 +68,6 @@ test('playbar contours use single pixel coverage and continuous corner lighting 
       }
     )
     assert.match(result.stdout, /CONTOUR_PIXEL_OK/)
-    assert.match(result.stdout, /CORNER_LIGHT_OK/)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -104,35 +98,6 @@ function checkPixels(image,reference,box,density,ring,label){
  }
  return errors;
 }
-function checkCornerLight(image,box,density,bottom){
- const size=image.getSize(),pixels=image.toBitmap();const records=[];
- const sample=(x,y)=>{
-  const px=x*density-.5,py=y*density-.5,ix=Math.floor(px),iy=Math.floor(py),fx=px-ix,fy=py-iy;
-  const at=(x,y)=>pixels[(y*size.width+x)*4];
-  return (at(ix,iy)*(1-fx)+at(ix+1,iy)*fx)*(1-fy)+(at(ix,iy+1)*(1-fx)+at(ix+1,iy+1)*fx)*fy;
- };
- for(const right of [false,true]){
-  const cx=right?box.x+box.width-box.radius:box.x+box.radius;
-  const cy=bottom?box.y+box.height-box.radius:box.y+box.radius;
-  const profile=[];
-  for(let degrees=21;degrees<=69;degrees++){
-   const angle=degrees*Math.PI/180;let value=0;
-   for(let depth=.25;depth<=3.25;depth+=.25){
-    const radius=box.radius-depth;
-    value+=sample(cx+(right?1:-1)*radius*Math.sin(angle),cy+(bottom?1:-1)*radius*Math.cos(angle));
-   }
-   profile.push(value/13);
-  }
-  const mean=profile.reduce((a,b)=>a+b,0)/profile.length;
-  const jump=Math.max(...profile.slice(1).map((value,index)=>Math.abs(value-profile[index])));
-  const bisector=Math.abs(profile[43-21]-profile[47-21]);
-  // Average inward samples to distinguish a directional light discontinuity
-  // from individual pixel coverage. Normalise so merely dimming the rim fails.
-  if(mean<5||jump/mean>.25||bisector/mean>.5)throw Error('corner light has a hard join: '+JSON.stringify({density,bottom,right,mean,jump,bisector}));
-  records.push({right,mean,jump,bisector});
- }
- return records;
-}
 app.on('window-all-closed',()=>{});
 app.whenReady().then(async()=>{
  let win;
@@ -148,7 +113,7 @@ app.whenReady().then(async()=>{
    await loadDensity(density);
    for(const tone of ['dark','pureWhite'])for(const material of ['regular','glass','liquid'])for(const offset of [0,.375])for(const hover of [false,true]){
     await win.webContents.executeJavaScript('document.body.classList.toggle("cover-hover",'+hover+')');
-    const boxes=await win.webContents.executeJavaScript('(()=>{const tone='+JSON.stringify(tone)+',material='+JSON.stringify(material)+',offset='+offset+';document.documentElement.dataset.theme=tone;const bar=document.querySelector(".player-bar");bar.className="player-bar"+(material==="glass"?" player-bar-glass":material==="liquid"?" player-bar-liquid":"");bar.style.left=(7+offset)+"px";bar.style.top=(28+offset)+"px";const cover=document.querySelector(".player-cover-slot");cover.style.left=(7+offset)+"px";cover.style.top=(128+offset)+"px";const box=element=>{const r=element.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,radius:parseFloat(getComputedStyle(element).borderTopLeftRadius)}};return{bar:box(document.querySelector(".player-bar-optics")),cover:box(cover)}})()');
+    const boxes=await win.webContents.executeJavaScript('(()=>{const tone='+JSON.stringify(tone)+',material='+JSON.stringify(material)+',offset='+offset+';document.documentElement.dataset.theme=tone;const bar=document.querySelector(".player-bar");bar.className="player-bar"+(material==="glass"?" player-bar-glass":material==="liquid"?" player-bar-liquid":"");bar.style.left=(7+offset)+"px";bar.style.top=(28+offset)+"px";const cover=document.querySelector(".player-cover-slot");cover.style.left=(7+offset)+"px";cover.style.top=(128+offset)+"px";const box=element=>{const r=element.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,radius:parseFloat(getComputedStyle(element).borderTopLeftRadius)}};return{bar:box(document.querySelector(".player-bar")),cover:box(cover)}})()');
     await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     const screenshot=await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true});
     const image=nativeImage.createFromBuffer(Buffer.from(screenshot.data,'base64'));
@@ -159,26 +124,12 @@ app.whenReady().then(async()=>{
     await win.webContents.executeJavaScript('(()=>{const boxes='+JSON.stringify(boxes)+';for(const name of ["bar","cover"]){const b=boxes[name],style=document.getElementById("reference-"+name).style;style.left=b.x+"px";style.top=b.y+"px";style.width=b.width+"px";style.height=b.height+"px";style.borderRadius=b.radius+"px";}document.body.classList.add("reference-mode");return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))})()');
     const referenceScreenshot=await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true});
     const reference=nativeImage.createFromBuffer(Buffer.from(referenceScreenshot.data,'base64'));
-    results.push({density,tone,material,offset,hover,bar:checkPixels(image,reference,boxes.bar,density,true,'playbar '+material+' offset '+offset),cover:checkPixels(image,reference,boxes.cover,density,false,'artwork hover '+hover)});
+    results.push({density,tone,material,offset,hover,bar:checkPixels(image,reference,boxes.bar,density,false,'playbar '+material+' offset '+offset),cover:checkPixels(image,reference,boxes.cover,density,false,'artwork hover '+hover)});
     await win.webContents.executeJavaScript('document.body.classList.remove("reference-mode")');
    }
   }
   console.log('CONTOUR_PIXEL_OK '+results.length+' cases, four corners each');
   if(process.env.TE_CONTOUR_EVIDENCE_DIR)fs.writeFileSync(path.join(process.env.TE_CONTOUR_EVIDENCE_DIR,'contour-pixels.json'),JSON.stringify(results,null,2));
-  const lights=[];
-  for(const density of [1,1.25,1.5,2,2.5,3]){
-   await loadDensity(density);
-   await win.webContents.executeJavaScript('document.getElementById("coverage-paint").remove();document.querySelector(".player-cover-slot").style.visibility="hidden"');
-   for(const offset of [0,.375])for(const bottom of [false,true]){
-    const box=await win.webContents.executeJavaScript('(()=>{const bar=document.querySelector(".player-bar");bar.style.left="'+(7+offset)+'px";bar.style.top="'+(28+offset)+'px";bar.style.setProperty("--te-bohr-light","'+(bottom?'transparent':'white')+'");bar.style.setProperty("--te-bohr-edge","'+(bottom?'white':'transparent')+'");bar.style.setProperty("--te-bohr-shoulder","transparent");const r=bar.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,radius:parseFloat(getComputedStyle(bar).borderTopLeftRadius)}})()');
-    await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-    const screenshot=await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true});
-    const image=nativeImage.createFromBuffer(Buffer.from(screenshot.data,'base64'));
-    lights.push({density,offset,bottom,corners:checkCornerLight(image,box,density,bottom)});
-   }
-  }
-  console.log('CORNER_LIGHT_OK '+lights.length+' directional light cases');
-  if(process.env.TE_CONTOUR_EVIDENCE_DIR)fs.writeFileSync(path.join(process.env.TE_CONTOUR_EVIDENCE_DIR,'corner-light-pixels.json'),JSON.stringify(lights,null,2));
   app.exit(0);
  }catch(error){console.error(error);app.exit(1)}
 });`

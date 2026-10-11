@@ -183,7 +183,7 @@ test('all SVG filters remain defined once and referenced from their intended sur
   )
 })
 
-test('content filters place highlights after refraction; the playbar reflects above diffusion', () => {
+test('content filters place highlights after refraction; the playbar uses transmission only', () => {
   // The highlight is a lerp toward white, so it has to sit on top of the resolved
   // refraction rather than being displaced along with the source.
   const chains = defs.match(/<filter[\s\S]*?<\/filter>/g) ?? []
@@ -191,7 +191,7 @@ test('content filters place highlights after refraction; the playbar reflects ab
 
   for (const chain of chains) {
     if (chain.includes(':id="LIQUID_GLASS_PLAYBAR_FILTER_ID"')) {
-      assert.doesNotMatch(chain, /SPECULAR/, 'media reflections stay outside the blurred backdrop')
+      assert.doesNotMatch(chain, /SPECULAR/, 'media controls do not add a specular reflection')
       continue
     }
     const refracted = chain.indexOf('result="REFRACTED"')
@@ -255,9 +255,8 @@ test('a zero-strength highlight drops out of the chain instead of compositing a 
     assert.match(defs, new RegExp(`const ${flag} = computed\\(`))
   }
   assert.match(defs, /resolveSpecularMapStrength/)
-  // Both rasters are baked from the measured geometry, so the highlight lands on
-  // exactly the rim the refraction bends.
-  assert.match(defs, /getSpecularMapUrl\(playbar, undefined, density\)/)
+  // The player has no highlight raster; content cards retain their measured map.
+  assert.doesNotMatch(defs, /getSpecularMapUrl\(playbar, undefined, density\)/)
   assert.match(defs, /getSpecularMapUrl\(card, undefined, density\)/)
 })
 

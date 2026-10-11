@@ -852,6 +852,8 @@
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) :deep(.progress-area) {
   height: var(--te-standard-progress-row-height);
   min-height: 0;
+  position: relative;
+  top: 3px;
 }
 
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) :deep(.time-label) {
@@ -2118,7 +2120,7 @@ html[data-te-motion='off'] .player-bar :deep(.ab-loop-range) {
   --te-lg-press-color: transparent;
   background: transparent !important;
   border-color: transparent !important;
-  /* Refraction belongs below; the Bohr shoulder and reflection live above it. */
+  /* Refraction stays below the controls; elevation comes from the outer shadow. */
   box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -2133,54 +2135,8 @@ html[data-te-motion='off'] .player-bar :deep(.ab-loop-range) {
   border-radius: inherit;
   /* Elasticity lets the playbar reach toward the cursor; 0 keeps it pinned. */
   transform: translate(var(--te-lg-elastic-x, 0px), var(--te-lg-elastic-y, 0px));
-  /* Only the press flash and edge accents live here. The broad sheen washes this
-     layer used to carry were a hand-drawn *simulation* of glass lighting, written
-     when `filter: url()` saw nothing but this element's own gradients and so had
-     no visible effect. Two of them peaked over the middle of the bar — together
-     ~35% white across the center — which is exactly where real glass is clearest.
-     Stacked on top of the refracted backdrop and the baked shape-following
-     specular, they read as a white slab, not a lens.
-
-     Shape-following light comes from the baked specular map on the separate
-     Bohr optics layer, above backdrop diffusion. Its per-pixel incidence bends
-     around each corner. What remains below paints edges only. */
-  background:
-    radial-gradient(
-      circle at var(--te-lg-press-x, 50%) var(--te-lg-press-y, 50%),
-      var(--te-lg-press-color) 0%,
-      transparent 30%
-    ),
-    /* Bevel accent: bright on the light side, faint counter-shade opposite, and
-       fully transparent through the middle. Stops are in px, not percent: at 10%
-       of a 1180px bar the "accent" was a 118px wash across the left third of the
-       surface, which is haze rather than a lit edge. */
-    linear-gradient(
-        var(--te-lg-angle, 135deg),
-        color-mix(
-            in srgb,
-            white calc(var(--te-lg-specular, var(--te-lg-rim-strength)) * 40%),
-            transparent
-          )
-          0,
-        transparent 22px,
-        transparent calc(100% - 22px),
-        color-mix(
-            in srgb,
-            var(--te-lg-shade) calc(var(--te-lg-specular, var(--te-lg-rim-strength)) * 16%),
-            transparent
-          )
-          100%
-      ),
-    /* Vertical thickness cue: a hairline catch along the top lip and a slight
-       settling at the bottom. Held to the outer fifth so the middle stays open. */
-    linear-gradient(
-        180deg,
-        rgba(var(--te-lg-sheen-rgb), var(--te-lg-top-wash-alpha)) 0%,
-        transparent 20%,
-        transparent 80%,
-        rgba(var(--te-lg-shade-rgb), var(--te-lg-bottom-density-alpha)) 100%
-      ),
-    rgba(var(--te-lg-surface-rgb), var(--te-lg-surface-alpha, 0.12));
+  /* Keep transmission and diffusion, without a painted rim or edge sheen. */
+  background: rgba(var(--te-lg-surface-rgb), var(--te-lg-surface-alpha, 0.12));
   /* The SVG chain belongs in the *backdrop* list, not in `filter`. `filter` only
      ever sees this element's own rendering — the gradient layers above — and
      displacing a smooth gradient resamples to nearly the same colour, so the
@@ -2226,14 +2182,14 @@ html[data-platform='linux'] .player-bar-liquid .player-bar-warp {
    Solid mode therefore only thickens the material slightly, on top of the
    luminance-driven density the base rule already applies, because a sampler with
    no image to read is working from the app's flat background colour alone.
-   Overriding `background-color` keeps the gradient layers above intact. */
+   This density adjustment does not paint an edge highlight. */
 html[data-te-liquid-glass-source='solid'] .player-bar-liquid .player-bar-warp {
   background-color: rgba(var(--te-lg-surface-rgb), calc(var(--te-lg-surface-alpha, 0.12) + 0.02));
 }
 
 /* Grid children are not positioned by default, so they would paint below a z-index 0
    sibling. Lifting them keeps every control above the warp layer. */
-.player-bar-liquid > *:not(.player-bar-warp):not(.player-bar-optics) {
+.player-bar-liquid > *:not(.player-bar-warp) {
   position: relative;
   z-index: 1;
 }
@@ -2317,63 +2273,10 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   }
 }
 
-/* Bohr optical shoulder: no layout, hit testing, blur or pointer animation. */
-.player-bar-optics {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  /* Each decoration already paints its rounded contour or has a coverage map.
-     An overflow clip here multiplies that antialiasing coverage a second time. */
-  background: linear-gradient(
-    180deg,
-    var(--te-bohr-shoulder) 0,
-    transparent 7px,
-    transparent calc(100% - 4px),
-    color-mix(in srgb, var(--te-bohr-edge) 50%, transparent) 100%
-  );
-}
-
-.player-bar-optics::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  /* A top/side/bottom border changes colour abruptly at the corner bisectors.
-     Directional inset light spreads across the curve and falls off continuously;
-     its blur affects decoration only, never artwork, labels or controls. */
-  box-shadow:
-    inset 0 0.75px 1.5px var(--te-bohr-light),
-    inset 0 -0.75px 2px color-mix(in srgb, var(--te-bohr-edge) 50%, transparent);
-}
-
-.player-bar-liquid .player-bar-optics::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: white;
-  mask-image: var(--te-bohr-playbar-specular-map, none);
-  mask-size: 100% 100%;
-  mask-repeat: no-repeat;
-  opacity: var(--te-bohr-playbar-specular-strength, 0);
-}
-
 .player-bar:not(.player-bar-mini):not(.player-bar-compact)
   > :is(.player-left, .player-center, .player-right) {
   position: relative;
   z-index: 1;
-}
-
-body.te-no-blur .player-bar-optics,
-html[data-te-effects-mode='reduced'] .player-bar-optics {
-  display: none;
-}
-
-@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
-  .player-bar-optics {
-    display: none;
-  }
 }
 
 /* ===== Flat strip surface language =====

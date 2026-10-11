@@ -14,7 +14,7 @@ import test from 'node:test'
 const require = createRequire(import.meta.url)
 const root = fileURLToPath(new URL('../../../../', import.meta.url))
 
-test('Bohr reflections survive body diffusion, preserve input, and clean up with the material', async () => {
+test('glass transmission preserves input and DPI geometry without player edge lighting', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-bohr-'))
   try {
     const read = (path: string): Promise<string> => readFile(join(root, path), 'utf8')
@@ -73,7 +73,6 @@ test('Bohr reflections survive body diffusion, preserve input, and clean up with
       <div class="backdrop">透光的体积<br><small>温润弧面 · 清晰内容 · 柔和光影</small></div>
       <div class="player-bar player-bar-liquid" data-v-bohr>
         <span class="player-bar-warp" data-v-bohr aria-hidden="true"></span>
-        <span class="player-bar-optics" data-v-bohr aria-hidden="true"></span>
         <div class="player-left" data-v-bohr>Monsters In The Dark</div>
         <div class="player-center" data-v-bohr><button id="play">▶</button></div>
         <div class="player-right" data-v-bohr>♡  ⇆  ☷</div>
@@ -151,12 +150,10 @@ const runtime = `import {h,render,nextTick} from 'vue'
 import LiquidGlassDefs from '@renderer/components/LiquidGlassDefs.vue'
 const root=document.documentElement
 const host=document.getElementById('defs')
-const optics=document.querySelector('.player-bar-optics')
 const bar=document.querySelector('.player-bar')
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const settle=async()=>{await nextTick();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))}
 const mount=async(active)=>{render(h(LiquidGlassDefs,{active,followPointer:false,homeCardsActive:false,expandedActive:false}),host);await settle()}
-const reflection=()=>getComputedStyle(optics,'::after')
 window.prepareFullMaterialRaster=async(tone,material)=>{
  await window.prepareBohrEvidence(tone)
  bar.className='player-bar'+(material==='liquid'?' player-bar-liquid':material==='glass'?' player-bar-glass':'')
@@ -166,7 +163,7 @@ window.prepareFullMaterialRaster=async(tone,material)=>{
  expect(filter!=='none','complete material probe retains actual backdrop diffusion: '+material)
  if(material==='liquid'){
   expect(filter.includes('te-lg-playbar'),'complete material probe retains the refraction filter')
-  expect(reflection().maskImage!=='none'&&Number(reflection().opacity)>0,'complete material probe retains its sampled reflection')
+  expect(warp.backgroundImage==='none','complete material probe has no painted edge sheen')
  }
  return {x:r.x,y:r.y,width:r.width,height:r.height,radius:parseFloat(body.borderTopLeftRadius),filter}
 }
@@ -186,13 +183,8 @@ window.runBohrTests=async()=>{
  root.setAttribute('data-te-surface-material','liquidGlass')
  root.style.setProperty('--te-lg-specular','0.76')
  await mount(true)
- expect(reflection().maskImage.includes('data:image/png'),'measured reflection map is composited above the backdrop')
- expect(Number(reflection().opacity)>0,'reflection is visible')
- expect(reflection().filter==='none'&&reflection().backdropFilter==='none','surface light is never blurred or dimmed with the backdrop')
- expect(getComputedStyle(optics).pointerEvents==='none','optical layers do not intercept input')
- expect(getComputedStyle(optics,'::before').maskImage==='none','rounded contour uses native antialiasing instead of subtractive masks')
  const barRect=bar.getBoundingClientRect()
- for(const layer of [optics,bar.querySelector('.player-bar-warp')]){
+ for(const layer of [bar.querySelector('.player-bar-warp')]){
   const r=layer.getBoundingClientRect()
   for(const key of ['x','y','width','height'])expect(Math.abs(r[key]-barRect[key])<.02,'optical layer diverged from outer contour: '+JSON.stringify({dpi:devicePixelRatio,key,bar:barRect[key],layer:r[key]}))
  }
@@ -209,12 +201,12 @@ window.runBohrTests=async()=>{
  const geometry=bar.getBoundingClientRect()
  await mount(false)
  expect(!root.style.getPropertyValue('--te-bohr-playbar-specular-map'),'disabled material releases the raster reference')
- expect(Number(reflection().opacity)===0,'disabled material has no residual highlight')
+ expect(!root.style.getPropertyValue('--te-bohr-playbar-specular-strength'),'disabled material has no residual highlight')
  await mount(true)
  root.style.setProperty('--te-lg-specular','0')
  window.dispatchEvent(new Event('twilight:liquid-glass-tuning-changed'))
  await settle()
- expect(Number(reflection().opacity)===0,'zero highlight preserves user preference')
+ expect(getComputedStyle(bar.querySelector('.player-bar-warp')).backgroundImage==='none','light settings cannot bring back a painted player rim')
  for(const tone of ['pureWhite','dark']){
   root.setAttribute('data-theme',tone)
   expect(getComputedStyle(document.querySelector('.title-bar-background')).boxShadow==='none','caption material has no dark separator')
@@ -228,14 +220,13 @@ window.runBohrTests=async()=>{
   if(disabled==='class')document.body.classList.remove('te-no-blur');else root.removeAttribute(disabled)
  }
  root.setAttribute('data-te-surface-material','transparent')
- expect(getComputedStyle(optics).display==='none','transparent material removes the optical shoulder and rim')
  expect(getComputedStyle(document.querySelector('.player-bar-warp')).display==='none','transparent material removes refraction')
  expect(getComputedStyle(bar).boxShadow==='none','transparent material removes elevation')
  expect(bar.getBoundingClientRect().height===geometry.height,'transparent material preserves controls and layout')
  root.setAttribute('data-te-surface-material','liquidGlass')
- expect(getComputedStyle(optics).display!=='none','switching back restores the optical shoulder')
+ expect(getComputedStyle(bar.querySelector('.player-bar-warp')).display!=='none','switching back restores transmission without edge lighting')
 }
-window.checkBohrAccessibility=()=>expect(getComputedStyle(optics).display==='none','accessibility removes decorative reflections')
+window.checkBohrAccessibility=()=>expect(getComputedStyle(bar.querySelector('.player-bar-warp')).backdropFilter==='none','accessibility disables backdrop effects')
 window.prepareBohrEvidence=async(tone)=>{
  root.setAttribute('data-theme',tone)
  document.body.style.background=tone==='dark'?'#17181a':'#f4f4f7'
