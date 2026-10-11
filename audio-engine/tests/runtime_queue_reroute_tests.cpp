@@ -285,9 +285,16 @@ void testChannelRouterStateIsOwnedByRenderCallback() {
   assert(header.find("LatestRoutingCommandSlot") != std::string::npos);
   assert(setOutputConfigBody.find("enqueueControlCommand(routingCommand)") != std::string::npos);
   assert(source.find("channelRouter_.prepareForRealtime") != std::string::npos);
+  assert(source.find("preloadChannelRouter_.prepareForRealtime") != std::string::npos);
   assert(renderBody.find("mutex_") == std::string::npos);
   assert(renderBody.find("std::try_to_lock") == std::string::npos);
-  assert(renderBody.find("channelRouter_.route") != std::string::npos);
+  // Each deck retains its own filter/delay history across promotion. Both
+  // routers are selected and used only by the render callback.
+  assert(header.find("ChannelRouter preloadChannelRouter_") != std::string::npos);
+  assert(renderBody.find("currentRouter->route") != std::string::npos);
+  assert(renderBody.find("nextRouter->route") != std::string::npos);
+  assert(renderBody.find("activeUsesPreloadDspChain ? &preloadChannelRouter_ : &channelRouter_") != std::string::npos);
+  assert(renderBody.find("activeUsesPreloadDspChain ? &channelRouter_ : &preloadChannelRouter_") != std::string::npos);
 }
 
 void testRenderCallbacksUseNonBlockingSpectrumReset() {
@@ -469,7 +476,7 @@ void testTwilightAudioEngineReusesParsedDspConfigSnapshot() {
   const std::string source = readTextFile(sourcePath);
   const std::string header = readTextFile(headerPath);
   const std::string playBody =
-      extractFunctionBody(source, "TAE_Result TwilightAudioEngine::play(const std::string& source, double startTimeSeconds)");
+      extractFunctionBody(source, "TAE_Result TwilightAudioEngine::play(const std::string& source, double startTimeSeconds, bool initiallyPaused)");
   const std::string playQueueBody =
       extractFunctionBody(source, "TAE_Result TwilightAudioEngine::playQueueItem(const QueueItem& item, double startTimeSeconds)");
   const std::string perfectBody = extractFunctionBody(source, "void TwilightAudioEngine::updatePerfectLocked()");
@@ -789,6 +796,7 @@ FakeNativeDsdBehavior g_fakeNativeDsdBehavior = FakeNativeDsdBehavior::Proven;
 std::atomic<int> g_fakeTopologyOpenFailures{0};
 std::atomic<int> g_fakeTopologyStartFailures{0};
 std::atomic<bool> g_fakeTopologyDeviceInvalidated{false};
+std::atomic<size_t> g_renderFramesDuringStart{0};
 std::atomic<int> g_maxNativeDsdSampleRate{0};
 std::atomic<int> g_maxDopCarrierSampleRate{0};
 // Simulates a compatibility-route device that is configured but not present
@@ -798,14 +806,6 @@ std::atomic<int> g_decodeFirstReadDelayMs{0};
 std::atomic<int> g_decodeEveryReadDelayMs{0};
 std::mutex g_decoderSeekMutex;
 std::vector<double> g_decoderSeekSeconds;
-// Gate only an AutoMix worker's independent outgoing-tail seek. The active
-// decoder, preload and callback remain free to run during fault injection.
-std::atomic<bool> g_autoMixTailSeekGate{false};
-std::atomic<bool> g_autoMixTailSeekEntered{false};
-std::atomic<bool> g_autoMixTailSeekRelease{false};
-std::atomic<bool> g_autoMixTailSeekFail{false};
-std::atomic<bool> g_autoMixOriginalSourcesExpired{false};
-
 void resetDecoderSeekProbe() {
   std::lock_guard lock(g_decoderSeekMutex);
   g_decoderSeekSeconds.clear();
@@ -1193,6 +1193,11 @@ class FakeOutputBackend final : public IOutputBackend {
     state_->event = std::move(eventCallback);
     state_->started = true;
     state_->typedStarted = true;
+    if (const auto frames = g_renderFramesDuringStart.load()) {
+      lock.unlock();
+      renderBackendFrames(state_, frames);
+      lock.lock();
+    }
     if (state_->backendId == "wasapi-exclusive" && g_fakeTopologyDeviceInvalidated.exchange(false)) {
       const auto event = state_->event;
       lock.unlock();
@@ -1378,16 +1383,10 @@ TrackProfile buildTrackProfile(const std::string& source) {
   profile.defaultOutput = profile.stream.decodedFormat;
   profile.totalFrames = 65536;
   profile.sampleValue = 0.25f;
-  if (source.find("automix-") != std::string::npos) {
-    if (source.find("48k") != std::string::npos) {
-      profile.stream.sourceFormat = makePcmFormat(48000, 2, 24, AudioSampleFormat::Int24Interleaved);
-      profile.stream.decodedFormat = profile.stream.sourceFormat;
-      profile.defaultOutput = profile.stream.decodedFormat;
-    }
-    profile.totalFrames = 20 * profile.defaultOutput.sampleRate;
-    profile.stream.durationSeconds = 20;
-    profile.sampleValue = source.find("incoming") != std::string::npos ? .75f : .25f;
-    if(source.find("automix-silent-")!=std::string::npos)profile.sampleValue=0;
+  if (source.find("fractional-duration-") != std::string::npos) {
+    profile.stream.durationSeconds = source.find("-current") != std::string::npos
+        ? 338.040123456789 : 298.701234567891;
+    profile.totalFrames = static_cast<uint64_t>(profile.stream.durationSeconds * 44100);
   }
   if (source.find("typed-gapless-") != std::string::npos) {
     if (source.find("-s16-") != std::string::npos) {
@@ -1413,10 +1412,12 @@ TrackProfile buildTrackProfile(const std::string& source) {
     profile.stream.durationSeconds = 0.0;
   } else if (source.find("crossfade-current") != std::string::npos ||
              source.find("auto-promote-current") != std::string::npos) {
+    profile.stream.durationSeconds = 0.08;
     profile.totalFrames = 4096;
     profile.sampleValue = 0.25f;
   } else if (source.find("crossfade-next") != std::string::npos ||
              source.find("auto-promote-next") != std::string::npos) {
+    profile.stream.durationSeconds = 0.20;
     profile.totalFrames = 8192;
     profile.sampleValue = 0.75f;
   }
@@ -1436,6 +1437,7 @@ class EngineHarness {
     g_fakeTopologyOpenFailures = 0;
     g_fakeTopologyStartFailures = 0;
     g_fakeTopologyDeviceInvalidated = false;
+    g_renderFramesDuringStart = 0;
     g_maxNativeDsdSampleRate = 0;
     g_maxDopCarrierSampleRate = 0;
     engine_.setOutputBackend("wasapi-exclusive");
@@ -1448,6 +1450,7 @@ class EngineHarness {
     g_fakeTopologyOpenFailures = 0;
     g_fakeTopologyStartFailures = 0;
     g_fakeTopologyDeviceInvalidated = false;
+    g_renderFramesDuringStart = 0;
     g_maxNativeDsdSampleRate = 0;
     g_maxDopCarrierSampleRate = 0;
     g_decodeFirstReadDelayMs = 0;
@@ -2564,6 +2567,28 @@ void testAutoOutputDeviceRefreshCommitsRouteTransaction() {
   assertLatestPlaybackContains(engine, "\"state\":\"playing\"");
   assertLatestPlaybackContains(engine, "\"source\":\"auto-route-refresh.flac\"");
   assertLatestPlaybackContains(engine, "\"outputDevice\":\"auto\"");
+}
+
+void testPausedRerouteNeverConsumesPcmDuringBackendStartup() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setVolume(0) == TAE_RESULT_OK);
+  assert(engine.setOutputDevice("device-a") == TAE_RESULT_OK);
+  assert(engine.play("paused-route.flac", 12) == TAE_RESULT_OK);
+  assert(engine.pause() == TAE_RESULT_OK);
+  const double frozen = playbackJsonNumber(engine.getPlaybackInfoJson(), "position");
+  g_renderFramesDuringStart = 4096;
+  assert(engine.setOutputDevice("device-b") == TAE_RESULT_OK);
+  assert(engine.setOutputConfig("{}") == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  assert(std::abs(playbackJsonNumber(engine.getPlaybackInfoJson(), "position") - frozen) < .00005);
+  renderBackendFrames(waitForLatestStartedBackendState(), 4096);
+  assert(std::abs(playbackJsonNumber(engine.getPlaybackInfoJson(), "position") - frozen) < .00005);
+  assert(engine.pause() == TAE_RESULT_OK);
+  renderBackendFrames(waitForLatestStartedBackendState(), 4096);
+  assert(waitUntil([&] {
+    return playbackJsonNumber(engine.getPlaybackInfoJson(), "position") > frozen + .05;
+  }));
 }
 
 void testRenderWaitsForTransientDecoderLag() {
@@ -3976,342 +4001,6 @@ void testAutoNextDoesNotInheritDsdPath() {
   assertLatestPlaybackContains(engine, "\"source\":\"auto-next.flac\"");
 }
 
-void testAutoMixManualAcceptanceControls() {
-  bool expected=false;
-#if defined(TAE_AM_ASM)
-#if defined(TAE_AM_EXPERIMENTAL_PLAYER)
-  expected=true;
-#endif
-  if(const auto* startupFlag=std::getenv("TAE_AUTOMIX_EXPERIMENTAL"))expected=std::string(startupFlag)=="1";
-#endif
-  TwilightAudioEngine engine;
-  const auto allowed=expected?"\"experimentalAllowed\":true":"\"experimentalAllowed\":false";
-  assert(jsonContains(engine.getAutoMixStatusJson(),allowed));
-  assert(jsonContains(engine.getPlaybackInfoJson(),allowed));
-  assert(jsonContains(engine.getPlaybackInfoJson(),"\"stableRelease\":false"));
-  assert(jsonContains(engine.getAutoMixStatusJson(),"\"enabled\":false"));
-  assert(engine.setAutoMixConfig("{\"enabled\":true,\"maxTransitionSeconds\":4}")==
-      (expected?TAE_RESULT_OK:TAE_RESULT_BACKEND_UNAVAILABLE));
-  assert(jsonContains(engine.getPlaybackInfoJson(),expected?"\"enabled\":true":"\"enabled\":false"));
-  assert(engine.setAutoMixConfig("{\"enabled\":false}")==TAE_RESULT_OK);
-  assert(jsonContains(engine.getPlaybackInfoJson(),"\"enabled\":false"));
-}
-
-void testAutoMixPreparedPromotionAndCancellation() {
-  EngineHarness harness;
-  AudioPipeline pipeline;
-  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;config.revision=1;
-  pipeline.setAutoMixConfig(config);
-  QueueItem out,in;
-  out.id="out";out.source="automix-outgoing.flac";out.durationSeconds=20;
-  in.id="in";in.source="automix-incoming.flac";in.durationSeconds=20;
-  std::string error;
-  assert(pipeline.play(out,in,13,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-  auto backend=waitForLatestStartedBackendState();assert(backend);
-  const bool ready=waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");});
-  if(!ready)std::cerr<<pipeline.autoMixStatusJson()<<std::endl;
-  assert(ready);
-  // Application playback commits its DSP graph after Play. A fresh graph must
-  // rebuild the fallback without waiting for the isolated model worker.
-  const auto initialPair=playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision");
-  pipeline.setDspConfig("{\"gapless\":true,\"dspEnabled\":false}");
-  assert(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision")>initialPair);
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-  bool mixed=false,promoted=false;
-  for(size_t i=0;i<600&&!promoted;++i) {
-    auto samples=renderBackendFrames(backend,1024);
-    const auto status=pipeline.status();
-    mixed=mixed||jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"mixing\"");
-    assert(std::all_of(samples.begin(),samples.end(),[](float x){return std::isfinite(x)&&std::abs(x)<=1;}));
-    promoted=status.currentItem.id==in.id;
-    if(promoted)assert(status.positionSeconds>=4&&status.positionSeconds<4.05);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  assert(mixed&&promoted);
-  QueueItem started;assert(pipeline.consumeTrackStarted(&started));assert(started.id==in.id);
-  assert(!pipeline.consumeTrackStarted(&started));
-  pipeline.stop();
-  // A manual Next adopts the incoming source clock during the audible overlap.
-  assert(pipeline.play(out,in,13,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-  backend=waitForLatestStartedBackendState();
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-  for(size_t i=0;i<400&&!jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"mixing\"");++i) {
-    renderBackendFrames(backend,1024);std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  renderBackendFrames(backend,256);
-  const auto beforeNext=pipeline.autoMixStatusJson();
-  assert(jsonContains(beforeNext,"\"state\":\"mixing\""));
-  const auto incomingPosition=playbackJsonNumber(beforeNext,"progress")*playbackJsonNumber(beforeNext,"transitionSeconds");
-  assert(pipeline.skipToPreloaded(in,&error));
-  const auto adopted=pipeline.status();
-  assert(adopted.currentItem.id==in.id);
-  assert(std::abs(adopted.positionSeconds-incomingPosition)<=1./44100+1e-6);
-  // Replacing the following queue entry cannot throw away the audible incoming
-  // continuation or jump to its decoder's already-prepared resume position.
-  assert(pipeline.preloadNext(std::nullopt,&error));
-  assert(jsonContains(pipeline.autoMixStatusJson(),"manual_next_handover"));
-  auto nextSamples=renderBackendFrames(backend,256);
-  const auto afterHandover=pipeline.status();
-  assert(std::abs(afterHandover.positionSeconds-incomingPosition-256./44100)<=1./44100+1e-6);
-  assert(std::all_of(nextSamples.begin(),nextSamples.end(),[](float x){return std::isfinite(x);}));
-  for(size_t i=0;i<400&&jsonContains(pipeline.autoMixStatusJson(),"manual_next_handover");++i) {
-    renderBackendFrames(backend,256);pipeline.status();std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  assert(pipeline.status().positionSeconds>=2);
-  assert(!pipeline.consumeTrackStarted(&started)||started.id==in.id);
-  assert(!pipeline.consumeTrackStarted(&started));
-  pipeline.stop();
-  assert(pipeline.play(out,in,13,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-  backend=waitForLatestStartedBackendState();
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-  pipeline.setLoopRange(0,19);
-  assert(jsonContains(pipeline.autoMixStatusJson(),"ab_loop"));
-  for(size_t i=0;i<4;++i)renderBackendFrames(backend,256);
-  pipeline.clearLoopRange();
-  assert(pipeline.seek(1,&error)==TAE_RESULT_OK);
-  assert(pipeline.status().positionSeconds>=1&&pipeline.status().positionSeconds<1.001);
-  pipeline.preloadNext(std::nullopt,&error);
-  assert(!jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\""));
-  pipeline.stop();
-  // Feature messages carry the exact transport pair revision and identities.
-  // Delivery retains the armed fallback while preparing a replacement; an old
-  // completion cannot replace a subsequent seek/queue generation.
-  assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-  backend=waitForLatestStartedBackendState();
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-  const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
-  const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-outgoing.flac\",\"features\":{}},\"incoming\":{\"id\":\"in\",\"source\":\"automix-incoming.flac\",\"features\":{}}}";
-  assert(pipeline.setAutoMixFeatures(message,&error));
-  assert(!pipeline.setAutoMixFeatures(message,&error));assert(error=="features_already_delivered");
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-  assert(jsonContains(pipeline.autoMixStatusJson(),"\"featuresDelivered\":true"));
-  assert(pipeline.seek(18,&error)==TAE_RESULT_OK);
-  assert(!pipeline.setAutoMixFeatures(message,&error));
-  pipeline.stop();
-  // AutoMix owns processed PCM preloading even with saved bit-perfect-first
-  // and gapless=false. The incoming file has a different source rate/format.
-  in.source="automix-incoming-48k.flac";
-  assert(pipeline.play(out,in,13,"wasapi-exclusive","auto",1,"{\"gapless\":false}",false,&error)==TAE_RESULT_OK);
-  backend=waitForLatestStartedBackendState();
-  pipeline.setDspConfig("{\"gapless\":false}");
-  const bool formatReady=waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");});
-  if(!formatReady)std::cerr<<pipeline.autoMixStatusJson()<<std::endl;
-  assert(formatReady);
-  bool formatMixed=false;
-  for(size_t i=0;i<600&&pipeline.status().currentItem.id!=in.id;++i) {
-    renderBackendFrames(backend,1024);
-    formatMixed=formatMixed||jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"mixing\"");
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  assert(formatMixed&&pipeline.status().currentItem.source==in.source);
-  assert(pipeline.status().positionSeconds>=2);
-  pipeline.stop();
-}
-
-std::string autoMixTestFeatures(bool outgoing,double bpm=120) {
-  std::ostringstream json;
-  json << "{\"schemaVersion\":1,\"analysisVersion\":4,\"available\":true,\"durationSeconds\":20,"
-    "\"provenance\":\"independent-beat-this-yamnet-v1\",\"modelHashes\":{"
-    "\"beatThis\":\"10b8a43f58ec08dec4cf3c0df3ae4c62b8c51b4d96449c318af7f2aa76dc574f\","
-    "\"yamnet\":\"564a1406a3173634aedc049863403e581c1fabf2b0e2c22515d924d3ffb160e5\"},\"windows\":{\""
-    << (outgoing ? "tail" : "head") << "\":{\"sourceStart\":0,\"sourceEnd\":20,\"beatKnown\":true,"
-    "\"vocalKnown\":true,\"energyHopSeconds\":0.02,\"energyDbfs\":[";
-  for(int i=0;i<1000;++i){if(i)json<<',';json<<-20;}
-  json<<"],\"key\":null,\"phraseBoundaries\":null,\"beats\":[";
-  for(int i=0;i<=static_cast<int>(20*bpm/60);++i) {if(i)json<<',';json<<i*60/bpm;}
-  json<<"],\"downbeats\":[";
-  for(int i=0;i<=static_cast<int>(20*bpm/240);++i) {if(i)json<<',';json<<i*240/bpm;}
-  json<<"],\"stableRegions\":[{\"start\":0,\"end\":20,\"bpm\":"<<bpm<<",\"confidence\":1}],"
-    "\"vocalWindows\":[{\"start\":0,\"end\":20,\"probability\":0}]}}}";
-  return json.str();
-}
-
-void testAutoMixReplacementRetainsFallbackAndRejectsStaleWorkers() {
-  EngineHarness harness;
-  AudioPipeline pipeline;
-  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;config.revision=1;
-  pipeline.setAutoMixConfig(config);
-  QueueItem out,in;
-  out.id="out";out.source="automix-outgoing.flac";out.durationSeconds=20;
-  in.id="in";in.source="automix-incoming.flac";in.durationSeconds=20;
-  std::string error;
-  // Failure, deadline miss, transport cancellation, and successful replacement.
-  for(int mode=0;mode<4;++mode) {
-    assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-    const auto backend=waitForLatestStartedBackendState();assert(backend);
-    assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-    const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
-    const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+
-      ",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-outgoing.flac\",\"features\":"+autoMixTestFeatures(true)+
-      "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-incoming.flac\",\"features\":"+autoMixTestFeatures(false)+"}}";
-    g_autoMixTailSeekEntered=false;g_autoMixTailSeekRelease=false;g_autoMixTailSeekFail=mode==0;
-    g_autoMixTailSeekGate=true;
-    assert(pipeline.setAutoMixFeatures(message,&error));
-    assert(waitUntil([]{return g_autoMixTailSeekEntered.load();}));
-    assert(jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\""));
-    assert(playbackJsonNumber(pipeline.autoMixStatusJson(),"styleId")==1);
-    if(mode==1) {
-      while(pipeline.status().positionSeconds<16.1) {
-        renderBackendFrames(backend,2048);std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
-    } else if(mode==2) {
-      assert(pipeline.seek(3,&error)==TAE_RESULT_OK);
-      assert(!jsonContains(pipeline.autoMixStatusJson(),"\"featuresDelivered\":true"));
-    }
-    g_autoMixTailSeekRelease=true;
-    const char* expected=mode==0 ? "intelligent_prepare_failed_conservative" :
-      mode==1 ? "intelligent_prepare_late_conservative" :
-      mode==2 ? "analysis_unavailable_conservative_crossfade" : "independent_beat_tempo_mix";
-    const bool replaced=waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),expected);},6000);
-    if(!replaced)std::cerr<<"replacement mode="<<mode<<" "<<pipeline.autoMixStatusJson()<<std::endl;
-    assert(replaced);
-    assert(playbackJsonNumber(pipeline.autoMixStatusJson(),"styleId")== (mode==3?7:1));
-    if(mode==3) {
-      assert(jsonContains(pipeline.autoMixStatusJson(),"\"mixKind\":\"beat_mix\""));
-      assert(playbackJsonNumber(pipeline.autoMixStatusJson(),"audibleOverlapSeconds")>=2);
-    }
-    if(mode==2) {
-      assert(!pipeline.setAutoMixFeatures(message,&error));assert(error=="stale_feature_pair");
-    } else if(mode<2) {
-      bool mixed=false;
-      for(size_t i=0;i<1000&&pipeline.status().currentItem.id!=in.id;++i) {
-        const auto samples=renderBackendFrames(backend,1024);
-        mixed=mixed||jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"mixing\"");
-        assert(std::all_of(samples.begin(),samples.end(),[](float x){return std::isfinite(x);}));
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
-      assert(mixed&&pipeline.status().currentItem.id==in.id);
-      assert(pipeline.status().positionSeconds>=2);
-    }
-    pipeline.stop();g_autoMixTailSeekFail=false;
-  }
-  g_autoMixTailSeekGate=false;g_autoMixTailSeekFail=false;
-}
-
-void testAutoMixSilenceBoundaryPromotion() {
-  EngineHarness harness;
-  AudioPipeline pipeline;
-  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;config.max_transition_seconds=2;
-  pipeline.setAutoMixConfig(config);
-  QueueItem out,in;out.id="out";out.source="automix-outgoing.flac";out.durationSeconds=20;
-  in.id="in";in.source="automix-incoming.flac";in.durationSeconds=20;
-  std::string error;
-  assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-  const auto backend=waitForLatestStartedBackendState();assert(backend);
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-  const auto features=[](bool outgoing) {
-    auto text=autoMixTestFeatures(outgoing);
-    std::ostringstream energy;energy<<"\"energyDbfs\":[";
-    for(int i=0;i<1000;++i) {if(i)energy<<',';energy<<(outgoing?(i>=900?-120:-20):(i<50?-120:-20));}
-    energy<<']';const auto at=text.find("\"energyDbfs\":["),end=text.find(']',at);assert(at!=std::string::npos);
-    text.replace(at,end-at+1,energy.str());return text;
-  };
-  const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
-  const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+
-      ",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-outgoing.flac\",\"features\":"+features(true)+
-      "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-incoming.flac\",\"features\":"+features(false)+"}}";
-  assert(pipeline.setAutoMixFeatures(message,&error));
-  assert(waitUntil([&]{return playbackJsonNumber(pipeline.autoMixStatusJson(),"styleId")==5;}));
-  bool mixed=false;double outgoingPosition=0;
-  for(int i=0;i<1000&&pipeline.status().currentItem.id==out.id;++i) {
-    outgoingPosition=pipeline.status().positionSeconds;
-    renderBackendFrames(backend,1024);
-    mixed=mixed||jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"mixing\"");
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  const auto status=pipeline.status();
-  assert(mixed&&status.currentItem.id==in.id&&outgoingPosition<18.15);
-  assert(status.positionSeconds>=2.9-1./44100&&status.positionSeconds<3.1);
-  QueueItem started;assert(pipeline.consumeTrackStarted(&started)&&started.id==in.id);
-  assert(!pipeline.consumeTrackStarted(&started));
-  pipeline.stop();
-}
-
-void testAutoMixRefreshedPreparationKeepsLogicalQueueSources() {
-  EngineHarness harness;AudioPipeline pipeline;std::string error;
-  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;pipeline.setAutoMixConfig(config);
-  QueueItem out,in;out.id="out";out.source="automix-outgoing.flac";in.id="in";in.source="automix-incoming.flac";
-  // Display metadata may be rounded; source/model identity remains exactly 20s.
-  out.durationSeconds=19.6;in.durationSeconds=20.4;
-  assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-  const auto backend=waitForLatestStartedBackendState();assert(backend);
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-  const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
-  const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+
-    ",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-outgoing.flac\",\"preparationSource\":\"automix-outgoing-refreshed.flac\",\"features\":"+autoMixTestFeatures(true)+
-    "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-incoming.flac\",\"preparationSource\":\"automix-incoming-refreshed.flac\",\"features\":"+autoMixTestFeatures(false)+"}}";
-  g_autoMixOriginalSourcesExpired=true;
-  assert(pipeline.setAutoMixFeatures(message,&error));
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"mixKind\":\"beat_mix\"");},6000));
-  for(size_t i=0;i<1000&&pipeline.status().currentItem.id!=in.id;++i) {
-    renderBackendFrames(backend,1024);std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  const auto status=pipeline.status();assert(status.currentItem.id==in.id);
-  assert(status.currentItem.source==in.source&&status.stream.source==in.source&&status.positionSeconds>=2);
-  pipeline.stop();g_autoMixOriginalSourcesExpired=false;
-}
-
-void testAutoMixTempoMixSourceClocksAndPromotion() {
-  EngineHarness harness;AudioPipeline pipeline;std::string error;
-  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;
-  pipeline.setAutoMixConfig(config);
-  QueueItem out,in;out.id="out";out.source="automix-tone-outgoing.flac";
-  in.id="in";in.source="automix-tone-incoming.flac";
-  assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-  const auto backend=waitForLatestStartedBackendState();assert(backend);
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");}));
-  const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
-  const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+
-    ",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-tone-outgoing.flac\",\"features\":"+autoMixTestFeatures(true)+
-    "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-tone-incoming.flac\",\"features\":"+autoMixTestFeatures(false,126)+"}}";
-  assert(pipeline.setAutoMixFeatures(message,&error));
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"mixKind\":\"beat_mix\"");},6000));
-  const auto ready=pipeline.autoMixStatusJson();
-  const double resume=playbackJsonNumber(ready,"incomingResumeSeconds");
-  assert(playbackJsonNumber(ready,"audibleOverlapSeconds")>=2&&playbackJsonNumber(ready,"tempoAdjustmentPercent")>=4.9);
-  bool mixed=false;
-  for(int n=0;n<1100&&pipeline.status().currentItem.id!=in.id;++n) {
-    const auto samples=renderBackendFrames(backend,1024);
-    assert(std::all_of(samples.begin(),samples.end(),[](float x){return std::isfinite(x);}));
-    const auto status=pipeline.status();const auto json=pipeline.autoMixStatusJson();
-    if(status.currentItem.id==out.id&&jsonContains(json,"\"state\":\"mixing\"")) {
-      mixed=true;constexpr double q=1.05;
-      const double h=playbackJsonNumber(json,"transitionSeconds"),t=h*playbackJsonNumber(json,"progress");
-      const double lo=h*(q-1)/std::log(q);
-      const double expected=20-lo+lo*std::expm1((q-1)*t/lo)/(q-1);
-      assert(std::abs(status.positionSeconds-expected)<.0002);
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  assert(mixed&&pipeline.status().currentItem.id==in.id);
-  assert(std::abs(pipeline.status().positionSeconds-resume)<.025);
-  QueueItem started;assert(pipeline.consumeTrackStarted(&started)&&started.id==in.id);
-  assert(!pipeline.consumeTrackStarted(&started));
-  renderBackendFrames(backend,4410);
-  assert(pipeline.status().positionSeconds>=resume+.09);
-  pipeline.stop();
-}
-
-void testAutoMixPreparedEvidenceCannotPromoteSilentMusic() {
-  EngineHarness harness;AudioPipeline pipeline;std::string error;
-  TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);config.enabled=1;pipeline.setAutoMixConfig(config);
-  QueueItem out,in;out.id="out";out.source="automix-tone-outgoing.flac";
-  in.id="in";in.source="automix-silent-incoming.flac";
-  assert(pipeline.play(out,in,1,"wasapi-exclusive","auto",1,"{\"gapless\":true}",true,&error)==TAE_RESULT_OK);
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"\"state\":\"ready\"");},6000));
-  const auto revision=static_cast<uint64_t>(playbackJsonNumber(pipeline.autoMixStatusJson(),"pairRevision"));
-  const auto message=std::string("{\"pairRevision\":")+std::to_string(revision)+
-    ",\"outgoing\":{\"id\":\"out\",\"source\":\"automix-tone-outgoing.flac\",\"features\":"+autoMixTestFeatures(true)+
-    "},\"incoming\":{\"id\":\"in\",\"source\":\"automix-silent-incoming.flac\",\"features\":"+autoMixTestFeatures(false)+"}}";
-  // Deliberately inconsistent analysis must be caught by actual prepared PCM.
-  assert(pipeline.setAutoMixFeatures(message,&error));
-  assert(waitUntil([&]{return jsonContains(pipeline.autoMixStatusJson(),"intelligent_prepare_failed_conservative");},6000));
-  const auto status=pipeline.autoMixStatusJson();
-  assert(jsonContains(status,"\"mixKind\":\"conservative\""));
-  assert(playbackJsonNumber(status,"audibleOverlapSeconds")==0);
-  pipeline.stop();
-}
-
 void testNativeCrossfadeOverlapMixesPreloadAndPromotes(bool equalPower = false) {
   EngineHarness harness;
   auto& engine = harness.engine();
@@ -4449,6 +4138,24 @@ void testGaplessBlockedReasonReportsCrossfadeAndDisabled() {
   }));
   assertLatestPlaybackContains(engine, "\"gaplessActive\":true");
   assertLatestPlaybackContains(engine, "\"gaplessBlockedReason\":\"\"");
+}
+
+void testDecodedTimelineOverridesRoundedQueueDurations() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setVolume(0.5) == TAE_RESULT_OK);
+  assert(engine.setDspConfig("{\"gapless\":true,\"crossfadeSeconds\":0}") == TAE_RESULT_OK);
+  assert(engine.loadQueue(
+      "[{\"id\":\"a\",\"source\":\"fractional-duration-current.flac\",\"duration\":338},"
+      "{\"id\":\"b\",\"source\":\"fractional-duration-next.flac\",\"duration\":299}]", 0) == TAE_RESULT_OK);
+  assert(engine.play("fractional-duration-current.flac", 0) == TAE_RESULT_OK);
+  assert(waitUntil([&] { return jsonContains(engine.getPlaybackInfoJson(), "\"preloadReady\":true"); }));
+  assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "duration") == 338.040123456789);
+  assert(playbackJsonNumber(engine.getUpcomingTrackJson(), "duration") == 298.701234567891);
+  const auto info = engine.getPlaybackInfoJson();
+  const auto upcoming = info.find("\"upcomingTrack\":");
+  assert(upcoming != std::string::npos);
+  assert(playbackJsonNumber(info.substr(upcoming), "duration") == 298.701234567891);
 }
 
 void testContinuityPolicyConvertsMixedFormatsAndRejectsDsdPreload() {
@@ -4593,7 +4300,7 @@ void testSingleFileCueSegmentsSeekPromoteGaplesslyAndRetainReplayGain() {
   assert(g_backendRegistry.snapshots().size() == backendCountBefore);
   assertLatestPlaybackContains(engine, "\"source\":\"single-file-cue.flac\"");
   assertLatestPlaybackContains(engine, "\"queueIndex\":1");
-  assertLatestPlaybackContains(engine, "\"duration\":0.08");
+  assert(std::abs(playbackJsonNumber(engine.getPlaybackInfoJson(), "duration") - 0.08) < 1e-12);
   assertLatestPlaybackContains(engine, "\"replayGainDb\":-9");
 
   // Public positions are segment-relative. The decoder probe proves that a relative seek is
@@ -4867,7 +4574,6 @@ void testCueDopPregapOutputsCanonicalCarrierAndResetsMarkerAfterSeek() {
 }  // namespace
 
 namespace twilight::audio {
-
 std::string defaultBackendId() {
   return "wasapi-exclusive";
 }
@@ -4902,6 +4608,7 @@ FFmpegDecoder::FFmpegDecoder()
     : impl_(std::make_unique<Impl>()) {}
 
 FFmpegDecoder::~FFmpegDecoder() = default;
+void FFmpegDecoder::setInterrupt(int (*)(void*), void*) {}
 
 bool FFmpegDecoder::open(const std::string& source, std::string* error) {
   (void)error;
@@ -4946,8 +4653,6 @@ size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* 
   for (size_t frame = 0; frame < read; ++frame) {
     for (size_t channel = 0; channel < channels; ++channel) {
       output[frame * channels + channel] = impl_->profile.sampleValue;
-      if(impl_->profile.stream.source.find("automix-tone-")!=std::string::npos)
-        output[frame*channels+channel]=static_cast<float>(.1*std::sin(2*3.141592653589793*1800*(impl_->positionFrames+frame)/impl_->outputFormat.sampleRate));
       if (impl_->profile.stream.source.find("typed-gapless-") != std::string::npos) {
         writeTypedGaplessSample(impl_->profile.stream.source, impl_->outputFormat.sampleFormat,
             impl_->positionFrames + frame, channel,
@@ -4994,17 +4699,6 @@ size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
 }
 
 bool FFmpegDecoder::seek(double seconds, std::string* error) {
-  if(seconds>0&&g_autoMixOriginalSourcesExpired&&
-      (impl_->profile.stream.source=="automix-outgoing.flac"||impl_->profile.stream.source=="automix-incoming.flac")) {
-    if(error)*error="injected_expired_source";return false;
-  }
-  if(seconds>0&&impl_->profile.stream.source=="automix-outgoing.flac"&&g_autoMixTailSeekGate.exchange(false)) {
-    g_autoMixTailSeekEntered.store(true,std::memory_order_release);
-    while(!g_autoMixTailSeekRelease.load(std::memory_order_acquire))std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  if(seconds>0&&impl_->profile.stream.source=="automix-outgoing.flac"&&g_autoMixTailSeekFail.load()) {
-    if(error)*error="injected_tail_seek_failure";return false;
-  }
   const double clamped = std::max(0.0, seconds);
   {
     std::lock_guard lock(g_decoderSeekMutex);
@@ -5048,27 +4742,12 @@ void FFmpegDecoder::pollStreamMetadata() {}
   } while (false)
 
 int main() {
-  if(std::getenv("TAE_RUNTIME_AUTOMIX_CONTROLS_ONLY")) {
-    RUN_RUNTIME_CASE(testAutoMixManualAcceptanceControls());
-    return 0;
-  }
   if(std::getenv("TAE_RUNTIME_CLOCK_ONLY")) {
     RUN_RUNTIME_CASE(testClockSnapshotCannotUndoCompletedPause());
     RUN_RUNTIME_CASE(testClockSnapshotCannotUndoCompletedDopReroute());
     return 0;
   }
-  if (std::getenv("TAE_RUNTIME_AUTOMIX_ONLY")) {
-    RUN_RUNTIME_CASE(testAutoMixManualAcceptanceControls());
-    RUN_RUNTIME_CASE(testAutoMixPreparedPromotionAndCancellation());
-    RUN_RUNTIME_CASE(testAutoMixReplacementRetainsFallbackAndRejectsStaleWorkers());
-    RUN_RUNTIME_CASE(testAutoMixSilenceBoundaryPromotion());
-    RUN_RUNTIME_CASE(testAutoMixRefreshedPreparationKeepsLogicalQueueSources());
-    RUN_RUNTIME_CASE(testAutoMixTempoMixSourceClocksAndPromotion());
-    RUN_RUNTIME_CASE(testAutoMixPreparedEvidenceCannotPromoteSilentMusic());
-    return 0;
-  }
   RUN_RUNTIME_CASE(testFixedSpscQueuePreservesFifoAndReportsFull());
-  RUN_RUNTIME_CASE(testAutoMixManualAcceptanceControls());
   RUN_RUNTIME_CASE(testFloatScratchResizeForOverwritePreservesSameSizedScratch());
   RUN_RUNTIME_CASE(testVisualizationFftResolutionMatchesWebAudioReference());
   RUN_RUNTIME_CASE(testRenderCallbacksDoNotResizePipelineScratchBuffers());
@@ -5123,6 +4802,7 @@ int main() {
   RUN_RUNTIME_CASE(testBackendRenderErrorIsReportedThroughLastError());
   RUN_RUNTIME_CASE(testStoppedSetOutputDeviceKeepsOutputInfoDeviceNamesConsistent());
   RUN_RUNTIME_CASE(testOutputRouteTransactionCommitsOnceAfterBackendDeviceConfig());
+  RUN_RUNTIME_CASE(testPausedRerouteNeverConsumesPcmDuringBackendStartup());
   RUN_RUNTIME_CASE(testAutoOutputDeviceRefreshCommitsRouteTransaction());
   RUN_RUNTIME_CASE(testRenderWaitsForTransientDecoderLag());
   RUN_RUNTIME_CASE(testRoutedRenderHandlesCallbacksLargerThanPreparedScratch());
@@ -5189,15 +4869,10 @@ int main() {
   RUN_RUNTIME_CASE(testManualNextDoesNotInheritDsdPath());
   RUN_RUNTIME_CASE(testAutoNextDoesNotInheritDsdPath());
   RUN_RUNTIME_CASE(testNativeCrossfadeOverlapMixesPreloadAndPromotes());
-  RUN_RUNTIME_CASE(testAutoMixPreparedPromotionAndCancellation());
-  RUN_RUNTIME_CASE(testAutoMixReplacementRetainsFallbackAndRejectsStaleWorkers());
-  RUN_RUNTIME_CASE(testAutoMixSilenceBoundaryPromotion());
-  RUN_RUNTIME_CASE(testAutoMixRefreshedPreparationKeepsLogicalQueueSources());
-  RUN_RUNTIME_CASE(testAutoMixTempoMixSourceClocksAndPromotion());
-  RUN_RUNTIME_CASE(testAutoMixPreparedEvidenceCannotPromoteSilentMusic());
   RUN_RUNTIME_CASE(testCrossfadeDiscontinuitiesRestartPreloadAtItsBeginning());
   RUN_RUNTIME_CASE(testPreloadedPromotionKeepsRuntimeReplayGainSettings());
   RUN_RUNTIME_CASE(testGaplessBlockedReasonReportsCrossfadeAndDisabled());
+  RUN_RUNTIME_CASE(testDecodedTimelineOverridesRoundedQueueDurations());
   RUN_RUNTIME_CASE(testAutoNextPrefersPreloadedPromoteWithoutReopen());
   RUN_RUNTIME_CASE(testContinuityPolicyConvertsMixedFormatsAndRejectsDsdPreload());
   RUN_RUNTIME_CASE(testOriginalPolicyRejectsMixedFormatAndPolicySwitchRetainsPause());

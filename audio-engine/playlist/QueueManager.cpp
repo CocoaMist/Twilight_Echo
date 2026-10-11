@@ -1,4 +1,5 @@
 #include "QueueManager.h"
+#include "../utils/JsonUtils.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -566,7 +567,7 @@ std::string QueueManager::itemToJson(const std::optional<QueueItem>& item) {
        << "\"title\":\"" << escapeJson(item->title) << "\","
        << "\"artist\":\"" << escapeJson(item->artist) << "\","
        << "\"album\":\"" << escapeJson(item->album) << "\","
-       << "\"duration\":" << item->durationSeconds << ","
+       << "\"duration\":" << json_utils::number(item->durationSeconds) << ","
        << "\"codec\":\"" << escapeJson(item->codec) << "\","
        << "\"sampleRate\":" << item->sampleRate << ","
        << "\"bitrate\":" << item->bitrate << ","
@@ -596,11 +597,11 @@ std::string QueueManager::itemToJson(const std::optional<QueueItem>& item) {
     json << ",\"r128AlbumGainDb\":" << *item->r128AlbumGainDb;
   }
   if (item->cueStartSeconds && item->cueEndSeconds) {
-    json << ",\"cueStartSeconds\":" << *item->cueStartSeconds
-         << ",\"cueEndSeconds\":" << *item->cueEndSeconds
-         << ",\"cuePregapSeconds\":" << item->cuePregapSeconds
-         << ",\"cueVirtualPregapSeconds\":" << item->cueVirtualPregapSeconds
-         << ",\"cueSourcePregapSeconds\":" << item->cueSourcePregapSeconds;
+    json << ",\"cueStartSeconds\":" << json_utils::number(*item->cueStartSeconds)
+         << ",\"cueEndSeconds\":" << json_utils::number(*item->cueEndSeconds)
+         << ",\"cuePregapSeconds\":" << json_utils::number(item->cuePregapSeconds)
+         << ",\"cueVirtualPregapSeconds\":" << json_utils::number(item->cueVirtualPregapSeconds)
+         << ",\"cueSourcePregapSeconds\":" << json_utils::number(item->cueSourcePregapSeconds);
   }
   json << "}";
   return json.str();

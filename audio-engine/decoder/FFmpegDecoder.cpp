@@ -231,6 +231,8 @@ bool isTypedIntegerFormat(AudioSampleFormat format) {
 #endif
 
 struct FFmpegDecoder::Impl {
+  int (*interrupt)(void*) = nullptr;
+  void* interruptContext = nullptr;
   AudioStreamInfo streamInfo;
   AudioFormat outputFormat;
   bool eof = false;
@@ -555,8 +557,17 @@ FFmpegDecoder::~FFmpegDecoder() {
   close();
 }
 
+void FFmpegDecoder::setInterrupt(int (*callback)(void*), void* context) {
+  impl_->interrupt = callback;
+  impl_->interruptContext = context;
+}
+
 bool FFmpegDecoder::open(const std::string& source, std::string* error) {
   close();
+  if (impl_->interrupt && impl_->interrupt(impl_->interruptContext)) {
+    if (error) *error = "decode_cancelled";
+    return false;
+  }
 
 #if defined(TAE_HAS_FFMPEG)
   // Every failed open must release its partially allocated IO and decoder.
@@ -626,6 +637,13 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     if (error) *error = "无法打开本地音频文件";
     return false;
   }
+  if (!impl_->formatContext) impl_->formatContext = avformat_alloc_context();
+  if (!impl_->formatContext) {
+    av_dict_free(&openOptions);
+    if (error) *error = "Cannot allocate demuxer";
+    return false;
+  }
+  impl_->formatContext->interrupt_callback = {impl_->interrupt, impl_->interruptContext};
   int ret = avformat_open_input(&impl_->formatContext, source.c_str(), inputFormat, &openOptions);
   av_dict_free(&openOptions);
   if (ret < 0) {
@@ -889,6 +907,10 @@ size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* 
 }
 
 size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
+  if (impl_->interrupt && impl_->interrupt(impl_->interruptContext)) {
+    if (error) *error = "decode_cancelled";
+    return 0;
+  }
   if (!output.data || output.frames == 0) return 0;
 
 #if defined(TAE_HAS_FFMPEG)

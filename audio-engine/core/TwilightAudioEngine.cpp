@@ -2,8 +2,7 @@
 
 #include "../analysis/BpmAnalyzer.h"
 #include "../analysis/LoudnessAnalyzer.h"
-#include "../automix/AutoMixAnalyzer.h"
-#include "../automix/AutoMix.h"
+#include "../automix-native/AutoMixAdapter.h"
 #include "../decoder/SacdIsoProbe.h"
 #include "../devices/DeviceManager.h"
 #include "../metadata/AudioMetadataService.h"
@@ -131,8 +130,6 @@ void writeRenderPerformanceJson(
        << "\"meanCallbackNanoseconds\":" << meanCallbackNanoseconds << ","
        << "\"peakCallbackNanoseconds\":" << performance.peakCallbackNanoseconds << ","
        << "\"p999DeadlineRatioUpper\":" << performance.p999DeadlineRatioUpper << ","
-       << "\"autoMixSegmentCount\":" << performance.autoMixSegmentCount << ","
-       << "\"autoMixP999DeadlineRatioUpper\":" << performance.autoMixP999DeadlineRatioUpper << ","
        << "\"totalDeadlineNanoseconds\":" << performance.totalDeadlineNanoseconds << ","
        << "\"deadlineMissCount\":" << performance.deadlineMissCount << ","
        << "\"callbackDeadlineLoadPercent\":" << callbackDeadlineLoadPercent
@@ -382,8 +379,8 @@ std::string playbackInfoToJson(const PlaybackInfo& info) {
   std::ostringstream json;
   json << "{"
        << "\"state\":\"" << stateToString(info.state) << "\","
-       << "\"position\":" << info.positionSeconds << ","
-       << "\"duration\":" << info.durationSeconds << ","
+       << "\"position\":" << json_utils::number(info.positionSeconds) << ","
+       << "\"duration\":" << json_utils::number(info.durationSeconds) << ","
        << "\"volume\":" << info.volume << ","
        << "\"playbackRate\":" << info.playbackRate << ","
        << "\"requestedConfigRevision\":" << info.requestedConfigRevision << ","
@@ -532,10 +529,18 @@ std::string playbackInfoToJson(const PlaybackInfo& info) {
        << "\"crossfeedStrength\":" << info.crossfeedStrength << ","
        << "\"crossfadeSeconds\":" << info.crossfadeSeconds << ","
        << "\"crossfadeMixActive\":" << (info.crossfadeMixActive ? "true" : "false") << ","
-       << "\"autoMix\":" << info.autoMixJson << ","
        << "\"crossfadeEffectiveSeconds\":" << info.crossfadeEffectiveSeconds << ","
        << "\"crossfadeCurve\":\"" << info.crossfadeCurve << "\","
        << "\"crossfadeBlockedReason\":\"" << info.crossfadeBlockedReason << "\","
+       << "\"autoMixMode\":\"" << info.autoMixMode << "\","
+       << "\"autoMixState\":\"" << info.autoMixState << "\","
+       << "\"autoMixReason\":\"" << json_utils::escape(info.autoMixReason) << "\","
+       << "\"autoMixDurationSeconds\":" << info.autoMixDurationSeconds << ",\"autoMixStemEnhanced\":" << (info.autoMixStemEnhanced ? "true" : "false") << ","
+       << "\"autoMixDecodeMs\":" << info.autoMixDecodeMs << ",\"autoMixPrepareMs\":" << info.autoMixPrepareMs << ","
+       << "\"autoMixStrategy\":\"" << info.autoMixStrategy << "\","
+       << "\"autoMixPlanId\":" << info.autoMixPlanId << ','
+       << "\"autoMixOutputSeconds\":" << json_utils::number(info.autoMixOutputSeconds) << ','
+       << "\"autoMixNextSourceSeconds\":" << json_utils::number(info.autoMixNextSourceSeconds) << ','
        << "\"convolverLatencyFrames\":" << info.convolverLatencyFrames << ","
        << "\"partitionSize\":" << info.partitionSize << ","
        << "\"channelMappingMode\":\"" << json_utils::escape(info.channelMappingMode) << "\","
@@ -744,7 +749,7 @@ void TwilightAudioEngine::setStateEventsEnabled(bool enabled) {
   stateEventsEnabled_.store(enabled, std::memory_order_relaxed);
 }
 
-TAE_Result TwilightAudioEngine::play(const std::string& source, double startTimeSeconds) {
+TAE_Result TwilightAudioEngine::play(const std::string& source, double startTimeSeconds, bool initiallyPaused) {
   std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   if (source.empty()) return TAE_RESULT_INVALID_ARGUMENT;
@@ -779,7 +784,7 @@ TAE_Result TwilightAudioEngine::play(const std::string& source, double startTime
     info_.positionSeconds = std::max(0.0, startTimeSeconds);
     info_.durationSeconds = item.durationSeconds;
     info_.codec = inferCodec(item.source);
-    info_.state = PlaybackState::Playing;
+    info_.state = initiallyPaused ? PlaybackState::Paused : PlaybackState::Playing;
     info_.isDsd = info_.codec == "dsd";
     info_.dsdMode = info_.isDsd ? dsdModeToString(DsdMode::Unsupported) : dsdModeToString(DsdMode::Pcm);
     info_.dsdRate = 0;
@@ -800,7 +805,7 @@ TAE_Result TwilightAudioEngine::play(const std::string& source, double startTime
 
   std::string error;
   const TAE_Result result =
-      pipeline_ ? pipeline_->play(item, upcoming, startTimeSeconds, backend, device, volume, dspConfigJson, gaplessEnabled, &error)
+      pipeline_ ? pipeline_->play(item, upcoming, startTimeSeconds, backend, device, volume, dspConfigJson, gaplessEnabled, &error, initiallyPaused)
                 : TAE_RESULT_NOT_INITIALIZED;
   if (result != TAE_RESULT_OK) {
     {
@@ -1135,6 +1140,7 @@ TAE_Result TwilightAudioEngine::setOutputBackend(const std::string& backendId) {
 
 TAE_Result TwilightAudioEngine::selectQueueIndex(int index) {
   std::lock_guard transportLock(transportMutex_);
+  if (pipeline_) pipeline_->cancelAutoMix("queue_selection_changed");
   const ClockWake wake(*this);
   std::lock_guard lock(mutex_);
   if (index < 0 || static_cast<size_t>(index) >= queue_.size()) return TAE_RESULT_INVALID_ARGUMENT;
@@ -1146,8 +1152,73 @@ TAE_Result TwilightAudioEngine::selectQueueIndex(int index) {
   return TAE_RESULT_OK;
 }
 
+TAE_Result TwilightAudioEngine::setAutoMixMode(const std::string& mode) {
+  ClockWake wake(*this);
+  std::lock_guard transportLock(transportMutex_);
+  if (!pipeline_) return TAE_RESULT_NOT_INITIALIZED;
+  const auto before = pipeline_->status();
+  std::string error;
+  if (!pipeline_->setAutoMixMode(mode, &error)) {
+    emitError(error, TAE_RESULT_INVALID_ARGUMENT, "set-auto-mix-mode");
+    return TAE_RESULT_INVALID_ARGUMENT;
+  }
+  if (mode != "off" && before.autoMixMode != mode && !before.stream.isDsd &&
+      (before.outputInfo.pcmPassthrough || !before.sourceTimelineExact) &&
+      before.state != PipelineState::Stopped) {
+    return restartCurrentPlaybackForReroute(before.positionSeconds,
+        before.state == PipelineState::Paused ? PlaybackState::Paused : PlaybackState::Playing,
+        "automix_pcm_processing", "set-auto-mix-mode");
+  }
+  if (mode != "off" && before.state != PipelineState::Stopped) {
+    std::optional<QueueItem> upcoming;
+    { std::lock_guard lock(mutex_); upcoming = queue_.upcoming(); }
+    std::string preloadError;
+    pipeline_->preloadNext(upcoming, &preloadError);
+  }
+  std::lock_guard lock(mutex_);
+  applyPipelineStatusLocked(pipeline_->status());
+  return TAE_RESULT_OK;
+}
+std::string TwilightAudioEngine::selectAutoMix(const std::string& json) {
+  ClockWake wake(*this);
+  std::lock_guard transportLock(transportMutex_);
+  return pipeline_ ? pipeline_->selectAutoMix(json) : "{\"ok\":false,\"reason\":\"audio_service_unavailable\"}";
+}
+TAE_Result TwilightAudioEngine::prepareAutoMix(const std::string& json) {
+  ClockWake wake(*this);
+  std::lock_guard transportLock(transportMutex_);
+  std::string error;
+  if (!pipeline_ || !pipeline_->prepareAutoMix(json, &error)) {
+    if (pipeline_) {
+      std::lock_guard lock(mutex_);
+      applyPipelineStatusLocked(pipeline_->status());
+    }
+    emitError(error, TAE_RESULT_INVALID_ARGUMENT, "prepare-auto-mix");
+    return TAE_RESULT_INVALID_ARGUMENT;
+  }
+  std::lock_guard lock(mutex_);
+  applyPipelineStatusLocked(pipeline_->status());
+  return TAE_RESULT_OK;
+}
+TAE_Result TwilightAudioEngine::submitAutoMix(uint64_t id) {
+  ClockWake wake(*this);
+  std::lock_guard transportLock(transportMutex_);
+  std::string error;
+  if (!pipeline_ || !pipeline_->submitAutoMix(id, &error)) {
+    emitError(error, TAE_RESULT_INVALID_ARGUMENT, "submit-auto-mix");
+    return TAE_RESULT_INVALID_ARGUMENT;
+  }
+  return TAE_RESULT_OK;
+}
+TAE_Result TwilightAudioEngine::cancelAutoMix() {
+  ClockWake wake(*this);
+  std::lock_guard transportLock(transportMutex_);
+  if (pipeline_) pipeline_->cancelAutoMix("host_cancelled");
+  return TAE_RESULT_OK;
+}
 TAE_Result TwilightAudioEngine::loadQueue(const std::string& queueJson, int startIndex) {
   std::lock_guard transportLock(transportMutex_);
+  if (pipeline_) pipeline_->cancelAutoMix("queue_changed");
   const ClockWake wake(*this);
   std::string error;
   std::lock_guard lock(mutex_);
@@ -1245,6 +1316,7 @@ TAE_Result TwilightAudioEngine::previous() {
 
 TAE_Result TwilightAudioEngine::setPlayMode(const std::string& mode) {
   std::lock_guard transportLock(transportMutex_);
+  if (pipeline_) pipeline_->cancelAutoMix("queue_mode_changed");
   const ClockWake wake(*this);
   std::optional<QueueItem> upcoming;
   {
@@ -1259,81 +1331,6 @@ TAE_Result TwilightAudioEngine::setPlayMode(const std::string& mode) {
   }
   std::string error;
   if (pipeline_) pipeline_->preloadNext(upcoming, &error);
-  return TAE_RESULT_OK;
-}
-
-TAE_Result TwilightAudioEngine::setAutoMixConfig(const std::string& configJson) {
-  std::lock_guard transportLock(transportMutex_);
-  if (configJson.size() > 16384) return TAE_RESULT_INVALID_ARGUMENT;
-  const auto enabled = json_utils::fieldBool(configJson, "enabled").value_or(false);
-  const auto allowSkip = json_utils::fieldBool(configJson, "allowIntelligentSkip").value_or(true);
-  const auto maximum = json_utils::fieldNumber(configJson, "maxTransitionSeconds").value_or(12);
-  if (!std::isfinite(maximum) || maximum <= 0 || maximum > 12) return TAE_RESULT_INVALID_ARGUMENT;
-  // Stable enablement waits for listening, performance and long-run gates.
-  // The manual-acceptance build or explicit startup flag opens the prototype.
-  const bool prototypeAllowed=TAE_AM_ExperimentalPlayerAllowed()!=0;
-  if (enabled && !prototypeAllowed) {
-    emitError("AutoMix player integration has not passed the release gates", TAE_RESULT_BACKEND_UNAVAILABLE, "automix-integration-not-ready");
-    return TAE_RESULT_BACKEND_UNAVAILABLE;
-  }
-  std::optional<QueueItem> current;
-  double position = 0;
-  PlaybackState state = PlaybackState::Stopped;
-  bool changed = false;
-  TAE_AM_ConfigV1 previous{};TAE_AM_DefaultConfig(&previous);
-  {
-    std::lock_guard lock(mutex_);
-    changed = autoMixEnabled_ != enabled;
-    previous.enabled=autoMixEnabled_;previous.allow_intelligent_skip=autoMixAllowSkip_;
-    previous.max_transition_seconds=autoMixMaximumSeconds_;previous.revision=autoMixConfigRevision_;
-    autoMixEnabled_ = enabled;
-    autoMixAllowSkip_ = allowSkip;
-    autoMixMaximumSeconds_ = maximum;
-    ++autoMixConfigRevision_;
-    TAE_AM_ConfigV1 config{};TAE_AM_DefaultConfig(&config);
-    config.enabled=enabled;config.allow_intelligent_skip=allowSkip;
-    config.max_transition_seconds=maximum;config.revision=autoMixConfigRevision_;
-    if(pipeline_) {
-      const auto status=pipeline_->status();
-      state=info_.state;position=status.positionSeconds;current=status.currentItem;
-      pipeline_->setAutoMixConfig(config);
-    }
-  }
-  // Preferences remain in their original fields. Reopening uses the latest
-  // output/DSP settings, so user edits during AutoMix survive its restoration.
-  if(changed&&state!=PlaybackState::Stopped&&current&&!current->source.empty()) {
-    auto result=playQueueItem(*current,position);
-    if(result==TAE_RESULT_OK&&state==PlaybackState::Paused)result=pause();
-    if(result!=TAE_RESULT_OK) {
-      {std::lock_guard lock(mutex_);
-        autoMixEnabled_=previous.enabled!=0;autoMixAllowSkip_=previous.allow_intelligent_skip!=0;
-        autoMixMaximumSeconds_=previous.max_transition_seconds;autoMixConfigRevision_=previous.revision;
-        if(pipeline_)pipeline_->setAutoMixConfig(previous);
-      }
-      const auto restored=playQueueItem(*current,position);
-      if(restored==TAE_RESULT_OK&&state==PlaybackState::Paused)pause();
-      return result;
-    }
-  }
-  return TAE_RESULT_OK;
-}
-
-std::string TwilightAudioEngine::getAutoMixStatusJson() const {
-  std::lock_guard lock(mutex_);
-  if(pipeline_)return pipeline_->autoMixStatusJson();
-  std::ostringstream json;
-  json << "{\"enabled\":false,\"state\":\"disabled\",\"progress\":0,\"transitionSeconds\":0,\"styleId\":null,"
-       << "\"reason\":\"player_integration_not_ready\",\"configRevision\":" << autoMixConfigRevision_
-       << ",\"allowIntelligentSkip\":" << (autoMixAllowSkip_ ? "true" : "false")
-       << ",\"maxTransitionSeconds\":" << autoMixMaximumSeconds_ << "}";
-  return json.str();
-}
-
-TAE_Result TwilightAudioEngine::setAutoMixFeatures(const std::string& json) {
-  std::lock_guard transportLock(transportMutex_);
-  std::lock_guard lock(mutex_);
-  std::string error;
-  if(!pipeline_||!pipeline_->setAutoMixFeatures(json,&error))return TAE_RESULT_INVALID_ARGUMENT;
   return TAE_RESULT_OK;
 }
 
@@ -1819,6 +1816,12 @@ std::string TwilightAudioEngine::getQueueJson() const {
 
 std::string TwilightAudioEngine::getUpcomingTrackJson() const {
   std::lock_guard lock(mutex_);
+  const auto upcoming = queue_.upcoming();
+  if (upcoming && info_.hasUpcomingTrack && info_.preloadReady &&
+      upcoming->id == info_.upcomingTrack.id && upcoming->source == info_.upcomingTrack.source &&
+      upcoming->cueStartSeconds == info_.upcomingTrack.cueStartSeconds &&
+      upcoming->cueEndSeconds == info_.upcomingTrack.cueEndSeconds)
+    return QueueManager::itemToJson(info_.upcomingTrack);
   return queue_.upcomingJson();
 }
 
@@ -1949,32 +1952,6 @@ std::string TwilightAudioEngine::engineCapabilitiesJson() const {
 #endif
        << "},\"backends\":" << backends
        << ",\"backendCapabilities\":" << backendCapabilities
-       << ",\"autoMix\":{\"abiVersion\":1,\"playerSupported\":false,\"experimentalPlayerSupported\":"
-#if defined(TAE_AM_ASM)
-       << "true"
-#else
-       << "false"
-#endif
-       << ",\"experimentalAllowed\":" << (TAE_AM_ExperimentalPlayerAllowed()?"true":"false")
-       << ",\"stableRelease\":false,\"offlineRenderSupported\":true,\"modelsRequireVerifiedAssets\":true,\"reason\":\"release_validation_pending\",\"intelligentSkipSupported\":"
-#if defined(TAE_AM_ASM) && defined(TAE_HAS_FFMPEG)
-       << "true"
-#else
-       << "false"
-#endif
-       << ",\"intelligentSkipPolicy\":\"confirmed-boundary-silence\",\"keyAnalysisSupported\":false,\"phraseAnalysisSupported\":false,\"analysisSupported\":"
-#if defined(TAE_HAS_FFMPEG)
-       << "true"
-#else
-       << "false"
-#endif
-       << ",\"platformSupported\":"
-#if defined(TAE_AM_ASM)
-       << "true,\"platform\":\"windows-x64\",\"assemblyCore\":true"
-#else
-       << "false,\"platform\":\"unsupported\",\"assemblyCore\":false"
-#endif
-       << "}"
        << ",\"plugins\":" << pluginCapabilitiesJson()
        << ",\"output\":{\"accessModes\":[\"shared\",\"exclusive\",\"hog\",\"direct\",\"plugin\"]}"
        << "}";
@@ -1995,11 +1972,7 @@ std::string TwilightAudioEngine::getLastErrorJson() const {
 
 std::string TwilightAudioEngine::getPlaybackInfoJson() const {
   std::lock_guard lock(mutex_);
-  auto snapshot=info_;
-  // Settings must be available before the first Play, and immediately reflect
-  // a config change even while the stopped clock is on its slower tick.
-  if(pipeline_)snapshot.autoMixJson=pipeline_->autoMixStatusJson();
-  return playbackInfoToJson(snapshot);
+  return playbackInfoToJson(info_);
 }
 
 size_t TwilightAudioEngine::getSpectrumData(float* buffer, size_t pointCount) const {
@@ -2093,6 +2066,7 @@ void TwilightAudioEngine::clockLoop() {
     std::string deviceInvalidatedMessage;
     std::string renderErrorMessage;
     if (hasPipelineStatus) {
+      pipeline_->pollAutoMix();
       // A-B loop enforcement (seek is not RT-safe — runs on clock thread).
       std::string loopError;
       if (pipeline_->enforceLoopRange(&loopError)) {
@@ -2410,10 +2384,18 @@ void TwilightAudioEngine::applyPipelineStatusLocked(const PipelineStatus& status
   info_.crossfeedStrength = status.crossfeedStrength;
   info_.crossfadeSeconds = status.crossfadeSeconds;
   info_.crossfadeMixActive = status.crossfadeMixActive;
-  if(pipeline_)info_.autoMixJson=pipeline_->autoMixStatusJson();
   info_.crossfadeEffectiveSeconds = status.crossfadeEffectiveSeconds;
   info_.crossfadeCurve = status.crossfadeCurve;
   info_.crossfadeBlockedReason = status.crossfadeBlockedReason;
+  info_.autoMixMode = status.autoMixMode;
+  info_.autoMixState = status.autoMixState;
+  info_.autoMixDurationSeconds = status.autoMixDurationSeconds; info_.autoMixStemEnhanced = status.autoMixStemEnhanced;
+  info_.autoMixDecodeMs = status.autoMixDecodeMs; info_.autoMixPrepareMs = status.autoMixPrepareMs;
+  info_.autoMixReason = status.autoMixReason;
+  info_.autoMixStrategy = status.autoMixStrategy;
+  info_.autoMixPlanId = status.autoMixPlanId;
+  info_.autoMixOutputSeconds = status.autoMixOutputSeconds;
+  info_.autoMixNextSourceSeconds = status.autoMixNextSourceSeconds;
   info_.convolverLatencyFrames = status.convolverLatencyFrames;
   info_.partitionSize = status.partitionSize;
   info_.channelMappingMode = status.channelMappingMode;
@@ -2423,6 +2405,14 @@ void TwilightAudioEngine::applyPipelineStatusLocked(const PipelineStatus& status
   const auto upcoming = queue_.upcoming();
   info_.hasUpcomingTrack = upcoming.has_value();
   info_.upcomingTrack = upcoming.value_or(QueueItem{});
+  if (upcoming && status.preloadedItem && status.preloadReady &&
+      upcoming->id == status.preloadedItem->id && upcoming->source == status.preloadedItem->source &&
+      upcoming->cueStartSeconds == status.preloadedItem->cueStartSeconds &&
+      upcoming->cueEndSeconds == status.preloadedItem->cueEndSeconds) {
+    info_.upcomingTrack.durationSeconds = status.preloadedItem->durationSeconds;
+  } else {
+    info_.preloadReady = false;
+  }
   info_.perfectReason = status.perfectReason;
   info_.streamTitle = status.stream.streamTitle;
   info_.isDsd = status.stream.isDsd;
@@ -2575,15 +2565,12 @@ TAE_Result TwilightAudioEngine::restartCurrentPlaybackForReroute(
   }
   if (source.empty()) return TAE_RESULT_OK;
 
-  const TAE_Result result = play(source, std::max(0.0, positionSeconds));
+  const TAE_Result result = play(source, std::max(0.0, positionSeconds), previousState == PlaybackState::Paused);
   {
     std::lock_guard lock(mutex_);
     if (pipeline_) pipeline_->setRerouteInProgress(false);
   }
   if (result != TAE_RESULT_OK) return result;
-  if (previousState == PlaybackState::Paused) {
-    return pause();
-  }
   return TAE_RESULT_OK;
 }
 
@@ -2662,6 +2649,7 @@ TAE_Result analyzeWithProbeResult(
 
 enum class JsonGetter {
   None,
+  AutoMixSelection,
   Queue,
   UpcomingTrack,
   DspConfig,
@@ -2676,7 +2664,6 @@ enum class JsonGetter {
   PlaybackInfo,
   DiagnosticLog,
   Visualization,
-  AutoMixStatus
 };
 
 struct JsonProbeResult {
@@ -2786,6 +2773,28 @@ TAE_Result TAE_SetPlaybackRate(TAE_EngineHandle engine, double rate) {
   if (!engine) return TAE_RESULT_NOT_INITIALIZED;
   return fromHandle(engine)->setPlaybackRate(rate);
 }
+TAE_Result TAE_SetAutoMixMode(TAE_EngineHandle engine, const char* mode) {
+  if (!engine || !mode) return TAE_RESULT_INVALID_ARGUMENT;
+  return fromHandle(engine)->setAutoMixMode(mode);
+}
+TAE_Result TAE_SelectAutoMix(TAE_EngineHandle engine, const char* json,
+    char* buffer, size_t buffer_size, size_t* required_size) {
+  if (!engine || !json) return TAE_RESULT_INVALID_ARGUMENT;
+  return copyJsonWithProbeResult(engine, JsonGetter::AutoMixSelection, json, buffer, buffer_size,
+      required_size, nullptr, [&](uint64_t*) { return fromHandle(engine)->selectAutoMix(json); });
+}
+TAE_Result TAE_PrepareAutoMix(TAE_EngineHandle engine, const char* json) {
+  if (!engine || !json) return TAE_RESULT_INVALID_ARGUMENT;
+  return fromHandle(engine)->prepareAutoMix(json);
+}
+TAE_Result TAE_SubmitAutoMix(TAE_EngineHandle engine, uint64_t id) {
+  if (!engine || !id) return TAE_RESULT_INVALID_ARGUMENT;
+  return fromHandle(engine)->submitAutoMix(id);
+}
+TAE_Result TAE_CancelAutoMix(TAE_EngineHandle engine) {
+  if (!engine) return TAE_RESULT_NOT_INITIALIZED;
+  return fromHandle(engine)->cancelAutoMix();
+}
 
 TAE_Result TAE_SetLoopRange(TAE_EngineHandle engine, double start_seconds, double end_seconds) {
   if (!engine) return TAE_RESULT_NOT_INITIALIZED;
@@ -2846,21 +2855,6 @@ TAE_Result TAE_GetUpcomingTrack(TAE_EngineHandle engine, char* buffer, size_t bu
 TAE_Result TAE_SetDspConfig(TAE_EngineHandle engine, const char* dsp_config_json) {
   if (!engine) return TAE_RESULT_NOT_INITIALIZED;
   return fromHandle(engine)->setDspConfig(dsp_config_json ? dsp_config_json : "{}");
-}
-
-TAE_Result TAE_SetAutoMixConfig(TAE_EngineHandle engine, const char* config_json) {
-  if (!engine || !config_json) return TAE_RESULT_INVALID_ARGUMENT;
-  return fromHandle(engine)->setAutoMixConfig(config_json);
-}
-
-TAE_Result TAE_SetAutoMixFeatures(TAE_EngineHandle engine,const char* features_json) {
-  if(!engine||!features_json)return TAE_RESULT_INVALID_ARGUMENT;
-  return fromHandle(engine)->setAutoMixFeatures(features_json);
-}
-
-TAE_Result TAE_GetAutoMixStatus(TAE_EngineHandle engine, char* buffer, size_t buffer_size, size_t* required_size) {
-  return copyJsonWithProbeResult(engine, JsonGetter::AutoMixStatus, {}, buffer, buffer_size, required_size, nullptr,
-      [engine](uint64_t*) { return fromHandle(engine)->getAutoMixStatusJson(); });
 }
 
 TAE_Result TAE_SetDspGraph(TAE_EngineHandle engine, const char* dsp_graph_json) {
@@ -3092,6 +3086,13 @@ TAE_Result TAE_AnalyzeLoudness(
       twilight::audio::analyzeLoudnessJson);
 }
 
+TAE_Result TAE_AnalyzeAutoMix(TAE_EngineHandle engine, const char* source,
+    const char* options_json, char* buffer, size_t buffer_size, size_t* required_size) {
+  return analyzeWithProbeResult(engine, source, options_json, buffer, buffer_size,
+      required_size, &autoMixProbeResult, &autoMixAnalysisExecutionCount,
+      twilight::audio::analyzeAutoMixJson);
+}
+
 uint64_t TAE_GetAnalysisExecutionCount(const char* analysis_kind) {
   if (!analysis_kind) return 0;
   const std::string kind(analysis_kind);
@@ -3099,12 +3100,6 @@ uint64_t TAE_GetAnalysisExecutionCount(const char* analysis_kind) {
   if (kind == "loudness") return loudnessAnalysisExecutionCount.load(std::memory_order_relaxed);
   if (kind == "automix") return autoMixAnalysisExecutionCount.load(std::memory_order_relaxed);
   return 0;
-}
-
-TAE_Result TAE_AnalyzeAutoMix(TAE_EngineHandle engine, const char* source, const char* options_json,
-    char* buffer, size_t buffer_size, size_t* required_size) {
-  return analyzeWithProbeResult(engine, source, options_json, buffer, buffer_size, required_size,
-      &autoMixProbeResult, &autoMixAnalysisExecutionCount, twilight::audio::analyzeAutoMixJson);
 }
 
 const char* TAE_GetVersion(void) {

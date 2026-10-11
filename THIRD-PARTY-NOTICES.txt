@@ -30,3 +30,53 @@ SOFTWARE.
 
 VSTGUI, mda-vst3 examples, VST2 materials, and third-party VST3 plug-ins are not
 included in the Twilight Echo Windows package.
+
+Twilight AutoMix public analysis assets and algorithm reference
+
+Beat This small0 (CPJKU, commit b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c):
+public source and published model weights, MIT License.
+Copyright (c) 2024 Institute of Computational Perception, JKU Linz, Austria.
+Source: https://github.com/CPJKU/beat_this
+
+YAMNet (TensorFlow Models, commit 34a21326906b9574fa11c4d6d0a5c534ff039267):
+Apache License 2.0. Copyright 2019 The TensorFlow Authors. All Rights Reserved.
+The native waveform frontend and fixed execution graph adapt the public YAMNet
+computation. The published model weights are redistributed only with the public
+asset lock and Apache License 2.0 notice.
+Source: https://github.com/tensorflow/models/tree/34a21326906b9574fa11c4d6d0a5c534ff039267/research/audioset/yamnet
+License: https://www.apache.org/licenses/LICENSE-2.0
+
+Signalsmith Stretch 1.3.2 (commit a670068d9aeb64913331d5cc29337b19a457a7df):
+MIT License. Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd.
+The native time-only C11 adaptation uses linked phase prediction, a bounded
+offline STFT, and explicit source-time mapping. It omits pitch/formant mapping.
+Source: https://github.com/Signalsmith-Audio/signalsmith-stretch
+
+Signalsmith Linear (commit 146b26f91b48835d665fa0498d64d9617818d27a):
+MIT License. Copyright (c) 2025 Signalsmith Audio.
+Source: https://github.com/Signalsmith-Audio/linear
+
+The complete notices are retained in audio-engine/automix-native/licenses and
+included alongside the public model assets in the packaged native resources.
+PyTorch, TensorFlow, ONNX and ONNX Runtime are development export/oracle tools;
+the Twilight AutoMix production runtime does not include those frameworks.
+
+MIT License (applies to the MIT components named above)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

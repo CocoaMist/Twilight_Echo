@@ -462,6 +462,46 @@ napi_value SetLoopRange(napi_env env, napi_callback_info info) {
   const double end = argc > 1 ? getNumberArg(env, argv[1], -1.0) : -1.0;
   return throwOnError(env, TAE_SetLoopRange(g_engine, start, end));
 }
+napi_value SetAutoMixMode(napi_env env, napi_callback_info info) {
+  ensureEngine(); clearLastError();
+  size_t argc = 1; napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const auto mode = argc ? getStringArg(env, argv[0]) : "off";
+  return throwOnError(env, TAE_SetAutoMixMode(g_engine, mode.c_str()));
+}
+napi_value SelectAutoMix(napi_env env, napi_callback_info info) {
+  ensureEngine(); clearLastError();
+  size_t argc = 1; napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const auto request = argc ? getStringArg(env, argv[0]) : "{}";
+  size_t required = 0;
+  auto result = TAE_SelectAutoMix(g_engine, request.c_str(), nullptr, 0, &required);
+  if (required > 64 * 1024 || !required) return throwOnError(env, TAE_RESULT_INVALID_ARGUMENT);
+  std::vector<char> buffer(required);
+  result = TAE_SelectAutoMix(g_engine, request.c_str(), buffer.data(), buffer.size(), &required);
+  if (result != TAE_RESULT_OK) return throwOnError(env, result);
+  napi_value value; napi_create_string_utf8(env, buffer.data(), NAPI_AUTO_LENGTH, &value); return value;
+}
+napi_value PrepareAutoMix(napi_env env, napi_callback_info info) {
+  ensureEngine(); clearLastError();
+  size_t argc = 1; napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const auto request = argc ? getStringArg(env, argv[0]) : "{}";
+  return throwOnError(env, TAE_PrepareAutoMix(g_engine, request.c_str()));
+}
+napi_value SubmitAutoMix(napi_env env, napi_callback_info info) {
+  ensureEngine(); clearLastError();
+  size_t argc = 1; napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const auto id = argc ? getNumberArg(env, argv[0], 0) : 0;
+  if (!std::isfinite(id) || id < 1 || id > 9007199254740991.0 || std::floor(id) != id)
+    return throwOnError(env, TAE_RESULT_INVALID_ARGUMENT);
+  return throwOnError(env, TAE_SubmitAutoMix(g_engine, static_cast<uint64_t>(id)));
+}
+napi_value CancelAutoMix(napi_env env, napi_callback_info) {
+  ensureEngine(); clearLastError();
+  return throwOnError(env, TAE_CancelAutoMix(g_engine));
+}
 
 napi_value SetOutputDevice(napi_env env, napi_callback_info info) {
   ensureEngine();
@@ -867,35 +907,27 @@ napi_value AnalyzeBpm(napi_env env, napi_callback_info info) {
 napi_value AnalyzeAutoMix(napi_env env, napi_callback_info info) {
   ensureEngine();
   clearLastError();
-  size_t argc = 2; napi_value argv[2];
+  size_t argc = 2;
+  napi_value argv[2];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  if (argc < 1) { napi_throw_type_error(env, nullptr, "AutoMix 分析需要音源路径"); return makeUndefined(env); }
-  const auto source = getStringArg(env, argv[0]);
-  const auto options = argc > 1 ? getStringArg(env, argv[1]) : "{}";
+  if (argc < 1) {
+    napi_throw_type_error(env, nullptr, "Twilight AutoMix analysis requires an audio source");
+    return makeUndefined(env);
+  }
+  const std::string source = getStringArg(env, argv[0]);
+  const std::string options = argc > 1 ? getStringArg(env, argv[1]) : "{}";
   size_t required = 0;
-  auto result = TAE_AnalyzeAutoMix(g_engine, source.c_str(), options.c_str(), nullptr, 0, &required);
-  if (result != TAE_RESULT_OK) return throwOnError(env, result);
+  TAE_Result result = TAE_AnalyzeAutoMix(g_engine, source.c_str(), options.c_str(), nullptr, 0, &required);
+  if (required > 512 * 1024) {
+    napi_throw_error(env, nullptr, "Twilight AutoMix analysis exceeded its response budget");
+    return makeUndefined(env);
+  }
   std::vector<char> buffer(required == 0 ? 1 : required);
   result = TAE_AnalyzeAutoMix(g_engine, source.c_str(), options.c_str(), buffer.data(), buffer.size(), &required);
   if (result != TAE_RESULT_OK) return throwOnError(env, result);
-  napi_value json; napi_create_string_utf8(env, buffer.data(), NAPI_AUTO_LENGTH, &json); return json;
-}
-
-napi_value SetAutoMixConfig(napi_env env, napi_callback_info info) {
-  ensureEngine(); clearLastError();
-  size_t argc = 1; napi_value argv[1];
-  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-  return throwOnError(env, TAE_SetAutoMixConfig(g_engine, argc ? getStringArg(env, argv[0]).c_str() : "{}"));
-}
-
-napi_value GetAutoMixStatus(napi_env env, napi_callback_info) {
-  return readJson(env, TAE_GetAutoMixStatus);
-}
-
-napi_value SetAutoMixFeatures(napi_env env,napi_callback_info info) {
-  ensureEngine();clearLastError();
-  size_t argc=1;napi_value argv[1];napi_get_cb_info(env,info,&argc,argv,nullptr,nullptr);
-  return throwOnError(env,TAE_SetAutoMixFeatures(g_engine,argc?getStringArg(env,argv[0]).c_str():"{}"));
+  napi_value json;
+  napi_create_string_utf8(env, buffer.data(), NAPI_AUTO_LENGTH, &json);
+  return json;
 }
 
 napi_value AnalyzeLoudness(napi_env env, napi_callback_info info) {
@@ -979,9 +1011,11 @@ napi_value Init(napi_env env, napi_value exports) {
   define(env, exports, "GetVisualizationData", GetVisualizationData);
   define(env, exports, "AnalyzeBpm", AnalyzeBpm);
   define(env, exports, "AnalyzeAutoMix", AnalyzeAutoMix);
-  define(env, exports, "SetAutoMixConfig", SetAutoMixConfig);
-  define(env, exports, "SetAutoMixFeatures", SetAutoMixFeatures);
-  define(env, exports, "GetAutoMixStatus", GetAutoMixStatus);
+  define(env, exports, "SetAutoMixMode", SetAutoMixMode);
+  define(env, exports, "SelectAutoMix", SelectAutoMix);
+  define(env, exports, "PrepareAutoMix", PrepareAutoMix);
+  define(env, exports, "SubmitAutoMix", SubmitAutoMix);
+  define(env, exports, "CancelAutoMix", CancelAutoMix);
   define(env, exports, "AnalyzeLoudness", AnalyzeLoudness);
   return exports;
 }

@@ -27,6 +27,9 @@ class FFmpegDecoder {
   FFmpegDecoder& operator=(const FFmpegDecoder&) = delete;
 
   bool open(const std::string& source, std::string* error);
+  /* Set before open. Callback/context must outlive decoder IO; callback must
+   * be thread-safe and nonblocking. Used by bounded background preparation. */
+  void setInterrupt(int (*callback)(void*), void* context);
   void close();
 
   bool setOutputFormat(const AudioFormat& format, std::string* error);
