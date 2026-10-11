@@ -21,21 +21,33 @@ def main():
     parser = argparse.ArgumentParser()
     for name in ('corpus', 'baseline', 'probe', 'windows-probe', 'output', 'scratch'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--comparison', type=Path, help='Previously rendered evaluation directory; raw analysis still comes from --baseline')
+    parser.add_argument('--rule-version', default='twilight-rules-3')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     args.scratch.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(2)
-    before = json.loads((args.baseline / 'pairs.validation.json').read_text(encoding='utf-8'))
+    raw_report = json.loads((args.baseline / 'pairs.validation.json').read_text(encoding='utf-8'))
+    comparison = args.comparison or args.baseline
+    before = json.loads((comparison / 'pairs.validation.json').read_text(encoding='utf-8'))
     corpus = json.loads(args.corpus.read_text(encoding='utf-8'))
-    assert sha(args.corpus) == before['manifestSha256']
+    assert sha(args.corpus) == before['manifestSha256'] == raw_report['manifestSha256']
     assert len(corpus['pairs']) == len(before['pairs']) == 36
-    report = {'schemaVersion': 4, 'ruleVersion': 'twilight-rules-3', 'manifestSha256': sha(args.corpus),
-              'baselineReportSha256': sha(args.baseline / 'pairs.validation.json'),
-              'rawAnalysisReused': True, 'rawAnalysisDllSha256': before['analysisDllSha256'],
+    report = {'schemaVersion': 5, 'ruleVersion': args.rule_version, 'manifestSha256': sha(args.corpus),
+              'baselineReportSha256': sha(comparison / 'pairs.validation.json'),
+              'rawAnalysisReportSha256': sha(args.baseline / 'pairs.validation.json'),
+              'rawAnalysisReused': True, 'rawAnalysisDllSha256': raw_report['analysisDllSha256'],
               'rendererSha256': sha(args.probe), 'windowsProbeSha256': sha(args.windows_probe),
               'pcmRoute': 'libsndfile/torchaudio context PCM; production JSON ownership and C/SSE2/AVX2 selection/mapping/rendering',
               'suitabilityAnnotated': False, 'humanListeningPassed': False, 'releaseReady': False, 'pairs': []}
     verified = {}
+    def comparison_wave(pair, mode):
+        output = pair['outputs'][mode+'-after']
+        path = comparison / (output['file'] if isinstance(output, dict) else output)
+        if isinstance(output, dict): assert sha(path) == output['sha256']
+        wave, rate = sf.read(path, dtype='float32', always_2d=True)
+        assert rate == 48000
+        return wave / pair['modes'][mode]['sharedComparisonGain']
     def identity(path):
         path = str(path)
         if path not in verified:
@@ -121,13 +133,36 @@ def main():
                 assert max(entry_error, exit_error) <= 1e-6 and peak <= .9801
                 entry['modes'][mode] = {**plan, 'prepareMs': timings, 'maxCpuSampleError': maximum,
                                        'entrySampleError': entry_error, 'exitSampleError': exit_error, 'bodyPeak': peak}
+                if plan.get('strategy') == 'tail-overlap':
+                    # An independent witness from decoded stereo PCM at full
+                    # output rate, using the renderer's exact gain correction.
+                    frames = plan['outputFrames']; size = frames // 960
+                    lanes = [pcm[d][chosen[side+'Start']-origins[d]:chosen[side+'Start']-origins[d]+frames]
+                             for d, side in enumerate(('current', 'next'))]
+                    p = np.arange(frames, dtype=np.float64) / (frames - 1)
+                    gains = [np.cos(p*np.pi/2), np.sin(p*np.pi/2)*(plan['nextGain']+(1-plan['nextGain'])*p)]
+                    raw_mix = lanes[0]*gains[0][:,None] + lanes[1]*gains[1][:,None]
+                    energy = np.sum(raw_mix*raw_mix, axis=1)
+                    headroom = np.divide(np.sum(reference*raw_mix, axis=1), energy,
+                                         out=np.ones(frames), where=energy>1e-12)
+                    assert headroom.min() >= -.0002 and headroom.max() <= 1.0002
+                    residual = float(np.max(np.abs(reference-raw_mix*headroom[:,None])))
+                    assert residual < .0002, (item['id'], 'prepared shared headroom witness', residual)
+                    headroom = np.clip(headroom, 0, 1)
+                    powers = [np.mean((lanes[d][:size*960].astype(np.float64)*(gains[d]*headroom)[:size*960,None]).reshape(size,960,2)**2,axis=(1,2)) for d in (0,1)]
+                    endpoint = max(float(np.mean(lanes[0][:48000].astype(np.float64)**2)),float(np.mean(lanes[1][-48000:].astype(np.float64)**2)))
+                    audible = max(10**(-55/10), endpoint*10**(-24/10))
+                    joint = float(np.sum((powers[0]>=audible)&(powers[1]>=audible))*.02)
+                    assert joint >= frames/48000*.5, (item['id'], 'real PCM jointly audible', joint)
+                    entry['modes'][mode]['pcmJointAudibleSeconds'] = round(joint, 3)
+                    entry['modes'][mode]['pcmJointThresholdDb'] = round(10*np.log10(audible), 3)
+                    entry['modes'][mode]['pcmEvidenceStage'] = 'decoded stereo, exact gain curve and verified prepared shared headroom'
+                    entry['modes'][mode]['pcmHeadroomWitnessError'] = residual
                 after = np.concatenate([pcm[0][:chosen['currentStart']-origins[0]], reference, pcm[1][chosen['nextEnd']-origins[1]:]])
             else:
                 entry['modes'][mode] = chosen
-                after, _ = sf.read(args.baseline/previous['outputs'][mode+'-after'], dtype='float32', always_2d=True)
-                after /= previous['modes'][mode]['sharedComparisonGain']
-            old, _ = sf.read(args.baseline/previous['outputs'][mode+'-after'], dtype='float32', always_2d=True)
-            old /= previous['modes'][mode]['sharedComparisonGain']
+                after = comparison_wave(previous, mode)
+            old = comparison_wave(previous, mode)
             gain = min(1, .98 / max(float(np.max(np.abs(old))), float(np.max(np.abs(after))), 1e-9))
             for label, wave in (('before', old), ('after', after)):
                 name = f'{item["id"]}-{mode}-{label}.wav'

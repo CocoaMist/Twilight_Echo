@@ -18,6 +18,7 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'automix.phase.degraded': 'Using regular playback for this transition',
   'automix.strategy.beat-aligned': 'Beat-aligned transition',
   'automix.strategy.content-boundary': 'Instrumental outro transition at original speed',
+  'automix.strategy.tail-overlap': 'Long outro overlap at original speed',
   'automix.reason.waiting': 'Waiting for a new transition',
   'automix.reason.beats': 'Beats are insufficiently stable for alignment',
   'automix.reason.tempo': 'Tempo difference exceeds the selected mode limit',

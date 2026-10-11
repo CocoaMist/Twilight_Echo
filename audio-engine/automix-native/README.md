@@ -1,20 +1,22 @@
 # Twilight AutoMix native core
 
-The latest evaluation is **1.3.0-automix.4**, using `twilight-rules-3`.
-On the unchanged 36-pair corpus, intelligent preparation rises from 12 to 26
-Natural pairs and from 23 to 34 DJ pairs; DJ transitions lasting at least
-16 seconds rise from 15 to 19. Natural includes 25 original-speed content
-handoffs and one beat-aligned transition. DJ includes 19 beat-aligned long
-mixes and 15 original-speed short handoffs; two pairs retain speed-limit fallback.
-See [EVALUATION-V4.md](EVALUATION-V4.md) for changes, reproduction and executed
+The latest evaluation is **1.3.0-automix.5**, using `twilight-rules-4`.
+On the unchanged 36-pair corpus, intelligent preparation remains 26/36 Natural
+and 34/36 DJ. DJ transitions lasting at least 16 seconds rise from 19 to 22:
+19 beat-aligned long mixes and three original-speed tail overlaps. Twelve DJ
+pairs retain original-speed short handoffs; two retain speed-limit fallback.
+Natural still includes 25 original-speed content handoffs and one beat-aligned
+transition. See [EVALUATION-V5.md](EVALUATION-V5.md) for the reference findings,
+route eligibility, reproduction and executed
 checks. These are preparation/rendering counts, with human listening and
 preannotated suitable-pair coverage still pending.
 
-The .4 unpacked package and ZIP contain the tested engine. The ignored
+The .5 unpacked package and ZIP contain the tested engine. The ignored
 development `resources/audio-engine` runtime has also been updated after the
 development player was closed, with matching build digests and a rule-version
 probe. The package is ready for independent evaluation. The records below
-describe earlier acceptance work and retain their original limitations.
+and [EVALUATION-V4.md](EVALUATION-V4.md) describe earlier acceptance work and
+retain their original limitations.
 
 Production numerical kernels are handwritten Win64 NASM, with a complete C11
 reference and explicit SSE2/AVX2 dispatch. The existing engine owns transport;

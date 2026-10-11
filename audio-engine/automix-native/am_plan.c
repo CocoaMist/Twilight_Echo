@@ -374,6 +374,12 @@ static int select_boundary(const ta_am_features *a, const ta_am_features *b,
 }
 #include "am_dj.inc"
 
+const char *ta_am_transition_name(ta_am_transition_kind kind) {
+  return kind == TA_AM_CONTENT_BOUNDARY ? "content-boundary" :
+         kind == TA_AM_TAIL_OVERLAP ? "tail-overlap" :
+         kind == TA_AM_BEAT_ALIGNED ? "beat-aligned" : "";
+}
+
 int ta_am_plan_valid(const ta_am_plan_spec *s, const ta_am_kernels *k) {
   if (!s || !k || (s->mode != TA_AM_NATURAL && s->mode != TA_AM_DJ) ||
       s->binding.sample_rate < 8000 || s->binding.sample_rate > 384000 ||
@@ -392,11 +398,16 @@ int ta_am_plan_valid(const ta_am_plan_spec *s, const ta_am_kernels *k) {
       !isfinite(s->score) || s->effect < TA_AM_CLEAN ||
       s->effect > TA_AM_REPEAT ||
       (s->mode == TA_AM_NATURAL && s->effect != TA_AM_CLEAN) ||
-      (s->kind != TA_AM_BEAT_ALIGNED && s->kind != TA_AM_CONTENT_BOUNDARY) ||
+      (s->kind != TA_AM_BEAT_ALIGNED && s->kind != TA_AM_CONTENT_BOUNDARY &&
+       s->kind != TA_AM_TAIL_OVERLAP) ||
       (s->kind == TA_AM_BEAT_ALIGNED && (s->bpm < 55 || s->confidence < .55f)) ||
-      (s->kind == TA_AM_CONTENT_BOUNDARY && (
+      (s->kind != TA_AM_BEAT_ALIGNED && (
           s->effect != TA_AM_CLEAN || s->current_rate != 1 || s->next_rate != 1 ||
-          s->bpm != 0 || s->confidence != 0)))
+          s->bpm != 0 || s->confidence != 0)) ||
+      (s->kind == TA_AM_CONTENT_BOUNDARY && s->output_frames > (uint64_t)s->binding.sample_rate * 8) ||
+      (s->kind == TA_AM_TAIL_OVERLAP && (s->mode != TA_AM_DJ ||
+          s->output_frames < (uint64_t)s->binding.sample_rate * 16 ||
+          s->output_frames > (uint64_t)s->binding.sample_rate * 24)))
     return 0;
   float lo = s->mode == TA_AM_NATURAL ? 0.96f : 0.88f,
         hi = s->mode == TA_AM_NATURAL ? 1.04f : 1.12f;

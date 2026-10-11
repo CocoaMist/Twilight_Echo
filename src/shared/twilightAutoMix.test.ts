@@ -25,6 +25,10 @@ test('AutoMix status explains fallback and cancellation without exposing raw int
     'automix.strategy.beat-aligned'
   )
   assert.equal(autoMixStatusKeys('degraded', '', 'content-boundary').strategy, undefined)
+  assert.equal(
+    autoMixStatusKeys('mixing', '', 'tail-overlap').strategy,
+    'automix.strategy.tail-overlap'
+  )
   assert.equal(autoMixStatusKeys('ready', '', 'unknown').strategy, undefined)
   assert.equal(
     autoMixStatusKeys('degraded', 'unknown_native_failure').reason,

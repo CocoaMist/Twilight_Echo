@@ -213,7 +213,7 @@ async function run(options) {
       )
       report.activeCycle.stage = 'preparing'
       const request = {
-        ruleVersion: 'twilight-rules-3',
+        ruleVersion: 'twilight-rules-4',
         currentSource: source.current,
         nextSource: source.next,
         currentSourceStartSeconds: 0,

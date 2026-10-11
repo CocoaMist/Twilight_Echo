@@ -4,7 +4,7 @@ export type AutoMixStemCacheMiB = 0 | 256 | 512 | 1024 | 2048
 export function normalizeAutoMixStemCacheMiB(value: unknown): AutoMixStemCacheMiB {
   return value === 0 || value === 256 || value === 1024 || value === 2048 ? value : 512
 }
-export const TWILIGHT_AUTOMIX_RULE_VERSION = 'twilight-rules-3'
+export const TWILIGHT_AUTOMIX_RULE_VERSION = 'twilight-rules-4'
 export const TWILIGHT_AUTOMIX_MATERIAL_VERSION = 2
 export interface AutoMixSelection {
   ok: boolean
@@ -88,7 +88,7 @@ export function autoMixStatusKeys(
     phase: `automix.phase.${['off', 'preparing', 'ready', 'mixing', 'completed', 'degraded'].includes(phase) ? phase : 'degraded'}`,
     reason: reason ? `automix.reason.${reasonGroup}` : '',
     ...(['ready', 'mixing', 'completed'].includes(phase) &&
-    ['beat-aligned', 'content-boundary'].includes(strategy)
+    ['beat-aligned', 'content-boundary', 'tail-overlap'].includes(strategy)
       ? { strategy: `automix.strategy.${strategy}` }
       : {})
   }

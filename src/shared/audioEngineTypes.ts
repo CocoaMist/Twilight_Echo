@@ -502,7 +502,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   autoMixDecodeMs?: number
   autoMixPrepareMs?: number
   autoMixReason?: string
-  autoMixStrategy?: '' | 'beat-aligned' | 'content-boundary'
+  autoMixStrategy?: '' | 'beat-aligned' | 'content-boundary' | 'tail-overlap'
   autoMixPlanId?: number
   autoMixOutputSeconds?: number
   autoMixNextSourceSeconds?: number

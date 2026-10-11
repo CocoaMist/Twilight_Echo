@@ -13,7 +13,12 @@ typedef enum {
   TA_AM_REVERB = 3,
   TA_AM_REPEAT = 4
 } ta_am_effect;
-typedef enum { TA_AM_BEAT_ALIGNED = 0, TA_AM_CONTENT_BOUNDARY = 1 } ta_am_transition_kind;
+typedef enum {
+  TA_AM_BEAT_ALIGNED = 0,
+  TA_AM_CONTENT_BOUNDARY = 1,
+  TA_AM_TAIL_OVERLAP = 2
+} ta_am_transition_kind;
+const char *ta_am_transition_name(ta_am_transition_kind kind);
 typedef struct {
   uint64_t plan_id, queue_revision, playback_generation, format_revision;
   char current_identity[65],

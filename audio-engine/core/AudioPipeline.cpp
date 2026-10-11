@@ -1757,7 +1757,7 @@ std::string AudioPipeline::selectAutoMix(const std::string& json) {
   const auto currentJson = json_utils::fieldObject(json, "currentFeatures");
   const auto nextJson = json_utils::fieldObject(json, "nextFeatures");
   if (json.size() > 3 * 1024 * 1024 || !AutoMixJsonValidation(json).valid() ||
-      json_utils::fieldString(json, "ruleVersion").value_or("") != "twilight-rules-3" ||
+      json_utils::fieldString(json, "ruleVersion").value_or("") != "twilight-rules-4" ||
       !parseAutoMixWindows(json, "currentWindows", "currentFeatures", &request.current, &error) ||
       !parseAutoMixWindows(json, "nextWindows", "nextFeatures", &request.next, &error))
     return "{\"ok\":false,\"reason\":\"invalid_analysis_windows\"}";
@@ -1875,7 +1875,7 @@ std::string AudioPipeline::selectAutoMix(const std::string& json) {
       << ",\"outputFrames\":" << spec.output_frames << ",\"currentRate\":" << spec.current_rate
       << ",\"nextRate\":" << spec.next_rate << ",\"sampleRate\":" << spec.binding.sample_rate
       << ",\"channels\":" << spec.binding.channels << ",\"strategy\":\""
-      << (spec.kind == TA_AM_CONTENT_BOUNDARY ? "content-boundary" : "beat-aligned") << "\"" << inputJson << "}";
+      << ta_am_transition_name(spec.kind) << "\"" << inputJson << "}";
   {
     std::lock_guard lock(mutex_);
     if (autoMixRevision_ != spec.binding.queue_revision || activeStream_ != ticket->outgoing ||
@@ -4734,8 +4734,7 @@ PipelineStatus AudioPipeline::buildStatusLocked() {
         s == AutoMixGeneration::Completed)) {
       status.autoMixDurationSeconds = static_cast<double>(ta_am_prepared_spec(autoMix_->prepared)->output_frames) / autoMix_->binding.sample_rate;
       status.autoMixStemEnhanced = autoMix_->materialUsed[0] && autoMix_->materialUsed[1];
-      status.autoMixStrategy = ta_am_prepared_spec(autoMix_->prepared)->kind == TA_AM_CONTENT_BOUNDARY
-          ? "content-boundary" : "beat-aligned";
+      status.autoMixStrategy = ta_am_transition_name(ta_am_prepared_spec(autoMix_->prepared)->kind);
     }
   }
   if (outputFormat_.sampleRate > 0) {

@@ -67,13 +67,13 @@ int main(int argc, char **argv) {
   fprintf(report, "{\"intelligent\":%s,\"reason\":\"%s\"", selected ? "true" : "false", why);
   if (selection_only) fprintf(report, ",\"selectionOnly\":true");
   if (selected) {
-    fprintf(report, ",\"strategy\":\"%s\"", spec.kind == TA_AM_CONTENT_BOUNDARY ? "content-boundary" : "beat-aligned");
+    fprintf(report, ",\"strategy\":\"%s\"", ta_am_transition_name(spec.kind));
     fprintf(report, ",\"effect\":%d,\"outputFrames\":%llu,\"currentStart\":%llu,\"currentEnd\":%llu,"
         "\"nextStart\":%llu,\"nextEnd\":%llu,\"currentRate\":%.9g,\"nextRate\":%.9g,"
-        "\"score\":%.9g,\"confidence\":%.9g,\"preparedBytes\":%zu",
+        "\"score\":%.9g,\"confidence\":%.9g,\"bpm\":%.9g,\"nextGain\":%.9g,\"preparedBytes\":%zu",
         spec.effect, (unsigned long long)spec.output_frames, (unsigned long long)spec.current_start,
         (unsigned long long)spec.current_end, (unsigned long long)spec.next_start, (unsigned long long)spec.next_end,
-        spec.current_rate, spec.next_rate, spec.score, spec.confidence, ta_am_prepared_bytes(prepared));
+        spec.current_rate, spec.next_rate, spec.score, spec.confidence, spec.bpm, spec.next_gain, ta_am_prepared_bytes(prepared));
     FILE *out = prepared ? fopen(argv[11], "wb") : NULL;
     if (selection_only) goto report_end;
     if (!out) { fclose(report); ta_am_prepared_free(prepared); return 2; }
