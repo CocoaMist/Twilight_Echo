@@ -93,10 +93,9 @@ html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-l
   padding: 8px;
   background: transparent;
   box-shadow:
-    inset 0 0 0 0.5px color-mix(in srgb, var(--te-lg-context-rim) 40%, transparent),
-    inset 0 1px 0.5px color-mix(in srgb, var(--te-lg-context-rim) 16%, transparent),
-    inset 0 -1px 1px color-mix(in srgb, var(--te-lg-context-label) 8%, transparent),
-    0 2px 7px color-mix(in srgb, var(--te-lg-context-label) 4%, transparent),
+    inset 0 1px 0.5px color-mix(in srgb, var(--te-lg-context-rim) 28%, transparent),
+    inset 0 -1px 1px rgb(0 0 0 / 12%),
+    0 2px 7px rgb(0 0 0 / 5%),
     0 13px 32px var(--te-lg-context-shadow);
 }
 
@@ -106,62 +105,21 @@ html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-l
   z-index: -1;
   inset: 0;
   border-radius: inherit;
+  /* Diffuse detail under text; keep light at the bevel instead of whitening
+     the whole surface. Navigation never receives an optical displacement. */
   background:
-    /* Shape-aware rim light: bright bevel along the light side, faint
-       counter-shade opposite, clear through the middle. */
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 22%, transparent) 0%,
-      transparent 12%,
-      transparent 88%,
-      color-mix(in srgb, var(--te-lg-context-label) 7%, transparent) 100%
-    ),
     radial-gradient(
-      112% 126% at 50% 42%,
-      color-mix(in srgb, var(--te-lg-context-rim) 12%, transparent) 0%,
-      color-mix(in srgb, var(--te-lg-context-rim) 4%, transparent) 21%,
-      transparent 55%
+      ellipse at 18% 0%,
+      color-mix(in srgb, var(--te-lg-context-rim) 28%, transparent),
+      transparent 34%
     ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 9%, transparent) 0%,
-      color-mix(in srgb, var(--te-lg-context-rim) 2%, transparent) 30%,
-      transparent 55%,
-      color-mix(in srgb, var(--te-lg-context-label) 6%, transparent) 100%
-    ),
-    var(--te-lg-context-surface);
+    linear-gradient(180deg, transparent 86%, rgb(0 0 0 / 5%)), var(--te-lg-context-material);
   content: '';
   pointer-events: none;
-  backdrop-filter: blur(var(--te-lg-blur, 16px)) saturate(var(--te-lg-saturate, 140%));
-  -webkit-backdrop-filter: blur(var(--te-lg-blur, 16px)) saturate(var(--te-lg-saturate, 140%));
-}
-
-html[data-te-liquid-glass-source='solid']:is(
-    [data-te-surface-material='liquidGlass'],
-    [data-te-settings-navigation-liquid-glass='on']
-  )
-  .settings-preview-nav::after {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 18%, transparent),
-      transparent 48%,
-      color-mix(in srgb, var(--te-lg-context-label) 8%, transparent)
-    ),
-    var(--te-lg-context-material);
-}
-
-html:is(
-    [data-te-surface-material='liquidGlass'],
-    [data-te-settings-navigation-liquid-glass='on']
-  )[data-theme='dark']
-  .settings-preview-nav {
-  box-shadow:
-    inset 0 0 0 0.5px color-mix(in srgb, var(--te-lg-context-rim) 40%, transparent),
-    inset 0 1px 0.5px color-mix(in srgb, var(--te-lg-context-rim) 16%, transparent),
-    inset 0 -1px 1px color-mix(in srgb, var(--te-lg-context-label) 15%, transparent),
-    0 2px 7px color-mix(in srgb, var(--te-lg-context-label) 7%, transparent),
-    0 13px 32px color-mix(in srgb, var(--te-lg-context-label) 18%, transparent);
+  backdrop-filter: blur(max(var(--te-lg-blur, 16px), var(--te-lg-context-diffusion, 16px)))
+    saturate(124%);
+  -webkit-backdrop-filter: blur(max(var(--te-lg-blur, 16px), var(--te-lg-context-diffusion, 16px)))
+    saturate(124%);
 }
 
 html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-liquid-glass='on'])
@@ -182,7 +140,7 @@ html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-l
   .settings-preview-nav
   .preview-nav-item.active {
   background: color-mix(in srgb, var(--te-lg-context-rim) 38%, transparent);
-  box-shadow: 0 4px 14px color-mix(in srgb, var(--te-lg-context-label) 10%, transparent);
+  box-shadow: none;
 }
 
 html:is(
@@ -192,7 +150,7 @@ html:is(
   .settings-preview-nav
   .preview-nav-item.active {
   background: color-mix(in srgb, var(--te-lg-context-rim) 22%, transparent);
-  box-shadow: 0 4px 14px color-mix(in srgb, var(--te-lg-context-label) 18%, transparent);
+  box-shadow: none;
 }
 
 html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-liquid-glass='on'])
@@ -250,6 +208,7 @@ html:is(
     [data-te-settings-navigation-liquid-glass='on']
   )[data-window-transparent='on'][data-platform='linux']
   .settings-preview-nav::after {
+  background: var(--te-lg-context-surface-solid) !important;
   filter: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
@@ -258,7 +217,7 @@ html:is(
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-liquid-glass='on'])
     .settings-preview-nav::after {
-    background: var(--te-lg-context-surface-solid);
+    background: var(--te-lg-context-surface-solid) !important;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
@@ -273,7 +232,7 @@ html:is(
 
   html:is([data-te-surface-material='liquidGlass'], [data-te-settings-navigation-liquid-glass='on'])
     .settings-preview-nav::after {
-    background: Canvas;
+    background: Canvas !important;
     filter: none;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -826,7 +785,7 @@ html:is(
 
 @media (forced-colors: active) {
   .glass-card {
-    background: Canvas;
+    background: Canvas !important;
     border-color: CanvasText;
     box-shadow: none;
   }

@@ -715,15 +715,15 @@ html
     ),
     color-mix(in srgb, var(--te-lg-context-surface) 56%, transparent);
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--te-lg-context-label) 8%, transparent);
-  backdrop-filter: blur(16px) saturate(124%);
-  -webkit-backdrop-filter: blur(16px) saturate(124%);
+  backdrop-filter: blur(var(--te-lg-context-diffusion, 16px)) saturate(124%);
+  -webkit-backdrop-filter: blur(var(--te-lg-context-diffusion, 16px)) saturate(124%);
 }
 
 :global(html[data-te-liquid-glass-source='solid'] .title-bar-liquid .title-bar-background) {
   background:
     linear-gradient(
       180deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 22%, transparent),
+      color-mix(in srgb, var(--te-lg-context-rim) 10%, transparent),
       transparent 82%
     ),
     var(--te-lg-context-material);

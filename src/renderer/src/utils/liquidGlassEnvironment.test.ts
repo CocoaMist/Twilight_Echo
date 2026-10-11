@@ -45,6 +45,29 @@ test('invalid solid colours use the deterministic environment fallback', () => {
   )
 })
 
+test('dark backdrops keep white labels without whitening the material or shadow', () => {
+  const dark = analyzeLiquidGlassColor('#17181a', false)
+  assert.equal(dark.variables['--te-lg-context-label-rgb'], '248, 250, 252')
+  assert.match(dark.variables['--te-lg-context-shadow'], /^rgb\(0 0 0 \/ /)
+  const channels = dark.variables['--te-lg-context-material'].match(/^rgb\((\d+) (\d+) (\d+)/)
+  assert.ok(channels)
+  assert.ok(Number(channels[1]) <= 23 && Number(channels[2]) <= 24 && Number(channels[3]) <= 26)
+})
+
+test('regular glass increases diffusion over complex imagery without changing text polarity', () => {
+  const flat = analyzeLiquidGlassPixels(pixels(127, 127, 127, 255), false)
+  const busy = analyzeLiquidGlassPixels(pixels(0, 0, 0, 255, 255, 255, 255, 255), false)
+  assert.equal(busy.context, 'busy')
+  assert.ok(
+    Number.parseFloat(busy.variables['--te-lg-context-diffusion']) >
+      Number.parseFloat(flat.variables['--te-lg-context-diffusion'])
+  )
+  assert.equal(
+    busy.variables['--te-lg-context-label-rgb'],
+    flat.variables['--te-lg-context-label-rgb']
+  )
+})
+
 test('busy image samples keep all generated material values bounded', () => {
   const environment = analyzeLiquidGlassPixels(
     pixels(0, 0, 0, 255, 255, 255, 255, 255, 0, 60, 190, 255, 255, 160, 0, 255),

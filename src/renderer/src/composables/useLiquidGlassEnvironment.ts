@@ -17,6 +17,7 @@ const RUNTIME_VARIABLES = [
   '--te-lg-context-rgb',
   '--te-lg-context-surface-alpha',
   '--te-lg-context-shadow-alpha',
+  '--te-lg-context-diffusion',
   '--te-lg-context-rim-alpha',
   '--te-lg-context-label-rgb',
   '--te-lg-context-surface',

@@ -81,7 +81,7 @@ test('liquid glass settings navigation has its own readable surface layer', () =
   )
   assert.match(
     styles,
-    /\[data-te-settings-navigation-liquid-glass='on'\][\s\S]{0,240}\.settings-preview-nav::after\s*\{[\s\S]*?backdrop-filter:\s*blur\(var\(--te-lg-blur, 16px\)\)\s*saturate\(var\(--te-lg-saturate, 140%\)\)/
+    /\[data-te-settings-navigation-liquid-glass='on'\][\s\S]{0,240}\.settings-preview-nav::after\s*\{[\s\S]*?backdrop-filter:\s*blur\(max\(var\(--te-lg-blur, 16px\), var\(--te-lg-context-diffusion, 16px\)\)\)\s*saturate\(124%\)/
   )
   assert.match(
     styles,
@@ -146,7 +146,7 @@ test('native checkboxes inherit the active dark color scheme and theme accent', 
 test('settings wallpaper is painted once by the overlay root, never per element', () => {
   assert.match(
     styles,
-    /\.settings-preview-page\s*\{[\s\S]*?inset:\s*32px 0 0;[\s\S]*?z-index:\s*2000;[\s\S]*?height:\s*auto/
+    /\.settings-preview-page\s*\{[\s\S]*?inset:\s*var\(--te-titlebar-inset, 45px\) 0 0;[\s\S]*?z-index:\s*2000;[\s\S]*?height:\s*auto/
   )
   // The page stays transparent: per-element wallpaper copies relied on
   // `background-attachment: fixed`, which composited layers silently unpin —

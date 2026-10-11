@@ -73,11 +73,13 @@ function variablesFor(
   )
   const shadow = clamp(0.1 + (darkLabels ? 0.15 : 0.05) + (busy ? 0.11 : 0), 0.1, 0.36)
   const label = darkLabels ? '248 250 252' : '15 23 42'
-  const labelChannels = label.split(' ').map((value) => Number(value))
+  // The substrate follows the backdrop tone; text contrast must never turn a
+  // dark material or its drop shadow into a white veil.
+  const substrate = darkLabels ? [8, 10, 14] : [250, 252, 255]
   const materialWeight = darkLabels ? 0.2 : 0.22
-  const materialRed = Math.round(red * (1 - materialWeight) + labelChannels[0] * materialWeight)
-  const materialGreen = Math.round(green * (1 - materialWeight) + labelChannels[1] * materialWeight)
-  const materialBlue = Math.round(blue * (1 - materialWeight) + labelChannels[2] * materialWeight)
+  const materialRed = Math.round(red * (1 - materialWeight) + substrate[0] * materialWeight)
+  const materialGreen = Math.round(green * (1 - materialWeight) + substrate[1] * materialWeight)
+  const materialBlue = Math.round(blue * (1 - materialWeight) + substrate[2] * materialWeight)
   const surfaceAlpha = density.toFixed(3)
   const shadowAlpha = shadow.toFixed(3)
   const rimAlpha = (darkLabels ? 0.48 : 0.62).toFixed(3)
@@ -89,13 +91,14 @@ function variablesFor(
       '--te-lg-context-rgb': `${red}, ${green}, ${blue}`,
       '--te-lg-context-surface-alpha': surfaceAlpha,
       '--te-lg-context-shadow-alpha': shadowAlpha,
+      '--te-lg-context-diffusion': busy ? '22px' : '16px',
       '--te-lg-context-rim-alpha': rimAlpha,
       '--te-lg-context-label-rgb': label.replaceAll(' ', ', '),
       '--te-lg-context-surface': `rgb(${red} ${green} ${blue} / ${surfaceAlpha})`,
       '--te-lg-context-surface-solid': `rgb(${red} ${green} ${blue})`,
       '--te-lg-context-material': `rgb(${materialRed} ${materialGreen} ${materialBlue} / ${surfaceAlpha})`,
       '--te-lg-context-label': `rgb(${label})`,
-      '--te-lg-context-shadow': `rgb(${label} / ${shadowAlpha})`,
+      '--te-lg-context-shadow': `rgb(0 0 0 / ${shadowAlpha})`,
       '--te-lg-context-rim': `rgb(255 255 255 / ${rimAlpha})`
     }
   }
