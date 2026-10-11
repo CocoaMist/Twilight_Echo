@@ -839,7 +839,7 @@
    artwork corners and clear padding inside the rounded panel. */
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) {
   --te-player-progress-height: 5px;
-  --te-standard-play-height: calc(var(--te-player-play-size, 44px) * 9 / 11);
+  --te-standard-play-height: calc(var(--te-player-play-size, 44px) * 8 / 11);
   --te-standard-progress-label-height: calc(var(--te-font-size-body, 14px) * 11 / 14 * 1.65);
   --te-standard-progress-row-height: max(
     22px,
@@ -851,6 +851,9 @@
   );
   --te-standard-cover-size: calc(var(--te-standard-bar-height) - 20px);
   --te-standard-cover-radius: 10px;
+  /* Reserve the real utility width on narrow windows instead of letting its
+     hit targets spill backwards into the seeking column. */
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 1.8fr) minmax(max-content, 1fr);
   height: var(--te-standard-bar-height);
   border-radius: 20px;
   padding-inline: 9px;
@@ -877,6 +880,19 @@
 
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) .player-controls {
   transform: none;
+  gap: calc(var(--te-player-control-gap, 12px) * 5 / 6);
+}
+
+/* Related controls sit closer together; whitespace marks the next function
+   without adding another glass container around each group. */
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .player-right {
+  gap: 4px;
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact)
+  .player-right
+  > :is(.volume-anchor, .mini-player-btn):not(:first-child) {
+  margin-inline-start: 8px;
 }
 
 .player-bar > .player-left {
@@ -1985,7 +2001,7 @@ html[data-te-motion='off'] .player-bar :deep(.ab-loop-range) {
 
 /* Keep the Windows transport easy to hit without a prominent colored disc. */
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play {
-  width: calc(var(--te-standard-play-height) * 5 / 3);
+  width: calc(var(--te-standard-play-height) * 15 / 8);
   height: var(--te-standard-play-height);
   padding: 8px;
   border: 0;

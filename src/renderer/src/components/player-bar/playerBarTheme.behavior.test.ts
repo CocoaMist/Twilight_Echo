@@ -181,6 +181,10 @@ const mount=(mode,glass=false,live=false)=>{
   shell.dataset.tePlaybarMode=mode
   shell.innerHTML='<div class="player-bar '+(mode==='standard'?'':'player-bar-'+mode)+(glass?' player-bar-glass':'')+'" style="--accent-color:#cc9900;--play-button-color:#cc9900"><div class="player-left"><button class="mini-play-button">Play</button></div><div class="player-center"><div class="player-controls"><button class="ctrl-btn btn-play">Play</button></div><div class="'+(mode==='standard'?'progress-slider-wrap':mode+'-progress-rail')+'"><div class="'+(mode==='standard'?'':mode+'-')+'progress-track"><div class="'+(mode==='standard'?'':mode+'-')+'progress-fill'+(live?' live':'')+'"></div></div></div></div><div class="player-right"></div></div>'
   if(mode==='standard'){
+    shell.querySelector('.player-controls').innerHTML='<button class="ctrl-btn previous-button" aria-label="上一首"></button><button class="ctrl-btn btn-play">Play</button><button class="ctrl-btn next-button" aria-label="下一首"></button>'
+    mountIcon(shell.querySelector('.previous-button'),'previous')
+    mountIcon(shell.querySelector('.next-button'),'next')
+    shell.querySelector('.player-right').innerHTML='<button class="icon-btn favorite-btn" aria-label="喜欢"></button><button class="ctrl-btn mode-btn-right" aria-label="播放模式"></button><div class="volume-anchor"><button class="icon-btn volume-control-button" aria-label="音量控制"></button></div><button class="icon-btn track-menu-button" aria-label="播放列表"></button><button class="icon-btn mini-player-btn" aria-label="迷你播放器"></button><button class="icon-btn desktop-lyrics-btn" aria-label="桌面歌词"></button><button class="icon-btn hifi-toggle-button" aria-label="HiFi"></button>'
     shell.querySelector('.player-left').innerHTML='<div class="player-cover-slot"><img class="player-cover" alt="" /></div>'
     const rail=shell.querySelector('.progress-slider-wrap')
     rail.outerHTML='<div class="progress-area"><span class="time-label">0:24</span>'+rail.outerHTML+'<span class="time-label">2:41</span></div>'
@@ -274,7 +278,7 @@ window.runPlayerThemeTests=async()=>{
       bar.style.setProperty('--play-button-color',cover)
       await settle()
       const rect=button.getBoundingClientRect()
-      expect(rect.width>=rect.height*1.6&&rect.height>=36,'standard transport is a quiet capsule with a usable desktop hit target')
+      expect(rect.width>=rect.height*1.6&&rect.height>=32,'standard transport is a quiet capsule with a usable desktop hit target')
       checkBackground(button,'var(--te-transport-play-surface)','default standard play surface stays neutral across covers')
       const expected=background(button)
       const expectedIcon=getComputedStyle(button).color
@@ -358,12 +362,22 @@ window.checkStandardPlayerGeometry=async()=>{
     const topInset=controls.top-frame.top,bottomInset=frame.bottom-visibleBottom
     expect(Math.abs(topInset-bottomInset)<0.6,'transport and time labels have equal visible top and bottom insets: '+JSON.stringify({tone,glass,fontSize,topInset,bottomInset}))
     expect(Math.abs(controls.top-art.top)<0.6&&Math.abs(visibleBottom-art.bottom)<0.6,'cover and the whole transport group share the same visible height and alignment')
-    if(fontSize===14)expect(frame.height>=75&&frame.height<=77,'default player stays near 76px instead of the previous 88px')
+    if(fontSize===14)expect(frame.height>=71&&frame.height<=73,'default player stays near 72px instead of the previous 76px')
     const seekTarget=bar.querySelector('.progress-slider-wrap').getBoundingClientRect()
     expect(seekTarget.height>=22&&seekTarget.bottom<=frame.bottom,'optical centering preserves the full seek target inside the panel')
     expect(controls.top-frame.top>=9.9,'transport has at least 10px top clearance: '+(controls.top-frame.top))
     expect(frame.bottom-progress.bottom>=7.9,'progress has at least 8px bottom clearance')
     const play=button.getBoundingClientRect(),glyph=button.querySelector('svg').getBoundingClientRect()
+    const previous=bar.querySelector('.previous-button').getBoundingClientRect(),next=bar.querySelector('.next-button').getBoundingClientRect()
+    expect(Math.abs(previous.height-play.height)<0.6&&Math.abs(next.height-play.height)<0.6,'transport controls use the same desktop height')
+    expect(Math.abs((play.left-previous.right)-(next.left-play.right))<0.6,'previous and next have balanced spacing around play')
+    const utilities=[...bar.querySelector('.player-right').children].map(node=>node.getBoundingClientRect())
+    expect(utilities[0].left>=controls.right+4,'secondary controls clear the main transport group')
+    const seeking=bar.querySelector('.progress-area').getBoundingClientRect()
+    expect(utilities[0].left>=seeking.right+4,'utility hit targets cannot intrude into the seeking column at narrow widths')
+    expect(utilities.at(-1).right<=frame.right-9,'trailing controls stay inside the panel')
+    for(let i=1;i<utilities.length;i++)expect(utilities[i].left-utilities[i-1].right>=3.9,'secondary hit targets do not overlap')
+    expect(utilities[2].left-utilities[1].right>=11.9&&utilities[4].left-utilities[3].right>=11.9,'whitespace separates playback preferences, output and queue, and player tools')
     expect(play.width>=play.height*1.6,'play capsule remains horizontal at every width and font size')
     expect(Math.abs(glyph.x+glyph.width/2-play.x-play.width/2)<0.6&&Math.abs(glyph.y+glyph.height/2-play.y-play.height/2)<0.6,'transport glyph stays centered in the capsule: '+JSON.stringify({tone,glass,fontSize,width:innerWidth,play:play.toJSON(),glyph:glyph.toJSON(),display:getComputedStyle(button).display,align:getComputedStyle(button).alignItems}))
   }

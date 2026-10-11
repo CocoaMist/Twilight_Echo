@@ -620,7 +620,7 @@
 /* The same quiet capsule as the standard bar, including explicit theme colors. */
 .home .transport-button.transport-play {
   width: 60px;
-  height: 36px;
+  height: 32px;
   border: none;
   font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
   color: var(--te-player-bar-play-text, var(--te-transport-play-text));
