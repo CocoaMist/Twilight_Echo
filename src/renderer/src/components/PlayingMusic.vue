@@ -1343,7 +1343,7 @@ html[data-te-motion='off'] .backdrop-fluid::before {
 
 .playback-time {
   position: absolute;
-  top: 42px;
+  top: calc(var(--te-titlebar-inset, 45px) + 16px);
   right: 42px;
   z-index: 2;
 }
@@ -1832,7 +1832,7 @@ html[data-te-motion='off'] .backdrop-fluid::before {
 /* Visualizer toggle — same frosted chip style as the time chip */
 .visualizer-toggle-button {
   position: fixed;
-  top: 42px;
+  top: calc(var(--te-titlebar-inset, 45px) + 16px);
   left: 42px;
   width: 40px;
   height: 40px;

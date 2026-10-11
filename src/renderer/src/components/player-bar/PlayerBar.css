@@ -841,16 +841,17 @@
   --te-player-progress-height: 5px;
   --te-standard-bar-height: calc(
     max(var(--te-player-play-size, 44px), var(--te-player-control-size, 32px)) +
-      max(24px, calc(var(--te-font-size-body, 14px) * 11 / 14 * 1.65 + 6px)) + 24px
+      max(24px, calc(var(--te-font-size-body, 14px) * 11 / 14 * 1.65 + 6px)) + 20px
   );
-  --te-standard-cover-size: calc(var(--te-standard-bar-height) - 24px);
+  --te-standard-cover-size: calc(var(--te-standard-bar-height) - 20px);
   --te-standard-cover-radius: 10px;
   height: var(--te-standard-bar-height);
-  padding-inline: 11px;
+  border-radius: 20px;
+  padding-inline: 9px;
 }
 
 .player-bar:not(.player-bar-mini):not(.player-bar-compact) > .player-center {
-  padding-top: 8px;
+  padding-top: 0;
   transform: none;
 }
 

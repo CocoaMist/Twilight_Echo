@@ -303,6 +303,7 @@ window.runProviderFallbackTests = async () => {
       expect(material.display !== 'none' && material.backgroundColor !== 'rgba(0, 0, 0, 0)', 'title tint disappeared: ' + theme + '/' + surface + '/' + transparent);
       expect(material.backdropFilter.includes('blur(20px)'), 'title backdrop lost its blur: ' + theme + '/' + surface + '/' + transparent);
       expect(material.pointerEvents === 'none', 'material blocks title commands');
+      if(theme === 'dark') expect(material.boxShadow === 'none' && material.backgroundImage === 'none', 'dark caption has a pale rim or wash');
     }
     titleProps.value = { streaming: false }; await settle();
     delete document.documentElement.dataset.windowTransparent;

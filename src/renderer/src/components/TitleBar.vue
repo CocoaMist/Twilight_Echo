@@ -209,13 +209,11 @@ function close(): void {
             <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
             <path v-if="doNotDisturb" d="m3 3 18 18" />
           </svg>
-          <span v-if="activeTaskCount" class="notification-task-count" aria-hidden="true">{{
-            activeTaskCount
-          }}</span>
           <Transition name="notification-dot">
             <span
-              v-if="unreadCount && !doNotDisturb"
+              v-if="!doNotDisturb && (unreadCount || activeTaskCount)"
               class="notification-dot"
+              :class="{ 'notification-dot--busy': !unreadCount && activeTaskCount }"
               aria-hidden="true"
             ></span>
           </Transition>
@@ -265,19 +263,6 @@ function close(): void {
 </template>
 
 <style scoped>
-.notification-task-count {
-  position: absolute;
-  bottom: 2px;
-  right: 3px;
-  min-width: 13px;
-  padding: 0 2px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--te-primary-500) 18%, var(--te-app-bg));
-  color: var(--te-settings-text);
-  font-size: 9px;
-  line-height: 13px;
-  font-variant-numeric: tabular-nums;
-}
 .notification-btn {
   position: relative;
 }
@@ -294,12 +279,6 @@ function close(): void {
   stroke-linejoin: round;
   transition: transform 280ms var(--te-ease-soft);
 }
-.notification-btn:hover .notification-icon {
-  transform: rotate(-10deg);
-}
-.notification-btn:active .notification-icon {
-  transform: scale(0.9);
-}
 .notification-dot {
   position: absolute;
   top: calc(50% - 9px);
@@ -308,7 +287,11 @@ function close(): void {
   height: 5px;
   border-radius: 50%;
   background: var(--te-primary-500);
-  box-shadow: 0 0 0 2px var(--te-app-bg);
+  box-shadow: none;
+}
+.notification-dot--busy {
+  background: currentColor;
+  opacity: 0.55;
 }
 .notification-dot-enter-active,
 .notification-dot-leave-active {
@@ -375,6 +358,17 @@ function close(): void {
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--te-titlebar-material-ink) 8%, transparent);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
+}
+
+/* Dark chrome has a soft surface, without a pale outline around the strip. */
+html[data-theme='dark'] .title-bar:not(.title-bar-immersive) .title-bar-background {
+  background: color-mix(in srgb, var(--te-titlebar-material-surface) 72%, transparent);
+  box-shadow: none;
+}
+
+html[data-theme='dark'] .title-bar-liquid .title-bar-background {
+  background: color-mix(in srgb, var(--te-lg-context-surface) 64%, transparent);
+  box-shadow: none;
 }
 
 .title-bar::before {
@@ -719,7 +713,7 @@ html
       color-mix(in srgb, var(--te-lg-context-rim) 18%, transparent),
       transparent 82%
     ),
-    color-mix(in srgb, var(--te-lg-context-surface) 56%, transparent) !important;
+    color-mix(in srgb, var(--te-lg-context-surface) 56%, transparent);
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--te-lg-context-label) 8%, transparent);
   backdrop-filter: blur(16px) saturate(124%);
   -webkit-backdrop-filter: blur(16px) saturate(124%);
@@ -732,7 +726,7 @@ html
       color-mix(in srgb, var(--te-lg-context-rim) 22%, transparent),
       transparent 82%
     ),
-    var(--te-lg-context-material) !important;
+    var(--te-lg-context-material);
 }
 
 .title-bar-liquid :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn) {

@@ -451,7 +451,15 @@ test('visualizer toggle sits top-left with the frosted time-chip style', () => {
     source,
     /:class="\{ 'visualizer-toggle-button--close': viewMode === 'visualizer' \}"/
   )
-  assert.match(source, /\.visualizer-toggle-button \{[\s\S]*top: 42px[\s\S]*left: 42px/)
+  for (const selector of ['visualizer-toggle-button', 'playback-time']) {
+    assert.match(
+      source,
+      new RegExp(
+        `\\.${selector} \\{[\\s\\S]*?top: calc\\(var\\(--te-titlebar-inset, 45px\\) \\+ 16px\\)`
+      )
+    )
+  }
+  assert.match(source, /\.visualizer-toggle-button \{[\s\S]*left: 42px/)
   assert.match(source, /\.visualizer-toggle-button \{[\s\S]*border-radius: 999px/)
   assert.match(
     source,

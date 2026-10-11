@@ -4,7 +4,7 @@ import type { AppSettings, SettingsSnapshot } from '../core/types'
 import { createSettingsSnapshot, normalizeAppSettings, writeAppSettings } from '../core/settings'
 import type { AudioOutputState } from '../../shared/audioEngineTypes.ts'
 import { applyEffectiveAudioProcessingToEngine } from '../audio/state.ts'
-import { getWindowBackgroundColor } from './windowAppearance.ts'
+import { getWindowBackgroundColor, syncWindowFrameColor } from './windowAppearance.ts'
 import { ensureMusicCacheDirectories } from '../cache/ncmCache'
 import { applyDiscordRpcSetting } from '../integrations/discord'
 import {
@@ -42,6 +42,14 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
     Object.prototype.hasOwnProperty.call(patch, 'theme') ||
     Object.prototype.hasOwnProperty.call(patch, 'appBackground')
   runtime.appSettings = nextSettings
+  if (shouldUpdateWindowBackground && runtime.mainWindow) {
+    syncWindowFrameColor(
+      runtime.mainWindow,
+      runtime.appSettings,
+      nativeTheme.shouldUseDarkColors,
+      nativeTheme.shouldUseHighContrastColors
+    )
+  }
   if (shouldUpdateWindowBackground && !runtime.appSettings.windowTransparency) {
     runtime.mainWindow?.setBackgroundColor(
       getWindowBackgroundColor(runtime.appSettings, nativeTheme.shouldUseDarkColors)
