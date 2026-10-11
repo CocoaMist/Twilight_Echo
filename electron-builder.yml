@@ -31,6 +31,11 @@ files:
   - '!node_modules/**/*.md'
   - '!node_modules/@neteasecloudmusicapienhanced/api/public/**'
 extraResources:
+  - from: resources/automix-stems
+    to: automix-stems
+    filter:
+      - worker.py
+      - arrangement.py
   - from: resources/remote
     to: remote
     filter:

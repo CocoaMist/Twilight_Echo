@@ -1,11 +1,14 @@
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, rm, writeFile, open, readdir } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { AutoMixSelection } from '../../shared/twilightAutoMix.ts'
-import { normalizeAutoMixStemCacheMiB } from '../../shared/twilightAutoMix.ts'
+import {
+  normalizeAutoMixStemCacheMiB,
+  TWILIGHT_AUTOMIX_STEM_ARRANGEMENT_VERSION
+} from '../../shared/twilightAutoMix.ts'
 
 // A bounded read on one handle binds the digest and length to the same file.
 export async function validateStemMaterial(
@@ -40,6 +43,27 @@ export async function validateStemMaterial(
 export const STEM_CHECKPOINT_SHA256 =
   '8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4'
 export const STEM_MODEL_VERSION = 'demucs-4.0.1:955717e8'
+export function stemResultMatchesRun(
+  result: {
+    runId?: unknown
+    stemMaterials?: {
+      selectionId?: unknown
+      version?: unknown
+      modelVersion?: unknown
+      arrangementVersion?: unknown
+    }
+  },
+  selection: AutoMixSelection,
+  runId: string
+): boolean {
+  return (
+    result.runId === runId &&
+    result.stemMaterials?.selectionId === selection.selectionId &&
+    result.stemMaterials?.version === 2 &&
+    result.stemMaterials?.modelVersion === STEM_MODEL_VERSION &&
+    result.stemMaterials?.arrangementVersion === TWILIGHT_AUTOMIX_STEM_ARRANGEMENT_VERSION
+  )
+}
 export function stemBudgetMs(selectionStart: number, position: number): number {
   return Math.max(0, Math.min(90_000, (selectionStart - position - 2) * 1000 - 20_000))
 }
@@ -62,18 +86,21 @@ export class AutoMixStemService {
   private enabled: () => boolean
   private reportResources?: (resources: Record<string, unknown>) => void
   private cacheMiB: () => unknown
+  private workerDirectory: () => string
   constructor(
     cacheDirectory: string,
     pack: () => string | null,
     enabled: () => boolean,
     reportResources?: (resources: Record<string, unknown>) => void,
-    cacheMiB: () => unknown = () => 512
+    cacheMiB: () => unknown = () => 512,
+    workerDirectory: () => string = () => resolve('resources/automix-stems')
   ) {
     this.cacheDirectory = cacheDirectory
     this.pack = pack
     this.enabled = enabled
     this.reportResources = reportResources
     this.cacheMiB = cacheMiB
+    this.workerDirectory = workerDirectory
   }
   async select(
     request: string,
@@ -121,6 +148,8 @@ export class AutoMixStemService {
     try {
       const directory = resolve(selection.stemDirectory)
       if (!this.directories.has(directory)) throw new Error('invalid_material_ticket')
+      const worker = join(this.workerDirectory(), 'worker.py')
+      if (!existsSync(worker)) throw new Error('stem_worker_unavailable')
       const manifest = JSON.parse(await readFile(join(pack, 'manifest.json'), 'utf8'))
       const lock = JSON.parse(await readFile(join(pack, 'model.lock.json'), 'utf8'))
       if (
@@ -136,32 +165,32 @@ export class AutoMixStemService {
       for (const name of ['result.json', 'current-mixed.f32', 'next-mixed.f32'])
         await rm(join(directory, name), { force: true })
       const request = join(directory, 'request.json')
+      const runId = randomUUID()
       await writeFile(
         request,
         JSON.stringify({
           selection,
+          runId,
+          arrangementVersion: TWILIGHT_AUTOMIX_STEM_ARRANGEMENT_VERSION,
+          packDirectory: pack,
           cacheDirectory: this.cacheDirectory,
           cacheBudgetBytes: normalizeAutoMixStemCacheMiB(this.cacheMiB()) * 1024 ** 2
         }),
         'utf8'
       )
       await new Promise<void>((resolveTask, reject) => {
-        const child = spawn(
-          join(pack, 'runtime', 'python.exe'),
-          [join(pack, 'worker.py'), request],
-          {
-            cwd: pack,
-            windowsHide: true,
-            stdio: ['ignore', 'ignore', 'pipe'],
-            env: {
-              ...process.env,
-              PYTHONNOUSERSITE: '1',
-              PYTHONUTF8: '1',
-              PYTHONDONTWRITEBYTECODE: '1',
-              OPENBLAS_NUM_THREADS: '1'
-            }
+        const child = spawn(join(pack, 'runtime', 'python.exe'), [worker, request], {
+          cwd: pack,
+          windowsHide: true,
+          stdio: ['ignore', 'ignore', 'pipe'],
+          env: {
+            ...process.env,
+            PYTHONNOUSERSITE: '1',
+            PYTHONUTF8: '1',
+            PYTHONDONTWRITEBYTECODE: '1',
+            OPENBLAS_NUM_THREADS: '1'
           }
-        )
+        })
         let settled = false
         let pendingError: Error | undefined
         const finish = (error?: Error) => {
@@ -202,11 +231,7 @@ export class AutoMixStemService {
         this.reportResources?.({ ...(result.resources ?? {}), reason: result.reason })
         throw new Error(/^[a-z_]{1,80}$/.test(result.reason) ? result.reason : 'stem_worker_failed')
       }
-      if (
-        result.stemMaterials?.selectionId !== selection.selectionId ||
-        result.stemMaterials?.version !== 2 ||
-        result.stemMaterials?.modelVersion !== STEM_MODEL_VERSION
-      )
+      if (!stemResultMatchesRun(result, selection, runId))
         throw new Error('invalid_material_ticket')
       for (const [deck, prefix] of ['current', 'next'].entries()) {
         const material = result.stemMaterials[prefix],
@@ -233,7 +258,14 @@ export class AutoMixStemService {
       // and worker-owned temporary cache writes; native inputs remain reusable.
       const directory = resolve(selection.stemDirectory)
       if (this.directories.has(directory) && !completed) {
-        for (const name of ['current-mixed.f32', 'next-mixed.f32', 'result.json', 'request.json'])
+        for (const name of [
+          'current-mixed.f32',
+          'next-mixed.f32',
+          'current-stems.tmp',
+          'next-stems.tmp',
+          'result.json',
+          'request.json'
+        ])
           await rm(join(directory, name), { force: true }).catch(() => {})
       }
       for (const name of await readdir(this.cacheDirectory).catch(() => [] as string[]))

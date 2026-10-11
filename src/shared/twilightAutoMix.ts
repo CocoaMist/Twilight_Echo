@@ -6,6 +6,7 @@ export function normalizeAutoMixStemCacheMiB(value: unknown): AutoMixStemCacheMi
 }
 export const TWILIGHT_AUTOMIX_RULE_VERSION = 'twilight-rules-4'
 export const TWILIGHT_AUTOMIX_MATERIAL_VERSION = 2
+export const TWILIGHT_AUTOMIX_STEM_ARRANGEMENT_VERSION = 'twilight-stem-arrangement-1'
 export interface AutoMixSelection {
   ok: boolean
   reason?: string
@@ -20,6 +21,8 @@ export interface AutoMixSelection {
   outputFrames?: number
   currentRate?: number
   nextRate?: number
+  mode?: 'natural' | 'dj'
+  nextGain?: number
   strategy?: string
   stemDirectory?: string
   inputs?: {

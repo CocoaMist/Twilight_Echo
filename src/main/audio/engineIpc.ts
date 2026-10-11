@@ -616,7 +616,12 @@ async function initializeAudioEngineRuntime(): Promise<void> {
       ]),
     () => runtime.appSettings.autoMixStemMode === 'auto',
     (resources) => audioDiagnosticRecorder?.record('automix-stems', resources),
-    () => runtime.appSettings.autoMixStemCacheMiB
+    () => runtime.appSettings.autoMixStemCacheMiB,
+    () =>
+      join(
+        app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'),
+        'automix-stems'
+      )
   )
   mixEngine.setAutoMixCoordinator(
     new TwilightAutoMixCoordinator({

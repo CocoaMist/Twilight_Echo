@@ -53,6 +53,9 @@ int main(int argc, char **argv) {
   if (selected < 0) return 2;
   ta_am_prepared *prepared = NULL;
   if (selected && !selection_only) {
+    /* Evaluation-only material route: production skips bass EQ when BOTH
+     * decks have validated separated material. Never double-apply it here. */
+    spec.stem_enhanced = getenv("TA_AM_PROBE_STEM_ENHANCED") != NULL;
     size_t an = 0, bn = 0;
     float *x = pcm(argv[3], bind.channels, bind.sample_rate, &an);
     float *y = pcm(argv[5], bind.channels, bind.sample_rate, &bn);
@@ -67,6 +70,7 @@ int main(int argc, char **argv) {
   fprintf(report, "{\"intelligent\":%s,\"reason\":\"%s\"", selected ? "true" : "false", why);
   if (selection_only) fprintf(report, ",\"selectionOnly\":true");
   if (selected) {
+    fprintf(report, ",\"stemEnhanced\":%s", spec.stem_enhanced ? "true" : "false");
     fprintf(report, ",\"strategy\":\"%s\"", ta_am_transition_name(spec.kind));
     fprintf(report, ",\"effect\":%d,\"outputFrames\":%llu,\"currentStart\":%llu,\"currentEnd\":%llu,"
         "\"nextStart\":%llu,\"nextEnd\":%llu,\"currentRate\":%.9g,\"nextRate\":%.9g,"

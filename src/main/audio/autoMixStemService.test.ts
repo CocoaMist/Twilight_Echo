@@ -4,7 +4,12 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, open, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { validateStemMaterial, stemBudgetMs } from './autoMixStemService.ts'
+import {
+  validateStemMaterial,
+  stemBudgetMs,
+  stemResultMatchesRun,
+  STEM_MODEL_VERSION
+} from './autoMixStemService.ts'
 import { normalizeAutoMixStemCacheMiB } from '../../shared/twilightAutoMix.ts'
 
 test('legacy and unsupported stem cache settings migrate to 512 MiB', () => {
@@ -57,4 +62,48 @@ test('stem budget preserves native preparation and submission time', () => {
   assert.equal(stemBudgetMs(100, 0), 78000)
   assert.equal(stemBudgetMs(200, 0), 90000)
   assert.equal(stemBudgetMs(22, 0), 0)
+})
+
+test('stem tickets reject old arrangement policies and stale worker runs', () => {
+  const selection = { ok: true, selectionId: 9 }
+  const result = {
+    runId: 'current-run',
+    stemMaterials: {
+      selectionId: 9,
+      version: 2,
+      modelVersion: STEM_MODEL_VERSION,
+      arrangementVersion: 'twilight-stem-arrangement-1'
+    }
+  }
+  assert.equal(stemResultMatchesRun(result, selection, 'current-run'), true)
+  assert.equal(stemResultMatchesRun(result, selection, 'previous-run'), false)
+  assert.equal(
+    stemResultMatchesRun(result, { ...selection, selectionId: 10 }, 'current-run'),
+    false
+  )
+  for (const arrangementVersion of [undefined, 'fixed-duck-v2', 'twilight-stem-arrangement-2'])
+    assert.equal(
+      stemResultMatchesRun(
+        { ...result, stemMaterials: { ...result.stemMaterials, arrangementVersion } },
+        selection,
+        'current-run'
+      ),
+      false
+    )
+  assert.equal(
+    stemResultMatchesRun(
+      { ...result, stemMaterials: { ...result.stemMaterials, version: 1 } },
+      selection,
+      'current-run'
+    ),
+    false
+  )
+  assert.equal(
+    stemResultMatchesRun(
+      { ...result, stemMaterials: { ...result.stemMaterials, modelVersion: 'different-model' } },
+      selection,
+      'current-run'
+    ),
+    false
+  )
 })

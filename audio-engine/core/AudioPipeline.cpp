@@ -1873,6 +1873,7 @@ std::string AudioPipeline::selectAutoMix(const std::string& json) {
       << ",\"nextStartSeconds\":" << static_cast<double>(spec.next_start) / spec.binding.sample_rate
       << ",\"nextEndSeconds\":" << static_cast<double>(spec.next_end) / spec.binding.sample_rate
       << ",\"outputFrames\":" << spec.output_frames << ",\"currentRate\":" << spec.current_rate
+      << ",\"mode\":\"" << (spec.mode == TA_AM_DJ ? "dj" : "natural") << "\",\"nextGain\":" << spec.next_gain
       << ",\"nextRate\":" << spec.next_rate << ",\"sampleRate\":" << spec.binding.sample_rate
       << ",\"channels\":" << spec.binding.channels << ",\"strategy\":\""
       << ta_am_transition_name(spec.kind) << "\"" << inputJson << "}";
@@ -1965,6 +1966,7 @@ bool AudioPipeline::prepareAutoMix(const std::string& json, std::string* error) 
   if (!materials.empty() && ticket && !ticket->materialDirectory.empty() && request.binding.channels <= 2 &&
       json_utils::fieldNumber(materials, "version").value_or(0) == 2 &&
       json_utils::fieldString(materials, "modelVersion").value_or("") == "demucs-4.0.1:955717e8" &&
+      json_utils::fieldString(materials, "arrangementVersion").value_or("") == "twilight-stem-arrangement-1" &&
       json_utils::fieldNumber(materials, "selectionId").value_or(0) == selectedId) {
     for (unsigned d = 0; d < 2; d++) {
       const auto entry = json_utils::fieldObject(materials, d ? "next" : "current");
@@ -1985,6 +1987,8 @@ bool AudioPipeline::prepareAutoMix(const std::string& json, std::string* error) 
       generation->materialPath[0].clear(); generation->materialPath[1].clear();
       generation->materialFallback = "stems_material_invalid_fallback";
     }
+  } else if (!materials.empty()) {
+    generation->materialFallback = "stems_policy_invalid_fallback";
   }
   if (request.has_selection) request.selection.stem_enhanced = !generation->materialPath[0].empty() && !generation->materialPath[1].empty();
   const ta_am_job_io io{AutoMixGeneration::decode, AutoMixGeneration::continueAt, AutoMixGeneration::releaseDecoded, AutoMixGeneration::materialReady};
