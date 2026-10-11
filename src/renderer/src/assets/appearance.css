@@ -189,6 +189,7 @@
   html[data-te-surface-material='transparent']
     :is(
       .player-bar-warp,
+      .player-bar-optics,
       .player-bar-specular,
       .player-bar-rim,
       .liquid-glass-warp,

@@ -20,7 +20,8 @@ test('Bohr reflections survive body diffusion, preserve input, and clean up with
     const read = (path: string): Promise<string> => readFile(join(root, path), 'utf8')
     const global =
       (await read('src/renderer/src/assets/base.css')) +
-      (await read('src/renderer/src/assets/bohr.css'))
+      (await read('src/renderer/src/assets/bohr.css')) +
+      (await read('src/renderer/src/assets/appearance.css'))
     const styles = [
       await read('src/renderer/src/components/player-bar/PlayerBar.css'),
       await read('src/renderer/src/components/settings-page/SettingsPage.css'),
@@ -189,6 +190,13 @@ window.runBohrTests=async()=>{
   window.checkBohrAccessibility()
   if(disabled==='class')document.body.classList.remove('te-no-blur');else root.removeAttribute(disabled)
  }
+ root.setAttribute('data-te-surface-material','transparent')
+ expect(getComputedStyle(optics).display==='none','transparent material removes the optical shoulder and rim')
+ expect(getComputedStyle(document.querySelector('.player-bar-warp')).display==='none','transparent material removes refraction')
+ expect(getComputedStyle(bar).boxShadow==='none','transparent material removes elevation')
+ expect(bar.getBoundingClientRect().height===geometry.height,'transparent material preserves controls and layout')
+ root.setAttribute('data-te-surface-material','liquidGlass')
+ expect(getComputedStyle(optics).display!=='none','switching back restores the optical shoulder')
 }
 window.checkBohrAccessibility=()=>expect(getComputedStyle(optics).display==='none','accessibility removes decorative reflections')
 window.prepareBohrEvidence=async(tone)=>{

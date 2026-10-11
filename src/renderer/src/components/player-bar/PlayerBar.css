@@ -856,6 +856,9 @@
   grid-template-columns: minmax(0, 1fr) minmax(220px, 1.8fr) minmax(max-content, 1fr);
   height: var(--te-standard-bar-height);
   border-radius: 20px;
+  /* Reserve the border's layout space without painting a second hard contour. */
+  border-color: transparent;
+  box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation);
   padding-inline: 9px;
 }
 
@@ -928,11 +931,8 @@ html[data-theme='pureWhite']
     .player-bar-glass
   ) {
   background: rgb(250 251 253 / 80%);
-  border-color: rgb(15 23 42 / 9%);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 65%),
-    var(--te-bohr-contact),
-    var(--te-bohr-elevation);
+  border-color: transparent;
+  box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation);
   backdrop-filter: blur(24px) saturate(124%);
   -webkit-backdrop-filter: blur(24px) saturate(124%);
 }
@@ -943,7 +943,7 @@ html[data-theme='dark']
     .player-bar-compact
   ) {
   background: rgb(16 17 19 / 72%);
-  border-color: rgb(0 0 0 / 24%);
+  border-color: transparent;
   box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation);
   backdrop-filter: blur(24px) saturate(124%);
   -webkit-backdrop-filter: blur(24px) saturate(124%);
@@ -2353,9 +2353,8 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
     var(--te-bohr-shoulder) 0,
     transparent 7px,
     transparent calc(100% - 4px),
-    var(--te-bohr-edge) 100%
+    color-mix(in srgb, var(--te-bohr-edge) 50%, transparent) 100%
   );
-  /* The single border below supplies the lip; no coincident inset bright line. */
 }
 
 .player-bar-optics::before {
@@ -2363,11 +2362,12 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  /* Native rounded borders have one antialiased contour. Subtracting two masks
-     produced a stepped one-pixel ring, especially at fractional display scales. */
-  border: 1px solid var(--te-bohr-shoulder);
-  border-top-color: var(--te-bohr-light);
-  border-bottom-color: var(--te-bohr-edge);
+  /* A top/side/bottom border changes colour abruptly at the corner bisectors.
+     Directional inset light spreads across the curve and falls off continuously;
+     its blur affects decoration only, never artwork, labels or controls. */
+  box-shadow:
+    inset 0 0.75px 1.5px var(--te-bohr-light),
+    inset 0 -0.75px 2px color-mix(in srgb, var(--te-bohr-edge) 50%, transparent);
 }
 
 .player-bar-liquid .player-bar-optics::after {
