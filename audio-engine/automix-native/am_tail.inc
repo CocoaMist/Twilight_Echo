@@ -29,10 +29,10 @@ static int tail_sparse(const ta_am_features *f, double start, double end) {
   }
   return count && rises * 1000 <= count * 25 && bass_rises * 1000 <= count * 40;
 }
-static int tail_envelope(const ta_am_features *a, const ta_am_features *b,
+static int unaligned_envelope(const ta_am_features *a, const ta_am_features *b,
                          double start, double begin, unsigned seconds,
                          float gain, float entry, float exit,
-                         float *ripple_out, float *joint_out) {
+                         int release, float *ripple_out, float *joint_out) {
   double bins[24] = {0};
   unsigned samples[24] = {0}, joint = 0, count = 0;
   double audible = pow(10, fmax(-55, fmax(entry, exit) - 24) / 10.);
@@ -51,7 +51,7 @@ static int tail_envelope(const ta_am_features *a, const ta_am_features *b,
     bins[bin] += ax + by; samples[bin]++; count++;
     joint += ax >= audible && by >= audible;
   }
-  if (count < seconds * 50 - 1 || joint * 2 < count) return 0;
+  if (count < seconds * 50 - 1 || (release ? joint < 50 : joint * 2 < count)) return 0;
   float ripple = 0;
   for (unsigned i = 0; i < seconds; i++) {
     if (!samples[i]) return 0;
@@ -103,7 +103,7 @@ static int select_tail_overlap(const ta_am_features *a, const ta_am_features *b,
       float adb = region_rms(a, start, end, k), bdb = region_rms(b, starts[s], finish, k);
       float gain = fmaxf(.5f, fminf(2, powf(10, (adb - bdb) / 20)));
       float ripple, joint;
-      if (!tail_envelope(a, b, start, starts[s], seconds, gain, entry, exit, &ripple, &joint)) continue;
+      if (!unaligned_envelope(a, b, start, starts[s], seconds, gain, entry, exit, 0, &ripple, &joint)) continue;
       // Duration alone is no reward: audible overlap and envelope continuity
       // compete with vocal activity and skipped instrumental content.
       float score = 2 - ripple * .2f + joint * .025f - (av + bv) * 2 -

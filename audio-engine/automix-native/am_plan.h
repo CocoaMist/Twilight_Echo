@@ -16,7 +16,8 @@ typedef enum {
 typedef enum {
   TA_AM_BEAT_ALIGNED = 0,
   TA_AM_CONTENT_BOUNDARY = 1,
-  TA_AM_TAIL_OVERLAP = 2
+  TA_AM_TAIL_OVERLAP = 2,
+  TA_AM_RELEASE_BOUNDARY = 3
 } ta_am_transition_kind;
 const char *ta_am_transition_name(ta_am_transition_kind kind);
 typedef struct {

@@ -20,6 +20,7 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'automix.phase.degraded': '本次使用常规播放',
   'automix.strategy.beat-aligned': '节拍对齐过渡',
   'automix.strategy.content-boundary': '非人声尾奏过渡（保持原速）',
+  'automix.strategy.release-boundary': '尾音衰减过渡（保持原速）',
   'automix.strategy.tail-overlap': '尾奏长交接（保持原速）',
   'automix.reason.waiting': '等待新的过渡准备',
   'automix.reason.beats': '节拍不够稳定，暂不对拍',

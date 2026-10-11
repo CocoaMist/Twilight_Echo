@@ -597,7 +597,7 @@ void verifyAutoMixTransport(const std::filesystem::path& root) {
           ",\"currentFeatures\":" + autoMixFeaturesJson(fa, ah) +
           ",\"nextFeatures\":" + autoMixFeaturesJson(fb, bh) + "}";
 
-      const auto selectRequest = request.substr(0, request.size() - 1) + ",\"ruleVersion\":\"twilight-rules-4\"}";
+      const auto selectRequest = request.substr(0, request.size() - 1) + ",\"ruleVersion\":\"twilight-rules-5\"}";
       const auto oldRuleRequest = request.substr(0, request.size() - 1) + ",\"ruleVersion\":\"twilight-rules-3\"}";
       assert(!json_utils::fieldBool(pipeline.selectAutoMix(oldRuleRequest), "ok").value_or(false));
       auto selection = pipeline.selectAutoMix(selectRequest);

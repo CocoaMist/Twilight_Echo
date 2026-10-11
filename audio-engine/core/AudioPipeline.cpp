@@ -1757,7 +1757,7 @@ std::string AudioPipeline::selectAutoMix(const std::string& json) {
   const auto currentJson = json_utils::fieldObject(json, "currentFeatures");
   const auto nextJson = json_utils::fieldObject(json, "nextFeatures");
   if (json.size() > 3 * 1024 * 1024 || !AutoMixJsonValidation(json).valid() ||
-      json_utils::fieldString(json, "ruleVersion").value_or("") != "twilight-rules-4" ||
+      json_utils::fieldString(json, "ruleVersion").value_or("") != "twilight-rules-5" ||
       !parseAutoMixWindows(json, "currentWindows", "currentFeatures", &request.current, &error) ||
       !parseAutoMixWindows(json, "nextWindows", "nextFeatures", &request.next, &error))
     return "{\"ok\":false,\"reason\":\"invalid_analysis_windows\"}";

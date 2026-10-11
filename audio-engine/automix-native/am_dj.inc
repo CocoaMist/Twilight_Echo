@@ -26,6 +26,7 @@ static float onset_density(const ta_am_features *f, double start, double end) {
   return count ? (float)active / count : 0;
 }
 #include "am_tail.inc"
+#include "am_release.inc"
 static int select_dj_phrases(const ta_am_features *a, const ta_am_features *b,
                              const ta_am_binding *bind, const ta_am_kernels *k,
                              uint64_t minimum_start, ta_am_plan_spec *out) {
@@ -151,6 +152,13 @@ int ta_am_select_after(const ta_am_features *a, const ta_am_features *b,
       content_boundary(a, b, bind, k, fmin(a->duration_seconds, a->end_seconds) - silence_boundary(a, 0),
         silence_boundary(b, 1), minimum_start, out)) {
     out->mode = TA_AM_DJ; reason_text(reason, n, ""); result = 1;
+  }
+  if (result == 0 && valid && (mode == TA_AM_NATURAL || mode == TA_AM_DJ) &&
+      a->end_seconds >= a->duration_seconds - .021 && b->start_seconds <= .001 &&
+      a->duration_seconds >= 12 && b->duration_seconds >= 12 &&
+      a->peak >= .0001f && b->peak >= .0001f &&
+      select_release_boundary(a, b, mode, bind, k, minimum_start, out)) {
+    reason_text(reason, n, ""); result = 1;
   }
   if (result == 1 && out->current_start < minimum_start) {
     reason_text(reason, n, "preparation_missed_boundary"); return 0;

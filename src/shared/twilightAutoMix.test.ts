@@ -31,6 +31,10 @@ test('AutoMix status explains fallback and cancellation without exposing raw int
   )
   assert.equal(autoMixStatusKeys('ready', '', 'unknown').strategy, undefined)
   assert.equal(
+    autoMixStatusKeys('ready', '', 'release-boundary').strategy,
+    'automix.strategy.release-boundary'
+  )
+  assert.equal(
     autoMixStatusKeys('degraded', 'unknown_native_failure').reason,
     'automix.reason.failed'
   )
