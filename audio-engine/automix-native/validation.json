@@ -1323,5 +1323,94 @@
       "formal publication"
     ],
     "previousEvaluationRecordsPreserved": true
+  },
+  "evaluationV6": {
+    "version": "1.3.0-automix.6",
+    "ruleVersion": "twilight-rules-4",
+    "materialVersion": 2,
+    "arrangementVersion": "twilight-stem-arrangement-1",
+    "sourceCommit": "cb04cb4de9d7b8d7cca815159e0161a05ea07a9a",
+    "releaseReady": false,
+    "defaultMode": "off",
+    "referenceSourceTransplanted": false,
+    "corpusSha256": "ee2c8f460725307331ee76fe866ef0a4b1d9ea332083eb6b8fc595827cb31520",
+    "basePlansRechecked": 72,
+    "baseSummary": {
+      "natural": 26,
+      "dj": 34,
+      "djLong": 22
+    },
+    "stemUniquePairs": 9,
+    "stemTransitions": 10,
+    "naturalStemTransitions": 2,
+    "djStemTransitions": 8,
+    "stemCoverageNotInferredFromBaseCounts": true,
+    "stemFallbacks": 0,
+    "referenceModelsImported": false,
+    "compatibleEnhancementPack": "2.2",
+    "checkpointSha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+    "packWorkerUnmodifiedSha256": "bbc20fb23540b8519c2c93b18e9513ddafa134b22594a8fe479b950c024d186b",
+    "workers": {
+      "worker.py": "45fc90d3d7b25efff1cd7317994fc28876270d6be61c7ecf06c4cb7925fbec9e",
+      "arrangement.py": "53f91e9184328161407d2c48e5b3f94a74b02e7c9d2e27329042519645aa43c5"
+    },
+    "archive": {
+      "file": "TwilightEcho-1.3.0-automix.6-Windows-x64.zip",
+      "bytes": 189519908,
+      "sha256": "a73cb6695ff773b909d7115b5cc7e2a3c8e5d278a30221ac22a1264e79a9e086",
+      "integrityPassed": true
+    },
+    "checks": {
+      "fullMinGwCTestPassed": 47,
+      "fullMinGwCTestSkipped": 1,
+      "skip": "existing ASIO ABI cross-DLL environment fixture",
+      "stemRuleTestsPassed": 12,
+      "relatedNodeTestsPassed": 37,
+      "audioManagerTestsPassed": 445,
+      "typecheckBuildPassed": true,
+      "lintPassed": true,
+      "nativeStemRenders": 90,
+      "wavSha256Verified": 30,
+      "realWasapiStemHandoffs": 2,
+      "nativeBadMaterialFallbackCases": 3,
+      "serviceLifecycleScenarios": 10,
+      "cacheWithoutTorchCudaPassed": true,
+      "realCpuNoCachePassed": true,
+      "packagedAppAndRestorePassed": true,
+      "packagedWorkerSha256Passed": true,
+      "developmentRuntimeReplacedAndLoaded": true,
+      "pageDesktopMobileAndSwitchPassed": true
+    },
+    "developmentRuntime": {
+      "passed": true,
+      "staged": true,
+      "ruleVersion": "twilight-rules-4",
+      "runtime": "D:/Project/Twilight_Echo/resources/audio-engine",
+      "nativeFiles": {
+        "twilight-audio-engine.dll": "49dfa51d2dc41bba13abefb69b6145115f369563ded0606b1fd131ccd739179c",
+        "twilight_audio_node.node": "01b75d655d6d61bf9d24a3f8a5456f20104b6fbbcc5a97649f02cce38ebace24",
+        "twilight-asio-helper.exe": "015ea53ba7021ca0e9ed6566661fd93246860b564cc6741942c46eb6acba5cf7"
+      },
+      "currentRuleProbe": {
+        "ok": false,
+        "reason": "next_source_not_ready"
+      },
+      "staleRuleProbe": {
+        "ok": false,
+        "reason": "invalid_analysis_windows"
+      },
+      "runtimeLoaded": true,
+      "productionWindowsParsed": true
+    },
+    "pendingGates": [
+      "human listening",
+      "preannotated suitable-pair coverage",
+      "all 36 pairs stem evaluation",
+      "24-hour application/device stress",
+      "real online account acceptance",
+      "formal publication"
+    ],
+    "previousEvaluationRecordsPreserved": true,
+    "pushed": false
   }
 }
