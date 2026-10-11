@@ -12,7 +12,9 @@ function parse(argv) {
   const options = {}
   for (let index = 0; index < argv.length; index += 2) {
     assert.ok(
-      ['--package', '--output', '--profile', '--restore', '--playback'].includes(argv[index])
+      ['--package', '--output', '--profile', '--restore', '--playback', '--stems'].includes(
+        argv[index]
+      )
     )
     assert.ok(argv[index + 1])
     options[argv[index].slice(2)] = argv[index + 1]
@@ -47,7 +49,9 @@ async function runElectron(options) {
   const archive = path.join(resources, 'app.asar')
   app.setPath('userData', path.resolve(options.profile))
   app.setAppPath(archive)
-  process.resourcesPath = resources
+  // Electron exposes a read-only but configurable property. Assignment silently
+  // leaves the harness runtime path in place instead of the packaged resources.
+  Object.defineProperty(process, 'resourcesPath', { value: resources })
   // Only window visibility is adapted; the actual application owns all IPC,
   // settings, scheduling, preload security and native audio-service calls.
   BrowserWindow.prototype.show = function () {
@@ -128,6 +132,12 @@ async function runElectron(options) {
       'window.api.audioEngine.getAutoMixStemCapabilities(true)'
     )
     assert.ok(['missing', 'ready', 'unavailable'].includes(report.stemCapabilities.status))
+    if (options.stems === 'missing') assert.equal(report.stemCapabilities.status, 'missing')
+    if (options.stems === 'gpu' || options.stems === 'cpu') {
+      assert.equal(report.stemCapabilities.status, 'ready')
+      assert.equal(report.stemCapabilities.cpu, true)
+      assert.equal(report.stemCapabilities.gpu, options.stems === 'gpu')
+    }
     if (process.env.TWILIGHT_AUTOMIX_STEM_PACK)
       assert.equal(report.stemCapabilities.status, 'ready')
     report.stemPreferences = []
@@ -455,7 +465,8 @@ function runNode(options) {
         profile,
         '--restore',
         restore,
-        ...(options.playback ? ['--playback', path.resolve(options.playback)] : [])
+        ...(options.playback ? ['--playback', path.resolve(options.playback)] : []),
+        ...(options.stems ? ['--stems', options.stems] : [])
       ],
       {
         cwd: process.cwd(),
