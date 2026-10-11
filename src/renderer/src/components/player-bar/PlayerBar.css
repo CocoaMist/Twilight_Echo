@@ -1096,6 +1096,13 @@ html[data-te-effects-mode='reduced']
     filter 0.22s;
   box-shadow: 0 14px 32px rgba(15, 23, 42, 0.12);
 }
+/* The slot owns the rounded crop, including hover motion. Rounding its image a
+   second time multiplies edge coverage and darkens partially covered pixels. */
+.player-cover-slot img.player-cover,
+.player-cover-slot :deep(img.player-cover),
+.player-cover-slot > .player-cover-placeholder {
+  border-radius: 0;
+}
 .player-cover-slot:hover img.player-cover,
 .player-cover-slot:hover :deep(img.player-cover),
 .player-cover-slot:hover .player-cover {
@@ -2339,7 +2346,8 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
-  overflow: hidden;
+  /* Each decoration already paints its rounded contour or has a coverage map.
+     An overflow clip here multiplies that antialiasing coverage a second time. */
   background: linear-gradient(
     180deg,
     var(--te-bohr-shoulder) 0,
@@ -2347,7 +2355,7 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
     transparent calc(100% - 4px),
     var(--te-bohr-edge) 100%
   );
-  box-shadow: inset 0 1px 0.5px var(--te-bohr-light);
+  /* The single border below supplies the lip; no coincident inset bright line. */
 }
 
 .player-bar-optics::before {
