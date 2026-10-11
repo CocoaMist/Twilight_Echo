@@ -188,6 +188,9 @@ interface TrayPlayerBootstrap {
 }
 
 interface AudioEngineAPI {
+  getAutoMixStemCapabilities: (
+    refresh?: boolean
+  ) => Promise<import('../shared/twilightAutoMix.ts').AutoMixStemCapabilities>
   loadQueue: (
     items: AudioEngineQueueItem[],
     startIndex?: number

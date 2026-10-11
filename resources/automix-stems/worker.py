@@ -23,6 +23,36 @@ DEFAULT_CACHE_BYTES = 512 * 1024 ** 2
 CHECKPOINT_SHA256 = '8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4'
 
 
+def validate_runtime(torch):
+    from importlib.metadata import version
+    if version('demucs') != '4.0.1' or torch.__version__ not in ('2.8.0+cu128', '2.8.0+cpu', '2.8.0') or sys.version_info[:2] != (3, 11):
+        raise RuntimeError('model_runtime_mismatch')
+
+
+def choose_device(torch, policy):
+    if policy not in ('auto', 'gpu', 'cpu'):
+        raise RuntimeError('invalid_device_policy')
+    if policy == 'cpu':
+        return 'cpu'
+    if torch.cuda.is_available():
+        return 'cuda'
+    if policy == 'gpu':
+        raise RuntimeError('gpu_unavailable')
+    return 'cpu'
+
+
+def separate_with_device_policy(model, audio, device, policy, torch, resources):
+    try:
+        return streaming_apply(model, audio, device, torch)[0].cpu(), device
+    except torch.cuda.OutOfMemoryError:
+        if policy != 'auto':
+            raise RuntimeError('gpu_memory_exhausted') from None
+        model.cpu()
+        torch.cuda.empty_cache()
+        resources['device'] = 'cpu-oom-fallback'
+        return streaming_apply(model, audio, 'cpu', torch)[0].cpu(), 'cpu'
+
+
 def sha(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -204,7 +234,10 @@ def run(request_path):
                 cache_writable = False
         inputs.append((source, entry, metadata, hit))
     stages['sourceAndCacheValidationSeconds'] = time.monotonic() - validation_started
-    resources = {'device': 'cache', 'executionPath': 'cache-reuse', 'cacheHits': sum(x[3] for x in inputs),
+    policy = request.get('device', 'auto')
+    if policy not in ('auto', 'gpu', 'cpu'):
+        raise RuntimeError('invalid_device_policy')
+    resources = {'device': 'cache', 'requestedDevice': policy, 'executionPath': 'cache-reuse', 'cacheHits': sum(x[3] for x in inputs),
                  'executionPathLabel': '缓存复用',
                  'checkpointSha256': lock['checkpointSha256'], 'cacheBudgetBytes': budget,
                  'modelLoaded': False, 'torchImported': False, 'cudaInitialized': False,
@@ -216,16 +249,14 @@ def run(request_path):
         import torch
         import torchaudio
         from demucs.pretrained import get_model
-        from importlib.metadata import version
-        if version('demucs') != '4.0.1' or torch.__version__ != '2.8.0+cu128' or sys.version_info[:2] != (3, 11):
-            raise RuntimeError('model_runtime_mismatch')
+        validate_runtime(torch)
+        device = choose_device(torch, policy)
         torch.set_num_threads(min(4, os.cpu_count() or 1))
         torch.set_grad_enabled(False)
         model = get_model('htdemucs', repo=pack / 'models')
         model.eval()
         if list(model.sources) != ['drums', 'bass', 'other', 'vocals']:
             raise RuntimeError('model_stem_order_mismatch')
-        device = 'cuda' if request.get('device', 'auto') != 'cpu' and torch.cuda.is_available() else 'cpu'
         if device == 'cuda' and 'gpuMemoryFraction' in request:
             fraction = request['gpuMemoryFraction']
             if not isinstance(fraction, (int, float)) or not 0 < fraction <= 1:
@@ -259,14 +290,7 @@ def run(request_path):
                     ref = audio.mean(0)
                     mean, std = ref.mean(), ref.std().clamp_min(1e-5)
                     audio = (audio - mean) / std
-                    try:
-                        separated = streaming_apply(model, audio[None], device, torch)[0].cpu()
-                    except torch.cuda.OutOfMemoryError:
-                        model.cpu()
-                        torch.cuda.empty_cache()
-                        device = 'cpu'
-                        resources['device'] = 'cpu-oom-fallback'
-                        separated = streaming_apply(model, audio[None], device, torch)[0].cpu()
+                    separated, device = separate_with_device_policy(model, audio[None], device, policy, torch, resources)
                     separated = separated * std + mean / 4
                     separated = torchaudio.functional.resample(separated, model.samplerate, sr)
                     if separated.shape[-1] < frames:

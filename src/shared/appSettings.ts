@@ -212,6 +212,7 @@ export interface AppSettings {
   previousButtonAction: PreviousButtonAction
   autoMixMode: import('./twilightAutoMix.ts').AutoMixMode
   autoMixStemMode: import('./twilightAutoMix.ts').AutoMixStemMode
+  autoMixStemDevice: import('./twilightAutoMix.ts').AutoMixStemDevice
   autoMixStemCacheMiB: import('./twilightAutoMix.ts').AutoMixStemCacheMiB
   sleepTimer: SleepTimerSettings
   ncmPlaybackQuality: NcmPlaybackQuality

@@ -1,5 +1,6 @@
 export const IPC = {
   audioEngine: {
+    getAutoMixStemCapabilities: 'audioEngine:getAutoMixStemCapabilities',
     getDeviceProfiles: 'audioEngine:getDeviceProfiles',
     saveDeviceProfile: 'audioEngine:saveDeviceProfile',
     deleteDeviceProfile: 'audioEngine:deleteDeviceProfile',

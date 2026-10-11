@@ -1,16 +1,103 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
-import { mkdtemp, open, rm } from 'node:fs/promises'
+import { mkdtemp, open, rm, mkdir, link, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   validateStemMaterial,
   stemBudgetMs,
   stemResultMatchesRun,
-  STEM_MODEL_VERSION
+  STEM_MODEL_VERSION,
+  STEM_CHECKPOINT_SHA256,
+  AutoMixStemService
 } from './autoMixStemService.ts'
 import { normalizeAutoMixStemCacheMiB } from '../../shared/twilightAutoMix.ts'
+
+test('disabled stems bypass detection and source material export', async () => {
+  let detections = 0
+  const service = new AutoMixStemService(
+    'unused',
+    () => {
+      detections++
+      return null
+    },
+    () => false
+  )
+  const request = '{"mode":"dj"}'
+  await service.select(request, async (actual) => {
+    assert.equal(actual, request)
+    return { ok: true }
+  })
+  assert.equal(await service.prepare({ ok: true }, () => 0, new AbortController().signal), null)
+  assert.equal(detections, 0)
+})
+
+test('host passes each selected device to the worker and rechecks enable after detection', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'stem-device-request-test-'))
+  const workerDirectory = join(root, 'worker'),
+    pack = join(root, 'pack')
+  await mkdir(workerDirectory)
+  await mkdir(join(pack, 'runtime'), { recursive: true })
+  // A tiny process fixture observes the real spawn request without running a model.
+  await link(process.execPath, join(pack, 'runtime/python.exe'))
+  const metadata = JSON.stringify({
+    modelVersion: STEM_MODEL_VERSION,
+    checkpointSha256: STEM_CHECKPOINT_SHA256
+  })
+  await writeFile(join(pack, 'manifest.json'), metadata)
+  await writeFile(join(pack, 'model.lock.json'), metadata)
+  await writeFile(
+    join(workerDirectory, 'worker.py'),
+    `const fs=require('node:fs'),path=require('node:path');const file=process.argv[2],request=JSON.parse(fs.readFileSync(file,'utf8'));fs.writeFileSync(path.join(path.dirname(file),'result.json'),JSON.stringify({ok:false,reason:'policy_test_complete',resources:{requestedDevice:request.device}}));`
+  )
+  let device = 'auto',
+    enabled = true
+  const observed: unknown[] = []
+  const service = new AutoMixStemService(
+    join(root, 'cache'),
+    async () => pack,
+    () => enabled,
+    (resources) => observed.push(resources.requestedDevice),
+    () => 512,
+    () => workerDirectory,
+    () => device
+  )
+  try {
+    for (device of ['auto', 'gpu', 'cpu']) {
+      const selection = await service.select('{}', async (request) => ({
+        ok: true,
+        stemDirectory: JSON.parse(request).materialDirectory,
+        inputs: [],
+        channels: 2,
+        currentStartSeconds: 100
+      }))
+      try {
+        await assert.rejects(
+          service.prepare(selection, () => 0, new AbortController().signal),
+          /policy_test_complete/
+        )
+      } finally {
+        await service.release(selection)
+      }
+    }
+    assert.deepEqual(observed, ['auto', 'gpu', 'cpu'])
+    const changed = new AutoMixStemService(
+      'unused',
+      async () => {
+        enabled = false
+        return pack
+      },
+      () => enabled
+    )
+    await changed.select('{}', async (request) => {
+      assert.equal(request, '{}')
+      return { ok: true }
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 test('legacy and unsupported stem cache settings migrate to 512 MiB', () => {
   for (const value of [undefined, null, '256', -1, 128, NaN, Infinity])

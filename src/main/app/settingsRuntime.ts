@@ -25,8 +25,6 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
     if (accepted === false)
       throw new Error('音频引擎未能应用 AutoMix 模式，请检查音频服务状态后重试。')
   }
-  if (Object.prototype.hasOwnProperty.call(patch, 'autoMixStemMode'))
-    runtime.audioEngineManager?.invalidateAutoMixSource()
   if (Object.prototype.hasOwnProperty.call(patch, 'audioExclusiveAutoRelease')) {
     await runtime.audioEngineManager?.setExclusiveAutoRelease(
       nextSettings.audioExclusiveAutoRelease
@@ -52,6 +50,11 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
     Object.prototype.hasOwnProperty.call(patch, 'theme') ||
     Object.prototype.hasOwnProperty.call(patch, 'appBackground')
   runtime.appSettings = nextSettings
+  if (
+    Object.prototype.hasOwnProperty.call(patch, 'autoMixStemMode') ||
+    Object.prototype.hasOwnProperty.call(patch, 'autoMixStemDevice')
+  )
+    runtime.audioEngineManager?.invalidateAutoMixSource()
   if (shouldUpdateWindowBackground && !runtime.appSettings.windowTransparency) {
     runtime.mainWindow?.setBackgroundColor(
       getWindowBackgroundColor(runtime.appSettings, nativeTheme.shouldUseDarkColors)

@@ -161,6 +161,10 @@ export function bindAudioEngineIpcEvents(): void {
 
 export const audioEngineApi = {
   audioEngine: {
+    getAutoMixStemCapabilities: (
+      refresh = false
+    ): Promise<import('../../shared/twilightAutoMix.ts').AutoMixStemCapabilities> =>
+      ipcRenderer.invoke(IPC.audioEngine.getAutoMixStemCapabilities, refresh),
     getDeviceProfiles: (): Promise<AudioDeviceProfilesSnapshot> =>
       ipcRenderer.invoke(IPC.audioEngine.getDeviceProfiles),
     saveDeviceProfile: (profile: AudioDeviceProfile): Promise<AudioDeviceProfilesSnapshot> =>

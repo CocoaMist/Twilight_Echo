@@ -1,4 +1,5 @@
-import { AutoMixStemService, findAutoMixStemPack } from './autoMixStemService.ts'
+import { AutoMixStemService } from './autoMixStemService.ts'
+import { AutoMixStemDetector } from './autoMixStemCapabilities.ts'
 import { IPC } from '../../shared/ipcChannels.ts'
 import { resolveAuthorizationBatch } from '../security/authorizationBatch.ts'
 import { DspAuditionManager } from './dspAuditionManager.ts'
@@ -80,7 +81,11 @@ import { remoteMediaGrants } from '../security/remoteMediaGrants.ts'
 import { TwilightAutoMixCoordinator } from './twilightAutoMixCoordinator.ts'
 import { TwilightAutoMixWindowCache } from './twilightAutoMixCache.ts'
 import { providerPlaybackIdentities } from './providerPlaybackIdentity.ts'
-import { TWILIGHT_AUTOMIX_AVAILABLE, effectiveAutoMixMode } from '../../shared/twilightAutoMix.ts'
+import {
+  TWILIGHT_AUTOMIX_AVAILABLE,
+  effectiveAutoMixMode,
+  normalizeAutoMixStemDevice
+} from '../../shared/twilightAutoMix.ts'
 import {
   grantUserSelectedImpulseResponse,
   grantUserSelectedVst3SearchPath,
@@ -96,6 +101,29 @@ const MAX_AUDIO_QUEUE_ITEMS = MAX_NATIVE_QUEUE_ITEMS
 const MAX_AUDIO_SOURCE_LENGTH = 8192
 const MAX_AUDIO_DEVICE_LENGTH = 512
 let audioDiagnosticRecorder: AudioDiagnosticRecorder | null = null
+function stemWorkerDirectory(): string {
+  return join(
+    app.isPackaged || app.getAppPath().endsWith('.asar')
+      ? process.resourcesPath
+      : join(app.getAppPath(), 'resources'),
+    'automix-stems'
+  )
+}
+const stemDetector = new AutoMixStemDetector(
+  () => [
+    ...(process.env.TWILIGHT_AUTOMIX_STEM_PACK ? [process.env.TWILIGHT_AUTOMIX_STEM_PACK] : []),
+    ...[
+      join(app.getPath('exe'), '..'),
+      join(process.resourcesPath, '..'),
+      app.getAppPath()
+    ].flatMap((directory) =>
+      ['automix-enhancement', 'automix-enhancement-gpu', 'automix-enhancement-cpu'].map((name) =>
+        join(directory, name)
+      )
+    )
+  ],
+  stemWorkerDirectory
+)
 let lastAudioDiagnosticPlaybackSignature = ''
 
 const SOFTWARE_VOLUME_PERSIST_DELAY_MS = 350
@@ -609,19 +637,12 @@ async function initializeAudioEngineRuntime(): Promise<void> {
   const stemService = new AutoMixStemService(
     join(app.getPath('userData'), 'automix-stems-v2'),
     () =>
-      findAutoMixStemPack([
-        ...(process.env.TWILIGHT_AUTOMIX_STEM_PACK ? [process.env.TWILIGHT_AUTOMIX_STEM_PACK] : []),
-        join(app.getPath('exe'), '..', 'automix-enhancement'),
-        join(process.resourcesPath, '..', 'automix-enhancement')
-      ]),
+      stemDetector.resolveDevice(normalizeAutoMixStemDevice(runtime.appSettings.autoMixStemDevice)),
     () => runtime.appSettings.autoMixStemMode === 'auto',
     (resources) => audioDiagnosticRecorder?.record('automix-stems', resources),
     () => runtime.appSettings.autoMixStemCacheMiB,
-    () =>
-      join(
-        app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'),
-        'automix-stems'
-      )
+    stemWorkerDirectory,
+    () => runtime.appSettings.autoMixStemDevice
   )
   mixEngine.setAutoMixCoordinator(
     new TwilightAutoMixCoordinator({
@@ -791,6 +812,10 @@ export function setupAudioEngineIpc(): void {
 }
 
 function registerAudioEngineIpcHandlers(): void {
+  ipcMain.handle(IPC.audioEngine.getAutoMixStemCapabilities, (event, refresh: unknown) => {
+    assertTrustedIpcSender(event, 'AutoMix stem capabilities')
+    return stemDetector.get(refresh === true)
+  })
   const auditionManager = new DspAuditionManager({
     context: async () => (await ensureAudioEngineRuntime()).getAuditionContext(),
     apply: async (revision, key, graph) =>

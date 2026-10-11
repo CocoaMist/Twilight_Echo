@@ -1,5 +1,16 @@
 export type AutoMixMode = 'off' | 'natural' | 'dj'
 export type AutoMixStemMode = 'off' | 'auto'
+export type AutoMixStemDevice = 'auto' | 'gpu' | 'cpu'
+export interface AutoMixStemCapabilities {
+  status: 'missing' | 'ready' | 'unavailable'
+  cpu: boolean
+  gpu: boolean
+  packs: { directory: string; cpu: boolean; gpu: boolean; gpuName?: string }[]
+  reason?: 'pack_invalid' | 'runtime_unavailable' | 'probe_timeout'
+}
+export function normalizeAutoMixStemDevice(value: unknown): AutoMixStemDevice {
+  return value === 'gpu' || value === 'cpu' ? value : 'auto'
+}
 export type AutoMixStemCacheMiB = 0 | 256 | 512 | 1024 | 2048
 export function normalizeAutoMixStemCacheMiB(value: unknown): AutoMixStemCacheMiB {
   return value === 0 || value === 256 || value === 1024 || value === 2048 ? value : 512

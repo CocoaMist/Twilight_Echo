@@ -36,6 +36,7 @@ extraResources:
     filter:
       - worker.py
       - arrangement.py
+      - probe.py
   - from: resources/remote
     to: remote
     filter:

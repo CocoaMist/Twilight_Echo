@@ -221,6 +221,7 @@ const fallbackSettings: AppSettings = {
   previousButtonAction: 'restart',
   autoMixMode: 'off',
   autoMixStemMode: 'auto',
+  autoMixStemDevice: 'auto',
   autoMixStemCacheMiB: 512,
   sleepTimer: DEFAULT_SLEEP_TIMER_SETTINGS,
   ncmPlaybackQuality: 'auto',

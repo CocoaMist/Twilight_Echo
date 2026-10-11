@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import type { AutoMixSelection } from '../../shared/twilightAutoMix.ts'
 import {
   normalizeAutoMixStemCacheMiB,
+  normalizeAutoMixStemDevice,
   TWILIGHT_AUTOMIX_STEM_ARRANGEMENT_VERSION
 } from '../../shared/twilightAutoMix.ts'
 
@@ -82,18 +83,20 @@ export class AutoMixStemService {
   private busy = false
   private directories = new Set<string>()
   private cacheDirectory: string
-  private pack: () => string | null
+  private pack: () => string | null | Promise<string | null>
   private enabled: () => boolean
   private reportResources?: (resources: Record<string, unknown>) => void
   private cacheMiB: () => unknown
   private workerDirectory: () => string
+  private device: () => unknown
   constructor(
     cacheDirectory: string,
-    pack: () => string | null,
+    pack: () => string | null | Promise<string | null>,
     enabled: () => boolean,
     reportResources?: (resources: Record<string, unknown>) => void,
     cacheMiB: () => unknown = () => 512,
-    workerDirectory: () => string = () => resolve('resources/automix-stems')
+    workerDirectory: () => string = () => resolve('resources/automix-stems'),
+    device: () => unknown = () => 'auto'
   ) {
     this.cacheDirectory = cacheDirectory
     this.pack = pack
@@ -101,12 +104,13 @@ export class AutoMixStemService {
     this.reportResources = reportResources
     this.cacheMiB = cacheMiB
     this.workerDirectory = workerDirectory
+    this.device = device
   }
   async select(
     request: string,
     select: (request: string) => Promise<AutoMixSelection>
   ): Promise<AutoMixSelection> {
-    if (!this.enabled() || !this.pack()) return select(request)
+    if (!this.enabled() || !(await this.pack()) || !this.enabled()) return select(request)
     const directory = await mkdtemp(join(tmpdir(), 'twilight-automix-material-'))
     this.directories.add(directory)
     let result: AutoMixSelection
@@ -130,7 +134,9 @@ export class AutoMixStemService {
     position: () => number,
     signal: AbortSignal
   ): Promise<Record<string, unknown> | null> {
-    const pack = this.pack()
+    if (!this.enabled()) return null
+    const device = normalizeAutoMixStemDevice(this.device())
+    const pack = await this.pack()
     if (
       !this.enabled() ||
       !pack ||
@@ -171,6 +177,7 @@ export class AutoMixStemService {
         JSON.stringify({
           selection,
           runId,
+          device,
           arrangementVersion: TWILIGHT_AUTOMIX_STEM_ARRANGEMENT_VERSION,
           packDirectory: pack,
           cacheDirectory: this.cacheDirectory,
