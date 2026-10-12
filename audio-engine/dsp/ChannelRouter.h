@@ -49,6 +49,10 @@ class ChannelRouter {
   /// 重置所有状态（切歌/切设备时调用）
   void reset();
 
+  // Called by the render owner before routing a deck. Continuation decoders
+  // keep the same token; a new source/seek clears history without allocation.
+  void beginSource(uint64_t token);
+
   /// 路由/上混
   void route(const float* source, float* destination,
              size_t frameCount,
@@ -74,6 +78,7 @@ class ChannelRouter {
   size_t realtimeDelayCapacity_ = 0;
   uint32_t delayGeneration_ = 1;
   bool realtimePrepared_ = false;
+  uint64_t sourceToken_ = 0;
 
   void recomputeCoefficients();
   void resetRealtimeDelayState();

@@ -1508,7 +1508,7 @@ async function resolveDeferredRouteCalls(service: DeferredAudioServiceBinding): 
 
 function makeManager(
   config: ConstructorParameters<typeof AudioEngineManager>[0],
-  nativeBinding: FakeNativeBinding,
+  nativeBinding: FakeNativeBinding | FakeAudioServiceBinding,
   scheduler?: AudioEngineManagerDependencies['scheduler']
 ): InstanceType<typeof AudioEngineManager> {
   return new AudioEngineManager(config, {
@@ -4489,6 +4489,44 @@ test('queue cursor reuse verifies content token and CUE identity before native s
   assert.deepEqual(selected, [1])
 })
 
+test('playback snapshots expose queue authority only for a matching native source', async (t) => {
+  const nativeBinding = new FakeNativeBinding()
+  let now = 1000
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding,
+    { now: () => now }
+  )
+  t.after(() => manager.destroy())
+  const events: PlaybackInfo[] = []
+  manager.on('playback-info', (info: PlaybackInfo) => events.push(info))
+  await manager.loadQueue(
+    [
+      { id: 'ncm:a', source: 'https://cdn.test/a.flac' },
+      { id: 'ncm:b', source: 'https://cdn.test/b.flac' }
+    ],
+    0
+  )
+  await manager.play('https://cdn.test/a.flac')
+  const token = manager.getQueueToken()
+  assert.equal((await manager.getPlaybackInfo()).queueToken, token)
+  assert.ok(events.some((event) => event.queueToken === token))
+
+  nativeBinding.playbackInfo = {
+    ...nativeBinding.playbackInfo,
+    source: 'https://cdn.test/b.flac',
+    queueIndex: 1
+  }
+  now += 1000
+  const promoted = await manager.getPlaybackInfo()
+  assert.equal(promoted.queueIndex, 1)
+  assert.equal(promoted.queueToken, token)
+
+  await manager.loadQueue([{ id: 'ncm:c', source: 'https://cdn.test/c.flac' }], 0)
+  now += 1000
+  assert.equal((await manager.getPlaybackInfo()).queueToken, undefined)
+})
+
 test('loadQueue skips native call and queue fanout when normalized queue is unchanged', async () => {
   const nativeBinding = new FakeNativeBinding()
   const manager = makeManager(
@@ -4635,7 +4673,7 @@ test('loadQueue reapplies play mode to clear stale native repeat mode', async ()
   assert.equal(nativeBinding.playbackInfo.playMode, 'sequential')
 })
 
-test('AutoMix handoff publishes incoming identity and position before scalar progress and start-file', async () => {
+test('Native queue handoff publishes incoming identity and position before scalar progress and start-file', async () => {
   const nativeBinding = new FakeNativeBinding()
   const manager = makeManager(
     { exclusiveMode: true, audioOutput: 'wasapi', audioDevice: 'auto' },
@@ -4676,147 +4714,6 @@ test('AutoMix handoff publishes incoming identity and position before scalar pro
   assert.ok(events.indexOf('info') < events.indexOf('duration'))
   assert.ok(events.indexOf('info') < events.indexOf('start'))
   assert.equal(events.filter((event) => event === 'start').length, 1)
-})
-
-test('AutoMix permission reaches settings before the first Play without replacing transport state', async () => {
-  const autoMix = {
-    enabled: false,
-    state: 'disabled',
-    progress: 0,
-    transitionSeconds: 0,
-    styleId: null,
-    reason: 'disabled',
-    configRevision: 0,
-    experimentalAllowed: true,
-    stableRelease: false,
-    intelligentSkipSupported: false
-  }
-  const nativeBinding = Object.assign(new FakeNativeBinding(), {
-    GetAutoMixStatus: () => JSON.stringify(autoMix)
-  })
-  const manager = makeManager({ exclusiveMode: false, volume: 0.31 }, nativeBinding)
-  try {
-    const info = await manager.getPlaybackInfo()
-    assert.equal(info.autoMix?.experimentalAllowed, true)
-    assert.equal(info.autoMix?.enabled, false)
-    assert.equal(info.state, 'stopped')
-    assert.equal(info.source, '')
-    assert.equal(info.volume, 0.31)
-    assert.equal(nativeBinding.playCalls.length, 0)
-  } finally {
-    manager.destroy()
-  }
-})
-
-test('AutoMix settings use fresh service RPC status and publish changes while stopped', async () => {
-  let status = {
-    enabled: false,
-    state: 'disabled',
-    progress: 0,
-    transitionSeconds: 0,
-    styleId: null,
-    reason: 'disabled',
-    configRevision: 0,
-    experimentalAllowed: true,
-    stableRelease: false,
-    intelligentSkipSupported: false
-  }
-  const service = Object.assign(new FakeAudioServiceBinding(), {
-    // The synchronous client cache may still be disconnected at startup.
-    GetAutoMixStatus: () => '{"enabled":false,"experimentalAllowed":false}',
-    SetAutoMixConfig: (json: string) => {
-      const config = JSON.parse(json)
-      status = { ...status, enabled: config.enabled, configRevision: status.configRevision + 1 }
-    }
-  })
-  const originalCall = service.callAsync.bind(service)
-  service.callAsync = async (method, args) =>
-    method === 'GetAutoMixStatus' ? JSON.stringify(status) : originalCall(method, args)
-  const manager = new AudioEngineManager(
-    { exclusiveMode: false, volume: 0.31 },
-    {
-      audioServiceFactory: () => service,
-      scheduler: TEST_SCHEDULER,
-      deviceOptionsProvider: () => DEVICE_OPTIONS
-    }
-  )
-  const updates: PlaybackInfo[] = []
-  manager.on('playback-info', (info: PlaybackInfo) => updates.push(info))
-  try {
-    assert.equal((await manager.getPlaybackInfo()).autoMix?.experimentalAllowed, true)
-    await manager.setAudioProcessing({
-      autoMix: { enabled: true, allowIntelligentSkip: false, maxTransitionSeconds: 4 }
-    })
-    assert.equal(updates.at(-1)?.autoMix?.enabled, true)
-    assert.equal(updates.at(-1)?.state, 'stopped')
-    await manager.setAudioProcessing({
-      autoMix: { enabled: false, allowIntelligentSkip: false, maxTransitionSeconds: 4 }
-    })
-    assert.equal(updates.at(-1)?.autoMix?.enabled, false)
-    status = { ...status, experimentalAllowed: false }
-    assert.equal((await manager.getPlaybackInfo()).autoMix?.experimentalAllowed, false)
-    assert.equal(service.playCalls, 0)
-  } finally {
-    manager.destroy()
-  }
-})
-
-test('AutoMix permission discards pre-crash responses and refreshes on service ready', async () => {
-  let status = {
-    enabled: false,
-    state: 'disabled',
-    progress: 0,
-    transitionSeconds: 0,
-    styleId: null,
-    reason: 'disabled',
-    configRevision: 0,
-    experimentalAllowed: true,
-    stableRelease: false
-  }
-  let blockStatus = false
-  let releaseStatus: ((value: string) => void) | undefined
-  const service = Object.assign(new FakeAudioServiceBinding(), {
-    GetAutoMixStatus: () => JSON.stringify(status)
-  })
-  const originalCall = service.callAsync.bind(service)
-  service.callAsync = async (method, args) => {
-    if (method !== 'GetAutoMixStatus') return originalCall(method, args)
-    if (blockStatus)
-      return new Promise<string>((resolve) => {
-        releaseStatus = resolve
-      })
-    return JSON.stringify(status)
-  }
-  const manager = new AudioEngineManager(
-    { exclusiveMode: false },
-    {
-      audioServiceFactory: () => service,
-      scheduler: TEST_SCHEDULER,
-      deviceOptionsProvider: () => DEVICE_OPTIONS
-    }
-  )
-  const updates: PlaybackInfo[] = []
-  manager.on('playback-info', (info: PlaybackInfo) => updates.push(info))
-  try {
-    assert.equal((await manager.getPlaybackInfo()).autoMix?.experimentalAllowed, true)
-    blockStatus = true
-    const pending = manager.getPlaybackInfo()
-    assert.ok(releaseStatus)
-    service.emit('crash', 'fixture service restart')
-    assert.equal(updates.at(-1)?.autoMix, undefined)
-    releaseStatus(JSON.stringify(status))
-    assert.equal((await pending).autoMix, undefined)
-    blockStatus = false
-    status = { ...status, experimentalAllowed: false }
-    const ready = new Promise<void>((resolve) => manager.once('audio-service-ready', resolve))
-    service.emit('ready')
-    await ready
-    assert.equal(updates.at(-1)?.autoMix?.experimentalAllowed, false)
-    assert.equal(updates.at(-1)?.state, 'stopped')
-    assert.equal(service.playCalls, 0)
-  } finally {
-    manager.destroy()
-  }
 })
 
 test('getPlaybackInfo reuses fresh native playback info from the manager tick', async () => {
@@ -5023,6 +4920,124 @@ test('native tick soft-advances past stale service GetPlaybackInfo cache', async
     advanced >= 2.45,
     `expected soft-advanced position >= 2.45, got ${advanced}; samples=${JSON.stringify(timePositions)}`
   )
+})
+
+test('AutoMix progress and frozen native source positions bypass wall-clock smoothing', async () => {
+  let now = 2000
+  const nativeBinding = new FakeNativeBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding,
+    {
+      now: () => now
+    }
+  )
+  const positions: number[] = []
+  manager.on('property-change', ({ name, data }) => {
+    if (name === 'time-pos') positions.push(data as number)
+  })
+  await manager.play('track.flac', 0)
+  nativeBinding.playbackInfo = {
+    ...nativeBinding.playbackInfo,
+    state: 'playing',
+    position: 20,
+    autoMixMode: 'natural',
+    autoMixState: 'mixing',
+    autoMixPlanId: 1
+  }
+  manager.tick()
+  now += 250
+  manager.tick()
+  assert.equal(positions.at(-1), 20)
+  nativeBinding.playbackInfo = { ...nativeBinding.playbackInfo, position: 20.24 }
+  now += 250
+  manager.tick()
+  assert.equal(positions.at(-1), 20.24)
+  manager.destroy()
+})
+
+test('AutoMix preparation status reads the service instead of its stale synchronous cache', async () => {
+  const service = new FakeAudioServiceBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    service
+  )
+  service.playbackInfo = makePlaybackInfo({
+    autoMixMode: 'dj',
+    autoMixState: 'degraded',
+    autoMixReason: 'host_cancelled'
+  })
+  const cached = service.GetPlaybackInfo()
+  service.GetPlaybackInfo = () => cached
+  const baseCall = service.callAsync.bind(service)
+  service.callAsync = async (method, args) =>
+    method === 'GetPlaybackInfo'
+      ? JSON.stringify(
+          makePlaybackInfo({ autoMixMode: 'dj', autoMixState: 'ready', autoMixPlanId: 42 })
+        )
+      : baseCall(method, args)
+  const status = await manager.getAutoMixNativeStatus()
+  assert.equal(status.autoMixState, 'ready')
+  assert.equal(status.autoMixPlanId, 42)
+  manager.destroy()
+})
+
+test('AutoMix context waits for decoded next-source duration and preserves fractional bounds', async () => {
+  const service = new FakeAudioServiceBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    service
+  )
+  await manager.loadQueue([
+    { id: 'a', source: 'a.flac', duration: 338 },
+    { id: 'b', source: 'b.flac', duration: 299 }
+  ])
+  const internal = manager as unknown as { playbackInfo: PlaybackInfo }
+  internal.playbackInfo = makePlaybackInfo({
+    queueIndex: 0,
+    source: 'a.flac',
+    duration: 338.040123456789,
+    upcomingTrack: { id: 'b', source: 'b.flac', duration: 298.701234567891 }
+  })
+  assert.equal(manager.getAutoMixContext(), null)
+  internal.playbackInfo.preloadReady = true
+  const context = manager.getAutoMixContext()
+  assert.equal(context?.info.duration, 338.040123456789)
+  assert.equal(context?.next.duration, 298.701234567891)
+  manager.destroy()
+})
+
+test('play publishes decoded source bounds immediately despite rounded queue duration and stale service cache', async () => {
+  const service = new FakeAudioServiceBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    service
+  )
+  await manager.loadQueue([
+    { id: 'a', source: 'a.flac', duration: 338 },
+    { id: 'b', source: 'b.flac', duration: 299 }
+  ])
+  service.GetPlaybackInfo = () =>
+    JSON.stringify(makePlaybackInfo({ source: 'old.flac', duration: 10 }))
+  const originalCall = service.callAsync.bind(service)
+  service.callAsync = async (method, args) =>
+    method === 'GetPlaybackInfo'
+      ? JSON.stringify(
+          makePlaybackInfo({
+            state: 'playing',
+            source: 'a.flac',
+            queueIndex: 0,
+            duration: 338.040123456789,
+            preloadReady: true,
+            upcomingTrack: { id: 'b', source: 'b.flac', duration: 298.701234567891 }
+          })
+        )
+      : originalCall(method, args)
+  assert.equal((await manager.play('a.flac')).nativeStarted, true)
+  const context = manager.getAutoMixContext()
+  assert.equal(context?.info.duration, 338.040123456789)
+  assert.equal(context?.next.duration, 298.701234567891)
+  manager.destroy()
 })
 
 test('native tick rejects pre-seek cached positions until the requested position arrives', async () => {

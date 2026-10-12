@@ -22,7 +22,6 @@ test('local sidebar opening follows the streaming navigation timing', () => {
   assert.match(app, /translate3d\(0, 16px, 0\)/)
   assert.match(app, /opacity 0\.14s ease,\s*transform 0\.18s var\(--te-ease-enter\)/)
   assert.match(app, /translate3d\(0, -12px, 0\)/)
-  assert.match(playerBarCss, /transition: left var\(--te-motion-panel\) var\(--te-ease-soft\);/)
 })
 
 /**
@@ -31,7 +30,8 @@ test('local sidebar opening follows the streaming navigation timing', () => {
  * both edges — so animating it snapped the right edge inward by the clearance on
  * the first frame and swept it back over the rest, which read as the page flinching
  * on its right side. The clearance property itself has to be the animated one, on
- * all three surfaces, even though each frame costs a layout pass.
+ * the content surfaces, even though each frame costs a layout pass. The player
+ * keeps its viewport geometry and paints over navigation on desktop.
  *
  * The 0.32s duration is what pins these to the *clearance* animation specifically;
  * the page-transition transforms in the same files run on their own curves.
@@ -39,7 +39,6 @@ test('local sidebar opening follows the streaming navigation timing', () => {
 test('side-menu clearance animates the inset, never a transform', () => {
   const surfaces: [name: string, source: string, property: 'padding-left' | 'left'][] = [
     ['App.vue .main-content', app, 'padding-left'],
-    ['PlayerBar.css .player-bar-shell', playerBarCss, 'left'],
     ['StreamingPage.css .streaming-content', streamingCss, 'padding-left']
   ]
   for (const [name, source, property] of surfaces) {

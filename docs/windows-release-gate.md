@@ -266,6 +266,13 @@ Packaging delegates production dependency discovery to electron-builder and keep
 pnpm run gate:release:win
 ```
 
+If a running development app holds the staged audio DLL open, set
+`TAE_AUDIO_ENGINE_STAGE_DIR` to a separate writable directory before running the gate, for example
+`$env:TAE_AUDIO_ENGINE_STAGE_DIR = 'D:\twilight-release\audio-engine'`. The native build stages its
+fresh engine, addon, ASIO helper, and runtime dependencies there; Windows packaging overlays those
+files while retaining bundled assets and MSVC helpers from `resources/audio-engine`. An incomplete
+isolated engine fails packaging instead of falling back to the older files held by the live app.
+
 `gate:release:win` runs `gate:release:preflight` and the cross-ABI ASIO gate before packaging. On
 success it writes
 `dist/<installer>-setup.exe.sha256`; upload that file alongside the installer and publish the same

@@ -3,7 +3,6 @@ import { ref, type Ref } from 'vue'
 export interface SideMenuClearanceOptions {
   showLocalSidebar: Ref<boolean>
   hasPlayerBar: Ref<boolean>
-  menuOpen: Ref<boolean>
 }
 
 const SIDE_MENU_OVERLAP_GAP = 10
@@ -12,19 +11,12 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   const playerBottomClearance = ref(0)
   const sideMenuBottomOffset = ref(0)
   const sideMenuToolsClearance = ref(0)
-  /**
-   * Where the open side menu's right edge actually sits, so a bar that spans the
-   * window can start after it. Not derivable in CSS: `--te-menu-width` is only
-   * the menu's width, and a preset layout is free to inset the menu from the
-   * window edge, which leaves a width-based `left` short by exactly that inset
-   * and the bar overlapping the menu.
-   */
-  const sideMenuInlineEnd = ref(0)
   let sideMenuMonitorFrame: number | null = null
   let resizeObserver: ResizeObserver | null = null
   let playbarMutationObserver: MutationObserver | null = null
   let observedSideMenu: HTMLElement | null = null
   let observedPlayerBar: HTMLElement | null = null
+  let observedPlayerSurface: HTMLElement | null = null
 
   function setSideMenuBottomOffset(offset: number): void {
     const nextOffset = Math.max(0, Math.round(offset))
@@ -33,28 +25,22 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     }
   }
 
-  function setSideMenuInlineEnd(edge: number): void {
-    // A detached or not-yet-laid-out menu reports nothing useful; publishing NaN
-    // from here would reach a CSS custom property and invalidate the whole
-    // declaration that reads it, dropping the bar back onto the menu.
-    if (!Number.isFinite(edge)) return
-    const nextEdge = Math.max(0, Math.round(edge))
-    if (sideMenuInlineEnd.value !== nextEdge) {
-      sideMenuInlineEnd.value = nextEdge
-    }
-  }
-
   function measureSideMenuClearance(): void {
+    const isWindowLayout = document.documentElement.dataset.teShellLayout !== 'custom'
     const playerBar = document.querySelector<HTMLElement>('.player-bar-shell')
-    const playerBarRect = playerBar?.getBoundingClientRect()
+    const playerBarShellRect = playerBar?.getBoundingClientRect()
+    // The shell spans the window even when the painted bar is centred at a
+    // smaller maximum width. Only the painted surface can cover the tools.
+    const playerSurface = playerBar?.querySelector<HTMLElement>('.player-bar') ?? playerBar
+    const playerBarRect = playerSurface?.getBoundingClientRect()
     playerBottomClearance.value =
       options.hasPlayerBar.value &&
       playerBar?.dataset.tePlaybarHidden !== 'true' &&
-      playerBarRect &&
-      playerBarRect.height > 0 &&
-      playerBarRect.bottom > 0 &&
-      playerBarRect.top < window.innerHeight
-        ? Math.max(0, Math.ceil(window.innerHeight - playerBarRect.top))
+      playerBarShellRect &&
+      playerBarShellRect.height > 0 &&
+      playerBarShellRect.bottom > 0 &&
+      playerBarShellRect.top < window.innerHeight
+        ? Math.max(0, Math.ceil(window.innerHeight - playerBarShellRect.top))
         : 0
     if (!options.showLocalSidebar.value || !options.hasPlayerBar.value) {
       setSideMenuBottomOffset(0)
@@ -70,21 +56,6 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
       return
     }
 
-    /**
-     * Publish where the menu's right edge lands when it is open, for the
-     * edge-to-edge shapes to start after. Read from the *untransformed* box:
-     * `.side-menu` is always laid out in place and merely translated off-screen
-     * when closed, so `offsetLeft + offsetWidth` is the open edge whether or not
-     * it is open right now, and it does not sweep through intermediate values
-     * during the 0.32s slide. A rect would, and the bar would chase it.
-     *
-     * `--te-menu-width` cannot answer this: it is only the menu's own width, and
-     * a preset may inset the menu from the window edge, which puts its edge that
-     * much further right than the token implies. Measuring covers every preset,
-     * plugin ones too.
-     */
-    setSideMenuInlineEnd(sideMenu.offsetLeft + sideMenu.offsetWidth)
-
     // An auto-hidden mini bar is translated out of view but keeps its layout box,
     // so its rect would still push the sidebar up. The shell flags the state.
     if (playerBar.dataset.tePlaybarHidden === 'true') {
@@ -94,32 +65,53 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     }
 
     const sideMenuRect = sideMenu.getBoundingClientRect()
-    // An open local menu already gives the bar horizontal clearance through
-    // `.player-bar-shell.menu-open`. Reading the bar's rect while that `left`
-    // transition is in flight briefly reports an overlap, which lifts the menu
-    // and then drops it again once the transition completes. The class is the
-    // stable geometry contract, so it must win over that transient rect.
-    if (
-      playerBar.classList.contains('menu-open') &&
-      window.innerWidth > 900 &&
-      document.documentElement.dataset.teShellLayout !== 'custom'
-    ) {
-      setSideMenuBottomOffset(0)
-      sideMenuToolsClearance.value = 0
-      return
-    }
-
+    // Sliding the menu out must not change its footer height. Measure its layout
+    // position without its own horizontal transform, including a custom parent.
+    const sideMenuLeft =
+      sideMenu.offsetLeft + (sideMenu.offsetParent?.getBoundingClientRect().left ?? 0)
+    const sideMenuRight = sideMenuLeft + sideMenu.offsetWidth
     const overlapsHorizontally =
-      playerBarRect.left < sideMenuRect.right && playerBarRect.right > sideMenuRect.left
-    // Reserve content padding only when the bar actually covers the menu. A bar
-    // beside it must leave the tools at the bottom, including in custom shells.
+      playerBarRect.left < sideMenuRight && playerBarRect.right > sideMenuLeft
+    // Trailing button whitespace may sit behind the player. Only its icon and
+    // label need clearance. Undo the slide so closing the menu keeps this stable;
+    // opacity is deliberately ignored because hidden labels keep their layout.
+    const slideOffset = sideMenuLeft - sideMenuRect.left
+    const overlapsToolContent = isWindowLayout
+      ? [
+          ...sideMenu.querySelectorAll<HTMLElement>(
+            '.menu-toolbar .item-icon, .menu-toolbar .item-label'
+          )
+        ].some((content) => {
+          const rect = content.getBoundingClientRect()
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            playerBarRect.left < rect.right + slideOffset + SIDE_MENU_OVERLAP_GAP &&
+            playerBarRect.right > rect.left + slideOffset - SIDE_MENU_OVERLAP_GAP
+          )
+        })
+      : overlapsHorizontally
+    // Custom shells still reserve their complete navigation column.
     sideMenuToolsClearance.value =
-      overlapsHorizontally &&
+      overlapsToolContent &&
       playerBarRect.height > 0 &&
       playerBarRect.top < window.innerHeight &&
       playerBarRect.bottom > sideMenuRect.top
-        ? Math.max(0, Math.round(sideMenuRect.bottom - playerBarRect.top + SIDE_MENU_OVERLAP_GAP))
+        ? Math.max(
+            0,
+            Math.round(
+              (isWindowLayout ? window.innerHeight : sideMenuRect.bottom) -
+                playerBarRect.top +
+                SIDE_MENU_OVERLAP_GAP
+            )
+          )
         : 0
+    // Keep the sidebar surface behind the player; lift only its footer. Its
+    // height and footer clearance then stay stable throughout horizontal slides.
+    if (isWindowLayout) {
+      setSideMenuBottomOffset(0)
+      return
+    }
     /**
      * Test the overlap against the bottom the menu would have with no clearance
      * applied, not its current one. Once the offset lifts the menu, its measured
@@ -151,10 +143,17 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   function observeGeometry(): void {
     const sideMenu = document.querySelector<HTMLElement>('.side-menu')
     const playerBar = document.querySelector<HTMLElement>('.player-bar-shell')
-    if (sideMenu === observedSideMenu && playerBar === observedPlayerBar) return
+    const playerSurface = playerBar?.querySelector<HTMLElement>('.player-bar') ?? null
+    if (
+      sideMenu === observedSideMenu &&
+      playerBar === observedPlayerBar &&
+      playerSurface === observedPlayerSurface
+    )
+      return
 
     observedSideMenu = sideMenu
     observedPlayerBar = playerBar
+    observedPlayerSurface = playerSurface
     resizeObserver?.disconnect()
     playbarMutationObserver?.disconnect()
 
@@ -162,6 +161,7 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
       resizeObserver = new ResizeObserver(() => scheduleMeasure())
       if (sideMenu) resizeObserver.observe(sideMenu)
       if (playerBar) resizeObserver.observe(playerBar)
+      if (playerSurface) resizeObserver.observe(playerSurface)
     }
     if (typeof MutationObserver !== 'undefined' && playerBar) {
       playbarMutationObserver = new MutationObserver(() => scheduleMeasure())
@@ -200,7 +200,6 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   function resetSideMenuClearance(): void {
     stopSideMenuMonitor()
     setSideMenuBottomOffset(0)
-    setSideMenuInlineEnd(0)
     sideMenuToolsClearance.value = 0
     playerBottomClearance.value = 0
   }
@@ -223,7 +222,6 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     playerBottomClearance,
     sideMenuBottomOffset,
     sideMenuToolsClearance,
-    sideMenuInlineEnd,
     startSideMenuMonitor,
     stopSideMenuMonitor,
     resetSideMenuClearance,

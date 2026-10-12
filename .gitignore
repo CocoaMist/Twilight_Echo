@@ -30,6 +30,15 @@ audio-engine/vcpkg_installed/
 # Staged native binaries are local/release artifacts, not source
 resources/audio-engine/**
 !resources/audio-engine/.gitkeep
+# AutoMix public conversion outputs and private research stay outside source.
+audio-engine/automix-native/**/*.tamg
+audio-engine/automix-native/**/*.onnx
+audio-engine/automix-native/**/*.ckpt
+audio-engine/automix-native/**/*.h5
+audio-engine/automix-native/**/*.f32
+audio-engine/automix-native/**/*.f64
+audio-engine/automix-native/research/
+audio-engine/automix-native/**/__pycache__/
 
 # Test and coverage output
 coverage/
@@ -143,6 +152,7 @@ resources/font/_originals/
 
 # Local design prototype output (never publish)
 outputs/
+/.artifacts/
 
 # Local packaging / signing artifacts
 /dist-release-*/

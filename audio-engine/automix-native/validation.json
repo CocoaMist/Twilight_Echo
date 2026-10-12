@@ -1,0 +1,1541 @@
+{
+  "schemaVersion": 1,
+  "updatedDate": "2026-10-12",
+  "product": "Twilight AutoMix",
+  "releaseReady": false,
+  "defaultMode": "off",
+  "phase": 3,
+  "gates": {
+    "publicAssets": {
+      "status": "passed",
+      "fixedGraphExportsReproduced": [
+        "beat-this-small0",
+        "yamnet"
+      ],
+      "releaseStaging": "seven exact allowlisted files; graph and license digests verified",
+      "protectedResearchInputs": false
+    },
+    "nativeNumerics": {
+      "status": "passed",
+      "toolchains": [
+        "MinGW x64",
+        "MSVC x64 Release"
+      ],
+      "forcedPaths": [
+        "C11",
+        "handwritten NASM SSE2",
+        "handwritten NASM AVX2"
+      ],
+      "ctestPassedPerToolchain": 6,
+      "coverage": [
+        "FFT",
+        "correlation",
+        "matrix and convolution compute",
+        "normalisation",
+        "activations",
+        "linked phase transport",
+        "time mapping",
+        "gain and mix",
+        "all five exit effects",
+        "anti-phase downmix",
+        "graph and JSON bounds",
+        "cancel before preparation",
+        "single-worker lifecycle and timeout",
+        "aggregate 128MiB preparation reservation",
+        "source SHA-256 lease, changed-file rejection and lease release"
+      ],
+      "beatRealMusic": {
+        "songs": 6,
+        "comparisonsPerToolchain": 18,
+        "eventMaxSecondsError": 0
+      },
+      "voiceRealMusic": {
+        "mingwComparisons": 120,
+        "msvcComparisons": 60,
+        "classificationAccuracyValidated": false
+      },
+      "stretchSynthetic": {
+        "comparisons": 48,
+        "passed": true
+      },
+      "stretchRealMusic": {
+        "songs": 6,
+        "comparisons": 72,
+        "passed": true,
+        "humanListeningPassed": false
+      },
+      "completeAnalysis": {
+        "sources": 2,
+        "windowsPerSource": 2,
+        "comparisons": 12,
+        "includesChinesePathAndMp3": true
+      },
+      "latestPlannerRetest": {
+        "toolchains": [
+          "MinGW x64",
+          "MSVC x64 Release"
+        ],
+        "msvcPassed": 6,
+        "report": "rhythm-final-curve-msvc-tests.log",
+        "coverage": [
+          "candidate-local rhythm regression",
+          "quantised 160 BPM",
+          "half/double beat correspondence at bounded audio speed",
+          "instrumental-outro evidence and unknown/vocal rejection",
+          "headroom C/NASM differential with bounds and exact endpoints",
+          "variable-speed source PCM phase joins with dispatched gain curves",
+          "real corpus identical selection and frame bounds across CPUs"
+        ]
+      }
+    },
+    "analysisAbi": {
+      "status": "passed",
+      "cases": 6,
+      "coverage": [
+        "head",
+        "tail",
+        "short CUE",
+        "Chinese path",
+        "MP3",
+        "single execution across ABI size probe and read"
+      ]
+    },
+    "existingEngineRegression": {
+      "status": "passed",
+      "passed": 46,
+      "skipped": 1,
+      "skip": "ASIO ABI cross-DLL fixture",
+      "autoMixPlaybackIncluded": true,
+      "latestTargetedTransportRetestPassed": 4,
+      "latestFullSuite": "rhythm-final-native-tests.log",
+      "latestPostSeamTargetedRetest": {
+        "passed": 7,
+        "report": "rhythm-final-curve-tests.log",
+        "includesOrdinaryPcmTransparency": true,
+        "previousTransportRetest": {
+          "passed": 8,
+          "report": "rhythm-seams-native-tests.log"
+        }
+      }
+    },
+    "preparedTransport": {
+      "status": "partial",
+      "implemented": [
+        "C-owned worker preparation, timeout and cancellation",
+        "independent prepared lanes, deck DSP and routing, handwritten assembly mix",
+        "native promotion exactly once with source-frame continuation",
+        "pause freezes source/output clocks",
+        "cancelled overlap resumes outgoing mapped position",
+        "wrong/stale plan and source hash rejection",
+        "tail/head priority, window cache, low-priority middle coverage",
+        "provider resolution, actual quality and cached path invalidation",
+        "native mapped progress, status fanout, service mode restoration",
+        "reprepare after native DSP/output invalidation",
+        "callback-owned source tokens reset reused deck routing history and preserve incoming continuation",
+        "exact local PCM/CUE source frame grids; rejection of plans after an ordinary approximate seek; post-seek invalidation closes concurrent preparation window",
+        "Decoded current/preloaded-next fractional duration and round-trip timing JSON; startup/context gating against stale source caches",
+        "Enabling during PCM playback prepares next source, realigns approximate cursor and preserves pause; subsequent seeks are exact",
+        "Fresh native status reads and shared explicit-read/tick cache; original failure reason survives cleanup; fallback status clocks use current atomic frames"
+      ],
+      "realDecoderFixture": {
+        "modes": [
+          "natural",
+          "dj"
+        ],
+        "sourceSampleRates": [
+          48000,
+          44100
+        ],
+        "resamplerQualities": [
+          "native",
+          "ultra"
+        ],
+        "continuationSampleComparisonPassed": true,
+        "utf8CueRangesPassed": true,
+        "threeTrack51RoutingReusePassed": true,
+        "syntheticFixtureIsListeningEvidence": false,
+        "compressedFormatCombinations": [
+          "MP3 to MP3",
+          "FLAC to FLAC",
+          "FLAC to MP3",
+          "MP3 to FLAC"
+        ],
+        "compressedCueSourceRangeSeconds": [
+          3,
+          27
+        ],
+        "compressedContinuationAndCancelSampleComparisonPassed": true,
+        "approximateTimelineRejectionPassed": true
+      },
+      "remaining": "Complete remaining compressed formats, channel/device-change/concurrent-cancellation playback matrix and full Electron application stress verification.",
+      "applicationPlayback": {
+        "status": "passed",
+        "report": "rhythm-final-application.json",
+        "intelligentPairs": 5,
+        "strategyCounts": {
+          "beat-aligned": 4,
+          "content-boundary": 1
+        },
+        "expectedLowConfidenceFallbacks": 1,
+        "actualProductionModels": true,
+        "actualNativeUtilityProcesses": true,
+        "actualSharedWasapiDevice": true,
+        "silent": true,
+        "pauseFreezeResume": true,
+        "singleQueueAdvance": true,
+        "consumedSourceContinuation": true,
+        "actualTempoChanges": true,
+        "enabledDuringPlayback": true,
+        "scope": "Five known successful real-song pairs plus one expected low-confidence fallback; no suitable-pair denominator."
+      }
+    },
+    "onlineIdentity": {
+      "status": "partial",
+      "implemented": "Bundled NCM preserves actual endpoint quality metadata internally; revisions bind address, actual quality and exact completed cache path. When AutoMix and provider caching are enabled, fresh authorized resolutions may prepare one complete cache file with a 10-second deadline and a 256-MiB disk limit. Playback and analysis then use the same local bytes; native transport retains a source lease. Partial, cancelled, expired or mismatched downloads are discarded. Before publication, streaming metadata inspection under the same deadline/cancellation requires recognized audio headers and valid codec/sample-rate/channel geometry, rejecting HTTP 200 error pages. This is not full-file decoder validation.",
+      "requestedQualityUsedAsActualQuality": false,
+      "directUncachedStreams": "Bundled NCM can materialise fresh sources before playback. Existing live direct streams, failed preparation, disabled caching and other providers retain conservative fallback.",
+      "onlineAccountValidated": false,
+      "remaining": "Real-account URL-expiry/quality-change playback tests, full application preparation latency acceptance and other provider source coverage.",
+      "headerInspection": {
+        "status": "passed",
+        "realSourceFiles": 4,
+        "formats": [
+          "MP3",
+          "FLAC"
+        ],
+        "syntheticWavHeader": true,
+        "networkAccountValidated": false
+      }
+    },
+    "realPairCoverage": {
+      "status": "pending",
+      "annotatedPairs": 0,
+      "renderedPairs": 36,
+      "unannotatedRandomCorpusIntelligentPairs": {
+        "natural": 2,
+        "dj": 3
+      },
+      "suitablePairCoverageValidated": false,
+      "categoryCoverageValidated": false,
+      "requiredPairs": 36,
+      "minimumSuitablePairCoverage": 0.8,
+      "latestIteration": {
+        "status": "rendered, awaiting human suitability and listening",
+        "report": "rhythm-improvement/report.json",
+        "renderedPairs": 36,
+        "selectedRenders": 19,
+        "strategies": {
+          "natural": {
+            "beat-aligned": 1,
+            "content-boundary": 11,
+            "fallback": 24
+          },
+          "dj": {
+            "beat-aligned": 7,
+            "content-boundary": 0,
+            "fallback": 29
+          }
+        },
+        "sourceAnalysisReused": true,
+        "suitablePairCoverageValidated": false
+      }
+    },
+    "humanListening": {
+      "status": "pending",
+      "ratedPairs": 0,
+      "localComparisonPage": "rhythm-improvement/source-joined-renders/listening.html",
+      "renderPaths": [
+        "C11",
+        "SSE2",
+        "AVX2"
+      ],
+      "comparisonKinds": [
+        "original",
+        "plain crossfade",
+        "natural",
+        "dj"
+      ],
+      "browserVisualVerification": "pending for the latest comparison page",
+      "previousBrowserVisualAttempt": "blocked: automatic approval rejected local server launch; browser disallows file protocol"
+    },
+    "windowsDevice": {
+      "status": "partial",
+      "verifiedDeviceRunSeconds": 64.1505651,
+      "runtime": "Current rhythm evaluation packaged native DLL",
+      "backend": "WASAPI Shared",
+      "device": "FRANSUN CX31993 HiFi-Audio",
+      "realPairNaturalDjHandoffsPassed": true,
+      "callbackDeadlineMisses": 0,
+      "underruns": 0,
+      "scope": "Native real-song prepared transport short check and six actual packaged application fixtures; listening, full playback matrix and long-run acceptance remain unfinished.",
+      "dllSha256": "3052de7777762a8f05bc265374682eef35e9cfa4de1dfe3f8a2da7276055156a",
+      "moduleSha256": "4a26ef6929a0db02625da385cd51859ae9fdc5a2674f4090bd4e3c6381939662",
+      "latestApplicationPlayback": {
+        "report": "rhythm-final-application.json",
+        "binary": "3052de7777762a8f05bc265374682eef35e9cfa4de1dfe3f8a2da7276055156a",
+        "intelligentPairs": 5,
+        "strategyCounts": {
+          "content-boundary": 1,
+          "beat-aligned": 4
+        },
+        "deadlineMisses": 0,
+        "underruns": 0,
+        "silent": true,
+        "humanListeningPassed": false
+      },
+      "latestNativeShortRun": {
+        "report": "rhythm-current-device-short.json",
+        "passed": true,
+        "verifiedRunSeconds": 64.1505651,
+        "completedCycles": 5,
+        "deadlineMisses": 0,
+        "underruns": 0,
+        "stress24HoursPassed": false,
+        "analysisReused": true
+      },
+      "previousNativeShortRun": {
+        "verifiedRunSeconds": 53.54482049999999,
+        "dllSha256": "fef93965312192f2cef3b19233c7211b89104bb2c3060689f881008c784b7ab9"
+      }
+    },
+    "stress24Hours": {
+      "status": "failed",
+      "verifiedRunSeconds": 33561.38947,
+      "requiredRunSeconds": 86400,
+      "report": "device-reproducible-final-soak-24h.json",
+      "processMetadata": "device-reproducible-final-soak-process.json",
+      "scope": "Silent real-device native natural/DJ transport, pause, seek, mode cancellation, queue promotion, callback deadlines and warmed RSS growth.",
+      "completionRequiresReadingFinalReport": true,
+      "dllSha256": "fef93965312192f2cef3b19233c7211b89104bb2c3060689f881008c784b7ab9",
+      "moduleSha256": "4a26ef6929a0db02625da385cd51859ae9fdc5a2674f4090bd4e3c6381939662",
+      "supersededAttempts": [
+        {
+          "report": "device-soak-24h.json",
+          "verifiedRunSeconds": 1954.8813332999998,
+          "passed": false,
+          "cancelled": true,
+          "finishedAt": "2026-10-10T19:29:19.772Z",
+          "reason": "superseded by final reproducibly stripped package"
+        },
+        {
+          "report": "device-package-soak-24h.json",
+          "verifiedRunSeconds": 2179.5738570999997,
+          "passed": false,
+          "cancelled": true,
+          "finishedAt": "2026-10-10T20:05:41.515Z",
+          "reason": "superseded by final reproducibly stripped package"
+        },
+        {
+          "report": "device-release-candidate-soak-24h.json",
+          "verifiedRunSeconds": 599.5501423,
+          "passed": false,
+          "cancelled": true,
+          "finishedAt": "2026-10-10T20:18:25.987Z",
+          "reason": "superseded by final reproducibly stripped package"
+        }
+      ],
+      "lastObservedAt": "2026-10-11T05:37:55.811Z",
+      "observedRunSeconds": 33561.38947,
+      "observedCompletedCycles": 2507,
+      "processId": 278312,
+      "latestEvaluationBinaryCovered": false,
+      "latestEvaluationBinaryReason": "Earlier soak uses a different native DLL. This planner/headroom/source-join runtime has no completed 24-hour device run.",
+      "completedCycles": 2507,
+      "passed": false,
+      "stress24HoursPassed": false,
+      "error": "Playback stopped before native handoff",
+      "finishedAt": "2026-10-11T05:37:55.811Z",
+      "callbackDeadlineMisses": 0,
+      "underruns": 0,
+      "failureSnapshotAvailable": false,
+      "causeEstablished": false,
+      "latestEvaluationAttempt": {
+        "status": "running",
+        "report": "rhythm-current-device-soak-24h.json",
+        "processMetadata": "rhythm-current-device-soak-process.json",
+        "processId": 272256,
+        "dllSha256": "3052de7777762a8f05bc265374682eef35e9cfa4de1dfe3f8a2da7276055156a",
+        "startedAt": "2026-10-11T10:06:12.664Z",
+        "requiredRunSeconds": 86400,
+        "verifiedRunSeconds": 198.0532811,
+        "completedCycles": 15,
+        "stress24HoursPassed": false,
+        "observedAt": "2026-10-11T10:09:32.352Z",
+        "fullApplicationStressValidated": false
+      },
+      "processActive": false
+    },
+    "installedPackage": {
+      "status": "partial",
+      "unpackedBuildPassed": true,
+      "runtimeDependencyPackagesVerified": 241,
+      "publicAssetAllowlistPassed": true,
+      "packagedNativeModelAnalysisPassed": true,
+      "packagedNativeDeviceShortRunPassed": true,
+      "temporaryDllProbeIsolated": true,
+      "reason": "Installer installation, packaged CPU fallback on actual hardware, remaining full application matrix and long-run resource acceptance remain pending.",
+      "packageDirectory": "D:\\TwilightEchoDependencies\\automix\\package-automix-rhythm-evaluation\\win-unpacked",
+      "verificationReport": "rhythm-package-verification.json",
+      "nativeStripReproducibilityPassed": true,
+      "packagedBackgroundNativeAnalysisPassed": true,
+      "files": {
+        "twilight-audio-engine.dll": "3052de7777762a8f05bc265374682eef35e9cfa4de1dfe3f8a2da7276055156a",
+        "twilight_audio_node.node": "4a26ef6929a0db02625da385cd51859ae9fdc5a2674f4090bd4e3c6381939662",
+        "twilight_smtc_node.node": "302b95dbbdae2dba23b83a265da7203717b15d733a34397675d7b9532e815c9a",
+        "twilight-asio-helper.exe": "12917feaa020bc4129264362fbaa7fec21d83fdb14b7efa694063f1872138790",
+        "twilight-vst3-host.exe": "f8faa8695cdaa9accf554628098f72fc35c350c496f55b1e4213877c895b63e3",
+        "twilight-vst3-scanner.exe": "fdad10dd46e38330f2d3248b99348d348735c85d47d5592e05c591891db218f1"
+      },
+      "latestEvaluationPackage": {
+        "directory": "D:\\TwilightEchoDependencies\\automix\\package-automix-rhythm-evaluation\\win-unpacked",
+        "verificationReport": "rhythm-package-verification.json",
+        "nativeFiles": {
+          "twilight-audio-engine.dll": "3052de7777762a8f05bc265374682eef35e9cfa4de1dfe3f8a2da7276055156a",
+          "twilight_audio_node.node": "4a26ef6929a0db02625da385cd51859ae9fdc5a2674f4090bd4e3c6381939662",
+          "twilight_smtc_node.node": "302b95dbbdae2dba23b83a265da7203717b15d733a34397675d7b9532e815c9a",
+          "twilight-asio-helper.exe": "12917feaa020bc4129264362fbaa7fec21d83fdb14b7efa694063f1872138790",
+          "twilight-vst3-host.exe": "f8faa8695cdaa9accf554628098f72fc35c350c496f55b1e4213877c895b63e3",
+          "twilight-vst3-scanner.exe": "fdad10dd46e38330f2d3248b99348d348735c85d47d5592e05c591891db218f1"
+        },
+        "unpackedBuildPassed": true,
+        "installerInstallationValidated": false
+      },
+      "previousPackage": {
+        "directory": "D:/TwilightEchoDependencies/automix/package-validation-final/win-unpacked",
+        "report": "package-verification-reproducible-final.json",
+        "files": {
+          "twilight-audio-engine.dll": "fef93965312192f2cef3b19233c7211b89104bb2c3060689f881008c784b7ab9",
+          "twilight_audio_node.node": "4a26ef6929a0db02625da385cd51859ae9fdc5a2674f4090bd4e3c6381939662"
+        }
+      }
+    },
+    "hostRegression": {
+      "status": "passed",
+      "audioManagerPassed": 443,
+      "onlineProviderPassed": 188,
+      "focusedAutoMixPassed": 32,
+      "releaseArtifactPassed": 60,
+      "typecheckAndApplicationBuildPassed": true,
+      "nativeSoakHarnessProvenanceTestsPassed": 3
+    },
+    "backgroundAnalysis": {
+      "status": "partial",
+      "nativeIpcSmokePassed": true,
+      "transport": "Production scheduler and identical packaged worker/chunks over Node IPC",
+      "completedAnalyses": 3,
+      "recoveryAnalysisPassed": true,
+      "maximumSimultaneousAutoMix": 1,
+      "maximumLiveScheduledWorkers": 1,
+      "poolConfiguredConcurrency": 4,
+      "remaining": "Long-run worker resource acceptance and the remaining full application cancellation/device/online matrix.",
+      "actualElectronUtilityProcessTargetedPlaybackPassed": true
+    }
+  },
+  "evidenceRoot": "D:/TwilightEchoDependencies/automix/evidence",
+  "evidence": [
+    "mingw-ctest.log",
+    "msvc-ctest.log",
+    "engine-tests-current.log",
+    "mingw-music-asm-phase/music.validation.json",
+    "msvc-music/music.validation.json",
+    "real-music-voice-head/voice.validation.json",
+    "msvc-music-voice/voice.validation.json",
+    "mingw-stretch-asm-phase/stretch.validation.json",
+    "real-music-stretch/music-stretch.validation.json",
+    "complete-native-analysis/native-analysis.validation.json",
+    "native-abi-current/analysis.validation.json",
+    "engine-tests-transport-next.log",
+    "tests-resampler-current.log",
+    "mingw-native-tests-latest.log",
+    "msvc-tests-transport-latest.log",
+    "online-manager-status-tests.log",
+    "automix-host-tests-current.log",
+    "automix-release-policy-tests.log",
+    "typecheck-final-transport.log",
+    "real-pairs/corpus.json",
+    "real-pairs/pairs.validation.json",
+    "device-short.json",
+    "device-soak-process.json",
+    "device-soak-24h.json",
+    "engine-tests-router-full.log",
+    "tests-router-cue-rates.log",
+    "online-materialization-tests.log",
+    "online-current-regression.log",
+    "automix-host-tests-download.log",
+    "app-build-automix-current.log",
+    "package-lifecycle-tests.log",
+    "package-contract-current.log",
+    "package-verification-fixed.json",
+    "package-analysis-smoke-current.json",
+    "device-router-short.json",
+    "device-package-short.json",
+    "device-package-soak-process.json",
+    "device-package-soak-24h.json",
+    "engine-tests-timeline-fixed.log",
+    "tests-timeline-guard-fixed.log",
+    "codec-transport-timeline.validation.json",
+    "online-audio-header-tests.log",
+    "online-audio-header-real.validation.json",
+    "online-header-regression.log",
+    "automix-host-header-tests.log",
+    "audio-manager-release-final.log",
+    "release-provenance-tests.log",
+    "app-build-diagnostics-final.log",
+    "package-reproducible-final.log",
+    "strip-reproducibility.validation.json",
+    "package-verification-reproducible-final.json",
+    "background-analysis-release-candidate.json",
+    "background-analysis-reproducible-final.json",
+    "device-reproducible-final-short.json",
+    "device-release-candidate-soak-24h.json",
+    "device-reproducible-final-soak-process.json",
+    "device-reproducible-final-soak-24h.json",
+    "evaluation-app-build.log",
+    "evaluation-automix-tests.log",
+    "evaluation-audio-manager-tests.log",
+    "evaluation-settings-regression.log",
+    "evaluation-eslint.log",
+    "evaluation-package-build.log",
+    "evaluation-package-verification.json",
+    "evaluation-application-smoke.json",
+    "evaluation-launch-cwd-repro.json",
+    "evaluation-loader-tests.log",
+    "evaluation-loader-audio-manager.log",
+    "evaluation-loader-eslint.log",
+    "evaluation-loader-app-build.log",
+    "evaluation-loader-package-build.log",
+    "evaluation-loader-project-launch.json",
+    "evaluation-loader-empty-launch.json",
+    "evaluation-loader-package-verification.json",
+    "playback-fixed-summary.json",
+    "playback-fixed-real-app.json",
+    "playback-fixed-modes-restore.json",
+    "playback-fixed-package-verification.json",
+    "playback-fixed-native-build.log",
+    "playback-fixed-native-tests.log",
+    "playback-fixed-audio-manager.log",
+    "playback-fixed-automix-tests.log",
+    "playback-fixed-settings-test.log",
+    "playback-fixed-service-tests.log",
+    "playback-fixed-eslint.log",
+    "playback-fixed-app-build.log",
+    "playback-fixed-package-build.log",
+    "playback-fixed-development-stage.log",
+    "rhythm-improvement/report.json",
+    "rhythm-improvement/source-joined-renders/pairs.validation.json",
+    "rhythm-final-application.json",
+    "rhythm-package-verification.json",
+    "rhythm-current-device-short.json",
+    "rhythm-development-stage.log",
+    "rhythm-final-native-tests.log",
+    "rhythm-seams-native-tests.log",
+    "rhythm-final-curve-msvc-tests.log",
+    "rhythm-final-curve-tests.log",
+    "rhythm-audio-manager-tests.log",
+    "rhythm-decoded-tail-host-tests.log",
+    "rhythm-settings-services.log",
+    "rhythm-tail-typecheck.log",
+    "rhythm-tail-eslint.log",
+    "rhythm-neutral-song.log",
+    "rhythm-soak-harness-tests.log",
+    "rhythm-current-device-soak-process.json",
+    "rhythm-current-device-soak-24h.json"
+  ],
+  "limitations": [
+    "Numerical parity does not establish beat/voice ground-truth accuracy or listening preference.",
+    "Objective stretch comparison does not establish waveform equivalence or absence of audible artifacts.",
+    "Random corpus success is not the preannotated suitable-pair coverage metric; that metric is unknown without prior human annotation.",
+    "Local libsndfile/torchaudio listening renders verify the C/NASM preparation and mixing core, not every production decoder/DSP/output route.",
+    "A running 24-hour process is not a passed gate; validate its final report and provenance before updating acceptance.",
+    "No public delivery claim is permitted while transport, listening, device, online or package gates remain pending."
+  ],
+  "manualEvaluation": {
+    "available": true,
+    "releaseReady": false,
+    "defaultMode": "off",
+    "modes": [
+      "natural",
+      "dj"
+    ],
+    "availabilityPolicy": "Development builds or an explicit TWILIGHT_AUTOMIX_EVALUATION=1 production build; main and renderer share the flag.",
+    "packageDirectory": "D:\\TwilightEchoDependencies\\automix\\package-automix-rhythm-evaluation\\win-unpacked",
+    "actualVueSelectorPassed": true,
+    "packagedApplicationModeAndRestartSmokePassed": true,
+    "applicationSmokeScope": "Packaged main, preload and renderer in a hidden isolated Electron harness with real native utility processes; caller directory and PATH preserved.",
+    "settingsPolicyRegressionPassed": 33,
+    "packageAssetsAndDependenciesPassed": true,
+    "developmentRuntimeStaged": true,
+    "developmentRuntimeReason": "Confirmed no process loaded checkout runtime; current tested engine/addon/helper and capability manifests staged without changing user settings.",
+    "humanListeningPassed": false,
+    "report": "rhythm-improvement/report.json",
+    "launchDirectoriesValidated": [
+      "D:\\Project\\Twilight_Echo",
+      "D:\\TwilightEchoDependencies\\automix\\evidence\\evaluation-empty-launch"
+    ],
+    "nativeLoaderRegressionPassed": 3,
+    "staleNativeLoaderIssue": {
+      "reproduced": true,
+      "previousPackage": "package-automix-evaluation/win-unpacked",
+      "reproReport": "evaluation-launch-cwd-repro.json",
+      "symptom": "settings:update failed because the old checkout addon did not expose SetAutoMixMode",
+      "fixed": "ASAR workers load only from their own resources directory; checkout fallback is forbidden for a packaged worker."
+    },
+    "playbackRegression": {
+      "status": "passed",
+      "report": "playback-fixed-real-app.json",
+      "summaryReport": "playback-fixed-summary.json",
+      "fixed": [
+        "rounded physical source duration",
+        "timing JSON precision",
+        "stale cancelled preparation status",
+        "failure reason masking",
+        "embedded artwork exceeding control response budget",
+        "tick cache regression after pause/resume",
+        "enabling during active PCM playback",
+        "initial playback source/next-duration consistency"
+      ],
+      "formalAcceptanceUnchanged": true
+    },
+    "latestRuntimeStagedToDevelopment": true,
+    "latestRuntimeStagingReason": "Confirmed no process loaded checkout runtime; current tested engine/addon/helper and capability manifests staged without changing user settings.",
+    "latestDevelopmentFiles": {
+      "twilight-audio-engine.dll": "3052de7777762a8f05bc265374682eef35e9cfa4de1dfe3f8a2da7276055156a",
+      "twilight_audio_node.node": "4a26ef6929a0db02625da385cd51859ae9fdc5a2674f4090bd4e3c6381939662",
+      "twilight-asio-helper.exe": "12917feaa020bc4129264362fbaa7fec21d83fdb14b7efa694063f1872138790"
+    },
+    "latestLaunchDirectoriesValidated": [
+      "D:\\Project\\Twilight_Echo"
+    ]
+  },
+  "algorithmIteration": {
+    "scope": "Fixed unannotated corpus; reused unchanged public-model analysis, rebuilt native preparation and real packaged application inference",
+    "releaseReady": false,
+    "humanListeningPassed": false,
+    "suitablePairCoverageValidated": false,
+    "baseline": {
+      "natural": 2,
+      "dj": 3
+    },
+    "strategies": {
+      "natural": {
+        "beat-aligned": 1,
+        "content-boundary": 11,
+        "fallback": 24
+      },
+      "dj": {
+        "beat-aligned": 7,
+        "content-boundary": 0,
+        "fallback": 29
+      }
+    },
+    "renderedPairs": 36,
+    "selectedRenders": 19,
+    "maximumBodyPeak": 0.9800001978874207,
+    "maximumCpuSampleError": 3.5762786865234375e-07,
+    "maximumJoinSampleError": 0,
+    "application": {
+      "passed": true,
+      "transitions": [
+        {
+          "id": "pair-03",
+          "mode": "natural",
+          "passed": true,
+          "strategy": "content-boundary",
+          "deadlineMisses": 0,
+          "underruns": 0,
+          "promotedPosition": 4.12975,
+          "observedNextRate": 1
+        },
+        {
+          "id": "pair-11",
+          "mode": "natural",
+          "passed": true,
+          "strategy": "beat-aligned",
+          "deadlineMisses": 0,
+          "underruns": 0,
+          "promotedPosition": 6.283479166666667,
+          "observedNextRate": 1.024791666666667
+        },
+        {
+          "id": "pair-22",
+          "mode": "dj",
+          "passed": true,
+          "strategy": "beat-aligned",
+          "deadlineMisses": 0,
+          "underruns": 0,
+          "promotedPosition": 14.7794375,
+          "observedNextRate": 0.9277083333333332
+        },
+        {
+          "id": "pair-28",
+          "mode": "dj",
+          "passed": true,
+          "strategy": "beat-aligned",
+          "deadlineMisses": 0,
+          "underruns": 0,
+          "promotedPosition": 17.682354166666666,
+          "observedNextRate": 1.056041666666666
+        },
+        {
+          "id": "pair-35",
+          "mode": "dj",
+          "passed": true,
+          "strategy": "beat-aligned",
+          "deadlineMisses": 0,
+          "underruns": 0,
+          "promotedPosition": 12.198,
+          "observedNextRate": 1.0604166666666668
+        },
+        {
+          "id": "pair-01",
+          "mode": "dj",
+          "passed": true,
+          "expectedFallback": "low_beat_confidence"
+        }
+      ],
+      "silent": true
+    },
+    "nativeDeviceShortRun": {
+      "report": "rhythm-current-device-short.json",
+      "passed": true,
+      "verifiedRunSeconds": 64.1505651,
+      "completedCycles": 5,
+      "deadlineMisses": 0,
+      "underruns": 0,
+      "stress24HoursPassed": false,
+      "analysisReused": true
+    },
+    "previous24HourAttempt": {
+      "report": "device-reproducible-final-soak-24h.json",
+      "passed": false,
+      "stress24HoursPassed": false,
+      "verifiedRunSeconds": 33561.38947,
+      "completedCycles": 2507,
+      "error": "Playback stopped before native handoff",
+      "finishedAt": "2026-10-11T05:37:55.811Z",
+      "dllSha256": "fef93965312192f2cef3b19233c7211b89104bb2c3060689f881008c784b7ab9",
+      "failureSnapshotAvailable": false,
+      "causeEstablished": false
+    },
+    "package": {
+      "assets": {
+        "ok": true,
+        "files": [
+          "beat-this.tamg",
+          "yamnet.tamg",
+          "Beat-This-LICENSE.txt",
+          "YAMNet-LICENSE.txt",
+          "Signalsmith-Stretch-LICENSE.txt",
+          "Signalsmith-Linear-LICENSE.txt",
+          "manifest.json"
+        ]
+      },
+      "dependencies": {
+        "packages": 241
+      },
+      "branding": {
+        "fileDescription": "TwilightEcho",
+        "productName": "TwilightEcho",
+        "internalName": "TwilightEcho",
+        "originalFilename": "TwilightEcho.exe",
+        "companyName": "Pxasen.com"
+      },
+      "asarSha256": "ac8f8e41e7d947d93224bbee9c776355a1322f83626d2185cafb929fa76bfd3d",
+      "native": {
+        "twilight-audio-engine.dll": "3052de7777762a8f05bc265374682eef35e9cfa4de1dfe3f8a2da7276055156a",
+        "twilight_audio_node.node": "4a26ef6929a0db02625da385cd51859ae9fdc5a2674f4090bd4e3c6381939662",
+        "twilight_smtc_node.node": "302b95dbbdae2dba23b83a265da7203717b15d733a34397675d7b9532e815c9a",
+        "twilight-asio-helper.exe": "12917feaa020bc4129264362fbaa7fec21d83fdb14b7efa694063f1872138790",
+        "twilight-vst3-host.exe": "f8faa8695cdaa9accf554628098f72fc35c350c496f55b1e4213877c895b63e3",
+        "twilight-vst3-scanner.exe": "fdad10dd46e38330f2d3248b99348d348735c85d47d5592e05c591891db218f1"
+      }
+    },
+    "evidenceSha256": "f45ecd97c93e603fe38fc94f575cbdcca4187d7eed22e0a7471f44160b6b5776",
+    "limitations": [
+      "Corpus has no prior suitability/category annotations; no 80% claim.",
+      "11 original-speed natural outro transitions are not beat-aligned coverage.",
+      "Peak prediction applies to prepared PCM before user DSP; no intersample true-peak assertion.",
+      "No human listening verdict, online-account acceptance or new-DLL 24-hour test."
+    ],
+    "packageDirectory": "D:\\TwilightEchoDependencies\\automix\\package-automix-rhythm-evaluation\\win-unpacked",
+    "listeningPage": "D:\\TwilightEchoDependencies\\automix\\evidence\\rhythm-improvement\\source-joined-renders\\listening.html",
+    "codecTailFix": {
+      "realSource": "MP3 Dstorv",
+      "decodedDeficitSeconds": 0.012,
+      "cacheKeyUsesActualEnd": true,
+      "fullCoverageClaimed": false,
+      "report": "rhythm-decoded-tail-host-tests.log"
+    },
+    "current24HourAttempt": {
+      "status": "running",
+      "report": "rhythm-current-device-soak-24h.json",
+      "processMetadata": "rhythm-current-device-soak-process.json",
+      "processId": 272256,
+      "dllSha256": "3052de7777762a8f05bc265374682eef35e9cfa4de1dfe3f8a2da7276055156a",
+      "startedAt": "2026-10-11T10:06:12.664Z",
+      "requiredRunSeconds": 86400,
+      "verifiedRunSeconds": 198.0532811,
+      "completedCycles": 15,
+      "stress24HoursPassed": false,
+      "observedAt": "2026-10-11T10:09:32.352Z",
+      "fullApplicationStressValidated": false
+    }
+  },
+  "evaluationV2": {
+    "version": "1.3.0-automix.2",
+    "ruleVersion": "twilight-rules-2",
+    "materialVersion": 2,
+    "releaseReady": false,
+    "humanListeningPassed": false,
+    "suitabilityAnnotated": false,
+    "stress24HoursPassed": false,
+    "summary": {
+      "natural": {
+        "beforeSuccess": 12,
+        "afterSuccess": 12,
+        "longMixes": 0,
+        "failureReasons": {
+          "low_beat_confidence": 20,
+          "tempo_outside_mode_limit": 4
+        }
+      },
+      "dj": {
+        "beforeSuccess": 7,
+        "afterSuccess": 23,
+        "longMixes": 15,
+        "failureReasons": {
+          "low_beat_confidence": 6,
+          "tempo_outside_mode_limit": 7
+        }
+      }
+    },
+    "corpusSha256": "ee2c8f460725307331ee76fe866ef0a4b1d9ea332083eb6b8fc595827cb31520",
+    "deliveredFiles": {
+      "TwilightEcho.exe": "7b0b88f254bf2c7059d761a5229a113a9b5a4f645033516e424c7ce403110ae5",
+      "resources/app.asar": "725019757d8444a2c6193563eb1d26482a3766a68f2e4353670dbb0881581d1d",
+      "resources/audio-engine/twilight-audio-engine.dll": "12bb85b4c27bebebf55acdcc0cfb895e2e9f0d5424139a24cc249bb263d5d07a",
+      "resources/audio-engine/twilight_audio_node.node": "7a4c4e57778ba96687d0a5fd97f5657a672dd43942c0516596243793710fc1b0"
+    },
+    "modelVersion": "demucs-4.0.1:955717e8",
+    "checkpointSha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+    "minGwNativePassed": 46,
+    "nativeSkipped": 1,
+    "focusedTestsPassed": 37,
+    "relatedTestsPassed": 229,
+    "analysisClientTestsPassed": 8,
+    "finalAnalysisCompatibilityPassed": true,
+    "finalStemPlaybackPassed": true,
+    "enhancementPackage2_1": {
+      "version": "2.1",
+      "archive": "Twilight-AutoMix-Enhancement-2.1-Slim-Windows-x64.7z",
+      "bytes": 1985257469,
+      "unpackedBytes": 4749686500,
+      "sha256": "c92c7e875ce528a05cbd6fd436ed5516656db3549135b52edfee91e20b3b33a7",
+      "modelAndWorkerUnchanged": true,
+      "all135RuntimeBinariesUnchanged": true,
+      "samePathSamplesExact": true,
+      "extractedDigestsPassed": true,
+      "legalNoticesExact": 102,
+      "emptyWorkingDirectoryImportPassed": true,
+      "nativeMaterialPreparationPassed": true,
+      "report": "stem-slim-packaging.json",
+      "documentation": "stems/PACKAGING.md"
+    },
+    "documentation": "EVALUATION-V2.md",
+    "outputs": "C:\\Users\\XOS\\Documents\\Codex\\2026-10-11\\a-u\\outputs",
+    "pendingGates": [
+      "human listening",
+      "preannotated suitable-pair 80% long-mix coverage",
+      "24-hour real device stress",
+      "real online account acceptance",
+      "formal publication acceptance"
+    ]
+  },
+  "evaluationV3Memory": {
+    "version": "1.3.0-automix.3",
+    "enhancementVersion": "2.2",
+    "releaseReady": false,
+    "baseArchive": {
+      "file": "TwilightEcho-1.3.0-automix.3-Windows-x64.zip",
+      "bytes": 189496308,
+      "sha256": "e4e0a0f2b5fe800e00a5aaccdae421653ac3188ecb1e4789382737511eadb399",
+      "archiveIntegrityPassed": true
+    },
+    "enhancementArchive": {
+      "version": "2.2",
+      "archive": "Twilight-AutoMix-Enhancement-2.2-Windows-x64.7z",
+      "bytes": 1985267024,
+      "sha256": "154a63f2156e49b7438996dcb7e112a0779ad865bb5b1460f4f4a5aa9ea56683",
+      "unpackedBytes": 4749695373,
+      "workerSha256": "bbc20fb23540b8519c2c93b18e9513ddafa134b22594a8fe479b950c024d186b",
+      "checkpointSha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+      "defaultCacheBudgetBytes": 536870912,
+      "runtimeAndModelUnchanged": true,
+      "all135RuntimeModelBinariesRetained": true,
+      "legalNoticesRetained": 102,
+      "archiveIntegrityPassed": true,
+      "compression": "Lossless LZMA2; unchanged verified 2.1 blocks reused",
+      "elapsedSeconds": 74.0
+    },
+    "packagedFiles": {
+      "TwilightEcho.exe": "2406a178e04356a9919914273b4ed7cdaf0a097be69ded1bb5bf98df00006714",
+      "resources/app.asar": "e1516b378134608c0d5d9a8ccc34cd67f16065adc238aee5345df0683cfbcf2f",
+      "resources/audio-engine/twilight-audio-engine.dll": "12bb85b4c27bebebf55acdcc0cfb895e2e9f0d5424139a24cc249bb263d5d07a",
+      "resources/audio-engine/twilight_audio_node.node": "7a4c4e57778ba96687d0a5fd97f5657a672dd43942c0516596243793710fc1b0"
+    },
+    "defaultStemCacheMiB": 512,
+    "modelVersion": "demucs-4.0.1:955717e8",
+    "checkpointSha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+    "sampleExactValidationPassed": true,
+    "listeningStemEnhanced": true,
+    "humanListeningPassed": false,
+    "focusedTestsPassed": 40,
+    "mainPlaybackTestsPassed": 220,
+    "settingsTestsPassed": 30,
+    "workerUnitTestsPassed": 5,
+    "pendingGates": [
+      "human listening",
+      "preannotated suitable-pair 80% long-mix coverage",
+      "24-hour real device stress",
+      "real online account acceptance",
+      "formal publication acceptance"
+    ],
+    "previousVersionsPreserved": true,
+    "previousDeliveryManifest": "交付清单-automix.2.json",
+    "resourceSummary": "验证报告/分轨资源汇总-2.2.json",
+    "listening": "分轨试听-2.2/试听.html",
+    "documentation": "stems/MEMORY-2.2.md",
+    "benchmarkSummary": {
+      "passed": true,
+      "machine": {
+        "gpu": "NVIDIA GeForce RTX 5070 Laptop GPU",
+        "ramApproxGiB": 16
+      },
+      "repetitionsPerScenario": 3,
+      "rows": [
+        {
+          "device": "CPU",
+          "scenario": "冷启动",
+          "versions": {
+            "2.1": {
+              "wallSecondsMedian": 17.891000000061467,
+              "peakWorkingSetBytesMedian": 2142302208,
+              "peakPrivateCommitBytesMedian": 3549085696,
+              "peakGpuAllocatedBytesMedian": 0,
+              "peakGpuReservedBytesMedian": 0,
+              "peakDiskBytesMedian": 55298654
+            },
+            "2.2": {
+              "wallSecondsMedian": 18.43700000003446,
+              "peakWorkingSetBytesMedian": 1984696320,
+              "peakPrivateCommitBytesMedian": 2680193024,
+              "peakGpuAllocatedBytesMedian": 0,
+              "peakGpuReservedBytesMedian": 0,
+              "peakDiskBytesMedian": 55299664
+            }
+          }
+        },
+        {
+          "device": "CPU",
+          "scenario": "双侧缓存命中",
+          "versions": {
+            "2.1": {
+              "wallSecondsMedian": 3.187000000034459,
+              "peakWorkingSetBytesMedian": 793133056,
+              "peakPrivateCommitBytesMedian": 2031316992,
+              "peakGpuAllocatedBytesMedian": 0,
+              "peakGpuReservedBytesMedian": 0,
+              "peakDiskBytesMedian": 55298652
+            },
+            "2.2": {
+              "wallSecondsMedian": 0.5160000000614673,
+              "peakWorkingSetBytesMedian": 63270912,
+              "peakPrivateCommitBytesMedian": 32493568,
+              "peakGpuAllocatedBytesMedian": 0,
+              "peakGpuReservedBytesMedian": 0,
+              "peakDiskBytesMedian": 55297678
+            }
+          }
+        },
+        {
+          "device": "CPU",
+          "scenario": "单侧缓存命中",
+          "versions": {
+            "2.1": {
+              "wallSecondsMedian": 10.89000000001397,
+              "peakWorkingSetBytesMedian": 2107326464,
+              "peakPrivateCommitBytesMedian": 3510480896,
+              "peakGpuAllocatedBytesMedian": 0,
+              "peakGpuReservedBytesMedian": 0,
+              "peakDiskBytesMedian": 55298654
+            },
+            "2.2": {
+              "wallSecondsMedian": 10.858999999938533,
+              "peakWorkingSetBytesMedian": 1980006400,
+              "peakPrivateCommitBytesMedian": 2671702016,
+              "peakGpuAllocatedBytesMedian": 0,
+              "peakGpuReservedBytesMedian": 0,
+              "peakDiskBytesMedian": 55299672
+            }
+          }
+        },
+        {
+          "device": "GPU",
+          "scenario": "冷启动",
+          "versions": {
+            "2.1": {
+              "wallSecondsMedian": 5.219000000040978,
+              "peakWorkingSetBytesMedian": 1609416704,
+              "peakPrivateCommitBytesMedian": 3908562944,
+              "peakGpuAllocatedBytesMedian": 581213696,
+              "peakGpuReservedBytesMedian": 832569344,
+              "peakDiskBytesMedian": 55298695
+            },
+            "2.2": {
+              "wallSecondsMedian": 5.219000000040978,
+              "peakWorkingSetBytesMedian": 1538113536,
+              "peakPrivateCommitBytesMedian": 3023380480,
+              "peakGpuAllocatedBytesMedian": 570478592,
+              "peakGpuReservedBytesMedian": 765460480,
+              "peakDiskBytesMedian": 55299710
+            }
+          }
+        },
+        {
+          "device": "GPU",
+          "scenario": "双侧缓存命中",
+          "versions": {
+            "2.1": {
+              "wallSecondsMedian": 3.3130000000819564,
+              "peakWorkingSetBytesMedian": 822300672,
+              "peakPrivateCommitBytesMedian": 2052976640,
+              "peakGpuAllocatedBytesMedian": 0,
+              "peakGpuReservedBytesMedian": 0,
+              "peakDiskBytesMedian": 55298653
+            },
+            "2.2": {
+              "wallSecondsMedian": 0.515999999945052,
+              "peakWorkingSetBytesMedian": 62955520,
+              "peakPrivateCommitBytesMedian": 32763904,
+              "peakGpuAllocatedBytesMedian": 0,
+              "peakGpuReservedBytesMedian": 0,
+              "peakDiskBytesMedian": 55299560
+            }
+          }
+        },
+        {
+          "device": "GPU",
+          "scenario": "单侧缓存命中",
+          "versions": {
+            "2.1": {
+              "wallSecondsMedian": 4.625,
+              "peakWorkingSetBytesMedian": 1575665664,
+              "peakPrivateCommitBytesMedian": 3841232896,
+              "peakGpuAllocatedBytesMedian": 577288192,
+              "peakGpuReservedBytesMedian": 765460480,
+              "peakDiskBytesMedian": 55298696
+            },
+            "2.2": {
+              "wallSecondsMedian": 4.625,
+              "peakWorkingSetBytesMedian": 1512214528,
+              "peakPrivateCommitBytesMedian": 2995453952,
+              "peakGpuAllocatedBytesMedian": 566545920,
+              "peakGpuReservedBytesMedian": 765460480,
+              "peakDiskBytesMedian": 55299697
+            }
+          }
+        }
+      ],
+      "sampleExact": true,
+      "workerSha256": "bbc20fb23540b8519c2c93b18e9513ddafa134b22594a8fe479b950c024d186b",
+      "modelSha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+      "defaultCacheBudgetBytes": 536870912,
+      "formalReleaseReady": false,
+      "method": "Median of three sequential isolated process runs per CPU/GPU and cold/full/partial scenario. Same 12s stereo MP3/FLAC contexts. Parent polls Windows PROCESS_MEMORY_COUNTERS_EX at 50ms; disk peaks are sampled cache+controlled materials, excluding fixed runtime and OS paging. Baseline source bytes remain unchanged; external instrumentation only records memory/CUDA metrics."
+    },
+    "actualStemAuditionGpuInference": true,
+    "materialAndCacheVersion": 2
+  },
+  "evaluationV4Planning": {
+    "version": "1.3.0-automix.4",
+    "ruleVersion": "twilight-rules-3",
+    "releaseReady": false,
+    "outputs": "C:\\Users\\XOS\\Documents\\Codex\\2026-10-11\\c-users-xos-desktop-automix-c-2\\outputs",
+    "documentation": "EVALUATION-V4.md",
+    "corpusManifestSha256": "ee2c8f460725307331ee76fe866ef0a4b1d9ea332083eb6b8fc595827cb31520",
+    "rawAnalysisReused": true,
+    "baselineReportSha256": "34dc4d6fad4e10142ea5857b771b526429a3fcc9c637a37c2a7dd87b0917154f",
+    "newModelInferenceClaimed": false,
+    "humanListeningPassed": false,
+    "preannotatedSuitablePairCoveragePassed": false,
+    "stress24HoursPassed": false,
+    "summary": {
+      "natural": {
+        "beforeIntelligent": 12,
+        "afterIntelligent": 26,
+        "beforeLongMixes": 0,
+        "afterLongMixes": 0,
+        "newIntelligentPairs": [
+          "pair-01",
+          "pair-02",
+          "pair-05",
+          "pair-12",
+          "pair-13",
+          "pair-14",
+          "pair-15",
+          "pair-16",
+          "pair-20",
+          "pair-21",
+          "pair-24",
+          "pair-26",
+          "pair-31",
+          "pair-32"
+        ],
+        "newLongMixPairs": [],
+        "strategyCounts": {
+          "content-boundary": 25,
+          "fallback": 10,
+          "beat-aligned": 1
+        },
+        "failureReasons": {
+          "low_beat_confidence": 9,
+          "tempo_outside_mode_limit": 1
+        }
+      },
+      "dj": {
+        "beforeIntelligent": 23,
+        "afterIntelligent": 34,
+        "beforeLongMixes": 15,
+        "afterLongMixes": 19,
+        "newIntelligentPairs": [
+          "pair-01",
+          "pair-05",
+          "pair-12",
+          "pair-13",
+          "pair-14",
+          "pair-15",
+          "pair-20",
+          "pair-21",
+          "pair-23",
+          "pair-26",
+          "pair-36"
+        ],
+        "newLongMixPairs": [
+          "pair-20",
+          "pair-23",
+          "pair-26",
+          "pair-36"
+        ],
+        "strategyCounts": {
+          "content-boundary": 15,
+          "beat-aligned": 19,
+          "fallback": 2
+        },
+        "failureReasons": {
+          "tempo_outside_mode_limit": 2
+        }
+      }
+    },
+    "archive": {
+      "file": "TwilightEcho-1.3.0-automix.4-Windows-x64.zip",
+      "bytes": 190470631,
+      "sha256": "6cb944a49a4912a06695c04d1412286c2ee038df37de8fbde7b9b23548099241",
+      "integrityPassed": true
+    },
+    "packagedFiles": {
+      "TwilightEcho.exe": "4ff0e6e810501567ac73fdadce0a19dd8ff4723c73fce25a6ecc3e027cd3cd1d",
+      "resources/app.asar": "074c89a3e90903810a9057576aa1db41e01337aee3e3cc06246a4b0ac4afd54d",
+      "resources/audio-engine/twilight-audio-engine.dll": "c845ae37984613075e808bf8c18e4af1ae1fa5952bff2559a08e6c2abd918a0e",
+      "resources/audio-engine/twilight_audio_node.node": "7a4c4e57778ba96687d0a5fd97f5657a672dd43942c0516596243793710fc1b0",
+      "resources/audio-engine/automix-native/beat-this.tamg": "a01d39a2185f64e2da422fc6251dd93785f8bb90ba91a50087049e42d8b04fec",
+      "resources/audio-engine/automix-native/yamnet.tamg": "2f80a111ab1af443c8657406fd543d700b068b938e6638a26f5ec0f6ee5aa1df"
+    },
+    "checks": {
+      "fullMinGwCTestPassed": 46,
+      "fullMinGwCTestSkipped": 1,
+      "skip": "ASIO ABI cross-DLL environment fixture",
+      "nativeTestsPassed": 6,
+      "focusedAutoMixTestsPassed": 40,
+      "deviceHarnessTestsPassed": 3,
+      "evaluationTypecheckBuildPassed": true,
+      "relatedLintPassed": true,
+      "corpusRenderPassed": true,
+      "packagedApplicationPassed": true,
+      "realWasapiCyclesPassed": 3,
+      "dependencyClosurePackages": 241,
+      "packageBrandingPassed": true,
+      "listeningPageDesktopAndMobilePassed": true,
+      "wavSha256Verified": 144,
+      "developmentRuntimeLoadedAndRuleVersionPassed": true
+    },
+    "reports": {
+      "corpus": "试听对照/pairs.validation.json",
+      "packagedApplication": "验证报告/打包应用验证.json",
+      "device": "验证报告/真实设备播放.json",
+      "developmentRuntime": "验证报告/开发运行库验证.json",
+      "page": "验证报告/试听页面验证.json",
+      "logs": "验证报告/执行日志",
+      "testHistory": "验证报告/测试历史"
+    },
+    "developmentRuntime": {
+      "staged": true,
+      "runtime": "D:/Project/Twilight_Echo/resources/audio-engine",
+      "nativeFiles": {
+        "twilight-audio-engine.dll": "dbd4aa41d44f4a8bc115754f07bec2da96c3aa238ca4eaf5fa150f6d50def10a",
+        "twilight_audio_node.node": "01b75d655d6d61bf9d24a3f8a5456f20104b6fbbcc5a97649f02cce38ebace24",
+        "twilight-asio-helper.exe": "015ea53ba7021ca0e9ed6566661fd93246860b564cc6741942c46eb6acba5cf7"
+      },
+      "matchesVerifiedBuild": true,
+      "runtimeLoaded": true,
+      "ruleVersionProbePassed": true,
+      "initialAttempt": "EBUSY: running development player owned old DLL; user then closed it",
+      "userProcessesStoppedByAgent": false
+    },
+    "compatibleEnhancementPack": "2.2",
+    "pendingGates": [
+      "human listening",
+      "preannotated suitable-pair 80% long-mix coverage",
+      "24-hour real device/application stress",
+      "real online account acceptance",
+      "formal publication acceptance"
+    ],
+    "previousEvaluationRecordsPreserved": true
+  },
+  "evaluationV5": {
+    "version": "1.3.0-automix.5",
+    "ruleVersion": "twilight-rules-4",
+    "releaseReady": false,
+    "referenceSourceTransplanted": false,
+    "rawAnalysisReused": true,
+    "manifestSha256": "ee2c8f460725307331ee76fe866ef0a4b1d9ea332083eb6b8fc595827cb31520",
+    "baselineReportSha256": "bdc98ee20e1d1cf128139efe918522f9d7f03c983bbfd21ae157df4cdca3178b",
+    "rendererSha256": "d5cbc42757ccfa8084877053dfb8568b1db90beed89b40e57b422a5b7080c2d3",
+    "windowsProbeSha256": "e36f3399651f77dc0b08d02f0a52222c2f5e0c8f31dcebc9ef459114a3f19593",
+    "summary": {
+      "natural": {
+        "beforeSuccess": 26,
+        "afterSuccess": 26,
+        "beforeLongMixes": 0,
+        "afterLongMixes": 0,
+        "strategies": {
+          "content-boundary": 25,
+          "beat-aligned": 1
+        },
+        "failureReasons": {
+          "low_beat_confidence": 9,
+          "tempo_outside_mode_limit": 1
+        }
+      },
+      "dj": {
+        "beforeSuccess": 34,
+        "afterSuccess": 34,
+        "beforeLongMixes": 19,
+        "afterLongMixes": 22,
+        "strategies": {
+          "content-boundary": 12,
+          "beat-aligned": 19,
+          "tail-overlap": 3
+        },
+        "failureReasons": {
+          "tempo_outside_mode_limit": 2
+        }
+      }
+    },
+    "newLongTailPairs": [
+      {
+        "id": "pair-12",
+        "seconds": 24.0,
+        "pcmJointAudibleSeconds": 15.68
+      },
+      {
+        "id": "pair-15",
+        "seconds": 24.0,
+        "pcmJointAudibleSeconds": 16.9
+      },
+      {
+        "id": "pair-17",
+        "seconds": 16.0,
+        "pcmJointAudibleSeconds": 12.52
+      }
+    ],
+    "archive": {
+      "file": "TwilightEcho-1.3.0-automix.5-Windows-x64.zip",
+      "bytes": 190483549,
+      "sha256": "3ee929795382faa6801257786016f72802caebddd220b3ed9251d45f9f8872d4",
+      "integrityPassed": true
+    },
+    "packagedFiles": {
+      "TwilightEcho.exe": "09df7369b17137e4c86b0a3c531679892e84654fac77aea009e15a1fde3380b2",
+      "resources/app.asar": "54996f326e150c871e3bdcf146562121a2d13553f93ec8bfafbdbc6337384734",
+      "resources/audio-engine/twilight-audio-engine.dll": "5a6c2fdad37b33d86a167decbd36d7bee3975beb0c4324525662d41b95dcdf22",
+      "resources/audio-engine/twilight_audio_node.node": "7a4c4e57778ba96687d0a5fd97f5657a672dd43942c0516596243793710fc1b0",
+      "resources/audio-engine/automix-native/beat-this.tamg": "a01d39a2185f64e2da422fc6251dd93785f8bb90ba91a50087049e42d8b04fec",
+      "resources/audio-engine/automix-native/yamnet.tamg": "2f80a111ab1af443c8657406fd543d700b068b938e6638a26f5ec0f6ee5aa1df"
+    },
+    "checks": {
+      "fullMinGwCTestPassed": 47,
+      "fullMinGwCTestSkipped": 1,
+      "skip": "existing ASIO ABI cross-DLL environment fixture",
+      "nativeTestsPassed": 7,
+      "audioManagerTestsPassed": 445,
+      "focusedAutoMixTestsPassed": 40,
+      "releaseArtifactTestsPassed": 60,
+      "deviceHarnessTestsPassed": 3,
+      "typecheckBuildPassed": true,
+      "relatedLintPassed": true,
+      "corpusRenderPassed": true,
+      "packagedApplicationPassed": true,
+      "restorePassed": true,
+      "realWasapiTailCyclesPassed": 3,
+      "dependencyClosurePackages": 241,
+      "packageBrandingPassed": true,
+      "listeningPageDesktopAndMobilePassed": true,
+      "wavSha256Verified": 144,
+      "developmentRuntimeLoadedAndRuleVersionPassed": true
+    },
+    "developmentRuntime": {
+      "passed": true,
+      "staged": true,
+      "ruleVersion": "twilight-rules-4",
+      "runtime": "D:/Project/Twilight_Echo/resources/audio-engine",
+      "nativeFiles": {
+        "twilight-audio-engine.dll": "e0d4b03d6c6651cab9ccdc26c596bd93dc0e79912e16d6337246a1bdd7975218",
+        "twilight_audio_node.node": "01b75d655d6d61bf9d24a3f8a5456f20104b6fbbcc5a97649f02cce38ebace24",
+        "twilight-asio-helper.exe": "015ea53ba7021ca0e9ed6566661fd93246860b564cc6741942c46eb6acba5cf7"
+      },
+      "currentRuleProbe": {
+        "ok": false,
+        "reason": "next_source_not_ready"
+      },
+      "staleRuleProbe": {
+        "ok": false,
+        "reason": "invalid_analysis_windows"
+      },
+      "runtimeLoaded": true,
+      "productionWindowsParsed": true
+    },
+    "compatibleEnhancementPack": "2.2",
+    "pendingGates": [
+      "human listening",
+      "preannotated suitable-pair coverage",
+      "24-hour application/device stress",
+      "real online account acceptance",
+      "formal publication"
+    ],
+    "previousEvaluationRecordsPreserved": true
+  },
+  "evaluationV6": {
+    "version": "1.3.0-automix.6",
+    "ruleVersion": "twilight-rules-4",
+    "materialVersion": 2,
+    "arrangementVersion": "twilight-stem-arrangement-1",
+    "sourceCommit": "cb04cb4de9d7b8d7cca815159e0161a05ea07a9a",
+    "releaseReady": false,
+    "defaultMode": "off",
+    "referenceSourceTransplanted": false,
+    "corpusSha256": "ee2c8f460725307331ee76fe866ef0a4b1d9ea332083eb6b8fc595827cb31520",
+    "basePlansRechecked": 72,
+    "baseSummary": {
+      "natural": 26,
+      "dj": 34,
+      "djLong": 22
+    },
+    "stemUniquePairs": 9,
+    "stemTransitions": 10,
+    "naturalStemTransitions": 2,
+    "djStemTransitions": 8,
+    "stemCoverageNotInferredFromBaseCounts": true,
+    "stemFallbacks": 0,
+    "referenceModelsImported": false,
+    "compatibleEnhancementPack": "2.2",
+    "checkpointSha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+    "packWorkerUnmodifiedSha256": "bbc20fb23540b8519c2c93b18e9513ddafa134b22594a8fe479b950c024d186b",
+    "workers": {
+      "worker.py": "45fc90d3d7b25efff1cd7317994fc28876270d6be61c7ecf06c4cb7925fbec9e",
+      "arrangement.py": "53f91e9184328161407d2c48e5b3f94a74b02e7c9d2e27329042519645aa43c5"
+    },
+    "archive": {
+      "file": "TwilightEcho-1.3.0-automix.6-Windows-x64.zip",
+      "bytes": 189519908,
+      "sha256": "a73cb6695ff773b909d7115b5cc7e2a3c8e5d278a30221ac22a1264e79a9e086",
+      "integrityPassed": true
+    },
+    "checks": {
+      "fullMinGwCTestPassed": 47,
+      "fullMinGwCTestSkipped": 1,
+      "skip": "existing ASIO ABI cross-DLL environment fixture",
+      "stemRuleTestsPassed": 12,
+      "relatedNodeTestsPassed": 37,
+      "audioManagerTestsPassed": 445,
+      "typecheckBuildPassed": true,
+      "lintPassed": true,
+      "nativeStemRenders": 90,
+      "wavSha256Verified": 30,
+      "realWasapiStemHandoffs": 2,
+      "nativeBadMaterialFallbackCases": 3,
+      "serviceLifecycleScenarios": 10,
+      "cacheWithoutTorchCudaPassed": true,
+      "realCpuNoCachePassed": true,
+      "packagedAppAndRestorePassed": true,
+      "packagedWorkerSha256Passed": true,
+      "developmentRuntimeReplacedAndLoaded": true,
+      "pageDesktopMobileAndSwitchPassed": true
+    },
+    "developmentRuntime": {
+      "passed": true,
+      "staged": true,
+      "ruleVersion": "twilight-rules-4",
+      "runtime": "D:/Project/Twilight_Echo/resources/audio-engine",
+      "nativeFiles": {
+        "twilight-audio-engine.dll": "49dfa51d2dc41bba13abefb69b6145115f369563ded0606b1fd131ccd739179c",
+        "twilight_audio_node.node": "01b75d655d6d61bf9d24a3f8a5456f20104b6fbbcc5a97649f02cce38ebace24",
+        "twilight-asio-helper.exe": "015ea53ba7021ca0e9ed6566661fd93246860b564cc6741942c46eb6acba5cf7"
+      },
+      "currentRuleProbe": {
+        "ok": false,
+        "reason": "next_source_not_ready"
+      },
+      "staleRuleProbe": {
+        "ok": false,
+        "reason": "invalid_analysis_windows"
+      },
+      "runtimeLoaded": true,
+      "productionWindowsParsed": true
+    },
+    "pendingGates": [
+      "human listening",
+      "preannotated suitable-pair coverage",
+      "all 36 pairs stem evaluation",
+      "24-hour application/device stress",
+      "real online account acceptance",
+      "formal publication"
+    ],
+    "previousEvaluationRecordsPreserved": true,
+    "pushed": false
+  },
+  "evaluationV8": {
+    "version": "1.3.0-automix.8",
+    "ruleVersion": "twilight-rules-5",
+    "implementationCommit": "ddf1fc2c",
+    "releaseReady": false,
+    "defaultMode": "off",
+    "referenceSourceTransplanted": false,
+    "corpusSha256": "ee2c8f460725307331ee76fe866ef0a4b1d9ea332083eb6b8fc595827cb31520",
+    "rawAnalysisReused": true,
+    "plansChecked": 72,
+    "summary": {
+      "natural": 27,
+      "dj": 34,
+      "djLong": 22
+    },
+    "unchangedExistingSuccessfulPlans": 60,
+    "changedPlans": [
+      {
+        "id": "pair-27",
+        "mode": "natural",
+        "plan": {
+          "intelligent": true,
+          "reason": "",
+          "stemEnhanced": false,
+          "strategy": "release-boundary",
+          "effect": 0,
+          "outputFrames": 384000,
+          "currentStart": 8394959,
+          "currentEnd": 8778959,
+          "nextStart": 9600,
+          "nextEnd": 393600,
+          "currentRate": 1,
+          "nextRate": 1,
+          "score": 1.01748216,
+          "confidence": 0,
+          "bpm": 0,
+          "nextGain": 0.5,
+          "preparedBytes": 12288000,
+          "prepareMs": [
+            31,
+            32,
+            31
+          ],
+          "maxCpuSampleError": 1.1920928955078125e-07,
+          "entrySampleError": 0.0,
+          "exitSampleError": 0.0,
+          "bodyPeak": 0.9792026877403259,
+          "pcmJointAudibleSeconds": 4.5,
+          "pcmJointThresholdDb": -36.85,
+          "pcmEvidenceStage": "decoded stereo, exact gain curve and verified prepared shared headroom",
+          "pcmHeadroomWitnessError": 5.922140156044975e-08,
+          "pcmEnvelopeRippleDb": 3.99,
+          "sharedComparisonGain": 0.7953004880539534
+        }
+      }
+    ],
+    "nativeRenders": 183,
+    "wavFiles": 144,
+    "rendererSha256": "f27c634a549a8a62f15f194c81ba5424e1622bc1fbd8097ef03e6f5be2652ec3",
+    "windowsProbeSha256": "9d43513c2c94512a221380e5244d9249c4c157a4797cf2b6e2c02205187fe1ae",
+    "package": {
+      "passed": true,
+      "version": "1.3.0-automix.8",
+      "archiveSha256": "8f59f21ac8740a937a7b58d14b8f12e82c3bcf14c80beb6f049667742001a397",
+      "exeSha256": "2451b2eb83d5c112c46e9822ce4abccaeffc0f4738854801356d182c8a28b621",
+      "dllSha256": "b510ac5e3242a4129e259b0e6e0b12dd056ee9dab80318fbe6409aee418ccfeb",
+      "nativeBinaries": [
+        "twilight-audio-engine.dll",
+        "twilight_audio_node.node",
+        "twilight-asio-helper.exe",
+        "twilight-vst3-host.exe",
+        "twilight-vst3-scanner.exe",
+        "twilight_smtc_node.node"
+      ],
+      "runtimeDependencies": [],
+      "workers": {
+        "worker.py": "d4efa4baceae098a5cc4f7d32ebde23134bde5106ee0becc98ad6d7436cbac31",
+        "arrangement.py": "53f91e9184328161407d2c48e5b3f94a74b02e7c9d2e27329042519645aa43c5",
+        "probe.py": "db2211d8ef04c84dd0919d299aa323beca98256be7688bc6e3cb787f5720714c"
+      },
+      "unchangedBaseGraphs": true,
+      "enhancementPackDuplicated": false
+    },
+    "archive": {
+      "file": "TwilightEcho-1.3.0-automix.8-Windows-x64.zip",
+      "bytes": 190506355,
+      "sha256": "b2085a4931f0057211effae55aa062a91374e2ded0314f539de183203f83e1f2",
+      "integrityPassed": true
+    },
+    "checks": {
+      "autoMixSettingsTestsPassed": 39,
+      "autoMixChainTestsPassed": 43,
+      "settingsChainTestsOverlap": true,
+      "audioManagerTestsPassed": 445,
+      "fullNativeCTestInitiallyPassed": 47,
+      "fullNativeCTestSkipped": 1,
+      "fullNativeCTestInitialFailures": [
+        "twilight_wsola_performance_gate: one deadline miss during concurrent rendering/build"
+      ],
+      "finalNativeAutoMixAndPerformanceRetestPassed": 9,
+      "allNativeFailuresResolved": true,
+      "unchangedSkip": "ASIO cross-DLL environment fixture",
+      "typecheckBuildPassed": true,
+      "lintPassed": true,
+      "packagedRealModelHandoffs": 2,
+      "realPlaybackUnderruns": 0,
+      "realPlaybackDeadlineMisses": 0,
+      "packagedSettingsRestorePassed": true,
+      "pageDesktopMobilePassed": true,
+      "developmentRuntimeUpdated": true
+    },
+    "compatibleEnhancementPack": "2.2",
+    "stemArrangementVersion": "twilight-stem-arrangement-1",
+    "stemCoverageMeasuredThisIteration": false,
+    "pendingGates": [
+      "human listening",
+      "preannotated suitable-pair coverage",
+      "all 36 pairs stem evaluation",
+      "24-hour device/application stress",
+      "real online account acceptance",
+      "formal publication"
+    ],
+    "pushed": false,
+    "previousEvaluationRecordsPreserved": true
+  }
+}

@@ -1,0 +1,9 @@
+/* 波尔 / Bohr: a translucent body with a curved shoulder and directional light.
+   Body diffusion, surface reflection and elevation are separate layers. Keep
+   content calm; reserve optical refraction for the floating media controls.
+   Base.css defines the foundation colors. These internal tokens do not change the saved material or theme contracts. */
+:root {
+  --te-bohr-raised-shadow:
+    inset 0 1px 0.5px var(--te-bohr-light), inset 0 -1.5px 2px var(--te-bohr-edge),
+    var(--te-bohr-contact), var(--te-bohr-elevation);
+}

@@ -18,7 +18,8 @@ import {
   requestNcmApi,
   openNcmOfficialLogin
 } from '../ncm/api'
-import { getCachedNcmSong, cacheNcmSong } from '../cache/ncmCache'
+import { getCachedNcmSong, cacheNcmSong, prepareNcmAutoMixSong } from '../cache/ncmCache'
+import { TWILIGHT_AUTOMIX_AVAILABLE } from '../../shared/twilightAutoMix.ts'
 import {
   normalizeFiniteNumber,
   normalizeIpcString,
@@ -58,6 +59,7 @@ export function setupPluginIpc(): void {
   runtime.pluginManager = new TwilightPluginManager({
     appVersion: app.getVersion(),
     hostEntry: join(__dirname, 'pluginHost.js'),
+    autoMixEnabled: () => TWILIGHT_AUTOMIX_AVAILABLE && runtime.appSettings.autoMixMode !== 'off',
     // Diagnostics / soak runs can shorten the host idle window; production uses the default.
     ...(resolvePluginHostIdleOverride(process.env.TWILIGHT_PLUGIN_HOST_IDLE_MS) !== null
       ? {
@@ -88,6 +90,15 @@ export function setupPluginIpc(): void {
       cacheSong: async (songId, url, fileName) => {
         if (runtime.appSettings.cachePolicy.streamingAudio !== 'provider') return null
         return cacheNcmSong(Number(songId), url, fileName)
+      },
+      prepareAutoMixSong: async (songId, url, fileName, options) => {
+        if (
+          runtime.appSettings.cachePolicy.streamingAudio !== 'provider' ||
+          !TWILIGHT_AUTOMIX_AVAILABLE ||
+          runtime.appSettings.autoMixMode === 'off'
+        )
+          return null
+        return prepareNcmAutoMixSong(Number(songId), url, fileName, options)
       }
     },
     getPlaybackInfo: async () => runtime.audioEngineManager?.getPlaybackInfo() ?? null,

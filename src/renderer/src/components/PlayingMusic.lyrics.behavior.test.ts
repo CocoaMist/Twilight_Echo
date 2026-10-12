@@ -796,6 +796,12 @@ window.runPlayingMusicLyricsRuntime = async () => {
     '.lyric-row.active .lyric-row-content'
   ) as HTMLElement | null
   expect(
+    [...document.querySelectorAll('.lyric-row-content, .lyric-char')].every(
+      (node) => getComputedStyle(node).willChange === 'auto'
+    ),
+    'lyric rows and characters must not permanently pin scaled text textures'
+  )
+  expect(
     activeAlignedContent && getComputedStyle(activeAlignedContent).transformOrigin.startsWith('0px'),
     'the highlighted left-aligned row still scaled around its centre'
   )
@@ -1524,6 +1530,7 @@ const subscribe = (list, cb) => {
 }
 const noopSubscribe = () => () => {}
 window.api = {
+  ncmCloud: { onProgress: noopSubscribe },
   settings: {
     get: async () => settingsSnapshot(),
     update: async (patch) => {
@@ -1549,6 +1556,7 @@ window.api = {
     onError: noopSubscribe,
     onDisconnected: noopSubscribe,
     getPlaybackInfo: async () => window.__audioFixture.playbackInfo,
+    setVolume: async () => {},
     getAudioOutputState: async () => { throw new Error('fixture output unavailable') },
     getAudioProcessing: async () => { throw new Error('fixture processing unavailable') },
     seek: async (position) => { window.__audioFixture.seekPosition = position }
@@ -1637,7 +1645,7 @@ function electronRunnerSource(): string {
       coverVerticallyCentered: Math.abs((column.top + column.bottom - layout.top - layout.bottom) / 2) < 1,
       coverFits: cover.width > 0 && Math.abs(cover.width - cover.height) < 1 && column.top >= layout.top - 1 && column.bottom <= layout.bottom + 1,
       columnsSeparated: !lyrics || (innerWidth > 1120 ? lyrics.left >= column.right + gap - 1 : lyrics.top >= column.bottom + gap - 1),
-      timeAtEdge: Math.abs(page.right - time.right - (innerWidth <= 760 ? 16 : 42)) < 1 && Math.abs(time.top - page.top - 42) < 1,
+      timeAtEdge: Math.abs(page.right - time.right - (innerWidth <= 760 ? 16 : 42)) < 1 && Math.abs(time.top - page.top - (Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--te-titlebar-inset')) || 40) - 16) < 1,
       controlsClear: innerWidth > 1120 || time.bottom <= column.top,
       single: document.querySelector('.layout').classList.contains('layout--single'),
       overflow: document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth,

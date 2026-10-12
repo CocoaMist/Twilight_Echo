@@ -571,6 +571,7 @@ window.__audioFixture = {
 const subscribe = (list, cb) => { list.push(cb); return () => { const i = list.indexOf(cb); if (i >= 0) list.splice(i, 1) } }
 const noopSubscribe = () => () => {}
 window.api = {
+  ncmCloud: { onProgress: noopSubscribe },
   audioEngine: {
     onPropertyChange: (cb) => subscribe(window.__audioFixture.propertyCallbacks, cb),
     onPlaybackInfo: (cb) => subscribe(window.__audioFixture.playbackInfoCallbacks, cb),

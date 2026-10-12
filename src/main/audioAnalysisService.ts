@@ -8,8 +8,6 @@ import {
   loadNativeBindingWithDiagnostics
 } from './audio/nativeBinding.ts'
 import type { NativeAudioBinding } from './audio/audioEngineTypes.ts'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 
 type ParentPort = {
   postMessage: (message: AudioAnalysisWorkerMessage) => void
@@ -96,25 +94,9 @@ function handleRequest(message: AudioAnalysisWorkerRequest): void {
           : 'AnalyzeLoudness'
     const target = native[method]
     if (typeof target !== 'function') throw new Error(`native method unavailable: ${method}`)
-    let optionsJson = message.optionsJson
-    if (message.analysis === 'automix') {
-      const options = JSON.parse(optionsJson || '{}') as Record<string, unknown>
-      if (!options.modelDirectory) {
-        const candidates = [
-          process.env.TAE_AUTOMIX_ASSETS,
-          join(process.resourcesPath || '', 'audio-engine', 'automix'),
-          join(process.cwd(), 'resources', 'audio-engine', 'automix')
-        ]
-        const root = candidates.find(
-          (directory) => directory && existsSync(join(directory, 'assets.json'))
-        )
-        if (root) options.modelDirectory = root
-      }
-      optionsJson = JSON.stringify(options)
-    }
     const value = (target as (source: string, optionsJson: string) => unknown)(
       message.source,
-      optionsJson
+      message.optionsJson
     )
     servicePort.postMessage({ kind: 'response', requestId: message.requestId, ok: true, value })
   } catch (error) {

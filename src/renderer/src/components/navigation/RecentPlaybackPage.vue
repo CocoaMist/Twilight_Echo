@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useProviderStore } from '@renderer/stores/useProviderStore'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
@@ -176,7 +177,7 @@ function play(track: Track): void {
             ><small>{{ track.artist }} · {{ track.album }}</small>
           </div>
           <button type="button" :aria-label="`播放${track.title}`" @click="play(track)">
-            <i class="pi pi-play" aria-hidden="true"></i>
+            <PlaybackIcon name="play" aria-hidden="true" />
           </button>
         </div>
         <nav v-if="history.tracks.value.length > 50" aria-label="平台历史分页">
@@ -197,24 +198,56 @@ function play(track: Track): void {
 
 <style scoped>
 .recent-playback-page {
+  --recent-content-inset: min(4.4vw, 48px);
+  --recent-header-inset: 32px;
   display: flex;
   flex-direction: column;
   height: 100vh;
   min-height: 0;
+  min-width: 0;
+  container: te-recent-page / inline-size;
 }
 .recent-playback-page :deep(.song-list) {
   height: 0 !important;
   flex: 1;
   min-height: 0;
   padding-top: 24px;
+  padding-inline: var(--recent-content-inset);
+}
+.recent-playback-page :deep(.song-list-header) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 0;
+  gap: 20px;
+  padding: 0 var(--recent-header-inset);
+  margin-bottom: 20px;
+}
+.recent-playback-page :deep(.header-right) {
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+.recent-playback-page :deep(.recent-source-dropdown),
+.recent-playback-page :deep(.library-filter-dropdown) {
+  display: flex;
+  align-items: center;
+}
+.recent-playback-page :deep(.search-box) {
+  box-sizing: border-box;
+  width: clamp(220px, 22vw, 320px);
+  min-width: 0;
+}
+.recent-playback-page :deep(.library-play-actions) {
+  padding-inline: var(--recent-header-inset);
 }
 .recent-scope-tabs {
   position: relative;
-  z-index: 51;
+  z-index: 3;
   display: flex;
   gap: 8px;
   flex-shrink: 0;
-  padding: 52px clamp(24px, 4vw, 60px) 0;
+  padding: calc(var(--te-titlebar-inset, 40px) + 16px)
+    calc(var(--recent-content-inset) + var(--recent-header-inset)) 0;
   flex-wrap: wrap;
 }
 button,
@@ -244,7 +277,7 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 24px clamp(24px, 4vw, 60px) 40px;
+  padding: 24px calc(var(--recent-content-inset) + var(--recent-header-inset)) 40px;
   color: var(--te-neutral-900);
 }
 .has-player .platform-history {
@@ -309,6 +342,36 @@ nav {
   align-items: center;
   gap: 16px;
   margin-top: 24px;
+}
+@container te-recent-page (max-width: 1000px) {
+  .recent-playback-page :deep(.song-list-header) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .recent-playback-page :deep(.header-right) {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .recent-playback-page :deep(.search-box) {
+    flex: 1 1 220px;
+    width: auto;
+  }
+}
+@container te-recent-page (max-width: 640px) {
+  .recent-scope-tabs,
+  .platform-history {
+    padding-inline: calc(var(--recent-content-inset) + 10px);
+  }
+  .recent-playback-page :deep(.song-list-header),
+  .recent-playback-page :deep(.library-play-actions) {
+    padding-inline: 10px;
+  }
+  .recent-playback-page :deep(.search-box) {
+    flex-basis: 100%;
+  }
+}
+:global(html[data-theme='pureWhite'] .recent-playback-page) {
+  background: var(--te-card-bg);
 }
 :global(html[data-te-shell-layout='custom'] .recent-playback-page) {
   height: 100%;

@@ -144,7 +144,8 @@
   box-sizing: border-box;
   width: min(100%, 1280px);
   margin: 0 auto;
-  padding: 32px clamp(24px, 3.4vw, 48px) 120px;
+  padding: calc(var(--te-home-titlebar-clearance, var(--te-titlebar-inset, 35px)) + 32px)
+    clamp(24px, 3.4vw, 48px) 120px;
 }
 
 /* Returning home is frequent; keep content and keyboard targets immediate. */
@@ -586,87 +587,162 @@
   align-items: center;
   gap: 12px;
   margin-top: 28px;
+  max-width: 100%;
+}
+
+.hero-actions.is-current {
+  width: min(100%, 460px);
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.hero-actions.is-current .transport-button:not(.transport-play) {
+  color: color-mix(in srgb, var(--home-ink) 76%, transparent);
+}
+
+.hero-actions.is-current .transport-button .playback-icon {
+  width: 22px;
+  height: 22px;
 }
 
 .transport-button {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
-  border: 1px solid color-mix(in srgb, var(--home-ink) 16%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--home-card) 78%, transparent);
-  font-size: calc(var(--te-font-size-body, 14px) * 17 / 14);
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
   color: var(--home-ink);
   cursor: pointer;
   transition:
     transform var(--te-motion-hover) var(--te-ease-soft),
     background var(--te-motion-hover),
-    border-color var(--te-motion-hover);
+    color var(--te-motion-hover);
 }
 
-.transport-button:hover {
-  transform: translateY(-2px);
-  background: var(--home-hover);
-  border-color: color-mix(in srgb, var(--home-ink) 30%, transparent);
-}
-
-.transport-button:active {
+.transport-button:active:not(:focus-visible) {
   transform: scale(var(--te-motion-press-scale));
 }
 
+/* Align transport with the seek bar; use the accent to give play a clear focus. */
 .home .transport-button.transport-play {
-  width: 56px;
-  height: 56px;
+  width: 58px;
+  height: 50px;
   border: none;
+  border-radius: 18px;
   font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
-  color: var(--home-card);
+  color: var(--te-player-bar-play-text, var(--home-card));
   -webkit-text-fill-color: currentColor;
-  background: var(--te-player-bar-play-surface, var(--home-ink));
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--home-ink) 26%, transparent);
-}
-
-.home .transport-button.transport-play:hover {
   background: var(
-    --te-player-bar-play-hover-surface,
-    var(--te-player-bar-play-surface, color-mix(in srgb, var(--home-ink) 84%, var(--home-accent)))
+    --te-player-bar-play-surface,
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--home-accent) 82%, var(--home-card)),
+      color-mix(in srgb, var(--home-accent) 90%, var(--home-ink))
+    )
   );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--home-card) 40%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--home-ink) 8%, transparent),
+    0 5px 14px color-mix(in srgb, var(--home-accent) 18%, transparent);
 }
 
-.hero-ghost-action {
+.home .transport-button.transport-play.is-idle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 0 20px;
-  border: 1px solid color-mix(in srgb, var(--home-ink) 18%, transparent);
-  border-radius: 12px;
-  background: transparent;
-  color: var(--home-ink);
-  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
+  justify-content: center;
+  gap: 10px;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 12px 22px;
+  border: 1px solid color-mix(in srgb, var(--home-accent) 18%, var(--home-card));
+  border-radius: 999px;
+  font-size: var(--te-font-size-body, 14px);
   font-weight: 600;
-  cursor: pointer;
-  transition:
-    border-color var(--te-motion-hover),
-    background var(--te-motion-hover),
-    transform var(--te-motion-hover) var(--te-ease-soft);
+  line-height: 1.5;
+  color: var(
+    --te-player-bar-play-text,
+    color-mix(in srgb, var(--home-accent) 72%, var(--home-ink))
+  );
+  background: var(
+    --te-player-bar-play-surface,
+    color-mix(in srgb, var(--home-accent) 10%, var(--home-card))
+  );
+  box-shadow: none;
 }
 
-.home .hero-ghost-action.hero-primary-action {
-  border-color: transparent;
-  color: var(--home-card);
-  -webkit-text-fill-color: currentColor;
-  background: var(--home-ink);
+.home .transport-button.transport-play:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 3px;
 }
 
-.home .hero-ghost-action.hero-primary-action:hover {
-  background: color-mix(in srgb, var(--home-ink) 90%, var(--home-accent));
+.home .transport-button.transport-play .playback-icon {
+  width: 22px;
+  height: 22px;
 }
 
-.hero-ghost-action:hover {
-  border-color: color-mix(in srgb, var(--home-ink) 34%, transparent);
-  background: var(--home-hover);
+.home .transport-button.transport-play.is-idle .playback-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.transport-play-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .transport-button:hover {
+    transform: translateY(var(--te-motion-hover-translate, -1px));
+    background: var(--home-hover);
+  }
+
+  .home .transport-button.transport-play:hover {
+    color: var(--te-player-bar-play-hover-text, var(--te-player-bar-play-text, var(--home-card)));
+    background: var(
+      --te-player-bar-play-hover-surface,
+      var(
+        --te-player-bar-play-surface,
+        linear-gradient(
+          145deg,
+          color-mix(in srgb, var(--home-accent) 90%, var(--home-card)),
+          color-mix(in srgb, var(--home-accent) 84%, var(--home-ink))
+        )
+      )
+    );
+  }
+
+  .hero-actions.is-current .transport-button:hover {
+    transform: none;
+  }
+
+  .hero-actions.is-current .transport-button:not(.transport-play):hover {
+    color: var(--home-ink);
+  }
+
+  .home .transport-button.transport-play.is-idle:hover {
+    color: var(
+      --te-player-bar-play-hover-text,
+      var(--te-player-bar-play-text, color-mix(in srgb, var(--home-accent) 72%, var(--home-ink)))
+    );
+    background: var(
+      --te-player-bar-play-hover-surface,
+      var(
+        --te-player-bar-play-surface,
+        color-mix(in srgb, var(--home-accent) 16%, var(--home-card))
+      )
+    );
+    border-color: color-mix(in srgb, var(--home-accent) 30%, var(--home-card));
+  }
 }
 
 /* Hero art: offset echo + big cover */
@@ -977,7 +1053,7 @@
   align-items: stretch;
   gap: 8px;
   overflow-x: auto;
-  scrollbar-width: none;
+  scrollbar-width: none !important;
   -ms-overflow-style: none;
 }
 
@@ -1232,7 +1308,7 @@
   height: 36px;
   border-radius: 999px;
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  color: var(--te-neutral-900);
+  color: #111827;
   background: color-mix(in srgb, #ffffff 92%, transparent);
   box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-900) 30%, transparent);
   opacity: 0;
@@ -1692,7 +1768,7 @@
   height: 40px;
   border-radius: 999px;
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  color: var(--te-neutral-900);
+  color: #111827;
   background: color-mix(in srgb, #ffffff 92%, transparent);
   box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-900) 30%, transparent);
   opacity: 0;
@@ -2441,7 +2517,6 @@
   transition: none;
 }
 
-.hero-ghost-action:active:not(:focus-visible),
 .block-more:active:not(:focus-visible) {
   transform: scale(0.97);
 }
@@ -2480,6 +2555,7 @@
 
   .home button:active,
   .home button:hover,
+  .home .transport-button:is(:hover, :active),
   .fresh-tile:is(:hover, :active) .fresh-cover,
   .gallery-tile:is(:hover, :active) .gallery-cover,
   .fresh-tile:hover .fresh-cover img,

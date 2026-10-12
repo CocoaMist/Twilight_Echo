@@ -8,9 +8,10 @@ const props = withDefaults(
     title: string
     summary?: string
     attention?: string
+    description?: string
     initiallyOpen?: boolean
   }>(),
-  { summary: '', attention: '', initiallyOpen: false }
+  { summary: '', attention: '', description: '', initiallyOpen: false }
 )
 const open = useSettingsDisclosure(props.id, props.initiallyOpen)
 </script>
@@ -37,6 +38,7 @@ const open = useSettingsDisclosure(props.id, props.initiallyOpen)
       keep-mounted
       class="settings-group-content"
     >
+      <p v-if="description" class="settings-group-description">{{ description }}</p>
       <slot />
     </SettingsDisclosure>
   </div>

@@ -29,6 +29,7 @@ test('changing only motionPreference updates open lyrics and tray windows withou
   const dependencies: Record<string, unknown> = {
     electron: {},
     '../core/runtime': { runtime },
+    '../../shared/twilightAutoMix.ts': {},
     '../core/settings': {
       normalizeAppSettings: (settings: unknown) => settings,
       writeAppSettings() {},

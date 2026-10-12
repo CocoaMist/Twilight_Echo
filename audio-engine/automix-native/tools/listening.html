@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Twilight AutoMix 本地试听验收</title>
+  <style>
+    body {
+      font: 16px/1.6 system-ui;
+      background: #151924;
+      color: #e7eaf3;
+      max-width: 1100px;
+      margin: 32px auto;
+      padding: 0 24px;
+    }
+    h1 {
+      font-size: 26px;
+    }
+    section {
+      border: 1px solid #3d455d;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+    button,
+    select,
+    input,
+    textarea {
+      font: inherit;
+      background: #282f43;
+      color: inherit;
+      border: 1px solid #627095;
+      border-radius: 5px;
+      padding: 6px;
+    }
+    button {
+      cursor: pointer;
+    }
+    audio {
+      display: block;
+      width: 100%;
+      margin: 8px 0 20px;
+    }
+    label {
+      display: inline-block;
+      margin: 8px 16px 8px 0;
+    }
+    textarea {
+      width: 95%;
+    }
+    .muted {
+      color: #bdc5d8;
+    }
+    details {
+      margin-top: 16px;
+    }
+    article {
+      border-top: 1px solid #3d455d;
+      padding-top: 12px;
+    }
+    .sticky {
+      position: sticky;
+      top: 0;
+      background: #151924;
+      padding: 12px 0;
+    }
+    strong {
+      color: #a2bcff;
+    }
+  </style>
+  <h1>Twilight AutoMix 本地试听验收</h1>
+  <p>
+    先试听原始交接，标注两种模式是否适合。提交标注后再试听普通交叉淡化、自然模式和 DJ 模式。每项评分
+    1–5，5 为最好。降级样本使用普通淡化，不能计为智能过渡成功。
+  </p>
+  <p class="muted">
+    这是离线算法对照；真实输出设备、在线账号和 24
+    小时运行需另行验收。四种版本采用同一个防削波增益，没有分别拉齐响度。
+  </p>
+  <div class="sticky">
+    <label>试听人员 <input id="reviewer" autocomplete="name" /></label
+    ><button id="export">导出验收记录 JSON</button><span id="count"></span>
+  </div>
+  <main id="pairs"></main>
+  <script>
+    'use strict'
+    const corpus = /*CORPUS_DATA*/ null
+    const key = 'twilight-automix-listening:' + corpus.manifestSha256
+    let state
+    try {
+      state = JSON.parse(localStorage.getItem(key) || '{}')
+    } catch {
+      state = {}
+    }
+    state.pairs ??= {}
+    state.manifestSha256 = corpus.manifestSha256
+    const metrics = ['节拍连续性', '人声完整性', '变速伪影控制', '响度平稳', '整体偏好']
+    function save() {
+      localStorage.setItem(key, JSON.stringify(state))
+      document.querySelector('#count').textContent =
+        '　已标注 ' +
+        Object.values(state.pairs).filter((p) => p.annotationAt).length +
+        ' / ' +
+        corpus.pairs.length
+    }
+    const reviewer = document.querySelector('#reviewer')
+    reviewer.value = state.reviewer || ''
+    reviewer.onchange = () => {
+      state.reviewer = reviewer.value.trim()
+      save()
+    }
+    function el(tag, text) {
+      const n = document.createElement(tag)
+      if (text) n.textContent = text
+      return n
+    }
+    function audio(parent, file) {
+      const a = el('audio')
+      a.controls = true
+      a.preload = 'none'
+      a.src = file
+      parent.append(a)
+    }
+    function select(label, choices, initial, onchange, parent) {
+      const l = el('label', label + ' '),
+        s = el('select')
+      for (const [value, text] of choices) {
+        const o = el('option', text)
+        o.value = value
+        s.append(o)
+      }
+      s.value = initial
+      s.onchange = () => {
+        onchange(s.value)
+        save()
+      }
+      l.append(s)
+      parent.append(l)
+      return s
+    }
+    for (const pair of corpus.pairs) {
+      const section = el('section')
+      section.append(el('h2', pair.id + '　' + pair.currentTitle + ' → ' + pair.nextTitle))
+      const p = (state.pairs[pair.id] ??= {
+        id: pair.id,
+        suitable: { natural: null, dj: null },
+        category: null,
+        ratings: {},
+        outputs: pair.outputs
+      })
+      section.append(el('strong', '原始交接：'))
+      audio(section, pair.outputs.original.file)
+      const annotation = el('div')
+      const options = [
+        ['', '请选择'],
+        ['yes', '适合'],
+        ['no', '不适合'],
+        ['uncertain', '无法判断']
+      ]
+      for (const mode of ['natural', 'dj'])
+        select(
+          mode === 'natural' ? '自然模式' : 'DJ 模式',
+          options,
+          p.suitable[mode] === null ? '' : p.suitable[mode],
+          (v) => (p.suitable[mode] = v || null),
+          annotation
+        )
+      select(
+        '歌曲对类型',
+        [
+          ['', '请选择'],
+          ['steady', '稳定节拍'],
+          ['different_tempo', '不同速度'],
+          ['vocal', '人声重叠'],
+          ['slow', '慢歌'],
+          ['live', '现场'],
+          ['weak_beat', '弱节拍']
+        ],
+        p.category || '',
+        (v) => (p.category = v || null),
+        annotation
+      )
+      const reveal = el('button', '保存预先标注，开始对照试听')
+      annotation.append(reveal)
+      section.append(annotation)
+      const comparisons = el('div')
+      function render() {
+        comparisons.replaceChildren()
+        for (const [mode, title] of [
+          ['crossfade', '普通交叉淡化'],
+          ['natural', '自然模式'],
+          ['dj', 'DJ 模式']
+        ]) {
+          const article = el('article')
+          article.append(el('h3', title))
+          if (pair.modes[mode] && !pair.modes[mode].intelligent)
+            article.append(el('p', '已降级：' + pair.modes[mode].reason))
+          else if (pair.modes[mode]?.strategy)
+            article.append(
+              el(
+                'p',
+                pair.modes[mode].strategy === 'content-boundary'
+                  ? '非人声尾奏过渡，保持原速；不计入对拍覆盖率'
+                  : '节拍对齐过渡'
+              )
+            )
+          audio(article, pair.outputs[mode].file)
+          const scores = (p.ratings[mode] ??= {})
+          for (const metric of metrics)
+            select(
+              metric,
+              [['', '未评分'], ...[1, 2, 3, 4, 5].map((n) => [String(n), String(n)])],
+              scores[metric] || '',
+              (v) => (scores[metric] = v ? Number(v) : null),
+              article
+            )
+          comparisons.append(article)
+        }
+        const note = el('textarea')
+        note.placeholder = '听感记录：人声截断、重复、节拍脱离、伪影或偏好原因'
+        note.value = p.notes || ''
+        note.onchange = () => {
+          p.notes = note.value
+          save()
+        }
+        comparisons.append(note)
+      }
+      reveal.onclick = () => {
+        if (
+          !reviewer.value.trim() ||
+          !p.category ||
+          Object.values(p.suitable).some((v) => v === null)
+        ) {
+          alert('请填写试听人员、类型和两种模式的适用标注。')
+          return
+        }
+        if (!p.annotationAt) {
+          p.annotationAt = new Date().toISOString()
+          p.annotatedBeforeReveal = true
+        }
+        p.revealedAt ??= new Date().toISOString()
+        reveal.disabled = true
+        annotation.querySelectorAll('select').forEach((s) => (s.disabled = true))
+        render()
+        save()
+      }
+      if (p.annotationAt) {
+        reveal.disabled = true
+        annotation.querySelectorAll('select').forEach((s) => (s.disabled = true))
+        render()
+      }
+      section.append(comparisons)
+      document.querySelector('#pairs').append(section)
+    }
+    document.querySelector('#export').onclick = () => {
+      state.reviewer = reviewer.value.trim()
+      state.exportedAt = new Date().toISOString()
+      save()
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }),
+        a = el('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = 'twilight-automix-listening.json'
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+    }
+    const verdict = el('label', '我已完成全部试听，并确认整体听感达标 ')
+    const approve = el('input')
+    approve.type = 'checkbox'
+    approve.checked = state.humanApproved === true
+    approve.onchange = () => {
+      const complete =
+        corpus.pairs.length >= 36 &&
+        corpus.pairs.every((pair) => {
+          const p = state.pairs[pair.id]
+          return (
+            p?.annotationAt &&
+            ['crossfade', 'natural', 'dj'].every((mode) =>
+              metrics.every((metric) => Number.isInteger(p.ratings?.[mode]?.[metric]))
+            )
+          )
+        })
+      if (approve.checked && !complete) {
+        approve.checked = false
+        alert('请先完成至少 36 组的预先标注和全部听感评分。')
+      }
+      state.humanApproved = approve.checked
+      state.humanVerdictAt = new Date().toISOString()
+      save()
+    }
+    verdict.append(approve)
+    document.querySelector('#pairs').after(verdict)
+    save()
+  </script>
+</html>

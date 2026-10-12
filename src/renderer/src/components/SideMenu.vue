@@ -225,40 +225,40 @@ function setPressOrigin(event: PointerEvent): void {
           >
         </button>
       </div>
-      <div class="menu-bottom">
-        <div class="menu-separator"></div>
-        <div
-          class="menu-toolbar"
-          role="toolbar"
-          aria-label="音乐工具"
-          aria-orientation="vertical"
-          @keydown="handleToolbarKey"
-        >
-          <button
-            type="button"
-            class="menu-item toolbar-item"
-            title="导入歌曲"
-            aria-label="导入歌曲"
-            @click="showImportDialog = true"
-          >
-            <ThemeIcon class="item-icon" icon-slot="navigation.import" /><span class="item-label"
-              >导入歌曲</span
-            >
-          </button>
-          <button
-            type="button"
-            class="menu-item toolbar-item"
-            title="编辑页面"
-            aria-label="编辑页面"
-            @click="showPagesEditor = true"
-          >
-            <i class="item-icon pi pi-pencil" aria-hidden="true"></i
-            ><span class="item-label">编辑页面</span>
-          </button>
-        </div>
-        <span v-if="scanning" class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
-      </div>
     </nav>
+    <div class="menu-bottom">
+      <div class="menu-separator"></div>
+      <div
+        class="menu-toolbar"
+        role="toolbar"
+        aria-label="音乐工具"
+        aria-orientation="vertical"
+        @keydown="handleToolbarKey"
+      >
+        <button
+          type="button"
+          class="menu-item toolbar-item"
+          title="导入歌曲"
+          aria-label="导入歌曲"
+          @click="showImportDialog = true"
+        >
+          <ThemeIcon class="item-icon" icon-slot="navigation.import" /><span class="item-label"
+            >导入歌曲</span
+          >
+        </button>
+        <button
+          type="button"
+          class="menu-item toolbar-item"
+          title="编辑页面"
+          aria-label="编辑页面"
+          @click="showPagesEditor = true"
+        >
+          <i class="item-icon pi pi-pencil" aria-hidden="true"></i
+          ><span class="item-label">编辑页面</span>
+        </button>
+      </div>
+      <span v-if="scanning" class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
+    </div>
   </div>
   <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
   <NativeDialogTransition>
@@ -277,12 +277,10 @@ function setPressOrigin(event: PointerEvent): void {
   position: fixed;
   display: flex;
   flex-direction: column;
-  top: 32px;
+  top: var(--te-titlebar-inset, 40px);
   left: 0;
-  /* App.vue measures how much of the bottom edge the playbar covers and publishes
-     it on `.app-shell-navigation`; the menu ends above the bar instead of running
-     underneath it. A custom property rather than an inline `bottom` so the custom
-     shell layout's `inset: auto !important` still wins. */
+  /* The sidebar surface reaches the window bottom behind the player. Its
+     footer clears the painted bar; custom shells can reserve a playback row. */
   bottom: var(--te-side-menu-bottom, 0px);
   width: var(--te-menu-width);
   /* Frosted surface: the bottom-most global background shows through. The
@@ -318,14 +316,14 @@ function setPressOrigin(event: PointerEvent): void {
 
 :global(html[data-te-navigation-style='expanded']) {
   --te-menu-width: clamp(
-    calc(var(--te-font-size-body, 14px) * 180 / 14),
-    18vw,
-    calc(var(--te-font-size-body, 14px) * 216 / 14)
+    calc(var(--te-font-size-body, 14px) * 208 / 14),
+    16vw,
+    calc(var(--te-font-size-body, 14px) * 236 / 14)
   ) !important;
 }
 
 :global(html[data-te-navigation-style='compact']) {
-  --te-menu-width: calc(var(--te-font-size-body, 14px) * 164 / 14) !important;
+  --te-menu-width: calc(var(--te-font-size-body, 14px) * 192 / 14) !important;
 }
 
 :global(html[data-te-navigation-style='rail']) {
@@ -370,7 +368,7 @@ function setPressOrigin(event: PointerEvent): void {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  padding: 16px 12px max(16px, var(--te-side-menu-tools-clearance, 0px)) 4px;
+  padding: 16px 12px 0;
 }
 
 .menu-nav {
@@ -417,14 +415,14 @@ function setPressOrigin(event: PointerEvent): void {
   position: absolute;
   top: 8px;
   bottom: 12px;
-  left: 34px;
+  left: 23px;
   width: 1px;
   background: var(--te-navigation-border);
 }
 
 .menu-item.menu-child {
-  width: calc(100% - 44px);
-  margin-left: 44px;
+  width: calc(100% - 32px);
+  margin-left: 32px;
   padding-inline: 10px;
   gap: 10px;
   height: 36px;
@@ -456,6 +454,7 @@ function setPressOrigin(event: PointerEvent): void {
 .menu-bottom {
   flex-shrink: 0;
   margin-top: auto;
+  padding: 0 12px max(12px, var(--te-side-menu-tools-clearance, 0px));
 }
 
 .menu-item {
@@ -464,13 +463,13 @@ function setPressOrigin(event: PointerEvent): void {
   flex-shrink: 0;
   align-items: center;
   height: 40px;
-  width: calc(100% - 8px);
-  padding: 0 12px 0 16px;
-  margin-left: 8px;
+  width: 100%;
+  padding: 0 12px;
+  margin-left: 0;
   border: 0;
   cursor: pointer;
   border-radius: var(--te-radius-global);
-  gap: 14px;
+  gap: 10px;
   white-space: nowrap;
   color: var(--te-chrome-text, var(--te-navigation-text));
   background: transparent;
@@ -502,7 +501,7 @@ function setPressOrigin(event: PointerEvent): void {
 .menu-item.active::before {
   content: '';
   position: absolute;
-  left: -8px;
+  left: -6px;
   top: 10px;
   bottom: 10px;
   width: 2px;
@@ -597,7 +596,11 @@ function setPressOrigin(event: PointerEvent): void {
 :global(html[data-te-navigation-style='rail'] .menu-items) {
   min-width: 0;
   max-width: 100%;
-  padding: 12px 8px max(12px, var(--te-side-menu-tools-clearance, 0px));
+  padding: 12px 8px 0;
+}
+
+:global(html[data-te-navigation-style='rail'] .menu-bottom) {
+  padding: 0 8px max(12px, var(--te-side-menu-tools-clearance, 0px));
 }
 
 :global(html[data-te-navigation-style='rail'] .menu-nav) {

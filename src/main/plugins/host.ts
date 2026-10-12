@@ -121,6 +121,13 @@ interface TwilightPluginContext {
         officialLogin: () => Promise<string>
         getCachedSong: (songId: number) => Promise<string | null>
         cacheSong: (songId: number, url: string, fileName?: string) => Promise<string | null>
+        prepareAutoMixSong: (
+          songId: number,
+          url: string,
+          fileName?: string,
+          metadata?: { expiresAt?: number | null; expectedBytes?: number | null },
+          options?: { signal?: AbortSignal }
+        ) => Promise<string | null>
       }
     }
   }
@@ -355,7 +362,13 @@ function createContext(
         getCachedSong: (songId) =>
           callInternalNcmApi('ncmGetCachedSong', [songId]) as Promise<string | null>,
         cacheSong: (songId, url, fileName) =>
-          callInternalNcmApi('ncmCacheSong', [songId, url, fileName]) as Promise<string | null>
+          callInternalNcmApi('ncmCacheSong', [songId, url, fileName]) as Promise<string | null>,
+        prepareAutoMixSong: (songId, url, fileName, metadata, options) =>
+          callInternalNcmApi(
+            'ncmPrepareAutoMixSong',
+            [songId, url, fileName, metadata],
+            options?.signal
+          ) as Promise<string | null>
       }
     }
   }

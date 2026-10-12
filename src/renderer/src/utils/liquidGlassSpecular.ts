@@ -44,11 +44,13 @@
  */
 
 import {
-  geometryKey,
+  clearRasterRowSpan,
+  rasterSamplingKey,
   liquidRel,
-  resolveRasterGeometry,
+  resolveRasterSampling,
   roundedRectSDF,
   sdfNormal,
+  straightRasterRowSpan,
   type DisplacementGeometry,
   type DisplacementRaster,
   type DisplacementVector,
@@ -143,6 +145,7 @@ export function specularTerms(
   if (signedDistance > 0) return { rim: 0, sheen: 0 }
 
   const depth = -signedDistance
+  if (depth >= Math.max(rimWidth, SPECULAR_EDGE_BAND_PX)) return { rim: 0, sheen: 0 }
   const t = Math.min(1, depth / Math.max(1e-6, rimWidth))
 
   const normal = sdfNormal(x, y, shape)
@@ -201,7 +204,8 @@ export function bayerOffset(x: number, y: number): number {
  */
 export function buildSpecularPixels(
   geometry: DisplacementGeometry,
-  angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG
+  angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG,
+  rasterScale: number = 1
 ): SpecularRaster {
   if (
     !Number.isFinite(geometry.width) ||
@@ -214,18 +218,59 @@ export function buildSpecularPixels(
 
   // Same resolver as the displacement map, so the highlight lands on exactly the
   // rim the refraction bends.
-  const { width, height, shape, blurRadius } = resolveRasterGeometry(geometry)
+  const { width, height, shape, blurRadius, scaleX, scaleY } = resolveRasterSampling(
+    geometry,
+    rasterScale
+  )
   const rimWidth = blurRadius
   const lightVector = lightVectorFromAngle(angleDegrees)
 
   const pixels = new Uint8ClampedArray(width * height * 4)
+  const verticalIntensity = new Float64Array(width).fill(-1)
+  pixels.fill(255)
+  for (let p = 3; p < pixels.length; p += 4) pixels[p] = 0
 
   for (let y = 0; y < height; y++) {
     // Sample at pixel centers so the field stays symmetric for any size.
-    const py = y + 0.5 - height / 2
+    const py = (y + 0.5) / scaleY - shape.halfHeight
+    const [clearStart, clearEnd] = clearRasterRowSpan(
+      shape,
+      Math.max(rimWidth, SPECULAR_EDGE_BAND_PX),
+      py,
+      scaleX,
+      scaleY
+    )
+    const [straightStart, straightEnd] = straightRasterRowSpan(shape, py, scaleX, scaleY)
     for (let x = 0; x < width; x++) {
-      const px = x + 0.5 - width / 2
-      const intensity = specularIntensity(px, py, shape, rimWidth, lightVector)
+      if (x >= clearStart && x < clearEnd) {
+        x = clearEnd - 1
+        continue
+      }
+      const px = (x + 0.5) / scaleX - shape.halfWidth
+      const verticalEdge = clearEnd > clearStart
+      let intensity = verticalEdge ? verticalIntensity[x] : -1
+      if (intensity < 0) {
+        const distance = roundedRectSDF(px, py, shape.halfWidth, shape.halfHeight, shape.radius)
+        intensity = specularIntensity(px, py, shape, rimWidth, lightVector)
+        // Integrate coverage across a boundary pixel instead of deciding its alpha
+        // from one point. Only the narrow contour pays for the additional samples.
+        if (Math.abs(distance) < Math.hypot(0.5 / scaleX, 0.5 / scaleY)) {
+          intensity = 0
+          for (const dy of [-0.375, -0.125, 0.125, 0.375]) {
+            for (const dx of [-0.375, -0.125, 0.125, 0.375]) {
+              intensity +=
+                specularIntensity(
+                  px + dx / scaleX,
+                  py + dy / scaleY,
+                  shape,
+                  rimWidth,
+                  lightVector
+                ) / 16
+            }
+          }
+        }
+        if (verticalEdge) verticalIntensity[x] = intensity
+      }
 
       const p = (y * width + x) * 4
       pixels[p] = 255
@@ -234,6 +279,14 @@ export function buildSpecularPixels(
       // Dither only where there is a gradient to band; leave the dead interior
       // exactly transparent so the middle of a surface stays untouched.
       pixels[p + 3] = intensity <= 0 ? 0 : intensity * 255 + bayerOffset(x, y)
+      if (x === straightStart && straightEnd > straightStart) {
+        // Preserve the per-pixel dither while reusing the constant optical field.
+        for (let nextX = x + 1; nextX < straightEnd; nextX++) {
+          pixels[(y * width + nextX) * 4 + 3] =
+            intensity <= 0 ? 0 : intensity * 255 + bayerOffset(nextX, y)
+        }
+        x = straightEnd - 1
+      }
     }
   }
 
@@ -250,9 +303,10 @@ const MAX_CACHED_MAPS = 8
  */
 export function getSpecularMapUrl(
   geometry: DisplacementGeometry,
-  angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG
+  angleDegrees: number = DEFAULT_SPECULAR_ANGLE_DEG,
+  rasterScale: number = 1
 ): string {
-  const key = `${geometryKey(geometry)}@${angleDegrees}`
+  const key = `${rasterSamplingKey(geometry, rasterScale)}@${angleDegrees}`
   const cached = cache.get(key)
   if (cached !== undefined) {
     cache.delete(key)
@@ -262,7 +316,7 @@ export function getSpecularMapUrl(
 
   if (typeof document === 'undefined') return ''
 
-  const raster = buildSpecularPixels(geometry, angleDegrees)
+  const raster = buildSpecularPixels(geometry, angleDegrees, rasterScale)
   const canvas = document.createElement('canvas')
   canvas.width = raster.width
   canvas.height = raster.height

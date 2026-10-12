@@ -49,7 +49,8 @@ test('uses only the resolved current stream when a restored companion is unautho
       }
     ],
     startIndex: 0,
-    delegated: false
+    delegated: false,
+    queueIndices: [1]
   })
 })
 
@@ -581,4 +582,104 @@ test('stripStaleNcmStreamUrls returns an equal copy when nothing is stripped', a
   const stripped = stripStaleNcmStreamUrls(queue, { committedAtByTrackId: new Map() })
   assert.deepEqual(stripped, queue)
   assert.notEqual(stripped, queue, 'callers receive a defensive copy')
+})
+
+test('NetEase prepares the current and next entries without skipping an unresolved song', async () => {
+  const queue = ['a', 'b', 'c'].map((id) =>
+    createTrack({
+      id: `ncm:${id}`,
+      source: 'ncm',
+      filePath: `ncm:${id}`,
+      streamUrl: id === 'c' ? null : `twilight-media://audio/${id}`
+    })
+  )
+  const options = {
+    queue,
+    currentTrack: queue[0],
+    currentTarget: queue[0].streamUrl!,
+    currentIndex: 0,
+    isAudioFileAuthorized: async () => false
+  }
+  const prepared = await prepareNativeQueue(options)
+  assert.deepEqual(
+    prepared?.items.map((item) => item.id),
+    ['ncm:a', 'ncm:b']
+  )
+  assert.deepEqual(prepared?.queueIndices, [0, 1])
+  assert.equal(prepared?.delegated, false)
+  queue[1].streamUrl = null
+  queue[2].streamUrl = 'twilight-media://audio/c'
+  const blocked = await prepareNativeQueue(options)
+  assert.deepEqual(
+    blocked?.items.map((item) => item.id),
+    ['ncm:a']
+  )
+})
+
+test('NetEase partial list-loop windows wrap only at the logical queue boundary', async () => {
+  const { preparedNativePlayMode } = await import('./nativeQueuePreparation.ts')
+  const queue = ['a', 'unresolved', 'c'].map((id) =>
+    createTrack({
+      id: `ncm:${id}`,
+      source: 'ncm',
+      filePath: `ncm:${id}`,
+      streamUrl: id === 'unresolved' ? null : `twilight-media://audio/${id}`
+    })
+  )
+  const prepared = await prepareNativeQueue({
+    queue,
+    currentTrack: queue[2],
+    currentTarget: queue[2].streamUrl!,
+    currentIndex: 2,
+    playMode: 'listLoop',
+    isAudioFileAuthorized: async () => false
+  })
+  assert.ok(prepared)
+  assert.deepEqual(prepared.queueIndices, [2, 0])
+  assert.equal(preparedNativePlayMode(prepared, 'listLoop'), 'sequential')
+  assert.equal(preparedNativePlayMode(prepared, 'shuffle'), 'sequential')
+  assert.equal(preparedNativePlayMode(prepared, 'repeat'), 'repeat')
+})
+
+test('quality changes strip both signed NetEase URLs and managed cache paths', async () => {
+  const { stripStaleNcmStreamUrls } = await import('./nativeQueuePreparation.ts')
+  const queue = ['twilight-media://audio/a', 'D:\\Cache\\ncm-cache\\b.flac'].map(
+    (streamUrl, index) =>
+      createTrack({ id: `ncm:${index}`, source: 'ncm', streamUrl, streamQuality: 'lossless' })
+  )
+  const stripped = stripStaleNcmStreamUrls(queue, {
+    committedAtByTrackId: new Map(queue.map((track) => [track.id, Date.now()])),
+    quality: 'standard'
+  })
+  assert.deepEqual(
+    stripped.map((track) => track.streamUrl),
+    ['', '']
+  )
+  assert.ok(queue.every((track) => track.streamUrl))
+})
+
+test('oversized NetEase queues keep only the current boundary and do not authorize the whole album', async () => {
+  const { MAX_NATIVE_QUEUE_ITEMS } = await import('../../../shared/nativeQueue.ts')
+  const queue = Array.from({ length: MAX_NATIVE_QUEUE_ITEMS + 1 }, (_, index) =>
+    createTrack({
+      id: `ncm:${index}`,
+      source: 'ncm',
+      filePath: `ncm:${index}`,
+      streamUrl: index < 2 ? `twilight-media://audio/${index}` : null
+    })
+  )
+  const prepared = await prepareNativeQueue({
+    queue,
+    currentTrack: queue[0],
+    currentTarget: queue[0].streamUrl!,
+    currentIndex: 0,
+    isAudioFileAuthorized: async () => {
+      throw new Error('remote windows need no file authorization')
+    },
+    areAudioFilesAuthorized: async () => {
+      throw new Error('must not authorize the full queue')
+    }
+  })
+  assert.equal(prepared?.items.length, 2)
+  assert.deepEqual(prepared?.queueIndices, [0, 1])
 })

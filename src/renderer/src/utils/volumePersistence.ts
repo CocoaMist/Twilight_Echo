@@ -10,9 +10,10 @@ export interface DebouncedVolumePersistence {
 
 export function createDebouncedVolumePersistence(
   persist: (value: number) => Promise<void>,
+  // Browser timers reject the scheduler object as their `this` receiver.
   scheduler: VolumePersistenceScheduler = {
-    setTimeout,
-    clearTimeout
+    setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+    clearTimeout: (timer) => clearTimeout(timer)
   },
   delayMs = 280
 ): DebouncedVolumePersistence {

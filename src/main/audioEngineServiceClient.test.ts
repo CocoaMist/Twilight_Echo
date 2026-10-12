@@ -1074,6 +1074,74 @@ test('oversized audio service cache responses are rejected, discarded, and follo
   }
 })
 
+test('metadata accepts bounded embedded artwork while oversized metadata still restarts the service', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 1000,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  try {
+    const pending = binding.getMetadataAsync('large-cover.mp3')
+    const request = child.messages.at(-1) as { requestId: string }
+    const metadata = JSON.stringify({
+      duration: 135.694,
+      coverDataBase64: 'A'.repeat(2 * 1024 * 1024)
+    })
+    child.emit('message', {
+      kind: 'response',
+      requestId: request.requestId,
+      ok: true,
+      value: metadata
+    })
+    assert.equal(await pending, metadata)
+    assert.equal(child.killCount, 0)
+    const oversized = binding.getMetadataAsync('oversized-cover.mp3')
+    const rejected = assert.rejects(oversized, /invalid or oversized message/)
+    const largeRequest = child.messages.at(-1) as { requestId: string }
+    child.emit('message', {
+      kind: 'response',
+      requestId: largeRequest.requestId,
+      ok: true,
+      value: 'x'.repeat(9 * 1024 * 1024)
+    })
+    await rejected
+    assert.equal(child.killCount, 1)
+  } finally {
+    binding.destroy()
+  }
+})
+
+test('explicit playback reads refresh the cache used by ticks after pause and preparation', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 1000,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  try {
+    for (const info of [
+      { state: 'playing', autoMixState: 'preparing', autoMixPlanId: 1 },
+      { state: 'paused', autoMixState: 'mixing', autoMixPlanId: 1, autoMixOutputSeconds: 1.234 },
+      { state: 'playing', autoMixState: 'mixing', autoMixPlanId: 1, autoMixOutputSeconds: 1.234 }
+    ]) {
+      const pending = binding.callAsync('GetPlaybackInfo', [])
+      const request = child.messages.at(-1) as { requestId: string }
+      const json = JSON.stringify(info)
+      child.emit('message', {
+        kind: 'response',
+        requestId: request.requestId,
+        ok: true,
+        value: json
+      })
+      assert.equal(await pending, json)
+      assert.equal(binding.GetPlaybackInfo(), json)
+    }
+  } finally {
+    binding.destroy()
+  }
+})
+
 test('audio service utility-process logs are bounded by chunk and process lifetime', () => {
   const child = new ManualUtilityProcess()
   const binding = new AudioEngineServiceBinding({

@@ -1763,47 +1763,66 @@ function getUnblockedPlaybackUrl(data) {
   return null
 }
 
-function officialAutoMixIdentity(songId, item) {
-  if (item.freeTrialInfo) return null
-  const md5 = typeof item.md5 === 'string' ? item.md5.toLowerCase() : ''
-  const size = Number(item.size),
-    bitrate = Number(item.br),
-    milliseconds = Number(item.time)
-  const format = normalizeNcmFormat(item.type ?? item.encodeType)
-  if (
-    !/^[a-f0-9]{32}$/.test(md5) ||
-    !Number.isSafeInteger(size) ||
-    size <= 0 ||
-    !Number.isFinite(bitrate) ||
-    bitrate <= 0 ||
-    !Number.isFinite(milliseconds) ||
-    milliseconds <= 0 ||
-    !format
-  )
-    return null
+function playbackIdentityResult(source, originSource, item, options, expiresAt) {
+  if (options?._twilightSourceIdentity !== true) return source
+  const positive = (value) =>
+    Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null
   return {
-    contentId: `ncm:${songId}:${md5}:${size}`,
-    quality: JSON.stringify([format, bitrate, item.level ?? '']),
-    durationSeconds: milliseconds / 1000,
-    seekable: true
+    streamUrl: source,
+    providerSource: {
+      originSource,
+      actualQuality: typeof item?.level === 'string' ? item.level : null,
+      format: normalizeNcmFormat(item?.type ?? item?.encodeType ?? item?.format) || null,
+      bitrate: positive(item?.br ?? item?.bitrate),
+      sampleRate: positive(item?.sr ?? item?.sampleRate),
+      bytes: positive(item?.size),
+      expiresAt
+    }
   }
 }
-
-function autoMixPlaybackResult(url, identity, options) {
-  return options?.autoMixSource === true && identity
-    ? { streamUrl: url, autoMixIdentity: identity }
-    : url
+function rememberStreamUrl(cacheKey, url, songId, fileName, item = {}, prepare = false) {
+  const ttl =
+    Number(item.expi) > 0
+      ? Math.min(STREAM_URL_CACHE_TTL_MS, Number(item.expi) * 1000)
+      : STREAM_URL_CACHE_TTL_MS
+  const entry = { url, expiresAt: Date.now() + ttl, item }
+  streamUrlCache.set(cacheKey, entry)
+  if (!prepare)
+    void ncmApi
+      .cacheSong(songId, url, fileName)
+      .then((cachedPath) => {
+        if (cachedPath && streamUrlCache.get(cacheKey) === entry) entry.cachedPath = cachedPath
+      })
+      .catch(() => {})
+  return entry
 }
 
-function rememberStreamUrl(cacheKey, url, songId, fileName, autoMixIdentity = null) {
-  const entry = { url, autoMixIdentity, expiresAt: Date.now() + STREAM_URL_CACHE_TTL_MS }
-  streamUrlCache.set(cacheKey, entry)
-  void ncmApi
-    .cacheSong(songId, url, fileName)
-    .then((cachedPath) => {
-      if (cachedPath && streamUrlCache.get(cacheKey) === entry) entry.cachedPath = cachedPath
-    })
-    .catch(() => {})
+async function prepareStreamEntry(entry, songId, fileName, options, requestContext) {
+  if (options?._twilightAutoMixPrepare === true && ncmApi.prepareAutoMixSong) {
+    try {
+      const cachedPath = await ncmApi.prepareAutoMixSong(
+        songId,
+        entry.url,
+        fileName,
+        {
+          expiresAt: entry.expiresAt,
+          expectedBytes: Number(entry.item?.size) > 0 ? Number(entry.item.size) : null
+        },
+        { signal: requestContext?.signal }
+      )
+      throwIfRequestAborted(requestContext)
+      if (cachedPath && entry.expiresAt > Date.now()) {
+        entry.cachedPath = cachedPath
+        return playbackIdentityResult(cachedPath, entry.url, entry.item, options, entry.expiresAt)
+      }
+    } catch {
+      throwIfRequestAborted(requestContext)
+      // Preparation failure retains the official playback URL and normal
+      // player fallback; it never retries a different account/quality here.
+    }
+  }
+  if (entry.expiresAt <= Date.now()) throw new Error('Playback URL expired during preparation')
+  return playbackIdentityResult(entry.url, entry.url, entry.item, options, entry.expiresAt)
 }
 
 async function getPlaybackUrl(track, options = {}, requestContext) {
@@ -1822,17 +1841,20 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
       if (cachedStreamEntry.cachedPath) {
         try {
           const cachedPath = await ncmApi.getCachedSong(songId)
-          if (cachedPath === cachedStreamEntry.cachedPath) return cachedPath
+          if (cachedPath === cachedStreamEntry.cachedPath)
+            return playbackIdentityResult(
+              cachedPath,
+              cachedStreamEntry.url,
+              cachedStreamEntry.item,
+              options,
+              cachedStreamEntry.expiresAt
+            )
         } catch {
           // A cache lookup failure must not prevent online playback.
         }
         cachedStreamEntry.cachedPath = null
       }
-      return autoMixPlaybackResult(
-        cachedStreamEntry.url,
-        cachedStreamEntry.autoMixIdentity,
-        options
-      )
+      return prepareStreamEntry(cachedStreamEntry, songId, track?.fileName, options, requestContext)
     }
     streamUrlCache.delete(cacheKey)
   }
@@ -1855,11 +1877,18 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
       const url = getOfficialPlaybackUrl(data, streamItem)
       if (url) {
         rememberStreamAudioMeta(songId, streamItem)
-        const identity = officialAutoMixIdentity(songId, streamItem)
         if (!streamItem.freeTrialInfo) {
-          rememberStreamUrl(cacheKey, url, songId, track?.fileName, identity)
+          const entry = rememberStreamUrl(
+            cacheKey,
+            url,
+            songId,
+            track?.fileName,
+            streamItem,
+            options?._twilightAutoMixPrepare === true
+          )
+          return prepareStreamEntry(entry, songId, track?.fileName, options, requestContext)
         }
-        return autoMixPlaybackResult(url, identity, options)
+        return playbackIdentityResult(url, url, streamItem, options, null)
       }
       lastFailureMessage = getPlaybackFailureMessage(data, streamItem) || lastFailureMessage
     } catch (error) {
@@ -1879,8 +1908,15 @@ async function getPlaybackUrl(track, options = {}, requestContext) {
       const data = await requestAuthed(getUnblockedPlaybackUrlPath(songId), requestContext)
       const url = getUnblockedPlaybackUrl(data)
       if (url) {
-        rememberStreamUrl(cacheKey, url, songId, track?.fileName)
-        return url
+        const entry = rememberStreamUrl(
+          cacheKey,
+          url,
+          songId,
+          track?.fileName,
+          {},
+          options?._twilightAutoMixPrepare === true
+        )
+        return prepareStreamEntry(entry, songId, track?.fileName, options, requestContext)
       }
       lastFailureMessage =
         getPlaybackFailureMessage(data, {}) || '灰色歌曲解锁响应缺少有效的 HTTP(S) URL'

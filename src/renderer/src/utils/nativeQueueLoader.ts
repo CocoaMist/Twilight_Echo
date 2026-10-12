@@ -1,4 +1,7 @@
 import type { NativeQueueCommit, NativeQueueSelection } from '../../../shared/nativeQueue.ts'
+import type { Track } from '../types/music'
+import type { PlayMode } from '../types/settings'
+import { toNativePlayMode } from '../../../shared/playbackModes.ts'
 import {
   preparePlayerNativeQueue,
   type NativeQueueLoadItem,
@@ -14,7 +17,12 @@ interface QueueApi {
 
 /** Retains one content version, with authority to reuse held by main. */
 export class NativeQueueLoader {
-  private committed: { json: string; token: string } | null = null
+  private committed: {
+    json: string
+    token: string
+    window: boolean
+    entries: Array<{ id: string; queueEntryId?: string; index: number }>
+  } | null = null
 
   clear(): void {
     this.committed = null
@@ -24,12 +32,46 @@ export class NativeQueueLoader {
     return this.committed !== null && JSON.stringify(items) === this.committed.json
   }
 
-  async loadPrepared(prepared: PreparedNativeQueue, api: QueueApi): Promise<void> {
+  async loadPrepared(
+    prepared: PreparedNativeQueue,
+    api: QueueApi,
+    queue: readonly Track[] = []
+  ): Promise<void> {
     this.clear()
     const commit = await api.loadQueue(prepared.items, prepared.startIndex)
     if (commit?.queueToken) {
-      this.committed = { json: JSON.stringify(prepared.items), token: commit.queueToken }
+      this.committed = {
+        json: JSON.stringify(prepared.items),
+        token: commit.queueToken,
+        window: !!prepared.queueIndices,
+        entries: prepared.items.map((item, nativeIndex) => {
+          const index = prepared.queueIndices?.[nativeIndex] ?? nativeIndex
+          return { id: item.id, index, queueEntryId: queue[index]?.queueEntryId }
+        })
+      }
     }
+  }
+
+  findLogicalIndex(
+    info: { queueIndex: number; queueToken?: string },
+    queue: readonly Track[]
+  ): number {
+    if (!this.committed || !info.queueToken || info.queueToken !== this.committed.token) return -1
+    const entry = this.committed.entries[info.queueIndex]
+    if (!entry) return -1
+    const track = queue[entry.index]
+    return track?.id === entry.id &&
+      (!entry.queueEntryId || track.queueEntryId === entry.queueEntryId)
+      ? entry.index
+      : -1
+  }
+
+  hasWindow(): boolean {
+    return this.committed?.window === true
+  }
+
+  playMode(mode: PlayMode) {
+    return this.hasWindow() && mode !== 'repeat' ? 'sequential' : toNativePlayMode(mode)
   }
 
   async prepareAndLoad(
@@ -54,14 +96,21 @@ export class NativeQueueLoader {
         this.clear()
         return null
       }
-      if (selected) return prepared
+      if (selected) {
+        this.committed.window = !!prepared.queueIndices
+        this.committed.entries = prepared.items.map((item, nativeIndex) => {
+          const index = prepared!.queueIndices?.[nativeIndex] ?? nativeIndex
+          return { id: item.id, index, queueEntryId: options.queue[index]?.queueEntryId }
+        })
+        return prepared
+      }
       // Token invalidation, a changed symlink or a service restart: run the
       // full availability checks again, including singleton degradation.
       this.clear()
       prepared = await preparePlayerNativeQueue({ ...options, canReuseQueue: undefined }, boundary)
       if (!prepared || options.isCurrent?.() === false) return null
     }
-    await this.loadPrepared(prepared, api)
+    await this.loadPrepared(prepared, api, options.queue)
     if (options.isCurrent?.() === false) {
       this.clear()
       return null

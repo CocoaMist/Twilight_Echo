@@ -35,6 +35,7 @@ void ChannelRouter::prepareForRealtime(int sampleRate, float maximumDelayMs) {
   surroundLeftDelayGeneration_.assign(realtimeDelayCapacity_, 0);
   surroundRightDelayGeneration_.assign(realtimeDelayCapacity_, 0);
   realtimePrepared_ = true;
+  sourceToken_ = 0;
   delayGeneration_ = 1;
   surroundDelaySamples_ = 0;
   surroundLeftDelayCursor_ = 0;
@@ -51,6 +52,12 @@ void ChannelRouter::reset() {
   }
   channel_router::prepareDelayLine(surroundLeftDelay_, surroundDelaySamples_, surroundLeftDelayCursor_);
   channel_router::prepareDelayLine(surroundRightDelay_, surroundDelaySamples_, surroundRightDelayCursor_);
+}
+
+void ChannelRouter::beginSource(uint64_t token) {
+  if (sourceToken_ == token) return;
+  sourceToken_ = token;
+  reset();
 }
 
 void ChannelRouter::recomputeCoefficients() {

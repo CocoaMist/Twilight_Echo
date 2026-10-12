@@ -18,26 +18,10 @@ defineProps<{
       <h2>连接与控制</h2>
     </div>
     <p class="settings-section-description">配置快捷键、系统控制和外部连接。</p>
-    <slot />
     <div class="section-block">
-      <h3>系统与账号</h3>
+      <h3>播放控制</h3>
+      <slot />
       <div class="setting-list">
-        <div data-setting-id="check-login" id="setting-check-login" class="setting-item">
-          <div class="setting-copy">
-            <strong>启动时检查网易云登录</strong>
-            <span>应用启动后自动刷新内置网易云音源的登录状态。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{ active: settings.autoCheckLogin, inactive: !settings.autoCheckLogin }"
-            role="switch"
-            aria-label="启动时检查网易云登录"
-            :aria-checked="settings.autoCheckLogin"
-            @click="toggleSetting('autoCheckLogin')"
-          ></button>
-        </div>
-        <hr />
         <div data-setting-id="system-media" id="setting-system-media" class="setting-item">
           <div class="setting-copy">
             <strong>原生媒体控制 (SMTC)</strong>
@@ -73,6 +57,26 @@ defineProps<{
             aria-label="任务栏缩略图播放按钮"
             :aria-checked="settings.taskbarThumbarButtonsEnabled"
             @click="toggleSetting('taskbarThumbarButtonsEnabled')"
+          ></button>
+        </div>
+      </div>
+    </div>
+    <div class="section-block">
+      <h3>账号状态</h3>
+      <div class="setting-list">
+        <div data-setting-id="check-login" id="setting-check-login" class="setting-item">
+          <div class="setting-copy">
+            <strong>启动时检查网易云登录</strong>
+            <span>应用启动后自动刷新内置网易云音源的登录状态。</span>
+          </div>
+          <button
+            type="button"
+            class="toggle-switch"
+            :class="{ active: settings.autoCheckLogin, inactive: !settings.autoCheckLogin }"
+            role="switch"
+            aria-label="启动时检查网易云登录"
+            :aria-checked="settings.autoCheckLogin"
+            @click="toggleSetting('autoCheckLogin')"
           ></button>
         </div>
       </div>

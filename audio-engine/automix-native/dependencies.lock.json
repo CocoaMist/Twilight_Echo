@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "graphAbi": "TAMG0001",
+  "productionRuntimes": [],
+  "models": {
+    "beat-this-small0": {
+      "source": "https://github.com/CPJKU/beat_this",
+      "commit": "b95c8ab0c58c2d9fcfd40508ae8dffbc05ac4f5c",
+      "license": "MIT",
+      "licenseScope": "Public source and published pretrained weights, per upstream README",
+      "weightsUrl": "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/small0.ckpt",
+      "weightsSha256": "6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b",
+      "developmentOnnxSha256": "10b8a43f58ec08dec4cf3c0df3ae4c62b8c51b4d96449c318af7f2aa76dc574f",
+      "graphFile": "beat-this.tamg",
+      "graphSha256": "a01d39a2185f64e2da422fc6251dd93785f8bb90ba91a50087049e42d8b04fec",
+      "sampleRate": 22050,
+      "analysisFps": 50,
+      "fixedInput": [1, 1500, 128]
+    },
+    "yamnet": {
+      "source": "https://github.com/tensorflow/models/tree/34a21326906b9574fa11c4d6d0a5c534ff039267/research/audioset/yamnet",
+      "commit": "34a21326906b9574fa11c4d6d0a5c534ff039267",
+      "sourceFiles": {
+        "features.py": "e6cd53f81d072c7c43be4c7fff2b9dd0c5ccc7d64f2fbcfc85b44013d6d2ed5e",
+        "params.py": "925bb1e62461016031f98aea09aeac28975dd516f5747513767de5d1b06b6145",
+        "yamnet.py": "7ef3df32b7ecb782490b5a04d7581a23cfcf701dbf476bc4d03deefe22cdb040",
+        "yamnet_class_map.csv": "cdf24d193e196d9e95912a2667051ae203e92a2ba09449218ccb40ef787c6df2"
+      },
+      "license": "Apache-2.0",
+      "weightsUrl": "https://storage.googleapis.com/audioset/yamnet.h5",
+      "weightsSha256": "13c3308955bbfaef262f175ac9c40e47b134573a93984f009220dd7cc12a1744",
+      "developmentOnnxSha256": "564a1406a3173634aedc049863403e581c1fabf2b0e2c22515d924d3ffb160e5",
+      "graphFile": "yamnet.tamg",
+      "graphSha256": "2f80a111ab1af443c8657406fd543d700b068b938e6638a26f5ec0f6ee5aa1df",
+      "sampleRate": 16000,
+      "fixedInput": [1, 96, 64]
+    }
+  },
+  "references": {
+    "signalsmith-stretch": {
+      "source": "https://github.com/Signalsmith-Audio/signalsmith-stretch",
+      "commit": "a670068d9aeb64913331d5cc29337b19a457a7df",
+      "version": "1.3.2",
+      "license": "MIT"
+    },
+    "signalsmith-linear": {
+      "source": "https://github.com/Signalsmith-Audio/linear",
+      "commit": "146b26f91b48835d665fa0498d64d9617818d27a",
+      "license": "MIT"
+    }
+  },
+  "development": {"python": "3.12", "torch": "2.6.0+cpu", "torchaudio": "2.6.0+cpu", "tensorflow": "2.18.0", "tf-keras": "2.18.0", "tf2onnx": "1.16.1", "numpy": "1.26.4", "onnx": "1.17.0", "onnxruntime": "1.20.1", "soundfile": "0.13.1", "scipy": "1.15.3", "nasmValidated": "3.01"}
+}

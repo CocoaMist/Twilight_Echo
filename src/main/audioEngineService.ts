@@ -88,7 +88,10 @@ if (nativeContractError) {
 } else {
   servicePort.postMessage({
     kind: 'ready',
-    capabilities: createAudioServiceCapabilities(nativeMethods)
+    capabilities: {
+      ...createAudioServiceCapabilities(nativeMethods),
+      nativeRuntime: nativeLoad.runtime
+    }
   })
 }
 

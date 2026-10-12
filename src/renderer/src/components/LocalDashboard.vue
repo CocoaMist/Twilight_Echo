@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useMusicStore } from '../stores/useMusicStore'
@@ -153,6 +154,10 @@ const heroIsCurrent = computed(
   () => !!currentTrack.value && heroTrack.value?.id === currentTrack.value.id
 )
 
+const heroPlayLabel = computed(() =>
+  !heroIsCurrent.value ? '开始收听' : isPlaying.value ? '暂停' : '播放'
+)
+
 const heroCoverKey = computed(
   () =>
     `hero:${heroTrack.value?.id ?? 'none'}:${heroTrack.value?.cover ?? ''}:${heroTrack.value?.coverSource ?? ''}`
@@ -213,14 +218,6 @@ function playDashboardTrack(track: Track | null | undefined): void {
   const end = Math.min(tracks.value.length, start + DASHBOARD_QUEUE_WINDOW)
   const queueStart = Math.max(0, end - DASHBOARD_QUEUE_WINDOW)
   playTrack(track, tracks.value.slice(queueStart, end))
-}
-
-function handleHeroPlay(): void {
-  if (heroIsCurrent.value) {
-    togglePlay()
-    return
-  }
-  playDashboardTrack(heroTrack.value)
 }
 
 function shuffleAll(): void {
@@ -904,52 +901,45 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
 
               <DashboardPlaybackProgress v-if="heroIsCurrent" />
 
-              <div v-if="heroIsCurrent" class="hero-actions">
+              <div
+                v-if="heroTrack"
+                class="hero-actions"
+                :class="{ 'is-current': heroIsCurrent }"
+                role="group"
+                aria-label="播放控制"
+              >
                 <button
                   type="button"
+                  v-if="heroIsCurrent"
                   class="transport-button"
                   title="上一首"
                   aria-label="上一首"
                   @click="prev"
                 >
-                  <i class="ph ph-skip-back"></i>
+                  <PlaybackIcon name="previous" />
                 </button>
                 <button
                   type="button"
                   class="transport-button transport-play"
-                  :title="isPlaying ? '暂停' : '播放'"
-                  :aria-label="isPlaying ? '暂停' : '播放'"
-                  @click="togglePlay"
+                  :class="{ 'is-idle': !heroIsCurrent }"
+                  :title="heroPlayLabel"
+                  :aria-label="heroPlayLabel"
+                  @click="heroIsCurrent ? togglePlay() : playDashboardTrack(heroTrack)"
                 >
-                  <i :class="isPlaying ? 'ph ph-pause' : 'ph ph-play'"></i>
+                  <PlaybackIcon :name="heroIsCurrent && isPlaying ? 'pause' : 'play'" />
+                  <span v-if="!heroIsCurrent" class="transport-play-label">{{
+                    heroPlayLabel
+                  }}</span>
                 </button>
                 <button
                   type="button"
+                  v-if="heroIsCurrent"
                   class="transport-button"
                   title="下一首"
                   aria-label="下一首"
                   @click="next"
                 >
-                  <i class="ph ph-skip-forward"></i>
-                </button>
-                <button type="button" class="hero-ghost-action" @click="shuffleAll">
-                  <i class="ph ph-shuffle"></i>
-                  随机畅听
-                </button>
-              </div>
-
-              <div v-else class="hero-actions">
-                <button
-                  type="button"
-                  class="hero-ghost-action hero-primary-action"
-                  @click="handleHeroPlay"
-                >
-                  <i class="ph ph-play" aria-hidden="true"></i>
-                  播放这首
-                </button>
-                <button type="button" class="hero-ghost-action" @click="shuffleAll">
-                  <i class="ph ph-shuffle"></i>
-                  随机畅听
+                  <PlaybackIcon name="next" />
                 </button>
               </div>
             </div>
@@ -1104,7 +1094,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <span v-if="track.format" class="fresh-format">{{
                   track.format.toUpperCase()
                 }}</span>
-                <span class="fresh-play" aria-hidden="true"><i class="ph ph-play"></i></span>
+                <span class="fresh-play" aria-hidden="true"><PlaybackIcon name="play" /></span>
               </span>
               <span class="fresh-name">{{ track.title }}</span>
               <span class="fresh-artist">{{ track.artist || '未知艺术家' }}</span>
@@ -1241,7 +1231,7 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <CoverImg :cover="album.cover" :fallback="DEFAULT_COVER" :alt="album.name" />
                 <span class="gallery-scrim" aria-hidden="true"></span>
                 <span class="gallery-count">{{ album.trackCount }} 首</span>
-                <span class="gallery-play" aria-hidden="true"><i class="ph ph-play"></i></span>
+                <span class="gallery-play" aria-hidden="true"><PlaybackIcon name="play" /></span>
               </span>
               <span class="gallery-name">{{ album.name }}</span>
               <span class="gallery-artist">{{ album.artist || '未知艺术家' }}</span>

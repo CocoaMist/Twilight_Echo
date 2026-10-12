@@ -32,6 +32,9 @@ importers:
 
   .:
     dependencies:
+      '@borewit/text-codec':
+        specifier: 0.2.2
+        version: 0.2.2
       '@electron-toolkit/utils':
         specifier: ^4.0.0
         version: 4.0.0(electron@43.5.0)
@@ -41,6 +44,9 @@ importers:
       '@tokenizer/inflate':
         specifier: 0.4.1
         version: 0.4.1
+      '@tokenizer/token':
+        specifier: 0.3.0
+        version: 0.3.0
       '@xmldom/xmldom':
         specifier: ^0.9.12
         version: 0.9.12
@@ -104,6 +110,9 @@ importers:
       fd-slicer:
         specifier: 1.1.0
         version: 1.1.0
+      file-type:
+        specifier: 21.3.4
+        version: 21.3.4
       follow-redirects:
         specifier: 1.16.0
         version: 1.16.0
@@ -197,12 +206,21 @@ importers:
       toidentifier:
         specifier: 1.0.1
         version: 1.0.1
+      token-types:
+        specifier: 6.1.2
+        version: 6.1.2
+      uint8array-extras:
+        specifier: 1.5.0
+        version: 1.5.0
       undici:
         specifier: 6.28.1
         version: 6.28.1
       util-deprecate:
         specifier: 1.0.2
         version: 1.0.2
+      win-guid:
+        specifier: 0.2.1
+        version: 0.2.1
       wrappy:
         specifier: 1.0.2
         version: 1.0.2

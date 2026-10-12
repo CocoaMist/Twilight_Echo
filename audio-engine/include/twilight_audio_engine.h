@@ -69,6 +69,13 @@ TAE_API TAE_Result TAE_SelectQueueIndex(TAE_EngineHandle engine, int index);
 TAE_API TAE_Result TAE_Next(TAE_EngineHandle engine);
 TAE_API TAE_Result TAE_Previous(TAE_EngineHandle engine);
 TAE_API TAE_Result TAE_SetPlayMode(TAE_EngineHandle engine, const char* mode);
+/* Native-held plans. Preparation returns immediately; poll PlaybackInfo for
+ * preparing/ready/degraded and plan id, then submit that exact id. */
+TAE_API TAE_Result TAE_SetAutoMixMode(TAE_EngineHandle, const char* mode);
+TAE_API TAE_Result TAE_SelectAutoMix(TAE_EngineHandle engine, const char* request_json, char* buffer, size_t buffer_size, size_t* required_size);
+TAE_API TAE_Result TAE_PrepareAutoMix(TAE_EngineHandle, const char* request_json);
+TAE_API TAE_Result TAE_SubmitAutoMix(TAE_EngineHandle, uint64_t plan_id);
+TAE_API TAE_Result TAE_CancelAutoMix(TAE_EngineHandle);
 TAE_API TAE_Result TAE_GetQueue(TAE_EngineHandle engine, char* buffer, size_t buffer_size, size_t* required_size);
 TAE_API TAE_Result TAE_GetUpcomingTrack(TAE_EngineHandle engine, char* buffer, size_t buffer_size, size_t* required_size);
 
@@ -142,16 +149,15 @@ TAE_API TAE_Result TAE_AnalyzeLoudness(
     char* buffer,
     size_t buffer_size,
     size_t* required_size);
-/* Independent, bounded head/tail feature analysis; never returns native Song
- * indexes. Call from the isolated analysis process, not a playback callback. */
-TAE_API TAE_Result TAE_AnalyzeAutoMix(TAE_EngineHandle engine, const char* source,
-    const char* options_json, char* buffer, size_t buffer_size, size_t* required_size);
-TAE_API TAE_Result TAE_SetAutoMixConfig(TAE_EngineHandle engine, const char* config_json);
-/* Internal host feature delivery. Contains identities and pairRevision from
- * GetAutoMixStatus; late/stale pairs are rejected. No PCM crosses this API. */
-TAE_API TAE_Result TAE_SetAutoMixFeatures(TAE_EngineHandle engine, const char* features_json);
-TAE_API TAE_Result TAE_GetAutoMixStatus(TAE_EngineHandle engine, char* buffer,
-    size_t buffer_size, size_t* required_size);
+/* Worker-only bounded public-model analysis. options binds actual source identity
+ * and source range; no model inference is performed by the render callback. */
+TAE_API TAE_Result TAE_AnalyzeAutoMix(
+    TAE_EngineHandle engine,
+    const char* source,
+    const char* options_json,
+    char* buffer,
+    size_t buffer_size,
+    size_t* required_size);
 /* Diagnostic counter: number of actual analyzer executions, excluding cached size-probe reads. */
 TAE_API uint64_t TAE_GetAnalysisExecutionCount(const char* analysis_kind);
 TAE_API const char* TAE_GetVersion(void);

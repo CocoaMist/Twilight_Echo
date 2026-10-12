@@ -11,6 +11,7 @@ import { build } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 const source = readFileSync(new URL('./PlaybackSettingsSection.vue', import.meta.url), 'utf8')
+const settingsCss = readFileSync(new URL('./SettingsPage.css', import.meta.url), 'utf8')
 const require = createRequire(import.meta.url)
 
 test('automatic exclusive release uses the persisted setting and an accessible dependent switch', () => {
@@ -96,7 +97,10 @@ test('playback policy and target rate survive settings reload and component reop
           pinia: resolve(require.resolve('pinia'), '../dist/pinia.mjs')
         }
       },
-      define: { 'process.env.NODE_ENV': '"production"' },
+      define: {
+        'process.env.NODE_ENV': '"production"',
+        __TWILIGHT_AUTOMIX_EVALUATION__: 'true'
+      },
       build: {
         outDir: 'bundle',
         minify: false,
@@ -111,7 +115,7 @@ test('playback policy and target rate survive settings reload and component reop
     const files = await readdir(join(directory, 'bundle'))
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><html><head><meta charset="utf-8"></head><body><div id="app"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
+      `<!doctype html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box}${settingsCss}</style></head><body><div id="app"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),
@@ -140,7 +144,9 @@ import {normalizeOutputConfig} from '@shared/audioOutputConfig.ts'
 import {createAudioOutputController} from '@renderer/stores/player/audioOutputController.ts'
 export const persisted=ref(normalizeOutputConfig({pcmToDsdMode:'dsd128',dsdMutePreRollFrames:1024}))
 export const engine=ref({...persisted.value})
-export const appSettings=ref({audioOutputConfig:{...persisted.value},sleepTimer:{defaultMinutes:30,fadeSeconds:0}})
+export const appSettings=ref({autoMixMode:'off',autoMixStemMode:'auto',autoMixStemDevice:'auto',autoMixStemCacheMiB:512,audioOutputConfig:{...persisted.value},sleepTimer:{defaultMinutes:30,fadeSeconds:0}})
+export const stemCapabilities=ref({status:'missing',cpu:false,gpu:false,packs:[]})
+export const rejectSettings=ref(false)
 export const audioOutputConfig=ref(normalizeOutputConfig())
 /* ACTUAL_WATCHER */
 const audioProcessing=ref(/* ACTUAL_PROCESSING */)
@@ -148,7 +154,7 @@ const exclusiveMode=ref(false)
 const audioOutputConfigApplyStatus=ref({state:'idle',requestedRevision:0,appliedRevision:0,failedRevision:0,error:''})
 const controller=createAudioOutputController({exclusiveMode,audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,dspOutputStage:ref({}),dspStereoImage:ref({}),getAudioEngineApi:()=>({setOutputConfig:async config=>{engine.value=normalizeOutputConfig(config);persisted.value={...engine.value};return {...engine.value}},getOutputConfigApplyStatus:async()=>({state:'applied',requestedRevision:1,appliedRevision:1,failedRevision:0,error:''})}),setAudioEngineError:()=>{},refreshPlaybackInfo:async()=>{},scheduleCrossfadeIfNeeded:()=>{}})
 export const useAudioOutputDspStore=defineStore('policy-output',()=>({exclusiveMode,audioOutput:ref('wasapi'),audioDevice:ref('auto'),audioOutputOptions:ref([]),audioDeviceOptions:ref([]),audioOutputDeviceOptions:ref([]),audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,playbackInfo:ref(null),outputInfo:ref(null),audioEngineError:ref(null),...controller,refreshAudioOutputState:async()=>{}}))
-export const useSettingsStore=()=>({settings:appSettings,updateSettings:async()=>{}})
+export const useSettingsStore=()=>({settings:appSettings,updateSettings:async patch=>{if(rejectSettings.value)throw Error('settings failure');appSettings.value={...appSettings.value,...patch}}})
 export const usePlayerStore=()=>({volume:ref(.7),setVolume:()=>{},setUnityVolume:()=>{}})
 export const reload=()=>{appSettings.value={...appSettings.value,audioOutputConfig:JSON.parse(JSON.stringify(persisted.value))}}
 `
@@ -157,16 +163,131 @@ const policyRuntime = `
 import {createApp,h,nextTick,ref} from 'vue'
 import {createPinia} from 'pinia'
 import PlaybackSettingsSection from '@renderer/components/settings-page/PlaybackSettingsSection.vue'
-import {reload,audioOutputConfig,persisted,engine,appSettings} from 'policy-state'
+import {reload,audioOutputConfig,persisted,engine,appSettings,stemCapabilities,rejectSettings} from 'policy-state'
 const expect=(value,message)=>{if(!value)throw Error(message)}
 const settle=async()=>{await nextTick();await new Promise(resolve=>requestAnimationFrame(resolve));await nextTick()}
 window.runPolicyTests=async()=>{
+ let detectionCalls=0
+ let installStatus={phase:'idle',completedBytes:0,totalBytes:0},installResult={phase:'cancelled',completedBytes:0,totalBytes:0},finishInstall,holdInstall=false
+ window.api={audioEngine:{
+  getAutoMixStemCapabilities:async()=>{detectionCalls++;return JSON.parse(JSON.stringify(stemCapabilities.value))},
+  getAutoMixStemInstallStatus:async()=>({...installStatus}),
+  installAutoMixStemPack:async(...args)=>{expect(args.length===0,'renderer must not pass filesystem paths');if(holdInstall){installStatus={phase:'extracting',completedBytes:50,totalBytes:100,fileName:'pack.zip'};return new Promise(resolve=>{finishInstall=resolve})}installStatus={...installResult};return {...installStatus}},
+  cancelAutoMixStemInstall:async()=>{installStatus={phase:'cancelled',completedBytes:0,totalBytes:0};finishInstall?.({...installStatus});return {...installStatus}}
+ }}
  const open=ref(true)
  const app=createApp({render:()=>open.value?h(PlaybackSettingsSection):null})
  app.use(createPinia());app.mount('#app');await settle()
  const policy=()=>document.querySelector('select[aria-label="连续播放策略"]')
  const rate=()=>document.querySelector('select[aria-label="连续播放目标采样率"]')
+ const autoMix=()=>document.querySelector('select[aria-label="Twilight AutoMix 模式"]')
+ const stemCache=()=>document.querySelector('select[aria-label="分轨缓存容量"]')
+ const stemSwitch=()=>document.querySelector('button[role="switch"][aria-label="分轨增强"]')
+ const stemDevice=()=>document.querySelector('select[aria-label="分轨计算设备"]')
+ const refreshStems=async()=>{[...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='重新检测').click();await settle()}
  const change=async(select,value)=>{select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}));await settle()}
+ expect(autoMix()&&!autoMix().disabled&&autoMix().value==='off','evaluation must expose an initially disabled-by-choice AutoMix selector')
+ expect(document.body.textContent.includes('人工验收版本'),'evaluation status must remain distinct from release acceptance')
+ expect(stemSwitch().disabled&&stemSwitch().getAttribute('aria-checked')==='false','missing pack must disable stem switch')
+ expect(stemDevice().disabled&&document.body.textContent.includes('未检测到分轨器'),'missing pack must explain installation')
+ expect(appSettings.value.autoMixStemMode==='auto','missing pack must retain saved enable preference')
+ stemCapabilities.value={status:'ready',cpu:true,gpu:false,packs:[{directory:'cpu',cpu:true,gpu:false}]}
+ await refreshStems()
+ expect(detectionCalls===2&&!stemSwitch().disabled,'manual detection must discover newly installed pack')
+ expect(stemDevice().querySelector('option[value="gpu"]').disabled&&!stemDevice().querySelector('option[value="cpu"]').disabled,'CPU-only runtime must disable GPU choice')
+ await change(stemDevice(),'cpu')
+ expect(appSettings.value.autoMixStemDevice==='cpu','CPU choice must reach settings')
+ stemSwitch().click();await settle()
+ expect(appSettings.value.autoMixStemMode==='off'&&stemSwitch().getAttribute('aria-checked')==='false','switch must persist Off')
+ open.value=false;await settle();reload();open.value=true;await settle()
+ expect(stemDevice().value==='cpu'&&stemSwitch().getAttribute('aria-checked')==='false','device and Off must survive reopen')
+ stemSwitch().click();await settle()
+ expect(appSettings.value.autoMixStemMode==='auto','switch must enable stem preparation')
+ stemCapabilities.value={status:'ready',cpu:true,gpu:true,packs:[{directory:'gpu',cpu:true,gpu:true,gpuName:'Test GPU'}]}
+ await refreshStems()
+ expect(!stemDevice().querySelector('option[value="gpu"]').disabled&&document.body.textContent.includes('Test GPU'),'GPU detection must expose GPU name and choice')
+ await change(stemDevice(),'gpu')
+ open.value=false;await settle();reload();open.value=true;await settle()
+ expect(stemDevice().value==='gpu'&&stemSwitch().getAttribute('aria-checked')==='true','GPU and On must survive reopen')
+ rejectSettings.value=true
+ await change(stemDevice(),'cpu')
+ expect(appSettings.value.autoMixStemDevice==='gpu'&&stemDevice().value==='gpu','failed device update must restore saved selection')
+ stemSwitch().click();await settle()
+ expect(stemSwitch().getAttribute('aria-checked')==='true','failed switch update must retain saved state')
+ rejectSettings.value=false
+ stemCapabilities.value={status:'ready',cpu:true,gpu:false,packs:[{directory:'cpu',cpu:true,gpu:false}]}
+ await refreshStems()
+ expect(stemSwitch().disabled&&stemSwitch().getAttribute('aria-checked')==='false'&&stemDevice().value==='gpu','unavailable saved GPU must not silently enable CPU')
+ expect(appSettings.value.autoMixStemDevice==='gpu','hardware change must retain user preference')
+ await change(stemDevice(),'auto')
+ expect(!stemSwitch().disabled&&stemSwitch().getAttribute('aria-checked')==='true','Auto choice must restore usable CPU enhancement')
+ const installButton=()=>document.querySelector('[data-setting-id="autoMixMode"] [data-action="install-stem-pack"]')
+ const chooseInstall=async(enable)=>{
+  installButton().click();await settle()
+  const dialog=document.querySelector('dialog[aria-labelledby="automix-install-title"]')
+  expect(dialog.open&&dialog.textContent.includes('内存')&&dialog.textContent.includes('显存'),'install options must explain RAM / VRAM usage before choosing ZIP')
+  const bounds=dialog.getBoundingClientRect()
+  expect(Math.abs(bounds.x+bounds.width/2-document.documentElement.clientWidth/2)<2&&Math.abs(bounds.y+bounds.height/2-document.documentElement.clientHeight/2)<2,'install dialog must remain centered under the application margin reset: '+JSON.stringify({x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height,viewport:[innerWidth,innerHeight],client:[document.documentElement.clientWidth,document.documentElement.clientHeight]}))
+  const checkbox=dialog.querySelector('input[type="checkbox"]')
+  if(enable!==undefined){checkbox.checked=enable;checkbox.dispatchEvent(new Event('change',{bubbles:true}));await settle()}
+  dialog.querySelector('[data-action="choose-stem-zip"]').click();await settle()
+ }
+ expect(installButton()?.textContent.includes('安装分轨包'),'installer must appear directly in main AutoMix row')
+ const savedPreferences=JSON.stringify(appSettings.value)
+ await chooseInstall()
+ expect(document.body.textContent.includes('已取消安装'),'picker cancellation must be explained')
+ expect(JSON.stringify(appSettings.value)===savedPreferences,'picker cancellation must preserve user preferences')
+ installResult={phase:'failed',completedBytes:0,totalBytes:0,reason:'integrity'}
+ await chooseInstall()
+ expect(document.querySelector('[role="alert"]')?.textContent.includes('文件校验不通过'),'installation failure must have accessible actionable feedback')
+ expect(!installButton().disabled,'failed installation must allow retry')
+ holdInstall=true
+ await chooseInstall();await new Promise(resolve=>setTimeout(resolve,450));await settle()
+ expect(installButton().disabled&&document.querySelector('progress')?.value===50,'busy installation must expose byte progress and prevent duplicate requests')
+ open.value=false;await settle();open.value=true;await settle()
+ expect(document.querySelector('progress')?.value===50&&installButton().disabled,'reopening settings must recover active installation status')
+ const cancelButton=[...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='取消安装')
+ expect(cancelButton,'active installation must allow cancellation')
+ cancelButton.click();await settle()
+ expect(document.body.textContent.includes('已取消安装')&&!installButton().disabled,'cancellation must allow retry')
+ await chooseInstall()
+ stemCapabilities.value={status:'ready',cpu:true,gpu:true,packs:[{directory:'installed',cpu:true,gpu:true,gpuName:'Installed GPU'}]}
+ installStatus={phase:'ready',completedBytes:100,totalBytes:100,capabilities:{cpu:true,gpu:true}}
+ finishInstall({...installStatus});await settle()
+ expect(document.body.textContent.includes('安装完成')&&!stemDevice().querySelector('option[value="gpu"]').disabled,'successful install must refresh GPU / CPU choices immediately')
+ expect(JSON.stringify(appSettings.value)===savedPreferences,'installer must preserve mode/device/enable choices')
+ holdInstall=false;installResult={...installStatus}
+ await chooseInstall(false)
+ expect(appSettings.value.autoMixStemMode==='off','unchecked install choice must keep enhancement off after successful install')
+ await chooseInstall(true)
+ expect(appSettings.value.autoMixStemMode==='auto'&&appSettings.value.autoMixStemDevice==='auto','checked install choice must enable automatic GPU / CPU enhancement')
+ expect(document.querySelector('[data-setting-id="autoMixStemMode"]').textContent.includes('显存'),'enabled enhancement must retain resource notice')
+ expect(stemCache().value==='512','stem cache default must be 512 MiB')
+ for(const capacity of ['0','256','512','1024','2048']){
+  await change(stemCache(),capacity)
+  expect(appSettings.value.autoMixStemCacheMiB===Number(capacity),'stem cache choice did not persist')
+  open.value=false;await settle();reload();await settle();open.value=true;await settle()
+  expect(stemCache().value===capacity,'stem cache choice was lost on component reopen')
+ }
+ for(const desired of ['natural','dj','off']){
+  const previousMode=appSettings.value.autoMixMode
+  await change(autoMix(),desired)
+  if(desired==='dj'){
+   const dialog=document.querySelector('dialog[aria-labelledby="automix-dj-title"]')
+   expect(dialog.open&&dialog.textContent.includes('大幅跳过')&&dialog.textContent.includes('重叠混音'),'entering DJ must explain skipped content and mixing')
+   const bounds=dialog.getBoundingClientRect()
+   expect(Math.abs(bounds.x+bounds.width/2-document.documentElement.clientWidth/2)<2&&Math.abs(bounds.y+bounds.height/2-document.documentElement.clientHeight/2)<2,'DJ dialog must appear at viewport center')
+   expect(appSettings.value.autoMixMode===previousMode&&autoMix().value===previousMode,'DJ must await confirmation before changing mode')
+   Array.from(dialog.querySelectorAll('button')).find(button=>button.textContent.trim()==='取消').click();await settle()
+   expect(!dialog.open&&appSettings.value.autoMixMode===previousMode,'cancelled DJ confirmation must retain original mode')
+   await change(autoMix(),'dj')
+   dialog.querySelector('[data-action="confirm-dj-mode"]').click();await settle()
+   expect(!dialog.open,'successful DJ confirmation must dismiss the dialog')
+  }
+  expect(appSettings.value.autoMixMode===desired,'manual AutoMix choice did not reach the settings boundary')
+  open.value=false;await settle();reload();await settle();open.value=true;await settle()
+  expect(autoMix().value===desired&&!autoMix().disabled,'manual AutoMix choice was lost on component reopen')
+ }
  for(const desired of ['continuity-first','bit-perfect-first','continuity-first']){
   await change(policy(),desired)
   if(desired==='continuity-first')await change(rate(),'96000')

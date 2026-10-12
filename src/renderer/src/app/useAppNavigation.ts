@@ -52,7 +52,7 @@ const songlistOrder = [
   'analytics'
 ]
 
-export function useAppNavigation() {
+export function useAppNavigation(options: { appearancePreviewActive?: () => boolean } = {}) {
   const menuOpen = ref(false)
   const pageTarget = shallowRef<NavigationPageTarget>(localHome())
   const overlay = ref<Overlay | null>(null)
@@ -131,16 +131,28 @@ export function useAppNavigation() {
   const showPluginPage = overlayFlag('plugins')
   const showEqualizerPage = overlayFlag('equalizer')
   const showDspRackPage = overlayFlag('dsp')
-  const showStreamingPage = computed(() => pageTarget.value.kind === 'streaming' && !overlay.value)
-  const showStreamingSurface = showStreamingPage
-  const showRadioPodcastPage = computed(() => pageTarget.value.kind === 'radio' && !overlay.value)
-  const showNetworkSourcesPage = computed(
-    () => pageTarget.value.kind === 'network' && !overlay.value
+  // Preview the retained page without dismissing Settings or changing its return path.
+  const pageContentVisible = computed(
+    () => !overlay.value || (overlay.value === 'settings' && !!options.appearancePreviewActive?.())
   )
-  const showRecentPage = computed(() => pageTarget.value.kind === 'recent' && !overlay.value)
-  const localViewVisible = computed(() => pageTarget.value.kind === 'local' && !overlay.value)
+  const showStreamingPage = computed(
+    () => pageTarget.value.kind === 'streaming' && pageContentVisible.value
+  )
+  const showStreamingSurface = showStreamingPage
+  const showRadioPodcastPage = computed(
+    () => pageTarget.value.kind === 'radio' && pageContentVisible.value
+  )
+  const showNetworkSourcesPage = computed(
+    () => pageTarget.value.kind === 'network' && pageContentVisible.value
+  )
+  const showRecentPage = computed(
+    () => pageTarget.value.kind === 'recent' && pageContentVisible.value
+  )
+  const localViewVisible = computed(
+    () => pageTarget.value.kind === 'local' && pageContentVisible.value
+  )
   const activePluginPage = computed(() =>
-    pageTarget.value.kind === 'plugin' && !overlay.value ? pageTarget.value.page : null
+    pageTarget.value.kind === 'plugin' && pageContentVisible.value ? pageTarget.value.page : null
   )
   const activePageId = computed(() => navigationTargetId(pageTarget.value))
   const canGoBackPage = computed(() => history.value.length > 0 && !overlay.value)
@@ -317,7 +329,6 @@ export function useAppNavigation() {
   }
   function createToggleMenuHandler(): () => void {
     return () => {
-      if (showThemeStudioPage.value || showLoginPage.value) return
       if (overlay.value) {
         overlay.value = null
         overlayHistory.length = 0

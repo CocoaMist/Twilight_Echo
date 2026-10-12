@@ -76,7 +76,13 @@ function toggleSetting(key: BooleanSettingKey): void {
             @click="toggleSetting('useCoverTheme')"
           ></button>
         </div>
-        <WindowTransparencySettings />
+        <SettingsGroup
+          id="window-transparency-details"
+          title="系统窗口透明"
+          :summary="settings.windowTransparency ? '已开启' : '已关闭'"
+          description="需要透出桌面或系统模糊效果时展开；这是系统窗口效果，与界面卡片材质分别设置。"
+          ><WindowTransparencySettings
+        /></SettingsGroup>
       </div>
     </div>
     <div class="section-block">
@@ -129,7 +135,7 @@ function toggleSetting(key: BooleanSettingKey): void {
         ' · ' +
         { visible: '常显', autoHide: '自动隐藏', hidden: '完全隐藏' }[settings.playerBar.visibility]
       "
-      initially-open
+      description="先选择形态与显示方式；需要调整播放页差异、自动隐藏或按钮布局时，再展开对应选项。"
     >
       <div class="setting-list">
         <PlayerBarSettings />
@@ -159,7 +165,16 @@ function toggleSetting(key: BooleanSettingKey): void {
             "
           />
         </div>
-        <PlayerBarLayoutSettings />
+        <SettingsGroup
+          id="player-bar-layout-details"
+          title="按钮编排"
+          :summary="
+            '当前全局形态：' +
+            { standard: '标准', mini: '迷你', compact: '紧凑' }[settings.playerBar.mode]
+          "
+          description="调整每种播放条上的按钮和顺序；编辑布局不会切换正在使用的形态。"
+          ><PlayerBarLayoutSettings
+        /></SettingsGroup>
       </div>
     </SettingsGroup>
     <MiniPlayerSettingsSection />

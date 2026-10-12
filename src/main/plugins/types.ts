@@ -443,6 +443,7 @@ export type PluginHostResponse =
         | 'ncmOfficialLogin'
         | 'ncmGetCachedSong'
         | 'ncmCacheSong'
+        | 'ncmPrepareAutoMixSong'
         | 'qishuiGetQrLogin'
         | 'qishuiCheckQrLogin'
         | 'qishuiClear'
