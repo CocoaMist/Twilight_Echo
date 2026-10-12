@@ -80,26 +80,16 @@ test('system theme follows the current native preference without importing audio
 })
 
 test(
-  'Windows frame follows explicit and system tones and yields to high contrast',
+  'Windows frame avoids a painted accent outline and yields to high contrast',
   {
     skip: process.platform !== 'win32'
   },
   () => {
     const colors: (string | boolean | null)[] = []
     const win = { setAccentColor: (color: string | boolean | null) => colors.push(color) }
-    const settings = {
-      theme: 'dark' as AppSettingsTheme,
-      appBackground: { global: { dark: '#18191b', light: '#fafafa' } }
-    }
-    syncWindowFrameColor(win, settings, false, false)
-    settings.theme = 'pureWhite'
-    syncWindowFrameColor(win, settings, true, false)
-    settings.theme = 'system'
-    syncWindowFrameColor(win, settings, true, false)
-    syncWindowFrameColor(win, settings, false, false)
-    syncWindowFrameColor(win, settings, false, true)
-    assert.deepEqual(colors, ['#18191b', '#fafafa', '#18191b', '#fafafa', null])
+    syncWindowFrameColor(win, false)
+    syncWindowFrameColor(win, true)
+    syncWindowFrameColor(win, false)
+    assert.deepEqual(colors, [false, null, false])
   }
 )
-
-type AppSettingsTheme = Parameters<typeof getWindowBackgroundColor>[0]['theme']

@@ -43,12 +43,7 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
     Object.prototype.hasOwnProperty.call(patch, 'appBackground')
   runtime.appSettings = nextSettings
   if (shouldUpdateWindowBackground && runtime.mainWindow) {
-    syncWindowFrameColor(
-      runtime.mainWindow,
-      runtime.appSettings,
-      nativeTheme.shouldUseDarkColors,
-      nativeTheme.shouldUseHighContrastColors
-    )
+    syncWindowFrameColor(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
   }
   if (shouldUpdateWindowBackground && !runtime.appSettings.windowTransparency) {
     runtime.mainWindow?.setBackgroundColor(

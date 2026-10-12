@@ -17,13 +17,11 @@ export function getWindowBackgroundColor(
   return settings.appBackground.global.light
 }
 
-/** Keep the Windows frame on the same surface as the frameless caption. */
+/** Avoid a theme-coloured DWM outline around edge-to-edge playback content. */
 export function syncWindowFrameColor(
   win: Pick<BrowserWindow, 'setAccentColor'>,
-  settings: WindowAppearanceSettings,
-  systemDark: boolean,
   highContrast: boolean
 ): void {
   if (process.platform !== 'win32') return
-  win.setAccentColor(highContrast ? null : getWindowBackgroundColor(settings, systemDark))
+  win.setAccentColor(highContrast ? null : false)
 }
