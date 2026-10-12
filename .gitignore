@@ -152,6 +152,7 @@ resources/font/_originals/
 
 # Local design prototype output (never publish)
 outputs/
+/.artifacts/
 
 # Local packaging / signing artifacts
 /dist-release-*/
