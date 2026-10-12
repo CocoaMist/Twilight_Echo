@@ -1310,7 +1310,6 @@ html[data-theme='pureWhite'] .shortcut-item kbd {
   background: #f8fafc;
 }
 
-html[data-theme='pureWhite'] .settings-group,
 html[data-theme='pureWhite'] .shortcut-list,
 html[data-theme='pureWhite'] .theme-option.active,
 html[data-theme='pureWhite'] .color-mode-button.active,
@@ -1913,7 +1912,6 @@ html[data-theme='dark'] .settings-tabs {
   border-right-color: rgba(148, 163, 184, 0.12);
 }
 
-html[data-theme='dark'] .settings-group,
 html[data-theme='dark'] .shortcut-list,
 html[data-theme='dark'] .theme-option.active,
 html[data-theme='dark'] .color-mode-button.active,
@@ -3005,7 +3003,6 @@ html[data-window-transparent='on']
     .folder-card,
     .empty-list-card,
     .filter-card,
-    .settings-group,
     .device-card,
     .card,
     .account-card,
@@ -3067,7 +3064,6 @@ html[data-window-transparent='on']:not([data-platform='linux'])
     .folder-card,
     .empty-list-card,
     .filter-card,
-    .settings-group,
     .device-card,
     .card,
     .account-card,

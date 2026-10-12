@@ -324,6 +324,8 @@ export interface SettingsSearchEntry {
   /** Stable target, independent of translated labels. Optional for legacy callers. */
   id?: string
   disclosureId?: string
+  /** Ancestors first, for targets inside nested settings groups. */
+  disclosureIds?: readonly string[]
   fallbackId?: string
   fallbackReason?: string
   appearanceArea?: 'background' | 'material' | 'advanced'
@@ -339,6 +341,12 @@ export interface SettingsSearchEntry {
 
 /** 设置项级细粒度搜索索引：每个设置项一条，保证任意设置项都能被搜到 */
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+  {
+    id: 'audio-device',
+    section: 'playback',
+    title: '输出设备',
+    terms: '声音 输出设备 耳机 音箱 解码器 声卡 没有声音 audio device 系统默认'
+  },
   {
     id: 'library-folders',
     section: 'library',
@@ -376,7 +384,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     id: 'library-rescan',
     section: 'library',
     title: '完整重扫',
-    terms: '媒体库 下载 缓存 存储 rescan 重扫 扫描 元数据 封面 刷新 媒体库 完整重扫',
+    terms:
+      '媒体库 下载 缓存 存储 rescan 重扫 扫描 元数据 封面 刷新 媒体库 停止补全歌曲信息 取消富化 后台富化 完整重扫',
     disclosureId: 'scan-diagnostics'
   },
   {
@@ -743,7 +752,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: 'cache-metadata',
     section: 'library',
-    title: '元数据缓存',
+    title: '歌曲信息缓存',
     terms: '媒体库 下载 缓存 存储 元数据 metadata 缓存 清除 元数据缓存',
     disclosureId: 'cache-details'
   },
@@ -1505,6 +1514,93 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     terms: '歌词 桌面歌词 歌词 个性化 字体 翻译 罗马音 逐层'
   }
 ]
+
+// Reveal ancestors first so nested disclosures also work with lazily mounted content.
+const groupedTargets: { path: readonly string[]; ids: readonly string[] }[] = [
+  {
+    path: ['playback-transitions'],
+    ids: [
+      'autoMixMode',
+      'autoMixStemMode',
+      'autoMixStemDevice',
+      'autoMixStemCacheMiB',
+      'gapless',
+      'bpm-analysis',
+      'playback-policy'
+    ]
+  },
+  {
+    path: ['output-advanced'],
+    ids: ['audio-output', 'exclusive-mode', 'exclusive-release', 'software-volume', 'clip-guard']
+  },
+  { path: ['dsd-routing'], ids: ['pcm-to-dsd'] },
+  {
+    path: ['theme-customization'],
+    ids: ['theme-studio', 'theme-workshop', 'accent-light', 'accent-dark']
+  },
+  {
+    path: ['window-transparency-details'],
+    ids: [
+      'window-transparency',
+      'window-surface-opacity',
+      'window-surface-blur',
+      'window-card-opacity',
+      'window-card-blur'
+    ]
+  },
+  {
+    path: ['player-bar', 'player-bar-behavior-details'],
+    ids: ['player-page-mode', 'player-page-visibility', 'player-bar-threshold', 'player-bar-delay']
+  },
+  { path: ['player-bar', 'player-bar-layout-details'], ids: ['player-bar-layout'] },
+  {
+    path: ['lyrics-style-details'],
+    ids: [
+      'lyrics-weight',
+      'lyrics-line-gap',
+      'lyrics-dim',
+      'lyrics-focus',
+      'lyrics-color',
+      'lyrics-customizer'
+    ]
+  },
+  { path: ['shortcut-details'], ids: ['shortcut-bindings', 'media-keys', 'shortcut-status'] },
+  { path: ['external-connections'], ids: ['discord', 'remote-control', 'remote-pairing'] },
+  { path: ['network-proxy'], ids: ['proxy-mode', 'proxy-host', 'proxy-port', 'proxy-fallback'] }
+]
+for (const entry of SETTINGS_SEARCH_INDEX) {
+  const path = groupedTargets.find((group) => group.ids.includes(entry.id ?? ''))?.path
+  if (path) {
+    entry.disclosureIds = path
+    entry.disclosureId = path[path.length - 1]
+  } else if (entry.id?.startsWith('download-') || entry.id?.startsWith('cache-')) {
+    entry.disclosureIds = ['storage', ...(entry.disclosureId ? [entry.disclosureId] : [])]
+    entry.disclosureId = entry.disclosureIds[entry.disclosureIds.length - 1]
+  }
+  if (entry.id?.startsWith('autoMixStem')) {
+    entry.fallbackId = 'autoMixMode'
+    entry.fallbackReason = '当前版本的 AutoMix 分轨功能暂不可用，请查看此处的功能说明。'
+  }
+}
+
+export function settingsDisclosurePath(entry: SettingsSearchEntry): readonly string[] {
+  return entry.disclosureIds ?? (entry.disclosureId ? [entry.disclosureId] : [])
+}
+
+export function settingsAnchorDisclosurePath(anchor: string): readonly string[] {
+  if (anchor === 'cache') return ['storage']
+  if (anchor === 'device-profiles') return ['output-advanced']
+  if (anchor === 'audio-output-device-panel') return ['output-advanced', anchor]
+  const entry = SETTINGS_SEARCH_INDEX.find(
+    (candidate) => candidate.id === anchor.replace(/^setting-/, '')
+  )
+  if (entry) return settingsDisclosurePath(entry)
+  const owner = SETTINGS_SEARCH_INDEX.find((candidate) =>
+    settingsDisclosurePath(candidate).includes(anchor)
+  )
+  const path = owner ? settingsDisclosurePath(owner) : []
+  return path.slice(0, path.indexOf(anchor) + 1)
+}
 
 /** Resolve pre-reorganization commands without guessing from rendered text. */
 export function resolveSettingsSearchEntry(entry: SettingsSearchEntry): SettingsSearchEntry {

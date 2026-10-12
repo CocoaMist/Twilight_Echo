@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { scrollMotionBehavior } from '../app/scrollMotion'
 import { createSettingsSectionRendering } from './settings-page/settingsSectionRendering'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
+import SettingsQuickSetup from './settings-page/SettingsQuickSetup.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
 import { openAppearanceEditor } from '../composables/appearanceEditorState.ts'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
@@ -24,6 +25,8 @@ import {
   LEGACY_SETTINGS_TARGETS,
   normalizeSettingsSection,
   resolveSettingsSearchEntry,
+  settingsDisclosurePath,
+  settingsAnchorDisclosurePath,
   type BooleanSettingKey,
   type SettingsSearchEntry,
   sections,
@@ -61,6 +64,7 @@ import {
   cloneLyricsAppearance
 } from '../../../shared/lyricsAppearance.ts'
 import { DEFAULT_PLAYER_BAR_SETTINGS, clonePlayerBarSettings } from '../../../shared/playerBar.ts'
+import { getBuiltInThemePreset, TWILIGHT_DEFAULT_THEME_ID } from '../../../shared/themeCatalog.ts'
 
 const props = defineProps<{
   initialSection?: SettingsSectionInput
@@ -85,6 +89,7 @@ const pluginSettingsValues = ref<Record<string, Record<string, string>>>({})
 const settingsSearchQuery = ref('')
 const settingsNotice = ref('')
 const settingsError = ref('')
+const storageError = ref('')
 const importSettingsInputRef = ref<HTMLInputElement | null>(null)
 const shortcutStatuses = ref<PlayerShortcutStatus[]>([])
 
@@ -300,7 +305,7 @@ async function cancelActiveLibraryScan(): Promise<void> {
 function cancelActiveLibraryMetadataEnrichment(): void {
   libraryScanCommandError.value = ''
   if (!cancelLibraryMetadataEnrichment()) {
-    libraryScanCommandError.value = '当前没有可取消的后台富化任务'
+    libraryScanCommandError.value = '当前没有正在补全的歌曲信息'
   }
 }
 
@@ -311,8 +316,34 @@ function scanCommandErrorMessage(error: unknown): string {
 const { setAudioProcessing, refreshAudioOutputState, clearBpmAnalysisFromPlaybackState } =
   audioOutputDspStore
 
-const { syncExtensions, uiContributions } = useExtensionRegistry()
+const { syncExtensions, uiContributions, themeContributions } = useExtensionRegistry()
 const themeStore = useThemeStore()
+const quickSetupDeviceName = computed(() => {
+  const store = audioOutputDspStore
+  return (
+    store.audioOutputDeviceOptions?.find((device) => device.id === store.audioDevice)?.label ??
+    (store.audioDevice === 'auto' ? '跟随系统默认设备' : store.audioDevice || '正在读取输出设备…')
+  )
+})
+const quickSetupThemeName = computed(() => {
+  const selection = themeStore.activeTheme?.value
+  if (!selection) return '正在读取主题…'
+  const name =
+    selection.kind === 'plugin'
+      ? ((themeContributions?.value ?? []).find(
+          (theme) => theme.pluginId === selection.pluginId && theme.id === selection.themeId
+        )?.name ?? '插件主题')
+      : selection.kind === 'user'
+        ? (themeStore.activeProfile?.value?.name ?? '自定义主题')
+        : selection.id === TWILIGHT_DEFAULT_THEME_ID
+          ? '默认主题'
+          : (getBuiltInThemePreset(selection.id)?.name ?? '内置主题')
+  return `${name} · ${{ system: '跟随系统', pureWhite: '浅色', dark: '深色' }[settings.value.theme]}`
+})
+function navigateQuickSetup(id: string): void {
+  const entry = SETTINGS_SEARCH_INDEX.find((candidate) => candidate.id === id)
+  if (entry) void scrollToSearchResult(entry)
+}
 
 const activeCachePath = computed(
   () => paths.value?.activeCachePath ?? settings.value.cachePath ?? ''
@@ -390,22 +421,36 @@ async function onUpdateShortcutBindings(patch: Partial<GlobalShortcutSettings>):
 
 function toggleCacheArtifact(key: keyof MusicCachePolicySettings): void {
   if (key === 'streamingAudio') return
-  void updateSettings({
-    cachePolicy: {
-      ...settings.value.cachePolicy,
-      [key]: !settings.value.cachePolicy[key]
-    }
-  })
+  void runStorageOperation(() =>
+    updateSettings({
+      cachePolicy: {
+        ...settings.value.cachePolicy,
+        [key]: !settings.value.cachePolicy[key]
+      }
+    })
+  )
 }
 
 function setStreamingAudioCachePolicy(event: Event): void {
   const streamingAudio = (event.target as HTMLSelectElement).value as StreamingAudioCachePolicy
-  void updateSettings({
-    cachePolicy: {
-      ...settings.value.cachePolicy,
-      streamingAudio
-    }
-  })
+  void runStorageOperation(() =>
+    updateSettings({
+      cachePolicy: {
+        ...settings.value.cachePolicy,
+        streamingAudio
+      }
+    })
+  )
+}
+
+async function runStorageOperation(operation: () => Promise<unknown>): Promise<void> {
+  storageError.value = ''
+  try {
+    await operation()
+  } catch (error) {
+    storageError.value = error instanceof Error ? error.message : String(error)
+    settingsError.value = storageError.value
+  }
 }
 
 function toggleAutoAnalyzeBpm(): void {
@@ -754,7 +799,7 @@ async function confirmClearCache(): Promise<void> {
   ) {
     return
   }
-  await clearCache()
+  await runStorageOperation(clearCache)
 }
 
 async function confirmClearBpmAnalysisCache(): Promise<void> {
@@ -765,8 +810,10 @@ async function confirmClearBpmAnalysisCache(): Promise<void> {
   ) {
     return
   }
-  await clearBpmAnalysisCache()
-  clearBpmAnalysisFromPlaybackState()
+  await runStorageOperation(async () => {
+    await clearBpmAnalysisCache()
+    clearBpmAnalysisFromPlaybackState()
+  })
 }
 
 async function confirmClearLoudnessAnalysisCache(): Promise<void> {
@@ -777,7 +824,7 @@ async function confirmClearLoudnessAnalysisCache(): Promise<void> {
   ) {
     return
   }
-  await clearLoudnessAnalysisCache()
+  await runStorageOperation(clearLoudnessAnalysisCache)
 }
 
 /**
@@ -901,6 +948,7 @@ async function applyNavigationTarget(): Promise<void> {
       : null
   const anchor = target?.anchor ?? (!target?.entry ? legacy?.anchor : undefined)
   if (anchor) {
+    await revealSettingsPath(settingsAnchorDisclosurePath(anchor), revision)
     await disclosures.reveal(anchor)
     if (revision !== settingsNavigationRevision || !pageRef.value) return
     const element = pageRef.value.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`)
@@ -973,7 +1021,18 @@ async function scrollToSearchResult(input: SettingsSearchEntry): Promise<void> {
     openAppearanceEditor(entry.appearanceArea)
     return
   }
-  if (entry.disclosureId) await disclosures.reveal(entry.disclosureId)
+  await revealSettingsPath(settingsDisclosurePath(entry), revision)
+  if (revision !== settingsNavigationRevision || !pageRef.value) return
+  // A conditional control can be absent while its dependency is in another group.
+  const section = pageRef.value.querySelector<HTMLElement>(
+    `#${normalizeSettingsSection(entry.section)}`
+  )
+  if (section && !findSettingItem(section, entry) && entry.fallbackId) {
+    const fallbackEntry = SETTINGS_SEARCH_INDEX.find(
+      (candidate) => candidate.id === entry.fallbackId
+    )
+    if (fallbackEntry) await revealSettingsPath(settingsDisclosurePath(fallbackEntry), revision)
+  }
   await settleSettingsNavigation(
     entry.disclosureId
       ? (pageRef.value?.querySelector<HTMLElement>(`#${CSS.escape(entry.disclosureId)}`) ?? null)
@@ -1007,6 +1066,13 @@ async function scrollToSearchResult(input: SettingsSearchEntry): Promise<void> {
   scrollPageToElement(target, { block: target === sectionEl ? 'start' : 'center' })
   highlightSettingItem(target === sectionEl ? null : target)
   focusSetting(target)
+}
+
+async function revealSettingsPath(path: readonly string[], revision: number): Promise<void> {
+  for (const id of path) {
+    if (revision !== settingsNavigationRevision || !pageRef.value) return
+    await disclosures.reveal(id)
+  }
 }
 
 function findSettingItem(sectionEl: HTMLElement, entry: SettingsSearchEntry): HTMLElement | null {
@@ -1291,6 +1357,12 @@ onBeforeUnmount(() => {
         <header class="settings-page-header">
           <h1 class="settings-page-title">设置</h1>
         </header>
+        <SettingsQuickSetup
+          :folder-count="settings.libraryFolders?.length ?? 0"
+          :device-name="quickSetupDeviceName"
+          :theme-name="quickSetupThemeName"
+          @navigate="navigateQuickSetup"
+        />
         <section
           v-if="settingsNotice || settingsError"
           class="settings-command-bar"
@@ -1379,6 +1451,13 @@ onBeforeUnmount(() => {
           />
         </section>
         <LibrarySettingsSection
+          :formatted-cache-size="formattedCacheSize"
+          :storage-attention="
+            storageError ||
+            (clearingCache || clearingBpmAnalysisCache || clearingLoudnessAnalysisCache
+              ? '正在清理缓存…'
+              : '')
+          "
           :library-watcher-status="libraryWatcherStatus"
           :library-scan-status="libraryScanStatus"
           :library-scan-is-active="libraryScanIsActive"
@@ -1417,8 +1496,8 @@ onBeforeUnmount(() => {
             :clearing-loudness-analysis-cache="clearingLoudnessAnalysisCache"
             :formatted-cache-size="formattedCacheSize"
             :clearing-cache="clearingCache"
-            @choose-cache-folder="chooseCacheFolder"
-            @reset-cache-folder="resetCacheFolder"
+            @choose-cache-folder="runStorageOperation(chooseCacheFolder)"
+            @reset-cache-folder="runStorageOperation(resetCacheFolder)"
             @toggle-cache-artifact="toggleCacheArtifact"
             @set-streaming-audio-cache-policy="setStreamingAudioCachePolicy"
             @confirm-clear-bpm-analysis-cache="confirmClearBpmAnalysisCache"

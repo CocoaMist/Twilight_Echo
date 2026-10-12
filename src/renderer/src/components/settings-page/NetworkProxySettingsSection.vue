@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsGroup from './SettingsGroup.vue'
 import type { ProxyMode } from '../../types/settings'
 
 const props = defineProps<{
@@ -30,73 +31,80 @@ function setProxyPort(event: Event): void {
 </script>
 
 <template>
-  <div class="section-block">
-    <h3>网络代理</h3>
-    <div class="setting-list">
-      <div data-setting-id="proxy-mode" id="setting-proxy-mode" class="setting-item">
-        <div class="setting-copy">
-          <strong>代理模式</strong>
-          <span>为流媒体插件（YouTube Music 等）配置 HTTP 代理，需重启后生效。</span>
+  <SettingsGroup
+    id="network-proxy"
+    title="网络代理"
+    :summary="{ auto: '自动检测', custom: '自定义代理', off: '已关闭' }[proxyMode]"
+    description="音源连接需要代理时展开；代理更改需要重启应用后生效。"
+  >
+    <div class="section-block">
+      <h3>网络代理</h3>
+      <div class="setting-list">
+        <div data-setting-id="proxy-mode" id="setting-proxy-mode" class="setting-item">
+          <div class="setting-copy">
+            <strong>代理模式</strong>
+            <span>为流媒体插件（YouTube Music 等）配置 HTTP 代理，需重启后生效。</span>
+          </div>
+          <select class="preview-select" :value="props.proxyMode" @change="setProxyMode">
+            <option value="auto">自动检测</option>
+            <option value="custom">自定义</option>
+            <option value="off">关闭</option>
+          </select>
         </div>
-        <select class="preview-select" :value="props.proxyMode" @change="setProxyMode">
-          <option value="auto">自动检测</option>
-          <option value="custom">自定义</option>
-          <option value="off">关闭</option>
-        </select>
+        <template v-if="props.proxyMode === 'custom'">
+          <hr />
+          <div data-setting-id="proxy-host" id="setting-proxy-host" class="setting-item">
+            <div class="setting-copy">
+              <strong>代理地址</strong>
+              <span>HTTP 代理服务器地址，不含协议前缀。</span>
+            </div>
+            <input
+              class="preview-select"
+              type="text"
+              placeholder="127.0.0.1"
+              :value="props.proxyHost"
+              @change="setProxyHost"
+            />
+          </div>
+          <hr />
+          <div data-setting-id="proxy-port" id="setting-proxy-port" class="setting-item">
+            <div class="setting-copy">
+              <strong>代理端口</strong>
+              <span>HTTP 代理服务器端口。</span>
+            </div>
+            <input
+              class="preview-select"
+              type="number"
+              placeholder="7897"
+              :value="props.proxyPort || ''"
+              @change="setProxyPort"
+              min="0"
+              max="65535"
+            />
+          </div>
+        </template>
+        <template v-if="props.proxyMode !== 'off'">
+          <hr />
+          <div data-setting-id="proxy-fallback" id="setting-proxy-fallback" class="setting-item">
+            <div class="setting-copy">
+              <strong>代理失败时允许直连</strong>
+              <span>默认关闭。开启后代理连接失败才会尝试直连；已取消的请求永不回退。</span>
+            </div>
+            <button
+              type="button"
+              aria-label="代理失败时允许直连"
+              class="toggle-switch"
+              :class="{
+                active: props.proxyAllowDirectFallback,
+                inactive: !props.proxyAllowDirectFallback
+              }"
+              role="switch"
+              :aria-checked="props.proxyAllowDirectFallback"
+              @click="emit('toggle:allowDirectFallback')"
+            ></button>
+          </div>
+        </template>
       </div>
-      <template v-if="props.proxyMode === 'custom'">
-        <hr />
-        <div data-setting-id="proxy-host" id="setting-proxy-host" class="setting-item">
-          <div class="setting-copy">
-            <strong>代理地址</strong>
-            <span>HTTP 代理服务器地址，不含协议前缀。</span>
-          </div>
-          <input
-            class="preview-select"
-            type="text"
-            placeholder="127.0.0.1"
-            :value="props.proxyHost"
-            @change="setProxyHost"
-          />
-        </div>
-        <hr />
-        <div data-setting-id="proxy-port" id="setting-proxy-port" class="setting-item">
-          <div class="setting-copy">
-            <strong>代理端口</strong>
-            <span>HTTP 代理服务器端口。</span>
-          </div>
-          <input
-            class="preview-select"
-            type="number"
-            placeholder="7897"
-            :value="props.proxyPort || ''"
-            @change="setProxyPort"
-            min="0"
-            max="65535"
-          />
-        </div>
-      </template>
-      <template v-if="props.proxyMode !== 'off'">
-        <hr />
-        <div data-setting-id="proxy-fallback" id="setting-proxy-fallback" class="setting-item">
-          <div class="setting-copy">
-            <strong>代理失败时允许直连</strong>
-            <span>默认关闭。开启后代理连接失败才会尝试直连；已取消的请求永不回退。</span>
-          </div>
-          <button
-            type="button"
-            aria-label="代理失败时允许直连"
-            class="toggle-switch"
-            :class="{
-              active: props.proxyAllowDirectFallback,
-              inactive: !props.proxyAllowDirectFallback
-            }"
-            role="switch"
-            :aria-checked="props.proxyAllowDirectFallback"
-            @click="emit('toggle:allowDirectFallback')"
-          ></button>
-        </div>
-      </template>
     </div>
-  </div>
+  </SettingsGroup>
 </template>

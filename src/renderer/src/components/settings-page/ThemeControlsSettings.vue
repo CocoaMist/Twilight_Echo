@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import SettingsGroup from './SettingsGroup.vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useExtensionRegistry } from '../../extensions/registry'
@@ -71,35 +72,6 @@ async function setPluginTheme(event: Event): Promise<void> {
 </script>
 
 <template>
-  <div data-setting-id="theme-studio" id="setting-theme-studio" class="setting-item">
-    <div class="setting-copy">
-      <strong>主题创意工坊</strong>
-    </div>
-    <button type="button" class="soft-button" @click="emit('openThemeStudio')">
-      <i class="ph ph-swatches" aria-hidden="true"></i>
-      打开主题创意工坊
-    </button>
-  </div>
-  <div data-setting-id="theme-workshop" class="setting-item">
-    <div class="setting-copy">
-      <strong class="workshop-setting-title"
-        >主题插件工坊<small class="workshop-beta-tag">BETA</small></strong
-      ><span>{{
-        workshopEnabled
-          ? '定制已加载的主题插件，管理素材并导出个人主题。'
-          : '在插件管理中启用「主题插件工坊」后使用。'
-      }}</span>
-    </div>
-    <button
-      type="button"
-      class="soft-button"
-      :disabled="!workshopEnabled"
-      @click="emit('openThemeWorkshop')"
-    >
-      <i class="ph ph-paint-brush" aria-hidden="true"></i>打开主题插件工坊
-    </button>
-  </div>
-  <hr />
   <div data-setting-id="color-mode" id="setting-color-mode" class="setting-item">
     <div class="setting-copy">
       <strong>深浅色</strong>
@@ -116,21 +88,6 @@ async function setPluginTheme(event: Event): Promise<void> {
         {{ option.label }}
       </button>
     </div>
-  </div>
-  <hr />
-  <div data-setting-id="motion" id="setting-motion" class="setting-item">
-    <div class="setting-copy">
-      <strong>界面动画</strong>
-    </div>
-    <select
-      class="preview-select wide"
-      :value="settings.motionPreference"
-      @change="setMotionPreference"
-    >
-      <option v-for="option in motionPreferenceOptions" :key="option.value" :value="option.value">
-        {{ option.label }}
-      </option>
-    </select>
   </div>
   <hr />
   <div data-setting-id="plugin-theme" id="setting-plugin-theme" class="setting-item">
@@ -150,57 +107,114 @@ async function setPluginTheme(event: Event): Promise<void> {
     </select>
   </div>
   <hr />
-  <div data-setting-id="accent-light" id="setting-accent-light" class="setting-item">
+  <div data-setting-id="motion" id="setting-motion" class="setting-item">
     <div class="setting-copy">
-      <strong>浅色强调色</strong>
-      <span>浅色模式下设置、本地主页和主要控件使用的主题色。</span>
+      <strong>界面动画</strong>
     </div>
-    <div class="swatch-row">
-      <span
-        v-for="option in accentColorOptions"
-        :key="option.value"
-        class="swatch"
-        data-te-interactive
-        role="button"
-        tabindex="0"
-        :aria-label="option.label"
-        :aria-pressed="settings.lightAccentColor === option.value"
-        :class="[option.class, { active: settings.lightAccentColor === option.value }]"
-        :title="option.label"
-        @click="setAccentColor('light', option.value)"
-        @keydown.enter.prevent="setAccentColor('light', option.value)"
-        @keydown.space.prevent="setAccentColor('light', option.value)"
-      >
-        <i v-if="settings.lightAccentColor === option.value" class="pi pi-check"></i>
-      </span>
-    </div>
+    <select
+      class="preview-select wide"
+      :value="settings.motionPreference"
+      @change="setMotionPreference"
+    >
+      <option v-for="option in motionPreferenceOptions" :key="option.value" :value="option.value">
+        {{ option.label }}
+      </option>
+    </select>
   </div>
-  <hr />
-  <div data-setting-id="accent-dark" id="setting-accent-dark" class="setting-item">
-    <div class="setting-copy">
-      <strong>深色强调色</strong>
-      <span>深色模式下复用同一组选项，可与浅色模式独立保存。</span>
+  <SettingsGroup
+    id="theme-customization"
+    title="自定义主题与配色"
+    description="需要独立设置深浅色配色、创建或编辑主题时展开。"
+    :summary="
+      '浅色：' +
+      (accentColorOptions.find((option) => option.value === settings.lightAccentColor)?.label ??
+        settings.lightAccentColor) +
+      ' · 深色：' +
+      (accentColorOptions.find((option) => option.value === settings.darkAccentColor)?.label ??
+        settings.darkAccentColor)
+    "
+  >
+    <div data-setting-id="theme-studio" id="setting-theme-studio" class="setting-item">
+      <div class="setting-copy">
+        <strong>主题创意工坊</strong>
+      </div>
+      <button type="button" class="soft-button" @click="emit('openThemeStudio')">
+        <i class="ph ph-swatches" aria-hidden="true"></i>
+        打开主题创意工坊
+      </button>
     </div>
-    <div class="swatch-row">
-      <span
-        v-for="option in accentColorOptions"
-        :key="option.value"
-        class="swatch"
-        data-te-interactive
-        role="button"
-        tabindex="0"
-        :aria-label="option.label"
-        :aria-pressed="settings.darkAccentColor === option.value"
-        :class="[option.class, { active: settings.darkAccentColor === option.value }]"
-        :title="option.label"
-        @click="setAccentColor('dark', option.value)"
-        @keydown.enter.prevent="setAccentColor('dark', option.value)"
-        @keydown.space.prevent="setAccentColor('dark', option.value)"
+    <div data-setting-id="theme-workshop" class="setting-item">
+      <div class="setting-copy">
+        <strong class="workshop-setting-title"
+          >主题插件工坊<small class="workshop-beta-tag">BETA</small></strong
+        ><span>{{
+          workshopEnabled
+            ? '定制已加载的主题插件，管理素材并导出个人主题。'
+            : '在插件管理中启用「主题插件工坊」后使用。'
+        }}</span>
+      </div>
+      <button
+        type="button"
+        class="soft-button"
+        :disabled="!workshopEnabled"
+        @click="emit('openThemeWorkshop')"
       >
-        <i v-if="settings.darkAccentColor === option.value" class="pi pi-check"></i>
-      </span>
+        <i class="ph ph-paint-brush" aria-hidden="true"></i>打开主题插件工坊
+      </button>
     </div>
-  </div>
+    <hr />
+    <div data-setting-id="accent-light" id="setting-accent-light" class="setting-item">
+      <div class="setting-copy">
+        <strong>浅色强调色</strong>
+        <span>浅色模式下设置、本地主页和主要控件使用的主题色。</span>
+      </div>
+      <div class="swatch-row">
+        <span
+          v-for="option in accentColorOptions"
+          :key="option.value"
+          class="swatch"
+          data-te-interactive
+          role="button"
+          tabindex="0"
+          :aria-label="option.label"
+          :aria-pressed="settings.lightAccentColor === option.value"
+          :class="[option.class, { active: settings.lightAccentColor === option.value }]"
+          :title="option.label"
+          @click="setAccentColor('light', option.value)"
+          @keydown.enter.prevent="setAccentColor('light', option.value)"
+          @keydown.space.prevent="setAccentColor('light', option.value)"
+        >
+          <i v-if="settings.lightAccentColor === option.value" class="pi pi-check"></i>
+        </span>
+      </div>
+    </div>
+    <hr />
+    <div data-setting-id="accent-dark" id="setting-accent-dark" class="setting-item">
+      <div class="setting-copy">
+        <strong>深色强调色</strong>
+        <span>深色模式下复用同一组选项，可与浅色模式独立保存。</span>
+      </div>
+      <div class="swatch-row">
+        <span
+          v-for="option in accentColorOptions"
+          :key="option.value"
+          class="swatch"
+          data-te-interactive
+          role="button"
+          tabindex="0"
+          :aria-label="option.label"
+          :aria-pressed="settings.darkAccentColor === option.value"
+          :class="[option.class, { active: settings.darkAccentColor === option.value }]"
+          :title="option.label"
+          @click="setAccentColor('dark', option.value)"
+          @keydown.enter.prevent="setAccentColor('dark', option.value)"
+          @keydown.space.prevent="setAccentColor('dark', option.value)"
+        >
+          <i v-if="settings.darkAccentColor === option.value" class="pi pi-check"></i>
+        </span>
+      </div>
+    </div>
+  </SettingsGroup>
 </template>
 
 <style scoped>

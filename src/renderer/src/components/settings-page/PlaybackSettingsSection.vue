@@ -103,6 +103,10 @@ const selectedAudioOutput = computed(() =>
   audioOutputOptions.value.find((option) => option.id === audioOutput.value)
 )
 const exclusiveAvailable = computed(() => selectedAudioOutput.value?.supportsExclusive ?? false)
+const profileAttention = ref('')
+function setProfileAttention(message: string): void {
+  profileAttention.value = message
+}
 const exclusiveAutoReleaseApplying = ref(false)
 const autoMixModeApplying = ref(false)
 const stemCapabilities = ref<AutoMixStemCapabilities>({
@@ -638,10 +642,6 @@ function toggleDsdRouteStrict(): void {
   patchDsdRoute({ strictPassthrough: !dsdRoute.value.strictPassthrough })
 }
 
-function setDsdOutputMode(event: Event): void {
-  void selectDsdOutputMode((event.target as HTMLSelectElement).value as DsdOutputMode)
-}
-
 function setVolumeFromInput(event: Event): void {
   volumePercent.value = Number((event.target as HTMLInputElement).value)
 }
@@ -796,7 +796,327 @@ function setContinuitySampleRate(event: Event): void {
             </option>
           </select>
         </div>
-        <hr />
+      </div>
+    </div>
+    <div v-if="audioEngineError" class="engine-error">{{ audioEngineError }}</div>
+    <div class="section-block">
+      <h3>声音输出</h3>
+      <div data-setting-id="audio-device" id="setting-audio-device" class="setting-item">
+        <div class="setting-copy">
+          <strong>输出设备</strong
+          ><span>通常保持跟随系统即可；连接耳机、音箱或解码器后，可以在这里切换。</span>
+        </div>
+        <div class="inline-controls">
+          <select
+            class="preview-select wide"
+            aria-label="输出设备"
+            :value="audioDevice"
+            @change="selectAudioDevice(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="auto">跟随系统默认设备</option>
+            <option
+              v-if="
+                audioDevice !== 'auto' &&
+                !audioOutputDeviceOptions.some((device) => device.id === audioDevice)
+              "
+              :value="audioDevice"
+            >
+              {{ audioDevice }}（暂不可用）
+            </option>
+            <option
+              v-for="device in audioOutputDeviceOptions.filter((device) => device.id !== 'auto')"
+              :key="device.id"
+              :value="device.id"
+            >
+              {{ device.label }}
+            </option>
+          </select>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="刷新设备列表"
+            title="刷新设备列表"
+            @click="refreshAudioOutputState"
+          >
+            <i class="pi pi-refresh" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      <SettingsGroup
+        id="output-advanced"
+        title="进阶输出"
+        description="使用专业声卡、独占输出，或需要排查声音问题时展开；日常播放可以保持现有设置。"
+        :summary="
+          (selectedAudioOutput?.label ?? audioOutput) +
+          ' · ' +
+          (exclusiveMode ? '独占输出' : '共享输出')
+        "
+        :attention="
+          audioEngineError ||
+          profileAttention ||
+          (audioOutputConfigApplyStatus.state === 'pending' ? '正在应用输出参数…' : '')
+        "
+      >
+        <div class="section-block">
+          <h3>输出方式</h3>
+          <div class="setting-list">
+            <div data-setting-id="audio-output" id="setting-audio-output" class="setting-item">
+              <div class="setting-copy">
+                <strong>输出模式</strong>
+                <span>选择音频后端和系统混音路径。</span>
+              </div>
+              <div class="segmented-control">
+                <button
+                  v-for="option in audioOutputOptions"
+                  :key="option.id"
+                  type="button"
+                  :class="{ active: audioOutput === option.id }"
+                  @click="selectAudioOutput(option.id)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
+            <hr />
+            <div data-setting-id="exclusive-mode" id="setting-exclusive-mode" class="setting-item">
+              <div class="setting-copy">
+                <strong>独占模式</strong>
+                <span>尝试绕过系统混音器以获得更直接的输出链路。</span>
+              </div>
+              <button
+                type="button"
+                aria-label="独占模式"
+                class="toggle-switch"
+                :class="{ active: exclusiveMode, inactive: !exclusiveMode }"
+                role="switch"
+                :aria-checked="exclusiveMode"
+                :disabled="!exclusiveAvailable"
+                :title="exclusiveAvailable ? '' : '当前后端不支持独占模式'"
+                @click="exclusiveAvailable && toggleExclusiveMode()"
+              ></button>
+            </div>
+            <hr />
+            <div
+              data-setting-id="exclusive-release"
+              id="setting-exclusive-release"
+              class="setting-item"
+            >
+              <div class="setting-copy">
+                <strong>独占模式自动启停</strong>
+                <span>暂停时释放音频设备，继续播放时重新获取。</span>
+                <span v-if="outputInfo?.outputReleased && playbackInfo?.state === 'paused'">
+                  已暂停，音频设备已释放。
+                </span>
+              </div>
+              <button
+                type="button"
+                class="toggle-switch"
+                :class="{
+                  active: settings.audioExclusiveAutoRelease,
+                  inactive: !settings.audioExclusiveAutoRelease
+                }"
+                role="switch"
+                aria-label="独占模式自动启停"
+                :aria-checked="settings.audioExclusiveAutoRelease"
+                :disabled="!exclusiveAvailable || !exclusiveMode || exclusiveAutoReleaseApplying"
+                :title="
+                  !exclusiveAvailable
+                    ? '当前后端不支持独占模式'
+                    : !exclusiveMode
+                      ? '请先开启独占模式'
+                      : ''
+                "
+                @click="toggleExclusiveAutoRelease"
+              ></button>
+            </div>
+          </div>
+        </div>
+        <div class="section-block">
+          <h3>音量与保护</h3>
+          <div class="setting-list">
+            <div
+              data-setting-id="software-volume"
+              id="setting-software-volume"
+              class="setting-item compact-row"
+            >
+              <div class="setting-copy">
+                <strong>软件音量</strong>
+                <span> {{ HIFI_STATUS_COPY.volumeNotUnityHint }}。低于 100% 会改变样本值。 </span>
+              </div>
+              <div class="inline-controls">
+                <input
+                  class="number-input"
+                  type="number"
+                  min="0"
+                  max="100"
+                  :value="volumePercent"
+                  @input="setVolumeFromInput"
+                />
+                <button
+                  type="button"
+                  class="soft-button"
+                  :disabled="volumePercent >= 100"
+                  title="将软件音量固定为 100%（Unity）"
+                  @click="setUnityVolume"
+                >
+                  {{ HIFI_STATUS_COPY.unityButton }}
+                </button>
+              </div>
+            </div>
+            <div data-setting-id="clip-guard" id="setting-clip-guard" class="setting-item">
+              <div class="setting-copy">
+                <strong>防破音保护</strong><span>压缩过载信号，减少数字削波失真。</span>
+              </div>
+              <button
+                type="button"
+                class="toggle-switch"
+                role="switch"
+                aria-label="防破音保护"
+                :aria-checked="audioProcessing.clipGuard"
+                :class="{ active: audioProcessing.clipGuard, inactive: !audioProcessing.clipGuard }"
+                @click="toggleClipGuard"
+              />
+            </div>
+          </div>
+        </div>
+        <AudioDeviceProfilesPanel @attention="setProfileAttention" />
+        <div v-if="playbackInfo" class="output-diagnostic-panel">
+          <div class="diagnostic-head">
+            <span class="diagnostic-label">{{ t('diagnostics.panel.title') }}</span>
+            <span class="diagnostic-status" :data-tone="outputVerdictTone">
+              {{ outputVerdictText }}
+            </span>
+          </div>
+          <div class="diagnostic-chain">{{ outputChainText }}</div>
+
+          <!-- The reason the chain is not bit-perfect, with what is happening and
+           what to do. This panel previously printed the underrun counters twice
+           and never showed the reason at all. -->
+          <div v-if="outputReason" class="diagnostic-reason">
+            <p class="diagnostic-reason-label">
+              <span class="diagnostic-severity" :data-severity="outputReason.severity">
+                {{ t(`diagnostics.severity.${outputReason.severity}`) }}
+              </span>
+              {{ outputReason.label }}
+            </p>
+            <p v-if="outputReason.explain" class="diagnostic-reason-explain">
+              {{ outputReason.explain }}
+            </p>
+            <p v-if="outputReason.fix" class="diagnostic-reason-fix">
+              <i class="pi pi-wrench" aria-hidden="true"></i> {{ outputReason.fix }}
+            </p>
+          </div>
+
+          <div class="diagnostic-meta">
+            <span v-if="outputLatencyText"
+              ><i class="pi pi-clock"></i> {{ outputLatencyText }}</span
+            >
+            <span><i class="pi pi-chart-bar"></i> {{ outputDiagnosticsText }}</span>
+            <span v-if="outputProviderImplementation">
+              <i class="pi pi-cog"></i> Provider {{ outputProviderImplementation }}
+            </span>
+          </div>
+        </div>
+        <div class="device-panel">
+          <div class="device-panel-head">
+            <div>
+              <p>Audio Output</p>
+              <h3>设备能力与链路</h3>
+            </div>
+            <div class="device-panel-actions">
+              <label class="device-panel-disclosure">
+                <input
+                  v-model="audioOutputPanelExpanded"
+                  type="checkbox"
+                  aria-controls="audio-output-device-panel"
+                  :aria-expanded="audioOutputPanelExpanded"
+                />
+                <span>{{ audioOutputPanelExpanded ? '收起设备列表' : '展开设备列表' }}</span>
+              </label>
+              <button
+                type="button"
+                class="icon-button"
+                title="刷新设备列表"
+                @click="refreshAudioOutputState"
+              >
+                <i class="pi pi-refresh"></i>
+              </button>
+            </div>
+          </div>
+          <SettingsDisclosure
+            :open="audioOutputPanelExpanded"
+            keep-mounted
+            trigger-selector='input[aria-controls="audio-output-device-panel"]'
+            id="audio-output-device-panel"
+            class="device-panel-content"
+          >
+            <div class="device-grid">
+              <button
+                v-for="device in audioOutputDeviceOptions"
+                :key="device.id"
+                type="button"
+                class="device-card"
+                :class="{ active: audioDevice === device.id }"
+                @click="selectAudioDevice(device.id)"
+              >
+                <i :class="deviceIcon(device)"></i>
+                <span>{{ device.label }}</span>
+                <small>{{ deviceSpecText(device) }}</small>
+                <div
+                  v-if="
+                    normalizeCapabilityState(device.dopSupportState) !== 'unsupported' ||
+                    normalizeCapabilityState(device.nativeDsdSupportState) !== 'unsupported'
+                  "
+                  class="device-capability-row"
+                >
+                  <span
+                    v-if="normalizeCapabilityState(device.dopSupportState) !== 'unsupported'"
+                    class="device-capability-chip"
+                    :class="capabilityStateTone(device.dopSupportState)"
+                    :title="capabilityStateTitle(device, 'DoP')"
+                  >
+                    DoP {{ capabilityStateLabel(device.dopSupportState) }}
+                  </span>
+                  <span
+                    v-if="normalizeCapabilityState(device.nativeDsdSupportState) !== 'unsupported'"
+                    class="device-capability-chip"
+                    :class="capabilityStateTone(device.nativeDsdSupportState)"
+                    :title="capabilityStateTitle(device, 'Native DSD')"
+                  >
+                    Native DSD {{ capabilityStateLabel(device.nativeDsdSupportState) }}
+                  </span>
+                </div>
+                <b v-if="audioDevice === device.id">当前</b>
+              </button>
+            </div>
+            <p class="device-capability-note">
+              列表为设备能力声明；是否 Native DSD / DoP 以播放时 HiFi
+              状态为准（筛选≠当前输出模式）。
+            </p>
+          </SettingsDisclosure>
+        </div>
+      </SettingsGroup>
+    </div>
+    <SettingsGroup
+      id="playback-transitions"
+      title="歌曲衔接"
+      description="想让歌曲之间更连贯，或尝试自动混音时，再调整这些选项。无缝播放、淡化与 AutoMix 分别配置。"
+      :summary="
+        (audioProcessing.gapless ? '无缝播放已开启' : '无缝播放已关闭') +
+        ' · 淡化 ' +
+        audioProcessing.crossfadeSeconds +
+        ' 秒 · AutoMix ' +
+        { off: '关闭', natural: '自然', dj: 'DJ' }[effectiveAutoMixMode(settings.autoMixMode)]
+      "
+      :attention="
+        stemInstalling
+          ? stemInstallText || '正在安装分轨包…'
+          : stemInstallStatus.phase === 'failed'
+            ? stemInstallText
+            : ''
+      "
+    >
+      <div class="setting-list">
         <div data-setting-id="autoMixMode" class="setting-item">
           <div class="setting-copy">
             <strong>Twilight AutoMix</strong>
@@ -912,7 +1232,6 @@ function setContinuitySampleRate(event: Event): void {
             <option value="cpu" :disabled="!stemCapabilities.cpu">CPU</option>
           </select>
         </div>
-
         <div
           v-if="TWILIGHT_AUTOMIX_AVAILABLE"
           data-setting-id="autoMixStemCacheMiB"
@@ -939,7 +1258,6 @@ function setContinuitySampleRate(event: Event): void {
             </option>
           </select>
         </div>
-
         <div data-setting-id="gapless" id="setting-gapless" class="setting-item">
           <div class="setting-copy">
             <strong>无缝播放</strong>
@@ -1015,246 +1333,66 @@ function setContinuitySampleRate(event: Event): void {
           />
         </div>
       </div>
-    </div>
-    <div v-if="audioEngineError" class="engine-error">{{ audioEngineError }}</div>
-    <AudioDeviceProfilesPanel />
-    <div v-if="playbackInfo" class="output-diagnostic-panel">
-      <div class="diagnostic-head">
-        <span class="diagnostic-label">{{ t('diagnostics.panel.title') }}</span>
-        <span class="diagnostic-status" :data-tone="outputVerdictTone">
-          {{ outputVerdictText }}
-        </span>
-      </div>
-      <div class="diagnostic-chain">{{ outputChainText }}</div>
-
-      <!-- The reason the chain is not bit-perfect, with what is happening and
-           what to do. This panel previously printed the underrun counters twice
-           and never showed the reason at all. -->
-      <div v-if="outputReason" class="diagnostic-reason">
-        <p class="diagnostic-reason-label">
-          <span class="diagnostic-severity" :data-severity="outputReason.severity">
-            {{ t(`diagnostics.severity.${outputReason.severity}`) }}
-          </span>
-          {{ outputReason.label }}
-        </p>
-        <p v-if="outputReason.explain" class="diagnostic-reason-explain">
-          {{ outputReason.explain }}
-        </p>
-        <p v-if="outputReason.fix" class="diagnostic-reason-fix">
-          <i class="pi pi-wrench" aria-hidden="true"></i> {{ outputReason.fix }}
-        </p>
-      </div>
-
-      <div class="diagnostic-meta">
-        <span v-if="outputLatencyText"><i class="pi pi-clock"></i> {{ outputLatencyText }}</span>
-        <span><i class="pi pi-chart-bar"></i> {{ outputDiagnosticsText }}</span>
-        <span v-if="outputProviderImplementation">
-          <i class="pi pi-cog"></i> Provider {{ outputProviderImplementation }}
-        </span>
-      </div>
-    </div>
-    <div class="device-panel">
-      <div class="device-panel-head">
-        <div>
-          <p>Audio Output</p>
-          <h3>输出设备与链路</h3>
-        </div>
-        <div class="device-panel-actions">
-          <label class="device-panel-disclosure">
-            <input
-              v-model="audioOutputPanelExpanded"
-              type="checkbox"
-              aria-controls="audio-output-device-panel"
-              :aria-expanded="audioOutputPanelExpanded"
-            />
-            <span>{{ audioOutputPanelExpanded ? '收起设备列表' : '展开设备列表' }}</span>
-          </label>
-          <button
-            type="button"
-            class="icon-button"
-            title="刷新设备列表"
-            @click="refreshAudioOutputState"
-          >
-            <i class="pi pi-refresh"></i>
-          </button>
-        </div>
-      </div>
-      <SettingsDisclosure
-        :open="audioOutputPanelExpanded"
-        keep-mounted
-        trigger-selector='input[aria-controls="audio-output-device-panel"]'
-        id="audio-output-device-panel"
-        class="device-panel-content"
-      >
-        <div class="device-grid">
-          <button
-            v-for="device in audioOutputDeviceOptions"
-            :key="device.id"
-            type="button"
-            class="device-card"
-            :class="{ active: audioDevice === device.id }"
-            @click="selectAudioDevice(device.id)"
-          >
-            <i :class="deviceIcon(device)"></i>
-            <span>{{ device.label }}</span>
-            <small>{{ deviceSpecText(device) }}</small>
-            <div
-              v-if="
-                normalizeCapabilityState(device.dopSupportState) !== 'unsupported' ||
-                normalizeCapabilityState(device.nativeDsdSupportState) !== 'unsupported'
-              "
-              class="device-capability-row"
-            >
+      <div class="section-block">
+        <h3 data-setting-id="playback-policy" id="setting-playback-policy">连续播放策略</h3>
+        <div class="setting-list">
+          <div class="setting-item">
+            <div class="setting-copy">
+              <strong>连续播放策略</strong>
               <span
-                v-if="normalizeCapabilityState(device.dopSupportState) !== 'unsupported'"
-                class="device-capability-chip"
-                :class="capabilityStateTone(device.dopSupportState)"
-                :title="capabilityStateTitle(device, 'DoP')"
+                >原样优先保留来源格式；连续优先将 PCM 统一为双声道 Float32，允许重采样，不保证
+                bit-perfect。DSD 单独切换。</span
               >
-                DoP {{ capabilityStateLabel(device.dopSupportState) }}
+              <span v-if="audioOutputConfig.playbackPolicy === 'continuity-first'">
+                目标：{{ audioOutputConfig.continuitySampleRate ?? 48000 }} Hz / 32 bit / 2 声道。
+                需自动声道路由并关闭 PCM 转 DSD；切换策略会保留进度重新打开输出。
               </span>
-              <span
-                v-if="normalizeCapabilityState(device.nativeDsdSupportState) !== 'unsupported'"
-                class="device-capability-chip"
-                :class="capabilityStateTone(device.nativeDsdSupportState)"
-                :title="capabilityStateTitle(device, 'Native DSD')"
-              >
-                Native DSD {{ capabilityStateLabel(device.nativeDsdSupportState) }}
+              <span v-if="playbackInfo?.source">
+                来源：{{ playbackInfo.sourceSampleRate }} Hz / {{ playbackInfo.sourceBitDepth }} bit
+                / {{ playbackInfo.sourceChannels ?? '—' }} 声道； 实际：{{
+                  playbackInfo.outputSampleRate
+                }}
+                Hz / {{ playbackInfo.outputBitDepth }} bit / {{ playbackInfo.channelCount }} 声道。
+                {{
+                  gaplessRuntimeStatusCopy({
+                    intentEnabled: audioProcessing.gapless,
+                    ...playbackInfo
+                  })
+                }}
               </span>
             </div>
-            <b v-if="audioDevice === device.id">当前</b>
-          </button>
-        </div>
-        <p class="device-capability-note">
-          列表为设备能力声明；是否 Native DSD / DoP 以播放时 HiFi 状态为准（筛选≠当前输出模式）。
-        </p>
-      </SettingsDisclosure>
-    </div>
-    <div class="section-block">
-      <h3>输出方式</h3>
-      <div class="setting-list">
-        <div data-setting-id="audio-output" id="setting-audio-output" class="setting-item">
-          <div class="setting-copy">
-            <strong>输出模式</strong>
-            <span>选择音频后端和系统混音路径。</span>
+            <div class="inline-controls continuity-controls">
+              <select
+                class="preview-select"
+                aria-label="连续播放策略"
+                :value="audioOutputConfig.playbackPolicy ?? 'bit-perfect-first'"
+                :disabled="audioOutputConfigApplyStatus.state === 'pending'"
+                @change="setPlaybackPolicy"
+              >
+                <option value="bit-perfect-first">原样优先</option>
+                <option value="continuity-first">连续优先</option>
+              </select>
+              <select
+                v-if="audioOutputConfig.playbackPolicy === 'continuity-first'"
+                class="preview-select"
+                aria-label="连续播放目标采样率"
+                :value="audioOutputConfig.continuitySampleRate ?? 48000"
+                :disabled="audioOutputConfigApplyStatus.state === 'pending'"
+                @change="setContinuitySampleRate"
+              >
+                <option :value="44100">44.1 kHz</option>
+                <option :value="48000">48 kHz</option>
+                <option :value="96000">96 kHz</option>
+              </select>
+            </div>
           </div>
-          <div class="segmented-control">
-            <button
-              v-for="option in audioOutputOptions"
-              :key="option.id"
-              type="button"
-              :class="{ active: audioOutput === option.id }"
-              @click="selectAudioOutput(option.id)"
-            >
-              {{ option.label }}
-            </button>
-          </div>
-        </div>
-        <hr />
-        <div data-setting-id="exclusive-mode" id="setting-exclusive-mode" class="setting-item">
-          <div class="setting-copy">
-            <strong>独占模式</strong>
-            <span>尝试绕过系统混音器以获得更直接的输出链路。</span>
-          </div>
-          <button
-            type="button"
-            aria-label="独占模式"
-            class="toggle-switch"
-            :class="{ active: exclusiveMode, inactive: !exclusiveMode }"
-            role="switch"
-            :aria-checked="exclusiveMode"
-            :disabled="!exclusiveAvailable"
-            :title="exclusiveAvailable ? '' : '当前后端不支持独占模式'"
-            @click="exclusiveAvailable && toggleExclusiveMode()"
-          ></button>
-        </div>
-        <hr />
-        <div
-          data-setting-id="exclusive-release"
-          id="setting-exclusive-release"
-          class="setting-item"
-        >
-          <div class="setting-copy">
-            <strong>独占模式自动启停</strong>
-            <span>暂停时释放音频设备，继续播放时重新获取。</span>
-            <span v-if="outputInfo?.outputReleased && playbackInfo?.state === 'paused'">
-              已暂停，音频设备已释放。
-            </span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            :class="{
-              active: settings.audioExclusiveAutoRelease,
-              inactive: !settings.audioExclusiveAutoRelease
-            }"
-            role="switch"
-            aria-label="独占模式自动启停"
-            :aria-checked="settings.audioExclusiveAutoRelease"
-            :disabled="!exclusiveAvailable || !exclusiveMode || exclusiveAutoReleaseApplying"
-            :title="
-              !exclusiveAvailable
-                ? '当前后端不支持独占模式'
-                : !exclusiveMode
-                  ? '请先开启独占模式'
-                  : ''
-            "
-            @click="toggleExclusiveAutoRelease"
-          ></button>
         </div>
       </div>
-    </div>
-    <div class="section-block">
-      <h3>音量与保护</h3>
-      <div class="setting-list">
-        <div
-          data-setting-id="software-volume"
-          id="setting-software-volume"
-          class="setting-item compact-row"
-        >
-          <div class="setting-copy">
-            <strong>软件音量</strong>
-            <span> {{ HIFI_STATUS_COPY.volumeNotUnityHint }}。低于 100% 会改变样本值。 </span>
-          </div>
-          <div class="inline-controls">
-            <input
-              class="number-input"
-              type="number"
-              min="0"
-              max="100"
-              :value="volumePercent"
-              @input="setVolumeFromInput"
-            />
-            <button
-              type="button"
-              class="soft-button"
-              :disabled="volumePercent >= 100"
-              title="将软件音量固定为 100%（Unity）"
-              @click="setUnityVolume"
-            >
-              {{ HIFI_STATUS_COPY.unityButton }}
-            </button>
-          </div>
-        </div>
-        <div data-setting-id="clip-guard" id="setting-clip-guard" class="setting-item">
-          <div class="setting-copy">
-            <strong>防破音保护</strong><span>压缩过载信号，减少数字削波失真。</span>
-          </div>
-          <button
-            type="button"
-            class="toggle-switch"
-            role="switch"
-            aria-label="防破音保护"
-            :aria-checked="audioProcessing.clipGuard"
-            :class="{ active: audioProcessing.clipGuard, inactive: !audioProcessing.clipGuard }"
-            @click="toggleClipGuard"
-          />
-        </div>
-      </div>
-    </div>
+    </SettingsGroup>
     <SettingsGroup
       id="dsd-routing"
-      title="DSD 路由"
+      title="DSD 播放"
+      description="播放 DSD 文件或使用支持 DSD 的解码器时，再调整直通与兼容层路由。"
       :summary="
         audioProcessing.dsdOutputMode + (dsdRoute.enabled ? ' · 已启用兼容层路由' : ' · 主输出路由')
       "
@@ -1421,66 +1559,34 @@ function setContinuitySampleRate(event: Event): void {
             </div>
           </div>
         </template>
-      </div></SettingsGroup
-    >
-    <div class="section-block">
-      <h3 data-setting-id="playback-policy" id="setting-playback-policy">连续播放策略</h3>
-      <div class="setting-list">
-        <div class="setting-item">
-          <div class="setting-copy">
-            <strong>连续播放策略</strong>
-            <span
-              >原样优先保留来源格式；连续优先将 PCM 统一为双声道 Float32，允许重采样，不保证
-              bit-perfect。DSD 单独切换。</span
-            >
-            <span v-if="audioOutputConfig.playbackPolicy === 'continuity-first'">
-              目标：{{ audioOutputConfig.continuitySampleRate ?? 48000 }} Hz / 32 bit / 2 声道。
-              需自动声道路由并关闭 PCM 转 DSD；切换策略会保留进度重新打开输出。
-            </span>
-            <span v-if="playbackInfo?.source">
-              来源：{{ playbackInfo.sourceSampleRate }} Hz / {{ playbackInfo.sourceBitDepth }} bit /
-              {{ playbackInfo.sourceChannels ?? '—' }} 声道； 实际：{{
-                playbackInfo.outputSampleRate
-              }}
-              Hz / {{ playbackInfo.outputBitDepth }} bit / {{ playbackInfo.channelCount }} 声道。
-              {{
-                gaplessRuntimeStatusCopy({
-                  intentEnabled: audioProcessing.gapless,
-                  ...playbackInfo
-                })
-              }}
-            </span>
-          </div>
-          <div class="inline-controls continuity-controls">
+        <div class="advanced-grid">
+          <label data-setting-id="pcm-to-dsd">
+            <span>PCM → DSD</span>
             <select
               class="preview-select"
-              aria-label="连续播放策略"
-              :value="audioOutputConfig.playbackPolicy ?? 'bit-perfect-first'"
+              :value="audioOutputConfig.pcmToDsdMode ?? 'off'"
               :disabled="audioOutputConfigApplyStatus.state === 'pending'"
-              @change="setPlaybackPolicy"
+              @change="setPcmToDsdMode"
             >
-              <option value="bit-perfect-first">原样优先</option>
-              <option value="continuity-first">连续优先</option>
+              <option
+                v-for="option in pcmToDsdModeOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
             </select>
-            <select
-              v-if="audioOutputConfig.playbackPolicy === 'continuity-first'"
-              class="preview-select"
-              aria-label="连续播放目标采样率"
-              :value="audioOutputConfig.continuitySampleRate ?? 48000"
-              :disabled="audioOutputConfigApplyStatus.state === 'pending'"
-              @change="setContinuitySampleRate"
-            >
-              <option :value="44100">44.1 kHz</option>
-              <option :value="48000">48 kHz</option>
-              <option :value="96000">96 kHz</option>
-            </select>
-          </div>
+          </label>
         </div>
-      </div>
-    </div>
-    <SettingsGroup
+        <p class="setting-hint">
+          PCM → DSD 在解码/DSP 之后将 PCM 调制为 DSD，经 Native DSD 或 DoP 输出；源文件已是 DSD
+          时不受影响。
+        </p>
+      </div></SettingsGroup
+    ><SettingsGroup
       id="advanced-engine-parameters"
       title="高级引擎参数"
+      description="使用专业声卡、独占输出，或需要排查声音问题时展开；日常播放可以保持默认设置。"
       :summary="
         (audioOutputConfig.preferredBufferSize || '自动缓冲') +
         ' · ' +
@@ -1523,40 +1629,8 @@ function setContinuitySampleRate(event: Event): void {
             </option>
           </select>
         </label>
-        <label>
-          <span>DSD Output</span>
-          <select
-            class="preview-select"
-            :value="audioProcessing.dsdOutputMode"
-            @change="setDsdOutputMode"
-          >
-            <option
-              v-for="option in dsdOutputModeOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-        <label data-setting-id="pcm-to-dsd">
-          <span>PCM → DSD</span>
-          <select
-            class="preview-select"
-            :value="audioOutputConfig.pcmToDsdMode ?? 'off'"
-            :disabled="audioOutputConfigApplyStatus.state === 'pending'"
-            @change="setPcmToDsdMode"
-          >
-            <option v-for="option in pcmToDsdModeOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
       </div>
-      <p class="setting-hint">
-        PCM → DSD 在解码/DSP 之后将 PCM 调制为 DSD，经 Native DSD 或 DoP 输出；源文件已是 DSD
-        时不受影响。
-      </p>
+
       <div v-if="isUpmixActive" class="advanced-grid">
         <label>
           <span>Center Gain</span>

@@ -519,6 +519,97 @@ html:is(
 
 .settings-group {
   min-width: 0;
+  border: 1px solid var(--te-settings-control-border);
+  border-radius: 14px;
+  /* A light tint over the containing card keeps the disclosure in the same
+     palette, including when the card shows wallpaper or native transparency. */
+  background: color-mix(in srgb, var(--te-settings-text) 3%, transparent);
+}
+
+.settings-group-description {
+  margin: 4px 0 16px;
+  color: var(--te-settings-text-muted);
+  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+  line-height: 1.65;
+}
+
+.settings-quick-setup {
+  min-width: 0;
+  padding: 16px;
+  color: var(--te-settings-text);
+}
+
+.settings-quick-setup > .settings-group-trigger {
+  padding: 4px;
+  border: 0;
+  background: transparent;
+}
+
+.settings-quick-setup-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--te-settings-text-muted);
+  font-size: 12px;
+}
+
+.settings-quick-setup-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 16px;
+}
+
+.settings-quick-setup-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 12px;
+  border: 1px solid var(--te-card-border);
+  border-radius: 12px;
+  background: var(--te-subtle-bg);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-quick-setup-action > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-quick-setup-action strong,
+.settings-quick-setup-action small {
+  display: block;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.settings-quick-setup-action small {
+  margin-top: 4px;
+  color: var(--te-settings-text-muted);
+}
+
+.settings-quick-setup-action > i {
+  flex-shrink: 0;
+  color: var(--te-settings-text-muted);
+}
+
+.settings-quick-setup-action:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .settings-quick-setup-action:hover {
+    background: var(--te-settings-search-bg);
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-quick-setup-actions {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-group-trigger {
@@ -528,9 +619,9 @@ html:is(
   gap: 16px;
   width: 100%;
   padding: 14px 16px;
-  border: 1px solid var(--te-card-border);
+  border: 0;
   border-radius: 12px;
-  background: var(--te-subtle-bg);
+  background: transparent;
   color: var(--te-settings-text);
   text-align: left;
   cursor: pointer;
@@ -574,8 +665,13 @@ html:is(
   outline-offset: 3px;
 }
 
+.settings-group > .settings-group-trigger[aria-expanded='true'] {
+  border-radius: 12px 12px 0 0;
+}
+
 .settings-group-content {
-  padding-top: 16px;
+  padding: 16px;
+  border-top: 1px solid var(--te-settings-control-border);
 }
 
 .settings-group-content h4 {
@@ -625,7 +721,7 @@ html:is(
 
 @media (hover: hover) and (pointer: fine) {
   .settings-group-trigger:hover {
-    background: var(--te-settings-search-bg);
+    background: color-mix(in srgb, var(--te-settings-text) 4%, transparent);
   }
 }
 

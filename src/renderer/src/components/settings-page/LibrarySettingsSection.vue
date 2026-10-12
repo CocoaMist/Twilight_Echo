@@ -15,6 +15,8 @@ watch(
 )
 
 defineProps<{
+  formattedCacheSize: string
+  storageAttention?: string
   libraryWatcherStatus: LibraryWatcherStatusSnapshot | null
   libraryScanStatus: { state: string; current: number; total: number }
   libraryScanIsActive: boolean
@@ -105,6 +107,7 @@ defineProps<{
     <SettingsGroup
       id="scan-diagnostics"
       title="扫描与诊断"
+      description="歌曲未显示或信息不完整时，可以查看扫描状态、重新扫描或停止信息补全。"
       :summary="
         libraryScanIsActive || libraryMetadataEnrichmentIsActive
           ? libraryScanProgressText + ' · ' + libraryMetadataEnrichmentText
@@ -144,7 +147,7 @@ defineProps<{
         >
           <div class="setting-copy">
             <strong>媒体库监控状态</strong>
-            <span>各根目录的监听状态；Linux 或失败时会自动降级为定时对账扫描。</span>
+            <span>各根目录的监听状态；无法实时监听时，会定时检查文件夹变动。</span>
           </div>
           <div class="watcher-status-list" aria-live="polite">
             <div
@@ -166,7 +169,7 @@ defineProps<{
                 · {{ watcherModeLabel(item.mode) }}
               </span>
               <span class="watcher-status-times">
-                事件 {{ formatWatcherTime(item.lastEventAt) }} · 对账
+                事件 {{ formatWatcherTime(item.lastEventAt) }} · 检查
                 {{ formatWatcherTime(item.lastReconcileAt) }}
               </span>
               <span v-if="item.lastError" class="watcher-status-error">{{ item.lastError }}</span>
@@ -247,52 +250,65 @@ defineProps<{
                 v-if="libraryMetadataEnrichmentIsActive"
                 type="button"
                 class="soft-button"
-                title="丢弃队列中的富化；已发出的 Provider 请求可能仍会完成但不会写回"
+                title="停止尚未完成的歌曲信息补全；已获取的歌曲信息会保留"
                 @click="cancelActiveLibraryMetadataEnrichment"
               >
-                取消富化
+                停止补全歌曲信息
               </button>
             </div>
           </div>
         </div>
       </div></SettingsGroup
     >
-    <div class="section-block">
-      <h3>下载到本地</h3>
-      <div class="setting-list">
-        <div
-          data-setting-id="download-directory"
-          id="setting-download-directory"
-          class="setting-item top-align"
-        >
-          <div class="setting-copy">
-            <strong>下载目录</strong>
-            <span>
-              流媒体「下载到本地」的保存位置；留空时沿用第一个扫描文件夹。选在扫描文件夹之外时，下载完成的文件不会自动进入媒体库。
-            </span>
+    <SettingsGroup
+      id="storage"
+      title="下载与存储"
+      :summary="
+        '下载：' +
+        (settings.downloadFolder || settings.libraryFolders[0] || '尚未选择位置') +
+        ' · 缓存 ' +
+        formattedCacheSize
+      "
+      :attention="storageAttention"
+      description="下载文件用于长期保留；缓存用于加快加载，可以单独清理，两者分别选择保存位置。"
+    >
+      <div class="section-block">
+        <h3>下载到本地</h3>
+        <div class="setting-list">
+          <div
+            data-setting-id="download-directory"
+            id="setting-download-directory"
+            class="setting-item top-align"
+          >
+            <div class="setting-copy">
+              <strong>下载目录</strong>
+              <span>
+                流媒体「下载到本地」的保存位置；留空时沿用第一个扫描文件夹。选在扫描文件夹之外时，下载完成的文件不会自动进入媒体库。
+              </span>
+            </div>
+            <div class="path-control">
+              <input
+                readonly
+                aria-label="下载目录"
+                :value="settings.downloadFolder || '跟随扫描文件夹'"
+              />
+              <button type="button" class="soft-button" @click="chooseDownloadFolder">
+                选择文件夹
+              </button>
+              <button
+                v-if="settings.downloadFolder"
+                type="button"
+                class="muted-button"
+                @click="resetDownloadFolder"
+              >
+                清除
+              </button>
+            </div>
           </div>
-          <div class="path-control">
-            <input
-              readonly
-              aria-label="下载目录"
-              :value="settings.downloadFolder || '跟随扫描文件夹'"
-            />
-            <button type="button" class="soft-button" @click="chooseDownloadFolder">
-              选择文件夹
-            </button>
-            <button
-              v-if="settings.downloadFolder"
-              type="button"
-              class="muted-button"
-              @click="resetDownloadFolder"
-            >
-              清除
-            </button>
-          </div>
+          <DownloadSettingsFields />
         </div>
-        <DownloadSettingsFields />
       </div>
-    </div>
-    <slot />
+      <slot />
+    </SettingsGroup>
   </section>
 </template>

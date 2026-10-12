@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import type {
   AudioDeviceProfile,
   AudioDeviceProfilesSnapshot
@@ -9,11 +9,20 @@ import AudioDeviceProfileEditor from '@renderer/components/settings-page/AudioDe
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 
 defineProps<{ compact?: boolean }>()
+const emit = defineEmits<{ attention: [message: string] }>()
 const snapshot = shallowRef<AudioDeviceProfilesSnapshot | null>(null)
 const draft = ref<AudioDeviceProfile | null>(null)
 const busy = ref(false)
 const error = ref('')
 const feedback = ref('')
+watch(
+  () =>
+    error.value ||
+    snapshot.value?.error ||
+    (busy.value || snapshot.value?.phase === 'applying' ? '正在应用设备档案…' : ''),
+  (message) => emit('attention', message),
+  { immediate: true }
+)
 const deleteTarget = ref('')
 const createButton = ref<HTMLButtonElement | null>(null)
 const outputStore = useAudioOutputDspStore()
