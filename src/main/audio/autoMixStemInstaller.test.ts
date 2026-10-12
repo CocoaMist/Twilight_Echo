@@ -232,6 +232,26 @@ test('runtime failure never publishes a pack', async () => {
   )
 })
 
+test('runtime is verified at a short permanent path before its active registry is published', async () => {
+  let probedDirectory = ''
+  await fixture(
+    async ({ installer, root }) => {
+      assert.equal((await installer.install()).phase, 'ready')
+      assert.equal(probedDirectory, managedStemPackDirectories(root)[0])
+      assert.match(probedDirectory.split(/[\\/]/).at(-1)!, /^[a-f0-9]{24}$/)
+    },
+    {
+      probe: async (directory) => {
+        probedDirectory = directory
+        assert.ok(!directory.includes('.install-'))
+        assert.deepEqual(await readFile(join(directory, MODEL)), model)
+        await assert.rejects(readFile(join(directory, '..', 'active.json')))
+        return { cpu: true, gpu: false }
+      }
+    }
+  )
+})
+
 test('concurrent requests share one operation and cancellation during verification rolls back', async () => {
   let entered!: () => void, release!: () => void
   const started = new Promise<void>((resolve) => {

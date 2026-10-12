@@ -76,7 +76,9 @@ function installedIds(root: string): string[] {
     const registry = JSON.parse(readFileSync(join(root, 'active.json'), 'utf8'))
     return Array.isArray(registry)
       ? registry
-          .filter((id: unknown) => typeof id === 'string' && /^[a-f0-9]{64}$/.test(id))
+          .filter(
+            (id: unknown) => typeof id === 'string' && /^(?:[a-f0-9]{24}|[a-f0-9]{64})$/.test(id)
+          )
           .slice(0, 16)
       : []
   } catch {
@@ -286,22 +288,14 @@ export class AutoMixStemInstaller {
             throw new InstallError('integrity')
       }
       checkCancelled()
-      let capabilities
-      try {
-        capabilities = await (this.options.probe ?? probeStemRuntime)(
-          staging,
-          this.options.workerDirectory()
-        )
-      } catch {
-        throw new InstallError('runtime')
-      }
-      if (!capabilities.cpu) throw new InstallError('runtime')
-      checkCancelled()
       // Immutable installs keep running workers valid. Publish only a validated
-      // pack, then replace the small active registry atomically.
+      // pack, then replace the small active registry atomically. A short content
+      // ID leaves room for Python extension paths under Windows MAX_PATH; exact
+      // byte verification above still rejects a collision or damaged reinstall.
       const id = createHash('sha256')
         .update(JSON.stringify([...hashes].sort(([a], [b]) => a.localeCompare(b))))
         .digest('hex')
+        .slice(0, 24)
       const destination = join(root, id)
       try {
         await rename(staging, destination)
@@ -324,6 +318,20 @@ export class AutoMixStemInstaller {
             throw new InstallError('integrity')
         }
       }
+      // Probe at the permanent path, since Python native imports can succeed in
+      // staging and fail after a move to a longer Windows directory.
+      checkCancelled()
+      let capabilities
+      try {
+        capabilities = await (this.options.probe ?? probeStemRuntime)(
+          destination,
+          this.options.workerDirectory()
+        )
+      } catch {
+        throw new InstallError('runtime')
+      }
+      if (!capabilities.cpu) throw new InstallError('runtime')
+      checkCancelled()
       const temporaryRegistry = join(root, `.active-${randomUUID()}.json`)
       try {
         await writeFile(
