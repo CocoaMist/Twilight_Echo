@@ -9,7 +9,7 @@ Twilight Echo 插件是一段随应用加载、通过统一 `twilight` API 句�
 
 插件系统当前是**信任式安装**：装上去的插件拥有与应用同等的权限。这不是安全沙箱，而是崩溃隔离加可观测性。这意味着开发者的责任很重，权限声明要诚实，代码要随包分发，不能偷偷拉远程脚本。
 
-完整契约、版本承诺、安全底线全部以 [`./twilight-echo-plugin-spec.md`](./twilight-echo-plugin-spec.md) 为准；分阶段落地边界见 [`./twilight-echo-plugin-plan.md`](./twilight-echo-plugin-plan.md)。
+完整契约、版本承诺、安全底线全部以 [`./twilight-echo-plugin-spec.md`](./twilight-echo-plugin-spec.md) 为准。
 
 ## 2. 插件类型
 
@@ -389,7 +389,6 @@ DSP 是审核最严的插件类型，因为实时音频路径对延迟和稳定�
 ## 18. 延伸阅读
 
 - [`./twilight-echo-plugin-spec.md`](./twilight-echo-plugin-spec.md)，插件系统规范与标准（权威契约）
-- [`./twilight-echo-plugin-plan.md`](./twilight-echo-plugin-plan.md)，插件系统分阶段实施边界
 - [`./DEVELOPER_README.md`](./DEVELOPER_README.md)，应用开发者文档
 - [`../README.md`](../README.md)，Twilight Echo 项目主页
 

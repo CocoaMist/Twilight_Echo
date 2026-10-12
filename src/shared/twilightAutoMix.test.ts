@@ -5,6 +5,7 @@ import { build } from 'vite'
 import {
   autoMixStatusKeys,
   effectiveAutoMixMode,
+  TWILIGHT_AUTOMIX_RELEASE_AVAILABLE,
   TWILIGHT_AUTOMIX_RELEASE_READY
 } from './twilightAutoMix.ts'
 
@@ -40,13 +41,16 @@ test('AutoMix status explains fallback and cancellation without exposing raw int
   )
 })
 
-test('an unconfigured runtime retains the closed delivery gate and off mode', () => {
+test('release availability enables opt-in modes without claiming delivery acceptance', () => {
+  assert.equal(TWILIGHT_AUTOMIX_RELEASE_AVAILABLE, true)
   assert.equal(TWILIGHT_AUTOMIX_RELEASE_READY, false)
-  assert.equal(effectiveAutoMixMode('natural'), 'off')
-  assert.equal(effectiveAutoMixMode('dj'), 'off')
+  assert.equal(effectiveAutoMixMode('natural'), 'natural')
+  assert.equal(effectiveAutoMixMode('dj'), 'dj')
+  assert.equal(effectiveAutoMixMode('off'), 'off')
+  assert.equal(effectiveAutoMixMode(undefined), 'off')
 })
 
-test('evaluation builds can choose both modes while ordinary builds remain closed', async () => {
+test('production and evaluation builds can choose both modes with acceptance kept separate', async () => {
   for (const enabled of [false, true]) {
     const bundle = await build({
       configFile: false,
@@ -68,11 +72,12 @@ test('evaluation builds can choose both modes while ordinary builds remain close
       .find((item) => item.type === 'chunk')
     assert.ok(chunk?.type === 'chunk')
     const policy = await import(`data:text/javascript,${encodeURIComponent(chunk.code)}`)
+    assert.equal(policy.TWILIGHT_AUTOMIX_RELEASE_AVAILABLE, true)
     assert.equal(policy.TWILIGHT_AUTOMIX_RELEASE_READY, false)
     assert.equal(policy.TWILIGHT_AUTOMIX_EVALUATION_AVAILABLE, enabled)
-    assert.equal(policy.TWILIGHT_AUTOMIX_AVAILABLE, enabled)
-    assert.equal(policy.effectiveAutoMixMode('natural'), enabled ? 'natural' : 'off')
-    assert.equal(policy.effectiveAutoMixMode('dj'), enabled ? 'dj' : 'off')
+    assert.equal(policy.TWILIGHT_AUTOMIX_AVAILABLE, true)
+    assert.equal(policy.effectiveAutoMixMode('natural'), 'natural')
+    assert.equal(policy.effectiveAutoMixMode('dj'), 'dj')
     assert.equal(policy.effectiveAutoMixMode('off'), 'off')
     assert.equal(policy.effectiveAutoMixMode(undefined), 'off')
     assert.equal(policy.effectiveAutoMixMode('unsupported'), 'off')

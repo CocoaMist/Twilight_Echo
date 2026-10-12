@@ -1,7 +1,5 @@
-# ADR: ASIO helper process isolation
+# ASIO helper process isolation
 
-- **Status**: Accepted for AP-101 implementation
-- **Date**: 2026-08-31
 - **Scope**: Windows x64 ASIO compatibility backend
 - **Protocol revision**: 1
 
@@ -12,7 +10,7 @@ on a dedicated COM thread. That limits UI stalls, but the third-party driver DLL
 the audio service process. A driver access violation, infinite control call, or corrupted callback
 can therefore terminate or wedge the whole audio service.
 
-AP-101 adds one more fault boundary. The audio service keeps Twilight Echo's decoder, queue, DSP,
+The output backend uses an additional process boundary. The audio service keeps Twilight Echo's decoder, queue, DSP,
 format selection, and diagnostics. A native helper process alone loads the ASIO driver and owns its
 COM objects, driver buffers, callback router, and control thread. The helper contains no renderer,
 preload, Electron main-process, queue, decoder, or DSP logic.
@@ -21,7 +19,7 @@ preload, Electron main-process, queue, decoder, or DSP logic.
 
 ### Process boundary
 
-`AsioBackend` remains the engine-facing output backend. Its default `IAsioHost` becomes an isolated
+`AsioBackend` is the engine-facing output backend. Its default `IAsioHost` uses an isolated
 host proxy. The proxy launches `twilight-asio-helper.exe` from beside the audio-engine binaries.
 The helper owns `RealAsioHost`; tests may launch the same server with a fake host fixture.
 

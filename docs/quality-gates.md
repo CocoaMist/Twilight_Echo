@@ -27,32 +27,6 @@
 
 一个入口失败或启动错误不跳过后续入口；每组记录全部结果、退出码、耗时，最终任一失败则返回非零。CI 上传完整 JSON。所调用的测试入口集中声明在 `scripts/run-product-quality-gate.cjs`，策略测试保证归属、无重复和失败后完整执行。
 
-当前测试范围按用户要求仅为 Windows：Repository Quality、Native Audio 和 Required Quality Gate 都在 windows-latest 执行，不启动 Linux/macOS 测试任务。业务门禁直接运行 Windows Electron 夹具；CI 从已安装的 MinGW 编译器设置 W64DEVKIT_ROOT，实际编译并执行 VST3 桥回归，缺少编译器则明确失败。本地性能与插件组各限制两个测试进程，避免 Electron 夹具与系统字体 PowerShell 查询同时争抢 CPU/内存；测试文件与字体查询的原有超时限制保留。普通单测中的四处单次耗时变为诊断，仍检查完整匹配、稳定 ID/顺序、逻辑收藏身份、一次批量持久化。性能改善由独立基准和资源预算证明，不能把低负载时的一次耗时作为 PR 合格证。
+当前必需测试在 Windows 执行：Repository Quality、Native Audio 和 Required Quality Gate 都在 windows-latest 执行，不启动 Linux/macOS 测试任务。业务门禁直接运行 Windows Electron 夹具；CI 从已安装的 MinGW 编译器设置 W64DEVKIT_ROOT，实际编译并执行 VST3 桥回归，缺少编译器则明确失败。本地性能与插件组各限制两个测试进程，避免 Electron 夹具与系统字体 PowerShell 查询同时争抢 CPU/内存；测试文件与字体查询的原有超时限制保留。普通单测中的四处单次耗时变为诊断，仍检查完整匹配、稳定 ID/顺序、逻辑收藏身份、一次批量持久化。性能改善由独立基准和资源预算证明，不能把低负载时的一次耗时作为 PR 合格证。
 
-生产依赖审计与独立 10k 重复检测基准继续单独执行。Windows 原生任务独立执行，不用源码测试成功代替原生结果。宏观入口不调用应用/原生构建或打包命令；现有 Electron 测试生成自己的临时夹具。初始本地检查受不构建约束；用户随后解除限制，补跑生产构建、完整产品门禁和独立 Debug 原生验证。已有 macOS 发布打包任务仅在显式 workflow_dispatch/tag 时触发，不属于 PR 测试或必需门禁；平台生产支持保持现状。
-
-## 本次项目清洗
-
-- 移除无引用的 `scripts/__code_audit.cjs`、`scripts/__placeholder_audit.cjs`：旧正则 scratch 检查由正式的 AST 错误覆盖与 i18n 运行测试取代。Git 历史可恢复。
-- 清除 IPC 数量下限和 renderer 内部足迹冻结；保留公开频道、main/preload 映射、renderer 域合法性检查。
-- 为纯非 CJK 元数据增加拼音提取快速返回，避免每次冷搜索逐字尝试汉字分类；混合文字行为保留。
-- 后端可用性由 factory 的纯能力谓词统一判定，不创建探测设备；配置不可用后端立即拒绝，保持原路线。测试按引擎实际枚举选平台默认/专用后端，provider 失败测试仍覆盖原有错误语义。
-- 保留空闲音频时钟命令的唤醒标记，避免进入 idle wait 时丢失命令；活动时钟继续 100 ms 周期。DSD 测试等待具体超时错误码和 stop/close 结果，保留不前进、非完美输出和 stopped 断言。
-
-Node 与 Web 的额外 noUnusedLocals/noUnusedParameters 扫描本次均无诊断。未发现即可安全删除的其它未使用声明，不依据静态未命中批量删除动态入口、插件协议、模板、数据文件或历史证据。真实 UI/音频设备效果与各平台原生验证结果分别报告。
-
-## 补充本地验证
-
-生产构建与渲染资源预算检查通过；完整产品门禁 19 个入口全部通过，包括实际 Electron 界面夹具。Windows VST3 桥使用本机 WinLibs 编译器路径运行，验证 2048 参数与处理后音频传输；未安装完整 vcpkg/w64devkit 生产静态预设。
-
-独立 Debug 原生构建完成，37 项 CTest 中 35 通过、2 条件跳过、0 失败。跳过的是 MSVC 交叉 DLL ABI 与需要 FFmpeg 的性能验证；本机未发现 FFmpeg/libebur128 开发库，不能据此证明真实解码播放或发布静态包。后端/唤醒/DSD 控制回归均实际执行。
-
-新宏观 CI 完整报告还发现音频工具链夹具把 Windows 路径与分隔符当成主机固定值。夹具改为虚拟的主机绝对路径并按主机分隔符检查，保持 CMake/CTest 缺失、依赖完整性、GNU patch、路径优先级和 VST3 staging 行为断言；71 项工具链检查通过。公共 Windows 路径转 CMake 与运行时分隔符语义仍独立覆盖。原生测试方法名的编译错误已修正，各平台 CI 以修正后的提交为准。
-
-后续 Repository Quality 已实际通过。macOS 暴露极短 DSD 位置夹具与默认静音过渡的混合依赖；位置换算测试明确关闭 pre/post-roll，保持 64 bit frames / 2,822,400 Hz 与原精度断言，静音超时/DSD→PCM 保护仍在独立回归中执行。本机整个 runtime queue/reroute 集成再次通过。原生 CTest 进程设置 180 秒退出边界，并在该集成内部记录当前场景，使卡住时留下具体位置；它约束整组结束和可诊断性，不要求单个函数在一次机器计时内完成。
-
-历史跨平台 CI 已通过 Repository Quality 与 Linux/macOS 原生。Windows 的退出报告定位到错误事件夹具：registry 锁内调用 pipeline 事件，和状态读取的 pipeline→registry 顺序相反。改为锁内复制回调、锁外调用，保持实际 RenderError/lastError/context 回归；不增加超时或跳过场景。旧结果仅作诊断证据，后续仅验证 Windows。
-
-后续发现实际暂停竞争：clockLoop 在 engine 锁外读取 playing 快照，命令完成 pause 后，旧快照又把状态写成 playing。新增 Windows 可执行的屏障回归，固定“时钟已取快照 → pause 完成 → 时钟继续”顺序，修复前确实失败。时钟刷新现在保留已提交的播放状态；命令和明确的结束/错误事件仍负责状态切换，进度/配置 ACK/曲目信息照常刷新。完整原生回归验证暂停、换曲、路由回滚和 DSD 保护，最终 CI 以最新 Windows head 为准。
-
-首轮 Windows-only CI 的原生门禁通过，完整业务报告继续发现两处夹具问题：路径授权应对比 realpath 规范结果，不能把 Windows 8.3 临时目录别名当作规范路径；像素夹具应按实际 CSS viewport 与 BGRA bitmap 换算坐标，不能假定 BrowserWindow 的外窗宽度就是内容宽度。路径拒绝/符号链接逃逸和播放条低对比度断言保持。替代 SVG 链的 Chromium 能力结果仅作诊断，修复旧 Chromium bug 不再阻断产品。CI 同时保存人工棋盘截图供定位。修正后的本机主题 258 项通过，插件 430 通过/1 原有跳过；软件渲染/100% 探针通过，最终 Windows CI 另行确认。
+生产依赖审计与独立 10k 重复检测基准继续单独执行。Windows 原生任务独立执行，不用源码测试成功代替原生结果。宏观入口不调用应用/原生构建或打包命令；现有 Electron 测试生成自己的临时夹具。已有 macOS 发布打包任务仅在显式 workflow_dispatch/tag 时触发，不属于 PR 测试或必需门禁；平台生产支持保持现状。
