@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
+import { usePlayerStore } from '@renderer/stores/usePlayerStore'
 import type { AudioDeviceOption } from '@renderer/types/settings'
 
 const props = defineProps<{ audioExclusiveMode: boolean }>()
@@ -11,6 +12,17 @@ const audioStore = useAudioOutputDspStore()
 const { audioDevice, audioOutputDeviceOptions, audioOutput, audioOutputOptions, audioProcessing } =
   storeToRefs(audioStore)
 const { setAudioDevice, refreshAudioOutputState, setReplayGainMode } = audioStore
+const testToneState = ref<'idle' | 'playing' | 'success' | 'error'>('idle')
+const testToneError = ref('')
+const deviceChanging = ref(false)
+const { volume, setVolume } = usePlayerStore()
+let active = true
+let testAttempt = 0
+onBeforeUnmount(() => {
+  active = false
+  testAttempt++
+  void window.api.audioEngine.stopOutputTest().catch(() => undefined)
+})
 
 // Device picks apply immediately (like library folders on the local step) so
 // the user hears the change without waiting for the wizard to finish.
@@ -30,9 +42,63 @@ function toggleLoudnessMatch(): void {
   void setReplayGainMode(loudnessMatched.value ? 'off' : 'track')
 }
 
-function selectDevice(id: string): void {
-  if (audioDevice.value === id) return
-  void setAudioDevice(id)
+async function selectDevice(id: string): Promise<void> {
+  if (audioDevice.value === id || deviceChanging.value) return
+  deviceChanging.value = true
+  testAttempt++
+  testToneState.value = 'idle'
+  testToneError.value = ''
+  try {
+    await window.api.audioEngine.stopOutputTest()
+    await setAudioDevice(id)
+    if (audioDevice.value !== id) throw new Error('设备切换未成功，请检查设备连接后重试')
+  } catch (error) {
+    testToneError.value = error instanceof Error ? error.message : String(error)
+    testToneState.value = 'error'
+  } finally {
+    deviceChanging.value = false
+  }
+}
+
+async function testOutput(): Promise<void> {
+  if (testToneState.value === 'playing' || deviceChanging.value) return
+  testToneState.value = 'playing'
+  testToneError.value = ''
+  const attempt = ++testAttempt
+  try {
+    const result = await window.api.audioEngine.testOutput(props.audioExclusiveMode)
+    if (active && attempt === testAttempt)
+      testToneState.value = result.cancelled ? 'idle' : 'success'
+  } catch (error) {
+    if (!active || attempt !== testAttempt) return
+    testToneState.value = 'error'
+    testToneError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function stopTest(): Promise<boolean> {
+  testAttempt++
+  try {
+    await window.api.audioEngine.stopOutputTest()
+    if (active) testToneState.value = 'idle'
+    return true
+  } catch (error) {
+    if (active) {
+      testToneState.value = 'error'
+      testToneError.value = error instanceof Error ? error.message : String(error)
+    }
+    return false
+  }
+}
+
+async function selectMode(exclusive: boolean): Promise<void> {
+  if (deviceChanging.value || !(await stopTest()) || !active) return
+  testToneError.value = ''
+  emit('update:audioExclusiveMode', exclusive)
+}
+
+function changeVolume(event: Event): void {
+  setVolume(Number((event.target as HTMLInputElement).value) / 100)
 }
 
 function deviceIcon(device: AudioDeviceOption): string {
@@ -81,6 +147,7 @@ function deviceBadges(device: AudioDeviceOption): string[] {
         :class="{ 'is-selected': audioDevice === device.id }"
         role="radio"
         :aria-checked="audioDevice === device.id"
+        :disabled="deviceChanging"
         @click="selectDevice(device.id)"
       >
         <i class="onb-device-icon" :class="deviceIcon(device)"></i>
@@ -96,6 +163,49 @@ function deviceBadges(device: AudioDeviceOption): string[] {
         </span>
       </button>
     </div>
+    <div class="onb-audio-test">
+      <button
+        type="button"
+        class="onb-btn-secondary"
+        :disabled="deviceChanging"
+        @click="testToneState === 'playing' ? stopTest() : testOutput()"
+      >
+        <i
+          class="ph"
+          :class="testToneState === 'playing' ? 'ph-spinner-gap' : 'ph-speaker-high'"
+        ></i>
+        {{
+          testToneState === 'playing'
+            ? '停止试听'
+            : testToneState === 'error'
+              ? '重试试听'
+              : '试听当前设备'
+        }}
+      </button>
+      <span v-if="testToneState === 'success'" class="onb-audio-test-ok" role="status"
+        >试听结束；没听到声音时可检查音量或更换设备。</span
+      >
+      <span v-else-if="testToneState === 'error'" class="onb-audio-test-error" role="alert">{{
+        testToneError
+      }}</span>
+      <span v-else role="status">{{
+        testToneState === 'playing'
+          ? '正在试听：先左声道，再右声道。'
+          : '播放约 2 秒测试音：先左声道，再右声道。'
+      }}</span>
+    </div>
+    <label class="onb-test-volume"
+      ><i class="ph ph-speaker-high" aria-hidden="true"></i><span>音量</span
+      ><input
+        type="range"
+        min="0"
+        max="100"
+        :value="Math.round(volume * 100)"
+        aria-label="播放器音量"
+        :disabled="testToneState === 'playing'"
+        @input="changeVolume"
+      /><output>{{ Math.round(volume * 100) }}%</output></label
+    >
     <div class="onb-cards has-selection" role="radiogroup" aria-label="音频输出模式">
       <button
         type="button"
@@ -103,7 +213,7 @@ function deviceBadges(device: AudioDeviceOption): string[] {
         :class="{ 'is-selected': !props.audioExclusiveMode }"
         role="radio"
         :aria-checked="!props.audioExclusiveMode"
-        @click="emit('update:audioExclusiveMode', false)"
+        @click="selectMode(false)"
       >
         <span v-if="!props.audioExclusiveMode" class="onb-card-check">
           <i class="ph ph-check"></i>
@@ -119,7 +229,7 @@ function deviceBadges(device: AudioDeviceOption): string[] {
         role="radio"
         :aria-checked="props.audioExclusiveMode"
         :disabled="!exclusiveAvailable"
-        @click="emit('update:audioExclusiveMode', true)"
+        @click="selectMode(true)"
       >
         <span v-if="props.audioExclusiveMode" class="onb-card-check">
           <i class="ph ph-check"></i>

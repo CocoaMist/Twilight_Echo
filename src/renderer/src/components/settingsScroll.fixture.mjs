@@ -281,6 +281,79 @@ window.runSettingsScrollTests = async () => {
     'category navigation does not have one Tab stop'
   )
 
+  const header = page.querySelector('.settings-page-header')
+  const fades = (element) =>
+    element
+      .getAnimations()
+      .filter((animation) =>
+        animation.effect.getKeyframes().some((frame) => frame.opacity !== undefined)
+      )
+  const pointerSelect = async (key) => {
+    nav(key).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    await nextTick()
+  }
+  document.documentElement.dataset.teMotion = 'full'
+  await pointerSelect('appearance')
+  const firstFade = fades(header)[0]
+  expect(
+    firstFade && fades(document.querySelector('#appearance')).length === 1,
+    'pointer switch did not animate the heading and category together'
+  )
+  expect(
+    visibleSections().length === 1 && visibleSections()[0].id === 'appearance',
+    'animation delayed the selected category or left an old panel visible'
+  )
+  expect(firstFade.effect.getTiming().duration <= 300, 'category fade blocks navigation too long')
+  firstFade.pause()
+  firstFade.currentTime = Number(firstFade.effect.getTiming().duration) / 4
+  const interruptedOpacity = Number(getComputedStyle(header).opacity)
+  await pointerSelect('playback')
+  expect(
+    firstFade.playState === 'idle' && fades(header).length === 1,
+    'rapid switches stacked category animations'
+  )
+  expect(
+    Math.abs(Number(fades(header)[0].effect.getKeyframes()[0].opacity) - interruptedOpacity) < 0.01,
+    'rapid switch restarted the fade instead of continuing from its visible opacity'
+  )
+  await pointerSelect('general')
+  expect(
+    general.querySelector('input') === draft && draft.value === '未保存的输入' && expanded.value,
+    'animated category switch lost the input draft or disclosure state'
+  )
+  document.documentElement.dataset.teMotion = 'reduced'
+  await nextTick()
+  expect(
+    fades(header).length === 0 && getComputedStyle(header).opacity === '1',
+    'changing motion preference left a category partially transparent'
+  )
+  await pointerSelect('appearance')
+  const reducedFade = fades(header)[0]
+  expect(
+    reducedFade &&
+      reducedFade.effect.getTiming().duration <= 120 &&
+      reducedFade.effect.getKeyframes().every((frame) => frame.transform === undefined),
+    'reduced motion did not retain a short fade without movement'
+  )
+  document.documentElement.dataset.teMotion = 'off'
+  await nextTick()
+  await pointerSelect('general')
+  expect(
+    !fades(header).length && !fades(general).length && getComputedStyle(header).opacity === '1',
+    'disabled motion still faded the selected category'
+  )
+  document.documentElement.dataset.teMotion = 'full'
+  nav('general').dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
+  await nextTick()
+  expect(
+    visibleSections()[0].id === 'system' &&
+      document.activeElement === nav('system') &&
+      !fades(header).length &&
+      !fades(document.querySelector('#system')).length,
+    'keyboard category navigation animated or failed to restore focus'
+  )
+  document.documentElement.dataset.teMotion = 'off'
+
   await select('system')
   persistence.stop()
   mounted.value = false
@@ -298,5 +371,5 @@ window.runSettingsScrollTests = async () => {
   persistence.stop()
   app.unmount()
   removeDecorations()
-  return 'SETTINGS_SCROLL_OK: seven panels; startup/drafts/geometry/search/Tab/sidebar keyboard/restore verified'
+  return 'SETTINGS_SCROLL_OK: category fades/interruption/motion preferences; seven panels; startup/drafts/geometry/search/Tab/sidebar keyboard/restore verified'
 }

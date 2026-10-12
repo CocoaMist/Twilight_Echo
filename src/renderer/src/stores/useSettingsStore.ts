@@ -511,6 +511,9 @@ export function useSettingsStore() {
 
   function hydrateStartupSnapshot(startup: AppStartupSnapshot): AppSettings {
     setupListener()
+    // The startup promise is cached across shell remounts. Replaying it after
+    // live updates would reset volume and persist that old value back to disk.
+    if (loaded.value) return settings.value
     applySnapshot(startup.settings)
     return settings.value
   }

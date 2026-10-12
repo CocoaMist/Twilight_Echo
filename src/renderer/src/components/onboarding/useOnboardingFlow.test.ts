@@ -11,6 +11,96 @@ const {
   new URL('./useOnboardingFlow.ts', import.meta.url).href
 )) as typeof import('./useOnboardingFlow')
 
+test('early completion only writes visited sections', () => {
+  const choices = createDefaultOnboardingChoices()
+  choices.usage = 'both'
+  choices.audioExclusiveMode = true
+  const patch = buildSettingsPatch(choices, new Set(['welcome', 'usage', 'local']))
+  assert.equal(patch.startupHomePage, 'local')
+  assert.equal(patch.watchLibrary, true)
+  for (const field of [
+    'audioExclusiveMode',
+    'playerBar',
+    'miniPlayer',
+    'ncmPlaybackQuality',
+    'cachePolicy',
+    'closeWindowBehavior',
+    'globalShortcuts'
+  ])
+    assert.equal(field in patch, false, field)
+})
+
+test('reopening seeds all persisted choices and clones editable objects', () => {
+  const seed = {
+    onboardingCompleted: true,
+    ...createDefaultOnboardingChoices(),
+    audioExclusiveMode: true,
+    watchLibrary: false,
+    autoAnalyzeBpm: false,
+    globalShortcuts: true,
+    smtcEnabled: false,
+    discordRpcEnabled: true,
+    ncmPlaybackQuality: 'hires' as const,
+    playbackResumeMode: 'trackAndPosition' as const
+  }
+  const choices = createDefaultOnboardingChoices(seed)
+  for (const field of [
+    'audioExclusiveMode',
+    'watchLibrary',
+    'autoAnalyzeBpm',
+    'globalShortcuts',
+    'smtcEnabled',
+    'discordRpcEnabled',
+    'ncmPlaybackQuality',
+    'playbackResumeMode'
+  ] as const)
+    assert.equal(choices[field], seed[field])
+  choices.playerBar.mode = 'compact'
+  choices.miniPlayer.alwaysOnTop = !seed.miniPlayer.alwaysOnTop
+  choices.cachePolicy.streamingAudio = 'off'
+  assert.notEqual(choices.playerBar.mode, seed.playerBar.mode)
+  assert.notEqual(choices.miniPlayer.alwaysOnTop, seed.miniPlayer.alwaysOnTop)
+  assert.equal(seed.cachePolicy.streamingAudio, 'provider')
+})
+
+test('first-run defaults use standard on home and compact on the playing page without replacing saved choices', () => {
+  const defaults = createDefaultOnboardingChoices()
+  assert.equal(defaults.playerBar.mode, 'standard')
+  assert.equal(defaults.playerBar.modeSource, 'user')
+  assert.equal(defaults.playerBar.playingPageMode, 'compact')
+  const saved = {
+    ...defaults.playerBar,
+    mode: 'mini' as const,
+    playingPageMode: 'standard' as const
+  }
+  const reopened = createDefaultOnboardingChoices({ onboardingCompleted: true, playerBar: saved })
+  assert.equal(reopened.playerBar.mode, 'mini')
+  assert.equal(reopened.playerBar.playingPageMode, 'standard')
+  defaults.usage = 'local'
+  assert.equal(buildSettingsPatch(defaults).playerBar?.playingPageMode, 'compact')
+})
+
+test('summary edits can return to finish, but cannot jump to unvisited steps', () => {
+  const flow = useOnboardingFlow()
+  flow.next()
+  flow.choices.value.usage = 'both'
+  flow.goTo(7)
+  assert.equal(flow.currentStep.value, 'usage')
+  while (!flow.isLastStep.value) flow.next()
+  flow.goTo(flow.visibleSteps.value.indexOf('player'))
+  assert.equal(flow.currentStep.value, 'player')
+  flow.goTo(flow.visibleSteps.value.indexOf('finish'))
+  assert.equal(flow.currentStep.value, 'finish')
+  flow.goTo(1)
+  flow.choices.value.usage = 'local'
+  flow.choices.value.wantsStreamingLogin = true
+  flow.choices.value.wantsPluginMarket = true
+  assert.equal(resolveFinishAction(flow.choices.value), 'local')
+  const patch = buildSettingsPatch(flow.choices.value, flow.visitedSteps.value)
+  assert.equal('ncmPlaybackQuality' in patch, false)
+  assert.equal('cachePolicy' in patch, false)
+})
+
 test('visible steps adapt to the usage choice', () => {
   assert.deepEqual(resolveVisibleSteps(null), [
     'welcome',

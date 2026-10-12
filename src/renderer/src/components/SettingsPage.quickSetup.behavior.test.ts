@@ -38,7 +38,7 @@ test('legacy anchors and single-level callers resolve ordered disclosure paths',
   ])
 })
 
-test('quick setup reflects saved state, reveals nested targets, and preserves local disclosure preferences', async () => {
+test('quick setup hides after configuration, reveals nested targets, and preserves local disclosure preferences', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-settings-quick-setup-'))
   try {
     const fixture = fileURLToPath(new URL('./settingsOrganization.fixture.mjs', import.meta.url))
@@ -169,12 +169,14 @@ const waitFor=async (check,label='')=>{const deadline=Date.now()+2000;while(!che
 window.runQuickSetupTests=async()=>{
  await settle()
  const page=document.querySelector('.settings-preview-page')
+ expect(!page.querySelector('.settings-quick-setup'),'existing music folders must hide quick setup')
+ settings.value={...settings.value,onboardingCompleted:false,libraryFolders:[]};await settle()
  const card=page.querySelector('.settings-quick-setup')
  const trigger=card.querySelector(':scope > button')
  const actions=[...card.querySelectorAll('.settings-quick-setup-action')]
  expect(actions.length===3&&trigger.getAttribute('aria-expanded')==='true','three optional quick setup entries must be visible initially')
  for(const id of ['output-advanced','playback-transitions','player-bar','player-bar-behavior-details','player-bar-layout-details','theme-customization','window-transparency-details','storage','shortcut-details','external-connections','network-proxy','lyrics-style-details'])expect(page.querySelector('#'+id+' > button').getAttribute('aria-expanded')==='false','advanced group must start collapsed: '+id)
- expect(card.textContent.includes('已添加 1 个文件夹')&&card.textContent.includes('跟随系统默认设备')&&card.textContent.includes('默认主题'),'quick setup must reflect saved settings')
+ expect(card.textContent.includes('已添加 0 个文件夹')&&card.textContent.includes('跟随系统默认设备')&&card.textContent.includes('默认主题'),'unconfigured users must retain valid default audio and theme choices')
  const originalSettings=JSON.stringify(settings.value)
  for(const [index,id] of ['library-folders','audio-device','color-mode'].entries()){
   actions[index].click();await waitFor(()=>page.querySelector('.search-target-flash')?.dataset.settingId===id)
@@ -238,8 +240,14 @@ window.runQuickSetupTests=async()=>{
  host.querySelector('button').click();await settle();app.unmount();app=mount();await settle()
  expect(host.querySelector('button').getAttribute('aria-expanded')==='true','reopening must also retain expanded preference')
  app.unmount();host.remove();trigger.click();await settle()
+ settings.value={...settings.value,libraryFolders:['D:/Music']};await settle()
+ expect(!page.querySelector('.settings-quick-setup'),'adding a music folder must hide quick setup immediately')
+ settings.value={...settings.value,onboardingCompleted:true,libraryFolders:[]};await settle()
+ expect(!page.querySelector('.settings-quick-setup'),'completed onboarding must hide quick setup for streaming users without folders')
+ settings.value={...settings.value,onboardingCompleted:false,libraryFolders:[]};await settle()
+ expect(page.querySelector('.settings-quick-setup'),'first-run users must still have access to quick setup')
  expect(window.organizationRendererErrors.length===0,'renderer errors: '+window.organizationRendererErrors.join('; '))
- return 'QUICK_SETUP_OK: three focused destinations, live state, saved disclosure preference, every search from collapsed groups, failure summaries, DSD and unavailable AutoMix verified'
+ return 'QUICK_SETUP_OK: configured local/streaming users hide quick setup; three focused destinations, live state, saved disclosure preference, every search from collapsed groups, failure summaries, DSD and unavailable AutoMix verified'
 }
 window.checkQuickSetupLayout=async theme=>{
  document.documentElement.dataset.theme=theme;document.documentElement.dataset.teMotion='reduced'

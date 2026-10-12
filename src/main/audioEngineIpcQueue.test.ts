@@ -197,6 +197,7 @@ test('queue cursor IPC freshly authorizes its source before forwarding the main-
       if (denied) throw new Error('denied')
       return 'canonical.flac'
     },
+    outputTest: { stop: async () => calls.push('stop-test') },
     ensureAudioEngineRuntime: async () => ({
       selectQueueItem: async (selection: unknown) => {
         calls.push('select')
@@ -207,7 +208,7 @@ test('queue cursor IPC freshly authorizes its source before forwarding the main-
   })
   const selection = { queueToken: 'stale', index: 3, id: 'cue:3', source: 'alias.flac' }
   assert.equal(await handler({}, selection), false)
-  assert.deepEqual(calls, ['trusted', 'authorize', 'select'])
+  assert.deepEqual(calls, ['trusted', 'authorize', 'stop-test', 'select'])
   assert.equal(
     JSON.stringify(selections[0]),
     JSON.stringify({ ...selection, source: 'canonical.flac' })

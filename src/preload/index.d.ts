@@ -278,6 +278,8 @@ interface AudioEngineAPI {
   ) => Promise<AudioProcessingSettings>
   getMetadata: (source: string) => Promise<NativeAudioMetadata | null>
   getPlaybackInfo: () => Promise<PlaybackInfo>
+  testOutput: (exclusive: boolean) => Promise<{ cancelled: boolean }>
+  stopOutputTest: () => Promise<void>
   exportDiagnostics: () => Promise<{ filePath: string | null }>
   getSpectrumData: (points?: number) => Promise<number[]>
   getVisualizationData: (options?: VisualizationOptions) => Promise<VisualizationData>

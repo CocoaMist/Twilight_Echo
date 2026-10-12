@@ -17,6 +17,7 @@ const props = withDefaults(
     titleSurface?: 'default' | 'settings' | 'streaming'
     activeTool?: 'settings' | 'plugins' | null
     preview?: boolean
+    closeOnly?: boolean
     notificationsOpen?: boolean
   }>(),
   {
@@ -107,16 +108,21 @@ function close(): void {
     :class="{
       'drag-region': !preview,
       'no-drag': preview,
-      'title-bar-glass': glass,
-      'title-bar-liquid': liquidMaterial && !immersive,
-      'title-bar-immersive': immersive,
-      'title-bar-settings': titleSurface === 'settings',
-      'title-bar-streaming': titleSurface === 'streaming',
-      'title-bar-menu-open': menuOpen
+      'title-bar-glass': glass && !closeOnly,
+      'title-bar-liquid': liquidMaterial && !immersive && !closeOnly,
+      'title-bar-immersive': immersive && !closeOnly,
+      'title-bar-close-only': closeOnly,
+      'title-bar-settings': titleSurface === 'settings' && !closeOnly,
+      'title-bar-streaming': titleSurface === 'streaming' && !closeOnly,
+      'title-bar-menu-open': menuOpen && !closeOnly
     }"
   >
-    <div class="title-bar-background" aria-hidden="true"></div>
-    <div v-if="canGoBack && !preview" class="title-bar-back no-drag" @pointerdown="setPressOrigin">
+    <div v-if="!closeOnly" class="title-bar-background" aria-hidden="true"></div>
+    <div
+      v-if="canGoBack && !preview && !closeOnly"
+      class="title-bar-back no-drag"
+      @pointerdown="setPressOrigin"
+    >
       <button
         type="button"
         class="back-btn"
@@ -127,7 +133,7 @@ function close(): void {
         <TitleBarIcon name="arrow_left" />
       </button>
     </div>
-    <div class="title-bar-start no-drag" @pointerdown="setPressOrigin">
+    <div v-if="!closeOnly" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
       <button
         type="button"
         aria-label="菜单"
@@ -156,7 +162,7 @@ function close(): void {
       </button>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
-      <div class="title-bar-tools" role="group" aria-label="应用工具">
+      <div v-if="!closeOnly" class="title-bar-tools" role="group" aria-label="应用工具">
         <button
           type="button"
           aria-label="扩展中心"
@@ -209,6 +215,7 @@ function close(): void {
       </div>
       <div class="title-bar-window-controls" role="group" aria-label="窗口控制">
         <button
+          v-if="!closeOnly"
           type="button"
           :disabled="preview"
           aria-label="最小化"
@@ -221,6 +228,7 @@ function close(): void {
           </svg>
         </button>
         <button
+          v-if="!closeOnly"
           type="button"
           :aria-label="maximized ? '还原窗口' : '最大化窗口'"
           class="control-btn maximize"
@@ -574,6 +582,16 @@ html[data-theme='dark'] .title-bar :is(.settings-btn, .plugins-btn)[aria-pressed
 
 .title-bar-window-controls {
   margin-left: 12px;
+}
+
+.title-bar-close-only .title-bar-window-controls {
+  margin-left: 0;
+}
+
+html .title-bar.title-bar-close-only {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .title-bar-tools::after {

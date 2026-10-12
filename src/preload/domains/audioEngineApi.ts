@@ -161,6 +161,9 @@ export function bindAudioEngineIpcEvents(): void {
 
 export const audioEngineApi = {
   audioEngine: {
+    testOutput: (exclusive: boolean): Promise<{ cancelled: boolean }> =>
+      ipcRenderer.invoke(IPC.audioEngine.testOutput, exclusive),
+    stopOutputTest: (): Promise<void> => ipcRenderer.invoke(IPC.audioEngine.stopOutputTest),
     getAutoMixStemCapabilities: (
       refresh = false
     ): Promise<import('../../shared/twilightAutoMix.ts').AutoMixStemCapabilities> =>

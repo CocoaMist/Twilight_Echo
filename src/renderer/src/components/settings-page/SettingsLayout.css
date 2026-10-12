@@ -19,10 +19,11 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-preview
   padding-top: 0;
 }
 html .settings-preview-page[data-settings-layout='categories'] .settings-preview-nav {
-  position: sticky;
-  inset: 0 auto auto;
-  transform: none;
-  width: 100%;
+  position: fixed;
+  /* Center the 192px navigation in the gutter before the second grid column. */
+  inset: 50% auto auto max(32px, calc((100vw - 1120px) / 4 + 16px));
+  transform: translateY(-50%);
+  width: 192px;
   max-height: calc(100vh - 96px);
   overflow: visible;
   flex-direction: column;
@@ -31,6 +32,7 @@ html .settings-preview-page[data-settings-layout='categories'] .settings-preview
   justify-content: flex-start;
 }
 html .settings-preview-page[data-settings-layout='categories'] .settings-preview-stack {
+  grid-column: 2;
   width: 100%;
   margin: 0;
   gap: 20px;
@@ -83,7 +85,8 @@ html .settings-preview-page[data-settings-layout='categories'] .setting-list hr 
 }
 html .settings-preview-page[data-settings-layout='categories'] :is(.setting-item, .mini-setting) {
   min-height: var(--te-setting-row-height);
-  padding: var(--te-setting-row-padding) 0;
+  /* Keep the hover/focus inset highlight clear of the first and last controls. */
+  padding: var(--te-setting-row-padding) 16px;
   gap: 24px;
 }
 html .settings-preview-page[data-settings-layout='categories'] .mini-setting + .mini-setting {
@@ -385,11 +388,18 @@ html[data-theme='dark']
     gap: 20px;
   }
   html .settings-preview-page[data-settings-layout='categories'] .settings-preview-nav {
+    position: sticky;
+    inset: 0 auto auto;
+    transform: none;
+    width: 100%;
     z-index: 110;
     padding: 8px;
     background: var(--te-settings-control-bg);
     border-radius: 20px;
     gap: 8px;
+  }
+  html .settings-preview-page[data-settings-layout='categories'] .settings-preview-stack {
+    grid-column: 1;
   }
   html .settings-preview-page[data-settings-layout='categories'] .settings-nav-categories {
     display: none;

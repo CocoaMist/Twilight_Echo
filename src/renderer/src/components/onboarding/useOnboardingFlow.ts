@@ -1,4 +1,4 @@
-import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type {
   AppSettings,
   CloseWindowBehavior,
@@ -62,35 +62,52 @@ export interface OnboardingChoices {
 }
 
 export function createDefaultOnboardingChoices(
-  seed?: Pick<
-    AppSettings,
-    | 'closeWindowBehavior'
-    | 'launchAtLogin'
-    | 'taskbarThumbarButtonsEnabled'
-    | 'playerBar'
-    | 'miniPlayer'
-    | 'onlineLyricsFallback'
-    | 'cachePolicy'
+  seed?: Partial<
+    Pick<
+      AppSettings,
+      | 'onboardingCompleted'
+      | 'closeWindowBehavior'
+      | 'launchAtLogin'
+      | 'taskbarThumbarButtonsEnabled'
+      | 'playerBar'
+      | 'miniPlayer'
+      | 'onlineLyricsFallback'
+      | 'cachePolicy'
+      | 'audioExclusiveMode'
+      | 'watchLibrary'
+      | 'autoAnalyzeBpm'
+      | 'globalShortcuts'
+      | 'smtcEnabled'
+      | 'discordRpcEnabled'
+      | 'ncmPlaybackQuality'
+      | 'playbackResumeMode'
+    >
   >
 ): OnboardingChoices {
+  const playerBar = clonePlayerBarSettings(seed?.playerBar ?? DEFAULT_PLAYER_BAR_SETTINGS)
+  if (!seed?.onboardingCompleted && (!seed?.playerBar || seed.playerBar.modeSource === 'theme')) {
+    playerBar.mode = 'standard'
+    playerBar.modeSource = 'user'
+    playerBar.playingPageMode = 'compact'
+  }
   return {
     usage: null,
-    audioExclusiveMode: false,
+    audioExclusiveMode: seed?.audioExclusiveMode ?? false,
     closeWindowBehavior: seed?.closeWindowBehavior ?? 'quit',
     launchAtLogin: seed?.launchAtLogin ?? false,
-    playerBar: clonePlayerBarSettings(seed?.playerBar ?? DEFAULT_PLAYER_BAR_SETTINGS),
+    playerBar,
     miniPlayer: cloneMiniPlayerSettings(seed?.miniPlayer ?? DEFAULT_MINI_PLAYER_SETTINGS),
     openMiniPlayerOnFinish: false,
     taskbarThumbarButtonsEnabled: seed?.taskbarThumbarButtonsEnabled !== false,
-    watchLibrary: true,
-    autoAnalyzeBpm: true,
+    watchLibrary: seed?.watchLibrary ?? true,
+    autoAnalyzeBpm: seed?.autoAnalyzeBpm ?? true,
     onlineLyricsFallback: seed?.onlineLyricsFallback === true,
     cachePolicy: { ...(seed?.cachePolicy ?? DEFAULT_ONBOARDING_CACHE_POLICY) },
-    globalShortcuts: false,
-    smtcEnabled: true,
-    discordRpcEnabled: false,
-    ncmPlaybackQuality: 'auto',
-    playbackResumeMode: 'off',
+    globalShortcuts: seed?.globalShortcuts ?? false,
+    smtcEnabled: seed?.smtcEnabled ?? true,
+    discordRpcEnabled: seed?.discordRpcEnabled ?? false,
+    ncmPlaybackQuality: seed?.ncmPlaybackQuality ?? 'auto',
+    playbackResumeMode: seed?.playbackResumeMode ?? 'off',
     wantsStreamingLogin: false,
     wantsPluginMarket: false
   }
@@ -104,27 +121,35 @@ export function resolveVisibleSteps(usage: OnboardingUsage | null): OnboardingSt
   return steps
 }
 
-export function buildSettingsPatch(choices: OnboardingChoices): Partial<AppSettings> {
+export function buildSettingsPatch(
+  choices: OnboardingChoices,
+  visitedSteps: ReadonlySet<OnboardingStepId> = new Set(resolveVisibleSteps(choices.usage))
+): Partial<AppSettings> {
   const patch: Partial<AppSettings> = { onboardingCompleted: true }
   if (choices.usage === null) return patch
-  patch.startupHomePage = choices.usage === 'streaming' ? 'streaming' : 'local'
-  patch.audioExclusiveMode = choices.audioExclusiveMode
-  patch.closeWindowBehavior = choices.closeWindowBehavior
-  patch.closeToTray = choices.closeWindowBehavior === 'tray'
-  patch.launchAtLogin = choices.launchAtLogin
-  patch.playerBar = clonePlayerBarSettings(choices.playerBar)
-  patch.miniPlayer = cloneMiniPlayerSettings(choices.miniPlayer)
-  patch.taskbarThumbarButtonsEnabled = choices.taskbarThumbarButtonsEnabled
-  patch.globalShortcuts = choices.globalShortcuts
-  patch.smtcEnabled = choices.smtcEnabled
-  patch.discordRpcEnabled = choices.discordRpcEnabled
-  patch.playbackResumeMode = choices.playbackResumeMode
-  if (choices.usage !== 'streaming') {
+  if (visitedSteps.has('usage'))
+    patch.startupHomePage = choices.usage === 'streaming' ? 'streaming' : 'local'
+  if (visitedSteps.has('audio')) patch.audioExclusiveMode = choices.audioExclusiveMode
+  if (visitedSteps.has('player')) {
+    patch.playerBar = clonePlayerBarSettings(choices.playerBar)
+    patch.miniPlayer = cloneMiniPlayerSettings(choices.miniPlayer)
+  }
+  if (visitedSteps.has('system')) {
+    patch.closeWindowBehavior = choices.closeWindowBehavior
+    patch.closeToTray = choices.closeWindowBehavior === 'tray'
+    patch.launchAtLogin = choices.launchAtLogin
+    patch.taskbarThumbarButtonsEnabled = choices.taskbarThumbarButtonsEnabled
+    patch.globalShortcuts = choices.globalShortcuts
+    patch.smtcEnabled = choices.smtcEnabled
+    patch.discordRpcEnabled = choices.discordRpcEnabled
+    patch.playbackResumeMode = choices.playbackResumeMode
+  }
+  if (visitedSteps.has('local') && choices.usage !== 'streaming') {
     patch.watchLibrary = choices.watchLibrary
     patch.autoAnalyzeBpm = choices.autoAnalyzeBpm
     patch.onlineLyricsFallback = choices.onlineLyricsFallback
   }
-  if (choices.usage !== 'local') {
+  if (visitedSteps.has('streaming') && choices.usage !== 'local') {
     patch.ncmPlaybackQuality = choices.ncmPlaybackQuality
     patch.cachePolicy = { ...choices.cachePolicy }
   }
@@ -147,6 +172,7 @@ export interface OnboardingFlow {
   currentIndex: Ref<number>
   currentStep: ComputedRef<OnboardingStepId>
   direction: Ref<OnboardingDirection>
+  visitedSteps: Ref<Set<OnboardingStepId>>
   isFirstStep: ComputedRef<boolean>
   isLastStep: ComputedRef<boolean>
   canAdvance: ComputedRef<boolean>
@@ -161,11 +187,13 @@ export function useOnboardingFlow(
   const choices = ref<OnboardingChoices>(createDefaultOnboardingChoices(seed))
   const currentIndex = ref(0)
   const direction = ref<OnboardingDirection>('forward')
+  const visitedSteps = ref(new Set<OnboardingStepId>(['welcome']))
 
   const visibleSteps = computed(() => resolveVisibleSteps(choices.value.usage))
   const currentStep = computed(
     () => visibleSteps.value[Math.min(currentIndex.value, visibleSteps.value.length - 1)]
   )
+  watch(currentStep, (step) => visitedSteps.value.add(step), { flush: 'sync' })
   const isFirstStep = computed(() => currentIndex.value === 0)
   const isLastStep = computed(() => currentIndex.value >= visibleSteps.value.length - 1)
   // The usage step gates the rest of the flow; every other step has defaults.
@@ -184,9 +212,14 @@ export function useOnboardingFlow(
   }
 
   function goTo(index: number): void {
-    // Progress dots only allow revisiting steps already passed.
-    if (index >= currentIndex.value || index < 0) return
-    direction.value = 'back'
+    if (
+      index < 0 ||
+      index >= visibleSteps.value.length ||
+      !visitedSteps.value.has(visibleSteps.value[index]) ||
+      index === currentIndex.value
+    )
+      return
+    direction.value = index > currentIndex.value ? 'forward' : 'back'
     currentIndex.value = index
   }
 
@@ -196,6 +229,7 @@ export function useOnboardingFlow(
     currentIndex,
     currentStep,
     direction,
+    visitedSteps,
     isFirstStep,
     isLastStep,
     canAdvance,

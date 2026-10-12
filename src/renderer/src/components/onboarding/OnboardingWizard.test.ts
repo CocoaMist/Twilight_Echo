@@ -9,10 +9,11 @@ const app = readFileSync(new URL('../../App.vue', import.meta.url), 'utf8')
 test('finishing or skipping the wizard always persists the completion flag', () => {
   const flowSource = readFileSync(new URL('./useOnboardingFlow.ts', import.meta.url), 'utf8')
   assert.match(flowSource, /onboardingCompleted: true/)
-  assert.match(wizard, /buildSettingsPatch\(choices\.value\)/)
+  assert.match(wizard, /buildSettingsPatch\(choices\.value, visitedSteps\.value\)/)
   assert.match(wizard, /emit\('finish'/)
   // The skip button routes through the same finish() so it also persists.
-  assert.match(wizard, /class="onb-btn-ghost" @click="finish">\s*\n\s*跳过引导/)
+  assert.match(wizard, /class="onb-btn-ghost"[^>]*@click="\(\) => finish\(\)"/)
+  assert.match(wizard, /保存并开始使用/)
 })
 
 test('app gates the wizard on the completion flag plus an empty library unless tray navigation wins', () => {
@@ -20,14 +21,18 @@ test('app gates the wizard on the completion flag plus an empty library unless t
     app,
     /!pendingNavigation &&\s*!loadedSettings\.onboardingCompleted &&\s*loadedSettings\.libraryFolders\.length === 0/
   )
-  assert.match(app, /<OnboardingWizard v-if="showOnboarding" @finish="handleOnboardingFinish" \/>/)
+  assert.match(
+    app,
+    /<OnboardingWizard[\s\S]*?v-if="showOnboarding"[\s\S]*?@finish="handleOnboardingFinish"[\s\S]*?\/>/
+  )
   assert.match(app, /await updateSettings\(result\.patch\)/)
 })
 
-test('the player bar stays hidden while the wizard is on screen', () => {
+test('the wizard hides the player bar and switches the title bar to close-only controls', () => {
   const hasPlayerBar = app.match(/const hasPlayerBar = computed\([\s\S]*?\n\)/)?.[0]
   assert.ok(hasPlayerBar, 'hasPlayerBar computed must exist')
   assert.match(hasPlayerBar, /!showOnboarding\.value/)
+  assert.match(app, /<TitleBar\s+:close-only="showOnboarding"/)
 })
 
 test('settings can relaunch the wizard without a restart', () => {
@@ -36,7 +41,7 @@ test('settings can relaunch the wizard without a restart', () => {
   assert.match(app, /@reopen-onboarding="handleReopenOnboarding"/)
   assert.match(
     app,
-    /function handleReopenOnboarding\(\): void \{\s*\n\s*closeSettingsPage\(\)\s*\n\s*showOnboarding\.value = true/
+    /function handleReopenOnboarding\(\): void \{[\s\S]*?closeSettingsPage\(\)[\s\S]*?showOnboarding\.value = true/
   )
 })
 
@@ -101,7 +106,8 @@ test('the local step offers online lyric fallback without enabling it silently',
 
 test('the player step owns bar shape and mini-player taskbar behavior', () => {
   const player = readFileSync(new URL('./steps/StepPlayer.vue', import.meta.url), 'utf8')
-  assert.match(player, /playerBar\.mode/)
+  assert.match(player, /resolvePlayerBarPresentation/)
+  assert.match(player, /playingPageMode/)
   assert.match(player, /visibility/)
   assert.match(player, /showInTaskbar/)
   assert.match(player, /alwaysOnTop/)
@@ -130,7 +136,7 @@ test('finishing can hand off to the plugin market, but login wins', () => {
   assert.match(wizard, /v-model:cache-policy="choices\.cachePolicy"/)
   assert.match(
     wizard,
-    /openPluginMarket: choices\.value\.usage !== null && choices\.value\.wantsPluginMarket/
+    /openPluginMarket: !actionOverride && streamingVisited && choices\.value\.wantsPluginMarket/
   )
   assert.match(app, /else if \(result\.openPluginMarket\) \{/)
   assert.match(wizard, /openMiniPlayer:/)

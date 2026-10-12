@@ -1,5 +1,7 @@
 export const IPC = {
   audioEngine: {
+    testOutput: 'audioEngine:testOutput',
+    stopOutputTest: 'audioEngine:stopOutputTest',
     getAutoMixStemCapabilities: 'audioEngine:getAutoMixStemCapabilities',
     installAutoMixStemPack: 'audioEngine:installAutoMixStemPack',
     getAutoMixStemInstallStatus: 'audioEngine:getAutoMixStemInstallStatus',

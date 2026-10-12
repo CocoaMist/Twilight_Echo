@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { scrollMotionBehavior } from '../app/scrollMotion'
+import { documentMotionMode, scrollMotionBehavior } from '../app/scrollMotion'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import SettingsQuickSetup from './settings-page/SettingsQuickSetup.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
@@ -98,6 +98,73 @@ const activeSectionInfo = computed(
 )
 watch(activeSection, (section) => emit('sectionChange', section), { flush: 'sync' })
 const pageRef = ref<HTMLElement | null>(null)
+
+let keyboardCategoryChange = false
+let categoryAnimations: Animation[] = []
+let categoryMotionObserver: MutationObserver | undefined
+let categoryMotionMedia: MediaQueryList | undefined
+let categoryMotionMode = documentMotionMode()
+
+function selectSettingsCategory(section: SectionKey, keyboardNavigation = false): void {
+  keyboardCategoryChange = keyboardNavigation
+  activeSection.value = section
+}
+
+function cancelCategoryMotion(): void {
+  for (const animation of categoryAnimations) animation.cancel()
+  categoryAnimations = []
+}
+
+function settleCategoryMotion(): void {
+  const mode = documentMotionMode()
+  if (mode === categoryMotionMode) return
+  categoryMotionMode = mode
+  cancelCategoryMotion()
+}
+
+watch(
+  activeSection,
+  (section) => {
+    const page = pageRef.value
+    const header = page?.querySelector<HTMLElement>('.settings-page-header')
+    const panel = page?.querySelector<HTMLElement>(`#${section}`)
+    const mode = documentMotionMode()
+    // Continue from the visible fade when another category is chosen mid-transition.
+    const opacity = categoryAnimations.length && header ? getComputedStyle(header).opacity : '0'
+    cancelCategoryMotion()
+    const keyboard = keyboardCategoryChange
+    keyboardCategoryChange = false
+    if (!header || !panel || mode === 'off' || keyboard) return
+    categoryMotionMode = mode
+    const tokens = getComputedStyle(document.documentElement)
+    const duration =
+      mode === 'reduced'
+        ? 120
+        : Math.min(280, parseFloat(tokens.getPropertyValue('--te-motion-return')) || 220)
+    const easing =
+      tokens.getPropertyValue('--te-ease-out-strong').trim() || 'cubic-bezier(0.23, 1, 0.32, 1)'
+    // Opacity keeps search positioning, sticky controls and draft inputs stable.
+    for (const element of [header, panel]) {
+      const animation = element.animate([{ opacity }, { opacity: '1' }], { duration, easing })
+      categoryAnimations.push(animation)
+      const release = (): void => {
+        categoryAnimations = categoryAnimations.filter((running) => running !== animation)
+      }
+      void animation.finished.then(release, release)
+    }
+  },
+  { flush: 'post' }
+)
+
+onMounted(() => {
+  categoryMotionObserver = new MutationObserver(settleCategoryMotion)
+  categoryMotionObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-te-motion']
+  })
+  categoryMotionMedia = window.matchMedia('(prefers-reduced-motion: reduce)')
+  categoryMotionMedia.addEventListener('change', settleCategoryMotion)
+})
 
 function setNavigationPressOrigin(event: PointerEvent): void {
   const button =
@@ -319,6 +386,9 @@ const { setAudioProcessing, refreshAudioOutputState, clearBpmAnalysisFromPlaybac
 
 const { syncExtensions, uiContributions, themeContributions } = useExtensionRegistry()
 const themeStore = useThemeStore()
+const showQuickSetup = computed(
+  () => !settings.value.onboardingCompleted && !settings.value.libraryFolders?.length
+)
 const quickSetupDeviceName = computed(() => {
   const store = audioOutputDspStore
   return (
@@ -895,12 +965,12 @@ function scrollPageToElement(
   })
 }
 
-function scrollToSection(section: SectionKey): void {
+function scrollToSection(section: SectionKey, keyboardNavigation = false): void {
   const revision = ++settingsNavigationRevision
   settingsSearchQuery.value = ''
   settingsNotice.value = ''
   highlightSettingItem(null)
-  activeSection.value = section
+  selectSettingsCategory(section, keyboardNavigation)
   void nextTick(() => {
     if (revision === settingsNavigationRevision)
       pageRef.value?.scrollTo({ top: 0, behavior: 'instant' })
@@ -937,7 +1007,7 @@ function onCategoryKeydown(event: KeyboardEvent, section: SectionKey): void {
   else return
   event.preventDefault()
   const next = sections[nextIndex].key
-  scrollToSection(next)
+  scrollToSection(next, true)
   void nextTick(() => {
     pageRef.value
       ?.querySelector<HTMLElement>(`[data-settings-category="${next}"]`)
@@ -947,7 +1017,8 @@ function onCategoryKeydown(event: KeyboardEvent, section: SectionKey): void {
 }
 
 function onCategorySelect(event: Event): void {
-  scrollToSection(normalizeSettingsSection((event.target as HTMLSelectElement).value))
+  const select = event.target as HTMLSelectElement
+  scrollToSection(normalizeSettingsSection(select.value), select.matches(':focus-visible'))
 }
 
 async function applyNavigationTarget(): Promise<void> {
@@ -961,7 +1032,7 @@ async function applyNavigationTarget(): Promise<void> {
       : null
   const anchor = target?.anchor ?? (!target?.entry ? legacy?.anchor : undefined)
   if (anchor) {
-    activeSection.value = normalizeSettingsSection(props.initialSection)
+    selectSettingsCategory(normalizeSettingsSection(props.initialSection))
     await nextTick()
     if (revision !== settingsNavigationRevision || !pageRef.value) return
     await revealSettingsPath(settingsAnchorDisclosurePath(anchor), revision)
@@ -1026,12 +1097,15 @@ function focusSetting(target: HTMLElement): void {
   }
 }
 
-async function scrollToSearchResult(input: SettingsSearchEntry): Promise<void> {
+async function scrollToSearchResult(
+  input: SettingsSearchEntry,
+  keyboardNavigation = false
+): Promise<void> {
   const revision = ++settingsNavigationRevision
   const entry = resolveSettingsSearchEntry(input)
   settingsSearchQuery.value = ''
   settingsNotice.value = ''
-  activeSection.value = normalizeSettingsSection(entry.section)
+  selectSettingsCategory(normalizeSettingsSection(entry.section), keyboardNavigation)
   revealActiveNavigationItem()
   if (entry.appearanceArea) {
     openAppearanceEditor(entry.appearanceArea)
@@ -1162,7 +1236,7 @@ function handleSettingsSearchEnter(): void {
     activeSearchIndex.value >= 0 && activeSearchIndex.value < results.length
       ? results[activeSearchIndex.value]
       : results[0]
-  scrollToSearchResult(target)
+  scrollToSearchResult(target, true)
 }
 
 function clearSettingsSearch(): void {
@@ -1208,6 +1282,9 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   settingsDisposed = true
+  cancelCategoryMotion()
+  categoryMotionObserver?.disconnect()
+  categoryMotionMedia?.removeEventListener('change', settleCategoryMotion)
   ++settingsNavigationRevision
   if (searchHighlightTimer !== null) window.clearTimeout(searchHighlightTimer)
   if (libraryWatcherStatusTimer !== null) {
@@ -1284,7 +1361,7 @@ onBeforeUnmount(() => {
               :aria-selected="activeSearchIndex === index"
               :class="{ active: activeSearchIndex === index }"
               @mouseenter="activeSearchIndex = index"
-              @click="scrollToSearchResult(result)"
+              @click="scrollToSearchResult(result, $event.detail === 0)"
             >
               <i :class="sections.find((section) => section.key === result.section)?.icon"></i>
               <span class="settings-nav-result-title">{{ result.title }}</span>
@@ -1316,7 +1393,7 @@ onBeforeUnmount(() => {
             :tabindex="activeSection === section.key ? 0 : -1"
             :data-settings-category="section.key"
             @keydown="onCategoryKeydown($event, section.key)"
-            @click="scrollToSection(section.key)"
+            @click="scrollToSection(section.key, $event.detail === 0)"
           >
             <i :class="section.icon"></i>
             <span>{{ section.label }}</span>
@@ -1330,6 +1407,7 @@ onBeforeUnmount(() => {
           <p class="settings-page-description">{{ activeSectionInfo.description }}</p>
         </header>
         <SettingsQuickSetup
+          v-if="showQuickSetup"
           :folder-count="settings.libraryFolders?.length ?? 0"
           :device-name="quickSetupDeviceName"
           :theme-name="quickSetupThemeName"

@@ -5,6 +5,8 @@ import { IPC } from '../../shared/ipcChannels.ts'
 import { resolveAuthorizationBatch } from '../security/authorizationBatch.ts'
 import { DspAuditionManager } from './dspAuditionManager.ts'
 import { createDspAuditionHandlers } from './dspAuditionIpc.ts'
+import { OutputTest } from './outputTest.ts'
+import { AudioEngineServiceBinding } from '../audioEngineServiceClient.ts'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { release } from 'node:os'
@@ -102,6 +104,7 @@ const MAX_AUDIO_QUEUE_ITEMS = MAX_NATIVE_QUEUE_ITEMS
 const MAX_AUDIO_SOURCE_LENGTH = 8192
 const MAX_AUDIO_DEVICE_LENGTH = 512
 let audioDiagnosticRecorder: AudioDiagnosticRecorder | null = null
+let stopOutputTest: () => Promise<void> = () => Promise.resolve()
 function stemWorkerDirectory(): string {
   return join(
     app.isPackaged || app.getAppPath().endsWith('.asar')
@@ -805,6 +808,7 @@ async function initializeAudioEngineRuntime(): Promise<void> {
   })
 
   runtime.audioEngineManager.on('playback-info', (info) => {
+    if (info.state === 'playing') void stopOutputTest()
     if (recordPlaybackDiagnostic(info)) void drainEngineDiagnosticLog('playback-info')
     runtime.mainWindow?.webContents.send(IPC.audioEngine.playbackInfo, info)
     void runtime.pluginManager?.broadcastEvent('player:playback-info', info)
@@ -849,6 +853,46 @@ function registerAudioEngineIpcHandlers(): void {
     assertTrustedIpcSender(event, 'Cancel AutoMix stem installation')
     return stemInstaller.cancel()
   })
+  const outputTest = new OutputTest({
+    context: async (exclusive) => {
+      const engine = await ensureAudioEngineRuntime()
+      const state = await engine.getAudioOutputState()
+      const info = await engine.getPlaybackInfo()
+      return {
+        backend: state.output === 'wasapi' && exclusive ? 'wasapi-exclusive' : state.output,
+        device: state.device,
+        volume: Math.min(info.volume, engine.getDeviceProfiles().volumeCeiling),
+        outputConfig: { ...runtime.appSettings.audioOutputConfig },
+        playing: info.state === 'playing'
+      }
+    },
+    createService: () => {
+      const service = new AudioEngineServiceBinding({
+        serviceEntry: join(__dirname, 'audioEngineService.js')
+      })
+      service.on('crash', () => service.destroy())
+      return service
+    }
+  })
+  stopOutputTest = () => outputTest.stop()
+  ipcMain.handle(IPC.audioEngine.testOutput, async (event, exclusive: unknown) => {
+    assertTrustedIpcSender(event, 'audio output test')
+    if (event.sender !== runtime.mainWindow?.webContents) throw new Error('试听仅可从主窗口发起')
+    if (typeof exclusive !== 'boolean') throw new Error('试听输出模式无效')
+    const cancel = () => outputTest.stop()
+    event.sender.once('destroyed', cancel)
+    try {
+      return await outputTest.play(exclusive)
+    } finally {
+      event.sender.removeListener('destroyed', cancel)
+    }
+  })
+  ipcMain.handle(IPC.audioEngine.stopOutputTest, async (event) => {
+    assertTrustedIpcSender(event, 'stop audio output test')
+    if (event.sender !== runtime.mainWindow?.webContents) throw new Error('试听仅可从主窗口停止')
+    await outputTest.stop()
+  })
+  app.once('before-quit', () => outputTest.stop())
   const auditionManager = new DspAuditionManager({
     context: async () => (await ensureAudioEngineRuntime()).getAuditionContext(),
     apply: async (revision, key, graph) =>
@@ -946,6 +990,7 @@ function registerAudioEngineIpcHandlers(): void {
     const source = await resolveAuthorizedPlaybackSource(
       normalizeIpcString(selection.source, 'audio source', MAX_AUDIO_SOURCE_LENGTH)
     )
+    await outputTest.stop()
     return await (
       await ensureAudioEngineRuntime()
     ).selectQueueItem({ queueToken, index, id, source })
@@ -968,6 +1013,7 @@ function registerAudioEngineIpcHandlers(): void {
       startTime: normalizedStartTime
     })
     try {
+      await outputTest.stop()
       const result = await (
         await ensureAudioEngineRuntime()
       ).play(authorizedSource, normalizedStartTime)
@@ -994,6 +1040,7 @@ function registerAudioEngineIpcHandlers(): void {
 
   ipcMain.handle(IPC.audioEngine.togglePause, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
+    await outputTest.stop()
     await (await ensureAudioEngineRuntime()).togglePause()
   })
 
@@ -1047,11 +1094,13 @@ function registerAudioEngineIpcHandlers(): void {
 
   ipcMain.handle(IPC.audioEngine.next, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
+    await outputTest.stop()
     await (await ensureAudioEngineRuntime()).next()
   })
 
   ipcMain.handle(IPC.audioEngine.previous, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
+    await outputTest.stop()
     await (await ensureAudioEngineRuntime()).previous()
   })
 
