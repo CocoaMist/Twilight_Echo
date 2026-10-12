@@ -39,6 +39,7 @@ export default defineConfig(({ command }) => {
         rollupOptions: {
           output: {
             manualChunks: {
+              'locale-messages': [resolve('src/shared/i18n/messages/index.ts')],
               'media-providers': [resolve('src/renderer/src/providers/index.ts')],
               'playback-session': [
                 resolve('src/renderer/src/app/playbackSessionWriter.ts'),

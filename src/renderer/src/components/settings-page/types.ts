@@ -543,6 +543,30 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     terms: '播放 输出 引擎 DSP 音效 音量 削波 clip 保护 响度 安全 音量与削波保护'
   },
   {
+    id: 'autoMixMode',
+    section: 'playback',
+    title: 'Twilight AutoMix',
+    terms: '播放 混音 智能过渡 automix 自然 natural DJ 安装 分轨包 ZIP'
+  },
+  {
+    id: 'autoMixStemMode',
+    section: 'playback',
+    title: '分轨增强',
+    terms: '播放 automix stems 分轨 分离 人声 贝斯 安装 增强包 ZIP 开启 关闭 内存 显存'
+  },
+  {
+    id: 'autoMixStemDevice',
+    section: 'playback',
+    title: '分轨计算设备',
+    terms: '播放 automix 分轨 计算 设备 GPU CPU 自动 显卡 显存'
+  },
+  {
+    id: 'autoMixStemCacheMiB',
+    section: 'playback',
+    title: '分轨缓存容量',
+    terms: '播放 automix 分轨 缓存 容量 MiB'
+  },
+  {
     id: 'gapless',
     section: 'playback',
     title: '无缝播放',

@@ -4,7 +4,7 @@ import SettingsGroup from './SettingsGroup.vue'
 import { useSettingsDisclosure } from './settingsDisclosureRegistry.ts'
 import { storeToRefs } from 'pinia'
 import AudioDeviceProfilesPanel from '@renderer/components/settings-page/AudioDeviceProfilesPanel.vue'
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useAudioOutputDspStore } from '../../stores/useAudioOutputDspStore'
 import { usePlayerStore } from '../../stores/usePlayerStore'
 import { useSettingsStore } from '../../stores/useSettingsStore'
@@ -24,6 +24,9 @@ import {
   normalizeAutoMixStemCacheMiB,
   normalizeAutoMixStemDevice,
   type AutoMixStemCapabilities,
+  type AutoMixMode,
+  type AutoMixStemInstallStatus,
+  autoMixStemInstallBusy,
   autoMixStatusKeys,
   effectiveAutoMixMode,
   TWILIGHT_AUTOMIX_AVAILABLE,
@@ -110,6 +113,92 @@ const stemCapabilities = ref<AutoMixStemCapabilities>({
 })
 const stemChecking = ref(false)
 const stemApplying = ref(false)
+const stemInstallDialog = ref<HTMLDialogElement>()
+const djModeDialog = ref<HTMLDialogElement>()
+const enableStemsAfterInstall = ref(false)
+function chooseStemInstall(): void {
+  if (stemInstalling.value) return
+  enableStemsAfterInstall.value = settings.value.autoMixStemMode === 'auto'
+  stemInstallDialog.value?.showModal()
+}
+const stemInstallStatus = ref<AutoMixStemInstallStatus>({
+  phase: 'idle',
+  completedBytes: 0,
+  totalBytes: 0
+})
+const stemInstalling = computed(() => autoMixStemInstallBusy(stemInstallStatus.value))
+const stemInstallPercent = computed(() =>
+  stemInstallStatus.value.totalBytes
+    ? Math.min(
+        100,
+        Math.floor(
+          (stemInstallStatus.value.completedBytes / stemInstallStatus.value.totalBytes) * 100
+        )
+      )
+    : 0
+)
+const stemInstallText = computed(() => {
+  const status = stemInstallStatus.value
+  if (status.phase === 'idle') return ''
+  if (status.phase === 'failed') return t(`automix.stems.install.error.${status.reason ?? 'io'}`)
+  const text = t(`automix.stems.install.${status.phase}`)
+  return text + (status.phase === 'extracting' ? ` ${stemInstallPercent.value}%` : '')
+})
+let stemInstallPoll: ReturnType<typeof setTimeout> | undefined
+let stemComponentMounted = false
+async function acceptStemInstallStatus(status: AutoMixStemInstallStatus): Promise<void> {
+  if (!stemComponentMounted) return
+  const wasReady = stemInstallStatus.value.phase === 'ready'
+  stemInstallStatus.value = status
+  if (status.phase === 'ready' && !wasReady) await detectStems(true)
+}
+async function pollStemInstall(): Promise<void> {
+  if (!stemComponentMounted) return
+  try {
+    await acceptStemInstallStatus(await window.api.audioEngine.getAutoMixStemInstallStatus())
+  } catch {
+    /* The install invocation reports IPC failures to the user. */
+  }
+  if (stemComponentMounted && stemInstalling.value)
+    stemInstallPoll = setTimeout(() => void pollStemInstall(), 400)
+}
+async function installStemPack(): Promise<void> {
+  if (stemInstalling.value) return
+  const enableAfterInstall = enableStemsAfterInstall.value
+  stemInstallDialog.value?.close()
+  stemInstallStatus.value = { phase: 'selecting', completedBytes: 0, totalBytes: 0 }
+  clearTimeout(stemInstallPoll)
+  stemInstallPoll = setTimeout(() => void pollStemInstall(), 400)
+  try {
+    const status = await window.api.audioEngine.installAutoMixStemPack()
+    await acceptStemInstallStatus(status)
+    if (status.phase === 'ready') {
+      try {
+        await updateSettings(
+          enableAfterInstall
+            ? { autoMixStemMode: 'auto', autoMixStemDevice: 'auto' }
+            : { autoMixStemMode: 'off' }
+        )
+      } catch (error) {
+        audioEngineError.value = error instanceof Error ? error.message : String(error)
+      }
+    }
+  } catch {
+    await acceptStemInstallStatus({
+      phase: 'failed',
+      completedBytes: 0,
+      totalBytes: 0,
+      reason: 'io'
+    })
+  }
+}
+async function cancelStemInstall(): Promise<void> {
+  try {
+    await acceptStemInstallStatus(await window.api.audioEngine.cancelAutoMixStemInstall())
+  } catch {
+    /* Keep polling the main process until installation completes. */
+  }
+}
 const stemAvailable = computed(() => stemCapabilities.value.status === 'ready')
 const stemDeviceAvailable = computed(() =>
   settings.value.autoMixStemDevice === 'gpu'
@@ -157,7 +246,15 @@ async function detectStems(refresh = false): Promise<void> {
   }
 }
 onMounted(() => {
-  if (TWILIGHT_AUTOMIX_AVAILABLE) void detectStems()
+  stemComponentMounted = true
+  if (TWILIGHT_AUTOMIX_AVAILABLE) {
+    void detectStems()
+    void pollStemInstall()
+  }
+})
+onUnmounted(() => {
+  stemComponentMounted = false
+  clearTimeout(stemInstallPoll)
 })
 async function toggleStems(): Promise<void> {
   if (stemChecking.value || stemApplying.value || !stemDeviceAvailable.value) return
@@ -212,14 +309,22 @@ const autoMixStatusText = computed(() => {
 async function setAutoMixMode(event: Event): Promise<void> {
   if (!TWILIGHT_AUTOMIX_AVAILABLE || autoMixModeApplying.value) return
   const select = event.target as HTMLSelectElement
+  const mode = normalizeAutoMixMode(select.value)
+  if (mode === 'dj' && effectiveAutoMixMode(settings.value.autoMixMode) !== 'dj') {
+    select.value = effectiveAutoMixMode(settings.value.autoMixMode)
+    djModeDialog.value?.showModal()
+    return
+  }
+  await applyAutoMixMode(mode)
+  select.value = effectiveAutoMixMode(settings.value.autoMixMode)
+}
+async function applyAutoMixMode(mode: AutoMixMode): Promise<void> {
   autoMixModeApplying.value = true
   try {
-    await updateSettings({
-      autoMixMode: normalizeAutoMixMode(select.value)
-    })
+    await updateSettings({ autoMixMode: mode })
+    djModeDialog.value?.close()
   } catch (error) {
     audioEngineError.value = error instanceof Error ? error.message : String(error)
-    select.value = effectiveAutoMixMode(settings.value.autoMixMode)
   } finally {
     autoMixModeApplying.value = false
   }
@@ -706,16 +811,28 @@ function setContinuitySampleRate(event: Event): void {
               autoMixStatusText
             }}</span>
           </div>
-          <select
-            :value="effectiveAutoMixMode(settings.autoMixMode)"
-            :disabled="!TWILIGHT_AUTOMIX_AVAILABLE || autoMixModeApplying"
-            aria-label="Twilight AutoMix 模式"
-            @change="setAutoMixMode"
-          >
-            <option value="off">关闭</option>
-            <option value="natural">自然</option>
-            <option value="dj">DJ</option>
-          </select>
+          <div class="inline-controls automix-mode-controls">
+            <button
+              v-if="TWILIGHT_AUTOMIX_AVAILABLE"
+              type="button"
+              class="preset-btn"
+              data-action="install-stem-pack"
+              :disabled="stemInstalling"
+              @click="chooseStemInstall"
+            >
+              {{ t('automix.stems.install.button') }}
+            </button>
+            <select
+              :value="effectiveAutoMixMode(settings.autoMixMode)"
+              :disabled="!TWILIGHT_AUTOMIX_AVAILABLE || autoMixModeApplying"
+              aria-label="Twilight AutoMix 模式"
+              @change="setAutoMixMode"
+            >
+              <option value="off">关闭</option>
+              <option value="natural">自然</option>
+              <option value="dj">DJ</option>
+            </select>
+          </div>
         </div>
         <div
           v-if="TWILIGHT_AUTOMIX_AVAILABLE"
@@ -726,12 +843,37 @@ function setContinuitySampleRate(event: Event): void {
             <strong>{{ t('automix.stems.title') }}</strong>
             <span>{{ t('automix.stems.description') }}</span>
             <span role="status" aria-live="polite">{{ stemDetectionText }}</span>
+            <span v-if="stemEnabled" role="status">{{ t('automix.stems.resourceNotice') }}</span>
+            <span
+              v-if="stemInstallText"
+              :role="stemInstallStatus.phase === 'failed' ? 'alert' : 'status'"
+              aria-live="polite"
+              >{{ stemInstallText }}</span
+            >
+            <span v-if="stemInstalling && stemInstallStatus.fileName">{{
+              stemInstallStatus.fileName
+            }}</span>
+            <progress
+              v-if="stemInstallStatus.phase === 'extracting'"
+              class="automix-install-progress"
+              :value="stemInstallStatus.completedBytes"
+              :max="stemInstallStatus.totalBytes || 1"
+              :aria-label="t('automix.stems.install.extracting')"
+            ></progress>
           </div>
           <div class="inline-controls">
             <button
+              v-if="stemInstalling && stemInstallStatus.phase !== 'selecting'"
               type="button"
               class="preset-btn"
-              :disabled="stemChecking || stemApplying"
+              @click="cancelStemInstall"
+            >
+              {{ t('automix.stems.install.cancel') }}
+            </button>
+            <button
+              type="button"
+              class="preset-btn"
+              :disabled="stemChecking || stemApplying || stemInstalling"
               @click="detectStems(true)"
             >
               {{ t('automix.stems.refresh') }}
@@ -1504,4 +1646,64 @@ function setContinuitySampleRate(event: Event): void {
       </div>
     </SettingsGroup>
   </div>
+  <dialog
+    ref="stemInstallDialog"
+    class="automix-notice-dialog"
+    aria-labelledby="automix-install-title"
+    aria-describedby="automix-install-description"
+  >
+    <h3 id="automix-install-title">{{ t('automix.stems.install.button') }}</h3>
+    <p id="automix-install-description">{{ t('automix.stems.resourceNotice') }}</p>
+    <label class="automix-install-choice">
+      <input
+        v-model="enableStemsAfterInstall"
+        type="checkbox"
+        data-action="enable-stems-after-install"
+      />
+      {{ t('automix.stems.install.enableAfter') }}
+    </label>
+    <p>{{ t('automix.stems.install.enableDescription') }}</p>
+    <div class="inline-controls">
+      <button type="button" class="preset-btn" autofocus @click="stemInstallDialog?.close()">
+        {{ t('automix.notice.cancel') }}
+      </button>
+      <button
+        type="button"
+        class="preset-btn"
+        data-action="choose-stem-zip"
+        @click="installStemPack"
+      >
+        {{ t('automix.stems.install.choose') }}
+      </button>
+    </div>
+  </dialog>
+  <dialog
+    ref="djModeDialog"
+    class="automix-notice-dialog"
+    aria-labelledby="automix-dj-title"
+    aria-describedby="automix-dj-description"
+  >
+    <h3 id="automix-dj-title">{{ t('automix.djNotice.title') }}</h3>
+    <p id="automix-dj-description">{{ t('automix.djNotice.description') }}</p>
+    <div class="inline-controls">
+      <button
+        type="button"
+        class="preset-btn"
+        autofocus
+        :disabled="autoMixModeApplying"
+        @click="djModeDialog?.close()"
+      >
+        {{ t('automix.notice.cancel') }}
+      </button>
+      <button
+        type="button"
+        class="preset-btn"
+        data-action="confirm-dj-mode"
+        :disabled="autoMixModeApplying"
+        @click="applyAutoMixMode('dj')"
+      >
+        {{ t('automix.djNotice.confirm') }}
+      </button>
+    </div>
+  </dialog>
 </template>

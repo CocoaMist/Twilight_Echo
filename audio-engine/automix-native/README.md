@@ -1,6 +1,10 @@
 # Twilight AutoMix native core
 
-The latest evaluation is **1.3.0-automix.8**, using `twilight-rules-5`.
+The latest evaluation is **1.3.0-automix.9**, using the unchanged `twilight-rules-5`.
+It adds local ZIP stem installation, an enable-after-install choice, RAM/VRAM
+notices and centered installation/DJ confirmation dialogs. Real packaged
+installation and restart detection passed for CPU and RTX 5070 Laptop GPU.
+See [EVALUATION-V9.md](EVALUATION-V9.md) for installation and UI validation.
 On the unchanged 36-pair corpus, intelligent preparation is 27/36 Natural
 and 34/36 DJ; 22 DJ transitions last at least 16 seconds. A new original-speed
 short release route requires nearby positive music, uninterrupted decay,
@@ -13,7 +17,7 @@ suitable-pair coverage remain pending.
 The optional paired-stem arrangement and detected Auto/GPU/CPU controls remain
 available; see [EVALUATION-V6.md](EVALUATION-V6.md) and [EVALUATION-V7.md](EVALUATION-V7.md).
 The records below and earlier evaluation documents retain their original
-limitations. The current tested runtime is shipped in the .8 evaluation package.
+limitations. The .8 native runtime is retained in the .9 evaluation package.
 
 Production numerical kernels are handwritten Win64 NASM, with a complete C11
 reference and explicit SSE2/AVX2 dispatch. The existing engine owns transport;

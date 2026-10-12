@@ -11,6 +11,7 @@ import { build } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 const source = readFileSync(new URL('./PlaybackSettingsSection.vue', import.meta.url), 'utf8')
+const settingsCss = readFileSync(new URL('./SettingsPage.css', import.meta.url), 'utf8')
 const require = createRequire(import.meta.url)
 
 test('automatic exclusive release uses the persisted setting and an accessible dependent switch', () => {
@@ -114,7 +115,7 @@ test('playback policy and target rate survive settings reload and component reop
     const files = await readdir(join(directory, 'bundle'))
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><html><head><meta charset="utf-8"></head><body><div id="app"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
+      `<!doctype html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box}${settingsCss}</style></head><body><div id="app"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),
@@ -167,7 +168,13 @@ const expect=(value,message)=>{if(!value)throw Error(message)}
 const settle=async()=>{await nextTick();await new Promise(resolve=>requestAnimationFrame(resolve));await nextTick()}
 window.runPolicyTests=async()=>{
  let detectionCalls=0
- window.api={audioEngine:{getAutoMixStemCapabilities:async()=>{detectionCalls++;return JSON.parse(JSON.stringify(stemCapabilities.value))}}}
+ let installStatus={phase:'idle',completedBytes:0,totalBytes:0},installResult={phase:'cancelled',completedBytes:0,totalBytes:0},finishInstall,holdInstall=false
+ window.api={audioEngine:{
+  getAutoMixStemCapabilities:async()=>{detectionCalls++;return JSON.parse(JSON.stringify(stemCapabilities.value))},
+  getAutoMixStemInstallStatus:async()=>({...installStatus}),
+  installAutoMixStemPack:async(...args)=>{expect(args.length===0,'renderer must not pass filesystem paths');if(holdInstall){installStatus={phase:'extracting',completedBytes:50,totalBytes:100,fileName:'pack.zip'};return new Promise(resolve=>{finishInstall=resolve})}installStatus={...installResult};return {...installStatus}},
+  cancelAutoMixStemInstall:async()=>{installStatus={phase:'cancelled',completedBytes:0,totalBytes:0};finishInstall?.({...installStatus});return {...installStatus}}
+ }}
  const open=ref(true)
  const app=createApp({render:()=>open.value?h(PlaybackSettingsSection):null})
  app.use(createPinia());app.mount('#app');await settle()
@@ -214,6 +221,47 @@ window.runPolicyTests=async()=>{
  expect(appSettings.value.autoMixStemDevice==='gpu','hardware change must retain user preference')
  await change(stemDevice(),'auto')
  expect(!stemSwitch().disabled&&stemSwitch().getAttribute('aria-checked')==='true','Auto choice must restore usable CPU enhancement')
+ const installButton=()=>document.querySelector('[data-setting-id="autoMixMode"] [data-action="install-stem-pack"]')
+ const chooseInstall=async(enable)=>{
+  installButton().click();await settle()
+  const dialog=document.querySelector('dialog[aria-labelledby="automix-install-title"]')
+  expect(dialog.open&&dialog.textContent.includes('内存')&&dialog.textContent.includes('显存'),'install options must explain RAM / VRAM usage before choosing ZIP')
+  const bounds=dialog.getBoundingClientRect()
+  expect(Math.abs(bounds.x+bounds.width/2-document.documentElement.clientWidth/2)<2&&Math.abs(bounds.y+bounds.height/2-document.documentElement.clientHeight/2)<2,'install dialog must remain centered under the application margin reset: '+JSON.stringify({x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height,viewport:[innerWidth,innerHeight],client:[document.documentElement.clientWidth,document.documentElement.clientHeight]}))
+  const checkbox=dialog.querySelector('input[type="checkbox"]')
+  if(enable!==undefined){checkbox.checked=enable;checkbox.dispatchEvent(new Event('change',{bubbles:true}));await settle()}
+  dialog.querySelector('[data-action="choose-stem-zip"]').click();await settle()
+ }
+ expect(installButton()?.textContent.includes('安装分轨包'),'installer must appear directly in main AutoMix row')
+ const savedPreferences=JSON.stringify(appSettings.value)
+ await chooseInstall()
+ expect(document.body.textContent.includes('已取消安装'),'picker cancellation must be explained')
+ expect(JSON.stringify(appSettings.value)===savedPreferences,'picker cancellation must preserve user preferences')
+ installResult={phase:'failed',completedBytes:0,totalBytes:0,reason:'integrity'}
+ await chooseInstall()
+ expect(document.querySelector('[role="alert"]')?.textContent.includes('文件校验不通过'),'installation failure must have accessible actionable feedback')
+ expect(!installButton().disabled,'failed installation must allow retry')
+ holdInstall=true
+ await chooseInstall();await new Promise(resolve=>setTimeout(resolve,450));await settle()
+ expect(installButton().disabled&&document.querySelector('progress')?.value===50,'busy installation must expose byte progress and prevent duplicate requests')
+ open.value=false;await settle();open.value=true;await settle()
+ expect(document.querySelector('progress')?.value===50&&installButton().disabled,'reopening settings must recover active installation status')
+ const cancelButton=[...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='取消安装')
+ expect(cancelButton,'active installation must allow cancellation')
+ cancelButton.click();await settle()
+ expect(document.body.textContent.includes('已取消安装')&&!installButton().disabled,'cancellation must allow retry')
+ await chooseInstall()
+ stemCapabilities.value={status:'ready',cpu:true,gpu:true,packs:[{directory:'installed',cpu:true,gpu:true,gpuName:'Installed GPU'}]}
+ installStatus={phase:'ready',completedBytes:100,totalBytes:100,capabilities:{cpu:true,gpu:true}}
+ finishInstall({...installStatus});await settle()
+ expect(document.body.textContent.includes('安装完成')&&!stemDevice().querySelector('option[value="gpu"]').disabled,'successful install must refresh GPU / CPU choices immediately')
+ expect(JSON.stringify(appSettings.value)===savedPreferences,'installer must preserve mode/device/enable choices')
+ holdInstall=false;installResult={...installStatus}
+ await chooseInstall(false)
+ expect(appSettings.value.autoMixStemMode==='off','unchecked install choice must keep enhancement off after successful install')
+ await chooseInstall(true)
+ expect(appSettings.value.autoMixStemMode==='auto'&&appSettings.value.autoMixStemDevice==='auto','checked install choice must enable automatic GPU / CPU enhancement')
+ expect(document.querySelector('[data-setting-id="autoMixStemMode"]').textContent.includes('显存'),'enabled enhancement must retain resource notice')
  expect(stemCache().value==='512','stem cache default must be 512 MiB')
  for(const capacity of ['0','256','512','1024','2048']){
   await change(stemCache(),capacity)
@@ -222,7 +270,20 @@ window.runPolicyTests=async()=>{
   expect(stemCache().value===capacity,'stem cache choice was lost on component reopen')
  }
  for(const desired of ['natural','dj','off']){
+  const previousMode=appSettings.value.autoMixMode
   await change(autoMix(),desired)
+  if(desired==='dj'){
+   const dialog=document.querySelector('dialog[aria-labelledby="automix-dj-title"]')
+   expect(dialog.open&&dialog.textContent.includes('大幅跳过')&&dialog.textContent.includes('重叠混音'),'entering DJ must explain skipped content and mixing')
+   const bounds=dialog.getBoundingClientRect()
+   expect(Math.abs(bounds.x+bounds.width/2-document.documentElement.clientWidth/2)<2&&Math.abs(bounds.y+bounds.height/2-document.documentElement.clientHeight/2)<2,'DJ dialog must appear at viewport center')
+   expect(appSettings.value.autoMixMode===previousMode&&autoMix().value===previousMode,'DJ must await confirmation before changing mode')
+   Array.from(dialog.querySelectorAll('button')).find(button=>button.textContent.trim()==='取消').click();await settle()
+   expect(!dialog.open&&appSettings.value.autoMixMode===previousMode,'cancelled DJ confirmation must retain original mode')
+   await change(autoMix(),'dj')
+   dialog.querySelector('[data-action="confirm-dj-mode"]').click();await settle()
+   expect(!dialog.open,'successful DJ confirmation must dismiss the dialog')
+  }
   expect(appSettings.value.autoMixMode===desired,'manual AutoMix choice did not reach the settings boundary')
   open.value=false;await settle();reload();await settle();open.value=true;await settle()
   expect(autoMix().value===desired&&!autoMix().disabled,'manual AutoMix choice was lost on component reopen')
