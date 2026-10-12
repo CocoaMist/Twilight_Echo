@@ -22,11 +22,15 @@ function installDom(options: {
   playerBarHidden?: 'true' | 'false'
   playerBarMenuOpen?: boolean
   playerBarRect?: FakeRect
+  playerSurfaceRect?: FakeRect
   sideMenuRect?: FakeRect
+  toolContentRects?: FakeRect[]
   playerBarMissing?: boolean
   /** Untransformed left edge, i.e. how far a preset floats the menu inward. */
   sideMenuInset?: number
+  sideMenuParentLeft?: number
   viewportWidth?: number
+  viewportHeight?: number
   shellLayout?: 'classic' | 'custom'
 }): void {
   const playerBarRect = options.playerBarRect ?? {
@@ -45,6 +49,8 @@ function installDom(options: {
   }
   const playerBar = {
     dataset: { tePlaybarHidden: options.playerBarHidden ?? 'false' },
+    querySelector: () =>
+      options.playerSurfaceRect ? { getBoundingClientRect: () => options.playerSurfaceRect } : null,
     classList: {
       contains: (name: string) => name === 'menu-open' && options.playerBarMenuOpen === true
     },
@@ -58,13 +64,34 @@ function installDom(options: {
   const sideMenu = {
     offsetLeft: options.sideMenuInset ?? 0,
     offsetWidth: 216,
-    getBoundingClientRect: () => sideMenuRect
+    offsetParent:
+      options.sideMenuParentLeft === undefined
+        ? null
+        : { getBoundingClientRect: () => ({ left: options.sideMenuParentLeft }) },
+    getBoundingClientRect: () => sideMenuRect,
+    querySelectorAll: () =>
+      (
+        options.toolContentRects ?? [
+          {
+            left: sideMenuRect.left + 24,
+            right: sideMenuRect.left + 112,
+            top: sideMenuRect.bottom - 44,
+            bottom: sideMenuRect.bottom - 22,
+            height: 22
+          }
+        ]
+      ).map((rect) => ({
+        getBoundingClientRect: () => ({ ...rect, width: rect.right - rect.left })
+      }))
   }
   const g = globalThis as Record<string, unknown>
-  g.window = { innerHeight: 800, innerWidth: options.viewportWidth ?? 1200 }
+  g.window = {
+    innerHeight: options.viewportHeight ?? 800,
+    innerWidth: options.viewportWidth ?? 1200
+  }
   g.document = {
     hidden: false,
-    documentElement: { dataset: { teShellLayout: options.shellLayout ?? 'classic' } },
+    documentElement: { dataset: { teShellLayout: options.shellLayout ?? 'custom' } },
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: (selector: string) => {
@@ -157,12 +184,85 @@ test('navigation tools do not reserve the playback band twice in an inset shell'
   clearance.dispose()
 })
 
-test('overlay navigation at 760px reserves room above the full-width playbar', () => {
+test('custom overlay navigation at 760px reserves room above the full-width playbar', () => {
   assert.equal(measure({ playerBarMenuOpen: true, viewportWidth: 760 }), 110)
 })
 
 test('temporary navigation in a wide custom shell clears its grid-positioned playbar', () => {
   assert.equal(measure({ playerBarMenuOpen: true, shellLayout: 'custom' }), 110)
+})
+
+test('window tools clear the painted player at every size while the sidebar surface stays full height', () => {
+  for (const [viewportWidth, viewportHeight] of [
+    [760, 820],
+    [960, 820],
+    [1280, 720],
+    [1920, 1080]
+  ]) {
+    for (const playerBarHidden of ['false', 'true'] as const) {
+      installDom({
+        shellLayout: 'classic',
+        viewportWidth,
+        viewportHeight,
+        playerBarHidden,
+        playerBarRect: {
+          top: viewportHeight - 100,
+          bottom: viewportHeight - 20,
+          left: 18,
+          right: viewportWidth - 18,
+          height: 80
+        },
+        sideMenuRect: {
+          top: 40,
+          bottom: viewportHeight,
+          left: 0,
+          right: 216,
+          height: viewportHeight - 40
+        }
+      })
+      const clearance = useSideMenuClearance({
+        showLocalSidebar: ref(true),
+        hasPlayerBar: ref(true)
+      })
+      clearance.measureSideMenuClearance()
+      assert.equal(clearance.sideMenuBottomOffset.value, 0)
+      assert.equal(clearance.sideMenuToolsClearance.value, playerBarHidden === 'true' ? 0 : 110)
+      assert.equal(clearance.playerBottomClearance.value, playerBarHidden === 'true' ? 0 : 100)
+      clearance.dispose()
+    }
+  }
+})
+
+test('a centred player surface leaves tools at the window bottom despite its full-width shell', () => {
+  installDom({
+    shellLayout: 'classic',
+    viewportWidth: 1920,
+    viewportHeight: 1080,
+    playerBarRect: { top: 980, bottom: 1060, left: 18, right: 1902, height: 80 },
+    playerSurfaceRect: { top: 980, bottom: 1060, left: 370, right: 1550, height: 80 }
+  })
+  const clearance = useSideMenuClearance({ showLocalSidebar: ref(true), hasPlayerBar: ref(true) })
+  clearance.measureSideMenuClearance()
+  assert.equal(clearance.sideMenuBottomOffset.value, 0)
+  assert.equal(clearance.sideMenuToolsClearance.value, 0)
+  clearance.dispose()
+})
+
+test('player overlap with trailing sidebar whitespace keeps icons and labels at the bottom', () => {
+  for (const playerLeft of [150, 122, 110, 18]) {
+    installDom({
+      shellLayout: 'classic',
+      sideMenuRect: { top: 40, bottom: 800, left: 0, right: 216, height: 760 },
+      playerSurfaceRect: { top: 700, bottom: 780, left: playerLeft, right: 1182, height: 80 }
+    })
+    const clearance = useSideMenuClearance({ showLocalSidebar: ref(true), hasPlayerBar: ref(true) })
+    for (let pass = 0; pass < 3; pass++) {
+      clearance.measureSideMenuClearance()
+      assert.equal(clearance.sideMenuBottomOffset.value, 0)
+      assert.equal(clearance.sideMenuToolsClearance.value, playerLeft >= 122 ? 0 : 110)
+    }
+    clearance.dispose()
+  }
 })
 
 test('sidebar clearance still handles a missing playbar and a non-overlapping one', () => {
@@ -171,6 +271,54 @@ test('sidebar clearance still handles a missing playbar and a non-overlapping on
     measure({
       // Bar sits to the right of the sidebar: no horizontal overlap.
       playerBarRect: { top: 700, bottom: 780, left: 400, right: 1200, height: 80 }
+    }),
+    0
+  )
+})
+
+test('sidebar opening and closing retain the footer height while translating off screen', () => {
+  for (const shellLayout of ['classic', 'custom'] as const) {
+    for (const shift of [0, -24, -120, -215, -216, -120, 0]) {
+      const options = {
+        shellLayout,
+        viewportWidth: 760,
+        playerBarRect: { top: 700, bottom: 780, left: 18, right: 1182, height: 80 },
+        sideMenuRect: { top: 40, bottom: 800, left: shift, right: 216 + shift, height: 760 }
+      }
+      installDom(options)
+      const clearance = useSideMenuClearance({
+        showLocalSidebar: ref(true),
+        hasPlayerBar: ref(true)
+      })
+      clearance.measureSideMenuClearance()
+      assert.equal(
+        clearance.sideMenuBottomOffset.value,
+        shellLayout === 'classic' ? 0 : 110,
+        `horizontal translation ${shift}px must not reset the footer clearance`
+      )
+      assert.equal(clearance.sideMenuToolsClearance.value, 110)
+      clearance.dispose()
+    }
+  }
+})
+
+test('sidebar layout measurements retain the custom shell parent origin', () => {
+  assert.equal(
+    measure({
+      shellLayout: 'custom',
+      sideMenuInset: 12,
+      sideMenuParentLeft: 300,
+      sideMenuRect: { top: 40, bottom: 800, left: 96, right: 312, height: 760 },
+      playerBarRect: { top: 700, bottom: 780, left: 300, right: 600, height: 80 }
+    }),
+    110
+  )
+  assert.equal(
+    measure({
+      shellLayout: 'custom',
+      sideMenuParentLeft: 300,
+      sideMenuRect: { top: 40, bottom: 800, left: 84, right: 300, height: 760 },
+      playerBarRect: { top: 700, bottom: 780, left: 18, right: 250, height: 80 }
     }),
     0
   )
@@ -189,6 +337,7 @@ test('sidebar clearance settles instead of oscillating once the menu is lifted',
   let appliedOffset = 0
   const playerBar = {
     dataset: { tePlaybarHidden: 'false' },
+    querySelector: () => null,
     classList: { contains: () => false },
     getBoundingClientRect: () => playerBarRect
   }
@@ -207,7 +356,7 @@ test('sidebar clearance settles instead of oscillating once the menu is lifted',
   g.window = { innerHeight: 800 }
   g.document = {
     hidden: false,
-    documentElement: { dataset: { teShellLayout: 'classic' } },
+    documentElement: { dataset: { teShellLayout: 'custom' } },
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: (selector: string) => {

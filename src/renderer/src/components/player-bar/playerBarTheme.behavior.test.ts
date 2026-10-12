@@ -207,7 +207,7 @@ const mountDashboard=(glass=false)=>{
   const home=document.createElement('div')
   home.className='home'
   home.style.setProperty('--play-button-color','#cc9900')
-  home.innerHTML='<div class="hero-progress"><button class="hero-progress-track"><span style="transform:scaleX(0.42)"></span></button></div><div class="hero-actions"><button class="transport-button transport-play">Play</button></div>'
+  home.innerHTML='<div class="hero-progress"><button class="hero-progress-track"><span style="transform:scaleX(0.42)"></span></button></div><div class="hero-actions is-current"><button class="transport-button transport-play">Play</button></div>'
   mountIcon(home.querySelector('.transport-play'),'play')
   for(const element of [home,...home.querySelectorAll('*')])element.setAttribute('data-v-test','')
   document.body.append(home)
@@ -269,7 +269,7 @@ const checkDashboardDefaults=()=>{
   const ink=style.getPropertyValue('--home-ink')
   checkBackground(track,'color-mix(in srgb, '+ink+' 12%, transparent)','reset restores dashboard track','::before')
   checkBackground(fill,'linear-gradient(90deg, '+style.getPropertyValue('--home-accent')+', '+style.getPropertyValue('--te-accent-cyan')+')','reset restores dashboard fill')
-  checkBackground(button,'var(--te-transport-play-surface)','reset restores quiet dashboard play surface')
+  checkBackground(button,'linear-gradient(145deg, color-mix(in srgb, '+style.getPropertyValue('--home-accent')+' 82%, '+style.getPropertyValue('--home-card')+'), color-mix(in srgb, '+style.getPropertyValue('--home-accent')+' 90%, '+ink+'))','reset restores themed dashboard play surface')
 }
 window.runPlayerThemeTests=async()=>{
   await boot()
@@ -282,15 +282,14 @@ window.runPlayerThemeTests=async()=>{
       const rect=button.getBoundingClientRect()
       expect(rect.width>=rect.height*1.6&&rect.height>=32,'standard transport is a quiet capsule with a usable desktop hit target')
       checkBackground(button,'var(--te-transport-play-surface)','default standard play surface stays neutral across covers')
-      const expected=background(button)
-      const expectedIcon=getComputedStyle(button).color
       mountDashboard()
       bar.style.setProperty('--play-button-color',cover)
       await settle()
       const homeRect=button.getBoundingClientRect()
-      expect(Math.abs(homeRect.width-rect.width)<0.6&&Math.abs(homeRect.height-rect.height)<0.6,'dashboard and standard capsule dimensions match')
-      expect(background(button)===expected,tone+' dashboard and standard play colors match after cover changes')
-      expect(getComputedStyle(button).color===expectedIcon,tone+' dashboard and standard play icon colors match')
+      expect(homeRect.width>=44&&homeRect.height>=44,'dashboard transport keeps a usable hit target')
+      const homeStyle=getComputedStyle(bar)
+      checkBackground(button,'linear-gradient(145deg, color-mix(in srgb, '+homeStyle.getPropertyValue('--home-accent')+' 82%, '+homeStyle.getPropertyValue('--home-card')+'), color-mix(in srgb, '+homeStyle.getPropertyValue('--home-accent')+' 90%, '+homeStyle.getPropertyValue('--home-ink')+'))',tone+' dashboard play surface follows its theme after cover changes')
+      expect(getComputedStyle(button).color!==getComputedStyle(button).backgroundColor,tone+' dashboard play icon contrasts with its surface')
     }
   }
   const profile=store.createProfile('Player colors')
@@ -400,7 +399,7 @@ window.checkNavigationProportions=async()=>{
     await new Promise(requestAnimationFrame)
     const frame=menu.getBoundingClientRect(),row=item.getBoundingClientRect(),glyph=icon.getBoundingClientRect()
     expect(Math.abs(frame.top-40)<0.6,'sidebar begins below the fixed 40px title bar')
-    const expected=style==='rail'?72:style==='compact'?size*192/14:Math.max(size*224/14,Math.min(innerWidth*.18,size*260/14))
+    const expected=style==='rail'?72:style==='compact'?size*192/14:Math.max(size*208/14,Math.min(innerWidth*.16,size*236/14))
     expect(Math.abs(frame.width-expected)<1,'navigation mode width survives inline theme tokens: '+style+' '+frame.width+'/'+expected)
     expect(Math.abs(parseFloat(getComputedStyle(main).paddingLeft)-(innerWidth>900?frame.width:0))<1,'content reserves sidebar width on desktop and overlays at narrow widths: '+JSON.stringify({style,width:frame.width,padding:getComputedStyle(main).paddingLeft,window:innerWidth}))
     expect(glyph.left>=frame.left+8&&glyph.right<=frame.right-8,'navigation icon stays inside sidebar padding')
@@ -450,7 +449,7 @@ window.checkSharedPlaybackGlyphs=async()=>{
 }
 window.checkSidebarTransition=async()=>{
   const sidebar=document.createElement('aside')
-  sidebar.style.cssText='position:fixed;inset:40px auto 0 0;width:216px;z-index:1000;background:#456;transition:transform .32s;'
+  sidebar.style.cssText='position:fixed;inset:40px auto 0 0;width:var(--te-menu-width);z-index:1000;background:#456;transition:transform .32s;'
   document.body.append(sidebar)
   try{
     for(const tone of ['pureWhite','dark'])for(const mode of ['standard','mini','compact']){
@@ -463,7 +462,6 @@ window.checkSidebarTransition=async()=>{
       expect(Number(getComputedStyle(shell).zIndex)>Number(getComputedStyle(sidebar).zIndex),'player stays above navigation: '+mode)
       for(const open of [true,false,true,false]){
         sidebar.style.transform=open?'translateX(0)':'translateX(-100%)'
-        // Old integrations may still toggle this class; it must have no effect.
         shell.classList.toggle('menu-open',open)
         const started=performance.now()
         do{

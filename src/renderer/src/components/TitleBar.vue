@@ -116,6 +116,17 @@ function close(): void {
     }"
   >
     <div class="title-bar-background" aria-hidden="true"></div>
+    <div v-if="canGoBack && !preview" class="title-bar-back no-drag" @pointerdown="setPressOrigin">
+      <button
+        type="button"
+        class="back-btn"
+        :title="backHint ?? '返回'"
+        aria-label="返回"
+        @click="canGoBack && $emit('back')"
+      >
+        <TitleBarIcon name="arrow_left" />
+      </button>
+    </div>
     <div class="title-bar-start no-drag" @pointerdown="setPressOrigin">
       <button
         type="button"
@@ -143,29 +154,6 @@ function close(): void {
         />
         <TitleBarIcon v-else name="person" />
       </button>
-    </div>
-    <!-- Keep commands anchored when a return handler becomes available. -->
-    <div
-      class="title-bar-back"
-      :class="{
-        'title-bar-back-visible': canGoBack && !preview,
-        'no-drag': canGoBack && !preview
-      }"
-      :inert="!canGoBack || preview"
-      @pointerdown="setPressOrigin"
-    >
-      <Transition name="title-back-fade">
-        <button
-          type="button"
-          v-if="canGoBack && !preview"
-          class="back-btn"
-          :title="backHint ?? '返回'"
-          aria-label="返回"
-          @click="canGoBack && $emit('back')"
-        >
-          <TitleBarIcon name="arrow_left" />
-        </button>
-      </Transition>
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
       <div class="title-bar-tools" role="group" aria-label="应用工具">
@@ -420,10 +408,6 @@ html[data-theme='dark'] .title-bar-liquid .title-bar-background {
   flex-shrink: 0;
 }
 
-.title-bar-back-visible {
-  overflow: visible;
-}
-
 .back-btn {
   display: flex;
   align-items: center;
@@ -442,16 +426,6 @@ html[data-theme='dark'] .title-bar-liquid .title-bar-background {
 
 .back-btn:hover {
   background: var(--te-shell-control-hover);
-}
-
-.title-back-fade-enter-active,
-.title-back-fade-leave-active {
-  transition: opacity 0.18s ease;
-}
-
-.title-back-fade-enter-from,
-.title-back-fade-leave-to {
-  opacity: 0;
 }
 
 .title-bar-glass .back-btn {

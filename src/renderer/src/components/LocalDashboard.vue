@@ -154,6 +154,10 @@ const heroIsCurrent = computed(
   () => !!currentTrack.value && heroTrack.value?.id === currentTrack.value.id
 )
 
+const heroPlayLabel = computed(() =>
+  !heroIsCurrent.value ? '开始收听' : isPlaying.value ? '暂停' : '播放'
+)
+
 const heroCoverKey = computed(
   () =>
     `hero:${heroTrack.value?.id ?? 'none'}:${heroTrack.value?.cover ?? ''}:${heroTrack.value?.coverSource ?? ''}`
@@ -897,7 +901,13 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
 
               <DashboardPlaybackProgress v-if="heroIsCurrent" />
 
-              <div v-if="heroTrack" class="hero-actions">
+              <div
+                v-if="heroTrack"
+                class="hero-actions"
+                :class="{ 'is-current': heroIsCurrent }"
+                role="group"
+                aria-label="播放控制"
+              >
                 <button
                   type="button"
                   v-if="heroIsCurrent"
@@ -911,11 +921,15 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <button
                   type="button"
                   class="transport-button transport-play"
-                  :title="heroIsCurrent && isPlaying ? '暂停' : '播放'"
-                  :aria-label="heroIsCurrent && isPlaying ? '暂停' : '播放'"
+                  :class="{ 'is-idle': !heroIsCurrent }"
+                  :title="heroPlayLabel"
+                  :aria-label="heroPlayLabel"
                   @click="heroIsCurrent ? togglePlay() : playDashboardTrack(heroTrack)"
                 >
                   <PlaybackIcon :name="heroIsCurrent && isPlaying ? 'pause' : 'play'" />
+                  <span v-if="!heroIsCurrent" class="transport-play-label">{{
+                    heroPlayLabel
+                  }}</span>
                 </button>
                 <button
                   type="button"
