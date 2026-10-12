@@ -108,7 +108,10 @@ app.whenReady().then(async()=>{
     const geometry=await win.webContents.executeJavaScript('window.prepareFullMaterialRaster('+JSON.stringify(tone)+','+JSON.stringify(material)+')');
     const capture=await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true});
     const image=nativeImage.createFromBuffer(Buffer.from(capture.data,'base64'));
-    if(image.getSize().width!==Math.round(1100*deviceScaleFactor))throw Error('material screenshot did not preserve physical DPI');
+    const viewport=await win.webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
+    const expectedSize={width:Math.round(viewport.width*deviceScaleFactor),height:Math.round(viewport.height*deviceScaleFactor)};
+    const rasterSize=image.getSize();
+    if(Math.abs(rasterSize.width-expectedSize.width)>1||Math.abs(rasterSize.height-expectedSize.height)>1)throw Error('material screenshot did not preserve physical DPI: '+JSON.stringify({density:deviceScaleFactor,viewport,expectedSize,actual:rasterSize}));
     captures.push({deviceScaleFactor,tone,material,geometry,pixels:image.getSize()});
     if(process.env.TE_BOHR_EVIDENCE_DIR)fs.writeFileSync(require('node:path').join(process.env.TE_BOHR_EVIDENCE_DIR,'material-'+tone+'-'+material+'-'+deviceScaleFactor+'.png'),image.toPNG());
    }

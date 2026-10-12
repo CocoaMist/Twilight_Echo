@@ -117,7 +117,10 @@ app.whenReady().then(async()=>{
     await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     const screenshot=await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true});
     const image=nativeImage.createFromBuffer(Buffer.from(screenshot.data,'base64'));
-    if(image.getSize().width!==Math.round(1112*density))throw Error('pixel probe did not capture the physical DPI raster');
+    const viewport=await win.webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
+    const expectedSize={width:Math.round(viewport.width*density),height:Math.round(viewport.height*density)};
+    const rasterSize=image.getSize();
+    if(Math.abs(rasterSize.width-expectedSize.width)>1||Math.abs(rasterSize.height-expectedSize.height)>1)throw Error('pixel probe did not capture the physical DPI raster: '+JSON.stringify({density:density,viewport,expectedSize,actual:rasterSize}));
     if(process.env.TE_CONTOUR_EVIDENCE_DIR){fs.writeFileSync(path.join(process.env.TE_CONTOUR_EVIDENCE_DIR,'contour-latest.png'),image.toPNG());fs.writeFileSync(path.join(process.env.TE_CONTOUR_EVIDENCE_DIR,'contour-latest-boxes.json'),JSON.stringify({density,tone,material,offset,boxes}));}
     // Use Chromium's single native rounded contour as the reference. It accounts
     // for border pixel snapping at fractional heights and fractional placement.

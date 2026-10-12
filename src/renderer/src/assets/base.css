@@ -1,4 +1,9 @@
 :root {
+  --te-bohr-light: rgb(255 255 255 / 58%);
+  --te-bohr-shoulder: rgb(255 255 255 / 18%);
+  --te-bohr-edge: rgb(18 24 32 / 22%);
+  --te-bohr-contact: 0 2px 5px rgb(18 24 32 / 10%);
+  --te-bohr-elevation: 0 12px 32px rgb(18 24 32 / 14%);
   --te-titlebar-height: 40px;
   --te-titlebar-inset: 40px;
   --te-transport-play-text: var(--te-shell-control-text);
@@ -3858,4 +3863,13 @@ html[data-te-liquid-glass-coverage='expanded']
 
 :root {
   --te-page-gutter: clamp(16px, 3vw, 32px);
+}
+
+/* Bohr material uses the same foundation colors at every surface. */
+html[data-theme='dark'] {
+  --te-bohr-light: rgb(255 255 255 / 28%);
+  --te-bohr-shoulder: rgb(255 255 255 / 7%);
+  --te-bohr-edge: rgb(0 0 0 / 52%);
+  --te-bohr-contact: 0 2px 5px rgb(0 0 0 / 30%);
+  --te-bohr-elevation: 0 12px 32px rgb(0 0 0 / 36%);
 }

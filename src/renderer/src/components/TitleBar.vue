@@ -437,7 +437,7 @@ html[data-theme='dark'] .title-bar-liquid .title-bar-background {
 }
 
 .title-bar-glass .back-btn {
-  color: #fff;
+  color: var(--te-on-accent);
 }
 
 .title-bar-glass .back-btn:hover {

@@ -1142,9 +1142,9 @@ body.te-no-blur .onb-segmented {
   align-items: center;
   gap: 7px;
   padding: 8px 14px;
-  border: 1px solid rgba(var(--onb-accent-rgb), 0.38);
+  border: 1px solid color-mix(in srgb, var(--onb-accent) 38%, transparent);
   border-radius: 999px;
-  background: rgba(var(--onb-accent-rgb), 0.08);
+  background: color-mix(in srgb, var(--onb-accent) 8%, transparent);
   color: var(--onb-accent);
   font: inherit;
   font-weight: 600;
@@ -1156,7 +1156,7 @@ body.te-no-blur .onb-segmented {
 
 .onb-btn-secondary:hover:not(:disabled) {
   transform: translateY(-2px);
-  background: rgba(var(--onb-accent-rgb), 0.14);
+  background: color-mix(in srgb, var(--onb-accent) 14%, transparent);
 }
 .onb-btn-secondary:active:not(:disabled) {
   transform: scale(0.97);
@@ -1170,10 +1170,10 @@ body.te-no-blur .onb-segmented {
 }
 .onb-audio-test-error {
   max-width: 330px;
-  color: #be123c;
+  color: var(--te-danger-soft-fg);
 }
 html[data-theme='dark'] .onb-audio-test-error {
-  color: #fda4af;
+  color: var(--te-danger-soft-fg);
 }
 
 @media (max-width: 620px) {
@@ -1816,9 +1816,9 @@ body.te-no-blur .onb-panel {
 .onb-summary-item {
   min-width: 0;
   padding: 12px 14px;
-  border: 1px solid rgba(var(--onb-accent-rgb), 0.12);
+  border: 1px solid color-mix(in srgb, var(--onb-accent) 12%, transparent);
   border-radius: 14px;
-  background: rgba(var(--onb-accent-rgb), 0.035);
+  background: color-mix(in srgb, var(--onb-accent) 3.5%, transparent);
 }
 
 .onb-summary-item.is-wide {
@@ -1851,7 +1851,7 @@ body.te-no-blur .onb-panel {
   cursor: pointer;
 }
 .onb-summary-heading button:hover {
-  background: rgba(var(--onb-accent-rgb), 0.1);
+  background: color-mix(in srgb, var(--onb-accent) 10%, transparent);
 }
 .onb-summary-item > strong {
   display: block;
@@ -1886,7 +1886,7 @@ body.te-no-blur .onb-panel {
   white-space: nowrap;
   padding: 3px 7px;
   border-radius: 6px;
-  background: rgba(var(--onb-accent-rgb), 0.08);
+  background: color-mix(in srgb, var(--onb-accent) 8%, transparent);
   color: var(--onb-muted);
   font-size: 10px;
 }
@@ -1901,14 +1901,14 @@ body.te-no-blur .onb-panel {
   max-width: 560px;
   margin: 0;
   padding: 8px 12px;
-  border: 1px solid rgba(225, 29, 72, 0.28);
+  border: 1px solid color-mix(in srgb, var(--te-control-danger) 28%, transparent);
   border-radius: 10px;
-  background: rgba(225, 29, 72, 0.08);
-  color: #be123c;
+  background: var(--te-danger-soft-bg);
+  color: var(--te-danger-soft-fg);
   font-size: 12px;
 }
 html[data-theme='dark'] .onb-save-error {
-  color: #fda4af;
+  color: var(--te-danger-soft-fg);
 }
 
 @media (max-width: 560px) {
