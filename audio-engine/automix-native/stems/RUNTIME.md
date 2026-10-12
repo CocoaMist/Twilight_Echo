@@ -1,7 +1,7 @@
-# AutoMix enhancement 2.2
+# Stem worker runtime and cache contract
 
-This worker keeps the 2.1 runtime, htdemucs checkpoint, FP32 inference, 7.8 s
-segments, 25% overlap, shifts=0 and complete source transition context. Material
+The worker uses the pinned runtime and htdemucs checkpoint, FP32 inference,
+7.8 s segments, 25% overlap, shifts=0 and complete source transition context. Material
 and cache tickets remain version 2. Python bytecode output is disabled.
 
 Both input digests, source ranges, model digest and cache arrays are validated
@@ -20,7 +20,7 @@ would change the samples.
 
 Input PCM and cache arrays use read-only memory maps. Validation and envelope
 generation operate in 65,536-frame blocks at absolute sample positions. Mixing
-preserves 2.1's float32 addition followed by float64 gains and final float32
+uses float32 addition followed by float64 gains and final float32
 interleaving. Inference still requires whole-context normalization/resampling;
 it is not advertised as a constant-memory model.
 
@@ -40,7 +40,9 @@ per-deck inference and recomposition time, working-set peak, private committed
 peak and CUDA allocated/reserved peaks. Private commit is not physical RAM.
 
 Reproducible tests: run `test_worker.py` with the pinned Python 3.11 runtime, and
-`pnpm run test:twilight-automix`. Delivery evidence compares the fixed 2.1 worker
-against 2.2 on the same machine, three repeats per cold/full/partial cache scenario
-on CPU and GPU. Require sample-exact stem and PCM comparisons. Formal listening,
-24-hour device and publication gates stay closed.
+`pnpm run test:twilight-automix`.
+
+The host derives the worker deadline from the live transition position, capped
+at 90 seconds. Timeout, invalid materials or failed inference retain ordinary
+base-mix fallback. Validation logs and benchmark comparisons belong in external
+reports, rather than this runtime contract.

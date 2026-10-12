@@ -1,9 +1,5 @@
 # Twilight Echo 插件系统 — 规范与标准
 
-> 版本：v0.1 草案（2026-06-10）
-> 状态：Phase 0 定稿目标，定稿前所有字段与契约均可调整
-> 分阶段实施边界见 [`twilight-echo-plugin-plan.md`](./twilight-echo-plugin-plan.md)。
-
 ## 1. Manifest 标准（`plugin.json`）
 
 每个插件包根目录必须包含 `plugin.json`。

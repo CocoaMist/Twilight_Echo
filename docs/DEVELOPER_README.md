@@ -1,6 +1,6 @@
 # Twilight Echo 技术文档
 
-本文档面向 Twilight Echo 维护者，说明仓库结构、运行架构、关键数据流、性能约束和验证命令。插件系统的权威契约以 [twilight-echo-plugin-spec.md](./twilight-echo-plugin-spec.md) 与 [twilight-echo-plugin-plan.md](./twilight-echo-plugin-plan.md) 为准；本文只描述 app 仓库如何接入和承载插件能力。
+本文档面向 Twilight Echo 维护者，说明仓库结构、运行架构、关键数据流、性能约束和验证命令。插件系统的权威契约以 [twilight-echo-plugin-spec.md](./twilight-echo-plugin-spec.md) 为准；本文只描述 app 仓库如何接入和承载插件能力。
 
 应用设置的跨领域编排由 `src/main/app/settingsRuntime.ts` 承担：IPC 设置、主题和遥控入口通过它应用设置与同步集成；`audio/state.ts` 只负责音频状态持久化、DSP 生效和播放事件。窗口背景计算是 `app/windowAppearance.ts` 的纯函数，窗口创建不再导入音频状态。架构门禁使用 TypeScript AST 检查 main 的静态运行时 import/re-export 循环；类型引用和延迟 `import()` 不属于初始化依赖。
 
@@ -44,7 +44,7 @@
 - Low/High Shelf 使用 Q 控制过渡与共振，原生处理与 renderer 响应图采用相同系数。旧实现忽略搁架 Q；启用此行为后已有预设会按保存的 Q 生效，Q 为 `1 / sqrt(2)` 时保留旧的搁架曲线。
 - `pnpm run test:dsp-graph` 包含 MinGW 原生 PCM 与前端响应对照，覆盖零增益滤波、搁架 Q、All Pass 相位、旁路及声道隔离。
 
-### 反馈 38–43 行为修正
+### 列表点击、队列与界面布局
 
 - 主窗口关闭时将普通尺寸和最大化状态原子保存至 `userData/window-state.json`；启动按当前主屏工作区与响应式最小尺寸恢复，最大化不会覆盖普通尺寸。
 - 网易云个人音乐库展示收藏专辑和歌手，分批渲染，复用现有详情导航；切换账户或分类后忽略旧请求结果。
@@ -228,7 +228,7 @@ Streaming 页的本地歌曲、歌单、歌手搜索逻辑放在 `components/str
 
 Linux 播放条的 CSS 毛玻璃回退服从减少透明度、高对比度和强制颜色偏好。无障碍模式必须禁用 backdrop 滤镜，其覆盖优先级高于平台回退规则；`liquidGlassSurfaces.test.ts` 使用实际 scoped 样式与 Electron 媒体偏好模拟验证计算结果。
 
-## Issue #46 交互与诊断约定
+## 交互与诊断约定
 
 - 主窗口前台空格切换播放/暂停，输入、可编辑区域、按钮、菜单和对话框保留自身键盘行为；全局音量增减默认使用 `CommandOrControl+Alt+Up/Down`，步进 5%，允许在快捷键设置中修改。跨进程快捷键载荷统一在 `src/shared/playerShortcuts.ts`。
 - 全局字体设置支持 `local:<字体名称>`，复用 main 字体枚举与既有字体 CSS 变量，保留 CJK 回退。Windows 字体注册表经 PowerShell 显式 UTF-8 输出，避免中文名称被按错误代码页解码。

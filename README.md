@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>收藏你喜欢的音乐，找到下一首心动。</strong><br />
-  一款集本地音乐、在线发现、沉浸歌词与 HiFi 播放于一体的开源桌面播放器。
+  一款整合本地曲库、在线发现与网络音乐源的开源桌面播放器。<br />
+  从沉浸歌词、主题定制，到 HiFi 调音与 AutoMix，让音乐按你的习惯播放。
 </p>
 
 <p align="center">
@@ -20,13 +21,23 @@
   · <a href="#快速开始">快速开始</a>
   · <a href="#功能一览">功能一览</a>
   · <a href="#界面预览">界面预览</a>
+  · <a href="./docs/release-notes/1.3.0.md">1.3.0 更新说明</a>
   · <a href="#常见问题">常见问题</a>
   · <a href="https://github.com/Px-asen/Twilight_Echo/issues">问题反馈</a>
 </p>
 
-![Twilight Echo 本地音乐主页：正在播放、曲库概览与随机漫游](./assets/screenshots/local-dashboard.png)
+![Twilight Echo 音乐主页：唱片式正在播放、每日推荐与音乐入口](./assets/screenshots/home-dashboard.png)
 
 <p align="center"><sub>从硬盘里的珍藏，到每日推荐里的新发现，让音乐陪你度过每一个日常。</sub></p>
+
+## 1.3.0 更新亮点
+
+- **重新组织听歌入口**：新版首页整合继续收听与在线发现，独立搜索覆盖歌曲、专辑、艺术家和歌单，侧栏页面可以排序、隐藏并恢复浏览位置。
+- **更细致地调整声音**：参数均衡器支持 A/B 快照、撤销重做和多频段编辑；Twilight AutoMix 开放自然与 DJ 模式试用，分轨增强可按需安装。
+- **更自由地设计外观**：背景与界面材质统一编辑，深浅方案和不同页面可分别设置；主题工作室提供实时预览，主题插件工坊（Beta）支持导出独立主题包。
+- **把后台任务和个人记录照顾好**：任务与通知中心集中显示处理进度；新增个人数据备份与目录映射，完善软件更新续传，并扩展收听趋势与排行。
+
+完整的新增功能、修复与使用说明见 **[v1.3.0 发布说明](./docs/release-notes/1.3.0.md)**。
 
 ## 下载与安装
 
@@ -54,13 +65,17 @@ Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA2
 
 ## 快速开始
 
-**听本地收藏** — 在首次使用向导中添加音乐文件夹，或打开「设置 → 常规 → 媒体库管理 → 添加文件夹」。扫描完成后，就能按歌曲、专辑、艺术家或文件夹浏览和播放。
+**听本地收藏** — 在首次使用向导中添加音乐文件夹，或打开「设置 → 媒体库与存储 → 本地媒体库 → 添加文件夹」。扫描完成后，按歌曲、专辑、艺术家、文件夹或流派浏览；设置页的「快速配置」也能直接进入添加音乐和选择输出设备。
 
-**发现在线音乐** — 打开「流媒体」，使用内置网易云音乐服务；扫码登录后，可以访问每日推荐、私人 FM 与个人收藏。更多音源可在「扩展中心」查找，或从[第三方插件仓库](https://github.com/Px-asen/Twilight-Echo-plugins)获取 `.tep` 扩展包。
+**发现在线音乐** — 无需先建立本地曲库。打开「流媒体音乐 → 推荐主页」，按音源能力浏览公开歌单或排行榜；登录后使用每日推荐、私人漫游与个人收藏。更多音源可在「扩展中心」查找，或从[第三方插件仓库](https://github.com/Px-asen/Twilight-Echo-plugins)获取 `.tep` 扩展包。
 
-**调成喜欢的样子** — 在「设置 → 外观」切换深浅主题、封面取色与背景；打开「主题工作室」继续调整字体、布局和播放器样式。想边工作边听歌，可以试试迷你播放器和桌面歌词。
+**快速找到内容** — 在侧栏「搜索」选择本地音乐、全部来源或已启用音源，查找歌曲、专辑、歌单和艺术家；可用搜索类型取决于音源。按 **Ctrl + K** 打开命令面板，查找歌曲、已加载歌单和常用操作；输入 `>` 可只查找操作与设置。
 
-日常听歌可以先使用默认音频设置。接入耳机、音箱或外置声卡后，再到「设置 → 播放」选择对应输出设备。
+**调成喜欢的样子** — 在「设置 → 外观」调整深浅主题、字体、播放栏，以及「背景与界面材质」；打开「主题工作室」预览布局和播放器样式。迷你播放器、桌面歌词和主窗口可分别调整。需要制作可分享的主题包时，再使用主题插件工坊（Beta）。
+
+**选择声音与衔接方式** — 在「设置 → 播放与音效」选择输出设备，可用左右声道测试音检查输出。日常听歌可保持默认配置；想尝试自动混音，在「歌曲衔接 → Twilight AutoMix」选择自然或 DJ 模式后再播放队列。基础 AutoMix 无需额外分轨包，分轨增强的安装方式见下方常见问题。
+
+扫描、下载或更新进行时，可从标题栏「任务与通知」查看进度和处理结果。设置搜索也能直接定位选项，无需逐个展开分类。
 
 ## 功能一览
 
@@ -68,31 +83,51 @@ Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA2
   <tr>
     <td width="50%" valign="top">
       <h3>🎵 把收藏整理好</h3>
-      <p>多文件夹曲库、专辑与艺术家浏览、歌单和最近播放。新增音乐自动扫描，支持标签批量编辑、重复歌曲检测与 CUE 整轨分曲。</p>
+      <p>多文件夹监听、专辑与艺术家浏览、元数据补全、批量标签编辑、重复检测和 CUE 整轨分曲。通过曲库整理收件箱处理待整理内容，关联歌曲与专辑的不同版本和来源。</p>
     </td>
     <td width="50%" valign="top">
-      <h3>📻 总有新的声音</h3>
-      <p>网易云音乐推荐、搜索与歌单发现，云盘上传和下载，还有网络电台与 RSS 播客。通过扩展接入更多音乐来源。</p>
+      <h3>🔎 总有新的声音</h3>
+      <p>统一搜索本地与在线歌曲、专辑、艺术家和歌单；浏览网易云推荐、排行榜、个人音乐库与云盘。下载完成后可直接播放、打开目录或复制加入本地曲库。</p>
     </td>
   </tr>
   <tr>
     <td valign="top">
       <h3>✨ 让歌词跟着音乐走</h3>
-      <p>逐行、逐词同步，翻译与音译分层显示，支持 TTML 歌词与本地歌词导入。沉浸式播放页随封面变换色彩，桌面歌词独立陪伴。</p>
+      <p>逐行、逐词同步，翻译与音译分层显示，支持 TTML、本地歌词导入、编辑和时间偏移。沉浸式播放页随封面变换色彩，桌面歌词独立显示，频谱与波形呈现声音动态。</p>
     </td>
     <td valign="top">
       <h3>🎧 按你的喜好调音</h3>
-      <p>原生音频引擎、WASAPI 共享与独占输出、图形和参数均衡器。通过 OPRA/AutoEQ 查找耳机校正，也能组合 DSP 效果并查看频谱、波形与响度。</p>
+      <p>原生音频引擎、WASAPI 共享与独占输出、设备档案、OPRA/AutoEQ 耳机校正与 DSP 效果链。参数均衡器支持最多 32 个频段、A/B 快照、多选联动、复制粘贴和撤销重做。</p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>🎚️ 让歌曲自然接上</h3>
+      <p>无缝播放、交叉淡化与 Twilight AutoMix 可分别配置。AutoMix 提供自然和 DJ 模式试用，分析适合的交接位置；安装可选分轨包后，可用人声与贝斯分轨辅助过渡。</p>
+    </td>
+    <td valign="top">
+      <h3>🌙 留住播放进度</h3>
+      <p>保存命名队列、恢复歌曲与进度、查看实际播放顺序，并使用播放书签、变速不变调、A-B 循环和睡眠定时。迷你播放器、托盘、全局快捷键和局域网遥控适配不同听歌场景。</p>
     </td>
   </tr>
   <tr>
     <td valign="top">
       <h3>🎨 做成你喜欢的样子</h3>
-      <p>浅色、深色与跟随系统，封面取色和液态玻璃材质。主题工作室支持调整外观、预览与导入导出，主窗口和小窗也能分别设置。</p>
+      <p>深浅主题、封面取色、自定义图片，以及透明、毛玻璃和液态玻璃材质。按页面设置背景并全窗口预览，调整字体、播放栏和侧栏顺序；主题插件工坊（Beta）可编辑与导出主题。</p>
     </td>
     <td valign="top">
-      <h3>🌙 融入日常的播放控制</h3>
-      <p>迷你播放器、托盘控制、自定义全局快捷键与系统媒体控件。支持变速不变调、A-B 区间循环和睡眠定时，工作、练习、入睡时都能用。</p>
+      <h3>🧩 接入更多音乐来源</h3>
+      <p>通过 WebDAV、FTP、SFTP、SMB 等网络源浏览 NAS 或远程音乐，协议可用性取决于系统与服务端。支持网络电台、RSS 播客，以及通过扩展中心安装音源、主题和工具插件。</p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>📊 回看自己的音乐足迹</h3>
+      <p>统计仪表盘展示近 7／30／90 天收听趋势、前一周期对比、活动日历，以及常听歌曲与艺术家排行。可按时长或次数查看歌曲排行，按日期范围清理记录。</p>
+    </td>
+    <td valign="top">
+      <h3>💾 管理任务与个人数据</h3>
+      <p>任务与通知中心汇总扫描、补全、响度分析、下载与更新，支持勿扰。个人数据备份涵盖十类记录，恢复前预览冲突并映射音乐目录；软件更新支持进度显示、续传和完整性校验。</p>
     </td>
   </tr>
 </table>
@@ -119,24 +154,24 @@ Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA2
 ![沉浸式播放页：封面取色、同步歌词与双语显示](./assets/screenshots/immersive-lyrics.png)
 
 <details>
-<summary>查看更多界面：歌单发现、调音工具与扩展中心</summary>
+<summary>查看更多界面：主题工作室、在线歌单、调音工具与扩展中心</summary>
 
 <table>
   <tr>
-    <td width="50%"><a href="./assets/screenshots/playlist-discovery.png"><img src="./assets/screenshots/playlist-discovery.png" alt="按语种、风格和场景筛选歌单" /></a></td>
-    <td width="50%"><a href="./assets/screenshots/streaming-playlist.png"><img src="./assets/screenshots/streaming-playlist.png" alt="在线歌单详情与播放队列" /></a></td>
+    <td width="50%"><a href="./assets/screenshots/theme-studio.png"><img src="./assets/screenshots/theme-studio.png" alt="主题工作室：选择界面风格并实时预览" /></a></td>
+    <td width="50%"><a href="./assets/screenshots/streaming-playlist.png"><img src="./assets/screenshots/streaming-playlist.png" alt="每日推荐歌单：歌曲列表与播放控制" /></a></td>
   </tr>
   <tr>
-    <td align="center">按心情与场景发现歌单</td>
-    <td align="center">浏览歌单与管理播放队列</td>
+    <td align="center">切换主题，实时预览界面风格</td>
+    <td align="center">浏览每日推荐，播放喜欢的歌曲</td>
   </tr>
   <tr>
     <td><a href="./assets/screenshots/dsp-processor.png"><img src="./assets/screenshots/dsp-processor.png" alt="DSP 处理器与音频信号链" /></a></td>
-    <td><a href="./assets/screenshots/equalizer-autoeq.png"><img src="./assets/screenshots/equalizer-autoeq.png" alt="均衡器与 OPRA AutoEQ 耳机校正" /></a></td>
+    <td><a href="./assets/screenshots/parametric-equalizer.png"><img src="./assets/screenshots/parametric-equalizer.png" alt="Twilight EQ 参数均衡器：频段曲线、实时频谱与调节旋钮" /></a></td>
   </tr>
   <tr>
     <td align="center">组合 DSP 效果，查看处理状态</td>
-    <td align="center">均衡器与耳机校正</td>
+    <td align="center">调节频段，直观看到均衡曲线</td>
   </tr>
   <tr>
     <td><a href="./assets/screenshots/audio-visualizer.png"><img src="./assets/screenshots/audio-visualizer.png" alt="音频频谱、波形与响度可视化" /></a></td>
@@ -150,7 +185,7 @@ Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA2
 
 </details>
 
-<sub>截图供界面参考，实际外观随版本和主题设置变化。截图中的 Bilibili、YouTube Music 等为可选第三方扩展示例，可用性以当前扩展为准。</sub>
+<sub>以上界面截图截取自 v1.3.0 演示视频，实际外观随版本和主题设置变化。截图中的酷狗、Bilibili、QQ 音乐等为可选第三方扩展示例，可用性以当前扩展为准。</sub>
 
 ## 支持的音频格式
 
@@ -173,16 +208,25 @@ Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA2
 </details>
 
 <details>
+<summary>在哪里打开统计、电台、播客和 NAS 网络源？</summary>
+
+这些页面默认不固定在侧栏。打开「全部页面」，或通过侧栏「编辑页面」显示「统计仪表盘」「电台 / 播客」「网络源」，也可以用 Ctrl + K 查找入口。侧栏支持调整页面顺序和隐藏不常用项。
+
+</details>
+
+<details>
 <summary>添加文件夹后，歌曲没有出现怎么办？</summary>
 
-先确认文件夹中有受支持的音频文件，并等待扫描完成。在「设置 → 常规 → 媒体库管理」检查扫描目录和扫描状态，必要时执行完整重扫。存放在扫描目录之外的下载文件，需要将所在文件夹加入媒体库后才会显示。
+先确认文件夹中有受支持的音频文件，并等待扫描完成。在「设置 → 媒体库与存储」检查目录、自动扫描和扫描状态，必要时展开「扫描与诊断」执行完整重扫。标题栏「任务与通知」也能查看扫描进度。
+
+下载目录在曲库之外时，可在下载完成项点击「加入曲库（复制）」；应用会保留原文件，并把副本加入已配置的音乐目录。也可以直接把下载目录添加到媒体库。
 
 </details>
 
 <details>
 <summary>没有声音，或者其他应用突然不能出声？</summary>
 
-先检查播放器音量、静音状态和 Windows 音量混合器，再到「设置 → 播放」确认输出设备。如果启用了 WASAPI 独占模式，设备可能被播放器独占；日常多应用同时播放时，使用共享模式更方便。
+先检查播放器音量、静音状态和 Windows 音量混合器，再到「设置 → 播放与音效」确认输出设备；暂停播放后可用左右声道测试音检查输出。如果启用了 WASAPI 独占模式，设备可能被播放器独占；日常多应用同时播放时，使用共享模式更方便。
 
 </details>
 
@@ -194,9 +238,29 @@ Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA2
 </details>
 
 <details>
+<summary>AutoMix 怎么开启？分轨包需要另外下载吗？</summary>
+
+在「设置 → 播放与音效 → 歌曲衔接 → Twilight AutoMix」选择自然或 DJ 模式，再开始播放队列。AutoMix 默认关闭，当前已开放试用；自然模式侧重保留歌曲内容，DJ 模式允许更长重叠、对拍和更明显的片头／片尾调整。不适合混音或过渡准备失败时会回退常规播放。
+
+基础 AutoMix 不需要安装分轨包。需要人声、贝斯分轨辅助时，在 [Releases](https://github.com/Px-asen/Twilight_Echo/releases) 找到当前版本对应的 Assets（附件），下载分轨运行包，再在上述设置中点击「安装分轨包…」选择 ZIP 文件。按运行包能力选择自动、GPU 或 CPU；分轨会额外占用内存或显存，详见[发布说明](./docs/release-notes/1.3.0.md)。
+
+</details>
+
+<details>
+<summary>换电脑后，怎么带走歌单、队列和收听记录？</summary>
+
+打开「设置 → 系统与关于 → 备份与恢复」，导出个人数据；在新电脑上选择备份并预览，勾选恢复类别、选择冲突处理方式，并把原音乐目录映射到新位置。确认后，在下次启动时执行恢复。
+
+个人数据备份包含曲库索引、歌单收藏、队列、当前播放、歌词修改、播放书签、电台、播客、收听统计和版本关系。**音频文件需要另行复制，账号登录、插件和封面缓存不随备份迁移。** 设置与主题配置使用同一区域的「设置备份」单独导出、导入。
+
+</details>
+
+<details>
 <summary>如何更新播放器？</summary>
 
-打开「设置 → 关于」检查更新，下载完成后按提示运行安装程序；也可以从 [Releases](https://github.com/Px-asen/Twilight_Echo/releases) 手动下载。各版本的更新内容和历史安装包都在发布页中。
+打开「设置 → 系统与关于」检查更新，可选择稳定或测试频道，并查看更新说明、下载进度与安装状态。Windows 使用完整安装包升级，下载支持中断恢复，并在安装前校验文件大小和 SHA-256；任务与通知中心也能查看更新进度。后台检查只提示新版本，下载和安装由你决定。
+
+也可以从 [Releases](https://github.com/Px-asen/Twilight_Echo/releases) 手动下载安装包；当前版本的变化见 [v1.3.0 发布说明](./docs/release-notes/1.3.0.md)。
 
 </details>
 
@@ -207,6 +271,7 @@ Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA2
 - **DSD**：Native DSD、DoP 与 SACD ISO 的实际播放模式取决于设备、驱动和发布包。WASAPI 与 CoreAudio 没有平台级 native DSD 通道，会使用 DoP 或 PCM 回退；Linux 仅在兼容的 ALSA `hw:` 设备上尝试 native DSD。DSD / 直通播放会绕过部分 DSP，这是预期行为。
 - **ASIO 与 VST3**：Windows x64 的 ASIO 兼容层仍属实验性，真实设备支持尚未验证；VST3 的实际运行与设备兼容性同样尚未完成验证。请结合发布包能力清单与应用中的输出诊断判断。
 - **重采样与转换**：PCM SRC 支持 SWR；SoXR 随构建可选，当前仍属未验证能力。实验性 PCM→DSD64/128/256 由 CPU 执行，不代表完整高品质 SDM；当前不提供 CUDA SDM。
+- **原样输出与混音**：EQ、DSP 和 AutoMix 可能改变输出样本。需要 bit-perfect 时，应关闭会改变信号的处理，并以播放时的 HiFi 状态和原因说明为准；AutoMix 分轨可使用 GPU，不代表核心音频链路提供 CUDA 加速。
 
 更详细的能力状态见[发布能力说明](./docs/release-capability-status.md)，实际发布包以随附的 `audio-capabilities.json` 与 `release-capability-status.json` 为准。
 
@@ -229,7 +294,7 @@ CoreAudio 与 ALSA 后端已存在，但目前没有经过与 Windows 同等级�
 
 提交前先查看[常见问题](#常见问题)，并[搜索已有 Issue](https://github.com/Px-asen/Twilight_Echo/issues)，包括已关闭的问题；已有相同问题时，直接补充到原 Issue。每条 Issue 只讨论一个问题，标题描述具体现象，例如「[Bug] 切换 WASAPI 独占模式后播放无声」。
 
-截图和日志按需提供。音频问题建议补充输出设备、驱动、输出模式及歌曲格式，也可在「设置 → 关于 → 导出音频诊断」保存诊断文件，并附上导出的 Markdown 报告。插件问题请提供插件名称、版本和来源；如果仅涉及第三方插件，可优先向对应插件作者反馈。
+截图和日志按需提供。音频问题建议补充输出设备、驱动、输出模式及歌曲格式，也可在「设置 → 系统与关于 → 导出音频诊断」保存诊断文件，并附上导出的 Markdown 报告。AutoMix 问题可补充模式、分轨运行包和计算设备；插件问题请提供插件名称、版本和来源。如果仅涉及第三方插件，可优先向对应插件作者反馈。
 
 Issue 内容和附件会公开显示，上传前请检查并删除密码、Cookie、Token、账号信息及私人文件路径，无需上传整首音乐或完整媒体库。
 

@@ -41,7 +41,7 @@ The persistence file uses the shared versioned-data envelope and compare-and-
 swap revisions. A stale renderer write is rejected instead of replacing a
 newer document.
 
-### 任务栏歌词浮层（2026-09-10）
+### 任务栏歌词浮层
 
 桌面歌词新增 `placement: desktop | taskbar`，继续走既有桌面歌词会话和设置通道。任务栏模式在主屏显示单行透明浮层，强制置顶、鼠标穿透，保留原桌面模式的字体/横竖排/翻译设置；返回桌面模式时恢复这些设置。任务栏专用宽度、水平位置和字号可单独调整。横向任务栏使用显示器工作区与屏幕边界计算位置，自动隐藏或垂直任务栏时落在屏幕底部。此实现不是 Explorer 内嵌控件，不自动识别或避让任务栏应用图标；用户可调整位置。显示器缩放/工作区变化后重新计算。
 

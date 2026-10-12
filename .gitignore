@@ -17,6 +17,16 @@ release-builds/
 *.blockmap
 *.yml.sig
 
+# Versioned packaging resources inside the root build directory
+!/build/
+/build/*
+!/build/entitlements.mac.plist
+!/build/icon.ico
+!/build/icon.png
+!/build/smtc/
+/build/smtc/*
+!/build/smtc/*.ico
+
 # Native audio engine / CMake output
 audio-engine/build/
 audio-engine/out/
@@ -112,6 +122,26 @@ CLAUDE.md
 /docs/superpowers/
 /docs/audit-evidence/*
 !/docs/audit-evidence/ipc-channel-baseline.json
+!/docs/audit-evidence/te-3.3-persistence-benchmark-2026-07-17.json
+!/docs/audit-evidence/te-3.4-queue-virtualization-2026-07-17.json
+!/docs/audit-evidence/te-4.4-duplicate-detection-2026-09-30.json
+!/docs/audit-evidence/te-4.4-duplicate-detection-2026-09-30.manifest.json
+**/docs/history-session/
+**/docs/performance-audit-evidence/
+**/docs/plans/
+**/docs/handoffs/
+**/docs/*-plan*.md
+**/docs/*-roadmap.md
+**/docs/*-handoff-*.md
+**/docs/*-audit*.md
+**/docs/audit-*.md
+**/docs/*-review-*.md
+**/docs/*-implementation-*.md
+**/docs/*-fixes-*.md
+/docs/agent-architecture-guide.md
+/docs/playback-capability-agent-prompt-pack.md
+/docs/code-relief-*.md
+/docs/asio-dsd-passthrough-research.md
 .worktrees/
 agent-tools/
 .idea/
@@ -131,12 +161,17 @@ agent-tools/
 .codegraph/
 .zcode/
 .pi/
-/plans/
+plans/
+history-session/
+/audio-engine/automix-native/EVALUATION-*.md
+/audio-engine/automix-native/validation.json
+/audio-engine/automix-native/stems/MEMORY-*.md
 /orig-labels.json
 
 # Temporary files / local scratch
 tmp/
 temp/
+/work/
 *.tmp
 *.temp
 tmp_*.py
@@ -172,7 +207,6 @@ outputs/
 *.p7b
 *.spc
 *.pvk
-*.pfx
 *.snk
 
 # Self-hosted telemetry service (deployed separately, never part of the app build)
@@ -180,10 +214,3 @@ outputs/
 
 # Local telemetry mock server runtime database (SQLite + WAL)
 /data/
-
-# Sponsor payment QR codes packaged with the settings sponsor dialog
-resources/sponsor/alipay.jpg
-resources/sponsor/wechat.png
-!resources/sponsor/
-!resources/sponsor/alipay.jpg
-!resources/sponsor/wechat.png

@@ -1,0 +1,47 @@
+# ASIO 与 DSD 输出契约
+
+ASIO 是 Windows x64 的实验性兼容后端。能力与发布状态以
+[发布能力说明](./release-capability-status.md)及当前发布包清单为准。
+历史设备测试记录不能代替当前构建的硬件验证。
+
+## 契约与实现边界
+
+- 独立 ABI、样本格式和 Native DSD 扩展以
+  [ASIO 互操作规范](./legal/asio-interoperability-spec.md)为准。
+- 驱动由独立 helper 加载，进程、控制协议、缓冲所有权、退出和超时约束见
+  [ASIO helper 隔离架构](./asio-helper-process-adr.md)。
+- 法律来源与决策保存在 [来源说明](./legal/asio-clean-room-provenance.md)和
+  [决策记录](./legal/asio-decision-record.md)中。
+
+## PCM、Native DSD 与 DoP
+
+PCM 输出按实际协商的格式、声道和采样率处理。
+Native DSD 使用驱动报告的 DSD 通道类型和 I/O-format 能力；
+DoP 将 DSD 数据封装在 PCM 载波中，要求有效标记和支持相应载波的设备。
+普通高采样率 PCM 不是 DSD 传输的证明。
+
+DSD 格式切换后重新查询缓冲范围；驱动对缓冲单位、格式切换顺序及速率的
+差异由后端实际能力、探测结果和回退原因说明。来源格式、传输格式和
+设备输出格式是不同事实，不能通过采样率名称推断 Native DSD 或直通成功。
+
+直通状态由统一 evaluator 根据实际输出、运行证据及 DSP/音量/路由状态计算。
+完整字段和 `sourceExact` / `outputPerfect` 判定见
+[音频引擎 API](./audio-engine-api.md#dsd--dop--sacd-语义)。
+
+## 验证与诊断
+
+无设备夹具用于验证 ABI、生命周期、格式处理、错误回退与进程隔离。
+真实 DAC/驱动、DSD/DoP 听感和当前发布包兼容性使用
+[Windows HiFi 检查清单](./windows-phase-6c-smoke-checklist.md)与
+[音频证据规则](./audio-smoke-evidence.md)独立验证。
+
+记录实际驱动与设备身份、输入和输出格式、缓冲单位、回退原因、欠载计数、
+二进制身份及最终结果。设备诊断和单次修复日志放在 Issue、PR 或外部证据目录。
+
+## 参考规范
+
+- [ASIO 官方 SDK 镜像与 DSD 扩展定义](https://github.com/audiosdk/asio)
+- [DoP open standard](https://dsd-guide.com/dop-open-standard)
+- [DSDIFF 1.5 规范](https://dsd-guide.com/sites/default/files/white-papers/DSDIFF_1.5_Spec.pdf)
+
+参考资料用于解释互操作契约；项目的实现与打包边界以法律说明为准。

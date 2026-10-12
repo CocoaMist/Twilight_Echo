@@ -2,6 +2,5 @@
 # canonical ending regardless of platform/autocrlf. The explicit entries below
 # keep their own attributes for matching paths.
 * text=auto eol=lf
-D:/Project/Twilight_Echo/Twilight_Echo/resources/mpv/mpv.exe filter=lfs diff=lfs merge=lfs -text
 src/main/audioEngineManager.test.ts whitespace=cr-at-eol
 audio-engine/third_party/miniaudio/* whitespace=-trailing-space
