@@ -44,7 +44,7 @@ test('released output replaces playback proof and the HiFi occupancy label', () 
   assert.match(sidebar, /if \(props\.outputReleased\) return `\$\{backend\} · RELEASED`/)
 })
 
-test('playback policy and target rate survive settings reload and component reopen in both directions', async () => {
+test('production AutoMix modes, stem installation and playback policy survive settings reload and component reopen', async () => {
   const playerSource = readFileSync(
     new URL('../../stores/usePlayerStore.ts', import.meta.url),
     'utf8'
@@ -99,7 +99,7 @@ test('playback policy and target rate survive settings reload and component reop
       },
       define: {
         'process.env.NODE_ENV': '"production"',
-        __TWILIGHT_AUTOMIX_EVALUATION__: 'true'
+        __TWILIGHT_AUTOMIX_EVALUATION__: 'false'
       },
       build: {
         outDir: 'bundle',
@@ -186,8 +186,9 @@ window.runPolicyTests=async()=>{
  const stemDevice=()=>document.querySelector('select[aria-label="分轨计算设备"]')
  const refreshStems=async()=>{[...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='重新检测').click();await settle()}
  const change=async(select,value)=>{select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}));await settle()}
- expect(autoMix()&&!autoMix().disabled&&autoMix().value==='off','evaluation must expose an initially disabled-by-choice AutoMix selector')
- expect(document.body.textContent.includes('人工验收版本'),'evaluation status must remain distinct from release acceptance')
+ expect(autoMix()&&!autoMix().disabled&&autoMix().value==='off','production must expose an opt-in AutoMix selector that defaults to off')
+ expect(document.body.textContent.includes('开放试用'),'production must explain AutoMix availability')
+ expect(!document.body.textContent.includes('人工验收版本'),'production must not describe the package as an evaluation build')
  expect(stemSwitch().disabled&&stemSwitch().getAttribute('aria-checked')==='false','missing pack must disable stem switch')
  expect(stemDevice().disabled&&document.body.textContent.includes('未检测到分轨器'),'missing pack must explain installation')
  expect(appSettings.value.autoMixStemMode==='auto','missing pack must retain saved enable preference')

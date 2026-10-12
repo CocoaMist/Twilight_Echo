@@ -63,14 +63,17 @@ export interface AutoMixSelection {
     frames: number
   }[]
 }
-// Delivery acceptance is independent of an explicitly enabled evaluation build.
-// Neither evaluation availability nor a selected mode passes the release gates.
+// Release availability permits opt-in use without asserting listening acceptance.
+// Neither availability nor a selected mode passes the delivery acceptance gates.
+export const TWILIGHT_AUTOMIX_RELEASE_AVAILABLE = true
 export const TWILIGHT_AUTOMIX_RELEASE_READY = false
 declare const __TWILIGHT_AUTOMIX_EVALUATION__: boolean
 export const TWILIGHT_AUTOMIX_EVALUATION_AVAILABLE =
   typeof __TWILIGHT_AUTOMIX_EVALUATION__ !== 'undefined' && __TWILIGHT_AUTOMIX_EVALUATION__
 export const TWILIGHT_AUTOMIX_AVAILABLE =
-  TWILIGHT_AUTOMIX_RELEASE_READY || TWILIGHT_AUTOMIX_EVALUATION_AVAILABLE
+  TWILIGHT_AUTOMIX_RELEASE_AVAILABLE ||
+  TWILIGHT_AUTOMIX_RELEASE_READY ||
+  TWILIGHT_AUTOMIX_EVALUATION_AVAILABLE
 export const TWILIGHT_AUTOMIX_MODEL_VERSION =
   'twilight-automix-native-1:a01d39a2185f64e2da422fc6251dd93785f8bb90ba91a50087049e42d8b04fec:2f80a111ab1af443c8657406fd543d700b068b938e6638a26f5ec0f6ee5aa1df'
 export type AutoMixPhase = 'off' | 'preparing' | 'ready' | 'mixing' | 'degraded'

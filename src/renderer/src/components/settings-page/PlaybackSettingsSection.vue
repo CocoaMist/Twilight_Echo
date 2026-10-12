@@ -1124,6 +1124,9 @@ function setContinuitySampleRate(event: Event): void {
             <span v-if="TWILIGHT_AUTOMIX_EVALUATION_AVAILABLE && !TWILIGHT_AUTOMIX_RELEASE_READY"
               >人工验收版本：可以开启试听，正式验收尚未完成。请先选择模式，再开始播放队列。</span
             >
+            <span v-else-if="TWILIGHT_AUTOMIX_AVAILABLE && !TWILIGHT_AUTOMIX_RELEASE_READY"
+              >AutoMix 已开放试用。分轨增强需要另外安装分轨包；请先选择模式，再开始播放队列。</span
+            >
             <span v-else-if="!TWILIGHT_AUTOMIX_AVAILABLE"
               >正式验收尚未完成，请使用人工验收版本试听。</span
             >
