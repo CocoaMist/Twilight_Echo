@@ -326,7 +326,7 @@ function voiceMotionRole(voice: LyricVoiceLayer): 'lead' | 'background' | 'harmo
   overflow: visible;
   transform: scale(var(--lyric-line-scale, 1));
   transform-origin: center;
-  will-change: transform;
+  /* Let Chromium re-rasterize scaled text instead of pinning every row's texture. */
 }
 
 /* Keep the reading edge fixed while the active row grows.  A centered scale

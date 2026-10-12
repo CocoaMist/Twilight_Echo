@@ -40,6 +40,7 @@ import {
   type DisplacementGeometry
 } from '../utils/liquidGlassDisplacement.ts'
 import { getSpecularMapUrl } from '../utils/liquidGlassSpecular.ts'
+import { glassRasterDensity, observeDevicePixelRatio } from '../utils/glassRasterDensity.ts'
 import {
   createFrameCoalescer,
   LIQUID_GLASS_POINTER_FRAME_INTERVAL_MS,
@@ -71,7 +72,6 @@ const GEOMETRY_REMEASURE_INTERVAL_MS = 120
 const cardMapUrl = ref('')
 const playbarMapUrl = ref('')
 const cardSpecularUrl = ref('')
-const playbarSpecularUrl = ref('')
 const specularOpacity = ref(DEFAULT_LIQUID_GLASS_LIGHT.specularOpacity)
 const homeSpecularOpacity = ref(DEFAULT_LIQUID_GLASS_HOME_CARDS.light.specularOpacity)
 const expandedSpecularOpacity = ref(36)
@@ -143,9 +143,6 @@ const expandedSpecularStrength = computed(() =>
  */
 const cardSpecularActive = computed(
   () => specularStrength.value > 0 && Boolean(cardSpecularUrl.value)
-)
-const playbarSpecularActive = computed(
-  () => specularStrength.value > 0 && Boolean(playbarSpecularUrl.value)
 )
 const homeSpecularActive = computed(
   () => homeSpecularStrength.value > 0 && Boolean(cardSpecularUrl.value)
@@ -234,19 +231,19 @@ function measureSelector(selector: string, fallback: DisplacementGeometry): Disp
  */
 function ensureMaps(): void {
   if (!props.active) return
+  const density = glassRasterDensity(window.devicePixelRatio)
 
   const playbar = measureSelector(LIQUID_GLASS_PLAYBAR_SELECTOR, NOMINAL_PLAYBAR_GEOMETRY)
   playbarGeometry.value = playbar
-  playbarMapUrl.value = getDisplacementMapUrl(playbar)
-  playbarSpecularUrl.value = getSpecularMapUrl(playbar)
+  playbarMapUrl.value = getDisplacementMapUrl(playbar, density)
 
   // Cards are many elements sharing one filter, so they cannot each carry their
   // own raster. The first visible card stands in for the class; they are laid out
   // on a uniform grid, so one measurement is representative.
   const card = measureSelector(LIQUID_GLASS_CARD_SELECTOR, NOMINAL_CARD_GEOMETRY)
   cardGeometry.value = card
-  cardMapUrl.value = getDisplacementMapUrl(card)
-  cardSpecularUrl.value = getSpecularMapUrl(card)
+  cardMapUrl.value = getDisplacementMapUrl(card, density)
+  cardSpecularUrl.value = getSpecularMapUrl(card, undefined, density)
 }
 
 /**
@@ -260,6 +257,7 @@ const geometryFrames = createFrameCoalescer<void>(() => ensureMaps(), {
 
 let geometryObserver: ResizeObserver | null = null
 let geometryMutationObserver: MutationObserver | null = null
+let stopObservingPixelRatio: (() => void) | null = null
 
 /**
  * The surface currently being watched for each measured class. Exactly one
@@ -648,6 +646,9 @@ function syncSurfaceVisibility(): void {
 
 onMounted(() => {
   ensureMaps()
+  stopObservingPixelRatio = observeDevicePixelRatio(() => {
+    if (props.active) geometryFrames.schedule(undefined)
+  }, window)
   syncFilterInputs()
   writePointerVariables(staticPointerCssVariables(), document.documentElement)
   syncPointerTracking()
@@ -674,6 +675,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopObservingPixelRatio?.()
+  stopObservingPixelRatio = null
   window.removeEventListener(LIQUID_GLASS_TUNING_CHANGED_EVENT, onTuningChanged)
   detachPointer()
   clearSurfaceVisibility()
@@ -681,6 +684,8 @@ onBeforeUnmount(() => {
   clearGeometryObservers()
   motionObserver?.disconnect()
   motionObserver = null
+  document.documentElement.style.removeProperty('--te-bohr-playbar-specular-map')
+  document.documentElement.style.removeProperty('--te-bohr-playbar-specular-strength')
 })
 
 watch(
@@ -1065,24 +1070,7 @@ watch(
         <feBlend in="RED_CHANNEL" in2="GB_COMBINED" mode="screen" result="RGB_COMBINED" />
         <feGaussianBlur in="RGB_COMBINED" :stdDeviation="aberrationBlur" result="REFRACTED" />
 
-        <!-- Wide-strip highlight, so the playbar's rim light keeps the same
-             physical thickness on its short axis as the cards do. -->
-        <template v-if="playbarSpecularActive">
-          <feImage
-            x="0"
-            y="0"
-            width="100%"
-            height="100%"
-            result="SPECULAR_RAW"
-            preserveAspectRatio="none"
-            :href="playbarSpecularUrl"
-          />
-          <feComponentTransfer in="SPECULAR_RAW" result="SPECULAR">
-            <feFuncA type="linear" :slope="specularStrength" intercept="0" />
-          </feComponentTransfer>
-          <feComposite in="SPECULAR" in2="SourceGraphic" operator="in" result="SPECULAR_CLIPPED" />
-          <feBlend in="REFRACTED" in2="SPECULAR_CLIPPED" mode="screen" />
-        </template>
+        <!-- Playback controls use transmission only, without edge reflections. -->
       </filter>
     </defs>
   </svg>

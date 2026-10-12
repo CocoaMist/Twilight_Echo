@@ -9,12 +9,16 @@ import {
   getDisplacementMapUrl,
   liquidRel,
   MAX_DISPLACEMENT_MAP_AXIS,
+  MAX_GLASS_RASTER_AXIS,
+  MAX_GLASS_RASTER_PIXELS,
   NEUTRAL_BYTE,
   NOMINAL_CARD_GEOMETRY,
   NOMINAL_PLAYBAR_GEOMETRY,
   refractionDistance,
   refractionOffset,
   resolveRasterGeometry,
+  resolveRasterSampling,
+  rasterSamplingKey,
   roundedRectSDF,
   sdfNormal,
   type DisplacementGeometry,
@@ -408,4 +412,60 @@ test('map url generation degrades to empty string without a DOM', () => {
   // node test env has no document; callers are expected to skip the filter
   assert.equal(typeof globalThis.document, 'undefined')
   assert.equal(getDisplacementMapUrl(NOMINAL_CARD_GEOMETRY), '')
+})
+
+test('dense sampling registers the same optical field and bounds both axes and area', () => {
+  const geometry = { width: 320, height: 200, radius: 18 }
+  const base = resolveRasterGeometry(geometry)
+  const dense = resolveRasterSampling(geometry, 2.5)
+  assert.deepEqual(dense.shape, base.shape, 'density must not change optical radius')
+  assert.equal(dense.width, 800)
+  assert.equal(dense.height, 500)
+  for (const dimensions of [
+    [4000, 72],
+    [4000, 4000],
+    [72, 4000]
+  ]) {
+    const raster = resolveRasterSampling(
+      { width: dimensions[0], height: dimensions[1], radius: 20 },
+      100
+    )
+    assert.ok(raster.width <= MAX_GLASS_RASTER_AXIS && raster.height <= MAX_GLASS_RASTER_AXIS)
+    assert.ok(raster.width * raster.height <= MAX_GLASS_RASTER_PIXELS)
+  }
+  assert.equal(rasterSamplingKey(geometry, 3), rasterSamplingKey(geometry, 100))
+  assert.deepEqual(resolveRasterSampling(geometry, NaN), resolveRasterSampling(geometry))
+})
+
+test('displacement contour integrates coverage without premultiplied RGB loss', () => {
+  const geometry = { width: 32, height: 32, radius: 8 }
+  const raster = buildDisplacementPixels(geometry)
+  const { shape, blurRadius } = resolveRasterGeometry(geometry)
+  for (const [x, y] of [
+    [0, 2],
+    [1, 1],
+    [2, 0]
+  ]) {
+    let referenceX = 0,
+      referenceY = 0
+    for (let sy = 0; sy < 64; sy++) {
+      for (let sx = 0; sx < 64; sx++) {
+        const sample = refractionOffset(
+          x + (sx + 0.5) / 64 - 16,
+          y + (sy + 0.5) / 64 - 16,
+          shape,
+          blurRadius
+        )
+        referenceX += sample.x / 4096
+        referenceY += sample.y / 4096
+      }
+    }
+    assert.ok(Math.abs(channelAt(raster, x, y, 0) - (referenceX * 0.5 + 0.5) * 255) < 5)
+    assert.ok(Math.abs(channelAt(raster, x, y, 1) - (referenceY * 0.5 + 0.5) * 255) < 5)
+    assert.equal(channelAt(raster, x, y, 3), 255)
+  }
+  const dense = buildDisplacementPixels(geometry, 2)
+  assert.equal(dense.width, 64)
+  assert.equal(channelAt(dense, 32, 32, 0), NEUTRAL_BYTE)
+  for (let p = 3; p < dense.pixels.length; p += 4) assert.equal(dense.pixels[p], 255)
 })

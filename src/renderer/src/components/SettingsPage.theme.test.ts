@@ -81,7 +81,7 @@ test('liquid glass settings navigation has its own readable surface layer', () =
   )
   assert.match(
     styles,
-    /\[data-te-settings-navigation-liquid-glass='on'\][\s\S]{0,240}\.settings-preview-nav::after\s*\{[\s\S]*?backdrop-filter:\s*blur\(var\(--te-lg-blur, 16px\)\)\s*saturate\(var\(--te-lg-saturate, 140%\)\)/
+    /\[data-te-settings-navigation-liquid-glass='on'\][\s\S]{0,240}\.settings-preview-nav::after\s*\{[\s\S]*?backdrop-filter:\s*blur\(max\(var\(--te-lg-blur, 16px\), var\(--te-lg-context-diffusion, 16px\)\)\)\s*saturate\(124%\)/
   )
   assert.match(
     styles,
@@ -146,7 +146,7 @@ test('native checkboxes inherit the active dark color scheme and theme accent', 
 test('settings wallpaper is painted once by the overlay root, never per element', () => {
   assert.match(
     styles,
-    /\.settings-preview-page\s*\{[\s\S]*?inset:\s*32px 0 0;[\s\S]*?z-index:\s*2000;[\s\S]*?height:\s*auto/
+    /\.settings-preview-page\s*\{[\s\S]*?inset:\s*var\(--te-titlebar-inset, 40px\) 0 0;[\s\S]*?z-index:\s*2000;[\s\S]*?height:\s*auto/
   )
   // The page stays transparent: per-element wallpaper copies relied on
   // `background-attachment: fixed`, which composited layers silently unpin —
@@ -208,10 +208,10 @@ test('settings wallpaper is painted once by the overlay root, never per element'
   )
   assert.match(appSource, /\.app-shell-title\s*\{[\s\S]*?z-index:\s*2100/)
   assert.match(appSource, /\.settings-page-enter-active\s*\{[\s\S]*?z-index:\s*2000/)
-  const titleBarSettingsRule =
-    titleBarSource.match(/\.title-bar\.title-bar-settings,([\s\S]*?)\n\}/)?.[1] ?? ''
-  assert.match(titleBarSettingsRule, /background:\s*transparent !important;/)
-  assert.doesNotMatch(titleBarSettingsRule, /--te-settings-bg-image|background-attachment/)
+  // The title material tints and blurs the existing wallpaper instead of repainting it.
+  const titleMaterialRule =
+    titleBarSource.match(/\.title-bar-background\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.doesNotMatch(titleMaterialRule, /--te-settings-bg-image|background-attachment/)
   assert.doesNotMatch(baseStyles, /html\[data-theme='dark'\] \.title-bar\.title-bar-settings,/)
 })
 

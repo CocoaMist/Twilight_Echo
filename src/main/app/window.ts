@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { runtime } from '../core/runtime'
-import { getWindowBackgroundColor } from './windowAppearance.ts'
+import { getWindowBackgroundColor, syncWindowFrameColor } from './windowAppearance.ts'
 import {
   isWindowsAcrylicBackdropAvailable,
   isWindowsAcrylicBuild,
@@ -180,6 +180,12 @@ export function createWindow(): void {
     }
   })
 
+  syncWindowFrameColor(
+    runtime.mainWindow,
+    runtime.appSettings,
+    nativeTheme.shouldUseDarkColors,
+    nativeTheme.shouldUseHighContrastColors
+  )
   installWindowChromePublisher(runtime.mainWindow)
   runtime.mainWindow.on('ready-to-show', () => {
     if (windowState?.maximized) runtime.mainWindow?.maximize()

@@ -206,41 +206,31 @@ defineExpose({ historyOpen, toggleHistory })
     >
       <header class="notice-history-header">
         <div>
-          <h2 id="notice-history-title">
-            任务与通知 <span class="notice-count">{{ noticeHistory.length }}</span>
-          </h2>
-          <p>{{ activeTaskCount ? `${activeTaskCount} 项任务进行中` : '任务进度与通知记录' }}</p>
+          <h2 id="notice-history-title">任务与通知</h2>
+          <p v-if="activeTaskCount">{{ activeTaskCount }} 项任务进行中</p>
         </div>
-        <button
-          type="button"
-          class="notice-icon-button"
-          aria-label="关闭任务与通知"
-          @click="closeHistory()"
-        >
-          <i class="pi pi-times" aria-hidden="true"></i>
-        </button>
+        <div class="notice-header-actions">
+          <button
+            type="button"
+            role="switch"
+            class="notice-icon-button notice-dnd-toggle"
+            aria-label="勿扰模式"
+            :title="doNotDisturb ? '关闭勿扰模式' : '开启勿扰模式，通知仍会保留'"
+            :aria-checked="doNotDisturb"
+            @click="setDoNotDisturb(!doNotDisturb)"
+          >
+            <i class="pi pi-moon" aria-hidden="true"></i>
+          </button>
+          <button
+            type="button"
+            class="notice-icon-button"
+            aria-label="关闭任务与通知"
+            @click="closeHistory()"
+          >
+            <i class="pi pi-times" aria-hidden="true"></i>
+          </button>
+        </div>
       </header>
-      <div class="notice-dnd">
-        <div class="notice-dnd-copy">
-          <span class="notice-dnd-label">勿扰模式</span>
-          <p id="notice-dnd-description">
-            {{
-              doNotDisturb ? '已开启 · 通知静默保留，不弹出提醒' : '开启后不弹出提醒，通知仍会保留'
-            }}
-          </p>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          class="notice-dnd-switch"
-          aria-label="勿扰模式"
-          aria-describedby="notice-dnd-description"
-          :aria-checked="doNotDisturb"
-          @click="setDoNotDisturb(!doNotDisturb)"
-        >
-          <span aria-hidden="true"></span>
-        </button>
-      </div>
       <div class="notice-filters" role="group" aria-label="筛选任务与通知">
         <button
           v-for="item in [
@@ -480,8 +470,17 @@ button:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 22px 20px 18px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--notice-border);
+}
+.notice-header-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+.notice-dnd-toggle[aria-checked='true'] {
+  color: var(--notice-accent);
+  background: color-mix(in srgb, var(--notice-accent) 12%, transparent);
 }
 .notice-history-header h2 {
   display: flex;
@@ -492,69 +491,10 @@ button:focus-visible {
   font-weight: 650;
   letter-spacing: 0.02em;
 }
-.notice-count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 5px;
-  box-sizing: border-box;
-  border-radius: 7px;
-  color: var(--notice-accent);
-  background: color-mix(in srgb, var(--notice-accent) 10%, transparent);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
 .notice-history-header p {
   margin: 7px 0 0;
   font-size: 11px;
   color: var(--notice-muted);
-}
-.notice-dnd {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-  gap: 12px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--notice-border);
-}
-.notice-dnd-copy {
-  min-width: 0;
-}
-.notice-dnd-label {
-  font-size: 12px;
-  font-weight: 600;
-}
-.notice-dnd-copy p {
-  margin: 5px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--notice-muted);
-}
-.notice-dnd-switch {
-  display: flex;
-  align-items: center;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 24px;
-  box-sizing: border-box;
-  padding: 3px;
-  border: 0;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--notice-muted) 35%, transparent);
-  cursor: pointer;
-}
-.notice-dnd-switch[aria-checked='true'] {
-  justify-content: flex-end;
-  background: var(--notice-accent);
-}
-.notice-dnd-switch span {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: var(--te-settings-shadow-soft);
 }
 .notice-history-body {
   overflow-x: hidden;

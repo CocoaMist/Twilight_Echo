@@ -182,7 +182,7 @@ test('shape chrome renders after whatever the layout placed, never instead of it
   assert.ok(loopEnd > 0, 'the control loop must close')
   for (const marker of [
     'class="resume-offer"',
-    'class="progress-area"',
+    '<PlayerSeekProgress',
     'class="mini-progress-rail"'
   ]) {
     assert.ok(
@@ -287,25 +287,16 @@ test('every arrangement keeps exactly one way into the now-playing page', () => 
   assert.match(playerBarCss, /\.player-title-button:focus-visible\s*\{/)
 })
 
-test('the shell clears the bar beside either open sidebar', () => {
+test('the player is independent of navigation while navigation reserves usable space', () => {
   const sideMenu = readFileSync(new URL('../SideMenu.vue', import.meta.url), 'utf8')
   const clearance = readFileSync(
     new URL('../../app/useSideMenuClearance.ts', import.meta.url),
     'utf8'
   )
 
-  // The streaming sidebar follows the local behaviour: it stays full height and
-  // gives the bar the same `menu-open` state, so the bar begins to its right.
-  assert.match(
-    app,
-    /const sidebarMenuOpen = computed\(\(\) => \{[\s\S]*?if \(showPlayingPage\.value\) return false[\s\S]*?return menuOpen\.value && showLocalSidebar\.value\s*\}\)/
-  )
-  assert.match(app, /:menu-open="sidebarMenuOpen"/)
-  assert.match(playerBar, /'menu-open': menuOpen/)
-  assert.match(
-    playerBarCss,
-    /\.player-bar-shell\.menu-open\s*\{[^}]*left:\s*calc\(var\(--te-menu-width\)/
-  )
+  assert.doesNotMatch(app, /sidebarMenuOpen|:menu-open="sidebarMenuOpen"/)
+  assert.doesNotMatch(playerBar, /'menu-open': menuOpen|geometryAnimTimer/)
+  assert.doesNotMatch(playerBarCss, /\.player-bar-shell\.menu-open\s*\{/)
 
   // The measured clearance was computed and then dropped on the floor. It now
   // travels as a custom property — not an inline `bottom` — so the custom shell
@@ -427,33 +418,10 @@ test('compact pins the shell to the window edges harder than any preset layout d
   }
   assert.doesNotMatch(flush[0], /!important/)
 
-  const menuOpen = playerBarCss.match(
-    /\.player-bar-shell\[data-te-playbar-mode='compact'\]\.player-bar-shell\.player-bar-shell\.menu-open\s*\{[^}]*\}/
-  )
-  assert.ok(menuOpen, 'compact must follow the side menu when it opens')
-  /**
-   * The edge comes from the measured right edge of the open menu, not from
-   * `--te-menu-width`. The token is only the menu's own width, so a preset that
-   * insets the menu from the window edge puts its edge that much further right,
-   * and a width-based `left` left the bar covering the gap. The token stays as
-   * the fallback for the frames before the
-   * first measurement lands, and `max()` keeps whichever is further right.
-   */
-  assert.match(
-    menuOpen[0],
-    /left:\s*max\(var\(--te-side-menu-inline-end, 0px\), var\(--te-menu-width\)\)/
-  )
-  // App.vue has to publish that variable somewhere the shell can read it.
-  assert.match(app, /'--te-side-menu-inline-end': `\$\{sideMenuInlineEnd\}px`/)
-  assert.match(app, /sideMenuInlineEnd/)
-
   // The arithmetic the two rules above rely on: no preset layout targets the
   // shell with as many class-level components as compact does.
   const compactShellCount = classCount(
     ".player-bar-shell[data-te-playbar-mode='compact'].player-bar-shell.player-bar-shell"
-  )
-  const compactMenuCount = classCount(
-    ".player-bar-shell[data-te-playbar-mode='compact'].player-bar-shell.player-bar-shell.menu-open"
   )
   const layoutDir = new URL('../../assets/theme-layouts/', import.meta.url)
   const offenders: string[] = []
@@ -465,7 +433,7 @@ test('compact pins the shell to the window edges harder than any preset layout d
       for (const selector of selectorList.split(',').map((part) => part.trim())) {
         if (!selector.endsWith('.player-bar-shell') && !selector.endsWith('.menu-open')) continue
         if (!selector.includes('.player-bar-shell')) continue
-        const budget = selector.endsWith('.menu-open') ? compactMenuCount : compactShellCount
+        const budget = compactShellCount
         if (classCount(selector) >= budget) offenders.push(`${name}: ${selector}`)
       }
     }

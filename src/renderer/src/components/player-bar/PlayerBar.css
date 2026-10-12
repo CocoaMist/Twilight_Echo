@@ -1,19 +1,8 @@
-﻿/* ===== Shell =====
-
-   Clearing the open side menu animates `left` — this shell's own inset — and
-   never `transform`. Both insets are pinned, so the distance between them *is*
-   the bar's width: a translate carries the right edge along with the left,
-   which starts the already-narrowed bar a full menu-width inside the frame and
-   sweeps it back out. That read as the bar flinching on its right side. The
-   inset transition costs a layout pass per frame instead, and it is a small
-   subtree — `.is-geometry-animating` below drops the glass blur for the
-   duration so the per-frame cost stays in layout rather than re-compositing.
-
-   Never add `will-change: transform` here. With a transform-like value this
-   shell becomes a permanent containing block for its `position: fixed`
-   descendants — the full-height `.hifi-overlay` and the viewport-wide
-   `.player-panel-dismiss` — collapsing both into this bottom strip. That is
-   what once made the HiFi deck open as a sliver across the playbar. */
+/* ===== Shell =====
+   The viewport owns player geometry. Navigation only reserves space below it;
+   opening a sidebar must not resize, move or disable the material.
+   Keep this shell free of transforms and filters so fixed HiFi and dismiss
+   overlays retain the viewport as their containing block. */
 .player-bar-shell {
   position: fixed;
   bottom: 14px;
@@ -21,25 +10,6 @@
   right: 18px;
   z-index: 1002;
   pointer-events: none;
-  transition: left var(--te-motion-panel) var(--te-ease-soft);
-}
-
-.player-bar-shell.is-geometry-animating .player-bar,
-.player-bar-shell.is-geometry-animating .player-bar-liquid .player-bar-warp {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-.player-bar-shell.menu-open {
-  left: calc(var(--te-menu-width) + 18px);
-  right: 18px;
-  z-index: 999;
-}
-
-.player-bar-shell.menu-open .player-bar {
-  width: 100%;
-  max-width: none;
-  margin: 0;
 }
 
 .player-panel-dismiss {
@@ -841,6 +811,73 @@
     box-shadow 0.3s;
 }
 
+/* Keep transport and seeking together in the middle column, with concentric
+   artwork corners and clear padding inside the rounded panel. */
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) {
+  --te-player-progress-height: 5px;
+  --te-standard-play-height: calc(var(--te-player-play-size, 44px) * 8 / 11);
+  --te-standard-progress-label-height: calc(var(--te-font-size-body, 14px) * 11 / 14 * 1.65);
+  --te-standard-progress-row-height: max(
+    22px,
+    calc(var(--te-standard-progress-label-height) + 4px)
+  );
+  --te-standard-bar-height: calc(
+    max(var(--te-standard-play-height), var(--te-player-control-size, 32px)) +
+      var(--te-standard-progress-row-height) + 18px
+  );
+  --te-standard-cover-size: calc(var(--te-standard-bar-height) - 20px);
+  --te-standard-cover-radius: 10px;
+  /* Reserve the real utility width on narrow windows instead of letting its
+     hit targets spill backwards into the seeking column. */
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 1.8fr) minmax(max-content, 1fr);
+  height: var(--te-standard-bar-height);
+  border-radius: 20px;
+  /* A 1px border snaps differently at fractional DPI; fixed -1px optical insets
+     then overshoot it. Reserve the same content space with padding and align all
+     optical layers directly to this borderless outer box. */
+  border: 0;
+  box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation);
+  padding: 1px 10px;
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) > .player-center {
+  padding-top: 0;
+  /* Center the whole visible group, including the time labels. Its envelope
+     matches the cover; the transparent seek target still has its full height. */
+  transform: translateY(
+    calc((var(--te-standard-progress-row-height) - var(--te-standard-progress-label-height)) / 4)
+  );
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) :deep(.progress-area) {
+  height: var(--te-standard-progress-row-height);
+  min-height: 0;
+  position: relative;
+  top: 3px;
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) :deep(.time-label) {
+  line-height: 1.65;
+  padding-block: 0;
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .player-controls {
+  transform: none;
+  gap: calc(var(--te-player-control-gap, 12px) * 5 / 6);
+}
+
+/* Related controls sit closer together; whitespace marks the next function
+   without adding another glass container around each group. */
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .player-right {
+  gap: 4px;
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact)
+  .player-right
+  > :is(.volume-anchor, .mini-player-btn):not(:first-child) {
+  margin-inline-start: 8px;
+}
+
 .player-bar > .player-left {
   grid-area: 1 / 1;
 }
@@ -854,6 +891,7 @@
 }
 
 .player-bar-glass {
+  --te-regular-solid: rgb(16 17 19);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035)),
     rgba(14, 14, 14, 0.86);
@@ -864,6 +902,59 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.16);
   backdrop-filter: blur(28px) saturate(145%);
   -webkit-backdrop-filter: blur(28px) saturate(145%);
+}
+
+/* Regular material diffuses artwork without obscuring its hue. Keep the lens
+   variant and the compact layouts on their own recipes. */
+html[data-theme='pureWhite']
+  .player-bar:not(.player-bar-liquid):not(.player-bar-mini):not(.player-bar-compact):not(
+    .player-bar-glass
+  ) {
+  background: rgb(250 251 253 / 80%);
+  border-color: transparent;
+  box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation);
+  backdrop-filter: blur(24px) saturate(124%);
+  -webkit-backdrop-filter: blur(24px) saturate(124%);
+}
+
+html[data-theme='dark']
+  .player-bar:not(.player-bar-liquid):not(.player-bar-mini):not(.player-bar-compact),
+.player-bar.player-bar-glass:not(.player-bar-liquid):not(.player-bar-mini):not(
+    .player-bar-compact
+  ) {
+  background: rgb(16 17 19 / 72%);
+  border-color: transparent;
+  box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation);
+  backdrop-filter: blur(24px) saturate(124%);
+  -webkit-backdrop-filter: blur(24px) saturate(124%);
+}
+
+body.te-no-blur .player-bar:not(.player-bar-liquid):not(.player-bar-mini):not(.player-bar-compact),
+html[data-te-effects-mode='reduced']
+  .player-bar:not(.player-bar-liquid):not(.player-bar-mini):not(.player-bar-compact) {
+  background: rgb(
+    from var(--te-regular-solid, var(--te-card-bg-solid, var(--te-card-bg))) r g b / 1
+  ) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .player-bar:not(.player-bar-liquid):not(.player-bar-mini):not(.player-bar-compact) {
+    background: rgb(
+      from var(--te-regular-solid, var(--te-card-bg-solid, var(--te-card-bg))) r g b / 1
+    ) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  body .player-bar:not(.player-bar-liquid):not(.player-bar-mini):not(.player-bar-compact) {
+    background: Canvas !important;
+    border-color: CanvasText !important;
+    box-shadow: none !important;
+  }
 }
 
 .player-bar-glass .player-title {
@@ -907,7 +998,7 @@
   filter: brightness(0) invert(1);
   opacity: 0.55;
 }
-.player-bar-glass .time-label {
+.player-bar-glass :deep(.time-label) {
   color: rgba(255, 255, 255, 0.5);
 }
 .player-bar-glass .player-cover-placeholder {
@@ -937,15 +1028,15 @@
   background: rgba(255, 255, 255, 0.16);
 }
 
-.player-bar-glass .progress-track {
+.player-bar-glass :deep(.progress-track) {
   background: color-mix(in srgb, var(--accent-color, #1a73e8) 12%, transparent);
 }
 
-.player-bar-glass .progress-fill {
+.player-bar-glass :deep(.progress-fill) {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.7));
 }
 
-.player-bar-glass .progress-fill.live {
+.player-bar-glass :deep(.progress-fill).live {
   background: var(
     --te-player-bar-progress-fill,
     linear-gradient(90deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.85))
@@ -961,20 +1052,20 @@
   max-width: 100%;
 }
 .player-cover-slot {
-  width: 48px;
-  height: 48px;
+  width: var(--te-standard-cover-size, 48px);
+  height: var(--te-standard-cover-size, 48px);
   flex-shrink: 0;
   cursor: pointer;
-  border-radius: 12px;
+  border-radius: var(--te-standard-cover-radius, 12px);
   overflow: hidden;
   background: rgba(15, 23, 42, 0.04);
 }
 .player-cover-slot img.player-cover,
 .player-cover-slot :deep(img.player-cover),
 .player-cover {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: var(--te-standard-cover-size, 48px);
+  height: var(--te-standard-cover-size, 48px);
+  border-radius: var(--te-standard-cover-radius, 12px);
   object-fit: cover;
   flex-shrink: 0;
   cursor: pointer;
@@ -985,6 +1076,13 @@
     filter 0.22s;
   box-shadow: 0 14px 32px rgba(15, 23, 42, 0.12);
 }
+/* The slot owns the rounded crop, including hover motion. Rounding its image a
+   second time multiplies edge coverage and darkens partially covered pixels. */
+.player-cover-slot img.player-cover,
+.player-cover-slot :deep(img.player-cover),
+.player-cover-slot > .player-cover-placeholder {
+  border-radius: 0;
+}
 .player-cover-slot:hover img.player-cover,
 .player-cover-slot:hover :deep(img.player-cover),
 .player-cover-slot:hover .player-cover {
@@ -993,9 +1091,9 @@
   filter: saturate(1.08);
 }
 .player-cover-placeholder {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: var(--te-standard-cover-size, 48px);
+  height: var(--te-standard-cover-size, 48px);
+  border-radius: var(--te-standard-cover-radius, 12px);
   background:
     radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.9), transparent 36%),
     linear-gradient(135deg, rgba(37, 99, 235, 0.16), rgba(13, 148, 136, 0.12));
@@ -1340,43 +1438,46 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
 }
 
 /* ===== Progress ===== */
-.progress-area {
+:deep(.progress-area) {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
+  min-height: 24px;
+  min-width: 0;
 }
-.time-label {
+:deep(.time-label) {
   font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   color: #999;
   min-width: 36px;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
-.progress-slider-wrap {
+:deep(.progress-slider-wrap) {
   position: relative;
   flex: 1;
-  display: flex;
-  align-items: center;
+  height: 22px;
   min-width: 0;
-  height: 24px;
+  z-index: 3;
 }
 /* Real DOM track/fill — Chromium does not reliably repaint
    ::-webkit-slider-runnable-track when only a CSS custom property changes. */
-.progress-track {
+:deep(.progress-track) {
   position: absolute;
   left: 0;
   right: 0;
   top: 50%;
-  height: 6px;
-  transform: translateY(-50%);
+  height: 5px;
+  transform: translateY(-50%) scaleY(0.6);
+  transform-origin: center;
+  transition: transform 120ms ease-out;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent-color, #1a73e8) 18%, transparent);
   overflow: hidden;
   pointer-events: none;
   z-index: 0;
 }
-.progress-fill {
+:deep(.progress-fill) {
   height: 100%;
   width: 100%;
   border-radius: 999px;
@@ -1386,36 +1487,78 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   will-change: transform;
   transition: none;
 }
-.progress-fill.live {
+:deep(.progress-fill).live {
   background: linear-gradient(90deg, #38bdf8, #0ea5e9 50%, #6366f1);
 }
-.ab-loop-range {
+:deep(.ab-loop-range) {
   position: absolute;
   left: 0;
   top: 50%;
-  height: 6px;
-  transform: translateY(-50%);
+  height: 5px;
+  transform: translateY(-50%) scaleY(0.6);
+  transform-origin: center;
+  transition: transform 120ms ease-out;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent-color, #f59e0b) 55%, transparent);
   pointer-events: none;
   z-index: 1;
 }
-.progress-slider {
-  flex: 1;
+:deep(.progress-slider) {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 24px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
   cursor: pointer;
-  position: relative;
+  touch-action: none;
   z-index: 2;
 }
-.progress-slider.live {
+
+:deep(.progress-slider-wrap:not(.is-disabled):hover .progress-track),
+:deep(.progress-area.is-keyboard-focus .progress-track),
+:deep(.progress-area.is-scrubbing .progress-track),
+:deep(.progress-slider-wrap:not(.is-disabled):hover .ab-loop-range),
+:deep(.progress-area.is-scrubbing .ab-loop-range) {
+  transform: translateY(-50%) scaleY(1);
+}
+
+:deep(.progress-slider:focus) {
+  outline: none;
+}
+
+:deep(.progress-area.is-keyboard-focus .progress-track) {
+  outline: 2px solid var(--accent-color, #2563eb);
+  outline-offset: 3px;
+}
+
+:deep(.progress-slider:disabled) {
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :deep(.progress-track),
+  :deep(.ab-loop-range) {
+    transition: none;
+  }
+}
+
+html[data-te-motion='reduced'] .player-bar :deep(.progress-track),
+html[data-te-motion='off'] .player-bar :deep(.progress-track),
+html[data-te-motion='reduced'] .player-bar :deep(.ab-loop-range),
+html[data-te-motion='off'] .player-bar :deep(.ab-loop-range) {
+  transition: none;
+}
+
+:deep(.progress-slider).live {
   cursor: default;
   opacity: 0.85;
 }
-.progress-slider.live:disabled {
+:deep(.progress-slider).live:disabled {
   cursor: default;
 }
 
@@ -1482,33 +1625,33 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   color: #fff;
 }
 
-/* Transparent native track — fill is drawn by .progress-fill above. */
-.progress-slider::-webkit-slider-runnable-track {
+/* Transparent native track — fill is drawn by :deep(.progress-fill) above. */
+:deep(.progress-slider)::-webkit-slider-runnable-track {
   height: 6px;
   border-radius: 999px;
   background: transparent;
 }
 
-.progress-slider::-webkit-slider-thumb {
+:deep(.progress-slider)::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
   width: 0;
   height: 0;
 }
 
-.progress-slider::-moz-range-track {
+:deep(.progress-slider)::-moz-range-track {
   height: 6px;
   border-radius: 999px;
   background: transparent;
 }
 
-.progress-slider::-moz-range-progress {
+:deep(.progress-slider)::-moz-range-progress {
   height: 6px;
   border-radius: 999px;
   background: transparent;
 }
 
-.progress-slider::-moz-range-thumb {
+:deep(.progress-slider)::-moz-range-thumb {
   width: 0;
   height: 0;
   border: 0;
@@ -1664,7 +1807,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
     gap: 2px;
   }
 
-  .progress-area {
+  :deep(.progress-area) {
     gap: 6px;
   }
 }
@@ -1683,7 +1826,7 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
     margin-top: 0;
   }
 
-  .time-label {
+  :deep(.time-label) {
     min-width: 32px;
   }
 }
@@ -1842,23 +1985,62 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   height: var(--te-player-play-size, 44px);
 }
 
-.player-bar .progress-track {
+/* Keep the Windows transport easy to hit without a prominent colored disc. */
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play {
+  width: calc(var(--te-standard-play-height) * 15 / 8);
+  height: var(--te-standard-play-height);
+  padding: 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--te-player-bar-play-surface, var(--te-transport-play-surface));
+  color: var(--te-player-bar-play-text, var(--te-transport-play-text));
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play .playback-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact).player-bar-glass {
+  --te-transport-play-text: #fff;
+  --te-transport-play-surface: rgba(255, 255, 255, 0.08);
+  --te-transport-play-hover-surface: rgba(255, 255, 255, 0.13);
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play:hover,
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play:active {
+  background: var(
+    --te-player-bar-play-hover-surface,
+    var(--te-player-bar-play-surface, var(--te-transport-play-hover-surface))
+  );
+  color: var(
+    --te-player-bar-play-hover-text,
+    var(--te-player-bar-play-text, var(--te-transport-play-text))
+  );
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact) .btn-play:focus-visible {
+  outline: 2px solid var(--te-primary-500);
+  outline-offset: 3px;
+}
+
+.player-bar :deep(.progress-track) {
   height: var(--te-player-progress-height, 6px);
   border-radius: var(--te-player-progress-radius, 999px);
   background: var(--te-player-bar-progress-track, var(--te-player-progress-track));
 }
 
-.player-bar .progress-fill {
+.player-bar :deep(.progress-fill) {
   border-radius: var(--te-player-progress-radius, 999px);
   background: var(--te-player-bar-progress-fill, var(--te-player-progress-fill));
 }
 
-.player-bar .progress-slider::-webkit-slider-runnable-track {
+.player-bar :deep(.progress-slider)::-webkit-slider-runnable-track {
   height: var(--te-player-progress-height, 6px);
   border-radius: var(--te-player-progress-radius, 999px);
 }
 
-.player-bar .time-label {
+.player-bar :deep(.time-label) {
   padding: 3px 6px;
   border-radius: var(--te-player-time-radius, 8px);
   background: color-mix(
@@ -1938,75 +2120,23 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   --te-lg-press-color: transparent;
   background: transparent !important;
   border-color: transparent !important;
-  /* Rim stays outside the filter so it reads crisp instead of smeared. */
-  box-shadow:
-    inset 0 0 0 0.5px
-      rgba(var(--te-lg-sheen-rgb), calc(var(--te-lg-specular, var(--te-lg-rim-strength)) * 0.9)),
-    inset 0 1px 1px
-      rgba(var(--te-lg-sheen-rgb), calc(var(--te-lg-specular, var(--te-lg-rim-strength)) * 0.5)),
-    inset 0 -1px 1px rgba(var(--te-lg-shade-rgb), var(--te-lg-shade-alpha)),
-    0 5px 18px rgba(var(--te-lg-drop-rgb), var(--te-lg-drop-near-alpha)),
-    0 24px 70px rgba(var(--te-lg-drop-rgb), var(--te-lg-drop-alpha)) !important;
+  /* Refraction stays below the controls; elevation comes from the outer shadow. */
+  box-shadow: var(--te-bohr-contact), var(--te-bohr-elevation) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
 .player-bar-liquid .player-bar-warp {
   position: absolute;
+  /* Match the borderless outer box at every physical pixel density. */
   inset: 0;
   z-index: 0;
   pointer-events: none;
   border-radius: inherit;
   /* Elasticity lets the playbar reach toward the cursor; 0 keeps it pinned. */
   transform: translate(var(--te-lg-elastic-x, 0px), var(--te-lg-elastic-y, 0px));
-  /* Only the press flash and edge accents live here. The broad sheen washes this
-     layer used to carry were a hand-drawn *simulation* of glass lighting, written
-     when `filter: url()` saw nothing but this element's own gradients and so had
-     no visible effect. Two of them peaked over the middle of the bar — together
-     ~35% white across the center — which is exactly where real glass is clearest.
-     Stacked on top of the refracted backdrop and the baked shape-following
-     specular, they read as a white slab, not a lens.
-
-     Shape-following light now comes from the baked specular map inside
-     `#te-lg-playbar`, whose per-pixel incidence bends around each corner in a way
-     no CSS gradient can express. What remains below paints edges only. */
-  background:
-    radial-gradient(
-      circle at var(--te-lg-press-x, 50%) var(--te-lg-press-y, 50%),
-      var(--te-lg-press-color) 0%,
-      transparent 30%
-    ),
-    /* Bevel accent: bright on the light side, faint counter-shade opposite, and
-       fully transparent through the middle. Stops are in px, not percent: at 10%
-       of a 1180px bar the "accent" was a 118px wash across the left third of the
-       surface, which is haze rather than a lit edge. */
-    linear-gradient(
-        var(--te-lg-angle, 135deg),
-        color-mix(
-            in srgb,
-            white calc(var(--te-lg-specular, var(--te-lg-rim-strength)) * 40%),
-            transparent
-          )
-          0,
-        transparent 22px,
-        transparent calc(100% - 22px),
-        color-mix(
-            in srgb,
-            var(--te-lg-shade) calc(var(--te-lg-specular, var(--te-lg-rim-strength)) * 16%),
-            transparent
-          )
-          100%
-      ),
-    /* Vertical thickness cue: a hairline catch along the top lip and a slight
-       settling at the bottom. Held to the outer fifth so the middle stays open. */
-    linear-gradient(
-        180deg,
-        rgba(var(--te-lg-sheen-rgb), var(--te-lg-top-wash-alpha)) 0%,
-        transparent 20%,
-        transparent 80%,
-        rgba(var(--te-lg-shade-rgb), var(--te-lg-bottom-density-alpha)) 100%
-      ),
-    rgba(var(--te-lg-surface-rgb), var(--te-lg-surface-alpha, 0.12));
+  /* Keep transmission and diffusion, without a painted rim or edge sheen. */
+  background: rgba(var(--te-lg-surface-rgb), var(--te-lg-surface-alpha, 0.12));
   /* The SVG chain belongs in the *backdrop* list, not in `filter`. `filter` only
      ever sees this element's own rendering — the gradient layers above — and
      displacing a smooth gradient resamples to nearly the same colour, so the
@@ -2052,7 +2182,7 @@ html[data-platform='linux'] .player-bar-liquid .player-bar-warp {
    Solid mode therefore only thickens the material slightly, on top of the
    luminance-driven density the base rule already applies, because a sampler with
    no image to read is working from the app's flat background colour alone.
-   Overriding `background-color` keeps the gradient layers above intact. */
+   This density adjustment does not paint an edge highlight. */
 html[data-te-liquid-glass-source='solid'] .player-bar-liquid .player-bar-warp {
   background-color: rgba(var(--te-lg-surface-rgb), calc(var(--te-lg-surface-alpha, 0.12) + 0.02));
 }
@@ -2141,6 +2271,12 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
+}
+
+.player-bar:not(.player-bar-mini):not(.player-bar-compact)
+  > :is(.player-left, .player-center, .player-right) {
+  position: relative;
+  z-index: 1;
 }
 
 /* ===== Flat strip surface language =====
@@ -2338,7 +2474,7 @@ html[data-window-transparent='on'][data-platform='linux'] .player-bar-liquid .pl
   pointer-events: auto;
 }
 
-/* Real DOM track/fill for the same reason as .progress-track: Chromium does not
+/* Real DOM track/fill for the same reason as :deep(.progress-track): Chromium does not
    reliably repaint ::-webkit-slider-runnable-track on a custom-property change. */
 .mini-progress-track {
   position: absolute;
@@ -2519,6 +2655,34 @@ html[data-theme='dark'] .player-bar-mini .mini-progress-track {
   background: var(--te-player-bar-progress-fill, rgba(255, 255, 255, 0.9));
 }
 
+/* Shared transport glyphs inherit color directly; SVG images' invert filters do not apply. */
+.player-controls .playback-icon {
+  width: 18px;
+  height: 18px;
+  opacity: 0.8;
+}
+
+.player-controls .btn-play .playback-icon {
+  width: 21px;
+  height: 21px;
+  color: inherit;
+  opacity: 1;
+}
+
+.mini-play-button .playback-icon {
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+}
+
+.player-bar-compact .player-controls .ctrl-btn .playback-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.player-bar-compact .player-controls .btn-play .playback-icon {
+  width: 16px;
+  height: 16px;
+}
+
 /* Dark themes park the card colour a step or two from the page background —
    #181818 on #17181a in the built-in preset — so the hairline used to be the
    only thing separating the strip. With it gone the fill has to do that job:
@@ -2671,17 +2835,6 @@ html[data-theme='dark']
   bottom: 0;
 }
 
-/* Start after the open menu's real right edge, not after its width. A preset may
-   inset the menu from the window edge, which puts its edge that much further
-   right than `--te-menu-width` implies, and a width-based `left` left the strip
-   covering that gap. App.vue publishes the measured edge on the player wrapper;
-   the token is the fallback for the first frame, before the measurement lands,
-   and for any consumer that renders the bar without the clearance monitor. */
-.player-bar-shell[data-te-playbar-mode='compact'].player-bar-shell.player-bar-shell.menu-open {
-  left: max(var(--te-side-menu-inline-end, 0px), var(--te-menu-width));
-  right: 0;
-}
-
 .player-bar-shell[data-te-playbar-mode='compact'].compact-visualizer-active {
   --te-compact-visualizer-height: 138px;
 }
@@ -2736,7 +2889,7 @@ html[data-theme='dark']
 /* ===== Compact top-edge progress rail =====
 
    The visible line is 2px; the wrapper is taller so seeking has a real hit
-   target. Real DOM track/fill for the same reason as `.progress-track` and
+   target. Real DOM track/fill for the same reason as `:deep(.progress-track)` and
    `.mini-progress-track`: Chromium does not reliably repaint
    ::-webkit-slider-runnable-track when only a custom property changes. */
 .player-bar.player-bar-compact > .compact-progress-rail {
@@ -3198,7 +3351,7 @@ html[data-te-motion='reduced']
     gap: 2px;
   }
 
-  .progress-area {
+  :deep(.progress-area) {
     gap: 6px;
   }
 }

@@ -1,0 +1,22 @@
+/* 波尔 / Bohr: a translucent body with a curved shoulder and directional light.
+   Body diffusion, surface reflection and elevation are separate layers. Keep
+   content calm; reserve optical refraction for the floating media controls.
+   These internal tokens do not change the saved material or theme contracts. */
+:root {
+  --te-bohr-light: rgb(255 255 255 / 58%);
+  --te-bohr-shoulder: rgb(255 255 255 / 18%);
+  --te-bohr-edge: rgb(18 24 32 / 22%);
+  --te-bohr-contact: 0 2px 5px rgb(18 24 32 / 10%);
+  --te-bohr-elevation: 0 12px 32px rgb(18 24 32 / 14%);
+  --te-bohr-raised-shadow:
+    inset 0 1px 0.5px var(--te-bohr-light), inset 0 -1.5px 2px var(--te-bohr-edge),
+    var(--te-bohr-contact), var(--te-bohr-elevation);
+}
+
+html[data-theme='dark'] {
+  --te-bohr-light: rgb(255 255 255 / 28%);
+  --te-bohr-shoulder: rgb(255 255 255 / 7%);
+  --te-bohr-edge: rgb(0 0 0 / 52%);
+  --te-bohr-contact: 0 2px 5px rgb(0 0 0 / 30%);
+  --te-bohr-elevation: 0 12px 32px rgb(0 0 0 / 36%);
+}

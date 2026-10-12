@@ -182,7 +182,7 @@
     color 0.18s;
 }
 
-.btn-play-all i {
+.btn-play-all :is(i, .playback-icon) {
   font-size: calc(var(--te-font-size-body, 14px) * 1);
 }
 
@@ -1201,23 +1201,12 @@
     );
 }
 
-/* Border geometry only. The pointer-following radial-gradient that used to fill
-   this box was removed together with its rAF writer, but the box itself still
-   draws the playing row's border (.track-playing::after): without `inset` an
-   absolutely positioned pseudo-element collapses to 0x0, and the mask pair is
-   what turns the filled box into a 1px outline. */
+/* Native rounded borders share one antialiased contour. Subtracting two masks
+   produced stair steps on fractional Windows display scaling. */
 .track-row::after {
   z-index: 2;
   inset: 0;
-  padding: 1px;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  -webkit-mask-composite: xor;
+  border: 1px solid transparent;
 }
 
 .virtual-spacer {
@@ -1289,13 +1278,7 @@
 
 .track-playing::after {
   opacity: 1;
-  background: linear-gradient(
-    90deg,
-    rgba(124, 77, 255, 0.88),
-    rgba(34, 211, 238, 0.72),
-    rgba(255, 126, 182, 0.82),
-    rgba(124, 77, 255, 0.88)
-  );
+  border-color: rgba(124, 77, 255, 0.88) rgba(34, 211, 238, 0.72) rgba(255, 126, 182, 0.82);
 }
 
 /* The animated border is decorative. Pause it whenever the row is not the
@@ -1582,14 +1565,14 @@
 }
 
 .menu-item.danger,
-.menu-item.danger i {
+.menu-item.danger :is(i, .playback-icon) {
   color: #b42318;
 }
 
 .menu-item.danger:hover {
   background: rgba(180, 35, 24, 0.1);
 }
-.menu-item i {
+.menu-item :is(i, .playback-icon) {
   margin-right: 10px;
   font-size: calc(var(--te-font-size-body, 14px) * 1);
   color: #666;

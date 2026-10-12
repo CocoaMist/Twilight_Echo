@@ -113,7 +113,9 @@ import {
 type TitleSurface = 'default' | 'settings' | 'streaming'
 let idleLoginCheck: IdleTaskHandle | null = null
 
-const navigation = useAppNavigation()
+const navigation = useAppNavigation({
+  appearancePreviewActive: () => appearanceFullWindowPreview.value
+})
 const navigationPersistence = createNavigationSessionPersistence(navigation)
 const {
   menuOpen,
@@ -607,13 +609,6 @@ const navigationPages = computed(() => {
 })
 const mainContentMinHeight = computed(() => '100vh')
 
-const sidebarMenuOpen = computed(() => {
-  // PlayingMusic hides the local sidebar, so its preserved open state must not
-  // shift the full-width compact bar and leave a blank gutter on the left.
-  if (showPlayingPage.value) return false
-  return menuOpen.value && showLocalSidebar.value
-})
-
 const playbackSessionPersistence = createPlaybackSessionPersistence({
   settings,
   currentTrack,
@@ -635,15 +630,13 @@ const {
   playerBottomClearance,
   sideMenuBottomOffset,
   sideMenuToolsClearance,
-  sideMenuInlineEnd,
   startSideMenuMonitor,
   stopSideMenuMonitor,
   resetSideMenuClearance,
   dispose: disposeSideMenuClearance
 } = useSideMenuClearance({
   showLocalSidebar,
-  hasPlayerBar,
-  menuOpen
+  hasPlayerBar
 })
 
 watch(
@@ -975,10 +968,9 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     />
     <div class="app-shell-title">
       <TitleBar
-        :glass="showPlayingPage"
+        :immersive="showPlayingPage"
         :liquid-material="liquidGlassChromeActive"
         :streaming="showStreamingPage && !showPlayingPage"
-        :hide-start="showThemeStudioPage || showLoginPage"
         :title-surface="titleSurface"
         :active-tool="showPluginPage ? 'plugins' : showSettingsPage ? 'settings' : null"
         :menu-open="titleMenuOpen"
@@ -988,7 +980,6 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @login="handleTitleLogin"
         @settings="toggleSettingsPage"
         @plugins="togglePluginPage"
-        @commands="commandPalette.open"
         @library="selectSidebarPage({ kind: 'local', category: 'allSongs', filter: null })"
         :notifications-open="noticeHostRef?.historyOpen ?? false"
         @notifications="noticeHostRef?.toggleHistory($event)"
@@ -1020,7 +1011,10 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         }"
         :style="{ minHeight: mainContentMinHeight }"
       >
-        <Transition :name="songlistTransitionName" mode="out-in">
+        <Transition
+          :name="activeCategory === 'dashboard' ? 'home-page' : songlistTransitionName"
+          mode="out-in"
+        >
           <LocalDashboard
             v-if="localViewVisible && activeCategory === 'dashboard'"
             key="local-dashboard"
@@ -1136,21 +1130,12 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         </Transition>
       </div>
     </div>
-    <!-- Where the open side menu's right edge actually lands, measured rather than
-         derived: `--te-menu-width` is only the menu's width, and a preset layout
-         may inset the menu from the window edge, which leaves a width-based
-         `left` short by that inset. The edge-to-edge shapes start after this so
-         they never cover the menu. -->
-    <div
-      class="app-shell-player"
-      :style="{ '--te-side-menu-inline-end': `${sideMenuInlineEnd}px` }"
-    >
+    <div class="app-shell-player">
       <PlayerBar
         v-if="hasPlayerBar"
         ref="playerBarRef"
         :glass="showPlayingPage"
         :visualizer-visible="showPlayingPage && settings.playerBar.compactVisualizerEnabled"
-        :menu-open="sidebarMenuOpen"
         :mode="playerBarPresentation.mode"
         :auto-hide="playerBarPresentation.autoHide"
         :hidden-bar="playerBarPresentation.hidden || soundFieldSidebarActive"
@@ -1487,7 +1472,25 @@ body.te-no-blur .login-page-leave-to {
   min-height: 0;
 }
 
-/* Local left-menu view transitions mirror the streaming sidebar. */
+/* Home returns to its resting geometry immediately; only its opacity changes. */
+.main-content:has(> .local-home-layout.home-page-enter-active) {
+  /* Restoring a sidebar hidden by an overlay is navigation, not a menu toggle.
+     Set its clearance before home becomes visible to avoid resizing its cards. */
+  transition: none;
+}
+.home-page-enter-active {
+  transition: opacity 180ms ease;
+}
+.home-page-leave-active {
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+.home-page-enter-from,
+.home-page-leave-to {
+  opacity: 0;
+}
+
+/* Local list view transitions mirror the streaming sidebar. */
 .main-content > .page-down-enter-active,
 .main-content > .page-down-leave-active,
 .main-content > .page-up-enter-active,
