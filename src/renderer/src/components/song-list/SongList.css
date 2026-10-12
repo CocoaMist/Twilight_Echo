@@ -31,7 +31,8 @@
 .song-list {
   display: grid;
   position: relative;
-  padding: calc(32px + 30px) min(4.4vw, 48px) 132px;
+  padding: calc(32px + 30px) min(4.4vw, 48px)
+    max(132px, calc(var(--te-playbar-bottom-clearance, 0px) + 12px));
   overflow-y: auto;
   overflow-x: hidden;
   /* Ambient tints only: the local wallpaper stays on the body (te-local-surface)
@@ -1801,6 +1802,9 @@
   right: 8px;
   width: 26px;
   height: 26px;
+  border: 0;
+  padding: 0;
+  color: #fff;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.5);
   display: flex;
@@ -1818,7 +1822,8 @@
   position: relative;
 }
 
-.playlist-card:hover .playlist-delete-btn {
+.playlist-card:hover .playlist-delete-btn,
+.playlist-card:focus-within .playlist-delete-btn {
   opacity: 1;
 }
 

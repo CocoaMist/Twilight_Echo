@@ -1723,18 +1723,22 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <div v-if="playlistSourceSummaryLabel(playlist)" class="playlist-source-summary">
                     {{ playlistSourceSummaryLabel(playlist) }}
                   </div>
-                  <div
+                  <button
                     v-if="!playlist.isDefault"
+                    type="button"
                     class="playlist-delete-btn"
                     data-te-interactive
                     title="删除歌单"
-                    @click="handleDeletePlaylist(playlist.id || '', $event)"
+                    :aria-label="`删除歌单 ${playlist.name}`"
+                    @pointerdown.stop
+                    @keydown.stop
+                    @click.stop="handleDeletePlaylist(playlist.id || '', $event)"
                   >
                     <i
                       class="pi pi-trash"
                       style="font-size: calc(var(--te-font-size-body, 14px) * 12 / 14)"
                     ></i>
-                  </div>
+                  </button>
                 </div>
               </template>
               <template v-if="category === 'folders'">
@@ -2397,16 +2401,12 @@ function finishViewSwitchAndRestoreScroll(): void {
                         </span>
                       </label>
                       <CoverImg
-                        v-if="track.coverSmall || track.cover"
                         :cover="track.coverSmall || track.cover"
                         :cover-source="track.coverSmallSource || track.coverSource"
                         :identity="track.id"
                         class="cover-img"
                         alt="cover"
                       />
-                      <div v-else class="cover-placeholder">
-                        <ThemeIcon icon-slot="library.empty" />
-                      </div>
                     </div>
                   </td>
                   <td class="col-info">

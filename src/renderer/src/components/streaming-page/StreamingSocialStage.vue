@@ -501,15 +501,12 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
 
             <div class="col-title">
               <CoverImg
-                v-if="track.cover"
                 :cover="track.cover"
                 :cover-source="track.coverSource"
                 class="row-cover"
                 alt=""
               />
-              <div v-else class="row-cover row-cover-fallback" aria-hidden="true">
-                <i class="pi pi-wave-pulse"></i>
-              </div>
+
               <div class="row-copy">
                 <div class="row-title" :title="track.title">{{ track.title }}</div>
                 <div class="row-artist" :title="track.artist">{{ track.artist || '未知艺人' }}</div>

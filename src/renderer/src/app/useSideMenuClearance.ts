@@ -59,8 +59,14 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     }
 
     const sideMenuRect = sideMenu.getBoundingClientRect()
+    const customShell = document.documentElement.dataset.teShellLayout === 'custom'
+    // translate3d changes the visual rect throughout the slide. Default content
+    // padding must use the resting box so crossing the player's left edge cannot
+    // change the scroller height or scroll position halfway through the motion.
+    const sideMenuLeft = customShell ? sideMenuRect.left : sideMenu.offsetLeft
+    const sideMenuRight = customShell ? sideMenuRect.right : sideMenuLeft + sideMenu.offsetWidth
     const overlapsHorizontally =
-      playerBarRect.left < sideMenuRect.right && playerBarRect.right > sideMenuRect.left
+      playerBarRect.left < sideMenuRight && playerBarRect.right > sideMenuLeft
     // Reserve content padding only when the bar actually covers the menu. A bar
     // beside it must leave the tools at the bottom, including in custom shells.
     sideMenuToolsClearance.value =
@@ -70,6 +76,14 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
       playerBarRect.bottom > sideMenuRect.top
         ? Math.max(0, Math.round(sideMenuRect.bottom - playerBarRect.top + SIDE_MENU_OVERLAP_GAP))
         : 0
+    // Default navigation owns a stable full-height material surface. Only its
+    // content clears the player; resizing the backdrop when playback appears,
+    // hides or changes shape makes the sidebar jump and rebuild its blur layer.
+    // Custom shells retain their explicit, grid-dependent clearance contract.
+    if (!customShell) {
+      setSideMenuBottomOffset(0)
+      return
+    }
     /**
      * Test the overlap against the bottom the menu would have with no clearance
      * applied, not its current one. Once the offset lifts the menu, its measured

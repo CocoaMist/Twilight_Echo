@@ -1364,7 +1364,7 @@ test('local dashboard playback keeps a multi-track queue for next and previous c
   const playDashboardTrack = source.match(/function playDashboardTrack[\s\S]*?\n}/)?.[0] ?? ''
 
   assert.match(source, /const heroTrack = computed<Track \| null>/)
-  assert.match(source, /@click="handleHeroPlay"/)
+  assert.match(source, /@click="heroIsCurrent \? togglePlay\(\) : playDashboardTrack\(heroTrack\)"/)
   assert.match(source, /@click="playDashboardTrack\(track\)"/)
   assert.match(source, /@click="playDashboardTrack\(entry\.track\)"/)
   assert.match(playDashboardTrack, /DASHBOARD_QUEUE_WINDOW/)

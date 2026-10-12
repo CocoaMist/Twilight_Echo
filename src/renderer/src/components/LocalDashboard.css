@@ -140,7 +140,7 @@
   z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 28px;
   box-sizing: border-box;
   width: min(100%, 1280px);
   margin: 0 auto;
@@ -438,18 +438,32 @@
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.6fr);
   align-items: center;
-  gap: clamp(32px, 4cqi, 48px);
-  min-height: 344px;
-  padding: clamp(28px, 3.6cqi, 44px);
+  gap: clamp(28px, 5cqi, 56px);
+  padding: clamp(24px, 3cqi, 32px);
 }
 
 .hero-copy {
+  --home-hero-title-size: clamp(
+    calc(var(--te-font-size-body, 14px) * 32 / 14),
+    4cqi,
+    calc(var(--te-font-size-body, 14px) * 38 / 14)
+  );
+  --home-hero-artist-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
+  --home-hero-meta-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  justify-content: center;
   min-width: 0;
+  /* Reserve the complete two-line composition, rather than leaving a gap
+     between metadata and transport when the title occupies just one line. */
+  min-height: calc(
+    var(--home-hero-title-size) * 2.3 + var(--home-hero-artist-size) * 1.5 +
+      var(--home-hero-meta-size) * 1.5 + var(--te-player-play-size, 44px) * 12 / 11 +
+      var(--te-font-size-body, 14px) * 2.5 + 88px
+  );
 }
 
 .hero-eyebrow {
@@ -504,18 +518,14 @@
 .hero-track-info {
   width: 100%;
   min-width: 0;
-  margin-top: 20px;
+  margin-top: 12px;
 }
 
 .hero-title {
   max-width: 100%;
   margin: 0;
   font-family: var(--home-display);
-  font-size: clamp(
-    calc(var(--te-font-size-body, 14px) * 32 / 14),
-    4.5cqi,
-    calc(var(--te-font-size-body, 14px) * 48 / 14)
-  );
+  font-size: var(--home-hero-title-size);
   line-height: 1.15;
   overflow-wrap: anywhere;
   font-weight: 650;
@@ -531,8 +541,8 @@
 }
 
 .hero-artist {
-  margin: 12px 0 0;
-  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
+  margin: 8px 0 0;
+  font-size: var(--home-hero-artist-size);
   line-height: 1.5;
   font-weight: 500;
   color: color-mix(in srgb, var(--home-ink) 76%, transparent);
@@ -544,11 +554,10 @@
 
 .hero-meta {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-  margin: 16px 0 0;
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+  margin: 8px 0 0;
+  font-size: var(--home-hero-meta-size);
   line-height: 1.5;
   font-weight: 400;
   color: var(--home-muted);
@@ -556,6 +565,7 @@
 }
 
 .hero-release {
+  flex: 0 1 auto;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -576,28 +586,60 @@
 }
 
 .hero-audio-meta {
+  flex-shrink: 0;
   padding-left: 12px;
   border-left: 1px solid var(--home-line);
   white-space: nowrap;
 }
 
+.hero-progress-slot {
+  width: 100%;
+}
+
+/* Keep the same measured progress space before the first playback starts. */
+.hero-progress-slot.is-inactive {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .hero-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns:
+    calc(var(--te-player-play-size, 44px) * 12 / 11)
+    calc(var(--te-player-play-size, 44px) * 21 / 11)
+    calc(var(--te-player-play-size, 44px) * 12 / 11);
+  width: min(100%, 480px);
+  justify-content: center;
   align-items: center;
   gap: 12px;
-  margin-top: 28px;
+  margin-top: 22px;
+  min-height: calc(var(--te-player-play-size, 44px) * 12 / 11);
+}
+
+.hero-actions .transport-button:first-child:not(.transport-play) {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.hero-actions .transport-play {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.hero-actions .transport-button:last-child:not(.transport-play) {
+  grid-column: 3;
+  grid-row: 1;
 }
 
 .transport-button {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 46px;
-  height: 46px;
-  border: 1px solid color-mix(in srgb, var(--home-ink) 16%, transparent);
+  width: calc(var(--te-player-play-size, 44px) * 12 / 11);
+  height: calc(var(--te-player-play-size, 44px) * 12 / 11);
+  border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--home-card) 78%, transparent);
+  background: transparent;
   font-size: calc(var(--te-font-size-body, 14px) * 17 / 14);
   color: var(--home-ink);
   cursor: pointer;
@@ -608,9 +650,7 @@
 }
 
 .transport-button:hover {
-  transform: translateY(-2px);
   background: var(--home-hover);
-  border-color: color-mix(in srgb, var(--home-ink) 30%, transparent);
 }
 
 .transport-button:active {
@@ -619,8 +659,8 @@
 
 /* The same quiet capsule as the standard bar, including explicit theme colors. */
 .home .transport-button.transport-play {
-  width: 60px;
-  height: 32px;
+  width: calc(var(--te-player-play-size, 44px) * 21 / 11);
+  height: calc(var(--te-player-play-size, 44px) * 12 / 11);
   border: none;
   font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
   color: var(--te-player-bar-play-text, var(--te-transport-play-text));
@@ -645,14 +685,19 @@
   transform: scale(var(--te-motion-press-scale));
 }
 
-.home .transport-button.transport-play:focus-visible {
+.home .transport-button:focus-visible {
   outline: 2px solid var(--te-primary-500);
   outline-offset: 3px;
 }
 
+.home .transport-button .playback-icon {
+  width: 20px;
+  height: 20px;
+}
+
 .home .transport-button.transport-play .playback-icon {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
 }
 
 /* Hero art: offset echo + big cover */
@@ -660,7 +705,7 @@
 .hero-art {
   position: relative;
   justify-self: center;
-  width: min(100%, clamp(200px, 26cqi, 288px));
+  width: min(100%, clamp(176px, 23cqi, 248px));
   aspect-ratio: 1;
 }
 
@@ -669,8 +714,8 @@
   inset: 0;
   border-radius: 20px;
   background: linear-gradient(135deg, var(--home-tint), var(--home-cyan-tint));
-  transform: rotate(6deg) translate(10px, 6px);
-  transition: transform 0.4s var(--te-ease-soft);
+  transform: rotate(4deg) translate(8px, 4px);
+  opacity: 0.6;
 }
 
 .hero-art-frame {
@@ -680,10 +725,8 @@
   border-radius: 20px;
   overflow: hidden;
   box-shadow:
-    0 26px 54px color-mix(in srgb, var(--te-neutral-900) 26%, transparent),
+    0 12px 28px rgba(0, 0, 0, 0.18),
     0 0 0 1px color-mix(in srgb, var(--home-card) 42%, transparent);
-  transform: rotate(-2deg);
-  transition: transform 0.4s var(--te-ease-soft);
 }
 
 .hero-art-frame img {
@@ -691,24 +734,6 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.hero-art-frame.is-live {
-  animation: art-breathe 5.5s ease-in-out infinite;
-}
-
-@keyframes art-breathe {
-  0%,
-  100% {
-    transform: rotate(-2deg) translateY(0);
-  }
-  50% {
-    transform: rotate(-1.2deg) translateY(-7px);
-  }
-}
-
-.feature-card:hover .hero-art-echo {
-  transform: rotate(8deg) translate(13px, 8px);
 }
 
 /* ── Figures row ────────────────────────────────────────────────────── */
@@ -1142,7 +1167,7 @@
 
 .fresh-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 24px 20px;
 }
 
@@ -1164,14 +1189,12 @@
   border-radius: var(--te-library-cover-radius);
   overflow: hidden;
   background: var(--home-soft);
-  box-shadow: 0 14px 30px color-mix(in srgb, var(--te-neutral-900) 12%, transparent);
-  transition:
-    transform var(--te-motion-hover) var(--te-ease-soft),
-    box-shadow var(--te-motion-hover);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--te-neutral-900) 8%, transparent);
+  transition: box-shadow var(--te-motion-hover);
 }
 
 :global(html[data-theme='dark'] .home .fresh-cover) {
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
 }
 
 .fresh-cover img {
@@ -1179,17 +1202,11 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 200ms var(--te-ease-soft);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .fresh-tile:hover .fresh-cover {
-    transform: translateY(-2px);
-    box-shadow: 0 20px 42px color-mix(in srgb, var(--te-neutral-900) 20%, transparent);
-  }
-
-  .fresh-tile:hover .fresh-cover img {
-    transform: scale(1.03);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--home-ink) 14%, transparent);
   }
 }
 
@@ -1197,15 +1214,13 @@
   position: absolute;
   left: 10px;
   top: 10px;
-  padding: 3px 9px;
-  border-radius: 999px;
+  padding: 3px 7px;
+  border-radius: 6px;
   font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: var(--te-neutral-900);
-  background: color-mix(in srgb, #ffffff 88%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--home-ink);
+  background: color-mix(in srgb, var(--home-card) 92%, transparent);
 }
 
 .fresh-play {
@@ -1218,19 +1233,16 @@
   height: 36px;
   border-radius: 999px;
   font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  color: #111827;
-  background: color-mix(in srgb, #ffffff 92%, transparent);
-  box-shadow: 0 10px 22px color-mix(in srgb, var(--te-neutral-900) 30%, transparent);
+  color: var(--te-transport-play-text, var(--home-ink));
+  background: color-mix(in srgb, var(--home-card) 92%, var(--home-ink));
+  border: 1px solid color-mix(in srgb, var(--home-ink) 12%, transparent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   opacity: 0;
-  transform: translateY(6px) scale(0.9);
-  transition:
-    opacity var(--te-motion-hover),
-    transform var(--te-motion-hover) var(--te-ease-spring);
+  transition: opacity var(--te-motion-hover);
 }
 
 .fresh-tile:hover .fresh-play {
   opacity: 1;
-  transform: translateY(0) scale(1);
 }
 
 .fresh-name {
@@ -1455,7 +1467,7 @@
 
 .cal-weekdays {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 6px;
   margin-bottom: 8px;
 }
@@ -1470,7 +1482,7 @@
 
 .cal-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -2226,26 +2238,13 @@
 }
 
 :global(html[data-te-library-density='compact'] .fresh-grid) {
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 18px 14px;
 }
 
 :global(html[data-te-library-density='compact'] .gallery-grid) {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 18px 14px;
-}
-
-@media (max-width: 1180px) {
-  :global(html[data-te-library-density='compact'] .fresh-grid),
-  :global(html[data-te-library-density='compact'] .gallery-grid) {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 760px) {
-  :global(html[data-te-library-density='compact'] :is(.fresh-grid, .gallery-grid)) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 1120px) {
@@ -2270,8 +2269,8 @@
     width: min(100%, 200px);
   }
 
-  .hero-title {
-    font-size: calc(var(--te-font-size-body, 14px) * 32 / 14);
+  .hero-copy {
+    --home-hero-title-size: calc(var(--te-font-size-body, 14px) * 32 / 14);
   }
 
   .signal-head {
@@ -2282,7 +2281,6 @@
     display: none;
   }
 
-  .fresh-grid,
   .gallery-grid {
     grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
   }
@@ -2305,19 +2303,18 @@
 
   .hero-inner {
     grid-template-columns: minmax(0, 1fr);
-    gap: 28px;
+    gap: 20px;
   }
 
   .hero-art {
     grid-row: 1;
     justify-self: start;
-    width: clamp(144px, 40cqi, 200px);
+    width: clamp(112px, 26cqi, 152px);
     margin: 4px 0 4px 4px;
   }
 }
 
 @container dashboard (max-width: 520px) {
-  .fresh-grid,
   .gallery-grid {
     grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
     gap: 16px 12px;
@@ -2360,16 +2357,10 @@
     padding: 2px 8px;
   }
 
-  .hero-title {
-    font-size: calc(var(--te-font-size-body, 14px) * 28 / 14);
-  }
-
-  .hero-artist {
-    font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  }
-
-  .hero-meta {
-    font-size: calc(var(--te-font-size-body, 14px) * 11.5 / 14);
+  .hero-copy {
+    --home-hero-title-size: calc(var(--te-font-size-body, 14px) * 28 / 14);
+    --home-hero-artist-size: var(--te-font-size-body, 14px);
+    --home-hero-meta-size: calc(var(--te-font-size-body, 14px) * 11.5 / 14);
   }
 
   .figure strong {
@@ -2405,6 +2396,15 @@
 }
 
 @container dashboard (max-width: 940px) {
+  .fresh-grid,
+  :global(html[data-te-library-density='compact'] .fresh-grid) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  :global(html[data-te-library-density='compact'] .gallery-grid) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .footprint-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2473,263 +2473,13 @@
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   Liquid glass — local dashboard
-   ═══════════════════════════════════════════════════════════════════════
+/* Content cards retain their standard surface, artwork and legibility scrim.
+   Optical refraction and pointer-following light belong to the control layer. */
 
-   Why this lives here and not in the canonical card list in base.css:
-
-   1. The home page's own surfaces (.signal-card, .chart-panel, .cal-panel,
-      .empty-stage) are the exact classes every preset theme layout restyles
-      (assets/theme-layouts/*.css), while no preset touches a canonical card
-      class. Registering them upstream would let the shared
-      `html[data-card-custom='on']` block overwrite preset layouts with
-      !important background/border/radius/shadow.
-   2. The dashboard is a wallpaper-backed editorial page: its type sits on the
-      user's own background image, so it needs a denser legibility floor than a
-      card floating over an app-coloured page.
-
-   The Hero mixes its own Clear material from the same shared roles the
-   navigation and playbar use (--te-lg-*). Its independent profile maps those
-   roles to --te-home-lg-*; only the veil density is local.
-
-   Readability contract: the Hero copy keeps an adaptive opaque-enough substrate
-   so it clears the wallpaper's worst case (pure black and pure white).
-
-   Only the Hero is included in LIQUID_GLASS_CARD_SELECTOR, so the shared pointer
-   tracker and visibility observer never run for ordinary home content. */
-
-html[data-te-home-liquid-glass='on'] .home {
-  /* Veil roles, densest first. Text-bearing surfaces use `panel` or `strong`;
-     `soft` is for decorative or already-covered areas. */
-  --home-glass-veil-strong: 82%;
-  --home-glass-veil: 76%;
-  --home-glass-veil-soft: 34%;
-  --home-glass-rim: color-mix(in srgb, var(--home-ink) 12%, transparent);
-  /* Inner accents must stop being opaque slabs once their host is translucent. */
-  --home-hover: color-mix(in srgb, var(--home-ink) 8%, transparent);
-  --home-soft: color-mix(in srgb, var(--home-ink) 5%, transparent);
-  /* Secondary copy loses ~2 stops of contrast over a translucent backing.
-     Pulling muted toward ink restores it in both tones, since the neutral scale
-     inverts in dark mode (ink is near-white there). */
-  --home-muted: color-mix(in srgb, var(--te-neutral-500) 58%, var(--home-ink));
-  /* The card's own backdrop blur already carries the wallpaper's colour; a 0.5
-     cover-art bloom on top of it reads as haze rather than light. */
-  --home-hero-art-alpha: 0.28;
-  /* Color form of the shade base for the rim light on the feature-card warp;
-     defined once here so the gradient needs no literal color function. */
-  --te-lg-shade: rgb(15 23 42);
-  --home-lg-blur: var(--te-lg-blur, 16px);
-  --home-lg-saturate: var(--te-lg-saturate, 140%);
-  --home-lg-specular: var(--te-lg-specular, 0.44);
-  /* SVG displacement dropped from cards: on the same layer as backdrop-filter it
-     makes Chromium abandon the backdrop pass (grey slab) and costs a full filter
-     pass per card per frame. The CSS sheen above carries the glass look. */
-  --home-lg-filter: none;
-}
-
-html[data-te-home-liquid-glass='on'] .home {
-  --home-lg-blur: var(--te-home-lg-blur, var(--te-lg-blur, 16px));
-  --home-lg-saturate: var(--te-home-lg-saturate, var(--te-lg-saturate, 140%));
-  --home-lg-specular: var(--te-home-lg-specular, var(--te-lg-specular, 0.44));
-  --home-lg-filter: none;
-}
-
-/* ── Clear material recipe for the media hero ─────────────────────────── */
-
-html[data-te-home-liquid-glass='on'] .home .feature-card {
-  position: relative;
-  /* Contains the negative-z warp layer so it cannot slip behind the page. */
-  isolation: isolate;
-  background: transparent !important;
-  border-color: transparent !important;
-  box-shadow:
-    inset 0 0 0 0.5px
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.54)),
-    inset 0 1px 0.5px
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.2)),
-    inset 0 -1px 1px rgba(var(--te-lg-shade-rgb, 15, 23, 42), 0.062),
-    0 2px 7px rgba(var(--te-lg-drop-rgb, 15, 23, 42), 0.026),
-    0 13px 32px rgba(var(--te-lg-drop-rgb, 15, 23, 42), 0.072) !important;
-}
-
-html[data-te-home-liquid-glass='on'] .home .feature-card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  border-radius: inherit;
-  /* Rim light first so it traces the shape, then directional sheen, then top/bottom
-     density, then the legibility veil last so it sits under the light. */
-  background:
-    linear-gradient(
-      var(--te-lg-angle, 135deg),
-      color-mix(in srgb, white calc(var(--home-lg-specular) * 40%), transparent) 0%,
-      transparent 12%,
-      transparent 88%,
-      color-mix(in srgb, var(--te-lg-shade) calc(var(--home-lg-specular) * 16%), transparent) 100%
-    ),
-    linear-gradient(
-      var(--te-lg-angle, 135deg),
-      transparent 0%,
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.09)) 34%,
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.026)) 62%,
-      transparent 100%
-    ),
-    linear-gradient(
-      180deg,
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), 0.055) 0%,
-      transparent 52%,
-      rgba(var(--te-lg-shade-rgb, 15, 23, 42), 0.062) 100%
-    ),
-    color-mix(in srgb, var(--home-card) var(--home-glass-veil), transparent);
-  backdrop-filter: blur(var(--home-lg-blur)) saturate(var(--home-lg-saturate));
-  -webkit-backdrop-filter: blur(var(--home-lg-blur)) saturate(var(--home-lg-saturate));
-  filter: var(--home-lg-filter);
-}
-
-html[data-te-liquid-glass-source='solid'][data-te-home-liquid-glass='on']
-  .home
-  .feature-card::after {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 18%, transparent),
-      transparent 48%,
-      color-mix(in srgb, var(--te-lg-context-label) 8%, transparent)
-    ),
-    var(--te-lg-context-material);
-}
-
-/* ── Hero ─────────────────────────────────────────────────────────────── */
-
-/* .feature-card is canonical, so its glass already paints at ::after / z-index -1.
-   What hid it was this scrim: a full-bleed --home-card wash (opaque white in
-   light themes) painted by an in-flow child, on top of the glass. Replaced with a
-   wedge that is dense only under the copy column and clears entirely over the
-   artwork, so the card reads as glass while the type keeps a real substrate. */
-html[data-te-home-liquid-glass='on'] .home .feature-backdrop::after {
-  background:
-    linear-gradient(
-      100deg,
-      color-mix(in srgb, var(--home-card) var(--home-glass-veil-strong), transparent) 0%,
-      color-mix(in srgb, var(--home-card) var(--home-glass-veil-strong), transparent) 34%,
-      color-mix(in srgb, var(--home-card) var(--home-glass-veil), transparent) 46%,
-      color-mix(in srgb, var(--home-card) var(--home-glass-veil-soft), transparent) 62%,
-      transparent 84%
-    ),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--home-card) var(--home-glass-veil-soft), transparent),
-      transparent 38%
-    );
-}
-
-/* ── Dark tone ────────────────────────────────────────────────────────── */
-
-/* The sheen stays light — it is a specular highlight, not a fill — while the
-   veil darkens with --home-card (#181818). Depth roles go heavier, matching the
-   canonical dark-card profile. */
-html[data-theme='dark'][data-te-home-liquid-glass='on'] .home {
-  --home-glass-rim: color-mix(in srgb, var(--home-ink) 16%, transparent);
-  --home-hover: color-mix(in srgb, var(--home-ink) 10%, transparent);
-  --home-soft: color-mix(in srgb, var(--home-ink) 6%, transparent);
-}
-
-html[data-theme='dark'][data-te-home-liquid-glass='on'] .home .feature-card {
-  box-shadow:
-    inset 0 0 0 0.5px
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.54)),
-    inset 0 1px 0.5px
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.2)),
-    inset 0 -1px 1px rgba(0, 0, 0, 0.15),
-    0 2px 7px rgba(0, 0, 0, 0.07),
-    0 13px 32px rgba(0, 0, 0, 0.18) !important;
-}
-
-html[data-theme='dark'][data-te-home-liquid-glass='on'] .home .feature-card::after {
-  background:
-    linear-gradient(
-      var(--te-lg-angle, 135deg),
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), 0) 0%,
-      rgba(var(--te-lg-sheen-rgb, 255, 255, 255), calc(var(--home-lg-specular) * 0.12)) 34%,
-      transparent 100%
-    ),
-    linear-gradient(180deg, transparent 52%, rgba(0, 0, 0, 0.08) 100%),
-    color-mix(in srgb, var(--home-card) var(--home-glass-veil), transparent);
-}
-
-/* ── Degradation contracts ────────────────────────────────────────────── */
-
-/* Three existing contracts strip heavy effects; each must also drop the SVG
-   filter, because refraction without its blurred backdrop reads as a smeared
-   artifact rather than glass. The veil stays, so text keeps its substrate.
-
-   These rules must NOT wrap the ancestor in `:global()`. Vue rewrites only the
-   last compound of a scoped selector, so `:global(body.te-no-blur) .foo`
-   compiles to the bare ancestor and lands `filter: none` on <body> itself. */
-
-html[data-te-home-liquid-glass='on'] .home .te-liquid-glass-offscreen::after {
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-html[data-te-home-liquid-glass='on'] body.te-no-blur .home .feature-card::after {
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-html[data-te-home-liquid-glass='on'][data-te-effects-mode='reduced'] .home .feature-card::after {
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-/* Transparent Linux windows cannot sample the desktop behind the window, so an
-   in-app backdrop snapshot has nothing valid to read. */
-html[data-te-home-liquid-glass='on'][data-window-transparent='on'][data-platform='linux']
-  .home
-  .feature-card::after {
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-/* Blur-free modes lose the optical separation the blur provided, so the veil has
-   to carry legibility on its own. */
-html[data-te-home-liquid-glass='on'] body.te-no-blur .home,
-html[data-te-home-liquid-glass='on'][data-te-effects-mode='reduced'] .home,
-html[data-te-home-liquid-glass='on'][data-window-transparent='on'][data-platform='linux'] .home {
-  --home-glass-veil-strong: 94%;
-  --home-glass-veil: 90%;
-  --home-glass-veil-soft: 62%;
-  --home-hero-art-alpha: 0.22;
-}
-
-/* Reduced / disabled motion keeps the material but pins the transition, matching
-   the canonical carve-out. */
-html[data-te-home-liquid-glass='on']:is([data-te-motion='reduced'], [data-te-motion='off'])
-  .home
-  .feature-card::after {
-  transition: none !important;
-}
-
-@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-  html[data-te-home-liquid-glass='on'] .home .feature-card::after {
-    filter: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-}
-
-@media (forced-colors: active) {
-  html[data-te-home-liquid-glass='on'] .home .feature-card::after {
-    background: Canvas !important;
-    filter: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+@container dashboard (max-width: 520px) {
+  .fresh-grid,
+  :global(html[data-te-library-density='compact'] :is(.fresh-grid, .gallery-grid)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px 12px;
   }
 }

@@ -64,6 +64,7 @@ import {
 } from '../../../shared/appFont.ts'
 import {
   DEFAULT_LIQUID_GLASS,
+  functionalLiquidGlassSettings,
   LIQUID_GLASS_TUNING_CHANGED_EVENT,
   liquidGlassCssVariables,
   liquidGlassExpandedCssVariables,
@@ -178,7 +179,7 @@ function cacheSettingsAppearance(settings: SettingsAppearanceInput): void {
   appBackground = appearance.appBackground
   cardAppearance = appearance.cardAppearance ?? null
   surfaceMaterial = normalizeSurfaceMaterial(appearance.surfaceMaterial)
-  liquidGlass = appearance.liquidGlass ?? DEFAULT_LIQUID_GLASS
+  liquidGlass = functionalLiquidGlassSettings(appearance.liquidGlass ?? DEFAULT_LIQUID_GLASS)
   effectiveSurfaceMaterial.value = surfaceMaterial
   effectiveLiquidGlass.value = liquidGlass
   document.documentElement.dataset.density = settings.uiDensity
@@ -211,14 +212,6 @@ function resolveSharedGlassProfileIsDark(tone: ThemeTone): boolean {
   )
 }
 
-function resolveHomeGlassProfileIsDark(tone: ThemeTone): boolean {
-  if (tone === 'dark' || liquidGlass.homeCards.overLight) return true
-  return (
-    liquidGlass.adaptiveTone &&
-    document.documentElement.dataset.teHomeLiquidGlassAdaptiveTone === 'dark'
-  )
-}
-
 function applyLiquidGlassRuntimeVariables(tone: ThemeTone): void {
   const root = document.documentElement
   for (const name of LIQUID_GLASS_RUNTIME_VARIABLES) root.style.removeProperty(name)
@@ -231,20 +224,6 @@ function applyLiquidGlassRuntimeVariables(tone: ThemeTone): void {
   if (usesSharedLiquidGlassProfile()) {
     const theme = resolveSharedGlassProfileIsDark(tone) ? liquidGlass.dark : liquidGlass.light
     for (const [name, value] of Object.entries(liquidGlassCssVariables(theme))) {
-      root.style.setProperty(name, value, 'important')
-    }
-  }
-  if (liquidGlass.homeCards.enabled) {
-    const theme = resolveHomeGlassProfileIsDark(tone)
-      ? liquidGlass.homeCards.dark
-      : liquidGlass.homeCards.light
-    for (const [name, value] of Object.entries(liquidGlassHomeCardCssVariables(theme))) {
-      root.style.setProperty(name, value, 'important')
-    }
-  }
-  if (liquidGlass.coverage === 'expanded') {
-    const theme = resolveSharedGlassProfileIsDark(tone) ? liquidGlass.dark : liquidGlass.light
-    for (const [name, value] of Object.entries(liquidGlassExpandedCssVariables(theme))) {
       root.style.setProperty(name, value, 'important')
     }
   }
@@ -266,8 +245,7 @@ function usesSharedLiquidGlassProfile(): boolean {
     surfaceMaterial === 'liquidGlass' ||
     liquidGlass.navigationEnabled ||
     liquidGlass.playbarEnabled ||
-    liquidGlass.settingsNavigationEnabled ||
-    liquidGlass.coverage === 'expanded'
+    liquidGlass.settingsNavigationEnabled
   )
 }
 
@@ -637,17 +615,6 @@ function applyLiquidGlassVariables(tone: ThemeTone, variables: Record<string, st
   if (usesSharedLiquidGlassProfile()) {
     const theme = tone === 'dark' || liquidGlass.overLight ? liquidGlass.dark : liquidGlass.light
     Object.assign(variables, liquidGlassCssVariables(theme))
-  }
-  if (liquidGlass.homeCards.enabled) {
-    const theme =
-      tone === 'dark' || liquidGlass.homeCards.overLight
-        ? liquidGlass.homeCards.dark
-        : liquidGlass.homeCards.light
-    Object.assign(variables, liquidGlassHomeCardCssVariables(theme))
-  }
-  if (liquidGlass.coverage === 'expanded') {
-    const theme = tone === 'dark' || liquidGlass.overLight ? liquidGlass.dark : liquidGlass.light
-    Object.assign(variables, liquidGlassExpandedCssVariables(theme))
   }
 }
 

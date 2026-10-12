@@ -86,7 +86,7 @@ export const useSettingsStore=()=>({settings,updateSettings:async patch=>{if(win
         .map((file) => `<link rel="stylesheet" href="bundle/${file}">`)
         .join(
           ''
-        )}<style>${shellStyles}</style><style>body{margin:0;font:var(--te-font-size-body,14px) system-ui}#opener{position:fixed;left:250px;top:20px}#app{--te-side-menu-bottom:84px;--te-shell-navigation-display:block;--te-shell-compact-navigation-display:none}.playbar-fixture{position:fixed;bottom:0;left:0;right:0;height:84px;background:var(--te-card-bg);border-top:1px solid var(--te-card-border)}</style></head><body><button id="opener">页面菜单</button><div id="app"></div><div class="playbar-fixture"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
+        )}<style>${shellStyles}</style><style>body{margin:0;font:var(--te-font-size-body,14px) system-ui}#opener{position:fixed;left:250px;top:20px}#app{--te-side-menu-bottom:84px;--te-shell-navigation-display:block;--te-shell-compact-navigation-display:none}.playbar-fixture{position:fixed;bottom:0;left:0;right:0;height:84px;background:var(--te-card-bg);border-top:1px solid var(--te-card-border)}</style></head><body><button id="opener">页面菜单</button><div id="app" class="app-shell"></div><div class="playbar-fixture"></div><script src="bundle/${files.find((file) => file.endsWith('.js'))}"></script></body></html>`
     )
     await writeFile(
       join(directory, 'runner.cjs'),
@@ -117,8 +117,10 @@ console.log('NAVIGATION_PAGES_OK');app.exit(0)}catch(error){console.error(error.
   }
 })
 
-const runtime = `import {createApp,h,nextTick,ref} from 'vue'
+const runtime = `import {createApp,h,nextTick,ref,watchEffect} from 'vue'
 import SideMenu from '@renderer/components/SideMenu.vue'
+import NavigationPagesDialog from '@renderer/components/navigation/NavigationPagesDialog.vue'
+import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
 import {BUILTIN_NAVIGATION_PAGES} from '@renderer/app/navigationPages.ts'
 import {useSettingsStore} from '@renderer/stores/useSettingsStore'
 import {useSideMenuClearance} from '@renderer/app/useSideMenuClearance'
@@ -129,9 +131,15 @@ const expect=(value,message)=>{if(!value)throw new Error(message)}
 const pause=(delay=35)=>new Promise(resolve=>setTimeout(resolve,delay))
 const button=label=>[...document.querySelectorAll('button')].find(node=>node.getAttribute('aria-label')===label||node.textContent.trim()===label)
 const aria=label=>document.querySelector('[aria-label="'+label+'"]')
-let visible=ref(true),open=ref(true),selected='',active=ref('local-home'),app,queries,key
+let visible=ref(true),open=ref(true),editing=ref(false),selected='',active=ref('local-home'),app,queries,key
 const store=useSettingsStore()
-const mount=()=>{app=createApp({setup(){key=ref('songs');queries=useSongListSearch(key);return()=>visible.value?h('div',{class:['app-shell-navigation',{'navigation-temporary':open.value}]},h(SideMenu,{open:open.value,activeKey:active.value,onSelectPage:page=>{selected=page.id;active.value=page.id}})):null}});app.mount('#app')}
+const mount=()=>{app=createApp({setup(){key=ref('songs');queries=useSongListSearch(key);return()=>[
+visible.value?h('div',{class:['app-shell-navigation',{'navigation-temporary':open.value}]},h(SideMenu,{open:open.value,activeKey:active.value,onSelectPage:page=>{selected=page.id;active.value=page.id}})):null,
+h(NativeDialogTransition,null,()=>editing.value?h(NavigationPagesDialog,{pages:BUILTIN_NAVIGATION_PAGES,edit:true,onClose:()=>editing.value=false}):null)
+]}});app.mount('#app')}
+// The user removed the sidebar footer actions. Exercise the editor independently.
+const editorOpener=()=>document.querySelector('#opener')
+document.querySelector('#opener').onclick=()=>editing.value=true
 const dialog=()=>document.querySelector('dialog')
 const until=async(predicate,message)=>{const end=Date.now()+3000;while(!predicate()){if(Date.now()>end)throw new Error(message);await nextTick();await pause(10)}}
 const openEditor=async opener=>{opener.click();await until(()=>dialog()?.matches(':modal')&&!dialog().inert&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'native editor did not finish mounting');await nextTick()}
@@ -140,9 +148,8 @@ window.runNavigationTests=async()=>{
   window.writes=0;mount();await pause(350)
   queries.searchQuery.value='moon';await pause(200);key.value='albums';await nextTick();expect(queries.searchQuery.value==='','search leaked to a different page');queries.searchQuery.value='album';await nextTick();key.value='songs';await nextTick();expect(queries.searchQuery.value==='moon'&&queries.debouncedSearchQuery.value==='moon','page search did not restore')
   expect(button('主页')&&button('流媒体音乐')&&button('音乐库'),'primary hierarchy missing')
-  expect(document.querySelectorAll('button[aria-label="编辑页面"]').length===1&&button('编辑页面').closest('.menu-bottom')&&!button('全部页面')&&!document.querySelector('.menu-heading button'),'editor must have one footer entry')
-  const menu=document.querySelector('.side-menu'),footer=menu.querySelector('.menu-bottom'),items=menu.querySelector('.menu-items')
-  expect(Math.abs(menu.getBoundingClientRect().bottom-footer.getBoundingClientRect().bottom-parseFloat(getComputedStyle(items).paddingBottom))<=1,'collapsed navigation leaves empty space below tools')
+  expect(!button('编辑页面')&&!button('导入歌曲')&&!button('全部页面')&&!document.querySelector('.menu-heading button'),'removed sidebar actions returned')
+  expect(!document.querySelector('.menu-bottom'),'idle sidebar reserves a removed toolbar')
   expect(button('流媒体音乐').getAttribute('aria-expanded')==='false'&&button('音乐库').getAttribute('aria-expanded')==='false','groups should start tucked away on home')
   button('流媒体音乐').click();await nextTick();expect(button('音乐云盘').getBoundingClientRect().height>0&&selected==='','expanding streaming navigated or omitted cloud')
   button('发现歌单').click();await nextTick();expect(selected==='discover'&&open.value&&button('流媒体音乐').getAttribute('aria-expanded')==='true','child navigation closed the menu')
@@ -150,9 +157,8 @@ window.runNavigationTests=async()=>{
   active.value='library';await nextTick();expect(button('流媒体音乐').getAttribute('aria-expanded')==='true','external navigation did not reveal active child')
   button('音乐库').focus();button('音乐库').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));await nextTick();await nextTick();expect(document.activeElement===button('所有歌曲'),'keyboard expansion did not focus first child')
   button('所有歌曲').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));await nextTick();expect(document.activeElement===button('音乐库')&&button('音乐库').getAttribute('aria-expanded')==='false','keyboard collapse did not restore branch focus')
-  button('导入歌曲').focus();button('导入歌曲').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));expect(document.activeElement===button('编辑页面'),'toolbar arrow navigation failed')
   active.value='local-home';selected='';await nextTick()
-  const opener=button('编辑页面');opener.focus();await openEditor(opener)
+  const opener=editorOpener();opener.focus();await openEditor(opener)
   expect(dialog().matches(':modal'),'editor is not modal')
   expect(dialog().querySelector('h2').textContent==='编辑页面'&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length&&!aria('搜索页面'),'footer did not open editing directly')
   aria('下移主页').click();aria('显示搜索').click();button('取消').click();await untilClosed()
@@ -170,12 +176,12 @@ window.runNavigationTests=async()=>{
   for(const input of dialog().querySelectorAll('input[type=checkbox]'))if(input.checked)input.click()
   button('保存').click();await untilClosed();expect(window.writes===1&&document.querySelectorAll('.menu-nav [aria-current]').length===0,'hide-all failed')
   const saved=window.saved;app.unmount();store.settings.value=JSON.parse(saved);mount();await pause()
-  expect(button('编辑页面')&&button('添加常用页面')&&!button('主页'),'hidden page appeared after remount')
-  await openEditor(button('编辑页面'));expect(!aria('显示网络源').checked&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'editor lost hidden pages');button('取消').click();await untilClosed()
+  expect(editorOpener()&&button('添加常用页面')&&!button('主页'),'hidden page appeared after remount')
+  await openEditor(editorOpener());expect(!aria('显示网络源').checked&&dialog().querySelectorAll('input[type=checkbox]').length===BUILTIN_NAVIGATION_PAGES.length,'editor lost hidden pages');button('取消').click();await untilClosed()
   expect(window.writes===1&&store.settings.value.navigationPages.hidden.length===16,'cancel changed hidden-page configuration')
   await openEditor(button('添加常用页面'));aria('显示网络源').click();await nextTick();expect(aria('显示网络源').checked,'network checkbox did not update');button('保存').click();await untilClosed();button('流媒体音乐').click();await nextTick();await until(()=>button('网络源')?.checkVisibility(),'restored network page did not become visible');button('网络源').click();await nextTick()
   expect(selected==='network'&&window.writes===2&&store.settings.value.navigationPages.hidden.length===15,'editor could not restore a hidden page: '+JSON.stringify({selected,writes:window.writes,hidden:store.settings.value.navigationPages.hidden}))
-  await openEditor(button('编辑页面'));button('恢复默认').click();button('保存').click();await untilClosed();expect(button('主页')&&button('流派')&&button('音乐云盘'),'restore defaults failed')
+  await openEditor(editorOpener());button('恢复默认').click();button('保存').click();await untilClosed();expect(button('主页')&&button('流派')&&button('音乐云盘'),'restore defaults failed')
   open.value=false;await nextTick();expect(document.querySelector('.side-menu').inert,'closed sidebar remains interactive');open.value=true;await pause()
   document.documentElement.dataset.teShellLayout='custom';document.documentElement.dataset.teShellNavigation='persistent';open.value=false;await pause();expect(!document.querySelector('.side-menu').inert,'persistent shell is inert');delete document.documentElement.dataset.teShellLayout;delete document.documentElement.dataset.teShellNavigation;open.value=true
   store.settings.value={navigationPages:{version:1,order:BUILTIN_NAVIGATION_PAGES.map(page=>page.id),hidden:[]}}
@@ -188,17 +194,42 @@ window.checkAdjacentNavigation=async({tone})=>{
   const clearance=useSideMenuClearance({showLocalSidebar:visible,hasPlayerBar:ref(true)});clearance.measureSideMenuClearance()
   host.style.setProperty('--te-side-menu-bottom',clearance.sideMenuBottomOffset.value+'px');host.style.setProperty('--te-side-menu-tools-clearance',clearance.sideMenuToolsClearance.value+'px');await nextTick()
   expect(clearance.sideMenuBottomOffset.value===0&&clearance.sideMenuToolsClearance.value===0,'adjacent playbar reserves empty space under the tools')
-  expect(Math.abs(menu.getBoundingClientRect().bottom-window.innerHeight)<=1,'adjacent playbar shortens the sidebar')
-  expect(Math.abs(window.innerHeight-button('编辑页面').getBoundingClientRect().bottom-16)<=1,'edit entry leaves a playback-height gap above the window bottom')
-  clearance.dispose()
+  expect(Math.abs(menu.getBoundingClientRect().bottom-(window.innerHeight-4))<=1,'adjacent playbar shortens the sidebar')
+  bar.style.left='18px';await pause(350)
+  let settledOffset=0
+  for(let pass=0;pass<5;pass++){
+    clearance.measureSideMenuClearance()
+    host.style.setProperty('--te-side-menu-bottom',clearance.sideMenuBottomOffset.value+'px')
+    await nextTick();await pause(30)
+    const menuBox=menu.getBoundingClientRect()
+    expect(Math.abs(menuBox.bottom-(window.innerHeight-4))<=1,'default material surface must remain full height')
+    expect(clearance.sideMenuBottomOffset.value===0&&clearance.sideMenuToolsClearance.value>0,'only inner content reserves player space')
+    if(pass>0)expect(clearance.sideMenuBottomOffset.value===settledOffset,'sidebar clearance oscillates after its own height changes')
+    settledOffset=clearance.sideMenuBottomOffset.value
+  }
+  const stopBinding=watchEffect(()=>{
+    host.style.setProperty('--te-side-menu-bottom',clearance.sideMenuBottomOffset.value+'px')
+    host.style.setProperty('--te-side-menu-tools-clearance',clearance.sideMenuToolsClearance.value+'px')
+  })
+  clearance.startSideMenuMonitor();await pause(100)
+  const fullHeight=menu.getBoundingClientRect().height,contentHeight=menu.querySelector('.menu-nav').clientHeight
+  for(const target of [false,true,false,true]){
+    open.value=target;await nextTick()
+    for(let frame=0;frame<24;frame++){
+      await new Promise(requestAnimationFrame)
+      expect(Math.abs(menu.getBoundingClientRect().height-fullHeight)<.1,'open/close resizes the material surface')
+      expect(menu.querySelector('.menu-nav').clientHeight===contentHeight,'open/close changes the scrolling area while sliding')
+    }
+  }
+  clearance.dispose();stopBinding()
 }
 window.checkNavigationGeometry=async({width,tone,bottom})=>{
   const bar=document.querySelector('.playbar-fixture');bar.classList.remove('player-bar-shell','menu-open');bar.style.left='0';document.querySelector('#app').style.setProperty('--te-side-menu-tools-clearance','0px')
   document.documentElement.dataset.theme=tone;document.documentElement.style.setProperty('--te-font-size-body','21px');document.querySelector('#app').style.setProperty('--te-side-menu-bottom',bottom+'px');document.querySelector('.playbar-fixture').style.height=bottom+'px';await pause(350)
-  const prefs=JSON.stringify(store.settings.value.navigationPages),menu=document.querySelector('.side-menu'),nav=menu.querySelector('.menu-nav'),footer=menu.querySelector('.menu-bottom')
-  expect(menu.getBoundingClientRect().bottom<=window.innerHeight-bottom+1,'sidebar overlaps playbar');expect(nav.scrollHeight>nav.clientHeight,'large text directory does not scroll independently');expect(Math.abs(menu.getBoundingClientRect().bottom-footer.getBoundingClientRect().bottom-parseFloat(getComputedStyle(menu.querySelector('.menu-items')).paddingBottom))<=1,'tools are not anchored to the sidebar bottom');expect(button('编辑页面').getBoundingClientRect().top>=menu.getBoundingClientRect().top,'edit action scrolled out of footer')
+  const prefs=JSON.stringify(store.settings.value.navigationPages),menu=document.querySelector('.side-menu'),nav=menu.querySelector('.menu-nav')
+  expect(Math.abs(menu.getBoundingClientRect().bottom-(window.innerHeight-4))<=1,'sidebar loses its full-height inset surface');expect(nav.scrollHeight>nav.clientHeight,'large text directory does not scroll independently');expect(!menu.querySelector('.menu-bottom'),'idle sidebar reserves removed footer actions')
   for(const label of ['主页','流媒体音乐','音乐库','我的音乐库']){const text=button(label).querySelector('.item-label');expect(text.scrollWidth<=text.clientWidth,'large-text navigation label is truncated: '+label)}
-  await openEditor(button('编辑页面'));expect(dialog().getBoundingClientRect().right<=width&&dialog().getBoundingClientRect().bottom<=window.innerHeight,'dialog overflows narrow window');button('取消').click();await untilClosed();expect(JSON.stringify(store.settings.value.navigationPages)===prefs,'theme/layout changed saved preferences')
+  await openEditor(editorOpener());expect(dialog().getBoundingClientRect().right<=width&&dialog().getBoundingClientRect().bottom<=window.innerHeight,'dialog overflows narrow window');button('取消').click();await untilClosed();expect(JSON.stringify(store.settings.value.navigationPages)===prefs,'theme/layout changed saved preferences')
 }
 window.prepareSidebarPreview=async({tone,expanded})=>{
   document.documentElement.dataset.theme=tone;document.documentElement.style.setProperty('--te-font-size-body','14px')
@@ -214,7 +245,7 @@ window.checkNavigationStyles=async()=>{
   }
   document.documentElement.dataset.teNavigationStyle='expanded';await pause(350)
 }
-window.openNavigationEditor=async()=>{await openEditor(button('编辑页面'))}
+window.openNavigationEditor=async()=>{await openEditor(editorOpener())}
 window.checkCustomNavigation=async()=>{
   button('取消').click();document.documentElement.dataset.teShellLayout='custom'
   for(const mode of ['hidden','persistent']){

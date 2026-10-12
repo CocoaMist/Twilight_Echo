@@ -559,8 +559,7 @@ const hasPlayerBar = computed(
     !showDspRackPage.value &&
     !showPluginPage.value &&
     !activePluginPage.value &&
-    !visualizerActive.value &&
-    !!currentTrack.value
+    !visualizerActive.value
 )
 /* Shape and visibility resolution live in shared/playerBar.ts so main and renderer
    agree and the truth table stays unit-testable; App.vue only forwards the result.
@@ -923,10 +922,19 @@ const liquidGlassActive = computed(
   () =>
     effectiveSurfaceMaterial.value !== 'transparent' &&
     (liquidGlassChromeActive.value ||
-      effectiveLiquidGlass.value.homeCards.enabled ||
       effectiveLiquidGlass.value.playbarEnabled ||
-      effectiveLiquidGlass.value.settingsNavigationEnabled ||
-      effectiveLiquidGlass.value.coverage === 'expanded')
+      effectiveLiquidGlass.value.settingsNavigationEnabled)
+)
+const playbarRefractionActive = computed(
+  () =>
+    liquidGlassActive.value &&
+    settings.value.blurEffect &&
+    hasPlayerBar.value &&
+    !!currentTrack.value &&
+    !showPlayingPage.value &&
+    playerBarPresentation.value.mode === 'standard' &&
+    !playerBarPresentation.value.hidden &&
+    (effectiveSurfaceMaterial.value === 'liquidGlass' || effectiveLiquidGlass.value.playbarEnabled)
 )
 const liquidGlassBackgroundPage = computed<AppBackgroundPage>(() => {
   if (showPlayingPage.value) return 'player'
@@ -950,22 +958,14 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
   <AppBackgroundLayer :page="showStreamingSurface ? 'streaming' : 'local'" />
   <div
     class="app-shell"
+    :class="{ 'is-immersive': showPlayingPage }"
     :inert="appearanceFullWindowPreview"
     :style="{
       '--te-side-menu-bottom': `${sideMenuBottomOffset}px`,
       '--te-side-menu-tools-clearance': `${sideMenuToolsClearance}px`
     }"
   >
-    <LiquidGlassDefs
-      :active="liquidGlassActive"
-      :follow-pointer="effectiveLiquidGlass.followPointer"
-      :home-cards-active="
-        effectiveSurfaceMaterial !== 'transparent' && effectiveLiquidGlass.homeCards.enabled
-      "
-      :expanded-active="
-        effectiveSurfaceMaterial !== 'transparent' && effectiveLiquidGlass.coverage === 'expanded'
-      "
-    />
+    <LiquidGlassDefs :active="playbarRefractionActive" />
     <div class="app-shell-title">
       <TitleBar
         :immersive="showPlayingPage"

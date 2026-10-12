@@ -2,21 +2,50 @@
    Body diffusion, surface reflection and elevation are separate layers. Keep
    content calm; reserve optical refraction for the floating media controls.
    These internal tokens do not change the saved material or theme contracts. */
+/* Navigation and transport share a quiet material family. Their different
+   footprints need different elevation, without changing content card depth. */
 :root {
-  --te-bohr-light: rgb(255 255 255 / 58%);
-  --te-bohr-shoulder: rgb(255 255 255 / 18%);
-  --te-bohr-edge: rgb(18 24 32 / 22%);
-  --te-bohr-contact: 0 2px 5px rgb(18 24 32 / 10%);
-  --te-bohr-elevation: 0 12px 32px rgb(18 24 32 / 14%);
+  --te-chrome-material-solid: color-mix(
+    in srgb,
+    var(--te-app-bg) 96%,
+    var(--te-shell-control-text)
+  );
+  --te-chrome-material-surface: color-mix(
+    in srgb,
+    var(--te-chrome-material-solid) 76%,
+    transparent
+  );
+  --te-chrome-navigation-surface: color-mix(
+    in srgb,
+    var(--te-chrome-material-solid) 88%,
+    transparent
+  );
+  --te-chrome-navigation-elevation: 3px 0 14px
+    color-mix(in srgb, var(--te-chrome-shadow-color) 4%, transparent);
+  --te-chrome-contact: 0 1px 3px color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
+  --te-chrome-elevation: 0 5px 16px
+    color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
+  --te-bohr-light: color-mix(in srgb, var(--te-on-accent) 58%, transparent);
+  --te-bohr-shoulder: color-mix(in srgb, var(--te-on-accent) 18%, transparent);
+  --te-bohr-edge: color-mix(in srgb, var(--te-chrome-shadow-color) 22%, transparent);
+  --te-bohr-contact: 0 2px 5px color-mix(in srgb, var(--te-chrome-shadow-color) 10%, transparent);
+  --te-bohr-elevation: 0 12px 32px
+    color-mix(in srgb, var(--te-chrome-shadow-color) 14%, transparent);
   --te-bohr-raised-shadow:
     inset 0 1px 0.5px var(--te-bohr-light), inset 0 -1.5px 2px var(--te-bohr-edge),
     var(--te-bohr-contact), var(--te-bohr-elevation);
 }
 
 html[data-theme='dark'] {
-  --te-bohr-light: rgb(255 255 255 / 28%);
-  --te-bohr-shoulder: rgb(255 255 255 / 7%);
-  --te-bohr-edge: rgb(0 0 0 / 52%);
-  --te-bohr-contact: 0 2px 5px rgb(0 0 0 / 30%);
-  --te-bohr-elevation: 0 12px 32px rgb(0 0 0 / 36%);
+  --te-chrome-navigation-elevation: 3px 0 14px
+    color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
+  --te-chrome-contact: 0 1px 3px color-mix(in srgb, var(--te-chrome-shadow-color) 20%, transparent);
+  --te-chrome-elevation: 0 5px 16px
+    color-mix(in srgb, var(--te-chrome-shadow-color) 16%, transparent);
+  --te-bohr-light: color-mix(in srgb, var(--te-on-accent) 28%, transparent);
+  --te-bohr-shoulder: color-mix(in srgb, var(--te-on-accent) 7%, transparent);
+  --te-bohr-edge: color-mix(in srgb, var(--te-chrome-shadow-color) 52%, transparent);
+  --te-bohr-contact: 0 2px 5px color-mix(in srgb, var(--te-chrome-shadow-color) 30%, transparent);
+  --te-bohr-elevation: 0 12px 32px
+    color-mix(in srgb, var(--te-chrome-shadow-color) 36%, transparent);
 }

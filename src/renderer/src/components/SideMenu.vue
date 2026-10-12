@@ -9,7 +9,6 @@ import {
   ref,
   watch
 } from 'vue'
-import ImportDialog from '@renderer/components/ImportDialog.vue'
 import ThemeIcon from '@renderer/components/ThemeIcon.vue'
 import { useMusicStore } from '@renderer/stores/useMusicStore'
 import { useSettingsStore } from '@renderer/stores/useSettingsStore'
@@ -89,20 +88,6 @@ async function handleGroupKey(event: KeyboardEvent, id: SidebarGroupId): Promise
     group.querySelector<HTMLElement>('.menu-group-toggle')?.focus()
   }
 }
-function handleToolbarKey(event: KeyboardEvent): void {
-  if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
-  const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll('button')]
-  const index = buttons.indexOf(event.target as HTMLButtonElement)
-  if (index < 0) return
-  event.preventDefault()
-  const next =
-    event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? buttons.length - 1
-        : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
-  buttons[next]?.focus()
-}
 const { libraryScanStatus, libraryScanProgress } = useMusicStore()
 const scanning = computed(
   () => libraryScanStatus.value.state === 'running' || libraryScanStatus.value.state === 'paused'
@@ -113,7 +98,6 @@ const scanningLabel = computed(() => {
   const phase = libraryScanProgress.value?.phase === 'parsing' ? '解析' : '扫描'
   return status.total > 0 ? phase + '中 ' + (status.current || 0) + '/' + status.total : '正在扫描…'
 })
-const showImportDialog = ref(false)
 const showPagesEditor = ref(false)
 function selectPage(page: NavigationPageDefinition): void {
   showPagesEditor.value = false
@@ -166,11 +150,10 @@ function setPressOrigin(event: PointerEvent): void {
             >
               <ThemeIcon class="item-icon" :icon-slot="entry.icon" />
               <span class="item-label">{{ entry.title }}</span>
-              <i
-                class="group-chevron pi"
-                :class="expanded.has(entry.id) ? 'pi-angle-down' : 'pi-angle-right'"
-                aria-hidden="true"
-              ></i>
+              <ThemeIcon
+                class="group-chevron"
+                :icon-slot="expanded.has(entry.id) ? 'navigation.collapse' : 'navigation.expand'"
+              />
             </button>
             <div
               :id="`sidebar-group-${entry.id}`"
@@ -188,6 +171,13 @@ function setPressOrigin(event: PointerEvent): void {
                 :title="page.title"
                 @click="selectPage(page)"
               >
+                <i
+                  v-if="page.customIcon"
+                  class="item-icon"
+                  :class="page.customIcon"
+                  aria-hidden="true"
+                ></i>
+                <ThemeIcon v-else class="item-icon" :icon-slot="page.icon" />
                 <span class="item-label">{{ page.title }}</span>
               </button>
             </div>
@@ -225,42 +215,11 @@ function setPressOrigin(event: PointerEvent): void {
           >
         </button>
       </div>
-      <div class="menu-bottom">
-        <div class="menu-separator"></div>
-        <div
-          class="menu-toolbar"
-          role="toolbar"
-          aria-label="音乐工具"
-          aria-orientation="vertical"
-          @keydown="handleToolbarKey"
-        >
-          <button
-            type="button"
-            class="menu-item toolbar-item"
-            title="导入歌曲"
-            aria-label="导入歌曲"
-            @click="showImportDialog = true"
-          >
-            <ThemeIcon class="item-icon" icon-slot="navigation.import" /><span class="item-label"
-              >导入歌曲</span
-            >
-          </button>
-          <button
-            type="button"
-            class="menu-item toolbar-item"
-            title="编辑页面"
-            aria-label="编辑页面"
-            @click="showPagesEditor = true"
-          >
-            <i class="item-icon pi pi-pencil" aria-hidden="true"></i
-            ><span class="item-label">编辑页面</span>
-          </button>
-        </div>
-        <span v-if="scanning" class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
+      <div v-if="scanning" class="menu-bottom">
+        <span class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
       </div>
     </nav>
   </div>
-  <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
   <NativeDialogTransition>
     <NavigationPagesDialog
       v-if="showPagesEditor"
@@ -279,31 +238,25 @@ function setPressOrigin(event: PointerEvent): void {
   flex-direction: column;
   top: var(--te-titlebar-inset, 40px);
   left: 0;
-  /* App.vue measures how much of the bottom edge the playbar covers and publishes
-     it on `.app-shell-navigation`; the menu ends above the bar instead of running
-     underneath it. A custom property rather than an inline `bottom` so the custom
-     shell layout's `inset: auto !important` still wins. */
+  /* Default navigation keeps a full-height surface; main.css owns its window
+     inset. Custom shells can reserve their playback band through this property.
+     Overlap padding belongs to the inner scroller, not the material bounds. */
   bottom: var(--te-side-menu-bottom, 0px);
   width: var(--te-menu-width);
-  /* Frosted surface: the bottom-most global background shows through. The
-     blur is what keeps the split readable over a custom wallpaper — the page
-     draws its own cover-scaled copy of that image while the body carries the
-     window-wide one, and an unblurred seam between the two scales reads as the
-     menu sitting off-grid. Same recipe the streaming sidebar ships. */
-  background: transparent;
+  /* A lightly tinted sibling of the player material. The tall navigation
+     surface stays quiet; selection and labels carry its attention. */
+  background: var(--te-chrome-navigation-surface, transparent);
   border-right: 1px solid var(--te-navigation-border);
   border-radius: 0 var(--te-navigation-radius) var(--te-navigation-radius) 0;
   z-index: 1000;
   overflow: hidden;
-  box-shadow: var(--te-navigation-shadow);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: var(--te-chrome-navigation-elevation, var(--te-navigation-shadow));
+  backdrop-filter: blur(24px) saturate(124%);
+  -webkit-backdrop-filter: blur(24px) saturate(124%);
   transform: translate3d(-100%, 0, 0);
   transform-origin: left center;
   will-change: transform;
-  transition:
-    transform var(--te-motion-panel) var(--te-ease-soft),
-    box-shadow var(--te-motion-panel);
+  transition: transform var(--te-motion-panel) var(--te-ease-soft);
   font-family: var(--te-font-sans);
 }
 
@@ -311,9 +264,9 @@ function setPressOrigin(event: PointerEvent): void {
   transform: translate3d(0, 0, 0);
 }
 
-:global(html[data-theme='dark'] .side-menu) {
+:global(html[data-theme='dark'] .side-menu:not(.side-menu-liquid)) {
   border-right-color: var(--te-navigation-border);
-  background: transparent;
+  background: var(--te-chrome-navigation-surface, transparent);
 }
 
 :global(html[data-te-navigation-style='expanded']) {
@@ -435,6 +388,10 @@ function setPressOrigin(event: PointerEvent): void {
   font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
 }
 
+.menu-child > .item-icon {
+  display: none;
+}
+
 .menu-child.active::before {
   left: -10px;
 }
@@ -530,7 +487,7 @@ function setPressOrigin(event: PointerEvent): void {
   justify-content: center;
   flex-shrink: 0;
   color: var(--te-navigation-icon);
-  font-size: calc(var(--te-font-size-body, 14px) * 1.21429);
+  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
   transition: color var(--te-motion-hover) var(--te-ease-enter);
 }
 
@@ -555,10 +512,10 @@ function setPressOrigin(event: PointerEvent): void {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: calc(var(--te-font-size-body, 14px) * 1);
-  font-weight: 500;
+  font-weight: var(--te-control-font-weight, 500);
   color: currentColor;
   opacity: 0;
-  letter-spacing: 0.3px;
+  letter-spacing: normal;
   transition: opacity 0.2s ease;
 }
 
@@ -617,6 +574,10 @@ function setPressOrigin(event: PointerEvent): void {
   padding: 0;
 }
 
+:global(html[data-te-navigation-style='rail'] .menu-child > .item-icon) {
+  display: inline-grid;
+}
+
 :global(html[data-te-navigation-style='rail'] .menu-children::before) {
   left: 5px;
 }
@@ -671,9 +632,13 @@ function setPressOrigin(event: PointerEvent): void {
 }
 
 .side-menu-liquid {
+  background: transparent;
+  /* The pseudo surface owns the only backdrop pass. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   isolation: isolate;
-  border-right-color: color-mix(in srgb, var(--te-lg-context-label) 13%, transparent);
-  box-shadow: 5px 0 22px var(--te-lg-context-shadow);
+  border-right-color: color-mix(in srgb, var(--te-lg-context-label) 6%, transparent);
+  box-shadow: var(--te-chrome-navigation-elevation);
 }
 
 .side-menu-liquid::before {
@@ -681,28 +646,19 @@ function setPressOrigin(event: PointerEvent): void {
   z-index: -1;
   inset: 0;
   border-radius: inherit;
-  background:
-    linear-gradient(
-      112deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 18%, transparent),
-      transparent 56%
-    ),
-    color-mix(in srgb, var(--te-lg-context-surface) 68%, transparent);
-  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--te-lg-context-rim) 32%, transparent);
+  background: color-mix(in srgb, var(--te-lg-context-surface-solid) 82%, transparent);
   content: '';
   pointer-events: none;
-  backdrop-filter: blur(20px) saturate(128%);
-  -webkit-backdrop-filter: blur(20px) saturate(128%);
+  backdrop-filter: blur(24px) saturate(124%);
+  -webkit-backdrop-filter: blur(24px) saturate(124%);
 }
 
 :global(html[data-te-liquid-glass-source='solid'] .side-menu-liquid::before) {
-  background:
-    linear-gradient(
-      112deg,
-      color-mix(in srgb, var(--te-lg-context-rim) 22%, transparent),
-      transparent 56%
-    ),
-    var(--te-lg-context-material);
+  background: color-mix(
+    in srgb,
+    var(--te-lg-context-surface-solid) 70%,
+    var(--te-lg-context-material)
+  );
 }
 
 .side-menu-liquid :is(.navigation-brand, .menu-item, .scanning-text) {
@@ -746,9 +702,30 @@ function setPressOrigin(event: PointerEvent): void {
   opacity: 1;
 }
 
+/* Keep regular navigation readable when diffusion is disabled. */
+body.te-no-blur .side-menu:not(.side-menu-liquid),
+html[data-te-effects-mode='reduced'] .side-menu:not(.side-menu-liquid) {
+  background: var(--te-chrome-material-solid, var(--te-navigation-bg));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body.te-no-blur .side-menu-liquid::before,
+html[data-te-effects-mode='reduced'] .side-menu-liquid::before {
+  background: var(--te-lg-context-surface-solid, var(--te-chrome-material-solid)) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .side-menu:not(.side-menu-liquid) {
+    background: var(--te-chrome-material-solid, var(--te-navigation-bg));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   .side-menu-liquid::before {
-    background: var(--te-lg-context-surface-solid);
+    background: var(--te-lg-context-surface-solid) !important;
     border-right: 1px solid var(--te-lg-context-label);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -756,8 +733,16 @@ function setPressOrigin(event: PointerEvent): void {
 }
 
 @media (forced-colors: active) {
+  .side-menu:not(.side-menu-liquid) {
+    background: Canvas !important;
+    border-right: 1px solid CanvasText;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   .side-menu-liquid::before {
-    background: Canvas;
+    background: Canvas !important;
     border-right: 1px solid CanvasText;
     box-shadow: none;
     backdrop-filter: none;

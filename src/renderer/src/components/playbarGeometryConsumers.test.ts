@@ -93,9 +93,32 @@ function measure(options: Parameters<typeof installDom>[0]): number {
   return offset
 }
 
-test('sidebar clearance reserves room for a visible overlapping playbar', () => {
+test('custom sidebar clearance reserves room for a visible overlapping playbar', () => {
   // 800 viewport - 700 top + 10 gap.
-  assert.equal(measure({ playerBarHidden: 'false' }), 110)
+  assert.equal(measure({ playerBarHidden: 'false', shellLayout: 'custom' }), 110)
+})
+
+test('default sidebar preserves its content clearance during a slide and repeated toggles', () => {
+  for (const right of [240, 160, 80, 0, -4, 0, 80, 160, 240]) {
+    installDom({
+      sideMenuInset: 4,
+      sideMenuRect: { top: 100, bottom: 796, left: right - 216, right, height: 696 },
+      playerBarRect: { top: 700, bottom: 778, left: 94, right: 1106, height: 78 }
+    })
+    const clearance = useSideMenuClearance({ showLocalSidebar: ref(true), hasPlayerBar: ref(true) })
+    clearance.measureSideMenuClearance()
+    assert.equal(
+      clearance.sideMenuBottomOffset.value,
+      0,
+      'the material bounds cannot depend on the animated rect'
+    )
+    assert.equal(
+      clearance.sideMenuToolsClearance.value,
+      106,
+      'sliding past the player cannot resize the scroller'
+    )
+    clearance.dispose()
+  }
 })
 
 test('sidebar clearance drops to zero once the mini bar is tucked away', () => {
@@ -103,7 +126,7 @@ test('sidebar clearance drops to zero once the mini bar is tucked away', () => {
 })
 
 test('legacy menu-open state does not bypass actual overlap clearance', () => {
-  assert.equal(measure({ playerBarMenuOpen: true }), 110)
+  assert.equal(measure({ playerBarMenuOpen: true }), 0)
 })
 
 test('navigation tools clear the overlaid player and remain flush for adjacent custom layouts', () => {
@@ -113,7 +136,7 @@ test('navigation tools clear the overlaid player and remain flush for adjacent c
     hasPlayerBar: ref(true)
   })
   clearance.measureSideMenuClearance()
-  assert.equal(clearance.sideMenuBottomOffset.value, 110)
+  assert.equal(clearance.sideMenuBottomOffset.value, 0)
   assert.equal(clearance.sideMenuToolsClearance.value, 70)
 
   // Once the transition completes, adjacent bars also need no padding when a
@@ -157,8 +180,8 @@ test('navigation tools do not reserve the playback band twice in an inset shell'
   clearance.dispose()
 })
 
-test('overlay navigation at 760px reserves room above the full-width playbar', () => {
-  assert.equal(measure({ playerBarMenuOpen: true, viewportWidth: 760 }), 110)
+test('default overlay navigation at 760px keeps its full-height surface', () => {
+  assert.equal(measure({ playerBarMenuOpen: true, viewportWidth: 760 }), 0)
 })
 
 test('temporary navigation in a wide custom shell clears its grid-positioned playbar', () => {
@@ -183,7 +206,7 @@ test('sidebar clearance still handles a missing playbar and a non-overlapping on
  * loop — and it is the loop a ResizeObserver on the menu would drive forever,
  * flickering the menu between lifted and full height.
  */
-test('sidebar clearance settles instead of oscillating once the menu is lifted', () => {
+test('custom sidebar clearance settles instead of oscillating once the menu is lifted', () => {
   const NATURAL_BOTTOM = 760
   const playerBarRect = { top: 700, bottom: 780, left: 0, right: 1200, height: 80 }
   let appliedOffset = 0
@@ -207,7 +230,7 @@ test('sidebar clearance settles instead of oscillating once the menu is lifted',
   g.window = { innerHeight: 800 }
   g.document = {
     hidden: false,
-    documentElement: { dataset: { teShellLayout: 'classic' } },
+    documentElement: { dataset: { teShellLayout: 'custom' } },
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: (selector: string) => {

@@ -249,7 +249,7 @@ button:disabled {
   color: var(--te-neutral-900);
 }
 .has-player .platform-history {
-  padding-bottom: 130px;
+  padding-bottom: max(130px, calc(var(--te-playbar-bottom-clearance, 0px) + 12px));
 }
 header {
   display: flex;

@@ -495,7 +495,6 @@ function rowNumber(index: number): number {
               </td>
               <td class="col-cover">
                 <CoverImg
-                  v-if="track.coverSmall || track.cover"
                   :cover="track.coverSmall || track.cover"
                   :cover-source="track.coverSmallSource || track.coverSource"
                   :identity="track.id"
@@ -503,9 +502,6 @@ function rowNumber(index: number): number {
                   alt=""
                   loading="lazy"
                 />
-                <div v-else class="aggregate-row-cover aggregate-row-cover-placeholder">
-                  <ThemeIcon icon-slot="navigation.songs" />
-                </div>
               </td>
               <td class="col-info">
                 <span class="aggregate-row-title">{{ track.title }}</span>

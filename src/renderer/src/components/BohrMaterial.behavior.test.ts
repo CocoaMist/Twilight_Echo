@@ -97,7 +97,7 @@ app.whenReady().then(async()=>{
   const captures=[];
   for(const deviceScaleFactor of [1,1.25,1.5,2,2.5,3]){
    win.destroy();
-   win=new BrowserWindow({show:false,width:1100,height:700,useContentSize:true,webPreferences:{offscreen:{deviceScaleFactor},contextIsolation:false,backgroundThrottling:false}});
+   win=new BrowserWindow({show:false,frame:false,width:1100,height:700,useContentSize:true,webPreferences:{offscreen:{deviceScaleFactor},contextIsolation:false,backgroundThrottling:false}});
    await win.loadFile(process.argv.at(-1));
    win.webContents.debugger.attach('1.3');
    await win.webContents.executeJavaScript('window.runBohrTests()');
@@ -106,9 +106,13 @@ app.whenReady().then(async()=>{
    await win.webContents.executeJavaScript('window.runBohrTests()');
    for(const tone of ['dark','pureWhite'])for(const material of ['regular','glass','liquid']){
     const geometry=await win.webContents.executeJavaScript('window.prepareFullMaterialRaster('+JSON.stringify(tone)+','+JSON.stringify(material)+')');
-    const capture=await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true});
+    // Native Windows client sizes round at fractional display scales. Capture a
+    // fixed CSS region so the backing-density assertion does not mix DIP rounding
+    // with the offscreen device scale being tested.
+    const capture=await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true,clip:{x:0,y:0,width:1100,height:700,scale:1}});
     const image=nativeImage.createFromBuffer(Buffer.from(capture.data,'base64'));
-    if(image.getSize().width!==Math.round(1100*deviceScaleFactor))throw Error('material screenshot did not preserve physical DPI');
+    const viewport=await win.webContents.executeJavaScript('({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})');
+    if(image.getSize().width!==Math.round(1100*deviceScaleFactor)||image.getSize().height!==Math.round(700*deviceScaleFactor))throw Error('material screenshot did not preserve physical DPI: '+JSON.stringify({deviceScaleFactor,pixels:image.getSize(),viewport}));
     captures.push({deviceScaleFactor,tone,material,geometry,pixels:image.getSize()});
     if(process.env.TE_BOHR_EVIDENCE_DIR)fs.writeFileSync(require('node:path').join(process.env.TE_BOHR_EVIDENCE_DIR,'material-'+tone+'-'+material+'-'+deviceScaleFactor+'.png'),image.toPNG());
    }
@@ -148,12 +152,13 @@ app.whenReady().then(async()=>{
 
 const runtime = `import {h,render,nextTick} from 'vue'
 import LiquidGlassDefs from '@renderer/components/LiquidGlassDefs.vue'
+import {resolveRasterSampling,measureSurfaceGeometry} from '@renderer/utils/liquidGlassDisplacement.ts'
 const root=document.documentElement
 const host=document.getElementById('defs')
 const bar=document.querySelector('.player-bar')
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const settle=async()=>{await nextTick();await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))}
-const mount=async(active)=>{render(h(LiquidGlassDefs,{active,followPointer:false,homeCardsActive:false,expandedActive:false}),host);await settle()}
+const mount=async(active)=>{render(h(LiquidGlassDefs,{active}),host);await settle()}
 window.prepareFullMaterialRaster=async(tone,material)=>{
  await window.prepareBohrEvidence(tone)
  bar.className='player-bar'+(material==='liquid'?' player-bar-liquid':material==='glass'?' player-bar-glass':'')
@@ -173,11 +178,12 @@ window.checkPixelRatioUpdate=async()=>{
  await settle()
  await new Promise(resolve=>setTimeout(resolve,250))
  await settle()
- const images=[...document.querySelectorAll('#te-lg-card feImage')].slice(0,1)
- expect(images.length===1,'card filter remains mounted across DPI changes')
+ const images=[...document.querySelectorAll('#te-lg-playbar feImage')].slice(0,1)
+ expect(images.length===1,'playback filter remains mounted across DPI changes')
  const image=new Image();image.src=images[0].getAttribute('href');await image.decode()
  const density=Math.max(2,Math.min(3,window.devicePixelRatio))
- expect(image.width===180*density&&image.height===120*density,'unchanged CSS geometry updates its physical-pixel raster: '+image.width+'x'+image.height+' at '+density)
+ const raster=resolveRasterSampling(measureSurfaceGeometry(bar),density)
+ expect(image.width===raster.width&&image.height===raster.height,'unchanged CSS geometry updates its physical-pixel raster: '+image.width+'x'+image.height+' at '+density)
 }
 window.runBohrTests=async()=>{
  root.setAttribute('data-te-surface-material','liquidGlass')
@@ -210,7 +216,16 @@ window.runBohrTests=async()=>{
  for(const tone of ['pureWhite','dark']){
   root.setAttribute('data-theme',tone)
   expect(getComputedStyle(document.querySelector('.title-bar-background')).boxShadow==='none','caption material has no dark separator')
-  expect(getComputedStyle(bar).boxShadow.includes(tone==='dark'?'0, 0, 0':'18, 24, 32'),'elevation follows theme tone')
+  const shadow=getComputedStyle(bar).boxShadow
+  const shadowColor=shadow.match(/^(rgba?[(][^)]*[)]|color[(][^)]*[)])/ )?.[0]
+  expect(Boolean(shadowColor),'elevation must retain a resolvable colour')
+  const canvas=document.createElement('canvas');canvas.width=canvas.height=1
+  const context=canvas.getContext('2d');context.fillStyle=shadowColor;context.fillRect(0,0,1,1)
+  const pixel=context.getImageData(0,0,1,1).data
+  const expected=tone==='dark'?[0,0,0]:[18,24,32]
+  // Canvas stores premultiplied 8-bit channels: faint shadows lose RGB precision.
+  const tolerance=Math.ceil(255/(2*pixel[3]))
+  expect(expected.every((value,index)=>Math.abs(pixel[index]-value)<=tolerance)&&pixel[3]>0,'elevation follows theme tone: '+JSON.stringify({tone,shadow,pixel:[...pixel]}))
   const after=bar.getBoundingClientRect()
   expect(after.height===geometry.height&&after.width===geometry.width,'material does not change bar geometry')
  }
