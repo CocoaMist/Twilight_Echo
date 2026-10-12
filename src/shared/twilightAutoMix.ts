@@ -1,6 +1,25 @@
 export type AutoMixMode = 'off' | 'natural' | 'dj'
 export type AutoMixStemMode = 'off' | 'auto'
 export type AutoMixStemDevice = 'auto' | 'gpu' | 'cpu'
+export interface AutoMixStemInstallStatus {
+  phase:
+    | 'idle'
+    | 'selecting'
+    | 'checking'
+    | 'extracting'
+    | 'verifying'
+    | 'ready'
+    | 'cancelled'
+    | 'failed'
+  completedBytes: number
+  totalBytes: number
+  fileName?: string
+  reason?: 'invalid_archive' | 'invalid_pack' | 'integrity' | 'disk_space' | 'runtime' | 'io'
+  capabilities?: { cpu: boolean; gpu: boolean; gpuName?: string }
+}
+export function autoMixStemInstallBusy(status: AutoMixStemInstallStatus): boolean {
+  return ['selecting', 'checking', 'extracting', 'verifying'].includes(status.phase)
+}
 export interface AutoMixStemCapabilities {
   status: 'missing' | 'ready' | 'unavailable'
   cpu: boolean

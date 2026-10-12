@@ -188,6 +188,15 @@ interface TrayPlayerBootstrap {
 }
 
 interface AudioEngineAPI {
+  installAutoMixStemPack: () => Promise<
+    import('../shared/twilightAutoMix.ts').AutoMixStemInstallStatus
+  >
+  getAutoMixStemInstallStatus: () => Promise<
+    import('../shared/twilightAutoMix.ts').AutoMixStemInstallStatus
+  >
+  cancelAutoMixStemInstall: () => Promise<
+    import('../shared/twilightAutoMix.ts').AutoMixStemInstallStatus
+  >
   getAutoMixStemCapabilities: (
     refresh?: boolean
   ) => Promise<import('../shared/twilightAutoMix.ts').AutoMixStemCapabilities>

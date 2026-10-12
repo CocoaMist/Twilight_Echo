@@ -47,7 +47,40 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'automix.stems.deviceAuto': 'Auto (prefer GPU)',
   'automix.stems.checking': 'Detecting stem separator and compute devices…',
   'automix.stems.missing':
-    'No stem separator detected. Place the automix-enhancement folder in the player directory, then select Detect again.',
+    'No stem separator detected. Select Install stem pack above and choose a ZIP to enable GPU / CPU choices.',
+  'automix.stems.install.button': 'Install stem pack…',
+  'automix.stems.resourceNotice':
+    'Stem enhancement uses RAM to process audio and also uses VRAM on GPU. Usage depends on the audio and compute device. You can disable stem enhancement at any time.',
+  'automix.stems.install.enableAfter': 'Enable stem enhancement after installation',
+  'automix.stems.install.enableDescription':
+    'When checked, select GPU / CPU automatically. When unchecked, disable stem enhancement after a successful install. Cancellation or failure preserves current settings.',
+  'automix.stems.install.choose': 'Choose ZIP and install',
+  'automix.notice.cancel': 'Cancel',
+  'automix.djNotice.title': 'Enable DJ mode?',
+  'automix.djNotice.description':
+    'DJ mode may skip large parts of song openings or endings for beat matching and transitions, and overlap two songs in a longer mix. Choose Natural to retain more song content.',
+  'automix.djNotice.confirm': 'Enable DJ mode',
+  'automix.stems.install.pick': 'Select an AutoMix stem pack ZIP',
+  'automix.stems.install.selecting': 'Choose a stem pack ZIP…',
+  'automix.stems.install.checking': 'Checking the pack and free disk space…',
+  'automix.stems.install.extracting': 'Extracting stem pack',
+  'automix.stems.install.verifying': 'Verifying files and detecting GPU / CPU…',
+  'automix.stems.install.ready':
+    'Stem pack installed. Choose a compute device and enable stem enhancement.',
+  'automix.stems.install.cancel': 'Cancel installation',
+  'automix.stems.install.cancelled': 'Installation cancelled.',
+  'automix.stems.install.error.invalid_archive':
+    'Installation failed: invalid or unsupported ZIP. Select a complete stem pack.',
+  'automix.stems.install.error.invalid_pack':
+    'Installation failed: incomplete pack or incompatible model version.',
+  'automix.stems.install.error.integrity':
+    'Installation failed: file verification failed. Obtain a complete stem pack and retry.',
+  'automix.stems.install.error.disk_space':
+    'Installation failed: insufficient space on the user data drive. Free space and retry.',
+  'automix.stems.install.error.runtime':
+    'Installation failed: stem runtime check failed. Check the pack and retry.',
+  'automix.stems.install.error.io':
+    'Installation failed: unable to read the ZIP or write the installation directory. Check the file and disk, then retry.',
   'automix.stems.cpuReady': 'Stem separator detected · CPU available, GPU unavailable',
   'automix.stems.gpuReady': 'Stem separator detected · GPU / CPU available',
   'automix.stems.deviceUnavailable':

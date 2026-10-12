@@ -1,5 +1,6 @@
 import { AutoMixStemService } from './autoMixStemService.ts'
 import { AutoMixStemDetector } from './autoMixStemCapabilities.ts'
+import { AutoMixStemInstaller, managedStemPackDirectories } from './autoMixStemInstaller.ts'
 import { IPC } from '../../shared/ipcChannels.ts'
 import { resolveAuthorizationBatch } from '../security/authorizationBatch.ts'
 import { DspAuditionManager } from './dspAuditionManager.ts'
@@ -109,8 +110,27 @@ function stemWorkerDirectory(): string {
     'automix-stems'
   )
 }
+const stemInstallRoot = (): string => join(app.getPath('userData'), 'automix-stem-packs')
+const stemInstaller = new AutoMixStemInstaller({
+  root: stemInstallRoot,
+  workerDirectory: stemWorkerDirectory,
+  chooseArchive: async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: translate(mainLocale(), 'automix.stems.install.pick'),
+      properties: ['openFile'],
+      filters: [{ name: 'AutoMix ZIP', extensions: ['zip'] }]
+    }
+    const parent = runtime.mainWindow
+    const result =
+      parent && !parent.isDestroyed()
+        ? await dialog.showOpenDialog(parent, options)
+        : await dialog.showOpenDialog(options)
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  }
+})
 const stemDetector = new AutoMixStemDetector(
   () => [
+    ...managedStemPackDirectories(stemInstallRoot()),
     ...(process.env.TWILIGHT_AUTOMIX_STEM_PACK ? [process.env.TWILIGHT_AUTOMIX_STEM_PACK] : []),
     ...[
       join(app.getPath('exe'), '..'),
@@ -815,6 +835,19 @@ function registerAudioEngineIpcHandlers(): void {
   ipcMain.handle(IPC.audioEngine.getAutoMixStemCapabilities, (event, refresh: unknown) => {
     assertTrustedIpcSender(event, 'AutoMix stem capabilities')
     return stemDetector.get(refresh === true)
+  })
+  ipcMain.handle(IPC.audioEngine.installAutoMixStemPack, async (event) => {
+    assertTrustedIpcSender(event, 'Install AutoMix stem package')
+    if (!TWILIGHT_AUTOMIX_AVAILABLE) throw new Error('AutoMix unavailable')
+    return stemInstaller.install()
+  })
+  ipcMain.handle(IPC.audioEngine.getAutoMixStemInstallStatus, (event) => {
+    assertTrustedIpcSender(event, 'AutoMix stem installation status')
+    return stemInstaller.getStatus()
+  })
+  ipcMain.handle(IPC.audioEngine.cancelAutoMixStemInstall, (event) => {
+    assertTrustedIpcSender(event, 'Cancel AutoMix stem installation')
+    return stemInstaller.cancel()
   })
   const auditionManager = new DspAuditionManager({
     context: async () => (await ensureAudioEngineRuntime()).getAuditionContext(),

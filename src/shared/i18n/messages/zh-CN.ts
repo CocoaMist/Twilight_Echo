@@ -49,8 +49,36 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
     '自动优先使用 GPU，显存不足时回退 CPU；指定 GPU 时失败会使用基础 AutoMix。已有分轨缓存可直接复用。',
   'automix.stems.deviceAuto': '自动（优先 GPU）',
   'automix.stems.checking': '正在检测分轨器和计算设备…',
-  'automix.stems.missing':
-    '未检测到分轨器。将 automix-enhancement 文件夹放在播放器目录后，点击“重新检测”。',
+  'automix.stems.missing': '未检测到分轨器。点击上方“安装分轨包”选择 ZIP，安装后可选择 GPU / CPU。',
+  'automix.stems.install.button': '安装分轨包…',
+  'automix.stems.resourceNotice':
+    '分轨增强会使用内存处理音频；使用 GPU 时还会占用显存。占用量取决于音频和计算设备，可随时关闭分轨增强。',
+  'automix.stems.install.enableAfter': '安装完成后开启分轨增强',
+  'automix.stems.install.enableDescription':
+    '勾选后自动选择 GPU / CPU；不勾选则在安装成功后关闭分轨增强。取消或安装失败保留当前设置。',
+  'automix.stems.install.choose': '选择 ZIP 并安装',
+  'automix.notice.cancel': '取消',
+  'automix.djNotice.title': '开启 DJ 模式？',
+  'automix.djNotice.description':
+    'DJ 模式可能为了对拍和过渡，大幅跳过歌曲的开头或结尾，并让两首歌曲较长时间重叠混音。若希望保留更多歌曲内容，请选择自然模式。',
+  'automix.djNotice.confirm': '确认开启 DJ',
+  'automix.stems.install.pick': '选择 AutoMix 分轨包 ZIP',
+  'automix.stems.install.selecting': '请选择分轨包 ZIP…',
+  'automix.stems.install.checking': '正在检查分轨包和可用空间…',
+  'automix.stems.install.extracting': '正在解压分轨包',
+  'automix.stems.install.verifying': '正在校验文件并检测 GPU / CPU…',
+  'automix.stems.install.ready': '分轨包安装完成，请选择计算设备并开启分轨增强。',
+  'automix.stems.install.cancel': '取消安装',
+  'automix.stems.install.cancelled': '已取消安装。',
+  'automix.stems.install.error.invalid_archive':
+    '安装失败：ZIP 无效或包含不支持的文件，请重新选择完整的分轨包。',
+  'automix.stems.install.error.invalid_pack': '安装失败：分轨包文件不完整或模型版本不兼容。',
+  'automix.stems.install.error.integrity': '安装失败：文件校验不通过，请重新获取完整的分轨包。',
+  'automix.stems.install.error.disk_space':
+    '安装失败：用户数据所在磁盘空间不足，请释放空间后重试。',
+  'automix.stems.install.error.runtime': '安装失败：分轨运行环境检测未通过，请检查分轨包后重试。',
+  'automix.stems.install.error.io':
+    '安装失败：无法读取 ZIP 或写入安装目录，请检查文件和磁盘后重试。',
   'automix.stems.cpuReady': '已检测到分轨器 · CPU 可用，GPU 不可用',
   'automix.stems.gpuReady': '已检测到分轨器 · GPU / CPU 可用',
   'automix.stems.deviceUnavailable': '已保存的计算设备当前不可用，请选择可用设备。',
