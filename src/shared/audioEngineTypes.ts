@@ -448,6 +448,8 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   requestedConfigRevision: number
   appliedConfigRevision: number
   queueIndex: number
+  /** Main-issued content version for mapping partial native queues to logical entries. */
+  queueToken?: string
   playMode: PlayMode
   source: string
   codec: string

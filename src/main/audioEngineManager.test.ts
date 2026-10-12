@@ -4489,6 +4489,44 @@ test('queue cursor reuse verifies content token and CUE identity before native s
   assert.deepEqual(selected, [1])
 })
 
+test('playback snapshots expose queue authority only for a matching native source', async (t) => {
+  const nativeBinding = new FakeNativeBinding()
+  let now = 1000
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding,
+    { now: () => now }
+  )
+  t.after(() => manager.destroy())
+  const events: PlaybackInfo[] = []
+  manager.on('playback-info', (info: PlaybackInfo) => events.push(info))
+  await manager.loadQueue(
+    [
+      { id: 'ncm:a', source: 'https://cdn.test/a.flac' },
+      { id: 'ncm:b', source: 'https://cdn.test/b.flac' }
+    ],
+    0
+  )
+  await manager.play('https://cdn.test/a.flac')
+  const token = manager.getQueueToken()
+  assert.equal((await manager.getPlaybackInfo()).queueToken, token)
+  assert.ok(events.some((event) => event.queueToken === token))
+
+  nativeBinding.playbackInfo = {
+    ...nativeBinding.playbackInfo,
+    source: 'https://cdn.test/b.flac',
+    queueIndex: 1
+  }
+  now += 1000
+  const promoted = await manager.getPlaybackInfo()
+  assert.equal(promoted.queueIndex, 1)
+  assert.equal(promoted.queueToken, token)
+
+  await manager.loadQueue([{ id: 'ncm:c', source: 'https://cdn.test/c.flac' }], 0)
+  now += 1000
+  assert.equal((await manager.getPlaybackInfo()).queueToken, undefined)
+})
+
 test('loadQueue skips native call and queue fanout when normalized queue is unchanged', async () => {
   const nativeBinding = new FakeNativeBinding()
   const manager = makeManager(

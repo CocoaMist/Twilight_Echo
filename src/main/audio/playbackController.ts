@@ -908,7 +908,7 @@ export class PlaybackController {
         this.lastNativePlaybackInfoTickReadAt = now
       }
     }
-    return { ...this.playbackInfo, nativePlaybackActive: this.nativePlaybackActive }
+    return this.playbackSnapshot()
   }
 
   getSpectrumData(points = 64): number[] {
@@ -1629,15 +1629,22 @@ export class PlaybackController {
   }
 
   publishPlaybackInfo(options: { dedupePositionOnly?: boolean } = {}): void {
-    const fanoutKey = this.createPlaybackInfoFanoutKey()
+    const fanoutKey = `${this.queueToken}:${this.createPlaybackInfoFanoutKey()}`
     if (options.dedupePositionOnly && fanoutKey === this.lastPlaybackInfoFanoutKey) return
 
     this.lastPlaybackInfoFanoutKey = fanoutKey
-    this.emit('playback-info', {
-      ...this.playbackInfo,
-      nativePlaybackActive: this.nativePlaybackActive
-    })
+    this.emit('playback-info', this.playbackSnapshot())
     this.publishPendingConfigAppliedEvent()
+  }
+
+  private playbackSnapshot(): PlaybackInfo {
+    // A stale native sample must not inherit authority from a newly loaded queue.
+    const indexed = this.queue[this.playbackInfo.queueIndex]
+    return {
+      ...this.playbackInfo,
+      nativePlaybackActive: this.nativePlaybackActive,
+      queueToken: indexed?.source === this.playbackInfo.source ? this.queueToken : undefined
+    }
   }
 
   publishPendingConfigAppliedEvent(): void {

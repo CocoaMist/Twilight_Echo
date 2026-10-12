@@ -1,5 +1,7 @@
 import type { Track, TrackSource } from '../types/music'
+import type { PlayMode } from '../types/settings'
 import { MAX_NATIVE_QUEUE_ITEMS } from '../../../shared/nativeQueue.ts'
+import { playModeWrapsAtQueueEnd, toNativePlayMode } from '../../../shared/playbackModes.ts'
 import { isTwilightMediaGrantTarget, shouldUseNativePlaybackTarget } from './playbackRouting.ts'
 
 const WINDOWS_ABSOLUTE_PATH_PATTERN = /^[a-zA-Z]:[\\/]/
@@ -27,6 +29,8 @@ export interface PreparedNativeQueue {
   items: NativeQueueLoadItem[]
   startIndex: number
   delegated: boolean
+  /** Logical indices for a partial queue. Such a window must never loop itself. */
+  queueIndices?: number[]
 }
 
 export interface PrepareNativeQueueOptions {
@@ -34,6 +38,7 @@ export interface PrepareNativeQueueOptions {
   currentTrack: Track
   currentTarget: string
   currentIndex: number
+  playMode?: PlayMode
   /** Only the main-issued queue token may commit this speculative reuse. */
   canReuseQueue?: (items: NativeQueueLoadItem[]) => boolean
   isCurrent?: () => boolean
@@ -81,10 +86,11 @@ export async function prepareNativeQueue(
   if (currentIndex < 0) return asCurrentOnly(currentItem)
 
   // A whole-library queue can exceed what one loadQueue IPC accepts. Delegating
-  // it would be rejected by main before playback ever starts, so hand the engine
-  // the current track only and let the renderer drive advancement. Checked ahead
-  // of the authorization fan-out below, which costs one IPC round-trip per track.
-  if (options.queue.length > MAX_NATIVE_QUEUE_ITEMS) return asCurrentOnly(currentItem)
+  // it would be rejected by main before playback ever starts. Bound it before
+  // authorization; NetEase can keep a playable upcoming entry in that window.
+  if (options.queue.length > MAX_NATIVE_QUEUE_ITEMS) {
+    return prepareNcmWindow(options, currentItem, currentIndex)
+  }
 
   const items = options.queue.map((track, index) =>
     index === currentIndex ? currentItem : toQueueItem(track, getTrackTarget(track))
@@ -107,7 +113,42 @@ export async function prepareNativeQueue(
   if (available) {
     return { items, startIndex: currentIndex, delegated: true }
   }
-  return asCurrentOnly(currentItem)
+  return prepareNcmWindow(options, currentItem, currentIndex)
+}
+
+/** Resolve only the immediate boundary; an unresolved later song must not
+ * disarm an already playable next song. Keep manual next/previous in the
+ * renderer until the entire logical queue is delegated. */
+async function prepareNcmWindow(
+  options: PrepareNativeQueueOptions,
+  currentItem: NativeQueueLoadItem,
+  currentIndex: number
+): Promise<PreparedNativeQueue | null> {
+  const mode = options.playMode ?? 'sequential'
+  let nextIndex = currentIndex + 1
+  if (nextIndex >= options.queue.length && playModeWrapsAtQueueEnd(mode)) nextIndex = 0
+  const next = mode !== 'repeat' && mode !== 'heart' ? options.queue[nextIndex] : undefined
+  if (getTrackSource(options.currentTrack) !== 'ncm' && (!next || getTrackSource(next) !== 'ncm')) {
+    return asCurrentOnly(currentItem)
+  }
+  const prepared: PreparedNativeQueue = {
+    items: [currentItem],
+    startIndex: 0,
+    delegated: false,
+    queueIndices: [currentIndex]
+  }
+  if (next && nextIndex !== currentIndex) {
+    const item = toQueueItem(next, getTrackTarget(next))
+    if (await isNativeTargetAvailable(next, item.source, options)) {
+      prepared.items.push(item)
+      prepared.queueIndices!.push(nextIndex)
+    }
+  }
+  return options.isCurrent?.() === false ? null : prepared
+}
+
+export function preparedNativePlayMode(prepared: PreparedNativeQueue, mode: PlayMode) {
+  return prepared.queueIndices && mode !== 'repeat' ? 'sequential' : toNativePlayMode(mode)
 }
 
 function asCurrentOnly(item: NativeQueueLoadItem): PreparedNativeQueue {
@@ -277,6 +318,7 @@ export interface NcmStreamUrlFreshness {
   committedAtByTrackId: ReadonlyMap<string, number>
   nowMs?: number
   maxAgeMs?: number
+  quality?: Track['streamQuality']
 }
 
 /**
@@ -295,6 +337,10 @@ export function stripStaleNcmStreamUrls(
   const items = queue.map((track) => {
     if (getTrackSource(track) !== 'ncm') return track
     const streamUrl = track.streamUrl
+    if (streamUrl && freshness.quality && track.streamQuality !== freshness.quality) {
+      changed = true
+      return { ...track, streamUrl: '' }
+    }
     if (
       typeof streamUrl !== 'string' ||
       (!/^https?:\/\//i.test(streamUrl) && !isTwilightMediaGrantTarget(streamUrl))
@@ -308,7 +354,7 @@ export function stripStaleNcmStreamUrls(
   return changed ? items : ([...queue] as Track[])
 }
 
-function isAuthorizedRemoteUrl(target: string): boolean {
+export function isAuthorizedRemoteUrl(target: string): boolean {
   // Opaque grants are already vetted when issued by main (protectProviderMedia).
   if (isTwilightMediaGrantTarget(target)) return true
   try {
