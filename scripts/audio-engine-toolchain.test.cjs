@@ -1244,10 +1244,11 @@ test('MinGW CTest validation requires every native test registration, including 
     ...cmakeLists.matchAll(/add_test\(\s*NAME\s+(twilight_[a-z0-9_]+)/g)
   ].map((match) => match[1])
 
-  assert.equal(MINGW_EXPECTED_CTESTS.length, 40)
+  assert.equal(MINGW_EXPECTED_CTESTS.length, 41)
   assert.ok(MINGW_EXPECTED_CTESTS.includes('twilight_convolver_unit'))
   assert.ok(MINGW_EXPECTED_CTESTS.includes('twilight_wsola_performance_gate'))
   assert.ok(MINGW_EXPECTED_CTESTS.includes('twilight_audio_performance_gate'))
+  assert.ok(MINGW_EXPECTED_CTESTS.includes('twilight_audio_pcm_transparency'))
   assert.deepEqual([...MINGW_EXPECTED_CTESTS].sort(), registeredTests.sort())
 })
 
