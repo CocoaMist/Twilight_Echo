@@ -195,6 +195,25 @@ test('plugin manager enforces plugin API namespace permissions at the gateway', 
   )
 })
 
+test('plugin manager routes the overlay namespace to the host dynamic island bridge behind ui:inject', () => {
+  assert.match(managerSource, /dynamicIsland\?: \{/)
+  assert.match(managerSource, /message\.namespace === 'overlay'[\s\S]*this\.handleOverlayApiCall\(id, message\)/)
+  assert.match(managerSource, /private handleOverlayApiCall\(/)
+  assert.match(
+    managerSource,
+    /this\.requirePermission\(pluginId,\s*'ui:inject',\s*`overlay\.\$\{message\.method\}`\)/
+  )
+  assert.match(managerSource, /this\.dynamicIsland\.show\(pluginId\)/)
+  assert.match(managerSource, /this\.dynamicIsland\.hide\(pluginId\)/)
+  assert.match(
+    managerSource,
+    /this\.dynamicIsland\.configure\(pluginId, message\.args\[0\] \?\? \{\}\)/
+  )
+  assert.match(pluginHostSource, /overlay: \{/)
+  assert.match(pluginHostSource, /function callOverlayApi\(/)
+  assert.match(pluginHostSource, /callApi\('overlay', method, args\)/)
+})
+
 test('plugin manager prevents provider id takeover', () => {
   assert.match(managerSource, /const RESERVED_PROVIDER_IDS = new Set\(\['local', 'ncm'\]\)/)
   assert.match(managerSource, /private assertProviderIdAvailable\(/)

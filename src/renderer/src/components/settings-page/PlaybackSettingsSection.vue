@@ -150,8 +150,13 @@ const stemInstallText = computed(() => {
 })
 let stemInstallPoll: ReturnType<typeof setTimeout> | undefined
 let stemComponentMounted = false
-async function acceptStemInstallStatus(status: AutoMixStemInstallStatus): Promise<void> {
+async function acceptStemInstallStatus(
+  status: AutoMixStemInstallStatus | null | undefined
+): Promise<void> {
   if (!stemComponentMounted) return
+  // The IPC wrapper is generic; a malformed/absent payload must not replace a
+  // known status with `null` and break every downstream computed.
+  if (!status || typeof status.phase !== 'string') return
   const wasReady = stemInstallStatus.value.phase === 'ready'
   stemInstallStatus.value = status
   if (status.phase === 'ready' && !wasReady) await detectStems(true)
@@ -236,7 +241,10 @@ async function detectStems(refresh = false): Promise<void> {
   if (stemChecking.value) return
   stemChecking.value = true
   try {
-    stemCapabilities.value = await window.api.audioEngine.getAutoMixStemCapabilities(refresh)
+    const capabilities = await window.api.audioEngine.getAutoMixStemCapabilities(refresh)
+    if (capabilities && typeof capabilities.status === 'string') {
+      stemCapabilities.value = capabilities
+    }
   } catch {
     stemCapabilities.value = {
       status: 'unavailable',

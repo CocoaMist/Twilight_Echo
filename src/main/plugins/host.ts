@@ -97,6 +97,17 @@ interface TwilightPluginContext {
       onCommand: (command: string, handler: CommandHandler) => () => void
       notify: (notice: { kind?: string; message: string; durationMs?: number }) => Promise<void>
     }
+    overlay: {
+      /** Show the host-owned dynamic island window. Requires `ui:inject`. */
+      show: () => Promise<void>
+      /** Hide the host-owned dynamic island window. */
+      hide: () => Promise<void>
+      /**
+       * Apply a DIY config, returning the normalized config the host actually
+       * renders. Safe to call while hidden; the config applies on next show.
+       */
+      configure: (config: unknown) => Promise<unknown>
+    }
     themes: {
       register: (theme: {
         id: string
@@ -338,6 +349,11 @@ function createContext(
       },
       notify: (notice) => callUiApi('notify', notice).then(() => undefined)
     },
+    overlay: {
+      show: () => callOverlayApi('show', []).then(() => undefined),
+      hide: () => callOverlayApi('hide', []).then(() => undefined),
+      configure: (config) => callOverlayApi('configure', [config])
+    },
     themes: {
       register: async () => {
         throw new Error('Themes must be declared in plugin.json contributes.themes')
@@ -442,6 +458,13 @@ function callUiApi(
   contribution: unknown
 ): Promise<unknown> {
   return callApi('extensions', method, [contribution])
+}
+
+function callOverlayApi(
+  method: Extract<PluginHostResponse, { kind: 'api-call' }>['method'],
+  args: unknown[]
+): Promise<unknown> {
+  return callApi('overlay', method, args)
 }
 
 function callInternalNcmApi(
