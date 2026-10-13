@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import { downloadEntryToCache } from './networkCache.ts'
 import { clearDirectory, getDirectorySize } from './networkCache.ts'
@@ -10,6 +11,7 @@ import { createWebDavAdapter } from './adapters/webdavAdapter.ts'
 import { buildNetworkEntryId } from './networkPath.ts'
 import { normalizeEntry } from './networkEntryInput.ts'
 import type { NetworkEntry, NetworkSourceProfile } from '../../shared/networkSources.ts'
+import type { NetworkSourceSession } from './adapters/types.ts'
 
 const FLAC_BYTES = Buffer.from('FLAC-CACHE-DATA-0123456789')
 let server: Server
@@ -225,3 +227,121 @@ test('a wrong Content-Range cannot publish same-size but incorrect resumed bytes
   const target = await downloadEntryToCache({ session, entry, cacheRoot })
   assert.deepEqual(await readFile(target), FLAC_BYTES)
 })
+
+function slowSession(bytes: Buffer): NetworkSourceSession & { reads: number; aborted: number } {
+  return {
+    protocol: 'ftp',
+    reads: 0,
+    aborted: 0,
+    async list() {
+      return []
+    },
+    async stat() {
+      return null
+    },
+    async resolvePlaybackUrl() {
+      return null
+    },
+    async close() {},
+    async readStream(_path, signal, options) {
+      this.reads += 1
+      const stream = new PassThrough()
+      let offset = options?.start ?? 0
+      const onAbort = (): void => {
+        this.aborted += 1
+        stream.destroy(new Error('aborted'))
+      }
+      const timer = setInterval(() => {
+        if (offset === bytes.length) stream.end()
+        else {
+          const next = Math.min(offset + 1024, bytes.length)
+          stream.write(bytes.subarray(offset, next))
+          offset = next
+        }
+      }, 2)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      stream.once('close', () => {
+        clearInterval(timer)
+        signal?.removeEventListener('abort', onAbort)
+      })
+      return stream
+    }
+  }
+}
+
+test(
+  'concurrent cache consumers share a producer and one cancellation leaves the other running',
+  { timeout: 2_000 },
+  async (t) => {
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'network-cache-share-'))
+    t.after(() => rm(cacheRoot, { recursive: true, force: true }))
+    const bytes = Buffer.alloc(32 * 1024, 42)
+    const session = slowSession(bytes)
+    const entry = makeEntry('/music/shared.flac', bytes.length)
+    const controller = new AbortController()
+    const first = downloadEntryToCache({ session, entry, cacheRoot, signal: controller.signal })
+    const cancelled = assert.rejects(first, { code: 'timeout' })
+    const second = downloadEntryToCache({ session, entry, cacheRoot })
+    const third = downloadEntryToCache({ session, entry, cacheRoot })
+    setTimeout(() => controller.abort(), 15)
+    const [, secondPath, thirdPath] = await Promise.all([cancelled, second, third])
+    assert.equal(secondPath, thirdPath)
+    assert.deepEqual(await readFile(secondPath), bytes)
+    assert.equal(session.reads, 1)
+    assert.equal(session.aborted, 0)
+  }
+)
+
+test(
+  'the last cancelled cache consumer aborts its producer and a later call can resume',
+  { timeout: 2_000 },
+  async (t) => {
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'network-cache-abort-'))
+    t.after(() => rm(cacheRoot, { recursive: true, force: true }))
+    const bytes = Buffer.alloc(32 * 1024, 24)
+    const session = slowSession(bytes)
+    const entry = makeEntry('/music/abort.flac', bytes.length)
+    const a = new AbortController()
+    const b = new AbortController()
+    const first = assert.rejects(
+      downloadEntryToCache({ session, entry, cacheRoot, signal: a.signal }),
+      { code: 'timeout' }
+    )
+    const second = assert.rejects(
+      downloadEntryToCache({ session, entry, cacheRoot, signal: b.signal }),
+      { code: 'timeout' }
+    )
+    setTimeout(() => {
+      a.abort()
+      b.abort()
+    }, 15)
+    await Promise.all([first, second])
+    const result = await downloadEntryToCache({ session, entry, cacheRoot })
+    assert.equal(session.reads, 2)
+    assert.equal(session.aborted, 1)
+    assert.deepEqual(await readFile(result), bytes)
+  }
+)
+
+test(
+  'clearing a cache aborts existing producers before deleting their partial files',
+  { timeout: 2_000 },
+  async (t) => {
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'network-cache-clear-'))
+    t.after(() => rm(cacheRoot, { recursive: true, force: true }))
+    const bytes = Buffer.alloc(32 * 1024, 14)
+    const session = slowSession(bytes)
+    const entry = makeEntry('/music/clear.flac', bytes.length)
+    const download = assert.rejects(downloadEntryToCache({ session, entry, cacheRoot }), {
+      code: 'timeout'
+    })
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    await Promise.all([clearDirectory(cacheRoot), download])
+    assert.equal(await getDirectorySize(cacheRoot), 0)
+    assert.equal(session.aborted, 1)
+    assert.deepEqual(
+      await readFile(await downloadEntryToCache({ session, entry, cacheRoot })),
+      bytes
+    )
+  }
+)

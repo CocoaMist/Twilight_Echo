@@ -75,6 +75,7 @@ export function useStreamingDiscovery({
   const loadingMore = ref(false)
 
   let latestRequestId = 0
+  let latestCatalogueRequestId = 0
   let hqBefore = 0
   let loadedOnce = false
   let loadedProviderId = providerId.value
@@ -85,21 +86,27 @@ export function useStreamingDiscovery({
     if (catalogue.value && !force) return
     catalogueLoading.value = true
     catalogueError.value = ''
+    const requestId = ++latestCatalogueRequestId
     const requestProviderId = loadedProviderId
     try {
       const nextCatalogue = await fetchPlaylistCategories(requestProviderId)
-      if (requestProviderId !== loadedProviderId) return
+      if (requestId !== latestCatalogueRequestId || requestProviderId !== loadedProviderId) return
       catalogue.value = nextCatalogue
     } catch (error) {
-      if (requestProviderId !== loadedProviderId) return
+      if (requestId !== latestCatalogueRequestId || requestProviderId !== loadedProviderId) return
       catalogueError.value = error instanceof Error ? error.message : '加载歌单分类失败'
     } finally {
-      if (requestProviderId === loadedProviderId) catalogueLoading.value = false
+      if (requestId === latestCatalogueRequestId && requestProviderId === loadedProviderId) {
+        catalogueLoading.value = false
+      }
     }
   }
 
   async function loadPage(nextOffset: number): Promise<void> {
     const requestId = ++latestRequestId
+    // A replacing request takes ownership from any pending append. Its stale
+    // finally block must not keep the new list's load-more control disabled.
+    loadingMore.value = false
     listLoading.value = true
     listError.value = ''
     try {
@@ -225,6 +232,7 @@ export function useStreamingDiscovery({
   function resetForProvider(nextProviderId: string): void {
     loadedProviderId = nextProviderId
     latestRequestId += 1
+    latestCatalogueRequestId += 1
     catalogue.value = null
     catalogueLoading.value = false
     catalogueError.value = ''
@@ -250,6 +258,10 @@ export function useStreamingDiscovery({
   if (getCurrentInstance()) {
     onBeforeUnmount(() => {
       latestRequestId += 1
+      latestCatalogueRequestId += 1
+      catalogueLoading.value = false
+      listLoading.value = false
+      loadingMore.value = false
     })
   }
 

@@ -1,4 +1,5 @@
 #include "AudioPipeline.h"
+#include "../decoder/FFmpegIoDeadline.h"
 #include "AudioPipelineDsdUtils.h"
 #include "AudioPipelineRenderUtils.h"
 #include "CrossfadePolicy.h"
@@ -788,7 +789,13 @@ struct AudioPipeline::DecodeStream {
   AudioBuffer buffer;
   std::vector<uint8_t> floatReadScratch;
   std::atomic<bool> running{false};
+  std::atomic<bool> ioStopped{false};
+  std::shared_ptr<std::atomic<bool>> preparationCancel;
+  const ta_am_cancel* autoMixCancel = nullptr;
   std::atomic<bool> eof{false};
+  std::atomic<bool> failed{false};
+  mutable std::mutex failureMutex;
+  std::string failure;
   std::atomic<uint64_t> crossfadeConsumedFrames{0};
   std::thread decodeThread;
   Mode mode = Mode::Pcm;
@@ -801,8 +808,13 @@ struct AudioPipeline::DecodeStream {
     stop();
   }
 
-  bool openSource(const QueueItem& queueItem, std::string* error, const ta_am_cancel* cancel = nullptr) {
+  bool openSource(const QueueItem& queueItem, std::string* error, const ta_am_cancel* cancel = nullptr,
+      const std::shared_ptr<std::atomic<bool>>& prepareCancel = {}) {
     stop();
+    ioStopped.store(false, std::memory_order_release);
+    preparationCancel = prepareCancel;
+    autoMixCancel = cancel;
+    failed.store(false, std::memory_order_release);
     dsdReader.reset();
     item = queueItem;
     routingSourceToken.store(nextRoutingSourceToken(), std::memory_order_release);
@@ -810,8 +822,11 @@ struct AudioPipeline::DecodeStream {
     decoder = std::make_unique<FFmpegDecoder>();
     ta_am_source_stamp before{}, after{};
     const bool hadBefore = ta_am_source_snapshot(item.source.c_str(), &before) != 0;
-    decoder->setInterrupt([](void* p) { return ta_am_cancelled(static_cast<const ta_am_cancel*>(p)); },
-                          const_cast<ta_am_cancel*>(cancel));
+    decoder->setInterrupt([](void* p) {
+      const auto* self = static_cast<const DecodeStream*>(p);
+      return self->ioStopped.load(std::memory_order_acquire) || ta_am_cancelled(self->autoMixCancel) ||
+          (self->preparationCancel && self->preparationCancel->load(std::memory_order_acquire)) ? 1 : 0;
+    }, this);
     if (!decoder->open(item.source, error)) {
       decoder.reset();
       return false;
@@ -1062,11 +1077,13 @@ struct AudioPipeline::DecodeStream {
 
   void start() {
     if ((!decoder && !dsdReader) || running.load() || eof.load()) return;
+    ioStopped.store(false, std::memory_order_release);
     running = true;
     decodeThread = std::thread([this] { decodeLoop(); });
   }
 
   void requestStop() {
+    ioStopped.store(true, std::memory_order_release);
     running = false;
     buffer.notifyAll();
   }
@@ -1080,6 +1097,8 @@ struct AudioPipeline::DecodeStream {
     if (!decoder && !dsdReader) return false;
     const bool priorTimelineExact = sourceTimelineExact.exchange(false, std::memory_order_acq_rel);
     stop();
+    ioStopped.store(false, std::memory_order_release);
+    failed.store(false, std::memory_order_release);
     const double logicalSeconds = clampLogicalSegmentPosition(seconds);
     const double sourceSeconds = sourcePositionForLogicalPosition(logicalSeconds);
     const bool ok = (mode == Mode::Dop || mode == Mode::NativeDsd)
@@ -1177,11 +1196,16 @@ struct AudioPipeline::DecodeStream {
   }
 
   bool drained() const {
-    return eof.load() && buffer.availableFrames() == 0;
+    return (eof.load() || failed.load()) && buffer.availableFrames() == 0;
   }
 
   bool readyForRender() const {
-    return buffer.availableFrames() > 0 || eof.load();
+    return !failed.load(std::memory_order_acquire) && (buffer.availableFrames() > 0 || eof.load());
+  }
+
+  std::string failureMessage() const {
+    std::lock_guard lock(failureMutex);
+    return failure;
   }
 
   bool waitForPreroll(size_t targetFrames, std::chrono::milliseconds timeout) const {
@@ -1316,7 +1340,18 @@ struct AudioPipeline::DecodeStream {
         decoded = std::min(decoded, static_cast<size_t>(*remainingSegmentFrames));
       }
       if (decoded == 0) {
-        markEof();
+        if (!running.load(std::memory_order_acquire)) break;
+        if (!error.empty() || !decoder->eof()) {
+          {
+            std::lock_guard lock(failureMutex);
+            failure = error.empty() ? "stream_decode_error" : error;
+          }
+          failed.store(true, std::memory_order_release);
+          running.store(false, std::memory_order_release);
+          buffer.notifyAll();
+        } else {
+          markEof();
+        }
         break;
       }
       if (decodeFormat.sampleFormat == AudioSampleFormat::Float32Interleaved) {
@@ -3184,12 +3219,6 @@ TAE_Result AudioPipeline::playInternal(
                                    : static_cast<size_t>(std::max(1, outputFormat_.sampleRate / 100));
   active->start();
   active->waitForPreroll(prerollFrames, std::chrono::milliseconds(500));
-  if ((gaplessEnabled || requestedAutoMixMode_.load(std::memory_order_acquire) != TA_AM_OFF) &&
-      !dopPath && !nativeDsdPath && !pcmToDsdPath) {
-    std::string preloadError;
-    preloadNext(upcomingItem, &preloadError);
-  }
-
   auto eventCallback = [this](OutputBackendEvent event, const std::string& message) {
     std::lock_guard lock(mutex_);
     outputEventMessage_ = message;
@@ -3319,6 +3348,11 @@ TAE_Result AudioPipeline::playInternal(
             ",\"channels\":" + std::to_string(outputFormat_.channelCount) + "}");
   }
 
+  if ((gaplessEnabled || requestedAutoMixMode_.load(std::memory_order_acquire) != TA_AM_OFF) &&
+      !dopPath && !nativeDsdPath && !pcmToDsdPath) {
+    std::string preloadError;
+    preloadNext(upcomingItem, &preloadError);
+  }
   return TAE_RESULT_OK;
 }
 
@@ -3426,6 +3460,7 @@ TAE_Result AudioPipeline::stop() {
 }
 
 TAE_Result AudioPipeline::stopUnlocked() {
+  cancelNetworkPreload();
   std::unique_ptr<IOutputBackend> output;
   std::shared_ptr<DecodeStream> active;
   std::shared_ptr<DecodeStream> preload;
@@ -4402,6 +4437,44 @@ void AudioPipeline::resetPreloadOverlap() {
 }
 
 bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::string* error) {
+  std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
+  std::shared_ptr<DecodeStream> currentActive;
+  {
+    std::lock_guard lock(mutex_);
+    synchronizeRenderPromotionLocked();
+    if (item && preloadStream_ && !preloadStream_->failed.load(std::memory_order_acquire) &&
+        sameQueueSegment(*item, preloadStream_->item)) return true;
+    currentActive = activeStream_;
+  }
+  if (item && networkPreloadRunning_.load(std::memory_order_acquire) && networkPreloadItem_ &&
+      networkPreloadActive_.lock() == currentActive &&
+      sameQueueSegment(*item, *networkPreloadItem_)) return true;
+  cancelNetworkPreload();
+  if (!item || !ffmpeg::isNetworkSource(item->source)) return preloadNextPrepared(item, error);
+  preloadNextPrepared(std::nullopt, nullptr);
+  networkPreloadItem_ = item;
+  networkPreloadActive_ = currentActive;
+  networkPreloadCancel_ = std::make_shared<std::atomic<bool>>(false);
+  networkPreloadRunning_.store(true, std::memory_order_release);
+  networkPreloadThread_ = std::thread([this, item, cancel = networkPreloadCancel_] {
+    std::string preloadError;
+    preloadNextPrepared(item, &preloadError, cancel);
+    networkPreloadRunning_.store(false, std::memory_order_release);
+  });
+  return true;
+}
+
+void AudioPipeline::cancelNetworkPreload() {
+  if (networkPreloadCancel_) networkPreloadCancel_->store(true, std::memory_order_release);
+  if (networkPreloadThread_.joinable()) networkPreloadThread_.join();
+  networkPreloadRunning_.store(false, std::memory_order_release);
+  networkPreloadCancel_.reset();
+  networkPreloadItem_.reset();
+  networkPreloadActive_.reset();
+}
+
+bool AudioPipeline::preloadNextPrepared(const std::optional<QueueItem>& item, std::string* error,
+    const std::shared_ptr<std::atomic<bool>>& preparationCancel) {
   cleanupRetiredDecodeStreams();
 
   if (!item || item->source.empty()) {
@@ -4435,6 +4508,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
   bool typedPassthrough = false;
   AudioFormat activeSourceFormat;
   bool autoMixEnabled = false;
+  std::shared_ptr<DecodeStream> expectedActive;
   {
     std::lock_guard lock(mutex_);
     synchronizeRenderPromotionLocked();
@@ -4450,14 +4524,16 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
     activeIsDsd = stream_.isDsd;
     typedPassthrough = activeStream_ && activeStream_->typedPassthrough;
     if (activeStream_) activeSourceFormat = activeStream_->stream.sourceFormat;
+    expectedActive = activeStream_;
   }
   if (!gapless || outputFormat.sampleRate <= 0 || outputFormat.channelCount <= 0) return false;
 
-  preloadNext(std::nullopt, nullptr);
+  preloadNextPrepared(std::nullopt, nullptr);
 
   auto stream = makeDecodeStream();
-  if (!stream->openSource(*item, error)) {
+  if (!stream->openSource(*item, error, nullptr, preparationCancel)) {
     std::lock_guard lock(mutex_);
+    if (preparationCancel && preparationCancel->load(std::memory_order_acquire)) return false;
     lastPreloadFormatMismatch_ = true;
     publishStatusLocked();
     return false;
@@ -4488,12 +4564,20 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
                                      ? static_cast<size_t>(bufferSizeFrames)
                                      : static_cast<size_t>(std::max(1, outputFormat.sampleRate / 100));
   stream->prepareFloatReadScratch(maxRenderFrames);
+  // The completed stream is now independently cancellable through requestStop;
+  // cancelling a later preparation must not interrupt a promoted active track.
+  stream->preparationCancel.reset();
   stream->start();
 
   std::shared_ptr<DecodeStream> previous;
   {
     std::lock_guard lock(mutex_);
     synchronizeRenderPromotionLocked();
+    if ((preparationCancel && preparationCancel->load(std::memory_order_acquire)) ||
+        activeStream_ != expectedActive || state_ == PipelineState::Stopped ||
+        (!gaplessEnabled_ && autoMixMode_ == TA_AM_OFF) ||
+        !pcmFormatsExactMatch(activeStream_ && !activeStream_->typedPassthrough ? decodeFormat_ : outputFormat_,
+            outputFormat)) return false;
     previous = std::move(preloadStream_);
     preloadStream_ = std::move(stream);
     lastPreloadFormatMismatch_ = false;
@@ -4912,7 +4996,11 @@ bool AudioPipeline::consumeDeviceInvalidated(std::string* message) {
 bool AudioPipeline::consumeRenderError(std::string* message) {
   if (!renderError_.exchange(false)) return false;
   std::lock_guard lock(mutex_);
-  if (message) *message = outputEventMessage_.empty() ? "音频渲染失败" : outputEventMessage_;
+  if (message) {
+    *message = activeStream_ && activeStream_->failed.load(std::memory_order_acquire)
+        ? activeStream_->failureMessage()
+        : outputEventMessage_.empty() ? "音频渲染失败" : outputEventMessage_;
+  }
   outputEventMessage_.clear();
   return true;
 }
@@ -5482,7 +5570,8 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
     if (filled == 0) {
       fillDsdTransportIdle(output, &renderDopMarkerIndex_);
       if (active->drained()) {
-        ended_ = true;
+        ended_ = !active->failed.load(std::memory_order_acquire);
+        if (!ended_.load()) renderError_.store(true, std::memory_order_release);
         renderState_.store(PipelineState::Stopped, std::memory_order_release);
       }
       spectrum_.tryResetCapture();
@@ -5562,7 +5651,8 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
       read += segmentRead;
       renderedFrames_ += dsdRenderedFrameUnits(segmentRead, output.format);
       if (read == requestedFrames || !active->drained()) break;
-      if (!renderGaplessEnabled_.load(std::memory_order_acquire) || !preload ||
+      if (active->failed.load(std::memory_order_acquire) ||
+          !renderGaplessEnabled_.load(std::memory_order_acquire) || !preload ||
           !preload->typedPassthrough || !preload->readyForRender() ||
           !pcmFormatsExactMatch(preload->bufferFormat(), output.format)) break;
 
@@ -5606,7 +5696,8 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
       }
     }
   } else if (active->drained()) {
-    ended_ = true;
+    ended_ = !active->failed.load(std::memory_order_acquire);
+    if (!ended_.load()) renderError_.store(true, std::memory_order_release);
     renderState_.store(PipelineState::Stopped, std::memory_order_release);
     spectrum_.tryResetCapture();
   } else {
@@ -5942,7 +6033,8 @@ size_t AudioPipeline::render(float* output, size_t frameCount) {
         continue;
       }
 
-      const bool canPromotePreload = preload && renderPreloadStream_.load(std::memory_order_acquire)==preload && preload->readyForRender();
+      const bool canPromotePreload = !active->failed.load(std::memory_order_acquire) &&
+          preload && renderPreloadStream_.load(std::memory_order_acquire)==preload && preload->readyForRender();
       if ((!renderGaplessEnabled_.load(std::memory_order_acquire) && !renderCrossfadeMixActive_) ||
           !canPromotePreload) {
         break;
@@ -6061,7 +6153,8 @@ size_t AudioPipeline::render(float* output, size_t frameCount) {
   } else if (active->drained() && (!rateActive || totalRead == 0)) {
     // Rate path ends when the source is drained and WSOLA could not emit more frames
     // (OLA tail already flushed / no full grain left).
-    ended_ = true;
+    ended_ = !active->failed.load(std::memory_order_acquire);
+    if (!ended_.load()) renderError_.store(true, std::memory_order_release);
     renderState_.store(PipelineState::Stopped, std::memory_order_release);
     spectrum_.tryResetCapture();
   } else {

@@ -22,11 +22,15 @@ import {
 import {
   createLocalLibraryFileIndexMap,
   loadLocalLibraryFileIndex,
-  persistLocalLibraryFileIndex
+  persistLocalLibraryFileIndex,
+  type LoadedLocalLibraryFileIndex
 } from './fileIndex.ts'
 import type { LocalLibraryScanRunner } from './libraryScanServiceClient.ts'
 import { expandSacdIsoTracks, type SacdIsoMetadataReader } from './sacdIsoTracks.ts'
-import { LOCAL_LIBRARY_METADATA_VERSION } from '../../shared/localLibraryScan.ts'
+import {
+  LOCAL_LIBRARY_METADATA_VERSION,
+  type LocalLibraryFileIndexDocument
+} from '../../shared/localLibraryScan.ts'
 import { normalizeReleaseDate } from '../../shared/releaseDate.ts'
 
 type LibraryTransaction = <T>(operation: () => Promise<T> | T) => Promise<T>
@@ -35,8 +39,10 @@ export interface LocalLibraryIndexCoordinatorOptions {
   libraryFilePath: string
   scanRunner: LocalLibraryScanRunner
   enqueueTransaction: LibraryTransaction
-  loadDocument: () => LoadedMusicLibraryDocument
-  persistDocument: (document: LocalMusicLibraryDocument) => void
+  loadDocument: () => LoadedMusicLibraryDocument | Promise<LoadedMusicLibraryDocument>
+  persistDocument: (document: LocalMusicLibraryDocument) => void | Promise<void>
+  loadFileIndex?: () => LoadedLocalLibraryFileIndex | Promise<LoadedLocalLibraryFileIndex>
+  persistFileIndex?: (document: LocalLibraryFileIndexDocument) => void | Promise<void>
   resolveRoots: (folders: string[]) => Promise<string[]>
   getCoverCacheDir: () => string
   /**
@@ -220,8 +226,10 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
           })
         }
         const snapshot = await this.options.enqueueTransaction(async () => {
-          const loaded = this.options.loadDocument()
-          const loadedIndex = loadLocalLibraryFileIndex(this.options.libraryFilePath)
+          const loaded = await this.options.loadDocument()
+          const loadedIndex = this.options.loadFileIndex
+            ? await this.options.loadFileIndex()
+            : loadLocalLibraryFileIndex(this.options.libraryFilePath)
           return {
             document: loaded.document,
             index: loadedIndex.document,
@@ -234,7 +242,7 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
         const roots = await this.options.resolveRoots(snapshot.document.folders)
         if (roots.length === 0 && mode !== 'watch') {
           const committed = await this.options.enqueueTransaction(async () => {
-            const current = this.options.loadDocument().document
+            const current = (await this.options.loadDocument()).document
             const currentRoots = await this.options.resolveRoots(current.folders)
             if (
               current.revision !== snapshot.document.revision ||
@@ -260,14 +268,11 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
               if (job.cancelled) {
                 return { cancelled: true as const, library: current, removedFilePaths: [] }
               }
-              this.options.persistDocument(nextDocument)
+              await this.options.persistDocument(nextDocument)
             } else {
               replaceActiveLibraryExclusions(nextDocument.exclusions)
             }
-            if (job.cancelled) {
-              return { cancelled: true as const, library: current, removedFilePaths: [] }
-            }
-            persistLocalLibraryFileIndex(this.options.libraryFilePath, {
+            await this.persistFileIndex({
               version: 1,
               libraryRevision: nextDocument.revision,
               updatedAt: this.now().toISOString(),
@@ -352,7 +357,7 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
         }
         if (workerResult.cancelled || job.cancelled) {
           const current = await this.options.enqueueTransaction(
-            async () => this.options.loadDocument().document
+            async () => (await this.options.loadDocument()).document
           )
           const result = completeCancelledResult(job.id, mode, current)
           this.setStatus({ state: 'cancelled' })
@@ -360,7 +365,7 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
         }
 
         const committed = await this.options.enqueueTransaction(async () => {
-          const current = this.options.loadDocument().document
+          const current = (await this.options.loadDocument()).document
           const currentRoots = await this.options.resolveRoots(current.folders)
           if (
             current.revision !== snapshot.document.revision ||
@@ -376,19 +381,17 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
             : current
           if (applied.changed) {
             if (job.cancelled) return { cancelled: true as const, library: current }
-            this.options.persistDocument(nextDocument)
+            await this.options.persistDocument(nextDocument)
           } else {
             replaceActiveLibraryExclusions(nextDocument.exclusions)
           }
-          if (job.cancelled) return { cancelled: true as const, library: current }
-
           const nextIndex = mergeFileIndex(
-            loadLocalLibraryFileIndex(this.options.libraryFilePath).document.entries,
+            (await this.loadFileIndex()).document.entries,
             effectiveWorkerResult,
             currentRoots,
             scanAccumulator.metadataParsedPaths
           )
-          persistLocalLibraryFileIndex(this.options.libraryFilePath, {
+          await this.persistFileIndex({
             version: 1,
             libraryRevision: nextDocument.revision,
             updatedAt: this.now().toISOString(),
@@ -440,6 +443,17 @@ export class LocalLibraryIndexCoordinator extends EventEmitter {
     } finally {
       if (this.activeJob?.id === job.id) this.activeJob = null
     }
+  }
+
+  private async loadFileIndex(): Promise<LoadedLocalLibraryFileIndex> {
+    return this.options.loadFileIndex
+      ? await this.options.loadFileIndex()
+      : loadLocalLibraryFileIndex(this.options.libraryFilePath)
+  }
+
+  private async persistFileIndex(document: LocalLibraryFileIndexDocument): Promise<void> {
+    if (this.options.persistFileIndex) await this.options.persistFileIndex(document)
+    else persistLocalLibraryFileIndex(this.options.libraryFilePath, document)
   }
 
   private async prepareBatch(batch: LocalLibraryScanBatch): Promise<void> {

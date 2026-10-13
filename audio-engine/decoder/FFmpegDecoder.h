@@ -30,6 +30,8 @@ class FFmpegDecoder {
   /* Set before open. Callback/context must outlive decoder IO; callback must
    * be thread-safe and nonblocking. Used by bounded background preparation. */
   void setInterrupt(int (*callback)(void*), void* context);
+  // Set before open; defaults bound network open/probe and each read/seek to 10 s.
+  void setIoTimeouts(int openMilliseconds, int readMilliseconds);
   void close();
 
   bool setOutputFormat(const AudioFormat& format, std::string* error);

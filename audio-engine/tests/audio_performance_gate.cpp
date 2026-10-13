@@ -5,6 +5,8 @@
 #include "../automix-native/am_hash.h"
 #include "../decoder/FFmpegDecoder.h"
 #include "../utils/JsonUtils.h"
+#include "../metadata/AudioMetadataService.h"
+#include "HttpFixtureServer.h"
 
 #include <algorithm>
 #include <cassert>
@@ -804,6 +806,234 @@ bool pumpCallback(const std::shared_ptr<ControlledBackendState> &backend,
   return containsAudio;
 }
 
+#ifdef _WIN32
+int verifyNetworkIo() {
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+  std::cout << std::unitbuf;
+  const auto textPath = [](const auto& path) {
+    const auto utf8 = path.u8string();
+    return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+  };
+  using Server = test::HttpFixtureServer;
+  using Clock = std::chrono::steady_clock;
+  const auto milliseconds = [](Clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+  };
+  const auto root = std::filesystem::temp_directory_path() / "twilight-network-io-regression";
+  std::filesystem::create_directories(root);
+  const auto wav = writePcmWav(root / "network.wav", 40, false, 997);
+  std::ifstream input(wav, std::ios::binary);
+  const std::vector<char> body{std::istreambuf_iterator<char>{input}, {}};
+  input.close();
+  {
+    Server server(Server::Mode::StallHeaders);
+    FFmpegDecoder decoder;
+    decoder.setIoTimeouts(400, 400);
+    std::string error;
+    const auto start = Clock::now();
+    assert(!decoder.open(server.url(), &error));
+    assert(error == "stream_io_timeout" && milliseconds(start) < 2000);
+    std::cout << "PASS stalled headers bounded: " << milliseconds(start) << " ms\n";
+  }
+  {
+    Server server(Server::Mode::StallHeaders);
+    FFmpegDecoder decoder;
+    std::atomic<bool> cancelled{false};
+    decoder.setInterrupt([](void* context) {
+      return static_cast<std::atomic<bool>*>(context)->load() ? 1 : 0;
+    }, &cancelled);
+    std::thread cancel([&] {
+      assert(server.waitForConnection());
+      cancelled.store(true);
+    });
+    std::string error;
+    const auto start = Clock::now();
+    assert(!decoder.open(server.url(), &error));
+    cancel.join();
+    assert(error == "decode_cancelled" && milliseconds(start) < 2000);
+    std::cout << "PASS opening source cancellation: " << milliseconds(start) << " ms\n";
+  }
+  for (const auto mode : {Server::Mode::Complete, Server::Mode::StallBody, Server::Mode::Truncated}) {
+    std::cout << "START stream outcome " << static_cast<int>(mode) << '\n';
+    Server server(mode, body);
+    FFmpegDecoder decoder;
+    decoder.setIoTimeouts(2000, 400);
+    std::string error;
+    assert(decoder.open(server.url(), &error));
+    AudioFormat format = decoder.streamInfo().decodedFormat;
+    format.sampleFormat = AudioSampleFormat::Float32Interleaved;
+    format.bitDepth = 32;
+    assert(decoder.setOutputFormat(format, &error));
+    std::vector<float> samples(4096 * static_cast<size_t>(format.channelCount));
+    const auto start = Clock::now();
+    size_t frames = 0;
+    while (decoder.readFrames(samples.data(), 4096, &error) > 0) {
+      frames += 4096;
+      assert(milliseconds(start) < 5000);
+    }
+    assert(frames > 0);
+    if (mode == Server::Mode::Complete) {
+      assert(error.empty() && decoder.eof());
+    } else {
+      assert(!error.empty() && !decoder.eof());
+    }
+    std::cout << "PASS stream outcome " << static_cast<int>(mode) << ": " << error << '\n';
+  }
+  {
+    std::cout << "START valid current plus stalled next\n";
+    Server server(Server::Mode::StallHeaders);
+    AudioPipeline pipeline;
+    QueueItem current, next;
+    current.id = "valid-current";
+    current.source = textPath(wav);
+    next.id = "stalled-next";
+    next.source = server.url();
+    std::string error;
+    const auto start = Clock::now();
+    assert(pipeline.play(current, next, 0, "controlled-pump", "controlled", 1,
+        "{\"dspEnabled\":true,\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+    assert(milliseconds(start) < 2000);
+    std::vector<float> scratch;
+    assert(pumpCallback(latestBackend(), &scratch));
+    assert(server.waitForConnection());
+    const auto stop = Clock::now();
+    assert(pipeline.stop() == TAE_RESULT_OK);
+    assert(milliseconds(stop) < 2000);
+    assert(!pipeline.consumeEnded());
+    std::cout << "PASS current audio starts before stalled preload; Stop joins: "
+              << milliseconds(stop) << " ms\n";
+  }
+  {
+    std::cout << "START streaming Stop\n";
+    Server server(Server::Mode::StallBody, body);
+    AudioPipeline pipeline;
+    QueueItem current;
+    current.source = server.url();
+    std::string error;
+    assert(pipeline.play(current, std::nullopt, 0, "controlled-pump", "controlled", 1,
+        "{\"dspEnabled\":true}", false, &error) == TAE_RESULT_OK);
+    assert(server.waitForConnection());
+    std::vector<float> scratch;
+    for (int frame = 0; frame < 2500; ++frame) {
+      pumpCallback(latestBackend(), &scratch);
+      if (frame % 64 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const auto stop = Clock::now();
+    assert(pipeline.stop() == TAE_RESULT_OK);
+    assert(milliseconds(stop) < 2000 && !pipeline.consumeEnded());
+    std::cout << "PASS streaming read Stop joins: " << milliseconds(stop) << " ms\n";
+  }
+  {
+    Server server(Server::Mode::Complete);
+    AudioPipeline pipeline;
+    QueueItem current, next;
+    current.source = textPath(wav);
+    next.source = server.url();
+    std::string error;
+    assert(pipeline.play(current, next, 0, "controlled-pump", "controlled", 1,
+        "{\"dspEnabled\":true,\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+    assert(server.waitForConnection());
+    const auto start = Clock::now();
+    while (server.connections() < 2 && milliseconds(start) < 2000) {
+      pipeline.preloadNext(next, &error);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    assert(server.connections() >= 2 && !pipeline.status().preloadReady);
+    pipeline.stop();
+    std::cout << "PASS failed completed network preload can retry same source\n";
+  }
+  {
+    // A short complete body avoids keeping the fixture's server busy sending
+    // the promoted source while the next repeat opens a second connection.
+    const auto shortWav = writePcmWav(root / "repeat.wav", 2, false, 997);
+    std::ifstream shortInput(shortWav, std::ios::binary);
+    const std::vector<char> shortBody{std::istreambuf_iterator<char>{shortInput}, {}};
+    shortInput.close();
+    Server server(Server::Mode::Complete, shortBody);
+    AudioPipeline pipeline;
+    QueueItem current, next;
+    current.source = textPath(wav);
+    next.id = "repeat-source";
+    next.source = server.url();
+    std::string error;
+    assert(pipeline.play(current, next, 0, "controlled-pump", "controlled", 1,
+        "{\"dspEnabled\":true,\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+    const auto waitReady = [&] {
+      const auto start = Clock::now();
+      while (!pipeline.status().preloadReady && milliseconds(start) < 3000)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      assert(pipeline.status().preloadReady);
+    };
+    waitReady();
+    assert(pipeline.skipToPreloaded(next, &error));
+    assert(!pipeline.status().preloadReady);
+    assert(pipeline.preloadNext(next, &error));
+    waitReady();
+    assert(server.connections() >= 2);
+    pipeline.stop();
+    std::filesystem::remove(shortWav);
+    std::cout << "PASS promoted network source can preload its next repeat\n";
+  }
+  {
+    Server server(Server::Mode::HeldHeaders, body);
+    AudioPipeline pipeline;
+    QueueItem current, next;
+    current.source = textPath(wav);
+    next.source = server.url();
+    std::string error;
+    assert(pipeline.play(current, next, 0, "controlled-pump", "controlled", 1,
+        "{\"dspEnabled\":true,\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+    assert(server.waitForConnection());
+    pipeline.setDspConfig("{\"dspEnabled\":true,\"gapless\":false}");
+    server.releaseHeaders();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    assert(!pipeline.status().preloadedItem && !pipeline.status().preloadReady);
+    pipeline.stop();
+    std::cout << "PASS disabling gapless discards delayed successful preparation\n";
+  }
+  {
+    std::cout << "START stream queue failure\n";
+    Server server(Server::Mode::StallBody, body);
+    AudioPipeline pipeline;
+    QueueItem current, next;
+    current.id = "failed-stream";
+    current.source = server.url();
+    next.id = "must-not-auto-promote";
+    next.source = textPath(wav);
+    std::string error;
+    assert(pipeline.play(current, next, 0, "controlled-pump", "controlled", 1,
+        "{\"dspEnabled\":true,\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+    const auto start = Clock::now();
+    std::vector<float> scratch;
+    bool receivedError = false;
+    while (milliseconds(start) < 15000) {
+      for (int frame = 0; frame < 64; ++frame) pumpCallback(latestBackend(), &scratch);
+      assert(!pipeline.consumeEnded());
+      assert(!pipeline.consumeTrackStarted(nullptr));
+      if (pipeline.consumeRenderError(&error)) { receivedError = true; break; }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::cout << "Queue failure result: received=" << receivedError << " error=" << error << '\n';
+    assert(receivedError && error == "stream_io_timeout");
+    assert(pipeline.status().currentItem.id == current.id);
+    pipeline.stop();
+    std::cout << "PASS read failure emits error and keeps queue boundary: " << error << '\n';
+  }
+  {
+    std::cout << "START metadata deadline\n";
+    Server server(Server::Mode::StallHeaders);
+    const auto start = Clock::now();
+    const std::string metadata = readMetadataJson(server.url());
+    assert(metadata.find("stream_io_timeout") != std::string::npos);
+    assert(milliseconds(start) < 10000);
+    std::cout << "PASS metadata headers bounded: " << milliseconds(start) << " ms\n";
+  }
+  std::filesystem::remove(wav);
+  std::filesystem::remove(root);
+  return 0;
+}
+#endif
+
 // Capture the production float callback without a device or muted software
 // volume. This checks ordinary playback, before any transition is submitted.
 int verifyPcmTransparency(const std::filesystem::path& manifestPath) {
@@ -1191,6 +1421,9 @@ int main(int argc, char** argv) {
 #else
   ScopedPerformanceTestThreadPriority performanceTestThreadPriority;
   ScopedControlledBackendFactory controlledBackendFactory;
+#ifdef _WIN32
+  if (argc == 2 && std::string(argv[1]) == "--verify-network-io") return verifyNetworkIo();
+#endif
   if (argc == 3 && std::string(argv[1]) == "--verify-pcm")
     return verifyPcmTransparency(std::filesystem::u8path(argv[2]));
   if (argc == 2 && std::string(argv[1]) == "--verify-neutral-pcm") {

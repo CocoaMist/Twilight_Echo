@@ -2,6 +2,7 @@ import { pathToFileURL } from 'url'
 import { deletePluginSetting, getPluginSetting, setPluginSetting } from './settingsStore'
 import { initProxy } from './proxyBootstrap'
 import { redactSensitiveText } from '../security/secureStorage.ts'
+import { PluginLogBudget } from './logBudget.ts'
 import { QISHUI_PLUGIN_ID } from './qishuiAuthBridge.ts'
 import type {
   PluginHostApiResult,
@@ -604,8 +605,13 @@ function rejectPendingApiCalls(reason: string): void {
   pendingApiCalls.clear()
 }
 
+const hostLogBudget = new PluginLogBudget()
+
 function log(level: 'debug' | 'info' | 'warn' | 'error', message: string): void {
-  post({ kind: 'log', level, message: redactSensitiveText(message) })
+  const captured = hostLogBudget.capture(message)
+  if (captured.text !== null)
+    post({ kind: 'log', level, message: redactSensitiveText(captured.text) })
+  if (captured.notice !== null) post({ kind: 'log', level: 'warn', message: captured.notice })
 }
 
 function reportError(error: unknown): void {

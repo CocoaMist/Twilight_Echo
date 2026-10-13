@@ -8,7 +8,7 @@ export const MAX_DUPLICATE_DETECTION_TRACKS = 50_000
 
 export interface DuplicateDetectionIpcDependencies {
   assertTrustedSender(event: unknown): void
-  loadTracks(): readonly unknown[]
+  loadTracks(): readonly unknown[] | Promise<readonly unknown[]>
   authorizeAudioFile(filePath: string): Promise<string>
   hashContent?(filePath: string): Promise<string>
 }
@@ -29,7 +29,7 @@ export function createDuplicateDetectionIpcHandlers(
   return {
     async detect(event): Promise<DuplicateDetectionResult> {
       dependencies.assertTrustedSender(event)
-      const tracks = dependencies.loadTracks()
+      const tracks = await dependencies.loadTracks()
       const candidates = toCandidates(tracks)
       return await detectDuplicates(candidates, {
         contentHashForPath: async (filePath) => {

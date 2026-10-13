@@ -851,6 +851,7 @@ if(TAE_BUILD_TESTS)
   # controlled callback pump. Real-device scheduling remains an opt-in smoke.
   add_executable(twilight_audio_performance_gate
     tests/audio_performance_gate.cpp
+    metadata/AudioMetadataService.cpp
     core/AudioBuffer.cpp
     core/AudioPipeline.cpp
     core/DsdMuteGuard.cpp
@@ -916,6 +917,11 @@ if(TAE_BUILD_TESTS)
   add_test(NAME twilight_audio_pcm_transparency
     COMMAND twilight_audio_performance_gate --verify-neutral-pcm)
   set_tests_properties(twilight_audio_pcm_transparency PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+  if(WIN32)
+    add_test(NAME twilight_audio_network_io
+      COMMAND twilight_audio_performance_gate --verify-network-io)
+    set_tests_properties(twilight_audio_network_io PROPERTIES TIMEOUT 40 SKIP_RETURN_CODE 77)
+  endif()
 
   add_executable(twilight_dst_decoder_tests
     tests/dst_decoder_tests.cpp

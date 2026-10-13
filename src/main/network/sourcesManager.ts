@@ -1,5 +1,5 @@
 import { NetworkSourceFailure } from './errors.ts'
-import { downloadEntryToCache } from './networkCache.ts'
+import { closeSessionAfterCacheDownloads, downloadEntryToCache } from './networkCache.ts'
 import { enrichNetworkEntry } from './networkMetadata.ts'
 import { buildNetworkEntryId, normalizeRemotePath } from './networkPath.ts'
 import type { NetworkLibraryIndex } from './networkLibrary.ts'
@@ -92,7 +92,7 @@ export function createNetworkSourcesManager(deps: {
       try {
         return await session.list(remotePath, signal)
       } finally {
-        await session.close()
+        await closeSessionAfterCacheDownloads(session)
       }
     },
     async testConnection(profileId) {
@@ -102,7 +102,7 @@ export function createNetworkSourcesManager(deps: {
           await session.list(profile.rootPath)
           return { ok: true }
         } finally {
-          await session.close()
+          await closeSessionAfterCacheDownloads(session)
         }
       } catch (err) {
         const failure =
@@ -141,7 +141,7 @@ export function createNetworkSourcesManager(deps: {
         })
         return { kind: 'local-cache', cacheFilePath, displayName: entry.name }
       } finally {
-        await session.close()
+        await closeSessionAfterCacheDownloads(session)
       }
     },
     async scanDirectory(profileId, dirPath, signal) {
@@ -169,7 +169,7 @@ export function createNetworkSourcesManager(deps: {
         await walk(root, 0)
         return library.addEntries(profileId, root, found)
       } finally {
-        await session.close()
+        await closeSessionAfterCacheDownloads(session)
       }
     },
     async listLibrary(profileId, query) {
@@ -199,7 +199,7 @@ export function createNetworkSourcesManager(deps: {
           }
         }
       } finally {
-        await session.close()
+        await closeSessionAfterCacheDownloads(session)
       }
       if (updated.length > 0) await library.updateEntries(profileId, updated)
       return { enriched: updated.length, failed }

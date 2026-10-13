@@ -9,10 +9,7 @@ import {
   toLocalLibraryScanUpdate
 } from '../library/libraryIndexCoordinator.ts'
 import { getLibraryWatcherStatusSnapshot } from '../library/watcher.ts'
-import {
-  resetLocalLibraryFileIndex,
-  synchronizeLocalLibraryFileIndexRevision
-} from '../library/fileIndex.ts'
+import { LibraryPersistenceClient } from '../library/libraryPersistenceClient.ts'
 import type { LocalLibraryScanRunner } from '../library/libraryScanServiceClient.ts'
 import { expandSacdIsoTracks } from '../library/sacdIsoTracks.ts'
 import {
@@ -21,10 +18,8 @@ import {
   beginLibraryPathMutation,
   collectLibraryTrackPathKeys,
   createMusicLibraryDocument,
-  loadMusicLibraryDocument,
   migrateMusicLibraryCovers,
   normalizeLibraryFilePath,
-  persistMusicLibraryDocument,
   replaceActiveLibraryExclusions,
   restoreLibraryExclusions,
   type LoadedMusicLibraryDocument
@@ -32,9 +27,7 @@ import {
 import {
   commitLocalLibraryRemoval,
   createLocalLibraryRemovalJournal,
-  getLocalLibraryRemovalJournalPath,
-  recoverLocalLibraryRemoval,
-  recoverLocalLibraryRemovalResult
+  getLocalLibraryRemovalJournalPath
 } from '../library/removal.ts'
 import type {
   LocalLibraryRemoveRequest,
@@ -76,6 +69,10 @@ import {
 const MAX_LIBRARY_MUTATION_ITEMS = 10_000
 
 let musicLibraryTransactionChain: Promise<void> = Promise.resolve()
+let pendingMusicLibraryTransactions = 0
+const libraryPersistence = new LibraryPersistenceClient(
+  join(__dirname, 'libraryPersistenceWorker.js')
+)
 let musicLibraryFilePath: string | null = null
 let musicLibraryExclusionsPromise: Promise<void> | null = null
 let warmedMusicLibrary: { filePath: string; loaded: LoadedMusicLibraryDocument } | null = null
@@ -139,7 +136,7 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
   const duplicateDetectionIpc = createDuplicateDetectionIpcHandlers({
     assertTrustedSender: (event) =>
       assertTrustedIpcSender(event as IpcMainInvokeEvent, 'library duplicate detection IPC'),
-    loadTracks: () => loadMusicLibraryDocument(MUSIC_LIBRARY_FILE).document.tracks,
+    loadTracks: async () => (await libraryPersistence.load(MUSIC_LIBRARY_FILE)).document.tracks,
     authorizeAudioFile: async (filePath) =>
       await resolveAuthorizedAudioFile(
         normalizeLocalPath(filePath, 'duplicate detection audio file')
@@ -151,10 +148,12 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
     scanRunner: runtime.localLibraryScanService ?? unavailableLocalLibraryScanRunner(),
     enqueueTransaction: enqueueMusicLibraryTransaction,
     loadDocument: () => loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, { consumeWarm: false }),
-    persistDocument: (document) => {
-      persistMusicLibraryDocument(MUSIC_LIBRARY_FILE, document)
+    persistDocument: async (document) => {
+      await libraryPersistence.persist(MUSIC_LIBRARY_FILE, document)
       invalidateWarmedMusicLibrary()
     },
+    loadFileIndex: () => libraryPersistence.loadIndex(MUSIC_LIBRARY_FILE),
+    persistFileIndex: (document) => libraryPersistence.persistIndex(MUSIC_LIBRARY_FILE, document),
     resolveRoots: async () =>
       await filterAuthorizedLibraryRoots(runtime.appSettings.libraryFolders),
     getCoverCacheDir,
@@ -241,13 +240,15 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
       assertTrustedIpcSender(event, 'data IPC')
       const snapshot = normalizeMusicLibrarySnapshot(library)
       snapshot.folders = await filterAuthorizedLibraryRoots(snapshot.folders)
-      stringifyJsonForIpcStorage(snapshot, 'music library', MAX_MUSIC_LIBRARY_BYTES)
+      await libraryPersistence.validate(snapshot)
       return await enqueueMusicLibraryTransaction(async () => {
-        const loaded = loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, { consumeWarm: false })
+        const loaded = await loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, {
+          consumeWarm: false
+        })
         assertMusicLibraryRevision(snapshot.revision, loaded.document.revision)
         const nextDocument = createMusicLibraryDocument(snapshot, loaded.document.exclusions)
         nextDocument.revision = loaded.document.revision + 1
-        persistMusicLibraryDocumentWithIndex(MUSIC_LIBRARY_FILE, nextDocument)
+        await persistMusicLibraryDocumentWithIndex(MUSIC_LIBRARY_FILE, nextDocument)
         invalidateWarmedMusicLibrary()
         return nextDocument
       })
@@ -257,7 +258,7 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
   ipcMain.handle('data:loadMusicLibrary', async (event) => {
     assertTrustedIpcSender(event, 'data IPC')
     return await enqueueMusicLibraryTransaction(async () => {
-      const loaded = loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE)
+      const loaded = await loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE)
       const document = loaded.document
 
       const authorizedFolders = await filterAuthorizedLibraryRoots(document.folders)
@@ -282,7 +283,7 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
 
       if (changed) {
         const nextDocument = { ...document, revision: document.revision + 1 }
-        persistMusicLibraryDocumentWithIndex(MUSIC_LIBRARY_FILE, nextDocument)
+        await persistMusicLibraryDocumentWithIndex(MUSIC_LIBRARY_FILE, nextDocument)
         invalidateWarmedMusicLibrary()
         return nextDocument
       } else {
@@ -299,7 +300,9 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
     stringifyJsonForIpcStorage(request, 'library removal request', MAX_MUSIC_LIBRARY_BYTES)
 
     return await enqueueMusicLibraryTransaction(async () => {
-      const loaded = loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, { consumeWarm: false })
+      const loaded = await loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, {
+        consumeWarm: false
+      })
       assertMusicLibraryRevision(request.library.revision, loaded.document.revision)
       const persistedPaths = collectLibraryTrackPathKeys(loaded.document)
       const presentItems = request.items.filter((item) =>
@@ -326,9 +329,9 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
               )
               await shell.trashItem(authorizedPath)
             },
-            persist: (nextDocument) => {
+            persist: async (nextDocument) => {
               nextDocument.revision = loaded.document.revision + 1
-              persistMusicLibraryDocumentWithIndex(MUSIC_LIBRARY_FILE, nextDocument)
+              await persistMusicLibraryDocumentWithIndex(MUSIC_LIBRARY_FILE, nextDocument)
             },
             journal:
               request.mode === 'trash'
@@ -337,7 +340,7 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
           })
         } catch (error) {
           if (request.mode !== 'trash') throw error
-          const recovered = recoverLocalLibraryRemovalResult(
+          const recovered = await libraryPersistence.recoverRemovalResult(
             MUSIC_LIBRARY_FILE,
             document,
             authorized.items
@@ -360,7 +363,9 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
   ipcMain.handle(IPC.library.reset, async (event): Promise<LocalLibraryResetResult> => {
     assertTrustedIpcSender(event, 'library reset IPC')
     return await enqueueMusicLibraryTransaction(async () => {
-      const loaded = loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, { consumeWarm: false })
+      const loaded = await loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, {
+        consumeWarm: false
+      })
       const removedTrackIds = loaded.document.tracks.flatMap((track) => {
         if (!track || typeof track !== 'object' || Array.isArray(track)) return []
         const id = (track as Record<string, unknown>).id
@@ -378,10 +383,10 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
         folders: loaded.document.folders,
         exclusions: loaded.document.exclusions
       }
-      persistMusicLibraryDocument(MUSIC_LIBRARY_FILE, nextDocument)
+      await libraryPersistence.persist(MUSIC_LIBRARY_FILE, nextDocument)
       invalidateWarmedMusicLibrary()
       activeLibraryExclusionPaths = nextDocument.exclusions.map((exclusion) => exclusion.filePath)
-      resetLocalLibraryFileIndex(MUSIC_LIBRARY_FILE, nextDocument.revision)
+      await libraryPersistence.resetIndex(MUSIC_LIBRARY_FILE, nextDocument.revision)
       return { library: nextDocument, removedTrackIds, removedFilePaths }
     })
   })
@@ -397,13 +402,15 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
     )
 
     return await enqueueMusicLibraryTransaction(async () => {
-      const loaded = loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, { consumeWarm: false })
+      const loaded = await loadMusicLibraryForTransaction(MUSIC_LIBRARY_FILE, {
+        consumeWarm: false
+      })
       assertMusicLibraryRevision(request.library.revision, loaded.document.revision)
       const document = createMusicLibraryDocument(request.library, loaded.document.exclusions)
       const restored = restoreLibraryExclusions(document, request.filePaths)
       if (restored.restoredFilePaths.length > 0) {
         restored.document.revision = loaded.document.revision + 1
-        persistMusicLibraryDocumentWithIndex(MUSIC_LIBRARY_FILE, restored.document)
+        await persistMusicLibraryDocumentWithIndex(MUSIC_LIBRARY_FILE, restored.document)
       }
       return {
         library: restored.restoredFilePaths.length > 0 ? restored.document : loaded.document,
@@ -434,11 +441,11 @@ async function ensureLibraryExclusionsLoaded(): Promise<string[]> {
   if (!musicLibraryExclusionsPromise) {
     const loading = enqueueMusicLibraryTransaction(async () => {
       try {
-        const removalRecovery = recoverLocalLibraryRemoval(filePath)
+        const removalRecovery = await libraryPersistence.recoverRemoval(filePath)
         if (removalRecovery.recovered) {
           reportLocalLibraryRemovalRecovery(filePath, removalRecovery.removedFilePaths)
         }
-        const initialLibrary = loadMusicLibraryDocument(filePath)
+        const initialLibrary = await libraryPersistence.load(filePath)
         if (migrateMusicLibraryCovers(initialLibrary.document, migrateBase64Cover)) {
           initialLibrary.migrated = true
         }
@@ -448,7 +455,7 @@ async function ensureLibraryExclusionsLoaded(): Promise<string[]> {
         )
         replaceActiveLibraryExclusions(initialLibrary.document.exclusions)
         if (initialLibrary.migrated) {
-          persistMusicLibraryDocumentWithIndex(filePath, initialLibrary.document)
+          await persistMusicLibraryDocumentWithIndex(filePath, initialLibrary.document)
           invalidateWarmedMusicLibrary()
         }
         if (initialLibrary.recovery) {
@@ -489,7 +496,16 @@ function invalidateWarmedMusicLibrary(): void {
 }
 
 function enqueueMusicLibraryTransaction<T>(operation: () => Promise<T> | T): Promise<T> {
-  const result = musicLibraryTransactionChain.catch(() => {}).then(operation)
+  if (pendingMusicLibraryTransactions >= 16) {
+    return Promise.reject(new Error('Music library is busy; retry after the current operation'))
+  }
+  pendingMusicLibraryTransactions++
+  const result = musicLibraryTransactionChain
+    .catch(() => {})
+    .then(operation)
+    .finally(() => {
+      pendingMusicLibraryTransactions--
+    })
   musicLibraryTransactionChain = result.then(
     () => {},
     () => {}
@@ -524,17 +540,17 @@ function unavailableLocalLibraryScanRunner(): LocalLibraryScanRunner {
   }
 }
 
-function persistMusicLibraryDocumentWithIndex(
+async function persistMusicLibraryDocumentWithIndex(
   libraryFilePath: string,
   document: LocalMusicLibraryDocument
-): void {
-  persistMusicLibraryDocument(libraryFilePath, document)
+): Promise<void> {
+  await libraryPersistence.persist(libraryFilePath, document)
   invalidateWarmedMusicLibrary()
   if (libraryFilePath === musicLibraryFilePath) {
     activeLibraryExclusionPaths = document.exclusions.map((exclusion) => exclusion.filePath)
   }
   try {
-    synchronizeLocalLibraryFileIndexRevision(libraryFilePath, document.revision)
+    await libraryPersistence.alignIndex(libraryFilePath, document.revision)
   } catch (error) {
     // The file index is derived data. A later startup scan will reconcile it.
     console.warn(
@@ -544,17 +560,17 @@ function persistMusicLibraryDocumentWithIndex(
   }
 }
 
-function loadMusicLibraryForTransaction(
+async function loadMusicLibraryForTransaction(
   filePath: string,
   options: { consumeWarm?: boolean } = {}
-): LoadedMusicLibraryDocument {
+): Promise<LoadedMusicLibraryDocument> {
   if (options.consumeWarm !== false && warmedMusicLibrary?.filePath === filePath) {
     const warmed = warmedMusicLibrary.loaded
     warmedMusicLibrary = null
     return warmed
   }
   try {
-    const removalRecovery = recoverLocalLibraryRemoval(filePath)
+    const removalRecovery = await libraryPersistence.recoverRemoval(filePath)
     if (removalRecovery.recovered) {
       reportLocalLibraryRemovalRecovery(filePath, removalRecovery.removedFilePaths)
     }
@@ -567,7 +583,7 @@ function loadMusicLibraryForTransaction(
   }
   let loaded: LoadedMusicLibraryDocument
   try {
-    loaded = loadMusicLibraryDocument(filePath)
+    loaded = await libraryPersistence.load(filePath)
     if (migrateMusicLibraryCovers(loaded.document, migrateBase64Cover)) {
       loaded.migrated = true
     }

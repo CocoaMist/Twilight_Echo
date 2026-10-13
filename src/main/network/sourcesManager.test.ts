@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { buildNetworkEntryId } from './networkPath.ts'
 import { normalizeEntry } from './networkEntryInput.ts'
 import { createNetworkSourcesManager } from './sourcesManager.ts'
@@ -55,6 +55,98 @@ test('playback derives its cache key and size in main and rejects profile mismat
   await assert.rejects(manager.resolvePlayback('p2', entry), { code: 'denied' })
   assert.equal(closed, 1)
 })
+
+test(
+  'a cancelled playback caller transfers session cleanup while another cache consumer remains',
+  { timeout: 2_000 },
+  async (t) => {
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'manager-shared-cache-'))
+    const bytes = Buffer.alloc(32 * 1024, 35)
+    const sessions: Array<{ stream: PassThrough; closed: boolean }> = []
+    let started: () => void = () => undefined
+    const reading = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    let statted: () => void = () => undefined
+    const secondStat = new Promise<void>((resolve) => {
+      statted = resolve
+    })
+    const entry: NetworkEntry = {
+      id: 'shared',
+      profileId: 'p1',
+      name: 'shared.flac',
+      kind: 'audio',
+      path: '/shared.flac',
+      sizeBytes: bytes.length
+    }
+    let reads = 0
+    const manager = createNetworkSourcesManager({
+      store: fakeStore,
+      cacheRoot,
+      coverCacheRoot: join(cacheRoot, 'cover'),
+      library: createNetworkLibrary({ filePath: join(cacheRoot, 'library.json') }),
+      getAdapter: async () => ({
+        protocol: 'webdav',
+        async createSession() {
+          const owner = { stream: new PassThrough(), closed: false }
+          sessions.push(owner)
+          return {
+            protocol: 'webdav',
+            async list() {
+              return []
+            },
+            async stat() {
+              if (sessions.length === 2) statted()
+              return entry
+            },
+            async resolvePlaybackUrl() {
+              return null
+            },
+            async readStream(_path, signal) {
+              reads += 1
+              signal?.addEventListener(
+                'abort',
+                () => owner.stream.destroy(new Error('producer aborted')),
+                { once: true }
+              )
+              owner.stream.write(bytes.subarray(0, 1024))
+              started()
+              return owner.stream
+            },
+            async close() {
+              owner.closed = true
+              owner.stream.destroy()
+            }
+          }
+        }
+      })
+    })
+    t.after(async () => {
+      for (const session of sessions) session.stream.destroy()
+      await rm(cacheRoot, { recursive: true, force: true })
+    })
+    const controller = new AbortController()
+    const cancelled = assert.rejects(manager.resolvePlayback('p1', entry, controller.signal), {
+      code: 'timeout'
+    })
+    await reading
+    const second = manager.resolvePlayback('p1', entry)
+    void second.catch(() => undefined)
+    await secondStat
+    await new Promise((resolve) => setImmediate(resolve))
+    controller.abort()
+    await cancelled
+    assert.equal(sessions[0].closed, false, 'cancelled caller must not close the shared producer')
+    sessions[0].stream.end(bytes.subarray(1024))
+    const plan = await second
+    assert.deepEqual(await readFile(plan.cacheFilePath!), bytes)
+    assert.equal(reads, 1)
+    assert.ok(
+      sessions.every((session) => session.closed),
+      'both sessions are closed after publication'
+    )
+  }
+)
 
 function syncsafe(value: number): Buffer {
   return Buffer.from([

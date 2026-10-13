@@ -296,7 +296,7 @@ test('plugin manager exposes per-plugin logs for troubleshooting', () => {
   assert.match(managerSource, /async openLog\(id: string\)/)
   assert.match(managerSource, /async getLog\(id: string\)/)
   assert.match(managerSource, /raw\.slice\(-20000\)/)
-  assert.match(managerSource, /private appendLog\(descriptor: TwilightPluginDescriptor/)
+  assert.match(managerSource, /private appendLog\(\s*descriptor: TwilightPluginDescriptor/)
   assert.match(managerSource, /logs', 'plugins'/)
 })
 
@@ -365,19 +365,20 @@ test('provider results replace approved remote media URLs before returning to th
   )
 })
 
-test('plugin host logs rotate at a bounded size and append through a serialized write chain', () => {
+test('plugin host logs rotate and use a bounded serialized backlog', () => {
   assert.match(managerSource, /const PLUGIN_LOG_MAX_BYTES = \d+/)
-  assert.match(managerSource, /logWriteChains = new Map<string, Promise<void>>/)
+  assert.match(managerSource, /logWrites = new BoundedPluginLogQueue/)
   assert.match(managerSource, /logSizes = new Map<string, number>/)
   const appendLog = managerSource.match(
-    /private appendLog\(descriptor: TwilightPluginDescriptor, level: string, message: string\): void \{([\s\S]*?)\n  \}/
+    /private async writeLogLine\(logPath: string, line: string\): Promise<void> \{([\s\S]*?)\n  \}/
   )
   assert.ok(appendLog, 'appendLog should exist')
   const body = appendLog[1]
   assert.match(body, /size \+ lineBytes > PLUGIN_LOG_MAX_BYTES/)
   assert.match(body, /await rm\(previousLogPath, \{ force: true \}\)/)
   assert.match(body, /await rename\(logPath, previousLogPath\)/)
-  assert.match(body, /this\.logWriteChains\.get\(logPath\) \?\? Promise\.resolve\(\)/)
+  assert.match(managerSource, /budget\.capture\(message\)/)
+  assert.match(pluginHostSource, /hostLogBudget\.capture\(message\)/)
 })
 
 test('plugin hosts hibernate when idle and wake on demand without losing contributions', () => {

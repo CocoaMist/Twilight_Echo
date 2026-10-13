@@ -405,6 +405,16 @@ class AudioPipeline {
   std::unique_ptr<IOutputBackend> output_;
   std::shared_ptr<DecodeStream> activeStream_;
   std::shared_ptr<DecodeStream> preloadStream_;
+  // Network preparation never runs on the transport/clock thread. A single
+  // owned job is cancelled and joined before another source or Stop publishes.
+  std::thread networkPreloadThread_;
+  std::atomic<bool> networkPreloadRunning_{false};
+  std::shared_ptr<std::atomic<bool>> networkPreloadCancel_;
+  std::optional<QueueItem> networkPreloadItem_;
+  std::weak_ptr<DecodeStream> networkPreloadActive_;
+  void cancelNetworkPreload();
+  bool preloadNextPrepared(const std::optional<QueueItem>& item, std::string* error,
+      const std::shared_ptr<std::atomic<bool>>& preparationCancel = {});
   std::unique_ptr<AutoMixGeneration> autoMix_;
   std::unique_ptr<AutoMixSelection> autoMixSelection_;
   std::vector<std::unique_ptr<AutoMixGeneration>> retiredAutoMix_;

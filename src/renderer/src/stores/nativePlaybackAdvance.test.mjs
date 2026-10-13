@@ -13,6 +13,7 @@ import { createPlaybackClockController } from './player/playbackClockController.
 import { evaluateNativePlaybackInfoIntent } from '../utils/nativePlaybackInfoIntent.ts'
 import { findNativeQueueTrackIndex } from '../utils/nativeQueueTrackIndex.ts'
 import { NativeQueueLoader } from '../utils/nativeQueueLoader.ts'
+import { PlaybackRecoverySession } from './player/playbackRecoverySession.ts'
 import {
   NATIVE_PLAYBACK_INFO_INTENT_GRACE_MS,
   NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
@@ -333,6 +334,7 @@ test('an older failed load cannot clear a newer load after waiting for source re
   await pending
   assert.equal(f.context.isLoading.value, true)
   assert.equal(f.context.isPlaying.value, true)
+  assert.equal(f.context.activePlaybackRecovery, null)
   assert.deepEqual(f.errors, [])
 })
 
@@ -352,6 +354,8 @@ function loadFixture({ fallback = async () => false } = {}) {
     queueIndex: ref(0),
     lastActiveTrack: null,
     activeLoadToken: 0,
+    activePlaybackRecovery: null,
+    PlaybackRecoverySession,
     playMode: ref('sequential'),
     playbackRate: ref(1),
     isLoading: ref(false),
@@ -414,6 +418,7 @@ for (const direction of ['next', 'previous']) {
       assert.equal(f.currentTrack.value.id, 'restored-session')
       assert.equal(f.isLoading.value, false)
       assert.equal(f.visualizationStarts(), 0)
+      assert.equal(f.recovery.signal.aborted, true)
     })
   }
 }
@@ -483,9 +488,12 @@ function fixture(stage) {
     'loads',
     'track',
     'wait',
+    'PlaybackRecoverySession',
     `
     const { currentTrack, isPlaying, isLoading, queueIndex, duration } = refs;
     let activeLoadToken = 1, nativePlaybackActive = true, nativeQueueDelegated = true, restoredPlaybackPending = false;
+    let activePlaybackRecovery = new PlaybackRecoverySession(currentTrack.value);
+    const recovery = activePlaybackRecovery;
     let startFilePlaybackInfoRefreshGeneration = 0, loadedTrackId = 'old-A', visualizationStarts = 0;
     const nativeQueueRevisionFence = { next() {} }, nativeSourceToTrackId = new Map(), playbackInfo = { value: null }, castTargetUsn = { value: null };
     const NATIVE_PLAYBACK_INFO_REFRESH_DELAY_MS = 0;
@@ -508,7 +516,7 @@ function fixture(stage) {
       setRestoredPlaybackPosition() {}, setPendingLoadStartTime() {}, setAutoAdvanceInFlight() {},
       setAdvancingFromEndedTrackId() {}, setCurrentTimeImmediate() {}, loadLyricsForTrack() {}
     });
-    return { advanceNativePlayback, controller, visualizationStarts: () => visualizationStarts };
+    return { advanceNativePlayback, controller, recovery, visualizationStarts: () => visualizationStarts };
   `
   )(
     { currentTrack, isPlaying, isLoading, queueIndex, duration },
@@ -516,7 +524,8 @@ function fixture(stage) {
     windowStub,
     loads,
     track,
-    wait
+    wait,
+    PlaybackRecoverySession
   )
   return { ...harness, loads, started, release, currentTrack, isPlaying, isLoading, track }
 }

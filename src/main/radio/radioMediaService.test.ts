@@ -3,10 +3,12 @@ import test from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createServer } from 'node:http'
 
 const { RadioMediaService } = (await import(
   new URL('./radioMediaService.ts', import.meta.url).href
 )) as typeof import('./radioMediaService')
+const { defaultFetchFeed } = await import('./radioMediaService.ts')
 const { PersistentDataRevisionConflictError } = (await import(
   new URL('../../shared/versionedPersistence.ts', import.meta.url).href
 )) as typeof import('../../shared/versionedPersistence')
@@ -63,6 +65,50 @@ test('radio media service persists stations with CAS revisions', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test(
+  'default podcast HTTP reader cancels an oversized chunked feed and preserves valid / 304 replies',
+  { timeout: 4_000 },
+  async (t) => {
+    let sent = 0
+    const server = createServer((req, res) => {
+      if (req.url === '/valid') {
+        res.writeHead(200, { ETag: '"valid"' })
+        res.end(RSS)
+        return
+      }
+      if (req.url === '/unchanged') {
+        res.writeHead(304, { ETag: '"same"', 'Content-Length': 20 * 1024 * 1024 })
+        res.end()
+        return
+      }
+      const chunk = Buffer.alloc(64 * 1024, 32)
+      const timer = setInterval(() => {
+        sent += chunk.length
+        res.write(chunk)
+        if (sent >= 10 * 1024 * 1024) {
+          clearInterval(timer)
+          res.end()
+        }
+      }, 1)
+      res.once('close', () => clearInterval(timer))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    t.after(async () => {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    })
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    await assert.rejects(defaultFetchFeed(`${base}/oversized`), /response is too large/)
+    assert.ok(sent < 10 * 1024 * 1024)
+    const valid = await defaultFetchFeed(`${base}/valid`)
+    assert.equal(valid.body, RSS)
+    assert.equal(valid.etag, '"valid"')
+    const unchanged = await defaultFetchFeed(`${base}/unchanged`, { ifNoneMatch: '"same"' })
+    assert.equal(unchanged.status, 304)
+    assert.equal(unchanged.body, '')
+  }
+)
 
 test('radio media service imports playlist and subscribes podcast feeds', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'te-podcast-'))

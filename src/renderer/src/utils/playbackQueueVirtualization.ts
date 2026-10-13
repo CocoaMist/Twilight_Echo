@@ -25,6 +25,7 @@ export function toPlaybackQueueSnapshot(track: Track): Track {
   return {
     id: track.id,
     queueEntryId: track.queueEntryId,
+    ...('queuePlaybackOrigin' in track ? { queuePlaybackOrigin: track.queuePlaybackOrigin } : {}),
     title: track.title,
     artist: track.artist,
     artists: track.artists,
@@ -88,7 +89,13 @@ export function patchPlaybackQueueTrack(tracks: Track[], updatedTrack: Track): T
     const track = tracks[index]
     if (track.id !== updatedTrack.id || matchesPlaybackQueueSnapshot(track, snapshot)) continue
     updated ??= tracks.slice()
-    updated[index] = { ...snapshot, queueEntryId: track.queueEntryId }
+    updated[index] = Object.assign(
+      { ...snapshot },
+      {
+        queueEntryId: track.queueEntryId,
+        queuePlaybackOrigin: 'queuePlaybackOrigin' in track ? track.queuePlaybackOrigin : undefined
+      }
+    )
   }
   return updated ?? tracks
 }

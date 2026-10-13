@@ -1,10 +1,61 @@
 import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
-import { dirname, extname, join, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { NetworkResumeUnsupported, NetworkSourceFailure } from './errors.ts'
 import type { NetworkSourceSession } from './adapters/types.ts'
 import type { NetworkEntry } from '../../shared/networkSources.ts'
+
+interface CacheDownload {
+  target: string
+  session: NetworkSourceSession
+  sizeBytes: number | undefined
+  controller: AbortController
+  subscribers: number
+  promise: Promise<string>
+}
+
+const downloads = new Map<string, CacheDownload>()
+const clears = new Map<string, Promise<void>>()
+
+function pathKey(path: string): string {
+  const absolute = resolve(path)
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+}
+
+function insideDirectory(target: string, directory: string): boolean {
+  const path = relative(pathKey(directory), pathKey(target))
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path))
+}
+
+function cancelledDownload(): NetworkSourceFailure {
+  return new NetworkSourceFailure('timeout', '网络文件下载已取消')
+}
+
+function subscribe(download: CacheDownload, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) return Promise.reject(cancelledDownload())
+  download.subscribers += 1
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (error?: unknown, value?: string): void => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      download.subscribers -= 1
+      if (error) reject(error)
+      else resolve(value as string)
+    }
+    const onAbort = (): void => {
+      finish(cancelledDownload())
+      if (download.subscribers === 0) download.controller.abort()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    download.promise.then(
+      (value) => finish(undefined, value),
+      (error) => finish(error)
+    )
+  })
+}
 
 /**
  * 把远程条目下载到 network-cache。
@@ -31,10 +82,69 @@ export async function downloadEntryToCache(deps: {
   if (entry.sizeBytes != null && (!Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0)) {
     throw new NetworkSourceFailure('network', '无效的网络文件大小')
   }
+  if (signal?.aborted) throw cancelledDownload()
+  for (const [directory, pendingClear] of clears) {
+    if (insideDirectory(target, directory)) await pendingClear
+  }
+  if (signal?.aborted) throw cancelledDownload()
+  const key = pathKey(target)
+  const existing = downloads.get(key)
+  if (existing) {
+    // A new consumer must not reuse an already abandoned producer, or a
+    // publication for a different known revision of the same entry.
+    if (existing.controller.signal.aborted || existing.sizeBytes !== entry.sizeBytes) {
+      await existing.promise.catch(() => undefined)
+      return downloadEntryToCache(deps)
+    }
+    return subscribe(existing, signal)
+  }
+  const controller = new AbortController()
+  const download: CacheDownload = {
+    target,
+    session,
+    sizeBytes: entry.sizeBytes,
+    controller,
+    subscribers: 0,
+    promise: Promise.resolve('')
+  }
+  downloads.set(key, download)
+  download.promise = performDownload(session, entry, cacheRoot, target, controller.signal).finally(
+    () => {
+      if (downloads.get(key) === download) downloads.delete(key)
+    }
+  )
+  return subscribe(download, signal)
+}
+
+/** A cancelled caller may leave other consumers using its producer session. */
+export async function closeSessionAfterCacheDownloads(
+  session: NetworkSourceSession
+): Promise<void> {
+  const active = [...downloads.values()].filter((download) => download.session === session)
+  if (active.length === 0) {
+    await session.close()
+    return
+  }
+  // Transfer cleanup ownership without delaying the cancelled caller until
+  // another consumer finishes a potentially large media download.
+  void Promise.allSettled(active.map((download) => download.promise))
+    .then(() => session.close())
+    .catch(() => undefined)
+}
+
+async function performDownload(
+  session: NetworkSourceSession,
+  entry: NetworkEntry,
+  cacheRoot: string,
+  target: string,
+  signal: AbortSignal
+): Promise<string> {
   await mkdir(cacheRoot, { recursive: true })
+  if (signal.aborted) throw cancelledDownload()
 
   try {
     const info = await stat(target)
+    if (signal.aborted) throw cancelledDownload()
     if (entry.sizeBytes == null || info.size === entry.sizeBytes) return target
   } catch {
     // 未缓存，继续下载
@@ -55,7 +165,9 @@ export async function downloadEntryToCache(deps: {
       partialSize = 0
     }
     if (partialSize > 0 && partialSize === entry.sizeBytes) {
+      if (signal.aborted) throw cancelledDownload()
       await rename(temp, target)
+      if (signal.aborted) throw cancelledDownload()
       return target
     }
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -71,8 +183,10 @@ export async function downloadEntryToCache(deps: {
       }
       await pipeline(stream, createWriteStream(temp, { flags: start > 0 ? 'a' : 'w' }), { signal })
       const completedSize = (await stat(temp)).size
+      if (signal.aborted) throw cancelledDownload()
       if (entry.sizeBytes == null || completedSize === entry.sizeBytes) {
         await rename(temp, target)
+        if (signal.aborted) throw cancelledDownload()
         return target
       }
       // A server that ignored Range returns the whole object. Reset once and
@@ -85,6 +199,7 @@ export async function downloadEntryToCache(deps: {
     }
     throw new NetworkSourceFailure('network', '网络文件无法完成下载')
   } catch (err) {
+    if (signal.aborted) throw cancelledDownload()
     if (err instanceof NetworkSourceFailure) throw err
     throw new NetworkSourceFailure('network', `网络文件下载失败：${(err as Error).message}`)
   }
@@ -114,6 +229,21 @@ export async function getDirectorySize(directory: string): Promise<number> {
 }
 
 export async function clearDirectory(directory: string): Promise<void> {
-  await rm(directory, { recursive: true, force: true })
-  await mkdir(directory, { recursive: true })
+  const key = pathKey(directory)
+  const previous = clears.get(key)
+  if (previous) return previous
+  const active = [...downloads.values()].filter((download) =>
+    insideDirectory(download.target, directory)
+  )
+  for (const download of active) download.controller.abort()
+  const clearing = Promise.allSettled(active.map((download) => download.promise))
+    .then(async () => {
+      await rm(directory, { recursive: true, force: true })
+      await mkdir(directory, { recursive: true })
+    })
+    .finally(() => {
+      if (clears.get(key) === clearing) clears.delete(key)
+    })
+  clears.set(key, clearing)
+  return clearing
 }

@@ -1,5 +1,6 @@
 #include "AudioMetadataService.h"
 #include "../decoder/FFmpegFileInput.h"
+#include "../decoder/FFmpegIoDeadline.h"
 
 #include "AudioMetadataTypes.h"
 
@@ -191,9 +192,12 @@ std::string coverMimeForCodec(AVCodecID codecId) {
 
 struct FormatContextHandle {
   FFmpegFileInput fileInput;
+  ffmpeg::IoDeadline deadline;
   AVFormatContext* context = nullptr;
+  AVDictionary* options = nullptr;
   ~FormatContextHandle() {
     if (context) avformat_close_input(&context);
+    av_dict_free(&options);
   }
 };
 #endif
@@ -310,12 +314,22 @@ std::string readMetadataJson(const std::string& source) {
 
 #if defined(TAE_HAS_FFMPEG)
   FormatContextHandle handle;
-  if (!handle.fileInput.open(source, &handle.context) ||
-      avformat_open_input(&handle.context, source.c_str(), nullptr, nullptr) < 0 || !handle.context) {
+  const bool networkSource = ffmpeg::isNetworkSource(source);
+  handle.deadline.arm(networkSource ? 8000 : 0);
+  if (networkSource) av_dict_set(&handle.options, "rw_timeout", "8000000", 0);
+  if (!handle.fileInput.open(source, &handle.context)) {
     return metadataToJson(metadata, "无法打开音频文件");
   }
+  if (!handle.context) handle.context = avformat_alloc_context();
+  if (!handle.context) return metadataToJson(metadata, "Cannot allocate demuxer");
+  handle.context->interrupt_callback = {
+      [](void* context) { return static_cast<ffmpeg::IoDeadline*>(context)->expired() ? 1 : 0; },
+      &handle.deadline};
+  if (avformat_open_input(&handle.context, source.c_str(), nullptr, &handle.options) < 0 || !handle.context) {
+    return metadataToJson(metadata, handle.deadline.expired() ? "stream_io_timeout" : "无法打开音频文件");
+  }
   if (avformat_find_stream_info(handle.context, nullptr) < 0) {
-    return metadataToJson(metadata, "无法读取音频流信息");
+    return metadataToJson(metadata, handle.deadline.expired() ? "stream_io_timeout" : "无法读取音频流信息");
   }
 
   readDictionary(handle.context->metadata, &metadata);

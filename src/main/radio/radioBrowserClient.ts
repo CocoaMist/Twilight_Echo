@@ -4,6 +4,7 @@
  * Docs: https://api.radio-browser.info/
  */
 import { parseJsonWithNestingLimit } from '../security/jsonSafety.ts'
+import { cancelResponseBody, readBoundedResponseBody } from './boundedResponseBody.ts'
 
 export interface RadioBrowserStation {
   stationuuid: string
@@ -128,12 +129,16 @@ async function defaultFetchJson(url: string): Promise<unknown> {
       signal: controller.signal
     })
     if (!response.ok) {
+      await cancelResponseBody(response)
       throw new Error(`Radio directory HTTP ${response.status}`)
     }
-    const text = await response.text()
-    if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) {
-      throw new Error('Radio directory response is too large')
-    }
+    const text = (
+      await readBoundedResponseBody(
+        response,
+        MAX_RESPONSE_BYTES,
+        'Radio directory response is too large'
+      )
+    ).toString('utf8')
     return parseJsonWithNestingLimit(text) as unknown
   } finally {
     clearTimeout(timer)

@@ -1,5 +1,6 @@
 #include "FFmpegDecoder.h"
 #include "FFmpegFileInput.h"
+#include "FFmpegIoDeadline.h"
 
 #include "FFmpegDecoderUtils.h"
 #include "FFmpegDsdRate.h"
@@ -19,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <thread>
 
 #if defined(TAE_HAS_FFMPEG)
 extern "C" {
@@ -233,6 +235,21 @@ bool isTypedIntegerFormat(AudioSampleFormat format) {
 struct FFmpegDecoder::Impl {
   int (*interrupt)(void*) = nullptr;
   void* interruptContext = nullptr;
+  ffmpeg::IoDeadline ioDeadline;
+  int openTimeoutMs = 10000;
+  int readTimeoutMs = 10000;
+  bool networkSource = false;
+  std::string terminalError;
+  bool cancelled() const { return interrupt && interrupt(interruptContext); }
+  static int interruptIo(void* context) {
+    const auto* self = static_cast<const Impl*>(context);
+    return self->cancelled() || self->ioDeadline.expired();
+  }
+  std::string ioError(int code) const {
+    if (cancelled()) return "decode_cancelled";
+    if (ioDeadline.expired()) return "stream_io_timeout";
+    return "stream_read_error:" + std::to_string(code);
+  }
   AudioStreamInfo streamInfo;
   AudioFormat outputFormat;
   bool eof = false;
@@ -337,6 +354,8 @@ struct FFmpegDecoder::Impl {
     resamplerFlushed = false;
     icyEnabled = false;
     eof = false;
+    terminalError.clear();
+    ioDeadline.clear();
     resetPending();
     exactSeek = false;
     exactInputCursor.reset();
@@ -494,7 +513,6 @@ struct FFmpegDecoder::Impl {
       }
       if (ret != AVERROR(EAGAIN)) {
         if (error) *error = "解码器接收音频帧失败，错误码：" + std::to_string(ret);
-        eof = true;
         return false;
       }
 
@@ -508,7 +526,6 @@ struct FFmpegDecoder::Impl {
         }
         if (ret < 0 && ret != AVERROR(EAGAIN)) {
           if (error) *error = "解码器收尾失败，错误码：" + std::to_string(ret);
-          eof = true;
           return false;
         }
         continue;
@@ -516,8 +533,16 @@ struct FFmpegDecoder::Impl {
 
       ret = av_read_frame(formatContext, packet);
       if (ret < 0) {
-        inputEof = true;
-        continue;
+        if (ret == AVERROR_EOF) {
+          inputEof = true;
+          continue;
+        }
+        if (ret == AVERROR(EAGAIN) && !interruptIo(this)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
+        }
+        if (error) *error = ioError(ret);
+        return false;
       }
 
       // ICY metadata can land in format-context tags between packets on live streams.
@@ -528,7 +553,6 @@ struct FFmpegDecoder::Impl {
         av_packet_unref(packet);
         if (ret < 0 && ret != AVERROR(EAGAIN)) {
           if (error) *error = "解码器提交音频包失败，错误码：" + std::to_string(ret);
-          eof = true;
           return false;
         }
       } else {
@@ -562,8 +586,15 @@ void FFmpegDecoder::setInterrupt(int (*callback)(void*), void* context) {
   impl_->interruptContext = context;
 }
 
+void FFmpegDecoder::setIoTimeouts(int openMilliseconds, int readMilliseconds) {
+  impl_->openTimeoutMs = std::max(1, openMilliseconds);
+  impl_->readTimeoutMs = std::max(1, readMilliseconds);
+}
+
 bool FFmpegDecoder::open(const std::string& source, std::string* error) {
   close();
+  impl_->networkSource = ffmpeg::isNetworkSource(source);
+  impl_->ioDeadline.arm(impl_->networkSource ? impl_->openTimeoutMs : 0);
   if (impl_->interrupt && impl_->interrupt(impl_->interruptContext)) {
     if (error) *error = "decode_cancelled";
     return false;
@@ -585,14 +616,10 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     return false;
   }
 
-  static bool ffmpegNetworkInitialized = false;
-  if (!ffmpegNetworkInitialized) {
-    int initRet = avformat_network_init();
-    if (initRet < 0) {
-      if (error) *error = "FFmpeg 网络初始化失败，错误码：" + std::to_string(initRet);
-      return false;
-    }
-    ffmpegNetworkInitialized = true;
+  static const int networkInitResult = avformat_network_init();
+  if (networkInitResult < 0) {
+    if (error) *error = "FFmpeg 网络初始化失败，错误码：" + std::to_string(networkInitResult);
+    return false;
   }
 
   // Enable ICY metadata for live HTTP(S) radio streams so StreamTitle updates appear.
@@ -606,6 +633,7 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     av_dict_set(&openOptions, "reconnect", "1", 0);
     av_dict_set(&openOptions, "reconnect_streamed", "1", 0);
     av_dict_set(&openOptions, "reconnect_delay_max", "5", 0);
+    av_dict_set(&openOptions, "rw_timeout", std::to_string(impl_->readTimeoutMs * 1000LL).c_str(), 0);
     // NetEase (and many CDNs) reject bare FFmpeg clients. Attach a browser-like
     // UA and, for NetEase hosts, the music.163.com Referer so stream open succeeds.
     av_dict_set(
@@ -643,17 +671,17 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     if (error) *error = "Cannot allocate demuxer";
     return false;
   }
-  impl_->formatContext->interrupt_callback = {impl_->interrupt, impl_->interruptContext};
+  impl_->formatContext->interrupt_callback = {Impl::interruptIo, impl_.get()};
   int ret = avformat_open_input(&impl_->formatContext, source.c_str(), inputFormat, &openOptions);
   av_dict_free(&openOptions);
   if (ret < 0) {
-    if (error) *error = "打开音频失败，错误码：" + std::to_string(ret);
+    if (error) *error = impl_->ioError(ret);
     return false;
   }
 
   ret = avformat_find_stream_info(impl_->formatContext, nullptr);
   if (ret < 0) {
-    if (error) *error = "解析音频信息失败，错误码：" + std::to_string(ret);
+    if (error) *error = impl_->ioError(ret);
     return false;
   }
 
@@ -756,6 +784,7 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
   }
   if (!setOutputFormat(defaultOutput, error)) return false;
   failedOpen.release();
+  impl_->ioDeadline.clear();
   return true;
 #else
   (void)source;
@@ -907,6 +936,11 @@ size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* 
 }
 
 size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
+  if (error) error->clear();
+  if (!impl_->terminalError.empty()) {
+    if (error) *error = impl_->terminalError;
+    return 0;
+  }
   if (impl_->interrupt && impl_->interrupt(impl_->interruptContext)) {
     if (error) *error = "decode_cancelled";
     return 0;
@@ -914,6 +948,7 @@ size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
   if (!output.data || output.frames == 0) return 0;
 
 #if defined(TAE_HAS_FFMPEG)
+  impl_->ioDeadline.arm(impl_->networkSource ? impl_->readTimeoutMs : 0);
   if (!impl_->codecContext || !impl_->swr) {
     ffmpeg::zeroPcmBlock(output);
     return 0;
@@ -937,7 +972,14 @@ size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
             ? impl_->pending.size() / bytesPerFrame - impl_->pendingFrameOffset
             : 0;
     if (pendingFrames == 0) {
-      if (!impl_->decodeOneFrame(error)) break;
+      std::string decodeError;
+      if (!impl_->decodeOneFrame(&decodeError)) {
+        if (!decodeError.empty()) {
+          impl_->terminalError = std::move(decodeError);
+          if (error) *error = impl_->terminalError;
+        }
+        break;
+      }
       continue;
     }
 
@@ -964,6 +1006,7 @@ size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
 
 bool FFmpegDecoder::seek(double seconds, std::string* error) {
 #if defined(TAE_HAS_FFMPEG)
+  impl_->ioDeadline.arm(impl_->networkSource ? impl_->readTimeoutMs : 0);
   if (!impl_->formatContext || impl_->audioStreamIndex < 0) return false;
   AVStream* stream = impl_->formatContext->streams[impl_->audioStreamIndex];
   const int64_t timestamp = static_cast<int64_t>(seconds / av_q2d(stream->time_base));
@@ -981,6 +1024,7 @@ bool FFmpegDecoder::seek(double seconds, std::string* error) {
   impl_->inputEof = false;
   impl_->resamplerFlushed = false;
   impl_->eof = false;
+  impl_->terminalError.clear();
   impl_->resetPending();
   impl_->exactSeek = false;
   impl_->exactInputCursor.reset();

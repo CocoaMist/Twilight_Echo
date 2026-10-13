@@ -183,18 +183,29 @@ async function fixture(
   const directory = fs.mkdtempSync(path.join(tmpdir(), 'twilight-plugin-wake-'))
   fs.writeFileSync(path.join(directory, 'index.mjs'), 'export function activate() {}\n')
   const importSource = (name) => import(pathToFileURL(path.join(__dirname, name)).href)
-  const [manifest, routing, queue, rpc, idle, persistence, dependenciesApi, media, identities] =
-    await Promise.all([
-      importSource('manifest.ts'),
-      importSource('providerRouting.ts'),
-      importSource('operationQueue.ts'),
-      importSource('rpcCoordinator.ts'),
-      importSource('hostIdle.ts'),
-      importSource('statePersistence.ts'),
-      importSource('dependencies.ts'),
-      importSource('../security/remoteMediaGrants.ts'),
-      importSource('../audio/providerPlaybackIdentity.ts')
-    ])
+  const [
+    manifest,
+    routing,
+    queue,
+    rpc,
+    idle,
+    persistence,
+    dependenciesApi,
+    media,
+    identities,
+    logs
+  ] = await Promise.all([
+    importSource('manifest.ts'),
+    importSource('providerRouting.ts'),
+    importSource('operationQueue.ts'),
+    importSource('rpcCoordinator.ts'),
+    importSource('hostIdle.ts'),
+    importSource('statePersistence.ts'),
+    importSource('dependencies.ts'),
+    importSource('../security/remoteMediaGrants.ts'),
+    importSource('../audio/providerPlaybackIdentity.ts'),
+    importSource('logBudget.ts')
+  ])
   const children = []
   let notify
   const activationStarted = new Promise((resolve) => {
@@ -242,6 +253,7 @@ async function fixture(
     './manifest': manifest,
     './providerRouting': routing,
     './operationQueue.ts': queue,
+    './logBudget.ts': logs,
     './rpcCoordinator.ts': rpc,
     './hostIdle.ts': idle,
     './statePersistence.ts': persistence,

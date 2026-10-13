@@ -79,6 +79,8 @@ import {
 } from '../utils/playbackQueueVirtualization.ts'
 import { clampProviderReliability, findPlaybackFallbackTrack } from '../utils/playbackFallback.ts'
 import { findProviderRematchCandidate } from '../utils/libraryRepair.ts'
+import { preferredSourceKey } from '../utils/logicalTrackModel.ts'
+import { PlaybackRecoverySession } from './player/playbackRecoverySession.ts'
 import { useNcmStore } from './useNcmStore.ts'
 import { useLyricsManagement } from './lyricsManagement.ts'
 import { usePlaybackBookmarks } from './playbackBookmarks'
@@ -545,6 +547,7 @@ async function prefetchUpcomingNcmStream(): Promise<void> {
 const nativeQueueRevisionFence = new NativeQueueRevisionFence()
 const nativeQueueLoader = new NativeQueueLoader()
 let activeLoadToken = 0
+let activePlaybackRecovery: PlaybackRecoverySession | null = null
 let rendererFallbackInProgress = false
 let rendererPlaybackWatchdogTimer: number | null = null
 let playbackToggleIntent: { playing: boolean; expiresAt: number } | null = null
@@ -806,18 +809,31 @@ function getPlaybackAudio(): HTMLAudioElement {
     // failures during initial load; this covers mid-stream CDN drops / 403 /
     // decode errors that occur after playback has started.
     const track = currentTrack.value
-    if (track && !nativePlaybackActive && !rendererFallbackInProgress) {
+    if (track && !isLoading.value && !nativePlaybackActive && !rendererFallbackInProgress) {
+      const loadToken = activeLoadToken
       rendererFallbackInProgress = true
-      void handlePlaybackFallback(track, new Error(message), activeLoadToken).then((handled) => {
-        rendererFallbackInProgress = false
-        if (!handled) {
-          setAudioEngineError(message)
+      void handlePlaybackFallback(track, new Error(message), loadToken)
+        .then((handled) => {
+          if (!handled && isActiveLoad(loadToken, track)) {
+            setAudioEngineError(message)
+            isPlaying.value = false
+            isLoading.value = false
+          }
+        })
+        .catch((error) => {
+          if (!isActiveLoad(loadToken, track)) return
+          setAudioEngineError(error instanceof Error ? error.message : message)
           isPlaying.value = false
           isLoading.value = false
-        }
-      })
+        })
+        .finally(() => {
+          rendererFallbackInProgress = false
+        })
       return
     }
+    // audio.play() owns initial-load failures and routes them through the same
+    // recovery session; an error event must not start a second retry chain.
+    if (isLoading.value) return
     setAudioEngineError(message)
     isPlaying.value = false
     isLoading.value = false
@@ -868,6 +884,8 @@ function stopRendererAudio(clearSource = false): void {
 }
 
 function resetPlaybackRuntimeStateForRestore(): void {
+  activePlaybackRecovery?.cancel()
+  activePlaybackRecovery = null
   activeLoadToken += 1
   nativeQueueRevisionFence.next()
   startFilePlaybackInfoRefreshGeneration++
@@ -1598,6 +1616,8 @@ function getNativeQueueAdvanceTarget(
 }
 
 async function advanceNativePlayback(direction: 'next' | 'previous'): Promise<void> {
+  activePlaybackRecovery?.cancel()
+  activePlaybackRecovery = null
   const loadToken = ++activeLoadToken
   const isCurrentAdvance = () => loadToken === activeLoadToken
   // Drop any pending pause/play grace — a track switch is a new transport action
@@ -2387,31 +2407,50 @@ async function resolvePlayTarget(track: Track): Promise<string> {
   return streamUrl
 }
 
+/** Keep the selected queue occurrence when its audio provider changes. */
+function preserveQueueEntryContext(replacement: Track, entry: Track): Track {
+  return Object.assign(
+    { ...replacement },
+    {
+      queueEntryId: entry.queueEntryId,
+      queuePlaybackOrigin: 'queuePlaybackOrigin' in entry ? entry.queuePlaybackOrigin : undefined
+    }
+  )
+}
+
 async function handlePlaybackFallback(
   failedTrack: Track,
   reason: unknown,
-  loadToken: number
+  loadToken: number,
+  recovery?: PlaybackRecoverySession
 ): Promise<boolean> {
   if (!isActiveLoad(loadToken, failedTrack)) return false
+  if (preferredSourceKey(recovery?.rootTrack ?? failedTrack)) return false
+  const recoverySession = recovery ?? new PlaybackRecoverySession(failedTrack)
+  if (!recovery) {
+    activePlaybackRecovery?.cancel()
+    activePlaybackRecovery = recoverySession
+    recoverySession.beginAttempt(failedTrack)
+  }
   const failedSource = getTrackSource(failedTrack)
   const fallback = findPlaybackFallbackTrack({
     failedTrack,
-    candidates: queue.value,
+    candidates: queue.value.filter((track) => recoverySession.canAttempt(track)),
     unavailableSources: [failedSource],
     sourceReliability: getProviderSourceReliability()
   })
-  if (!fallback) return await handleProviderRematchFallback(failedTrack, loadToken)
+  if (!fallback) {
+    try {
+      return await handleProviderRematchFallback(failedTrack, loadToken, recoverySession)
+    } finally {
+      if (!recovery) {
+        recoverySession.finish()
+        if (activePlaybackRecovery === recoverySession) activePlaybackRecovery = null
+      }
+    }
+  }
 
-  // A fallback succeeded: audio is still playing, so this is a warning.
-  const fallbackLocale = currentLocale()
-  setAudioEngineError(
-    translate(fallbackLocale, 'error.audio.playback_fallback_switched', {
-      title: failedTrack.title || translate(fallbackLocale, 'error.audio.current_track'),
-      source: fallback.source ?? getTrackSource(fallback),
-      reason: presentError(fallbackLocale, reason)
-    }),
-    'warning'
-  )
+  recoverySession.notice = { kind: 'switched', reason }
   nativePlaybackActive = false
   loadedTrackId = ''
   stopVisualizationPolling(true)
@@ -2419,15 +2458,20 @@ async function handlePlaybackFallback(
 
   const fallbackSnapshot = toPlaybackQueueSnapshot(fallback)
   queue.value = queue.value.map((track) =>
-    track.id === failedTrack.id ? { ...fallbackSnapshot, queueEntryId: track.queueEntryId } : track
+    track.id === failedTrack.id ? preserveQueueEntryContext(fallbackSnapshot, track) : track
   )
   originalQueue.value = originalQueue.value.map((track) =>
-    track.id === failedTrack.id ? { ...fallbackSnapshot, queueEntryId: track.queueEntryId } : track
+    track.id === failedTrack.id ? preserveQueueEntryContext(fallbackSnapshot, track) : track
   )
-  queueIndex.value = queue.value.findIndex((track) => track.id === fallback.id)
+  const selectedFallback = preserveQueueEntryContext(fallback, failedTrack)
+  queueIndex.value = queue.value.findIndex((track) =>
+    selectedFallback.queueEntryId
+      ? track.queueEntryId === selectedFallback.queueEntryId
+      : track.id === selectedFallback.id
+  )
   if (queueIndex.value < 0) queueIndex.value = 0
-  currentTrack.value = fallback
-  await loadAndPlay(fallback)
+  currentTrack.value = selectedFallback
+  await loadAndPlay(selectedFallback, 0, recoverySession)
   return true
 }
 
@@ -2444,18 +2488,26 @@ function getProviderSourceReliability(): ProviderSourceReliability {
 
 async function handleProviderRematchFallback(
   failedTrack: Track,
-  loadToken: number
+  loadToken: number,
+  recoverySession: PlaybackRecoverySession
 ): Promise<boolean> {
   if (!isActiveLoad(loadToken, failedTrack)) return false
+  if (!recoverySession.canAttemptSearch()) return false
+  if (preferredSourceKey(recoverySession.rootTrack)) return false
   const failedSource = getTrackSource(failedTrack)
 
-  await syncPluginProviders()
-  const searchResult = await useMediaProviders().searchAllSongs({
-    query: [failedTrack.title, failedTrack.artist].filter(Boolean).join(' '),
-    localTracks: queue.value
-  })
+  await recoverySession.run(() => syncPluginProviders())
+  if (!isActiveLoad(loadToken, failedTrack)) return false
+  const searchResult = await recoverySession.run(() =>
+    useMediaProviders().searchAllSongs({
+      query: [failedTrack.title, failedTrack.artist].filter(Boolean).join(' '),
+      localTracks: queue.value,
+      signal: recoverySession.signal
+    })
+  )
   const candidates = searchResult.items
     .map((item) => item.track)
+    .filter((track) => recoverySession.canAttempt(track))
     .filter((track) =>
       failedSource === 'local'
         ? getTrackSource(track) !== 'local'
@@ -2464,15 +2516,8 @@ async function handleProviderRematchFallback(
   const rematched = findProviderRematchCandidate(failedTrack, candidates)
   if (!rematched || !isActiveLoad(loadToken, failedTrack)) return false
 
-  // Rematch succeeded: playback continues from another source.
-  const rematchLocale = currentLocale()
-  setAudioEngineError(
-    translate(rematchLocale, 'error.audio.playback_fallback_rematched', {
-      title: failedTrack.title || translate(rematchLocale, 'error.audio.current_track'),
-      source: rematched.source ?? getTrackSource(rematched)
-    }),
-    'warning'
-  )
+  recoverySession.pendingRematch = true
+  recoverySession.notice = { kind: 'rematched' }
   nativePlaybackActive = false
   loadedTrackId = ''
   stopVisualizationPolling(true)
@@ -2480,20 +2525,20 @@ async function handleProviderRematchFallback(
 
   const rematchedSnapshot = toPlaybackQueueSnapshot(rematched)
   queue.value = queue.value.map((track) =>
-    track.id === failedTrack.id ? { ...rematchedSnapshot, queueEntryId: track.queueEntryId } : track
+    track.id === failedTrack.id ? preserveQueueEntryContext(rematchedSnapshot, track) : track
   )
   originalQueue.value = originalQueue.value.map((track) =>
-    track.id === failedTrack.id ? { ...rematchedSnapshot, queueEntryId: track.queueEntryId } : track
+    track.id === failedTrack.id ? preserveQueueEntryContext(rematchedSnapshot, track) : track
   )
-  queueIndex.value = queue.value.findIndex((track) => track.id === rematched.id)
+  const selectedRematch = preserveQueueEntryContext(rematched, failedTrack)
+  queueIndex.value = queue.value.findIndex((track) =>
+    selectedRematch.queueEntryId
+      ? track.queueEntryId === selectedRematch.queueEntryId
+      : track.id === selectedRematch.id
+  )
   if (queueIndex.value < 0) queueIndex.value = 0
-  currentTrack.value = rematched
-  // Persist the rematch so playlists/library references to the expired
-  // provider track are replaced — not just the transient playback queue.
-  if (failedSource !== 'local') {
-    useMusicStore().replaceTrackReference(failedTrack.id, rematched)
-  }
-  await loadAndPlay(rematched)
+  currentTrack.value = selectedRematch
+  await loadAndPlay(selectedRematch, 0, recoverySession)
   return true
 }
 
@@ -2938,7 +2983,17 @@ function scheduleCrossfadeIfNeeded(): void {
   )
 }
 
-async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
+async function loadAndPlay(
+  track: Track,
+  startTime = 0,
+  recovery?: PlaybackRecoverySession
+): Promise<void> {
+  const recoverySession = recovery ?? new PlaybackRecoverySession(track)
+  if (!recovery) {
+    activePlaybackRecovery?.cancel()
+    activePlaybackRecovery = recoverySession
+  }
+  if (!recoverySession.beginAttempt(track)) return
   playbackHistoryController.beginPlaybackAttempt()
   nativeHistoryRestartPending = false
   // Capture previous playback identity before this load mutates state.
@@ -3000,7 +3055,7 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
       return
     }
 
-    const playTarget = await resolvePlayTarget(track)
+    const playTarget = await recoverySession.run(() => resolvePlayTarget(track))
     if (!isActiveLoad(loadToken, track)) {
       releaseLoadIfOwned()
       return
@@ -3208,6 +3263,38 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
     startVisualizationPolling()
     playbackHistoryController.maybeOfferResumeForTrack(track, resumeAt)
     playbackHistoryController.recordPlaybackStart(track, playMode.value)
+    // Search matches are only candidates until audio has actually started.
+    // Failed candidates must never rewrite the user's library or playlists.
+    if (recoverySession.pendingRematch && getTrackSource(recoverySession.rootTrack) !== 'local') {
+      try {
+        const replacement = { ...track }
+        delete replacement.queueEntryId
+        if ('queuePlaybackOrigin' in replacement) delete replacement.queuePlaybackOrigin
+        useMusicStore().replaceTrackReference(recoverySession.rootTrack.id, replacement)
+      } catch (error) {
+        console.warn('[audio-engine] Failed to save the successful source replacement:', error)
+      }
+    }
+    if (recoverySession.notice) {
+      const locale = currentLocale()
+      setAudioEngineError(
+        translate(
+          locale,
+          recoverySession.notice.kind === 'rematched'
+            ? 'error.audio.playback_fallback_rematched'
+            : 'error.audio.playback_fallback_switched',
+          {
+            title:
+              recoverySession.rootTrack.title || translate(locale, 'error.audio.current_track'),
+            source: track.source ?? getTrackSource(track),
+            reason: presentError(locale, recoverySession.notice.reason)
+          }
+        ),
+        'warning'
+      )
+    }
+    recoverySession.finish()
+    if (activePlaybackRecovery === recoverySession) activePlaybackRecovery = null
   } catch (err) {
     if (!isActiveLoad(loadToken, track)) {
       releaseLoadIfOwned()
@@ -3215,7 +3302,7 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
     }
     clearNativePlaybackInfoIntentForLoad(loadToken)
     try {
-      if (await handlePlaybackFallback(track, err, loadToken)) return
+      if (await handlePlaybackFallback(track, err, loadToken, recoverySession)) return
     } catch (fallbackError) {
       console.warn('[audio-engine] Source recovery failed:', fallbackError)
     }
@@ -3231,6 +3318,13 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
     nativePlaybackActive = false
     nativeQueueDelegated = false
     stopVisualizationPolling(true)
+    recoverySession.finish()
+    if (activePlaybackRecovery === recoverySession) activePlaybackRecovery = null
+  } finally {
+    if (activePlaybackRecovery === recoverySession) {
+      recoverySession.finish()
+      activePlaybackRecovery = null
+    }
   }
 }
 

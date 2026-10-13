@@ -735,6 +735,54 @@ test('failed and cancelled date reads leave legacy files eligible for retry; abs
   }
 })
 
+test('cancellation during an asynchronous committed save returns the actual persisted revision and aligns the index', async () => {
+  const fixture = createFixture('async-save-cancellation')
+  let release!: () => void
+  let saving!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const started = new Promise<void>((resolve) => {
+    saving = resolve
+  })
+  const filePath = join(fixture.root, 'song.flac')
+  fixture.persist(createDocument(1, [fixture.root], []))
+  const runner = new ScriptedRunner(async () =>
+    scanResult({
+      identities: [{ filePath, size: 100, mtimeMs: 200 }],
+      parsedTracks: [createTrack('new', filePath)],
+      parsedFilePaths: [filePath],
+      parsedFileCount: 1
+    })
+  )
+  const coordinator = fixture.coordinator(runner, {
+    loadDocument: async () => loadMusicLibraryDocument(fixture.libraryFile),
+    persistDocument: async (document) => {
+      saving()
+      await gate
+      fixture.persist(document)
+    },
+    loadFileIndex: async () => loadLocalLibraryFileIndex(fixture.libraryFile),
+    persistFileIndex: async (document) =>
+      persistLocalLibraryFileIndex(fixture.libraryFile, document)
+  })
+  try {
+    const pending = coordinator.scanFull()
+    await started
+    coordinator.cancel()
+    release()
+    const result = await pending
+    assert.equal(result.state, 'cancelled')
+    assert.equal(result.library.revision, 2)
+    assert.equal(fixture.load().revision, 2)
+    assert.equal(loadLocalLibraryFileIndex(fixture.libraryFile).document.libraryRevision, 2)
+  } finally {
+    release()
+    coordinator.destroy()
+    fixture.cleanup()
+  }
+})
+
 function createFixture(label: string): {
   root: string
   libraryFile: string

@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { loadTaglib, type Taglib } from './taglib.ts'
 import {
@@ -69,19 +69,6 @@ export function tagBackupPath(filePath: string, backupRoot: string): string {
 
 export function getTagWriteJournalPath(backupRoot: string): string {
   return join(backupRoot, TAG_WRITE_JOURNAL_FILE)
-}
-
-export function writeTagsWithBackup(input: TagWriteInput, backupRoot: string): TagWriteResult {
-  mkdirSync(backupRoot, { recursive: true })
-  const result = { filePath: input.filePath, backupPath: tagBackupPath(input.filePath, backupRoot) }
-  copyFileSync(input.filePath, result.backupPath)
-  try {
-    writeTags(input)
-    return result
-  } catch (error) {
-    copyFileSync(result.backupPath, input.filePath)
-    throw error
-  }
 }
 
 export function writeTagsBatchWithRollback(
@@ -156,10 +143,6 @@ export function restoreTagsFromBackup(filePath: string, backupRoot: string): voi
   if (!existsSync(backupPath)) throw new Error('Tag backup does not exist')
   mkdirSync(dirname(filePath), { recursive: true })
   copyFileSync(backupPath, filePath)
-}
-
-export function clearTagBackup(filePath: string, backupRoot: string): void {
-  rmSync(tagBackupPath(filePath, backupRoot), { force: true })
 }
 
 function writeTags(input: TagWriteInput): void {

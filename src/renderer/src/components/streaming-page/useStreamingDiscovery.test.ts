@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ref } from 'vue'
+import { createRenderer, defineComponent, h, nextTick, ref } from 'vue'
 import type { NcmPlaylistSummary } from '../../stores/useNcmStore.ts'
 
 const { useStreamingDiscovery, DISCOVERY_PAGE_SIZE } = (await import(
@@ -217,6 +217,193 @@ test('switching providers resets filters and loads the new provider without stal
 
   assert.deepEqual(calls, ['alpha', 'beta'])
   assert.equal(discovery.selectedTag.value, '全部')
+  assert.deepEqual(
+    discovery.playlists.value.map((item) => item.id),
+    [2]
+  )
+})
+
+test('switching away and back cannot accept the first provider catalogue request', async () => {
+  const providerId = ref('alpha')
+  let resolveOld!: (value: typeof catalogueFixture) => void
+  let alphaCalls = 0
+  const current = { ...catalogueFixture, hotTags: ['new catalogue'] }
+  const discovery = useStreamingDiscovery({
+    providerId,
+    fetchDiscoveryPlaylists: async () => discoveryPage([1]),
+    fetchPlaylistCategories: async (provider) => {
+      if (provider === 'alpha' && ++alphaCalls === 1) {
+        return new Promise((resolve) => {
+          resolveOld = resolve
+        })
+      }
+      return current
+    }
+  })
+  await discovery.ensureLoaded()
+  providerId.value = 'beta'
+  await nextTick()
+  await discovery.ensureLoaded()
+  providerId.value = 'alpha'
+  await nextTick()
+  await discovery.ensureLoaded()
+  resolveOld(catalogueFixture)
+  await nextTick()
+  assert.deepEqual(discovery.catalogue.value?.hotTags, ['new catalogue'])
+  assert.equal(discovery.catalogueLoading.value, false)
+})
+
+for (const replacement of ['tag', 'retry', 'quality', 'provider'] as const) {
+  test(`${replacement} replacement releases a superseded high-quality append`, async () => {
+    const providerId = ref('alpha')
+    let resolveAppend!: (value: {
+      items: NcmPlaylistSummary[]
+      total: number
+      hasMore: boolean
+      lasttime: number
+    }) => void
+    let rejectAppend!: (error: Error) => void
+    let appendCalls = 0
+    const discovery = useStreamingDiscovery({
+      providerId,
+      fetchDiscoveryPlaylists: async () => discoveryPage([90]),
+      fetchHighQualityPlaylists: async (_providerId, _cat, _limit, before = 0) => {
+        if (before > 0) {
+          appendCalls += 1
+          if (appendCalls === 1) {
+            return new Promise((resolve, reject) => {
+              resolveAppend = resolve
+              rejectAppend = reject
+            })
+          }
+          return { items: [playlist(3)], total: 3, hasMore: false, lasttime: 100 }
+        }
+        return { items: [playlist(2)], total: 3, hasMore: true, lasttime: 200 }
+      }
+    })
+    discovery.toggleHighQuality()
+    await nextTick()
+    const staleAppend = discovery.loadMore()
+    assert.equal(discovery.loadingMore.value, true)
+
+    if (replacement === 'tag') discovery.selectTag('欧美')
+    if (replacement === 'retry') discovery.retry()
+    if (replacement === 'quality') {
+      discovery.toggleHighQuality()
+      discovery.toggleHighQuality()
+    }
+    if (replacement === 'provider') {
+      providerId.value = 'beta'
+      await nextTick()
+      discovery.toggleHighQuality()
+    }
+    await nextTick()
+    assert.equal(discovery.loadingMore.value, false)
+    assert.equal(discovery.listLoading.value, false)
+    assert.equal(discovery.hasMore.value, true)
+
+    // Old failures must not poison the replacement; old successes must not
+    // append their previous category/provider into it.
+    if (replacement === 'retry') rejectAppend(new Error('stale append failed'))
+    else resolveAppend({ items: [playlist(99)], total: 1, hasMore: false, lasttime: 0 })
+    await staleAppend
+    assert.equal(discovery.loadingMore.value, false)
+    assert.equal(discovery.listError.value, '')
+    assert.deepEqual(
+      discovery.playlists.value.map((item) => item.id),
+      [2]
+    )
+    await discovery.loadMore()
+    assert.equal(appendCalls, 2)
+    assert.deepEqual(
+      discovery.playlists.value.map((item) => item.id),
+      [2, 3]
+    )
+  })
+}
+
+test('an old append finally cannot release a newer append owner', async () => {
+  const pending: Array<
+    (value: {
+      items: NcmPlaylistSummary[]
+      total: number
+      hasMore: boolean
+      lasttime: number
+    }) => void
+  > = []
+  const discovery = useStreamingDiscovery({
+    providerId: ref('ncm'),
+    fetchDiscoveryPlaylists: async () => discoveryPage([1]),
+    fetchHighQualityPlaylists: async (_providerId, _cat, _limit, before = 0) => {
+      if (before === 0) return { items: [playlist(2)], total: 4, hasMore: true, lasttime: 200 }
+      return new Promise((resolve) => pending.push(resolve))
+    }
+  })
+  discovery.toggleHighQuality()
+  await nextTick()
+  const old = discovery.loadMore()
+  discovery.selectTag('欧美')
+  await nextTick()
+  const newer = discovery.loadMore()
+  pending[0]({ items: [playlist(99)], total: 4, hasMore: true, lasttime: 100 })
+  await old
+  assert.equal(discovery.loadingMore.value, true)
+  pending[1]({ items: [playlist(3)], total: 4, hasMore: false, lasttime: 50 })
+  await newer
+  assert.equal(discovery.loadingMore.value, false)
+  assert.deepEqual(
+    discovery.playlists.value.map((item) => item.id),
+    [2, 3]
+  )
+})
+
+test('unmount invalidates an append and releases both loading flags', async () => {
+  let discovery!: ReturnType<typeof useStreamingDiscovery>
+  let resolveAppend!: (value: {
+    items: NcmPlaylistSummary[]
+    total: number
+    hasMore: boolean
+    lasttime: number
+  }) => void
+  const renderer = createRenderer<object, object>({
+    patchProp() {},
+    insert() {},
+    remove() {},
+    setElementText() {},
+    setText() {},
+    createElement: () => ({}),
+    createText: () => ({}),
+    createComment: () => ({}),
+    parentNode: () => null,
+    nextSibling: () => null
+  })
+  const app = renderer.createApp(
+    defineComponent({
+      setup() {
+        discovery = useStreamingDiscovery({
+          providerId: ref('ncm'),
+          fetchDiscoveryPlaylists: async () => discoveryPage([1]),
+          fetchHighQualityPlaylists: async (_providerId, _cat, _limit, before = 0) => {
+            if (before === 0)
+              return { items: [playlist(2)], total: 4, hasMore: true, lasttime: 200 }
+            return new Promise((resolve) => {
+              resolveAppend = resolve
+            })
+          }
+        })
+        return () => h('div')
+      }
+    })
+  )
+  app.mount({})
+  discovery.toggleHighQuality()
+  await nextTick()
+  const pending = discovery.loadMore()
+  app.unmount()
+  assert.equal(discovery.loadingMore.value, false)
+  assert.equal(discovery.listLoading.value, false)
+  resolveAppend({ items: [playlist(99)], total: 1, hasMore: false, lasttime: 0 })
+  await pending
   assert.deepEqual(
     discovery.playlists.value.map((item) => item.id),
     [2]

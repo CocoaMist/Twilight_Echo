@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { cancelResponseBody, readBoundedResponseBody } from './boundedResponseBody.ts'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
@@ -401,7 +402,7 @@ export class RadioMediaService {
   }
 }
 
-async function defaultFetchFeed(
+export async function defaultFetchFeed(
   url: string,
   request?: PodcastFeedRequest
 ): Promise<PodcastFeedResponse> {
@@ -417,16 +418,18 @@ async function defaultFetchFeed(
     signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS)
   })
   if (!response.ok && response.status !== 304) {
+    await cancelResponseBody(response)
     throw new Error(`Podcast feed request failed (${response.status})`)
   }
-  const lengthHeader = response.headers.get('content-length')
-  if (lengthHeader && Number(lengthHeader) > MAX_FEED_FETCH_BYTES) {
-    throw new Error('Podcast feed response is too large')
-  }
-  const buffer = Buffer.from(await response.arrayBuffer())
-  if (buffer.byteLength > MAX_FEED_FETCH_BYTES) {
-    throw new Error('Podcast feed response is too large')
-  }
+  if (response.status === 304) await cancelResponseBody(response)
+  const buffer =
+    response.status === 304
+      ? Buffer.alloc(0)
+      : await readBoundedResponseBody(
+          response,
+          MAX_FEED_FETCH_BYTES,
+          'Podcast feed response is too large'
+        )
   return {
     body: buffer.toString('utf8'),
     status: response.status,

@@ -149,10 +149,7 @@ test('data IPC applies path and storage limits before touching local files', () 
   )
 
   assert.match(source, /const snapshot = normalizeMusicLibrarySnapshot\(library\)/)
-  assert.match(
-    source,
-    /stringifyJsonForIpcStorage\(snapshot, 'music library', MAX_MUSIC_LIBRARY_BYTES\)/
-  )
+  assert.match(source, /await libraryPersistence\.validate\(snapshot\)/)
   assert.match(
     source,
     /assertMusicLibraryRevision\(snapshot\.revision, loaded\.document\.revision\)/

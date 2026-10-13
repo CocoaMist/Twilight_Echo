@@ -1,7 +1,7 @@
 'use strict'
 
 /**
- * Repository gate: every structured audio error thrown in the main process must
+ * Repository gate: every structured audio error thrown in either process must
  * have copy in every shipped message catalog.
  *
  * Without this, a `ipcError('audio.something_new', ...)` reaches the renderer,
@@ -21,6 +21,7 @@ const ts = require('typescript')
 
 const ROOT = path.join(__dirname, '..')
 const MAIN_DIR = path.join(ROOT, 'src', 'main')
+const RENDERER_DIR = path.join(ROOT, 'src', 'renderer', 'src')
 const CATALOG_DIR = path.join(ROOT, 'src', 'shared', 'i18n', 'messages')
 const LOCALES = ['zh-CN', 'en-US']
 
@@ -70,7 +71,7 @@ function collectSourceCodes(source, file) {
 /** Codes thrown through the structured helpers, as `code -> [source files]`. */
 function collectThrownCodes() {
   const codes = new Map()
-  for (const file of walk(MAIN_DIR)) {
+  for (const file of [...walk(MAIN_DIR), ...walk(RENDERER_DIR)]) {
     if (/\.(?:test|spec)\.[^.]+$/.test(file)) continue
     const source = fs.readFileSync(file, 'utf8')
     // Include literals delegated through the route transaction to nativeAudioError.
@@ -125,13 +126,19 @@ test('the probe finds the structured audio errors it is meant to police', () => 
   // A silent zero would make every assertion below vacuously true.
   assert.ok(
     codes.size >= 15,
-    `expected the main process to throw many structured audio errors, found ${codes.size}`
+    `expected the application to throw many structured audio errors, found ${codes.size}`
   )
   // Spot-check one code per migrated module so a refactor that drops the helper
   // (and goes back to a bare `throw new Error('中文')`) fails here.
   for (const expected of ['audio.device_switch_failed', 'audio.exclusive_unsupported']) {
     assert.ok(codes.has(expected), `${expected} should be thrown somewhere in src/main`)
   }
+  assert.ok(
+    codes
+      .get('audio.playback_target_unavailable')
+      ?.some((file) => file.startsWith('src/renderer/')),
+    'renderer playback failures must also be covered by message catalogs'
+  )
 })
 
 test('every thrown audio error code has copy in every shipped locale', () => {

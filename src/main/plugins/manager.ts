@@ -2,7 +2,7 @@ import { app, dialog, shell, utilityProcess, type UtilityProcess } from 'electro
 import { randomUUID } from 'crypto'
 import { providerPlaybackIdentities } from '../audio/providerPlaybackIdentity.ts'
 import { existsSync, mkdirSync, statSync } from 'fs'
-import { cp, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
+import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { basename, dirname, extname, join, resolve } from 'path'
 import { EventEmitter } from 'events'
 import { planPluginStartup } from './dependencies'
@@ -24,6 +24,7 @@ import {
   type ProviderMethodHealthRecord
 } from './providerRouting'
 import { PluginOperationQueue } from './operationQueue.ts'
+import { BoundedPluginLogQueue, PluginLogBudget } from './logBudget.ts'
 import {
   normalizeInternalNcmRequestOptions,
   PluginRpcCoordinator,
@@ -248,7 +249,10 @@ export class TwilightPluginManager extends EventEmitter {
   private contributionsCache: PluginContributionsCacheFile = {}
   private contributionsSaveChain: Promise<void> = Promise.resolve()
   private readonly hostIdle: PluginHostIdleTracker | null
-  private readonly logWriteChains = new Map<string, Promise<void>>()
+  private readonly logBudgets = new Map<string, PluginLogBudget>()
+  private readonly logWrites = new BoundedPluginLogQueue((path, line) =>
+    this.writeLogLine(path, line)
+  )
   private readonly logSizes = new Map<string, number>()
   private readonly providerHealth = new Map<string, ProviderHealthRecord>()
   private readonly stopOperations = new Map<string, Promise<void>>()
@@ -1241,8 +1245,8 @@ export class TwilightPluginManager extends EventEmitter {
       if (!running.trial) this.markFailed(descriptor.id, errorMessage)
       void this.stopPlugin(descriptor.id)
     })
-    child.stdout?.on('data', (chunk) => this.appendLog(descriptor, 'info', chunk.toString()))
-    child.stderr?.on('data', (chunk) => this.appendLog(descriptor, 'error', chunk.toString()))
+    child.stdout?.on('data', (chunk) => this.appendLog(descriptor, 'info', chunk))
+    child.stderr?.on('data', (chunk) => this.appendLog(descriptor, 'error', chunk))
     const activation = this.waitForActivation(child, descriptor)
     child.postMessage({
       kind: 'activate',
@@ -2132,34 +2136,41 @@ export class TwilightPluginManager extends EventEmitter {
     this.emit('changed')
   }
 
-  private appendLog(descriptor: TwilightPluginDescriptor, level: string, message: string): void {
+  private appendLog(
+    descriptor: TwilightPluginDescriptor,
+    level: string,
+    message: string | Buffer
+  ): void {
     const logPath = descriptor.paths.logPath
-    ensureParent(logPath)
-    const line = `[${new Date().toISOString()}] [${level}] ${redactSensitiveText(message).trim()}\n`
+    let budget = this.logBudgets.get(logPath)
+    if (!budget) {
+      budget = new PluginLogBudget()
+      this.logBudgets.set(logPath, budget)
+    }
+    const captured = budget.capture(message)
+    for (const text of [captured.text, captured.notice]) {
+      if (text === null) continue
+      const line = `[${new Date().toISOString()}] [${level.slice(0, 16)}] ${redactSensitiveText(text).trim()}\n`
+      this.logWrites.append(logPath, line)
+    }
+  }
+
+  private async writeLogLine(logPath: string, line: string): Promise<void> {
+    await mkdir(dirname(logPath), { recursive: true })
     const lineBytes = Buffer.byteLength(line)
-    // 每插件日志带尺寸轮转（current + .1 两档，仿 audioDiagnostics），同时把逐行
-    // 追加串进 per-path 写链，避免高并发日志乱序与无界增长。
-    const chain = this.logWriteChains.get(logPath) ?? Promise.resolve()
-    const next = chain.then(async () => {
-      let size = this.logSizes.get(logPath)
-      if (size === undefined) {
-        size = await stat(logPath)
-          .then((info) => info.size)
-          .catch(() => 0)
-      }
-      if (size + lineBytes > PLUGIN_LOG_MAX_BYTES) {
-        const previousLogPath = `${logPath}.1`
-        await rm(previousLogPath, { force: true }).catch(() => undefined)
-        await rename(logPath, previousLogPath).catch(() => undefined)
-        size = 0
-      }
-      await writeFile(logPath, line, { flag: 'a', encoding: 'utf-8' })
-      this.logSizes.set(logPath, size + lineBytes)
-    })
-    this.logWriteChains.set(
-      logPath,
-      next.catch(() => undefined)
-    )
+    let size = this.logSizes.get(logPath)
+    if (size === undefined)
+      size = await stat(logPath)
+        .then((info) => info.size)
+        .catch(() => 0)
+    if (size + lineBytes > PLUGIN_LOG_MAX_BYTES) {
+      const previousLogPath = `${logPath}.1`
+      await rm(previousLogPath, { force: true }).catch(() => undefined)
+      await rename(logPath, previousLogPath).catch(() => undefined)
+      size = 0
+    }
+    await writeFile(logPath, line, { flag: 'a', encoding: 'utf-8' })
+    this.logSizes.set(logPath, size + lineBytes)
   }
 
   private pathsFor(id: string, version: string): TwilightPluginPaths {

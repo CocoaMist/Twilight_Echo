@@ -566,7 +566,9 @@ test('only the active streaming load commits its resolved target into shared tra
   const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
   const resolvePlayTarget = extractInternalFunctionBody(source, 'resolvePlayTarget')
   const loadAndPlay = extractInternalFunctionBody(source, 'loadAndPlay')
-  const resolvedAt = loadAndPlay.indexOf('const playTarget = await resolvePlayTarget(track)')
+  const resolvedAt = loadAndPlay.indexOf(
+    'const playTarget = await recoverySession.run(() => resolvePlayTarget(track))'
+  )
   const activeCheckAt = loadAndPlay.indexOf('if (!isActiveLoad(loadToken, track))', resolvedAt)
   const commitAt = loadAndPlay.indexOf('track.streamUrl = playTarget', resolvedAt)
   const patchAt = loadAndPlay.indexOf('patchTrackInQueues(track)', resolvedAt)
@@ -1060,9 +1062,15 @@ test('mini player switching recovers from stale unauthorized local tracks', () =
   assert.match(resolvePlayTarget, /window\.api\.fs\.isAudioFileAuthorized\(track\.filePath\)/)
   assert.match(preloadSource, /ipcRenderer\.invoke\('fs:isAudioFileAuthorized', filePath\)/)
   assert.match(preloadSource, /ipcRenderer\.invoke\('fs:areAudioFilesAuthorized', filePaths\)/)
-  assert.match(handlePlaybackFallback, /await loadAndPlay\(fallback\)/)
-  assert.match(handleProviderRematchFallback, /if \(failedSource !== 'local'\)/)
-  assert.match(handleProviderRematchFallback, /await loadAndPlay\(rematched\)/)
+  assert.match(handlePlaybackFallback, /await loadAndPlay\(selectedFallback, 0, recoverySession\)/)
+  assert.match(
+    extractInternalFunctionBody(source, 'loadAndPlay'),
+    /getTrackSource\(recoverySession\.rootTrack\) !== 'local'/
+  )
+  assert.match(
+    handleProviderRematchFallback,
+    /await loadAndPlay\(selectedRematch, 0, recoverySession\)/
+  )
   assert.doesNotMatch(windowSource, /backgroundThrottling: false/)
 })
 
@@ -1717,9 +1725,12 @@ test('playback failure tries a same-song fallback variant from the queue', () =>
   assert.match(handlePlaybackFallback, /candidates: queue\.value/)
   assert.match(handlePlaybackFallback, /sourceReliability: getProviderSourceReliability\(\)/)
   assert.match(handlePlaybackFallback, /queue\.value = queue\.value\.map/)
-  assert.match(handlePlaybackFallback, /currentTrack\.value = fallback/)
-  assert.match(handlePlaybackFallback, /await loadAndPlay\(fallback\)/)
-  assert.match(loadAndPlay, /if \(await handlePlaybackFallback\(track, err, loadToken\)\) return/)
+  assert.match(handlePlaybackFallback, /currentTrack\.value = selectedFallback/)
+  assert.match(handlePlaybackFallback, /await loadAndPlay\(selectedFallback, 0, recoverySession\)/)
+  assert.match(
+    loadAndPlay,
+    /if \(await handlePlaybackFallback\(track, err, loadToken, recoverySession\)\) return/
+  )
 })
 
 test('audio engine errors use the global notice channel instead of the player bar', () => {
@@ -1737,7 +1748,7 @@ test('audio engine errors use the global notice channel instead of the player ba
   assert.match(storeSource, /pushNotice\(\{ kind, message \}\)/)
   assert.doesNotMatch(storeSource, /isFallbackNotice/)
   // Every caller that keeps audio playing must say so explicitly.
-  assert.equal(storeSource.match(/setAudioEngineError\([\s\S]*?'warning'\s*\)/g)?.length, 3)
+  assert.equal(storeSource.match(/setAudioEngineError\([\s\S]*?'warning'\s*\)/g)?.length, 2)
   assert.doesNotMatch(source, /audioEngineError/)
   assert.doesNotMatch(source, /player-playback-diagnostic"[^>]*>[\s\S]*audioEngineError/)
 })
@@ -2298,7 +2309,7 @@ test('provider playback failure searches provider results to rematch expired ids
   )
   assert.match(
     handlePlaybackFallback,
-    /await handleProviderRematchFallback\(failedTrack, loadToken\)/
+    /await handleProviderRematchFallback\(failedTrack, loadToken, recoverySession\)/
   )
   assert.match(handleProviderRematchFallback, /useMediaProviders\(\)\.searchAllSongs\(\{/)
   assert.match(
@@ -2306,8 +2317,11 @@ test('provider playback failure searches provider results to rematch expired ids
     /findProviderRematchCandidate\(failedTrack, candidates\)/
   )
   assert.match(handleProviderRematchFallback, /queue\.value = queue\.value\.map/)
-  assert.match(handleProviderRematchFallback, /currentTrack\.value = rematched/)
-  assert.match(handleProviderRematchFallback, /await loadAndPlay\(rematched\)/)
+  assert.match(handleProviderRematchFallback, /currentTrack\.value = selectedRematch/)
+  assert.match(
+    handleProviderRematchFallback,
+    /await loadAndPlay\(selectedRematch, 0, recoverySession\)/
+  )
 })
 
 test('missing local playback searches provider results instead of stopping at the local file error', () => {
@@ -2326,7 +2340,7 @@ test('missing local playback searches provider results instead of stopping at th
   // the message catalog instead of a template literal, so the notice is readable
   // in every shipped locale.
   assert.match(
-    handleProviderRematchFallback,
+    extractInternalFunctionBody(source, 'loadAndPlay'),
     /error\.audio\.playback_fallback_rematched/,
     'the rematch must still surface a notice, via the catalog'
   )

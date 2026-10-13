@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict'
 import { createServer, type Server as NetServer, type Socket } from 'node:net'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { createFtpAdapter } from './ftpAdapter.ts'
+import { downloadEntryToCache } from '../networkCache.ts'
+import { buildNetworkEntryId } from '../networkPath.ts'
 import type { NetworkSourceProfile } from '../../../shared/networkSources.ts'
 
 const FLAC_BYTES = Buffer.from('FTP-DATA-0123456789')
+const LARGE_BYTES = Buffer.alloc(2 * 1024 * 1024, 71)
 const USERNAME = 'alice'
 const PASSWORD = 's3cret'
 
@@ -48,6 +54,7 @@ async function startFtpServer(): Promise<TestFtpServer> {
   let dataSocket: Socket | null = null
   let dataServer: NetServer | null = null
   const controlSockets = new Set<Socket>()
+  const dataSockets = new Set<Socket>()
   const servers = new Set<NetServer>()
 
   const control = createServer((socket) => {
@@ -65,6 +72,8 @@ async function startFtpServer(): Promise<TestFtpServer> {
 
     function openPassive(replyPrefix: string): void {
       dataServer = createServer((data) => {
+        dataSockets.add(data)
+        data.once('close', () => dataSockets.delete(data))
         data.on('error', () => undefined)
         dataSocket = data
       })
@@ -83,7 +92,10 @@ async function startFtpServer(): Promise<TestFtpServer> {
       })
     }
 
-    async function withData(fn: (socket: Socket) => void): Promise<void> {
+    async function withData(
+      fn: (socket: Socket) => void,
+      completion = '226 transfer complete'
+    ): Promise<void> {
       reply('150 opening data connection')
       if (!dataSocket) {
         const deadline = Date.now() + 1000
@@ -106,7 +118,7 @@ async function startFtpServer(): Promise<TestFtpServer> {
         dataServer?.close()
         dataServer = null
       }
-      reply('226 transfer complete')
+      reply(completion)
     }
 
     socket.on('data', (chunk: string) => {
@@ -156,10 +168,22 @@ async function startFtpServer(): Promise<TestFtpServer> {
             void withData((socket) => socket.write(LISTING))
             break
           case 'RETR':
-            if (argument.endsWith('a.flac')) {
+            if (
+              argument.endsWith('a.flac') ||
+              argument.endsWith('large.flac') ||
+              argument.endsWith('late-error.flac')
+            ) {
               const offset = restartAt
               restartAt = 0
-              void withData((socket) => socket.write(FLAC_BYTES.subarray(offset).toString()))
+              void withData(
+                (socket) =>
+                  socket.write(
+                    (argument.endsWith('large.flac') ? LARGE_BYTES : FLAC_BYTES).subarray(offset)
+                  ),
+                argument.endsWith('late-error.flac')
+                  ? '550 transfer failed'
+                  : '226 transfer complete'
+              )
             } else {
               reply('550 no such file')
             }
@@ -188,6 +212,7 @@ async function startFtpServer(): Promise<TestFtpServer> {
     port,
     close: async () => {
       for (const socket of controlSockets) socket.destroy()
+      for (const socket of dataSockets) socket.destroy()
       dataSocket?.destroy()
       for (const server of servers) {
         await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -236,6 +261,24 @@ test('ftp readStream downloads file bytes', async () => {
   for await (const chunk of stream) chunks.push(Buffer.from(chunk))
   assert.deepEqual(Buffer.concat(chunks), FLAC_BYTES)
   await session.close()
+})
+
+test('FTP data EOF cannot hide a failed final control reply', { timeout: 2_000 }, async (t) => {
+  const session = await createFtpAdapter().createSession(makeProfile(server.port), {
+    kind: 'password',
+    username: USERNAME,
+    password: PASSWORD
+  })
+  t.after(() => session.close())
+  const stream = await session.readStream('/late-error.flac')
+  await assert.rejects(
+    async () => {
+      for await (const _chunk of stream) {
+        /* drain */
+      }
+    },
+    { code: 'notFound' }
+  )
 })
 
 test('ftp stat resolves size for files and rejects missing paths', async () => {
@@ -293,3 +336,147 @@ test('ftp readStream honors a restart offset', async () => {
   assert.deepEqual(Buffer.concat(chunks), FLAC_BYTES.subarray(4))
   await session.close()
 })
+
+test(
+  'ftp exposes a large producer before completion and respects a slow consumer',
+  { timeout: 5_000 },
+  async (t) => {
+    const session = await createFtpAdapter().createSession(makeProfile(server.port), {
+      kind: 'password',
+      username: USERNAME,
+      password: PASSWORD
+    })
+    t.after(() => session.close())
+    const stream = await session.readStream('/large.flac')
+    let bytes = 0
+    for await (const chunk of stream) {
+      bytes += Buffer.byteLength(chunk)
+      await new Promise((resolve) => setTimeout(resolve, 2))
+      assert.ok((stream as import('node:stream').Readable).readableLength <= 128 * 1024)
+    }
+    assert.equal(bytes, LARGE_BYTES.length)
+  }
+)
+
+test('ftp large files finish through the cache pipeline', { timeout: 5_000 }, async (t) => {
+  const cacheRoot = await mkdtemp(join(tmpdir(), 'ftp-large-cache-'))
+  const session = await createFtpAdapter().createSession(makeProfile(server.port), {
+    kind: 'password',
+    username: USERNAME,
+    password: PASSWORD
+  })
+  t.after(async () => {
+    await session.close()
+    await rm(cacheRoot, { recursive: true, force: true })
+  })
+  const path = await downloadEntryToCache({
+    session,
+    cacheRoot,
+    entry: {
+      id: buildNetworkEntryId('ftp', 'ftp1', '/large.flac'),
+      profileId: 'ftp1',
+      path: '/large.flac',
+      name: 'large.flac',
+      kind: 'audio',
+      sizeBytes: LARGE_BYTES.length
+    }
+  })
+  assert.deepEqual(await readFile(path), LARGE_BYTES)
+})
+
+test(
+  'ftp cancellation stops a producer and a failed producer reaches its consumer',
+  { timeout: 5_000 },
+  async (t) => {
+    const session = await createFtpAdapter().createSession(makeProfile(server.port), {
+      kind: 'password',
+      username: USERNAME,
+      password: PASSWORD
+    })
+    t.after(() => session.close())
+    const controller = new AbortController()
+    const stream = await session.readStream('/large.flac', controller.signal)
+    await assert.rejects(
+      async () => {
+        for await (const _chunk of stream) controller.abort()
+      },
+      { code: 'timeout' }
+    )
+    const missing = await session.readStream('/missing.flac')
+    await assert.rejects(
+      async () => {
+        for await (const _chunk of missing) {
+          /* drain */
+        }
+      },
+      { code: 'notFound' }
+    )
+  }
+)
+
+test(
+  'ftp cancellation interrupts connection setup before greeting',
+  { timeout: 2_000 },
+  async (t) => {
+    const sockets = new Set<Socket>()
+    const stalled = createServer((socket) => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+    })
+    await new Promise<void>((resolve) => stalled.listen(0, '127.0.0.1', resolve))
+    t.after(async () => {
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve) => stalled.close(() => resolve()))
+    })
+    const session = await createFtpAdapter().createSession(
+      makeProfile((stalled.address() as { port: number }).port),
+      {
+        kind: 'anonymous'
+      }
+    )
+    t.after(() => session.close())
+    const controller = new AbortController()
+    const stream = await session.readStream('/a.flac', controller.signal)
+    setTimeout(() => controller.abort(), 30)
+    await assert.rejects(
+      async () => {
+        for await (const _chunk of stream) {
+          /* drain */
+        }
+      },
+      { code: 'timeout' }
+    )
+  }
+)
+
+test(
+  "cancelling a queued FTP reader does not close another reader's connection",
+  { timeout: 5_000 },
+  async (t) => {
+    const session = await createFtpAdapter().createSession(makeProfile(server.port), {
+      kind: 'password',
+      username: USERNAME,
+      password: PASSWORD
+    })
+    t.after(() => session.close())
+    const first = await session.readStream('/large.flac')
+    const controller = new AbortController()
+    const queued = await session.readStream('/a.flac', controller.signal)
+    const cancelled = assert.rejects(
+      async () => {
+        for await (const _chunk of queued) {
+          /* drain */
+        }
+      },
+      { code: 'timeout' }
+    )
+    let received = 0
+    for await (const chunk of first) {
+      received += Buffer.byteLength(chunk)
+      controller.abort()
+      await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+    await cancelled
+    assert.equal(received, LARGE_BYTES.length)
+  }
+)
