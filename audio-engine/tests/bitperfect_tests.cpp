@@ -331,15 +331,21 @@ void testInt24SourceStaysExactThroughInt24In32Output() {
   assert(result.perfectReasonCode.empty());
   assert(result.perfectReason.empty());
 
-  // Widening the container is fine; changing the payload is not.
+  // Integer widening preserves source samples; narrowing does not.
   auto toInt32 = baseEvaluation();
   toInt32.sourceFormat = int24;
   toInt32.decodedFormat = int32;
   toInt32.outputFormat = int32;
   const PerfectResult int32Result = evaluatePerfect(toInt32);
-  assert(!int32Result.sourceExact);
-  assert(!int32Result.outputPerfect);
-  assert(int32Result.perfectReasonCode == "integer_passthrough_unavailable");
+  assert(int32Result.sourceExact);
+  assert(int32Result.outputPerfect);
+  assert(!int32Result.resampled);
+  assert(int32Result.perfectReasonCode.empty());
+
+  assert(pcmFormatsPreserveSource(int16, int32));
+  assert(pcmFormatsPreserveSource(int24, int32));
+  assert(!pcmFormatsPreserveSource(int32, int16));
+  assert(!pcmFormatsPreserveSource(float32, int32));
 }
 
 void testBackendSupport() {

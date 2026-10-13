@@ -2805,7 +2805,9 @@ TAE_Result AudioPipeline::playInternal(
         requestedAutoMixMode_.load(std::memory_order_acquire) == TA_AM_OFF &&
         !outputConfig.continuityFirst && !pcmToDsdPath && !active->stream.isDsd && !processingRequiresPcm &&
         backendCanTypedPassthrough(backendId) && formatCanTypedPassthrough(active->stream.sourceFormat) &&
-        pcmFormatsSemanticallyMatch(active->stream.sourceFormat, outputFormat);
+        (pcmFormatsSemanticallyMatch(active->stream.sourceFormat, outputFormat) ||
+          (backendId == "asio" &&
+            pcmFormatsPreserveSource(active->stream.sourceFormat, outputFormat)));
     AudioFormat decodeFormat = pcmToDsdPath ? requestedPcmFormat : outputFormat;
     if (pcmToDsdPath) {
       decodeFormat.sampleFormat = AudioSampleFormat::Float32Interleaved;
@@ -4466,7 +4468,7 @@ bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::strin
   const auto& sourceFormat = stream->stream.sourceFormat;
   const bool sourceCompatible = typedPassthrough
       ? pcmFormatsSemanticallyMatch(sourceFormat, activeSourceFormat) &&
-            pcmFormatsSemanticallyMatch(sourceFormat, outputFormat)
+              pcmFormatsPreserveSource(sourceFormat, outputFormat)
       : pcmFormatsExactMatch(sourceFormat, activeSourceFormat);
   if (stream->stream.isDsd || activeIsDsd || (!continuityFirst && !autoMixEnabled && !sourceCompatible)) {
     if (error) *error = stream->stream.isDsd || activeIsDsd ? "DSD 不参与 PCM 连续预加载" : "原样优先：相邻来源格式不同";

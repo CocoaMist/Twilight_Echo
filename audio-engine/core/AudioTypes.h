@@ -354,6 +354,7 @@ bool sampleFormatsSameIntegerPayload(AudioSampleFormat left, AudioSampleFormat r
  * are not interchangeable even though their payloads are.
  */
 bool pcmFormatsSemanticallyMatch(const AudioFormat& left, const AudioFormat& right);
+bool pcmFormatsPreserveSource(const AudioFormat& source, const AudioFormat& output);
 /** Keep the legacy resampled flag and the additive conversion fact in sync. */
 void synchronizeOutputConversionInfo(OutputInfo& info);
 bool isDsdSampleFormat(AudioSampleFormat format);
