@@ -188,6 +188,7 @@ interface ProviderRpcMetadata {
   method: TwilightMediaProviderMethod
   playbackTrackId?: string
   playbackQuality?: string
+  playbackMetadataRequested?: boolean
 }
 
 interface UiCommandRpcMetadata {
@@ -772,7 +773,11 @@ export class TwilightPluginManager extends EventEmitter {
         ...(method === 'getPlaybackUrl'
           ? {
               playbackTrackId: String((args[0] as { id?: unknown } | null)?.id ?? ''),
-              playbackQuality: String((args[1] as { quality?: unknown } | null)?.quality ?? 'auto')
+              playbackQuality: String((args[1] as { quality?: unknown } | null)?.quality ?? 'auto'),
+              playbackMetadataRequested:
+                running.descriptor.id === 'com.twilightecho.provider.ncm' &&
+                (args[1] as { _twilightPlaybackMetadata?: boolean } | null)
+                  ?._twilightPlaybackMetadata === true
             }
           : {})
       },
@@ -1797,7 +1802,17 @@ export class TwilightPluginManager extends EventEmitter {
           : null
       const playbackSource = envelope?.streamUrl ?? message.value
       if (envelope && typeof playbackSource === 'string') {
-        value = (value as Record<string, unknown>).streamUrl
+        const streamUrl = (value as Record<string, unknown>).streamUrl
+        if (metadata.playbackMetadataRequested) {
+          const sourceInfo = envelope.providerSource as Record<string, unknown> | undefined
+          value = {
+            streamUrl,
+            sampleRate: sourceInfo?.sampleRate,
+            bitrate: sourceInfo?.bitrate
+          }
+        } else {
+          value = streamUrl
+        }
       }
       const completion = this.rpcCalls.complete<ProviderRpcMetadata>(pluginId, message.requestId, {
         ok: true,

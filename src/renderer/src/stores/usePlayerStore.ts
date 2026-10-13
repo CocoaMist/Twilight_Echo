@@ -129,6 +129,7 @@ import { createRemoteControlBridge } from './player/remoteControlBridge.ts'
 import { createRemotePlaybackPublisher } from './player/remotePlaybackPublisher.ts'
 import { createNativePlaybackToggleController } from '@renderer/stores/player/nativePlaybackToggleController.ts'
 import { createPlayerSystemIntegrations } from './player/playerSystemIntegrations.ts'
+import { useProviderStore } from './useProviderStore'
 
 type NativePlaybackInfo = Awaited<ReturnType<typeof window.api.audioEngine.getPlaybackInfo>>
 type NativeOutputInfo = NativePlaybackInfo['outputInfo']
@@ -500,9 +501,16 @@ async function prefetchUpcomingNcmStream(): Promise<void> {
     if (retryKey === ncmPrefetchRetryKey && Date.now() < ncmPrefetchRetryAfter) return
     attempted = true
     await syncPluginProviders()
-    const resolved = await useMediaProviders().resolvePlaybackUrl(upcoming, {
-      quality
-    })
+    const result = await useProviderStore().callProvider<
+      | string
+      | {
+          streamUrl: string
+          sampleRate?: number
+          bitrate?: number
+        }
+      | null
+    >('ncm', 'getPlaybackUrl', [upcoming, { quality, _twilightPlaybackMetadata: true }])
+    const resolved = typeof result === 'string' ? result : result?.streamUrl
     if (!resolved) return
     if (
       !isAuthorizedRemoteUrl(resolved) &&
@@ -512,6 +520,21 @@ async function prefetchUpcomingNcmStream(): Promise<void> {
     // Resolution and cache authorization may outlive queue/account/quality changes.
     const stillUpcoming = currentUpcoming()
     if (!stillUpcoming) return
+
+    if (result && typeof result !== 'string') {
+      stillUpcoming.sampleRate =
+        typeof result.sampleRate === 'number' &&
+        Number.isFinite(result.sampleRate) &&
+        result.sampleRate > 0
+          ? result.sampleRate
+          : undefined
+
+      stillUpcoming.bitrate =
+        typeof result.bitrate === 'number' && Number.isFinite(result.bitrate) && result.bitrate > 0
+          ? result.bitrate
+          : undefined
+    }
+
     stillUpcoming.streamUrl = resolved
     stillUpcoming.streamQuality = quality
     patchTrackInQueues(stillUpcoming)
@@ -1273,6 +1296,18 @@ function findTrackIndexFromPlaybackInfo(info: NativePlaybackInfo): number {
     info,
     mappedTrackId,
     nativeQueueDelegated && nativeQueueSyncRequest === null
+  )
+}
+
+function isCurrentTrackNativePlaybackInfo(info: NativePlaybackInfo): boolean {
+  const index = nativeQueueLoader.findLogicalIndex(info, queue.value)
+  const track = currentTrack.value
+  return (
+    !!track &&
+    index >= 0 &&
+    index === queueIndex.value &&
+    queue.value[index]?.id === track.id &&
+    (!track.queueEntryId || queue.value[index]?.queueEntryId === track.queueEntryId)
   )
 }
 
@@ -3808,6 +3843,7 @@ export function usePlayerStore() {
     dspOutputStage,
     dspStereoImage,
     playbackInfo,
+    isCurrentTrackNativePlaybackInfo,
     loudnormStatus,
     loudnormStatusSource,
     outputInfo,
