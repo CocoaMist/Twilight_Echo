@@ -56,12 +56,7 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
   )
     runtime.audioEngineManager?.invalidateAutoMixSource()
   if (shouldUpdateWindowBackground && runtime.mainWindow) {
-    syncWindowFrameColor(
-      runtime.mainWindow,
-      runtime.appSettings,
-      nativeTheme.shouldUseDarkColors,
-      nativeTheme.shouldUseHighContrastColors
-    )
+    syncWindowFrameColor(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
   }
   if (shouldUpdateWindowBackground && !runtime.appSettings.windowTransparency) {
     runtime.mainWindow?.setBackgroundColor(

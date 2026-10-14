@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
+import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useMusicStore } from '../stores/useMusicStore'
@@ -23,6 +24,7 @@ import type { Track } from '../types/music'
 import { createUnifiedRecentTrackResolver } from '../utils/unifiedRecentTracks'
 import { resolveTimeGreeting } from '@renderer/utils/timeGreeting'
 import CoverImg from './CoverImg.vue'
+import DEFAULT_COVER from '../assets/images/default-track-cover.webp'
 
 const emit = defineEmits<{
   (event: 'select-view', category: string, filter: string | null): void
@@ -30,9 +32,6 @@ const emit = defineEmits<{
 }>()
 const props = defineProps<{ previewTracks?: Track[] }>()
 
-// Relative so the packaged file:// build resolves it next to index.html
-// instead of the filesystem root.
-const DEFAULT_COVER = './icon.png'
 const DASHBOARD_QUEUE_WINDOW = 200
 const SHELF_SIZE = 6
 const TOP_TRACK_COUNT = 6
@@ -51,7 +50,6 @@ const now = ref(new Date())
 
 onMounted(() => {
   if (props.previewTracks) return
-  window.addEventListener('keydown', onDspRouteDialogKeydown)
   void refreshDspRouteState(true)
   // The polled graph status only moves while audio is flowing (meters, process
   // time). When paused or stopped the last snapshot stays valid, so the 1 Hz
@@ -79,7 +77,6 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onDspRouteDialogKeydown)
   if (dspRoutePoll !== null) window.clearInterval(dspRoutePoll)
   dspRoutePoll = null
 })
@@ -387,6 +384,9 @@ const RESAMPLER_LABELS: Record<string, string> = {
 const dspSceneState = ref<DspSceneState | null>(null)
 const polledDspGraphStatus = ref<DspGraphStatus | null>(null)
 const dspRouteDialogOpen = ref(false)
+const dspRouteDialogRef = ref<HTMLElement | null>(null)
+useEscapeToClose(dspRouteDialogOpen, closeDspRouteDialog)
+useFocusTrap(dspRouteDialogRef, dspRouteDialogOpen)
 const dspRouteLoading = ref(false)
 const dspRouteError = ref('')
 let dspRoutePoll: number | null = null
@@ -806,10 +806,6 @@ function openDspRouteDialog(): void {
 function closeDspRouteDialog(): void {
   dspRouteDialogOpen.value = false
 }
-
-function onDspRouteDialogKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && dspRouteDialogOpen.value) closeDspRouteDialog()
-}
 </script>
 
 <template>
@@ -890,16 +886,14 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                 <p class="hero-artist" :title="heroTrack?.artist">
                   {{ heroTrack?.artist || '未知艺术家' }}
                 </p>
+                <p class="hero-meta" :title="heroTrack?.album || '本地音乐'">
+                  <span class="hero-release">
+                    <i class="ph ph-disc" aria-hidden="true"></i>
+                    <span class="hero-album">{{ heroTrack?.album || '本地音乐' }}</span>
+                  </span>
+                  <span v-if="heroAudioMeta" class="hero-audio-meta">{{ heroAudioMeta }}</span>
+                </p>
               </div>
-              <p class="hero-meta" :title="heroTrack?.album || '本地音乐'">
-                <span class="hero-release">
-                  <i class="ph ph-disc" aria-hidden="true"></i>
-                  <span class="hero-album">{{ heroTrack?.album || '本地音乐' }}</span>
-                </span>
-                <span v-if="heroAudioMeta" class="hero-audio-meta">{{ heroAudioMeta }}</span>
-              </p>
-
-              <DashboardPlaybackProgress v-if="heroIsCurrent" />
 
               <div
                 v-if="heroTrack"
@@ -942,11 +936,21 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
                   <PlaybackIcon name="next" />
                 </button>
               </div>
+
+              <div
+                v-if="heroTrack"
+                class="hero-progress-slot"
+                :class="{ 'is-inactive': !heroIsCurrent }"
+                :aria-hidden="!heroIsCurrent"
+                :inert="!heroIsCurrent"
+              >
+                <DashboardPlaybackProgress />
+              </div>
             </div>
 
             <div :key="`art:${heroCoverKey}`" class="hero-art" aria-hidden="true">
               <span class="hero-art-echo"></span>
-              <span class="hero-art-frame" :class="{ 'is-live': heroIsCurrent && isPlaying }">
+              <span class="hero-art-frame">
                 <CoverImg
                   v-if="heroTrack?.cover || heroTrack?.coverSource"
                   :cover="heroTrack?.cover"
@@ -983,83 +987,6 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
               {{ totalDuration.value }}<small class="figure-unit">{{ totalDuration.unit }}</small>
             </strong>
             <span>收藏总时长</span>
-          </div>
-        </section>
-
-        <!-- ── Live signal path ────────────────────────────────────────── -->
-        <section
-          class="signal-card"
-          role="button"
-          tabindex="0"
-          aria-label="打开实时 DSP 输出线路"
-          @click="openDspRouteDialog"
-          @keydown.enter.prevent="openDspRouteDialog"
-          @keydown.space.prevent="openDspRouteDialog"
-        >
-          <div class="signal-head">
-            <div class="signal-title">
-              <span class="signal-kicker">SIGNAL PATH</span>
-              <h2>播放链路</h2>
-              <small>{{ activeDspSceneName }}</small>
-            </div>
-            <div class="signal-head-state">
-              <span class="signal-summary">
-                <span><i class="ph ph-stack"></i>{{ enabledDspCount }} 个启用阶段</span>
-                <span><i class="ph ph-timer"></i>{{ dspGraphLatencyMs.toFixed(2) }} ms</span>
-              </span>
-              <span class="dsp-state" :class="{ on: dspEngineOn, live: dspProcessingActive }">
-                <span class="dsp-state-dot" aria-hidden="true"></span>
-                {{ dspStatusText }}
-              </span>
-              <i class="ph ph-caret-right signal-caret" aria-hidden="true"></i>
-            </div>
-          </div>
-
-          <div class="dsp-route-strip is-compact">
-            <div class="route-stage route-endpoint-stage" title="播放源">
-              <span class="route-stage-icon"><i class="ph ph-music-notes"></i></span>
-              <div class="route-stage-copy">
-                <small>SOURCE</small>
-                <strong>{{ dspSourceDetail }}</strong>
-              </div>
-            </div>
-
-            <template v-for="stage in dspRouteStages" :key="stage.id">
-              <span
-                class="route-connector"
-                :class="{ active: stage.active || dspProcessingActive }"
-                aria-hidden="true"
-              ></span>
-              <div
-                class="route-stage"
-                :class="[`is-${stage.state}`, { 'is-active': stage.active }]"
-                :title="`${stage.label} · ${stage.stateLabel} · ${stage.detail}`"
-              >
-                <span class="route-stage-icon"><i :class="stage.icon"></i></span>
-                <div class="route-stage-copy">
-                  <small>{{ stage.shortLabel }}</small>
-                  <strong>{{ stage.detail }}</strong>
-                </div>
-              </div>
-            </template>
-
-            <span
-              class="route-connector"
-              :class="{ active: playbackInfo?.state === 'playing' }"
-              aria-hidden="true"
-            ></span>
-            <div class="route-stage route-endpoint-stage is-output" title="实际输出">
-              <span class="route-stage-icon"><i class="ph ph-speaker-hifi"></i></span>
-              <div class="route-stage-copy">
-                <small>OUTPUT</small>
-                <strong>{{ dspOutputDetail }}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div class="signal-foot">
-            <span>{{ dspOutputDeviceDetail }}</span>
-            <strong>{{ activeDspCount }}/{{ dspRouteStages.length }} LIVE</strong>
           </div>
         </section>
 
@@ -1238,6 +1165,82 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
             </button>
           </div>
         </section>
+        <!-- ── Live signal path ────────────────────────────────────────── -->
+        <section
+          class="signal-card"
+          role="button"
+          tabindex="0"
+          aria-label="打开实时 DSP 输出线路"
+          @click="openDspRouteDialog"
+          @keydown.enter.prevent="openDspRouteDialog"
+          @keydown.space.prevent="openDspRouteDialog"
+        >
+          <div class="signal-head">
+            <div class="signal-title">
+              <span class="signal-kicker">SIGNAL PATH</span>
+              <h2>播放链路</h2>
+              <small>{{ activeDspSceneName }}</small>
+            </div>
+            <div class="signal-head-state">
+              <span class="signal-summary">
+                <span><i class="ph ph-stack"></i>{{ enabledDspCount }} 个启用阶段</span>
+                <span><i class="ph ph-timer"></i>{{ dspGraphLatencyMs.toFixed(2) }} ms</span>
+              </span>
+              <span class="dsp-state" :class="{ on: dspEngineOn, live: dspProcessingActive }">
+                <span class="dsp-state-dot" aria-hidden="true"></span>
+                {{ dspStatusText }}
+              </span>
+              <i class="ph ph-caret-right signal-caret" aria-hidden="true"></i>
+            </div>
+          </div>
+
+          <div class="dsp-route-strip is-compact">
+            <div class="route-stage route-endpoint-stage" title="播放源">
+              <span class="route-stage-icon"><i class="ph ph-music-notes"></i></span>
+              <div class="route-stage-copy">
+                <small>SOURCE</small>
+                <strong>{{ dspSourceDetail }}</strong>
+              </div>
+            </div>
+
+            <template v-for="stage in dspRouteStages" :key="stage.id">
+              <span
+                class="route-connector"
+                :class="{ active: stage.active || dspProcessingActive }"
+                aria-hidden="true"
+              ></span>
+              <div
+                class="route-stage"
+                :class="[`is-${stage.state}`, { 'is-active': stage.active }]"
+                :title="`${stage.label} · ${stage.stateLabel} · ${stage.detail}`"
+              >
+                <span class="route-stage-icon"><i :class="stage.icon"></i></span>
+                <div class="route-stage-copy">
+                  <small>{{ stage.shortLabel }}</small>
+                  <strong>{{ stage.detail }}</strong>
+                </div>
+              </div>
+            </template>
+
+            <span
+              class="route-connector"
+              :class="{ active: playbackInfo?.state === 'playing' }"
+              aria-hidden="true"
+            ></span>
+            <div class="route-stage route-endpoint-stage is-output" title="实际输出">
+              <span class="route-stage-icon"><i class="ph ph-speaker-hifi"></i></span>
+              <div class="route-stage-copy">
+                <small>OUTPUT</small>
+                <strong>{{ dspOutputDetail }}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="signal-foot">
+            <span>{{ dspOutputDeviceDetail }}</span>
+            <strong>{{ activeDspCount }}/{{ dspRouteStages.length }} LIVE</strong>
+          </div>
+        </section>
       </template>
     </main>
 
@@ -1248,10 +1251,12 @@ function onDspRouteDialogKeydown(event: KeyboardEvent): void {
         @click.self="closeDspRouteDialog"
       >
         <section
+          ref="dspRouteDialogRef"
           class="dsp-route-dialog"
           role="dialog"
           aria-modal="true"
           aria-labelledby="dsp-route-dialog-title"
+          tabindex="-1"
         >
           <header class="dsp-route-dialog-head">
             <div>

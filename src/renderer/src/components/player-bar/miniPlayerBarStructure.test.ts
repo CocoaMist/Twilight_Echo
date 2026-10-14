@@ -131,7 +131,7 @@ test('fully hidden is a separate step that outranks auto-hide', () => {
   // Either way of being hidden sets the flag the geometry consumers read.
   assert.match(playerBar, /fullyHidden\.value\s*\|\|\s*\(autoHideActive\.value/)
   // Fully hidden disarms auto-hide, so the pointer listeners never attach.
-  assert.match(playerBar, /props\.autoHide\s*&&\s*!fullyHidden\.value/)
+  assert.match(playerBar, /props\.autoHide\s*&&\s*!!currentTrack\.value\s*&&\s*!fullyHidden\.value/)
   // The settings preview must keep showing a bar whatever the live state is.
   assert.match(
     playerBar,
@@ -221,16 +221,15 @@ test('the mini shape keeps compact play/pause, utility controls and an exit', ()
   assert.match(playerBar, /@click="emit\('exitPlayingPage'\)"/)
   assert.match(app, /@exit-playing-page="handleExitPlayingPage"/)
   assert.match(app, /function handleExitPlayingPage\(\): void \{[\s\S]{0,80}closePlayingPage\(\)/)
-  // These stay in the standard bar's defaults and out of mini's.
+  // Ordinary pages group mode and volume with transport, apart from utilities.
   assert.deepEqual(DEFAULT_PLAYER_BAR_LAYOUT.standard.right, [
     'favorite',
-    'playMode',
-    'volume',
     'queue',
     'miniPlayer',
     'desktopLyrics',
     'hifi'
   ])
+  assert.deepEqual(DEFAULT_PLAYER_BAR_LAYOUT.standard.center, ['playMode', 'transport', 'volume'])
   assert.doesNotMatch(playerBar, /mini-lyrics-btn/)
 })
 

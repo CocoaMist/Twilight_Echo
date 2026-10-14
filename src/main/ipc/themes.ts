@@ -56,12 +56,7 @@ export function setupThemeIpc(): void {
     nativeTheme.on('updated', () => {
       const tone = nativeTheme.shouldUseDarkColors ? 'dark' : 'pureWhite'
       if (runtime.mainWindow && !runtime.mainWindow.isDestroyed()) {
-        syncWindowFrameColor(
-          runtime.mainWindow,
-          runtime.appSettings,
-          nativeTheme.shouldUseDarkColors,
-          nativeTheme.shouldUseHighContrastColors
-        )
+        syncWindowFrameColor(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
       }
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) window.webContents.send('themes:systemToneChanged', tone)

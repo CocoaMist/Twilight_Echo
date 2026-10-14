@@ -20,7 +20,7 @@
 
 const { spawn } = require('node:child_process')
 const { homedir } = require('node:os')
-const { join } = require('node:path')
+const { dirname, join } = require('node:path')
 const { readFileSync } = require('node:fs')
 
 const command = process.argv[2]
@@ -61,11 +61,22 @@ if (shouldUseX11Backend()) {
 // 统一放在 `--` 之后，交给 electron-vite 原样传给 electron
 const args = [command, '--', ...electronArgs]
 
-const bin = process.platform === 'win32' ? 'electron-vite.cmd' : 'electron-vite'
-const child = spawn(bin, args, {
+// Invoke the installed CLI directly. Shell metacharacters in forwarded Electron
+// arguments must stay literal, and installation paths can contain spaces.
+const entry = join(
+  dirname(require.resolve('electron-vite/package.json')),
+  'bin',
+  'electron-vite.js'
+)
+const child = spawn(process.execPath, [entry, ...args], {
   stdio: 'inherit',
-  shell: process.platform === 'win32'
+  shell: false,
+  windowsHide: true
+})
+child.on('error', (error) => {
+  console.error('启动失败:', error.message)
+  process.exitCode = 1
 })
 child.on('close', (code) => {
-  process.exit(code ?? 0)
+  process.exit(code ?? process.exitCode ?? 0)
 })

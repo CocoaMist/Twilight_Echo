@@ -729,16 +729,12 @@ onBeforeUnmount(() => {
             <section class="cover-column">
               <div class="cover-frame" :style="coverStyle">
                 <CoverImg
-                  v-if="currentTrack.cover || currentTrack.coverSource"
                   :cover="currentTrack.cover"
                   :cover-source="currentTrack.coverSource"
                   :identity="currentTrack.id"
                   class="cover-image"
                   alt="cover"
                 />
-                <div v-else class="cover-placeholder">
-                  <i class="pi pi-wave-pulse"></i>
-                </div>
               </div>
 
               <div class="cover-meta">

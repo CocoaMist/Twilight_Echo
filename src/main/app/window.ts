@@ -180,12 +180,7 @@ export function createWindow(): void {
     }
   })
 
-  syncWindowFrameColor(
-    runtime.mainWindow,
-    runtime.appSettings,
-    nativeTheme.shouldUseDarkColors,
-    nativeTheme.shouldUseHighContrastColors
-  )
+  syncWindowFrameColor(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
   installWindowChromePublisher(runtime.mainWindow)
   runtime.mainWindow.on('ready-to-show', () => {
     if (windowState?.maximized) runtime.mainWindow?.maximize()

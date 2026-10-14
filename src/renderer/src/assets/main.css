@@ -5,6 +5,140 @@
 @import './theme-layouts/index.css';
 @import './appearance.css';
 
+/* Windows owns the outer window corners; only inset content surfaces are clipped. */
+.app-shell {
+  /* Fixed page surfaces still need a full-height host for theme layers. */
+  height: 100vh;
+  --te-window-surface-radius: 8px;
+  --te-window-surface-inset: 4px;
+  --te-window-inner-radius: var(--te-window-surface-radius);
+  --te-window-content-top: calc(var(--te-titlebar-inset, 44px) + 4px);
+  --te-window-content-bottom: var(--te-window-surface-inset);
+}
+
+/* Leave wallpaper beneath the title strip so its existing blur can sample it. */
+.app-shell::before,
+.app-shell::after {
+  content: '';
+  position: fixed;
+  inset: var(--te-window-content-top) var(--te-window-surface-inset) var(--te-window-content-bottom);
+  z-index: 0;
+  pointer-events: none;
+  border-radius: var(--te-window-inner-radius);
+}
+
+.app-shell::before {
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--te-app-bg) 96%, var(--te-shell-control-text)) 18%,
+    transparent
+  );
+}
+
+/* The edge sits above page paint, below the separate floating player. */
+.app-shell::after {
+  z-index: 1001;
+  border: 1px solid color-mix(in srgb, var(--te-shell-control-text) 3%, transparent);
+}
+
+html[data-window-transparent='on'] .app-shell::before {
+  background: color-mix(in srgb, var(--te-app-bg) 4%, transparent);
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell:not(.is-immersive) .app-shell-content {
+  position: fixed;
+  inset: var(--te-window-content-top) var(--te-window-surface-inset) var(--te-window-content-bottom);
+  overflow: hidden;
+  border-radius: var(--te-window-inner-radius);
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell:not(.is-immersive) .main-content {
+  height: 100%;
+  min-height: 0 !important;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+html .app-shell:not(.is-immersive) .main-content > *,
+html .app-shell:not(.is-immersive) .local-home-layout > * {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell:not(.is-immersive) .streaming-page {
+  position: absolute;
+  inset: 0;
+}
+
+html .app-shell:not(.is-immersive) .streaming-content {
+  height: 100%;
+  min-height: 0;
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell .local-home-layout {
+  --te-home-titlebar-clearance: 0px;
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell .streaming-content-header {
+  margin-top: 16px;
+}
+
+html:not([data-te-shell-layout='custom'])
+  .app-shell
+  .main-content
+  > :is(.song-list, .analytics-page, .radio-podcast-page, .network-sources-page) {
+  padding-top: 24px;
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell .recent-scope-tabs {
+  padding-top: 12px;
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell .playlist-tabs {
+  padding-top: 12px;
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell .plugin-extension-page {
+  padding-top: 24px;
+}
+
+html[data-te-shell-layout='custom'] .app-shell-content {
+  margin: var(--te-window-surface-inset);
+  clip-path: inset(0 round var(--te-window-inner-radius));
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell-navigation .side-menu {
+  left: var(--te-window-surface-inset);
+  top: var(--te-window-content-top);
+  bottom: var(--te-window-content-bottom);
+  border-radius: var(--te-window-inner-radius) 0 0 var(--te-window-inner-radius);
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell-navigation .side-menu:not(.open) {
+  transform: translate3d(calc(-100% - var(--te-window-surface-inset)), 0, 0);
+}
+
+html[data-te-shell-layout='custom'] .app-shell-navigation {
+  margin: var(--te-window-surface-inset) 0 var(--te-window-surface-inset)
+    var(--te-window-surface-inset);
+  border-radius: var(--te-window-inner-radius) 0 0 var(--te-window-inner-radius);
+}
+
+/* Now playing keeps its original edge-to-edge immersive surface. */
+.app-shell.is-immersive::before,
+.app-shell.is-immersive::after {
+  display: none;
+}
+
+html .app-shell.is-immersive .app-shell-content {
+  margin: 0;
+  clip-path: none;
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell.is-immersive .app-shell-title .title-bar {
+  inset: 0 0 auto;
+  border-radius: 0;
+}
+
 /* Active lyrics are text-led, not cards. Keep this invariant after every
    built-in theme layout so presets cannot restore a glass capsule. */
 html body .playing-music button.lyric-row.active:not(.lyric-row--custom-background) {

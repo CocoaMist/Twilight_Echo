@@ -187,6 +187,8 @@ const mount=(mode,glass=false,live=false)=>{
     mountIcon(shell.querySelector('.previous-button'),'previous')
     mountIcon(shell.querySelector('.next-button'),'next')
     shell.querySelector('.player-right').innerHTML='<button class="icon-btn favorite-btn" aria-label="喜欢"></button><button class="ctrl-btn mode-btn-right" aria-label="播放模式"></button><div class="volume-anchor"><button class="icon-btn volume-control-button" aria-label="音量控制"></button></div><button class="icon-btn track-menu-button" aria-label="播放列表"></button><button class="icon-btn mini-player-btn" aria-label="迷你播放器"></button><button class="icon-btn desktop-lyrics-btn" aria-label="桌面歌词"></button><button class="icon-btn hifi-toggle-button" aria-label="HiFi"></button>'
+    shell.querySelector('.player-bar').classList.add('player-bar-transport-grouped')
+    const center=shell.querySelector('.player-center');center.prepend(shell.querySelector('.mode-btn-right'));center.insertBefore(shell.querySelector('.volume-anchor'),center.querySelector('.progress-slider-wrap'))
     shell.querySelector('.player-left').innerHTML='<div class="player-cover-slot"><img class="player-cover" alt="" /></div>'
     const rail=shell.querySelector('.progress-slider-wrap')
     rail.outerHTML='<div class="progress-area"><span class="time-label">0:24</span>'+rail.outerHTML+'<span class="time-label">2:41</span></div>'
@@ -215,6 +217,13 @@ const mountDashboard=(glass=false)=>{
   button=home.querySelector('.transport-play')
   track=home.querySelector('.hero-progress-track')
   fill=track.firstElementChild
+}
+// CSS Color 4 may serialize color-mix as color(srgb ... / alpha).
+// Sample its actual RGBA rather than depending on a legacy rgba string.
+const colorRgba=(color)=>{
+  const canvas=document.createElement('canvas');canvas.width=canvas.height=1
+  const ctx=canvas.getContext('2d');ctx.fillStyle=color;ctx.fillRect(0,0,1,1)
+  return ctx.getImageData(0,0,1,1).data
 }
 const background=(element,pseudo)=>{
   const style=getComputedStyle(element,pseudo)
@@ -332,15 +341,21 @@ window.checkStandardPlayerGeometry=async()=>{
   for(const tone of ['pureWhite','dark'])for(const glass of [false,true])for(const fontSize of [14,18])for(const placeholder of [false,true]){
     await store.setPreviewTone(tone)
     mount('standard',glass)
+    const shell=bar.parentElement
+    shell.style.setProperty('transition','none','important')
+    expect(Math.abs(innerHeight-shell.getBoundingClientRect().bottom-22)<0.1,'regular player floats 22px above the bottom')
+    shell.dataset.tePlayingPage='true'
+    expect(Math.abs(innerHeight-shell.getBoundingClientRect().bottom)<0.1,'song detail player remains flush with the bottom')
+    shell.dataset.tePlayingPage='false'
     const material=getComputedStyle(bar)
     expect(material.backdropFilter.includes('blur(24px)'), 'regular player material diffuses artwork before controls: '+material.backdropFilter)
-    const alpha=Number.parseFloat(material.backgroundColor.split(',').at(-1))
+    const alpha=colorRgba(material.backgroundColor)[3]/255
     expect(alpha>=0.7&&alpha<=0.81, 'regular player material transmits backdrop hues: '+material.backgroundColor)
     bar.style.setProperty('transition','none','important')
     document.body.classList.add('te-no-blur')
     expect(getComputedStyle(bar).backdropFilter==='none', 'disabling blur removes the regular backdrop pass')
-    expect(!getComputedStyle(bar).backgroundColor.startsWith('rgba'), 'without diffusion the regular substrate becomes opaque: '+getComputedStyle(bar).backgroundColor)
-    if(glass)checkBackground(bar,'rgb(from rgb(16 17 19) r g b / 1)', 'immersive white controls retain a dark substrate without effects')
+    expect(colorRgba(getComputedStyle(bar).backgroundColor)[3]===255, 'without diffusion the regular substrate becomes opaque: '+getComputedStyle(bar).backgroundColor)
+    if(glass)expect([...colorRgba(getComputedStyle(bar).backgroundColor)].slice(0,3).every(channel=>channel<40), 'white controls retain a dark substrate without effects')
     document.body.classList.remove('te-no-blur')
     bar.style.setProperty('--te-font-size-body',fontSize+'px')
     const slot=bar.querySelector('.player-cover-slot')
@@ -362,14 +377,15 @@ window.checkStandardPlayerGeometry=async()=>{
     const labels=[...bar.querySelectorAll('.time-label')].map(label=>label.getBoundingClientRect())
     const visibleBottom=Math.max(progress.bottom,...labels.map(label=>label.bottom))
     const topInset=controls.top-frame.top,bottomInset=frame.bottom-visibleBottom
-    expect(Math.abs(topInset-bottomInset-3)<0.6,'progress moves down 3px while transport retains its top inset: '+JSON.stringify({tone,glass,fontSize,topInset,bottomInset}))
-    expect(Math.abs(controls.top-art.top)<0.6&&Math.abs(visibleBottom-art.bottom-3)<0.6,'transport stays aligned with artwork while seeking gets more separation')
-    if(fontSize===14)expect(frame.height>=71&&frame.height<=73,'default player stays near 72px instead of the previous 76px')
+    expect(Math.abs(topInset-bottomInset-5)<0.6,'progress moves down 5px while transport retains its top inset: '+JSON.stringify({tone,glass,fontSize,topInset,bottomInset}))
+    expect(Math.abs(controls.top-art.top)<0.6&&Math.abs(visibleBottom-art.bottom-5)<0.6,'transport stays aligned with artwork while seeking gets more separation')
+    if(fontSize===14)expect(frame.height>=87&&frame.height<=89,'default player reserves room for the enlarged transport')
     const seekTarget=bar.querySelector('.progress-slider-wrap').getBoundingClientRect()
     expect(seekTarget.height>=22&&seekTarget.bottom<=frame.bottom,'optical centering preserves the full seek target inside the panel')
     expect(controls.top-frame.top>=9.9,'transport has at least 10px top clearance: '+(controls.top-frame.top))
     expect(frame.bottom-progress.bottom>=4.9,'lowered progress retains bottom clearance')
     const play=button.getBoundingClientRect(),glyph=button.querySelector('svg').getBoundingClientRect()
+    expect(play.height>=47.9,'play retains an enlarged forty-eight-pixel hit target')
     const previous=bar.querySelector('.previous-button').getBoundingClientRect(),next=bar.querySelector('.next-button').getBoundingClientRect()
     expect(Math.abs(previous.height-play.height)<0.6&&Math.abs(next.height-play.height)<0.6,'transport controls use the same desktop height')
     expect(Math.abs((play.left-previous.right)-(next.left-play.right))<0.6,'previous and next have balanced spacing around play')
@@ -379,7 +395,7 @@ window.checkStandardPlayerGeometry=async()=>{
     expect(utilities[0].left>=seeking.right+4,'utility hit targets cannot intrude into the seeking column at narrow widths')
     expect(utilities.at(-1).right<=frame.right-9,'trailing controls stay inside the panel')
     for(let i=1;i<utilities.length;i++)expect(utilities[i].left-utilities[i-1].right>=3.9,'secondary hit targets do not overlap')
-    expect(utilities[2].left-utilities[1].right>=11.9&&utilities[4].left-utilities[3].right>=11.9,'whitespace separates playback preferences, output and queue, and player tools')
+    expect(utilities[2].left-utilities[1].right>=11.9,'whitespace separates queue from detached player tools')
     expect(play.width>=play.height*1.6,'play capsule remains horizontal at every width and font size')
     expect(Math.abs(glyph.x+glyph.width/2-play.x-play.width/2)<0.6&&Math.abs(glyph.y+glyph.height/2-play.y-play.height/2)<0.6,'transport glyph stays centered in the capsule: '+JSON.stringify({tone,glass,fontSize,width:innerWidth,play:play.toJSON(),glyph:glyph.toJSON(),display:getComputedStyle(button).display,align:getComputedStyle(button).alignItems}))
   }
@@ -431,7 +447,9 @@ window.checkSharedPlaybackGlyphs=async()=>{
     bar.append(tile)
     for(const plate of tile.children){
       mountIcon(plate,'play')
-      expect(getComputedStyle(plate.querySelector('svg')).color==='rgb(17, 24, 39)',tone+' white overlay keeps a dark play glyph')
+      const actual=getComputedStyle(plate.querySelector('svg')).color
+      const expected=plate.classList.contains('fresh-play')?getComputedStyle(plate).color:'rgb(17, 24, 39)'
+      expect(actual===expected,tone+' cover play glyph follows its theme surface')
     }
     const row=document.createElement('button')
     row.className='music-track'
@@ -496,8 +514,9 @@ window.prepareDarkTitlebarControl=async(kind)=>{
 window.checkDarkTitlebarControl=(kind)=>{
   expect(hoverTarget.matches(':hover'),'titlebar '+kind+' receives the real pointer')
   const selected=kind==='settings'||kind==='plugins'
-  checkBackground(hoverTarget,kind==='close'?'#e81123':'color-mix(in srgb, var(--te-shell-control-text) '+(selected?'11%':'6%')+', transparent)','dark titlebar '+kind+' avoids the album wash')
+  checkBackground(hoverTarget,kind==='close'?'#e81123':'color-mix(in srgb, var(--te-shell-control-text) '+(selected?'16%':'6%')+', transparent)','dark titlebar '+kind+' avoids the album wash',kind==='close'?undefined:'::before')
   if(selected){
+    expect(getComputedStyle(hoverTarget,'::before').left==='7px','selected tools retain inset feedback while hovering')
     const probe=document.createElement('span')
     probe.style.color='var(--te-primary-400)'
     document.body.append(probe)

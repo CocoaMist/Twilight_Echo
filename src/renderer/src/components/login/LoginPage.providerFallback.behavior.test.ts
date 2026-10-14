@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import test from 'node:test'
 import { compileScript, compileStyle, parse } from '@vue/compiler-sfc'
 import ts from 'typescript'
+import { THEME_ICON_SLOT_REGISTRY } from '../../../../shared/theme.ts'
 
 const require = createRequire(import.meta.url)
 
@@ -55,7 +56,9 @@ test('login and title bar recover from disabled providers in real Electron rende
       iconStyle,
       iconPaths,
       baseStyle,
-      appearanceStyle
+      appearanceStyle,
+      themeIcon,
+      themeIconStyle
     ] = await Promise.all([
       readFile(require.resolve('vue/dist/vue.global.prod.js'), 'utf8'),
       component('../LoginPage.vue'),
@@ -68,11 +71,13 @@ test('login and title bar recover from disabled providers in real Electron rende
       componentStyle('../icons/TitleBarIcon.vue'),
       readFile(new URL('../icons/titleBarIconPaths.ts', import.meta.url), 'utf8'),
       readFile(new URL('../../assets/base.css', import.meta.url), 'utf8'),
-      readFile(new URL('../../assets/appearance.css', import.meta.url), 'utf8')
+      readFile(new URL('../../assets/appearance.css', import.meta.url), 'utf8'),
+      component('../ThemeIcon.vue'),
+      componentStyle('../ThemeIcon.vue')
     ])
     await writeFile(
       join(directory, 'index.html'),
-      `<!doctype html><meta charset="utf-8"><style>${baseStyle}\n${appearanceStyle}\n${await readFile(new URL('../../assets/theme-layouts/obsidian-glass.css', import.meta.url), 'utf8')}\n${await readFile(new URL('../../assets/theme-layouts/paper-light.css', import.meta.url), 'utf8')}\n${titleStyle}\n${iconStyle}</style><div id="title"></div><div id="app"></div>
+      `<!doctype html><meta charset="utf-8"><style>${baseStyle}\n${appearanceStyle}\n${await readFile(new URL('../../assets/theme-layouts/obsidian-glass.css', import.meta.url), 'utf8')}\n${await readFile(new URL('../../assets/theme-layouts/paper-light.css', import.meta.url), 'utf8')}\n${titleStyle}\n${iconStyle}\n${themeIconStyle}</style><div id="title"></div><div id="app"></div>
       <script>${vue}</script><script>${runtime}</script>
       <script>
         const load = source => {
@@ -85,6 +90,8 @@ test('login and title bar recover from disabled providers in real Electron rende
         window.ServerLoginForm = load(${JSON.stringify(serverForm)}).default;
         window.LoginPage = load(${JSON.stringify(login)}).default;
         window.titleBarIconPaths = load(${JSON.stringify(commonJs(iconPaths))});
+        window.themeIconRegistry = ${JSON.stringify(THEME_ICON_SLOT_REGISTRY)};
+        window.ThemeIcon = load(${JSON.stringify(themeIcon)}).default;
         window.TitleBarIcon = load(${JSON.stringify(titleIcon)}).default;
         window.TitleBar = load(${JSON.stringify(title)}).default;
       </script>`
@@ -92,6 +99,7 @@ test('login and title bar recover from disabled providers in real Electron rende
     await writeFile(
       join(directory, 'runner.cjs'),
       `const { app, BrowserWindow } = require('electron');
+      app.setPath('userData', require('node:path').join(require('node:path').dirname(process.argv.at(-1)), 'user-data'));
       app.whenReady().then(async () => {
         const win = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false, offscreen: true } });
         win.webContents.on('console-message', event => { if (event.level === 'error') console.error(event.message); });
@@ -161,6 +169,8 @@ window.fixtureRequire = id => {
   if (id.endsWith('.css')) return {};
   if (id.endsWith('/ServerLoginForm.vue')) return { default: window.ServerLoginForm };
   if (id.endsWith('/TitleBarIcon.vue')) return { default: window.TitleBarIcon };
+  if (id.endsWith('/ThemeIcon.vue')) return { default: window.ThemeIcon };
+  if (id.includes('shared/theme')) return { THEME_ICON_SLOT_REGISTRY: window.themeIconRegistry };
   if (id.includes('titleBarIconPaths')) return window.titleBarIconPaths;
   if (id.endsWith('.vue')) return { default: { render: () => h('span') } };
   if (id.includes('useProviderStore')) return window.providerStoreModule;
@@ -300,8 +310,8 @@ window.runProviderFallbackTests = async () => {
       document.documentElement.dataset.windowTransparent = transparent ? 'on' : 'off';
       document.documentElement.dataset.teSurfaceMaterial = transparent ? 'transparent' : 'theme';
       const material = getComputedStyle(document.querySelector('#title .title-bar-background'));
-      expect(material.display !== 'none' && material.backgroundColor !== 'rgba(0, 0, 0, 0)', 'title tint disappeared: ' + theme + '/' + surface + '/' + transparent);
-      expect(material.backdropFilter.includes('blur(20px)'), 'title backdrop lost its blur: ' + theme + '/' + surface + '/' + transparent);
+      expect(material.display !== 'none' && (material.backgroundColor === 'rgba(0, 0, 0, 0)') === transparent, 'title ignores transparent material preference: ' + theme + '/' + surface + '/' + transparent);
+      expect(transparent ? material.backdropFilter === 'none' : material.backdropFilter.includes('blur(20px)'), 'title backdrop does not follow material preference: ' + theme + '/' + surface + '/' + transparent);
       expect(material.pointerEvents === 'none', 'material blocks title commands');
       if(theme === 'dark') expect(material.boxShadow === 'none' && material.backgroundImage === 'none', 'dark caption has a pale rim or wash');
     }
@@ -330,8 +340,8 @@ window.runProviderFallbackTests = async () => {
     expect(!document.querySelector('#title .title-bar-back'), 'root page keeps an empty return slot');
     expect(menu.left - bar.left === bar.right - close.right, 'outer margins differ');
     expect(menu.left + menu.width / 2 - bar.left === bar.right - close.left - close.width / 2, 'outer icon centers differ');
-    expect(document.querySelector('#title .menu-btn svg').getBoundingClientRect().width === 18, 'left icon size did not grow');
-    expect(document.querySelector('#title .settings-btn svg').getBoundingClientRect().width === 18, 'right application icon differs from left application icons');
+    expect(document.querySelector('#title .menu-btn .title-bar-icon').getBoundingClientRect().width === 18, 'left icon size did not grow');
+    expect(document.querySelector('#title .settings-btn .title-bar-icon').getBoundingClientRect().width === 18, 'right application icon differs from left application icons');
     expect(document.querySelector('#title .close svg').getBoundingClientRect().width === 16, 'caption icon size changed');
     const controlPositions = [...document.querySelectorAll('#title .plugins-btn, #title .settings-btn, #title .notification-btn, #title .minimize, #title .maximize, #title .close')].map(element => element.getBoundingClientRect().left);
     const tools = document.querySelector('#title .title-bar-tools').getBoundingClientRect();
@@ -341,7 +351,7 @@ window.runProviderFallbackTests = async () => {
       document.documentElement.dataset.tePresetLayout = layout;
       await settle();
       const frame = document.querySelector('#title .title-bar').getBoundingClientRect();
-      const icon = document.querySelector('#title .menu-btn svg').getBoundingClientRect();
+      const icon = document.querySelector('#title .menu-btn .title-bar-icon').getBoundingClientRect();
       expect(frame.height === 40 && Math.abs(icon.top + icon.height / 2 - frame.top - frame.height / 2) < .6, 'theme changed title height or vertical alignment: ' + layout);
     }
     delete document.documentElement.dataset.tePresetLayout;
@@ -358,11 +368,11 @@ window.runProviderFallbackTests = async () => {
   let avatar = button.querySelector('img');
   expect(avatar && avatar.getBoundingClientRect().width === 18, 'connected avatar is missing');
   avatar.dispatchEvent(new Event('error')); await settle();
-  expect(!button.querySelector('img') && button.querySelector('svg'), 'failed avatar lost its fallback');
+  expect(!button.querySelector('img') && button.querySelector('.title-bar-icon'), 'failed avatar lost its fallback');
   profile.value = { ...profile.value, userId: 2 }; await settle();
   expect(button.querySelector('img'), 'new profile did not retry avatar');
   loggedIn.value = false; await settle();
-  expect(button.title === '网易云音乐登录' && !button.querySelector('img') && button.querySelector('svg'), 'logged-out account disappeared');
+  expect(button.title === '网易云音乐登录' && !button.querySelector('img') && button.querySelector('.title-bar-icon'), 'logged-out account disappeared');
   await replaceProviders([searchOnly]); button.click();
   expect(selected === null && button.title === '流媒体登录', 'empty title bar selected an unavailable provider');
   titleApp.unmount(); titleApp = null;

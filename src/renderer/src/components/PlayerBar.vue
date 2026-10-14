@@ -40,6 +40,7 @@ import { usePlaybarAutoHide } from './player-bar/usePlaybarAutoHide.ts'
 import { resolveSeekTargetSeconds, type PlayerBarMode } from '../../../shared/playerBar.ts'
 import {
   resolvePlayerBarRegions,
+  isDefaultStandardPlayerBar,
   PLAYER_BAR_REGION_NAMES,
   type PlayerBarRegionName
 } from '../../../shared/playerBarLayout.ts'
@@ -273,7 +274,7 @@ const liquidGlassActive = computed(
  * stylesheet both address the bar through them, so only the contents move.
  */
 const barRegions = computed(() => {
-  const regions = resolvePlayerBarRegions(settings.value.playerBar.layout, props.mode)
+  const regions = resolvePlayerBarRegions(settings.value.playerBar.layout, props.mode, props.glass)
   return PLAYER_BAR_REGION_NAMES.map((name: PlayerBarRegionName) => ({
     name,
     className: `player-${name}`,
@@ -283,6 +284,12 @@ const barRegions = computed(() => {
     items: regions[name]
   }))
 })
+const groupedStandardLayout = computed(
+  () =>
+    props.mode === 'standard' &&
+    isDefaultStandardPlayerBar(resolvePlayerBarRegions(settings.value.playerBar.layout, props.mode))
+)
+const referenceStandardLayout = computed(() => props.glass && groupedStandardLayout.value)
 
 const lyricsManagement = useLyricsManagement()
 const desktopLyricsOn = ref(settings.value.desktopLyrics.enabled)
@@ -792,7 +799,9 @@ const fullyHidden = computed(() => props.hiddenBar && !props.preview)
 // Fully hidden wins, so the pointer listeners never arm for a bar that has no
 // reveal gesture. `resolvePlayerBarPresentation` already keeps the two flags
 // exclusive; this holds even if a caller forwards both.
-const autoHideActive = computed(() => props.autoHide && !fullyHidden.value && !props.preview)
+const autoHideActive = computed(
+  () => props.autoHide && !!currentTrack.value && !fullyHidden.value && !props.preview
+)
 
 const {
   favoriteButtonVisible,
@@ -1434,7 +1443,8 @@ const playbarHidden = computed(
 const shellDataAttrs = computed(() => ({
   'data-te-playbar-mode': props.mode,
   'data-te-playbar-hidden': playbarHidden.value ? 'true' : 'false',
-  'data-te-playbar-visibility': fullyHidden.value ? 'hidden' : 'auto'
+  'data-te-playbar-visibility': fullyHidden.value ? 'hidden' : 'auto',
+  'data-te-playing-page': props.glass ? 'true' : 'false'
 }))
 
 // A track change or play/pause is feedback the user asked for; surface it briefly
@@ -1446,12 +1456,31 @@ watch(
   }
 )
 
+let pageChangeAnimation: Animation | null = null
+watch(
+  () => props.glass,
+  () => {
+    resetGlassPointer()
+    pageChangeAnimation?.cancel()
+    if (!motionAllowsPointer() || window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+      return
+    // Fade the changed grouping briefly without scaling text or moving hit targets.
+    pageChangeAnimation =
+      playerBarRef.value?.animate([{ opacity: 0.45 }, { opacity: 1 }], {
+        duration: 180,
+        easing: 'ease-out'
+      }) ?? null
+  },
+  { flush: 'post' }
+)
+
 onMounted(() => {
   if (!props.preview) void syncExtensions()
   syncGlassPointer()
 })
 
 onBeforeUnmount(() => {
+  pageChangeAnimation?.cancel()
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = null
   stopResizeSidebar()
@@ -1588,16 +1617,8 @@ onBeforeUnmount(() => {
                   </span>
                   <span v-else class="playlist-index-num">{{ item.index + 1 }}</span>
                 </span>
-                <CoverImg
-                  v-if="item.cover"
-                  :cover="item.cover"
-                  :identity="item.id"
-                  class="playlist-cover"
-                  alt=""
-                />
-                <div v-else class="playlist-cover-placeholder">
-                  <i class="pi pi-wave-pulse" aria-hidden="true"></i>
-                </div>
+                <CoverImg :cover="item.cover" :identity="item.id" class="playlist-cover" alt="" />
+
                 <div class="playlist-info">
                   <div class="playlist-title">{{ item.title }}</div>
                   <div class="playlist-artist">{{ item.artist }}</div>
@@ -1669,9 +1690,12 @@ onBeforeUnmount(() => {
       class="player-bar"
       :class="{
         'player-bar-glass': glass,
+        'player-bar-docked': glass && isStandard,
         'player-bar-liquid': liquidGlassActive,
         'player-bar-mini': isMini,
         'player-bar-compact': isCompact,
+        'player-bar-reference': referenceStandardLayout,
+        'player-bar-transport-grouped': groupedStandardLayout,
         'player-bar-compact-visualizer': showCompactVisualizer
       }"
       :style="{
@@ -1743,19 +1767,12 @@ onBeforeUnmount(() => {
             @click="onCoverClick"
           >
             <CoverImg
-              v-if="currentTrack.cover || currentTrack.coverSource"
               :cover="currentTrack.cover"
               :cover-source="currentTrack.coverSource"
               :identity="currentTrack.id"
               class="player-cover"
               alt=""
             />
-            <div v-else class="player-cover-placeholder">
-              <i
-                class="pi pi-wave-pulse"
-                style="font-size: calc(var(--te-font-size-body, 14px) * 18 / 14); color: #bbb"
-              ></i>
-            </div>
           </div>
 
           <div v-else-if="control === 'trackInfo'" class="player-track-info">
@@ -1893,6 +1910,7 @@ onBeforeUnmount(() => {
                     step="0.01"
                     class="volume-drawer-slider"
                     aria-label="音量"
+                    :aria-valuetext="`${Math.round(volume * 100)}%`"
                     :style="{ '--range-value': `${volume * 100}%` }"
                     @input="onVolumeInput"
                   />
@@ -2173,6 +2191,77 @@ onBeforeUnmount(() => {
         </div>
       </Transition>
     </Teleport>
+  </div>
+  <div v-else ref="playerBarShellRef" class="player-bar-shell" v-bind="shellDataAttrs">
+    <div
+      ref="playerBarRef"
+      class="player-bar player-bar-idle"
+      :class="{
+        'player-bar-mini': isMini,
+        'player-bar-compact': isCompact,
+        'player-bar-transport-grouped': isStandard
+      }"
+      aria-label="播放器，尚未选择歌曲"
+    >
+      <div class="player-left">
+        <button v-if="isMini" class="mini-play-button" disabled aria-label="请先选择歌曲">
+          <PlaybackIcon name="play" />
+        </button>
+        <template v-else>
+          <div class="player-cover-slot player-cover-placeholder" aria-hidden="true">
+            <PlayerControlIcon name="queue" />
+          </div>
+          <div class="player-track-info">
+            <div class="player-title">选择歌曲开始播放</div>
+            <span class="player-artist">本地音乐与流媒体</span>
+          </div>
+        </template>
+      </div>
+      <div class="player-center">
+        <button
+          v-if="isStandard"
+          class="ctrl-btn mode-btn-right"
+          disabled
+          aria-label="顺序播放，请先选择歌曲"
+        >
+          <img :src="sequentialIcon" alt="" />
+        </button>
+        <div v-if="!isMini" class="player-controls">
+          <button class="ctrl-btn previous-button" disabled aria-label="上一首，请先选择歌曲">
+            <PlaybackIcon name="previous" />
+          </button>
+          <button class="ctrl-btn btn-play" disabled aria-label="播放，请先选择歌曲">
+            <PlaybackIcon name="play" />
+          </button>
+          <button class="ctrl-btn next-button" disabled aria-label="下一首，请先选择歌曲">
+            <PlaybackIcon name="next" />
+          </button>
+        </div>
+        <div v-if="isStandard" class="volume-anchor">
+          <button class="volume-control-button icon-btn" disabled aria-label="音量，请先选择歌曲">
+            <PlayerControlIcon name="volume" />
+          </button>
+        </div>
+        <PlayerSeekProgress
+          v-if="isStandard"
+          :position="0"
+          :duration="0"
+          :live="false"
+          :ab-start="null"
+          :ab-end="null"
+          :format-time="formatTime"
+        />
+        <div v-else-if="isMini" class="mini-progress-rail" aria-hidden="true">
+          <div class="mini-progress-track"></div>
+          <span class="mini-progress-time">0:00 / 0:00</span>
+        </div>
+      </div>
+      <div class="player-right">
+        <button class="icon-btn" disabled aria-label="歌词，请先选择歌曲">
+          <span class="desktop-lyrics-icon" aria-hidden="true">词</span>
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
