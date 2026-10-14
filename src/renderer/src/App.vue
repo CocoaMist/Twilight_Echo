@@ -97,9 +97,8 @@ import { useAppNoticeStore } from './stores/useAppNoticeStore'
 import { getTrackSource } from './utils/logicalTrackModel'
 import { scheduleIdleTask, type IdleTaskHandle } from './app/scheduleIdleTask'
 import {
-  getPrimaryStreamingArtistId,
   getPrimaryStreamingArtistName,
-  type StreamingArtistNavigationRequest
+  type StreamingMetadataNavigationRequest
 } from './utils/streamingArtistResolution'
 const AppNoticeHost = defineAsyncComponent(() => import('./components/AppNoticeHost.vue'))
 import LiquidGlassDefs from './components/LiquidGlassDefs.vue'
@@ -109,6 +108,8 @@ import {
   soundFieldPlaybackKey,
   usesSoundFieldSidebar
 } from '@renderer/components/local-dashboard/soundFieldPlayback'
+
+import type { TrackArtistRef } from './types/music'
 
 type TitleSurface = 'default' | 'settings' | 'streaming'
 let idleLoginCheck: IdleTaskHandle | null = null
@@ -204,15 +205,16 @@ const toggleSettingsPage = navigation.createToggleSettingsHandler()
 const togglePluginPage = navigation.createTogglePluginHandler()
 
 const coverOrigin = ref({ x: 48, y: window.innerHeight - 36, w: 48, h: 48 })
-const streamingArtistRequest = ref<StreamingArtistNavigationRequest | null>(null)
-let streamingArtistRequestKey = 0
+const streamingMetadataRequest = ref<StreamingMetadataNavigationRequest | null>(null)
+let streamingMetadataRequestKey = 0
+const streamingMetadataTab = ref<StreamingPageTab>('home')
 // Keep StreamingPage mounted so contextual navigation preserves its detail.
 // Explicit sidebar selection returns the selected tab to its root instead.
 const streamingPageTabs = shallowRef<StreamingPageTab[]>([])
 const streamingRootNavigationRevisions = ref<Partial<Record<StreamingPageTab, number>>>({})
 
 function selectSidebarPage(target: NavigationPageTarget): void {
-  streamingArtistRequest.value = null
+  streamingMetadataRequest.value = null
   if (target.kind === 'streaming') {
     const revisions = streamingRootNavigationRevisions.value
     revisions[target.tab] = (revisions[target.tab] ?? 0) + 1
@@ -419,39 +421,76 @@ const mediaProviders = useMediaProviders()
 const navigationProviders = useProviderStore()
 const commandPalette = useCommandPalette(navigation, () => navigationPages.value)
 
-function handlePlayerBarArtistClick(): void {
+function handlePlayerBarArtistClick(artist: TrackArtistRef): void {
   const track = currentTrack.value
-  const trackArtist = track?.artist.trim() ?? ''
-  if (!track || !trackArtist) return
+  const artistName = artist.name.trim()
+  if (!track || !artistName) return
 
   const source = getTrackSource(track)
   if (source === 'local') {
-    streamingArtistRequest.value = null
-    returnToLocalMode()
-    onSelectView('artists', `artist:${trackArtist}`)
+    streamingMetadataRequest.value = null
+    onSelectView('artists', `artist:${artistName}`)
     return
   }
 
-  const artistName = getPrimaryStreamingArtistName(trackArtist)
-  if (!artistName) return
-  // 同名歌手只能靠 provider 歌手 id 区分；曲目没带 id 时才让流媒体页按名字搜。
-  const artistId = getPrimaryStreamingArtistId(trackArtist, track.artists)
-  streamingArtistRequest.value = {
-    key: ++streamingArtistRequestKey,
+  streamingMetadataRequest.value = {
+    kind: 'artist',
+    key: ++streamingMetadataRequestKey,
     providerId: source,
     artistName,
-    ...(artistId !== undefined ? { artistId } : {})
+    ...(artist.id != null ? { artistId: artist.id } : {})
   }
-  enterStreamingMode()
+  streamingMetadataTab.value = pageTarget.value.kind === 'streaming' ? streamingTab.value : 'home'
+  enterStreamingMode(streamingMetadataTab.value)
+}
+
+function handlePlayingAlbumClick(): void {
+  const track = currentTrack.value
+  if (!track?.album.trim()) return
+
+  const source = getTrackSource(track)
+  if (source === 'local') {
+    streamingMetadataRequest.value = null
+    const album = musicStore.albums.value.find((item) =>
+      item.tracks.some((albumTrack) => albumTrack.id === track.id)
+    )
+    if (!album) {
+      pushNotice({ kind: 'info', message: '本地曲库中未找到这首歌曲的专辑' })
+      return
+    }
+    onSelectView('albums', `album:${album.id}`)
+    return
+  }
+
+  const albumId = track.albumId?.trim()
+  if (!albumId) {
+    pushNotice({ kind: 'info', message: '这首歌曲没有可用的专辑详情标识' })
+    return
+  }
+
+  streamingMetadataRequest.value = {
+    kind: 'album',
+    key: ++streamingMetadataRequestKey,
+    providerId: source,
+    albumId,
+    albumName: track.album,
+    artist: track.albumArtist || track.artist,
+    cover: track.cover,
+    coverSource: track.coverSource
+  }
+  streamingMetadataTab.value = pageTarget.value.kind === 'streaming' ? streamingTab.value : 'home'
+  enterStreamingMode(streamingMetadataTab.value)
 }
 
 // The analytics dashboard only knows an aggregated artist string, so it hands
 // streaming-owned artists here; the provider falls back to a name search.
 function handleAnalyticsArtistOpen(request: { name: string; providerId: string }): void {
+  streamingMetadataTab.value = 'home'
   const artistName = getPrimaryStreamingArtistName(request.name)
   if (!artistName) return
-  streamingArtistRequest.value = {
-    key: ++streamingArtistRequestKey,
+  streamingMetadataRequest.value = {
+    kind: 'artist',
+    key: ++streamingMetadataRequestKey,
     providerId: request.providerId,
     artistName
   }
@@ -1068,6 +1107,8 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             v-if="showPlayingPage"
             :style="{ transformOrigin: coverTransformOrigin }"
             @customize-appearance="openThemeStudioPage('player')"
+            @open-artist="handlePlayerBarArtistClick"
+            @open-album="handlePlayingAlbumClick"
           />
         </Transition>
         <StreamingPage
@@ -1078,9 +1119,9 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
           :has-player="hasPlayerBar"
           :initial-tab="tab"
           :root-navigation-revision="streamingRootNavigationRevisions[tab] ?? 0"
-          :artist-navigation-request="
-            showStreamingSurface && tab === 'home' && streamingTab === tab
-              ? streamingArtistRequest
+          :metadata-navigation-request="
+            showStreamingSurface && tab === streamingMetadataTab && streamingTab === tab
+              ? streamingMetadataRequest
               : null
           "
           @navigate-tab="enterStreamingMode($event)"

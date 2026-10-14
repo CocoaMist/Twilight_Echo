@@ -8,7 +8,7 @@ import type {
   StreamingTrackSort,
   StreamingSortDirection
 } from '@renderer/components/streaming-page/streamingTrackView'
-import type { Track } from '../../types/music'
+import type { Track, TrackArtistRef } from '../../types/music'
 import CoverImg from '../CoverImg.vue'
 import { useProgressiveList } from './useProgressiveList.ts'
 
@@ -109,7 +109,7 @@ const emit = defineEmits<{
   'update:sort': [value: StreamingTrackSort]
   'update:direction': [value: StreamingSortDirection]
   refresh: []
-  openArtist: [track: Track]
+  openArtist: [track: Track, artist: TrackArtistRef]
   openAlbum: [track: Track]
   playAll: []
   shufflePlay: []
@@ -125,6 +125,14 @@ const emit = defineEmits<{
   loadMoreLiked: []
   trackContextMenu: [track: Track, index: number, event: MouseEvent]
 }>()
+
+function trackArtists(track: Track): TrackArtistRef[] {
+  if (track.artists?.length) return track.artists
+  return track.artist
+    .split(/\s+\/\s+/)
+    .map((name) => ({ name: name.trim() }))
+    .filter((artist) => artist.name)
+}
 
 const kindLabel = computed(() => {
   switch (props.kind) {
@@ -496,15 +504,21 @@ const infoTrack = shallowRef<Track | null>(null)
               >
                 {{ track.title }}
               </button>
-              <button
-                type="button"
-                class="row-artist metadata-link"
-                :title="track.artist"
-                @click.stop="emit('openArtist', track)"
-                @dblclick.stop
-              >
-                {{ track.artist || '未知艺人' }}
-              </button>
+              <div class="row-artists">
+                <template v-for="(artist, index) in trackArtists(track)" :key="index">
+                  <span v-if="index > 0" class="row-artist-separator" aria-hidden="true">/</span>
+                  <button
+                    type="button"
+                    class="row-artist metadata-link"
+                    :title="artist.name"
+                    @click.stop="emit('openArtist', track, artist)"
+                    @dblclick.stop
+                  >
+                    {{ artist.name }}
+                  </button>
+                </template>
+                <span v-if="!track.artist.trim() && !track.artists?.length">未知艺人</span>
+              </div>
             </div>
           </div>
 

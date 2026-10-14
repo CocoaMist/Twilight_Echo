@@ -89,7 +89,9 @@ import {
   findStreamingArtistById,
   matchStreamingArtistsByName,
   resolveLinkedStreamingArtist,
-  type StreamingArtistNavigationRequest
+  type StreamingAlbumNavigationRequest,
+  type StreamingArtistNavigationRequest,
+  type StreamingMetadataNavigationRequest
 } from '../utils/streamingArtistResolution'
 import { getTopTracks } from '../stores/useListeningStatsStore'
 import { shuffleArray } from '../utils/playerQueueUtils'
@@ -180,6 +182,7 @@ interface DetailSnapshot {
 interface DetailStackEntry {
   view: DetailView
   snapshot?: DetailSnapshot
+  fromPlayback?: boolean
 }
 
 const props = defineProps<{
@@ -188,7 +191,7 @@ const props = defineProps<{
   active?: boolean
   initialTab?: StreamingTab
   rootNavigationRevision?: number
-  artistNavigationRequest?: StreamingArtistNavigationRequest | null
+  metadataNavigationRequest?: StreamingMetadataNavigationRequest | null
 }>()
 
 const activeTab = ref<StreamingTab>(props.initialTab ?? 'home')
@@ -1500,11 +1503,16 @@ function applyDetailState(snapshot: DetailSnapshot | undefined): void {
 
 // Navigates one level deeper. The outgoing level's loaded data is snapshotted
 // onto its own entry first, so back-navigation restores instead of refetching.
-function pushDetail(view: DetailView): void {
+function pushDetail(view: DetailView, fromPlayback = false): void {
   detailNavigationToken += 1
   const top = detailStack.value[detailStack.value.length - 1]
+  if (fromPlayback && top?.fromPlayback) {
+    top.view = view
+    top.snapshot = undefined
+    return
+  }
   if (top) top.snapshot = captureDetailState()
-  detailStack.value.push({ view })
+  detailStack.value.push({ view, fromPlayback })
 }
 
 // Replaces the top entry in place (same level, fresher data).
@@ -1911,7 +1919,8 @@ function openTrackArtist(
 ): void {
   if (getTrackSource(track) === 'local') {
     detailNavigationToken += 1
-    if (track.artist.trim()) emit('selectView', 'artists', `artist:${track.artist.trim()}`)
+    const artistName = artist?.name.trim() || track.artist.trim()
+    if (artistName) emit('selectView', 'artists', `artist:${artistName}`)
     return
   }
   void openRequestedArtist({
@@ -1929,12 +1938,13 @@ async function openSearchAlbum(album: AlbumSearchItem): Promise<void> {
 async function openAlbum(
   album: MediaProviderAlbumSummary,
   providerId = activeProvider.value,
-  replace = false
+  replace = false,
+  fromPlayback = false
 ): Promise<void> {
   beginDetailTransition()
   const view: DetailView = { type: 'album', album, providerId }
   if (replace) replaceTopDetail(view)
-  else pushDetail(view)
+  else pushDetail(view, fromPlayback)
   const token = beginDetailLoad()
 
   try {
@@ -1954,10 +1964,11 @@ async function openAlbum(
 
 async function openArtist(
   artist: MediaProviderArtistSummary,
-  linkedUser?: NcmUserSummary
+  linkedUser?: NcmUserSummary,
+  fromPlayback = false
 ): Promise<void> {
   beginDetailTransition()
-  pushDetail({ type: 'artist', artist, user: linkedUser })
+  pushDetail({ type: 'artist', artist, user: linkedUser }, fromPlayback)
   activeArtistTab.value = 'songs'
   const token = beginDetailLoad()
 
@@ -2060,13 +2071,17 @@ async function openArtist(
   }
 }
 
-async function openRequestedArtist(request: StreamingArtistNavigationRequest): Promise<void> {
+async function openRequestedArtist(
+  request: StreamingArtistNavigationRequest,
+  fromPlayback = false,
+  providerReady = false
+): Promise<void> {
   const providerId = request.providerId.trim().toLowerCase()
   const artistName = request.artistName.trim()
   if (!providerId || !artistName) return
   const token = ++detailNavigationToken
 
-  await providerStore.syncProviders().catch(() => undefined)
+  if (!providerReady) await providerStore.syncProviders().catch(() => undefined)
   if (!isCurrentDetailNavigation(token)) return
   const provider = mediaProviders.get(providerId)
   // 带歌手 id 时搜索只用来补头图等展示字段，provider 没有 searchArtists 也能开页；
@@ -2098,7 +2113,11 @@ async function openRequestedArtist(request: StreamingArtistNavigationRequest): P
       const matched = searchResult
         ? findStreamingArtistById(request.artistId, searchResult.items)
         : null
-      await openArtist(matched ?? { id: request.artistId, name: artistName, picUrl: null })
+      await openArtist(
+        matched ?? { id: request.artistId, name: artistName, picUrl: null },
+        undefined,
+        fromPlayback
+      )
       return
     }
 
@@ -2116,11 +2135,48 @@ async function openRequestedArtist(request: StreamingArtistNavigationRequest): P
         message: `有多位歌手叫「${artistName}」，已打开搜索结果中排最前的一位`
       })
     }
-    await openArtist(artist)
+    await openArtist(artist, undefined, fromPlayback)
   } catch (error) {
     if (!isCurrentDetailNavigation(token, providerId)) return
     pushNotice({ kind: 'error', message: friendlyStreamingError(error, '打开歌手页面失败') })
   }
+}
+
+async function openRequestedAlbum(
+  request: StreamingAlbumNavigationRequest,
+  fromPlayback = false
+): Promise<void> {
+  const providerId = request.providerId.trim().toLowerCase()
+  const albumId = request.albumId.trim()
+  const albumName = request.albumName.trim()
+  if (!providerId || !albumId || !albumName) return
+
+  const token = ++detailNavigationToken
+  const provider = mediaProviders.get(providerId)
+  if (!provider?.fetchAlbumTracks) {
+    pushNotice({
+      kind: 'error',
+      message: `${provider?.name ?? providerId} 暂不支持专辑详情`
+    })
+    return
+  }
+
+  await selectDetailProvider(providerId)
+  if (!isCurrentDetailNavigation(token, providerId)) return
+
+  await openAlbum(
+    {
+      id: albumId,
+      name: albumName,
+      artist: request.artist,
+      cover: request.cover,
+      coverSource: request.coverSource,
+      trackCount: 0
+    },
+    providerId,
+    false,
+    fromPlayback
+  )
 }
 
 async function openUserList(listType: 'follows' | 'followers'): Promise<void> {
@@ -3378,17 +3434,39 @@ watch(
   }
 )
 
-let lastArtistNavigationKey = 0
+let lastMetadataNavigationKey = 0
+let playbackNavigationInFlight = 0
+
+function playbackNavigationPending(): boolean {
+  return (
+    playbackNavigationInFlight > 0 ||
+    (props.metadataNavigationRequest != null &&
+      props.metadataNavigationRequest.key !== lastMetadataNavigationKey)
+  )
+}
+
+function isCurrentPlaybackMetadataRequest(key: number): boolean {
+  return props.active !== false && props.metadataNavigationRequest?.key === key
+}
 watch(
-  () => props.artistNavigationRequest?.key,
-  () => {
-    const request = props.artistNavigationRequest
-    if (request && request.key !== lastArtistNavigationKey) {
-      lastArtistNavigationKey = request.key
-      void openRequestedArtist(request)
+  () => props.metadataNavigationRequest?.key,
+  async () => {
+    const request = props.metadataNavigationRequest
+    if (!request || props.active === false) return
+    if (request.key === lastMetadataNavigationKey) return
+
+    lastMetadataNavigationKey = request.key
+    playbackNavigationInFlight += 1
+    try {
+      await providerStore.syncProviders().catch(() => undefined)
+      if (!isCurrentPlaybackMetadataRequest(request.key)) return
+      if (request.kind === 'artist') await openRequestedArtist(request, true, true)
+      else await openRequestedAlbum(request, true)
+    } finally {
+      playbackNavigationInFlight -= 1
     }
   },
-  { immediate: true }
+  { immediate: true, flush: 'post' }
 )
 
 watch(
@@ -3538,6 +3616,7 @@ watch(
 )
 
 async function refreshStreamingSurface(): Promise<void> {
+  if (playbackNavigationPending()) return
   if (activeProvider.value === NCM_PROVIDER_ID) {
     if (!ncmNavigationAvailable.value) return
     await checkLogin()
@@ -3579,12 +3658,14 @@ watch(ncmNavigationAvailable, (available, wasAvailable) => {
 watch(
   () => props.active,
   (active, wasActive) => {
-    if (!active || wasActive === true) return
+    if (!active || wasActive === true || playbackNavigationPending()) return
     void refreshStreamingSurface()
   }
 )
 
 onMounted(async () => {
+  // Explicit playback navigation performs its own provider readiness check.
+  if (props.metadataNavigationRequest) return
   await providerStore.syncProviders().catch(() => undefined)
   // syncProviders may have resolved the preferred external provider, in which
   // case the activeProvider watcher above already handles the initial load.
@@ -3727,6 +3808,7 @@ onMounted(async () => {
             @open-rec-section="openRecSection"
             @open-playlist="openPlaylist"
             @play-track="playHomeTrack"
+            @open-artist="openTrackArtist"
             @request-login="emit('login', activeProvider)"
             @open-discovery="selectTab('discover')"
           >
@@ -3922,6 +4004,8 @@ onMounted(async () => {
               :track-count-label="detailTrackCountLabel"
               @follow="toggleCurrentDetailFollow"
               @retry="retryCurrentView"
+              @open-artist="openTrackArtist"
+              @open-album="openTrackAlbum"
               @person-click="onSocialPersonClick"
               @collection-click="onSocialCollectionClick"
               @tab-change="onArtistTabChange"

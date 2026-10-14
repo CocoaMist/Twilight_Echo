@@ -283,7 +283,7 @@ test('streaming detail, social, and HiFi surfaces compile working dark-theme sel
 })
 
 test('streaming page resolves player-bar artist requests through the track provider', () => {
-  assert.match(source, /artistNavigationRequest\?: StreamingArtistNavigationRequest \| null/)
+  assert.match(source, /metadataNavigationRequest\?: StreamingMetadataNavigationRequest \| null/)
   assert.match(source, /mediaProviders\.searchArtists\(providerId, artistName, 8, 0\)/)
   assert.match(source, /provider\.fetchArtistTopSongs\(artist\.id\)/)
   assert.match(

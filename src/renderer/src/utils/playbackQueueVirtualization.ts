@@ -29,6 +29,8 @@ export function toPlaybackQueueSnapshot(track: Track): Track {
     artist: track.artist,
     artists: track.artists,
     album: track.album,
+    albumId: track.albumId,
+    albumArtist: track.albumArtist,
     filePath: track.filePath,
     fileName: track.fileName,
     dir: track.dir,
@@ -106,6 +108,8 @@ export function matchesPlaybackQueueSnapshot(track: Track, snapshot: Track): boo
             artist.id === snapshot.artists![i].id && artist.name === snapshot.artists![i].name
         ))) &&
     track.album === snapshot.album &&
+    track.albumId === snapshot.albumId &&
+    track.albumArtist === snapshot.albumArtist &&
     track.filePath === snapshot.filePath &&
     track.fileName === snapshot.fileName &&
     track.dir === snapshot.dir &&

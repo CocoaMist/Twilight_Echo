@@ -1256,8 +1256,22 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .player-cover-placeho
   background: color-mix(in srgb, #f59e0b 72%, transparent);
 }
 
+.player-artists {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.player-artist-separator {
+  flex: none;
+  color: #999;
+}
+
 .player-artist {
   display: block;
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 100%;
   margin: 2px 0 0;
   padding: 0;
