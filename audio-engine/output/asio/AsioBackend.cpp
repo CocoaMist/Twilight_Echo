@@ -685,7 +685,7 @@ bool AsioBackend::open(const std::string& deviceId, const AudioFormat& requested
   // A driver that hands back int24-in-32 for a 24-bit request widened the
   // container without touching a bit, so that is not a conversion either.
   outputInfo_.resampled = !sameAsioTransportFormat(requestedFormat, outputFormat_) &&
-                          !pcmFormatsSemanticallyMatch(requestedFormat, outputFormat_);
+                          !pcmFormatsPreserveSource(requestedFormat, outputFormat_);
   outputInfo_.perfectReasonCode = outputInfo_.resampled ? "pcm_converted" : "";
   outputInfo_.perfectReason = outputInfo_.resampled ? "ASIO 输出格式已协商为驱动支持格式" : "";
   outputInfo_.outputSampleRate = outputFormat_.sampleRate;
@@ -1400,7 +1400,8 @@ bool AsioBackend::createAndStartHost(std::string* error) {
     }
     outputInfo_.resampled = isNativeDsdRequest(openConfig_.format)
                                 ? !sameNativeDsdStream(openConfig_.format, outputFormat_)
-                                : !sameAsioTransportFormat(openConfig_.format, outputFormat_);
+                                : (!sameAsioTransportFormat(openConfig_.format, outputFormat_) &&
+                                   !pcmFormatsPreserveSource(openConfig_.format, outputFormat_));
     if (!isNativeDsdRequest(openConfig_.format) && !openConfig_.format.dopEncoded &&
         firstChannelFormat.logicalFormat == AudioSampleFormat::Int32Interleaved && firstChannelFormat.validBits < 32) {
       outputInfo_.resampled = true;
