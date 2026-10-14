@@ -181,7 +181,7 @@ test('settings wallpaper is painted once by the overlay root, never per element'
   assert.doesNotMatch(darkSettingsPageRule, /--te-settings-bg-image/)
   assert.match(
     appSource,
-    /class="settings-overlay-root"[\s\S]*?settings-overlay-root--active[\s\S]*?<Transition name="settings-page">[\s\S]*?<SettingsPage/
+    /class="settings-overlay-root"[\s\S]*?settings-overlay-root--active[\s\S]*?<Transition\s+name="settings-page"[\s\S]*?<SettingsPage/
   )
   assert.match(
     appSource,
@@ -218,7 +218,12 @@ test('settings wallpaper is painted once by the overlay root, never per element'
 test('plugin center uses the settings wallpaper painter over streaming content', () => {
   const overlay =
     appSource.match(/<div\s+class="settings-overlay-root"[\s\S]*?<CommandPalette/)?.[0] ?? ''
-  assert.match(overlay, /settings-overlay-root--active': showSettingsPage \|\| showPluginPage/)
+  assert.match(overlay, /settings-overlay-root--active': settingsOverlayVisible/)
+  assert.match(overlay, /v-show="settingsOverlayVisible && !appearanceFullWindowPreview"/)
+  assert.match(
+    appSource,
+    /showSettingsPage\.value \|\| showPluginPage\.value \|\| settingsOverlayLeaves\.value > 0/
+  )
   assert.match(overlay, /<PluginPage\s+v-if="showPluginPage"/)
 })
 

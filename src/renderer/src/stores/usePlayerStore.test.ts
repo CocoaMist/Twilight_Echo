@@ -470,6 +470,21 @@ test('player state persists a selected track before shell-level autosave is avai
   )
 })
 
+test('local removal normalizes paths in the renderer without Node globals', () => {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const body = extractInternalFunctionBody(source, 'normalizeRemovalPath')
+  const normalize = (platform: string, filePath: string): string =>
+    vm.runInNewContext(`((filePath) => {${body}})(filePath)`, {
+      appPlatform: ref(platform),
+      filePath
+    })
+
+  assert.equal(normalize('win32', 'C:\\Music\\Song.FLAC'), 'c:/music/song.flac')
+  assert.equal(normalize('win32', 'c:/music/song.flac'), 'c:/music/song.flac')
+  assert.equal(normalize('linux', '/Music/Song.FLAC'), '/Music/Song.FLAC')
+  assert.notEqual(normalize('linux', '/Music/Song.FLAC'), normalize('linux', '/music/song.flac'))
+})
+
 test('removing a non-current local queue item persists the pruned restart session', () => {
   const sessionSource = readFileSync(
     new URL('./player/playbackSessionController.ts', import.meta.url),

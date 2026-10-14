@@ -194,6 +194,8 @@ export type {
   LocalLibraryRemoveResult,
   LocalLibraryResetResult,
   LocalLibraryRemovalMode,
+  LocalLibraryClearExclusionsRequest,
+  LocalLibraryClearExclusionsResult,
   LocalLibraryRestoreRequest,
   LocalLibraryRestoreResult,
   LocalLibrarySnapshotInput,

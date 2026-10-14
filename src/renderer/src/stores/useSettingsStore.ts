@@ -152,6 +152,7 @@ const fallbackSettings: AppSettings = {
   lyricsAppearance: cloneLyricsAppearance(DEFAULT_LYRICS_APPEARANCE),
   lyricsPresets: cloneLyricsPresetConfig(DEFAULT_LYRICS_PRESET_CONFIG),
   libraryFolders: [],
+  lastLibraryFolder: '',
   downloadPreferences: { ...DEFAULT_DOWNLOAD_PREFERENCES },
   downloadFolder: '',
   genreSeparators: DEFAULT_GENRE_SEPARATORS,
@@ -730,11 +731,13 @@ export function useSettingsStore() {
     await window.api.app.relaunch()
   }
 
-  async function addLibraryFolder(): Promise<void> {
+  async function addLibraryFolder(): Promise<string | null> {
     const folder = await window.api.dialog.openFolder()
-    if (!folder) return
-    if (settings.value.libraryFolders.includes(folder)) return
-    await updateSettings({ libraryFolders: [...settings.value.libraryFolders, folder] })
+    if (!folder) return null
+    if (!settings.value.libraryFolders.includes(folder)) {
+      await updateSettings({ libraryFolders: [...settings.value.libraryFolders, folder] })
+    }
+    return folder
   }
 
   async function removeLibraryFolder(folder: string): Promise<void> {

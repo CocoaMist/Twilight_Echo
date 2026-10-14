@@ -131,6 +131,8 @@ function applyWindowSettings(): void {
   if (!win || win.isDestroyed()) return
   const settings = getEffectiveDesktopLyricsSettings()
   win.setFocusable(settings.placement !== 'taskbar')
+  // On Windows, setFocusable(true) adds the window back to the taskbar.
+  win.setSkipTaskbar(true)
   if (settings.placement === 'taskbar') {
     appliedTaskbarPlacement = true
     win.setBounds(currentTaskbarBounds())

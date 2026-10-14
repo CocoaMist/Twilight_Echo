@@ -98,6 +98,7 @@ export const IPC = {
   library: {
     cancelScan: 'library:cancelScan',
     changed: 'library:changed',
+    clearExclusions: 'library:clearExclusions',
     coversMissing: 'library:covers-missing',
     detectDuplicates: 'library:detectDuplicates',
     getScanStatus: 'library:getScanStatus',

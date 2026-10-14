@@ -8,6 +8,7 @@ import type { LocalMusicLibraryDocument } from '../../shared/localLibrary.ts'
 const {
   assertMusicLibraryRevision,
   beginLibraryPathMutation,
+  clearLibraryExclusions,
   createMusicLibraryDocument,
   isActiveLibraryPathExcluded,
   isLibraryPathMutationInProgress,
@@ -279,6 +280,27 @@ test('managed exclusions can be restored without dropping unrelated entries', ()
   assert.deepEqual(restored.restoredFilePaths, [firstPath])
   assert.deepEqual(
     restored.document.exclusions.map((item) => item.filePath),
+    [secondPath]
+  )
+})
+
+test('managed exclusions can be cleared without restoring tracks', () => {
+  const firstPath = join(tmpdir(), 'Twilight Clear First.flac')
+  const secondPath = join(tmpdir(), 'Twilight Clear Second.flac')
+  const document = createDocument([], 2)
+  document.exclusions = [firstPath, secondPath].map((filePath) => ({
+    filePath,
+    title: filePath,
+    artist: '',
+    excludedAt: '2026-01-01T00:00:00.000Z'
+  }))
+
+  const cleared = clearLibraryExclusions(document, [firstPath])
+
+  assert.deepEqual(cleared.clearedFilePaths, [firstPath])
+  assert.deepEqual(cleared.document.tracks, [])
+  assert.deepEqual(
+    cleared.document.exclusions.map((item) => item.filePath),
     [secondPath]
   )
 })

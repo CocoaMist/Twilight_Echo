@@ -142,12 +142,18 @@ export function backgroundEffect(
 ): AppBackgroundEffect {
   return normalizeBackgroundEffect(background.effects?.[tone])
 }
+export const BACKGROUND_TEXT_PALETTES = {
+  light: { text: '#f4f7fb', muted: '#c4cbd5' },
+  dark: { text: '#1a202c', muted: '#4b5563' }
+} as const
+
 export function backgroundCssVariables(
   background: AppBackgroundColorPair,
   tone: AppearanceTone
 ): Record<string, string> {
   const effect = backgroundEffect(background, tone)
   const textLight = effect.textTone === 'theme' ? tone === 'dark' : effect.textTone === 'light'
+  const palette = BACKGROUND_TEXT_PALETTES[textLight ? 'light' : 'dark']
   return {
     '--appearance-color': background[tone],
     '--appearance-image':
@@ -159,8 +165,8 @@ export function backgroundCssVariables(
     '--appearance-dim': `${effect.dim / 100}`,
     '--appearance-scale': `${effect.scale}`,
     '--appearance-position': `${effect.positionX}% ${effect.positionY}%`,
-    '--appearance-text': textLight ? '#f4f7fb' : '#1a202c',
-    '--appearance-muted': textLight ? '#c4cbd5' : '#4b5563'
+    '--appearance-text': palette.text,
+    '--appearance-muted': palette.muted
   }
 }
 export function defaultCardTheme(tone: AppearanceTone): CardAppearanceTheme {

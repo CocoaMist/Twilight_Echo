@@ -111,11 +111,12 @@ if (process.argv[2] === 'client') {
         skip: process.platform !== 'win32' || !process.env.TAE_AUDIO_NODE
       },
       async () => {
-        const directory = path.resolve(
-          process.env.TAE_REMOTE_RECOVERY_EVIDENCE || 'node_modules/.cache/issue132-recovery/http',
-          mode
+        const evidenceRoot = path.resolve(
+          process.env.TAE_REMOTE_RECOVERY_EVIDENCE || 'node_modules/.cache/issue132-recovery/http'
         )
-        fs.mkdirSync(directory, { recursive: true })
+        fs.mkdirSync(evidenceRoot, { recursive: true })
+        // Native journals append across restarts; each run needs its own evidence.
+        const directory = fs.mkdtempSync(path.join(evidenceRoot, `${mode}-`))
         const bytes = wav(180)
         const traffic = []
         const sockets = new Set()

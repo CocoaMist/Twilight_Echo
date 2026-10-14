@@ -780,7 +780,7 @@ test('external provider home removes the redundant provider masthead', () => {
 })
 
 test('private FM and radar use a session-fenced queue stream in shuffle mode', () => {
-  assert.match(source, /const PERSONALIZED_STREAM_QUEUE_THRESHOLD = 6/)
+  assert.match(source, /playbackStore\.queue\.value\.length - playbackStore\.queueIndex\.value > 3/)
   assert.match(source, /async function loadMorePersonalizedStream/)
   assert.match(source, /session: PersonalizedStreamSession \| null = null/)
   assert.match(source, /let additions = appendUniqueTracks\(existing, incoming\)/)

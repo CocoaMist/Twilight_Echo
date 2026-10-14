@@ -16,33 +16,11 @@
   --te-window-content-bottom: var(--te-window-surface-inset);
 }
 
-/* Leave wallpaper beneath the title strip so its existing blur can sample it. */
+/* Chrome samples one wallpaper; an inset frame would draw a seam below the
+   caption and along navigation even when the surfaces share their material. */
 .app-shell::before,
 .app-shell::after {
-  content: '';
-  position: fixed;
-  inset: var(--te-window-content-top) var(--te-window-surface-inset) var(--te-window-content-bottom);
-  z-index: 0;
-  pointer-events: none;
-  border-radius: var(--te-window-inner-radius);
-}
-
-.app-shell::before {
-  background: color-mix(
-    in srgb,
-    color-mix(in srgb, var(--te-app-bg) 96%, var(--te-shell-control-text)) 18%,
-    transparent
-  );
-}
-
-/* The edge sits above page paint, below the separate floating player. */
-.app-shell::after {
-  z-index: 1001;
-  border: 1px solid color-mix(in srgb, var(--te-shell-control-text) 3%, transparent);
-}
-
-html[data-window-transparent='on'] .app-shell::before {
-  background: color-mix(in srgb, var(--te-app-bg) 4%, transparent);
+  display: none;
 }
 
 html:not([data-te-shell-layout='custom']) .app-shell:not(.is-immersive) .app-shell-content {

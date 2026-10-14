@@ -1925,6 +1925,20 @@
   cursor: not-allowed;
 }
 
+.dialog-btn.danger {
+  background: color-mix(in srgb, var(--te-danger-500, #d14343) 14%, transparent);
+  color: var(--te-danger-700, #a52f37);
+}
+
+.dialog-btn.danger:hover {
+  background: color-mix(in srgb, var(--te-danger-500, #d14343) 22%, transparent);
+}
+
+.dialog-btn.danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ── Dialog Transition ── */
 .dialog-fade-enter-active,
 .dialog-fade-leave-active {
