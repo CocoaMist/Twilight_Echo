@@ -298,7 +298,6 @@ const recommendPlaylists = shallowRef<MediaProviderPlaylistSummary[]>([])
 const recommendationProviderId = ref('')
 let recommendationRequestId = 0
 const PERSONALIZED_STREAM_LOAD_THRESHOLD = 0.75
-const PERSONALIZED_STREAM_QUEUE_THRESHOLD = 6
 const PERSONALIZED_STREAM_RETRY_COOLDOWN_MS = 15_000
 const personalizedStreamLoading = reactive<Record<PersonalizedStreamKey, boolean>>({
   fm: false,
@@ -3271,11 +3270,12 @@ watch(
     () => personalizedStreamLoading.fm,
     () => personalizedStreamLoading.radar
   ],
-  ([remaining, session]) => {
+  ([, session]) => {
     if (
       !session ||
       personalizedStreamLoading[session.key] ||
-      remaining > PERSONALIZED_STREAM_QUEUE_THRESHOLD
+      playbackStore.queueIndex.value < 0 ||
+      playbackStore.queue.value.length - playbackStore.queueIndex.value > 3
     ) {
       return
     }
