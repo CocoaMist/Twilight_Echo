@@ -1482,7 +1482,11 @@ function finishViewSwitchAndRestoreScroll(): void {
   <div
     ref="containerRef"
     class="song-list"
-    :class="{ 'has-player': props.hasPlayer, 'is-switching': isSwitching }"
+    :class="{
+      'has-player': props.hasPlayer,
+      'is-switching': isSwitching,
+      'playlist-library': category === 'playlists' && showGrid
+    }"
     :style="{ height: '100vh' }"
     @scroll="onSongListScroll"
   >
@@ -1543,7 +1547,11 @@ function finishViewSwitchAndRestoreScroll(): void {
                   v-model="searchQuery"
                   type="text"
                   class="search-input"
-                  placeholder="搜索歌曲、歌手、专辑或文件夹"
+                  :placeholder="
+                    category === 'playlists' && showGrid
+                      ? '搜索歌单'
+                      : '搜索歌曲、歌手、专辑或文件夹'
+                  "
                   @focus="searchInputFocused = true"
                   @blur="searchInputFocused = false"
                 />
@@ -1715,7 +1723,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   >
                     <i
                       :class="playlist.isDefault ? 'pi pi-heart' : 'pi pi-list'"
-                      style="font-size: calc(var(--te-font-size-body, 14px) * 32 / 14); color: #ccc"
+                      class="playlist-placeholder-icon"
                     ></i>
                   </div>
                   <div class="playlist-name">{{ playlist.name }}</div>
@@ -1803,6 +1811,28 @@ function finishViewSwitchAndRestoreScroll(): void {
                 <span v-else-if="libraryRepairStatusText" class="library-repair-status">
                   {{ libraryRepairStatusText }}
                 </span>
+                <div class="library-play-actions" aria-label="播放控制">
+                  <button
+                    type="button"
+                    class="btn-play-all"
+                    title="播放全部"
+                    :disabled="displayTracks.length === 0"
+                    @click="playAllTracks"
+                  >
+                    <PlaybackIcon name="play" />
+                    <span>播放全部</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-shuffle-all"
+                    title="随机播放"
+                    :disabled="displayTracks.length === 0"
+                    @click="shufflePlayTracks"
+                  >
+                    <i class="ph ph-shuffle"></i>
+                    <span>随机播放</span>
+                  </button>
+                </div>
               </div>
             </div>
             <div class="header-right">
@@ -2156,28 +2186,6 @@ function finishViewSwitchAndRestoreScroll(): void {
             @play="playAllTracks"
             @shuffle="shufflePlayTracks"
           />
-          <div v-if="!currentAlbum" class="library-play-actions" aria-label="播放控制">
-            <button
-              type="button"
-              class="btn-play-all"
-              title="播放全部"
-              :disabled="displayTracks.length === 0"
-              @click="playAllTracks"
-            >
-              <PlaybackIcon name="play" />
-              <span>播放全部</span>
-            </button>
-            <button
-              type="button"
-              class="btn-shuffle-all"
-              title="随机播放"
-              :disabled="displayTracks.length === 0"
-              @click="shufflePlayTracks"
-            >
-              <i class="ph ph-shuffle"></i>
-              <span>随机播放</span>
-            </button>
-          </div>
           <div
             v-if="showUnifiedSearchStatus"
             class="unified-search-status"

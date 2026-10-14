@@ -298,7 +298,7 @@ test('library header places the search box last so it renders right-most', () =>
   }
 })
 
-test('library playback controls render below the table header', () => {
+test('library playback controls render in the title group while albums use dedicated controls', () => {
   const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8').replace(
     /\r\n/g,
     '\n'
@@ -306,15 +306,36 @@ test('library playback controls render below the table header', () => {
 
   assert.doesNotMatch(source, /class="header-play-actions"/)
   const tableHeaderStart = source.lastIndexOf('<div class="song-list-header"')
+  const headerLeftStart = source.indexOf(
+    '<div v-if="!currentAlbum" class="header-left">',
+    tableHeaderStart
+  )
+  const titleGroupStart = source.indexOf('<div class="title-group">', headerLeftStart)
+  const headerRightStart = source.indexOf('<div class="header-right">', tableHeaderStart)
   const albumHeaderIndex = source.indexOf('<AlbumDetailHeader', tableHeaderStart)
   const playActionsIndex = source.indexOf('class="library-play-actions"', tableHeaderStart)
   const tableHeaderEnd = source.lastIndexOf('</div>', albumHeaderIndex)
 
   assert.ok(tableHeaderStart > 0)
-  assert.ok(tableHeaderEnd > tableHeaderStart)
+  assert.ok(headerLeftStart > tableHeaderStart)
+  assert.ok(titleGroupStart > headerLeftStart)
+  assert.ok(playActionsIndex > titleGroupStart)
+  assert.ok(headerRightStart > playActionsIndex)
+  assert.ok(tableHeaderEnd > headerRightStart)
   assert.ok(albumHeaderIndex > tableHeaderEnd)
-  assert.ok(playActionsIndex > tableHeaderEnd)
-  assert.match(source, /<div v-if="!currentAlbum" class="library-play-actions"/)
+  const titleGroup = source.slice(titleGroupStart, headerRightStart)
+  assert.match(titleGroup, /class="library-play-actions"[\s\S]*<\/div>\s*<\/div>\s*<\/div>\s*$/)
+  for (const handler of ['playAllTracks', 'shufflePlayTracks']) {
+    assert.match(
+      titleGroup,
+      new RegExp(`:disabled="displayTracks.length === 0"\\s+@click="${handler}"`)
+    )
+  }
+  const albumHeader = source.slice(albumHeaderIndex, source.indexOf('/>', albumHeaderIndex))
+  assert.match(albumHeader, /v-if="currentAlbum"/)
+  assert.match(albumHeader, /:can-play="displayTracks.length > 0"/)
+  assert.match(albumHeader, /@play="playAllTracks"/)
+  assert.match(albumHeader, /@shuffle="shufflePlayTracks"/)
 })
 
 test('song list context menu exposes play next, view artist, and view album actions', () => {
