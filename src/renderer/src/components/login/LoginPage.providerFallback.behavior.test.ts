@@ -106,6 +106,29 @@ test('login and title bar recover from disabled providers in real Electron rende
         try {
           await win.loadFile(process.argv.at(-1));
           const cases = await win.webContents.executeJavaScript('window.runProviderFallbackTests()');
+          win.webContents.debugger.attach('1.3');
+          for (const preference of ['normal', 'reduced-transparency', 'more-contrast']) {
+            await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [
+              { name: 'prefers-reduced-transparency', value: preference === 'reduced-transparency' ? 'reduce' : 'no-preference' },
+              { name: 'prefers-contrast', value: preference === 'more-contrast' ? 'more' : 'no-preference' }
+            ] });
+            for (const theme of ['pureWhite', 'dark']) for (const menuOpen of [false, true]) for (const light of [false, true]) for (const layout of ['default', 'obsidian-glass', 'paper-light']) {
+              const scenario = { preference, theme, menuOpen, light, layout };
+              const expected = await win.webContents.executeJavaScript('window.preparePlaybackCaptionCase(' + JSON.stringify(scenario) + ')');
+              const capture = await win.webContents.capturePage();
+              const pixels = capture.toBitmap(), width = capture.getSize().width;
+              for (const [x, y] of [[10, 2], [90, 2], [200, 20], [300, 20], [500, 2]]) {
+                const offset = (y * width + x) * 4;
+                const actual = [pixels[offset + 2], pixels[offset + 1], pixels[offset]];
+                if (actual.some((channel, index) => Math.abs(channel - expected[index]) > 1)) {
+                  throw new Error('Playback caption has a separate color block at ' + x + ',' + y + ': ' + JSON.stringify({ scenario, actual, expected }));
+                }
+              }
+            }
+          }
+          await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] });
+          await win.webContents.executeJavaScript('window.checkForcedColorPlaybackCaption()');
+          await win.webContents.executeJavaScript('window.finishPlaybackCaptionCases()');
           console.log('LOGIN_PROVIDER_FALLBACK_OK ' + cases);
           app.exit(0);
         } catch (error) { console.error(error.stack); app.exit(1); }
@@ -140,6 +163,49 @@ const settings = { id: 'apple', name: 'Apple Music', capabilities: ['login'], su
 const searchOnly = { id: 'search', name: '搜索', capabilities: ['search'], supportedMethods: [] };
 const loggedIn = ref(false), profile = ref(null), canGoBack = ref(false), titleProps = ref({ streaming: true });
 let available = [], calls = [], changed, handler, loginApp, titleApp, success = 0, configure = 0;
+window.preparePlaybackCaptionCase = async ({ preference, theme, menuOpen, light, layout }) => {
+  if (!titleApp) {
+    titleApp = createApp({ render: () => h(window.TitleBar, { ...titleProps.value }) });
+    titleApp.mount('#title');
+    const backdrop = document.createElement('div');
+    backdrop.id = 'playback-caption-backdrop';
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:9998';
+    document.body.append(backdrop);
+  }
+  const expected = light ? [244, 244, 247] : [37, 49, 79];
+  document.querySelector('#playback-caption-backdrop').style.background = 'rgb(' + expected.join(',') + ')';
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.tePresetLayout = layout;
+  // The artwork or background filters paint a different color from the base fill.
+  document.documentElement.style.setProperty('--te-player-bg', theme === 'dark' ? '#14282b' : '#d0dadb');
+  document.documentElement.style.setProperty('--te-app-bg', theme === 'dark' ? '#14282b' : '#d0dadb');
+  document.documentElement.style.setProperty('--te-playback-page-text', light ? '#1a202c' : '#f4f7fb');
+  canGoBack.value = true;
+  titleProps.value = { immersive: true, menuOpen, glass: true, liquidMaterial: true, titleSurface: light ? 'settings' : 'streaming', streaming: true };
+  await settle();
+  expect(matchMedia('(prefers-reduced-transparency: reduce)').matches === (preference === 'reduced-transparency'), 'transparency preference was not emulated');
+  expect(matchMedia('(prefers-contrast: more)').matches === (preference === 'more-contrast'), 'contrast preference was not emulated');
+  const frame = document.querySelector('#title .title-bar');
+  const expectedColor = light ? 'rgb(26, 32, 44)' : 'rgb(244, 247, 251)';
+  expect([...frame.querySelectorAll('button')].every(element => getComputedStyle(element).color === expectedColor), 'caption controls lost playback contrast');
+  expect(frame.querySelector('.back-btn') && frame.querySelector('.menu-btn') && frame.querySelector('.login-btn'), 'left playback commands disappeared');
+  return expected;
+};
+window.checkForcedColorPlaybackCaption = async () => {
+  await settle();
+  expect(matchMedia('(forced-colors: active)').matches, 'forced colors were not emulated');
+  const probe = document.createElement('div');
+  probe.style.cssText = 'color:CanvasText;background:Canvas';
+  document.body.append(probe);
+  const frame = document.querySelector('#title .title-bar');
+  expect(getComputedStyle(frame).backgroundColor === getComputedStyle(probe).backgroundColor, 'high contrast caption lost its system surface');
+  expect([...frame.querySelectorAll('button')].every(element => getComputedStyle(element).color === getComputedStyle(probe).color), 'high contrast caption lost its system foreground');
+  probe.remove();
+};
+window.finishPlaybackCaptionCases = () => {
+  titleApp.unmount(); titleApp = null;
+  document.querySelector('#playback-caption-backdrop').remove();
+};
 const timers = new Map();
 let timerId = 0;
 // Keep stage transitions advancing even when the test window is hidden.
@@ -324,12 +390,13 @@ window.runProviderFallbackTests = async () => {
       document.documentElement.style.setProperty('--te-playback-page-text', playerText);
       titleProps.value = { immersive: true, liquidMaterial: liquid, preview }; await settle();
       const frame = document.querySelector('#title .title-bar');
-      const material = getComputedStyle(frame.querySelector('.title-bar-background'));
+      const layer = frame.querySelector('.title-bar-background');
+      const material = layer && getComputedStyle(layer);
       expect(!frame.classList.contains('title-bar-liquid'), 'liquid material overrides immersive playback');
-      expect(material.backgroundColor === 'rgba(0, 0, 0, 0)' && material.backgroundImage === 'none' && material.boxShadow === 'none' && material.backdropFilter === 'none', 'playback caption still paints a separate strip: ' + theme + '/' + liquid + '/' + preview);
+      expect(!material || (material.backgroundColor === 'rgba(0, 0, 0, 0)' && material.backgroundImage === 'none' && material.boxShadow === 'none' && material.backdropFilter === 'none'), 'playback caption still paints a separate strip: ' + theme + '/' + liquid + '/' + preview);
       expect(frame.getBoundingClientRect().height === 40, 'immersive title changed its height');
       expect([...frame.querySelectorAll('button')].every((element,index) => getComputedStyle(element).color === playerText && element.getBoundingClientRect().left === restingPositions[index]), 'immersive controls lost playback colors or moved: ' + JSON.stringify({theme,liquid,preview,playerText,controls:[...frame.querySelectorAll('button')].map((element,index)=>({name:element.className,color:getComputedStyle(element).color,left:element.getBoundingClientRect().left,expectedLeft:restingPositions[index]}))}));
-      expect(getComputedStyle(frame.querySelector('.title-bar-background')).pointerEvents === 'none', 'immersive backdrop intercepts controls');
+      expect(!material || material.pointerEvents === 'none', 'immersive backdrop intercepts controls');
     }
     document.documentElement.style.removeProperty('--te-playback-page-text');
     titleProps.value = { streaming: false }; await settle();

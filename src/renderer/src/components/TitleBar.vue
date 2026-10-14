@@ -108,16 +108,18 @@ function close(): void {
     :class="{
       'drag-region': !preview,
       'no-drag': preview,
-      'title-bar-glass': glass && !closeOnly,
+      'title-bar-glass': glass && !immersive && !closeOnly,
       'title-bar-liquid': liquidMaterial && !immersive && !closeOnly,
       'title-bar-immersive': immersive && !closeOnly,
       'title-bar-close-only': closeOnly,
-      'title-bar-settings': titleSurface === 'settings' && !closeOnly,
-      'title-bar-streaming': titleSurface === 'streaming' && !closeOnly,
-      'title-bar-menu-open': menuOpen && !closeOnly
+      'title-bar-settings': titleSurface === 'settings' && !immersive && !closeOnly,
+      'title-bar-streaming': titleSurface === 'streaming' && !immersive && !closeOnly,
+      'title-bar-menu-open': menuOpen && !immersive && !closeOnly
     }"
   >
-    <div v-if="!closeOnly" class="title-bar-background" aria-hidden="true"></div>
+    <!-- Playback already paints the caption backdrop, including filtered artwork.
+         Keeping a separate material layer lets contrast preferences repaint it. -->
+    <div v-if="!closeOnly && !immersive" class="title-bar-background" aria-hidden="true"></div>
     <div
       v-if="canGoBack && !preview && !closeOnly"
       class="title-bar-back no-drag"
@@ -365,6 +367,9 @@ html[data-theme='dark']
   --te-shell-control-hover: color-mix(in srgb, var(--te-shell-control-text) 8%, transparent);
   --te-titlebar-material-surface: var(--te-player-bg);
   --te-titlebar-material-ink: var(--te-shell-control-text);
+  /* Presets must not tint the artwork again behind the caption controls. */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .title-bar-immersive .title-bar-background {
@@ -879,6 +884,11 @@ body.te-no-blur .title-bar .title-bar-background {
 }
 
 @media (forced-colors: active) {
+  html .title-bar.title-bar-immersive {
+    --te-shell-control-text: CanvasText;
+    background: Canvas !important;
+  }
+
   .title-bar .title-bar-background {
     background: Canvas !important;
     border-bottom: 1px solid CanvasText;

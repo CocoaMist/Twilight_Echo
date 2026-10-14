@@ -3598,7 +3598,12 @@ onMounted(async () => {
     class="streaming-page"
     :class="{ 'has-player': hasPlayer, 'menu-open': menuOpen }"
   >
-    <div ref="streamingContentRef" class="streaming-content" @scroll="onStreamingContentScroll">
+    <div
+      ref="streamingContentRef"
+      class="streaming-content"
+      :class="{ 'without-header': !!currentDetail && !showUnifiedSearch }"
+      @scroll="onStreamingContentScroll"
+    >
       <StreamingContentHeader
         :is-detail="!!currentDetail"
         :is-searching="isSearching && !currentDetail"
@@ -3614,7 +3619,6 @@ onMounted(async () => {
         :provider-id="activeProvider"
         :provider-options="headerProviderOptions"
         @update:search-query="searchQuery = $event"
-        @back="goBack"
         @clear-search="clearSearch"
         @select-provider="selectProvider"
       />

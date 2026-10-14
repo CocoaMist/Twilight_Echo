@@ -218,6 +218,10 @@ schemaVersion 3；API v3 继续接受 schemaVersion 1/2 和 `variables + stylesh
   `library` 能力可选提供 `fetchSavedAlbums()` / `fetchSavedArtists()`，返回标准
   `AlbumSummary[]` / `ArtistSummary[]`；内置网易云插件分页读取收藏列表，音乐库按批展示并复用详情导航。
   方法名称联合类型统一定义于 `src/shared/mediaProviderMethods.ts`，main/preload 共用，仍经现有 provider 调用桥接。
+- Navidrome 是在独立插件仓库维护的服务器型 `MediaProvider` 插件：插件 ID 为
+  `com.twilightecho.provider.navidrome`，provider 前缀固定为 `navidrome`，通过插件市场或本地 `.tep` 安装并启用。
+  它通过 Subsonic API 的 `loginWithServer(serverUrl, username, password, context?)` 保存连接配置，
+  提供搜索、播放、封面、歌词和歌单读取；密码由宿主插件设置存储加密。
 - 第三方音源插件使用同一 Provider API。Bilibili 收藏夹音频插件作为外部插件仓库
   或私有插件索引分发，插件 ID 为 `com.twilightecho.provider.bilibili`，provider 前缀
   固定为 `bili`；仅在用户安装、启用并扫码登录后，流媒体 UI 才展示其视频收藏夹。
@@ -326,4 +330,4 @@ schemaVersion 3；API v3 继续接受 schemaVersion 1/2 和 `variables + stylesh
 
 编辑描述 schemaVersion 1 的绑定三选一：`variable`、`token` 或宿主已登记的 `slot`；开关可声明 `checkedValue` / `uncheckedValue`，参数可声明 `description`。编译与导出保留 structured 布局、模式、深浅色参数。项目包含素材及许可、分页面图层和上次应用版本；导出的声明式主题不依赖工坊启用状态。主题源码和素材仍保留在外部插件仓库。
 
-服务器型音源可声明 `loginWithServer(serverUrl, username, password, context?)`，返回 `{ loggedIn, profile }`，并声明 `login` 能力。宿主根据已注册方法展示服务器地址、用户名和密码表单，经现有 provider 调用桥传递，不新增 IPC 通道；同一插件未实现该方法时继续使用原登录流程。插件只持久化服务端会话令牌，不保存密码。Jellyfin provider 位于独立插件仓库，使用官方 AuthenticateByName、Items、Playlists 和 Audio universal 接口。
+服务器型音源可声明 `loginWithServer(serverUrl, username, password, context?)`，返回 `{ loggedIn, profile }`，并声明 `login` 能力。宿主根据已注册方法展示服务器地址、用户名和密码表单，经现有 provider 调用桥传递，不新增 IPC 通道；同一插件未实现该方法时继续使用原登录流程。Jellyfin 和 Navidrome provider 均位于独立插件仓库。Jellyfin 使用官方 AuthenticateByName、Items、Playlists 和 Audio universal 接口，只持久化服务端会话令牌；Navidrome 使用 Subsonic token/salt 认证，需要将密码存入宿主加密的插件设置。

@@ -16,11 +16,11 @@
 namespace twilight::audio::asio_helper {
 
 constexpr uint32_t kProtocolMagic = 0x48414554u;
-constexpr uint32_t kProtocolVersion = 3;
+constexpr uint32_t kProtocolVersion = 4;
 constexpr uint32_t kMaxDevices = 64;
 constexpr uint32_t kMaxChannels = 32;
 constexpr uint32_t kMaxFrames = 32768;
-constexpr uint32_t kMaxBytesPerSample = 4;
+constexpr uint32_t kMaxBytesPerSample = 8;
 constexpr uint32_t kMaxRates = 32;
 constexpr uint32_t kMaxFormats = 16;
 constexpr uint32_t kMaxBitDepths = 8;
@@ -132,6 +132,7 @@ struct Request {
   char deviceId[kMaxIdentityBytes]{};
   AudioFormatRecord format;
   int32_t bufferSizeFrames = 0;
+  int32_t outputChannelStart = 0;
   int32_t sampleFormatMappingReported = -1;
   int32_t sampleFormatMappingInterpreted = -1;
   int32_t nativeDsdControlOrder = 0;
@@ -155,6 +156,7 @@ struct Response {
   char driverName[kMaxIdentityBytes]{};
   int32_t driverVersion = 0;
   char nativeDsdNegotiation[kMaxMessageBytes]{};
+  char startupSummary[kMaxMessageBytes]{};
   int32_t openFailureKind = static_cast<int32_t>(AsioOpenFailureKind::None);
   ChannelFormatRecord channelFormats[kMaxChannels]{};
   uint32_t channelCount = 0;
@@ -173,6 +175,7 @@ struct alignas(64) RenderBuffer {
 struct CallbackRecord {
   int32_t bufferIndex = 0;
   uint32_t sequence = 0;
+  uint64_t driverTimestampNs = 0;
 };
 
 struct HostEventRecord {
@@ -202,6 +205,8 @@ struct alignas(64) SharedMemory {
   Request request;
   Response response;
   int32_t activeBufferSizeFrames = 0;
+  volatile int32_t activeRenderFrameCapacity = 0;
+  volatile int32_t dsdBufferUnitConfirmed = 0;
   uint32_t activeChannelCount = 0;
   ChannelFormatRecord activeChannelFormats[kMaxChannels]{};
   CallbackRecord callbacks[kCallbackRingSize]{};

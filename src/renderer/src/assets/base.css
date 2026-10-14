@@ -1374,38 +1374,15 @@ html[data-theme='pureWhite'] .playing-music .backdrop-accent {
   opacity: 0.72;
 }
 
-html[data-theme='pureWhite'] .playing-music .track-title,
-html[data-theme='pureWhite'] .playing-music .lyric-row.active {
-  color: rgba(255, 255, 255, 0.96);
-}
-
-html[data-theme='pureWhite'] .playing-music .track-artist,
-html[data-theme='pureWhite'] .playing-music .lyric-row:hover {
-  color: rgba(255, 255, 255, 0.78);
-}
-
-html[data-theme='pureWhite'] .playing-music .track-album,
-html[data-theme='pureWhite'] .playing-music .lyric-row {
-  color: rgba(255, 255, 255, 0.42);
-}
-
 html[data-theme='pureWhite'] .playing-music .lyrics-column {
   border-left-color: rgba(255, 255, 255, 0.08);
 }
 
 html[data-theme='pureWhite'] .playing-music .time-chip,
 html[data-theme='pureWhite'] .playing-music .lyric-row.active {
-  border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.2);
-}
-
-html[data-theme='pureWhite'] .playing-music .lyric-translation {
-  color: rgba(255, 255, 255, 0.56);
-}
-
-html[data-theme='pureWhite'] .playing-music .lyric-row.active .lyric-translation {
-  color: rgba(255, 255, 255, 0.78);
+  border-color: var(--te-playback-control-border, rgba(255, 255, 255, 0.12));
+  background: var(--te-playback-control-surface, rgba(255, 255, 255, 0.08));
+  box-shadow: var(--te-playback-control-hover-shadow, 0 14px 32px rgba(0, 0, 0, 0.2));
 }
 
 html[data-theme='pureWhite'] .playing-music .cover-frame {
@@ -1417,7 +1394,7 @@ html[data-theme='pureWhite'] .playing-music .cover-placeholder {
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
     color-mix(in srgb, var(--accent-color) 20%, transparent);
-  color: rgba(255, 255, 255, 0.38);
+  color: var(--te-playback-cover-placeholder-text, rgba(255, 255, 255, 0.38));
 }
 
 html[data-theme='dark'],
@@ -1613,9 +1590,9 @@ html[data-theme='dark'] .song-list-title,
 html[data-theme='dark'] .artist-name,
 html[data-theme='dark'] .album-name,
 html[data-theme='dark'] .playlist-name,
-html[data-theme='dark'] .track-title,
+html[data-theme='dark'] .track-title:where(:not(.playing-music *)),
 html[data-theme='dark'] .playlist-title,
-html[data-theme='dark'] .player-title,
+html[data-theme='dark'] .player-title:where(:not(.player-bar-glass *)),
 html[data-theme='dark'] .placeholder-title,
 html[data-theme='dark'] .playlist-grid-name {
   color: rgba(248, 250, 252, 0.95);
@@ -1624,8 +1601,8 @@ html[data-theme='dark'] .playlist-grid-name {
 html[data-theme='dark'] .artist-count,
 html[data-theme='dark'] .album-count,
 html[data-theme='dark'] .playlist-count,
-html[data-theme='dark'] .track-artist,
-html[data-theme='dark'] .player-artist,
+html[data-theme='dark'] .track-artist:where(:not(.playing-music *)),
+html[data-theme='dark'] .player-artist:where(:not(.player-bar-glass *)),
 html[data-theme='dark'] .empty-text,
 html[data-theme='dark'] .empty-hint,
 html[data-theme='dark'] .placeholder-hint,
@@ -1823,7 +1800,7 @@ html[data-theme='dark'] .playlist-artist,
 html[data-theme='dark'] .more-action-desc,
 html[data-theme='dark'] .more-item-desc,
 html[data-theme='dark'] .volume-drawer-val,
-html[data-theme='dark'] .time-label {
+html[data-theme='dark'] .time-label:where(:not(.player-bar-glass *)) {
   color: rgba(148, 163, 184, 0.76);
 }
 
@@ -1848,16 +1825,16 @@ html[data-theme='dark'] .audio-device-mini-select {
   color: rgba(203, 213, 225, 0.88);
 }
 
-html[data-theme='dark'] .ctrl-btn:not(.btn-play),
-html[data-theme='dark'] .icon-btn,
-html[data-theme='dark'] .mode-btn-right {
+html[data-theme='dark'] .ctrl-btn:not(.btn-play):where(:not(.player-bar-glass *)),
+html[data-theme='dark'] .icon-btn:where(:not(.player-bar-glass *)),
+html[data-theme='dark'] .mode-btn-right:where(:not(.player-bar-glass *)) {
   color: rgba(203, 213, 225, 0.82);
 }
 
-html[data-theme='dark'] .ctrl-btn:not(.btn-play):hover,
-html[data-theme='dark'] .icon-btn:hover,
-html[data-theme='dark'] .icon-btn.active,
-html[data-theme='dark'] .mode-btn-right:hover {
+html[data-theme='dark'] .ctrl-btn:not(.btn-play):hover:where(:not(.player-bar-glass *)),
+html[data-theme='dark'] .icon-btn:hover:where(:not(.player-bar-glass *)),
+html[data-theme='dark'] .icon-btn.active:where(:not(.player-bar-glass *)),
+html[data-theme='dark'] .mode-btn-right:hover:where(:not(.player-bar-glass *)) {
   background: rgba(255, 255, 255, 0.075);
   color: rgba(248, 250, 252, 0.94);
 }
@@ -1870,13 +1847,13 @@ html[data-theme='dark'] .player-bar:not(.player-bar-glass) .mode-btn-right img {
 
 /* Pressed and toggled-on playbar controls must stay visible on the dark bar:
    the old 7.5% white wash made active/pressed buttons melt into the surface. */
-html[data-theme='dark'] .ctrl-btn:not(.btn-play):active,
-html[data-theme='dark'] .icon-btn:active,
-html[data-theme='dark'] .mode-btn-right:active {
+html[data-theme='dark'] .ctrl-btn:not(.btn-play):active:where(:not(.player-bar-glass *)),
+html[data-theme='dark'] .icon-btn:active:where(:not(.player-bar-glass *)),
+html[data-theme='dark'] .mode-btn-right:active:where(:not(.player-bar-glass *)) {
   background: rgba(255, 255, 255, 0.18);
 }
 
-html[data-theme='dark'] .icon-btn.active {
+html[data-theme='dark'] .icon-btn.active:where(:not(.player-bar-glass *)) {
   background: rgba(255, 255, 255, 0.18);
   color: rgba(248, 250, 252, 0.96);
 }
@@ -2013,7 +1990,6 @@ html[data-theme='dark'] .section-heading p {
 }
 
 html[data-theme='dark'] .streaming-search-box,
-html[data-theme='dark'] .btn-back,
 html[data-theme='dark'] .streaming-round-btn,
 html[data-theme='dark'] .streaming-avatar-btn,
 html[data-theme='dark'] .search-tab-pill,
@@ -3302,30 +3278,6 @@ html[data-te-effects-mode='reduced'][data-te-background-treatment='image'] body:
 }
 
 /* Content cards use their standard theme surfaces; no optical overlay. */
-
-.detail-back-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex-shrink: 0;
-  min-height: 36px;
-  padding: 0 16px;
-  border: 1px solid var(--te-card-border);
-  border-radius: 999px;
-  background: var(--te-card-bg);
-  color: var(--te-chrome-text);
-  font: inherit;
-  font-size: 14px;
-  cursor: pointer;
-}
-.detail-back-button:hover {
-  background: var(--te-hover-bg);
-}
-.detail-back-button:focus-visible {
-  outline: 2px solid var(--te-primary-500);
-  outline-offset: 3px;
-}
 
 .metadata-link {
   display: block;
