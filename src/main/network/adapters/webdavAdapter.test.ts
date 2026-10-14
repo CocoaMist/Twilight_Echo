@@ -33,6 +33,61 @@ const MULTISTATUS = `<?xml version="1.0" encoding="utf-8"?>
   </d:response>
 </d:multistatus>`
 
+// 真实服务端会返回绝对 URI、XML 转义实体（&amp;）、百分号编码（含中文），
+// 还可能混入错误编码与穿越路径。这里一次性覆盖这些形态。
+const RICH_MULTISTATUS = `<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>http://example.test/music-rich</d:href>
+    <d:propstat>
+      <d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/music-rich/album/</d:href>
+    <d:propstat>
+      <d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>http://example.test/music-rich/a&amp;b.flac</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>4</d:getcontentlength><d:getcontenttype>audio/flac</d:getcontenttype></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/music-rich/c%23d.flac</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>4</d:getcontentlength></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/music-rich/%E4%B8%AD%E6%96%87%20name.flac</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>4</d:getcontentlength></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/music-rich/../secret.flac</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>4</d:getcontentlength></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/music-rich/bad%ZZ.flac</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>4</d:getcontentlength></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>`
+
 const FLAC_BYTES = Buffer.from('FLAC-DATA-0123456789')
 const EXPECTED_BASIC = `Basic ${Buffer.from('alice:s3cret').toString('base64')}`
 const SINGLE_FILE_STATUS = `<?xml version="1.0" encoding="utf-8"?>
@@ -49,11 +104,37 @@ const SINGLE_FILE_STATUS = `<?xml version="1.0" encoding="utf-8"?>
   </d:response>
 </d:multistatus>`
 
-let server: Server
-let basePort = 0
+interface SeenRequest {
+  method: string
+  url: string
+  authorization?: string
+  contentLength?: string
+  range?: string
+}
 
-function makeProfile(): NetworkSourceProfile {
-  return {
+let server: Server
+let otherServer: Server
+let basePort = 0
+let otherPort = 0
+const seen: SeenRequest[] = []
+const otherSeen: SeenRequest[] = []
+
+function record(target: SeenRequest[], req: import('node:http').IncomingMessage): void {
+  target.push({
+    method: req.method ?? '',
+    url: req.url ?? '',
+    authorization: req.headers.authorization,
+    contentLength: req.headers['content-length'],
+    range: typeof req.headers.range === 'string' ? req.headers.range : undefined
+  })
+}
+
+function makeProfile(
+  overrides: Partial<Omit<NetworkSourceProfile, 'options'>> & {
+    options?: Partial<NetworkSourceProfile['options']>
+  } = {}
+): NetworkSourceProfile {
+  const base: NetworkSourceProfile = {
     id: 'p1',
     protocol: 'webdav',
     name: 'Test NAS',
@@ -72,10 +153,17 @@ function makeProfile(): NetworkSourceProfile {
     createdAt: 1,
     lastConnectedAt: null
   }
+  return {
+    ...base,
+    ...overrides,
+    options: { ...base.options, ...(overrides.options ?? {}) },
+    credential: overrides.credential ?? base.credential
+  }
 }
 
 test.before(async () => {
   server = createServer((req, res) => {
+    record(seen, req)
     if (req.headers.authorization !== EXPECTED_BASIC) {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="test"' })
       res.end()
@@ -92,38 +180,89 @@ test.before(async () => {
         res.end(SINGLE_FILE_STATUS)
         return
       }
+      if (req.url === '/music-rich' || req.url === '/music-rich/') {
+        res.writeHead(207, { 'Content-Type': 'application/xml' })
+        res.end(RICH_MULTISTATUS)
+        return
+      }
+      if (req.url === '/music-no-slash') {
+        res.writeHead(301, { Location: '/music/' })
+        res.end()
+        return
+      }
+      if (req.url === '/music-xorigin') {
+        res.writeHead(301, { Location: `http://127.0.0.1:${otherPort}/music-target` })
+        res.end()
+        return
+      }
+      if (req.url === '/music-hang') {
+        // 故意不响应，用于空闲超时断言。
+        return
+      }
       res.writeHead(404)
       res.end()
       return
     }
-    if (req.method === 'GET' && req.url === '/music/a.flac') {
-      const range = req.headers.range
-      const match = typeof range === 'string' ? /^bytes=(\d+)-/.exec(range) : null
-      if (match) {
-        const start = Number(match[1])
-        const body = FLAC_BYTES.subarray(start)
-        res.writeHead(206, {
-          'Content-Range': `bytes ${start}-${FLAC_BYTES.length - 1}/${FLAC_BYTES.length}`,
-          'Content-Length': body.length
-        })
-        res.end(body)
+    if (req.method === 'GET') {
+      if (req.url?.startsWith('/music-rich/')) {
+        res.writeHead(200, { 'Content-Type': 'audio/flac' })
+        res.end('RICH')
         return
       }
-      res.writeHead(200, { 'Content-Type': 'audio/flac', 'Content-Length': FLAC_BYTES.length })
-      res.end(FLAC_BYTES)
-      return
+      if (req.url === '/music/slow.flac') {
+        res.writeHead(200, { 'Content-Type': 'audio/flac' })
+        let sent = 0
+        const timer = setInterval(() => {
+          res.write('slow-chunk;')
+          sent += 1
+          if (sent >= 16) {
+            clearInterval(timer)
+            res.end()
+          }
+        }, 50)
+        res.on('close', () => clearInterval(timer))
+        return
+      }
+      if (req.url === '/music/a.flac') {
+        const range = req.headers.range
+        const match = typeof range === 'string' ? /^bytes=(\d+)-/.exec(range) : null
+        if (match) {
+          const start = Number(match[1])
+          const body = FLAC_BYTES.subarray(start)
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${FLAC_BYTES.length - 1}/${FLAC_BYTES.length}`,
+            'Content-Length': body.length
+          })
+          res.end(body)
+          return
+        }
+        res.writeHead(200, { 'Content-Type': 'audio/flac', 'Content-Length': FLAC_BYTES.length })
+        res.end(FLAC_BYTES)
+        return
+      }
     }
     res.writeHead(404)
     res.end()
   })
+  otherServer = createServer((req, res) => {
+    record(otherSeen, req)
+    res.writeHead(200, { 'Content-Type': 'application/xml' })
+    res.end(MULTISTATUS)
+  })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  await new Promise<void>((resolve) => otherServer.listen(0, '127.0.0.1', resolve))
   const address = server.address()
+  const otherAddress = otherServer.address()
   if (address && typeof address === 'object') basePort = address.port
+  if (otherAddress && typeof otherAddress === 'object') otherPort = otherAddress.port
 })
 
 test.after(async () => {
-  await new Promise<void>((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve()))
+  await Promise.all(
+    [server, otherServer].map(
+      (item) =>
+        new Promise<void>((resolve, reject) => item.close((err) => (err ? reject(err) : resolve())))
+    )
   )
 })
 
@@ -206,5 +345,113 @@ test('webdav readStream honors byte range resumes', async () => {
   const chunks: Buffer[] = []
   for await (const chunk of stream) chunks.push(Buffer.from(chunk))
   assert.deepEqual(Buffer.concat(chunks), FLAC_BYTES.subarray(4))
+  await session.close()
+})
+
+test('webdav list normalizes absolute hrefs, XML entities, encodings and drops unsafe paths', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  const entries = await session.list('/music-rich')
+  const paths = entries.map((entry) => entry.path).sort()
+  assert.deepEqual(paths, [
+    '/music-rich/a&b.flac',
+    '/music-rich/album',
+    '/music-rich/bad%ZZ.flac',
+    '/music-rich/c#d.flac',
+    '/music-rich/中文 name.flac'
+  ])
+  // 绝对 URI 的自身 href 必须被过滤，不能出现在子条目里。
+  assert.ok(!paths.includes('/music-rich'))
+  // 穿越路径必须被丢弃，不能变成 ../secret。
+  assert.ok(!paths.some((path) => path.includes('secret')))
+  await session.close()
+})
+
+test('webdav percent-encodes reserved characters when building request URLs', async () => {
+  seen.length = 0
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  const stream = await session.readStream('/music-rich/c#d.flac')
+  for await (const _chunk of stream) void _chunk
+  assert.ok(seen.some((item) => item.url === '/music-rich/c%23d.flac'))
+
+  const amp = await session.readStream('/music-rich/a&b.flac')
+  for await (const _chunk of amp) void _chunk
+  assert.ok(seen.some((item) => item.url === '/music-rich/a%26b.flac'))
+
+  const chinese = await session.readStream('/music-rich/中文 name.flac')
+  for await (const _chunk of chinese) void _chunk
+  assert.ok(seen.some((item) => item.url === '/music-rich/%E4%B8%AD%E6%96%87%20name.flac'))
+  await session.close()
+})
+
+test('webdav sends an explicit Content-Length for PROPFIND bodies', async () => {
+  seen.length = 0
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  await session.list('/music')
+  const propfind = seen.find((item) => item.method === 'PROPFIND')
+  assert.ok(propfind)
+  assert.ok(Number(propfind.contentLength) > 0)
+  await session.close()
+})
+
+test('webdav follows redirects when a collection needs a trailing slash', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  const entries = await session.list('/music-no-slash')
+  assert.deepEqual(entries.map((entry) => entry.path).sort(), ['/music/a.flac', '/music/album'])
+  await session.close()
+})
+
+test('webdav does not leak credentials across cross-origin redirects', async () => {
+  otherSeen.length = 0
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  await session.list('/music-xorigin')
+  assert.ok(otherSeen.length > 0)
+  assert.ok(otherSeen.every((item) => item.authorization === undefined))
+  await session.close()
+})
+
+test('webdav does not abort downloads that keep making progress', async () => {
+  const session = await createWebDavAdapter().createSession(
+    makeProfile({ options: { transferTimeoutMs: 300 } }),
+    { kind: 'password', username: 'alice', password: 's3cret' }
+  )
+  const stream = await session.readStream('/music/slow.flac')
+  let total = 0
+  for await (const chunk of stream) total += Buffer.byteLength(chunk as Buffer)
+  assert.equal(total, 'slow-chunk;'.length * 16)
+  await session.close()
+})
+
+test('webdav reports an idle timeout when the server never responds', async () => {
+  const session = await createWebDavAdapter().createSession(
+    makeProfile({ options: { transferTimeoutMs: 150 } }),
+    { kind: 'password', username: 'alice', password: 's3cret' }
+  )
+  await assert.rejects(
+    async () => session.list('/music-hang'),
+    (err: unknown) => {
+      assert.equal((err as { code: string }).code, 'timeout')
+      return true
+    }
+  )
   await session.close()
 })

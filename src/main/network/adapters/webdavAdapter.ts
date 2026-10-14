@@ -7,6 +7,10 @@ import { entryKind } from '../entryKinds.ts'
 import type { NetworkEntry, NetworkSourceProfile } from '../../../shared/networkSources.ts'
 import type { NetworkAuth, NetworkSourceAdapter, NetworkSourceSession } from './types.ts'
 
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308])
+const MAX_REDIRECTS = 5
+const DEFAULT_RESPONSE_LIMIT_BYTES = 8 * 1024 * 1024
+
 function isCollectionBlock(block: string): boolean {
   return /<(?:\w+:)?collection\s*\/?\s*>/i.test(block)
 }
@@ -16,38 +20,92 @@ function extractTag(block: string, tag: string): string | null {
   return match ? match[1].trim() : null
 }
 
+/** 解码 XML 文本实体：WebDAV 的 href 中 `&` 等必须转义为 `&amp;`。 */
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (match, hex: string) => {
+      const code = Number.parseInt(hex, 16)
+      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match
+    })
+    .replace(/&#(\d+);/g, (match, dec: string) => {
+      const code = Number.parseInt(dec, 10)
+      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match
+    })
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+}
+
+/**
+ * 把 DAV:href 归一化为与请求一致的远程路径：
+ * - 兼容绝对 URI（反向代理与部分服务端会返回完整 URL）；
+ * - 先解 XML 实体，再解百分号编码；
+ * - 非法、穿越或含控制字符的 href 返回 null 并丢弃，避免一条坏记录中断整个目录。
+ */
+function hrefToPath(href: string): string | null {
+  const unescaped = decodeXmlEntities(href.trim())
+  let raw = unescaped
+  if (/^[a-z][a-z0-9+.-]*:/i.test(unescaped)) {
+    try {
+      raw = new URL(unescaped).pathname
+    } catch {
+      // 保留原始值交给 normalizeRemotePath 判定
+    }
+  }
+  let decoded = raw
+  try {
+    decoded = decodeURIComponent(raw)
+  } catch {
+    // 保留原始百分号编码，至少不因单个坏 href 抛 URIError
+  }
+  try {
+    return normalizeRemotePath(decoded)
+  } catch {
+    return null
+  }
+}
+
 function parseMultistatus(
   xml: string
-): Array<{ href: string; directory: boolean; size?: number; mime?: string; mtimeMs?: number }> {
+): Array<{ path: string; directory: boolean; size?: number; mime?: string; mtimeMs?: number }> {
   const blocks: string[] = []
   const pattern = /<(?:\w+:)?response[^>]*>([\s\S]*?)<\/(?:\w+:)?response>/gi
   let match: RegExpExecArray | null
   while ((match = pattern.exec(xml)) !== null) blocks.push(match[1])
 
-  return blocks
-    .map((block) => {
-      const href = extractTag(block, 'href')
-      if (!href) return null
-      const sizeText = extractTag(block, 'getcontentlength')
-      const size = sizeText ? Number.parseInt(sizeText, 10) : undefined
-      const mime = extractTag(block, 'getcontenttype') ?? undefined
-      const mtimeText = extractTag(block, 'getlastmodified')
-      const mtimeMs = mtimeText ? Date.parse(mtimeText) : undefined
-      return {
-        href: decodeURIComponent(href),
-        directory: isCollectionBlock(block),
-        size: Number.isFinite(size) ? size : undefined,
-        mime,
-        mtimeMs: Number.isFinite(mtimeMs as number) ? mtimeMs : undefined
-      }
+  const entries: Array<{
+    path: string
+    directory: boolean
+    size?: number
+    mime?: string
+    mtimeMs?: number
+  }> = []
+  for (const block of blocks) {
+    const href = extractTag(block, 'href')
+    if (!href) continue
+    const path = hrefToPath(href)
+    if (!path) continue
+    const sizeText = extractTag(block, 'getcontentlength')
+    const size = sizeText ? Number.parseInt(sizeText, 10) : undefined
+    const mime = extractTag(block, 'getcontenttype') ?? undefined
+    const mtimeText = extractTag(block, 'getlastmodified')
+    const mtimeMs = mtimeText ? Date.parse(mtimeText) : undefined
+    entries.push({
+      path,
+      directory: isCollectionBlock(block),
+      size: Number.isFinite(size) ? size : undefined,
+      mime,
+      mtimeMs: Number.isFinite(mtimeMs as number) ? mtimeMs : undefined
     })
-    .filter((item): item is NonNullable<typeof item> => item !== null)
+  }
+  return entries
 }
 
 function nameOf(path: string): string {
-  const cleaned = normalizeRemotePath(path)
-  if (cleaned === '/') return '/'
-  return cleaned.split('/').pop() ?? ''
+  if (path === '/') return '/'
+  return path.split('/').pop() ?? ''
 }
 
 function authHeader(auth: NetworkAuth): string | undefined {
@@ -55,9 +113,17 @@ function authHeader(auth: NetworkAuth): string | undefined {
   return `Basic ${Buffer.from(`${auth.username}:${auth.password}`).toString('base64')}`
 }
 
-function mergeSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  if (!signal) return AbortSignal.timeout(timeoutMs)
-  return AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+/**
+ * 逐段做百分号编码并保留 `/` 分隔符。`encodeURI` 不会编码 `#`、`?`，
+ * 会让含这些字符的文件名把路径截断成片段/查询串，必须用 `encodeURIComponent`。
+ */
+function encodeRemotePath(remotePath: string): string {
+  const normalized = normalizeRemotePath(remotePath)
+  if (normalized === '/') return '/'
+  return normalized
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')
 }
 
 export function createWebDavAdapter(): NetworkSourceAdapter {
@@ -69,49 +135,126 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
     ): Promise<NetworkSourceSession> {
       const scheme = profile.webdavScheme ?? (profile.port === 443 ? 'https' : 'http')
       const port = profile.port ?? (scheme === 'https' ? 443 : 80)
-      const cleanHost = profile.host.replace(/^https?:\/\//i, '')
+      const cleanHost = profile.host.trim().replace(/^https?:\/\//i, '')
       const authorization = authHeader(auth)
-
       const timeoutMs = profile.options.transferTimeoutMs
 
       function buildUrl(remotePath: string): string {
-        const path = normalizeRemotePath(remotePath).replace(/^\//, '')
-        return `${scheme}://${cleanHost}${port ? `:${port}` : ''}/${encodeURI(path)}`
+        let base: URL
+        try {
+          base = new URL(`${scheme}://${cleanHost}`)
+        } catch {
+          throw new NetworkSourceFailure('network', '网络地址不合法')
+        }
+        base.port = port ? String(port) : ''
+        base.pathname = encodeRemotePath(remotePath)
+        return base.toString()
       }
 
-      function perform(
+      function createRequest(
         method: string,
-        remotePath: string,
+        url: string,
         headers: Record<string, string>,
-        signal?: AbortSignal,
-        body?: string
+        signal: AbortSignal | undefined,
+        body: string | undefined,
+        includeAuth: boolean
       ): Promise<IncomingMessage> {
         return new Promise((resolve, reject) => {
-          const url = buildUrl(remotePath)
-          const requestFn = scheme === 'https' ? httpsRequest : httpRequest
-          const req = requestFn(
-            url,
-            {
-              method,
-              headers: { ...(authorization ? { Authorization: authorization } : {}), ...headers },
-              signal: mergeSignal(signal, timeoutMs)
-            },
-            (res) => resolve(res)
+          let requestFn: typeof httpRequest
+          try {
+            requestFn = new URL(url).protocol === 'https:' ? httpsRequest : httpRequest
+          } catch {
+            reject(new NetworkSourceFailure('network', '网络地址不合法'))
+            return
+          }
+          const finalHeaders: Record<string, string> = {
+            ...(includeAuth && authorization ? { Authorization: authorization } : {}),
+            ...headers
+          }
+          // PROPFIND 带 body；显式 Content-Length 兼容不接受 chunked 的旧服务端。
+          if (body !== undefined) {
+            finalHeaders['Content-Length'] = String(Buffer.byteLength(body, 'utf8'))
+          }
+          const req = requestFn(url, { method, headers: finalHeaders, signal }, (res) =>
+            resolve(res)
           )
+          // 空闲超时：socket 每次读写都会重置，因此只要持续有数据流动，
+          // 大文件下载不会被 transferTimeoutMs 整体掐断。
+          req.setTimeout(timeoutMs, () => {
+            req.destroy(new NetworkSourceFailure('timeout', '网络请求超时'))
+          })
           req.on('error', (err) => {
-            if ((err as NodeJS.ErrnoException).code === 'ABORT_ERR') {
+            if (err instanceof NetworkSourceFailure) {
+              reject(err)
+            } else if ((err as NodeJS.ErrnoException).code === 'ABORT_ERR') {
               reject(new NetworkSourceFailure('timeout', '网络请求超时'))
             } else {
               reject(new NetworkSourceFailure('network', `网络请求失败：${err.message}`))
             }
           })
-          if (body) req.write(body)
+          if (body !== undefined) req.write(body)
           req.end()
         })
       }
 
-      function throwForStatus(status: number | undefined, remotePath: string): void {
+      async function perform(
+        method: string,
+        remotePath: string,
+        headers: Record<string, string>,
+        signal?: AbortSignal,
+        body?: string
+      ): Promise<{ res: IncomingMessage; url: string }> {
+        let url = buildUrl(remotePath)
+        let currentMethod = method
+        let currentBody = body
+        let includeAuth = true
+        for (let redirect = 0; ; redirect += 1) {
+          const res = await createRequest(
+            currentMethod,
+            url,
+            headers,
+            signal,
+            currentBody,
+            includeAuth
+          )
+          const status = res.statusCode ?? 0
+          const location = res.headers.location
+          if (!location || !REDIRECT_STATUSES.has(status)) return { res, url }
+          // Drain the redirect body so the keep-alive socket can be reused.
+          res.resume()
+          if (redirect >= MAX_REDIRECTS) {
+            throw new NetworkSourceFailure('network', '远程服务器重定向次数过多')
+          }
+          let next: URL
+          try {
+            next = new URL(location, url)
+          } catch {
+            throw new NetworkSourceFailure('network', '远程服务器返回了无效的重定向地址')
+          }
+          // 跨源重定向不携带凭据，避免把口令泄露给第三方主机。
+          if (next.origin !== new URL(url).origin) includeAuth = false
+          if (status === 303) {
+            currentMethod = 'GET'
+            currentBody = undefined
+          }
+          url = next.toString()
+        }
+      }
+
+      /** 重定向后的有效路径，用于正确过滤自身条目（如补斜杠 301）。 */
+      function effectivePath(url: string, fallback: string): string {
+        try {
+          return hrefToPath(new URL(url).pathname) ?? normalizeRemotePath(fallback)
+        } catch {
+          return normalizeRemotePath(fallback)
+        }
+      }
+
+      function throwForStatus(res: IncomingMessage, remotePath: string): void {
+        const status = res.statusCode
         if (!status || (status >= 200 && status < 300)) return
+        // 消费/丢弃错误响应体，避免 keep-alive 连接被挂起的 body 卡住。
+        res.resume()
         if (status === 401) throw new NetworkSourceFailure('auth', '认证失败，请检查用户名或密码')
         if (status === 403) throw new NetworkSourceFailure('denied', '没有权限访问该目录')
         if (status === 404)
@@ -121,7 +264,7 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
 
       async function collectBody(
         res: IncomingMessage,
-        limitBytes = 8 * 1024 * 1024
+        limitBytes = DEFAULT_RESPONSE_LIMIT_BYTES
       ): Promise<string> {
         const chunks: Buffer[] = []
         let total = 0
@@ -141,15 +284,15 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
       ): NetworkEntry[] {
         const requested = normalizeRemotePath(requestedPath)
         return parseMultistatus(xml)
-          .filter((item) => includeSelf || normalizeRemotePath(item.href) !== requested)
+          .filter((item) => includeSelf || item.path !== requested)
           .map((item) => {
-            const path = normalizeRemotePath(item.href)
+            const name = nameOf(item.path)
             return {
-              id: buildNetworkEntryId(profile.protocol, profile.id, path),
+              id: buildNetworkEntryId(profile.protocol, profile.id, item.path),
               profileId: profile.id,
-              name: nameOf(path),
-              kind: entryKind(nameOf(path), { mime: item.mime, directory: item.directory }),
-              path,
+              name,
+              kind: entryKind(name, { mime: item.mime, directory: item.directory }),
+              path: item.path,
               sizeBytes: item.size,
               mtimeMs: item.mtimeMs,
               mimeType: item.mime
@@ -170,27 +313,27 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
       return {
         protocol: profile.protocol,
         async list(remotePath: string, signal?: AbortSignal): Promise<NetworkEntry[]> {
-          const res = await perform(
+          const { res, url } = await perform(
             'PROPFIND',
             remotePath,
             { Depth: '1', 'Content-Type': 'application/xml' },
             signal,
             propfindBody
           )
-          throwForStatus(res.statusCode, remotePath)
-          return entriesFromMultistatus(await collectBody(res), remotePath)
+          throwForStatus(res, remotePath)
+          return entriesFromMultistatus(await collectBody(res), effectivePath(url, remotePath))
         },
         async stat(remotePath: string, signal?: AbortSignal): Promise<NetworkEntry | null> {
-          const res = await perform(
+          const { res, url } = await perform(
             'PROPFIND',
             remotePath,
             { Depth: '0', 'Content-Type': 'application/xml' },
             signal,
             propfindBody
           )
-          throwForStatus(res.statusCode, remotePath)
-          const entries = entriesFromMultistatus(await collectBody(res), remotePath, true)
-          const requested = normalizeRemotePath(remotePath)
+          throwForStatus(res, remotePath)
+          const requested = effectivePath(url, remotePath)
+          const entries = entriesFromMultistatus(await collectBody(res), requested, true)
           return entries.find((entry) => entry.path === requested) ?? entries[0] ?? null
         },
         async readStream(
@@ -200,7 +343,7 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
         ): Promise<NodeJS.ReadableStream> {
           const headers: Record<string, string> =
             options?.start != null && options.start > 0 ? { Range: `bytes=${options.start}-` } : {}
-          const res = await perform('GET', remotePath, headers, signal)
+          const { res } = await perform('GET', remotePath, headers, signal)
           if (options?.start != null && options.start > 0) {
             const range = /^bytes (\d+)-(\d+)\/(\d+|\*)$/i.exec(res.headers['content-range'] ?? '')
             if (
@@ -213,7 +356,7 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
               throw new NetworkResumeUnsupported()
             }
           }
-          throwForStatus(res.statusCode, remotePath)
+          throwForStatus(res, remotePath)
           return res
         },
         async resolvePlaybackUrl(remotePath: string): Promise<string | null> {
