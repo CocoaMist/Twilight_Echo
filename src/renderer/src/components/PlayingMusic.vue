@@ -896,21 +896,45 @@ onBeforeUnmount(() => {
 
 .playback-view-enter-active,
 .playback-view-leave-active {
-  transition: opacity 80ms var(--te-ease-out-strong);
+  will-change: opacity, transform;
+}
+
+/*
+ * Cover/lyrics <-> native visualizer handoff. The outgoing surface lifts away
+ * while the incoming one rises into place, so the swap reads as a depth change
+ * instead of a hard cut. Both surfaces still end fully opaque at rest.
+ */
+.playback-view-enter-active {
+  transition:
+    opacity 220ms var(--te-ease-out-strong),
+    transform 280ms var(--te-ease-out-strong);
 }
 
 .playback-view-leave-active {
+  transition:
+    opacity 140ms var(--te-ease-out-strong),
+    transform 180ms var(--te-ease-out-strong);
   pointer-events: none;
 }
 
-.playback-view-enter-from,
+.playback-view-enter-from {
+  opacity: 0;
+  transform: translate3d(0, 16px, 0) scale(0.97);
+}
+
 .playback-view-leave-to {
   opacity: 0;
+  transform: translate3d(0, -12px, 0) scale(0.975);
 }
 
 html[data-te-motion='reduced'] .playback-view-enter-active,
 html[data-te-motion='reduced'] .playback-view-leave-active {
-  transition: opacity 60ms var(--te-ease-out-strong) !important;
+  transition: opacity 80ms var(--te-ease-out-strong) !important;
+}
+
+html[data-te-motion='reduced'] .playback-view-enter-from,
+html[data-te-motion='reduced'] .playback-view-leave-to {
+  transform: none;
 }
 
 .playing-music {
