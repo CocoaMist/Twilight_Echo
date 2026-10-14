@@ -450,7 +450,10 @@ test('the flat strips share one surface language, declared in exactly one place'
     playerBarCss,
     /--te-flat-bar-dark-lift:\s*color-mix\(in srgb, var\(--te-card-bg\) 95%, #fff 5%\)/
   )
-  assert.match(playerBarCss, /--te-flat-bar-glass-bg:\s*#141722/)
+  assert.match(
+    playerBarCss,
+    /--te-flat-bar-glass-bg:\s*var\(--te-playback-bar-flat-surface,\s*#141722\)/
+  )
   assert.match(playerBarCss, /--te-flat-bar-control:\s*rgba\(255, 255, 255, 0\.78\)/)
 })
 
