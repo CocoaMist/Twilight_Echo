@@ -156,3 +156,23 @@ test('WebDAV profiles preserve HTTPS selected by an entered URL', async () => {
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('profile update can change and explicitly clear an optional port', async () => {
+  const { dir, store } = await makeStore()
+  try {
+    const created = await store.createProfile(makeInput({ port: 8080 }))
+    assert.equal(created.port, 8080)
+
+    const changed = await store.updateProfile(created.id, { port: 9090 })
+    assert.equal(changed.port, 9090)
+
+    const cleared = await store.updateProfile(created.id, { port: null })
+    assert.equal(cleared.port, null)
+
+    const untouched = await store.updateProfile(created.id, { name: 'NAS 3' })
+    assert.equal(untouched.name, 'NAS 3')
+    assert.equal(untouched.port, null)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

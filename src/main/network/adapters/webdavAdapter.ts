@@ -1,6 +1,7 @@
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import type { IncomingMessage } from 'node:http'
+import { isIPv6 } from 'node:net'
 import { buildNetworkEntryId, normalizeRemotePath } from '../networkPath.ts'
 import { NetworkResumeUnsupported, NetworkSourceFailure } from '../errors.ts'
 import { entryKind } from '../entryKinds.ts'
@@ -109,8 +110,17 @@ function nameOf(path: string): string {
 }
 
 function authHeader(auth: NetworkAuth): string | undefined {
-  if (auth.kind !== 'password' || !auth.username || !auth.password) return undefined
-  return `Basic ${Buffer.from(`${auth.username}:${auth.password}`).toString('base64')}`
+  // 只要用户显式选择了口令认证就发送 Basic，即便口令为空；
+  // 空口令在部分服务端是合法配置，不能因为 falsy 而静默降级为匿名。
+  if (auth.kind !== 'password') return undefined
+  const username = auth.username ?? ''
+  return `Basic ${Buffer.from(`${username}:${auth.password}`).toString('base64')}`
+}
+
+/** IPv6 字面量必须加方括号，否则无法拼进 URL。 */
+function hostForUrl(host: string): string {
+  if (host.includes(':') && !host.startsWith('[') && isIPv6(host)) return `[${host}]`
+  return host
 }
 
 /**
@@ -134,8 +144,7 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
       auth: NetworkAuth
     ): Promise<NetworkSourceSession> {
       const scheme = profile.webdavScheme ?? (profile.port === 443 ? 'https' : 'http')
-      const port = profile.port ?? (scheme === 'https' ? 443 : 80)
-      const cleanHost = profile.host.trim().replace(/^https?:\/\//i, '')
+      const cleanHost = hostForUrl(profile.host.trim().replace(/^https?:\/\//i, ''))
       const authorization = authHeader(auth)
       const timeoutMs = profile.options.transferTimeoutMs
 
@@ -146,7 +155,9 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
         } catch {
           throw new NetworkSourceFailure('network', '网络地址不合法')
         }
-        base.port = port ? String(port) : ''
+        // 仅在显式配置了 port 时覆盖：否则保留 host 内嵌端口，
+        // 避免把 `nas:5001` 静默改写成协议默认端口。
+        if (profile.port != null) base.port = String(profile.port)
         base.pathname = encodeRemotePath(remotePath)
         return base.toString()
       }
@@ -160,13 +171,19 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
         includeAuth: boolean
       ): Promise<IncomingMessage> {
         return new Promise((resolve, reject) => {
-          let requestFn: typeof httpRequest
+          let parsed: URL
           try {
-            requestFn = new URL(url).protocol === 'https:' ? httpsRequest : httpRequest
+            parsed = new URL(url)
           } catch {
             reject(new NetworkSourceFailure('network', '网络地址不合法'))
             return
           }
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            reject(new NetworkSourceFailure('network', '远程服务器返回了不支持的重定向协议'))
+            return
+          }
+          const requestFn: typeof httpRequest =
+            parsed.protocol === 'https:' ? httpsRequest : httpRequest
           const finalHeaders: Record<string, string> = {
             ...(includeAuth && authorization ? { Authorization: authorization } : {}),
             ...headers
@@ -231,8 +248,12 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
           } catch {
             throw new NetworkSourceFailure('network', '远程服务器返回了无效的重定向地址')
           }
-          // 跨源重定向不携带凭据，避免把口令泄露给第三方主机。
-          if (next.origin !== new URL(url).origin) includeAuth = false
+          const current = new URL(url)
+          // 同主机同端口的 http→https 升级可继续带凭据；
+          // 主机/端口变化或降级到 http 时丢弃，避免凭据泄露或明文传输。
+          const hostUnchanged = next.host === current.host
+          const notDowngraded = next.protocol === 'https:' || current.protocol === 'http:'
+          if (!hostUnchanged || !notDowngraded) includeAuth = false
           if (status === 303) {
             currentMethod = 'GET'
             currentBody = undefined

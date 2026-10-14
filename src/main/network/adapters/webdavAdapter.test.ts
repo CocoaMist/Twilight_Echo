@@ -114,8 +114,10 @@ interface SeenRequest {
 
 let server: Server
 let otherServer: Server
+let ipv6Server: Server
 let basePort = 0
 let otherPort = 0
+let ipv6Port = 0
 const seen: SeenRequest[] = []
 const otherSeen: SeenRequest[] = []
 
@@ -249,17 +251,29 @@ test.before(async () => {
     res.writeHead(200, { 'Content-Type': 'application/xml' })
     res.end(MULTISTATUS)
   })
+  ipv6Server = createServer((req, res) => {
+    if (req.method === 'PROPFIND') {
+      res.writeHead(207, { 'Content-Type': 'application/xml' })
+      res.end(MULTISTATUS)
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   await new Promise<void>((resolve) => otherServer.listen(0, '127.0.0.1', resolve))
+  await new Promise<void>((resolve) => ipv6Server.listen(0, '::1', resolve))
   const address = server.address()
   const otherAddress = otherServer.address()
+  const ipv6Address = ipv6Server.address()
   if (address && typeof address === 'object') basePort = address.port
   if (otherAddress && typeof otherAddress === 'object') otherPort = otherAddress.port
+  if (ipv6Address && typeof ipv6Address === 'object') ipv6Port = ipv6Address.port
 })
 
 test.after(async () => {
   await Promise.all(
-    [server, otherServer].map(
+    [server, otherServer, ipv6Server].map(
       (item) =>
         new Promise<void>((resolve, reject) => item.close((err) => (err ? reject(err) : resolve())))
     )
@@ -453,5 +467,49 @@ test('webdav reports an idle timeout when the server never responds', async () =
       return true
     }
   )
+  await session.close()
+})
+
+test('webdav keeps a port embedded in the host when none is configured explicitly', async () => {
+  const session = await createWebDavAdapter().createSession(
+    makeProfile({ host: `127.0.0.1:${basePort}`, port: null }),
+    { kind: 'password', username: 'alice', password: 's3cret' }
+  )
+  const entries = await session.list('/music')
+  assert.deepEqual(entries.map((entry) => entry.path).sort(), ['/music/a.flac', '/music/album'])
+  await session.close()
+})
+
+test('webdav explicit port overrides a port embedded in the host', async () => {
+  const session = await createWebDavAdapter().createSession(
+    makeProfile({ host: '127.0.0.1:1', port: basePort }),
+    { kind: 'password', username: 'alice', password: 's3cret' }
+  )
+  const entries = await session.list('/music')
+  assert.equal(entries.length, 2)
+  await session.close()
+})
+
+test('webdav sends Basic auth for a password profile with an empty password', async () => {
+  seen.length = 0
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: ''
+  })
+  await assert.rejects(async () => session.list('/music'))
+  const request = seen.find((item) => item.method === 'PROPFIND')
+  assert.ok(request)
+  assert.equal(request.authorization, `Basic ${Buffer.from('alice:').toString('base64')}`)
+  await session.close()
+})
+
+test('webdav connects to an IPv6 host literal', async () => {
+  const session = await createWebDavAdapter().createSession(
+    makeProfile({ host: '::1', port: ipv6Port }),
+    { kind: 'anonymous' }
+  )
+  const entries = await session.list('/music')
+  assert.equal(entries.length, 2)
   await session.close()
 })

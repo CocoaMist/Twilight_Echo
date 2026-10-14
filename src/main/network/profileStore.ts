@@ -337,7 +337,7 @@ export function createNetworkProfileStore(deps: {
         protocol: patch.protocol ?? profile.protocol,
         name: patch.name ?? profile.name,
         host: patch.host ?? profile.host,
-        port: patch.port ?? profile.port,
+        port: patch.port === undefined ? profile.port : patch.port,
         rootPath: patch.rootPath ?? profile.rootPath,
         webdavScheme: patch.webdavScheme ?? profile.webdavScheme,
         username: patch.username === undefined ? profile.username : patch.username,
