@@ -563,3 +563,13 @@ test('webdav connects to an IPv6 host literal', async () => {
   assert.equal(entries.length, 2)
   await session.close()
 })
+
+test('webdav drops a stray query or fragment from the configured host', async () => {
+  const session = await createWebDavAdapter().createSession(
+    makeProfile({ host: `127.0.0.1:${basePort}?x=1#frag`, port: null }),
+    { kind: 'password', username: 'alice', password: 's3cret' }
+  )
+  const entries = await session.list('/music')
+  assert.equal(entries.length, 2)
+  await session.close()
+})

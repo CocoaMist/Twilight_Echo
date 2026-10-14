@@ -176,3 +176,27 @@ test('profile update can change and explicitly clear an optional port', async ()
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('webdav port 443 implies HTTPS unless the entered URL says otherwise', async () => {
+  const { dir, store } = await makeStore()
+  try {
+    assert.equal(
+      (await store.createProfile(makeInput({ host: 'nas.local', port: 443 }))).webdavScheme,
+      'https'
+    )
+    assert.equal(
+      (await store.createProfile(makeInput({ host: 'nas.local', port: 80 }))).webdavScheme,
+      'http'
+    )
+    assert.equal(
+      (await store.createProfile(makeInput({ host: 'http://nas.local', port: 443 }))).webdavScheme,
+      'http'
+    )
+    assert.equal(
+      (await store.createProfile(makeInput({ host: 'https://nas.local', port: 80 }))).webdavScheme,
+      'https'
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

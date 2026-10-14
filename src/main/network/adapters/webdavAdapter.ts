@@ -168,7 +168,10 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
         // 仅在显式配置了 port 时覆盖：否则保留 host 内嵌端口，
         // 避免把 `nas:5001` 静默改写成协议默认端口。
         if (profile.port != null) base.port = String(profile.port)
+        // host 里误带的路径/查询/片段不应进入每个请求的 URL。
         base.pathname = encodeRemotePath(remotePath)
+        base.search = ''
+        base.hash = ''
         return base.toString()
       }
 
