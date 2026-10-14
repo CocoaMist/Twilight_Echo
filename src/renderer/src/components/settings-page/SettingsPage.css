@@ -1876,6 +1876,15 @@ html[data-theme='dark'] .theme-segment button.active {
   font-weight: 650;
 }
 
+#dsp {
+  margin-top: 28px;
+  container-type: inline-size;
+}
+
+#dsp > .section-title-row h3 {
+  margin: 0;
+}
+
 .dsp-status-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1903,13 +1912,15 @@ html[data-theme='dark'] .theme-segment button.active {
 }
 
 .dsp-meter strong {
-  color: #1f2937;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--te-settings-text, #1f2937);
   font-size: calc(var(--te-font-size-body, 14px) * 1.14286);
   font-weight: 650;
 }
 
 .dsp-meter small {
-  color: #6b7280;
+  color: var(--te-settings-text-muted, #6b7280);
   font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
   font-weight: 600;
 }
@@ -3717,17 +3728,18 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
   flex-shrink: 0;
 }
 
-/* ── DSP 信号流可视化链路�?── */
+/* DSP signal connectors align with the circles, independent of label height. */
 .dsp-signal-chain {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  --dsp-node-size: 44px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr) minmax(12px, 0.8fr)) minmax(0, 1fr);
+  align-items: start;
   gap: 0;
   margin-bottom: 24px;
   padding: 24px 16px;
-  border: 1px solid rgba(229, 231, 235, 0.8);
+  border: 1px solid var(--te-settings-control-border, rgba(229, 231, 235, 0.8));
   border-radius: 16px;
-  background: rgba(249, 250, 251, 0.5);
+  background: color-mix(in srgb, var(--te-settings-text, #1f2937) 2%, transparent);
 }
 
 .signal-node {
@@ -3735,11 +3747,13 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  text-align: center;
   cursor: pointer;
   transition:
     opacity var(--te-motion-panel) var(--te-ease-soft),
     scale var(--te-motion-hover) var(--te-ease-soft);
-  opacity: 0.45;
+  opacity: 1;
 }
 
 .signal-node.static {
@@ -3753,8 +3767,10 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
 .signal-node-circle {
   position: relative;
   display: flex;
-  width: 44px;
-  height: 44px;
+  width: var(--dsp-node-size);
+  height: var(--dsp-node-size);
+  box-sizing: border-box;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   border: 2px dashed #d1d5db;
@@ -3770,11 +3786,11 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
 .signal-node-circle.active {
   border: 2px solid var(--brand-500);
   box-shadow: 0 0 15px rgba(var(--te-primary-rgb), 0.15);
-  background: var(--brand-50);
+  background: color-mix(in srgb, var(--brand-500) 10%, var(--te-card-bg));
 }
 
 .signal-node-circle i {
-  color: #9ca3af;
+  color: var(--te-settings-text-muted, #6b7280);
   font-size: calc(var(--te-font-size-body, 14px) * 1.28571);
   transition: color 0.3s ease;
 }
@@ -3784,7 +3800,7 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
 }
 
 .signal-node-label {
-  color: #9ca3af;
+  color: var(--te-settings-text-muted, #6b7280);
   font-size: calc(var(--te-font-size-body, 14px) * 0.64286);
   font-weight: 650;
   letter-spacing: 0.2em;
@@ -3796,24 +3812,45 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
 }
 
 .signal-node-name {
-  color: #6b7280;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--te-settings-text-muted, #6b7280);
   font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
   font-weight: 650;
   letter-spacing: 0.05em;
 }
 
 .signal-node.active .signal-node-name {
-  color: #1f2937;
+  color: var(--te-settings-text, #1f2937);
 }
 
 .signal-line {
   position: relative;
   overflow: hidden;
-  flex: 1;
+  margin-top: calc(var(--dsp-node-size) / 2 - 1px);
   height: 2px;
-  min-width: 20px;
+  min-width: 0;
+  box-sizing: border-box;
   border-bottom: 2px dashed #d1d5db;
   transition: border-color 0.3s var(--te-ease-soft);
+}
+
+@container (max-width: 520px) {
+  .dsp-signal-chain {
+    --dsp-node-size: 36px;
+    grid-template-columns: repeat(4, minmax(0, 1fr) 12px) minmax(0, 1fr);
+    padding: 20px 8px;
+  }
+
+  .signal-node-label,
+  .signal-node-name {
+    letter-spacing: 0;
+    font-size: calc(var(--te-font-size-body, 14px) * 0.64286);
+  }
+
+  .dsp-status-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .signal-line.active {

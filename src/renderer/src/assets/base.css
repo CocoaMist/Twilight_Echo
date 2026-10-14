@@ -209,7 +209,7 @@
   --te-library-action-bg: rgba(37, 99, 235, 0.08);
   --te-library-action-radius: 12px;
   --te-playback-cover-size: 100%;
-  --te-artwork-list-radius: 12px;
+  --te-artwork-list-radius: 6px;
   --te-player-control-size: 32px;
   --te-player-play-size: 44px;
   --te-player-control-gap: 12px;
