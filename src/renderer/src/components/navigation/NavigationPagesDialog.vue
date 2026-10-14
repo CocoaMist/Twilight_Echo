@@ -82,6 +82,9 @@ function isBackdrop(event: MouseEvent): boolean {
     event.clientY > bounds.bottom
   )
 }
+function onBackdropPointerDown(event: PointerEvent): void {
+  backdropPressed = isBackdrop(event)
+}
 function onBackdropClick(event: MouseEvent): void {
   if (backdropPressed && isBackdrop(event)) close()
   backdropPressed = false
@@ -95,7 +98,7 @@ useEscapeToClose(() => !busy.value, close)
     class="navigation-pages-dialog"
     aria-labelledby="navigation-pages-title"
     @cancel.prevent="close"
-    @pointerdown="backdropPressed = isBackdrop($event)"
+    @pointerdown="onBackdropPointerDown"
     @click="onBackdropClick"
   >
     <header>
