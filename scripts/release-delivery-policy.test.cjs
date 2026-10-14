@@ -4,12 +4,109 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
+const { createMinimalPe } = require('./pe-fixture.cjs')
+const { NATIVE_RUNTIME_FILES } = require('./release-artifact-strip.cjs')
+const { preparePackagedAudioStaging } = require('./packaged-audio-staging.cjs')
 
 const root = path.resolve(__dirname, '..')
 
 function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8')
 }
+
+test('packaging overlays an isolated fresh engine and dependencies while preserving live files and bundled assets', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'twilight-isolated-package-'))
+  const liveDir = path.join(directory, 'resources', 'audio-engine')
+  const isolatedDir = path.join(directory, 'fresh')
+  fs.mkdirSync(liveDir, { recursive: true })
+  fs.mkdirSync(isolatedDir)
+  fs.writeFileSync(
+    path.join(directory, 'electron-builder.yml'),
+    'extraResources:\n  - from: resources/audio-engine\n'
+  )
+  for (const name of [
+    ...NATIVE_RUNTIME_FILES,
+    'msvcp140.dll',
+    'vcruntime140.dll',
+    'vcruntime140_1.dll'
+  ]) {
+    fs.writeFileSync(path.join(liveDir, name), createMinimalPe({ trailer: 'live-' + name }))
+  }
+  fs.mkdirSync(path.join(liveDir, 'automix-native'))
+  fs.writeFileSync(path.join(liveDir, 'automix-native', 'manifest.json'), '{"preserved":true}')
+  const freshCore = createMinimalPe({ imports: ['fresh-runtime.dll'], trailer: 'fresh-core' })
+  fs.writeFileSync(path.join(isolatedDir, 'twilight-audio-engine.dll'), freshCore)
+  fs.writeFileSync(
+    path.join(isolatedDir, 'twilight_audio_node.node'),
+    createMinimalPe({ trailer: 'fresh-addon' })
+  )
+  fs.writeFileSync(path.join(isolatedDir, 'fresh-runtime.dll'), createMinimalPe())
+  const smtcOverride = path.join(directory, 'fresh-smtc.node')
+  fs.writeFileSync(smtcOverride, createMinimalPe({ trailer: 'smtc-override' }))
+  let staging
+  try {
+    staging = preparePackagedAudioStaging(directory, {
+      environment: { TAE_AUDIO_ENGINE_STAGE_DIR: isolatedDir },
+      nativeOverrides: { 'twilight_smtc_node.node': smtcOverride },
+      stripNativeFile: () => undefined,
+      observeRuntime: () => null
+    })
+    const packagedDir = path.join(path.dirname(staging.configPath), 'audio-engine')
+    assert.deepEqual(
+      fs.readFileSync(path.join(packagedDir, 'twilight-audio-engine.dll')),
+      freshCore
+    )
+    assert.deepEqual(
+      fs.readFileSync(path.join(packagedDir, 'twilight_smtc_node.node')),
+      fs.readFileSync(smtcOverride)
+    )
+    assert.ok(fs.existsSync(path.join(packagedDir, 'fresh-runtime.dll')))
+    assert.equal(
+      fs.readFileSync(path.join(packagedDir, 'automix-native', 'manifest.json'), 'utf8'),
+      '{"preserved":true}'
+    )
+    assert.deepEqual(
+      fs.readFileSync(path.join(liveDir, 'twilight-audio-engine.dll')),
+      createMinimalPe({ trailer: 'live-twilight-audio-engine.dll' })
+    )
+    assert.deepEqual(
+      fs.readFileSync(path.join(isolatedDir, 'twilight-audio-engine.dll')),
+      freshCore
+    )
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(packagedDir, 'audio-capabilities.json'), 'utf8')
+    )
+    assert.ok(
+      JSON.stringify(manifest).includes(createHash('sha256').update(freshCore).digest('hex'))
+    )
+  } finally {
+    staging?.dispose()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('an incomplete isolated engine cannot silently package an older live engine', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'twilight-incomplete-package-'))
+  try {
+    assert.throws(
+      () =>
+        preparePackagedAudioStaging(directory, {
+          environment: { TAE_AUDIO_ENGINE_STAGE_DIR: directory }
+        }),
+      /Isolated audio staging is missing twilight-audio-engine\.dll/
+    )
+    fs.writeFileSync(path.join(directory, 'twilight-audio-engine.dll'), createMinimalPe())
+    assert.throws(
+      () =>
+        preparePackagedAudioStaging(directory, {
+          environment: { TAE_AUDIO_ENGINE_STAGE_DIR: directory }
+        }),
+      /Isolated audio staging is missing twilight_audio_node\.node/
+    )
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
 
 test('release configuration is intentionally unsigned and does not advertise a placeholder updater', () => {
   const builder = read('electron-builder.yml')

@@ -30,7 +30,7 @@ export class NativeQueueRevisionFence {
 export interface RevisionedNativeQueueSync<T> {
   prepare: () => Promise<T | null>
   loadQueue: (prepared: T) => Promise<void>
-  setPlayMode: () => Promise<void>
+  setPlayMode: (prepared: T) => Promise<void>
 }
 
 export interface RevisionedNativeQueueResult<T> {
@@ -68,6 +68,6 @@ export async function synchronizeLatestNativeQueue<T>(
   }
   if (!loadResult.applied) return { applied: false, prepared: null }
 
-  const modeResult = await fence.runLatest(revision, sync.setPlayMode)
+  const modeResult = await fence.runLatest(revision, () => sync.setPlayMode(prepared))
   return modeResult.applied ? { applied: true, prepared } : { applied: false, prepared: null }
 }

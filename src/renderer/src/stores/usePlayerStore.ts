@@ -35,10 +35,7 @@ import {
 } from '../../../shared/dspGraph.ts'
 import { extractDominantColor } from '../utils/colorExtractor'
 import { resolveCover } from '../utils/coverLoader'
-import {
-  mergeAutoMixPlaybackInfo,
-  normalizeNativePlaybackInfo
-} from '../utils/playerPlaybackInfo.ts'
+import { normalizeNativePlaybackInfo } from '../utils/playerPlaybackInfo.ts'
 import { normalizeOutputConfig } from '../../../shared/audioOutputConfig.ts'
 import { clampSoftwareVolume, cloneAudioProcessingSettings } from '../utils/playerAudioSettings.ts'
 import {
@@ -65,7 +62,9 @@ import {
 } from '../utils/playbackRouting'
 import {
   NCM_STREAM_URL_MAX_AGE_MS,
+  isAuthorizedRemoteUrl,
   preparePlayerNativeQueue,
+  preparedNativePlayMode,
   stripStaleNcmStreamUrls
 } from '../utils/nativeQueuePreparation.ts'
 import {
@@ -112,7 +111,6 @@ import { ipcError, parseAppError } from '../../../shared/errors/appError.ts'
 import { translate } from '../../../shared/i18n/translate.ts'
 import { currentLocale } from '../app/useLocale.ts'
 import type { LyricSource } from '../../../shared/lyricsManagement.ts'
-import { toNativePlayMode } from '../../../shared/playbackModes.ts'
 import { createPlayerSleepTimer } from './player/usePlayerSleepTimer.ts'
 import { useAppNoticeStore, type AppNoticeKind } from './useAppNoticeStore'
 import { claimRendererRuntime } from './playerRuntimeOwnership.ts'
@@ -363,9 +361,6 @@ const {
   applyAudioOutputState,
   refreshAudioOutputState
 } = createAudioOutputState({
-  applyPlaybackSettingsStatus: (info) => {
-    playbackInfo.value = mergeAutoMixPlaybackInfo(playbackInfo.value, info)
-  },
   audioProcessing,
   dspOutputStage,
   dspStereoImage,
@@ -419,13 +414,22 @@ function pruneNativeSourceToTrackId(
 }
 
 // —— 8.4 NCM 下一曲播放地址预取 ——
-// 触发点：播放进度 ≥70% 或「next 意图」（曲目激活切换）。只预取 1 首、并发 1；
+// 启动、原生切曲和队列编辑时立即准备下一首，播放进度 ≥70% 时重试。并发 1；
 // 预取地址仅在 NCM_STREAM_URL_MAX_AGE_MS（10min）窗口内被原生队列携带——短于
 // CDN 链接有效期，也尊重 twilight-media grant 的 30min 空闲 TTL。
 const NCM_PREFETCH_TRIGGER_PROGRESS = 0.7
 const MAX_NCM_STREAM_URL_RECORDS = 64
 const ncmStreamUrlCommittedAt = new Map<string, number>()
 let ncmPrefetchInFlightTrackId = ''
+let ncmPrefetchGeneration = 0
+let ncmPrefetchRetryAfter = 0
+let ncmPrefetchRetryKey = ''
+let ncmPrefetchLastSyncedKey = ''
+
+function getNcmPrefetchScope(): string {
+  const ncm = useNcmStore()
+  return `${ncm.isLoggedIn.value}:${ncm.profile.value?.userId ?? ''}:${appSettings.value.ncmPlaybackQuality}`
+}
 
 function rememberNcmStreamUrlCommit(trackId: string): void {
   ncmStreamUrlCommittedAt.delete(trackId)
@@ -449,31 +453,92 @@ function findUpcomingQueueTrack(): Track | null {
 }
 
 async function prefetchUpcomingNcmStream(): Promise<void> {
+  if (!nativePlaybackActive || isLoading.value || !isPlaying.value || castTargetUsn.value) return
   const upcoming = findUpcomingQueueTrack()
   if (!upcoming || getTrackSource(upcoming) !== 'ncm') return
   const trackId = upcoming.id
   if (ncmPrefetchInFlightTrackId) return
   const committedAt = ncmStreamUrlCommittedAt.get(trackId)
-  if (committedAt != null && Date.now() - committedAt < NCM_STREAM_URL_MAX_AGE_MS) return
+  const quality = appSettings.value.ncmPlaybackQuality
+  const scope = getNcmPrefetchScope()
+  const retryKey = `${activeLoadToken}:${scope}:${playMode.value}:${queueIndex.value}:${currentTrack.value?.queueEntryId}:${upcoming.queueEntryId ?? trackId}`
+  const generation = ncmPrefetchGeneration
+  const loadToken = activeLoadToken
+  const currentUpcoming = (): Track | null => {
+    const latest = findUpcomingQueueTrack()
+    return generation === ncmPrefetchGeneration &&
+      loadToken === activeLoadToken &&
+      scope === getNcmPrefetchScope() &&
+      nativePlaybackActive &&
+      latest?.id === trackId &&
+      latest.queueEntryId === upcoming.queueEntryId
+      ? latest
+      : null
+  }
+  let attempted = false
+  let succeeded = false
   ncmPrefetchInFlightTrackId = trackId
   try {
+    if (
+      upcoming.streamUrl &&
+      upcoming.streamQuality === quality &&
+      committedAt != null &&
+      Date.now() - committedAt < NCM_STREAM_URL_MAX_AGE_MS &&
+      (isAuthorizedRemoteUrl(upcoming.streamUrl) ||
+        (await isUsableLocalPlaybackFile(upcoming.streamUrl)))
+    ) {
+      if (
+        currentUpcoming() &&
+        nativeQueueLoader.hasWindow() &&
+        ncmPrefetchLastSyncedKey !== retryKey
+      ) {
+        await queueNativeQueueStateSync()
+        ncmPrefetchLastSyncedKey = retryKey
+      }
+      return
+    }
+    if (retryKey === ncmPrefetchRetryKey && Date.now() < ncmPrefetchRetryAfter) return
+    attempted = true
     await syncPluginProviders()
     const resolved = await useMediaProviders().resolvePlaybackUrl(upcoming, {
-      quality: appSettings.value.ncmPlaybackQuality
+      quality
     })
     if (!resolved) return
-    // 迟到守卫：解析期间目标已不再是「下一首」时丢弃结果，绝不写共享轨状态。
-    const stillUpcoming = findUpcomingQueueTrack()
-    if (!stillUpcoming || stillUpcoming.id !== trackId) return
-    if (/^https?:\/\//i.test(resolved)) {
-      stillUpcoming.streamUrl = resolved
-    }
-    // 有结果（含 provider 磁盘缓存命中）即视为已预热：下次解析即时返回。
+    if (
+      !isAuthorizedRemoteUrl(resolved) &&
+      (!isLikelyLocalFilePath(resolved) || !(await isUsableLocalPlaybackFile(resolved)))
+    )
+      return
+    // Resolution and cache authorization may outlive queue/account/quality changes.
+    const stillUpcoming = currentUpcoming()
+    if (!stillUpcoming) return
+    stillUpcoming.streamUrl = resolved
+    stillUpcoming.streamQuality = quality
+    patchTrackInQueues(stillUpcoming)
     rememberNcmStreamUrlCommit(trackId)
+    await queueNativeQueueStateSync()
+    ncmPrefetchLastSyncedKey = retryKey
+    succeeded = true
   } catch {
-    // 预取失败静默：切曲时走正常解析与错误提示链路。
+    // Normal playback remains the fallback; do not hammer the provider on every tick.
+    ncmStreamUrlCommittedAt.delete(trackId)
+    ncmPrefetchLastSyncedKey = ''
   } finally {
+    if (attempted && !succeeded) {
+      ncmPrefetchRetryAfter = Date.now() + 5_000
+      ncmPrefetchRetryKey = retryKey
+    }
     if (ncmPrefetchInFlightTrackId === trackId) ncmPrefetchInFlightTrackId = ''
+    if (
+      generation !== ncmPrefetchGeneration ||
+      loadToken !== activeLoadToken ||
+      scope !== getNcmPrefetchScope() ||
+      findUpcomingQueueTrack()?.queueEntryId !== upcoming.queueEntryId ||
+      findUpcomingQueueTrack()?.id !== trackId
+    ) {
+      ncmPrefetchRetryAfter = 0
+      void prefetchUpcomingNcmStream()
+    }
   }
 }
 
@@ -557,7 +622,7 @@ function markNativePlaybackInfoIntentConfirmed(now = getNowMs()): void {
   if (!intent || intent.confirmedAt !== null) return
   intent.confirmedAt = now
   // Bound the guard to this confirmation. Extending it on every playing tick
-  // also rejects legitimate native AutoMix/gapless advances later in the song.
+  // also rejects legitimate native gapless advances later in the song.
   intent.expiresAt = Math.max(
     intent.expiresAt,
     now + NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
@@ -1195,6 +1260,9 @@ function patchTrackInQueues(updatedTrack: Track): void {
 }
 
 function findTrackIndexFromPlaybackInfo(info: NativePlaybackInfo): number {
+  const logicalIndex =
+    playMode.value !== 'heart' ? nativeQueueLoader.findLogicalIndex(info, queue.value) : -1
+  if (logicalIndex >= 0) return logicalIndex
   const mappedTrackId =
     typeof info.source === 'string' && info.source.length > 0
       ? nativeSourceToTrackId.get(info.source)
@@ -1424,7 +1492,6 @@ async function syncNativeQueueState(snapshot: NativeQueueStateSnapshot): Promise
     return
   }
 
-  const nativePlayMode = toNativePlayMode(snapshot.playMode)
   const heartModeActive = snapshot.playMode === 'heart'
   const synchronized = await synchronizeLatestNativeQueue(
     nativeQueueRevisionFence,
@@ -1436,11 +1503,13 @@ async function syncNativeQueueState(snapshot: NativeQueueStateSnapshot): Promise
             // 心动模式由渲染层管理智能列表与边界续播，原生引擎只加载当前曲目，
             // 避免原生引擎在列表耗尽时静默停止而无法触发渲染层补拉。
             queue: stripStaleNcmStreamUrls(heartModeActive ? [current] : snapshot.queue, {
-              committedAtByTrackId: ncmStreamUrlCommittedAt
+              committedAtByTrackId: ncmStreamUrlCommittedAt,
+              quality: appSettings.value.ncmPlaybackQuality
             }),
             currentTrack: current,
             currentTarget: getTrackAudioSource(current),
-            currentIndex: heartModeActive ? 0 : snapshot.currentIndex
+            currentIndex: heartModeActive ? 0 : snapshot.currentIndex,
+            playMode: snapshot.playMode
           },
           {
             isAudioFileAuthorized: window.api.fs.isAudioFileAuthorized,
@@ -1448,8 +1517,9 @@ async function syncNativeQueueState(snapshot: NativeQueueStateSnapshot): Promise
           }
         ),
       loadQueue: (preparedQueue) =>
-        nativeQueueLoader.loadPrepared(preparedQueue, window.api.audioEngine),
-      setPlayMode: () => window.api.audioEngine.setPlayMode(nativePlayMode)
+        nativeQueueLoader.loadPrepared(preparedQueue, window.api.audioEngine, snapshot.queue),
+      setPlayMode: (preparedQueue) =>
+        window.api.audioEngine.setPlayMode(preparedNativePlayMode(preparedQueue, snapshot.playMode))
     }
   )
   if (!synchronized.applied) return
@@ -1458,6 +1528,7 @@ async function syncNativeQueueState(snapshot: NativeQueueStateSnapshot): Promise
       '[audio-engine] Native queue resynchronization failed:',
       synchronized.loadQueueError
     )
+    throw synchronized.loadQueueError
   }
   const preparedQueue = synchronized.prepared
   if (preparedQueue) pruneNativeSourceToTrackId(preparedQueue.items, getTrackAudioSource(current))
@@ -1472,11 +1543,12 @@ async function syncNativeQueueState(snapshot: NativeQueueStateSnapshot): Promise
 
 function trackNativeQueueSyncRequest(request: Promise<void>): Promise<void> {
   nativeQueueSyncRequest = request
-  void request.finally(() => {
+  const clearRequest = (): void => {
     if (nativeQueueSyncRequest === request) {
       nativeQueueSyncRequest = null
     }
-  })
+  }
+  void request.then(clearRequest, clearRequest)
   return request
 }
 
@@ -1491,11 +1563,10 @@ function queueNativeQueueStateSync(): Promise<void> {
 }
 
 function queueNativePlayModeSync(mode: PlayMode): Promise<void> {
-  const nativePlayMode = toNativePlayMode(mode)
   const previousRequest = nativeQueueSyncRequest
   const request = (previousRequest ?? Promise.resolve())
     .catch(() => {})
-    .then(() => window.api.audioEngine.setPlayMode(nativePlayMode))
+    .then(() => window.api.audioEngine.setPlayMode(nativeQueueLoader.playMode(mode)))
   return trackNativeQueueSyncRequest(request)
 }
 
@@ -2562,8 +2633,7 @@ function setupAudioEngineListeners(): void {
       advancingFromEndedTrackId = ''
       autoAdvanceInFlight = false
       // Only identity-bearing playback-info can start a native track clock.
-      // AutoMix has already played part of the incoming track before start-file;
-      // resetting to zero here discards its confirmed continuation position.
+      // Resetting to zero here discards the confirmed position of the incoming track.
       // loadAndPlay anchors explicit starts before issuing the native command.
       pendingLoadStartTime = 0
       isLoading.value = false
@@ -2965,11 +3035,13 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
           {
             // 心动模式：渲染层自行驱动切歌与补拉，原生引擎只加载当前曲目。
             queue: stripStaleNcmStreamUrls(playMode.value === 'heart' ? [track] : queue.value, {
-              committedAtByTrackId: ncmStreamUrlCommittedAt
+              committedAtByTrackId: ncmStreamUrlCommittedAt,
+              quality: appSettings.value.ncmPlaybackQuality
             }),
             currentTrack: track,
             currentTarget: playTarget,
             currentIndex: playMode.value === 'heart' ? 0 : queueIndex.value,
+            playMode: playMode.value,
             isCurrent: () => isActiveLoad(loadToken, track)
           },
           {
@@ -3004,7 +3076,7 @@ async function loadAndPlay(track: Track, startTime = 0): Promise<void> {
         // 心动模式由渲染层驱动切歌与补拉，原生队列不代管边界。
         if (playMode.value === 'heart') nativeQueueDelegated = false
 
-        const nativePlayMode = toNativePlayMode(playMode.value)
+        const nativePlayMode = preparedNativePlayMode(preparedQueue, playMode.value)
         await window.api.audioEngine.setPlayMode(nativePlayMode)
         if (!isActiveLoad(loadToken, track)) {
           releaseLoadIfOwned()
@@ -3415,20 +3487,47 @@ function setupPlayerIntegrationSideEffects(): void {
     playbackHistoryController.flushPodcastEpisodeProgress(false)
   })
 
-  // 8.4：播放后段（≥70%）预解析下一首网易云地址；窗口内的地址由原生队列直接
-  // 携带，切曲时 provider 命中磁盘/TTL 缓存即时返回，消除现场解析往返。
+  // Retry failed/expired next-track preparation in the latter part of playback.
   watch([currentTime, duration], ([time, total]) => {
     if (!isPlaying.value || !Number.isFinite(total) || total <= 0) return
     if (time / total < NCM_PREFETCH_TRIGGER_PROGRESS) return
     void prefetchUpcomingNcmStream()
   })
 
-  // 「next 意图」：曲目完成激活切换即预取再下一首（窗口内去重，零额外请求）。
+  // Prepare immediately after native startup/handoff, including queue edits.
   watch(
-    () => currentTrack.value?.id,
+    [
+      () => currentTrack.value?.queueEntryId ?? currentTrack.value?.id,
+      queueIndex,
+      queue,
+      isPlaying,
+      isLoading
+    ],
     () => {
       if (isPlaying.value) void prefetchUpcomingNcmStream()
     }
+  )
+
+  watch(
+    getNcmPrefetchScope,
+    () => {
+      ncmPrefetchGeneration += 1
+      ncmPrefetchRetryAfter = 0
+      ncmPrefetchLastSyncedKey = ''
+      ncmStreamUrlCommittedAt.clear()
+      const clearNcmTarget = (track: Track): Track =>
+        getTrackSource(track) === 'ncm'
+          ? { ...track, streamUrl: null, streamQuality: undefined }
+          : track
+      queue.value = queue.value.map(clearNcmTarget)
+      originalQueue.value = originalQueue.value.map(clearNcmTarget)
+      if (nativePlaybackActive) {
+        void queueNativeQueueStateSync()
+          .then(prefetchUpcomingNcmStream)
+          .catch(() => {})
+      }
+    },
+    { flush: 'sync' }
   )
 
   watch(
@@ -3519,8 +3618,12 @@ function setPlayModeInternal(mode: PlayMode, options: { persist?: boolean } = {}
       console.error('[音频引擎] 保存播放模式失败:', err)
     })
   }
-  if (!castTargetUsn.value && nativePlaybackActive && isNativeQueueDelegated()) {
-    // A delegated engine has already preloaded its next item, so a later renderer
+  if (
+    !castTargetUsn.value &&
+    nativePlaybackActive &&
+    (isNativeQueueDelegated() || nativeQueueLoader.hasWindow())
+  ) {
+    // A delegated engine or window has already preloaded its next item, so a later renderer
     // boundary can no longer influence what plays next: the pending reorder would
     // never take effect and shuffle would keep playing in plain queue order.
     // Apply it now and resync the whole queue instead. The active track stays at

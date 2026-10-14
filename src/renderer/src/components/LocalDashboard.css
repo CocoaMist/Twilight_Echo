@@ -603,101 +603,167 @@
 }
 
 .hero-actions {
-  display: grid;
-  grid-template-columns:
-    calc(var(--te-player-play-size, 44px) * 12 / 11)
-    calc(var(--te-player-play-size, 44px) * 21 / 11)
-    calc(var(--te-player-play-size, 44px) * 12 / 11);
-  width: min(100%, 480px);
-  justify-content: center;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  margin-top: 22px;
-  min-height: calc(var(--te-player-play-size, 44px) * 12 / 11);
+  margin-top: 28px;
+  max-width: 100%;
 }
 
-.hero-actions .transport-button:first-child:not(.transport-play) {
-  grid-column: 1;
-  grid-row: 1;
+.hero-actions.is-current {
+  width: min(100%, 460px);
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 20px;
+  margin-top: 20px;
 }
 
-.hero-actions .transport-play {
-  grid-column: 2;
-  grid-row: 1;
+.hero-actions.is-current .transport-button:not(.transport-play) {
+  color: color-mix(in srgb, var(--home-ink) 76%, transparent);
 }
 
-.hero-actions .transport-button:last-child:not(.transport-play) {
-  grid-column: 3;
-  grid-row: 1;
+.hero-actions.is-current .transport-button .playback-icon {
+  width: 22px;
+  height: 22px;
 }
 
 .transport-button {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: calc(var(--te-player-play-size, 44px) * 12 / 11);
-  height: calc(var(--te-player-play-size, 44px) * 12 / 11);
-  border: 0;
-  border-radius: 999px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
   background: transparent;
-  font-size: calc(var(--te-font-size-body, 14px) * 17 / 14);
+  font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
   color: var(--home-ink);
   cursor: pointer;
   transition:
     transform var(--te-motion-hover) var(--te-ease-soft),
     background var(--te-motion-hover),
-    border-color var(--te-motion-hover);
+    color var(--te-motion-hover);
 }
 
-.transport-button:hover {
-  background: var(--home-hover);
-}
-
-.transport-button:active {
+.transport-button:active:not(:focus-visible) {
   transform: scale(var(--te-motion-press-scale));
 }
 
-/* The same quiet capsule as the standard bar, including explicit theme colors. */
+/* Align transport with the seek bar; use the accent to give play a clear focus. */
 .home .transport-button.transport-play {
-  width: calc(var(--te-player-play-size, 44px) * 21 / 11);
-  height: calc(var(--te-player-play-size, 44px) * 12 / 11);
+  width: 58px;
+  height: 50px;
   border: none;
+  border-radius: 18px;
   font-size: calc(var(--te-font-size-body, 14px) * 20 / 14);
-  color: var(--te-player-bar-play-text, var(--te-transport-play-text));
+  color: var(--te-player-bar-play-text, var(--home-card));
   -webkit-text-fill-color: currentColor;
-  background: var(--te-player-bar-play-surface, var(--te-transport-play-surface));
+  background: var(
+    --te-player-bar-play-surface,
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--home-accent) 82%, var(--home-card)),
+      color-mix(in srgb, var(--home-accent) 90%, var(--home-ink))
+    )
+  );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--home-card) 40%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--home-ink) 8%, transparent),
+    0 5px 14px color-mix(in srgb, var(--home-accent) 18%, transparent);
+}
+
+.home .transport-button.transport-play.is-idle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 12px 22px;
+  border: 1px solid color-mix(in srgb, var(--home-accent) 18%, var(--home-card));
+  border-radius: 999px;
+  font-size: var(--te-font-size-body, 14px);
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(
+    --te-player-bar-play-text,
+    color-mix(in srgb, var(--home-accent) 72%, var(--home-ink))
+  );
+  background: var(
+    --te-player-bar-play-surface,
+    color-mix(in srgb, var(--home-accent) 10%, var(--home-card))
+  );
   box-shadow: none;
 }
 
-.home .transport-button.transport-play:hover {
-  transform: none;
-  color: var(
-    --te-player-bar-play-hover-text,
-    var(--te-player-bar-play-text, var(--te-transport-play-text))
-  );
-  background: var(
-    --te-player-bar-play-hover-surface,
-    var(--te-player-bar-play-surface, var(--te-transport-play-hover-surface))
-  );
-}
-
-.home .transport-button.transport-play:active {
-  transform: scale(var(--te-motion-press-scale));
-}
-
-.home .transport-button:focus-visible {
+.home .transport-button.transport-play:focus-visible {
   outline: 2px solid var(--te-primary-500);
   outline-offset: 3px;
 }
 
-.home .transport-button .playback-icon {
-  width: 20px;
-  height: 20px;
+.home .transport-button.transport-play .playback-icon {
+  width: 22px;
+  height: 22px;
 }
 
-.home .transport-button.transport-play .playback-icon {
-  width: 24px;
-  height: 24px;
+.home .transport-button.transport-play.is-idle .playback-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.transport-play-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .transport-button:hover {
+    transform: translateY(var(--te-motion-hover-translate, -1px));
+    background: var(--home-hover);
+  }
+
+  .home .transport-button.transport-play:hover {
+    color: var(--te-player-bar-play-hover-text, var(--te-player-bar-play-text, var(--home-card)));
+    background: var(
+      --te-player-bar-play-hover-surface,
+      var(
+        --te-player-bar-play-surface,
+        linear-gradient(
+          145deg,
+          color-mix(in srgb, var(--home-accent) 90%, var(--home-card)),
+          color-mix(in srgb, var(--home-accent) 84%, var(--home-ink))
+        )
+      )
+    );
+  }
+
+  .hero-actions.is-current .transport-button:hover {
+    transform: none;
+  }
+
+  .hero-actions.is-current .transport-button:not(.transport-play):hover {
+    color: var(--home-ink);
+  }
+
+  .home .transport-button.transport-play.is-idle:hover {
+    color: var(
+      --te-player-bar-play-hover-text,
+      var(--te-player-bar-play-text, color-mix(in srgb, var(--home-accent) 72%, var(--home-ink)))
+    );
+    background: var(
+      --te-player-bar-play-hover-surface,
+      var(
+        --te-player-bar-play-surface,
+        color-mix(in srgb, var(--home-accent) 16%, var(--home-card))
+      )
+    );
+    border-color: color-mix(in srgb, var(--home-accent) 30%, var(--home-card));
+  }
 }
 
 /* Hero art: offset echo + big cover */
@@ -2465,6 +2531,7 @@
 
   .home button:active,
   .home button:hover,
+  .home .transport-button:is(:hover, :active),
   .fresh-tile:is(:hover, :active) .fresh-cover,
   .gallery-tile:is(:hover, :active) .gallery-cover,
   .fresh-tile:hover .fresh-cover img,

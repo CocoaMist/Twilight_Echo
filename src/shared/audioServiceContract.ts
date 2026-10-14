@@ -129,6 +129,7 @@ export interface AudioServiceCapabilities {
   protocolVersion: number
   methods: string[]
   dspGraphRevisionAck: boolean
+  nativeRuntime?: Record<string, string>
 }
 
 export function createAudioServiceCapabilities(methods: string[]): AudioServiceCapabilities {

@@ -141,7 +141,9 @@ function stripNativeFile(filePath, dependencies = {}) {
     dependencies.stripCommand || resolveStripCommand(dependencies.environment, exists)
   let result
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    result = run(stripCommand, ['--strip-all', filePath], {
+    // GNU strip otherwise rewrites the PE timestamp on each package build,
+    // breaking file-digest provenance even when the source binary is unchanged.
+    result = run(stripCommand, ['--strip-all', '--preserve-dates', filePath], {
       encoding: 'utf8',
       windowsHide: true
     })

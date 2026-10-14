@@ -1,12 +1,20 @@
 #pragma once
 
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace twilight::audio::json_utils {
+
+// Shortest decimal that round-trips the exact source-frame timeline.
+inline std::string number(double value) {
+  char buffer[32];
+  const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
+  return result.ec == std::errc{} ? std::string(buffer, result.ptr) : "0";
+}
 
 inline std::string escape(const std::string& value) {
   std::string out;

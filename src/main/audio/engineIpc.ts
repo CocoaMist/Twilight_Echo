@@ -1,9 +1,12 @@
+import { AutoMixStemService } from './autoMixStemService.ts'
+import { AutoMixStemDetector } from './autoMixStemCapabilities.ts'
+import { AutoMixStemInstaller, managedStemPackDirectories } from './autoMixStemInstaller.ts'
 import { IPC } from '../../shared/ipcChannels.ts'
 import { resolveAuthorizationBatch } from '../security/authorizationBatch.ts'
-import { providerPlaybackSources } from '../security/providerPlaybackSources.ts'
-import { createAutoMixOnlineResolver } from './autoMixOnlineSource.ts'
 import { DspAuditionManager } from './dspAuditionManager.ts'
 import { createDspAuditionHandlers } from './dspAuditionIpc.ts'
+import { OutputTest } from './outputTest.ts'
+import { AudioEngineServiceBinding } from '../audioEngineServiceClient.ts'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { release } from 'node:os'
@@ -78,6 +81,14 @@ import {
 } from '../security/ipcValidation.ts'
 import { assertTrustedIpcSender } from '../security/electronSecurity.ts'
 import { remoteMediaGrants } from '../security/remoteMediaGrants.ts'
+import { TwilightAutoMixCoordinator } from './twilightAutoMixCoordinator.ts'
+import { TwilightAutoMixWindowCache } from './twilightAutoMixCache.ts'
+import { providerPlaybackIdentities } from './providerPlaybackIdentity.ts'
+import {
+  TWILIGHT_AUTOMIX_AVAILABLE,
+  effectiveAutoMixMode,
+  normalizeAutoMixStemDevice
+} from '../../shared/twilightAutoMix.ts'
 import {
   grantUserSelectedImpulseResponse,
   grantUserSelectedVst3SearchPath,
@@ -93,6 +104,49 @@ const MAX_AUDIO_QUEUE_ITEMS = MAX_NATIVE_QUEUE_ITEMS
 const MAX_AUDIO_SOURCE_LENGTH = 8192
 const MAX_AUDIO_DEVICE_LENGTH = 512
 let audioDiagnosticRecorder: AudioDiagnosticRecorder | null = null
+let stopOutputTest: () => Promise<void> = () => Promise.resolve()
+function stemWorkerDirectory(): string {
+  return join(
+    app.isPackaged || app.getAppPath().endsWith('.asar')
+      ? process.resourcesPath
+      : join(app.getAppPath(), 'resources'),
+    'automix-stems'
+  )
+}
+const stemInstallRoot = (): string => join(app.getPath('userData'), 'automix-stem-packs')
+const stemInstaller = new AutoMixStemInstaller({
+  root: stemInstallRoot,
+  workerDirectory: stemWorkerDirectory,
+  chooseArchive: async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: translate(mainLocale(), 'automix.stems.install.pick'),
+      properties: ['openFile'],
+      filters: [{ name: 'AutoMix ZIP', extensions: ['zip'] }]
+    }
+    const parent = runtime.mainWindow
+    const result =
+      parent && !parent.isDestroyed()
+        ? await dialog.showOpenDialog(parent, options)
+        : await dialog.showOpenDialog(options)
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  }
+})
+const stemDetector = new AutoMixStemDetector(
+  () => [
+    ...managedStemPackDirectories(stemInstallRoot()),
+    ...(process.env.TWILIGHT_AUTOMIX_STEM_PACK ? [process.env.TWILIGHT_AUTOMIX_STEM_PACK] : []),
+    ...[
+      join(app.getPath('exe'), '..'),
+      join(process.resourcesPath, '..'),
+      app.getAppPath()
+    ].flatMap((directory) =>
+      ['automix-enhancement', 'automix-enhancement-gpu', 'automix-enhancement-cpu'].map((name) =>
+        join(directory, name)
+      )
+    )
+  ],
+  stemWorkerDirectory
+)
 let lastAudioDiagnosticPlaybackSignature = ''
 
 const SOFTWARE_VOLUME_PERSIST_DELAY_MS = 350
@@ -323,6 +377,7 @@ function initializeAudioDiagnostics(): AudioDiagnosticRecorder {
     }
   })
   recorder.record('session-start', {
+    nativeRuntime: runtime.audioEngineManager?.getNativeRuntimeIdentity(),
     selectedOutput: {
       output: runtime.appSettings.audioOutput,
       device: runtime.appSettings.audioDevice,
@@ -601,15 +656,65 @@ async function initializeAudioEngineRuntime(): Promise<void> {
     }
   )
   runtime.audioEngineManager.setLoudnessAnalysisManager(runtime.loudnessAnalysisManager)
-  runtime.audioEngineManager.setAutoMixAnalysisService(
-    () => runtime.audioAnalysisService,
-    join(app.getPath('userData'), 'automix-features'),
-    createAutoMixOnlineResolver({
-      registry: providerPlaybackSources,
-      callProvider: async (...args) => runtime.pluginManager?.callProvider(...args) ?? null,
-      authorize: resolveAuthorizedPlaybackSource
+  const mixEngine = runtime.audioEngineManager
+  const stemService = new AutoMixStemService(
+    join(app.getPath('userData'), 'automix-stems-v2'),
+    () =>
+      stemDetector.resolveDevice(normalizeAutoMixStemDevice(runtime.appSettings.autoMixStemDevice)),
+    () => runtime.appSettings.autoMixStemMode === 'auto',
+    (resources) => audioDiagnosticRecorder?.record('automix-stems', resources),
+    () => runtime.appSettings.autoMixStemCacheMiB,
+    stemWorkerDirectory,
+    () => runtime.appSettings.autoMixStemDevice
+  )
+  mixEngine.setAutoMixCoordinator(
+    new TwilightAutoMixCoordinator({
+      context: () => mixEngine.getAutoMixContext(),
+      authorize: resolveAuthorizedPlaybackSource,
+      sourceRevision: (source) => providerPlaybackIdentities.revision(source),
+      assertSource: (source) => providerPlaybackIdentities.assertCurrent(source),
+      onState: (state, reason) => mixEngine.reportAutoMixAnalysisState(state, reason),
+      onNativePreparation: () => mixEngine.clearAutoMixAnalysisState(),
+      scopedCancellation: true,
+      select: (request) => stemService.select(request, (json) => mixEngine.selectAutoMix(json)),
+      stems: (selection, _request, signal) =>
+        stemService.prepare(
+          selection,
+          () => mixEngine.getAutoMixContext()?.info.position ?? 0,
+          signal
+        ),
+      releaseMaterials: (selection) => stemService.release(selection),
+      onDiagnostic: (entry) => audioDiagnosticRecorder?.record('automix-prepare', entry),
+      analyze: (source, options, priority, signal) => {
+        if (!runtime.audioAnalysisService)
+          return Promise.reject(new Error('analysis_service_unavailable'))
+        return runtime.audioAnalysisService.analyzeAutoMix(source, options, {
+          priority: priority === 'boundary' ? 90 : -20,
+          signal
+        })
+      },
+      cancelAnalysis: (source) => {
+        runtime.audioAnalysisService?.cancelBySource(source, 'automix')
+      },
+      prepare: (request) => mixEngine.prepareAutoMix(request),
+      submit: (id) => mixEngine.submitAutoMix(id),
+      cancel: () => mixEngine.cancelAutoMix(),
+      status: () => mixEngine.getAutoMixNativeStatus(),
+      cache: new TwilightAutoMixWindowCache(
+        join(app.getPath('userData'), 'twilight-automix-windows.json')
+      )
     })
   )
+  providerPlaybackIdentities.on('changed', (sources: string[]) => {
+    const context = mixEngine.getAutoMixContext()
+    if (
+      context &&
+      sources.some((source) => source === context.current.source || source === context.next.source)
+    )
+      mixEngine.invalidateAutoMixSource()
+  })
+  if (TWILIGHT_AUTOMIX_AVAILABLE)
+    await mixEngine.setAutoMixMode(effectiveAutoMixMode(runtime.appSettings.autoMixMode))
   runtime.vst3Catalog = new Vst3CatalogService(join(app.getPath('userData'), 'dsp-vst3'), {
     scan: (modulePath) => requireAudioEngine().scanVst3Module(modulePath)
   })
@@ -703,6 +808,7 @@ async function initializeAudioEngineRuntime(): Promise<void> {
   })
 
   runtime.audioEngineManager.on('playback-info', (info) => {
+    if (info.state === 'playing') void stopOutputTest()
     if (recordPlaybackDiagnostic(info)) void drainEngineDiagnosticLog('playback-info')
     runtime.mainWindow?.webContents.send(IPC.audioEngine.playbackInfo, info)
     void runtime.pluginManager?.broadcastEvent('player:playback-info', info)
@@ -730,6 +836,63 @@ export function setupAudioEngineIpc(): void {
 }
 
 function registerAudioEngineIpcHandlers(): void {
+  ipcMain.handle(IPC.audioEngine.getAutoMixStemCapabilities, (event, refresh: unknown) => {
+    assertTrustedIpcSender(event, 'AutoMix stem capabilities')
+    return stemDetector.get(refresh === true)
+  })
+  ipcMain.handle(IPC.audioEngine.installAutoMixStemPack, async (event) => {
+    assertTrustedIpcSender(event, 'Install AutoMix stem package')
+    if (!TWILIGHT_AUTOMIX_AVAILABLE) throw new Error('AutoMix unavailable')
+    return stemInstaller.install()
+  })
+  ipcMain.handle(IPC.audioEngine.getAutoMixStemInstallStatus, (event) => {
+    assertTrustedIpcSender(event, 'AutoMix stem installation status')
+    return stemInstaller.getStatus()
+  })
+  ipcMain.handle(IPC.audioEngine.cancelAutoMixStemInstall, (event) => {
+    assertTrustedIpcSender(event, 'Cancel AutoMix stem installation')
+    return stemInstaller.cancel()
+  })
+  const outputTest = new OutputTest({
+    context: async (exclusive) => {
+      const engine = await ensureAudioEngineRuntime()
+      const state = await engine.getAudioOutputState()
+      const info = await engine.getPlaybackInfo()
+      return {
+        backend: state.output === 'wasapi' && exclusive ? 'wasapi-exclusive' : state.output,
+        device: state.device,
+        volume: Math.min(info.volume, engine.getDeviceProfiles().volumeCeiling),
+        outputConfig: { ...runtime.appSettings.audioOutputConfig },
+        playing: info.state === 'playing'
+      }
+    },
+    createService: () => {
+      const service = new AudioEngineServiceBinding({
+        serviceEntry: join(__dirname, 'audioEngineService.js')
+      })
+      service.on('crash', () => service.destroy())
+      return service
+    }
+  })
+  stopOutputTest = () => outputTest.stop()
+  ipcMain.handle(IPC.audioEngine.testOutput, async (event, exclusive: unknown) => {
+    assertTrustedIpcSender(event, 'audio output test')
+    if (event.sender !== runtime.mainWindow?.webContents) throw new Error('试听仅可从主窗口发起')
+    if (typeof exclusive !== 'boolean') throw new Error('试听输出模式无效')
+    const cancel = () => outputTest.stop()
+    event.sender.once('destroyed', cancel)
+    try {
+      return await outputTest.play(exclusive)
+    } finally {
+      event.sender.removeListener('destroyed', cancel)
+    }
+  })
+  ipcMain.handle(IPC.audioEngine.stopOutputTest, async (event) => {
+    assertTrustedIpcSender(event, 'stop audio output test')
+    if (event.sender !== runtime.mainWindow?.webContents) throw new Error('试听仅可从主窗口停止')
+    await outputTest.stop()
+  })
+  app.once('before-quit', () => outputTest.stop())
   const auditionManager = new DspAuditionManager({
     context: async () => (await ensureAudioEngineRuntime()).getAuditionContext(),
     apply: async (revision, key, graph) =>
@@ -827,6 +990,7 @@ function registerAudioEngineIpcHandlers(): void {
     const source = await resolveAuthorizedPlaybackSource(
       normalizeIpcString(selection.source, 'audio source', MAX_AUDIO_SOURCE_LENGTH)
     )
+    await outputTest.stop()
     return await (
       await ensureAudioEngineRuntime()
     ).selectQueueItem({ queueToken, index, id, source })
@@ -849,6 +1013,7 @@ function registerAudioEngineIpcHandlers(): void {
       startTime: normalizedStartTime
     })
     try {
+      await outputTest.stop()
       const result = await (
         await ensureAudioEngineRuntime()
       ).play(authorizedSource, normalizedStartTime)
@@ -875,6 +1040,7 @@ function registerAudioEngineIpcHandlers(): void {
 
   ipcMain.handle(IPC.audioEngine.togglePause, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
+    await outputTest.stop()
     await (await ensureAudioEngineRuntime()).togglePause()
   })
 
@@ -928,11 +1094,13 @@ function registerAudioEngineIpcHandlers(): void {
 
   ipcMain.handle(IPC.audioEngine.next, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
+    await outputTest.stop()
     await (await ensureAudioEngineRuntime()).next()
   })
 
   ipcMain.handle(IPC.audioEngine.previous, async (event) => {
     assertTrustedIpcSender(event, 'audio engine IPC')
+    await outputTest.stop()
     await (await ensureAudioEngineRuntime()).previous()
   })
 

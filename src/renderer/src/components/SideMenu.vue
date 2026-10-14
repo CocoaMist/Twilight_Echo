@@ -9,6 +9,7 @@ import {
   ref,
   watch
 } from 'vue'
+import ImportDialog from '@renderer/components/ImportDialog.vue'
 import ThemeIcon from '@renderer/components/ThemeIcon.vue'
 import { useMusicStore } from '@renderer/stores/useMusicStore'
 import { useSettingsStore } from '@renderer/stores/useSettingsStore'
@@ -88,6 +89,20 @@ async function handleGroupKey(event: KeyboardEvent, id: SidebarGroupId): Promise
     group.querySelector<HTMLElement>('.menu-group-toggle')?.focus()
   }
 }
+function handleToolbarKey(event: KeyboardEvent): void {
+  if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+  const buttons = [...(event.currentTarget as HTMLElement).querySelectorAll('button')]
+  const index = buttons.indexOf(event.target as HTMLButtonElement)
+  if (index < 0) return
+  event.preventDefault()
+  const next =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? buttons.length - 1
+        : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+  buttons[next]?.focus()
+}
 const { libraryScanStatus, libraryScanProgress } = useMusicStore()
 const scanning = computed(
   () => libraryScanStatus.value.state === 'running' || libraryScanStatus.value.state === 'paused'
@@ -98,6 +113,7 @@ const scanningLabel = computed(() => {
   const phase = libraryScanProgress.value?.phase === 'parsing' ? '解析' : '扫描'
   return status.total > 0 ? phase + '中 ' + (status.current || 0) + '/' + status.total : '正在扫描…'
 })
+const showImportDialog = ref(false)
 const showPagesEditor = ref(false)
 function selectPage(page: NavigationPageDefinition): void {
   showPagesEditor.value = false
@@ -150,10 +166,11 @@ function setPressOrigin(event: PointerEvent): void {
             >
               <ThemeIcon class="item-icon" :icon-slot="entry.icon" />
               <span class="item-label">{{ entry.title }}</span>
-              <ThemeIcon
-                class="group-chevron"
-                :icon-slot="expanded.has(entry.id) ? 'navigation.collapse' : 'navigation.expand'"
-              />
+              <i
+                class="group-chevron pi"
+                :class="expanded.has(entry.id) ? 'pi-angle-down' : 'pi-angle-right'"
+                aria-hidden="true"
+              ></i>
             </button>
             <div
               :id="`sidebar-group-${entry.id}`"
@@ -215,11 +232,42 @@ function setPressOrigin(event: PointerEvent): void {
           >
         </button>
       </div>
-      <div v-if="scanning" class="menu-bottom">
-        <span class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
-      </div>
     </nav>
+    <div class="menu-bottom">
+      <div class="menu-separator"></div>
+      <div
+        class="menu-toolbar"
+        role="toolbar"
+        aria-label="音乐工具"
+        aria-orientation="vertical"
+        @keydown="handleToolbarKey"
+      >
+        <button
+          type="button"
+          class="menu-item toolbar-item"
+          title="导入歌曲"
+          aria-label="导入歌曲"
+          @click="showImportDialog = true"
+        >
+          <ThemeIcon class="item-icon" icon-slot="navigation.import" /><span class="item-label"
+            >导入歌曲</span
+          >
+        </button>
+        <button
+          type="button"
+          class="menu-item toolbar-item"
+          title="编辑页面"
+          aria-label="编辑页面"
+          @click="showPagesEditor = true"
+        >
+          <i class="item-icon pi pi-pencil" aria-hidden="true"></i
+          ><span class="item-label">编辑页面</span>
+        </button>
+      </div>
+      <span v-if="scanning" class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
+    </div>
   </div>
+  <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
   <NativeDialogTransition>
     <NavigationPagesDialog
       v-if="showPagesEditor"
@@ -238,9 +286,8 @@ function setPressOrigin(event: PointerEvent): void {
   flex-direction: column;
   top: var(--te-titlebar-inset, 40px);
   left: 0;
-  /* Default navigation keeps a full-height surface; main.css owns its window
-     inset. Custom shells can reserve their playback band through this property.
-     Overlap padding belongs to the inner scroller, not the material bounds. */
+  /* The sidebar surface reaches the window bottom behind the player. Its
+     footer clears the painted bar; custom shells can reserve a playback row. */
   bottom: var(--te-side-menu-bottom, 0px);
   width: var(--te-menu-width);
   /* A lightly tinted sibling of the player material. The tall navigation
@@ -271,9 +318,9 @@ function setPressOrigin(event: PointerEvent): void {
 
 :global(html[data-te-navigation-style='expanded']) {
   --te-menu-width: clamp(
-    calc(var(--te-font-size-body, 14px) * 224 / 14),
-    18vw,
-    calc(var(--te-font-size-body, 14px) * 260 / 14)
+    calc(var(--te-font-size-body, 14px) * 208 / 14),
+    16vw,
+    calc(var(--te-font-size-body, 14px) * 236 / 14)
   ) !important;
 }
 
@@ -323,7 +370,7 @@ function setPressOrigin(event: PointerEvent): void {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  padding: 16px 12px max(16px, var(--te-side-menu-tools-clearance, 0px));
+  padding: 16px 12px 0;
 }
 
 .menu-nav {
@@ -413,6 +460,7 @@ function setPressOrigin(event: PointerEvent): void {
 .menu-bottom {
   flex-shrink: 0;
   margin-top: auto;
+  padding: 0 12px max(12px, var(--te-side-menu-tools-clearance, 0px));
 }
 
 .menu-item {
@@ -554,7 +602,11 @@ function setPressOrigin(event: PointerEvent): void {
 :global(html[data-te-navigation-style='rail'] .menu-items) {
   min-width: 0;
   max-width: 100%;
-  padding: 12px 8px max(12px, var(--te-side-menu-tools-clearance, 0px));
+  padding: 12px 8px 0;
+}
+
+:global(html[data-te-navigation-style='rail'] .menu-bottom) {
+  padding: 0 8px max(12px, var(--te-side-menu-tools-clearance, 0px));
 }
 
 :global(html[data-te-navigation-style='rail'] .menu-nav) {

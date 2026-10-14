@@ -287,7 +287,7 @@ test('every arrangement keeps exactly one way into the now-playing page', () => 
   assert.match(playerBarCss, /\.player-title-button:focus-visible\s*\{/)
 })
 
-test('the player is independent of navigation while navigation reserves usable space', () => {
+test('the player is independent of navigation while narrow navigation reserves usable space', () => {
   const sideMenu = readFileSync(new URL('../SideMenu.vue', import.meta.url), 'utf8')
   const clearance = readFileSync(
     new URL('../../app/useSideMenuClearance.ts', import.meta.url),
@@ -296,7 +296,7 @@ test('the player is independent of navigation while navigation reserves usable s
 
   assert.doesNotMatch(app, /sidebarMenuOpen|:menu-open="sidebarMenuOpen"/)
   assert.doesNotMatch(playerBar, /'menu-open': menuOpen|geometryAnimTimer/)
-  assert.doesNotMatch(playerBarCss, /\.player-bar-shell\.menu-open\s*\{/)
+  assert.doesNotMatch(playerBarCss, /\.player-bar-shell[^{}]*\.menu-open\s*\{/)
 
   // The measured clearance was computed and then dropped on the floor. It now
   // travels as a custom property — not an inline `bottom` — so the custom shell

@@ -52,3 +52,40 @@ test('an unloadable staged addon provides no capability fact', () => {
     null
   )
 })
+
+test('production inspection uses a hidden bounded child and never loads the staging DLL in the parent', () => {
+  let calls = 0
+  const result = readStagedAudioRuntimeObservation({
+    artifactDir: 'C:/staged',
+    manifest,
+    runProbe: (executable, args, options) => {
+      calls++
+      assert.equal(executable, process.execPath)
+      assert.equal(args[0], require.resolve('./staged-audio-runtime-observation.cjs'))
+      assert.ok(args[1].endsWith('twilight_audio_node.node'))
+      assert.equal(options.windowsHide, true)
+      assert.equal(options.timeout, 15_000)
+      assert.equal(options.env.ELECTRON_RUN_AS_NODE, '1')
+      return { status: 0, stdout: JSON.stringify({ features: { asio: true } }) }
+    }
+  })
+  assert.equal(calls, 1)
+  assert.equal(result.capabilities.asio.enabled, true)
+})
+
+test('timed-out and invalid child observations remain unknown', () => {
+  for (const child of [
+    { status: null, error: new Error('timeout') },
+    { status: 1, stdout: '{}' },
+    { status: 0, stdout: 'invalid' }
+  ]) {
+    assert.equal(
+      readStagedAudioRuntimeObservation({
+        artifactDir: 'C:/staged',
+        manifest,
+        runProbe: () => child
+      }),
+      null
+    )
+  }
+})

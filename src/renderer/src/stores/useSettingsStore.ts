@@ -85,8 +85,7 @@ const fallbackAudioProcessing: AudioProcessingSettings = {
   crossfeedDelayMs: 0.35,
   crossfeedCutoffHz: 700,
   gapless: true,
-  crossfadeSeconds: 0,
-  autoMix: { enabled: false, allowIntelligentSkip: true, maxTransitionSeconds: 12 }
+  crossfadeSeconds: 0
 }
 
 const fallbackHeadphoneCompensation = {
@@ -220,6 +219,10 @@ const fallbackSettings: AppSettings = {
   nowPlayingBackground: 'blur',
   playbackResumeMode: 'off',
   previousButtonAction: 'restart',
+  autoMixMode: 'off',
+  autoMixStemMode: 'auto',
+  autoMixStemDevice: 'auto',
+  autoMixStemCacheMiB: 512,
   sleepTimer: DEFAULT_SLEEP_TIMER_SETTINGS,
   ncmPlaybackQuality: 'auto',
   playMode: 'sequential',
@@ -508,6 +511,9 @@ export function useSettingsStore() {
 
   function hydrateStartupSnapshot(startup: AppStartupSnapshot): AppSettings {
     setupListener()
+    // The startup promise is cached across shell remounts. Replaying it after
+    // live updates would reset volume and persist that old value back to disk.
+    if (loaded.value) return settings.value
     applySnapshot(startup.settings)
     return settings.value
   }

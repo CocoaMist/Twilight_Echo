@@ -1,6 +1,8 @@
-import { existsSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'module'
-import { join } from 'path'
+import { dirname, join } from 'path'
+import { fileURLToPath } from 'url'
 import type { NativeAudioBinding } from './audioEngineTypes.ts'
 
 const require = createRequire(import.meta.url)
@@ -27,18 +29,38 @@ export function resolveElectronApp(
 
 const electronApp = resolveElectronApp()
 
-export function getNativeAddonCandidates(): string[] {
+interface NativeAddonLocationContext {
+  modulePath?: string
+  resourcesPath?: string
+  appPath?: string
+  cwd?: string
+}
+
+export function getNativeAddonCandidates(context: NativeAddonLocationContext = {}): string[] {
   const binary = 'twilight_audio_node.node'
-  const appPath = electronApp?.getAppPath?.() ?? process.cwd()
+  const modulePath = context.modulePath ?? fileURLToPath(import.meta.url)
+  // Electron utility processes do not expose the main process's resourcesPath
+  // or app singleton. Resolve their own archive first, without consulting the
+  // launch directory: a stale checkout must never replace a packaged addon.
+  const archive = modulePath.match(/^(.*[/\\][^/\\]+\.asar)(?:[/\\]|$)/i)?.[1]
+  if (archive) return [join(dirname(archive), 'audio-engine', binary)]
+
+  // The same anchoring supports built development workers and direct TS tools.
+  const moduleRoot = modulePath.match(/^(.*)[/\\](?:out|src)[/\\]main[/\\]/i)?.[1]
+  const appPath =
+    context.appPath ?? electronApp?.getAppPath?.() ?? moduleRoot ?? context.cwd ?? process.cwd()
+  const resourcesPath = context.resourcesPath ?? process.resourcesPath
   return [
-    join(process.resourcesPath ?? '', 'audio-engine', binary),
-    join(appPath, 'resources', 'audio-engine', binary),
-    join(appPath, 'audio-engine', 'build', 'default', binary),
-    join(appPath, 'audio-engine', 'build', 'mingw-static', binary),
-    join(appPath, 'audio-engine', 'build', 'windows-msvc', binary),
-    join(appPath, '..', 'audio-engine', 'build', 'default', binary),
-    join(appPath, '..', 'audio-engine', 'build', 'mingw-static', binary),
-    join(appPath, '..', 'audio-engine', 'build', 'windows-msvc', binary)
+    ...new Set([
+      ...(resourcesPath ? [join(resourcesPath, 'audio-engine', binary)] : []),
+      join(appPath, 'resources', 'audio-engine', binary),
+      join(appPath, 'audio-engine', 'build', 'default', binary),
+      join(appPath, 'audio-engine', 'build', 'mingw-static', binary),
+      join(appPath, 'audio-engine', 'build', 'windows-msvc', binary),
+      join(appPath, '..', 'audio-engine', 'build', 'default', binary),
+      join(appPath, '..', 'audio-engine', 'build', 'mingw-static', binary),
+      join(appPath, '..', 'audio-engine', 'build', 'windows-msvc', binary)
+    ])
   ]
 }
 
@@ -50,9 +72,30 @@ export type NativeBindingLoadAttempt = { candidate: string; error: string }
 
 export type NativeBindingLoadResult = {
   binding: NativeAudioBinding | null
+  runtime?: Record<string, string>
   /** Candidates that existed on disk but could not be required. */
   attempts: NativeBindingLoadAttempt[]
   candidateCount: number
+}
+
+export function nativeRuntimeIdentity(candidate: string): Record<string, string> {
+  const directory = dirname(candidate)
+  const runtime: Record<string, string> = { addonPath: candidate }
+  for (const name of [
+    'twilight_audio_node.node',
+    'twilight-audio-engine.dll',
+    'automix-native/beat-this.tamg',
+    'automix-native/yamnet.tamg'
+  ]) {
+    try {
+      runtime[name] = createHash('sha256')
+        .update(readFileSync(join(directory, name)))
+        .digest('hex')
+    } catch {
+      runtime[name] = 'unavailable'
+    }
+  }
+  return runtime
 }
 
 const MAX_NATIVE_FAILURE_DETAIL = 240
@@ -68,6 +111,7 @@ export function loadNativeBindingWithDiagnostics(
       // Native addons must be loaded dynamically because the file is produced by CMake.
       return {
         binding: require(candidate) as NativeAudioBinding,
+        runtime: nativeRuntimeIdentity(candidate),
         attempts,
         candidateCount: candidates.length
       }

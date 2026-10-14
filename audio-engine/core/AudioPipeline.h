@@ -7,7 +7,6 @@
 #include "../decoder/DopPacker.h"
 #include "DsdMuteGuard.h"
 #include "PauseFade.h"
-#include "../automix/AutoMix.h"
 #include "../decoder/DsdReader.h"
 #include "../decoder/FFmpegDecoder.h"
 #include "../dsp/DspChain.h"
@@ -18,6 +17,8 @@
 #include "../output/IOutputBackend.h"
 
 #include "twilight_audio_engine.h"
+#include "../automix-native/am_handoff.h"
+#include "../automix-native/am_job.h"
 
 #include <array>
 #include <atomic>
@@ -83,6 +84,18 @@ struct PipelineStatus {
   bool outputPerfect = false;
   bool gaplessActive = false;
   bool preloadReady = false;
+  std::optional<QueueItem> preloadedItem;
+  bool sourceTimelineExact = false;
+  std::string autoMixMode = "off";
+  std::string autoMixState = "off";
+  uint64_t autoMixDecodeMs = 0, autoMixPrepareMs = 0;
+  double autoMixDurationSeconds = 0;
+  bool autoMixStemEnhanced = false;
+  std::string autoMixReason;
+  std::string autoMixStrategy;
+  uint64_t autoMixPlanId = 0;
+  double autoMixOutputSeconds = 0;
+  double autoMixNextSourceSeconds = 0;
   // Empty when gapless path is unblocked; otherwise one of:
   // disabled | dsd_path | crossfade | format_mismatch
   std::string gaplessBlockedReason;
@@ -119,7 +132,7 @@ class AudioPipeline {
       double volume,
       const std::string& dspConfigJson,
       bool gaplessEnabled,
-      std::string* error);
+      std::string* error, bool initiallyPaused = false);
   TAE_Result play(
       const std::string& source,
       double startTimeSeconds,
@@ -159,9 +172,12 @@ class AudioPipeline {
   bool preloadNext(const std::optional<QueueItem>& item, std::string* error);
   void resetPreloadOverlap();
   bool skipToPreloaded(const QueueItem& item, std::string* error);
-  void setAutoMixConfig(const TAE_AM_ConfigV1& config);
-  bool setAutoMixFeatures(const std::string& json, std::string* error);
-  std::string autoMixStatusJson() const;
+  bool setAutoMixMode(const std::string&, std::string* error);
+  std::string selectAutoMix(const std::string& requestJson);
+  bool prepareAutoMix(const std::string& requestJson, std::string* error);
+  bool submitAutoMix(uint64_t planId, std::string* error);
+  void cancelAutoMix(const std::string& reason);
+  void pollAutoMix();
 
   PipelineStatus status();
   bool consumeEnded();
@@ -261,12 +277,10 @@ class AudioPipeline {
 
   struct DecodeStream;
   struct DecodeStreamReaper;
-  struct AutoMixTransition;
-  struct AutoMixJob;
-  void autoMixWorker();
-  void scheduleAutoMixLocked();
-  void cancelAutoMixLocked(const char* reason);
-  void reclaimAutoMixLocked();
+  struct AutoMixGeneration;
+  struct AutoMixSelection;
+  void cancelAutoMixLocked(const std::string&);
+  void reapAutoMixLocked();
 
   struct RenderDspGraphGeneration {
     uint64_t epoch = 0;
@@ -333,7 +347,7 @@ class AudioPipeline {
       bool allowDop,
       const std::string& forcedDsdFallbackReason,
       const std::optional<NativeDsdRuntimeFacts>& forcedNativeDsdFallbackFacts,
-      std::string* error);
+      std::string* error, bool initiallyPaused = false);
   void recomputeDspActiveLocked();
   void recomputeDspActiveLocked(double requestedVolume);
   bool updatePerfectLocked();
@@ -391,23 +405,19 @@ class AudioPipeline {
   std::unique_ptr<IOutputBackend> output_;
   std::shared_ptr<DecodeStream> activeStream_;
   std::shared_ptr<DecodeStream> preloadStream_;
-  TAE_AM_ConfigV1 autoMixConfig_{sizeof(TAE_AM_ConfigV1), TAE_AM_ABI_VERSION, 0, 0, 1, 12, 128ULL*1024*1024};
-  std::unique_ptr<AutoMixJob> autoMixJob_;
-  std::unique_ptr<AutoMixTransition> autoMixTransition_;
-  std::vector<std::unique_ptr<AutoMixTransition>> retiredAutoMix_;
-  std::thread autoMixThread_;
-  std::condition_variable autoMixWake_;
-  bool autoMixShutdown_ = false;
-  std::atomic<uint64_t> autoMixSerial_{0};
-  std::string autoMixReason_ = "disabled";
-  std::string autoMixOutgoingFeatures_, autoMixIncomingFeatures_;
-  uint64_t autoMixScheduledSerial_ = UINT64_MAX;
-  std::string autoMixOutgoingPreparationSource_,autoMixIncomingPreparationSource_;
-  uint64_t autoMixPlanRevision_ = 0;
-  std::atomic<AutoMixTransition*> renderAutoMix_{nullptr};
-  std::atomic<uint64_t> renderAutoMixFrames_{0};
-  std::atomic<bool> renderAutoMixStarted_{false};
-  std::atomic<bool> renderAutoMixEnabled_{false};
+  std::unique_ptr<AutoMixGeneration> autoMix_;
+  std::unique_ptr<AutoMixSelection> autoMixSelection_;
+  std::vector<std::unique_ptr<AutoMixGeneration>> retiredAutoMix_;
+  std::atomic<AutoMixGeneration*> renderAutoMix_{nullptr};
+  ta_am_handoff renderAutoMixHandoff_{};
+  AutoMixGeneration* renderAutoMixObserved_ = nullptr;
+  std::atomic<uint64_t> autoMixOutputFrame_{0}, autoMixNextSourceFrame_{0};
+  std::atomic<bool> autoMixProcessing_{false};
+  uint64_t autoMixDecodeMs_ = 0, autoMixPrepareMs_ = 0;
+  uint64_t autoMixRevision_ = 0, autoMixNextPlanId_ = 0;
+  ta_am_mode autoMixMode_ = TA_AM_OFF;
+  std::atomic<int> requestedAutoMixMode_{TA_AM_OFF};
+  std::string autoMixReason_;
   mutable std::array<RetiredDecodeStream, kRetiredStreamSlots> retiredStreams_;
   mutable size_t retiredStreamCount_ = 0;
   mutable std::vector<RetiredDecodeStream> deferredRetiredStreams_;
@@ -493,8 +503,6 @@ class AudioPipeline {
   // Ceil to 0.1% of the buffer period. Bucket 1001 means above deadline,
   // sufficient to fail every release threshold; no unbounded event log.
   std::array<std::atomic<uint64_t>,1002> renderDeadlineHistogram_{};
-  std::array<std::atomic<uint64_t>,1002> autoMixDeadlineHistogram_{};
-  void recordAutoMixPerformance(size_t frames,int rate,uint64_t ns) noexcept;
   // The output callback owns these values. The control thread only publishes
   // primitive hand-off values or retains the DecodeStream lifetime.
   std::atomic<PipelineState> renderState_{PipelineState::Stopped};
@@ -562,6 +570,7 @@ class AudioPipeline {
   /** True after a non-unity rate callback used WSOLA; cleared when unity flush resets it. */
   bool rateWsolaDirty_ = false;
   ChannelRouter channelRouter_;
+  ChannelRouter preloadChannelRouter_;
   mutable std::mutex statusMutex_;
   PipelineStatus lastStatus_;
 };

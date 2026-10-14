@@ -12,6 +12,7 @@ import { createPlaybackSessionController } from './player/playbackSessionControl
 import { createPlaybackClockController } from './player/playbackClockController.ts'
 import { evaluateNativePlaybackInfoIntent } from '../utils/nativePlaybackInfoIntent.ts'
 import { findNativeQueueTrackIndex } from '../utils/nativeQueueTrackIndex.ts'
+import { NativeQueueLoader } from '../utils/nativeQueueLoader.ts'
 import {
   NATIVE_PLAYBACK_INFO_INTENT_GRACE_MS,
   NATIVE_PLAYBACK_INFO_POST_CONFIRMATION_GRACE_MS
@@ -29,7 +30,7 @@ function productionFunction(name) {
 }
 
 for (const eventOrder of ['info-first', 'start-first']) {
-  test(`AutoMix ${eventOrder}: playbar retains the incoming source position and keeps advancing`, async (t) => {
+  test(`Native queue ${eventOrder}: playbar retains the incoming source position and keeps advancing`, async (t) => {
     const f = handoffFixture(t)
     f.context.setNativePlaybackInfoIntent(1, f.outgoing, f.outgoing.filePath, 0)
     f.context.applyNativePlaybackInfo(f.info(f.outgoing, 0, 170))
@@ -65,6 +66,49 @@ test('confirming ordinary playing ticks cannot prolong the previous-track guard'
   }
   f.setNow(3001)
   assert.equal(f.context.applyNativePlaybackInfo(f.info(f.incoming, 1, 4.2)), true)
+})
+
+test('NetEase native windows map opaque grants to the incoming UI track and source clock', async (t) => {
+  const f = handoffFixture(t)
+  f.outgoing.id = 'ncm:a'
+  f.outgoing.filePath = 'ncm:a'
+  f.outgoing.streamUrl = 'twilight-media://audio/a'
+  f.incoming.id = 'ncm:b'
+  f.incoming.filePath = 'ncm:b'
+  f.incoming.streamUrl = 'twilight-media://audio/b'
+  f.context.queue.value = [
+    { id: 'ncm:unresolved', filePath: 'ncm:unresolved' },
+    f.outgoing,
+    f.incoming
+  ]
+  f.context.queueIndex.value = 1
+  f.context.loadedTrackId = f.outgoing.id
+  const loader = new NativeQueueLoader()
+  await loader.loadPrepared(
+    {
+      items: [
+        { id: f.outgoing.id, source: f.outgoing.streamUrl },
+        { id: f.incoming.id, source: f.incoming.streamUrl }
+      ],
+      startIndex: 0,
+      delegated: false,
+      queueIndices: [1, 2]
+    },
+    { loadQueue: async () => ({ queueToken: 'ncm-window' }) },
+    f.context.queue.value
+  )
+  f.context.nativeQueueLoader = loader
+  vm.runInContext(productionFunction('findTrackIndexFromPlaybackInfo'), f.context)
+  const info = {
+    ...f.info(f.incoming, 1, 4.18),
+    source: 'https://cdn.test/b.flac',
+    queueToken: 'ncm-window'
+  }
+  assert.equal(f.context.applyNativePlaybackInfo(info), true)
+  assert.equal(f.context.queueIndex.value, 2)
+  assert.equal(f.context.currentTrack.value.id, 'ncm:b')
+  assert.equal(f.context.currentTime.value, 4.18)
+  assert.equal(f.clock.playbackClockSnapshot.value.trackId, 'ncm:b')
 })
 
 function handoffFixture(t) {

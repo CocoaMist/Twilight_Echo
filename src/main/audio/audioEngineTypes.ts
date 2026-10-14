@@ -28,6 +28,11 @@ export interface NativeAudioBinding {
   Seek: (time: number) => void
   SetVolume: (volume: number) => void
   SetPlaybackRate: (rate: number) => void
+  SetAutoMixMode?: (mode: import('../../shared/twilightAutoMix.ts').AutoMixMode) => void
+  SelectAutoMix?: (requestJson: string) => string | Promise<unknown>
+  PrepareAutoMix?: (requestJson: string) => void
+  SubmitAutoMix?: (planId: number) => void
+  CancelAutoMix?: () => void
   /** A-B loop; end <= start clears. Optional on older native bindings. */
   SetLoopRange?: (startSeconds: number, endSeconds: number) => void
   SetOutputDevice: (device: string) => void
@@ -68,14 +73,11 @@ export interface NativeAudioBinding {
   GetSpectrumData?: (points?: number) => number[]
   GetVisualizationData?: (optionsJson: string) => string | VisualizationData
   AnalyzeBpm?: (source: string, optionsJson?: string) => string | BpmAnalysisResult
+  AnalyzeLoudness?: (source: string, optionsJson?: string) => string | LoudnessAnalysisResult
   AnalyzeAutoMix?: (
     source: string,
     optionsJson?: string
-  ) => string | import('../../shared/autoMix.ts').AutoMixAnalysisResult
-  SetAutoMixConfig?: (json: string) => void
-  SetAutoMixFeatures?: (json: string) => void
-  GetAutoMixStatus?: () => string | import('../../shared/autoMix.ts').AutoMixStatus
-  AnalyzeLoudness?: (source: string, optionsJson?: string) => string | LoudnessAnalysisResult
+  ) => string | import('../../shared/twilightAutoMix.ts').AutoMixAnalysisResult
   EnumerateDevices?: () => string | AudioDeviceOption[]
   EnumerateBackends?: () => string
   GetEngineCapabilities?: () => string

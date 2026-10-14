@@ -16,6 +16,7 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   let playbarMutationObserver: MutationObserver | null = null
   let observedSideMenu: HTMLElement | null = null
   let observedPlayerBar: HTMLElement | null = null
+  let observedPlayerSurface: HTMLElement | null = null
 
   function setSideMenuBottomOffset(offset: number): void {
     const nextOffset = Math.max(0, Math.round(offset))
@@ -25,16 +26,21 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   }
 
   function measureSideMenuClearance(): void {
+    const isWindowLayout = document.documentElement.dataset.teShellLayout !== 'custom'
     const playerBar = document.querySelector<HTMLElement>('.player-bar-shell')
-    const playerBarRect = playerBar?.getBoundingClientRect()
+    const playerBarShellRect = playerBar?.getBoundingClientRect()
+    // The shell spans the window even when the painted bar is centred at a
+    // smaller maximum width. Only the painted surface can cover the tools.
+    const playerSurface = playerBar?.querySelector<HTMLElement>('.player-bar') ?? playerBar
+    const playerBarRect = playerSurface?.getBoundingClientRect()
     playerBottomClearance.value =
       options.hasPlayerBar.value &&
       playerBar?.dataset.tePlaybarHidden !== 'true' &&
-      playerBarRect &&
-      playerBarRect.height > 0 &&
-      playerBarRect.bottom > 0 &&
-      playerBarRect.top < window.innerHeight
-        ? Math.max(0, Math.ceil(window.innerHeight - playerBarRect.top))
+      playerBarShellRect &&
+      playerBarShellRect.height > 0 &&
+      playerBarShellRect.bottom > 0 &&
+      playerBarShellRect.top < window.innerHeight
+        ? Math.max(0, Math.ceil(window.innerHeight - playerBarShellRect.top))
         : 0
     if (!options.showLocalSidebar.value || !options.hasPlayerBar.value) {
       setSideMenuBottomOffset(0)
@@ -59,28 +65,43 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
     }
 
     const sideMenuRect = sideMenu.getBoundingClientRect()
-    const customShell = document.documentElement.dataset.teShellLayout === 'custom'
-    // translate3d changes the visual rect throughout the slide. Default content
-    // padding must use the resting box so crossing the player's left edge cannot
-    // change the scroller height or scroll position halfway through the motion.
-    const sideMenuLeft = customShell ? sideMenuRect.left : sideMenu.offsetLeft
-    const sideMenuRight = customShell ? sideMenuRect.right : sideMenuLeft + sideMenu.offsetWidth
+    // Sliding the menu out must not change its footer height. Measure its layout
+    // position without its own horizontal transform, including a custom parent.
+    const sideMenuLeft =
+      sideMenu.offsetLeft + (sideMenu.offsetParent?.getBoundingClientRect().left ?? 0)
+    const sideMenuRight = sideMenuLeft + sideMenu.offsetWidth
     const overlapsHorizontally =
       playerBarRect.left < sideMenuRight && playerBarRect.right > sideMenuLeft
-    // Reserve content padding only when the bar actually covers the menu. A bar
-    // beside it must leave the tools at the bottom, including in custom shells.
+    // Trailing button whitespace may sit behind the player. Only its icon and
+    // label need clearance. Undo the slide so closing the menu keeps this stable;
+    // opacity is deliberately ignored because hidden labels keep their layout.
+    const slideOffset = sideMenuLeft - sideMenuRect.left
+    const overlapsToolContent = isWindowLayout
+      ? [
+          ...sideMenu.querySelectorAll<HTMLElement>(
+            '.menu-toolbar .item-icon, .menu-toolbar .item-label'
+          )
+        ].some((content) => {
+          const rect = content.getBoundingClientRect()
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            playerBarRect.left < rect.right + slideOffset + SIDE_MENU_OVERLAP_GAP &&
+            playerBarRect.right > rect.left + slideOffset - SIDE_MENU_OVERLAP_GAP
+          )
+        })
+      : overlapsHorizontally
+    // Custom shells still reserve their complete navigation column.
     sideMenuToolsClearance.value =
-      overlapsHorizontally &&
+      overlapsToolContent &&
       playerBarRect.height > 0 &&
       playerBarRect.top < window.innerHeight &&
       playerBarRect.bottom > sideMenuRect.top
         ? Math.max(0, Math.round(sideMenuRect.bottom - playerBarRect.top + SIDE_MENU_OVERLAP_GAP))
         : 0
-    // Default navigation owns a stable full-height material surface. Only its
-    // content clears the player; resizing the backdrop when playback appears,
-    // hides or changes shape makes the sidebar jump and rebuild its blur layer.
-    // Custom shells retain their explicit, grid-dependent clearance contract.
-    if (!customShell) {
+    // Keep the sidebar surface behind the player; lift only its footer. Its
+    // height and footer clearance then stay stable throughout horizontal slides.
+    if (isWindowLayout) {
       setSideMenuBottomOffset(0)
       return
     }
@@ -115,10 +136,17 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
   function observeGeometry(): void {
     const sideMenu = document.querySelector<HTMLElement>('.side-menu')
     const playerBar = document.querySelector<HTMLElement>('.player-bar-shell')
-    if (sideMenu === observedSideMenu && playerBar === observedPlayerBar) return
+    const playerSurface = playerBar?.querySelector<HTMLElement>('.player-bar') ?? null
+    if (
+      sideMenu === observedSideMenu &&
+      playerBar === observedPlayerBar &&
+      playerSurface === observedPlayerSurface
+    )
+      return
 
     observedSideMenu = sideMenu
     observedPlayerBar = playerBar
+    observedPlayerSurface = playerSurface
     resizeObserver?.disconnect()
     playbarMutationObserver?.disconnect()
 
@@ -126,6 +154,7 @@ export function useSideMenuClearance(options: SideMenuClearanceOptions) {
       resizeObserver = new ResizeObserver(() => scheduleMeasure())
       if (sideMenu) resizeObserver.observe(sideMenu)
       if (playerBar) resizeObserver.observe(playerBar)
+      if (playerSurface) resizeObserver.observe(playerSurface)
     }
     if (typeof MutationObserver !== 'undefined' && playerBar) {
       playbarMutationObserver = new MutationObserver(() => scheduleMeasure())

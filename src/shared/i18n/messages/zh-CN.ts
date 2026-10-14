@@ -12,6 +12,83 @@
  */
 
 export const ZH_CN_MESSAGES: Record<string, string> = {
+  'automix.phase.off': '已关闭',
+  'automix.phase.preparing': '正在分析并准备下一次过渡',
+  'automix.phase.ready': '过渡已就绪，将在曲尾自动混音',
+  'automix.phase.mixing': '正在混音',
+  'automix.phase.completed': '过渡已完成',
+  'automix.phase.degraded': '本次使用常规播放',
+  'automix.strategy.beat-aligned': '节拍对齐过渡',
+  'automix.strategy.content-boundary': '非人声尾奏过渡（保持原速）',
+  'automix.strategy.release-boundary': '尾音衰减过渡（保持原速）',
+  'automix.strategy.tail-overlap': '尾奏长交接（保持原速）',
+  'automix.reason.waiting': '等待新的过渡准备',
+  'automix.reason.beats': '节拍不够稳定，暂不对拍',
+  'automix.reason.tempo': '两曲速度差超出当前模式范围',
+  'automix.reason.boundary': '未找到合适的重叠位置',
+  'automix.reason.gapless': '连续专辑优先无缝播放',
+  'automix.reason.transport': '当前播放处理或音频格式不支持智能过渡',
+  'automix.reason.range': '音源时间范围不一致，请重新开始播放',
+  'automix.reason.timeout': '准备未赶上本次过渡',
+  'automix.reason.source': '音源已变化或尚未准备好',
+  'automix.reason.retrying': '服务暂时忙碌，正在重试',
+  'automix.reason.cache': '缓存不可用，正在使用有效分析',
+  'automix.reason.decode': '音频边界解码或续播准备失败',
+  'automix.reason.model': '增强模型不可用，使用基础混音',
+  'automix.reason.service': '分析或音频服务暂时不可用',
+  'automix.reason.unsuitable': '此歌曲组合不适合混音',
+  'automix.reason.analysis': '音乐分析失败',
+  'automix.stems.active': '已使用分轨增强',
+  'automix.stems.cache.title': '分轨缓存容量',
+  'automix.stems.cache.description': '复用已完成的分轨。按最近使用顺序清理；关闭后不保留声部缓存。',
+  'automix.stems.title': '分轨增强',
+  'automix.stems.description':
+    '开启后使用人声和贝斯分轨辅助交接；关闭或准备未完成时使用基础 AutoMix。',
+  'automix.stems.device': '分轨计算设备',
+  'automix.stems.deviceDescription':
+    '自动优先使用 GPU，显存不足时回退 CPU；指定 GPU 时失败会使用基础 AutoMix。已有分轨缓存可直接复用。',
+  'automix.stems.deviceAuto': '自动（优先 GPU）',
+  'automix.stems.checking': '正在检测分轨器和计算设备…',
+  'automix.stems.missing': '未检测到分轨器。点击上方“安装分轨包”选择 ZIP，安装后可选择 GPU / CPU。',
+  'automix.stems.install.button': '安装分轨包…',
+  'automix.stems.resourceNotice':
+    '分轨增强会使用内存处理音频；使用 GPU 时还会占用显存。占用量取决于音频和计算设备，可随时关闭分轨增强。',
+  'automix.stems.install.enableAfter': '安装完成后开启分轨增强',
+  'automix.stems.install.enableDescription':
+    '勾选后自动选择 GPU / CPU；不勾选则在安装成功后关闭分轨增强。取消或安装失败保留当前设置。',
+  'automix.stems.install.choose': '选择 ZIP 并安装',
+  'automix.notice.cancel': '取消',
+  'automix.djNotice.title': '开启 DJ 模式？',
+  'automix.djNotice.description':
+    'DJ 模式可能为了对拍和过渡，大幅跳过歌曲的开头或结尾，并让两首歌曲较长时间重叠混音。若希望保留更多歌曲内容，请选择自然模式。',
+  'automix.djNotice.confirm': '确认开启 DJ',
+  'automix.stems.install.pick': '选择 AutoMix 分轨包 ZIP',
+  'automix.stems.install.selecting': '请选择分轨包 ZIP…',
+  'automix.stems.install.checking': '正在检查分轨包和可用空间…',
+  'automix.stems.install.extracting': '正在解压分轨包',
+  'automix.stems.install.verifying': '正在校验文件并检测 GPU / CPU…',
+  'automix.stems.install.ready': '分轨包安装完成，请选择计算设备并开启分轨增强。',
+  'automix.stems.install.cancel': '取消安装',
+  'automix.stems.install.cancelled': '已取消安装。',
+  'automix.stems.install.error.invalid_archive':
+    '安装失败：ZIP 无效或包含不支持的文件，请重新选择完整的分轨包。',
+  'automix.stems.install.error.invalid_pack': '安装失败：分轨包文件不完整或模型版本不兼容。',
+  'automix.stems.install.error.integrity': '安装失败：文件校验不通过，请重新获取完整的分轨包。',
+  'automix.stems.install.error.disk_space':
+    '安装失败：用户数据所在磁盘空间不足，请释放空间后重试。',
+  'automix.stems.install.error.runtime': '安装失败：分轨运行环境检测未通过，请检查分轨包后重试。',
+  'automix.stems.install.error.io':
+    '安装失败：无法读取 ZIP 或写入安装目录，请检查文件和磁盘后重试。',
+  'automix.stems.cpuReady': '已检测到分轨器 · CPU 可用，GPU 不可用',
+  'automix.stems.gpuReady': '已检测到分轨器 · GPU / CPU 可用',
+  'automix.stems.deviceUnavailable': '已保存的计算设备当前不可用，请选择可用设备。',
+  'automix.stems.pack_invalid': '分轨器文件不完整或版本不兼容，请检查增强包后重新检测。',
+  'automix.stems.runtime_unavailable': '分轨器运行检测失败，请检查增强包后重新检测。',
+  'automix.stems.probe_timeout': '分轨器检测超时，请稍后重新检测。',
+  'automix.stems.refresh': '重新检测',
+  'automix.stems.off': '关闭',
+  'automix.stems.auto': '自动（需要增强包）',
+  'automix.reason.failed': '过渡准备失败',
   // ── 通用动作 ──────────────────────────────────────────────────────────────
   // Label/value separator. Locale-dependent: CJK uses the fullwidth form, and a
   // fullwidth colon in English copy reads as a typo, so it cannot be hardcoded
@@ -104,11 +181,11 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'audio.reason.crossfade_active.explain':
     '淡入淡出在曲目衔接处叠加两条流并施加增益包络，衔接段的样本被改写，同时会关闭 true gapless。',
   'audio.reason.crossfade_active.fix': '把播放设置里的交叉淡入淡出时长设为 0 秒。',
-  'audio.reason.automix_active.label': 'AutoMix 正在衔接曲目',
-  'audio.reason.automix_active.explain':
-    'AutoMix 正在混合或处理两首曲目的 PCM 音频，当前输出样本已改变。',
-  'audio.reason.automix_active.fix': '关闭播放设置中的 AutoMix 后恢复最新输出偏好。',
-
+  'audio.reason.automix_processing.label': 'AutoMix 正在处理歌曲过渡',
+  'audio.reason.automix_processing.explain':
+    'AutoMix 在歌曲过渡时调整增益、速度或混合两曲，输出样本因此改变。',
+  'audio.reason.automix_processing.fix':
+    '若需要原样输出，请在播放设置中关闭 AutoMix 并重新播放歌曲。',
   'audio.reason.dsd_output_mode_pcm.label': 'DSD 输出模式被设为 PCM',
   'audio.reason.dsd_output_mode_pcm.explain':
     '当前设置强制把 DSD 转成 PCM，不会尝试 Native DSD 或 DoP 直通。',

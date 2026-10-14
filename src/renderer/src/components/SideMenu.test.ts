@@ -20,7 +20,6 @@ test('local sidebar opening uses one transform transition without material chang
   assert.match(app, /translate3d\(0, 16px, 0\)/)
   assert.match(app, /opacity 0\.14s ease,\s*transform 0\.18s var\(--te-ease-enter\)/)
   assert.match(app, /translate3d\(0, -12px, 0\)/)
-  assert.doesNotMatch(playerBarCss, /transition: left var\(--te-motion-panel\)/)
 })
 
 /**
@@ -29,7 +28,8 @@ test('local sidebar opening uses one transform transition without material chang
  * both edges — so animating it snapped the right edge inward by the clearance on
  * the first frame and swept it back over the rest, which read as the page flinching
  * on its right side. The clearance property itself has to be the animated one, on
- * content surfaces. The player bar stays anchored to the window.
+ * the content surfaces, even though each frame costs a layout pass. The player
+ * keeps its viewport geometry and paints over navigation on desktop.
  *
  * The 0.32s duration is what pins these to the *clearance* animation specifically;
  * the page-transition transforms in the same files run on their own curves.

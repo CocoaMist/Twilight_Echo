@@ -82,7 +82,6 @@ test('app shell uses regular material for navigation and samples only its active
   assert.match(app, /useLiquidGlassEnvironment/)
   assert.match(app, /liquidGlassBackgroundPage = computed<AppBackgroundPage>/)
   assert.match(app, /:liquid-material="liquidGlassChromeActive"/)
-  assert.match(app, /:liquid-material="liquidGlassChromeActive"/)
 })
 
 test('chrome surfaces retain isolated blur layers and press-origin feedback', () => {

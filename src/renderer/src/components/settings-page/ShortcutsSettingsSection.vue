@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SettingsGroup from './SettingsGroup.vue'
 import { computed, ref } from 'vue'
 import type { GlobalShortcutSettings, PlayerShortcutStatus } from '../../types/settings'
 import { isCommandPaletteAccelerator } from '../../../../shared/commandPaletteShortcut.ts'
@@ -287,88 +288,104 @@ function onRecorderBlur(key: BindingKey): void {
       </div>
     </div>
 
-    <div data-setting-id="shortcut-bindings" id="setting-shortcut-bindings" class="shortcut-panel">
-      <div class="shortcut-panel-head">
-        <h3>自定义组合键</h3>
-        <span class="shortcut-panel-hint">点击右侧按钮后直接按下组合键，Esc 取消</span>
-        <button
-          v-if="modifiedKeys.length > 0"
-          type="button"
-          class="shortcut-ghost-button"
-          @click="resetAllBindings"
-        >
-          全部恢复默认
-        </button>
-      </div>
-      <ul class="shortcut-rows">
-        <li
-          v-for="item in EDITABLE_BINDINGS"
-          :key="item.key"
-          class="shortcut-row"
-          :class="{ conflict: conflictBinding === item.key }"
-        >
-          <span
-            class="shortcut-state"
-            :class="statusToneOf(customStatusOf(item.key))"
-            :title="statusTitleOf(customStatusOf(item.key))"
-          ></span>
-          <span class="shortcut-label">{{ item.label }}</span>
-          <button
-            v-if="modifiedKeys.includes(item.key)"
-            type="button"
-            class="shortcut-revert"
-            :title="`恢复默认 ${formatAccelerator(DEFAULT_BINDINGS[item.key])}`"
-            :aria-label="`${item.label}：恢复默认组合键`"
-            @click="resetBinding(item.key)"
-          >
-            <i class="pi pi-undo"></i>
-          </button>
-          <button
-            type="button"
-            class="shortcut-key"
-            :class="{ recording: recordingKey === item.key }"
-            :aria-label="`自定义全局快捷键：${item.label}`"
-            :aria-pressed="recordingKey === item.key"
-            :title="bindingValues[item.key]"
-            @focus="onRecorderFocus(item.key)"
-            @blur="onRecorderBlur(item.key)"
-            @keydown="handleShortcutKeydown(item.key, $event)"
-          >
-            {{
-              recordingKey === item.key ? '按下组合键…' : formatAccelerator(bindingValues[item.key])
-            }}
-          </button>
-        </li>
-      </ul>
-      <p v-if="conflictBinding" class="shortcut-note failed">{{ conflictTip }}</p>
-    </div>
-
-    <div
-      data-setting-id="media-keys"
-      id="setting-media-keys"
-      v-if="mediaStatuses.length > 0"
-      class="shortcut-panel"
+    <SettingsGroup
+      id="shortcut-details"
+      title="组合键与注册状态"
+      :summary="statusSummary.text"
+      :attention="
+        conflictBinding ? conflictTip : statusSummary.tone === 'failed' ? statusSummary.text : ''
+      "
+      description="需要修改后台播放组合键，或排查快捷键冲突时展开。系统媒体控制和全局快捷键分别配置。"
     >
-      <div class="shortcut-panel-head">
-        <h3>系统媒体键</h3>
-        <span class="shortcut-panel-hint">键盘与耳机上的播放控制键，固定绑定</span>
+      <div
+        data-setting-id="shortcut-bindings"
+        id="setting-shortcut-bindings"
+        class="shortcut-panel"
+      >
+        <div class="shortcut-panel-head">
+          <h3>自定义组合键</h3>
+          <span class="shortcut-panel-hint">点击右侧按钮后直接按下组合键，Esc 取消</span>
+          <button
+            v-if="modifiedKeys.length > 0"
+            type="button"
+            class="shortcut-ghost-button"
+            @click="resetAllBindings"
+          >
+            全部恢复默认
+          </button>
+        </div>
+        <ul class="shortcut-rows">
+          <li
+            v-for="item in EDITABLE_BINDINGS"
+            :key="item.key"
+            class="shortcut-row"
+            :class="{ conflict: conflictBinding === item.key }"
+          >
+            <span
+              class="shortcut-state"
+              :class="statusToneOf(customStatusOf(item.key))"
+              :title="statusTitleOf(customStatusOf(item.key))"
+            ></span>
+            <span class="shortcut-label">{{ item.label }}</span>
+            <button
+              v-if="modifiedKeys.includes(item.key)"
+              type="button"
+              class="shortcut-revert"
+              :title="`恢复默认 ${formatAccelerator(DEFAULT_BINDINGS[item.key])}`"
+              :aria-label="`${item.label}：恢复默认组合键`"
+              @click="resetBinding(item.key)"
+            >
+              <i class="pi pi-undo"></i>
+            </button>
+            <button
+              type="button"
+              class="shortcut-key"
+              :class="{ recording: recordingKey === item.key }"
+              :aria-label="`自定义全局快捷键：${item.label}`"
+              :aria-pressed="recordingKey === item.key"
+              :title="bindingValues[item.key]"
+              @focus="onRecorderFocus(item.key)"
+              @blur="onRecorderBlur(item.key)"
+              @keydown="handleShortcutKeydown(item.key, $event)"
+            >
+              {{
+                recordingKey === item.key
+                  ? '按下组合键…'
+                  : formatAccelerator(bindingValues[item.key])
+              }}
+            </button>
+          </li>
+        </ul>
+        <p v-if="conflictBinding" class="shortcut-note failed">{{ conflictTip }}</p>
       </div>
-      <ul class="shortcut-rows">
-        <li v-for="status in mediaStatuses" :key="status.accelerator" class="shortcut-row">
-          <span
-            class="shortcut-state"
-            :class="statusToneOf(status)"
-            :title="statusTitleOf(status)"
-          ></span>
-          <span class="shortcut-label">{{ mediaLabelOf(status.label) }}</span>
-          <kbd class="shortcut-key static">{{ status.accelerator }}</kbd>
-        </li>
-      </ul>
-    </div>
 
-    <p data-setting-id="shortcut-status" class="shortcut-note" :class="statusSummary.tone">
-      {{ statusSummary.text }}
-    </p>
+      <div
+        data-setting-id="media-keys"
+        id="setting-media-keys"
+        v-if="mediaStatuses.length > 0"
+        class="shortcut-panel"
+      >
+        <div class="shortcut-panel-head">
+          <h3>系统媒体键</h3>
+          <span class="shortcut-panel-hint">键盘与耳机上的播放控制键，固定绑定</span>
+        </div>
+        <ul class="shortcut-rows">
+          <li v-for="status in mediaStatuses" :key="status.accelerator" class="shortcut-row">
+            <span
+              class="shortcut-state"
+              :class="statusToneOf(status)"
+              :title="statusTitleOf(status)"
+            ></span>
+            <span class="shortcut-label">{{ mediaLabelOf(status.label) }}</span>
+            <kbd class="shortcut-key static">{{ status.accelerator }}</kbd>
+          </li>
+        </ul>
+      </div>
+
+      <p data-setting-id="shortcut-status" class="shortcut-note" :class="statusSummary.tone">
+        {{ statusSummary.text }}
+      </p>
+    </SettingsGroup>
   </div>
 </template>
 

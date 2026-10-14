@@ -32,6 +32,10 @@ export interface OnboardingFinishResult {
 }
 
 const emit = defineEmits<{ finish: [result: OnboardingFinishResult] }>()
+const props = withDefaults(defineProps<{ saving?: boolean; saveError?: string }>(), {
+  saving: false,
+  saveError: ''
+})
 
 const { settings } = useSettingsStore()
 const flow = useOnboardingFlow(settings.value)
@@ -41,6 +45,7 @@ const {
   currentIndex,
   currentStep,
   direction,
+  visitedSteps,
   isFirstStep,
   isLastStep,
   canAdvance,
@@ -63,7 +68,23 @@ const STEP_TITLES: Record<OnboardingStepId, string> = {
 const hasCustomBackdrop = computed(() => settings.value.appBackground.global.kind === 'image')
 
 const transitionName = computed(() => (direction.value === 'forward' ? 'onb-fwd' : 'onb-back'))
-const primaryLabel = computed(() => (isLastStep.value ? '开始聆听' : '继续'))
+const streamingVisited = computed(
+  () => visitedSteps.value.has('streaming') && choices.value.usage !== 'local'
+)
+const finishAction = computed(() =>
+  resolveFinishAction({
+    ...choices.value,
+    wantsStreamingLogin: streamingVisited.value && choices.value.wantsStreamingLogin
+  })
+)
+const primaryLabel = computed(() => {
+  if (props.saving) return '正在保存…'
+  if (!isLastStep.value) return '继续'
+  if (finishAction.value === 'streaming-login') return '保存并登录'
+  if (streamingVisited.value && choices.value.wantsPluginMarket) return '打开扩展中心'
+  if (choices.value.openMiniPlayerOnFinish) return '打开迷你播放器'
+  return finishAction.value === 'streaming' ? '打开在线音乐' : '打开本地曲库'
+})
 const primaryIcon = computed(() => (isLastStep.value ? 'ph ph-play' : 'ph ph-arrow-right'))
 const sceneNumber = computed(() => String(currentIndex.value + 1).padStart(2, '0'))
 const sceneTotal = computed(() => String(visibleSteps.value.length).padStart(2, '0'))
@@ -109,22 +130,29 @@ function selectUsage(usage: OnboardingUsage): void {
   choices.value.usage = usage
 }
 
-function finish(): void {
+function finish(actionOverride?: OnboardingFinishAction): void {
+  if (props.saving) return
+  const streamingVisited = visitedSteps.value.has('streaming') && choices.value.usage !== 'local'
+  const playerVisited = visitedSteps.value.has('player')
   emit('finish', {
-    patch: buildSettingsPatch(choices.value),
-    action: resolveFinishAction(choices.value),
-    openPluginMarket: choices.value.usage !== null && choices.value.wantsPluginMarket,
+    patch: buildSettingsPatch(choices.value, visitedSteps.value),
+    action:
+      actionOverride ??
+      (choices.value.usage === null ? settings.value.startupHomePage : finishAction.value),
+    openPluginMarket: !actionOverride && streamingVisited && choices.value.wantsPluginMarket,
     // A login page or plugin-market handoff needs the main window; mini mode
     // only wins when no other finish-time destination asks for it.
     openMiniPlayer:
-      choices.value.usage !== null &&
+      !actionOverride &&
+      playerVisited &&
       choices.value.openMiniPlayerOnFinish &&
-      !choices.value.wantsStreamingLogin &&
-      !choices.value.wantsPluginMarket
+      !(streamingVisited && choices.value.wantsStreamingLogin) &&
+      !(streamingVisited && choices.value.wantsPluginMarket)
   })
 }
 
 function handlePrimary(): void {
+  if (props.saving) return
   if (isLastStep.value) {
     finish()
     return
@@ -133,7 +161,7 @@ function handlePrimary(): void {
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.defaultPrevented) return
+  if (event.defaultPrevented || props.saving) return
   const target = event.target as HTMLElement | null
   // Radio groups own arrow keys and Enter activates the focused control —
   // only steer the flow when focus is not inside an interactive element.
@@ -189,7 +217,7 @@ onBeforeUnmount(() => {
         :title="STEP_TITLES[step]"
         :aria-label="`第 ${index + 1} 步：${STEP_TITLES[step]}`"
         :aria-current="index === currentIndex ? 'step' : undefined"
-        :disabled="index >= currentIndex"
+        :disabled="saving || index === currentIndex || !visitedSteps.has(step)"
         @click="goTo(index)"
       ></button>
     </nav>
@@ -240,22 +268,37 @@ onBeforeUnmount(() => {
           v-model:smtc-enabled="choices.smtcEnabled"
           v-model:discord-rpc-enabled="choices.discordRpcEnabled"
         />
-        <StepFinish v-else key="finish" />
+        <StepFinish
+          v-else
+          key="finish"
+          :choices="choices"
+          :saving="saving"
+          @edit="(step) => goTo(visibleSteps.indexOf(step))"
+          @start="finish"
+        />
       </Transition>
     </div>
     <footer class="onb-footer">
       <div class="onb-footer-side">
-        <button v-if="!isLastStep" type="button" class="onb-btn-ghost" @click="finish">
-          跳过引导
+        <button
+          v-if="!isLastStep"
+          type="button"
+          class="onb-btn-ghost"
+          :disabled="saving"
+          @click="() => finish()"
+        >
+          {{ choices.usage === null ? '跳过引导' : '保存并开始使用' }}
         </button>
       </div>
-      <p class="onb-key-hint" aria-hidden="true">回车键继续 · 方向键切换</p>
+      <p v-if="saveError" class="onb-save-error" role="alert">{{ saveError }}</p>
+      <p v-else class="onb-key-hint" aria-hidden="true">回车键继续 · 方向键切换</p>
       <div class="onb-footer-side is-end">
         <button
           v-if="!isFirstStep"
           type="button"
           class="onb-btn-ghost"
           data-te-back-button="pill"
+          :disabled="saving"
           @click="back"
         >
           返回
@@ -263,7 +306,7 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="onb-btn-primary"
-          :disabled="!canAdvance"
+          :disabled="saving || !canAdvance"
           @click="handlePrimary"
         >
           {{ primaryLabel }}

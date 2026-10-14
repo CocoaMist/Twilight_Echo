@@ -200,3 +200,31 @@ test('legacy APIs without cursor selection retain full availability checks', asy
   assert.equal((await loader.prepareAndLoad(options, boundary, api))?.delegated, false)
   assert.equal(batches, 2)
 })
+
+test('partial native queues map versioned indices to duplicate logical occurrences', async () => {
+  const loader = new NativeQueueLoader()
+  const queue = tracks(4)
+  queue[0].id = queue[3].id = 'ncm:same'
+  queue.forEach((track, index) => {
+    track.queueEntryId = `entry:${index}`
+  })
+  const prepared = {
+    items: [
+      { id: queue[3].id, source: 'twilight-media://audio/last' },
+      { id: queue[0].id, source: 'twilight-media://audio/first' }
+    ],
+    startIndex: 0,
+    delegated: false,
+    queueIndices: [3, 0]
+  }
+  await loader.loadPrepared(prepared, { loadQueue: async () => ({ queueToken: 'window' }) }, queue)
+  assert.equal(loader.findLogicalIndex({ queueIndex: 0, queueToken: 'window' }, queue), 3)
+  assert.equal(loader.findLogicalIndex({ queueIndex: 1, queueToken: 'window' }, queue), 0)
+  assert.equal(loader.findLogicalIndex({ queueIndex: 1, queueToken: 'old-window' }, queue), -1)
+  assert.equal(loader.findLogicalIndex({ queueIndex: 1 }, queue), -1)
+  queue[0] = { ...queue[0], queueEntryId: 'replacement' }
+  assert.equal(loader.findLogicalIndex({ queueIndex: 1, queueToken: 'window' }, queue), -1)
+  assert.equal(loader.playMode('listLoop'), 'sequential')
+  loader.clear()
+  assert.equal(loader.findLogicalIndex({ queueIndex: 0, queueToken: 'window' }, queue), -1)
+})

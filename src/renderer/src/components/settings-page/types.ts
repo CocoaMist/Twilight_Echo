@@ -82,14 +82,49 @@ export type BooleanSettingKey =
   | 'remoteControlEnabled'
   | 'developerMode'
 
-export const sections: { key: SectionKey; label: string; icon: string }[] = [
-  { key: 'general', label: '通用', icon: 'pi pi-sliders-h' },
-  { key: 'appearance', label: '外观', icon: 'pi pi-palette' },
-  { key: 'playback', label: '播放与音效', icon: 'pi pi-volume-up' },
-  { key: 'lyrics', label: '歌词', icon: 'pi pi-align-left' },
-  { key: 'library', label: '媒体库与存储', icon: 'pi pi-database' },
-  { key: 'connections', label: '连接与控制', icon: 'pi pi-link' },
-  { key: 'system', label: '系统与关于', icon: 'pi pi-cog' }
+export const sections: { key: SectionKey; label: string; icon: string; description: string }[] = [
+  {
+    key: 'general',
+    label: '通用',
+    icon: 'pi pi-sliders-h',
+    description: '调整启动、窗口和日常操作习惯。'
+  },
+  {
+    key: 'appearance',
+    label: '外观',
+    icon: 'pi pi-palette',
+    description: '设置主题、背景、字体与播放器外观。'
+  },
+  {
+    key: 'playback',
+    label: '播放与音效',
+    icon: 'pi pi-volume-up',
+    description: '调整播放习惯、输出设备和声音处理。'
+  },
+  {
+    key: 'lyrics',
+    label: '歌词',
+    icon: 'pi pi-align-left',
+    description: '设置歌词来源与播放页、桌面上的显示方式。'
+  },
+  {
+    key: 'library',
+    label: '媒体库与存储',
+    icon: 'pi pi-database',
+    description: '管理本地媒体库、下载目录与缓存。'
+  },
+  {
+    key: 'connections',
+    label: '连接与控制',
+    icon: 'pi pi-link',
+    description: '配置系统集成、远程控制和快捷键。'
+  },
+  {
+    key: 'system',
+    label: '系统与关于',
+    icon: 'pi pi-cog',
+    description: '管理性能、插件、备份与软件更新。'
+  }
 ]
 
 export const colorModeOptions: { value: AppTheme; label: string; icon: string }[] = [
@@ -324,6 +359,8 @@ export interface SettingsSearchEntry {
   /** Stable target, independent of translated labels. Optional for legacy callers. */
   id?: string
   disclosureId?: string
+  /** Ancestors first, for targets inside nested settings groups. */
+  disclosureIds?: readonly string[]
   fallbackId?: string
   fallbackReason?: string
   appearanceArea?: 'background' | 'material' | 'advanced'
@@ -339,6 +376,12 @@ export interface SettingsSearchEntry {
 
 /** 设置项级细粒度搜索索引：每个设置项一条，保证任意设置项都能被搜到 */
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+  {
+    id: 'audio-device',
+    section: 'playback',
+    title: '输出设备',
+    terms: '声音 输出设备 耳机 音箱 解码器 声卡 没有声音 audio device 系统默认'
+  },
   {
     id: 'library-folders',
     section: 'library',
@@ -376,7 +419,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     id: 'library-rescan',
     section: 'library',
     title: '完整重扫',
-    terms: '媒体库 下载 缓存 存储 rescan 重扫 扫描 元数据 封面 刷新 媒体库 完整重扫',
+    terms:
+      '媒体库 下载 缓存 存储 rescan 重扫 扫描 元数据 封面 刷新 媒体库 停止补全歌曲信息 取消富化 后台富化 完整重扫',
     disclosureId: 'scan-diagnostics'
   },
   {
@@ -543,6 +587,30 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     terms: '播放 输出 引擎 DSP 音效 音量 削波 clip 保护 响度 安全 音量与削波保护'
   },
   {
+    id: 'autoMixMode',
+    section: 'playback',
+    title: 'Twilight AutoMix',
+    terms: '播放 混音 智能过渡 automix 自然 natural DJ 安装 分轨包 ZIP'
+  },
+  {
+    id: 'autoMixStemMode',
+    section: 'playback',
+    title: '分轨增强',
+    terms: '播放 automix stems 分轨 分离 人声 贝斯 安装 增强包 ZIP 开启 关闭 内存 显存'
+  },
+  {
+    id: 'autoMixStemDevice',
+    section: 'playback',
+    title: '分轨计算设备',
+    terms: '播放 automix 分轨 计算 设备 GPU CPU 自动 显卡 显存'
+  },
+  {
+    id: 'autoMixStemCacheMiB',
+    section: 'playback',
+    title: '分轨缓存容量',
+    terms: '播放 automix 分轨 缓存 容量 MiB'
+  },
+  {
     id: 'gapless',
     section: 'playback',
     title: '无缝播放',
@@ -554,12 +622,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     section: 'playback',
     title: '启动时恢复播放',
     terms: '播放 输出 引擎 DSP 音效 恢复 播放 resume 上次 曲目 位置 启动 启动时恢复播放'
-  },
-  {
-    id: 'automix',
-    section: 'playback',
-    title: 'AutoMix',
-    terms: '播放 输出 引擎 DSP 音效 automix 自动混音 智能转场 衔接 选段 淡化 实验 AutoMix'
   },
   {
     id: 'previous-action',
@@ -725,7 +787,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: 'cache-metadata',
     section: 'library',
-    title: '元数据缓存',
+    title: '歌曲信息缓存',
     terms: '媒体库 下载 缓存 存储 元数据 metadata 缓存 清除 元数据缓存',
     disclosureId: 'cache-details'
   },
@@ -1487,6 +1549,93 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     terms: '歌词 桌面歌词 歌词 个性化 字体 翻译 罗马音 逐层'
   }
 ]
+
+// Reveal ancestors first so nested disclosures also work with lazily mounted content.
+const groupedTargets: { path: readonly string[]; ids: readonly string[] }[] = [
+  {
+    path: ['playback-transitions'],
+    ids: [
+      'autoMixMode',
+      'autoMixStemMode',
+      'autoMixStemDevice',
+      'autoMixStemCacheMiB',
+      'gapless',
+      'bpm-analysis',
+      'playback-policy'
+    ]
+  },
+  {
+    path: ['output-advanced'],
+    ids: ['audio-output', 'exclusive-mode', 'exclusive-release', 'software-volume', 'clip-guard']
+  },
+  { path: ['dsd-routing'], ids: ['pcm-to-dsd'] },
+  {
+    path: ['theme-customization'],
+    ids: ['theme-studio', 'theme-workshop', 'accent-light', 'accent-dark']
+  },
+  {
+    path: ['window-transparency-details'],
+    ids: [
+      'window-transparency',
+      'window-surface-opacity',
+      'window-surface-blur',
+      'window-card-opacity',
+      'window-card-blur'
+    ]
+  },
+  {
+    path: ['player-bar', 'player-bar-behavior-details'],
+    ids: ['player-page-mode', 'player-page-visibility', 'player-bar-threshold', 'player-bar-delay']
+  },
+  { path: ['player-bar', 'player-bar-layout-details'], ids: ['player-bar-layout'] },
+  {
+    path: ['lyrics-style-details'],
+    ids: [
+      'lyrics-weight',
+      'lyrics-line-gap',
+      'lyrics-dim',
+      'lyrics-focus',
+      'lyrics-color',
+      'lyrics-customizer'
+    ]
+  },
+  { path: ['shortcut-details'], ids: ['shortcut-bindings', 'media-keys', 'shortcut-status'] },
+  { path: ['external-connections'], ids: ['discord', 'remote-control', 'remote-pairing'] },
+  { path: ['network-proxy'], ids: ['proxy-mode', 'proxy-host', 'proxy-port', 'proxy-fallback'] }
+]
+for (const entry of SETTINGS_SEARCH_INDEX) {
+  const path = groupedTargets.find((group) => group.ids.includes(entry.id ?? ''))?.path
+  if (path) {
+    entry.disclosureIds = path
+    entry.disclosureId = path[path.length - 1]
+  } else if (entry.id?.startsWith('download-') || entry.id?.startsWith('cache-')) {
+    entry.disclosureIds = ['storage', ...(entry.disclosureId ? [entry.disclosureId] : [])]
+    entry.disclosureId = entry.disclosureIds[entry.disclosureIds.length - 1]
+  }
+  if (entry.id?.startsWith('autoMixStem')) {
+    entry.fallbackId = 'autoMixMode'
+    entry.fallbackReason = '当前版本的 AutoMix 分轨功能暂不可用，请查看此处的功能说明。'
+  }
+}
+
+export function settingsDisclosurePath(entry: SettingsSearchEntry): readonly string[] {
+  return entry.disclosureIds ?? (entry.disclosureId ? [entry.disclosureId] : [])
+}
+
+export function settingsAnchorDisclosurePath(anchor: string): readonly string[] {
+  if (anchor === 'cache') return ['storage']
+  if (anchor === 'device-profiles') return ['output-advanced']
+  if (anchor === 'audio-output-device-panel') return ['output-advanced', anchor]
+  const entry = SETTINGS_SEARCH_INDEX.find(
+    (candidate) => candidate.id === anchor.replace(/^setting-/, '')
+  )
+  if (entry) return settingsDisclosurePath(entry)
+  const owner = SETTINGS_SEARCH_INDEX.find((candidate) =>
+    settingsDisclosurePath(candidate).includes(anchor)
+  )
+  const path = owner ? settingsDisclosurePath(owner) : []
+  return path.slice(0, path.indexOf(anchor) + 1)
+}
 
 /** Resolve pre-reorganization commands without guessing from rendered text. */
 export function resolveSettingsSearchEntry(entry: SettingsSearchEntry): SettingsSearchEntry {

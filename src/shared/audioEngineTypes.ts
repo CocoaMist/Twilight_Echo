@@ -1,5 +1,4 @@
 import type { CueRange } from './cue.ts'
-import type { AutoMixConfig, AutoMixStatus } from './autoMix.ts'
 import type { DsdRouteSettings } from './audioProcessingOptions.ts'
 
 export type { DsdRouteSettings }
@@ -80,7 +79,6 @@ export interface AudioProcessingSettings {
   crossfadeSeconds: number
   crossfadeCurve?: 'linear' | 'equal-power'
   crossfadeContent?: 'conservative' | 'all' | 'live'
-  autoMix?: AutoMixConfig
 }
 
 export interface AudioOutputOption {
@@ -450,6 +448,8 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   requestedConfigRevision: number
   appliedConfigRevision: number
   queueIndex: number
+  /** Main-issued content version for mapping partial native queues to logical entries. */
+  queueToken?: string
   playMode: PlayMode
   source: string
   codec: string
@@ -494,10 +494,20 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   crossfeedActive: boolean
   crossfadeActive: boolean
   crossfadeMixActive?: boolean
-  autoMix?: AutoMixStatus
   crossfadeEffectiveSeconds?: number
   crossfadeCurve?: 'linear' | 'equal-power'
   crossfadeBlockedReason?: string
+  autoMixMode?: import('./twilightAutoMix.ts').AutoMixMode
+  autoMixState?: 'off' | 'preparing' | 'ready' | 'mixing' | 'completed' | 'degraded'
+  autoMixDurationSeconds?: number
+  autoMixStemEnhanced?: boolean
+  autoMixDecodeMs?: number
+  autoMixPrepareMs?: number
+  autoMixReason?: string
+  autoMixStrategy?: '' | 'beat-aligned' | 'content-boundary' | 'tail-overlap' | 'release-boundary'
+  autoMixPlanId?: number
+  autoMixOutputSeconds?: number
+  autoMixNextSourceSeconds?: number
   fftActive: boolean
   irResampled: boolean
   replayGainDb: number

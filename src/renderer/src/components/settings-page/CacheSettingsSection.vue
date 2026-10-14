@@ -72,6 +72,7 @@ const emit = defineEmits<{
     <SettingsGroup
       id="cache-details"
       title="缓存策略与分析数据"
+      description="需要节省空间或重新分析歌曲时展开；关闭缓存不会删除已下载的音乐文件。"
       :attention="
         clearingBpmAnalysisCache || clearingLoudnessAnalysisCache ? '正在清理分析缓存…' : ''
       "
@@ -113,12 +114,12 @@ const emit = defineEmits<{
         <hr />
         <div data-setting-id="cache-metadata" id="setting-cache-metadata" class="setting-item">
           <div class="setting-copy">
-            <strong>元数据缓存</strong>
+            <strong>歌曲信息缓存</strong>
             <span>缓存在线匹配得到的艺人、专辑和曲目信息，不覆盖本地文件身份。</span>
           </div>
           <button
             type="button"
-            aria-label="元数据缓存"
+            aria-label="歌曲信息缓存"
             class="toggle-switch"
             :class="{ active: cachePolicy.metadata, inactive: !cachePolicy.metadata }"
             role="switch"

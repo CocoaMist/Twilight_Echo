@@ -168,9 +168,7 @@ onBeforeUnmount(() => {
 }
 
 /* The marquee carries information: a long title is unreadable when truncated,
-   so the mini window's text keeps scrolling in the reduced tier — just slower.
-   See docs/ui-playback-refactor-audit.md:696 for why the component's own
-   prefers-reduced-motion disable rule was removed. */
+   so the mini window's text keeps scrolling in the reduced tier — just slower. */
 :global(html[data-te-motion='reduced'] .te-scroll-text.is-overflowing) {
   animation-name: te-scroll-text-edge !important;
   animation-duration: calc(var(--te-scroll-duration, 10s) * 2) !important;

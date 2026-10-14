@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+import vm from 'node:vm'
 import assert from 'node:assert/strict'
 import ts from 'typescript'
 import { effectScope, nextTick, ref, watch } from 'vue'
@@ -10,7 +11,15 @@ import { translate } from '../../../shared/i18n/translate.ts'
 import { ZH_CN_MESSAGES } from '../../../shared/i18n/messages/zh-CN.ts'
 import { EN_US_MESSAGES } from '../../../shared/i18n/messages/en-US.ts'
 import type { Track } from '../types/music'
-import { prepareNativeQueue } from '../utils/nativeQueuePreparation.ts'
+import {
+  prepareNativeQueue,
+  preparedNativePlayMode,
+  stripStaleNcmStreamUrls,
+  isAuthorizedRemoteUrl,
+  NCM_STREAM_URL_MAX_AGE_MS
+} from '../utils/nativeQueuePreparation.ts'
+import { NativeQueueLoader } from '../utils/nativeQueueLoader.ts'
+import { patchPlaybackQueueTrack } from '../utils/playbackQueueVirtualization.ts'
 import { getTrackSource, isLikelyLocalFilePath } from '../utils/playerTrackUtils.ts'
 import { shouldReuseResolvedStreamUrl } from '../utils/playbackRouting.ts'
 
@@ -748,15 +757,15 @@ test('NetEase next-track prefetch wires into playback progress and the native qu
   assert.match(prefetch, /if \(ncmPrefetchInFlightTrackId\) return/)
   assert.match(prefetch, /NCM_STREAM_URL_MAX_AGE_MS/)
   // 解析带当前音质偏好；http(s) 地址才写回队列轨，且只写在最新队列里的对象实例。
-  assert.match(prefetch, /quality: appSettings\.value\.ncmPlaybackQuality/)
+  assert.match(prefetch, /const quality = appSettings\.value\.ncmPlaybackQuality/)
   assert.match(prefetch, /stillUpcoming\.streamUrl = resolved/)
   // 迟到守卫：解析期间目标漂移即丢弃结果，绝不写共享轨状态。
   const resolveAt = prefetch.indexOf('resolvePlaybackUrl')
-  const guardAt = prefetch.indexOf('findUpcomingQueueTrack()', resolveAt)
+  const guardAt = prefetch.indexOf('currentUpcoming()', resolveAt)
   const writeAt = prefetch.indexOf('stillUpcoming.streamUrl = resolved')
   assert.ok(resolveAt >= 0 && guardAt > resolveAt && writeAt > guardAt)
-  // 预取不 patchTrackInQueues：loadAndPlay 的提交路径仍是唯一权威写点。
-  assert.doesNotMatch(prefetch, /patchTrackInQueues/)
+  assert.match(prefetch, /patchTrackInQueues\(stillUpcoming\)/)
+  assert.match(prefetch, /await queueNativeQueueStateSync\(\)/)
   // 触发：播放后段 ≥70% 或曲目切换（next 意图）。
   assert.match(source, /NCM_PREFETCH_TRIGGER_PROGRESS = 0\.7/)
   assert.match(source, /void prefetchUpcomingNcmStream\(\)/)
@@ -767,6 +776,272 @@ test('NetEase next-track prefetch wires into playback progress and the native qu
     /stripStaleNcmStreamUrls\(playMode\.value === 'heart' \? \[track\] : queue\.value,/
   )
 })
+
+function ncmGaplessFixture(
+  options: {
+    resolve?: (track: Track, quality: Track['streamQuality']) => Promise<string | null>
+    authorize?: (path: string) => Promise<boolean>
+  } = {}
+) {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const base = ncmPlaybackResolutionFixture([]).track
+  const queue = ['a', 'b', 'c', 'd'].map<Track>((id) => ({
+    ...base,
+    id: `ncm:${id}`,
+    queueEntryId: `entry:${id}`,
+    filePath: `ncm:${id}`,
+    streamUrl: null
+  }))
+  queue[0].streamUrl = 'twilight-media://audio/a'
+  let now = 1000
+  const calls: Array<{ id: string; quality: Track['streamQuality'] }> = []
+  const loaded: string[][] = []
+  const modes: string[] = []
+  const loader = new NativeQueueLoader()
+  const context = {
+    queue: { value: queue as Track[] },
+    currentTrack: { value: queue[0] as Track },
+    queueIndex: { value: 0 },
+    playMode: { value: 'sequential' as import('../types/settings').PlayMode },
+    appSettings: { value: { ncmPlaybackQuality: 'lossless' as Track['streamQuality'] } },
+    scope: 'account:1',
+    activeLoadToken: 1,
+    nativePlaybackActive: true,
+    isPlaying: { value: true },
+    isLoading: { value: false },
+    castTargetUsn: { value: '' },
+    ncmPrefetchInFlightTrackId: '',
+    ncmPrefetchGeneration: 0,
+    ncmPrefetchRetryAfter: 0,
+    ncmPrefetchRetryKey: '',
+    ncmPrefetchLastSyncedKey: '',
+    ncmStreamUrlCommittedAt: new Map([[queue[0].id, now]]),
+    MAX_NCM_STREAM_URL_RECORDS: 64,
+    NCM_STREAM_URL_MAX_AGE_MS,
+    nativeQueueLoader: loader,
+    Date: { now: () => now },
+    getTrackSource,
+    isLikelyLocalFilePath,
+    isAuthorizedRemoteUrl,
+    getNcmPrefetchScope: () => context.scope,
+    syncPluginProviders: async () => {},
+    isUsableLocalPlaybackFile: options.authorize ?? (async () => false),
+    useMediaProviders: () => ({
+      resolvePlaybackUrl: async (track: Track, resolution: { quality: Track['streamQuality'] }) => {
+        calls.push({ id: track.id, quality: resolution.quality })
+        return options.resolve
+          ? options.resolve(track, resolution.quality)
+          : `twilight-media://audio/${track.id.slice(4)}`
+      }
+    }),
+    patchTrackInQueues: (track: Track) => {
+      context.queue.value = patchPlaybackQueueTrack(context.queue.value, track)
+    },
+    queueNativeQueueStateSync: async (): Promise<void> => {
+      const prepared = await prepareNativeQueue({
+        queue: stripStaleNcmStreamUrls(context.queue.value, {
+          committedAtByTrackId: context.ncmStreamUrlCommittedAt,
+          quality: context.appSettings.value.ncmPlaybackQuality,
+          nowMs: now
+        }),
+        currentTrack: context.currentTrack.value,
+        currentTarget: context.currentTrack.value.streamUrl!,
+        currentIndex: context.queueIndex.value,
+        playMode: context.playMode.value,
+        isAudioFileAuthorized: options.authorize ?? (async () => false)
+      })
+      assert.ok(prepared)
+      await loader.loadPrepared(
+        prepared,
+        {
+          loadQueue: async (items) => {
+            loaded.push(items.map((item) => item.source))
+            return { queueToken: `version:${loaded.length}` }
+          }
+        },
+        context.queue.value
+      )
+      modes.push(preparedNativePlayMode(prepared, context.playMode.value))
+    }
+  }
+  const implementation = ts.transpileModule(
+    ['rememberNcmStreamUrlCommit', 'findUpcomingQueueTrack', 'prefetchUpcomingNcmStream']
+      .map((name) => `async function ${name}() {${extractInternalFunctionBody(source, name)}}`)
+      .join('\n')
+      .replace(
+        'async function rememberNcmStreamUrlCommit()',
+        'function rememberNcmStreamUrlCommit(trackId)'
+      )
+      .replace('async function findUpcomingQueueTrack()', 'function findUpcomingQueueTrack()'),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
+  ).outputText
+  const prefetch = vm.runInNewContext(
+    `${implementation}\nprefetchUpcomingNcmStream`,
+    context
+  ) as () => Promise<void>
+  return {
+    context,
+    calls,
+    loaded,
+    modes,
+    loader,
+    prefetch,
+    setNow: (value: number) => {
+      now = value
+    },
+    setIndex: (index: number) => {
+      context.queueIndex.value = index
+      context.currentTrack.value = context.queue.value[index]
+    }
+  }
+}
+
+test('NetEase grants reach native preload even with unresolved later album tracks', async () => {
+  const f = ncmGaplessFixture()
+  await f.prefetch()
+  assert.deepEqual(f.loaded, [['twilight-media://audio/a', 'twilight-media://audio/b']])
+  assert.deepEqual(f.modes, ['sequential'])
+  assert.equal(
+    f.loader.findLogicalIndex({ queueIndex: 1, queueToken: 'version:1' }, f.context.queue.value),
+    1
+  )
+  await f.prefetch()
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.loaded.length, 1, 'fresh progress ticks must not rebuild the native window')
+  f.setIndex(1)
+  await f.prefetch()
+  assert.deepEqual(f.loaded[1], ['twilight-media://audio/b', 'twilight-media://audio/c'])
+  assert.equal(
+    f.loader.findLogicalIndex({ queueIndex: 1, queueToken: 'version:2' }, f.context.queue.value),
+    2
+  )
+  assert.equal(
+    f.loader.findLogicalIndex({ queueIndex: 1, queueToken: 'version:1' }, f.context.queue.value),
+    -1
+  )
+})
+
+test('NetEase list loop rolls a partial native window to a fresh first song without looping the window', async () => {
+  const f = ncmGaplessFixture()
+  f.context.playMode.value = 'listLoop'
+  f.context.queue.value[2].streamUrl = 'twilight-media://audio/c'
+  f.context.ncmStreamUrlCommittedAt.set('ncm:c', 1000)
+  f.setIndex(2)
+  await f.prefetch()
+  assert.deepEqual(f.loaded[0], ['twilight-media://audio/c', 'twilight-media://audio/d'])
+  f.setIndex(3)
+  await f.prefetch()
+  assert.deepEqual(f.loaded[1], ['twilight-media://audio/d', 'twilight-media://audio/a'])
+  assert.deepEqual(f.modes, ['sequential', 'sequential'])
+  assert.equal(f.calls.length, 1, 'the first song is already fresh')
+  assert.equal(
+    f.loader.findLogicalIndex({ queueIndex: 1, queueToken: 'version:2' }, f.context.queue.value),
+    0
+  )
+})
+
+test('NetEase prefetch authorizes cached files and re-resolves a deleted cache', async () => {
+  const cached = 'D:\\Cache\\ncm-cache\\93.flac'
+  let exists = true
+  let resolutions = 0
+  const f = ncmGaplessFixture({
+    resolve: async () => (++resolutions === 1 ? cached : 'twilight-media://audio/new-b'),
+    authorize: async (path) => path === cached && exists
+  })
+  await f.prefetch()
+  assert.equal(f.loaded[0][1], cached)
+  exists = false
+  f.setNow(6001)
+  await f.prefetch()
+  assert.equal(f.loaded[1][1], 'twilight-media://audio/new-b')
+})
+
+test('NetEase failed prefetch is bounded and never commits an unauthorized cache', async () => {
+  let resolutions = 0
+  const f = ncmGaplessFixture({
+    resolve: async () =>
+      ++resolutions === 1 ? 'D:\\Untrusted\\93.flac' : 'twilight-media://audio/b'
+  })
+  await Promise.all([f.prefetch(), f.prefetch()])
+  await f.prefetch()
+  assert.equal(f.calls.length, 1)
+  assert.equal(f.loaded.length, 0)
+  assert.equal(f.context.ncmStreamUrlCommittedAt.has('ncm:b'), false)
+  f.setNow(6001)
+  await f.prefetch()
+  assert.equal(f.loaded[0][1], 'twilight-media://audio/b')
+})
+
+test('failed native queue synchronization clears its pending owner without an unhandled rejection', async () => {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const body = ts.transpileModule(
+    `function trackNativeQueueSyncRequest(request) {${extractInternalFunctionBody(source, 'trackNativeQueueSyncRequest')}}`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
+  ).outputText
+  const context = { nativeQueueSyncRequest: null as Promise<void> | null }
+  const track = vm.runInNewContext(`${body}\ntrackNativeQueueSyncRequest`, context) as (
+    request: Promise<void>
+  ) => Promise<void>
+  const pending = track(Promise.reject(new Error('queue unavailable')))
+  await assert.rejects(pending, /queue unavailable/)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(context.nativeQueueSyncRequest, null)
+})
+
+test('NetEase prefetch retries a failed native commit without retaining false freshness', async () => {
+  const f = ncmGaplessFixture()
+  const synchronize = f.context.queueNativeQueueStateSync
+  f.context.queueNativeQueueStateSync = async () => {
+    throw new Error('queue unavailable')
+  }
+  await f.prefetch()
+  assert.equal(f.context.ncmStreamUrlCommittedAt.has('ncm:b'), false)
+  assert.equal(f.loaded.length, 0)
+  f.context.queueNativeQueueStateSync = synchronize
+  f.setNow(6001)
+  await f.prefetch()
+  assert.equal(f.loaded[0][1], 'twilight-media://audio/b')
+})
+
+for (const change of ['account', 'quality', 'load', 'queue-entry'] as const) {
+  test(`NetEase prefetch discards a late result after a ${change} change and prepares the new target`, async () => {
+    let release!: (target: string) => void
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    let count = 0
+    const f = ncmGaplessFixture({
+      resolve: async () =>
+        ++count === 1
+          ? new Promise<string>((resolve) => {
+              release = resolve
+              markStarted()
+            })
+          : 'twilight-media://audio/new-target'
+    })
+    const pending = f.prefetch()
+    await started
+    if (change === 'account') f.context.scope = 'account:2'
+    if (change === 'quality') {
+      f.context.appSettings.value.ncmPlaybackQuality = 'standard'
+      f.context.ncmPrefetchGeneration += 1
+    }
+    if (change === 'load') f.context.activeLoadToken += 1
+    if (change === 'queue-entry') {
+      f.context.queue.value[1] = { ...f.context.queue.value[1], queueEntryId: 'replacement' }
+    }
+    release('twilight-media://audio/stale-target')
+    await pending
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(f.loaded.length, 1)
+    assert.equal(f.loaded[0][1], 'twilight-media://audio/new-target')
+    assert.equal(
+      f.context.queue.value[1].streamQuality,
+      f.context.appSettings.value.ncmPlaybackQuality
+    )
+  })
+}
 
 test('mini player switching recovers from stale unauthorized local tracks', () => {
   const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
@@ -871,7 +1146,7 @@ test('player store prepares native queues before loading or synchronizing them',
   assert.match(syncNativeQueueState, /if \(!synchronized\.applied\) return/)
   assert.match(
     syncNativeQueueState,
-    /nativeQueueLoader\.loadPrepared\(preparedQueue, window\.api\.audioEngine\)/
+    /nativeQueueLoader\.loadPrepared\(preparedQueue, window\.api\.audioEngine, snapshot\.queue\)/
   )
 })
 
@@ -1364,7 +1639,7 @@ test('local dashboard playback keeps a multi-track queue for next and previous c
   const playDashboardTrack = source.match(/function playDashboardTrack[\s\S]*?\n}/)?.[0] ?? ''
 
   assert.match(source, /const heroTrack = computed<Track \| null>/)
-  assert.match(source, /@click="heroIsCurrent \? togglePlay\(\) : playDashboardTrack\(heroTrack\)"/)
+  assert.match(source, /@click="(?:handleHeroPlay|[^"]*playDashboardTrack\(heroTrack\)[^"]*)"/)
   assert.match(source, /@click="playDashboardTrack\(track\)"/)
   assert.match(source, /@click="playDashboardTrack\(entry\.track\)"/)
   assert.match(playDashboardTrack, /DASHBOARD_QUEUE_WINDOW/)
@@ -2119,12 +2394,14 @@ test('play mode is persisted in settings and restored on launch', () => {
   // in plain queue order. Everywhere else the reorder still waits for a boundary.
   assert.match(
     setPlayModeInternal,
-    /if \(!castTargetUsn\.value && nativePlaybackActive && isNativeQueueDelegated\(\)\) \{[\s\S]*applyPendingRendererPlayModeAtBoundary\(\)\s*\n\s*void queueNativeQueueStateSync\(\)/
+    /nativeQueueLoader\.hasWindow\(\)[\s\S]*applyPendingRendererPlayModeAtBoundary\(\)\s*\n\s*void queueNativeQueueStateSync\(\)/
   )
   // Switching mode must never restart playback, delegated or not.
   assert.doesNotMatch(setPlayModeInternal, /playQueueTrack\(|loadAndPlay\(/)
-  assert.match(queueNativePlayModeSync, /toNativePlayMode\(mode\)/)
-  assert.match(queueNativePlayModeSync, /window\.api\.audioEngine\.setPlayMode\(nativePlayMode\)/)
+  assert.match(
+    queueNativePlayModeSync,
+    /window\.api\.audioEngine\.setPlayMode\(nativeQueueLoader\.playMode\(mode\)\)/
+  )
   assert.doesNotMatch(queueNativePlayModeSync, /loadQueue\(/)
   assert.match(
     applyPendingRendererPlayModeAtBoundary,
@@ -2147,7 +2424,7 @@ test('play mode is persisted in settings and restored on launch', () => {
   assert.match(previous, /applyPendingRendererPlayModeAtBoundary\(\)/)
   assert.match(
     loadAndPlay,
-    /const nativePlayMode = toNativePlayMode\(playMode\.value\)[\s\S]*await window\.api\.audioEngine\.setPlayMode\(nativePlayMode\)/
+    /const nativePlayMode = preparedNativePlayMode\(preparedQueue, playMode\.value\)[\s\S]*await window\.api\.audioEngine\.setPlayMode\(nativePlayMode\)/
   )
   // Every native mode push routes through the one shared mapping. Re-inlining it
   // is how listLoop ended up pinned to a non-wrapping native sequential.
@@ -2156,10 +2433,7 @@ test('play mode is persisted in settings and restored on launch', () => {
     /=== 'repeat' \|\| [a-zA-Z.]*playMode[a-zA-Z.]* === 'shuffle'\s*\n?\s*\? /,
     'map play modes for the native engine through toNativePlayMode, not a local copy'
   )
-  assert.match(
-    playerSource,
-    /import \{ toNativePlayMode \} from '\.\.\/\.\.\/\.\.\/shared\/playbackModes\.ts'/
-  )
+  assert.match(playerSource, /preparedNativePlayMode/)
   assert.match(
     playerSource,
     /const modes: PlayMode\[\] = \['sequential', 'listLoop', 'repeat', 'shuffle', 'heart'\]/

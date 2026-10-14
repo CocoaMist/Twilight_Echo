@@ -29,6 +29,7 @@ export const useAppNoticeStore=()=>({unreadCount:ref(1),activeTaskCount:ref(0),d
 export const useWindowChrome=()=>({maximized:ref(false)})
 export const useBackStack=()=>({canGoBack:ref(true),backHint:ref(null)})`
     )
+    await writeFile(join(directory, 'import.ts'), `export default {render:()=>null}`)
     await build({
       configFile: false,
       logLevel: 'error',
@@ -38,6 +39,10 @@ export const useBackStack=()=>({canGoBack:ref(true),backHint:ref(null)})`
       resolve: {
         alias: [
           { find: '/icon.png', replacement: join(workspace, 'resources/icon.png') },
+          {
+            find: '@renderer/components/ImportDialog.vue',
+            replacement: join(directory, 'import.ts')
+          },
           {
             find: /^(?:.*\/stores\/use(?:Ncm|Provider|AppNotice|Settings|Music)Store|.*\/app\/use(?:WindowChrome|BackStack))(?:\.ts)?$/,
             replacement: join(directory, 'fixtures.ts')
@@ -193,6 +198,6 @@ window.runChromeHigTests=async()=>{
  expect(portals.length===2&&portals.every(button=>button.tagName==='BUTTON'&&button.type==='button'),'library portals are not semantic buttons')
  portals[1].click();expect(ranking===1&&recent===0,'library portal emits the wrong action')
 }
-window.prepareLibraryPortal=()=>{[...document.querySelectorAll('.side-menu .menu-nav>button')].at(-1).focus()}
+window.prepareLibraryPortal=()=>{document.querySelector('.side-menu [aria-label="编辑页面"]').focus()}
 window.checkLibraryActivation=()=>{expect(recent===1,'Enter does not activate the actual library portal');expect(document.activeElement.matches(':focus-visible'),'keyboard portal focus is not visible: '+JSON.stringify({active:document.activeElement.outerHTML.slice(0,180),focused:document.hasFocus(),outline:getComputedStyle(document.activeElement).outline}))}
 `

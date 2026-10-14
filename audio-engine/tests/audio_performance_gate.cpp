@@ -1,16 +1,22 @@
 #include "../core/AudioPipeline.h"
 #include "../dsp/Vst3BridgeProcessor.h"
 #include "../output/IOutputBackend.h"
+#include "../automix-native/AutoMixAdapter.h"
+#include "../automix-native/am_hash.h"
+#include "../decoder/FFmpegDecoder.h"
+#include "../utils/JsonUtils.h"
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -81,6 +87,9 @@ class ScopedPerformanceTestThreadPriority {
 
 std::mutex g_backendMutex;
 std::shared_ptr<ControlledBackendState> g_latestBackend;
+// Emulate shared-mode negotiation for the PCM transparency probe. Other gates
+// preserve their requested (including typed integer) formats.
+bool g_pcmSharedFormat = false;
 
 class ControlledPumpBackend final : public IOutputBackend {
  public:
@@ -94,6 +103,12 @@ class ControlledPumpBackend final : public IOutputBackend {
   bool open(const std::string& deviceId, const AudioFormat& requestedFormat, std::string*) override {
     std::lock_guard lock(state_->mutex);
     state_->format = requestedFormat;
+    if (g_pcmSharedFormat) {
+      state_->format.sampleRate = 48000;
+      state_->format.bitDepth = 32;
+      state_->format.channelCount = 2;
+      state_->format.sampleFormat = AudioSampleFormat::Float32Interleaved;
+    }
     state_->info = {};
     state_->info.backend = id();
     state_->info.actualBackend = id();
@@ -101,12 +116,12 @@ class ControlledPumpBackend final : public IOutputBackend {
     state_->info.actualDeviceName = state_->info.deviceName;
     state_->info.driverName = "test-controlled";
     state_->info.actualDriverName = state_->info.driverName;
-    state_->info.outputSampleRate = requestedFormat.sampleRate;
-    state_->info.outputBitDepth = requestedFormat.bitDepth;
-    state_->info.actualSampleRate = requestedFormat.sampleRate;
-    state_->info.actualBitDepth = requestedFormat.bitDepth;
-    state_->info.actualChannels = requestedFormat.channelCount;
-    state_->info.actualOutputFormat = sampleFormatToString(requestedFormat.sampleFormat);
+    state_->info.outputSampleRate = state_->format.sampleRate;
+    state_->info.outputBitDepth = state_->format.bitDepth;
+    state_->info.actualSampleRate = state_->format.sampleRate;
+    state_->info.actualBitDepth = state_->format.bitDepth;
+    state_->info.actualChannels = state_->format.channelCount;
+    state_->info.actualOutputFormat = sampleFormatToString(state_->format.sampleFormat);
     state_->info.bufferSizeFrames = static_cast<int>(kCallbackFrames);
     state_->info.latencyFrames = static_cast<int>(kCallbackFrames);
     state_->info.latencyMs =
@@ -219,8 +234,8 @@ std::filesystem::path writePcmWav(
     const std::filesystem::path& path,
     double seconds,
     bool impulseResponse,
-    double frequency = 440.0) {
-  const uint64_t frameCount = static_cast<uint64_t>(std::llround(seconds * static_cast<double>(kSampleRate)));
+    double frequency = 440.0, unsigned sourceRate = kSampleRate) {
+  const uint64_t frameCount = static_cast<uint64_t>(std::llround(seconds * static_cast<double>(sourceRate)));
   const uint64_t dataBytes64 = frameCount * kChannels * sizeof(int16_t);
   assert(dataBytes64 <= UINT32_MAX - 36U);
   const uint32_t dataBytes = static_cast<uint32_t>(dataBytes64);
@@ -233,8 +248,8 @@ std::filesystem::path writePcmWav(
   writeLe32(out, 16);
   writeLe16(out, 1);
   writeLe16(out, kChannels);
-  writeLe32(out, kSampleRate);
-  writeLe32(out, kSampleRate * kChannels * sizeof(int16_t));
+  writeLe32(out, sourceRate);
+  writeLe32(out, sourceRate * kChannels * sizeof(int16_t));
   writeLe16(out, kChannels * sizeof(int16_t));
   writeLe16(out, 16);
   out.write("data", 4);
@@ -243,11 +258,11 @@ std::filesystem::path writePcmWav(
   for (uint64_t frame = 0; frame < frameCount; ++frame) {
     double sample = 0.0;
     if (impulseResponse) {
-      const double decay = std::exp(-static_cast<double>(frame) / static_cast<double>(kSampleRate) * 7.0);
+      const double decay = std::exp(-static_cast<double>(frame) / static_cast<double>(sourceRate) * 7.0);
       sample = frame == 0 ? 0.85 : ((frame % 97 == 0) ? decay * 0.18 : 0.0);
     } else {
       sample = std::sin((2.0 * 3.14159265358979323846 * frequency * static_cast<double>(frame)) /
-                        static_cast<double>(kSampleRate)) *
+                        static_cast<double>(sourceRate)) *
                0.20;
     }
     const auto encoded = static_cast<int16_t>(std::clamp(sample, -1.0, 1.0) * 32767.0);
@@ -406,7 +421,362 @@ double meanCallbackMilliseconds(const OutputInfo::RenderPerformanceSnapshot& sna
          static_cast<double>(snapshot.callbackCount) / 1000000.0;
 }
 
-bool pumpCallback(const std::shared_ptr<ControlledBackendState>& backend, std::vector<float>* scratch) {
+ta_am_features autoMixFixtureFeatures(double duration, bool tail, float bpm) {
+  ta_am_features f{};
+  f.duration_seconds = duration; f.start_seconds = tail ? std::max(0.0, duration - 30) : 0;
+  f.end_seconds = tail ? duration : std::min(duration, 30.0);
+  f.bpm = bpm; f.tempo_confidence = .9f; f.rms_db = -17; f.peak = .2f; f.key = -1;
+  for (double t = f.start_seconds; t < f.end_seconds; t += 60.0 / bpm) f.beats[f.beat_count++] = t;
+  f.frame_count = static_cast<uint32_t>(std::llround((f.end_seconds - f.start_seconds) * 50));
+  for (unsigned i = 0; i < f.frame_count; i++) { f.frame_db[i] = -17; f.frame_peak[i] = .2f; }
+  return f;
+}
+void verifyRoutedDeckReuse(const std::filesystem::path& root) {
+  const auto textPath = [](const auto& p) {
+    auto u = p.u8string(); return std::string(reinterpret_cast<const char*>(u.data()), u.size());
+  };
+  QueueItem a, b, c;
+  a.id = "routed-first"; a.source = textPath(writePcmWav(root / "routed-first.wav", 4, false, 421));
+  b.id = "routed-second"; b.source = textPath(writePcmWav(root / "routed-second.wav", 4, false, 523));
+  c.id = "routed-third"; c.source = textPath(writePcmWav(root / "routed-third-silence.wav", 4, false, 0));
+  resetBackend(); AudioPipeline pipeline; std::string error;
+  OutputConfig config; config.routingMode = ChannelRoutingMode::StereoTo51;
+  config.upmixSurroundDelayMs = 20;
+  assert(pipeline.setOutputConfig(config, &error));
+  assert(pipeline.play(a, b, 0, "controlled-pump", "controlled", 1,
+      "{\"gapless\":true,\"crossfadeSeconds\":0,\"fftEnabled\":false}", true, &error) == TAE_RESULT_OK);
+  const auto backend = latestBackend(); assert(backend->format.channelCount == 6);
+  std::vector<float> scratch(kCallbackFrames * 6);
+  unsigned promotions = 0, silentBlocks = 0;
+  bool thirdActive = false;
+  for (unsigned i = 0; i < 3000 && silentBlocks < 4; ++i) {
+    backend->render(scratch.data(), kCallbackFrames);
+    if (thirdActive) {
+      // Includes LFE and delayed surround slots from the reused track-one router.
+      for (auto sample : scratch) assert(sample == 0);
+      ++silentBlocks;
+    }
+    QueueItem started;
+    if (pipeline.consumeTrackStarted(&started)) {
+      ++promotions;
+      if (started.id == b.id) assert(pipeline.preloadNext(c, &error));
+      else { assert(started.id == c.id); thirdActive = true; }
+    }
+    if (i % 8 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  assert(promotions == 2 && silentBlocks == 4);
+  pipeline.stop();
+  std::cout << "PASS three-track routed gapless, independent LFE/delay history and clean deck reuse\n";
+}
+
+void verifyAutoMixWindowOwnership() {
+  auto a = std::make_unique<ta_am_features>(autoMixFixtureFeatures(60, false, 120));
+  auto b = std::make_unique<ta_am_features>(*a);
+  b->start_seconds = 25; b->end_seconds = 55;
+  b->beat_count = 0;
+  for (double t = 25.1; t < 55; t += .5) b->beats[b->beat_count++] = t;
+  a->voice_count = b->voice_count = 1;
+  a->voice_start[0] = 0; a->voice_end[0] = 30; a->voice[0] = .01f; a->music[0] = .9f;
+  b->voice_start[0] = 25; b->voice_end[0] = 55; b->voice[0] = .8f; b->music[0] = .2f;
+  const std::string identity(64, 'a'), ja = autoMixFeaturesJson(*a, identity), jb = autoMixFeaturesJson(*b, identity);
+  auto merged = std::make_unique<ta_am_features>(); std::string error;
+  auto request = "{\"currentFeatures\":" + ja + ",\"currentWindows\":[" + jb + "," + ja + "]}";
+  assert(parseAutoMixWindows(request, "currentWindows", "currentFeatures", merged.get(), &error));
+  assert(std::abs(ta_am_voice_between(merged.get(), 25, 27, 0) - .01f) < 1e-6f);
+  assert(std::abs(ta_am_voice_between(merged.get(), 28, 30, 0) - .8f) < 1e-6f);
+  bool owned = false, spurious = false;
+  for (unsigned i = 0; i < merged->beat_count; i++) {
+    owned |= std::abs(merged->beats[i] - 26) < 1e-6;
+    spurious |= std::abs(merged->beats[i] - 26.1) < 1e-6;
+  }
+  assert(owned && !spurious);
+  b->voice_count = 0;
+  request = "{\"currentFeatures\":" + ja + ",\"currentWindows\":[" + ja + "," + autoMixFeaturesJson(*b, identity) + "]}";
+  assert(parseAutoMixWindows(request, "currentWindows", "currentFeatures", merged.get(), &error));
+  assert(ta_am_voice_between(merged.get(), 28, 29, 0) < 0);
+  b->start_seconds = 31; b->end_seconds = 60; b->frame_count = 1450;
+  b->beat_count = 0;
+  request = "{\"currentFeatures\":" + ja + ",\"currentWindows\":[" + ja + "," + autoMixFeaturesJson(*b, identity) + "]}";
+  assert(!parseAutoMixWindows(request, "currentWindows", "currentFeatures", merged.get(), &error));
+  std::cout << "PASS context-owned beats and voice, missing voice and coverage gaps\n";
+}
+void verifyAutoMixTransport(const std::filesystem::path& root) {
+  const auto a = writePcmWav(root / "automix-a.wav", 24.125, false, 421, 48000);
+  const auto b = writePcmWav(root / "automix-b.wav", 24.125, false, 523, 44100);
+  const auto cueA =
+      writePcmWav(root / u8"自动混音-当前-CUE.wav", 32, false, 421, 48000);
+  const auto cueB =
+      writePcmWav(root / u8"自动混音-下一曲-CUE.wav", 32, false, 523, 44100);
+  const auto textPath = [](const auto &p) {
+    auto u = p.u8string();
+    return std::string(reinterpret_cast<const char *>(u.data()), u.size());
+  };
+  struct TransportCase {
+    std::filesystem::path current, next;
+    bool cue;
+    bool external;
+  };
+  std::vector<TransportCase> cases{{a, b, false, false},
+                                   {cueA, cueB, true, false}};
+  // Development-only compressed fixtures stay outside the checkout. Labels
+  // below exercise transport with deterministic supplied features; they never
+  // count as model quality, suitability or listening evidence.
+  if (const char *manifestPath = std::getenv("TAE_AUTOMIX_TRANSPORT_FIXTURE")) {
+    std::ifstream input(manifestPath, std::ios::binary);
+    assert(input.good());
+    const std::string json(std::istreambuf_iterator<char>{input}, {});
+    const auto current = json_utils::fieldString(json, "currentSource");
+    const auto next = json_utils::fieldString(json, "nextSource");
+    assert(current && next);
+    cases.push_back({std::filesystem::u8path(*current),
+                     std::filesystem::u8path(*next), true, true});
+  }
+  for (const auto &fixture : cases) {
+    const bool cue = fixture.cue;
+    char ah[65], bh[65];
+    assert(!ta_am_sha256_file(textPath(fixture.current).c_str(), ah) &&
+           !ta_am_sha256_file(textPath(fixture.next).c_str(), bh));
+    for (const auto setting :
+         {std::pair{"natural", DspResamplerQuality::Native},
+          std::pair{"dj", DspResamplerQuality::Ultra}}) {
+      const auto mode = setting.first;
+      const auto quality = setting.second;
+      const std::string dspJson =
+          std::string("{\"gapless\":true,\"crossfadeSeconds\":2,\"fftEnabled\":"
+                      "false,\"resamplerQuality\":\"") +
+          (quality == DspResamplerQuality::Ultra ? "ultra" : "native") + "\"}";
+      resetBackend();
+      AudioPipeline pipeline;
+      std::string error;
+      if (fixture.external) {
+        OutputConfig output;
+        output.continuityFirst = true;
+        output.continuitySampleRate = 48000;
+        assert(pipeline.setOutputConfig(output, &error));
+      }
+      QueueItem current, next;
+      current.id = "automix-current";
+      current.source = textPath(fixture.current);
+      next.id = "automix-next";
+      next.source = textPath(fixture.next);
+      // Library metadata may round up or down; decoder timelines remain exact.
+      current.durationSeconds = 25;
+      next.durationSeconds = 23;
+      if (cue) {
+        current.cueStartSeconds = next.cueStartSeconds = 3;
+        current.cueEndSeconds = next.cueEndSeconds = 27;
+      }
+      assert(pipeline.setAutoMixMode(mode, &error));
+      assert(pipeline.play(current, next, 0, "controlled-pump", "controlled", 1,
+                           dspJson, true, &error) == TAE_RESULT_OK);
+      auto backend = latestBackend();
+      assert(backend && backend->render);
+      const int renderRate = backend->format.sampleRate;
+      assert(renderRate == 48000);
+      std::vector<float> scratch(kCallbackFrames * kChannels);
+      backend->render(scratch.data(), kCallbackFrames); // ACK preload graph
+      const auto decoded = pipeline.status();
+      const double duration = cue ? 24 : 24.125;
+      assert(std::abs(decoded.stream.durationSeconds - duration) < 0.00002);
+      assert(decoded.preloadedItem &&
+             std::abs(decoded.preloadedItem->durationSeconds - duration) < 0.00002);
+      auto fa = autoMixFixtureFeatures(decoded.stream.durationSeconds, true, 120),
+           fb = autoMixFixtureFeatures(decoded.preloadedItem->durationSeconds, false, 123);
+      const auto secondsJson = [](double seconds) {
+        std::ostringstream value;
+        value << std::setprecision(17) << seconds;
+        return value.str();
+      };
+      const std::string request =
+          "{\"currentSource\":\"" + json_utils::escape(current.source) +
+          "\",\"nextSource\":\"" + json_utils::escape(next.source) +
+          "\",\"currentSourceStartSeconds\":" + (cue ? "3" : "0") +
+          ",\"currentSourceEndSeconds\":" + (cue ? "27" : secondsJson(decoded.stream.durationSeconds)) +
+          ",\"nextSourceStartSeconds\":" + (cue ? "3" : "0") +
+          ",\"nextSourceEndSeconds\":" + (cue ? "27" : secondsJson(decoded.preloadedItem->durationSeconds)) +
+          ",\"currentFeatures\":" + autoMixFeaturesJson(fa, ah) +
+          ",\"nextFeatures\":" + autoMixFeaturesJson(fb, bh) + "}";
+
+      const auto selectRequest = request.substr(0, request.size() - 1) + ",\"ruleVersion\":\"twilight-rules-5\"}";
+      const auto oldRuleRequest = request.substr(0, request.size() - 1) + ",\"ruleVersion\":\"twilight-rules-3\"}";
+      assert(!json_utils::fieldBool(pipeline.selectAutoMix(oldRuleRequest), "ok").value_or(false));
+      auto selection = pipeline.selectAutoMix(selectRequest);
+      assert(json_utils::fieldBool(selection, "ok").value_or(false));
+      auto selectionId = json_utils::fieldNumber(selection, "selectionId").value_or(0);
+      assert(selectionId > 0);
+      pipeline.cancelAutoMix("selection_invalidated_test");
+      const auto stale = selectRequest.substr(0, selectRequest.size() - 1) + ",\"selectionId\":" + std::to_string(selectionId) + "}";
+      assert(!pipeline.prepareAutoMix(stale, &error) && error == "stale_selection_ticket");
+      selection = pipeline.selectAutoMix(selectRequest);
+      assert(json_utils::fieldBool(selection, "ok").value_or(false));
+      selectionId = json_utils::fieldNumber(selection, "selectionId").value_or(0);
+      const auto selectedRequest = selectRequest.substr(0, selectRequest.size() - 1) + ",\"selectionId\":" + std::to_string(selectionId) + "}";
+      assert(pipeline.prepareAutoMix(selectedRequest, &error));
+      auto waitReady = [&] {
+        for (unsigned i = 0; i < 2000; i++) {
+          pipeline.pollAutoMix();
+          auto status = pipeline.status();
+          if (status.autoMixState != "preparing")
+            return status;
+          std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return pipeline.status();
+      };
+      auto status = waitReady();
+      if (status.autoMixState != "ready")
+        std::cerr << "AutoMix reason: " << status.autoMixReason << '\n';
+      assert(status.autoMixState == "ready");
+      assert(!pipeline.submitAutoMix(status.autoMixPlanId + 1, &error));
+      assert(pipeline.submitAutoMix(status.autoMixPlanId, &error));
+      uint64_t previous = 0;
+      unsigned promotions = 0;
+      bool sawMix = false, pauseVerified = false;
+      for (unsigned i = 0; i < 4000; i++) {
+        backend->render(scratch.data(), kCallbackFrames);
+        if (i % 8 == 0)
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const auto after = pipeline.status();
+        if (after.autoMixState == "mixing") {
+          sawMix = true;
+          assert(!after.outputPerfect &&
+                 after.autoMixOutputSeconds * renderRate >= previous);
+          previous = static_cast<uint64_t>(
+              std::llround(after.autoMixOutputSeconds * renderRate));
+          if (!pauseVerified) {
+            assert(pipeline.togglePause() == TAE_RESULT_OK);
+            const auto paused = pipeline.status();
+            backend->render(scratch.data(), kCallbackFrames);
+            backend->render(scratch.data(), kCallbackFrames);
+            const auto frozen = pipeline.status();
+            assert(frozen.positionSeconds == paused.positionSeconds &&
+                   frozen.autoMixOutputSeconds == paused.autoMixOutputSeconds &&
+                   frozen.autoMixNextSourceSeconds ==
+                       paused.autoMixNextSourceSeconds);
+            assert(pipeline.togglePause() == TAE_RESULT_OK);
+            pauseVerified = true;
+          }
+        }
+        QueueItem started;
+        if (pipeline.consumeTrackStarted(&started)) {
+          promotions++;
+          assert(started.id == next.id);
+        }
+        if (after.currentItem.id == next.id) {
+          assert(sawMix && promotions == 1 && after.positionSeconds > 4);
+          // The following block must match the original source at the mapped
+          // incoming clock. This catches repeating/skipping a continuation
+          // frame.
+          const auto frame = static_cast<uint64_t>(
+              std::llround(after.positionSeconds * renderRate));
+          AudioFormat format;
+          format.sampleRate = renderRate;
+          format.channelCount = kChannels;
+          std::vector<float> reference;
+          assert(decodeAutoMixFrames(next, format, frame, kCallbackFrames,
+                                     &reference, &error, nullptr, quality));
+          backend->render(scratch.data(), kCallbackFrames);
+          assert(reference.size() == scratch.size());
+          for (size_t sample = 0; sample < scratch.size(); sample++)
+            assert(std::abs(reference[sample] - scratch[sample]) < 1e-5f);
+          assert(!pipeline.consumeTrackStarted(nullptr));
+          break;
+        }
+      }
+      assert(sawMix && promotions == 1);
+      const auto performance = pipeline.renderPerformanceSnapshot();
+      assert(performance.deadlineMissCount == 0 &&
+             performance.totalDeadlineNanoseconds > 0 &&
+             100.0 * performance.totalCallbackNanoseconds /
+                     performance.totalDeadlineNanoseconds <
+                 kPipelineMeanDeadlineLoadLimitPercent);
+      pipeline.stop();
+      // A source hash mismatch must never produce a ready plan.
+      assert(pipeline.play(current, next, 0, "controlled-pump", "controlled", 1,
+                           "{\"gapless\":true,\"fftEnabled\":false}", true,
+                           &error) == TAE_RESULT_OK);
+      backend = latestBackend();
+      backend->render(scratch.data(), kCallbackFrames);
+      std::string mismatch = request;
+      const auto where = mismatch.find(ah);
+      assert(where != std::string::npos);
+      mismatch[where] = ah[0] == 'a' ? 'b' : 'a';
+      assert(pipeline.prepareAutoMix(mismatch, &error));
+      status = waitReady();
+      assert(status.autoMixState == "degraded" &&
+             status.autoMixReason == "source_changed_or_identity_unavailable");
+      // Cancelling a live overlap resumes the original outgoing stream at the
+      // mapped source clock; the untouched fallback preload remains at zero.
+      assert(pipeline.prepareAutoMix(request, &error));
+      status = waitReady();
+      assert(status.autoMixState == "ready" &&
+             pipeline.submitAutoMix(status.autoMixPlanId, &error));
+      bool cancelled = false;
+      for (unsigned i = 0; i < 4000; i++) {
+        backend->render(scratch.data(), kCallbackFrames);
+        if (i % 8 == 0)
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        status = pipeline.status();
+        if (status.autoMixState != "mixing")
+          continue;
+        pipeline.cancelAutoMix("test_cancel");
+        status = pipeline.status();
+        const auto frame = static_cast<uint64_t>(
+            std::llround(status.positionSeconds * renderRate));
+        AudioFormat format;
+        format.sampleRate = renderRate;
+        format.channelCount = kChannels;
+        std::vector<float> reference;
+        // This replay uses the default native resampler. Analysis decoding's
+        // default High quality is a different waveform for resampled music.
+        assert(decodeAutoMixFrames(current, format, frame, kCallbackFrames,
+                                   &reference, &error, nullptr,
+                                   DspResamplerQuality::Native));
+        backend->render(scratch.data(), kCallbackFrames);
+        for (size_t sample = 0; sample < scratch.size(); sample++) {
+          if (std::abs(reference[sample] - scratch[sample]) >= 1e-5f) {
+            std::cerr << "Cancel continuation mismatch mode=" << mode
+                      << " frame=" << frame << " sample=" << sample
+                      << " expected=" << reference[sample]
+                      << " actual=" << scratch[sample]
+                      << " crossfade=" << pipeline.status().crossfadeMixActive
+                      << '\n';
+          }
+          assert(std::abs(reference[sample] - scratch[sample]) < 1e-5f);
+        }
+        assert(!pipeline.consumeTrackStarted(nullptr));
+        cancelled = true;
+        break;
+      }
+      assert(cancelled);
+      assert(pipeline.seek(1, &error) == TAE_RESULT_OK);
+      assert(!pipeline.submitAutoMix(status.autoMixPlanId, &error));
+      pipeline.stop();
+      if (!cue) {
+        // Enabling smart mixing after an ordinary approximate seek must not
+        // pretend that the decoder and planned source-frame grid agree.
+        assert(pipeline.setAutoMixMode("off", &error));
+        // Force PCM. While mode is off, ordinary gapless deliberately does not
+        // preload unequal-rate sources; prepare it after enabling AutoMix.
+        assert(pipeline.play(current, next, 1.25, "controlled-pump", "controlled", .75,
+            "{\"gapless\":true,\"fftEnabled\":false}", true, &error) == TAE_RESULT_OK);
+        backend = latestBackend(); backend->render(scratch.data(), kCallbackFrames);
+        assert(pipeline.setAutoMixMode(mode, &error));
+        assert(pipeline.preloadNext(next, &error));
+        backend->render(scratch.data(), kCallbackFrames);
+        const bool prepared = pipeline.prepareAutoMix(request, &error);
+        if (prepared || error != "source_timeline_not_exact")
+          std::cerr << "Approximate timeline guard prepared=" << prepared
+                    << " reason=" << error << '\n';
+        assert(!prepared && error == "source_timeline_not_exact");
+        pipeline.stop();
+      }
+    }
+  }
+  std::cout << "PASS AutoMix real decoder natural/DJ, UTF-8 CUE ranges, single "
+               "promotion, exact continuation and stale source\n";
+}
+bool pumpCallback(const std::shared_ptr<ControlledBackendState> &backend,
+                  std::vector<float> *scratch) {
   assert(backend && scratch);
   RenderCallback render;
   AudioFormat format;
@@ -417,18 +787,152 @@ bool pumpCallback(const std::shared_ptr<ControlledBackendState>& backend, std::v
     format = backend->format;
   }
   assert(render);
-  scratch->assign(kCallbackFrames * static_cast<size_t>(std::max(1, format.channelCount)), 0.0f);
+  scratch->assign(kCallbackFrames *
+                      static_cast<size_t>(std::max(1, format.channelCount)),
+                  0.0f);
   const size_t written = render(scratch->data(), kCallbackFrames);
   assert(written == kCallbackFrames);
-  const bool containsAudio = std::any_of(scratch->begin(), scratch->end(), [](float value) {
-    return std::abs(value) > 0.0001f;
-  });
+  const bool containsAudio =
+      std::any_of(scratch->begin(), scratch->end(),
+                  [](float value) { return std::abs(value) > 0.0001f; });
   {
     std::lock_guard lock(backend->mutex);
     ++backend->callbackInvocations;
-    if (containsAudio) ++backend->callbacksWithAudio;
+    if (containsAudio)
+      ++backend->callbacksWithAudio;
   }
   return containsAudio;
+}
+
+// Capture the production float callback without a device or muted software
+// volume. This checks ordinary playback, before any transition is submitted.
+int verifyPcmTransparency(const std::filesystem::path& manifestPath) {
+  std::ifstream manifest(manifestPath);
+  const std::string json{std::istreambuf_iterator<char>(manifest), {}};
+  const std::string source = json_utils::fieldString(json, "source").value_or("");
+  const double seconds = json_utils::fieldNumber(json, "seconds").value_or(90);
+  const double volume = json_utils::fieldNumber(json, "volume").value_or(.54);
+  const std::string outputDir = json_utils::fieldString(json, "outputDir").value_or("");
+  assert(!source.empty() && seconds > 0 && seconds <= 600 && volume > 0 && volume <= 1);
+  const std::string graph = json_utils::fieldObject(json, "graph");
+  assert(!graph.empty());
+  g_pcmSharedFormat = true;
+  AudioFormat format;
+  format.sampleRate = 48000;
+  format.bitDepth = 32;
+  format.channelCount = 2;
+  format.sampleFormat = AudioSampleFormat::Float32Interleaved;
+  const size_t frames = static_cast<size_t>(seconds * format.sampleRate) / kCallbackFrames * kCallbackFrames;
+  std::vector<float> decoded(frames * 2), block(kCallbackFrames * 2);
+  FFmpegDecoder decoder;
+  std::string error;
+  assert(decoder.open(source, &error));
+  decoder.setResamplerQuality(FFmpegDecoder::ResamplerQuality::Native);
+  assert(decoder.setOutputFormat(format, &error));
+  assert(decoder.readFrames(decoded.data(), frames, &error) == frames);
+  const auto writeCapture = [&](const std::string& name, const std::vector<float>& pcm) {
+    if (outputDir.empty()) return;
+    std::filesystem::create_directories(std::filesystem::u8path(outputDir));
+    std::ofstream out(std::filesystem::u8path(outputDir) / (name + ".f32"), std::ios::binary);
+    out.write(reinterpret_cast<const char*>(pcm.data()), pcm.size() * sizeof(float));
+    assert(out.good());
+  };
+  writeCapture("decoded", decoded);
+  double decodedPeak = 0;
+  uint64_t decodedOverFullScale = 0;
+  for (const float value : decoded) {
+    decodedPeak = std::max(decodedPeak, std::abs(static_cast<double>(value)));
+    decodedOverFullScale += std::abs(value) > 1;
+  }
+  std::vector<float> baseline;
+  bool passed = true;
+  std::cout << std::setprecision(12)
+            << "{\"source\":\"" << json_utils::escape(source) << "\",\"frames\":" << frames
+            << ",\"sampleRate\":48000,\"volume\":" << volume
+            << ",\"decodedPeak\":" << decodedPeak
+            << ",\"decodedOverFullScale\":" << decodedOverFullScale << ",\"scenarios\":[";
+  size_t scenarioIndex = 0;
+  for (const bool dspEnabled : {false, true}) {
+    for (const std::string mode : {"off", "natural", "dj", "dj-to-off"}) {
+      resetBackend();
+      AudioPipeline pipeline;
+      OutputConfig config;
+      assert(pipeline.setOutputConfig(config, &error));
+      assert(pipeline.setDspGraph("{\"dspEnabled\":" + std::string(dspEnabled ? "true" : "false") +
+          ",\"graph\":" + graph + "}", &error));
+      assert(pipeline.setAutoMixMode(mode == "dj-to-off" ? "dj" : mode, &error));
+      QueueItem item;
+      item.id = "transparency";
+      item.source = source;
+      const std::string processing = "{\"dspEnabled\":" + std::string(dspEnabled ? "true" : "false") +
+          ",\"clipGuard\":true,\"fftEnabled\":true,\"fftResolution\":8192,\"highResolution\":true}";
+      assert(pipeline.play(item, std::nullopt, 0, "controlled-pump", "controlled", volume,
+          processing, true, &error) == TAE_RESULT_OK);
+      const auto backend = latestBackend();
+      assert(backend->format.sampleRate == 48000);
+      std::vector<float> actual(frames * 2);
+      size_t rendered = 0;
+      uint64_t starvationCallbacks = 0;
+      while (rendered < frames) {
+        if (mode == "dj-to-off" && rendered == kCallbackFrames * 32)
+          assert(pipeline.setAutoMixMode("off", &error));
+        // Exercise the same atomic graph replacement used by the UI, including
+        // a master bypass and restoration while audio continues.
+        if (rendered == kCallbackFrames * 64 || rendered == kCallbackFrames * 128) {
+          const bool enabled = rendered == kCallbackFrames * 64 ? !dspEnabled : dspEnabled;
+          const uint64_t revision = rendered == kCallbackFrames * 64 ? 100 : 101;
+          const std::string nextProcessing = "{\"dspEnabled\":" + std::string(enabled ? "true" : "false") +
+              ",\"clipGuard\":true,\"fftEnabled\":true,\"fftResolution\":8192,\"highResolution\":true}";
+          assert(pipeline.applyDspState(revision,
+              "{\"revision\":" + std::to_string(revision) + ",\"processing\":" + nextProcessing +
+              ",\"graph\":" + graph + "}", &error));
+        }
+        const double before = pipeline.status().positionSeconds;
+        pumpCallback(backend, &block);
+        const double after = pipeline.status().positionSeconds;
+        if (after <= before) {
+          ++starvationCallbacks;
+          assert(starvationCallbacks < 10000);
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
+        }
+        assert(std::abs(after - before - static_cast<double>(kCallbackFrames) / 48000) < 1e-8);
+        std::copy(block.begin(), block.end(), actual.begin() + rendered * 2);
+        rendered += kCallbackFrames;
+        if ((rendered / kCallbackFrames) % 8 == 0)
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      double peak = 0, maxError = 0, squaredError = 0, maxBaselineDifference = 0;
+      uint64_t clipped = 0, nonfinite = 0;
+      for (size_t i = 0; i < actual.size(); ++i) {
+        const float expected = static_cast<float>(std::clamp(static_cast<double>(decoded[i]) * volume, -1., 1.));
+        const double difference = static_cast<double>(actual[i]) - expected;
+        maxError = std::max(maxError, std::abs(difference));
+        squaredError += difference * difference;
+        peak = std::max(peak, std::abs(static_cast<double>(actual[i])));
+        clipped += std::abs(actual[i]) >= 1;
+        nonfinite += !std::isfinite(actual[i]);
+        if (!baseline.empty()) maxBaselineDifference = std::max(maxBaselineDifference,
+            std::abs(static_cast<double>(actual[i]) - baseline[i]));
+      }
+      if (baseline.empty()) baseline = actual;
+      const auto status = pipeline.status();
+      pipeline.stop();
+      const std::string name = std::string(dspEnabled ? "dsp-on-" : "dsp-off-") + mode;
+      writeCapture(name, actual);
+      if (scenarioIndex++) std::cout << ',';
+      std::cout << "{\"name\":\"" << name << "\",\"peak\":" << peak
+                << ",\"clipped\":" << clipped << ",\"nonfinite\":" << nonfinite
+                << ",\"maxError\":" << maxError << ",\"rmsError\":" << std::sqrt(squaredError / actual.size())
+                << ",\"maxBaselineDifference\":" << maxBaselineDifference
+                << ",\"starvationCallbacks\":" << starvationCallbacks
+                << ",\"positionSeconds\":" << status.positionSeconds << '}';
+      passed = passed && maxError <= 1e-7 && maxBaselineDifference == 0 && nonfinite == 0 && starvationCallbacks == 0;
+    }
+  }
+  std::cout << "],\"passed\":" << (passed ? "true" : "false") << "}\n";
+  g_pcmSharedFormat = false;
+  return passed ? 0 : 1;
 }
 
 struct PumpResult {
@@ -438,10 +942,10 @@ struct PumpResult {
 };
 
 PumpResult pumpAudioTime(
-    AudioPipeline& pipeline,
-    const std::shared_ptr<ControlledBackendState>& backend,
+    AudioPipeline &pipeline,
+    const std::shared_ptr<ControlledBackendState> &backend,
     double targetAudioSeconds,
-    const std::optional<std::string>& expectedCurrentItemId = std::nullopt) {
+    const std::optional<std::string> &expectedCurrentItemId = std::nullopt) {
   const uint64_t expectedFrames = static_cast<uint64_t>(targetAudioSeconds * static_cast<double>(kSampleRate));
   const uint64_t expectedCallbacks = (expectedFrames + kCallbackFrames - 1) / kCallbackFrames;
   std::vector<float> scratch;
@@ -669,13 +1173,42 @@ std::unique_ptr<IOutputBackend> createOutputBackend(const std::string&, std::str
 
 }  // namespace twilight::audio
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc == 4 && std::string(argv[1]) == "--export-automix-windows") {
+    std::ifstream input(std::filesystem::u8path(argv[2]), std::ios::binary);
+    if (!input) return 2;
+    const std::string json(std::istreambuf_iterator<char>{input}, {});
+    auto merged = std::make_unique<ta_am_features>(); std::string error;
+    if (!parseAutoMixWindows(json, "windows", "features", merged.get(), &error)) return 2;
+    std::ofstream output(std::filesystem::u8path(argv[3]), std::ios::binary);
+    output.write(reinterpret_cast<const char*>(merged.get()), sizeof(*merged));
+    return output.good() ? 0 : 2;
+  }
+  verifyAutoMixWindowOwnership();
 #ifndef TAE_HAS_FFMPEG
   std::cout << "audio-performance-gate skipped: FFmpeg support is not compiled\n";
   return 77;
 #else
   ScopedPerformanceTestThreadPriority performanceTestThreadPriority;
   ScopedControlledBackendFactory controlledBackendFactory;
+  if (argc == 3 && std::string(argv[1]) == "--verify-pcm")
+    return verifyPcmTransparency(std::filesystem::u8path(argv[2]));
+  if (argc == 2 && std::string(argv[1]) == "--verify-neutral-pcm") {
+    const auto probeRoot = std::filesystem::temp_directory_path() / "twilight-neutral-pcm";
+    std::filesystem::create_directories(probeRoot);
+    const auto source = writePcmWav(probeRoot / "neutral.wav", 6, false, 997);
+    const auto manifestPath = probeRoot / "manifest.json";
+    std::ofstream manifest(manifestPath);
+    manifest << "{\"source\":\"" << json_utils::escape(source.string())
+             << "\",\"seconds\":5,\"volume\":0.54,\"graph\":{\"nodes\":["
+                "{\"id\":\"meter\",\"type\":\"meter\",\"enabled\":true,\"params\":{}}],"
+                "\"outputStage\":{\"resamplerQuality\":\"native\",\"dither\":\"off\",\"safetyClamp\":true}}}";
+    manifest.close();
+    const int result = verifyPcmTransparency(manifestPath);
+    std::filesystem::remove(manifestPath);
+    std::filesystem::remove(source);
+    return result;
+  }
   std::cout << std::fixed << std::setprecision(3);
   const std::filesystem::path fixtureRoot =
       std::filesystem::temp_directory_path() / "twilight-audio-performance-gate";
@@ -683,6 +1216,8 @@ int main() {
   std::filesystem::remove_all(fixtureRoot, ignored);
   std::filesystem::create_directories(fixtureRoot);
   verifyTypedGaplessWithRealDecoder(fixtureRoot);
+  verifyAutoMixTransport(fixtureRoot);
+  verifyRoutedDeckReuse(fixtureRoot);
 
   const auto pcmLong = writePcmWav(fixtureRoot / "pcm-long.wav", kLongScenarioAudioSeconds + 4.0, false, 311.0);
   const auto gaplessA = writePcmWav(fixtureRoot / "gapless-a.wav", 8.0, false, 421.0);

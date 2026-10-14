@@ -1,6 +1,6 @@
 /* ===== Shell =====
-   The viewport owns player geometry. Navigation only reserves space below it;
-   opening a sidebar must not resize, move or disable the material.
+   The viewport owns player geometry. Navigation keeps its surface behind the
+   player and clears its tools only when the painted bar overlaps them.
    Keep this shell free of transforms and filters so fixed HiFi and dismiss
    overlays retain the viewport as their containing block. */
 .player-bar-shell {

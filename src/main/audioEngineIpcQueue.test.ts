@@ -160,7 +160,7 @@ test('the native queue ceiling is one shared constant on both sides of the IPC',
     source,
     /import \{ MAX_NATIVE_QUEUE_ITEMS \} from '\.\.\/\.\.\/shared\/nativeQueue\.ts'/
   )
-  // The renderer must degrade to a current-only native queue rather than issue a
+  // The renderer must prepare a bounded native queue rather than issue a
   // request this handler rejects: the rejection happens before audioEngine:play,
   // so playback dies on every backend and every output device.
   assert.match(
@@ -169,7 +169,7 @@ test('the native queue ceiling is one shared constant on both sides of the IPC',
   )
   assert.match(
     preparationSource,
-    /if \(options\.queue\.length > MAX_NATIVE_QUEUE_ITEMS\) return asCurrentOnly\(currentItem\)/
+    /if \(options\.queue\.length > MAX_NATIVE_QUEUE_ITEMS\) \{\s*return prepareNcmWindow\(options, currentItem, currentIndex\)/
   )
 })
 
@@ -197,6 +197,7 @@ test('queue cursor IPC freshly authorizes its source before forwarding the main-
       if (denied) throw new Error('denied')
       return 'canonical.flac'
     },
+    outputTest: { stop: async () => calls.push('stop-test') },
     ensureAudioEngineRuntime: async () => ({
       selectQueueItem: async (selection: unknown) => {
         calls.push('select')
@@ -207,7 +208,7 @@ test('queue cursor IPC freshly authorizes its source before forwarding the main-
   })
   const selection = { queueToken: 'stale', index: 3, id: 'cue:3', source: 'alias.flac' }
   assert.equal(await handler({}, selection), false)
-  assert.deepEqual(calls, ['trusted', 'authorize', 'select'])
+  assert.deepEqual(calls, ['trusted', 'authorize', 'stop-test', 'select'])
   assert.equal(
     JSON.stringify(selections[0]),
     JSON.stringify({ ...selection, source: 'canonical.flac' })

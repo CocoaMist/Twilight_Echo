@@ -397,6 +397,38 @@ void testZeroFramesNoCrash() {
   assert(output[0] == -999.0f);
 }
 
+void testThreeDeckSourceLifetimes() {
+  ChannelRouter first, second, uninterrupted;
+  UpmixConfig config;
+  config.surroundDelayMs = 20;
+  for (auto* router : {&first, &second, &uninterrupted}) {
+    router->setUpmixConfig(config);
+    router->prepareForRealtime(48000, 1000);
+  }
+  const size_t frames = 512;
+  std::vector<float> audio(frames * 2, 0.25f), silence(frames * 2, 0.0f);
+  std::vector<float> actual(frames * 6), expected(frames * 6);
+  first.beginSource(1);
+  first.route(audio.data(), actual.data(), frames, 2, 6, ChannelRoutingMode::StereoTo51);
+  second.beginSource(2);
+  uninterrupted.beginSource(2);
+  second.route(audio.data(), actual.data(), frames, 2, 6, ChannelRoutingMode::StereoTo51);
+  uninterrupted.route(audio.data(), expected.data(), frames, 2, 6, ChannelRoutingMode::StereoTo51);
+  // Decoder continuation after promotion must retain both the LFE and delay.
+  second.beginSource(2);
+  second.route(silence.data(), actual.data(), frames, 2, 6, ChannelRoutingMode::StereoTo51);
+  uninterrupted.route(silence.data(), expected.data(), frames, 2, 6, ChannelRoutingMode::StereoTo51);
+  assert(actual == expected);
+  assert(actual[3] > 0); // a reset would erase the LFE tail
+  // Reuse the old outgoing deck for track three. Even before all old delay
+  // slots have been overwritten, silence must contain no track-one history.
+  first.beginSource(3);
+  for (unsigned block = 0; block < 4; ++block) {
+    first.route(silence.data(), actual.data(), frames, 2, 6, ChannelRoutingMode::StereoTo51);
+    for (const auto sample : actual) assert(sample == 0);
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -416,5 +448,6 @@ int main() {
   testMonoToStereoFastRoutePredicate();
   testUpmix51MultipleFrames();
   testZeroFramesNoCrash();
+  testThreeDeckSourceLifetimes();
   return 0;
 }

@@ -1,8 +1,8 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { scrollMotionBehavior } from '../app/scrollMotion'
-import { createSettingsSectionRendering } from './settings-page/settingsSectionRendering'
+import { documentMotionMode, scrollMotionBehavior } from '../app/scrollMotion'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
+import SettingsQuickSetup from './settings-page/SettingsQuickSetup.vue'
 import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
 import { openAppearanceEditor } from '../composables/appearanceEditorState.ts'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
@@ -15,7 +15,6 @@ import CacheSettingsSection from './settings-page/CacheSettingsSection.vue'
 import DesktopLyricsSettingsSection from './settings-page/DesktopLyricsSettingsSection.vue'
 import AboutSettingsSection from './settings-page/AboutSettingsSection.vue'
 import ShortcutsSettingsSection from './settings-page/ShortcutsSettingsSection.vue'
-import AnimatedInput from './AnimatedInput.vue'
 import { provideSettingsDisclosures } from './settings-page/settingsDisclosureRegistry.ts'
 import {
   type SectionKey,
@@ -24,6 +23,8 @@ import {
   LEGACY_SETTINGS_TARGETS,
   normalizeSettingsSection,
   resolveSettingsSearchEntry,
+  settingsDisclosurePath,
+  settingsAnchorDisclosurePath,
   type BooleanSettingKey,
   type SettingsSearchEntry,
   sections,
@@ -61,6 +62,7 @@ import {
   cloneLyricsAppearance
 } from '../../../shared/lyricsAppearance.ts'
 import { DEFAULT_PLAYER_BAR_SETTINGS, clonePlayerBarSettings } from '../../../shared/playerBar.ts'
+import { getBuiltInThemePreset, TWILIGHT_DEFAULT_THEME_ID } from '../../../shared/themeCatalog.ts'
 
 const props = defineProps<{
   initialSection?: SettingsSectionInput
@@ -85,13 +87,84 @@ const pluginSettingsValues = ref<Record<string, Record<string, string>>>({})
 const settingsSearchQuery = ref('')
 const settingsNotice = ref('')
 const settingsError = ref('')
+const storageError = ref('')
 const importSettingsInputRef = ref<HTMLInputElement | null>(null)
 const shortcutStatuses = ref<PlayerShortcutStatus[]>([])
 
 const disclosures = provideSettingsDisclosures()
 const activeSection = ref<SectionKey>(normalizeSettingsSection(props.initialSection))
+const activeSectionInfo = computed(
+  () => sections.find((section) => section.key === activeSection.value) ?? sections[0]
+)
 watch(activeSection, (section) => emit('sectionChange', section), { flush: 'sync' })
 const pageRef = ref<HTMLElement | null>(null)
+
+let keyboardCategoryChange = false
+let categoryAnimations: Animation[] = []
+let categoryMotionObserver: MutationObserver | undefined
+let categoryMotionMedia: MediaQueryList | undefined
+let categoryMotionMode = documentMotionMode()
+
+function selectSettingsCategory(section: SectionKey, keyboardNavigation = false): void {
+  keyboardCategoryChange = keyboardNavigation
+  activeSection.value = section
+}
+
+function cancelCategoryMotion(): void {
+  for (const animation of categoryAnimations) animation.cancel()
+  categoryAnimations = []
+}
+
+function settleCategoryMotion(): void {
+  const mode = documentMotionMode()
+  if (mode === categoryMotionMode) return
+  categoryMotionMode = mode
+  cancelCategoryMotion()
+}
+
+watch(
+  activeSection,
+  (section) => {
+    const page = pageRef.value
+    const header = page?.querySelector<HTMLElement>('.settings-page-header')
+    const panel = page?.querySelector<HTMLElement>(`#${section}`)
+    const mode = documentMotionMode()
+    // Continue from the visible fade when another category is chosen mid-transition.
+    const opacity = categoryAnimations.length && header ? getComputedStyle(header).opacity : '0'
+    cancelCategoryMotion()
+    const keyboard = keyboardCategoryChange
+    keyboardCategoryChange = false
+    if (!header || !panel || mode === 'off' || keyboard) return
+    categoryMotionMode = mode
+    const tokens = getComputedStyle(document.documentElement)
+    const duration =
+      mode === 'reduced'
+        ? 120
+        : Math.min(280, parseFloat(tokens.getPropertyValue('--te-motion-return')) || 220)
+    const easing =
+      tokens.getPropertyValue('--te-ease-out-strong').trim() || 'cubic-bezier(0.23, 1, 0.32, 1)'
+    // Opacity keeps search positioning, sticky controls and draft inputs stable.
+    for (const element of [header, panel]) {
+      const animation = element.animate([{ opacity }, { opacity: '1' }], { duration, easing })
+      categoryAnimations.push(animation)
+      const release = (): void => {
+        categoryAnimations = categoryAnimations.filter((running) => running !== animation)
+      }
+      void animation.finished.then(release, release)
+    }
+  },
+  { flush: 'post' }
+)
+
+onMounted(() => {
+  categoryMotionObserver = new MutationObserver(settleCategoryMotion)
+  categoryMotionObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-te-motion']
+  })
+  categoryMotionMedia = window.matchMedia('(prefers-reduced-motion: reduce)')
+  categoryMotionMedia.addEventListener('change', settleCategoryMotion)
+})
 
 function setNavigationPressOrigin(event: PointerEvent): void {
   const button =
@@ -300,7 +373,7 @@ async function cancelActiveLibraryScan(): Promise<void> {
 function cancelActiveLibraryMetadataEnrichment(): void {
   libraryScanCommandError.value = ''
   if (!cancelLibraryMetadataEnrichment()) {
-    libraryScanCommandError.value = '当前没有可取消的后台富化任务'
+    libraryScanCommandError.value = '当前没有正在补全的歌曲信息'
   }
 }
 
@@ -311,8 +384,37 @@ function scanCommandErrorMessage(error: unknown): string {
 const { setAudioProcessing, refreshAudioOutputState, clearBpmAnalysisFromPlaybackState } =
   audioOutputDspStore
 
-const { syncExtensions, uiContributions } = useExtensionRegistry()
+const { syncExtensions, uiContributions, themeContributions } = useExtensionRegistry()
 const themeStore = useThemeStore()
+const showQuickSetup = computed(
+  () => !settings.value.onboardingCompleted && !settings.value.libraryFolders?.length
+)
+const quickSetupDeviceName = computed(() => {
+  const store = audioOutputDspStore
+  return (
+    store.audioOutputDeviceOptions?.find((device) => device.id === store.audioDevice)?.label ??
+    (store.audioDevice === 'auto' ? '跟随系统默认设备' : store.audioDevice || '正在读取输出设备…')
+  )
+})
+const quickSetupThemeName = computed(() => {
+  const selection = themeStore.activeTheme?.value
+  if (!selection) return '正在读取主题…'
+  const name =
+    selection.kind === 'plugin'
+      ? ((themeContributions?.value ?? []).find(
+          (theme) => theme.pluginId === selection.pluginId && theme.id === selection.themeId
+        )?.name ?? '插件主题')
+      : selection.kind === 'user'
+        ? (themeStore.activeProfile?.value?.name ?? '自定义主题')
+        : selection.id === TWILIGHT_DEFAULT_THEME_ID
+          ? '默认主题'
+          : (getBuiltInThemePreset(selection.id)?.name ?? '内置主题')
+  return `${name} · ${{ system: '跟随系统', pureWhite: '浅色', dark: '深色' }[settings.value.theme]}`
+})
+function navigateQuickSetup(id: string): void {
+  const entry = SETTINGS_SEARCH_INDEX.find((candidate) => candidate.id === id)
+  if (entry) void scrollToSearchResult(entry)
+}
 
 const activeCachePath = computed(
   () => paths.value?.activeCachePath ?? settings.value.cachePath ?? ''
@@ -390,22 +492,36 @@ async function onUpdateShortcutBindings(patch: Partial<GlobalShortcutSettings>):
 
 function toggleCacheArtifact(key: keyof MusicCachePolicySettings): void {
   if (key === 'streamingAudio') return
-  void updateSettings({
-    cachePolicy: {
-      ...settings.value.cachePolicy,
-      [key]: !settings.value.cachePolicy[key]
-    }
-  })
+  void runStorageOperation(() =>
+    updateSettings({
+      cachePolicy: {
+        ...settings.value.cachePolicy,
+        [key]: !settings.value.cachePolicy[key]
+      }
+    })
+  )
 }
 
 function setStreamingAudioCachePolicy(event: Event): void {
   const streamingAudio = (event.target as HTMLSelectElement).value as StreamingAudioCachePolicy
-  void updateSettings({
-    cachePolicy: {
-      ...settings.value.cachePolicy,
-      streamingAudio
-    }
-  })
+  void runStorageOperation(() =>
+    updateSettings({
+      cachePolicy: {
+        ...settings.value.cachePolicy,
+        streamingAudio
+      }
+    })
+  )
+}
+
+async function runStorageOperation(operation: () => Promise<unknown>): Promise<void> {
+  storageError.value = ''
+  try {
+    await operation()
+  } catch (error) {
+    storageError.value = error instanceof Error ? error.message : String(error)
+    settingsError.value = storageError.value
+  }
 }
 
 function toggleAutoAnalyzeBpm(): void {
@@ -754,7 +870,7 @@ async function confirmClearCache(): Promise<void> {
   ) {
     return
   }
-  await clearCache()
+  await runStorageOperation(clearCache)
 }
 
 async function confirmClearBpmAnalysisCache(): Promise<void> {
@@ -765,8 +881,10 @@ async function confirmClearBpmAnalysisCache(): Promise<void> {
   ) {
     return
   }
-  await clearBpmAnalysisCache()
-  clearBpmAnalysisFromPlaybackState()
+  await runStorageOperation(async () => {
+    await clearBpmAnalysisCache()
+    clearBpmAnalysisFromPlaybackState()
+  })
 }
 
 async function confirmClearLoudnessAnalysisCache(): Promise<void> {
@@ -777,7 +895,7 @@ async function confirmClearLoudnessAnalysisCache(): Promise<void> {
   ) {
     return
   }
-  await clearLoudnessAnalysisCache()
+  await runStorageOperation(clearLoudnessAnalysisCache)
 }
 
 /**
@@ -806,8 +924,6 @@ async function exportAudioDiagnostics(): Promise<void> {
 }
 
 const SETTINGS_SECTION_SCROLL_OFFSET = 24
-let programmaticScrollUntil = 0
-let programmaticScrollTimer: number | null = null
 
 function scrollPageToElement(
   target: HTMLElement,
@@ -816,8 +932,6 @@ function scrollPageToElement(
   const page = pageRef.value
   if (!page) return
 
-  sectionRendering?.prepareNavigation()
-  sectionGeometryDirty = true
   const block = options.block ?? 'start'
   const behavior = scrollMotionBehavior(
     options.behavior ?? 'smooth',
@@ -829,7 +943,7 @@ function scrollPageToElement(
   const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
   const scrollOffset =
     SETTINGS_SECTION_SCROLL_OFFSET +
-    (navigation && getComputedStyle(navigation).position === 'sticky'
+    (navigation && navigation.getBoundingClientRect().right > targetRect.left
       ? navigation.getBoundingClientRect().height
       : 0)
   const maxScrollTop = Math.max(0, page.scrollHeight - page.clientHeight)
@@ -844,56 +958,73 @@ function scrollPageToElement(
         Math.max(0, (page.clientHeight - scrollOffset - targetRect.height) / 2)
       : targetTop - scrollOffset
 
-  programmaticScrollUntil = performance.now() + (behavior === 'smooth' ? 700 : 0)
-  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
-  programmaticScrollTimer = window.setTimeout(
-    finishProgrammaticScroll,
-    behavior === 'smooth' ? 750 : 0
-  )
-
   page.scrollTo({
-    // Early rows should keep their category heading in view; otherwise a centered
-    // target lands in the preceding category and scroll-spy selects the wrong tab.
+    // Keep early rows with their category heading.
     top: Math.max(0, Math.min(maxScrollTop, Math.max(categoryTop, nextTop))),
     behavior
   })
 }
 
-function finishProgrammaticScroll(): void {
-  if (programmaticScrollTimer === null && programmaticScrollUntil === 0) return
-  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
-  programmaticScrollTimer = null
-  programmaticScrollUntil = 0
-  sectionRendering?.finishNavigation()
-  sectionGeometryDirty = true
-  scheduleActiveSectionUpdate()
-}
-
-function scrollToSection(section: SectionKey): void {
-  ++settingsNavigationRevision
-  activeSection.value = section
-  const el = document.getElementById(section)
-  if (!el) return
-  scrollPageToElement(el, { block: 'start' })
+function scrollToSection(section: SectionKey, keyboardNavigation = false): void {
+  const revision = ++settingsNavigationRevision
+  settingsSearchQuery.value = ''
+  settingsNotice.value = ''
+  highlightSettingItem(null)
+  selectSettingsCategory(section, keyboardNavigation)
+  void nextTick(() => {
+    if (revision === settingsNavigationRevision)
+      pageRef.value?.scrollTo({ top: 0, behavior: 'instant' })
+  })
   revealActiveNavigationItem()
 }
 
 function revealActiveNavigationItem(): void {
   void nextTick(() => {
     const strip = pageRef.value?.querySelector<HTMLElement>('.settings-nav-categories')
-    const item = strip?.querySelector<HTMLElement>('[aria-current="location"]')
-    if (!strip || !item || strip.scrollWidth <= strip.clientWidth) return
-    const left = item.offsetLeft
-    if (left < strip.scrollLeft) strip.scrollLeft = left
-    else if (left + item.offsetWidth > strip.scrollLeft + strip.clientWidth)
-      strip.scrollLeft = left + item.offsetWidth - strip.clientWidth
+    const item = strip?.querySelector<HTMLElement>('[aria-current="page"]')
+    if (!strip || !item || !strip.getClientRects().length) return
+    const containerRect = strip.getBoundingClientRect()
+    const itemRect = item.getBoundingClientRect()
+    if (itemRect.top < containerRect.top) strip.scrollTop += itemRect.top - containerRect.top
+    else if (itemRect.bottom > containerRect.bottom)
+      strip.scrollTop += itemRect.bottom - containerRect.bottom
+    if (itemRect.left < containerRect.left) strip.scrollLeft += itemRect.left - containerRect.left
+    else if (itemRect.right > containerRect.right)
+      strip.scrollLeft += itemRect.right - containerRect.right
   })
 }
 watch(activeSection, revealActiveNavigationItem)
 
+function onCategoryKeydown(event: KeyboardEvent, section: SectionKey): void {
+  const index = sections.findIndex((item) => item.key === section)
+  let nextIndex: number
+  if (event.key === 'Home') nextIndex = 0
+  else if (event.key === 'End') nextIndex = sections.length - 1
+  else if (event.key === 'ArrowDown' || event.key === 'ArrowRight')
+    nextIndex = (index + 1) % sections.length
+  else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft')
+    nextIndex = (index - 1 + sections.length) % sections.length
+  else return
+  event.preventDefault()
+  const next = sections[nextIndex].key
+  scrollToSection(next, true)
+  void nextTick(() => {
+    pageRef.value
+      ?.querySelector<HTMLElement>(`[data-settings-category="${next}"]`)
+      ?.focus({ preventScroll: true })
+    revealActiveNavigationItem()
+  })
+}
+
+function onCategorySelect(event: Event): void {
+  const select = event.target as HTMLSelectElement
+  scrollToSection(normalizeSettingsSection(select.value), select.matches(':focus-visible'))
+}
+
 async function applyNavigationTarget(): Promise<void> {
   if (!pageRef.value) return
   const revision = ++settingsNavigationRevision
+  settingsNotice.value = ''
   const target = props.navigationTarget
   const legacy =
     props.initialSection && Object.hasOwn(LEGACY_SETTINGS_TARGETS, props.initialSection)
@@ -901,6 +1032,10 @@ async function applyNavigationTarget(): Promise<void> {
       : null
   const anchor = target?.anchor ?? (!target?.entry ? legacy?.anchor : undefined)
   if (anchor) {
+    selectSettingsCategory(normalizeSettingsSection(props.initialSection))
+    await nextTick()
+    if (revision !== settingsNavigationRevision || !pageRef.value) return
+    await revealSettingsPath(settingsAnchorDisclosurePath(anchor), revision)
     await disclosures.reveal(anchor)
     if (revision !== settingsNavigationRevision || !pageRef.value) return
     const element = pageRef.value.querySelector<HTMLElement>(`#${CSS.escape(anchor)}`)
@@ -908,7 +1043,6 @@ async function applyNavigationTarget(): Promise<void> {
       if (element instanceof HTMLDetailsElement) element.open = true
       await settleSettingsNavigation(element)
       if (revision !== settingsNavigationRevision || !pageRef.value) return
-      activeSection.value = normalizeSettingsSection(props.initialSection)
       scrollPageToElement(element, { block: 'center' })
       focusSetting(element)
       return
@@ -963,17 +1097,34 @@ function focusSetting(target: HTMLElement): void {
   }
 }
 
-async function scrollToSearchResult(input: SettingsSearchEntry): Promise<void> {
+async function scrollToSearchResult(
+  input: SettingsSearchEntry,
+  keyboardNavigation = false
+): Promise<void> {
   const revision = ++settingsNavigationRevision
   const entry = resolveSettingsSearchEntry(input)
   settingsSearchQuery.value = ''
-  activeSection.value = normalizeSettingsSection(entry.section)
+  settingsNotice.value = ''
+  selectSettingsCategory(normalizeSettingsSection(entry.section), keyboardNavigation)
   revealActiveNavigationItem()
   if (entry.appearanceArea) {
     openAppearanceEditor(entry.appearanceArea)
     return
   }
-  if (entry.disclosureId) await disclosures.reveal(entry.disclosureId)
+  await nextTick()
+  if (revision !== settingsNavigationRevision || !pageRef.value) return
+  await revealSettingsPath(settingsDisclosurePath(entry), revision)
+  if (revision !== settingsNavigationRevision || !pageRef.value) return
+  // A conditional control can be absent while its dependency is in another group.
+  const section = pageRef.value.querySelector<HTMLElement>(
+    `#${normalizeSettingsSection(entry.section)}`
+  )
+  if (section && !findSettingItem(section, entry) && entry.fallbackId) {
+    const fallbackEntry = SETTINGS_SEARCH_INDEX.find(
+      (candidate) => candidate.id === entry.fallbackId
+    )
+    if (fallbackEntry) await revealSettingsPath(settingsDisclosurePath(fallbackEntry), revision)
+  }
   await settleSettingsNavigation(
     entry.disclosureId
       ? (pageRef.value?.querySelector<HTMLElement>(`#${CSS.escape(entry.disclosureId)}`) ?? null)
@@ -1007,6 +1158,13 @@ async function scrollToSearchResult(input: SettingsSearchEntry): Promise<void> {
   scrollPageToElement(target, { block: target === sectionEl ? 'start' : 'center' })
   highlightSettingItem(target === sectionEl ? null : target)
   focusSetting(target)
+}
+
+async function revealSettingsPath(path: readonly string[], revision: number): Promise<void> {
+  for (const id of path) {
+    if (revision !== settingsNavigationRevision || !pageRef.value) return
+    await disclosures.reveal(id)
+  }
 }
 
 function findSettingItem(sectionEl: HTMLElement, entry: SettingsSearchEntry): HTMLElement | null {
@@ -1078,7 +1236,7 @@ function handleSettingsSearchEnter(): void {
     activeSearchIndex.value >= 0 && activeSearchIndex.value < results.length
       ? results[activeSearchIndex.value]
       : results[0]
-  scrollToSearchResult(target)
+  scrollToSearchResult(target, true)
 }
 
 function clearSettingsSearch(): void {
@@ -1097,62 +1255,9 @@ async function refreshShortcutStatuses(): Promise<void> {
 }
 
 let settingsDisposed = false
-let sectionFrame = 0
-let sectionGeometryDirty = true
-let sectionRendering: ReturnType<typeof createSettingsSectionRendering> | null = null
-let sectionPositions: { key: SectionKey; top: number }[] = []
-let sectionScrollOffset = SETTINGS_SECTION_SCROLL_OFFSET
-
-function scheduleActiveSectionUpdate(): void {
-  if (sectionFrame || settingsDisposed) return
-  sectionFrame = window.requestAnimationFrame(() => {
-    sectionFrame = 0
-    updateActiveSection()
-  })
-}
-
-function updateActiveSection(): void {
-  if (performance.now() < programmaticScrollUntil) return
-  const page = pageRef.value
-  if (!page) return
-  const scrollTop = page.scrollTop
-  if (sectionGeometryDirty) {
-    const pageTop = page.getBoundingClientRect().top
-    sectionPositions = sections.flatMap((section) => {
-      const el = page.querySelector<HTMLElement>(`#${section.key}`)
-      return el
-        ? [{ key: section.key, top: el.getBoundingClientRect().top - pageTop + scrollTop }]
-        : []
-    })
-    const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
-    sectionScrollOffset =
-      SETTINGS_SECTION_SCROLL_OFFSET +
-      (navigation && getComputedStyle(navigation).position === 'sticky'
-        ? navigation.offsetHeight
-        : 0)
-    sectionGeometryDirty = false
-  }
-  // A long category owns the entire interval up to the next category. Comparing
-  // distances to headings incorrectly selects the next category halfway through.
-  let closest = sectionPositions[0]?.key ?? activeSection.value
-  for (const section of sectionPositions) {
-    if (section.top > scrollTop + sectionScrollOffset + 4) break
-    closest = section.key
-  }
-  activeSection.value = closest
-}
-
 onMounted(async () => {
-  // Scroll handling must not wait for cache sizes or plugin/native IPC to finish.
-  const page = pageRef.value
-  if (page) {
-    sectionRendering = createSettingsSectionRendering(page, () => {
-      sectionGeometryDirty = true
-      scheduleActiveSectionUpdate()
-    })
-    page.addEventListener('scroll', scheduleActiveSectionUpdate, { passive: true })
-    page.addEventListener('scrollend', finishProgrammaticScroll, { passive: true })
-  }
+  // Select the initial category before asynchronous native startup completes.
+  void applyNavigationTarget()
   await Promise.all([loadSettings(), refreshAudioOutputState(), themeStore.load()])
   if (settingsDisposed) return
   await Promise.all([
@@ -1173,19 +1278,15 @@ onMounted(async () => {
   }, 5_000)
   await nextTick()
   if (settingsDisposed) return
-  applyNavigationTarget()
 })
 
 onBeforeUnmount(() => {
   settingsDisposed = true
+  cancelCategoryMotion()
+  categoryMotionObserver?.disconnect()
+  categoryMotionMedia?.removeEventListener('change', settleCategoryMotion)
   ++settingsNavigationRevision
-  pageRef.value?.removeEventListener('scroll', scheduleActiveSectionUpdate)
-  pageRef.value?.removeEventListener('scrollend', finishProgrammaticScroll)
-  sectionRendering?.dispose()
-  if (sectionFrame) window.cancelAnimationFrame(sectionFrame)
   if (searchHighlightTimer !== null) window.clearTimeout(searchHighlightTimer)
-  if (programmaticScrollTimer !== null) window.clearTimeout(programmaticScrollTimer)
-  programmaticScrollUntil = 0
   if (libraryWatcherStatusTimer !== null) {
     window.clearInterval(libraryWatcherStatusTimer)
     libraryWatcherStatusTimer = null
@@ -1194,7 +1295,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main ref="pageRef" class="settings-preview-page">
+  <main ref="pageRef" class="settings-preview-page" data-settings-layout="categories">
     <input
       ref="importSettingsInputRef"
       class="visually-hidden-file-input"
@@ -1211,7 +1312,7 @@ onBeforeUnmount(() => {
         <div class="settings-nav-search-wrap">
           <div class="settings-search-box settings-nav-search">
             <i class="pi pi-search"></i>
-            <AnimatedInput
+            <input
               id="settings-search-input"
               v-model="settingsSearchQuery"
               type="text"
@@ -1260,7 +1361,7 @@ onBeforeUnmount(() => {
               :aria-selected="activeSearchIndex === index"
               :class="{ active: activeSearchIndex === index }"
               @mouseenter="activeSearchIndex = index"
-              @click="scrollToSearchResult(result)"
+              @click="scrollToSearchResult(result, $event.detail === 0)"
             >
               <i :class="sections.find((section) => section.key === result.section)?.icon"></i>
               <span class="settings-nav-result-title">{{ result.title }}</span>
@@ -1271,6 +1372,16 @@ onBeforeUnmount(() => {
             没有找到匹配的设置
           </div>
         </div>
+        <select
+          class="settings-category-select preview-select"
+          aria-label="设置分类"
+          :value="activeSection"
+          @change="onCategorySelect"
+        >
+          <option v-for="section in sections" :key="section.key" :value="section.key">
+            {{ section.label }}
+          </option>
+        </select>
         <div class="settings-nav-categories">
           <button
             v-for="section in sections"
@@ -1278,8 +1389,11 @@ onBeforeUnmount(() => {
             type="button"
             class="preview-nav-item"
             :class="{ active: activeSection === section.key }"
-            :aria-current="activeSection === section.key ? 'location' : undefined"
-            @click="scrollToSection(section.key)"
+            :aria-current="activeSection === section.key ? 'page' : undefined"
+            :tabindex="activeSection === section.key ? 0 : -1"
+            :data-settings-category="section.key"
+            @keydown="onCategoryKeydown($event, section.key)"
+            @click="scrollToSection(section.key, $event.detail === 0)"
           >
             <i :class="section.icon"></i>
             <span>{{ section.label }}</span>
@@ -1289,8 +1403,16 @@ onBeforeUnmount(() => {
 
       <div class="settings-preview-stack">
         <header class="settings-page-header">
-          <h1 class="settings-page-title">设置</h1>
+          <h1 class="settings-page-title">{{ activeSectionInfo.label }}</h1>
+          <p class="settings-page-description">{{ activeSectionInfo.description }}</p>
         </header>
+        <SettingsQuickSetup
+          v-if="showQuickSetup"
+          :folder-count="settings.libraryFolders?.length ?? 0"
+          :device-name="quickSetupDeviceName"
+          :theme-name="quickSetupThemeName"
+          @navigate="navigateQuickSetup"
+        />
         <section
           v-if="settingsNotice || settingsError"
           class="settings-command-bar"
@@ -1312,6 +1434,7 @@ onBeforeUnmount(() => {
         </div>
 
         <GeneralSettingsSection
+          v-show="activeSection === 'general'"
           :track-activation-mode-options="trackActivationModeOptions"
           :startup-home-page-options="startupHomePageOptions"
           :toggle-setting="toggleSetting"
@@ -1321,10 +1444,15 @@ onBeforeUnmount(() => {
           @reopen-onboarding="emit('reopenOnboarding')"
         />
         <AppearanceSettingsSection
+          v-show="activeSection === 'appearance'"
           @open-theme-studio="emit('openThemeStudio')"
           @open-theme-workshop="emit('openThemeWorkshop')"
         />
-        <section id="playback" class="glass-card preview-section">
+        <section
+          v-show="activeSection === 'playback'"
+          id="playback"
+          class="glass-card preview-section"
+        >
           <div class="section-title-row">
             <i class="pi pi-volume-up" aria-hidden="true" />
             <h2>播放与音效</h2>
@@ -1338,7 +1466,7 @@ onBeforeUnmount(() => {
             @open-dsp-rack="emit('openDspRack')"
           />
         </section>
-        <section id="lyrics" class="glass-card preview-section">
+        <section v-show="activeSection === 'lyrics'" id="lyrics" class="glass-card preview-section">
           <div class="section-title-row">
             <i class="pi pi-align-left" aria-hidden="true" />
             <h2>歌词</h2>
@@ -1379,6 +1507,14 @@ onBeforeUnmount(() => {
           />
         </section>
         <LibrarySettingsSection
+          v-show="activeSection === 'library'"
+          :formatted-cache-size="formattedCacheSize"
+          :storage-attention="
+            storageError ||
+            (clearingCache || clearingBpmAnalysisCache || clearingLoudnessAnalysisCache
+              ? '正在清理缓存…'
+              : '')
+          "
           :library-watcher-status="libraryWatcherStatus"
           :library-scan-status="libraryScanStatus"
           :library-scan-is-active="libraryScanIsActive"
@@ -1417,8 +1553,8 @@ onBeforeUnmount(() => {
             :clearing-loudness-analysis-cache="clearingLoudnessAnalysisCache"
             :formatted-cache-size="formattedCacheSize"
             :clearing-cache="clearingCache"
-            @choose-cache-folder="chooseCacheFolder"
-            @reset-cache-folder="resetCacheFolder"
+            @choose-cache-folder="runStorageOperation(chooseCacheFolder)"
+            @reset-cache-folder="runStorageOperation(resetCacheFolder)"
             @toggle-cache-artifact="toggleCacheArtifact"
             @set-streaming-audio-cache-policy="setStreamingAudioCachePolicy"
             @confirm-clear-bpm-analysis-cache="confirmClearBpmAnalysisCache"
@@ -1427,6 +1563,7 @@ onBeforeUnmount(() => {
           />
         </LibrarySettingsSection>
         <ConnectionsSettingsSection
+          v-show="activeSection === 'connections'"
           :update-settings="updateSettings"
           :toggle-setting="toggleSetting"
         >
@@ -1439,6 +1576,7 @@ onBeforeUnmount(() => {
           />
         </ConnectionsSettingsSection>
         <SystemSettingsSection
+          v-show="activeSection === 'system'"
           :plugin-settings-panels="pluginSettingsPanels"
           :plugin-settings-result="pluginSettingsResult"
           :plugin-settings-error="pluginSettingsError"
@@ -1887,3 +2025,5 @@ html[data-theme='dark'] .settings-preview-page .engine-error {
   font-size: 0.9rem;
 }
 </style>
+
+<style src="./settings-page/SettingsLayout.css"></style>

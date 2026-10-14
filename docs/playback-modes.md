@@ -34,6 +34,23 @@ In the engine, `listLoop` (and legacy `shuffle`) wrap in both `advanceAfterEnd()
 the engine preloads, so without it the last → first hop would lose gapless playback.
 A shuffle cycle wraps in place and is never re-permuted mid-session.
 
+NetEase queues can contain tracks whose playback targets have not been resolved yet.
+The renderer immediately resolves and authorizes the next target after native startup,
+handoff or a queue edit, then updates the queue and arms native pre-decoding without
+stopping playback. HTTP(S), `twilight-media://audio/` grants and authorized managed
+cache files all take this path. An unresolved later entry does not block the current
+and next entries from forming a partial native window.
+
+Partial windows run in native `sequential` mode; they never loop their own two entries.
+The renderer retains the full logical order and explicitly includes the first song as
+the next target at a list-loop/shuffle boundary. Main-issued queue tokens and logical
+entry mappings keep the UI aligned with native promotion, including duplicate songs.
+Single-track repeat retains native `repeat`; heart remains renderer-owned. Account and
+quality changes invalidate older speculative targets. Preparation failure keeps the
+normal boundary fallback, and format/DSD restrictions still apply. True gapless uses
+the existing sample-continuous native path with crossfade disabled; it does not trim
+silence that is part of the source recording.
+
 Should the engine still stop at a queue end while its queue is delegated — an engine
 binary older than the host, which parses the unknown `listLoop` as `sequential`, or a
 mode-sync race — main publishes `eof-reached` (it reports no upcoming track) and the

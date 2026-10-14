@@ -1530,6 +1530,7 @@ const subscribe = (list, cb) => {
 }
 const noopSubscribe = () => () => {}
 window.api = {
+  ncmCloud: { onProgress: noopSubscribe },
   settings: {
     get: async () => settingsSnapshot(),
     update: async (patch) => {

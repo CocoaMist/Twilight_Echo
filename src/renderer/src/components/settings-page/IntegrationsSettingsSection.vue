@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import QRCode from 'qrcode'
+import SettingsGroup from './SettingsGroup.vue'
 import type { RemoteControlStatus } from '../../../../shared/remoteControl.ts'
 
 const props = defineProps<{
@@ -165,115 +166,130 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="section-block">
-    <h3>社交与远程控制</h3>
-    <div class="setting-list">
-      <div data-setting-id="discord" id="setting-discord" class="setting-item">
-        <div class="setting-copy">
-          <strong>Discord Rich Presence <i class="pi pi-discord discord-icon"></i></strong>
-          <span>在 Discord 状态中向好友展示您正在播放的音乐。</span>
-          <span class="setting-substatus" aria-live="polite">{{ discordStatusText }}</span>
-        </div>
-        <button
-          type="button"
-          aria-label="Discord Rich Presence"
-          class="toggle-switch"
-          :class="{ active: props.discordEnabled, inactive: !props.discordEnabled }"
-          role="switch"
-          :aria-checked="props.discordEnabled"
-          @click="toggleDiscord"
-        ></button>
-      </div>
-      <hr />
-      <div
-        data-setting-id="remote-control"
-        id="setting-remote-control"
-        class="setting-item top-align"
-      >
-        <div class="setting-copy">
-          <strong>局域网远程控制</strong>
-          <span>
-            默认关闭。开启后在局域网提供 Web 遥控页（PIN 配对 + Token），并支持 DLNA 投送。
-          </span>
-        </div>
-        <button
-          type="button"
-          aria-label="局域网远程控制"
-          class="toggle-switch"
-          :class="{
-            active: props.remoteEnabled,
-            inactive: !props.remoteEnabled
-          }"
-          role="switch"
-          :aria-checked="props.remoteEnabled"
-          :aria-busy="remoteBusy"
-          @click="toggleRemote"
-        ></button>
-      </div>
-      <div
-        data-setting-id="remote-pairing"
-        id="setting-remote-pairing"
-        v-if="props.remoteEnabled"
-        class="setting-item top-align remote-control-panel"
-      >
-        <div class="setting-copy">
-          <strong>配对 PIN / 访问地址</strong>
-          <span>
-            状态：
-            {{ remoteStatus?.running ? `运行中 · 端口 ${remoteStatus.port ?? '—'}` : '未运行' }}
-            <template v-if="remoteStatus?.paired"> · 已配对</template>
-            <template v-if="(remoteStatus?.clientCount ?? 0) > 0">
-              · {{ remoteStatus?.clientCount }} 客户端
-            </template>
-          </span>
-          <div v-if="remoteStatus?.pin" class="remote-pin-row">
-            <code class="remote-pin">{{ remoteStatus.pin }}</code>
-            <button
-              type="button"
-              class="soft-button"
-              :disabled="remoteBusy"
-              @click="rotateRemotePin"
-            >
-              更换 PIN
-            </button>
-            <button
-              type="button"
-              class="soft-button"
-              :disabled="remoteBusy"
-              @click="refreshRemoteStatus"
-            >
-              刷新
-            </button>
+  <SettingsGroup
+    id="external-connections"
+    title="社交与远程控制"
+    :summary="
+      'Discord：' + discordStatusText + ' · 远程控制：' + (remoteEnabled ? '已开启' : '已关闭')
+    "
+    :attention="
+      remoteStatusError ||
+      remoteStatus?.lastError ||
+      discordStatus?.lastError ||
+      (remoteBusy ? '正在更新远程连接…' : '')
+    "
+    description="需要分享听歌状态，或从同一局域网的手机控制播放时展开。"
+  >
+    <div class="section-block">
+      <h3>社交与远程控制</h3>
+      <div class="setting-list">
+        <div data-setting-id="discord" id="setting-discord" class="setting-item">
+          <div class="setting-copy">
+            <strong>Discord Rich Presence <i class="pi pi-discord discord-icon"></i></strong>
+            <span>在 Discord 状态中向好友展示您正在播放的音乐。</span>
+            <span class="setting-substatus" aria-live="polite">{{ discordStatusText }}</span>
           </div>
-          <div
-            v-if="remoteQrDataUrl || (remoteStatus?.urls?.length ?? 0) > 0"
-            class="remote-access-row"
-          >
-            <div v-if="remoteQrDataUrl" class="remote-qr-block">
-              <img
-                class="remote-qr"
-                :src="remoteQrDataUrl"
-                :alt="`远程控制二维码：${remoteQrUrl}`"
-                width="160"
-                height="160"
-              />
-              <span class="remote-qr-hint">手机扫码打开遥控页</span>
+          <button
+            type="button"
+            aria-label="Discord Rich Presence"
+            class="toggle-switch"
+            :class="{ active: props.discordEnabled, inactive: !props.discordEnabled }"
+            role="switch"
+            :aria-checked="props.discordEnabled"
+            @click="toggleDiscord"
+          ></button>
+        </div>
+        <hr />
+        <div
+          data-setting-id="remote-control"
+          id="setting-remote-control"
+          class="setting-item top-align"
+        >
+          <div class="setting-copy">
+            <strong>局域网远程控制</strong>
+            <span>
+              默认关闭。开启后在局域网提供 Web 遥控页（PIN 配对 + Token），并支持 DLNA 投送。
+            </span>
+          </div>
+          <button
+            type="button"
+            aria-label="局域网远程控制"
+            class="toggle-switch"
+            :class="{
+              active: props.remoteEnabled,
+              inactive: !props.remoteEnabled
+            }"
+            role="switch"
+            :aria-checked="props.remoteEnabled"
+            :aria-busy="remoteBusy"
+            @click="toggleRemote"
+          ></button>
+        </div>
+        <div
+          data-setting-id="remote-pairing"
+          id="setting-remote-pairing"
+          v-if="props.remoteEnabled"
+          class="setting-item top-align remote-control-panel"
+        >
+          <div class="setting-copy">
+            <strong>配对 PIN / 访问地址</strong>
+            <span>
+              状态：
+              {{ remoteStatus?.running ? `运行中 · 端口 ${remoteStatus.port ?? '—'}` : '未运行' }}
+              <template v-if="remoteStatus?.paired"> · 已配对</template>
+              <template v-if="(remoteStatus?.clientCount ?? 0) > 0">
+                · {{ remoteStatus?.clientCount }} 客户端
+              </template>
+            </span>
+            <div v-if="remoteStatus?.pin" class="remote-pin-row">
+              <code class="remote-pin">{{ remoteStatus.pin }}</code>
+              <button
+                type="button"
+                class="soft-button"
+                :disabled="remoteBusy"
+                @click="rotateRemotePin"
+              >
+                更换 PIN
+              </button>
+              <button
+                type="button"
+                class="soft-button"
+                :disabled="remoteBusy"
+                @click="refreshRemoteStatus"
+              >
+                刷新
+              </button>
             </div>
-            <ul v-if="(remoteStatus?.urls?.length ?? 0) > 0" class="remote-url-list">
-              <li v-for="url in remoteStatus?.urls ?? []" :key="url">
-                <button type="button" class="linkish" @click="copyRemoteUrl(url)">
-                  {{ url }}
-                </button>
-              </li>
-            </ul>
+            <div
+              v-if="remoteQrDataUrl || (remoteStatus?.urls?.length ?? 0) > 0"
+              class="remote-access-row"
+            >
+              <div v-if="remoteQrDataUrl" class="remote-qr-block">
+                <img
+                  class="remote-qr"
+                  :src="remoteQrDataUrl"
+                  :alt="`远程控制二维码：${remoteQrUrl}`"
+                  width="160"
+                  height="160"
+                />
+                <span class="remote-qr-hint">手机扫码打开遥控页</span>
+              </div>
+              <ul v-if="(remoteStatus?.urls?.length ?? 0) > 0" class="remote-url-list">
+                <li v-for="url in remoteStatus?.urls ?? []" :key="url">
+                  <button type="button" class="linkish" @click="copyRemoteUrl(url)">
+                    {{ url }}
+                  </button>
+                </li>
+              </ul>
+            </div>
+            <span v-if="remoteStatus?.lastError" class="remote-error">
+              {{ remoteStatus.lastError }}
+            </span>
+            <span v-if="remoteStatusError" class="remote-error">{{ remoteStatusError }}</span>
+            <span v-if="notice" class="setting-substatus">{{ notice }}</span>
           </div>
-          <span v-if="remoteStatus?.lastError" class="remote-error">
-            {{ remoteStatus.lastError }}
-          </span>
-          <span v-if="remoteStatusError" class="remote-error">{{ remoteStatusError }}</span>
-          <span v-if="notice" class="setting-substatus">{{ notice }}</span>
         </div>
       </div>
     </div>
-  </div>
+  </SettingsGroup>
 </template>

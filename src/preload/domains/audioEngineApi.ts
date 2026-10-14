@@ -161,6 +161,22 @@ export function bindAudioEngineIpcEvents(): void {
 
 export const audioEngineApi = {
   audioEngine: {
+    testOutput: (exclusive: boolean): Promise<{ cancelled: boolean }> =>
+      ipcRenderer.invoke(IPC.audioEngine.testOutput, exclusive),
+    stopOutputTest: (): Promise<void> => ipcRenderer.invoke(IPC.audioEngine.stopOutputTest),
+    getAutoMixStemCapabilities: (
+      refresh = false
+    ): Promise<import('../../shared/twilightAutoMix.ts').AutoMixStemCapabilities> =>
+      ipcRenderer.invoke(IPC.audioEngine.getAutoMixStemCapabilities, refresh),
+    installAutoMixStemPack: (): Promise<
+      import('../../shared/twilightAutoMix.ts').AutoMixStemInstallStatus
+    > => ipcRenderer.invoke(IPC.audioEngine.installAutoMixStemPack),
+    getAutoMixStemInstallStatus: (): Promise<
+      import('../../shared/twilightAutoMix.ts').AutoMixStemInstallStatus
+    > => ipcRenderer.invoke(IPC.audioEngine.getAutoMixStemInstallStatus),
+    cancelAutoMixStemInstall: (): Promise<
+      import('../../shared/twilightAutoMix.ts').AutoMixStemInstallStatus
+    > => ipcRenderer.invoke(IPC.audioEngine.cancelAutoMixStemInstall),
     getDeviceProfiles: (): Promise<AudioDeviceProfilesSnapshot> =>
       ipcRenderer.invoke(IPC.audioEngine.getDeviceProfiles),
     saveDeviceProfile: (profile: AudioDeviceProfile): Promise<AudioDeviceProfilesSnapshot> =>

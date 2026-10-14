@@ -236,6 +236,8 @@ watch(
   { immediate: true }
 )
 const showOnboarding = ref(false)
+const onboardingSaving = ref(false)
+const onboardingSaveError = ref('')
 
 function applyExternalNavigation(target: 'local' | 'streaming' | 'settings'): void {
   showOnboarding.value = false
@@ -314,17 +316,21 @@ function handleTitleLogin(providerId?: string | null): void {
 
 function handleReopenOnboarding(): void {
   closeSettingsPage()
+  onboardingSaveError.value = ''
   showOnboarding.value = true
 }
 
 async function handleOnboardingFinish(result: OnboardingFinishResult): Promise<void> {
+  if (onboardingSaving.value) return
+  onboardingSaving.value = true
+  onboardingSaveError.value = ''
   try {
     await updateSettings(result.patch)
   } catch (error) {
-    pushNotice({
-      kind: 'warning',
-      message: `保存引导设置失败：${error instanceof Error ? error.message : String(error)}`
-    })
+    onboardingSaveError.value = `保存失败，请重试：${error instanceof Error ? error.message : String(error)}`
+    return
+  } finally {
+    onboardingSaving.value = false
   }
   showOnboarding.value = false
   if (result.action === 'streaming' || result.action === 'streaming-login') {
@@ -968,6 +974,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     <LiquidGlassDefs :active="playbarRefractionActive" />
     <div class="app-shell-title">
       <TitleBar
+        :close-only="showOnboarding"
         :immersive="showPlayingPage"
         :liquid-material="liquidGlassChromeActive"
         :streaming="showStreamingPage && !showPlayingPage"
@@ -1194,7 +1201,12 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     @close="commandPalette.close"
   />
   <Transition name="onboarding-page">
-    <OnboardingWizard v-if="showOnboarding" @finish="handleOnboardingFinish" />
+    <OnboardingWizard
+      v-if="showOnboarding"
+      :saving="onboardingSaving"
+      :save-error="onboardingSaveError"
+      @finish="handleOnboardingFinish"
+    />
   </Transition>
   <NativeDialogTransition>
     <QueueWorkspaceDialog

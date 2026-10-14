@@ -17,6 +17,7 @@ const props = withDefaults(
     titleSurface?: 'default' | 'settings' | 'streaming'
     activeTool?: 'settings' | 'plugins' | null
     preview?: boolean
+    closeOnly?: boolean
     notificationsOpen?: boolean
   }>(),
   {
@@ -107,16 +108,32 @@ function close(): void {
     :class="{
       'drag-region': !preview,
       'no-drag': preview,
-      'title-bar-glass': glass,
-      'title-bar-liquid': liquidMaterial && !immersive,
-      'title-bar-immersive': immersive,
-      'title-bar-settings': titleSurface === 'settings',
-      'title-bar-streaming': titleSurface === 'streaming',
-      'title-bar-menu-open': menuOpen
+      'title-bar-glass': glass && !closeOnly,
+      'title-bar-liquid': liquidMaterial && !immersive && !closeOnly,
+      'title-bar-immersive': immersive && !closeOnly,
+      'title-bar-close-only': closeOnly,
+      'title-bar-settings': titleSurface === 'settings' && !closeOnly,
+      'title-bar-streaming': titleSurface === 'streaming' && !closeOnly,
+      'title-bar-menu-open': menuOpen && !closeOnly
     }"
   >
-    <div class="title-bar-background" aria-hidden="true"></div>
-    <div class="title-bar-start no-drag" @pointerdown="setPressOrigin">
+    <div v-if="!closeOnly" class="title-bar-background" aria-hidden="true"></div>
+    <div
+      v-if="canGoBack && !preview && !closeOnly"
+      class="title-bar-back no-drag"
+      @pointerdown="setPressOrigin"
+    >
+      <button
+        type="button"
+        class="back-btn"
+        :title="backHint ?? '返回'"
+        aria-label="返回"
+        @click="canGoBack && $emit('back')"
+      >
+        <TitleBarIcon name="arrow_left" />
+      </button>
+    </div>
+    <div v-if="!closeOnly" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
       <button
         type="button"
         aria-label="菜单"
@@ -144,31 +161,8 @@ function close(): void {
         <TitleBarIcon v-else name="person" />
       </button>
     </div>
-    <!-- Keep commands anchored when a return handler becomes available. -->
-    <div
-      class="title-bar-back"
-      :class="{
-        'title-bar-back-visible': canGoBack && !preview,
-        'no-drag': canGoBack && !preview
-      }"
-      :inert="!canGoBack || preview"
-      @pointerdown="setPressOrigin"
-    >
-      <Transition name="title-back-fade">
-        <button
-          type="button"
-          v-if="canGoBack && !preview"
-          class="back-btn"
-          :title="backHint ?? '返回'"
-          aria-label="返回"
-          @click="canGoBack && $emit('back')"
-        >
-          <TitleBarIcon name="arrow_left" />
-        </button>
-      </Transition>
-    </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
-      <div class="title-bar-tools" role="group" aria-label="应用工具">
+      <div v-if="!closeOnly" class="title-bar-tools" role="group" aria-label="应用工具">
         <button
           type="button"
           aria-label="扩展中心"
@@ -218,6 +212,7 @@ function close(): void {
       </div>
       <div class="title-bar-window-controls" role="group" aria-label="窗口控制">
         <button
+          v-if="!closeOnly"
           type="button"
           :disabled="preview"
           aria-label="最小化"
@@ -230,6 +225,7 @@ function close(): void {
           </svg>
         </button>
         <button
+          v-if="!closeOnly"
           type="button"
           :aria-label="maximized ? '还原窗口' : '最大化窗口'"
           class="control-btn maximize"
@@ -403,10 +399,6 @@ html[data-theme='dark']
   flex-shrink: 0;
 }
 
-.title-bar-back-visible {
-  overflow: visible;
-}
-
 .back-btn {
   display: flex;
   align-items: center;
@@ -423,18 +415,12 @@ html[data-theme='dark']
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
 }
 
-.title-back-fade-enter-active,
-.title-back-fade-leave-active {
-  transition: opacity 0.18s ease;
-}
-
-.title-back-fade-enter-from,
-.title-back-fade-leave-to {
-  opacity: 0;
+.back-btn:hover {
+  background: var(--te-shell-control-hover);
 }
 
 .title-bar-glass .back-btn {
-  color: #fff;
+  color: var(--te-on-accent);
 }
 
 .menu-btn {
@@ -538,6 +524,16 @@ html[data-theme='dark'] .title-bar .control-btn:not(.notification-btn):not(.clos
 
 .title-bar-window-controls {
   margin-left: 12px;
+}
+
+.title-bar-close-only .title-bar-window-controls {
+  margin-left: 0;
+}
+
+html .title-bar.title-bar-close-only {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .title-bar-tools::after {

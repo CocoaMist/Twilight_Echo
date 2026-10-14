@@ -10,6 +10,92 @@
  */
 
 export const EN_US_MESSAGES: Record<string, string> = {
+  'automix.phase.off': 'Off',
+  'automix.phase.preparing': 'Analyzing and preparing the next transition',
+  'automix.phase.ready': 'Ready to mix near the end of this song',
+  'automix.phase.mixing': 'Mixing',
+  'automix.phase.completed': 'Transition complete',
+  'automix.phase.degraded': 'Using regular playback for this transition',
+  'automix.strategy.beat-aligned': 'Beat-aligned transition',
+  'automix.strategy.content-boundary': 'Instrumental outro transition at original speed',
+  'automix.strategy.release-boundary': 'Decaying musical tail at original speed',
+  'automix.strategy.tail-overlap': 'Long outro overlap at original speed',
+  'automix.reason.waiting': 'Waiting for a new transition',
+  'automix.reason.beats': 'Beats are insufficiently stable for alignment',
+  'automix.reason.tempo': 'Tempo difference exceeds the selected mode limit',
+  'automix.reason.boundary': 'No suitable overlap position found',
+  'automix.reason.gapless': 'Gapless playback preferred for a continuous album',
+  'automix.reason.transport': 'Current processing or audio format prevents intelligent transitions',
+  'automix.reason.range': 'Source timelines differ; restart playback',
+  'automix.reason.timeout': 'Preparation missed this transition',
+  'automix.reason.source': 'Source changed or is not ready',
+  'automix.reason.retrying': 'Service temporarily busy; retrying',
+  'automix.reason.cache': 'Cache unavailable; using valid analysis',
+  'automix.reason.decode': 'Boundary decode or continuation failed',
+  'automix.reason.model': 'Enhancement unavailable; using the basic mix',
+  'automix.reason.service': 'Analysis or audio service temporarily unavailable',
+  'automix.reason.unsuitable': 'This pair is unsuitable for mixing',
+  'automix.reason.analysis': 'Music analysis failed',
+  'automix.stems.active': 'Stems active',
+  'automix.stems.cache.title': 'Stem cache capacity',
+  'automix.stems.cache.description':
+    'Reuse completed stems. Oldest entries are removed first; Off keeps no stem cache.',
+  'automix.stems.title': 'Stem enhancement',
+  'automix.stems.device': 'Stem compute device',
+  'automix.stems.deviceDescription':
+    'Auto prefers GPU and falls back to CPU when GPU memory runs out. GPU mode uses basic AutoMix on failure. Existing stems can be reused from cache.',
+  'automix.stems.deviceAuto': 'Auto (prefer GPU)',
+  'automix.stems.checking': 'Detecting stem separator and compute devices…',
+  'automix.stems.missing':
+    'No stem separator detected. Select Install stem pack above and choose a ZIP to enable GPU / CPU choices.',
+  'automix.stems.install.button': 'Install stem pack…',
+  'automix.stems.resourceNotice':
+    'Stem enhancement uses RAM to process audio and also uses VRAM on GPU. Usage depends on the audio and compute device. You can disable stem enhancement at any time.',
+  'automix.stems.install.enableAfter': 'Enable stem enhancement after installation',
+  'automix.stems.install.enableDescription':
+    'When checked, select GPU / CPU automatically. When unchecked, disable stem enhancement after a successful install. Cancellation or failure preserves current settings.',
+  'automix.stems.install.choose': 'Choose ZIP and install',
+  'automix.notice.cancel': 'Cancel',
+  'automix.djNotice.title': 'Enable DJ mode?',
+  'automix.djNotice.description':
+    'DJ mode may skip large parts of song openings or endings for beat matching and transitions, and overlap two songs in a longer mix. Choose Natural to retain more song content.',
+  'automix.djNotice.confirm': 'Enable DJ mode',
+  'automix.stems.install.pick': 'Select an AutoMix stem pack ZIP',
+  'automix.stems.install.selecting': 'Choose a stem pack ZIP…',
+  'automix.stems.install.checking': 'Checking the pack and free disk space…',
+  'automix.stems.install.extracting': 'Extracting stem pack',
+  'automix.stems.install.verifying': 'Verifying files and detecting GPU / CPU…',
+  'automix.stems.install.ready':
+    'Stem pack installed. Choose a compute device and enable stem enhancement.',
+  'automix.stems.install.cancel': 'Cancel installation',
+  'automix.stems.install.cancelled': 'Installation cancelled.',
+  'automix.stems.install.error.invalid_archive':
+    'Installation failed: invalid or unsupported ZIP. Select a complete stem pack.',
+  'automix.stems.install.error.invalid_pack':
+    'Installation failed: incomplete pack or incompatible model version.',
+  'automix.stems.install.error.integrity':
+    'Installation failed: file verification failed. Obtain a complete stem pack and retry.',
+  'automix.stems.install.error.disk_space':
+    'Installation failed: insufficient space on the user data drive. Free space and retry.',
+  'automix.stems.install.error.runtime':
+    'Installation failed: stem runtime check failed. Check the pack and retry.',
+  'automix.stems.install.error.io':
+    'Installation failed: unable to read the ZIP or write the installation directory. Check the file and disk, then retry.',
+  'automix.stems.cpuReady': 'Stem separator detected · CPU available, GPU unavailable',
+  'automix.stems.gpuReady': 'Stem separator detected · GPU / CPU available',
+  'automix.stems.deviceUnavailable':
+    'The saved compute device is unavailable. Select an available device.',
+  'automix.stems.pack_invalid':
+    'The stem pack is incomplete or incompatible. Check the enhancement pack and detect again.',
+  'automix.stems.runtime_unavailable':
+    'The stem runtime check failed. Check the enhancement pack and detect again.',
+  'automix.stems.probe_timeout': 'Stem detection timed out. Try detecting again later.',
+  'automix.stems.refresh': 'Detect again',
+  'automix.stems.description':
+    'Use vocal and bass stems to assist handoffs when enabled. Use basic AutoMix when disabled or preparation is incomplete.',
+  'automix.stems.off': 'Off',
+  'automix.stems.auto': 'Auto (requires enhancement pack)',
+  'automix.reason.failed': 'Transition preparation failed',
   // ══ Language setting ═════════════════════════════════════════════════════
   'settings.language.title': 'Language',
   'settings.language.description': 'Language used for the interface and error messages.',
@@ -104,12 +190,11 @@ export const EN_US_MESSAGES: Record<string, string> = {
   'audio.reason.crossfade_active.explain':
     'Crossfade overlaps two streams at track boundaries and applies a gain envelope, rewriting samples in the transition and disabling true gapless.',
   'audio.reason.crossfade_active.fix': 'Set crossfade duration to 0 seconds in playback settings.',
-  'audio.reason.automix_active.label': 'AutoMix is transitioning tracks',
-  'audio.reason.automix_active.explain':
-    'AutoMix is mixing or processing PCM from the outgoing and incoming tracks, changing the output samples.',
-  'audio.reason.automix_active.fix':
-    'Turn off AutoMix in playback settings to restore your latest output preferences.',
-
+  'audio.reason.automix_processing.label': 'AutoMix is processing the song transition',
+  'audio.reason.automix_processing.explain':
+    'AutoMix adjusts gain, tempo or blends two songs during a transition, changing the output samples.',
+  'audio.reason.automix_processing.fix':
+    'For unprocessed output, turn off AutoMix in playback settings and restart playback.',
   'audio.reason.dsd_output_mode_pcm.label': 'DSD output mode is set to PCM',
   'audio.reason.dsd_output_mode_pcm.explain':
     'The current setting forces DSD to PCM conversion and never attempts native DSD or DoP passthrough.',

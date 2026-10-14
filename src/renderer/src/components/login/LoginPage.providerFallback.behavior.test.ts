@@ -326,7 +326,7 @@ window.runProviderFallbackTests = async () => {
       const frame = document.querySelector('#title .title-bar');
       const material = getComputedStyle(frame.querySelector('.title-bar-background'));
       expect(!frame.classList.contains('title-bar-liquid'), 'liquid material overrides immersive playback');
-      expect(material.backgroundColor === 'rgba(0, 0, 0, 0)' && material.backgroundImage === 'none' && material.boxShadow === 'none' && material.backdropFilter === 'none', 'playback caption breaks the continuous backdrop: ' + theme + '/' + liquid + '/' + preview);
+      expect(material.backgroundColor === 'rgba(0, 0, 0, 0)' && material.backgroundImage === 'none' && material.boxShadow === 'none' && material.backdropFilter === 'none', 'playback caption still paints a separate strip: ' + theme + '/' + liquid + '/' + preview);
       expect(frame.getBoundingClientRect().height === 40, 'immersive title changed its height');
       expect([...frame.querySelectorAll('button')].every((element,index) => getComputedStyle(element).color === playerText && element.getBoundingClientRect().left === restingPositions[index]), 'immersive controls lost playback colors or moved: ' + JSON.stringify({theme,liquid,preview,playerText,controls:[...frame.querySelectorAll('button')].map((element,index)=>({name:element.className,color:getComputedStyle(element).color,left:element.getBoundingClientRect().left,expectedLeft:restingPositions[index]}))}));
       expect(getComputedStyle(frame.querySelector('.title-bar-background')).pointerEvents === 'none', 'immersive backdrop intercepts controls');
@@ -337,6 +337,7 @@ window.runProviderFallbackTests = async () => {
     const restoredMaterial = getComputedStyle(document.querySelector('#title .title-bar-background'));
     expect(restoredMaterial.backgroundColor !== 'rgba(0, 0, 0, 0)' && restoredMaterial.backdropFilter.includes('blur(20px)') && getComputedStyle(document.querySelector('#title .menu-btn')).color === normalColor, 'leaving playback did not restore normal chrome');
     expect(bar.height === 40 && menu.width === close.width && close.width === 46, 'caption geometry differs');
+    expect(!document.querySelector('#title .title-bar-back'), 'root page keeps an empty return slot');
     expect(menu.left - bar.left === bar.right - close.right, 'outer margins differ');
     expect(menu.left + menu.width / 2 - bar.left === bar.right - close.left - close.width / 2, 'outer icon centers differ');
     expect(document.querySelector('#title .menu-btn .title-bar-icon').getBoundingClientRect().width === 18, 'left icon size did not grow');
@@ -354,13 +355,13 @@ window.runProviderFallbackTests = async () => {
       expect(frame.height === 40 && Math.abs(icon.top + icon.height / 2 - frame.top - frame.height / 2) < .6, 'theme changed title height or vertical alignment: ' + layout);
     }
     delete document.documentElement.dataset.tePresetLayout;
-    const backSlot = document.querySelector('#title .title-bar-back').getBoundingClientRect();
     const accountLeft = button.getBoundingClientRect().left;
     canGoBack.value = true; await settle();
-    expect(button.getBoundingClientRect().left === accountLeft && document.querySelector('#title .back-btn'), 'return shifted account entry');
-    expect(document.querySelector('#title .title-bar-back').getBoundingClientRect().width === backSlot.width, 'return changed its reserved width');
+    expect(button.getBoundingClientRect().left === accountLeft + 46 && document.querySelector('#title .back-btn'), 'return did not occupy one leading slot');
+    expect(document.querySelector('#title .back-btn').getBoundingClientRect().left === document.querySelector('#title .title-bar').getBoundingClientRect().left, 'return is not fixed to the left edge');
     expect([...document.querySelectorAll('#title .plugins-btn, #title .settings-btn, #title .notification-btn, #title .minimize, #title .maximize, #title .close')].every((element, index) => element.getBoundingClientRect().left === controlPositions[index]), 'return shifted right controls');
     canGoBack.value = false; await settle();
+    expect(!document.querySelector('#title .title-bar-back') && button.getBoundingClientRect().left === accountLeft, 'root page did not remove the return slot');
   }
 
   // A failed avatar must keep a usable fallback; a changed profile retries its image.

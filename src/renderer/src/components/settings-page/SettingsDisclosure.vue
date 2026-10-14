@@ -20,7 +20,7 @@ const props = withDefaults(
   { tag: 'div', boundary: '.settings-preview-stack' }
 )
 const root = ref<HTMLElement | null>(null)
-const rendered = ref(props.open)
+const rendered = ref(props.open || props.keepMounted)
 let contentAnimation: Animation | undefined
 const movements = new Map<HTMLElement, Animation>()
 let before = new Map<HTMLElement, DOMRect>()

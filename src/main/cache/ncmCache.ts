@@ -18,6 +18,7 @@ import { redactSensitiveText } from '../security/secureStorage.ts'
 import { getMusicCacheStorageDirectories } from './musicCacheLayout.ts'
 import { NCM_CACHE_MAX_BYTES, planNcmCachePrune } from './ncmCachePrune.ts'
 import { buildNcmCacheIndexFromNames, parseNcmCacheFileSongId } from './ncmCacheIndex.ts'
+import { downloadAutoMixSource } from './autoMixSourceDownload.ts'
 
 export function ensureMusicCacheDirectories(rootPath: string): void {
   if (!rootPath) return
@@ -148,6 +149,48 @@ function pruneNcmCacheDir(dir: string): void {
 
 /** 进行中的整文件缓存下载。新解析到达时旧下载全部取消（快速连切 ≤1 个活跃下载）。 */
 const activeCacheDownloads = new Map<number, AbortController>()
+
+// A single bounded preparation queue; normal playback retains its existing
+// delayed cache flow. A cancelled RPC never publishes a partially cached song.
+let autoMixSourceQueue: Promise<unknown> = Promise.resolve()
+export async function prepareNcmAutoMixSong(
+  songId: number,
+  url: string,
+  fileName: string | undefined,
+  options: { signal?: AbortSignal; expiresAt?: number | null; expectedBytes?: number | null }
+): Promise<string | null> {
+  if (!Number.isFinite(songId) || songId <= 0 || !isSafeRemoteMediaUrl(url)) return null
+  const deadline = Date.now() + 10_000
+  const run = autoMixSourceQueue
+    .catch(() => {})
+    .then(async () => {
+      options.signal?.throwIfAborted()
+      if (Date.now() >= deadline) return null
+      const sourceKey = createHash('sha256').update(url).digest('hex')
+      const cached = getCachedNcmSong(songId)
+      if (cached && cached.includes(`${songId}.${sourceKey}.`)) return cached
+      // Avoid an old delayed write replacing or competing with prepared bytes.
+      for (const active of activeCacheDownloads.values())
+        active.abort(new Error(NCM_CACHE_DOWNLOAD_SUPERSEDED_MESSAGE))
+      const dir = getNcmCacheDir()
+      const ext = inferNcmCacheExtension(url, null, fileName)
+      const name = `${songId}.${sourceKey}${ext}`
+      const result = await downloadAutoMixSource(url, join(dir, name), {
+        ...options,
+        timeoutMs: deadline - Date.now()
+      })
+      rememberNcmCacheEntry(songId, dir, name)
+      pruneNcmCacheDir(dir)
+      return result.path
+    })
+  autoMixSourceQueue = run
+  try {
+    return await run
+  } catch {
+    options.signal?.throwIfAborted()
+    return null
+  }
+}
 
 /** 绝大多数跳歌发生在前 30s：延迟启动让被切走的歌完全不产生下载流量（批量 8.1③）。 */
 const NCM_CACHE_DOWNLOAD_START_DELAY_MS = 30_000

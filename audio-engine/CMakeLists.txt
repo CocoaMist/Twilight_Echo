@@ -13,7 +13,6 @@ option(TAE_ENABLE_MINIAUDIO "Enable the miniaudio Shared/default PCM provider Po
 if(TAE_BUILD_TESTS)
   enable_testing()
 endif()
-add_subdirectory(automix)
 
 set(TAE_DEFAULT_PCM_PROVIDER "legacy" CACHE STRING
   "Default Windows Shared/default PCM provider when TWILIGHT_AUDIO_PCM_PROVIDER is unset")
@@ -76,7 +75,7 @@ set(TAE_ENGINE_SOURCES
   core/TwilightAudioEngine.cpp
   analysis/BpmAnalyzer.cpp
   analysis/LoudnessAnalyzer.cpp
-  automix/AutoMixAnalyzer.cpp
+  automix-native/AutoMixAdapter.cpp
   decoder/DopPacker.cpp
   decoder/DsdReader.cpp
   decoder/DstDecoder.cpp
@@ -107,7 +106,9 @@ set(TAE_ENGINE_SOURCES
   utils/StringUtils.cpp
 )
 
+add_subdirectory(automix-native)
 add_library(twilight_audio_engine SHARED ${TAE_ENGINE_SOURCES})
+target_link_libraries(twilight_audio_engine PRIVATE twilight_automix_native)
 
 target_include_directories(twilight_audio_engine
   PUBLIC
@@ -123,7 +124,6 @@ target_compile_definitions(
     TAE_DEFAULT_PCM_PROVIDER_MINIAUDIO=${TAE_DEFAULT_PCM_PROVIDER_MINIAUDIO}
 )
 target_link_libraries(twilight_audio_engine PRIVATE ${CMAKE_DL_LIBS})
-target_link_libraries(twilight_audio_engine PRIVATE twilight_automix)
 if(UNIX AND NOT APPLE)
   target_link_options(twilight_audio_engine PRIVATE "-Wl,-Bsymbolic")
 endif()
@@ -484,7 +484,6 @@ if(TAE_BUILD_TESTS)
     core/AudioTypes.cpp
   )
   target_include_directories(twilight_ffmpeg_decoder_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(twilight_ffmpeg_decoder_tests PRIVATE twilight_automix)
   if(FFMPEG_FOUND)
     target_compile_definitions(twilight_ffmpeg_decoder_tests PRIVATE TAE_HAS_FFMPEG=1)
     target_include_directories(twilight_ffmpeg_decoder_tests PRIVATE ${FFMPEG_INCLUDE_DIRS})
@@ -815,6 +814,8 @@ if(TAE_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
   target_link_libraries(twilight_runtime_queue_reroute_tests PRIVATE ${CMAKE_DL_LIBS})
+  target_sources(twilight_runtime_queue_reroute_tests PRIVATE automix-native/AutoMixAdapter.cpp)
+  target_link_libraries(twilight_runtime_queue_reroute_tests PRIVATE twilight_automix_native)
   if(WIN32)
     # The fixture is a controlled process-level stand-in for the external VST3
     # host. It exercises the same shared-memory lifecycle without pretending
@@ -844,8 +845,6 @@ if(TAE_BUILD_TESTS)
     target_link_libraries(twilight_runtime_queue_reroute_tests PRIVATE ${EBUR128_LIBRARY})
   endif()
   add_test(NAME twilight_runtime_queue_reroute_unit COMMAND twilight_runtime_queue_reroute_tests)
-  target_sources(twilight_runtime_queue_reroute_tests PRIVATE automix/AutoMixAnalyzer.cpp)
-  target_link_libraries(twilight_runtime_queue_reroute_tests PRIVATE twilight_automix)
 
   # This is deliberately a native behavior gate, not an array-fill benchmark.
   # It drives the production AudioPipeline and FFmpeg decoder through a
@@ -888,7 +887,9 @@ if(TAE_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
   # NDEBUG is stripped from every test target at the end of this block.
-  target_link_libraries(twilight_audio_performance_gate PRIVATE ${CMAKE_DL_LIBS} twilight_automix)
+  target_link_libraries(twilight_audio_performance_gate PRIVATE ${CMAKE_DL_LIBS})
+  target_sources(twilight_audio_performance_gate PRIVATE automix-native/AutoMixAdapter.cpp)
+  target_link_libraries(twilight_audio_performance_gate PRIVATE twilight_automix_native)
   if(FFMPEG_FOUND)
     target_compile_definitions(twilight_audio_performance_gate PRIVATE TAE_HAS_FFMPEG=1)
     target_include_directories(twilight_audio_performance_gate PRIVATE ${FFMPEG_INCLUDE_DIRS})
@@ -912,6 +913,9 @@ if(TAE_BUILD_TESTS)
   endif()
   add_test(NAME twilight_audio_performance_gate COMMAND twilight_audio_performance_gate)
   set_tests_properties(twilight_audio_performance_gate PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+  add_test(NAME twilight_audio_pcm_transparency
+    COMMAND twilight_audio_performance_gate --verify-neutral-pcm)
+  set_tests_properties(twilight_audio_pcm_transparency PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 
   add_executable(twilight_dst_decoder_tests
     tests/dst_decoder_tests.cpp

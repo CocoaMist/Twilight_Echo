@@ -74,7 +74,8 @@ test('release strip only processes the packaged runtime copy and fails closed', 
   assert.equal(cleared.length, NATIVE_RUNTIME_FILES.length)
   assert.equal(symbolCleared.length, NATIVE_RUNTIME_FILES.length)
   assert.ok(calls.every((call) => call.args[0] === '--strip-all'))
-  assert.ok(calls.every((call) => call.args[1].startsWith(packagedDir)))
+  assert.ok(calls.every((call) => call.args.includes('--preserve-dates')))
+  assert.ok(calls.every((call) => call.args.at(-1).startsWith(packagedDir)))
   assert.throws(
     () =>
       stripNativeArtifacts(packagedDir, {
@@ -166,7 +167,8 @@ test('release strip retries transient file locks and still fails closed', () => 
     wait: () => {},
     copy: () => {},
     remove: () => {},
-    run: (_, [, filePath]) => {
+    run: (_, args) => {
+      const filePath = args.at(-1)
       const attempts = (attemptsByFile.get(filePath) || 0) + 1
       attemptsByFile.set(filePath, attempts)
       return { status: attempts < 3 ? 1 : 0 }
