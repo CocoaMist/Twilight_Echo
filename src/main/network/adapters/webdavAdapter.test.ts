@@ -190,6 +190,18 @@ function makeProfile(
 test.before(async () => {
   server = createServer((req, res) => {
     record(seen, req)
+    if (req.url === '/music-digest') {
+      res.writeHead(401, {
+        'WWW-Authenticate': 'Digest realm="x", nonce="abc", algorithm=MD5, qop="auth"'
+      })
+      res.end()
+      return
+    }
+    if (req.url === '/music-basic-realm-digest') {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Digest zone"' })
+      res.end()
+      return
+    }
     if (req.headers.authorization !== EXPECTED_BASIC) {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="test"' })
       res.end()
@@ -691,5 +703,39 @@ test('webdav parses namespaced tags with hyphen or dot prefixes', async () => {
     '/music-hyphen/a.flac',
     '/music-hyphen/album'
   ])
+  await session.close()
+})
+
+test('webdav distinguishes a Digest challenge from a wrong password', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  await assert.rejects(
+    async () => session.list('/music-digest'),
+    (err: unknown) => {
+      assert.equal((err as { code: string }).code, 'auth')
+      assert.match((err as Error).message, /Digest/)
+      return true
+    }
+  )
+  await session.close()
+})
+
+test('webdav keeps the generic auth message for a Basic realm mentioning Digest', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  await assert.rejects(
+    async () => session.list('/music-basic-realm-digest'),
+    (err: unknown) => {
+      assert.equal((err as { code: string }).code, 'auth')
+      assert.doesNotMatch((err as Error).message, /Digest/)
+      return true
+    }
+  )
   await session.close()
 })

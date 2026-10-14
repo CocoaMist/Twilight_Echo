@@ -292,7 +292,16 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
         if (!status || (status >= 200 && status < 300)) return
         // 消费/丢弃错误响应体，避免 keep-alive 连接被挂起的 body 卡住。
         res.resume()
-        if (status === 401) throw new NetworkSourceFailure('auth', '认证失败，请检查用户名或密码')
+        if (status === 401) {
+          const challenge = res.headers['www-authenticate']
+          const text = Array.isArray(challenge) ? challenge.join(', ') : (challenge ?? '')
+          // 服务端只提供 Digest 时，Basic 凭据本身可能是对的，提示要准确。
+          // 匹配 challenge 首令牌，避免 Basic realm 里恰好含 “Digest” 时误判。
+          if (/(?:^|,\s*)Digest\s+(?:realm|nonce|algorithm|qop)\s*=/i.test(text)) {
+            throw new NetworkSourceFailure('auth', '服务器要求 Digest 认证，当前仅支持 Basic')
+          }
+          throw new NetworkSourceFailure('auth', '认证失败，请检查用户名或密码')
+        }
         if (status === 403) throw new NetworkSourceFailure('denied', '没有权限访问该目录')
         if (status === 404)
           throw new NetworkSourceFailure('notFound', `远程路径不存在：${remotePath}`)
