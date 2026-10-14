@@ -377,7 +377,7 @@ window.runProviderFallbackTests = async () => {
       document.documentElement.dataset.teSurfaceMaterial = transparent ? 'transparent' : 'theme';
       const material = getComputedStyle(document.querySelector('#title .title-bar-background'));
       expect(material.display !== 'none' && (material.backgroundColor === 'rgba(0, 0, 0, 0)') === transparent, 'title ignores transparent material preference: ' + theme + '/' + surface + '/' + transparent);
-      expect(transparent ? material.backdropFilter === 'none' : material.backdropFilter.includes('blur(20px)'), 'title backdrop does not follow material preference: ' + theme + '/' + surface + '/' + transparent);
+      expect(transparent ? material.backdropFilter === 'none' : material.backdropFilter.includes('blur(24px)'), 'title backdrop does not follow material preference: ' + theme + '/' + surface + '/' + transparent);
       expect(material.pointerEvents === 'none', 'material blocks title commands');
       if(theme === 'dark') expect(material.boxShadow === 'none' && material.backgroundImage === 'none', 'dark caption has a pale rim or wash');
     }
@@ -402,7 +402,7 @@ window.runProviderFallbackTests = async () => {
     titleProps.value = { streaming: false }; await settle();
     await new Promise(resolve => setTimeout(resolve, 350));
     const restoredMaterial = getComputedStyle(document.querySelector('#title .title-bar-background'));
-    expect(restoredMaterial.backgroundColor !== 'rgba(0, 0, 0, 0)' && restoredMaterial.backdropFilter.includes('blur(20px)') && getComputedStyle(document.querySelector('#title .menu-btn')).color === normalColor, 'leaving playback did not restore normal chrome');
+    expect(restoredMaterial.backgroundColor !== 'rgba(0, 0, 0, 0)' && restoredMaterial.backdropFilter.includes('blur(24px)') && getComputedStyle(document.querySelector('#title .menu-btn')).color === normalColor, 'leaving playback did not restore normal chrome');
     expect(bar.height === 40 && menu.width === close.width && close.width === 46, 'caption geometry differs');
     expect(!document.querySelector('#title .title-bar-back'), 'root page keeps an empty return slot');
     expect(menu.left - bar.left === bar.right - close.right, 'outer margins differ');

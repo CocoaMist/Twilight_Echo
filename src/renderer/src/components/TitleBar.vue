@@ -297,7 +297,11 @@ function close(): void {
 }
 .title-bar {
   --te-titlebar-height: 40px;
-  --te-titlebar-material-surface: var(--te-app-bg);
+  --te-titlebar-material-surface: var(--te-chrome-frosted-solid, var(--te-app-bg));
+  --te-titlebar-frosted-surface: var(
+    --te-chrome-frosted-surface,
+    color-mix(in srgb, var(--te-titlebar-material-surface) 80%, transparent)
+  );
   --te-titlebar-material-ink: var(--te-shell-control-text);
   --te-titlebar-icon-size: 16px;
   --te-titlebar-control-width: 46px;
@@ -338,18 +342,12 @@ function close(): void {
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  background: color-mix(in srgb, var(--te-titlebar-material-surface) 28%, transparent);
+  background: var(--te-titlebar-frosted-surface);
   box-shadow: none;
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
-}
-
-/* Dark chrome has a soft surface, without a pale outline around the strip. */
-html[data-theme='dark']
-  .title-bar:not(.title-bar-immersive):not(.title-bar-liquid)
-  .title-bar-background {
-  background: color-mix(in srgb, var(--te-titlebar-material-surface) 28%, transparent);
-  box-shadow: none;
+  backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
+  -webkit-backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
 }
 
 .title-bar::before {
@@ -358,6 +356,7 @@ html[data-theme='dark']
 
 .title-bar-glass {
   --te-titlebar-material-surface: #17181a;
+  --te-titlebar-frosted-surface: rgb(23 24 26 / 72%);
   --te-titlebar-material-ink: #fff;
 }
 
@@ -647,8 +646,10 @@ html
   display: block;
   background: color-mix(in srgb, var(--te-lg-context-material) 72%, transparent);
   box-shadow: none;
-  backdrop-filter: blur(var(--te-lg-context-diffusion, 16px)) saturate(124%);
-  -webkit-backdrop-filter: blur(var(--te-lg-context-diffusion, 16px)) saturate(124%);
+  backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
+  -webkit-backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
 }
 
 .title-bar-liquid :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn) {
