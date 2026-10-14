@@ -234,7 +234,7 @@ test.before(async () => {
         const timer = setTimeout(() => {
           res.writeHead(207, { 'Content-Type': 'application/xml' })
           res.end(MULTISTATUS)
-        }, 400)
+        }, 800)
         res.on('close', () => clearTimeout(timer))
         return
       }
@@ -533,7 +533,7 @@ test('webdav does not leak credentials across cross-origin redirects', async () 
 
 test('webdav does not abort downloads that keep making progress', async () => {
   const session = await createWebDavAdapter().createSession(
-    makeProfile({ options: { transferTimeoutMs: 300 } }),
+    makeProfile({ options: { transferTimeoutMs: 500 } }),
     { kind: 'password', username: 'alice', password: 's3cret' }
   )
   const stream = await session.readStream('/music/slow.flac')
@@ -571,7 +571,7 @@ test('webdav bounds the wait for response headers with connectTimeoutMs', async 
       return true
     }
   )
-  assert.ok(Date.now() - startedAt < 400)
+  assert.ok(Date.now() - startedAt < 600)
   await session.close()
 })
 

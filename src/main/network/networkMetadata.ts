@@ -46,6 +46,9 @@ export async function saveEntryCover(
   coverCacheRoot: string
 ): Promise<string | undefined> {
   if (!cover?.length) return undefined
+  // 与下载缓存一致的标识约束：入口 id 必须是无路径分隔符的短令牌，
+  // 防止污染/穿越 cover-cache 目录。
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(entryId)) return undefined
   const target = join(coverCacheRoot, `${entryId}.${coverExtension(coverMime)}`)
   await mkdir(coverCacheRoot, { recursive: true })
   await writeFile(target, cover)
