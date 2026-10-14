@@ -127,6 +127,7 @@ const {
   dspOutputStage,
   dspStereoImage,
   playbackInfo,
+  isCurrentTrackNativePlaybackInfo,
   loudnormStatus,
   outputInfo,
   visualizationData,
@@ -203,9 +204,16 @@ const currentTrack = computed(() =>
 const currentSourceInfo = computed(() => {
   const track = currentTrack.value
   const info = playbackInfo.value
-  return !props.preview && track && info?.nativePlaybackActive && info.source === track.filePath
-    ? info
-    : null
+  if (props.preview || !track || !info?.nativePlaybackActive) return null
+
+  const source = info.source
+  if (typeof source !== 'string' || !source) return null
+
+  if (source === track.filePath || source === track.streamUrl || source === track.subTrack) {
+    return info
+  }
+
+  return isCurrentTrackNativePlaybackInfo(info) ? info : null
 })
 // Keep the visualization poll alive only while the compact skyline is mounted.
 let releaseVisualizationConsumer: (() => void) | null = null
