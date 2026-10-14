@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { downloadEntryToCache } from './networkCache.ts'
+import { coverExtension } from './networkCover.ts'
 import type { NetworkSourceSession } from './adapters/types.ts'
 import type { NetworkEntry, NetworkEntryMetadata } from '../../shared/networkSources.ts'
 
@@ -36,14 +37,6 @@ async function parseCachedEntry(cacheFilePath: string): Promise<ParsedEntry | nu
   } catch {
     return null
   }
-}
-
-function coverExtension(mime: string | undefined): string {
-  if (mime?.startsWith('image/')) {
-    const extension = mime.split('/')[1]?.replace(/[^a-z0-9]/gi, '')
-    if (extension) return extension
-  }
-  return 'jpg'
 }
 
 export async function saveEntryCover(

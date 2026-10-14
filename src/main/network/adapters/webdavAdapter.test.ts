@@ -86,6 +86,13 @@ const RICH_MULTISTATUS = `<?xml version="1.0" encoding="utf-8"?>
       <d:status>HTTP/1.1 200 OK</d:status>
     </d:propstat>
   </d:response>
+  <d:response>
+    <d:href>/music-rich/&#xD800;.flac</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>4</d:getcontentlength></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
 </d:multistatus>`
 
 const FLAC_BYTES = Buffer.from('FLAC-DATA-0123456789')
@@ -199,6 +206,14 @@ test.before(async () => {
       }
       if (req.url === '/music-hang') {
         // 故意不响应，用于空闲超时断言。
+        return
+      }
+      if (req.url === '/music-slow-headers') {
+        const timer = setTimeout(() => {
+          res.writeHead(207, { 'Content-Type': 'application/xml' })
+          res.end(MULTISTATUS)
+        }, 400)
+        res.on('close', () => clearTimeout(timer))
         return
       }
       res.writeHead(404)
@@ -379,8 +394,26 @@ test('webdav list normalizes absolute hrefs, XML entities, encodings and drops u
   ])
   // 绝对 URI 的自身 href 必须被过滤，不能出现在子条目里。
   assert.ok(!paths.includes('/music-rich'))
-  // 穿越路径必须被丢弃，不能变成 ../secret。
+  // 穿越路径、非法编码与孤立代理项必须被丢弃。
   assert.ok(!paths.some((path) => path.includes('secret')))
+  assert.ok(!paths.some((path) => path.includes('\uD800')))
+  await session.close()
+})
+
+test('webdav rejects paths that cannot be percent-encoded with a structured error', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  await assert.rejects(
+    async () => session.list('/music/\uD800'),
+    (err: unknown) => {
+      assert.equal((err as { code: string }).code, 'network')
+      assert.ok(err instanceof Error)
+      return true
+    }
+  )
   await session.close()
 })
 
@@ -457,7 +490,7 @@ test('webdav does not abort downloads that keep making progress', async () => {
 
 test('webdav reports an idle timeout when the server never responds', async () => {
   const session = await createWebDavAdapter().createSession(
-    makeProfile({ options: { transferTimeoutMs: 150 } }),
+    makeProfile({ options: { connectTimeoutMs: 150, transferTimeoutMs: 150 } }),
     { kind: 'password', username: 'alice', password: 's3cret' }
   )
   await assert.rejects(
@@ -467,6 +500,23 @@ test('webdav reports an idle timeout when the server never responds', async () =
       return true
     }
   )
+  await session.close()
+})
+
+test('webdav bounds the wait for response headers with connectTimeoutMs', async () => {
+  const session = await createWebDavAdapter().createSession(
+    makeProfile({ options: { connectTimeoutMs: 120, transferTimeoutMs: 5_000 } }),
+    { kind: 'password', username: 'alice', password: 's3cret' }
+  )
+  const startedAt = Date.now()
+  await assert.rejects(
+    async () => session.list('/music-slow-headers'),
+    (err: unknown) => {
+      assert.equal((err as { code: string }).code, 'timeout')
+      return true
+    }
+  )
+  assert.ok(Date.now() - startedAt < 400)
   await session.close()
 })
 

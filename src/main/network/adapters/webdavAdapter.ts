@@ -39,6 +39,9 @@ function decodeXmlEntities(value: string): string {
     .replace(/&amp;/g, '&')
 }
 
+/** 孤立代理项无法百分号编码，会在请求阶段抛 URIError。 */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
 /**
  * 把 DAV:href 归一化为与请求一致的远程路径：
  * - 兼容绝对 URI（反向代理与部分服务端会返回完整 URL）；
@@ -61,6 +64,8 @@ function hrefToPath(href: string): string | null {
   } catch {
     // 保留原始百分号编码，至少不因单个坏 href 抛 URIError
   }
+  // 数字 XML 实体可以造出孤立代理项（如 &#xD800;），必须丢弃。
+  if (LONE_SURROGATE.test(decoded)) return null
   try {
     return normalizeRemotePath(decoded)
   } catch {
@@ -130,10 +135,14 @@ function hostForUrl(host: string): string {
 function encodeRemotePath(remotePath: string): string {
   const normalized = normalizeRemotePath(remotePath)
   if (normalized === '/') return '/'
-  return normalized
-    .split('/')
-    .map((segment) => encodeURIComponent(segment))
-    .join('/')
+  try {
+    return normalized
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
+  } catch {
+    throw new NetworkSourceFailure('network', '远程路径包含无法编码的字符')
+  }
 }
 
 export function createWebDavAdapter(): NetworkSourceAdapter {
@@ -147,6 +156,7 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
       const cleanHost = hostForUrl(profile.host.trim().replace(/^https?:\/\//i, ''))
       const authorization = authHeader(auth)
       const timeoutMs = profile.options.transferTimeoutMs
+      const connectTimeoutMs = profile.options.connectTimeoutMs
 
       function buildUrl(remotePath: string): string {
         let base: URL
@@ -195,11 +205,14 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
           const req = requestFn(url, { method, headers: finalHeaders, signal }, (res) =>
             resolve(res)
           )
-          // 空闲超时：socket 每次读写都会重置，因此只要持续有数据流动，
-          // 大文件下载不会被 transferTimeoutMs 整体掐断。
-          req.setTimeout(timeoutMs, () => {
+          // 连接/等待响应头阶段用 connectTimeoutMs；收到响应后改用
+          // transferTimeoutMs 作为空闲超时，socket 每次读写都会重置。
+          const onTimeout = (): void => {
             req.destroy(new NetworkSourceFailure('timeout', '网络请求超时'))
-          })
+          }
+          req.setTimeout(connectTimeoutMs)
+          req.on('timeout', onTimeout)
+          req.on('response', () => req.setTimeout(timeoutMs))
           req.on('error', (err) => {
             if (err instanceof NetworkSourceFailure) {
               reject(err)
