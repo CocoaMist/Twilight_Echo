@@ -23,6 +23,10 @@ const integrationSource = readFileSync(
   new URL('../../../main/integrations/dynamicIsland.ts', import.meta.url),
   'utf8'
 )
+const lyricsPublisherSource = readFileSync(
+  new URL('../app/useDynamicIslandLyrics.ts', import.meta.url),
+  'utf8'
+)
 
 const defaults = normalizeDynamicIslandConfig(undefined)
 
@@ -202,4 +206,67 @@ test('host validates plugin config and hides the island per the visibility polic
   assert.match(integrationSource, /config = normalizeDynamicIslandConfig\(rawConfig\)/)
   assert.match(integrationSource, /shouldShowDynamicIsland\(config, currentState\(\), expanded\)/)
   assert.match(integrationSource, /sendToIsland\('dynamicIsland:config', \{ config, layout \}\)/)
+})
+
+test('incoming state cannot clobber a seek or volume drag in progress', () => {
+  assert.match(
+    appSource,
+    /currentTime: seekDragging\.value \? state\.value\.currentTime : nextState\.currentTime/
+  )
+  assert.match(
+    appSource,
+    /volume: volumeDragging\.value \? state\.value\.volume : nextState\.volume/
+  )
+  assert.match(appSource, /@pointerdown="beginSeekDrag"/)
+  assert.match(appSource, /@pointerup="endSeekDrag"/)
+  assert.match(appSource, /@pointerdown="beginVolumeDrag"/)
+  assert.match(appSource, /@pointerup="endVolumeDrag"/)
+})
+
+test('hover mode treats a summary click as expand instead of fighting hover', () => {
+  assert.match(
+    appSource,
+    /if \(config\.value\.behavior\.expandTrigger === 'hover'\) \{\s*if \(!expanded\.value\) setExpanded\(true\)/
+  )
+})
+
+test('expanded card shows the active lyric translation as its second line', () => {
+  assert.match(appSource, /line\.translation\?\.trim\(\) \|\| line\.romanization\?\.trim\(\)/)
+  assert.match(appSource, /\{\{ islandPlayerSecondary \}\}/)
+})
+
+test('summary falls back to copy when artwork is disabled', () => {
+  assert.match(appSource, /collapsedContent !== 'artwork' \|\| !components\.cover/)
+})
+
+test('summary exposes a keyboard focus ring', () => {
+  assert.match(styleSource, /\.island-summary:focus-visible\s*\{[\s\S]*?outline: 2px solid/)
+})
+
+test('collapsed panel, closed volume menu and expanded summary leave the tab order', () => {
+  assert.match(appSource, /:inert="!expanded"/)
+  assert.match(appSource, /:inert="!volumeOpen"/)
+  assert.match(appSource, /:inert="expanded"/)
+})
+
+test('focus moves between the summary and panel as the panel toggles inert', () => {
+  assert.match(appSource, /document\.activeElement === summaryButton\.value/)
+  assert.match(appSource, /panelElement\.value\?\.contains\(document\.activeElement\)/)
+  assert.match(appSource, /summaryButton\.value\?\.focus\(\)/)
+})
+
+test('play toggle is disabled while idle or loading', () => {
+  assert.match(appSource, /:disabled="!state\.track \|\| state\.isLoading"/)
+  assert.match(styleSource, /\.island-player-toggle:disabled\s*\{[\s\S]*?opacity: 0\.58/)
+})
+
+test('lyric publisher skips unchanged payloads', () => {
+  assert.match(lyricsPublisherSource, /lastPublished\.lines === next\.lines/)
+})
+
+test('island follows the main window across displays and display topology changes', () => {
+  assert.match(integrationSource, /screen\.on\('display-added', refreshForDisplayChange\)/)
+  assert.match(integrationSource, /screen\.on\('display-removed', refreshForDisplayChange\)/)
+  assert.match(integrationSource, /mainWindow\.on\('move', handleMainWindowMoved\)/)
+  assert.match(integrationSource, /targetDisplay\(\)\.id === lastDisplayId/)
 })

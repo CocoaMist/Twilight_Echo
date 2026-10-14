@@ -42,6 +42,11 @@ let lyrics: DynamicIslandLyricsPayload = { trackId: null, lines: [] }
 let windowReady = false
 let ipcBound = false
 let expandedShapeTimer: NodeJS.Timeout | null = null
+// Tracks the display the island is currently placed on. Dragging the main
+// window within one display keeps the island anchored there; only crossing to
+// another display (or a display topology change) re-places the window.
+let lastDisplayId: number | null = null
+let trackedMainWindow: BrowserWindow | null = null
 
 function liveWindow(): BrowserWindow | null {
   const win = runtime.dynamicIslandWindow
@@ -69,12 +74,16 @@ function currentState(): MiniPlayerStateSnapshot {
   return runtime.latestMiniPlayerState ?? { ...EMPTY_MINI_PLAYER_STATE }
 }
 
-function targetDisplayBounds(): Electron.Rectangle {
+function targetDisplay(): Electron.Display {
   const mainWindow = runtime.mainWindow
   if (config.layout.display === 'main-window' && mainWindow && !mainWindow.isDestroyed()) {
-    return screen.getDisplayMatching(mainWindow.getBounds()).bounds
+    return screen.getDisplayMatching(mainWindow.getBounds())
   }
-  return screen.getPrimaryDisplay().bounds
+  return screen.getPrimaryDisplay()
+}
+
+function targetDisplayBounds(): Electron.Rectangle {
+  return targetDisplay().bounds
 }
 
 function currentLayout(display = targetDisplayBounds()): DynamicIslandLayout {
@@ -132,8 +141,38 @@ function syncVisibility(win: BrowserWindow): void {
   else if (!visible && win.isVisible()) win.hide()
 }
 
+/**
+ * Follow the main window across displays when the island is anchored to it.
+ * Moving within a display does not change the target display, so the window is
+ * only re-placed when the id actually changes.
+ */
+function handleMainWindowMoved(): void {
+  if (config.layout.display !== 'main-window') return
+  if (targetDisplay().id === lastDisplayId) return
+  const win = liveWindow()
+  if (win) refreshWindow(win)
+}
+
+function ensureMainWindowTracking(): void {
+  const mainWindow = runtime.mainWindow
+  if (!mainWindow || mainWindow === trackedMainWindow) return
+  trackedMainWindow?.removeListener('move', handleMainWindowMoved)
+  trackedMainWindow = mainWindow
+  mainWindow.on('move', handleMainWindowMoved)
+  mainWindow.once('closed', () => {
+    if (trackedMainWindow === mainWindow) trackedMainWindow = null
+  })
+}
+
+function refreshForDisplayChange(): void {
+  const win = liveWindow()
+  if (win) refreshWindow(win)
+}
+
 /** Push geometry, config, state and visibility to an existing window. */
 function refreshWindow(win: BrowserWindow): void {
+  ensureMainWindowTracking()
+  lastDisplayId = targetDisplay().id
   const layout = applyWindowLayout(win)
   sendToIsland('dynamicIsland:config', { config, layout })
   sendToIsland('dynamicIsland:state', currentState())
@@ -317,10 +356,9 @@ export function setupDynamicIslandIpc(): void {
   if (ipcBound) return
   ipcBound = true
 
-  screen.on('display-metrics-changed', () => {
-    const win = liveWindow()
-    if (win) refreshWindow(win)
-  })
+  screen.on('display-metrics-changed', refreshForDisplayChange)
+  screen.on('display-added', refreshForDisplayChange)
+  screen.on('display-removed', refreshForDisplayChange)
 
   ipcMain.handle('dynamicIsland:getBootstrap', (event): DynamicIslandBootstrap => {
     assertDynamicIslandSender(event, 'dynamic island bootstrap IPC')

@@ -1,9 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import {
-  EMPTY_MINI_PLAYER_STATE,
-  type MiniPlayerCommand
-} from '../../../shared/miniPlayer.ts'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { EMPTY_MINI_PLAYER_STATE, type MiniPlayerCommand } from '../../../shared/miniPlayer.ts'
 import {
   DEFAULT_DYNAMIC_ISLAND_CONFIG,
   cloneDynamicIslandConfig,
@@ -28,11 +25,17 @@ const presentation = ref<DynamicIslandPresentation>({
 })
 const expanded = ref(false)
 const volumeOpen = ref(false)
+// While the user drags a range input the optimistic value must win over the
+// playback publishes that keep arriving, otherwise the thumb snaps back.
+const seekDragging = ref(false)
+const volumeDragging = ref(false)
 const muted = ref(state.value.volume <= 0)
 const lastVolume = ref(state.value.volume > 0 ? state.value.volume : 0.72)
 const coverFailed = ref(false)
 const ready = ref(false)
 const islandSurface = ref<HTMLElement | null>(null)
+const summaryButton = ref<HTMLButtonElement | null>(null)
+const panelElement = ref<HTMLElement | null>(null)
 let collapseTimer: number | null = null
 let collapseCommitTimer: number | null = null
 let collapseCommitPending = false
@@ -77,6 +80,16 @@ const collapsedPrimary = computed(() =>
   components.value.collapsedContent === 'lyric' && hasTimedLyric.value ? lyric.value : title.value
 )
 const trackLine = computed(() => `${artist.value}/${title.value}`)
+const lyricTranslation = computed(() => {
+  const line = currentLyric.value
+  if (!line) return ''
+  return line.translation?.trim() || line.romanization?.trim() || ''
+})
+// The expanded card only has room for two text lines: the active lyric plus a
+// secondary line. Prefer the translation when one exists, otherwise the track.
+const islandPlayerSecondary = computed(() =>
+  showExpandedLyric.value && lyricTranslation.value ? lyricTranslation.value : trackLine.value
+)
 const remaining = computed(() => Math.max(0, state.value.duration - state.value.currentTime))
 const progress = computed(() => {
   if (!state.value.duration || state.value.duration <= 0) return 0
@@ -113,6 +126,22 @@ function seek(value: number): void {
 
 function onSeek(event: Event): void {
   seek(Number((event.target as HTMLInputElement).value))
+}
+
+function beginSeekDrag(): void {
+  seekDragging.value = true
+}
+
+function endSeekDrag(): void {
+  seekDragging.value = false
+}
+
+function beginVolumeDrag(): void {
+  volumeDragging.value = true
+}
+
+function endVolumeDrag(): void {
+  volumeDragging.value = false
 }
 
 function setVolume(value: number): void {
@@ -183,14 +212,36 @@ function waitForCollapseTransition(): void {
 function setExpanded(next: boolean): void {
   clearCollapseTimer()
   if (expanded.value === next) return
+  // Capture the focus target before the DOM toggles `inert`, otherwise the
+  // browser clears focus first and we cannot tell where it came from.
+  const focusWasOnSummary = document.activeElement === summaryButton.value
+  const focusWasInPanel = Boolean(panelElement.value?.contains(document.activeElement))
   expanded.value = next
   if (next) {
     clearCollapseCommit()
     syncWindowExpansion(true)
+    void syncKeyboardFocus(focusWasOnSummary, false)
     return
   }
   volumeOpen.value = false
   waitForCollapseTransition()
+  void syncKeyboardFocus(false, focusWasInPanel)
+}
+
+/** Keep keyboard focus on a visible control as the panel toggles `inert`. */
+async function syncKeyboardFocus(fromSummary: boolean, fromPanel: boolean): Promise<void> {
+  await nextTick()
+  if (fromSummary) {
+    const panel = panelElement.value
+    // The volume menu is inert while closed, so only consider the always-live
+    // transport/timeline controls before falling back to the panel shell.
+    const target = panel?.querySelector<HTMLElement>(
+      '.island-player-actions button:not(:disabled), .island-player-timeline input:not(:disabled)'
+    )
+    ;(target ?? panel)?.focus()
+    return
+  }
+  if (fromPanel) summaryButton.value?.focus()
 }
 
 function handleIslandTransitionEnd(event: TransitionEvent): void {
@@ -218,6 +269,12 @@ function scheduleCollapse(): void {
 }
 
 function toggleSummary(): void {
+  // In hover mode the pointer is still inside, so a toggle-to-collapse would be
+  // undone by the next pointermove. A click there is always an expand intent.
+  if (config.value.behavior.expandTrigger === 'hover') {
+    if (!expanded.value) setExpanded(true)
+    return
+  }
   setExpanded(!expanded.value)
 }
 
@@ -239,7 +296,12 @@ onMounted(async () => {
   const api = window.api.dynamicIsland
   removeListeners = [
     api.onState((nextState) => {
-      state.value = { ...nextState, lyrics: state.value.lyrics }
+      state.value = {
+        ...nextState,
+        currentTime: seekDragging.value ? state.value.currentTime : nextState.currentTime,
+        volume: volumeDragging.value ? state.value.volume : nextState.volume,
+        lyrics: state.value.lyrics
+      }
     }),
     api.onLyrics((payload) => {
       state.value = { ...state.value, lyrics: payload.lines }
@@ -310,11 +372,13 @@ onBeforeUnmount(() => {
       @transitionend="handleIslandTransitionEnd"
     >
       <button
+        ref="summaryButton"
         class="island-summary"
         type="button"
         :aria-expanded="expanded"
         aria-controls="dynamic-island-panel"
         aria-label="展开灵动岛"
+        :inert="expanded"
         @click.stop="toggleSummary"
       >
         <template v-if="components.cover">
@@ -327,7 +391,10 @@ onBeforeUnmount(() => {
           />
           <span v-else class="island-mini-art island-art-fallback" aria-hidden="true">♪</span>
         </template>
-        <span v-if="components.collapsedContent !== 'artwork'" class="island-summary-copy">
+        <span
+          v-if="components.collapsedContent !== 'artwork' || !components.cover"
+          class="island-summary-copy"
+        >
           <span class="island-track-title">{{ collapsedPrimary }}</span>
           <span class="island-track-artist">{{ artist }}</span>
         </span>
@@ -347,8 +414,11 @@ onBeforeUnmount(() => {
 
       <section
         id="dynamic-island-panel"
+        ref="panelElement"
         class="island-panel island-player-panel"
         aria-label="灵动岛播放器"
+        tabindex="-1"
+        :inert="!expanded"
       >
         <div class="island-player-heading">
           <span v-if="components.cover" class="island-player-art-shell" aria-hidden="true">
@@ -365,7 +435,7 @@ onBeforeUnmount(() => {
           </span>
           <div class="island-player-copy" :class="{ 'has-lyric': showExpandedLyric }">
             <p v-if="showExpandedLyric" class="island-player-lyric">{{ lyric }}</p>
-            <span>{{ trackLine }}</span>
+            <span>{{ islandPlayerSecondary }}</span>
             <span class="island-player-status" role="status" aria-live="polite">{{
               statusText
             }}</span>
@@ -395,6 +465,12 @@ onBeforeUnmount(() => {
             aria-label="播放进度"
             :disabled="!state.track || state.duration <= 0"
             @input="onSeek"
+            @pointerdown="beginSeekDrag"
+            @pointerup="endSeekDrag"
+            @pointercancel="endSeekDrag"
+            @keydown="beginSeekDrag"
+            @keyup="endSeekDrag"
+            @change="endSeekDrag"
           />
           <div v-if="components.time">
             <span>{{ formatTime(state.currentTime) }}</span>
@@ -433,6 +509,7 @@ onBeforeUnmount(() => {
             class="island-player-toggle"
             type="button"
             :aria-label="playLabel"
+            :disabled="!state.track || state.isLoading"
             @click.stop="togglePlay"
           >
             <svg class="player-icon player-icon--play" viewBox="0 0 24 24" aria-hidden="true">
@@ -497,6 +574,7 @@ onBeforeUnmount(() => {
               role="group"
               aria-label="音量控制"
               data-te-interactive
+              :inert="!volumeOpen"
               @click.stop
             >
               <button
@@ -536,6 +614,12 @@ onBeforeUnmount(() => {
                 :style="{ '--volume-progress': `${volumePercent}%` }"
                 aria-label="播放器音量"
                 @input="onVolume"
+                @pointerdown="beginVolumeDrag"
+                @pointerup="endVolumeDrag"
+                @pointercancel="endVolumeDrag"
+                @keydown="beginVolumeDrag"
+                @keyup="endVolumeDrag"
+                @change="endVolumeDrag"
               />
               <output for="dynamic-island-volume-slider">{{ volumePercent }}%</output>
             </div>

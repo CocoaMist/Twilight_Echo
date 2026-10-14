@@ -57,12 +57,11 @@ input {
   overflow: hidden;
   color: inherit;
   background-color: rgb(var(--island-bg-rgb) / var(--island-bg-alpha));
-  background:
-    linear-gradient(
-      145deg,
-      rgb(var(--island-bg-rgb) / var(--island-bg-alpha)),
-      rgb(var(--island-bg-rgb) / calc(var(--island-bg-alpha) * 0.84))
-    );
+  background: linear-gradient(
+    145deg,
+    rgb(var(--island-bg-rgb) / var(--island-bg-alpha)),
+    rgb(var(--island-bg-rgb) / calc(var(--island-bg-alpha) * 0.84))
+  );
   border: 1px solid rgb(var(--island-text-rgb) / 0.08);
   border-radius: var(--island-expanded-radius);
   clip-path: inset(
@@ -101,11 +100,7 @@ input {
 .island-surface::before {
   z-index: 0;
   background:
-    radial-gradient(
-      95% 125% at 5% 0%,
-      rgb(var(--island-accent-rgb) / 0.2),
-      transparent 58%
-    ),
+    radial-gradient(95% 125% at 5% 0%, rgb(var(--island-accent-rgb) / 0.2), transparent 58%),
     radial-gradient(
       80% 110% at 100% 100%,
       rgb(var(--island-visualizer-rgb) / 0.13),
@@ -165,6 +160,12 @@ input {
   transition:
     opacity calc(0.1s * var(--island-motion)) ease,
     transform calc(0.28s * var(--island-motion)) cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.island-summary:focus-visible {
+  border-radius: var(--island-collapsed-radius);
+  outline: 2px solid rgb(var(--island-accent-rgb) / 0.85);
+  outline-offset: -2px;
 }
 
 .island-mini-art,
@@ -280,6 +281,10 @@ input {
   transition:
     opacity calc(0.16s * var(--island-motion)) ease,
     transform calc(0.4s * var(--island-motion)) cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.island-panel:focus {
+  outline: none;
 }
 
 /* Paddings, rows and gaps below are mirrored by resolveDynamicIslandLayout(). */
@@ -465,7 +470,9 @@ input {
   );
   accent-color: rgb(var(--island-accent-rgb));
   cursor: pointer;
-  box-shadow: inset 0 1px 1px rgb(0 0 0 / 0.24), 0 0 0 1px rgb(255 255 255 / 0.035);
+  box-shadow:
+    inset 0 1px 1px rgb(0 0 0 / 0.24),
+    0 0 0 1px rgb(255 255 255 / 0.035);
 }
 
 .island-player-timeline input:disabled {
@@ -617,6 +624,18 @@ input {
     0 6px 18px rgb(var(--island-accent-rgb) / 0.22);
 }
 
+.island-player-toggle:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.island-player-toggle:disabled:hover {
+  background: rgb(var(--island-accent-rgb) / 0.18);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 5px 14px rgb(var(--island-accent-rgb) / 0.14);
+}
+
 .island-player-favorite:hover:not(:disabled),
 .island-player-favorite:focus-visible,
 .island-player-skip:hover,
@@ -686,12 +705,11 @@ input {
   padding: 0.48rem 0.58rem;
   border: 1px solid rgb(var(--island-text-rgb) / 0.1);
   border-radius: 999px;
-  background:
-    linear-gradient(
-      145deg,
-      rgb(var(--island-bg-rgb) / 0.96),
-      color-mix(in srgb, rgb(var(--island-bg-rgb)) 82%, rgb(var(--island-accent-rgb)))
-    );
+  background: linear-gradient(
+    145deg,
+    rgb(var(--island-bg-rgb) / 0.96),
+    color-mix(in srgb, rgb(var(--island-bg-rgb)) 82%, rgb(var(--island-accent-rgb)))
+  );
   box-shadow:
     0 14px 34px rgb(0 0 0 / 0.44),
     inset 0 1px 0 rgb(255 255 255 / 0.08);
@@ -791,19 +809,14 @@ input {
 
 .music-island[data-player-state='loading'] .island-surface::before {
   background:
-    linear-gradient(
-      110deg,
-      transparent 22%,
-      rgb(255 255 255 / 0.1) 48%,
-      transparent 74%
-    ),
-    radial-gradient(
-      95% 125% at 5% 0%,
-      rgb(var(--island-accent-rgb) / 0.16),
-      transparent 58%
-    );
-  background-size: 220% 100%, auto;
-  background-position: 140% 0, 0 0;
+    linear-gradient(110deg, transparent 22%, rgb(255 255 255 / 0.1) 48%, transparent 74%),
+    radial-gradient(95% 125% at 5% 0%, rgb(var(--island-accent-rgb) / 0.16), transparent 58%);
+  background-size:
+    220% 100%,
+    auto;
+  background-position:
+    140% 0,
+    0 0;
   animation: island-loading-sheen 1.4s ease-in-out infinite;
 }
 

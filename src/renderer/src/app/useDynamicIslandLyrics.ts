@@ -72,8 +72,21 @@ export function useDynamicIslandLyrics(): void {
     return { trackId: track.id, lines: projectedLines }
   })
 
+  let lastPublished: DynamicIslandLyricsPayload | null = null
   const publish = (): void => {
-    window.api?.miniPlayer?.publishLyrics?.(payload.value)
+    const next = payload.value
+    // The computed returns a fresh wrapper object, but `lines` keeps its array
+    // identity until the track or its lyrics actually change. Skip no-op sends
+    // so progress-driven recomputes never re-serialize the lyric array.
+    if (
+      lastPublished &&
+      lastPublished.trackId === next.trackId &&
+      lastPublished.lines === next.lines
+    ) {
+      return
+    }
+    lastPublished = next
+    window.api?.miniPlayer?.publishLyrics?.(next)
   }
   const stop = watch(payload, publish, { immediate: true })
   onBeforeUnmount(stop)
