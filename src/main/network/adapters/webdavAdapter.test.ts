@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer, type Server } from 'node:http'
 import test from 'node:test'
 import { createWebDavAdapter } from './webdavAdapter.ts'
+import { NetworkResumeUnsupported } from '../errors.ts'
 import type { NetworkSourceProfile } from '../../../shared/networkSources.ts'
 
 const MULTISTATUS = `<?xml version="1.0" encoding="utf-8"?>
@@ -216,6 +217,26 @@ test.before(async () => {
         res.on('close', () => clearTimeout(timer))
         return
       }
+      if (req.url === '/music-forbidden') {
+        res.writeHead(403)
+        res.end()
+        return
+      }
+      if (req.url === '/music-error') {
+        res.writeHead(500)
+        res.end('boom')
+        return
+      }
+      if (req.url === '/music-loop') {
+        res.writeHead(301, { Location: '/music-loop' })
+        res.end()
+        return
+      }
+      if (req.url === '/music-ftp') {
+        res.writeHead(301, { Location: 'ftp://example.test/music' })
+        res.end()
+        return
+      }
       res.writeHead(404)
       res.end()
       return
@@ -240,11 +261,24 @@ test.before(async () => {
         res.on('close', () => clearInterval(timer))
         return
       }
+      if (req.url === '/music/wrong-range.flac') {
+        res.writeHead(206, {
+          'Content-Range': `bytes 0-4/${FLAC_BYTES.length}`,
+          'Content-Length': 5
+        })
+        res.end(FLAC_BYTES.subarray(0, 5))
+        return
+      }
       if (req.url === '/music/a.flac') {
         const range = req.headers.range
         const match = typeof range === 'string' ? /^bytes=(\d+)-/.exec(range) : null
         if (match) {
           const start = Number(match[1])
+          if (start >= FLAC_BYTES.length) {
+            res.writeHead(416, { 'Content-Range': `bytes */${FLAC_BYTES.length}` })
+            res.end()
+            return
+          }
           const body = FLAC_BYTES.subarray(start)
           res.writeHead(206, {
             'Content-Range': `bytes ${start}-${FLAC_BYTES.length - 1}/${FLAC_BYTES.length}`,
@@ -571,5 +605,56 @@ test('webdav drops a stray query or fragment from the configured host', async ()
   )
   const entries = await session.list('/music')
   assert.equal(entries.length, 2)
+  await session.close()
+})
+
+test('webdav maps forbidden and server errors to structured codes', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  await assert.rejects(
+    async () => session.list('/music-forbidden'),
+    (err: unknown) => (err as { code: string }).code === 'denied'
+  )
+  await assert.rejects(
+    async () => session.list('/music-error'),
+    (err: unknown) => (err as { code: string }).code === 'network'
+  )
+  await session.close()
+})
+
+test('webdav rejects redirect loops and non-http redirect targets', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  await assert.rejects(
+    async () => session.list('/music-loop'),
+    (err: unknown) => (err as { code: string }).code === 'network'
+  )
+  await assert.rejects(
+    async () => session.list('/music-ftp'),
+    (err: unknown) => (err as { code: string }).code === 'network'
+  )
+  await session.close()
+})
+
+test('webdav treats unsatisfiable and mismatched ranges as resume-unsupported', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  await assert.rejects(
+    async () => session.readStream('/music/a.flac', undefined, { start: 9999 }),
+    (err: unknown) => err instanceof NetworkResumeUnsupported
+  )
+  await assert.rejects(
+    async () => session.readStream('/music/wrong-range.flac', undefined, { start: 4 }),
+    (err: unknown) => err instanceof NetworkResumeUnsupported
+  )
   await session.close()
 })
