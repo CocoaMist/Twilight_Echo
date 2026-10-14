@@ -524,6 +524,41 @@ test('private radar resolves the personalized radar playlist instead of private-
   }
 })
 
+test('level-based playback uses eapi without needing an xeapi key or the classic URL endpoint', async () => {
+  const requests = []
+  const provider = await activateProvider(async (path, cookie) => {
+    requests.push(path)
+    const url = parseRequest(path)
+    assert.equal(cookie, 'MUSIC_U=test;')
+    if (url.pathname !== '/song/url/v1' || url.searchParams.get('crypto') !== 'eapi') {
+      return { code: 404, msg: 'xeapi public key is missing', data: null }
+    }
+    return {
+      code: 200,
+      data: [{ id: 76, url: 'https://music.example/76.flac', code: 200 }]
+    }
+  })
+
+  try {
+    for (const quality of ['auto', 'hires', 'lossless', 'exhigh', 'standard']) {
+      assert.equal(
+        await provider.getPlaybackUrl({ id: 'ncm:76' }, { quality, force: true }),
+        'https://music.example/76.flac'
+      )
+    }
+    assert.equal(requests.length, 5)
+    assert.deepEqual(
+      requests.map((path) => parseRequest(path).searchParams.get('level')),
+      ['hires', 'hires', 'lossless', 'exhigh', 'standard']
+    )
+    assert.ok(
+      requests.every((path) => parseRequest(path).searchParams.get('encodeType') === 'flac')
+    )
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
 test('playback quality falls back only through official lower compatible levels', async () => {
   const requests = []
   const provider = await activateProvider(async (path) => {
@@ -531,6 +566,7 @@ test('playback quality falls back only through official lower compatible levels'
     const url = parseRequest(path)
     assert.equal(url.pathname, '/song/url/v1')
     assert.equal(url.searchParams.get('encodeType'), 'flac')
+    assert.equal(url.searchParams.get('crypto'), 'eapi')
     if (url.searchParams.get('level') === 'lossless') {
       return {
         code: 200,

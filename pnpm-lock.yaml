@@ -23,7 +23,7 @@ overrides:
   node-abi: 4.33.0
 
 patchedDependencies:
-  '@neteasecloudmusicapienhanced/api@4.35.1': 656fbb26c80cd8fce02181032bac95656a93ff1e6f1726e8d4cba566fb1cca5b
+  '@neteasecloudmusicapienhanced/api@4.35.1': 784a29b4344049d2a94eb0e698074e771cafe85a2a4d1eb41ae40e033e8bd2cf
   '@phosphor-icons/web@2.1.2': d72ddd19ae5364cf585c9f7c63b19372deb741a3e80cdad3ab6bdc74cf0bbaeb
   extract-zip@2.0.1: 59db17789d14064f3a4432efcf74b7a57de863db5b515354ef04aa411e6d7c73
   node-forge@1.4.0: 7aa50d29a105c5fb9d206aadd58501d637901b4d5878feafb4c1d04b4cf8c6cf
@@ -40,7 +40,7 @@ importers:
         version: 4.0.0(electron@43.5.0)
       '@neteasecloudmusicapienhanced/api':
         specifier: ^4.35.1
-        version: 4.35.1(patch_hash=656fbb26c80cd8fce02181032bac95656a93ff1e6f1726e8d4cba566fb1cca5b)
+        version: 4.35.1(patch_hash=784a29b4344049d2a94eb0e698074e771cafe85a2a4d1eb41ae40e033e8bd2cf)
       '@tokenizer/inflate':
         specifier: 0.4.1
         version: 0.4.1
@@ -3876,7 +3876,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@neteasecloudmusicapienhanced/api@4.35.1(patch_hash=656fbb26c80cd8fce02181032bac95656a93ff1e6f1726e8d4cba566fb1cca5b)':
+  '@neteasecloudmusicapienhanced/api@4.35.1(patch_hash=784a29b4344049d2a94eb0e698074e771cafe85a2a4d1eb41ae40e033e8bd2cf)':
     dependencies:
       '@neteasecloudmusicapienhanced/unblockmusic-utils': 0.3.3
       axios: 1.20.0
