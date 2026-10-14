@@ -1961,8 +1961,11 @@ void testPauseFadesPcmBeforeTransportStopsAndRestoresVolumeOnResume() {
       paused.store(true, std::memory_order_release);
     });
     std::vector<float> fading;
+    // Supply 40 ms of PCM per mock callback so coarse Windows sleep timers
+    // cannot stretch a 200 ms envelope past the missing-callback timeout.
+    const size_t callbackFrames = std::max<size_t>(256, backend->openedFormat.sampleRate / 25);
     while (!paused.load(std::memory_order_acquire)) {
-      const auto block = renderBackendFrames(backend, 256);
+      const auto block = renderBackendFrames(backend, callbackFrames);
       fading.insert(fading.end(), block.begin(), block.end());
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }

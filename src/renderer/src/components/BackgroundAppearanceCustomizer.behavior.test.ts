@@ -97,6 +97,7 @@ const runner = `
 const {app,BrowserWindow,protocol,nativeImage}=require('electron'),fs=require('node:fs'),path=require('node:path');
 protocol.registerSchemesAsPrivileged([{scheme:'background',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setPath('userData',path.join(__dirname,'profile'));
+app.commandLine.appendSwitch('force-color-profile','srgb');
 app.whenReady().then(async()=>{
  const bytes=Buffer.alloc(1280*800*4);
  for(let y=0;y<800;y++)for(let x=0;x<1280;x++){const offset=(y*1280+x)*4;bytes[offset]=90;bytes[offset+1]=60;bytes[offset+2]=40;bytes[offset+3]=255}
@@ -104,19 +105,28 @@ app.whenReady().then(async()=>{
  protocol.handle('background',request=>request.url.includes('missing')?new Response('',{status:404}):new Response(wallpaper,{headers:{'content-type':'image/png'}}));
  // Pixel samples use content coordinates; native Windows borders must not shrink the viewport.
  const win=new BrowserWindow({show:false,width:1280,height:820,useContentSize:true,webPreferences:{contextIsolation:false,offscreen:true,backgroundThrottling:false}});
+ const capturePixel=async point=>{
+  const image=await win.webContents.capturePage();
+  const size=image.getSize();
+  if(point.x+point.width>size.width||point.y+point.height>size.height)throw new Error('pixel sample lies outside the captured viewport: '+JSON.stringify(size));
+  const pixel=image.crop(point).toBitmap();
+  if(pixel.length<4)throw new Error('pixel sample is empty');
+  return pixel;
+ };
  try{
   await win.loadFile(process.argv.at(-1));
   await win.webContents.executeJavaScript('window.runAppearanceTests()');
   for(const page of ['local','streaming','player','settings'])for(const blur of [0,30]){
    await win.webContents.executeJavaScript('window.prepareAppearancePixels('+JSON.stringify(page)+','+blur+')');
    for(const point of [{x:600,y:400,width:1,height:1},{x:1270,y:400,width:1,height:1}]){
-    const pixel=(await win.webContents.capturePage(point)).toBitmap();
+    const pixel=await capturePixel(point);
     if(Math.abs(pixel[0]-43)>3||Math.abs(pixel[1]-29)>3||Math.abs(pixel[2]-19)>3)throw new Error(page+' background brightness/dim or blur edge mismatch: '+[...pixel]);
    }
   }
   await win.webContents.executeJavaScript('window.prepareMissingBackground()');
-  const fallback=(await win.webContents.capturePage({x:600,y:400,width:1,height:1})).toBitmap();
-  if(fallback[0]!==86||fallback[1]!==52||fallback[2]!==18)throw new Error('missing image did not fall back to solid color: '+[...fallback]);
+  const fallback=await capturePixel({x:600,y:400,width:1,height:1});
+  // Full-frame capture may round color channels; use the same tolerance as wallpaper samples.
+  if(Math.abs(fallback[0]-86)>3||Math.abs(fallback[1]-52)>3||Math.abs(fallback[2]-18)>3)throw new Error('missing image did not fall back to solid color: '+[...fallback]);
   if(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR){fs.mkdirSync(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,{recursive:true});for(const tone of ['pureWhite','dark']){await win.webContents.executeJavaScript('window.showAppearanceEvidence('+JSON.stringify(tone)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,'appearance-'+tone+'.png'),(await win.webContents.capturePage()).toPNG())}win.setContentSize(620,820);await win.webContents.executeJavaScript('window.settleAppearance()');if(await win.webContents.executeJavaScript('document.querySelector(".appearance-editor").scrollWidth>document.querySelector(".appearance-editor").clientWidth+1'))throw new Error('narrow editor overflows');fs.writeFileSync(path.join(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,'appearance-narrow.png'),(await win.webContents.capturePage()).toPNG())}
   console.log('APPEARANCE_OK');app.exit(0)
  }catch(error){console.error(error.stack);app.exit(1)}
