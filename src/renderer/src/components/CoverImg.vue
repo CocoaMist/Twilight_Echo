@@ -1,52 +1,48 @@
 <template>
+  <slot v-if="!displayCover && $slots.placeholder" name="placeholder" />
   <img
-    v-if="displayCover"
-    :key="coverIdentityKey"
-    :src="displayCover"
+    v-else-if="displayCover || fallback"
+    :key="displayCover ? coverIdentityKey : `fb:${coverIdentityKey}`"
+    :src="displayCover || fallback"
     :alt="alt"
     :class="$attrs.class"
     decoding="async"
     :loading="loading"
-    @error="onImageError"
+    @error="displayCover && onImageError($event)"
   />
-  <slot v-else name="placeholder">
-    <img
-      v-if="fallback"
-      :key="`fb:${coverIdentityKey}`"
-      :src="fallback"
-      :alt="alt"
-      :class="$attrs.class"
-    />
-  </slot>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import DEFAULT_TRACK_COVER from '../assets/images/default-track-cover.webp'
 import {
   clearLocalCoverDataCache,
   invalidateRemoteCoverGrant,
   resolveCover
 } from '../utils/coverLoader.ts'
 
-const props = defineProps<{
-  cover: string | null | undefined
-  /** Durable remote origin used to re-grant expired twilight-media handles. */
-  coverSource?: string | null | undefined
-  /** Stable identity (track id) — changes force full remount + re-resolve. */
-  identity?: string | null | undefined
-  alt?: string
-  fallback?: string
-  loading?: 'lazy' | 'eager'
-}>()
+const props = withDefaults(
+  defineProps<{
+    cover: string | null | undefined
+    /** Durable remote origin used to re-grant expired twilight-media handles. */
+    coverSource?: string | null | undefined
+    /** Stable identity (track id) — changes force full remount + re-resolve. */
+    identity?: string | null | undefined
+    alt?: string
+    fallback?: string
+    loading?: 'lazy' | 'eager'
+  }>(),
+  { fallback: DEFAULT_TRACK_COVER }
+)
 
 const emit = defineEmits<{ error: [event: Event] }>()
 
 defineOptions({ inheritAttrs: false })
 
 const displayCover = ref<string | null>(null)
-const failed = ref(false)
 const remountNonce = ref(0)
 let requestId = 0
+let retriedCover = false
 
 const coverIdentityKey = computed(
   () =>
@@ -55,7 +51,7 @@ const coverIdentityKey = computed(
 
 async function reloadCover(): Promise<void> {
   const id = ++requestId
-  failed.value = false
+  retriedCover = false
   // Blank first so Chromium cannot keep the previous bitmap while we resolve.
   displayCover.value = null
 
@@ -70,7 +66,6 @@ async function reloadCover(): Promise<void> {
   } catch {
     if (id !== requestId) return
     displayCover.value = null
-    failed.value = true
   }
 }
 
@@ -90,28 +85,36 @@ async function onImageError(event: Event): Promise<void> {
     (typeof props.cover === 'string' && /^https?:\/\//i.test(props.cover.trim())
       ? props.cover.trim()
       : '')
-  if (source) {
-    invalidateRemoteCoverGrant(source)
-    const next = await resolveCover(null, source)
-    if (id !== requestId) return
-    if (next && next !== displayCover.value) {
-      displayCover.value = next
-      remountNonce.value += 1
-      return
+  // Recover an expired handle once per identity; a broken image must not loop.
+  if (!retriedCover) {
+    retriedCover = true
+    try {
+      if (source) {
+        invalidateRemoteCoverGrant(source)
+        const next = await resolveCover(null, source)
+        if (id !== requestId) return
+        if (next && next !== displayCover.value) {
+          displayCover.value = next
+          remountNonce.value += 1
+          return
+        }
+      }
+      // Local protocol art: drop materialize cache and retry once.
+      if (typeof props.cover === 'string' && /^cover:/i.test(props.cover)) {
+        clearLocalCoverDataCache()
+        const next = await resolveCover(props.cover, null)
+        if (id !== requestId) return
+        if (next && next !== displayCover.value) {
+          displayCover.value = next
+          remountNonce.value += 1
+          return
+        }
+      }
+    } catch {
+      // Failed grants/materialization use the same local fallback as missing art.
     }
   }
-  // Local protocol art: drop materialize cache and retry once.
-  if (typeof props.cover === 'string' && /^cover:/i.test(props.cover)) {
-    clearLocalCoverDataCache()
-    const next = await resolveCover(props.cover, null)
-    if (id !== requestId) return
-    if (next && next !== displayCover.value) {
-      displayCover.value = next
-      remountNonce.value += 1
-      return
-    }
-  }
-  failed.value = true
+  if (id !== requestId) return
   displayCover.value = null
   emit('error', event)
 }

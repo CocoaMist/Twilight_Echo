@@ -298,7 +298,6 @@ const recommendPlaylists = shallowRef<MediaProviderPlaylistSummary[]>([])
 const recommendationProviderId = ref('')
 let recommendationRequestId = 0
 const PERSONALIZED_STREAM_LOAD_THRESHOLD = 0.75
-const PERSONALIZED_STREAM_QUEUE_THRESHOLD = 6
 const PERSONALIZED_STREAM_RETRY_COOLDOWN_MS = 15_000
 const personalizedStreamLoading = reactive<Record<PersonalizedStreamKey, boolean>>({
   fm: false,
@@ -3271,11 +3270,12 @@ watch(
     () => personalizedStreamLoading.fm,
     () => personalizedStreamLoading.radar
   ],
-  ([remaining, session]) => {
+  ([, session]) => {
     if (
       !session ||
       personalizedStreamLoading[session.key] ||
-      remaining > PERSONALIZED_STREAM_QUEUE_THRESHOLD
+      playbackStore.queueIndex.value < 0 ||
+      playbackStore.queue.value.length - playbackStore.queueIndex.value > 3
     ) {
       return
     }
@@ -3598,7 +3598,12 @@ onMounted(async () => {
     class="streaming-page"
     :class="{ 'has-player': hasPlayer, 'menu-open': menuOpen }"
   >
-    <div ref="streamingContentRef" class="streaming-content" @scroll="onStreamingContentScroll">
+    <div
+      ref="streamingContentRef"
+      class="streaming-content"
+      :class="{ 'without-header': !!currentDetail && !showUnifiedSearch }"
+      @scroll="onStreamingContentScroll"
+    >
       <StreamingContentHeader
         :is-detail="!!currentDetail"
         :is-searching="isSearching && !currentDetail"
@@ -3614,7 +3619,6 @@ onMounted(async () => {
         :provider-id="activeProvider"
         :provider-options="headerProviderOptions"
         @update:search-query="searchQuery = $event"
-        @back="goBack"
         @clear-search="clearSearch"
         @select-provider="selectProvider"
       />

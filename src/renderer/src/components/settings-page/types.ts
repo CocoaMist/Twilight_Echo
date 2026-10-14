@@ -180,7 +180,11 @@ export const bufferSizeOptions = [
   { value: 256, label: '256' },
   { value: 512, label: '512' },
   { value: 1024, label: '1024' },
-  { value: 2048, label: '2048' }
+  { value: 2048, label: '2048' },
+  { value: 4096, label: '4096' },
+  { value: 8192, label: '8192' },
+  { value: 16384, label: '16384' },
+  { value: 32768, label: '32768' }
 ] as const
 
 export const routingModeOptions: { value: ChannelRoutingMode; label: string }[] = [

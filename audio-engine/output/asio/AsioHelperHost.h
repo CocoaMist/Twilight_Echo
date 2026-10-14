@@ -36,6 +36,11 @@ class AsioHelperHost final : public IAsioHost {
   AsioChannelFormat outputChannelFormat(long channel) const override;
   bool outputReady() override;
   long activeBufferSize() const override;
+  int activeSampleRate() const override;
+  long activeLatencyFrames() const override;
+  std::string startupSummary() const override;
+  size_t activeRenderFrameCapacity() const override;
+  bool dsdBufferUnitConfirmed() const override;
   void commitOutputBuffer(long bufferIndex, size_t frameCount) override;
   std::string lastCloseError() const override;
 
@@ -56,6 +61,9 @@ class AsioHelperHost final : public IAsioHost {
   std::atomic<uint32_t> renderChannelCount_{0};
   AudioFormat openFormat_;
   long activeBufferSize_ = 0;
+  int activeSampleRate_ = 0;
+  long activeLatencyFrames_ = -1;
+  std::string startupSummary_;
   mutable std::string closeError_;
   std::thread worker_;
   std::atomic<bool> workerRunning_{false};

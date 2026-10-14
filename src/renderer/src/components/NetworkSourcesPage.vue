@@ -873,7 +873,8 @@ html[data-te-motion='off'] .network-create-form {
   box-sizing: border-box;
   width: 100%;
   min-height: 0;
-  padding: 52px clamp(24px, 5vw, 72px) 132px;
+  padding: 52px clamp(24px, 5vw, 72px)
+    max(132px, calc(var(--te-playbar-bottom-clearance, 0px) + 12px));
   color: var(--te-settings-text, #0f172a);
   overflow-y: auto;
   height: 100dvh;
@@ -932,6 +933,31 @@ html[data-te-motion='off'] .network-create-form {
   align-items: center;
   justify-content: center;
   gap: 7px;
+}
+.network-sources-page :is(.soft-button, .brand-soft-button) {
+  min-height: var(--te-control-height-md, 34px);
+  padding: 0 var(--te-control-pad-x-md, 14px);
+  border: 0;
+  border-radius: var(--te-control-radius-pill, 999px);
+  font-weight: var(--te-control-font-weight-strong, 600);
+}
+.network-sources-page .soft-button {
+  background: var(--te-control-bg);
+  color: var(--te-control-fg);
+}
+.network-sources-page .soft-button:hover {
+  background: var(--te-control-bg-hover);
+}
+.network-sources-page .brand-soft-button {
+  background: var(--te-control-accent-soft);
+  color: var(--te-control-accent-text);
+}
+.network-sources-page .brand-soft-button:hover {
+  background: color-mix(in srgb, var(--te-control-accent) 16%, transparent);
+}
+.network-sources-page :is(.soft-button, .brand-soft-button):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .network-view-toggle {
   display: inline-flex;

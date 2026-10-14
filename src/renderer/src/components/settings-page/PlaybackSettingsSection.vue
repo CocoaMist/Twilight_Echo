@@ -550,6 +550,13 @@ function setPreferredBufferSize(event: Event): void {
   void setAudioOutputConfig({ preferredBufferSize: value })
 }
 
+function setAsioOutputChannelStart(event: Event): void {
+  if (audioOutputConfigApplyStatus.value.state === 'pending') return
+  const value = Number((event.target as HTMLInputElement).value)
+  if (!Number.isFinite(value)) return
+  void setAudioOutputConfig({ asioOutputChannelStart: Math.min(255, Math.max(0, Math.trunc(value) - 1)) })
+}
+
 function setRoutingMode(event: Event): void {
   const target = event.target as HTMLSelectElement
   void setAudioOutputConfig({ routingMode: target.value as ChannelRoutingMode })
@@ -1619,6 +1626,19 @@ function setContinuitySampleRate(event: Event): void {
               {{ option.label }}
             </option>
           </select>
+        </label>
+        <label v-if="audioOutput === 'asio'" data-setting-id="asio-output-channel-start">
+          <span>ASIO 起始输出通道</span>
+          <input
+            class="preview-select"
+            type="number"
+            min="1"
+            max="256"
+            step="1"
+            :value="(audioOutputConfig.asioOutputChannelStart ?? 0) + 1"
+            :disabled="audioOutputConfigApplyStatus.state === 'pending'"
+            @change="setAsioOutputChannelStart"
+          />
         </label>
         <label data-setting-id="channel-routing">
           <span>Routing</span>

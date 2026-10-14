@@ -361,6 +361,8 @@ export async function deactivate() {}
 
 它是应用仓库里唯一的内置 provider 例外。第三方音源插件（如 Bilibili 收藏夹音频）走外部仓库分发，使用同一 Provider API，但不享受内置待遇。详见 [spec §4.5](./twilight-echo-plugin-spec.md#45-多音源数据模型)。
 
+Navidrome 音源插件 `com.twilightecho.provider.navidrome` 在独立插件仓库 `Twilight-Echo-plugins/plugins/navidrome-provider` 维护，通过插件市场或本地 `.tep` 安装并启用后使用。它通过 Subsonic API 提供服务器登录、搜索、播放、封面、同步歌词和歌单读取，密码存入宿主加密的插件设置。
+
 ## 16. 安全底线
 
 当前是信任式安装，插件即任意代码执行。最低安全要求：
