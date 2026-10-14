@@ -32,7 +32,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC)
-  add_compile_options(/utf-8)
+  add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>")
 endif()
 
 set(TAE_WASAPI_AVAILABLE OFF)
