@@ -77,10 +77,17 @@ test('local library scan persists trackNumber and discNumber from common tags', 
 test('local library scan only stores albumArtist from a real ALBUMARTIST tag', () => {
   const serviceSource = readFileSync(new URL('./libraryScanService.ts', import.meta.url), 'utf8')
 
-  assert.match(
-    serviceSource,
-    /\.\.\.\(metadata\.common\.albumartist \? \{ albumArtist: metadata\.common\.albumartist \} : \{\}\)/
-  )
+  const field = serviceSource.match(
+    /\.\.\.\((?:typeof\s+)?metadata\.common\.albumartist[\s\S]*?:\s*\{\}\)/
+  )?.[0]
+  assert.ok(field, 'the scanner must conditionally persist the ALBUMARTIST tag')
+  const readField = new Function('metadata', 'repairMojibakeText', `return ({${field}})`)
+  const normalize = (value: string): string => value.trim()
+  assert.deepEqual(readField({ common: {} }, normalize), {})
+  assert.deepEqual(readField({ common: { artist: 'Track Artist' } }, normalize), {})
+  assert.deepEqual(readField({ common: { albumartist: 'Album Artist' } }, normalize), {
+    albumArtist: 'Album Artist'
+  })
   assert.doesNotMatch(
     serviceSource,
     /albumArtist:\s*metadata\.common\.albumartist\s*\|\|\s*metadata\.common\.artist/
