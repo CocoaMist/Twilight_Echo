@@ -13,11 +13,11 @@ const MAX_REDIRECTS = 5
 const DEFAULT_RESPONSE_LIMIT_BYTES = 8 * 1024 * 1024
 
 function isCollectionBlock(block: string): boolean {
-  return /<(?:\w+:)?collection\s*\/?\s*>/i.test(block)
+  return /<(?:[\w.-]+:)?collection\s*\/?\s*>/i.test(block)
 }
 
 function extractTag(block: string, tag: string): string | null {
-  const match = block.match(new RegExp(String.raw`<(?:\w+:)?${tag}[^>]*>([^<]*)<`, 'i'))
+  const match = block.match(new RegExp(String.raw`<(?:[\w.-]+:)?${tag}[^>]*>([^<]*)<`, 'i'))
   return match ? match[1].trim() : null
 }
 
@@ -77,7 +77,7 @@ function parseMultistatus(
   xml: string
 ): Array<{ path: string; directory: boolean; size?: number; mime?: string; mtimeMs?: number }> {
   const blocks: string[] = []
-  const pattern = /<(?:\w+:)?response[^>]*>([\s\S]*?)<\/(?:\w+:)?response>/gi
+  const pattern = /<(?:[\w.-]+:)?response[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?response>/gi
   let match: RegExpExecArray | null
   while ((match = pattern.exec(xml)) !== null) blocks.push(match[1])
 

@@ -264,7 +264,7 @@ export function createNetworkProfileStore(deps: {
       return parsed.value.profiles
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw new NetworkSourceFailure('network', '?????????')
+      throw new NetworkSourceFailure('network', '网络源配置读取失败')
     }
   }
 

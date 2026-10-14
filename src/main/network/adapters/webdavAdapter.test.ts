@@ -96,6 +96,22 @@ const RICH_MULTISTATUS = `<?xml version="1.0" encoding="utf-8"?>
   </d:response>
 </d:multistatus>`
 
+const HYPHEN_PREFIX_MULTISTATUS = `<?xml version="1.0" encoding="utf-8"?>
+<ns-1:multistatus xmlns:ns-1="DAV:">
+  <ns-1:response>
+    <ns-1:href>/music-hyphen/</ns-1:href>
+    <ns-1:propstat><ns-1:prop><ns-1:resourcetype><ns-1:collection/></ns-1:resourcetype></ns-1:prop><ns-1:status>HTTP/1.1 200 OK</ns-1:status></ns-1:propstat>
+  </ns-1:response>
+  <ns-1:response>
+    <ns-1:href>/music-hyphen/album/</ns-1:href>
+    <ns-1:propstat><ns-1:prop><ns-1:resourcetype><ns-1:collection/></ns-1:resourcetype></ns-1:prop><ns-1:status>HTTP/1.1 200 OK</ns-1:status></ns-1:propstat>
+  </ns-1:response>
+  <ns-1:response>
+    <ns-1:href>/music-hyphen/a.flac</ns-1:href>
+    <ns-1:propstat><ns-1:prop><ns-1:getcontentlength>1024</ns-1:getcontentlength></ns-1:prop><ns-1:status>HTTP/1.1 200 OK</ns-1:status></ns-1:propstat>
+  </ns-1:response>
+</ns-1:multistatus>`
+
 const FLAC_BYTES = Buffer.from('FLAC-DATA-0123456789')
 const EXPECTED_BASIC = `Basic ${Buffer.from('alice:s3cret').toString('base64')}`
 const SINGLE_FILE_STATUS = `<?xml version="1.0" encoding="utf-8"?>
@@ -193,6 +209,11 @@ test.before(async () => {
       if (req.url === '/music-rich' || req.url === '/music-rich/') {
         res.writeHead(207, { 'Content-Type': 'application/xml' })
         res.end(RICH_MULTISTATUS)
+        return
+      }
+      if (req.url === '/music-hyphen' || req.url === '/music-hyphen/') {
+        res.writeHead(207, { 'Content-Type': 'application/xml' })
+        res.end(HYPHEN_PREFIX_MULTISTATUS)
         return
       }
       if (req.url === '/music-no-slash') {
@@ -656,5 +677,19 @@ test('webdav treats unsatisfiable and mismatched ranges as resume-unsupported', 
     async () => session.readStream('/music/wrong-range.flac', undefined, { start: 4 }),
     (err: unknown) => err instanceof NetworkResumeUnsupported
   )
+  await session.close()
+})
+
+test('webdav parses namespaced tags with hyphen or dot prefixes', async () => {
+  const session = await createWebDavAdapter().createSession(makeProfile(), {
+    kind: 'password',
+    username: 'alice',
+    password: 's3cret'
+  })
+  const entries = await session.list('/music-hyphen')
+  assert.deepEqual(entries.map((entry) => entry.path).sort(), [
+    '/music-hyphen/a.flac',
+    '/music-hyphen/album'
+  ])
   await session.close()
 })

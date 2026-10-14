@@ -112,7 +112,14 @@ test('profile store fails closed on deeply nested or structurally invalid persis
   try {
     const nested = `${'['.repeat(128)}0${']'.repeat(128)}`
     await writeFile(filePath, `{"profiles":${nested}}`, 'utf8')
-    await assert.rejects(() => store.listProfiles())
+    await assert.rejects(
+      () => store.listProfiles(),
+      (err: unknown) => {
+        assert.equal((err as { code: string }).code, 'network')
+        assert.equal((err as Error).message, '网络源配置读取失败')
+        return true
+      }
+    )
 
     await writeFile(filePath, JSON.stringify({ profiles: [{ id: 'malformed' }] }), 'utf8')
     await assert.rejects(() => store.listProfiles())
