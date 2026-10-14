@@ -1,4 +1,5 @@
 import { normalizeNavigationPagePreferences } from '../../shared/navigationPages.ts'
+import { writeDiagnostic } from '../diagnostics/logger.ts'
 import {
   normalizeAutoMixMode,
   normalizeAutoMixStemMode,
@@ -778,8 +779,11 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
 }
 
 export function readAppSettings(): AppSettings {
+  const started = performance.now()
+  writeDiagnostic('settings', 'load.start', {}, 'debug')
   const result = loadSettingsFile(getSettingsFilePath(), DEFAULT_SETTINGS, normalizeAppSettings)
   appSettingsLoadIssue = result.issue
+  writeDiagnostic('settings', 'load.complete', { durationMs: performance.now() - started, issue: result.issue?.kind ?? null })
   if (result.issue?.kind === 'recovered') {
     console.warn('[persistence] application settings recovered from backup')
   } else if (result.issue?.kind === 'corrupt') {
@@ -789,7 +793,9 @@ export function readAppSettings(): AppSettings {
 }
 
 export function writeAppSettings(settings: AppSettings): void {
-  writeSettingsFile(getSettingsFilePath(), settings)
+  const started = performance.now()
+  try { writeSettingsFile(getSettingsFilePath(), settings); writeDiagnostic('settings', 'save.complete', { durationMs: performance.now() - started, keys: Object.keys(settings).length }, 'debug') }
+  catch (error) { writeDiagnostic('settings', 'save.failed', { error }, 'error'); throw error }
 }
 
 export function consumeAppSettingsLoadIssue(): SettingsFileLoadIssue | null {

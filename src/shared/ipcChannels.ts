@@ -1,4 +1,12 @@
 export const IPC = {
+  diagnostics: {
+    status: 'diagnostics:getStatus',
+    marker: 'diagnostics:markProblem',
+    directory: 'diagnostics:openDirectory',
+    export: 'diagnostics:exportBundle',
+    clear: 'diagnostics:clearHistory',
+    record: 'diagnostics:record'
+  },
   audioEngine: {
     testOutput: 'audioEngine:testOutput',
     stopOutputTest: 'audioEngine:stopOutputTest',

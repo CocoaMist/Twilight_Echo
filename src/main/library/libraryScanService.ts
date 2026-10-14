@@ -1,3 +1,6 @@
+import { initializeUtilityDiagnostics } from '../diagnostics/utility.ts'
+import { observeDiagnosticOperation } from '../diagnostics/observation.ts'
+import { writeDiagnostic } from '../diagnostics/logger.ts'
 import { createHash, randomUUID } from 'crypto'
 import { type Dirent } from 'fs'
 import { mkdir, readFile, readdir, stat, writeFile } from 'fs/promises'
@@ -59,6 +62,7 @@ if (!parentPort) {
 }
 
 const servicePort = parentPort
+initializeUtilityDiagnostics('twilight-library-scan')
 const activeScans = new Map<string, ScanControl>()
 const coverHandlesByDirectory = new Map<string, Promise<string | null>>()
 const MAX_COVER_BYTES = 20 * 1024 * 1024
@@ -74,7 +78,13 @@ const MAX_COVER_DIRECTORY_CACHE_ENTRIES = 2_048
 servicePort.postMessage({ kind: 'ready' })
 servicePort.on('message', (message) => {
   if (message.kind === 'scan') {
-    void handleScan(message.requestId, message.request)
+    void observeDiagnosticOperation(
+      'library.scan',
+      'scan',
+      () => handleScan(message.requestId, message.request),
+      [message.request],
+      { requestId: message.requestId, ...(message as any).diagnosticContext }
+    )
     return
   }
   const control = activeScans.get(message.requestId)
@@ -105,6 +115,7 @@ async function handleScan(
     const value = await runScan(requestId, request, control)
     servicePort.postMessage({ kind: 'response', requestId, ok: true, value })
   } catch (error) {
+    writeDiagnostic('library.scan', 'scan.failed', { error }, 'error')
     servicePort.postMessage({
       kind: 'response',
       requestId,

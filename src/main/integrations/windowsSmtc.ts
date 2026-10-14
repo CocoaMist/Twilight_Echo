@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { writeDiagnostic } from '../diagnostics/logger.ts'
 import { pathToFileURL } from 'url'
 import { runtime } from '../core/runtime'
 import { resolveCoverCacheFile } from '../library/coverCache.ts'
@@ -153,6 +154,7 @@ export function refreshWindowsSmtc(force = false): void {
     lastUpdateSignature = signature
     status.lastError = null
   } catch (error) {
+    writeDiagnostic('system.media', 'session.update.failed', { error }, 'error')
     lastUpdateSignature = null
     status.lastError = error instanceof Error ? error.message : String(error)
     console.warn('[smtc] failed to update Windows media session:', error)
@@ -203,6 +205,7 @@ export function initializeWindowsSmtc(): boolean {
     }
     binding = loaded.binding
     status = { supported: true, active: true, lastError: null }
+    writeDiagnostic('system.media', 'session.started', { backend: 'windows-smtc' })
     lastUpdateSignature = null
     runtime.refreshWindowsSmtc = refreshWindowsSmtc
     refreshWindowsSmtc(true)
@@ -219,6 +222,7 @@ export function initializeWindowsSmtc(): boolean {
 }
 
 export function destroyWindowsSmtc(): void {
+  writeDiagnostic('system.media', 'session.stopped')
   runtime.refreshWindowsSmtc = null
   lastUpdateSignature = null
   const current = binding

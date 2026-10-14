@@ -463,11 +463,11 @@ test('specialized windows receive only their scoped preload APIs', () => {
   assert.match(preloadSource, /exposedApiForDocument\(\)/)
   assert.match(
     preloadSource,
-    /if \(isDesktopLyricsDocument\(\)\) return \{ desktopLyrics: desktopLyricsWindowApi \}/
+    /if \(isDesktopLyricsDocument\(\)\) return \{ diagnostics: diagnosticsApi, desktopLyrics: desktopLyricsWindowApi \}/
   )
   assert.match(
     preloadSource,
-    /if \(isMiniPlayerDocument\(\)\) \{[\s\S]*?return \{ miniPlayer: miniPlayerWindowApi, data: miniPlayerCoverDataApi \}/
+    /if \(isMiniPlayerDocument\(\)\) \{[\s\S]*?return \{ diagnostics: diagnosticsApi, miniPlayer: miniPlayerWindowApi, data: miniPlayerCoverDataApi \}/
   )
   // The lyrics window is the shared renderer document with a `window` query now.
   assert.match(preloadSource, /get\('window'\) === 'desktop-lyrics'/)

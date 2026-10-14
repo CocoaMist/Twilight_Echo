@@ -59,7 +59,7 @@ test('desktop lyrics v3 isolates host and satellite IPC capabilities', async () 
   assert.match(entry, /desktopLyrics: desktopLyricsHostApi/)
   assert.match(
     entry,
-    /if \(isDesktopLyricsDocument\(\)\) return \{ desktopLyrics: desktopLyricsWindowApi \}/
+    /if \(isDesktopLyricsDocument\(\)\) return \{ diagnostics: diagnosticsApi, desktopLyrics: desktopLyricsWindowApi \}/
   )
   assert.doesNotMatch(preload, /desktopLyrics:toggle/)
 })

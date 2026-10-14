@@ -313,6 +313,7 @@ interface OpraAPI {
 }
 
 interface WindowAPI {
+  diagnostics: import('../shared/diagnostics.ts').DiagnosticsApi
   systemMedia: {
     getNativeStatus: () => Promise<import('../shared/systemMedia.ts').SystemMediaNativeStatus>
   }

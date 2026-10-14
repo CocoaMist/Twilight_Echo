@@ -1,4 +1,6 @@
 import { app, dialog, shell, utilityProcess, type UtilityProcess } from 'electron'
+import { writeDiagnostic } from '../diagnostics/logger.ts'
+import { sanitizeDiagnosticText } from '../diagnostics/sanitize.ts'
 import { randomUUID } from 'crypto'
 import { providerPlaybackIdentities } from '../audio/providerPlaybackIdentity.ts'
 import { existsSync, mkdirSync, statSync } from 'fs'
@@ -2148,9 +2150,10 @@ export class TwilightPluginManager extends EventEmitter {
   }
 
   private appendLog(descriptor: TwilightPluginDescriptor, level: string, message: string): void {
+    const shared = writeDiagnostic('plugin', 'plugin.output', { pluginId: descriptor.id, message }, level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info')
     const logPath = descriptor.paths.logPath
     ensureParent(logPath)
-    const line = `[${new Date().toISOString()}] [${level}] ${redactSensitiveText(message).trim()}\n`
+    const line = `[${shared?.timestamp ?? new Date().toISOString()}] [${level}] [eventId=${shared?.eventId ?? ''}] ${sanitizeDiagnosticText(redactSensitiveText(message)).trim()}\n`
     const lineBytes = Buffer.byteLength(line)
     // 每插件日志带尺寸轮转（current + .1 两档，仿 audioDiagnostics），同时把逐行
     // 追加串进 per-path 写链，避免高并发日志乱序与无界增长。

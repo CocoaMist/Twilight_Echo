@@ -38,6 +38,89 @@ class ThrowingUtilityProcess extends ManualUtilityProcess {
   }
 }
 
+test('crash listener calls cannot bypass the configured restart backoff', async () => {
+  const children: ManualUtilityProcess[] = []
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    restartDelayMs: 50,
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const child = new ManualUtilityProcess()
+          children.push(child)
+          return child
+        }
+      }
+    }
+  })
+  let listenerCall: Promise<unknown> | undefined
+  binding.on('crash', () => {
+    listenerCall = binding.callAsync('GetPlaybackInfo', [])
+    void listenerCall.catch(() => undefined)
+    assert.equal(children.length, 1)
+  })
+  try {
+    startAudioServiceForTest(binding)
+    children[0].emit('exit', 1)
+    await assert.rejects(listenerCall!, /音频服务不可用/)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    assert.equal(children.length, 1)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.equal(children.length, 2)
+  } finally {
+    binding.destroy()
+  }
+})
+
+test('old coalesced control completion cannot discard a replacement generation control', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  const children: ManualUtilityProcess[] = []
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    restartDelayMs: 5,
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const child = new ManualUtilityProcess()
+          children.push(child)
+          return child
+        }
+      }
+    }
+  })
+  try {
+    binding.SetVolume(0.2)
+    await Promise.resolve()
+    children[0].emit('exit', 1)
+    context.mock.timers.tick(5)
+    assert.equal(children.length, 2)
+    binding.SetVolume(0.7)
+    await new Promise((resolve) => setImmediate(resolve))
+    const controls = children[1].messages as Array<{
+      kind: string
+      requestId: string
+      method: string
+      args: unknown[]
+    }>
+    assert.equal(controls.length, 1)
+    assert.deepEqual(controls[0].args, [0.7])
+    binding.SetVolume(0.8)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(controls.length, 1)
+    children[1].emit('message', {
+      kind: 'response',
+      requestId: controls[0].requestId,
+      ok: true,
+      value: true
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(controls.length, 2)
+    assert.deepEqual(controls[1].args, [0.8])
+  } finally {
+    binding.destroy()
+  }
+})
+
 function markAnalysisWorkerReady(child: ManualUtilityProcess): void {
   child.emit('message', {
     kind: 'ready',
@@ -45,6 +128,39 @@ function markAnalysisWorkerReady(child: ManualUtilityProcess): void {
     analyses: ['bpm', 'loudness']
   })
 }
+
+test('RPC timeout diagnostics identify in-flight native methods without source arguments', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 5,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  const events: unknown[] = []
+  binding.on('rpc-timeout', (event) => events.push(event))
+  const play = binding.callAsync('Play', ['https://private.example/song?token=secret', 0])
+  void play.catch(() => undefined)
+  try {
+    await assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
+    assert.equal(events.length, 1)
+    const event = events[0] as {
+      method: string
+      generation: number
+      elapsedMs: number
+      inFlight: Array<{ method: string }>
+    }
+    assert.equal(event.method, 'GetPlaybackInfo')
+    assert.equal(event.generation, 0)
+    assert.ok(event.elapsedMs >= 0)
+    assert.deepEqual(
+      event.inFlight.map((request) => request.method),
+      ['Play']
+    )
+    assert.doesNotMatch(JSON.stringify(event), /private\.example|secret|token|args/)
+  } finally {
+    binding.destroy()
+  }
+})
 
 function startAudioServiceForTest(binding: AudioEngineServiceBinding): void {
   ;(binding as unknown as { start: () => void }).start()

@@ -182,6 +182,7 @@ class TwilightAudioEngine {
   void startClock();
   void stopClock();
   void clockLoop();
+  void diagnosticLoop();
   void wakeClock() const;
   void waitForClockTick(bool active);
   void emit(const char* type, const std::string& payload) const;
@@ -231,6 +232,9 @@ class TwilightAudioEngine {
   mutable bool clockWakeRequested_ = false;
   bool clockIdle_ = true;
   std::thread clockThread_;
+  std::thread diagnosticThread_;
+  std::atomic<bool> diagnosticRunning_{true};
+  std::atomic<uint64_t> clockHeartbeat_{0}, clockHeartbeatMs_{0};
   std::chrono::steady_clock::time_point lastTick_;
   uint64_t lastEmittedAppliedConfigRevision_ = 0;
 };
