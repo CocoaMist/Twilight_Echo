@@ -424,13 +424,8 @@ function playPersonalizedStream(section: RecSection | null): void {
               String(index + 1).padStart(2, '0')
             }}</span>
             <span class="chart-cover">
-              <CoverImg
-                v-if="track.cover"
-                :cover="track.cover"
-                :cover-source="track.coverSource"
-                alt=""
-              />
-              <span v-else class="chart-cover-empty"><i class="pi pi-volume-up"></i></span>
+              <CoverImg :cover="track.cover" :cover-source="track.coverSource" alt="" />
+
               <span class="chart-cover-action" aria-hidden="true">
                 <span v-if="isPlayingTrack(track)" class="chart-eq"> <i></i><i></i><i></i> </span>
                 <PlaybackIcon name="play" v-else />

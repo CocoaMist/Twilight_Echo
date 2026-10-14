@@ -302,7 +302,9 @@ Issue 内容和附件会公开显示，上传前请检查并删除密码、Cooki
 
 ## 支持与赞助
 
-如果 Twilight Echo 成了你常用的播放器，欢迎给项目点一个 **Star**、分享给朋友，或通过[爱发电](https://afdian.com/a/pxasen)支持后续开发。捐赠者将记录在软件内的贡献者名单中，感谢每一份支持。
+##### **如果 Twilight Echo 成了你常用的播放器，欢迎给项目点一个 Star、分享给朋友，或通过[爱发电](https://afdian.com/a/pxasen)支持后续开发。捐赠者将记录在软件内的贡献者名单中，感谢每一份支持。**
+
+#### **每一位想参与TwilightEcho开发的开发者可以通过：QQ3248974986 来加我的联系方式进入内部开发者群聊，让我们一起将TwilightEcho做的更好**！
 
 ## 扩展与开发
 
@@ -318,4 +320,4 @@ Issue 内容和附件会公开显示，上传前请检查并删除密码、Cooki
 
 Twilight Echo 采用 [Apache License 2.0](./LICENSE) 开源。第三方依赖、字体、图标、插件和内容素材遵循各自的许可证或服务条款；相关商标归其权利人所有，Twilight Echo 与这些服务不存在官方隶属或背书关系。
 
-如有版权或侵权问题，请联系 [asenyarzc@gmail.com](mailto:asenyarzc@gmail.com)，以便核实并处理。
+如有版权或侵权问题，请联系 Pxasen@outlook.com，以便核实并处理。

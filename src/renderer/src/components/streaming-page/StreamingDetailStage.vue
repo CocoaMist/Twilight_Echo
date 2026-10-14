@@ -480,15 +480,12 @@ const infoTrack = shallowRef<Track | null>(null)
 
           <div class="col-title">
             <CoverImg
-              v-if="track.cover"
               :cover="track.cover"
               :cover-source="track.coverSource"
               class="row-cover"
               alt=""
             />
-            <div v-else class="row-cover row-cover-fallback" aria-hidden="true">
-              <i class="pi pi-wave-pulse"></i>
-            </div>
+
             <div class="row-copy">
               <button
                 type="button"

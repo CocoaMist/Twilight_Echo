@@ -133,6 +133,42 @@ void testControlTimeout(const std::wstring& helperPath) {
   assert(waitUntil([&] { return !process.alive(); }, 2s));
 }
 
+void testWireCapacityAndFloat64(const std::wstring& helperPath) {
+  using namespace twilight::audio::asio_helper;
+  for (const wchar_t* mode : {L"verify-float64", L"verify-bounds"}) {
+    setMode(mode);
+    AsioHelperProcess process(helperPath);
+    std::string error;
+    Response response;
+    assert(process.launch(&error));
+    assert(requestOpen(&process, &response, &error));
+    assert(process.request(Command::CreateBuffers, &response, 2s, &error));
+    assert(response.actualFormat.sampleRate == 48000 && response.latencyFrames == 77);
+    assert(readText(response.startupSummary) == "fixture post-create summary");
+    auto* shared = process.shared();
+    assert(readAtomic(&shared->activeRenderFrameCapacity) == 64);
+    auto& block = shared->buffers[0];
+    const bool wide = std::wstring(mode) == L"verify-float64";
+    block.committedFrames = wide ? 64 : 80;
+    for (long channel = 0; channel < 2; ++channel) {
+      auto* output = channelBuffer(shared, channel, 0);
+      if (wide) for (size_t i = 0; i < 64; ++i) {
+        const double sample = channel == 0 ? 0.25 : -0.5;
+        std::memcpy(output + i * 8, &sample, 8);
+      }
+      else std::memset(output, 0x5a, 320);
+      block.channelBytes[channel] = wide ? 512 : 320;
+    }
+    MemoryBarrier(); incrementAtomic(&block.generation);
+    assert(process.request(Command::Start, &response, 2s, &error));
+    assert(waitUntil([&] { return readAtomic(&shared->hostEventWriteSequence) > 0; }, 2s));
+    assert(readText(shared->hostEvents[0].message) == "wire-verified");
+    assert(shared->callbacks[0].driverTimestampNs > 0);
+    assert(process.request(Command::Stop, &response, 2s, &error));
+    process.shutdown();
+  }
+}
+
 void testAbnormalExit(const std::wstring& helperPath) {
   setMode(L"abnormal-exit");
   AsioHelperProcess process(helperPath);
@@ -473,6 +509,7 @@ int wmain(int argc, wchar_t* argv[]) {
   testProtocolReasonCodes();
   testNormalRoundTrip(argv[1]);
   testPcmBytesReachDriverAcrossReopen(argv[1]);
+  testWireCapacityAndFloat64(argv[1]);
   testControlTimeout(argv[1]);
   testAbnormalExit(argv[1]);
   testExternalKill(argv[1]);

@@ -1358,7 +1358,12 @@ export class PlaybackController {
       appliedConfigRevision,
       outputInfo,
       outputBackend: outputInfo.backend,
-      outputDevice: outputInfo.deviceName,
+      // The native outputDevice is the requested route identity. A released
+      // pause can retain the previous device's runtime name until resume, so
+      // replacing this ID with deviceName breaks pending route confirmation.
+      outputDevice: staleNativeOutputRoute
+        ? this.device
+        : preferNonEmpty(info.outputDevice, outputInfo.deviceName),
       actualBackend: outputInfo.actualBackend,
       accessMode: outputInfo.accessMode,
       devicePathKind: outputInfo.devicePathKind,

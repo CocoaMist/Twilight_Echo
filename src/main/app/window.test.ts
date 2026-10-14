@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { restoreWindowSize } from './windowState.ts'
-import { getWindowBackgroundColor, syncWindowFrameColor } from './windowAppearance.ts'
+import { getWindowBackgroundColor, syncWindowFrameAppearance } from './windowAppearance.ts'
 
 test('main-process startup creates the window before deferred runtime work', async () => {
   const source = await readFile(new URL('./lifecycle.ts', import.meta.url), 'utf8')
@@ -80,26 +80,16 @@ test('system theme follows the current native preference without importing audio
 })
 
 test(
-  'Windows frame follows explicit and system tones and yields to high contrast',
+  'Windows frame disables forced accents and restores them after leaving high contrast',
   {
     skip: process.platform !== 'win32'
   },
   () => {
     const colors: (string | boolean | null)[] = []
     const win = { setAccentColor: (color: string | boolean | null) => colors.push(color) }
-    const settings = {
-      theme: 'dark' as AppSettingsTheme,
-      appBackground: { global: { dark: '#18191b', light: '#fafafa' } }
-    }
-    syncWindowFrameColor(win, settings, false, false)
-    settings.theme = 'pureWhite'
-    syncWindowFrameColor(win, settings, true, false)
-    settings.theme = 'system'
-    syncWindowFrameColor(win, settings, true, false)
-    syncWindowFrameColor(win, settings, false, false)
-    syncWindowFrameColor(win, settings, false, true)
-    assert.deepEqual(colors, ['#18191b', '#fafafa', '#18191b', '#fafafa', null])
+    syncWindowFrameAppearance(win, false)
+    syncWindowFrameAppearance(win, true)
+    syncWindowFrameAppearance(win, false)
+    assert.deepEqual(colors, [false, null, false])
   }
 )
-
-type AppSettingsTheme = Parameters<typeof getWindowBackgroundColor>[0]['theme']

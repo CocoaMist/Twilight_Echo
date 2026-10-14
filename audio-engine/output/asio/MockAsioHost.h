@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IAsioHost.h"
+#include "AsioDsdBufferGeometry.h"
 
 #include <array>
 #include <cstdint>
@@ -87,6 +88,8 @@ class MockAsioHost final : public IAsioHost {
   AsioChannelFormat outputChannelFormat(long channel) const override;
   bool outputReady() override;
   long activeBufferSize() const override;
+  size_t activeRenderFrameCapacity() const override;
+  bool dsdBufferUnitConfirmed() const override;
   std::string lastCloseError() const override;
 
   void triggerBufferSwitch(long bufferIndex);
@@ -95,6 +98,7 @@ class MockAsioHost final : public IAsioHost {
  private:
   AsioBufferSwitchCallback bufferSwitch_;
   AsioEventCallback eventCallback_;
+  asio::DsdBufferGeometry dsdGeometry_;
 };
 
 AsioDeviceInfo makeMockAsioDevice(
