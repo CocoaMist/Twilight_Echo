@@ -601,11 +601,10 @@ export function normalizeAudioDevice(device: unknown): string {
   return normalized
 }
 
-// Stored preferences retain the existing 8192-frame range. The engine applies
-// its 2048-frame cap when activating the shared configuration.
+// Preserve large ASIO buffers through storage and activation.
 export function normalizeOutputConfig(config: unknown): OutputConfig {
   if (!config || typeof config !== 'object') return { ...DEFAULT_SETTINGS.audioOutputConfig }
-  return normalizeSharedOutputConfig(config as Partial<OutputConfig>, 8192)
+  return normalizeSharedOutputConfig(config as Partial<OutputConfig>, 32768)
 }
 
 export function normalizeDesktopLyrics(raw: unknown): DesktopLyricsSettings {

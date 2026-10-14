@@ -1068,7 +1068,7 @@ class FakeOutputBackend final : public IOutputBackend {
     state_->stopped = false;
     state_->closed = false;
     state_->requestedFormat = requestedFormat;
-    if (state_->backendId == "wasapi-exclusive" && g_fakeTopologyOpenFailures.load() > 0) {
+    if ((state_->backendId == "wasapi-exclusive" || state_->backendId == "asio") && g_fakeTopologyOpenFailures.load() > 0) {
       g_fakeTopologyOpenFailures.fetch_sub(1);
       if (error) *error = "fake WASAPI topology open failure";
       return false;
@@ -1156,7 +1156,7 @@ class FakeOutputBackend final : public IOutputBackend {
   bool start(RenderCallback callback, OutputEventCallback eventCallback, std::string* error) override {
     std::unique_lock lock(g_backendRegistry.mutex);
     ++state_->startCalls;
-    if (state_->backendId == "wasapi-exclusive" && g_fakeTopologyStartFailures.load() > 0) {
+    if ((state_->backendId == "wasapi-exclusive" || state_->backendId == "asio") && g_fakeTopologyStartFailures.load() > 0) {
       g_fakeTopologyStartFailures.fetch_sub(1);
       if (error) *error = "fake WASAPI topology start failure";
       return false;
@@ -1183,7 +1183,7 @@ class FakeOutputBackend final : public IOutputBackend {
       std::string* error) override {
     std::unique_lock lock(g_backendRegistry.mutex);
     ++state_->startCalls;
-    if (state_->backendId == "wasapi-exclusive" && g_fakeTopologyStartFailures.load() > 0) {
+    if ((state_->backendId == "wasapi-exclusive" || state_->backendId == "asio") && g_fakeTopologyStartFailures.load() > 0) {
       g_fakeTopologyStartFailures.fetch_sub(1);
       if (error) *error = "fake WASAPI topology start failure";
       return false;
@@ -1961,8 +1961,11 @@ void testPauseFadesPcmBeforeTransportStopsAndRestoresVolumeOnResume() {
       paused.store(true, std::memory_order_release);
     });
     std::vector<float> fading;
+    // Supply 40 ms of PCM per mock callback so coarse Windows sleep timers
+    // cannot stretch a 200 ms envelope past the missing-callback timeout.
+    const size_t callbackFrames = std::max<size_t>(256, backend->openedFormat.sampleRate / 25);
     while (!paused.load(std::memory_order_acquire)) {
-      const auto block = renderBackendFrames(backend, 256);
+      const auto block = renderBackendFrames(backend, callbackFrames);
       fading.insert(fading.end(), block.begin(), block.end());
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -3916,6 +3919,55 @@ void testWasapiExclusiveTopologyUpdateReopensAndResumesPlaying() {
   assertLatestPlaybackContains(engine, "\"bufferSizeFrames\":512");
 }
 
+void testAsioBufferAndOutputChannelChangesReopenWithoutConsumingPausedAudio() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setOutputBackend("asio") == TAE_RESULT_OK);
+  assert(engine.setOutputConfig("{}") == TAE_RESULT_OK);
+  assert(engine.play("asio-topology.flac", 0.0) == TAE_RESULT_OK);
+  assert(waitForStartedBackendCount(1));
+  assert(engine.setOutputConfig("{\"preferredBufferSize\":8192,\"asioOutputChannelStart\":0}") == TAE_RESULT_OK);
+  auto snapshots = g_backendRegistry.snapshots();
+  assert(snapshots.size() == 1 && snapshots.front().openCalls == 2);
+  assert(snapshots.front().startCalls == 2 && snapshots.front().info.bufferSizeFrames == 8192);
+  assertLatestPlaybackContains(engine, "\"state\":\"playing\"");
+  assertLatestPlaybackContains(engine, "\"bufferSizeFrames\":8192");
+
+  assert(engine.pause() == TAE_RESULT_OK);
+  const double position = playbackJsonNumber(engine.getPlaybackInfoJson(), "position");
+  g_renderFramesDuringStart = 256;
+  assert(engine.setOutputConfig("{\"preferredBufferSize\":8192,\"asioOutputChannelStart\":4}") == TAE_RESULT_OK);
+  snapshots = g_backendRegistry.snapshots();
+  assert(snapshots.size() == 1 && snapshots.front().openCalls == 3);
+  assert(snapshots.front().outputConfig.asioOutputChannelStart == 4);
+  assert(snapshots.front().info.bufferSizeFrames == 8192);
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "position") == position);
+
+  // Applying the same geometry must not interrupt the driver again.
+  assert(engine.setOutputConfig("{\"preferredBufferSize\":8192,\"asioOutputChannelStart\":4}") == TAE_RESULT_OK);
+  assert(g_backendRegistry.snapshots().front().openCalls == 3);
+}
+
+void testAsioTopologyFailureRestoresPreviousChannelsBufferAndPause() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setOutputBackend("asio") == TAE_RESULT_OK);
+  assert(engine.setOutputConfig("{\"preferredBufferSize\":512,\"asioOutputChannelStart\":2}") == TAE_RESULT_OK);
+  assert(engine.play("asio-topology-rollback.flac", 0.0) == TAE_RESULT_OK);
+  assert(waitForStartedBackendCount(1));
+  assert(engine.pause() == TAE_RESULT_OK);
+  g_fakeTopologyStartFailures = 1;
+  assert(engine.setOutputConfig("{\"preferredBufferSize\":1024,\"asioOutputChannelStart\":4}") == TAE_RESULT_INVALID_ARGUMENT);
+  const auto snapshots = g_backendRegistry.snapshots();
+  assert(snapshots.size() == 1 && snapshots.front().openCalls == 3);
+  assert(snapshots.front().startCalls == 3);
+  assert(snapshots.front().outputConfig.asioOutputChannelStart == 2);
+  assert(snapshots.front().outputConfig.preferredBufferSize == 512);
+  assertLatestPlaybackContains(engine, "\"state\":\"paused\"");
+  assertLatestPlaybackContains(engine, "\"bufferSizeFrames\":512");
+}
+
 void testWasapiExclusiveTopologyStartFailureRollsBackAndPreservesPausedState() {
   EngineHarness harness;
   auto& engine = harness.engine();
@@ -4854,6 +4906,8 @@ int main() {
   RUN_RUNTIME_CASE(testSeekReevaluatesDsdPath());
   RUN_RUNTIME_CASE(testPausedSettingsFallbackBeforeResume());
   RUN_RUNTIME_CASE(testWasapiExclusiveTopologyUpdateReopensAndResumesPlaying());
+  RUN_RUNTIME_CASE(testAsioBufferAndOutputChannelChangesReopenWithoutConsumingPausedAudio());
+  RUN_RUNTIME_CASE(testAsioTopologyFailureRestoresPreviousChannelsBufferAndPause());
   RUN_RUNTIME_CASE(testExclusiveAutoReleasePreservesPauseAcrossBackends());
   RUN_RUNTIME_CASE(testExclusiveAutoReleaseDefaultsOffAndIgnoresSharedOutput());
   RUN_RUNTIME_CASE(testExclusiveReleasedPauseEditsAndResumeFailureRetainContext());

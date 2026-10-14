@@ -133,6 +133,7 @@
       .side-menu,
       .streaming-sidebar,
       .title-bar,
+      .title-bar-background,
       .main-content,
       .home,
       .song-list,
@@ -273,27 +274,79 @@
     --te-chrome-text: var(--te-settings-background-text);
     color: var(--te-settings-background-text) !important;
   }
+  /* A custom background replaces the dark artwork stage. Its theme text tone
+     must follow the app tone too, including chrome outside the playing page. */
+  html[data-te-player-custom-background='on'][data-te-player-text-tone='theme']
+    :is(.playing-music, .title-bar-immersive, .title-bar-glass, .player-bar-glass),
   html[data-te-player-text-tone='light']
-    :is(.playing-music, body .app-shell .title-bar-glass, body .app-shell .player-bar-glass),
+    :is(.playing-music, .title-bar-immersive, .title-bar-glass, .player-bar-glass),
   html[data-te-player-text-tone='dark']
-    :is(.playing-music, body .app-shell .title-bar-glass, body .app-shell .player-bar-glass) {
+    :is(.playing-music, .title-bar-immersive, .title-bar-glass, .player-bar-glass) {
     --te-playback-page-text: var(--te-player-background-text);
     --te-playback-page-muted: var(--te-player-background-muted);
     --te-playback-track-title: var(--te-player-background-text);
     --te-playback-track-artist: var(--te-player-background-muted);
     --te-playback-track-album: var(--te-player-background-muted);
     --te-playback-lyric-text: var(--te-player-background-muted);
+    --te-playback-lyric-hover-text: var(--te-player-background-text);
     --te-playback-lyric-active-text: var(--te-player-background-text);
+    --te-playback-lyric-translation: var(--te-player-background-muted);
+    --te-playback-lyric-translation-active: var(--te-player-background-text);
+    --te-playback-lyric-harmony: var(--te-player-background-muted);
+    --te-playback-lyric-harmony-active: var(--te-player-background-text);
+    --te-playback-lyric-romanization: var(--te-player-background-muted);
+    --te-playback-lyric-romanization-active: var(--te-player-background-text);
+    --te-playback-cover-placeholder-text: var(--te-player-background-muted);
     --te-playback-control-text: var(--te-player-background-text);
+    --te-playback-control-hover-text: var(--te-player-background-text);
+    --te-playback-control-surface: color-mix(
+      in srgb,
+      var(--te-player-background-text) 8%,
+      transparent
+    );
+    --te-playback-control-hover-surface: color-mix(
+      in srgb,
+      var(--te-player-background-text) 14%,
+      transparent
+    );
+    --te-playback-control-border: color-mix(
+      in srgb,
+      var(--te-player-background-text) 10%,
+      transparent
+    );
+    --te-playback-control-hover-border: color-mix(
+      in srgb,
+      var(--te-player-background-text) 16%,
+      transparent
+    );
+    --te-playback-bar-surface: color-mix(
+      in srgb,
+      var(--te-player-background-color) 72%,
+      transparent
+    );
+    --te-playback-bar-solid: var(--te-player-background-color);
+    --te-playback-bar-flat-surface: var(--te-player-background-color);
+    --te-playback-icon-filter: brightness(0);
     --te-neutral-900: var(--te-player-background-text);
     --te-neutral-500: var(--te-player-background-muted);
     --te-chrome-text: var(--te-player-background-text);
     --te-shell-control-text: var(--te-player-background-text);
-    --te-flat-bar-glass-text: var(--te-player-background-text);
-    --te-flat-bar-muted: var(--te-player-background-muted);
+    /* Flat strip defaults are declared on the bar itself, so these overrides
+       need layer priority rather than relying on inherited variables. */
+    --te-flat-bar-glass-text: var(--te-player-background-text) !important;
+    --te-flat-bar-control: var(--te-player-background-text) !important;
+    --te-flat-bar-control-hover-text: var(--te-player-background-text) !important;
+    --te-flat-bar-control-hover-bg: var(--te-playback-control-hover-surface) !important;
+    --te-flat-bar-muted: var(--te-player-background-muted) !important;
     --text-primary: var(--te-player-background-text);
     --text-secondary: var(--te-player-background-muted);
     color: var(--te-player-background-text) !important;
+  }
+
+  html[data-te-player-text-tone='light'] :is(.playing-music, .player-bar-glass),
+  html[data-theme='dark'][data-te-player-custom-background='on'][data-te-player-text-tone='theme']
+    :is(.playing-music, .player-bar-glass) {
+    --te-playback-icon-filter: brightness(0) invert(1);
   }
 
   /* Overlays retain the theme's readable surface and foreground palette. */

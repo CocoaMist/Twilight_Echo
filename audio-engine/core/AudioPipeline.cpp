@@ -99,10 +99,12 @@ UpmixConfig upmixConfigFromOutputConfig(const OutputConfig& config) noexcept {
   return upmix;
 }
 
-bool wasapiExclusiveTopologyChanged(
+bool outputTopologyChanged(
     const std::string& backendId,
     const OutputConfig& previous,
     const OutputConfig& next) noexcept {
+  if (backendId == "asio") return previous.preferredBufferSize != next.preferredBufferSize ||
+      previous.asioOutputChannelStart != next.asioOutputChannelStart;
   return backendId == "wasapi-exclusive" &&
          (previous.preferredBufferSize != next.preferredBufferSize ||
           previous.wasapiExclusivePushMode != next.wasapiExclusivePushMode);
@@ -4056,7 +4058,7 @@ bool AudioPipeline::setOutputConfig(const OutputConfig& config, std::string* err
     renderOutputFormat_ = outputFormat_;
   };
 
-  if (!output_ || !wasapiExclusiveTopologyChanged(backendId_, previousConfig, config)) {
+  if (!output_ || !outputTopologyChanged(backendId_, previousConfig, config)) {
     outputConfig_ = config;
     applyRoutingLocked(config);
     if (output_ && !output_->setOutputConfig(config, error)) {
@@ -4070,11 +4072,12 @@ bool AudioPipeline::setOutputConfig(const OutputConfig& config, std::string* err
     return true;
   }
 
-  // WASAPI Exclusive fixes its event/push mode and buffer duration during
-  // IAudioClient::Initialize. A live assignment cannot change that topology.
+  // WASAPI fixes its mode/buffer duration during Initialize; ASIO fixes its
+  // buffer geometry and output channel numbers during createBuffers.
   // Keep render callbacks silent while the current backend is fully stopped,
   // then only publish the requested config after the candidate has reopened
   // and started. The previous topology is reopened on every candidate failure.
+  const std::string backendLabel = backendId_ == "asio" ? "ASIO" : "WASAPI Exclusive";
   renderState_.store(PipelineState::Paused, std::memory_order_release);
   lock.unlock();
   // The reopen below runs with mutex_ released; serialize it against
@@ -4139,7 +4142,7 @@ bool AudioPipeline::setOutputConfig(const OutputConfig& config, std::string* err
     const bool candidateRaisedOutputFailure =
         deviceInvalidated_.load(std::memory_order_acquire) || renderError_.load(std::memory_order_acquire);
     if (candidateRaisedOutputFailure) {
-      candidateError = outputEventMessage_.empty() ? "WASAPI Exclusive candidate reported an output failure" :
+      candidateError = outputEventMessage_.empty() ? backendLabel + " candidate reported an output failure" :
                                                      outputEventMessage_;
       candidateStarted = false;
     }
@@ -4151,6 +4154,7 @@ bool AudioPipeline::setOutputConfig(const OutputConfig& config, std::string* err
     lock.lock();
     outputConfig_ = previousConfig;
     if (rollbackStarted) {
+      refreshOpenedOutputLocked(output);
       deviceInvalidated_ = false;
       renderError_ = false;
       state_ = previousState;
@@ -4158,17 +4162,17 @@ bool AudioPipeline::setOutputConfig(const OutputConfig& config, std::string* err
       updatePerfectLocked();
       publishStatusLocked();
       if (error) {
-        *error = "WASAPI Exclusive topology update failed and the previous topology was restored: " +
+        *error = backendLabel + " topology update failed and the previous topology was restored: " +
                  candidateError;
       }
     } else {
       state_ = PipelineState::Stopped;
       renderState_.store(PipelineState::Stopped, std::memory_order_release);
       outputInfo_.perfectReasonCode = "topology_rollback_failed";
-      outputInfo_.perfectReason = rollbackError.empty() ? "WASAPI Exclusive rollback failed" : rollbackError;
+      outputInfo_.perfectReason = rollbackError.empty() ? backendLabel + " rollback failed" : rollbackError;
       publishStatusLocked();
       if (error) {
-        *error = "WASAPI Exclusive topology update failed: " + candidateError +
+        *error = backendLabel + " topology update failed: " + candidateError +
                  "; rollback failed: " + rollbackError;
       }
     }
@@ -4177,6 +4181,7 @@ bool AudioPipeline::setOutputConfig(const OutputConfig& config, std::string* err
 
   lock.lock();
   outputConfig_ = config;
+  refreshOpenedOutputLocked(output);
   applyRoutingLocked(config);
   state_ = previousState;
   renderState_.store(previousState, std::memory_order_release);

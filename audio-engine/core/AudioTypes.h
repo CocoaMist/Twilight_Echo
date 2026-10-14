@@ -64,6 +64,7 @@ struct OutputConfig {
   bool continuityFirst = false;
   int continuitySampleRate = 48000;
   uint32_t preferredBufferSize = 0;
+  uint32_t asioOutputChannelStart = 0;
   ChannelRoutingMode routingMode = ChannelRoutingMode::Auto;
   bool wasapiExclusivePushMode = false;
   bool releaseExclusiveOnPause = false;
@@ -194,6 +195,8 @@ struct OutputInfo {
     bool typedRawPath = false;
     bool processingBypassed = false;
     std::string nativeDsdNegotiation;
+    std::string asioStartupSummary;
+    bool wireLittleEndian = true;
     std::string dopRuntimeEvidence;
     std::string quirkRegistryState;
     std::string quirkFingerprint;

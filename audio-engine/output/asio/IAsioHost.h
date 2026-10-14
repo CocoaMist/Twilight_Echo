@@ -87,6 +87,7 @@ struct AsioOpenConfig {
   std::string deviceId;
   AudioFormat format;
   long bufferSizeFrames = 0;
+  int32_t outputChannelStart = 0;
   std::optional<AsioSampleFormatMapping> sampleFormatMapping;
   AsioNativeDsdControlOrder nativeDsdControlOrder = AsioNativeDsdControlOrder::Default;
   long dsdMinimumBufferFrames = 0;
@@ -169,6 +170,13 @@ class IAsioHost {
   // The buffer size the driver actually accepted; can differ from the open
   // result when createBuffers fell back to the driver's preferred size.
   virtual long activeBufferSize() const = 0;
+  virtual int activeSampleRate() const { return 0; }
+  virtual long activeLatencyFrames() const { return -1; }
+  virtual std::string startupSummary() const { return {}; }
+  // Packed source frames approved at the driver boundary. Zero means the
+  // caller must keep the conservative DSD bufferSize/8 capacity.
+  virtual size_t activeRenderFrameCapacity() const { return 0; }
+  virtual bool dsdBufferUnitConfirmed() const { return false; }
   virtual void commitOutputBuffer(long bufferIndex, size_t frameCount) {
     (void)bufferIndex;
     (void)frameCount;

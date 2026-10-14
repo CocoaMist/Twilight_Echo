@@ -2097,6 +2097,59 @@ test('module switches gate matching nodes in an active custom scene', async () =
   manager.destroy()
 })
 
+for (const readyFirst of [false, true]) {
+  test(`cold startup serializes DSP initialization when service ready arrives ${readyFirst ? 'before' : 'during'} start`, async () => {
+    const service = new DeferredAudioServiceBinding(['ApplyDspState'])
+    const manager = new AudioEngineManager(
+      { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+      {
+        audioServiceFactory: () => service,
+        scheduler: TEST_SCHEDULER,
+        deviceOptionsProvider: () => DEVICE_OPTIONS
+      }
+    )
+    try {
+      const ready = new Promise<{ restoreErrors: string[]; outputRouteSynced: boolean }>(
+        (resolve) => {
+          manager.once('audio-service-ready', resolve)
+        }
+      )
+      if (readyFirst) service.emit('ready')
+      let startupFinished = false
+      const startup = manager.start().then(() => {
+        startupFinished = true
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      assert.equal(service.deferredCalls.length, 1)
+      if (!readyFirst) service.emit('ready')
+      await new Promise((resolve) => setImmediate(resolve))
+      const concurrentGraphApplies = service.deferredCalls.length
+      service.resolveNextDeferredCall()
+      await new Promise((resolve) => setImmediate(resolve))
+      const readyAfterFirstGraph = startupFinished
+      for (let turn = 0; turn < 6; turn += 1) {
+        service.resolveNextDeferredCall()
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+      await startup
+      const event = await ready
+      assert.equal(
+        concurrentGraphApplies,
+        1,
+        "startup and ready must wait for each other's DSP ACK"
+      )
+      assert.equal(readyAfterFirstGraph, false, 'startup must also await the first ready restore')
+      assert.deepEqual(event.restoreErrors, [])
+      assert.equal(event.outputRouteSynced, true)
+      const status = await manager.getDspGraphStatus()
+      assert.equal(status.applyState, 'applied')
+      assert.equal(status.appliedRevision, status.requestedRevision)
+    } finally {
+      manager.destroy()
+    }
+  })
+}
+
 test('audio service restart replays the DSP graph and verifies the new applied revision', async () => {
   const service = new FakeAudioServiceBinding()
   const manager = new AudioEngineManager(
