@@ -546,7 +546,203 @@ test('cached audio service calls swallow timeout rejections', async () => {
   }
 })
 
-test('timed out audio service RPC terminates and restarts the unresponsive generation once', async () => {
+test('a timed out status RPC keeps a service that answers the health probe alive', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 10,
+    restartDelayMs: 5,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  const crashes: string[] = []
+  binding.on('crash', (reason: string) => crashes.push(reason))
+
+  try {
+    await assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
+    assert.equal(child.killCount, 0)
+    const probe = child.messages.find((message) => (message as { kind: string }).kind === 'ping')
+    assert.ok(probe)
+    child.emit('message', { kind: 'pong', requestId: (probe as { requestId: string }).requestId })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(child.killCount, 0)
+    assert.deepEqual(crashes, [])
+  } finally {
+    binding.destroy()
+  }
+})
+
+test('successful volume replies cancel the watchdog after a status timeout', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 10,
+    restartDelayMs: 5,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  try {
+    await assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
+    for (const volume of [0.5, 0.4, 0.3]) {
+      const pending = binding.callAsync('SetVolume', [volume])
+      const request = child.messages.at(-1) as { requestId: string }
+      child.emit('message', { kind: 'response', requestId: request.requestId, ok: true })
+      await pending
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(child.killCount, 0)
+  } finally {
+    binding.destroy()
+  }
+})
+
+test('concurrent status timeouts share one probe and stale pongs cannot rescue a replacement', async () => {
+  const children: ManualUtilityProcess[] = []
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 10,
+    restartDelayMs: 5,
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const child = new ManualUtilityProcess()
+          children.push(child)
+          return child
+        }
+      }
+    }
+  })
+  try {
+    await Promise.all([
+      assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/),
+      assert.rejects(binding.callAsync('GetVisualizationData', ['{}']), /音频服务调用超时/)
+    ])
+    const probes = children[0].messages.filter(
+      (message) => (message as { kind: string }).kind === 'ping'
+    )
+    assert.equal(probes.length, 1)
+    children[0].emit('message', { kind: 'pong', requestId: 'unrelated-probe' })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(children[0].killCount, 1)
+    assert.equal(children.length, 2)
+    await assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
+    children[0].emit('message', {
+      kind: 'pong',
+      requestId: (probes[0] as { requestId: string }).requestId
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(children[1].killCount, 1)
+    assert.equal(children.length, 3)
+  } finally {
+    binding.destroy()
+  }
+})
+
+test('starting a slow operation cancels a pending health probe until the operation replies', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 10,
+    topologyRequestTimeoutMs: 100,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  try {
+    await assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
+    const pause = binding.callAsync('Pause', [])
+    const request = child.messages.at(-1) as { requestId: string }
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(child.killCount, 0)
+    child.emit('message', { kind: 'response', requestId: request.requestId, ok: true })
+    await pause
+  } finally {
+    binding.destroy()
+  }
+})
+
+test('destroy cancels an outstanding health probe without restarting or emitting a crash', async () => {
+  const child = new ManualUtilityProcess()
+  let forks = 0
+  const crashes: string[] = []
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 10,
+    restartDelayMs: 5,
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          forks += 1
+          return child
+        }
+      }
+    }
+  })
+  binding.on('crash', (reason: string) => crashes.push(reason))
+  await assert.rejects(binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
+  binding.destroy()
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(forks, 1)
+  assert.equal(child.killCount, 1)
+  assert.deepEqual(crashes, [])
+})
+
+test('a rejected fire-and-forget command leaves other RPCs waiting for their own replies', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 100,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  try {
+    const playback = binding.callAsync('GetPlaybackInfo', []).then(
+      (value) => ({ value, error: '' }),
+      (error: Error) => ({ value: undefined, error: error.message })
+    )
+    const read = child.messages[0] as { requestId: string }
+    binding.SetDspPluginChain('{"plugins":[]}')
+    const command = child.messages[1] as { requestId: string }
+    child.emit('message', {
+      kind: 'response',
+      requestId: command.requestId,
+      ok: false,
+      error: 'plugin rejected'
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    child.emit('message', {
+      kind: 'response',
+      requestId: read.requestId,
+      ok: true,
+      value: '{"state":"paused"}'
+    })
+    assert.deepEqual(await playback, { value: '{"state":"paused"}', error: '' })
+    assert.equal(child.killCount, 0)
+    assert.match(binding.GetLastError(), /plugin rejected/)
+  } finally {
+    binding.destroy()
+  }
+})
+
+test('pause can finish its fade and device release beyond the status polling deadline', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 5,
+    topologyRequestTimeoutMs: 100,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  try {
+    const pause = binding.callAsync('Pause', []).then(
+      () => '',
+      (error: Error) => error.message
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const request = child.messages[0] as { requestId: string }
+    child.emit('message', { kind: 'response', requestId: request.requestId, ok: true })
+    assert.equal(await pause, '')
+    assert.equal(child.killCount, 0)
+  } finally {
+    binding.destroy()
+  }
+})
+
+test('timed out audio service RPC terminates and restarts only after an unanswered health probe', async () => {
   const children: ManualUtilityProcess[] = []
   const electron = {
     utilityProcess: {
@@ -567,9 +763,10 @@ test('timed out audio service RPC terminates and restarts the unresponsive gener
   binding.on('crash', (reason: string) => crashes.push(reason))
 
   try {
-    // A fast-tier status RPC: with no slow-tier request in flight, a timeout
-    // here is genuine evidence of a wedged child and must recover the service.
+    // A status timeout alone is insufficient. An unanswered event-loop probe
+    // confirms that this generation cannot respond and needs replacement.
     await assert.rejects(() => binding.callAsync('GetPlaybackInfo', []), /音频服务调用超时/)
+    assert.equal(children[0].killCount, 0)
     await new Promise((resolve) => setTimeout(resolve, 30))
 
     assert.equal(children[0].killCount, 1)

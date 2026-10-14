@@ -139,6 +139,8 @@ export interface OutputConfig {
   playbackPolicy?: 'bit-perfect-first' | 'continuity-first'
   continuitySampleRate?: 44100 | 48000 | 96000
   preferredBufferSize: number
+  /** Zero-based first ASIO output channel; the interface displays channel 1. */
+  asioOutputChannelStart?: number
   routingMode: ChannelRoutingMode
   wasapiExclusivePushMode?: boolean
   /** After float decode/DSP, modulate PCM to DSD64/128/256 via native DSD or DoP. */
@@ -199,6 +201,8 @@ export interface OutputDiagnostics {
   typedRawPath?: boolean
   processingBypassed?: boolean
   nativeDsdNegotiation?: string
+  asioStartupSummary?: string
+  wireLittleEndian?: boolean
   dopRuntimeEvidence?: string
   quirkRegistryState?: string
   quirkFingerprint?: string
@@ -463,6 +467,7 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   decodedChannels: number
   decodedSampleFormat: string
   outputBackend: string
+  /** Requested output device ID; runtime names live in outputInfo. */
   outputDevice: string
   outputInfo: OutputInfo
   actualBackend: string

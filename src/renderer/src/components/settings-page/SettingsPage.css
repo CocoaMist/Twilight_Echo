@@ -2838,7 +2838,10 @@ html[data-te-motion='full'] .swatch.active {
   box-shadow: 0 32px 100px rgba(2, 6, 23, 0.42);
 }
 
-.sponsor-list-dialog,
+.sponsor-list-dialog {
+  width: min(600px, calc(100vw - 56px));
+}
+
 .qq-group-dialog {
   width: min(520px, calc(100vw - 56px));
 }
@@ -3101,39 +3104,44 @@ html[data-te-motion='full'] .swatch.active {
 
 .sponsor-list-entries {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  counter-reset: sponsor;
 }
 
 .sponsor-list-entry {
-  display: flex;
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 10px 12px;
+  min-height: 64px;
+  padding: 12px 13px;
   border: 1px solid var(--te-card-border);
-  border-radius: 12px;
-  background: var(--te-subtle-bg);
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(var(--te-primary-rgb), 0.09), var(--te-subtle-bg) 58%);
+  counter-increment: sponsor;
+  transition:
+    transform 0.16s var(--te-ease-soft),
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
-.sponsor-list-avatar {
+.sponsor-list-entry::before {
   display: grid;
+  width: 30px;
+  height: 30px;
   flex: 0 0 auto;
   place-items: center;
-  width: 44px;
-  height: 44px;
-  overflow: hidden;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--te-primary-500), var(--te-accent-cyan));
-  color: var(--te-on-primary, white);
-  font-size: calc(var(--te-font-size-body, 14px) * 1.14286);
+  border-radius: 10px;
+  background: rgba(var(--te-primary-rgb), 0.12);
+  color: var(--brand-600, var(--te-primary-500));
+  content: counter(sponsor, decimal-leading-zero);
+  font-size: calc(var(--te-font-size-body, 14px) * 0.71429);
+  font-variant-numeric: tabular-nums;
   font-weight: 700;
-}
-
-.sponsor-list-avatar img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  letter-spacing: 0.04em;
 }
 
 .sponsor-list-entry-copy {
@@ -3143,27 +3151,34 @@ html[data-te-motion='full'] .swatch.active {
 }
 
 .sponsor-list-entry-copy strong {
-  overflow: hidden;
+  display: block;
   color: var(--te-settings-text);
   font-size: calc(var(--te-font-size-body, 14px) * 1);
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sponsor-list-entry-copy small {
-  overflow: hidden;
-  color: var(--te-settings-text-muted);
-  font-size: calc(var(--te-font-size-body, 14px) * 0.78571);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .sponsor-list-entry-heart {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   margin-left: auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.12);
   color: var(--te-warning-500);
   font-size: calc(var(--te-font-size-body, 14px) * 0.92857);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sponsor-list-entry:hover {
+    transform: translateY(-2px);
+    border-color: rgba(var(--te-primary-rgb), 0.3);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  }
 }
 
 .sponsor-list-empty > span {
@@ -3242,15 +3257,16 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-qr-card {
 
 html[data-theme='dark'] .sponsor-dialog .sponsor-list-entry {
   border-color: var(--te-card-border);
-  background: var(--te-subtle-bg);
+  background: linear-gradient(135deg, rgba(var(--te-primary-rgb), 0.13), var(--te-subtle-bg) 58%);
 }
 
 html[data-theme='dark'] .sponsor-dialog .sponsor-list-entry-copy strong {
   color: var(--te-settings-text);
 }
 
-html[data-theme='dark'] .sponsor-dialog .sponsor-list-entry-copy small {
-  color: var(--te-settings-text-muted);
+html[data-theme='dark'] .sponsor-dialog .sponsor-list-entry::before {
+  background: rgba(var(--te-primary-rgb), 0.18);
+  color: var(--te-primary-300, #93c5fd);
 }
 
 html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
@@ -3278,6 +3294,10 @@ html[data-theme='dark'] .sponsor-dialog .sponsor-dialog-notice {
 
   .sponsor-qr-image-shell {
     aspect-ratio: 3 / 2;
+  }
+
+  .sponsor-list-entries {
+    grid-template-columns: 1fr;
   }
 }
 

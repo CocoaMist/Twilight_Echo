@@ -31,7 +31,8 @@
 .song-list {
   display: grid;
   position: relative;
-  padding: calc(32px + 30px) min(4.4vw, 48px) 132px;
+  padding: calc(32px + 30px) min(4.4vw, 48px)
+    max(132px, calc(var(--te-playbar-bottom-clearance, 0px) + 12px));
   overflow-y: auto;
   overflow-x: hidden;
   /* Ambient tints only: the local wallpaper stays on the body (te-local-surface)
@@ -259,31 +260,6 @@
   color: var(--te-primary-600);
 }
 
-.btn-back {
-  position: absolute;
-  inset-inline-start: 0;
-  inset-block-end: 4px;
-  z-index: 1;
-  width: 32px;
-  height: 32px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(var(--te-font-size-body, 14px) * 1.14286);
-  transition:
-    background 0.18s,
-    border-color 0.18s,
-    color 0.18s,
-    transform 0.18s var(--te-ease-soft),
-    box-shadow 0.18s;
-  flex-shrink: 0;
-}
-
-.btn-back:hover {
-  transform: translateX(-1px);
-}
-
 .song-list-title {
   font-family: var(--te-font-display, var(--te-font-rounded));
   font-size: clamp(28px, 2.8vw, 36px);
@@ -313,10 +289,6 @@
   align-items: center;
   min-height: 40px;
   margin-bottom: 12px;
-}
-
-.album-detail-toolbar .header-left {
-  flex: 0 0 auto;
 }
 
 .album-detail-toolbar .header-right {
@@ -1632,11 +1604,6 @@
     padding: 52px 10px 0;
   }
 
-  .btn-back {
-    inset-block: 0 auto;
-    inset-inline-start: 0;
-  }
-
   .library-play-actions {
     padding-inline: 10px;
   }
@@ -1660,7 +1627,7 @@
 
   .song-list-header.album-detail-toolbar {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
     padding: 0 4px;
@@ -1801,6 +1768,9 @@
   right: 8px;
   width: 26px;
   height: 26px;
+  border: 0;
+  padding: 0;
+  color: #fff;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.5);
   display: flex;
@@ -1818,7 +1788,8 @@
   position: relative;
 }
 
-.playlist-card:hover .playlist-delete-btn {
+.playlist-card:hover .playlist-delete-btn,
+.playlist-card:focus-within .playlist-delete-btn {
   opacity: 1;
 }
 

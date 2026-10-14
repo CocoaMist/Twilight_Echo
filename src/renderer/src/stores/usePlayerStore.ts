@@ -1868,7 +1868,7 @@ watch(
 watch(
   () => appSettings.value?.audioOutputConfig,
   (config) => {
-    audioOutputConfig.value = normalizeOutputConfig(config, 8192)
+    audioOutputConfig.value = normalizeOutputConfig(config, 32768)
   },
   { deep: true, immediate: true }
 )

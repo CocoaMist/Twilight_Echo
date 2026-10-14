@@ -16,6 +16,8 @@ type AudioServiceRequest = {
   args: unknown[]
 }
 
+type AudioServiceMessage = AudioServiceRequest | { kind: 'ping'; requestId: string }
+
 type AudioServiceResponse = {
   kind: 'response'
   requestId: string
@@ -28,20 +30,21 @@ type ParentPort = {
   postMessage: (
     message:
       | AudioServiceResponse
+      | { kind: 'pong'; requestId: string }
       | { kind: 'ready'; capabilities: AudioServiceCapabilities }
       | { kind: 'fatal'; error: string }
   ) => void
-  on: (event: 'message', listener: (message: AudioServiceRequest) => void) => void
+  on: (event: 'message', listener: (message: AudioServiceMessage) => void) => void
 }
 
 type ElectronParentPort = {
   postMessage: ParentPort['postMessage']
-  on: (event: 'message', listener: (event: { data: AudioServiceRequest }) => void) => void
+  on: (event: 'message', listener: (event: { data: AudioServiceMessage }) => void) => void
 }
 
 type NodeIpcProcess = {
   send?: ParentPort['postMessage']
-  on?: (event: 'message', listener: (message: AudioServiceRequest) => void) => void
+  on?: (event: 'message', listener: (message: AudioServiceMessage) => void) => void
 }
 
 const maybeElectronParentPort = (process as unknown as { parentPort?: ElectronParentPort })
@@ -96,6 +99,10 @@ if (nativeContractError) {
 }
 
 servicePort.on('message', (message) => {
+  if (message.kind === 'ping') {
+    servicePort.postMessage({ kind: 'pong', requestId: message.requestId })
+    return
+  }
   if (message.kind !== 'request') return
   void handleRequest(message)
 })
