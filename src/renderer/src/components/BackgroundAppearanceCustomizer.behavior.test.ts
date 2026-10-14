@@ -118,7 +118,9 @@ app.whenReady().then(async()=>{
   await win.webContents.executeJavaScript('window.runAppearanceTests()');
   for(const page of ['local','streaming','player','settings'])for(const blur of [0,30]){
    await win.webContents.executeJavaScript('window.prepareAppearancePixels('+JSON.stringify(page)+','+blur+')');
-   for(const point of [{x:600,y:400,width:1,height:1},{x:1270,y:400,width:1,height:1}]){
+   const viewport=(await win.webContents.capturePage()).getSize();
+   // Windows runners can clamp a hidden window to their smaller virtual display.
+   for(const point of [{x:600,y:400,width:1,height:1},{x:viewport.width-10,y:400,width:1,height:1}]){
     const pixel=await capturePixel(point);
     if(Math.abs(pixel[0]-43)>3||Math.abs(pixel[1]-29)>3||Math.abs(pixel[2]-19)>3)throw new Error(page+' background brightness/dim or blur edge mismatch: '+[...pixel]);
    }

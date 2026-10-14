@@ -276,7 +276,7 @@ async function runHomeReturnTests(){
   document.documentElement.dataset.theme=tone
   document.documentElement.dataset.teMotion=motion
   for(const [name,leave,back] of returns){
-   const before=measure();leave();await nextTick();await sleep(350)
+   const before=measure();leave();await nextTick();await until(()=>!document.querySelector('.feature-card'))
    expect(!document.querySelector('.feature-card'),'home must leave for '+name)
    back();await nextTick()
    const samples=[]
