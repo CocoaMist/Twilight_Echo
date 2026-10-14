@@ -40,7 +40,6 @@ import { usePlaybarAutoHide } from './player-bar/usePlaybarAutoHide.ts'
 import { resolveSeekTargetSeconds, type PlayerBarMode } from '../../../shared/playerBar.ts'
 import {
   resolvePlayerBarRegions,
-  isDefaultStandardPlayerBar,
   PLAYER_BAR_REGION_NAMES,
   type PlayerBarRegionName
 } from '../../../shared/playerBarLayout.ts'
@@ -274,7 +273,7 @@ const liquidGlassActive = computed(
  * stylesheet both address the bar through them, so only the contents move.
  */
 const barRegions = computed(() => {
-  const regions = resolvePlayerBarRegions(settings.value.playerBar.layout, props.mode, props.glass)
+  const regions = resolvePlayerBarRegions(settings.value.playerBar.layout, props.mode)
   return PLAYER_BAR_REGION_NAMES.map((name: PlayerBarRegionName) => ({
     name,
     className: `player-${name}`,
@@ -284,12 +283,6 @@ const barRegions = computed(() => {
     items: regions[name]
   }))
 })
-const groupedStandardLayout = computed(
-  () =>
-    props.mode === 'standard' &&
-    isDefaultStandardPlayerBar(resolvePlayerBarRegions(settings.value.playerBar.layout, props.mode))
-)
-const referenceStandardLayout = computed(() => props.glass && groupedStandardLayout.value)
 
 const lyricsManagement = useLyricsManagement()
 const desktopLyricsOn = ref(settings.value.desktopLyrics.enabled)
@@ -1443,8 +1436,7 @@ const playbarHidden = computed(
 const shellDataAttrs = computed(() => ({
   'data-te-playbar-mode': props.mode,
   'data-te-playbar-hidden': playbarHidden.value ? 'true' : 'false',
-  'data-te-playbar-visibility': fullyHidden.value ? 'hidden' : 'auto',
-  'data-te-playing-page': props.glass ? 'true' : 'false'
+  'data-te-playbar-visibility': fullyHidden.value ? 'hidden' : 'auto'
 }))
 
 // A track change or play/pause is feedback the user asked for; surface it briefly
@@ -1456,31 +1448,12 @@ watch(
   }
 )
 
-let pageChangeAnimation: Animation | null = null
-watch(
-  () => props.glass,
-  () => {
-    resetGlassPointer()
-    pageChangeAnimation?.cancel()
-    if (!motionAllowsPointer() || window.matchMedia('(prefers-reduced-motion: reduce)').matches)
-      return
-    // Fade the changed grouping briefly without scaling text or moving hit targets.
-    pageChangeAnimation =
-      playerBarRef.value?.animate([{ opacity: 0.45 }, { opacity: 1 }], {
-        duration: 180,
-        easing: 'ease-out'
-      }) ?? null
-  },
-  { flush: 'post' }
-)
-
 onMounted(() => {
   if (!props.preview) void syncExtensions()
   syncGlassPointer()
 })
 
 onBeforeUnmount(() => {
-  pageChangeAnimation?.cancel()
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = null
   stopResizeSidebar()
@@ -1690,12 +1663,9 @@ onBeforeUnmount(() => {
       class="player-bar"
       :class="{
         'player-bar-glass': glass,
-        'player-bar-docked': glass && isStandard,
         'player-bar-liquid': liquidGlassActive,
         'player-bar-mini': isMini,
         'player-bar-compact': isCompact,
-        'player-bar-reference': referenceStandardLayout,
-        'player-bar-transport-grouped': groupedStandardLayout,
         'player-bar-compact-visualizer': showCompactVisualizer
       }"
       :style="{
@@ -2198,8 +2168,7 @@ onBeforeUnmount(() => {
       class="player-bar player-bar-idle"
       :class="{
         'player-bar-mini': isMini,
-        'player-bar-compact': isCompact,
-        'player-bar-transport-grouped': isStandard
+        'player-bar-compact': isCompact
       }"
       aria-label="播放器，尚未选择歌曲"
     >
@@ -2218,14 +2187,6 @@ onBeforeUnmount(() => {
         </template>
       </div>
       <div class="player-center">
-        <button
-          v-if="isStandard"
-          class="ctrl-btn mode-btn-right"
-          disabled
-          aria-label="顺序播放，请先选择歌曲"
-        >
-          <img :src="sequentialIcon" alt="" />
-        </button>
         <div v-if="!isMini" class="player-controls">
           <button class="ctrl-btn previous-button" disabled aria-label="上一首，请先选择歌曲">
             <PlaybackIcon name="previous" />
@@ -2235,11 +2196,6 @@ onBeforeUnmount(() => {
           </button>
           <button class="ctrl-btn next-button" disabled aria-label="下一首，请先选择歌曲">
             <PlaybackIcon name="next" />
-          </button>
-        </div>
-        <div v-if="isStandard" class="volume-anchor">
-          <button class="volume-control-button icon-btn" disabled aria-label="音量，请先选择歌曲">
-            <PlayerControlIcon name="volume" />
           </button>
         </div>
         <PlayerSeekProgress
@@ -2257,6 +2213,19 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="player-right">
+        <button
+          v-if="isStandard"
+          class="ctrl-btn mode-btn-right"
+          disabled
+          aria-label="顺序播放，请先选择歌曲"
+        >
+          <img :src="sequentialIcon" alt="" />
+        </button>
+        <div v-if="isStandard" class="volume-anchor">
+          <button class="volume-control-button icon-btn" disabled aria-label="音量，请先选择歌曲">
+            <PlayerControlIcon name="volume" />
+          </button>
+        </div>
         <button class="icon-btn" disabled aria-label="歌词，请先选择歌曲">
           <span class="desktop-lyrics-icon" aria-hidden="true">词</span>
         </button>

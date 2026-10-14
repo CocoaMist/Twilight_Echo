@@ -77,14 +77,14 @@ export type PlayerBarRegions = Record<PlayerBarRegionName, PlayerBarControlId[]>
 export type PlayerBarLayoutSettings = Record<PlayerBarMode, PlayerBarRegions>
 
 /**
- * Ordinary pages keep artwork and metadata on the left. The now-playing page
- * applies its separate desktop arrangement without changing saved layouts.
+ * Artwork and metadata stay on the left, transport and seeking in the center,
+ * and utility controls on the right. Mini's progress rail owns its center.
  */
 export const DEFAULT_PLAYER_BAR_LAYOUT: PlayerBarLayoutSettings = {
   standard: {
     left: ['cover', 'trackInfo'],
-    center: ['playMode', 'transport', 'volume'],
-    right: ['favorite', 'queue', 'miniPlayer', 'desktopLyrics', 'hifi']
+    center: ['transport'],
+    right: ['favorite', 'playMode', 'volume', 'queue', 'miniPlayer', 'desktopLyrics', 'hifi']
   },
   mini: {
     left: ['playPause'],
@@ -104,24 +104,22 @@ export const DEFAULT_PLAYER_BAR_LAYOUT: PlayerBarLayoutSettings = {
   }
 }
 
-export const NOW_PLAYING_STANDARD_REGIONS: PlayerBarRegions = {
+const PREVIOUS_NOW_PLAYING_REGIONS: PlayerBarRegions = {
   left: ['trackInfo', 'favorite', 'miniPlayer'],
   center: ['playMode', 'transport', 'volume'],
   right: ['hifi', 'desktopLyrics', 'queue']
 }
 
-const LEGACY_STANDARD_REGIONS: PlayerBarRegions = {
+const PREVIOUS_STANDARD_REGIONS: PlayerBarRegions = {
   left: ['cover', 'trackInfo'],
-  center: ['transport'],
-  right: ['favorite', 'playMode', 'volume', 'queue', 'miniPlayer', 'desktopLyrics', 'hifi']
+  center: ['playMode', 'transport', 'volume'],
+  right: ['favorite', 'queue', 'miniPlayer', 'desktopLyrics', 'hifi']
 }
 
-function isLegacyStandardPlayerBar(raw: unknown): boolean {
-  return sameRegions(raw, LEGACY_STANDARD_REGIONS) || sameRegions(raw, NOW_PLAYING_STANDARD_REGIONS)
-}
-
-export function isDefaultStandardPlayerBar(regions: PlayerBarRegions): boolean {
-  return sameRegions(regions, DEFAULT_PLAYER_BAR_LAYOUT.standard)
+function isPreviousDefaultPlayerBar(raw: unknown): boolean {
+  return (
+    sameRegions(raw, PREVIOUS_STANDARD_REGIONS) || sameRegions(raw, PREVIOUS_NOW_PLAYING_REGIONS)
+  )
 }
 
 function sameRegions(raw: unknown, expected: PlayerBarRegions): boolean {
@@ -204,7 +202,7 @@ export function normalizePlayerBarLayout(raw: unknown): PlayerBarLayoutSettings 
   const result = {} as PlayerBarLayoutSettings
   for (const mode of Object.keys(DEFAULT_PLAYER_BAR_LAYOUT) as PlayerBarMode[]) {
     const stored =
-      mode === 'standard' && isLegacyStandardPlayerBar(value[mode]) ? undefined : value[mode]
+      mode === 'standard' && isPreviousDefaultPlayerBar(value[mode]) ? undefined : value[mode]
     result[mode] = normalizeRegions(stored, DEFAULT_PLAYER_BAR_LAYOUT[mode], mode)
   }
   return result
@@ -230,18 +228,13 @@ export function clonePlayerBarLayout(value: PlayerBarLayoutSettings): PlayerBarL
  */
 export function resolvePlayerBarRegions(
   layout: PlayerBarLayoutSettings | undefined,
-  mode: PlayerBarMode,
-  onPlayingPage = false
+  mode: PlayerBarMode
 ): PlayerBarRegions {
   const stored = layout?.[mode] ?? DEFAULT_PLAYER_BAR_LAYOUT[mode]
   // Migrate exact former defaults; custom arrangements keep their placement.
-  const regions =
-    mode === 'standard' && isLegacyStandardPlayerBar(stored)
-      ? DEFAULT_PLAYER_BAR_LAYOUT.standard
-      : stored
-  return onPlayingPage && mode === 'standard' && isDefaultStandardPlayerBar(regions)
-    ? NOW_PLAYING_STANDARD_REGIONS
-    : regions
+  return mode === 'standard' && isPreviousDefaultPlayerBar(stored)
+    ? DEFAULT_PLAYER_BAR_LAYOUT.standard
+    : stored
 }
 
 /** Controls this shape has not placed anywhere, for the editor's add menu. */

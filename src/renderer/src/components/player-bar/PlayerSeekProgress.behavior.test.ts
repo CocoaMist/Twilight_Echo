@@ -76,7 +76,7 @@ const {volumeOpen,toggleVolume}=useFloatingPanels(shell)
 const setVolume=(value:number)=>volume.value=value,setUnityVolume=()=>setVolume(1)
 ${volumeHandlers}
 window.volumeFixture={volume,glass}
-</script><template><div ref="shell" class="player-bar-shell" data-te-playbar-mode="standard"><div class="player-bar player-bar-transport-grouped"><div class="player-center">${volumeTemplate}</div></div></div></template><style scoped src="${join(workspace, 'src/renderer/src/components/player-bar/PlayerBar.css').replaceAll('\\', '/')}"></style>`
+</script><template><div ref="shell" class="player-bar-shell" data-te-playbar-mode="standard"><div class="player-bar"><div class="player-right">${volumeTemplate}</div></div></div></template><style scoped src="${join(workspace, 'src/renderer/src/components/player-bar/PlayerBar.css').replaceAll('\\', '/')}"></style>`
     )
     await writeFile(join(directory, 'entry.ts'), runtime)
     await build({
@@ -125,7 +125,7 @@ window.volumeFixture={volume,glass}
 const runtime = `
 import {createApp,h,ref,nextTick} from 'vue'
 import SeekProgress from '${join(workspace, 'src/renderer/src/components/player-bar/PlayerSeekProgress.vue').replaceAll('\\', '/')}'
-import {DEFAULT_PLAYER_BAR_LAYOUT,NOW_PLAYING_STANDARD_REGIONS} from '${join(workspace, 'src/shared/playerBarLayout.ts').replaceAll('\\', '/')}'
+import {DEFAULT_PLAYER_BAR_LAYOUT} from '${join(workspace, 'src/shared/playerBarLayout.ts').replaceAll('\\', '/')}'
 import IdleFixture from './IdleFixture.vue'
 import VolumeFixture from './VolumeFixture.vue'
 const reference=ref(false)
@@ -134,6 +134,7 @@ for(const kind of ['pointerdown','pointerup','pointercancel','gotpointercapture'
 const check=(value,message)=>{if(!value)throw Error(message)}
 const scoped=(tag,props,children)=>h(tag,{'data-v-test':'',...props},children)
 const renderControl=id=>{
+ if(id==='cover')return scoped('div',{class:'player-cover-slot'},'')
  if(id==='trackInfo')return scoped('div',{class:'player-track-info'},[
   scoped('div',{class:'player-title-row'},[scoped('button',{class:'player-title player-title-button'},'A very long song title that must stay inside its column')]),
   scoped('button',{class:'player-artist'},'Ludovico Einaudi')])
@@ -142,12 +143,12 @@ const renderControl=id=>{
  if(id==='volume')return scoped('div',{class:'volume-anchor'},[scoped('button',{class:'icon-btn volume-control-button'},'♪')])
  return scoped('button',{class:id==='playMode'?'ctrl-btn mode-btn-right':'icon-btn '+id+'-btn'},id==='playMode'?'↻':id.slice(0,1))
 }
-const seekApp=createApp({render:()=>scoped('div',{class:'player-bar-shell','data-te-playbar-mode':'standard','data-te-playing-page':String(reference.value)},[scoped('div',{class:['player-bar player-bar-transport-grouped',reference.value?'player-bar-reference player-bar-glass player-bar-docked':'']},[
- scoped('div',{class:'player-left'},reference.value?NOW_PLAYING_STANDARD_REGIONS.left.map(renderControl):[scoped('div',{class:'player-cover-slot'},'')]),
+const seekApp=createApp({render:()=>scoped('div',{class:'player-bar-shell','data-te-playbar-mode':'standard'},[scoped('div',{class:['player-bar',reference.value?'player-bar-glass':'']},[
+ scoped('div',{class:'player-left'},DEFAULT_PLAYER_BAR_LAYOUT.standard.left.map(renderControl)),
  scoped('div',{class:'player-center'},[
-  ...(reference.value?NOW_PLAYING_STANDARD_REGIONS.center.map(renderControl):DEFAULT_PLAYER_BAR_LAYOUT.standard.center.map(renderControl)),
+  ...DEFAULT_PLAYER_BAR_LAYOUT.standard.center.map(renderControl),
   h(SeekProgress,{'data-v-test':'',key:track.value,position:position.value,duration:duration.value,live:live.value,abStart:20,abEnd:50,formatTime:s=>s.toFixed(1),onSeek:s=>{seeks.push(s);position.value=s}})
- ]),scoped('div',{class:'player-right'},reference.value?NOW_PLAYING_STANDARD_REGIONS.right.map(renderControl):DEFAULT_PLAYER_BAR_LAYOUT.standard.right.map(renderControl))
+ ]),scoped('div',{class:'player-right'},DEFAULT_PLAYER_BAR_LAYOUT.standard.right.map(renderControl))
 ])])});seekApp.mount('#app')
 const slider=()=>document.querySelector('.progress-slider')
 const frame=()=>document.querySelector('.player-bar').getBoundingClientRect()
@@ -164,9 +165,9 @@ window.prepareSeek=async(tone,glass,newLayout)=>{
  }
  await new Promise(resolve=>setTimeout(resolve,360));await new Promise(requestAnimationFrame)
  const rail=slider().getBoundingClientRect(),bar=frame(),line=document.querySelector('.progress-track').getBoundingClientRect()
- const art=document.querySelector(newLayout?'.player-left':'.player-cover-slot').getBoundingClientRect()
+ const art=document.querySelector('.player-cover-slot').getBoundingClientRect()
  check(bar.bottom-line.bottom>=8,'rail clears the rounded panel bottom')
- check(rail.left-art.right>=(newLayout?9:12),'seek target clears song actions')
+ check(rail.left-art.right>=12,'seek target clears artwork')
  check(rail.right<bar.right-20,'seek target clears the right rounded corner')
  const controls=document.querySelector('.player-controls').getBoundingClientRect()
  check(Math.abs((rail.left+rail.right)/2-(controls.left+controls.right)/2)<1,'seek rail stays centered below transport')
@@ -174,22 +175,15 @@ window.prepareSeek=async(tone,glass,newLayout)=>{
  check(rail.height>=20,'thin visual retains a large hit area')
  check(line.height<=3.1,'idle rail is thin')
  const surface=getComputedStyle(document.querySelector('.player-bar'))
- if(newLayout){
-  check(Math.abs(bar.bottom-innerHeight)<.1&&Math.abs(bar.left)<.1&&Math.abs(bar.right-innerWidth)<.1,'lyrics controls sit flush on the full viewport bottom')
-  check(surface.borderTopLeftRadius==='0px'&&surface.boxShadow==='none'&&surface.backdropFilter==='none'&&surface.backgroundColor==='rgba(0, 0, 0, 0)','lyrics controls have no floating surface: '+JSON.stringify({radius:surface.borderTopLeftRadius,shadow:surface.boxShadow,blur:surface.backdropFilter,background:surface.backgroundColor}))
- }else{
-  check(bar.bottom<innerHeight-10&&bar.left>=18&&bar.right<=innerWidth-18,'ordinary controls retain the floating inset')
-  check(parseFloat(surface.borderTopLeftRadius)>=20,'ordinary controls retain rounded corners')
- }
+ check(bar.bottom<innerHeight-10&&bar.left>=18&&bar.right<=innerWidth-18,'controls retain the floating inset on every page')
+ check(parseFloat(surface.borderTopLeftRadius)>=20,'controls retain rounded corners')
  {
   const mode=document.querySelector('.mode-btn-right').getBoundingClientRect(),volume=document.querySelector('.volume-anchor').getBoundingClientRect()
   const tools=[...document.querySelector('.player-right').children].map(el=>el.getBoundingClientRect())
-  check(mode.right<controls.left&&volume.left>controls.right,'play mode and volume flank the transport');check(controls.left-mode.right<=16.1&&volume.left-controls.right<=16.1,'related controls form one nearby group');const play=document.querySelector('.btn-play').getBoundingClientRect();check(play.height>=47.9&&play.width>=83.9,'primary play target is larger than before');const middle=document.querySelector('.player-center').getBoundingClientRect();check(mode.left>=middle.left-.1&&volume.right<=middle.right+.1,'transport flanks stay within the middle region')
+  check(mode.left>controls.right&&volume.left>controls.right,'play mode and volume return to the utility region');const play=document.querySelector('.btn-play').getBoundingClientRect();check(play.height>=31.9&&play.width>=59.9,'restored play capsule retains its desktop hit target');const right=document.querySelector('.player-right').getBoundingClientRect();check(mode.left>=right.left-.1&&volume.right<=right.right+.1,'utility controls stay within their region')
   check(tools[0].left>=rail.right+9&&tools.at(-1).right<=bar.right-10,'tools clear the seek area and panel edge')
-  if(newLayout){
-  const info=document.querySelector('.player-track-info').getBoundingClientRect(),favorite=document.querySelector('.favorite-btn').getBoundingClientRect()
-  check(favorite.top>=info.bottom&&info.right<=art.right+.1,'song actions stay below clipped metadata')
-  }
+  const info=document.querySelector('.player-track-info').getBoundingClientRect()
+  check(info.left>=art.right&&info.right<rail.left,'metadata stays next to artwork and clear of seeking')
  }
  const fill=document.querySelector('.progress-fill').getBoundingClientRect()
  window.startFrame={top:bar.top,height:bar.height,left:line.left,right:line.right,fillRight:fill.right}
@@ -255,7 +249,7 @@ window.prepareVolume=async(tone,glass)=>{
  await nextTick();await new Promise(resolve=>setTimeout(resolve,250))
  const popup=bar.querySelector('.volume-drawer').getBoundingClientRect(),anchor=toggle.getBoundingClientRect()
  check(popup.bottom<=anchor.top-9&&popup.top>=0,'volume popup stays above its control and inside the window')
- check(getComputedStyle(bar.querySelector('.volume-drawer')).borderRadius==='16px','volume shares rounded functional material')
+ check(getComputedStyle(bar.querySelector('.volume-drawer')).borderRadius==='14px','volume restores its rounded popover')
  const input=bar.querySelector('.volume-drawer-slider');input.focus();await new Promise(requestAnimationFrame)
  check(input.getAttribute('aria-valuetext')==='50%','volume exposes its percentage')
 }
