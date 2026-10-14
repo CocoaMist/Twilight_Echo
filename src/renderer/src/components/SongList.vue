@@ -570,7 +570,7 @@ const unifiedSearchStatusText = computed(() => {
   return `找到 ${resultCount} 首，已合并本地库和 ${providerCount} 个在线音源`
 })
 
-const showDetailBackButton = computed(() => {
+const isDetailView = computed(() => {
   // Top-level views (including recent / all songs) are reached from the side
   // menu; a back action that only clears the filter is a no-op there.
   return !!props.filter
@@ -580,7 +580,7 @@ function handleDetailBack(): void {
   if (props.returnFromDetail) props.returnFromDetail()
   else emit('selectView', props.category, null)
 }
-useBackHandler(showDetailBackButton, handleDetailBack)
+useBackHandler(isDetailView, handleDetailBack)
 
 const showGrid = computed(() => {
   if (props.category === 'allSongs' || props.category === 'recent') return false
@@ -1793,18 +1793,8 @@ function finishViewSwitchAndRestoreScroll(): void {
         </template>
         <template v-else>
           <div class="song-list-header" :class="{ 'album-detail-toolbar': !!currentAlbum }">
-            <div class="header-left">
-              <button
-                v-if="showDetailBackButton"
-                type="button"
-                class="detail-back-button"
-                data-te-back-button="pill"
-                @click="handleDetailBack"
-              >
-                <i class="pi pi-arrow-left" aria-hidden="true"></i>
-                <span>返回</span>
-              </button>
-              <div v-if="!currentAlbum" class="title-group">
+            <div v-if="!currentAlbum" class="header-left">
+              <div class="title-group">
                 <div class="title-line">
                   <h2 class="song-list-title">{{ viewTitle }}</h2>
                   <span v-if="viewStatsText" class="view-stats">{{ viewStatsText }}</span>

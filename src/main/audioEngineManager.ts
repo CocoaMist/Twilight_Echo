@@ -163,6 +163,7 @@ export class AudioEngineManager extends EventEmitter {
   private nativeOutputRouteSynced = false
   private nativeVolumeSynced = false
   private audioServiceReadyRestoreSerial = 0
+  private audioServiceReadyRestore: Promise<void> | null = null
   private lastNativeError = ''
   // Why the in-process addon is unavailable, kept so every later "原生音频…失败"
   // quotes the real loader error instead of a bare "未加载".
@@ -566,7 +567,7 @@ export class AudioEngineManager extends EventEmitter {
     const restoreSerial = ++this.audioServiceReadyRestoreSerial
     this.nativeOutputRouteSynced = false
     this.invalidateAudioDeviceOptionsCache('audio-service-ready')
-    void this.outputRouter
+    this.audioServiceReadyRestore = this.outputRouter
       .serializeConfiguration(() => this.restoreAudioServiceReadyState())
       .then((result) => {
         if (this.destroyed || restoreSerial !== this.audioServiceReadyRestoreSerial) return
@@ -585,6 +586,11 @@ export class AudioEngineManager extends EventEmitter {
           outputRouteSynced: result.outputRouteSynced,
           restoreErrors: result.errors
         })
+      })
+      .finally(() => {
+        if (restoreSerial === this.audioServiceReadyRestoreSerial) {
+          this.audioServiceReadyRestore = null
+        }
       })
   }
 
@@ -693,18 +699,26 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    this.nativeOutputRouteSynced = false
-    const routeRestore = await this.restoreAudioServiceOutputRoute('初始化')
-    this.nativeOutputRouteSynced = routeRestore.synced
-    await this.applyNativeDspSettings('初始化 DSP 配置', {}, false)
-    const volumeStep = await this.restoreAudioServiceOutputRouteStep(
-      'volume',
-      '初始化软件音量',
-      'SetVolume',
-      this.playbackInfo.volume
-    )
-    this.nativeVolumeSynced = volumeStep.ok
-    if (this.processing.directMode) await this.applyDirectModeRuntimeOverrides(true)
+    // The first service ready event can arrive during these awaited RPCs.
+    // Share the recovery/configuration queue so its DSP revision cannot race
+    // startup's ACK or overwrite the graph status while startup is finishing.
+    await this.outputRouter.serializeConfiguration(async () => {
+      this.nativeOutputRouteSynced = false
+      const routeRestore = await this.restoreAudioServiceOutputRoute('初始化')
+      this.nativeOutputRouteSynced = routeRestore.synced
+      await this.applyNativeDspSettings('初始化 DSP 配置', {}, false)
+      const volumeStep = await this.restoreAudioServiceOutputRouteStep(
+        'volume',
+        '初始化软件音量',
+        'SetVolume',
+        this.playbackInfo.volume
+      )
+      this.nativeVolumeSynced = volumeStep.ok
+      if (this.processing.directMode) await this.applyDirectModeRuntimeOverrides(true)
+    })
+    // Recovery may have queued behind startup while the first RPC was opening
+    // the service. Finish it before announcing readiness to playback callers.
+    await this.audioServiceReadyRestore
     this.startClock()
     this.scheduler.setImmediate(() => this.emit('ready'))
   }

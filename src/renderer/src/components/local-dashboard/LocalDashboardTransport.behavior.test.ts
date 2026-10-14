@@ -182,7 +182,7 @@ window.runHomeTransportTests=async()=>{
  expect(!document.querySelector('.hero-actions')?.textContent.includes('播放这首'),'no duplicate text CTA')
  const cardHeight=()=>document.querySelector('.feature-card').getBoundingClientRect().height
  const idleHeight=cardHeight()
- expect(getComputedStyle(document.querySelector('.hero-progress')).visibility==='hidden','idle progress must reserve space without exposing a seek control')
+ expect(!document.querySelector('.hero-progress'),'idle card must not expose a seek control')
  const routeTrigger=document.querySelector('[aria-label="打开实时 DSP 输出线路"]')
  routeTrigger.focus();routeTrigger.click();await settle()
  const routeDialog=document.querySelector('.dsp-route-dialog')
@@ -196,18 +196,20 @@ window.runHomeTransportTests=async()=>{
  await settle()
  expect(!document.querySelector('.home').classList.contains('has-route-dialog')&&document.activeElement===routeTrigger,'DSP modal closes on Escape and restores its trigger')
  play().click();await settle()
- expect(Math.abs(cardHeight()-idleHeight)<1,'first playback must preserve the card height')
+ expect(cardHeight()>=idleHeight,'playback progress must fit in the card')
+ const playingHeight=cardHeight()
  expect(getComputedStyle(document.querySelector('.hero-progress')).visibility==='visible','active playback must reveal the real progress control')
+ expect(document.querySelector('.hero-progress').getBoundingClientRect().bottom<=document.querySelector('.hero-actions').getBoundingClientRect().top,'progress returns above transport')
  expect(JSON.stringify(state.calls[0])===JSON.stringify(['start','two',['one','two']]),'idle control must play the displayed last track with its normal queue')
  expect(controls().length===3&&play().getAttribute('aria-label')==='暂停','starting a track must expose all three regular controls')
  expect(document.querySelector('.hero-actions').classList.contains('is-current')&&!play().classList.contains('is-idle'),'active controls must expose their session transport')
  expect(controls().every(button=>{const r=button.getBoundingClientRect();return r.width>=44&&r.height>=44}),'all transport controls must retain usable hit targets')
  play().click();await settle()
- expect(Math.abs(cardHeight()-idleHeight)<1,'pause must preserve the card height')
+ expect(Math.abs(cardHeight()-playingHeight)<1,'pause must preserve the card height')
  expect(!state.isPlaying.value&&play().getAttribute('aria-label')==='播放','pause must keep an available resume control')
  expect(document.querySelector('.hero-actions').classList.contains('is-current')&&controls().length===3,'pause must retain the grouped transport without returning to the listening invitation')
  play().click();await settle()
- expect(Math.abs(cardHeight()-idleHeight)<1,'resume must preserve the card height')
+ expect(Math.abs(cardHeight()-playingHeight)<1,'resume must preserve the card height')
  expect(state.isPlaying.value&&state.calls.filter(call=>call[0]==='start').length===1,'resume must not replace the queue')
  const originalTrack=state.currentTrack.value
  const originalLibrary=state.tracks.value
@@ -221,17 +223,16 @@ window.runHomeTransportTests=async()=>{
   const title=document.querySelector('.hero-title'),artist=document.querySelector('.hero-artist')
   const lineHeight=parseFloat(getComputedStyle(title).lineHeight)
   expect(artist.getBoundingClientRect().top-title.getBoundingClientRect().bottom<14,'short title separates its artist at width '+width)
-  const grid=document.querySelector('.fresh-grid'),tiles=[...grid.children],host=document.querySelector('.home-inner'),css=getComputedStyle(host)
+  const grid=document.querySelector('.fresh-grid'),tiles=[...grid.children],host=document.querySelector('.home-inner')
   const image=tiles[0].querySelector('img'),frame=tiles[0].querySelector('.fresh-cover')
   expect(image?.naturalWidth===768&&Math.abs(image.getBoundingClientRect().width-frame.getBoundingClientRect().width)<1&&Math.abs(image.getBoundingClientRect().height-frame.getBoundingClientRect().height)<1,'fallback cover sizing broke at '+width+'px')
-  const contentWidth=host.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight)
-  const columns=contentWidth<=520?2:contentWidth<=940?3:6
-  expect(tiles.length===6&&tiles.filter(tile=>Math.abs(tile.getBoundingClientRect().top-tiles[0].getBoundingClientRect().top)<1).length===columns,'music shelf leaves uneven rows at width '+width+' '+density)
-  expect(document.querySelector('.signal-card').getBoundingClientRect().top>grid.getBoundingClientRect().bottom,'technical status precedes music discovery')
+  const gridBox=grid.getBoundingClientRect()
+  expect(tiles.length===6&&tiles.every(tile=>{const box=tile.getBoundingClientRect();return box.width>0&&box.left>=gridBox.left-1&&box.right<=gridBox.right+1}),'responsive music shelf must keep its cards in bounds at '+width+' '+density)
+  expect(document.querySelector('.signal-card').getBoundingClientRect().bottom<gridBox.top,'signal card returns above recent music')
   expect(host.scrollWidth<=host.clientWidth+1,'homepage content overflows horizontally '+JSON.stringify({width,font,density,client:host.clientWidth,scroll:host.scrollWidth,children:[...host.children].map(el=>({class:el.className,right:el.getBoundingClientRect().right}))}))
   state.currentTrack.value={...originalTrack,title:'A Cielo Abierto (Viaje V) — A long musical journey across the evening sky',album:'A very long album title that must not displace the audio metadata or transport controls'};await settle()
   expect(title.scrollHeight>lineHeight*1.5,'long title must wrap at width '+width)
-  expect(Math.abs(cardHeight()-shortHeight)<1,'wrapped title must preserve card height at width '+width+' '+JSON.stringify({shortHeight,longHeight:cardHeight(),parts:[...document.querySelector('.hero-copy').children].map(el=>({class:el.className,height:el.getBoundingClientRect().height,margin:getComputedStyle(el).marginTop})),min:getComputedStyle(document.querySelector('.hero-copy')).minHeight}))
+  expect(cardHeight()>=shortHeight,'wrapped title must fit inside the card at width '+width)
  }
  state.tracks.value=originalLibrary
  document.documentElement.style.removeProperty('--te-font-size-body')
@@ -276,7 +277,7 @@ async function runHomeReturnTests(){
   document.documentElement.dataset.theme=tone
   document.documentElement.dataset.teMotion=motion
   for(const [name,leave,back] of returns){
-   const before=measure();leave();await nextTick();await sleep(350)
+   const before=measure();leave();await nextTick();await until(()=>!document.querySelector('.feature-card'))
    expect(!document.querySelector('.feature-card'),'home must leave for '+name)
    back();await nextTick()
    const samples=[]

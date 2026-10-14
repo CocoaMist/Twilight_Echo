@@ -88,6 +88,8 @@ void writeDiagnosticsJson(std::ostringstream& json, const OutputInfo::Diagnostic
        << "\"typedRawPath\":" << (diagnostics.typedRawPath ? "true" : "false") << ","
        << "\"processingBypassed\":" << (diagnostics.processingBypassed ? "true" : "false") << ","
        << "\"nativeDsdNegotiation\":\"" << json_utils::escape(diagnostics.nativeDsdNegotiation) << "\","
+       << "\"asioStartupSummary\":\"" << json_utils::escape(diagnostics.asioStartupSummary) << "\","
+       << "\"wireLittleEndian\":" << (diagnostics.wireLittleEndian ? "true" : "false") << ","
        << "\"dopRuntimeEvidence\":\"" << json_utils::escape(diagnostics.dopRuntimeEvidence) << "\","
        << "\"quirkRegistryState\":\"" << json_utils::escape(diagnostics.quirkRegistryState) << "\","
        << "\"quirkFingerprint\":\"" << json_utils::escape(diagnostics.quirkFingerprint) << "\","
@@ -645,6 +647,7 @@ float parseFloatField(const std::string& json, const std::string& key, float fal
 OutputConfig parseOutputConfigJson(const std::string& json) {
   OutputConfig config;
   config.preferredBufferSize = parseUintField(json, "preferredBufferSize", 0);
+  config.asioOutputChannelStart = std::min<uint32_t>(255, parseUintField(json, "asioOutputChannelStart", 0));
   config.routingMode = parseChannelRoutingMode(parseStringField(json, "routingMode", "auto"));
   config.wasapiExclusivePushMode = parseBoolField(json, "wasapiExclusivePushMode", false);
   config.releaseExclusiveOnPause = parseBoolField(json, "releaseExclusiveOnPause", false);

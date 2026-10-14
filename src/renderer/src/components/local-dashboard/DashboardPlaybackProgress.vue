@@ -35,8 +35,8 @@ function handleHeroSeek(event: MouseEvent): void {
 
 <style scoped>
 .hero-progress {
-  width: min(100%, 480px);
-  margin-top: 14px;
+  width: min(100%, 460px);
+  margin-top: 22px;
 }
 
 .hero-progress-track {
@@ -86,7 +86,6 @@ function handleHeroSeek(event: MouseEvent): void {
   justify-content: space-between;
   margin-top: 6px;
   font-size: calc(var(--te-font-size-body, 14px) * 11.5 / 14);
-  line-height: 1.5;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--home-muted);

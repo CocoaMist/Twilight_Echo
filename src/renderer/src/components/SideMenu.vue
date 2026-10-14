@@ -63,7 +63,31 @@ const visible = computed(() =>
   )
 )
 const entries = computed(() => buildSidebarEntries(visible.value))
+const sideMenu = ref<HTMLElement | null>(null)
 const expanded = ref(new Set<SidebarGroupId>())
+watch(
+  visible,
+  async (pages, previous) => {
+    const previousIds = new Set(previous?.map((page) => page.id))
+    const added = pages.filter((page) =>
+      previous ? !previousIds.has(page.id) : !page.defaultVisible
+    )
+    // Enabling a page must also reveal it inside its collapsed sidebar group.
+    // Restore explicitly enabled optional pages when the sidebar mounts again.
+    for (const page of added) {
+      const group = sidebarGroupId(page.id)
+      if (group) expanded.value.add(group)
+    }
+    if (!previous || added.length === 0) return
+    await nextTick()
+    const page = added.find((page) => !page.defaultVisible) ?? added[0]
+    const button = [
+      ...(sideMenu.value?.querySelectorAll<HTMLElement>('[data-page-id]') ?? [])
+    ].find((button) => button.dataset.pageId === page.id)
+    button?.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+  },
+  { immediate: true }
+)
 watch(
   () => props.activeKey,
   (key) => {
@@ -131,6 +155,7 @@ function setPressOrigin(event: PointerEvent): void {
 
 <template>
   <div
+    ref="sideMenu"
     class="side-menu"
     :class="{ open: open || persistent, 'side-menu-liquid': props.liquidMaterial }"
     :inert="!open && !persistent"
@@ -185,6 +210,7 @@ function setPressOrigin(event: PointerEvent): void {
                 :class="{ active: props.activeKey === page.id }"
                 :aria-current="props.activeKey === page.id ? 'page' : undefined"
                 :aria-label="page.title"
+                :data-page-id="page.id"
                 :title="page.title"
                 @click="selectPage(page)"
               >
@@ -206,6 +232,7 @@ function setPressOrigin(event: PointerEvent): void {
             :class="{ active: props.activeKey === entry.page.id }"
             :aria-current="props.activeKey === entry.page.id ? 'page' : undefined"
             :aria-label="entry.page.title"
+            :data-page-id="entry.page.id"
             :title="entry.page.title"
             @click="selectPage(entry.page)"
           >

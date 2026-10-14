@@ -221,15 +221,17 @@ test('the mini shape keeps compact play/pause, utility controls and an exit', ()
   assert.match(playerBar, /@click="emit\('exitPlayingPage'\)"/)
   assert.match(app, /@exit-playing-page="handleExitPlayingPage"/)
   assert.match(app, /function handleExitPlayingPage\(\): void \{[\s\S]{0,80}closePlayingPage\(\)/)
-  // Ordinary pages group mode and volume with transport, apart from utilities.
+  // Standard playback keeps mode and volume in the right utility region.
   assert.deepEqual(DEFAULT_PLAYER_BAR_LAYOUT.standard.right, [
     'favorite',
+    'playMode',
+    'volume',
     'queue',
     'miniPlayer',
     'desktopLyrics',
     'hifi'
   ])
-  assert.deepEqual(DEFAULT_PLAYER_BAR_LAYOUT.standard.center, ['playMode', 'transport', 'volume'])
+  assert.deepEqual(DEFAULT_PLAYER_BAR_LAYOUT.standard.center, ['transport'])
   assert.doesNotMatch(playerBar, /mini-lyrics-btn/)
 })
 
@@ -450,7 +452,10 @@ test('the flat strips share one surface language, declared in exactly one place'
     playerBarCss,
     /--te-flat-bar-dark-lift:\s*color-mix\(in srgb, var\(--te-card-bg\) 95%, #fff 5%\)/
   )
-  assert.match(playerBarCss, /--te-flat-bar-glass-bg:\s*#141722/)
+  assert.match(
+    playerBarCss,
+    /--te-flat-bar-glass-bg:\s*var\(--te-playback-bar-flat-surface,\s*#141722\)/
+  )
   assert.match(playerBarCss, /--te-flat-bar-control:\s*rgba\(255, 255, 255, 0\.78\)/)
 })
 

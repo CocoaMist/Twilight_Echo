@@ -14,7 +14,7 @@ import vue from '@vitejs/plugin-vue'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
-test('saved theme colors reach the dashboard and player controls across tones and bar modes', async () => {
+test('playback background contrast and saved colors survive tone and bar changes', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-player-theme-'))
   try {
     const dashboardProgress = await readFile(
@@ -23,13 +23,18 @@ test('saved theme colors reach the dashboard and player controls across tones an
     )
     const baseStyles =
       (await readFile(new URL('../../assets/base.css', import.meta.url), 'utf8')) +
-      (await readFile(new URL('../../assets/bohr.css', import.meta.url), 'utf8'))
+      (await readFile(new URL('../../assets/bohr.css', import.meta.url), 'utf8')) +
+      (await readFile(new URL('../../assets/appearance.css', import.meta.url), 'utf8'))
     const sources = [
       await readFile(new URL('./PlayerBar.css', import.meta.url), 'utf8'),
       await readFile(new URL('../LocalDashboard.css', import.meta.url), 'utf8'),
       await readFile(new URL('../streaming-page/ProviderMusicHome.css', import.meta.url), 'utf8'),
       parse(dashboardProgress).descriptor.styles[0].content,
       parse(await readFile(new URL('../TitleBar.vue', import.meta.url), 'utf8')).descriptor
+        .styles[0].content,
+      parse(await readFile(new URL('../PlayingMusic.vue', import.meta.url), 'utf8')).descriptor
+        .styles[0].content,
+      parse(await readFile(new URL('../PlayingLyricLine.vue', import.meta.url), 'utf8')).descriptor
         .styles[0].content,
       parse(await readFile(new URL('../icons/PlaybackIcon.vue', import.meta.url), 'utf8'))
         .descriptor.styles[0].content,
@@ -88,6 +93,7 @@ app.whenReady().then(async()=>{
   win.webContents.on('console-message',event=>console.error(event.message))
   try{
     await win.loadFile(process.argv.at(-1))
+    await win.webContents.executeJavaScript('window.runPlaybackBackgroundContrastTests()')
     await win.webContents.executeJavaScript('window.runPlayerThemeTests()')
     for(const width of [1380,900,760]){
       win.setSize(width,900)
@@ -137,8 +143,9 @@ app.whenReady().then(async()=>{
 
 const runtime = `import {h,render} from 'vue'
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
-import {bootstrapThemeRuntime,useThemeStore} from '@renderer/stores/useThemeStore.ts'
-import {createDefaultThemeLibraryDocument,normalizeThemeProfile} from '@shared/theme.ts'
+import {bootstrapThemeRuntime,syncThemeSettingsAppearance,useThemeStore} from '@renderer/stores/useThemeStore.ts'
+import {createDefaultThemeLibraryDocument,normalizeThemeProfile,themeContrastRatio} from '@shared/theme.ts'
+import {normalizeAppBackgroundSettings} from '@shared/appAppearance.ts'
 const storageKey='player-theme-test-library'
 let library=JSON.parse(localStorage.getItem(storageKey)||'null')||{version:2,revision:0,savedAt:new Date(0).toISOString(),data:createDefaultThemeLibraryDocument()}
 const expect=(value,message)=>{if(!value)throw new Error(message)}
@@ -187,8 +194,6 @@ const mount=(mode,glass=false,live=false)=>{
     mountIcon(shell.querySelector('.previous-button'),'previous')
     mountIcon(shell.querySelector('.next-button'),'next')
     shell.querySelector('.player-right').innerHTML='<button class="icon-btn favorite-btn" aria-label="喜欢"></button><button class="ctrl-btn mode-btn-right" aria-label="播放模式"></button><div class="volume-anchor"><button class="icon-btn volume-control-button" aria-label="音量控制"></button></div><button class="icon-btn track-menu-button" aria-label="播放列表"></button><button class="icon-btn mini-player-btn" aria-label="迷你播放器"></button><button class="icon-btn desktop-lyrics-btn" aria-label="桌面歌词"></button><button class="icon-btn hifi-toggle-button" aria-label="HiFi"></button>'
-    shell.querySelector('.player-bar').classList.add('player-bar-transport-grouped')
-    const center=shell.querySelector('.player-center');center.prepend(shell.querySelector('.mode-btn-right'));center.insertBefore(shell.querySelector('.volume-anchor'),center.querySelector('.progress-slider-wrap'))
     shell.querySelector('.player-left').innerHTML='<div class="player-cover-slot"><img class="player-cover" alt="" /></div>'
     const rail=shell.querySelector('.progress-slider-wrap')
     rail.outerHTML='<div class="progress-area"><span class="time-label">0:24</span>'+rail.outerHTML+'<span class="time-label">2:41</span></div>'
@@ -241,6 +246,86 @@ const checkIconColor=(element,value)=>{
   const probe=document.createElement('span');probe.style.color=value;document.body.append(probe)
   expect(getComputedStyle(element.querySelector('svg')).color===getComputedStyle(probe).color,'explicit transport icon color reaches the glyph')
   probe.remove()
+}
+window.runPlaybackBackgroundContrastTests=async()=>{
+  await boot()
+  const appearance={theme:'pureWhite',accentColor:'blue',uiDensity:'comfortable',appBackground:normalizeAppBackgroundSettings(undefined)}
+  const color=(element)=>getComputedStyle(element).color
+  const expectColor=(element,value,label)=>{
+    const probe=document.createElement('span');probe.style.color=value;document.body.append(probe)
+    expect(color(element)===color(probe),label+': '+color(element)+' expected '+color(probe));probe.remove()
+  }
+  const mountPage=()=>{
+    document.querySelector('.playing-music')?.remove()
+    document.querySelector('.title-bar-immersive')?.remove()
+    const page=document.createElement('div');page.className='playing-music bg-blur'
+    page.innerHTML='<div class="backdrop"></div><h1 class="track-title">歌曲名称</h1><p class="track-artist">歌手名称</p><p class="track-album">专辑名称</p><button class="lyric-row"><span class="lyric-text">未播放歌词</span><span class="lyric-translation">歌词翻译</span><span class="lyric-romanization">歌词音译</span></button><button class="lyric-row active"><span class="lyric-text">当前歌词</span><span class="lyric-translation">当前翻译</span><span class="lyric-romanization">当前音译</span><span class="lyric-voice--supporting">和声</span></button><div class="lyrics-pending">加载歌词…</div><div class="time-chip">0:14 / 2:25</div><button class="visualizer-toggle-button">可视化</button>'
+    for(const el of [page,...page.querySelectorAll('*')])el.setAttribute('data-v-test','')
+    document.body.append(page)
+    const title=document.createElement('div');title.className='title-bar title-bar-immersive';title.innerHTML='<button class="control-btn">关闭</button><button class="menu-btn">菜单</button>'
+    for(const el of [title,...title.querySelectorAll('*')])el.setAttribute('data-v-test','')
+    document.body.append(title)
+    return page
+  }
+  const page=mountPage()
+  for(const tone of ['pureWhite','dark']){
+    await store.setPreviewTone(tone);await settle()
+    expect(themeContrastRatio(color(page.querySelector('.track-title')),'#080e17')>10,tone+' default artwork title remains legible on the dark stage')
+    appearance.appBackground.global.customized=true
+    syncThemeSettingsAppearance(appearance);await store.setPreviewTone(tone);await settle()
+    for(const backgroundMode of ['blur','fluid','solid'])for(const mode of ['standard','mini','compact']){
+      page.className='playing-music bg-'+backgroundMode
+      mount(mode,true)
+      const info=document.createElement('div');info.innerHTML='<button class="player-title player-title-button">歌曲名称</button><button class="player-artist">歌手</button><span class="'+(mode==='mini'?'mini-progress-time':'player-time-readout')+'">0:14 / 2:25</span><button class="icon-btn">音量</button><button class="mode-btn-right"><img alt="播放模式" /></button>'
+      bar.append(info);for(const el of [info,...info.querySelectorAll('*')])el.setAttribute('data-v-test','')
+      await settle()
+      const text=tone==='dark'?'#f4f7fb':'#1a202c',muted=tone==='dark'?'#c4cbd5':'#4b5563'
+      for(const selector of ['.track-title','.lyric-row.active','.time-chip','.visualizer-toggle-button'])expectColor(page.querySelector(selector),text,tone+'/'+mode+' '+selector)
+      for(const selector of ['.track-artist','.track-album','.lyric-row:not(.active)','.lyric-translation','.lyric-romanization','.lyrics-pending'])expectColor(page.querySelector(selector),muted,tone+'/'+mode+' '+selector)
+      for(const selector of ['.lyric-row.active .lyric-translation','.lyric-row.active .lyric-romanization'])expectColor(page.querySelector(selector),text,tone+' '+selector)
+      for(const selector of ['.player-title','.icon-btn','.mode-btn-right'])expectColor(bar.querySelector(selector),text,tone+'/'+mode+' '+selector)
+      expectColor(bar.querySelector('.player-artist'),muted,tone+'/'+mode+' player artist')
+      if(mode==='standard'){
+        expectColor(button,text,tone+' play button')
+        expectColor(bar.querySelector('.time-label'),muted,tone+' elapsed time')
+      }else expectColor(bar.querySelector(mode==='mini'?'.mini-progress-time':'.player-time-readout'),muted,tone+'/'+mode+' elapsed time')
+      expect(getComputedStyle(bar.querySelector('.mode-btn-right img')).filter===(tone==='dark'?'brightness(0) invert(1)':'brightness(0)'),tone+'/'+mode+' image icon filter follows text tone')
+      expectColor(document.querySelector('.title-bar-immersive .control-btn'),text,tone+' caption control')
+      expectColor(document.querySelector('.title-bar-immersive .menu-btn'),text,tone+' caption menu')
+      expect(getComputedStyle(page.querySelector('.backdrop')).display==='none','custom background did not replace artwork')
+      if(mode!=='standard')checkBackground(bar,appearance.appBackground.global[tone==='dark'?'dark':'light'],tone+'/'+mode+' strip surface')
+      const titleColor=color(page.querySelector('.track-title'));page.style.setProperty('--accent-color','#fefefe');bar.style.setProperty('--accent-color','#fefefe')
+      expect(color(page.querySelector('.track-title'))===titleColor,'bright cover accent changed text contrast')
+    }
+    appearance.appBackground.global.customized=false
+    syncThemeSettingsAppearance(appearance);await store.setPreviewTone(tone);await settle()
+  }
+  appearance.appBackground.pages.player={...appearance.appBackground.pages.player,inherit:false,light:'#ffffff'}
+  syncThemeSettingsAppearance(appearance);await store.setPreviewTone('pureWhite');await settle()
+  expectColor(page.querySelector('.track-title'),'#1a202c','independent light playback background uses theme text')
+  const row=page.querySelector('.lyric-row.active');row.style.setProperty('--lyric-style-color','#7c3aed')
+  await settle()
+  expectColor(row,'#7c3aed','per-target lyric customization keeps priority in light mode');row.style.removeProperty('--lyric-style-color')
+  appearance.appBackground.pages.player.effects.light.textTone='light'
+  syncThemeSettingsAppearance(appearance);await store.setPreviewTone('pureWhite');await settle()
+  expectColor(page.querySelector('.track-title'),'#f4f7fb','explicit light text remains available')
+  expectColor(bar.querySelector('.icon-btn'),'#f4f7fb','explicit light controls follow the page')
+  expectColor(document.querySelector('.title-bar-immersive .control-btn'),'#f4f7fb','explicit light caption follows the page')
+  appearance.appBackground.pages.player.effects.light.textTone='dark'
+  syncThemeSettingsAppearance(appearance);await store.setPreviewTone('pureWhite');await settle()
+  expectColor(page.querySelector('.lyric-row.active .lyric-translation'),'#1a202c','explicit dark text reaches active lyric layers')
+  appearance.appBackground.pages.player.dark='#f4f4f7'
+  appearance.appBackground.pages.player.effects.dark.textTone='dark'
+  bar.classList.remove('player-bar-compact');bar.parentElement.dataset.tePlaybarMode='standard'
+  syncThemeSettingsAppearance(appearance);await store.setPreviewTone('dark');await settle()
+  expectColor(page.querySelector('.track-title'),'#1a202c','dark theme honors dark text on a light playback background')
+  expectColor(bar.querySelector('.player-title'),'#1a202c','dark theme metadata honors playback text tone')
+  expectColor(bar.querySelector('.player-artist'),'#4b5563','dark theme artist honors playback text tone')
+  expectColor(bar.querySelector('.icon-btn'),'#1a202c','dark theme controls honor playback text tone')
+  expectColor(button,'#1a202c','dark theme play glyph honors playback text tone')
+  page.remove();document.querySelector('.title-bar-immersive').remove();clear()
+  syncThemeSettingsAppearance({theme:'pureWhite',accentColor:'blue',lightAccentColor:'blue',darkAccentColor:'blue',uiDensity:'comfortable'})
+  await store.setPreviewTone(null)
 }
 const checkColors=async(overrides)=>{
   for(const tone of ['pureWhite','dark']){
@@ -343,10 +428,7 @@ window.checkStandardPlayerGeometry=async()=>{
     mount('standard',glass)
     const shell=bar.parentElement
     shell.style.setProperty('transition','none','important')
-    expect(Math.abs(innerHeight-shell.getBoundingClientRect().bottom-22)<0.1,'regular player floats 22px above the bottom')
-    shell.dataset.tePlayingPage='true'
-    expect(Math.abs(innerHeight-shell.getBoundingClientRect().bottom)<0.1,'song detail player remains flush with the bottom')
-    shell.dataset.tePlayingPage='false'
+    expect(Math.abs(innerHeight-shell.getBoundingClientRect().bottom-14)<0.1,'player restores its 14px floating inset on every page')
     const material=getComputedStyle(bar)
     expect(material.backdropFilter.includes('blur(24px)'), 'regular player material diffuses artwork before controls: '+material.backdropFilter)
     const alpha=colorRgba(material.backgroundColor)[3]/255
@@ -377,15 +459,15 @@ window.checkStandardPlayerGeometry=async()=>{
     const labels=[...bar.querySelectorAll('.time-label')].map(label=>label.getBoundingClientRect())
     const visibleBottom=Math.max(progress.bottom,...labels.map(label=>label.bottom))
     const topInset=controls.top-frame.top,bottomInset=frame.bottom-visibleBottom
-    expect(Math.abs(topInset-bottomInset-5)<0.6,'progress moves down 5px while transport retains its top inset: '+JSON.stringify({tone,glass,fontSize,topInset,bottomInset}))
-    expect(Math.abs(controls.top-art.top)<0.6&&Math.abs(visibleBottom-art.bottom-5)<0.6,'transport stays aligned with artwork while seeking gets more separation')
-    if(fontSize===14)expect(frame.height>=87&&frame.height<=89,'default player reserves room for the enlarged transport')
+    expect(Math.abs(topInset-bottomInset-3)<0.6,'progress restores its 3px offset while transport retains its top inset: '+JSON.stringify({tone,glass,fontSize,topInset,bottomInset}))
+    expect(Math.abs(controls.top-art.top)<0.6&&Math.abs(visibleBottom-art.bottom-3)<0.6,'transport and seeking stay aligned with artwork')
+    if(fontSize===14)expect(frame.height>=71&&frame.height<=73,'default player restores its 72px height')
     const seekTarget=bar.querySelector('.progress-slider-wrap').getBoundingClientRect()
     expect(seekTarget.height>=22&&seekTarget.bottom<=frame.bottom,'optical centering preserves the full seek target inside the panel')
     expect(controls.top-frame.top>=9.9,'transport has at least 10px top clearance: '+(controls.top-frame.top))
     expect(frame.bottom-progress.bottom>=4.9,'lowered progress retains bottom clearance')
     const play=button.getBoundingClientRect(),glyph=button.querySelector('svg').getBoundingClientRect()
-    expect(play.height>=47.9,'play retains an enlarged forty-eight-pixel hit target')
+    expect(play.height>=31.9,'play retains its restored desktop hit target')
     const previous=bar.querySelector('.previous-button').getBoundingClientRect(),next=bar.querySelector('.next-button').getBoundingClientRect()
     expect(Math.abs(previous.height-play.height)<0.6&&Math.abs(next.height-play.height)<0.6,'transport controls use the same desktop height')
     expect(Math.abs((play.left-previous.right)-(next.left-play.right))<0.6,'previous and next have balanced spacing around play')
@@ -395,7 +477,7 @@ window.checkStandardPlayerGeometry=async()=>{
     expect(utilities[0].left>=seeking.right+4,'utility hit targets cannot intrude into the seeking column at narrow widths')
     expect(utilities.at(-1).right<=frame.right-9,'trailing controls stay inside the panel')
     for(let i=1;i<utilities.length;i++)expect(utilities[i].left-utilities[i-1].right>=3.9,'secondary hit targets do not overlap')
-    expect(utilities[2].left-utilities[1].right>=11.9,'whitespace separates queue from detached player tools')
+    expect(utilities[2].left-utilities[1].right>=11.9&&utilities[4].left-utilities[3].right>=11.9,'whitespace separates playback preferences, output and queue, and player tools')
     expect(play.width>=play.height*1.6,'play capsule remains horizontal at every width and font size')
     expect(Math.abs(glyph.x+glyph.width/2-play.x-play.width/2)<0.6&&Math.abs(glyph.y+glyph.height/2-play.y-play.height/2)<0.6,'transport glyph stays centered in the capsule: '+JSON.stringify({tone,glass,fontSize,width:innerWidth,play:play.toJSON(),glyph:glyph.toJSON(),display:getComputedStyle(button).display,align:getComputedStyle(button).alignItems}))
   }

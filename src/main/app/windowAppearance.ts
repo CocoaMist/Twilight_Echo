@@ -17,11 +17,13 @@ export function getWindowBackgroundColor(
   return settings.appBackground.global.light
 }
 
-/** Avoid a theme-coloured DWM outline around edge-to-edge playback content. */
-export function syncWindowFrameColor(
+/** Let Windows draw a neutral frame around pages with independent backgrounds. */
+export function syncWindowFrameAppearance(
   win: Pick<BrowserWindow, 'setAccentColor'>,
   highContrast: boolean
 ): void {
   if (process.platform !== 'win32') return
+  // A global light background becomes a white outline around the dark playback
+  // page. Disable the forced accent while keeping native resizing and shadows.
   win.setAccentColor(highContrast ? null : false)
 }

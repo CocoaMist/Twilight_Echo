@@ -72,7 +72,7 @@ AsioChannelFormat normalizeAsioDopChannelFormat(
     const AudioFormat& requested,
     AsioChannelFormat actual) {
   if (isDopCarrierFormat(requested) && actual.logicalFormat == AudioSampleFormat::Int32Interleaved &&
-      actual.containerBits == 32 && actual.littleEndian && actual.dsdPacking == AsioDsdPacking::None) {
+      actual.containerBits == 32 && actual.validBits >= 24 && actual.dsdPacking == AsioDsdPacking::None) {
     actual.logicalFormat = AudioSampleFormat::Int24In32Interleaved;
     actual.validBits = 24;
     actual.validBitsAreMostSignificant = true;
@@ -254,7 +254,7 @@ void applyNativeDsdFactsToOutputInfo(OutputInfo* info, const NativeDsdRuntimeFac
 }
 
 bool explicitBufferSizeAllowed(uint32_t size) {
-  static constexpr uint32_t kAllowed[] = {64, 128, 256, 512, 1024, 2048};
+  static constexpr uint32_t kAllowed[] = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
   return std::find(std::begin(kAllowed), std::end(kAllowed), size) != std::end(kAllowed);
 }
 
@@ -606,6 +606,7 @@ bool AsioBackend::open(const std::string& deviceId, const AudioFormat& requested
   openConfig_.nativeDsdControlOrder = quirkApplication_.dsdControlOrder;
   openConfig_.dsdMinimumBufferFrames = quirkApplication_.dsdMinimumBufferFrames;
   openConfig_.dsdCadenceConfirmCallbacks = quirkApplication_.dsdCadenceConfirmCallbacks;
+  openConfig_.outputChannelStart = static_cast<int32_t>(outputConfig_.asioOutputChannelStart);
 
   // Walk the ranked candidates. A driver may reject a rate or sample type that
   // looked plausible from its capability record, and a single rejection must
@@ -695,6 +696,7 @@ bool AsioBackend::open(const std::string& deviceId, const AudioFormat& requested
   outputInfo_.devicePathKind = "asio";
   outputInfo_.deviceName = deviceName_;
   outputInfo_.actualDeviceName = deviceName_;
+  outputInfo_.actualDeviceId = openConfig_.deviceId;
   outputInfo_.driverName = driverName_;
   outputInfo_.actualDriverName = driverName_;
   outputInfo_.driverVersion = driverVersion_;
@@ -756,7 +758,11 @@ bool AsioBackend::open(const std::string& deviceId, const AudioFormat& requested
 
 bool AsioBackend::setOutputConfig(const OutputConfig& config, std::string* error) {
   if (config.preferredBufferSize != 0 && !explicitBufferSizeAllowed(config.preferredBufferSize)) {
-    if (error) *error = "ASIO buffer size 只支持 Auto/64/128/256/512/1024/2048";
+    if (error) *error = "ASIO buffer size 只支持 Auto 或 64～32768 的 2 次幂";
+    return false;
+  }
+  if (config.asioOutputChannelStart > 255) {
+    if (error) *error = "ASIO 起始输出通道超出范围";
     return false;
   }
   std::lock_guard lock(mutex_);
@@ -1274,7 +1280,7 @@ int AsioBackend::routedOutputChannels(const AsioDeviceInfo& device, int sourceCh
         return requested;
     }
   }
-  const int available = device.outputChannels;
+  const int available = std::max(0, device.outputChannels - static_cast<int>(outputConfig_.asioOutputChannelStart));
   switch (outputConfig_.routingMode) {
     case ChannelRoutingMode::StereoTo51:
       return std::min(available, 6);
@@ -1325,7 +1331,20 @@ bool AsioBackend::createAndStartHost(std::string* error) {
           normalizeAsioDopChannelFormat(openConfig_.format, host_->outputChannelFormat(channel)));
     }
     const AsioChannelFormat firstChannelFormat = channelFormats.front();
+    const int activeRate = host_->activeSampleRate();
+    const long activeLatency = host_->activeLatencyFrames();
+    const std::string startupSummary = host_->startupSummary();
     std::lock_guard lock(mutex_);
+    if (activeRate > 0) outputFormat_.sampleRate = activeRate;
+    if (activeLatency >= 0) latencyFrames_ = activeLatency;
+    diagnostics_.asioStartupSummary = startupSummary;
+    outputInfo_.outputSampleRate = outputFormat_.sampleRate;
+    outputInfo_.latencyFrames = static_cast<int>(latencyFrames_);
+    const double callbackRate = asioCallbackFrameRate(outputFormat_);
+    outputInfo_.latencyInfo.bufferLatencyMs = callbackRate > 0 ? bufferSizeFrames_ * 1000.0 / callbackRate : 0;
+    outputInfo_.latencyInfo.outputLatencyMs = callbackRate > 0 ? latencyFrames_ * 1000.0 / callbackRate : 0;
+    outputInfo_.latencyInfo.totalLatencyMs = outputInfo_.latencyInfo.bufferLatencyMs + outputInfo_.latencyInfo.outputLatencyMs;
+    outputInfo_.latencyMs = outputInfo_.latencyInfo.outputLatencyMs;
     outputInfo_.bufferSizeFrames = static_cast<int>(bufferSizeFrames_);
     if (!asio::isSupportedChannelFormat(firstChannelFormat)) {
       if (error) *error = "unsupported_asio_sample_type";
@@ -1350,22 +1369,46 @@ bool AsioBackend::createAndStartHost(std::string* error) {
     }
     actualOutputFormatObserved_ = true;
     actualOutputChannelFormatsMatch_ = uniformActualSampleFormat;
+    if (openConfig_.format.dopEncoded &&
+        (!uniformActualSampleFormat || firstChannelFormat.validBits < 24 ||
+         (firstChannelFormat.logicalFormat != AudioSampleFormat::Int24Interleaved &&
+          firstChannelFormat.logicalFormat != AudioSampleFormat::Int24In32Interleaved &&
+          firstChannelFormat.logicalFormat != AudioSampleFormat::Int32Interleaved))) {
+      if (error) *error = "ASIO DoP requires a uniform integer carrier with at least 24 valid bits";
+      diagnostics_.lastError = error ? *error : "ASIO DoP carrier rejected";
+      AudioFormat rejected = outputFormat_;
+      rejected.sampleFormat = firstChannelFormat.logicalFormat;
+      dopRuntimeFacts_ = buildAsioDopRuntimeFacts(deviceInfo_, openConfig_.format, rejected, true, uniformActualSampleFormat);
+      outputInfo_.perfectReasonCode = "dop_carrier_rejected";
+      outputInfo_.diagnostics = diagnostics_;
+      return false;
+    }
     outputFormat_.sampleFormat = firstActualSampleFormat;
     outputFormat_.bitDepth = bitDepthForFormat(firstActualSampleFormat);
     outputInfo_.actualOutputFormat = sampleFormatToString(firstActualSampleFormat);
     outputInfo_.actualBitDepth = outputFormat_.bitDepth;
     outputInfo_.outputBitDepth = outputFormat_.bitDepth;
-    if (isNativeDsdRequest(openConfig_.format)) {
+    {
       diagnostics_.actualWireFormat = sampleFormatToString(firstActualSampleFormat);
       diagnostics_.containerBits = firstChannelFormat.containerBits;
       diagnostics_.validBits = firstChannelFormat.validBits;
+      diagnostics_.wireLittleEndian = firstChannelFormat.littleEndian;
       diagnostics_.blockAlign = static_cast<int>(
-          asio::bytesPerSample(firstChannelFormat) * static_cast<size_t>(outputChannels));
+          (firstChannelFormat.dsdPacking == AsioDsdPacking::Ner8 ? 8 : asio::bytesPerSample(firstChannelFormat)) *
+          static_cast<size_t>(outputChannels));
       outputInfo_.diagnostics = diagnostics_;
     }
     outputInfo_.resampled = isNativeDsdRequest(openConfig_.format)
                                 ? !sameNativeDsdStream(openConfig_.format, outputFormat_)
                                 : !sameAsioTransportFormat(openConfig_.format, outputFormat_);
+    if (!isNativeDsdRequest(openConfig_.format) && !openConfig_.format.dopEncoded &&
+        firstChannelFormat.logicalFormat == AudioSampleFormat::Int32Interleaved && firstChannelFormat.validBits < 32) {
+      outputInfo_.resampled = true;
+      outputInfo_.pcmPassthrough = false;
+      outputInfo_.outputPerfect = false;
+      outputInfo_.perfectReasonCode = "pcm_wire_precision_reduced";
+      outputInfo_.perfectReason = "ASIO driver uses fewer valid PCM bits than the engine integer container";
+    }
     const size_t callbackFrames = static_cast<size_t>(std::max<long>(1, bufferSizeFrames_));
     const size_t renderSamples = callbackFrames * static_cast<size_t>(std::max(1, outputFormat_.channelCount));
     renderScratch_.resize(renderSamples);
@@ -1446,15 +1489,9 @@ bool AsioBackend::createAndStartHost(std::string* error) {
       const AsioChannelFormat& channelFormat = renderChannelFormatsSession_[static_cast<size_t>(channel)];
       const size_t bytesPerFrame = asio::bytesPerSample(channelFormat);
       if (bytesPerFrame == 0) continue;
-      const size_t fillBytes =
-          (nativeDsdFill ? std::max<size_t>(1, fillFrames / 8) : fillFrames) * bytesPerFrame;
-      const uint8_t fillByte =
-          isDsdSampleFormat(channelFormat.logicalFormat)
-              ? asio::nativeDsdIdleByte(channelFormat.logicalFormat)
-              : 0;
       for (long bufferIndex = 0; bufferIndex < 2; ++bufferIndex) {
         if (uint8_t* buffer = static_cast<uint8_t*>(host_->outputBuffer(channel, bufferIndex))) {
-          std::memset(buffer, fillByte, fillBytes);
+          asio::fillChannelIdle(buffer, channelFormat, nativeDsdFill ? std::max<size_t>(1, fillFrames / 8) : fillFrames);
         }
       }
     }
@@ -1534,26 +1571,19 @@ void AsioBackend::renderBuffer(long bufferIndex) {
   const auto now = std::chrono::high_resolution_clock::now();
   const uint32_t callbacksSeen = renderCallbacksSeen_++;
   static constexpr uint32_t kUnderrunWarmupCallbacks = 2;
-  const uint32_t kDsdUnitConfirmCallbacks = renderDsdCadenceConfirmCallbacksSession_;
   const double byteFrameExpectedMs =
       static_cast<double>(frames) * 1000.0 / asioCallbackFrameRate(outputFormat);
   const double elapsedMs =
       lastRenderTime_.time_since_epoch().count() > 0
           ? std::chrono::duration<double, std::milli>(now - lastRenderTime_).count()
           : 0.0;
-  if (nativeDsdOutput && !dsdRenderUnitProbe_.confirmed && callbacksSeen >= kUnderrunWarmupCallbacks) {
-    // Unit probe: cadence intervals are the only runtime evidence of which
-    // buffer unit the driver counts. Writes stay at the conservative probe
-    // unit until the verdict latches, so neither interpretation can overflow.
-    const auto decision = asio::advanceDsdRenderUnitProbe(
-        dsdRenderUnitProbe_,
-        asio::classifyDsdCallbackUnit(byteFrameExpectedMs, elapsedMs),
-        kDsdUnitConfirmCallbacks);
-    if (decision == asio::DsdRenderUnitDecision::UseByteFrames) {
-      renderDsdUnitFramesSession_ = frames;
-    } else if (decision == asio::DsdRenderUnitDecision::UseBitSamples) {
+  if (nativeDsdOutput) {
+    const size_t approved = host_->activeRenderFrameCapacity();
+    if (approved > 0 && approved <= frames) renderDsdUnitFramesSession_ = approved;
+    dsdRenderUnitProbe_.confirmed = host_->dsdBufferUnitConfirmed();
+    if (dsdRenderUnitProbe_.confirmed && renderDsdUnitFramesSession_ < frames &&
+        outputFormat.sampleFormat != AudioSampleFormat::DsdInt8Ner8)
       pendingDsdBufferUnitAdapted_.store(true, std::memory_order_release);
-    }
   }
   lastRenderTime_ = now;
   // While the probe is undecided the deadline reference stays on the declared
@@ -1656,12 +1686,8 @@ void AsioBackend::renderBuffer(long bufferIndex) {
       if (!output) continue;
       if (static_cast<size_t>(channel) >= renderChannelFormatsSession_.size()) continue;
       const AsioChannelFormat& channelFormat = renderChannelFormatsSession_[static_cast<size_t>(channel)];
-      const AudioSampleFormat sampleFormat = channelFormat.logicalFormat;
-      if (!isDsdSampleFormat(sampleFormat)) continue;
-      std::memset(
-          output,
-          asio::nativeDsdIdleByte(sampleFormat),
-          renderFrames * asio::bytesPerSample(channelFormat));
+      if (!isDsdSampleFormat(channelFormat.logicalFormat)) continue;
+      asio::fillChannelIdle(output, channelFormat, renderFrames);
     }
     recordRenderBufferDrop();
     // The typed path is structurally present in every pipeline start; reaching

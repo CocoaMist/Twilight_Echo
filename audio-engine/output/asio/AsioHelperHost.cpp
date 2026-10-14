@@ -138,6 +138,7 @@ bool AsioHelperHost::open(
         asio_helper::copyText(request.deviceId, sizeof(request.deviceId), config.deviceId);
         request.format = asio_helper::encodeAudioFormat(config.format);
         request.bufferSizeFrames = static_cast<int32_t>(config.bufferSizeFrames);
+        request.outputChannelStart = config.outputChannelStart;
         if (config.sampleFormatMapping) {
           request.sampleFormatMappingReported =
               static_cast<int32_t>(config.sampleFormatMapping->reported);
@@ -207,11 +208,21 @@ bool AsioHelperHost::createBuffers(
     bufferSwitch_ = std::move(bufferSwitch);
     eventCallback_ = std::move(eventCallback);
     activeBufferSize_ = response.bufferSizeFrames;
+    activeSampleRate_ = response.actualFormat.sampleRate;
+    activeLatencyFrames_ = response.latencyFrames;
+    startupSummary_ = asio_helper::readText(response.startupSummary);
     channelFormats_.clear();
     channelFormats_.reserve(response.channelCount);
     for (uint32_t channel = 0; channel < response.channelCount; ++channel) {
       const AsioChannelFormat format =
           asio_helper::decodeChannelFormat(response.channelFormats[channel]);
+      const auto& record = response.channelFormats[channel];
+      if (!asio_helper::validSampleFormat(record.logicalFormat) || record.littleEndian > 1 ||
+          record.validBitsAreMostSignificant > 1 || !asio::isSupportedChannelFormat(format)) {
+        if (error) *error = "ASIO helper returned an invalid channel format";
+        process_.abort(asio_helper::FailureReason::ProtocolError, "invalid channel format");
+        return false;
+      }
       channelFormats_.push_back(format);
       renderChannelFormats_[channel] = format;
     }
@@ -321,12 +332,37 @@ long AsioHelperHost::activeBufferSize() const {
   return activeBufferSize_;
 }
 
+int AsioHelperHost::activeSampleRate() const {
+  std::lock_guard lock(stateMutex_);
+  return activeSampleRate_;
+}
+
+long AsioHelperHost::activeLatencyFrames() const {
+  std::lock_guard lock(stateMutex_);
+  return activeLatencyFrames_;
+}
+
+std::string AsioHelperHost::startupSummary() const {
+  std::lock_guard lock(stateMutex_);
+  return startupSummary_;
+}
+
+size_t AsioHelperHost::activeRenderFrameCapacity() const {
+  const auto* shared = process_.shared();
+  return shared ? static_cast<size_t>(std::max<LONG>(0, asio_helper::readAtomic(&shared->activeRenderFrameCapacity))) : 0;
+}
+
+bool AsioHelperHost::dsdBufferUnitConfirmed() const {
+  const auto* shared = process_.shared();
+  return shared && asio_helper::readAtomic(&shared->dsdBufferUnitConfirmed) != 0;
+}
+
 void AsioHelperHost::commitOutputBuffer(long bufferIndex, size_t frameCount) {
   auto* shared = process_.shared();
   if (!shared || bufferIndex < 0 || bufferIndex > 1) return;
   asio_helper::RenderBuffer& buffer = shared->buffers[bufferIndex];
   const uint32_t boundedFrames = static_cast<uint32_t>(
-      std::min<size_t>(frameCount, asio_helper::kMaxFrames));
+      std::min({frameCount, size_t{asio_helper::kMaxFrames}, activeRenderFrameCapacity()}));
   const uint32_t channelCount = std::min<uint32_t>(
       renderChannelCount_.load(std::memory_order_acquire),
       asio_helper::kMaxChannels);
@@ -334,7 +370,7 @@ void AsioHelperHost::commitOutputBuffer(long bufferIndex, size_t frameCount) {
   std::memset(buffer.channelBytes, 0, sizeof(buffer.channelBytes));
   for (uint32_t channel = 0; channel < channelCount; ++channel) {
     const size_t bytes =
-        boundedFrames * asio::bytesPerSample(renderChannelFormats_[channel]);
+        asio::wireBytesForFrames(renderChannelFormats_[channel], boundedFrames);
     buffer.channelBytes[channel] = static_cast<uint32_t>(
         std::min<size_t>(bytes, asio_helper::kChannelStride));
   }
