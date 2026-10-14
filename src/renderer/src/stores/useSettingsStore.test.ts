@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { reactive } from 'vue'
@@ -226,9 +226,8 @@ function readSettingsPageSources(): string {
     .join('\n')
 }
 
-test('about settings expose local-only sponsor payment options and sponsor list', () => {
+test('about settings expose bundled sponsor payment options and sponsor list', () => {
   const source = readSettingsPageSources()
-  const gitignore = readFileSync(new URL('../../../../.gitignore', import.meta.url), 'utf8')
 
   assert.match(source, /const AFDIAN_URL = 'https:\/\/ifdian\.net\/a\/pxasen'/)
   assert.match(source, />\s*赞助作者\s*</)
@@ -245,8 +244,8 @@ test('about settings expose local-only sponsor payment options and sponsor list'
   assert.match(source, /群号：1093775290/)
   assert.match(source, /useEscapeToClose\(qqGroupDialogOpen, closeQqGroupDialog\)/)
   assert.match(source, /useFocusTrap\(qqGroupDialogRef, qqGroupDialogOpen\)/)
-  assert.match(gitignore, /^resources\/sponsor\/alipay\.jpg$/m)
-  assert.match(gitignore, /^resources\/sponsor\/wechat\.png$/m)
+  assert.ok(existsSync(new URL('../../../../resources/sponsor/alipay.jpg', import.meta.url)))
+  assert.ok(existsSync(new URL('../../../../resources/sponsor/wechat.png', import.meta.url)))
 })
 
 test('appearance parser quotes background image handles when building css url values', () => {
