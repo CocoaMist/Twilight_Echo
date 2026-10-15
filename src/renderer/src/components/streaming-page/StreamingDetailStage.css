@@ -847,3 +847,22 @@ html[data-theme='dark'] .detail-stage .sk {
   height: 1px;
   list-style: none;
 }
+
+.row-artists {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.row-artist-separator {
+  flex: none;
+}
+
+.row-artists .row-artist {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

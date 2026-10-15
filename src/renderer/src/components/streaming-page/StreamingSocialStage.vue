@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { computed } from 'vue'
-import type { Track } from '../../types/music'
+import type { Track, TrackArtistRef } from '../../types/music'
+import TrackArtistLinks from '../TrackArtistLinks.vue'
 import CoverImg from '../CoverImg.vue'
 import { useProgressiveList } from './useProgressiveList.ts'
 
@@ -114,6 +115,8 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
+  openArtist: [track: Track, artist: TrackArtistRef]
+  openAlbum: [track: Track]
   follow: []
   retry: []
   personClick: [person: SocialPerson]
@@ -509,7 +512,10 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
 
               <div class="row-copy">
                 <div class="row-title" :title="track.title">{{ track.title }}</div>
-                <div class="row-artist" :title="track.artist">{{ track.artist || '未知艺人' }}</div>
+                <div class="row-artist">
+                  <TrackArtistLinks :track="track" @open-artist="emit('openArtist', track, $event)" />
+                  <span v-if="!track.artist.trim() && !track.artists?.length">未知艺人</span>
+                </div>
               </div>
             </div>
 
@@ -533,8 +539,20 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
               </button>
             </div>
 
-            <div class="col-album" :title="track.album || ''">
-              {{ track.album || '—' }}
+            <div class="col-album">
+              <button
+                v-if="track.album"
+                type="button"
+                class="metadata-link"
+                :title="track.album"
+                @click.stop="emit('openAlbum', track)"
+                @dblclick.stop
+                @keydown.stop
+                @keyup.stop
+              >
+                {{ track.album }}
+              </button>
+              <span v-else>—</span>
             </div>
 
             <div class="col-time">

@@ -48,6 +48,7 @@ import {
   collectionLetterAtScroll,
   firstCollectionIndexForLetter,
   LibraryCollectionViewPreferences,
+  resolveLibraryArtistTracks,
   type LibraryCollectionSort,
   type LibraryCollectionViewState
 } from '../utils/libraryCollectionView.ts'
@@ -226,7 +227,7 @@ const baseDisplayTracks = computed(() => {
   if (props.filter) {
     if (props.filter.startsWith('artist:')) {
       const name = props.filter.slice(7)
-      return artists.value.find((artist) => artist.name === name)?.tracks ?? []
+      return resolveLibraryArtistTracks(tracks.value, name)
     }
     if (props.filter.startsWith('album:')) {
       const id = props.filter.slice(6)

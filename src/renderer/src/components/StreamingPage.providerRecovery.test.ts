@@ -10,7 +10,11 @@ const script = source.match(/<script\b[^>]*>([\s\S]*?)<\/script>/)![1]
 const ast = ts.createSourceFile('page.ts', script, ts.ScriptTarget.Latest, true)
 const recoveryNodes = ast.statements.filter(
   (node) =>
-    (ts.isFunctionDeclaration(node) && node.name?.text === 'refreshStreamingSurface') ||
+    (ts.isFunctionDeclaration(node) &&
+      ['refreshStreamingSurface', 'playbackNavigationPending'].includes(node.name?.text ?? '')) ||
+    (ts.isVariableStatement(node) && node.declarationList.declarations.some((declaration) =>
+      ['lastMetadataNavigationKey', 'playbackNavigationInFlight'].includes(declaration.name.getText(ast))
+    )) ||
     (ts.isExpressionStatement(node) &&
       ts.isCallExpression(node.expression) &&
       node.expression.expression.getText(ast) === 'watch' &&
@@ -26,7 +30,10 @@ function fixture(t: { after: (fn: () => void) => void }) {
   const calls: string[] = []
   const ncmNavigationAvailable = ref(false)
   const activeProvider = ref('ncm')
-  const props = reactive({ active: true })
+  const props = reactive({
+    active: true,
+    metadataNavigationRequest: null as { key: number } | null
+  })
   const bindings = {
     watch,
     ncmNavigationAvailable,
@@ -191,4 +198,18 @@ test('personalized refill ignores an invalid queue index and a completed session
   f.setIndex(9)
   await flush()
   assert.deepEqual(f.calls, [])
+})
+
+test('late provider registration does not refresh the root while playback metadata navigation is pending', async (t) => {
+  const f = fixture(t)
+  f.props.metadataNavigationRequest = { key: 1 }
+  f.ncmNavigationAvailable.value = true
+  await flush()
+  assert.deepEqual(f.calls, [])
+  f.props.metadataNavigationRequest = null
+  f.props.active = false
+  await flush()
+  f.props.active = true
+  await flush()
+  assert.deepEqual(f.calls, ['login', 'library'])
 })
