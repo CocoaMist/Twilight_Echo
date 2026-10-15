@@ -298,7 +298,9 @@ watch(
           data-te-appearance-ignore
         >
           <header class="appearance-properties-heading">
-            <strong>{{ partInfo.label }}{{ materialPart ? '材质' : '背景' }}</strong
+            <strong
+              >{{ partInfo.label
+              }}{{ materialPart ? '材质' : backgroundPart ? '' : '背景' }}</strong
             ><span>{{ toneLabel }}</span>
           </header>
           <fieldset class="appearance-parameters" :disabled="busy || importing">
@@ -361,6 +363,9 @@ watch(
                 选择图片后可调整遮罩、亮度与模糊。
               </p>
               <button v-if="background.image" @click="removeImage">移除背景图片</button>
+              <button class="appearance-more-button" @click="emit('more', part)">
+                页面背景设置
+              </button>
             </template>
             <div v-for="field in fields" :key="field.key" class="appearance-parameter">
               <div>
