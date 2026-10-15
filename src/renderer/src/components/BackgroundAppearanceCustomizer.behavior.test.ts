@@ -119,6 +119,7 @@ app.whenReady().then(async()=>{
   await win.loadFile(process.argv.at(-1));
   win.webContents.debugger.attach('1.3');
   await win.webContents.executeJavaScript('window.runAppearanceTests()');
+  await win.webContents.executeJavaScript('window.runRecipeRestoreTests()');
   for(const page of ['local','streaming','player','settings'])for(const blur of [0,30]){
    await win.webContents.executeJavaScript('window.prepareAppearancePixels('+JSON.stringify(page)+','+blur+')');
    const viewport=(await capture()).getSize();
@@ -154,7 +155,7 @@ const expect=(value,message)=>{if(!value)throw new Error(message)}
 const settle=async()=>{await nextTick();for(let i=0;i<4;i++)await new Promise(resolve=>requestAnimationFrame(resolve))}
 window.settleAppearance=settle
 const page=ref('local'),writes=[];let failSave=false,failImport=false
-window.api={settings:{onChanged:()=>()=>{},update:async patch=>{if(failSave)throw new Error('保存失败示例');writes.push(patch);confirmed={...confirmed,...patch};return snapshot()},importBackgroundImage:async()=> {if(failImport)throw new Error('图片导入失败示例');return 'background://wallpaper.png'}},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}}}
+window.api={settings:{get:async()=>snapshot(),onChanged:()=>()=>{},update:async patch=>{if(failSave)throw new Error('保存失败示例');writes.push(patch);confirmed={...confirmed,...patch};return snapshot()},importBackgroundImage:async()=> {if(failImport)throw new Error('图片导入失败示例');return 'background://wallpaper.png'}},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}}}
 const settingsStore=useSettingsStore(),theme=useThemeStore()
 let confirmed={...settingsStore.settings.value,theme:'dark',appBackground:normalizeAppBackgroundSettings({global:{kind:'image',image:'background://wallpaper.png'}}),cardAppearance:defaultCardAppearance(),surfaceMaterial:'standard'}
 const snapshot=()=>({settings:confirmed,defaults:confirmed,paths:{},appVersion:'test',platform:'win32',windowTransparencySupported:false,restartReasons:[]})
@@ -170,7 +171,7 @@ createApp({setup(){return()=>h('div',[
  page.value==='player'?h('div',{class:'playing-music fixture-player','data-v-fixture':''},[h(Background,{page:'player',embedded:true}),h('div',{class:'backdrop','data-v-fixture':''},'旧封面背景')]):null,
  appearanceEditorOpen.value?h(Editor):null
 ])}}).mount('#app')
-const button=(text)=>[...document.querySelectorAll('.appearance-editor button,.appearance-full-preview-toolbar button')].find(el=>el.textContent.trim()===text && el.checkVisibility())
+const button=(text)=>[...document.querySelectorAll('.appearance-editor button,.appearance-full-preview-toolbar button,.appearance-recipe-prompt button')].find(el=>el.textContent.trim()===text && el.checkVisibility())
 window.runAppearanceTests=async()=>{
  settingsStore.hydrateStartupSnapshot(startup());await bootstrapThemeRuntime(startup());await settle()
  const cache=localStorage.getItem('twilight-echo:theme-runtime-cache:v1')
@@ -196,6 +197,29 @@ window.runAppearanceTests=async()=>{
  }
  await previewAppearance(null);await theme.setPreviewTone(null)
  const first=cloneAppearance(confirmed),second=cloneAppearance(confirmed);first.surfaceMaterial='transparent';second.surfaceMaterial='liquidGlass';await Promise.all([previewAppearance(first),previewAppearance(second)]);expect(document.documentElement.dataset.teSurfaceMaterial==='liquidGlass','old preview won race');await previewAppearance(null)
+}
+window.runRecipeRestoreTests=async()=>{
+ const baseline=JSON.parse(JSON.stringify(confirmed))
+ const waitFor=async(predicate,message)=>{for(let i=0;i<120;i++){await settle();if(predicate())return}throw new Error(message)}
+ const upload=async()=>{
+  const input=document.querySelector('.appearance-file-input'),transfer=new DataTransfer();transfer.items.add(new File(['image'],'wallpaper.png',{type:'image/png'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));await waitFor(()=>document.querySelector('[role=alertdialog]'),'successful image import did not offer the recipe')
+ }
+ for(const tone of ['pureWhite','dark']){
+  confirmed=JSON.parse(JSON.stringify(baseline));await settingsStore.loadSettings();await theme.setPreviewTone(tone);await settle();openAppearanceEditor();await settle()
+  failImport=true;const input=document.querySelector('.appearance-file-input'),transfer=new DataTransfer();transfer.items.add(new File(['invalid'],'invalid.png',{type:'image/png'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));await settle();expect(!document.querySelector('[role=alertdialog]'),'failed import opened a recommendation');failImport=false
+  const savedWrites=writes.length
+  await upload();expect(document.querySelector('[role=alertdialog]').contains(document.activeElement),'prompt did not receive focus');window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settle();expect(!document.querySelector('[role=alertdialog]')&&appearanceEditorOpen.value,'Escape closed the editor instead of the prompt')
+  await upload();button('稍后设置').click();await settle();expect(!document.querySelector('[role=alertdialog]')&&appearanceEditorOpen.value,'later action discarded the editor');expect(document.querySelector('.appearance-mini-window').style.getPropertyValue('--appearance-image').includes('wallpaper.png'),'later action discarded the image draft')
+  await upload();button('应用推荐').click();await waitFor(()=>button('透明')?.getAttribute('aria-pressed')==='true'&&!button('正在分析背景…'),'recipe did not finish');expect(!document.querySelector('[role=alertdialog]'),'apply action left the prompt open');expect(writes.length===savedWrites,'recipe persisted before save')
+  button('保存并使用').click();await settle();expect(confirmed.surfaceMaterial==='transparent','recipe did not save');expect(confirmed.appBackground.global.customized,'recipe did not exercise custom image state')
+  openAppearanceEditor();await settle();button('纯色').click();await settle();expect(button('跟随主题').getAttribute('aria-pressed')==='true','solid colour retained transparent material');expect(document.querySelector('#background-dim').value==='0','solid colour retained the image mask')
+  page.value='player';button('全窗口预览').click();await settle();expect(document.documentElement.dataset.tePlayerCustomBackground==='off','default solid colour still suppressed the player artwork');expect(document.documentElement.dataset.tePlayerTextTone==='theme','player retained the image text tone');expect(getComputedStyle(document.querySelector('.fixture-player .backdrop')).display!=='none','player backdrop stayed hidden after switching to solid colour');expect(writes.length===savedWrites+1,'solid preview unexpectedly persisted')
+  button('返回编辑').click();await settle();button('保存并使用').click();await settle();expect(confirmed.surfaceMaterial==='standard'&&!confirmed.appBackground.global.customized,'solid colour did not persist its restored state');expect(!confirmed.appBackground.global.image&&confirmed.appBackground.global.kind==='color','solid colour kept the image handle');for(const mode of ['light','dark'])expect(confirmed.appBackground.global.effects[mode].textTone==='theme','image text tone survived a restart')
+  openAppearanceEditor();await settle();button('图片').click();await settle();await upload();button('应用推荐').click();await waitFor(()=>button('透明')?.getAttribute('aria-pressed')==='true'&&!button('正在分析背景…'),'second recipe did not finish');button('移除').click();await settle();expect(button('跟随主题').getAttribute('aria-pressed')==='true','remove image retained transparent material');button('取消').click();await settle()
+ }
+ // The affected saved configuration also occurs with the standard material.
+ confirmed=JSON.parse(JSON.stringify(baseline));confirmed.surfaceMaterial='standard';confirmed.appBackground=normalizeAppBackgroundSettings({global:{customized:true,effects:{light:{textTone:'dark'}}}});await settingsStore.loadSettings();await theme.setPreviewTone('pureWhite');await settle();openAppearanceEditor();await settle();button('纯色').click();button('保存并使用').click();await settle();expect(!confirmed.appBackground.global.customized&&confirmed.appBackground.global.effects.light.textTone==='theme','selecting the existing solid mode did not repair the stale saved flags')
+ confirmed=JSON.parse(JSON.stringify(baseline));await settingsStore.loadSettings();page.value='local';await theme.setPreviewTone(null);await settle()
 }
 window.prepareAppearancePixels=async(currentPage,blur)=>{
  page.value=currentPage;document.body.className=currentPage==='streaming'?'te-streaming-surface':currentPage==='settings'?'te-settings-surface':'te-local-surface';const draft=cloneAppearance(confirmed);draft.surfaceMaterial='transparent';draft.appBackground.global.effects.dark={...draft.appBackground.global.effects.dark,blur,brightness:80,dim:40};await theme.setPreviewTone('dark');await previewAppearance(draft);await settle()

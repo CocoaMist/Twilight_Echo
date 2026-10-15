@@ -131,6 +131,12 @@ struct AsioHostDiagnostics {
   int loadableDriverCount64 = 0;
 };
 
+struct AsioRenderHealth {
+  uint64_t callbackCount = 0;
+  uint64_t underrunCount = 0;
+  uint64_t bufferDropCount = 0;
+};
+
 using AsioBufferSwitchCallback = std::function<void(long bufferIndex)>;
 using AsioEventCallback = std::function<void(AsioHostEvent event, const std::string& message)>;
 
@@ -177,6 +183,10 @@ class IAsioHost {
   // caller must keep the conservative DSD bufferSize/8 capacity.
   virtual size_t activeRenderFrameCapacity() const { return 0; }
   virtual bool dsdBufferUnitConfirmed() const { return false; }
+  // A nonblocking snapshot at the driver boundary, including IPC starvation
+  // which cannot be observed by the parent render callback's own counters.
+  virtual AsioRenderHealth renderHealth() const { return {}; }
+  virtual bool hasDriverBoundaryHealth() const { return false; }
   virtual void commitOutputBuffer(long bufferIndex, size_t frameCount) {
     (void)bufferIndex;
     (void)frameCount;
