@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import type { Track, TrackArtistRef } from '../../types/music'
 import TrackArtistLinks from '../TrackArtistLinks.vue'
 import CoverImg from '../CoverImg.vue'
+import ExplicitBadge from '../ExplicitBadge.vue'
 import { useProgressiveList } from './useProgressiveList.ts'
 
 export type SocialStageKind = 'artist' | 'user_list' | 'user_playlists' | string
@@ -30,6 +31,7 @@ export type SocialCollection = {
   coverSmallSource?: string | null
   trackCount?: number
   meta?: string
+  isExplicit?: boolean
 }
 
 const props = withDefaults(
@@ -88,7 +90,7 @@ const props = withDefaults(
     people: () => [],
     collections: () => [],
     collectionUnit: '首',
-    collectionEmptyTitle: '暂无内容',
+    collectionEmptyTitle: '',
     collectionEmptyHint: '',
     peopleEmptyTitle: '暂无数据',
     tabs: () => [],
@@ -178,10 +180,11 @@ const avatarCover = computed(
 
 const emptyMessage = computed(() => {
   if (isPeopleMode.value) return props.peopleEmptyTitle
+  if (props.collectionEmptyTitle) return props.collectionEmptyTitle
   if (props.activeTab === 'albums') return '这个艺人目前没有可展示的专辑'
   if (props.activeTab === 'playlists') return '目前没有公开创建的歌单'
   if (showTrackPanel.value) return '这个艺人目前没有可展示的歌曲'
-  return props.collectionEmptyTitle
+  return '暂无内容'
 })
 
 function onRowActivate(track: Track, index: number, event: MouseEvent): void {
@@ -385,6 +388,7 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
 
     <!-- Collections (albums / playlists / user playlists) -->
     <div v-else-if="showCollectionPanel || isCollectionOnlyMode" class="stage-panel">
+      <slot name="collection-tools" />
       <div v-if="collections.length === 0" class="stage-empty">
         <i class="pi pi-clone" aria-hidden="true"></i>
         <p>{{ emptyMessage }}</p>
@@ -408,7 +412,10 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
           <div v-else class="stage-collection-cover stage-collection-fallback" aria-hidden="true">
             <i class="pi pi-clone"></i>
           </div>
-          <span class="stage-collection-name" :title="item.name">{{ item.name }}</span>
+          <span class="stage-collection-title">
+            <span class="stage-collection-name" :title="item.name">{{ item.name }}</span>
+            <ExplicitBadge v-if="item.isExplicit" />
+          </span>
           <span v-if="item.meta || item.trackCount != null" class="stage-collection-meta">
             {{ item.meta || `${item.trackCount} ${collectionUnit}` }}
           </span>

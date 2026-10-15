@@ -10,6 +10,7 @@ import type {
 } from '@renderer/components/streaming-page/streamingTrackView'
 import type { Track, TrackArtistRef } from '../../types/music'
 import CoverImg from '../CoverImg.vue'
+import ExplicitBadge from '../ExplicitBadge.vue'
 import { useProgressiveList } from './useProgressiveList.ts'
 
 export type DetailStageKind =
@@ -28,6 +29,7 @@ const props = withDefaults(
   defineProps<{
     kind: DetailStageKind
     title: string
+    isExplicit?: boolean
     cover?: string | null
     coverSource?: string | null
     description?: string
@@ -279,7 +281,10 @@ const infoTrack = shallowRef<Track | null>(null)
           <span v-if="trackCountLabel" class="stage-kicker-meta">{{ trackCountLabel }}</span>
         </div>
 
-        <h2 class="stage-title">{{ title }}</h2>
+        <div class="stage-title-row">
+          <h2 class="stage-title">{{ title }}</h2>
+          <ExplicitBadge v-if="kind === 'album' && isExplicit" />
+        </div>
 
         <p v-if="description" class="stage-desc">{{ description }}</p>
         <p v-if="intro" class="stage-intro">{{ intro }}</p>
