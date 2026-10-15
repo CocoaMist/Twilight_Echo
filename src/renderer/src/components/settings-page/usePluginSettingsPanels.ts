@@ -28,7 +28,8 @@ export function usePluginSettingsPanels(execute: ExecuteCommand = defaultExecute
   const pluginSettingsValues = ref<Record<string, Record<string, string>>>({})
 
   const liveTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  const liveInFlight = new Set<string>()
+  const liveInFlight = new Map<string, Promise<void>>()
+  const resettingPanels = new Set<string>()
   const liveDirty = new Set<string>()
   const draftRevisions = new Map<string, number>()
   const autoLoadedPanels = new Set<string>()
@@ -97,6 +98,7 @@ export function usePluginSettingsPanels(execute: ExecuteCommand = defaultExecute
 
   function setPluginSettingsField(panel: UiContribution, key: string, value: string): void {
     const stateKey = pluginPanelStateKey(panel)
+    if (resettingPanels.has(stateKey)) return
     setValues(stateKey, {
       ...(pluginSettingsValues.value[stateKey] ?? {}),
       [key]: value.slice(0, 4096)
@@ -115,7 +117,7 @@ export function usePluginSettingsPanels(execute: ExecuteCommand = defaultExecute
 
   async function flushLiveSubmit(stateKey: string): Promise<void> {
     const form = pluginSettingsForms.value[stateKey]
-    if (!form?.live) return
+    if (!form?.live || resettingPanels.has(stateKey)) return
     if (liveInFlight.has(stateKey)) {
       // Coalesce edits made while a submit is in flight into one follow-up.
       liveDirty.add(stateKey)
@@ -128,20 +130,23 @@ export function usePluginSettingsPanels(execute: ExecuteCommand = defaultExecute
       return
     }
     const revision = draftRevisions.get(stateKey) ?? 0
-    liveInFlight.add(stateKey)
-    try {
-      const result = await execute(form.submitCommand, [{ ...values }])
-      // Only adopt the plugin's canonical values if the user has not kept
-      // editing; otherwise a slow round-trip would snap sliders backwards.
-      const nextForm = refreshedForm(result)
-      if (nextForm && draftRevisions.get(stateKey) === revision) applyForm(stateKey, nextForm)
-      setFeedback(stateKey, submitResultMessage(result))
-    } catch (err) {
-      setError(stateKey, err)
-    } finally {
-      liveInFlight.delete(stateKey)
-      if (liveDirty.delete(stateKey)) void flushLiveSubmit(stateKey)
-    }
+    const submission = Promise.resolve().then(async () => {
+      try {
+        const result = await execute(form.submitCommand, [{ ...values }])
+        // A pending reset owns the next form and feedback, even if this save fails.
+        if (resettingPanels.has(stateKey)) return
+        const nextForm = refreshedForm(result)
+        if (nextForm && draftRevisions.get(stateKey) === revision) applyForm(stateKey, nextForm)
+        setFeedback(stateKey, submitResultMessage(result))
+      } catch (err) {
+        if (!resettingPanels.has(stateKey)) setError(stateKey, err)
+      } finally {
+        liveInFlight.delete(stateKey)
+        if (liveDirty.delete(stateKey)) void flushLiveSubmit(stateKey)
+      }
+    })
+    liveInFlight.set(stateKey, submission)
+    await submission
   }
 
   async function submitPluginSettingsForm(panel: UiContribution): Promise<void> {
@@ -184,11 +189,15 @@ export function usePluginSettingsPanels(execute: ExecuteCommand = defaultExecute
     const stateKey = pluginPanelStateKey(panel)
     const form = pluginSettingsForms.value[stateKey]
     if (!form?.resetCommand || runningPluginSettingsCommand.value) return
+    resettingPanels.add(stateKey)
+    draftRevisions.set(stateKey, (draftRevisions.get(stateKey) ?? 0) + 1)
     cancelLiveSubmit(stateKey)
     liveDirty.delete(stateKey)
     runningPluginSettingsCommand.value = stateKey
     setFeedback(stateKey, '')
     try {
+      // Reset must be the last write, not just the last response shown in the UI.
+      await liveInFlight.get(stateKey)
       const result = await execute(form.resetCommand, [])
       const nextForm = refreshedForm(result)
       if (nextForm) {
@@ -199,6 +208,7 @@ export function usePluginSettingsPanels(execute: ExecuteCommand = defaultExecute
     } catch (err) {
       setError(stateKey, err)
     } finally {
+      resettingPanels.delete(stateKey)
       runningPluginSettingsCommand.value = ''
     }
   }

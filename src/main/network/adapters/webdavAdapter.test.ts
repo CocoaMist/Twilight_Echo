@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import dns from 'node:dns'
 import { createServer, type Server } from 'node:http'
 import test from 'node:test'
 import { createWebDavAdapter } from './webdavAdapter.ts'
@@ -545,7 +546,7 @@ test('webdav does not leak credentials across cross-origin redirects', async () 
 
 test('webdav does not abort downloads that keep making progress', async () => {
   const session = await createWebDavAdapter().createSession(
-    makeProfile({ options: { transferTimeoutMs: 500 } }),
+    makeProfile({ options: { connectTimeoutMs: 500, transferTimeoutMs: 500 } }),
     { kind: 'password', username: 'alice', password: 's3cret' }
   )
   const stream = await session.readStream('/music/slow.flac')
@@ -585,6 +586,32 @@ test('webdav bounds the wait for response headers with connectTimeoutMs', async 
   )
   assert.ok(Date.now() - startedAt < 600)
   await session.close()
+})
+
+test('webdav connection deadline includes a stalled DNS lookup', async (t) => {
+  let lookupStarted = false
+  t.mock.method(dns, 'lookup', () => {
+    lookupStarted = true
+    // Simulate a resolver that never invokes its callback.
+  })
+  const session = await createWebDavAdapter().createSession(
+    makeProfile({ host: 'stalled.invalid', options: { connectTimeoutMs: 50 } }),
+    { kind: 'anonymous' }
+  )
+  const controller = new AbortController()
+  let watchdogExpired = false
+  const watchdog = setTimeout(() => {
+    watchdogExpired = true
+    controller.abort()
+  }, 2000)
+  try {
+    await assert.rejects(session.list('/music', controller.signal), { code: 'timeout' })
+    assert.equal(lookupStarted, true)
+    assert.equal(watchdogExpired, false, 'connection deadline must abort before the caller does')
+  } finally {
+    clearTimeout(watchdog)
+    await session.close()
+  }
 })
 
 test('webdav keeps a port embedded in the host when none is configured explicitly', async () => {

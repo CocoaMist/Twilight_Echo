@@ -390,7 +390,7 @@ test('plugin lifecycle stop is single-flight and stale process events cannot dis
   )
   assert.match(
     managerSource,
-    /if \(this\.running\.get\(id\) === running\) this\.running\.delete\(id\)/
+    /if \(this\.running\.get\(id\) === running\) \{\s*this\.dynamicIsland\?\.hide\(id\)\s*this\.running\.delete\(id\)/
   )
 })
 

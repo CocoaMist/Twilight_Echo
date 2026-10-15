@@ -175,6 +175,53 @@ test('reset runs the reset command and replaces the draft', async () => {
   assert.equal(panels.pluginSettingsResult.value[key], '已恢复')
 })
 
+for (const saveFails of [false, true]) {
+  test(`reset waits for an in-flight live save (${saveFails ? 'failure' : 'success'})`, async () => {
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const calls: string[] = []
+    let persisted = 'initial'
+    const nextForm = (value: string): unknown =>
+      form([{ key: 'v', label: 'V', type: 'text', value }], {
+        live: true,
+        resetCommand: 'reset'
+      })
+    const panels = usePluginSettingsPanels(async (command, args) => {
+      calls.push(command)
+      if (command === 'open') return nextForm(persisted)
+      if (command === 'save') {
+        started.resolve()
+        await release.promise
+        if (saveFails) throw new Error('save failed')
+        persisted = (args[0] as Record<string, string>).v
+      } else if (command === 'reset') {
+        persisted = 'default'
+      }
+      return { message: command, form: nextForm(persisted) }
+    })
+    await panels.runPluginSettingsPanel(panel)
+    panels.setPluginSettingsField(panel, 'v', 'custom')
+    // Flush the pending debounce, then leave the actual save unresolved.
+    panels.disposePluginSettingsPanels()
+    await started.promise
+    panels.setPluginSettingsField(panel, 'v', 'queued')
+    panels.disposePluginSettingsPanels()
+    const reset = panels.resetPluginSettingsForm(panel)
+    await Promise.resolve()
+    assert.deepEqual(calls, ['open', 'save'], 'reset must not overlap the live save')
+    panels.setPluginSettingsField(panel, 'v', 'during-reset')
+    release.resolve()
+    await reset
+    panels.disposePluginSettingsPanels()
+    const key = panels.pluginPanelStateKey(panel)
+    assert.deepEqual(calls, ['open', 'save', 'reset'], 'discard obsolete queued saves')
+    assert.equal(persisted, 'default')
+    assert.equal(panels.pluginSettingsValues.value[key].v, 'default')
+    assert.equal(panels.pluginSettingsResult.value[key], 'reset')
+    assert.equal(panels.pluginSettingsError.value[key], '')
+  })
+}
+
 test('autoLoad panels open once per page visit', async () => {
   const opened: string[] = []
   const panels = usePluginSettingsPanels(async (command) => {

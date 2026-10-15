@@ -208,15 +208,22 @@ export function createWebDavAdapter(): NetworkSourceAdapter {
           const req = requestFn(url, { method, headers: finalHeaders, signal }, (res) =>
             resolve(res)
           )
-          // 连接/等待响应头阶段用 connectTimeoutMs；收到响应后改用
-          // transferTimeoutMs 作为空闲超时，socket 每次读写都会重置。
+          // Socket timeouts only start after connection. A separate deadline
+          // also bounds DNS lookup, TCP/TLS setup and waiting for headers.
           const onTimeout = (): void => {
             req.destroy(new NetworkSourceFailure('timeout', '网络请求超时'))
           }
-          req.setTimeout(connectTimeoutMs)
+          const connectTimer = setTimeout(onTimeout, connectTimeoutMs)
+          const clearConnectTimer = (): void => clearTimeout(connectTimer)
+          req.once('close', clearConnectTimer)
           req.on('timeout', onTimeout)
-          req.on('response', () => req.setTimeout(timeoutMs))
+          req.once('response', () => {
+            clearConnectTimer()
+            // Once headers arrive, active transfers have only an idle timeout.
+            req.setTimeout(timeoutMs)
+          })
           req.on('error', (err) => {
+            clearConnectTimer()
             if (err instanceof NetworkSourceFailure) {
               reject(err)
             } else if ((err as NodeJS.ErrnoException).code === 'ABORT_ERR') {

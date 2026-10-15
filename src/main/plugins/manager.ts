@@ -1229,6 +1229,7 @@ export class TwilightPluginManager extends EventEmitter {
     })
     child.on('exit', (code) => {
       if (this.running.get(descriptor.id) !== running) return
+      this.dynamicIsland?.hide(descriptor.id)
       const wasStopping = this.stopOperations.has(descriptor.id)
       this.rpcCalls.cancelPlugin(
         descriptor.id,
@@ -1299,6 +1300,7 @@ export class TwilightPluginManager extends EventEmitter {
     this.hostIdle?.clear(id)
     const running = this.running.get(id)
     if (!running) {
+      this.dynamicIsland?.hide(id)
       // A hibernated plugin has no process; an explicit stop just forgets it.
       if (!this.hibernating.has(id)) {
         this.hibernated.delete(id)
@@ -1350,7 +1352,10 @@ export class TwilightPluginManager extends EventEmitter {
     if (id === QISHUI_PLUGIN_ID) {
       await this.qishuiAuth.clear(running.descriptor.paths.versionRoot).catch(() => undefined)
     }
-    if (this.running.get(id) === running) this.running.delete(id)
+    if (this.running.get(id) === running) {
+      this.dynamicIsland?.hide(id)
+      this.running.delete(id)
+    }
   }
 
   private waitForActivation(
