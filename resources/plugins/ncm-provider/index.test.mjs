@@ -1940,6 +1940,81 @@ test('saved albums and artists paginate and normalize cloud collections', async 
   }
 })
 
+test('album collections retain upstream release kinds without guessing from track counts', async () => {
+  const source = [
+    { ...album(1), name: 'LONG SEASON', size: 1, type: 'Single', subType: '录音室版' },
+    { ...album(2), name: 'Spitfire EP', size: 11, type: '专辑', subType: '录音室版' },
+    { ...album(3), type: ' EP ', subType: ' 现场版 ' },
+    { ...album(4), type: 'EP/Single', subType: 'Remix' },
+    { ...album(5), type: 'Mixtape', subType: 'Demo' },
+    { ...album(6), type: ' ', subType: 7 },
+    album(7)
+  ]
+  const provider = await activateProvider(async (path) => {
+    const url = parseRequest(path)
+    if (url.pathname === '/artist/album') return { hotAlbums: source, more: false }
+    if (url.pathname === '/album/sublist') return { data: source, more: false }
+    throw new Error(`unexpected endpoint: ${url.pathname}`)
+  })
+  try {
+    for (const result of [
+      await provider.fetchArtistAlbums(185871),
+      await provider.fetchSavedAlbums()
+    ]) {
+      assert.deepEqual(
+        result.map(({ releaseType }) => releaseType),
+        ['Single', '专辑', 'EP', 'EP/Single', 'Mixtape', undefined, undefined]
+      )
+      assert.equal(result[0].trackCount, 1)
+      assert.equal(result[1].name, 'Spitfire EP')
+      assert.equal(result[1].trackCount, 11)
+    }
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
+test('album explicit badges use the upstream flag bit and leave invalid metadata unknown', async () => {
+  const cases = [
+    [1048576, true],
+    [1056768, true],
+    [2 ** 40 + 1048576, true],
+    ['1056768', true],
+    [0, false],
+    [8192, false],
+    ['0', false],
+    [undefined, undefined],
+    [null, undefined],
+    ['', undefined],
+    [' ', undefined],
+    ['invalid', undefined],
+    [true, undefined],
+    [-1, undefined],
+    [1048576.5, undefined],
+    [Number.MAX_SAFE_INTEGER + 1, undefined]
+  ]
+  const source = cases.map(([mark], id) => ({ ...album(id + 1), name: 'Explicit', mark }))
+  const provider = await activateProvider(async (path) => {
+    const url = parseRequest(path)
+    if (url.pathname === '/artist/album') return { hotAlbums: source, more: false }
+    if (url.pathname === '/album/sublist') return { data: source, more: false }
+    throw new Error(`unexpected endpoint: ${url.pathname}`)
+  })
+  try {
+    for (const result of [
+      await provider.fetchArtistAlbums(53092),
+      await provider.fetchSavedAlbums()
+    ]) {
+      assert.deepEqual(
+        result.map(({ isExplicit }) => isExplicit),
+        cases.map(([, expected]) => expected)
+      )
+    }
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
 test('artist albums keep paging when a short page reports more items', async () => {
   const requests = []
   const provider = await activateProvider(async (path) => {

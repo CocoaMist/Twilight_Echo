@@ -2,6 +2,7 @@ let contextRef = null
 let ncmApi = null
 
 const PROVIDER_ID = 'ncm'
+const EXPLICIT_ALBUM_MARK = 0x100000
 const COOKIE_KEY = 'cookie'
 const PC_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0'
@@ -758,6 +759,10 @@ function normalizeAlbum(album) {
       .map((item) => item?.name)
       .filter(Boolean)
       .join(' / ') || album.artistName
+  const mark =
+    typeof album.mark === 'number' || (typeof album.mark === 'string' && album.mark.trim())
+      ? Number(album.mark)
+      : NaN
   return {
     id: Number(album.id),
     name: album.name || '未命名专辑',
@@ -765,6 +770,9 @@ function normalizeAlbum(album) {
     cover: normalizeRemoteAssetUrl(rawCover),
     coverSmall: normalizeNcmCoverSize(rawCover, 140),
     trackCount: typeof album.size === 'number' ? album.size : (album.songCount ?? 0),
+    releaseType: typeof album.type === 'string' ? album.type.trim() || undefined : undefined,
+    isExplicit:
+      Number.isSafeInteger(mark) && mark >= 0 ? (mark & EXPLICIT_ALBUM_MARK) !== 0 : undefined,
     publishTime:
       typeof album.publishTime === 'number'
         ? album.publishTime

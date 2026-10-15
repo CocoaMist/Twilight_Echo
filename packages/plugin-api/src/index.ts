@@ -263,6 +263,10 @@ export interface AlbumSummary {
   cover?: string | null
   trackCount?: number
   publishTime?: number
+  /** Provider-reported release kind; do not infer LP/EP from the track count. */
+  releaseType?: string
+  /** Provider-reported explicit-content flag; omitted when unavailable. */
+  isExplicit?: boolean
 }
 
 /** Public music charts, including the provider's compact song previews. */

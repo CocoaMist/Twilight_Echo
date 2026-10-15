@@ -59,6 +59,11 @@ import { useBilibiliFavorites } from './streaming-page/useBilibiliFavorites'
 import NcmCloudPanel from './NcmCloudPanel.vue'
 import StreamingSearch from './StreamingSearch.vue'
 import StreamingDetailStage from './streaming-page/StreamingDetailStage.vue'
+import NcmAlbumFilters from './streaming-page/NcmAlbumFilters.vue'
+import {
+  filterNcmAlbums,
+  formatNcmAlbumClassification
+} from './streaming-page/ncmAlbumClassification'
 import { useStreamingTrackView } from '@renderer/components/streaming-page/useStreamingTrackView'
 import {
   usePlaylistTrackPaging,
@@ -142,6 +147,7 @@ interface HomeSectionDefinition extends ProviderHomeSectionPresentation {
 
 interface DetailHeaderInfo {
   title: string
+  isExplicit?: boolean
   cover: string | null
   coverSource?: string | null
   desc: string
@@ -172,6 +178,7 @@ interface DetailSnapshot {
   intro: string
   followed: boolean | null
   artistTab: ArtistDetailTab
+  artistAlbumReleaseType: string
   liked: number | null
   likedPaging: { nextOffset: number; total: number | null; hasMore: boolean }
   playlistPaging?: PlaylistTrackPagingSnapshot
@@ -284,6 +291,7 @@ const artistPlaylists = ref<MediaProviderPlaylistSummary[]>([])
 const artistIntro = ref('')
 const artistFollowed = ref<boolean | null>(null)
 const activeArtistTab = ref<ArtistDetailTab>('songs')
+const artistAlbumReleaseType = ref('')
 const detailLoading = ref(false)
 const detailError = ref('')
 const followActionLoading = ref(false)
@@ -1224,6 +1232,17 @@ const currentArtistPlaylists = computed(() =>
 const currentArtistAlbums = computed(() =>
   currentDetail.value?.type === 'artist' ? artistAlbums.value : []
 )
+const showNcmAlbumFilters = computed(
+  () =>
+    activeProvider.value === NCM_PROVIDER_ID &&
+    currentDetail.value?.type === 'artist' &&
+    activeArtistTab.value === 'albums'
+)
+const filteredArtistAlbums = computed(() =>
+  activeProvider.value === NCM_PROVIDER_ID
+    ? filterNcmAlbums(currentArtistAlbums.value, artistAlbumReleaseType.value)
+    : currentArtistAlbums.value
+)
 const artistDetailTabs = computed<Array<{ key: ArtistDetailTab; label: string; count: number }>>(
   () => [
     { key: 'songs', label: '全部歌曲', count: detailTracks.value.length },
@@ -1319,6 +1338,10 @@ const detailHeaderInfo = computed<DetailHeaderInfo | null>(() => {
   if (currentDetail.value.type === 'album') {
     return {
       title: currentDetail.value.album.name,
+      isExplicit:
+        currentDetail.value.providerId === NCM_PROVIDER_ID
+          ? currentDetail.value.album.isExplicit
+          : undefined,
       cover: currentDetail.value.album.cover,
       coverSource: currentDetail.value.album.coverSource ?? null,
       desc: [
@@ -1326,6 +1349,9 @@ const detailHeaderInfo = computed<DetailHeaderInfo | null>(() => {
         currentDetail.value.providerId === 'local'
           ? '本地音乐'
           : providerStore.getProvider(currentDetail.value.providerId)?.name,
+        currentDetail.value.providerId === NCM_PROVIDER_ID
+          ? formatNcmAlbumClassification(currentDetail.value.album)
+          : '',
         `共 ${detailTracks.value.length || currentDetail.value.album.trackCount} 首歌曲`
       ]
         .filter(Boolean)
@@ -1449,6 +1475,7 @@ function clearDetailState(): void {
   artistIntro.value = ''
   artistFollowed.value = null
   activeArtistTab.value = 'songs'
+  artistAlbumReleaseType.value = ''
   detailLoading.value = false
   detailError.value = ''
   resetLikedTracksPaging()
@@ -1465,6 +1492,7 @@ function captureDetailState(): DetailSnapshot {
     intro: artistIntro.value,
     followed: artistFollowed.value,
     artistTab: activeArtistTab.value,
+    artistAlbumReleaseType: artistAlbumReleaseType.value,
     liked: likedCount.value,
     playlistPaging: playlistTrackPaging.snapshot(),
     likedPaging: {
@@ -1488,6 +1516,7 @@ function applyDetailState(snapshot: DetailSnapshot | undefined): void {
   artistIntro.value = snapshot.intro
   artistFollowed.value = snapshot.followed
   activeArtistTab.value = snapshot.artistTab
+  artistAlbumReleaseType.value = snapshot.artistAlbumReleaseType ?? ''
   likedCount.value = snapshot.liked
   likedTracksNextOffset.value = snapshot.likedPaging.nextOffset
   likedTracksTotal.value = snapshot.likedPaging.total
@@ -2748,14 +2777,21 @@ const socialCollections = computed(() => {
   }
   if (detail?.type === 'artist') {
     if (activeArtistTab.value === 'albums') {
-      return currentArtistAlbums.value.map((album) => ({
+      return filteredArtistAlbums.value.map((album) => ({
         id: album.id,
         name: album.name,
         cover: album.cover,
         coverSource: album.coverSource ?? null,
         coverSmall: album.coverSmall ?? null,
         coverSmallSource: album.coverSmallSource ?? null,
-        trackCount: album.trackCount
+        trackCount: album.trackCount,
+        isExplicit: activeProvider.value === NCM_PROVIDER_ID ? album.isExplicit : undefined,
+        meta:
+          activeProvider.value === NCM_PROVIDER_ID
+            ? [formatNcmAlbumClassification(album), `${album.trackCount} 首`]
+                .filter(Boolean)
+                .join(' · ')
+            : undefined
       }))
     }
     if (activeArtistTab.value === 'playlists') {
@@ -3836,6 +3872,7 @@ onMounted(async () => {
                 v-else-if="detailHeaderInfo"
                 :kind="currentDetail.type"
                 :title="detailHeaderInfo.title"
+                :is-explicit="detailHeaderInfo.isExplicit"
                 :cover="detailHeaderInfo.cover"
                 :cover-source="detailHeaderInfo.coverSource"
                 :description="detailHeaderInfo.desc"
@@ -3904,6 +3941,9 @@ onMounted(async () => {
               :follow-error="followActionError"
               :people="socialPeople"
               :collections="socialCollections"
+              :collection-empty-title="
+                showNcmAlbumFilters && artistAlbumReleaseType ? '没有符合筛选条件的专辑' : undefined
+              "
               :collection-empty-hint="socialCollectionEmptyHint"
               :tabs="socialStageKind === 'artist' ? artistDetailTabs : []"
               :active-tab="socialStageKind === 'artist' ? activeArtistTab : ''"
@@ -3935,7 +3975,15 @@ onMounted(async () => {
               @batch-delete="handleStreamingBatchDelete"
               @clear-selection="clearSelection"
               @track-context-menu="onStreamingTrackContextMenu"
-            />
+            >
+              <template #collection-tools>
+                <NcmAlbumFilters
+                  v-if="showNcmAlbumFilters && currentArtistAlbums.length"
+                  :albums="currentArtistAlbums"
+                  v-model:release-type="artistAlbumReleaseType"
+                />
+              </template>
+            </StreamingSocialStage>
           </div>
 
           <NcmCloudPanel
