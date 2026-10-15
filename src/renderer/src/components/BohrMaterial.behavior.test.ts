@@ -154,7 +154,8 @@ app.whenReady().then(async()=>{
 
 const runtime = `import {h,render,nextTick} from 'vue'
 import LiquidGlassDefs from '@renderer/components/LiquidGlassDefs.vue'
-import {resolveRasterSampling,measureSurfaceGeometry} from '@renderer/utils/liquidGlassDisplacement.ts'
+import {resolveRasterSampling,measureSurfaceGeometry,buildDisplacementPixels,getDisplacementMapUrl} from '@renderer/utils/liquidGlassDisplacement.ts'
+import {buildSpecularPixels,getSpecularMapUrl} from '@renderer/utils/liquidGlassSpecular.ts'
 const root=document.documentElement
 const host=document.getElementById('defs')
 const bar=document.querySelector('.player-bar')
@@ -188,6 +189,18 @@ window.checkPixelRatioUpdate=async()=>{
  expect(image.width===raster.width&&image.height===raster.height,'unchanged CSS geometry updates its physical-pixel raster: '+image.width+'x'+image.height+' at '+density)
 }
 window.runBohrTests=async()=>{
+ // Compare both PNGs against the previous copy-based encoding path in real Chromium.
+ for(const density of [1,2,3]){
+  const geometry={width:64,height:48,radius:12}
+  for(const [build,url] of [[buildDisplacementPixels,getDisplacementMapUrl],[(g,d)=>buildSpecularPixels(g,45,d),(g,d)=>getSpecularMapUrl(g,45,d)]]){
+   const raster=build(geometry,density),canvas=document.createElement('canvas')
+   canvas.width=raster.width;canvas.height=raster.height
+   const ctx=canvas.getContext('2d'),copy=ctx.createImageData(raster.width,raster.height)
+   copy.data.set(raster.pixels);ctx.putImageData(copy,0,0)
+   expect(url(geometry,density)===canvas.toDataURL(),'raster allocation optimization changed encoded pixels')
+   canvas.width=0;canvas.height=0
+  }
+ }
  root.setAttribute('data-te-surface-material','liquidGlass')
  root.style.setProperty('--te-lg-specular','0.76')
  await mount(true)

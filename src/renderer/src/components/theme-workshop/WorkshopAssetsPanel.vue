@@ -115,7 +115,13 @@ function replace(asset: WorkshopAsset): void {
     :data-workshop-asset="asset.id"
     tabindex="-1"
   >
-    <img v-if="asset.type === 'image'" :src="asset.dataUrl" :alt="asset.name" />
+    <img
+      v-if="asset.type === 'image'"
+      :src="asset.dataUrl"
+      :alt="asset.name"
+      loading="lazy"
+      decoding="async"
+    />
     <h3>{{ asset.name }}</h3>
     <small
       >{{ sizes[asset.id] ?? (asset.type === 'font' ? 'WOFF2' : '读取尺寸中…') }} ·
