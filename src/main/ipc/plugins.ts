@@ -31,6 +31,12 @@ import { reconcileThemeAfterPluginChange } from './themes.ts'
 import { setupThemeWorkshopIpc, prepareThemeWorkshopDisable } from './themeWorkshop.ts'
 import { THEME_WORKSHOP_ID } from '../../shared/themeWorkshop.ts'
 import {
+  configureDynamicIsland,
+  hideDynamicIsland,
+  isDynamicIslandOwner,
+  showDynamicIsland
+} from '../integrations/dynamicIsland.ts'
+import {
   PROVIDER_DOWNLOAD_CHANGED_CHANNEL,
   type ProviderDownloadCreateInput
 } from '../../shared/providerDownloads.ts'
@@ -124,6 +130,12 @@ export function setupPluginIpc(): void {
       previous: async () => {
         await runtime.audioEngineManager?.previous()
       }
+    },
+    dynamicIsland: {
+      show: showDynamicIsland,
+      configure: configureDynamicIsland,
+      hide: hideDynamicIsland,
+      isOwner: isDynamicIslandOwner
     },
     getProxyEnv: () => buildPluginProxyEnv(runtime.appSettings)
   })

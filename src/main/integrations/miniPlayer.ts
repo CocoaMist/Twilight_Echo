@@ -26,6 +26,8 @@ import { runtime } from '../core/runtime'
 import { createSettingsSnapshot, writeAppSettings } from '../core/settings'
 import { importBackgroundImage } from '../library/coverCache'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
+import { publishDynamicIslandLyrics, publishDynamicIslandState } from './dynamicIsland.ts'
+import { normalizeDynamicIslandLyrics } from '../../shared/dynamicIsland.ts'
 import {
   MINI_PLAYER_MAX_HEIGHT,
   MINI_PLAYER_MAX_WIDTH,
@@ -443,6 +445,7 @@ export function setupMiniPlayerIpc(): void {
     if (!shouldAcceptSenderWindow(event, runtime.mainWindow, 'mini player state IPC')) return
     const state = normalizeMiniPlayerStateSnapshot(rawState)
     runtime.latestMiniPlayerState = state
+    publishDynamicIslandState(state)
     sendMiniPlayerState(state)
     runtime.refreshTrayMenu?.()
     runtime.refreshTaskbarThumbarButtons?.()
@@ -455,6 +458,13 @@ export function setupMiniPlayerIpc(): void {
     ) {
       trayPlayerWindow.webContents.send('trayPlayer:state', state)
     }
+  })
+
+  // Island-only lyric channel: keeps the shared snapshot lyric-free while the
+  // main renderer still owns lyric parsing.
+  ipcMain.on('miniPlayer:publishLyrics', (event, rawLyrics: unknown) => {
+    if (!shouldAcceptSenderWindow(event, runtime.mainWindow, 'dynamic island lyrics IPC')) return
+    publishDynamicIslandLyrics(normalizeDynamicIslandLyrics(rawLyrics))
   })
 
   ipcMain.handle('miniPlayer:getBootstrap', (event): MiniPlayerBootstrap => {

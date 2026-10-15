@@ -1654,7 +1654,14 @@ export function resolveSettingsSearchEntry(entry: SettingsSearchEntry): Settings
 
 export const RESET_DESKTOP_LYRICS: DesktopLyricsSettings = DEFAULT_DESKTOP_LYRICS_SETTINGS
 
-export type PluginSettingsFieldType = 'text' | 'password' | 'url' | 'select'
+export type PluginSettingsFieldType =
+  | 'text'
+  | 'password'
+  | 'url'
+  | 'select'
+  | 'toggle'
+  | 'range'
+  | 'color'
 
 export interface PluginSettingsOption {
   label: string
@@ -1667,12 +1674,24 @@ export interface PluginSettingsField {
   type: PluginSettingsFieldType
   required: boolean
   placeholder: string
+  description: string
+  /** Heading shared by consecutive fields; empty when ungrouped. */
+  group: string
   value: string
   options: PluginSettingsOption[]
+  /** Range bounds; unused by other field types. */
+  min: number
+  max: number
+  step: number
+  unit: string
 }
 
 export interface PluginSettingsForm {
   submitCommand: string
+  /** Empty when the plugin offers no reset action. */
+  resetCommand: string
+  /** Submit on every change (debounced) instead of via a save button. */
+  live: boolean
   fields: PluginSettingsField[]
   notice: string
 }

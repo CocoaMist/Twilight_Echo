@@ -35,6 +35,7 @@ interface WakeTestManager {
   wakeOperations: Map<string, Promise<Snapshot>>
   state: Record<string, { enabled: boolean }>
   listProviders(): TwilightMediaProviderRegistration[]
+  stopPlugin(id: string): Promise<void>
   callProvider(providerId: string, method: 'checkLogin', args: unknown[]): Promise<unknown>
 }
 
@@ -44,12 +45,14 @@ function createWakeHarness(): {
   started: Promise<void>
   forkCount: () => number
   calls: string[]
+  island: { owner: string | null; hideCalls: string[] }
 } {
   let resolveStarted!: () => void
   const started = new Promise<void>((done) => {
     resolveStarted = done
   })
   const calls: string[] = []
+  const island = { owner: pluginId as string | null, hideCalls: [] as string[] }
   let forks = 0
   const child = Object.assign(new EventEmitter(), {
     postMessage(message: { kind: string; method?: string; requestId?: string }): void {
@@ -126,6 +129,12 @@ function createWakeHarness(): {
     contributionsCache: {},
     state: { [pluginId]: { enabled: true } },
     hostIdle: null,
+    dynamicIsland: {
+      hide(id: string): void {
+        island.hideCalls.push(id)
+        if (island.owner === id) island.owner = null
+      }
+    },
     bundledPlugins: [{ id: pluginId }],
     pluginOperationQueue: new PluginOperationQueue(),
     rpcCalls: {
@@ -140,7 +149,7 @@ function createWakeHarness(): {
     queueStateSave: () => undefined,
     handleHostMessage: () => undefined
   })
-  return { manager, child, started, forkCount: () => forks, calls }
+  return { manager, child, started, forkCount: () => forks, calls, island }
 }
 
 test('cached startup providers stay visible and concurrent calls wait for wake activation', async () => {
@@ -185,7 +194,7 @@ test('cached startup providers stay visible and concurrent calls wait for wake a
 })
 
 test('wake activation failure rejects all waiters and removes cached contributions', async () => {
-  const { manager, child, started, forkCount, calls } = createWakeHarness()
+  const { manager, child, started, forkCount, calls, island } = createWakeHarness()
   const first = manager.callProvider('ncm', 'checkLogin', [])
   await started
   const second = manager.callProvider('ncm', 'checkLogin', [])
@@ -205,6 +214,45 @@ test('wake activation failure rejects all waiters and removes cached contributio
   assert.equal(manager.wakeOperations.size, 0)
   assert.equal(manager.state[pluginId].enabled, true, 'retain user intent for the next startup')
   assert.equal(manager.listProviders().length, 0)
+  assert.equal(island.owner, null, 'failed activation releases any overlay it opened')
+})
+
+for (const reason of ['stop', 'crash'] as const) {
+  test(`plugin ${reason} releases its dynamic island`, async () => {
+    const { manager, child, started, island } = createWakeHarness()
+    const activation = manager.callProvider('ncm', 'checkLogin', [])
+    await started
+    child.emit('message', { kind: 'activated', pluginId })
+    await activation
+    if (reason === 'stop') await manager.stopPlugin(pluginId)
+    else child.emit('exit', 1)
+    assert.equal(manager.running.has(pluginId), false)
+    assert.equal(island.owner, null)
+    assert.deepEqual(island.hideCalls, [pluginId])
+  })
+}
+
+test('stale process exit cannot release a replacement host overlay', async () => {
+  const { manager, child, started, island } = createWakeHarness()
+  const activation = manager.callProvider('ncm', 'checkLogin', [])
+  await started
+  child.emit('message', { kind: 'activated', pluginId })
+  await activation
+  const replacement = { ...manager.running.get(pluginId)! }
+  manager.running.set(pluginId, replacement)
+  child.emit('exit', 1)
+  assert.equal(manager.running.get(pluginId), replacement)
+  assert.equal(island.owner, pluginId)
+  assert.deepEqual(island.hideCalls, [])
+})
+
+test('stopping an absent plugin releases only its own overlay', async () => {
+  const { manager, island } = createWakeHarness()
+  await manager.stopPlugin(pluginId)
+  assert.equal(island.owner, null)
+  island.owner = 'another-plugin'
+  await manager.stopPlugin(pluginId)
+  assert.equal(island.owner, 'another-plugin')
 })
 
 test('disabled providers are not woken by a provider call', async () => {

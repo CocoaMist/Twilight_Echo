@@ -12,7 +12,8 @@ import type {
 import NetworkCoverThumb from './network-sources/NetworkCoverThumb.vue'
 import {
   createNetworkBrowser,
-  createNetworkLibraryView
+  createNetworkLibraryView,
+  parseOptionalPort
 } from './network-sources/networkViewState.ts'
 
 const networkSourcesApi = window.api?.networkSources
@@ -113,7 +114,7 @@ async function createProfile(): Promise<void> {
   creating.value = true
   error.value = ''
   try {
-    const port = form.value.port.trim() ? Number(form.value.port) : null
+    const port = parseOptionalPort(form.value.port)
     await networkSourcesApi.createProfile({
       protocol: form.value.protocol,
       name: form.value.name.trim(),
@@ -759,7 +760,7 @@ onBeforeUnmount(() => {
             /></label>
             <label
               >端口（可选）<input
-                v-model.trim="form.port"
+                v-model="form.port"
                 type="number"
                 min="1"
                 max="65535"
