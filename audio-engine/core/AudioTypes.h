@@ -201,6 +201,9 @@ struct OutputInfo {
     // do not invalidate the stream, so rebuilding it would turn a momentary
     // glitch into a guaranteed dropout.
     uint64_t driverXrunCount = 0;
+    uint64_t asioHelperCallbackCount = 0;
+    uint64_t asioHelperUnderrunCount = 0;
+    uint64_t asioHelperBufferDropCount = 0;
     uint64_t dsdIdleFrameCount = 0;
     uint64_t dsdShortReadCount = 0;
     std::string dsdTransport;

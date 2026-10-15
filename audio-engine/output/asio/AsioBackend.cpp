@@ -854,6 +854,16 @@ void AsioBackend::close() {
     closeError = host_->lastCloseError();
   }
   std::lock_guard lock(mutex_);
+  if (host_ && opened_ && renderBufferSizeFramesSession_ > 0) {
+    const auto health = host_->renderHealth();
+    diagnostics_.asioHelperCallbackCount = health.callbackCount;
+    diagnostics_.asioHelperUnderrunCount = health.underrunCount;
+    diagnostics_.asioHelperBufferDropCount = health.bufferDropCount;
+    diagnostics_.sessionUnderrunCount += health.underrunCount;
+    diagnostics_.lifetimeUnderrunCount += health.underrunCount;
+    diagnostics_.sessionBufferDropCount += health.bufferDropCount;
+    diagnostics_.lifetimeBufferDropCount += health.bufferDropCount;
+  }
   const uint64_t pendingUnderruns = pendingRenderUnderruns_.exchange(0, std::memory_order_relaxed);
   const uint64_t pendingBufferDrops = pendingRenderBufferDrops_.exchange(0, std::memory_order_relaxed);
   diagnostics_.lifetimeUnderrunCount += pendingUnderruns;
@@ -921,6 +931,16 @@ OutputInfo AsioBackend::outputInfo() const {
   info.diagnostics.lifetimeUnderrunCount += pendingUnderruns;
   info.diagnostics.sessionBufferDropCount += pendingBufferDrops;
   info.diagnostics.lifetimeBufferDropCount += pendingBufferDrops;
+  if (host_ && opened_ && renderBufferSizeFramesSession_ > 0) {
+    const auto health = host_->renderHealth();
+    info.diagnostics.asioHelperCallbackCount = health.callbackCount;
+    info.diagnostics.asioHelperUnderrunCount = health.underrunCount;
+    info.diagnostics.asioHelperBufferDropCount = health.bufferDropCount;
+    info.diagnostics.sessionUnderrunCount += health.underrunCount;
+    info.diagnostics.lifetimeUnderrunCount += health.underrunCount;
+    info.diagnostics.sessionBufferDropCount += health.bufferDropCount;
+    info.diagnostics.lifetimeBufferDropCount += health.bufferDropCount;
+  }
   info.diagnostics.dsdShortReadCount += pendingDsdShortReads_.load(std::memory_order_relaxed);
   info.diagnostics.dsdIdleFrameCount += pendingDsdIdleFrames_.load(std::memory_order_relaxed);
   if (openConfig_.format.dopEncoded && isDopCarrierFormat(openConfig_.format)) {
@@ -1598,6 +1618,10 @@ void AsioBackend::renderBuffer(long bufferIndex) {
           ? static_cast<double>(renderFrames) * 1000.0 / asioCallbackFrameRate(outputFormat)
           : byteFrameExpectedMs;
   const bool callbackDeadlineMissed =
+      // IPC callbacks run ahead of the next reuse of a driver buffer. Worker
+      // wake-up jitter does not imply an audible underrun: the helper knows
+      // whether fresh samples actually reached the hardware in time.
+      !host_->hasDriverBoundaryHealth() &&
       callbacksSeen >= kUnderrunWarmupCallbacks && elapsedMs > 0.0 &&
       deadlineExpectedMs > 0 && elapsedMs > deadlineExpectedMs * 1.5;
 
