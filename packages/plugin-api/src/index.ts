@@ -221,6 +221,14 @@ export interface TrackArtistRef {
 export interface Track {
   id: string
   title: string
+  /** Optional grouping metadata; each part retains its own playable id and duration. */
+  mediaPart?: {
+    groupId: string
+    groupTitle: string
+    title: string
+    index: number
+    count: number
+  }
   artist: string
   /** Structured artist identities behind the `artist` display string. */
   artists?: TrackArtistRef[]

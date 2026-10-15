@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import test from 'node:test'
 import { compileScript, parse } from '@vue/compiler-sfc'
 import ts from 'typescript'
+import { buildMediaPartRows, MEDIA_PART_PAGE_SIZE } from './streaming-page/mediaPartRows.ts'
 
 const require = createRequire(import.meta.url)
 const run = promisify(execFile)
@@ -50,11 +51,13 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
       html,
       `<!doctype html><html><body><div id="login"></div><div id="list"></div><div id="saved"></div><script>${vue}</script><script>
       const { ref, computed } = Vue;
+      const MEDIA_PART_PAGE_SIZE = ${MEDIA_PART_PAGE_SIZE};
       Vue.Transition = { setup: (_props, { slots }) => () => slots.default?.() };
       const replies = [];
       const savedAlbums = [], savedArtists = [];
       const provider = { id: 'ncm', name: 'NetEase', capabilities: ['login'], supportedMethods: ['fetchSavedAlbums', 'fetchSavedArtists'], ui: {} };
       window.fixture = {
+        buildMediaPartRows: ${buildMediaPartRows.toString()}, MEDIA_PART_PAGE_SIZE,
         QRCode: { toDataURL: async () => 'data:image/png;base64,AA==' },
         AnimatedInput: { template: '<input />' }, CoverImg: { template: '<img />' },
         useBackHandler: () => {},
