@@ -14,6 +14,8 @@ const {
   tone,
   importing,
   matching,
+  recipePromptOpen,
+  recipePromptRef,
   busy,
   advancedOpen,
   pageOptions,
@@ -32,6 +34,9 @@ const {
   resetCurrent,
   selectMaterial,
   useTransparentRecipe,
+  dismissRecipePrompt,
+  applyRecipeFromPrompt,
+  setBackgroundKind,
   fullPreview,
   cancel,
   save,
@@ -202,7 +207,7 @@ const {
                     :key="kind"
                     type="button"
                     :aria-pressed="activeBackground.kind === kind"
-                    @click="editableBackground().kind = kind"
+                    @click="setBackgroundKind(kind)"
                   >
                     {{ kind === 'color' ? '纯色' : '图片' }}
                   </button>
@@ -344,6 +349,43 @@ const {
           class="appearance-file-input"
           @change="importImage"
         />
+      </section>
+    </div>
+    <div
+      v-if="appearanceEditorOpen && !state.fullWindow && recipePromptOpen"
+      class="appearance-recipe-prompt-backdrop"
+      @click.self="dismissRecipePrompt"
+    >
+      <section
+        class="appearance-recipe-prompt"
+        :ref="
+          (element) => {
+            recipePromptRef = element as HTMLElement | null
+          }
+        "
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="appearance-recipe-prompt-title"
+        aria-describedby="appearance-recipe-prompt-description"
+        tabindex="-1"
+      >
+        <div class="appearance-recipe-prompt-icon" aria-hidden="true">
+          <i class="pi pi-sparkles" />
+        </div>
+        <div class="appearance-recipe-prompt-copy">
+          <h2 id="appearance-recipe-prompt-title">图片已更换</h2>
+          <p id="appearance-recipe-prompt-description">
+            要不要使用图片通透推荐搭配？我会根据图片明暗自动选择文字颜色和保护遮罩，让主页卡片与设置文字更清晰。
+          </p>
+        </div>
+        <div class="appearance-recipe-prompt-actions">
+          <button type="button" class="appearance-recipe-prompt-later" @click="dismissRecipePrompt">
+            稍后设置
+          </button>
+          <button type="button" class="appearance-save" @click="applyRecipeFromPrompt">
+            <i class="pi pi-eye" aria-hidden="true" /> 应用推荐
+          </button>
+        </div>
       </section>
     </div>
     <div
