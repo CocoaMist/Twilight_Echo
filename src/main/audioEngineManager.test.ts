@@ -5009,6 +5009,138 @@ test('AutoMix progress and frozen native source positions bypass wall-clock smoo
   manager.destroy()
 })
 
+test('native source starvation freezes progress while stale cache smoothing remains available', async () => {
+  let now = 2000
+  const native = new FakeNativeBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    native,
+    { now: () => now }
+  )
+  const positions: number[] = []
+  manager.on('property-change', ({ name, data }) => {
+    if (name === 'time-pos') positions.push(data as number)
+  })
+  await manager.play('remote.flac', 0)
+  native.playbackInfo = { ...native.playbackInfo, state: 'playing', position: 4.3 }
+  native.setDiagnostics({
+    decodeHealthAvailable: true,
+    liveRenderState: 1,
+    decodeEof: false,
+    decodeStopRequested: false,
+    decodeBufferedFrames: 0,
+    decodeStage: 'reading',
+    decodeLastProgressAgeMs: 1000
+  })
+  manager.tick()
+  for (let tick = 0; tick < 12; tick++) {
+    now += 250
+    manager.tick()
+  }
+  assert.equal(positions.at(-1), 4.3)
+  native.setDiagnostics({ decodeStage: 'reconnecting' })
+  now += 250
+  manager.tick()
+  assert.equal(positions.at(-1), 4.3)
+  native.playbackInfo = { ...native.playbackInfo, position: 4.55 }
+  native.setDiagnostics({
+    decodeBufferedFrames: 96000,
+    decodeStage: 'writing',
+    decodeLastProgressAgeMs: 10
+  })
+  now += 250
+  manager.tick()
+  assert.equal(positions.at(-1), 4.55)
+  manager.destroy()
+})
+
+test('terminal native decode failure reports error without a normal EOF or sleep-timer boundary', async () => {
+  let now = 2000
+  const native = new FakeNativeBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    native,
+    { now: () => now }
+  )
+  const endings: string[] = [],
+    boundaries: unknown[] = [],
+    errors: Error[] = [],
+    properties: string[] = []
+  const positions: number[] = []
+  manager.on('end-file', ({ reason }) => endings.push(reason))
+  manager.on('sleep-timer-boundary', (data) => boundaries.push(data))
+  manager.on('error', (error) => errors.push(error))
+  manager.on('property-change', ({ name, data }) => {
+    properties.push(name)
+    if (name === 'time-pos') positions.push(data as number)
+  })
+  await manager.play('broken.flac', 0)
+  native.playbackInfo = { ...native.playbackInfo, state: 'playing', position: 4.3 }
+  manager.tick()
+  now += 3000
+  native.playbackInfo = {
+    ...native.playbackInfo,
+    state: 'stopped',
+    position: 4.3,
+    upcomingTrack: null
+  }
+  native.setDiagnostics({ lastError: 'Audio source read failed, code: -1414092869' })
+  manager.tick()
+  manager.tick()
+  assert.deepEqual(endings, ['error'])
+  assert.equal(errors.length, 1)
+  assert.deepEqual(boundaries, [])
+  assert.ok(!properties.includes('eof-reached'))
+  assert.equal(positions.at(-1), 4.3)
+  manager.destroy()
+})
+
+test('terminal decode failure clears a pending seek and reports stopped once', async () => {
+  const native = new FakeNativeBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    native
+  )
+  const endings: string[] = []
+  const errors: Error[] = []
+  manager.on('end-file', ({ reason }) => endings.push(reason))
+  manager.on('error', (error) => errors.push(error))
+  await manager.play('broken.flac', 0)
+  await manager.seek(90)
+  native.playbackInfo = { ...native.playbackInfo, state: 'stopped', position: 4.3 }
+  native.setDiagnostics({ lastError: 'Audio source read failed' })
+  manager.tick()
+  manager.tick()
+  const info = await manager.getPlaybackInfo()
+  assert.equal(info.state, 'stopped')
+  assert.equal(info.position, 4.3)
+  assert.deepEqual(endings, ['error'])
+  assert.equal(errors.length, 1)
+  manager.destroy()
+})
+
+test('an explicit play toggle retries the failed source from its last consumed position', async () => {
+  const native = new FakeNativeBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    native
+  )
+  manager.on('error', () => {})
+  await manager.play('broken.flac', 0)
+  native.playbackInfo = { ...native.playbackInfo, state: 'stopped', position: 4.3 }
+  native.setDiagnostics({ lastError: 'Audio source read failed' })
+  manager.tick()
+  manager.tick()
+  assert.equal(native.playCalls.length, 1, 'status polling must not restart a failed source')
+  native.setDiagnostics({ lastError: '' })
+  await manager.togglePause()
+  assert.equal(native.playCalls.length, 2)
+  assert.equal(native.playCalls[1].source, 'broken.flac')
+  assert.equal(native.playCalls[1].startTime, 4.3)
+  assert.equal((await manager.getPlaybackInfo()).state, 'playing')
+  manager.destroy()
+})
+
 test('AutoMix preparation status reads the service instead of its stale synchronous cache', async () => {
   const service = new FakeAudioServiceBinding()
   const manager = makeManager(

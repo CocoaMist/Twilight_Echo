@@ -17,7 +17,8 @@ import {
   isCoverCacheFileName,
   readCoverCacheFileBytes,
   resizeCoverImageBytes,
-  resolveBackgroundImageFile
+  resolveBackgroundImageFile,
+  prepareBackgroundForDisplay
 } from '../library/coverCache'
 import { decodeAudioFileUrlPath } from '../library/audioFileUrl.ts'
 import { initializeLocalPathGrants, resolveAuthorizedAudioFile } from '../security/localPaths'
@@ -260,21 +261,27 @@ export function startApp(): void {
         if (!filePath) {
           return new Response('Not Found', { status: 404 })
         }
-        const ext = extname(filePath).toLowerCase()
-        const contentType =
-          ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
-        const data = await readCachedProtocolFile(filePath)
-        if (!data) {
-          return new Response('Not Found', { status: 404 })
-        }
-        return new Response(data, {
-          headers: {
-            'Content-Type': contentType,
-            // Background filenames are sha256 slices of the stored bytes.
-            'Cache-Control': 'public, max-age=31536000, immutable',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, HEAD'
-          }
+        const displayPath = await prepareBackgroundForDisplay(filePath)
+        // Stream from disk; Chromium owns the encoded/decode caches. Do not also
+        // retain a full wallpaper Buffer in the main-process thumbnail LRU.
+        const response = await net
+          .fetch(pathToFileURL(displayPath).toString(), {
+            method: request.method,
+            bypassCustomProtocolHandlers: true
+          })
+          .catch(() => null)
+        if (!response) return new Response('Not Found', { status: 404 })
+        const headers = new Headers(response.headers)
+        for (const [name, value] of Object.entries({
+          // Background filenames are sha256 slices of the stored bytes.
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, HEAD'
+        }))
+          headers.set(name, value)
+        return new Response(request.method === 'HEAD' ? null : response.body, {
+          status: response.status,
+          headers
         })
       })
 

@@ -10,7 +10,7 @@ import { parse } from '@vue/compiler-sfc'
 
 const require = createRequire(import.meta.url)
 
-test('page scrollports stay below window controls and inside the rounded shell', async () => {
+test('page scrollports paint under the caption while window controls retain input', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-scroll-bounds-'))
   try {
     const source = await readFile(new URL('../App.vue', import.meta.url), 'utf8')
@@ -91,7 +91,7 @@ function setup(root,menu,tone){
  document.documentElement.dataset.theme=tone
  const host=document.querySelector('.main-content');host.classList.toggle('menu-open',menu)
  const rows='<div class="row">Music</div>'.repeat(30)
- host.innerHTML=root==='streaming'?'<div class="streaming-page '+(menu?'menu-open':'')+'"><div class="streaming-content" data-scroller>'+rows+'</div></div>':root==='home'?'<div class="local-home-layout"><div class="home" data-scroller>'+rows+'</div></div>':'<div class="'+root+'" data-scroller>'+rows+'</div>'
+ host.innerHTML=root==='streaming'?'<div class="streaming-page '+(menu?'menu-open':'')+'"><div class="streaming-content" data-scroller>'+rows+'</div></div>':root==='home'?'<div class="local-home-layout"><div class="home" data-scroller><main class="home-inner">'+rows+'</main></div></div>':'<div class="'+root+'" data-scroller>'+rows+'</div>'
  const el=document.querySelector('[data-scroller]'),rect=el.getBoundingClientRect()
  const width=el.clientWidth,height=el.clientHeight
  for(const state of ['', 'te-auto-scrollbar te-scrollbar-active', 'te-auto-scrollbar te-scrollbar-near']){
@@ -102,8 +102,10 @@ function setup(root,menu,tone){
   }
   if(el.clientWidth!==width||el.clientHeight!==height)throw Error(root+' scrollbar interaction shifts content')
  }
- if(rect.top<44||rect.bottom>innerHeight-4.1+0.2||rect.right>innerWidth-3.9)throw Error(root+' scroll bounds: '+JSON.stringify([rect.toJSON(),host.firstElementChild.getBoundingClientRect().toJSON(),getComputedStyle(host.firstElementChild).height,host.getBoundingClientRect().toJSON()]))
+ const underCaption=root!=='recent-playback-page'
+ if(Math.abs(rect.top-(underCaption?0:44))>.2||rect.bottom>innerHeight-4.1+0.2||rect.right>innerWidth-3.9)throw Error(root+' scroll bounds: '+JSON.stringify([rect.toJSON(),host.firstElementChild.getBoundingClientRect().toJSON(),getComputedStyle(host.firstElementChild).height,host.getBoundingClientRect().toJSON()]))
  if(document.elementFromPoint(innerWidth-8,28)?.closest('[data-scroller]'))throw Error('scrollport reaches the window controls')
+ if(document.querySelector('.row').getBoundingClientRect().top<44)throw Error(root+' initial content is covered by the caption')
  el.scrollTop=el.scrollHeight
  if(el.scrollTop+el.clientHeight<el.scrollHeight-1)throw Error(root+' cannot reach its end')
  el.scrollTop=0

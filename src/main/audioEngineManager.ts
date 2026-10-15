@@ -468,6 +468,7 @@ export class AudioEngineManager extends EventEmitter {
         const normalized = message.trim()
         if (normalized) this.emit('audio-service-stdout', { message: normalized })
       })
+      service.on('rpc-timeout', (event) => this.emit('audio-service-rpc-timeout', event))
       this.audioServiceBinding = service
       return service
     }
@@ -631,7 +632,7 @@ export class AudioEngineManager extends EventEmitter {
         )
       )
     }
-    const graphStatus = await this.applyNativeDspGraph('音频服务恢复后应用 DSP graph')
+    const graphStatus = await this.dsp.applyLatestNativeDspGraph('音频服务恢复后应用 DSP graph')
     results.push({
       ok:
         graphStatus.applyState === 'applied' &&
@@ -1418,6 +1419,21 @@ export class AudioEngineManager extends EventEmitter {
 
   async getPlaybackInfo(): Promise<PlaybackInfo> {
     return this.playback.getPlaybackInfo()
+  }
+
+  /** Export must never start or probe an unresponsive service. */
+  getCachedDiagnosticSnapshot(): Record<string, unknown> {
+    const readAt = this.playback.lastNativePlaybackInfoTickReadAt
+    return {
+      cached: true,
+      dataAgeMs: Number.isFinite(readAt) ? Math.max(0, this.scheduler.now() - readAt) : null,
+      playback: this.playbackInfo,
+      outputConfig: this.getOutputConfig(),
+      effectiveOutputConfig: this.getEffectiveOutputConfig(),
+      dspGraphStatus: this.dsp.lastNativeDspGraphStatus ?? { cached: true, revision: this.dsp.dspGraphRevision },
+      dspSceneState: this.getDspSceneState(),
+      nativeError: this.lastNativeError
+    }
   }
 
   getSpectrumData(points = 64): number[] {

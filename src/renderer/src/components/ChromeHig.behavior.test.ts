@@ -171,7 +171,9 @@ window.runChromeHigTests=async()=>{
   document.documentElement.dataset.theme=tone;await settle()
   const nav=document.querySelector('.side-menu'),css=getComputedStyle(nav)
   const alpha=color=>{const c=document.createElement('canvas');c.width=c.height=1;const x=c.getContext('2d');x.fillStyle=color;x.fillRect(0,0,1,1);return x.getImageData(0,0,1,1).data[3]/255}
-  expect(alpha(css.backgroundColor)>.84&&alpha(css.backgroundColor)<.93,'navigation loses its material substrate: '+tone+' '+css.backgroundColor)
+  const caption=getComputedStyle(document.querySelector('.title-bar-background'))
+  expect(alpha(css.backgroundColor)>.7&&alpha(css.backgroundColor)<.81,'navigation loses its material substrate: '+tone+' '+css.backgroundColor)
+  expect(css.backgroundColor===caption.backgroundColor&&css.backdropFilter===caption.backdropFilter,'navigation and caption materials differ: '+tone)
   expect(css.backdropFilter.includes('blur(24px)'),'navigation loses diffusion')
   document.body.classList.add('te-no-blur');await settle()
   expect(alpha(getComputedStyle(nav).backgroundColor)===1&&getComputedStyle(nav).backdropFilter==='none','navigation remains transparent without diffusion')

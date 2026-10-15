@@ -317,16 +317,17 @@ function setPressOrigin(event: PointerEvent): void {
      footer clears the painted bar; custom shells can reserve a playback row. */
   bottom: var(--te-side-menu-bottom, 0px);
   width: var(--te-menu-width);
-  /* A lightly tinted sibling of the player material. The tall navigation
-     surface stays quiet; selection and labels carry its attention. */
+  /* The same frosted tint as the caption and player, over the shared wallpaper. */
   background: var(--te-chrome-navigation-surface, transparent);
-  border-right: 1px solid var(--te-navigation-border);
+  border-right: 0;
   border-radius: 0 var(--te-navigation-radius) var(--te-navigation-radius) 0;
   z-index: 1000;
   overflow: hidden;
   box-shadow: var(--te-chrome-navigation-elevation, var(--te-navigation-shadow));
-  backdrop-filter: blur(24px) saturate(124%);
-  -webkit-backdrop-filter: blur(24px) saturate(124%);
+  backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
+  -webkit-backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
   transform: translate3d(-100%, 0, 0);
   transform-origin: left center;
   will-change: transform;
@@ -725,19 +726,13 @@ function setPressOrigin(event: PointerEvent): void {
   z-index: -1;
   inset: 0;
   border-radius: inherit;
-  background: color-mix(in srgb, var(--te-lg-context-surface-solid) 82%, transparent);
+  background: color-mix(in srgb, var(--te-lg-context-material) 72%, transparent);
   content: '';
   pointer-events: none;
-  backdrop-filter: blur(24px) saturate(124%);
-  -webkit-backdrop-filter: blur(24px) saturate(124%);
-}
-
-:global(html[data-te-liquid-glass-source='solid'] .side-menu-liquid::before) {
-  background: color-mix(
-    in srgb,
-    var(--te-lg-context-surface-solid) 70%,
-    var(--te-lg-context-material)
-  );
+  backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
+  -webkit-backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
 }
 
 .side-menu-liquid :is(.navigation-brand, .menu-item, .scanning-text) {
@@ -784,7 +779,7 @@ function setPressOrigin(event: PointerEvent): void {
 /* Keep regular navigation readable when diffusion is disabled. */
 body.te-no-blur .side-menu:not(.side-menu-liquid),
 html[data-te-effects-mode='reduced'] .side-menu:not(.side-menu-liquid) {
-  background: var(--te-chrome-material-solid, var(--te-navigation-bg));
+  background: var(--te-chrome-frosted-solid, var(--te-navigation-bg));
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -798,7 +793,7 @@ html[data-te-effects-mode='reduced'] .side-menu-liquid::before {
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .side-menu:not(.side-menu-liquid) {
-    background: var(--te-chrome-material-solid, var(--te-navigation-bg));
+    background: var(--te-chrome-frosted-solid, var(--te-navigation-bg));
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }

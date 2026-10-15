@@ -2,6 +2,7 @@
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import SettingsGroup from './SettingsGroup.vue'
 import BackupAndResetSettingsSection from './BackupAndResetSettingsSection.vue'
+import DiagnosticsSettingsSection from './DiagnosticsSettingsSection.vue'
 import type { UiContribution } from '../../extensions/registry'
 import type { BooleanSettingKey, PluginSettingsForm, SettingsResetGroup } from './types.ts'
 const { settings } = useSettingsStore()
@@ -57,6 +58,7 @@ defineProps<{
         </div>
       </div>
     </div>
+    <DiagnosticsSettingsSection />
     <BackupAndResetSettingsSection
       @export-settings="exportSettingsBackup"
       @import-settings="importSettingsBackup"

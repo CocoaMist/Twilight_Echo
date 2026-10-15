@@ -167,6 +167,18 @@ const {
   closeMissingPluginPage,
   openSettingsPage
 } = navigation
+// Keep the wallpaper inside its overlay through the leave transition. An idle
+// overlay must hide its embedded painter, which would otherwise cover home.
+const settingsOverlayLeaves = ref(0)
+const settingsOverlayVisible = computed(
+  () => showSettingsPage.value || showPluginPage.value || settingsOverlayLeaves.value > 0
+)
+function retainSettingsOverlay(): void {
+  settingsOverlayLeaves.value += 1
+}
+function releaseSettingsOverlay(): void {
+  settingsOverlayLeaves.value = Math.max(0, settingsOverlayLeaves.value - 1)
+}
 const { pushNotice } = useAppNoticeStore()
 let stopAppUpdateNotifications: (() => void) | null = null
 let updateNotificationsDisposed = false
@@ -961,7 +973,10 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
 </script>
 
 <template>
-  <AppBackgroundLayer :page="showStreamingSurface ? 'streaming' : 'local'" />
+  <AppBackgroundLayer
+    :page="showStreamingSurface ? 'streaming' : 'local'"
+    :ambient="localViewVisible && activeCategory === 'dashboard'"
+  />
   <div
     class="app-shell"
     :class="{ 'is-immersive': showPlayingPage }"
@@ -1158,11 +1173,16 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
   </div>
   <div
     class="settings-overlay-root"
-    v-show="!appearanceFullWindowPreview"
-    :class="{ 'settings-overlay-root--active': showSettingsPage || showPluginPage }"
+    v-show="settingsOverlayVisible && !appearanceFullWindowPreview"
+    :class="{ 'settings-overlay-root--active': settingsOverlayVisible }"
   >
     <AppBackgroundLayer page="settings" embedded />
-    <Transition name="settings-page">
+    <Transition
+      name="settings-page"
+      @before-leave="retainSettingsOverlay"
+      @after-leave="releaseSettingsOverlay"
+      @leave-cancelled="releaseSettingsOverlay"
+    >
       <SettingsPage
         v-if="showSettingsPage"
         :initial-section="settingsInitialSection"
@@ -1175,7 +1195,12 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @reopen-onboarding="handleReopenOnboarding"
       />
     </Transition>
-    <Transition name="settings-page">
+    <Transition
+      name="settings-page"
+      @before-leave="retainSettingsOverlay"
+      @after-leave="releaseSettingsOverlay"
+      @leave-cancelled="releaseSettingsOverlay"
+    >
       <PluginPage
         v-if="showPluginPage"
         @open-theme-workshop="

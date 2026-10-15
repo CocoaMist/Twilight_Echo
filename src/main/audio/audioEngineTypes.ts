@@ -97,7 +97,7 @@ export interface AudioEngineServiceNativeBinding extends NativeAudioBinding {
   restartAfterFatal?: () => boolean
   readonly fatalStartupError?: string
   on: (
-    event: 'crash' | 'error-log' | 'log' | 'ready',
+    event: 'crash' | 'error-log' | 'log' | 'ready' | 'rpc-timeout',
     listener: (...args: any[]) => void
   ) => unknown
 }

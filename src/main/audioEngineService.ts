@@ -1,3 +1,7 @@
+import { initializeUtilityDiagnostics } from './diagnostics/utility.ts'
+import { observeDiagnosticOperation } from './diagnostics/observation.ts'
+import { writeDiagnostic } from './diagnostics/logger.ts'
+import type { DiagnosticContext } from '../shared/diagnostics.ts'
 import {
   describeNativeBindingFailure,
   loadNativeBindingWithDiagnostics
@@ -10,6 +14,7 @@ import {
 } from '../shared/audioServiceContract.ts'
 
 type AudioServiceRequest = {
+  diagnosticContext?: DiagnosticContext
   kind: 'request'
   requestId: string
   method: keyof NativeAudioBinding
@@ -70,6 +75,7 @@ if (!parentPort) {
 }
 
 const servicePort = parentPort
+initializeUtilityDiagnostics('twilight-audio-engine')
 const nativeLoad = loadNativeBindingWithDiagnostics()
 const native = nativeLoad.binding
 const nativeMethods = native
@@ -104,11 +110,18 @@ servicePort.on('message', (message) => {
     return
   }
   if (message.kind !== 'request') return
-  void handleRequest(message)
+  void observeDiagnosticOperation(
+    'audio.native',
+    String(message.method),
+    () => handleRequest(message),
+    message.args,
+    { ...message.diagnosticContext, requestId: message.requestId }
+  )
 })
 
 async function handleRequest(message: AudioServiceRequest): Promise<void> {
   if (!native || nativeContractError) {
+    writeDiagnostic('audio.native', 'binding.unavailable', { error: nativeContractError }, 'error')
     post({
       kind: 'response',
       requestId: message.requestId,
@@ -118,6 +131,11 @@ async function handleRequest(message: AudioServiceRequest): Promise<void> {
     return
   }
   try {
+    ;(
+      native as NativeAudioBinding & { SetDiagnosticContext?: (json: string) => void }
+    ).SetDiagnosticContext?.(
+      JSON.stringify({ ...message.diagnosticContext, requestId: message.requestId })
+    )
     if (
       message.method === 'AnalyzeBpm' ||
       message.method === 'AnalyzeLoudness' ||
@@ -132,12 +150,17 @@ async function handleRequest(message: AudioServiceRequest): Promise<void> {
     const value = (method as (...args: unknown[]) => unknown)(...message.args)
     post({ kind: 'response', requestId: message.requestId, ok: true, value })
   } catch (error) {
+    writeDiagnostic('audio.native', 'call.failed', { method: message.method, error }, 'error')
     post({
       kind: 'response',
       requestId: message.requestId,
       ok: false,
       error: error instanceof Error ? error.message : String(error)
     })
+  } finally {
+    ;(
+      native as NativeAudioBinding & { SetDiagnosticContext?: (json: string) => void }
+    ).SetDiagnosticContext?.('{}')
   }
 }
 

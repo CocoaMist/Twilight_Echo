@@ -16,33 +16,11 @@
   --te-window-content-bottom: var(--te-window-surface-inset);
 }
 
-/* Leave wallpaper beneath the title strip so its existing blur can sample it. */
+/* Chrome samples one wallpaper; an inset frame would draw a seam below the
+   caption and along navigation even when the surfaces share their material. */
 .app-shell::before,
 .app-shell::after {
-  content: '';
-  position: fixed;
-  inset: var(--te-window-content-top) var(--te-window-surface-inset) var(--te-window-content-bottom);
-  z-index: 0;
-  pointer-events: none;
-  border-radius: var(--te-window-inner-radius);
-}
-
-.app-shell::before {
-  background: color-mix(
-    in srgb,
-    color-mix(in srgb, var(--te-app-bg) 96%, var(--te-shell-control-text)) 18%,
-    transparent
-  );
-}
-
-/* The edge sits above page paint, below the separate floating player. */
-.app-shell::after {
-  z-index: 1001;
-  border: 1px solid color-mix(in srgb, var(--te-shell-control-text) 3%, transparent);
-}
-
-html[data-window-transparent='on'] .app-shell::before {
-  background: color-mix(in srgb, var(--te-app-bg) 4%, transparent);
+  display: none;
 }
 
 html:not([data-te-shell-layout='custom']) .app-shell:not(.is-immersive) .app-shell-content {
@@ -50,6 +28,43 @@ html:not([data-te-shell-layout='custom']) .app-shell:not(.is-immersive) .app-she
   inset: var(--te-window-content-top) var(--te-window-surface-inset) var(--te-window-content-bottom);
   overflow: hidden;
   border-radius: var(--te-window-inner-radius);
+}
+
+/* A frosted caption needs page pixels behind it. These scrolling pages keep
+   their initial caption clearance inside the scrollport instead of clipping
+   the whole page below the caption. Fixed page chrome retains its inset box. */
+html:not([data-te-shell-layout='custom'])
+  .app-shell:not(.is-immersive)
+  .app-shell-content:has(> .main-content > .local-home-layout > .home),
+html:not([data-te-shell-layout='custom'])
+  .app-shell:not(.is-immersive)
+  .app-shell-content:has(
+    > .main-content
+      > :is(
+        .song-list,
+        .streaming-page,
+        .analytics-page,
+        .radio-podcast-page,
+        .network-sources-page
+      )
+  ) {
+  --te-scroll-caption-clearance: var(--te-window-content-top);
+  top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+html:not([data-te-shell-layout='custom'])
+  .app-shell
+  :is(
+    .home,
+    .song-list,
+    .streaming-content,
+    .analytics-page,
+    .radio-podcast-page,
+    .network-sources-page
+  ) {
+  scroll-padding-top: var(--te-scroll-caption-clearance, 0px);
 }
 
 html:not([data-te-shell-layout='custom']) .app-shell:not(.is-immersive) .main-content {
@@ -75,7 +90,21 @@ html .app-shell:not(.is-immersive) .streaming-content {
 }
 
 html:not([data-te-shell-layout='custom']) .app-shell .local-home-layout {
-  --te-home-titlebar-clearance: 0px;
+  --te-home-titlebar-clearance: var(--te-scroll-caption-clearance, 0px);
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell .streaming-content {
+  padding-top: var(--te-scroll-caption-clearance, 0px);
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell .streaming-content.without-header {
+  padding-top: calc(
+    var(--te-scroll-caption-clearance, 0px) + var(--te-titlebar-inset, 40px) + 20px
+  );
+}
+
+html:not([data-te-shell-layout='custom']) .app-shell .streaming-content.has-search-tabs {
+  padding-top: var(--te-scroll-caption-clearance, 0px) !important;
 }
 
 html:not([data-te-shell-layout='custom']) .app-shell .streaming-content-header {
@@ -86,7 +115,7 @@ html:not([data-te-shell-layout='custom'])
   .app-shell
   .main-content
   > :is(.song-list, .analytics-page, .radio-podcast-page, .network-sources-page) {
-  padding-top: 24px;
+  padding-top: calc(var(--te-scroll-caption-clearance, 0px) + 24px);
 }
 
 html:not([data-te-shell-layout='custom']) .app-shell .recent-scope-tabs {

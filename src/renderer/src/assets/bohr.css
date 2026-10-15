@@ -5,6 +5,9 @@
 /* Navigation and transport share a quiet material family. Their different
    footprints need different elevation, without changing content card depth. */
 :root {
+  /* Caption, navigation and playback sample the same window-wide background. */
+  --te-chrome-frosted-blur: 24px;
+  --te-chrome-frosted-saturation: 124%;
   --te-chrome-material-solid: color-mix(
     in srgb,
     var(--te-app-bg) 96%,
@@ -15,13 +18,8 @@
     var(--te-chrome-material-solid) 76%,
     transparent
   );
-  --te-chrome-navigation-surface: color-mix(
-    in srgb,
-    var(--te-chrome-material-solid) 88%,
-    transparent
-  );
-  --te-chrome-navigation-elevation: 3px 0 14px
-    color-mix(in srgb, var(--te-chrome-shadow-color) 4%, transparent);
+  --te-chrome-navigation-surface: var(--te-chrome-frosted-surface);
+  --te-chrome-navigation-elevation: none;
   --te-chrome-contact: 0 1px 3px color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
   --te-chrome-elevation: 0 5px 16px
     color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
@@ -37,8 +35,6 @@
 }
 
 html[data-theme='dark'] {
-  --te-chrome-navigation-elevation: 3px 0 14px
-    color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
   --te-chrome-contact: 0 1px 3px color-mix(in srgb, var(--te-chrome-shadow-color) 20%, transparent);
   --te-chrome-elevation: 0 5px 16px
     color-mix(in srgb, var(--te-chrome-shadow-color) 16%, transparent);

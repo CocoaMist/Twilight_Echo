@@ -13,6 +13,8 @@ const {
   previewPage,
   tone,
   importing,
+  matching,
+  busy,
   advancedOpen,
   pageOptions,
   materials,
@@ -60,7 +62,7 @@ const {
             type="button"
             class="appearance-icon-button"
             aria-label="取消并关闭"
-            :disabled="state.saving || importing"
+            :disabled="state.saving || busy"
             @click="cancel"
           >
             <i class="pi pi-times" />
@@ -147,10 +149,10 @@ const {
             <button
               type="button"
               class="appearance-recipe"
-              :disabled="state.saving || importing"
+              :disabled="inherited || state.saving || busy"
               @click="useTransparentRecipe"
             >
-              <i class="pi pi-eye" /> 图片通透推荐搭配
+              <i class="pi pi-eye" /> {{ matching ? '正在分析背景…' : '图片通透推荐搭配' }}
             </button>
           </aside>
           <div
@@ -193,7 +195,7 @@ const {
                   @change="setInheritance"
                 />继承统一背景</label
               >
-              <fieldset :disabled="inherited || state.saving || importing">
+              <fieldset :disabled="inherited || state.saving || busy">
                 <div class="appearance-segment">
                   <button
                     v-for="kind in ['color', 'image'] as const"
@@ -266,7 +268,7 @@ const {
                   :key="material.value"
                   type="button"
                   :aria-pressed="activeMaterial === material.value"
-                  :disabled="state.saving"
+                  :disabled="state.saving || busy"
                   @click="selectMaterial(material.value)"
                 >
                   <i :class="material.icon" />{{ material.label }}
@@ -284,7 +286,7 @@ const {
                 <i :class="advancedOpen ? 'pi pi-chevron-up' : 'pi pi-chevron-down'" />
               </button>
               <div v-if="advancedOpen">
-                <fieldset :disabled="inherited || state.saving">
+                <fieldset :disabled="inherited || state.saving || busy">
                   <div
                     v-for="field in ['positionX', 'positionY'] as const"
                     :key="field"
@@ -304,7 +306,7 @@ const {
                     />
                   </div>
                 </fieldset>
-                <fieldset :disabled="state.saving">
+                <fieldset :disabled="state.saving || busy">
                   <CardAppearanceSettings
                     v-model="state.draft"
                     v-model:tone="tone"
@@ -316,16 +318,16 @@ const {
         </div>
         <p v-if="state.error" class="appearance-error" role="alert">{{ state.error }}</p>
         <footer class="appearance-editor-footer">
-          <button type="button" :disabled="state.saving || importing" @click="resetCurrent">
+          <button type="button" :disabled="state.saving || busy" @click="resetCurrent">
             恢复当前项默认</button
-          ><button type="button" :disabled="state.saving || importing" @click="fullPreview(true)">
+          ><button type="button" :disabled="state.saving || busy" @click="fullPreview(true)">
             全窗口预览</button
-          ><span /><button type="button" :disabled="state.saving || importing" @click="cancel">
+          ><span /><button type="button" :disabled="state.saving || busy" @click="cancel">
             取消</button
           ><button
             type="button"
             class="appearance-save"
-            :disabled="state.saving || importing"
+            :disabled="state.saving || busy"
             @click="save"
           >
             {{ importing ? '导入中…' : state.saving ? '保存中…' : '保存并使用' }}

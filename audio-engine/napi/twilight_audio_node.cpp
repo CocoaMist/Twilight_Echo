@@ -786,6 +786,13 @@ napi_value GetPlaybackInfo(napi_env env, napi_callback_info) {
   return readJson(env, TAE_GetPlaybackInfo);
 }
 
+napi_value SetDiagnosticContext(napi_env env, napi_callback_info info) {
+  size_t argc = 1; napi_value argv[1]; napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  const std::string context = argc ? getStringArg(env, argv[0]) : "{}";
+  TAE_SetDiagnosticContext(context.c_str());
+  napi_value result; napi_get_undefined(env, &result); return result;
+}
+
 napi_value GetDiagnosticLog(napi_env env, napi_callback_info info) {
   ensureEngine();
   clearLastError();
@@ -1000,6 +1007,7 @@ napi_value Init(napi_env env, napi_value exports) {
   define(env, exports, "GetMetadata", GetMetadata);
   define(env, exports, "GetPlaybackInfo", GetPlaybackInfo);
   define(env, exports, "GetDiagnosticLog", GetDiagnosticLog);
+  define(env, exports, "SetDiagnosticContext", SetDiagnosticContext);
   define(env, exports, "GetQueue", GetQueue);
   define(env, exports, "GetUpcomingTrack", GetUpcomingTrack);
   define(env, exports, "GetDspConfig", GetDspConfig);

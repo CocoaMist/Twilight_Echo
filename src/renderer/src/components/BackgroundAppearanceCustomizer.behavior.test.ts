@@ -105,8 +105,10 @@ app.whenReady().then(async()=>{
  protocol.handle('background',request=>request.url.includes('missing')?new Response('',{status:404}):new Response(wallpaper,{headers:{'content-type':'image/png'}}));
  // Pixel samples use content coordinates; native Windows borders must not shrink the viewport.
  const win=new BrowserWindow({show:false,width:1280,height:820,useContentSize:true,webPreferences:{contextIsolation:false,offscreen:true,backgroundThrottling:false}});
+ // Keep crop coordinates in CSS pixels regardless of the Windows display scale.
+ const capture=async()=>nativeImage.createFromBuffer(Buffer.from((await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true})).data,'base64'));
  const capturePixel=async point=>{
-  const image=await win.webContents.capturePage();
+  const image=await capture();
   const size=image.getSize();
   if(point.x+point.width>size.width||point.y+point.height>size.height)throw new Error('pixel sample lies outside the captured viewport: '+JSON.stringify(size));
   const pixel=image.crop(point).toBitmap();
@@ -115,10 +117,11 @@ app.whenReady().then(async()=>{
  };
  try{
   await win.loadFile(process.argv.at(-1));
+  win.webContents.debugger.attach('1.3');
   await win.webContents.executeJavaScript('window.runAppearanceTests()');
   for(const page of ['local','streaming','player','settings'])for(const blur of [0,30]){
    await win.webContents.executeJavaScript('window.prepareAppearancePixels('+JSON.stringify(page)+','+blur+')');
-   const viewport=(await win.webContents.capturePage()).getSize();
+   const viewport=(await capture()).getSize();
    // Windows runners can clamp a hidden window to their smaller virtual display.
    for(const point of [{x:600,y:400,width:1,height:1},{x:viewport.width-10,y:400,width:1,height:1}]){
     const pixel=await capturePixel(point);

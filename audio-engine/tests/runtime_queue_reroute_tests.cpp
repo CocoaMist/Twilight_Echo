@@ -804,6 +804,10 @@ std::atomic<int> g_maxDopCarrierSampleRate{0};
 constexpr const char* kMissingDsdProxyDeviceId = "missing-dsd-proxy";
 std::atomic<int> g_decodeFirstReadDelayMs{0};
 std::atomic<int> g_decodeEveryReadDelayMs{0};
+std::atomic<int> g_blockedDecodeReaders{0};
+std::atomic<int> g_injectedRemoteReadFailures{0};
+std::atomic<bool> g_blockNextReconnect{false};
+std::atomic<int> g_blockedReconnects{0};
 std::mutex g_decoderSeekMutex;
 std::vector<double> g_decoderSeekSeconds;
 void resetDecoderSeekProbe() {
@@ -1692,6 +1696,49 @@ void testDspGraphEpochRetirementStaysBoundedAcrossOneThousandUpdates() {
 // parked a live decoder + ring buffer until the user pressed stop. The render
 // thread now ACKs a retirement epoch per callback and the control thread
 // reclaims behind that ACK while playback keeps running.
+void testStopAndSeekInterruptBlockedDecodeAndExposeLiveHealth() {
+  g_backendRegistry.reset();
+  AudioPipeline pipeline;
+  std::string error;
+  assert(pipeline.play("interruptible-read.flac", 0.0, "wasapi-exclusive", "auto", 0.5,
+      kUnityGainProcessingConfigJson, &error) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  assert(waitUntil([] { return g_blockedDecodeReaders.load() == 1; }));
+  OutputInfo::Diagnostics health;
+  pipeline.sampleDecodeHealth(health);
+  assert(health.decodeHealthAvailable);
+  assert(health.decodeRunning && !health.decodeEof && !health.decodeStopRequested);
+  assert(health.decodeStage == "reading");
+  assert(health.decodeProducedFrames == 4096);
+  renderBackendFrames(backend, 256);
+  pipeline.sampleDecodeHealth(health);
+  assert(health.liveRenderedFrames == 256);
+  assert(health.liveRenderCallbackCount > 0);
+  assert(health.sourceConsumedFrames == 256);
+  assert(health.outputProducedFrames == 256);
+  // Drain the initial block while the decode worker is intentionally blocked.
+  renderBackendFrames(backend, 3840);
+  pipeline.sampleDecodeHealth(health);
+  const auto consumed = health.sourceConsumedFrames;
+  const auto empty = health.emptyOutputCount;
+  const auto zero = health.zeroFilledFrames;
+  renderBackendFrames(backend, 256);
+  pipeline.sampleDecodeHealth(health);
+  assert(health.sourceConsumedFrames == consumed);
+  assert(health.emptyOutputCount == empty + 1);
+  assert(health.zeroFilledFrames == zero + 256);
+  assert(health.decodeRunning && !health.decodeEof && health.decodeBufferedFrames == 0);
+  const auto seekStarted = std::chrono::steady_clock::now();
+  assert(pipeline.seek(0.0, &error) == TAE_RESULT_OK);
+  assert(std::chrono::steady_clock::now() - seekStarted < std::chrono::milliseconds(300));
+  assert(waitUntil([] { return g_blockedDecodeReaders.load() == 1; }));
+  const auto stopStarted = std::chrono::steady_clock::now();
+  assert(pipeline.stop() == TAE_RESULT_OK);
+  assert(std::chrono::steady_clock::now() - stopStarted < std::chrono::milliseconds(300));
+  assert(g_blockedDecodeReaders.load() == 0);
+}
+
 void testRetiredDecodeStreamsAreReclaimedWhilePlaying() {
   g_backendRegistry.reset();
   AudioPipeline pipeline;
@@ -1760,6 +1807,87 @@ void testRetiredDecodeStreamsAreReclaimedWhilePlaying() {
 
   pipeline.stop();
   assert(pipeline.retiredDecodeStreamCountForTests() == 0);
+}
+
+void testRemoteRecoveryKeepsQueuedFramesAndResumesAtNextSourceFrame() {
+  for (const bool partialTail : {false, true}) {
+    g_backendRegistry.reset();
+    g_injectedRemoteReadFailures = 1;
+    AudioPipeline pipeline;
+    std::string error;
+    const std::string source = partialTail
+        ? "http://test/partial-read-failure.flac" : "http://test/read-failure.flac";
+    assert(pipeline.play(source, 0.0, "wasapi-exclusive", "auto", 0.5,
+        kUnityGainProcessingConfigJson, &error) == TAE_RESULT_OK);
+    const auto backend = waitForLatestStartedBackendState();
+    assert(backend);
+    size_t consumed = 0;
+    while (consumed < 65536) {
+      OutputInfo::Diagnostics health;
+      assert(waitUntil([&] {
+        pipeline.sampleDecodeHealth(health);
+        return health.decodeHealthAvailable && health.decodeBufferedFrames >= 256;
+      }));
+      const auto samples = renderBackendFrames(backend, 256);
+      for (size_t frame = 0; frame < 256; ++frame) {
+        const float expected = (0.125f + static_cast<float>(consumed + frame) / 65536.0f) * 0.5f;
+        assert(std::abs(samples[frame * 2] - expected) < 0.00001f);
+        assert(std::abs(samples[frame * 2 + 1] - expected) < 0.00001f);
+      }
+      consumed += 256;
+    }
+    assert(g_injectedRemoteReadFailures == 0);
+    assert(!pipeline.consumeDecodeError(&error));
+    pipeline.stop();
+  }
+}
+
+void testReadFailureCannotPromotePreloadOrReportNormalEnd() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setVolume(0.5) == TAE_RESULT_OK);
+  assert(engine.loadQueue("[{\"id\":\"broken\",\"source\":\"read-failure.flac\"},"
+      "{\"id\":\"next\",\"source\":\"healthy-next.flac\"}]", 0) == TAE_RESULT_OK);
+  assert(engine.play("read-failure.flac", 0.0) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  for (int block = 0; block < 16; ++block) renderBackendFrames(backend, 256);
+  assert(waitUntil([&] { return engine.getPlaybackInfoJson().find("\"state\":\"stopped\"") != std::string::npos; }));
+  const auto info = engine.getPlaybackInfoJson();
+  assert(info.find("read-failure.flac") != std::string::npos);
+  assert(playbackJsonNumber(info, "queueIndex") == 0);
+  assert(info.find("Injected source read failure") != std::string::npos);
+  assert(engine.getLastErrorJson().find("\"context\":\"decode\"") != std::string::npos);
+}
+
+void testStopAndSeekCancelBlockedRemoteReconnect() {
+  for (const bool seek : {false, true}) {
+    g_backendRegistry.reset();
+    g_injectedRemoteReadFailures = 1;
+    g_blockNextReconnect = true;
+    AudioPipeline pipeline;
+    std::string error;
+    assert(pipeline.play("http://test/blocked-reconnect-read-failure.flac", 0.0,
+        "wasapi-exclusive", "auto", 0.5, kUnityGainProcessingConfigJson, &error) == TAE_RESULT_OK);
+    assert(waitUntil([] { return g_blockedReconnects.load() == 1; }));
+    OutputInfo::Diagnostics health;
+    pipeline.sampleDecodeHealth(health);
+    assert(health.decodeStage == "reconnecting" && !health.decodeEof);
+    const auto started = std::chrono::steady_clock::now();
+    assert((seek ? pipeline.seek(0.0, &error) : pipeline.stop()) == TAE_RESULT_OK);
+    assert(std::chrono::steady_clock::now() - started < std::chrono::milliseconds(300));
+    assert(g_blockedReconnects == 0);
+    assert(!pipeline.consumeDecodeError(&error));
+    if (seek) {
+      assert(waitUntil([&] {
+        pipeline.sampleDecodeHealth(health);
+        return health.decodeHealthAvailable && health.decodeBufferedFrames >= 4096;
+      }));
+      const auto samples = renderBackendFrames(waitForLatestStartedBackendState(), 256);
+      assert(std::abs(samples.front() - 0.0625f) < 0.00001f);
+    }
+    pipeline.stop();
+  }
 }
 
 void testApplyDspStateGraphPreparationFailureIsTransactional() {
@@ -4654,19 +4782,69 @@ struct FFmpegDecoder::Impl {
   TrackProfile profile;
   AudioFormat outputFormat;
   size_t positionFrames = 0;
+  int (*interrupt)(void*) = nullptr;
+  void* interruptContext = nullptr;
+  bool opened = false;
+
+  bool injectedReadFailure(std::string* error) {
+    if (positionFrames < 4096 || profile.stream.source.find("read-failure") == std::string::npos) return false;
+    const bool remote = profile.stream.source.rfind("http://", 0) == 0;
+    if (remote) {
+      int remaining = g_injectedRemoteReadFailures.load();
+      while (remaining > 0 && !g_injectedRemoteReadFailures.compare_exchange_weak(remaining, remaining - 1)) {}
+      if (remaining <= 0) return false;
+    }
+    if (error) *error = "Injected source read failure";
+    return true;
+  }
+
+  bool interruptedRead(std::string* error) {
+    if (profile.stream.source.find("interruptible-read") == std::string::npos || positionFrames < 4096) return false;
+    g_blockedDecodeReaders.fetch_add(1);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (interrupt && interrupt(interruptContext)) {
+        g_blockedDecodeReaders.fetch_sub(1);
+        if (error) *error = "decode_cancelled";
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    g_blockedDecodeReaders.fetch_sub(1);
+    return false;
+  }
 };
 
 FFmpegDecoder::FFmpegDecoder()
     : impl_(std::make_unique<Impl>()) {}
 
 FFmpegDecoder::~FFmpegDecoder() = default;
-void FFmpegDecoder::setInterrupt(int (*)(void*), void*) {}
+void FFmpegDecoder::setInterrupt(int (*callback)(void*), void* context) {
+  impl_->interrupt = callback;
+  impl_->interruptContext = context;
+}
 
 bool FFmpegDecoder::open(const std::string& source, std::string* error) {
-  (void)error;
+  if (impl_->positionFrames > 0 && source.find("blocked-reconnect") != std::string::npos &&
+      g_blockNextReconnect.exchange(false)) {
+    // A real reopen closes its previous AVFormatContext before new IO starts.
+    impl_->opened = false;
+    g_blockedReconnects.fetch_add(1);
+    while (!impl_->interrupt || !impl_->interrupt(impl_->interruptContext)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    g_blockedReconnects.fetch_sub(1);
+    if (error) *error = "decode_cancelled";
+    return false;
+  }
+  if (impl_->interrupt && impl_->interrupt(impl_->interruptContext)) {
+    if (error) *error = "decode_cancelled";
+    return false;
+  }
   impl_->profile = buildTrackProfile(source);
   impl_->outputFormat = impl_->profile.defaultOutput;
   impl_->positionFrames = 0;
+  impl_->opened = true;
   impl_->profile.stream.decodedFormat = impl_->outputFormat;
   return true;
 }
@@ -4687,7 +4865,8 @@ void FFmpegDecoder::setResamplerQuality(ResamplerQuality quality) {
 }
 
 size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* error) {
-  (void)error;
+  if (impl_->interruptedRead(error)) return 0;
+  if (impl_->profile.stream.source.find("partial-read-failure") == std::string::npos && impl_->injectedReadFailure(error)) return 0;
   if (impl_->outputFormat.sampleFormat != AudioSampleFormat::Float32Interleaved) return 0;
   const int delayMs = g_decodeFirstReadDelayMs.exchange(0);
   if (delayMs > 0 && impl_->positionFrames == 0) {
@@ -4705,6 +4884,9 @@ size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* 
   for (size_t frame = 0; frame < read; ++frame) {
     for (size_t channel = 0; channel < channels; ++channel) {
       output[frame * channels + channel] = impl_->profile.sampleValue;
+      if (impl_->profile.stream.source.find("read-failure") != std::string::npos) {
+        output[frame * channels + channel] = 0.125f + static_cast<float>(impl_->positionFrames + frame) / 65536.0f;
+      }
       if (impl_->profile.stream.source.find("typed-gapless-") != std::string::npos) {
         writeTypedGaplessSample(impl_->profile.stream.source, impl_->outputFormat.sampleFormat,
             impl_->positionFrames + frame, channel,
@@ -4713,11 +4895,12 @@ size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* 
     }
   }
   impl_->positionFrames += read;
+  if (impl_->profile.stream.source.find("partial-read-failure") != std::string::npos) impl_->injectedReadFailure(error);
   return read;
 }
 
 size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
-  (void)error;
+  if (impl_->interruptedRead(error)) return 0;
   if (!output.data || output.frames == 0) return 0;
   if (output.byteSize > 0) std::memset(output.data, 0, output.byteSize);
   if (!pcmFormatsExactMatch(output.format, impl_->outputFormat)) return 0;
@@ -4751,6 +4934,10 @@ size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
 }
 
 bool FFmpegDecoder::seek(double seconds, std::string* error) {
+  if (!impl_->opened) {
+    if (error) *error = "Audio source is not open";
+    return false;
+  }
   const double clamped = std::max(0.0, seconds);
   {
     std::lock_guard lock(g_decoderSeekMutex);
@@ -4830,6 +5017,10 @@ int main() {
   RUN_RUNTIME_CASE(testDspGraphCommandAppliesAtRenderBoundary());
   RUN_RUNTIME_CASE(testDspGraphEpochRetirementStaysBoundedAcrossOneThousandUpdates());
   RUN_RUNTIME_CASE(testRetiredDecodeStreamsAreReclaimedWhilePlaying());
+  RUN_RUNTIME_CASE(testStopAndSeekInterruptBlockedDecodeAndExposeLiveHealth());
+  RUN_RUNTIME_CASE(testRemoteRecoveryKeepsQueuedFramesAndResumesAtNextSourceFrame());
+  RUN_RUNTIME_CASE(testReadFailureCannotPromotePreloadOrReportNormalEnd());
+  RUN_RUNTIME_CASE(testStopAndSeekCancelBlockedRemoteReconnect());
   RUN_RUNTIME_CASE(testApplyDspStateGraphPreparationFailureIsTransactional());
   RUN_RUNTIME_CASE(testApplyDspStateCapacityFailureKeepsLastAcceptedState());
   RUN_RUNTIME_CASE(testStoppedVolumeAcceptanceIsVisibleBeforePlayback());

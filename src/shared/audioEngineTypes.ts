@@ -172,6 +172,19 @@ export interface LatencyInfo {
 }
 
 export interface OutputDiagnostics {
+  /** Live PCM worker/render samples; unavailable when the pipeline is busy or on DSD. */
+  decodeHealthAvailable?: boolean
+  decodeStreamToken?: number
+  decodeRunning?: boolean
+  decodeEof?: boolean
+  decodeStopRequested?: boolean
+  decodeBufferedFrames?: number
+  decodeProducedFrames?: number
+  decodeLastProgressAgeMs?: number
+  decodeStage?: string
+  liveRenderState?: number
+  liveRenderedFrames?: number
+  liveRenderCallbackCount?: number
   sessionUnderrunCount: number
   sessionBufferDropCount: number
   sessionRecoveryCount: number

@@ -130,6 +130,7 @@ import { createRemotePlaybackPublisher } from './player/remotePlaybackPublisher.
 import { createNativePlaybackToggleController } from '@renderer/stores/player/nativePlaybackToggleController.ts'
 import { createPlayerSystemIntegrations } from './player/playerSystemIntegrations.ts'
 import { useProviderStore } from './useProviderStore'
+import { onLocalTracksRemovalRequested } from '../utils/localTrackRemovalPolicy.ts'
 
 type NativePlaybackInfo = Awaited<ReturnType<typeof window.api.audioEngine.getPlaybackInfo>>
 type NativeOutputInfo = NativePlaybackInfo['outputInfo']
@@ -377,7 +378,12 @@ const visualizationData = shallowRef<NativeVisualizationData>(createInactiveVisu
 // 读取 visualizationData 的已挂载组件数；为 0 时 60ms IPC 轮询不启动。
 const visualizationConsumers = ref(0)
 const visualizationDocumentVisible = ref(typeof document === 'undefined' || !document.hidden)
-const { settings: appSettings, loaded: settingsLoaded, updateSettings } = useSettingsStore()
+const {
+  settings: appSettings,
+  loaded: settingsLoaded,
+  platform: appPlatform,
+  updateSettings
+} = useSettingsStore()
 const lyricsManagement = useLyricsManagement()
 let playbackAudio: HTMLAudioElement | null = null
 let playbackObjectUrl: string | null = null
@@ -945,6 +951,66 @@ async function stopNativeAudio(): Promise<void> {
   } catch {
     // The renderer audio fallback can still continue if the native bridge is unavailable.
   }
+}
+
+function normalizeRemovalPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  return appPlatform.value === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized
+}
+
+function isRemovalTarget(filePath: string | undefined, targets: Set<string>): boolean {
+  return !!filePath && targets.has(normalizeRemovalPath(filePath))
+}
+
+/**
+ * Native playback preloads the upcoming queue item, so stopping only the
+ * current track is insufficient when that upcoming file is being trashed.
+ * Renderer fallback audio also needs its source cleared before the main IPC
+ * attempts the filesystem operation.
+ */
+async function prepareLocalTracksForRemoval(
+  _trackIds: string[],
+  filePaths: string[]
+): Promise<void> {
+  const targets = new Set(
+    filePaths
+      .filter((filePath) => typeof filePath === 'string' && filePath)
+      .map(normalizeRemovalPath)
+  )
+  if (targets.size === 0) return
+
+  const current = currentTrack.value
+  const currentPath =
+    current && getTrackSource(current) === 'local' ? normalizeRemovalPath(current.filePath) : ''
+  const currentMatches = currentPath.length > 0 && targets.has(currentPath)
+  const nativeInfo = playbackInfo.value
+  const nativeSourceMatches = isRemovalTarget(nativeInfo?.source, targets)
+  const upcomingSourceMatches = isRemovalTarget(nativeInfo?.upcomingTrack?.source, targets)
+  const rendererMatches = currentMatches && loadedTrackId === current?.id
+  const nativeMatches =
+    nativePlaybackActive || nativeQueueDelegated
+      ? currentMatches || nativeSourceMatches || upcomingSourceMatches
+      : nativeSourceMatches || upcomingSourceMatches
+
+  if (!nativeMatches && !rendererMatches) return
+
+  activeLoadToken += 1
+  nativeQueueRevisionFence.next()
+  clearCrossfadeTimer()
+  clearPlaybackToggleIntent()
+  clearNativePlaybackInfoIntent()
+  stopVisualizationPolling(true)
+  isLoading.value = false
+  isPlaying.value = false
+  loadedTrackId = ''
+  stopRendererAudio(true)
+
+  // Await the native command. The Windows decoder and any preloaded stream
+  // release their handles as part of Stop; the retrying trash operation in the
+  // main process covers the small OS-level close delay that can follow it.
+  if (nativeMatches) await stopNativeAudio()
+  nativePlaybackActive = false
+  nativeQueueDelegated = false
 }
 
 const playbackClockController = createPlaybackClockController({
@@ -1885,6 +1951,7 @@ watch(
 )
 
 const cleanupFns: (() => void)[] = []
+cleanupFns.push(onLocalTracksRemovalRequested(prepareLocalTracksForRemoval))
 let listenersSetup = false
 let crossfadeTimer: number | null = null
 let crossfadeTrackId = ''
