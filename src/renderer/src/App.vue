@@ -88,6 +88,7 @@ import { hasDismissLayer } from '@renderer/app/useDismissLayer'
 import { createPlaybackSessionPersistence } from './app/usePlaybackSessionPersistence'
 import { useSideMenuClearance } from './app/useSideMenuClearance'
 import { useMiniPlayerSync } from './app/useMiniPlayerSync'
+import { useDynamicIslandLyrics } from './app/useDynamicIslandLyrics.ts'
 import { useDesktopLyricsPublisher } from './app/useDesktopLyricsPublisher.ts'
 import { useFavoriteButton } from './components/player-bar/useFavoriteButton'
 import { useMotionPreference } from './app/useMotionPreference'
@@ -426,6 +427,7 @@ const {
   visualizerActive
 } = usePlayerStore()
 useDesktopLyricsPublisher()
+useDynamicIslandLyrics()
 const { setAdaptiveMedia, effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
 const mediaProviders = useMediaProviders()
 const navigationProviders = useProviderStore()

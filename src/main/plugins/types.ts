@@ -426,7 +426,7 @@ export type PluginHostResponse =
   | {
       kind: 'api-call'
       requestId: string
-      namespace: 'player' | 'providers' | 'extensions' | 'internal' | 'auth'
+      namespace: 'player' | 'providers' | 'extensions' | 'internal' | 'auth' | 'overlay'
       method:
         | 'getPlaybackInfo'
         | 'play'
@@ -447,6 +447,9 @@ export type PluginHostResponse =
         | 'qishuiGetQrLogin'
         | 'qishuiCheckQrLogin'
         | 'qishuiClear'
+        | 'show'
+        | 'configure'
+        | 'hide'
       args: unknown[]
     }
   | {

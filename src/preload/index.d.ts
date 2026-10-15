@@ -21,10 +21,15 @@ import type {
 } from './types.ts'
 import type {
   MiniPlayerSettings,
-  MiniPlayerTrackSnapshot,
+  MiniPlayerStateSnapshot,
   MiniPlayerSettingsPatch
 } from '../shared/miniPlayer.ts'
 import type { TrayNavigationTarget } from '../shared/trayPlayer.ts'
+import type {
+  DynamicIslandBootstrap,
+  DynamicIslandLyricsPayload,
+  DynamicIslandPresentation
+} from '../shared/dynamicIsland.ts'
 import type { VersionedDataEnvelope } from '../shared/versionedPersistence.ts'
 import type {
   AudioOutputId,
@@ -148,23 +153,6 @@ type LibraryChange =
 import type { TwilightMediaProviderMethod } from '../shared/mediaProviderMethods.ts'
 
 type MotionPreference = 'system' | 'full' | 'reduced' | 'off'
-
-interface MiniPlayerStateSnapshot {
-  track: MiniPlayerTrackSnapshot | null
-  isPlaying: boolean
-  isLoading: boolean
-  currentTime: number
-  duration: number
-  playbackRate: number
-  volume: number
-  playMode: PlayMode
-  favoriteAvailable: boolean
-  favoriteLiked: boolean
-  favoriteLoading: boolean
-  dominantColor: string
-  queueIndex: number
-  queueLength: number
-}
 
 type MiniPlayerCommand =
   | { type: 'toggle-play' }
@@ -811,6 +799,8 @@ interface WindowAPI {
     moveTo: (x: number, y: number) => void
     moveEnd: () => void
     publishState: (state: MiniPlayerStateSnapshot) => void
+    /** Island-only lyric channel; keeps lyric payloads out of the shared snapshot. */
+    publishLyrics: (payload: DynamicIslandLyricsPayload) => void
     onState: (cb: (state: MiniPlayerStateSnapshot) => void) => () => void
     onSettings: (cb: (settings: MiniPlayerSettings) => void) => () => void
     onMotionPreference: (cb: (preference: MotionPreference) => void) => () => void
@@ -823,6 +813,16 @@ interface WindowAPI {
     hide: () => void
     onState: (cb: (state: MiniPlayerStateSnapshot) => void) => () => void
     onMotionPreference: (cb: (preference: MotionPreference) => void) => () => void
+  }
+  dynamicIsland: {
+    getBootstrap: () => Promise<DynamicIslandBootstrap>
+    command: (command: MiniPlayerCommand) => void
+    getVisualizationData: (options?: VisualizationOptions) => Promise<VisualizationData>
+    setExpanded: (expanded: boolean) => Promise<boolean>
+    onState: (cb: (state: MiniPlayerStateSnapshot) => void) => () => void
+    onExpanded: (cb: (expanded: boolean) => void) => () => void
+    onConfig: (cb: (presentation: DynamicIslandPresentation) => void) => () => void
+    onLyrics: (cb: (payload: DynamicIslandLyricsPayload) => void) => () => void
   }
 }
 

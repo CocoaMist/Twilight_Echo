@@ -29,6 +29,7 @@
 - [插件开发导读](./PLUGIN_README.md)
 - [插件系统权威规范](./twilight-echo-plugin-spec.md)
 - [主题插件开发](./theme-plugin-authoring.md)
+- [灵动岛](./dynamic-island.md)
 
 ## 本地库与播放功能
 
