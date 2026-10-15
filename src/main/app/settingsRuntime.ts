@@ -17,6 +17,7 @@ import { applyRuntimeSettings } from '../integrations/shortcutsTray'
 import { applyLibraryWatchers } from '../library/watcher'
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
+  const previousLibraryFolders = runtime.appSettings.libraryFolders ?? []
   const nextSettings = normalizeAppSettings({ ...runtime.appSettings, ...patch })
   if (Object.prototype.hasOwnProperty.call(patch, 'autoMixMode')) {
     const accepted = await runtime.audioEngineManager?.setAutoMixMode(
@@ -151,6 +152,18 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
     Object.prototype.hasOwnProperty.call(patch, 'watchLibrary')
   ) {
     applyLibraryWatchers(runtime.appSettings.libraryFolders, runtime.appSettings.watchLibrary)
+    // Native watchers only report future filesystem changes. Import existing
+    // files when a root is added, even when automatic watching is disabled.
+    if (Object.prototype.hasOwnProperty.call(patch, 'libraryFolders')) {
+      const addedFolders = runtime.appSettings.libraryFolders.filter(
+        (folder) => !previousLibraryFolders.includes(folder)
+      )
+      if (addedFolders.length > 0) {
+        runtime.localLibraryIndexCoordinator?.enqueueWatcherChanges(
+          addedFolders.map((path) => ({ kind: 'reconcile', path }))
+        )
+      }
+    }
   }
 
   // Keep already-open lyric controls in sync with the application motion tier.
