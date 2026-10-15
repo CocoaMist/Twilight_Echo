@@ -1,7 +1,23 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AppBackgroundPage } from '../../../shared/appSettings.ts'
-const props = defineProps<{ page: AppBackgroundPage | 'app'; embedded?: boolean }>()
+import { mountBackgroundImageFallback } from '../app/backgroundImageFallback'
+const props = defineProps<{
+  page: AppBackgroundPage | 'app'
+  embedded?: boolean
+  reading?: boolean
+}>()
+const layer = ref<HTMLElement>()
+let fallback: ReturnType<typeof mountBackgroundImageFallback> | undefined
+onMounted(() => {
+  if (layer.value) fallback = mountBackgroundImageFallback(layer.value)
+})
+watch(
+  () => props.page,
+  () => fallback?.refresh(),
+  { flush: 'post' }
+)
+onBeforeUnmount(() => fallback?.dispose())
 const style = computed(() =>
   Object.fromEntries(
     [
@@ -17,13 +33,19 @@ const style = computed(() =>
 </script>
 <template>
   <div
+    ref="layer"
     class="app-background-layer"
-    :class="{ 'app-background-layer--embedded': embedded }"
+    data-te-material="canvas"
+    :class="{
+      'app-background-layer--embedded': embedded,
+      'app-background-layer--reading': reading
+    }"
     :data-background-page="page"
     :style="style"
     aria-hidden="true"
   >
     <div class="app-background-image" />
     <div class="app-background-dim" />
+    <div v-if="reading" class="app-background-reading-wash" />
   </div>
 </template>

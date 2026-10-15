@@ -5,26 +5,7 @@
 /* Navigation and transport share a quiet material family. Their different
    footprints need different elevation, without changing content card depth. */
 :root {
-  --te-chrome-material-solid: color-mix(
-    in srgb,
-    var(--te-app-bg) 96%,
-    var(--te-shell-control-text)
-  );
-  --te-chrome-material-surface: color-mix(
-    in srgb,
-    var(--te-chrome-material-solid) 76%,
-    transparent
-  );
-  --te-chrome-navigation-surface: color-mix(
-    in srgb,
-    var(--te-chrome-material-solid) 88%,
-    transparent
-  );
-  --te-chrome-navigation-elevation: 3px 0 14px
-    color-mix(in srgb, var(--te-chrome-shadow-color) 4%, transparent);
-  --te-chrome-contact: 0 1px 3px color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
-  --te-chrome-elevation: 0 5px 16px
-    color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
+  /* Chrome recipes are generated from shared/materials.ts. */
   --te-bohr-light: color-mix(in srgb, var(--te-on-accent) 58%, transparent);
   --te-bohr-shoulder: color-mix(in srgb, var(--te-on-accent) 18%, transparent);
   --te-bohr-edge: color-mix(in srgb, var(--te-chrome-shadow-color) 22%, transparent);
@@ -37,11 +18,6 @@
 }
 
 html[data-theme='dark'] {
-  --te-chrome-navigation-elevation: 3px 0 14px
-    color-mix(in srgb, var(--te-chrome-shadow-color) 8%, transparent);
-  --te-chrome-contact: 0 1px 3px color-mix(in srgb, var(--te-chrome-shadow-color) 20%, transparent);
-  --te-chrome-elevation: 0 5px 16px
-    color-mix(in srgb, var(--te-chrome-shadow-color) 16%, transparent);
   --te-bohr-light: color-mix(in srgb, var(--te-on-accent) 28%, transparent);
   --te-bohr-shoulder: color-mix(in srgb, var(--te-on-accent) 7%, transparent);
   --te-bohr-edge: color-mix(in srgb, var(--te-chrome-shadow-color) 52%, transparent);
