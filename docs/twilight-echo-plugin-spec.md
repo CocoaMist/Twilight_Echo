@@ -217,6 +217,12 @@ schemaVersion 3；API v3 继续接受 schemaVersion 1/2 和 `variables + stylesh
   供后续检查重试，仅显式退出登录时删除凭据。
   `library` 能力可选提供 `fetchSavedAlbums()` / `fetchSavedArtists()`，返回标准
   `AlbumSummary[]` / `ArtistSummary[]`；内置网易云插件分页读取收藏列表，音乐库按批展示并复用详情导航。
+  `AlbumSummary` 可选携带 `releaseType`，保留音源报告的发行类型。
+  内置网易云将 `type` 原样规范为该字段，只在网易云艺人专辑区和收藏专辑区
+  展示发行类型单选筛选与标签；缺失数据保留为“未标注”，不按曲数或标题推断 LP、EP 或 Mixtape。
+  类型选项从返回数据生成，支持专辑、EP、Single、旧的 EP/Single 及后续新增值。
+  `AlbumSummary.isExplicit` 可选携带音源提供的 Explicit 标记；网易云从专辑 `mark` 的
+  `0x100000` 位读取，在专辑卡片和详情显示 E 标。缺失或无效的 `mark` 不推断为 Explicit。
   方法名称联合类型统一定义于 `src/shared/mediaProviderMethods.ts`，main/preload 共用，仍经现有 provider 调用桥接。
 - Navidrome 是在独立插件仓库维护的服务器型 `MediaProvider` 插件：插件 ID 为
   `com.twilightecho.provider.navidrome`，provider 前缀固定为 `navidrome`，通过插件市场或本地 `.tep` 安装并启用。
