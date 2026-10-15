@@ -35,10 +35,12 @@ html:not([data-te-shell-layout='custom']) .app-shell:not(.is-immersive) .app-she
    the whole page below the caption. Fixed page chrome retains its inset box. */
 html:not([data-te-shell-layout='custom'])
   .app-shell:not(.is-immersive)
-  .app-shell-content:has(> .main-content > .local-home-layout > .home),
+  .app-shell-content:not(:has(.theme-studio-page)):has(
+    > .main-content > .local-home-layout > .home
+  ),
 html:not([data-te-shell-layout='custom'])
   .app-shell:not(.is-immersive)
-  .app-shell-content:has(
+  .app-shell-content:not(:has(.theme-studio-page)):has(
     > .main-content
       > :is(
         .song-list,
