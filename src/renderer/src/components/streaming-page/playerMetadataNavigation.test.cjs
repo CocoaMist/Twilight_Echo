@@ -56,7 +56,7 @@ async function runAlbumRequest(change = () => {}) {
     isCurrentDetailNavigation: (token, providerId) =>
       token === context.detailNavigationToken &&
       context.props.active !== false &&
-      providerId === context.activeProvider.value,
+      (providerId === undefined || providerId === context.activeProvider.value),
     openAlbum: async (...args) => opened.push(args),
     openRequestedArtist: async () => {},
     isCurrentPlaybackMetadataRequest: (key) =>
@@ -87,6 +87,13 @@ test('album request is discarded when another destination supersedes it during p
 test('album request is discarded after leaving the streaming surface', async () => {
   const opened = await runAlbumRequest((context) => {
     context.props.active = false
+  })
+  assert.equal(opened.length, 0)
+})
+
+test('album request is discarded after a newer in-page navigation starts', async () => {
+  const opened = await runAlbumRequest((context) => {
+    context.detailNavigationToken += 1
   })
   assert.equal(opened.length, 0)
 })

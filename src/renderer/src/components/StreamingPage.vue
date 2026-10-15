@@ -1438,6 +1438,7 @@ function selectProvider(provider: string, persist = true): void {
   }
   fallbackProvider.value = null
   if (preferredProvider.value === provider) return
+  detailNavigationToken += 1
   // Only an explicit user action changes the persisted preference; availability
   // fallbacks never write back, so the choice survives restarts and plugin toggles.
   preferredProvider.value = provider
@@ -3436,6 +3437,7 @@ watch(
 
 let lastMetadataNavigationKey = 0
 let playbackNavigationInFlight = 0
+let playbackNavigationSyncToken: number | null = null
 
 function playbackNavigationPending(): boolean {
   return (
@@ -3456,13 +3458,19 @@ watch(
     if (request.key === lastMetadataNavigationKey) return
 
     lastMetadataNavigationKey = request.key
+    const navigationToken = ++detailNavigationToken
+    playbackNavigationSyncToken = navigationToken
     playbackNavigationInFlight += 1
     try {
       await providerStore.syncProviders().catch(() => undefined)
-      if (!isCurrentPlaybackMetadataRequest(request.key)) return
+      if (
+        !isCurrentPlaybackMetadataRequest(request.key) ||
+        navigationToken !== detailNavigationToken
+      ) return
       if (request.kind === 'artist') await openRequestedArtist(request, true, true)
       else await openRequestedAlbum(request, true)
     } finally {
+      if (playbackNavigationSyncToken === navigationToken) playbackNavigationSyncToken = null
       playbackNavigationInFlight -= 1
     }
   },
@@ -3491,8 +3499,11 @@ watch(
 watch(activeProvider, async (provider, oldProvider) => {
   if (provider === oldProvider || props.active === false) return
   // Preserve the request that initiated an internal source switch.
-  resetDetail({ keepNavigationRequest: provider === detailNavigationProvider })
-  if (provider !== detailNavigationProvider) clearSearch()
+  const keepNavigationRequest =
+    provider === detailNavigationProvider ||
+    playbackNavigationSyncToken === detailNavigationToken
+  resetDetail({ keepNavigationRequest })
+  if (!keepNavigationRequest) clearSearch()
   recommendationRequestId += 1
   recommendationProviderId.value = ''
   homeSectionDefinitions.value = []

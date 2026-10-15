@@ -371,6 +371,7 @@ function createTrackMetadataNavigationHarness() {
     },
     detailStack,
     detailLoadToken: 0,
+    playbackNavigationSyncToken: null,
     streamingTransitionName: ref(''),
     streamingContentRef: ref(null),
     applyDetailState() {},
