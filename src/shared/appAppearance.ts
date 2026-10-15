@@ -9,6 +9,7 @@ import type {
   CardAppearanceTheme
 } from './appSettings.ts'
 import { normalizeLiquidGlass, normalizeSurfaceMaterial } from './liquidGlass.ts'
+import { backgroundDisplayUrl } from './backgroundDisplay.ts'
 
 export type AppearanceDraft = Pick<
   AppSettings,
@@ -158,7 +159,7 @@ export function backgroundCssVariables(
     '--appearance-color': background[tone],
     '--appearance-image':
       background.kind === 'image' && background.image
-        ? `url("${background.image.replace(/["\\\n\r]/g, '')}")`
+        ? `url("${backgroundDisplayUrl(background.image).replace(/["\\\n\r]/g, '')}")`
         : 'none',
     '--appearance-blur': `${effect.blur}px`,
     '--appearance-brightness': `${effect.brightness}%`,

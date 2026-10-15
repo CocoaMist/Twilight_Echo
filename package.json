@@ -8,6 +8,7 @@
   "homepage": "https://TwilightEcho.com",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
+    "test:memory-assets": "node --experimental-strip-types --test src/main/cache/backgroundDisplayCache.test.ts src/main/cache/protocolAssetCache.test.ts scripts/background-display-memory.test.cjs",
     "test:diagnostics": "node --experimental-strip-types --test src/main/diagnostics/diagnostics.test.ts",
     "test:diagnostics-native": "node --experimental-strip-types --test scripts/diagnostics-native-fault.test.cjs",
     "test:ncm-api-compatibility": "node --test scripts/ncm-api-compatibility.test.cjs",

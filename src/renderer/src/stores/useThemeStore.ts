@@ -1,4 +1,5 @@
 import { applyExplicitThemePreferences } from '@renderer/extensions/themeProfilePriority'
+import { backgroundDisplayUrl } from '../../../shared/backgroundDisplay.ts'
 import {
   backgroundCssVariables,
   backgroundEffect,
@@ -671,7 +672,7 @@ function appearanceDataAttributes(tone: ThemeTone): Record<string, string> {
 
 function toBackgroundImageValue(background: AppBackgroundColorPair): string {
   if (background.kind !== 'image' || !background.image) return 'none'
-  return `url("${escapeCssUrl(background.image)}")`
+  return `url("${escapeCssUrl(backgroundDisplayUrl(background.image))}")`
 }
 
 function resolveRuntimeTone(profile: ThemeProfileV2 | null, modes: ThemeModes): ThemeTone {
