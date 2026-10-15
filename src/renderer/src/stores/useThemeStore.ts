@@ -946,7 +946,15 @@ function decodeThemeResources(urls: string[]): void {
     uncached.map(async (url) => {
       const image = new Image()
       image.src = url
-      await image.decode()
+      try {
+        await image.decode()
+      } finally {
+        // Theme resource decoding is a warm-up step; the stylesheet owns the
+        // URL afterwards, so do not keep a decoded bitmap on this temporary Image.
+        image.onload = null
+        image.onerror = null
+        image.src = ''
+      }
     })
   ).then(() => {
     recordThemePerformance('resource-decode', startedAt)

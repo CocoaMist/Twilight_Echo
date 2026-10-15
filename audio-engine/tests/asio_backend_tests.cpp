@@ -1733,6 +1733,42 @@ void testPcmShortReadIsCountedOncePerCallback() {
   assert(secondSession.diagnostics.lifetimeUnderrunCount == 1);
 }
 
+void testHelperStarvationIsIncludedInSessionAndLifetimeDiagnostics() {
+  auto host = makeHost();
+  auto* rawHost = host.get();
+  AsioBackend backend(std::move(host));
+  std::string error;
+  assert(backend.open("asio:mock", sourceFormat(48000, 32), &error));
+  assert(backend.start([](float*, size_t frames) { return frames; }, nullptr, &error));
+  rawHost->renderHealthSnapshot = {20, 7, 3};
+  rawHost->driverBoundaryHealthAvailable = true;
+  rawHost->triggerBufferSwitch(0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  rawHost->triggerBufferSwitch(1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  rawHost->triggerBufferSwitch(0);
+  for (int read = 0; read < 2; ++read) {
+    const auto diagnostics = backend.outputInfo().diagnostics;
+    assert(diagnostics.asioHelperCallbackCount == 20);
+    assert(diagnostics.asioHelperUnderrunCount == 7);
+    assert(diagnostics.asioHelperBufferDropCount == 3);
+    assert(diagnostics.sessionUnderrunCount == 7);
+    assert(diagnostics.lifetimeUnderrunCount == 7);
+    assert(diagnostics.sessionBufferDropCount == 3);
+    assert(diagnostics.lifetimeBufferDropCount == 3);
+  }
+  backend.close();
+  backend.close();
+  assert(backend.outputInfo().diagnostics.lifetimeUnderrunCount == 7);
+  assert(backend.open("asio:mock", sourceFormat(48000, 32), &error));
+  const auto reopened = backend.outputInfo().diagnostics;
+  assert(reopened.sessionUnderrunCount == 0);
+  assert(reopened.sessionBufferDropCount == 0);
+  assert(reopened.lifetimeUnderrunCount == 7);
+  assert(reopened.lifetimeBufferDropCount == 3);
+  rawHost->renderHealthSnapshot = {};
+}
+
 void testOutputReadyFailureDisablesRepeatedDriverCalls() {
   auto host = makeHost();
   auto* rawHost = host.get();
@@ -2377,6 +2413,7 @@ int main() {
   testActualOutputFormatRefreshAfterBuffers();
   testPcmWirePrecisionAndFloat64();
   testPcmShortReadIsCountedOncePerCallback();
+  testHelperStarvationIsIncludedInSessionAndLifetimeDiagnostics();
   testOutputReadyFailureDisablesRepeatedDriverCalls();
   testBufferSizeMatrix();
   testNativeDsdBufferSizeWithoutCatalogRange();
