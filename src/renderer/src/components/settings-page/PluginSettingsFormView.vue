@@ -224,7 +224,7 @@ function toggle(field: PluginSettingsField): void {
 }
 
 .plugin-settings-label b {
-  color: var(--te-danger, #ef4444);
+  color: var(--te-danger-soft-fg);
 }
 
 .plugin-settings-field .preview-select {
