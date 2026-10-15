@@ -1,4 +1,5 @@
 import './assets/main.css'
+import { installRendererDiagnostics, installVueDiagnostics } from './app/diagnostics.ts'
 
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
@@ -9,6 +10,7 @@ import { installScrollToTopButton } from './utils/scrollToTopButton'
 import { injectCachedThemeRuntime } from './app/themeRuntimeCache'
 
 const query = new URLSearchParams(window.location.search)
+installRendererDiagnostics()
 const windowKind = query.get('window')
 const isMiniPlayer = windowKind === 'mini-player'
 const isTrayPlayer = windowKind === 'tray-player'
@@ -76,7 +78,9 @@ async function mountApp(): Promise<void> {
   // The lyrics window reads no theme tokens: every colour arrives in its settings
   // payload, so it must not pay for (or wait on) the theme runtime.
   if (isMiniPlayer) await bootstrapThemeRuntime()
-  createApp(rootComponent).use(createPinia()).mount('#app')
+  const app = createApp(rootComponent).use(createPinia())
+  installVueDiagnostics(app)
+  app.mount('#app')
   void startupSnapshot
 }
 

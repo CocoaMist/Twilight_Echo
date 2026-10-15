@@ -231,6 +231,16 @@ export function compileMaterialCss(): string {
   const blocks = [
     '/* Generated from src/shared/materials.ts. Run generate:materials; do not edit. */',
     `:root {\n${declarations(MATERIAL_FOUNDATION)}\n}`,
+    `:where(.app-background-ambient) {\n${declarations({
+      '--te-home-ambient-surface':
+        'radial-gradient(ellipse 520px 520px at 80px 40px, color-mix(in srgb, var(--te-primary-500) 6%, transparent), transparent 72%), radial-gradient(ellipse 420px 420px at calc(100% - 20px) 300px, color-mix(in srgb, var(--te-accent-cyan) 4%, transparent), transparent 72%), radial-gradient(ellipse 360px 360px at 45% 840px, color-mix(in srgb, var(--te-favorite-500) 3%, transparent), transparent 72%)'
+    })}\n}`,
+    `:where(.dialog-btn.danger) {\n${declarations({
+      '--te-danger-control-surface':
+        'color-mix(in srgb, var(--te-danger-500, #d14343) 14%, transparent)',
+      '--te-danger-control-hover':
+        'color-mix(in srgb, var(--te-danger-500, #d14343) 22%, transparent)'
+    })}\n}`,
     `html[data-theme='dark'] {\n${declarations(darkFoundation)}\n}`,
     // Resolve context-dependent recipes where they paint, rather than freezing
     // their root values before a preview, page or theme supplies local inputs.

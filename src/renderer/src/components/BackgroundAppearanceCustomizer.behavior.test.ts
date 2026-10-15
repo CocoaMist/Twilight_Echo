@@ -135,8 +135,10 @@ app.whenReady().then(async()=>{
  protocol.handle('theme-asset',()=>new Response(themeWallpaper,{headers:{'content-type':'image/png','Access-Control-Allow-Origin':'*'}}));
  // Pixel samples use content coordinates; native Windows borders must not shrink the viewport.
  const win=new BrowserWindow({show:false,width:1280,height:820,useContentSize:true,webPreferences:{contextIsolation:false,offscreen:true,backgroundThrottling:false}});
+ // Keep crop coordinates in CSS pixels regardless of the Windows display scale.
+ const capture=async()=>nativeImage.createFromBuffer(Buffer.from((await win.webContents.debugger.sendCommand('Page.captureScreenshot',{format:'png',fromSurface:true})).data,'base64'));
  const capturePixel=async point=>{
-  const image=await win.webContents.capturePage();
+  const image=await capture();
   const size=image.getSize();
   const viewport=await win.webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
   if(point.x+point.width>viewport.width||point.y+point.height>viewport.height)throw new Error('pixel sample lies outside the CSS viewport: '+JSON.stringify(viewport));
@@ -152,6 +154,7 @@ app.whenReady().then(async()=>{
  };
  try{
   await win.loadFile(process.argv.at(-1));
+  win.webContents.debugger.attach('1.3');
   await win.webContents.executeJavaScript('window.runAppearanceTests()');
   // capturePage can apply a display color transform even with an sRGB PNG.
   // Compare to the same window's mathematical CSS result, keeping channel tolerance unchanged.
@@ -207,6 +210,7 @@ import {createApp,h,nextTick,ref} from 'vue'
 import Editor from '@renderer/components/BackgroundAppearanceCustomizer.vue'
 import Background from '@renderer/components/AppBackgroundLayer.vue'
 import '@renderer/assets/base.css'
+import '@renderer/assets/materials.css'
 import '@renderer/assets/appearance.css'
 import 'primeicons/primeicons.css'
 import {useSettingsStore} from '@renderer/stores/useSettingsStore.ts'

@@ -42,6 +42,7 @@ import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import { useLocale } from '../app/useLocale.ts'
 import { useThemeStore } from '../stores/useThemeStore'
 import { useMusicStore } from '../stores/useMusicStore'
+import { isTrackUnderLibraryRoot, normalizeLibraryPath } from '../stores/library/musicStoreData.ts'
 import { useExtensionRegistry, type UiContribution } from '../extensions/registry'
 import type {
   AppSettings,
@@ -203,6 +204,8 @@ const {
   libraryScanStatus,
   libraryScanProgress,
   libraryMetadataEnrichmentStatus,
+  excludedTracks,
+  restoreExcludedTracks,
   startFullLibraryScan,
   resetLibrary,
   pauseLibraryScan,
@@ -223,6 +226,21 @@ const libraryScanIsActive = computed(
 const libraryMetadataEnrichmentIsActive = computed(
   () => libraryMetadataEnrichmentStatus.value.state === 'enriching'
 )
+
+async function addLibraryFolderAndRestore(): Promise<void> {
+  libraryScanCommandError.value = ''
+  try {
+    const folder = await addLibraryFolder()
+    if (!folder) return
+    const root = normalizeLibraryPath(folder)
+    const excludedForFolder = excludedTracks.value
+      .filter((item) => isTrackUnderLibraryRoot(item.filePath, root))
+      .map((item) => item.filePath)
+    if (excludedForFolder.length > 0) await restoreExcludedTracks(excludedForFolder)
+  } catch (error) {
+    libraryScanCommandError.value = scanCommandErrorMessage(error)
+  }
+}
 const libraryScanProgressText = computed(() => {
   const status = libraryScanStatus.value
   if (status.state === 'failed') return status.error || '后台扫描失败'
@@ -1341,7 +1359,7 @@ onBeforeUnmount(() => {
           :library-reset-message="libraryResetMessage"
           :library-scan-command-error="libraryScanCommandError"
           :library-reset-pending="libraryResetPending"
-          :add-library-folder="addLibraryFolder"
+          :add-library-folder="addLibraryFolderAndRestore"
           :remove-library-folder="removeLibraryFolder"
           :choose-download-folder="chooseDownloadFolder"
           :reset-download-folder="resetDownloadFolder"

@@ -46,6 +46,7 @@ test('successful local loads retain pixels for sampling but release callbacks', 
   const result = loadLiquidGlassContextImage('theme-asset:test', request.signal, () => image)
   image.onload?.call(image, new Event('load'))
   assert.equal(await result, image)
+  assert.equal(image.crossOrigin, 'anonymous')
   request.abort()
   assert.equal(image.src, 'theme-asset:test')
   assert.equal(image.onload, null)

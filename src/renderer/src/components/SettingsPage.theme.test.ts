@@ -181,7 +181,7 @@ test('settings wallpaper is painted once by the overlay root, never per element'
   assert.doesNotMatch(darkSettingsPageRule, /--te-settings-bg-image/)
   assert.match(
     appSource,
-    /class="settings-overlay-root"[\s\S]*?settings-overlay-root--active[\s\S]*?<Transition name="settings-page">[\s\S]*?<SettingsPage/
+    /class="settings-overlay-root"[\s\S]*?settings-overlay-root--active[\s\S]*?<Transition\s+name="settings-page"[\s\S]*?<SettingsPage/
   )
   assert.match(
     appSource,

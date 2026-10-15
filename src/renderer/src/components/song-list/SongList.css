@@ -1888,6 +1888,20 @@
   cursor: not-allowed;
 }
 
+.dialog-btn.danger {
+  background: var(--te-danger-control-surface);
+  color: var(--te-danger-700, #a52f37);
+}
+
+.dialog-btn.danger:hover {
+  background: var(--te-danger-control-hover);
+}
+
+.dialog-btn.danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ── Dialog Transition ── */
 .dialog-fade-enter-active,
 .dialog-fade-leave-active {

@@ -321,7 +321,7 @@ function setPressOrigin(event: PointerEvent): void {
   width: var(--te-menu-width);
   /* Navigation shares the attached title-strip material, above the window base. */
   background: var(--te-chrome-navigation-surface, transparent);
-  border-right: 1px solid var(--te-navigation-border);
+  border-right: 0;
   border-radius: 0 var(--te-navigation-radius) var(--te-navigation-radius) 0;
   z-index: 1000;
   overflow: hidden;
@@ -779,7 +779,7 @@ function setPressOrigin(event: PointerEvent): void {
 /* Keep regular navigation readable when diffusion is disabled. */
 body.te-no-blur .side-menu:not(.side-menu-liquid),
 html[data-te-effects-mode='reduced'] .side-menu:not(.side-menu-liquid) {
-  background: var(--te-chrome-material-solid, var(--te-navigation-bg));
+  background: var(--te-chrome-frosted-solid, var(--te-navigation-bg));
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -793,7 +793,7 @@ html[data-te-effects-mode='reduced'] .side-menu-liquid::before {
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .side-menu:not(.side-menu-liquid) {
-    background: var(--te-chrome-material-solid, var(--te-navigation-bg));
+    background: var(--te-chrome-frosted-solid, var(--te-navigation-bg));
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }

@@ -10,6 +10,8 @@ import {
 } from './appearanceEditorState.ts'
 import { useAppearanceDraft } from './useAppearanceDraft.ts'
 import { analyzeBackgroundImage } from '../utils/backgroundImagePalette.ts'
+import { loadLiquidGlassContextImage } from '../utils/liquidGlassContextImage.ts'
+import { recommendTransparentAppearance } from '../utils/transparentAppearanceRecipe.ts'
 import {
   BACKGROUND_EFFECT_RANGES,
   applyAppearancePreset,
@@ -112,11 +114,17 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
   )
   const importing = ref(false)
+  const matching = ref(false)
+  const busy = computed(() => importing.value || matching.value)
+  let recipeRequest = null as AbortController | null
   const imagePaletteNotice = ref('')
   let importRevision = 0
   let imageAnalysis: AbortController | undefined
   function invalidateImageImport(): void {
     importRevision++
+    recipeRequest?.abort()
+    recipeRequest = null
+    matching.value = false
     imageAnalysis?.abort()
     imageAnalysis = undefined
     importing.value = false
@@ -388,19 +396,85 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
   function selectMaterial(preset: AppearancePreset): void {
     state.draft = applyAppearancePreset(state.draft, preset)
   }
-  function useTransparentRecipe(): void {
-    selectMaterial('transparent')
+  async function useTransparentRecipe(): Promise<void> {
+    if (inherited.value || state.saving || importing.value) return
+    recipeRequest?.abort()
+    const request = new AbortController()
+    recipeRequest = request
+    matching.value = true
+    state.error = ''
+    const selectedTarget = target.value
+    const selectedTone = tone.value
+    const background = activeBackground.value
+    const source = background.kind === 'image' ? background.image : ''
+    let recipe = recommendTransparentAppearance([])
+    let samplingFailed = false
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = 64
+      canvas.height = Math.max(
+        16,
+        Math.min(128, Math.round((64 * window.innerHeight) / Math.max(1, window.innerWidth)))
+      )
+      const context = canvas.getContext('2d', { willReadFrequently: true })
+      if (!context) throw new Error('图片采样不可用')
+      context.fillStyle = background[selectedTone]
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      if (source) {
+        const image = await loadLiquidGlassContextImage(source, request.signal, undefined, 2500)
+        const aspect = canvas.width / canvas.height
+        const cropWidth = Math.min(image.naturalWidth, image.naturalHeight * aspect)
+        const cropHeight = cropWidth / aspect
+        const position = backgroundEffect(background, selectedTone)
+        context.drawImage(
+          image,
+          ((image.naturalWidth - cropWidth) * position.positionX) / 100,
+          ((image.naturalHeight - cropHeight) * position.positionY) / 100,
+          cropWidth,
+          cropHeight,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        )
+      }
+      recipe = recommendTransparentAppearance(
+        context.getImageData(0, 0, canvas.width, canvas.height).data,
+        canvas.width
+      )
+    } catch {
+      samplingFailed = !request.signal.aborted
+    } finally {
+      if (recipeRequest === request) matching.value = false
+    }
+    // A late image result must not overwrite a new target, image, or editor session.
+    if (
+      request.signal.aborted ||
+      recipeRequest !== request ||
+      !appearanceEditorOpen.value ||
+      target.value !== selectedTarget ||
+      tone.value !== selectedTone ||
+      activeBackground.value !== background ||
+      (background.kind === 'image' ? background.image : '') !== source
+    ) {
+      if (recipeRequest === request) recipeRequest = null
+      return
+    }
+    recipeRequest = null
+    if (samplingFailed) state.error = '无法分析背景，已采用浅色文字与保护遮罩。'
+    // Clear previous custom card/glass layers so the recipe has one predictable material.
+    state.draft = applyAppearancePreset(applyAppearancePreset(state.draft, 'theme'), 'transparent')
     for (const [field, value] of Object.entries({
-      textTone: 'light',
+      ...recipe,
       blur: 0,
-      dim: 40,
       brightness: 100,
       scale: 1
-    }))
+    })) {
       setEffect(
         field as keyof AppBackgroundEffect,
         value as AppBackgroundEffect[keyof AppBackgroundEffect]
       )
+    }
   }
   async function fullPreview(value: boolean): Promise<void> {
     cancelPendingPreview()
@@ -434,7 +508,7 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     else appearanceEditorOpen.value = false
   }
   async function save(): Promise<void> {
-    if (importing.value || hasConflict.value) return
+    if (busy.value || hasConflict.value) return
     cancelPendingPreview()
     if (await session.save()) {
       if (embedded) begin()
@@ -465,6 +539,8 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     setTone,
     importing,
     imagePaletteNotice,
+    matching,
+    busy,
     advancedOpen,
     pageOptions,
     materials,

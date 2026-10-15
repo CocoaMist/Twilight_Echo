@@ -25,6 +25,15 @@
   --te-material-content-filter: blur(var(--te-card-blur, 0px)) saturate(var(--te-card-saturate, 100%));
 }
 
+:where(.app-background-ambient) {
+  --te-home-ambient-surface: radial-gradient(ellipse 520px 520px at 80px 40px, color-mix(in srgb, var(--te-primary-500) 6%, transparent), transparent 72%), radial-gradient(ellipse 420px 420px at calc(100% - 20px) 300px, color-mix(in srgb, var(--te-accent-cyan) 4%, transparent), transparent 72%), radial-gradient(ellipse 360px 360px at 45% 840px, color-mix(in srgb, var(--te-favorite-500) 3%, transparent), transparent 72%);
+}
+
+:where(.dialog-btn.danger) {
+  --te-danger-control-surface: color-mix(in srgb, var(--te-danger-500, #d14343) 14%, transparent);
+  --te-danger-control-hover: color-mix(in srgb, var(--te-danger-500, #d14343) 22%, transparent);
+}
+
 html[data-theme='dark'] {
   --te-chrome-contact: 0 1px 3px color-mix(in srgb, var(--te-chrome-shadow-color) 20%, transparent);
   --te-chrome-elevation: 0 5px 16px color-mix(in srgb, var(--te-chrome-shadow-color) 16%, transparent);

@@ -70,7 +70,7 @@ const inspectorCollapsed = ref(false)
 const layerImporting = ref(false)
 const partInfo = computed(() => APPEARANCE_PARTS.find((part) => part.id === characterPart.value)!)
 const characterBusy = computed(
-  () => state.saving || importing.value || layerImporting.value || props.commitBusy
+  () => state.saving || busy.value || layerImporting.value || props.commitBusy
 )
 function focusPart(id: AppearancePart): void {
   if (characterBusy.value) return
@@ -346,6 +346,8 @@ const {
   setTone,
   importing,
   imagePaletteNotice,
+  matching,
+  busy,
   advancedOpen,
   pageOptions,
   materials,
@@ -561,7 +563,7 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
             type="button"
             class="appearance-icon-button"
             aria-label="取消并关闭"
-            :disabled="state.saving || importing"
+            :disabled="state.saving || busy"
             @click="cancel"
           >
             <i class="pi pi-times" />
@@ -881,10 +883,10 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
               <button
                 type="button"
                 class="appearance-recipe"
-                :disabled="state.saving || importing"
+                :disabled="state.saving || busy"
                 @click="useTransparentRecipe"
               >
-                <i class="pi pi-eye" /> 图片通透推荐搭配
+                <i class="pi pi-eye" /> {{ matching ? '正在分析图片…' : '图片通透推荐搭配' }}
               </button>
               <button
                 v-if="embedded"
@@ -1227,7 +1229,7 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
             @click="resetAdjustableAppearance"
           >
             恢复当前项默认</button
-          ><button type="button" :disabled="state.saving || importing" @click="fullPreview(true)">
+          ><button type="button" :disabled="state.saving || busy" @click="fullPreview(true)">
             全窗口预览</button
           ><span /><button
             type="button"

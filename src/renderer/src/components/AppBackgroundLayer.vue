@@ -6,6 +6,7 @@ const props = defineProps<{
   page: AppBackgroundPage | 'app'
   embedded?: boolean
   reading?: boolean
+  ambient?: boolean
 }>()
 const layer = ref<HTMLElement>()
 let fallback: ReturnType<typeof mountBackgroundImageFallback> | undefined
@@ -48,4 +49,5 @@ const style = computed(() =>
     <div class="app-background-dim" />
     <div v-if="reading" class="app-background-reading-wash" />
   </div>
+  <div v-if="ambient" class="app-background-ambient" aria-hidden="true" />
 </template>

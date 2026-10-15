@@ -122,6 +122,7 @@ const {
   removeTrack,
   removeLocalTracks,
   restoreExcludedTracks,
+  clearExcludedTracks,
   applyLocalTagWrite,
   startFullLibraryScan,
   isScanning,
@@ -1352,6 +1353,29 @@ async function handleRestoreExclusions(filePaths: string[]): Promise<void> {
     if (excludedTracks.value.length === 0) showExcludedTracksDialog.value = false
   } catch (error) {
     repairMessage.value = error instanceof Error ? error.message : '恢复排除项失败'
+  } finally {
+    exclusionRestorePending.value = false
+  }
+}
+
+async function handleClearExclusions(): Promise<void> {
+  if (exclusionRestorePending.value || excludedTracks.value.length === 0) return
+  if (
+    !window.confirm(
+      `确定清除这 ${excludedTracks.value.length} 条已移除记录吗？文件不会被删除；清除后可重新扫描并重新加入音乐库。`
+    )
+  ) {
+    return
+  }
+  exclusionRestorePending.value = true
+  try {
+    const clearedCount = await clearExcludedTracks(
+      excludedTracks.value.map((item) => item.filePath)
+    )
+    repairMessage.value = `已清除 ${clearedCount} 条移除记录`
+    if (excludedTracks.value.length === 0) showExcludedTracksDialog.value = false
+  } catch (error) {
+    repairMessage.value = error instanceof Error ? error.message : '清除移除记录失败'
   } finally {
     exclusionRestorePending.value = false
   }
@@ -3198,6 +3222,13 @@ usePageDock(
                 @click="handleRestoreExclusions(excludedTracks.map((item) => item.filePath))"
               >
                 {{ exclusionRestorePending ? '正在恢复…' : '全部恢复' }}
+              </button>
+              <button
+                class="dialog-btn danger"
+                :disabled="excludedTracks.length === 0 || exclusionRestorePending"
+                @click="handleClearExclusions"
+              >
+                清除记录
               </button>
             </div>
           </div>

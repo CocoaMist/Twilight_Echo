@@ -1,3 +1,4 @@
+import { diagnosticsApi } from './diagnostics.ts'
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   MiniPlayerBootstrap,
@@ -128,6 +129,7 @@ const trayPlayerWindowApi = {
 }
 
 const api = {
+  diagnostics: diagnosticsApi,
   sleepTimer: {
     configure: (state: import('../shared/sleepTimer.ts').SleepTimerState) =>
       ipcRenderer.invoke('sleepTimer:configure', state),
@@ -166,14 +168,14 @@ if (process.contextIsolated) {
 
 function exposedApiForDocument():
   | typeof api
-  | { desktopLyrics: typeof desktopLyricsWindowApi }
-  | { miniPlayer: typeof miniPlayerWindowApi; data: typeof miniPlayerCoverDataApi }
-  | { trayPlayer: typeof trayPlayerWindowApi } {
-  if (isDesktopLyricsDocument()) return { desktopLyrics: desktopLyricsWindowApi }
+  | { diagnostics: typeof diagnosticsApi; desktopLyrics: typeof desktopLyricsWindowApi }
+  | { diagnostics: typeof diagnosticsApi; miniPlayer: typeof miniPlayerWindowApi; data: typeof miniPlayerCoverDataApi }
+  | { diagnostics: typeof diagnosticsApi; trayPlayer: typeof trayPlayerWindowApi } {
+  if (isDesktopLyricsDocument()) return { diagnostics: diagnosticsApi, desktopLyrics: desktopLyricsWindowApi }
   if (isMiniPlayerDocument()) {
-    return { miniPlayer: miniPlayerWindowApi, data: miniPlayerCoverDataApi }
+    return { diagnostics: diagnosticsApi, miniPlayer: miniPlayerWindowApi, data: miniPlayerCoverDataApi }
   }
-  if (isTrayPlayerDocument()) return { trayPlayer: trayPlayerWindowApi }
+  if (isTrayPlayerDocument()) return { diagnostics: diagnosticsApi, trayPlayer: trayPlayerWindowApi }
   return api
 }
 

@@ -161,6 +161,8 @@ TAE_API TAE_Result TAE_AnalyzeAutoMix(
 /* Diagnostic counter: number of actual analyzer executions, excluding cached size-probe reads. */
 TAE_API uint64_t TAE_GetAnalysisExecutionCount(const char* analysis_kind);
 TAE_API const char* TAE_GetVersion(void);
+/* Optional diagnostic context for the current native control thread. */
+TAE_API void TAE_SetDiagnosticContext(const char* context_json);
 
 #ifdef __cplusplus
 }

@@ -82,6 +82,7 @@ test('3D rulers retain readable editor colors across matching and opposite previ
 const runtime = `import {createApp,h,nextTick,ref} from 'vue';
 import ViewAngleControl from '__RENDERER__/components/AppearanceViewAngleControl.vue';
 import '__RENDERER__/assets/base.css';
+import '__RENDERER__/assets/materials.css';
 import '__RENDERER__/components/settings-page/BackgroundAppearanceCustomizer.css';
 const angles=ref({x:0,y:0}),zoom=ref(1);let restored=false;
 createApp({render:()=>h(ViewAngleControl,{modelValue:angles.value,zoom:zoom.value,'onUpdate:modelValue':value=>angles.value=value,'onUpdate:zoom':value=>zoom.value=value,onRestore:()=>restored=true})}).mount('#app');

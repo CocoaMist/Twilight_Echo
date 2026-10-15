@@ -1,4 +1,5 @@
 import type { AppBackgroundImagePalette } from '../../../shared/appSettings.ts'
+import { backgroundDisplayUrl } from '../../../shared/backgroundDisplay.ts'
 
 const LOCAL_BACKGROUND_IMAGE = /^background:\/\/[a-zA-Z0-9._-]+$/
 const SAMPLE_SIZE = 48
@@ -104,7 +105,7 @@ export function analyzeBackgroundImage(
     options.signal?.addEventListener('abort', abort, { once: true })
     image.decoding = 'async'
     image.crossOrigin = 'anonymous'
-    image.src = source
+    image.src = backgroundDisplayUrl(source)
     let decoding: Promise<void>
     try {
       decoding = image.decode()

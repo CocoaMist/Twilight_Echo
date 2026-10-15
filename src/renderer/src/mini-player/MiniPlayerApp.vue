@@ -445,10 +445,11 @@ async function openCustomizer(): Promise<void> {
   await animateCustomizerArtwork(before, generation)
 }
 
-async function closeCustomizer(): Promise<void> {
+async function closeCustomizer(action: 'save' | 'undo' = 'save'): Promise<void> {
   const generation = ++customizerGeneration
   try {
-    await customization.flush()
+    if (action === 'undo') await customization.undoSession()
+    else await customization.flush()
     if (generation !== customizerGeneration) return
     customizerOpening.value = false
     customizerOpen.value = false
@@ -1004,7 +1005,7 @@ onBeforeUnmount(() => {
           :error="customization.error.value"
           :pick-background-image="pickBackgroundImage"
           @update:settings="customization.replaceSettings"
-          @undo="customization.undoSession"
+          @undo="closeCustomizer('undo')"
           @reset="customization.resetActiveTheme"
           @flush="customization.flush"
           @close="closeCustomizer"

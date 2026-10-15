@@ -1693,8 +1693,12 @@ function getPlaybackQualityFallbacks(quality) {
 
 function getPlaybackUrlRequestPaths(songId, quality) {
   const encodedId = encodeURIComponent(String(songId))
+  // The embedded API defaults v1 to xeapi, whose public key may be absent
+  // or fail to initialize. eapi supports the same levels and account rights
+  // without that key, so keep v1 usable before trying classic bitrate URLs.
   const levelPaths = getPlaybackQualityFallbacks(quality).map(
-    (level) => `/song/url/v1?id=${encodedId}&level=${encodeURIComponent(level)}&encodeType=flac`
+    (level) =>
+      `/song/url/v1?id=${encodedId}&level=${encodeURIComponent(level)}&encodeType=flac&crypto=eapi`
   )
   // Classic bitrate endpoints remain as a compatibility fallback when the
   // level-based player API returns no official URL for the signed-in account.

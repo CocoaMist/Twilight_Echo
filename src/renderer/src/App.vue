@@ -253,6 +253,18 @@ const { centerOpen } = useAppNoticeStore()
 watch([showAccountPage, noticeHistoryTarget], ([visible, target]) => {
   centerOpen.value = visible && target !== null
 })
+// Keep the wallpaper inside its overlay through the leave transition. An idle
+// overlay must hide its embedded painter, which would otherwise cover home.
+const settingsOverlayLeaves = ref(0)
+const settingsOverlayVisible = computed(
+  () => showSettingsPage.value || showAppearancePage.value || settingsOverlayLeaves.value > 0
+)
+function retainSettingsOverlay(): void {
+  settingsOverlayLeaves.value += 1
+}
+function releaseSettingsOverlay(): void {
+  settingsOverlayLeaves.value = Math.max(0, settingsOverlayLeaves.value - 1)
+}
 const { pushNotice } = useAppNoticeStore()
 let stopAppUpdateNotifications: (() => void) | null = null
 let updateNotificationsDisposed = false
@@ -1265,6 +1277,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         showNetworkSourcesPage) &&
       !appearanceFullWindowPreview
     "
+    :ambient="localViewVisible && activeCategory === 'dashboard'"
   />
   <div
     class="app-shell"
@@ -1500,18 +1513,16 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
   </div>
   <div
     class="settings-overlay-root"
-    v-show="!appearanceFullWindowPreview"
-    :class="{
-      'settings-overlay-root--active': showSettingsPage || showAppearancePage
-    }"
+    v-show="settingsOverlayVisible && !appearanceFullWindowPreview"
+    :class="{ 'settings-overlay-root--active': settingsOverlayVisible }"
   >
-    <AppBackgroundLayer
-      v-if="showSettingsPage || showAppearancePage"
-      page="settings"
-      embedded
-      :reading="!appearanceFullWindowPreview"
-    />
-    <Transition name="settings-page">
+    <AppBackgroundLayer page="settings" embedded :reading="!appearanceFullWindowPreview" />
+    <Transition
+      name="settings-page"
+      @before-leave="retainSettingsOverlay"
+      @after-leave="releaseSettingsOverlay"
+      @leave-cancelled="releaseSettingsOverlay"
+    >
       <SettingsPage
         v-if="settingsPageRetained"
         v-show="showSettingsPage"
@@ -1527,7 +1538,12 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @open-appearance="navigation.openAppearancePage"
       />
     </Transition>
-    <Transition name="settings-page">
+    <Transition
+      name="settings-page"
+      @before-leave="retainSettingsOverlay"
+      @after-leave="releaseSettingsOverlay"
+      @leave-cancelled="releaseSettingsOverlay"
+    >
       <AppearancePage
         :pages="navigationPages"
         v-if="appearancePageRetained"

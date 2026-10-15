@@ -27,6 +27,9 @@ export function loadLiquidGlassContextImage(
     const abort = (): void => fail(new DOMException('Material image cancelled', 'AbortError'))
     const timer = setTimeout(() => fail(new Error('Material image timed out')), timeoutMs)
     image.decoding = 'async'
+    // Local custom schemes are separate origins. Request their existing CORS
+    // permission so reading the sampled pixels does not taint the canvas.
+    image.crossOrigin = 'anonymous'
     image.onload = () => {
       cleanup()
       resolve(image)

@@ -16,6 +16,7 @@ import { normalizePlayerBarSettings } from './playerBar.ts'
 import { normalizeAppearanceLayers } from './appearanceLayers.ts'
 import { ensureThemeTextContrast, themeContrastRatio } from './theme.ts'
 import { MIN_READING_FADE } from './materials.ts'
+import { backgroundDisplayUrl } from './backgroundDisplay.ts'
 
 export type AppearanceDraft = Pick<
   AppSettings,
@@ -350,6 +351,11 @@ export function resolveBackgroundTextTone(
     ? (resolveBackgroundPalette(background, tone)?.textTone ?? 'theme')
     : selected
 }
+export const BACKGROUND_TEXT_PALETTES = {
+  light: { text: '#f4f7fb', muted: '#c4cbd5' },
+  dark: { text: '#1a202c', muted: '#4b5563' }
+} as const
+
 export function backgroundCssVariables(
   background: AppBackgroundColorPair,
   tone: AppearanceTone
@@ -360,7 +366,7 @@ export function backgroundCssVariables(
   return {
     '--appearance-color': background[tone],
     '--appearance-image': hasBackgroundImage(background)
-      ? `url("${background.image.replace(/["\\\n\r]/g, '')}")`
+      ? `url("${backgroundDisplayUrl(background.image).replace(/["\\\n\r]/g, '')}")`
       : 'none',
     '--appearance-blur': `${effect.blur}px`,
     '--appearance-brightness': `${effect.brightness}%`,

@@ -194,6 +194,8 @@ export interface AppSettings {
   lyricsAppearance: LyricsAppearanceSettings
   lyricsPresets: LyricsPresetConfig
   libraryFolders: string[]
+  /** Last location used by the music folder picker, including existing or removed roots. */
+  lastLibraryFolder: string
   /** Destination for provider downloads. Empty falls back to the first music library folder. */
   downloadPreferences: import('./downloadPreferences.ts').DownloadPreferences
   downloadFolder: string

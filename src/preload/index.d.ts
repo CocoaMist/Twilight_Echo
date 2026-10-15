@@ -86,6 +86,8 @@ import type {
   LocalLibraryRemoveRequest,
   LocalLibraryRemoveResult,
   LocalLibraryResetResult,
+  LocalLibraryClearExclusionsRequest,
+  LocalLibraryClearExclusionsResult,
   LocalLibraryRestoreRequest,
   LocalLibraryRestoreResult,
   LocalLibrarySnapshotInput,
@@ -313,6 +315,7 @@ interface OpraAPI {
 }
 
 interface WindowAPI {
+  diagnostics: import('../shared/diagnostics.ts').DiagnosticsApi
   systemMedia: {
     getNativeStatus: () => Promise<import('../shared/systemMedia.ts').SystemMediaNativeStatus>
   }
@@ -368,6 +371,9 @@ interface WindowAPI {
   }
   library: DuplicateDetectionReadApi & {
     removeTracks: (request: LocalLibraryRemoveRequest) => Promise<LocalLibraryRemoveResult>
+    clearExclusions: (
+      request: LocalLibraryClearExclusionsRequest
+    ) => Promise<LocalLibraryClearExclusionsResult>
     restoreExclusions: (request: LocalLibraryRestoreRequest) => Promise<LocalLibraryRestoreResult>
     reset: () => Promise<LocalLibraryResetResult>
     writeTags: (request: LocalLibraryTagWriteRequest) => Promise<LocalLibraryTagWriteResult>

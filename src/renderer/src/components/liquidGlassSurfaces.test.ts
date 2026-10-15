@@ -91,7 +91,10 @@ test('chrome surfaces retain isolated blur layers and press-origin feedback', ()
   assert.match(titleBar, /circle at var\(--te-lg-press-x, 50%\) var\(--te-lg-press-y, 50%\)/)
   assert.match(sideMenu, /side-menu-liquid/)
   assert.match(sideMenu, /function setPressOrigin\(event: PointerEvent\)/)
-  assert.match(sideMenu, /backdrop-filter: blur\(24px\) saturate\(124%\)/)
+  assert.match(
+    sideMenu,
+    /backdrop-filter: blur\(var\(--te-chrome-frosted-blur, 24px\)\)\s*saturate\(var\(--te-chrome-frosted-saturation, 124%\)\)/
+  )
   assert.match(settingsPage, /function setNavigationPressOrigin\(event: PointerEvent\)/)
   assert.match(settingsStyle, /circle at var\(--te-lg-press-x, 50%\) var\(--te-lg-press-y, 50%\)/)
   assert.match(playerBar, /function setGlassPressOrigin\(event: PointerEvent\)/)
@@ -109,7 +112,7 @@ test('all chrome recipes consume bounded context variables and preserve reduced-
   assert.match(playerBarStyle, /body\.te-no-blur .player-bar-liquid .player-bar-warp/)
   assert.match(titleBar, /--te-lg-context-material/)
   assert.match(playerBarStyle, /data-te-liquid-glass-source='solid'/)
-  assert.match(sideMenu, /data-te-liquid-glass-source='solid'/)
+  assert.match(sideMenu, /background: var\(--te-lg-context-surface-solid/)
 })
 
 test('the one optical filter remains on the playback backdrop rather than foreground content', () => {

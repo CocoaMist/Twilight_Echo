@@ -19,6 +19,7 @@ export default defineConfig(
       '**/build/**',
       '**/output/**',
       '**/outputs/**',
+      'work/**',
       '**/coverage/**',
       '**/.qoder/**',
       '**/audio-engine/build/**',

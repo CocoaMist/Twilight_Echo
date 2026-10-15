@@ -395,7 +395,11 @@ function close(): void {
   --te-titlebar-item-opacity: 0.58;
   --te-titlebar-ink-duration: 160ms;
   --te-titlebar-height: 40px;
-  --te-titlebar-material-surface: var(--te-app-bg);
+  --te-titlebar-material-surface: var(--te-chrome-frosted-solid, var(--te-app-bg));
+  --te-titlebar-frosted-surface: var(
+    --te-chrome-frosted-surface,
+    color-mix(in srgb, var(--te-titlebar-material-surface) 80%, transparent)
+  );
   --te-titlebar-material-ink: var(--te-shell-control-text);
   --te-titlebar-icon-size: 16px;
   --te-titlebar-control-width: 46px;
@@ -578,6 +582,8 @@ html[data-theme='dark']
   .title-bar-background {
   background: var(--te-material-background, var(--te-chrome-attached-surface));
   box-shadow: none;
+  backdrop-filter: var(--te-material-filter, none);
+  -webkit-backdrop-filter: var(--te-material-filter, none);
 }
 
 /* Appearance material switches must reach the painter as well as its host. */
@@ -594,6 +600,7 @@ html[data-te-surface-material='transparent'] .title-bar .title-bar-background {
 
 .title-bar-glass {
   --te-titlebar-material-surface: #17181a;
+  --te-titlebar-frosted-surface: rgb(23 24 26 / 72%);
   --te-titlebar-material-ink: #fff;
 }
 

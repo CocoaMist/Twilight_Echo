@@ -167,6 +167,27 @@ struct OutputInfo {
   };
 
   struct Diagnostics {
+    // Live pipeline samples, independent of the clock's PlaybackInfo cache.
+    bool decodeHealthAvailable = false;
+    std::string decodeUnavailableReason;
+    uint64_t decodeStreamToken = 0;
+    bool decodeRunning = false;
+    bool decodeEof = false;
+    bool decodeStopRequested = false;
+    uint64_t decodeBufferedFrames = 0;
+    uint64_t decodeProducedFrames = 0;
+    uint64_t decodeLastProgressAgeMs = 0;
+    std::string decodeStage;
+    int liveRenderState = 0;
+    uint64_t liveRenderedFrames = 0;
+    uint64_t liveRenderCallbackCount = 0;
+    uint64_t sourceConsumedFrames = 0;
+    uint64_t outputProducedFrames = 0;
+    uint64_t zeroFilledFrames = 0;
+    uint64_t emptyOutputCount = 0;
+    uint64_t inactiveOutputCount = 0;
+    uint64_t eofOutputCount = 0;
+    uint64_t preloadStreamToken = 0;
     uint64_t sessionUnderrunCount = 0;
     uint64_t sessionBufferDropCount = 0;
     uint64_t sessionRecoveryCount = 0;

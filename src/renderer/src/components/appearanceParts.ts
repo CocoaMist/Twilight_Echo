@@ -1,5 +1,5 @@
 import type { EditorNodeDefinition } from '../editor/viewportGeometry'
-import { BODY_CONTROL_SELECTOR, CARD_SURFACE_SELECTOR } from '../../../shared/cardSurfaces'
+import { BODY_CONTROL_SELECTOR, CARD_SURFACE_SELECTOR } from '../../../shared/cardSurfaces.ts'
 export type AppearancePart =
   | 'overview'
   | 'inner-panel'

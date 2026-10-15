@@ -1,4 +1,7 @@
+import { initializeUtilityDiagnostics } from '../diagnostics/utility.ts'
 import { pathToFileURL } from 'url'
+
+initializeUtilityDiagnostics('twilight-plugin')
 import { deletePluginSetting, getPluginSetting, setPluginSetting } from './settingsStore'
 import { initProxy } from './proxyBootstrap'
 import { redactSensitiveText } from '../security/secureStorage.ts'

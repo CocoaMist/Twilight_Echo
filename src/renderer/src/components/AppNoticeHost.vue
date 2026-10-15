@@ -39,6 +39,11 @@ const historyPanel = ref<HTMLElement | null>(null)
 const filter = ref<'all' | 'active' | 'attention'>('all')
 const showAllHistory = ref(false)
 const visibleTaskCount = ref(0)
+const taskCenter = ref<InstanceType<typeof TaskCenter> | null>(null)
+function clearRecords(): void {
+  clearHistory()
+  taskCenter.value?.clearCompletedTasks()
+}
 const pointerOpened = ref(true)
 const panelOrigin = ref('right top')
 const downloads = useDownloadTasks()
@@ -267,6 +272,7 @@ defineExpose({ historyOpen, toggleHistory })
         </div>
         <div class="notice-history-body">
           <TaskCenter
+            ref="taskCenter"
             :active="historyOpen"
             :filter="filter"
             :compact="embeddedHistory"
@@ -330,8 +336,8 @@ defineExpose({ historyOpen, toggleHistory })
           <button
             type="button"
             class="notice-clear"
-            :disabled="!noticeHistory.length"
-            @click="clearHistory"
+            :disabled="!noticeHistory.length && !visibleTaskCount"
+            @click="clearRecords"
           >
             清空记录
           </button>

@@ -502,6 +502,18 @@ export class PlaybackController {
 
   async togglePause(): Promise<void> {
     this.transportRevision += 1
+    const failure =
+      this.playbackInfo.outputInfo?.diagnostics?.lastError ||
+      this.playbackInfo.diagnostics?.lastError
+    if (this.playbackInfo.state === 'stopped' && failure && this.playbackInfo.source) {
+      // A failed decoder has been retired. An explicit user resume must open
+      // it again; Pause on a stopped native engine is deliberately a no-op.
+      const result = await this.play(this.playbackInfo.source, this.playbackInfo.position)
+      if (!result.nativeStarted && !result.superseded) {
+        throw new Error(result.fallbackReason || this.lastNativeError || failure)
+      }
+      return
+    }
     const native = this.native
     if (!native) {
       this.lastNativeError = '未加载 twilight_audio_node.node'
@@ -1088,8 +1100,24 @@ export class PlaybackController {
     const previousPosition = this.playbackInfo.position
     const mappedAutoMixPosition =
       nativeInfo.autoMixState === 'mixing' || this.playbackInfo.autoMixState === 'mixing'
+    const health = nativeInfo.outputInfo?.diagnostics ?? nativeInfo.diagnostics
+    const sourceStarved =
+      health?.decodeHealthAvailable === true &&
+      health.liveRenderState === 1 &&
+      !health.decodeEof &&
+      !health.decodeStopRequested &&
+      health.decodeBufferedFrames === 0 &&
+      (health.decodeStage === 'reading' || health.decodeStage === 'reconnecting') &&
+      (health.decodeLastProgressAgeMs ?? 0) >= 500
+    const sourceFailed = nativeInfo.state === 'stopped' && Boolean(health?.lastError)
+    if (
+      sourceFailed &&
+      (!this.pendingNativeSource || nativeInfo.source === this.pendingNativeSource)
+    ) {
+      this.pendingNativePositionTarget = null
+    }
     const resolvedPosition =
-      mappedAutoMixPosition &&
+      (mappedAutoMixPosition || sourceStarved || sourceFailed) &&
       this.pendingNativePositionTarget === null &&
       Number.isFinite(nativeInfo.position)
         ? Math.max(0, nativeInfo.position)
@@ -1541,8 +1569,13 @@ export class PlaybackController {
           // any further. The old index comparison misread a looping or repeating
           // queue as finished, and read the last entry of a shuffled native play
           // order as mid-queue.
+          const readError =
+            nativeInfo.outputInfo?.diagnostics?.lastError || nativeInfo.diagnostics?.lastError
           const isAtEnd = this.queue.length === 0 || !nativeInfo.upcomingTrack
-          if (isAtEnd) {
+          if (readError) {
+            this.emit('end-file', { reason: 'error' })
+            this.emit('error', new Error(readError))
+          } else if (isAtEnd) {
             // 播放结束：保持 nativePlaybackActive=true 以便持续轮询原生真实状态，
             // 避免状态发散后无法自我纠正。下次 play() 会重新设置状态。
             this.publishProperty('eof-reached', true)

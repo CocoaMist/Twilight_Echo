@@ -1,4 +1,5 @@
 #include "FFmpegDecoder.h"
+#include "../core/DiagnosticLog.h"
 #include "FFmpegFileInput.h"
 
 #include "FFmpegDecoderUtils.h"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -233,9 +235,34 @@ bool isTypedIntegerFormat(AudioSampleFormat format) {
 struct FFmpegDecoder::Impl {
   int (*interrupt)(void*) = nullptr;
   void* interruptContext = nullptr;
+  bool remoteIo = false;
+  std::chrono::steady_clock::time_point ioDeadline{};
+
+  static int interruptIo(void* context) {
+    const auto* impl = static_cast<const Impl*>(context);
+    return (impl->interrupt && impl->interrupt(impl->interruptContext)) ||
+        (impl->remoteIo && impl->ioDeadline != std::chrono::steady_clock::time_point{} &&
+         std::chrono::steady_clock::now() >= impl->ioDeadline);
+  }
+
+  // Each remote operation has a total deadline, including FFmpeg reconnects.
+  // Idle time between reads (a full PCM ring / paused playback) is excluded.
+  struct IoBudget {
+    Impl& impl;
+    std::chrono::steady_clock::time_point previous;
+    IoBudget(Impl& value, std::chrono::seconds duration) : impl(value), previous(value.ioDeadline) {
+      if (impl.remoteIo) {
+        const auto deadline = std::chrono::steady_clock::now() + duration;
+        impl.ioDeadline = previous == std::chrono::steady_clock::time_point{}
+            ? deadline : std::min(previous, deadline);
+      }
+    }
+    ~IoBudget() { impl.ioDeadline = previous; }
+  };
   AudioStreamInfo streamInfo;
   AudioFormat outputFormat;
   bool eof = false;
+  std::string terminalReadError;
   FFmpegDecoder::ResamplerQuality resamplerQuality = FFmpegDecoder::ResamplerQuality::Native;
   // ICY StreamTitle snapshot (decode-thread writes; control/status may read).
   mutable std::mutex streamTitleMutex;
@@ -337,6 +364,7 @@ struct FFmpegDecoder::Impl {
     resamplerFlushed = false;
     icyEnabled = false;
     eof = false;
+    terminalReadError.clear();
     resetPending();
     exactSeek = false;
     exactInputCursor.reset();
@@ -480,42 +508,43 @@ struct FFmpegDecoder::Impl {
       if (ret == 0) {
         const bool ok = convertFrame(error);
         av_frame_unref(frame);
-        if (!ok) return false;
+        if (!ok) return failRead(error && !error->empty() ? *error : "Audio frame conversion failed", error);
         if (pending.empty()) {
           continue;
         }
         return true;
       }
       if (ret == AVERROR_EOF) {
-        if (!drainResamplerOnce(error)) return false;
+        if (!drainResamplerOnce(error)) return failRead(error && !error->empty() ? *error : "Audio resampler flush failed", error);
         if (!pending.empty()) return true;
         eof = true;
         return false;
       }
       if (ret != AVERROR(EAGAIN)) {
-        if (error) *error = "解码器接收音频帧失败，错误码：" + std::to_string(ret);
-        eof = true;
-        return false;
+        return failRead("Audio decoder receive failed, code: " + std::to_string(ret), error);
       }
 
       if (inputEof) {
         ret = avcodec_send_packet(codecContext, nullptr);
         if (ret == AVERROR_EOF) {
-          if (!drainResamplerOnce(error)) return false;
+          if (!drainResamplerOnce(error)) return failRead(error && !error->empty() ? *error : "Audio resampler flush failed", error);
           if (!pending.empty()) return true;
           eof = true;
           return false;
         }
         if (ret < 0 && ret != AVERROR(EAGAIN)) {
-          if (error) *error = "解码器收尾失败，错误码：" + std::to_string(ret);
-          eof = true;
-          return false;
+          return failRead("Audio decoder flush failed, code: " + std::to_string(ret), error);
         }
         continue;
       }
 
       ret = av_read_frame(formatContext, packet);
       if (ret < 0) {
+        if (ret != AVERROR_EOF) {
+          DiagnosticLog::instance().append(DiagLevel::Error, "ffmpeg.read.failed", "read failed",
+              "{\"code\":" + std::to_string(ret) + ",\"timeoutOrCancel\":" + (ret == AVERROR_EXIT ? "true" : "false") + "}");
+          return failRead("Audio source read failed, code: " + std::to_string(ret), error);
+        }
         inputEof = true;
         continue;
       }
@@ -527,20 +556,25 @@ struct FFmpegDecoder::Impl {
         ret = avcodec_send_packet(codecContext, packet);
         av_packet_unref(packet);
         if (ret < 0 && ret != AVERROR(EAGAIN)) {
-          if (error) *error = "解码器提交音频包失败，错误码：" + std::to_string(ret);
-          eof = true;
-          return false;
+          return failRead("Audio decoder send failed, code: " + std::to_string(ret), error);
         }
       } else {
         av_packet_unref(packet);
       }
     }
   }
+  bool failRead(const std::string& message, std::string* error) {
+    terminalReadError = message;
+    eof = false;
+    if (error) *error = terminalReadError;
+    return false;
+  }
 #else
   void close() {
     streamInfo = {};
     outputFormat = {};
     eof = false;
+    terminalReadError.clear();
     {
       std::lock_guard lock(streamTitleMutex);
       streamTitle.clear();
@@ -564,6 +598,8 @@ void FFmpegDecoder::setInterrupt(int (*callback)(void*), void* context) {
 
 bool FFmpegDecoder::open(const std::string& source, std::string* error) {
   close();
+  impl_->remoteIo = source.find("://") != std::string::npos && source.rfind("file://", 0) != 0;
+  Impl::IoBudget ioBudget(*impl_, std::chrono::seconds(15));
   if (impl_->interrupt && impl_->interrupt(impl_->interruptContext)) {
     if (error) *error = "decode_cancelled";
     return false;
@@ -585,14 +621,11 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     return false;
   }
 
-  static bool ffmpegNetworkInitialized = false;
-  if (!ffmpegNetworkInitialized) {
-    int initRet = avformat_network_init();
-    if (initRet < 0) {
-      if (error) *error = "FFmpeg 网络初始化失败，错误码：" + std::to_string(initRet);
-      return false;
-    }
-    ffmpegNetworkInitialized = true;
+  // Recovery on decode workers can open concurrently with control-path preload.
+  static const int networkInitResult = avformat_network_init();
+  if (networkInitResult < 0) {
+    if (error) *error = "FFmpeg network initialization failed, code: " + std::to_string(networkInitResult);
+    return false;
   }
 
   // Enable ICY metadata for live HTTP(S) radio streams so StreamTitle updates appear.
@@ -606,6 +639,7 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     av_dict_set(&openOptions, "reconnect", "1", 0);
     av_dict_set(&openOptions, "reconnect_streamed", "1", 0);
     av_dict_set(&openOptions, "reconnect_delay_max", "5", 0);
+    av_dict_set(&openOptions, "rw_timeout", "10000000", 0);
     // NetEase (and many CDNs) reject bare FFmpeg clients. Attach a browser-like
     // UA and, for NetEase hosts, the music.163.com Referer so stream open succeeds.
     av_dict_set(
@@ -643,17 +677,19 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
     if (error) *error = "Cannot allocate demuxer";
     return false;
   }
-  impl_->formatContext->interrupt_callback = {impl_->interrupt, impl_->interruptContext};
+  impl_->formatContext->interrupt_callback = {Impl::interruptIo, impl_.get()};
   int ret = avformat_open_input(&impl_->formatContext, source.c_str(), inputFormat, &openOptions);
   av_dict_free(&openOptions);
   if (ret < 0) {
     if (error) *error = "打开音频失败，错误码：" + std::to_string(ret);
+    DiagnosticLog::instance().append(DiagLevel::Error, "ffmpeg.open.failed", "open failed", "{\"code\":" + std::to_string(ret) + "}");
     return false;
   }
 
   ret = avformat_find_stream_info(impl_->formatContext, nullptr);
   if (ret < 0) {
     if (error) *error = "解析音频信息失败，错误码：" + std::to_string(ret);
+    DiagnosticLog::instance().append(DiagLevel::Error, "ffmpeg.probe.failed", "probe failed", "{\"code\":" + std::to_string(ret) + "}");
     return false;
   }
 
@@ -907,6 +943,7 @@ size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* 
 }
 
 size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
+  Impl::IoBudget ioBudget(*impl_, std::chrono::seconds(10));
   if (impl_->interrupt && impl_->interrupt(impl_->interruptContext)) {
     if (error) *error = "decode_cancelled";
     return 0;
@@ -914,7 +951,13 @@ size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
   if (!output.data || output.frames == 0) return 0;
 
 #if defined(TAE_HAS_FFMPEG)
+  if (!impl_->terminalReadError.empty()) {
+    if (error) *error = impl_->terminalReadError;
+    ffmpeg::zeroPcmBlock(output);
+    return 0;
+  }
   if (!impl_->codecContext || !impl_->swr) {
+    if (error) *error = "Audio decoder is not open";
     ffmpeg::zeroPcmBlock(output);
     return 0;
   }
@@ -963,13 +1006,18 @@ size_t FFmpegDecoder::readFrames(PcmBlock& output, std::string* error) {
 }
 
 bool FFmpegDecoder::seek(double seconds, std::string* error) {
+  Impl::IoBudget ioBudget(*impl_, std::chrono::seconds(10));
 #if defined(TAE_HAS_FFMPEG)
-  if (!impl_->formatContext || impl_->audioStreamIndex < 0) return false;
+  if (!impl_->formatContext || impl_->audioStreamIndex < 0) {
+    if (error) *error = "Audio source is not open";
+    return false;
+  }
   AVStream* stream = impl_->formatContext->streams[impl_->audioStreamIndex];
   const int64_t timestamp = static_cast<int64_t>(seconds / av_q2d(stream->time_base));
   const int ret = av_seek_frame(impl_->formatContext, impl_->audioStreamIndex, timestamp, AVSEEK_FLAG_BACKWARD);
   if (ret < 0) {
     if (error) *error = "音频跳转失败，错误码：" + std::to_string(ret);
+    DiagnosticLog::instance().append(DiagLevel::Error, "ffmpeg.seek.failed", "seek failed", "{\"code\":" + std::to_string(ret) + "}");
     return false;
   }
   avcodec_flush_buffers(impl_->codecContext);
@@ -981,6 +1029,7 @@ bool FFmpegDecoder::seek(double seconds, std::string* error) {
   impl_->inputEof = false;
   impl_->resamplerFlushed = false;
   impl_->eof = false;
+  impl_->terminalReadError.clear();
   impl_->resetPending();
   impl_->exactSeek = false;
   impl_->exactInputCursor.reset();
@@ -993,6 +1042,7 @@ bool FFmpegDecoder::seek(double seconds, std::string* error) {
 }
 
 bool FFmpegDecoder::seekOutputFrame(uint64_t frame, std::string* error) {
+  Impl::IoBudget ioBudget(*impl_, std::chrono::seconds(10));
 #if defined(TAE_HAS_FFMPEG)
   if (!impl_->formatContext || !impl_->swr || impl_->outputFormat.sampleRate <= 0 ||
       frame >= static_cast<uint64_t>(INT64_MAX)) return false;

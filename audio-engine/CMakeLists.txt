@@ -481,6 +481,7 @@ if(TAE_BUILD_TESTS)
     tests/ffmpeg_decoder_tests.cpp
     tests/AudioFixtureLibrary.cpp
     decoder/FFmpegDecoder.cpp
+    core/DiagnosticLog.cpp
     core/AudioTypes.cpp
   )
   target_include_directories(twilight_ffmpeg_decoder_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -9,6 +9,7 @@ import * as glass from '../../../shared/liquidGlass.ts'
 import { useAppearanceDraft } from './useAppearanceDraft.ts'
 import { persistAppearanceLayers } from './appearanceLayersPersistence.ts'
 import type { AppBackgroundImagePalette } from '../../../shared/appSettings.ts'
+import * as transparentRecipe from '../utils/transparentAppearanceRecipe.ts'
 
 const source = transformSync(
   readFileSync(new URL('./useBackgroundAppearanceEditor.ts', import.meta.url), 'utf8'),
@@ -88,6 +89,12 @@ function fixture(
     '../utils/backgroundImagePalette.ts': {
       analyzeBackgroundImage: options.analyze ?? (async (image: string) => palette(image))
     },
+    '../utils/liquidGlassContextImage.ts': {
+      loadLiquidGlassContextImage: async () => {
+        throw new Error('not used by image import')
+      }
+    },
+    '../utils/transparentAppearanceRecipe.ts': transparentRecipe,
     '../../../shared/appAppearance.ts': appearance,
     '../../../shared/liquidGlass.ts': glass
   }
