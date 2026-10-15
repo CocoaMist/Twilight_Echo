@@ -2,7 +2,7 @@
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import PlayerControlIcon from '@renderer/components/player-bar/PlayerControlIcon.vue'
 import { clampVolumePercent, createVolumeWheelStepper } from './player-bar/volumeWheel'
-import type { Track } from '@renderer/types/music'
+import type { Track, TrackArtistRef } from '@renderer/types/music'
 import { ref, computed, onMounted, onBeforeUnmount, watch, type ComponentPublicInstance } from 'vue'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
@@ -335,12 +335,22 @@ const emit = defineEmits<{
   openSettings: []
   openDsp: []
   openEqualizer: []
-  openArtist: []
+  openArtist: [artist: TrackArtistRef]
 }>()
 
-function onArtistClick(): void {
-  if (props.preview || !currentTrack.value?.artist.trim()) return
-  emit('openArtist')
+const currentArtists = computed<TrackArtistRef[]>(() => {
+  const track = currentTrack.value
+  if (!track) return []
+  if (track.artists?.length) return track.artists
+  return track.artist
+    .split(/\s+\/\s+/)
+    .map((name) => ({ name: name.trim() }))
+    .filter((artist) => artist.name)
+})
+
+function onArtistClick(artist: TrackArtistRef): void {
+  if (props.preview || !artist.name.trim()) return
+  emit('openArtist', artist)
 }
 
 /**
@@ -1781,16 +1791,21 @@ onBeforeUnmount(() => {
                 >{{ isStreamBuffering && !isLiveStream ? '缓冲中' : liveBadgeLabel }}</span
               >
             </div>
-            <button
-              type="button"
-              class="player-artist"
-              data-te-interactive
-              :disabled="preview || !currentTrack.artist.trim()"
-              :title="currentTrack.artist ? `打开歌手：${currentTrack.artist}` : undefined"
-              @click.stop="onArtistClick"
-            >
-              {{ currentTrack.artist }}
-            </button>
+            <div class="player-artists">
+              <template v-for="(artist, index) in currentArtists" :key="index">
+                <span v-if="index > 0" class="player-artist-separator" aria-hidden="true">/</span>
+                <button
+                  type="button"
+                  class="player-artist"
+                  data-te-interactive
+                  :disabled="preview || !artist.name.trim()"
+                  :title="`打开歌手：${artist.name}`"
+                  @click.stop="onArtistClick(artist)"
+                >
+                  {{ artist.name }}
+                </button>
+              </template>
+            </div>
             <div
               v-if="streamNowPlaying && isLiveStream && !isMini"
               class="player-stream-now-playing"
