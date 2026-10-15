@@ -244,6 +244,12 @@ export type {
   MiniPlayerSettingsPatch,
   MiniPlayerStateSnapshot
 } from '../shared/miniPlayer.ts'
+export type {
+  DynamicIslandBootstrap,
+  DynamicIslandLyricLine,
+  DynamicIslandLyricsPayload,
+  DynamicIslandPresentation
+} from '../shared/dynamicIsland.ts'
 export type { TrayNavigationTarget, TrayPlayerBootstrap } from '../shared/trayPlayer.ts'
 
 export type AudioEngineSimpleCallback = () => void

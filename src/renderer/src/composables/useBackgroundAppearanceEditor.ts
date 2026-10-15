@@ -17,6 +17,7 @@ import {
   backgroundEffect,
   cardCssVariables,
   defaultBackground,
+  defaultBackgroundEffect,
   defaultCardAppearance,
   resolveBackground,
   type AppearancePreset,
@@ -51,6 +52,8 @@ export function useBackgroundAppearanceEditor() {
   )
   const importing = ref(false)
   const matching = ref(false)
+  const recipePromptOpen = ref(false)
+  const recipePromptRef = ref<HTMLElement | null>(null)
   const busy = computed(() => importing.value || matching.value)
   const advancedOpen = ref(appearanceEditorArea.value === 'advanced')
   let importRevision = 0
@@ -122,7 +125,11 @@ export function useBackgroundAppearanceEditor() {
               : 'none'
     }
   })
-  useFocusTrap(dialogRef, () => appearanceEditorOpen.value && !state.fullWindow)
+  useFocusTrap(
+    dialogRef,
+    () => appearanceEditorOpen.value && !state.fullWindow && !recipePromptOpen.value
+  )
+  useFocusTrap(recipePromptRef, recipePromptOpen)
   useEscapeToClose(
     () => appearanceEditorOpen.value,
     () => {
@@ -130,6 +137,18 @@ export function useBackgroundAppearanceEditor() {
       if (state.fullWindow) void fullPreview(false)
       else void cancel()
     }
+  )
+  useEscapeToClose(recipePromptOpen, () => {
+    recipePromptOpen.value = false
+  })
+  watch(
+    recipePromptOpen,
+    async (open) => {
+      if (!open) return
+      await nextTick()
+      recipePromptRef.value?.focus({ preventScroll: true })
+    },
+    { flush: 'post' }
   )
   watch(
     appearanceEditorOpen,
@@ -202,6 +221,31 @@ export function useBackgroundAppearanceEditor() {
     pickerTarget = target.value
     fileInput.value?.click()
   }
+
+  function setBackgroundKind(kind: AppBackgroundColorPair['kind']): void {
+    const background = editableBackground(target.value, false)
+    if (kind === 'image') {
+      if (background.kind === 'image') return
+      background.kind = kind
+      background.customized = true
+      return
+    }
+
+    // Removing wallpaper also removes its contrast treatment. In particular,
+    // a default solid colour must stop suppressing the artwork on the player.
+    if (state.draft.surfaceMaterial === 'transparent')
+      state.draft = applyAppearancePreset(state.draft, 'theme')
+    const restored = editableBackground(target.value, false)
+    const defaults = defaultBackground(target.value)
+    restored.kind = 'color'
+    restored.image = ''
+    restored.customized = restored.light !== defaults.light || restored.dark !== defaults.dark
+    restored.effects = {
+      light: defaultBackgroundEffect(),
+      dark: defaultBackgroundEffect()
+    }
+  }
+
   async function importImage(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement
     const file = input.files?.[0]
@@ -217,12 +261,19 @@ export function useBackgroundAppearanceEditor() {
       const image = await importBackgroundImage(file)
       if (!image) throw new Error('图片导入失败，请重新选择')
       const bitmap = new Image()
-      bitmap.src = image
-      await bitmap.decode()
-      if (revision !== importRevision) return
-      const background = editableBackground(selectedTarget)
-      background.image = image
-      background.kind = 'image'
+      try {
+        bitmap.src = image
+        await bitmap.decode()
+        if (revision !== importRevision) return
+        const background = editableBackground(selectedTarget)
+        background.image = image
+        background.kind = 'image'
+        recipePromptOpen.value = true
+      } finally {
+        bitmap.onload = null
+        bitmap.onerror = null
+        bitmap.src = ''
+      }
     } catch (error) {
       if (revision === importRevision)
         state.error = error instanceof Error ? error.message : '无法读取这张图片'
@@ -231,9 +282,7 @@ export function useBackgroundAppearanceEditor() {
     }
   }
   function removeImage(): void {
-    const background = editableBackground()
-    background.image = ''
-    background.kind = 'color'
+    setBackgroundKind('color')
   }
   function resetCurrent(): void {
     if (appearanceEditorArea.value !== 'background') {
@@ -278,21 +327,26 @@ export function useBackgroundAppearanceEditor() {
       context.fillRect(0, 0, canvas.width, canvas.height)
       if (source) {
         const image = await loadLiquidGlassContextImage(source, request.signal, undefined, 2500)
-        const aspect = canvas.width / canvas.height
-        const cropWidth = Math.min(image.naturalWidth, image.naturalHeight * aspect)
-        const cropHeight = cropWidth / aspect
-        const position = backgroundEffect(background, selectedTone)
-        context.drawImage(
-          image,
-          ((image.naturalWidth - cropWidth) * position.positionX) / 100,
-          ((image.naturalHeight - cropHeight) * position.positionY) / 100,
-          cropWidth,
-          cropHeight,
-          0,
-          0,
-          canvas.width,
-          canvas.height
-        )
+        try {
+          const aspect = canvas.width / canvas.height
+          const cropWidth = Math.min(image.naturalWidth, image.naturalHeight * aspect)
+          const cropHeight = cropWidth / aspect
+          const position = backgroundEffect(background, selectedTone)
+          context.drawImage(
+            image,
+            ((image.naturalWidth - cropWidth) * position.positionX) / 100,
+            ((image.naturalHeight - cropHeight) * position.positionY) / 100,
+            cropWidth,
+            cropHeight,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          )
+        } finally {
+          // Sampling is synchronous; release the decoded wallpaper immediately.
+          image.src = ''
+        }
       }
       recipe = recommendTransparentAppearance(
         context.getImageData(0, 0, canvas.width, canvas.height).data,
@@ -332,6 +386,15 @@ export function useBackgroundAppearanceEditor() {
       )
     }
   }
+
+  function dismissRecipePrompt(): void {
+    recipePromptOpen.value = false
+  }
+
+  async function applyRecipeFromPrompt(): Promise<void> {
+    recipePromptOpen.value = false
+    await useTransparentRecipe()
+  }
   async function fullPreview(value: boolean): Promise<void> {
     await session.preview(value)
     if (!value) {
@@ -365,6 +428,8 @@ export function useBackgroundAppearanceEditor() {
     tone,
     importing,
     matching,
+    recipePromptOpen,
+    recipePromptRef,
     busy,
     advancedOpen,
     pageOptions,
@@ -375,6 +440,7 @@ export function useBackgroundAppearanceEditor() {
     activeMaterial,
     previewStyle,
     editableBackground,
+    setBackgroundKind,
     setEffect,
     setInheritance,
     chooseImage,
@@ -383,6 +449,8 @@ export function useBackgroundAppearanceEditor() {
     resetCurrent,
     selectMaterial,
     useTransparentRecipe,
+    dismissRecipePrompt,
+    applyRecipeFromPrompt,
     fullPreview,
     cancel,
     save,

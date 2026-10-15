@@ -1,6 +1,45 @@
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { runInNewContext } from 'node:vm'
+import { computed, reactive, ref } from 'vue'
+import ts from 'typescript'
+import { parse } from '@vue/compiler-sfc'
+import type { Track } from '../types/music'
+import { resolveLibraryArtistTracks } from '../utils/libraryCollectionView.ts'
+
+test('local artist navigation resolves collaborations and reacts to the selected performer', () => {
+  const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
+  const script = parse(source).descriptor.scriptSetup!.content
+  const ast = ts.createSourceFile('SongList.ts', script, ts.ScriptTarget.Latest, true)
+  let expression = ''
+  for (const statement of ast.statements) {
+    if (!ts.isVariableStatement(statement)) continue
+    const declaration = statement.declarationList.declarations.find(
+      (node) => node.name.getText(ast) === 'baseDisplayTracks'
+    )
+    if (declaration?.initializer) expression = declaration.initializer.getText(ast)
+  }
+  assert.ok(expression)
+  const solo = { id: 'solo', artist: 'Alice' } as Track
+  const duet = { id: 'duet', artist: 'Alice / Bob' } as Track
+  const tracks = ref([solo, duet])
+  const props = reactive({ category: 'artists', filter: 'artist:Alice' })
+  const code = ts.transpileModule(`const result = ${expression}; result`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 }
+  }).outputText
+  const result = runInNewContext(code, {
+    computed,
+    props,
+    tracks,
+    resolveLibraryArtistTracks
+  }) as { value: Track[] }
+  assert.deepEqual(result.value.map((track) => track.id), ['solo', 'duet'])
+  props.filter = 'artist:Bob'
+  assert.deepEqual(result.value.map((track) => track.id), ['duet'])
+  tracks.value = [solo]
+  assert.deepEqual(result.value, [])
+})
 
 test('song list omits header kickers from all non-dashboard local library views', () => {
   const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')

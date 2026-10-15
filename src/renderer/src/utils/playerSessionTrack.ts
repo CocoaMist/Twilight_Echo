@@ -20,6 +20,8 @@ export function cloneTrackForPlaybackSession(track: Track): Track {
     artist: track.artist,
     artists: track.artists?.map((item) => ({ ...item })),
     album: track.album,
+    albumId: track.albumId,
+    albumArtist: track.albumArtist,
     filePath: track.filePath,
     fileName: track.fileName,
     dir: track.dir,

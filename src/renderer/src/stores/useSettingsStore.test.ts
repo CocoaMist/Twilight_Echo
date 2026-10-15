@@ -204,6 +204,7 @@ function readSettingsPageSources(): string {
   return [
     'SettingsPage.vue',
     'settings-page/types.ts',
+    'settings-page/usePluginSettingsPanels.ts',
     'settings-page/AboutSettingsSection.vue',
     'settings-page/ShortcutsSettingsSection.vue',
     'settings-page/MiniPlayerSettingsSection.vue',
@@ -248,13 +249,13 @@ test('about settings expose bundled sponsor payment options and sponsor list', (
   assert.ok(existsSync(new URL('../../../../resources/sponsor/wechat.png', import.meta.url)))
 })
 
-test('appearance parser quotes background image handles when building css url values', () => {
+test('appearance parser quotes display-sized background image handles when building css url values', () => {
   const background = normalizeAppBackgroundSettings({
     global: { kind: 'image', image: 'background://one.png' }
   })
   assert.equal(
     backgroundCssVariables(background.global, 'dark')['--appearance-image'],
-    'url("background://one.png")'
+    'url("background://one.png?display=v1")'
   )
   const invalid = normalizeAppBackgroundSettings({
     global: { kind: 'image', image: 'background://one.png")' }

@@ -96,6 +96,7 @@ import type {
 } from './types'
 import { parseJsonWithNestingLimit } from '../security/jsonSafety.ts'
 import { normalizePluginNoticeInput, type PluginNotice } from '../../shared/pluginNotice.ts'
+import type { DynamicIslandConfig } from '../../shared/dynamicIsland.ts'
 
 export interface TwilightPluginManagerOptions {
   appVersion: string
@@ -131,6 +132,17 @@ export interface TwilightPluginManagerOptions {
     stop: () => Promise<void> | void
     next: () => Promise<void> | void
     previous: () => Promise<void> | void
+  }
+  /**
+   * Host-owned dynamic island window bridge. Plugins reach it through
+   * `twilight.overlay` and must declare the `ui:inject` permission. Only one
+   * plugin may own the island at a time.
+   */
+  dynamicIsland?: {
+    show: (pluginId: string) => void
+    configure: (pluginId: string, config: unknown) => DynamicIslandConfig
+    hide: (pluginId: string) => void
+    isOwner: (pluginId: string) => boolean
   }
   getProxyEnv?: () => Record<string, string>
   /**
@@ -243,6 +255,7 @@ export class TwilightPluginManager extends EventEmitter {
   private readonly autoMixEnabled: TwilightPluginManagerOptions['autoMixEnabled']
   private readonly applyNativeDspPluginChain: TwilightPluginManagerOptions['applyNativeDspPluginChain']
   private readonly player: TwilightPluginManagerOptions['player']
+  private readonly dynamicIsland: TwilightPluginManagerOptions['dynamicIsland']
   private readonly getProxyEnv: TwilightPluginManagerOptions['getProxyEnv']
   private readonly running = new Map<string, RunningPlugin>()
   private readonly hibernated = new Map<string, HibernatedPlugin>()
@@ -279,6 +292,7 @@ export class TwilightPluginManager extends EventEmitter {
     this.autoMixEnabled = options.autoMixEnabled
     this.applyNativeDspPluginChain = options.applyNativeDspPluginChain
     this.player = options.player
+    this.dynamicIsland = options.dynamicIsland
     this.getProxyEnv = options.getProxyEnv
     const idleTimeoutMs = options.hostIdleTimeoutMs ?? DEFAULT_PLUGIN_HOST_IDLE_TIMEOUT_MS
     this.hostIdle =
@@ -1217,6 +1231,7 @@ export class TwilightPluginManager extends EventEmitter {
     })
     child.on('exit', (code) => {
       if (this.running.get(descriptor.id) !== running) return
+      this.dynamicIsland?.hide(descriptor.id)
       const wasStopping = this.stopOperations.has(descriptor.id)
       this.rpcCalls.cancelPlugin(
         descriptor.id,
@@ -1287,6 +1302,7 @@ export class TwilightPluginManager extends EventEmitter {
     this.hostIdle?.clear(id)
     const running = this.running.get(id)
     if (!running) {
+      this.dynamicIsland?.hide(id)
       // A hibernated plugin has no process; an explicit stop just forgets it.
       if (!this.hibernating.has(id)) {
         this.hibernated.delete(id)
@@ -1338,7 +1354,10 @@ export class TwilightPluginManager extends EventEmitter {
     if (id === QISHUI_PLUGIN_ID) {
       await this.qishuiAuth.clear(running.descriptor.paths.versionRoot).catch(() => undefined)
     }
-    if (this.running.get(id) === running) this.running.delete(id)
+    if (this.running.get(id) === running) {
+      this.dynamicIsland?.hide(id)
+      this.running.delete(id)
+    }
   }
 
   private waitForActivation(
@@ -1472,6 +1491,14 @@ export class TwilightPluginManager extends EventEmitter {
           requestId: message.requestId,
           ok: true,
           value: await this.handleQishuiAuthApiCall(id, message)
+        }
+      }
+      if (message.namespace === 'overlay') {
+        return {
+          kind: 'api-result',
+          requestId: message.requestId,
+          ok: true,
+          value: this.handleOverlayApiCall(id, message)
         }
       }
       if (message.namespace !== 'player') throw new Error('未知 API 命名空间')
@@ -1686,6 +1713,26 @@ export class TwilightPluginManager extends EventEmitter {
       return null
     }
     throw new Error('未知汽水音乐安全登录 API')
+  }
+
+  private handleOverlayApiCall(
+    pluginId: string,
+    message: Extract<PluginHostResponse, { kind: 'api-call' }>
+  ): DynamicIslandConfig | null {
+    if (!this.dynamicIsland) throw new Error('灵动岛服务不可用')
+    this.requirePermission(pluginId, 'ui:inject', `overlay.${message.method}`)
+    if (message.method === 'show') {
+      this.dynamicIsland.show(pluginId)
+      return null
+    }
+    if (message.method === 'hide') {
+      this.dynamicIsland.hide(pluginId)
+      return null
+    }
+    if (message.method === 'configure') {
+      return this.dynamicIsland.configure(pluginId, message.args[0] ?? {})
+    }
+    throw new Error('未知灵动岛 API')
   }
 
   private async handleExtensionApiCall(

@@ -271,6 +271,10 @@ export interface AlbumSummary {
   cover?: string | null
   trackCount?: number
   publishTime?: number
+  /** Provider-reported release kind; do not infer LP/EP from the track count. */
+  releaseType?: string
+  /** Provider-reported explicit-content flag; omitted when unavailable. */
+  isExplicit?: boolean
 }
 
 /** Public music charts, including the provider's compact song previews. */
@@ -977,12 +981,87 @@ export interface NativeDspPluginStatus {
   parameters?: NativeDspParameterInfo[]
 }
 
+export interface TwilightOverlayAppearanceConfig {
+  backgroundColor: string
+  /** Surface opacity in percent (host clamps to 30–100). */
+  backgroundOpacity: number
+  textColor: string
+  accentColor: string
+  accentSource: 'custom' | 'cover'
+  visualizerColor: string
+  /** Text scale in percent (host clamps to 80–130). */
+  fontScale: number
+  collapsedRadius: number
+  expandedRadius: number
+  audioReactive: boolean
+}
+
+export interface TwilightOverlayLayoutConfig {
+  collapsedWidth: number
+  collapsedHeight: number
+  expandedWidth: number
+  anchor: 'left' | 'center' | 'right'
+  offsetX: number
+  offsetY: number
+  display: 'main-window' | 'primary'
+}
+
+export interface TwilightOverlayComponentsConfig {
+  collapsedContent: 'artwork' | 'track' | 'lyric'
+  cover: boolean
+  visualizer: boolean
+  lyric: boolean
+  progress: boolean
+  time: boolean
+  favorite: boolean
+  skip: boolean
+  volume: boolean
+}
+
+export interface TwilightOverlayBehaviorConfig {
+  expandTrigger: 'hover' | 'click'
+  collapseDelayMs: number
+  motion: 'off' | 'fast' | 'normal' | 'slow'
+  visibility: 'always' | 'when-track' | 'when-playing'
+}
+
+/** Complete, normalized dynamic island config as returned by `overlay.configure`. */
+export interface TwilightOverlayConfig {
+  appearance: TwilightOverlayAppearanceConfig
+  layout: TwilightOverlayLayoutConfig
+  components: TwilightOverlayComponentsConfig
+  behavior: TwilightOverlayBehaviorConfig
+}
+
+/** Partial DIY config submitted by a plugin; the host fills and clamps every field. */
+export interface TwilightOverlayConfigInput {
+  appearance?: Partial<TwilightOverlayAppearanceConfig>
+  layout?: Partial<TwilightOverlayLayoutConfig>
+  components?: Partial<TwilightOverlayComponentsConfig>
+  behavior?: Partial<TwilightOverlayBehaviorConfig>
+}
+
+/**
+ * Controls the host-owned dynamic island window. Requires the `ui:inject`
+ * permission and exclusive ownership: only one plugin may use it at a time.
+ * Older hosts omit this namespace, so probe `typeof twilight.overlay?.configure`
+ * before calling.
+ */
+export interface TwilightOverlayApi {
+  show(): Promise<void>
+  hide(): Promise<void>
+  /** Returns the config the host actually rendered; persist this value. */
+  configure(config?: TwilightOverlayConfigInput): Promise<TwilightOverlayConfig>
+}
+
 export interface TwilightApi {
   events: TwilightEventsApi
   player: TwilightPlayerApi
   providers: TwilightProvidersApi
   ui: TwilightUiApi
   themes: TwilightThemesApi
+  /** Host-owned dynamic island window (requires `ui:inject`). */
+  overlay?: TwilightOverlayApi
   /** Optional host-owned secure QR flow for the Qishui provider. */
   qishuiAuth?: TwilightQishuiAuthApi
 }

@@ -211,6 +211,7 @@ function buildReport() {
     'providerDownloads',
     'extensions',
     'desktopLyrics',
+    'dynamicIsland',
     'miniPlayer',
     'trayPlayer',
     'debug'

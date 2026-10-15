@@ -186,6 +186,9 @@ export interface OutputDiagnostics {
   liveRenderedFrames?: number
   liveRenderCallbackCount?: number
   sessionUnderrunCount: number
+  asioHelperCallbackCount?: number
+  asioHelperUnderrunCount?: number
+  asioHelperBufferDropCount?: number
   sessionBufferDropCount: number
   sessionRecoveryCount: number
   lifetimeUnderrunCount: number

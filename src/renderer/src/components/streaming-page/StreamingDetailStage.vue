@@ -8,8 +8,9 @@ import type {
   StreamingTrackSort,
   StreamingSortDirection
 } from '@renderer/components/streaming-page/streamingTrackView'
-import type { Track } from '../../types/music'
+import type { Track, TrackArtistRef } from '../../types/music'
 import CoverImg from '../CoverImg.vue'
+import ExplicitBadge from '../ExplicitBadge.vue'
 import { useProgressiveList } from './useProgressiveList.ts'
 import {
   buildMediaPartRows,
@@ -34,6 +35,7 @@ const props = withDefaults(
   defineProps<{
     kind: DetailStageKind
     title: string
+    isExplicit?: boolean
     cover?: string | null
     coverSource?: string | null
     description?: string
@@ -115,7 +117,7 @@ const emit = defineEmits<{
   'update:sort': [value: StreamingTrackSort]
   'update:direction': [value: StreamingSortDirection]
   refresh: []
-  openArtist: [track: Track]
+  openArtist: [track: Track, artist: TrackArtistRef]
   openAlbum: [track: Track]
   playAll: []
   shufflePlay: []
@@ -131,6 +133,14 @@ const emit = defineEmits<{
   loadMoreLiked: []
   trackContextMenu: [track: Track, index: number, event: MouseEvent]
 }>()
+
+function trackArtists(track: Track): TrackArtistRef[] {
+  if (track.artists?.length) return track.artists
+  return track.artist
+    .split(/\s+\/\s+/)
+    .map((name) => ({ name: name.trim() }))
+    .filter((artist) => artist.name)
+}
 
 const kindLabel = computed(() => {
   switch (props.kind) {
@@ -332,7 +342,10 @@ const infoTrack = shallowRef<Track | null>(null)
           <span v-if="trackCountLabel" class="stage-kicker-meta">{{ trackCountLabel }}</span>
         </div>
 
-        <h2 class="stage-title">{{ title }}</h2>
+        <div class="stage-title-row">
+          <h2 class="stage-title">{{ title }}</h2>
+          <ExplicitBadge v-if="kind === 'album' && isExplicit" />
+        </div>
 
         <p v-if="description" class="stage-desc">{{ description }}</p>
         <p v-if="intro" class="stage-intro">{{ intro }}</p>
@@ -646,16 +659,28 @@ const infoTrack = shallowRef<Track | null>(null)
                 >
                   {{ row.grouped ? row.track.mediaPart?.title : row.track.title }}
                 </button>
-                <button
-                  type="button"
-                  v-if="!row.grouped"
-                  class="row-artist metadata-link"
-                  :title="row.track.artist"
-                  @click.stop="emit('openArtist', row.track)"
-                  @dblclick.stop
-                >
-                  {{ row.track.artist || '未知艺人' }}
-                </button>
+                <div v-if="!row.grouped" class="row-artists">
+                  <template
+                    v-for="(artist, artistIndex) in trackArtists(row.track)"
+                    :key="artistIndex"
+                  >
+                    <span v-if="artistIndex > 0" class="row-artist-separator" aria-hidden="true"
+                      >/</span
+                    >
+                    <button
+                      type="button"
+                      class="row-artist metadata-link"
+                      :title="artist.name"
+                      @click.stop="emit('openArtist', row.track, artist)"
+                      @dblclick.stop
+                    >
+                      {{ artist.name }}
+                    </button>
+                  </template>
+                  <span v-if="!row.track.artist.trim() && !row.track.artists?.length"
+                    >未知艺人</span
+                  >
+                </div>
               </div>
             </div>
 
