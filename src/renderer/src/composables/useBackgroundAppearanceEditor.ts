@@ -261,13 +261,19 @@ export function useBackgroundAppearanceEditor() {
       const image = await importBackgroundImage(file)
       if (!image) throw new Error('图片导入失败，请重新选择')
       const bitmap = new Image()
-      bitmap.src = image
-      await bitmap.decode()
-      if (revision !== importRevision) return
-      const background = editableBackground(selectedTarget)
-      background.image = image
-      background.kind = 'image'
-      recipePromptOpen.value = true
+      try {
+        bitmap.src = image
+        await bitmap.decode()
+        if (revision !== importRevision) return
+        const background = editableBackground(selectedTarget)
+        background.image = image
+        background.kind = 'image'
+        recipePromptOpen.value = true
+      } finally {
+        bitmap.onload = null
+        bitmap.onerror = null
+        bitmap.src = ''
+      }
     } catch (error) {
       if (revision === importRevision)
         state.error = error instanceof Error ? error.message : '无法读取这张图片'
@@ -321,21 +327,26 @@ export function useBackgroundAppearanceEditor() {
       context.fillRect(0, 0, canvas.width, canvas.height)
       if (source) {
         const image = await loadLiquidGlassContextImage(source, request.signal, undefined, 2500)
-        const aspect = canvas.width / canvas.height
-        const cropWidth = Math.min(image.naturalWidth, image.naturalHeight * aspect)
-        const cropHeight = cropWidth / aspect
-        const position = backgroundEffect(background, selectedTone)
-        context.drawImage(
-          image,
-          ((image.naturalWidth - cropWidth) * position.positionX) / 100,
-          ((image.naturalHeight - cropHeight) * position.positionY) / 100,
-          cropWidth,
-          cropHeight,
-          0,
-          0,
-          canvas.width,
-          canvas.height
-        )
+        try {
+          const aspect = canvas.width / canvas.height
+          const cropWidth = Math.min(image.naturalWidth, image.naturalHeight * aspect)
+          const cropHeight = cropWidth / aspect
+          const position = backgroundEffect(background, selectedTone)
+          context.drawImage(
+            image,
+            ((image.naturalWidth - cropWidth) * position.positionX) / 100,
+            ((image.naturalHeight - cropHeight) * position.positionY) / 100,
+            cropWidth,
+            cropHeight,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          )
+        } finally {
+          // Sampling is synchronous; release the decoded wallpaper immediately.
+          image.src = ''
+        }
       }
       recipe = recommendTransparentAppearance(
         context.getImageData(0, 0, canvas.width, canvas.height).data,
