@@ -100,7 +100,7 @@ JS 插件填写 `main`，DSP 插件填写 `binary`，纯 theme 插件可用 `con
 | `player:control`   | 控制播放器（播放、暂停、跳转、队列等）         |
 | `player:observe`   | 观察播放器状态（事件订阅、读取状态）           |
 | `library:read`     | 读音乐库                                       |
-| `library:write`    | 写音乐库                                       |
+| `library:write`    | 写入用户歌单（目前仅 `twilight.library.importPlaylists`） |
 | `settings`         | 读写应用设置                                   |
 | `clipboard`        | 访问剪贴板                                     |
 | `ui:inject`        | 向 UI 注入扩展点（侧边栏页面、按钮、设置面板） |
@@ -141,6 +141,13 @@ JS 插件实现两个函数：
 | `twilight.providers` | 注册 provider 能力、查询已注册 provider                                                 |
 | `twilight.ui`        | 注册 UI 扩展点（侧边栏页面、播放栏按钮、设置面板、流媒体/本地侧栏入口）并显示提示 toast |
 | `twilight.themes`    | 主题资源声明                                                                            |
+| `twilight.library`   | 把曲目写进用户的本地歌单（`importPlaylists`，需 `library:write`；宿主较新时才有）      |
+
+`twilight.library.importPlaylists({ playlists: [{ name, paths }] })` 让插件把一批歌单
+写进 **音乐库 → 歌单**。曲目按**文件路径**匹配本地音乐库（与自带 m3u8 导入同一套逻辑），
+插件不需要知道本地曲目 ID。调用是**即发即忘**的：主进程把请求转给渲染进程执行——
+歌单状态归渲染进程所有，写入走它带版本号的持久化——结果由宿主用一条汇总 toast 告知。
+旧宿主没有这个命名空间，调用前请用 `typeof twilight.library?.importPlaylists` 判断。
 
 不要试图绕过网关直接拿宿主内部对象。API 主版本内只加不改不删（见 [spec §3](./twilight-echo-plugin-spec.md#3-api-版本与兼容性承诺)），所以绑在 `twilight` 上的调用是稳的。
 
