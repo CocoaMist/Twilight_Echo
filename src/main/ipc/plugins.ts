@@ -41,6 +41,10 @@ import {
   type ProviderDownloadCreateInput
 } from '../../shared/providerDownloads.ts'
 import { PLUGIN_NOTICE_CHANNEL, type PluginNotice } from '../../shared/pluginNotice.ts'
+import {
+  PLUGIN_IMPORT_PLAYLIST_CHANNEL,
+  type PluginPlaylistImportNotice
+} from '../../shared/pluginPlaylistImport.ts'
 
 const MAX_PLUGIN_ID_LENGTH = 128
 const MAX_PROVIDER_ID_LENGTH = 128
@@ -179,6 +183,12 @@ export function setupPluginIpc(): void {
 
   runtime.pluginManager.on('notice', (notice: PluginNotice) => {
     runtime.mainWindow?.webContents.send(PLUGIN_NOTICE_CHANNEL, notice)
+  })
+
+  // The renderer owns the local playlist store, so a plugin's import request is
+  // handed to it rather than written from here. See shared/pluginPlaylistImport.
+  runtime.pluginManager.on('importPlaylist', (request: PluginPlaylistImportNotice) => {
+    runtime.mainWindow?.webContents.send(PLUGIN_IMPORT_PLAYLIST_CHANNEL, request)
   })
 
   ipcMain.handle('plugins:list', async (event) => {

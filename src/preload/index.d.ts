@@ -112,6 +112,7 @@ import type {
 import type { DuplicateDetectionReadApi } from '../shared/duplicateDetection.ts'
 import type { LyricsManagementDocument } from '../shared/lyricsManagement.ts'
 import type { PluginNotice } from '../shared/pluginNotice.ts'
+import type { PluginPlaylistImportNotice } from '../shared/pluginPlaylistImport.ts'
 import type {
   NcmCloudDownloadRequest,
   NcmCloudDownloadResult,
@@ -739,6 +740,7 @@ interface WindowAPI {
     ) => Promise<TwilightPluginDescriptor>
     onChanged: (cb: () => void) => () => void
     onNotice: (cb: (notice: PluginNotice) => void) => () => void
+    onImportPlaylist: (cb: (request: PluginPlaylistImportNotice) => void) => () => void
   }
   providers: {
     list: () => Promise<TwilightMediaProviderRegistration[]>

@@ -111,6 +111,17 @@ interface TwilightPluginContext {
        */
       configure: (config: unknown) => Promise<unknown>
     }
+    library: {
+      /**
+       * Create (or extend) local playlists from absolute file paths. Requires
+       * `library:write`. Batched on purpose — plugins import tens of playlists
+       * at once — and resolves once the request is queued; the renderer reports
+       * one combined toast with the imported/unresolved counts.
+       */
+      importPlaylists: (request: {
+        playlists: Array<{ name: string; paths: string[] }>
+      }) => Promise<void>
+    }
     themes: {
       register: (theme: {
         id: string
@@ -357,6 +368,16 @@ function createContext(
       hide: () => callOverlayApi('hide', []).then(() => undefined),
       configure: (config) => callOverlayApi('configure', [config])
     },
+    library: {
+      /**
+       * Creates (or extends) local playlists from absolute file paths. Fire and
+       * forget by design: the renderer owns the playlist store and reports the
+       * outcome with a single combined toast, so a plugin never blocks on the
+       * UI thread.
+       */
+      importPlaylists: (request) =>
+        callLibraryApi('importPlaylists', [request]).then(() => undefined)
+    },
     themes: {
       register: async () => {
         throw new Error('Themes must be declared in plugin.json contributes.themes')
@@ -468,6 +489,13 @@ function callOverlayApi(
   args: unknown[]
 ): Promise<unknown> {
   return callApi('overlay', method, args)
+}
+
+function callLibraryApi(
+  method: Extract<PluginHostResponse, { kind: 'api-call' }>['method'],
+  args: unknown[]
+): Promise<unknown> {
+  return callApi('library', method, args)
 }
 
 function callInternalNcmApi(
