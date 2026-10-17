@@ -1,4 +1,5 @@
 import { ipcRenderer } from 'electron'
+import type { InstalledExperience } from '../../shared/pluginExperience.ts'
 import { ProviderWriteIdempotencyCoordinator } from '../../shared/providerWriteIdempotency.ts'
 import { PROVIDER_DOWNLOAD_CHANGED_CHANNEL } from '../../shared/providerDownloads.ts'
 import { PLUGIN_NOTICE_CHANNEL, type PluginNotice } from '../../shared/pluginNotice.ts'
@@ -147,6 +148,15 @@ export const pluginsApi = {
     }
   },
   extensions: {
+    experienceExport: (pluginId: string, name: string, content: string): Promise<{ saved: boolean }> =>
+      ipcRenderer.invoke('extensions:experienceExport', pluginId, name, content),
+    experienceMusic: (pluginId: string, operation: string, albums: unknown[], args: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('extensions:experienceMusic', pluginId, operation, albums, args),
+    experienceDocument: (pluginId: string, update?: { revision: number; value: Record<string, unknown> }): Promise<{ revision: number; value: Record<string, unknown> }> =>
+      ipcRenderer.invoke('extensions:experienceDocument', pluginId, update),
+    experiences: (): Promise<InstalledExperience[]> => ipcRenderer.invoke('extensions:experiences'),
+    experiencePreferences: (pluginId: string, value?: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('extensions:experiencePreferences', pluginId, value),
     list: (): Promise<TwilightPluginExtensionContribution[]> =>
       ipcRenderer.invoke('extensions:list'),
     executeCommand: (command: string, args?: unknown[]): Promise<unknown> =>

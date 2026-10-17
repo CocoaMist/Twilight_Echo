@@ -1,5 +1,6 @@
 import { app, ipcMain, powerMonitor, utilityProcess } from 'electron'
-import { join } from 'node:path'
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { isAbsolute, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DiagnosticWriterClient } from './client.ts'
 import {
@@ -14,6 +15,51 @@ import { installNetworkDiagnostics } from './network.ts'
 import { observeUtilityProcess } from './utilityObservation.ts'
 
 app.setName('TwilightEcho')
+
+// electron-vite can launch through wrapper/process trees that deny its
+// medium-integrity Electron process access to the normal Roaming profile. If
+// that happens Chromium cannot create its process-singleton lock and exits
+// before the window appears. Development mode therefore uses an explicit
+// override when supplied and otherwise verifies that the default profile is
+// writable, falling back to a workspace-local profile when needed.
+function configureDevelopmentUserData(): void {
+  if (app.isPackaged) return
+
+  const explicitDirectory = process.env.TWILIGHT_DEV_USER_DATA_DIR?.trim()
+  let directory = explicitDirectory
+    ? isAbsolute(explicitDirectory)
+      ? explicitDirectory
+      : resolve(explicitDirectory)
+    : ''
+
+  if (!directory) {
+    try {
+      const defaultDirectory = app.getPath('userData')
+      mkdirSync(defaultDirectory, { recursive: true })
+      const probePath = join(defaultDirectory, `.twilight-write-probe-${randomUUID()}`)
+      writeFileSync(probePath, 'probe')
+      unlinkSync(probePath)
+      return
+    } catch (error) {
+      directory = join(app.getAppPath(), 'tmp', 'electron-vite-user-data')
+      console.warn(
+        '[dev-user-data] default profile is not writable; using workspace-local profile:',
+        directory,
+        error instanceof Error ? error.message : error
+      )
+    }
+  }
+
+  try {
+    mkdirSync(directory, { recursive: true })
+    app.setPath('userData', directory)
+  } catch (error) {
+    console.warn('[dev-user-data] unable to use isolated profile:', error)
+  }
+}
+
+configureDevelopmentUserData()
+
 export const diagnosticDirectory =
   process.env.TWILIGHT_LOG_DIRECTORY || join(app.getPath('logs'), 'diagnostics')
 export const diagnosticWriter = new DiagnosticWriterClient(

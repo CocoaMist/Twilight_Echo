@@ -13,6 +13,7 @@ import type {
   TrayPlayerBootstrap,
   MotionPreference
 } from './types'
+import type { ExperienceWindowOptions, ExperienceWindowTheme } from '../shared/experienceWindow.ts'
 import { createSleepTimerEventBridge } from './sleepTimerEvents.ts'
 import { dataApi, miniPlayerCoverDataApi } from './domains/dataApi.ts'
 import { audioEngineApi, bindAudioEngineIpcEvents } from './domains/audioEngineApi.ts'
@@ -39,6 +40,8 @@ const dynamicIslandStateCallbacks = new Set<(state: MiniPlayerStateSnapshot) => 
 const dynamicIslandLyricsCallbacks = new Set<(payload: DynamicIslandLyricsPayload) => void>()
 const dynamicIslandExpandedCallbacks = new Set<(expanded: boolean) => void>()
 const dynamicIslandConfigCallbacks = new Set<(presentation: DynamicIslandPresentation) => void>()
+const experienceWindowThemeCallbacks = new Set<(theme: ExperienceWindowTheme) => void>()
+let latestExperienceWindowTheme: ExperienceWindowTheme | undefined
 const sleepTimerEvents = createSleepTimerEventBridge()
 
 bindSettingsIpcEvents()
@@ -85,6 +88,11 @@ ipcRenderer.on('dynamicIsland:lyrics', (_event, payload: DynamicIslandLyricsPayl
   for (const cb of dynamicIslandLyricsCallbacks) cb(payload)
 })
 
+ipcRenderer.on('experience:windowTheme', (_event, theme: ExperienceWindowTheme) => {
+  latestExperienceWindowTheme = theme
+  for (const cb of experienceWindowThemeCallbacks) cb(theme)
+})
+
 const miniPlayerWindowApi = {
   getBootstrap: (): Promise<MiniPlayerBootstrap> => ipcRenderer.invoke('miniPlayer:getBootstrap'),
   command: (command: MiniPlayerCommand): void => {
@@ -122,7 +130,8 @@ const miniPlayerWindowApi = {
 
 const miniPlayerHostApi = {
   ...miniPlayerWindowApi,
-  open: (): Promise<MiniPlayerSettings> => ipcRenderer.invoke('miniPlayer:open'),
+  open: (options?: ExperienceWindowOptions): Promise<MiniPlayerSettings> =>
+    ipcRenderer.invoke('miniPlayer:open', options),
   publishState: (state: MiniPlayerStateSnapshot): void => {
     ipcRenderer.send('miniPlayer:publishState', state)
   },
@@ -133,6 +142,14 @@ const miniPlayerHostApi = {
   onCommand: (cb: (command: MiniPlayerCommand) => void): (() => void) => {
     miniPlayerCommandCallbacks.add(cb)
     return () => miniPlayerCommandCallbacks.delete(cb)
+  }
+}
+
+const experienceWindowApi = {
+  onTheme: (cb: (theme: ExperienceWindowTheme) => void): (() => void) => {
+    experienceWindowThemeCallbacks.add(cb)
+    if (latestExperienceWindowTheme) cb(latestExperienceWindowTheme)
+    return () => experienceWindowThemeCallbacks.delete(cb)
   }
 }
 
@@ -206,7 +223,13 @@ const api = {
   ...pluginsApi,
   desktopLyrics: desktopLyricsHostApi,
   miniPlayer: miniPlayerHostApi,
-  trayPlayer: trayPlayerWindowApi
+  trayPlayer: trayPlayerWindowApi,
+  window: {
+    ...systemApi.window,
+    showTrayPlayer: (options?: ExperienceWindowOptions) =>
+      ipcRenderer.invoke('window:showTrayPlayer', options)
+  },
+  experienceWindow: experienceWindowApi
 }
 
 if (process.contextIsolated) {
@@ -222,25 +245,43 @@ if (process.contextIsolated) {
 
 function exposedApiForDocument():
   | typeof api
-  | { diagnostics: typeof diagnosticsApi; desktopLyrics: typeof desktopLyricsWindowApi }
+  | {
+      diagnostics: typeof diagnosticsApi
+      desktopLyrics: typeof desktopLyricsWindowApi
+      experienceWindow: typeof experienceWindowApi
+    }
   | {
       diagnostics: typeof diagnosticsApi
       miniPlayer: typeof miniPlayerWindowApi
       data: typeof miniPlayerCoverDataApi
+      experienceWindow: typeof experienceWindowApi
     }
-  | { diagnostics: typeof diagnosticsApi; trayPlayer: typeof trayPlayerWindowApi }
+  | {
+      diagnostics: typeof diagnosticsApi
+      trayPlayer: typeof trayPlayerWindowApi
+      experienceWindow: typeof experienceWindowApi
+    }
   | { dynamicIsland: typeof dynamicIslandWindowApi; data: typeof miniPlayerCoverDataApi } {
   if (isDesktopLyricsDocument())
-    return { diagnostics: diagnosticsApi, desktopLyrics: desktopLyricsWindowApi }
+    return {
+      diagnostics: diagnosticsApi,
+      desktopLyrics: desktopLyricsWindowApi,
+      experienceWindow: experienceWindowApi
+    }
   if (isMiniPlayerDocument()) {
     return {
       diagnostics: diagnosticsApi,
       miniPlayer: miniPlayerWindowApi,
-      data: miniPlayerCoverDataApi
+      data: miniPlayerCoverDataApi,
+      experienceWindow: experienceWindowApi
     }
   }
   if (isTrayPlayerDocument())
-    return { diagnostics: diagnosticsApi, trayPlayer: trayPlayerWindowApi }
+    return {
+      diagnostics: diagnosticsApi,
+      trayPlayer: trayPlayerWindowApi,
+      experienceWindow: experienceWindowApi
+    }
   if (isDynamicIslandDocument()) {
     return { dynamicIsland: dynamicIslandWindowApi, data: miniPlayerCoverDataApi }
   }

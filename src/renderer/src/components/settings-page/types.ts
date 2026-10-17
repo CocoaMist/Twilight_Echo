@@ -893,6 +893,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     terms: '外观 主题 界面 插件 主题 plugin theme 扩展 插件主题'
   },
   {
+    id: 'startup-experience',
+    section: 'appearance',
+    title: '完整界面',
+    terms: '外观 主题 插件 莱茵生命 Rhine 完整界面 启动 重启 切换 experience'
+  },
+  {
     id: 'accent-light',
     section: 'appearance',
     title: '浅色强调色',
@@ -1290,6 +1296,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: '显示音译',
     terms:
       '歌词 桌面歌词 音译 罗马音 romanization transliteration 显示 外文歌词 显示音译 (Show Romanization)'
+  },
+  {
+    id: 'local-shortcuts',
+    section: 'connections',
+    title: '应用内快捷键',
+    terms: '快捷键 Ctrl+W 关闭窗口 Ctrl+K 命令面板 空格 播放 暂停 开关 启用 禁用'
   },
   {
     id: 'global-shortcuts',

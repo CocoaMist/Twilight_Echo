@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import type { InstalledExperience } from '../../../shared/pluginExperience.ts'
 import type { StructuredPluginTheme } from '../../../shared/theme.ts'
 import type { PluginPlaylistImportNotice } from '../../../shared/pluginPlaylistImport.ts'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
@@ -13,6 +14,7 @@ export type UiContributionKind =
   | 'streamingHome'
 
 export interface UiContribution {
+  experience?: InstalledExperience
   pluginId: string
   id: string
   kind: UiContributionKind
@@ -132,6 +134,10 @@ export async function syncExtensions(): Promise<void> {
   syncInFlight.value = (async () => {
     const entries = await api.list()
     const nextUi: UiContribution[] = []
+    for (const experience of await api.experiences?.() ?? []) {
+      nextUi.push({ pluginId: experience.pluginId, id: experience.id, kind: 'sidebarPage',
+        title: experience.name, icon: 'pi pi-box', experience })
+    }
     const nextThemes: ThemeContribution[] = []
     for (const entry of entries as PluginExtensionContribution[]) {
       nextUi.push(

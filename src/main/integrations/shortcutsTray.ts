@@ -14,6 +14,7 @@ import {
   type PlayerShortcutKeyAction,
   type PlayerShortcutStatus
 } from '../core/types'
+import type { ShortcutId } from '../../shared/shortcutPreferences.ts'
 import { buildPlayerShortcutStatuses } from '../core/shortcutStatus'
 import { getAppIconPath } from '../app/window'
 import { applyDiscordRpcSetting } from './discord'
@@ -51,9 +52,10 @@ export function buildPlayerShortcutDefinitions(): {
   accelerator: string
   action: PlayerShortcutKeyAction
   label: string
+  enabled: boolean
 }[] {
   const bindings = runtime.appSettings.globalShortcutBindings
-  return [
+  const definitions: { accelerator: string; action: PlayerShortcutKeyAction; label: string }[] = [
     { accelerator: bindings.volumeUp, action: 'volumeUp', label: '增加音量' },
     { accelerator: bindings.volumeDown, action: 'volumeDown', label: '降低音量' },
     { accelerator: bindings.previous, action: 'previous', label: '上一首' },
@@ -71,6 +73,15 @@ export function buildPlayerShortcutDefinitions(): {
     },
     ...MEDIA_KEY_SHORTCUTS
   ]
+  return definitions.map((shortcut) => ({
+    ...shortcut,
+    enabled:
+      runtime.appSettings.shortcutEnabled[
+        (shortcut.accelerator.startsWith('Media')
+          ? shortcut.accelerator
+          : shortcut.action) as ShortcutId
+      ] !== false
+  }))
 }
 
 export function applyAutoLaunch(enabled: boolean): void {
@@ -95,7 +106,7 @@ export function registerPlayerShortcuts(): void {
     shortcuts,
     runtime.appSettings.globalShortcuts,
     (accelerator) => {
-      const shortcut = shortcuts.find((item) => item.accelerator === accelerator)
+      const shortcut = shortcuts.find((item) => item.enabled && item.accelerator === accelerator)
       if (!shortcut) return false
       const ok = globalShortcut.register(shortcut.accelerator, () => {
         handleGlobalShortcutAction(shortcut.action)

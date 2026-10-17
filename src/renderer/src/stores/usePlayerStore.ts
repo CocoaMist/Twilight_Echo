@@ -3837,6 +3837,17 @@ export function usePlayerStore() {
     await togglePlayState()
   }
 
+  /** End the current transport while retaining the user's queue for replay. */
+  function stopPlayback(): void {
+    clearCrossfadeTimer()
+    resetPlaybackRuntimeStateForRestore()
+    currentTrack.value = null
+    isPlaying.value = false
+    isLoading.value = false
+    currentTime.value = 0
+    resetPlaybackUiForTrackSwitch(null, 0)
+  }
+
   function prev(): void {
     previous()
   }
@@ -3932,6 +3943,7 @@ export function usePlayerStore() {
     playTrack,
     playTrackFromPosition,
     togglePlay,
+    stopPlayback,
     next,
     prev,
     seek,

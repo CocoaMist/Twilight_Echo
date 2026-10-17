@@ -34,6 +34,7 @@ export async function resolveCover(cover,source){
  state.calls++
  if(state.mode==='reject')throw Error('Grant failed')
  if(state.mode==='pending')return new Promise(resolve=>state.pending.push(resolve))
+ if(state.mode==='same')return 'data:image/png;base64,AAAA'
  if(state.mode==='good'||state.mode==='recover'&&state.calls===2)return good
  return 'data:image/png;base64,AAAA#'+state.calls
 }
@@ -92,6 +93,7 @@ export const validCover=good`
 const runtime = `import {createApp,h,reactive,ref,nextTick} from 'vue'
 import CoverImg from './ArtworkFrame.vue'
 import {state,validCover} from './loader'
+const diagnostics=[];window.api={diagnostics:{record:events=>diagnostics.push(...events)}}
 const props=reactive({cover:null,coverSource:null,identity:'empty',loading:'lazy'}),errors=[],custom=ref(false)
 createApp({render:()=>h(CoverImg,{...props,onError:event=>errors.push(event)},custom.value?{placeholder:()=>h('span',{'data-custom-placeholder':''},'Custom')}:undefined)}).mount('#app')
 const expect=(ok,message)=>{if(!ok)throw Error(message)}
@@ -105,12 +107,18 @@ window.runArtworkTests=async()=>{
  state.mode='broken';state.calls=0;props.coverSource='https://example.invalid/cover';props.identity='broken'
  const broken=await loaded();await settle()
  expect(broken.src===fallback&&state.calls===2&&state.invalidations===1&&errors.length===1,'broken grant loops or does not fall back')
+ expect(diagnostics.some(e=>e.event==='image.failed')&&diagnostics.some(e=>e.event==='retry.resolved')&&diagnostics.some(e=>e.event==='fallback.shown'),'cover failure chain is absent from diagnostics')
+ expect(!JSON.stringify(diagnostics).includes('base64,AAAA'),'diagnostics include embedded image payload')
  await settle();expect(state.calls===2,'fallback continues to request remote art')
  state.mode='reject';props.identity='rejected';await settle()
  expect((await loaded()).src===fallback,'rejected grant leaves a broken image')
  state.mode='recover';state.calls=0;props.identity='recover';await settle()
  const recovered=await loaded();expect(recovered.src!==fallback&&state.calls===2,'one expired handle cannot recover')
+ expect(diagnostics.some(e=>e.event==='image.recovered'),'successful recovery is absent from diagnostics')
  expect(recovered.getBoundingClientRect().width===size.width&&recovered.getBoundingClientRect().height===size.height,'fallback changes thumbnail geometry')
+ state.mode='same';state.calls=0;props.identity='same-handle';await loaded();await settle()
+ expect(diagnostics.some(e=>e.event==='retry.resolved'&&e.details.sameHandle===true),'same-handle retry failure cannot be identified')
+ expect(state.calls===2,'same-handle diagnostics changed retry behavior')
  state.mode='pending';props.identity='older';await settle()
  expect(state.pending.length===1,'deferred cover was not requested')
  state.mode='good';props.identity='newer';await settle();expect((await loaded()).src===validCover,'new track did not acquire its cover')

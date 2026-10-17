@@ -211,7 +211,8 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     navigate({ kind: 'plugin', page })
   }
   function closePluginPage(): void {
-    goBackPage()
+    if (history.value.length) goBackPage()
+    else pageTarget.value = lastLocal.value
   }
   function enterRadioPodcastMode(): void {
     navigate({ kind: 'radio' })
@@ -321,10 +322,11 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     if (nextHistory.length !== history.value.length) history.value = nextHistory
     const target = pageTarget.value
     if (target.kind !== 'plugin') return
-    if (
-      !pages.some((page) => page.pluginId === target.page.pluginId && page.id === target.page.id)
-    ) {
+    const current = pages.find((page) => page.pluginId === target.page.pluginId && page.id === target.page.id)
+    if (!current) {
       pageTarget.value = localHome()
+    } else if (current.experience?.version !== target.page.experience?.version) {
+      pageTarget.value = { kind: 'plugin', page: current }
     }
   }
   function createToggleMenuHandler(): () => void {

@@ -86,5 +86,6 @@ export interface PlayerShortcutStatus {
   action: PlayerShortcutAction
   label: string
   registered: boolean
+  enabled?: boolean
   error: string | null
 }

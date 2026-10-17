@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import test from 'node:test'
 import { compileScript, parse } from '@vue/compiler-sfc'
 import ts from 'typescript'
+import { buildMediaPartRows, MEDIA_PART_PAGE_SIZE } from './streaming-page/mediaPartRows.ts'
 
 const require = createRequire(import.meta.url)
 const run = promisify(execFile)
@@ -60,11 +61,13 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
       html,
       `<!doctype html><html><body><div id="login"></div><div id="list"></div><div id="saved"></div><script>${vue}</script><script>
       const { ref, computed } = Vue;
+      const MEDIA_PART_PAGE_SIZE = ${MEDIA_PART_PAGE_SIZE};
       Vue.Transition = { setup: (_props, { slots }) => () => slots.default?.() };
       const replies = [];
       const savedAlbums = [], savedArtists = [];
       const provider = { id: 'ncm', name: 'NetEase', capabilities: ['login'], supportedMethods: ['fetchSavedAlbums', 'fetchSavedArtists'], ui: {} };
       window.fixture = {
+        buildMediaPartRows: ${buildMediaPartRows.toString()}, MEDIA_PART_PAGE_SIZE,
         QRCode: { toDataURL: async () => 'data:image/png;base64,AA==' },
         AnimatedInput: { template: '<input />' }, CoverImg: { template: '<img />' },
         useBackHandler: () => {},
@@ -92,9 +95,9 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
         check(document.querySelector('#login .stage-title').textContent.includes('选择你的音乐平台'), 'stale QR must not replace platform picker');
         check(loggedIn === 0, 'stale request must not navigate to streaming');
         login.unmount();
-        let played = 0, artist = 0, album = 0;
-        const track = { id: 'ncm:1', title: 'Song', artist: 'Artist', album: 'Album', duration: 180, cover: null };
-        const list = Vue.createApp(fixture.DetailStage, { kind: 'playlist', title: 'Playlist', trackCountLabel: '1', tracks: [track], isSelected: () => false, isTrackLiked: () => false, isLiking: () => false, formatTime: () => '3:00', onTrackClick: () => played++, onPlayTrack: () => played++, onOpenArtist: () => artist++, onOpenAlbum: () => album++ });
+        let played = 0, artist = 0, album = 0, selectedArtist = null;
+        const track = { id: 'ncm:1', title: 'Song', artist: 'Artist / Guest', artists: [{id:'artist-1', name:'Artist'}, {id:'artist-2', name:'Guest'}], album: 'Album', duration: 180, cover: null };
+        const list = Vue.createApp(fixture.DetailStage, { kind: 'playlist', title: 'Playlist', trackCountLabel: '1', tracks: [track], isSelected: () => false, isTrackLiked: () => false, isLiking: () => false, formatTime: () => '3:00', onTrackClick: () => played++, onPlayTrack: () => played++, onOpenArtist: (row, selected) => { check(row.id === track.id, 'artist link retains the original track'); artist++; selectedArtist = selected; }, onOpenAlbum: () => album++ });
         list.mount('#list'); await tick();
         document.querySelector('.row-title').click(); await tick();
         check(document.querySelector('dialog[open]'), 'song title opens information');
@@ -107,6 +110,9 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
         document.querySelector('.stage-row .col-album button').click();
         document.querySelector('.row-artist').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
         check(artist === 1 && album === 1 && played === 0, 'metadata links must not play');
+        check(selectedArtist.id === 'artist-1', 'first artist keeps its provider ID');
+        document.querySelectorAll('.row-artist')[1].click();
+        check(artist === 2 && selectedArtist.id === 'artist-2' && played === 0, 'each artist navigates independently without playback');
         document.querySelector('.row-play-btn').click(); check(played === 1, 'play button still plays');
         list.unmount();
         const biliState = Vue.reactive({ liked: true, loading: false });

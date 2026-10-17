@@ -8,6 +8,7 @@ import type {
   PlayMode
 } from './audioEngineTypes.ts'
 import type { MiniPlayerSettings } from './miniPlayer.ts'
+import type { ShortcutEnabledSettings } from './shortcutPreferences.ts'
 import type { DspScene } from './dspGraph.ts'
 import type { SleepTimerSettings } from './sleepTimer.ts'
 import type { ThemeSelection, ThemeWindowInheritance } from './theme.ts'
@@ -20,6 +21,7 @@ import type { LanguagePreference } from './i18n/locale.ts'
 import type { MotionPreference } from './motion.ts'
 import type { NavigationPagePreferences } from './navigationPages.ts'
 import type { AppFontRendering } from './appFont.ts'
+import type { StartupExperience } from './pluginExperience.ts'
 
 export type {
   DesktopLyricsPalette,
@@ -149,6 +151,7 @@ export interface AppSettings {
   launchAtLogin: boolean
   hardwareAcceleration: boolean
   globalShortcuts: boolean
+  shortcutEnabled: ShortcutEnabledSettings
   globalShortcutBindings: GlobalShortcutSettings
   minimizeToTray: boolean
   musicCachePath: string
@@ -168,6 +171,7 @@ export interface AppSettings {
   /** Unlocks developer-only affordances, e.g. installing an unpacked plugin directory. */
   developerMode: boolean
   startupHomePage: StartupHomePage
+  startupExperience: StartupExperience | null
   navigationPages: NavigationPagePreferences
   trackActivationMode: TrackActivationMode
   /** UI and error-message language. `system` follows the OS locale. */

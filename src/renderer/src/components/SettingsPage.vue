@@ -523,6 +523,11 @@ async function onUpdateShortcutBindings(patch: Partial<GlobalShortcutSettings>):
   await refreshShortcutStatuses()
 }
 
+async function onUpdateShortcutEnabled(patch: AppSettings['shortcutEnabled']): Promise<void> {
+  await updateSettings({ shortcutEnabled: { ...settings.value.shortcutEnabled, ...patch } })
+  await refreshShortcutStatuses()
+}
+
 function toggleCacheArtifact(key: keyof MusicCachePolicySettings): void {
   if (key === 'streamingAudio') return
   void runStorageOperation(() =>
@@ -1434,8 +1439,10 @@ onBeforeUnmount(() => {
             :global-shortcuts="settings.globalShortcuts"
             :shortcut-statuses="shortcutStatuses"
             :shortcut-bindings="settings.globalShortcutBindings"
+            :shortcut-enabled="settings.shortcutEnabled"
             @update:global-shortcuts="toggleGlobalShortcuts"
             @update:shortcut-bindings="onUpdateShortcutBindings"
+            @update:shortcut-enabled="onUpdateShortcutEnabled"
           />
         </ConnectionsSettingsSection>
         <SystemSettingsSection

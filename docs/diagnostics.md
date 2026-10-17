@@ -40,17 +40,28 @@ log.warn('tags.partial', { succeeded: 4, failed: 1, error })
 
 导出以固定目录中的打开文件及初始长度为快照边界，采用有界排序和流式 ZIP，不将 256 MiB 日志整体放入内存。worker 失效时直接读取已保存文件，并标记未取得写入确认。包中 `timeout`、`failed`、`available: false` 或未知数据年龄都代表缺失证据，不能解释为服务正常。
 
-## 排查 #132
+## 排查流媒体封面
+
+封面链路使用 `media.remote`、`cover.cache` 和 `cover.renderer` 领域事件，直接覆盖独立的 undici 图片请求，不依赖全局 fetch 拦截。`grant.issued` 只表示授权完成，`upstream.response.headers` 只表示收到响应头，`body.complete` 才表示上游正文读取结束；它们都不能代替浏览器成功解码图片的证据。
+
+- 按 `handleUrl.fingerprint` 关联授权、协议请求与前端图片失败；按 `source.fingerprint` 关联原始封面与磁盘缓存。正文、缓存和 CDN 跳转沿用本次协议请求的 `requestId`，不同请求不混用。转成 blob 的播放封面通过 `display.materialized` 的 `displayUrl` 关联浏览器资源错误。
+- `upstream.response.headers` 保留每一跳的状态码、Content-Type、声明长度和耗时；`upstream.redirect` 保留脱敏后的跳转目标。`request.failed.reason` 区分授权、Range、上游状态、网络、类型及大小校验失败。网络 Error 保留 code/cause；中途断流与取消分别记录 `body.failed`、`body.cancelled`，不误记为下载完成。
+- `cover.cache` 区分禁用、文件不存在、过期、损坏和磁盘读写失败，记录写入字节数及缩图失败。缓存异常仍沿用原有回退行为。
+- `cover.renderer` 记录缺少封面字段、解析/授权失败、图片加载失败、重试拿到相同地址、回退以及重试成功。普通图片加载成功不逐张记录，避免滚动刷屏。`renderer/resource.failed` 补充资源地址指纹，覆盖不经过 CoverImg 的图片。
+
+地址、协议句柄、文件路径统一脱敏；不记录 Cookie、请求头、歌曲标题、图片正文或 data URL 的内嵌内容。现有导出器会自动把这些事件收入 `timeline.jsonl` 和 `logs/`。定位时先看封面事件，不能把歌词接口的 403/404 当作封面请求失败。
+
+## 排查 #132 音频
 
 先定位 `problem.marked` 或 `incident.empty-output`，检查相邻的 `audio.native / health.sample`：
 
-| 证据 | 可能方向 |
-| --- | --- |
-| 回调增长，sourceConsumedFrames 停住，bufferedFrames 为 0，decodeStage 为 reading | 解码或读取断供 |
-| stopRequested 为 true，decode_stop_requested / stream_retired 事件存在 | 内部停止或流退役 |
-| 缓冲充足，emptyOutputCount/zeroFilledFrames 增长 | 渲染取样或空输出分支 |
-| 消费持续增长，clockHeartbeat 停住或 clockAgeMs 增长 | 控制线程或状态更新阻塞 |
-| available 为 false，unavailableReason 为 pipeline-lock-busy | 控制锁忙，不能推断解码状态 |
+| 证据                                                                             | 可能方向                   |
+| -------------------------------------------------------------------------------- | -------------------------- |
+| 回调增长，sourceConsumedFrames 停住，bufferedFrames 为 0，decodeStage 为 reading | 解码或读取断供             |
+| stopRequested 为 true，decode_stop_requested / stream_retired 事件存在           | 内部停止或流退役           |
+| 缓冲充足，emptyOutputCount/zeroFilledFrames 增长                                 | 渲染取样或空输出分支       |
+| 消费持续增长，clockHeartbeat 停住或 clockAgeMs 增长                              | 控制线程或状态更新阻塞     |
+| available 为 false，unavailableReason 为 pipeline-lock-busy                      | 控制锁忙，不能推断解码状态 |
 
 使用 streamToken、preloadStreamToken、服务代次和 queue/stream 事件核对流是否切换。连续三个有效间隔出现“playing + callbacks 增长 + 源帧未消费”会标记异常；暂停、EOF、停止、流变化和不可用样本会重置检测。检测只取证，不执行恢复操作。FFmpeg 打开、探测、读取和跳转失败记录错误码；读取中断记录 timeoutOrCancel。
 

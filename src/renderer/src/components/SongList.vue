@@ -597,6 +597,14 @@ const showTable = computed(() => {
 const isCollectionGrid = computed(
   () => showGrid.value && (props.category === 'artists' || props.category === 'albums')
 )
+
+const currentTrackIndex = computed(() => {
+  const trackId = currentTrack.value?.id
+  if (!trackId || !showTable.value) return -1
+  return displayTracks.value.findIndex((track) => track.id === trackId)
+})
+
+const canLocateCurrentTrack = computed(() => currentTrackIndex.value >= 0)
 const collectionViewPreferences = new LibraryCollectionViewPreferences()
 const collectionViewState = ref<LibraryCollectionViewState>(
   collectionViewPreferences.read(props.category)
@@ -986,6 +994,7 @@ const {
   onScroll,
   updateViewportHeight,
   restoreScrollAndMeasure,
+  scrollToTrack,
   scrollTop,
   viewportHeight
 } = useSongListVirtualScroll({
@@ -1501,6 +1510,12 @@ function finishViewSwitchAndRestoreScroll(): void {
   finishViewSwitch()
   restoreScrollAndMeasure()
 }
+
+function locateCurrentTrack(): void {
+  const index = currentTrackIndex.value
+  if (index < 0) return
+  scrollToTrack(index)
+}
 </script>
 
 <template>
@@ -1513,7 +1528,9 @@ function finishViewSwitchAndRestoreScroll(): void {
       'playlist-library': category === 'playlists' && showGrid
     }"
     :style="{ height: '100vh' }"
+    :data-te-locate-current="canLocateCurrentTrack ? 'true' : undefined"
     @scroll="onSongListScroll"
+    @te-locate-current="locateCurrentTrack"
   >
     <Teleport to="body">
       <NativeDialogTransition>
@@ -2390,6 +2407,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     'track-selected': isSelected(track.id),
                     'playlist-draggable': isPlaylistDetail
                   }"
+                  :aria-current="currentTrack?.id === track.id ? 'true' : undefined"
                   :style="{ height: rowHeight - 4 + 'px', display: 'flex' }"
                   :draggable="isPlaylistDetail"
                   @click="onRowClick(track, Number(index), $event)"

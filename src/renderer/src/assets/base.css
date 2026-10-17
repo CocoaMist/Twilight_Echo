@@ -412,10 +412,11 @@
    styles above remain for in-flow controls (onboarding stepper, mini player,
    login error recovery). */
 
-/* Shared back-to-top control. scrollToTopButton.ts keeps exactly one of these in
-   the document and anchors it to whichever container is scrolled, so `left`/`top`
+/* Shared floating scroll controls. scrollToTopButton.ts keeps one stack in the
+   document and anchors it to whichever container is scrolled, so `left`/`top`
    are written from script while everything else stays theme-owned here. */
-.te-scroll-top {
+.te-scroll-top,
+.te-scroll-locate {
   position: fixed;
   top: 0;
   left: 0;
@@ -445,19 +446,22 @@
     border-color var(--te-motion-hover) ease;
 }
 
-.te-scroll-top[data-te-scroll-top-visible='true'] {
+.te-scroll-top[data-te-scroll-top-visible='true'],
+.te-scroll-locate[data-te-scroll-locate-visible='true'] {
   opacity: 1;
   visibility: visible;
   transform: none;
   pointer-events: auto;
 }
 
-.te-scroll-top:hover {
+.te-scroll-top:hover,
+.te-scroll-locate:hover {
   border-color: color-mix(in srgb, var(--te-scroll-top-color) 26%, var(--te-scroll-top-border));
   background: var(--te-scroll-top-bg-hover);
 }
 
-.te-scroll-top:focus-visible {
+.te-scroll-top:focus-visible,
+.te-scroll-locate:focus-visible {
   outline: 2px solid var(--te-scroll-top-color);
   outline-offset: 2px;
 }
