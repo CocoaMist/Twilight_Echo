@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, protocol, net } from 'electron'
+import { installExperienceProtocol } from '../plugins/experienceProtocol.ts'
 import { applyPendingPersonalRestore } from '../persistence/personalBackup.ts'
 import { readAppSettings } from '../core/settings'
 import { join, extname } from 'path'
@@ -146,6 +147,7 @@ export function startApp(): void {
       return
     }
     protocol.registerSchemesAsPrivileged([
+      { scheme: 'plugin-ui', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
       {
         scheme: 'twilight-audio',
         privileges: {
@@ -223,6 +225,7 @@ export function startApp(): void {
         )
       }
       installElectronSecurity()
+      installExperienceProtocol()
       await initializeLocalPathGrants(runtime.launchSettings)
 
       // Register cover:// protocol — Chromium reads cached image assets directly from disk,

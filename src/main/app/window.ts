@@ -23,6 +23,7 @@ import { isSafeExternalUrl } from '../security/externalUrl.ts'
 import type { RendererClosePersistenceOutcome } from '../../shared/closePersistence.ts'
 import { readWindowState, restoreWindowSize, saveWindowState } from './windowState.ts'
 import { installWindowChromePublisher } from './windowChrome.ts'
+import { installWindowCloseShortcut } from './windowShortcuts.ts'
 
 const PLAYBACK_SESSION_SAVE_TIMEOUT_MS = 1800
 const closePersistenceAttemptGate = new ClosePersistenceAttemptGate()
@@ -185,6 +186,10 @@ export function createWindow(): void {
 
   syncWindowFrameAppearance(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
   installWindowChromePublisher(runtime.mainWindow)
+  installWindowCloseShortcut(
+    runtime.mainWindow,
+    () => runtime.appSettings.shortcutEnabled.closeWindow !== false
+  )
   runtime.mainWindow.on('ready-to-show', () => {
     if (windowState?.maximized) runtime.mainWindow?.maximize()
     runtime.mainWindow?.show()

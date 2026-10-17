@@ -1,4 +1,5 @@
 import { normalizeNavigationPagePreferences } from '../../shared/navigationPages.ts'
+import { normalizeShortcutEnabled } from '../../shared/shortcutPreferences.ts'
 import { writeDiagnostic } from '../diagnostics/logger.ts'
 import {
   normalizeAutoMixMode,
@@ -110,6 +111,8 @@ import {
   type SettingsFileLoadIssue
 } from '../persistence/settingsFile.ts'
 
+import { normalizeStartupExperience, startupExperienceKey } from '../../shared/pluginExperience.ts'
+
 let appSettingsLoadIssue: SettingsFileLoadIssue | null = null
 
 export const DEFAULT_DESKTOP_LYRICS: DesktopLyricsSettings = DEFAULT_DESKTOP_LYRICS_SETTINGS
@@ -137,6 +140,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   launchAtLogin: false,
   hardwareAcceleration: true,
   globalShortcuts: false,
+  shortcutEnabled: {},
   globalShortcutBindings: { ...DEFAULT_GLOBAL_SHORTCUT_BINDINGS },
   minimizeToTray: false,
   musicCachePath: '',
@@ -149,6 +153,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   onboardingCompleted: false,
   developerMode: false,
   startupHomePage: 'local',
+  startupExperience: null,
   navigationPages: normalizeNavigationPagePreferences(undefined),
   trackActivationMode: 'singleClick',
   language: DEFAULT_LANGUAGE_PREFERENCE,
@@ -677,6 +682,7 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     launchAtLogin,
     hardwareAcceleration: settings.hardwareAcceleration !== false,
     globalShortcuts: settings.globalShortcuts === true,
+    shortcutEnabled: normalizeShortcutEnabled(settings.shortcutEnabled),
     globalShortcutBindings: normalizeGlobalShortcutBindings(settings.globalShortcutBindings),
     minimizeToTray,
     musicCachePath: cachePath,
@@ -689,6 +695,7 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     onboardingCompleted: settings.onboardingCompleted === true,
     developerMode: settings.developerMode === true,
     startupHomePage: normalizeStartupHomePage(settings.startupHomePage),
+    startupExperience: normalizeStartupExperience(settings.startupExperience),
     navigationPages: normalizeNavigationPagePreferences(settings.navigationPages),
     trackActivationMode: normalizeTrackActivationMode(settings.trackActivationMode),
     language: normalizeLanguagePreference(settings.language),
@@ -822,6 +829,11 @@ export function consumeAppSettingsLoadIssue(): SettingsFileLoadIssue | null {
 
 export function getRestartReasons(settings: AppSettings, launch: AppSettings): string[] {
   const reasons: string[] = []
+  if (
+    startupExperienceKey(settings.startupExperience) !== startupExperienceKey(launch.startupExperience)
+  ) {
+    reasons.push('完整界面')
+  }
   if (settings.hardwareAcceleration !== launch.hardwareAcceleration) {
     reasons.push('GPU 加速')
   }

@@ -3,6 +3,7 @@ import { DEFAULT_DOWNLOAD_PREFERENCES } from '../../../shared/downloadPreference
 import { computed, ref } from 'vue'
 import { normalizeAppBackgroundSettings } from '../../../shared/appAppearance.ts'
 import { normalizeAppFontRendering } from '../../../shared/appFont.ts'
+import { normalizeStartupExperience } from '../../../shared/pluginExperience.ts'
 import {
   DEFAULT_MINI_PLAYER_SETTINGS,
   cloneMiniPlayerSettings
@@ -108,6 +109,7 @@ const fallbackSettings: AppSettings = {
   launchAtLogin: false,
   hardwareAcceleration: true,
   globalShortcuts: false,
+  shortcutEnabled: {},
   globalShortcutBindings: {
     previous: 'CommandOrControl+Alt+Left',
     next: 'CommandOrControl+Alt+Right',
@@ -132,6 +134,7 @@ const fallbackSettings: AppSettings = {
   onboardingCompleted: false,
   developerMode: false,
   startupHomePage: 'local',
+  startupExperience: null,
   navigationPages: normalizeNavigationPagePreferences(undefined),
   trackActivationMode: 'singleClick',
   language: 'system',
@@ -469,7 +472,8 @@ function applySnapshot(snapshot: SettingsSnapshot): void {
         }
       }
     },
-    liquidGlass: normalizeLiquidGlass(incoming.liquidGlass)
+    liquidGlass: normalizeLiquidGlass(incoming.liquidGlass),
+    startupExperience: normalizeStartupExperience(incoming.startupExperience)
   }
   defaults.value = { ...snapshot.defaults }
   paths.value = { ...snapshot.paths }
