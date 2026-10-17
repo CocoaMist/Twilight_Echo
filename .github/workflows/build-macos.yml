@@ -20,8 +20,10 @@ jobs:
       matrix:
         include:
           - arch: x64
+            cmake_arch: x86_64
             runner: macos-15-intel
           - arch: arm64
+            cmake_arch: arm64
             runner: macos-15
 
     steps:
@@ -50,7 +52,7 @@ jobs:
         run: |
           cmake -S audio-engine -B audio-engine/build/default \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}" \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.cmake_arch }}" \
             -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
             -DTAE_BUILD_NAPI=ON \
             -DTAE_BUILD_TESTS=OFF
