@@ -63,6 +63,7 @@ class AfterglowModeService {
   private desktopLyricsWasVisible = false
   private resolveAdopt: (() => void) | null = null
   private adoptPromise: Promise<void> | null = null
+  private adoptCompleted = false
   /** Queue snapshot the renderer handed over just before it unloaded. */
   private rendererSnapshot: AfterglowRendererSnapshot | null = null
   /** True when the native queue is only a current+next window (online queues). */
@@ -523,11 +524,18 @@ class AfterglowModeService {
       }
       return this.getStatus()
     }
+    if (this.phase === 'entering') {
+      // Entry unloads the UI on a timer. Wait for it to settle so restore never
+      // races the teardown and creates a second main window.
+      await this.entryCompletion
+      if (!this.isActive()) return this.getStatus()
+    }
     if (this.phase === 'restoring') return this.restoreCompletion ?? this.getStatus()
 
     ++this.generation
     this.phase = 'restoring'
     this.error = null
+    this.adoptCompleted = false
     this.stopQueueCore()
     this.unbindWindowedAutoRestore()
     if (this.uiDestroyTimer) {
@@ -577,6 +585,7 @@ class AfterglowModeService {
       window = createWindow({ afterglowRestore: true })
       const ready = await this.waitForWindowReady(window)
       if (!ready || window.isDestroyed()) {
+        await this.destroyRestoreWindow(window)
         return finish(this.failWindowRestore('afterglow_restore_window_unavailable'))
       }
       window.show()
@@ -602,9 +611,27 @@ class AfterglowModeService {
       runtime.refreshTrayMenu?.(true)
       return finish(this.getStatus())
     } catch (error) {
+      // Destroy before rebinding SMTC/taskbar: the closed handler would
+      // otherwise tear down the anchor-bound session that failWindowRestore
+      // is about to recreate.
+      await this.destroyRestoreWindow(window)
       const status = this.failWindowRestore(error instanceof Error ? error.message : String(error))
-      if (window && !window.isDestroyed()) window.destroy()
       return finish(status)
+    }
+  }
+
+  /**
+   * Removes a main window that failed to restore without letting its `closed`
+   * handler tear down the tray/SMTC surfaces that keep Afterglow controllable.
+   */
+  private async destroyRestoreWindow(window: BrowserWindow | null): Promise<void> {
+    if (!window || window.isDestroyed()) return
+    try {
+      const { setMainWindowAfterglowUnloading } = await import('./window.ts')
+      setMainWindowAfterglowUnloading(true)
+      window.destroy()
+    } catch (error) {
+      console.warn('[afterglow] failed to clean up restore window:', error)
     }
   }
 
@@ -645,7 +672,7 @@ class AfterglowModeService {
    * the service stuck in `restoring` forever.
    */
   private waitForRendererAdopt(window: BrowserWindow): Promise<void> {
-    if (window.isDestroyed()) return Promise.resolve()
+    if (window.isDestroyed() || this.adoptCompleted) return Promise.resolve()
     const promise = new Promise<void>((resolve) => {
       this.resolveAdopt = resolve
     })
@@ -674,6 +701,7 @@ class AfterglowModeService {
   /** Called by the recreated renderer once it has adopted the live state. */
   notifyRendererAdoptComplete(): void {
     if (this.phase !== 'restoring') return
+    this.adoptCompleted = true
     this.resolveAdopt?.()
     this.resolveAdopt = null
     this.adoptPromise = null
@@ -774,9 +802,12 @@ class AfterglowModeService {
    */
   reassertShortcuts(): void {
     if (!this.isActive()) return
-    if (!this.restoreAccelerator || !this.ownedShortcuts.has(this.restoreAccelerator)) {
-      this.registerRestoreShortcut()
-    }
+    // `applyRuntimeSettings` calls globalShortcut.unregisterAll(), so the set is
+    // stale even though it still lists our accelerators. Clear it to force a
+    // fresh registration of the restore escape hatch.
+    this.ownedShortcuts.clear()
+    this.restoreAccelerator = null
+    this.registerRestoreShortcut()
     this.registerFallbackMediaKeys()
   }
 
@@ -792,6 +823,7 @@ class AfterglowModeService {
     this.resolveAdopt?.()
     this.resolveAdopt = null
     this.adoptPromise = null
+    this.adoptCompleted = false
     this.unregisterOwnedShortcuts()
     destroyAfterglowAnchorWindow()
     stopAfterglowPresentation()

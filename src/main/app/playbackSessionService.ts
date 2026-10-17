@@ -36,6 +36,12 @@ class PlaybackSessionService {
   private lastPositionWriteAt = 0
   private writeTail: Promise<void> = Promise.resolve()
   /**
+   * The queue is written once when a renderer snapshot is adopted. Later track
+   * and position writes omit it so a 32 MB queue file is not rewritten on every
+   * persistence tick.
+   */
+  private queueDirty = false
+  /**
    * True when the session exists only for this Afterglow run. Users with
    * playback-resume disabled must not get a resume record written on their behalf.
    */
@@ -51,6 +57,7 @@ class PlaybackSessionService {
     const { storage } = getPlaybackSessionStoreBundle()
     const envelope = await storage.load()
     this.memoryOnly = false
+    this.queueDirty = false
     if (!envelope?.data) {
       this.cached = null
       return null
@@ -83,6 +90,7 @@ class PlaybackSessionService {
     }
     if (runtime.appSettings.playbackResumeMode === 'off') {
       this.memoryOnly = true
+      this.queueDirty = false
       this.cached = { session: nextSession, revision: 0 }
       return
     }
@@ -90,6 +98,7 @@ class PlaybackSessionService {
       const { storage } = getPlaybackSessionStoreBundle()
       const envelope = await storage.load()
       this.memoryOnly = false
+      this.queueDirty = true
       this.cached = {
         session: {
           ...(envelope?.data ?? nextSession),
@@ -116,6 +125,7 @@ class PlaybackSessionService {
   clearRuntimeSnapshot(): void {
     if (!this.memoryOnly) return
     this.memoryOnly = false
+    this.queueDirty = false
     this.cached = null
   }
 
@@ -168,6 +178,7 @@ class PlaybackSessionService {
       playMode: normalizePersistedPlayMode(status.playMode, cached.session.playMode)
     }
     if (this.memoryOnly) return
+    this.lastPositionWriteAt = now
     if (trackChanged) {
       this.enqueueWrite({ force: true })
       return
@@ -199,7 +210,11 @@ class PlaybackSessionService {
     const { storage } = getPlaybackSessionStoreBundle()
     for (let attempt = 0; attempt <= MAX_CAS_RETRIES; attempt += 1) {
       try {
-        const saved = await storage.save(cached.session, cached.revision)
+        const saved = await storage.save(
+          this.queueDirty ? cached.session : { ...cached.session, queue: undefined },
+          cached.revision
+        )
+        this.queueDirty = false
         cached.revision = saved.revision
         return
       } catch (error) {

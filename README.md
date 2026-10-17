@@ -269,7 +269,7 @@ Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA2
 
 打开「设置 → 系统与关于」检查更新，可选择稳定或测试频道，并查看更新说明、下载进度与安装状态。Windows 使用完整安装包升级，下载支持中断恢复，并在安装前校验文件大小和 SHA-256；任务与通知中心也能查看更新进度。后台检查只提示新版本，下载和安装由你决定。
 
-也可以从 [Releases](https://github.com/Px-asen/Twilight_Echo/releases) 手动下载安装包；当前版本的变化见 [v1.3.0 发布说明](./docs/release-notes/1.3.0.md)。
+也可以从 [Releases](https://github.com/Px-asen/Twilight_Echo/releases) 手动下载安装包；当前版本的变化见 [v1.3.1 发布说明](./docs/release-notes/1.3.1.md)。
 
 </details>
 

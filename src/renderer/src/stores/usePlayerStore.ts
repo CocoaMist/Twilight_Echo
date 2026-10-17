@@ -2851,7 +2851,11 @@ function setupAudioEngineListeners(): void {
       }
       // A renderer recreated after Afterglow must not overwrite the running
       // host with the persisted volume/rate; it adopted the live values instead.
-      if (!adoptedAfterglowRestore) {
+      // A later engine-ready event (for example after an audio-service restart)
+      // must resume syncing the persisted settings.
+      if (adoptedAfterglowRestore) {
+        adoptedAfterglowRestore = false
+      } else {
         syncSoftwareVolumeToEngine()
         api.setPlaybackRate(playbackRate.value).catch(() => {})
       }
@@ -3914,6 +3918,9 @@ export function usePlayerStore() {
     const adoptedQueue = toPlaybackQueueSnapshots(snapshotQueue)
     const track = adoptedQueue[index]
     if (!track) return
+    const nativeQueueIndices = Array.isArray(state.nativeQueueIndices)
+      ? state.nativeQueueIndices
+      : null
     queue.value = adoptedQueue
     originalQueue.value = [...adoptedQueue]
     queueIndex.value = index
@@ -3937,14 +3944,15 @@ export function usePlayerStore() {
     autoAdvanceInFlight = false
     advancingFromEndedTrackId = ''
     nativePlaybackActive = true
-    nativeQueueDelegated = true
+    // A windowed adoption (current+next online queue) still lets the native
+    // engine advance inside the loaded window, but the renderer must keep
+    // handling queue-end so playback does not stop silently at the window tail.
+    nativeQueueDelegated = !nativeQueueIndices || nativeQueueIndices.length === adoptedQueue.length
     adoptedAfterglowRestore = true
     nativeQueueLoader.adopt(adoptedQueue, {
       queueIndex: index,
       queueToken: state.queueToken,
-      ...(Array.isArray(state.nativeQueueIndices)
-        ? { nativeQueueIndices: state.nativeQueueIndices }
-        : {})
+      ...(nativeQueueIndices ? { nativeQueueIndices } : {})
     })
     void lyricsLoader.ensureCurrentTrackLyricsLoaded(hydrated, true)
     startRendererPlaybackClock()

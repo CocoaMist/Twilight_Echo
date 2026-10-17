@@ -23,6 +23,8 @@ const MAX_REMOTE_COVER_DATA_URL = 250_000
 const SAFE_REMOTE_COVER_DATA_URL = /^data:image\/(?:png|jpe?g|webp);base64,/i
 
 let listener: ((info: PlaybackInfo) => void) | null = null
+let propertyListener: ((event: { name: string; data: unknown }) => void) | null = null
+let lastEngineInfo: PlaybackInfo | null = null
 let lastPresentationKey = ''
 let lastSmtcRefreshAt = 0
 let lastRemotePublishAt = 0
@@ -212,6 +214,7 @@ const publishExternalSurfaces = (
  * state while Afterglow has no renderer to publish `MiniPlayerStateSnapshot`.
  */
 const publishFromEngine = (info: PlaybackInfo): void => {
+  lastEngineInfo = info
   const logicalIndex = engineLogicalIndices?.[info.queueIndex]
   playbackSessionService.applyEngineState(
     {
@@ -260,6 +263,15 @@ export function startAfterglowPresentation(): void {
   }
   listener = onPlaybackInfo
   manager.on('playback-info', onPlaybackInfo)
+  // `playback-info` drops position-only ticks. Progress still has to reach the
+  // tray-adjacent snapshot, the web remote and the persisted session, so fold
+  // the periodic `time-pos` property into the last engine snapshot.
+  const onPropertyChange = (event: { name: string; data: unknown }): void => {
+    if (event.name !== 'time-pos' || typeof event.data !== 'number' || !lastEngineInfo) return
+    publishFromEngine({ ...lastEngineInfo, position: event.data })
+  }
+  propertyListener = onPropertyChange
+  manager.on('property-change', onPropertyChange)
   // Publish the current state immediately; the next engine tick follows in 250ms.
   void manager
     .getPlaybackInfo()
@@ -270,7 +282,10 @@ export function startAfterglowPresentation(): void {
 export function stopAfterglowPresentation(): void {
   const manager = runtime.audioEngineManager
   if (manager && listener) manager.off('playback-info', listener)
+  if (manager && propertyListener) manager.off('property-change', propertyListener)
   listener = null
+  propertyListener = null
+  lastEngineInfo = null
   lastPresentationKey = ''
   lastSmtcRefreshAt = 0
   lastRemotePublishAt = 0
