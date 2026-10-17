@@ -1080,6 +1080,35 @@ export interface TwilightOverlayApi {
   configure(config?: TwilightOverlayConfigInput): Promise<TwilightOverlayConfig>
 }
 
+/**
+ * Create or extend the user's local playlists.
+ *
+ * The renderer owns the playlist store, so the call is fire-and-forget: it
+ * resolves once the request has been queued in the current application session.
+ * Imports wait for the main renderer's library and playlists to finish loading,
+ * and the host reports how many entries matched with a single combined toast. Entries are
+ * matched by file path, exactly like the built-in `.m3u8` importer, so a plugin
+ * never needs to know local track ids.
+ *
+ * Requests are batched because plugins typically import tens of playlists at
+ * once; an empty playlist is skipped, and one with no matching paths still
+ * creates the (empty) playlist.
+ *
+ * Requires the `library:write` permission. Hosts predating this namespace omit
+ * `twilight.library`, so probe `typeof twilight.library?.importPlaylists`
+ * before calling.
+ */
+export interface TwilightLibraryApi {
+  importPlaylists(request: {
+    playlists: Array<{
+      /** Playlist to create, or append to by name. Maximum 80 normalized characters; longer names reject the request. */
+      name: string
+      /** Absolute audio file paths, in playlist order. */
+      paths: string[]
+    }>
+  }): Promise<void>
+}
+
 export interface TwilightApi {
   events: TwilightEventsApi
   player: TwilightPlayerApi
@@ -1090,6 +1119,8 @@ export interface TwilightApi {
   overlay?: TwilightOverlayApi
   /** Optional host-owned secure QR flow for the Qishui provider. */
   qishuiAuth?: TwilightQishuiAuthApi
+  /** Local playlist import (requires `library:write`). */
+  library?: TwilightLibraryApi
 }
 
 export type Activate = (context: TwilightPluginContext) => void | Promise<void>

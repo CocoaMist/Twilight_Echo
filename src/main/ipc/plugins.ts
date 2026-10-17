@@ -47,6 +47,12 @@ import {
 import { PLUGIN_NOTICE_CHANNEL, type PluginNotice } from '../../shared/pluginNotice.ts'
 import { showTrayPlayerWindow } from '../integrations/trayPlayer.ts'
 import { normalizeExperienceWindowTheme } from '../../shared/experienceWindow.ts'
+import { createPlaylistImportQueue } from '../plugins/playlistImportQueue.ts'
+import {
+  PLUGIN_IMPORT_PLAYLIST_CHANNEL,
+  PLUGIN_TAKE_PLAYLIST_IMPORTS_CHANNEL,
+  type PluginPlaylistImportNotice
+} from '../../shared/pluginPlaylistImport.ts'
 
 const MAX_PLUGIN_ID_LENGTH = 128
 const MAX_PROVIDER_ID_LENGTH = 128
@@ -192,6 +198,27 @@ export function setupPluginIpc(): void {
 
   runtime.pluginManager.on('notice', (notice: PluginNotice) => {
     runtime.mainWindow?.webContents.send(PLUGIN_NOTICE_CHANNEL, notice)
+  })
+
+  // Keep accepted imports even when no renderer listener exists yet. The main
+  // renderer pulls them only after its library and playlist stores have loaded.
+  const playlistImports = createPlaylistImportQueue()
+  runtime.pluginManager.on('importPlaylist', (request: PluginPlaylistImportNotice) => {
+    playlistImports.enqueue(request)
+    const window = runtime.mainWindow
+    if (window && !window.isDestroyed()) {
+      window.webContents.send(PLUGIN_IMPORT_PLAYLIST_CHANNEL)
+    }
+  })
+  ipcMain.handle(PLUGIN_TAKE_PLAYLIST_IMPORTS_CHANNEL, (event) => {
+    assertTrustedIpcSender(event, 'plugin playlist import')
+    if (
+      event.sender !== runtime.mainWindow?.webContents ||
+      event.senderFrame !== event.sender.mainFrame
+    ) {
+      throw new Error('只有主窗口可以接收插件歌单导入')
+    }
+    return playlistImports.take()
   })
 
   ipcMain.handle('plugins:list', async (event) => {

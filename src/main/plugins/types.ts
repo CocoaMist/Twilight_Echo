@@ -428,7 +428,7 @@ export type PluginHostResponse =
   | {
       kind: 'api-call'
       requestId: string
-      namespace: 'player' | 'providers' | 'extensions' | 'internal' | 'auth' | 'overlay'
+      namespace: 'player' | 'providers' | 'extensions' | 'internal' | 'auth' | 'overlay' | 'library'
       method:
         | 'getPlaybackInfo'
         | 'play'
@@ -441,6 +441,7 @@ export type PluginHostResponse =
         | 'registerUi'
         | 'registerTheme'
         | 'notify'
+        | 'importPlaylists'
         | 'ncmRequest'
         | 'ncmOfficialLogin'
         | 'ncmGetCachedSong'

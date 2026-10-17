@@ -540,7 +540,16 @@ async function buildThemeRuntimeState(syncPluginExtensions: boolean): Promise<Th
   }
   const themedVariables = { ...variables }
   applyAppBackgroundVariables(tone, variables)
-  applySettingsAccentColor(tone, variables)
+
+  // 插件明确声明主色时保留插件配色，否则沿用设置中的强调色。
+  const pluginDefinesAccent =
+    selectedPluginTheme?.structured?.variants[tone]?.tokens?.['color.primary.500'] != null ||
+    selectedPluginTheme?.variables?.['--te-primary-500'] != null
+
+  if (!pluginDefinesAccent) {
+    applySettingsAccentColor(tone, variables)
+  }
+
   Object.assign(variables, appFontCssVariables(uiFontFamily))
   Object.assign(variables, appFontRenderingCssVariables(uiFontRendering))
   applyExplicitThemePreferences(selectedProfile, tone, themedVariables, variables)
