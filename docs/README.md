@@ -21,6 +21,7 @@
 - [真实设备音频证据规则](./audio-smoke-evidence.md)
 - [VST3 宿主工具链](./vst3-host-toolchain.md)
 - [AutoMix 运行与验证指南](../audio-engine/automix-native/README.md)
+- [1.3.1 发布说明](./release-notes/1.3.1.md)
 - [1.3.0 发布说明](./release-notes/1.3.0.md)
 - [1.1.0 发布说明](./release-notes/1.1.0.md)
 
@@ -39,6 +40,7 @@
 - [本地库排序与筛选](./local-library-sorting-and-filters.md)
 - [搜索与跨来源歌曲身份](./search-and-library-identity.md)
 - [播放模式](./playback-modes.md)
+- [余晖模式（Afterglow）](./afterglow-mode.md)
 - [播放队列虚拟化](./playback-queue-virtualization.md)
 - [播放列表生命周期](./playlist-lifecycle.md)
 - [歌词管理](./lyrics-management.md)
