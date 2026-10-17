@@ -4,6 +4,7 @@ import { PROVIDER_DOWNLOAD_CHANGED_CHANNEL } from '../../shared/providerDownload
 import { PLUGIN_NOTICE_CHANNEL, type PluginNotice } from '../../shared/pluginNotice.ts'
 import {
   PLUGIN_IMPORT_PLAYLIST_CHANNEL,
+  PLUGIN_TAKE_PLAYLIST_IMPORTS_CHANNEL,
   type PluginPlaylistImportNotice
 } from '../../shared/pluginPlaylistImport.ts'
 import type {
@@ -20,7 +21,7 @@ import type {
 
 const pluginChangedCallbacks = new Set<() => void>()
 const pluginNoticeCallbacks = new Set<(notice: PluginNotice) => void>()
-const pluginImportPlaylistCallbacks = new Set<(request: PluginPlaylistImportNotice) => void>()
+const pluginImportPlaylistCallbacks = new Set<() => void>()
 const providerDownloadChangedCallbacks = new Set<(tasks: ProviderDownloadTaskSnapshot[]) => void>()
 const providerWriteIdempotency = new ProviderWriteIdempotencyCoordinator()
 
@@ -37,14 +38,11 @@ export function bindPluginsIpcEvents(): void {
     }
   })
 
-  ipcRenderer.on(
-    PLUGIN_IMPORT_PLAYLIST_CHANNEL,
-    (_event, request: PluginPlaylistImportNotice) => {
-      for (const cb of pluginImportPlaylistCallbacks) {
-        cb(request)
-      }
+  ipcRenderer.on(PLUGIN_IMPORT_PLAYLIST_CHANNEL, () => {
+    for (const cb of pluginImportPlaylistCallbacks) {
+      cb()
     }
-  )
+  })
 
   ipcRenderer.on(
     PROVIDER_DOWNLOAD_CHANGED_CHANNEL,
@@ -91,7 +89,9 @@ export const pluginsApi = {
       pluginNoticeCallbacks.add(cb)
       return () => pluginNoticeCallbacks.delete(cb)
     },
-    onImportPlaylist: (cb: (request: PluginPlaylistImportNotice) => void): (() => void) => {
+    takePlaylistImports: (): Promise<PluginPlaylistImportNotice[]> =>
+      ipcRenderer.invoke(PLUGIN_TAKE_PLAYLIST_IMPORTS_CHANNEL),
+    onImportPlaylist: (cb: () => void): (() => void) => {
       pluginImportPlaylistCallbacks.add(cb)
       return () => pluginImportPlaylistCallbacks.delete(cb)
     }

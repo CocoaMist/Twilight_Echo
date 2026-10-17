@@ -35,12 +35,33 @@ test('drops unusable paths and empty playlists without failing the batch', () =>
   assert.deepEqual(request.playlists[0].paths, ['a.flac', 'b.flac'])
 })
 
-test('collapses whitespace and caps absurdly long names', () => {
+test('normalizes whitespace and accepts names exactly at the limit', () => {
   const request = normalizePluginPlaylistImportRequest({
-    playlists: [{ name: `  a${'b'.repeat(200)}  `, paths: ['x.flac'] }]
+    playlists: [{ name: `  ${'x'.repeat(MAX_PLUGIN_PLAYLIST_NAME_LENGTH)}  `, paths: ['x.flac'] }]
   })
   assert.equal(request.playlists[0].name.length, MAX_PLUGIN_PLAYLIST_NAME_LENGTH)
-  assert.equal(request.playlists[0].name, `a${'b'.repeat(MAX_PLUGIN_PLAYLIST_NAME_LENGTH - 1)}`)
+  assert.equal(
+    normalizePluginPlaylistImportRequest({
+      playlists: [{ name: '  a   b  ', paths: ['x.flac'] }]
+    }).playlists[0].name,
+    'a b'
+  )
+})
+
+test('rejects long names instead of aliasing an existing playlist or each other', () => {
+  const prefix = 'x'.repeat(MAX_PLUGIN_PLAYLIST_NAME_LENGTH)
+  for (const suffix of ['A', 'B']) {
+    assert.throws(
+      () =>
+        normalizePluginPlaylistImportRequest({
+          playlists: [
+            { name: prefix, paths: ['first.flac'] },
+            { name: prefix + suffix, paths: ['second.flac'] }
+          ]
+        }),
+      /歌单名称不能超过 80 个字符/
+    )
+  }
 })
 
 test('rejects malformed payloads', () => {

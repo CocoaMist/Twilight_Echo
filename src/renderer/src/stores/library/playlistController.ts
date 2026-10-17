@@ -237,39 +237,58 @@ export function createPlaylistController(options: {
     entries: readonly PlaylistImportEntry[],
     warnings: string[] = []
   ): PlaylistImportApplyResult {
-    const normalizedName = normalizePlaylistName(name)
+    return applyPlaylistEntryBatch([{ name, entries, warnings }])[0]
+  }
+
+  function applyPlaylistEntryBatch(
+    batch: readonly {
+      name: string
+      entries: readonly PlaylistImportEntry[]
+      warnings?: string[]
+    }[]
+  ): PlaylistImportApplyResult[] {
+    if (batch.length === 0) return []
+    // Validate all names before mutating, and share the index and transaction
+    // snapshots across the whole batch rather than copying every growing prefix.
+    const normalizedNames = batch.map((item) => normalizePlaylistName(item.name))
     const byPath = new Map<string, Track>()
     for (const track of tracks.value)
       byPath.set(normalizePortableLibraryPath(track.filePath), track)
-    const imported: Track[] = []
-    let unresolvedEntries = 0
-    for (const entry of entries) {
-      const normalizedPath = normalizePortableLibraryPath(entry.path)
-      let matched = byPath.get(normalizedPath)
-      if (!matched && !/^[a-zA-Z]:\\/.test(normalizedPath) && !normalizedPath.startsWith('\\')) {
-        const suffix = `\\${normalizedPath}`
-        const candidates = tracks.value.filter((track) =>
-          normalizePortableLibraryPath(track.filePath).endsWith(suffix)
-        )
-        if (candidates.length === 1) matched = candidates[0]
-      }
-      if (matched) imported.push(matched)
-      else unresolvedEntries++
-    }
     const base = clonePlaylistSnapshot()
-    const existing = findLocalPlaylistByName(normalizedName)
-    const playlist = existing ?? ensurePlaylist(normalizedName)
-    const changed = appendTracksToPlaylist(playlist, imported)
-    if (changed || !existing) {
-      touchPlaylist(playlist)
-      queuePlaylistPersistence(base)
-    }
-    return {
-      playlistId: playlist.id,
-      importedCount: imported.length,
-      unresolvedEntries,
-      warnings
-    }
+    let batchChanged = false
+    const results = batch.map(({ entries, warnings = [] }, index) => {
+      const imported: Track[] = []
+      let unresolvedEntries = 0
+      for (const entry of entries) {
+        const normalizedPath = normalizePortableLibraryPath(entry.path)
+        let matched = byPath.get(normalizedPath)
+        if (!matched && !/^[a-zA-Z]:\\/.test(normalizedPath) && !normalizedPath.startsWith('\\')) {
+          const suffix = `\\${normalizedPath}`
+          const candidates = tracks.value.filter((track) =>
+            normalizePortableLibraryPath(track.filePath).endsWith(suffix)
+          )
+          if (candidates.length === 1) matched = candidates[0]
+        }
+        if (matched) imported.push(matched)
+        else unresolvedEntries++
+      }
+      const normalizedName = normalizedNames[index]
+      const existing = findLocalPlaylistByName(normalizedName)
+      const playlist = existing ?? ensurePlaylist(normalizedName)
+      const changed = appendTracksToPlaylist(playlist, imported)
+      if (changed || !existing) {
+        touchPlaylist(playlist)
+        batchChanged = true
+      }
+      return {
+        playlistId: playlist.id,
+        importedCount: imported.length,
+        unresolvedEntries,
+        warnings
+      }
+    })
+    if (batchChanged) queuePlaylistPersistence(base)
+    return results
   }
 
   /**
@@ -281,6 +300,17 @@ export function createPlaylistController(options: {
     return applyPlaylistEntries(
       name,
       paths.map((path) => ({ path }))
+    )
+  }
+
+  function importPlaylistPathBatch(
+    batch: readonly { name: string; paths: readonly string[] }[]
+  ): PlaylistImportApplyResult[] {
+    return applyPlaylistEntryBatch(
+      batch.map(({ name, paths }) => ({
+        name,
+        entries: paths.map((path) => ({ path }))
+      }))
     )
   }
 
@@ -587,6 +617,7 @@ export function createPlaylistController(options: {
     movePlaylistTracks,
     importPlaylistDocument,
     importPlaylistPaths,
+    importPlaylistPathBatch,
     exportPlaylistDocument: exportPlaylistDocumentForStore,
     repairPlaylistMissingTracks,
     deletePlaylist,

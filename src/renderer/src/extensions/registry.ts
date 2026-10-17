@@ -3,6 +3,7 @@ import type { StructuredPluginTheme } from '../../../shared/theme.ts'
 import type { PluginPlaylistImportNotice } from '../../../shared/pluginPlaylistImport.ts'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import { useMusicStore } from '../stores/useMusicStore'
+import { consumePluginPlaylistImports } from './playlistImports.ts'
 
 export type UiContributionKind =
   | 'sidebarPage'
@@ -69,8 +70,21 @@ function setupExtensionChangeListener(): void {
       dedupeKey: `plugin-notice:${notice.pluginId}:${notice.kind}`
     })
   })
-  window.api.plugins.onImportPlaylist((request) => {
-    importPluginPlaylist(request)
+}
+
+export function startPluginPlaylistImports(ready: Promise<unknown>): Promise<() => void> {
+  return consumePluginPlaylistImports({
+    ready,
+    subscribe: window.api.plugins.onImportPlaylist,
+    take: window.api.plugins.takePlaylistImports,
+    apply: importPluginPlaylist,
+    onError: (error) => {
+      useAppNoticeStore().pushNotice({
+        kind: 'error',
+        message: `插件导入歌单失败：${error instanceof Error ? error.message : String(error)}`,
+        durationMs: 10000
+      })
+    }
   })
 }
 
@@ -85,8 +99,7 @@ function importPluginPlaylist(request: PluginPlaylistImportNotice): void {
     const store = useMusicStore()
     let importedCount = 0
     let unresolvedEntries = 0
-    for (const playlist of request.playlists) {
-      const result = store.importPlaylistPaths(playlist.name, playlist.paths)
+    for (const result of store.importPlaylistPathBatch(request.playlists)) {
       importedCount += result.importedCount
       unresolvedEntries += result.unresolvedEntries
     }

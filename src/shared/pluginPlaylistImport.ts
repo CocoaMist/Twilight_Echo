@@ -14,6 +14,7 @@
  */
 
 export const PLUGIN_IMPORT_PLAYLIST_CHANNEL = 'plugins:importPlaylist'
+export const PLUGIN_TAKE_PLAYLIST_IMPORTS_CHANNEL = 'plugins:takePlaylistImports'
 
 /** Matches the renderer's own per-playlist import ceiling. */
 export const MAX_PLUGIN_PLAYLIST_ENTRIES = 20_000
@@ -42,7 +43,10 @@ export class PluginPlaylistImportError extends Error {}
 function normalizeName(value: unknown): string {
   const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
   if (!name) throw new PluginPlaylistImportError('歌单名称不能为空')
-  return name.slice(0, MAX_PLUGIN_PLAYLIST_NAME_LENGTH)
+  if (name.length > MAX_PLUGIN_PLAYLIST_NAME_LENGTH) {
+    throw new PluginPlaylistImportError('歌单名称不能超过 80 个字符')
+  }
+  return name
 }
 
 function normalizePaths(value: unknown): string[] {
@@ -60,9 +64,7 @@ function normalizePaths(value: unknown): string[] {
 }
 
 /** Validates an untrusted payload coming from a plugin over the RPC bridge. */
-export function normalizePluginPlaylistImportRequest(
-  value: unknown
-): PluginPlaylistImportRequest {
+export function normalizePluginPlaylistImportRequest(value: unknown): PluginPlaylistImportRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new PluginPlaylistImportError('导入请求必须是对象')
   }
@@ -70,9 +72,7 @@ export function normalizePluginPlaylistImportRequest(
   if (!Array.isArray(raw)) throw new PluginPlaylistImportError('playlists 必须是数组')
   if (raw.length === 0) throw new PluginPlaylistImportError('playlists 不能为空')
   if (raw.length > MAX_PLUGIN_PLAYLISTS_PER_REQUEST) {
-    throw new PluginPlaylistImportError(
-      `一次最多导入 ${MAX_PLUGIN_PLAYLISTS_PER_REQUEST} 个歌单`
-    )
+    throw new PluginPlaylistImportError(`一次最多导入 ${MAX_PLUGIN_PLAYLISTS_PER_REQUEST} 个歌单`)
   }
 
   const playlists: PluginPlaylistImportEntry[] = []

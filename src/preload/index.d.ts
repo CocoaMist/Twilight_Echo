@@ -740,7 +740,8 @@ interface WindowAPI {
     ) => Promise<TwilightPluginDescriptor>
     onChanged: (cb: () => void) => () => void
     onNotice: (cb: (notice: PluginNotice) => void) => () => void
-    onImportPlaylist: (cb: (request: PluginPlaylistImportNotice) => void) => () => void
+    takePlaylistImports: () => Promise<PluginPlaylistImportNotice[]>
+    onImportPlaylist: (cb: () => void) => () => void
   }
   providers: {
     list: () => Promise<TwilightMediaProviderRegistration[]>
