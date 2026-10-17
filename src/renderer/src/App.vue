@@ -67,6 +67,7 @@ const QueueWorkspaceDialog = defineAsyncComponent(
 const PluginExtensionPage = defineAsyncComponent(
   () => import('./components/PluginExtensionPage.vue')
 )
+const ExperienceView = defineAsyncComponent(() => import('./components/experience/ExperienceView.vue'))
 const OnboardingWizard = defineAsyncComponent(
   () => import('./components/onboarding/OnboardingWizard.vue')
 )
@@ -79,6 +80,7 @@ import { useSettingsStore } from './stores/useSettingsStore'
 import { useThemeStore, applyActiveTheme, bootstrapThemeRuntime } from './stores/useThemeStore'
 import { getStartupSnapshot } from './app/startupSnapshot'
 import { useExtensionRegistry } from './extensions/registry'
+import { applyStartupExperience } from './app/startupExperience'
 import { syncPluginProviders, useMediaProviders } from './providers'
 import { useAppNavigation } from './app/useAppNavigation'
 import { createNavigationSessionPersistence } from './app/useNavigationSessionPersistence'
@@ -273,7 +275,7 @@ function handleTitleBack(): void {
 }
 
 function onGlobalBackKeydown(event: KeyboardEvent): void {
-  if (isPlaybackSpace(event)) {
+  if (settings.value.shortcutEnabled?.playbackSpace !== false && isPlaybackSpace(event)) {
     event.preventDefault()
     togglePlay()
     return
@@ -786,6 +788,7 @@ onMounted(async () => {
     }
   }
   navigationPersistence.start()
+  const startupNavigation = navigation.session.value
 
   // Restore the session before loading the potentially large music library.
   // The main-process data handlers use synchronous file reads, so issuing the
@@ -816,10 +819,23 @@ onMounted(async () => {
     reportStartupDataError('playlists', error)
   )
   const extensionsPromise = syncExtensions().then(() => {
+    const canEnterExperience =
+      !needsOnboarding && !pendingNavigation &&
+      navigation.session.value === startupNavigation
+    // Full interfaces are restored only by the explicit startup preference, never by page memory.
     navigationPersistence.resolvePluginPages([
-      ...availablePluginPages.value,
+      ...availablePluginPages.value.filter((page) => !page.experience),
       ...localSidebarItems.value
     ])
+    if (
+      canEnterExperience &&
+      applyStartupExperience(navigation, loadedSettings.startupExperience, availablePluginPages.value) === 'unavailable'
+    ) {
+      pushNotice({
+        kind: 'warning',
+        message: '所选完整界面未启用或已移除，已使用 Twilight Echo 默认界面。'
+      })
+    }
   })
   if (loadedSettings.autoCheckLogin) {
     idleLoginCheck = scheduleIdleTask(() => {
@@ -1188,7 +1204,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             "
           />
           <PluginExtensionPage
-            v-else-if="activePluginPage"
+            v-else-if="activePluginPage && !activePluginPage.experience"
             :key="activePageId"
             :page="activePluginPage"
           />
@@ -1258,6 +1274,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
       />
     </Transition>
   </div>
+  <ExperienceView v-if="activePluginPage?.experience" :key="activePluginPage.pluginId + ':' + activePluginPage.experience.version" :experience="activePluginPage.experience" @exit="navigation.closePluginPage()" />
   <CommandPalette
     v-if="commandPalette.isOpen.value"
     :actions="commandPalette.actions.value"
