@@ -22,6 +22,11 @@ import {
   type MiniPlayerWindowSize
 } from '../../shared/miniPlayer'
 import type { MotionPreference } from '../../shared/motion.ts'
+import {
+  normalizeExperienceWindowTheme,
+  type ExperienceWindowOptions,
+  type ExperienceWindowTheme
+} from '../../shared/experienceWindow.ts'
 import { runtime } from '../core/runtime'
 import { createSettingsSnapshot, writeAppSettings } from '../core/settings'
 import { importBackgroundImage } from '../library/coverCache'
@@ -46,6 +51,7 @@ const MINI_PLAYER_BOUNDS_SAVE_DELAY_MS = 350
 let boundsSaveTimer: NodeJS.Timeout | null = null
 let programmedBounds: Electron.Rectangle | null = null
 let dragSize: MiniPlayerWindowSize | null = null
+let miniPlayerExperienceTheme: ExperienceWindowTheme = 'default'
 
 function getMiniPlayerIconPath(): string | undefined {
   const candidates =
@@ -219,6 +225,12 @@ function sendMiniPlayerMotionPreference(preference = runtime.appSettings.motionP
   win.webContents.send('miniPlayer:motionPreference', preference)
 }
 
+function sendMiniPlayerExperienceTheme(): void {
+  const win = runtime.miniPlayerWindow
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
+  win.webContents.send('experience:windowTheme', miniPlayerExperienceTheme)
+}
+
 export function applyMiniPlayerSettingsFromApp(settings: MiniPlayerSettings): void {
   applyMiniPlayerWindowSettings(settings)
   sendMiniPlayerSettings(settings)
@@ -235,6 +247,7 @@ function enterMiniPlayerMode(win: BrowserWindow): void {
   runtime.mainWindow?.hide()
   sendMiniPlayerSettings()
   sendMiniPlayerMotionPreference()
+  sendMiniPlayerExperienceTheme()
   sendMiniPlayerState(runtime.latestMiniPlayerState ?? { ...EMPTY_MINI_PLAYER_STATE })
 }
 
@@ -321,6 +334,7 @@ function createMiniPlayerWindow(): BrowserWindow {
     dragSize = null
     sendMiniPlayerSettings()
     sendMiniPlayerMotionPreference()
+    sendMiniPlayerExperienceTheme()
     sendMiniPlayerState(runtime.latestMiniPlayerState ?? { ...EMPTY_MINI_PLAYER_STATE })
   })
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _url, isMainFrame) => {
@@ -332,17 +346,19 @@ function createMiniPlayerWindow(): BrowserWindow {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     const rendererUrl = new URL(process.env['ELECTRON_RENDERER_URL'])
     rendererUrl.searchParams.set('window', 'mini-player')
+    rendererUrl.searchParams.set('experienceTheme', miniPlayerExperienceTheme)
     void win.loadURL(rendererUrl.toString())
   } else {
     void win.loadFile(join(__dirname, '../renderer/index.html'), {
-      query: { window: 'mini-player' }
+      query: { window: 'mini-player', experienceTheme: miniPlayerExperienceTheme }
     })
   }
 
   return win
 }
 
-export function showMiniPlayer(): MiniPlayerSettings {
+export function showMiniPlayer(options?: ExperienceWindowOptions): MiniPlayerSettings {
+  miniPlayerExperienceTheme = normalizeExperienceWindowTheme(options?.theme)
   const existing = runtime.miniPlayerWindow
   if (existing && !existing.isDestroyed()) {
     if (!existing.webContents.isLoadingMainFrame()) enterMiniPlayerMode(existing)
@@ -436,9 +452,13 @@ function shouldAcceptSenderWindow(
 }
 
 export function setupMiniPlayerIpc(): void {
-  ipcMain.handle('miniPlayer:open', (event) => {
+  ipcMain.handle('miniPlayer:open', (event, rawOptions: unknown) => {
     assertSenderWindow(event, runtime.mainWindow, 'mini player host IPC')
-    return showMiniPlayer()
+    const options =
+      rawOptions && typeof rawOptions === 'object'
+        ? (rawOptions as ExperienceWindowOptions)
+        : {}
+    return showMiniPlayer(options)
   })
 
   ipcMain.on('miniPlayer:publishState', (event, rawState: unknown) => {
