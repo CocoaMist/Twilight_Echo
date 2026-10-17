@@ -13,7 +13,7 @@ Windows 安装包仍由本地 `pnpm run gate:release:win` 产出，见
 | 推送 `v*` 标签 | 自动构建并发布到该标签对应的 Release |
 | `workflow_dispatch` + `release_tag` 输入 | 为已存在的标签重新构建并补齐资源；留空时只构建，不发布 |
 
-标签必须已经存在，发布任务使用 `gh release create --verify-tag`，不会隐式创建标签。
+标签必须已经存在，发布任务会先查询 `git/ref/tags/<tag>`，不会隐式创建标签。
 发布前会校验标签与 `package.json` 的 `version` 一致，例如 `v1.3.1` 对应 `"version": "1.3.1"`。
 
 ```powershell
@@ -40,10 +40,13 @@ gh workflow run "Build Linux packages" -f release_tag=v1.3.1
 2. 发布任务下载本平台的运行产物，生成 `.sha256` 同名文件；
 3. Release 不存在时以 **草稿** 形式创建，标题为 `Twilight Echo <version>`，
    正文优先使用 `docs/release-notes/<version>.md`；
-4. `gh release upload --clobber` 上传安装包与校验文件；
+4. 上传安装包与校验文件；同名资源先删除再上传，重复运行不会留下旧文件；
 5. 校验本平台产物完整（macOS 两个架构的 dmg/zip，Linux 四种格式，且每个安装包都有校验文件）；
-6. 以 `--platform all` 再校验一次：只有 macOS 与 Linux 全部齐备时才执行
-   `gh release edit --draft=false` 正式发布。
+6. 以 `--platform all` 再校验一次：只有 macOS 与 Linux 全部齐备时才把草稿 Release 正式发布。
+
+草稿 Release 无法通过 `/releases/tags/<tag>` 查询（该接口对草稿返回 404），因此
+[`scripts/publish-release-assets.sh`](../scripts/publish-release-assets.sh) 先从 Release 列表里按标签
+找到数字 id，再按 id 上传资源并通过 PATCH `{"draft": false}` 发布。
 
 如果其中一端构建失败或被取消，Release 会停留在草稿状态，不会出现只带半套安装包的公开版本。
 修复后对同一标签重新运行缺失的那个工作流即可补齐资源；先完成的一侧会保留已上传的文件。

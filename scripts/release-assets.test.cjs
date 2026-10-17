@@ -244,21 +244,27 @@ test('packaging workflows publish tag releases only after every platform uploade
       /node scripts\/release-assets\.cjs checksum release-assets/,
       workflowPath
     )
-    assert.match(
-      workflow,
-      /node scripts\/release-assets\.cjs verify --assets release-assets\.json/,
-      workflowPath
-    )
+    assert.match(workflow, /bash scripts\/publish-release-assets\.sh/, workflowPath)
     assert.match(workflow, new RegExp(`--platform ${platform}\\n`), workflowPath)
-    assert.match(workflow, /--platform all; then/, workflowPath)
-    assert.match(
-      workflow,
-      /gh release upload "\$RELEASE_TAG" release-assets\/\* --clobber/,
-      workflowPath
-    )
-    assert.match(workflow, /gh release edit "\$RELEASE_TAG" --draft=false/, workflowPath)
     assert.match(workflow, /contents: write/, workflowPath)
-    // The draft title is user facing and must not claim a different version.
-    assert.match(workflow, /--title "Twilight Echo \$\{RELEASE_TAG#v\}"/, workflowPath)
+    // Release publishing goes through the draft-aware helper: `gh release view`
+    // answers 404 for drafts, so it must not drive the publish path.
+    assert.doesNotMatch(workflow, /gh release (view|create|upload|edit)/, workflowPath)
   }
+})
+
+test('the publish helper resolves drafts by id and publishes only a complete asset set', () => {
+  const script = read('scripts/publish-release-assets.sh')
+  // Drafts are missing from the by-tag endpoint, so the release id comes from
+  // the release list instead.
+  assert.match(script, /releases\?per_page=100/)
+  assert.match(script, /select\(\.tag_name == \$tag\)/)
+  assert.match(script, /git\/ref\/tags\/\$\{tag\}/)
+  assert.match(script, /require\('\.\/package\.json'\)\.version/)
+  // Assets are replaced by name so a re-run cannot leave a stale installer.
+  assert.match(script, /releases\/assets\/\$\{existing_id\}/)
+  assert.match(script, /--data-binary "@\$\{file\}"/)
+  // Publication stays fail-closed behind the shared completeness check.
+  assert.match(script, /release-assets\.cjs verify[\s\S]*--platform all/)
+  assert.match(script, /-d '\{"draft":false\}'/)
 })
