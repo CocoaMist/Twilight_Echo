@@ -2,6 +2,17 @@ name: Build Linux packages
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish the built packages to this release tag (for example v1.3.1). Leave empty to only build artifacts.'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
 
 jobs:
   linux:
@@ -91,3 +102,69 @@ jobs:
             dist/*.rpm
             dist/*.tar.gz
           if-no-files-found: error
+
+  publish:
+    name: Publish Linux packages
+    needs: linux
+    # A tag push publishes automatically; manual runs must name an existing tag.
+    if: needs.linux.result == 'success' && (github.event_name == 'push' || inputs.release_tag)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          name: twilight-echo-linux
+          path: release-assets
+
+      - name: Verify the release tag matches the packaged version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "v${version}" = "$RELEASE_TAG"
+
+      - name: Write SHA-256 companion files
+        run: node scripts/release-assets.cjs checksum release-assets
+
+      - name: Create the draft release when it does not exist yet
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists."
+            exit 0
+          fi
+          notes_file="docs/release-notes/${RELEASE_TAG#v}.md"
+          create_args=(--draft --verify-tag --title "Twilight Echo ${RELEASE_TAG#v}")
+          if [ -f "$notes_file" ]; then
+            # Another platform workflow may create the same release concurrently.
+            gh release create "$RELEASE_TAG" "${create_args[@]}" --notes-file "$notes_file" \
+              || gh release view "$RELEASE_TAG" >/dev/null
+          else
+            gh release create "$RELEASE_TAG" "${create_args[@]}" --generate-notes \
+              || gh release view "$RELEASE_TAG" >/dev/null
+          fi
+
+      - name: Upload Linux packages
+        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber
+
+      - name: Verify the Linux packages are attached
+        run: |
+          gh release view "$RELEASE_TAG" --json assets > release-assets.json
+          node scripts/release-assets.cjs verify --assets release-assets.json \
+            --version "${RELEASE_TAG#v}" --platform linux
+
+      - name: Publish the release once every platform is attached
+        run: |
+          gh release view "$RELEASE_TAG" --json assets > release-assets.json
+          if node scripts/release-assets.cjs verify --assets release-assets.json \
+            --version "${RELEASE_TAG#v}" --platform all; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          else
+            echo "Waiting for the remaining platform packages; the release stays draft."
+          fi
