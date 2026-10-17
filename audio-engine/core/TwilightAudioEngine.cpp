@@ -403,6 +403,8 @@ std::string playbackInfoToJson(const PlaybackInfo& info) {
        << "\"requestedConfigRevision\":" << info.requestedConfigRevision << ","
        << "\"appliedConfigRevision\":" << info.appliedConfigRevision << ","
        << "\"queueIndex\":" << info.queueIndex << ","
+       << "\"queueRevision\":" << info.queueRevision << ","
+       << "\"upcomingQueueIndex\":" << info.upcomingQueueIndex << ","
        << "\"playMode\":\"" << json_utils::escape(info.playMode) << "\","
        << "\"source\":\"" << json_utils::escape(info.source) << "\","
        << "\"codec\":\"" << json_utils::escape(info.codec) << "\","
@@ -1269,6 +1271,146 @@ TAE_Result TwilightAudioEngine::loadQueue(const std::string& queueJson, int star
   return TAE_RESULT_OK;
 }
 
+namespace {
+
+bool sameQueuePosition(
+    const std::optional<QueueItem>& left,
+    const std::optional<QueueItem>& right) {
+  if (left.has_value() != right.has_value()) return false;
+  if (!left) return true;
+  return left->id == right->id && left->source == right->source &&
+         left->cueStartSeconds == right->cueStartSeconds &&
+         left->cueEndSeconds == right->cueEndSeconds;
+}
+
+}  // namespace
+
+TAE_Result TwilightAudioEngine::appendQueueItems(const std::string& itemsJson, int* outFirstIndex) {
+  std::lock_guard transportLock(transportMutex_);
+  const ClockWake wake(*this);
+  std::optional<QueueItem> beforeUpcoming;
+  std::optional<QueueItem> afterUpcoming;
+  int firstIndex = -1;
+  int appendedCount = 0;
+  uint64_t revision = 0;
+  bool transportActive = false;
+  {
+    std::lock_guard lock(mutex_);
+    beforeUpcoming = queue_.upcoming();
+    std::string error;
+    if (!queue_.appendFromJsonBatch(itemsJson, &firstIndex, &error)) {
+      emitError(
+          error.empty() ? "追加播放队列失败" : error,
+          TAE_RESULT_INVALID_ARGUMENT,
+          "queue");
+      return TAE_RESULT_INVALID_ARGUMENT;
+    }
+    appendedCount = static_cast<int>(queue_.size()) - firstIndex;
+    revision = queue_.queueRevision();
+    afterUpcoming = queue_.upcoming();
+    info_.queueIndex = queue_.currentIndex();
+    info_.playMode = queue_.playModeId();
+    info_.hasUpcomingTrack = afterUpcoming.has_value();
+    info_.upcomingTrack = afterUpcoming.value_or(QueueItem{});
+    transportActive = info_.state != PlaybackState::Stopped;
+  }
+  if (outFirstIndex) *outFirstIndex = firstIndex;
+
+  // Appending past an already preloaded next item must not churn the decoder;
+  // only a changed upcoming identity needs a fresh preload.
+  if (appendedCount > 0 && transportActive && pipeline_ &&
+      !sameQueuePosition(beforeUpcoming, afterUpcoming)) {
+    if (afterUpcoming) {
+      pipeline_->refreshQueueReplayGainTags(*afterUpcoming);
+      std::string preloadError;
+      if (!pipeline_->preloadNext(afterUpcoming, &preloadError)) {
+        emitError(
+            preloadError.empty() ? "追加队列后预加载失败" : preloadError,
+            TAE_RESULT_INTERNAL_ERROR,
+            "queue");
+      }
+    }
+  }
+
+  if (appendedCount > 0) {
+    std::ostringstream payload;
+    payload << "{\"firstIndex\":" << firstIndex << ",\"count\":" << appendedCount
+            << ",\"revision\":" << revision << "}";
+    emit("queue-appended", payload.str());
+  }
+  return TAE_RESULT_OK;
+}
+
+TAE_Result TwilightAudioEngine::updateQueueItemSource(int index, const std::string& source) {
+  std::lock_guard transportLock(transportMutex_);
+  const ClockWake wake(*this);
+  std::optional<QueueItem> beforeUpcoming;
+  std::optional<QueueItem> afterUpcoming;
+  uint64_t revision = 0;
+  bool transportActive = false;
+  {
+    std::lock_guard lock(mutex_);
+    if (index < 0 || index >= static_cast<int>(queue_.size())) {
+      emitError("队列索引越界", TAE_RESULT_INVALID_ARGUMENT, "queue");
+      return TAE_RESULT_INVALID_ARGUMENT;
+    }
+    if (index == queue_.currentIndex()) {
+      emitError(
+          "当前播放条目的音频地址不可热更新",
+          TAE_RESULT_INVALID_ARGUMENT,
+          "queue");
+      return TAE_RESULT_INVALID_ARGUMENT;
+    }
+    beforeUpcoming = queue_.upcoming();
+    std::string error;
+    if (!queue_.updateItemSource(index, source, &error)) {
+      emitError(
+          error.empty() ? "更新队列音频地址失败" : error,
+          TAE_RESULT_INVALID_ARGUMENT,
+          "queue");
+      return TAE_RESULT_INVALID_ARGUMENT;
+    }
+    revision = queue_.queueRevision();
+    afterUpcoming = queue_.upcoming();
+    info_.hasUpcomingTrack = afterUpcoming.has_value();
+    info_.upcomingTrack = afterUpcoming.value_or(QueueItem{});
+    transportActive = info_.state != PlaybackState::Stopped;
+  }
+
+  std::string preload = "not_needed";
+  if (pipeline_ && !sameQueuePosition(beforeUpcoming, afterUpcoming) && afterUpcoming) {
+    pipeline_->cancelAutoMix("queue_item_source_changed");
+    if (transportActive) {
+      pipeline_->refreshQueueReplayGainTags(*afterUpcoming);
+      std::string preloadError;
+      preload = pipeline_->preloadNext(afterUpcoming, &preloadError) ? "refreshed" : "failed";
+      if (preload == "failed") {
+        emitError(
+            preloadError.empty() ? "刷新预加载失败" : preloadError,
+            TAE_RESULT_INTERNAL_ERROR,
+            "queue");
+      }
+    }
+  }
+
+  std::ostringstream payload;
+  payload << "{\"index\":" << index << ",\"revision\":" << revision
+          << ",\"preload\":\"" << preload << "\"}";
+  emit("queue-item-source-updated", payload.str());
+  return TAE_RESULT_OK;
+}
+
+std::string TwilightAudioEngine::getQueueStateJson() const {
+  std::lock_guard lock(mutex_);
+  std::ostringstream json;
+  json << "{\"revision\":" << queue_.queueRevision()
+       << ",\"size\":" << queue_.size()
+       << ",\"currentIndex\":" << queue_.currentIndex()
+       << ",\"upcomingIndex\":" << queue_.upcomingIndex().value_or(-1)
+       << ",\"playMode\":\"" << queue_.playModeId() << "\"}";
+  return json.str();
+}
+
 TAE_Result TwilightAudioEngine::next() {
   std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
@@ -1978,6 +2120,8 @@ std::string TwilightAudioEngine::engineCapabilitiesJson() const {
        << ",\"backendCapabilities\":" << backendCapabilities
        << ",\"plugins\":" << pluginCapabilitiesJson()
        << ",\"output\":{\"accessModes\":[\"shared\",\"exclusive\",\"hog\",\"direct\",\"plugin\"]}"
+       << ",\"queueHotUpdate\":{\"version\":1,\"append\":true,\"updateSource\":true,"
+          "\"upcomingIndex\":true}"
        << "}";
   return json.str();
 }
@@ -1999,6 +2143,8 @@ std::string TwilightAudioEngine::getPlaybackInfoJson() const {
   {
     std::lock_guard lock(mutex_);
     snapshot = info_;
+    snapshot.queueRevision = queue_.queueRevision();
+    snapshot.upcomingQueueIndex = queue_.upcomingIndex().value_or(-1);
   }
   if (pipeline_) pipeline_->sampleDecodeHealth(snapshot.outputInfo.diagnostics);
   return playbackInfoToJson(snapshot);
@@ -2366,7 +2512,10 @@ void TwilightAudioEngine::emitError(const std::string& message, TAE_Result code,
 
 void TwilightAudioEngine::publishStateLocked() const {
   if (!stateEventsEnabled_.load(std::memory_order_relaxed)) return;
-  emit("playback-info", playbackInfoToJson(info_));
+  PlaybackInfo snapshot = info_;
+  snapshot.queueRevision = queue_.queueRevision();
+  snapshot.upcomingQueueIndex = queue_.upcomingIndex().value_or(-1);
+  emit("playback-info", playbackInfoToJson(snapshot));
 }
 
 void TwilightAudioEngine::applyClockPipelineStatusLocked(const PipelineStatus& status) {
@@ -2727,6 +2876,7 @@ enum class JsonGetter {
   None,
   AutoMixSelection,
   Queue,
+  QueueState,
   UpcomingTrack,
   DspConfig,
   DspGraphStatus,
@@ -2890,6 +3040,35 @@ TAE_Result TAE_SetOutputBackend(TAE_EngineHandle engine, const char* backend_id)
 TAE_Result TAE_LoadQueue(TAE_EngineHandle engine, const char* queue_json, int start_index) {
   if (!engine) return TAE_RESULT_NOT_INITIALIZED;
   return fromHandle(engine)->loadQueue(queue_json ? queue_json : "[]", start_index);
+}
+
+TAE_Result TAE_AppendQueueItems(
+    TAE_EngineHandle engine,
+    const char* items_json,
+    int* out_first_index) {
+  if (!engine || !items_json) return TAE_RESULT_INVALID_ARGUMENT;
+  return fromHandle(engine)->appendQueueItems(items_json, out_first_index);
+}
+
+TAE_Result TAE_UpdateQueueItemSource(
+    TAE_EngineHandle engine,
+    int index,
+    const char* source) {
+  if (!engine || !source || index < 0) return TAE_RESULT_INVALID_ARGUMENT;
+  return fromHandle(engine)->updateQueueItemSource(index, source);
+}
+
+TAE_Result TAE_GetQueueState(
+    TAE_EngineHandle engine,
+    char* buffer,
+    size_t buffer_size,
+    size_t* required_size) {
+  if (!engine) return TAE_RESULT_NOT_INITIALIZED;
+  return copyJsonWithProbeResult(
+      engine, JsonGetter::QueueState, {}, buffer, buffer_size, required_size, nullptr,
+      [engine](uint64_t*) {
+        return fromHandle(engine)->getQueueStateJson();
+      });
 }
 
 TAE_Result TAE_SelectQueueIndex(TAE_EngineHandle engine, int index) {

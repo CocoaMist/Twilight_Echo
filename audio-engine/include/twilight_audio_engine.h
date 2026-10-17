@@ -65,6 +65,26 @@ TAE_API TAE_Result TAE_SetOutputDevice(TAE_EngineHandle engine, const char* devi
 TAE_API TAE_Result TAE_SetOutputBackend(TAE_EngineHandle engine, const char* backend_id);
 
 TAE_API TAE_Result TAE_LoadQueue(TAE_EngineHandle engine, const char* queue_json, int start_index);
+/**
+ * Appends resolved entries (JSON array) to the native queue without reloading.
+ * out_first_index receives the absolute native index of the first appended item
+ * and may be NULL. Existing indices never move.
+ */
+TAE_API TAE_Result TAE_AppendQueueItems(
+    TAE_EngineHandle engine,
+    const char* items_json,
+    int* out_first_index);
+/** Refreshes the source of a non-current queued item (expiring provider URL). */
+TAE_API TAE_Result TAE_UpdateQueueItemSource(
+    TAE_EngineHandle engine,
+    int index,
+    const char* source);
+/** Queue revision/size/cursor/upcoming index/play-mode snapshot. */
+TAE_API TAE_Result TAE_GetQueueState(
+    TAE_EngineHandle engine,
+    char* buffer,
+    size_t buffer_size,
+    size_t* required_size);
 TAE_API TAE_Result TAE_SelectQueueIndex(TAE_EngineHandle engine, int index);
 TAE_API TAE_Result TAE_Next(TAE_EngineHandle engine);
 TAE_API TAE_Result TAE_Previous(TAE_EngineHandle engine);

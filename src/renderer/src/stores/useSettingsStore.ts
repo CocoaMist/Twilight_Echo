@@ -131,6 +131,7 @@ const fallbackSettings: AppSettings = {
   closeWindowBehavior: 'quit',
   closeToTray: false,
   taskbarThumbarButtonsEnabled: true,
+  afterglowAutoEntry: 'off',
   onboardingCompleted: false,
   developerMode: false,
   startupHomePage: 'local',

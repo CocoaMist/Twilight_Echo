@@ -166,6 +166,12 @@ export interface AppSettings {
   closeToTray: boolean
   /** Windows taskbar thumbnail transport buttons; independent from SMTC metadata. */
   taskbarThumbarButtonsEnabled: boolean
+  /**
+   * Unload the UI renderer while the native engine keeps playing (Afterglow).
+   * `off` keeps every window resident; other values enter automatically when the
+   * main window is minimized and/or hidden to the tray.
+   */
+  afterglowAutoEntry: import('./afterglowMode.ts').AfterglowAutoEntry
   /** First-run welcome wizard has been completed or skipped. */
   onboardingCompleted: boolean
   /** Unlocks developer-only affordances, e.g. installing an unpacked plugin directory. */

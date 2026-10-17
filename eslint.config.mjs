@@ -24,6 +24,7 @@ export default defineConfig(
       '**/.qoder/**',
       '**/audio-engine/build/**',
       '**/audio-engine/out/**',
+      'src/main/plugins/rhine-vendor/**',
       '**/packages/create-twilight-plugin/**/*.cjs'
     ]
   },
