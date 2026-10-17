@@ -183,6 +183,12 @@ test('Linux packaging fails closed when native engine artifacts are missing', ()
   )
 })
 
+test('Linux release builds keep the validated Ubuntu LTS image', () => {
+  const workflow = read('.github/workflows/build-linux.yml')
+  assert.match(workflow, /runs-on: ubuntu-24\.04/)
+  assert.doesNotMatch(workflow, /runs-on: ubuntu-latest/)
+})
+
 test('release packaging writes an SHA-256 companion file for the installer', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'twilight-release-checksum-'))
   try {
