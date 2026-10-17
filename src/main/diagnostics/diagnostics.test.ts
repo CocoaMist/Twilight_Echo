@@ -25,6 +25,11 @@ import {
 import { exportDiagnosticBundle, collectDiagnosticSnapshots } from './bundle.ts'
 import { installNetworkDiagnostics } from './network.ts'
 import type { DiagnosticEvent } from '../../shared/diagnostics.ts'
+import {
+  createRemoteMediaRequestHandler,
+  RemoteMediaGrantService
+} from '../security/remoteMediaGrants.ts'
+import { createRemoteCoverCache } from '../cache/remoteCoverCache.ts'
 
 async function fixture(t: any) {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-logs-test-'))
@@ -399,6 +404,163 @@ test('native and legacy ring events share a canonical export id and missing capa
   const zip = await readZip(result.filePath)
   const timeline = JSON.parse(zip.get('timeline.jsonl')!.toString().trim())
   assert.equal(timeline.requestId, 'native-request')
+})
+
+test('cover diagnostics correlate grants, CDN hops, cache and body completion without leaking URLs', async (t) => {
+  const directory = await fixture(t)
+  const entries: DiagnosticEvent[] = []
+  configureDiagnosticLogger({}, (entry) => entries.push(entry))
+  t.after(() => configureDiagnosticLogger({}, () => {}))
+  const grants = new RemoteMediaGrantService()
+  const source = 'https://private-cover.example/art.jpg?token=do-not-log'
+  const handle = grants.grant(source, 'image')
+  let calls = 0
+  const handler = createRemoteMediaRequestHandler({
+    grants,
+    imageCache: createRemoteCoverCache(() => directory),
+    fetch: async () =>
+      ++calls === 1
+        ? new Response(null, {
+            status: 302,
+            headers: { location: 'https://private-edge.example/art.jpg?signature=hidden' }
+          })
+        : new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/jpeg' } })
+  })
+  const response = await handler(new Request(handle))
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), new Uint8Array([1, 2, 3]))
+  const firstRequest = entries.find((e) => e.event === 'request.start')!.requestId
+  for (const name of [
+    'authorization.complete',
+    'upstream.redirect',
+    'body.complete',
+    'write.complete',
+    'response.ready'
+  ]) {
+    assert.equal(entries.find((e) => e.event === name)!.requestId, firstRequest, name)
+  }
+  const granted = entries.find((e) => e.event === 'grant.issued')!.details as any
+  const authorized = entries.find((e) => e.event === 'authorization.complete')!.details as any
+  assert.deepEqual(granted.handleUrl, authorized.handleUrl)
+  assert.deepEqual(granted.source, authorized.source)
+  assert.equal((entries.find((e) => e.event === 'body.complete')!.details as any).bytes, 3)
+  await (await handler(new Request(handle))).arrayBuffer()
+  assert.equal(calls, 2, 'cache hit must not download again')
+  const hit = entries.find((e) => e.event === 'read.hit')!
+  assert.notEqual(hit.requestId, firstRequest)
+  assert.doesNotMatch(
+    JSON.stringify(entries),
+    /private-cover|private-edge|do-not-log|signature=hidden|img-[a-f0-9]{48}/
+  )
+  // Diagnostic observer failures must not break the media response.
+  configureDiagnosticLogger({}, () => {
+    throw new Error('log sink unavailable')
+  })
+  assert.equal((await handler(new Request(handle))).status, 200)
+})
+
+test('cover diagnostics distinguish HTTP, MIME, authorization, connection and mid-body failures', async (t) => {
+  const entries: DiagnosticEvent[] = []
+  configureDiagnosticLogger({}, (entry) => entries.push(entry))
+  t.after(() => configureDiagnosticLogger({}, () => {}))
+  const grants = new RemoteMediaGrantService()
+  const handle = grants.grant('https://cover.example/art.jpg', 'image')
+  for (const [response, reason, status] of [
+    [new Response('denied', { status: 403 }), 'upstream-status', 502],
+    [new Response('<html>', { headers: { 'content-type': 'text/html' } }), 'content-type', 415],
+    [
+      new Response(null, {
+        headers: { 'content-type': 'image/png', 'content-length': '999999999' }
+      }),
+      'content-length',
+      413
+    ]
+  ] as const) {
+    entries.length = 0
+    const handler = createRemoteMediaRequestHandler({ grants, fetch: async () => response })
+    assert.equal((await handler(new Request(handle))).status, status)
+    assert.equal((entries.find((e) => e.event === 'request.failed')!.details as any).reason, reason)
+    assert.ok(entries.some((e) => e.event === 'upstream.response.headers'))
+    assert.ok(!entries.some((e) => e.event === 'body.complete'))
+  }
+  entries.length = 0
+  const failing = createRemoteMediaRequestHandler({
+    grants,
+    fetch: async () => {
+      throw Object.assign(new Error('connect failed'), { code: 'ECONNRESET' })
+    }
+  })
+  assert.equal((await failing(new Request('twilight-media://image/expired'))).status, 403)
+  assert.equal((entries.at(-1)!.details as any).reason, 'authorization')
+  assert.equal((await failing(new Request(handle))).status, 502)
+  assert.equal((entries.at(-1)!.details as any).error.code, 'ECONNRESET')
+  entries.length = 0
+  const broken = createRemoteMediaRequestHandler({
+    grants,
+    fetch: async () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            controller.error(new Error('body interrupted'))
+          }
+        }),
+        { headers: { 'content-type': 'image/png' } }
+      )
+  })
+  const result = await broken(new Request(handle))
+  await assert.rejects(result.arrayBuffer(), /body interrupted/)
+  assert.equal(entries.filter((e) => e.event === 'body.failed').length, 1)
+  assert.ok(!entries.some((e) => e.event === 'body.complete'))
+  entries.length = 0
+  const stream = createRemoteMediaRequestHandler({
+    grants,
+    fetch: async () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            controller.enqueue(new Uint8Array([1]))
+          }
+        }),
+        { headers: { 'content-type': 'image/png' } }
+      )
+  })
+  await (await stream(new Request(handle))).body!.cancel()
+  assert.ok(entries.some((e) => e.event === 'body.cancelled'))
+  assert.ok(!entries.some((e) => e.event === 'body.complete'))
+  entries.length = 0
+  const pending = createRemoteMediaRequestHandler({
+    grants,
+    fetch: async () =>
+      new Response(new ReadableStream(), { headers: { 'content-type': 'image/png' } })
+  })
+  const pendingResponse = await pending(new Request(handle))
+  const reader = pendingResponse.body!.getReader()
+  const read = reader.read()
+  await reader.cancel()
+  await read
+  assert.equal(entries.filter((e) => e.event === 'body.cancelled').length, 1)
+  assert.ok(!entries.some((e) => e.event === 'body.complete' || e.event === 'body.failed'))
+})
+
+test('cover cache diagnostics distinguish disabled, corrupt and failed writes while retaining fallback behavior', async (t) => {
+  const directory = await fixture(t)
+  const entries: DiagnosticEvent[] = []
+  configureDiagnosticLogger({}, (entry) => entries.push(entry))
+  t.after(() => configureDiagnosticLogger({}, () => {}))
+  const source = 'https://cover.example/private.jpg'
+  const cache = createRemoteCoverCache(() => directory)
+  assert.equal(await createRemoteCoverCache(() => null).read(source), null)
+  assert.equal((entries.at(-1)!.details as any).reason, 'disabled')
+  assert.equal(await cache.read(source), null)
+  assert.equal((entries.at(-1)!.details as any).reason, 'not-found')
+  const file = join(directory, `${createHash('sha256').update(source).digest('hex')}.remote`)
+  await writeFile(file, 'invalid-header')
+  assert.equal(await cache.read(source), null)
+  assert.equal((entries.at(-1)!.details as any).reason, 'invalid-header')
+  const blocker = join(directory, 'not-a-directory')
+  await writeFile(blocker, 'blocked')
+  await createRemoteCoverCache(() => blocker).write(source, 'image/png', new Uint8Array([1]))
+  assert.equal(entries.at(-1)!.event, 'write.failed')
+  assert.doesNotMatch(JSON.stringify(entries), /private\.jpg|not-a-directory/)
 })
 
 test('external sort merges multiple bounded chunks without holding the complete log', async (t) => {

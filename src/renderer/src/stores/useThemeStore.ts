@@ -1,4 +1,5 @@
 import { applyExplicitThemePreferences } from '@renderer/extensions/themeProfilePriority'
+import { imageDataUrlToBlob } from '../utils/imageDataUrl.ts'
 import { backgroundDisplayUrl } from '../../../shared/backgroundDisplay.ts'
 import {
   backgroundCssVariables,
@@ -812,7 +813,7 @@ export async function setThemeAdaptiveMedia(input: {
   let nextObjectUrl = ''
   try {
     if (/^data:image\//i.test(coverUrl)) {
-      const blob = await (await fetch(coverUrl)).blob()
+      const blob = imageDataUrlToBlob(coverUrl)
       nextObjectUrl = URL.createObjectURL(blob)
       nextCoverUrl = nextObjectUrl
     } else if (/^(?:blob:|twilight-media:|cover:|background:)/i.test(coverUrl)) {
