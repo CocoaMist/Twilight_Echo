@@ -96,6 +96,10 @@ import type {
 } from './types'
 import { parseJsonWithNestingLimit } from '../security/jsonSafety.ts'
 import { normalizePluginNoticeInput, type PluginNotice } from '../../shared/pluginNotice.ts'
+import {
+  normalizePluginPlaylistImportRequest,
+  type PluginPlaylistImportNotice
+} from '../../shared/pluginPlaylistImport.ts'
 import type { DynamicIslandConfig } from '../../shared/dynamicIsland.ts'
 
 export interface TwilightPluginManagerOptions {
@@ -1500,6 +1504,18 @@ export class TwilightPluginManager extends EventEmitter {
           ok: true,
           value: this.handleOverlayApiCall(id, message)
         }
+      }
+      if (message.namespace === 'library') {
+        if (message.method !== 'importPlaylists') throw new Error('未知音乐库 API')
+        this.requirePermission(id, 'library:write', 'library.importPlaylists')
+        const request = normalizePluginPlaylistImportRequest(message.args[0])
+        // Forwarded to the renderer, which owns the playlist store and its
+        // revision-guarded persistence; the plugin does not wait for it.
+        this.emit('importPlaylist', {
+          ...request,
+          pluginId: id
+        } satisfies PluginPlaylistImportNotice)
+        return { kind: 'api-result', requestId: message.requestId, ok: true, value: null }
       }
       if (message.namespace !== 'player') throw new Error('未知 API 命名空间')
       const method = message.method

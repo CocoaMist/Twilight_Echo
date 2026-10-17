@@ -78,7 +78,7 @@ import { usePlayerStore } from './stores/usePlayerStore'
 import { useSettingsStore } from './stores/useSettingsStore'
 import { useThemeStore, applyActiveTheme, bootstrapThemeRuntime } from './stores/useThemeStore'
 import { getStartupSnapshot } from './app/startupSnapshot'
-import { useExtensionRegistry } from './extensions/registry'
+import { startPluginPlaylistImports, useExtensionRegistry } from './extensions/registry'
 import { syncPluginProviders, useMediaProviders } from './providers'
 import { useAppNavigation } from './app/useAppNavigation'
 import { createNavigationSessionPersistence } from './app/useNavigationSessionPersistence'
@@ -710,6 +710,7 @@ let removeLibraryChangedListener: (() => void) | null = null
 let removeCoversMissingListener: (() => void) | null = null
 let removeLibraryScanProgressListener: (() => void) | null = null
 let removeLibraryScanStatusListener: (() => void) | null = null
+let removePluginPlaylistImports: (() => void) | null = null
 let quitFlushHandler: (() => void) | null = null
 let pageHideFlushHandler: (() => void) | null = null
 const startupDataErrorScopes = new Set<string>()
@@ -809,12 +810,24 @@ onMounted(async () => {
       playbackSessionPersistence.startAutosaveWatchers()
     })
   // Run independent startup operations in parallel so none blocks the others.
-  const libraryPromise = loadLibrary().catch((error) =>
+  const libraryLoad = loadLibrary()
+  const playlistsLoad = loadPlaylists()
+  const libraryPromise = libraryLoad.catch((error) =>
     reportStartupDataError('music library', error)
   )
-  const playlistsPromise = loadPlaylists().catch((error) =>
+  const playlistsPromise = playlistsLoad.catch((error) =>
     reportStartupDataError('playlists', error)
   )
+  void startPluginPlaylistImports(Promise.all([libraryLoad, playlistsLoad]))
+    .then((unsubscribe) => {
+      removePluginPlaylistImports = unsubscribe
+    })
+    .catch((error) => {
+      console.warn(
+        '[plugins] Playlist imports remain queued because library startup failed:',
+        error
+      )
+    })
   const extensionsPromise = syncExtensions().then(() => {
     navigationPersistence.resolvePluginPages([
       ...availablePluginPages.value,
@@ -946,6 +959,8 @@ onBeforeUnmount(() => {
   removeLibraryScanProgressListener = null
   removeLibraryScanStatusListener?.()
   removeLibraryScanStatusListener = null
+  removePluginPlaylistImports?.()
+  removePluginPlaylistImports = null
   removeCoversMissingListener?.()
   removeCoversMissingListener = null
   if (quitFlushHandler) window.removeEventListener('beforeunload', quitFlushHandler)
