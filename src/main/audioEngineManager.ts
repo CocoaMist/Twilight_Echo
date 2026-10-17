@@ -19,6 +19,7 @@ import type {
   AudioEngineManagerDependencies,
   AudioEnginePlayResult,
   AudioEngineQueueItem,
+  AudioEngineQueueState,
   AudioEngineScheduler,
   AudioEngineServiceNativeBinding,
   AudioOutputId,
@@ -78,6 +79,7 @@ export type {
   AudioEngineManagerDependencies,
   AudioEnginePlayResult,
   AudioEngineQueueItem,
+  AudioEngineQueueState,
   AudioEngineScheduler,
   AudioEngineServiceNativeBinding,
   AudioOutputId,
@@ -127,6 +129,13 @@ export {
   loadNativeBinding,
   rendererFallbackAllowed
 } from './audio/nativeBinding.ts'
+
+export interface QueueHotUpdateCapability {
+  version: number
+  append: boolean
+  updateSource: boolean
+  upcomingIndex: boolean
+}
 
 export class AudioEngineManager extends EventEmitter {
   private native: NativeAudioBinding | null
@@ -1360,6 +1369,105 @@ export class AudioEngineManager extends EventEmitter {
   getQueueToken(): string {
     return this.playback.queueToken
   }
+
+  /**
+   * Read-only copy of the queue currently delegated to the engine. Used by the
+   * Afterglow supervisor to verify that a fully-local queue is resident before
+   * it is safe to unload the renderer.
+   */
+  getQueueSnapshot(): readonly AudioEngineQueueItem[] {
+    return this.playback.queue.slice()
+  }
+
+  /**
+   * Adds already-resolved entries after the current queue. Used while the
+   * renderer is unloaded so online playback can extend its lookahead without
+   * reloading the native queue (which would break the active stream).
+   */
+  async appendQueueItems(items: AudioEngineQueueItem[]): Promise<number> {
+    if (items.length === 0) return this.playback.queue.length
+    return this.playback.appendQueueItems(items)
+  }
+
+  /**
+   * Refreshes an expiring provider URL on a queued item that is not currently
+   * decoding. Rejects the current index: its decoder is already open.
+   */
+  async updateQueueItemSource(index: number, source: string): Promise<boolean> {
+    return this.playback.updateQueueItemSource(index, source)
+  }
+
+  /** Native queue control-plane snapshot, or null on engines without hot update. */
+  async getQueueState(): Promise<AudioEngineQueueState | null> {
+    return this.playback.readQueueState()
+  }
+
+  /**
+   * Capability gate for the Afterglow online core. Older engines return null so
+   * the caller falls back to the window/rebuild mode instead of probing methods.
+   */
+  getQueueHotUpdateCapability(): QueueHotUpdateCapability | null {
+    try {
+      return this.parseQueueHotUpdateCapability(this.native?.GetEngineCapabilities?.())
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Service mode's sync capability accessor is a synthetic subset, so ask the
+   * utility process for the real native JSON before enabling online maintenance.
+   */
+  async getQueueHotUpdateCapabilityAsync(): Promise<QueueHotUpdateCapability | null> {
+    const binding = this.audioServiceBinding
+    const provider = binding?.getEngineCapabilitiesAsync
+    let raw: unknown = null
+    if (binding && provider) {
+      try {
+        raw = await provider.call(binding)
+      } catch {
+        raw = null
+      }
+    } else {
+      raw = this.native?.GetEngineCapabilities?.()
+    }
+    const parsed = raw == null ? null : this.parseQueueHotUpdateCapability(raw)
+    if (parsed) return parsed
+    // Capability JSON can be missing on an otherwise new service. GetQueueState
+    // is only implemented by engines with the hot-update contract, so use it as
+    // a method-level fallback instead of silently disabling the online core.
+    try {
+      const state = await this.playback.readQueueState()
+      if (state) {
+        return { version: 1, append: true, updateSource: true, upcomingIndex: true }
+      }
+    } catch {
+      // ignore: absence of the probe means the feature is unavailable
+    }
+    return null
+  }
+
+  private parseQueueHotUpdateCapability(raw: unknown): QueueHotUpdateCapability | null {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const capability = (parsed as { queueHotUpdate?: unknown } | null)?.queueHotUpdate
+    if (!capability || typeof capability !== 'object') return null
+    const record = capability as Record<string, unknown>
+    if (
+      typeof record.version !== 'number' ||
+      typeof record.append !== 'boolean' ||
+      typeof record.updateSource !== 'boolean' ||
+      typeof record.upcomingIndex !== 'boolean'
+    ) {
+      return null
+    }
+    return {
+      version: record.version,
+      append: record.append,
+      updateSource: record.updateSource,
+      upcomingIndex: record.upcomingIndex
+    }
+  }
+
   setAutoMixCoordinator(coordinator: TwilightAutoMixCoordinator): void {
     this.autoMixCoordinator?.destroy()
     this.off('playback-info', this.observeAutoMix)
@@ -1430,7 +1538,10 @@ export class AudioEngineManager extends EventEmitter {
       playback: this.playbackInfo,
       outputConfig: this.getOutputConfig(),
       effectiveOutputConfig: this.getEffectiveOutputConfig(),
-      dspGraphStatus: this.dsp.lastNativeDspGraphStatus ?? { cached: true, revision: this.dsp.dspGraphRevision },
+      dspGraphStatus: this.dsp.lastNativeDspGraphStatus ?? {
+        cached: true,
+        revision: this.dsp.dspGraphRevision
+      },
       dspSceneState: this.getDspSceneState(),
       nativeError: this.lastNativeError
     }

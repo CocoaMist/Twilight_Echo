@@ -60,6 +60,11 @@ import { installElectronSecurity } from '../security/electronSecurity.ts'
 import { createRemoteMediaRequestHandler } from '../security/remoteMediaGrants.ts'
 import { destroyTelemetry, initializeTelemetry } from '../analytics/index.ts'
 import { createWindow } from './window'
+import {
+  isAfterglowModeActive,
+  restoreAfterglowMode,
+  shutdownAfterglowMode
+} from './AfterglowModeService'
 import { startAppUpdateChecks, stopAppUpdateChecks } from './appUpdateService.ts'
 import {
   consumeAppSettingsLoadIssue,
@@ -147,7 +152,10 @@ export function startApp(): void {
       return
     }
     protocol.registerSchemesAsPrivileged([
-      { scheme: 'plugin-ui', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
+      {
+        scheme: 'plugin-ui',
+        privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
+      },
       {
         scheme: 'twilight-audio',
         privileges: {
@@ -203,6 +211,10 @@ export function startApp(): void {
 
     // Focus-only: no OS protocol client / argv deep links (see AGENTS.md).
     app.on('second-instance', () => {
+      if (isAfterglowModeActive()) {
+        void restoreAfterglowMode()
+        return
+      }
       if (runtime.miniPlayerWindow && !runtime.miniPlayerWindow.isDestroyed()) {
         restoreMainWindowFromMiniPlayer()
         return
@@ -414,6 +426,10 @@ export function startApp(): void {
       }
 
       app.on('activate', function () {
+        if (isAfterglowModeActive()) {
+          void restoreAfterglowMode()
+          return
+        }
         if (runtime.miniPlayerWindow && !runtime.miniPlayerWindow.isDestroyed()) {
           restoreMainWindowFromMiniPlayer()
         } else if (BrowserWindow.getAllWindows().length === 0) {
@@ -423,6 +439,8 @@ export function startApp(): void {
     })
 
     app.on('window-all-closed', () => {
+      // Afterglow deliberately lives without any BrowserWindow.
+      if (isAfterglowModeActive()) return
       if (process.platform !== 'darwin' && !runtime.appSettings.closeToTray) {
         app.quit()
       }
@@ -438,6 +456,7 @@ export function startApp(): void {
     })
 
     app.on('will-quit', () => {
+      shutdownAfterglowMode()
       stopAppUpdateChecks()
       destroyDesktopLyrics()
       destroyDynamicIsland()

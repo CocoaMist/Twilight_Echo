@@ -67,7 +67,9 @@ const QueueWorkspaceDialog = defineAsyncComponent(
 const PluginExtensionPage = defineAsyncComponent(
   () => import('./components/PluginExtensionPage.vue')
 )
-const ExperienceView = defineAsyncComponent(() => import('./components/experience/ExperienceView.vue'))
+const ExperienceView = defineAsyncComponent(
+  () => import('./components/experience/ExperienceView.vue')
+)
 const OnboardingWizard = defineAsyncComponent(
   () => import('./components/onboarding/OnboardingWizard.vue')
 )
@@ -79,6 +81,7 @@ import { usePlayerStore } from './stores/usePlayerStore'
 import { useSettingsStore } from './stores/useSettingsStore'
 import { useThemeStore, applyActiveTheme, bootstrapThemeRuntime } from './stores/useThemeStore'
 import { getStartupSnapshot } from './app/startupSnapshot'
+import { isAfterglowRendererRestore } from '../../shared/afterglowMode.ts'
 import { startPluginPlaylistImports, useExtensionRegistry } from './extensions/registry'
 import { applyStartupExperience } from './app/startupExperience'
 import { syncPluginProviders, useMediaProviders } from './providers'
@@ -86,6 +89,7 @@ import { useAppNavigation } from './app/useAppNavigation'
 import { createNavigationSessionPersistence } from './app/useNavigationSessionPersistence'
 import { useCommandPalette } from '@renderer/app/useCommandPalette.ts'
 import { useBackStack } from './app/useBackStack'
+import { createHistoryCommandRouter } from './app/historyNavigation.ts'
 import { hasDismissLayer } from '@renderer/app/useDismissLayer'
 import { createPlaybackSessionPersistence } from './app/usePlaybackSessionPersistence'
 import { useSideMenuClearance } from './app/useSideMenuClearance'
@@ -215,6 +219,15 @@ backStack.useBackHandler(showPluginPage, hidePluginPage)
 backStack.useBackHandler(showEqualizerPage, closeEqualizerPage)
 backStack.useBackHandler(showDspRackPage, closeDspRackPage)
 backStack.useBackHandler(showLoginPage, closeLoginPage)
+// Mouse side buttons: Windows/Linux deliver them as app commands forwarded by
+// the main process; some builds also dispatch the XBUTTON as a DOM mouseup.
+// Both paths share one router so a single press only moves one step. Back
+// resolves this same layered stack as the title-bar button; forward replays the
+// page trail the user backed out of.
+const routeHistoryCommand = createHistoryCommandRouter({
+  back: () => backStack.goBack(),
+  forward: () => navigation.goForwardPage()
+})
 const toggleMenu = navigation.createToggleMenuHandler()
 const toggleSettingsPage = navigation.createToggleSettingsHandler()
 const togglePluginPage = navigation.createTogglePluginHandler()
@@ -422,6 +435,8 @@ const {
   setPlayMode,
   restorePlaybackSession,
   createPlaybackSession,
+  adoptAfterglowRestore,
+  getNativeQueueIndices,
   rehydrateCurrentTrackFromLibrary,
   queueWorkspace,
   queueSessions,
@@ -708,6 +723,7 @@ watch(
 
 let removePlaybackSessionSaveListener: (() => void) | null = null
 let removeAppNavigationListener: (() => void) | null = null
+let removeHistoryCommandListener: (() => void) | null = null
 let removeLibraryChangedListener: (() => void) | null = null
 let removeCoversMissingListener: (() => void) | null = null
 let removeLibraryScanProgressListener: (() => void) | null = null
@@ -769,6 +785,8 @@ onMounted(async () => {
     applyExternalNavigation(target)
     void window.api.app.consumePendingNavigation()
   })
+  removeHistoryCommandListener = window.api.app.onHistoryCommand(routeHistoryCommand.run)
+  window.addEventListener('mouseup', routeHistoryCommand.handleMouseUp, true)
   const pendingNavigation =
     startupSnapshot?.pendingNavigation ?? (await window.api.app.consumePendingNavigation())
   if (pendingNavigation) applyExternalNavigation(pendingNavigation)
@@ -794,13 +812,71 @@ onMounted(async () => {
   // Restore the session before loading the potentially large music library.
   // The main-process data handlers use synchronous file reads, so issuing the
   // library request first can delay the home page's current-track state.
-  const playbackSessionSetupPromise = playbackSessionPersistence
-    .restoreSavedPlaybackSession(loadedSettings.playbackResumeMode)
+  //
+  // Afterglow restore is different: the native engine kept playing while this
+  // renderer did not exist, so we adopt its live state instead of replaying the
+  // persisted session (which would also reload the native queue).
+  const afterglowRestoreRequested = isAfterglowRendererRestore(window.location.search)
+  const afterglowRestoreState = afterglowRestoreRequested
+    ? await window.api.app.afterglow.getRestoreState().catch(() => null)
+    : null
+  const playbackSessionSetupPromise = (
+    afterglowRestoreState
+      ? (() => {
+          adoptAfterglowRestore(afterglowRestoreState)
+          return playbackSessionPersistence.adoptLivePlaybackSession()
+        })()
+      : playbackSessionPersistence.restoreSavedPlaybackSession(loadedSettings.playbackResumeMode)
+  )
     .catch((error) => {
       reportStartupDataError('playback session', error)
     })
     .finally(() => {
-      removePlaybackSessionSaveListener = window.api.app.onSavePlaybackSession(async () => {
+      removePlaybackSessionSaveListener = window.api.app.onSavePlaybackSession(async (options) => {
+        if (options?.includeQueue) {
+          // Afterglow's handoff is memory-only. Publish the snapshot first so
+          // a failed disk save can never keep the renderer alive; the normal
+          // persistence flush then runs best-effort for resume/close data.
+          const track = currentTrack.value
+          if (!track) throw new Error('当前没有可交接的曲目')
+          // Pinia state is reactive; nested proxies/functions are not
+          // structured-cloneable. IPC rejects them as "An object could not be
+          // cloned", which used to surface as "保存播放状态失败". Hand over a
+          // plain JSON snapshot instead.
+          const toPlainSnapshot = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+          const nativeQueueIndices = getNativeQueueIndices()
+          const published = await window.api.app.afterglow.publishRendererSnapshot({
+            queue: toPlainSnapshot(queue.value),
+            queueIndex: queueIndex.value,
+            track: toPlainSnapshot(track),
+            position: currentTime.value,
+            playMode: playMode.value,
+            volume: volume.value,
+            playbackRate: playbackRate.value,
+            // Online queues are loaded as a current+next window; tell main
+            // which logical index each native entry came from.
+            ...(nativeQueueIndices && nativeQueueIndices.length > 0
+              ? { nativeQueueIndices: [...nativeQueueIndices] }
+              : {})
+          })
+          if (!published) throw new Error('主进程拒绝了播放队列快照')
+          const bestEffort = async (label: string, action: () => Promise<unknown>) => {
+            try {
+              await action()
+            } catch (error) {
+              console.warn(`[afterglow] ${label} failed (non-fatal):`, error)
+            }
+          }
+          await bestEffort('playback session save', () =>
+            playbackSessionPersistence.savePlaybackSessionWithQueue()
+          )
+          await bestEffort('playlist flush', flushPlaylistsForExit)
+          await bestEffort('volume flush', flushSoftwareVolumePersist)
+          await bestEffort('listening stats flush', flushListeningStatsForExit)
+          await bestEffort('queue workspace flush', () => queueWorkspace.flush())
+          navigationPersistence.flush()
+          return
+        }
         navigationPersistence.flush()
         // This callback is awaited by the main-process close coordinator. It
         // closes the 250ms playlist debounce window before renderer teardown.
@@ -811,6 +887,9 @@ onMounted(async () => {
         await queueWorkspace.flush()
       })
       playbackSessionPersistence.startAutosaveWatchers()
+      if (afterglowRestoreRequested) {
+        void window.api.app.afterglow.rendererAdoptComplete().catch(() => {})
+      }
     })
   // Run independent startup operations in parallel so none blocks the others.
   const libraryLoad = loadLibrary()
@@ -833,8 +912,7 @@ onMounted(async () => {
     })
   const extensionsPromise = syncExtensions().then(() => {
     const canEnterExperience =
-      !needsOnboarding && !pendingNavigation &&
-      navigation.session.value === startupNavigation
+      !needsOnboarding && !pendingNavigation && navigation.session.value === startupNavigation
     // Full interfaces are restored only by the explicit startup preference, never by page memory.
     navigationPersistence.resolvePluginPages([
       ...availablePluginPages.value.filter((page) => !page.experience),
@@ -842,7 +920,11 @@ onMounted(async () => {
     ])
     if (
       canEnterExperience &&
-      applyStartupExperience(navigation, loadedSettings.startupExperience, availablePluginPages.value) === 'unavailable'
+      applyStartupExperience(
+        navigation,
+        loadedSettings.startupExperience,
+        availablePluginPages.value
+      ) === 'unavailable'
     ) {
       pushNotice({
         kind: 'warning',
@@ -969,6 +1051,9 @@ onBeforeUnmount(() => {
   removePlaybackSessionSaveListener = null
   removeAppNavigationListener?.()
   removeAppNavigationListener = null
+  removeHistoryCommandListener?.()
+  removeHistoryCommandListener = null
+  window.removeEventListener('mouseup', routeHistoryCommand.handleMouseUp, true)
   removeLibraryChangedListener?.()
   removeLibraryChangedListener = null
   removeLibraryScanProgressListener?.()
@@ -1289,7 +1374,12 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
       />
     </Transition>
   </div>
-  <ExperienceView v-if="activePluginPage?.experience" :key="activePluginPage.pluginId + ':' + activePluginPage.experience.version" :experience="activePluginPage.experience" @exit="navigation.closePluginPage()" />
+  <ExperienceView
+    v-if="activePluginPage?.experience"
+    :key="activePluginPage.pluginId + ':' + activePluginPage.experience.version"
+    :experience="activePluginPage.experience"
+    @exit="navigation.closePluginPage()"
+  />
   <CommandPalette
     v-if="commandPalette.isOpen.value"
     :actions="commandPalette.actions.value"

@@ -21,9 +21,12 @@ import { destroyWindowsSmtc, initializeWindowsSmtc } from '../integrations/windo
 import { ClosePersistenceAttemptGate } from './closePersistence.ts'
 import { isSafeExternalUrl } from '../security/externalUrl.ts'
 import type { RendererClosePersistenceOutcome } from '../../shared/closePersistence.ts'
+import type { PlaybackSessionSaveOptions } from '../../shared/closePersistence.ts'
+import { afterglowRendererRestoreQueryKey } from '../../shared/afterglowMode.ts'
 import { readWindowState, restoreWindowSize, saveWindowState } from './windowState.ts'
 import { installWindowChromePublisher } from './windowChrome.ts'
 import { installWindowCloseShortcut } from './windowShortcuts.ts'
+import { installMouseHistoryNavigation } from './windowHistoryNavigation.ts'
 
 const PLAYBACK_SESSION_SAVE_TIMEOUT_MS = 1800
 const closePersistenceAttemptGate = new ClosePersistenceAttemptGate()
@@ -31,6 +34,15 @@ const pendingPlaybackSessionSaves = new Map<
   string,
   (outcome: RendererClosePersistenceOutcome) => void
 >()
+let afterglowUnloading = false
+
+/**
+ * Marks the next `closed` event as an intentional Afterglow unload so window
+ * teardown does not also tear down the surfaces that keep playback controllable.
+ */
+export function setMainWindowAfterglowUnloading(value: boolean): void {
+  afterglowUnloading = value
+}
 
 export function resolvePlaybackSessionSave(
   requestId: string,
@@ -42,7 +54,9 @@ export function resolvePlaybackSessionSave(
   resolvePending(outcome)
 }
 
-export async function requestRendererPlaybackSessionSave(): Promise<void> {
+export async function requestRendererPlaybackSessionSave(
+  options: PlaybackSessionSaveOptions = {}
+): Promise<void> {
   const win = runtime.mainWindow
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
 
@@ -62,7 +76,7 @@ export async function requestRendererPlaybackSessionSave(): Promise<void> {
       reject(new Error(outcome.error || 'Renderer persistence failed'))
     })
 
-    win.webContents.send('app:save-playback-session', requestId)
+    win.webContents.send('app:save-playback-session', requestId, options)
   })
 }
 
@@ -135,7 +149,12 @@ export function supportsWindowsAcrylic(): boolean {
   return isWindowsAcrylicBuild()
 }
 
-export function createWindow(): void {
+export interface CreateWindowOptions {
+  /** Recreated after Afterglow: the renderer adopts live engine state. */
+  afterglowRestore?: boolean
+}
+
+export function createWindow(options: CreateWindowOptions = {}): BrowserWindow {
   const windowStatePath = join(app.getPath('userData'), 'window-state.json')
   const windowState = readWindowState(windowStatePath)
   const requestedTransparency = runtime.appSettings.windowTransparency === true
@@ -186,6 +205,7 @@ export function createWindow(): void {
 
   syncWindowFrameAppearance(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
   installWindowChromePublisher(runtime.mainWindow)
+  installMouseHistoryNavigation(runtime.mainWindow)
   installWindowCloseShortcut(
     runtime.mainWindow,
     () => runtime.appSettings.shortcutEnabled.closeWindow !== false
@@ -193,6 +213,13 @@ export function createWindow(): void {
   runtime.mainWindow.on('ready-to-show', () => {
     if (windowState?.maximized) runtime.mainWindow?.maximize()
     runtime.mainWindow?.show()
+  })
+
+  runtime.mainWindow.on('minimize', () => {
+    // Resolved lazily: the Afterglow service itself imports this module.
+    void import('./AfterglowModeService')
+      .then((service) => service.handleMainWindowMinimized())
+      .catch((error) => console.warn('[afterglow] minimize hook failed:', error))
   })
 
   runtime.mainWindow.on('close', (event) => {
@@ -214,6 +241,9 @@ export function createWindow(): void {
         showMiniPlayer()
       } else {
         runtime.mainWindow?.hide()
+        void import('./AfterglowModeService')
+          .then((service) => service.handleMainWindowHidden())
+          .catch((error) => console.warn('[afterglow] hide hook failed:', error))
       }
       return
     }
@@ -227,8 +257,13 @@ export function createWindow(): void {
   })
 
   runtime.mainWindow.on('closed', () => {
-    destroyTaskbarThumbarButtons()
-    destroyWindowsSmtc()
+    // Afterglow owns the unload: the tray, taskbar anchor and SMTC survive it.
+    if (afterglowUnloading) {
+      afterglowUnloading = false
+    } else {
+      destroyTaskbarThumbarButtons()
+      destroyWindowsSmtc()
+    }
     runtime.mainWindow = null
   })
 
@@ -263,10 +298,19 @@ export function createWindow(): void {
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    runtime.mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    const rendererUrl = new URL(process.env['ELECTRON_RENDERER_URL'])
+    if (options.afterglowRestore) {
+      rendererUrl.searchParams.set(afterglowRendererRestoreQueryKey, '1')
+    }
+    runtime.mainWindow.loadURL(rendererUrl.toString())
+  } else if (options.afterglowRestore) {
+    runtime.mainWindow.loadFile(join(__dirname, '../renderer/index.html'), {
+      query: { [afterglowRendererRestoreQueryKey]: '1' }
+    })
   } else {
     runtime.mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+  return runtime.mainWindow
 }
 
 // S4：外部跳转默认仅放行 https:（共享实现见 security/externalUrl.ts）

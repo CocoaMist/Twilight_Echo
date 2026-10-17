@@ -1,4 +1,4 @@
-﻿'use strict'
+'use strict'
 
 const fs = require('node:fs')
 const path = require('node:path')
@@ -206,6 +206,7 @@ function buildReport() {
     'settings',
     'fonts',
     'themes',
+    'themeWorkshop',
     'plugins',
     'providers',
     'providerDownloads',

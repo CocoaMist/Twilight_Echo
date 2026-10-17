@@ -1,4 +1,8 @@
 export const IPC = {
+  // Page history commands forwarded from Windows/Linux mouse side buttons.
+  app: {
+    historyCommand: 'app:history-command'
+  },
   diagnostics: {
     status: 'diagnostics:getStatus',
     marker: 'diagnostics:markProblem',

@@ -54,6 +54,7 @@ export type {
 } from '../../../shared/appSettings.ts'
 
 export type { MiniPlayerSettings } from '../../../shared/miniPlayer.ts'
+export type { AfterglowAutoEntry, AfterglowModeStatus } from '../../../shared/afterglowMode.ts'
 export type { MotionPreference } from '../../../shared/motion.ts'
 export type {
   LiquidGlassCoverage,

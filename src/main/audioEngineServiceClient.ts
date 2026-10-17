@@ -109,6 +109,9 @@ const SLOW_NATIVE_METHODS = new Set<string>([
   'SetOutputBackend',
   'SetOutputConfig',
   'LoadQueue',
+  // Hot append/update may synchronously preload the next remote stream.
+  'AppendQueueItems',
+  'UpdateQueueItemSource',
   'SetDspConfig',
   'SetDspGraph',
   'ApplyDspState',
@@ -517,6 +520,12 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
       dspGraphRevisionAck: this.serviceCapabilities?.dspGraphRevisionAck === true,
       nativeRuntime: this.serviceCapabilities?.nativeRuntime
     })
+  }
+
+  /** Full capability JSON from the native engine (the sync version is a subset). */
+  async getEngineCapabilitiesAsync(): Promise<string> {
+    const raw = await this.call('GetEngineCapabilities', [])
+    return typeof raw === 'string' ? raw : JSON.stringify(raw ?? {})
   }
 
   GetLastError(): string {
@@ -1046,7 +1055,13 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
   }
 
   private call(method: keyof NativeAudioBinding, args: unknown[]): Promise<unknown> {
-    return observeDiagnosticOperation('audio.rpc', String(method), () => this.callUnobserved(method, args), args, { serviceGeneration: this.generation })
+    return observeDiagnosticOperation(
+      'audio.rpc',
+      String(method),
+      () => this.callUnobserved(method, args),
+      args,
+      { serviceGeneration: this.generation }
+    )
   }
 
   private callUnobserved(method: keyof NativeAudioBinding, args: unknown[]): Promise<unknown> {
@@ -1103,7 +1118,13 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
         this.clearHealthProbe()
       }
       try {
-        child.postMessage({ kind: 'request', requestId, method, args, diagnosticContext: diagnosticContext() })
+        child.postMessage({
+          kind: 'request',
+          requestId,
+          method,
+          args,
+          diagnosticContext: diagnosticContext()
+        })
       } catch (err) {
         clearTimeout(timer)
         this.pending.delete(requestId)

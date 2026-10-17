@@ -1614,6 +1614,7 @@ function volumeRestoreFixture(savedVolume: number) {
     .join('\n')
   const implementation = ts.transpileModule(
     `let suppressVolumePersist = false
+     let adoptedAfterglowRestore = false
      const playbackAudio = null
      const lastAudibleVolume = ref(0.7)
      const muted = ref(false)

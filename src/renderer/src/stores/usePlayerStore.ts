@@ -19,6 +19,7 @@ import {
 } from 'vue'
 import { shouldApplyNativeTimePosition } from './playerProgressPolicy.ts'
 import type { Track } from '../types/music'
+import type { AfterglowRestoreState } from '../../../shared/afterglowMode.ts'
 import type {
   AudioProcessingSettings,
   OutputConfig,
@@ -1963,6 +1964,22 @@ let lastActiveTrack: Track | null = null
 let restoredPlaybackPending = false
 let restoredPlaybackPosition = 0
 let pendingLoadStartTime = 0
+/**
+ * Set once a recreated renderer adopted live engine state after Afterglow.
+ * Startup must not replay persisted volume/rate over the running host.
+ */
+let adoptedAfterglowRestore = false
+
+const ADOPTED_PLAY_MODES: readonly PlayMode[] = [
+  'sequential',
+  'listLoop',
+  'repeat',
+  'shuffle',
+  'heart'
+]
+
+const normalizeAdoptedPlayMode = (value: string): PlayMode =>
+  (ADOPTED_PLAY_MODES as readonly string[]).includes(value) ? (value as PlayMode) : 'sequential'
 let nativeQueueSyncRequest: Promise<void> | null = null
 let nativeHistoryRestartPending = false
 const rendererPlayModeBoundaryPending = ref(false)
@@ -2832,8 +2849,12 @@ function setupAudioEngineListeners(): void {
       } else {
         setAudioEngineError(null)
       }
-      syncSoftwareVolumeToEngine()
-      api.setPlaybackRate(playbackRate.value).catch(() => {})
+      // A renderer recreated after Afterglow must not overwrite the running
+      // host with the persisted volume/rate; it adopted the live values instead.
+      if (!adoptedAfterglowRestore) {
+        syncSoftwareVolumeToEngine()
+        api.setPlaybackRate(playbackRate.value).catch(() => {})
+      }
       await refreshAudioOutputState()
       try {
         const nativeInfo = await api.getPlaybackInfo()
@@ -3869,7 +3890,68 @@ export function usePlayerStore() {
     await lyricsLoader.ensureCurrentTrackLyricsLoaded(currentTrack.value, true, true)
   }
 
+  /**
+   * Afterglow restore: adopt the engine's live state without issuing transport
+   * commands. The native engine kept playing while the renderer was unloaded, so
+   * replaying `loadQueue`/`play` here would restart or interrupt it.
+   */
+  function adoptAfterglowRestore(state: AfterglowRestoreState): void {
+    const snapshotQueue = Array.isArray(state.queue) ? (state.queue as Track[]) : []
+    if (snapshotQueue.length === 0) return
+    const index = Number.isInteger(state.queueIndex)
+      ? Math.min(Math.max(0, state.queueIndex), snapshotQueue.length - 1)
+      : 0
+
+    activeLoadToken += 1
+    nativeQueueRevisionFence.next()
+    nativeSourceToTrackId.clear()
+    clearNativePlaybackInfoIntent()
+    clearPlaybackToggleIntent()
+    resetPlaybackClock()
+    stopVisualizationPolling(true)
+    stopRendererAudio(true)
+
+    const adoptedQueue = toPlaybackQueueSnapshots(snapshotQueue)
+    const track = adoptedQueue[index]
+    if (!track) return
+    queue.value = adoptedQueue
+    originalQueue.value = [...adoptedQueue]
+    queueIndex.value = index
+    const hydrated = hydratePlaybackTrack(track)
+    currentTrack.value = hydrated
+    lastActiveTrack = hydrated
+    loadedTrackId = hydrated.id
+    duration.value = state.duration > 0 ? state.duration : cueDuration(hydrated)
+    setCurrentTimeImmediate(Math.max(0, state.position))
+    isPlaying.value = state.state === 'playing'
+    isLoading.value = false
+    playbackRate.value = state.playbackRate
+    volume.value = Math.min(
+      Math.max(0, state.volume),
+      appSettings.value.audioDeviceProfiles.volumeCeiling
+    )
+    playMode.value = normalizeAdoptedPlayMode(state.playMode)
+    restoredPlaybackPending = false
+    restoredPlaybackPosition = 0
+    pendingLoadStartTime = 0
+    autoAdvanceInFlight = false
+    advancingFromEndedTrackId = ''
+    nativePlaybackActive = true
+    nativeQueueDelegated = true
+    adoptedAfterglowRestore = true
+    nativeQueueLoader.adopt(adoptedQueue, {
+      queueIndex: index,
+      queueToken: state.queueToken,
+      ...(Array.isArray(state.nativeQueueIndices)
+        ? { nativeQueueIndices: state.nativeQueueIndices }
+        : {})
+    })
+    void lyricsLoader.ensureCurrentTrackLyricsLoaded(hydrated, true)
+    startRendererPlaybackClock()
+  }
+
   return {
+    adoptAfterglowRestore,
     rehydrateCurrentTrackFromLibrary,
     currentTrack,
     dominantColor,
@@ -3915,6 +3997,8 @@ export function usePlayerStore() {
     audioOutputOptions,
     audioDeviceOptions,
     audioOutputDeviceOptions,
+    /** Native→logical queue mapping for the pre-unload handoff. */
+    getNativeQueueIndices: (): number[] | null => nativeQueueLoader.getCommittedIndices(),
     audioProcessing,
     audioOutputConfig,
     audioOutputConfigApplyStatus,

@@ -3,6 +3,7 @@ import type { NativeQueueSelection } from '../../shared/nativeQueue.ts'
 import type {
   AudioEnginePlayResult,
   AudioEngineQueueItem,
+  AudioEngineQueueState,
   AudioEngineScheduler,
   AudioEngineServiceNativeBinding,
   AudioOutputId,
@@ -731,6 +732,118 @@ export class PlaybackController {
     this.playbackInfo.queueIndex = nextQueueIndex
     this.invalidateUpcomingTrackCache()
     this.emit('queue-change', this.queue)
+  }
+
+  /**
+   * Hot-appends resolved queue entries without calling LoadQueue. Native
+   * indices stay stable, so the logical mapping the Afterglow core keeps does
+   * not need to be rebased. Returns the absolute first native index.
+   */
+  async appendQueueItems(items: AudioEngineQueueItem[]): Promise<number> {
+    if (items.length === 0) return this.queue.length
+    if (this.queue.length === 0) {
+      throw nativeAudioError(
+        'audio.queue_append_empty',
+        'cannot append to an unloaded queue',
+        this.lastNativeError
+      )
+    }
+    this.transportRevision += 1
+    const firstIndex = this.queue.length
+    const appended = await this.callNativeMaybeAsync(
+      '追加播放队列',
+      'AppendQueueItems',
+      JSON.stringify(items)
+    )
+    if (!appended) {
+      throw nativeAudioError(
+        'audio.queue_append_failed',
+        'native queue append failed',
+        this.lastNativeError
+      )
+    }
+    this.queue.push(...items.map((item) => ({ ...item })))
+    this.queueJson = JSON.stringify(this.queue)
+    this.invalidateUpcomingTrackCache()
+    this.emit('queue-appended', {
+      firstIndex,
+      count: items.length,
+      queueToken: this.queueToken
+    })
+    return firstIndex
+  }
+
+  /**
+   * Refreshes the source of a queued item that is not currently decoding. The
+   * native side invalidates a stale preload and re-opens the upcoming stream.
+   */
+  async updateQueueItemSource(index: number, source: string): Promise<boolean> {
+    if (!Number.isInteger(index) || index < 0 || index >= this.queue.length) {
+      throw nativeAudioError(
+        'audio.queue_index_invalid',
+        `queue index ${index} is out of range`,
+        this.lastNativeError
+      )
+    }
+    if (index === this.playbackInfo.queueIndex) {
+      throw nativeAudioError(
+        'audio.queue_current_source_immutable',
+        'the currently playing queue item cannot be hot-updated',
+        this.lastNativeError
+      )
+    }
+    if (!source.trim()) {
+      throw nativeAudioError(
+        'audio.queue_source_invalid',
+        'queue source is empty',
+        this.lastNativeError
+      )
+    }
+    this.transportRevision += 1
+    const updated = await this.callNativeMaybeAsync(
+      '热更新队列音频地址',
+      'UpdateQueueItemSource',
+      index,
+      source
+    )
+    if (!updated) {
+      throw nativeAudioError(
+        'audio.queue_source_update_failed',
+        'native queue source update failed',
+        this.lastNativeError
+      )
+    }
+    this.queue[index] = { ...this.queue[index], source }
+    this.queueJson = JSON.stringify(this.queue)
+    this.invalidateUpcomingTrackCache()
+    this.emit('queue-item-source-updated', { index, queueToken: this.queueToken })
+    return true
+  }
+
+  /** Authoritative native queue revision/cursor/upcoming snapshot for hot-update consumers. */
+  async readQueueState(): Promise<AudioEngineQueueState | null> {
+    if (!this.native) return null
+    try {
+      const raw =
+        typeof this.native.callAsync === 'function'
+          ? await this.native.callAsync('GetQueueState', [])
+          : this.native.GetQueueState?.()
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+      if (!parsed || typeof parsed !== 'object') return null
+      const state = parsed as Partial<AudioEngineQueueState>
+      if (
+        !Number.isInteger(state.revision) ||
+        !Number.isInteger(state.size) ||
+        !Number.isInteger(state.currentIndex) ||
+        !Number.isInteger(state.upcomingIndex) ||
+        typeof state.playMode !== 'string'
+      ) {
+        return null
+      }
+      return state as AudioEngineQueueState
+    } catch {
+      return null
+    }
   }
 
   async selectQueueItem(selection: NativeQueueSelection): Promise<boolean> {

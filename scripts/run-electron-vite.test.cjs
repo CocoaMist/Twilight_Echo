@@ -36,7 +36,12 @@ function launch(command, forwarded = []) {
       exit = code
     }
   }
-  vm.runInNewContext(source, { require: mockRequire, process, console: { error: () => {} } })
+  vm.runInNewContext(source, {
+    require: mockRequire,
+    process,
+    console: { error: () => {} },
+    __dirname
+  })
   return { child, process, invocation, dependency, exit: () => exit }
 }
 

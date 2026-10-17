@@ -69,6 +69,7 @@ import type {
   StreamingAudioCachePolicy,
   UiDensity
 } from './types'
+import type { AfterglowAutoEntry } from '../../shared/afterglowMode.ts'
 import type { PlayMode } from '../audioEngineManager'
 import {
   DEFAULT_MINI_PLAYER_SETTINGS,
@@ -150,6 +151,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   closeWindowBehavior: 'quit',
   closeToTray: false,
   taskbarThumbarButtonsEnabled: true,
+  afterglowAutoEntry: 'off',
   onboardingCompleted: false,
   developerMode: false,
   startupHomePage: 'local',
@@ -383,6 +385,10 @@ export function normalizeStartupHomePage(value: unknown): StartupHomePage {
 
 export function normalizeTrackActivationMode(value: unknown): TrackActivationMode {
   return value === 'doubleClick' ? 'doubleClick' : 'singleClick'
+}
+
+export function normalizeAfterglowAutoEntry(value: unknown): AfterglowAutoEntry {
+  return value === 'minimize' || value === 'hide' || value === 'minimizeOrHide' ? value : 'off'
 }
 
 export function normalizeStreamingAudioCachePolicy(value: unknown): StreamingAudioCachePolicy {
@@ -692,6 +698,7 @@ export function normalizeAppSettings(settings: Partial<AppSettings>): AppSetting
     closeWindowBehavior,
     closeToTray,
     taskbarThumbarButtonsEnabled: settings.taskbarThumbarButtonsEnabled !== false,
+    afterglowAutoEntry: normalizeAfterglowAutoEntry(settings.afterglowAutoEntry),
     onboardingCompleted: settings.onboardingCompleted === true,
     developerMode: settings.developerMode === true,
     startupHomePage: normalizeStartupHomePage(settings.startupHomePage),
@@ -830,7 +837,8 @@ export function consumeAppSettingsLoadIssue(): SettingsFileLoadIssue | null {
 export function getRestartReasons(settings: AppSettings, launch: AppSettings): string[] {
   const reasons: string[] = []
   if (
-    startupExperienceKey(settings.startupExperience) !== startupExperienceKey(launch.startupExperience)
+    startupExperienceKey(settings.startupExperience) !==
+    startupExperienceKey(launch.startupExperience)
   ) {
     reasons.push('完整界面')
   }

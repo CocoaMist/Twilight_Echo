@@ -4580,6 +4580,138 @@ test('playback snapshots expose queue authority only for a matching native sourc
   assert.equal((await manager.getPlaybackInfo()).queueToken, undefined)
 })
 
+test('queue hot update appends and refreshes future sources without reloading', async (t) => {
+  const nativeBinding = new FakeNativeBinding()
+  const calls: Array<{ method: string; args: unknown[] }> = []
+  Object.assign(nativeBinding, {
+    AppendQueueItems: (json: string) => {
+      calls.push({ method: 'AppendQueueItems', args: [json] })
+    },
+    UpdateQueueItemSource: (index: number, source: string) => {
+      calls.push({ method: 'UpdateQueueItemSource', args: [index, source] })
+    }
+  })
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding
+  )
+  t.after(() => manager.destroy())
+  assert.equal(manager.getQueueHotUpdateCapability(), null)
+  Object.assign(nativeBinding, {
+    GetEngineCapabilities: () =>
+      JSON.stringify({
+        queueHotUpdate: {
+          version: 1,
+          append: true,
+          updateSource: true,
+          upcomingIndex: true
+        }
+      })
+  })
+  assert.deepEqual(manager.getQueueHotUpdateCapability(), {
+    version: 1,
+    append: true,
+    updateSource: true,
+    upcomingIndex: true
+  })
+  assert.deepEqual(await manager.getQueueHotUpdateCapabilityAsync(), {
+    version: 1,
+    append: true,
+    updateSource: true,
+    upcomingIndex: true
+  })
+  await manager.loadQueue(
+    [
+      { id: 'ncm:a', source: 'https://cdn.test/a.flac' },
+      { id: 'ncm:b', source: 'https://cdn.test/b.flac' }
+    ],
+    0
+  )
+  const appendEvents: unknown[] = []
+  manager.on('queue-appended', (payload: unknown) => appendEvents.push(payload))
+
+  const firstIndex = await manager.appendQueueItems([
+    { id: 'ncm:c', source: 'https://cdn.test/c.flac' }
+  ])
+  assert.equal(firstIndex, 2)
+  assert.deepEqual(
+    manager.getQueueSnapshot().map((item) => item.source),
+    ['https://cdn.test/a.flac', 'https://cdn.test/b.flac', 'https://cdn.test/c.flac']
+  )
+  assert.equal(nativeBinding.loadQueueCalls, 1, 'append must not reload the queue')
+  assert.equal(calls.filter((call) => call.method === 'AppendQueueItems').length, 1)
+  assert.deepEqual(appendEvents, [{ firstIndex: 2, count: 1, queueToken: manager.getQueueToken() }])
+
+  assert.equal(await manager.updateQueueItemSource(2, 'https://cdn.test/c.flac?sig=2'), true)
+  assert.equal(manager.getQueueSnapshot()[2].source, 'https://cdn.test/c.flac?sig=2')
+  assert.equal(nativeBinding.loadQueueCalls, 1)
+  assert.equal(calls.filter((call) => call.method === 'UpdateQueueItemSource').length, 1)
+  // The active item is already open; hot-swapping it is a contract violation.
+  await assert.rejects(
+    () => manager.updateQueueItemSource(0, 'https://cdn.test/a.flac?sig=2'),
+    /cannot be hot-updated/
+  )
+  await assert.rejects(() => manager.updateQueueItemSource(9, 'x'), /out of range/)
+})
+
+test('service capability probe asks the utility process for the full native JSON', async (t) => {
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    new FakeNativeBinding()
+  )
+  t.after(() => manager.destroy())
+  const calls: string[] = []
+  const binding = {
+    GetEngineCapabilities: () => JSON.stringify({}),
+    getEngineCapabilitiesAsync: async () => {
+      calls.push('async')
+      return JSON.stringify({
+        queueHotUpdate: {
+          version: 1,
+          append: true,
+          updateSource: true,
+          upcomingIndex: true
+        }
+      })
+    },
+    destroy: () => {}
+  }
+  ;(manager as unknown as { audioServiceBinding: typeof binding }).audioServiceBinding = binding
+  assert.deepEqual(await manager.getQueueHotUpdateCapabilityAsync(), {
+    version: 1,
+    append: true,
+    updateSource: true,
+    upcomingIndex: true
+  })
+  assert.deepEqual(calls, ['async'])
+})
+
+test('queue hot update capability falls back to the native queue-state probe', async (t) => {
+  const nativeBinding = new FakeNativeBinding()
+  Object.assign(nativeBinding, {
+    GetEngineCapabilities: () => JSON.stringify({}),
+    GetQueueState: () =>
+      JSON.stringify({
+        revision: 4,
+        size: 2,
+        currentIndex: 0,
+        upcomingIndex: 1,
+        playMode: 'sequential'
+      })
+  })
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding
+  )
+  t.after(() => manager.destroy())
+  assert.deepEqual(await manager.getQueueHotUpdateCapabilityAsync(), {
+    version: 1,
+    append: true,
+    updateSource: true,
+    upcomingIndex: true
+  })
+})
+
 test('loadQueue skips native call and queue fanout when normalized queue is unchanged', async () => {
   const nativeBinding = new FakeNativeBinding()
   const manager = makeManager(
