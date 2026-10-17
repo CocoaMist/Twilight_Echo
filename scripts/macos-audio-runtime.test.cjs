@@ -103,6 +103,9 @@ test('macOS packaging maps Electron architecture names to Clang and keeps downlo
   assert.ok(workflow.includes('-DCMAKE_OSX_ARCHITECTURES="${{ matrix.cmake_arch }}"'))
   assert.ok(workflow.includes('--mac --${{ matrix.arch }}'))
   const builder = fs.readFileSync(path.join(__dirname, '..', 'electron-builder.yml'), 'utf8')
-  assert.match(builder, /notarize: false\s+artifactName: \$\{name\}-\$\{version\}-mac-\$\{arch\}\.\$\{ext\}/)
+  assert.match(
+    builder,
+    /notarize: false\s+artifactName: \$\{name\}-\$\{version\}-mac-\$\{arch\}\.\$\{ext\}/
+  )
   assert.match(builder, /dmg:\s+artifactName: \$\{name\}-\$\{version\}-mac-\$\{arch\}\.\$\{ext\}/)
 })
