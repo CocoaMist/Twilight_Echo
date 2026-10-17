@@ -34,9 +34,15 @@ test('local artist navigation resolves collaborations and reacts to the selected
     tracks,
     resolveLibraryArtistTracks
   }) as { value: Track[] }
-  assert.deepEqual(result.value.map((track) => track.id), ['solo', 'duet'])
+  assert.deepEqual(
+    result.value.map((track) => track.id),
+    ['solo', 'duet']
+  )
   props.filter = 'artist:Bob'
-  assert.deepEqual(result.value.map((track) => track.id), ['duet'])
+  assert.deepEqual(
+    result.value.map((track) => track.id),
+    ['duet']
+  )
   tracks.value = [solo]
   assert.deepEqual(result.value, [])
 })
@@ -485,4 +491,16 @@ test('selected tracks append as one queue command without starting playback', ()
   assert.equal(batches.length, 1)
   assert.match(source, /@click="appendActionTracksToQueue\(contextActionTracks\)"/)
   assert.match(source, /@click="appendActionTracksToQueue\(selectionActionTracks\)"/)
+})
+
+test('song list exposes the shared locate-current action for every table view', () => {
+  const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
+
+  assert.match(source, /const currentTrackIndex = computed\(/)
+  assert.match(source, /!showTable\.value/)
+  assert.match(source, /const canLocateCurrentTrack = computed\(/)
+  assert.match(source, /:data-te-locate-current="canLocateCurrentTrack \? 'true' : undefined"/)
+  assert.match(source, /@te-locate-current="locateCurrentTrack"/)
+  assert.match(source, /scrollToTrack\(index\)/)
+  assert.match(source, /:aria-current="currentTrack\?\.id === track\.id \? 'true' : undefined"/)
 })
