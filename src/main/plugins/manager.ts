@@ -2096,6 +2096,12 @@ export class TwilightPluginManager extends EventEmitter {
     if (!isCompatibleTwilightRange(manifest.engines.twilightEcho, this.appVersion)) {
       return `插件要求 Twilight Echo ${manifest.engines.twilightEcho}`
     }
+    const experiences = (manifest.contributes as { experiences?: { entry: string }[] } | undefined)?.experiences ?? []
+    for (const experience of experiences) {
+      if (!resolvePluginFile(resolve(versionRoot, experience.entry), versionRoot)) {
+        return 'Plugin experience HTML entry is missing or outside its package'
+      }
+    }
     if (manifest.main) {
       const mainPath = resolve(versionRoot, manifest.main)
       if (!resolvePluginFile(mainPath, versionRoot)) {

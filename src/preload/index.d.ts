@@ -25,6 +25,7 @@ import type {
   MiniPlayerSettingsPatch
 } from '../shared/miniPlayer.ts'
 import type { TrayNavigationTarget } from '../shared/trayPlayer.ts'
+import type { ExperienceWindowOptions, ExperienceWindowTheme } from '../shared/experienceWindow.ts'
 import type {
   DynamicIslandBootstrap,
   DynamicIslandLyricsPayload,
@@ -333,6 +334,10 @@ interface WindowAPI {
     minimize: () => void
     toggleMaximize: () => void
     close: () => void
+    showTrayPlayer: (options?: ExperienceWindowOptions) => Promise<void>
+  }
+  experienceWindow: {
+    onTheme: (callback: (theme: ExperienceWindowTheme) => void) => () => void
   }
   dialog: {
     openFolder: () => Promise<string | null>
@@ -759,12 +764,17 @@ interface WindowAPI {
     onChanged: (cb: (tasks: ProviderDownloadTaskSnapshot[]) => void) => () => void
   }
   extensions: {
+    experienceExport: (pluginId: string, name: string, content: string) => Promise<{ saved: boolean }>
+    experienceMusic: (pluginId: string, operation: string, albums: unknown[], args: Record<string, unknown>) => Promise<unknown>
+    experienceDocument: (pluginId: string, update?: { revision: number; value: Record<string, unknown> }) => Promise<{ revision: number; value: Record<string, unknown> }>
+    experiences: () => Promise<import('../shared/pluginExperience.ts').InstalledExperience[]>
+    experiencePreferences: (pluginId: string, value?: unknown) => Promise<unknown>
     list: () => Promise<TwilightPluginExtensionContribution[]>
     executeCommand: (command: string, args?: unknown[]) => Promise<unknown>
     readThemeStylesheet: (stylesheetPath: string) => Promise<string>
   }
   desktopLyrics: {
-    setEnabled: (enabled: boolean) => Promise<boolean>
+    setEnabled: (enabled: boolean, options?: ExperienceWindowOptions) => Promise<boolean>
     publishSession: (session: DesktopLyricsSession) => void
     publishClock: (clock: DesktopLyricsClockSnapshot) => void
     onEnabledChanged: (cb: (enabled: boolean) => void) => () => void
@@ -789,7 +799,7 @@ interface WindowAPI {
     onHoverIntent: (cb: (pointerInside: boolean) => void) => () => void
   }
   miniPlayer: {
-    open: () => Promise<MiniPlayerSettings>
+    open: (options?: ExperienceWindowOptions) => Promise<MiniPlayerSettings>
     getBootstrap: () => Promise<MiniPlayerBootstrap>
     command: (command: MiniPlayerCommand) => void
     updateSettings: (patch: MiniPlayerSettingsPatch) => Promise<MiniPlayerSettings>
