@@ -66,7 +66,7 @@ async function main() {
     .map((line) => JSON.parse(line))
   assert.ok(timeline.some((entry) => entry.event === 'javascript.error'))
   assert.ok(timeline.some((entry) => entry.event === 'health.sample'))
-  const installer = path.resolve('dist/TwilightEcho-1.3.1-preview-setup.exe')
+  const installer = path.resolve('dist/TwilightEcho-1.3.1-setup.exe')
   const installerSha256 = hash(await fs.readFile(installer))
   const checksum = await fs.readFile(installer + '.sha256', 'utf8')
   assert.ok(checksum.startsWith(installerSha256))

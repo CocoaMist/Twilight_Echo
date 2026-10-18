@@ -34,9 +34,15 @@ test('local artist navigation resolves collaborations and reacts to the selected
     tracks,
     resolveLibraryArtistTracks
   }) as { value: Track[] }
-  assert.deepEqual(result.value.map((track) => track.id), ['solo', 'duet'])
+  assert.deepEqual(
+    result.value.map((track) => track.id),
+    ['solo', 'duet']
+  )
   props.filter = 'artist:Bob'
-  assert.deepEqual(result.value.map((track) => track.id), ['duet'])
+  assert.deepEqual(
+    result.value.map((track) => track.id),
+    ['duet']
+  )
   tracks.value = [solo]
   assert.deepEqual(result.value, [])
 })

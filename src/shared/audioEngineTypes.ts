@@ -277,6 +277,18 @@ export interface AudioEngineQueueItem {
   cueRange?: CueRange
 }
 
+/**
+ * Native queue control-plane state for hot append/source-refresh consumers.
+ * Indices are absolute for the lifetime of the loaded queue and never shift.
+ */
+export interface AudioEngineQueueState {
+  revision: number
+  size: number
+  currentIndex: number
+  upcomingIndex: number
+  playMode: PlayMode
+}
+
 export interface AudioEnginePlayResult {
   nativeStarted: boolean
   fallbackReason: string
@@ -468,6 +480,10 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   requestedConfigRevision: number
   appliedConfigRevision: number
   queueIndex: number
+  /** Monotonic native queue content revision (hot append/source updates). */
+  queueRevision?: number
+  /** Absolute native index of the preloaded/upcoming item, or -1. */
+  upcomingQueueIndex?: number
   /** Main-issued content version for mapping partial native queues to logical entries. */
   queueToken?: string
   playMode: PlayMode

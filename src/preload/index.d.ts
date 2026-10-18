@@ -25,6 +25,7 @@ import type {
   MiniPlayerSettingsPatch
 } from '../shared/miniPlayer.ts'
 import type { TrayNavigationTarget } from '../shared/trayPlayer.ts'
+import type { ExperienceWindowOptions, ExperienceWindowTheme } from '../shared/experienceWindow.ts'
 import type {
   DynamicIslandBootstrap,
   DynamicIslandLyricsPayload,
@@ -78,6 +79,7 @@ import type {
 } from '../shared/dspGraph.ts'
 import type { ImportedFrequencyResponse } from '../shared/frequencyResponse.ts'
 import type { AppStartupSnapshot } from '../shared/appStartup.ts'
+import type { AppHistoryCommand } from '../shared/appHistory.ts'
 import type {
   ThemeAssetReference,
   ThemeAssetType,
@@ -334,6 +336,10 @@ interface WindowAPI {
     minimize: () => void
     toggleMaximize: () => void
     close: () => void
+    showTrayPlayer: (options?: ExperienceWindowOptions) => Promise<void>
+  }
+  experienceWindow: {
+    onTheme: (callback: (theme: ExperienceWindowTheme) => void) => () => void
   }
   dialog: {
     openFolder: () => Promise<string | null>
@@ -429,9 +435,30 @@ interface WindowAPI {
     /**
      * Reject to report a failed close-time persistence transaction. The main
      * process keeps the window open and offers the user a retry path.
+     * `includeQueue` asks for a queue-inclusive snapshot (Afterglow entry).
      */
-    onSavePlaybackSession: (cb: () => Promise<void> | void) => () => void
+    onSavePlaybackSession: (
+      cb: (
+        options?: import('../shared/closePersistence.ts').PlaybackSessionSaveOptions
+      ) => Promise<void> | void
+    ) => () => void
     onNavigate: (cb: (target: TrayNavigationTarget) => void) => () => void
+    /** Mouse side-button back/forward presses forwarded from the main process. */
+    onHistoryCommand: (cb: (command: AppHistoryCommand) => void) => () => void
+    /** Renderer-unload mode (Afterglow): status, entry, restore and live handoff. */
+    afterglow: {
+      getStatus: () => Promise<import('../shared/afterglowMode.ts').AfterglowModeStatus>
+      enter: () => Promise<import('../shared/afterglowMode.ts').AfterglowModeStatus>
+      restore: () => Promise<import('../shared/afterglowMode.ts').AfterglowModeStatus>
+      getRestoreState: () => Promise<
+        import('../shared/afterglowMode.ts').AfterglowRestoreState | null
+      >
+      rendererAdoptComplete: () => Promise<void>
+      /** Pre-unload queue snapshot handed to main (memory only). */
+      publishRendererSnapshot: (
+        snapshot: import('../shared/afterglowMode.ts').AfterglowRendererSnapshot
+      ) => Promise<boolean>
+    }
   }
   ncmCloud: {
     chooseUploadFiles: () => Promise<NcmCloudSelectedFile[]>
@@ -762,12 +789,29 @@ interface WindowAPI {
     onChanged: (cb: (tasks: ProviderDownloadTaskSnapshot[]) => void) => () => void
   }
   extensions: {
+    experienceExport: (
+      pluginId: string,
+      name: string,
+      content: string
+    ) => Promise<{ saved: boolean }>
+    experienceMusic: (
+      pluginId: string,
+      operation: string,
+      albums: unknown[],
+      args: Record<string, unknown>
+    ) => Promise<unknown>
+    experienceDocument: (
+      pluginId: string,
+      update?: { revision: number; value: Record<string, unknown> }
+    ) => Promise<{ revision: number; value: Record<string, unknown> }>
+    experiences: () => Promise<import('../shared/pluginExperience.ts').InstalledExperience[]>
+    experiencePreferences: (pluginId: string, value?: unknown) => Promise<unknown>
     list: () => Promise<TwilightPluginExtensionContribution[]>
     executeCommand: (command: string, args?: unknown[]) => Promise<unknown>
     readThemeStylesheet: (stylesheetPath: string) => Promise<string>
   }
   desktopLyrics: {
-    setEnabled: (enabled: boolean) => Promise<boolean>
+    setEnabled: (enabled: boolean, options?: ExperienceWindowOptions) => Promise<boolean>
     publishSession: (session: DesktopLyricsSession) => void
     publishClock: (clock: DesktopLyricsClockSnapshot) => void
     onEnabledChanged: (cb: (enabled: boolean) => void) => () => void
@@ -792,7 +836,7 @@ interface WindowAPI {
     onHoverIntent: (cb: (pointerInside: boolean) => void) => () => void
   }
   miniPlayer: {
-    open: () => Promise<MiniPlayerSettings>
+    open: (options?: ExperienceWindowOptions) => Promise<MiniPlayerSettings>
     getBootstrap: () => Promise<MiniPlayerBootstrap>
     command: (command: MiniPlayerCommand) => void
     updateSettings: (patch: MiniPlayerSettingsPatch) => Promise<MiniPlayerSettings>

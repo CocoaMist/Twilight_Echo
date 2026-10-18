@@ -1,4 +1,4 @@
-export const TWILIGHT_PLUGIN_API_VERSION = 3 as const
+export const TWILIGHT_PLUGIN_API_VERSION = 4 as const
 export const TAE_DSP_PLUGIN_ABI_VERSION = 1 as const
 export const TAE_DSP_PLUGIN_ABI_VERSION_V2 = 2 as const
 
@@ -17,6 +17,8 @@ export type TwilightPluginPermission =
   | 'settings'
   | 'clipboard'
   | 'ui:inject'
+  | 'app:settings'
+  | 'plugins:manage'
   | 'dsp:native'
 
 export interface TwilightPluginManifest {
@@ -41,6 +43,30 @@ export interface TwilightPluginManifest {
   icon?: string
   signature?: unknown
 }
+
+/** API v4: isolated, packaged full-window interface. No preload or Node access. */
+export interface PluginExperience {
+  id: string
+  name: string
+  /** HTML file relative to the installed version root, e.g. dist/index.html. */
+  entry: string
+  bridgeVersion: 1 | 2
+}
+
+export interface PluginExperienceContribution {
+  experiences: PluginExperience[]
+}
+
+export interface PluginExperienceRequest {
+  id: number
+  method: string
+  args?: Record<string, unknown>
+}
+
+export type PluginExperienceMessage =
+  | { id: number; value: unknown }
+  | { id: number; error: string }
+  | { event: 'player' | 'queue' | 'lyrics' | 'library'; value: unknown }
 
 export type TwilightPluginStatus = 'installed' | 'enabled' | 'disabled' | 'invalid' | 'failed'
 export type TwilightPluginSource = 'directory' | 'tep' | 'bundled' | 'index'
@@ -221,6 +247,14 @@ export interface TrackArtistRef {
 export interface Track {
   id: string
   title: string
+  /** Optional grouping metadata; each part retains its own playable id and duration. */
+  mediaPart?: {
+    groupId: string
+    groupTitle: string
+    title: string
+    index: number
+    count: number
+  }
   artist: string
   /** Structured artist identities behind the `artist` display string. */
   artists?: TrackArtistRef[]

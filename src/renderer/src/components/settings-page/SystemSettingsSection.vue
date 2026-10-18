@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import SettingsGroup from './SettingsGroup.vue'
+import AfterglowSettingsSection from './AfterglowSettingsSection.vue'
 import BackupAndResetSettingsSection from './BackupAndResetSettingsSection.vue'
 import DiagnosticsSettingsSection from './DiagnosticsSettingsSection.vue'
 import PluginSettingsFormView from './PluginSettingsFormView.vue'
@@ -58,6 +59,7 @@ defineProps<{
             @click="toggleSetting('hardwareAcceleration')"
           ></button>
         </div>
+        <AfterglowSettingsSection />
       </div>
     </div>
     <DiagnosticsSettingsSection />

@@ -1,8 +1,59 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { EventEmitter } from 'node:events'
+import type { BrowserWindow } from 'electron'
+import { installWindowCloseShortcut } from './windowShortcuts.ts'
 import test from 'node:test'
 import { restoreWindowSize } from './windowState.ts'
 import { getWindowBackgroundColor, syncWindowFrameAppearance } from './windowAppearance.ts'
+
+test('Ctrl/Cmd+W obeys live preferences while suppressing the default menu close', () => {
+  const webContents = new EventEmitter()
+  let enabled = true
+  let closes = 0
+  let prevented = 0
+  const win = { webContents, close: () => closes++ } as unknown as BrowserWindow
+  installWindowCloseShortcut(win, () => enabled)
+  const input = {
+    type: 'keyDown',
+    key: 'w',
+    control: process.platform !== 'darwin',
+    meta: process.platform === 'darwin',
+    alt: false,
+    shift: false,
+    isAutoRepeat: false,
+    isComposing: false
+  }
+  const press = (patch = {}) =>
+    webContents.emit(
+      'before-input-event',
+      { preventDefault: () => prevented++ },
+      { ...input, ...patch }
+    )
+  press()
+  assert.equal(closes, 1)
+  enabled = false
+  press()
+  assert.equal(closes, 1)
+  assert.equal(prevented, 2)
+  enabled = true
+  press({ type: 'keyUp' })
+  press({ isAutoRepeat: true })
+  press({ isComposing: true })
+  assert.equal(closes, 1)
+  const previousPrevented = prevented
+  for (const patch of [
+    { shift: true },
+    { alt: true },
+    { key: 'q' },
+    { control: false, meta: false }
+  ])
+    press(patch)
+  assert.equal(prevented, previousPrevented)
+  assert.equal(closes, 1)
+  press({ key: 'W' })
+  assert.equal(closes, 2)
+})
 
 test('main-process startup creates the window before deferred runtime work', async () => {
   const source = await readFile(new URL('./lifecycle.ts', import.meta.url), 'utf8')

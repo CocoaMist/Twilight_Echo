@@ -105,6 +105,12 @@ const MAX_AUDIO_SOURCE_LENGTH = 8192
 const MAX_AUDIO_DEVICE_LENGTH = 512
 let audioDiagnosticRecorder: AudioDiagnosticRecorder | null = null
 let stopOutputTest: () => Promise<void> = () => Promise.resolve()
+
+/**
+ * Stops a running device output test for transport paths that bypass IPC
+ * (renderer-free playback while Afterglow has unloaded every window).
+ */
+export const stopActiveOutputTest = (): Promise<void> => stopOutputTest()
 function stemWorkerDirectory(): string {
   return join(
     app.isPackaged || app.getAppPath().endsWith('.asar')
@@ -176,7 +182,7 @@ function persistSoftwareVolumeNow(): void {
   )
 }
 
-function scheduleSoftwareVolumePersist(volume: number): void {
+export function scheduleSoftwareVolumePersist(volume: number): void {
   pendingSoftwareVolume = volume
   if (softwareVolumePersistTimer) clearTimeout(softwareVolumePersistTimer)
   softwareVolumePersistTimer = setTimeout(

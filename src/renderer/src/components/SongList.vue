@@ -598,6 +598,7 @@ const showTable = computed(() => {
 const isCollectionGrid = computed(
   () => showGrid.value && (props.category === 'artists' || props.category === 'albums')
 )
+
 const collectionViewPreferences = new LibraryCollectionViewPreferences()
 const collectionViewState = ref<LibraryCollectionViewState>(
   collectionViewPreferences.read(props.category)
@@ -1437,7 +1438,9 @@ useLocatePlayingTrack({
   displayTracks,
   // Application playlists and device history can retain online snapshots.
   libraryTracks: computed(() =>
-    props.category === 'playlists' || props.category === 'recent' ? displayTracks.value : tracks.value
+    props.category === 'playlists' || props.category === 'recent'
+      ? displayTracks.value
+      : tracks.value
   ),
   currentTrack,
   enabled: computed(() => showTable.value && !isSwitching.value),
@@ -2404,6 +2407,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     'track-selected': isSelected(track.id),
                     'playlist-draggable': isPlaylistDetail
                   }"
+                  :aria-current="currentTrack?.id === track.id ? 'true' : undefined"
                   :style="{ height: rowHeight - 4 + 'px', display: 'flex' }"
                   :draggable="isPlaylistDetail"
                   @click="onRowClick(track, Number(index), $event)"

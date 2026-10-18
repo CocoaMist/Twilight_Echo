@@ -14,6 +14,7 @@ import {
 } from '../integrations/miniPlayer'
 import { syncDesktopLyricsSettings } from '../integrations/desktopLyrics'
 import { applyRuntimeSettings } from '../integrations/shortcutsTray'
+import { reassertAfterglowShortcuts } from './AfterglowModeService.ts'
 import { applyLibraryWatchers } from '../library/watcher'
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
@@ -186,6 +187,9 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
   }
 
   applyRuntimeSettings()
+  // Shortcut re-registration unregisters everything first; restore the
+  // Afterglow escape hatch when the UI is currently unloaded.
+  reassertAfterglowShortcuts()
   const snapshot = createSettingsSnapshot(runtime.appSettings, runtime.launchSettings)
   runtime.mainWindow?.webContents.send('settings:changed', snapshot)
   const trayWindow = runtime.trayPlayerWindow

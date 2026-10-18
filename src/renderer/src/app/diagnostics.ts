@@ -13,6 +13,7 @@ export function installRendererDiagnostics(): void {
     'error',
     (event) => {
       const target = event.target as HTMLElement | null
+      const resource = target?.getAttribute?.('src') ?? target?.getAttribute?.('href')
       recordRendererDiagnostic({
         level: 'error',
         module: 'renderer',
@@ -23,7 +24,12 @@ export function installRendererDiagnostics(): void {
           filename: event.filename,
           line: event.lineno,
           column: event.colno,
-          element: target?.tagName
+          element: target?.tagName,
+          resourceUrl: resource
+            ? /^data:/i.test(resource)
+              ? 'data:'
+              : resource.slice(0, 4096)
+            : null
         }
       })
     },
