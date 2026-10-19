@@ -80,6 +80,7 @@ const activeTab = ref<EqualizerTab>('graphic')
 const autoPreampEnabled = ref(false)
 const appSettings = ref<AppSettings | null>(null)
 const presetName = ref('')
+const presetError = ref('')
 const saving = ref(false)
 const presetMenuOpen = ref(false)
 const filterMenuOpen = ref(false)
@@ -441,7 +442,7 @@ async function syncActiveSceneEq(nextSettings: AudioProcessingSettings): Promise
       : nextSettings.eqPreamp,
     bands: opraCompensationEnabled.value
       ? [...cloneBands(headphoneCompensation.value.bands), ...cloneBands(nextSettings.eqBands)]
-      : nextSettings.eqBands
+      : cloneBands(nextSettings.eqBands)
   }
   await window.api.audioEngine.setDspScenes(dspState.scenes, dspState.pinnedSceneId)
 }
@@ -906,33 +907,19 @@ async function applyOpraProfile(profile: OpraProfile): Promise<void> {
 
 async function disableOpraCompensation(): Promise<void> {
   if (!appSettings.value) return
+  opraError.value = ''
   try {
     const savedSettings = await window.api.settings.update({
       headphoneCompensation: {
         ...headphoneCompensation.value,
-        enabled: false
+        enabled: false,
+        bands: cloneBands(headphoneCompensation.value.bands)
       }
     })
-    // Explicitly construct a new object to guarantee Vue reactivity triggers
-    appSettings.value = {
-      ...appSettings.value,
-      ...savedSettings,
-      headphoneCompensation: {
-        ...headphoneCompensation.value,
-        enabled: false
-      }
-    }
+    appSettings.value = { ...appSettings.value, ...savedSettings }
     await syncActiveSceneEq(audioProcessing.value)
   } catch (err) {
-    console.error('停用 OPRA 补偿失败：', err)
-    // Fallback: at least update local state so the UI reflects the change
-    appSettings.value = {
-      ...appSettings.value,
-      headphoneCompensation: {
-        ...headphoneCompensation.value,
-        enabled: false
-      }
-    }
+    opraError.value = err instanceof Error ? err.message : String(err)
   }
 }
 
@@ -961,6 +948,7 @@ async function saveEqPreset(): Promise<void> {
     })}`
   if (!name || !appSettings.value || saving.value) return
   saving.value = true
+  presetError.value = ''
   try {
     const nextPreset: AudioEqPreset = {
       id: `custom-${Date.now()}`,
@@ -970,12 +958,17 @@ async function saveEqPreset(): Promise<void> {
       eqBands: cloneBands(audioProcessing.value.eqBands)
     }
     appSettings.value = await window.api.settings.update({
-      audioEqPresets: [...userPresets.value, nextPreset]
+      // contextBridge clones arguments before preload runs. Copy every band's
+      // fields, including those belonging to previously saved reactive presets.
+      audioEqPresets: [
+        ...userPresets.value.map((preset) => ({ ...preset, eqBands: cloneBands(preset.eqBands) })),
+        nextPreset
+      ]
     })
     presetName.value = ''
     presetMenuOpen.value = true
   } catch (err) {
-    console.error('保存均衡器预设失败：', err)
+    presetError.value = `保存预设失败：${err instanceof Error ? err.message : String(err)}`
   } finally {
     saving.value = false
   }
@@ -1135,6 +1128,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
       </aside>
 
       <main class="eq-content">
+        <p v-if="presetError" class="preset-error" role="alert">{{ presetError }}</p>
         <!-- Toolbar for Presets across Graphic and Parametric -->
         <div v-if="activeTab !== 'parametric'" class="eq-toolbar-modern">
           <EqHistoryControls
@@ -1505,6 +1499,12 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   border-bottom: 1px solid rgba(15, 23, 42, 0.06);
   margin-bottom: 24px;
   flex-wrap: wrap;
+}
+
+.preset-error {
+  margin: 0 0 12px;
+  color: var(--te-error, #ec4899);
+  overflow-wrap: anywhere;
 }
 
 .eq-command {
