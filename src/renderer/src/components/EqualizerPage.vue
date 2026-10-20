@@ -1503,7 +1503,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 
 .preset-error {
   margin: 0 0 12px;
-  color: var(--te-error, #ec4899);
+  color: var(--te-danger-soft-fg);
   overflow-wrap: anywhere;
 }
 
