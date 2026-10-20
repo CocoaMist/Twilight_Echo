@@ -96,7 +96,9 @@ AudioFormat defaultDopCandidate(const AudioFormat& sourceFormat) {
 }
 
 bool wantsDopCarrier(const AudioFormat& sourceFormat) {
-  return looksLikeDsdRate(sourceFormat.sampleRate) || isDopCarrierFormat(sourceFormat);
+  // High-rate 24-bit PCM has the same layout as a DoP carrier. Only an
+  // explicitly tagged transport request (or a raw DSD rate) requires DoP.
+  return looksLikeDsdRate(sourceFormat.sampleRate) || sourceFormat.dopEncoded;
 }
 
 int sampleRateFamily(int sampleRate) {
@@ -366,6 +368,7 @@ std::vector<WasapiFormatNegotiator::Candidate> WasapiFormatNegotiator::buildCand
       candidate.outputFormat.channelCount = sourceFormat.channelCount;
       candidate.outputFormat.bitDepth = 24;
       candidate.outputFormat.sampleFormat = variant.sampleFormat;
+      candidate.outputFormat.dopEncoded = true;
       candidate.waveFormatBytes = makeWaveFormatBytes(carrierRate, sourceFormat.channelCount, variant);
       candidate.dopCarrier = true;
       candidates.push_back(std::move(candidate));
