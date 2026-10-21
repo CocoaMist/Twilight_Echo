@@ -6,6 +6,7 @@ export function useEqSpectrum(source: {
   levels: () => Float32Array | null
   visible: () => boolean
   frozen: () => boolean
+  document?: () => Document
 }) {
   const lineRef = ref<SVGPathElement | null>(null)
   const fillRef = ref<SVGPathElement | null>(null)
@@ -15,6 +16,8 @@ export function useEqSpectrum(source: {
   const speed = ref<SpectrumSpeed>('medium')
   let displayed = new Float32Array(0)
   let peaks = new Float32Array(0)
+  const ownerDocument = () => source.document?.() ?? document
+  let frameWindow: Window | null = null
   let frame = 0
   let lastTime = 0
   let peakPath = ''
@@ -39,7 +42,7 @@ export function useEqSpectrum(source: {
   }
 
   function stop(): void {
-    if (frame) window.cancelAnimationFrame(frame)
+    if (frame) frameWindow?.cancelAnimationFrame(frame)
     frame = 0
     lastTime = 0
   }
@@ -47,8 +50,8 @@ export function useEqSpectrum(source: {
   function animate(now: number): void {
     frame = 0
     const target = source.levels()
-    if (document.hidden || !source.visible() || source.frozen() || !target) return
-    const motion = document.documentElement.dataset.teMotion
+    if (ownerDocument().hidden || !source.visible() || source.frozen() || !target) return
+    const motion = ownerDocument().documentElement.dataset.teMotion
     if (motion === 'reduced' || motion === 'off') {
       displayed.set(target)
       draw()
@@ -58,12 +61,13 @@ export function useEqSpectrum(source: {
     const moving = smoothSpectrum(displayed, target, lastTime ? now - lastTime : 16.7, speed.value)
     lastTime = now
     draw()
-    if (moving) frame = window.requestAnimationFrame(animate)
+    if (moving)
+      frame = (frameWindow = ownerDocument().defaultView ?? window).requestAnimationFrame(animate)
     else lastTime = 0
   }
 
   function update(): void {
-    if (document.hidden) {
+    if (ownerDocument().hidden) {
       stop()
       return
     }
@@ -91,14 +95,15 @@ export function useEqSpectrum(source: {
     if (peaks.length !== target.length) peaks = target.slice()
     if (peakHold.value) accumulateSpectrumPeak(peaks, target)
     updatePeakPath()
-    const motion = document.documentElement.dataset.teMotion
+    const motion = ownerDocument().documentElement.dataset.teMotion
     if (motion === 'reduced' || motion === 'off') {
       stop()
       displayed.set(target)
       draw()
       return
     }
-    if (!frame) frame = window.requestAnimationFrame(animate)
+    if (!frame)
+      frame = (frameWindow = ownerDocument().defaultView ?? window).requestAnimationFrame(animate)
   }
 
   function resetPeaks(): void {
@@ -108,7 +113,7 @@ export function useEqSpectrum(source: {
   }
 
   function onVisibilityChange(): void {
-    if (document.hidden) {
+    if (ownerDocument().hidden) {
       stop()
       return
     }
@@ -123,10 +128,21 @@ export function useEqSpectrum(source: {
     updatePeakPath()
     draw()
   })
+  watch(ownerDocument, (next, previous) => {
+    stop()
+    previous?.removeEventListener('visibilitychange', onVisibilityChange)
+    next.addEventListener('visibilitychange', onVisibilityChange)
+    motionObserver?.disconnect()
+    motionObserver?.observe(next.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-te-motion']
+    })
+    update()
+  })
   onMounted(() => {
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    ownerDocument().addEventListener('visibilitychange', onVisibilityChange)
     motionObserver = new MutationObserver(update)
-    motionObserver.observe(document.documentElement, {
+    motionObserver.observe(ownerDocument().documentElement, {
       attributes: true,
       attributeFilter: ['data-te-motion']
     })
@@ -135,7 +151,7 @@ export function useEqSpectrum(source: {
   })
   onBeforeUnmount(() => {
     stop()
-    document.removeEventListener('visibilitychange', onVisibilityChange)
+    ownerDocument().removeEventListener('visibilitychange', onVisibilityChange)
     motionObserver?.disconnect()
   })
   return { lineRef, fillRef, peakRef, peakHold, range, speed, resetPeaks }

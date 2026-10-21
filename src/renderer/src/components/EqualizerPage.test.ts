@@ -11,8 +11,104 @@ import {
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { useEqualizerHistory } from '../composables/useEqualizerHistory.ts'
+import { createDspFactoryScene, type DspSceneState } from '../../../shared/dspGraph.ts'
 
 const page = readFileSync(new URL('./EqualizerPage.vue', import.meta.url), 'utf8')
+
+test('opening a master-bypassed default scene preserves the separate EQ module switch', () => {
+  const declaration = page.match(/function applyActiveSceneEqToEditor\([\s\S]*?\n\}/)?.[0]
+  assert.ok(declaration)
+  const scene = createDspFactoryScene('headphoneCorrection', 'default')
+  scene.graph.nodes.find((node) => node.type === 'equalizer')!.enabled = false
+  let processing = normalizeAudioProcessing({ dspEnabled: false, eqEnabled: true })
+  const apply = runInNewContext(
+    `${stripTypeScriptTypes(declaration)}\napplyActiveSceneEqToEditor`,
+    {
+      loadedSceneId: null,
+      opraCompensationEnabled: { value: false },
+      audioProcessing: { value: processing },
+      appSettings: { value: null },
+      normalizeAudioProcessing,
+      audioOutputDspStore: {
+        applyAudioProcessingState: (next: typeof processing) => {
+          processing = next
+        }
+      }
+    }
+  )
+  apply({ scenes: [scene], activeSceneId: 'default' })
+  assert.equal(processing.dspEnabled, false)
+  assert.equal(processing.eqEnabled, true)
+})
+
+test('live EQ creates an absent active-scene EQ, stacks OPRA once and requires explicit DSD consent', async () => {
+  const declaration = page.match(/async function syncActiveSceneEq\([\s\S]*?\n\}/)?.[0]
+  assert.ok(declaration)
+  const scene = createDspFactoryScene('transparent', 'active')
+  scene.graph.nodes = [
+    { id: 'legacy', type: 'nativePlugin', pluginAbiVersion: 1, enabled: true, params: {} }
+  ]
+  let state: DspSceneState = {
+    scenes: [scene],
+    activeSceneId: 'active',
+    pinnedSceneId: null,
+    graph: scene.graph,
+    requiresPcmFallback: true,
+    dsdPcmFallbackApplied: false
+  }
+  let consent = false,
+    writes = 0,
+    applied = 0
+  const context = {
+    props: { embedded: true },
+    loadedSceneId: 'active',
+    crypto: { randomUUID: () => 'test' },
+    opraCompensationEnabled: { value: true },
+    headphoneCompensation: {
+      value: { preampDb: -2, bands: [{ frequency: 200, gain: 2, q: 1, filterType: 'peak' }] }
+    },
+    cloneBands,
+    window: {
+      confirm: () => consent,
+      api: {
+        audioEngine: {
+          getDspSceneState: async () => JSON.parse(JSON.stringify(state)),
+          setDspScenes: async (scenes: DspSceneState['scenes']) => {
+            writes++
+            state = { ...state, scenes }
+            return state
+          },
+          applyDspScene: async () => {
+            applied++
+            return state
+          }
+        }
+      }
+    }
+  }
+  const sync = runInNewContext(`${stripTypeScriptTypes(declaration)}\nsyncActiveSceneEq`, context)
+  const settings = normalizeAudioProcessing({
+    eqMode: 'parametric',
+    dspEnabled: true,
+    eqEnabled: true,
+    eqBands: [{ frequency: 1000, gain: -3, q: 1, filterType: 'peak' }]
+  })
+  await sync(settings)
+  assert.equal(writes, 1)
+  assert.equal(applied, 0)
+  assert.deepEqual(
+    state.scenes[0].graph.nodes.map((node) => node.type),
+    ['equalizer', 'nativePlugin']
+  )
+  assert.equal((state.scenes[0].graph.nodes[0].params.bands as unknown[]).length, 2)
+  consent = true
+  await sync(settings)
+  assert.equal(applied, 1)
+  assert.equal((state.scenes[0].graph.nodes[0].params.bands as unknown[]).length, 2)
+  context.loadedSceneId = 'old-device-scene'
+  await assert.rejects(sync(settings), /活动场景已改变/)
+  assert.equal(writes, 2)
+})
 
 test('history keyboard shortcuts leave text undo and modified band shortcuts untouched', () => {
   const declaration = page.match(
@@ -795,7 +891,7 @@ test('parametric page puts mode, presets and power into the instrument with a co
 
 test('parametric spectrum and meters acquire one shared demand without a second IPC timer', () => {
   assert.match(page, /acquireVisualizationConsumer\(\{ spectrumPoints: points \}\)/)
-  assert.match(page, /shouldPoll \? 2048 : 64/)
+  assert.match(page, /shouldPoll\s*\?\s*2048\s*:\s*64/)
   assert.doesNotMatch(page, /getVisualizationData|spectrumPollTimer/)
   assert.match(page, /:spectrum-levels="spectrumLevels"/)
 })
@@ -808,6 +904,8 @@ test('freeze retains its frame, downgrades shared demand, and ignores late detai
   let releases = 0
   const baseline = new Float32Array([0.2, 0.4])
   const context = {
+    props: { visible: true },
+    document: { hidden: false },
     spectrumPollingMounted: true,
     visualizationConsumerPoints: 0,
     releaseVisualizationConsumer: null,
@@ -849,6 +947,15 @@ test('freeze retains its frame, downgrades shared demand, and ignores late detai
   assert.equal(context.spectrumLevels.value, null)
   assert.equal(context.visualizationConsumerPoints, 0)
   assert.equal(releases, 3)
+  context.activeTab.value = 'parametric'
+  actions.updateSpectrumPolling()
+  context.document.hidden = true
+  actions.updateSpectrumPolling()
+  assert.equal(context.visualizationConsumerPoints, 0)
+  context.document.hidden = false
+  context.props.visible = false
+  actions.updateSpectrumPolling()
+  assert.equal(context.visualizationConsumerPoints, 0)
 })
 
 test('equalizer state writes go through the store action instead of detaching storeToRefs', () => {

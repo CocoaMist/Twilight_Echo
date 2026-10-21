@@ -10,6 +10,7 @@ import { storeToRefs } from 'pinia'
 import { useBackHandler } from '@renderer/app/useBackStack.ts'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
+import EqBandTable from '@renderer/components/equalizer/EqBandTable.vue'
 import EqHistoryControls from '@renderer/components/equalizer/EqHistoryControls.vue'
 import ParametricEqWorkspace from '@renderer/components/equalizer/ParametricEqWorkspace.vue'
 import OpraEqPanel from '@renderer/components/equalizer/OpraEqPanel.vue'
@@ -54,6 +55,13 @@ import type {
   HeadphoneCompensationSettings
 } from '@renderer/types/settings'
 import type { DspSceneState } from '../../../shared/dspGraph.ts'
+
+const props = defineProps<{
+  embedded?: boolean
+  visible?: boolean
+  hostDocument?: Document
+  activeSceneId?: string | null
+}>()
 
 type EqualizerTab = EqMode
 type ResponseView = 'dsp' | 'headphone'
@@ -106,6 +114,7 @@ let pendingBandFrame = 0
 const pendingBandPatches = new Map<number, Partial<EqualizerBand>>()
 let pendingPreamp: number | null = null
 let commitChain: Promise<void> = Promise.resolve()
+let activeEqApply: Promise<void> = Promise.resolve()
 let applyFeedbackTimer: number | null = null
 let spectrumPollingMounted = false
 const eqHistory = useEqualizerHistory(audioProcessing.value, applyEqualizerSnapshot)
@@ -376,6 +385,7 @@ async function applyAutoPreamp(): Promise<void> {
   await commitChain
 }
 
+let loadedSceneId: string | null = null
 async function loadAppSettings(): Promise<void> {
   try {
     const settings = await window.api.settings.get()
@@ -404,19 +414,25 @@ async function loadAppSettings(): Promise<void> {
 }
 
 function applyActiveSceneEqToEditor(dspState: DspSceneState): void {
+  loadedSceneId = dspState.activeSceneId
   // The scene EQ node holds the effective (OPRA-stacked) bands; never fold
   // those into the manual editor state or the next manual edit would persist
   // OPRA bands as user EQ and the engine would apply them twice.
   if (opraCompensationEnabled.value) return
   const scene = dspState.scenes.find((item) => item.id === dspState.activeSceneId)
-  const node = scene?.graph.nodes.find((item) => item.type === 'equalizer')
-  if (!node) return
-  const params = node.params
+  if (!scene) return
+  const node = scene.graph.nodes.find((item) => item.type === 'equalizer')
+  const params = node?.params ?? {}
   const settings = normalizeAudioProcessing({
     ...audioProcessing.value,
-    dspEnabled: true,
-    eqEnabled: node.enabled,
-    eqMode: params.mode === 'parametric' ? 'parametric' : 'graphic',
+    dspEnabled: audioProcessing.value.dspEnabled,
+    // The legacy default graph encodes the master gate into node.enabled.
+    // Opening an editor while master-bypassed must not erase the EQ toggle.
+    eqEnabled:
+      scene.id === 'default' && !audioProcessing.value.dspEnabled
+        ? audioProcessing.value.eqEnabled
+        : (node?.enabled ?? false),
+    eqMode: !node || params.mode === 'parametric' ? 'parametric' : 'graphic',
     eqPreamp: typeof params.preampDb === 'number' ? params.preampDb : 0,
     eqBands: Array.isArray(params.bands) ? (params.bands as EqualizerBand[]) : []
   })
@@ -427,8 +443,17 @@ function applyActiveSceneEqToEditor(dspState: DspSceneState): void {
 async function syncActiveSceneEq(nextSettings: AudioProcessingSettings): Promise<void> {
   const dspState = await window.api.audioEngine.getDspSceneState()
   const scene = dspState.scenes.find((item) => item.id === dspState.activeSceneId)
-  const node = scene?.graph.nodes.find((item) => item.type === 'equalizer')
-  if (!node) return
+  if (!scene) throw new Error('当前没有活动 DSP 场景。')
+  if (props.embedded && loadedSceneId && scene.id !== loadedSceneId)
+    throw new Error('活动场景已改变，请等待均衡器重新载入后再调节。')
+  let node = scene.graph.nodes.find((item) => item.type === 'equalizer')
+  if (!node) {
+    node = { id: `equalizer-${crypto.randomUUID()}`, type: 'equalizer', enabled: false, params: {} }
+    const tail = scene.graph.nodes.findIndex(
+      (item) => item.type === 'nativePlugin' && item.pluginAbiVersion === 1
+    )
+    scene.graph.nodes.splice(tail < 0 ? scene.graph.nodes.length : tail, 0, node)
+  }
   // OPRA contributes to the equalizer node but must not override the user's EQ
   // bypass. Preserve its parameters while disabled so re-enabling EQ restores
   // the same stacked response without continuing to process audio in bypass.
@@ -443,7 +468,16 @@ async function syncActiveSceneEq(nextSettings: AudioProcessingSettings): Promise
       ? [...cloneBands(headphoneCompensation.value.bands), ...cloneBands(nextSettings.eqBands)]
       : nextSettings.eqBands
   }
-  await window.api.audioEngine.setDspScenes(dspState.scenes, dspState.pinnedSceneId)
+  const next = await window.api.audioEngine.setDspScenes(dspState.scenes, dspState.pinnedSceneId)
+  if (
+    props.embedded &&
+    next.requiresPcmFallback &&
+    !next.dsdPcmFallbackApplied &&
+    (props.hostDocument?.defaultView ?? window).confirm(
+      '均衡器已保存。停止 DSD Direct / DoP 直通并转换为 PCM 以运行 DSP？'
+    )
+  )
+    await window.api.audioEngine.applyDspScene(next.pinnedSceneId, true)
 }
 
 async function updateAudioProcessing(patch: Partial<AudioProcessingSettings>): Promise<void> {
@@ -468,6 +502,11 @@ async function applyEqualizerSnapshot(snapshot: EqSnapshot): Promise<void> {
   const nextSettings = normalizeAudioProcessing(
     mergeEqualizerPatch(audioProcessing.value, snapshot)
   )
+  if (props.embedded && loadedSceneId) {
+    const current = await window.api.audioEngine.getDspSceneState()
+    if (current.activeSceneId !== loadedSceneId)
+      throw new Error('活动场景已改变，请等待均衡器重新载入后再调节。')
+  }
   await setAudioProcessing(nextSettings, { throwOnError: true })
   await syncActiveSceneEq(nextSettings)
   activeTab.value = nextSettings.eqMode
@@ -502,20 +541,24 @@ function clearApplyFeedbackTimer(): void {
 }
 
 async function runEqApply(action: () => Promise<void>): Promise<void> {
-  clearApplyFeedbackTimer()
-  eqApplyFeedback.value = 'applying'
-  eqApplyError.value = ''
-  try {
-    await action()
-    eqApplyFeedback.value = 'applied'
-    applyFeedbackTimer = window.setTimeout(() => {
-      eqApplyFeedback.value = 'idle'
-      applyFeedbackTimer = null
-    }, 1400)
-  } catch (error) {
-    eqApplyFeedback.value = 'failed'
-    eqApplyError.value = error instanceof Error ? error.message : String(error)
-  }
+  const pending = (async () => {
+    clearApplyFeedbackTimer()
+    eqApplyFeedback.value = 'applying'
+    eqApplyError.value = ''
+    try {
+      await action()
+      eqApplyFeedback.value = 'applied'
+      applyFeedbackTimer = window.setTimeout(() => {
+        eqApplyFeedback.value = 'idle'
+        applyFeedbackTimer = null
+      }, 1400)
+    } catch (error) {
+      eqApplyFeedback.value = 'failed'
+      eqApplyError.value = error instanceof Error ? error.message : String(error)
+    }
+  })()
+  activeEqApply = pending
+  await pending
 }
 
 // Apply the staged edit to renderer state only. The engine apply is deferred to
@@ -722,7 +765,7 @@ async function pasteBands(): Promise<void> {
 }
 
 function blockWhileApplying(event: Event): void {
-  if (!historyBusy.value && !clipboardBusy.value) return
+  if (!historyBusy.value && !clipboardBusy.value && !opraApplyingEqId.value) return
   if (event instanceof KeyboardEvent && event.key === 'Tab') return
   event.preventDefault()
   event.stopImmediatePropagation()
@@ -771,6 +814,8 @@ function updateSpectrumPolling(): void {
     spectrumFrozen.value = false
   const shouldPoll =
     spectrumPollingMounted &&
+    props.visible !== false &&
+    !(props.hostDocument ?? document).hidden &&
     activeTab.value === 'parametric' &&
     responseView.value === 'dsp' &&
     spectrumVisible.value &&
@@ -781,7 +826,14 @@ function updateSpectrumPolling(): void {
   }
   // Spectrum and meters share a single native sample, also consumed by the bar.
   const points =
-    spectrumPollingMounted && activeTab.value === 'parametric' ? (shouldPoll ? 2048 : 64) : 0
+    spectrumPollingMounted &&
+    props.visible !== false &&
+    !(props.hostDocument ?? document).hidden &&
+    activeTab.value === 'parametric'
+      ? shouldPoll
+        ? 2048
+        : 64
+      : 0
   if (points === visualizationConsumerPoints) return
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = points
@@ -905,7 +957,9 @@ async function applyOpraProfile(profile: OpraProfile): Promise<void> {
 }
 
 async function disableOpraCompensation(): Promise<void> {
-  if (!appSettings.value) return
+  if (!appSettings.value || opraApplyingEqId.value) return
+  opraApplyingEqId.value = '__disable__'
+  opraError.value = ''
   try {
     const savedSettings = await window.api.settings.update({
       headphoneCompensation: {
@@ -924,15 +978,9 @@ async function disableOpraCompensation(): Promise<void> {
     }
     await syncActiveSceneEq(audioProcessing.value)
   } catch (err) {
-    console.error('停用 OPRA 补偿失败：', err)
-    // Fallback: at least update local state so the UI reflects the change
-    appSettings.value = {
-      ...appSettings.value,
-      headphoneCompensation: {
-        ...headphoneCompensation.value,
-        enabled: false
-      }
-    }
+    opraError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    opraApplyingEqId.value = ''
   }
 }
 
@@ -999,7 +1047,7 @@ async function switchTab(tab: EqualizerTab): Promise<void> {
 // 参数均衡是页面内部的一层：标题栏返回键先退回图形标签，再退出均衡器页
 // （页面层由 App.vue 按页面旗标注冊）。
 useBackHandler(
-  computed(() => activeTab.value === 'parametric'),
+  computed(() => !props.embedded && activeTab.value === 'parametric'),
   () => switchTab('graphic'),
   '返回图形'
 )
@@ -1058,6 +1106,20 @@ function selectBand(index: number, indices: number[] = [index]): void {
   filterMenuOpen.value = false
 }
 
+watch(
+  () => props.activeSceneId,
+  async (sceneId) => {
+    if (!props.embedded || !sceneId || !loadedSceneId || sceneId === loadedSceneId) return
+    historyLoading.value = true
+    finishParametricEdits()
+    await commitChain
+    await activeEqApply
+    await loadAppSettings()
+    eqHistory.reset(audioProcessing.value)
+    historyLoading.value = false
+  }
+)
+
 onMounted(() => {
   spectrumPollingMounted = true
   loadAutoPreampPreference()
@@ -1093,13 +1155,54 @@ watch(autoPreampTargetDb, () => {
   void applyAutoPreamp()
 })
 
-watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], updateSpectrumPolling)
+watch(
+  [
+    activeTab,
+    spectrumVisible,
+    responseView,
+    isPlaying,
+    spectrumFrozen,
+    () => props.visible,
+    () => props.hostDocument
+  ],
+  updateSpectrumPolling
+)
+watch(
+  () => props.hostDocument,
+  (next, previous) => {
+    previous?.removeEventListener('visibilitychange', updateSpectrumPolling)
+    ;(next ?? document).addEventListener('visibilitychange', updateSpectrumPolling)
+  }
+)
+onMounted(() =>
+  (props.hostDocument ?? document).addEventListener('visibilitychange', updateSpectrumPolling)
+)
+onBeforeUnmount(() =>
+  (props.hostDocument ?? document).removeEventListener('visibilitychange', updateSpectrumPolling)
+)
+defineExpose({
+  busy: computed(
+    () =>
+      historyLoading.value || historyBusy.value || clipboardBusy.value || !!opraApplyingEqId.value
+  ),
+  requestLeave: async () => {
+    finishParametricEdits()
+    await commitChain
+    await activeEqApply
+    return (
+      !historyLoading.value &&
+      !clipboardBusy.value &&
+      !opraApplyingEqId.value &&
+      eqApplyFeedback.value !== 'failed'
+    )
+  }
+})
 </script>
 
 <template>
   <div
     class="eq-page"
-    :class="{ 'is-parametric': activeTab === 'parametric' }"
+    :class="{ 'is-parametric': activeTab === 'parametric', 'eq-embedded': embedded }"
     @keydown="onEqualizerKeydown"
   >
     <div
@@ -1121,6 +1224,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
           role="button"
           tabindex="0"
           :aria-pressed="activeTab === tab.key"
+          :title="embedded ? tab.desc : undefined"
           :class="{ active: activeTab === tab.key }"
           @click="switchTab(tab.key)"
           @keydown.enter.prevent="switchTab(tab.key)"
@@ -1129,9 +1233,21 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
           <i :class="tab.icon"></i>
           <div class="nav-info">
             <span>{{ tab.label }}</span
-            ><small>{{ tab.desc }}</small>
+            ><small v-if="!embedded">{{ tab.desc }}</small>
           </div>
         </div>
+        <button
+          v-if="embedded"
+          type="button"
+          class="embedded-eq-power"
+          role="switch"
+          aria-label="启用均衡器"
+          :aria-checked="audioProcessing.eqEnabled"
+          @click="toggleParametricEq"
+        >
+          <i class="pi pi-power-off"></i
+          >{{ audioProcessing.eqEnabled ? '均衡器已启用' : '均衡器已旁路' }}
+        </button>
       </aside>
 
       <main class="eq-content">
@@ -1214,7 +1330,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
         </div>
 
         <div v-if="activeTab === 'graphic'" class="tab-pane active">
-          <header class="eq-header">
+          <header v-if="!embedded" class="eq-header">
             <div class="eq-title">
               <h1>图形均衡器</h1>
               <p>调整此面板会改变最终输出。</p>
@@ -1237,6 +1353,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
           </header>
 
           <OpraEqPanel
+            :initially-open="!embedded"
             :compensation="headphoneCompensation"
             :status="opraStatus"
             :searching="opraSearching"
@@ -1302,6 +1419,8 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
         <div v-else-if="activeTab === 'parametric'" class="tab-pane active parametric-pane">
           <ParametricEqWorkspace
             ref="parametricWorkspaceRef"
+            :docked-inspector="embedded"
+            :host-document="hostDocument"
             :bands="audioProcessing.eqBands"
             :selected-index="selectedBandIndex"
             :selected-indices="selectedBandIndices"
@@ -1467,6 +1586,42 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
               </label>
             </template>
           </ParametricEqWorkspace>
+          <EqBandTable
+            v-if="embedded"
+            :bands="audioProcessing.eqBands"
+            :selected-indices="selectedBandIndices"
+            caption="手动 EQ 频段 · 不含 OPRA 补偿"
+            @select="selectBand"
+            @patch="
+              (index, patch) => {
+                stageBandPatch(index, patch)
+                void commitStagedBands()
+              }
+            "
+            @remove="deleteBand"
+          />
+          <details v-if="embedded" class="workbench-opra">
+            <summary>
+              耳机补偿 · OPRA
+              <span v-if="opraCompensationEnabled">{{ headphoneCompensation.productName }}</span>
+            </summary>
+            <OpraEqPanel
+              :initially-open="!embedded"
+              :compensation="headphoneCompensation"
+              :status="opraStatus"
+              :searching="opraSearching"
+              :refreshing="opraRefreshing"
+              :applying-eq-id="opraApplyingEqId"
+              :results="opraResults"
+              :error="opraError"
+              :query="opraQuery"
+              @update:query="opraQuery = $event"
+              @search="searchOpraProfiles"
+              @select="applyOpraProfile"
+              @clear="disableOpraCompensation"
+              @refresh="refreshOpraCatalog"
+            />
+          </details>
         </div>
       </main>
     </div>
@@ -2200,7 +2355,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   background: transparent;
   color: var(--eq-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   cursor: pointer;
 }
 .instrument-mode-switch button {
@@ -2224,7 +2379,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   background: transparent;
   color: var(--eq-text-muted);
   box-shadow: none;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
 }
 .instrument-presets .preset-menu {
   width: 280px;
@@ -2320,12 +2475,12 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 .instrument-preamp {
   color: var(--eq-text-muted);
   font-family: var(--eq-mono);
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .instrument-preamp small {
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   color: var(--eq-text-subtle);
 }
 .instrument-preamp input {
@@ -2411,6 +2566,50 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 @media (max-width: 900px) {
   .eq-content {
     padding-bottom: max(40px, calc(var(--te-playbar-bottom-clearance, 0px) + 16px));
+  }
+}
+</style>
+
+<style scoped>
+.eq-page.eq-embedded {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  height: 100%;
+  min-height: 550px;
+  background: transparent;
+  backdrop-filter: none;
+}
+.eq-embedded .eq-container,
+.eq-page.eq-embedded.is-parametric .eq-container {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  border-radius: 0;
+}
+.eq-page.eq-embedded .eq-content {
+  padding: 12px 0 24px;
+}
+.eq-embedded .eq-sidebar {
+  padding-top: 16px;
+  background: transparent;
+}
+.eq-embedded :deep(.parametric-workspace) {
+  --eq-surface: var(--te-app-bg);
+  --eq-text: var(--te-settings-text);
+  --eq-text-muted: var(--te-settings-text-muted);
+}
+@media (max-width: 800px) {
+  .eq-page.eq-embedded .eq-container {
+    flex-direction: column;
+  }
+  .eq-embedded .eq-sidebar {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 0;
   }
 }
 </style>
