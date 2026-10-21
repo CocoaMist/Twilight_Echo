@@ -25,6 +25,7 @@ defineProps<{
   setPluginSettingsField: (panel: UiContribution, key: string, value: string) => void
   submitPluginSettingsForm: (panel: UiContribution) => void
   resetPluginSettingsForm: (panel: UiContribution) => void
+  runPluginSettingsAction: (panel: UiContribution, fieldKey: string) => void
 }>()
 </script>
 <template>
@@ -132,6 +133,7 @@ defineProps<{
             @update="(key, value) => setPluginSettingsField(panel, key, value)"
             @submit="submitPluginSettingsForm(panel)"
             @reset="resetPluginSettingsForm(panel)"
+            @action="(key) => runPluginSettingsAction(panel, key)"
           />
         </template></div
     ></SettingsGroup>
