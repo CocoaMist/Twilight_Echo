@@ -14,6 +14,8 @@ const props = defineProps<{
   show: boolean
   /** 创建后立即加入的曲目；为空就只建一个空歌单。 */
   tracks: Track[]
+  trackCount?: number
+  createWithTracks?: (name: string) => Promise<{ playlistId: string; addedCount: number }>
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +27,7 @@ const { createAggregatePlaylist, addTracksToPlaylistById } = useMusicStore()
 
 const name = ref('')
 const error = ref('')
+const pending = ref(false)
 const dialogRef = ref<HTMLElement | null>(null)
 
 watch(
@@ -37,26 +40,39 @@ watch(
 )
 
 const trackLabel = computed(() =>
-  props.tracks.length > 1 ? `，并加入 ${props.tracks.length} 首歌曲` : ''
+  (props.trackCount ?? props.tracks.length) > 1
+    ? `，并加入 ${props.trackCount ?? props.tracks.length} 首歌曲`
+    : ''
 )
 
 function close(): void {
   emit('close')
 }
 
-function confirm(): void {
+async function confirm(): Promise<void> {
+  if (pending.value) return
   const trimmed = name.value.trim()
   if (!trimmed) {
     error.value = '请输入聚合歌单名称'
     return
   }
   try {
+    if (props.createWithTracks) {
+      pending.value = true
+      const result = await props.createWithTracks(trimmed)
+      if (!props.show) return
+      emit('created', result.playlistId, result.addedCount)
+      close()
+      return
+    }
     const playlistId = createAggregatePlaylist(trimmed)
     const added = props.tracks.length > 0 ? addTracksToPlaylistById(playlistId, props.tracks) : 0
     emit('created', playlistId, added)
     close()
   } catch (createError) {
     error.value = createError instanceof Error ? createError.message : '创建聚合歌单失败'
+  } finally {
+    pending.value = false
   }
 }
 
@@ -96,6 +112,7 @@ useFocusTrap(dialogRef, () => props.show)
             <button
               type="button"
               class="create-aggregate-btn create-aggregate-btn-primary"
+              :disabled="pending"
               @click="confirm()"
             >
               创建

@@ -7,7 +7,11 @@ import { formatReleaseDate } from '../../../../shared/releaseDate.ts'
 import { resolveCover } from '../../utils/coverLoader.ts'
 import { extractAverageColor, normalizeAccentColor } from '../../utils/colorExtractor.ts'
 
-const props = defineProps<{ album: LibraryItem; durationText: string; canPlay: boolean }>()
+const props = defineProps<{
+  album: Omit<LibraryItem, 'tracks'>
+  durationText: string
+  canPlay: boolean
+}>()
 defineEmits<{ play: []; shuffle: [] }>()
 const tint = ref<string | null>(null)
 const ambientStyle = computed(() => (tint.value ? { '--album-tint': tint.value } : {}))

@@ -144,11 +144,67 @@ test('one failed import does not discard subsequent queued requests', async () =
 
 test('app gates imports on uncaught hydration promises and IPC restricts draining to the main frame', () => {
   const app = readFileSync(new URL('../App.vue', import.meta.url), 'utf8')
-  assert.match(app, /const libraryLoad = loadLibrary\(\)/)
+  assert.match(app, /const libraryLoad = loadApplicationLibrary\(\)/)
   assert.match(app, /const playlistsLoad = loadPlaylists\(\)/)
   assert.match(app, /startPluginPlaylistImports\(Promise\.all\(\[libraryLoad, playlistsLoad\]\)\)/)
   const ipc = readFileSync(new URL('../../../main/ipc/plugins.ts', import.meta.url), 'utf8')
   assert.match(ipc, /playlistImports\.enqueue\(request\)/)
   assert.match(ipc, /event\.sender !== runtime\.mainWindow\?\.webContents/)
   assert.match(ipc, /event\.senderFrame !== event\.sender\.mainFrame/)
+})
+
+test('async applies finish before another pull starts and rejected applies do not discard later imports', async () => {
+  const queue = createPlaylistImportQueue(),
+    gate = deferred()
+  queue.enqueue(notice('pending'))
+  queue.enqueue(notice('bad'))
+  queue.enqueue(notice('same-batch'))
+  let listener!: () => void,
+    takes = 0,
+    active = 0,
+    maxActive = 0
+  const started: string[] = [],
+    finished: string[] = [],
+    errors: unknown[] = []
+  const starting = consumePluginPlaylistImports({
+    ready: Promise.resolve(),
+    subscribe: (callback) => {
+      listener = callback
+      return () => {}
+    },
+    take: async () => {
+      takes++
+      return queue.take()
+    },
+    apply: async (request) => {
+      const name = request.playlists[0].name
+      started.push(name)
+      active++
+      maxActive = Math.max(maxActive, active)
+      try {
+        if (name === 'pending') await gate.promise
+        if (name === 'bad') throw new Error('async failed')
+        finished.push(name)
+      } finally {
+        active--
+      }
+    },
+    onError: (error) => {
+      errors.push(error)
+    }
+  })
+  await tick()
+  queue.enqueue(notice('later-pull'))
+  listener()
+  listener()
+  await tick()
+  assert.deepEqual(started, ['pending'])
+  assert.equal(takes, 1)
+  gate.resolve()
+  const stop = await starting
+  await tick()
+  assert.deepEqual(finished, ['pending', 'same-batch', 'later-pull'])
+  assert.equal(errors.length, 1)
+  assert.equal(maxActive, 1)
+  stop()
 })

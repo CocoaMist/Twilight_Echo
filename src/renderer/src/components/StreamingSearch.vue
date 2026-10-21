@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import type { Track, TrackArtistRef } from '../types/music'
-import type {
-  MediaProviderPlaylistSummary,
-  MediaProviderArtistSummary
-} from '../providers/mediaProvider'
+import type { MediaProviderPlaylistSummary } from '../providers/mediaProvider'
 import type { SearchType } from './streaming-page/useStreamingSearch'
 import { albumSearchKey, type AlbumSearchItem } from './streaming-page/albumSearch.ts'
+import { artistSearchKey, type ArtistSearchItem } from './streaming-page/artistSearch.ts'
 import CoverImg from './CoverImg.vue'
+import { trackRowKeyAction } from './song-list/trackRowKeyboard'
 
 interface PageState {
   first: number
@@ -20,7 +19,7 @@ const props = defineProps<{
   searchResults: Track[]
   searchAlbumsResults?: AlbumSearchItem[]
   searchPlaylistsResults: MediaProviderPlaylistSummary[]
-  searchArtistsResults: MediaProviderArtistSummary[]
+  searchArtistsResults: ArtistSearchItem[]
   searchTotal: number
   searchOffset: number
   searchLoading: boolean
@@ -47,7 +46,7 @@ const emit = defineEmits<{
   likeTrack: [track: Track, event: MouseEvent]
   openPlaylist: [playlist: MediaProviderPlaylistSummary]
   openAlbum: [album: AlbumSearchItem]
-  openArtist: [artist: MediaProviderArtistSummary]
+  openArtist: [artist: ArtistSearchItem]
   openTrackArtist: [track: Track, artist?: TrackArtistRef]
   openTrackAlbum: [track: Track]
   pageChange: [event: PageState]
@@ -82,10 +81,11 @@ function emitPage(first: number): void {
 
 function onTrackKeydown(event: KeyboardEvent, track: Track): void {
   if (event.target !== event.currentTarget) return
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault()
+  const action = trackRowKeyAction(event)
+  if (action) {
     event.stopPropagation()
-    if (!event.repeat) emit('searchTrackActivate', track)
+    if (action === 'play') emit('searchTrackActivate', track)
+    else emit('searchTrackClick', track, new MouseEvent('click', { ctrlKey: true }))
   } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
     event.stopPropagation()
@@ -171,7 +171,8 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
                 class="track-row"
                 data-te-interactive
                 tabindex="0"
-                :aria-label="`${track.title} · ${track.artist}，按回车播放`"
+                :aria-label="`${track.title} · ${track.artist}，按回车播放，空格选择`"
+                :aria-selected="isSelected(track.id)"
                 @keydown="onTrackKeydown($event, track)"
                 :class="{
                   'track-playing': currentTrack?.id === track.id,
@@ -352,7 +353,7 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
         <div class="playlist-grid">
           <button
             v-for="artist in searchArtistsResults"
-            :key="artist.id"
+            :key="artistSearchKey(artist)"
             type="button"
             class="playlist-grid-card artist-card"
             data-te-interactive
@@ -372,7 +373,10 @@ function onTrackKeydown(event: KeyboardEvent, track: Track): void {
               ></i>
             </div>
             <div class="playlist-grid-name">{{ artist.name }}</div>
-            <div class="playlist-grid-count">{{ artist.musicSize ?? 0 }} 首单曲</div>
+            <div class="playlist-grid-count">
+              <template v-if="artist.providerName">{{ artist.providerName }} · </template>
+              {{ artist.musicSize ?? 0 }} 首单曲
+            </div>
           </button>
         </div>
       </div>

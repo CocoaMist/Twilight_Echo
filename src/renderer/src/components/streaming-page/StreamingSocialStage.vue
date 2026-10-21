@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import type { Track, TrackArtistRef } from '../../types/music'
 import TrackArtistLinks from '../TrackArtistLinks.vue'
 import CoverImg from '../CoverImg.vue'
+import { trackRowKeyAction } from '../song-list/trackRowKeyboard'
 import ExplicitBadge from '../ExplicitBadge.vue'
 import { useProgressiveList } from './useProgressiveList.ts'
 
@@ -190,6 +191,13 @@ const emptyMessage = computed(() => {
 function onRowActivate(track: Track, index: number, event: MouseEvent): void {
   if (event.detail > 1) return
   emit('trackClick', track, index, event)
+}
+
+function onRowKeydown(event: KeyboardEvent, track: Track, index: number): void {
+  const action = trackRowKeyAction(event)
+  if (action === 'play') emit('playTrack', track, index)
+  if (action === 'select')
+    emit('trackClick', track, index, new MouseEvent('click', { ctrlKey: true }))
 }
 
 function onRowDblClick(track: Track, index: number, event: MouseEvent): void {
@@ -481,6 +489,9 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
             }"
             :style="index === 0 ? { marginTop: `${paddingTop}px` } : undefined"
             role="listitem"
+            tabindex="0"
+            :aria-label="`${track.title} · ${track.artist}，按回车播放，空格选择`"
+            @keydown="onRowKeydown($event, track, trackIndex(index))"
             @click="onRowActivate(track, trackIndex(index), $event)"
             @dblclick="onRowDblClick(track, trackIndex(index), $event)"
             @contextmenu="onContextMenu(track, trackIndex(index), $event)"
@@ -520,7 +531,10 @@ function onContextMenu(track: Track, index: number, event: MouseEvent): void {
               <div class="row-copy">
                 <div class="row-title" :title="track.title">{{ track.title }}</div>
                 <div class="row-artist">
-                  <TrackArtistLinks :track="track" @open-artist="emit('openArtist', track, $event)" />
+                  <TrackArtistLinks
+                    :track="track"
+                    @open-artist="emit('openArtist', track, $event)"
+                  />
                   <span v-if="!track.artist.trim() && !track.artists?.length">未知艺人</span>
                 </div>
               </div>

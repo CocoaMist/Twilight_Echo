@@ -153,6 +153,7 @@ export const usePlayerStore=()=>player
 export const useListeningStatsStore=()=>({listeningStats:ref({days:{}})})
 export const getMostListenedTracks=()=>[]
 export const getRecentTracks=()=>state.recent.value?[{id:state.recent.value.id,track:state.recent.value}]:[]
+export const waitForListeningStatsReady=async()=>{}
 export const createUnifiedRecentTrackResolver=tracks=>stat=>tracks.find(track=>track.id===stat.id)||stat.track
 export const useAudioOutputDspStore=()=>({audioProcessing:ref({dspEnabled:false}),playbackInfo:ref(null),outputInfo:ref(null)})
 export const storeToRefs=store=>store
@@ -162,7 +163,7 @@ const runtime = `import {createApp,h,nextTick} from 'vue'
 import LocalDashboard from '@renderer/components/LocalDashboard.vue'
 import NavigationFixture from './NavigationFixture.vue'
 import {state} from './fixtures.ts'
-window.api={audioEngine:{getDspGraphStatus:async()=>null,getDspSceneState:async()=>null}}
+window.api={audioEngine:{getDspGraphStatus:async()=>null,getDspSceneState:async()=>null},library:{getStorageMode:async()=>'json',onChanged:()=>()=>{}}}
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const settle=async()=>{await nextTick();await new Promise(resolve=>setTimeout(resolve,50))}
 const app=createApp({render:()=>h(LocalDashboard)})
@@ -173,7 +174,7 @@ window.runHomeTransportTests=async()=>{
  await settle()
  for(let tick=0;tick<30&&!document.querySelector('.fresh-cover img')?.naturalWidth;tick++)await settle()
  const fallback=document.querySelector('.fresh-cover img')
- expect(fallback?.naturalWidth===768,'recent music is missing the bundled fallback artwork')
+ expect(fallback?.naturalWidth===1254,'recent music is missing the bundled fallback artwork')
  expect(Math.abs(fallback.getBoundingClientRect().width-fallback.parentElement.getBoundingClientRect().width)<1,'fallback cover is cropped at its intrinsic size')
  expect(controls().length===1,'fresh launch must show its regular play control')
  expect(play()?.getAttribute('aria-label')==='开始收听'&&play().querySelector('[data-playback-icon="play"]'),'idle control must have the visible play glyph and matching accessible label')
@@ -225,7 +226,7 @@ window.runHomeTransportTests=async()=>{
   expect(artist.getBoundingClientRect().top-title.getBoundingClientRect().bottom<14,'short title separates its artist at width '+width)
   const grid=document.querySelector('.fresh-grid'),tiles=[...grid.children],host=document.querySelector('.home-inner')
   const image=tiles[0].querySelector('img'),frame=tiles[0].querySelector('.fresh-cover')
-  expect(image?.naturalWidth===768&&Math.abs(image.getBoundingClientRect().width-frame.getBoundingClientRect().width)<1&&Math.abs(image.getBoundingClientRect().height-frame.getBoundingClientRect().height)<1,'fallback cover sizing broke at '+width+'px')
+  expect(image?.naturalWidth===1254&&Math.abs(image.getBoundingClientRect().width-frame.getBoundingClientRect().width)<1&&Math.abs(image.getBoundingClientRect().height-frame.getBoundingClientRect().height)<1,'fallback cover sizing broke at '+width+'px')
   const gridBox=grid.getBoundingClientRect()
   expect(tiles.length===6&&tiles.every(tile=>{const box=tile.getBoundingClientRect();return box.width>0&&box.left>=gridBox.left-1&&box.right<=gridBox.right+1}),'responsive music shelf must keep its cards in bounds at '+width+' '+density)
   expect(document.querySelector('.signal-card').getBoundingClientRect().bottom<gridBox.top,'signal card returns above recent music')

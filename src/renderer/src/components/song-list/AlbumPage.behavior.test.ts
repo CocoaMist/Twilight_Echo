@@ -151,11 +151,11 @@ window.albumTest=async()=>{
  expect(document.querySelector('.album-detail-release').textContent==='1998年','year precision lost')
  filter.value='album:id:album-3';await pause(650)
  const missingArtwork=document.querySelector('.album-artwork img')
- expect(missingArtwork?.complete&&missingArtwork.naturalWidth===768,'missing album artwork must display the packaged music cover')
+ expect(missingArtwork?.complete&&missingArtwork.naturalWidth===1254,'missing album artwork must display the packaged music cover')
  expect(document.querySelector('.album-detail-release').textContent==='发行时间未知','unknown date missing')
  filter.value='album:id:album-4';await pause(650)
  const failedArtwork=document.querySelector('.album-artwork img')
- expect(failedArtwork?.complete&&failedArtwork.naturalWidth===768,'failed album artwork must display the packaged music cover')
+ expect(failedArtwork?.complete&&failedArtwork.naturalWidth===1254,'failed album artwork must display the packaged music cover')
  filter.value=null;await pause(650)
  expect(errors.length===0,errors.join(';'))
  return 'ALBUM_UI_OK'

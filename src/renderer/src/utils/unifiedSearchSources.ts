@@ -7,9 +7,13 @@ import {
   type SourceVariantInput
 } from '@renderer/utils/logicalTrackModel.ts'
 import type { NetworkEntry } from '../../../shared/networkSources.ts'
+import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
 
 type SearchIndexEntry = { item: UnifiedSearchTrackItem; text: string }
-const localIndexes = new WeakMap<readonly Track[], SearchIndexEntry[]>()
+const localIndexes = new WeakMap<
+  readonly Track[],
+  { revision: number; entries: SearchIndexEntry[] }
+>()
 
 export function toSearchItem(
   track: Track,
@@ -38,18 +42,20 @@ export function searchUnifiedLocalPage(
 ): { items: UnifiedSearchTrackItem[]; total: number } {
   const q = normalizeSearchText(query)
   if (!q) return { items: [], total: 0 }
-  let index = localIndexes.get(tracks)
-  if (!index) {
-    index = tracks.map((track) => ({
+  getMusicVersions()
+  let cached = localIndexes.get(tracks)
+  if (!cached || cached.revision !== musicVersionRevision.value) {
+    const index = tracks.map((track) => ({
       item: toSearchItem(track, { sourceName: '本地音乐', providerAvailable: true }),
       text: `${getTrackSearchBlob(track)}\u0000${normalizeSearchText(track.fileName)}`
     }))
     index.sort((left, right) => compareSearchItems(left.item, right.item))
-    localIndexes.set(tracks, index)
+    cached = { revision: musicVersionRevision.value, entries: index }
+    localIndexes.set(tracks, cached)
   }
   const items: UnifiedSearchTrackItem[] = []
   let total = 0
-  for (const entry of index) {
+  for (const entry of cached.entries) {
     if (!entry.text.includes(q)) continue
     if (total >= offset && items.length < limit) items.push(entry.item)
     total += 1

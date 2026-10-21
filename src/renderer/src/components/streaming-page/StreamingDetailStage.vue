@@ -10,6 +10,7 @@ import type {
 } from '@renderer/components/streaming-page/streamingTrackView'
 import type { Track, TrackArtistRef } from '../../types/music'
 import CoverImg from '../CoverImg.vue'
+import { trackRowKeyAction } from '../song-list/trackRowKeyboard'
 import ExplicitBadge from '../ExplicitBadge.vue'
 import { useProgressiveList } from './useProgressiveList.ts'
 import {
@@ -277,6 +278,13 @@ async function locateCurrentTrack(): Promise<void> {
 function onRowActivate(track: Track, index: number, event: MouseEvent): void {
   if (event.detail > 1) return
   emit('trackClick', track, index, event)
+}
+
+function onRowKeydown(event: KeyboardEvent, track: Track, index: number): void {
+  const action = trackRowKeyAction(event)
+  if (action === 'play') emit('playTrack', track, index)
+  if (action === 'select')
+    emit('trackClick', track, index, new MouseEvent('click', { ctrlKey: true }))
 }
 
 function onRowDblClick(track: Track, index: number, event: MouseEvent): void {
@@ -610,6 +618,9 @@ const infoTrack = shallowRef<Track | null>(null)
             }"
             :style="index === 0 ? { marginTop: `${paddingTop}px` } : undefined"
             role="listitem"
+            tabindex="0"
+            :aria-label="`${row.track.title} · ${row.track.artist}，按回车播放，空格选择`"
+            @keydown="onRowKeydown($event, row.track, row.index)"
             @click="onRowActivate(row.track, row.index, $event)"
             @dblclick="onRowDblClick(row.track, row.index, $event)"
             @contextmenu="onContextMenu(row.track, row.index, $event)"

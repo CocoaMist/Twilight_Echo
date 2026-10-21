@@ -1,5 +1,5 @@
-import { computed, nextTick, onUnmounted, ref, watch, type ComputedRef, type Ref } from 'vue'
-import { filterLocalGridItems } from '../../utils/localLibrarySearch'
+import { computed, nextTick, onScopeDispose, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { filterLocalGridItems } from '../../utils/localLibrarySearch.ts'
 import type { GridItem, LocalTransitionName } from './types'
 import {
   estimateGridColumns,
@@ -8,14 +8,18 @@ import {
   getSongListGridScrollTopForIndex,
   getSongListGridVirtualRange,
   GRID_OVERSCAN_ROWS
-} from './songListVirtualWindow'
+} from './songListVirtualWindow.ts'
 
-type UseSongListGridRenderingOptions = {
+type UseSongListGridRenderingOptions<T extends GridItem> = {
   category: () => string
   filter: () => string | null
   transitionName: () => 'page-down' | 'page-up'
   debouncedSearchQuery: ComputedRef<string> | { value: string }
-  currentGridItems: ComputedRef<GridItem[]>
+  currentGridItems: ComputedRef<T[]>
+  itemCount?: ComputedRef<number>
+  itemAt?: (index: number) => T | undefined
+  /** SQL has already matched complete collection members; summaries have no tracks. */
+  serverFiltered?: ComputedRef<boolean>
   showGrid: ComputedRef<boolean>
   updateViewportHeight: () => void
   containerRef: Ref<HTMLElement | null>
@@ -23,31 +27,37 @@ type UseSongListGridRenderingOptions = {
   viewportHeight: Ref<number>
 }
 
-export function useSongListGridRendering({
+export function useSongListGridRendering<T extends GridItem = GridItem>({
   category,
   filter,
   transitionName,
   debouncedSearchQuery,
   currentGridItems,
+  itemCount,
+  itemAt,
+  serverFiltered,
   showGrid,
   updateViewportHeight,
   containerRef,
   scrollTop,
   viewportHeight
-}: UseSongListGridRenderingOptions): {
+}: UseSongListGridRenderingOptions<T>): {
   renderedGridCount: ComputedRef<number>
-  filteredGridItems: ComputedRef<GridItem[]>
-  visibleGridItems: ComputedRef<GridItem[]>
+  filteredGridItems: ComputedRef<T[]>
+  visibleGridItems: ComputedRef<T[]>
   gridTotalCount: ComputedRef<number>
   gridWindowStart: ComputedRef<number>
   gridPaddingTop: ComputedRef<number>
   gridPaddingBottom: ComputedRef<number>
   showPlaylistCreateCard: ComputedRef<boolean>
-  visibleArtists: ComputedRef<GridItem[]>
-  visibleAlbums: ComputedRef<GridItem[]>
-  visibleGenres: ComputedRef<GridItem[]>
-  visiblePlaylists: ComputedRef<GridItem[]>
-  visibleFolders: ComputedRef<GridItem[]>
+  visibleArtists: ComputedRef<T[]>
+  visibleAlbums: ComputedRef<T[]>
+  visibleGenres: ComputedRef<T[]>
+  visiblePlaylists: ComputedRef<T[]>
+  visibleFolders: ComputedRef<T[]>
+  visibleGridSlots: ComputedRef<Array<{ index: number; item: T | undefined }>>
+  gridDataRange: ComputedRef<{ start: number; end: number }>
+  gridRowGap: Ref<number>
   gridColumns: Ref<number>
   gridRowStride: Ref<number>
   gridOffsetTop: Ref<number>
@@ -62,18 +72,26 @@ export function useSongListGridRendering({
   const isSwitching = ref(false)
   const gridColumns = ref(1)
   const gridRowStride = ref(280)
+  const gridRowGap = ref(22)
   const gridOffsetTop = ref(0)
   let measureFrame: number | null = null
   let layoutObserver: ResizeObserver | null = null
   let observedGrid: HTMLElement | null = null
   let observedCard: HTMLElement | null = null
+  let measuredWidth = -1
+  let measuredCategory = ''
+  let disposed = false
 
   const filteredGridItems = computed(() =>
-    filterLocalGridItems(currentGridItems.value, debouncedSearchQuery.value)
+    serverFiltered?.value
+      ? currentGridItems.value
+      : filterLocalGridItems(currentGridItems.value, debouncedSearchQuery.value)
   )
   const leadingSlotCount = computed(() => (category() === 'playlists' ? 1 : 0))
-  const virtualItemCount = computed(() => filteredGridItems.value.length + leadingSlotCount.value)
-  const gridTotalCount = computed(() => filteredGridItems.value.length)
+  const gridTotalCount = computed(() =>
+    serverFiltered?.value && itemCount ? itemCount.value : filteredGridItems.value.length
+  )
+  const virtualItemCount = computed(() => gridTotalCount.value + leadingSlotCount.value)
   const localTransitionName = computed<LocalTransitionName>(() =>
     transitionName() === 'page-up' ? 'local-page-up' : 'local-page-down'
   )
@@ -97,20 +115,35 @@ export function useSongListGridRendering({
   const dataEnd = computed(() =>
     Math.max(dataStart.value, gridRange.value.end - leadingSlotCount.value)
   )
+  const gridDataRange = computed(() => ({ start: dataStart.value, end: dataEnd.value }))
+  const visibleGridSlots = computed(() =>
+    Array.from({ length: dataEnd.value - dataStart.value }, (_, offset) => {
+      const index = dataStart.value + offset
+      return {
+        index,
+        item: serverFiltered?.value && itemAt ? itemAt(index) : filteredGridItems.value[index]
+      }
+    })
+  )
   const visibleGridItems = computed(() =>
-    filteredGridItems.value.slice(dataStart.value, dataEnd.value)
+    visibleGridSlots.value.flatMap(({ item }) => (item ? [item] : []))
   )
   const gridWindowStart = computed(() => dataStart.value)
   const renderedGridCount = computed(() => dataEnd.value)
   const showPlaylistCreateCard = computed(
     () => leadingSlotCount.value > 0 && gridRange.value.start === 0
   )
-  const gridPaddingTop = computed(() => gridRange.value.startRow * gridRange.value.rowStride)
+  const gridPaddingTop = computed(() =>
+    Math.max(0, gridRange.value.startRow * gridRange.value.rowStride - gridRowGap.value)
+  )
   const totalRows = computed(() =>
     Math.ceil(virtualItemCount.value / Math.max(1, gridRange.value.columns))
   )
   const gridPaddingBottom = computed(() =>
-    Math.max(0, (totalRows.value - gridRange.value.endRow) * gridRange.value.rowStride)
+    Math.max(
+      0,
+      (totalRows.value - gridRange.value.endRow) * gridRange.value.rowStride - gridRowGap.value
+    )
   )
   const visibleArtists = computed(() => (category() === 'artists' ? visibleGridItems.value : []))
   const visibleAlbums = computed(() => (category() === 'albums' ? visibleGridItems.value : []))
@@ -120,11 +153,11 @@ export function useSongListGridRendering({
   )
   const visibleFolders = computed(() => (category() === 'folders' ? visibleGridItems.value : []))
 
-  function estimateFromContainer(): void {
+  function estimateFromContainer(preserveColumns = false): void {
     const container = containerRef.value
     const width = container?.clientWidth || 960
     const viewportWidth = window.innerWidth || width
-    gridColumns.value = estimateGridColumns(width, viewportWidth)
+    if (!preserveColumns) gridColumns.value = estimateGridColumns(width, viewportWidth)
     const columnWidth = width / Math.max(1, gridColumns.value)
     const fontSize = container
       ? Number.parseFloat(
@@ -148,11 +181,18 @@ export function useSongListGridRendering({
       estimateFromContainer()
       return
     }
-    gridOffsetTop.value = grid.offsetTop
+    gridOffsetTop.value =
+      grid.getBoundingClientRect().top -
+      container.getBoundingClientRect().top +
+      container.scrollTop -
+      container.clientTop
+    gridRowGap.value = Number.parseFloat(window.getComputedStyle(grid).rowGap) || 0
     const template = window.getComputedStyle(grid).gridTemplateColumns
     const columns = template.split(/\s+/).filter(Boolean).length
     if (columns > 0) gridColumns.value = columns
-    const firstCard = grid.querySelector<HTMLElement>('.artist-card, .album-card, .playlist-card')
+    const firstCard = grid.querySelector<HTMLElement>(
+      '.artist-card, .album-card, .playlist-card, .aggregate-card'
+    )
     if (
       typeof ResizeObserver !== 'undefined' &&
       (grid !== observedGrid || firstCard !== observedCard)
@@ -170,15 +210,20 @@ export function useSongListGridRendering({
       observedCard = firstCard
     }
     if (firstCard) {
-      const gap = Number.parseFloat(window.getComputedStyle(grid).rowGap) || 22
-      gridRowStride.value = Math.max(1, firstCard.getBoundingClientRect().height + gap)
+      measuredWidth = grid.clientWidth
+      measuredCategory = category()
+      gridRowStride.value = Math.max(1, firstCard.getBoundingClientRect().height + gridRowGap.value)
       return
     }
-    estimateFromContainer()
+    if (measuredWidth !== grid.clientWidth || measuredCategory !== category()) {
+      estimateFromContainer(true)
+      measuredWidth = grid.clientWidth
+      measuredCategory = category()
+    }
   }
 
   function scheduleMeasure(): void {
-    if (measureFrame !== null) return
+    if (disposed || measureFrame !== null) return
     measureFrame = window.requestAnimationFrame(() => {
       measureFrame = null
       measureGridMetrics()
@@ -227,6 +272,14 @@ export function useSongListGridRendering({
     { immediate: true, flush: 'post' }
   )
 
+  watch(
+    () => visibleGridSlots.value.find(({ item }) => item)?.item,
+    () => {
+      if (showGrid.value) void nextTick(scheduleMeasure)
+    },
+    { flush: 'post' }
+  )
+
   watch([scrollTop, viewportHeight], () => {
     if (showGrid.value && gridOffsetTop.value === 0) scheduleMeasure()
   })
@@ -235,7 +288,8 @@ export function useSongListGridRendering({
     window.addEventListener('resize', scheduleMeasure)
   }
 
-  onUnmounted(() => {
+  onScopeDispose(() => {
+    disposed = true
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', scheduleMeasure)
     }
@@ -250,6 +304,9 @@ export function useSongListGridRendering({
     visibleGridItems,
     gridTotalCount,
     gridWindowStart,
+    visibleGridSlots,
+    gridDataRange,
+    gridRowGap,
     gridPaddingTop,
     gridPaddingBottom,
     showPlaylistCreateCard,

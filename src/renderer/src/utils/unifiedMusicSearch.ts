@@ -1,6 +1,7 @@
 import type { MediaProviderCapability, MediaProviderSearchResult } from '../providers/mediaProvider'
 import type { Track, TrackSource } from '../types/music'
 import type { NetworkEntry } from '../../../shared/networkSources.ts'
+import type { LibraryQuery } from '../../../shared/libraryDatabase.ts'
 import {
   buildLogicalTracks,
   clampReliability,
@@ -60,9 +61,32 @@ export interface UnifiedSearchTrackItem {
 export type LogicalMusicVariant = SourceVariant
 export type LogicalMusicItem = LogicalTrack
 
+export interface LibrarySearchSnapshot {
+  libraryRevision?: number
+  preferenceRevision?: number
+}
+export interface UnifiedLocalSearchPage extends LibrarySearchSnapshot {
+  items: UnifiedSearchTrackItem[]
+  total: number
+  /** Local-only results can play the complete database query, not this page. */
+  playbackQuery?: LibraryQuery
+}
+export interface UnifiedLocalSearch {
+  search(
+    query: string,
+    limit: number,
+    offset: number,
+    signal?: AbortSignal
+  ): Promise<UnifiedLocalSearchPage>
+  /** Slow providers must not publish a local page from an obsolete library/order. */
+  confirm(page: LibrarySearchSnapshot, signal?: AbortSignal): Promise<void>
+}
+
 export interface UnifiedSearchOptions {
   query: string
   localTracks: Track[]
+  localSource?: UnifiedLocalSearch
+  signal?: AbortSignal
   networkEntries?: Array<{ profileName: string; entry: NetworkEntry }>
   providers: UnifiedSearchProvider[]
   limit?: number
@@ -81,6 +105,7 @@ export interface UnifiedSearchResult {
   health: Record<string, UnifiedSearchProviderHealth>
   total: number
   hasMore?: boolean
+  libraryRevision?: number
 }
 
 export async function unifiedSearchSongs(
@@ -90,7 +115,10 @@ export async function unifiedSearchSongs(
   const limit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 30) || 30))
   const offset = Math.max(0, Math.trunc(options.offset ?? 0) || 0)
   if (!query) return { items: [], logicalItems: [], health: {}, total: 0, hasMore: false }
-  const local = searchUnifiedLocalPage(options.localTracks, query, limit, offset)
+  const local: UnifiedLocalSearchPage = options.localSource
+    ? await options.localSource.search(query, limit, offset, options.signal)
+    : searchUnifiedLocalPage(options.localTracks, query, limit, offset)
+  if (options.signal?.aborted) throw new DOMException('Search was cancelled', 'AbortError')
   const network = searchUnifiedNetworkPage(options.networkEntries ?? [], query, limit, offset)
   const health: Record<string, UnifiedSearchProviderHealth> = {}
   let total = local.total + network.total
@@ -146,13 +174,17 @@ export async function unifiedSearchSongs(
     )
   ).flat()
 
+  await options.localSource?.confirm(local, options.signal)
+  if (options.signal?.aborted) throw new DOMException('Search was cancelled', 'AbortError')
+
   const items = [...local.items, ...network.items, ...providerItems].sort(compareSearchItems)
   return {
     items,
     logicalItems: buildLogicalMusicItemsFromSearchItems(items),
     health,
     total,
-    hasMore
+    hasMore,
+    ...('libraryRevision' in local ? { libraryRevision: local.libraryRevision } : {})
   }
 }
 

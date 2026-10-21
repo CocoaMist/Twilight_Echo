@@ -75,7 +75,7 @@ export const useMusicStore=()=>({tracks,artists})
 `
 const playerFixture = `import {shallowRef} from 'vue'
 export const currentTrack=shallowRef(null),calls=[]
-export const usePlayerStore=()=>({currentTrack,playTrack:(track,queue)=>{calls.push({track,queue});currentTrack.value=track}})
+export const usePlayerStore=()=>({currentTrack,playTrack:(track,queue)=>{calls.push({track,queue});currentTrack.value=track},playLibraryQuery:async(query,id)=>{calls.push({query,id})}})
 `
 const runtime = `import {createApp,h,nextTick,triggerRef} from 'vue'
 import Page from '@renderer/components/ListeningAnalyticsPage.vue'
@@ -84,9 +84,12 @@ import {calls} from './player'
 import {useListeningStatsStore,resetListeningStatsForTest,recordListeningForTest,waitForListeningStatsReady} from '@renderer/stores/useListeningStatsStore'
 import {ListeningStatsDatabase} from '@renderer/stores/listeningStatsDatabase'
 import {getUnifiedRecentResolverRebuildCount} from '@renderer/utils/unifiedRecentTracks'
+let storageMode='json';const libraryListeners=new Set(),databaseCalls=[]
+window.api={library:{getStorageMode:async()=>storageMode,onChanged:listener=>(libraryListeners.add(listener),()=>libraryListeners.delete(listener)),database:{getTracksByIds:async ids=>{databaseCalls.push({type:'tracks',ids});return {revision:1,tracks:ids.map(id=>({...track('database'),id}))}},lookupPlaylistTracks:async input=>{databaseCalls.push({type:'history',input});return {revision:1,ids:input.entries.map(()=>'sqlite-track')}},queryTracks:async query=>{databaseCalls.push({type:'artist',query});return {revision:1,total:query.artist==='本地艺人'?1:0,tracks:[]}}}}}
 const expect=(ok,message)=>{if(!ok)throw new Error(message)}
 const tick=async()=>{await nextTick();await nextTick()}
 const untilClosed=async()=>{const end=Date.now()+3000;while(document.querySelector('.stats-clear-dialog')){if(Date.now()>end)throw new Error('native clear dialog exit did not finish');await new Promise(resolve=>setTimeout(resolve,20))}await tick()}
+const waitFor=async(predicate,message)=>{const end=Date.now()+3000;while(!predicate()){if(Date.now()>end)throw new Error(message);await new Promise(resolve=>setTimeout(resolve,10))}}
 const text=selector=>document.querySelector(selector)?.textContent
 const button=(scope,label)=>[...document.querySelectorAll(scope+' button')].find(el=>el.textContent.trim()===label)
 const key=async(el,value)=>{el.focus();el.dispatchEvent(new KeyboardEvent('keydown',{key:value,bubbles:true,cancelable:true}));await tick()}
@@ -183,6 +186,19 @@ window.runJournalTests=async()=>{
   document.querySelector('.stats-clear-confirm').click();await untilClosed()
   expect(document.querySelector('.journal-empty')&&document.querySelector('.journal-clear').disabled,'full clear did not restore empty state')
   expect(Object.keys(listeningStats.value.days).length===0&&Object.keys(listeningStats.value.tracks).length===0,'full clear retained historical data')
+  storageMode='sqlite'
+  const databaseTrack={...track('database'),id:'sqlite-track'}
+  listeningStats.value={days:{[today]:3600},tracks:{sqlite:stat(databaseTrack,7200,8)}}
+  triggerRef(listeningStats)
+  for(const listener of libraryListeners)listener()
+  await waitFor(()=>databaseCalls.some(call=>call.type==='artist'),'SQLite ranking refresh did not finish')
+  await tick()
+  expect(databaseCalls.some(call=>call.type==='history'),'SQLite ranking did not resolve history identities')
+  expect(document.querySelectorAll('.ranking-row:not(:disabled)').length===1,'SQLite ranking did not resolve the database-only track')
+  document.querySelector('.ranking-row:not(:disabled)').click();await tick()
+  expect(calls.at(-1).query.sort==='playlist'&&calls.at(-1).id==='sqlite-track','SQLite ranking playback did not use a library query')
+  button('.ranking-tabs','艺人').click();await tick()
+  expect(views.at(-1)[0]==='artists'&&views.at(-1)[1]==='artist:本地艺人','SQLite artist availability did not use indexed lookup')
   app.unmount();resetListeningStatsForTest()
 }
 `

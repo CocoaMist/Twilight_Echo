@@ -2,7 +2,8 @@ import type { Track, TrackSource } from '@renderer/types/music'
 import { sourceVersion } from '@renderer/stores/musicVersions.ts'
 import { getTrackSource, versionSourceKey } from '@renderer/utils/trackSourceIdentity.ts'
 export { getTrackSource } from '@renderer/utils/trackSourceIdentity.ts'
-import { getLogicalTrackKey } from '@renderer/utils/logicalTrackIdentity.ts'
+import { createRecordingIdentityRules } from '../../../shared/recordingIdentity.ts'
+export { canShareLogicalTrack } from '../../../shared/recordingIdentity.ts'
 
 export interface SourceVariantInput {
   track: Track
@@ -46,7 +47,7 @@ const LOSSLESS_FORMATS = new Set([
   'dff',
   'mqa'
 ])
-const LOGICAL_DURATION_TOLERANCE_SECONDS = 8
+const identityRules = createRecordingIdentityRules((key) => sourceVersion('tracks', key))
 
 export function buildLogicalTracks(inputs: Iterable<SourceVariantInput>): LogicalTrack[] {
   const groups: LogicalTrack[] = []
@@ -137,58 +138,9 @@ export function compareSourceVariantsByTitle(left: SourceVariant, right: SourceV
   )
 }
 
-export function canShareLogicalTrack(left: Track, right: Track): boolean {
-  if (!left.duration || !right.duration) return true
-  return Math.abs(left.duration - right.duration) <= LOGICAL_DURATION_TOLERANCE_SECONDS
-}
-
-export function canShareTrackIdentity(left: Track, right: Track): boolean {
-  if (versionSourceKey(left) === versionSourceKey(right)) return true
-  const leftVersion = sourceVersion('tracks', versionSourceKey(left))
-  const rightVersion = sourceVersion('tracks', versionSourceKey(right))
-  if (leftVersion || rightVersion) return !!leftVersion && leftVersion.id === rightVersion?.id
-  if (getLogicalTrackKey(left) !== getLogicalTrackKey(right)) return false
-  const versionHint = (track: Track): string =>
-    (track.title + ' ' + track.album)
-      .match(
-        /\blive\b|现场|\bremaster(?:ed)?\b|重制|\bacoustic\b|\bunplugged\b|不插电|\binstrumental\b|伴奏/gi
-      )
-      ?.map((hint) => hint.toLowerCase())
-      .sort()
-      .join(':') ?? ''
-  if (versionHint(left) !== versionHint(right)) return false
-  const leftRemote = getRemoteSongRef(left)
-  const rightRemote = getRemoteSongRef(right)
-  if (
-    leftRemote &&
-    rightRemote &&
-    leftRemote.provider === rightRemote.provider &&
-    leftRemote.id !== rightRemote.id
-  ) {
-    return false
-  }
-  return canShareLogicalTrack(left, right)
-}
-
-function getRemoteSongRef(track: Track): { provider: string; id: string } | null {
-  const source = getTrackSource(track)
-  if (source === 'local') return null
-  if (track.ncmSongId != null) return { provider: 'ncm', id: String(track.ncmSongId) }
-  const separatorIndex = track.id.indexOf(':')
-  const remoteId = separatorIndex > 0 ? track.id.slice(separatorIndex + 1).trim() : ''
-  return remoteId ? { provider: source, id: remoteId } : null
-}
-
-export function getRecordingTrackKey(
-  track: Pick<Track, 'id' | 'title' | 'artist'> & Partial<Track>
-): string {
-  const version = sourceVersion('tracks', versionSourceKey(track))
-  return version ? `version:${version.id}` : getLogicalTrackKey(track)
-}
-
-export function preferredSourceKey(track: Track): string | null {
-  return sourceVersion('tracks', versionSourceKey(track))?.preferredSource ?? null
-}
+export const canShareTrackIdentity = identityRules.canShareTrackIdentity
+export const getRecordingTrackKey = identityRules.getRecordingTrackKey
+export const preferredSourceKey = identityRules.preferredSourceKey
 
 function isPreferredSource(track: Track): boolean {
   return preferredSourceKey(track) === versionSourceKey(track)

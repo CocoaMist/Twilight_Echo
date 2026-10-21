@@ -25,6 +25,7 @@ export interface TrackArtistRef {
 }
 
 export interface Track {
+  isrc?: string
   id: string
   /**
    * Stable playback-queue entry identity. A track may occur more than once in

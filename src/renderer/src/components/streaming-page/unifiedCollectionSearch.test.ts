@@ -91,3 +91,53 @@ test('global pages cross source boundaries without duplicate items, gaps or over
     []
   ])
 })
+
+test('a failed authoritative local window or final revision check cannot become partial online success', async () => {
+  const options = {
+    local: { items: ['local:0'], total: 40 },
+    limit: 30,
+    offset: 30,
+    searchLocal: async () => {
+      throw new Error('local database offline')
+    },
+    providers: [{ id: 'remote', name: 'Remote' }],
+    search: async () => ({ items: ['remote'], total: 1 }),
+    reportError: (message: string) => assert.fail(message)
+  }
+  await assert.rejects(searchUnifiedCollections(options), /local database offline/)
+  await assert.rejects(
+    searchUnifiedCollections({
+      ...options,
+      offset: 0,
+      local: { items: [], total: 0 },
+      confirmLocal: async () => {
+        throw new Error('library revision changed')
+      }
+    }),
+    /library revision changed/
+  )
+})
+
+test('cancellation during slow providers prevents follow-up source reads and publication', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+      release = resolve
+    }),
+    controller = new AbortController()
+  const request = searchUnifiedCollections({
+    local: { items: [], total: 100 },
+    limit: 30,
+    offset: 30,
+    searchLocal: async () => assert.fail('cancelled search must not request the next local window'),
+    providers: [{ id: 'remote', name: 'Remote' }],
+    search: async () => {
+      await gate
+      return { items: [], total: 0 }
+    },
+    reportError: (message) => assert.fail(message),
+    signal: controller.signal
+  })
+  controller.abort()
+  release()
+  await assert.rejects(request, { name: 'AbortError' })
+})

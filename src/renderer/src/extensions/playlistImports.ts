@@ -5,7 +5,7 @@ export async function consumePluginPlaylistImports(options: {
   ready: Promise<unknown>
   subscribe: (callback: () => void) => () => void
   take: () => Promise<PluginPlaylistImportNotice[]>
-  apply: (request: PluginPlaylistImportNotice) => void
+  apply: (request: PluginPlaylistImportNotice) => void | Promise<void>
   onError: (error: unknown) => void
 }): Promise<() => void> {
   await options.ready
@@ -18,7 +18,7 @@ export async function consumePluginPlaylistImports(options: {
         const requests = await options.take()
         for (const request of requests) {
           try {
-            options.apply(request)
+            await options.apply(request)
           } catch (error) {
             options.onError(error)
           }

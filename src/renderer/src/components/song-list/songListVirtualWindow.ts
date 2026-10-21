@@ -144,8 +144,11 @@ export function getSongListGridVirtualRange({
   const safeStride = Math.max(1, rowStride)
   const totalRows = Math.ceil(safeCount / safeColumns)
   const virtualScrollTop = Math.max(0, scrollTop - gridOffsetTop)
-  const startRow = Math.max(0, Math.floor(virtualScrollTop / safeStride) - overscanRows)
   const visibleRows = Math.ceil(Math.max(0, viewportHeight) / safeStride) + overscanRows * 2
+  const startRow = Math.min(
+    Math.max(0, totalRows - visibleRows),
+    Math.max(0, Math.floor(virtualScrollTop / safeStride) - overscanRows)
+  )
   const endRow = Math.min(totalRows, startRow + visibleRows)
   return {
     start: Math.min(safeCount, startRow * safeColumns),
