@@ -801,6 +801,8 @@ struct AudioPipeline::DecodeStream {
   AudioStreamInfo stream;
   AudioFormat decodeFormat;
   DspResamplerQuality actualResamplerQuality = DspResamplerQuality::Native;
+  // Decode-thread reconnects publish one coherent observation for status readers.
+  std::atomic<uint32_t> resamplerObservation{0};
   std::unique_ptr<FFmpegDecoder> decoder;
   std::unique_ptr<DsdReader> dsdReader;
   // DSD-preserving DST decoder provider, injected into dsdReader so SACD ISO
@@ -913,6 +915,16 @@ struct AudioPipeline::DecodeStream {
     }
   }
 
+  void publishResamplerObservation() {
+    resamplerObservation.store(
+        static_cast<uint32_t>(decoder->resamplerEngine()) |
+        (static_cast<uint32_t>(decoder->effectiveResamplerQuality()) << 4) |
+        (((actualResamplerQuality == DspResamplerQuality::SoxrHq ||
+           actualResamplerQuality == DspResamplerQuality::SoxrVhq) &&
+          decoder->effectiveResamplerQuality() == FFmpegDecoder::ResamplerQuality::Ultra) ? 0x100u : 0u),
+        std::memory_order_release);
+  }
+
   bool openDsdSource(const QueueItem& queueItem, std::string* error) {
     stop();
     decoder.reset();
@@ -980,6 +992,7 @@ struct AudioPipeline::DecodeStream {
       decodeFormat.sampleFormat = AudioSampleFormat::Float32Interleaved;
     }
     if (!decoder->setOutputFormat(decodeFormat, error)) return false;
+    publishResamplerObservation();
     decodeFormat = decoder->outputFormat();
     stream.decodedFormat = decodeFormat;
     const double logicalStart = clampLogicalSegmentPosition(startTimeSeconds);
@@ -1394,6 +1407,7 @@ struct AudioPipeline::DecodeStream {
           restored ? "source position restored" : attemptError,
           context + ",\"durationMs\":" + std::to_string(duration) + "}");
       if (restored) {
+        publishResamplerObservation();
         decoderNeedsReopen = false;
         return true;
       }
@@ -5394,7 +5408,26 @@ void AudioPipeline::reclaimRetiredRenderDspGraphsLocked() const {
 
 std::string AudioPipeline::appliedDspGraphStatusJsonLocked() const {
   reclaimRetiredRenderDspGraphsLocked();
-  return appliedDspGraphStatusJson_;
+  std::string json = appliedDspGraphStatusJson_;
+  const auto start = json_utils::topLevelFieldValueStart(json, "outputStage");
+  if (!start || *start >= json.size() || json[*start] != '{') return json;
+  const uint32_t observation = activeStream_
+      ? activeStream_->resamplerObservation.load(std::memory_order_acquire) : 0;
+  const auto engine = static_cast<FFmpegDecoder::ResamplerEngine>(observation & 0xf);
+  const auto quality = static_cast<FFmpegDecoder::ResamplerQuality>((observation >> 4) & 0xf);
+  const char* engineName = engine == FFmpegDecoder::ResamplerEngine::None ? "none" :
+      engine == FFmpegDecoder::ResamplerEngine::Swr ? "swr" :
+      engine == FFmpegDecoder::ResamplerEngine::Soxr ? "soxr" : "unknown";
+  const char* qualityName = quality == FFmpegDecoder::ResamplerQuality::SoxrVhq ? "soxrVhq" :
+      quality == FFmpegDecoder::ResamplerQuality::SoxrHq ? "soxrHq" :
+      quality == FFmpegDecoder::ResamplerQuality::Ultra ? "ultra" :
+      quality == FFmpegDecoder::ResamplerQuality::High ? "high" : "native";
+  const bool known = engine != FFmpegDecoder::ResamplerEngine::Unknown;
+  json.insert(*start + 1, std::string("\"effectiveResampler\":\"") + engineName +
+      "\",\"effectiveResamplerQuality\":" + (known ? std::string("\"") + qualityName + "\"" : "null") +
+      ",\"effectiveResamplerFallback\":" + ((observation & 0x100u) ? "true" : "false") +
+      ",\"resampled\":" + (!known ? "null" : engine == FFmpegDecoder::ResamplerEngine::None ? "false" : "true") + ",");
+  return json;
 }
 
 std::unique_ptr<DspChain> AudioPipeline::makeDspGraphCandidateLocked(

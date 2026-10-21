@@ -3,6 +3,7 @@ import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DiagnosticWriterClient } from './client.ts'
+import { registerDiagnosticQuit } from './quit.ts'
 import {
   configureDiagnosticLogger,
   diagnosticIdentity,
@@ -155,12 +156,8 @@ app
   })
   .catch((error) => writeDiagnostic('app', 'diagnostics.setup-failed', { error }, 'error'))
 
-let shuttingDown = false
-app.on('will-quit', (event) => {
-  if (shuttingDown) return
-  shuttingDown = true
-  event.preventDefault()
+registerDiagnosticQuit(app, async () => {
   flushDiagnosticAggregates()
   writeDiagnostic('app', 'session.end')
-  void diagnosticWriter.close().finally(() => app.quit())
+  await diagnosticWriter.close()
 })

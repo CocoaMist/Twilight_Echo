@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { describeResampler } from '../../../shared/resamplerStatus.ts'
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -564,12 +565,6 @@ const DITHER_LABELS: Record<string, string> = {
   noiseShaped: '二阶噪声整形'
 }
 
-const RESAMPLER_LABELS: Record<string, string> = {
-  native: 'Native',
-  high: 'High',
-  ultra: 'Ultra'
-}
-
 const dspSceneState = ref<DspSceneState | null>(null)
 const polledDspGraphStatus = ref<DspGraphStatus | null>(null)
 const dspRouteDialogOpen = ref(false)
@@ -776,10 +771,11 @@ const dspOutputStages = computed<DspRouteStage[]>(() => {
   const status = outputStageStatus.value
   const sourceRate = sourceSampleRate.value
   const actualRate = status?.actualSampleRate || actualOutputSampleRate.value
-  const srcActive =
-    status?.active === true ||
-    outputInfo.value?.resampled === true ||
-    (sourceRate > 0 && actualRate > 0 && sourceRate !== actualRate)
+  const srcKnown =
+    (status?.effectiveResampler === 'none' && status.resampled === false) ||
+    ((status?.effectiveResampler === 'swr' || status?.effectiveResampler === 'soxr') &&
+      status.resampled === true)
+  const srcActive = srcKnown && status?.resampled === true
   const targetLabel =
     config.targetSampleRate === 'device'
       ? actualRate > 0
@@ -802,9 +798,9 @@ const dspOutputStages = computed<DspRouteStage[]>(() => {
       icon: 'ph ph-arrows-left-right',
       enabled: true,
       active: srcActive,
-      state: srcActive ? 'active' : 'bypassed',
-      stateLabel: srcActive ? '实时转换' : 'SRC 旁路',
-      detail: `${RESAMPLER_LABELS[config.resamplerQuality]} · ${srcDetail}`
+      state: srcActive ? 'active' : srcKnown ? 'bypassed' : 'ready',
+      stateLabel: srcActive ? '实时转换' : srcKnown ? 'SRC 旁路' : 'SRC 未验证',
+      detail: `${describeResampler(config.resamplerQuality, status)} · ${srcDetail}`
     },
     {
       id: 'output-dither',

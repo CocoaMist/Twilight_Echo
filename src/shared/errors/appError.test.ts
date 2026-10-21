@@ -12,6 +12,16 @@ import {
 } from './appError.ts'
 import { presentError, presentErrorDetail } from './presentError.ts'
 
+test('native decode failures explain the audio problem and retain the original diagnostics', () => {
+  for (const phase of ['receive', 'send', 'flush']) {
+    const message = `Audio decoder ${phase} failed, code: -1094995529`
+    const presented = presentErrorDetail('zh-CN', message)
+    assert.match(presented.display, /音频读取或解码失败/)
+    assert.equal(presented.developerMessage, message)
+    assert.match(presentError('en-US', message), /Audio could not be read or decoded/)
+  }
+})
+
 test('output route failures survive IPC and render localized copy with their actual params', () => {
   const cases = [
     {

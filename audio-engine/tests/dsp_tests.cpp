@@ -1300,10 +1300,12 @@ int main() {
     chain.prepare(testFormat());
     std::string error;
 
+    soxrRuntimeStateStorage().store(0);
     assert(chain.configureGraphJson(graphWithQuality("soxrHq"), &error));
     std::string statusJson = chain.graphStatusJson();
     assert(statusJson.find("\"resamplerQuality\":\"soxrHq\"") != std::string::npos);
     assert(statusJson.find("\"resamplerEngine\":\"") != std::string::npos);
+    assert(statusJson.find("\"resamplerEngine\":\"unknown\"") != std::string::npos);
     assert(statusJson.find("\"resamplerFallback\":") != std::string::npos);
 
     assert(chain.configureGraphJson(graphWithQuality("soxrVhq"), &error));
