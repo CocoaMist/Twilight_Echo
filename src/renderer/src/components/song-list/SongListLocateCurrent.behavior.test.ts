@@ -63,7 +63,7 @@ test(
       const files = await readdir(join(directory, 'bundle'))
       await writeFile(
         join(directory, 'index.html'),
-        `<!doctype html><html data-theme="pureWhite"><head><meta charset="utf-8">${files
+        `<!doctype html><html data-theme="pureWhite" data-te-motion="off"><head><meta charset="utf-8">${files
           .filter((name) => name.endsWith('.css'))
           .map((name) => `<link rel="stylesheet" href="bundle/${name}">`)
           .join(
@@ -105,6 +105,7 @@ window.api = {
 const currentTrack = ref(null)
 window.songListPlayer = {
   currentTrack,
+  queue: ref([]),
   isPlaying: ref(false),
   mode: 'order',
   playTrack() {},
@@ -165,8 +166,8 @@ const waitFor = async (predicate, message) => {
 
 window.songListLocateTest = async () => {
   await waitFor(
-    () => document.querySelector('.song-list')?.dataset.teLocateCurrent === 'true',
-    'the table did not advertise the locate action'
+    () => document.querySelector('.song-list') && document.querySelector('.te-scroll-companion'),
+    'the table did not register the shared locate action'
   )
   const container = document.querySelector('.song-list')
   const initialScrollTop = 1_200
@@ -174,13 +175,12 @@ window.songListLocateTest = async () => {
   container.scrollTop = initialScrollTop
   container.dispatchEvent(new Event('scroll'))
   await waitFor(
-    () => document.querySelector('.te-scroll-locate')?.dataset.teScrollLocateVisible === 'true',
+    () => document.querySelector('.te-scroll-companion')?.dataset.teScrollTopVisible === 'true',
     'the shared locate control did not appear'
   )
 
-  let locateEventCount = 0
-  container.addEventListener('te-locate-current', () => { locateEventCount += 1 })
-  document.querySelector('.te-scroll-locate').click()
+  const before = JSON.stringify({ track: currentTrack.value, queue: window.songListPlayer.queue.value })
+  document.querySelector('.te-scroll-companion').click()
   await waitFor(
     () =>
       Array.from(document.querySelectorAll('.track-row')).some((element) =>
@@ -188,7 +188,19 @@ window.songListLocateTest = async () => {
       ),
     'the locate click did not mount the current track row'
   )
-  expect(locateEventCount === 1, 'the locate control did not emit exactly one page event')
+  await waitFor(
+    () => {
+      const current = document.querySelector('.track-playing')?.getBoundingClientRect()
+      const viewport = container.getBoundingClientRect()
+      return document.querySelector('.te-scroll-companion')?.dataset.teScrollTopVisible === 'false' &&
+        current && current.top >= viewport.top && current.bottom <= viewport.bottom
+    },
+    'the locate control did not hide after revealing the row'
+  )
+  expect(
+    JSON.stringify({ track: currentTrack.value, queue: window.songListPlayer.queue.value }) === before,
+    'the locate control changed playback state'
+  )
   expect(container.scrollTop > initialScrollTop, 'the locate click did not scroll the table')
   const row = Array.from(document.querySelectorAll('.track-row')).find((element) =>
     element.textContent.includes('Locate track ' + targetIndex)

@@ -84,6 +84,7 @@ import { useSongListGridRendering } from './song-list/useSongListGridRendering'
 import { usePlaylistLifecycleActions } from './song-list/usePlaylistLifecycleActions.ts'
 import { useSongListSearch } from './song-list/useSongListSearch'
 import { useSongListVirtualScroll } from './song-list/useSongListVirtualScroll'
+import { useLocatePlayingTrack } from './song-list/useLocatePlayingTrack'
 import { useTrackMultiSelect } from './song-list/useTrackMultiSelect'
 
 const props = defineProps<{
@@ -598,13 +599,6 @@ const isCollectionGrid = computed(
   () => showGrid.value && (props.category === 'artists' || props.category === 'albums')
 )
 
-const currentTrackIndex = computed(() => {
-  const trackId = currentTrack.value?.id
-  if (!trackId || !showTable.value) return -1
-  return displayTracks.value.findIndex((track) => track.id === trackId)
-})
-
-const canLocateCurrentTrack = computed(() => currentTrackIndex.value >= 0)
 const collectionViewPreferences = new LibraryCollectionViewPreferences()
 const collectionViewState = ref<LibraryCollectionViewState>(
   collectionViewPreferences.read(props.category)
@@ -994,7 +988,6 @@ const {
   onScroll,
   updateViewportHeight,
   restoreScrollAndMeasure,
-  scrollToTrack,
   scrollTop,
   viewportHeight
 } = useSongListVirtualScroll({
@@ -1439,6 +1432,21 @@ const {
 
 const availableIndexLetters = computed(() => availableCollectionLetters(filteredGridItems.value))
 
+useLocatePlayingTrack({
+  containerRef,
+  tbodyRef,
+  displayTracks,
+  // Application playlists and device history can retain online snapshots.
+  libraryTracks: computed(() =>
+    props.category === 'playlists' || props.category === 'recent'
+      ? displayTracks.value
+      : tracks.value
+  ),
+  currentTrack,
+  enabled: computed(() => showTable.value && !isSwitching.value),
+  rowHeight
+})
+
 function collectionLetterDisabled(letter: string): boolean {
   return !availableIndexLetters.value.has(letter)
 }
@@ -1510,12 +1518,6 @@ function finishViewSwitchAndRestoreScroll(): void {
   finishViewSwitch()
   restoreScrollAndMeasure()
 }
-
-function locateCurrentTrack(): void {
-  const index = currentTrackIndex.value
-  if (index < 0) return
-  scrollToTrack(index)
-}
 </script>
 
 <template>
@@ -1528,9 +1530,7 @@ function locateCurrentTrack(): void {
       'playlist-library': category === 'playlists' && showGrid
     }"
     :style="{ height: '100vh' }"
-    :data-te-locate-current="canLocateCurrentTrack ? 'true' : undefined"
     @scroll="onSongListScroll"
-    @te-locate-current="locateCurrentTrack"
   >
     <Teleport to="body">
       <NativeDialogTransition>

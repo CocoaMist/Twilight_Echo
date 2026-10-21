@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
 test(
-  'video disclosure, 20-part paging, playback, locating and themes work in the real detail stage',
+  'video disclosure, 20-part paging, playback, scoped locating and themes work in the real detail stage',
   { timeout: 60_000 },
   async () => {
     const directory = await mkdtemp(join(tmpdir(), 'twilight-video-parts-'))
@@ -87,6 +87,7 @@ test(
 const runtime = `
 import {createApp,h,ref,nextTick} from 'vue';
 import Stage from '@renderer/components/streaming-page/StreamingDetailStage.vue';
+import {installScrollToTopButton} from '@renderer/utils/scrollToTopButton.ts';
 import '@renderer/assets/base.css';
 import '@renderer/assets/primeicons.css';
 const cover='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><rect width="300" height="300" fill="#293c3c"/><circle cx="150" cy="150" r="100" fill="none" stroke="#cab791" stroke-width="2"/><circle cx="150" cy="150" r="72" fill="none" stroke="#cab791"/><text x="150" y="144" text-anchor="middle" font-family="serif" font-size="28" fill="#f0e4ce">CLASSICAL</text><text x="150" y="177" text-anchor="middle" font-family="serif" font-size="18" fill="#cab791">COLLECTION</text></svg>');
@@ -97,15 +98,18 @@ const query=ref(''),sort=ref('default'),current=ref(tracks[40].id),shown=ref([..
 const errors=[],events=[];
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const expect=(ok,label)=>{if(!ok)throw new Error(label)};
-const app=createApp({render:()=>h(Stage,{kind:'playlist',title:'午后古典',cover,description:'Bilibili 收藏夹 · 在熟悉的旋律里，发现每一个乐章。',trackCountLabel:'2 个视频',tracks:shown.value,query:query.value,sort:sort.value,currentTrackId:current.value,canLocate:true,isExternal:true,showTrackLikes:true,favoriteProviderLabel:'Bilibili',isSelected:()=>false,isTrackLiked:()=>true,isLiking:()=>false,formatTime:s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0'),onPlayTrack:(t,i)=>events.push([t.id,i]),onLikeTrack:t=>events.push(['like',t.id]),onTrackContextMenu:(t,i)=>events.push(['context',t.id,i]),'onUpdate:query':value=>{query.value=value;shown.value=value?[tracks[26]]:[...tracks,single]}})});
-app.config.errorHandler=e=>errors.push(String(e));app.mount('#app');
+const app=createApp({render:()=>h(Stage,{kind:'playlist',title:'午后古典',cover,description:'Bilibili 收藏夹 · 在熟悉的旋律里，发现每一个乐章。',trackCountLabel:'2 个视频',tracks:shown.value,query:query.value,sort:sort.value,currentTrackId:current.value,isExternal:true,showTrackLikes:true,favoriteProviderLabel:'Bilibili',isSelected:()=>false,isTrackLiked:()=>true,isLiking:()=>false,formatTime:s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0'),onPlayTrack:(t,i)=>events.push([t.id,i]),onLikeTrack:t=>events.push(['like',t.id]),onTrackContextMenu:(t,i)=>events.push(['context',t.id,i]),'onUpdate:query':value=>{query.value=value;shown.value=value?[tracks[26]]:[...tracks,single]}})});
+app.config.errorHandler=e=>errors.push(String(e));app.mount('#app');installScrollToTopButton();
 const find=s=>document.querySelector(s);
+const locatorShown=()=>find('.te-scroll-companion')?.dataset.teScrollTopVisible==='true';
+const waitFor=async(predicate,label)=>{for(let i=0;i<80;i++){await nextTick();await pause(20);if(predicate())return}throw new Error(label)};
 const click=async s=>{expect(find(s),'missing '+s);find(s).click();await nextTick();await pause(90)};
 const top=async()=>{find('#app').scrollTop=0;await pause(90)};
 const pager=async()=>{const list=find('.stage-rows');find('#app').scrollTop=list.offsetTop+21*64-300;await pause(90);expect(find('.part-pager'),'missing pager')};
 window.checkParts=async()=>{
  await pause(150);expect(!find('.part-track'),'starts collapsed');expect(find('.part-count').textContent==='47 P','part count');
  await click('.part-disclosure');expect(find('.part-track[data-part-index="1"]'),'expands P1');expect(!find('[data-part-index="21"]'),'does not leak next page');
+ expect(!locatorShown(),'current part on another page must not be locatable');
  await pager();expect(find('.part-range').textContent.includes('1–20 / 47'),'first page range');expect(find('[aria-label="上一页分P"]').disabled,'first page bound');
  await click('[aria-label="下一页分P"]');expect(find('[data-part-index="21"]'),'second page begins at P21');
  await click('[data-part-index="21"] .row-play-btn');expect(events[0][0]===tracks[20].id&&events[0][1]===20,'correct original playback index');
@@ -115,9 +119,18 @@ window.checkParts=async()=>{
  expect(find('[data-part-index="41"]'),'last page P41');expect(!find('[data-part-index="48"]'),'no extra part');
  expect(find('[aria-label="下一页分P"]').disabled,'last page bound');expect(find('.part-range').textContent.includes('41–47 / 47'),'last range');
  await click('.part-collapse');expect(!find('.part-track'),'collapses from footer');await click('.part-disclosure');expect(find('[data-part-index="41"]'),'retains page after folding');
- await click('.part-disclosure');await click('[aria-label="定位正在播放的歌曲"]');expect(find('[data-part-index="41"].playing'),'locate unfolds and pages');
+ await click('.part-disclosure');expect(!locatorShown(),'collapsed part must not be locatable');expect(query.value==='','collapsed locate check changed query');
+ await click('.part-disclosure');current.value=tracks[46].id;find('#app').style.minHeight='0';find('#app').style.height='520px';await top();
+ await waitFor(locatorShown,'offscreen part on the selected page must be locatable');
+ const beforeLocate=JSON.stringify({current:current.value,query:query.value,events});
+ await click('[aria-label="定位正在播放的歌曲"]');
+ await waitFor(()=>!locatorShown()&&find('[data-part-index="47"].playing'),'locate did not reveal the current part on the selected page');
+ const located=find('[data-part-index="47"].playing').getBoundingClientRect(),viewport=find('#app').getBoundingClientRect();
+ expect(located.bottom>viewport.top&&located.top<viewport.bottom,'located part stayed outside the viewport');
+ expect(JSON.stringify({current:current.value,query:query.value,events})===beforeLocate,'locate changed query, playback or actions');
+ find('#app').style.height='';find('#app').style.minHeight='';current.value=tracks[40].id;await top();
  const input=find('.track-search input');input.value='月光';input.dispatchEvent(new Event('input',{bubbles:true}));await pause(100);expect(find('[data-part-index="27"]'),'matching part revealed automatically');
- await click('[aria-label="定位正在播放的歌曲"]');expect(find('[data-part-index="41"].playing'),'locate clears filter and selects correct page');
+ expect(!locatorShown(),'filtered current part must not be locatable');expect(query.value==='月光','locate cleared the query');
  expect(errors.length===0,errors.join(';'));return {played:events[0][0],queueIndex:events[0][1]};
 };
 window.preparePartsScreenshot=async(tone,expanded)=>{
