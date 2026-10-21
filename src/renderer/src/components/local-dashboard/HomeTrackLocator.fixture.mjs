@@ -27,6 +27,7 @@ const songs = Array.from({ length: 12 }, (_, index) => ({
   format: 'flac'
 }))
 const current = songs[0]
+window.api = { library: { getStorageMode: async () => 'json', onChanged: () => () => {} } }
 let playCalls = 0
 window.homePlayer = {
   currentTrack: ref(current),

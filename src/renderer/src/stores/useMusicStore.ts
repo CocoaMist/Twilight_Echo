@@ -1,5 +1,18 @@
 import { buildDerivedCollections } from './library/derivedCollections.ts'
 import { createPlaylistController } from './library/playlistController.ts'
+import { createLibraryCompatibilityRefresh } from './library/libraryCompatibilityRefresh.ts'
+import { patchLibraryMetadata } from './library/libraryMetadataPatch.ts'
+import { resolveLibraryPlaylistImportPaths } from './library/libraryPlaylistImport.ts'
+import { readLibraryPlaylistTrackPresence } from './library/libraryPlaylistPresence.ts'
+import { findLibraryPlaylistRelocations } from './library/libraryPlaylistRepair.ts'
+import { readLibraryPlaylistTracks } from './library/libraryPlaylistResolution.ts'
+import {
+  createPlaylistDocumentWriter,
+  findPlaylistRelocations
+} from '../utils/playlistLifecycle.ts'
+import { createLibraryUnifiedSearch } from './library/libraryUnifiedSearch.ts'
+import { getMusicVersions, musicVersionRevision } from './musicVersions.ts'
+import { libraryTrack } from '../utils/libraryQueuePlayback.ts'
 import type { Playlist, LibraryItem, PlaylistPersistenceNotice } from './library/musicStoreTypes.ts'
 export type {
   Playlist,
@@ -11,6 +24,7 @@ export type {
 import { computed, ref, shallowRef } from 'vue'
 import type { Track } from '../types/music'
 import { equalBpmAnalysis } from '../utils/bpmAnalysisEquality.ts'
+import type { LibraryTrackPatch } from '../../../shared/libraryDatabase.ts'
 import type {
   LocalLibraryExclusion,
   LocalLibraryClearExclusionsResult,
@@ -68,10 +82,15 @@ interface LibraryRepairReport {
 }
 
 type LibraryChange =
+  | { kind: 'database'; revision: number }
   | { kind: 'add' | 'remove' | 'unknown'; path?: string }
   | { kind: 'scan'; update: LocalLibraryScanUpdate }
 
 const tracks = shallowRef<Track[]>([])
+// SQLite keeps the authoritative count in metadata while `tracks` remains a
+// deliberately bounded compatibility reference. JSON keeps this in sync with
+// its complete in-memory snapshot.
+const libraryTrackCount = ref<number | null>(null)
 const scannedFolders = ref<string[]>([])
 const isScanning = ref(false)
 const artists = shallowRef<LibraryItem[]>([])
@@ -120,6 +139,10 @@ const libraryMetadataEnrichmentStatus = ref<LibraryMetadataEnrichmentStatus>({
   error: ''
 })
 let libraryRevision = 0
+let compatibilityRevision = -1
+let libraryStorageMode: 'json' | 'sqlite' | null = null
+const libraryCompatibilityError = shallowRef('')
+let databaseCompatibilityRefresh: ReturnType<typeof createLibraryCompatibilityRefresh> | null = null
 const trackById = new Map<string, Track>()
 const trackByPath = new Map<string, Track>()
 const trackIndexById = new Map<string, number>()
@@ -145,6 +168,7 @@ let libraryMetadataEnrichmentQueue: LibraryMetadataEnrichmentQueue | null = null
 let metadataProviderSync: Promise<void> | null = null
 const pendingMetadataEnrichmentUpdates = new Map<string, LibraryMetadataEnrichmentTrackUpdate>()
 let metadataEnrichmentFlushScheduled = false
+let metadataEnrichmentEpoch = 0
 
 const { clonePlaylistSnapshot, queuePlaylistPersistence, ...playlistCommands } =
   createPlaylistController({
@@ -153,10 +177,92 @@ const { clonePlaylistSnapshot, queuePlaylistPersistence, ...playlistCommands } =
     trackById,
     getTracksRevision: () => tracksRevision,
     playlistPersistenceStatus,
-    playlistPersistenceNotice
+    playlistPersistenceNotice,
+    exportDocument: async (playlist, format) => {
+      const mode = libraryStorageMode ?? (await window.api.library.getStorageMode())
+      if (mode === 'json') return null
+      if (mode !== 'sqlite') throw new Error('无法确认曲库存储，未导出歌单')
+      const writer = createPlaylistDocumentWriter(format)
+      await readLibraryPlaylistTracks(playlist, window.api.library.database, {
+        getVersions: () => {
+          const document = getMusicVersions()
+          return { revision: musicVersionRevision.value, versions: document.tracks.versions }
+        },
+        consume: (batch) => {
+          for (const track of batch) writer.append(track)
+        }
+      })
+      return writer.finish()
+    },
+    readTrackPresence: async (ids) => {
+      const mode = libraryStorageMode ?? (await window.api.library.getStorageMode())
+      if (mode === 'json') return null
+      if (mode !== 'sqlite') throw new Error('无法确认曲库存储，未修复歌单')
+      return readLibraryPlaylistTrackPresence(ids, window.api.library.database)
+    },
+    findRelocationsInFolder: async (missing, folder) => {
+      const mode = libraryStorageMode ?? (await window.api.library.getStorageMode())
+      if (mode === 'json')
+        return findPlaylistRelocations(
+          missing,
+          (await window.api.fs.scanMusicFiles(folder)) as Track[]
+        )
+      if (mode !== 'sqlite') throw new Error('无法确认曲库存储，未修复歌单')
+      return findLibraryPlaylistRelocations(missing, folder, window.api.library.database)
+    },
+    resolveImportPaths: async (paths) => {
+      const mode = libraryStorageMode ?? (await window.api.library.getStorageMode())
+      if (mode === 'json') return null
+      if (mode !== 'sqlite') throw new Error('无法确认曲库存储，未导入歌单')
+      return resolveLibraryPlaylistImportPaths(paths, window.api.library.database)
+    }
   })
 
 export function useMusicStore() {
+  function createUnifiedSearchSource() {
+    let preferences: { revision: number; sources: string[] } | null = null
+    return createLibraryUnifiedSearch({
+      getStorageMode: async () => {
+        const mode = libraryStorageMode ?? (await window.api.library.getStorageMode())
+        if (mode !== 'json' && mode !== 'sqlite')
+          throw new Error('无法确认曲库存储，未执行本地搜索')
+        return mode
+      },
+      getJsonTracks: () => tracks.value,
+      getJsonAlbums: () => albums.value,
+      getJsonArtists: () => artists.value,
+      getPreferences: () => {
+        const document = getMusicVersions()
+        if (!preferences || preferences.revision !== musicVersionRevision.value)
+          preferences = {
+            revision: musicVersionRevision.value,
+            sources: document.tracks.versions.flatMap((version) =>
+              version.preferredSource ? [version.preferredSource] : []
+            )
+          }
+        return preferences
+      },
+      api: {
+        queryTracks: (query) => window.api.library.database.queryTracks(query),
+        queryCollections: (kind, query) =>
+          window.api.library.database.queryCollections(kind, query),
+        getMetadata: () => window.api.library.database.getMetadata()
+      }
+    })
+  }
+  const compatibilityRefresh = (databaseCompatibilityRefresh ??= createLibraryCompatibilityRefresh({
+    getRevision: () => compatibilityRevision,
+    isScanning: () =>
+      libraryScanStatus.value.state === 'running' ||
+      libraryMetadataEnrichmentStatus.value.state === 'enriching',
+    refresh: (minimumRevision) =>
+      libraryStorageMode === 'sqlite'
+        ? readLibraryMetadata(minimumRevision)
+        : readLibrarySnapshot(true, minimumRevision),
+    onError: (error) => {
+      libraryCompatibilityError.value = error
+    }
+  }))
   function rebuildDerivedCollections(): void {
     rebuildTrackLookupIndexes()
     const { settings } = useSettingsStore()
@@ -173,6 +279,7 @@ export function useMusicStore() {
 
   function setTracks(nextTracks: Track[], options: { rebuildIndexes?: boolean } = {}): void {
     tracks.value = nextTracks
+    if (libraryStorageMode !== 'sqlite') libraryTrackCount.value = nextTracks.length
     tracksRevision++
     libraryMutationGeneration++
     if (options.rebuildIndexes !== false) {
@@ -224,6 +331,7 @@ export function useMusicStore() {
   }
 
   async function saveLibrary(): Promise<void> {
+    if (libraryStorageMode === 'sqlite') return
     // Direct save: flush any pending timer and write immediately
     if (saveLibraryTimer !== null) {
       clearTimeout(saveLibraryTimer)
@@ -238,6 +346,7 @@ export function useMusicStore() {
   }
 
   function scheduleSaveLibrary(): Promise<void> {
+    if (libraryStorageMode === 'sqlite') return Promise.resolve()
     return new Promise<void>((resolve) => {
       pendingSaveResolvers.push({ generation: libraryMutationGeneration, resolve })
       librarySaveRetryDelayMs = 500
@@ -250,6 +359,15 @@ export function useMusicStore() {
   }
 
   function flushSaveLibrary(): void {
+    // Query/patch consumers have no renderer snapshot to flush. In particular,
+    // quitting during a scan must not replace its committed rows with the last
+    // compatibility read. Explicit legacy dirty writes still retain their API.
+    if (
+      libraryStorageMode === 'sqlite' &&
+      saveLibraryTimer === null &&
+      pendingSaveResolvers.length === 0
+    )
+      return
     if (saveLibraryTimer !== null) {
       clearTimeout(saveLibraryTimer)
       saveLibraryTimer = null
@@ -294,11 +412,73 @@ export function useMusicStore() {
     }
   }
 
-  async function loadLibrary(skipDateOnlyEnrichment = false): Promise<void> {
-    const saved = await window.api.data.loadMusicLibrary()
-    if (!saved) return
+  /** Application startup discovers authority before starting any background writes.
+   * loadLibrary keeps its complete-document compatibility contract for old callers. */
+  async function loadApplicationLibrary(): Promise<void> {
+    const mode = await window.api.library.getStorageMode()
+    if (mode !== 'sqlite' && mode !== 'json') throw new Error('曲库存储模式无效')
+    libraryStorageMode = mode
+    if (mode === 'sqlite') {
+      await readLibraryMetadata()
+      return
+    }
+    await loadLibrary()
+  }
 
-    libraryMetadataEnrichmentQueue?.cancel()
+  /**
+   * SQLite owns the track rows. Renderer startup and revision notifications
+   * only need the small configuration/summary record; consumers resolve rows
+   * through the paginated database API when they need them.
+   */
+  async function readLibraryMetadata(minimumRevision = 0): Promise<number> {
+    const metadata = await window.api.library.database.getMetadata()
+    if (
+      !metadata ||
+      !Number.isSafeInteger(metadata.revision) ||
+      metadata.revision < minimumRevision
+    )
+      throw new Error('曲库 metadata 版本过旧，请重试读取')
+    if (
+      metadata.revision < Math.max(libraryRevision, compatibilityRevision) &&
+      minimumRevision <= metadata.revision
+    )
+      return metadata.revision
+
+    libraryRevision = metadata.revision
+    compatibilityRevision = metadata.revision
+    libraryTrackCount.value = metadata.trackCount
+    scannedFolders.value = [...metadata.folders]
+    excludedTracks.value = [...metadata.exclusions]
+    rebuildDerivedCollections()
+    libraryRepairReport.value = null
+    return metadata.revision
+  }
+
+  async function loadLibrary(skipDateOnlyEnrichment = false, minimumRevision = 0): Promise<void> {
+    await readLibrarySnapshot(skipDateOnlyEnrichment, minimumRevision)
+  }
+
+  async function readLibrarySnapshot(
+    skipDateOnlyEnrichment: boolean,
+    minimumRevision: number
+  ): Promise<number> {
+    const saved = await window.api.data.loadMusicLibrary()
+    if (!saved) return compatibilityRevision
+    if (
+      libraryStorageMode === 'sqlite' &&
+      (Array.isArray(saved) ||
+        !Number.isSafeInteger(saved.revision) ||
+        saved.revision < minimumRevision)
+    )
+      throw new Error('兼容曲库快照版本过旧，请重试读取')
+    if (
+      libraryStorageMode === 'sqlite' &&
+      !Array.isArray(saved) &&
+      saved.revision < Math.max(libraryRevision, compatibilityRevision)
+    )
+      return saved.revision // A newer reset/mutation was applied while this read was in flight.
+
+    cancelLibraryMetadataEnrichment()
     pendingMetadataEnrichmentUpdates.clear()
     metadataEnrichmentFlushScheduled = false
 
@@ -319,11 +499,14 @@ export function useMusicStore() {
       ? loadedTracks.filter((track) => !isReleaseDateOnlyUpdate(trackById.get(track.id), track))
       : loadedTracks
     setTracks(loadedTracks)
+    libraryTrackCount.value = loadedTracks.length
+    compatibilityRevision = libraryRevision
     rebuildDerivedCollections()
     libraryRepairReport.value = null
     // File-system reconciliation is owned by the main-process incremental scan
     // coordinator. Provider enrichment is queued after the first local render.
     void queueBackgroundMetadataEnrichment(enrichmentTracks)
+    return compatibilityRevision
   }
 
   function whenLibrarySettled(): Promise<void> {
@@ -334,6 +517,12 @@ export function useMusicStore() {
     libraryScanStatus.value = { ...status }
     if (status.state === 'completed' || status.state === 'cancelled' || status.state === 'failed') {
       libraryScanProgress.value = null
+    }
+    if (status.databaseProgress) {
+      libraryStorageMode = 'sqlite'
+      void compatibilityRefresh.notify(status.databaseProgress.revision).catch((error) => {
+        console.error('[library] Failed to refresh compatibility readers:', error)
+      })
     }
   }
 
@@ -351,6 +540,12 @@ export function useMusicStore() {
   }
 
   async function applyLibraryScanUpdate(update: LocalLibraryScanUpdate): Promise<void> {
+    if (libraryStorageMode === 'sqlite') {
+      // Status events own the current job. A delayed RPC result from an older
+      // job may request a read, but must not replace newer status/metadata.
+      await compatibilityRefresh.notify(update.libraryRevision)
+      return
+    }
     excludedTracks.value = update.exclusions
     libraryRevision = update.libraryRevision
     libraryScanStatus.value = {
@@ -428,12 +623,22 @@ export function useMusicStore() {
     return update
   }
 
+  async function scanLibraryDirectories(
+    request: import('../../../shared/libraryDatabase.ts').LibraryDirectoryScanRequest
+  ): Promise<LocalLibraryScanUpdate> {
+    const update = await window.api.library.database.scanDirectories(request)
+    await applyLibraryScanUpdate(update)
+    return update
+  }
+
   async function resetLibrary(): Promise<number> {
     const result = await window.api.library.reset()
-    libraryMetadataEnrichmentQueue?.cancel()
+    cancelLibraryMetadataEnrichment()
     pendingMetadataEnrichmentUpdates.clear()
     metadataEnrichmentFlushScheduled = false
     libraryRevision = result.library.revision
+    compatibilityRevision = result.library.revision
+    libraryTrackCount.value = result.library.tracks.length
     excludedTracks.value = result.library.exclusions
     setTracks([])
     rebuildDerivedCollections()
@@ -455,6 +660,7 @@ export function useMusicStore() {
   }
 
   function cancelLibraryMetadataEnrichment(): boolean {
+    metadataEnrichmentEpoch++
     return libraryMetadataEnrichmentQueue?.cancel() ?? false
   }
 
@@ -463,8 +669,26 @@ export function useMusicStore() {
   }
 
   async function handleLibraryChange(change: LibraryChange | undefined): Promise<void> {
+    if (change?.kind === 'database') {
+      libraryStorageMode = 'sqlite'
+      await compatibilityRefresh.notify(change.revision)
+      return
+    }
     if (change?.kind === 'scan') {
       await applyLibraryScanUpdate(change.update)
+      return
+    }
+    // SQLite owns all local rows and the main-process scanner is the only
+    // writer. Native file events can still arrive in the legacy shape while
+    // a watcher is being reconfigured; never let those events scan a folder
+    // or mutate the bounded renderer compatibility state directly.
+    if (libraryStorageMode === null) {
+      const mode = await window.api.library.getStorageMode()
+      if (mode !== 'json' && mode !== 'sqlite') throw new Error('曲库存储模式无效')
+      libraryStorageMode = mode
+    }
+    if (libraryStorageMode === 'sqlite') {
+      await refreshIncrementalLibrary()
       return
     }
     try {
@@ -675,6 +899,31 @@ export function useMusicStore() {
     }
   }
 
+  function applyTagPatchToTrack(track: Track, patch: LocalLibraryTagPatch): Track {
+    return {
+      ...track,
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.artist !== undefined ? { artist: patch.artist } : {}),
+      ...(patch.album !== undefined ? { album: patch.album } : {}),
+      ...(patch.albumArtist !== undefined ? { albumArtist: patch.albumArtist } : {}),
+      ...(patch.genre !== undefined ? { genre: patch.genre } : {}),
+      ...(patch.track !== undefined ? { trackNumber: patch.track } : {}),
+      ...(patch.disc !== undefined ? { discNumber: patch.disc } : {})
+    }
+  }
+
+  function tagPatchRecord(patch: LocalLibraryTagPatch): Record<string, unknown> {
+    return {
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.artist !== undefined ? { artist: patch.artist } : {}),
+      ...(patch.album !== undefined ? { album: patch.album } : {}),
+      ...(patch.albumArtist !== undefined ? { albumArtist: patch.albumArtist } : {}),
+      ...(patch.genre !== undefined ? { genre: patch.genre } : {}),
+      ...(patch.track !== undefined ? { trackNumber: patch.track } : {}),
+      ...(patch.disc !== undefined ? { discNumber: patch.disc } : {})
+    }
+  }
+
   function applyLocalTagWrite(filePaths: readonly string[], patch: LocalLibraryTagPatch): number {
     const paths = new Set(filePaths.map(normalizePortableLibraryPath))
     if (paths.size === 0) return 0
@@ -682,22 +931,50 @@ export function useMusicStore() {
     const nextTracks = tracks.value.map((track) => {
       if (!paths.has(normalizePortableLibraryPath(track.filePath))) return track
       changed++
-      return {
-        ...track,
-        ...(patch.title !== undefined ? { title: patch.title } : {}),
-        ...(patch.artist !== undefined ? { artist: patch.artist } : {}),
-        ...(patch.album !== undefined ? { album: patch.album } : {}),
-        ...(patch.albumArtist !== undefined ? { albumArtist: patch.albumArtist } : {}),
-        ...(patch.genre !== undefined ? { genre: patch.genre } : {}),
-        ...(patch.track !== undefined ? { trackNumber: patch.track } : {}),
-        ...(patch.disc !== undefined ? { discNumber: patch.disc } : {})
-      }
+      return applyTagPatchToTrack(track, patch)
     })
     if (changed === 0) return 0
     setTracks(nextTracks, { rebuildIndexes: false })
     scheduleRebuild()
     void scheduleSaveLibrary()
     return changed
+  }
+
+  /** TrackInfoDialog can finish before the SQLite directory recheck. Keep the
+   * durable row current immediately, fenced by the row versions returned by
+   * the path lookup. The file scanner remains responsible for cover bytes and
+   * any fields not represented by the lightweight compatibility patch. */
+  async function applyLocalTagWriteAsync(
+    filePaths: readonly string[],
+    patch: LocalLibraryTagPatch
+  ): Promise<number> {
+    const mode = libraryStorageMode ?? (await window.api.library.getStorageMode())
+    if (mode !== 'sqlite') return applyLocalTagWrite(filePaths, patch)
+    libraryStorageMode = mode
+    const paths = [...new Set(filePaths.map(normalizePortableLibraryPath))]
+    if (!paths.length) return 0
+    const api = window.api.library.database
+    const lookup = await api.lookupTracksByPaths(paths)
+    const ids = lookup.ids.filter((id): id is string => id !== null)
+    if (!ids.length) return 0
+    const page = await api.getTracksByIds(ids, lookup.revision)
+    const byId = new Map(page.tracks.map((record) => [record.id, record]))
+    const recordPatch = tagPatchRecord(patch)
+    const patches: LibraryTrackPatch[] = []
+    for (const id of ids) {
+      const record = byId.get(id)
+      const next = record && { ...record, ...recordPatch }
+      if (!record || !next) continue
+      const changed = Object.keys(recordPatch).some(
+        (key) => JSON.stringify(record[key]) !== JSON.stringify(next[key])
+      )
+      if (changed) patches.push({ id, expectedVersion: page.versions[id], patch: recordPatch })
+    }
+    if (!patches.length) return 0
+    const saved = await api.patchTracks(patches)
+    libraryRevision = Math.max(libraryRevision, saved.revision)
+    compatibilityRevision = Math.max(compatibilityRevision, saved.revision)
+    return patches.length
   }
 
   function applyLocalRemovalDelta(result: LocalLibraryRemoveResult): void {
@@ -886,12 +1163,13 @@ export function useMusicStore() {
   }
 
   function clearTracks(): void {
-    libraryMetadataEnrichmentQueue?.cancel()
+    cancelLibraryMetadataEnrichment()
     pendingMetadataEnrichmentUpdates.clear()
     metadataEnrichmentFlushScheduled = false
     librarySettlementInFlight = null
     rebuildScheduled = false
     setTracks([])
+    if (libraryStorageMode !== 'sqlite') libraryTrackCount.value = 0
     rebuildDerivedCollections()
   }
 
@@ -914,6 +1192,10 @@ export function useMusicStore() {
       },
       onStatus: (status) => {
         libraryMetadataEnrichmentStatus.value = status
+        if (libraryStorageMode === 'sqlite' && status.state !== 'enriching')
+          void compatibilityRefresh.flush().catch((error) => {
+            console.error('[library] Failed to refresh compatibility readers:', error)
+          })
       },
       onTrackEnriched: queueMetadataEnrichmentUpdate
     })
@@ -938,7 +1220,9 @@ export function useMusicStore() {
     return completion
   }
 
-  function queueMetadataEnrichmentUpdate(update: LibraryMetadataEnrichmentTrackUpdate): void {
+  function queueMetadataEnrichmentUpdate(
+    update: LibraryMetadataEnrichmentTrackUpdate
+  ): void | Promise<void> {
     const current = trackById.get(update.track.id)
     if (
       !current ||
@@ -947,6 +1231,24 @@ export function useMusicStore() {
       current.filePath !== update.track.filePath
     ) {
       return
+    }
+    if (libraryStorageMode === 'sqlite') {
+      const epoch = metadataEnrichmentEpoch
+      const isCurrent = (): boolean =>
+        epoch === metadataEnrichmentEpoch && trackById.get(update.track.id) === update.source
+      // Each provider worker awaits this commit. At most the provider concurrency
+      // can wait for writes; enrichment never queues an unbounded patch stream.
+      return enqueueLibraryWrite(async () => {
+        const saved = await patchLibraryMetadata(window.api.library.database, update, isCurrent)
+        if (!saved || !isCurrent()) return
+        libraryRevision = Math.max(libraryRevision, saved.revision)
+        const index = trackIndexById.get(update.track.id)
+        const record = saved.tracks.find((track) => track.id === update.track.id)
+        if (index !== undefined && record) {
+          replaceTrackAtIndex(index, libraryTrack(record))
+          scheduleRebuild()
+        }
+      })
     }
     pendingMetadataEnrichmentUpdates.set(update.track.id, update)
     if (metadataEnrichmentFlushScheduled) return
@@ -1028,12 +1330,78 @@ export function useMusicStore() {
     return replacementCount
   }
 
+  function queueDatabaseTrackPatch(
+    trackId: string,
+    filePath: string,
+    patch: Record<string, unknown>
+  ): void {
+    void enqueueLibraryWrite(async () => {
+      const api = window.api.library.database
+      let page = await api.getTracksByIds(trackId ? [trackId] : [])
+      let current = page.tracks.find((record) => record.id === trackId)
+      if (!current && filePath) {
+        const lookup = await api.lookupTracksByPaths([filePath])
+        const id = lookup.ids[0]
+        if (!id) return
+        page = await api.getTracksByIds([id], lookup.revision)
+        current = page.tracks[0]
+      }
+      if (!current) return
+      const changed = Object.keys(patch).some(
+        (key) => JSON.stringify(current![key]) !== JSON.stringify(patch[key])
+      )
+      if (!changed) return
+      const saved = await api.patchTracks([
+        { id: current.id, expectedVersion: page.versions[current.id], patch }
+      ])
+      libraryRevision = Math.max(libraryRevision, saved.revision)
+      compatibilityRevision = Math.max(compatibilityRevision, saved.revision)
+    }).catch((error) => {
+      console.warn('[library] SQLite track patch failed:', error)
+    })
+  }
+
+  function clearDatabaseBpmAnalysis(): void {
+    void enqueueLibraryWrite(async () => {
+      const api = window.api.library.database
+      let offset = 0
+      for (;;) {
+        const page = await api.queryTracks({
+          sort: 'insertion',
+          direction: 'asc',
+          offset,
+          limit: 1000
+        })
+        const patches: LibraryTrackPatch[] = page.tracks
+          .filter((record) => record.bpmAnalysis !== undefined && record.bpmAnalysis !== null)
+          .map((record) => ({
+            id: record.id,
+            expectedVersion: page.versions[record.id],
+            patch: { bpmAnalysis: null }
+          }))
+        if (patches.length) {
+          const saved = await api.patchTracks(patches)
+          libraryRevision = Math.max(libraryRevision, saved.revision)
+          compatibilityRevision = Math.max(compatibilityRevision, saved.revision)
+        }
+        offset += page.tracks.length
+        if (offset >= page.total || page.tracks.length === 0) return
+      }
+    }).catch((error) => {
+      console.warn('[library] SQLite BPM cleanup failed:', error)
+    })
+  }
+
   function applyBpmAnalysis(
     trackId: string,
     filePath: string,
     analysis: Track['bpmAnalysis']
   ): boolean {
     if (!analysis) return false
+    if (libraryStorageMode === 'sqlite') {
+      queueDatabaseTrackPatch(trackId, filePath, { bpmAnalysis: analysis })
+      return true
+    }
     const fallbackTrackId = filePath ? trackByPath.get(filePath)?.id : undefined
     const index =
       trackIndexById.get(trackId) ??
@@ -1063,13 +1431,17 @@ export function useMusicStore() {
   }
 
   function clearBpmAnalysis(): boolean {
+    const databaseMode = libraryStorageMode === 'sqlite'
+    if (databaseMode) clearDatabaseBpmAnalysis()
     let libraryChanged = false
-    const nextTracks = tracks.value.map((track) => {
-      if (!track.bpmAnalysis) return track
-      const { bpmAnalysis: _bpmAnalysis, ...nextTrack } = track
-      libraryChanged = true
-      return nextTrack
-    })
+    const nextTracks = databaseMode
+      ? tracks.value
+      : tracks.value.map((track) => {
+          if (!track.bpmAnalysis) return track
+          const { bpmAnalysis: _bpmAnalysis, ...nextTrack } = track
+          libraryChanged = true
+          return nextTrack
+        })
     if (libraryChanged) {
       setTracks(nextTracks)
       scheduleRebuild()
@@ -1097,7 +1469,7 @@ export function useMusicStore() {
       }
     }
     if (playlistsChanged) queuePlaylistPersistence(playlistBase)
-    return libraryChanged || playlistsChanged
+    return databaseMode || libraryChanged || playlistsChanged
   }
 
   if (!derivedCollectionsInitialized) {
@@ -1107,6 +1479,7 @@ export function useMusicStore() {
 
   return {
     ...playlistCommands,
+    createUnifiedSearchSource,
     tracks,
     artists,
     albums,
@@ -1123,6 +1496,7 @@ export function useMusicStore() {
     restoreExcludedTracks,
     clearExcludedTracks,
     applyLocalTagWrite,
+    applyLocalTagWriteAsync,
     clearTrackMetadataMatch,
     applyTrackMetadataMatch,
     clearTracks,
@@ -1133,12 +1507,17 @@ export function useMusicStore() {
     localPlaylists,
     saveLibrary,
     loadLibrary,
+    loadApplicationLibrary,
+    libraryCompatibilityError,
+    retryLibraryCompatibility: compatibilityRefresh.flush,
     whenLibrarySettled,
     libraryScanStatus,
     libraryScanProgress,
     libraryMetadataEnrichmentStatus,
+    libraryTrackCount,
     startStartupLibraryScan,
     startFullLibraryScan,
+    scanLibraryDirectories,
     resetLibrary,
     pauseLibraryScan,
     resumeLibraryScan,

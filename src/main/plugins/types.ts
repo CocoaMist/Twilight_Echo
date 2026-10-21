@@ -159,7 +159,8 @@ export interface TwilightPluginIndexEntry extends TwilightPluginManifest {
   installedVersion?: string
 }
 
-export type TwilightPluginIndexSourceKind = 'github' | 'custom' | 'bundled'
+/** Source category only; official verification still requires a valid signature. */
+export type TwilightPluginIndexSourceKind = 'official' | 'github' | 'custom' | 'bundled'
 export type TwilightPluginIndexLoadedFrom = 'remote' | 'cache' | 'bundled'
 export type TwilightPluginIndexCacheFormat = 'envelope-v1' | 'legacy'
 

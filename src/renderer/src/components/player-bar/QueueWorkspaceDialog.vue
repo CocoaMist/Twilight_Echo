@@ -12,7 +12,7 @@ const props = defineProps<{
   queueLength: number
   canUndo: boolean
   undoLabel: string
-  undo: () => boolean
+  undo: () => boolean | Promise<boolean>
 }>()
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement | null>(null)
@@ -68,8 +68,8 @@ function choose(session: NamedQueueSession): void {
   deleting.value = false
 }
 
-function undoQueueEdit(): void {
-  message.value = props.undo() ? '已撤销队列操作' : '队列已变化，当前操作无法撤销'
+async function undoQueueEdit(): Promise<void> {
+  message.value = (await props.undo()) ? '已撤销队列操作' : '队列已变化，当前操作无法撤销'
 }
 
 function restore(andPlay = false): void {
@@ -191,10 +191,11 @@ onBeforeUnmount(() => {
             @click="choose(session)"
           >
             <span>{{ session.name }}</span
-            ><small
-              >{{ session.entries.length.toLocaleString() }} 首 ·
-              {{ modes[session.playMode] }}</small
-            >
+            ><small>
+              <template v-if="session.libraryQueue">数据库队列 · </template>
+              <template v-else>{{ session.entries.length.toLocaleString() }} 首 · </template>
+              {{ modes[session.playMode] }}
+            </small>
           </button>
         </div>
         <section v-if="selected" class="session-actions" :aria-label="`管理会话：${selected.name}`">

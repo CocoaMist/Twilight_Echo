@@ -3,9 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useProviderStore } from '@renderer/stores/useProviderStore'
 import { useSettingsStore } from '@renderer/stores/useSettingsStore'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
-import { useMusicStore } from '@renderer/stores/useMusicStore'
-import { getRecentTracks } from '@renderer/stores/useListeningStatsStore'
-import { resolveUnifiedRecentTracks } from '@renderer/utils/unifiedRecentTracks'
+import { useLibraryRecentTracks } from '@renderer/composables/useLibraryRecentTracks.ts'
 import { getTrackSource } from '@renderer/utils/logicalTrackModel'
 import type { Track } from '@renderer/types/music'
 import type { StreamingPageTab } from '@renderer/app/navigationPages'
@@ -25,7 +23,11 @@ const emit = defineEmits<{
 const providerStore = useProviderStore()
 const { settings, updateSettings } = useSettingsStore()
 const player = usePlayerStore()
-const { tracks: localTracks } = useMusicStore()
+const history = useLibraryRecentTracks()
+const recent = history.tracks
+const recentState = history.state
+const recentActionError = ref('')
+const recentError = computed(() => recentActionError.value || history.error.value)
 const selectedProvider = ref(settings.value.streamingActiveProvider || '')
 const home = useOnlineHome({
   providers: providerStore.providers,
@@ -44,12 +46,6 @@ const {
   sectionTitle,
   playlistTitle
 } = home
-const recent = computed(() =>
-  resolveUnifiedRecentTracks({
-    recentStats: getRecentTracks(30),
-    localTracks: localTracks.value
-  }).slice(0, 6)
-)
 const hero = computed(() => player.currentTrack.value ?? recent.value[0] ?? tracks.value[0] ?? null)
 const actionError = ref('')
 const pendingPlaylist = ref<string | null>(null)
@@ -59,6 +55,10 @@ function reload(): void {
   actionError.value = ''
   void home.reload()
 }
+function retryRecent(): void {
+  recentActionError.value = ''
+  history.retry()
+}
 
 watch(
   () => provider.value?.id,
@@ -67,6 +67,14 @@ watch(
     pendingPlaylist.value = null
     actionError.value = ''
   }
+)
+watch(
+  [player.currentTrack, player.isPlaying],
+  () => {
+    actionRevision++
+    pendingPlaylist.value = null
+  },
+  { flush: 'sync' }
 )
 onBeforeUnmount(() => {
   actionRevision += 1
@@ -101,17 +109,24 @@ async function canPlay(providerId: string, request: number): Promise<boolean> {
 
 async function play(track: Track, queue: Track[]): Promise<void> {
   const request = ++actionRevision
+  const recentSnapshot = history.capture(queue)
   pendingPlaylist.value = null
   actionError.value = ''
+  recentActionError.value = ''
   if (player.currentTrack.value?.id === track.id) {
     player.togglePlay()
     return
   }
   try {
-    if (await canPlay(getTrackSource(track), request)) player.playTrack(track, queue)
+    if (!(await canPlay(getTrackSource(track), request)) || request !== actionRevision) return
+    if (recentSnapshot && !(await history.confirm(recentSnapshot))) return
+    if (request === actionRevision) player.playTrack(track, queue)
   } catch (cause) {
-    if (request === actionRevision)
-      actionError.value = friendlyStreamingError(cause, '暂时无法播放')
+    if (request === actionRevision) {
+      const message = friendlyStreamingError(cause, '暂时无法播放')
+      if (recentSnapshot) recentActionError.value = message
+      else actionError.value = message
+    }
   }
 }
 
@@ -155,6 +170,8 @@ async function playPlaylist(playlist: MediaProviderPlaylistSummary): Promise<voi
     :section-title="sectionTitle"
     :playlist-title="playlistTitle"
     :recent="recent"
+    :recent-loading="recentState.loading"
+    :recent-error="recentError"
     :hero="hero"
     :current-track-id="player.currentTrack.value?.id"
     :is-playing="player.isPlaying.value"
@@ -164,6 +181,7 @@ async function playPlaylist(playlist: MediaProviderPlaylistSummary): Promise<voi
     @play-hero="playHero"
     @play-playlist="playPlaylist"
     @reload="reload"
+    @retry-recent="retryRecent"
     @login="provider && emit('login', provider.id)"
     @open-streaming="emit('open-streaming', $event)"
     @open-plugins="emit('open-plugins')"

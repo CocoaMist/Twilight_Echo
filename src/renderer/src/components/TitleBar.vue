@@ -6,6 +6,8 @@ import { useProviderStore } from '../stores/useProviderStore'
 import TitleBarIcon from './icons/TitleBarIcon.vue'
 import { useWindowChrome } from '../app/useWindowChrome'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+import PageDock from './PageDock.vue'
+import type { PageDockAction } from '../app/pageDock'
 
 const props = withDefaults(
   defineProps<{
@@ -15,7 +17,8 @@ const props = withDefaults(
     liquidMaterial?: boolean
     streaming?: boolean
     titleSurface?: 'default' | 'settings' | 'streaming'
-    activeTool?: 'settings' | 'plugins' | null
+    activeTool?: 'settings' | 'plugins' | 'appearance' | null
+    pageDockActions?: readonly PageDockAction[]
     preview?: boolean
     closeOnly?: boolean
     notificationsOpen?: boolean
@@ -32,6 +35,7 @@ defineEmits<{
   login: [providerId?: string | null]
   settings: []
   reportIssue: []
+  appearance: []
   plugins: []
   library: []
   notifications: [event: MouseEvent]
@@ -166,6 +170,17 @@ function close(): void {
     </div>
     <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
       <div v-if="!closeOnly" class="title-bar-tools" role="group" aria-label="应用工具">
+        <PageDock :actions="pageDockActions ?? []" />
+        <button
+          type="button"
+          aria-label="外观"
+          :aria-pressed="activeTool === 'appearance'"
+          class="settings-btn appearance-btn"
+          title="外观"
+          @click="$emit('appearance')"
+        >
+          <TitleBarIcon name="appearance" />
+        </button>
         <button
           type="button"
           aria-label="上报问题"
@@ -522,7 +537,8 @@ html[data-theme='dark'] .title-bar .control-btn:not(.notification-btn):not(.clos
 
 .title-bar-controls {
   display: flex;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
   height: 100%;
   margin-left: auto;
   position: relative;
@@ -537,7 +553,15 @@ html[data-theme='dark'] .title-bar .control-btn:not(.notification-btn):not(.clos
 }
 
 .title-bar-window-controls {
+  flex-shrink: 0;
   margin-left: 12px;
+}
+
+.title-bar-tools {
+  min-width: 0;
+}
+.title-bar-tools > button {
+  flex-shrink: 0;
 }
 
 .title-bar-close-only .title-bar-window-controls {

@@ -48,3 +48,36 @@ test('invalid CUE bounds are rejected in both the active track and the queued sn
   assert.equal(isPlaybackSession({ ...session(), queue: [{ id: 'local:one', cueRange }] }), false)
   assert.equal(isPlaybackSession({ ...session(), queue: [null] }), false)
 })
+
+test('database sessions use one compact occurrence reference, never an array queue or its revision', () => {
+  const value = {
+    version: 1,
+    savedAt: '',
+    mode: 'trackAndPosition',
+    position: 42,
+    track: { id: 'track', queueEntryId: 'second' },
+    libraryQueue: { id: 'queue', revision: 9, entryId: 'second', index: 299_999 }
+  }
+  assert.equal(isPlaybackSession(value), true)
+  for (const patch of [
+    { queue: [] },
+    { queueIndex: 0 },
+    { queueRevision: 1 },
+    { track: { id: 'track', queueEntryId: 'first' } },
+    { libraryQueue: null }
+  ])
+    assert.equal(isPlaybackSession({ ...value, ...patch }), false)
+  for (const patch of [
+    { id: '' },
+    { id: 'q'.repeat(129) },
+    { entryId: '' },
+    { revision: -1 },
+    { revision: 1.2 },
+    { index: -1 },
+    { index: Infinity }
+  ])
+    assert.equal(
+      isPlaybackSession({ ...value, libraryQueue: { ...value.libraryQueue, ...patch } }),
+      false
+    )
+})

@@ -39,6 +39,7 @@ async function waitFor(predicate, message) {
 }
 
 window.api = {
+  library: { getStorageMode: async () => 'json', onChanged: () => () => {} },
   data: { loadPlaybackBookmarks: async () => null },
   providers: { list: async () => [] }
 }

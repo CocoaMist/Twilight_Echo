@@ -15,6 +15,7 @@ export function getProviderCallTimeoutMs(method: TwilightMediaProviderMethod): n
     [
       'fetchPlaylistTracks',
       'fetchPlaylistTracksPage',
+      'readPlaylistImportPage',
       'fetchLikedTracks',
       'fetchLikedTracksPage',
       'fetchCloudSongsPage',
@@ -245,6 +246,7 @@ export const TWILIGHT_MEDIA_PROVIDER_METHODS = [
   'searchArtists',
   'fetchPlaylistTracks',
   'fetchPlaylistTracksPage',
+  'readPlaylistImportPage',
   'createDownload',
   'getDownloadStatus',
   'getDownloadFile',
@@ -318,6 +320,7 @@ const PROVIDER_METHOD_CAPABILITIES: Partial<
   searchArtists: 'search',
   fetchPlaylistTracks: 'playlist',
   fetchPlaylistTracksPage: 'playlist',
+  readPlaylistImportPage: 'playlist',
   createDownload: 'download',
   getDownloadStatus: 'download',
   getDownloadFile: 'download',

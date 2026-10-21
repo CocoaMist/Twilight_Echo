@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { installAutoHideScrollbars } from './autoHideScrollbars.ts'
 
 const runtime = readFileSync(new URL('./autoHideScrollbars.ts', import.meta.url), 'utf8')
 const baseStyles = readFileSync(new URL('../assets/base.css', import.meta.url), 'utf8')
@@ -96,4 +97,126 @@ test('page-level back buttons are gone; the title bar owns the global back affor
   assert.match(appShell, /backStack\.useBackHandler\(showPlayingPage, closePlayingPage\)/)
   // Alt+Left is the keyboard path into the same stack.
   assert.match(appShell, /onGlobalBackKeydown/)
+})
+
+test('pointer frames only mutate changed classes and cannot reveal scrollbars after leaving', () => {
+  const previous = new Map(
+    ['window', 'document', 'Element', 'HTMLElement'].map((name) => [
+      name,
+      Object.getOwnPropertyDescriptor(globalThis, name)
+    ])
+  )
+  let writes = 0
+  class TestElement extends EventTarget {
+    tokens = new Set<string>()
+    parentElement = null
+    clientHeight = 300
+    clientWidth = 300
+    scrollHeight = 900
+    scrollWidth = 300
+    classList = {
+      contains: (token: string) => this.tokens.has(token),
+      toggle: (token: string, enabled: boolean) => {
+        writes++
+        if (enabled) this.tokens.add(token)
+        else this.tokens.delete(token)
+        return enabled
+      }
+    }
+    getBoundingClientRect() {
+      return { top: 0, left: 0, right: 300, bottom: 300 }
+    }
+  }
+  const frames = new Map<number, FrameRequestCallback>()
+  const timers = new Map<number, () => void>()
+  let id = 0
+  const win = Object.assign(new EventTarget(), {
+    getComputedStyle: () => ({ overflowY: 'auto', overflowX: 'hidden' }),
+    requestAnimationFrame: (callback: FrameRequestCallback) => {
+      frames.set(++id, callback)
+      return id
+    },
+    cancelAnimationFrame: (id: number) => frames.delete(id),
+    setTimeout: (callback: () => void) => {
+      timers.set(++id, callback)
+      return id
+    },
+    clearTimeout: (id: number) => timers.delete(id)
+  })
+  const scroller = new TestElement()
+  const doc = Object.assign(new EventTarget(), {
+    hidden: false,
+    scrollingElement: scroller,
+    documentElement: new TestElement(),
+    body: new TestElement()
+  })
+  Object.defineProperties(
+    globalThis,
+    Object.fromEntries(
+      Object.entries({
+        window: win,
+        document: doc,
+        Element: TestElement,
+        HTMLElement: TestElement
+      }).map(([name, value]) => [name, { configurable: true, value }])
+    )
+  )
+  const flush = (): void => {
+    const pending = [...frames.values()]
+    frames.clear()
+    for (const callback of pending) callback(0)
+  }
+  const move = (): void => {
+    doc.dispatchEvent(Object.assign(new Event('pointermove'), { clientX: 298, clientY: 80 }))
+  }
+  const near = (): boolean => scroller.classList.contains('is-scrollbar-near')
+  let cleanup: (() => void) | undefined
+  try {
+    cleanup = installAutoHideScrollbars()
+    move()
+    flush()
+    assert.equal(near(), true)
+    const firstWrites = writes
+    for (let i = 0; i < 100; i++) {
+      move()
+      flush()
+    }
+    assert.equal(writes, firstWrites, 'stationary proximity must not churn DOM attributes')
+    for (const [surface, event] of [
+      [doc, 'pointerleave'],
+      [win, 'blur']
+    ] as const) {
+      move()
+      surface.dispatchEvent(new Event(event))
+      assert.equal(frames.size, 0)
+      flush()
+      assert.equal(near(), false)
+      move()
+      flush()
+      assert.equal(near(), true)
+    }
+    doc.dispatchEvent(new Event('scroll'))
+    assert.equal(scroller.classList.contains('is-scrollbar-active'), true)
+    assert.equal(timers.size, 1)
+    move()
+    doc.hidden = true
+    doc.dispatchEvent(new Event('visibilitychange'))
+    assert.equal(frames.size, 0)
+    assert.equal(timers.size, 0)
+    assert.equal(near(), false)
+    assert.equal(scroller.classList.contains('is-scrollbar-active'), false)
+    doc.hidden = false
+    move()
+    cleanup()
+    cleanup = undefined
+    assert.equal(frames.size, 0)
+    move()
+    assert.equal(frames.size, 0, 'uninstall must remove pointer handlers')
+  } finally {
+    cleanup?.()
+    for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+  }
 })

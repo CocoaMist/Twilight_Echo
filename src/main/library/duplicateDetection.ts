@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { normalize } from 'node:path'
+import { normalizeCueRange } from '../../shared/cue.ts'
 import type {
   AcousticFingerprint,
   DuplicateActionPlan,
@@ -70,7 +71,9 @@ export async function detectDuplicates(
     options.contentHashForPath,
     options.hashConcurrency ?? 4
   )
-  appendGroups(groups, remaining, 'contentHash', (item) => hashes.get(item) ?? '')
+  appendGroups(groups, remaining, 'contentHash', (item) =>
+    sourceEvidenceKey(hashes.get(item), item)
+  )
   appendGroups(groups, remaining, 'audioFingerprint', verifiedAudioFingerprintKey)
   appendGroups(groups, remaining, 'metadataCandidate', metadataCandidateKey)
   appendGroups(groups, remaining, 'logicalTrack', logicalTrackKey)
@@ -97,7 +100,7 @@ export function groupDuplicates(
   appendGroups(groups, remaining, 'path', canonicalPathKey)
   appendGroups(groups, remaining, 'contentHash', (item) => {
     const persisted = normalizeContentHash(item.contentHash)
-    return persisted ?? normalizeContentHash(hashForPath?.(item.filePath)) ?? ''
+    return sourceEvidenceKey(persisted ?? normalizeContentHash(hashForPath?.(item.filePath)), item)
   })
   appendGroups(groups, remaining, 'audioFingerprint', verifiedAudioFingerprintKey)
   appendGroups(groups, remaining, 'metadataCandidate', metadataCandidateKey)
@@ -186,9 +189,13 @@ export function createDuplicateActionPlans(
 }
 
 export function toDuplicateCandidate(track: Record<string, unknown>): DuplicateCandidate {
+  const subTrack = text(track.subTrack)
+  const cueRange = normalizeCueRange(track.cueRange)
   return {
     id: text(track.id),
     filePath: text(track.filePath),
+    ...(subTrack ? { subTrack } : {}),
+    ...(cueRange ? { cueRange } : {}),
     title: text(track.title),
     artist: text(track.artist),
     album: text(track.album),
@@ -284,7 +291,16 @@ function canonicalPathKey(item: DuplicateCandidate): string {
   const filePath = item.filePath.trim()
   if (!filePath) return ''
   const canonical = normalize(filePath)
-  return process.platform === 'win32' ? canonical.toLocaleLowerCase('en-US') : canonical
+  return sourceEvidenceKey(
+    process.platform === 'win32' ? canonical.toLocaleLowerCase('en-US') : canonical,
+    item
+  )
+}
+
+function sourceEvidenceKey(evidence: string | undefined, item: DuplicateCandidate): string {
+  if (!evidence) return ''
+  if (!item.subTrack && !item.cueRange) return evidence
+  return JSON.stringify([evidence, item.subTrack ?? null, normalizeCueRange(item.cueRange)])
 }
 
 function normalizeContentHash(value: unknown): string | undefined {

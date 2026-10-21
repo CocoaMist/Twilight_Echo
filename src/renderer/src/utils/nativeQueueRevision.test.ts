@@ -1,6 +1,90 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { NativeQueueRevisionFence, synchronizeLatestNativeQueue } from './nativeQueueRevision.ts'
+import { NativeQueueLoader } from './nativeQueueLoader.ts'
+import type { Track } from '../types/music'
+import { prepareNativeQueue } from './nativeQueuePreparation.ts'
+
+test('background queue edits wait for authorization, queue commit and play of the active load', async () => {
+  const fence = new NativeQueueRevisionFence(),
+    loader = new NativeQueueLoader()
+  const track = { id: 'one', filePath: 'D:/Music/one.flac', source: 'local' } as Track
+  const edited = (await prepareNativeQueue({
+    queue: [track],
+    currentTrack: track,
+    currentTarget: track.filePath,
+    currentIndex: 0,
+    isAudioFileAuthorized: async () => true
+  }))!
+  let authorize!: () => void
+  const started = new Promise<void>((resolve) => {
+    authorize = resolve
+  })
+  const calls: string[] = []
+  const load = fence.serialize(async () => {
+    const prepared = await loader.prepareAndLoad(
+      {
+        queue: [track],
+        currentTrack: track,
+        currentTarget: track.filePath,
+        currentIndex: 0,
+        isCurrent: () => true
+      },
+      {
+        isAudioFileAuthorized: async () => {
+          await started
+          return true
+        }
+      },
+      {
+        loadQueue: async () => {
+          calls.push('load')
+          return { queueToken: 'active' }
+        }
+      }
+    )
+    assert.ok(prepared, 'a background edit is not a target-unavailable playback failure')
+    calls.push('play')
+    return prepared
+  })
+  const resync = fence.serialize(async () => {
+    await loader.loadPrepared(
+      edited,
+      {
+        loadQueue: async () => {
+          calls.push('resync')
+          return { queueToken: 'edited' }
+        }
+      },
+      [track]
+    )
+  })
+  await Promise.resolve()
+  assert.deepEqual(calls, [])
+  authorize()
+  await Promise.all([load, resync])
+  assert.deepEqual(calls, ['load', 'play', 'resync'])
+  assert.equal(loader.findLogicalIndex({ queueIndex: 0, queueToken: 'edited' }, [track]), 0)
+})
+
+test('serialized native failures release the lane and superseded revisions skip queued work', async () => {
+  const fence = new NativeQueueRevisionFence()
+  const old = fence.next()
+  let staleRan = false
+  const failed = fence.serialize(async () => {
+    throw new Error('output failed')
+  })
+  const stale = fence.serialize(() =>
+    fence.runLatest(old, async () => {
+      staleRan = true
+    })
+  )
+  fence.next()
+  await assert.rejects(failed, /output failed/)
+  assert.deepEqual(await stale, { applied: false })
+  assert.equal(staleRan, false)
+  assert.equal(await fence.serialize(async () => 'next load'), 'next load')
+})
 
 test('native queue revision fence rejects a stale asynchronous queue request', () => {
   const fence = new NativeQueueRevisionFence()

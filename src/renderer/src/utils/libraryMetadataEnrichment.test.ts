@@ -26,6 +26,55 @@ const localTrack = {
   format: 'flac'
 }
 
+test(
+  'metadata acceptance backpressures a duplicate group and cancellation stops subsequent writes',
+  { timeout: 3000 },
+  async () => {
+    let started!: () => void, release!: () => void
+    const accepting = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let writes = 0
+    const queue = new LibraryMetadataEnrichmentQueue({
+      provider: {
+        searchSongs: async () => ({ items: [createProviderTrack(localTrack)], total: 1 })
+      },
+      onTrackEnriched: async () => {
+        writes++
+        started()
+        await hold
+      }
+    })
+    const complete = queue.enqueue(
+      Array.from({ length: 500 }, (_, index) => ({ ...localTrack, id: `local:${index}` }))
+    )
+    await accepting
+    assert.equal(writes, 1)
+    assert.equal(queue.getStatus().state, 'enriching')
+    assert.equal(queue.cancel(), true)
+    release()
+    await complete
+    await Promise.resolve()
+    assert.equal(writes, 1)
+    assert.equal(queue.getStatus().state, 'cancelled')
+  }
+)
+
+test('metadata write failures are reported as persistence failures, not provider outages', async () => {
+  const queue = new LibraryMetadataEnrichmentQueue({
+    provider: { searchSongs: async () => ({ items: [createProviderTrack(localTrack)], total: 1 }) },
+    onTrackEnriched: async () => {
+      throw new Error('disk full')
+    }
+  })
+  await queue.enqueue([localTrack])
+  assert.equal(queue.getStatus().state, 'failed')
+  assert.match(queue.getStatus().error, /元数据保存失败/)
+})
+
 test('enrichLocalTracksFromProviders fills missing local metadata from provider search results', async () => {
   const enriched = await enrichLocalTracksFromProviders([localTrack], {
     searchSongs: async (query) => {

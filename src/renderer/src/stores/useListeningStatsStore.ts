@@ -1,6 +1,7 @@
 import { shallowRef, triggerRef, watch, type Ref } from 'vue'
 import type { Track } from '../types/music'
 import { ListeningStatsDatabase } from './listeningStatsDatabase.ts'
+import { createLibraryListeningProjection } from './library/libraryListeningProjection.ts'
 import { getLogicalTrackKey, normalizeLogicalTrackText } from '../utils/logicalTrackIdentity.ts'
 import {
   ListeningStatsPersistence,
@@ -79,13 +80,27 @@ export const LISTENING_STATS_FLUSH_DELAY_MS = 30_000
 export const LISTENING_STATS_RETRY_DELAY_MS = 60_000
 
 const listeningStats = shallowRef<ListeningStats>(loadListeningStats())
+export const libraryListeningProjection = createLibraryListeningProjection({
+  getStorageMode: () => window.api.library.getStorageMode(),
+  ready: () => waitForListeningStatsReady(),
+  snapshot: () => buildLastPlayedByTrackId(listeningStats.value),
+  sync: (request) => window.api.library.database.syncListeningHistory(request)
+})
 const listeningDatabase =
   typeof indexedDB === 'undefined' ? null : new ListeningStatsDatabase(indexedDB)
 let hydratingListeningStats = listeningDatabase !== null
 const pendingListeningMutations: Array<(stats: ListeningStats) => void> = []
 let lastCompactedDay = ''
 let listeningStatsHydrationError: unknown = null
-async function hydrateListeningStats(): Promise<void> {
+let listeningStatsHydrationTask: Promise<void> | null = null
+function hydrateListeningStats(): Promise<void> {
+  // Projection readiness and persistence can retry the same failed startup read.
+  // A second snapshot must not overwrite mutations consumed by the first retry.
+  return (listeningStatsHydrationTask ??= hydrateListeningStatsSnapshot().finally(() => {
+    listeningStatsHydrationTask = null
+  }))
+}
+async function hydrateListeningStatsSnapshot(): Promise<void> {
   if (!listeningDatabase) return
   const saved = await listeningDatabase.load()
   if (saved) {
@@ -127,6 +142,7 @@ function prepareListeningStats(): void {
   if (compactListeningStatsForPersistence(listeningStats.value)) {
     listeningDatabase?.invalidate()
     triggerRef(listeningStats)
+    libraryListeningProjection.refresh()
   }
   lastCompactedDay = today
 }
@@ -314,6 +330,7 @@ function commitListeningStats(mutator: (stats: ListeningStats) => void): void {
   mutator(listeningStats.value)
   triggerRef(listeningStats)
   listeningStatsPersistence.markDirty()
+  libraryListeningProjection.refresh()
 }
 
 function dayKey(timestamp: number): string {
@@ -606,6 +623,7 @@ function stopListeningTimer(): void {
 export function setupListeningStatsTracking(player: ListeningPlayerState): void {
   if (trackerStarted) return
   trackerStarted = true
+  void libraryListeningProjection.ensure()
   const { currentTrack, isPlaying, currentTime, duration } = player
   lastOutcomeTrack = currentTrack.value
   lastOutcomePosition = currentTime.value
@@ -743,6 +761,7 @@ export function getTopArtists(limit = 50): ListeningArtistStat[] {
 export function resetListeningStatsForTest(): void {
   listeningStatsPersistence.resetForTest()
   listeningStats.value = { days: {}, tracks: {} }
+  libraryListeningProjection.refresh()
   lastCompactedDay = ''
   listeningDatabase?.invalidate()
   lastCountedTrackId = ''

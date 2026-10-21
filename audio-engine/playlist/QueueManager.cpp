@@ -289,6 +289,17 @@ struct ParsedQueueItem {
 ParsedQueueItem parseQueueItem(const std::string& object) {
   ParsedQueueItem parsed;
   QueueItem& item = parsed.item;
+  if (const auto start = findTopLevelFieldValue(object, "logicalQueueEnd")) {
+    const bool isTrue = object.compare(*start, 4, "true") == 0;
+    const bool isFalse = object.compare(*start, 5, "false") == 0;
+    size_t end = *start + (isTrue ? 4 : isFalse ? 5 : 0);
+    while (end < object.size() && std::isspace(static_cast<unsigned char>(object[end]))) ++end;
+    if ((!isTrue && !isFalse) || end >= object.size() || (object[end] != ',' && object[end] != '}')) {
+      parsed.valid = false;
+      return parsed;
+    }
+    item.logicalQueueEnd = isTrue;
+  }
   item.id = extractStringField(object, "id").value_or("");
   item.title = extractStringField(object, "title").value_or(extractStringField(object, "name").value_or(""));
   item.artist = extractStringField(object, "artist").value_or("");
@@ -602,6 +613,13 @@ std::optional<QueueItem> QueueManager::advanceAfterEnd() {
   return current();
 }
 
+bool QueueManager::currentCompletesQueue() const {
+  const auto item = current();
+  if (!item) return false;
+  if (item->logicalQueueEnd.has_value()) return *item->logicalQueueEnd;
+  return playMode_ != PlayMode::Repeat && orderPosition_ == static_cast<int>(playOrder_.size()) - 1;
+}
+
 std::string QueueManager::queueJson() const {
   return rawQueueJson_;
 }
@@ -645,6 +663,9 @@ std::string QueueManager::itemToJson(const std::optional<QueueItem>& item) {
        << "\"sampleRate\":" << item->sampleRate << ","
        << "\"bitrate\":" << item->bitrate << ","
        << "\"bitDepth\":" << item->bitDepth;
+  if (item->logicalQueueEnd.has_value()) {
+    json << ",\"logicalQueueEnd\":" << (*item->logicalQueueEnd ? "true" : "false");
+  }
   if (item->measuredIntegratedLufs) {
     json << ",\"measuredIntegratedLufs\":" << *item->measuredIntegratedLufs;
   }

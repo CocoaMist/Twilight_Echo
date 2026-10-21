@@ -207,6 +207,7 @@ interface ProviderRpcMetadata {
   playbackTrackId?: string
   playbackQuality?: string
   playbackMetadataRequested?: boolean
+  playbackExpiryRequested?: boolean
 }
 
 interface UiCommandRpcMetadata {
@@ -215,6 +216,8 @@ interface UiCommandRpcMetadata {
 }
 
 export interface TwilightProviderCallOptions {
+  /** Main-only playback preparation: retain expiry without exposing the provider envelope. */
+  playbackExpiry?: boolean
   /** Reuse this key when retrying one user-initiated write after an unknown outcome. */
   idempotencyKey?: string
   /** Cancels queued or active plugin RPC work and propagates cancellation to the provider host. */
@@ -794,6 +797,7 @@ export class TwilightPluginManager extends EventEmitter {
           ? {
               playbackTrackId: String((args[0] as { id?: unknown } | null)?.id ?? ''),
               playbackQuality: String((args[1] as { quality?: unknown } | null)?.quality ?? 'auto'),
+              playbackExpiryRequested: options.playbackExpiry === true,
               playbackMetadataRequested:
                 running.descriptor.id === 'com.twilightecho.provider.ncm' &&
                 (args[1] as { _twilightPlaybackMetadata?: boolean } | null)
@@ -1868,7 +1872,16 @@ export class TwilightPluginManager extends EventEmitter {
       const playbackSource = envelope?.streamUrl ?? message.value
       if (envelope && typeof playbackSource === 'string') {
         const streamUrl = (value as Record<string, unknown>).streamUrl
-        if (metadata.playbackMetadataRequested) {
+        if (metadata.playbackExpiryRequested) {
+          const sourceInfo = envelope.providerSource as Record<string, unknown> | undefined
+          const expiry = sourceInfo?.expiresAt
+          value = {
+            streamUrl,
+            providerSource: {
+              expiresAt: typeof expiry === 'number' && Number.isFinite(expiry) ? expiry : null
+            }
+          }
+        } else if (metadata.playbackMetadataRequested) {
           const sourceInfo = envelope.providerSource as Record<string, unknown> | undefined
           value = {
             streamUrl,
@@ -2112,7 +2125,8 @@ export class TwilightPluginManager extends EventEmitter {
     if (!isCompatibleTwilightRange(manifest.engines.twilightEcho, this.appVersion)) {
       return `插件要求 Twilight Echo ${manifest.engines.twilightEcho}`
     }
-    const experiences = (manifest.contributes as { experiences?: { entry: string }[] } | undefined)?.experiences ?? []
+    const experiences =
+      (manifest.contributes as { experiences?: { entry: string }[] } | undefined)?.experiences ?? []
     for (const experience of experiences) {
       if (!resolvePluginFile(resolve(versionRoot, experience.entry), versionRoot)) {
         return 'Plugin experience HTML entry is missing or outside its package'
@@ -2219,7 +2233,12 @@ export class TwilightPluginManager extends EventEmitter {
   }
 
   private appendLog(descriptor: TwilightPluginDescriptor, level: string, message: string): void {
-    const shared = writeDiagnostic('plugin', 'plugin.output', { pluginId: descriptor.id, message }, level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info')
+    const shared = writeDiagnostic(
+      'plugin',
+      'plugin.output',
+      { pluginId: descriptor.id, message },
+      level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'
+    )
     const logPath = descriptor.paths.logPath
     ensureParent(logPath)
     const line = `[${shared?.timestamp ?? new Date().toISOString()}] [${level}] [eventId=${shared?.eventId ?? ''}] ${sanitizeDiagnosticText(redactSensitiveText(message)).trim()}\n`

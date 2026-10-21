@@ -1,7 +1,10 @@
 import { ref, shallowRef, type Ref } from 'vue'
 import type { Track } from '@renderer/types/music'
 import type { PlayMode } from '@renderer/types/settings'
-import { captureQueueSession } from '@renderer/utils/queueSessionTrack.ts'
+import {
+  captureLibraryQueueSession,
+  captureQueueSession
+} from '@renderer/utils/queueSessionTrack.ts'
 import {
   resolveQueueSession,
   type QueueSessionRestoreSources,
@@ -9,6 +12,7 @@ import {
 } from '@renderer/stores/player/queueSessionRestore.ts'
 import type { createQueueWorkspaceStore } from '@renderer/stores/player/queueWorkspaceStore.ts'
 import type { NamedQueueSession } from '../../../../shared/queueWorkspace.ts'
+import type { LibraryPlaybackQueueReference } from '../../../../shared/playbackSession.ts'
 
 interface QueueSessionOptions {
   workspace: ReturnType<typeof createQueueWorkspaceStore>
@@ -21,7 +25,18 @@ interface QueueSessionOptions {
   getSources: (
     entries: NamedQueueSession['entries']
   ) => Promise<Omit<QueueSessionRestoreSources, 'isCurrent'>>
+  getLibraryQueueReference?: () => LibraryPlaybackQueueReference | null
+  restoreLibraryQueue?: (
+    reference: LibraryPlaybackQueueReference,
+    mode: NamedQueueSession['playMode'],
+    isCurrent: () => boolean
+  ) => Promise<{ track: Track; reference: LibraryPlaybackQueueReference } | null>
   prepare: (result: QueueSessionRestoreResult, mode: NamedQueueSession['playMode']) => void
+  prepareLibrary?: (
+    result: { track: Track; reference: LibraryPlaybackQueueReference },
+    mode: NamedQueueSession['playMode'],
+    position: number
+  ) => void
   play: () => Promise<void>
 }
 
@@ -44,6 +59,19 @@ export function createQueueSessionController(options: QueueSessionOptions) {
   }
 
   function save(name: string, id?: string): Promise<void> {
+    const libraryReference = options.getLibraryQueueReference?.()
+    if (libraryReference) {
+      return options.workspace.save(
+        captureLibraryQueueSession(
+          name,
+          libraryReference,
+          options.getPosition(),
+          options.playMode.value,
+          id
+        ),
+        !!id
+      )
+    }
     const session = captureQueueSession(
       name,
       options.queue.value,
@@ -71,6 +99,20 @@ export function createQueueSessionController(options: QueueSessionOptions) {
     restoring.value = true
     lastRestore.value = null
     try {
+      if (session.libraryQueue) {
+        if (!options.restoreLibraryQueue || !options.prepareLibrary)
+          throw new Error('数据库队列恢复暂不可用')
+        const result = await options.restoreLibraryQueue(
+          session.libraryQueue,
+          session.playMode,
+          isCurrent
+        )
+        if (!isCurrent()) throw new Error('队列已变化，已取消恢复，请重新选择会话')
+        if (!result) throw new Error('数据库队列已删除，请刷新后重试')
+        options.prepareLibrary(result, session.playMode, session.position)
+        if (andPlay) await options.play()
+        return
+      }
       const sources = await options.getSources(session.entries)
       if (!isCurrent()) throw new Error('队列已变化，已取消恢复，请重新选择会话')
       const result = await resolveQueueSession(session, { ...sources, isCurrent })

@@ -13,9 +13,17 @@ import {
   defineAsyncComponent
 } from 'vue'
 import TitleBar from './components/TitleBar.vue'
+import AppearanceLayersHost from './components/AppearanceLayersHost.vue'
+import { providePageDock } from './app/pageDock'
+import {
+  guardAppearanceNavigation,
+  type AppearanceWorkspace
+} from './app/appearanceNavigationGuard'
 import AppBackgroundLayer from './components/AppBackgroundLayer.vue'
+import { guardDspNavigation, type DspWorkspace } from './app/dspNavigationGuard'
 import {
   appearanceEditorOpen,
+  appearanceChromePreview,
   appearanceFullWindowPreview
 } from './composables/appearanceEditorState.ts'
 const BackgroundAppearanceCustomizer = defineAsyncComponent(
@@ -50,13 +58,9 @@ const RadioPodcastPage = defineAsyncComponent(() => import('./components/RadioPo
 const NetworkSourcesPage = defineAsyncComponent(() => import('./components/NetworkSourcesPage.vue'))
 const LoginPage = defineAsyncComponent(() => import('./components/LoginPage.vue'))
 const SettingsPage = defineAsyncComponent(() => import('./components/SettingsPage.vue'))
-const ThemeStudioPage = defineAsyncComponent(() => import('./components/ThemeStudioPage.vue'))
-const ThemeWorkshopPage = defineAsyncComponent(
-  () => import('./components/theme-workshop/ThemeWorkshopPage.vue')
-)
+const AppearancePage = defineAsyncComponent(() => import('./components/AppearancePage.vue'))
 const PluginPage = defineAsyncComponent(() => import('./components/PluginPage.vue'))
-const EqualizerPage = defineAsyncComponent(() => import('./components/EqualizerPage.vue'))
-const DspRackPage = defineAsyncComponent(() => import('./components/DspRackPage.vue'))
+const AudioWorkspace = defineAsyncComponent(() => import('./components/AudioWorkspace.vue'))
 const ListeningAnalyticsPage = defineAsyncComponent(
   () => import('./components/ListeningAnalyticsPage.vue')
 )
@@ -75,6 +79,8 @@ const OnboardingWizard = defineAsyncComponent(
 )
 import type { OnboardingFinishResult } from './components/onboarding/OnboardingWizard.vue'
 import { useMusicStore } from './stores/useMusicStore'
+import { startPlaylistPersistenceNotifications } from './app/playlistPersistenceNotifications.ts'
+import { getExternalPlaylistService } from './stores/library/externalPlaylistService.ts'
 import { useNcmStore } from './stores/useNcmStore'
 import { isPlaybackSpace } from '@renderer/app/playbackKeyboard'
 import { usePlayerStore } from './stores/usePlayerStore'
@@ -121,9 +127,38 @@ import type { TrackArtistRef } from './types/music'
 type TitleSurface = 'default' | 'settings' | 'streaming'
 let idleLoginCheck: IdleTaskHandle | null = null
 
-const navigation = useAppNavigation({
-  appearancePreviewActive: () => appearanceFullWindowPreview.value
-})
+const appearancePageRef = ref<(AppearanceWorkspace & { requestClose: () => Promise<void> }) | null>(
+  null
+)
+const audioWorkspaceRef = ref<DspWorkspace | null>(null)
+const navigation = guardDspNavigation(
+  guardAppearanceNavigation(
+    useAppNavigation({
+      appearancePreviewActive: () => appearanceFullWindowPreview.value
+    }),
+    () => appearancePageRef.value
+  ),
+  () => audioWorkspaceRef.value
+)
+const audioWorkspaceRetained = computed(() =>
+  [navigation.session.value.overlay, ...navigation.session.value.overlayHistory].some(
+    (overlay) => overlay === 'equalizer' || overlay === 'dsp'
+  )
+)
+const audioWorkspaceInitialTab = computed(() =>
+  [
+    navigation.session.value.overlay,
+    ...[...navigation.session.value.overlayHistory].reverse()
+  ].find((overlay) => overlay === 'equalizer' || overlay === 'dsp') === 'equalizer'
+    ? 'equalizer'
+    : 'monitor'
+)
+const appearancePageRetained = computed(
+  () =>
+    navigation.showAppearancePage.value ||
+    navigation.session.value.overlayHistory.includes('appearance')
+)
+const pageDock = providePageDock(() => (navigation.showAppearancePage.value ? 'appearance' : ''))
 const navigationPersistence = createNavigationSessionPersistence(navigation)
 const {
   menuOpen,
@@ -139,7 +174,8 @@ const {
   loginPageMode,
   loginInitialProviderId,
   showSettingsPage,
-  showThemeStudioPage,
+  showAppearancePage,
+  appearanceNavigationTarget,
   themeStudioInitialDomain,
   showPluginPage,
   showEqualizerPage,
@@ -163,7 +199,8 @@ const {
   closeLoginPage,
   closeSettingsPage,
   openThemeStudioPage,
-  closeThemeStudioPage,
+  openAppearancePage,
+  closeAppearancePage,
   openPlaybackSettings,
   openDspSettings,
   hidePluginPage,
@@ -179,7 +216,11 @@ const {
 // overlay must hide its embedded painter, which would otherwise cover home.
 const settingsOverlayLeaves = ref(0)
 const settingsOverlayVisible = computed(
-  () => showSettingsPage.value || showPluginPage.value || settingsOverlayLeaves.value > 0
+  () =>
+    showSettingsPage.value ||
+    showAppearancePage.value ||
+    showPluginPage.value ||
+    settingsOverlayLeaves.value > 0
 )
 function retainSettingsOverlay(): void {
   settingsOverlayLeaves.value += 1
@@ -188,6 +229,12 @@ function releaseSettingsOverlay(): void {
   settingsOverlayLeaves.value = Math.max(0, settingsOverlayLeaves.value - 1)
 }
 const { pushNotice } = useAppNoticeStore()
+const playlistRecoveryStore = useMusicStore()
+const stopPlaylistPersistenceNotifications = startPlaylistPersistenceNotifications(
+  playlistRecoveryStore.playlistPersistenceStatus,
+  playlistRecoveryStore.reloadPlaylistsDiscardingChanges
+)
+onBeforeUnmount(stopPlaylistPersistenceNotifications)
 let stopAppUpdateNotifications: (() => void) | null = null
 let updateNotificationsDisposed = false
 onMounted(() => {
@@ -399,8 +446,12 @@ function handleLoginConfigure(): void {
 }
 
 const musicStore = useMusicStore()
+const externalPlaylistService = getExternalPlaylistService(musicStore)
+onBeforeUnmount(() => externalPlaylistService.dispose())
 const {
-  loadLibrary,
+  loadApplicationLibrary,
+  libraryCompatibilityError,
+  retryLibraryCompatibility,
   loadPlaylists,
   flushSaveLibrary,
   flushPlaylists,
@@ -409,6 +460,20 @@ const {
   applyLibraryScanProgress,
   applyLibraryScanStatus
 } = musicStore
+watch(libraryCompatibilityError, (error) => {
+  if (!error) return
+  pushNotice({
+    kind: 'warning',
+    message: `兼容曲库页面尚未更新：${error}`,
+    action: {
+      label: '重试读取',
+      run: () =>
+        retryLibraryCompatibility().catch((cause) => {
+          console.error('[library] Compatibility refresh retry failed:', cause)
+        })
+    }
+  })
+})
 const { checkLogin } = useNcmStore()
 const {
   currentTrack,
@@ -425,6 +490,8 @@ const {
   themeCoverIdentity,
   queue,
   queueIndex,
+  libraryQueueReference,
+  libraryQueueSnapshot,
   togglePlay,
   next,
   prev,
@@ -437,6 +504,7 @@ const {
   createPlaybackSession,
   adoptAfterglowRestore,
   getNativeQueueIndices,
+  handoffSleepTimerForAfterglow,
   rehydrateCurrentTrackFromLibrary,
   queueWorkspace,
   queueSessions,
@@ -447,7 +515,8 @@ const {
 } = usePlayerStore()
 useDesktopLyricsPublisher()
 useDynamicIslandLyrics()
-const { setAdaptiveMedia, effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
+const { setAdaptiveMedia, effectiveSurfaceMaterial, effectiveLiquidGlass, effectiveThemeLayers } =
+  useThemeStore()
 const mediaProviders = useMediaProviders()
 const navigationProviders = useProviderStore()
 const commandPalette = useCommandPalette(navigation, () => navigationPages.value)
@@ -630,7 +699,7 @@ const hasPlayerBar = computed(
     !showOnboarding.value &&
     !showLoginPage.value &&
     (!showSettingsPage.value || appearanceFullWindowPreview.value) &&
-    !showThemeStudioPage.value &&
+    (!showAppearancePage.value || appearanceFullWindowPreview.value) &&
     !showEqualizerPage.value &&
     !showDspRackPage.value &&
     !showPluginPage.value &&
@@ -642,16 +711,19 @@ const hasPlayerBar = computed(
    A fully hidden bar stays mounted — playback controls, the HiFi panel and the
    geometry flag both consumers read all live on it — so CSS does the hiding. */
 const playerBarPresentation = computed(() =>
-  resolvePlayerBarPresentation(settings.value.playerBar, {
-    onPlayingPage: showPlayingPage.value
-  })
+  resolvePlayerBarPresentation(
+    appearanceChromePreview.value?.playerBar ?? settings.value.playerBar,
+    {
+      onPlayingPage: showPlayingPage.value
+    }
+  )
 )
 const showLocalSidebar = computed(
   () =>
     !showPlayingPage.value &&
     !showLoginPage.value &&
     (!showSettingsPage.value || appearanceFullWindowPreview.value) &&
-    !showThemeStudioPage.value &&
+    (!showAppearancePage.value || appearanceFullWindowPreview.value) &&
     !showEqualizerPage.value &&
     !showDspRackPage.value &&
     !showPluginPage.value
@@ -693,7 +765,16 @@ const playbackSessionPersistence = createPlaybackSessionPersistence({
   restorePlaybackSession,
   createPlaybackSession,
   syncPluginProviders,
-  dataApi: window.api.data,
+  dataApi: {
+    ...window.api.data,
+    syncQueueReferences: async (owner: string, ids: string[]) => {
+      try {
+        await window.api.library.database.syncQueueReferences(owner, ids)
+      } catch (error) {
+        if (!String(error).includes('SQLite 曲库尚未启用')) throw error
+      }
+    }
+  },
   onAutosaveError: (error) => {
     pushNotice({
       kind: 'warning',
@@ -820,11 +901,14 @@ onMounted(async () => {
   const afterglowRestoreState = afterglowRestoreRequested
     ? await window.api.app.afterglow.getRestoreState().catch(() => null)
     : null
+  let afterglowAdopted = false
   const playbackSessionSetupPromise = (
-    afterglowRestoreState
-      ? (() => {
-          adoptAfterglowRestore(afterglowRestoreState)
-          return playbackSessionPersistence.adoptLivePlaybackSession()
+    afterglowRestoreRequested
+      ? (async () => {
+          if (!afterglowRestoreState) throw new Error('未能读取后台播放状态，请重新恢复窗口')
+          await adoptAfterglowRestore(afterglowRestoreState)
+          afterglowAdopted = true
+          await playbackSessionPersistence.adoptLivePlaybackSession()
         })()
       : playbackSessionPersistence.restoreSavedPlaybackSession(loadedSettings.playbackResumeMode)
   )
@@ -845,20 +929,35 @@ onMounted(async () => {
           // plain JSON snapshot instead.
           const toPlainSnapshot = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
           const nativeQueueIndices = getNativeQueueIndices()
-          const published = await window.api.app.afterglow.publishRendererSnapshot({
-            queue: toPlainSnapshot(queue.value),
-            queueIndex: queueIndex.value,
-            track: toPlainSnapshot(track),
-            position: currentTime.value,
-            playMode: playMode.value,
-            volume: volume.value,
-            playbackRate: playbackRate.value,
-            // Online queues are loaded as a current+next window; tell main
-            // which logical index each native entry came from.
-            ...(nativeQueueIndices && nativeQueueIndices.length > 0
-              ? { nativeQueueIndices: [...nativeQueueIndices] }
-              : {})
-          })
+          // Array handoff remains `queue: toPlainSnapshot(queue.value)` for
+          // the legacy source; SQLite queues publish only their reference.
+          const publishSnapshot = (sleep: {
+            volume: number
+            sleepShutdown?: import('../../shared/sleepTimer.ts').SleepTimerShutdownHandoff
+          }) =>
+            window.api.app.afterglow.publishRendererSnapshot({
+              queue: libraryQueueReference.value ? [] : toPlainSnapshot(queue.value),
+              queueIndex: libraryQueueReference.value?.index ?? queueIndex.value,
+              track: toPlainSnapshot(track),
+              position: currentTime.value,
+              playMode: playMode.value,
+              volume: sleep.volume,
+              playbackRate: playbackRate.value,
+              ...(sleep.sleepShutdown ? { sleepShutdown: sleep.sleepShutdown } : {}),
+              ...(libraryQueueReference.value
+                ? { libraryQueue: toPlainSnapshot(libraryQueueReference.value) }
+                : {}),
+              // Online queues are loaded as a current+next window; tell main
+              // which logical index each native entry came from.
+              ...(nativeQueueIndices && nativeQueueIndices.length > 0
+                ? { nativeQueueIndices: [...nativeQueueIndices] }
+                : {})
+            })
+          const status = await window.api.app.afterglow.getStatus()
+          const published =
+            status.phase === 'active'
+              ? await handoffSleepTimerForAfterglow(publishSnapshot)
+              : await publishSnapshot({ volume: volume.value })
           if (!published) throw new Error('主进程拒绝了播放队列快照')
           const bestEffort = async (label: string, action: () => Promise<unknown>) => {
             try {
@@ -886,13 +985,14 @@ onMounted(async () => {
         await playbackSessionPersistence.savePlaybackSessionForQuit()
         await queueWorkspace.flush()
       })
-      playbackSessionPersistence.startAutosaveWatchers()
-      if (afterglowRestoreRequested) {
+      if (!afterglowRestoreRequested || afterglowAdopted)
+        playbackSessionPersistence.startAutosaveWatchers()
+      if (afterglowAdopted) {
         void window.api.app.afterglow.rendererAdoptComplete().catch(() => {})
       }
     })
   // Run independent startup operations in parallel so none blocks the others.
-  const libraryLoad = loadLibrary()
+  const libraryLoad = loadApplicationLibrary()
   const playlistsLoad = loadPlaylists()
   const libraryPromise = libraryLoad.catch((error) =>
     reportStartupDataError('music library', error)
@@ -1012,12 +1112,12 @@ watch(
 )
 
 watch(
-  [showSettingsPage, showPluginPage, showThemeStudioPage, appearanceFullWindowPreview],
+  [showSettingsPage, showPluginPage, showAppearancePage, appearanceFullWindowPreview],
   () => {
     document.body.classList.toggle(
       'te-settings-surface',
       !appearanceFullWindowPreview.value &&
-        (showSettingsPage.value || showPluginPage.value || showThemeStudioPage.value)
+        (showSettingsPage.value || showPluginPage.value || showAppearancePage.value)
     )
   },
   { immediate: true }
@@ -1080,7 +1180,7 @@ const coverTransformOrigin = computed(() => `${coverOrigin.value.x}px ${coverOri
 const titleSurface = computed<TitleSurface>(() => {
   if (showPlayingPage.value) return 'default'
   if (showSettingsPage.value && !appearanceFullWindowPreview.value) return 'settings'
-  if (showThemeStudioPage.value) return 'settings'
+  if (showAppearancePage.value && !appearanceFullWindowPreview.value) return 'settings'
   if (showPluginPage.value) return 'settings'
   if (showStreamingPage.value) return 'streaming'
   if (showNetworkSourcesPage.value) return 'streaming'
@@ -1130,6 +1230,12 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
 </script>
 
 <template>
+  <AppearanceLayersHost
+    v-if="appearanceFullWindowPreview || (!appearancePageRetained && !appearanceEditorOpen)"
+    :settings="
+      appearanceChromePreview?.appearanceLayers ?? effectiveThemeLayers ?? settings.appearanceLayers
+    "
+  />
   <AppBackgroundLayer
     :page="showStreamingSurface ? 'streaming' : 'local'"
     :ambient="localViewVisible && activeCategory === 'dashboard'"
@@ -1151,7 +1257,16 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         :liquid-material="liquidGlassChromeActive"
         :streaming="showStreamingPage && !showPlayingPage"
         :title-surface="titleSurface"
-        :active-tool="showPluginPage ? 'plugins' : showSettingsPage ? 'settings' : null"
+        :active-tool="
+          showAppearancePage
+            ? 'appearance'
+            : showPluginPage
+              ? 'plugins'
+              : showSettingsPage
+                ? 'settings'
+                : null
+        "
+        :page-dock-actions="pageDock.actions.value"
         :menu-open="titleMenuOpen"
         @toggle-menu="toggleMenu"
         @collapse-menu="collapseMenu"
@@ -1159,6 +1274,9 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @login="handleTitleLogin"
         @settings="toggleSettingsPage"
         @report-issue="openSettingsPage('system', { anchor: 'application-diagnostics' })"
+        @appearance="
+          showAppearancePage ? appearancePageRef?.requestClose?.() : openAppearancePage()
+        "
         @plugins="togglePluginPage"
         @library="selectSidebarPage({ kind: 'local', category: 'allSongs', filter: null })"
         :notifications-open="noticeHostRef?.historyOpen ?? false"
@@ -1283,29 +1401,15 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
             @configure="handleLoginConfigure"
           />
         </Transition>
-        <Transition name="settings-page">
-          <ThemeStudioPage
-            v-if="showThemeStudioPage"
-            :initial-domain="themeStudioInitialDomain"
-            @domain-change="navigation.rememberThemeStudioDomain"
-            @back="closeThemeStudioPage"
-          />
-        </Transition>
-        <Transition name="settings-page">
-          <DspRackPage v-if="showDspRackPage" />
-        </Transition>
+        <AudioWorkspace
+          v-if="audioWorkspaceRetained"
+          ref="audioWorkspaceRef"
+          :active="showDspRackPage || showEqualizerPage"
+          :initial-tab="audioWorkspaceInitialTab"
+        />
         <Transition name="login-page">
-          <EqualizerPage v-if="showEqualizerPage" />
-        </Transition>
-        <Transition name="login-page">
-          <ThemeWorkshopPage
-            v-if="
-              activePluginPage?.pluginId === 'com.twilightecho.tool.theme-workshop' &&
-              activePluginPage.id === 'theme-workshop'
-            "
-          />
           <PluginExtensionPage
-            v-else-if="activePluginPage && !activePluginPage.experience"
+            v-if="activePluginPage && !activePluginPage.experience"
             :key="activePageId"
             :page="activePluginPage"
           />
@@ -1336,7 +1440,27 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     v-show="settingsOverlayVisible && !appearanceFullWindowPreview"
     :class="{ 'settings-overlay-root--active': settingsOverlayVisible }"
   >
-    <AppBackgroundLayer page="settings" embedded />
+    <AppBackgroundLayer page="settings" embedded :reading="!appearanceFullWindowPreview" />
+    <Transition
+      name="settings-page"
+      @before-leave="retainSettingsOverlay"
+      @after-leave="releaseSettingsOverlay"
+      @leave-cancelled="releaseSettingsOverlay"
+    >
+      <AppearancePage
+        v-if="appearancePageRetained"
+        v-show="showAppearancePage"
+        ref="appearancePageRef"
+        :active="showAppearancePage"
+        :pages="navigationPages"
+        :initial-domain="themeStudioInitialDomain"
+        :navigation-target="appearanceNavigationTarget"
+        @tab-change="navigation.rememberAppearanceTab"
+        @domain-change="navigation.rememberThemeStudioDomain"
+        @back="closeAppearancePage"
+        @open-plugins="openPluginPage"
+      />
+    </Transition>
     <Transition
       name="settings-page"
       @before-leave="retainSettingsOverlay"
@@ -1352,6 +1476,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @open-dsp-rack="openDspRackPage"
         @open-theme-studio="openThemeStudioPage"
         @open-theme-workshop="openThemeWorkshop"
+        @open-appearance="openAppearancePage"
         @reopen-onboarding="handleReopenOnboarding"
       />
     </Transition>
@@ -1386,7 +1511,6 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
     :actions="commandPalette.actions.value"
     :search="commandPalette.search"
     :playlists="commandPalette.playlists"
-    :tracks="commandPalette.tracks"
     :play-track="commandPalette.playTrack"
     :open-playlist="commandPalette.openPlaylist"
     @close="commandPalette.close"
@@ -1404,7 +1528,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
       v-if="queueSessions.open.value"
       :workspace="queueWorkspace"
       :controller="queueSessions"
-      :queue-length="queue.length"
+      :queue-length="libraryQueueSnapshot?.total ?? queue.length"
       :can-undo="canUndoQueue"
       :undo-label="queueUndoLabel"
       :undo="undoQueue"

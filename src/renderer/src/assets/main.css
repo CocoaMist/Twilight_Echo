@@ -4,6 +4,8 @@
 @import './bohr.css';
 @import './theme-layouts/index.css';
 @import './appearance.css';
+@import './materials.css';
+@import './appearance-layers.css';
 
 /* Windows owns the outer window corners; only inset content surfaces are clipped. */
 .app-shell {

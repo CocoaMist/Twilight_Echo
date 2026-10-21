@@ -43,9 +43,19 @@
 
 **[前往 Releases 下载最新版 →](https://github.com/Px-asen/Twilight_Echo/releases/latest)**
 
-1. 在发布页的 **Assets（资源）** 中，下载以 `-setup.exe` 结尾的 Windows 安装程序。
-2. 运行安装程序，按向导选择安装位置并完成安装。
-3. 打开 Twilight Echo，跟随首次使用向导设置听歌习惯、音乐文件夹和播放器外观。
+发布页同时提供 Windows、macOS 与 Linux 安装包。每个安装包旁都有同名 `.sha256` 文件，下载后可核对完整性。
+
+**Windows 10/11**：下载以 `-setup.exe` 结尾的安装程序，运行后按向导选择安装位置并完成安装。
+
+**macOS**：Apple 芯片下载 `-mac-arm64.dmg`，Intel 芯片下载 `-mac-x64.dmg`；也可以使用同名的 `.zip` 压缩包。应用未做商业代码签名与公证，首次打开请右键 →「打开」，或先执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/TwilightEcho.app
+```
+
+**Linux x64**：`.AppImage` 添加执行权限后可直接运行；`.deb` 与 `.rpm` 适合安装到发行版中；`.tar.gz` 为免安装压缩包。
+
+打开 Twilight Echo，跟随首次使用向导设置听歌习惯、音乐文件夹和播放器外观。
 
 > [!NOTE]
 > Windows 10/11 是当前主要且验证最完整的平台。macOS 与 Linux 后端已有实现，但尚未达到正式发布验证标准。
@@ -61,11 +71,15 @@
 Get-FileHash -LiteralPath '.\你下载的安装包文件名.exe' -Algorithm SHA256
 ```
 
+macOS 与 Linux 可使用 `shasum -a 256 <文件名>` 或 `sha256sum -c <文件名>.sha256` 核对。
+
 </details>
 
 ## 快速开始
 
 **听本地收藏** — 在首次使用向导中添加音乐文件夹，或打开「设置 → 媒体库与存储 → 本地媒体库 → 添加文件夹」。扫描完成后，按歌曲、专辑、艺术家、文件夹或流派浏览；设置页的「快速配置」也能直接进入添加音乐和选择输出设备。
+
+本地曲库默认使用 SQLite。升级后首次启动会自动迁移旧曲库，保留原 `music-library.json` 及其备份；后续读写使用 `music-library.sqlite`。备份与恢复继续使用设置页的个人备份入口。
 
 **发现在线音乐** — 无需先建立本地曲库。打开「流媒体音乐 → 推荐主页」，按音源能力浏览公开歌单或排行榜；登录后使用每日推荐、私人漫游与个人收藏。更多音源可在「扩展中心」查找，或从[第三方插件仓库](https://github.com/Px-asen/Twilight-Echo-plugins)获取 `.tep` 扩展包。
 

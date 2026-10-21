@@ -15,6 +15,12 @@ import {
   checkRestoreOptions
 } from '../persistence/personalBackup.ts'
 import {
+  createPersonalBackupFromDatabase,
+  previewRestoreFromDatabase,
+  stagePersonalRestoreFromDatabase,
+  type PersonalLibraryDatabase
+} from '../persistence/personalBackup.ts'
+import {
   isRecord,
   remapPersonalPaths,
   type PersonalBackup,
@@ -22,7 +28,7 @@ import {
   type PersonalRestoreOptions
 } from '../../shared/personalBackup.ts'
 
-export function registerPersonalBackupIpc(ipc: IpcMain): void {
+export function registerPersonalBackupIpc(ipc: IpcMain, database?: PersonalLibraryDatabase): void {
   const root = app.getPath('userData')
   let selected: PersonalBackup | null = null
   ipc.handle('data:chooseRestoreFolder', async (event) => {
@@ -38,7 +44,9 @@ export function registerPersonalBackupIpc(ipc: IpcMain): void {
   ipc.handle('data:exportPersonalBackup', async (event, rendererData: PersonalData) => {
     assertTrustedIpcSender(event, 'personal backup')
     if (!isRecord(rendererData)) throw new Error('数据无效')
-    const backup = createPersonalBackup(root, rendererData)
+    const backup = database
+      ? await createPersonalBackupFromDatabase(root, rendererData, database)
+      : createPersonalBackup(root, rendererData)
     const result = await dialog.showSaveDialog({
       title: '导出个人数据备份',
       defaultPath: `TwilightEcho-personal-${new Date().toISOString().slice(0, 10)}.json`,
@@ -59,7 +67,9 @@ export function registerPersonalBackupIpc(ipc: IpcMain): void {
     })
     if (result.canceled || !result.filePaths[0]) return null
     selected = readBackupFile(result.filePaths[0])
-    return previewRestore(root, selected, rendererData)
+    return database
+      ? await previewRestoreFromDatabase(root, selected, rendererData, database)
+      : previewRestore(root, selected, rendererData)
   })
   ipc.handle('data:stagePersonalRestore', async (event, options: PersonalRestoreOptions) => {
     assertTrustedIpcSender(event, 'personal restore')
@@ -72,7 +82,8 @@ export function registerPersonalBackupIpc(ipc: IpcMain): void {
         ? await resolveAuthorizedLibraryRootSettings(mapped.folders)
         : []
     // A file preview owns the imported data; renderer cannot inject arbitrary file payloads.
-    stagePersonalRestore(root, backup, options, roots)
+    if (database) await stagePersonalRestoreFromDatabase(root, backup, options, roots, database)
+    else stagePersonalRestore(root, backup, options, roots)
     selected = null
   })
   ipc.handle('data:readRendererRestore', (event) => {

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { createDuplicateDetectionIpcHandlers } from './duplicateDetectionIpc.ts'
+import { toDuplicateCandidate } from './duplicateDetection.ts'
 
 test('duplicate IPC only reads authorized library files and returns a serializable review result', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'twilight-duplicate-ipc-'))
@@ -111,6 +112,83 @@ test('duplicate IPC hashes the resolved authorized file, never the renderer-supp
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test('paged detection inspects candidates beyond 50,000 and coalesces concurrent trusted requests', async () => {
+  const rows = 50_002
+  let reads = 0,
+    release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const handlers = createDuplicateDetectionIpcHandlers({
+    assertTrustedSender(event) {
+      if (event !== 'trusted') throw new Error('untrusted')
+    },
+    async *loadCandidatePages() {
+      await gate
+      for (let offset = 0; offset < rows; offset += 1000) {
+        reads++
+        yield Array.from({ length: Math.min(1000, rows - offset) }, (_, i) =>
+          toDuplicateCandidate({
+            id: `id:${offset + i}`,
+            filePath: `D:/Music/${offset + i}.flac`,
+            contentHash: offset + i === 0 || offset + i === rows - 1 ? 'a'.repeat(64) : undefined
+          })
+        )
+      }
+    },
+    authorizeAudioFile: async () => assert.fail('persisted hash evidence needs no media reads')
+  })
+  const first = handlers.detect('trusted'),
+    second = handlers.detect('trusted')
+  await assert.rejects(handlers.detect('untrusted'), /untrusted/)
+  release()
+  const [left, right] = await Promise.all([first, second])
+  assert.equal(reads, 51, 'concurrent UI requests share the same candidate scan')
+  assert.equal(left, right)
+  assert.equal(left.groups.length, 1)
+  assert.equal(left.groups[0].kind, 'contentHash')
+  assert.deepEqual(
+    new Set(left.groups[0].items.map((item) => item.id)),
+    new Set(['id:0', 'id:50001'])
+  )
+})
+
+test('a failed candidate page returns an explicit error rather than partial detection and can be retried', async () => {
+  let failure = true
+  const handlers = createDuplicateDetectionIpcHandlers({
+    assertTrustedSender() {},
+    async *loadCandidatePages() {
+      yield [toDuplicateCandidate({ id: 'one', filePath: 'D:/Music/one.flac' })]
+      if (failure) throw new Error('library revision changed')
+      // Repeated IDs cannot multiply a candidate across page boundaries.
+      yield [toDuplicateCandidate({ id: 'one', filePath: 'D:/Music/one.flac' })]
+    },
+    authorizeAudioFile: async () => assert.fail('no media reads for a failed snapshot')
+  })
+  await assert.rejects(handlers.detect(null), /library revision changed/)
+  failure = false
+  assert.deepEqual((await handlers.detect(null)).groups, [])
+})
+
+test('the legacy array entry also detects records beyond its former silent cutoff', async () => {
+  const tracks = Array.from({ length: 50_001 }, (_, i) => ({
+    id: `id:${i}`,
+    filePath: `D:/Music/${i}.flac`
+  }))
+  tracks.push({ id: 'last', filePath: tracks[0].filePath })
+  const handlers = createDuplicateDetectionIpcHandlers({
+    assertTrustedSender() {},
+    loadTracks: () => tracks,
+    authorizeAudioFile: async () => assert.fail('path evidence needs no media reads')
+  })
+  const result = await handlers.detect(null)
+  assert.equal(result.groups.length, 1)
+  assert.deepEqual(
+    result.groups[0].items.map((item) => item.id),
+    ['id:0', 'last']
+  )
 })
 
 function track(

@@ -30,6 +30,7 @@ import {
   type PersonalizedStreamSession
 } from '../stores/usePlayerStore'
 import { useMusicStore } from '../stores/useMusicStore'
+import { useLibraryUnifiedSearch } from '../app/useLibraryUnifiedSearch.ts'
 import { useMediaProviders } from '../providers'
 import {
   providerFavoriteChange,
@@ -41,6 +42,7 @@ import {
   supportsAlbumSearch,
   type AlbumSearchItem
 } from '@renderer/components/streaming-page/albumSearch.ts'
+import { createArtistSearch, type ArtistSearchItem } from './streaming-page/artistSearch.ts'
 import { BUILTIN_NAVIGATION_PAGES } from '@renderer/app/navigationPages.ts'
 import type {
   MediaProviderAlbumSummary,
@@ -99,13 +101,11 @@ import {
   type StreamingMetadataNavigationRequest
 } from '../utils/streamingArtistResolution'
 import { getTopTracks } from '../stores/useListeningStatsStore'
+import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
 import { shuffleArray } from '../utils/playerQueueUtils'
 import { resolveUnifiedRecentTracks } from '../utils/unifiedRecentTracks'
-import {
-  searchLocalStreamingArtists,
-  searchLocalStreamingPlaylists,
-  searchLocalStreamingSongs
-} from './streaming-page/localStreamingSearch'
+import { readLibraryRecentHistoryTracks } from '../stores/library/libraryRecentHistory.ts'
+import { searchLocalStreamingPlaylists } from './streaming-page/localStreamingSearch'
 import {
   appendUniqueTracks,
   streamingFavoriteLabel,
@@ -115,7 +115,11 @@ import {
   resolveStreamingTabIndex as getStreamingTabIndex,
   timeGreeting as resolveTimeGreeting
 } from './streaming-page/streamingPageModel'
-import { useStreamingSearch, type SearchSourceOption } from './streaming-page/useStreamingSearch'
+import {
+  useStreamingSearch,
+  type SearchSourceOption,
+  type SongSearchPage
+} from './streaming-page/useStreamingSearch'
 import { useStreamingDiscovery } from './streaming-page/useStreamingDiscovery'
 import { useTrackMultiSelect } from './song-list/useTrackMultiSelect'
 import {
@@ -331,6 +335,10 @@ const providerStore = useProviderStore()
 const settingsStore = useSettingsStore()
 const musicStore = useMusicStore()
 const mediaProviders = useMediaProviders()
+const localSearchSource = useLibraryUnifiedSearch(() => {
+  if (searchType.value !== 'playlists' && ['all', 'local'].includes(searchSource.value))
+    refreshSearch()
+})
 const { pushNotice } = useAppNoticeStore()
 
 const NCM_PROVIDER_ID = 'ncm'
@@ -783,7 +791,8 @@ async function searchUnifiedSongs(
 ): Promise<{ tracks: Track[]; total: number }> {
   const result = await mediaProviders.searchAllSongs({
     query: keywords,
-    localTracks: musicStore.tracks.value,
+    localTracks: [],
+    localSource: localSearchSource,
     limit,
     offset,
     signal: options?.signal
@@ -822,23 +831,19 @@ async function searchProviderPlaylists(
   return { playlists: result.items, total: result.total }
 }
 
-async function searchProviderArtists(
-  providerId: string,
-  keywords: string,
-  limit?: number,
-  offset?: number,
-  options?: { signal?: AbortSignal }
-): Promise<{ artists: MediaProviderArtistSummary[]; total: number }> {
-  const result = await mediaProviders.searchArtists(providerId, keywords, limit, offset, options)
-  return { artists: result.items, total: result.total }
-}
-
 async function searchLocalSongs(
   keywords: string,
   limit: number = 30,
-  offset: number = 0
-): Promise<{ tracks: Track[]; total: number }> {
-  return searchLocalStreamingSongs(musicStore.tracks.value, keywords, limit, offset)
+  offset: number = 0,
+  options?: { signal?: AbortSignal }
+): Promise<SongSearchPage> {
+  const page = await localSearchSource.searchLocal(keywords, limit, offset, options?.signal)
+  await localSearchSource.confirm(page, options?.signal)
+  return {
+    tracks: page.items.map((item) => item.track),
+    total: page.total,
+    ...(page.playbackQuery ? { playbackQuery: page.playbackQuery } : {})
+  }
 }
 
 async function searchLocalPlaylists(
@@ -849,20 +854,21 @@ async function searchLocalPlaylists(
   return searchLocalStreamingPlaylists(musicStore.localPlaylists.value, keywords, limit, offset)
 }
 
-async function searchLocalArtists(
-  keywords: string,
-  limit: number = 30,
-  offset: number = 0
-): Promise<{ artists: MediaProviderArtistSummary[]; total: number }> {
-  return searchLocalStreamingArtists(musicStore.artists.value, keywords, limit, offset)
-}
-
 const albumSearch = createAlbumSearch({
   localAlbums: () => musicStore.albums.value,
+  localSource: localSearchSource,
   providers: () => providerStore.providers.value,
   searchProvider: (id, query, limit, offset, options) =>
     mediaProviders.searchAlbums(id, query, limit, offset, options),
   getProvider: (id) => mediaProviders.get(id),
+  reportError: (message) => pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
+})
+const artistSearch = createArtistSearch({
+  localArtists: () => musicStore.artists.value,
+  localSource: localSearchSource,
+  providers: () => providerStore.providers.value,
+  searchProvider: (id, query, limit, offset, options) =>
+    mediaProviders.searchArtists(id, query, limit, offset, options),
   reportError: (message) => pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
 })
 
@@ -920,6 +926,7 @@ const {
   isSearching,
   availableSearchTypes,
   clearSearch,
+  refreshSearch,
   performSearch,
   onPageChange,
   onSearchTrackClick
@@ -953,38 +960,16 @@ const {
     })
     return { playlists: result.items, total: result.total }
   },
-  searchArtists: async (query, limit = 30, offset = 0, options) => {
-    const local = await searchLocalArtists(query, limit, 0)
-    const result = await searchUnifiedCollections({
-      local: { items: local.artists, total: local.total },
-      searchLocal: async (pageLimit, pageOffset) => {
-        const result = await searchLocalArtists(query, pageLimit, pageOffset)
-        return { items: result.artists, total: result.total }
-      },
-      limit,
-      offset,
-      providers: providerStore.providers.value.filter(
-        (provider) =>
-          provider.supportedMethods.includes('searchArtists') &&
-          provider.health?.available !== false
-      ),
-      search: (id, pageLimit, pageOffset) =>
-        mediaProviders.searchArtists(id, query, pageLimit, pageOffset, options),
-      reportError: (message) => {
-        if (!options?.signal?.aborted)
-          pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
-      }
-    })
-    return { artists: result.items, total: result.total }
-  },
+  searchArtists: artistSearch.searchArtists,
   searchProviderSongs,
   searchProviderPlaylists,
-  searchProviderArtists,
+  searchProviderArtists: artistSearch.searchProviderArtists,
   searchLocalSongs,
   searchLocalPlaylists,
-  searchLocalArtists,
+  searchLocalArtists: artistSearch.searchLocalArtists,
   searchSources,
-  playTrack
+  playTrack,
+  playLibraryQuery: (query, id) => playbackStore.playLibraryQuery(query, id)
 })
 
 const discoveryProviderId = computed(() => activeProvider.value)
@@ -1914,10 +1899,13 @@ async function selectDetailProvider(providerId: string): Promise<void> {
 async function openTrackAlbum(track: Track): Promise<void> {
   const token = ++detailNavigationToken
   if (getTrackSource(track) === 'local') {
-    const album = musicStore.albums.value.find((item) =>
-      item.tracks.some((albumTrack) => albumTrack.id === track.id)
-    )
-    if (album) emit('selectView', 'albums', `album:${album.id}`)
+    try {
+      const album = await localSearchSource.resolveAlbum({ trackId: track.id })
+      if (isCurrentDetailNavigation(token)) emit('selectView', 'albums', `album:${album.albumId}`)
+    } catch (error) {
+      if (isCurrentDetailNavigation(token))
+        pushNotice({ kind: 'error', message: friendlyStreamingError(error, '打开本地专辑失败') })
+    }
     return
   }
   if (!track.albumId) {
@@ -1965,12 +1953,42 @@ async function openSearchAlbum(album: AlbumSearchItem): Promise<void> {
   await openAlbum(album, album.providerId)
 }
 
+async function openSearchArtist(artist: ArtistSearchItem): Promise<void> {
+  const token = ++detailNavigationToken
+  if (artist.providerId === 'local') {
+    // Reuse the local artist page's authoritative paging and complete-query
+    // playback, rather than loading an artist-sized Track[] into this surface.
+    emit('selectView', 'artists', `artist:${artist.name}`)
+    return
+  }
+  if (artist.providerId) {
+    await selectDetailProvider(artist.providerId)
+    if (!isCurrentDetailNavigation(token, artist.providerId)) return
+  }
+  await openArtist(artist)
+}
+
 async function openAlbum(
   album: MediaProviderAlbumSummary,
   providerId = activeProvider.value,
   replace = false,
   fromPlayback = false
 ): Promise<void> {
+  if (providerId === 'local') {
+    const navigation = ++detailNavigationToken
+    try {
+      const target = await localSearchSource.resolveAlbum({ albumId: String(album.id) })
+      if (!isCurrentDetailNavigation(navigation)) return
+      if (target.mode === 'sqlite') {
+        emit('selectView', 'albums', `album:${target.albumId}`)
+        return
+      }
+    } catch (error) {
+      if (isCurrentDetailNavigation(navigation))
+        pushNotice({ kind: 'error', message: friendlyStreamingError(error, '打开本地专辑失败') })
+      return
+    }
+  }
   beginDetailTransition()
   const view: DetailView = { type: 'album', album, providerId }
   if (replace) replaceTopDetail(view)
@@ -2276,10 +2294,36 @@ async function openRanking(): Promise<void> {
 
   try {
     const topStats = getTopTracks()
-    let tracks = resolveUnifiedRecentTracks({
-      recentStats: topStats,
-      localTracks: musicStore.tracks.value
-    })
+    const mode = await window.api.library.getStorageMode()
+    let tracks: Track[]
+    if (mode === 'json') {
+      tracks = resolveUnifiedRecentTracks({
+        recentStats: topStats,
+        localTracks: musicStore.tracks.value
+      })
+    } else if (mode === 'sqlite') {
+      const api = window.api.library.database
+      const revision = (await api.getTracksByIds([])).revision
+      const getPreferences = () => ({
+        revision: musicVersionRevision.value,
+        versions: getMusicVersions().tracks.versions
+      })
+      tracks = await readLibraryRecentHistoryTracks(
+        topStats,
+        revision,
+        {
+          getPreferences,
+          api: {
+            lookupPlaylistTracks: (request, expectedRevision) =>
+              api.lookupPlaylistTracks(request, expectedRevision),
+            getTracksByIds: (ids, expectedRevision) => api.getTracksByIds(ids, expectedRevision)
+          }
+        },
+        () => {
+          if (!isActiveDetailLoad(token)) throw new Error('排行榜请求已过期')
+        }
+      )
+    } else throw new Error('无法确认曲库存储，未读取听歌排行')
     if (tracks.length === 0) {
       tracks = await fetchPlayRecords(1)
     }
@@ -2392,6 +2436,7 @@ const multiSelectEnabled = computed(
 
 const multiSelect = useTrackMultiSelect({
   tracks: streamingListTracks,
+  root: streamingContentRef,
   resetSources: [
     currentDetail,
     activeTab,
@@ -3497,7 +3542,8 @@ watch(
       if (
         !isCurrentPlaybackMetadataRequest(request.key) ||
         navigationToken !== detailNavigationToken
-      ) return
+      )
+        return
       if (request.kind === 'artist') await openRequestedArtist(request, true, true)
       else await openRequestedAlbum(request, true)
     } finally {
@@ -3531,8 +3577,7 @@ watch(activeProvider, async (provider, oldProvider) => {
   if (provider === oldProvider || props.active === false) return
   // Preserve the request that initiated an internal source switch.
   const keepNavigationRequest =
-    provider === detailNavigationProvider ||
-    playbackNavigationSyncToken === detailNavigationToken
+    provider === detailNavigationProvider || playbackNavigationSyncToken === detailNavigationToken
   resetDetail({ keepNavigationRequest })
   if (!keepNavigationRequest) clearSearch()
   recommendationRequestId += 1
@@ -3809,7 +3854,7 @@ onMounted(async () => {
             @like-track="onLikeTrack"
             @open-playlist="openPlaylist"
             @open-album="openSearchAlbum"
-            @open-artist="openArtist"
+            @open-artist="openSearchArtist"
             @open-track-artist="openTrackArtist"
             @open-track-album="openTrackAlbum"
             @page-change="onPageChange"

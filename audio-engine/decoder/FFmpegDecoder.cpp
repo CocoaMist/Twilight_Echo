@@ -747,12 +747,22 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
           ? (impl_->formatContext->iformat->long_name ? impl_->formatContext->iformat->long_name
                                                       : (impl_->formatContext->iformat->name ? impl_->formatContext->iformat->name : ""))
           : "";
-  const bool sourceDsd = codecLooksDsd(params->codec_id, codecName, containerName, extensionOf(source));
+  bool wavPackDsd = false;
+  if (!impl_->remoteIo && params->codec_id == AV_CODEC_ID_WAVPACK) {
+    // Read only the local block header; never infer DSD from a high PCM rate.
+    std::array<uint8_t, 32> header{};
+    SharedInputFile input(utf8Path(source), std::ios::binary);
+    input.read(reinterpret_cast<char*>(header.data()), header.size());
+    wavPackDsd = ffmpeg::wavPackHeaderIsDsd(header.data(), static_cast<size_t>(input.gcount()));
+  }
+  const bool sourceDsd = wavPackDsd || codecLooksDsd(params->codec_id, codecName, containerName, extensionOf(source));
   const bool dopCarrier = sourceDsd && (textMentions(codecName, "dop") || textMentions(containerName, "dop"));
   const int reportedSampleRate = params->sample_rate > 0 ? params->sample_rate : impl_->codecContext->sample_rate;
   // Raw-DSD demuxers report the post-decimation PCM rate; the engine wants the DSD bit
   // rate here. See FFmpegDsdRate.h.
-  const int sourceSampleRate = ffmpeg::dsdSampleRateFromCodecRate(params->codec_id, reportedSampleRate);
+  const int sourceSampleRate = wavPackDsd
+                                   ? reportedSampleRate * ffmpeg::kDsdBitsPerByte
+                                   : ffmpeg::dsdSampleRateFromCodecRate(params->codec_id, reportedSampleRate);
 
   impl_->streamInfo.source = source;
   impl_->streamInfo.codec = codecName;

@@ -74,6 +74,19 @@ export interface LiquidGlassTheme {
   tintOpacity: number
 }
 
+export type LiquidGlassTone = 'light' | 'dark'
+
+/** Resolves the shared chrome profile without changing the application's tone. */
+export function resolveLiquidGlassTone(
+  tone: LiquidGlassTone,
+  settings: Pick<LiquidGlassSettings, 'overLight' | 'adaptiveTone'>,
+  adaptiveTone?: unknown
+): LiquidGlassTone {
+  return tone === 'dark' || settings.overLight || (settings.adaptiveTone && adaptiveTone === 'dark')
+    ? 'dark'
+    : 'light'
+}
+
 export interface LiquidGlassSettings {
   /** Legacy expanded value remains readable; runtime coverage is functional. */
   coverage: LiquidGlassCoverage

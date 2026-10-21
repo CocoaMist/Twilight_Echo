@@ -2,6 +2,7 @@ import { createHash, createPublicKey, verify, type KeyObject } from 'crypto'
 import { existsSync, readFileSync } from 'fs'
 import { tryParseJsonWithNestingLimit } from '../security/jsonSafety.ts'
 import { canonicalizePluginManifestPaths } from './manifest.ts'
+import { OFFICIAL_PLUGIN_INDEX_URL } from '../../shared/pluginDistribution.ts'
 import type {
   TwilightPluginIndexLoadedFrom,
   TwilightPluginPublisherSignature,
@@ -9,8 +10,7 @@ import type {
   TwilightPluginVerification
 } from './types.ts'
 
-export const OFFICIAL_PLUGIN_INDEX_URL =
-  'https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json'
+export { OFFICIAL_PLUGIN_INDEX_URL } from '../../shared/pluginDistribution.ts'
 
 const TRUST_REGISTRY_SCHEMA_VERSION = 1
 const MAX_TRUSTED_PUBLISHER_REGISTRY_BYTES = 512 * 1024

@@ -382,3 +382,137 @@ test('a superseded provider search cancels its request without surfacing an erro
   assert.equal(search.searchError.value, '')
   assert.equal(search.searchResults.value[0]?.id, 'ncm:new')
 })
+
+test('local invalidation refreshes the current page once, forwards cancellation, and recovers a page after deletions', async (t) => {
+  const offsets: number[] = []
+  let total = 90
+  const search = useStreamingSearch({
+    searchSongs: async () => ({ tracks: [], total: 0 }),
+    searchPlaylists: async () => ({ playlists: [], total: 0 }),
+    searchArtists: async () => ({ artists: [], total: 0 }),
+    searchLocalSongs: async (_query, _limit, offset = 0, options) => {
+      assert.ok(options?.signal)
+      offsets.push(offset)
+      return { tracks: offset < total ? [localTrack] : [], total }
+    },
+    searchSources: defaultSources,
+    playTrack: () => {}
+  })
+  t.after(search.clearSearch)
+  search.searchSource.value = 'local'
+  search.searchQuery.value = 'moon'
+  await nextTick()
+  search.searchOffset.value = 60
+  await search.performSearch('moon')
+  for (let i = 0; i < 500; i++) search.refreshSearch()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(offsets, [60, 60])
+  total = 31
+  search.refreshSearch()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(offsets, [60, 60, 60, 30])
+  assert.equal(search.searchOffset.value, 30)
+  assert.equal(search.searchTotal.value, 31)
+  assert.equal(search.searchResults.value[0].id, localTrack.id)
+  search.refreshSearch()
+  search.clearSearch()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(offsets.length, 4)
+})
+
+test('artist refreshes preserve deep offsets, recover after deletion, and pass cancellation to local catalog reads', async (t) => {
+  const offsets: number[] = [],
+    signals: AbortSignal[] = []
+  let total = 405
+  const artist = { id: 'local-singer', name: 'Singer', picUrl: null }
+  const search = useStreamingSearch({
+    searchSongs: async () => ({ tracks: [], total: 0 }),
+    searchPlaylists: async () => ({ playlists: [], total: 0 }),
+    searchArtists: async () => ({ artists: [], total: 0 }),
+    searchLocalArtists: async (_query, _limit, offset = 0, options) => {
+      assert.ok(options?.signal)
+      signals.push(options.signal)
+      offsets.push(offset)
+      return { artists: offset < total ? [artist] : [], total }
+    },
+    searchSources: ref([
+      { id: 'local', label: '本地', available: true, supportedTypes: ['artists'] }
+    ]),
+    playTrack: () => {}
+  })
+  t.after(search.clearSearch)
+  search.searchSource.value = 'local'
+  search.searchType.value = 'artists'
+  search.searchQuery.value = 'Singer'
+  await nextTick()
+  search.searchOffset.value = 300
+  await search.performSearch('Singer')
+  for (let i = 0; i < 500; i++) search.refreshSearch()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(offsets, [300, 300])
+  total = 31
+  search.refreshSearch()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(offsets, [300, 300, 300, 30])
+  assert.equal(search.searchOffset.value, 30)
+  assert.equal(search.searchTotal.value, 31)
+  assert.equal(search.searchArtistsResults.value[0].id, artist.id)
+  assert.equal(signals[2].aborted, true, 'clamping the page supersedes the invalid deep request')
+})
+
+test('local database search playback freezes all results, fences stale rows, and preserves provider and JSON queues', async (t) => {
+  const query = { search: 'moon', sort: 'playlist' as const, contentRevision: 12 }
+  const full: Array<{ query: unknown; id: string }> = [],
+    arrays: string[][] = []
+  let json = false,
+    failure = false
+  const search = useStreamingSearch({
+    searchSongs: async () => ({ tracks: [providerTrack], total: 1 }),
+    searchPlaylists: async () => ({ playlists: [], total: 0 }),
+    searchArtists: async () => ({ artists: [], total: 0 }),
+    searchLocalSongs: async () => ({
+      tracks: [localTrack],
+      total: 405,
+      ...(!json ? { playbackQuery: query } : {})
+    }),
+    searchProviderSongs: async () => ({ tracks: [providerTrack], total: 1 }),
+    searchSources: defaultSources,
+    playTrack: (_track, queue) => {
+      arrays.push(queue!.map((track) => track.id))
+    },
+    playLibraryQuery: async (value, id) => {
+      if (failure) throw new Error('曲库在读取期间发生变化，请重试')
+      full.push({ query: value, id })
+    }
+  })
+  t.after(search.clearSearch)
+  search.searchSource.value = 'local'
+  search.searchQuery.value = 'moon'
+  await nextTick()
+  search.searchOffset.value = 300
+  await search.performSearch('moon')
+  search.onSearchTrackClick(localTrack)
+  assert.deepEqual(full, [{ query, id: localTrack.id }])
+  assert.equal(arrays.length, 0)
+  search.searchQuery.value = 'new query'
+  search.onSearchTrackClick(localTrack)
+  assert.equal(full.length, 1, 'an old row cannot play against a new input before debounce')
+  search.searchQuery.value = 'moon'
+  await nextTick()
+  await search.performSearch('moon')
+  failure = true
+  search.onSearchTrackClick(localTrack)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.match(search.searchError.value, /发生变化/)
+  assert.equal(arrays.length, 0, 'failed SQL queue creation never plays the current page instead')
+  failure = false
+  json = true
+  await search.performSearch('moon')
+  search.onSearchTrackClick(localTrack)
+  assert.deepEqual(arrays, [[localTrack.id]])
+  search.searchSource.value = 'ncm'
+  await nextTick()
+  await search.performSearch('moon')
+  search.onSearchTrackClick(providerTrack)
+  assert.deepEqual(arrays, [[localTrack.id], [providerTrack.id]])
+})

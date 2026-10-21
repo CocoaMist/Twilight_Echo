@@ -109,6 +109,7 @@ const SLOW_NATIVE_METHODS = new Set<string>([
   'SetOutputBackend',
   'SetOutputConfig',
   'LoadQueue',
+  'RebindQueue',
   // Hot append/update may synchronously preload the next remote stream.
   'AppendQueueItems',
   'UpdateQueueItemSource',
@@ -142,6 +143,7 @@ function isSlowNativeMethod(method: keyof NativeAudioBinding): boolean {
 
 type PendingRequest = {
   method: keyof NativeAudioBinding
+  playbackInfoSerial?: number
   startedAt: number
   slow: boolean
   resolve: (value: unknown) => void
@@ -205,6 +207,8 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
   private cacheRequestSerial = new Map<string, number>()
   private cacheRequestsInFlight = new Set<string>()
   private lastPlaybackInfo: string | PlaybackInfo | null = null
+  private playbackInfoReadSerial = 0
+  private playbackInfoAppliedSerial = 0
   private lastDspStatus: string | { plugins: unknown[] } = { plugins: [] }
   private lastDspGraphStatus: DspGraphStatus = createEmptyDspGraphStatus()
   private serviceCapabilities: AudioServiceCapabilities | null = null
@@ -241,11 +245,16 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
    * 异步调用原生方法并等待 utility 进程返回结果。
    * 用于 play/pause 等需要确认真实状态的控制命令。
    */
-  callAsync(method: string, args: unknown[]): Promise<unknown> {
+  async callAsync(method: string, args: unknown[]): Promise<unknown> {
     if (method === 'AnalyzeBpm' || method === 'AnalyzeLoudness') {
       return Promise.reject(new Error(`${method} must use the isolated audio analysis service`))
     }
-    return this.call(method as keyof NativeAudioBinding, args)
+    const result = await this.call(method as keyof NativeAudioBinding, args)
+    // A bounded window reload renumbers the incoming occurrence (usually 1→0).
+    // Drain the post-ACK state before main publishes its new token. Source alone
+    // cannot reject an old slot when adjacent CUE tracks share the same file.
+    if (method === 'LoadQueue') await this.call('GetPlaybackInfo', [])
+    return result
   }
 
   Play(source: string, startTime?: number): void {
@@ -305,6 +314,32 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
 
   LoadQueue(queueJson: string, startIndex: number): void {
     this.fireAndForget('LoadQueue', [queueJson, startIndex])
+  }
+
+  async RebindQueue(
+    queueJson: string,
+    startIndex: number,
+    mode: string,
+    expectedJson: string,
+    expectedIndex: number
+  ): Promise<boolean> {
+    // Method capabilities come from the loaded addon, not this shim's surface.
+    // Older binaries must not receive a speculative mutating request.
+    if (!this.serviceCapabilities?.methods.includes('RebindQueue')) return false
+    const result = await this.call('RebindQueue', [
+      queueJson,
+      startIndex,
+      mode,
+      expectedJson,
+      expectedIndex
+    ])
+    if (typeof result !== 'boolean') throw new Error('Invalid native queue rebind reply')
+    // Rebind can renumber the live slot without changing source or decoder.
+    // Drain a post-ACK read before main publishes the replacement queue/map;
+    // otherwise its next tick can interpret the old cached slot as a new song.
+    // A failed read leaves authority uncertain, never replay the mutation.
+    if (result) await this.call('GetPlaybackInfo', [])
+    return result
   }
 
   SelectQueueIndex(index: number): void {
@@ -457,9 +492,8 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
   }
 
   GetPlaybackInfo(): string | PlaybackInfo {
-    this.refreshCache('GetPlaybackInfo', [], (value) => {
-      this.lastPlaybackInfo = value as string | PlaybackInfo
-    })
+    // handleMessage owns ordered cache publication for polling and demand reads.
+    this.refreshCache('GetPlaybackInfo', [], () => {})
     return this.lastPlaybackInfo ?? '{"state":"stopped"}'
   }
 
@@ -771,8 +805,13 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
     if (response.ok) {
       // Explicit reads after transport/preparation must refresh the same cache
       // that regular playback ticks consume, before the caller resumes.
-      if (pending.method === 'GetPlaybackInfo')
+      if (
+        pending.playbackInfoSerial !== undefined &&
+        pending.playbackInfoSerial >= this.playbackInfoAppliedSerial
+      ) {
+        this.playbackInfoAppliedSerial = pending.playbackInfoSerial
         this.lastPlaybackInfo = response.value as string | PlaybackInfo
+      }
       if (pending.method === 'GetUpcomingTrack')
         this.lastUpcomingTrack = response.value as string | AudioEngineQueueItem | null
       pending.resolve(response.value)
@@ -1027,6 +1066,8 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
     this.lastDspGraphStatus = createEmptyDspGraphStatus()
     this.serviceCapabilities = null
     this.lastPlaybackInfo = '{"state":"stopped"}'
+    this.playbackInfoReadSerial = 0
+    this.playbackInfoAppliedSerial = 0
     this.lastConvolverInfo = null
     this.lastVisualizationDataByKey.clear()
     this.visualizationCacheKeys.clear()
@@ -1075,6 +1116,8 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
     const requestId = diagnosticContext().requestId ?? randomUUID()
     const generation = this.generation
     const slow = isSlowNativeMethod(method)
+    const playbackInfoSerial =
+      method === 'GetPlaybackInfo' ? ++this.playbackInfoReadSerial : undefined
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const pending = this.pending.get(requestId)
@@ -1104,6 +1147,7 @@ export class AudioEngineServiceBinding extends EventEmitter implements NativeAud
       }, this.requestTimeoutForMethod(method))
       this.pending.set(requestId, {
         method,
+        playbackInfoSerial,
         startedAt: Date.now(),
         slow,
         resolve: (value) => {

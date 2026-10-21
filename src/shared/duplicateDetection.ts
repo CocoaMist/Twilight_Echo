@@ -1,4 +1,6 @@
-/** Evidence is ordered from exact file identity to metadata-only similarity. */
+import type { CueRange } from './cue.ts'
+
+/** Evidence is ordered from exact source identity to metadata-only similarity. */
 export type DuplicateEvidenceKind =
   | 'path'
   | 'contentHash'
@@ -24,6 +26,9 @@ export interface AcousticFingerprint {
 export interface DuplicateCandidate {
   id: string
   filePath: string
+  /** A container path/hash is exact evidence only within the same logical source segment. */
+  subTrack?: string
+  cueRange?: CueRange
   title: string
   artist: string
   album: string

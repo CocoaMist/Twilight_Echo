@@ -1,5 +1,6 @@
 import { ref, type Ref } from 'vue'
 import type { Track } from '../../types/music'
+import type { PlaylistTrackPageCreator } from '../../stores/library/musicStoreTypes.ts'
 
 export interface PlaybackQueueDrawerCommands {
   enqueueTrack: (track: Track) => void
@@ -9,14 +10,19 @@ export interface PlaybackQueueDrawerCommands {
   reorderQueue: (fromIndex: number, toIndex: number) => void
   saveQueueAsPlaylist: (
     name: string,
-    createPlaylistWithTracks: (name: string, tracks: Track[]) => string
-  ) => string
+    createPlaylistWithTracks: (name: string, tracks: Track[]) => string,
+    createPages?: PlaylistTrackPageCreator,
+    signal?: AbortSignal
+  ) => string | Promise<string>
 }
 
 interface PlaybackQueueDrawerActionOptions {
   queue: Ref<Track[]>
   commands: PlaybackQueueDrawerCommands
   createPlaylistWithTracks: (name: string, tracks: Track[]) => string
+  createPlaylistWithTrackPages?: PlaylistTrackPageCreator
+  /** Database queues deliberately keep the compatibility Track[] empty. */
+  queueLength?: Ref<number>
 }
 
 function normalizePlaylistName(value: string): string {
@@ -31,7 +37,9 @@ function normalizePlaylistName(value: string): string {
 export function usePlaybackQueueDrawerActions({
   queue,
   commands,
-  createPlaylistWithTracks
+  createPlaylistWithTracks,
+  createPlaylistWithTrackPages,
+  queueLength
 }: PlaybackQueueDrawerActionOptions) {
   const draggedEntryId = ref<string | null>(null)
 
@@ -63,9 +71,16 @@ export function usePlaybackQueueDrawerActions({
     if (queue.value.length > 0) commands.clearQueue()
   }
 
-  function saveAsPlaylist(name: string): string | null {
+  function saveAsPlaylist(name: string, signal?: AbortSignal): string | Promise<string> | null {
     const normalized = normalizePlaylistName(name)
-    if (!normalized || queue.value.length === 0) return null
+    if (!normalized || (queueLength?.value ?? queue.value.length) === 0) return null
+    if (createPlaylistWithTrackPages)
+      return commands.saveQueueAsPlaylist(
+        normalized,
+        createPlaylistWithTracks,
+        createPlaylistWithTrackPages,
+        signal
+      )
     return commands.saveQueueAsPlaylist(normalized, createPlaylistWithTracks)
   }
 

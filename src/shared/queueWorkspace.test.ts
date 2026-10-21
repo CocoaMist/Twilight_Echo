@@ -83,6 +83,36 @@ test('workspace boundary accepts stable identities and rejects stale media field
   )
 })
 
+test('workspace boundary accepts a SQLite queue reference without materializing entries', () => {
+  const librarySession = {
+    ...session(),
+    entries: [],
+    originalEntryIds: [],
+    currentEntryId: 'entry-2',
+    libraryQueue: { id: 'queue-1', revision: 4, entryId: 'entry-2', index: 17 }
+  }
+  assert.equal(
+    isQueueWorkspaceDocument({ version: 1, sessions: [librarySession], history: [] }),
+    true
+  )
+  assert.equal(
+    isQueueWorkspaceDocument({
+      version: 1,
+      sessions: [{ ...librarySession, entries: [session().entries[0]] }],
+      history: []
+    }),
+    false
+  )
+  assert.equal(
+    isQueueWorkspaceDocument({
+      version: 1,
+      sessions: [{ ...librarySession, currentEntryId: 'other' }],
+      history: []
+    }),
+    false
+  )
+})
+
 test('workspace bounds session count, aggregate entries and actual history independently', () => {
   assert.equal(
     isQueueWorkspaceDocument({

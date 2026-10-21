@@ -148,11 +148,13 @@ async function callProvider<T>(
   method: string,
   args: unknown[] = []
 ): Promise<T> {
-  return (await window.api.providers.call(
+  const result = (await window.api.providers.call(
     providerId,
     method as never,
     toProviderIpcArgs(args)
   )) as T
+  if (/^(?:logout|login|checkQrLogin)/.test(method)) window.dispatchEvent(new Event('twilight-provider-auth-changed'))
+  return result
 }
 
 export function useProviderStore() {

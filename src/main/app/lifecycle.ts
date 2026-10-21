@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, protocol, net } from 'electron'
+import { app, BrowserWindow, dialog, protocol, net, ipcMain } from 'electron'
 import { installExperienceProtocol } from '../plugins/experienceProtocol.ts'
 import { applyPendingPersonalRestore } from '../persistence/personalBackup.ts'
 import { readAppSettings } from '../core/settings'
@@ -22,7 +22,11 @@ import {
   prepareBackgroundForDisplay
 } from '../library/coverCache'
 import { decodeAudioFileUrlPath } from '../library/audioFileUrl.ts'
-import { initializeLocalPathGrants, resolveAuthorizedAudioFile } from '../security/localPaths'
+import {
+  initializeLocalPathGrants,
+  resolveAuthorizedAudioFile,
+  resolveAuthorizedLibraryDirectory
+} from '../security/localPaths'
 import {
   unregisterPlayerShortcuts,
   destroyTray,
@@ -45,12 +49,24 @@ import { setupNcmIpc } from '../ncm/api'
 import { ensureAudioEngineRuntime, setupAudioEngineIpc } from '../audio/engineIpc'
 import { AudioAnalysisServiceClient } from '../audioAnalysisServiceClient.ts'
 import { LocalLibraryScanServiceClient } from '../library/libraryScanServiceClient.ts'
+import { LibraryDatabaseServiceClient } from '../library/libraryDatabaseServiceClient.ts'
+import { LibraryDatabaseRuntime } from '../library/libraryDatabaseRuntime.ts'
+import { selectLibraryStorage } from '../library/libraryStorageMode.ts'
 import { setupBpmAnalysisIpc } from '../bpm/bpmIpc'
 import { setupLoudnessAnalysisIpc } from '../audio/loudnessIpc'
 import { setupOpraIpc } from '../ipc/opra'
 import { setupPluginIpc } from '../ipc/plugins'
 import { setupDataIpc } from '../ipc/data'
-import { ensureActiveLibraryExclusionsLoaded } from '../ipc/libraryIpc.ts'
+import {
+  ensureActiveLibraryExclusionsLoaded,
+  prepareAudioFilesForRemoval,
+  trashLocalFileWithRetry,
+  readSacdIsoMetadata
+} from '../ipc/libraryIpc.ts'
+import { filterAuthorizedLibraryRoots } from '../security/localPaths'
+import { normalizeLocalPath } from '../security/ipcValidation.ts'
+import { normalizeCachedCoverHandle } from '../library/coverCache'
+import { setupLibraryDatabaseIpc } from '../ipc/libraryDatabaseIpc.ts'
 import { setupThemeIpc } from '../ipc/themes'
 import { resolveThemeAssetFile } from '../themes/themeArchive.ts'
 import { setupRadioMediaIpc, destroyRadioMediaIpc } from '../radio/radioMediaIpc.ts'
@@ -136,11 +152,17 @@ export function startApp(): void {
   }
 
   const gotSingleInstanceLock = app.requestSingleInstanceLock()
+  let libraryStorage: 'json' | 'sqlite' = 'json'
   if (!gotSingleInstanceLock) {
     app.quit()
   } else {
     try {
-      applyPendingPersonalRestore(app.getPath('userData'))
+      libraryStorage = selectLibraryStorage(
+        app.getPath('userData'),
+        app.isPackaged,
+        process.env.TWILIGHT_SQLITE_LIBRARY
+      )
+      if (libraryStorage === 'json') applyPendingPersonalRestore(app.getPath('userData'))
       runtime.appSettings = readAppSettings()
       runtime.launchSettings = { ...runtime.appSettings }
     } catch (error) {
@@ -228,6 +250,22 @@ export function startApp(): void {
 
     const acrylicBackdropWarmup = warmWindowsAcrylicBackdropAvailability()
     app.whenReady().then(async () => {
+      if (libraryStorage === 'sqlite') {
+        try {
+          await initializeDatabaseLibrary()
+        } catch (error) {
+          runtime.libraryDatabase?.destroy()
+          runtime.libraryDatabase = null
+          runtime.localLibraryScanService?.destroy()
+          runtime.localLibraryScanService = null
+          dialog.showErrorBox(
+            'SQLite 曲库启动未完成',
+            `恢复日志与原始数据已保留，未退回旧 JSON。\n${error instanceof Error ? error.message : String(error)}`
+          )
+          app.exit(1)
+          return
+        }
+      }
       await acrylicBackdropWarmup
       const shellIdentity = ensureWindowsShellIdentity()
       if (!shellIdentity.ok) {
@@ -239,6 +277,17 @@ export function startApp(): void {
       installElectronSecurity()
       installExperienceProtocol()
       await initializeLocalPathGrants(runtime.launchSettings)
+      if (runtime.libraryDatabase) {
+        try {
+          await runtime.libraryDatabase.refreshRoots()
+        } catch (error) {
+          runtime.libraryDatabase.destroy()
+          runtime.localLibraryScanService?.destroy()
+          dialog.showErrorBox('SQLite 曲库目录授权失败', String(error))
+          app.exit(1)
+          return
+        }
+      }
 
       // Register cover:// protocol — Chromium reads cached image assets directly from disk,
       // no IPC, no base64, browser manages decode cache natively.
@@ -386,9 +435,23 @@ export function startApp(): void {
         optimizer.watchWindowShortcuts(window)
       })
 
-      runtime.localLibraryScanService = new LocalLibraryScanServiceClient({
+      runtime.localLibraryScanService ??= new LocalLibraryScanServiceClient({
         serviceEntry: join(__dirname, 'libraryScanService.js')
       })
+      setupLibraryDatabaseIpc(
+        ipcMain,
+        runtime.libraryDatabase?.api,
+        runtime.libraryDatabase
+          ? {
+              scanDirectories: (request) => runtime.libraryDatabase!.scanDirectories(request),
+              removeFiles: (request) =>
+                runtime.libraryDatabase!.removeFiles(request.items, request.mode)
+            }
+          : undefined,
+        runtime.libraryDatabase?.playlistRepair,
+        runtime.libraryDatabase?.selections,
+        runtime.libraryDatabase?.queueBuilds
+      )
       setupDataIpc()
       setupThemeIpc()
       setupDesktopLyricsIpc()
@@ -471,6 +534,8 @@ export function startApp(): void {
       runtime.audioAnalysisService = null
       runtime.localLibraryIndexCoordinator?.destroy()
       runtime.localLibraryIndexCoordinator = null
+      runtime.libraryDatabase?.destroy()
+      runtime.libraryDatabase = null
       runtime.localLibraryScanService?.destroy()
       runtime.localLibraryScanService = null
       runtime.audioEngineManager?.destroy()
@@ -489,6 +554,47 @@ export function startApp(): void {
       runtime.ncmServerPromise = null
     })
   }
+}
+
+async function initializeDatabaseLibrary(): Promise<void> {
+  const root = app.getPath('userData')
+  const database = new LibraryDatabaseServiceClient({
+    serviceEntry: join(__dirname, 'libraryDatabaseService.js'),
+    libraryFilePath: join(root, 'music-library.json'),
+    coverCacheDir: getCoverCacheDir()
+  })
+  runtime.localLibraryScanService = new LocalLibraryScanServiceClient({
+    serviceEntry: join(__dirname, 'libraryScanService.js')
+  })
+  runtime.libraryDatabase = new LibraryDatabaseRuntime({
+    root,
+    libraryFilePath: join(root, 'music-library.json'),
+    database,
+    scanner: runtime.localLibraryScanService,
+    coverCacheDir: getCoverCacheDir(),
+    resolveRoots: () => filterAuthorizedLibraryRoots(runtime.appSettings.libraryFolders),
+    authorizeRemoval: async (filePath, mode) => {
+      const path = normalizeLocalPath(filePath, 'library removal path')
+      if (mode === 'trash') await resolveAuthorizedAudioFile(path)
+    },
+    authorizeRepairDirectory: resolveAuthorizedLibraryDirectory,
+    authorizeRepairFile: resolveAuthorizedAudioFile,
+    prepareTrash: prepareAudioFilesForRemoval,
+    trashItem: async (filePath) => {
+      await trashLocalFileWithRetry(
+        await resolveAuthorizedAudioFile(normalizeLocalPath(filePath, 'trash item path'))
+      )
+    },
+    normalizeCoverHandle: normalizeCachedCoverHandle,
+    readSacdIsoMetadata,
+    closeDatabase: () => database.destroy(),
+    watcherDebounceMs: runtime.libraryWatcherDebounceMs
+  })
+  await runtime.libraryDatabase.initialize()
+  // Personal restore runs before any other persistence owners or windows and
+  // may have restored directory grants/settings used by the rest of startup.
+  runtime.appSettings = readAppSettings()
+  runtime.launchSettings = { ...runtime.appSettings }
 }
 
 function createMainWindowAndScheduleDeferredStartup(): void {

@@ -3,7 +3,11 @@ import { useSettingsStore } from '../../stores/useSettingsStore'
 import DownloadSettingsFields from './DownloadSettingsFields.vue'
 import SettingsGroup from './SettingsGroup.vue'
 import { ref, watch } from 'vue'
-import type { LibraryWatcherStatusSnapshot } from '../../../../shared/localLibraryScan.ts'
+import type {
+  LibraryWatcherStatusSnapshot,
+  LocalLibraryScanStatus
+} from '../../../../shared/localLibraryScan.ts'
+import { canResumeLocalLibraryScan } from '../../utils/libraryScanPresentation.ts'
 import type { BooleanSettingKey } from './types.ts'
 const { settings } = useSettingsStore()
 const genreSeparatorsDraft = ref(settings.value.genreSeparators)
@@ -18,7 +22,7 @@ defineProps<{
   formattedCacheSize: string
   storageAttention?: string
   libraryWatcherStatus: LibraryWatcherStatusSnapshot | null
-  libraryScanStatus: { state: string; current: number; total: number }
+  libraryScanStatus: LocalLibraryScanStatus
   libraryScanIsActive: boolean
   libraryScanProgressText: string
   libraryMetadataEnrichmentText: string
@@ -193,10 +197,43 @@ defineProps<{
             <progress
               v-if="libraryScanIsActive"
               class="library-scan-progress"
-              :value="libraryScanStatus.total > 0 ? libraryScanStatus.current : undefined"
+              :value="
+                !libraryScanStatus.databaseProgress && libraryScanStatus.total > 0
+                  ? libraryScanStatus.current
+                  : undefined
+              "
               :max="libraryScanStatus.total > 0 ? libraryScanStatus.total : 1"
+              aria-label="扫描进度"
             ></progress>
             <span class="library-scan-copy">{{ libraryScanProgressText }}</span>
+            <dl
+              v-if="libraryScanStatus.databaseProgress"
+              class="library-scan-counters"
+              aria-label="已确认的扫描统计"
+            >
+              <div>
+                <dt>检查文件</dt>
+                <dd>{{ libraryScanStatus.databaseProgress.checkedFiles.toLocaleString() }} 个</dd>
+              </div>
+              <div>
+                <dt>解析元数据</dt>
+                <dd>
+                  {{ libraryScanStatus.databaseProgress.parsedFiles.toLocaleString() }} 个文件
+                </dd>
+              </div>
+              <div>
+                <dt>已入库曲目</dt>
+                <dd>{{ libraryScanStatus.databaseProgress.trackCount.toLocaleString() }} 首</dd>
+              </div>
+              <div
+                :class="{
+                  'library-scan-failures': libraryScanStatus.databaseProgress.failedFiles > 0
+                }"
+              >
+                <dt>失败文件</dt>
+                <dd>{{ libraryScanStatus.databaseProgress.failedFiles.toLocaleString() }} 个</dd>
+              </div>
+            </dl>
             <span class="library-scan-copy">{{ libraryMetadataEnrichmentText }}</span>
             <span v-if="libraryResetMessage" class="library-scan-copy success-copy">
               {{ libraryResetMessage }}
@@ -222,12 +259,12 @@ defineProps<{
                 暂停
               </button>
               <button
-                v-if="libraryScanStatus.state === 'paused'"
+                v-if="canResumeLocalLibraryScan(libraryScanStatus)"
                 type="button"
                 class="soft-button"
                 @click="resumeActiveLibraryScan"
               >
-                继续
+                继续扫描
               </button>
               <button
                 v-if="libraryScanIsActive"
@@ -312,3 +349,26 @@ defineProps<{
     </SettingsGroup>
   </section>
 </template>
+
+<style scoped>
+.library-scan-counters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 24px;
+  margin: 0;
+}
+.library-scan-counters dt {
+  color: var(--text-secondary);
+  font-size: var(--te-font-size-body, 14px);
+}
+.library-scan-counters dd {
+  margin: 3px 0 0;
+  color: var(--text-primary);
+  font-size: var(--te-font-size-body, 14px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.library-scan-failures dd {
+  color: var(--te-danger-500, #dc2626);
+}
+</style>

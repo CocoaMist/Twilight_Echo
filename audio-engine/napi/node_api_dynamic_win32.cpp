@@ -47,6 +47,12 @@ extern "C" napi_status NAPI_CDECL napi_get_undefined(napi_env env, napi_value* r
   return fn ? fn(env, result) : napi_generic_failure;
 }
 
+extern "C" napi_status NAPI_CDECL napi_get_boolean(napi_env env, bool value, napi_value* result) {
+  using Fn = napi_status(NAPI_CDECL*)(napi_env, bool, napi_value*);
+  static Fn fn = loadNodeApi<Fn>("napi_get_boolean");
+  return fn ? fn(env, value, result) : napi_generic_failure;
+}
+
 extern "C" napi_status NAPI_CDECL napi_create_array_with_length(
     napi_env env,
     size_t length,

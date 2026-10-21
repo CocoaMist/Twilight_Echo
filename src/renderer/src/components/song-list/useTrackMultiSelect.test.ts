@@ -1,10 +1,65 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
-import { effectScope, ref } from 'vue'
+import test, { afterEach } from 'node:test'
+import { effectScope, nextTick, ref } from 'vue'
+import type { Track } from '../../types/music.ts'
 
-const { useTrackMultiSelect } = (await import(
+const { useTrackMultiSelect, isTrackListShortcutTarget } = (await import(
   new URL('./useTrackMultiSelect.ts', import.meta.url).href
 )) as typeof import('./useTrackMultiSelect')
+
+test('list shortcuts stay within the owning noneditable surface and yield to menus and dialogs', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'HTMLElement')
+  class TestElement {
+    tagName = 'BUTTON'
+    isContentEditable = false
+  }
+  Object.defineProperty(globalThis, 'HTMLElement', { configurable: true, value: TestElement })
+  try {
+    const row = new TestElement()
+    const outside = new TestElement()
+    const input = Object.assign(new TestElement(), { tagName: 'INPUT' })
+    const select = Object.assign(new TestElement(), { tagName: 'SELECT' })
+    const contentEditable = Object.assign(new TestElement(), { isContentEditable: true })
+    let active = row
+    let overlay: object | null = null
+    const inside = new Set([row, input, select, contentEditable])
+    const root = {
+      contains: (element: TestElement) => inside.has(element),
+      ownerDocument: {
+        get activeElement() {
+          return active
+        },
+        querySelector: () => overlay
+      }
+    } as unknown as HTMLElement
+    const event = (target: TestElement, defaultPrevented = false): KeyboardEvent =>
+      ({
+        key: 'a',
+        ctrlKey: true,
+        target,
+        defaultPrevented
+      }) as unknown as KeyboardEvent
+    assert.equal(isTrackListShortcutTarget(event(row), root, false), true)
+    assert.equal(isTrackListShortcutTarget(event(outside), root, false), false)
+    active = outside
+    assert.equal(isTrackListShortcutTarget(event(row), root, false), false)
+    for (const editable of [input, select, contentEditable]) {
+      active = editable
+      assert.equal(isTrackListShortcutTarget(event(editable), root, false), false)
+    }
+    active = row
+    assert.equal(isTrackListShortcutTarget(event(row, true), root, false), false)
+    assert.equal(isTrackListShortcutTarget(event(row), root, true), false)
+    overlay = { role: 'menu' }
+    assert.equal(isTrackListShortcutTarget(event(row), root, false), false)
+    overlay = { tag: 'dialog' }
+    assert.equal(isTrackListShortcutTarget(event(row), root, false), false)
+    assert.equal(isTrackListShortcutTarget(event(row), null, false), false)
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'HTMLElement', previous)
+    else Reflect.deleteProperty(globalThis, 'HTMLElement')
+  }
+})
 
 function makeTracks(count: number): Array<{
   id: string
@@ -34,8 +89,13 @@ function makeTracks(count: number): Array<{
   }))
 }
 
+const scopes: ReturnType<typeof effectScope>[] = []
+afterEach(() => {
+  for (const scope of scopes.splice(0)) scope.stop()
+})
 function withScope<T>(run: () => T): T {
   const scope = effectScope()
+  scopes.push(scope)
   const result = scope.run(run)
   if (result === undefined) throw new Error('scope.run returned undefined')
   return result
@@ -216,4 +276,140 @@ test('checkbox-style toggle enters multi-select without playing', () => {
   assert.equal(multi.isSelected('t1'), true)
   multi.toggle(tracks.value[1].id, 1)
   assert.equal(multi.hasSelection.value, false)
+})
+
+test('occurrence keys select duplicate recordings independently without changing Track IDs', () => {
+  const list = [makeTracks(1)[0], makeTracks(1)[0], makeTracks(1)[0]]
+  const tracks = ref(list)
+  const keys = new Map<Track, string>(tracks.value.map((track, i) => [track, `entry:${i}`]))
+  const multi = withScope(() =>
+    useTrackMultiSelect({ tracks, keyForTrack: (track) => keys.get(track)! })
+  )
+  multi.onRowClick(tracks.value[1], 1, { ctrlKey: true } as MouseEvent)
+  assert.deepEqual(multi.getSelectedTrackIds(), ['entry:1'])
+  assert.equal(multi.getSelectedTracks().length, 1)
+  assert.equal(multi.getSelectedTracks()[0], tracks.value[1])
+  multi.onRowClick(tracks.value[2], 2, { shiftKey: true } as MouseEvent)
+  assert.deepEqual(multi.getSelectedTrackIds(), ['entry:1', 'entry:2'])
+  multi.selectAll()
+  assert.equal(multi.selectedCount.value, 3)
+  assert.deepEqual(
+    multi.getSelectedTracks().map((track) => track.id),
+    ['t0', 't0', 't0']
+  )
+})
+
+test('SQLite-style bounded pages retain explicitly selected rows across page changes', async () => {
+  const tracks = ref(makeTracks(4))
+  const multi = withScope(() => useTrackMultiSelect({ tracks, preserveSelectedTracks: () => true }))
+  multi.toggle(tracks.value[0].id, 0, tracks.value[0])
+  tracks.value = tracks.value.slice(2)
+  await nextTick()
+
+  assert.equal(multi.selectedCount.value, 1)
+  assert.equal(multi.isSelected('t0'), true)
+  assert.deepEqual(
+    multi.getSelectedTracks().map((track) => track.id),
+    ['t0']
+  )
+
+  // A refreshed row updates the compact selection cache without requiring the
+  // previous page to remain resident.
+  const refreshed = { ...tracks.value[0], id: 't0' }
+  tracks.value = [refreshed, tracks.value[1]]
+  await nextTick()
+  assert.equal(multi.getSelectedTracks()[0], tracks.value[0])
+
+  multi.clearSelection()
+  assert.equal(multi.selectedCount.value, 0)
+  assert.deepEqual(multi.getSelectedTracks(), [])
+})
+
+test('legacy reactive lists prune deleted rows and preserve list order by default', () => {
+  const tracks = ref(makeTracks(4))
+  const multi = withScope(() => useTrackMultiSelect({ tracks }))
+  multi.toggle('t3', 3)
+  multi.toggle('t1', 1)
+  const version = multi.selectionVersion.value
+  tracks.value = tracks.value.slice(0, 3)
+  assert.equal(multi.selectionVersion.value, version + 1)
+  assert.deepEqual(multi.getSelectedTrackIds(), ['t1'])
+  assert.deepEqual(
+    multi.getSelectedTracks().map((track) => track.id),
+    ['t1']
+  )
+})
+
+test('paged selection uses compact records in query order, supports two-argument calls, and releases on reset/dispose', () => {
+  const tracks = ref<Track[]>(makeTracks(4))
+  const offset = ref(200)
+  const revision = ref(1)
+  const preserve = ref(true)
+  const scope = effectScope()
+  const multi = scope.run(() =>
+    useTrackMultiSelect({
+      tracks,
+      preserveSelectedTracks: preserve,
+      snapshotTrack: (track) => ({ ...makeTracks(1)[0], id: track.id, title: track.title }),
+      selectionOrder: (_track, index) => offset.value + index,
+      resetSources: [revision],
+      rangeContext: offset
+    })
+  )!
+  multi.toggle('t3', 3)
+  multi.toggle('missing', 0)
+  assert.equal(multi.selectedCount.value, 1)
+  tracks.value = [] // Loading is not deletion.
+  offset.value = 0
+  tracks.value = makeTracks(2).map((track) => ({ ...track, id: `first:${track.id}` }))
+  multi.selectAll()
+  assert.deepEqual(
+    multi.getSelectedTracks().map((track) => track.id),
+    ['first:t0', 'first:t1', 't3']
+  )
+  assert.notEqual(multi.getSelectedTracks()[0], tracks.value[0])
+  multi.selectOnly('first:t1', 1)
+  assert.deepEqual(
+    multi.getSelectedTracks().map((track) => track.id),
+    ['first:t1']
+  )
+  revision.value++
+  assert.equal(
+    multi.selectedCount.value,
+    0,
+    'revision fence clears synchronously, before a stale action'
+  )
+  multi.toggle('first:t0', 0)
+  preserve.value = false
+  assert.equal(multi.selectedCount.value, 0, 'storage/source changes release retained rows')
+  preserve.value = true
+  multi.selectAll()
+  scope.stop()
+  assert.deepEqual(multi.getSelectedTracks(), [])
+})
+
+test('page-local Shift range never uses a previous page anchor and select-all adds only this page', () => {
+  const tracks = ref(makeTracks(6))
+  const page = ref(0)
+  const multi = withScope(() =>
+    useTrackMultiSelect({
+      tracks,
+      preserveSelectedTracks: () => true,
+      rangeContext: page,
+      selectionOrder: (_track, index) => page.value * 200 + index
+    })
+  )
+  multi.toggle('t5', 5)
+  page.value = 1
+  tracks.value = makeTracks(6).map((track) => ({ ...track, id: `next:${track.id}` }))
+  multi.onRowClick(tracks.value[2], 2, { shiftKey: true } as MouseEvent)
+  assert.deepEqual(multi.getSelectedTrackIds(), ['t5', 'next:t2'])
+  multi.onRowClick(tracks.value[4], 4, { shiftKey: true } as MouseEvent)
+  assert.deepEqual(
+    multi.getSelectedTracks().map((track) => track.id),
+    ['t5', 'next:t2', 'next:t3', 'next:t4']
+  )
+  multi.selectAll()
+  assert.equal(multi.selectedCount.value, 7)
+  assert.equal(multi.isSelected('t0'), false, 'select-all does not imply the complete SQL query')
 })

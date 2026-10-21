@@ -5,6 +5,7 @@ import {
   type VersionedDataEnvelope
 } from '../../shared/versionedPersistence.ts'
 import { trackCueRangePropertyIsValid } from '../../shared/cue.ts'
+import { isPlaybackSession } from '../../shared/playbackSession.ts'
 
 export function isPlaybackQueueSnapshot(value: unknown): value is unknown[] {
   return (
@@ -54,11 +55,20 @@ export class PlaybackSessionStorage {
     session: PlaybackSession,
     expectedRevision: number
   ): Promise<VersionedDataEnvelope<PlaybackSession>> {
+    if (!isPlaybackSession(session)) throw new Error('Invalid playback session')
     const current = await this.stateStore.load()
     if ((current?.revision ?? 0) !== expectedRevision) {
       throw new PersistentDataRevisionConflictError(current, expectedRevision)
     }
     const { queue, queueRevision: _incomingQueueRevision, ...state } = session
+    if (session.libraryQueue) {
+      // Keep old queue files for the previous state backup, but never attach
+      // their revision to a database reference (or export them as this queue).
+      return (await this.stateStore.save(
+        state,
+        expectedRevision
+      )) as VersionedDataEnvelope<PlaybackSession>
+    }
     let queueRevision = current?.data?.queueRevision
     if (queue !== undefined) {
       queueRevision = await this.saveQueue(queue)

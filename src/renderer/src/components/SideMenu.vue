@@ -13,6 +13,8 @@ import ImportDialog from '@renderer/components/ImportDialog.vue'
 import ThemeIcon from '@renderer/components/ThemeIcon.vue'
 import { useMusicStore } from '@renderer/stores/useMusicStore'
 import { useSettingsStore } from '@renderer/stores/useSettingsStore'
+import { appearanceChromePreview } from '../composables/appearanceEditorState.ts'
+import type { NavigationPagePreferences } from '../../../shared/navigationPages'
 import {
   BUILTIN_NAVIGATION_PAGES,
   isNavigationPageVisible,
@@ -33,12 +35,15 @@ const props = withDefaults(
     liquidMaterial?: boolean
     activeKey: string
     pages?: NavigationPageDefinition[]
+    preview?: boolean
+    previewPreferences?: NavigationPagePreferences
   }>(),
   { pages: () => BUILTIN_NAVIGATION_PAGES }
 )
 const persistent = ref(false)
 let observer: MutationObserver | undefined
 onMounted(() => {
+  if (props.preview) return
   const root = document.documentElement
   const sync = (): void => {
     persistent.value =
@@ -54,13 +59,15 @@ onMounted(() => {
 onBeforeUnmount(() => observer?.disconnect())
 const emit = defineEmits<{ selectPage: [page: NavigationPageDefinition] }>()
 const settingsStore = useSettingsStore()
-const ordered = computed(() =>
-  orderNavigationPages(props.pages, settingsStore.settings.value.navigationPages)
+const navigationPreferences = computed(
+  () =>
+    props.previewPreferences ??
+    appearanceChromePreview.value?.navigationPages ??
+    settingsStore.settings.value.navigationPages
 )
+const ordered = computed(() => orderNavigationPages(props.pages, navigationPreferences.value))
 const visible = computed(() =>
-  ordered.value.filter((page) =>
-    isNavigationPageVisible(page, settingsStore.settings.value.navigationPages)
-  )
+  ordered.value.filter((page) => isNavigationPageVisible(page, navigationPreferences.value))
 )
 const entries = computed(() => buildSidebarEntries(visible.value))
 const sideMenu = ref<HTMLElement | null>(null)
@@ -294,7 +301,7 @@ function setPressOrigin(event: PointerEvent): void {
       <span v-if="scanning" class="scanning-text" aria-live="polite">{{ scanningLabel }}</span>
     </div>
   </div>
-  <ImportDialog :show="showImportDialog" @close="showImportDialog = false" />
+  <ImportDialog v-if="!preview" :show="showImportDialog" @close="showImportDialog = false" />
   <NativeDialogTransition>
     <NavigationPagesDialog
       v-if="showPagesEditor"
@@ -317,7 +324,7 @@ function setPressOrigin(event: PointerEvent): void {
      footer clears the painted bar; custom shells can reserve a playback row. */
   bottom: var(--te-side-menu-bottom, 0px);
   width: var(--te-menu-width);
-  /* The same frosted tint as the caption and player, over the shared wallpaper. */
+  /* Diffuse the shared wallpaper without adding a default dark tint. */
   background: var(--te-chrome-navigation-surface, transparent);
   border-right: 0;
   border-radius: 0 var(--te-navigation-radius) var(--te-navigation-radius) 0;

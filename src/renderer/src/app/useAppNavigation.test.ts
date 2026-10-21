@@ -26,7 +26,39 @@ function memoryStorage(): NavigationSessionStorage {
   }
 }
 
-test('appearance preview exposes the retained page and preserves Settings navigation', () => {
+test('appearance resumes retained drafts without adding duplicate overlay history', () => {
+  const navigation = useAppNavigation()
+  navigation.openSettingsPage('library')
+  navigation.openAppearancePage(undefined, 'studio')
+  const target = navigation.appearanceNavigationTarget.value
+  navigation.openPluginPage()
+  navigation.openAppearancePage()
+  assert.equal(navigation.appearanceNavigationTarget.value, target)
+  assert.equal(navigation.appearanceTab.value, 'studio')
+  assert.deepEqual(navigation.session.value.overlayHistory, [null, 'settings'])
+  navigation.closeAppearancePage()
+  assert.equal(navigation.showSettingsPage.value, true)
+})
+
+test('appearance settings sessions stay in settings while legacy theme sessions restore to the workspace', () => {
+  const navigation = useAppNavigation()
+  const saved = navigation.session.value
+  navigation.restoreSession({
+    ...saved,
+    overlay: 'settings',
+    settingsSection: 'appearance',
+    overlayHistory: [null]
+  })
+  assert.equal(navigation.showSettingsPage.value, true)
+  assert.equal(navigation.showAppearancePage.value, false)
+  assert.equal(navigation.settingsInitialSection.value, 'appearance')
+  navigation.restoreSession({ ...saved, overlay: 'equalizer', overlayHistory: [null, 'theme'] })
+  assert.equal(navigation.appearanceTab.value, 'studio')
+  navigation.closeEqualizerPage()
+  assert.equal(navigation.showAppearancePage.value, true)
+})
+
+test('appearance preview exposes the retained page and preserves its independent navigation', () => {
   const preview = ref(false)
   const navigation = useAppNavigation({ appearancePreviewActive: () => preview.value })
   const cases = [
@@ -41,17 +73,17 @@ test('appearance preview exposes the retained page and preserves Settings naviga
   ] as const
   for (const { target, visible } of cases) {
     navigation.navigate(target)
-    navigation.openSettingsPage('appearance')
+    navigation.openAppearancePage()
     const retainedSession = JSON.stringify(navigation.session.value)
     assert.equal(visible.value, false, target.kind)
     preview.value = true
     assert.equal(visible.value, true, target.kind)
-    assert.equal(navigation.showSettingsPage.value, true)
+    assert.equal(navigation.showAppearancePage.value, true)
     assert.equal(JSON.stringify(navigation.session.value), retainedSession)
     preview.value = false
     assert.equal(visible.value, false, target.kind)
     assert.equal(JSON.stringify(navigation.session.value), retainedSession)
-    navigation.closeSettingsPage()
+    navigation.closeAppearancePage()
     assert.equal(visible.value, true, target.kind)
     assert.deepEqual(navigation.pageTarget.value, target)
   }
@@ -315,8 +347,9 @@ test('settings, plugin, equalizer, and extension pages are mutually exclusive', 
 
   navigation.closeThemeStudioPage()
   assert.equal(navigation.showThemeStudioPage.value, false)
-  assert.equal(navigation.showSettingsPage.value, true)
-  assert.equal(navigation.settingsInitialSection.value, 'appearance')
+  assert.equal(navigation.showPluginPage.value, true)
+  assert.equal(navigation.showSettingsPage.value, false)
+  assert.equal(navigation.settingsInitialSection.value, 'playback')
 
   navigation.openEqualizerPage()
   assert.equal(navigation.showEqualizerPage.value, true)

@@ -1,5 +1,6 @@
-export const OFFICIAL_PLUGIN_INDEX_URL =
-  'https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json'
+import { OFFICIAL_PLUGIN_INDEX_URL } from '../../../shared/pluginDistribution.ts'
+
+export { OFFICIAL_PLUGIN_INDEX_URL } from '../../../shared/pluginDistribution.ts'
 
 export interface PluginVerificationLike {
   level: 'official' | 'publisher-signed' | 'index-declared' | 'unverified'

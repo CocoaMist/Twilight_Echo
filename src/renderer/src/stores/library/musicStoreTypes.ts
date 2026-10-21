@@ -1,10 +1,44 @@
 import type { Track } from '../../types/music'
 
+/** Await each bounded page. An optional final guard runs synchronously at
+ * publication, after the producer has completed and before any live mutation. */
+export type PlaylistPageProducer<T> = (
+  append: (items: readonly T[]) => Promise<void>
+) => Promise<void | (() => void)>
+
+export type PlaylistTrackPageProducer = PlaylistPageProducer<Track>
+
+/** Original configured IDs (entry IDs for imports), never playback/variant IDs. */
+export type PlaylistTrackIdPageProducer = PlaylistPageProducer<string>
+
+export interface PlaylistMember {
+  id: string
+  /** An exact-ID snapshot from a bounded source page, for legacy ID-only
+   * definitions that have no stored snapshot. A relinked variant is not exact. */
+  track?: Track
+}
+export type PlaylistMemberPageProducer = PlaylistPageProducer<PlaylistMember>
+
+export interface PlaylistFavoritePageState {
+  count: number
+  favoriteCount: number
+}
+
+export type PlaylistTrackPageCreator = (
+  name: string,
+  produce: PlaylistTrackPageProducer,
+  signal?: AbortSignal
+) => Promise<string>
+
 export interface Playlist {
   id: string
   name: string
   trackIds: string[]
+  /** Session-only external import; omitted from playlist persistence until saved. */
+  transient?: boolean
   trackSnapshots?: Record<string, Track>
+  /** Imported occurrences are authoritative; trackIds remains the legacy contract. */
+  imported?: import('../../../../shared/externalPlaylist.ts').ImportedPlaylistData
   /** User-selected data URL or cached cover handle. */
   cover?: string | null
   isDefault?: boolean

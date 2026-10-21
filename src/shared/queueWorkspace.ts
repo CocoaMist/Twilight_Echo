@@ -1,5 +1,9 @@
 import type { PlayMode } from './audioEngineTypes.ts'
 import { trackCueRangePropertyIsValid, type CueRange } from './cue.ts'
+import {
+  isLibraryPlaybackQueueReference,
+  type LibraryPlaybackQueueReference
+} from './playbackSession.ts'
 
 export const MAX_QUEUE_SESSIONS = 20
 export const MAX_SESSION_QUEUE_ENTRIES = 20_000
@@ -31,6 +35,8 @@ export interface NamedQueueSession {
   originalEntryIds: string[]
   currentEntryId: string | null
   position: number
+  /** Durable SQLite queue ownership. Mutually exclusive with array entries. */
+  libraryQueue?: LibraryPlaybackQueueReference
 }
 
 export interface PlaybackOrderEntry {
@@ -98,13 +104,21 @@ export function isNamedQueueSession(value: unknown): value is NamedQueueSession 
   if (!timestamp(value.createdAt) || !timestamp(value.updatedAt) || !positive(value.position))
     return false
   if (!modes.has(value.playMode) || value.playMode === 'heart') return false
-  if (
-    !Array.isArray(value.entries) ||
-    !value.entries.length ||
-    value.entries.length > MAX_SESSION_QUEUE_ENTRIES ||
-    !value.entries.every(isSavedQueueTrack)
-  )
+  if (!Array.isArray(value.entries) || value.entries.length > MAX_SESSION_QUEUE_ENTRIES)
     return false
+  if (!Array.isArray(value.originalEntryIds)) return false
+  const hasLibraryQueue = value.libraryQueue !== undefined
+  if (hasLibraryQueue) {
+    if (
+      !isLibraryPlaybackQueueReference(value.libraryQueue) ||
+      value.entries.length !== 0 ||
+      value.originalEntryIds.length !== 0 ||
+      value.currentEntryId !== value.libraryQueue.entryId
+    )
+      return false
+    return true
+  }
+  if (!value.entries.length || !value.entries.every(isSavedQueueTrack)) return false
   const ids = new Set(value.entries.map((entry) => entry.queueEntryId))
   if (
     ids.size !== value.entries.length ||

@@ -1,12 +1,13 @@
 import type { UiContribution } from '../extensions/registry'
 import type { NavigationPageTarget, StreamingPageTab } from './navigationPages.ts'
-import type { SettingsSection, ThemeStudioDomain } from './useAppNavigation'
+import type { AppearanceWorkspaceTab, SettingsSection, ThemeStudioDomain } from './useAppNavigation'
 import { normalizeSettingsSection } from '../components/settings-page/types.ts'
 
 export type NavigationOverlay =
   | 'playing'
   | 'login'
   | 'settings'
+  | 'appearance'
   | 'theme'
   | 'plugins'
   | 'equalizer'
@@ -25,6 +26,7 @@ export interface NavigationSession {
   menuOpen: boolean
   settingsSection: SettingsSection
   themeStudioDomain: ThemeStudioDomain
+  appearanceTab?: AppearanceWorkspaceTab
   themeReturn: 'playing' | 'settings' | null
   loginPageMode: 'login' | 'profile'
   loginProviderId: string | null
@@ -53,6 +55,7 @@ const overlays = new Set<NavigationOverlay>([
   'playing',
   'login',
   'settings',
+  'appearance',
   'theme',
   'plugins',
   'equalizer',
@@ -147,6 +150,10 @@ export function normalizeNavigationSession(value: unknown): NavigationSession | 
     themeStudioDomain: member(themeDomains, value.themeStudioDomain)
       ? value.themeStudioDomain
       : 'presets',
+    appearanceTab:
+      value.appearanceTab === 'studio' || value.appearanceTab === 'workshop'
+        ? value.appearanceTab
+        : 'adjust',
     themeReturn:
       value.themeReturn === 'settings' || value.themeReturn === 'playing'
         ? value.themeReturn

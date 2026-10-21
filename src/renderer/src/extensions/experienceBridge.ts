@@ -6,10 +6,16 @@ import {
   type InstalledExperience
 } from '../../../shared/pluginExperience.ts'
 import { useMusicStore } from '../stores/useMusicStore'
+import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import type { Track } from '../types/music'
+import type {
+  LibraryCollectionSummary,
+  LibraryTrackRecord
+} from '../../../shared/libraryDatabase.ts'
 import { useProviderStore } from '../stores/useProviderStore'
+import { libraryTrack } from '../utils/libraryQueuePlayback.ts'
 import {
   createDspFactoryScene,
   DSP_FACTORY_SCENE_TEMPLATES,
@@ -17,6 +23,10 @@ import {
 } from '../../../shared/dspGraph.ts'
 import { nodeCatalog, normalizeNodeEditorParams, singletonNodeTypes } from '../utils/dspNodeParams'
 import { createExperienceServices } from './experienceServices'
+import {
+  createExperienceLibraryReader,
+  readExperiencePlaylistTrackDtos
+} from './experienceLibrary.ts'
 
 const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 const bounded = (value: unknown, min: number, max: number): number => {
@@ -37,9 +47,11 @@ export function createExperienceBridge(
   let disposed = false,
     inFlight = 0
   const stops: WatchStopHandle[] = []
+  let stopDatabaseChanged: (() => void) | undefined
   const providers = useProviderStore()
   const invokeService = createExperienceServices(experience.permissions)
   const remoteTracks = new Map<string, Track>()
+  const sqliteLibrary = createExperienceLibraryReader(window.api.library.database)
   const rememberTracks = (tracks: Track[]) =>
     tracks.map((track) => {
       remoteTracks.set(track.id, track)
@@ -50,6 +62,12 @@ export function createExperienceBridge(
   const albumOfTrack = new Map<string, string>()
   const albumIds = new Map<string, string>()
   let indexRevision = 0
+  let storageMode: Promise<'json' | 'sqlite'> | null = null
+  const getStorageMode = () =>
+    (storageMode ??= window.api.library.getStorageMode().then((mode) => {
+      if (mode !== 'json' && mode !== 'sqlite') throw new Error('曲库存储模式无效')
+      return mode
+    }))
   async function indexAlbums() {
     const revision = ++indexRevision
     const albums = music.albums.value
@@ -69,13 +87,28 @@ export function createExperienceBridge(
       for (const track of album.tracks)
         albumOfTrack.set(track.id, albumIds.get(album.id ?? album.name)!)
   }
-  let indexing = indexAlbums()
-  const albumId = (album: (typeof music.albums.value)[number]) =>
-    albumIds.get(album.id ?? album.name) ?? ''
-  function trackDto(track: Track) {
+  let indexing = getStorageMode().then((mode) => (mode === 'json' ? indexAlbums() : undefined))
+  function albumId(key: string) {
+    return albumIds.get(key) ?? ''
+  }
+  type ExperienceAlbum = {
+    id?: string
+    name: string
+    artist?: string
+    releaseDate?: string
+    cover?: string | null
+    coverSource?: string | null
+    genre?: string | null
+    trackCount: number
+    duration?: number
+    extensionId?: string
+    tracks?: Track[]
+  }
+  function trackDto(track: Track, albumIdOverride?: string) {
     return {
       id: track.id,
-      albumId: albumOfTrack.get(track.id) ?? '',
+      albumId:
+        albumIdOverride ?? albumOfTrack.get(track.id) ?? sqliteLibrary.trackAlbumId(track.id),
       title: track.title,
       artist: track.artist,
       album: track.album,
@@ -93,13 +126,14 @@ export function createExperienceBridge(
       queueEntryId: track.queueEntryId
     }
   }
-  function albumDto(album: (typeof music.albums.value)[number], full = false) {
+  function albumDto(album: ExperienceAlbum, full = false) {
+    const tracks = album.tracks ?? []
     return {
-      id: albumId(album),
+      id: album.extensionId ?? albumId(album.id ?? album.name),
       title: album.name,
       artist: album.artist ?? '',
       year: album.releaseDate ? Number(album.releaseDate.slice(0, 4)) : undefined,
-      genreId: album.tracks[0]?.genre || '未分类',
+      genreId: tracks[0]?.genre || album.genre || '未分类',
       rawGenres: [],
       folder: '',
       coverUrl:
@@ -107,10 +141,35 @@ export function createExperienceBridge(
           ? album.cover
           : undefined,
       trackCount: album.trackCount,
-      totalDuration: album.tracks.reduce((sum, t) => sum + t.duration, 0),
-      tracks: full ? album.tracks.map(trackDto) : [],
+      totalDuration: album.duration ?? tracks.reduce((sum, t) => sum + t.duration, 0),
+      tracks: full ? tracks.map((track) => trackDto(track, album.extensionId)) : [],
       producers: [],
       offline: false
+    }
+  }
+  function rememberDatabaseAlbum(
+    album: LibraryCollectionSummary & {
+      extensionId: string
+      tracks?: LibraryTrackRecord[]
+    }
+  ): ExperienceAlbum {
+    albumIds.set(album.id, album.extensionId)
+    return {
+      ...album,
+      tracks: album.tracks?.map(libraryTrack)
+    }
+  }
+  async function readAllDatabaseAlbums(): Promise<ExperienceAlbum[]> {
+    const albums: ExperienceAlbum[] = []
+    let offset = 0,
+      revision: number | undefined
+    for (;;) {
+      const page = await sqliteLibrary.detailedPage(offset, 100, revision)
+      revision = page.revision
+      albums.push(...page.albums.map(rememberDatabaseAlbum))
+      offset += page.albums.length
+      if (offset >= page.total) return albums
+      if (!page.albums.length) throw new Error('曲库专辑分页中断')
     }
   }
   function state() {
@@ -142,12 +201,39 @@ export function createExperienceBridge(
   const send = (event: string, value: unknown) => {
     if (!disposed) port.postMessage({ event, value: plain(value) })
   }
-  const resolveTrack = (id: unknown) => {
+  async function resolveTracks(ids: string[]): Promise<Track[]> {
+    const found = new Map<string, Track>(),
+      missing: string[] = []
+    for (const id of ids) {
+      const track = player.queue.value.find((item) => item.id === id) ?? remoteTracks.get(id)
+      if (track) found.set(id, track)
+      else missing.push(id)
+    }
+    if (missing.length) {
+      const mode = await getStorageMode()
+      if (mode === 'json') {
+        for (const id of missing) {
+          const track = music.getTrackById(id)
+          if (track) found.set(id, track)
+        }
+      } else {
+        for (let offset = 0; offset < missing.length; offset += 1000) {
+          const page = await window.api.library.database.getTracksByIds(
+            missing.slice(offset, offset + 1000)
+          )
+          for (const record of page.tracks) found.set(record.id, libraryTrack(record))
+        }
+      }
+    }
+    return ids.map((id) => {
+      const track = found.get(id)
+      if (!track) throw new Error('Track no longer available')
+      return track
+    })
+  }
+  async function resolveTrack(id: unknown): Promise<Track> {
     if (typeof id !== 'string') throw new Error('Missing track id')
-    const track =
-      music.getTrackById(id) ?? player.queue.value.find((t) => t.id === id) ?? remoteTracks.get(id)
-    if (!track) throw new Error('Track no longer available')
-    return track
+    return (await resolveTracks([id]))[0]
   }
   async function invoke(method: string, args: Record<string, unknown>) {
     assertExperienceMethod(method, experience.permissions)
@@ -251,7 +337,7 @@ export function createExperienceBridge(
         }))
       case 'downloads.create': {
         assertExperienceMethod('online.providers', experience.permissions)
-        const track = resolveTrack(args.id)
+        const track = await resolveTrack(args.id)
         const quality = String(args.quality ?? 'lossless')
         if (!['aac', 'lossless', 'hi-res'].includes(quality)) throw new Error('Invalid quality')
         const task = await window.api.providerDownloads.create({
@@ -282,10 +368,17 @@ export function createExperienceBridge(
           throw new Error('Invalid metadata operation')
         if (args.operation !== 'status' && music.isScanning.value)
           throw new Error('曲库正在扫描，请完成后重试资料操作')
+        const mode = await getStorageMode()
+        const albums =
+          args.operation === 'status'
+            ? []
+            : mode === 'sqlite'
+              ? (await readAllDatabaseAlbums()).map((album) => albumDto(album, true))
+              : music.albums.value.map((album) => albumDto(album, true))
         return window.api.extensions.experienceMusic(
           experience.pluginId,
           String(args.operation),
-          args.operation === 'status' ? [] : music.albums.value.map((a) => albumDto(a, true)),
+          albums,
           (args.body ?? {}) as Record<string, unknown>
         )
       }
@@ -318,9 +411,16 @@ export function createExperienceBridge(
             throw new Error('Invalid library folders')
           // Removing a root does not erase songs or playlists. The host scan owns reconciliation.
           const roots = [...new Set(args.roots as string[])]
-          for (const path of [...music.scannedFolders.value])
-            if (!roots.includes(path)) music.removeFolder(path)
-          for (const path of roots) music.addFolder(path)
+          if ((await getStorageMode()) === 'sqlite') {
+            // SQLite roots are owned by the application process. Updating the
+            // settings lets that owner refresh its durable configuration
+            // without serializing the renderer's compatibility snapshot.
+            await settings.updateSettings({ libraryFolders: roots })
+          } else {
+            for (const path of [...music.scannedFolders.value])
+              if (!roots.includes(path)) music.removeFolder(path)
+            for (const path of roots) music.addFolder(path)
+          }
         }
         void music.startFullLibraryScan()
         return null
@@ -331,6 +431,27 @@ export function createExperienceBridge(
         if (args.revision === libraryRevision) return { unchanged: true, revision: libraryRevision }
         const offset = Math.floor(bounded(args.offset ?? 0, 0, 10000000))
         const limit = Math.floor(bounded(args.limit ?? 100, 1, 100))
+        if ((await getStorageMode()) === 'sqlite') {
+          const page = await sqliteLibrary.detailedPage(offset, limit)
+          const albums = page.albums.map(rememberDatabaseAlbum)
+          const genres = await sqliteLibrary.allGenres(page.revision)
+          return {
+            version: 1,
+            revision: libraryRevision,
+            albums: albums.map((album) => ({
+              ...albumDto(album, true),
+              discCount: Math.max(1, ...(album.tracks ?? []).map((track) => track.discNumber ?? 1))
+            })),
+            total: page.total,
+            genres: genres.map((name) => ({ id: name, name })),
+            roots: music.scannedFolders.value.map((path) => ({ path, status: 'online' })),
+            scan: {
+              running: music.isScanning.value,
+              error: music.libraryScanStatus.value.error || undefined
+            },
+            onlineEnabled: false
+          }
+        }
         const genres = [
           ...new Set(music.albums.value.map((a) => a.tracks[0]?.genre || '未分类'))
         ].map((name) => ({ id: name, name }))
@@ -352,16 +473,29 @@ export function createExperienceBridge(
         }
       }
       case 'library.list': {
-        await music.whenLibrarySettled()
+        const mode = await getStorageMode()
+        if (mode === 'json') await music.whenLibrarySettled()
         const offset = Math.floor(bounded(args.offset ?? 0, 0, 10000000))
         const limit = Math.floor(bounded(args.limit ?? 200, 1, 500))
+        if (mode === 'sqlite') {
+          const page = await sqliteLibrary.albumPage(offset, limit)
+          return {
+            albums: page.albums.map((album) => albumDto(rememberDatabaseAlbum(album))),
+            total: page.total
+          }
+        }
         return {
           albums: music.albums.value.slice(offset, offset + limit).map((a) => albumDto(a)),
           total: music.albums.value.length
         }
       }
       case 'library.album': {
-        const album = music.albums.value.find((a) => albumId(a) === args.id)
+        if ((await getStorageMode()) === 'sqlite') {
+          const result = await sqliteLibrary.detailedAlbum(args.id)
+          if (!result) throw new Error('Album no longer available')
+          return albumDto(rememberDatabaseAlbum(result.album), true)
+        }
+        const album = music.albums.value.find((a) => albumId(a.id ?? a.name) === args.id)
         if (!album) throw new Error('Album no longer available')
         return albumDto(album, true)
       }
@@ -369,6 +503,13 @@ export function createExperienceBridge(
         const query = String(args.query ?? '')
           .slice(0, 200)
           .toLocaleLowerCase()
+        if ((await getStorageMode()) === 'sqlite') {
+          const result = await sqliteLibrary.search(query)
+          return {
+            albums: result.albums.map((album) => albumDto(rememberDatabaseAlbum(album))),
+            tracks: result.tracks.map((record) => trackDto(libraryTrack(record)))
+          }
+        }
         return {
           albums: music.albums.value
             .filter((a) => `${a.name} ${a.artist}`.toLocaleLowerCase().includes(query))
@@ -377,18 +518,60 @@ export function createExperienceBridge(
           tracks: music.tracks.value
             .filter((t) => `${t.title} ${t.artist} ${t.album}`.toLocaleLowerCase().includes(query))
             .slice(0, 100)
-            .map(trackDto)
+            .map((track) => trackDto(track))
         }
       }
       case 'library.playlists':
-        return music.localPlaylists.value.map((p) => ({
-          id: p.id,
-          name: p.name,
-          tracks: music.getPlaylistTracksById(p.id).map(trackDto),
-          isDefault: p.isDefault
+        if ((await getStorageMode()) === 'sqlite') {
+          const api = window.api.library.database
+          const metadata = await api.getMetadata()
+          const preferences = getMusicVersions().tracks.versions
+          const preferenceRevision = musicVersionRevision.value
+          const playlists: Array<{
+            id: string
+            name: string
+            tracks: Array<ReturnType<typeof trackDto>>
+            isDefault?: boolean
+          }> = []
+          for (const playlist of music.localPlaylists.value) {
+            const tracks: ReturnType<typeof trackDto>[] = []
+            if (playlist.imported) {
+              tracks.push(
+                ...music.getPlaylistTracksById(playlist.id).map((track) => trackDto(track))
+              )
+            } else {
+              tracks.push(
+                ...(await readExperiencePlaylistTrackDtos(
+                  playlist,
+                  api,
+                  sqliteLibrary,
+                  metadata.revision,
+                  () => ({ revision: preferenceRevision, versions: preferences }),
+                  trackDto
+                ))
+              )
+            }
+            playlists.push({
+              id: playlist.id,
+              name: playlist.name,
+              tracks,
+              isDefault: playlist.isDefault
+            })
+          }
+          if ((await api.getMetadata()).revision !== metadata.revision)
+            throw new Error('曲库在读取插件歌单期间发生变化，请重试')
+          if (musicVersionRevision.value !== preferenceRevision)
+            throw new Error('录音版本偏好在读取插件歌单期间发生变化，请重试')
+          return playlists
+        }
+        return music.localPlaylists.value.map((playlist) => ({
+          id: playlist.id,
+          name: playlist.name,
+          tracks: music.getPlaylistTracksById(playlist.id).map((track) => trackDto(track)),
+          isDefault: playlist.isDefault
         }))
       case 'library.favorite': {
-        const track = resolveTrack(args.id)
+        const track = await resolveTrack(args.id)
         if (music.isFavoriteTrack(track)) music.removeFavoriteTrack(track)
         else music.addFavoriteTrack(track)
         return trackDto(track)
@@ -398,7 +581,7 @@ export function createExperienceBridge(
       case 'library.addToPlaylist': {
         const p = music.localPlaylists.value.find((p) => p.id === args.playlistId)
         if (!p) throw new Error('Playlist unavailable')
-        const track = resolveTrack(args.id)
+        const track = await resolveTrack(args.id)
         music.addToPlaylist(p.name, track.id, track)
         return null
       }
@@ -430,7 +613,7 @@ export function createExperienceBridge(
         await player.setPlaybackRate(bounded(args.value, 0.5, 2))
         return state()
       case 'player.queue':
-        return player.queue.value.map(trackDto)
+        return player.queue.value.map((track) => trackDto(track))
       case 'player.lyrics':
         return {
           id: player.currentTrack.value?.id,
@@ -438,11 +621,27 @@ export function createExperienceBridge(
           translatedLyrics: player.currentTrack.value?.translatedLyrics ?? ''
         }
       case 'player.play': {
-        const track = resolveTrack(args.id)
+        const selected = await resolveTrack(args.id)
         const ids = Array.isArray(args.ids) ? args.ids.slice(0, 10000) : undefined
-        const album = music.albums.value.find((a) => albumId(a) === args.albumId)
-        const queue = ids ? ids.map(resolveTrack) : (album?.tracks ?? [track])
-        await player.playTrack(track, queue)
+        const mode = await getStorageMode()
+        if (ids) {
+          if (ids.some((id) => typeof id !== 'string')) throw new Error('Invalid queue')
+          const queue = await resolveTracks(ids as string[])
+          await player.playTrack(selected, queue)
+        } else if (mode === 'sqlite' && args.albumId !== undefined) {
+          const databaseAlbumId = sqliteLibrary.databaseId(args.albumId)
+          if (!databaseAlbumId) throw new Error('Album no longer available')
+          await player.playLibraryQuery(
+            { albumId: databaseAlbumId, sort: 'trackNumber' },
+            selected.id
+          )
+        } else {
+          const album =
+            mode === 'json'
+              ? music.albums.value.find((item) => albumId(item.id ?? item.name) === args.albumId)
+              : undefined
+          await player.playTrack(selected, album?.tracks ?? [selected])
+        }
         return state()
       }
       case 'player.toggle':
@@ -484,7 +683,8 @@ export function createExperienceBridge(
       }
       case 'player.setQueue': {
         if (!Array.isArray(args.ids) || args.ids.length > 10000) throw new Error('Invalid queue')
-        const tracks = args.ids.map(resolveTrack)
+        if (args.ids.some((id) => typeof id !== 'string')) throw new Error('Invalid queue')
+        const tracks = await resolveTracks(args.ids as string[])
         player.clearQueue()
         player.appendQueueTracks(tracks)
         return null
@@ -734,13 +934,23 @@ export function createExperienceBridge(
     )
   }
   if (experience.permissions.includes('library:read'))
-    stops.push(
-      watch(music.albums, () => {
-        libraryRevision++
-        indexing = indexAlbums()
-        void indexing.then(() => send('library', null))
-      })
-    )
+    void getStorageMode().then((mode) => {
+      if (disposed) return
+      if (mode === 'json') {
+        stops.push(
+          watch(music.albums, () => {
+            libraryRevision++
+            indexing = indexAlbums()
+            void indexing.then(() => send('library', null))
+          })
+        )
+      } else {
+        stopDatabaseChanged = window.api.library.onChanged(() => {
+          libraryRevision++
+          send('library', null)
+        })
+      }
+    })
   stops.push(
     watch(
       [music.isScanning, music.libraryScanStatus, music.scannedFolders],
@@ -759,6 +969,7 @@ export function createExperienceBridge(
     disposed = true
     clearInterval(timer)
     stops.forEach((stop) => stop())
+    stopDatabaseChanged?.()
     port.close()
   }
 }

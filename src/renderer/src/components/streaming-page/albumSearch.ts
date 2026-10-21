@@ -8,6 +8,7 @@ import type {
 import type { Track } from '@renderer/types/music'
 import { searchLocalStreamingAlbums } from './localStreamingSearch.ts'
 import { searchUnifiedCollections } from './unifiedCollectionSearch.ts'
+import type { LibrarySearchSnapshot } from '../../utils/unifiedMusicSearch.ts'
 
 export interface AlbumSearchItem extends MediaProviderAlbumSummary {
   providerId: string
@@ -45,9 +46,28 @@ export function createAlbumSearch(options: {
   ) => Promise<MediaProviderSearchResult<MediaProviderAlbumSummary>>
   getProvider: (providerId: string) => MediaProvider | null | undefined
   reportError: (message: string) => void
+  localSource?: {
+    searchAlbums(
+      query: string,
+      limit: number,
+      offset: number,
+      signal?: AbortSignal
+    ): Promise<{ items: MediaProviderAlbumSummary[]; total: number } & LibrarySearchSnapshot>
+    confirm(page: LibrarySearchSnapshot, signal?: AbortSignal): Promise<void>
+  }
 }) {
-  async function searchLocalAlbums(query: string, limit = 30, offset = 0) {
-    const result = searchLocalStreamingAlbums(options.localAlbums(), query, limit, offset)
+  async function readLocalAlbums(
+    query: string,
+    limit: number,
+    offset: number,
+    signal?: AbortSignal
+  ) {
+    const page = options.localSource
+      ? await options.localSource.searchAlbums(query, limit, offset, signal)
+      : null
+    const result = page
+      ? { albums: page.items, total: page.total }
+      : searchLocalStreamingAlbums(options.localAlbums(), query, limit, offset)
     return {
       albums: result.albums.map(
         (album): AlbumSearchItem => ({
@@ -56,8 +76,20 @@ export function createAlbumSearch(options: {
           providerName: '本地音乐'
         })
       ),
-      total: result.total
+      total: result.total,
+      ...(page?.libraryRevision !== undefined ? { libraryRevision: page.libraryRevision } : {})
     }
+  }
+
+  async function searchLocalAlbums(
+    query: string,
+    limit = 30,
+    offset = 0,
+    callOptions?: MediaProviderCallOptions
+  ) {
+    const result = await readLocalAlbums(query, limit, offset, callOptions?.signal)
+    await options.localSource?.confirm(result, callOptions?.signal)
+    return result
   }
 
   async function searchProviderAlbums(
@@ -90,11 +122,13 @@ export function createAlbumSearch(options: {
     offset = 0,
     callOptions?: MediaProviderCallOptions
   ) {
-    const local = await searchLocalAlbums(query, limit, 0)
+    const local = await readLocalAlbums(query, limit, 0, callOptions?.signal)
     const result = await searchUnifiedCollections({
       local: { items: local.albums, total: local.total },
       searchLocal: async (pageLimit, pageOffset) => {
-        const page = await searchLocalAlbums(query, pageLimit, pageOffset)
+        const page = await readLocalAlbums(query, pageLimit, pageOffset, callOptions?.signal)
+        if (page.libraryRevision !== local.libraryRevision)
+          throw new Error('曲库在搜索期间发生变化，请重新搜索')
         return { items: page.albums, total: page.total }
       },
       providers: options
@@ -114,6 +148,9 @@ export function createAlbumSearch(options: {
       },
       limit,
       offset,
+      signal: callOptions?.signal,
+      confirmLocal: () =>
+        options.localSource?.confirm(local, callOptions?.signal) ?? Promise.resolve(),
       reportError: (message) => {
         if (!callOptions?.signal?.aborted) options.reportError(message)
       }

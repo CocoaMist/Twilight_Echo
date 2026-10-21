@@ -23,6 +23,7 @@ import {
   desktopLyricsWindowApi
 } from './domains/desktopLyricsApi.ts'
 import { libraryAndFileSystemApi } from './domains/libraryApi.ts'
+import { playlistImportApi } from './domains/playlistImportApi.ts'
 import { mediaSubscriptionsApi } from './domains/mediaSubscriptionsApi.ts'
 import { networkSourcesApi } from './domains/networkSourcesApi.ts'
 import { bindSettingsIpcEvents, settingsApi } from './domains/settingsApi.ts'
@@ -211,6 +212,7 @@ const api = {
     onState: sleepTimerEvents.onState,
     onTrigger: sleepTimerEvents.onTrigger
   },
+  playlistImport: playlistImportApi,
   ...libraryAndFileSystemApi,
   ...audioEngineApi,
   ...mediaSubscriptionsApi,

@@ -1,3 +1,9 @@
+import {
+  isLibraryPlaybackQueueReference,
+  type LibraryPlaybackQueueReference
+} from './playbackSession.ts'
+import { isSleepTimerShutdownHandoff, type SleepTimerShutdownHandoff } from './sleepTimer.ts'
+
 /**
  * Renderer-unload ("Afterglow") mode.
  *
@@ -45,7 +51,10 @@ export interface AfterglowModeStatus {
  * setting and never writes a resume record the user did not ask for.
  */
 export interface AfterglowRendererSnapshot {
+  /** Legacy/array queue. SQLite queues leave this empty and use libraryQueue. */
   queue: unknown[]
+  /** Durable queue cursor; the main process reads bounded detail windows from SQLite. */
+  libraryQueue?: LibraryPlaybackQueueReference
   queueIndex: number
   track: unknown
   position: number
@@ -58,21 +67,37 @@ export interface AfterglowRendererSnapshot {
    * 0 does not necessarily mean logical index 0.
    */
   nativeQueueIndices?: number[]
+  /** An explicitly frozen renderer fade offered to the existing main owner. */
+  sleepShutdown?: SleepTimerShutdownHandoff
 }
 
 /**
  * Snapshot handed to a recreated renderer. The engine already owns playback, so
  * the renderer adopts this state and never issues `loadQueue`/`play` for it.
  */
+export interface AfterglowNativeQueueEntry {
+  id: string
+  queueEntryId: string
+  index: number
+}
+
 export interface AfterglowRestoreState {
-  /** Content token of the queue currently loaded in the engine. */
+  /** Explicit recovery: Stop was acknowledged; no native queue is adopted.
+   * SQL owns the displayed selection. Only a later user action may load/play. */
+  recovery?: 'native-queue-unknown'
+  /** Content token of the confirmed native queue; empty for stopped recovery. */
   queueToken: string
-  /** Logical queue index the engine is on. */
+  /** Logical current index, or SQL's selected index in stopped recovery. */
   queueIndex: number
-  /** Number of items currently delegated to the engine. */
+  /** Complete logical queue size, not the native window size. */
   queueLength: number
-  /** Logical index for each native queue entry (length === queueLength). */
+  /** Logical index for each native entry; a window can be shorter than queueLength. */
   nativeQueueIndices: number[]
+  /** SQLite restores retain the durable source and only lightweight native identities. */
+  libraryQueue?: LibraryPlaybackQueueReference
+  nativeQueueEntries?: AfterglowNativeQueueEntry[]
+  /** Current SQL occurrence; live restores also include its native source. */
+  track?: unknown
   state: 'stopped' | 'playing' | 'paused'
   position: number
   duration: number
@@ -159,21 +184,31 @@ export const parseAfterglowRendererSnapshot = (
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const queue = record.queue
-  if (!Array.isArray(queue) || queue.length === 0 || queue.length > MAX_AFTERGLOW_QUEUE_ITEMS) {
+  const libraryQueue = record.libraryQueue
+  const hasLibraryQueue = isLibraryPlaybackQueueReference(libraryQueue)
+  if (libraryQueue !== undefined && !hasLibraryQueue) return null
+  if (
+    !Array.isArray(queue) ||
+    (!hasLibraryQueue && queue.length === 0) ||
+    (hasLibraryQueue && queue.length !== 0) ||
+    queue.length > MAX_AFTERGLOW_QUEUE_ITEMS
+  ) {
     return null
   }
   const queueIndex = record.queueIndex
   if (
     typeof queueIndex !== 'number' ||
-    !Number.isInteger(queueIndex) ||
+    !Number.isSafeInteger(queueIndex) ||
     queueIndex < 0 ||
-    queueIndex >= queue.length
+    (hasLibraryQueue ? queueIndex !== libraryQueue.index : queueIndex >= queue.length)
   ) {
     return null
   }
   const track = record.track
   if (!track || typeof track !== 'object' || Array.isArray(track)) return null
   if (typeof (track as Record<string, unknown>).id !== 'string') return null
+  if (hasLibraryQueue && (track as Record<string, unknown>).queueEntryId !== libraryQueue.entryId)
+    return null
   const position = record.position
   if (typeof position !== 'number' || !Number.isFinite(position) || position < 0) return null
   const volume = record.volume
@@ -192,26 +227,42 @@ export const parseAfterglowRendererSnapshot = (
   const rawIndices = record.nativeQueueIndices
   let nativeQueueIndices: number[] | undefined
   if (rawIndices !== undefined) {
-    if (!Array.isArray(rawIndices) || rawIndices.length === 0) return null
+    if (
+      !Array.isArray(rawIndices) ||
+      rawIndices.length === 0 ||
+      rawIndices.length > MAX_AFTERGLOW_QUEUE_ITEMS
+    )
+      return null
     if (
       !rawIndices.every(
         (entry) =>
-          typeof entry === 'number' && Number.isInteger(entry) && entry >= 0 && entry < queue.length
+          typeof entry === 'number' &&
+          Number.isSafeInteger(entry) &&
+          entry >= 0 &&
+          (hasLibraryQueue || entry < queue.length)
       )
     ) {
       return null
     }
     nativeQueueIndices = [...rawIndices]
   }
+  const sleepShutdown = record.sleepShutdown
+  if (
+    sleepShutdown !== undefined &&
+    (!isSleepTimerShutdownHandoff(sleepShutdown) || sleepShutdown.volume !== volume)
+  )
+    return null
   return {
     queue,
+    ...(hasLibraryQueue ? { libraryQueue: libraryQueue as LibraryPlaybackQueueReference } : {}),
     queueIndex,
     track,
     position,
     playMode: typeof record.playMode === 'string' ? record.playMode : 'sequential',
     volume,
     playbackRate,
-    ...(nativeQueueIndices ? { nativeQueueIndices } : {})
+    ...(nativeQueueIndices ? { nativeQueueIndices } : {}),
+    ...(sleepShutdown ? { sleepShutdown: { ...sleepShutdown } } : {})
   }
 }
 
@@ -225,12 +276,16 @@ const AFTERGLOW_ERROR_MESSAGES: Record<string, string> = {
   afterglow_requires_fully_delegated_queue: '队列还没有完整交给原生引擎',
   afterglow_requires_renderer_snapshot: '没有拿到播放队列快照',
   afterglow_requires_mappable_current_track: '无法把当前播放映射回队列',
+  afterglow_library_queue_changed: '后台播放队列已变化，请重试或恢复界面',
+  afterglow_queue_recovery_stop_failed: '无法确认原生播放已停止，请重试恢复界面',
+  afterglow_requires_renderer_play_mode: '当前播放模式需要恢复界面后继续',
   // Legacy status text still cached by running windows from before the resume
   // requirement was removed; keep a readable message until the next action.
   afterglow_requires_resume_mode: '「播放记忆」已关闭（该限制已移除，请重新尝试）',
   afterglow_requires_minimized_or_hidden_window: '窗口需要先最小化或隐藏',
   afterglow_restore_shortcut_unavailable: '恢复快捷键都被占用了',
   afterglow_renderer_flush_failed: '保存播放状态失败',
+  afterglow_sleep_shutdown_handoff_failed: '睡眠淡出尚未交接，窗口已保留，请重试',
   afterglow_restore_window_unavailable: '恢复窗口没有创建成功',
   afterglow_restore_window_closed: '恢复窗口被关闭',
   afterglow_restore_window_timeout: '恢复窗口超时',
@@ -307,16 +362,32 @@ export const resolveAfterglowEngineMapping = (
   const used = new Set<number>()
   return engineItems.map((item) => {
     const id = typeof item.id === 'string' ? item.id : ''
+    const queueEntryId =
+      typeof (item as Record<string, unknown>).queueEntryId === 'string'
+        ? String((item as Record<string, unknown>).queueEntryId)
+        : ''
     const source = typeof item.source === 'string' ? item.source : ''
     let index = -1
-    if (id) {
+    if (queueEntryId) {
       index = queue.findIndex(
         (track, candidate) =>
           !used.has(candidate) &&
           !!track &&
           typeof track === 'object' &&
-          (track as Record<string, unknown>).id === id
+          (track as Record<string, unknown>).queueEntryId === queueEntryId
       )
+    }
+    if (id) {
+      index =
+        index >= 0
+          ? index
+          : queue.findIndex(
+              (track, candidate) =>
+                !used.has(candidate) &&
+                !!track &&
+                typeof track === 'object' &&
+                (track as Record<string, unknown>).id === id
+            )
     }
     if (index < 0 && source) {
       index = queue.findIndex(

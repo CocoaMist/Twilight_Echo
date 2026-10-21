@@ -1,5 +1,8 @@
 import type { Track } from '../types/music'
 import { splitGenreValues } from '../../../shared/genreSeparators.ts'
+import { isLibraryArtistMember } from '../../../shared/libraryCollections.ts'
+import { collectionIndexLetter } from '../../../shared/libraryCollections.ts'
+export { collectionIndexLetter } from '../../../shared/libraryCollections.ts'
 
 export const AZ_INDEX_LETTERS = Array.from({ length: 26 }, (_, index) =>
   String.fromCharCode(65 + index)
@@ -19,16 +22,7 @@ export interface LibraryCollectionViewState {
 }
 
 export function resolveLibraryArtistTracks(tracks: readonly Track[], name: string): Track[] {
-  const artistName = name.trim()
-  if (!artistName) return []
-  return tracks.filter((track) => {
-    // Keep full display-name links and the unknown-artist collection working.
-    if ((track.artist.trim() || '未知艺术家') === artistName) return true
-    const names = track.artists?.length
-      ? track.artists.map((artist) => artist.name)
-      : track.artist.split(/\s+\/\s+/)
-    return names.some((name) => name.trim() === artistName)
-  })
+  return tracks.filter((track) => isLibraryArtistMember(track, name))
 }
 
 const DEFAULT_STATE: LibraryCollectionViewState = {
@@ -92,11 +86,6 @@ export function collectionAddedAt(item: LibraryCollectionItem): number {
     }
   }
   return latest
-}
-
-export function collectionIndexLetter(name: string): string | null {
-  const first = name.trim().normalize('NFKD').replace(/\p{M}/gu, '').charAt(0).toUpperCase()
-  return /^[A-Z]$/.test(first) ? first : null
 }
 
 export function availableCollectionLetters(items: readonly LibraryCollectionItem[]): Set<string> {

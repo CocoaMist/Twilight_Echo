@@ -20,6 +20,11 @@ import type {
   LocalLibraryTagWriteResult,
   LibraryWatcherStatusSnapshot
 } from '../types'
+import type {
+  LibraryQuery,
+  LibraryTrackPatch,
+  LibraryCollectionKind
+} from '../../shared/libraryDatabase.ts'
 
 const duplicateDetectionApi: DuplicateDetectionReadApi = {
   detectDuplicates: (): Promise<DuplicateDetectionResult> =>
@@ -28,6 +33,8 @@ const duplicateDetectionApi: DuplicateDetectionReadApi = {
 
 export const libraryAndFileSystemApi = {
   library: {
+    getStorageMode: (): Promise<'json' | 'sqlite'> =>
+      ipcRenderer.invoke(IPC.library.getStorageMode),
     removeTracks: (request: LocalLibraryRemoveRequest): Promise<LocalLibraryRemoveResult> =>
       ipcRenderer.invoke(IPC.library.removeTracks, request),
     clearExclusions: (
@@ -51,6 +58,75 @@ export const libraryAndFileSystemApi = {
     pauseScan: (): Promise<boolean> => ipcRenderer.invoke(IPC.library.pauseScan),
     resumeScan: (): Promise<boolean> => ipcRenderer.invoke(IPC.library.resumeScan),
     cancelScan: (): Promise<boolean> => ipcRenderer.invoke(IPC.library.cancelScan),
+    database: {
+      buildQueue: (
+        command: import('../../shared/libraryQueueBuild.ts').LibraryQueueBuildCommand
+      ): Promise<import('../../shared/libraryQueueBuild.ts').LibraryQueueBuildReply> =>
+        ipcRenderer.invoke(IPC.library.databaseBuildQueue, command),
+      selection: (
+        command: import('../../shared/librarySelection.ts').LibrarySelectionCommand
+      ): Promise<import('../../shared/librarySelection.ts').LibrarySelectionReply> =>
+        ipcRenderer.invoke(IPC.library.databaseSelection, command),
+      repairPlaylist: (
+        request: import('../../shared/playlistRepair.ts').LibraryPlaylistRepairRequest
+      ): Promise<import('../../shared/playlistRepair.ts').LibraryPlaylistRepairResponse> =>
+        ipcRenderer.invoke(IPC.library.databaseRepairPlaylist, request),
+      syncPlaylistView: (
+        request: import('../../shared/libraryDatabase.ts').LibraryPlaylistViewSync
+      ) => ipcRenderer.invoke(IPC.library.databaseSyncPlaylistView, request),
+      syncListeningHistory: (
+        request: import('../../shared/libraryDatabase.ts').LibraryHistorySyncRequest
+      ) => ipcRenderer.invoke(IPC.library.databaseSyncListeningHistory, request),
+      scanDirectories: (
+        request: Parameters<
+          import('../../shared/libraryDatabase.ts').LibraryFileMutationApi['scanDirectories']
+        >[0]
+      ): Promise<LocalLibraryScanUpdate> =>
+        ipcRenderer.invoke(IPC.library.databaseScanDirectories, request),
+      removeFiles: (
+        request: Parameters<
+          import('../../shared/libraryDatabase.ts').LibraryFileMutationApi['removeFiles']
+        >[0]
+      ) => ipcRenderer.invoke(IPC.library.databaseRemoveFiles, request),
+      getMetadata: () => ipcRenderer.invoke(IPC.library.databaseMetadata),
+      queryTracks: (query?: LibraryQuery) =>
+        ipcRenderer.invoke(IPC.library.databaseQueryTracks, query),
+      queryCollections: (kind: LibraryCollectionKind, query?: LibraryQuery) =>
+        ipcRenderer.invoke(IPC.library.databaseQueryCollections, kind, query),
+      getTracksByIds: (ids: string[], revision?: number) =>
+        ipcRenderer.invoke(IPC.library.databaseTracksByIds, ids, revision),
+      lookupTracksByPaths: (paths: string[], revision?: number) =>
+        ipcRenderer.invoke(IPC.library.databaseLookupPaths, paths, revision),
+      lookupPlaylistTracks: (
+        request: import('../../shared/libraryDatabase.ts').LibraryPlaylistLookupRequest,
+        revision?: number
+      ) => ipcRenderer.invoke(IPC.library.databaseLookupPlaylist, request, revision),
+      patchTracks: (patches: LibraryTrackPatch[]) =>
+        ipcRenderer.invoke(IPC.library.databasePatchTracks, patches),
+      createQueue: (query: LibraryQuery, selectedId?: string) =>
+        ipcRenderer.invoke(IPC.library.databaseCreateQueue, query, selectedId),
+      readQueue: (
+        id: string,
+        offset?: number,
+        limit?: number,
+        options?: import('../../shared/libraryDatabase.ts').LibraryQueueReadOptions
+      ) =>
+        options === undefined
+          ? ipcRenderer.invoke(IPC.library.databaseReadQueue, id, offset, limit)
+          : ipcRenderer.invoke(IPC.library.databaseReadQueue, id, offset, limit, options),
+      getQueue: (id: string) => ipcRenderer.invoke(IPC.library.databaseGetQueue, id),
+      editQueue: (
+        id: string,
+        revision: number,
+        edit: import('../../shared/libraryDatabase.ts').LibraryQueueEdit
+      ) => ipcRenderer.invoke(IPC.library.databaseEditQueue, id, revision, edit),
+      deleteQueue: (id: string, revision: number) =>
+        ipcRenderer.invoke(IPC.library.databaseDeleteQueue, id, revision),
+      syncQueueReferences: (owner: string, ids: string[]) =>
+        ipcRenderer.invoke(IPC.library.databaseSyncQueueReferences, owner, ids),
+      collectQueueGarbage: (olderThanMs?: number) =>
+        ipcRenderer.invoke(IPC.library.databaseCollectQueueGarbage, olderThanMs)
+    },
     onChanged: (cb: (change: LibraryChange | undefined) => void): (() => void) => {
       const handler = (_event, change: LibraryChange | undefined): void => cb(change)
       ipcRenderer.on(IPC.library.changed, handler)

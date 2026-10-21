@@ -540,6 +540,31 @@ napi_value Next(napi_env env, napi_callback_info) {
   return throwOnError(env, TAE_Next(g_engine));
 }
 
+napi_value RebindQueue(napi_env env, napi_callback_info info) {
+  ensureEngine();
+  clearLastError();
+  size_t argc = 5;
+  napi_value argv[5];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc != 5) return throwOnError(env, TAE_RESULT_INVALID_ARGUMENT);
+  const double start = getNumberArg(env, argv[1], -1.0);
+  const double expectedIndex = getNumberArg(env, argv[4], -1.0);
+  for (const double index : {start, expectedIndex}) {
+    if (!std::isfinite(index) || index < 0 || index > std::numeric_limits<int>::max() ||
+        std::floor(index) != index) return throwOnError(env, TAE_RESULT_INVALID_ARGUMENT);
+  }
+  const auto queue = getStringArg(env, argv[0]);
+  const auto mode = getStringArg(env, argv[2]);
+  const auto expected = getStringArg(env, argv[3]);
+  int applied = 0;
+  const auto result = TAE_RebindQueue(g_engine, queue.c_str(), static_cast<int>(start),
+      mode.c_str(), expected.c_str(), static_cast<int>(expectedIndex), &applied);
+  if (result != TAE_RESULT_OK) return throwOnError(env, result);
+  napi_value value;
+  napi_get_boolean(env, applied != 0, &value);
+  return value;
+}
+
 napi_value AppendQueueItems(napi_env env, napi_callback_info info) {
   ensureEngine();
   clearLastError();
@@ -1017,6 +1042,7 @@ napi_value Init(napi_env env, napi_value exports) {
   define(env, exports, "SetOutputDevice", SetOutputDevice);
   define(env, exports, "SetOutputBackend", SetOutputBackend);
   define(env, exports, "LoadQueue", LoadQueue);
+  define(env, exports, "RebindQueue", RebindQueue);
   define(env, exports, "AppendQueueItems", AppendQueueItems);
   define(env, exports, "UpdateQueueItemSource", UpdateQueueItemSource);
   define(env, exports, "GetQueueState", GetQueueState);

@@ -65,6 +65,10 @@ TAE_API TAE_Result TAE_SetOutputDevice(TAE_EngineHandle engine, const char* devi
 TAE_API TAE_Result TAE_SetOutputBackend(TAE_EngineHandle engine, const char* backend_id);
 
 TAE_API TAE_Result TAE_LoadQueue(TAE_EngineHandle engine, const char* queue_json, int start_index);
+/** Conditional queue-only replacement. OK + applied=0 leaves the old queue intact. */
+TAE_API TAE_Result TAE_RebindQueue(TAE_EngineHandle engine, const char* queue_json, int start_index,
+                                  const char* mode, const char* expected_item_json,
+                                  int expected_index, int* out_applied);
 /**
  * Appends resolved entries (JSON array) to the native queue without reloading.
  * out_first_index receives the absolute native index of the first appended item

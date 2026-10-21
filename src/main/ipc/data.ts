@@ -15,9 +15,12 @@ import { registerLyricsIpc } from './lyricsIpc.ts'
 import { registerPersistenceIpc } from './persistenceIpc.ts'
 import { registerSleepTimerIpc } from './sleepTimerIpc.ts'
 import { registerAfterglowModeIpc } from './afterglowModeIpc.ts'
+import { runtime } from '../core/runtime'
+import { registerExternalPlaylistIpc } from './externalPlaylistIpc.ts'
 
 export function setupDataIpc(): void {
-  registerPersonalBackupIpc(ipcMain)
+  registerExternalPlaylistIpc(ipcMain)
+  registerPersonalBackupIpc(ipcMain, runtime.libraryDatabase?.database)
   registerWindowIpc(ipcMain)
   registerShellIpc(ipcMain)
   registerDiscordIpc(ipcMain)

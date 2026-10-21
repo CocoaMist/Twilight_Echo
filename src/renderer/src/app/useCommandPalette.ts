@@ -93,7 +93,6 @@ export function useCommandPalette(
     search,
     actions,
     playlists: music.playlists,
-    tracks: music.tracks,
     playTrack: player.playTrack,
     openPlaylist: navigation.openLibraryPlaylist
   }

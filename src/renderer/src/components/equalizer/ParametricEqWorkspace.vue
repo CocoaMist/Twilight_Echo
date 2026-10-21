@@ -35,6 +35,9 @@ import type { EqualizerBand, EqualizerFilterType } from '@renderer/types/setting
 
 type HeadphoneCurveKey = 'source' | 'target' | 'individual' | 'combined' | 'corrected'
 const props = defineProps<{
+  hostDocument?: Document
+  dockedInspector?: boolean
+  fixedBandCount?: boolean
   bands: EqualizerBand[]
   selectedIndex: number
   selectedIndices?: number[]
@@ -140,6 +143,7 @@ const geometry = shallowRef({
 const compact = ref(false)
 const spectrumGradientId = `eq-spectrum-${useId()}`
 const spectrum = useEqSpectrum({
+  document: () => props.hostDocument ?? document,
   levels: () => props.spectrumLevels,
   visible: () => props.spectrumVisible && props.responseView === 'dsp',
   frozen: () => props.spectrumFrozen === true
@@ -185,7 +189,7 @@ const selectedSet = computed(() => new Set(selectedIndices.value))
 const activeBandCount = computed(() => props.bands.filter((band) => band.enabled !== false).length)
 const showInspector = computed(
   () =>
-    inspectorOpen.value &&
+    (props.dockedInspector || inspectorOpen.value) &&
     selectedBand.value &&
     props.responseView === 'dsp' &&
     !boxDrag.value?.moved
@@ -291,6 +295,7 @@ function isInspectorControl(event: Event): boolean {
   )
 }
 function beginInspectorDrag(event: PointerEvent): void {
+  if (props.dockedInspector) return
   if (event.button !== 0 || compact.value || inspectorDrag.value || isInspectorControl(event))
     return
   event.preventDefault()
@@ -455,6 +460,7 @@ function resetSelectedGain(): void {
   emit('commit')
 }
 function addBand(event: MouseEvent): void {
+  if (props.fixedBandCount) return
   if (props.responseView !== 'dsp' || drag.value || props.bands.length >= PARAMETRIC_EQ_MAX_BANDS)
     return
   const surface = surfaceRef.value
@@ -719,9 +725,10 @@ defineExpose({ finishInteraction })
   <section
     ref="workspaceRef"
     class="parametric-workspace"
-    :class="{ compact }"
+    :class="{ compact, 'docked-inspector': dockedInspector, 'without-inspector': !showInspector }"
     aria-label="参数均衡器"
     data-te-parametric-eq-workspace
+    :data-te-material="dockedInspector ? 'content' : undefined"
   >
     <header class="parametric-stage-header">
       <div class="stage-brand">
@@ -749,7 +756,7 @@ defineExpose({ finishInteraction })
           <button
             type="button"
             title="粘贴频段（Ctrl/⌘+V）"
-            :disabled="clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
+            :disabled="fixedBandCount || clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
             @click="emit('paste')"
           >
             粘贴
@@ -1056,12 +1063,17 @@ defineExpose({ finishInteraction })
       v-if="showInspector && selectedBand"
       ref="inspectorHost"
       class="floating-band-inspector"
-      :class="{ moving: inspectorDrag, movable: !compact }"
-      :style="{ ...inspectorPosition, '--band-color': bandColor(selectedIndex) }"
-      :tabindex="compact ? undefined : 0"
+      :class="{ moving: inspectorDrag, movable: !compact && !dockedInspector }"
+      :style="{
+        ...(dockedInspector ? {} : inspectorPosition),
+        '--band-color': bandColor(selectedIndex)
+      }"
+      :tabindex="compact || dockedInspector ? undefined : 0"
       role="group"
       aria-label="频段面板"
-      :aria-description="compact ? undefined : '拖动空白区域移动，双击复位，方向键微调'"
+      :aria-description="
+        compact || dockedInspector ? undefined : '拖动空白区域移动，双击复位，方向键微调'
+      "
       @pointerdown="beginInspectorDrag"
       @pointermove="moveInspector"
       @pointerup="endInspectorDrag"
@@ -1078,7 +1090,8 @@ defineExpose({ finishInteraction })
         :selection-count="selectedIndices.length"
         :selection-enabled="selectedIndices.some((index) => bands[index].enabled !== false)"
         :filter-types="filterTypes"
-        :movable="!compact"
+        :movable="!compact && !dockedInspector"
+        :can-delete="!fixedBandCount"
         @preview="previewBand"
         @commit="emit('commit')"
         @toggle="emit('toggle', $event)"
@@ -1137,7 +1150,7 @@ defineExpose({ finishInteraction })
       </button>
       <button
         type="button"
-        :disabled="clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
+        :disabled="fixedBandCount || clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
         @click="emit('paste')"
       >
         粘贴频段
@@ -1171,7 +1184,9 @@ defineExpose({ finishInteraction })
               : '启用所选频段'
           }}
         </button>
-        <button type="button" @click="emit('delete', selectedIndex)">删除所选频段</button>
+        <button type="button" :disabled="fixedBandCount" @click="emit('delete', selectedIndex)">
+          删除所选频段
+        </button>
       </template>
     </NativeContextMenu>
   </section>
@@ -1240,12 +1255,12 @@ defineExpose({ finishInteraction })
   flex-shrink: 0;
 }
 .brand-symbol {
-  font-size: 32px;
+  font-size: calc(var(--te-font-size-body, 14px) * 32 / 14);
   font-weight: 300;
   color: var(--eq-response);
 }
 .stage-brand strong {
-  font-size: 18px;
+  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
   font-weight: 550;
   letter-spacing: -0.04em;
 }
@@ -1257,7 +1272,7 @@ defineExpose({ finishInteraction })
 .stage-brand small {
   display: block;
   margin-top: 2px;
-  font-size: 7px;
+  font-size: calc(var(--te-font-size-body, 14px) * 7 / 14);
   letter-spacing: 0.16em;
   color: var(--eq-text-subtle);
 }
@@ -1286,7 +1301,7 @@ defineExpose({ finishInteraction })
   align-items: center;
   gap: 12px;
   color: var(--eq-text-subtle);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
@@ -1388,7 +1403,7 @@ defineExpose({ finishInteraction })
 .frequency-labels span {
   position: absolute;
   font-family: var(--eq-mono);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   font-variant-numeric: tabular-nums;
   color: var(--eq-text-subtle);
   pointer-events: none;
@@ -1549,7 +1564,7 @@ defineExpose({ finishInteraction })
   position: relative;
   color: var(--eq-highlight);
   font-family: var(--eq-mono);
-  font-size: 8px;
+  font-size: calc(var(--te-font-size-body, 14px) * 8 / 14);
   opacity: 0;
 }
 .selected .handle-index,
@@ -1578,7 +1593,7 @@ defineExpose({ finishInteraction })
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   font-weight: 550;
 }
 .band-tooltip strong i {
@@ -1590,7 +1605,7 @@ defineExpose({ finishInteraction })
 .band-tooltip small {
   margin-left: auto;
   color: var(--eq-text-subtle);
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   font-weight: 400;
 }
 .band-tooltip div {
@@ -1600,7 +1615,7 @@ defineExpose({ finishInteraction })
   gap: 8px;
   font-family: var(--eq-mono);
   color: var(--eq-text-muted);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
 }
 .graph-crosshair {
   position: absolute;
@@ -1625,11 +1640,11 @@ defineExpose({ finishInteraction })
 }
 .graph-empty strong {
   font-weight: 450;
-  font-size: 17px;
+  font-size: calc(var(--te-font-size-body, 14px) * 17 / 14);
   color: var(--eq-text-muted);
 }
 .graph-empty span {
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   color: var(--eq-text-subtle);
 }
 .floating-band-inspector {
@@ -1662,7 +1677,7 @@ defineExpose({ finishInteraction })
 .meter-scale {
   position: relative;
   font-family: var(--eq-mono);
-  font-size: 8px;
+  font-size: calc(var(--te-font-size-body, 14px) * 8 / 14);
   color: var(--eq-text-subtle);
 }
 .meter-scale span {
@@ -1698,7 +1713,7 @@ defineExpose({ finishInteraction })
   gap: 4px;
   color: var(--eq-text-subtle);
   font-family: var(--eq-mono);
-  font-size: 8px;
+  font-size: calc(var(--te-font-size-body, 14px) * 8 / 14);
 }
 .graph-hint {
   position: absolute;
@@ -1708,7 +1723,7 @@ defineExpose({ finishInteraction })
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   color: var(--eq-text-subtle);
   pointer-events: none;
 }
@@ -1730,7 +1745,7 @@ defineExpose({ finishInteraction })
   border-radius: 5px;
   background: var(--eq-panel-raised);
   color: var(--eq-text-muted);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   cursor: pointer;
 }
 .curve-control i {
@@ -1778,12 +1793,12 @@ defineExpose({ finishInteraction })
   background: transparent;
   color: var(--eq-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   cursor: pointer;
 }
 .spectrum-toggle small {
   color: var(--eq-text-subtle);
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
 }
 .spectrum-toggle.active i,
 .spectrum-toggle.active small {
@@ -1795,7 +1810,7 @@ defineExpose({ finishInteraction })
   gap: 6px;
   margin-left: auto;
   color: var(--eq-text-subtle);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   white-space: nowrap;
 }
 .status-dot {
@@ -1814,12 +1829,12 @@ defineExpose({ finishInteraction })
 .eq-apply-error {
   padding: 8px 14px;
   color: var(--te-danger-soft-fg);
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
 }
 .clipboard-feedback {
   padding: 6px 14px;
   color: var(--eq-text-muted);
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
 }
 .clipboard-feedback.failed {
   color: var(--te-danger-soft-fg);
@@ -1856,7 +1871,7 @@ defineExpose({ finishInteraction })
   padding-block: 10px;
 }
 .compact .stage-brand strong {
-  font-size: 16px;
+  font-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
 }
 .compact .stage-brand small {
   display: none;
@@ -1902,7 +1917,7 @@ defineExpose({ finishInteraction })
     display: none;
   }
   .stage-status {
-    font-size: 9px;
+    font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1910,6 +1925,121 @@ defineExpose({ finishInteraction })
   .parametric-workspace *::before {
     animation: none !important;
     transition: none !important;
+  }
+}
+</style>
+
+<style scoped>
+.parametric-workspace.docked-inspector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max(276px, 20em);
+  grid-template-rows: auto minmax(340px, 1fr) auto;
+  border-radius: 6px;
+  box-shadow: none;
+  background: var(--te-app-bg);
+  --eq-surface: var(--te-app-bg);
+  --eq-panel: var(--te-settings-control-bg, var(--te-card-bg));
+  --eq-panel-raised: var(--te-card-bg);
+  --eq-response: var(--te-primary-500);
+  --eq-text: var(--te-settings-text, var(--te-neutral-900));
+}
+.parametric-workspace.docked-inspector.compact {
+  grid-template-columns: minmax(0, 1fr);
+}
+.parametric-workspace.docked-inspector.without-inspector {
+  grid-template-columns: minmax(0, 1fr);
+}
+.docked-inspector .parametric-stage-header {
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  background: transparent;
+  border-radius: 0;
+}
+.docked-inspector .stage-brand {
+  display: none;
+}
+.docked-inspector .stage-commands {
+  flex: 1;
+}
+.docked-inspector .parametric-graph-frame {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 340px;
+  background: transparent;
+}
+.docked-inspector .floating-band-inspector {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  grid-column: 2;
+  grid-row: 2;
+  width: auto;
+  max-width: none;
+  border-left: 1px solid var(--eq-border-soft);
+  z-index: 2;
+}
+.docked-inspector .floating-band-inspector :deep(.band-inspector) {
+  height: 100%;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 24px;
+  padding: 24px 18px;
+  background: transparent;
+}
+.docked-inspector :deep(.inspector-identity) {
+  width: 100%;
+  display: grid;
+  gap: 16px;
+}
+.docked-inspector :deep(.precision-controls) {
+  grid-template-columns: minmax(5.5em, 1fr) minmax(5.5em, 1fr) minmax(4em, 0.8fr);
+  width: 100%;
+  justify-content: center;
+}
+.docked-inspector :deep(.knob-caption),
+.docked-inspector :deep(.band-state),
+.docked-inspector :deep(.band-number) {
+  font-size: 0.82em;
+}
+.docked-inspector .analyzer-footer {
+  grid-column: 1 / -1;
+  background: transparent;
+  padding: 12px;
+  border-radius: 0;
+}
+.docked-inspector .eq-apply-error,
+.docked-inspector .clipboard-feedback {
+  grid-column: 1 / -1;
+}
+@container eq-workspace (max-width: 800px) {
+  .parametric-workspace.docked-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .docked-inspector .floating-band-inspector {
+    grid-column: 1;
+    grid-row: 3;
+    border-left: 0;
+    border-top: 1px solid var(--eq-border-soft);
+  }
+  .docked-inspector .floating-band-inspector :deep(.band-inspector) {
+    padding: 20px 30px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .docked-inspector :deep(.inspector-identity) {
+    width: auto;
+  }
+  .docked-inspector .analyzer-footer {
+    grid-row: 4;
   }
 }
 </style>

@@ -5,7 +5,11 @@ export interface PlaylistPersistenceStatus {
   dirty: boolean
   failureCount: number
   lastError: string | null
+  /** A logical conflict needs explicit reload/discard, not an automatic retry. */
+  canRetry?: false
 }
+
+export class PlaylistTransactionRejectedError extends Error {}
 
 export interface PlaylistPersistenceOptions<T> {
   /**
@@ -20,6 +24,7 @@ export interface PlaylistPersistenceOptions<T> {
   cloneSnapshot?(snapshot: T): T
   setTimeout?: typeof globalThis.setTimeout
   clearTimeout?: typeof globalThis.clearTimeout
+  shouldRetry?(error: unknown): boolean
 }
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>
@@ -47,6 +52,7 @@ export class PlaylistPersistence<T> {
   private dirty = false
   private failureCount = 0
   private lastError: string | null = null
+  private retryable = true
 
   constructor(options: PlaylistPersistenceOptions<T>) {
     this.options = options
@@ -64,7 +70,8 @@ export class PlaylistPersistence<T> {
     if (this.pendingSnapshot === null) this.pendingBase = clone(base)
     this.pendingSnapshot = clone(snapshot)
     this.dirty = true
-    this.schedule(this.options.flushDelayMs)
+    if (this.retryable) this.schedule(this.options.flushDelayMs)
+    else this.publish('error')
   }
 
   async flush(): Promise<boolean> {
@@ -73,6 +80,7 @@ export class PlaylistPersistence<T> {
     // Yield once so flush joins that write chain instead of observing only its
     // cleared pending slot.
     await Promise.resolve()
+    if (!this.retryable) return false
     const failuresAtStart = this.failureCount
     do {
       await this.commitPending()
@@ -89,6 +97,21 @@ export class PlaylistPersistence<T> {
     this.clearScheduledFlush()
   }
 
+  /** Read authority first. Check, queue reset and publication share one turn. */
+  async discardPending(check: () => void, apply: () => void): Promise<void> {
+    await this.writeChain
+    check()
+    this.clearScheduledFlush()
+    this.pendingSnapshot = null
+    this.pendingBase = null
+    this.dirty = false
+    this.retryable = true
+    this.failureCount = 0
+    this.lastError = null
+    apply()
+    if (!this.dirty) this.publish('idle')
+  }
+
   private schedule(delayMs: number, publishPending = true): void {
     this.clearScheduledFlush()
     if (publishPending) this.publish('pending')
@@ -102,6 +125,7 @@ export class PlaylistPersistence<T> {
   }
 
   private async commitPending(): Promise<void> {
+    if (!this.retryable) return
     if (this.writing) {
       await this.writeChain
       return
@@ -140,13 +164,15 @@ export class PlaylistPersistence<T> {
           this.dirty = true
           this.failureCount += 1
           this.lastError = describeError(error)
+          this.retryable = this.options.shouldRetry?.(error) !== false
           this.publish('error')
-          this.schedule(this.options.retryDelayMs, false)
+          if (this.retryable) this.schedule(this.options.retryDelayMs, false)
+          else this.clearScheduledFlush()
         }
       })
       .finally(() => {
         this.writing = false
-        if (this.pendingSnapshot !== null && this.timer === null) {
+        if (this.retryable && this.pendingSnapshot !== null && this.timer === null) {
           this.schedule(this.options.flushDelayMs)
         }
       })
@@ -165,7 +191,8 @@ export class PlaylistPersistence<T> {
       state,
       dirty: this.dirty,
       failureCount: this.failureCount,
-      lastError: this.lastError
+      lastError: this.lastError,
+      ...(!this.retryable ? { canRetry: false as const } : {})
     })
   }
 }

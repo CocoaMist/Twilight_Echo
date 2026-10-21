@@ -7,6 +7,7 @@ export type TwilightMediaProviderMethod =
   | 'searchArtists'
   | 'fetchPlaylistTracks'
   | 'fetchPlaylistTracksPage'
+  | 'readPlaylistImportPage'
   | 'createDownload'
   | 'getDownloadStatus'
   | 'getDownloadFile'

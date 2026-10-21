@@ -11,6 +11,7 @@ import {
   type LogicalTrack
 } from '../../utils/logicalTrackModel.ts'
 import { versionSourceKey } from '../../utils/trackSourceIdentity.ts'
+import { importedPlayableTracks } from './externalPlaylistController.ts'
 
 /** Cache recording identity against library and music-version revisions. */
 export function createPlaylistTrackResolver({
@@ -117,6 +118,7 @@ export function createPlaylistTrackResolver({
   // Ordinary playlists prefer a playable local recording. Aggregate playlists
   // preserve provider snapshots so users can still choose between sources.
   function resolvePlaylistTracks(playlist: Playlist, preserveSources = false): Track[] {
+    if (playlist.imported) return importedPlayableTracks(playlist.imported.entries)
     let localLogicalTracks: Map<string, LogicalTrack> | null = null
     return playlist.trackIds
       .map((trackId): Track | undefined => {

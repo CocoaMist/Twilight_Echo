@@ -2,6 +2,15 @@ import type { Ref } from 'vue'
 import type { Track } from '../../types/music.ts'
 import type { PlayMode } from '../../types/settings.ts'
 import type {
+  LibraryDatabaseApi,
+  LibraryQuery,
+  LibraryQueuePage,
+  LibraryQueueReadOptions,
+  LibraryQueueSnapshot,
+  LibraryTrackRecord
+} from '../../../../shared/libraryDatabase.ts'
+import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import type {
   PlayerRemoteCommand,
   RemoteBrowseItem,
   RemoteBrowseRequest,
@@ -15,7 +24,12 @@ interface RemotePlaylist {
   trackIds: string[]
 }
 
-interface RemoteControlBridgeOptions {
+type RemoteLibraryApi = Pick<
+  LibraryDatabaseApi,
+  'queryTracks' | 'queryCollections' | 'getTracksByIds' | 'readLibraryQueue'
+>
+
+export interface RemoteControlBridgeOptions {
   tracks: Ref<Track[]>
   playlists: Ref<RemotePlaylist[]>
   getPlaylistTracks: (playlistId: string) => Track[]
@@ -23,15 +37,35 @@ interface RemoteControlBridgeOptions {
   queueIndex: Ref<number>
   playMode: Ref<PlayMode>
   playTrack: (track: Track, trackList?: Track[]) => Promise<void>
-  enqueueTrack: (track: Track) => void
+  enqueueTrack: (track: Track) => void | Promise<void>
   jumpQueue: (index: number) => void
   removeQueueItem: (index: number) => void
   setPlayMode: (mode: PlayMode) => void
+  /** SQLite preview owns the complete library outside the renderer array. */
+  getStorageMode?: () => Promise<'json' | 'sqlite'>
+  database?: RemoteLibraryApi
+  playLibraryQuery?: (query: LibraryQuery, selectedId: string) => Promise<void>
+  enqueueLibraryTrack?: (id: string) => Promise<void> | void
+  queryLibraryPlaylist?: (
+    playlistId: string,
+    request: RemoteBrowseRequest
+  ) => Promise<{
+    page: import('../../../../shared/libraryDatabase.ts').LibraryPage
+    query: LibraryQuery
+  }>
+  getLibraryQueue?: () => LibraryQueueSnapshot | null
+  readLibraryQueue?: RemoteLibraryApi['readLibraryQueue']
 }
 
 interface TrackToken {
   trackId: string
   playlistId?: string
+}
+
+type LibraryToken = {
+  id: string
+  query: LibraryQuery
+  queue?: { id: string; revision: number }
 }
 
 const toRemoteMode = (mode: PlayMode): RemotePlayMode => {
@@ -75,6 +109,7 @@ function matches(track: Track, needle: string): boolean {
 }
 
 export function createRemoteControlBridge(options: RemoteControlBridgeOptions): {
+  /** JSON callers receive a value; SQLite callers receive an awaited value from the IPC handler. */
   browse: (request: RemoteBrowseRequest) => RemoteBrowseResult
   command: (command: PlayerRemoteCommand) => Promise<void>
   snapshot: () => { playMode: RemotePlayMode; queueRevision: number }
@@ -83,6 +118,7 @@ export function createRemoteControlBridge(options: RemoteControlBridgeOptions): 
   const tokenByTrackContext = new Map<string, string>()
   const playlistTokens = new Map<string, string>()
   const tokenByPlaylistId = new Map<string, string>()
+  const libraryTokens = new Map<string, LibraryToken>()
   let indexedTracks: readonly Track[] | null = null
   let tracksById = new Map<string, Track>()
   let indexedPlaylists: readonly RemotePlaylist[] | null = null
@@ -152,6 +188,114 @@ export function createRemoteControlBridge(options: RemoteControlBridgeOptions): 
     return options.getPlaylistTracks(playlistId)
   }
 
+  const databasePageItem = (token: string, record: LibraryTrackRecord, index?: number) => {
+    const track = libraryTrack(record)
+    return trackItem(token, track, index)
+  }
+
+  const databaseQuery = (request: RemoteBrowseRequest): LibraryQuery => ({
+    search: request.query,
+    ...(request.query.trim() ? { searchLiteral: true } : {}),
+    sort: 'insertion',
+    direction: 'asc',
+    offset: request.offset,
+    limit: request.limit
+  })
+
+  async function browseDatabase(request: RemoteBrowseRequest): Promise<RemoteBrowseResult> {
+    if (!options.database) throw new Error('library_database_unavailable')
+    if (request.view === 'library') {
+      const query = databaseQuery(request)
+      const { offset: _offset, limit: _limit, ...fullQuery } = query
+      const page = await options.database.queryTracks(query)
+      const items = page.tracks.map((record) => {
+        const token = remoteId()
+        libraryTokens.set(token, { id: record.id, query: fullQuery })
+        return databasePageItem(token, record, undefined)
+      })
+      return {
+        items,
+        total: page.total,
+        offset: page.offset,
+        limit: request.limit,
+        revision: page.revision
+      }
+    }
+    if (request.view === 'queue') {
+      const queue = options.getLibraryQueue?.()
+      const read = options.readLibraryQueue ?? options.database.readLibraryQueue
+      if (!queue)
+        return { items: [], total: 0, offset: request.offset, limit: request.limit, revision: 0 }
+      const readOptions: LibraryQueueReadOptions = {
+        expectedRevision: queue.revision,
+        ...(request.query.trim() ? { search: request.query } : {})
+      }
+      const page: LibraryQueuePage = await read(
+        queue.id,
+        request.offset,
+        request.limit,
+        readOptions
+      )
+      const items = page.items.flatMap((entry) => {
+        if (!entry.track) return []
+        const token = remoteId()
+        libraryTokens.set(token, {
+          id: entry.track.id,
+          query: {},
+          queue: { id: queue.id, revision: page.revision }
+        })
+        return [databasePageItem(token, entry.track, entry.position)]
+      })
+      return {
+        items,
+        total: page.total,
+        offset: page.offset,
+        limit: request.limit,
+        revision: page.revision
+      }
+    }
+    if (request.playlistId && options.queryLibraryPlaylist) {
+      const playlistId = playlistTokens.get(request.playlistId)
+      if (!playlistId) throw new Error('playlist_not_found')
+      const { page, query } = await options.queryLibraryPlaylist(playlistId, request)
+      const items = page.tracks.map((record) => {
+        const token = remoteId()
+        libraryTokens.set(token, { id: record.id, query })
+        return databasePageItem(token, record)
+      })
+      return {
+        items,
+        total: page.total,
+        offset: page.offset,
+        limit: request.limit,
+        revision: page.revision
+      }
+    }
+    // Playlist headers remain the lightweight persisted playlist configuration;
+    // track details are still resolved only after the user opens a playlist.
+    refreshPlaylistIndex()
+    const needle = request.query.trim().toLocaleLowerCase('zh-CN')
+    const items: RemoteBrowseItem[] = []
+    let total = 0
+    const end = request.offset + request.limit
+    for (const playlist of options.playlists.value) {
+      if (!playlist.name.toLocaleLowerCase('zh-CN').includes(needle)) continue
+      if (total >= request.offset && total < end) {
+        const token = tokenForPlaylist(playlist)
+        items.push({
+          id: token,
+          title: playlist.name || '未命名歌单',
+          artist: '',
+          album: '',
+          duration: 0,
+          trackCount: playlist.trackIds.length
+        })
+      }
+      total++
+    }
+    return { items, total, offset: request.offset, limit: request.limit }
+  }
+
   const browseTracks = (
     source: readonly Track[],
     request: RemoteBrowseRequest,
@@ -187,69 +331,116 @@ export function createRemoteControlBridge(options: RemoteControlBridgeOptions): 
 
   return {
     browse(request) {
-      refreshTrackIndex()
-      refreshPlaylistIndex()
-      if (request.view === 'playlists' && !request.playlistId) {
-        const needle = request.query.trim().toLocaleLowerCase('zh-CN')
-        const items: RemoteBrowseItem[] = []
-        let total = 0
-        const end = request.offset + request.limit
-        for (const playlist of options.playlists.value) {
-          if (!playlist.name.toLocaleLowerCase('zh-CN').includes(needle)) continue
-          if (total >= request.offset && total < end) {
-            items.push({
-              id: tokenForPlaylist(playlist),
-              title: playlist.name || '未命名歌单',
-              artist: '',
-              album: '',
-              duration: 0,
-              trackCount: playlist.trackIds.length
-            })
-          }
-          total++
-        }
-        return { items, total, offset: request.offset, limit: request.limit }
-      }
-      if (request.view === 'queue') {
-        return browseTracks(options.queue.value, request, undefined, refreshQueueRevision())
-      }
-      if (request.playlistId) {
-        const playlistId = playlistTokens.get(request.playlistId)
-        if (!playlistId) throw new Error('playlist_not_found')
-        return browseTracks(playlistTracks(playlistId), request, playlistId)
-      }
-      return browseTracks(options.tracks.value, request)
+      if (options.database && options.getStorageMode)
+        return options
+          .getStorageMode()
+          .then((mode) =>
+            mode === 'sqlite' ? browseDatabase(request) : browseLegacy(request)
+          ) as unknown as RemoteBrowseResult
+      return browseLegacy(request)
     },
     async command(command) {
-      refreshTrackIndex()
-      refreshPlaylistIndex()
-      if (command.action === 'playTrack' || command.action === 'enqueueTrack') {
-        const entry = trackTokens.get(command.id)
-        const playlistContext = entry?.playlistId ? playlistTracks(entry.playlistId) : undefined
-        const track = entry?.playlistId
-          ? playlistContext?.find((candidate) => candidate.id === entry.trackId)
-          : entry
-            ? tracksById.get(entry.trackId)
-            : undefined
-        if (!entry || !track) throw new Error('track_not_found')
-        if (command.action === 'playTrack') {
-          await options.playTrack(track, playlistContext)
-        } else options.enqueueTrack(track)
+      if (
+        options.database &&
+        options.getStorageMode &&
+        (await options.getStorageMode()) === 'sqlite'
+      ) {
+        const library = libraryTokens.get(
+          command.action === 'playTrack' || command.action === 'enqueueTrack' ? command.id : ''
+        )
+        if (command.action === 'playTrack' || command.action === 'enqueueTrack') {
+          if (!library) throw new Error('track_not_found')
+          if (command.action === 'playTrack') {
+            if (!options.playLibraryQuery) throw new Error('library_database_unavailable')
+            await options.playLibraryQuery(library.query, library.id)
+          } else if (options.enqueueLibraryTrack) await options.enqueueLibraryTrack(library.id)
+          else throw new Error('library_database_unavailable')
+          return
+        }
+        if (command.action === 'jumpQueue' || command.action === 'removeQueue') {
+          const queue = options.getLibraryQueue?.()
+          if (!queue || command.revision !== queue.revision) throw new Error('queue_changed')
+          if (command.index >= queue.total) throw new Error('queue_item_not_found')
+          if (command.action === 'jumpQueue') options.jumpQueue(command.index)
+          else options.removeQueueItem(command.index)
+          return
+        }
+        if (command.action === 'setPlayMode') {
+          options.setPlayMode(toDesktopMode(command.mode))
+          return
+        }
         return
       }
-      if (command.action === 'jumpQueue' || command.action === 'removeQueue') {
-        if (command.revision !== refreshQueueRevision()) throw new Error('queue_changed')
-        if (command.index >= options.queue.value.length) throw new Error('queue_item_not_found')
-        if (command.action === 'jumpQueue') options.jumpQueue(command.index)
-        else options.removeQueueItem(command.index)
-        refreshQueueRevision()
-        return
-      }
-      if (command.action === 'setPlayMode') options.setPlayMode(toDesktopMode(command.mode))
+      return commandLegacy(command)
     },
-    snapshot: () => ({
-      playMode: toRemoteMode(options.playMode.value),
-      queueRevision: refreshQueueRevision()
-    })
+    snapshot: () => {
+      const queue = options.getLibraryQueue?.()
+      return queue
+        ? { playMode: toRemoteMode(options.playMode.value), queueRevision: queue.revision }
+        : { playMode: toRemoteMode(options.playMode.value), queueRevision: refreshQueueRevision() }
+    }
+  }
+
+  function browseLegacy(request: RemoteBrowseRequest): RemoteBrowseResult {
+    refreshTrackIndex()
+    refreshPlaylistIndex()
+    if (request.view === 'playlists' && !request.playlistId) {
+      const needle = request.query.trim().toLocaleLowerCase('zh-CN')
+      const items: RemoteBrowseItem[] = []
+      let total = 0
+      const end = request.offset + request.limit
+      for (const playlist of options.playlists.value) {
+        if (!playlist.name.toLocaleLowerCase('zh-CN').includes(needle)) continue
+        if (total >= request.offset && total < end) {
+          items.push({
+            id: tokenForPlaylist(playlist),
+            title: playlist.name || '未命名歌单',
+            artist: '',
+            album: '',
+            duration: 0,
+            trackCount: playlist.trackIds.length
+          })
+        }
+        total++
+      }
+      return { items, total, offset: request.offset, limit: request.limit }
+    }
+    if (request.view === 'queue') {
+      return browseTracks(options.queue.value, request, undefined, refreshQueueRevision())
+    }
+    if (request.playlistId) {
+      const playlistId = playlistTokens.get(request.playlistId)
+      if (!playlistId) throw new Error('playlist_not_found')
+      return browseTracks(playlistTracks(playlistId), request, playlistId)
+    }
+    return browseTracks(options.tracks.value, request)
+  }
+
+  async function commandLegacy(command: PlayerRemoteCommand): Promise<void> {
+    refreshTrackIndex()
+    refreshPlaylistIndex()
+    if (command.action === 'playTrack' || command.action === 'enqueueTrack') {
+      const entry = trackTokens.get(command.id)
+      const playlistContext = entry?.playlistId ? playlistTracks(entry.playlistId) : undefined
+      const track = entry?.playlistId
+        ? playlistContext?.find((candidate) => candidate.id === entry.trackId)
+        : entry
+          ? tracksById.get(entry.trackId)
+          : undefined
+      if (!entry || !track) throw new Error('track_not_found')
+      if (command.action === 'playTrack') {
+        await options.playTrack(track, playlistContext)
+      } else await options.enqueueTrack(track)
+      return
+    }
+    if (command.action === 'jumpQueue' || command.action === 'removeQueue') {
+      if (command.revision !== refreshQueueRevision()) throw new Error('queue_changed')
+      if (command.index >= options.queue.value.length) throw new Error('queue_item_not_found')
+      if (command.action === 'jumpQueue') options.jumpQueue(command.index)
+      else options.removeQueueItem(command.index)
+      refreshQueueRevision()
+      return
+    }
+    if (command.action === 'setPlayMode') options.setPlayMode(toDesktopMode(command.mode))
   }
 }

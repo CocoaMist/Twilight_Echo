@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import type { NativeQueueSelection } from '../../shared/nativeQueue.ts'
+import type {
+  NativeQueueCommit,
+  NativeQueueRebind,
+  NativeQueueSelection
+} from '../../shared/nativeQueue.ts'
 import type {
   AudioEnginePlayResult,
   AudioEngineQueueItem,
@@ -42,6 +46,7 @@ import {
 import { playModeWrapsAtQueueEnd } from '../../shared/playbackModes.ts'
 import { audioEngineError, nativeAudioError } from './engineErrors.ts'
 import { rendererFallbackAllowed } from './nativeBinding.ts'
+import { NativeSleepTimerBoundaryCursor } from './sleepTimerNativeBoundary.ts'
 import type { DspGraphConfig } from '../../shared/dspGraph.ts'
 
 export interface PlaybackControllerHost {
@@ -115,12 +120,31 @@ export interface PlaybackControllerHost {
 // Nth tick; demand reads (getPlaybackInfo) still bypass this via the TTL gate.
 const NATIVE_IDLE_POLL_INTERVAL_TICKS = 4
 
+/** Main-process-only authority to continue a naturally exhausted native window. */
+export interface PlaybackEndCheckpoint {
+  selection: NativeQueueSelection
+  intent: number
+}
+
+export interface PlaybackEndContinuation {
+  expected: PlaybackEndCheckpoint
+  item: AudioEngineQueueItem
+  playMode: 'sequential' | 'repeat'
+  isCurrent: () => boolean
+  onSelected: () => void
+}
+
 export class PlaybackController {
   queue: AudioEngineQueueItem[] = []
   queueToken = ''
   queueJson = '[]'
   playbackInfo: PlaybackInfo
   private transportRevision = 0
+  private stoppedRecoveryRevision: number | null = null
+  private playbackEndEligible = false
+  private continuationIntent = 0
+  /** Temporary shutdown attenuation, never a user volume or session setting. */
+  private sleepTimerGain = 1
   timer: NodeJS.Timeout | null = null
   lastTick = 0
   lastNativePlaybackInfoTickReadAt = Number.NEGATIVE_INFINITY
@@ -161,6 +185,7 @@ export class PlaybackController {
   } | null = null
 
   private readonly host: PlaybackControllerHost
+  private readonly sleepBoundaryCursor = new NativeSleepTimerBoundaryCursor()
 
   constructor(host: PlaybackControllerHost, initialPlaybackInfo: PlaybackInfo) {
     this.host = host
@@ -314,6 +339,8 @@ export class PlaybackController {
   }
 
   resetCachesOnServiceCrash(): void {
+    this.invalidateQueueRecovery()
+    this.revokePlaybackEnd()
     this.lastVisualizationCache = null
     this.lastSpectrumCache = null
     this.invalidateUpcomingTrackCache()
@@ -323,10 +350,64 @@ export class PlaybackController {
     this.nativeConfigRevisionEpochPending = true
   }
 
-  async play(source: string, startTime = 0): Promise<AudioEnginePlayResult> {
+  private revokePlaybackEnd(): void {
+    this.playbackEndEligible = false
+    this.continuationIntent++
+  }
+
+  invalidateQueueRecovery(): void {
+    this.transportRevision++
+    this.stoppedRecoveryRevision = null
+  }
+
+  isQueueRecoveryCurrent(revision: number): boolean {
+    return (
+      !this.destroyed &&
+      this.stoppedRecoveryRevision === revision &&
+      this.transportRevision === revision &&
+      !this.queueToken &&
+      !this.nativePlaybackActive &&
+      this.playbackInfo.state === 'stopped'
+    )
+  }
+
+  /** Explicit recovery only. Never infer a successful Stop from our mirror:
+   * a timed-out queue command may have executed even if the mirror is idle. */
+  async stopForQueueRecovery(): Promise<number> {
+    if (this.queueToken) throw new Error('afterglow_library_queue_changed')
+    const revision = ++this.transportRevision
+    this.stoppedRecoveryRevision = null
+    this.revokePlaybackEnd()
+    const current = () => !this.destroyed && revision === this.transportRevision && !this.queueToken
+    const stopped = await this.callNativeMaybeAsync('确认队列恢复停止', 'Stop')
+    if (!current()) throw new Error('afterglow_library_queue_changed')
+    if (!stopped) throw new Error('afterglow_queue_recovery_stop_failed')
+    const actual = await this.readNativePlaybackInfoAsync()
+    if (!current()) throw new Error('afterglow_library_queue_changed')
+    if (!actual || actual.state !== 'stopped')
+      throw new Error('afterglow_queue_recovery_stop_failed')
+    this.nativePlaybackActive = false
+    this.pendingNativeSource = null
+    this.pendingNativePositionTarget = null
+    this.lastNativeReportedPosition = Number.NaN
+    this.playbackInfo = { ...this.mergeNativePlaybackInfo(actual), state: 'stopped', position: 0 }
+    this.stoppedRecoveryRevision = revision
+    this.publishProperty('pause', true)
+    this.publishProperty('eof-reached', false)
+    this.publishPlaybackInfo()
+    return revision
+  }
+
+  async play(
+    source: string,
+    startTime = 0,
+    requested?: () => boolean
+  ): Promise<AudioEnginePlayResult> {
     if (!source) throw audioEngineError('audio.source_empty', 'playback source is empty')
     const revision = ++this.transportRevision
+    this.revokePlaybackEnd()
     const isCurrent = () => !this.destroyed && revision === this.transportRevision
+    const isRequested = () => isCurrent() && requested?.() !== false
     const superseded: AudioEnginePlayResult = {
       nativeStarted: false,
       fallbackReason: '',
@@ -336,7 +417,7 @@ export class PlaybackController {
     await this.prepareLoudnormForPlay(source)
     // Startup preparation can outlive a next/previous/stop or a newer play.
     // Never dispatch the old source after a newer transport action owns playback.
-    if (!isCurrent()) return superseded
+    if (!isRequested()) return superseded
     const current = this.queue[this.playbackInfo.queueIndex]
     const duration = current?.source === source ? (current.duration ?? 0) : 0
     const boundedStartTime = clampQueueItemPosition(current, startTime)
@@ -364,6 +445,7 @@ export class PlaybackController {
       if (!isCurrent()) return superseded
       this.nativeOutputRouteSynced = fallbackRoute.synced
       if (fallbackRoute.synced) {
+        if (!isRequested()) return superseded
         nativeStarted = await this.tryNativePlay('WASAPI 兜底播放', source, boundedStartTime)
         if (!isCurrent()) return superseded
       } else {
@@ -390,6 +472,7 @@ export class PlaybackController {
         )
         if (!isCurrent()) return superseded
         if (!deviceSynced) continue
+        if (!isRequested()) return superseded
         nativeStarted = await this.tryNativePlay(
           `ALSA 兜底播放 ${candidate}`,
           source,
@@ -477,7 +560,7 @@ export class PlaybackController {
       // Native play carries info_.volume into the pipeline, but reassert it
       // after a successful start so a restored engine can never stay at unity
       // loudness if a startup SetVolume was lost before the pipeline existed.
-      this.tryNative('播放后应用音量', (native) => native.SetVolume(this.playbackInfo.volume))
+      this.tryNative('播放后应用音量', (native) => native.SetVolume(this.effectiveVolume()))
     }
     await this.applyNativeDspGraph('播放源格式变更后解析 DSP 场景')
     if (!isCurrent()) return superseded
@@ -490,6 +573,7 @@ export class PlaybackController {
     this.lastNativeReportedPosition =
       nativePositionConfirmed && nativeInfo ? nativeInfo.position : Number.NaN
     this.pendingNativePositionTarget = nativePositionConfirmed ? null : boundedStartTime
+    this.playbackEndEligible = nativeStarted
     this.emit('start-file')
     this.publishDuration(this.playbackInfo.duration, { force: true })
     this.publishProperty('pause', false)
@@ -502,7 +586,8 @@ export class PlaybackController {
   }
 
   async togglePause(): Promise<void> {
-    this.transportRevision += 1
+    const revision = ++this.transportRevision
+    this.revokePlaybackEnd()
     const failure =
       this.playbackInfo.outputInfo?.diagnostics?.lastError ||
       this.playbackInfo.diagnostics?.lastError
@@ -525,8 +610,10 @@ export class PlaybackController {
     if (typeof native.callAsync === 'function') {
       try {
         await native.callAsync('Pause', [])
+        if (revision !== this.transportRevision) return
         // 等待原生引擎更新状态后读取真实播放信息
         const raw = await native.callAsync('GetPlaybackInfo', [])
+        if (revision !== this.transportRevision) return
         const realInfo = parseNativeJson(
           raw as string | PlaybackInfo | undefined,
           null as PlaybackInfo | null
@@ -537,6 +624,7 @@ export class PlaybackController {
           )
         }
         this.lastTick = this.scheduler.now()
+        this.playbackEndEligible = this.playbackInfo.state === 'playing'
         this.publishProperty('pause', this.playbackInfo.state !== 'playing')
         this.publishPlaybackInfo()
         return
@@ -560,11 +648,13 @@ export class PlaybackController {
       this.playbackInfo = this.mergeNativePlaybackInfo(nativeInfo)
     }
     this.lastTick = this.scheduler.now()
+    this.playbackEndEligible = this.playbackInfo.state === 'playing'
     this.publishProperty('pause', this.playbackInfo.state !== 'playing')
     this.publishPlaybackInfo()
   }
 
   async pause(): Promise<void> {
+    this.revokePlaybackEnd()
     // 真正的硬暂停：如果已经暂停则不操作，避免 toggle 语义导致的反向翻转
     if (this.playbackInfo.state === 'paused' || this.playbackInfo.state === 'stopped') {
       return
@@ -573,6 +663,7 @@ export class PlaybackController {
   }
 
   async seek(time: number): Promise<void> {
+    this.revokePlaybackEnd()
     const position = clampQueueItemPosition(this.queue[this.playbackInfo.queueIndex], time)
     if (this.playbackInfo.state !== 'playing' && Object.is(position, this.playbackInfo.position)) {
       return
@@ -582,6 +673,7 @@ export class PlaybackController {
     this.lastTick = this.scheduler.now()
     this.lastNativeReportedPosition = Number.NaN
     this.pendingNativePositionTarget = position
+    this.playbackEndEligible = this.nativePlaybackActive && this.playbackInfo.state === 'playing'
     this.publishProperty('time-pos', position)
     this.publishPlaybackInfo()
   }
@@ -595,7 +687,9 @@ export class PlaybackController {
     // the native engine stays loud, and every renderer push would be dropped
     // as a no-op here.
     if (alreadyReported && this.host.isNativeVolumeSynced()) return
-    const applied = this.tryNative('设置音量', (native) => native.SetVolume(normalized))
+    const applied = this.tryNative('设置音量', (native) =>
+      native.SetVolume(this.effectiveVolume(normalized))
+    )
     this.playbackInfo.volume = normalized
     if (applied && this.host.canVerifyNativeVolume()) {
       // In-process binding: SetVolume succeeded synchronously. The audio service
@@ -605,6 +699,27 @@ export class PlaybackController {
     }
     this.updateOutputPerfect()
     this.publishPlaybackInfo()
+  }
+
+  effectiveVolume(volume = this.playbackInfo.volume): number {
+    return volume * this.sleepTimerGain
+  }
+
+  /** Main-only gain. Await the service ACK so stop/reset cannot race a fade step. */
+  async setSleepTimerGain(gain: number): Promise<void> {
+    this.sleepTimerGain = clampNumber(gain, 0, 1, 1)
+    const applied = await this.callNativeMaybeAsync(
+      '睡眠定时器临时音量',
+      'SetVolume',
+      this.effectiveVolume()
+    )
+    this.host.markNativeVolumeSynced(applied)
+    if (!applied)
+      throw nativeAudioError(
+        'audio.volume_change_failed',
+        'sleep timer gain failed',
+        this.lastNativeError
+      )
   }
 
   async setPlaybackRate(rate: number): Promise<void> {
@@ -643,6 +758,7 @@ export class PlaybackController {
 
   async stop(): Promise<void> {
     this.transportRevision += 1
+    this.revokePlaybackEnd()
     if (
       this.playbackInfo.state === 'stopped' &&
       this.playbackInfo.position === 0 &&
@@ -672,8 +788,13 @@ export class PlaybackController {
     this.publishPlaybackInfo()
   }
 
-  async loadQueue(items: AudioEngineQueueItem[], startIndex = 0): Promise<void> {
+  async loadQueue(
+    items: AudioEngineQueueItem[],
+    startIndex = 0,
+    options: { rollbackOnFailure?: boolean } = {}
+  ): Promise<void> {
     this.transportRevision += 1
+    this.revokePlaybackEnd()
     const nextQueue = [...items]
     const nextQueueIndex =
       nextQueue.length > 0 ? Math.min(Math.max(0, startIndex), nextQueue.length - 1) : -1
@@ -720,7 +841,7 @@ export class PlaybackController {
       // never ran (slow-tier timeouts reject while the load may still land),
       // which would leave the engine on the new queue while the local mirror
       // keeps the old one. Best-effort restore closes that divergence.
-      if (hasPreviousQueue) {
+      if (hasPreviousQueue && options.rollbackOnFailure !== false) {
         this.rollbackQueueAfterFailedLoad(previousQueueJson, previousQueueIndex)
       }
       throw error
@@ -732,6 +853,173 @@ export class PlaybackController {
     this.playbackInfo.queueIndex = nextQueueIndex
     this.invalidateUpcomingTrackCache()
     this.emit('queue-change', this.queue)
+  }
+
+  getPlaybackEnd(): PlaybackEndCheckpoint | null {
+    const info = this.playbackInfo
+    const item = this.queue[info.queueIndex]
+    const failure = info.outputInfo?.diagnostics?.lastError || info.diagnostics?.lastError
+    if (
+      !this.playbackEndEligible ||
+      !this.nativePlaybackActive ||
+      !this.queueToken ||
+      this.pendingNativeSource !== null ||
+      this.pendingNativePositionTarget !== null ||
+      info.state !== 'stopped' ||
+      info.upcomingTrack ||
+      failure ||
+      !item ||
+      item.source !== info.source
+    )
+      return null
+    return {
+      selection: {
+        queueToken: this.queueToken,
+        index: info.queueIndex,
+        id: item.id,
+        source: item.source
+      },
+      intent: this.transportRevision
+    }
+  }
+
+  /** Unlike rebind, this may open a decoder, but only after a confirmed natural
+   * end. Every await is fenced against a later stop/pause/seek/queue command.
+   * Unknown native outcomes escape to the owner; they are never replayed here. */
+  async continueAfterPlaybackEnd(options: PlaybackEndContinuation): Promise<boolean> {
+    await this.getPlaybackInfo()
+    const end = this.getPlaybackEnd()
+    if (
+      !options.isCurrent() ||
+      !end ||
+      end.intent !== options.expected.intent ||
+      end.selection.queueToken !== options.expected.selection.queueToken ||
+      end.selection.index !== options.expected.selection.index ||
+      end.selection.id !== options.expected.selection.id ||
+      end.selection.source !== options.expected.selection.source
+    )
+      return false
+    const loading = this.loadQueue([options.item], 0, { rollbackOnFailure: false })
+    const loadRevision = this.transportRevision
+    const loadIntent = this.continuationIntent
+    await loading
+    // Publish the confirmed selection before play emits its first snapshot,
+    // including when the owner is being restored while LoadQueue replies.
+    if (
+      this.queue.length === 1 &&
+      this.queueToken &&
+      this.queue[0].queueEntryId === options.item.queueEntryId &&
+      this.queue[0].source === options.item.source
+    ) {
+      if (this.playbackInfo.state === 'stopped') {
+        this.nativePlaybackActive = false
+        this.playbackInfo = {
+          ...this.playbackInfo,
+          source: options.item.source,
+          position: 0,
+          duration: options.item.duration ?? 0
+        }
+      }
+      options.onSelected()
+    }
+    if (
+      !options.isCurrent() ||
+      loadRevision !== this.transportRevision ||
+      loadIntent !== this.continuationIntent
+    )
+      return false
+    const changingMode = this.setPlayMode(options.playMode)
+    const modeRevision = this.transportRevision
+    const modeIntent = this.continuationIntent
+    await changingMode
+    if (
+      !options.isCurrent() ||
+      modeRevision !== this.transportRevision ||
+      modeIntent !== this.continuationIntent
+    )
+      return false
+    let playIntent = 0
+    const playing = this.play(
+      options.item.source,
+      0,
+      () => options.isCurrent() && playIntent === this.continuationIntent
+    )
+    playIntent = this.continuationIntent
+    const playRevision = this.transportRevision
+    try {
+      const result = await playing
+      if (result.superseded) return false
+      if (!result.nativeStarted) throw new Error('afterglow_requires_native_playback')
+      return true
+    } catch (error) {
+      // A selected decoder that failed is still a resumable target. Do not stop
+      // a later user action while retiring this failed automatic attempt.
+      if (playRevision === this.transportRevision && playIntent === this.continuationIntent)
+        await this.stop()
+      throw error
+    }
+  }
+
+  /** Compare and replace the native queue without touching its decoder or
+   * transport. An uncertain reply revokes authority; never replay or rollback
+   * a request that may already have crossed an EOF/user-action boundary. */
+  async rebindQueue(request: NativeQueueRebind): Promise<NativeQueueCommit | null> {
+    const { expected, startIndex, playMode } = request
+    const previousToken = this.queueToken
+    const current = this.queue[expected.index]
+    const selected = request.items[startIndex]
+    const rebind = this.native?.RebindQueue?.bind(this.native)
+    if (
+      !rebind ||
+      !previousToken ||
+      expected.queueToken !== previousToken ||
+      !Number.isInteger(expected.index) ||
+      !Number.isInteger(startIndex) ||
+      !current ||
+      current.id !== expected.id ||
+      current.source !== expected.source ||
+      !selected ||
+      selected.id !== current.id ||
+      selected.source !== current.source ||
+      selected.cueRange?.startSeconds !== current.cueRange?.startSeconds ||
+      selected.cueRange?.endSeconds !== current.cueRange?.endSeconds ||
+      (selected.cueRange?.virtualPregapSeconds ?? 0) !==
+        (current.cueRange?.virtualPregapSeconds ?? 0)
+    )
+      return null
+
+    const nextQueue = request.items.map((item) => ({
+      ...item,
+      ...(item.cueRange ? { cueRange: { ...item.cueRange } } : {})
+    }))
+    const nextJson = JSON.stringify(nextQueue)
+    const expectedJson = JSON.stringify(current)
+    const revision = ++this.transportRevision
+    this.queueToken = ''
+    let applied: unknown
+    try {
+      applied = await rebind(nextJson, startIndex, playMode, expectedJson, expected.index)
+      if (typeof applied !== 'boolean') throw new Error('Invalid native queue rebind reply')
+    } catch (error) {
+      // A late completion cannot revoke a newer queue's token.
+      if (revision === this.transportRevision) this.queueToken = ''
+      throw error
+    }
+    if (!applied) {
+      if (revision === this.transportRevision) this.queueToken = previousToken
+      return null
+    }
+    if (revision !== this.transportRevision) {
+      throw new Error('Native queue handoff superseded; queue authority must be refreshed')
+    }
+    this.queue = nextQueue
+    this.queueJson = nextJson
+    this.queueToken = randomUUID()
+    this.playbackInfo.queueIndex = startIndex
+    this.playbackInfo.playMode = playMode
+    this.invalidateUpcomingTrackCache()
+    this.emit('queue-change', this.queue)
+    return { queueToken: this.queueToken }
   }
 
   /**
@@ -892,6 +1180,7 @@ export class PlaybackController {
   async next(): Promise<void> {
     if (this.queue.length === 0) return
     const revision = ++this.transportRevision
+    this.revokePlaybackEnd()
     this.invalidateUpcomingTrackCache()
     const fallbackIndex = (this.playbackInfo.queueIndex + 1) % this.queue.length
     let nextIndex = fallbackIndex
@@ -925,6 +1214,7 @@ export class PlaybackController {
         nextIndex = nativeInfo.queueIndex
         this.pendingNativeSource = null
         this.playbackInfo = this.mergeNativePlaybackInfo(nativeInfo)
+        this.playbackEndEligible = true
         this.emit('start-file')
         this.publishPlaybackInfo()
         return
@@ -938,6 +1228,7 @@ export class PlaybackController {
   async previous(): Promise<void> {
     if (this.queue.length === 0) return
     const revision = ++this.transportRevision
+    this.revokePlaybackEnd()
     this.invalidateUpcomingTrackCache()
     const fallbackIndex =
       this.playbackInfo.queueIndex <= 0 ? this.queue.length - 1 : this.playbackInfo.queueIndex - 1
@@ -972,6 +1263,7 @@ export class PlaybackController {
         nextIndex = nativeInfo.queueIndex
         this.pendingNativeSource = null
         this.playbackInfo = this.mergeNativePlaybackInfo(nativeInfo)
+        this.playbackEndEligible = true
         this.emit('start-file')
         this.publishPlaybackInfo()
         return
@@ -984,6 +1276,10 @@ export class PlaybackController {
 
   async setPlayMode(mode: PlayMode): Promise<void> {
     if (mode === this.playbackInfo.playMode) return
+    const revision = this.transportRevision
+    const endEligible = this.playbackEndEligible && this.playbackInfo.state === 'playing'
+    this.revokePlaybackEnd()
+    const intent = this.continuationIntent
     // Native QueueManager anchors the current queue item while rebuilding shuffle
     // order, so the new policy affects only the next manual/EOF advancement.
     const playModeSynced = await this.callNativeMaybeAsync(
@@ -998,7 +1294,9 @@ export class PlaybackController {
         this.lastNativeError
       )
     }
+    if (revision !== this.transportRevision || intent !== this.continuationIntent) return
     this.playbackInfo.playMode = mode
+    this.playbackEndEligible = endEligible
     this.invalidateUpcomingTrackCache()
     this.publishPlaybackInfo()
   }
@@ -1211,6 +1509,19 @@ export class PlaybackController {
         ? clampNumber(nativeInfo.playbackRate, 0.5, 2, this.playbackInfo.playbackRate ?? 1)
         : (this.playbackInfo.playbackRate ?? 1)
     const previousPosition = this.playbackInfo.position
+    const nativeOccurrenceChanged =
+      this.pendingNativeSource === null &&
+      nativeInfo.state !== 'stopped' &&
+      nativeInfo.queueIndex >= 0 &&
+      nativeInfo.queueIndex !== this.playbackInfo.queueIndex &&
+      this.queue[nativeInfo.queueIndex]?.source === nativeInfo.source
+    if (nativeOccurrenceChanged) {
+      // Adjacent CUE segments can share a source. Their native slot still marks
+      // a new clock: neither outgoing smoothing nor an unconfirmed outgoing
+      // seek may leak into the incoming occurrence's first progress sample.
+      this.pendingNativePositionTarget = null
+      this.lastNativeReportedPosition = nativeInfo.position
+    }
     const mappedAutoMixPosition =
       nativeInfo.autoMixState === 'mixing' || this.playbackInfo.autoMixState === 'mixing'
     const health = nativeInfo.outputInfo?.diagnostics ?? nativeInfo.diagnostics
@@ -1230,7 +1541,7 @@ export class PlaybackController {
       this.pendingNativePositionTarget = null
     }
     const resolvedPosition =
-      (mappedAutoMixPosition || sourceStarved || sourceFailed) &&
+      (nativeOccurrenceChanged || mappedAutoMixPosition || sourceStarved || sourceFailed) &&
       this.pendingNativePositionTarget === null &&
       Number.isFinite(nativeInfo.position)
         ? Math.max(0, nativeInfo.position)
@@ -1651,21 +1962,25 @@ export class PlaybackController {
           nativeInfo.state !== 'stopped' &&
           ((nativeInfo.source && nativeInfo.source !== previousSource) ||
             (nativeInfo.queueIndex >= 0 && nativeInfo.queueIndex !== previousQueueIndex))
+        const naturalBoundaries = this.sleepBoundaryCursor.consume(nativeInfo.naturalBoundaries)
+        if (naturalBoundaries)
+          for (const boundary of naturalBoundaries) this.emit('sleep-timer-boundary', boundary)
         if (switchedTrack) {
           // A fully delegated native queue advances without a renderer EOF
           // callback. Report its boundary in the main process so sleep timers
           // retain the same semantics as renderer-managed playback.
-          if (this.queue.length > 1) this.emit('sleep-timer-boundary', { boundary: 'trackEnd' })
-          // A looping native queue never stops, so passing the last entry is the
-          // only queue boundary it will ever produce. The renderer path reports
-          // queueEnd right before it wraps (advanceAfterPlaybackEnded), so mirror
-          // that order here — otherwise "stop at end of queue" would never fire
-          // once the queue is delegated.
+          if (naturalBoundaries === null && this.queue.length > 1)
+            this.emit('sleep-timer-boundary', { boundary: 'trackEnd' })
+          // Old bindings can still project SQL boundaries from explicit item
+          // metadata: [global last, first] is a native 0 -> 1, not a wrap.
+          const previousLogicalEnd = this.queue[previousQueueIndex]?.logicalQueueEnd
           if (
+            naturalBoundaries === null &&
             this.queue.length > 1 &&
-            playModeWrapsAtQueueEnd(this.playbackInfo.playMode) &&
-            previousQueueIndex === this.queue.length - 1 &&
-            nativeInfo.queueIndex === 0
+            (previousLogicalEnd ??
+              (playModeWrapsAtQueueEnd(this.playbackInfo.playMode) &&
+                previousQueueIndex === this.queue.length - 1 &&
+                nativeInfo.queueIndex === 0))
           ) {
             this.emit('sleep-timer-boundary', { boundary: 'queueEnd' })
           }
@@ -1697,8 +2012,11 @@ export class PlaybackController {
             // track boundary before they are a queue boundary, so emit both in
             // that order. The following tick sees `wasPlaying === false`,
             // which prevents a duplicate terminal boundary.
-            this.emit('sleep-timer-boundary', { boundary: 'trackEnd' })
-            this.emit('sleep-timer-boundary', { boundary: 'queueEnd' })
+            if (naturalBoundaries === null) {
+              this.emit('sleep-timer-boundary', { boundary: 'trackEnd' })
+              if (this.queue[nativeInfo.queueIndex]?.logicalQueueEnd !== false)
+                this.emit('sleep-timer-boundary', { boundary: 'queueEnd' })
+            }
           }
         }
         return

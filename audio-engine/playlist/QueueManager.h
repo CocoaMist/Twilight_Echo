@@ -58,6 +58,8 @@ class QueueManager {
   std::optional<QueueItem> next();
   std::optional<QueueItem> previous();
   std::optional<QueueItem> advanceAfterEnd();
+  /** True when naturally completing current() completes the logical cycle. */
+  bool currentCompletesQueue() const;
 
   std::string queueJson() const;
   std::string upcomingJson() const;

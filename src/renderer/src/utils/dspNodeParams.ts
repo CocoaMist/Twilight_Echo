@@ -98,6 +98,26 @@ export const nodeCatalog: Array<{
 ]
 
 export const channelLayouts: DspChannelLayout[] = ['mono', 'stereo', '5.1', '7.1']
+
+export const dspNodeDescriptions: Record<DspNodeType, string> = {
+  replayGain: '响度标准化 · 平衡不同曲目的音量',
+  equalizer: '参数均衡 · 精细调整频率与音色',
+  dynamicEqualizer: '动态均衡 · 随信号强度调整频段',
+  convolver: '卷积校正 · 加载耳机或房间脉冲响应',
+  crossfeed: '交叉馈电 · 让耳机声像更自然',
+  channelMatrix: '声道矩阵 · 自定义输入与输出路由',
+  channelStrip: '逐声道调节 · 增益、延迟与极性',
+  bassManagement: '低频管理 · 设置分频与低音通道',
+  gate: '噪声门 · 衰减低于阈值的声音',
+  compressor: '压缩器 · 控制动态与响度起伏',
+  multibandCompressor: '多段压缩 · 分别控制各频段动态',
+  stereoField: '立体声声场 · 宽度、平衡与中侧增益',
+  loudnessContour: '等响度补偿 · 改善低音量听感',
+  truePeakLimiter: '真峰值限制 · 控制峰值与过载',
+  nativePlugin: '原生扩展 · 加载 Native DSP 处理器',
+  vst3Plugin: '效果插件 · 加载已扫描的 VST3',
+  meter: '响度监测 · 测量 EBU R128 与真峰值'
+}
 export const channelLabels: Record<DspChannelLayout, string[]> = {
   mono: ['M'],
   stereo: ['L', 'R'],

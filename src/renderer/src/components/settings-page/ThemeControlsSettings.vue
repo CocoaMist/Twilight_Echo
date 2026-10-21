@@ -8,13 +8,15 @@ import { useExtensionRegistry } from '../../extensions/registry'
 import { getPluginThemeKey } from '../../extensions/themeSelection'
 import { accentColorOptions, colorModeOptions, motionPreferenceOptions } from './types.ts'
 import type { AppTheme, MotionPreference } from '../../types/settings'
+const props = defineProps<{ integrated?: boolean; colorMode?: AppTheme; paletteOnly?: boolean }>()
 
 const emit = defineEmits<{
+  'update:colorMode': [value: AppTheme]
   openThemeStudio: []
   openThemeWorkshop: []
 }>()
 
-const { settings, updateSettings } = useSettingsStore()
+const { settings, updateSettings, lastSettingsError } = useSettingsStore()
 const themeStore = useThemeStore()
 const { themeContributions, uiContributions } = useExtensionRegistry()
 
@@ -37,23 +39,24 @@ const selectedPluginThemeKey = computed(() => {
 })
 
 function setTheme(theme: AppTheme): void {
-  if (settings.value.theme === theme) return
-  void updateSettings({ theme })
+  if ((props.colorMode ?? settings.value.theme) === theme) return
+  if (props.colorMode !== undefined) emit('update:colorMode', theme)
+  else void updateSettings({ theme }).catch(() => undefined)
 }
 
 function setMotionPreference(event: Event): void {
   const motionPreference = (event.target as HTMLSelectElement).value as MotionPreference
-  void updateSettings({ motionPreference })
+  void updateSettings({ motionPreference }).catch(() => undefined)
 }
 
 function setAccentColor(mode: 'light' | 'dark', color: string): void {
   if (mode === 'light') {
     if (settings.value.lightAccentColor === color) return
-    void updateSettings({ accentColor: color, lightAccentColor: color })
+    void updateSettings({ accentColor: color, lightAccentColor: color }).catch(() => undefined)
     return
   }
   if (settings.value.darkAccentColor === color) return
-  void updateSettings({ darkAccentColor: color })
+  void updateSettings({ darkAccentColor: color }).catch(() => undefined)
 }
 
 async function setPluginTheme(event: Event): Promise<void> {
@@ -73,16 +76,18 @@ async function setPluginTheme(event: Event): Promise<void> {
 </script>
 
 <template>
+  <p v-if="!integrated && lastSettingsError" role="alert">{{ lastSettingsError }}</p>
   <div data-setting-id="color-mode" id="setting-color-mode" class="setting-item">
     <div class="setting-copy">
       <strong>深浅色</strong>
     </div>
-    <div class="theme-segment">
+    <div class="theme-segment" role="group" aria-label="配色模式">
       <button
         v-for="option in colorModeOptions"
         :key="option.value"
         type="button"
-        :class="{ active: settings.theme === option.value }"
+        :class="{ active: (colorMode ?? settings.theme) === option.value }"
+        :aria-pressed="(colorMode ?? settings.theme) === option.value"
         @click="setTheme(option.value)"
       >
         <i :class="option.icon"></i>
@@ -91,7 +96,12 @@ async function setPluginTheme(event: Event): Promise<void> {
     </div>
   </div>
   <hr />
-  <div data-setting-id="plugin-theme" id="setting-plugin-theme" class="setting-item">
+  <div
+    v-if="!integrated"
+    data-setting-id="plugin-theme"
+    id="setting-plugin-theme"
+    class="setting-item"
+  >
     <div class="setting-copy">
       <strong>插件主题</strong>
     </div>
@@ -107,10 +117,10 @@ async function setPluginTheme(event: Event): Promise<void> {
       </option>
     </select>
   </div>
-  <hr />
-  <ExperienceSettings />
-  <hr />
-  <div data-setting-id="motion" id="setting-motion" class="setting-item">
+  <hr v-if="!paletteOnly" />
+  <ExperienceSettings v-if="!paletteOnly" />
+  <hr v-if="!paletteOnly" />
+  <div v-if="!paletteOnly" data-setting-id="motion" id="setting-motion" class="setting-item">
     <div class="setting-copy">
       <strong>界面动画</strong>
     </div>
@@ -126,8 +136,12 @@ async function setPluginTheme(event: Event): Promise<void> {
   </div>
   <SettingsGroup
     id="theme-customization"
-    title="自定义主题与配色"
-    description="需要独立设置深浅色配色、创建或编辑主题时展开。"
+    :title="integrated ? '强调色' : '自定义主题与配色'"
+    :description="
+      integrated
+        ? '分别设置当前窗口的浅色和深色强调色。'
+        : '需要独立设置深浅色配色、创建或编辑主题时展开。'
+    "
     :summary="
       '浅色：' +
       (accentColorOptions.find((option) => option.value === settings.lightAccentColor)?.label ??
@@ -137,7 +151,12 @@ async function setPluginTheme(event: Event): Promise<void> {
         settings.darkAccentColor)
     "
   >
-    <div data-setting-id="theme-studio" id="setting-theme-studio" class="setting-item">
+    <div
+      v-if="!integrated"
+      data-setting-id="theme-studio"
+      id="setting-theme-studio"
+      class="setting-item"
+    >
       <div class="setting-copy">
         <strong>主题创意工坊</strong>
       </div>
@@ -146,7 +165,7 @@ async function setPluginTheme(event: Event): Promise<void> {
         打开主题创意工坊
       </button>
     </div>
-    <div data-setting-id="theme-workshop" class="setting-item">
+    <div v-if="!integrated" data-setting-id="theme-workshop" class="setting-item">
       <div class="setting-copy">
         <strong class="workshop-setting-title"
           >主题插件工坊<small class="workshop-beta-tag">BETA</small></strong
@@ -165,7 +184,7 @@ async function setPluginTheme(event: Event): Promise<void> {
         <i class="ph ph-paint-brush" aria-hidden="true"></i>打开主题插件工坊
       </button>
     </div>
-    <hr />
+    <hr v-if="!integrated" />
     <div data-setting-id="accent-light" id="setting-accent-light" class="setting-item">
       <div class="setting-copy">
         <strong>浅色强调色</strong>
@@ -232,8 +251,8 @@ async function setPluginTheme(event: Event): Promise<void> {
   border-radius: 5px;
   background: var(--te-settings-search-bg);
   color: var(--te-settings-text);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--te-type-caption);
+  font-weight: var(--te-type-weight-strong);
   line-height: 1.2;
   letter-spacing: 0.5px;
 }

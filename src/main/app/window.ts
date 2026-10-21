@@ -20,6 +20,7 @@ import {
 import { destroyWindowsSmtc, initializeWindowsSmtc } from '../integrations/windowsSmtc.ts'
 import { ClosePersistenceAttemptGate } from './closePersistence.ts'
 import { isSafeExternalUrl } from '../security/externalUrl.ts'
+import { isTrustedIpcSenderUrl } from '../security/electronSecurity.ts'
 import type { RendererClosePersistenceOutcome } from '../../shared/closePersistence.ts'
 import type { PlaybackSessionSaveOptions } from '../../shared/closePersistence.ts'
 import { afterglowRendererRestoreQueryKey } from '../../shared/afterglowMode.ts'
@@ -27,6 +28,11 @@ import { readWindowState, restoreWindowSize, saveWindowState } from './windowSta
 import { installWindowChromePublisher } from './windowChrome.ts'
 import { installWindowCloseShortcut } from './windowShortcuts.ts'
 import { installMouseHistoryNavigation } from './windowHistoryNavigation.ts'
+import {
+  isDspEditorWindowRequest,
+  dspEditorWindowOptions,
+  registerDspEditorWindow
+} from './dspEditorWindow.ts'
 
 const PLAYBACK_SESSION_SAVE_TIMEOUT_MS = 1800
 const closePersistenceAttemptGate = new ClosePersistenceAttemptGate()
@@ -282,11 +288,45 @@ export function createWindow(options: CreateWindowOptions = {}): BrowserWindow {
     }
   }
 
-  runtime.mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  runtime.mainWindow.webContents.setWindowOpenHandler(({ url, frameName, referrer }) => {
+    if (
+      isDspEditorWindowRequest(url, frameName) &&
+      isTrustedIpcSenderUrl(runtime.mainWindow?.webContents.getURL() ?? '') &&
+      // App documents deliberately use Referrer-Policy: no-referrer.
+      (!referrer.url || referrer.url === runtime.mainWindow?.webContents.getURL())
+    )
+      return {
+        action: 'allow',
+        outlivesOpener: false,
+        overrideBrowserWindowOptions: dspEditorWindowOptions(
+          screen.getDisplayMatching(runtime.mainWindow!.getBounds()).workArea
+        )
+      }
     if (isSafeExternalUrl(url)) {
       void shell.openExternal(url)
     }
     return { action: 'deny' }
+  })
+
+  runtime.mainWindow.webContents.on('did-create-window', (child, details) => {
+    if (!isDspEditorWindowRequest(details.url, details.frameName)) return
+    const owner = runtime.mainWindow!
+    registerDspEditorWindow(owner, child)
+    child.setMenu(null)
+    child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    child.webContents.on('will-navigate', (event) => event.preventDefault())
+    child.once('closed', () => {
+      if (
+        !owner.isDestroyed() &&
+        !runtime.forceQuit &&
+        !runtime.closingAfterPlaybackSessionSave &&
+        !runtime.savingPlaybackSessionBeforeClose
+      ) {
+        if (owner.isMinimized()) owner.restore()
+        owner.show()
+        owner.focus()
+      }
+    })
   })
 
   runtime.mainWindow.webContents.on('will-navigate', (event, url) => {

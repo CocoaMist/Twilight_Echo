@@ -9,6 +9,7 @@ import test from 'node:test'
 import { compileScript, parse } from '@vue/compiler-sfc'
 import ts from 'typescript'
 import { buildMediaPartRows, MEDIA_PART_PAGE_SIZE } from './streaming-page/mediaPartRows.ts'
+import { trackRowKeyAction } from './song-list/trackRowKeyboard.ts'
 
 const require = createRequire(import.meta.url)
 const run = promisify(execFile)
@@ -39,6 +40,10 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
   const directory = await mkdtemp(join(tmpdir(), 'te-issue46-ui-'))
   try {
     const vue = await readFile(require.resolve('vue/dist/vue.global.prod.js'), 'utf8')
+    const multiSelect = ts.transpileModule(
+      await readFile(new URL('./song-list/useTrackMultiSelect.ts', import.meta.url), 'utf8'),
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }
+    ).outputText
     const classifications = ts.transpileModule(
       await readFile(
         new URL('./streaming-page/ncmAlbumClassification.ts', import.meta.url),
@@ -49,6 +54,7 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
     const scripts = await Promise.all([
       component('./TrackInfoDialog.vue', 'TrackInfoDialog'),
       component('./ExplicitBadge.vue', 'ExplicitBadge'),
+      component('./StreamingSearch.vue', 'StreamingSearch'),
       component('./streaming-page/NcmAlbumFilters.vue', 'NcmAlbumFilters'),
       component('./streaming-page/SavedMusicCollections.vue', 'SavedMusicCollections'),
       component('./streaming-page/StreamingSocialStage.vue', 'StreamingSocialStage'),
@@ -68,6 +74,9 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
       const provider = { id: 'ncm', name: 'NetEase', capabilities: ['login'], supportedMethods: ['fetchSavedAlbums', 'fetchSavedArtists'], ui: {} };
       window.fixture = {
         buildMediaPartRows: ${buildMediaPartRows.toString()}, MEDIA_PART_PAGE_SIZE,
+        trackRowKeyAction: ${trackRowKeyAction.toString()},
+        hasDismissLayer: () => false,
+        albumSearchKey: album => String(album.id),
         QRCode: { toDataURL: async () => 'data:image/png;base64,AA==' },
         AnimatedInput: { template: '<input />' }, CoverImg: { template: '<img />' },
         useBackHandler: () => {},
@@ -81,6 +90,7 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
         useProgressiveList: source => ({ visibleItems: computed(source), visibleStart: ref(0), paddingTop: ref(0), totalHeight: computed(() => source().length * 64), listRef: () => {} })
       };
       (() => { const exports = {}; ${classifications}; Object.assign(window.fixture, exports); })();
+      (() => { const exports = {}, require = name => name === 'vue' ? Vue : window.fixture; ${multiSelect}; Object.assign(window.fixture, exports); })();
       ${scripts.join('\n')}
       const tick = async () => { for (let i = 0; i < 2; i++) { await Vue.nextTick(); await new Promise(resolve => setTimeout(resolve, 0)); } };
       const check = (value, message) => { if (!value) throw Error(message) };
@@ -115,6 +125,74 @@ test('real Vue login ignores stale QR replies and list links navigate without pl
         check(artist === 2 && selectedArtist.id === 'artist-2' && played === 0, 'each artist navigates independently without playback');
         document.querySelector('.row-play-btn').click(); check(played === 1, 'play button still plays');
         list.unmount();
+        const press = (row, key, options = {}) => {
+          const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options });
+          row.dispatchEvent(event); return event;
+        };
+        const selectionLists = [];
+        const SelectionList = {
+          setup() {
+            const root = Vue.ref(null);
+            const multi = fixture.useTrackMultiSelect({ tracks: Vue.ref([track]), root });
+            selectionLists.push(multi);
+            return () => Vue.h('section', { ref: root }, [
+              Vue.h('div', { tabindex: 0, class: 'selection-row' }, 'Song'), Vue.h('input')
+            ]);
+          }
+        };
+        const selectionApp = Vue.createApp({ render: () => Vue.h('div', [Vue.h(SelectionList), Vue.h(SelectionList)]) });
+        selectionApp.mount('#list'); await tick();
+        const selectionRows = document.querySelectorAll('.selection-row'); selectionRows[0].focus();
+        check(press(selectionRows[0], 'a', { ctrlKey: true }).defaultPrevented, 'focused list owns select all');
+        check(selectionLists[0].selectedCount.value === 1 && selectionLists[1].selectedCount.value === 0, 'background list stole select all');
+        selectionRows[1].focus(); press(selectionRows[1], 'a', { ctrlKey: true });
+        press(selectionRows[1], 'Escape');
+        check(selectionLists[0].selectedCount.value === 1 && selectionLists[1].selectedCount.value === 0, 'Escape cleared a different list');
+        const input = document.querySelector('#list input'); input.focus();
+        check(!press(input, 'a', { ctrlKey: true }).defaultPrevented, 'list intercepted editable select all');
+        selectionRows[1].focus();
+        const menu = document.createElement('div'); menu.setAttribute('role', 'menu'); document.body.append(menu);
+        check(!press(selectionRows[1], 'a', { ctrlKey: true }).defaultPrevented && selectionLists[1].selectedCount.value === 0, 'list intercepted a menu shortcut');
+        menu.remove(); selectionApp.unmount();
+        // Exercise the real row templates in both streaming stages. Space must
+        // select the original index, not play or bubble into global transport.
+        for (const Stage of [fixture.DetailStage, fixture.StreamingSocialStage]) {
+          const events = [];
+          const keyboardList = Vue.createApp(Stage, {
+            kind: 'artist', activeTab: 'songs', title: 'Artist', trackCountLabel: '1', tracks: [track],
+            trackActivationMode: 'doubleClick', isSelected: () => false,
+            isTrackLiked: () => false, isLiking: () => false, formatTime: () => '3:00',
+            onPlayTrack: (t, i) => events.push(['play', t.id, i]),
+            onTrackClick: (t, i, event) => events.push([event.ctrlKey ? 'select' : 'click', t.id, i])
+          });
+          keyboardList.mount('#list'); await tick();
+          const row = document.querySelector('#list .stage-row'); row.focus();
+          check(document.activeElement === row, 'track row can receive keyboard focus');
+          check(press(row, 'Enter').defaultPrevented, 'Enter is consumed by the row');
+          check(press(row, ' ').defaultPrevented, 'Space is consumed by selection');
+          press(row, ' ', { repeat: true }); press(row, 'Enter', { repeat: true });
+          press(row, 'Enter', { isComposing: true });
+          press(row.querySelector('button'), 'Enter');
+          check(JSON.stringify(events) === JSON.stringify([['play', track.id, 0], ['select', track.id, 0]]), 'row playback, selection, repeats or nested controls are conflated');
+          keyboardList.unmount();
+        }
+        const searchEvents = [];
+        const search = Vue.createApp(fixture.StreamingSearch, {
+          searchType: 'songs', searchResults: [track, { ...track, id: 'ncm:2' }],
+          searchPlaylistsResults: [], searchArtistsResults: [], searchTotal: 2, searchOffset: 0,
+          searchLoading: false, searchError: '', currentTrack: null, trackActivationMode: 'doubleClick',
+          likingTracks: new Set(), isTrackLiked: () => false, formatTime: () => '3:00',
+          onSearchTrackActivate: t => searchEvents.push(['play', t.id]),
+          onSearchTrackClick: (t, event) => searchEvents.push([event.ctrlKey ? 'select' : 'click', t.id])
+        });
+        search.mount('#list'); await tick();
+        const searchRows = document.querySelectorAll('#list .track-row'); searchRows[0].focus();
+        press(searchRows[0], 'Enter'); press(searchRows[0], ' '); press(searchRows[0], ' ', { repeat: true });
+        press(searchRows[0], 'Enter', { ctrlKey: true });
+        press(searchRows[0], 'ArrowDown');
+        check(document.activeElement === searchRows[1], 'search retains arrow navigation');
+        check(JSON.stringify(searchEvents) === JSON.stringify([['play', track.id], ['select', track.id]]), 'search keys conflate playback and selection');
+        search.unmount();
         const biliState = Vue.reactive({ liked: true, loading: false });
         let favoriteClicks = 0;
         const biliTrack = { ...track, id: 'bili:BV1:1', source: 'bili' };

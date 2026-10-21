@@ -454,6 +454,7 @@ HTMLAnchorElement.prototype.click = function () {
 }
 window.createImageBitmap = async () => ({ width: 800, height: 800, close() {} })
 window.api = {
+  library: { getStorageMode: async () => 'json' },
   data: {
     loadPlaylists: async () => envelope(),
     savePlaylists: async (data, expectedRevision) => {

@@ -1,201 +1,178 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import type { DspNodeType, DspScene, DspSceneState } from '../../../../shared/dspGraph.ts'
-import { nodeCatalog, nodeLabel } from '@renderer/utils/dspNodeParams'
-
+import { computed, ref } from 'vue'
+import type { DspNodeType, DspScene } from '../../../../shared/dspGraph.ts'
+import {
+  nodeCatalog,
+  nodeLabel,
+  singletonNodeTypes,
+  dspNodeDescriptions
+} from '@renderer/utils/dspNodeParams'
 const scene = defineModel<DspScene | null>('scene')
-const nodeTypeToAdd = defineModel<DspNodeType>('nodeTypeToAdd')
-
-defineProps<{
-  selectedNodeId: string | null
-  busy: boolean
-  isPinned: boolean
-  snapshotA: boolean
-  state: DspSceneState | null
-  vst3HelpersNotice: string
-  soxrFallbackActive: boolean
-}>()
-
+defineProps<{ selectedNodeId: string | null; busy: boolean }>()
 const emit = defineEmits<{
   selectNode: [id: string]
-  addNode: []
+  addNode: [type: DspNodeType]
   removeNode: [id: string]
   moveNode: [id: string, destinationId: string]
-  apply: []
-  save: []
-  togglePin: []
-  toggleSnapshot: []
-  setOutputTarget: [value: string]
-  setOutputQuality: [value: string]
-  setOutputDither: [value: string]
+  output: []
+  rules: []
 }>()
-
-const draggedNodeId = ref<string | null>(null)
-
-function onDrop(destinationId: string): void {
-  if (draggedNodeId.value) emit('moveNode', draggedNodeId.value, destinationId)
-  draggedNodeId.value = null
+const dragged = ref<string | null>(null)
+const adding = ref(false)
+const query = ref('')
+const category = ref('全部')
+const categories = ['全部', '均衡与校正', '动态处理', '声场与路由', '插件与监测']
+function add(type: DspNodeType): void {
+  emit('addNode', type)
+  adding.value = false
+}
+function group(type: DspNodeType): string {
+  if (['equalizer', 'dynamicEqualizer', 'convolver'].includes(type)) return categories[1]
+  if (
+    [
+      'replayGain',
+      'gate',
+      'compressor',
+      'multibandCompressor',
+      'truePeakLimiter',
+      'loudnessContour'
+    ].includes(type)
+  )
+    return categories[2]
+  if (['nativePlugin', 'vst3Plugin', 'meter'].includes(type)) return categories[4]
+  return categories[3]
+}
+const filtered = computed(() =>
+  nodeCatalog.filter(
+    (item) =>
+      (category.value === '全部' || category.value === group(item.type)) &&
+      `${item.label} ${item.type} ${dspNodeDescriptions[item.type]}`
+        .toLowerCase()
+        .includes(query.value.toLowerCase())
+  )
+)
+function drop(id: string): void {
+  if (dragged.value) emit('moveNode', dragged.value, id)
+  dragged.value = null
+}
+function move(index: number, delta: number): void {
+  const nodes = scene.value?.graph.nodes
+  if (nodes?.[index + delta]) emit('moveNode', nodes[index].id, nodes[index + delta].id)
+}
+function canMove(index: number, delta: number): boolean {
+  const nodes = scene.value?.graph.nodes
+  return (
+    !!nodes?.[index + delta] &&
+    [nodes[index], nodes[index + delta]].every(
+      (node) => !(node.type === 'nativePlugin' && node.pluginAbiVersion === 1)
+    )
+  )
 }
 </script>
-
 <template>
   <section class="graph-pane">
-    <template v-if="scene">
-      <div class="scene-toolbar">
-        <label>名称<input v-model="scene.name" maxlength="64" /></label>
-        <label>优先级<input v-model.number="scene.priority" type="number" step="1" /></label>
-        <label class="switch-field"
-          ><input v-model="scene.enabled" type="checkbox" /> 场景启用</label
-        >
+    <header class="pane-heading">
+      <h2>信号链</h2>
+      <button :aria-expanded="adding" @click="adding = !adding">
+        <i class="pi pi-plus"></i>添加
+      </button>
+    </header>
+    <section v-if="adding" class="node-picker" aria-label="添加处理节点">
+      <input v-model="query" type="search" aria-label="搜索处理器" placeholder="搜索处理器" />
+      <select v-model="category" aria-label="处理器分类">
+        <option v-for="item in categories" :key="item">{{ item }}</option>
+      </select>
+      <div class="node-picker-results">
         <button
-          type="button"
-          class="icon-text-button"
-          :class="{ selected: isPinned }"
-          @click="emit('togglePin')"
+          v-for="item in filtered"
+          :key="item.type"
+          :data-node-type="item.type"
+          :disabled="
+            singletonNodeTypes.has(item.type) &&
+            scene?.graph.nodes.some((node) => node.type === item.type)
+          "
+          @click="add(item.type)"
         >
-          <i class="pi pi-thumbtack"></i>{{ isPinned ? '取消 Pin' : 'Pin 场景' }}
-        </button>
-        <button type="button" class="icon-text-button" @click="emit('toggleSnapshot')">
-          <i class="pi pi-clone"></i>{{ snapshotA ? '恢复 A' : '记录 A' }}
-        </button>
-        <button type="button" class="primary-button" :disabled="busy" @click="emit('apply')">
-          <i class="pi pi-play"></i>应用
-        </button>
-        <button type="button" class="icon-text-button" :disabled="busy" @click="emit('save')">
-          <i class="pi pi-save"></i>保存
+          <i :class="item.icon"></i
+          ><span
+            >{{ item.label }}<small>{{ dspNodeDescriptions[item.type] }}</small></span
+          >
         </button>
       </div>
-
-      <div v-if="state?.requiresPcmFallback && !state.dsdPcmFallbackApplied" class="dsd-notice">
-        <i class="pi pi-info-circle"></i
-        ><span>当前 DSD Direct/DoP 保持直通。应用 DSP 需要明确确认 PCM 回退。</span>
-      </div>
-
-      <div v-if="vst3HelpersNotice" class="dsd-notice" role="status">
-        <i class="pi pi-exclamation-triangle"></i>
-        <span>{{ vst3HelpersNotice }}</span>
-      </div>
-
-      <div class="graph-heading">
-        <div>
-          <h2>串行处理图</h2>
-          <span>{{ scene.graph.nodes.length }} 个节点</span>
-        </div>
-        <div class="node-add">
-          <select v-model="nodeTypeToAdd">
-            <option v-for="item in nodeCatalog" :key="item.type" :value="item.type">
-              {{ item.label }}
-            </option></select
-          ><button type="button" class="icon-button" title="添加节点" @click="emit('addNode')">
-            <i class="pi pi-plus"></i>
+      <p v-if="!filtered.length" class="muted">未找到处理器</p>
+    </section>
+    <button class="signal-end" @click="emit('rules')">
+      <i class="pi pi-sign-in"></i>输入 <small>场景与自动匹配</small>
+    </button>
+    <ol class="node-list" aria-label="串行处理顺序">
+      <li
+        v-for="(node, index) in scene?.graph.nodes ?? []"
+        :key="node.id"
+        class="graph-node"
+        :class="{ selected: node.id === selectedNodeId, bypassed: !node.enabled }"
+        :draggable="!(node.type === 'nativePlugin' && node.pluginAbiVersion === 1)"
+        @dragstart="dragged = node.id"
+        @dragend="dragged = null"
+        @dragover.prevent
+        @drop.prevent="drop(node.id)"
+      >
+        <button
+          class="node-select"
+          :aria-pressed="node.id === selectedNodeId"
+          @click="emit('selectNode', node.id)"
+          @keydown.alt.up.prevent="move(index, -1)"
+          @keydown.alt.down.prevent="move(index, 1)"
+        >
+          <span class="node-index">{{ String(index + 1).padStart(2, '0') }}</span
+          ><span
+            ><strong>{{ nodeLabel(node.type) }}</strong
+            ><small>{{
+              node.type === 'nativePlugin' && node.pluginAbiVersion === 1
+                ? 'ABI v1 · 固定尾端'
+                : node.enabled
+                  ? '已启用'
+                  : '已旁路'
+            }}</small></span
+          >
+        </button>
+        <div class="node-actions">
+          <button
+            class="icon-button small"
+            :disabled="!canMove(index, -1)"
+            title="上移 · Alt+↑"
+            @click="move(index, -1)"
+          >
+            <i class="pi pi-angle-up"></i>
+          </button>
+          <button
+            class="icon-button small"
+            :disabled="!canMove(index, 1)"
+            title="下移 · Alt+↓"
+            @click="move(index, 1)"
+          >
+            <i class="pi pi-angle-down"></i>
+          </button>
+          <button
+            class="icon-button small"
+            :title="node.enabled ? '旁路节点' : '启用节点'"
+            :aria-pressed="node.enabled"
+            @click="node.enabled = !node.enabled"
+          >
+            <i class="pi pi-power-off"></i>
+          </button>
+          <button
+            class="icon-button small danger"
+            title="删除节点"
+            @click="emit('removeNode', node.id)"
+          >
+            <i class="pi pi-times"></i>
           </button>
         </div>
-      </div>
-
-      <section class="output-stage">
-        <label
-          >Output rate
-          <select
-            :value="String(scene.graph.outputStage.targetSampleRate)"
-            @change="emit('setOutputTarget', ($event.target as HTMLSelectElement).value)"
-          >
-            <option value="device">Device</option>
-            <option value="44100">44.1 kHz</option>
-            <option value="48000">48 kHz</option>
-            <option value="88200">88.2 kHz</option>
-            <option value="96000">96 kHz</option>
-            <option value="176400">176.4 kHz</option>
-            <option value="192000">192 kHz</option>
-          </select>
-        </label>
-        <label
-          >SRC
-          <select
-            :value="scene.graph.outputStage.resamplerQuality"
-            @change="emit('setOutputQuality', ($event.target as HTMLSelectElement).value)"
-          >
-            <option value="native">Native</option>
-            <option value="high">High</option>
-            <option value="ultra">Ultra</option>
-            <option value="soxrHq">
-              SoX HQ{{ soxrFallbackActive ? '（不可用，回退 Ultra）' : '' }}
-            </option>
-            <option value="soxrVhq">
-              SoX VHQ (最高){{ soxrFallbackActive ? '（不可用，回退 Ultra）' : '' }}
-            </option>
-          </select>
-        </label>
-        <label
-          >Dither
-          <select
-            :value="scene.graph.outputStage.dither"
-            @change="emit('setOutputDither', ($event.target as HTMLSelectElement).value)"
-          >
-            <option value="off">Off</option>
-            <option value="tpdf">TPDF</option>
-            <option value="highpassTpdf">High-pass TPDF</option>
-            <option value="noiseShaped">Noise-shaped</option>
-          </select>
-        </label>
-        <label class="switch-field"
-          ><input v-model="scene.graph.outputStage.safetyClamp" type="checkbox" /> Safety
-          clamp</label
-        >
-      </section>
-
-      <TransitionGroup name="dsp-node" tag="div" class="node-list" aria-label="DSP graph nodes">
-        <div v-for="node in scene.graph.nodes" :key="node.id" class="dsp-node-slot">
-          <article
-            draggable="true"
-            class="graph-node"
-            data-te-interactive
-            :class="{ selected: node.id === selectedNodeId, bypassed: !node.enabled }"
-            @dragstart="draggedNodeId = node.id"
-            @dragover.prevent
-            @drop="onDrop(node.id)"
-            @click="emit('selectNode', node.id)"
-          >
-            <i class="pi pi-bars drag-handle" aria-hidden="true"></i>
-            <i
-              :class="nodeCatalog.find((item) => item.type === node.type)?.icon ?? 'pi pi-circle'"
-            ></i>
-            <div>
-              <strong>{{ nodeLabel(node.type) }}</strong
-              ><small>{{ node.id }}</small>
-            </div>
-            <button
-              type="button"
-              class="icon-button small"
-              :title="node.enabled ? '旁路节点' : '启用节点'"
-              @click.stop="node.enabled = !node.enabled"
-            >
-              <i :class="node.enabled ? 'pi pi-eye' : 'pi pi-eye-slash'"></i>
-            </button>
-            <button
-              type="button"
-              class="icon-button small danger"
-              title="移除节点"
-              @click.stop="emit('removeNode', node.id)"
-            >
-              <i class="pi pi-times"></i>
-            </button>
-          </article>
-        </div>
-      </TransitionGroup>
-      <p class="v1-note">
-        ABI v1 原生插件固定在图末端、输出安全保护之前；仅 ABI v2 节点可参与此排序。
-      </p>
-    </template>
+      </li>
+    </ol>
+    <p v-if="!scene?.graph.nodes.length" class="empty-detail">添加处理器，构建串行信号链。</p>
+    <button class="signal-end" @click="emit('output')">
+      <i class="pi pi-sign-out"></i>输出级 <small>采样率 / 抖动 / 安全保护</small>
+    </button>
   </section>
 </template>
-
-<style scoped>
-.dsp-node-move {
-  transition: transform var(--te-motion-hover) var(--te-ease-soft);
-}
-
-html[data-te-motion='reduced'] .dsp-node-slot {
-  transform: none !important;
-  transition: none !important;
-}
-</style>

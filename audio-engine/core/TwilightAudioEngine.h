@@ -23,6 +23,13 @@ enum class PlaybackState {
   Paused
 };
 
+struct NaturalPlaybackBoundaries {
+  uint64_t trackSerial = 0;
+  uint64_t queueSerial = 0;
+  uint64_t trackTimeMs = 0;
+  uint64_t queueTimeMs = 0;
+};
+
 struct PlaybackInfo {
   PlaybackState state = PlaybackState::Stopped;
   double positionSeconds = 0.0;
@@ -33,6 +40,7 @@ struct PlaybackInfo {
   uint64_t appliedConfigRevision = 0;
   int queueIndex = -1;
   uint64_t queueRevision = 0;
+  NaturalPlaybackBoundaries naturalBoundaries;
   int upcomingQueueIndex = -1;
   std::string playMode = "sequential";
   std::string source;
@@ -130,6 +138,9 @@ class TwilightAudioEngine {
   TAE_Result setOutputBackend(const std::string& backendId);
 
   TAE_Result loadQueue(const std::string& queueJson, int startIndex);
+  TAE_Result rebindQueue(const std::string& queueJson, int startIndex,
+                        const std::string& mode, const std::string& expectedJson,
+                        int expectedIndex, int* outApplied);
   /**
    * Append resolved queue entries without reloading the current queue. The
    * returned first index is the absolute native index of the first appended
@@ -207,6 +218,7 @@ class TwilightAudioEngine {
   void publishStateLocked() const;
   void applyPipelineStatusLocked(const PipelineStatus& status);
   void applyClockPipelineStatusLocked(const PipelineStatus& status);
+  void recordNaturalBoundaryLocked();
   void updatePerfectLocked();
   bool shouldReleaseOutputLocked() const;
   void markOutputReleasedLocked();

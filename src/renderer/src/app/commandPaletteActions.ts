@@ -25,7 +25,7 @@ export function createCommandPaletteActions(controls: {
     length: number
     canUndo: boolean
     undoLabel: string
-    undo: () => boolean
+    undo: () => boolean | Promise<boolean>
     clear: () => void
     showSessions: () => void
     showHistory: () => void
@@ -109,9 +109,9 @@ export function createCommandPaletteActions(controls: {
     },
     {
       id: 'dsp',
-      title: '打开 DSP 机架',
-      description: '查看处理链与场景',
-      terms: 'dsp 音效 机架 场景',
+      title: '打开 DSP 工作台',
+      description: '均衡器、效果链、资料与插件、监测',
+      terms: 'dsp workbench dsp rack 音效 工作台 机架 场景 均衡器 效果链 资料 插件 监测',
       group: '操作',
       run: navigation.openDspRackPage
     },
