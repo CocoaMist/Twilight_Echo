@@ -1,3 +1,43 @@
+/* Appearance editors share a text hierarchy without changing existing page sizes.
+   Recompute at each portal boundary so local text-size previews stay live. */
+:is(
+  .appearance-page,
+  .appearance-editor,
+  .appearance-inspector,
+  .appearance-floating-properties,
+  .appearance-floating-host,
+  .appearance-popover,
+  .studio-context-popup,
+  .theme-studio-page,
+  .workshop-page
+) {
+  --te-type-page-title: calc(var(--te-font-size-body, 14px) * 28 / 14);
+  --te-type-section-title: calc(var(--te-font-size-body, 14px) * 20 / 14);
+  --te-type-headline: calc(var(--te-font-size-body, 14px) * 17 / 14);
+  --te-type-body: calc(var(--te-font-size-body, 14px) * 15 / 14);
+  --te-type-caption: calc(var(--te-font-size-body, 14px) * 13 / 14);
+  --te-type-toolbar: var(--te-type-caption);
+  --te-type-icon: calc(var(--te-font-size-body, 14px) * 16 / 14);
+  --te-type-weight-regular: 400;
+  --te-type-weight-medium: 500;
+  --te-type-weight-strong: 600;
+  --te-type-line-title: 1.25;
+  --te-type-line-body: 1.5;
+  --te-type-line-caption: 1.45;
+  --te-space-related: 8px;
+  --te-space-group: 24px;
+  --te-space-section: 32px;
+  --te-page-content-max: 1280px;
+  --te-page-gutter: clamp(24px, 4vw, 48px);
+  --te-page-inset: max(
+    var(--te-page-gutter),
+    calc((100% - var(--te-page-content-max)) / 2 + var(--te-page-gutter))
+  );
+  --te-page-top: 32px;
+  --te-page-bottom: max(32px, calc(var(--te-playbar-bottom-clearance, 0px) + 24px));
+  --te-content-shadow-color: #121820;
+}
+
 :root {
   --te-chrome-frosted-solid: rgb(250 251 253);
   --te-chrome-frosted-surface: rgb(250 251 253 / 80%);

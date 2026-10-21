@@ -222,7 +222,7 @@ test('plugin center uses the settings wallpaper painter over streaming content',
   assert.match(overlay, /v-show="settingsOverlayVisible && !appearanceFullWindowPreview"/)
   assert.match(
     appSource,
-    /showSettingsPage\.value \|\| showPluginPage\.value \|\| settingsOverlayLeaves\.value > 0/
+    /showSettingsPage\.value\s*\|\|\s*showAppearancePage\.value\s*\|\|\s*showPluginPage\.value\s*\|\|\s*settingsOverlayLeaves\.value > 0/
   )
   assert.match(overlay, /<PluginPage\s+v-if="showPluginPage"/)
 })

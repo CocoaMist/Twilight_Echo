@@ -5,6 +5,7 @@ const iconSlots = {
   navigation: 'navigation.menu',
   search: 'navigation.search',
   settings: 'navigation.settings',
+  appearance: 'navigation.appearance',
   puzzle_piece: 'navigation.plugin',
   arrow_left: 'navigation.back',
   person: 'navigation.person',
