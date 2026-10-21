@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import AnimatedInput from '../AnimatedInput.vue'
 import CreateAggregatePlaylistDialog from './CreateAggregatePlaylistDialog.vue'
 import CoverImg from '../CoverImg.vue'
@@ -15,6 +15,7 @@ import { formatDuration } from '../song-list/formatDuration'
 import { useSongListVirtualScroll } from '../song-list/useSongListVirtualScroll'
 import { useSongListGridRendering } from '../song-list/useSongListGridRendering'
 import { trackRowKeyAction } from '../song-list/trackRowKeyboard'
+import { useLocatePlayingTrack } from '../song-list/useLocatePlayingTrack'
 import { useBackHandler } from '../../app/useBackStack.ts'
 import { useMusicStore } from '../../stores/useMusicStore'
 import { usePlayerStore } from '../../stores/usePlayerStore'
@@ -244,6 +245,7 @@ const {
   onScroll,
   scrollTop,
   viewportHeight,
+  scrollToTrack,
   updateViewportHeight
 } = useSongListVirtualScroll({
   displayTracks,
@@ -320,6 +322,25 @@ watch(
 // 这两个只在模板里以 ref="…" 字符串出现，vue-tsc 不把那当使用（SongList 同样处理）。
 void containerRef.value
 void tbodyRef.value
+
+useLocatePlayingTrack({
+  containerRef,
+  tbodyRef,
+  displayTracks,
+  currentTrack,
+  enabled: computed(() => props.active && !!activePlaylist.value),
+  rowHeight,
+  playingRowSelector: '.is-playing',
+  database: { enabled: databaseEnabled, locate: database.locate }
+})
+watch(
+  () => databasePage.value.page,
+  (page) => {
+    if (page && page.anchorIndex !== undefined && page.anchorIndex >= 0)
+      void nextTick(() => scrollToTrack(page.anchorIndex!))
+  },
+  { flush: 'post' }
+)
 
 // ─── 音源展示 ──────────────────────────────────────────────────────────────
 function sourceLabel(source: string): string {
@@ -811,7 +832,7 @@ function playAll(): void {
               <tr
                 v-if="!track"
                 class="aggregate-row aggregate-row-placeholder"
-                :style="{ height: rowHeight - 4 + 'px', display: 'flex' }"
+                :style="{ height: rowHeight + 'px', display: 'flex' }"
                 aria-hidden="true"
               >
                 <td class="col-index">{{ rowNumber(index) }}</td>
@@ -825,7 +846,7 @@ function playAll(): void {
                 :aria-label="`${track.title} · ${track.artist}，按回车播放`"
                 :aria-current="currentTrack?.id === track.id ? 'true' : undefined"
                 :class="{ 'is-playing': currentTrack?.id === track.id }"
-                :style="{ height: rowHeight - 4 + 'px', display: 'flex' }"
+                :style="{ height: rowHeight + 'px', display: 'flex' }"
                 @click="onRowClick(track)"
                 @keydown="onRowKeydown(track, $event)"
                 @dblclick="onRowDoubleClick(track)"

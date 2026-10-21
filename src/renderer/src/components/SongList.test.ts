@@ -565,15 +565,3 @@ test('selected tracks await one queue command before reporting success, without 
   assert.match(source, /@click="appendActionTracksToQueue\(contextTracksForAction\(\)\)"/)
   assert.match(source, /@click="appendActionTracksToQueue\(\)"/)
 })
-
-test('song list exposes the shared locate-current action for every table view', () => {
-  const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
-
-  assert.match(source, /const currentTrackIndex = computed\(/)
-  assert.match(source, /!showTable\.value/)
-  assert.match(source, /const canLocateCurrentTrack = computed\(/)
-  assert.match(source, /:data-te-locate-current="canLocateCurrentTrack \? 'true' : undefined"/)
-  assert.match(source, /@te-locate-current="locateCurrentTrack"/)
-  assert.match(source, /scrollToTrack\(index\)/)
-  assert.match(source, /:aria-current="currentTrack\?\.id === track\.id \? 'true' : undefined"/)
-})

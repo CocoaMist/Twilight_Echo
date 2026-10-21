@@ -300,6 +300,7 @@ export function createLibraryAggregatePlaylist(
     retryVariants: variants.retry,
     retrySources: sources.retry,
     rowFor: currentRow,
+    locate: pages.locate,
     playbackQuery(track?: Track): LibraryQuery | null {
       const row = track ? currentRow(track) : null,
         page = row?.page ?? pages.state.value.page,

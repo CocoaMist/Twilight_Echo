@@ -1,6 +1,6 @@
 import {
-  SCROLL_CONTROL_STACK_GAP,
   SCROLL_TOP_BUTTON_SIZE,
+  SCROLL_TOP_EDGE_GAP,
   isScrollTopContainerEligible,
   isScrollTopRevealed,
   resolveScrollTopAnchor,
@@ -10,48 +10,94 @@ import {
 import { scrollMotionBehavior } from '../app/scrollMotion'
 
 /**
- * Shared floating scroll controls for every scroll container in the window.
+ * One shared "back to top" control for every scroll container in the window.
  *
  * The renderer has dozens of independent scroll containers spread across pages,
  * drawers and dialogs, so this is delegated the same way autoHideScrollbars.ts
  * delegates: a document-level listener resolves whichever container the user is
- * scrolling or pointing at, and fixed-position controls are anchored to that
- * container's bottom-right corner. Containers opt out with
+ * scrolling or pointing at, and a single fixed-position button is anchored to
+ * that container's bottom-right corner. Containers opt out with
  * `data-te-scroll-top="off"`; `inert` subtrees (the theme studio live preview)
  * are skipped automatically.
- *
- * A song page may opt into the locate action with
- * `data-te-locate-current="true"`. The second control then appears below
- * back-to-top and emits `te-locate-current` on the active scroller. The page owns
- * both the availability rule and the actual row lookup, so this module never
- * needs to know about player or library stores.
  */
 
-const TOP_BUTTON_CLASS = 'te-scroll-top'
-const LOCATE_BUTTON_CLASS = 'te-scroll-locate'
-const LOCATE_ATTRIBUTE = 'data-te-locate-current'
-const LOCATE_EVENT = 'te-locate-current'
+const BUTTON_CLASS = 'te-scroll-top'
 const SKIP_SELECTOR = '[inert], [data-te-scroll-top="off"]'
 /** Geometry and occlusion only change on layout, not while scrolling. */
 const GEOMETRY_REFRESH_INTERVAL_MS = 200
-/** Outlasts `--te-motion-page` so a page swap cannot leave the controls behind. */
+/** Outlasts `--te-motion-page` so a page swap cannot leave the control behind. */
 const NAVIGATION_SETTLE_MS = 460
 
-let topButton: HTMLButtonElement | null = null
-let locateButton: HTMLButtonElement | null = null
+let button: HTMLButtonElement | null = null
+let controls: HTMLDivElement | null = null
 let scroller: HTMLElement | null = null
 let anchor: ScrollTopAnchor | null = null
+let upperAnchor: ScrollTopAnchor | null = null
 let cachedClientHeight = 0
 let cachedScrollHeight = 0
 let geometryStamp = Number.NEGATIVE_INFINITY
 let appliedAnchor = ''
 let visible = false
-let locateAvailable = false
 let frame: number | null = null
 let pointerFrame: number | null = null
 let pendingPointerTarget: Element | null = null
 let settleTimer: number | null = null
-let locateAttributeObserver: MutationObserver | null = null
+
+export interface ScrollViewport {
+  top: number
+  bottom: number
+}
+
+interface ScrollCompanion {
+  label: string
+  icon: string
+  isVisible: (viewport: ScrollViewport) => boolean
+  activate: (viewport: ScrollViewport) => void
+}
+
+const companions = new Map<HTMLElement, { action: ScrollCompanion; button: HTMLButtonElement }>()
+let viewport: ScrollViewport | null = null
+const COMPANION_GAP = 16
+
+/** A page owns the action; the shared controls own positioning and occlusion. */
+export function registerScrollToTopCompanion(
+  target: HTMLElement,
+  action: ScrollCompanion
+): { refresh: () => void; dispose: () => void } {
+  const element = createButton('te-scroll-companion', action.label, action.icon, () => {
+    refreshGeometry(target, performance.now())
+    if (anchor && viewport && action.isVisible(viewport)) action.activate(viewport)
+  })
+  element.style.top = `${SCROLL_TOP_BUTTON_SIZE + COMPANION_GAP}px`
+  const registration = { action, button: element }
+  companions.get(target)?.button.remove()
+  companions.set(target, registration)
+  activateCompanion(target)
+  return {
+    refresh: () => {
+      if (!scroller || !scroller.isConnected || scroller.clientHeight === 0)
+        activateCompanion(target)
+      invalidateGeometry()
+    },
+    dispose: () => {
+      element.remove()
+      if (companions.get(target) === registration) companions.delete(target)
+      invalidateGeometry()
+    }
+  }
+}
+
+function activateCompanion(target: HTMLElement): void {
+  // Cached pages can register while hidden. A virtual list may also resolve to
+  // the non-scrolling document while its actual scrollport is unmeasurable.
+  if (
+    target.isConnected &&
+    target.clientHeight > 0 &&
+    (target !== document.scrollingElement || target.scrollHeight - target.clientHeight >= 8) &&
+    !target.closest(SKIP_SELECTOR)
+  )
+    setScroller(target)
+}
 
 function isVerticallyScrollable(element: HTMLElement): boolean {
   if (element.scrollHeight <= element.clientHeight + 1) return false
@@ -70,63 +116,50 @@ function findScrollTarget(start: Element | null): HTMLElement | null {
   return null
 }
 
-function isControlElement(element: Element | null): boolean {
-  return (
-    !!element &&
-    ((!!topButton && (element === topButton || topButton.contains(element))) ||
-      (!!locateButton && (element === locateButton || locateButton.contains(element))))
-  )
+function ensureButton(): HTMLButtonElement {
+  if (button) return button
+  button = createButton('', '回到开头', 'ph ph-arrow-up', onButtonClick)
+  return button
 }
 
-function isLocateAvailable(target: HTMLElement | null): boolean {
-  return target?.dataset.teLocateCurrent === 'true'
+function ensureControls(): HTMLDivElement {
+  if (controls) return controls
+  controls = document.createElement('div')
+  controls.className = 'te-scroll-controls'
+  controls.style.width = `${SCROLL_TOP_BUTTON_SIZE}px`
+  controls.style.height = `${SCROLL_TOP_BUTTON_SIZE}px`
+  document.body.append(controls)
+  return controls
 }
 
-function ensureTopButton(): HTMLButtonElement {
-  if (topButton) return topButton
+function createButton(
+  className: string,
+  label: string,
+  iconClass: string,
+  activate: () => void
+): HTMLButtonElement {
   const element = document.createElement('button')
   element.type = 'button'
-  element.className = TOP_BUTTON_CLASS
-  element.title = '回到开头'
-  element.setAttribute('aria-label', '回到开头')
+  element.className = `${BUTTON_CLASS} ${className}`.trim()
+  element.title = label
+  element.setAttribute('aria-label', label)
   element.dataset.teScrollTopVisible = 'false'
   // Size stays here rather than in base.css: the anchor math reserves exactly
   // this box, so a theme resizing the control would misplace it.
   element.style.width = `${SCROLL_TOP_BUTTON_SIZE}px`
   element.style.height = `${SCROLL_TOP_BUTTON_SIZE}px`
   const icon = document.createElement('i')
-  icon.className = 'ph ph-arrow-up'
+  icon.className = iconClass
   icon.setAttribute('aria-hidden', 'true')
   element.append(icon)
-  element.addEventListener('click', onTopClick)
-  document.body.append(element)
-  topButton = element
-  return element
-}
-
-function ensureLocateButton(): HTMLButtonElement {
-  if (locateButton) return locateButton
-  const element = document.createElement('button')
-  element.type = 'button'
-  element.className = LOCATE_BUTTON_CLASS
-  element.title = '定位到正在播放的歌曲'
-  element.setAttribute('aria-label', '定位到正在播放的歌曲')
-  element.dataset.teScrollLocateVisible = 'false'
-  element.style.width = `${SCROLL_TOP_BUTTON_SIZE}px`
-  element.style.height = `${SCROLL_TOP_BUTTON_SIZE}px`
-  const icon = document.createElement('i')
-  icon.className = 'pi pi-map-marker'
-  icon.setAttribute('aria-hidden', 'true')
-  element.append(icon)
-  element.addEventListener('click', onLocateClick)
-  document.body.append(element)
-  locateButton = element
+  element.addEventListener('click', activate)
+  ensureControls().append(element)
   return element
 }
 
 /**
  * The bar overlaps the bottom of every full-height page container, so the
- * controls have to stop above it. An auto-hidden mini bar keeps its layout box
+ * control has to stop above it. An auto-hidden mini bar keeps its layout box
  * while translated away — the shell publishes both hidden states as flags.
  */
 function resolvePlayerBarObstruction(): ScrollTopObstruction | null {
@@ -140,115 +173,129 @@ function resolvePlayerBarObstruction(): ScrollTopObstruction | null {
 }
 
 /**
- * Hit-testing the spot the controls want answers the only question that matters
+ * Hit-testing the spot the control wants answers the only question that matters
  * — "would a click there land in this container?" — without knowing anybody's
  * z-index. It covers a container left scrolled under a full overlay (the
  * now-playing page, a modal, the settings surface) and a panel that only takes
  * the corner, such as the playback queue drawer above the player bar. The
- * controls themselves are filtered out of the stack so they cannot mask their
- * own probes.
+ * control itself is filtered out of the stack so it cannot mask its own probe.
  */
 function isCovered(target: HTMLElement, at: ScrollTopAnchor): boolean {
   const x = Math.round(at.left + SCROLL_TOP_BUTTON_SIZE / 2)
   const y = Math.round(at.top + SCROLL_TOP_BUTTON_SIZE / 2)
   if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return true
   for (const hit of document.elementsFromPoint(x, y)) {
-    if (isControlElement(hit)) continue
+    if (isControl(hit)) continue
     return !(hit === target || target.contains(hit) || hit.contains(target))
   }
   return true
 }
 
-function locateAnchorFor(at: ScrollTopAnchor): ScrollTopAnchor {
-  return {
-    left: at.left,
-    top: at.top + SCROLL_TOP_BUTTON_SIZE + SCROLL_CONTROL_STACK_GAP
+function isControl(target: Element): boolean {
+  if (button && (target === button || button.contains(target))) return true
+  for (const companion of companions.values()) {
+    if (target === companion.button || companion.button.contains(target)) return true
   }
+  return false
 }
 
 function refreshGeometry(target: HTMLElement, now: number): void {
   geometryStamp = now
   anchor = null
+  upperAnchor = null
+  viewport = null
   cachedClientHeight = target.clientHeight
   cachedScrollHeight = target.scrollHeight
-  if (
-    !isScrollTopContainerEligible({
-      clientHeight: cachedClientHeight,
-      scrollHeight: cachedScrollHeight
-    })
-  ) {
+  const eligible = companions.has(target)
+    ? cachedClientHeight >= SCROLL_TOP_BUTTON_SIZE * 2 + COMPANION_GAP + SCROLL_TOP_EDGE_GAP * 2 &&
+      cachedScrollHeight - cachedClientHeight >= 8
+    : isScrollTopContainerEligible({
+        clientHeight: cachedClientHeight,
+        scrollHeight: cachedScrollHeight
+      })
+  if (!eligible) {
     return
   }
+  const rect = target.getBoundingClientRect()
+  const obstruction = resolvePlayerBarObstruction()
   const candidate = resolveScrollTopAnchor({
-    rect: target.getBoundingClientRect(),
+    rect,
     clientWidth: target.clientWidth,
     viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight,
-    obstruction: resolvePlayerBarObstruction(),
-    controlCount: locateAvailable ? 2 : 1
+    obstruction
   })
   if (!candidate) return
   if (isCovered(target, candidate)) return
-  // A panel can cover only the lower part of the stack. Keep both controls off
-  // screen unless every visible control has a clickable target.
-  if (locateAvailable && isCovered(target, locateAnchorFor(candidate))) return
   anchor = candidate
-}
-
-function positionLocateButton(): void {
-  if (!locateButton || !anchor) return
-  const next = locateAnchorFor(anchor)
-  locateButton.style.left = `${next.left}px`
-  locateButton.style.top = `${next.top}px`
+  // Song pages extend behind the title bar and publish its clearance as scroll padding.
+  const topClearance = Number.parseFloat(window.getComputedStyle(target).scrollPaddingTop) || 0
+  viewport = {
+    top: Math.max(0, rect.top + target.clientTop + topClearance),
+    bottom: Math.min(window.innerHeight, rect.top + target.clientTop + target.clientHeight)
+  }
+  const titleBar = document.querySelector<HTMLElement>('.title-bar')?.getBoundingClientRect()
+  if (
+    titleBar &&
+    titleBar.left < rect.right &&
+    titleBar.right > rect.left &&
+    titleBar.top <= viewport.top &&
+    titleBar.bottom > viewport.top
+  )
+    viewport.top = titleBar.bottom
+  if (obstruction && obstruction.left < rect.right && obstruction.right > rect.left) {
+    viewport.bottom = Math.min(viewport.bottom, obstruction.top)
+  }
+  if (companions.has(target)) {
+    const above = {
+      left: candidate.left,
+      top: candidate.top - SCROLL_TOP_BUTTON_SIZE - COMPANION_GAP
+    }
+    if (above.top >= viewport.top && !isCovered(target, above)) upperAnchor = above
+  }
 }
 
 function applyAnchor(next: ScrollTopAnchor): void {
-  const element = ensureTopButton()
+  const element = ensureControls()
   const key = `${next.left}:${next.top}`
-  if (appliedAnchor !== key) {
-    appliedAnchor = key
-    element.style.left = `${next.left}px`
-    element.style.top = `${next.top}px`
-  }
-  positionLocateButton()
+  if (appliedAnchor === key) return
+  appliedAnchor = key
+  element.style.left = `${next.left}px`
+  element.style.top = `${next.top}px`
 }
 
 function setVisible(next: boolean): void {
+  if (visible === next) return
   visible = next
-  if (next) ensureTopButton().dataset.teScrollTopVisible = 'true'
-  else if (topButton) topButton.dataset.teScrollTopVisible = 'false'
-  if (!next) setLocateVisible(false)
-}
-
-function setLocateVisible(next: boolean): void {
-  const shouldShow = next && locateAvailable && visible
-  if (shouldShow) {
-    ensureLocateButton().dataset.teScrollLocateVisible = 'true'
-    positionLocateButton()
-  } else if (locateButton) {
-    locateButton.dataset.teScrollLocateVisible = 'false'
-  }
+  if (!next && !button) return
+  ensureButton().dataset.teScrollTopVisible = next ? 'true' : 'false'
 }
 
 function update(): void {
   const target = scroller
-  const nextLocateAvailable = isLocateAvailable(target)
-  if (nextLocateAvailable !== locateAvailable) {
-    locateAvailable = nextLocateAvailable
-    // The stack grows/shrinks, so its reserved height and hit-test anchors move.
-    geometryStamp = Number.NEGATIVE_INFINITY
-    appliedAnchor = ''
-    if (!locateAvailable) setLocateVisible(false)
-  }
+  const companion = target && companions.get(target)
   if (!target || !target.isConnected || target.clientHeight === 0) {
     setVisible(false)
+    if (companion) companion.button.dataset.teScrollTopVisible = 'false'
     return
   }
   const now = performance.now()
   if (now - geometryStamp >= GEOMETRY_REFRESH_INTERVAL_MS) refreshGeometry(target, now)
   if (!anchor) {
     setVisible(false)
+    if (companion) companion.button.dataset.teScrollTopVisible = 'false'
     return
+  }
+  const showCompanion = !!(companion && viewport && companion.action.isVisible(viewport))
+  // Reserve the lower slot for this page even while its action is hidden.
+  // Both absolute-positioned buttons share one anchor, so neither can jump.
+  applyAnchor(
+    companion
+      ? { left: anchor.left, top: anchor.top - SCROLL_TOP_BUTTON_SIZE - COMPANION_GAP }
+      : anchor
+  )
+  if (companion) {
+    companion.button.dataset.teScrollTopVisible = String(showCompanion)
   }
   const revealed = isScrollTopRevealed({
     scrollTop: target.scrollTop,
@@ -259,9 +306,12 @@ function update(): void {
     setVisible(false)
     return
   }
-  applyAnchor(anchor)
+  const topAnchor = companion ? upperAnchor : anchor
+  if (!topAnchor) {
+    setVisible(false)
+    return
+  }
   setVisible(true)
-  setLocateVisible(locateAvailable)
 }
 
 function scheduleUpdate(): void {
@@ -274,8 +324,9 @@ function scheduleUpdate(): void {
 
 function setScroller(next: HTMLElement | null): void {
   if (scroller === next) return
+  const previous = scroller && companions.get(scroller)
+  if (previous) previous.button.dataset.teScrollTopVisible = 'false'
   scroller = next
-  locateAvailable = isLocateAvailable(next)
   anchor = null
   appliedAnchor = ''
   geometryStamp = Number.NEGATIVE_INFINITY
@@ -299,18 +350,12 @@ function scheduleSettleCheck(): void {
   }, NAVIGATION_SETTLE_MS)
 }
 
-function onTopClick(): void {
+function onButtonClick(): void {
   const target = scroller
   if (!target) return
   // Visibility is left to the scroll events the animation emits, so the control
   // fades exactly when the offset drops back under the reveal distance.
   target.scrollTo({ top: 0, behavior: scrollMotionBehavior() })
-}
-
-function onLocateClick(): void {
-  const target = scroller
-  if (!target || !isLocateAvailable(target)) return
-  target.dispatchEvent(new CustomEvent(LOCATE_EVENT))
 }
 
 function onScroll(event: Event): void {
@@ -334,8 +379,8 @@ function applyPointerTarget(): void {
   const target = pendingPointerTarget
   pendingPointerTarget = null
   if (!target) return
-  // Pointing at a control itself must never retarget or hide it.
-  if (isControlElement(target)) return
+  // Pointing at the control itself must never retarget or hide it.
+  if (isControl(target)) return
   const next = findScrollTarget(target)
   // Hovering non-scrollable chrome keeps whichever container is already active.
   if (next) setScroller(next)
@@ -370,21 +415,13 @@ function onVisibilityChange(): void {
   if (document.hidden) {
     cancelPendingUpdates()
     setVisible(false)
+    for (const companion of companions.values()) {
+      companion.button.dataset.teScrollTopVisible = 'false'
+    }
   } else invalidateGeometry()
 }
 
-function onLocateAttributeChange(records: MutationRecord[]): void {
-  if (!scroller) return
-  if (records.some((record) => record.target === scroller)) invalidateGeometry()
-}
-
 export function installScrollToTopButton(): () => void {
-  locateAttributeObserver = new MutationObserver(onLocateAttributeChange)
-  locateAttributeObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: [LOCATE_ATTRIBUTE],
-    subtree: true
-  })
   document.addEventListener('scroll', onScroll, { capture: true, passive: true })
   document.addEventListener('pointermove', onPointerMove, { passive: true })
   document.addEventListener('click', scheduleSettleCheck, { capture: true, passive: true })
@@ -399,20 +436,20 @@ export function installScrollToTopButton(): () => void {
     document.removeEventListener('keydown', onKeyDown, true)
     document.removeEventListener('visibilitychange', onVisibilityChange)
     window.removeEventListener('resize', invalidateGeometry)
-    locateAttributeObserver?.disconnect()
-    locateAttributeObserver = null
     cancelPendingUpdates()
-    topButton?.removeEventListener('click', onTopClick)
-    locateButton?.removeEventListener('click', onLocateClick)
-    topButton?.remove()
-    locateButton?.remove()
-    topButton = null
-    locateButton = null
+    button?.removeEventListener('click', onButtonClick)
+    button?.remove()
+    for (const companion of companions.values()) companion.button.remove()
+    companions.clear()
+    controls?.remove()
+    controls = null
+    viewport = null
+    button = null
     scroller = null
     anchor = null
+    upperAnchor = null
     appliedAnchor = ''
     visible = false
-    locateAvailable = false
     geometryStamp = Number.NEGATIVE_INFINITY
   }
 }

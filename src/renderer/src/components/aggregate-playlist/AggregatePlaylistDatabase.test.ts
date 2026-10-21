@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import test, { type TestContext } from 'node:test'
 import ts from 'typescript'
-import { computed, ref, reactive, watch } from 'vue'
+import { computed, nextTick, ref, reactive, watch } from 'vue'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import { createLibraryStorageState } from '../../stores/library/libraryStorageState.ts'
 import { createLibraryAggregatePlaylist } from '../../stores/library/libraryAggregatePlaylist.ts'
@@ -85,8 +85,10 @@ function fixture(t: TestContext, mode: 'sqlite' | 'json' | 'unavailable' = 'sqli
     ).outputText,
     {
       computed,
+      nextTick,
       ref,
       Error,
+      useLocatePlayingTrack() {},
       watch: (...args: Parameters<typeof watch>) => {
         const stop = watch(...args)
         stops.push(stop)
@@ -149,6 +151,7 @@ function fixture(t: TestContext, mode: 'sqlite' | 'json' | 'unavailable' = 'sqli
         scrollTop: ref(0),
         viewportHeight: ref(720),
         updateViewportHeight() {},
+        scrollToTrack() {},
         visibleTracks: displayTracks,
         totalHeight: ref(0),
         paddingTop: ref(0),

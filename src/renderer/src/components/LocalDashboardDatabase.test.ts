@@ -119,6 +119,7 @@ function fixture(t: TestContext, mode: 'json' | 'sqlite' = 'sqlite', preview = f
       computed,
       ref,
       Error,
+      useDomTrackLocator() {},
       watch: (...args: Parameters<typeof watch>) => {
         const stop = watch(...args)
         stops.push(stop)

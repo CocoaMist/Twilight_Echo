@@ -11,6 +11,7 @@ import {
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { useEqualizerHistory } from '../composables/useEqualizerHistory.ts'
+import { computed, ref } from 'vue'
 import { createDspFactoryScene, type DspSceneState } from '../../../shared/dspGraph.ts'
 
 const page = readFileSync(new URL('./EqualizerPage.vue', import.meta.url), 'utf8')
@@ -108,6 +109,164 @@ test('live EQ creates an absent active-scene EQ, stacks OPRA once and requires e
   context.loadedSceneId = 'old-device-scene'
   await assert.rejects(sync(settings), /活动场景已改变/)
   assert.equal(writes, 2)
+})
+
+function createPersistenceHarness() {
+  const initial = {
+    audioProcessing: {
+      ...defaultAudioProcessing,
+      eqMode: 'parametric' as const,
+      eqBands: cloneBands(defaultAudioProcessing.eqBands)
+    },
+    audioEqPresets: [] as { name: string; eqBands: typeof defaultAudioProcessing.eqBands }[],
+    headphoneCompensation: {
+      enabled: true,
+      preampDb: -3,
+      bands: cloneBands(defaultAudioProcessing.eqBands)
+    }
+  }
+  let persisted = structuredClone(initial)
+  const appSettings = ref(structuredClone(initial))
+  const scenes: unknown[] = []
+  const context = {
+    Error,
+    appSettings,
+    userPresets: computed(() => appSettings.value.audioEqPresets),
+    headphoneCompensation: computed(() => appSettings.value.headphoneCompensation),
+    opraCompensationEnabled: computed(() => appSettings.value.headphoneCompensation.enabled),
+    audioProcessing: ref(initial.audioProcessing),
+    presetName: ref('First'),
+    presetError: ref(''),
+    opraError: ref(''),
+    opraApplyingEqId: ref(''),
+    props: { embedded: false },
+    loadedSceneId: null,
+    saving: ref(false),
+    presetMenuOpen: ref(false),
+    commitChain: Promise.resolve(),
+    finishParametricEdits() {},
+    cloneBands,
+    window: {
+      api: {
+        settings: {
+          update: async (patch: Partial<typeof initial>) => {
+            // Model contextBridge's clone before any preload sanitization runs.
+            persisted = { ...persisted, ...structuredClone(patch) }
+            return structuredClone(persisted)
+          }
+        },
+        audioEngine: {
+          getDspSceneState: async () => ({
+            activeSceneId: 'main',
+            pinnedSceneId: 'main',
+            scenes: [{ id: 'main', graph: { nodes: [{ type: 'equalizer', params: {} }] } }]
+          }),
+          setDspScenes: async (value: unknown) => {
+            scenes.push(structuredClone(value))
+          }
+        }
+      }
+    },
+    console: { error() {} }
+  }
+  const declarations = ['saveEqPreset', 'disableOpraCompensation', 'syncActiveSceneEq']
+    .map((name) => {
+      const declaration = page.match(new RegExp(`async function ${name}\\([\\s\\S]*?\\n\\}`))?.[0]
+      assert.ok(declaration)
+      return stripTypeScriptTypes(declaration)
+    })
+    .join('\n')
+  const actions = runInNewContext(
+    `${declarations}\n({saveEqPreset,disableOpraCompensation,syncActiveSceneEq})`,
+    context
+  ) as {
+    saveEqPreset(): Promise<void>
+    disableOpraCompensation(): Promise<void>
+    syncActiveSceneEq(settings: typeof initial.audioProcessing): Promise<void>
+  }
+  return { context, actions, scenes, persisted: () => persisted }
+}
+
+test('saving successive presets sends cloneable snapshots of existing reactive bands', async () => {
+  const { context, actions, persisted } = createPersistenceHarness()
+  await actions.saveEqPreset()
+  context.presetName.value = 'Second'
+  context.audioProcessing.value.eqBands[0].gain = 5
+  await actions.saveEqPreset()
+  assert.deepEqual(
+    persisted().audioEqPresets.map((preset) => preset.name),
+    ['First', 'Second']
+  )
+  assert.equal(persisted().audioEqPresets[0].eqBands[0].gain, 0)
+  assert.equal(persisted().audioEqPresets[1].eqBands[0].gain, 5)
+  assert.equal(context.presetError.value, '')
+  assert.equal(context.saving.value, false)
+})
+
+test('preset persistence failure preserves the name and exposes a retryable error', async () => {
+  const { context, actions } = createPersistenceHarness()
+  const update = context.window.api.settings.update
+  context.window.api.settings.update = async () => {
+    throw new Error('disk full')
+  }
+  await actions.saveEqPreset()
+  assert.equal(context.appSettings.value.audioEqPresets.length, 0)
+  assert.equal(context.presetName.value, 'First')
+  assert.match(context.presetError.value, /disk full/)
+  assert.equal(context.saving.value, false)
+  context.window.api.settings.update = update
+  await actions.saveEqPreset()
+  assert.equal(context.presetError.value, '')
+  assert.equal(context.appSettings.value.audioEqPresets.length, 1)
+})
+
+test('disabling OPRA persists reactive bands and synchronizes the manual scene', async () => {
+  const { context, actions, scenes, persisted } = createPersistenceHarness()
+  await actions.disableOpraCompensation()
+  assert.equal(persisted().headphoneCompensation.enabled, false)
+  assert.equal(context.appSettings.value.headphoneCompensation.enabled, false)
+  assert.equal(context.opraError.value, '')
+  assert.equal(scenes.length, 1)
+  assert.deepEqual(
+    (scenes[0] as { graph: { nodes: { params: { bands: unknown[] } }[] } }[])[0].graph.nodes[0]
+      .params.bands,
+    structuredClone(defaultAudioProcessing.eqBands)
+  )
+})
+
+test('failed OPRA persistence keeps compensation enabled and exposes the failure', async () => {
+  const { context, actions, scenes, persisted } = createPersistenceHarness()
+  context.window.api.settings.update = async () => {
+    throw new Error('permission denied')
+  }
+  await actions.disableOpraCompensation()
+  assert.equal(persisted().headphoneCompensation.enabled, true)
+  assert.equal(context.appSettings.value.headphoneCompensation.enabled, true)
+  assert.match(context.opraError.value, /permission denied/)
+  assert.equal(scenes.length, 0)
+})
+
+test('scene synchronization clones reactive bands with and without OPRA', async () => {
+  const { context, actions, scenes } = createPersistenceHarness()
+  await actions.syncActiveSceneEq(context.audioProcessing.value)
+  context.appSettings.value.headphoneCompensation.enabled = false
+  await actions.syncActiveSceneEq(context.audioProcessing.value)
+  assert.equal(scenes.length, 2)
+})
+
+test('OPRA scene failure is reported after persistence and a successful retry clears it', async () => {
+  const { context, actions, persisted } = createPersistenceHarness()
+  const setDspScenes = context.window.api.audioEngine.setDspScenes
+  context.window.api.audioEngine.setDspScenes = async () => {
+    throw new Error('DSP unavailable')
+  }
+  await actions.disableOpraCompensation()
+  assert.equal(persisted().headphoneCompensation.enabled, false)
+  assert.equal(context.appSettings.value.headphoneCompensation.enabled, false)
+  assert.match(context.opraError.value, /DSP unavailable/)
+  context.window.api.audioEngine.setDspScenes = setDspScenes
+  await actions.disableOpraCompensation()
+  assert.equal(context.opraError.value, '')
 })
 
 test('history keyboard shortcuts leave text undo and modified band shortcuts untouched', () => {

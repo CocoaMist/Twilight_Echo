@@ -17,7 +17,7 @@ window.runExternalPlaylistImportTests=async screenshot=>{
     playlists:shallowRef([]),tracks:ref([]),persistedWrites:0,
     createExternalPlaylist(document,transient=false){const id=`playlist-${imported.length+1}`;const playlist={id,name:document.name,trackIds:[],createdAt:'',...(transient?{transient:true}:{}),imported:{version:1,source:document.source,entries:document.songs.map((original,position)=>({entryId:`entry-${position+1}`,position,original,revision:0,resolution:{state:'pending'}})),generation:'generation',membershipRevision:0,complete:true}};this.playlists.value=[...this.playlists.value,playlist];if(!transient)this.persistedWrites++;imported.push({id,document,transient});return id},
     saveExternalPlaylist(id){const playlist=this.playlists.value.find(item=>item.id===id);delete playlist.transient;this.persistedWrites++;return id},discardExternalPlaylist(id){this.playlists.value=this.playlists.value.filter(item=>item.id!==id)},
-    appendExternalPlaylistPage(){return true},setExternalPlaylistReadError(){return true},refreshExternalPlaylist(){return 'copy'},removeExternalEntries(){},bindExternalEntry(){},applyExternalResolutions(){return true}
+    appendExternalPlaylistPage(){return true},setExternalPlaylistReadError(){return true},refreshExternalPlaylist(){return 'copy'},removeExternalEntries(){/* Entry editing is outside this import fixture. */},bindExternalEntry(){/* Source matching is stubbed by the resolved entries below. */},applyExternalResolutions(){return true}
   }
   window.api={
     playlistImport:{chooseFile:async()=>importDocument,readPage:async()=>({songs:[],total:0,nextOffset:0,hasMore:false}),cancelRead:async()=>true},
@@ -47,7 +47,7 @@ window.runExternalPlaylistImportTests=async screenshot=>{
   ]}}
   window.auditMusic.playlists.value=[playlist];window.auditMusic.tracks.value=[track]
   window.auditPlayer={playTrack:(item,queue)=>playCalls.push({item,queue})}
-  window.auditService={run(){},stop(){},schedule(_source,action){return action()}}
+  window.auditService={run(){/* Matching results are supplied by the fixture. */},stop(){/* No background matching is started. */},schedule(_source,action){return action()}}
   const detail=createApp(defineComponent({setup:()=>()=>h(ImportedPlaylistDetail,{playlistId:imported[0].id,onBack:()=>{},onNavigate:()=>{}})}))
   detail.mount(document.body.appendChild(document.createElement('div')));await new Promise(resolve=>setTimeout(resolve,320));await settle()
   const visibleRows=document.querySelectorAll('.song-row:not(.table-heading)')

@@ -7,6 +7,7 @@ import type { Track } from '../../types/music'
 import type { MediaProviderPlaylistSummary } from '../../providers/mediaProvider'
 import type { StreamingPageTab } from '../../app/navigationPages'
 import { resolveTimeGreeting } from '../../utils/timeGreeting'
+import { useDomTrackLocator } from '@renderer/composables/useDomTrackLocator'
 
 const props = defineProps<{
   providers: ProviderInfo[]
@@ -26,6 +27,7 @@ const props = defineProps<{
   isPlaying: boolean
   pendingPlaylist: string | null
 }>()
+useDomTrackLocator('locatorRoot', () => props.currentTrackId ?? null)
 const emit = defineEmits<{
   'select-provider': [id: string]
   play: [track: Track, queue: Track[]]
@@ -79,7 +81,7 @@ const primaryLabel = computed(() => {
 </script>
 
 <template>
-  <main class="online-home" aria-label="音乐首页">
+  <main ref="locatorRoot" class="online-home" aria-label="音乐首页">
     <div class="online-home-inner">
       <header class="online-heading">
         <h1>{{ greeting }}</h1>
@@ -176,6 +178,7 @@ const primaryLabel = computed(() => {
           <button
             v-for="track in recent"
             :key="track.id"
+            :data-te-track-id="track.id"
             type="button"
             class="online-track"
             :class="{ 'is-current': currentTrackId === track.id }"
@@ -282,6 +285,7 @@ const primaryLabel = computed(() => {
               <button
                 v-for="(track, index) in tracks.slice(0, 6)"
                 :key="track.id"
+                :data-te-track-id="track.id"
                 class="online-track"
                 :class="{ 'is-current': currentTrackId === track.id }"
                 type="button"

@@ -95,6 +95,7 @@ import { useSongListGridRendering } from './song-list/useSongListGridRendering'
 import { usePlaylistLifecycleActions } from './song-list/usePlaylistLifecycleActions.ts'
 import { useSongListSearch } from './song-list/useSongListSearch'
 import { useSongListVirtualScroll } from './song-list/useSongListVirtualScroll'
+import { useLocatePlayingTrack } from './song-list/useLocatePlayingTrack'
 import { useTrackMultiSelect } from './song-list/useTrackMultiSelect'
 import {
   createSongListActionSource,
@@ -970,18 +971,6 @@ const isCollectionGrid = computed(
   () => showGrid.value && (props.category === 'artists' || props.category === 'albums')
 )
 
-const currentTrackIndex = computed(() => {
-  const trackId = currentTrack.value?.id
-  if (!trackId || !showTable.value) return -1
-  return tableTracks.value.findIndex((track) => track.id === trackId)
-})
-
-const canLocateCurrentTrack = computed(() =>
-  databaseTableEnabled.value
-    ? !!currentTrack.value &&
-      (isPlaylistDetail.value || getLogicalTrackSource(currentTrack.value) === 'local')
-    : currentTrackIndex.value >= 0
-)
 const collectionViewPreferences = new LibraryCollectionViewPreferences()
 const collectionViewState = ref<LibraryCollectionViewState>(
   collectionViewPreferences.read(props.category)
@@ -2677,6 +2666,29 @@ watch(
   { flush: 'post' }
 )
 
+useLocatePlayingTrack({
+  containerRef,
+  tbodyRef,
+  displayTracks,
+  // Application playlists and device history can retain online snapshots.
+  libraryTracks: computed(() =>
+    props.category === 'playlists' || props.category === 'recent'
+      ? displayTracks.value
+      : tracks.value
+  ),
+  currentTrack,
+  enabled: computed(
+    () =>
+      showTable.value &&
+      !isSwitching.value &&
+      (!databaseTableEnabled.value ||
+        isPlaylistDetail.value ||
+        (!!currentTrack.value && getLogicalTrackSource(currentTrack.value) === 'local'))
+  ),
+  rowHeight,
+  database: { enabled: databaseTableEnabled, locate: locateCurrentTrack }
+})
+
 function collectionLetterDisabled(letter: string): boolean {
   return !availableIndexLetters.value.has(letter)
 }
@@ -2794,10 +2806,10 @@ function locateCurrentTrack(): void {
     databasePages.locate(currentTrack.value.id)
     return
   }
-  const index = currentTrackIndex.value
-  if (index < 0) return
-  scrollToTrack(index)
+  const index = tableTracks.value.findIndex((track) => track.id === currentTrack.value?.id)
+  if (index >= 0) scrollToTrack(index)
 }
+
 watch(
   () => databasePageState.value.page,
   (page) => {
@@ -2818,9 +2830,7 @@ watch(
       'playlist-library': category === 'playlists' && showGrid
     }"
     :style="{ height: '100vh' }"
-    :data-te-locate-current="canLocateCurrentTrack ? 'true' : undefined"
     @scroll="onSongListScroll"
-    @te-locate-current="locateCurrentTrack"
   >
     <div v-if="pendingTagRecheckPaths.length" class="tag-recheck-notice" role="status">
       <span>{{ repairMessage }}</span>
