@@ -424,6 +424,75 @@ window.runScrollTopChecks = async () => {
   await frames(2)
   if (locator.getAnimations().length || getComputedStyle(locator).opacity !== '0')
     fail('off motion preference must hide locator immediately')
+
+  // Background registration must not activate a hidden cached scrollport or
+  // the non-scrolling document fallback of an unmeasurable virtual list.
+  locateVisible = true; companion.refresh()
+  await settle()
+  const foregroundBox = locator.getBoundingClientRect()
+  const cached = document.createElement('div')
+  cached.className = 'probe'
+  cached.style.cssText = 'display:none;left:0;top:0;width:52vw;height:100vh'
+  cached.innerHTML = '<div class="filler"></div>'
+  document.body.append(cached)
+  const cachedCompanion = registerScrollToTopCompanion(cached, {
+    label: 'Cached locator probe', icon: 'ph ph-crosshair',
+    isVisible: () => true, activate: () => {}
+  })
+  const cachedLocator = document.querySelector('[aria-label="Cached locator probe"]')
+  await settle()
+  if (locator.dataset.teScrollTopVisible !== 'true' || !shown())
+    fail('hidden registration stole the foreground scroll controls')
+  near(locator.getBoundingClientRect().top, foregroundBox.top, 'foreground anchor after hidden registration')
+  cachedCompanion.refresh()
+  await settle()
+  if (locator.dataset.teScrollTopVisible !== 'true') fail('hidden refresh stole the foreground locator')
+  if (document.scrollingElement.scrollHeight - document.scrollingElement.clientHeight >= 8)
+    fail('document fallback fixture must not scroll')
+  const documentCompanion = registerScrollToTopCompanion(document.scrollingElement, {
+    label: 'Document locator probe', icon: 'ph ph-crosshair',
+    isVisible: () => true, activate: () => {}
+  })
+  await settle()
+  if (locator.dataset.teScrollTopVisible !== 'true' || !shown())
+    fail('non-scrolling document registration stole the foreground controls')
+  documentCompanion.dispose()
+
+  page.style.display = 'none'
+  cachedCompanion.refresh()
+  await settle()
+  if (cachedLocator.dataset.teScrollTopVisible === 'true') fail('hidden refresh activated a hidden scrollport')
+  cached.style.display = ''
+  cachedCompanion.refresh()
+  await settle()
+  if (cachedLocator.dataset.teScrollTopVisible !== 'true') fail('revealing the cached scrollport did not activate its action')
+  if (locator.dataset.teScrollTopVisible !== 'false') fail('previous page retained its locator after navigation')
+  page.style.display = ''
+  cached.style.display = 'none'
+  companion.refresh()
+  await settle()
+  if (locator.dataset.teScrollTopVisible !== 'true' || !shown()) fail('returning to the foreground page did not restore its controls')
+  cachedCompanion.dispose()
+
+  // A visible dialog can register during loading, before it needs to scroll.
+  // Its later refresh must still take over from the page underneath it.
+  cached.innerHTML = ''
+  cached.style.display = ''
+  const loadingCompanion = registerScrollToTopCompanion(cached, {
+    label: 'Loading locator probe', icon: 'ph ph-crosshair',
+    isVisible: () => true, activate: () => {}
+  })
+  await settle()
+  if (cached.scrollHeight !== cached.clientHeight) fail('loading fixture must not scroll initially')
+  cached.innerHTML = '<div class="filler"></div>'
+  loadingCompanion.refresh()
+  await settle()
+  if (document.querySelector('[aria-label="Loading locator probe"]').dataset.teScrollTopVisible !== 'true')
+    fail('loaded dialog did not activate its locator over the previous page')
+  loadingCompanion.dispose()
+  cached.remove()
+  companion.refresh()
+  await settle()
   companion.dispose()
 
   html.dataset.teMotion = 'off'

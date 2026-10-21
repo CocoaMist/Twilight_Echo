@@ -72,10 +72,11 @@ export function registerScrollToTopCompanion(
   const registration = { action, button: element }
   companions.get(target)?.button.remove()
   companions.set(target, registration)
-  setScroller(target)
+  activateCompanion(target)
   return {
     refresh: () => {
-      if (!scroller || !scroller.isConnected || scroller.clientHeight === 0) setScroller(target)
+      if (!scroller || !scroller.isConnected || scroller.clientHeight === 0)
+        activateCompanion(target)
       invalidateGeometry()
     },
     dispose: () => {
@@ -84,6 +85,18 @@ export function registerScrollToTopCompanion(
       invalidateGeometry()
     }
   }
+}
+
+function activateCompanion(target: HTMLElement): void {
+  // Cached pages can register while hidden. A virtual list may also resolve to
+  // the non-scrolling document while its actual scrollport is unmeasurable.
+  if (
+    target.isConnected &&
+    target.clientHeight > 0 &&
+    (target !== document.scrollingElement || target.scrollHeight - target.clientHeight >= 8) &&
+    !target.closest(SKIP_SELECTOR)
+  )
+    setScroller(target)
 }
 
 function isVerticallyScrollable(element: HTMLElement): boolean {

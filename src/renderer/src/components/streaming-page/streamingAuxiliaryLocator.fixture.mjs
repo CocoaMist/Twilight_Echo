@@ -1,4 +1,4 @@
-import { createApp, h, nextTick, ref } from 'vue'
+import { Teleport, createApp, h, nextTick, ref } from 'vue'
 import StreamingSearch from '@renderer/components/StreamingSearch.vue'
 import NcmCloudPanel from '@renderer/components/NcmCloudPanel.vue'
 import { installScrollToTopButton } from '@renderer/utils/scrollToTopButton.ts'
@@ -36,6 +36,9 @@ const cloudSongs = Array.from({ length: 24 }, (_, index) => ({
 const currentCloud = ref(null)
 const showSearch = ref(true)
 const showCloud = ref(true)
+const cachedCloudMounted = ref(false)
+const cachedCloudVisible = ref(false)
+const cachedCurrentCloud = ref('cloud-18')
 const searchEvents = []
 const cloudEvents = []
 const state = {
@@ -48,6 +51,41 @@ const state = {
   showCloud,
   searchEvents,
   cloudEvents
+}
+// Keep background loads in a separate component, like the cached StreamingPage instances.
+const CachedCloudPage = {
+  render: () =>
+    cachedCloudMounted.value &&
+    h(Teleport, { to: 'body' }, [
+      h(
+        'div',
+        {
+          id: 'cached-cloud-region',
+          style: {
+            display: cachedCloudVisible.value ? 'block' : 'none',
+            position: 'fixed',
+            inset: '0',
+            overflowY: 'auto',
+            padding: '16px',
+            background: 'var(--te-app-bg)'
+          }
+        },
+        [
+          h(NcmCloudPanel, {
+            songs: cloudSongs,
+            total: cloudSongs.length,
+            loading: false,
+            loadingMore: false,
+            hasMore: false,
+            error: '',
+            selectedFiles: [],
+            transferTasks: {},
+            currentTrackId: cachedCurrentCloud.value,
+            onPlay: (song) => cloudEvents.push(['play', song])
+          })
+        ]
+      )
+    ])
 }
 const app = createApp({
   render: () =>
@@ -97,7 +135,8 @@ const app = createApp({
             onPlayAll: () => cloudEvents.push(['playAll']),
             onDownload: (song) => cloudEvents.push(['download', song])
           })
-        ])
+        ]),
+      h(CachedCloudPage)
     ])
 })
 app.config.errorHandler = (error) => {
@@ -220,6 +259,66 @@ window.runAuxLocatorChecks = async () => {
   const cloudBefore = state.cloudEvents.length
   await centerMatches(cloud)
   expect(state.cloudEvents.length === cloudBefore, 'cloud locator invoked the row playback action')
+
+  // Cached pages can finish loading and mount a list while their v-show parent is hidden.
+  await scroll(500)
+  expect(shown(), 'foreground cloud row should be offscreen before the cached list mounts')
+  const arrow = document.querySelector('[aria-label="回到开头"]')
+  expect(arrow?.dataset.teScrollTopVisible === 'true', 'foreground back-to-top should be visible')
+  const foregroundTop = shell().scrollTop
+  cachedCloudMounted.value = true
+  await settle()
+  expect(
+    document.querySelector('#cached-cloud-region').clientHeight === 0,
+    'cached page must be hidden'
+  )
+  expect(shown(), 'mounting a hidden cloud list stole the foreground locator')
+  expect(arrow.dataset.teScrollTopVisible === 'true', 'mounting a hidden list hid back-to-top')
+  cachedCurrentCloud.value = 'cloud-19'
+  await settle()
+  expect(shown(), 'refreshing a hidden cloud list stole the foreground locator')
+  expect(shell().scrollTop === foregroundTop, 'background mounting changed foreground scroll')
+  await centerMatches(cloud)
+  const centeredForegroundTop = shell().scrollTop
+
+  // Revealing the cached page must activate its locator without pointer or scroll input.
+  shell().style.display = 'none'
+  cachedCloudVisible.value = true
+  await settle()
+  const cachedPage = document.querySelector('#cached-cloud-region')
+  const hiddenForegroundTop = shell().scrollTop
+  const cachedLocator = [...document.querySelectorAll('.te-scroll-companion')].find(
+    (button) => button.dataset.teScrollTopVisible === 'true'
+  )
+  expect(
+    cachedLocator && cachedLocator !== companion,
+    'revealed cached page did not activate its locator'
+  )
+  expect(companion.dataset.teScrollTopVisible === 'false', 'hidden foreground retained its locator')
+  cachedLocator.click()
+  await settle()
+  const cachedRow = cachedPage.querySelector('[data-te-track-id="cloud-19"]')
+  const cachedRect = cachedRow.getBoundingClientRect()
+  expect(
+    cachedRect.top >= 0 && cachedRect.bottom <= innerHeight - 70,
+    'cached locator did not reveal its row'
+  )
+  expect(
+    cachedLocator.dataset.teScrollTopVisible === 'false',
+    'revealed cached row retained its locator'
+  )
+  expect(
+    shell().scrollTop === hiddenForegroundTop,
+    'cached locator scrolled the hidden foreground page'
+  )
+  expect(state.cloudEvents.length === cloudBefore, 'cached locator triggered playback')
+  shell().style.display = ''
+  cachedCloudMounted.value = false
+  await settle()
+  expect(
+    shell().scrollTop === centeredForegroundTop,
+    'returning from cache changed foreground scroll'
+  )
 
   // Removing one component must keep the shared group alive for the other root.
   state.currentCloud.value = null
