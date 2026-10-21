@@ -5,6 +5,7 @@ import {
   closeSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -27,6 +28,38 @@ import { loadMusicLibraryDocument, persistMusicLibraryDocument } from './library
 
 const WORKER_MESSAGE_TIMEOUT_MS = 30_000
 const WORKER_TERMINATION_TIMEOUT_MS = 5_000
+
+test('scan worker preserves GIF folder covers and rejects invalid GIF signatures', async (t) => {
+  for (const signature of ['GIF87a', 'GIF89a', 'GIF00a']) {
+    await t.test(signature, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'twilight-scan-gif-'))
+      const bytes = Buffer.from(
+        'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+        'base64'
+      )
+      bytes.write(signature, 0, 'latin1')
+      writeTaggedWav(join(root, 'audio.wav'))
+      writeFileSync(join(root, 'cover.gif'), bytes)
+      const child = await startWorker()
+      try {
+        const response = await sendScan(child, { ...baseRequest(root), mode: 'full' })
+        assert.equal(response.ok, true)
+        if (!response.ok) return
+        const track = response.value.parsedTracks[0] as Record<string, unknown>
+        if (signature === 'GIF00a') assert.equal(track.cover, null)
+        else {
+          assert.match(String(track.cover), /^cover:\/\/[a-f0-9]+\.gif$/)
+          const name = String(track.cover).slice('cover://'.length)
+          assert.deepEqual(readFileSync(join(root, 'covers', name)), bytes)
+        }
+      } finally {
+        await terminateWorker(child)
+        assert.ok(root.startsWith(join(tmpdir(), 'twilight-scan-gif-')))
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+  }
+})
 
 test('scan worker reads duration and trailing tags across a large audio payload', async () => {
   const root = mkdtempSync(join(tmpdir(), 'twilight-scan-seek-'))

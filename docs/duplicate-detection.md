@@ -14,8 +14,11 @@ rendering every member at once.
 
 Evidence is applied from strongest to weakest:
 
-1. Canonical local path and complete-file SHA-256 are exact evidence. SHA-256 is streamed only
-   after the main process has resolved the track through the authorized local-library path policy.
+1. Canonical local path and complete-file SHA-256 are exact evidence only for the same source
+   segment. CUE ranges (including pregap values), SACD subtracks, and whole-container tracks
+   remain distinct; an identical container does not make its different songs duplicates.
+   SHA-256 is streamed only after the main process has resolved the track through the authorized
+   local-library path policy.
 2. A fingerprint is acoustic evidence only when the scanner explicitly labels it
    `evidence: 'verifiedAcoustic'`. The host does not currently generate acoustic fingerprints.
 3. Legacy, missing-provenance, or metadata-derived fingerprints are `metadataCandidate` groups
@@ -41,6 +44,19 @@ journal recovery. Results are presented per path as success, failed, rolled back
 attempted. Only confirmed successes refresh the renderer's cached title/artist/album fields.
 
 ## Performance Evidence
+
+In the SQLite development preview, the application owner reads a complete, revision-fenced
+candidate projection from its existing database worker, in seek pages of at most 1,000 rows.
+Only the detector's comparison fields and source-segment identity cross that boundary; artwork, lyrics, analysis, and
+extension payloads stay in the database. A library edit during paging fails the inspection
+with a retry message instead of mixing revisions. Listening-history ticks do not invalidate
+this content snapshot. The former silent 50,000-record cutoff is removed for both storage
+modes, and concurrent trusted requests share one read-only inspection.
+
+Classification still retains the full lightweight candidate set and its results. The existing
+UI pages result rows; this projection does not establish bounded whole-application memory or
+real-media performance. SQLite release and UI acceptance remain tracked in
+[the database implementation status](./library-database-status.md).
 
 Run `pnpm run benchmark:duplicate-detection` to execute the TypeScript benchmark and write the
 current 10,000-row unique and high-collision results to

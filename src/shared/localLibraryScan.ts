@@ -1,4 +1,9 @@
 import type { LocalLibraryExclusion, LocalMusicLibraryDocument } from './localLibrary.ts'
+import type {
+  LibraryDatabaseScanResult,
+  LibraryScanDatabaseCall,
+  LibraryScanProgressSnapshot
+} from './libraryDatabase.ts'
 
 export const LOCAL_LIBRARY_FILE_INDEX_SCHEMA_VERSION = 1 as const
 export const LOCAL_LIBRARY_METADATA_VERSION = 1 as const
@@ -115,6 +120,11 @@ export interface LocalLibraryScanStatus {
   parsedFileCount: number
   skippedUnchanged: number
   error: string
+  /** SQLite counters are committed checkpoints, not the legacy parse delta.
+   * trackCount is the entire currently browsable library, including CUE tracks. */
+  databaseProgress?: LibraryScanProgressSnapshot & {
+    phase: 'checking' | 'parsing' | 'committing' | 'idle'
+  }
 }
 
 export interface LocalLibraryScanResult {
@@ -147,6 +157,11 @@ export interface LocalLibraryScanUpdate {
 }
 
 export type LocalLibraryScanWorkerRequest =
+  | { kind: 'scan-repair'; requestId: string; root: string; coverCacheDir: string }
+  | { kind: 'repair-ack'; requestId: string; sequence: number; error?: string }
+  | { kind: 'scan-database'; requestId: string; coverCacheDir: string; forceParse: boolean }
+  | { kind: 'database-response'; requestId: string; callId: number; ok: true; value: unknown }
+  | { kind: 'database-response'; requestId: string; callId: number; ok: false; error: string }
   | {
       kind: 'scan'
       requestId: string
@@ -157,6 +172,17 @@ export type LocalLibraryScanWorkerRequest =
   | { kind: 'cancel'; requestId: string }
 
 export type LocalLibraryScanWorkerMessage =
+  | { kind: 'repair-call'; requestId: string; sequence: number; call: RepairScanCall }
+  | { kind: 'repair-result'; requestId: string; error?: string }
+  | { kind: 'database-call'; requestId: string; callId: number; call: LibraryScanDatabaseCall }
+  | {
+      kind: 'database-progress'
+      requestId: string
+      progress: LibraryScanProgressSnapshot
+      phase: 'checking' | 'parsing' | 'committing'
+    }
+  | { kind: 'database-result'; requestId: string; ok: true; value: LibraryDatabaseScanResult }
+  | { kind: 'database-result'; requestId: string; ok: false; error: string }
   | { kind: 'ready' }
   | {
       kind: 'progress'
@@ -180,6 +206,10 @@ export type LocalLibraryScanWorkerMessage =
     }
   | { kind: 'response'; requestId: string; ok: true; value: LocalLibraryWorkerScanResult }
   | { kind: 'response'; requestId: string; ok: false; error: string }
+
+export type RepairScanCall =
+  | { kind: 'authorize'; paths: string[] }
+  | { kind: 'append'; tracks: import('./libraryDatabase.ts').LibraryTrackRecord[] }
 
 export type LibraryWatcherState = 'active' | 'degraded' | 'failed' | 'disabled'
 export type LibraryWatcherMode = 'recursive' | 'polling' | 'none'

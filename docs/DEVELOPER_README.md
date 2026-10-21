@@ -123,7 +123,9 @@ Electron main 侧有五个构建入口，均在 `electron.vite.config.ts` 中声
 
 每个 Track/Album 分组以一份小型原子 JSON（含备份）保存到 `userData/library-loudness/`，专辑记录同时保存成员测量。缓存核对算法、模式、成员顺序和 ID、授权后的真实路径、文件大小、mtime 与 CUE 起止点；曲目和专辑分别缓存。提交前再次授权并检查文件身份，随后同步原子提交该组，取消检查与提交之间不跨异步等待。取消或失败的当前专辑不会发布部分结果，已完成的其它组保留。结果面板使用 shallow Map 索引、按 100 组查询和虚拟窗口，进度更新只触及变化项。完整接口和数值语义见 [音频引擎 API](./audio-engine-api.md#库内批量响度分析)。
 
-`libraryScanService` 在独立 `utilityProcess` 中执行目录枚举、`music-metadata` 解析和封面落盘。所有进入 `cover-cache` 的封面统一限制为 500 px 宽 JPEG（`COVER_THUMBNAIL_WIDTH`）：主进程导入直接缩放；utilityProcess 没有 `nativeImage`，扫描 worker 先按原尺寸落盘，`libraryIndexCoordinator` 在批次进入累加器前经 `normalizeCachedCoverHandle` 换成缩略图句柄（`fs:scanMusicFiles` 同样在返回前替换），worker 写下的原图文件保留不清理。主进程的 `libraryIndexCoordinator` 持久化 `path + size + mtime` 快速索引：启动只解析新增、变化或索引缺失的文件；文件 watcher 事件按 canonical path 合并后进入串行队列；完整 metadata/封面重扫只能由用户在设置页显式启动，并支持进度、暂停、继续和取消。大扫描通过有界批次传输 identity 与解析结果，进度按时间/文件数节流；元数据通过可随机定位的文件 tokenizer 读取，跳过音频载荷但保留尾部标签与封面；无 CUE 的目录复用枚举阶段的 dependency signature，避免逐曲同步重读目录。单文件解析和扫描 worker 均有 watchdog；暂停期间停用 worker watchdog。完整 identity 快照扫描在 worker 重启后保留主进程已收到的结果批次及 identity 快照，仅解析尚未完成的文件，进度累计已完成文件数；当前阻塞路径跳过并在下次扫描重试，watch 局部扫描仍重新核对变化路径。恢复检查点仅在当前扫描任务内有效，不跨应用重启持久化。扫描提交前必须重查曲库 revision、授权 roots 与 exclusions；发生 drift 时丢弃旧结果并重规划，禁止把已移除目录或 TE-0.4 排除项重新写回。
+`libraryScanService` 在独立 `utilityProcess` 中执行目录枚举、`music-metadata` 解析和封面落盘。默认 SQLite 路径由 `LibraryDatabaseRuntime` 调度，任务、文件检查点及暂停状态跨应用重启持久化；数据提交由数据库 worker 负责，详见下方「本地库与搜索数据流」。
+
+旧 JSON 路径仍使用 `libraryIndexCoordinator`：所有进入 `cover-cache` 的封面统一限制为 500 px 宽 JPEG（`COVER_THUMBNAIL_WIDTH`）：主进程导入直接缩放；utilityProcess 没有 `nativeImage`，扫描 worker 先按原尺寸落盘，`libraryIndexCoordinator` 在批次进入累加器前经 `normalizeCachedCoverHandle` 换成缩略图句柄（`fs:scanMusicFiles` 同样在返回前替换），worker 写下的原图文件保留不清理。主进程的 `libraryIndexCoordinator` 持久化 `path + size + mtime` 快速索引：启动只解析新增、变化或索引缺失的文件；文件 watcher 事件按 canonical path 合并后进入串行队列；完整 metadata/封面重扫只能由用户在设置页显式启动，并支持进度、暂停、继续和取消。大扫描通过有界批次传输 identity 与解析结果，进度按时间/文件数节流；元数据通过可随机定位的文件 tokenizer 读取，跳过音频载荷但保留尾部标签与封面；无 CUE 的目录复用枚举阶段的 dependency signature，避免逐曲同步重读目录。单文件解析和扫描 worker 均有 watchdog；暂停期间停用 worker watchdog。完整 identity 快照扫描在 worker 重启后保留主进程已收到的结果批次及 identity 快照，仅解析尚未完成的文件，进度累计已完成文件数；当前阻塞路径跳过并在下次扫描重试，watch 局部扫描仍重新核对变化路径。此旧路径的恢复检查点仅在当前扫描任务内有效，不跨应用重启持久化。扫描提交前必须重查曲库 revision、授权 roots 与 exclusions；发生 drift 时丢弃旧结果并重规划，禁止把已移除目录或 TE-0.4 排除项重新写回。
 
 主进程负责窗口生命周期、单实例锁、IPC 注册、设置持久化、本地库扫描、桌面歌词、快捷键托盘、Discord RPC、NCM API 启动和音频引擎编排。
 
@@ -147,7 +149,7 @@ renderer 位于 `src/renderer/src/`，入口是 `main.ts` 与 `App.vue`。主要
 
 播放会话恢复后默认暂停；继续播放原曲时使用保存的进度，主动选择其他歌曲时从头播放（指定起点的播放操作使用指定位置）。每次加载开始清除旧的待恢复进度，加载期间手动调整的进度只应用到本次加载，不能带入下一首。
 
-自动恢复的队列与播放状态分开落盘：`playback-queue.json` 保存队列，限制 32 MiB，只在队列内容变化时写入；`playback-session.json` 保存当前曲目、进度和队列 revision，限制 2 MiB。定时进度保存只更新小状态。保存队列时先写队列再写状态；启动恢复按 revision 匹配主队列或备份队列，中断后若两者都不匹配则只恢复当前曲目。旧版内嵌队列会话仍可读取，并在下一次保存时迁移。清除会话先提交空状态，再删除队列及备份，因此队列文件损坏不会阻止关闭恢复。队列与状态共用现有 `data:savePlaybackSession` 通道和版本化写入器；App 与播放器 store 通过同一个写入器按提交结果判断是否需要克隆队列，失败后续写会重新携带队列，退出前会刷入尚未保存的变化。队列快照省略内嵌图片和进程内封面授权，当前曲目可保留不超过 256 KiB 的内嵌封面；其余封面在恢复后从曲库或持久封面来源重新获取。
+SQLite 本地队列保存在数据库中，`playback-session.json` 只保存当前 occurrence 引用、曲目和进度，不导出全队列。JSON/内存队列仍分开落盘：`playback-queue.json` 保存队列，限制 32 MiB，只在队列内容变化时写入；`playback-session.json` 保存当前曲目、进度和队列 revision，限制 2 MiB。定时进度保存只更新小状态。保存队列时先写队列再写状态；启动恢复按 revision 匹配主队列或备份队列，中断后若两者都不匹配则只恢复当前曲目。旧版内嵌队列会话仍可读取，并在下一次保存时迁移。清除会话先提交空状态，再删除队列及备份，因此队列文件损坏不会阻止关闭恢复。队列与状态共用现有 `data:savePlaybackSession` 通道和版本化写入器；App 与播放器 store 通过同一个写入器按提交结果判断是否需要克隆队列，失败后续写会重新携带队列，退出前会刷入尚未保存的变化。队列快照省略内嵌图片和进程内封面授权，当前曲目可保留不超过 256 KiB 的内嵌封面；其余封面在恢复后从曲库或持久封面来源重新获取。
 
 统一命令面板由 `app/useCommandPalette.ts` 连接现有播放器、统一搜索和导航，`components/CommandPalette.vue` 负责原生 modal、输入法与虚拟结果列表。标题栏搜索按钮或 Ctrl+K / ⌘K 打开，支持歌曲、本地/聚合歌单、设置索引、正在播放、EQ、DSP、桌面歌词、设备档案，以及队列撤销、清空、保存/管理会话和实际播放顺序；`>` 前缀只搜索操作和设置。空查询及一般导航不会发起歌曲搜索或应用音频设置。查询按来源分页，旧请求取消并受 request ID 约束；本地不可变曲库快照共用排序/文本索引。设置定位请求带独立 revision，即使已在相同分区也能重新定位。
 
@@ -201,7 +203,11 @@ VST3 音频桥按绝对帧位置回填预分配的环形缓冲，宿主按提交
 
 ## 本地库与搜索数据流
 
-本地曲库加载时先把已保存曲目放入 renderer，使界面尽快可用；`libraryScanService` 随后用快速索引做启动增量核对，provider 元数据补全也在后台进行。后台结果按 track id/path 合并，避免覆盖用户在加载期间新增、删除或排除的曲目。完整扫描的大规模提交只返回有界增量；renderer 收到 reload 标记后重新加载已原子提交的曲库文档。主进程加载路径不得遍历解析全库 metadata、转换 base64 封面或逐项修复封面；这些工作只允许在显式后台重扫中执行。
+开发与打包应用默认使用 `music-library.sqlite`，无需设置环境变量。首次启动由 `openLibraryDatabase` 流式迁移旧 `music-library.json`，保留原 JSON 与 `.bak`；已有 SQLite 时以数据库为准。迁移失败保留原资料并停止启动。普通备份与恢复继续走个人备份 API。
+
+`LibraryDatabaseRuntime` 是唯一数据库 owner，独立 `libraryDatabaseService` worker 执行查询与写入。renderer 启动读取 metadata，歌曲、分类、搜索和本地队列按页读取；数据库版本事件使受影响窗口失效，不要求重新导出全库。扫描文件检查点、暂停/继续和队列 occurrence 持久化在 SQLite。完整实现与验收记录见 [大曲库改造状态](./library-database-status.md)。
+
+仅为旧路径回归，可在**尚未迁移的独立开发资料目录**设置 `TWILIGHT_SQLITE_LIBRARY=0` 使用 JSON；已有 SQLite 的目录会拒绝此模式，打包应用始终使用 SQLite。旧 JSON 路径先把已保存曲目放入 renderer，再用快速索引做启动核对，后台提交后重读曲库文档。主进程加载路径不得遍历解析全库 metadata、转换 base64 封面或逐项修复封面；这些工作只允许在显式后台重扫中执行。
 
 本地扫描对 ALAC 保存编码名作为格式，并从 MP4 `alac` 配置读取采样率与位深，避免非标准 sample entry 把 96 kHz / 24 bit 误报成 1 Hz / 16 bit。HiFi 面板播放本地文件时优先显示引擎确认的源格式，以便已入库的旧记录在重扫前也能正确显示。
 

@@ -1,4 +1,5 @@
-import { existsSync } from 'fs'
+import { existsSync, statSync, unlinkSync } from 'fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'path'
 import type {
   LocalLibraryMutationFailure,
@@ -20,6 +21,7 @@ import {
   writeJsonFileAtomic,
   type JsonFileOptions
 } from '../persistence/jsonFile.ts'
+import type { LibraryDatabaseWorkerApi, LibraryRemovalResult } from './libraryDatabaseProtocol.ts'
 
 const LOCAL_LIBRARY_REMOVAL_JOURNAL_VERSION = 1 as const
 
@@ -31,6 +33,14 @@ interface LocalLibraryRemovalJournalDocument {
   items: LocalLibraryTrackSelection[]
   succeededFilePaths: string[]
   inFlightFilePath: string | null
+  databaseRecovery?: {
+    id: string
+    items: LocalLibraryTrackSelection[]
+    cursor: number
+    removedTrackIds: string[]
+    removedFilePaths: string[]
+    failures: LocalLibraryMutationFailure[]
+  }
 }
 
 export interface LocalLibraryRemovalJournal {
@@ -198,6 +208,11 @@ export function recoverLocalLibraryRemoval(
   }
 
   const journal = loadedJournal.value
+  if (
+    journal.databaseRecovery ||
+    existsSync(join(dirname(libraryFilePath), 'music-library.sqlite'))
+  )
+    throw new Error('此删除日志需要 SQLite 曲库恢复，未写入旧 JSON')
   const recoverablePaths = new Set(journal.succeededFilePaths.map(normalizeLibraryFilePath))
   if (journal.inFlightFilePath && !existsSync(journal.inFlightFilePath)) {
     recoverablePaths.add(normalizeLibraryFilePath(journal.inFlightFilePath))
@@ -221,6 +236,88 @@ export function recoverLocalLibraryRemoval(
     removedTrackIds: mutation.removedTrackIds,
     removedFilePaths: mutation.removedFilePaths
   }
+}
+
+/** Redirect an old JSON removal redo log into the current database authority.
+ * Persist a bounded cursor before each request so losing a worker reply never
+ * replays a completed deletion against newly restored songs at the same path. */
+export async function recoverLocalLibraryRemovalFromDatabase(
+  libraryFilePath: string,
+  database: Pick<LibraryDatabaseWorkerApi, 'recoverRemovalJournal' | 'getMetadata'>
+): Promise<LibraryRemovalResult | null> {
+  const path = getLocalLibraryRemovalJournalPath(libraryFilePath)
+  const loaded = loadJsonFileWithBackup(path, LOCAL_LIBRARY_REMOVAL_JOURNAL_OPTIONS)
+  if (loaded.status === 'missing') return null
+  const journal = loaded.value
+  const persist = () =>
+    writeJsonFileAtomic(
+      path,
+      JSON.stringify(journal),
+      LOCAL_LIBRARY_REMOVAL_JOURNAL_OPTIONS,
+      journal
+    )
+  if (!journal.databaseRecovery) {
+    const recoverablePaths = new Set(journal.succeededFilePaths.map(normalizeLibraryFilePath))
+    if (journal.inFlightFilePath) {
+      try {
+        statSync(journal.inFlightFilePath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if (!statSync(dirname(journal.inFlightFilePath)).isDirectory())
+          throw new Error('回收站目录不可访问')
+        recoverablePaths.add(normalizeLibraryFilePath(journal.inFlightFilePath))
+      }
+    }
+    journal.databaseRecovery = {
+      id: randomUUID(),
+      cursor: 0,
+      items: [
+        ...new Map(
+          journal.items
+            .filter((item) => recoverablePaths.has(normalizeLibraryFilePath(item.filePath)))
+            .map((item) => [normalizeLibraryFilePath(item.filePath), item])
+        ).values()
+      ],
+      removedTrackIds: [],
+      removedFilePaths: [],
+      failures: []
+    }
+    persist()
+  }
+  const checkpoint = journal.databaseRecovery
+  let result: LibraryRemovalResult | null = null
+  // An empty log needs no database call and cannot accidentally touch the JSON library.
+  while (checkpoint.cursor < checkpoint.items.length) {
+    const batch = checkpoint.items.slice(checkpoint.cursor, checkpoint.cursor + 256)
+    result = await database.recoverRemovalJournal(`${checkpoint.id}-${checkpoint.cursor}`, batch)
+    checkpoint.removedTrackIds.push(...result.removedTrackIds)
+    checkpoint.removedFilePaths.push(...result.removedFilePaths)
+    checkpoint.failures.push(...result.failures)
+    checkpoint.cursor += batch.length
+    persist()
+  }
+  // If every batch was already acknowledged before a crash, its durable cursor
+  // proves that only journal cleanup remains; do not issue a fresh deletion.
+  const recovered = checkpoint.items.length
+    ? {
+        id: checkpoint.id,
+        mode: 'trash' as const,
+        metadata: result?.metadata ?? (await database.getMetadata()),
+        removedTrackIds: checkpoint.removedTrackIds,
+        removedFilePaths: checkpoint.removedFilePaths,
+        failures: checkpoint.failures
+      }
+    : null
+  // Delete the fallback before the primary log; never swallow a real cleanup
+  // error and leave an old cursor to be replayed after normal startup.
+  for (const suffix of ['.bak', '']) {
+    try {
+      unlinkSync(path + suffix)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+  return recovered
 }
 
 export function recoverLocalLibraryRemovalResult(
@@ -272,7 +369,33 @@ function isLocalLibraryRemovalJournalDocument(
     record.items.every(isLocalLibraryTrackSelection) &&
     Array.isArray(record.succeededFilePaths) &&
     record.succeededFilePaths.every((filePath) => typeof filePath === 'string' && !!filePath) &&
-    (record.inFlightFilePath === null || typeof record.inFlightFilePath === 'string')
+    (record.inFlightFilePath === null || typeof record.inFlightFilePath === 'string') &&
+    (record.databaseRecovery === undefined || isDatabaseRemovalRecovery(record.databaseRecovery))
+  )
+}
+
+function isDatabaseRemovalRecovery(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.id === 'string' &&
+    /^[a-zA-Z0-9-]{1,96}$/.test(record.id) &&
+    Array.isArray(record.items) &&
+    record.items.every(isLocalLibraryTrackSelection) &&
+    isNonNegativeSafeInteger(record.cursor) &&
+    Number(record.cursor) <= record.items.length &&
+    Array.isArray(record.removedTrackIds) &&
+    record.removedTrackIds.every((id) => typeof id === 'string') &&
+    Array.isArray(record.removedFilePaths) &&
+    record.removedFilePaths.every((path) => typeof path === 'string') &&
+    Array.isArray(record.failures) &&
+    record.failures.every(
+      (failure) =>
+        !!failure &&
+        typeof failure === 'object' &&
+        typeof failure.filePath === 'string' &&
+        typeof failure.message === 'string'
+    )
   )
 }
 

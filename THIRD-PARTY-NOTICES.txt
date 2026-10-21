@@ -1,5 +1,30 @@
 Twilight Echo third-party notices
 
+stream-json 3.7.0 and stream-chain 4.2.6
+Sources: https://github.com/uhop/stream-json and https://github.com/uhop/stream-chain
+License: BSD-3-Clause (the following notice applies to both components)
+
+Copyright 2005-2026 Eugene Lazutkin
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Wallpaper Engine renderer bridge 2.1.0
+Source: patch/we-background.js in the user-supplied
+com.twilightecho.tool.wallpaper-engine-2.1.0.tep
+Author: Twilight Echo Community
+License: MIT (as declared in plugin.json)
+The adapted renderer bridge is retained at resources/we-background.js. The
+plugin service and its bundled rendering engine are installed separately and
+are not included by this integration. The MIT license text below applies.
+
 Steinberg VST3 SDK v3.8.0_build_66
 Commit: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
 Source: https://github.com/steinbergmedia/vst3sdk

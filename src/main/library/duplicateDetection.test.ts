@@ -8,6 +8,7 @@ import {
   createDuplicateActionPlans,
   detectDuplicates,
   groupDuplicates,
+  toDuplicateCandidate,
   type DuplicateCandidate
 } from './duplicateDetection.ts'
 
@@ -248,6 +249,60 @@ test('streamed content hashing preserves a fixed fixture and groups identical me
     ])
   } finally {
     rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('path evidence distinguishes CUE ranges, SACD subtracks and the whole container', () => {
+  const cueRange = { startSeconds: 0, endSeconds: 30, pregapSeconds: 0 }
+  const candidates = [
+    { ...item('cue-first'), cueRange },
+    { ...item('cue-copy'), cueRange },
+    {
+      ...item('cue-second'),
+      cueRange: { ...cueRange, startSeconds: 30, endSeconds: 60 }
+    },
+    { ...item('sacd-first'), subTrack: '1' },
+    { ...item('sacd-copy'), subTrack: '1' },
+    { ...item('sacd-second'), subTrack: '2' },
+    item('whole')
+  ].map((track) => toDuplicateCandidate({ ...track, filePath: 'E:/music/container.wav' }))
+  const exact = groupDuplicates(candidates).filter((group) => group.confidence === 'exact')
+  assert.deepEqual(exact.map((group) => group.items.map((track) => track.id).sort()).sort(), [
+    ['cue-copy', 'cue-first'],
+    ['sacd-copy', 'sacd-first']
+  ])
+})
+
+test('complete-container hashes are exact evidence only for matching source segments', async () => {
+  const cueRange = { startSeconds: 0, endSeconds: 30, pregapSeconds: 0 }
+  const candidates = [
+    { ...item('cue-first'), cueRange },
+    { ...item('cue-copy'), cueRange },
+    {
+      ...item('cue-second'),
+      cueRange: { ...cueRange, startSeconds: 30, endSeconds: 60 }
+    },
+    { ...item('cue-pregap'), cueRange: { ...cueRange, virtualPregapSeconds: 2 } },
+    { ...item('sacd-first'), subTrack: '1' },
+    { ...item('sacd-copy'), subTrack: '1' },
+    { ...item('sacd-second'), subTrack: '2' },
+    item('whole')
+  ].map((track) => toDuplicateCandidate({ ...track }))
+  const expected = [
+    ['cue-copy', 'cue-first'],
+    ['sacd-copy', 'sacd-first']
+  ]
+  const result = await detectDuplicates(candidates, {
+    contentHashForPath: async () => 'a'.repeat(64)
+  })
+  const synchronous = groupDuplicates(candidates, () => 'a'.repeat(64))
+  for (const groups of [result.groups, synchronous]) {
+    const exact = groups.filter((group) => group.confidence === 'exact')
+    assert.ok(exact.every((group) => group.kind === 'contentHash'))
+    assert.deepEqual(
+      exact.map((group) => group.items.map((track) => track.id).sort()).sort(),
+      expected
+    )
   }
 })
 
