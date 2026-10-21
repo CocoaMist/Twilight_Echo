@@ -76,7 +76,8 @@ export function setupPluginIpc(): void {
     assertTrustedIpcSender(event)
     if (event.sender !== runtime.mainWindow?.webContents)
       throw new Error('tray player open rejected from satellite')
-    const options = rawOptions && typeof rawOptions === 'object' ? (rawOptions as { theme?: unknown }) : {}
+    const options =
+      rawOptions && typeof rawOptions === 'object' ? (rawOptions as { theme?: unknown }) : {}
     showTrayPlayerWindow({ theme: normalizeExperienceWindowTheme(options.theme) })
   })
   const bundledPluginIds = ['com.twilightecho.provider.ncm', THEME_WORKSHOP_ID]
@@ -163,7 +164,7 @@ export function setupPluginIpc(): void {
     getLibraryFolders: () => runtime.appSettings.libraryFolders,
     getPreferences: () => runtime.appSettings.downloadPreferences,
     resolveDownloadRoot: () => resolveConfiguredDownloadRoot(runtime.appSettings.downloadFolder),
-    libraryIndexCoordinator: () => runtime.localLibraryIndexCoordinator,
+    libraryIndexCoordinator: () => runtime.libraryDatabase ?? runtime.localLibraryIndexCoordinator,
     onChanged: (tasks) => {
       runtime.mainWindow?.webContents.send(PROVIDER_DOWNLOAD_CHANGED_CHANNEL, tasks)
     }
@@ -404,29 +405,46 @@ export function setupPluginIpc(): void {
     assertTrustedIpcSender(event, 'experience IPC')
     return listExperiences()
   })
-  ipcMain.handle('extensions:experienceExport', async (event, pluginId: string, name: string, content: string) => {
-    assertTrustedIpcSender(event)
-    await experienceDocument(normalizePluginId(pluginId))
-    if (typeof name !== 'string' || !/^[a-zA-Z0-9_.-]{1,100}\.(md|json|txt)$/.test(name) || typeof content !== 'string' || Buffer.byteLength(content) > 4 * 1024 * 1024) throw new Error('Invalid export')
-    const owner = BrowserWindow.fromWebContents(event.sender)
-    const options = { title: '导出莱茵音乐资料', defaultPath: name }
-    const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return { saved: false }
-    await writeFile(result.filePath, content, 'utf8')
-    return { saved: true }
-  })
+  ipcMain.handle(
+    'extensions:experienceExport',
+    async (event, pluginId: string, name: string, content: string) => {
+      assertTrustedIpcSender(event)
+      await experienceDocument(normalizePluginId(pluginId))
+      if (
+        typeof name !== 'string' ||
+        !/^[a-zA-Z0-9_.-]{1,100}\.(md|json|txt)$/.test(name) ||
+        typeof content !== 'string' ||
+        Buffer.byteLength(content) > 4 * 1024 * 1024
+      )
+        throw new Error('Invalid export')
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const options = { title: '导出莱茵音乐资料', defaultPath: name }
+      const result = owner
+        ? await dialog.showSaveDialog(owner, options)
+        : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return { saved: false }
+      await writeFile(result.filePath, content, 'utf8')
+      return { saved: true }
+    }
+  )
   ipcMain.handle('extensions:experienceDocument', async (event, pluginId: string, update) => {
     assertTrustedIpcSender(event, 'experience IPC')
     return experienceDocument(normalizePluginId(pluginId), update)
   })
-  ipcMain.handle('extensions:experienceMusic', async (event, pluginId: string, operation: string, albums, args) => {
-    assertTrustedIpcSender(event, 'experience IPC')
-    return experienceMusicOperation(normalizePluginId(pluginId), operation, albums, args ?? {})
-  })
-  ipcMain.handle('extensions:experiencePreferences', async (event, pluginId: string, value?: unknown) => {
-    assertTrustedIpcSender(event, 'experience IPC')
-    return experiencePreferences(normalizePluginId(pluginId), value)
-  })
+  ipcMain.handle(
+    'extensions:experienceMusic',
+    async (event, pluginId: string, operation: string, albums, args) => {
+      assertTrustedIpcSender(event, 'experience IPC')
+      return experienceMusicOperation(normalizePluginId(pluginId), operation, albums, args ?? {})
+    }
+  )
+  ipcMain.handle(
+    'extensions:experiencePreferences',
+    async (event, pluginId: string, value?: unknown) => {
+      assertTrustedIpcSender(event, 'experience IPC')
+      return experiencePreferences(normalizePluginId(pluginId), value)
+    }
+  )
   ipcMain.handle('extensions:executeCommand', async (_event, command: string, args?: unknown[]) => {
     assertTrustedIpcSender(_event, 'extension IPC')
     await runtime.pluginManagerReady

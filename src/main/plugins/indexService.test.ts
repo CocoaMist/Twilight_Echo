@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { extname, join } from 'node:path'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import {
   DEFAULT_PLUGIN_INDEX_URL,
@@ -15,6 +16,7 @@ import {
   createTrustedPluginPublisherRegistry
 } from './indexTrust.ts'
 import type { TwilightPluginDescriptor, TwilightPluginIndexEntry } from './types.ts'
+import { LEGACY_GITHUB_PLUGIN_INDEX_URL } from '../../shared/pluginDistribution.ts'
 
 const require = createRequire(import.meta.url)
 const { createZip } = require('../../../packages/create-twilight-plugin/lib/zip.cjs') as {
@@ -231,7 +233,8 @@ test('downloads a valid package after checksum validation', async () => {
   }
 })
 
-test('uses the default GitHub index URL unless an override is provided', () => {
+test('uses the default CDN index URL unless an override is provided', () => {
+  assert.equal(DEFAULT_PLUGIN_INDEX_URL, 'https://plugins.aaapi.fun/plugins.json')
   assert.equal(resolvePluginIndexUrl(undefined), DEFAULT_PLUGIN_INDEX_URL)
   assert.equal(resolvePluginIndexUrl('  '), DEFAULT_PLUGIN_INDEX_URL)
   assert.equal(
@@ -243,8 +246,7 @@ test('uses the default GitHub index URL unless an override is provided', () => {
 test('loads remote index, records source status, and writes cache', async () => {
   const fixture = await createIndexFixture()
   const cachePath = join(fixture.root, 'cache', 'plugins.json')
-  const remoteUrl =
-    'https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json'
+  const remoteUrl = DEFAULT_PLUGIN_INDEX_URL
   const service = new PluginIndexService({
     appVersion: '0.20.0',
     localIndexPath: fixture.indexPath,
@@ -274,7 +276,7 @@ test('loads remote index, records source status, and writes cache', async () => 
   assert.equal(cachedRaw.index.plugins.length, 1)
   assert.equal(status.sourceUrl, remoteUrl)
   assert.equal(status.configuredSourceUrl, remoteUrl)
-  assert.equal(status.sourceKind, 'github')
+  assert.equal(status.sourceKind, 'official')
   assert.equal(status.loadedFrom, 'remote')
   assert.equal(status.lastFetchedAt, cachedRaw.fetchedAt)
   assert.equal(status.expiresAt, cachedRaw.expiresAt)
@@ -283,6 +285,21 @@ test('loads remote index, records source status, and writes cache', async () => 
   assert.equal(status.originVerified, true)
   assert.equal(status.officialSource, true)
   assert.equal(status.cacheFormat, null)
+})
+
+test('keeps the legacy GitHub index usable as an explicit override', async () => {
+  const fixture = await createIndexFixture()
+  const service = new PluginIndexService({
+    appVersion: '0.20.0',
+    localIndexPath: fixture.indexPath,
+    remoteIndexUrl: resolvePluginIndexUrl(LEGACY_GITHUB_PLUGIN_INDEX_URL),
+    fetchImpl: createFetch({
+      [LEGACY_GITHUB_PLUGIN_INDEX_URL]: await readFile(fixture.indexPath)
+    })
+  })
+  assert.equal((await service.list()).length, 1)
+  assert.equal(service.getStatus().sourceKind, 'github')
+  assert.equal(service.getStatus().officialSource, false)
 })
 
 test('serves fresh cache immediately and conditionally revalidates', async (t) => {
@@ -1091,6 +1108,73 @@ test('streams a remote package into the configured staging volume while hashing 
   assert.deepEqual(await readdir(stagingDir), [])
 })
 
+test('package deadlines allow large CDN downloads and preserve explicit timeout overrides', async (t) => {
+  for (const scenario of [
+    {
+      name: 'default package outlives the index deadline',
+      options: {},
+      tick: 10_000,
+      abort: false
+    },
+    {
+      name: 'separate package deadline overrides the index deadline',
+      options: { timeoutMs: 20, packageTimeoutMs: 100 },
+      tick: 20,
+      abort: false
+    },
+    {
+      name: 'explicit legacy timeout still aborts packages and cleans staging',
+      options: { timeoutMs: 20 },
+      tick: 20,
+      abort: true
+    }
+  ]) {
+    await t.test(scenario.name, async (t) => {
+      const fixture = await createIndexFixture()
+      const indexBytes = await readFile(fixture.indexPath)
+      const packageBytes = await readFile(fixture.packagePath)
+      const stagingDir = join(fixture.root, 'deadline-staging')
+      const started = deferred<void>()
+      const release = deferred<void>()
+      let packageSignal: AbortSignal | null = null
+      t.mock.timers.enable({ apis: ['setTimeout'] })
+      const service = new PluginIndexService({
+        appVersion: '0.20.0',
+        localIndexPath: fixture.indexPath,
+        remoteIndexUrl: DEFAULT_PLUGIN_INDEX_URL,
+        packageStagingDir: stagingDir,
+        ...scenario.options,
+        fetchImpl: async (input, init) => {
+          if (String(input) === DEFAULT_PLUGIN_INDEX_URL) return responseFor(indexBytes)
+          packageSignal = init!.signal!
+          started.resolve()
+          await new Promise<void>((resolve, reject) => {
+            packageSignal!.addEventListener('abort', () => reject(new Error('Package deadline')), {
+              once: true
+            })
+            void release.promise.then(resolve)
+          })
+          return responseFor(packageBytes)
+        }
+      })
+      const download = service.downloadPackage(baseManifest.id)
+      const rejection = scenario.abort ? assert.rejects(download, /Package deadline/) : null
+      await started.promise
+      t.mock.timers.tick(scenario.tick)
+      assert.equal((packageSignal as AbortSignal | null)?.aborted, scenario.abort)
+      release.resolve()
+      if (rejection) {
+        await rejection
+      } else {
+        const downloaded = await download
+        assert.equal(downloaded.evidence.checksumVerified, true)
+        await downloaded.cleanup()
+      }
+      assert.deepEqual(await readdir(stagingDir), [])
+    })
+  }
+})
+
 test('stops redirect loops before issuing a repeated plugin package request', async () => {
   const fixture = await createIndexFixture()
   const remoteUrl = 'https://plugins.example.test/plugins.json'
@@ -1182,6 +1266,26 @@ test('allows localhost http indexes and rejects non-local http indexes', async (
     fetchImpl: async () => responseFor(indexContent)
   })
   await assert.rejects(() => externalHttpService.list(), /https|本机 http/)
+})
+
+test('bundled discovery snapshot uses absolute CDN package URLs without upgrading trust', async () => {
+  const service = new PluginIndexService({
+    appVersion: '1.3.1',
+    localIndexPath: fileURLToPath(
+      new URL('../../../resources/plugin-index/plugins.json', import.meta.url)
+    )
+  })
+  const entries = await service.list()
+  assert.ok(entries.length > 0)
+  assert.equal(service.getStatus().loadedFrom, 'bundled')
+  for (const entry of entries) {
+    assert.equal(new URL(entry.sourceUrl).origin, new URL(DEFAULT_PLUGIN_INDEX_URL).origin)
+    assert.equal(entry.verification.official, false)
+  }
+  assert.equal(
+    entries.some((entry) => entry.id === 'com.twilightecho.theme.miku-navigation'),
+    false
+  )
 })
 
 test('bundled plugin index does not carry third-party tep packages', async () => {

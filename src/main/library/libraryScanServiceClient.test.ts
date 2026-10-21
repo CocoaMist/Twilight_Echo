@@ -31,6 +31,196 @@ const scanRequest: LocalLibraryWorkerScanRequest = {
   coverCacheDir: 'C:\\Covers'
 }
 
+test('database pause during worker startup is delivered after the scan request and suspends its watchdog', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const child = new ManualUtilityProcess()
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'libraryScanService.js',
+    scanWatchdogMs: 100,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => client.destroy())
+  const pending = client.scanDatabase(
+    'starting-database',
+    'C:/Covers',
+    {} as Parameters<typeof client.scanDatabase>[2]
+  )
+  const rejected = assert.rejects(pending, /stopped/)
+  client.pause('starting-database')
+  child.emit('message', { kind: 'ready' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(child.messages, [
+    {
+      kind: 'scan-database',
+      requestId: 'starting-database',
+      coverCacheDir: 'C:/Covers',
+      forceParse: false
+    },
+    { kind: 'pause', requestId: 'starting-database' }
+  ])
+  t.mock.timers.tick(500)
+  assert.equal(child.killCount, 0)
+  client.destroy()
+  await rejected
+})
+
+test('resuming a database startup replaces its pending pause without admitting a competing scan', async (t) => {
+  const child = new ManualUtilityProcess()
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'libraryScanService.js',
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => client.destroy())
+  const database = {} as Parameters<typeof client.scanDatabase>[2]
+  const pending = client.scanDatabase('starting-database', 'C:/Covers', database)
+  const rejected = assert.rejects(pending, /stopped/)
+  client.pause('starting-database')
+  client.resume('starting-database')
+  await assert.rejects(client.scanDatabase('other', 'C:/Covers', database), /already scanning/)
+  const legacyRejected = assert.rejects(client.scan('legacy', scanRequest), /already using/)
+  child.emit('message', { kind: 'ready' })
+  await legacyRejected
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(child.messages, [
+    {
+      kind: 'scan-database',
+      requestId: 'starting-database',
+      coverCacheDir: 'C:/Covers',
+      forceParse: false
+    }
+  ])
+  client.destroy()
+  await rejected
+})
+
+test('a failed database startup releases its reservation for the next legacy scan', async (t) => {
+  const children: ManualUtilityProcess[] = []
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'libraryScanService.js',
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const child = new ManualUtilityProcess()
+          children.push(child)
+          return child
+        }
+      }
+    }
+  })
+  t.after(() => client.destroy())
+  const pending = client.scanDatabase(
+    'starting-database',
+    'C:/Covers',
+    {} as Parameters<typeof client.scanDatabase>[2]
+  )
+  const rejected = assert.rejects(pending, /exited/)
+  children[0].emit('exit', 1)
+  await rejected
+  const legacy = client.scan('legacy', scanRequest)
+  const legacyRejected = assert.rejects(legacy, /stopped/)
+  children[1].emit('message', { kind: 'ready' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(children[1].messages, [
+    { kind: 'scan', requestId: 'legacy', request: scanRequest }
+  ])
+  client.destroy()
+  await legacyRejected
+})
+
+test('cancelling a database worker before ready releases startup immediately without sending a scan', async (t) => {
+  const children: ManualUtilityProcess[] = []
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'libraryScanService.js',
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const child = new ManualUtilityProcess()
+          children.push(child)
+          return child
+        }
+      }
+    }
+  })
+  t.after(() => client.destroy())
+  const abort = new AbortController()
+  const pending = client.scanDatabase(
+    'starting-database',
+    'C:/Covers',
+    {} as Parameters<typeof client.scanDatabase>[2],
+    undefined,
+    undefined,
+    abort.signal
+  )
+  const rejected = assert.rejects(pending, /cancelled|stopped/)
+  abort.abort()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(children[0].killCount, 1)
+  assert.deepEqual(children[0].messages, [])
+  await rejected
+  const legacy = client.scan('legacy', scanRequest)
+  const legacyRejected = assert.rejects(legacy, /stopped/)
+  children[1].emit('message', { kind: 'ready' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(children[1].messages, [
+    { kind: 'scan', requestId: 'legacy', request: scanRequest }
+  ])
+  client.destroy()
+  await legacyRejected
+})
+
+test('repair reserves the metadata process before startup and aborting startup does not hang or replay', async () => {
+  const children: ManualUtilityProcess[] = []
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'libraryScanService.js',
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const child = new ManualUtilityProcess()
+          children.push(child)
+          return child
+        }
+      }
+    }
+  })
+  const abort = new AbortController()
+  const repair = client.scanRepair('repair', 'C:/Music', 'C:/Covers', async () => {}, abort.signal)
+  const repairRejected = assert.rejects(repair, /已取消/)
+  abort.abort()
+  await repairRejected
+  assert.equal(children[0].killCount, 1)
+  assert.equal(children[0].messages.length, 0)
+  const next = client.scan('normal', scanRequest)
+  const nextRejected = assert.rejects(next, /stopped/)
+  children[1].emit('message', { kind: 'ready' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(children.length, 2)
+  assert.deepEqual(children[1].messages, [
+    { kind: 'scan', requestId: 'normal', request: scanRequest }
+  ])
+  client.destroy()
+  await nextRejected
+})
+
+test('legacy and database scans cannot interrupt an active repair or enqueue competing work', async () => {
+  const child = new ManualUtilityProcess()
+  const client = new LocalLibraryScanServiceClient({
+    serviceEntry: 'libraryScanService.js',
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  const repair = client.scanRepair('repair', 'C:/Music', 'C:/Covers', async () => {})
+  child.emit('message', { kind: 'ready' })
+  await new Promise((resolve) => setImmediate(resolve))
+  await assert.rejects(client.scan('legacy', scanRequest), /already using/)
+  await assert.rejects(
+    client.scanDatabase('db', 'C:/Covers', {} as Parameters<typeof client.scanDatabase>[2]),
+    /already scanning/
+  )
+  assert.equal(child.messages.length, 1)
+  child.emit('message', { kind: 'repair-result', requestId: 'repair' })
+  await repair
+  client.destroy()
+})
+
 test('local library scan service forks on its first scan, then waits for ready', async () => {
   const children: ManualUtilityProcess[] = []
   const client = new LocalLibraryScanServiceClient({

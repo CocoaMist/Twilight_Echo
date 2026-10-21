@@ -4,6 +4,7 @@ import { ref, shallowRef } from 'vue'
 import type { PlaybackSession, Track } from '@renderer/types/music'
 import type { PlayMode } from '@renderer/types/settings'
 import { createPlaybackSessionController } from '@renderer/stores/player/playbackSessionController.ts'
+import type { PlaybackSessionControllerOptions } from '@renderer/stores/player/playbackSessionController.ts'
 
 const makeTrack = (id: string, queueEntryId?: string): Track => ({
   id,
@@ -19,7 +20,7 @@ const makeTrack = (id: string, queueEntryId?: string): Track => ({
   lyrics: null
 })
 
-function fixture() {
+function fixture(overrides: Partial<PlaybackSessionControllerOptions> = {}) {
   const queue = shallowRef<Track[]>([])
   const originalQueue = shallowRef<Track[]>([])
   const currentTrack = shallowRef<Track | null>(null)
@@ -78,7 +79,8 @@ function fixture() {
     setAutoAdvanceInFlight: () => {},
     getAdvancingFromEndedTrackId: () => '',
     setAdvancingFromEndedTrackId: () => {},
-    getNativePlaybackActive: () => false
+    getNativePlaybackActive: () => false,
+    ...overrides
   })
   function restore(track: Track, tracks: Track[], index: number) {
     const session: PlaybackSession = {
@@ -113,6 +115,103 @@ function fixture() {
     }
   }
 }
+
+test('database restore waits for its authoritative occurrence without filling the legacy queue arrays', async () => {
+  const reference = { id: 'db', revision: 8, entryId: 'second', index: 299_999 }
+  const track = makeTrack('same', 'second')
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const state = fixture({
+    getLibraryQueueReference: () => reference,
+    restoreLibraryQueue: async () => {
+      await pending
+      return { track, reference }
+    },
+    getAppSettings: () => ref({ playbackResumeMode: 'off' } as never)
+  })
+  const restoring = state.controller.restorePlaybackSession({
+    version: 1,
+    savedAt: '',
+    mode: 'trackAndPosition',
+    track,
+    position: 25,
+    libraryQueue: reference
+  })
+  assert.equal(state.currentTrack.value, null)
+  release()
+  await restoring
+  assert.equal((state.currentTrack.value as Track | null)?.queueEntryId, 'second')
+  assert.equal(state.currentTime.value, 25)
+  assert.equal(state.queueIndex.value, -1)
+  assert.deepEqual(state.queue.value, [])
+  const session = state.controller.createPlaybackSession('trackAndPosition')!
+  assert.deepEqual(session.libraryQueue, reference)
+  assert.equal(session.queue, undefined)
+  assert.equal(session.queueIndex, undefined)
+})
+
+test('a superseded asynchronous database restore cannot replace a newer selection', async () => {
+  let current = true
+  const track = makeTrack('old', 'old'),
+    reference = { id: 'db', revision: 1, entryId: 'old', index: 0 }
+  const state = fixture({
+    restoreLibraryQueue: async () => {
+      current = false
+      return { track, reference }
+    }
+  })
+  await state.controller.restorePlaybackSession(
+    { version: 1, savedAt: '', mode: 'track', track, position: 0, libraryQueue: reference },
+    () => current
+  )
+  assert.equal(state.currentTrack.value, null)
+  assert.equal(state.resets(), 0)
+})
+
+test('database resume adopts the confirmed SQL mode instead of reapplying the stale session mode', async () => {
+  const track = makeTrack('cue', 'duplicate'),
+    reference = { id: 'db', revision: 7, entryId: 'duplicate', index: 0 }
+  const state = fixture({
+    restoreLibraryQueue: async () => ({ track, reference, playMode: 'repeat' })
+  })
+  await state.controller.restorePlaybackSession({
+    version: 1,
+    savedAt: '',
+    mode: 'trackAndPosition',
+    track,
+    position: 12,
+    playMode: 'shuffle',
+    libraryQueue: { ...reference, revision: 6, index: 399 }
+  })
+  assert.equal(state.playMode.value, 'repeat')
+  assert.equal(state.currentTime.value, 12)
+  assert.deepEqual(state.queue.value, [])
+  assert.deepEqual(state.originalQueue.value, [])
+  assert.equal(state.queueIndex.value, -1)
+})
+
+test('a missing database queue owner fails explicitly rather than restoring a misleading singleton array', async () => {
+  const state = fixture(),
+    previous = makeTrack('array', 'array-entry'),
+    database = makeTrack('database', 'db-entry')
+  state.restore(previous, [previous], 0)
+  await assert.rejects(
+    async () =>
+      state.controller.restorePlaybackSession({
+        version: 1,
+        savedAt: '',
+        mode: 'track',
+        track: database,
+        position: 0,
+        libraryQueue: { id: 'db', revision: 0, entryId: 'db-entry', index: 0 }
+      }),
+    /恢复尚未接入/
+  )
+  assert.equal(state.currentTrack.value?.id, 'array')
+  assert.equal(state.queue.value.length, 1)
+})
 
 test('automatic restore selects the saved duplicate occurrence instead of an obsolete numeric index', () => {
   const state = fixture()

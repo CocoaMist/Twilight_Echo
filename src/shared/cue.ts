@@ -136,6 +136,19 @@ export function decodeCue(bytes: Uint8Array): {
 }
 
 export function parseCueSheet(bytes: Uint8Array, sourceDurationSeconds: number): ParsedCueSheet {
+  return resolveCueDefinition(parseCueDefinition(bytes), sourceDurationSeconds)
+}
+
+/** Syntax and encoding are independent of the referenced audio's duration. */
+export interface CueDefinition {
+  encoding: ParsedCueSheet['encoding']
+  fileName: string
+  title?: string
+  performer?: string
+  tracks: RawCueTrack[]
+}
+
+export function parseCueDefinition(bytes: Uint8Array): CueDefinition {
   const decoded = decodeCue(bytes)
   const lines = decoded.text.replace(/\r\n?/g, '\n').split('\n')
   let fileName = ''
@@ -202,9 +215,6 @@ export function parseCueSheet(bytes: Uint8Array, sourceDurationSeconds: number):
   if (current) tracks.push(finalizeRawTrack(current))
   if (!fileName) throw new CueParseError('CUE sheet has no FILE directive')
   if (!tracks.length) throw new CueParseError('CUE sheet has no AUDIO tracks')
-  if (!Number.isFinite(sourceDurationSeconds) || sourceDurationSeconds <= 0) {
-    throw new CueParseError('Referenced audio duration is unavailable')
-  }
   const trackNumbers = new Set<number>()
   for (const track of tracks) {
     if (track.number < 1 || track.number > 99 || trackNumbers.has(track.number)) {
@@ -212,6 +222,24 @@ export function parseCueSheet(bytes: Uint8Array, sourceDurationSeconds: number):
     }
     trackNumbers.add(track.number)
   }
+
+  return {
+    encoding: decoded.encoding,
+    fileName,
+    title: globalTitle,
+    performer: globalPerformer,
+    tracks
+  }
+}
+
+export function resolveCueDefinition(
+  definition: CueDefinition,
+  sourceDurationSeconds: number
+): ParsedCueSheet {
+  if (!Number.isFinite(sourceDurationSeconds) || sourceDurationSeconds <= 0) {
+    throw new CueParseError('Referenced audio duration is unavailable')
+  }
+  const { tracks } = definition
 
   const definitions = tracks.map((track, index) => {
     const startSeconds = track.index01!
@@ -245,10 +273,10 @@ export function parseCueSheet(bytes: Uint8Array, sourceDurationSeconds: number):
     }
   })
   return {
-    encoding: decoded.encoding,
-    fileName,
-    title: globalTitle,
-    performer: globalPerformer,
+    encoding: definition.encoding,
+    fileName: definition.fileName,
+    title: definition.title,
+    performer: definition.performer,
     tracks: definitions
   }
 }
@@ -280,7 +308,7 @@ function sameCueFileName(left: string, right: string): boolean {
   return left.replace(/\\/g, '/').toLowerCase() === right.replace(/\\/g, '/').toLowerCase()
 }
 
-interface RawCueTrack {
+export interface RawCueTrack {
   number: number
   title?: string
   performer?: string

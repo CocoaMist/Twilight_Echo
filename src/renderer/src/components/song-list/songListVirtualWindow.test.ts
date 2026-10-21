@@ -51,6 +51,25 @@ test('table window keeps rows above the viewport and clamps stale offsets after 
   assert.deepEqual(getSongListVirtualRange({ ...input, trackCount: 0 }), { start: 0, end: 0 })
 })
 
+test('grid window clamps old deep scroll offsets after filtering or deleting cards', () => {
+  const input = {
+    itemCount: 4000,
+    scrollTop: 200_000,
+    viewportHeight: 720,
+    gridOffsetTop: 180,
+    columns: 5,
+    rowStride: 260
+  }
+  for (const itemCount of [0, 3, 83]) {
+    const range = getSongListGridVirtualRange({ ...input, itemCount })
+    assert.ok(range.startRow <= range.endRow)
+    assert.equal(range.end, itemCount)
+    assert.ok(range.end - range.start <= maxMountedGridCards(720, 260, 5))
+    if (itemCount) assert.ok(range.end > range.start, 'remaining cards must stay mounted')
+    else assert.equal(range.start, 0)
+  }
+})
+
 test('A-Z jump scroll top lands the target index inside the window', () => {
   const itemCount = 800
   const columns = 4

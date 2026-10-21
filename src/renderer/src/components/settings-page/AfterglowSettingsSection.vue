@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { describeAfterglowError } from '../../../../shared/afterglowMode.ts'
 import type { AfterglowAutoEntry, AfterglowModeStatus } from '../../types/settings'
@@ -9,7 +9,12 @@ const status = ref<AfterglowModeStatus | null>(null)
 const busy = ref(false)
 const message = ref('')
 
-const active = computed(() => status.value?.active === true)
+const active = computed(() => status.value?.phase === 'active')
+const restoring = computed(() => status.value?.phase === 'restoring')
+const transitioning = computed(() => restoring.value || status.value?.phase === 'entering')
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+let refreshGeneration = 0
+let disposed = false
 const autoEntry = computed<AfterglowAutoEntry>(() => settings.value.afterglowAutoEntry ?? 'off')
 const restoreHint = computed(() =>
   (status.value?.restoreAccelerator ?? 'CommandOrControl+Shift+E').replace(
@@ -19,15 +24,35 @@ const restoreHint = computed(() =>
 )
 
 async function refreshStatus(): Promise<void> {
+  if (disposed) return
+  const generation = ++refreshGeneration
+  if (refreshTimer !== null) clearTimeout(refreshTimer)
+  refreshTimer = null
   try {
-    status.value = await window.api.app.afterglow.getStatus()
+    const next = await window.api.app.afterglow.getStatus()
+    if (disposed || generation !== refreshGeneration) return
+    status.value = next
+    // Settings can mount before App acknowledges the live-engine handoff.
+    // Recheck only that transition, not a permanently cached "UI unloaded".
+    if (next.phase === 'restoring') {
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null
+        void refreshStatus()
+      }, 250)
+    }
   } catch {
-    status.value = null
+    if (!disposed && generation === refreshGeneration) status.value = null
   }
 }
 
 onMounted(() => {
   void refreshStatus()
+})
+
+onBeforeUnmount(() => {
+  disposed = true
+  ++refreshGeneration
+  if (refreshTimer !== null) clearTimeout(refreshTimer)
 })
 
 async function enterAfterglow(): Promise<void> {
@@ -68,7 +93,8 @@ function setAutoEntry(value: string): void {
           恢复快捷键 {{ restoreHint }}（若被占用会改用回退组合）。要求原生输出；本地文件与 CUE
           可完整续播，在线队列由后台按需解析并续接，解析失败/断网时播完已加载窗口后自动恢复界面。
         </span>
-        <small v-if="active" class="setting-hint">当前处于余晖模式，界面已卸载。</small>
+        <small v-if="restoring" class="setting-hint">正在恢复界面与播放状态…</small>
+        <small v-else-if="active" class="setting-hint">当前处于余晖模式，界面已卸载。</small>
         <small v-else-if="status?.error && !message" class="setting-hint">
           上次操作未完成：{{ describeAfterglowError(status.error) }}
         </small>
@@ -77,10 +103,18 @@ function setAutoEntry(value: string): void {
       <button
         type="button"
         class="soft-button"
-        :disabled="busy || active"
+        :disabled="busy || active || transitioning"
         @click="void enterAfterglow()"
       >
-        {{ busy ? '进入中…' : active ? '已卸载界面' : '立即进入' }}
+        {{
+          restoring
+            ? '恢复中…'
+            : busy || transitioning
+              ? '进入中…'
+              : active
+                ? '已卸载界面'
+                : '立即进入'
+        }}
       </button>
     </div>
     <div

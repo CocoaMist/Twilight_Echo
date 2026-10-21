@@ -381,6 +381,12 @@ export interface SettingsSearchEntry {
 /** 设置项级细粒度搜索索引：每个设置项一条，保证任意设置项都能被搜到 */
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
+    id: 'appearance-workspace',
+    section: 'appearance',
+    title: '外观工作区',
+    terms: '外观 新版 主题 制作 插件 工坊 预览 2D 3D'
+  },
+  {
     id: 'audio-device',
     section: 'playback',
     title: '输出设备',
@@ -661,6 +667,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     title: 'WASAPI 独占推送模式',
     terms: '播放 输出 引擎 DSP 音效 wasapi 独占 推送 模式 windows 输出 WASAPI 独占推送模式',
     disclosureId: 'advanced-engine-parameters'
+  },
+  {
+    id: 'dsp-workbench',
+    section: 'playback',
+    title: 'DSP 工作台',
+    terms: 'DSP 工作台 workbench rack 机架 均衡器 效果链 场景 校正 资料 插件 监测'
   },
   {
     id: 'dsp-master',

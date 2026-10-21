@@ -17,6 +17,7 @@ const props = defineProps<{
   results: OpraProfile[]
   error: string
   query: string
+  initiallyOpen?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,7 +28,7 @@ const emit = defineEmits<{
   refresh: []
 }>()
 
-const drawerOpen = ref(true)
+const drawerOpen = ref(props.initiallyOpen ?? true)
 const query = ref(props.query)
 let searchTimer: number | null = null
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
+import PlaybackModeIcon from '@renderer/components/icons/PlaybackModeIcon.vue'
 import PlayerControlIcon from '@renderer/components/player-bar/PlayerControlIcon.vue'
 import { clampVolumePercent, createVolumeWheelStepper } from './player-bar/volumeWheel'
 import type { Track, TrackArtistRef } from '@renderer/types/music'
@@ -29,11 +30,7 @@ import { useLocale } from '../app/useLocale.ts'
 import type { LyricLayerSourceSelection } from '../../../shared/lyricsManagement.ts'
 import CoverImg from './CoverImg.vue'
 import HiFiSidebar from './player-bar/HiFiSidebar.vue'
-import repeatIcon from '../assets/icons/single-song-repeat.svg'
-import listLoopIcon from '../assets/icons/list-loop-repeat.svg'
 import sequentialIcon from '../assets/icons/sequential-playback.svg'
-import shuffleIcon from '../assets/icons/shuffle.svg'
-import heartModeIcon from '../assets/icons/heart-mode.svg'
 import { useFavoriteButton } from './player-bar/useFavoriteButton'
 import { useFloatingPanels } from './player-bar/useFloatingPanels'
 import { usePlaybarAutoHide } from './player-bar/usePlaybarAutoHide.ts'
@@ -44,10 +41,14 @@ import {
   type PlayerBarRegionName
 } from '../../../shared/playerBarLayout.ts'
 import { useEscapeToClose } from '../app/useDismissLayer.ts'
+import { appearanceChromePreview } from '../composables/appearanceEditorState.ts'
+import type { AppearanceDraft } from '../../../shared/appAppearance.ts'
 import { usePlaybackQueueVirtualScroll } from './player-bar/usePlaybackQueueVirtualScroll'
 import { usePlaybackQueueDrawerActions } from './player-bar/usePlaybackQueueDrawerActions'
 import { useQueueAddToPlaylist } from './player-bar/useQueueAddToPlaylist'
 import QueueAddToPlaylistDialog from './player-bar/QueueAddToPlaylistDialog.vue'
+import LibraryQueueDrawer from './player-bar/LibraryQueueDrawer.vue'
+import QueueSavePlaylistDialog from './player-bar/QueueSavePlaylistDialog.vue'
 import CompactPlayerBarVisualizer from './player-bar/CompactPlayerBarVisualizer.vue'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import { syncPluginProviders } from '../providers'
@@ -68,6 +69,7 @@ const props = withDefaults(
     preview?: boolean
     previewTrack?: Track
     previewState?: string
+    previewAppearance?: Pick<AppearanceDraft, 'surfaceMaterial' | 'liquidGlass' | 'playerBar'>
     /** Show the expanded artwork and waveform stage on the actual lyrics page. */
     visualizerVisible?: boolean
     /**
@@ -116,6 +118,14 @@ const {
   sleepTimerNotice,
   queue,
   queueIndex,
+  libraryQueueActive,
+  libraryQueueSnapshot,
+  libraryQueueContentRevision,
+  libraryQueueBusy,
+  readLibraryQueuePage,
+  playLibraryQueueEntry,
+  editLibraryQueue,
+  refreshLibraryQueue,
   playMode,
   exclusiveMode,
   audioOutput,
@@ -242,11 +252,12 @@ const {
   removeFromPlaylist,
   createPlaylist,
   createPlaylistWithTracks,
+  createPlaylistWithTrackPages,
   isFavoriteTrack,
   addFavoriteTrack,
   removeFavoriteTrack
 } = useMusicStore()
-const mediaProviders = useMediaProviders()
+const mediaProviders = useMediaProviders({ sync: !props.preview })
 const { pushNotice } = useAppNoticeStore()
 // Reason-code copy is resolved per locale, so the chip labels re-render when the
 // language preference changes rather than freezing whatever was active at mount.
@@ -255,11 +266,17 @@ const { locale } = useLocale()
 const coverRef = ref<HTMLElement | null>(null)
 const playerBarShellRef = ref<HTMLElement | null>(null)
 const playButtonColor = computed(() => normalizeAccentColor(dominantColor.value))
-const { uiContributions, syncExtensions } = useExtensionRegistry()
+const { uiContributions, syncExtensions } = useExtensionRegistry({ listen: !props.preview })
 const playerBarButtons = computed(() =>
   uiContributions.value.filter((contribution) => contribution.kind === 'playerBarButton')
 )
 const { settings } = useSettingsStore()
+const previewPlayerSettings = computed(
+  () =>
+    props.previewAppearance?.playerBar ??
+    appearanceChromePreview.value?.playerBar ??
+    settings.value.playerBar
+)
 const { effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
 /* Only the standard bar wears the material. Mini and compact are deliberately
    flat control strips, so they opt out entirely rather than wearing it with the
@@ -271,8 +288,11 @@ const { effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
 const liquidGlassActive = computed(
   () =>
     isStandard.value &&
-    effectiveSurfaceMaterial.value !== 'transparent' &&
-    (effectiveSurfaceMaterial.value === 'liquidGlass' || effectiveLiquidGlass.value.playbarEnabled)
+    (props.previewAppearance?.surfaceMaterial ?? effectiveSurfaceMaterial.value) !==
+      'transparent' &&
+    ((props.previewAppearance?.surfaceMaterial ?? effectiveSurfaceMaterial.value) ===
+      'liquidGlass' ||
+      (props.previewAppearance?.liquidGlass ?? effectiveLiquidGlass.value).playbarEnabled)
 )
 /**
  * Which controls this shape puts in each region, resolved through the shared
@@ -281,7 +301,7 @@ const liquidGlassActive = computed(
  * stylesheet both address the bar through them, so only the contents move.
  */
 const barRegions = computed(() => {
-  const regions = resolvePlayerBarRegions(settings.value.playerBar.layout, props.mode)
+  const regions = resolvePlayerBarRegions(previewPlayerSettings.value.layout, props.mode)
   return PLAYER_BAR_REGION_NAMES.map((name: PlayerBarRegionName) => ({
     name,
     className: `player-${name}`,
@@ -664,6 +684,11 @@ const queueAddToPlaylistProvider = computed(() =>
       }
 )
 
+const queueSavePlaylistOpen = ref(false)
+const playbackQueueLength = computed(() =>
+  libraryQueueActive.value ? (libraryQueueSnapshot.value?.total ?? 0) : queue.value.length
+)
+
 const {
   volumeOpen,
   playlistOpen,
@@ -675,7 +700,7 @@ const {
   toggleMore
 } = useFloatingPanels(playerBarShellRef, {
   // The picker is teleported to `body`, so its clicks read as "outside the bar".
-  isDismissBlocked: () => queueAddToPlaylist.open.value
+  isDismissBlocked: () => queueAddToPlaylist.open.value || queueSavePlaylistOpen.value
 })
 
 /*
@@ -738,6 +763,7 @@ const {
   addToTail: addQueueEntryToTail,
   remove: removeQueueEntry,
   clear: clearPlaybackQueue,
+  saveAsPlaylist: savePlaybackQueuePlaylist,
   onDragStart: onQueueDragStart,
   onDragOver: onQueueDragOver,
   onDrop: onQueueDrop,
@@ -752,7 +778,9 @@ const {
     reorderQueue,
     saveQueueAsPlaylist
   },
-  createPlaylistWithTracks
+  createPlaylistWithTracks,
+  createPlaylistWithTrackPages,
+  queueLength: playbackQueueLength
 })
 
 function setPlaylistListRef(element: Element | ComponentPublicInstance | null): void {
@@ -1501,7 +1529,21 @@ onBeforeUnmount(() => {
     ></button>
 
     <Transition name="drawer-up">
-      <div v-if="playlistOpen" class="playlist-panel" :class="{ 'panel-glass': glass }">
+      <LibraryQueueDrawer
+        v-if="playlistOpen && libraryQueueActive"
+        :snapshot="libraryQueueSnapshot"
+        :content-revision="libraryQueueContentRevision"
+        :busy="libraryQueueBusy"
+        :is-playing="isPlaying"
+        :glass="glass"
+        :read-page="readLibraryQueuePage"
+        :play-entry="playLibraryQueueEntry"
+        :edit-queue="editLibraryQueue"
+        :refresh-queue="refreshLibraryQueue"
+        @add-to-playlist="queueAddToPlaylist.openForTrack"
+        @save-playlist="queueSavePlaylistOpen = true"
+      />
+      <div v-else-if="playlistOpen" class="playlist-panel" :class="{ 'panel-glass': glass }">
         <div class="playlist-header">
           <div class="playlist-heading">
             <div class="playlist-heading-row">
@@ -1511,6 +1553,14 @@ onBeforeUnmount(() => {
             <span class="playlist-heading-subtitle">{{ queueSummaryText }}</span>
           </div>
           <div class="playlist-tools" aria-label="队列操作">
+            <button
+              class="playlist-tool-btn"
+              type="button"
+              :disabled="queue.length === 0"
+              @click="queueSavePlaylistOpen = true"
+            >
+              存为歌单
+            </button>
             <button
               class="playlist-tool-btn"
               type="button"
@@ -1656,7 +1706,15 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
 
+    <QueueSavePlaylistDialog
+      v-if="queueSavePlaylistOpen"
+      :save="savePlaybackQueuePlaylist"
+      @close="queueSavePlaylistOpen = false"
+      @saved="pushNotice({ kind: 'success', message: '已将队列存为歌单' })"
+    />
+
     <QueueAddToPlaylistDialog
+      v-if="!preview"
       :open="queueAddToPlaylist.open.value"
       :target-label="queueAddToPlaylist.targetLabel.value"
       :local-playlists="queueAddToPlaylist.localPlaylists.value"
@@ -1880,11 +1938,7 @@ onBeforeUnmount(() => {
             :aria-label="modeTitle"
             @click="cyclePlayMode"
           >
-            <img v-if="playMode === 'sequential'" :src="sequentialIcon" alt="顺序" />
-            <img v-else-if="playMode === 'listLoop'" :src="listLoopIcon" alt="列表循环" />
-            <img v-else-if="playMode === 'repeat'" :src="repeatIcon" alt="单曲循环" />
-            <img v-else-if="playMode === 'heart'" :src="heartModeIcon" alt="心动模式" />
-            <img v-else :src="shuffleIcon" alt="随机" />
+            <PlaybackModeIcon :mode="playMode" />
           </button>
 
           <div

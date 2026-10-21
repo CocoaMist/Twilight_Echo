@@ -17,6 +17,9 @@ export interface AfterglowQueueCoreEngine {
 export interface AfterglowQueueCoreOptions {
   /** Logical queue snapshot handed over by the renderer. */
   queue: readonly unknown[]
+  /** SQLite-backed queues provide a bounded loader instead of a full array. */
+  queueLength?: number
+  loadQueueItem?: (index: number) => Promise<unknown | null>
   /** Logical index the native window currently starts on (usually mapping[0]). */
   currentLogicalIndex: number
   /** Native index -> logical index for the queue already loaded in the engine. */
@@ -47,19 +50,24 @@ const numberField = (record: Record<string, unknown>, key: string): number | und
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-const toQueueItem = (
+export const afterglowNativeQueueItem = (
   track: unknown,
   source: string,
-  logicalIndex: number
+  logicalIndex: number,
+  logicalQueueEnd?: boolean
 ): AudioEngineQueueItem => {
   const record = track && typeof track === 'object' ? (track as Record<string, unknown>) : {}
   const cueRange =
     record.cueRange && typeof record.cueRange === 'object'
       ? (record.cueRange as CueRange)
       : undefined
-  return {
+  const item: AudioEngineQueueItem = {
     id: textField(record, 'id') ?? `afterglow:${logicalIndex}`,
+    ...(textField(record, 'queueEntryId')
+      ? { queueEntryId: textField(record, 'queueEntryId') }
+      : {}),
     source,
+    ...(logicalQueueEnd !== undefined ? { logicalQueueEnd } : {}),
     ...(textField(record, 'title') ? { title: textField(record, 'title') } : {}),
     ...(textField(record, 'artist') ? { artist: textField(record, 'artist') } : {}),
     ...(textField(record, 'album') ? { album: textField(record, 'album') } : {}),
@@ -77,6 +85,22 @@ const toQueueItem = (
       : {}),
     ...(cueRange ? { cueRange } : {})
   }
+  for (const key of [
+    'measuredIntegratedLufs',
+    'measuredTruePeakDb',
+    'replayGainTrackGainDb',
+    'replayGainAlbumGainDb',
+    'replayGainTrackPeak',
+    'replayGainAlbumPeak',
+    'r128TrackGainDb',
+    'r128AlbumGainDb'
+  ] as const) {
+    const value = numberField(record, key)
+    if (value !== undefined) item[key] = value
+  }
+  const codec = textField(record, 'codec') ?? textField(record, 'format')
+  if (codec) item.codec = codec
+  return item
 }
 
 /**
@@ -85,10 +109,13 @@ const toQueueItem = (
  * The core never calls LoadQueue. It appends already-resolved entries and
  * refreshes the upcoming provider URL through the native hot-update contract,
  * so the active decoder stream keeps running. All work is serialized; `stop()`
- * makes every in-flight provider/append result a no-op.
+ * cancels undispatched work and drains already dispatched engine commands. The
+ * final mapping includes confirmed appends, without publishing stale callbacks.
  */
 export class AfterglowQueueCore {
   private readonly queue: readonly unknown[]
+  private readonly queueLength: number
+  private readonly loadQueueItem?: (index: number) => Promise<unknown | null>
   private readonly engine: AfterglowQueueCoreEngine
   private readonly resolver: AfterglowSourceResolver
   private readonly lookahead: number
@@ -104,11 +131,15 @@ export class AfterglowQueueCore {
   private active = false
   private generation = 0
   private lane: Promise<void> = Promise.resolve()
+  private engineDrain: Promise<void> = Promise.resolve()
   private pendingTick: Promise<void> | null = null
   private lastError: string | null = null
+  private sourceReads = new AbortController()
 
   constructor(options: AfterglowQueueCoreOptions) {
     this.queue = options.queue
+    this.queueLength = options.queueLength ?? options.queue.length
+    this.loadQueueItem = options.loadQueueItem
     this.engine = options.engine
     this.resolver = options.resolver
     this.lookahead = Math.max(1, options.lookahead ?? DEFAULT_LOOKAHEAD)
@@ -123,7 +154,7 @@ export class AfterglowQueueCore {
     if (
       this.mapping.length === 0 ||
       this.mapping.some(
-        (index) => !Number.isInteger(index) || index < 0 || index >= this.queue.length
+        (index) => !Number.isInteger(index) || index < 0 || index >= this.queueLength
       )
     ) {
       this.lastError = 'afterglow_core_invalid_initial_mapping'
@@ -153,14 +184,18 @@ export class AfterglowQueueCore {
     }
     this.active = true
     this.generation += 1
+    this.sourceReads = new AbortController()
     await this.tick()
   }
 
-  stop(): void {
-    if (!this.active) return
+  stop(): Promise<void> {
     this.active = false
     this.generation += 1
+    this.sourceReads.abort()
     this.pendingTick = null
+    // Provider/SQL reads may be slow: their generation fence is sufficient.
+    // Only an engine command already sent can still change the handoff map.
+    return this.engineDrain
   }
 
   /** Coalesces concurrent ticks; provider/append work is serialized through the lane. */
@@ -171,7 +206,8 @@ export class AfterglowQueueCore {
     const run = this.lane
       .then(() => this.runTick(generation))
       .catch((error) => {
-        this.reportError(error instanceof Error ? error.message : String(error))
+        if (this.isCurrent(generation))
+          this.reportError(error instanceof Error ? error.message : String(error))
       })
     this.pendingTick = run
     void run.finally(() => {
@@ -193,16 +229,34 @@ export class AfterglowQueueCore {
     this.generation += 1
   }
 
-  private async resolveSource(logicalIndex: number): Promise<ResolvedAfterglowSource | null> {
+  private isCurrent(generation: number): boolean {
+    return this.active && generation === this.generation
+  }
+
+  private mutateEngine<T>(command: () => Promise<T>, commit: (result: T) => void): Promise<void> {
+    const result = command().then(commit)
+    this.engineDrain = result.catch(() => {})
+    return result
+  }
+
+  private async resolveSource(
+    logicalIndex: number,
+    generation: number
+  ): Promise<{ track: unknown; resolved: ResolvedAfterglowSource } | null> {
     const retryAt = this.retryAfter.get(logicalIndex) ?? 0
     if (this.now() < retryAt) return null
-    const resolved = await this.resolver.resolve(this.queue[logicalIndex])
+    const track = this.loadQueueItem
+      ? await this.loadQueueItem(logicalIndex)
+      : this.queue[logicalIndex]
+    if (!track || !this.isCurrent(generation)) return null
+    const resolved = await this.resolver.resolve(track, this.sourceReads.signal)
+    if (!this.isCurrent(generation)) return null
     if (!resolved) {
       this.retryAfter.set(logicalIndex, this.now() + RESOLVE_RETRY_MS)
       return null
     }
     this.retryAfter.delete(logicalIndex)
-    return resolved
+    return { track, resolved }
   }
 
   private async runTick(generation: number): Promise<void> {
@@ -219,12 +273,12 @@ export class AfterglowQueueCore {
     }
     if (state.currentIndex < 0 || state.currentIndex >= this.mapping.length) return
 
-    await this.refreshUpcoming(state)
+    await this.refreshUpcoming(state, generation)
     if (!this.active || generation !== this.generation) return
-    await this.ensureLookahead(state)
+    await this.ensureLookahead(state, generation)
   }
 
-  private async refreshUpcoming(state: AudioEngineQueueState): Promise<void> {
+  private async refreshUpcoming(state: AudioEngineQueueState, generation: number): Promise<void> {
     const upcomingNative = state.upcomingIndex
     if (upcomingNative < 0 || upcomingNative >= this.mapping.length) return
     if (upcomingNative === state.currentIndex) return
@@ -237,58 +291,75 @@ export class AfterglowQueueCore {
       !cached || (typeof expiresAt === 'number' && expiresAt - this.now() <= this.refreshMarginMs)
     if (!due) return
 
-    const resolved = await this.resolveSource(logicalIndex)
-    if (!resolved) return
-    if (!this.active) return
+    const loaded = await this.resolveSource(logicalIndex, generation)
+    if (!loaded || !this.isCurrent(generation)) return
+    const { resolved } = loaded
     if (cached?.source === resolved.source) {
       this.sources.set(logicalIndex, resolved)
       return
     }
     try {
-      const updated = await this.engine.updateQueueItemSource(upcomingNative, resolved.source)
-      if (!updated) {
-        this.reportError(`afterglow_core_source_update_rejected:${upcomingNative}`)
-        return
-      }
-      this.sources.set(logicalIndex, resolved)
+      await this.mutateEngine(
+        () => this.engine.updateQueueItemSource(upcomingNative, resolved.source),
+        (updated) => {
+          if (!this.isCurrent(generation)) return
+          if (!updated) {
+            this.reportError(`afterglow_core_source_update_rejected:${upcomingNative}`)
+            return
+          }
+          this.sources.set(logicalIndex, resolved)
+        }
+      )
     } catch (error) {
-      this.reportError(error instanceof Error ? error.message : String(error))
+      if (this.isCurrent(generation))
+        this.reportError(error instanceof Error ? error.message : String(error))
     }
   }
 
-  private async ensureLookahead(state: AudioEngineQueueState): Promise<void> {
+  private async ensureLookahead(state: AudioEngineQueueState, generation: number): Promise<void> {
     let appended = 0
     while (
-      this.active &&
+      this.isCurrent(generation) &&
       appended < MAX_APPEND_PER_TICK &&
       this.mapping.length - state.currentIndex <= this.lookahead
     ) {
-      if (this.nextLogicalIndex >= this.queue.length) return
+      if (this.nextLogicalIndex >= this.queueLength) return
       const logicalIndex = this.nextLogicalIndex
-      const resolved = await this.resolveSource(logicalIndex)
-      if (!resolved) {
+      const loaded = await this.resolveSource(logicalIndex, generation)
+      if (!this.isCurrent(generation)) return
+      if (!loaded) {
         this.reportError(`afterglow_core_source_unavailable:${logicalIndex}`)
         return
       }
-      if (!this.active) return
-      const item = toQueueItem(this.queue[logicalIndex], resolved.source, logicalIndex)
-      let firstIndex: number
+      const { track, resolved } = loaded
+      const item = afterglowNativeQueueItem(track, resolved.source, logicalIndex)
       try {
-        firstIndex = await this.engine.appendQueueItems([item])
+        await this.mutateEngine(
+          () => this.engine.appendQueueItems([item]),
+          (firstIndex) => {
+            if (firstIndex !== this.mapping.length) {
+              if (this.isCurrent(generation))
+                this.fail(
+                  `afterglow_core_append_index_mismatch:${firstIndex}/${this.mapping.length}`
+                )
+              return
+            }
+            // Keep a confirmed physical append in the final handoff map,
+            // even when its owner stopped while the engine was replying.
+            this.mapping.push(logicalIndex)
+            this.nextLogicalIndex = logicalIndex + 1
+            if (!this.isCurrent(generation)) return
+            this.sources.set(logicalIndex, resolved)
+            this.onMappingChanged?.(this.getMapping())
+          }
+        )
       } catch (error) {
-        this.fail(error instanceof Error ? error.message : String(error))
+        if (this.isCurrent(generation))
+          this.fail(error instanceof Error ? error.message : String(error))
         return
       }
-      if (!this.active) return
-      if (firstIndex !== this.mapping.length) {
-        this.fail(`afterglow_core_append_index_mismatch:${firstIndex}/${this.mapping.length}`)
-        return
-      }
-      this.mapping.push(logicalIndex)
-      this.sources.set(logicalIndex, resolved)
-      this.nextLogicalIndex = logicalIndex + 1
+      if (!this.isCurrent(generation)) return
       appended += 1
-      this.onMappingChanged?.(this.getMapping())
     }
   }
 }

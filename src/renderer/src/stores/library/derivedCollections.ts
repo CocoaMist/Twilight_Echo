@@ -3,13 +3,16 @@ import type { DerivedTrackGroup, LibraryItem } from './musicStoreTypes.ts'
 import { splitGenreValues } from '../../../../shared/genreSeparators.ts'
 import { resolveAlbumReleaseDate } from '../../../../shared/releaseDate.ts'
 import {
+  getCollectionAncestors,
+  getCollectionDirectory,
+  resolveAlbumArtist
+} from '../../../../shared/libraryCollections.ts'
+import {
   compareAlbumTrackOrder,
   deduplicateLibraryPaths,
   getAlbumIdentity,
-  isTrackUnderLibraryRoot,
   mergeAlbumGroupsByReleaseEvidence,
-  normalizeLibraryPath,
-  parentDirectoryOf
+  normalizeLibraryPath
 } from './musicStoreData.ts'
 
 /** Build one consistent library projection without reading or mutating store state. */
@@ -90,10 +93,6 @@ export function buildDerivedCollections(
   const genres = toNamedCollections(genreMap)
 
   const configuredFolderPaths = deduplicateLibraryPaths([...folderPaths])
-  const configuredFolderRoots = configuredFolderPaths.map((folderPath) => ({
-    folderPath,
-    normalized: normalizeLibraryPath(folderPath)
-  }))
   type FolderGroup = {
     folderPath: string
     normalized: string
@@ -117,45 +116,13 @@ export function buildDerivedCollections(
     if (!group.cover && track.cover) group.cover = track.cover
   }
 
-  for (const root of configuredFolderRoots) ensureFolderGroup(root.folderPath)
-
-  if (configuredFolderRoots.length === 0) {
-    for (const track of tracks) {
-      ensureFolderGroup(track.dir?.trim() || parentDirectoryOf(track.filePath))
-    }
-  }
+  for (const root of configuredFolderPaths) ensureFolderGroup(root)
 
   for (const track of tracks) {
-    if (configuredFolderRoots.length === 0) {
-      const trackDirectory = track.dir?.trim() || parentDirectoryOf(track.filePath)
-      addTrackToFolderGroup(folderGroups.get(normalizeLibraryPath(trackDirectory)), track)
-      continue
-    }
-
-    const matchingRoots = configuredFolderRoots.filter((root) =>
-      isTrackUnderLibraryRoot(track.filePath, root.normalized)
-    )
-    if (matchingRoots.length === 0) continue
-    const metadataDirectory = track.dir?.trim() || parentDirectoryOf(track.filePath)
-    const currentDirectoryIsBounded = matchingRoots.some((root) =>
-      isTrackUnderLibraryRoot(metadataDirectory, root.normalized)
-    )
-    let currentDirectory = currentDirectoryIsBounded
-      ? metadataDirectory
-      : parentDirectoryOf(track.filePath)
-    const remainingRootPaths = new Set(matchingRoots.map((root) => root.normalized))
-    while (currentDirectory) {
-      const normalizedCurrent = normalizeLibraryPath(currentDirectory)
-      const group = folderGroups.get(normalizedCurrent)
-      if (!group) {
-        ensureFolderGroup(currentDirectory)
-      }
-      addTrackToFolderGroup(folderGroups.get(normalizedCurrent), track)
-      remainingRootPaths.delete(normalizedCurrent)
-      if (remainingRootPaths.size === 0) break
-      const parent = parentDirectoryOf(currentDirectory)
-      if (!parent || parent === currentDirectory) break
-      currentDirectory = parent
+    const directory = getCollectionDirectory(track.filePath, track.dir, configuredFolderPaths)
+    for (const ancestor of getCollectionAncestors(directory, configuredFolderPaths)) {
+      ensureFolderGroup(ancestor)
+      addTrackToFolderGroup(folderGroups.get(normalizeLibraryPath(ancestor)), track)
     }
   }
 
@@ -175,18 +142,4 @@ export function buildDerivedCollections(
       (a, b) => a.name.localeCompare(b.name, 'zh') || (a.path ?? '').localeCompare(b.path ?? '')
     )
   return { artists, albums, genres, folders }
-}
-
-function resolveAlbumArtist(tracks: readonly Track[]): string {
-  const meaningful = (value?: string): string => {
-    const text = value?.trim() ?? ''
-    return /^(?:unknown(?: artist)?|未知(?:艺术家|歌手))$/i.test(text) ? '' : text
-  }
-  const owners = new Set(tracks.map((track) => meaningful(track.albumArtist)).filter(Boolean))
-  const artists = new Set(tracks.map((track) => meaningful(track.artist)).filter(Boolean))
-  // Legacy scans copied every track artist into ALBUMARTIST; inconsistent owners
-  // must not turn a compilation into a release owned by its first guest singer.
-  if (owners.size === 1) return [...owners][0]!
-  if (artists.size === 1) return [...artists][0]!
-  return artists.size > 1 ? '群星' : '未知歌手'
 }

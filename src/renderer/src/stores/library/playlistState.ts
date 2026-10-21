@@ -1,6 +1,10 @@
 import { toRaw, triggerRef, type Ref } from 'vue'
 import type { Playlist, PlaylistPersistenceNotice } from './musicStoreTypes.ts'
-import { PlaylistPersistence, type PlaylistPersistenceStatus } from '../playlistPersistence.ts'
+import {
+  PlaylistPersistence,
+  PlaylistTransactionRejectedError,
+  type PlaylistPersistenceStatus
+} from '../playlistPersistence.ts'
 import {
   isVersionedDataEnvelope,
   isPersistentDataRevisionConflict,
@@ -52,19 +56,24 @@ export function createPlaylistState({
       retryDelayMs: 1_000,
       // queuePlaylistPersistence only ever enqueues clonePlaylistSnapshot()
       // results (frozen plain data), so the queue does not need to re-clone.
-      cloneSnapshot: (snapshot) => snapshot
+      cloneSnapshot: (snapshot) => snapshot,
+      shouldRetry: (error) => !(error instanceof PlaylistTransactionRejectedError)
     })
     return playlistPersistence
   }
 
-  function queuePlaylistPersistence(
-    base = clonePlaylistSnapshot(playlistAuthoritativeSnapshot)
-  ): void {
+  function queuePlaylistPersistence(base?: Playlist[]): void {
     onChange()
     // playlists 是 shallowRef：就地修改（trackIds/trackSnapshots/name/cover）不会
     // 自动通知，所有变更路径都在此汇合，统一触发。
     triggerRef(playlists)
-    getPlaylistPersistence().enqueue(clonePlaylistSnapshot(), base)
+    const before = persistentSnapshot(base ?? playlistAuthoritativeSnapshot, false)
+    getPlaylistPersistence().enqueue(persistentSnapshot(playlists.value), before)
+  }
+
+  function persistentSnapshot(source: Playlist[], clone = true): Playlist[] {
+    const snapshot = source.filter((playlist) => !playlist.transient)
+    return clone ? clonePlaylistSnapshot(snapshot) : snapshot
   }
 
   function isPlaylistData(value: unknown): value is Playlist[] {
@@ -96,8 +105,11 @@ export function createPlaylistState({
           playlistsRevision = saved.revision
           playlistAuthoritativeSnapshot = clonePlaylistSnapshot(saved.data)
           // Do not overwrite an action that arrived while this write was in flight.
-          if (playlistDataEqual(playlists.value, snapshot)) {
-            playlists.value = clonePlaylistSnapshot(saved.data)
+          if (playlistDataEqual(persistentSnapshot(playlists.value), snapshot)) {
+            playlists.value = [
+              ...clonePlaylistSnapshot(saved.data),
+              ...playlists.value.filter((playlist) => playlist.transient)
+            ]
             onChange()
           }
         } else {
@@ -139,10 +151,75 @@ export function createPlaylistState({
 
   async function loadPlaylists(): Promise<void> {
     const loadedResult = await window.api.data.loadPlaylists()
+    applyLoadedPlaylists(loadedResult)
+  }
+
+  /** Explicitly discard all unsaved changes. Read failures or intervening
+   * gestures preserve both optimistic data and its pending transaction. */
+  async function reloadPlaylistsDiscardingChanges(): Promise<void> {
+    if (playlistPersistenceStatus.value.canRetry !== false)
+      throw new Error('当前没有需要重新读取的歌单成员冲突')
+    const before = clonePlaylistSnapshot()
+    const loadedResult = await window.api.data.loadPlaylists()
     const saved = isVersionedDataEnvelope(loadedResult, isPlaylistData)
       ? loadedResult.data
       : loadedResult
-    playlistsRevision = isVersionedDataEnvelope(loadedResult, isPlaylistData)
+    if (!isRecoveryData(saved)) throw new Error('未读取到有效歌单，已保留未保存的修改')
+    // Normalize and clone before dropping pending intent. A malformed snapshot
+    // must not clear the queue and only then fail during publication.
+    const prepared = prepareLoadedPlaylists(loadedResult)
+    await getPlaylistPersistence().discardPending(
+      () => {
+        if (
+          playlistPersistenceStatus.value.canRetry !== false ||
+          !playlistDataEqual(before, playlists.value)
+        )
+          throw new Error('读取期间歌单又有变化，已保留未保存的修改，请重试')
+      },
+      () => applyPreparedPlaylists(prepared)
+    )
+  }
+
+  function isRecoveryData(value: unknown): value is Playlist[] {
+    if (!Array.isArray(value)) return false
+    const ids = new Set<string>()
+    return value.every((playlist: Playlist | null) => {
+      if (
+        !playlist ||
+        typeof playlist.id !== 'string' ||
+        !playlist.id ||
+        ids.has(playlist.id) ||
+        typeof playlist.name !== 'string' ||
+        typeof playlist.createdAt !== 'string' ||
+        !Array.isArray(playlist.trackIds) ||
+        playlist.trackIds.some((id) => typeof id !== 'string')
+      )
+        return false
+      ids.add(playlist.id)
+      if (!playlist.imported) return true
+      const data = playlist.imported
+      return (
+        typeof data.generation === 'string' &&
+        Number.isSafeInteger(data.membershipRevision) &&
+        Array.isArray(data.entries) &&
+        data.entries.every(
+          (entry) =>
+            entry &&
+            typeof entry.entryId === 'string' &&
+            Number.isSafeInteger(entry.revision) &&
+            Number.isSafeInteger(entry.position) &&
+            !!entry.original &&
+            !!entry.resolution
+        )
+      )
+    })
+  }
+
+  function prepareLoadedPlaylists(loadedResult: unknown) {
+    const saved = isVersionedDataEnvelope(loadedResult, isPlaylistData)
+      ? loadedResult.data
+      : loadedResult
+    const revision = isVersionedDataEnvelope(loadedResult, isPlaylistData)
       ? loadedResult.revision
       : 0
     const DEFAULT_PLAYLIST: Playlist = {
@@ -154,11 +231,7 @@ export function createPlaylistState({
     }
 
     if (!saved || !Array.isArray(saved) || saved.length === 0) {
-      // First launch: create default playlist
-      playlists.value = [DEFAULT_PLAYLIST]
-      playlistAuthoritativeSnapshot = []
-      queuePlaylistPersistence([])
-      return
+      return { revision, loaded: [DEFAULT_PLAYLIST], authority: [] as Playlist[], needsSave: true }
     }
 
     // 旧版本保存的歌单快照可能携带歌词全文 / bpmAnalysis / metadataMatch，
@@ -168,14 +241,26 @@ export function createPlaylistState({
     if (!loaded.find((p) => p.isDefault)) {
       loaded.unshift(DEFAULT_PLAYLIST)
     }
-    playlists.value = loaded
-    playlistAuthoritativeSnapshot = clonePlaylistSnapshot(loaded)
+    return { revision, loaded, authority: clonePlaylistSnapshot(loaded), needsSave: false }
+  }
+
+  function applyPreparedPlaylists(prepared: ReturnType<typeof prepareLoadedPlaylists>): void {
+    playlistsRevision = prepared.revision
+    playlistAuthoritativeSnapshot = prepared.authority
+    playlists.value = prepared.loaded
+    onChange()
+    if (prepared.needsSave) queuePlaylistPersistence([])
+  }
+
+  function applyLoadedPlaylists(loadedResult: unknown): void {
+    applyPreparedPlaylists(prepareLoadedPlaylists(loadedResult))
   }
   return {
     clonePlaylistSnapshot,
     queuePlaylistPersistence,
     savePlaylists,
     flushPlaylists,
-    loadPlaylists
+    loadPlaylists,
+    reloadPlaylistsDiscardingChanges
   }
 }

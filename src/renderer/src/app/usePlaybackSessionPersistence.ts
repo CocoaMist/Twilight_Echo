@@ -20,6 +20,7 @@ interface PlaybackSessionDataApi {
     session: PlaybackSession,
     expectedRevision: number
   ) => Promise<VersionedDataEnvelope<PlaybackSession> | void>
+  syncQueueReferences?: (owner: string, ids: string[]) => Promise<void>
 }
 
 export interface PlaybackSessionPersistenceOptions {
@@ -28,7 +29,10 @@ export interface PlaybackSessionPersistenceOptions {
   currentTime: Ref<number>
   isPlaying: Ref<boolean>
   queue?: Ref<Track[]>
-  restorePlaybackSession: (session: PlaybackSession) => void
+  restorePlaybackSession: (
+    session: PlaybackSession,
+    isCurrent?: () => boolean
+  ) => void | boolean | Promise<void | boolean>
   createPlaybackSession: (mode: PlaybackResumeMode) => PlaybackSession | null
   syncPluginProviders: () => Promise<void>
   dataApi: PlaybackSessionDataApi
@@ -79,6 +83,12 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
       // expected revision (0) against a live envelope (e.g. 16) used to block
       // window close with a revision-conflict dialog.
       const session = await refreshAuthoritativeSession()
+      const syncQueueReferences = options.dataApi.syncQueueReferences
+      if (syncQueueReferences)
+        await syncQueueReferences(
+          'playback-session',
+          session?.libraryQueue?.id ? [session.libraryQueue.id] : []
+        ).catch(() => {})
       if (!canRestore()) return
 
       if (mode === 'off') {
@@ -98,7 +108,8 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
         mode,
         position: mode === 'trackAndPosition' ? session.position : 0
       }
-      options.restorePlaybackSession(restoredSession)
+      const restored = await options.restorePlaybackSession(restoredSession, canRestore)
+      if (restored === false || generation !== restoreGeneration) return
       sessionWriter.setSavedQueueRef(
         session.queueRevision !== undefined ? (options.queue?.value ?? null) : null
       )
@@ -127,6 +138,11 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
     if (mode === 'off') return
     const queueRef = options.queue?.value ?? null
     const session = options.createPlaybackSession(mode)
+    if (session?.libraryQueue) {
+      const write = sessionWriter.save(options.dataApi, session)
+      await write.completion
+      return
+    }
     if (!session || !queueRef || queueRef.length === 0) return
     const write = sessionWriter.save(options.dataApi, {
       ...session,
@@ -181,9 +197,11 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
     const loaded = await options.dataApi.loadPlaybackSession()
     if (isVersionedPlaybackSession(loaded)) {
       sessionWriter.setRevision(loaded.revision)
+      sessionWriter.setSavedLibraryQueueId(loaded.data?.libraryQueue?.id ?? null)
       return loaded.data
     }
     sessionWriter.setRevision(0)
+    sessionWriter.setSavedLibraryQueueId(loaded?.libraryQueue?.id ?? null)
     return loaded
   }
 
@@ -211,7 +229,8 @@ export function createPlaybackSessionPersistence(options: PlaybackSessionPersist
   function startAutosaveWatchers(): void {
     if (!playbackSessionWritesEnabled || stopHandles.length > 0) return
     unregisterAutosaveScheduler = sessionWriter.registerAutosaveScheduler(
-      schedulePlaybackSessionAutosave
+      schedulePlaybackSessionAutosave,
+      savePlaybackSessionForQuit
     )
 
     // The first track can be selected while the application is still waiting

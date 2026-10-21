@@ -232,3 +232,37 @@ test('obsolete network-library reads do not start provider searches', async () =
   assert.deepEqual(queries, ['new'])
   assert.equal(search.query.value, 'new')
 })
+
+test('database refreshes coalesce, retain the page, and reject responses older than the notified content revision', async () => {
+  const calls: Array<{ query: string; offset?: number }> = []
+  let revision = 3
+  const search = createUnifiedMusicSearch({
+    getLocalTracks: () =>
+      assert.fail('an authoritative local source must bypass the renderer array'),
+    localSource: { search: async () => ({ items: [], total: 0 }), confirm: async () => {} },
+    searchAllSongs: async ({ query, offset, localTracks }) => {
+      assert.equal(localTracks.length, 0)
+      calls.push({ query, offset })
+      return { ...unifiedResult(localTrack), libraryRevision: revision }
+    }
+  })
+  await search.search('moon', { limit: 20, offset: 200 })
+  for (let i = 0; i < 500; i++) search.invalidateLibrary(4)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(calls, [
+    { query: 'moon', offset: 200 },
+    { query: 'moon', offset: 200 }
+  ])
+  assert.match(search.error.value, /发生变化/)
+  assert.equal(search.items.value.length, 0)
+  revision = 4
+  search.refresh()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(search.items.value[0].track.id, localTrack.id)
+  search.refresh()
+  await search.search('new', { offset: 0 })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(calls.at(-1), { query: 'new', offset: 0 })
+  assert.equal(calls.length, 4, 'a scheduled refresh cannot restart after a newer manual search')
+  search.clear()
+})

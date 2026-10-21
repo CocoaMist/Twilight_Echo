@@ -59,6 +59,15 @@ export const PERSONAL_STORAGE_KEYS = {
 } as const
 export const isRecord = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v)
+/** Shared by the bounded database export and the complete personal backup. */
+export function personalBackupJsonReplacer(this: unknown, key: string, value: unknown): unknown {
+  return /^(cookie|cookies|password|authorization|accessToken|refreshToken|secret|apiKey|headers|credentials|privateKey)$/i.test(
+    key
+  ) ||
+    (key === 'streamUrl' && isRecord(this) && ('title' in this || 'source' in this))
+    ? undefined
+    : value
+}
 const records = (v: unknown): v is Record<string, unknown>[] =>
   Array.isArray(v) && v.every(isRecord)
 const safeNumber = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
@@ -180,6 +189,8 @@ export function validatePersonalBackup(value: unknown): value is PersonalBackup 
     Object.entries(value.data).every(
       ([k, v]) =>
         PERSONAL_DOMAINS.includes(k as PersonalDomain) &&
+        // Database queue IDs belong to one profile, not to the portable format.
+        !(k === 'playback' && isRecord(v) && v.libraryQueue !== undefined) &&
         validatePersonalDomain(k as PersonalDomain, v)
     )
   )

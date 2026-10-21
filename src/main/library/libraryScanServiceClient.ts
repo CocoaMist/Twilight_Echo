@@ -1,6 +1,13 @@
 import { randomUUID } from 'crypto'
+import { PlaylistRepairScanSession } from './playlistRepairScanSession.ts'
+import type { RepairScanCall } from '../../shared/localLibraryScan.ts'
 import { EventEmitter } from 'events'
 import { createRequire } from 'module'
+import {
+  LibraryDatabaseScanSession,
+  type DatabaseScanProgressListener
+} from './libraryDatabaseScanSession.ts'
+import type { LibraryScanCommit, LibraryScanDatabaseApi } from '../../shared/libraryDatabase.ts'
 import type {
   LocalLibraryScanBatch,
   LocalLibraryFileIdentity,
@@ -98,6 +105,10 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   private rejectReady: ((error: Error) => void) | null = null
   private startupTimer: NodeJS.Timeout | null = null
   private readonly pending = new Map<string, PendingScan>()
+  private databaseSession: LibraryDatabaseScanSession | null = null
+  private databaseReservation: { jobId: string; paused: boolean } | null = null
+  private repairSession: PlaylistRepairScanSession | null = null
+  private startingScans = 0
   private stopped = false
   private unavailableError = ''
 
@@ -121,10 +132,19 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
 
   private armIdleTimer(): void {
     this.clearIdleTimer()
-    if (this.stopped || !this.child || this.pending.size > 0) return
+    if (
+      this.stopped ||
+      !this.child ||
+      this.pending.size > 0 ||
+      this.databaseReservation ||
+      this.databaseSession ||
+      this.repairSession
+    )
+      return
     this.idleTimer = setTimeout(() => {
       this.idleTimer = null
-      if (this.stopped || this.pending.size > 0) return
+      if (this.stopped || this.pending.size > 0 || this.databaseSession || this.repairSession)
+        return
       this.detachChild()
     }, this.idleTimeoutMs)
   }
@@ -137,8 +157,11 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
     onIdentityBatch?: (batch: LocalLibraryScanIdentityBatch) => void,
     onAttemptReset?: () => void
   ): Promise<LocalLibraryWorkerScanResult> {
+    if (this.repairSession) throw new Error('A repair is already using the metadata process')
     this.clearIdleTimer()
-    await this.waitUntilReady()
+    await this.waitForScanStartup()
+    if (this.databaseReservation || this.databaseSession || this.repairSession)
+      throw new Error('A SQLite scan or repair is already using the metadata process')
     const child = this.child
     if (!child)
       throw new Error(this.unavailableError || 'local library scan service is unavailable')
@@ -167,6 +190,11 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   }
 
   pause(requestId: string): void {
+    if (this.databaseReservation?.jobId === requestId) {
+      this.databaseReservation.paused = true
+      if (!this.databaseSession) return
+    }
+    if (this.databaseSession?.jobId === requestId) this.databaseSession.pause()
     const pending = this.pending.get(requestId)
     if (pending) {
       pending.paused = true
@@ -177,6 +205,11 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   }
 
   resume(requestId: string): void {
+    if (this.databaseReservation?.jobId === requestId) {
+      this.databaseReservation.paused = false
+      if (!this.databaseSession) return
+    }
+    if (this.databaseSession?.jobId === requestId) this.databaseSession.resume()
     const pending = this.pending.get(requestId)
     if (pending) {
       pending.paused = false
@@ -186,6 +219,10 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
   }
 
   cancel(requestId: string): void {
+    if (this.databaseSession?.jobId === requestId) {
+      this.databaseSession.cancel()
+      return
+    }
     this.sendControl({ kind: 'cancel', requestId })
     const pending = this.pending.get(requestId)
     if (!pending) return
@@ -200,6 +237,8 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
 
   destroy(): void {
     this.stopped = true
+    this.databaseSession?.fail(new Error('local library scan service stopped'))
+    this.repairSession?.fail(new Error('local library scan service stopped'))
     this.clearIdleTimer()
     if (this.startupTimer) clearTimeout(this.startupTimer)
     this.startupTimer = null
@@ -266,6 +305,14 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
     if (this.unavailableError) throw new Error(this.unavailableError)
     await this.readyPromise
   }
+  private async waitForScanStartup(): Promise<void> {
+    this.startingScans++
+    try {
+      await this.waitUntilReady()
+    } finally {
+      this.startingScans--
+    }
+  }
 
   private handleMessage(message: LocalLibraryScanWorkerMessage): void {
     if (message.kind === 'ready') {
@@ -282,6 +329,16 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
       }
       return
     }
+    if (this.repairSession) {
+      this.repairSession.handle(message)
+      return
+    }
+    if (message.kind.startsWith('repair-')) return
+    if (this.databaseSession) {
+      this.databaseSession.handle(message)
+      return
+    }
+    if (message.kind.startsWith('database-')) return
     if (message.kind === 'progress') {
       const pending = this.pending.get(message.requestId)
       if (!pending) return
@@ -325,6 +382,7 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
       pending.onIdentityBatch?.(message.batch)
       return
     }
+    if (message.kind !== 'response') return
     const pending = this.pending.get(message.requestId)
     if (!pending) return
     this.clearPending(message.requestId, pending)
@@ -464,6 +522,8 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
     if (this.startupTimer) clearTimeout(this.startupTimer)
     this.startupTimer = null
     const error = new Error(reason)
+    this.databaseSession?.fail(error)
+    this.repairSession?.fail(error)
     this.rejectReady?.(error)
     this.rejectReady = null
     this.resolveReady = null
@@ -478,7 +538,130 @@ export class LocalLibraryScanServiceClient extends EventEmitter implements Local
     this.emit('service-error', error)
   }
 
-  private sendControl(message: Exclude<LocalLibraryScanWorkerRequest, { kind: 'scan' }>): void {
+  async scanDatabase(
+    jobId: string,
+    coverCacheDir: string,
+    database: LibraryScanDatabaseApi,
+    onProgress?: DatabaseScanProgressListener,
+    prepareBatch?: (batch: LibraryScanCommit) => Promise<LibraryScanCommit>,
+    signal?: AbortSignal,
+    forceParse = false
+  ) {
+    if (
+      this.repairSession ||
+      this.databaseReservation ||
+      this.databaseSession ||
+      this.pending.size ||
+      this.startingScans
+    )
+      throw new Error('The metadata process is already scanning')
+    if (signal?.aborted) throw new Error('SQLite scan was cancelled before worker startup')
+    this.clearIdleTimer()
+    // Reserve before startup yields so controls cannot overtake scan-database.
+    const reservation = { jobId, paused: false }
+    this.databaseReservation = reservation
+    try {
+      const cancelStartup = () => {
+        this.rejectReady?.(new Error('SQLite scan was cancelled before worker startup'))
+        this.detachChild()
+      }
+      signal?.addEventListener('abort', cancelStartup, { once: true })
+      try {
+        await this.waitForScanStartup()
+      } finally {
+        signal?.removeEventListener('abort', cancelStartup)
+      }
+      if (signal?.aborted) throw new Error('SQLite scan was cancelled before worker startup')
+      if (!this.child || this.pending.size || this.databaseSession || this.repairSession)
+        throw new Error('The metadata process is unavailable or already scanning')
+      const session = new LibraryDatabaseScanSession(
+        jobId,
+        database,
+        (request) => {
+          if (!this.child) throw new Error('Scan process is unavailable')
+          this.child.postMessage(request)
+        },
+        () => this.detachChild(),
+        this.scanWatchdogMs,
+        onProgress,
+        prepareBatch
+      )
+      this.databaseSession = session
+      if (reservation.paused) session.pause()
+      const abort = () => session.cancel()
+      signal?.addEventListener('abort', abort, { once: true })
+      try {
+        try {
+          this.child.postMessage({
+            kind: 'scan-database',
+            requestId: jobId,
+            coverCacheDir,
+            forceParse
+          })
+          if (reservation.paused) this.sendControl({ kind: 'pause', requestId: jobId })
+        } catch (error) {
+          session.fail(error)
+        }
+        return await session.result
+      } finally {
+        signal?.removeEventListener('abort', abort)
+        if (this.databaseSession === session) this.databaseSession = null
+      }
+    } finally {
+      if (this.databaseReservation === reservation) this.databaseReservation = null
+      this.armIdleTimer()
+    }
+  }
+
+  async scanRepair(
+    id: string,
+    root: string,
+    coverCacheDir: string,
+    processCall: (call: RepairScanCall) => Promise<void>,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (
+      this.pending.size ||
+      this.databaseReservation ||
+      this.databaseSession ||
+      this.repairSession ||
+      this.startingScans
+    )
+      throw new Error('The metadata process is already scanning')
+    this.clearIdleTimer()
+    const session = new PlaylistRepairScanSession(
+      id,
+      (message) => {
+        if (!this.child) throw new Error('Scan process is unavailable')
+        this.child.postMessage(message)
+      },
+      () => this.detachChild(),
+      processCall,
+      this.scanWatchdogMs
+    )
+    this.repairSession = session // Reserve before worker startup yields.
+    const abort = () => session.fail(new Error('歌单修复已取消'))
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      try {
+        await Promise.race([this.waitUntilReady(), session.result])
+        if (signal?.aborted) abort()
+        else if (!this.child) session.fail(new Error('Scan process is unavailable'))
+        else this.child.postMessage({ kind: 'scan-repair', requestId: id, root, coverCacheDir })
+      } catch (error) {
+        session.fail(error)
+      }
+      await session.result
+    } finally {
+      signal?.removeEventListener('abort', abort)
+      if (this.repairSession === session) this.repairSession = null
+      this.armIdleTimer()
+    }
+  }
+
+  private sendControl(
+    message: Extract<LocalLibraryScanWorkerRequest, { kind: 'pause' | 'resume' | 'cancel' }>
+  ): void {
     try {
       this.child?.postMessage(message)
     } catch {

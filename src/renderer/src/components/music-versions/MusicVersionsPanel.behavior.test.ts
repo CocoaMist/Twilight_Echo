@@ -81,7 +81,8 @@ window.runVersionTests=async()=>{
   localStorage.clear();loadMusicVersions()
   const tracks=shallowRef(Array.from({length:10000},(_,i)=>track(String(i),i<2?'Release A':'Release B')))
   const key=ref(0),plays=[]
-  createApp({setup:()=>()=>h(Panel,{key:key.value,tracks:tracks.value,onPlay:items=>plays.push(items)})}).mount('#app')
+  const app=createApp({setup:()=>()=>h(Panel,{key:key.value,tracks:tracks.value,onPlay:items=>plays.push(items)})})
+  app.mount('#app')
   await tick()
   expect(document.querySelectorAll('.version-list > li').length===50,'10k catalog must render only one page')
   const boxes=()=>document.querySelectorAll('.version-list input[type=checkbox]')
@@ -116,5 +117,52 @@ window.runVersionTests=async()=>{
   await click('修改版本标签');localStorage.setItem('twilight.music-versions.v1',JSON.stringify({version:1,tracks:{versions:[],families:[]},albums:{versions:[],families:[]}}));await click('确认保存关系')
   expect(document.querySelector('[role=alert]').textContent.includes('其他窗口'),'stale preview detects external edit')
   await value(document.querySelector('select'),'tracks');await tick()
+  app.unmount();document.querySelector('#app').replaceChildren()
+
+  localStorage.clear();loadMusicVersions()
+  const dbTracks=Array.from({length:125},(_,i)=>track('db-'+i,i<60?'Release A':'Release B'))
+  const dbRequests=[],queryPlays=[]
+  const filterTracks=query=>{
+    let matches=dbTracks
+    if(query.ids)matches=matches.filter(item=>query.ids.includes(item.id))
+    if(query.albumId)matches=matches.filter(item=>'id:'+item.albumId===query.albumId)
+    if(query.search)matches=matches.filter(item=>(item.title+' '+item.album+' '+item.fileName).toLowerCase().includes(query.search.toLowerCase()))
+    return matches
+  }
+  const queryTracks=async query=>{
+    dbRequests.push({...query})
+    const matches=filterTracks(query),offset=query.offset||0,limit=query.limit||200
+    return {tracks:matches.slice(offset,offset+limit),versions:{},total:matches.length,revision:8,offset}
+  }
+  window.api={library:{database:{
+    queryTracks,
+    queryCollections:async(kind,query)=>{
+      const groups=[...new Set(dbTracks.map(item=>'id:'+item.albumId))].map(id=>({id,name:id.slice(3),artist:'Artist',trackCount:filterTracks({albumId:id}).length,duration:3600,cover:null}))
+      const matches=query.search?groups.filter(item=>item.name.toLowerCase().includes(query.search.toLowerCase())):groups
+      const offset=query.offset||0,limit=query.limit||200
+      return {items:matches.slice(offset,offset+limit),total:matches.length,revision:8,offset,letterOffsets:{}}
+    }
+  }}}
+  const databaseApp=createApp({setup:()=>()=>h(Panel,{tracks:[],sqliteMode:true,onPlayQuery:(query,id)=>queryPlays.push({query,id})})})
+  databaseApp.mount('#app');await tick()
+  expect(document.querySelectorAll('.version-list > li').length===50,'SQLite track catalog renders only one page')
+  expect(document.querySelector('footer').textContent.includes('125 个来源'),'SQLite catalog uses the database total')
+  expect(dbRequests[0].limit===50&&dbRequests[0].offset===0,'SQLite catalog request is bounded')
+  document.querySelector('.version-list input[type=checkbox]').click();await tick();await click('播放偏好版本')
+  expect(queryPlays[0].query.ids.length===1&&queryPlays[0].id==='db-0','SQLite track preference creates a database queue query')
+  await click('下一页')
+  expect(dbRequests.some(request=>request.offset===50&&request.limit===50),'next page requests only the next database window')
+  await value(document.querySelector('.version-tools input'),'Song db-124')
+  expect(document.querySelectorAll('.version-list > li').length===1&&document.querySelector('.version-list').textContent.includes('db-124'),'database search replaces the current page')
+  await value(document.querySelector('.version-tools input'),'')
+  await value(document.querySelector('select'),'albums')
+  expect(document.querySelectorAll('.version-list > li').length===2,'SQLite album catalog uses summary pages')
+  document.querySelector('.version-list input[type=checkbox]').click();await tick();await click('播放偏好版本')
+  expect(queryPlays.at(-1).query.albumId==='id:Release A','SQLite album preference freezes an album query')
+  await click('查看来源与曲序')
+  expect(document.querySelectorAll('ol li').length===50,'SQLite album details read only one page')
+  await click('下一页曲目')
+  expect(document.querySelectorAll('ol li').length===10&&dbRequests.some(request=>request.albumId==='id:Release A'&&request.offset===50),'album detail pagination reads the next bounded window')
+  databaseApp.unmount()
 }
 `

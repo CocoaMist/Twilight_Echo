@@ -89,6 +89,7 @@ export async function activate(context) {
     searchPlaylists,
     searchArtists,
     fetchPlaylistTracks,
+    readPlaylistImportPage,
     checkLogin,
     getProfile,
     logout,
@@ -1336,6 +1337,28 @@ async function fetchPlaylistTracks(playlistId, force = false) {
   const tracks = songs.slice(0, MAX_PLAYLIST_TRACKS).map(normalizeTrack)
   playlistTrackCache.set(cacheKey, tracks)
   return tracks
+}
+
+// Import has a stronger completeness contract than the legacy playable list.
+// Read the authoritative occurrence IDs, never dedupe them or swallow failures.
+async function readPlaylistImportPage(playlistId, offset = 0, limit = 100) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error('Invalid playlist import page')
+  const detail = await requestOptionalAuthRead(`/playlist/detail?id=${encodeURIComponent(String(playlistId))}`, { attempts: 3, label: 'playlist import detail' })
+  const playlist = detail?.playlist
+  if (!playlist || !Array.isArray(playlist.trackIds) || (Number.isFinite(playlist.trackCount) && playlist.trackCount !== playlist.trackIds.length)) throw new Error('歌单权限不足或返回了不完整的条目，请登录后重试，或使用文件导入')
+  if (playlist.trackIds.length > 20000) throw new Error('歌单超过 20,000 条上限')
+  const refs = playlist.trackIds.slice(offset, offset + limit)
+  const ids = refs.map(ref => Number(ref?.id ?? ref)).filter(id => Number.isSafeInteger(id) && id > 0)
+  const details = ids.length ? await requestOptionalAuthRead(`/song/detail?ids=${ids.join(',')}`, { attempts: 3, label: 'playlist import songs' }) : { songs: [] }
+  if (!Array.isArray(details.songs)) throw new Error('歌曲详情读取中断，请重试')
+  const byId = new Map(details.songs.map(song => [String(song.id), song]))
+  const songs = refs.map(ref => {
+    const song = byId.get(String(ref?.id))
+    const refId=ref?.id ?? ref
+    const rawCover = song?.al?.picUrl || song?.album?.picUrl || null
+    return song ? { title: song.name, artist: (song.ar || song.artists || []).map(a => a.name).join(' / '), album: song.al?.name || song.album?.name, duration: (song.dt || song.duration || 0)/1000, platform: 'ncm', platformId: String(refId), cover: normalizeRemoteAssetUrl(rawCover), coverSource: rawCover, coverSmall: normalizeNcmCoverSize(rawCover, 140), coverSmallSource: rawCover, unavailableReason: song.noCopyrightRcmd ? '原平台版权受限' : undefined } : { platform: 'ncm', platformId: refId ? String(refId) : undefined, unavailableReason: '原平台已下架或无权访问，缺少元数据' }
+  })
+  return { name: playlist.name, songs, total: playlist.trackIds.length, nextOffset: offset + refs.length, hasMore: offset + refs.length < playlist.trackIds.length }
 }
 
 async function fetchLikedTracks(force = false) {

@@ -52,6 +52,22 @@ void assertDecoderContinuesWhenResamplerOutputsNoSamples() {
   }
 }
 
+void assertWavPackDsdDetectionUsesBlockFlag() {
+  std::array<uint8_t, 32> header{};
+  std::memcpy(header.data(), "wvpk", 4);
+  assert(!ffmpeg::wavPackHeaderIsDsd(header.data(), header.size()));
+  header[27] = 0x80;
+  assert(ffmpeg::wavPackHeaderIsDsd(header.data(), header.size()));
+  assert(!ffmpeg::wavPackHeaderIsDsd(header.data(), 31));
+  assert(!ffmpeg::wavPackHeaderIsDsd(nullptr, header.size()));
+  header[0] = 'x';
+  assert(!ffmpeg::wavPackHeaderIsDsd(header.data(), header.size()));
+  header[0] = 'w';
+  header[27] = 0;
+  header[24] = 0x80; // Not the high DSD flag; unrelated PCM flags remain PCM.
+  assert(!ffmpeg::wavPackHeaderIsDsd(header.data(), header.size()));
+}
+
 void assertDecoderReportsPcm(const std::string& name, int bitsPerSample) {
   const auto fixture = writePcmWavFixture({name, 48000, 2, bitsPerSample, 32, false});
   FFmpegDecoder decoder;
@@ -209,6 +225,30 @@ void assertDecoderReportsDsdFallbackWhenSupported() {
   assert(stream.decodedFormat.sampleRate > 0);
   decoder.close();
 }
+
+#if defined(TAE_HAS_FFMPEG)
+void assertDecoderReportsWavPackDsdBeforePcmConversion() {
+  const auto fixture = writeWavPackDsdFixture("twilight-decoder-dsd128.wv");
+  FFmpegDecoder decoder;
+  std::string error;
+  assert(decoder.open(fixture.string(), &error));
+  const auto stream = decoder.streamInfo();
+  assert(stream.isDsd);
+  assert(stream.dsdMode == DsdMode::Pcm);
+  assert(stream.dsdRate == 128);
+  assert(stream.sourceLossless);
+  assert(stream.sourceFormat.sampleRate == 5644800);
+  assert(stream.sourceFormat.bitDepth == 1);
+  assert(stream.sourceFormat.channelCount == 2);
+  assert(stream.decodedFormat.sampleRate == 705600);
+  assert(stream.decodedFormat.sampleFormat == AudioSampleFormat::Float32Interleaved);
+  assert(std::abs(stream.durationSeconds - 1024.0 / 705600) < 1e-9);
+  std::vector<float> samples(64 * 2);
+  assert(decoder.readFrames(samples.data(), 64, &error) == 64);
+  assert(error.empty());
+  for (const float sample : samples) assert(std::isfinite(sample));
+}
+#endif
 
 std::filesystem::path pathFromUtf8Bytes(const std::string& utf8) {
   return std::filesystem::path(reinterpret_cast<const char8_t*>(utf8.c_str()));
@@ -536,6 +576,7 @@ int main(int argc,char** argv) {
   assertSharedFilePreservesReadAndSeekAfterDeletion();
   assertDecoderInt24AppendAvoidsUnalignedInt32Reads();
   assertDecoderContinuesWhenResamplerOutputsNoSamples();
+  assertWavPackDsdDetectionUsesBlockFlag();
   assertDecoderTailZeroHelperPreservesCopiedFrames();
   assertDecoderDirectPendingHelperShrinksToActualSamples();
 #if defined(TAE_HAS_FFMPEG)
@@ -544,6 +585,7 @@ int main(int argc,char** argv) {
   assertDecoderReportsPcm("twilight-fixture-s32.wav", 32);
   assertDecoderCancellationCanBeResetBeforeSeek();
   assertDecoderReportsDsdFallbackWhenSupported();
+  assertDecoderReportsWavPackDsdBeforePcmConversion();
   assertDecoderSoxrTiersProbeAndFallBackGracefully();
   assertPreciseSeekMatchesContinuousPcm();
   assertDecoderOpensUtf8Path();

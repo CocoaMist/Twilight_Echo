@@ -49,6 +49,10 @@ export interface LibraryMetadataEnrichmentTrackUpdate {
   track: Track
 }
 
+type MetadataEnrichmentSink =
+  | ((update: LibraryMetadataEnrichmentTrackUpdate) => void)
+  | ((update: LibraryMetadataEnrichmentTrackUpdate) => Promise<void>)
+
 export interface LibraryMetadataEnrichmentQueueOptions {
   provider: LibraryMetadataEnrichmentProvider
   concurrency?: number
@@ -56,7 +60,7 @@ export interface LibraryMetadataEnrichmentQueueOptions {
   retryMaxMs?: number
   now?: () => number
   onStatus?: (status: LibraryMetadataEnrichmentStatus) => void
-  onTrackEnriched?: (update: LibraryMetadataEnrichmentTrackUpdate) => void
+  onTrackEnriched?: MetadataEnrichmentSink
 }
 
 export interface LibraryMetadataEnrichmentBenchmarkResult {
@@ -91,7 +95,7 @@ export class LibraryMetadataEnrichmentQueue {
   private readonly retryMaxMs: number
   private readonly now: () => number
   private readonly onStatus?: (status: LibraryMetadataEnrichmentStatus) => void
-  private readonly onTrackEnriched?: (update: LibraryMetadataEnrichmentTrackUpdate) => void
+  private readonly onTrackEnriched?: MetadataEnrichmentSink
   private readonly entries = new Map<string, QueueEntry>()
   private readonly activeEntries = new Map<string, QueueEntry>()
   private readonly failures = new Map<string, FailureBackoff>()
@@ -225,6 +229,7 @@ export class LibraryMetadataEnrichmentQueue {
   }
 
   private async processEntry(entry: QueueEntry, generation: number): Promise<void> {
+    let acceptingUpdate = false
     const controller = new AbortController()
     const controllers = this.activeAbortControllers.get(generation) ?? new Set<AbortController>()
     controllers.add(controller)
@@ -238,10 +243,17 @@ export class LibraryMetadataEnrichmentQueue {
       if (generation !== this.generation) return
       this.failures.delete(entry.queryKey)
       for (const { track, policy } of entry.tracks.values()) {
+        if (generation !== this.generation) return
         const match = findBestMetadataMatch(track, candidates)
         const enriched = enrichLocalTrackMetadata(track, match, policy)
-        if (enriched !== track) this.onTrackEnriched?.({ source: track, track: enriched })
+        if (enriched !== track) {
+          acceptingUpdate = true
+          const accepted = this.onTrackEnriched?.({ source: track, track: enriched })
+          if (accepted && typeof accepted.then === 'function') await accepted
+          acceptingUpdate = false
+        }
       }
+      if (generation !== this.generation) return
       this.status.completed += entry.tracks.size
     } catch {
       if (generation !== this.generation) return
@@ -250,7 +262,9 @@ export class LibraryMetadataEnrichmentQueue {
       const retryMs = Math.min(this.retryMaxMs, this.retryBaseMs * 2 ** (attempts - 1))
       this.failures.set(entry.queryKey, { attempts, retryAt: this.now() + retryMs })
       this.status.failed += entry.tracks.size
-      this.status.error = '在线元数据服务暂不可用，将在稍后自动重试'
+      this.status.error = acceptingUpdate
+        ? '元数据保存失败，请稍后重试'
+        : '在线元数据服务暂不可用，将在稍后自动重试'
     } finally {
       const activeControllers = this.activeAbortControllers.get(generation)
       activeControllers?.delete(controller)

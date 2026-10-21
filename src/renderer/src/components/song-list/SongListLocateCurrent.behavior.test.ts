@@ -99,6 +99,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const expect = (condition, message) => { if (!condition) throw new Error(message) }
 
 window.api = {
+  library: { getStorageMode: async () => 'json', onChanged: () => () => {} },
   data: { loadPlaybackBookmarks: async () => null },
   providers: { list: async () => [] }
 }

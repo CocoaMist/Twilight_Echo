@@ -31,6 +31,8 @@ test('local artist navigation resolves collaborations and reacts to the selected
   const result = runInNewContext(code, {
     computed,
     props,
+    databaseTableCandidate: ref(false),
+    libraryStorage: { mode: ref('json') },
     tracks,
     resolveLibraryArtistTracks
   }) as { value: Track[] }
@@ -95,6 +97,16 @@ test('song list manual matching uses ranked metadata match candidates', () => {
   assert.match(source, /buildMetadataMatchCandidates/)
   assert.match(source, /const candidates = buildMetadataMatchCandidates\(/)
   assert.match(source, /const rematched = candidates\[0\]\?\.track/)
+})
+
+test('playlist rows expose a free source picker instead of only automatic rematching', () => {
+  const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
+
+  assert.match(source, /TrackSourcePicker/)
+  assert.match(source, /const sourcePickerTrack = shallowRef<Track \| null>\(null\)/)
+  assert.match(source, /replaceTrackReference\(original\.id, replacement\)/)
+  assert.match(source, /v-if="isPlaylistDetail && selectedTrack && contextActionCount <= 1"/)
+  assert.match(source, /选择播放来源/)
 })
 
 test('song list wires local metadata rematch into the context menu', () => {
@@ -171,7 +183,7 @@ test('song list playlist cards expose mixed-source composition', () => {
   assert.match(source, /formatPlaylistSourceSummary/)
   assert.match(source, /function playlistSourceSummaryLabel\(playlist: GridItem\): string/)
   assert.match(source, /class="playlist-source-summary"/)
-  assert.match(source, /playlistSourceSummaryLabel\(playlist\)/)
+  assert.match(source, /playlistSourceSummaryLabel\(item\)/)
   assert.match(styles, /\.playlist-source-summary/)
 })
 
@@ -373,12 +385,14 @@ test('library playback controls render in the title group while albums use dedic
   for (const handler of ['playAllTracks', 'shufflePlayTracks']) {
     assert.match(
       titleGroup,
-      new RegExp(`:disabled="displayTracks.length === 0"\\s+@click="${handler}"`)
+      new RegExp(
+        `:disabled="tableTrackCount === 0 \\|\\| databaseReadPending"\\s+@click="${handler}"`
+      )
     )
   }
   const albumHeader = source.slice(albumHeaderIndex, source.indexOf('/>', albumHeaderIndex))
   assert.match(albumHeader, /v-if="currentAlbum"/)
-  assert.match(albumHeader, /:can-play="displayTracks.length > 0"/)
+  assert.match(albumHeader, /:can-play="tableTrackCount > 0 && !databaseReadPending"/)
   assert.match(albumHeader, /@play="playAllTracks"/)
   assert.match(albumHeader, /@shuffle="shufflePlayTracks"/)
 })
@@ -410,15 +424,22 @@ test('track table places the list number before artwork and reserves metadata tr
   const table = source.slice(source.indexOf('<table class="track-table">'))
   const header = table.slice(table.indexOf('<thead>'), table.indexOf('</thead>'))
   const row = table.slice(
-    table.indexOf('<tr\n                  v-for='),
-    table.indexOf('</tr>', table.indexOf('<tr\n                  v-for='))
+    table.indexOf('class="track-row"'),
+    table.indexOf('</tr>', table.indexOf('class="track-row"'))
   )
 
   assert.ok(header.indexOf('class="col-index"') < header.indexOf('class="col-cover-header"'))
   assert.ok(row.indexOf('class="col-index"') < row.indexOf('class="col-cover"'))
   assert.match(source, /const isAlbumDetail = computed\(/)
   assert.match(source, /isAlbumDetail\.value[\s\S]*track\.trackNumber/)
-  assert.match(source, /return visibleRange\.value\.start \+ visibleIndex \+ 1/)
+  assert.match(source, /visibleRange\.value\.start \+\s*visibleIndex \+\s*1/)
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf('function trackListNumber'),
+      source.indexOf('const currentPlaylist =')
+    ),
+    /page\?\.offset/
+  )
   assert.match(row, /trackListNumber\(track, Number\(index\)\)/)
   assert.doesNotMatch(row, /track\.trackNumber\s*\?\?/)
 })
@@ -432,7 +453,7 @@ test('collection grid window-mounts cards and derives A-Z from data', () => {
   )
 
   assert.match(source, /grid-virtual-spacer/)
-  assert.match(source, /gridWindowStart \+ index/)
+  assert.match(source, /v-for="\{ item, index \} in visibleGridSlots"/)
   assert.match(source, /collectionLetterAtScroll/)
   assert.match(source, /loading="lazy"/)
   assert.doesNotMatch(source, /querySelectorAll<HTMLElement>\('\[data-collection-letter\]'\)/)
@@ -450,45 +471,97 @@ test('collection grid window-mounts cards and derives A-Z from data', () => {
   assert.match(styles, /\.track-playing::before \{[\s\S]*backdrop-filter: blur\(18px\)/)
 })
 
-test('selected tracks append as one queue command without starting playback', () => {
+test('selected tracks await one queue command before reporting success, without starting playback', async () => {
   const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
   const body = source.match(
-    /function appendActionTracksToQueue\(actionTracks: Track\[\]\): void \{([\s\S]*?)\n\}/
+    /async function appendActionTracksToQueue\(actionTracks\?: Track\[\]\): Promise<void> \{([\s\S]*?)\n\}/
   )?.[1]
   assert.ok(body)
   const batches: unknown[] = []
   const message = { value: '' }
   let cleared = 0
   let closed = 0
-  const append = new Function(
+  const execute = new Function(
     'actionTracks',
     'playbackStore',
     'repairMessage',
     'clearSelection',
     'closeContextMenu',
-    body
+    'libraryMutationPending',
+    'multiSelect',
+    'databaseTableEnabled',
+    `return ${ts.transpileModule(`(async () => {${body}})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText}`
   )
+  const append = (...args: unknown[]) => execute(...args, { value: false })
   const tracks = [{ id: 'local:2' }, { id: 'ncm:1' }]
-  const store = { appendQueueTracks: (items: unknown) => batches.push(items) }
-  append(
+  let release!: () => void
+  const store = {
+    appendQueueTracksAsync: async (items: unknown) => {
+      batches.push(items)
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    }
+  }
+  const pending = { value: false }
+  const selection = { selectionVersion: { value: 0 } }
+  const operation = append(
     tracks,
     store,
     message,
     () => cleared++,
-    () => closed++
+    () => closed++,
+    pending,
+    selection
   )
   assert.deepEqual(batches, [tracks])
+  assert.equal(pending.value, true)
+  assert.equal(cleared, 0)
+  assert.equal(message.value, '')
+  release()
+  await operation
   assert.equal(cleared, 1)
   assert.equal(closed, 1)
   assert.equal(message.value, '已添加 2 首到播放队列')
-  append(
+  await append(
     [],
     store,
     message,
     () => cleared++,
-    () => closed++
+    () => closed++,
+    pending,
+    selection
   )
   assert.equal(batches.length, 1)
-  assert.match(source, /@click="appendActionTracksToQueue\(contextActionTracks\)"/)
-  assert.match(source, /@click="appendActionTracksToQueue\(selectionActionTracks\)"/)
+  await append(
+    tracks,
+    {
+      appendQueueTracksAsync: async () => {
+        throw new Error('reply lost')
+      }
+    },
+    message,
+    () => cleared++,
+    () => closed++,
+    pending,
+    selection
+  )
+  assert.equal(message.value, 'reply lost')
+  assert.equal(cleared, 1, 'failed/unknown insert retains the selection for inspection')
+  assert.equal(pending.value, false)
+  const later = append(
+    tracks,
+    store,
+    message,
+    () => cleared++,
+    () => closed++,
+    pending,
+    selection
+  )
+  selection.selectionVersion.value++
+  release()
+  await later
+  assert.equal(cleared, 1, 'an earlier completed command must not clear a newer selection')
+  assert.match(source, /@click="appendActionTracksToQueue\(contextTracksForAction\(\)\)"/)
+  assert.match(source, /@click="appendActionTracksToQueue\(\)"/)
 })

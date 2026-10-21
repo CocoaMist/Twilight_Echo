@@ -61,3 +61,23 @@ test('opening settings without a destination returns to the last browsed categor
   assert.equal(navigation.settingsInitialSection.value, 'playback')
   assert.equal(navigation.settingsNavigationTarget.value.anchor, 'dsp')
 })
+
+test('appearance searches stay in original settings and the new workspace returns to them', () => {
+  const navigation = useAppNavigation()
+  const entry = SETTINGS_SEARCH_INDEX.find((item) => item.id === 'global-font')!
+  navigation.openSettingsPage('appearance', { entry })
+  assert.equal(navigation.showSettingsPage.value, true)
+  assert.equal(navigation.showAppearancePage.value, false)
+  assert.equal(navigation.settingsNavigationTarget.value.entry, entry)
+  const target = navigation.settingsNavigationTarget.value
+  navigation.openAppearancePage()
+  assert.equal(navigation.showAppearancePage.value, true)
+  navigation.closeAppearancePage()
+  assert.equal(navigation.showSettingsPage.value, true)
+  assert.equal(navigation.settingsInitialSection.value, 'appearance')
+  assert.equal(navigation.settingsNavigationTarget.value, target)
+  navigation.closeSettingsPage()
+  navigation.openSettingsPage()
+  assert.equal(navigation.showSettingsPage.value, true)
+  assert.equal(navigation.settingsInitialSection.value, 'appearance')
+})

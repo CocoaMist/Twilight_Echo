@@ -19,7 +19,7 @@ test('DSP audition panel waits for measurement and ACK, invalidates edits and re
     await writeFile(join(directory, 'entry.ts'), runtime)
     await writeFile(
       join(directory, 'player.ts'),
-      "import {shallowRef} from 'vue'; export const currentTrack=shallowRef({id:'local',source:'local',filePath:'D:/music/test.wav',title:'Test',duration:120}); export const usePlayerStore=()=>({currentTrack})"
+      "import {shallowRef} from 'vue'; export const currentTrack=shallowRef({id:'local',source:'local',filePath:'D:/music/test.wav',title:'Test',duration:120}); export const usePlayerStore=()=>({currentTrack,playbackInfo:shallowRef({isDsd:false,sourceSampleRate:48000,actualSampleRate:48000,decodedChannels:2,actualChannels:2})})"
     )
     await build({
       configFile: false,

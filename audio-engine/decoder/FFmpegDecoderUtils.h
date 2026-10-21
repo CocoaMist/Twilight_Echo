@@ -10,6 +10,13 @@
 
 namespace twilight::audio::ffmpeg {
 
+// The WavPack block flag distinguishes DSD from both integer and floating PCM.
+// FFmpeg decodes WavPack DSD to PCM but keeps AV_CODEC_ID_WAVPACK for the source.
+inline bool wavPackHeaderIsDsd(const uint8_t* header, size_t size) {
+  return header && size >= 32 && std::memcmp(header, "wvpk", 4) == 0 &&
+         (header[27] & 0x80) != 0;
+}
+
 inline void zeroPcmBlock(PcmBlock& block) {
   if (!block.data || block.byteSize == 0) return;
   std::memset(block.data, 0, block.byteSize);

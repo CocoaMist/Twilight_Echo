@@ -313,7 +313,9 @@ an incomplete VST3 helper pair, missing dynamic imports, manifest/status drift, 
 overstates staged facts fails the gate; absent real devices remain `unverified` / `not-run`.
 
 macOS CoreAudio and Linux ALSA package targets remain unverified. Their buildability is not a
-release-readiness claim; keep their real-device smoke evidence separate from the Windows gate.
+release-readiness claim; keep their real-device smoke evidence separate from the Windows gate. The
+packaging and release workflow for those targets is documented in
+[multi-platform release](multi-platform-release.md).
 
 ## Plugin Boundary
 

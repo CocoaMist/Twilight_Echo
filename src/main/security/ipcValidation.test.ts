@@ -328,16 +328,25 @@ test('Electron documents use local CSP, denied permissions, and trusted IPC send
   )
   assert.match(
     electronSecuritySource,
-    /img-src 'self' data: blob: cover: background: theme-asset: twilight-media:/
+    /img-src 'self' data: blob: cover: background: theme-asset: twilight-media:.*WALLPAPER_ENGINE_ORIGIN/
   )
   assert.match(electronSecuritySource, /font-src 'self' data: theme-asset:/)
-  assert.match(electronSecuritySource, /media-src 'self' blob: twilight-audio: twilight-media:/)
+  assert.match(
+    electronSecuritySource,
+    /media-src 'self' blob: twilight-audio: twilight-media:.*WALLPAPER_ENGINE_ORIGIN/
+  )
+  assert.match(electronSecuritySource, /frame-src 'self' plugin-ui:.*WALLPAPER_ENGINE_ORIGIN/)
   assert.match(
     rendererHtml,
-    /img-src 'self' data: blob: cover: background: theme-asset: twilight-media:/
+    /img-src 'self' data: blob: cover: background: theme-asset: twilight-media:.*127\.0\.0\.1:3100/
   )
   assert.match(rendererHtml, /font-src 'self' data: theme-asset:/)
-  assert.match(rendererHtml, /media-src 'self' blob: twilight-audio: twilight-media:/)
+  assert.match(
+    rendererHtml,
+    /media-src 'self' blob: twilight-audio: twilight-media:.*127\.0\.0\.1:3100/
+  )
+  assert.match(rendererHtml, /frame-src 'self' plugin-ui: http:\/\/127\.0\.0\.1:3100/)
+  assert.match(rendererHtml, /<script type="module" src="\/we-background\.js"><\/script>/)
   // Playbar cover-theme sampling uses crossOrigin=anonymous on local + remote covers.
   assert.match(lifecycleSource, /scheme: 'twilight-media'[\s\S]*corsEnabled:\s*true/)
   assert.match(lifecycleSource, /scheme: 'cover'[\s\S]*corsEnabled:\s*true/)
@@ -347,7 +356,10 @@ test('Electron documents use local CSP, denied permissions, and trusted IPC send
     lifecycleSource,
     /protocol\.handle\('cover'[\s\S]*Access-Control-Allow-Origin['"]:\s*['"]\*['"]/
   )
-  assert.doesNotMatch(rendererHtml, /(?:img-src|media-src)[^;]*\bhttps?:/)
+  assert.doesNotMatch(
+    rendererHtml,
+    /(?:frame-src|img-src|media-src)[^;]*https?:\/\/(?!127\.0\.0\.1:3100)/
+  )
   assert.doesNotMatch(rendererHtml, /unpkg\.com|fonts\.googleapis\.com|unsafe-inline' https:/)
   assert.match(rendererHtml, /script-src 'self'/)
   assert.match(rendererHtml, /frame-src 'self'/)

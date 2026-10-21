@@ -10,6 +10,7 @@ export interface SleepTimerBridge {
   configure: (state: SleepTimerState) => Promise<SleepTimerState | null>
   cancel: () => Promise<null>
   boundary: (boundary: 'trackEnd' | 'queueEnd') => Promise<SleepTimerState | null>
+  getState?: () => Promise<SleepTimerState | null>
 }
 
 export interface SleepTimerControllerOptions {
@@ -91,13 +92,23 @@ export function createSleepTimerController(options: SleepTimerControllerOptions)
     void options.bridge?.cancel().catch(() => {})
   }
 
-  async function reportBoundary(boundary: 'trackEnd' | 'queueEnd'): Promise<boolean> {
+  async function reportBoundary(
+    boundary: 'trackEnd' | 'queueEnd',
+    nativeAuthoritative = false
+  ): Promise<boolean> {
     if (disposed) return false
-    if (!options.getState()?.active || !options.bridge) return false
+    if (!options.bridge || (!nativeAuthoritative && !options.getState()?.active)) return false
     const isCurrent = capture()
     const commandToken = commandRevision
     try {
-      const state = await options.bridge.boundary(boundary)
+      // Modern native playback already supplied the original decision time to
+      // main. EOF continuation only reads that decision; reporting a second,
+      // untimed boundary could trigger a timer armed after the actual EOF.
+      const state = nativeAuthoritative
+        ? options.bridge.getState
+          ? await options.bridge.getState()
+          : options.getState()
+        : await options.bridge.boundary(boundary)
       if (disposed || commandRevision !== commandToken) return false
       // Trigger/status events can precede the invoke reply. Keep the newer
       // event snapshot, but still suppress EOF advancement when it fired.
@@ -109,7 +120,7 @@ export function createSleepTimerController(options: SleepTimerControllerOptions)
       return (
         !disposed &&
         commandRevision === commandToken &&
-        !isCurrent() &&
+        (nativeAuthoritative || !isCurrent()) &&
         options.getState()?.triggered === true
       )
     }

@@ -26,6 +26,44 @@ test('remote media grants expose an opaque URL and expire after inactivity', () 
   assert.throws(() => grants.resolve(granted, 'audio'), /expired/)
 })
 
+test('three days of grants retire untouched audio and images without evicting actively used handles', (t) => {
+  let now = 0,
+    token = 0
+  const grants = new RemoteMediaGrantService({
+    now: () => now,
+    createToken: () => `ttl-${++token}`
+  })
+  const active = grants.grant('https://media.example/active.flac', 'audio')
+  const image = grants.grant('https://media.example/first.jpg', 'image')
+  const state = (grants as unknown as { grants: Map<string, { kind: string }> }).grants
+  let peakAudio = 0,
+    peakImages = 0
+  for (let i = 0; i < 3 * 24 * 120; i++) {
+    now += 30_000
+    grants.resolve(active, 'audio')
+    grants.grant(`https://media.example/${i}.flac`, 'audio')
+    grants.grant(`https://media.example/${i}.jpg`, 'image')
+    const counts = [...state.values()].reduce(
+      (sum, grant) => {
+        sum[grant.kind === 'audio' ? 0 : 1]++
+        return sum
+      },
+      [0, 0]
+    )
+    peakAudio = Math.max(peakAudio, counts[0])
+    peakImages = Math.max(peakImages, counts[1])
+  }
+  assert.ok(peakAudio <= 125, `audio peak ${peakAudio}`)
+  assert.ok(peakImages <= 2945, `image peak ${peakImages}`)
+  t.diagnostic(`72 simulated hours: peak audio grants ${peakAudio}, image grants ${peakImages}`)
+  assert.equal(grants.resolve(active, 'audio').source, 'https://media.example/active.flac')
+  assert.throws(() => grants.resolve(image, 'image'), /unknown|expired/)
+  grants.revokeAll()
+  assert.equal(state.size, 0)
+  const fresh = grants.grant('https://media.example/fresh.flac', 'audio')
+  assert.equal(grants.resolve(fresh, 'audio').source, 'https://media.example/fresh.flac')
+})
+
 test('provider media results replace only approved remote media fields with grants', () => {
   const grants = new RemoteMediaGrantService({
     createToken: (() => {

@@ -101,7 +101,13 @@ const settle=async()=>{await nextTick();await new Promise(resolve=>setTimeout(re
 const loaded=async()=>{for(let i=0;i<30;i++){await settle();const img=document.querySelector('img');if(img?.complete&&img.naturalWidth)return img}throw Error('artwork did not load')}
 window.runArtworkTests=async()=>{
  const empty=await loaded(),fallback=empty.src
- expect(empty.naturalWidth===768&&empty.loading==='lazy'&&empty.decoding==='async','bundled fallback is absent or loses image hints')
+ expect(empty.naturalWidth===1254&&empty.loading==='lazy'&&empty.decoding==='async','bundled fallback is absent or loses image hints')
+ expect(empty.classList.contains('default-track-cover'),'default art is not theme-aware')
+ const lightContent=getComputedStyle(empty).content
+ document.documentElement.dataset.theme='dark';await settle()
+ expect(getComputedStyle(empty).content!==lightContent,'dark theme keeps the light fallback')
+ document.documentElement.dataset.theme='pureWhite';await settle()
+ expect(getComputedStyle(empty).content===lightContent,'light theme keeps the dark fallback')
  const size=empty.getBoundingClientRect().toJSON()
  expect(size.width===160&&size.height===160,'fallback does not inherit its parent scoped thumbnail size and gets cropped')
  state.mode='broken';state.calls=0;props.coverSource='https://example.invalid/cover';props.identity='broken'
@@ -114,6 +120,7 @@ window.runArtworkTests=async()=>{
  expect((await loaded()).src===fallback,'rejected grant leaves a broken image')
  state.mode='recover';state.calls=0;props.identity='recover';await settle()
  const recovered=await loaded();expect(recovered.src!==fallback&&state.calls===2,'one expired handle cannot recover')
+ expect(!recovered.classList.contains('default-track-cover')&&getComputedStyle(recovered).content==='normal','theme fallback masks real artwork')
  expect(diagnostics.some(e=>e.event==='image.recovered'),'successful recovery is absent from diagnostics')
  expect(recovered.getBoundingClientRect().width===size.width&&recovered.getBoundingClientRect().height===size.height,'fallback changes thumbnail geometry')
  state.mode='same';state.calls=0;props.identity='same-handle';await loaded();await settle()
@@ -127,4 +134,6 @@ window.runArtworkTests=async()=>{
  props.cover=null;props.coverSource=null;props.identity='custom';custom.value=true;await settle()
  expect(document.querySelector('[data-custom-placeholder]'),'explicit placeholder contract was lost')
  custom.value=false;props.fallback='';await settle();expect(!document.querySelector('img'),'explicit empty fallback was lost')
+ props.fallback=validCover;await settle();document.documentElement.dataset.theme='dark';await settle()
+ expect((await loaded()).src===validCover&&!document.querySelector('img').classList.contains('default-track-cover'),'theme replaces an explicit fallback')
 }`

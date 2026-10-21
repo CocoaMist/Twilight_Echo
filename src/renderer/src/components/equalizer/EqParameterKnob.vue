@@ -289,7 +289,7 @@ defineExpose({ finishInteraction })
 }
 .knob-caption {
   color: var(--eq-text-muted);
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   font-weight: 600;
   letter-spacing: 0.14em;
 }
@@ -300,7 +300,7 @@ defineExpose({ finishInteraction })
   gap: 3px;
   min-height: 22px;
   font-family: var(--eq-mono);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   color: var(--eq-text-muted);
 }
 .knob-readout input {
@@ -313,7 +313,7 @@ defineExpose({ finishInteraction })
   background: transparent;
   color: var(--eq-text);
   font: inherit;
-  font-size: 12px;
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   font-variant-numeric: tabular-nums;
   text-align: right;
   appearance: textfield;

@@ -9,6 +9,7 @@ import type { AudioEngineManager, PlaybackInfo } from '../audioEngineManager'
 import type { TelemetryClient } from '../analytics/telemetryClient.ts'
 import type { AudioAnalysisServiceClient } from '../audioAnalysisServiceClient.ts'
 import type { LocalLibraryIndexCoordinator } from '../library/libraryIndexCoordinator.ts'
+import type { LibraryDatabaseRuntime } from '../library/libraryDatabaseRuntime.ts'
 import type { LocalLibraryScanServiceClient } from '../library/libraryScanServiceClient.ts'
 import type { OpraCatalog } from '../opraCatalog'
 import type { TwilightPluginManager } from '../plugins/manager'
@@ -44,6 +45,7 @@ export const runtime = {
   audioAnalysisService: null as AudioAnalysisServiceClient | null,
   localLibraryScanService: null as LocalLibraryScanServiceClient | null,
   localLibraryIndexCoordinator: null as LocalLibraryIndexCoordinator | null,
+  libraryDatabase: null as LibraryDatabaseRuntime | null,
   dspAssetLibrary: null as DspAssetLibrary | null,
   vst3Catalog: null as Vst3CatalogService | null,
   bpmAnalysisManager: null as BpmAnalysisManager | null,

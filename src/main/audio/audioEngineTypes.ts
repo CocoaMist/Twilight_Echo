@@ -39,6 +39,13 @@ export interface NativeAudioBinding {
   SetOutputBackend: (backend: string) => void
   SetOutputConfig?: (json: string) => void
   LoadQueue?: (queueJson: string, startIndex: number) => void
+  RebindQueue?: (
+    queueJson: string,
+    startIndex: number,
+    mode: string,
+    expectedJson: string,
+    expectedIndex: number
+  ) => boolean | Promise<boolean>
   /** Hot append: returns void; the host mirror owns the first appended index. */
   AppendQueueItems?: (itemsJson: string) => void
   /** Refresh a non-current queued item's source (expiring provider URL). */

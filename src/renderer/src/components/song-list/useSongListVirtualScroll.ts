@@ -21,6 +21,9 @@ type UseSongListVirtualScrollOptions = {
   debouncedSearchQuery: Ref<string>
   viewKey?: ComputedRef<string>
   viewIdentity?: ComputedRef<string>
+  /** The full query count, independent of the bounded loaded Track window. */
+  itemCount?: ComputedRef<number>
+  restoreReady?: ComputedRef<boolean>
 }
 
 const ROW_HEIGHT = 68
@@ -32,7 +35,9 @@ export function useSongListVirtualScroll({
   shouldResetOnSearch,
   debouncedSearchQuery,
   viewKey,
-  viewIdentity
+  viewIdentity,
+  itemCount,
+  restoreReady
 }: UseSongListVirtualScrollOptions): {
   containerRef: Ref<HTMLElement | null>
   tbodyRef: Ref<HTMLElement | null>
@@ -58,10 +63,11 @@ export function useSongListVirtualScroll({
   const viewportHeight = ref(0)
   const tableOffsetTop = ref(0)
   const rowHeight = ROW_HEIGHT
+  const trackCount = computed(() => itemCount?.value ?? displayTracks.value.length)
 
   const visibleRange = computed(() =>
     getSongListVirtualRange({
-      trackCount: displayTracks.value.length,
+      trackCount: trackCount.value,
       scrollTop: scrollTop.value,
       viewportHeight: viewportHeight.value,
       tableOffsetTop: tableOffsetTop.value,
@@ -73,7 +79,7 @@ export function useSongListVirtualScroll({
     return displayTracks.value.slice(visibleRange.value.start, visibleRange.value.end)
   })
 
-  const totalHeight = computed(() => displayTracks.value.length * rowHeight)
+  const totalHeight = computed(() => trackCount.value * rowHeight)
   const paddingTop = computed(() => visibleRange.value.start * rowHeight)
 
   function onScroll(e: Event): void {
@@ -117,7 +123,9 @@ export function useSongListVirtualScroll({
   }
 
   function restoreScrollAndMeasure(): void {
+    if (restoreReady && !restoreReady.value) return
     void nextTick(() => {
+      if (restoreReady && !restoreReady.value) return
       updateViewportHeight()
       if (containerRef.value) containerRef.value.scrollTop = scrollTop.value
       if (containerRef.value) scrollTop.value = containerRef.value.scrollTop
@@ -131,7 +139,7 @@ export function useSongListVirtualScroll({
     updateViewportHeight()
     const nextTop = getSongListTrackScrollTopForIndex({
       index,
-      trackCount: displayTracks.value.length,
+      trackCount: trackCount.value,
       viewportHeight: container.clientHeight,
       tableOffsetTop: tableOffsetTop.value,
       rowHeight
@@ -139,6 +147,15 @@ export function useSongListVirtualScroll({
     container.scrollTop = nextTop
     scrollTop.value = container.scrollTop
   }
+
+  if (restoreReady)
+    watch(
+      restoreReady,
+      (ready) => {
+        if (ready && restorePending) restoreScrollAndMeasure()
+      },
+      { flush: 'post' }
+    )
 
   if (viewKey) {
     watch(

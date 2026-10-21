@@ -150,7 +150,8 @@ interface PlayerShortcutStatus {
 }
 
 type LibraryChange =
-  | { kind: 'add' | 'remove' | 'unknown'; path?: string }
+  | { kind: 'database'; revision: number }
+  | { kind: 'add' | 'remove' | 'unknown'; path?: string; revision?: number }
   | { kind: 'scan'; update: LocalLibraryScanUpdate }
 
 import type { TwilightMediaProviderMethod } from '../shared/mediaProviderMethods.ts'
@@ -200,6 +201,9 @@ interface AudioEngineAPI {
   selectQueueItem?: (
     selection: import('../shared/nativeQueue').NativeQueueSelection
   ) => Promise<boolean>
+  rebindQueue?: (
+    request: import('../shared/nativeQueue').NativeQueueRebind
+  ) => Promise<import('../shared/nativeQueue').NativeQueueCommit | null>
   play: (filePath: string, startTime?: number) => Promise<AudioEnginePlayResult>
   isHtmlAudioFallbackAllowed: () => Promise<boolean>
   togglePause: () => Promise<void>
@@ -306,6 +310,26 @@ interface OpraAPI {
 }
 
 interface WindowAPI {
+  playlistImport: {
+    chooseFile(): Promise<import('../shared/externalPlaylist.ts').PlaylistImportDocument | null>
+    resolveNeteaseShortLink(request: {
+      input: string
+      requestId: string
+    }): Promise<import('../shared/externalPlaylist.ts').PlaylistLink>
+    readPage(request: {
+      link: string
+      offset: number
+      cursor?: string
+      requestId?: string
+      credentials?: {
+        accessToken?: string
+        developerToken?: string
+        userToken?: string
+        country?: string
+      }
+    }): Promise<import('../shared/externalPlaylist.ts').PlaylistImportPage>
+    cancelRead(requestId: string): Promise<boolean>
+  }
   diagnostics: import('../shared/diagnostics.ts').DiagnosticsApi
   systemMedia: {
     getNativeStatus: () => Promise<import('../shared/systemMedia.ts').SystemMediaNativeStatus>
@@ -365,6 +389,49 @@ interface WindowAPI {
     clearActivity: () => Promise<void>
   }
   library: DuplicateDetectionReadApi & {
+    getStorageMode: () => Promise<'json' | 'sqlite'>
+    database: {
+      buildQueue: import('../shared/libraryQueueBuild.ts').LibraryQueueBuildApi['buildQueue']
+      selection: import('../shared/librarySelection.ts').LibrarySelectionBridgeApi['selection']
+      repairPlaylist: import('../shared/playlistRepair.ts').LibraryPlaylistRepairApi['repairPlaylist']
+      syncListeningHistory: import('../shared/libraryDatabase.ts').LibraryDatabaseApi['syncListeningHistory']
+      syncPlaylistView: import('../shared/libraryDatabase.ts').LibraryDatabaseApi['syncPlaylistView']
+      scanDirectories: import('../shared/libraryDatabase.ts').LibraryFileMutationApi['scanDirectories']
+      removeFiles: import('../shared/libraryDatabase.ts').LibraryFileMutationApi['removeFiles']
+      getMetadata: () => Promise<import('../shared/libraryDatabase.ts').LibraryMetadata>
+      queryTracks: (
+        query?: import('../shared/libraryDatabase.ts').LibraryQuery
+      ) => Promise<import('../shared/libraryDatabase.ts').LibraryPage>
+      queryCollections: (
+        kind: import('../shared/libraryDatabase.ts').LibraryCollectionKind,
+        query?: import('../shared/libraryDatabase.ts').LibraryQuery
+      ) => Promise<import('../shared/libraryDatabase.ts').LibraryCollectionPage>
+      getTracksByIds: import('../shared/libraryDatabase.ts').LibraryDatabaseApi['getTracksByIds']
+      lookupTracksByPaths: import('../shared/libraryDatabase.ts').LibraryDatabaseApi['lookupTracksByPaths']
+      lookupPlaylistTracks: import('../shared/libraryDatabase.ts').LibraryDatabaseApi['lookupPlaylistTracks']
+      patchTracks: (
+        patches: import('../shared/libraryDatabase.ts').LibraryTrackPatch[]
+      ) => Promise<import('../shared/libraryDatabase.ts').LibraryPage>
+      createQueue: (
+        query: import('../shared/libraryDatabase.ts').LibraryQuery,
+        selectedId?: string
+      ) => Promise<import('../shared/libraryDatabase.ts').LibraryQueueSnapshot>
+      readQueue: (
+        id: string,
+        offset?: number,
+        limit?: number,
+        options?: import('../shared/libraryDatabase.ts').LibraryQueueReadOptions
+      ) => Promise<import('../shared/libraryDatabase.ts').LibraryQueuePage>
+      getQueue: (id: string) => Promise<import('../shared/libraryDatabase.ts').LibraryQueueSnapshot>
+      editQueue: (
+        id: string,
+        revision: number,
+        edit: import('../shared/libraryDatabase.ts').LibraryQueueEdit
+      ) => Promise<import('../shared/libraryDatabase.ts').LibraryQueueEditResult>
+      deleteQueue: (id: string, revision: number) => Promise<void>
+      syncQueueReferences: (owner: string, ids: string[]) => Promise<void>
+      collectQueueGarbage: (olderThanMs?: number) => Promise<number>
+    }
     removeTracks: (request: LocalLibraryRemoveRequest) => Promise<LocalLibraryRemoveResult>
     clearExclusions: (
       request: LocalLibraryClearExclusionsRequest

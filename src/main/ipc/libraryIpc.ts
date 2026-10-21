@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { createTagWriteIpcHandlers } from '../library/tagWriteIpc.ts'
 import { createDuplicateDetectionIpcHandlers } from '../library/duplicateDetectionIpc.ts'
+import { registerSqliteLibraryIpc } from './sqliteLibraryIpc.ts'
 import {
   LocalLibraryIndexCoordinator,
   toLocalLibraryScanUpdate
@@ -139,15 +140,34 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
     redactError: (error) =>
       redactSensitiveText(error instanceof Error ? error.message : String(error))
   })
+  const databaseOwner = runtime.libraryDatabase
   const duplicateDetectionIpc = createDuplicateDetectionIpcHandlers({
     assertTrustedSender: (event) =>
       assertTrustedIpcSender(event as IpcMainInvokeEvent, 'library duplicate detection IPC'),
-    loadTracks: () => loadMusicLibraryDocument(MUSIC_LIBRARY_FILE).document.tracks,
+    ...(databaseOwner
+      ? { loadCandidatePages: () => databaseOwner.duplicateCandidatePages() }
+      : { loadTracks: () => loadMusicLibraryDocument(MUSIC_LIBRARY_FILE).document.tracks }),
     authorizeAudioFile: async (filePath) =>
       await resolveAuthorizedAudioFile(
         normalizeLocalPath(filePath, 'duplicate detection audio file')
       )
   })
+
+  ipcMain.handle(IPC.library.detectDuplicates, async (event) => duplicateDetectionIpc.detect(event))
+  ipcMain.handle(IPC.library.writeTags, async (event, request: unknown) =>
+    tagWriteIpc.write(event, request)
+  )
+  ipcMain.handle(IPC.library.restoreTags, async (event, request: unknown) =>
+    tagWriteIpc.restore(event, request)
+  )
+  if (runtime.libraryDatabase) {
+    registerSqliteLibraryIpc(ipcMain, runtime.libraryDatabase, {
+      normalizeSnapshot: normalizeMusicLibrarySnapshot,
+      normalizeRemove: normalizeLocalLibraryRemoveRequest,
+      normalizeExclusions: normalizeLocalLibraryRestoreRequest
+    })
+    return
+  }
 
   const localLibraryIndexCoordinator = new LocalLibraryIndexCoordinator({
     libraryFilePath: MUSIC_LIBRARY_FILE,
@@ -439,24 +459,14 @@ export function registerLibraryIpc(ipcMain: IpcMain): void {
       } satisfies LocalLibraryClearExclusionsResult
     })
   })
-
-  ipcMain.handle(
-    IPC.library.detectDuplicates,
-    async (event) => await duplicateDetectionIpc.detect(event)
-  )
-
-  ipcMain.handle(
-    IPC.library.writeTags,
-    async (event, rawRequest: unknown) => await tagWriteIpc.write(event, rawRequest)
-  )
-
-  ipcMain.handle(
-    IPC.library.restoreTags,
-    async (event, rawRequest: unknown) => await tagWriteIpc.restore(event, rawRequest)
-  )
 }
 
 async function ensureLibraryExclusionsLoaded(): Promise<string[]> {
+  if (runtime.libraryDatabase) {
+    const { exclusions } = await runtime.libraryDatabase.database.getMetadata()
+    replaceActiveLibraryExclusions(exclusions)
+    return exclusions.map((item) => item.filePath)
+  }
   const filePath = musicLibraryFilePath
   if (!filePath) throw new Error('Music library is unavailable')
   if (!musicLibraryExclusionsPromise) {
@@ -518,7 +528,7 @@ function invalidateWarmedMusicLibrary(): void {
 
 const TRASH_RETRY_DELAYS_MS = [0, 75, 200, 500, 1_000] as const
 
-async function prepareAudioFilesForRemoval(filePaths: string[]): Promise<void> {
+export async function prepareAudioFilesForRemoval(filePaths: string[]): Promise<void> {
   const uniquePaths = Array.from(new Set(filePaths.filter(Boolean)))
   if (uniquePaths.length === 0) return
 
@@ -526,6 +536,7 @@ async function prepareAudioFilesForRemoval(filePaths: string[]): Promise<void> {
   // handles on Windows, and a cancellation can take one event-loop turn to
   // reach the worker that currently owns the decoder.
   runtime.localLibraryIndexCoordinator?.cancel()
+  await runtime.libraryDatabase?.cancelAndWait()
   await runtime.libraryLoudnessManager?.cancel()
   for (const filePath of uniquePaths) {
     runtime.bpmAnalysisManager?.cancel(filePath)
@@ -584,7 +595,7 @@ async function prepareAudioFilesForRemoval(filePaths: string[]): Promise<void> {
   }
 }
 
-async function trashLocalFileWithRetry(filePath: string): Promise<void> {
+export async function trashLocalFileWithRetry(filePath: string): Promise<void> {
   if (process.platform !== 'win32') {
     await shell.trashItem(filePath)
     return
@@ -625,7 +636,7 @@ async function runLocalLibraryScanOperation<T>(operation: () => Promise<T>): Pro
   }
 }
 
-async function readSacdIsoMetadata(filePath: string): Promise<NativeAudioMetadata | null> {
+export async function readSacdIsoMetadata(filePath: string): Promise<NativeAudioMetadata | null> {
   return (await runtime.audioEngineManager?.getMetadataAsync(filePath)) ?? null
 }
 

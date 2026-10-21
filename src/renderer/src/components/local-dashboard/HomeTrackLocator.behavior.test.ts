@@ -42,7 +42,7 @@ test(
               const fixtures = {
                 '\0home-player': `export const usePlayerStore=()=>window.homePlayer`,
                 '\0home-music': `export const useMusicStore=()=>window.homeMusic`,
-                '\0home-listening-stats': `export const useListeningStatsStore=()=>window.homeStats;export const getMostListenedTracks=()=>[];export const getRecentTracks=()=>[]`,
+                '\0home-listening-stats': `export const useListeningStatsStore=()=>window.homeStats;export const getMostListenedTracks=()=>[];export const getRecentTracks=()=>[];export const waitForListeningStatsReady=async()=>{}`,
                 '\0home-audio-dsp': `export const useAudioOutputDspStore=()=>window.homeDsp`,
                 '\0home-settings': `export const useSettingsStore=()=>window.homeSettings`,
                 '\0home-pinia': `export const storeToRefs=value=>value`

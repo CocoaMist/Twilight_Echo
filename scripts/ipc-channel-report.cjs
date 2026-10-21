@@ -190,6 +190,7 @@ function buildReport() {
     'shell',
     'discord',
     'library',
+    'playlistImport',
     'fs',
     'audioEngine',
     'bpmAnalysis',

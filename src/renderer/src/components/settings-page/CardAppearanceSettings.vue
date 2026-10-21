@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import SettingsDisclosure from './SettingsDisclosure.vue'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
+import { useSettingsDisclosure } from './settingsDisclosureRegistry'
 import EditableRangeValue from '../EditableRangeValue.vue'
 import type { AppearanceDraft } from '../../../../shared/appAppearance.ts'
 import type {
@@ -20,7 +21,7 @@ function updateSettings(patch: Partial<AppearanceDraft>): void {
   emit('update:modelValue', { ...props.modelValue, ...patch })
 }
 
-const cardAppearanceOpen = ref(true)
+const cardAppearanceOpen = useSettingsDisclosure('card-appearance', true)
 const cardAppearanceTab = computed({
   get: () => props.tone ?? 'light',
   set: (tone: 'light' | 'dark') => emit('update:tone', tone)
@@ -74,6 +75,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
 <template>
   <button
     type="button"
+    data-setting-id="card-appearance"
     class="settings-accordion-trigger setting-item"
     :class="{ open: cardAppearanceOpen }"
     :aria-expanded="cardAppearanceOpen"
@@ -87,7 +89,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
   </button>
   <SettingsDisclosure :open="cardAppearanceOpen" class="settings-accordion-body">
     <hr />
-    <div class="setting-item">
+    <div data-setting-id="card-enabled" class="setting-item">
       <div class="setting-copy">
         <strong>启用自定义外观</strong>
         <span>标准材质下应用自定义卡片外观。</span>
@@ -129,7 +131,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
         </div>
       </div>
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="card-blur" class="setting-item">
         <div class="setting-copy">
           <strong>卡片模糊强度</strong>
           <span>控制卡片毛玻璃的模糊半径。</span>
@@ -155,7 +157,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
         </div>
       </div>
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="card-saturation" class="setting-item">
         <div class="setting-copy">
           <strong>卡片模糊饱和度</strong>
           <span>增强或减弱毛玻璃的色彩饱和感。</span>
@@ -183,7 +185,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
         </div>
       </div>
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="card-color" class="setting-item">
         <div class="setting-copy">
           <strong>卡片背景颜色</strong>
           <span>自定义卡片的底色。</span>
@@ -219,7 +221,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
         </div>
       </div>
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="card-border" class="setting-item">
         <div class="setting-copy">
           <strong>卡片边框</strong>
           <span>自定义边框颜色、透明度与宽度。</span>
@@ -278,7 +280,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
         </div>
       </div>
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="card-radius" class="setting-item">
         <div class="setting-copy">
           <strong>卡片圆角半径</strong>
           <span>控制卡片边角的圆滑程度。</span>
@@ -304,7 +306,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
         </div>
       </div>
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="card-shadow" class="setting-item">
         <div class="setting-copy">
           <strong>卡片阴影强度</strong>
           <span>控制卡片投影的深浅。</span>
@@ -324,7 +326,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
         </div>
       </div>
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="card-hover" class="setting-item">
         <div class="setting-copy">
           <strong>卡片悬浮效果</strong>
           <span>鼠标悬停时卡片的动效。</span>
@@ -344,7 +346,7 @@ function setCardField<K extends keyof CardAppearanceTheme>(
         </div>
       </div>
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="card-highlight" class="setting-item">
         <div class="setting-copy">
           <strong>玻璃高光</strong>
           <span>在卡片顶部添加内描边光泽。</span>

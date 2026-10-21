@@ -2,6 +2,14 @@ name: Build macOS packages
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish the built packages to this release tag (for example v1.3.1). Leave empty to only build artifacts.'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: read
@@ -20,8 +28,10 @@ jobs:
       matrix:
         include:
           - arch: x64
+            cmake_arch: x86_64
             runner: macos-15-intel
           - arch: arm64
+            cmake_arch: arm64
             runner: macos-15
 
     steps:
@@ -50,7 +60,7 @@ jobs:
         run: |
           cmake -S audio-engine -B audio-engine/build/default \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}" \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.cmake_arch }}" \
             -DCMAKE_PREFIX_PATH="$(brew --prefix)" \
             -DTAE_BUILD_NAPI=ON \
             -DTAE_BUILD_TESTS=OFF
@@ -84,3 +94,45 @@ jobs:
             dist/*.dmg
             dist/*.zip
           if-no-files-found: error
+
+  publish:
+    name: Publish macOS packages
+    needs: macos
+    # A tag push publishes automatically; manual runs must name an existing tag.
+    if: needs.macos.result == 'success' && (github.event_name == 'push' || inputs.release_tag)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: twilight-echo-macos-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify the release tag matches the packaged version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "v${version}" = "$RELEASE_TAG"
+
+      - name: Write SHA-256 companion files
+        run: node scripts/release-assets.cjs checksum release-assets
+
+      - name: Publish the installers to the release
+        # Draft releases are invisible to `/releases/tags`, so the helper resolves
+        # the release id, replaces any older asset with the same name, and only
+        # publishes once every platform attached its complete asset set.
+        run: >-
+          bash scripts/publish-release-assets.sh
+          --tag "$RELEASE_TAG"
+          --assets release-assets
+          --platform macos
+

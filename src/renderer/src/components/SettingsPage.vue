@@ -8,6 +8,7 @@ import { openAppearanceEditor } from '../composables/appearanceEditorState.ts'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
 import DspSettingsSection from './settings-page/DspSettingsSection.vue'
 import LibrarySettingsSection from './settings-page/LibrarySettingsSection.vue'
+import { libraryScanStatusText } from '../utils/libraryScanPresentation.ts'
 import ConnectionsSettingsSection from './settings-page/ConnectionsSettingsSection.vue'
 import SystemSettingsSection from './settings-page/SystemSettingsSection.vue'
 import LyricsStyleSettings from './settings-page/LyricsStyleSettings.vue'
@@ -73,6 +74,7 @@ const emit = defineEmits<{
   openDspRack: []
   openThemeStudio: []
   openThemeWorkshop: []
+  openAppearance: [entry?: SettingsSearchEntry]
   reopenOnboarding: []
 }>()
 
@@ -258,20 +260,9 @@ async function addLibraryFolderAndRestore(): Promise<void> {
     libraryScanCommandError.value = scanCommandErrorMessage(error)
   }
 }
-const libraryScanProgressText = computed(() => {
-  const status = libraryScanStatus.value
-  if (status.state === 'failed') return status.error || '后台扫描失败'
-  if (status.state === 'paused') return `已暂停：${status.current} / ${status.total || '?'} 项`
-  if (status.state === 'running') {
-    const phase = libraryScanProgress.value?.phase === 'parsing' ? '解析元数据' : '检查文件'
-    return `${phase}：${status.current} / ${status.total || '?'} 项`
-  }
-  if (status.state === 'completed') {
-    return `已完成：解析 ${status.parsedFileCount} 个文件，跳过 ${status.skippedUnchanged} 个未变化文件`
-  }
-  if (status.state === 'cancelled') return '扫描已取消，未提交未完成的结果'
-  return '启动时仅核对 path、size 与 mtime；完整元数据重扫只由此处触发。'
-})
+const libraryScanProgressText = computed(() =>
+  libraryScanStatusText(libraryScanStatus.value, libraryScanProgress.value)
+)
 const libraryMetadataEnrichmentText = computed(() => {
   const status = libraryMetadataEnrichmentStatus.value
   if (status.state === 'enriching') {
@@ -1316,6 +1307,7 @@ onBeforeUnmount(() => {
           v-show="activeSection === 'appearance'"
           @open-theme-studio="emit('openThemeStudio')"
           @open-theme-workshop="emit('openThemeWorkshop')"
+          @open-appearance="emit('openAppearance')"
         />
         <section
           v-show="activeSection === 'playback'"

@@ -216,6 +216,7 @@ export class AudioEngineManager extends EventEmitter {
         readNativePlaybackInfo: () => this.readNativePlaybackInfo(),
         readNativePlaybackInfoAsync: () => this.readNativePlaybackInfoAsync(),
         mergeNativePlaybackInfo: (nativeInfo) => this.mergeNativePlaybackInfo(nativeInfo),
+        effectiveVolume: (volume) => this.playback.effectiveVolume(volume),
         updateOutputPerfect: () => this.updateOutputPerfect(),
         publishPlaybackInfo: () => this.publishPlaybackInfo(),
         syncPlaybackOutputMirrorsFromOutputInfo: () =>
@@ -572,6 +573,7 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   private handleAudioServiceReady(): void {
+    this.playback.invalidateQueueRecovery()
     this.invalidateAutoMixService()
     this.playback.queueToken = ''
     const restoreSerial = ++this.audioServiceReadyRestoreSerial
@@ -680,7 +682,7 @@ export class AudioEngineManager extends EventEmitter {
       'volume',
       '音频服务恢复后应用音量',
       'SetVolume',
-      this.playbackInfo.volume
+      this.playback.effectiveVolume()
     )
     this.nativeVolumeSynced = volumeResult.ok
     results.push(volumeResult)
@@ -721,7 +723,7 @@ export class AudioEngineManager extends EventEmitter {
         'volume',
         '初始化软件音量',
         'SetVolume',
-        this.playbackInfo.volume
+        this.playback.effectiveVolume()
       )
       this.nativeVolumeSynced = volumeStep.ok
       if (this.processing.directMode) await this.applyDirectModeRuntimeOverrides(true)
@@ -1266,9 +1268,13 @@ export class AudioEngineManager extends EventEmitter {
     return this.outputRouter.createDeviceCapabilityRefreshSignature(info)
   }
 
-  async play(source: string, startTime = 0): Promise<AudioEnginePlayResult> {
+  async play(
+    source: string,
+    startTime = 0,
+    requested?: () => boolean
+  ): Promise<AudioEnginePlayResult> {
     this.autoMixCoordinator?.invalidate('playback_changed')
-    return this.playback.play(source, startTime)
+    return this.playback.play(source, startTime, requested)
   }
 
   async togglePause(): Promise<void> {
@@ -1288,6 +1294,11 @@ export class AudioEngineManager extends EventEmitter {
     return this.outputRouter.serializeConfiguration(() =>
       this.playback.setVolume(Math.min(volume, this.deviceProfiles.settings.volumeCeiling))
     )
+  }
+
+  /** Temporary main-process sleep fade; not exposed as a renderer volume setting. */
+  async setSleepTimerGain(gain: number): Promise<void> {
+    return this.outputRouter.serializeConfiguration(() => this.playback.setSleepTimerGain(gain))
   }
 
   async setPlaybackRate(rate: number): Promise<void> {
@@ -1361,13 +1372,46 @@ export class AudioEngineManager extends EventEmitter {
     return this.playback.stop()
   }
 
+  async stopForQueueRecovery(): Promise<number> {
+    this.autoMixCoordinator?.invalidate('queue_recovery')
+    return this.playback.stopForQueueRecovery()
+  }
+
+  isQueueRecoveryCurrent(revision: number): boolean {
+    return this.playback.isQueueRecoveryCurrent(revision)
+  }
+
   async loadQueue(items: AudioEngineQueueItem[], startIndex = 0): Promise<void> {
     this.autoMixCoordinator?.invalidate('queue_changed')
     return this.playback.loadQueue(items, startIndex)
   }
 
+  async rebindQueue(
+    request: import('../shared/nativeQueue.ts').NativeQueueRebind
+  ): Promise<import('../shared/nativeQueue.ts').NativeQueueCommit | null> {
+    try {
+      const commit = await this.playback.rebindQueue(request)
+      if (commit) this.autoMixCoordinator?.invalidate('queue_changed')
+      return commit
+    } catch (error) {
+      this.autoMixCoordinator?.invalidate('queue_handoff_unknown')
+      throw error
+    }
+  }
+
   getQueueToken(): string {
     return this.playback.queueToken
+  }
+
+  getPlaybackEnd(): import('./audio/playbackController.ts').PlaybackEndCheckpoint | null {
+    return this.playback.getPlaybackEnd()
+  }
+
+  async continueAfterPlaybackEnd(
+    options: import('./audio/playbackController.ts').PlaybackEndContinuation
+  ): Promise<boolean> {
+    this.autoMixCoordinator?.invalidate('queue_changed')
+    return this.playback.continueAfterPlaybackEnd(options)
   }
 
   /**
@@ -1804,7 +1848,7 @@ export class AudioEngineManager extends EventEmitter {
     const dspActive =
       sceneDspActive ||
       crossfadeSeconds > 0 ||
-      Math.abs(this.playbackInfo.volume - 1) > 0.001 ||
+      Math.abs(this.playback.effectiveVolume() - 1) > 0.001 ||
       Math.abs((this.playbackInfo.playbackRate ?? 1) - 1) > 0.001
     // The graph is what runs, so a module toggle whose node is disabled in the
     // effective graph is not active - claiming otherwise marked bit-perfect

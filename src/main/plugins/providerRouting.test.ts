@@ -27,7 +27,7 @@ type TestRunningProvider = {
       'search' | 'playbackUrl' | 'lyrics' | 'cover' | 'playlist' | 'library' | 'login' | 'download'
     >
     supportedMethods?: Array<
-      'fetchPlaylistTracks' | 'fetchPlaylistTracksPage' | 'fetchDiscoveryPlaylists'
+      'fetchPlaylistTracks' | 'fetchPlaylistTracksPage' | 'readPlaylistImportPage' | 'fetchDiscoveryPlaylists'
     >
   }>
 }
@@ -91,6 +91,13 @@ test('playlist paging requires an advertised handler and playlist capability thr
     getProviderCallTimeoutMs('fetchPlaylistTracksPage'),
     getProviderCallTimeoutMs('fetchPlaylistTracks')
   )
+})
+
+test('complete playlist import requires an explicit handler and playlist capability',()=>{
+  const provider:TestRunningProvider['providers'][number]={id:'ncm',name:'NCM',capabilities:['playlist'],supportedMethods:['readPlaylistImportPage']}
+  assert.equal(isTwilightMediaProviderMethod('readPlaylistImportPage'),true)
+  assert.equal(providerSupportsMethod(provider,'readPlaylistImportPage'),true)
+  assert.equal(providerSupportsMethod({...provider,capabilities:[]},'readPlaylistImportPage'),false)
 })
 
 test('routes provider calls to a plugin that declares the required method capability', () => {

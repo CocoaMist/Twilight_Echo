@@ -121,6 +121,9 @@ export function useListeningStatsStore() {
 }
 
 const navigation = useAppNavigation()
+let appearanceWorkspaceRequests = 0
+let dspWorkspaceRequests = 0
+let equalizerRequests = 0
 const expect = (value, message) => {
   if (!value) throw new Error(message)
 }
@@ -135,7 +138,10 @@ const app = createApp({
     h(SettingsPage, {
       initialSection: navigation.settingsInitialSection.value,
       navigationTarget: navigation.settingsNavigationTarget.value,
-      onSectionChange: navigation.rememberSettingsSection
+      onSectionChange: navigation.rememberSettingsSection,
+      onOpenAppearance: () => appearanceWorkspaceRequests++,
+      onOpenDspRack: () => dspWorkspaceRequests++,
+      onOpenEqualizer: () => equalizerRequests++
     })
 })
 app.use(createPinia())
@@ -151,6 +157,18 @@ window.runSettingsOrganizationTests = async () => {
   const page = document.querySelector('.settings-preview-page')
   const top = [...page.querySelectorAll('.settings-preview-stack > .preview-section')]
   expect(top.length === 7, 'expected seven top-level categories, got ' + top.length)
+  page.querySelector('[data-settings-category="appearance"]').click()
+  await settle()
+  expect(
+    page.querySelector('#appearance').checkVisibility() && appearanceWorkspaceRequests === 0,
+    'appearance category must keep its original settings page'
+  )
+  for (const title of ['主题与配色', '背景与材质', '文字与排版'])
+    expect(page.querySelector('#appearance').textContent.includes(title), 'missing ' + title)
+  expect(page.querySelector('#player-bar'), 'original player bar settings are missing')
+  page.querySelector('[data-setting-id="appearance-workspace"] button').click()
+  await settle()
+  expect(appearanceWorkspaceRequests === 1, 'new workspace entry did not emit its open event')
   expect(
     page.querySelectorAll('button[aria-label="防破音保护"]').length === 1,
     'clip guard must have one control'
@@ -200,6 +218,31 @@ window.runSettingsOrganizationTests = async () => {
     )
     return page.querySelector('.search-target-flash')
   }
+  await search('外观工作区')
+  expect(appearanceWorkspaceRequests === 1, 'searching the workspace must reveal its entry first')
+  processing.value = { ...processing.value, dspEnabled: false }
+  await search('DSP 工作台')
+  const dspEntry = page.querySelector('[data-setting-id="dsp-workbench"]')
+  expect(dspEntry.checkVisibility(), 'workbench entry is not visible')
+  expect(!dspEntry.closest('[inert]'), 'bypassing DSP disabled the workbench entry')
+  const dspButtons = [...dspEntry.querySelectorAll('button')]
+  expect(dspButtons[0].textContent.includes('打开 DSP 工作台'), 'workbench entry uses old name')
+  for (const button of dspButtons) {
+    expect(!button.disabled, 'editor entry is disabled while DSP is bypassed')
+    button.click()
+    await settle()
+  }
+  expect(dspWorkspaceRequests === 1 && equalizerRequests === 1, 'editor entries lost navigation')
+  expect(processing.value.dspEnabled === false, 'opening an editor enabled DSP')
+  expect(
+    page.querySelector('#dsp .dsp-disabled-content [class="soft-button"]').closest('[inert]'),
+    'IR controls lost their existing DSP bypass guard'
+  )
+  await search('界面字体')
+  expect(
+    page.querySelector('#appearance').checkVisibility() && appearanceWorkspaceRequests === 1,
+    'original appearance search was redirected to the workspace'
+  )
   await search('应用内快捷键')
   const closeSwitch = page.querySelector('[aria-label="关闭窗口快捷键"]')
   expect(closeSwitch.getAttribute('aria-checked') === 'true', 'close shortcut must default on')

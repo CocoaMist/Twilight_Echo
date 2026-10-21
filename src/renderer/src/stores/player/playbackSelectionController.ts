@@ -8,6 +8,7 @@ import {
 } from '@renderer/utils/playbackQueueVirtualization.ts'
 
 interface PlaybackSelectionOptions {
+  beforeSelection?: () => void
   queue: Ref<Track[]>
   queueIndex: Ref<number>
   playMode: Ref<PlayMode>
@@ -43,6 +44,7 @@ export function createPlaybackSelectionController(options: PlaybackSelectionOpti
           selectedIndex >= 0 ? selectedIndex : snapshots.findIndex((item) => item.id === track.id)
         ]
       if (!selected) return
+      options.beforeSelection?.()
       const queue = options.playMode.value === 'shuffle' ? shuffleArray(snapshots) : [...snapshots]
       options.replaceQueue(
         queue,
@@ -51,6 +53,7 @@ export function createPlaybackSelectionController(options: PlaybackSelectionOpti
       )
       track = { ...track, queueEntryId: selected.queueEntryId }
     } else {
+      options.beforeSelection?.()
       const index = options.queue.value.findIndex((item) =>
         track.queueEntryId ? item.queueEntryId === track.queueEntryId : item.id === track.id
       )

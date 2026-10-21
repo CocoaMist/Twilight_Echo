@@ -17,6 +17,7 @@ import type { AppSettings, UiDensity } from '../../types/settings'
 const emit = defineEmits<{
   openThemeStudio: []
   openThemeWorkshop: []
+  openAppearance: []
 }>()
 
 const { settings, updateSettings } = useSettingsStore()
@@ -47,6 +48,17 @@ function toggleSetting(key: BooleanSettingKey): void {
     </div>
 
     <p class="settings-section-description">搭配主题、文字与播放器，让界面适合你的使用习惯。</p>
+    <div class="setting-list">
+      <div data-setting-id="appearance-workspace" class="setting-item">
+        <div class="setting-copy">
+          <strong>外观工作区</strong>
+          <span>通过 2D/3D 预览调整外观、制作主题和管理主题插件。</span>
+        </div>
+        <button type="button" class="soft-button" @click="emit('openAppearance')">
+          打开新版外观
+        </button>
+      </div>
+    </div>
     <div class="section-block">
       <h3>主题与配色</h3>
       <div class="setting-list">

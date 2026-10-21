@@ -36,6 +36,167 @@ const track = {
   source: 'local' as const
 }
 
+test('database session writes bypass full-array cloning and returning to arrays forces a fresh snapshot', async () => {
+  const writer = new PlaybackSessionWriter(),
+    saved: PlaybackSession[] = []
+  const api = {
+    clearPlaybackSession: async () => {},
+    savePlaybackSession: async (session: PlaybackSession) => {
+      saved.push(session)
+    }
+  }
+  const array = [{ ...track, queueEntryId: 'first' }],
+    reference = { id: 'db', revision: 7, entryId: 'selected', index: 299_999 }
+  const base: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'track',
+    track: array[0],
+    position: 0
+  }
+  let clones = 0
+  const clone = () => {
+    clones++
+    return array
+  }
+  await writer.saveSnapshot(api, base, array, clone).completion
+  await writer.saveSnapshot(
+    api,
+    { ...base, track: { ...track, queueEntryId: 'selected' }, libraryQueue: reference },
+    array,
+    () => {
+      throw new Error('must not clone the legacy array')
+    }
+  ).completion
+  await writer.saveSnapshot(api, base, array, clone).completion
+  assert.equal(clones, 2)
+  assert.equal(saved[1].queue, undefined)
+  assert.deepEqual(saved[1].libraryQueue, reference)
+  assert.deepEqual(saved[2].queue, array)
+})
+
+test('database sessions stay compact during the renderer-free handoff', async () => {
+  const current = { ...track, queueEntryId: 'selected' },
+    writer = new PlaybackSessionWriter()
+  const session: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'track',
+    track: current,
+    position: 0,
+    libraryQueue: { id: 'db', revision: 1, entryId: 'selected', index: 299_999 }
+  }
+  let writes = 0
+  const persistence = createPlaybackSessionPersistence({
+    settings: ref({ playbackResumeMode: 'track' }),
+    currentTrack: ref(current),
+    currentTime: ref(0),
+    isPlaying: ref(false),
+    queue: shallowRef<Track[]>([]),
+    createPlaybackSession: () => session,
+    restorePlaybackSession: () => {},
+    syncPluginProviders: async () => {},
+    sessionWriter: writer,
+    dataApi: {
+      loadPlaybackSession: async () => null,
+      clearPlaybackSession: async () => {},
+      savePlaybackSession: async () => {
+        writes++
+      }
+    }
+  })
+  await persistence.restoreSavedPlaybackSession('track')
+  await persistence.savePlaybackSessionWithQueue()
+  assert.equal(writes, 1)
+  await persistence.savePlaybackSessionForQuit()
+  assert.equal(writes, 2)
+  persistence.stop()
+})
+
+test('database reference handoff protects both queues until the new session commits', async () => {
+  const writer = new PlaybackSessionWriter()
+  writer.setSavedLibraryQueueId('old')
+  const events: string[] = []
+  const next: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'track',
+    track: { ...track, queueEntryId: 'next-entry' },
+    position: 0,
+    libraryQueue: { id: 'next', revision: 2, entryId: 'next-entry', index: 1 }
+  }
+  const api = {
+    clearPlaybackSession: async () => {},
+    syncQueueReferences: async (_owner: string, ids: string[]) => {
+      events.push(`refs:${ids.join(',')}`)
+    },
+    savePlaybackSession: async () => {
+      events.push('save')
+    }
+  }
+  await writer.save(api, next).completion
+  assert.deepEqual(events, ['refs:old,next', 'save', 'refs:next'])
+})
+
+test('backup flush commits the latest compact session before its debounce and async restore honors a new selection', async () => {
+  const writer = new PlaybackSessionWriter(),
+    saved: PlaybackSession[] = [],
+    current = shallowRef<Track | null>(null)
+  let release!: () => void, notify!: () => void
+  const entered = new Promise<void>((resolve) => {
+      notify = resolve
+    }),
+    pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+  const old = { ...track, id: 'old' }
+  const persistence = createPlaybackSessionPersistence({
+    settings: ref({ playbackResumeMode: 'track' }),
+    currentTrack: current,
+    currentTime: ref(0),
+    isPlaying: ref(false),
+    sessionWriter: writer,
+    autosaveDelayMs: 60_000,
+    restorePlaybackSession: async (session, isCurrent) => {
+      notify()
+      await pending
+      if (!isCurrent?.()) return false
+      current.value = session.track
+      return true
+    },
+    createPlaybackSession: () =>
+      current.value
+        ? { version: 1, savedAt: '', mode: 'track', track: current.value, position: 0 }
+        : null,
+    syncPluginProviders: async () => {},
+    dataApi: {
+      loadPlaybackSession: async () => ({
+        version: 1,
+        savedAt: '',
+        mode: 'track',
+        track: old,
+        position: 0
+      }),
+      savePlaybackSession: async (session) => {
+        saved.push(session)
+      },
+      clearPlaybackSession: async () => {}
+    }
+  })
+  const restore = persistence.restoreSavedPlaybackSession('track')
+  await entered
+  current.value = track
+  release()
+  await restore
+  assert.equal(current.value.id, track.id)
+  persistence.startAutosaveWatchers()
+  current.value = { ...track, id: 'newest' }
+  await nextTick()
+  await writer.flushAutosave()
+  assert.equal(saved.at(-1)?.track.id, 'newest')
+  persistence.stop()
+})
+
 for (const stage of ['load', 'providers'] as const) {
   test(`startup restore preserves a user selection made while waiting for ${stage}`, async () => {
     let release!: () => void
@@ -164,7 +325,9 @@ test('restore clears persisted session when resume mode is off', async () => {
     currentTrack: ref(null),
     currentTime: ref(0),
     isPlaying: ref(false),
-    restorePlaybackSession: () => calls.push('restore'),
+    restorePlaybackSession: () => {
+      calls.push('restore')
+    },
     createPlaybackSession: () => null,
     syncPluginProviders: async () => {
       calls.push('sync')
@@ -211,7 +374,9 @@ test('local playback resume restores without waiting for plugin providers', asyn
     currentTrack: ref(null),
     currentTime: ref(0),
     isPlaying: ref(false),
-    restorePlaybackSession: (session) => calls.push(`restore:${session.position}`),
+    restorePlaybackSession: (session) => {
+      calls.push(`restore:${session.position}`)
+    },
     createPlaybackSession: () => null,
     syncPluginProviders: async () => {
       calls.push('sync')
@@ -316,7 +481,9 @@ test('plugin playback resume waits for plugin providers before restoring a saved
     currentTrack: ref(null),
     currentTime: ref(0),
     isPlaying: ref(false),
-    restorePlaybackSession: (session) => calls.push(`restore:${session.position}`),
+    restorePlaybackSession: (session) => {
+      calls.push(`restore:${session.position}`)
+    },
     createPlaybackSession: () => null,
     syncPluginProviders: async () => {
       calls.push('sync')
@@ -761,7 +928,9 @@ test('shared session producers clone a changed queue only once', async () => {
 
 test('real store and App autosaves share one timer across rapid selections in a 5000-track queue', async () => {
   const currentTrack = shallowRef<Track | null>(null)
-  const queue = shallowRef<Track[]>(Array.from({ length: 5000 }, (_, i) => ({ ...track, id: `local:${i}` })))
+  const queue = shallowRef<Track[]>(
+    Array.from({ length: 5000 }, (_, i) => ({ ...track, id: `local:${i}` }))
+  )
   const originalQueue = shallowRef(queue.value.slice())
   const currentTime = ref(0),
     isPlaying = ref(false),

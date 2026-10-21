@@ -49,8 +49,8 @@ const themeContributions = ref<ThemeContribution[]>([])
 const syncInFlight = ref<Promise<void> | null>(null)
 let listenerSetup = false
 
-export function useExtensionRegistry() {
-  setupExtensionChangeListener()
+export function useExtensionRegistry(options: { listen?: boolean } = {}) {
+  if (options.listen !== false) setupExtensionChangeListener()
   return {
     uiContributions: computed(() => uiContributions.value),
     themeContributions: computed(() => themeContributions.value),
@@ -95,13 +95,13 @@ export function startPluginPlaylistImports(ready: Promise<unknown>): Promise<() 
  * so it goes through the same matching and revision-guarded persistence as the
  * built-in importer. The plugin is not told the outcome — this toast is.
  */
-function importPluginPlaylist(request: PluginPlaylistImportNotice): void {
+async function importPluginPlaylist(request: PluginPlaylistImportNotice): Promise<void> {
   const notices = useAppNoticeStore()
   try {
     const store = useMusicStore()
     let importedCount = 0
     let unresolvedEntries = 0
-    for (const result of store.importPlaylistPathBatch(request.playlists)) {
+    for (const result of await store.importPlaylistPathBatchAsync(request.playlists)) {
       importedCount += result.importedCount
       unresolvedEntries += result.unresolvedEntries
     }
@@ -134,9 +134,15 @@ export async function syncExtensions(): Promise<void> {
   syncInFlight.value = (async () => {
     const entries = await api.list()
     const nextUi: UiContribution[] = []
-    for (const experience of await api.experiences?.() ?? []) {
-      nextUi.push({ pluginId: experience.pluginId, id: experience.id, kind: 'sidebarPage',
-        title: experience.name, icon: 'pi pi-box', experience })
+    for (const experience of (await api.experiences?.()) ?? []) {
+      nextUi.push({
+        pluginId: experience.pluginId,
+        id: experience.id,
+        kind: 'sidebarPage',
+        title: experience.name,
+        icon: 'pi pi-box',
+        experience
+      })
     }
     const nextThemes: ThemeContribution[] = []
     for (const entry of entries as PluginExtensionContribution[]) {

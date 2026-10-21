@@ -16,9 +16,17 @@ import type {
 import type { PageState } from './types'
 import { friendlyStreamingError } from './friendlyStreamingError.ts'
 import type { AlbumSearchItem } from './albumSearch.ts'
+import type { LibraryQuery } from '../../../../shared/libraryDatabase.ts'
 
 export type SearchType = 'songs' | 'albums' | 'playlists' | 'artists'
 export type SearchSource = 'all' | 'local' | string
+
+export interface SongSearchPage {
+  tracks: Track[]
+  total: number
+  /** Only authoritative local-only searches provide a full-query playback path. */
+  playbackQuery?: LibraryQuery
+}
 
 export interface SearchSourceOption {
   id: SearchSource
@@ -38,7 +46,8 @@ type UseStreamingSearchOptions = {
   searchLocalAlbums?: (
     keywords: string,
     limit?: number,
-    offset?: number
+    offset?: number,
+    options?: { signal?: AbortSignal }
   ) => Promise<{ albums: AlbumSearchItem[]; total: number }>
   searchProviderAlbums?: (
     providerId: string,
@@ -95,8 +104,9 @@ type UseStreamingSearchOptions = {
   searchLocalSongs?: (
     keywords: string,
     limit?: number,
-    offset?: number
-  ) => Promise<{ tracks: Track[]; total: number }>
+    offset?: number,
+    options?: { signal?: AbortSignal }
+  ) => Promise<SongSearchPage>
   searchLocalPlaylists?: (
     keywords: string,
     limit?: number,
@@ -111,6 +121,7 @@ type UseStreamingSearchOptions = {
   ) => Promise<{ artists: MediaProviderArtistSummary[]; total: number }>
   searchSources: Ref<SearchSourceOption[]>
   playTrack: (track: Track, queue?: Track[]) => void
+  playLibraryQuery?: (query: LibraryQuery, selectedId: string) => Promise<void>
 }
 
 interface SearchRequestSnapshot {
@@ -136,7 +147,8 @@ export function useStreamingSearch({
   searchLocalPlaylists,
   searchLocalArtists,
   searchSources,
-  playTrack
+  playTrack,
+  playLibraryQuery
 }: UseStreamingSearchOptions): {
   searchQuery: Ref<string>
   searchType: Ref<SearchType>
@@ -153,6 +165,7 @@ export function useStreamingSearch({
   isSearching: ComputedRef<boolean>
   availableSearchTypes: ComputedRef<SearchType[]>
   clearSearch: () => void
+  refreshSearch: () => void
   performSearch: (keywords: string) => Promise<void>
   onPageChange: (event: PageState) => void
   onSearchTrackClick: (track: Track) => void
@@ -174,6 +187,18 @@ export function useStreamingSearch({
   let latestRequestId = 0
   let lastRequestFingerprint = ''
   let activeSearchController: AbortController | null = null
+  let refreshQueued = false
+  let songPlayback: { snapshot: SearchRequestSnapshot; query: LibraryQuery } | null = null
+
+  function refreshSearch(): void {
+    if (refreshQueued || !isSearching.value) return
+    refreshQueued = true
+    const requestId = latestRequestId
+    queueMicrotask(() => {
+      refreshQueued = false
+      if (requestId === latestRequestId && isSearching.value) void performSearch(searchQuery.value)
+    })
+  }
 
   const cancelActiveSearch = (): void => {
     activeSearchController?.abort(new Error('Search request was superseded'))
@@ -213,7 +238,7 @@ export function useStreamingSearch({
   ): Promise<{ albums: AlbumSearchItem[]; total: number }> {
     if (source === 'all' && searchAlbums) return searchAlbums(keywords, limit, offset, { signal })
     if (source === 'local') {
-      return searchLocalAlbums?.(keywords, limit, offset) ?? { albums: [], total: 0 }
+      return searchLocalAlbums?.(keywords, limit, offset, { signal }) ?? { albums: [], total: 0 }
     }
     if (source !== 'all' && searchProviderAlbums) {
       return searchProviderAlbums(source, keywords, limit, offset, { signal })
@@ -227,12 +252,12 @@ export function useStreamingSearch({
     limit: number,
     offset: number,
     signal?: AbortSignal
-  ): Promise<{ tracks: Track[]; total: number }> {
+  ): Promise<SongSearchPage> {
     if (source === 'all') {
       return (searchUnifiedSongs ?? searchSongs)(keywords, limit, offset, { signal })
     }
     if (source === 'local') {
-      if (searchLocalSongs) return searchLocalSongs(keywords, limit, offset)
+      if (searchLocalSongs) return searchLocalSongs(keywords, limit, offset, { signal })
       return { tracks: [], total: 0 }
     }
     if (searchProviderSongs) {
@@ -272,7 +297,7 @@ export function useStreamingSearch({
       return searchArtists(keywords, limit, offset, { signal })
     }
     if (source === 'local') {
-      if (searchLocalArtists) return searchLocalArtists(keywords, limit, offset)
+      if (searchLocalArtists) return searchLocalArtists(keywords, limit, offset, { signal })
       return { artists: [], total: 0 }
     }
     if (searchProviderArtists) {
@@ -314,7 +339,7 @@ export function useStreamingSearch({
     searchError.value = ''
     try {
       if (snapshot.type === 'songs') {
-        const { tracks, total } = await resolveSongsSearch(
+        const { tracks, total, playbackQuery } = await resolveSongsSearch(
           snapshot.source,
           snapshot.query,
           30,
@@ -322,8 +347,19 @@ export function useStreamingSearch({
           controller.signal
         )
         if (snapshot.requestId === latestRequestId) {
+          if (snapshot.offset > 0 && snapshot.offset >= total) {
+            searchOffset.value = total > 0 ? Math.floor((total - 1) / 30) * 30 : 0
+            if (total > 0) {
+              await performSearch(snapshot.query)
+              return
+            }
+          }
           searchResults.value = tracks
           searchTotal.value = total
+          songPlayback =
+            snapshot.source === 'local' && playbackQuery
+              ? { snapshot, query: { ...playbackQuery } }
+              : null
         }
       } else if (snapshot.type === 'albums') {
         const { albums, total } = await resolveAlbumsSearch(
@@ -365,6 +401,13 @@ export function useStreamingSearch({
           controller.signal
         )
         if (snapshot.requestId === latestRequestId) {
+          if (snapshot.offset > 0 && snapshot.offset >= total) {
+            searchOffset.value = total > 0 ? Math.floor((total - 1) / 30) * 30 : 0
+            if (total > 0) {
+              await performSearch(snapshot.query)
+              return
+            }
+          }
           searchArtistsResults.value = artists
           searchTotal.value = total
         }
@@ -445,6 +488,27 @@ export function useStreamingSearch({
   }
 
   function onSearchTrackClick(track: Track): void {
+    if (songPlayback) {
+      const { snapshot, query } = songPlayback
+      if (
+        searchLoading.value ||
+        snapshot.requestId !== latestRequestId ||
+        snapshot.query !== searchQuery.value.trim() ||
+        searchSource.value !== 'local' ||
+        searchType.value !== 'songs' ||
+        !searchResults.value.some((item) => item.id === track.id)
+      )
+        return
+      if (!playLibraryQuery) {
+        searchError.value = '数据库播放接口不可用，请重新打开页面'
+        return
+      }
+      void playLibraryQuery({ ...query }, track.id).catch((error) => {
+        if (snapshot.requestId === latestRequestId)
+          searchError.value = friendlyStreamingError(error, '创建播放队列失败')
+      })
+      return
+    }
     playTrack(track, searchResults.value)
   }
 
@@ -472,6 +536,7 @@ export function useStreamingSearch({
     isSearching,
     availableSearchTypes,
     clearSearch,
+    refreshSearch,
     performSearch,
     onPageChange,
     onSearchTrackClick

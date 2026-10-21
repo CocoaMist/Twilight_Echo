@@ -148,6 +148,17 @@ test('renderer snapshot validation accepts a sane queue and rejects malformed pa
   assert.equal(parseAfterglowRendererSnapshot({ ...valid, nativeQueueIndices: [0, 5] }), null)
   assert.equal(parseAfterglowRendererSnapshot({ ...valid, nativeQueueIndices: [] }), null)
   assert.equal(parseAfterglowRendererSnapshot({ ...valid, nativeQueueIndices: [0, 0.5] }), null)
+  const handoff = { triggerRevision: 7, startedAt: 1_000, volume: valid.volume }
+  assert.deepEqual(
+    parseAfterglowRendererSnapshot({ ...valid, sleepShutdown: handoff })?.sleepShutdown,
+    handoff
+  )
+  for (const sleepShutdown of [
+    { ...handoff, triggerRevision: 0 },
+    { ...handoff, startedAt: Infinity },
+    { ...handoff, volume: 0.4 }
+  ])
+    assert.equal(parseAfterglowRendererSnapshot({ ...valid, sleepShutdown }), null)
 })
 
 test('engine queue entries map back onto logical indices for windowed queues', () => {
@@ -213,5 +224,13 @@ test('rejection codes have readable explanations and unknown codes pass through'
     '原生音频引擎尚未就绪'
   )
   assert.equal(describeAfterglowError(null), '')
+  assert.equal(
+    describeAfterglowError('afterglow_library_queue_changed'),
+    '后台播放队列已变化，请重试或恢复界面'
+  )
   assert.equal(describeAfterglowError('some_new_code'), 'some_new_code')
+  assert.equal(
+    describeAfterglowError('afterglow_requires_renderer_play_mode'),
+    '当前播放模式需要恢复界面后继续'
+  )
 })

@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import AnimatedInput from '../AnimatedInput.vue'
 import CreateAggregatePlaylistDialog from './CreateAggregatePlaylistDialog.vue'
 import CoverImg from '../CoverImg.vue'
 import ThemeIcon from '../ThemeIcon.vue'
+import LibraryPager from '../song-list/LibraryPager.vue'
+import { createLibraryStorageState } from '../../stores/library/libraryStorageState'
+import { createLibraryAggregatePlaylist } from '../../stores/library/libraryAggregatePlaylist'
+import { getMusicVersions, musicVersionRevision } from '../../stores/musicVersions'
+import { toSourceVariant } from '../../utils/logicalTrackModel'
+import type { LibraryPlaylistSourceSummary } from '../../../../shared/libraryDatabase'
+import type { Playlist } from '../../stores/library/musicStoreTypes'
 import { formatDuration } from '../song-list/formatDuration'
 import { useSongListVirtualScroll } from '../song-list/useSongListVirtualScroll'
+import { useSongListGridRendering } from '../song-list/useSongListGridRendering'
+import { trackRowKeyAction } from '../song-list/trackRowKeyboard'
 import { useLocatePlayingTrack } from '../song-list/useLocatePlayingTrack'
 import { useBackHandler } from '../../app/useBackStack.ts'
 import { useMusicStore } from '../../stores/useMusicStore'
@@ -48,7 +57,8 @@ const {
   getPlaylistTracksById,
   removeTracksFromPlaylistById
 } = useMusicStore()
-const { currentTrack, playTrack } = usePlayerStore()
+const playerStore = usePlayerStore()
+const { currentTrack, playTrack } = playerStore
 const settingsStore = useSettingsStore()
 const providerStore = useProviderStore()
 
@@ -74,9 +84,88 @@ const activePlaylist = computed(
 watch(activePlaylist, (playlist) => {
   if (activePlaylistId.value && !playlist) activePlaylistId.value = null
 })
+const storage = createLibraryStorageState({
+  getStorageMode: () => window.api.library.getStorageMode()
+})
+const database = createLibraryAggregatePlaylist({
+  syncPlaylistView: (request) => window.api.library.database.syncPlaylistView(request),
+  queryTracks: (query) => window.api.library.database.queryTracks(query),
+  queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query),
+  getMetadata: () => window.api.library.database.getMetadata()
+})
+const databasePage = database.pageState,
+  databaseSources = database.sourceState,
+  databaseVariants = database.variantState,
+  databaseCards = database.cardState
+const databaseMenu = database.menu,
+  databaseAction = database.action
+const databaseEnabled = computed(() => props.active && storage.mode.value === 'sqlite')
+const databasePending = computed(
+  () =>
+    props.active && ((storage.mode.value === null && storage.loading.value) || database.busy.value)
+)
+const databaseError = computed(() => storage.error.value || database.error.value)
+watch(
+  () => props.active,
+  (active) => {
+    if (active) void storage.load()
+  },
+  { immediate: true }
+)
+watch(
+  () => ({
+    enabled: databaseEnabled.value,
+    playlist: activePlaylist.value,
+    playlists: aggregatePlaylists.value,
+    search: searchQuery.value,
+    revision: musicVersionRevision.value,
+    hidden: activePlaylist.value?.hiddenSources,
+    preferences: activePlaylist.value?.variantPreferences
+  }),
+  (value) => database.setInput({ ...value, versions: getMusicVersions().tracks.versions }),
+  { immediate: true, flush: 'sync' }
+)
+watch(
+  [() => database.detailState.value.id, () => database.catalogState.value.id],
+  database.refreshQueries,
+  { flush: 'sync' }
+)
+let unsubscribeLibrary: (() => void) | undefined
+onMounted(() => {
+  unsubscribeLibrary = window.api.library.onChanged((change) => {
+    if (databaseEnabled.value)
+      database.invalidate(
+        change?.kind === 'scan' ? change.update.libraryRevision : change?.revision
+      )
+  })
+})
+onUnmounted(() => {
+  unsubscribeLibrary?.()
+  database.dispose()
+})
+function retryDatabase(): void {
+  if (storage.mode.value === null) void storage.load()
+  else database.retry()
+}
+type PlaylistCard = Pick<Playlist, 'id' | 'name' | 'cover' | 'pinnedAt'> & {
+  trackCount?: number
+  trackIds?: string[]
+  sourceSummary?: LibraryPlaylistSourceSummary
+}
+const playlistPins = computed(
+  () => new Map(aggregatePlaylists.value.map((playlist) => [playlist.id, playlist.pinnedAt]))
+)
+const gridPlaylists = computed<PlaylistCard[]>(() => {
+  if (storage.mode.value === 'json') return aggregatePlaylists.value
+  return database.cardPages.value.flatMap((page) =>
+    page.items.map((item) => ({ ...item, pinnedAt: playlistPins.value.get(item.id) }))
+  )
+})
 
 const activeTracks = computed<Track[]>(() =>
-  activePlaylist.value ? getPlaylistTracksById(activePlaylist.value.id) : []
+  props.active && storage.mode.value === 'json' && activePlaylist.value
+    ? getPlaylistTracksById(activePlaylist.value.id)
+    : []
 )
 
 const rows = computed<AggregateRow[]>(() => {
@@ -99,7 +188,9 @@ const searchedRows = computed<AggregateRow[]>(() => {
 
 /** 虚拟滚动跑在"每行当前选定音源"上，行数据再按 trackId 映射回来。 */
 const displayTracks = computed<Track[]>(() =>
-  searchedRows.value.map((row) => row.selectedVariant.track)
+  databaseEnabled.value
+    ? (database.pages.value.flatMap((page) => page.tracks) as unknown as Track[])
+    : searchedRows.value.map((row) => row.selectedVariant.track)
 )
 const playableTracks = computed<Track[]>(() => resolveAggregateQueue(searchedRows.value))
 const rowByTrackId = computed(() => {
@@ -109,36 +200,125 @@ const rowByTrackId = computed(() => {
 })
 
 const sourceFilters = computed(() =>
-  activePlaylist.value
-    ? collectAggregateSources(activeTracks.value, activePlaylist.value.hiddenSources ?? [])
-    : []
+  databaseEnabled.value
+    ? (databaseSources.value.page?.aggregate?.sources ?? [])
+    : activePlaylist.value
+      ? collectAggregateSources(activeTracks.value, activePlaylist.value.hiddenSources ?? [])
+      : []
 )
 
 const detailStatsText = computed(() => {
-  const visible = rows.value.length
-  const total = activeTracks.value.length
-  const sourceCount = sourceFilters.value.filter((item) => !item.hidden).length
+  if (storage.mode.value !== 'json' && !databasePage.value.page) return '正在读取聚合歌单…'
+  const visible = databaseEnabled.value
+    ? (databasePage.value.page?.aggregate?.rowCount ?? 0)
+    : rows.value.length
+  const total = databaseEnabled.value
+    ? (databasePage.value.page?.aggregate?.memberCount ?? 0)
+    : activeTracks.value.length
+  const sourceCount = databaseEnabled.value
+    ? databaseSources.value.total === null
+      ? null
+      : Math.max(
+          0,
+          (databaseSources.value.total ?? 0) -
+            new Set(activePlaylist.value?.hiddenSources ?? []).size
+        )
+    : sourceFilters.value.filter((item) => !item.hidden).length
   const parts = [`${visible} 首`]
   if (total !== visible) parts.push(`已隐藏 ${total - visible} 首`)
-  parts.push(`${sourceCount} 个音源`)
+  if (sourceCount !== null) parts.push(`${sourceCount} 个音源`)
   return parts.join(' · ')
 })
 
+const tableTrackCount = computed(() =>
+  databaseEnabled.value ? (databasePage.value.total ?? 0) : displayTracks.value.length
+)
+const showGrid = computed(() => !activePlaylist.value)
 const {
   containerRef,
   tbodyRef,
   rowHeight,
   visibleRange,
-  visibleTracks,
+  visibleTracks: legacyVisibleTracks,
   totalHeight,
   paddingTop,
-  onScroll
+  onScroll,
+  scrollTop,
+  viewportHeight,
+  scrollToTrack,
+  updateViewportHeight
 } = useSongListVirtualScroll({
   displayTracks,
-  resetSources: [activePlaylistId, searchQuery],
+  itemCount: tableTrackCount,
+  restoreReady: computed(
+    () =>
+      storage.mode.value === 'json' ||
+      (databaseEnabled.value &&
+        (showGrid.value ? databaseCards.value.total !== null : databasePage.value.total !== null))
+  ),
+  viewKey: computed(() =>
+    JSON.stringify([
+      'aggregate',
+      props.surface,
+      activePlaylistId.value,
+      searchQuery.value,
+      activePlaylist.value?.hiddenSources,
+      activePlaylist.value?.variantPreferences
+    ])
+  ),
+  resetSources: [],
   shouldResetOnSearch: computed(() => !!activePlaylist.value),
   debouncedSearchQuery: searchQuery
 })
+const visibleTracks = computed(() =>
+  databaseEnabled.value
+    ? Array.from(
+        { length: visibleRange.value.end - visibleRange.value.start },
+        (_, index) =>
+          database.trackAt(visibleRange.value.start + index) as unknown as Track | undefined
+      )
+    : legacyVisibleTracks.value
+)
+watch(
+  [visibleRange, databaseEnabled, () => databasePage.value.total],
+  ([range, enabled, total]) => {
+    if (enabled && activePlaylist.value && total !== null) database.setRange(range.start, range.end)
+  },
+  { flush: 'post' }
+)
+const {
+  visibleGridSlots,
+  gridDataRange,
+  gridPaddingTop,
+  gridPaddingBottom,
+  gridRowStride,
+  gridRowGap,
+  showPlaylistCreateCard
+} = useSongListGridRendering<PlaylistCard>({
+  category: () => 'playlists',
+  filter: () => null,
+  transitionName: () => 'page-down',
+  debouncedSearchQuery: computed(() => ''),
+  currentGridItems: gridPlaylists,
+  serverFiltered: databaseEnabled,
+  itemCount: computed(() => databaseCards.value.total ?? 0),
+  itemAt(index) {
+    const item = database.cardAt(index)
+    return item ? { ...item, pinnedAt: playlistPins.value.get(item.id) } : undefined
+  },
+  showGrid,
+  updateViewportHeight,
+  containerRef,
+  scrollTop,
+  viewportHeight
+})
+watch(
+  [gridDataRange, databaseEnabled, () => databaseCards.value.total],
+  ([range, enabled, total]) => {
+    if (enabled && showGrid.value && total !== null) database.setCardRange(range.start, range.end)
+  },
+  { flush: 'post' }
+)
 // 这两个只在模板里以 ref="…" 字符串出现，vue-tsc 不把那当使用（SongList 同样处理）。
 void containerRef.value
 void tbodyRef.value
@@ -150,8 +330,17 @@ useLocatePlayingTrack({
   currentTrack,
   enabled: computed(() => props.active && !!activePlaylist.value),
   rowHeight,
-  playingRowSelector: '.is-playing'
+  playingRowSelector: '.is-playing',
+  database: { enabled: databaseEnabled, locate: database.locate }
 })
+watch(
+  () => databasePage.value.page,
+  (page) => {
+    if (page && page.anchorIndex !== undefined && page.anchorIndex >= 0)
+      void nextTick(() => scrollToTrack(page.anchorIndex!))
+  },
+  { flush: 'post' }
+)
 
 // ─── 音源展示 ──────────────────────────────────────────────────────────────
 function sourceLabel(source: string): string {
@@ -171,8 +360,20 @@ function sourceIcon(source: string): string {
   )
 }
 
-function playlistSourceSummary(playlistId: string): string {
-  const sources = collectAggregateSources(getPlaylistTracksById(playlistId))
+function playlistSourceSummary(playlist: PlaylistCard): string {
+  if (playlist.sourceSummary) {
+    const summary = playlist.sourceSummary,
+      sources = [
+        ...(summary.local ? [{ source: 'local', count: summary.local }] : []),
+        ...summary.providers
+      ]
+    const label = sources.map((item) => `${sourceLabel(item.source)} ${item.count}`).join(' · ')
+    return summary.additionalProviders
+      ? `${label} · 另 ${summary.additionalProviders} 个音源`
+      : label
+  }
+  if (storage.mode.value !== 'json') return ''
+  const sources = collectAggregateSources(getPlaylistTracksById(playlist.id))
   if (sources.length === 0) return ''
   return sources.map((item) => `${sourceLabel(item.source)} ${item.count}`).join(' · ')
 }
@@ -189,6 +390,7 @@ function backToGrid(): void {
   if (props.returnFromDetail) props.returnFromDetail()
   else activePlaylistId.value = null
   openVariantMenuFor.value = null
+  database.closeVariants()
 }
 
 // 歌单详情 → 标题栏返回按钮回到网格；取代了原来详情头部的页内返回按钮。
@@ -226,10 +428,18 @@ function closeCreateDialog(): void {
 // ─── 详情操作 ──────────────────────────────────────────────────────────────
 function toggleSourceVisibility(source: string): void {
   const playlist = activePlaylist.value
-  if (!playlist) return
+  if (!props.active || !playlist) return
+  if (
+    storage.mode.value !== 'json' &&
+    (!databaseEnabled.value || databaseSources.value.total === null)
+  )
+    return
   const next = toggleHiddenSource(playlist.hiddenSources ?? [], source)
   // 全部音源都隐藏等于一个空歌单，拦下来并说明原因。
-  if (next.length >= sourceFilters.value.length) {
+  if (
+    new Set(next).size >=
+    (databaseEnabled.value ? (databaseSources.value.total ?? 0) : sourceFilters.value.length)
+  ) {
     actionError.value = '至少要保留一个显示的音源'
     return
   }
@@ -237,20 +447,33 @@ function toggleSourceVisibility(source: string): void {
   setPlaylistHiddenSources(playlist.id, next)
 }
 
-function rowFor(track: Track): AggregateRow | undefined {
-  return rowByTrackId.value.get(track.id)
+function rowFor(track: Track) {
+  if (databaseEnabled.value) {
+    const row = database.rowFor(track)?.meta
+    return row ? { ...row, selectedVariant: { source: track.source ?? 'local' } } : undefined
+  }
+  const row = rowByTrackId.value.get(track.id)
+  return row ? { ...row, visibleVariantCount: row.visibleVariants.length } : undefined
 }
 
-function toggleVariantMenu(anchorTrackId: string, event: Event): void {
+function toggleVariantMenu(track: Track, event: Event): void {
   event.stopPropagation()
+  if (databaseEnabled.value) {
+    database.openVariants(track)
+    return
+  }
+  const anchorTrackId = rowFor(track)?.anchorTrackId
+  if (!anchorTrackId) return
   openVariantMenuFor.value = openVariantMenuFor.value === anchorTrackId ? null : anchorTrackId
 }
 
-function chooseVariant(row: AggregateRow, source: string, event: Event): void {
+function chooseVariant(track: Track, source: string, event: Event): void {
   event.stopPropagation()
   const playlist = activePlaylist.value
   openVariantMenuFor.value = null
-  if (!playlist) return
+  const row = rowFor(track)
+  if (!playlist || !row) return
+  database.closeVariants()
   // 再点当前音源就是取消这一行的显式选择，回到默认优先级。
   setPlaylistVariantPreference(
     playlist.id,
@@ -261,6 +484,7 @@ function chooseVariant(row: AggregateRow, source: string, event: Event): void {
 
 function closeOverlays(): void {
   openVariantMenuFor.value = null
+  database.closeVariants()
   pendingDeleteId.value = null
 }
 
@@ -275,6 +499,16 @@ onUnmounted(() => {
 })
 
 function playRow(track: Track): void {
+  if (!props.active) return
+  if (databaseEnabled.value) {
+    const query = database.playbackQuery(track)
+    if (query)
+      void playerStore.playLibraryQuery(query, track.id, {
+        onQueryFailure: (error) => database.recoverPlayback(query.playlistView!, error)
+      })
+    return
+  }
+  if (storage.mode.value !== 'json') return
   if (rowFor(track)?.preferenceUnavailable) {
     actionError.value = '偏好来源未载入，请通过来源菜单明确选择，或在歌曲信息中修改偏好'
     return
@@ -292,10 +526,22 @@ function onRowDoubleClick(track: Track): void {
   playRow(track)
 }
 
-function removeRow(row: AggregateRow, event: Event): void {
+function onRowKeydown(track: Track, event: KeyboardEvent): void {
+  if (trackRowKeyAction(event, false) === 'play') playRow(track)
+}
+
+async function removeRow(track: Track, event: Event): Promise<void> {
   event.stopPropagation()
   const playlist = activePlaylist.value
-  if (!playlist) return
+  if (!props.active || !playlist) return
+  if (databaseEnabled.value) {
+    const result = await database.removalIds(track)
+    if (result) removeTracksFromPlaylistById(result.playlistId, result.ids)
+    return
+  }
+  if (storage.mode.value !== 'json') return
+  const row = rowByTrackId.value.get(track.id)
+  if (!row) return
   // 一行代表一段录音，移除时把它的所有音源一起从歌单里拿掉。
   removeTracksFromPlaylistById(
     playlist.id,
@@ -305,6 +551,30 @@ function removeRow(row: AggregateRow, event: Event): void {
 
 function rowNumber(index: number): number {
   return visibleRange.value.start + index + 1
+}
+function variantMenuOpen(track: Track): boolean {
+  return databaseEnabled.value
+    ? databaseMenu.value?.rowId === database.rowFor(track)?.meta.rowId &&
+        databaseMenu.value?.revision === database.rowFor(track)?.page.revision
+    : openVariantMenuFor.value === rowFor(track)?.anchorTrackId
+}
+function rowVariants(track: Track) {
+  return databaseEnabled.value
+    ? ((databaseVariants.value.page?.tracks as unknown as Track[]) ?? []).map((track) =>
+        toSourceVariant({ track })
+      )
+    : (rowByTrackId.value.get(track.id)?.visibleVariants ?? [])
+}
+function playAll(): void {
+  if (!props.active) return
+  if (databaseEnabled.value) {
+    const query = database.playbackQuery()
+    if (query)
+      void playerStore.playLibraryQuery(query, undefined, {
+        onQueryFailure: (error) => database.recoverPlayback(query.playlistView!, error)
+      })
+  } else if (storage.mode.value === 'json' && playableTracks.value[0])
+    playTrack(playableTracks.value[0], playableTracks.value)
 }
 </script>
 
@@ -328,80 +598,124 @@ function rowNumber(index: number): number {
         </button>
       </header>
 
-      <div class="aggregate-grid">
-        <button
-          type="button"
-          class="aggregate-card aggregate-create-card"
-          data-te-interactive
-          @click="openCreateDialog()"
-        >
-          <div class="aggregate-cover aggregate-cover-create">
-            <ThemeIcon class="aggregate-cover-icon" icon-slot="library.add" />
-          </div>
-          <div class="aggregate-card-name">新建聚合歌单</div>
-          <div class="aggregate-card-meta">跨音源收歌</div>
-        </button>
-
+      <p v-if="databaseError" class="aggregate-notice" role="alert">
+        {{ databaseError }} <button type="button" @click="retryDatabase">重试</button>
+      </p>
+      <p v-else-if="databasePending" class="aggregate-notice" role="status">正在读取聚合歌单…</p>
+      <div ref="containerRef" class="aggregate-grid-scroller" @scroll="onScroll">
         <div
-          v-for="playlist in aggregatePlaylists"
-          :key="playlist.id"
-          class="aggregate-card"
-          role="button"
-          tabindex="0"
-          data-te-interactive
-          :class="{ 'is-pinned': !!playlist.pinnedAt }"
-          @click="openPlaylist(playlist.id)"
-          @keydown.enter.prevent="openPlaylist(playlist.id)"
-          @keydown.space.prevent="openPlaylist(playlist.id)"
+          v-if="databaseCards.total !== null || storage.mode.value === 'json'"
+          class="aggregate-grid card-grid"
         >
-          <CoverImg
-            v-if="playlist.cover"
-            :cover="playlist.cover"
-            class="aggregate-cover"
-            alt="聚合歌单封面"
-            loading="lazy"
-          />
-          <div v-else class="aggregate-cover aggregate-cover-placeholder">
-            <i class="pi pi-sitemap aggregate-cover-icon"></i>
-          </div>
+          <div
+            v-if="gridPaddingTop > 0"
+            class="aggregate-grid-spacer"
+            :style="{ height: `${gridPaddingTop}px` }"
+            aria-hidden="true"
+          ></div>
+          <button
+            type="button"
+            v-if="showPlaylistCreateCard"
+            class="aggregate-card aggregate-create-card"
+            data-te-interactive
+            @click="openCreateDialog()"
+          >
+            <div class="aggregate-cover aggregate-cover-create">
+              <ThemeIcon class="aggregate-cover-icon" icon-slot="library.add" />
+            </div>
+            <div class="aggregate-card-name">新建聚合歌单</div>
+            <div class="aggregate-card-meta">跨音源收歌</div>
+            <div class="aggregate-card-sources" aria-hidden="true">&nbsp;</div>
+          </button>
 
-          <div class="aggregate-card-name">
-            <i v-if="playlist.pinnedAt" class="pi pi-thumbtack aggregate-pin-mark"></i>
-            {{ playlist.name }}
-          </div>
-          <div class="aggregate-card-meta">{{ playlist.trackIds.length }} 首</div>
-          <div v-if="playlistSourceSummary(playlist.id)" class="aggregate-card-sources">
-            {{ playlistSourceSummary(playlist.id) }}
-          </div>
+          <template
+            v-for="{ item: playlist, index } in visibleGridSlots"
+            :key="playlist?.id ?? `slot:${index}`"
+          >
+            <div
+              v-if="!playlist"
+              class="aggregate-card-placeholder"
+              :style="{ height: `${Math.max(1, gridRowStride - gridRowGap)}px` }"
+              aria-hidden="true"
+            ></div>
+            <div
+              v-else
+              class="aggregate-card"
+              role="button"
+              tabindex="0"
+              data-te-interactive
+              :class="{ 'is-pinned': !!playlist.pinnedAt }"
+              @click="openPlaylist(playlist.id)"
+              @keydown.enter.prevent="openPlaylist(playlist.id)"
+              @keydown.space.prevent="openPlaylist(playlist.id)"
+            >
+              <CoverImg
+                v-if="playlist.cover"
+                :cover="playlist.cover"
+                class="aggregate-cover"
+                alt="聚合歌单封面"
+                loading="lazy"
+              />
+              <div v-else class="aggregate-cover aggregate-cover-placeholder">
+                <i class="pi pi-sitemap aggregate-cover-icon"></i>
+              </div>
 
-          <div class="aggregate-card-actions">
-            <button
-              type="button"
-              class="aggregate-card-btn"
-              data-te-interactive
-              :title="playlist.pinnedAt ? '取消置顶' : '置顶'"
-              :aria-label="playlist.pinnedAt ? '取消置顶' : '置顶'"
-              @click="togglePinned(playlist.id, !!playlist.pinnedAt, $event)"
-            >
-              <i class="pi pi-thumbtack"></i>
-            </button>
-            <button
-              type="button"
-              class="aggregate-card-btn aggregate-card-btn-danger"
-              data-te-interactive
-              :class="{ 'is-confirming': pendingDeleteId === playlist.id }"
-              :title="pendingDeleteId === playlist.id ? '再点一次确认删除' : '删除聚合歌单'"
-              :aria-label="pendingDeleteId === playlist.id ? '再点一次确认删除' : '删除聚合歌单'"
-              @click="requestDelete(playlist.id, $event)"
-            >
-              <i class="pi pi-trash"></i>
-              <span v-if="pendingDeleteId === playlist.id">确认</span>
-            </button>
-          </div>
+              <div class="aggregate-card-name">
+                <i v-if="playlist.pinnedAt" class="pi pi-thumbtack aggregate-pin-mark"></i>
+                {{ playlist.name }}
+              </div>
+              <div class="aggregate-card-meta">
+                {{ playlist.trackCount ?? playlist.trackIds?.length ?? 0 }} 首
+              </div>
+              <div class="aggregate-card-sources">
+                {{ playlistSourceSummary(playlist) || '\u00a0' }}
+              </div>
+
+              <div class="aggregate-card-actions">
+                <button
+                  type="button"
+                  class="aggregate-card-btn"
+                  data-te-interactive
+                  :title="playlist.pinnedAt ? '取消置顶' : '置顶'"
+                  :aria-label="playlist.pinnedAt ? '取消置顶' : '置顶'"
+                  @click="togglePinned(playlist.id, !!playlist.pinnedAt, $event)"
+                >
+                  <i class="pi pi-thumbtack"></i>
+                </button>
+                <button
+                  type="button"
+                  class="aggregate-card-btn aggregate-card-btn-danger"
+                  data-te-interactive
+                  :class="{ 'is-confirming': pendingDeleteId === playlist.id }"
+                  :title="pendingDeleteId === playlist.id ? '再点一次确认删除' : '删除聚合歌单'"
+                  :aria-label="
+                    pendingDeleteId === playlist.id ? '再点一次确认删除' : '删除聚合歌单'
+                  "
+                  @click="requestDelete(playlist.id, $event)"
+                >
+                  <i class="pi pi-trash"></i>
+                  <span v-if="pendingDeleteId === playlist.id">确认</span>
+                </button>
+              </div>
+            </div>
+          </template>
+          <div
+            v-if="gridPaddingBottom > 0"
+            class="aggregate-grid-spacer"
+            :style="{ height: `${gridPaddingBottom}px` }"
+            aria-hidden="true"
+          ></div>
         </div>
       </div>
 
-      <p v-if="aggregatePlaylists.length === 0" class="aggregate-empty">
+      <p
+        v-if="
+          !databasePending &&
+          !databaseError &&
+          (databaseEnabled ? databaseCards.total === 0 : gridPlaylists.length === 0)
+        "
+        class="aggregate-empty"
+      >
         还没有聚合歌单。新建一个之后，在本地或流媒体页右键任意歌曲就能加进来。
       </p>
     </template>
@@ -417,6 +731,14 @@ function rowNumber(index: number): number {
           <p class="aggregate-subtitle">{{ detailStatsText }}</p>
         </div>
         <div class="aggregate-detail-tools">
+          <button
+            type="button"
+            class="aggregate-primary-action"
+            :disabled="databasePending || !!databaseError"
+            @click="playAll"
+          >
+            播放全部
+          </button>
           <AnimatedInput
             v-model="searchQuery"
             type="text"
@@ -455,7 +777,27 @@ function rowNumber(index: number): number {
         </button>
       </div>
 
+      <LibraryPager
+        v-if="databaseEnabled && (databaseSources.total ?? 0) > 200"
+        label="音源筛选"
+        :page="databaseSources.requestedPage"
+        :total="databaseSources.total"
+        :loading="databaseSources.loading"
+        @page="database.goToSourcePage"
+      />
+      <p v-if="databaseEnabled && databaseSources.error" class="aggregate-notice" role="alert">
+        {{ databaseSources.error }}
+        <button type="button" @click="database.retrySources">重试音源</button>
+      </p>
+
       <p v-if="actionError" class="aggregate-notice" role="alert">{{ actionError }}</p>
+      <p v-if="databaseEnabled && databaseAction.error" class="aggregate-notice" role="alert">
+        {{ databaseAction.error }}
+      </p>
+      <p v-if="databaseError" class="aggregate-notice" role="alert">
+        {{ databaseError }} <button type="button" @click="retryDatabase">重试</button>
+      </p>
+      <p v-else-if="databasePending" class="aggregate-notice" role="status">正在读取聚合歌单…</p>
 
       <div ref="containerRef" class="aggregate-table-wrapper" @scroll="onScroll">
         <table class="aggregate-table">
@@ -477,109 +819,150 @@ function rowNumber(index: number): number {
             <tr class="aggregate-spacer" :style="{ height: paddingTop + 'px' }" aria-hidden="true">
               <td colspan="7"></td>
             </tr>
-            <tr
+            <template
               v-for="(track, index) in visibleTracks"
-              :key="track.id"
-              class="aggregate-row"
-              data-te-interactive
-              :class="{ 'is-playing': currentTrack?.id === track.id }"
-              :style="{ height: rowHeight + 'px', display: 'flex' }"
-              @click="onRowClick(track)"
-              @dblclick="onRowDoubleClick(track)"
+              :key="
+                track
+                  ? databaseEnabled
+                    ? database.rowFor(track)?.meta.rowId
+                    : track.id
+                  : `slot:${visibleRange.start + index}`
+              "
             >
-              <td class="col-index">
-                <ThemeIcon
-                  v-if="currentTrack?.id === track.id"
-                  icon-slot="library.playing"
-                  class="aggregate-playing-icon"
-                />
-                <span v-else>{{ rowNumber(Number(index)) }}</span>
-              </td>
-              <td class="col-cover">
-                <CoverImg
-                  :cover="track.coverSmall || track.cover"
-                  :cover-source="track.coverSmallSource || track.coverSource"
-                  :identity="track.id"
-                  class="aggregate-row-cover"
-                  alt=""
-                  loading="lazy"
-                />
-              </td>
-              <td class="col-info">
-                <span class="aggregate-row-title">{{ track.title }}</span>
-                <span class="aggregate-row-artist">{{ track.artist }}</span>
-                <span v-if="rowFor(track)?.preferenceUnavailable" class="aggregate-row-artist"
-                  >偏好来源未载入，请选择音源</span
-                >
-              </td>
-              <td class="col-source">
-                <template v-if="rowFor(track)">
-                  <button
-                    type="button"
-                    class="aggregate-variant-btn"
-                    data-te-interactive
-                    :class="{ 'is-pinned': rowFor(track)!.variantPinned }"
-                    :title="
-                      rowFor(track)!.visibleVariants.length > 1
-                        ? '切换这一行使用的音源'
-                        : sourceLabel(rowFor(track)!.selectedVariant.source)
-                    "
-                    @click="toggleVariantMenu(rowFor(track)!.anchorTrackId, $event)"
+              <tr
+                v-if="!track"
+                class="aggregate-row aggregate-row-placeholder"
+                :style="{ height: rowHeight + 'px', display: 'flex' }"
+                aria-hidden="true"
+              >
+                <td class="col-index">{{ rowNumber(index) }}</td>
+                <td class="col-info">{{ databaseError ? '读取失败，请重试' : '正在读取…' }}</td>
+              </tr>
+              <tr
+                v-else
+                class="aggregate-row"
+                data-te-interactive
+                tabindex="0"
+                :aria-label="`${track.title} · ${track.artist}，按回车播放`"
+                :aria-current="currentTrack?.id === track.id ? 'true' : undefined"
+                :class="{ 'is-playing': currentTrack?.id === track.id }"
+                :style="{ height: rowHeight + 'px', display: 'flex' }"
+                @click="onRowClick(track)"
+                @keydown="onRowKeydown(track, $event)"
+                @dblclick="onRowDoubleClick(track)"
+                @contextmenu.prevent.stop="toggleVariantMenu(track, $event)"
+              >
+                <td class="col-index">
+                  <ThemeIcon
+                    v-if="currentTrack?.id === track.id"
+                    icon-slot="library.playing"
+                    class="aggregate-playing-icon"
+                  />
+                  <span v-else>{{ rowNumber(Number(index)) }}</span>
+                </td>
+                <td class="col-cover">
+                  <CoverImg
+                    :cover="track.coverSmall || track.cover"
+                    :cover-source="track.coverSmallSource || track.coverSource"
+                    :identity="track.id"
+                    class="aggregate-row-cover"
+                    alt=""
+                    loading="lazy"
+                  />
+                </td>
+                <td class="col-info">
+                  <span class="aggregate-row-title">{{ track.title }}</span>
+                  <span class="aggregate-row-artist">{{ track.artist }}</span>
+                  <span v-if="rowFor(track)?.preferenceUnavailable" class="aggregate-row-artist"
+                    >偏好来源未载入，请选择音源</span
                   >
-                    <i :class="sourceIcon(rowFor(track)!.selectedVariant.source)"></i>
-                    <span>{{ sourceLabel(rowFor(track)!.selectedVariant.source) }}</span>
-                    <i
-                      v-if="rowFor(track)!.visibleVariants.length > 1"
-                      class="pi pi-angle-down aggregate-variant-caret"
-                    ></i>
-                  </button>
-                  <div
-                    v-if="openVariantMenuFor === rowFor(track)!.anchorTrackId"
-                    class="aggregate-variant-menu"
-                    @click.stop
-                  >
+                </td>
+                <td class="col-source">
+                  <template v-if="rowFor(track)">
                     <button
-                      v-for="variant in rowFor(track)!.visibleVariants"
-                      :key="variant.track.id"
                       type="button"
-                      class="aggregate-variant-option"
+                      class="aggregate-variant-btn"
                       data-te-interactive
-                      :class="{
-                        'is-selected': variant.source === rowFor(track)!.selectedVariant.source
-                      }"
-                      @click="chooseVariant(rowFor(track)!, variant.source, $event)"
+                      :class="{ 'is-pinned': rowFor(track)!.variantPinned }"
+                      :title="
+                        rowFor(track)!.visibleVariantCount > 1
+                          ? '切换这一行使用的音源'
+                          : sourceLabel(rowFor(track)!.selectedVariant.source)
+                      "
+                      @click="toggleVariantMenu(track, $event)"
                     >
-                      <i :class="sourceIcon(variant.source)"></i>
-                      <span>{{ sourceLabel(variant.source) }}</span>
-                      <span v-if="variant.lossless" class="aggregate-variant-tag">无损</span>
+                      <i :class="sourceIcon(rowFor(track)!.selectedVariant.source)"></i>
+                      <span>{{ sourceLabel(rowFor(track)!.selectedVariant.source) }}</span>
                       <i
-                        v-if="variant.source === rowFor(track)!.selectedVariant.source"
-                        class="pi pi-check aggregate-variant-check"
+                        v-if="rowFor(track)!.visibleVariantCount > 1"
+                        class="pi pi-angle-down aggregate-variant-caret"
                       ></i>
                     </button>
-                  </div>
-                </template>
-              </td>
-              <td class="col-album">{{ track.album }}</td>
-              <td class="col-duration">{{ formatDuration(track.duration) }}</td>
-              <td class="col-actions">
-                <button
-                  type="button"
-                  class="aggregate-row-remove"
-                  data-te-interactive
-                  title="从聚合歌单移除（含这首歌的全部音源）"
-                  aria-label="从聚合歌单移除"
-                  @click="removeRow(rowFor(track)!, $event)"
-                >
-                  <i class="pi pi-times"></i>
-                </button>
-              </td>
-            </tr>
+                    <div v-if="variantMenuOpen(track)" class="aggregate-variant-menu" @click.stop>
+                      <button
+                        v-for="(variant, variantIndex) in rowVariants(track)"
+                        :key="`${variant.track.id}:${variantIndex}`"
+                        type="button"
+                        class="aggregate-variant-option"
+                        data-te-interactive
+                        :class="{
+                          'is-selected': variant.source === rowFor(track)!.selectedVariant.source
+                        }"
+                        @click="chooseVariant(track, variant.source, $event)"
+                      >
+                        <i :class="sourceIcon(variant.source)"></i>
+                        <span>{{ sourceLabel(variant.source) }}</span>
+                        <span v-if="variant.lossless" class="aggregate-variant-tag">无损</span>
+                        <i
+                          v-if="variant.source === rowFor(track)!.selectedVariant.source"
+                          class="pi pi-check aggregate-variant-check"
+                        ></i>
+                      </button>
+                      <template v-if="databaseEnabled">
+                        <p v-if="databaseVariants.loading" role="status">正在读取音源…</p>
+                        <p v-if="databaseVariants.error" role="alert">
+                          {{ databaseVariants.error }}
+                          <button type="button" @click="database.retryVariants">重试</button>
+                        </p>
+                        <LibraryPager
+                          v-if="(databaseVariants.total ?? 0) > 200"
+                          label="录音音源"
+                          :page="databaseVariants.requestedPage"
+                          :total="databaseVariants.total"
+                          :loading="databaseVariants.loading"
+                          @page="database.goToVariantPage"
+                        />
+                      </template>
+                    </div>
+                  </template>
+                </td>
+                <td class="col-album">{{ track.album }}</td>
+                <td class="col-duration">{{ formatDuration(track.duration) }}</td>
+                <td class="col-actions">
+                  <button
+                    type="button"
+                    class="aggregate-row-remove"
+                    data-te-interactive
+                    title="从聚合歌单移除（含这首歌的全部音源）"
+                    aria-label="从聚合歌单移除"
+                    :disabled="databaseEnabled && databaseAction.pending"
+                    @click="removeRow(track, $event)"
+                  >
+                    <i class="pi pi-times"></i>
+                  </button>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
-        <p v-if="displayTracks.length === 0" class="aggregate-empty">
+        <p
+          v-if="!databasePending && !databaseError && tableTrackCount === 0"
+          class="aggregate-empty"
+        >
           {{
-            activeTracks.length === 0
+            (databaseEnabled
+              ? (databasePage.page?.aggregate?.memberCount ?? 0)
+              : activeTracks.length) === 0
               ? '这个聚合歌单还是空的。在本地或流媒体页右键歌曲，选“添加到聚合歌单”。'
               : '当前筛选下没有可显示的歌曲，试试取消隐藏某个音源。'
           }}

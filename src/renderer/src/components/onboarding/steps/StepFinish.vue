@@ -17,7 +17,7 @@ const emit = defineEmits<{
   start: [action: OnboardingFinishAction]
 }>()
 
-const { tracks, libraryScanProgress } = useMusicStore()
+const { tracks, libraryTrackCount, libraryScanProgress } = useMusicStore()
 const { settings, updateSettings } = useSettingsStore()
 const { audioDevice, audioOutputDeviceOptions } = storeToRefs(useAudioOutputDspStore())
 const lyricsBusy = ref(false)
@@ -59,7 +59,8 @@ const scanText = computed(() => {
     if (progress.phase === 'enumerating') return `正在整理曲库…发现 ${progress.total} 个文件`
     return `正在整理曲库…${progress.current} / ${progress.total}`
   }
-  if (tracks.value.length > 0) return `曲库已就绪，共 ${tracks.value.length} 首`
+  const count = libraryTrackCount.value ?? tracks.value.length
+  if (count > 0) return `曲库已就绪，共 ${count} 首`
   return ''
 })
 

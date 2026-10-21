@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Track } from '../types/music'
+import { preparedNativePlayMode, type PrepareNativeQueueOptions } from './nativeQueuePreparation.ts'
 
 const { prepareNativeQueue } = (await import(
   new URL('./nativeQueuePreparation.ts', import.meta.url).href
@@ -24,6 +25,184 @@ function createTrack(overrides: Partial<Track> = {}): Track {
   }
 }
 
+test('database local windows keep CUE companions, absolute positions and occurrence-specific identity', async () => {
+  const first = createTrack({
+    queueEntryId: 'first',
+    cueRange: { startSeconds: 0, endSeconds: 90, pregapSeconds: 0 }
+  })
+  const next = createTrack({
+    id: 'local:two',
+    queueEntryId: 'next',
+    cueRange: { startSeconds: 90, endSeconds: 180, pregapSeconds: 0 }
+  })
+  const prepared = await prepareNativeQueue({
+    queue: [first, next],
+    currentTrack: first,
+    currentTarget: first.filePath,
+    currentIndex: 0,
+    playMode: 'listLoop',
+    libraryQueue: { id: 'database-queue', revision: 3, positions: [299_998, 299_999] },
+    isAudioFileAuthorized: async () => true
+  })
+  assert.equal(prepared?.startIndex, 0)
+  assert.equal(prepared?.delegated, false)
+  assert.deepEqual(prepared?.queueIndices, [299_998, 299_999])
+  assert.deepEqual(
+    prepared?.items.map((item) => item.queueEntryId),
+    ['first', 'next']
+  )
+  assert.deepEqual(
+    prepared?.items.map((item) => item.cueRange),
+    [first.cueRange, next.cueRange]
+  )
+  assert.deepEqual(
+    prepared?.libraryQueue?.entries.map((entry) => entry.index),
+    [299_998, 299_999]
+  )
+  assert.equal(preparedNativePlayMode(prepared!, 'listLoop'), 'sequential')
+  assert.equal(preparedNativePlayMode(prepared!, 'shuffle'), 'sequential')
+  assert.equal(preparedNativePlayMode(prepared!, 'repeat'), 'repeat')
+})
+
+test('database fallback retains only the authorized current occurrence and its global mapping', async () => {
+  const first = createTrack({ queueEntryId: 'first' })
+  const next = createTrack({ id: 'other', filePath: 'D:/offline.flac', queueEntryId: 'next' })
+  const options = {
+    queue: [first, next],
+    currentTrack: first,
+    currentTarget: first.filePath,
+    currentIndex: 0,
+    libraryQueue: { id: 'db', revision: 9, positions: [41, 42] },
+    isAudioFileAuthorized: async (path: string) => path !== next.filePath
+  }
+  const prepared = await prepareNativeQueue(options)
+  assert.equal(prepared?.items.length, 1)
+  assert.deepEqual(prepared?.libraryQueue?.entries, [
+    { id: first.id, queueEntryId: 'first', index: 41 }
+  ])
+  assert.deepEqual(prepared?.queueIndices, [41])
+  assert.equal(
+    await prepareNativeQueue({ ...options, isAudioFileAuthorized: async () => false }),
+    null
+  )
+})
+
+test('database windows select duplicate occurrences by entry ID rather than track ID', async () => {
+  const queue = [createTrack({ queueEntryId: 'first' }), createTrack({ queueEntryId: 'second' })]
+  const prepared = await prepareNativeQueue({
+    queue,
+    currentTrack: queue[1],
+    currentTarget: queue[1].filePath,
+    currentIndex: 0,
+    libraryQueue: { id: 'db', revision: 0, positions: [299_999, 0] },
+    isAudioFileAuthorized: async () => true
+  })
+  assert.equal(prepared?.startIndex, 1)
+  assert.equal(prepared?.items[prepared.startIndex].queueEntryId, 'second')
+  assert.deepEqual(prepared?.queueIndices, [299_999, 0])
+})
+
+test('malformed database mappings fail before authorization instead of degrading to an array queue', async () => {
+  const track = createTrack({ queueEntryId: 'entry' })
+  let authorizations = 0
+  const options: PrepareNativeQueueOptions = {
+    queue: [track],
+    currentTrack: track,
+    currentTarget: track.filePath,
+    currentIndex: 0,
+    libraryQueue: { id: 'db', revision: 0, positions: [0] },
+    isAudioFileAuthorized: async () => {
+      authorizations++
+      return true
+    }
+  }
+  for (const patch of [
+    { libraryQueue: { id: 'db', revision: 0, positions: [0], total: 0 } },
+    { libraryQueue: { id: 'db', revision: 0, positions: [1], total: 1 } },
+    { libraryQueue: { id: 'db', revision: 0, positions: [0], total: 1, lastPlayablePosition: 1 } },
+    { libraryQueue: { id: 'db', revision: -1, positions: [0] } },
+    { libraryQueue: { id: 'db', revision: 0, positions: [] } },
+    { libraryQueue: { id: 'db', revision: 0, positions: [-1] } },
+    { libraryQueue: { id: 'db', revision: 0, positions: [0.5] } },
+    { currentTrack: { ...track, queueEntryId: 'missing' } },
+    { currentTrack: { ...track, queueEntryId: undefined } },
+    { queue: [{ ...track, queueEntryId: undefined }] },
+    { queue: [track, track], libraryQueue: { id: 'db', revision: 0, positions: [0, 1] } },
+    {
+      queue: [track, { ...track, queueEntryId: 'second' }],
+      libraryQueue: { id: 'db', revision: 0, positions: [0, 0] }
+    }
+  ])
+    await assert.rejects(
+      prepareNativeQueue({ ...options, ...patch }),
+      /Invalid database playback window/
+    )
+  assert.equal(authorizations, 0)
+})
+
+test('SQL global end metadata survives full preparation, short fallback, repeat and reuse', async () => {
+  const queue = [
+    createTrack({ queueEntryId: 'last' }),
+    createTrack({ queueEntryId: 'first', filePath: 'D:/offline.flac' })
+  ]
+  for (const repeat of [false, true]) {
+    const options: PrepareNativeQueueOptions = {
+      queue,
+      currentTrack: queue[0],
+      currentTarget: queue[0].filePath,
+      currentIndex: 0,
+      playMode: repeat ? 'repeat' : 'listLoop',
+      libraryQueue: {
+        id: 'db',
+        revision: 0,
+        total: 300000,
+        lastPlayablePosition: 299997,
+        positions: [299997, 0]
+      },
+      isAudioFileAuthorized: async () => true
+    }
+    assert.deepEqual(
+      (await prepareNativeQueue(options))?.items.map((item) => item.logicalQueueEnd),
+      [!repeat, false]
+    )
+    const fallback = await prepareNativeQueue({
+      ...options,
+      isAudioFileAuthorized: async (path) => path !== queue[1].filePath
+    })
+    assert.deepEqual(
+      fallback?.items.map((item) => item.logicalQueueEnd),
+      [!repeat]
+    )
+    let checked = false
+    await prepareNativeQueue({
+      ...options,
+      canReuseQueue: (items) => {
+        assert.deepEqual(
+          items.map((item) => item.logicalQueueEnd),
+          [!repeat, false]
+        )
+        checked = true
+        return true
+      }
+    })
+    assert.equal(checked, true)
+  }
+})
+
+test('legacy array queues do not inherit database-only occurrence constraints', async () => {
+  const track = createTrack({ queueEntryId: 'a'.repeat(1000) })
+  const prepared = await prepareNativeQueue({
+    queue: [track],
+    currentTrack: track,
+    currentTarget: track.filePath,
+    currentIndex: 0,
+    isAudioFileAuthorized: async () => true
+  })
+  assert.equal(prepared?.delegated, true)
+  assert.equal(prepared?.libraryQueue, undefined)
+  assert.equal(prepared?.items[0].queueEntryId, undefined)
+})
+
 test('uses only the resolved current stream when a restored companion is unauthorized', async () => {
   const current = createTrack({ id: 'ncm:current', filePath: 'ncm:current', source: 'ncm' })
   const staleLocal = createTrack({ id: 'local:stale', filePath: 'D:\\Old\\stale.flac' })
@@ -42,6 +221,7 @@ test('uses only the resolved current stream when a restored companion is unautho
         id: 'ncm:current',
         duration: 180,
         source: 'https://media.example/current.flac',
+        logicalQueueEnd: true,
         format: 'flac',
         sampleRate: undefined,
         bitrate: undefined,
@@ -89,6 +269,9 @@ test('uses a singleton when a provider companion has not resolved its placeholde
   assert.equal(prepared?.delegated, false)
   assert.equal(prepared?.items.length, 1)
   assert.equal(prepared?.items[0].source, 'https://media.example/current.flac')
+  assert.deepEqual(prepared?.queueIndices, [0])
+  assert.equal(prepared?.items[0].logicalQueueEnd, false)
+  assert.equal(preparedNativePlayMode(prepared!, 'listLoop'), 'sequential')
 })
 
 test('accepts an authorized managed-cache path as the current provider target', async () => {

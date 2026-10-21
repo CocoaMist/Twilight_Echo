@@ -152,6 +152,9 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
     Object.prototype.hasOwnProperty.call(patch, 'libraryFolders') ||
     Object.prototype.hasOwnProperty.call(patch, 'watchLibrary')
   ) {
+    // Revoke the database scope before native events or a pending result can
+    // observe removed roots. The scan worker rechecks this at commit time.
+    await runtime.libraryDatabase?.refreshRoots()
     applyLibraryWatchers(runtime.appSettings.libraryFolders, runtime.appSettings.watchLibrary)
     // Native watchers only report future filesystem changes. Import existing
     // files when a root is added, even when automatic watching is disabled.
@@ -160,7 +163,7 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
         (folder) => !previousLibraryFolders.includes(folder)
       )
       if (addedFolders.length > 0) {
-        runtime.localLibraryIndexCoordinator?.enqueueWatcherChanges(
+        ;(runtime.libraryDatabase ?? runtime.localLibraryIndexCoordinator)?.enqueueWatcherChanges(
           addedFolders.map((path) => ({ kind: 'reconcile', path }))
         )
       }

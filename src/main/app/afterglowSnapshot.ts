@@ -15,6 +15,7 @@ import {
   resolveAfterglowEngineMapping,
   type AfterglowRestoreState
 } from '../../shared/afterglowMode.ts'
+import { libraryQueueResumeMode } from '../../shared/libraryDatabase.ts'
 
 const SMTC_REFRESH_INTERVAL_MS = 1_000
 const REMOTE_PUBLISH_INTERVAL_MS = 1_000
@@ -30,6 +31,10 @@ let lastSmtcRefreshAt = 0
 let lastRemotePublishAt = 0
 let lastRemoteCoverKey = ''
 let lastRemoteCoverGeneration = 0
+let presentationGeneration = 0
+let infoRevision = 0
+let pendingInfo: PlaybackInfo | null = null
+let publishing: Promise<void> | null = null
 /** Logical queue index for each native queue entry (window -> logical). */
 let engineLogicalIndices: number[] | null = null
 
@@ -74,7 +79,7 @@ const normalizePlayMode = (value: unknown): MiniPlayerPlayMode => {
 const buildSnapshot = (info: PlaybackInfo): MiniPlayerStateSnapshot | null => {
   const session = playbackSessionService.getCachedSession()
   if (!session) return null
-  const queueLength = Array.isArray(session.queue) ? session.queue.length : 0
+  const queueLength = playbackSessionService.getCachedQueueLength()
   const track = buildTrackSnapshot(session.track)
   if (!track) return null
   return {
@@ -86,12 +91,12 @@ const buildSnapshot = (info: PlaybackInfo): MiniPlayerStateSnapshot | null => {
     duration: Number.isFinite(info.duration) ? Math.max(0, info.duration) : 0,
     playbackRate: info.playbackRate ?? 1,
     volume: Number.isFinite(info.volume) ? info.volume : 1,
-    playMode: normalizePlayMode(info.playMode),
+    playMode: normalizePlayMode(session.libraryQueue ? session.playMode : info.playMode),
     favoriteAvailable: false,
     favoriteLiked: false,
     favoriteLoading: false,
     dominantColor: '',
-    queueIndex: Number.isInteger(info.queueIndex) ? info.queueIndex : -1,
+    queueIndex: session.libraryQueue?.index ?? session.queueIndex ?? -1,
     queueLength
   }
 }
@@ -105,7 +110,7 @@ const presentationKeyOf = (snapshot: MiniPlayerStateSnapshot): string =>
     String(snapshot.queueLength)
   ].join('\u0000')
 
-const RENDERER_FREE_MODES = new Set(['sequential', 'listLoop', 'repeat'])
+const RENDERER_FREE_MODES = new Set(['sequential', 'listLoop', 'repeat', 'shuffle'])
 
 const toRemotePlayMode = (mode: MiniPlayerPlayMode): RemotePlayMode => {
   if (mode === 'repeat') return 'single'
@@ -213,10 +218,26 @@ const publishExternalSurfaces = (
  * Drives the renderer-free surfaces (tray, SMTC, Discord mirror) from engine
  * state while Afterglow has no renderer to publish `MiniPlayerStateSnapshot`.
  */
-const publishFromEngine = (info: PlaybackInfo): void => {
-  lastEngineInfo = info
+export function applyAfterglowEngineState(
+  info: PlaybackInfo,
+  force = false,
+  isCurrent?: () => boolean
+): Promise<void> {
+  const manager = runtime.audioEngineManager
+  const queueToken = manager?.getQueueToken?.()
+  // An unknown mutation leaves this mirror stale. Even identical media/CUE
+  // sources cannot establish which occurrence the engine actually selected.
+  if (playbackSessionService.getCachedSession()?.libraryQueue && !queueToken)
+    return Promise.reject(new Error('afterglow_library_queue_changed'))
   const logicalIndex = engineLogicalIndices?.[info.queueIndex]
-  playbackSessionService.applyEngineState(
+  const engineQueue = runtime.audioEngineManager?.getQueueSnapshot() ?? []
+  if (
+    playbackSessionService.getCachedSession()?.libraryQueue &&
+    info.state !== 'stopped' &&
+    info.source !== engineQueue[info.queueIndex]?.source
+  )
+    return Promise.reject(new Error('afterglow_requires_mappable_current_track'))
+  return playbackSessionService.applyEngineState(
     {
       state: info.state,
       position: info.position,
@@ -224,8 +245,86 @@ const publishFromEngine = (info: PlaybackInfo): void => {
       source: info.source,
       playMode: info.playMode
     },
-    typeof logicalIndex === 'number' && logicalIndex >= 0 ? { logicalIndex } : {}
+    {
+      force,
+      isCurrent: () =>
+        isCurrent?.() !== false &&
+        manager === runtime.audioEngineManager &&
+        queueToken === manager?.getQueueToken?.(),
+      ...(typeof logicalIndex === 'number' && logicalIndex >= 0 ? { logicalIndex } : {}),
+      entryId: engineQueue[info.queueIndex]?.queueEntryId,
+      ...(force
+        ? {
+            nativeEntries: engineQueue.map((entry, native) => ({
+              id: entry.id,
+              queueEntryId: entry.queueEntryId ?? '',
+              index: engineLogicalIndices?.[native] ?? -1
+            }))
+          }
+        : {})
+    }
   )
+}
+
+/** Read-only payload after the explicit restore owner has confirmed Stop.
+ * No native index/source is used to choose SQL's durable occurrence. */
+export async function buildStoppedLibraryRestoreState(
+  isCurrent: () => boolean
+): Promise<AfterglowRestoreState | null> {
+  const manager = runtime.audioEngineManager
+  const database = runtime.libraryDatabase?.database
+  const session = playbackSessionService.getCachedSession()
+  if (!manager || !database || !session?.libraryQueue || !isCurrent()) return null
+  const queue = await database.getLibraryQueue(session.libraryQueue.id)
+  if (!isCurrent()) throw new Error('afterglow_library_queue_changed')
+  const row = queue.selectedEntryId
+    ? (
+        await database.readLibraryQueue(queue.id, queue.index, 1, {
+          expectedRevision: queue.revision
+        })
+      ).items[0]
+    : undefined
+  const info = await manager.getPlaybackInfo()
+  const latest = await database.getLibraryQueue(queue.id)
+  if (
+    !isCurrent() ||
+    info.state !== 'stopped' ||
+    latest.revision !== queue.revision ||
+    latest.index !== queue.index ||
+    latest.selectedEntryId !== queue.selectedEntryId ||
+    (queue.selectedEntryId &&
+      (row?.position !== queue.index || row.queueEntryId !== queue.selectedEntryId))
+  )
+    throw new Error('afterglow_library_queue_changed')
+  return {
+    recovery: 'native-queue-unknown',
+    queueToken: '',
+    queue: [],
+    nativeQueueIndices: [],
+    nativeQueueEntries: [],
+    queueIndex: queue.index,
+    queueLength: queue.total,
+    ...(queue.selectedEntryId
+      ? {
+          libraryQueue: {
+            id: queue.id,
+            revision: queue.revision,
+            index: queue.index,
+            entryId: queue.selectedEntryId
+          }
+        }
+      : {}),
+    track: row?.track ? { ...row.track, queueEntryId: row.queueEntryId } : null,
+    state: 'stopped',
+    position: 0,
+    duration: Math.max(0, number(row?.track?.duration) ?? 0),
+    volume: Number.isFinite(info.volume) ? info.volume : 1,
+    playbackRate: info.playbackRate ?? 1,
+    playMode: libraryQueueResumeMode(queue, session.playMode ?? 'sequential')
+  }
+}
+
+const publishSnapshot = (info: PlaybackInfo): void => {
   const snapshot = buildSnapshot(info)
   if (!snapshot) return
   runtime.latestMiniPlayerState = snapshot
@@ -249,17 +348,43 @@ const publishFromEngine = (info: PlaybackInfo): void => {
   publishExternalSurfaces(snapshot, { keyChanged: false, engineState: info.state })
 }
 
+const publishFromEngine = (info: PlaybackInfo): void => {
+  lastEngineInfo = info
+  infoRevision++
+  pendingInfo = info
+  if (publishing) return
+  const generation = presentationGeneration
+  const current = () => generation === presentationGeneration && listener !== null
+  const run = Promise.resolve().then(async () => {
+    try {
+      while (current() && pendingInfo) {
+        const next = pendingInfo
+        pendingInfo = null
+        await applyAfterglowEngineState(next, false, current)
+        if (!current()) return
+        if (!pendingInfo) publishSnapshot(next)
+      }
+    } catch (error) {
+      if (current()) console.warn('[afterglow] failed to update playback state:', error)
+    } finally {
+      if (publishing === run) publishing = null
+    }
+  })
+  publishing = run
+}
+
 export function startAfterglowPresentation(): void {
   stopAfterglowPresentation()
   lastPresentationKey = ''
   lastSmtcRefreshAt = 0
   lastRemotePublishAt = 0
   lastRemoteCoverKey = ''
-  lastRemoteCoverGeneration = 0
   const manager = runtime.audioEngineManager
   if (!manager) return
+  if (playbackSessionService.getCachedSession()?.libraryQueue && !manager.getQueueToken()) return
+  const generation = presentationGeneration
   const onPlaybackInfo = (info: PlaybackInfo): void => {
-    publishFromEngine(info)
+    if (generation === presentationGeneration) publishFromEngine(info)
   }
   listener = onPlaybackInfo
   manager.on('playback-info', onPlaybackInfo)
@@ -273,13 +398,21 @@ export function startAfterglowPresentation(): void {
   propertyListener = onPropertyChange
   manager.on('property-change', onPropertyChange)
   // Publish the current state immediately; the next engine tick follows in 250ms.
+  const revision = infoRevision
   void manager
     .getPlaybackInfo()
-    .then((info) => publishFromEngine(info))
+    .then((info) => {
+      if (generation === presentationGeneration && revision === infoRevision)
+        publishFromEngine(info)
+    })
     .catch(() => undefined)
 }
 
 export function stopAfterglowPresentation(): void {
+  presentationGeneration++
+  infoRevision++
+  pendingInfo = null
+  publishing = null
   const manager = runtime.audioEngineManager
   if (manager && listener) manager.off('playback-info', listener)
   if (manager && propertyListener) manager.off('property-change', propertyListener)
@@ -290,15 +423,20 @@ export function stopAfterglowPresentation(): void {
   lastSmtcRefreshAt = 0
   lastRemotePublishAt = 0
   lastRemoteCoverKey = ''
-  lastRemoteCoverGeneration = 0
+  lastRemoteCoverGeneration++
 }
 
 export function refreshAfterglowPresentationNow(): void {
   const manager = runtime.audioEngineManager
-  if (!manager) return
+  if (!manager || !listener) return
+  const generation = presentationGeneration
+  const revision = infoRevision
   void manager
     .getPlaybackInfo()
-    .then((info) => publishFromEngine(info))
+    .then((info) => {
+      if (generation === presentationGeneration && revision === infoRevision)
+        publishFromEngine(info)
+    })
     .catch(() => undefined)
 }
 
@@ -306,32 +444,90 @@ export function refreshAfterglowPresentationNow(): void {
 export async function buildRestoreState(): Promise<AfterglowRestoreState | null> {
   const manager = runtime.audioEngineManager
   if (!manager) return null
-  const session = playbackSessionService.getCachedSession()
-  if (!session) return null
+  const generation = presentationGeneration
   const info = await manager.getPlaybackInfo()
-  const queue = Array.isArray(session.queue) ? session.queue : []
+  const queueToken = manager.getQueueToken?.() ?? ''
   const engineQueue = manager.getQueueSnapshot()
-  // A hot append can land while stop() is racing the restore handoff; recover
-  // the native→logical map from queue identity instead of silently shifting
-  // indices when the cached mapping is one entry short.
-  const mapping = resolveAfterglowEngineMapping(
-    queue,
-    engineQueue,
-    engineLogicalIndices ?? undefined
+  await applyAfterglowEngineState(
+    info,
+    true,
+    () =>
+      generation === presentationGeneration &&
+      manager === runtime.audioEngineManager &&
+      queueToken === (manager.getQueueToken?.() ?? '')
   )
-  const logicalIndex =
-    mapping[info.queueIndex] >= 0 ? mapping[info.queueIndex] : (session.queueIndex ?? 0)
+  try {
+    await playbackSessionService.flush()
+  } catch (error) {
+    console.warn('[afterglow] session persistence unavailable during live restore:', error)
+  }
+  const session = playbackSessionService.getCachedSession()
+  if (!session || generation !== presentationGeneration) return null
+  if (queueToken !== (manager.getQueueToken?.() ?? ''))
+    throw new Error('afterglow_library_queue_changed')
+  if (session.libraryQueue && !queueToken) throw new Error('afterglow_library_queue_changed')
+  const queue = Array.isArray(session.queue) ? session.queue : []
+  const queueLength = playbackSessionService.getCachedQueueLength()
+  const mapping = session.libraryQueue
+    ? engineLogicalIndices
+    : resolveAfterglowEngineMapping(queue, engineQueue, engineLogicalIndices ?? undefined)
+  if (
+    !mapping ||
+    mapping.length !== engineQueue.length ||
+    (session.libraryQueue &&
+      mapping.some((index) => !Number.isSafeInteger(index) || index < 0 || index >= queueLength))
+  )
+    throw new Error('afterglow_requires_mappable_current_track')
+  const logicalIndex = mapping[info.queueIndex]
+  if (!(logicalIndex >= 0)) throw new Error('afterglow_requires_mappable_current_track')
+  const nativeQueueEntries = session.libraryQueue
+    ? engineQueue.map((entry, index) => {
+        if (!entry.queueEntryId) throw new Error('afterglow_requires_mappable_current_track')
+        return { id: entry.id, queueEntryId: entry.queueEntryId, index: mapping[index] }
+      })
+    : undefined
+  const latest = await manager.getPlaybackInfo()
+  if (
+    generation !== presentationGeneration ||
+    manager !== runtime.audioEngineManager ||
+    queueToken !== (manager.getQueueToken?.() ?? '') ||
+    latest.queueIndex !== info.queueIndex ||
+    (session.libraryQueue &&
+      (session.libraryQueue.index !== logicalIndex ||
+        session.libraryQueue.entryId !== nativeQueueEntries?.[info.queueIndex]?.queueEntryId))
+  )
+    throw new Error('afterglow_library_queue_changed')
   return {
-    queueToken: manager.getQueueToken?.() ?? '',
+    queueToken,
     queueIndex: logicalIndex,
-    queueLength: queue.length,
+    queueLength,
     nativeQueueIndices: [...mapping],
-    state: info.state,
-    position: Number.isFinite(info.position) ? Math.max(0, info.position) : 0,
-    duration: Number.isFinite(info.duration) ? Math.max(0, info.duration) : 0,
-    volume: Number.isFinite(info.volume) ? info.volume : 1,
-    playbackRate: info.playbackRate ?? 1,
-    playMode: info.playMode ?? session.playMode ?? 'sequential',
+    state: latest.state,
+    position: Number.isFinite(latest.position) ? Math.max(0, latest.position) : 0,
+    duration:
+      session.libraryQueue &&
+      latest.state === 'stopped' &&
+      latest.source !== engineQueue[latest.queueIndex]?.source
+        ? (engineQueue[latest.queueIndex]?.duration ??
+          number((session.track as Record<string, unknown>)?.duration) ??
+          0)
+        : Number.isFinite(latest.duration)
+          ? Math.max(0, latest.duration)
+          : 0,
+    volume: Number.isFinite(latest.volume) ? latest.volume : 1,
+    playbackRate: latest.playbackRate ?? 1,
+    playMode: (session.libraryQueue ? session.playMode : latest.playMode) ?? 'sequential',
+    ...(session.libraryQueue
+      ? {
+          libraryQueue: { ...session.libraryQueue },
+          nativeQueueEntries,
+          track: {
+            ...(session.track as Record<string, unknown>),
+            streamUrl:
+              latest.state === 'stopped' ? engineQueue[latest.queueIndex]?.source : latest.source
+          }
+        }
+      : {}),
     queue
   }
 }

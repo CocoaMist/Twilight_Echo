@@ -22,6 +22,10 @@ export interface LocalLibraryTrackSelection {
   filePath: string
   title: string
   artist: string
+  /** Frozen SQLite intent. Omitted by the existing JSON/snapshot callers. */
+  expectedVersion?: number
+  /** Frozen local row incarnation. Requires expectedVersion when supplied. */
+  expectedInstance?: number
 }
 
 export interface LocalLibrarySnapshotInput {

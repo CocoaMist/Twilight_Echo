@@ -3,10 +3,13 @@ import test from 'node:test'
 import type { Track } from '@renderer/types/music'
 import {
   buildVersionCatalog,
+  queryVersionCatalogPage,
+  resolvePreferredSourceKey,
   resolvePreferredVersion,
   versionDescriptions
 } from './versionCatalog.ts'
 import { emptyMusicVersions, editMusicVersions } from '@renderer/utils/musicVersions.ts'
+import type { LibraryDatabaseApi, LibraryTrackRecord } from '../../../../shared/libraryDatabase.ts'
 
 function track(id: string, album: string, disc = 1, index = 1): Track {
   return {
@@ -54,7 +57,79 @@ test('a preferred source never silently falls back and changes do not rewrite tr
   const [a, b] = buildVersionCatalog(tracks, 'tracks')
   let doc = editMusicVersions(emptyMusicVersions(), 'tracks', 'sources', [a.key, b.key], 'Studio')
   doc = editMusicVersions(doc, 'tracks', 'prefer-source', [b.key], '')
+  assert.equal(resolvePreferredSourceKey(doc, 'tracks', a.key), b.key)
   assert.equal(resolvePreferredVersion(doc, 'tracks', a.key, [a, b])[0], tracks[1])
   assert.throws(() => resolvePreferredVersion(doc, 'tracks', a.key, [a]), /未载入/)
   assert.equal(tracks[0].album, 'A')
+})
+
+test('SQLite track catalog returns only the requested bounded page for a large library', async () => {
+  let request: Parameters<LibraryDatabaseApi['queryTracks']>[0] | undefined
+  const records = [track('200', 'Album'), track('201', 'Album')] as unknown as LibraryTrackRecord[]
+  const api: Pick<LibraryDatabaseApi, 'queryTracks' | 'queryCollections'> = {
+    queryTracks: async (query) => {
+      request = query
+      return {
+        tracks: records,
+        versions: { '200': 1, '201': 1 },
+        total: 300_000,
+        revision: 17,
+        offset: query?.offset ?? 0
+      }
+    },
+    queryCollections: async () => {
+      throw new Error('track scope must not query collections')
+    }
+  }
+
+  const page = await queryVersionCatalogPage(api, 'tracks', {
+    search: 'needle',
+    offset: 200,
+    limit: 50
+  })
+
+  assert.deepEqual(request, { search: 'needle', offset: 200, limit: 50, sort: 'insertion' })
+  assert.equal(page.total, 300_000)
+  assert.equal(page.items.length, 2)
+  assert.equal(page.items[0].trackId, '200')
+  assert.equal(page.items[1].tracks[0].title, '201')
+})
+
+test('SQLite album catalog pages summaries without transferring member tracks', async () => {
+  let requestedKind: string | undefined
+  let request: Parameters<LibraryDatabaseApi['queryCollections']>[1] | undefined
+  const api: Pick<LibraryDatabaseApi, 'queryTracks' | 'queryCollections'> = {
+    queryTracks: async () => {
+      throw new Error('album scope must not query tracks for its catalog')
+    },
+    queryCollections: async (kind, query) => {
+      requestedKind = kind
+      request = query
+      return {
+        items: [
+          {
+            id: 'id:release-201',
+            name: 'Release 201',
+            artist: 'Artist',
+            trackCount: 14,
+            duration: 1_800,
+            cover: null
+          }
+        ],
+        total: 12_000,
+        revision: 23,
+        offset: query?.offset ?? 0,
+        letterOffsets: {}
+      }
+    }
+  }
+
+  const page = await queryVersionCatalogPage(api, 'albums', { offset: 400, limit: 50 })
+
+  assert.equal(requestedKind, 'albums')
+  assert.deepEqual(request, { offset: 400, limit: 50 })
+  assert.equal(page.total, 12_000)
+  assert.equal(page.items[0].key, JSON.stringify(['album', 'local', 'id:release-201']))
+  assert.equal(page.items[0].trackCount, 14)
+  assert.deepEqual(page.items[0].tracks, [])
 })

@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import type { DspGraphConfig } from '../../../../shared/dspGraph.ts'
 import type { DspAuditionResult } from '../../../../shared/dspAudition.ts'
+import { normalizeAuditionGraph } from '../../../../shared/dspAudition.ts'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
 import { getTrackSource } from '@renderer/utils/trackSourceIdentity.ts'
 
-const props = defineProps<{ a: DspGraphConfig | null; b: DspGraphConfig | null }>()
+const props = defineProps<{
+  a: DspGraphConfig | null
+  b: DspGraphConfig | null
+  current?: DspGraphConfig
+}>()
 const player = usePlayerStore()
 const start = ref(0)
 const seconds = ref(30)
@@ -14,6 +19,33 @@ const result = shallowRef<DspAuditionResult | null>(null)
 const message = ref('记录 A 快照后，将当前草稿作为 B。首版支持无处理与一个内置 EQ。')
 let generation = 0
 let timer: ReturnType<typeof setInterval> | null = null
+const unsupportedReason = computed(() => {
+  if (!props.a || !props.b) return '先记录 A 快照，再编辑 B 草稿。'
+  const track = player.currentTrack.value
+  if (!track || getTrackSource(track) !== 'local') return '请先播放本地 PCM 曲目。'
+  const info = player.playbackInfo.value
+  if (!info) return '正在等待音源和实际输出格式信息。'
+  if (info?.isDsd || /dsd|dop/i.test(info?.actualOutputFormat ?? ''))
+    return 'DSD / DoP 不能进行等响度测量。'
+  if (info?.sourceSampleRate !== info?.actualSampleRate)
+    return '当前正在重采样；请使用原采样率输出。'
+  if (
+    info &&
+    (info.decodedChannels > 2 ||
+      info.decodedChannels < 1 ||
+      info.actualChannels !== info.decodedChannels)
+  )
+    return '仅支持保持原声道的单 / 双声道 PCM。'
+  if (info?.crossfadeActive || (info?.playbackRate ?? 1) !== 1) return '交叉淡化或变速时无法测量。'
+  try {
+    normalizeAuditionGraph(props.a)
+    normalizeAuditionGraph(props.b)
+    if (props.current) normalizeAuditionGraph(props.current)
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  return ''
+})
 
 function describe(graph: DspGraphConfig | null): string {
   if (!graph) return '尚未记录'
@@ -72,7 +104,7 @@ watch([start, seconds], () => {
 })
 
 async function measure(): Promise<void> {
-  if (!props.a || !props.b || busy.value) return
+  if (!props.a || !props.b || busy.value || unsupportedReason.value) return
   if (!(await end('正在冻结音源、区间和两套配置……')) || !props.a || !props.b) return
   const requestGeneration = ++generation
   busy.value = true
@@ -131,6 +163,7 @@ async function select(side: 'a' | 'b'): Promise<void> {
 onBeforeUnmount(() => {
   void end()
 })
+defineExpose({ end })
 </script>
 
 <template>
@@ -145,10 +178,10 @@ onBeforeUnmount(() => {
       <label
         >区间长度（秒） <input v-model.number="seconds" type="number" min="10" max="60"
       /></label>
-      <button :disabled="!a || !b || busy" @click="measure">测量并匹配</button>
+      <button :disabled="!!unsupportedReason || busy" @click="measure">测量并匹配</button>
       <button v-if="busy || result" @click="end()">{{ busy ? '取消 / 退出' : '退出试听' }}</button>
     </div>
-    <p role="status" aria-live="polite">{{ message }}</p>
+    <p role="status" aria-live="polite">{{ unsupportedReason || message }}</p>
     <div v-if="result" class="audition-controls">
       <button :disabled="busy" :aria-pressed="result.selected === 'a'" @click="select('a')">
         A · {{ result.a.integratedLufs.toFixed(1) }} LUFS · 补偿 {{ result.gainA.toFixed(2) }} dB

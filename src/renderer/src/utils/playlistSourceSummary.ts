@@ -16,6 +16,7 @@ export interface PlaylistSourceSummary {
   local: number
   provider: number
   providers: PlaylistProviderSourceCount[]
+  additionalProviders?: number
 }
 
 export function summarizePlaylistSources(input: PlaylistSourceSummaryInput): PlaylistSourceSummary {
@@ -50,7 +51,12 @@ export function formatPlaylistSourceSummary(summary: PlaylistSourceSummary): str
   if (summary.local > 0) parts.push(`本地 ${summary.local}`)
   if (summary.provider > 0) parts.push(`Provider ${summary.provider}`)
   if (summary.providers.length > 0) {
-    parts.push(summary.providers.map((provider) => provider.source).join('/'))
+    const labels = summary.providers.map((provider) => provider.source).join('/')
+    parts.push(
+      summary.additionalProviders
+        ? `${labels} 等 ${summary.providers.length + summary.additionalProviders} 个音源`
+        : labels
+    )
   }
 
   return parts.join(' · ')

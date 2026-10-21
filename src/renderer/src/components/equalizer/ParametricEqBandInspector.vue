@@ -11,6 +11,7 @@ const props = defineProps<{
   selectionCount?: number
   selectionEnabled?: boolean
   movable?: boolean
+  canDelete?: boolean
   filterTypes: { value: EqualizerFilterType; label: string; usesGain: boolean }[]
 }>()
 const emit = defineEmits<{
@@ -118,6 +119,7 @@ defineExpose({ finishInteraction })
       <button
         type="button"
         class="inspector-icon delete-band"
+        :disabled="canDelete === false"
         aria-label="删除所选频段"
         title="删除频段"
         @click="act('delete')"
@@ -170,7 +172,7 @@ defineExpose({ finishInteraction })
 }
 .band-number {
   font-family: var(--eq-mono);
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   letter-spacing: 0.1em;
   color: var(--band-color);
 }
@@ -185,7 +187,7 @@ defineExpose({ finishInteraction })
   background: transparent;
   color: var(--eq-text-muted);
   cursor: pointer;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
 }
 .band-power {
   color: var(--band-color);
@@ -216,7 +218,7 @@ defineExpose({ finishInteraction })
   background: transparent;
   color: var(--eq-text);
   font: inherit;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   cursor: pointer;
 }
 .filter-select option {
@@ -224,7 +226,7 @@ defineExpose({ finishInteraction })
   color: var(--eq-text);
 }
 .band-state {
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   color: var(--eq-text-subtle);
 }
 .precision-controls {

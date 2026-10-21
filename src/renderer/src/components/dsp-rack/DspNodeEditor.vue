@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import DspDraftEqualizer from './DspDraftEqualizer.vue'
 import Vst3ParameterEditor from '@renderer/components/dsp-rack/Vst3ParameterEditor.vue'
 import type {
   DspAsset,
   DspAssetKind,
   DspGraphNode,
-  DspGraphNodeStatus,
-  DspGraphStatus,
   DspScene,
   Vst3CatalogState
 } from '../../../../shared/dspGraph.ts'
@@ -29,6 +28,7 @@ import {
   matrixChannelCount,
   matrixValue,
   nodeLabel,
+  dspNodeDescriptions,
   normalizeMultibandCrossovers,
   numberParam,
   removeBand,
@@ -54,12 +54,12 @@ const scene = defineModel<DspScene | null>('scene')
 const node = defineModel<DspGraphNode | null>('node')
 
 const props = defineProps<{
-  status: DspGraphStatus | null
-  selectedStatus: DspGraphNodeStatus | null
   busy: boolean
   assets: DspAsset[]
   vst3Catalog: Vst3CatalogState | null
   vst3HelpersReady: boolean
+  sampleRate?: number
+  hostDocument?: Document
 }>()
 
 const emit = defineEmits<{
@@ -80,26 +80,6 @@ const rawConfigExpanded = ref(false)
 const vst3StateAssets = computed(() =>
   props.assets.filter((asset) => asset.kind === 'vst3Preset' || asset.kind === 'vst3State')
 )
-const graphApplyState = computed(() => props.status?.applyState ?? 'idle')
-const graphApplyLabel = computed(() => {
-  if (graphApplyState.value === 'pending') return 'Pending'
-  if (graphApplyState.value === 'applied') return 'Applied'
-  if (graphApplyState.value === 'failed') return 'Failed'
-  return 'Idle'
-})
-const graphOverrunCount = computed(
-  () =>
-    props.status?.nodes.reduce((total, statusNode) => total + (statusNode.overrunCount ?? 0), 0) ??
-    0
-)
-const soxrFallbackActive = computed(() => props.status?.outputStage?.resamplerFallback === true)
-
-function formatMetric(value: number | null | undefined, digits = 1, unit = ''): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? `${value.toFixed(digits)}${unit}`
-    : '-'
-}
-
 function selectImpulseAsset(assetId: string): void {
   if (!node.value) return
   node.value.params.impulseResponseAssetId = assetId
@@ -108,23 +88,6 @@ function selectImpulseAsset(assetId: string): void {
 
 function selectCorrectionAsset(assetId: string): void {
   emit('selectCorrectionAsset', assetId)
-}
-
-function updateRuleList(
-  key: 'deviceIds' | 'backends' | 'channelLayouts' | 'sourceKinds',
-  value: string
-): void {
-  const selectedScene = scene.value
-  if (!selectedScene) return
-  const entries = value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-  if (entries.length === 0) {
-    delete selectedScene.rules[key]
-    return
-  }
-  selectedScene.rules[key] = entries as never
 }
 
 function selectVst3(catalogId: string): void {
@@ -160,7 +123,7 @@ function selectVst3State(assetId: string): void {
         <h2>{{ nodeLabel(node.type) }}</h2>
         <label class="switch-field"><input v-model="node.enabled" type="checkbox" /> 启用</label>
       </div>
-      <label class="full-field">节点 ID<input v-model="node.id" maxlength="96" /></label>
+      <p class="muted node-identity" :title="node.id">{{ dspNodeDescriptions[node.type] }}</p>
       <label v-if="node.type === 'nativePlugin'" class="full-field"
         >插件 ID<input v-model="node.pluginId" placeholder="com.example.dsp"
       /></label>
@@ -174,6 +137,7 @@ function selectVst3State(assetId: string): void {
               <option value="off">Off</option>
               <option value="track">Track</option>
               <option value="album">Album</option>
+              <option value="loudnorm">EBU R128</option>
             </select></label
           >
           <label
@@ -185,6 +149,45 @@ function selectVst3State(assetId: string): void {
               step="0.1"
               @input="setNumberParam(node, 'preampDb', ($event.target as HTMLInputElement).value)"
           /></label>
+          <label
+            >无响度标签时的增益 · dB<input
+              :value="numberParam(node, 'fallbackDb', 0)"
+              type="number"
+              min="-24"
+              max="24"
+              step="0.1"
+              @input="
+                setNumberParam(node, 'fallbackDb', ($event.target as HTMLInputElement).value)
+              "
+          /></label>
+          <template v-if="stringParam(node, 'mode', 'track') === 'loudnorm'">
+            <label
+              >目标响度 · LUFS<input
+                :value="numberParam(node, 'targetLufs', -23)"
+                type="number"
+                min="-70"
+                max="0"
+                step="0.1"
+                @input="
+                  setNumberParam(node, 'targetLufs', ($event.target as HTMLInputElement).value)
+                "
+            /></label>
+            <label
+              >真峰值上限 · dBTP<input
+                :value="numberParam(node, 'truePeakCeilingDb', -1)"
+                type="number"
+                min="-12"
+                max="0"
+                step="0.1"
+                @input="
+                  setNumberParam(
+                    node,
+                    'truePeakCeilingDb',
+                    ($event.target as HTMLInputElement).value
+                  )
+                "
+            /></label>
+          </template>
           <label class="switch-field"
             ><input
               :checked="booleanParam(node, 'clip', true)"
@@ -196,24 +199,12 @@ function selectVst3State(assetId: string): void {
         </template>
 
         <template v-else-if="node.type === 'equalizer'">
-          <label
-            >Mode<select
-              :value="stringParam(node, 'mode', 'parametric')"
-              @change="setStringParam(node, 'mode', ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="parametric">Parametric</option>
-              <option value="graphic">Graphic</option>
-            </select></label
-          >
-          <label
-            >Preamp dB<input
-              :value="numberParam(node, 'preampDb', 0)"
-              type="number"
-              min="-24"
-              max="24"
-              step="0.1"
-              @input="setNumberParam(node, 'preampDb', ($event.target as HTMLInputElement).value)"
-          /></label>
+          <DspDraftEqualizer
+            :key="node.id"
+            v-model="node"
+            :sample-rate="sampleRate || 48000"
+            :host-document="hostDocument"
+          />
           <div class="control-heading">
             <h3>Correction profile</h3>
             <button
@@ -1162,6 +1153,13 @@ function selectVst3State(assetId: string): void {
         </template>
 
         <template v-else-if="node.type === 'nativePlugin'">
+          <p class="control-note muted">
+            {{
+              node.pluginAbiVersion === 1
+                ? 'ABI v1 · 引擎固定在串行链末端'
+                : 'ABI v2 · 按信号链顺序执行'
+            }}
+          </p>
           <label
             >Module path<input
               :value="stringParam(node, 'path')"
@@ -1176,165 +1174,6 @@ function selectVst3State(assetId: string): void {
         <summary>Raw configuration</summary>
         <pre v-if="rawConfigExpanded">{{ JSON.stringify(node.params, null, 2) }}</pre>
       </details>
-
-      <section class="rule-editor">
-        <h3>自动规则</h3>
-        <label
-          >设备<input
-            :value="scene.rules.deviceIds?.join(', ') ?? ''"
-            placeholder="device-id, device-id"
-            @change="updateRuleList('deviceIds', ($event.target as HTMLInputElement).value)"
-        /></label>
-        <label
-          >后端<input
-            :value="scene.rules.backends?.join(', ') ?? ''"
-            placeholder="wasapi, asio"
-            @change="updateRuleList('backends', ($event.target as HTMLInputElement).value)"
-        /></label>
-        <label
-          >布局<input
-            :value="scene.rules.channelLayouts?.join(', ') ?? ''"
-            placeholder="stereo, 5.1, 7.1"
-            @change="updateRuleList('channelLayouts', ($event.target as HTMLInputElement).value)"
-        /></label>
-        <label
-          >格式<input
-            :value="scene.rules.sourceKinds?.join(', ') ?? ''"
-            placeholder="pcm, dsd"
-            @change="updateRuleList('sourceKinds', ($event.target as HTMLInputElement).value)"
-        /></label>
-        <div class="rate-fields">
-          <label
-            >最低 Hz<input
-              v-model.number="scene.rules.minSampleRate"
-              type="number"
-              min="0" /></label
-          ><label
-            >最高 Hz<input v-model.number="scene.rules.maxSampleRate" type="number" min="0"
-          /></label>
-        </div>
-      </section>
-
-      <section class="diagnostic-panel">
-        <h3>节点诊断</h3>
-        <dl>
-          <div>
-            <dt>状态</dt>
-            <dd>
-              {{
-                selectedStatus?.bypassed
-                  ? selectedStatus.bypassReason || '旁路'
-                  : selectedStatus?.active
-                    ? '运行中'
-                    : '待命'
-              }}
-            </dd>
-          </div>
-          <div>
-            <dt>延迟</dt>
-            <dd>{{ selectedStatus?.latencyFrames ?? 0 }} frames</dd>
-          </div>
-          <div>
-            <dt>Tail</dt>
-            <dd>{{ selectedStatus?.tailFrames ?? 0 }} frames</dd>
-          </div>
-          <div>
-            <dt>CPU</dt>
-            <dd>{{ (selectedStatus?.lastProcessMs ?? 0).toFixed(3) }} ms</dd>
-          </div>
-          <div>
-            <dt>CPU average</dt>
-            <dd>{{ formatMetric(selectedStatus?.averageProcessMs, 3, ' ms') }}</dd>
-          </div>
-          <div>
-            <dt>CPU peak</dt>
-            <dd>{{ formatMetric(selectedStatus?.maxProcessMs, 3, ' ms') }}</dd>
-          </div>
-          <div>
-            <dt>Overruns</dt>
-            <dd>{{ selectedStatus?.overrunCount ?? 0 }}</dd>
-          </div>
-          <div>
-            <dt>Clips</dt>
-            <dd>{{ selectedStatus?.clipCount ?? 0 }}</dd>
-          </div>
-          <div>
-            <dt>Format</dt>
-            <dd>{{ selectedStatus?.format || '-' }}</dd>
-          </div>
-        </dl>
-        <h3>Graph diagnostics</h3>
-        <dl>
-          <div>
-            <dt>Compile</dt>
-            <dd>{{ status?.compileState ?? '-' }}</dd>
-          </div>
-          <div>
-            <dt>Apply</dt>
-            <dd :class="['apply-state', graphApplyState]">{{ graphApplyLabel }}</dd>
-          </div>
-          <div>
-            <dt>Requested / applied</dt>
-            <dd>{{ status?.requestedRevision ?? 0 }} / {{ status?.appliedRevision ?? 0 }}</dd>
-          </div>
-          <div v-if="status?.applyError">
-            <dt>Apply error</dt>
-            <dd class="apply-error">{{ status.applyError }}</dd>
-          </div>
-          <div v-if="status?.compileError">
-            <dt>Compile error</dt>
-            <dd>{{ status.compileError }}</dd>
-          </div>
-          <div>
-            <dt>Output rate</dt>
-            <dd>{{ status?.outputStage?.actualSampleRate ?? '-' }} Hz</dd>
-          </div>
-          <div>
-            <dt>SRC / dither</dt>
-            <dd>
-              {{ status?.outputStage?.resamplerQuality ?? '-' }}
-              <template v-if="status?.outputStage?.resamplerEngine"
-                >({{ status.outputStage.resamplerEngine
-                }}{{ soxrFallbackActive ? ' 回退' : '' }})</template
-              >
-              /
-              {{ status?.outputStage?.dither ?? '-' }}
-            </dd>
-          </div>
-          <div>
-            <dt>Graph overruns</dt>
-            <dd>{{ graphOverrunCount }}</dd>
-          </div>
-          <div>
-            <dt>Post-DSP clips</dt>
-            <dd>{{ status?.meter?.clipCount ?? 0 }}</dd>
-          </div>
-          <div>
-            <dt>Momentary</dt>
-            <dd>{{ formatMetric(status?.meter?.momentaryLufs, 1, ' LUFS') }}</dd>
-          </div>
-          <div>
-            <dt>Short-term</dt>
-            <dd>{{ formatMetric(status?.meter?.shortTermLufs, 1, ' LUFS') }}</dd>
-          </div>
-          <div>
-            <dt>Integrated</dt>
-            <dd>{{ formatMetric(status?.meter?.integratedLufs, 1, ' LUFS') }}</dd>
-          </div>
-          <div>
-            <dt>LRA</dt>
-            <dd>{{ formatMetric(status?.meter?.loudnessRangeLu, 1, ' LU') }}</dd>
-          </div>
-          <div>
-            <dt>True peak</dt>
-            <dd>{{ formatMetric(status?.meter?.truePeakDb, 2, ' dBTP') }}</dd>
-          </div>
-          <div>
-            <dt>Correlation</dt>
-            <dd>{{ formatMetric(status?.meter?.correlation, 3) }}</dd>
-          </div>
-        </dl>
-      </section>
     </template>
     <div v-else class="empty-detail">选择一个节点来编辑参数。</div>
   </aside>

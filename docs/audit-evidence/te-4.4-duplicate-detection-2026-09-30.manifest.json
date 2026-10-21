@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-14T06:35:18.711Z",
+  "generatedAt": "2026-10-21T12:31:26.639Z",
   "evidence": {
     "path": "te-4.4-duplicate-detection-2026-09-30.json",
-    "sha256": "b41709a6b2431e8c54e558b464ae829ae2f9fff6dd66f4733d55920f451503f2"
+    "sha256": "b36a35bfdc48afb5f0e256df98a5835571a0699a70ac3c9b7b8352e4e89ceb3c"
   },
   "provenance": {
     "algorithm": "sha256",
     "source": {
       "path": "src/main/library/duplicateDetection.ts",
-      "sha256": "5f6236b47dbb08b564f15191c758d1169429ef869af910f089a0e50973209a1f"
+      "sha256": "aac84997c3299407d696c968ea35740c2908c30ced79facefbe0c1bf69141161"
     },
     "sharedContract": {
       "path": "src/shared/duplicateDetection.ts",
-      "sha256": "c3848f52b1356def97cce7ac9a6f9266df6aca66545a0e7968fb9c58c9b547f6"
+      "sha256": "1613a6a64961d03272c87b088dd616d3f7f54155ab29a8b63507379d157153df"
     },
     "runner": {
       "path": "scripts/duplicate-detection-benchmark.ts",
@@ -25,11 +25,11 @@
     },
     "packageManifest": {
       "path": "package.json",
-      "sha256": "77a1ca03fc44cc2b1fa6f8fe11e05f6778ebb6c771a63c8bf7759ba400b1f272"
+      "sha256": "d9e773394f79a5cd419a5a1425fb6c1ed86b191a6bca710d26903731cc41db82"
     },
     "lockfile": {
       "path": "pnpm-lock.yaml",
-      "sha256": "3abe0de62e1b52846c0fc5ea1ce9e8203c33c7dcb7456303ea2a7cc88d10a689"
+      "sha256": "b7857dd4d28035a3c95ffe3607452cd8485343c126812cc5391b33a59c82003e"
     }
   },
   "benchmark": {
@@ -41,12 +41,12 @@
       "collisionP95Ms": 2500
     },
     "unique": {
-      "p50Ms": 32.80499999999995,
-      "p95Ms": 57.85649999999998
+      "p50Ms": 41.95730000000003,
+      "p95Ms": 62.939899999999966
     },
     "collision": {
-      "p50Ms": 45.11270000000013,
-      "p95Ms": 52.9078999999997
+      "p50Ms": 49.15449999999964,
+      "p95Ms": 54.1579999999999
     }
   }
 }

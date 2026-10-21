@@ -151,25 +151,33 @@ export function exportPlaylistDocument(
   tracks: readonly Track[],
   format: PlaylistFileFormat
 ): string {
-  if (format === 'pls') {
-    const rows = ['[playlist]']
-    tracks.forEach((track, index) => {
-      const number = index + 1
-      rows.push(`File${number}=${toPortablePath(track.filePath)}`)
-      rows.push(`Title${number}=${track.artist ? `${track.artist} - ${track.title}` : track.title}`)
-      rows.push(`Length${number}=${Math.max(0, Math.round(track.duration || 0))}`)
-    })
-    rows.push(`NumberOfEntries=${tracks.length}`, 'Version=2')
-    return `${rows.join('\r\n')}\r\n`
+  const writer = createPlaylistDocumentWriter(format)
+  for (const track of tracks) writer.append(track)
+  return writer.finish()
+}
+
+/** Keep export text, not complete resolved Track arrays, across database pages. */
+export function createPlaylistDocumentWriter(format: PlaylistFileFormat) {
+  const rows = [format === 'pls' ? '[playlist]' : '#EXTM3U']
+  let count = 0
+  return {
+    append(track: Track): void {
+      const number = ++count,
+        title = track.artist ? `${track.artist} - ${track.title}` : track.title,
+        duration = Math.max(0, Math.round(track.duration || 0))
+      if (format === 'pls')
+        rows.push(
+          `File${number}=${toPortablePath(track.filePath)}`,
+          `Title${number}=${title}`,
+          `Length${number}=${duration}`
+        )
+      else rows.push(`#EXTINF:${duration},${title}`, toPortablePath(track.filePath))
+    },
+    finish(): string {
+      const tail = format === 'pls' ? [`NumberOfEntries=${count}`, 'Version=2'] : []
+      return `${[...rows, ...tail].join('\r\n')}\r\n`
+    }
   }
-  const rows = ['#EXTM3U']
-  for (const track of tracks) {
-    rows.push(
-      `#EXTINF:${Math.max(0, Math.round(track.duration || 0))},${track.artist ? `${track.artist} - ${track.title}` : track.title}`,
-      toPortablePath(track.filePath)
-    )
-  }
-  return `${rows.join('\r\n')}\r\n`
 }
 
 /** Resolves only unique candidates. Ambiguity is deliberately surfaced for user review. */

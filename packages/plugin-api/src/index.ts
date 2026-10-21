@@ -473,6 +473,14 @@ export interface TwilightMediaProviderRegistration {
     force?: boolean,
     context?: TwilightProviderRequestContext
   ): Promise<Track[]>
+  /** Complete occurrence metadata, including unavailable items. Never dedupe
+   * or truncate; reject an interrupted page. No playback URLs in this result. */
+  readPlaylistImportPage?(
+    playlistId: string,
+    offset: number,
+    limit: number,
+    context?: TwilightProviderRequestContext
+  ): Promise<{ name?: string; songs: Array<{ title?: string; artist?: string; album?: string; duration?: number; isrc?: string; platformId?: string; cover?: string | null; coverSource?: string | null; coverSmall?: string | null; coverSmallSource?: string | null; unavailableReason?: string }>; total: number; nextOffset: number; hasMore: boolean }>
   fetchPlaylistTracksPage?(
     playlistId: string | number,
     offset?: number,

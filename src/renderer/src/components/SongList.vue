@@ -5,6 +5,7 @@ import { useHoldReorder } from '@renderer/composables/useHoldReorder'
 import NativeContextMenu from '@renderer/components/NativeContextMenu.vue'
 import { useLocalPlaylistOrder } from '@renderer/components/song-list/useLocalPlaylistOrder'
 import TrackInfoDialog from '@renderer/components/TrackInfoDialog.vue'
+import TrackSourcePicker from '@renderer/components/TrackSourcePicker.vue'
 import PlaylistActionDialog from '@renderer/components/song-list/PlaylistActionDialog.vue'
 import PlaylistLifecycleToolbar from '@renderer/components/song-list/PlaylistLifecycleToolbar.vue'
 import {
@@ -15,10 +16,12 @@ import {
   onMounted,
   ref,
   shallowRef,
+  toRaw,
   watch
 } from 'vue'
 import type { LocalLibraryTagPatch } from '../../../shared/localLibraryTags.ts'
 import { useUnifiedMusicSearch } from '../app/useUnifiedMusicSearch'
+import { useLibraryUnifiedSearch } from '../app/useLibraryUnifiedSearch.ts'
 import { syncPluginProviders, useMediaProviders } from '../providers'
 import { useMusicStore } from '../stores/useMusicStore'
 import { usePlayerStore } from '../stores/usePlayerStore'
@@ -28,16 +31,20 @@ import { useProviderStore } from '../stores/useProviderStore'
 import {
   buildLastPlayedByTrackId,
   getRecentTracks,
+  libraryListeningProjection,
   useListeningStatsStore
 } from '../stores/useListeningStatsStore'
 import type { Track } from '../types/music'
-import { copyTrackNames } from '../utils/copyTrackNames'
+import { copyTrackNamePages } from '../utils/copyTrackNames'
 import { resolveUnifiedRecentTracks } from '../utils/unifiedRecentTracks'
 import { getTrackSearchBlob, normalizeSearchText } from '../utils/localLibrarySearch'
 import { getTrackSource as getLogicalTrackSource } from '../utils/logicalTrackModel'
 import { useEscapeToClose } from '../app/useDismissLayer.ts'
 import { useBackHandler } from '../app/useBackStack.ts'
-import { buildMetadataMatchCandidates } from '../utils/musicMetadataMatching'
+import {
+  buildMetadataMatchCandidates,
+  enrichLocalTrackMetadata
+} from '../utils/musicMetadataMatching'
 import { searchMetadataTracks } from '../utils/musicMetadataSearch'
 import {
   applyLibraryCollectionView,
@@ -56,7 +63,11 @@ import {
   formatPlaylistSourceSummary,
   summarizePlaylistSources
 } from '../utils/playlistSourceSummary'
-import { selectLocalLibraryActionTracks } from '../utils/localTrackRemovalPolicy'
+import {
+  selectLocalLibraryActionTracks,
+  notifyLocalTracksUnavailable,
+  prepareLocalTracksForRemoval
+} from '../utils/localTrackRemovalPolicy'
 import {
   applyLibraryView,
   createDefaultLibraryViewState,
@@ -86,6 +97,35 @@ import { useSongListSearch } from './song-list/useSongListSearch'
 import { useSongListVirtualScroll } from './song-list/useSongListVirtualScroll'
 import { useLocatePlayingTrack } from './song-list/useLocatePlayingTrack'
 import { useTrackMultiSelect } from './song-list/useTrackMultiSelect'
+import {
+  createSongListActionSource,
+  readSongListTagTargets,
+  readSongListLoudnessTargets,
+  type SongListActionLease,
+  type SongListActionSource
+} from './song-list/songListActionSource.ts'
+import { buildLibraryLoudnessDatabasePlan } from './library-loudness/libraryLoudnessDatabasePlan.ts'
+import { addSelectionRange } from '../../../shared/librarySelectionRanges.ts'
+import type { LibrarySelectionRange } from '../../../shared/librarySelection.ts'
+import { trackRowKeyAction } from './song-list/trackRowKeyboard'
+import {
+  type LibraryCollectionKind,
+  type LibraryTrackRecord
+} from '../../../shared/libraryDatabase.ts'
+import { createLibraryStorageState } from '../stores/library/libraryStorageState.ts'
+import { libraryDirectoriesForFiles } from '../utils/libraryScanDirectories.ts'
+import { createLibraryTrackWindow } from '../stores/library/libraryTrackWindow.ts'
+import { toPlaylistTrackSnapshot } from '../stores/library/musicStoreData.ts'
+import { createLibraryPlaylistView } from '../stores/library/libraryPlaylistView.ts'
+import { createLibraryCollectionPages } from '../stores/library/libraryCollectionPages.ts'
+import { createLibraryCollectionWindow } from '../stores/library/libraryCollectionWindow.ts'
+import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
+import { libraryTrackQuery, libraryDetailScope } from '../utils/libraryTrackQuery.ts'
+import { libraryTrack } from '../utils/libraryQueuePlayback.ts'
+import {
+  findExactProviderTrackCover,
+  type ProviderTrackCover
+} from '../utils/providerTrackCover.ts'
 
 const props = defineProps<{
   category: string
@@ -115,6 +155,7 @@ const {
   localPlaylists,
   aggregatePlaylists,
   folders,
+  scannedFolders,
   libraryRepairReport,
   excludedTracks,
   getPlaylistTracks,
@@ -124,6 +165,7 @@ const {
   clearExcludedTracks,
   applyLocalTagWrite,
   startFullLibraryScan,
+  scanLibraryDirectories,
   isScanning,
   clearTrackMetadataMatch,
   applyTrackMetadataMatch,
@@ -134,11 +176,15 @@ const {
   removeTracksFromPlaylist,
   replaceTrackReference,
   createPlaylist,
-  createPlaylistWithTracks,
   deletePlaylist,
-  addTracksToPlaylistById,
   isFavoriteTrack,
-  setFavoriteTracks
+  setFavoriteTracks,
+  readFavoriteTrackPages,
+  setFavoriteTrackPages,
+  removeTrackIdPagesFromPlaylistById,
+  addTrackPagesToPlaylistById,
+  createPlaylistWithTrackPages,
+  createAggregatePlaylistWithTrackPages
 } = useMusicStore()
 const playbackStore = usePlayerStore()
 const settingsStore = useSettingsStore()
@@ -148,9 +194,16 @@ const playbackBookmarks = usePlaybackBookmarks()
 void playbackBookmarks.ensureLoaded()
 const mediaProviders = useMediaProviders()
 const unifiedSearch = useUnifiedMusicSearch()
+const rematchSearchSource = useLibraryUnifiedSearch()
 const providerStore = useProviderStore()
 const { listeningStats } = useListeningStatsStore()
 const EMPTY_LAST_PLAYED_BY_TRACK_ID: ReadonlyMap<string, number> = new Map()
+const libraryStorage = createLibraryStorageState({
+  getStorageMode: () => window.api.library.getStorageMode()
+})
+onMounted(() => {
+  if (!props.previewTracks) void libraryStorage.load()
+})
 
 const currentLibraryViewKey = computed(() => libraryViewKey(props.category, props.filter))
 const { searchQuery, debouncedSearchQuery, searchInputFocused } =
@@ -199,12 +252,56 @@ const LibraryLoudnessDialog = defineAsyncComponent(
 )
 const loudnessOpen = ref(false)
 const loudnessSelection = shallowRef<Track[] | null>(null)
+const loudnessPlanResolver = shallowRef<
+  | ((
+      mode: 'track' | 'album',
+      signal: AbortSignal
+    ) => ReturnType<typeof buildLibraryLoudnessDatabasePlan>)
+  | undefined
+>()
 const loudnessFocusTarget = shallowRef<HTMLElement | null>(null)
 
-function openLoudness(all: boolean, event: Event): void {
+async function openLoudness(all: boolean, event: Event): Promise<void> {
   const target = event.currentTarget as HTMLElement
   loudnessFocusTarget.value =
     target.closest('.library-tools-dropdown')?.querySelector('button') ?? target
+  if (libraryStorage.mode.value === 'sqlite' && !props.previewTracks) {
+    try {
+      let source: SongListActionSource
+      if (all) {
+        const metadata = await window.api.library.database.getMetadata()
+        if (metadata.trackCount > 10_000) throw new Error('单次最多分析 10,000 首，请选择较小范围')
+        source = createSongListActionSource({
+          api: window.api.library.database,
+          request: {
+            query: { contentRevision: metadata.revision, sort: 'insertion' },
+            total: metadata.trackCount,
+            ranges: metadata.trackCount ? [[0, metadata.trackCount]] : []
+          }
+        })
+      } else source = captureActionSource()
+      await withActionSource(source, async (lease) => {
+        const selected = await readSongListLoudnessTargets(lease)
+        source.guard()
+        const revision = lease.revision!
+        loudnessSelection.value = selected
+        loudnessPlanResolver.value = (mode, signal) =>
+          buildLibraryLoudnessDatabasePlan(
+            window.api.library.database,
+            selected,
+            revision,
+            mode,
+            signal
+          )
+        libraryToolsMenuOpen.value = false
+        loudnessOpen.value = true
+      })
+    } catch (error) {
+      repairMessage.value = error instanceof Error ? error.message : '读取响度分析范围失败'
+    }
+    return
+  }
+  loudnessPlanResolver.value = undefined
   loudnessSelection.value = all ? null : selectLocalLibraryActionTracks(getSelectedTracks())
   libraryToolsMenuOpen.value = false
   loudnessOpen.value = true
@@ -212,6 +309,7 @@ function openLoudness(all: boolean, event: Event): void {
 
 const baseDisplayTracks = computed(() => {
   if (props.previewTracks) return props.previewTracks
+  if (databaseTableCandidate.value && libraryStorage.mode.value !== 'json') return []
   if (props.category === 'allSongs') return tracks.value
   if (props.category === 'recent') {
     const recentStats = getRecentTracks()
@@ -343,6 +441,11 @@ onBeforeUnmount(() => {
 })
 
 const libraryFilterOptions = computed(() => {
+  if (databaseTableEnabled.value) {
+    // Do not build facets from a page (or walk the compatibility Track[]).
+    // Numeric/path inputs below accept the actual values rather than truncating options.
+    return { sampleRates: [], bitDepths: [], folders: [], providers: [] }
+  }
   const values = baseDisplayTracks.value
   const sampleRates = [
     ...new Set(
@@ -372,12 +475,23 @@ const lastPlayedByTrackId = computed(() => {
   // sorted by last-played, keep stats out of the displayTracks dependency
   // graph so a playback tick cannot re-filter and re-sort the whole library.
   if (libraryViewState.value.sortKey !== 'lastPlayed') return EMPTY_LAST_PLAYED_BY_TRACK_ID
+  if (databaseTableCandidate.value && libraryStorage.mode.value === 'sqlite')
+    return EMPTY_LAST_PLAYED_BY_TRACK_ID
   return buildLastPlayedByTrackId(listeningStats.value)
 })
 
 const viewTitle = computed(() => {
   if (props.category === 'folders') {
     if (props.filter && props.filter.startsWith('folder:')) {
+      if (!props.previewTracks && libraryStorage.mode.value !== 'json') {
+        const path = props.filter.slice(7)
+        return (
+          path
+            .replace(/[\\/]+$/, '')
+            .split(/[\\/]/)
+            .pop() || path
+        )
+      }
       return folders.value.find((f) => f.path === props.filter?.slice(7))?.name ?? '文件夹'
     }
     return '文件夹'
@@ -391,6 +505,8 @@ const viewTitle = computed(() => {
   if (props.category === 'albums') {
     if (props.filter && props.filter.startsWith('album:')) {
       const id = props.filter.slice(6)
+      if (libraryStorage.mode.value !== 'json' && !props.previewTracks)
+        return databaseAlbumState.value.page?.items[0]?.name ?? '专辑'
       return albums.value.find((album) => album.id === id)?.name ?? '专辑'
     }
     return '专辑'
@@ -407,7 +523,7 @@ const viewTitle = computed(() => {
 })
 
 const gridStatsText = computed(() => {
-  const count = gridTotalCount.value
+  const count = collectionResultCount.value
   if (count === 0) return ''
   const unit =
     props.category === 'artists'
@@ -425,8 +541,9 @@ const gridStatsText = computed(() => {
 })
 
 const totalDurationText = computed(() => {
-  let total = 0
-  for (const track of displayTracks.value) total += track.duration || 0
+  let total = databaseTableEnabled.value ? (databasePageState.value.page?.totalDuration ?? 0) : 0
+  if (!databaseTableEnabled.value)
+    for (const track of displayTracks.value) total += track.duration || 0
   if (total <= 0) return ''
   const minutes = Math.round(total / 60)
   if (minutes < 1) return '不足 1 分钟'
@@ -436,7 +553,7 @@ const totalDurationText = computed(() => {
 
 const viewStatsText = computed(() => {
   if (props.category === 'allSongs') return ''
-  const count = displayTracks.value.length
+  const count = tableTrackCount.value
   if (count === 0) return ''
   return totalDurationText.value ? `${count} 首 · ${totalDurationText.value}` : `${count} 首`
 })
@@ -450,15 +567,18 @@ const isPlaylistDetail = computed(() => currentPlaylistName.value !== null)
 const isAlbumDetail = computed(
   () => props.category === 'albums' && props.filter?.startsWith('album:') === true
 )
-const currentAlbum = computed(() =>
-  isAlbumDetail.value
-    ? (albums.value.find((album) => album.id === props.filter?.slice(6)) ?? null)
-    : null
-)
+const currentAlbum = computed(() => {
+  if (!isAlbumDetail.value) return null
+  if (!props.previewTracks && libraryStorage.mode.value !== 'json')
+    return databaseAlbumState.value.page?.items[0] ?? null
+  return albums.value.find((album) => album.id === props.filter?.slice(6)) ?? null
+})
 const albumDurationText = computed(() => {
+  const album = currentAlbum.value
   const seconds =
-    currentAlbum.value?.tracks.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0) ??
-    0
+    album && 'duration' in album
+      ? album.duration
+      : (album?.tracks.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0) ?? 0)
   const minutes = Math.round(seconds / 60)
   if (seconds <= 0) return ''
   if (minutes < 1) return '不足 1 分钟'
@@ -488,12 +608,15 @@ const showExcludedTracksDialog = ref(false)
 const showTagManager = ref(false)
 const showLibraryInbox = ref(false)
 const showMusicVersions = ref(false)
+const musicVersionsInitialTrack = shallowRef<Track>()
+const musicVersionsOpening = ref(false)
 const MusicVersionsHost = defineAsyncComponent(
   () => import('@renderer/components/music-versions/MusicVersionsHost.vue')
 )
 const libraryToolsTrigger = ref<HTMLButtonElement | null>(null)
 const tagManagerInitialView = ref<'edit' | 'duplicates'>('edit')
 const tagManagerTracks = ref<Track[]>([])
+const tagManagerContentRevision = ref<number | null>(null)
 const tagManagerFocusRestoreTarget = ref<HTMLElement | null>(null)
 const libraryMutationPending = ref(false)
 const exclusionRestorePending = ref(false)
@@ -503,7 +626,159 @@ const showOnlineSearchToggle = computed(() => props.category === 'allSongs' && !
 const shouldUseUnifiedSearch = computed(
   () => showOnlineSearchToggle.value && searchOnlineSongs.value
 )
-
+const databasePlaylistView = createLibraryPlaylistView({
+  syncPlaylistView: (request) => window.api.library.database.syncPlaylistView(request)
+})
+const databasePlaylistState = databasePlaylistView.state
+watch(
+  [
+    () => libraryStorage.mode.value,
+    localPlaylists,
+    musicVersionRevision,
+    currentPlaylistName,
+    () => props.previewTracks
+  ],
+  () => {
+    const document = getMusicVersions()
+    void databasePlaylistView.setPlaylist(
+      !props.previewTracks && libraryStorage.mode.value === 'sqlite' ? currentPlaylist.value : null,
+      { revision: musicVersionRevision.value, versions: document.tracks.versions }
+    )
+  },
+  { immediate: true, flush: 'sync' }
+)
+const databaseDetailScope = computed(() => {
+  if (isPlaylistDetail.value) return {}
+  const scope = libraryDetailScope(props.category, props.filter)
+  if (scope?.folder)
+    scope.recursive =
+      scannedFolders.value.length > 0 || settingsStore.settings.value.libraryFolders.length > 0
+  return scope
+})
+const databaseTableCandidate = computed(
+  () => !props.previewTracks && databaseDetailScope.value !== null && !shouldUseUnifiedSearch.value
+)
+const databaseHistoryRequested = computed(
+  () =>
+    databaseTableCandidate.value &&
+    libraryStorage.mode.value === 'sqlite' &&
+    libraryViewState.value.sortKey === 'lastPlayed'
+)
+const databaseTableEnabled = computed(
+  () => databaseTableCandidate.value && libraryStorage.mode.value === 'sqlite'
+)
+const historyProjectionState = libraryListeningProjection.state
+const databaseHistoryReady = computed(
+  () => !databaseHistoryRequested.value || historyProjectionState.value.ready
+)
+const databaseHistoryRevision = computed(() =>
+  databaseHistoryRequested.value && historyProjectionState.value.ready
+    ? historyProjectionState.value.revision!
+    : undefined
+)
+watch(
+  databaseHistoryRequested,
+  (needed) => {
+    if (needed) void libraryListeningProjection.ensure()
+  },
+  { immediate: true }
+)
+const databaseQuery = computed(() =>
+  databaseTableEnabled.value &&
+  databaseHistoryReady.value &&
+  (!isPlaylistDetail.value || databasePlaylistState.value.id !== null)
+    ? {
+        ...libraryTrackQuery(libraryViewState.value, debouncedSearchQuery.value),
+        ...databaseDetailScope.value,
+        ...(isPlaylistDetail.value ? { playlistView: databasePlaylistState.value.id! } : {}),
+        genreSeparators: settingsStore.settings.value.genreSeparators,
+        ...(databaseHistoryRequested.value
+          ? { historyRevision: databaseHistoryRevision.value }
+          : {})
+      }
+    : null
+)
+const databasePages = createLibraryTrackWindow({
+  queryTracks: async (query) => {
+    try {
+      const page = await window.api.library.database.queryTracks(query)
+      return { ...page, tracks: page.tracks.map((record) => ({ ...libraryTrack(record) })) }
+    } catch (error) {
+      if (query?.playlistView) databasePlaylistView.recover(query.playlistView, error)
+      throw error
+    }
+  }
+})
+const databasePageState = databasePages.state
+const databaseWindowPages = databasePages.pages
+const databaseReadPending = computed(
+  () =>
+    (databaseTableCandidate.value &&
+      (libraryStorage.mode.value === null ||
+        (databaseTableEnabled.value && databasePageState.value.loading))) ||
+    (databaseTableEnabled.value && isPlaylistDetail.value && databasePlaylistState.value.pending) ||
+    (databaseHistoryRequested.value &&
+      !historyProjectionState.value.ready &&
+      historyProjectionState.value.pending)
+)
+const databaseReadError = computed(() =>
+  databaseTableCandidate.value
+    ? libraryStorage.error.value ||
+      (isPlaylistDetail.value ? databasePlaylistState.value.error : '') ||
+      (databaseHistoryRequested.value ? historyProjectionState.value.error : '') ||
+      (databaseTableEnabled.value ? databasePageState.value.error : '')
+    : ''
+)
+watch(
+  databaseQuery,
+  (query, previous) => {
+    const { historyRevision: _nextHistory, ...next } = query ?? {}
+    const { historyRevision: _previousHistory, ...before } = previous ?? {}
+    const historyOnly =
+      query?.sort === 'lastPlayed' &&
+      previous?.sort === 'lastPlayed' &&
+      query.historyRevision !== previous.historyRevision &&
+      JSON.stringify(next) === JSON.stringify(before)
+    databasePages.setQuery(query, historyOnly)
+  },
+  { immediate: true, flush: 'sync' }
+)
+let unsubscribeDatabasePages: (() => void) | undefined
+onMounted(() => {
+  unsubscribeDatabasePages = window.api?.library?.onChanged((change) => {
+    const revision = change?.kind === 'scan' ? change.update.libraryRevision : change?.revision
+    if (
+      showTagManager.value &&
+      tagManagerContentRevision.value !== null &&
+      revision !== undefined &&
+      revision > tagManagerContentRevision.value
+    ) {
+      closeTagManager()
+      repairMessage.value = '曲库已变化，请重新选择歌曲后编辑标签'
+    }
+    if (databaseTableEnabled.value) databasePages.invalidate(revision)
+    if (databaseGridEnabled.value) databaseCollections.invalidate(revision)
+    if (databaseAlbumEnabled.value) databaseAlbumPages.invalidate(revision)
+    if (databaseGridEnabled.value && isCollectionGrid.value) databaseGenrePages.invalidate(revision)
+  })
+})
+onBeforeUnmount(() => {
+  unsubscribeDatabasePages?.()
+  databasePages.dispose()
+  void databasePlaylistView.dispose()
+  void databasePlaylistCatalog.dispose()
+  databaseCollections.dispose()
+  databaseAlbumPages.dispose()
+  databaseGenrePages.dispose()
+})
+function retryDatabaseRead(): void {
+  if (libraryStorage.mode.value === null) void libraryStorage.load()
+  else if (databaseHistoryRequested.value && !historyProjectionState.value.ready)
+    void libraryListeningProjection.retry()
+  else if (isPlaylistDetail.value && databasePlaylistState.value.error)
+    void databasePlaylistView.retry()
+  else databasePages.retry()
+}
 const libraryRepairStatusText = computed(() => {
   if (props.category !== 'allSongs' || props.filter) return ''
   const report = libraryRepairReport.value
@@ -542,6 +817,103 @@ const searchedTracks = computed(() => {
 
 const displayTracks = computed(() =>
   applyLibraryView(searchedTracks.value, libraryViewState.value, lastPlayedByTrackId.value)
+)
+// A bounded loaded window, never the complete displayTracks/tracks contract.
+const tableTracks = computed<Track[]>(() =>
+  databaseTableEnabled.value
+    ? databaseWindowPages.value.flatMap((page) => page.tracks as unknown as Track[])
+    : displayTracks.value
+)
+const tableEntryIds = computed(() => {
+  if (!databaseTableEnabled.value) return new Map<Track, string>()
+  return new Map(
+    databaseWindowPages.value.flatMap((page) =>
+      page.entryIds
+        ? page.tracks.map(
+            (track, index) => [track as unknown as Track, page.entryIds![index]] as const
+          )
+        : []
+    )
+  )
+})
+const tableRowPositions = computed(
+  () =>
+    new Map(
+      databaseTableEnabled.value
+        ? databaseWindowPages.value.flatMap((page) =>
+            page.tracks.map(
+              (track, index) => [track as unknown as Track, page.offset + index] as const
+            )
+          )
+        : []
+    )
+)
+function databasePageForTrack(track: Track) {
+  return databasePages.pageForTrack(toRaw(track) as unknown as LibraryTrackRecord)
+}
+// Weak keys retain only selected compact records, not evicted pages or row payloads.
+const selectedTableRows = new WeakMap<
+  Track,
+  { key: string; definitionId: string; version?: number; position?: number }
+>()
+function tableTrackKey(track: Track): string {
+  const selected = selectedTableRows.get(toRaw(track))
+  if (selected) return selected.key
+  const entry = tableEntryIds.value.get(toRaw(track))
+  return entry === undefined ? track.id : `${databasePlaylistState.value.id}:${entry}`
+}
+// Configuration edits address the original member, not the preferred/relinked
+// local ID that SQL resolved for display/playback. Do not rewrite the row itself.
+function playlistDefinitionTrack(track: Track): Track {
+  const entry = tableEntryIds.value.get(toRaw(track))
+  const id =
+    selectedTableRows.get(toRaw(track))?.definitionId ??
+    (entry === undefined ? undefined : currentPlaylist.value?.trackIds[Number(entry)])
+  return id === undefined || id === track.id ? track : { ...track, id }
+}
+function snapshotSelectedTableTrack(track: Track): Track {
+  const snapshot = toPlaylistTrackSnapshot(track)
+  // Old embedded covers can be megabytes; action records use cache/remote covers.
+  if (snapshot.cover?.startsWith('data:')) snapshot.cover = null
+  if (snapshot.coverSmall?.startsWith('data:')) delete snapshot.coverSmall
+  if (snapshot.coverSource?.startsWith('data:')) delete snapshot.coverSource
+  if (snapshot.coverSmallSource?.startsWith('data:')) delete snapshot.coverSmallSource
+  selectedTableRows.set(snapshot, {
+    key: tableTrackKey(track),
+    definitionId: playlistDefinitionTrack(track).id,
+    version: databasePageForTrack(track)?.versions[track.id],
+    position: tableRowPositions.value.get(toRaw(track))
+  })
+  return snapshot
+}
+function databasePlaybackQuery(track?: Track) {
+  const query = databaseQuery.value,
+    page = track ? databasePageForTrack(track) : databasePageState.value.page
+  if (!query || !page || (track && !tableTracks.value.includes(toRaw(track)))) return null
+  return {
+    ...query,
+    contentRevision: page.revision,
+    ...(track && query.playlistView
+      ? { playlistEntryId: tableEntryIds.value.get(toRaw(track)) }
+      : {})
+  }
+}
+function databasePlaybackOptions(
+  query: NonNullable<typeof databaseQuery.value>,
+  options: Parameters<typeof playbackStore.playLibraryQuery>[2] = {}
+) {
+  const id = query.playlistView
+  if (!id) return options
+  return {
+    ...options,
+    onQueryFailure: (error: unknown) => {
+      if (databasePlaylistView.recover(id, error))
+        repairMessage.value = '歌单视图已失效，正在重建；完成后请重新播放'
+    }
+  }
+}
+const tableTrackCount = computed(() =>
+  databaseTableEnabled.value ? (databasePageState.value.total ?? 0) : displayTracks.value.length
 )
 
 const unifiedSearchSourceNames = computed(
@@ -629,7 +1001,181 @@ function setCollectionGenre(value: string): void {
   updateCollectionView({ ...collectionViewState.value, genre: value || null })
 }
 
+const playlistOrderNotice = ref('')
+const localPlaylistEntries = computed(() =>
+  localPlaylists.value.map((playlist) => ({ ...playlist, id: playlist.id ?? playlist.name }))
+)
+const localPlaylistOrder = useLocalPlaylistOrder(
+  localPlaylistEntries,
+  () => 'library',
+  (message) => {
+    playlistOrderNotice.value = message
+  }
+)
+const databasePlaylistCatalog = createLibraryPlaylistView({
+  syncPlaylistView: (request) => window.api.library.database.syncPlaylistView(request)
+})
+const databaseCatalogState = databasePlaylistCatalog.state
+const databaseGridKind = computed<LibraryCollectionKind | null>(() =>
+  !props.previewTracks &&
+  showGrid.value &&
+  ['albums', 'artists', 'genres', 'folders', 'playlists'].includes(props.category)
+    ? (props.category as LibraryCollectionKind)
+    : null
+)
+const databaseGridEnabled = computed(
+  () => databaseGridKind.value !== null && libraryStorage.mode.value === 'sqlite'
+)
+const databaseCollections = createLibraryCollectionWindow({
+  queryCollections: async (kind, query) => {
+    try {
+      return await window.api.library.database.queryCollections(kind, query)
+    } catch (error) {
+      if (query?.playlistView) databasePlaylistCatalog.recover(query.playlistView, error)
+      throw error
+    }
+  }
+})
+watch(
+  () => ({
+    enabled: databaseGridEnabled.value && databaseGridKind.value === 'playlists',
+    playlists: localPlaylistEntries.value,
+    revision: musicVersionRevision.value
+  }),
+  ({ enabled, playlists, revision }) =>
+    void databasePlaylistCatalog.setCatalog(enabled ? playlists : null, {
+      revision,
+      versions: getMusicVersions().tracks.versions
+    }),
+  { immediate: true, flush: 'sync' }
+)
+const databaseCollectionState = databaseCollections.state
+const databaseGridPending = computed(
+  () =>
+    databaseGridKind.value !== null &&
+    (libraryStorage.mode.value === null ||
+      (databaseGridEnabled.value &&
+        (databaseCollectionState.value.loading ||
+          (databaseGridKind.value === 'playlists' && databaseCatalogState.value.pending))))
+)
+const databaseGridError = computed(() =>
+  databaseGridKind.value !== null
+    ? libraryStorage.error.value ||
+      (databaseGridEnabled.value
+        ? (databaseGridKind.value === 'playlists' ? databaseCatalogState.value.error : '') ||
+          databaseCollectionState.value.error
+        : '')
+    : ''
+)
+const collectionResultCount = computed(() =>
+  databaseGridEnabled.value ? (databaseCollectionState.value.total ?? 0) : gridTotalCount.value
+)
+const databaseGridSelection = computed(() => ({
+  kind:
+    databaseGridEnabled.value &&
+    (databaseGridKind.value !== 'playlists' || databaseCatalogState.value.id !== null)
+      ? databaseGridKind.value
+      : null,
+  query:
+    databaseGridKind.value === 'playlists'
+      ? {
+          search: debouncedSearchQuery.value,
+          playlistView: databaseCatalogState.value.id ?? undefined,
+          collectionOrder: localPlaylistOrder.playlists.value.map((playlist) => playlist.id)
+        }
+      : {
+          search: debouncedSearchQuery.value,
+          genreSeparators: settingsStore.settings.value.genreSeparators,
+          ...(isCollectionGrid.value
+            ? {
+                collectionGenre: collectionViewState.value.genre ?? undefined,
+                sort: collectionViewState.value.sort.startsWith('added-')
+                  ? ('addedAt' as const)
+                  : ('title' as const),
+                direction: ['name-desc', 'added-newest'].includes(collectionViewState.value.sort)
+                  ? ('desc' as const)
+                  : ('asc' as const)
+              }
+            : {})
+        }
+}))
+
+let databaseGridIntent = ''
+watch(
+  databaseGridSelection,
+  ({ kind, query }) => {
+    const intent = JSON.stringify([
+      databaseGridEnabled.value,
+      databaseGridKind.value,
+      debouncedSearchQuery.value,
+      isCollectionGrid.value ? collectionViewState.value : null
+    ])
+    const preservePosition = databaseGridEnabled.value && intent === databaseGridIntent
+    databaseGridIntent = intent
+    databaseCollections.setQuery(kind, query, preservePosition)
+  },
+  { immediate: true }
+)
+
+function retryDatabaseCollections(): void {
+  if (libraryStorage.mode.value === null) void libraryStorage.load()
+  else if (databaseGridKind.value === 'playlists' && databaseCatalogState.value.error)
+    void databasePlaylistCatalog.retry()
+  else databaseCollections.retry()
+}
+// Album headers describe the entire release, independent of the detail table's
+// search, filters and current page. No placeholder Track[] is fabricated.
+const databaseAlbumEnabled = computed(
+  () => !props.previewTracks && isAlbumDetail.value && libraryStorage.mode.value === 'sqlite'
+)
+const databaseAlbumPages = createLibraryCollectionPages(
+  {
+    queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query)
+  },
+  1
+)
+const databaseAlbumState = databaseAlbumPages.state
+watch(
+  () => ({ enabled: databaseAlbumEnabled.value, albumId: props.filter?.slice(6) }),
+  ({ enabled, albumId }) => databaseAlbumPages.setQuery(enabled ? 'albums' : null, { albumId }),
+  { immediate: true }
+)
+
+// Keep suggestions bounded and searchable instead of exporting every genre to
+// populate a select. The filter still accepts any complete, case-insensitive label.
+const databaseGenrePages = createLibraryCollectionPages({
+  queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query)
+})
+const databaseGenreState = databaseGenrePages.state
+const databaseGenreSearch = ref(collectionViewState.value.genre ?? '')
+let genreSearchTimer: ReturnType<typeof setTimeout> | undefined
+watch(
+  () => collectionViewState.value.genre,
+  (genre) => {
+    clearTimeout(genreSearchTimer)
+    genreSearchTimer = setTimeout(() => {
+      databaseGenreSearch.value = genre ?? ''
+    }, 180)
+  }
+)
+onBeforeUnmount(() => clearTimeout(genreSearchTimer))
+watch(
+  () => ({
+    enabled: databaseGridEnabled.value && isCollectionGrid.value,
+    search: databaseGenreSearch.value,
+    genreSeparators: settingsStore.settings.value.genreSeparators
+  }),
+  ({ enabled, search, genreSeparators }) =>
+    databaseGenrePages.setQuery(enabled ? 'genres' : null, {
+      search,
+      genreSeparators,
+      collectionNamesOnly: true
+    }),
+  { immediate: true }
+)
+
 const baseCollectionItems = computed<GridItem[]>(() => {
+  if (databaseGridKind.value !== null && libraryStorage.mode.value !== 'json') return []
   if (props.category === 'artists') return artists.value
   if (props.category === 'albums') return albums.value
   return []
@@ -649,26 +1195,24 @@ watch(
   () => settingsStore.settings.value.genreSeparators,
   () => refreshLibraryIndex()
 )
-const playlistOrderNotice = ref('')
-const localPlaylistEntries = computed(() =>
-  localPlaylists.value.map((playlist) => ({ ...playlist, id: playlist.id ?? playlist.name }))
-)
-const localPlaylistOrder = useLocalPlaylistOrder(
-  localPlaylistEntries,
-  () => 'library',
-  (message) => {
-    playlistOrderNotice.value = message
-  }
-)
+const localPlaylistReorderEntries = computed(() => {
+  if (!databaseGridEnabled.value) return filteredGridItems.value as Array<GridItem & { id: string }>
+  const search = normalizeSearchText(debouncedSearchQuery.value.trim())
+  // Catalog search matches configured names only. Keep all matching header IDs,
+  // including unloaded neighbors, without resolving any track membership.
+  return localPlaylistOrder.playlists.value.filter((playlist) =>
+    normalizeSearchText(playlist.name).includes(search)
+  )
+})
 const localPlaylistReorder = useHoldReorder((from, to) => {
-  localPlaylistOrder.move(from, to, filteredGridItems.value as Array<GridItem & { id: string }>)
+  localPlaylistOrder.move(from, to, localPlaylistReorderEntries.value)
 })
 watch(() => [props.category, props.filter], localPlaylistReorder.cancel)
 function localPlaylistKeydown(event: KeyboardEvent, playlist: GridItem): void {
   if (event.target !== event.currentTarget) return
   if (event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
     event.preventDefault()
-    const entries = filteredGridItems.value
+    const entries = localPlaylistReorderEntries.value
     const index = entries.findIndex((entry) => entry.id === playlist.id)
     const target = entries[index + (event.key === 'ArrowUp' ? -1 : 1)]
     if (playlist.id && target?.id)
@@ -680,6 +1224,8 @@ function localPlaylistKeydown(event: KeyboardEvent, playlist: GridItem): void {
 }
 
 const currentGridItems = computed<GridItem[]>(() => {
+  if (databaseGridKind.value !== null && libraryStorage.mode.value !== 'json')
+    return databaseCollectionState.value.page?.items ?? []
   if (isCollectionGrid.value) return collectionGridItems.value
   if (props.category === 'genres') return genres.value
   if (props.category === 'playlists') return localPlaylistOrder.playlists.value
@@ -692,11 +1238,18 @@ function onRowDblClick(track: Track, event: MouseEvent): void {
   if (target.closest('.btn-remove') || target.closest('.track-select-checkbox')) return
   if (multiSelect.shouldSuppressRowDoubleClick(event)) return
   if (settingsStore.settings.value.trackActivationMode !== 'doubleClick') return
-  if (track.source === 'network') {
+  if (track.source === 'network' && !databaseTableEnabled.value) {
     void playNetworkTrack(track)
     return
   }
-  playTrack(track, displayTracks.value)
+  playTableTrack(track)
+}
+
+function playTableTrack(track: Track): void {
+  if (databaseTableEnabled.value) {
+    const query = databasePlaybackQuery(track)
+    if (query) void playbackStore.playLibraryQuery(query, track.id, databasePlaybackOptions(query))
+  } else playTrack(track, displayTracks.value)
 }
 
 async function playNetworkTrack(track: Track): Promise<void> {
@@ -715,12 +1268,31 @@ async function playNetworkTrack(track: Track): Promise<void> {
 }
 
 function playAllTracks(): void {
+  if (databaseTableEnabled.value) {
+    const query = databasePlaybackQuery()
+    if (query && tableTrackCount.value > 0)
+      void playbackStore.playLibraryQuery(query, undefined, databasePlaybackOptions(query))
+    return
+  }
   const list = displayTracks.value
   if (list.length === 0) return
   playTrack(list[0], list)
 }
 
 function shufflePlayTracks(): void {
+  if (databaseTableEnabled.value) {
+    const query = databasePlaybackQuery()
+    if (!query || tableTrackCount.value === 0) return
+    void playbackStore.playLibraryQuery(
+      query,
+      undefined,
+      databasePlaybackOptions(query, {
+        randomStart: true,
+        playMode: 'shuffle'
+      })
+    )
+    return
+  }
   const list = displayTracks.value
   if (list.length === 0) return
   setPlayMode('shuffle')
@@ -831,7 +1403,8 @@ function trackSourceClass(track: Track): string {
 }
 
 function playlistSourceSummaryLabel(playlist: GridItem): string {
-  return formatPlaylistSourceSummary(summarizePlaylistSources(playlist))
+  if (playlist.imported) return ''
+  return formatPlaylistSourceSummary(playlist.sourceSummary ?? summarizePlaylistSources(playlist))
 }
 
 async function handleManualRematch(track: Track): Promise<void> {
@@ -841,7 +1414,8 @@ async function handleManualRematch(track: Track): Promise<void> {
     const query = [track.title, track.artist].filter(Boolean).join(' ')
     const result = await mediaProviders.searchAllSongs({
       query,
-      localTracks: tracks.value,
+      localTracks: [],
+      localSource: rematchSearchSource,
       limit: 20,
       offset: 0
     })
@@ -865,6 +1439,10 @@ async function handleManualRematch(track: Track): Promise<void> {
 }
 
 async function handleMetadataRematch(track: Track): Promise<void> {
+  const expectedVersion = databaseTableEnabled.value
+    ? databasePageForTrack(track)?.versions[track.id]
+    : undefined
+  const useDatabase = databaseTableEnabled.value
   repairMessage.value = `正在匹配 ${track.title || '当前曲目'} 的流媒体元数据...`
   try {
     await syncPluginProviders()
@@ -883,10 +1461,35 @@ async function handleMetadataRematch(track: Track): Promise<void> {
       repairMessage.value = `未找到可匹配 ${track.title || '当前曲目'} 的流媒体元数据`
       return
     }
-    const changed = applyTrackMetadataMatch(track.id, best.track, {
-      confidence: best.confidence,
-      score: best.score
-    })
+    let changed: boolean
+    if (useDatabase) {
+      if (expectedVersion === undefined) throw new Error('曲目窗口已变化，请刷新后重试')
+      const next = enrichLocalTrackMetadata(track, best, settingsStore.settings.value.cachePolicy)
+      const patch = Object.fromEntries(
+        (
+          [
+            'artist',
+            'album',
+            'genre',
+            'cover',
+            'lyrics',
+            'translatedLyrics',
+            'lyricsSource',
+            'translatedLyricsSource',
+            'metadataMatch'
+          ] as const
+        )
+          .filter((key) => next[key] !== track[key])
+          .map((key) => [key, next[key]])
+      )
+      if (track.streamUrl !== undefined) patch.streamUrl = null
+      await window.api.library.database.patchTracks([{ id: track.id, expectedVersion, patch }])
+      changed = true
+    } else
+      changed = applyTrackMetadataMatch(track.id, best.track, {
+        confidence: best.confidence,
+        score: best.score
+      })
     repairMessage.value = changed
       ? `已匹配 ${best.sourceLabel}：${best.track.title || track.title}`
       : `找到 ${best.track.title || track.title}，但未能应用到本地曲目`
@@ -931,8 +1534,20 @@ const {
   removeFromPlaylist,
   rematchTrack: handleManualRematch,
   rematchMetadata: handleMetadataRematch,
-  clearMetadataMatch: (track) => {
-    clearTrackMetadataMatch(track.id)
+  clearMetadataMatch: async (track) => {
+    if (!databaseTableEnabled.value) {
+      clearTrackMetadataMatch(track.id)
+      return
+    }
+    try {
+      const expectedVersion = databasePageForTrack(track)?.versions[track.id]
+      if (expectedVersion === undefined) throw new Error('曲目窗口已变化，请刷新后重试')
+      await window.api.library.database.patchTracks([
+        { id: track.id, expectedVersion, patch: { metadataMatch: null } }
+      ])
+    } catch (error) {
+      repairMessage.value = error instanceof Error ? error.message : String(error)
+    }
   },
   createPlaylist,
   deletePlaylist,
@@ -945,6 +1560,10 @@ const {
   viewAlbum: (track) => {
     const album = track.album?.trim()
     if (!album) return
+    if (libraryStorage.mode.value === 'sqlite') {
+      void openDatabaseAlbum(track)
+      return
+    }
     const albumItem = albums.value.find((item) =>
       item.tracks.some((albumTrack) => albumTrack.id === track.id)
     )
@@ -952,53 +1571,133 @@ const {
     emit('selectView', 'albums', `album:${albumItem.id}`)
   },
   addToAggregatePlaylist: (playlistId) => {
-    const targets = contextActionTracks.value
-    const playlist = aggregatePlaylists.value.find((item) => item.id === playlistId)
-    if (!playlist || targets.length === 0) return
-    const added = addTracksToPlaylistById(playlistId, targets)
-    repairMessage.value =
-      added > 0
-        ? `已加入聚合歌单「${playlist.name}」${added} 首`
-        : `聚合歌单「${playlist.name}」里已经有这些歌了`
+    void addActionSourceToPlaylist(playlistId, captureActionSource(contextTracksForAction()))
   },
   createAggregatePlaylist: () => {
-    createAggregateTracks.value = contextActionTracks.value
+    const source = captureActionSource(contextTracksForAction())
+    if (!source.count) return
+    createAggregateSource.value = source
     showCreateAggregateDialog.value = true
   }
 })
 
+let albumNavigationIntent = 0
+watch(currentLibraryViewKey, () => {
+  albumNavigationIntent++
+})
+onBeforeUnmount(() => {
+  albumNavigationIntent++
+})
+async function openDatabaseAlbum(track: Track): Promise<void> {
+  const intent = ++albumNavigationIntent
+  try {
+    const result = await window.api.library.database.queryCollections('albums', {
+      ids: [track.id],
+      limit: 1
+    })
+    if (intent !== albumNavigationIntent) return
+    const album = result.items[0]
+    if (!album) throw new Error('此歌曲已不在曲库中，请刷新后重试')
+    emit('selectView', 'albums', `album:${album.id}`)
+  } catch (error) {
+    if (intent === albumNavigationIntent)
+      repairMessage.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
 const showCreateAggregateDialog = ref(false)
-const createAggregateTracks = ref<Track[]>([])
+const createAggregateSource = shallowRef<SongListActionSource | null>(null)
+
+function dismissCreateAggregateDialog(): void {
+  showCreateAggregateDialog.value = false
+  createAggregateSource.value = null
+}
+
+async function createSelectedAggregatePlaylist(
+  name: string
+): Promise<{ playlistId: string; addedCount: number }> {
+  const source = createAggregateSource.value
+  if (!source) throw new Error('歌曲选择已失效，请重新选择')
+  let playlistId = ''
+  const done = await withActionSource(
+    source,
+    async (lease, signal) => {
+      playlistId = await createAggregatePlaylistWithTrackPages(
+        name,
+        async (append) => {
+          await lease.tracks(append)
+          return () => {
+            source.guard()
+            if (createAggregateSource.value !== source || !showCreateAggregateDialog.value)
+              throw new Error('创建聚合歌单已取消')
+          }
+        },
+        signal
+      )
+    },
+    true
+  )
+  if (!done) throw new Error(repairMessage.value || '创建聚合歌单失败')
+  return {
+    playlistId,
+    addedCount:
+      aggregatePlaylists.value.find((playlist) => playlist.id === playlistId)?.trackIds.length ?? 0
+  }
+}
 
 function onAggregatePlaylistCreated(_playlistId: string, addedCount: number): void {
-  createAggregateTracks.value = []
+  createAggregateSource.value = null
   repairMessage.value = addedCount > 0 ? `已创建聚合歌单并加入 ${addedCount} 首` : '已创建聚合歌单'
 }
 
 useEscapeToClose(showContextMenu, closeContextMenu)
+
+// Query totals can arrive while out-in still displays the previous (shorter)
+// table. Wait for the new view before restoring a deep absolute position.
+const scrollViewReady = ref(true)
+watch(
+  currentLibraryViewKey,
+  () => {
+    scrollViewReady.value = false
+  },
+  { flush: 'sync' }
+)
 
 const {
   containerRef,
   tbodyRef,
   rowHeight,
   visibleRange,
-  visibleTracks,
+  visibleTracks: legacyVisibleTracks,
   totalHeight,
   paddingTop,
   onScroll,
   updateViewportHeight,
   restoreScrollAndMeasure,
+  scrollToTrack,
   scrollTop,
   viewportHeight
 } = useSongListVirtualScroll({
-  displayTracks,
+  displayTracks: tableTracks,
+  itemCount: tableTrackCount,
+  restoreReady: computed(
+    () =>
+      scrollViewReady.value &&
+      (!databaseTableCandidate.value ||
+        libraryStorage.mode.value === 'json' ||
+        (databaseTableEnabled.value && databasePageState.value.total !== null)) &&
+      (!databaseGridKind.value ||
+        libraryStorage.mode.value === 'json' ||
+        (databaseGridEnabled.value && databaseCollectionState.value.total !== null))
+  ),
   resetSources: [],
   viewIdentity: currentLibraryViewKey,
   viewKey: computed(() =>
     JSON.stringify([
       currentLibraryViewKey.value,
       debouncedSearchQuery.value,
-      libraryViewState.value
+      libraryViewState.value,
+      databaseGridEnabled.value ? collectionViewState.value : null
     ])
   ),
   shouldResetOnSearch: showTable,
@@ -1006,15 +1705,241 @@ const {
 })
 void containerRef.value
 void tbodyRef.value
+const visibleTracks = computed(() =>
+  databaseTableEnabled.value
+    ? Array.from(
+        { length: visibleRange.value.end - visibleRange.value.start },
+        (_, index) =>
+          databasePages.trackAt(visibleRange.value.start + index) as unknown as Track | undefined
+      )
+    : legacyVisibleTracks.value
+)
+watch(
+  [visibleRange, databaseTableEnabled, () => databasePageState.value.total],
+  ([range, enabled, total]) => {
+    if (enabled && total !== null) databasePages.setRange(range.start, range.end)
+  },
+  { flush: 'post' }
+)
 
+const providerTrackCovers = shallowRef(new Map<string, ProviderTrackCover | null>())
+const providerCoverRequests = new Map<string, Promise<void>>()
+const providerCoverTails = new Map<string, Promise<unknown>>()
+const providerCoverController = new AbortController()
+async function resolveMissingTrackCover(track: Track): Promise<void> {
+  if (track.cover || track.coverSource || track.coverSmall || track.coverSmallSource) return
+  const source = getLogicalTrackSource(track)
+  if (
+    !source ||
+    source === 'local' ||
+    providerTrackCovers.value.has(track.id) ||
+    providerCoverRequests.has(track.id)
+  )
+    return
+  const provider = mediaProviders.get(source)
+  if (!provider?.searchSongs) return
+  const previous = providerCoverTails.get(source) ?? Promise.resolve()
+  const task = previous
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        if (provider.isEnabled && !(await provider.isEnabled())) return
+        const cover = await findExactProviderTrackCover(
+          track,
+          provider,
+          providerCoverController.signal
+        )
+        if (providerCoverController.signal.aborted) return
+        const next = new Map(providerTrackCovers.value)
+        next.set(track.id, cover)
+        while (next.size > 400) next.delete(next.keys().next().value!)
+        providerTrackCovers.value = next
+      } catch {
+        if (!providerCoverController.signal.aborted) {
+          const next = new Map(providerTrackCovers.value)
+          next.set(track.id, null)
+          providerTrackCovers.value = next
+        }
+      } finally {
+        await new Promise((resolve) => setTimeout(resolve, 180))
+      }
+    })
+  providerCoverTails.set(source, task)
+  providerCoverRequests.set(
+    track.id,
+    task.then(() => undefined)
+  )
+  try {
+    await providerCoverRequests.get(track.id)
+  } finally {
+    providerCoverRequests.delete(track.id)
+    if (providerCoverTails.get(source) === task) providerCoverTails.delete(source)
+  }
+}
+function displayTrackCover(track: Track): string | null {
+  return (
+    track.coverSmall ||
+    track.cover ||
+    providerTrackCovers.value.get(track.id)?.coverSmall ||
+    providerTrackCovers.value.get(track.id)?.cover ||
+    null
+  )
+}
+function displayTrackCoverSource(track: Track): string | null {
+  return (
+    track.coverSmallSource ||
+    track.coverSource ||
+    providerTrackCovers.value.get(track.id)?.coverSmallSource ||
+    providerTrackCovers.value.get(track.id)?.coverSource ||
+    null
+  )
+}
+watch(
+  visibleTracks,
+  (items) => {
+    for (const track of items) if (track) void resolveMissingTrackCover(track)
+  },
+  { immediate: true }
+)
+onBeforeUnmount(() => providerCoverController.abort())
+
+const databaseQuerySelection = computed(() =>
+  databaseTableEnabled.value && databaseQuery.value
+    ? {
+        total: tableTrackCount.value,
+        positions: new Map(
+          tableTracks.value.map((track) => [
+            tableTrackKey(track),
+            tableRowPositions.value.get(toRaw(track)) ?? -1
+          ])
+        )
+      }
+    : null
+)
 const multiSelect = useTrackMultiSelect({
-  tracks: displayTracks,
-  resetSources: [() => props.category, () => props.filter, debouncedSearchQuery, recentSource],
-  enabled: showTable
+  tracks: tableTracks,
+  keyForTrack: tableTrackKey,
+  querySelection: () => {
+    const query = databaseQuerySelection.value
+    return query
+      ? { total: query.total, positionForKey: (key) => query.positions.get(key) ?? null }
+      : null
+  },
+  root: containerRef,
+  resetSources: [
+    () => props.category,
+    () => props.filter,
+    debouncedSearchQuery,
+    recentSource,
+    databasePages.selectionEpoch
+  ],
+  enabled: showTable,
+  preserveSelectedTracks: () => databaseTableEnabled.value,
+  snapshotTrack: snapshotSelectedTableTrack,
+  selectionOrder: (track, index) => tableRowPositions.value.get(toRaw(track)) ?? index,
+  rangeContext: () => databaseWindowPages.value.map((page) => page.offset).join(':')
 })
 
 const { selectedCount, hasSelection, isSelected, clearSelection, toggle, getSelectedTracks } =
   multiSelect
+watch(() => databasePageState.value.generation, closeContextMenu)
+
+// SQL action intent contains positions, not a renderer copy of the full result.
+// Legacy explicit cross-window callers can still supply retained absolute
+// positions; query-mode consumers never request the selected Track array.
+function captureActionSource(actionTracks?: Track[]): SongListActionSource {
+  const unavailable = (message: string) => {
+    repairMessage.value = message
+    return createSongListActionSource({ rows: [] }, () => {
+      throw new Error(message)
+    })
+  }
+  const selectionVersion = multiSelect.selectionVersion.value
+  const view = currentLibraryViewKey.value
+  const mode = libraryStorage.mode.value
+  const queryKey = JSON.stringify(databaseQuery.value)
+  const guard = () => {
+    if (
+      view !== currentLibraryViewKey.value ||
+      mode !== libraryStorage.mode.value ||
+      queryKey !== JSON.stringify(databaseQuery.value) ||
+      selectionVersion !== multiSelect.selectionVersion.value
+    )
+      throw new Error('歌曲选择或视图已变化，请重新操作')
+  }
+  if (databaseTableEnabled.value) {
+    const page = databasePageState.value.page
+    const query = databaseQuery.value
+    const total = databasePageState.value.total
+    if (!page || !query || total === null) return unavailable('歌曲查询尚未准备完成，请稍后重试')
+    let ranges: LibrarySelectionRange[] =
+      actionTracks === undefined ? (multiSelect.getSelectedRanges() ?? []) : []
+    if (actionTracks !== undefined || multiSelect.getSelectedRanges() === null) {
+      for (const track of actionTracks ?? getSelectedTracks()) {
+        const position =
+          selectedTableRows.get(toRaw(track))?.position ?? tableRowPositions.value.get(toRaw(track))
+        if (position === undefined || position < 0 || position >= total)
+          return unavailable('所选歌曲位置已失效，请重新选择')
+        ranges = addSelectionRange(ranges, position, position + 1)
+      }
+    }
+    return createSongListActionSource(
+      {
+        api: window.api.library.database,
+        request: {
+          query: { ...query, contentRevision: page.revision },
+          total,
+          ranges
+        }
+      },
+      guard
+    )
+  }
+  return createSongListActionSource(
+    {
+      rows: (actionTracks ?? getSelectedTracks()).map((track) => ({
+        track,
+        definitionId: track.id
+      }))
+    },
+    guard
+  )
+}
+
+let activeSelectionAction: AbortController | null = null
+watch([currentLibraryViewKey, () => libraryStorage.mode.value], () =>
+  activeSelectionAction?.abort()
+)
+onBeforeUnmount(() => activeSelectionAction?.abort())
+async function withActionSource(
+  source: SongListActionSource,
+  action: (lease: SongListActionLease, signal: AbortSignal) => Promise<void | boolean>,
+  clear = false
+): Promise<boolean> {
+  if (libraryMutationPending.value || !source.count) return false
+  const version = multiSelect.selectionVersion.value
+  const controller = new AbortController()
+  activeSelectionAction = controller
+  libraryMutationPending.value = true
+  closeContextMenu()
+  try {
+    const lease = await source.open(controller.signal)
+    try {
+      source.guard()
+      const completed = (await action(lease, controller.signal)) !== false
+      if (completed && clear && multiSelect.selectionVersion.value === version) clearSelection()
+      return completed
+    } finally {
+      await lease.close()
+    }
+  } catch (error) {
+    repairMessage.value = error instanceof Error ? error.message : '所选歌曲操作失败'
+    return false
+  } finally {
+    activeSelectionAction = null
+    libraryMutationPending.value = false
+  }
+}
 
 const {
   playlistImportInput,
@@ -1042,17 +1967,25 @@ const {
   currentPlaylist,
   isPlaylistDetail,
   repairMessage,
-  getSelectedTracks,
-  isSelected,
+  getSelectedTracks: () => getSelectedTracks().map(playlistDefinitionTrack),
+  isSelected: (id) => getSelectedTracks().some((track) => playlistDefinitionTrack(track).id === id),
   clearSelection,
+  definitionTrack: playlistDefinitionTrack,
+  streamingSelection: {
+    enabled: () => databaseTableEnabled.value,
+    capture: (track) =>
+      captureActionSource(track && !isSelected(tableTrackKey(track)) ? [track] : undefined),
+    run: withActionSource
+  },
   selectPlaylist: (name) => emit('selectView', 'playlists', `playlist:${name}`)
 })
 void playlistImportInput.value
 void playlistCoverInput.value
 
-const pendingBatchCreateTracks = ref<Track[]>([])
+const pendingBatchCreateSource = shallowRef<SongListActionSource | null>(null)
 
-function absoluteIndex(indexInVisible: number): number {
+function absoluteIndex(indexInVisible: number, track?: Track): number {
+  if (databaseTableEnabled.value && track) return tableTracks.value.indexOf(toRaw(track))
   return visibleRange.value.start + indexInVisible
 }
 
@@ -1061,20 +1994,28 @@ function onRowClick(track: Track, indexInVisible: number, event: MouseEvent): vo
   if (target.closest('.btn-remove')) return
   if (target.closest('.track-select-checkbox')) return
   if (event.detail > 1) return
-  const index = absoluteIndex(indexInVisible)
+  const index = absoluteIndex(indexInVisible, track)
   const result = multiSelect.onRowClick(track, index, event)
   if (result !== 'play') return
-  if (track.source === 'network') {
+  if (track.source === 'network' && !databaseTableEnabled.value) {
     void playNetworkTrack(track)
     return
   }
   if (settingsStore.settings.value.trackActivationMode === 'doubleClick') return
-  playTrack(track, displayTracks.value)
+  playTableTrack(track)
+}
+
+function onRowKeydown(track: Track, index: number, event: KeyboardEvent): void {
+  const action = trackRowKeyAction(event)
+  if (action === 'select') toggle(tableTrackKey(track), absoluteIndex(index, track), track)
+  if (action !== 'play') return
+  if (track.source === 'network' && !databaseTableEnabled.value) void playNetworkTrack(track)
+  else playTableTrack(track)
 }
 
 function onTrackSelectToggle(track: Track, indexInVisible: number, event: Event): void {
   event.stopPropagation()
-  toggle(track.id, absoluteIndex(indexInVisible))
+  toggle(tableTrackKey(track), absoluteIndex(indexInVisible, track), track)
 }
 
 function onTrackContextMenu(event: MouseEvent, track: Track): void {
@@ -1087,7 +2028,10 @@ function customizeLibraryAppearance(): void {
 }
 
 const contextUsesSelection = computed(
-  () => !!selectedTrack.value && isSelected(selectedTrack.value.id) && selectedCount.value > 0
+  () =>
+    !!selectedTrack.value &&
+    isSelected(tableTrackKey(selectedTrack.value)) &&
+    selectedCount.value > 0
 )
 const contextActionTracks = computed(() =>
   contextUsesSelection.value
@@ -1096,46 +2040,77 @@ const contextActionTracks = computed(() =>
       ? [selectedTrack.value]
       : []
 )
-const contextActionCount = computed(() => contextActionTracks.value.length)
+function contextTracksForAction(): Track[] | undefined {
+  return contextUsesSelection.value ? undefined : selectedTrack.value ? [selectedTrack.value] : []
+}
+const contextActionCount = computed(() =>
+  contextUsesSelection.value ? selectedCount.value : selectedTrack.value ? 1 : 0
+)
 const contextActionLabel = computed(() =>
   contextActionCount.value > 1 ? ` (${contextActionCount.value})` : ''
 )
 
 async function handleContextCopyTrackNames(): Promise<void> {
-  const tracks = contextActionTracks.value
-  closeContextMenu()
-  await copyTrackNames(tracks)
+  const source = captureActionSource(contextTracksForAction())
+  await withActionSource(source, async (lease) => {
+    await copyTrackNamePages(lease.tracks)
+  })
 }
 
 const contextAllFavorited = computed(() => {
+  if (databaseTableEnabled.value && contextUsesSelection.value) return null
   const targets = contextActionTracks.value
   return targets.length > 0 && targets.every((track) => isFavoriteTrack(track))
 })
-const contextLocalTrackCount = computed(
-  () => selectLocalLibraryActionTracks(contextActionTracks.value).length
+const contextLocalTrackCount = computed(() =>
+  databaseTableEnabled.value && contextUsesSelection.value
+    ? null
+    : selectLocalLibraryActionTracks(contextActionTracks.value).length
 )
 const contextLocalActionLabel = computed(() =>
-  contextLocalTrackCount.value > 1 ? ` (${contextLocalTrackCount.value})` : ''
+  contextLocalTrackCount.value !== null && contextLocalTrackCount.value > 1
+    ? ` (${contextLocalTrackCount.value})`
+    : ''
 )
 
-const selectionActionTracks = computed(() => getSelectedTracks())
 const selectionAllFavorited = computed(() => {
-  const selected = selectionActionTracks.value
+  if (databaseTableEnabled.value) return null
+  const selected = getSelectedTracks()
   return selected.length > 0 && selected.every((track) => isFavoriteTrack(track))
 })
-const selectedLocalTrackCount = computed(
-  () => selectLocalLibraryActionTracks(selectionActionTracks.value).length
+const selectedLocalTrackCount = computed(() =>
+  databaseTableEnabled.value ? null : selectLocalLibraryActionTracks(getSelectedTracks()).length
 )
 const localSelectionActionLabel = computed(() =>
-  selectedLocalTrackCount.value > 1 ? ` (${selectedLocalTrackCount.value})` : ''
+  selectedLocalTrackCount.value !== null && selectedLocalTrackCount.value > 1
+    ? ` (${selectedLocalTrackCount.value})`
+    : ''
 )
 
 async function runLocalLibraryRemoval(
   mode: 'library' | 'trash',
-  actionTracks: Track[] = selectionActionTracks.value
+  actionTracks?: Track[]
 ): Promise<void> {
   if (libraryMutationPending.value) return
-  const selected = selectLocalLibraryActionTracks(actionTracks)
+  if (databaseTableEnabled.value) {
+    const source = captureActionSource(actionTracks)
+    await withActionSource(
+      source,
+      async (lease, signal) => {
+        if (!lease.fileCount) return false
+        const prompt =
+          mode === 'library'
+            ? `确定从音乐库移除选中的 ${lease.fileCount} 个本地文件？\n文件仍保留在磁盘；共享文件中的 CUE 曲目会一并移除，可在「已从音乐库移除」中恢复。`
+            : `确定将选中的 ${lease.fileCount} 个本地文件移到系统回收站吗？共享文件中的 CUE 曲目会一并移除；失败的文件会继续保留在音乐库中。`
+        if (!window.confirm(prompt)) return false
+        await removeDatabaseSelectionFiles(lease, mode, signal)
+        return true
+      },
+      true
+    )
+    return
+  }
+  const selected = selectLocalLibraryActionTracks(actionTracks ?? getSelectedTracks())
   if (selected.length === 0) return
   if (
     mode === 'library' &&
@@ -1175,6 +2150,58 @@ async function runLocalLibraryRemoval(
   } finally {
     libraryMutationPending.value = false
   }
+}
+
+async function removeDatabaseSelectionFiles(
+  lease: SongListActionLease,
+  mode: 'library' | 'trash',
+  signal: AbortSignal
+): Promise<void> {
+  let removed = 0,
+    failed = 0
+  const details: string[] = []
+  try {
+    await lease.forEachPage(async (rows) => {
+      if (signal.aborted) throw new Error('选择操作已取消')
+      if (mode === 'trash')
+        await prepareLocalTracksForRemoval(
+          rows.map(({ track }) => track.id),
+          rows.map(({ track }) => track.filePath)
+        )
+      if (signal.aborted) throw new Error('选择操作已取消')
+      const result = await window.api.library.database.removeFiles({
+        mode,
+        items: rows.map(({ track, version, instance }) => {
+          if (version === undefined || instance === undefined)
+            throw new Error('本地文件选择缺少版本身份，请重新选择')
+          return {
+            id: track.id,
+            filePath: track.filePath,
+            title: track.title,
+            artist: track.artist,
+            expectedVersion: version,
+            expectedInstance: instance
+          }
+        })
+      })
+      // Confirmed results are published before another page is read. Never
+      // retain the entire removal result or replay a lost destructive reply.
+      removed += result.removedTrackIds.length
+      failed += result.failures.length
+      for (const failure of result.failures)
+        if (details.length < 8) details.push(`${failure.filePath}\n${failure.message}`)
+      notifyLocalTracksUnavailable(result.removedTrackIds, result.removedFilePaths)
+      databasePages.invalidate(result.metadata.revision)
+    }, 'files')
+  } catch (error) {
+    databasePages.invalidate()
+    throw new Error(
+      `已确认移除 ${removed} 首，${failed} 项失败；操作中断，请刷新后检查，不要直接重试未知批次：${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  const action = mode === 'trash' ? '移到回收站' : '从音乐库移除'
+  repairMessage.value = `${action} ${removed} 首${failed ? `，${failed} 项失败` : ''}`
+  if (details.length) window.alert(`${action}未全部完成：\n\n${details.join('\n\n')}`)
 }
 
 async function handleRestoreExclusions(filePaths: string[]): Promise<void> {
@@ -1223,96 +2250,198 @@ function formatExcludedAt(value: string): string {
   return Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp).toLocaleString() : ''
 }
 
-function appendActionTracksToQueue(actionTracks: Track[]): void {
-  if (actionTracks.length === 0) return
-  playbackStore.appendQueueTracks(actionTracks)
-  repairMessage.value = `已添加 ${actionTracks.length} 首到播放队列`
-  clearSelection()
+async function appendActionTracksToQueue(actionTracks?: Track[]): Promise<void> {
+  if (actionTracks?.length === 0 || libraryMutationPending.value) return
+  if (databaseTableEnabled.value) {
+    const source = captureActionSource(actionTracks)
+    await withActionSource(
+      source,
+      async (lease, signal) => {
+        await playbackStore.appendLibraryQueuePages(
+          async (append) => {
+            await lease.forEachPage((rows) =>
+              append(
+                rows.map(({ track }) => ({
+                  id: track.id,
+                  ...(getTrackSource(track) === 'local'
+                    ? {}
+                    : { snapshot: toPlaylistTrackSnapshot(track) as unknown as LibraryTrackRecord })
+                }))
+              )
+            )
+          },
+          true,
+          { signal, guard: source.guard }
+        )
+        repairMessage.value = `已添加 ${lease.count} 首到播放队列`
+      },
+      true
+    )
+    return
+  }
+  const selectionIntent = multiSelect.selectionVersion.value
+  const selected = actionTracks ?? getSelectedTracks()
+  libraryMutationPending.value = true
   closeContextMenu()
+  try {
+    await playbackStore.appendQueueTracksAsync(selected)
+    repairMessage.value = `已添加 ${selected.length} 首到播放队列`
+    if (multiSelect.selectionVersion.value === selectionIntent) clearSelection()
+  } catch (error) {
+    repairMessage.value = error instanceof Error ? error.message : '添加到播放队列失败'
+  } finally {
+    libraryMutationPending.value = false
+  }
 }
 
-function removeActionTracksFromCurrentPlaylist(actionTracks: Track[]): void {
+async function removeActionTracksFromCurrentPlaylist(actionTracks?: Track[]): Promise<void> {
   const playlistName = currentPlaylistName.value
-  if (!playlistName || actionTracks.length === 0) return
+  if (!playlistName || actionTracks?.length === 0) return
+  if (databaseTableEnabled.value) {
+    const playlist = currentPlaylist.value
+    if (!playlist) return
+    const source = captureActionSource(actionTracks)
+    await withActionSource(
+      source,
+      async (lease, signal) => {
+        const removed = await removeTrackIdPagesFromPlaylistById(playlist.id, lease.ids, signal)
+        repairMessage.value = `已从歌单移除 ${removed} 首`
+      },
+      true
+    )
+    return
+  }
   removeTracksFromPlaylist(
     playlistName,
-    actionTracks.map((track) => track.id)
+    (actionTracks ?? getSelectedTracks()).map((track) => playlistDefinitionTrack(track).id)
   )
   clearSelection()
   closeContextMenu()
 }
 
 function handleBatchRemoveFromPlaylist(): void {
-  removeActionTracksFromCurrentPlaylist(selectionActionTracks.value)
+  void removeActionTracksFromCurrentPlaylist()
 }
 
-function favoriteActionTracks(actionTracks: Track[]): void {
-  if (actionTracks.length === 0) return
-  if (actionTracks.every((track) => isFavoriteTrack(track))) {
-    setFavoriteTracks(actionTracks, false)
+async function favoriteActionTracks(actionTracks?: Track[]): Promise<void> {
+  if (actionTracks?.length === 0) return
+  if (databaseTableEnabled.value) {
+    const source = captureActionSource(actionTracks)
+    await withActionSource(source, async (lease, signal) => {
+      const state = await readFavoriteTrackPages(lease.tracks, signal)
+      const favorite = state.favoriteCount !== state.count
+      const changed = await setFavoriteTrackPages(lease.tracks, favorite, signal)
+      repairMessage.value = favorite
+        ? `已加入应用收藏 ${changed} 首`
+        : `已移出应用收藏 ${changed} 首`
+    })
+    return
+  }
+  const selected = actionTracks ?? getSelectedTracks()
+  if (selected.every((track) => isFavoriteTrack(track))) {
+    setFavoriteTracks(selected, false)
   } else {
-    setFavoriteTracks(actionTracks, true)
+    setFavoriteTracks(selected, true)
   }
   closeContextMenu()
 }
 
 function handleBatchFavorite(): void {
-  favoriteActionTracks(selectionActionTracks.value)
+  void favoriteActionTracks()
 }
 
-function addActionTracksToPlaylist(playlistName: string, actionTracks: Track[]): void {
-  if (actionTracks.length === 0) return
-  addTracksToPlaylist(playlistName, actionTracks)
+async function addActionTracksToPlaylist(
+  playlistName: string,
+  actionTracks?: Track[]
+): Promise<void> {
+  if (actionTracks?.length === 0) return
+  if (databaseTableEnabled.value) {
+    const playlist = localPlaylists.value.find((item) => item.name === playlistName)
+    if (!playlist) return
+    await addActionSourceToPlaylist(playlist.id, captureActionSource(actionTracks))
+    return
+  }
+  addTracksToPlaylist(playlistName, actionTracks ?? getSelectedTracks())
   closeContextMenu()
 }
 
-function handleBatchCreatePlaylistFromMenu(actionTracks: Track[]): void {
-  if (actionTracks.length === 0) return
-  pendingBatchCreateTracks.value = actionTracks
-  openCreatePlaylistDialog(actionTracks[0])
+async function addActionSourceToPlaylist(
+  playlistId: string,
+  source: SongListActionSource
+): Promise<void> {
+  await withActionSource(source, async (lease, signal) => {
+    const added = await addTrackPagesToPlaylistById(playlistId, lease.tracks, signal)
+    repairMessage.value = added ? `已加入歌单 ${added} 首` : '歌单里已经有这些歌了'
+  })
+}
+
+function handleBatchCreatePlaylistFromMenu(actionTracks?: Track[]): void {
+  if (actionTracks?.length === 0) return
+  const source = captureActionSource(actionTracks)
+  if (!source.count) return
+  pendingBatchCreateSource.value = source
+  openCreatePlaylistDialog()
 }
 
 function dismissCreatePlaylistDialog(): void {
-  pendingBatchCreateTracks.value = []
+  pendingBatchCreateSource.value = null
   completeCreatePlaylistDialog()
 }
 
-function handleConfirmCreatePlaylist(): void {
+async function handleConfirmCreatePlaylist(): Promise<void> {
   const name = newPlaylistName.value.trim()
   if (!name) return
-  const batch = pendingBatchCreateTracks.value
-  if (batch.length > 0) {
-    createPlaylistWithTracks(name, batch)
-    pendingBatchCreateTracks.value = []
-    completeCreatePlaylistDialog()
-    clearSelection()
+  const source = pendingBatchCreateSource.value
+  if (source) {
+    const done = await withActionSource(
+      source,
+      async (lease, signal) => {
+        await createPlaylistWithTrackPages(
+          name,
+          async (append) => {
+            await lease.tracks(append)
+            return () => {
+              source.guard()
+              if (pendingBatchCreateSource.value !== source || !showCreatePlaylistDialog.value)
+                throw new Error('创建歌单已取消')
+            }
+          },
+          signal
+        )
+      },
+      true
+    )
+    if (done && pendingBatchCreateSource.value === source) {
+      pendingBatchCreateSource.value = null
+      completeCreatePlaylistDialog()
+    }
     return
   }
   handleCreatePlaylist()
 }
 
 function handleContextRemoveFromLibrary(): void {
-  void runLocalLibraryRemoval('library', contextActionTracks.value)
+  void runLocalLibraryRemoval('library', contextTracksForAction())
 }
 
 function handleContextMoveToTrash(): void {
-  void runLocalLibraryRemoval('trash', contextActionTracks.value)
+  void runLocalLibraryRemoval('trash', contextTracksForAction())
 }
 
 function handleContextRemoveFromPlaylist(): void {
-  removeActionTracksFromCurrentPlaylist(contextActionTracks.value)
+  void removeActionTracksFromCurrentPlaylist(contextTracksForAction())
 }
 
 function handleContextFavorite(): void {
-  favoriteActionTracks(contextActionTracks.value)
+  void favoriteActionTracks(contextTracksForAction())
 }
 
 function handleContextAddToPlaylist(playlistName: string): void {
-  addActionTracksToPlaylist(playlistName, contextActionTracks.value)
+  void addActionTracksToPlaylist(playlistName, contextTracksForAction())
 }
 
 function handleContextCreatePlaylist(): void {
-  handleBatchCreatePlaylistFromMenu(contextActionTracks.value)
+  handleBatchCreatePlaylistFromMenu(contextTracksForAction())
 }
 
 const canContinueFromBookmark = computed(() => {
@@ -1330,7 +2459,17 @@ function handleContinueFromBookmark(): void {
     playbackBookmarks.resumeBookmarkFor(track) ?? playbackBookmarks.bookmarksFor(track)[0]
   if (!resume) return
   closeContextMenu()
-  playTrackFromPosition(track, resume.positionSeconds, displayTracks.value)
+  if (databaseTableEnabled.value) {
+    const query = databasePlaybackQuery(track)
+    if (query)
+      void playbackStore.playLibraryQuery(
+        query,
+        track.id,
+        databasePlaybackOptions(query, {
+          positionSeconds: resume.positionSeconds
+        })
+      )
+  } else playTrackFromPosition(track, resume.positionSeconds, displayTracks.value)
 }
 
 function handleToolbarRemoveFromLibrary(): void {
@@ -1345,11 +2484,29 @@ function handleToolbarFavorite(): void {
   handleBatchFavorite()
 }
 
-function openTagManager(initialView: 'edit' | 'duplicates' = 'edit'): void {
-  const selected = selectLocalLibraryActionTracks(getSelectedTracks())
+async function openTagManager(initialView: 'edit' | 'duplicates' = 'edit'): Promise<void> {
+  if (databaseTableEnabled.value && initialView === 'edit') {
+    const source = captureActionSource()
+    await withActionSource(source, async (lease) => {
+      const selected = await readSongListTagTargets(lease)
+      source.guard()
+      if (!selected.length) return
+      tagManagerFocusRestoreTarget.value =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null
+      tagManagerTracks.value = selected
+      tagManagerContentRevision.value = lease.revision ?? null
+      tagManagerInitialView.value = initialView
+      showTagManager.value = true
+    })
+    return
+  }
+  const selected = databaseTableEnabled.value
+    ? []
+    : selectLocalLibraryActionTracks(getSelectedTracks())
   tagManagerFocusRestoreTarget.value =
     document.activeElement instanceof HTMLElement ? document.activeElement : null
   tagManagerTracks.value = selected
+  tagManagerContentRevision.value = null
   tagManagerInitialView.value = initialView
   showTagManager.value = true
   closeContextMenu()
@@ -1366,9 +2523,30 @@ function openLibraryDuplicates(): void {
   openTagManager('duplicates')
 }
 
-function openMusicVersions(): void {
-  showMusicVersions.value = true
+async function openMusicVersions(): Promise<void> {
+  if (musicVersionsOpening.value) return
   libraryToolsMenuOpen.value = false
+  musicVersionsOpening.value = true
+  const view = currentLibraryViewKey.value
+  try {
+    musicVersionsInitialTrack.value = undefined
+    if (isAlbumDetail.value) {
+      if (!props.previewTracks && libraryStorage.mode.value !== 'json') {
+        if (libraryStorage.mode.value !== 'sqlite') throw new Error('无法确认曲库存储，请重试读取')
+        const page = await window.api.library.database.queryTracks({
+          albumId: props.filter!.slice(6),
+          sort: 'trackNumber',
+          limit: 1
+        })
+        if (page.tracks[0]) musicVersionsInitialTrack.value = libraryTrack(page.tracks[0])
+      } else musicVersionsInitialTrack.value = displayTracks.value[0]
+    }
+    if (view === currentLibraryViewKey.value) showMusicVersions.value = true
+  } catch (error) {
+    repairMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    musicVersionsOpening.value = false
+  }
 }
 
 function openLibraryInbox(): void {
@@ -1390,24 +2568,66 @@ function closeTagManager(): void {
   })
 }
 
-function applyTagManagerWrite(filePaths: string[], patch: LocalLibraryTagPatch): void {
+const pendingTagRecheckPaths = ref<string[]>([])
+const tagRecheckPending = ref(false)
+let tagRecheckGeneration = 0
+
+async function applyTagManagerWrite(
+  filePaths: string[],
+  patch: LocalLibraryTagPatch
+): Promise<void> {
+  if (!libraryStorage.mode.value) await libraryStorage.load()
+  if (!libraryStorage.mode.value) {
+    pendingTagRecheckPaths.value = [...new Set([...pendingTagRecheckPaths.value, ...filePaths])]
+    repairMessage.value = `标签已写入，无法确认曲库存储：${libraryStorage.error.value}`
+    return
+  }
+  if (libraryStorage.mode.value === 'sqlite') {
+    pendingTagRecheckPaths.value = [...new Set([...pendingTagRecheckPaths.value, ...filePaths])]
+    tagRecheckGeneration++
+    await recheckWrittenTags()
+    return
+  }
   const changed = applyLocalTagWrite(filePaths, patch)
   repairMessage.value =
     changed > 0 ? `已更新 ${changed} 首本地歌曲的本地视图` : '标签已写入，等待下次扫描刷新本地视图'
 }
 
+async function recheckWrittenTags(): Promise<void> {
+  if (tagRecheckPending.value || !pendingTagRecheckPaths.value.length) return
+  tagRecheckPending.value = true
+  const generation = tagRecheckGeneration
+  try {
+    await libraryStorage.load()
+    if (libraryStorage.mode.value !== 'sqlite')
+      throw new Error(libraryStorage.error.value || '请重新扫描已写入标签的文件夹')
+    repairMessage.value = '标签已写入，正在检查受影响目录'
+    const update = await scanLibraryDirectories({
+      directories: libraryDirectoriesForFiles(pendingTagRecheckPaths.value),
+      reason: 'tags'
+    })
+    if (update.state === 'completed' && generation === tagRecheckGeneration) {
+      pendingTagRecheckPaths.value = []
+      repairMessage.value = '标签检查已完成'
+    } else {
+      repairMessage.value = '标签检查尚未完成，可继续扫描或重试目录检查'
+    }
+  } catch (error) {
+    repairMessage.value = `标签已写入，目录检查未完成：${error instanceof Error ? error.message : String(error)}；可在当前扫描结束后重试`
+  } finally {
+    tagRecheckPending.value = false
+  }
+}
+
 const {
   filteredGridItems,
   gridTotalCount,
-  gridWindowStart,
+  visibleGridSlots,
+  gridDataRange,
+  gridRowGap,
   gridPaddingTop,
   gridPaddingBottom,
   showPlaylistCreateCard,
-  visibleArtists,
-  visibleAlbums,
-  visibleGenres,
-  visiblePlaylists,
-  visibleFolders,
   gridColumns,
   gridRowStride,
   gridOffsetTop,
@@ -1423,6 +2643,9 @@ const {
   transitionName: () => props.transitionName,
   debouncedSearchQuery,
   currentGridItems,
+  serverFiltered: databaseGridEnabled,
+  itemCount: computed(() => databaseCollectionState.value.total ?? 0),
+  itemAt: (index) => databaseCollections.itemAt(index),
   showGrid,
   updateViewportHeight,
   containerRef,
@@ -1430,7 +2653,18 @@ const {
   viewportHeight
 })
 
-const availableIndexLetters = computed(() => availableCollectionLetters(filteredGridItems.value))
+const availableIndexLetters = computed(() =>
+  databaseGridEnabled.value
+    ? new Set(Object.keys(databaseCollections.letterOffsets.value))
+    : availableCollectionLetters(filteredGridItems.value)
+)
+watch(
+  [gridDataRange, databaseGridEnabled, () => databaseCollectionState.value.total],
+  ([range, enabled, total]) => {
+    if (enabled && total !== null) databaseCollections.setRange(range.start, range.end)
+  },
+  { flush: 'post' }
+)
 
 useLocatePlayingTrack({
   containerRef,
@@ -1443,8 +2677,16 @@ useLocatePlayingTrack({
       : tracks.value
   ),
   currentTrack,
-  enabled: computed(() => showTable.value && !isSwitching.value),
-  rowHeight
+  enabled: computed(
+    () =>
+      showTable.value &&
+      !isSwitching.value &&
+      (!databaseTableEnabled.value ||
+        isPlaylistDetail.value ||
+        (!!currentTrack.value && getLogicalTrackSource(currentTrack.value) === 'local'))
+  ),
+  rowHeight,
+  database: { enabled: databaseTableEnabled, locate: locateCurrentTrack }
 })
 
 function collectionLetterDisabled(letter: string): boolean {
@@ -1453,6 +2695,13 @@ function collectionLetterDisabled(letter: string): boolean {
 
 function jumpToCollectionLetter(letter: string): void {
   if (!isCollectionGrid.value || collectionLetterDisabled(letter)) return
+  if (databaseGridEnabled.value) {
+    const index = databaseCollections.letterOffsets.value[letter]
+    if (index === undefined) return
+    renderGridThroughIndex(index)
+    activeCollectionLetter.value = letter
+    return
+  }
   const index = firstCollectionIndexForLetter(filteredGridItems.value, letter)
   if (index < 0) return
   activeCollectionLetter.value = letter
@@ -1461,14 +2710,22 @@ function jumpToCollectionLetter(letter: string): void {
 
 function updateActiveCollectionLetter(): void {
   if (!isCollectionGrid.value) return
-  const next =
-    collectionLetterAtScroll(
-      filteredGridItems.value,
-      scrollTop.value,
-      gridOffsetTop.value,
-      gridColumns.value,
-      gridRowStride.value
-    ) ?? collectionIndexLetter(filteredGridItems.value[0]?.name ?? '')
+  const index =
+    Math.max(
+      0,
+      Math.floor((scrollTop.value + 104 - gridOffsetTop.value) / Math.max(1, gridRowStride.value))
+    ) * Math.max(1, gridColumns.value)
+  const next = databaseGridEnabled.value
+    ? (Object.entries(databaseCollections.letterOffsets.value)
+        .filter(([, offset]) => offset <= index)
+        .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null)
+    : (collectionLetterAtScroll(
+        filteredGridItems.value,
+        scrollTop.value,
+        gridOffsetTop.value,
+        gridColumns.value,
+        gridRowStride.value
+      ) ?? collectionIndexLetter(filteredGridItems.value[0]?.name ?? ''))
   if (next === activeCollectionLetter.value) return
   activeCollectionLetter.value = next
 }
@@ -1488,11 +2745,9 @@ onBeforeUnmount(() => {
   collectionLetterFrame = null
 })
 
-watch([filteredGridItems, () => props.category], () => {
-  activeCollectionLetter.value = collectionIndexLetter(filteredGridItems.value[0]?.name ?? '')
-})
+watch([filteredGridItems, () => props.category], updateActiveCollectionLetter)
 
-watch([scrollTop, gridWindowStart], () => {
+watch([scrollTop, gridDataRange], () => {
   if (isCollectionGrid.value) updateActiveCollectionLetter()
 })
 
@@ -1513,11 +2768,56 @@ function openRowAlbum(track: Track): void {
 }
 
 const infoTrack = shallowRef<Track | null>(null)
+const sourcePickerTrack = shallowRef<Track | null>(null)
+
+function openSourcePicker(track: Track | null): void {
+  if (!track) return
+  sourcePickerTrack.value = track
+}
+
+function applySourceSelection(replacement: Track): void {
+  const original = sourcePickerTrack.value
+  if (!original) return
+  const replacedCount = replaceTrackReference(original.id, replacement)
+  repairMessage.value = replacedCount
+    ? `已切换到 ${replacement.source || '本地音乐'}：${replacement.title || original.title}`
+    : `已选择 ${replacement.title || original.title}，但没有需要替换的歌单引用`
+  sourcePickerTrack.value = null
+}
+
+function openSelectedSourcePicker(): void {
+  openSourcePicker(selectedTrack.value)
+  closeContextMenu()
+}
+
+function beginViewSwitch(): void {
+  scrollViewReady.value = false
+  onViewBeforeLeave()
+}
 
 function finishViewSwitchAndRestoreScroll(): void {
   finishViewSwitch()
+  scrollViewReady.value = true
   restoreScrollAndMeasure()
 }
+
+function locateCurrentTrack(): void {
+  if (databaseTableEnabled.value && currentTrack.value) {
+    databasePages.locate(currentTrack.value.id)
+    return
+  }
+  const index = tableTracks.value.findIndex((track) => track.id === currentTrack.value?.id)
+  if (index >= 0) scrollToTrack(index)
+}
+
+watch(
+  () => databasePageState.value.page,
+  (page) => {
+    if (!page || page.anchorIndex === undefined || page.anchorIndex < 0) return
+    void nextTick(() => scrollToTrack(page.anchorIndex!))
+  },
+  { flush: 'post' }
+)
 </script>
 
 <template>
@@ -1532,15 +2832,27 @@ function finishViewSwitchAndRestoreScroll(): void {
     :style="{ height: '100vh' }"
     @scroll="onSongListScroll"
   >
+    <div v-if="pendingTagRecheckPaths.length" class="tag-recheck-notice" role="status">
+      <span>{{ repairMessage }}</span>
+      <button type="button" :disabled="tagRecheckPending" @click="recheckWrittenTags">
+        {{ tagRecheckPending ? '检查中…' : '重试标签目录检查' }}
+      </button>
+    </div>
     <Teleport to="body">
       <NativeDialogTransition>
         <TrackInfoDialog v-if="infoTrack" :track="infoTrack" @close="infoTrack = null" />
       </NativeDialogTransition>
+      <TrackSourcePicker
+        v-if="sourcePickerTrack"
+        :track="sourcePickerTrack"
+        @close="sourcePickerTrack = null"
+        @select="applySourceSelection"
+      />
     </Teleport>
     <Transition
       :name="localTransitionName"
       mode="out-in"
-      @before-leave="onViewBeforeLeave"
+      @before-leave="beginViewSwitch"
       @after-enter="finishViewSwitchAndRestoreScroll"
       @enter-cancelled="finishViewSwitchAndRestoreScroll"
       @leave-cancelled="finishViewSwitchAndRestoreScroll"
@@ -1569,7 +2881,25 @@ function finishViewSwitchAndRestoreScroll(): void {
                     <option value="added-oldest">添加时间：最旧优先</option>
                   </select>
                 </label>
-                <label>
+                <label v-if="databaseGridEnabled">
+                  <span class="sr-only">按流派筛选</span>
+                  <input
+                    :value="collectionViewState.genre ?? ''"
+                    list="library-genre-suggestions"
+                    aria-label="按流派筛选"
+                    placeholder="全部流派（输入筛选）"
+                    title="从建议中选择或输入完整流派名，清空后显示全部流派"
+                    @input="setCollectionGenre(($event.target as HTMLInputElement).value)"
+                  />
+                  <datalist id="library-genre-suggestions">
+                    <option
+                      v-for="genre in databaseGenreState.page?.items ?? []"
+                      :key="genre.id"
+                      :value="genre.name"
+                    />
+                  </datalist>
+                </label>
+                <label v-else>
                   <span class="sr-only">按流派筛选</span>
                   <select
                     :value="collectionViewState.genre ?? ''"
@@ -1603,11 +2933,95 @@ function finishViewSwitchAndRestoreScroll(): void {
               </div>
             </div>
           </div>
-          <div v-if="category === 'artists' && artists.length === 0" class="empty-state">
+          <div v-if="databaseGridEnabled" class="database-page-controls" aria-label="分类读取状态">
+            <span role="status" aria-live="polite"
+              >{{
+                databaseCollectionState.total === null
+                  ? '正在读取总数'
+                  : gridStatsText || '共 0 项'
+              }}{{
+                databaseGridPending && databaseCollectionState.total !== null ? ' · 正在读取…' : ''
+              }}</span
+            >
+            <button
+              type="button"
+              class="selection-btn ghost"
+              :disabled="databaseGridPending"
+              @click="databaseCollections.invalidate()"
+            >
+              刷新
+            </button>
+          </div>
+          <p
+            v-if="databaseGridEnabled && isCollectionGrid && databaseGenreState.error"
+            class="repair-status"
+            role="status"
+          >
+            流派建议读取失败：{{ databaseGenreState.error }}
+            <button type="button" class="selection-btn" @click="databaseGenrePages.retry()">
+              重试
+            </button>
+          </p>
+          <p
+            v-if="databaseGridError && databaseCollectionState.total !== null"
+            class="repair-status"
+            role="alert"
+          >
+            {{ databaseGridError }}
+            <button type="button" class="selection-btn" @click="retryDatabaseCollections">
+              重试
+            </button>
+          </p>
+          <div
+            v-if="databaseGridError && databaseCollectionState.total === null"
+            class="empty-state"
+            role="alert"
+          >
+            <p class="empty-text">分类读取失败</p>
+            <p class="empty-hint">{{ databaseGridError }}</p>
+            <button type="button" class="selection-btn" @click="retryDatabaseCollections">
+              重试
+            </button>
+          </div>
+          <div
+            v-else-if="databaseGridPending && databaseCollectionState.total === null"
+            class="empty-state"
+            role="status"
+          >
+            <p class="empty-text">正在读取分类…</p>
+          </div>
+          <div
+            v-else-if="
+              databaseGridEnabled && category !== 'playlists' && collectionResultCount === 0
+            "
+            class="empty-state"
+          >
+            <p class="empty-text">
+              {{
+                searchQuery.trim() || (isCollectionGrid && collectionViewState.genre)
+                  ? '没有符合条件的分类'
+                  : '暂无内容'
+              }}
+            </p>
+            <p class="empty-hint">
+              {{
+                searchQuery.trim() || (isCollectionGrid && collectionViewState.genre)
+                  ? '请更改流派筛选或搜索条件'
+                  : '打开左侧菜单，点击「导入歌曲」添加本地音乐。'
+              }}
+            </p>
+          </div>
+          <div
+            v-else-if="!databaseGridEnabled && category === 'artists' && artists.length === 0"
+            class="empty-state"
+          >
             <p class="empty-text">暂无艺术家</p>
             <p class="empty-hint">打开左侧菜单，点击「导入歌曲」添加本地音乐。</p>
           </div>
-          <div v-else-if="category === 'albums' && albums.length === 0" class="empty-state">
+          <div
+            v-else-if="!databaseGridEnabled && category === 'albums' && albums.length === 0"
+            class="empty-state"
+          >
             <p class="empty-text">暂无专辑</p>
             <p class="empty-hint">打开左侧菜单，点击「导入歌曲」添加本地音乐。</p>
           </div>
@@ -1615,25 +3029,24 @@ function finishViewSwitchAndRestoreScroll(): void {
             <p class="empty-text">没有符合条件的{{ category === 'artists' ? '艺术家' : '专辑' }}</p>
             <p class="empty-hint">请更改流派筛选或搜索条件</p>
           </div>
-          <div v-else-if="category === 'genres' && genres.length === 0" class="empty-state">
+          <div
+            v-else-if="!databaseGridEnabled && category === 'genres' && genres.length === 0"
+            class="empty-state"
+          >
             <p class="empty-text">暂无流派</p>
             <p class="empty-hint">导入带流派标签的音乐，或完整重扫媒体库以回填</p>
           </div>
           <div
-            v-else-if="category === 'playlists' && localPlaylists.length === 0"
+            v-else-if="!databaseGridEnabled && category === 'folders' && folders.length === 0"
             class="empty-state"
           >
-            <p class="empty-text">暂无歌单</p>
-            <p class="empty-hint">点击下方卡片创建你的第一个歌单</p>
-          </div>
-          <div v-else-if="category === 'folders' && folders.length === 0" class="empty-state">
             <div class="empty-icon">
               <ThemeIcon class="empty-library-icon" icon-slot="library.folder" />
             </div>
             <p class="empty-text">暂无可显示的文件夹</p>
             <p class="empty-hint">打开左侧菜单，点击「导入歌曲」选择并扫描音乐文件夹。</p>
           </div>
-          <div v-else-if="gridTotalCount === 0" class="empty-state">
+          <div v-else-if="gridTotalCount === 0 && category !== 'playlists'" class="empty-state">
             <p class="empty-text">没有符合搜索条件的内容</p>
             <p class="empty-hint">请清除搜索内容后重试</p>
           </div>
@@ -1648,173 +3061,185 @@ function finishViewSwitchAndRestoreScroll(): void {
                 :style="{ height: `${gridPaddingTop}px` }"
                 aria-hidden="true"
               ></div>
-              <!-- Artist Cards -->
-              <template v-if="category === 'artists'">
-                <div
-                  v-for="(artist, index) in visibleArtists"
-                  :key="artist.name"
-                  class="artist-card"
-                  :data-collection-index="gridWindowStart + index"
-                  role="button"
-                  tabindex="0"
-                  @keydown="activateCollectionCard"
-                  :data-collection-letter="collectionIndexLetter(artist.name) ?? undefined"
-                  data-te-interactive
-                  @click="emit('selectView', 'artists', `artist:${artist.name}`)"
-                >
-                  <CoverImg
-                    v-if="artist.cover"
-                    :cover="artist.cover"
-                    class="artist-cover"
-                    alt="cover"
-                    loading="lazy"
-                  />
-                  <div v-else class="artist-cover-placeholder">
-                    <ThemeIcon class="library-placeholder-icon" icon-slot="library.artist" />
-                  </div>
-                  <div class="artist-name">{{ artist.name }}</div>
-                  <div class="artist-count">{{ artist.trackCount }} 首</div>
+              <!-- Create Playlist Card -->
+              <div
+                v-if="showPlaylistCreateCard"
+                class="playlist-card create-playlist-card"
+                role="button"
+                tabindex="0"
+                @keydown="activateCollectionCard"
+                data-te-interactive
+                @click="openCreatePlaylistDialog()"
+              >
+                <div class="playlist-cover-placeholder create-placeholder">
+                  <ThemeIcon class="library-placeholder-icon" icon-slot="library.add" />
                 </div>
-              </template>
-              <!-- Album Cards -->
-              <template v-if="category === 'albums'">
-                <AlbumCard
-                  v-for="(album, index) in visibleAlbums"
-                  :key="album.id"
-                  :album="album"
-                  :data-collection-index="gridWindowStart + index"
-                  :data-collection-letter="collectionIndexLetter(album.name) ?? undefined"
-                  @open="emit('selectView', 'albums', `album:${album.id}`)"
-                />
-              </template>
-              <!-- Genre Cards -->
-              <template v-if="category === 'genres'">
+                <div class="playlist-name">创建歌单</div>
+                <div class="playlist-count">点击创建新歌单</div>
+                <div class="playlist-source-summary" aria-hidden="true">&nbsp;</div>
+              </div>
+              <template
+                v-for="{ item, index } in visibleGridSlots"
+                :key="item ? (item.id ?? item.path ?? item.name) : `slot:${index}`"
+              >
                 <div
-                  v-for="genre in visibleGenres"
-                  :key="genre.name"
-                  class="artist-card"
-                  role="button"
-                  tabindex="0"
-                  @keydown="activateCollectionCard"
-                  data-te-interactive
-                  @click="emit('selectView', 'genres', `genre:${genre.name}`)"
-                >
-                  <CoverImg
-                    v-if="genre.cover"
-                    :cover="genre.cover"
-                    class="artist-cover"
-                    alt="cover"
-                    loading="lazy"
-                  />
-                  <div v-else class="artist-cover-placeholder">
-                    <ThemeIcon class="library-placeholder-icon" icon-slot="library.genre" />
-                  </div>
-                  <div class="artist-name">{{ genre.name }}</div>
-                  <div class="artist-count">{{ genre.trackCount }} 首</div>
-                </div>
-              </template>
-              <!-- Playlist Cards -->
-              <template v-if="category === 'playlists'">
-                <!-- Create Playlist Card -->
-                <div
-                  v-if="showPlaylistCreateCard"
-                  class="playlist-card create-playlist-card"
-                  role="button"
-                  tabindex="0"
-                  @keydown="activateCollectionCard"
-                  data-te-interactive
-                  @click="openCreatePlaylistDialog()"
-                >
-                  <div class="playlist-cover-placeholder create-placeholder">
-                    <ThemeIcon class="library-placeholder-icon" icon-slot="library.add" />
-                  </div>
-                  <div class="playlist-name">创建歌单</div>
-                  <div class="playlist-count">点击创建新歌单</div>
-                </div>
-                <div
-                  v-for="playlist in visiblePlaylists"
-                  :key="playlist.id"
-                  class="playlist-card"
-                  data-te-interactive
-                  :data-reorder-id="playlist.id"
-                  :class="{
-                    'is-dragging': localPlaylistReorder.active.value === playlist.id,
-                    'is-drop-target':
-                      localPlaylistReorder.over.value === playlist.id &&
-                      localPlaylistReorder.active.value !== playlist.id
-                  }"
-                  role="button"
-                  tabindex="0"
-                  title="长按拖动排序；Alt + ↑ / ↓ 调整顺序"
-                  @pointerdown="playlist.id && localPlaylistReorder.start($event, playlist.id)"
-                  @dragstart.prevent
-                  @keydown="localPlaylistKeydown($event, playlist)"
-                  @click="emit('selectView', 'playlists', `playlist:${playlist.name}`)"
-                >
-                  <CoverImg
-                    v-if="playlist.cover"
-                    :cover="playlist.cover"
-                    class="album-cover"
-                    alt="playlist cover"
-                    loading="lazy"
-                  />
-                  <div
-                    v-else
-                    class="playlist-cover-placeholder"
-                    :class="{ 'default-playlist-cover': playlist.isDefault }"
-                  >
-                    <i
-                      :class="playlist.isDefault ? 'pi pi-heart' : 'pi pi-list'"
-                      class="playlist-placeholder-icon"
-                    ></i>
-                  </div>
-                  <div class="playlist-name">{{ playlist.name }}</div>
-                  <div class="playlist-count">{{ playlist.trackIds?.length ?? 0 }} 首</div>
-                  <div v-if="playlistSourceSummaryLabel(playlist)" class="playlist-source-summary">
-                    {{ playlistSourceSummaryLabel(playlist) }}
-                  </div>
-                  <button
-                    v-if="!playlist.isDefault"
-                    type="button"
-                    class="playlist-delete-btn"
-                    data-te-interactive
-                    title="删除歌单"
-                    :aria-label="`删除歌单 ${playlist.name}`"
-                    @pointerdown.stop
-                    @keydown.stop
-                    @click.stop="handleDeletePlaylist(playlist.id || '', $event)"
-                  >
-                    <i
-                      class="pi pi-trash"
-                      style="font-size: calc(var(--te-font-size-body, 14px) * 12 / 14)"
-                    ></i>
-                  </button>
-                </div>
-              </template>
-              <template v-if="category === 'folders'">
-                <div
-                  v-for="folder in visibleFolders"
-                  :key="folder.path"
-                  class="playlist-card folder-card"
-                  role="button"
-                  tabindex="0"
-                  @keydown="activateCollectionCard"
-                  data-te-interactive
-                  @click="emit('selectView', 'folders', `folder:${folder.path}`)"
-                >
-                  <CoverImg
-                    v-if="folder.cover"
-                    :cover="folder.cover"
-                    class="album-cover"
-                    alt="cover"
-                    loading="lazy"
-                  />
-                  <div v-else class="playlist-cover-placeholder">
-                    <ThemeIcon class="library-placeholder-icon" icon-slot="library.folder" />
-                  </div>
-                  <div class="playlist-name">{{ folder.name }}</div>
-                  <div class="playlist-count">{{ folder.trackCount }} 首</div>
-                </div>
+                  v-if="!item"
+                  class="collection-card-placeholder"
+                  :style="{ height: `${Math.max(1, gridRowStride - gridRowGap)}px` }"
+                  aria-hidden="true"
+                ></div>
+                <template v-else>
+                  <!-- Artist Cards -->
+                  <template v-if="category === 'artists'">
+                    <div
+                      class="artist-card"
+                      :data-collection-index="index"
+                      role="button"
+                      tabindex="0"
+                      @keydown="activateCollectionCard"
+                      :data-collection-letter="collectionIndexLetter(item.name) ?? undefined"
+                      data-te-interactive
+                      @click="emit('selectView', 'artists', `artist:${item.name}`)"
+                    >
+                      <CoverImg
+                        v-if="item.cover"
+                        :cover="item.cover"
+                        class="artist-cover"
+                        alt="cover"
+                        loading="lazy"
+                      />
+                      <div v-else class="artist-cover-placeholder">
+                        <ThemeIcon class="library-placeholder-icon" icon-slot="library.artist" />
+                      </div>
+                      <div class="artist-name">{{ item.name }}</div>
+                      <div class="artist-count">{{ item.trackCount }} 首</div>
+                    </div>
+                  </template>
+                  <!-- Album Cards -->
+                  <template v-if="category === 'albums'">
+                    <AlbumCard
+                      :album="item"
+                      :data-collection-index="index"
+                      :data-collection-letter="collectionIndexLetter(item.name) ?? undefined"
+                      @open="emit('selectView', 'albums', `album:${item.id}`)"
+                    />
+                  </template>
+                  <!-- Genre Cards -->
+                  <template v-if="category === 'genres'">
+                    <div
+                      class="artist-card"
+                      role="button"
+                      tabindex="0"
+                      @keydown="activateCollectionCard"
+                      data-te-interactive
+                      @click="emit('selectView', 'genres', `genre:${item.name}`)"
+                    >
+                      <CoverImg
+                        v-if="item.cover"
+                        :cover="item.cover"
+                        class="artist-cover"
+                        alt="cover"
+                        loading="lazy"
+                      />
+                      <div v-else class="artist-cover-placeholder">
+                        <ThemeIcon class="library-placeholder-icon" icon-slot="library.genre" />
+                      </div>
+                      <div class="artist-name">{{ item.name }}</div>
+                      <div class="artist-count">{{ item.trackCount }} 首</div>
+                    </div>
+                  </template>
+                  <!-- Playlist Cards -->
+                  <template v-if="category === 'playlists'">
+                    <div
+                      class="playlist-card"
+                      data-te-interactive
+                      :data-reorder-id="item.id"
+                      :class="{
+                        'is-dragging': localPlaylistReorder.active.value === item.id,
+                        'is-drop-target':
+                          localPlaylistReorder.over.value === item.id &&
+                          localPlaylistReorder.active.value !== item.id
+                      }"
+                      role="button"
+                      tabindex="0"
+                      title="长按拖动排序；Alt + ↑ / ↓ 调整顺序"
+                      @pointerdown="item.id && localPlaylistReorder.start($event, item.id)"
+                      @dragstart.prevent
+                      @keydown="localPlaylistKeydown($event, item)"
+                      @click="emit('selectView', 'playlists', `playlist:${item.name}`)"
+                    >
+                      <CoverImg
+                        v-if="item.cover"
+                        :cover="item.cover"
+                        class="album-cover"
+                        alt="playlist cover"
+                        loading="lazy"
+                      />
+                      <div
+                        v-else
+                        class="playlist-cover-placeholder"
+                        :class="{ 'default-playlist-cover': item.isDefault }"
+                      >
+                        <i
+                          :class="item.isDefault ? 'pi pi-heart' : 'pi pi-list'"
+                          class="playlist-placeholder-icon"
+                        ></i>
+                      </div>
+                      <div class="playlist-name">{{ item.name }}</div>
+                      <div class="playlist-count">
+                        {{
+                          item.trackCount ??
+                          item.imported?.entries.length ??
+                          item.trackIds?.length ??
+                          0
+                        }}
+                        首
+                      </div>
+                      <div class="playlist-source-summary">
+                        {{ playlistSourceSummaryLabel(item) || '\u00a0' }}
+                      </div>
+                      <button
+                        v-if="!item.isDefault"
+                        type="button"
+                        class="playlist-delete-btn"
+                        data-te-interactive
+                        title="删除歌单"
+                        :aria-label="`删除歌单 ${item.name}`"
+                        @pointerdown.stop
+                        @keydown.stop
+                        @click.stop="handleDeletePlaylist(item.id || '', $event)"
+                      >
+                        <i
+                          class="pi pi-trash"
+                          style="font-size: calc(var(--te-font-size-body, 14px) * 12 / 14)"
+                        ></i>
+                      </button>
+                    </div>
+                  </template>
+                  <template v-if="category === 'folders'">
+                    <div
+                      class="playlist-card folder-card"
+                      role="button"
+                      tabindex="0"
+                      @keydown="activateCollectionCard"
+                      data-te-interactive
+                      @click="emit('selectView', 'folders', `folder:${item.path}`)"
+                    >
+                      <CoverImg
+                        v-if="item.cover"
+                        :cover="item.cover"
+                        class="album-cover"
+                        alt="cover"
+                        loading="lazy"
+                      />
+                      <div v-else class="playlist-cover-placeholder">
+                        <ThemeIcon class="library-placeholder-icon" icon-slot="library.folder" />
+                      </div>
+                      <div class="playlist-name">{{ item.name }}</div>
+                      <div class="playlist-count">{{ item.trackCount }} 首</div>
+                    </div>
+                  </template>
+                </template>
               </template>
               <div
                 v-if="gridPaddingBottom > 0"
@@ -1858,7 +3283,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     type="button"
                     class="btn-play-all"
                     title="播放全部"
-                    :disabled="displayTracks.length === 0"
+                    :disabled="tableTrackCount === 0 || databaseReadPending"
                     @click="playAllTracks"
                   >
                     <PlaybackIcon name="play" />
@@ -1868,7 +3293,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                     type="button"
                     class="btn-shuffle-all"
                     title="随机播放"
-                    :disabled="displayTracks.length === 0"
+                    :disabled="tableTrackCount === 0 || databaseReadPending"
                     @click="shufflePlayTracks"
                   >
                     <i class="ph ph-shuffle"></i>
@@ -2110,7 +3535,24 @@ function finishViewSwitchAndRestoreScroll(): void {
                     </label>
                     <label>
                       <span>采样率</span>
+                      <input
+                        v-if="databaseTableEnabled"
+                        type="number"
+                        min="1"
+                        :aria-label="'采样率（Hz）'"
+                        placeholder="全部"
+                        :value="libraryViewState.filters.sampleRate ?? ''"
+                        @change="
+                          setLibraryFilter(
+                            'sampleRate',
+                            Number(($event.target as HTMLInputElement).value) > 0
+                              ? Number(($event.target as HTMLInputElement).value)
+                              : null
+                          )
+                        "
+                      />
                       <select
+                        v-else
                         :value="libraryViewState.filters.sampleRate ?? ''"
                         @change="
                           setLibraryFilter(
@@ -2131,7 +3573,24 @@ function finishViewSwitchAndRestoreScroll(): void {
                     </label>
                     <label>
                       <span>位深</span>
+                      <input
+                        v-if="databaseTableEnabled"
+                        type="number"
+                        min="1"
+                        :aria-label="'位深（bit）'"
+                        placeholder="全部"
+                        :value="libraryViewState.filters.bitDepth ?? ''"
+                        @change="
+                          setLibraryFilter(
+                            'bitDepth',
+                            Number(($event.target as HTMLInputElement).value) > 0
+                              ? Number(($event.target as HTMLInputElement).value)
+                              : null
+                          )
+                        "
+                      />
                       <select
+                        v-else
                         :value="libraryViewState.filters.bitDepth ?? ''"
                         @change="
                           setLibraryFilter(
@@ -2152,7 +3611,21 @@ function finishViewSwitchAndRestoreScroll(): void {
                     </label>
                     <label>
                       <span>文件夹</span>
+                      <input
+                        v-if="databaseTableEnabled"
+                        type="text"
+                        aria-label="文件夹完整路径"
+                        placeholder="全部"
+                        :value="libraryViewState.filters.folder ?? ''"
+                        @change="
+                          setLibraryFilter(
+                            'folder',
+                            ($event.target as HTMLInputElement).value.trim() || null
+                          )
+                        "
+                      />
                       <select
+                        v-else
                         :value="libraryViewState.filters.folder ?? ''"
                         @change="
                           setLibraryFilter(
@@ -2173,7 +3646,21 @@ function finishViewSwitchAndRestoreScroll(): void {
                     </label>
                     <label>
                       <span>来源</span>
+                      <input
+                        v-if="databaseTableEnabled"
+                        type="text"
+                        aria-label="来源"
+                        placeholder="全部"
+                        :value="libraryViewState.filters.provider ?? ''"
+                        @change="
+                          setLibraryFilter(
+                            'provider',
+                            ($event.target as HTMLInputElement).value.trim() || null
+                          )
+                        "
+                      />
                       <select
+                        v-else
                         :value="libraryViewState.filters.provider ?? ''"
                         @change="
                           setLibraryFilter(
@@ -2224,10 +3711,58 @@ function finishViewSwitchAndRestoreScroll(): void {
             v-if="currentAlbum"
             :album="currentAlbum"
             :duration-text="albumDurationText"
-            :can-play="displayTracks.length > 0"
+            :can-play="tableTrackCount > 0 && !databaseReadPending"
             @play="playAllTracks"
             @shuffle="shufflePlayTracks"
           />
+          <p
+            v-if="databaseAlbumEnabled && databaseAlbumState.error"
+            class="repair-status"
+            role="alert"
+          >
+            专辑信息读取失败：{{ databaseAlbumState.error }}
+            <button type="button" class="selection-btn" @click="databaseAlbumPages.retry()">
+              重试
+            </button>
+          </p>
+          <nav
+            v-if="databaseTableEnabled"
+            class="database-page-controls database-track-window-status"
+            aria-label="曲库浏览"
+          >
+            <span>
+              {{
+                databasePageState.total === null
+                  ? '正在读取总数'
+                  : `共 ${databasePageState.total} 首`
+              }}
+              <template v-if="tableTrackCount > 0">
+                · {{ visibleRange.start + 1 }}–{{ visibleRange.end }}
+              </template>
+            </span>
+            <div class="database-page-actions">
+              <span v-if="databaseReadPending" role="status" aria-live="polite">正在读取…</span>
+              <button
+                v-if="databaseReadError"
+                type="button"
+                class="selection-btn"
+                @click="retryDatabaseRead"
+              >
+                重试
+              </button>
+              <button
+                type="button"
+                class="selection-btn ghost"
+                :disabled="databaseReadPending"
+                @click="databasePages.invalidate()"
+              >
+                刷新
+              </button>
+            </div>
+            <span v-if="databaseReadError && databasePageState.total !== null" role="alert">{{
+              databaseReadError
+            }}</span>
+          </nav>
           <div
             v-if="showUnifiedSearchStatus"
             class="unified-search-status"
@@ -2257,7 +3792,24 @@ function finishViewSwitchAndRestoreScroll(): void {
               </span>
             </div>
           </div>
-          <div v-if="displayTracks.length === 0" class="empty-state">
+          <div
+            v-if="databaseReadError && databasePageState.total === null"
+            class="empty-state"
+            role="alert"
+          >
+            <p class="empty-text">曲库读取失败</p>
+            <p class="empty-hint">{{ databaseReadError }}</p>
+            <button type="button" class="selection-btn" @click="retryDatabaseRead">重试</button>
+          </div>
+          <div
+            v-else-if="databaseReadPending && databasePageState.total === null"
+            class="empty-state"
+            role="status"
+            aria-live="polite"
+          >
+            <p class="empty-text">正在读取曲库…</p>
+          </div>
+          <div v-else-if="tableTrackCount === 0" class="empty-state">
             <div class="empty-icon">
               <ThemeIcon class="empty-library-icon" icon-slot="library.empty" />
             </div>
@@ -2287,15 +3839,25 @@ function finishViewSwitchAndRestoreScroll(): void {
               <span class="selection-count">已选择 {{ selectedCount }} 首</span>
               <div class="selection-actions">
                 <button
+                  v-if="databaseTableEnabled"
                   type="button"
                   class="selection-btn"
-                  @click="appendActionTracksToQueue(selectionActionTracks)"
+                  title="选中当前筛选和搜索结果中的全部歌曲，包含未加载的行"
+                  @click="multiSelect.selectAll()"
+                >
+                  <span>选中全部查询结果</span>
+                </button>
+                <button
+                  type="button"
+                  class="selection-btn"
+                  :disabled="libraryMutationPending"
+                  @click="appendActionTracksToQueue()"
                 >
                   <i class="pi pi-list"></i>
                   <span>添加到播放队列</span>
                 </button>
                 <button
-                  v-if="selectedLocalTrackCount > 0"
+                  v-if="selectedLocalTrackCount === null || selectedLocalTrackCount > 0"
                   type="button"
                   class="selection-btn"
                   @click="openLoudness(false, $event)"
@@ -2305,10 +3867,16 @@ function finishViewSwitchAndRestoreScroll(): void {
                 </button>
                 <button type="button" class="selection-btn" @click="handleToolbarFavorite">
                   <i :class="selectionAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
-                  <span>{{ selectionAllFavorited ? '移出应用收藏' : '加入应用收藏' }}</span>
+                  <span>{{
+                    selectionAllFavorited === null
+                      ? '切换应用收藏'
+                      : selectionAllFavorited
+                        ? '移出应用收藏'
+                        : '加入应用收藏'
+                  }}</span>
                 </button>
                 <button
-                  v-if="selectedLocalTrackCount > 0"
+                  v-if="selectedLocalTrackCount === null || selectedLocalTrackCount > 0"
                   type="button"
                   class="selection-btn"
                   :disabled="libraryMutationPending"
@@ -2354,7 +3922,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <span>移动到歌单</span>
                 </button>
                 <button
-                  v-if="selectedLocalTrackCount > 0"
+                  v-if="selectedLocalTrackCount === null || selectedLocalTrackCount > 0"
                   type="button"
                   class="selection-btn"
                   :disabled="libraryMutationPending"
@@ -2364,7 +3932,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <span>从音乐库移除</span>
                 </button>
                 <button
-                  v-if="selectedLocalTrackCount > 0"
+                  v-if="selectedLocalTrackCount === null || selectedLocalTrackCount > 0"
                   type="button"
                   class="selection-btn danger"
                   :disabled="libraryMutationPending"
@@ -2397,113 +3965,136 @@ function finishViewSwitchAndRestoreScroll(): void {
                 >
                   <td colspan="5"></td>
                 </tr>
-                <tr
+                <template
                   v-for="(track, index) in visibleTracks"
-                  :key="track.id"
-                  class="track-row"
-                  data-te-interactive
-                  :class="{
-                    'track-playing': currentTrack?.id === track.id,
-                    'track-selected': isSelected(track.id),
-                    'playlist-draggable': isPlaylistDetail
-                  }"
-                  :aria-current="currentTrack?.id === track.id ? 'true' : undefined"
-                  :style="{ height: rowHeight - 4 + 'px', display: 'flex' }"
-                  :draggable="isPlaylistDetail"
-                  @click="onRowClick(track, Number(index), $event)"
-                  @dblclick="onRowDblClick(track, $event)"
-                  @dragstart="handlePlaylistDragStart($event, track)"
-                  @dragover.prevent
-                  @drop="handlePlaylistDrop($event, track)"
-                  @contextmenu="onTrackContextMenu($event, track)"
+                  :key="track ? tableTrackKey(track) : `pending:${visibleRange.start + index}`"
                 >
-                  <td class="col-index">
-                    <span v-if="currentTrack?.id === track.id" class="playing-indicator">
-                      <ThemeIcon icon-slot="library.playing" />
-                    </span>
-                    <span v-else>{{ trackListNumber(track, Number(index)) }}</span>
-                  </td>
-                  <td class="col-cover">
-                    <div class="track-cover-cell" :class="{ 'has-selection': hasSelection }">
-                      <label
-                        v-if="hasSelection"
-                        class="track-select-checkbox"
-                        :title="isSelected(track.id) ? '取消选中' : '选中'"
-                        @click.stop
-                      >
-                        <input
-                          type="checkbox"
-                          :checked="isSelected(track.id)"
-                          :aria-label="`选中 ${track.title}`"
-                          @change="onTrackSelectToggle(track, Number(index), $event)"
+                  <tr
+                    v-if="track"
+                    class="track-row"
+                    data-te-interactive
+                    tabindex="0"
+                    :aria-label="`${track.title} · ${track.artist}，按回车播放，空格选择`"
+                    :aria-selected="isSelected(tableTrackKey(track))"
+                    :class="{
+                      'track-playing': currentTrack?.id === track.id,
+                      'track-selected': isSelected(tableTrackKey(track)),
+                      'playlist-draggable': isPlaylistDetail
+                    }"
+                    :aria-current="currentTrack?.id === track.id ? 'true' : undefined"
+                    :style="{ height: rowHeight - 4 + 'px', display: 'flex' }"
+                    :draggable="isPlaylistDetail"
+                    @click="onRowClick(track, Number(index), $event)"
+                    @keydown="onRowKeydown(track, Number(index), $event)"
+                    @dblclick="onRowDblClick(track, $event)"
+                    @dragstart="handlePlaylistDragStart($event, track)"
+                    @dragover.prevent
+                    @drop="handlePlaylistDrop($event, track)"
+                    @contextmenu="onTrackContextMenu($event, track)"
+                  >
+                    <td class="col-index">
+                      <span v-if="currentTrack?.id === track.id" class="playing-indicator">
+                        <ThemeIcon icon-slot="library.playing" />
+                      </span>
+                      <span v-else>{{ trackListNumber(track, Number(index)) }}</span>
+                    </td>
+                    <td class="col-cover">
+                      <div class="track-cover-cell" :class="{ 'has-selection': hasSelection }">
+                        <label
+                          v-if="hasSelection"
+                          class="track-select-checkbox"
+                          :title="isSelected(tableTrackKey(track)) ? '取消选中' : '选中'"
+                          @click.stop
+                        >
+                          <input
+                            type="checkbox"
+                            :checked="isSelected(tableTrackKey(track))"
+                            :aria-label="`选中 ${track.title}`"
+                            @change="onTrackSelectToggle(track, Number(index), $event)"
+                          />
+                          <span class="track-select-box" aria-hidden="true">
+                            <ThemeIcon
+                              v-if="isSelected(tableTrackKey(track))"
+                              icon-slot="library.selected"
+                            />
+                          </span>
+                        </label>
+                        <CoverImg
+                          :cover="displayTrackCover(track)"
+                          :cover-source="displayTrackCoverSource(track)"
+                          :identity="track.id"
+                          class="cover-img"
+                          alt="cover"
                         />
-                        <span class="track-select-box" aria-hidden="true">
-                          <ThemeIcon v-if="isSelected(track.id)" icon-slot="library.selected" />
-                        </span>
-                      </label>
-                      <CoverImg
-                        :cover="track.coverSmall || track.cover"
-                        :cover-source="track.coverSmallSource || track.coverSource"
-                        :identity="track.id"
-                        class="cover-img"
-                        alt="cover"
-                      />
-                    </div>
-                  </td>
-                  <td class="col-info">
-                    <div class="track-title-row">
+                      </div>
+                    </td>
+                    <td class="col-info">
+                      <div class="track-title-row">
+                        <button
+                          type="button"
+                          class="track-title metadata-link"
+                          @click.stop="infoTrack = track"
+                          @dblclick.stop
+                        >
+                          {{ track.title }}
+                        </button>
+                        <div class="track-badges">
+                          <span
+                            v-if="getLogicalTrackSource(track) !== 'local'"
+                            class="track-source-chip"
+                            :class="trackSourceClass(track)"
+                            :title="`来源：${trackSourceLabel(track)}`"
+                          >
+                            {{ trackSourceLabel(track) }}
+                          </span>
+                          <span
+                            v-if="track.metadataMatch"
+                            class="metadata-match-chip"
+                            :title="metadataMatchTitle(track)"
+                          >
+                            {{ metadataMatchLabel(track) }}
+                          </span>
+                        </div>
+                      </div>
                       <button
                         type="button"
-                        class="track-title metadata-link"
-                        @click.stop="infoTrack = track"
+                        class="track-artist metadata-link"
+                        @click.stop="openRowArtist(track)"
                         @dblclick.stop
                       >
-                        {{ track.title }}
+                        {{ track.artist }}
                       </button>
-                      <div class="track-badges">
-                        <span
-                          v-if="getLogicalTrackSource(track) !== 'local'"
-                          class="track-source-chip"
-                          :class="trackSourceClass(track)"
-                          :title="`来源：${trackSourceLabel(track)}`"
-                        >
-                          {{ trackSourceLabel(track) }}
-                        </span>
-                        <span
-                          v-if="track.metadataMatch"
-                          class="metadata-match-chip"
-                          :title="metadataMatchTitle(track)"
-                        >
-                          {{ metadataMatchLabel(track) }}
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      class="track-artist metadata-link"
-                      @click.stop="openRowArtist(track)"
-                      @dblclick.stop
-                    >
-                      {{ track.artist }}
-                    </button>
-                  </td>
-                  <td class="col-album">
-                    <button
-                      type="button"
-                      class="metadata-link"
-                      @click.stop="openRowAlbum(track)"
-                      @dblclick.stop
-                    >
-                      {{ track.album }}
-                    </button>
-                  </td>
-                  <td class="col-duration">
-                    <span class="duration-time">{{ formatDuration(track.duration) }}</span>
-                    <span v-if="trackQualityLabel(track)" class="duration-quality">
-                      {{ trackQualityLabel(track) }}
-                    </span>
-                  </td>
-                </tr>
+                    </td>
+                    <td class="col-album">
+                      <button
+                        type="button"
+                        class="metadata-link"
+                        @click.stop="openRowAlbum(track)"
+                        @dblclick.stop
+                      >
+                        {{ track.album }}
+                      </button>
+                    </td>
+                    <td class="col-duration">
+                      <span class="duration-time">{{ formatDuration(track.duration) }}</span>
+                      <span v-if="trackQualityLabel(track)" class="duration-quality">
+                        {{ trackQualityLabel(track) }}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr
+                    v-else
+                    class="track-row track-row-pending"
+                    aria-hidden="true"
+                    :style="{ height: rowHeight - 4 + 'px', display: 'flex' }"
+                  >
+                    <td class="col-index">{{ visibleRange.start + index + 1 }}</td>
+                    <td class="col-cover"><span class="pending-cover"></span></td>
+                    <td class="col-info"><span class="pending-line"></span></td>
+                    <td class="col-album"><span class="pending-line"></span></td>
+                    <td class="col-duration"></td>
+                  </tr>
+                </template>
                 <tr
                   class="virtual-spacer"
                   :style="{
@@ -2528,7 +4119,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                 <div
                   class="menu-item"
                   data-te-interactive
-                  @click="appendActionTracksToQueue(contextActionTracks)"
+                  @click="appendActionTracksToQueue(contextTracksForAction())"
                 >
                   <i class="pi pi-list"></i>
                   <span>添加到播放队列{{ contextActionLabel }}</span>
@@ -2579,7 +4170,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <span>查看专辑</span>
                 </div>
                 <div
-                  v-if="contextLocalTrackCount > 0"
+                  v-if="contextLocalTrackCount === null || contextLocalTrackCount > 0"
                   class="menu-item"
                   data-te-interactive
                   @click="handleContextRemoveFromLibrary"
@@ -2588,7 +4179,7 @@ function finishViewSwitchAndRestoreScroll(): void {
                   <span>从音乐库移除{{ contextLocalActionLabel }}</span>
                 </div>
                 <div
-                  v-if="contextLocalTrackCount > 0"
+                  v-if="contextLocalTrackCount === null || contextLocalTrackCount > 0"
                   class="menu-item danger"
                   data-te-interactive
                   @click="handleContextMoveToTrash"
@@ -2608,9 +4199,23 @@ function finishViewSwitchAndRestoreScroll(): void {
                 <div class="menu-item" data-te-interactive @click="handleContextFavorite">
                   <i :class="contextAllFavorited ? 'pi pi-heart-fill' : 'pi pi-heart'"></i>
                   <span
-                    >{{ contextAllFavorited ? '移出应用收藏' : '加入应用收藏'
+                    >{{
+                      contextAllFavorited === null
+                        ? '切换应用收藏'
+                        : contextAllFavorited
+                          ? '移出应用收藏'
+                          : '加入应用收藏'
                     }}{{ contextActionLabel }}</span
                   >
+                </div>
+                <div
+                  v-if="isPlaylistDetail && selectedTrack && contextActionCount <= 1"
+                  class="menu-item"
+                  data-te-interactive
+                  @click="openSelectedSourcePicker"
+                >
+                  <i class="pi pi-sliders-h"></i>
+                  <span>选择播放来源</span>
                 </div>
                 <div
                   v-if="canRematchSelectedTrack && contextActionCount <= 1"
@@ -2761,8 +4366,10 @@ function finishViewSwitchAndRestoreScroll(): void {
 
     <CreateAggregatePlaylistDialog
       :show="showCreateAggregateDialog"
-      :tracks="createAggregateTracks"
-      @close="showCreateAggregateDialog = false"
+      :tracks="[]"
+      :track-count="createAggregateSource?.count ?? 0"
+      :create-with-tracks="createSelectedAggregatePlaylist"
+      @close="dismissCreateAggregateDialog"
       @created="onAggregatePlaylistCreated"
     />
 
@@ -2817,6 +4424,7 @@ function finishViewSwitchAndRestoreScroll(): void {
           v-if="loudnessOpen"
           :library-tracks="tracks"
           :selected-tracks="loudnessSelection"
+          :resolve-plan="loudnessPlanResolver"
           :albums="albums"
           :restore-focus="loudnessFocusTarget"
           @close="loudnessOpen = false"
@@ -2830,7 +4438,7 @@ function finishViewSwitchAndRestoreScroll(): void {
           v-if="showMusicVersions"
           :restore-focus="libraryToolsTrigger"
           :initial-scope="category === 'albums' ? 'albums' : 'tracks'"
-          :initial-track="filter?.startsWith('album:') ? displayTracks[0] : undefined"
+          :initial-track="musicVersionsInitialTrack"
           @close="showMusicVersions = false"
         />
       </NativeDialogTransition>
@@ -2854,7 +4462,7 @@ function finishViewSwitchAndRestoreScroll(): void {
             :key="`${tagManagerInitialView}:${tagManagerTracks.map((track) => track.id).join(',')}`"
             :initial-view="tagManagerInitialView"
             :tracks="tagManagerTracks"
-            :current-tracks="tracks"
+            :current-tracks="databaseTableEnabled ? tagManagerTracks : tracks"
             @close="closeTagManager"
             @applied="applyTagManagerWrite"
           />

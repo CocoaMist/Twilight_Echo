@@ -5,6 +5,7 @@ import { syncPluginProviders, useMediaProviders } from '@renderer/providers/inde
 import type { Track } from '@renderer/types/music'
 import type { SavedQueueTrack } from '../../../../shared/queueWorkspace.ts'
 import type { QueueSessionRestoreSources } from '@renderer/stores/player/queueSessionRestore.ts'
+import { libraryTrack } from '@renderer/utils/libraryQueuePlayback.ts'
 
 export async function getQueueSessionSources(
   entries: SavedQueueTrack[]
@@ -37,10 +38,22 @@ export async function getQueueSessionSources(
     }
   const localTracks = new Map<string, Track>()
   const library = useMusicStore()
-  for (const entry of entries) {
-    if (entry.source !== 'local') continue
-    const track = library.getTrackById(entry.id)
-    if (track) localTracks.set(track.id, track)
+  const localEntries = entries.filter((entry) => entry.source === 'local')
+  if (localEntries.length) {
+    const mode = await window.api.library.getStorageMode()
+    if (mode === 'sqlite') {
+      for (let offset = 0; offset < localEntries.length; offset += 500) {
+        const page = await window.api.library.database.getTracksByIds(
+          localEntries.slice(offset, offset + 500).map((entry) => entry.id)
+        )
+        for (const record of page.tracks) localTracks.set(record.id, libraryTrack(record))
+      }
+    } else {
+      for (const entry of localEntries) {
+        const track = library.getTrackById(entry.id)
+        if (track) localTracks.set(track.id, track)
+      }
+    }
   }
   const availableProviders = new Set<string>()
   if (hasProviders)
