@@ -1,7 +1,11 @@
 import { toRaw } from 'vue'
 import type { Track } from '../types/music'
 import { getNcmSongId } from './ncmTrack.ts'
-import { unifiedSearchSongs, type UnifiedSearchResult } from '../utils/unifiedMusicSearch.ts'
+import {
+  unifiedSearchSongs,
+  type UnifiedSearchResult,
+  type UnifiedLocalSearch
+} from '../utils/unifiedMusicSearch.ts'
 import type { NetworkEntry } from '../../../shared/networkSources.ts'
 
 export type MediaProviderCapability =
@@ -175,6 +179,7 @@ export interface MediaProviderPlaylistTracksPage {
 }
 
 export interface MediaProvider {
+  readPlaylistImportPage?: (playlistId: string, offset: number, limit: number, options?: MediaProviderCallOptions) => Promise<import('../../../shared/externalPlaylist.ts').PlaylistImportPage>
   id: string
   name: string
   source: 'internal' | 'plugin'
@@ -491,6 +496,7 @@ export class MediaProviderRegistry {
   async searchAllSongs(options: {
     query: string
     localTracks: Track[]
+    localSource?: UnifiedLocalSearch
     networkEntries?: Array<{ profileName: string; entry: NetworkEntry }>
     limit?: number
     offset?: number

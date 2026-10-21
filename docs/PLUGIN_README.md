@@ -331,7 +331,9 @@ TLS 由 `undici.ProxyAgent` 处理，使用系统 CA 校验证书。重定向由
 | `verified`                | 索引发布者声明“已审核”的元数据；单独出现时只显示“索引声明”                                    |
 | `publisherSignature`      | 索引专用 Ed25519 发布者签名；不写入包内 `plugin.json`，也不等同于 manifest 的预留 `signature` |
 
-默认远程索引是 `https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json`。第三方插件源码和发布 `.tep` 包不放在应用主仓库。独立开发者在自己的公开仓库发布，目录仓库负责发现并合并为 `plugins.json`。
+默认远程索引是 `https://plugins.aaapi.fun/plugins.json`，索引和安装包由 Cloudflare R2 + CDN 分发。索引缓存 60 秒，带内容哈希的安装包长期缓存；目录仓库更新后由 GitHub Actions 自动发布，先上传安装包再切换索引。第三方插件源码和发布 `.tep` 包不放在应用主仓库。独立开发者在自己的公开仓库发布，目录仓库负责发现并合并为 `plugins.json`。
+
+旧版 GitHub 索引 `https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json` 保留可用；排查 CDN 访问问题时可用下面的环境变量显式切回。`sourceKind: official` 仅表示固定分发源，不代表插件已通过签名验证。
 
 `TWILIGHT_PLUGIN_INDEX_URL` 环境变量优先级最高，可指向自托管 HTTPS `plugins.json` 或本机 HTTP 测试索引。自定义索引的 `verified: true` 只表示该索引自己的声明。官方徽章要求本次从上面的固定官方 URL 直接、fresh 加载，实际 origin 与配置精确一致，记录未 stale/过期，并由 `resources/plugin-index/trusted-publishers.json` 中当前有效且未吊销的 Ed25519 key 验签通过。宿主在每次 list/status/download 时按当前时间重验索引 TTL 与 key 有效期，不把加载时结果永久缓存。
 
@@ -339,7 +341,7 @@ TLS 由 `undici.ProxyAgent` 处理，使用系统 CA 校验证书。重定向由
 
 `publisherSignature` 绑定精确 `indexOrigin` 和规范化后的完整 entry（包括 manifest、`sourceUrl`、`checksumSha256`、`tags`、`verified`）。`main`、`icon`、`binary.*` 路径先统一为 POSIX `/` canonical form，Windows host 与 Linux signer 必须生成相同 payload。可信公钥注册表支持多个 active key、有效期与吊销列表以完成轮换。生产私钥只允许位于外部插件仓库的受保护 CI 或离线签名环境，绝不能提交到应用仓库；正式 release public key 配置前，空注册表会让未签名条目保持“索引声明/未验证”。
 
-安装前宿主必须校验：`sourceUrl` 可达、包大小合理、sha256 匹配、包内 `plugin.json` 与索引 entry 字段一致。manager 会把实际安装字节写入私有 staging，再计算一次 SHA-256，与索引的 immutable expected SHA-256 比较；下载后发生 A/B 替换时在确认页前拒绝。校验不过就拒绝安装。
+索引请求默认超时 10 秒，安装包下载默认超时 5 分钟，避免较大的主题包被索引请求时限中断。安装前宿主必须校验：`sourceUrl` 可达、包大小合理、sha256 匹配、包内 `plugin.json` 与索引 entry 字段一致。manager 会把实际安装字节写入私有 staging，再计算一次 SHA-256，与索引的 immutable expected SHA-256 比较；下载后发生 A/B 替换时在确认页前拒绝。校验不过就拒绝安装。
 
 索引规则见 [spec §7.5](./twilight-echo-plugin-spec.md#75-phase-5-本地可发布生态形态)。注意 Phase 5 仍是信任式安装，索引只提高可发现性和完整性校验，不代表运行时权限 enforcement 或恶意代码沙箱。
 

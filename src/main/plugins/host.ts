@@ -168,6 +168,7 @@ const PROVIDER_METHODS: TwilightMediaProviderMethod[] = [
   'searchArtists',
   'fetchPlaylistTracks',
   'fetchPlaylistTracksPage',
+  'readPlaylistImportPage',
   'createDownload',
   'getDownloadStatus',
   'getDownloadFile',

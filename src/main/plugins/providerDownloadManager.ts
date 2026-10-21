@@ -87,7 +87,7 @@ interface ProviderDownloadManagerOptions {
    * Downloads then fall back to the first authorized music library root.
    */
   resolveDownloadRoot?: () => Promise<string | null>
-  libraryIndexCoordinator: () => LocalLibraryIndexCoordinator | null
+  libraryIndexCoordinator: () => Pick<LocalLibraryIndexCoordinator, 'enqueueWatcherChanges'> | null
   onChanged: (tasks: ProviderDownloadTaskSnapshot[]) => void
   fetch?: typeof globalThis.fetch
   now?: () => Date
@@ -394,7 +394,20 @@ export class ProviderDownloadManager {
 
   private patch(taskId: string, patch: Partial<ProviderDownloadTaskSnapshot>): void {
     const task = this.requireTask(taskId)
-    if (patch.status && patch.status !== task.status) writeDiagnostic('download', 'task.state', { taskId, previous: task.status, status: patch.status, fileSize: patch.fileSize ?? task.fileSize, error: patch.error }, patch.status === 'failed' ? 'error' : 'info', { operationId: taskId })
+    if (patch.status && patch.status !== task.status)
+      writeDiagnostic(
+        'download',
+        'task.state',
+        {
+          taskId,
+          previous: task.status,
+          status: patch.status,
+          fileSize: patch.fileSize ?? task.fileSize,
+          error: patch.error
+        },
+        patch.status === 'failed' ? 'error' : 'info',
+        { operationId: taskId }
+      )
     Object.assign(task, patch, { updatedAt: this.now().toISOString() })
     if (patch.status && TERMINAL_STATUSES.has(patch.status)) this.pruneTerminalTasks()
     this.emitChanged()

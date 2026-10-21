@@ -31,6 +31,7 @@ interface StoredGrant extends RemoteMediaGrant {
 
 const AUDIO_IDLE_TTL_MS = 30 * 60 * 1000
 const IMAGE_IDLE_TTL_MS = 24 * 60 * 60 * 1000
+const GRANT_SWEEP_BATCH = 64
 const MAX_IMAGE_RESPONSE_BYTES = 25 * 1024 * 1024
 const MAX_AUDIO_RESPONSE_BYTES = 1024 * 1024 * 1024
 // Provider CDNs (especially NetEase album art) routinely 302 to edge hosts.
@@ -42,6 +43,7 @@ export class RemoteMediaGrantService {
   private readonly now: () => number
   private readonly createToken: () => string
   private readonly deterministicImageTokens: boolean
+  private sweep: MapIterator<[string, StoredGrant]> | null = null
 
   constructor(options: RemoteMediaGrantServiceOptions = {}) {
     this.now = options.now ?? Date.now
@@ -52,6 +54,7 @@ export class RemoteMediaGrantService {
 
   grant(source: string, kind: RemoteMediaKind): string {
     const normalized = normalizeRemoteMediaSource(source)
+    this.pruneExpired(this.now())
     const token =
       kind === 'image' && this.deterministicImageTokens
         ? deterministicImageToken(normalized)
@@ -86,6 +89,22 @@ export class RemoteMediaGrantService {
 
   revokeAll(): void {
     this.grants.clear()
+    this.sweep = null
+  }
+
+  /** Retire untouched grants incrementally; never evict a still-valid handle.
+   * No timer or full-library sweep is needed on the playback/request path. */
+  private pruneExpired(now: number): void {
+    this.sweep ??= this.grants.entries()
+    for (let i = 0; i < GRANT_SWEEP_BATCH; i++) {
+      const next = this.sweep.next()
+      if (next.done) {
+        this.sweep = null
+        return
+      }
+      const [token, grant] = next.value
+      if (now - grant.lastAccessAt > ttlFor(grant.kind)) this.grants.delete(token)
+    }
   }
 }
 

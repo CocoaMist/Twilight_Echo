@@ -70,6 +70,50 @@ function parseRequest(path) {
   return new URL(path, 'http://twilight.local')
 }
 
+test('readPlaylistImportPage preserves repeated IDs and missing songs across complete pages',async()=>{
+  const requests=[]
+  const provider=await activateProvider(async path=>{
+    requests.push(path)
+    const url=parseRequest(path)
+    if(url.pathname==='/playlist/detail')return {playlist:{name:'Mix',trackCount:3,trackIds:[{id:1},{id:2},{id:1}]}}
+    if(url.pathname==='/song/detail')return {songs:(url.searchParams.get('ids')||'').split(',').filter(id=>id==='1').map(id=>({...song(Number(id)),al:{...song(Number(id)).al,picUrl:'https://p1.music.126.net/cover.jpg'}}))}
+    throw new Error(`unexpected endpoint: ${url.pathname}`)
+  })
+  try{
+    const first=await provider.readPlaylistImportPage('77',0,2)
+    assert.equal(first.name,'Mix');assert.equal(first.total,3);assert.equal(first.hasMore,true);assert.deepEqual(first.songs.map(item=>item.platformId),['1','2'])
+    assert.ok(first.songs[1].unavailableReason)
+    assert.equal(first.songs[0].cover,'https://p1.music.126.net/cover.jpg')
+    assert.equal(first.songs[0].coverSource,'https://p1.music.126.net/cover.jpg')
+    assert.equal(first.songs[0].coverSmall,'https://p1.music.126.net/cover.jpg?param=140y140')
+    const last=await provider.readPlaylistImportPage('77',2,2)
+    assert.equal(last.hasMore,false);assert.equal(last.nextOffset,3);assert.equal(last.songs[0].platformId,'1')
+    assert.equal(requests.filter(path=>parseRequest(path).pathname==='/playlist/detail').length,2)
+  }finally{ncmProvider.deactivate()}
+})
+
+test('readPlaylistImportPage preserves occurrence IDs, unavailable songs and stable pagination',async()=>{
+  const requests=[]
+  const provider=await activateProvider(async path=>{
+    requests.push(path)
+    const url=parseRequest(path)
+    if(url.pathname==='/playlist/detail')return {playlist:{name:'Mix',trackCount:3,trackIds:[{id:1},{id:2},{id:1}]}}
+    if(url.pathname==='/song/detail'){
+      const ids=(url.searchParams.get('ids')||'').split(',')
+      return {songs:ids.filter(id=>id==='1').map(id=>song(Number(id)))}
+    }
+    throw new Error(`unexpected endpoint: ${url.pathname}`)
+  })
+  try{
+    const first=await provider.readPlaylistImportPage('77',0,2)
+    assert.equal(first.name,'Mix');assert.equal(first.total,3);assert.equal(first.hasMore,true);assert.deepEqual(first.songs.map(item=>item.platformId),['1','2'])
+    assert.equal(first.songs[1].unavailableReason!==undefined,true)
+    const last=await provider.readPlaylistImportPage('77',2,2)
+    assert.equal(last.hasMore,false);assert.equal(last.nextOffset,3);assert.equal(last.songs[0].platformId,'1')
+    assert.equal(requests.filter(path=>parseRequest(path).pathname==='/playlist/detail').length,2)
+  }finally{ncmProvider.deactivate()}
+})
+
 test('album search is anonymous-capable and preserves totals, artist credits and cancellation', async () => {
   const controller = new AbortController()
   const provider = await activateProvider(async (path, cookie, options) => {
