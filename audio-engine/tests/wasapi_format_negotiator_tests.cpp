@@ -126,7 +126,7 @@ void testWasapiExclusiveDopBoundariesSubmitTypedCarrierWithoutSilentFlag() {
   const std::string startBody = extractFunctionBody(source, "bool startWithCallbacks(");
   const std::string stopBody = extractFunctionBody(source, "void stop()");
 
-  const std::string dopBranchSignature = "if (isDopCarrierFormat(outputFormat) && typedCallback)";
+  const std::string dopBranchSignature = "if (outputFormat.dopEncoded && typedCallback)";
   const std::string prefillDopBody = extractFunctionBody(startBody, dopBranchSignature);
   assert(prefillDopBody.find("(void)typedCallback(block)") != std::string::npos);
   assert(prefillDopBody.find("prefillFlags = 0") != std::string::npos);
@@ -590,6 +590,7 @@ void testDsd64NegotiatesDopCarrier() {
   assert(output.sampleRate == 176400);
   assert(output.bitDepth == 24);
   assert(output.sampleFormat == AudioSampleFormat::Int24In32Interleaved);
+  assert(output.dopEncoded);
 
   const OutputInfo info = negotiator.outputInfo();
   assert(info.exclusive);
@@ -705,6 +706,85 @@ void testBitDepthFallbackStillCountsAsConverted() {
   assert(negotiator.outputFormat().sampleFormat == AudioSampleFormat::Int16Interleaved);
   assert(negotiator.outputInfo().resampled);
   assert(negotiator.outputInfo().perfectReasonCode == "pcm_converted");
+}
+
+void testHighRatePcmCanNegotiateLowerDeviceRate() {
+  for (const int rate : {176400, 192000, 352800, 384000, 705600, 768000, 1411200, 1536000}) {
+    for (const auto sampleFormat : {AudioSampleFormat::Int24Interleaved, AudioSampleFormat::Int24In32Interleaved}) {
+      FakeAudioClient client({{48000, 24, 32}});
+      WasapiFormatNegotiator negotiator(&client);
+      std::string error;
+      AudioFormat source{rate, 2, 24, sampleFormat};
+
+      assert(negotiator.negotiate(source, &error));
+      assert(error.empty());
+      assert(negotiator.outputFormat().sampleRate == 48000);
+      assert(!negotiator.outputFormat().dopEncoded);
+      assert(negotiator.outputInfo().resampled);
+      assert(negotiator.outputInfo().perfectReasonCode == "pcm_converted");
+      assert(!negotiator.outputInfo().driverDopCapable);
+      assert(negotiator.dopRuntimeFacts().state == DopRuntimeFactState::Unsupported);
+    }
+  }
+}
+
+void testHighRatePcmAtExactRateRemainsPcm() {
+  FakeAudioClient client({{192000, 24, 32}});
+  WasapiFormatNegotiator negotiator(&client);
+  std::string error;
+
+  assert(negotiator.negotiate(AudioFormat{192000, 2, 24, AudioSampleFormat::Int24Interleaved}, &error));
+  assert(!negotiator.outputFormat().dopEncoded);
+  assert(!negotiator.outputInfo().resampled);
+  assert(negotiator.outputInfo().perfectReasonCode.empty());
+  assert(!negotiator.outputInfo().driverDopCapable);
+  assert(negotiator.dopRuntimeFacts().state == DopRuntimeFactState::Unsupported);
+}
+
+void testHighRatePcmCanNegotiateLowerBitDepth() {
+  FakeAudioClient client({{192000, 16, 16}});
+  WasapiFormatNegotiator negotiator(&client);
+  std::string error;
+
+  assert(negotiator.negotiate(AudioFormat{192000, 2, 24, AudioSampleFormat::Int24Interleaved}, &error));
+  assert(negotiator.outputFormat().sampleRate == 192000);
+  assert(negotiator.outputFormat().bitDepth == 16);
+  assert(!negotiator.outputFormat().dopEncoded);
+  assert(negotiator.outputInfo().resampled);
+}
+
+void testHighRatePcmFailureDoesNotClaimDop() {
+  FakeAudioClient client({});
+  WasapiFormatNegotiator negotiator(&client);
+  std::string error;
+
+  assert(!negotiator.negotiate(AudioFormat{192000, 2, 24, AudioSampleFormat::Int24Interleaved}, &error));
+  assert(error.find("DoP") == std::string::npos);
+  assert(error.find("Native DSD") == std::string::npos);
+  assert(negotiator.dopRuntimeFacts().state == DopRuntimeFactState::Unsupported);
+}
+
+void testExplicitDopCarrierPreservesTransportAndRejectsPcmFallback() {
+  for (const auto sampleFormat : {AudioSampleFormat::Int24Interleaved, AudioSampleFormat::Int24In32Interleaved}) {
+    AudioFormat source{192000, 2, 24, sampleFormat, true};
+    std::string error;
+    FakeAudioClient exactClient({{192000, 24, 32}});
+    WasapiFormatNegotiator exact(&exactClient);
+    assert(exact.negotiate(source, &error));
+    assert(exact.outputFormat().dopEncoded);
+    assert(!exact.outputInfo().resampled);
+    assert(exact.outputInfo().perfectReasonCode == "dsd_dop");
+    assert(exact.dopRuntimeFacts().state == DopRuntimeFactState::Proven);
+
+    FakeAudioClient pcmOnlyClient({{48000, 24, 32}, {192000, 16, 16}});
+    WasapiFormatNegotiator rejected(&pcmOnlyClient);
+    assert(!rejected.negotiate(source, &error));
+    assert(error.find("DoP carrier") != std::string::npos);
+    for (const auto& probe : pcmOnlyClient.probes) {
+      assert(probe.sampleRate == 192000);
+      assert(probe.validBits == 24);
+    }
+  }
 }
 
 void testDsd128FailureReasonNamesDopCarrierFacts() {
@@ -880,6 +960,11 @@ int main() {
   testInt24SourceOnInt24In32OnlyDeviceIsNotReportedAsConverted();
   testPackedInt24DeviceStillWinsForInt24Source();
   testBitDepthFallbackStillCountsAsConverted();
+  testHighRatePcmCanNegotiateLowerDeviceRate();
+  testHighRatePcmAtExactRateRemainsPcm();
+  testHighRatePcmCanNegotiateLowerBitDepth();
+  testHighRatePcmFailureDoesNotClaimDop();
+  testExplicitDopCarrierPreservesTransportAndRejectsPcmFallback();
   testDsd128FailureReasonNamesDopCarrierFacts();
   testDsd256FailureReasonNamesDopCarrierFacts();
   testExclusiveBufferPolicyAvoidsMinimumPeriodForAuto();

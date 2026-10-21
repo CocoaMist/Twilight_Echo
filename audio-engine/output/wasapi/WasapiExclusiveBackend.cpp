@@ -60,7 +60,7 @@ DopBufferObservation inspectDopBuffer(
     size_t frames,
     const AudioFormat& format) noexcept {
   DopBufferObservation observation;
-  if (!data || frames == 0 || !isDopCarrierFormat(format)) return observation;
+  if (!data || frames == 0 || !format.dopEncoded || !isDopCarrierFormat(format)) return observation;
   const size_t channels = static_cast<size_t>(std::max(1, format.channelCount));
   const size_t bytesPerSample = audioSampleFormatBytes(format.sampleFormat);
   const size_t bytesPerFrame = audioFormatBytesPerFrame(format);
@@ -337,16 +337,16 @@ struct WasapiExclusiveBackend::Impl {
         reinterpret_cast<const uint8_t*>(negotiator.waveFormat()),
         reinterpret_cast<const uint8_t*>(negotiator.waveFormat()) + negotiator.waveFormatSize());
     const auto* waveFormat = reinterpret_cast<const WAVEFORMATEX*>(waveFormatBytes.data());
-    diagnostics.dsdTransport = isDopCarrierFormat(outputFormat) ? "dop" : "pcm";
+    diagnostics.dsdTransport = outputFormat.dopEncoded ? "dop" : "pcm";
     diagnostics.requestedWireFormat = sampleFormatToString(requestedFormat.sampleFormat);
     diagnostics.actualWireFormat = sampleFormatToString(outputFormat.sampleFormat);
     diagnostics.containerBits = waveFormat ? waveFormat->wBitsPerSample : 0;
     diagnostics.validBits = outputFormat.bitDepth;
     diagnostics.blockAlign = waveFormat ? waveFormat->nBlockAlign : 0;
-    diagnostics.semanticSampleRate = isDopCarrierFormat(outputFormat) ? outputFormat.sampleRate * 16 : outputFormat.sampleRate;
+    diagnostics.semanticSampleRate = outputFormat.dopEncoded ? outputFormat.sampleRate * 16 : outputFormat.sampleRate;
     diagnostics.transportSampleRate = outputFormat.sampleRate;
-    diagnostics.typedRawPath = isDopCarrierFormat(outputFormat);
-    diagnostics.processingBypassed = isDopCarrierFormat(outputFormat);
+    diagnostics.typedRawPath = outputFormat.dopEncoded;
+    diagnostics.processingBypassed = outputFormat.dopEncoded;
     outputInfo.diagnostics = diagnostics;
     const std::string negotiatedPerfectReasonCode = outputInfo.perfectReasonCode;
     const std::string negotiatedCapabilityReason = outputInfo.capabilityReason;
@@ -443,14 +443,14 @@ struct WasapiExclusiveBackend::Impl {
       const size_t rendered = typedCallback(block);
       if (rendered > 0) {
         const size_t renderedFrames = std::min<size_t>(rendered, frameCount);
-        if (isDopCarrierFormat(outputFormat)) {
+        if (outputFormat.dopEncoded) {
           std::unique_lock lock(infoMutex, std::try_to_lock);
           if (lock.owns_lock() && !firstDopBufferObservation.observed) {
             firstDopBufferObservation = inspectDopBuffer(data, renderedFrames, outputFormat);
           }
         }
         const size_t renderedBytes = renderedFrames * audioFormatBytesPerFrame(outputFormat);
-        if (data && renderedBytes < byteCount && !isDopCarrierFormat(outputFormat)) {
+        if (data && renderedBytes < byteCount && !outputFormat.dopEncoded) {
           std::memset(data + renderedBytes, 0, byteCount - renderedBytes);
         }
         if (renderedFrames < frameCount) {
@@ -730,7 +730,7 @@ struct WasapiExclusiveBackend::Impl {
           // DoP cannot use all-zero PCM silence: that removes the 0x05/0xFA marker
           // sequence and makes many DACs lose DSD lock. Let the typed callback emit
           // a valid carrier pre-roll and submit those bytes without the SILENT flag.
-          if (isDopCarrierFormat(outputFormat) && typedCallback) {
+          if (outputFormat.dopEncoded && typedCallback) {
             PcmBlock block;
             block.format = outputFormat;
             block.data = data;
@@ -835,7 +835,7 @@ struct WasapiExclusiveBackend::Impl {
             const size_t byteCount =
                 static_cast<size_t>(framesAvailable) * audioFormatBytesPerFrame(outputFormat);
             DWORD releaseFlags = AUDCLNT_BUFFERFLAGS_SILENT;
-            if (isDopCarrierFormat(outputFormat) && typedCallback) {
+            if (outputFormat.dopEncoded && typedCallback) {
               PcmBlock block;
               block.format = outputFormat;
               block.data = data;
@@ -1194,7 +1194,7 @@ OutputInfo WasapiExclusiveBackend::outputInfo() const {
 #if defined(_WIN32) && defined(TAE_ENABLE_WASAPI)
   if (impl_->firstDopBufferObservation.observed) {
     info.diagnostics.firstBufferSummary = dopBufferSummary(impl_->firstDopBufferObservation);
-    if (isDopCarrierFormat(impl_->outputFormat)) {
+    if (impl_->outputFormat.dopEncoded) {
       info.diagnostics.dopRuntimeEvidence = dopRuntimeEvidenceSummary(impl_->firstDopBufferObservation);
     }
   }
@@ -1213,7 +1213,7 @@ DopRuntimeFacts WasapiExclusiveBackend::dopRuntimeFacts() const {
   std::lock_guard lock(impl_->infoMutex);
   DopRuntimeFacts facts = impl_->dopRuntimeFacts;
   const DopBufferObservation& observation = impl_->firstDopBufferObservation;
-  if (observation.observed && isDopCarrierFormat(impl_->outputFormat)) {
+  if (observation.observed && impl_->outputFormat.dopEncoded) {
     if (dopMarkersValid(observation)) {
       facts.reason = facts.reason.empty()
                          ? "DoP marker sequence confirmed in the first rendered buffer"
