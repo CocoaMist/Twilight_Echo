@@ -39,7 +39,11 @@ export const useSettingsStore = () => ({
     )
   }
 })
-export const useMusicStore = () => ({ tracks: ref([]), libraryScanProgress: ref(null) })
+export const useMusicStore = () => ({
+  tracks: ref([]),
+  libraryTrackCount: ref(300_000),
+  libraryScanProgress: ref(null)
+})
 export const usePlayerStore = () => ({
   volume,
   setVolume: (value) => {
@@ -365,6 +369,10 @@ window.runOnboardingTests = async () => {
   expect(stopCalls > stoppedBefore && !pendingTone, 'leaving audio failed to stop audition')
   await advance()
   expect(document.querySelector('.onb-summary'), 'summary missing')
+  expect(
+    document.querySelector('.onb-scan-status')?.textContent.includes('300000'),
+    'SQLite library count was replaced by the empty compatibility array'
+  )
   expect(
     document.querySelector('.onb-summary').textContent.includes('USB DAC'),
     'summary device mismatch'

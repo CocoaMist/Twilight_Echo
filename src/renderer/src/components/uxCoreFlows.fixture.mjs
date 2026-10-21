@@ -125,6 +125,7 @@ window.runUxCoreTests = async () => {
     }
   }
   window.api.dialog = { openFolder: async () => selectedFolder }
+  window.api.library = { getStorageMode: async () => 'json' }
   window.api.fs = {
     onScanProgress: () => () => {},
     scanMusicFiles: async (folder) => {

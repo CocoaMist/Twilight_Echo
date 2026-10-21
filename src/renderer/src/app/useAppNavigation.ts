@@ -21,10 +21,12 @@ import {
 } from './navigationSession.ts'
 
 export type SettingsSection = SectionKey
+export type AppearanceWorkspaceTab = 'adjust' | 'studio' | 'workshop'
 export interface SettingsNavigationTarget {
   revision: number
   entry?: SettingsSearchEntry
   anchor?: string
+  appearanceTab?: AppearanceWorkspaceTab
 }
 export type ThemeStudioDomain =
   | 'presets'
@@ -69,6 +71,8 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   const settingsInitialSection = ref<SettingsSection>('general')
   const settingsCurrentSection = ref<SettingsSection>('general')
   const themeStudioCurrentDomain = ref<ThemeStudioDomain>('presets')
+  const appearanceTab = ref<AppearanceWorkspaceTab>('adjust')
+  const appearanceNavigationTarget = shallowRef<SettingsNavigationTarget>({ revision: 0 })
   const settingsNavigationTarget = shallowRef<SettingsNavigationTarget>({ revision: 0 })
   const songlistTransitionName = ref<'page-down' | 'page-up'>('page-down')
 
@@ -82,6 +86,7 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     menuOpen: menuOpen.value,
     settingsSection: settingsCurrentSection.value,
     themeStudioDomain: themeStudioCurrentDomain.value,
+    appearanceTab: appearanceTab.value,
     themeReturn: themeReturn.value,
     loginPageMode: loginPageMode.value,
     loginProviderId: loginInitialProviderId.value
@@ -91,8 +96,30 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     pageTarget.value = resolveNavigationTarget(saved.pageTarget, pages) ?? localHome()
     history.value = saved.history.flatMap((target) => resolveNavigationTarget(target, pages) ?? [])
     lastLocal.value = saved.lastLocal
-    overlayHistory.splice(0, overlayHistory.length, ...saved.overlayHistory)
-    overlay.value = saved.overlay
+    const migrateOverlay = (page: Overlay | null): Overlay | null =>
+      page === 'theme' ? 'appearance' : page
+    overlayHistory.splice(0, overlayHistory.length, ...saved.overlayHistory.map(migrateOverlay))
+    overlay.value = migrateOverlay(saved.overlay)
+    appearanceTab.value =
+      saved.overlay === 'theme' || saved.overlayHistory.includes('theme')
+        ? 'studio'
+        : (saved.appearanceTab ?? 'adjust')
+    appearanceNavigationTarget.value = { revision: 0, appearanceTab: appearanceTab.value }
+    if (
+      saved.pageTarget.kind === 'plugin' &&
+      saved.pageTarget.pluginId === 'com.twilightecho.tool.theme-workshop' &&
+      saved.pageTarget.pageId === 'theme-workshop'
+    ) {
+      pageTarget.value = history.value.pop() ?? saved.lastLocal
+      appearanceTab.value = 'workshop'
+      appearanceNavigationTarget.value = { revision: 0, appearanceTab: 'workshop' }
+      if (!overlay.value) {
+        overlay.value = 'appearance'
+        overlayHistory.splice(0, overlayHistory.length, null)
+      } else if (overlay.value !== 'appearance' && !overlayHistory.includes('appearance')) {
+        overlayHistory.unshift('appearance')
+      }
+    }
     menuOpen.value = saved.menuOpen
     settingsInitialSection.value = settingsCurrentSection.value = saved.settingsSection
     themeStudioInitialDomain.value = themeStudioCurrentDomain.value = saved.themeStudioDomain
@@ -107,6 +134,9 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
 
   function rememberThemeStudioDomain(domain: ThemeStudioDomain): void {
     themeStudioCurrentDomain.value = domain
+  }
+  function rememberAppearanceTab(tab: AppearanceWorkspaceTab): void {
+    appearanceTab.value = tab
   }
 
   function openOverlay(key: Overlay): void {
@@ -130,13 +160,19 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   const showPlayingPage = overlayFlag('playing')
   const showLoginPage = overlayFlag('login')
   const showSettingsPage = overlayFlag('settings')
-  const showThemeStudioPage = overlayFlag('theme')
+  const showAppearancePage = overlayFlag('appearance')
+  const showThemeStudioPage = computed(
+    () => showAppearancePage.value && appearanceTab.value === 'studio'
+  )
   const showPluginPage = overlayFlag('plugins')
   const showEqualizerPage = overlayFlag('equalizer')
   const showDspRackPage = overlayFlag('dsp')
   // Preview the retained page without dismissing Settings or changing its return path.
   const pageContentVisible = computed(
-    () => !overlay.value || (overlay.value === 'settings' && !!options.appearancePreviewActive?.())
+    () =>
+      !overlay.value ||
+      ((overlay.value === 'settings' || overlay.value === 'appearance') &&
+        !!options.appearancePreviewActive?.())
   )
   const showStreamingPage = computed(
     () => pageTarget.value.kind === 'streaming' && pageContentVisible.value
@@ -225,6 +261,10 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     navigate(lastLocal.value)
   }
   function onSelectPluginPage(page: UiContribution): void {
+    if (page.pluginId === 'com.twilightecho.tool.theme-workshop' && page.id === 'theme-workshop') {
+      openAppearancePage(undefined, 'workshop')
+      return
+    }
     navigate({ kind: 'plugin', page })
   }
   function closePluginPage(): void {
@@ -285,20 +325,35 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   function closeSettingsPage(): void {
     showSettingsPage.value = false
   }
+  function openAppearancePage(entry?: SettingsSearchEntry, tab?: AppearanceWorkspaceTab): void {
+    const retainedIndex = overlayHistory.lastIndexOf('appearance')
+    const retained = overlay.value === 'appearance' || retainedIndex >= 0
+    // Returning from another tool resumes the same workspace and draft. Explicit
+    // deep links are handled by AppearancePage's own tab/dirty-state transition.
+    if (!retained || entry || tab) {
+      appearanceTab.value = tab ?? 'adjust'
+      appearanceNavigationTarget.value = {
+        ...(entry?.section === 'appearance' ? { entry } : {}),
+        appearanceTab: appearanceTab.value,
+        revision: appearanceNavigationTarget.value.revision + 1
+      }
+    }
+    if (retainedIndex >= 0) {
+      overlayHistory.splice(retainedIndex)
+      overlay.value = 'appearance'
+    } else openOverlay('appearance')
+  }
+  function closeAppearancePage(): void {
+    closeOverlay('appearance')
+  }
   function openThemeStudioPage(initialDomain: ThemeStudioDomain = 'presets'): void {
     themeStudioInitialDomain.value = initialDomain
     themeStudioCurrentDomain.value = initialDomain
-    themeReturn.value =
-      initialDomain === 'presets' || showSettingsPage.value
-        ? 'settings'
-        : showPlayingPage.value
-          ? 'playing'
-          : null
-    openOverlay('theme')
+    themeReturn.value = null
+    openAppearancePage(undefined, 'studio')
   }
   function closeThemeStudioPage(): void {
-    closeOverlay('theme')
-    if (themeReturn.value === 'settings') openSettingsPage('appearance')
+    closeAppearancePage()
   }
   function openPlaybackSettings(): void {
     openSettingsPage('playback')
@@ -369,6 +424,7 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     restoreSession,
     rememberSettingsSection,
     rememberThemeStudioDomain,
+    rememberAppearanceTab,
     menuOpen,
     pageTarget,
     activePageId,
@@ -389,6 +445,9 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     loginPageMode,
     loginInitialProviderId,
     showSettingsPage,
+    showAppearancePage,
+    appearanceTab,
+    appearanceNavigationTarget,
     showThemeStudioPage,
     themeStudioInitialDomain,
     showPluginPage,
@@ -417,6 +476,8 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     closeLoginPage,
     openSettingsPage,
     closeSettingsPage,
+    openAppearancePage,
+    closeAppearancePage,
     openThemeStudioPage,
     closeThemeStudioPage,
     openPlaybackSettings,

@@ -5,6 +5,9 @@ import vue from '@vitejs/plugin-vue'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
+const preview = process.argv.includes('--playlist-recovery')
+  ? 'PlaylistRecoveryPreview'
+  : 'NoticePreview'
 const server = await createServer({
   configFile: false,
   root,
@@ -13,6 +16,10 @@ const server = await createServer({
       {
         find: /^.*\/stores\/use(?:Music|Player)Store(?:\.ts)?$/,
         replacement: fileURLToPath(new URL('./notice-preview/fixtures.mjs', import.meta.url))
+      },
+      {
+        find: '@renderer',
+        replacement: fileURLToPath(new URL('../src/renderer/src', import.meta.url))
       }
     ]
   },
@@ -29,7 +36,7 @@ const server = await createServer({
           <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Twilight Echo · 通知栏预览</title></head>
           <body><div id="app"></div><script type="module">
           import { createApp } from 'vue';
-          import Preview from '/scripts/notice-preview/NoticePreview.vue';
+          import Preview from '/scripts/notice-preview/${preview}.vue';
           import { installPreviewApi } from '/scripts/notice-preview/fixtures.mjs';
           import '/node_modules/primeicons/primeicons.css';
           installPreviewApi();
@@ -42,7 +49,12 @@ const server = await createServer({
       }
     }
   ],
-  server: { host: '127.0.0.1', port: 5184, strictPort: true }
+  server: {
+    host: '127.0.0.1',
+    port: 5184,
+    strictPort: true,
+    watch: { ignored: ['**/tmp/**', '**/out/**', '**/dist/**'] }
+  }
 })
 await server.listen()
 server.printUrls()
