@@ -132,3 +132,39 @@ test('drawer queue commands target duplicate tracks by entry identity and save a
   ])
   assert.equal(actions.saveAsPlaylist('   '), null)
 })
+
+test('database drawer save uses authoritative count and the streaming creator, not its empty compatibility array', async () => {
+  const queue = ref<Track[]>([])
+  const queueLength = ref(605)
+  const cancellation = new AbortController()
+  const createPages = async () => 'streamed'
+  let saves = 0
+  const actions = usePlaybackQueueDrawerActions({
+    queue,
+    queueLength,
+    createPlaylistWithTrackPages: createPages,
+    createPlaylistWithTracks: () => {
+      assert.fail('SQLite save must not use the array creator')
+    },
+    commands: {
+      enqueueTrack() {},
+      playNextTrack() {},
+      removeQueueItem() {},
+      clearQueue() {},
+      reorderQueue() {},
+      saveQueueAsPlaylist: async (name, _legacy, create, signal) => {
+        saves++
+        assert.equal(name, 'Queue')
+        assert.equal(create, createPages)
+        assert.equal(signal, cancellation.signal)
+        return 'streamed'
+      }
+    }
+  })
+  assert.equal(await actions.saveAsPlaylist(' Queue ', cancellation.signal), 'streamed')
+  assert.equal(saves, 1)
+  assert.deepEqual(queue.value, [])
+  queueLength.value = 0
+  assert.equal(actions.saveAsPlaylist('Queue'), null)
+  assert.equal(saves, 1)
+})

@@ -1,4 +1,5 @@
 import { afterglowTrackPathOf, isAfterglowPlayableSource } from '../../shared/afterglowMode.ts'
+import { remoteMediaGrants, type RemoteMediaGrantService } from '../security/remoteMediaGrants.ts'
 
 export interface ResolvedAfterglowSource {
   source: string
@@ -7,18 +8,41 @@ export interface ResolvedAfterglowSource {
 }
 
 export interface AfterglowSourceResolver {
-  resolve(track: unknown): Promise<ResolvedAfterglowSource | null>
+  resolve(track: unknown, signal?: AbortSignal): Promise<ResolvedAfterglowSource | null>
 }
 
 export interface AfterglowSourceResolverDependencies {
-  callProvider?: (providerId: string, method: 'getPlaybackUrl', args: unknown[]) => Promise<unknown>
+  callProvider?: (
+    providerId: string,
+    method: 'getPlaybackUrl',
+    args: unknown[],
+    options: { signal: AbortSignal; playbackExpiry: true }
+  ) => Promise<unknown>
+  grants?: Pick<RemoteMediaGrantService, 'resolve'>
   quality?: string
   now?: () => number
+}
+
+/** SACD selectors belong to the native target, not to its filesystem grant. */
+export async function authorizeAfterglowNativeSource(
+  source: string,
+  authorize: (source: string) => Promise<string>
+): Promise<string> {
+  const local = isAfterglowPlayableSource(source) && !/^https?:\/\//i.test(source)
+  const iso = local
+    ? /^(.*\.iso)(\?area=(?:stereo|multichannel)&track=[1-9]\d{0,8})$/i.exec(source)
+    : null
+  return iso ? `${await authorize(iso[1])}${iso[2]}` : await authorize(source)
 }
 
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,127}$/i
 const PROVIDER_TIMEOUT_MS = 12_000
 const UNKNOWN_PROVIDER_TTL_MS = 8 * 60 * 1000
+
+export const isAfterglowSourceCurrent = (
+  resolved: ResolvedAfterglowSource,
+  now = Date.now()
+): boolean => resolved.expiresAt === null || resolved.expiresAt > now
 
 const providerIdOf = (track: unknown): string => {
   if (!track || typeof track !== 'object') return ''
@@ -33,10 +57,7 @@ const providerIdOf = (track: unknown): string => {
   return ''
 }
 
-const normalizeProviderResult = (
-  result: unknown,
-  now: number
-): { source: string; expiresAt: number | null } | null => {
+const normalizeProviderResult = (result: unknown): ResolvedAfterglowSource | null => {
   if (typeof result === 'string') {
     return { source: result.trim(), expiresAt: null }
   }
@@ -49,27 +70,43 @@ const normalizeProviderResult = (
       ? (record.providerSource as Record<string, unknown>)
       : null
   const rawExpiry = providerSource?.expiresAt
-  const expiresAt =
-    typeof rawExpiry === 'number' && Number.isFinite(rawExpiry) && rawExpiry > now
-      ? rawExpiry
-      : null
+  const expiresAt = typeof rawExpiry === 'number' && Number.isFinite(rawExpiry) ? rawExpiry : null
   return { source: streamUrl, expiresAt }
 }
 
-const withTimeout = <T>(promise: Promise<T>, timeoutMs: number): Promise<T> =>
+const withTimeout = <T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<T> =>
   new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('provider resolve timeout')), timeoutMs)
-    timer.unref?.()
-    promise.then(
-      (value) => {
-        clearTimeout(timer)
-        resolve(value)
-      },
-      (error) => {
-        clearTimeout(timer)
-        reject(error)
-      }
+    const controller = new AbortController()
+    const onAbort = () => controller.abort(signal?.reason)
+    const finish = (settle: () => void) => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      controller.signal.removeEventListener('abort', onCancelled)
+      settle()
+    }
+    const onCancelled = () => finish(() => reject(controller.signal.reason))
+    const timer = setTimeout(
+      () => controller.abort(new Error('provider resolve timeout')),
+      timeoutMs
     )
+    timer.unref?.()
+    controller.signal.addEventListener('abort', onCancelled, { once: true })
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
+    else
+      void Promise.resolve()
+        .then(() => {
+          controller.signal.throwIfAborted()
+          return operation(controller.signal)
+        })
+        .then(
+          (value) => finish(() => resolve(value)),
+          (error) => finish(() => reject(error))
+        )
   })
 
 /**
@@ -83,9 +120,16 @@ export const createAfterglowSourceResolver = (
   const now = dependencies.now ?? Date.now
   const injectedCallProvider = dependencies.callProvider
   return {
-    async resolve(track: unknown): Promise<ResolvedAfterglowSource | null> {
+    async resolve(track: unknown, signal?: AbortSignal): Promise<ResolvedAfterglowSource | null> {
+      if (signal?.aborted) return null
       if (!track || typeof track !== 'object') return null
-      const localPath = afterglowTrackPathOf(track)
+      const record = track as Record<string, unknown>
+      // CUE uses the physical file plus cueRange; SACD/other subtracks already
+      // carry their logical native target and must not play the container.
+      const localPath =
+        !record.cueRange && typeof record.subTrack === 'string' && record.subTrack.trim()
+          ? record.subTrack.trim()
+          : afterglowTrackPathOf(track)
       if (isAfterglowPlayableSource(localPath)) {
         return { source: localPath, expiresAt: null }
       }
@@ -105,24 +149,41 @@ export const createAfterglowSourceResolver = (
 
       const callProvider =
         injectedCallProvider ??
-        (async (targetProviderId: string, method: 'getPlaybackUrl', args: unknown[]) => {
+        (async (
+          targetProviderId: string,
+          method: 'getPlaybackUrl',
+          args: unknown[],
+          callOptions: { signal: AbortSignal; playbackExpiry: true }
+        ) => {
           const { runtime } = await import('../core/runtime.ts')
           if (!runtime.pluginManager) throw new Error('provider manager unavailable')
-          return runtime.pluginManager.callProvider(targetProviderId, method, args)
+          return runtime.pluginManager.callProvider(targetProviderId, method, args, callOptions)
         })
 
       try {
         const result = await withTimeout(
-          callProvider(providerId, 'getPlaybackUrl', [track, options]),
-          PROVIDER_TIMEOUT_MS
+          (signal) =>
+            callProvider(providerId, 'getPlaybackUrl', [track, options], {
+              signal,
+              playbackExpiry: true
+            }),
+          PROVIDER_TIMEOUT_MS,
+          signal
         )
-        const normalized = normalizeProviderResult(result, now())
-        if (!normalized || !isAfterglowPlayableSource(normalized.source)) return null
+        const normalized = normalizeProviderResult(result)
+        if (!normalized || !isAfterglowSourceCurrent(normalized, now())) return null
+        // Resolve only issued, unexpired audio grants. The opaque handle itself
+        // is never sent to native, and image/unknown tokens remain unauthorized.
+        const source = normalized.source.startsWith('twilight-media:')
+          ? (dependencies.grants ?? remoteMediaGrants).resolve(normalized.source, 'audio').source
+          : normalized.source
+        if (!isAfterglowPlayableSource(source)) return null
         return {
-          source: normalized.source,
+          source,
           expiresAt: normalized.expiresAt ?? now() + UNKNOWN_PROVIDER_TTL_MS
         }
       } catch (error) {
+        if (signal?.aborted) return null
         console.warn(
           `[afterglow] provider ${providerId} could not resolve a playback source:`,
           error instanceof Error ? error.message : String(error)

@@ -4,6 +4,77 @@ import type { SleepTimerState } from '../../../shared/sleepTimer.ts'
 import type { PlaybackSession } from '../types/music.ts'
 import { PlaybackSessionWriter } from '../app/playbackSessionWriter.ts'
 import { createSleepTimerController, getRestorableSleepTimerState } from './sleepTimerController.ts'
+import { SleepTimerService } from '../../../main/sleepTimerCore.ts'
+import { createSleepTimerState } from '../../../shared/sleepTimer.ts'
+
+test('native-authoritative EOF reads the main decision without reporting a fresh untimed boundary', async () => {
+  let now = 2000
+  const service = new SleepTimerService({ now: () => now })
+  let state: SleepTimerState | null = null
+  let reports = 0
+  let triggers = 0
+  const controller = createSleepTimerController({
+    bridge: {
+      configure: async (next) => service.configure(next),
+      cancel: async () => {
+        service.cancel()
+        return null
+      },
+      getState: async () => service.snapshot(),
+      boundary: async (event) => {
+        reports++
+        return service.boundary(event)
+      }
+    },
+    getSettings: () => ({ defaultMinutes: 1, fadeSeconds: 0 }),
+    getState: () => state,
+    setState: (next) => {
+      state = next
+    },
+    persistSession: () => {},
+    setNotice: () => {},
+    onTriggered: () => {
+      triggers++
+    },
+    now: () => now
+  })
+  const arm = () => {
+    service.configure(createSleepTimerState('queueEnd', now, { defaultMinutes: 1, fadeSeconds: 0 }))
+    controller.applyAuthoritativeState(service.snapshot())
+  }
+  arm()
+  service.boundary('queueEnd', 1999)
+  assert.equal(await controller.reportBoundary('queueEnd', true), false)
+  assert.equal(service.snapshot()?.active, true)
+  now = 3000
+  service.boundary('queueEnd', now)
+  assert.equal(
+    await controller.reportBoundary('trackEnd', true),
+    true,
+    'suppresses advance even before trigger event delivery'
+  )
+  controller.applyTrigger(service.snapshot()!)
+  assert.equal(await controller.reportBoundary('queueEnd', true), true)
+  assert.equal(triggers, 1)
+  now = 4000
+  arm()
+  service.boundary('queueEnd', 3000)
+  assert.equal(await controller.reportBoundary('queueEnd', true), false)
+  assert.equal(reports, 0)
+  assert.equal(
+    await controller.reportBoundary('queueEnd'),
+    true,
+    'HTML/legacy EOF still reports to main'
+  )
+  assert.equal(reports, 1)
+  controller.applyAuthoritativeState(service.snapshot())
+  service.cancel()
+  assert.equal(
+    await controller.reportBoundary('queueEnd', true),
+    false,
+    'authoritative null clears a delayed local trigger'
+  )
+})
 
 function pending<T>() {
   let resolve!: (value: T) => void

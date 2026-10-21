@@ -170,6 +170,11 @@ class AudioPipeline {
   void setNativeDspPluginChain(const std::string& json);
   std::string nativeDspPluginStatusJson() const;
   bool preloadNext(const std::optional<QueueItem>& item, std::string* error);
+  /** Commit a queue-only handoff while the selected decoder is still current.
+   * Render callbacks never wait: a concurrent callback keeps reading the current
+   * stream but cannot start an obsolete preload/AutoMix transition. */
+  bool rebindQueue(const QueueItem& expected, const std::optional<QueueItem>& upcoming,
+                   const std::function<void()>& commit, bool* preloadNeeded = nullptr);
   void resetPreloadOverlap();
   bool skipToPreloaded(const QueueItem& item, std::string* error);
   bool setAutoMixMode(const std::string&, std::string* error);
@@ -512,6 +517,8 @@ class AudioPipeline {
   std::atomic<PipelineState> renderState_{PipelineState::Stopped};
   std::atomic<DecodeStream*> renderActiveStream_{nullptr};
   std::atomic<DecodeStream*> renderPreloadStream_{nullptr};
+  std::atomic<bool> queueRebindExclusive_{false};
+  std::atomic<uint32_t> queueTransitionReaders_{0};
   std::atomic<bool> renderGaplessEnabled_{true};
   std::atomic<bool> renderDopPathActive_{false};
   std::atomic<bool> renderNativeDsdPathActive_{false};

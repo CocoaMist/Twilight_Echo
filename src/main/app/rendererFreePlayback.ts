@@ -12,12 +12,13 @@ import {
 } from '../audio/engineIpc.ts'
 import { resolveAuthorizedAudioSource } from '../security/localPaths.ts'
 import { playbackSessionService } from './playbackSessionService.ts'
+import { authorizeAfterglowNativeSource } from './afterglowSourceResolver.ts'
 
 const NATIVE_CYCLE: PlayMode[] = ['sequential', 'listLoop', 'repeat']
 
 let transportLane: Promise<unknown> = Promise.resolve()
 
-const enqueueTransport = <T>(operation: () => Promise<T>): Promise<T> => {
+export const enqueueRendererFreeTransport = <T>(operation: () => Promise<T>): Promise<T> => {
   const run = transportLane.then(operation, operation)
   transportLane = run.then(
     () => undefined,
@@ -31,9 +32,31 @@ const clamp = (value: number, min: number, max: number, fallback: number): numbe
 
 const resumeCurrentQueueItem = async (
   engine: AudioEngineManager,
-  info: { queueIndex: number; position: number; duration: number; source?: string }
+  info: { queueIndex: number; position: number; duration: number; source?: string },
+  isCurrent?: () => boolean
 ): Promise<void> => {
   const session = playbackSessionService.getCachedSession()
+  if (session?.libraryQueue) {
+    const current = engine.getQueueSnapshot()[info.queueIndex]
+    if (
+      !engine.getQueueToken() ||
+      current?.queueEntryId !== session.libraryQueue.entryId ||
+      !isAfterglowPlayableSource(current.source)
+    )
+      throw new Error('afterglow_no_resumable_track')
+    const source = await authorizeAfterglowNativeSource(
+      current.source,
+      resolveAuthorizedAudioSource
+    )
+    if (isCurrent?.() === false) return
+    const result = await engine.play(
+      source,
+      info.position > 0 && info.position < info.duration ? info.position : 0
+    )
+    if (!result.nativeStarted || result.superseded)
+      throw new Error('afterglow_requires_native_playback')
+    return
+  }
   const queue = playbackSessionService.getCachedQueue()
   const queueIndex =
     info.queueIndex >= 0 && info.queueIndex < queue.length
@@ -50,6 +73,7 @@ const resumeCurrentQueueItem = async (
         ? await resolveAuthorizedAudioSource(path)
         : ''
   if (!source) throw new Error('afterglow_no_resumable_track')
+  if (isCurrent?.() === false) return
   const insideTrack =
     Number.isFinite(info.position) && info.position > 0 && info.position < info.duration
   await engine.play(source, insideTrack ? info.position : 0)
@@ -60,11 +84,62 @@ const resumeCurrentQueueItem = async (
  * Serialized like the IPC handlers so rapid tray/media-key input cannot
  * interleave two `play` requests.
  */
-export function dispatchRendererFreeTransport(command: AfterglowTransportCommand): Promise<void> {
-  return enqueueTransport(async () => {
+export interface RendererFreeTransportOptions {
+  /** Drains a cancelled automatic handoff before issuing the user command. */
+  beforeTransport?: () => Promise<void>
+  /** A queued command cannot outlive the renderer-free owner that requested it. */
+  isCurrent?: () => boolean
+  /** SQL navigation owns the full logical queue, not the resident native window. */
+  navigateLibrary?: (direction: 1 | -1, engine: AudioEngineManager) => Promise<boolean>
+  /** Undefined requests the established cycle, evaluated from logical SQL mode. */
+  changeLibraryMode?: (mode: PlayMode | undefined, engine: AudioEngineManager) => Promise<boolean>
+}
+
+export function dispatchRendererFreeTransport(
+  command: AfterglowTransportCommand,
+  options: RendererFreeTransportOptions = {}
+): Promise<void> {
+  return enqueueRendererFreeTransport(async () => {
+    if (options.isCurrent?.() === false) return
+    await options.beforeTransport?.()
+    if (options.isCurrent?.() === false) return
     const engine = await ensureAudioEngineRuntime()
+    if (options.isCurrent?.() === false) return
     await stopActiveOutputTest()
     const info = await engine.getPlaybackInfo()
+    if (options.isCurrent?.() === false) return
+
+    if (
+      playbackSessionService.getCachedSession()?.libraryQueue &&
+      !engine.getQueueToken() &&
+      ![
+        'stop',
+        'pause',
+        'set-volume',
+        'volume-step',
+        'toggle-mute',
+        'set-playback-rate',
+        'rate-step'
+      ].includes(command.type)
+    )
+      throw new Error('afterglow_library_queue_changed')
+
+    if (
+      (command.type === 'next' || command.type === 'previous') &&
+      (await options.navigateLibrary?.(command.type === 'next' ? 1 : -1, engine))
+    )
+      return
+    if (options.isCurrent?.() === false) return
+
+    if (
+      (command.type === 'set-play-mode' || command.type === 'cycle-play-mode') &&
+      (await options.changeLibraryMode?.(
+        command.type === 'set-play-mode' ? command.mode : undefined,
+        engine
+      ))
+    )
+      return
+    if (options.isCurrent?.() === false) return
 
     switch (command.type) {
       case 'play':
@@ -73,7 +148,7 @@ export function dispatchRendererFreeTransport(command: AfterglowTransportCommand
           await engine.togglePause()
           return
         }
-        await resumeCurrentQueueItem(engine, info)
+        await resumeCurrentQueueItem(engine, info, options.isCurrent)
         return
       case 'pause':
         if (info.state === 'playing') await engine.togglePause()
@@ -83,7 +158,7 @@ export function dispatchRendererFreeTransport(command: AfterglowTransportCommand
           await engine.togglePause()
           return
         }
-        await resumeCurrentQueueItem(engine, info)
+        await resumeCurrentQueueItem(engine, info, options.isCurrent)
         return
       case 'stop':
         await engine.stop()

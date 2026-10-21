@@ -255,6 +255,10 @@ export interface AudioOutputState {
 
 export interface AudioEngineQueueItem {
   id: string
+  /** Occurrence identity participates in the host's queue token, even for identical media. */
+  queueEntryId?: string
+  /** Logical cycle boundary, independent of a bounded native window. */
+  logicalQueueEnd?: boolean
   source: string
   title?: string
   artist?: string
@@ -470,6 +474,14 @@ export interface PlaybackOutputInfoMirror extends Pick<
   capabilityReason?: OutputInfo['capabilityReason']
 }
 
+export interface NativeNaturalPlaybackBoundaries {
+  trackSerial: number
+  queueSerial: number
+  /** UTC epoch milliseconds at the native clock's natural-boundary decision. */
+  trackTimeMs: number
+  queueTimeMs: number
+}
+
 export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   state: 'stopped' | 'playing' | 'paused'
   position: number
@@ -482,6 +494,8 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   queueIndex: number
   /** Monotonic native queue content revision (hot append/source updates). */
   queueRevision?: number
+  /** Monotonic natural EOF/promotion counts; explicit transport never increments them. */
+  naturalBoundaries?: NativeNaturalPlaybackBoundaries
   /** Absolute native index of the preloaded/upcoming item, or -1. */
   upcomingQueueIndex?: number
   /** Main-issued content version for mapping partial native queues to logical entries. */

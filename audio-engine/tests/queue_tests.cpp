@@ -348,6 +348,36 @@ void testPlayModeChangesDoNotBumpQueueRevision() {
   assert(queue.queueRevision() == revisionBefore);
 }
 
+void testLogicalQueueBoundaryOverridesOnlyTheResidentWindow() {
+  QueueManager queue;
+  std::string error;
+  assert(queue.loadFromJson(kQueueJson, 2, &error));
+  assert(queue.currentCompletesQueue());
+  queue.setPlayMode(PlayMode::Repeat);
+  assert(!queue.currentCompletesQueue());
+  const std::string window =
+      "[{\"id\":\"last\",\"source\":\"disc.flac\",\"logicalQueueEnd\":true},"
+      "{\"id\":\"first\",\"source\":\"disc.flac\",\"logicalQueueEnd\":false}]";
+  assert(queue.loadFromJson(window, 0, &error));
+  queue.setPlayMode(PlayMode::Sequential);
+  assert(queue.currentCompletesQueue());
+  assert(queue.advanceAfterEnd());
+  assert(!queue.currentCompletesQueue());
+  assert(queue.queueJson().find("\"logicalQueueEnd\":false") != std::string::npos);
+  // Source refresh serializes the queue again and must preserve false as well as true.
+  assert(queue.updateItemSource(0, "fresh.flac", &error));
+  assert(queue.queueJson().find("\"logicalQueueEnd\":true") != std::string::npos);
+  assert(queue.queueJson().find("\"logicalQueueEnd\":false") != std::string::npos);
+  assert(queue.loadFromJson("[{\"source\":\"one.flac\",\"logicalQueueEnd\":true}]", 0, &error));
+  queue.setPlayMode(PlayMode::Repeat);
+  assert(queue.currentCompletesQueue() && "a host singleton listLoop uses native repeat");
+  for (const std::string value : {"null", "1", "\"true\"", "truejunk", "{}"}) {
+    assert(!queue.loadFromJson("[{\"source\":\"one.flac\",\"logicalQueueEnd\":" + value + "}]", 0, &error));
+  }
+  assert(queue.loadFromJson("[{\"source\":\"one.flac\",\"title\":\"\\\"logicalQueueEnd\\\":true\"}]", 0, &error));
+  assert(!queue.current()->logicalQueueEnd.has_value());
+}
+
 }  // namespace
 
 int main() {
@@ -370,5 +400,6 @@ int main() {
   testAppendBatchIsAtomicAndRejectsNonArrays();
   testUpdateItemSourceRefreshesOnlyFutureEntries();
   testPlayModeChangesDoNotBumpQueueRevision();
+  testLogicalQueueBoundaryOverridesOnlyTheResidentWindow();
   return 0;
 }

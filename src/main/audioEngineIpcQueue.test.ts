@@ -5,6 +5,9 @@ import { normalizeCueRange } from '../shared/cue.ts'
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { resolveAuthorizationBatch } from './security/authorizationBatch.ts'
+import { normalizeIpcArray, normalizeIpcString } from './security/ipcValidation.ts'
+import type { AudioEngineQueueItem } from '../shared/audioEngineTypes.ts'
+import type { NativeQueueCommit, NativeQueueRebind } from '../shared/nativeQueue.ts'
 
 function readPreloadSources(): string {
   const root = new URL('../preload/', import.meta.url)
@@ -38,6 +41,34 @@ const deviceHotplugSource = readFileSync(
   'utf8'
 )
 const windowSource = readFileSync(new URL('./app/window.ts', import.meta.url), 'utf8')
+
+test('queue occurrence IDs survive IPC normalization without aliases or identity truncation', () => {
+  const declaration = (name: string) => {
+    const start = source.indexOf(`function ${name}(`)
+    return source.slice(start, source.indexOf('\n}', start) + 2)
+  }
+  const normalize = runInNewContext(
+    stripTypeScriptTypes(
+      `${declaration('toQueueItem')}\n${declaration('normalizeQueueText')}\ntoQueueItem`
+    ),
+    {
+      normalizeCueRange,
+      normalizeIpcString,
+      MAX_AUDIO_SOURCE_LENGTH: 8192
+    }
+  ) as (value: unknown) => AudioEngineQueueItem | null
+  const track = { id: 'same', source: 'D:/Music/same.flac' }
+  assert.equal(normalize(track)?.logicalQueueEnd, undefined)
+  for (const logicalQueueEnd of [true, false])
+    assert.equal(normalize({ ...track, logicalQueueEnd })?.logicalQueueEnd, logicalQueueEnd)
+  for (const logicalQueueEnd of [null, 0, 1, 'true', {}, []])
+    assert.equal(normalize({ ...track, logicalQueueEnd }), null)
+  assert.equal(normalize(track)?.queueEntryId, undefined)
+  for (const queueEntryId of ['first', 'second', 'x'.repeat(128)])
+    assert.equal(normalize({ ...track, queueEntryId })?.queueEntryId, queueEntryId)
+  for (const queueEntryId of ['', ' first ', 'x'.repeat(129), 2, null, 'line\nbreak'])
+    assert.equal(normalize({ ...track, queueEntryId }), null)
+})
 
 test('audioEngine loadQueue IPC accepts renderer queue items with source field', () => {
   const start = source.indexOf('function toQueueItem')
@@ -217,6 +248,118 @@ test('queue cursor IPC freshly authorizes its source before forwarding the main-
   await assert.rejects(handler({}, selection), /denied/)
   assert.equal(selections.length, 1)
   await assert.rejects(handler({}, []), /Invalid queue selection/)
+})
+
+test('queue handoff IPC strictly validates identity and authorizes every source before native dispatch', async () => {
+  const declaration = (name: string) => {
+    const start = source.indexOf(`function ${name}(`)
+    return source.slice(start, source.indexOf('\n}', start) + 2)
+  }
+  const start = source.indexOf('ipcMain.handle(IPC.audioEngine.rebindQueue')
+  const handlerSource = source.slice(start, source.indexOf('\n  ipcMain.handle(', start + 1))
+  let handler!: (event: unknown, request: unknown) => Promise<NativeQueueCommit | null>
+  let trusted = true,
+    denied = ''
+  const authorized: string[] = [],
+    received: NativeQueueRebind[] = []
+  let complete!: (value: NativeQueueCommit | null) => void
+  const nativeReply = new Promise<NativeQueueCommit | null>((resolve) => {
+    complete = resolve
+  })
+  runInNewContext(
+    stripTypeScriptTypes(
+      `${declaration('toQueueItem')}\n${declaration('normalizeQueueText')}\n${handlerSource}`
+    ),
+    {
+      IPC: { audioEngine: { rebindQueue: 'rebind' } },
+      ipcMain: {
+        handle: (_channel: string, callback: typeof handler) => {
+          handler = callback
+        }
+      },
+      assertTrustedIpcSender: () => {
+        if (!trusted) throw new Error('untrusted')
+      },
+      MAX_AUDIO_QUEUE_ITEMS: 5000,
+      MAX_AUDIO_SOURCE_LENGTH: 8192,
+      normalizeIpcString,
+      normalizeIpcArray,
+      normalizeCueRange,
+      resolveAuthorizationBatch,
+      resolveAuthorizedPlaybackSource: async (source: string) => {
+        authorized.push(source)
+        if (source === denied) throw new Error('denied')
+        return `canonical:${source}`
+      },
+      ensureAudioEngineRuntime: async () => ({
+        rebindQueue: (request: NativeQueueRebind) => {
+          received.push(request)
+          return nativeReply
+        }
+      })
+    }
+  )
+  const request = {
+    expected: { queueToken: 'old', index: 299_999, id: 'cue', source: 'disc.flac' },
+    items: [
+      {
+        id: 'cue',
+        source: 'disc.flac',
+        queueEntryId: 'new-occurrence',
+        cueRange: { startSeconds: 10, endSeconds: 20 }
+      },
+      { id: 'next', source: 'next.flac' }
+    ],
+    startIndex: 0,
+    playMode: 'sequential'
+  }
+  const invalid = [
+    null,
+    [],
+    { ...request, expected: [] },
+    { ...request, expected: { ...request.expected, index: '49' } },
+    { ...request, expected: { ...request.expected, index: 0.5 } },
+    { ...request, startIndex: -1 },
+    { ...request, startIndex: 2 },
+    { ...request, startIndex: '0' },
+    { ...request, startIndex: 0.5 },
+    { ...request, playMode: 'shuffle' },
+    { ...request, items: [] },
+    { ...request, items: Array(5001).fill(request.items[0]) },
+    {
+      ...request,
+      items: [{ ...request.items[0], cueRange: { startSeconds: 20, endSeconds: 10 } }]
+    },
+    { ...request, items: [{ ...request.items[0], queueEntryId: ' padded ' }] }
+  ]
+  for (const bad of invalid) await assert.rejects(handler({}, bad))
+  assert.deepEqual(authorized, [])
+  assert.equal(received.length, 0)
+  trusted = false
+  await assert.rejects(handler({}, request), /untrusted/)
+  trusted = true
+  denied = 'next.flac'
+  await assert.rejects(handler({}, request), /denied/)
+  assert.equal(received.length, 0)
+  denied = ''
+  authorized.length = 0
+  let settled = false
+  const pending = handler({}, request).then((commit) => {
+    settled = true
+    return commit
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false)
+  assert.deepEqual(authorized, ['disc.flac', 'next.flac'])
+  assert.equal(received.length, 1)
+  assert.equal(received[0].expected.source, 'canonical:disc.flac')
+  assert.equal(received[0].expected.index, 299_999)
+  assert.equal(received[0].items[0].queueEntryId, 'new-occurrence')
+  assert.deepEqual(received[0].items[0].cueRange, normalizeCueRange(request.items[0].cueRange))
+  assert.equal(received[0].items[1].source, 'canonical:next.flac')
+  const commit = { queueToken: 'new' }
+  complete(commit)
+  assert.equal(await pending, commit)
 })
 
 test('loadQueue outcomes reach the audio diagnostics log', () => {

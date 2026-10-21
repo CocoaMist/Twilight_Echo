@@ -198,6 +198,10 @@ export const audioEngineApi = {
     selectQueueItem: (
       selection: import('../../shared/nativeQueue.ts').NativeQueueSelection
     ): Promise<boolean> => ipcRenderer.invoke(IPC.audioEngine.selectQueueItem, selection),
+    rebindQueue: (
+      request: import('../../shared/nativeQueue.ts').NativeQueueRebind
+    ): Promise<import('../../shared/nativeQueue.ts').NativeQueueCommit | null> =>
+      ipcRenderer.invoke(IPC.audioEngine.rebindQueue, request),
     play: (filePath: string, startTime?: number): Promise<AudioEnginePlayResult> =>
       ipcRenderer.invoke(IPC.audioEngine.play, filePath, startTime),
     isHtmlAudioFallbackAllowed: (): Promise<boolean> =>

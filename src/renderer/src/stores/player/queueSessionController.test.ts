@@ -121,3 +121,58 @@ test('restores cannot overwrite a newer queue, playback selection or cancelled d
     assert.equal(state.plays(), 0)
   }
 })
+
+test('SQLite queue sessions save and restore a durable reference without array entries', async (t) => {
+  const reference = { id: 'queue-1', revision: 3, entryId: 'entry-2', index: 17 }
+  const workspace = createQueueWorkspaceStore(() => ({
+    loadQueueWorkspace: async () => null,
+    saveQueueWorkspace: async (document) => {
+      return {
+        version: 2,
+        revision: 1,
+        savedAt: new Date().toISOString(),
+        data: document
+      }
+    }
+  }))
+  const queue = shallowRef<Track[]>([]),
+    originalQueue = shallowRef<Track[]>([]),
+    currentTrack = shallowRef<Track | null>(null),
+    revision = ref(0),
+    playMode = ref<PlayMode>('shuffle'),
+    restored = track('entry-2')
+  let prepared = false
+  const controller = createQueueSessionController({
+    workspace,
+    queue,
+    originalQueue,
+    currentTrack,
+    revision,
+    playMode,
+    getPosition: () => 31,
+    getSources: async () => {
+      throw new Error('array sources must not be requested')
+    },
+    getLibraryQueueReference: () => reference,
+    restoreLibraryQueue: async (requested, _mode, isCurrent) => {
+      assert.deepEqual(requested, reference)
+      assert.equal(isCurrent(), true)
+      return { track: restored, reference: requested }
+    },
+    prepare: () => {
+      throw new Error('array prepare must not be requested')
+    },
+    prepareLibrary: (result, mode, position) => {
+      prepared = result.track.id === restored.id && mode === 'shuffle' && position === 31
+      currentTrack.value = result.track
+    },
+    play: async () => {}
+  })
+  t.after(workspace.dispose)
+  await controller.save('database')
+  const saved = workspace.sessions.value[0]
+  assert.equal(saved?.libraryQueue?.entryId, 'entry-2')
+  assert.deepEqual(saved?.entries, [])
+  await controller.restore(saved!.id)
+  assert.equal(prepared, true)
+})

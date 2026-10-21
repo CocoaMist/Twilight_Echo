@@ -109,6 +109,9 @@ struct AudioStreamInfo {
 
 struct QueueItem {
   std::string id;
+  // A bounded host window may end before, or wrap inside, the logical queue.
+  // Absent retains native/full-queue semantics; present is host EOF policy.
+  std::optional<bool> logicalQueueEnd;
   std::string source;
   std::string title;
   std::string artist;

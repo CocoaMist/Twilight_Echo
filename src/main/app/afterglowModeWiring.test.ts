@@ -45,8 +45,10 @@ test('renderer restore adopts live engine state without reloading the queue', as
 
   assert.doesNotMatch(body, /loadQueue\(/, 'adoption must not reload the native queue')
   assert.doesNotMatch(body, /audioEngine\.play\(|api\.play\(/, 'adoption must not restart playback')
-  assert.match(body, /restoredPlaybackPending = false/)
-  assert.match(body, /nativePlaybackActive = true/)
+  assert.match(body, /const recovery = state\.recovery === 'native-queue-unknown'/)
+  assert.match(body, /restoredPlaybackPending = recovery/)
+  assert.match(body, /nativePlaybackActive = !recovery/)
+  assert.match(body, /nativeQueueAdoptionUncertain = recovery/)
   assert.match(body, /nativeQueueLoader\.adopt/)
   assert.match(body, /adoptedAfterglowRestore = true/)
 
@@ -60,7 +62,7 @@ test('renderer restore adopts live engine state without reloading the queue', as
 test('renderer-free control plane is serialized and reads live engine state', async () => {
   const source = await read('./rendererFreePlayback.ts')
   assert.match(source, /let transportLane: Promise<unknown> = Promise\.resolve\(\)/)
-  assert.match(source, /enqueueTransport/)
+  assert.match(source, /enqueueRendererFreeTransport/)
   assert.match(source, /stopActiveOutputTest\(\)/)
   assert.match(source, /scheduleSoftwareVolumePersist\(/)
   assert.match(source, /getPlaybackInfo\(\)/)
@@ -147,6 +149,10 @@ test('the renderer hands its queue to main without touching playback-session.jso
   assert.match(service, /bindWindowedAutoRestore/)
   assert.match(service, /AFTERGLOW_WINDOWED_AUTO_RESTORE_DELAY_MS/)
   assert.match(service, /afterglow_requires_mappable_current_track/)
+  assert.match(service, /AFTERGLOW_QUEUE_REFERENCE_OWNER = 'afterglow'/)
+  assert.match(service, /syncLibraryQueueReferences\(AFTERGLOW_QUEUE_REFERENCE_OWNER/)
+  assert.match(service, /setAfterglowLibraryQueueReference\(prepared\.queue\.id, true\)/)
+  assert.match(service, /afterglow_restore_window_timeout/)
   // Queue-end/error restore is not limited to windowed queues, and the online
   // core starts for full queues too (so upcoming URLs can still be refreshed).
   assert.match(service, /this\.bindWindowedAutoRestore\(\)\n/)

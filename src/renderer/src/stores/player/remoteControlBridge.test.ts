@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { shallowRef } from 'vue'
+import type { RemoteBrowseResult } from '../../../../shared/remoteControl.ts'
 import type { Track } from '../../types/music.ts'
 import { createRemoteControlBridge } from './remoteControlBridge.ts'
 import { createQueueCommandController } from './queueCommandController.ts'
@@ -237,4 +238,171 @@ test('large-library paging mints only visible tokens and queue revisions disting
   } finally {
     stub.mock.restore()
   }
+})
+
+test('SQLite remote browsing reads a bounded page and plays through the frozen database query', async () => {
+  const record = {
+    id: 'track:deep',
+    filePath: 'D:/Music/deep.flac',
+    fileName: 'deep.flac',
+    title: 'Deep Song',
+    artist: 'Artist',
+    album: 'Album',
+    duration: 180,
+    source: 'local'
+  }
+  const requests: unknown[] = []
+  const played: Array<{ query: unknown; id: string }> = []
+  const bridge = createRemoteControlBridge({
+    tracks: {
+      get value(): Track[] {
+        throw new Error('SQLite remote browse must not read the compatibility array')
+      }
+    } as never,
+    playlists: shallowRef([]),
+    getPlaylistTracks: () => {
+      throw new Error('SQLite remote browse must not resolve playlist arrays')
+    },
+    queue: shallowRef([]),
+    queueIndex: shallowRef(-1),
+    playMode: shallowRef('sequential'),
+    playTrack: async () => {},
+    enqueueTrack: () => {},
+    jumpQueue: () => {},
+    removeQueueItem: () => {},
+    setPlayMode: () => {},
+    getStorageMode: async () => 'sqlite',
+    database: {
+      queryTracks: async (query) => {
+        requests.push(query)
+        return {
+          tracks: [record],
+          versions: { [record.id]: 1 },
+          total: 401,
+          revision: 7,
+          offset: query?.offset ?? 0,
+          totalDuration: 0
+        }
+      },
+      queryCollections: async () => ({
+        items: [],
+        total: 0,
+        revision: 7,
+        offset: 0,
+        letterOffsets: {}
+      }),
+      getTracksByIds: async () => ({
+        tracks: [record],
+        versions: { [record.id]: 1 },
+        total: 1,
+        revision: 7,
+        offset: 0
+      }),
+      readLibraryQueue: async () => ({
+        items: [],
+        total: 0,
+        revision: 1,
+        libraryRevision: 7,
+        offset: 0
+      })
+    },
+    playLibraryQuery: async (query, id) => {
+      played.push({ query, id })
+    }
+  })
+  const page = await (bridge.browse({
+    view: 'library',
+    query: 'Deep',
+    offset: 200,
+    limit: 40
+  }) as unknown as Promise<RemoteBrowseResult>)
+  assert.equal(page.items[0].title, 'Deep Song')
+  assert.equal(page.total, 401)
+  assert.deepEqual(requests, [
+    {
+      search: 'Deep',
+      searchLiteral: true,
+      sort: 'insertion',
+      direction: 'asc',
+      offset: 200,
+      limit: 40
+    }
+  ])
+  await bridge.command({ action: 'playTrack', id: page.items[0].id })
+  assert.deepEqual(played, [
+    {
+      query: { search: 'Deep', searchLiteral: true, sort: 'insertion', direction: 'asc' },
+      id: record.id
+    }
+  ])
+})
+
+test('SQLite remote playlist browsing uploads a playlist view once and keeps playback query bounded', async () => {
+  const playlistQueries: Array<{ id: string; request: unknown }> = []
+  const record = {
+    id: 'track:playlist',
+    filePath: 'D:/Music/playlist.flac',
+    fileName: 'playlist.flac',
+    title: 'Playlist Song',
+    artist: 'Artist',
+    album: 'Album',
+    duration: 90,
+    source: 'local'
+  }
+  const bridge = createRemoteControlBridge({
+    tracks: { value: [] } as never,
+    playlists: shallowRef([{ id: 'p', name: 'Saved', trackIds: ['track:playlist'] }]),
+    getPlaylistTracks: () => [],
+    queue: shallowRef([]),
+    queueIndex: shallowRef(-1),
+    playMode: shallowRef('sequential'),
+    playTrack: async () => {},
+    enqueueTrack: () => {},
+    jumpQueue: () => {},
+    removeQueueItem: () => {},
+    setPlayMode: () => {},
+    getStorageMode: async () => 'sqlite',
+    database: {
+      queryTracks: async () => ({ tracks: [], versions: {}, total: 0, revision: 2, offset: 0 }),
+      queryCollections: async () => ({
+        items: [],
+        total: 0,
+        revision: 2,
+        offset: 0,
+        letterOffsets: {}
+      }),
+      getTracksByIds: async () => ({ tracks: [], versions: {}, total: 0, revision: 2, offset: 0 }),
+      readLibraryQueue: async () => ({
+        items: [],
+        total: 0,
+        revision: 1,
+        libraryRevision: 2,
+        offset: 0
+      })
+    },
+    queryLibraryPlaylist: async (id, request) => {
+      playlistQueries.push({ id, request })
+      return {
+        page: { tracks: [record], versions: {}, total: 1, revision: 2, offset: 0 },
+        query: { playlistView: 'remote-view', sort: 'playlist' }
+      }
+    },
+    playLibraryQuery: async () => {}
+  })
+  const headers = await (bridge.browse({
+    view: 'playlists',
+    query: '',
+    offset: 0,
+    limit: 40
+  }) as unknown as Promise<RemoteBrowseResult>)
+  const page = await (bridge.browse({
+    view: 'playlists',
+    playlistId: headers.items[0].id,
+    query: '',
+    offset: 0,
+    limit: 40
+  }) as unknown as Promise<RemoteBrowseResult>)
+  assert.equal(page.items[0].title, 'Playlist Song')
+  assert.equal(playlistQueries.length, 1)
+  assert.equal(playlistQueries[0].id, 'p')
 })

@@ -404,6 +404,10 @@ std::string playbackInfoToJson(const PlaybackInfo& info) {
        << "\"appliedConfigRevision\":" << info.appliedConfigRevision << ","
        << "\"queueIndex\":" << info.queueIndex << ","
        << "\"queueRevision\":" << info.queueRevision << ","
+       << "\"naturalBoundaries\":{\"trackSerial\":" << info.naturalBoundaries.trackSerial
+       << ",\"queueSerial\":" << info.naturalBoundaries.queueSerial
+       << ",\"trackTimeMs\":" << info.naturalBoundaries.trackTimeMs
+       << ",\"queueTimeMs\":" << info.naturalBoundaries.queueTimeMs << "},"
        << "\"upcomingQueueIndex\":" << info.upcomingQueueIndex << ","
        << "\"playMode\":\"" << json_utils::escape(info.playMode) << "\","
        << "\"source\":\"" << json_utils::escape(info.source) << "\","
@@ -1280,10 +1284,69 @@ bool sameQueuePosition(
   if (!left) return true;
   return left->id == right->id && left->source == right->source &&
          left->cueStartSeconds == right->cueStartSeconds &&
-         left->cueEndSeconds == right->cueEndSeconds;
+         left->cueEndSeconds == right->cueEndSeconds &&
+         left->cueVirtualPregapSeconds == right->cueVirtualPregapSeconds;
 }
 
 }  // namespace
+
+TAE_Result TwilightAudioEngine::rebindQueue(const std::string& queueJson, int startIndex,
+                                           const std::string& mode,
+                                           const std::string& expectedJson, int expectedIndex,
+                                           int* outApplied) {
+  if (outApplied) *outApplied = 0;
+  std::lock_guard transportLock(transportMutex_);
+  const ClockWake wake(*this);
+  if (startIndex < 0 || expectedIndex < 0 ||
+      (mode != "sequential" && mode != "repeat" && mode != "shuffle" && mode != "listLoop"))
+    return TAE_RESULT_INVALID_ARGUMENT;
+
+  QueueManager expectedQueue;
+  std::string error;
+  if (!expectedQueue.loadFromJson("[" + expectedJson + "]", 0, &error) || expectedQueue.size() != 1)
+    return TAE_RESULT_INVALID_ARGUMENT;
+  const auto expected = expectedQueue.current();
+  std::optional<QueueItem> upcoming;
+  bool transportActive = false;
+  bool preloadNeeded = false;
+  {
+    std::lock_guard lock(mutex_);
+    if (queue_.currentIndex() != expectedIndex || !sameQueuePosition(queue_.current(), expected))
+      return TAE_RESULT_OK;
+    if (info_.state != PlaybackState::Stopped && info_.source != expected->source)
+      return TAE_RESULT_OK;
+    // Parse into a copy: the legacy parser clears its target on invalid input.
+    // Its revision therefore stays monotonic without changing LoadQueue's API.
+    QueueManager replacement = queue_;
+    if (!replacement.loadFromJson(queueJson, startIndex, &error) ||
+        startIndex >= static_cast<int>(replacement.size()) ||
+        !sameQueuePosition(replacement.current(), expected))
+      return TAE_RESULT_INVALID_ARGUMENT;
+    replacement.setPlayMode(QueueManager::parsePlayMode(mode));
+    upcoming = replacement.upcoming();
+    const auto commit = [&] {
+      queue_ = std::move(replacement);
+      info_.queueIndex = queue_.currentIndex();
+      info_.playMode = queue_.playModeId();
+      info_.hasUpcomingTrack = upcoming.has_value();
+      info_.upcomingTrack = upcoming.value_or(QueueItem{});
+    };
+    if (pipeline_) {
+      if (!pipeline_->rebindQueue(*expected, upcoming, commit, &preloadNeeded)) return TAE_RESULT_OK;
+    } else commit();
+    if (!upcoming || preloadNeeded) info_.preloadReady = false;
+    transportActive = info_.state != PlaybackState::Stopped && !pausedOutputReleased_;
+  }
+  if (outApplied) *outApplied = 1;
+  // Preloading is outside the short render/control handoff. Failure only loses
+  // lookahead, never undoes a committed handoff or restarts the current stream.
+  if (pipeline_ && transportActive && preloadNeeded) {
+    std::string preloadError;
+    pipeline_->preloadNext(upcoming, &preloadError);
+  }
+  emit("queue-change", queueJson);
+  return TAE_RESULT_OK;
+}
 
 TAE_Result TwilightAudioEngine::appendQueueItems(const std::string& itemsJson, int* outFirstIndex) {
   std::lock_guard transportLock(transportMutex_);
@@ -2122,6 +2185,7 @@ std::string TwilightAudioEngine::engineCapabilitiesJson() const {
        << ",\"output\":{\"accessModes\":[\"shared\",\"exclusive\",\"hog\",\"direct\",\"plugin\"]}"
        << ",\"queueHotUpdate\":{\"version\":1,\"append\":true,\"updateSource\":true,"
           "\"upcomingIndex\":true}"
+       << ",\"queueRebind\":{\"version\":1,\"conditional\":true}"
        << "}";
   return json.str();
 }
@@ -2253,6 +2317,18 @@ void TwilightAudioEngine::diagnosticLoop() {
   journal.drain(); journal.write("engine.stopped", "{}");
 }
 
+void TwilightAudioEngine::recordNaturalBoundaryLocked() {
+  auto& boundary = info_.naturalBoundaries;
+  const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count());
+  ++boundary.trackSerial;
+  boundary.trackTimeMs = now;
+  if (queue_.currentCompletesQueue()) {
+    ++boundary.queueSerial;
+    boundary.queueTimeMs = now;
+  }
+}
+
 void TwilightAudioEngine::clockLoop() {
   PipelineState lastPipelineState = PipelineState::Stopped;
   while (running_) {
@@ -2279,7 +2355,6 @@ void TwilightAudioEngine::clockLoop() {
     bool renderError = false;
     bool decodeError = false;
     bool trackStarted = false;
-    QueueItem startedItem;
     std::string deviceInvalidatedMessage;
     std::string renderErrorMessage;
     std::string decodeErrorMessage;
@@ -2316,7 +2391,7 @@ void TwilightAudioEngine::clockLoop() {
       deviceInvalidated = pipeline_->consumeDeviceInvalidated(&deviceInvalidatedMessage);
       renderError = pipeline_->consumeRenderError(&renderErrorMessage);
       decodeError = pipeline_->consumeDecodeError(&decodeErrorMessage);
-      trackStarted = pipeline_->consumeTrackStarted(&startedItem);
+      trackStarted = pipeline_->consumeTrackStarted(nullptr);
       // Promotion can occur between the snapshot and the track-start flag.
       if(trackStarted)pipelineStatus=pipeline_->status();
       lastPipelineState=pipelineStatus.state;
@@ -2390,21 +2465,14 @@ void TwilightAudioEngine::clockLoop() {
       std::optional<QueueItem> upcoming;
       {
         std::lock_guard lock(mutex_);
-        // next() advances the queue itself and then swallows the
-        // track-started flag. If this clock tick observes the flag inside that
-        // window instead, the queue is already on the started item and
-        // advancing again would skip a track. Compare by item id; fall back to
-        // source + CUE identity when the host supplied no id.
-        const auto current = queue_.current();
-        const bool queueAlreadyOnStartedItem =
-            current.has_value() && startedItem.source == current->source &&
-            (!startedItem.id.empty()
-                 ? startedItem.id == current->id
-                 : startedItem.cueStartSeconds == current->cueStartSeconds &&
-                       startedItem.cueEndSeconds == current->cueEndSeconds);
-        if (!queueAlreadyOnStartedItem) {
-          queue_.advanceAfterEnd();
-        }
+        // Only this clock consumes natural promotions. Explicit next() consumes
+        // its own start flag under the same transport lock and never counts EOF.
+        // Same-source/same-index repeat is still a new natural boundary.
+        recordNaturalBoundaryLocked();
+        // Explicit next/play consume or clear their own promotion flag under
+        // transportMutex_. Every remaining flag advances once, even when two
+        // logical occurrences have identical ids, sources and CUE ranges.
+        queue_.advanceAfterEnd();
         applyClockPipelineStatusLocked(pipelineStatus);
         info_.queueIndex = queue_.currentIndex();
         info_.playMode = queue_.playModeId();
@@ -2420,7 +2488,9 @@ void TwilightAudioEngine::clockLoop() {
       if (pipeline_) pipeline_->preloadNext(upcoming, &preloadError);
       if (emitTick) emit("property-change", payload);
       emit("start-file", "{}");
-      continue;
+      // A very short promoted item can also drain before this clock sample.
+      // Its consumed EOF flag must be handled below, not silently discarded.
+      if (!emitEnded) continue;
     }
     std::optional<QueueItem> autoNextItem;
     bool releaseAtEnd = false;
@@ -2430,6 +2500,7 @@ void TwilightAudioEngine::clockLoop() {
         applyClockPipelineStatusLocked(pipelineStatus);
       }
       if (emitEnded) {
+        recordNaturalBoundaryLocked();
         autoNextItem = queue_.advanceAfterEnd();
         if (autoNextItem && !autoNextItem->source.empty()) {
           info_.queueIndex = queue_.currentIndex();
@@ -3040,6 +3111,16 @@ TAE_Result TAE_SetOutputBackend(TAE_EngineHandle engine, const char* backend_id)
 TAE_Result TAE_LoadQueue(TAE_EngineHandle engine, const char* queue_json, int start_index) {
   if (!engine) return TAE_RESULT_NOT_INITIALIZED;
   return fromHandle(engine)->loadQueue(queue_json ? queue_json : "[]", start_index);
+}
+
+TAE_Result TAE_RebindQueue(TAE_EngineHandle engine, const char* queue_json, int start_index,
+                          const char* mode, const char* expected_item_json,
+                          int expected_index, int* out_applied) {
+  if (out_applied) *out_applied = 0;
+  if (!engine || !queue_json || !mode || !expected_item_json || !out_applied)
+    return TAE_RESULT_INVALID_ARGUMENT;
+  return fromHandle(engine)->rebindQueue(queue_json, start_index, mode, expected_item_json,
+                                        expected_index, out_applied);
 }
 
 TAE_Result TAE_AppendQueueItems(

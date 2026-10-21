@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -46,14 +47,19 @@ int serve(int argc, wchar_t* argv[]) {
   }
 
   HANDLE mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, mappingName.c_str());
-  if (!mapping) return 2;
+  if (!mapping) {
+    std::fprintf(stderr, "VST3 fixture OpenFileMappingW failed: %lu\n", GetLastError());
+    return 2;
+  }
   auto* shared = static_cast<SharedMemory*>(MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(SharedMemory)));
   if (!shared) {
+    std::fprintf(stderr, "VST3 fixture MapViewOfFile failed: %lu\n", GetLastError());
     CloseHandle(mapping);
     return 2;
   }
   HANDLE inputEvent = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, inputEventName.c_str());
   if (!inputEvent) {
+    std::fprintf(stderr, "VST3 fixture OpenEventW failed: %lu\n", GetLastError());
     UnmapViewOfFile(shared);
     CloseHandle(mapping);
     return 2;

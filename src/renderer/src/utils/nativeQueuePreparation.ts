@@ -8,6 +8,8 @@ const WINDOWS_ABSOLUTE_PATH_PATTERN = /^[a-zA-Z]:[\\/]/
 
 export interface NativeQueueLoadItem {
   id: string
+  queueEntryId?: string
+  logicalQueueEnd?: boolean
   source: string
   duration?: number
   format?: string
@@ -25,12 +27,28 @@ export interface NativeQueueLoadItem {
   cueRange?: Track['cueRange']
 }
 
+export interface LibraryNativeQueueEntry {
+  id: string
+  queueEntryId: string
+  /** Absolute position in the frozen database queue. */
+  index: number
+}
+export interface LibraryNativeQueueReference {
+  id: string
+  revision: number
+}
+export interface LibraryNativeQueueMapping extends LibraryNativeQueueReference {
+  entries: LibraryNativeQueueEntry[]
+}
+
 export interface PreparedNativeQueue {
   items: NativeQueueLoadItem[]
   startIndex: number
   delegated: boolean
   /** Logical indices for a partial queue. Such a window must never loop itself. */
   queueIndices?: number[]
+  /** Explicit database mapping: never index a global Track[] with these positions. */
+  libraryQueue?: LibraryNativeQueueMapping
 }
 
 export interface PrepareNativeQueueOptions {
@@ -39,6 +57,13 @@ export interface PrepareNativeQueueOptions {
   currentTarget: string
   currentIndex: number
   playMode?: PlayMode
+  /** `queue` contains only a bounded detail window, not the global queue. */
+  libraryQueue?: LibraryNativeQueueReference & {
+    positions: readonly number[]
+    /** Complete frozen queue length, not the resident detail-window length. */
+    total?: number
+    lastPlayablePosition?: number
+  }
   /** Only the main-issued queue token may commit this speculative reuse. */
   canReuseQueue?: (items: NativeQueueLoadItem[]) => boolean
   isCurrent?: () => boolean
@@ -74,9 +99,101 @@ export async function preparePlayerNativeQueue(
 export async function prepareNativeQueue(
   options: PrepareNativeQueueOptions
 ): Promise<PreparedNativeQueue | null> {
+  if (options.libraryQueue) validateLibraryWindow(options)
+  const prepared = await prepareNativeQueueContents(options)
+  if (!prepared) return null
+  if (!options.libraryQueue) {
+    // Partial array windows also carry logical EOF policy. Missing metadata on
+    // full native queues retains native shuffle-order and legacy behavior.
+    if (prepared.delegated) return prepared
+    const indices = prepared.queueIndices ?? [findCurrentQueueIndex(options)]
+    return {
+      ...prepared,
+      queueIndices: indices,
+      items: prepared.items.map((item, index) => ({
+        ...item,
+        logicalQueueEnd:
+          options.playMode !== 'repeat' &&
+          options.playMode !== 'heart' &&
+          indices[index] === options.queue.length - 1
+      }))
+    }
+  }
+  const indices =
+    prepared.queueIndices ??
+    (prepared.delegated
+      ? prepared.items.map((_, index) => index)
+      : [findCurrentQueueIndex(options)])
+  const entries = indices.map(
+    (index): LibraryNativeQueueEntry => ({
+      id: options.queue[index].id,
+      queueEntryId: options.queue[index].queueEntryId!,
+      index: options.libraryQueue!.positions[index]
+    })
+  )
+  return {
+    ...prepared,
+    ...(options.libraryQueue.total !== undefined
+      ? {
+          items: prepared.items.map((item, index) => ({
+            ...item,
+            logicalQueueEnd:
+              options.playMode !== 'repeat' &&
+              entries[index].index ===
+                (options.libraryQueue!.lastPlayablePosition ?? options.libraryQueue!.total! - 1)
+          }))
+        }
+      : {}),
+    delegated: false,
+    queueIndices: entries.map((entry) => entry.index),
+    libraryQueue: { id: options.libraryQueue.id, revision: options.libraryQueue.revision, entries }
+  }
+}
+
+function validateLibraryWindow(options: PrepareNativeQueueOptions): void {
+  const window = options.libraryQueue!
+  if (
+    typeof window.id !== 'string' ||
+    !window.id ||
+    window.id.length > 128 ||
+    !Number.isSafeInteger(window.revision) ||
+    window.revision < 0 ||
+    !options.queue.length ||
+    options.queue.length > MAX_NATIVE_QUEUE_ITEMS ||
+    !Array.isArray(window.positions) ||
+    window.positions.length !== options.queue.length ||
+    window.positions.some((position) => !Number.isSafeInteger(position) || position < 0) ||
+    (window.total !== undefined &&
+      (!Number.isSafeInteger(window.total) ||
+        window.total <= 0 ||
+        window.positions.some((position) => position >= window.total!))) ||
+    (window.lastPlayablePosition !== undefined &&
+      (!Number.isSafeInteger(window.lastPlayablePosition) ||
+        window.lastPlayablePosition < 0 ||
+        window.total === undefined ||
+        window.lastPlayablePosition >= window.total)) ||
+    new Set(window.positions).size !== window.positions.length ||
+    typeof options.currentTrack.queueEntryId !== 'string' ||
+    !options.currentTrack.queueEntryId ||
+    options.queue.some(
+      (track) =>
+        typeof track.queueEntryId !== 'string' ||
+        !track.queueEntryId ||
+        track.queueEntryId.length > 128
+    ) ||
+    new Set(options.queue.map((track) => track.queueEntryId)).size !== options.queue.length ||
+    findCurrentQueueIndex(options) < 0
+  )
+    throw new Error('Invalid database playback window')
+}
+
+async function prepareNativeQueueContents(
+  options: PrepareNativeQueueOptions
+): Promise<PreparedNativeQueue | null> {
   const currentItem = toQueueItem(
     options.currentTrack,
-    getCurrentFallbackTarget(options.currentTrack, options.currentTarget)
+    getCurrentFallbackTarget(options.currentTrack, options.currentTarget),
+    options.libraryQueue ? options.currentTrack.queueEntryId : undefined
   )
   if (!(await isNativeTargetAvailable(options.currentTrack, currentItem.source, options)))
     return null
@@ -92,9 +209,23 @@ export async function prepareNativeQueue(
     return prepareNcmWindow(options, currentItem, currentIndex)
   }
 
-  const items = options.queue.map((track, index) =>
-    index === currentIndex ? currentItem : toQueueItem(track, getTrackTarget(track))
+  let items = options.queue.map((track, index) =>
+    index === currentIndex
+      ? currentItem
+      : toQueueItem(
+          track,
+          getTrackTarget(track),
+          options.libraryQueue ? track.queueEntryId : undefined
+        )
   )
+  if (options.libraryQueue?.total !== undefined)
+    items = items.map((item, index) => ({
+      ...item,
+      logicalQueueEnd:
+        options.playMode !== 'repeat' &&
+        options.libraryQueue!.positions[index] ===
+          (options.libraryQueue!.lastPlayablePosition ?? options.libraryQueue!.total! - 1)
+    }))
   if (options.canReuseQueue?.(items)) return { items, startIndex: currentIndex, delegated: true }
   // Routing is decided locally; only the local-file entries need the authorization
   // boundary, and they are resolved together. Doing it per track cost one IPC
@@ -138,7 +269,11 @@ async function prepareNcmWindow(
     queueIndices: [currentIndex]
   }
   if (next && nextIndex !== currentIndex) {
-    const item = toQueueItem(next, getTrackTarget(next))
+    const item = toQueueItem(
+      next,
+      getTrackTarget(next),
+      options.libraryQueue ? next.queueEntryId : undefined
+    )
     if (await isNativeTargetAvailable(next, item.source, options)) {
       prepared.items.push(item)
       prepared.queueIndices!.push(nextIndex)
@@ -157,8 +292,11 @@ function asCurrentOnly(item: NativeQueueLoadItem): PreparedNativeQueue {
 
 function findCurrentQueueIndex(options: PrepareNativeQueueOptions): number {
   const candidate = options.queue[options.currentIndex]
-  if (candidate?.id === options.currentTrack.id) return options.currentIndex
-  return options.queue.findIndex((track) => track.id === options.currentTrack.id)
+  const matches = (track: Track) =>
+    track.id === options.currentTrack.id &&
+    (!options.currentTrack.queueEntryId || track.queueEntryId === options.currentTrack.queueEntryId)
+  if (candidate && matches(candidate)) return options.currentIndex
+  return options.queue.findIndex(matches)
 }
 
 function getTrackTarget(track: Track): string {
@@ -192,9 +330,10 @@ function getTrackSource(track: Pick<Track, 'id' | 'source'>): TrackSource {
   return (separatorIndex > 0 ? track.id.slice(0, separatorIndex) : 'local') as TrackSource
 }
 
-function toQueueItem(track: Track, source: string): NativeQueueLoadItem {
+function toQueueItem(track: Track, source: string, queueEntryId?: string): NativeQueueLoadItem {
   const item: NativeQueueLoadItem = {
     id: track.id,
+    ...(queueEntryId !== undefined ? { queueEntryId } : {}),
     duration: track.duration,
     source,
     format: track.format,

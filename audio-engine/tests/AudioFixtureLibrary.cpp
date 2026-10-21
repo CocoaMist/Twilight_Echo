@@ -229,6 +229,35 @@ TempAudioFixture writeDsfFixture(const std::string& name, int sampleRate, int bl
   return TempAudioFixture(path);
 }
 
+TempAudioFixture writeWavPackDsdFixture(const std::string& name) {
+  const auto path = tempPathFor(name);
+  constexpr uint32_t kFrames = 1024;
+  constexpr uint32_t kDataBytes = kFrames * 2;
+  constexpr uint32_t kMetadataWords = (2 + kDataBytes) / 2;
+  uint32_t crc = 0xffffffffu;
+  for (uint32_t i = 0; i < kDataBytes; ++i) crc = crc * 3 + 0x69;
+  std::ofstream out(path, std::ios::binary);
+  out.write("wvpk", 4);
+  writeLe32(out, 32 + 4 + 2 + kDataBytes - 8);
+  writeLe16(out, 0x0410);
+  out.put(0); // Track and index are unused in version 4.
+  out.put(0);
+  writeLe32(out, kFrames);
+  writeLe32(out, 0);
+  writeLe32(out, kFrames);
+  // DSD, 88.2 kHz base rate, first and final block, stereo.
+  writeLe32(out, 0x80000000u | (12u << 23) | 0x1800u);
+  writeLe32(out, crc);
+  out.put(static_cast<char>(0x8e)); // Large DSD-data metadata block.
+  out.put(static_cast<char>(kMetadataWords & 0xff));
+  out.put(static_cast<char>((kMetadataWords >> 8) & 0xff));
+  out.put(static_cast<char>((kMetadataWords >> 16) & 0xff));
+  out.put(3); // Decoded byte rate = 88,200 * 2^3 = 705,600 Hz (DSD128).
+  out.put(0); // Uncompressed DSD bytes, interleaved stereo.
+  for (uint32_t i = 0; i < kDataBytes; ++i) out.put(static_cast<char>(0x69));
+  return TempAudioFixture(path);
+}
+
 std::vector<std::filesystem::path> findExternalAudioFixtures() {
   auto manifestFixtures = findExternalAudioFixturesFromManifest();
   if (!manifestFixtures.empty()) return manifestFixtures;
