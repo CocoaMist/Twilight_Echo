@@ -132,6 +132,58 @@ function deferred<T>() {
   })
   return { promise, resolve, reject }
 }
+
+test('imported membership is projected one batch at a time and stops on supersession', async () => {
+  const projected = new Set<number>()
+  const entries = Array.from({ length: 20_000 }, (_, index) => ({
+    entryId: `entry:${index}`, position: index, revision: 0,
+    resolution: { state: 'pending' as const },
+    get original() {
+      projected.add(index)
+      return { title: `Song ${index}`, artist: 'Artist' }
+    }
+  }))
+  const blocked = deferred<LibraryPlaylistViewSyncResult>()
+  let count = 0, serial = 0
+  let firstAppend: Extract<LibraryPlaylistViewSync, { kind: 'append' }> | undefined
+  const owner = createLibraryPlaylistView({
+    syncPlaylistView: async request => {
+      if (request.kind === 'begin') count = 0
+      if (request.kind === 'append') {
+        count += request.entries.length
+        if (!firstAppend) {
+          firstAppend = request
+          return blocked.promise
+        }
+      }
+      return {
+        id: request.id, sequence: 'sequence' in request ? request.sequence : 0,
+        count: request.kind === 'drop' ? 0 : count, committed: request.kind === 'commit'
+      }
+    }
+  }, () => `view-${++serial}`)
+  try {
+    const upload = owner.setPlaylist({
+      id: 'import', trackIds: [], imported: {
+        version: 1, entries, source: { kind: 'file', label: 'fixture' },
+        generation: 'one', membershipRevision: 0, importedAt: '', complete: true
+      }
+    }, preferences)
+    await tick()
+    assert.ok(firstAppend)
+    assert.equal(firstAppend.entries.length, 200)
+    assert.equal(projected.size, 200, 'later records must not be projected ahead of transport')
+    const replacement = owner.setPlaylist({ id: 'replacement', trackIds: ['new'] }, preferences)
+    blocked.resolve({ id: firstAppend.id, sequence: firstAppend.sequence, count: 200, committed: false })
+    await Promise.all([upload, replacement])
+    assert.equal(projected.size, 200, 'superseded imported membership is never projected')
+    assert.equal(owner.state.value.id, 'view-2')
+    assert.equal(owner.state.value.error, '')
+  } finally {
+    if (firstAppend) blocked.resolve({ id: firstAppend.id, sequence: firstAppend.sequence, count: 200, committed: false })
+    await owner.dispose()
+  }
+})
 test('supersession keeps one RPC in flight and never publishes an old or uncertain commit', async () => {
   const pending: Array<
     { request: LibraryPlaylistViewSync } & ReturnType<
