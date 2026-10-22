@@ -117,12 +117,27 @@ class FixtureHost final : public IAsioHost {
       }
       long bufferIndex = 0;
       int callbackCount = 0;
+      uint8_t expectedDsdBlock = 1;
       while (started_.load(std::memory_order_acquire)) {
         if (mode_ == "callback-stop" && callbackCount >= 4) return;
         if (mode_ == "delayed-callback" && callbackCount == 0) {
           std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
         if (bufferSwitch_) bufferSwitch_(bufferIndex);
+        if (mode_ == "verify-dsd-queue" && eventCallback_) {
+          const uint8_t first = buffers_[0][bufferIndex][0];
+          if (first != 0x96) {
+            bool exact = first == expectedDsdBlock;
+            for (const auto& channel : buffers_) {
+              for (size_t byte = 0; byte < kFrames / 8; ++byte)
+                exact &= channel[bufferIndex][byte] == expectedDsdBlock;
+              for (size_t byte = kFrames / 8; byte < channel[bufferIndex].size(); ++byte)
+                exact &= channel[bufferIndex][byte] == 0xcd;
+            }
+            ++expectedDsdBlock;
+            eventCallback_(AsioHostEvent::Xrun, exact ? "dsd-queue-verified" : "dsd-queue-corrupted");
+          }
+        }
         if (mode_ == "verify-pcm" && eventCallback_) {
           float first = 0;
           std::memcpy(&first, buffers_[0][bufferIndex].data(), sizeof(first));
@@ -188,6 +203,14 @@ class FixtureHost final : public IAsioHost {
   }
 
   AsioChannelFormat outputChannelFormat(long) const override {
+    if (mode_ == "verify-dsd-queue") {
+      AsioChannelFormat format;
+      format.logicalFormat = AudioSampleFormat::DsdInt8Msb1;
+      format.containerBits = 8;
+      format.validBits = 1;
+      format.dsdPacking = AsioDsdPacking::Msb1;
+      return format;
+    }
     if (mode_ == "verify-float64") {
       AsioChannelFormat format;
       format.containerBits = format.validBits = 64;

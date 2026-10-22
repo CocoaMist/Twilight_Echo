@@ -17,7 +17,7 @@ import {
   estimateGridColumnWidth,
   resolveGridLayoutMetrics,
   type GridLayoutMetrics
-} from '@renderer/components/song-list/songListVirtualWindow'
+} from './boundedGridLayout'
 
 /** Bounded cover tracks share available space; a sparse collection stays at the leading edge. */
 export function useBoundedGrid(

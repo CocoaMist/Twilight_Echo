@@ -9,7 +9,7 @@ import test from 'node:test'
 import { build } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-test('general color mode persists all three choices, follows native changes and commits its image palette atomically', async () => {
+test('legacy appearance color mode persists all three choices, follows native changes and commits its image palette atomically', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-color-mode-'))
   const require = createRequire(import.meta.url)
   try {
@@ -71,7 +71,7 @@ test('general color mode persists all three choices, follows native changes and 
 
 const runtime = `
 import {createApp,h,nextTick} from 'vue'
-import General from '@renderer/components/settings-page/GeneralSettingsSection.vue'
+import ThemeControls from '@renderer/components/settings-page/ThemeControlsSettings.vue'
 import {useSettingsStore} from '@renderer/stores/useSettingsStore.ts'
 import {bootstrapThemeRuntime,useThemeStore,previewAppearance} from '@renderer/stores/useThemeStore.ts'
 import {createDefaultThemeLibraryDocument} from '@shared/theme.ts'
@@ -91,7 +91,7 @@ window.runColorModeTests=async()=>{
  const startup={systemTone:'dark',settings:snapshot(),themeBootstrap:{library:{version:2,revision:0,savedAt:new Date(0).toISOString(),data:createDefaultThemeLibraryDocument()}}};
  settingsStore.hydrateStartupSnapshot(startup);await bootstrapThemeRuntime(startup);await previewAppearance(null);await theme.setPreviewTone(null);await settle();
  const host=document.querySelector('#app');
- const mount=()=>createApp({setup:()=>()=>h(General,{startupHomePageOptions:[],toggleSetting:()=>{},setStartupHomePage:()=>{},setCloseBehavior:()=>{}})});
+ const mount=()=>createApp({setup:()=>()=>h(ThemeControls,{paletteOnly:true})});
  let app=mount();app.mount(host);await settle();
  const selected=()=>[...host.querySelectorAll('[aria-label="配色模式"] button')].filter(button=>button.getAttribute('aria-pressed')==='true').map(button=>button.textContent.trim());
  const choose=async label=>{const button=[...host.querySelectorAll('[aria-label="配色模式"] button')].find(button=>button.textContent.trim()===label);expect(button&&!button.disabled,'missing usable '+label);button.focus();button.click();await settle();expect(document.activeElement===button,'saving color mode drops its keyboard focus')};
@@ -101,14 +101,14 @@ window.runColorModeTests=async()=>{
   expect(host.querySelectorAll('[aria-label="配色模式"] button').length===3,'color mode choices missing');
   for(const nativeTone of ['pureWhite','dark']){
    for(const listener of nativeToneListeners)listener(nativeTone);await settle();
-   await theme.setPreviewTone('dark');await choose('浅色模式');
-   expect(confirmed.theme==='pureWhite'&&document.documentElement.dataset.theme==='pureWhite'&&selected().join()==='浅色模式','light preference stays stuck in preview');
-   await choose('深色模式');expect(confirmed.theme==='dark'&&document.documentElement.dataset.theme==='dark'&&selected().join()==='深色模式','dark preference not applied');
-   await choose('跟随系统');expect(confirmed.theme==='system'&&document.documentElement.dataset.theme===nativeTone&&selected().join()==='跟随系统','system mode does not resolve native tone');
+   await theme.setPreviewTone('dark');await choose('浅色');
+   expect(confirmed.theme==='pureWhite'&&document.documentElement.dataset.theme==='pureWhite'&&selected().join()==='浅色','light preference stays stuck in preview');
+   await choose('深色');expect(confirmed.theme==='dark'&&document.documentElement.dataset.theme==='dark'&&selected().join()==='深色','dark preference not applied');
+   await choose('系统');expect(confirmed.theme==='system'&&document.documentElement.dataset.theme===nativeTone&&selected().join()==='系统','system mode does not resolve native tone');
   }
   for(const listener of nativeToneListeners)listener('pureWhite');await settle();expect(document.documentElement.dataset.theme==='pureWhite','live native change ignored');
-  const before=writes.length;failSave=true;await choose('深色模式');expect(confirmed.theme==='system'&&writes.length===before&&selected().join()==='跟随系统'&&host.querySelector('[role="alert"]')?.textContent.includes('保存失败'),'failed preference is not restored or explained');
-  failSave=false;await choose('深色模式');app.unmount();app=mount();app.mount(host);await settle();expect(selected().join()==='深色模式','reopened settings forget the confirmed preference');
+  const before=writes.length;failSave=true;await choose('深色');expect(confirmed.theme==='system'&&writes.length===before&&selected().join()==='系统'&&host.querySelector('[role="alert"]')?.textContent.includes('保存失败'),'failed preference is not restored or explained');
+  failSave=false;await choose('深色');app.unmount();app=mount();app.mount(host);await settle();expect(selected().join()==='深色','reopened settings forget the confirmed preference');
   expect(mixedFrames.length===0,'tone commits before its adaptive palette: '+JSON.stringify(mixedFrames));
  }finally{observer.disconnect();failSave=false;app.unmount()}
 };

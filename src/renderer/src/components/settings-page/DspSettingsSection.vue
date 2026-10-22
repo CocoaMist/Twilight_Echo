@@ -392,6 +392,17 @@ onMounted(() => {
       ></button>
     </div>
 
+    <div id="setting-dsp-workbench" data-setting-id="dsp-workbench" class="dsp-actions">
+      <button class="brand-soft-button" type="button" @click="openDspRackFromDsp">
+        <i class="pi pi-th-large"></i>
+        打开 DSP 工作台
+      </button>
+      <button class="brand-soft-button" type="button" @click="openEqualizerFromDsp">
+        <i class="pi pi-sliders-h"></i>
+        打开均衡器
+      </button>
+    </div>
+
     <div class="dsp-signal-chain">
       <div class="signal-node static" :class="{ active: true }">
         <div class="signal-node-circle active">
@@ -490,14 +501,6 @@ onMounted(() => {
       :class="{ 'dsp-disabled-content': !audioProcessing.dspEnabled }"
     >
       <div class="dsp-actions">
-        <button class="brand-soft-button" type="button" @click="openDspRackFromDsp">
-          <i class="pi pi-th-large"></i>
-          打开 DSP Rack
-        </button>
-        <button class="brand-soft-button" type="button" @click="openEqualizerFromDsp">
-          <i class="pi pi-sliders-h"></i>
-          打开均衡器
-        </button>
         <button class="soft-button" type="button" @click="selectImpulseResponse">
           <i class="pi pi-folder-open"></i>
           载入 IR · {{ convolverPathLabel }}
@@ -870,7 +873,7 @@ onMounted(() => {
           <div>
             <strong>仅当已暂存宿主和扫描组件时启用 VST3 宿主</strong>
             <span
-              >允许在 DSP Rack 中加载扫描到的 VST3 效果插件。仅当 Windows x64
+              >允许在 DSP 工作台中加载扫描到的 VST3 效果插件。仅当 Windows x64
               包暂存宿主和扫描组件时可用。</span
             >
           </div>

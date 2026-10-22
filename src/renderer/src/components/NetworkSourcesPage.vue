@@ -3,6 +3,7 @@ import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useBackHandler } from '../app/useBackStack.ts'
 import { usePlayerStore } from '../stores/usePlayerStore'
+import { useDomTrackLocator } from '../composables/useDomTrackLocator'
 import type { Track } from '../types/music'
 import type {
   NetworkEntry,
@@ -12,10 +13,13 @@ import type {
 import NetworkCoverThumb from './network-sources/NetworkCoverThumb.vue'
 import {
   createNetworkBrowser,
-  createNetworkLibraryView
+  createNetworkLibraryView,
+  parseOptionalPort
 } from './network-sources/networkViewState.ts'
 
 const networkSourcesApi = window.api?.networkSources
+const player = usePlayerStore()
+useDomTrackLocator('locatorRoot', () => player.currentTrack.value?.id)
 
 const profiles = ref<NetworkSourceProfileSummary[]>([])
 const loading = ref(false)
@@ -113,7 +117,7 @@ async function createProfile(): Promise<void> {
   creating.value = true
   error.value = ''
   try {
-    const port = form.value.port.trim() ? Number(form.value.port) : null
+    const port = parseOptionalPort(form.value.port)
     await networkSourcesApi.createProfile({
       protocol: form.value.protocol,
       name: form.value.name.trim(),
@@ -280,7 +284,7 @@ async function resolvePlan(
 }
 
 async function playEntry(entry: NetworkEntry): Promise<void> {
-  const { playTrack } = usePlayerStore()
+  const { playTrack } = player
   const profileId = entry.profileId
   const profileName = profiles.value.find((profile) => profile.id === profileId)?.name ?? '网络源'
   const plan = await resolvePlan(profileId, entry)
@@ -291,7 +295,7 @@ async function playEntry(entry: NetworkEntry): Promise<void> {
 }
 
 async function enqueueEntry(entry: NetworkEntry): Promise<void> {
-  const { enqueueTrack } = usePlayerStore()
+  const { enqueueTrack } = player
   const profileId = entry.profileId
   const profileName = profiles.value.find((profile) => profile.id === profileId)?.name ?? '网络源'
   const plan = await resolvePlan(profileId, entry)
@@ -300,7 +304,7 @@ async function enqueueEntry(entry: NetworkEntry): Promise<void> {
 }
 
 async function playAllInDirectory(): Promise<void> {
-  const { playTrack } = usePlayerStore()
+  const { playTrack } = player
   const profile = browsingProfile.value
   if (!profile || resolvingDirectory.value) return
   const current = browser.capture()
@@ -475,7 +479,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="network-sources-page">
+  <div ref="locatorRoot" class="network-sources-page">
     <header class="network-page-heading">
       <div class="network-heading-copy">
         <span class="network-kicker">REMOTE MUSIC</span>
@@ -600,7 +604,12 @@ onBeforeUnmount(() => {
       <p v-if="resolvingDirectory" class="network-browsing" aria-live="polite">正在准备播放队列…</p>
       <div v-if="browsingError" class="network-inline-error" role="alert">{{ browsingError }}</div>
       <ul v-if="entries.length > 0" class="network-entry-list network-entry-surface">
-        <li v-for="entry in entries" :key="entry.id" class="network-entry">
+        <li
+          v-for="entry in entries"
+          :key="entry.id"
+          class="network-entry"
+          :data-te-track-id="entry.kind === 'audio' ? entry.id : undefined"
+        >
           <span class="network-entry-kind"
             ><i
               class="pi"
@@ -670,6 +679,7 @@ onBeforeUnmount(() => {
           v-for="item in libraryEntries"
           :key="item.entry.id"
           class="network-entry network-entry-cover"
+          :data-te-track-id="item.entry.id"
         >
           <NetworkCoverThumb :profile-id="item.entry.profileId" :entry-id="item.entry.id" />
           <button type="button" class="network-entry-name" @click="playEntry(item.entry)">
@@ -759,7 +769,7 @@ onBeforeUnmount(() => {
             /></label>
             <label
               >端口（可选）<input
-                v-model.trim="form.port"
+                v-model="form.port"
                 type="number"
                 min="1"
                 max="65535"

@@ -24,6 +24,7 @@ function syncFallbackTone(document: Document, page: string): void {
 
 /** Keep image-only tuning from darkening the fallback color while an asset is unavailable. */
 export function mountBackgroundImageFallback(layer: HTMLElement, changed?: () => void) {
+  const registeredDocument = layer.ownerDocument
   const view = layer.ownerDocument.defaultView
   let page = layer.dataset.backgroundPage ?? 'local'
   const registered = layers.get(layer.ownerDocument) ?? new Set<HTMLElement>()
@@ -84,7 +85,7 @@ export function mountBackgroundImageFallback(layer: HTMLElement, changed?: () =>
       release()
       observer.disconnect()
       registered.delete(layer)
-      syncFallbackTone(layer.ownerDocument, page)
+      syncFallbackTone(registeredDocument, page)
     }
   }
 }

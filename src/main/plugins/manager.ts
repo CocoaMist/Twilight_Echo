@@ -96,6 +96,11 @@ import type {
 } from './types'
 import { parseJsonWithNestingLimit } from '../security/jsonSafety.ts'
 import { normalizePluginNoticeInput, type PluginNotice } from '../../shared/pluginNotice.ts'
+import {
+  normalizePluginPlaylistImportRequest,
+  type PluginPlaylistImportNotice
+} from '../../shared/pluginPlaylistImport.ts'
+import type { DynamicIslandConfig } from '../../shared/dynamicIsland.ts'
 
 export interface TwilightPluginManagerOptions {
   appVersion: string
@@ -131,6 +136,17 @@ export interface TwilightPluginManagerOptions {
     stop: () => Promise<void> | void
     next: () => Promise<void> | void
     previous: () => Promise<void> | void
+  }
+  /**
+   * Host-owned dynamic island window bridge. Plugins reach it through
+   * `twilight.overlay` and must declare the `ui:inject` permission. Only one
+   * plugin may own the island at a time.
+   */
+  dynamicIsland?: {
+    show: (pluginId: string) => void
+    configure: (pluginId: string, config: unknown) => DynamicIslandConfig
+    hide: (pluginId: string) => void
+    isOwner: (pluginId: string) => boolean
   }
   getProxyEnv?: () => Record<string, string>
   /**
@@ -191,6 +207,7 @@ interface ProviderRpcMetadata {
   playbackTrackId?: string
   playbackQuality?: string
   playbackMetadataRequested?: boolean
+  playbackExpiryRequested?: boolean
 }
 
 interface UiCommandRpcMetadata {
@@ -199,6 +216,8 @@ interface UiCommandRpcMetadata {
 }
 
 export interface TwilightProviderCallOptions {
+  /** Main-only playback preparation: retain expiry without exposing the provider envelope. */
+  playbackExpiry?: boolean
   /** Reuse this key when retrying one user-initiated write after an unknown outcome. */
   idempotencyKey?: string
   /** Cancels queued or active plugin RPC work and propagates cancellation to the provider host. */
@@ -243,6 +262,7 @@ export class TwilightPluginManager extends EventEmitter {
   private readonly autoMixEnabled: TwilightPluginManagerOptions['autoMixEnabled']
   private readonly applyNativeDspPluginChain: TwilightPluginManagerOptions['applyNativeDspPluginChain']
   private readonly player: TwilightPluginManagerOptions['player']
+  private readonly dynamicIsland: TwilightPluginManagerOptions['dynamicIsland']
   private readonly getProxyEnv: TwilightPluginManagerOptions['getProxyEnv']
   private readonly running = new Map<string, RunningPlugin>()
   private readonly hibernated = new Map<string, HibernatedPlugin>()
@@ -279,6 +299,7 @@ export class TwilightPluginManager extends EventEmitter {
     this.autoMixEnabled = options.autoMixEnabled
     this.applyNativeDspPluginChain = options.applyNativeDspPluginChain
     this.player = options.player
+    this.dynamicIsland = options.dynamicIsland
     this.getProxyEnv = options.getProxyEnv
     const idleTimeoutMs = options.hostIdleTimeoutMs ?? DEFAULT_PLUGIN_HOST_IDLE_TIMEOUT_MS
     this.hostIdle =
@@ -776,6 +797,7 @@ export class TwilightPluginManager extends EventEmitter {
           ? {
               playbackTrackId: String((args[0] as { id?: unknown } | null)?.id ?? ''),
               playbackQuality: String((args[1] as { quality?: unknown } | null)?.quality ?? 'auto'),
+              playbackExpiryRequested: options.playbackExpiry === true,
               playbackMetadataRequested:
                 running.descriptor.id === 'com.twilightecho.provider.ncm' &&
                 (args[1] as { _twilightPlaybackMetadata?: boolean } | null)
@@ -1217,6 +1239,7 @@ export class TwilightPluginManager extends EventEmitter {
     })
     child.on('exit', (code) => {
       if (this.running.get(descriptor.id) !== running) return
+      this.dynamicIsland?.hide(descriptor.id)
       const wasStopping = this.stopOperations.has(descriptor.id)
       this.rpcCalls.cancelPlugin(
         descriptor.id,
@@ -1287,6 +1310,7 @@ export class TwilightPluginManager extends EventEmitter {
     this.hostIdle?.clear(id)
     const running = this.running.get(id)
     if (!running) {
+      this.dynamicIsland?.hide(id)
       // A hibernated plugin has no process; an explicit stop just forgets it.
       if (!this.hibernating.has(id)) {
         this.hibernated.delete(id)
@@ -1338,7 +1362,10 @@ export class TwilightPluginManager extends EventEmitter {
     if (id === QISHUI_PLUGIN_ID) {
       await this.qishuiAuth.clear(running.descriptor.paths.versionRoot).catch(() => undefined)
     }
-    if (this.running.get(id) === running) this.running.delete(id)
+    if (this.running.get(id) === running) {
+      this.dynamicIsland?.hide(id)
+      this.running.delete(id)
+    }
   }
 
   private waitForActivation(
@@ -1473,6 +1500,26 @@ export class TwilightPluginManager extends EventEmitter {
           ok: true,
           value: await this.handleQishuiAuthApiCall(id, message)
         }
+      }
+      if (message.namespace === 'overlay') {
+        return {
+          kind: 'api-result',
+          requestId: message.requestId,
+          ok: true,
+          value: this.handleOverlayApiCall(id, message)
+        }
+      }
+      if (message.namespace === 'library') {
+        if (message.method !== 'importPlaylists') throw new Error('未知音乐库 API')
+        this.requirePermission(id, 'library:write', 'library.importPlaylists')
+        const request = normalizePluginPlaylistImportRequest(message.args[0])
+        // Forwarded to the renderer, which owns the playlist store and its
+        // revision-guarded persistence; the plugin does not wait for it.
+        this.emit('importPlaylist', {
+          ...request,
+          pluginId: id
+        } satisfies PluginPlaylistImportNotice)
+        return { kind: 'api-result', requestId: message.requestId, ok: true, value: null }
       }
       if (message.namespace !== 'player') throw new Error('未知 API 命名空间')
       const method = message.method
@@ -1688,6 +1735,26 @@ export class TwilightPluginManager extends EventEmitter {
     throw new Error('未知汽水音乐安全登录 API')
   }
 
+  private handleOverlayApiCall(
+    pluginId: string,
+    message: Extract<PluginHostResponse, { kind: 'api-call' }>
+  ): DynamicIslandConfig | null {
+    if (!this.dynamicIsland) throw new Error('灵动岛服务不可用')
+    this.requirePermission(pluginId, 'ui:inject', `overlay.${message.method}`)
+    if (message.method === 'show') {
+      this.dynamicIsland.show(pluginId)
+      return null
+    }
+    if (message.method === 'hide') {
+      this.dynamicIsland.hide(pluginId)
+      return null
+    }
+    if (message.method === 'configure') {
+      return this.dynamicIsland.configure(pluginId, message.args[0] ?? {})
+    }
+    throw new Error('未知灵动岛 API')
+  }
+
   private async handleExtensionApiCall(
     pluginId: string,
     message: Extract<PluginHostResponse, { kind: 'api-call' }>
@@ -1805,7 +1872,16 @@ export class TwilightPluginManager extends EventEmitter {
       const playbackSource = envelope?.streamUrl ?? message.value
       if (envelope && typeof playbackSource === 'string') {
         const streamUrl = (value as Record<string, unknown>).streamUrl
-        if (metadata.playbackMetadataRequested) {
+        if (metadata.playbackExpiryRequested) {
+          const sourceInfo = envelope.providerSource as Record<string, unknown> | undefined
+          const expiry = sourceInfo?.expiresAt
+          value = {
+            streamUrl,
+            providerSource: {
+              expiresAt: typeof expiry === 'number' && Number.isFinite(expiry) ? expiry : null
+            }
+          }
+        } else if (metadata.playbackMetadataRequested) {
           const sourceInfo = envelope.providerSource as Record<string, unknown> | undefined
           value = {
             streamUrl,
@@ -2049,6 +2125,13 @@ export class TwilightPluginManager extends EventEmitter {
     if (!isCompatibleTwilightRange(manifest.engines.twilightEcho, this.appVersion)) {
       return `插件要求 Twilight Echo ${manifest.engines.twilightEcho}`
     }
+    const experiences =
+      (manifest.contributes as { experiences?: { entry: string }[] } | undefined)?.experiences ?? []
+    for (const experience of experiences) {
+      if (!resolvePluginFile(resolve(versionRoot, experience.entry), versionRoot)) {
+        return 'Plugin experience HTML entry is missing or outside its package'
+      }
+    }
     if (manifest.main) {
       const mainPath = resolve(versionRoot, manifest.main)
       if (!resolvePluginFile(mainPath, versionRoot)) {
@@ -2150,7 +2233,12 @@ export class TwilightPluginManager extends EventEmitter {
   }
 
   private appendLog(descriptor: TwilightPluginDescriptor, level: string, message: string): void {
-    const shared = writeDiagnostic('plugin', 'plugin.output', { pluginId: descriptor.id, message }, level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info')
+    const shared = writeDiagnostic(
+      'plugin',
+      'plugin.output',
+      { pluginId: descriptor.id, message },
+      level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'
+    )
     const logPath = descriptor.paths.logPath
     ensureParent(logPath)
     const line = `[${shared?.timestamp ?? new Date().toISOString()}] [${level}] [eventId=${shared?.eventId ?? ''}] ${sanitizeDiagnosticText(redactSensitiveText(message)).trim()}\n`

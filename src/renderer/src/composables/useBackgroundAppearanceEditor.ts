@@ -20,6 +20,7 @@ import {
   cardCssVariables,
   cloneAppearance,
   defaultBackground,
+  defaultBackgroundEffect,
   defaultCardAppearance,
   resolveBackground,
   type AppearancePreset,
@@ -155,6 +156,15 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     if (state.saving || importing.value) return
     tone.value = value
     draftTheme.value = value === 'dark' ? 'dark' : 'pureWhite'
+  }
+  function setColorMode(value: typeof draftTheme.value): void {
+    if (state.saving || busy.value) return
+    draftTheme.value = value
+    tone.value =
+      value === 'dark' ||
+      (value === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        ? 'dark'
+        : 'light'
   }
   let pickerTarget: typeof target.value = 'global'
   const pageOptions: Array<{ value: AppBackgroundPage; label: string }> = [
@@ -369,13 +379,32 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
       }
     }
   }
-  function removeImage(): void {
+  function setBackgroundKind(kind: 'color' | 'image'): void {
     invalidateImageImport()
     imagePaletteNotice.value = ''
-    const background = editableBackground()
-    background.image = ''
-    background.kind = 'color'
-    delete background.imagePalette
+    const background = editableBackground(target.value, false)
+    if (kind === 'image') {
+      if (background.kind === 'image') return
+      background.kind = 'image'
+      background.customized = true
+      return
+    }
+    // A removed wallpaper must also release its image-only contrast treatment.
+    if (state.draft.surfaceMaterial === 'transparent')
+      state.draft = applyAppearancePreset(state.draft, 'theme')
+    const restored = editableBackground(target.value, false)
+    const defaults = defaultBackground(target.value)
+    restored.kind = 'color'
+    restored.image = ''
+    delete restored.imagePalette
+    restored.customized = restored.light !== defaults.light || restored.dark !== defaults.dark
+    restored.effects = {
+      light: defaultBackgroundEffect(),
+      dark: defaultBackgroundEffect()
+    }
+  }
+  function removeImage(): void {
+    setBackgroundKind('color')
   }
   function resetCurrent(): void {
     invalidateImageImport()
@@ -451,7 +480,7 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     if (
       request.signal.aborted ||
       recipeRequest !== request ||
-      !appearanceEditorOpen.value ||
+      (!embedded && !appearanceEditorOpen.value) ||
       target.value !== selectedTarget ||
       tone.value !== selectedTone ||
       activeBackground.value !== background ||
@@ -537,6 +566,8 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     previewPage,
     tone,
     setTone,
+    setColorMode,
+    draftColorMode: draftTheme,
     importing,
     imagePaletteNotice,
     matching,
@@ -550,6 +581,7 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     activeMaterial,
     previewStyle,
     editableBackground,
+    setBackgroundKind,
     setEffect,
     setInheritance,
     chooseImage,

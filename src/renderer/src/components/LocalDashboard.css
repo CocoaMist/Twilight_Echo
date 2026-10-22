@@ -68,6 +68,29 @@
   color: inherit;
 }
 
+.dashboard-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-block: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--home-line);
+  border-radius: var(--home-radius-md);
+  background: var(--home-card);
+  color: var(--home-muted);
+  font-size: var(--te-font-size-body, 14px);
+}
+
+.dashboard-state button {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border: 1px solid var(--home-line);
+  border-radius: 8px;
+  background: var(--home-soft);
+  cursor: pointer;
+}
+
 /* ── Ambient wash ───────────────────────────────────────────────────── */
 
 .ambient {

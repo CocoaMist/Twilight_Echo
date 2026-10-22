@@ -63,6 +63,9 @@ export const LEGACY_SETTINGS_TARGETS: Record<
 }
 export function normalizeSettingsSection(value: unknown): SectionKey {
   if (typeof value !== 'string') return 'general'
+  // Existing commands can still open the legacy appearance settings; daily
+  // navigation uses the separate appearance workspace.
+  if (value === 'appearance') return 'appearance'
   if (Object.hasOwn(LEGACY_SETTINGS_TARGETS, value))
     return LEGACY_SETTINGS_TARGETS[value as LegacySettingsSection].section
   return sections.some((section) => section.key === value) ? (value as SectionKey) : 'general'
@@ -136,9 +139,9 @@ export const sections: { key: SectionKey; label: string; icon: string; descripti
 ]
 
 export const colorModeOptions: { value: AppTheme; label: string; icon: string }[] = [
-  { value: 'system', label: '跟随系统', icon: 'pi pi-desktop' },
-  { value: 'dark', label: '深色模式', icon: 'pi pi-moon' },
-  { value: 'pureWhite', label: '浅色模式', icon: 'pi pi-sun' }
+  { value: 'system', label: '系统', icon: 'pi pi-desktop' },
+  { value: 'pureWhite', label: '浅色', icon: 'pi pi-sun' },
+  { value: 'dark', label: '深色', icon: 'pi pi-moon' }
 ]
 
 export const motionPreferenceOptions: { value: MotionPreference; label: string }[] = [
@@ -330,6 +333,8 @@ export const playerBarControlOptions: {
   { value: 'playMode', label: '播放顺序', icon: 'pi pi-refresh' },
   { value: 'volume', label: '音量', icon: 'pi pi-volume-up' },
   { value: 'queue', label: '播放列表', icon: 'pi pi-list' },
+  { value: 'hifi', label: 'HiFi 控制台', icon: 'ph ph-faders' },
+  { value: 'equalizer', label: '均衡器', icon: 'ph ph-sliders' },
   { value: 'desktopLyrics', label: '桌面歌词', icon: 'pi pi-window-maximize' },
   { value: 'miniPlayer', label: '迷你播放器', icon: 'ph ph-picture-in-picture' },
   {
@@ -386,6 +391,12 @@ export interface SettingsSearchEntry {
 
 /** 设置项级细粒度搜索索引：每个设置项一条，保证任意设置项都能被搜到 */
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+  {
+    id: 'appearance-workspace',
+    section: 'appearance',
+    title: '外观工作区',
+    terms: '外观 新版 主题 制作 插件 工坊 预览 2D 3D'
+  },
   {
     id: 'audio-device',
     section: 'audio',
@@ -669,6 +680,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     disclosureId: 'advanced-engine-parameters'
   },
   {
+    id: 'dsp-workbench',
+    section: 'audio',
+    title: 'DSP 工作台',
+    terms: 'DSP 工作台 workbench rack 机架 均衡器 效果链 场景 校正 资料 插件 监测'
+  },
+  {
     id: 'dsp-master',
     section: 'audio',
     title: 'DSP 音效',
@@ -897,6 +914,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     section: 'appearance',
     title: '插件主题',
     terms: '外观 主题 界面 插件 主题 plugin theme 扩展 插件主题'
+  },
+  {
+    id: 'startup-experience',
+    section: 'appearance',
+    title: '完整界面',
+    terms: '外观 主题 插件 莱茵生命 Rhine 完整界面 启动 重启 切换 experience'
   },
   {
     id: 'accent-light',
@@ -1298,6 +1321,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       '歌词 桌面歌词 音译 罗马音 romanization transliteration 显示 外文歌词 显示音译 (Show Romanization)'
   },
   {
+    id: 'local-shortcuts',
+    section: 'connections',
+    title: '应用内快捷键',
+    terms: '快捷键 Ctrl+W 关闭窗口 Ctrl+K 命令面板 空格 播放 暂停 开关 启用 禁用'
+  },
+  {
     id: 'global-shortcuts',
     section: 'connections',
     title: '全局快捷键',
@@ -1660,7 +1689,16 @@ export function resolveSettingsSearchEntry(entry: SettingsSearchEntry): Settings
 
 export const RESET_DESKTOP_LYRICS: DesktopLyricsSettings = DEFAULT_DESKTOP_LYRICS_SETTINGS
 
-export type PluginSettingsFieldType = 'text' | 'password' | 'url' | 'select'
+export type PluginSettingsFieldType =
+  | 'text'
+  | 'password'
+  | 'url'
+  | 'select'
+  | 'toggle'
+  | 'range'
+  | 'color'
+  /** One-shot action: pressing it runs `command` with `{ action: key }`. */
+  | 'button'
 
 export interface PluginSettingsOption {
   label: string
@@ -1673,12 +1711,26 @@ export interface PluginSettingsField {
   type: PluginSettingsFieldType
   required: boolean
   placeholder: string
+  description: string
+  /** Heading shared by consecutive fields; empty when ungrouped. */
+  group: string
   value: string
   options: PluginSettingsOption[]
+  /** Range bounds; unused by other field types. */
+  min: number
+  max: number
+  step: number
+  unit: string
+  /** `button` only: command to run; falls back to the form's submitCommand. */
+  command: string
 }
 
 export interface PluginSettingsForm {
   submitCommand: string
+  /** Empty when the plugin offers no reset action. */
+  resetCommand: string
+  /** Submit on every change (debounced) instead of via a save button. */
+  live: boolean
   fields: PluginSettingsField[]
   notice: string
 }

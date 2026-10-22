@@ -18,11 +18,11 @@ function updateTp<K extends keyof WindowTransparencyEffectSettings>(
 ): void {
   void updateSettings({
     windowTransparencyEffect: { ...settings.value.windowTransparencyEffect, [key]: value }
-  })
+  }).catch(() => undefined)
 }
 
 function toggleSetting(key: BooleanSettingKey): void {
-  void updateSettings({ [key]: !settings.value[key] })
+  void updateSettings({ [key]: !settings.value[key] }).catch(() => undefined)
 }
 </script>
 

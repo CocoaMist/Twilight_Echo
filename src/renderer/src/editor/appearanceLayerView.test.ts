@@ -806,7 +806,10 @@ test('Chromium projects every DOM corner and pointer frames touch only two cache
     )
     assert.ok(nativeShellStart >= 0 && nativeShellEnd > nativeShellStart)
     const nativeShellCss = mainCss.slice(nativeShellStart, nativeShellEnd)
-    assert.ok(nativeShellCss.includes("html[data-window-transparent='on'] .app-shell::before"))
+    assert.match(
+      nativeShellCss,
+      /\.app-shell::before,[\s\S]*?\.app-shell::after\s*\{\s*display:\s*none/
+    )
     const probeProject = createWorkshopProject('app-tint-probe', 'Native App tint')
     const probe = createWorkshopLayer('probe', 'gradient')
     Object.assign(probe, {
@@ -928,7 +931,9 @@ test('Chromium projects every DOM corner and pointer frames touch only two cache
     assert.ok(workshopResult.paintChanged > 1, 'the native App decoration never painted')
     assert.ok(workshopResult.paintRestored < 0.2, 'the 3D App decoration changes native color')
     for (const tint of workshopResult.nativeTints) {
-      assert.equal(tint.tintCopies, 4)
+      // This branch disables the native shell pseudo-tint. The preview must
+      // preserve that absence rather than reintroducing PR #154's foundation.
+      assert.equal(tint.tintCopies, 0)
       assert.ok(tint.visiblePaintDifference > 1, 'the compiled App probe is never visible')
       assert.ok(tint.collapsedDifference < 0.2, 'native App tint changes neutral 3D color')
       assert.equal(tint.roundtripDifference, 0)
@@ -1036,7 +1041,7 @@ window.configureNativeAppTint=async(mode,tone,transparent)=>{
 };
 `
 const browserProjectionRunner = `
-const {app,BrowserWindow}=require('electron'),path=require('node:path');app.setPath('userData',path.join(__dirname,'profile'));
+const {app,BrowserWindow}=require('electron'),path=require('node:path');app.setPath('userData',path.join(__dirname,'profile'));app.commandLine.appendSwitch('force-device-scale-factor','1');
 let width,height;
 function bitmap(image){const png=image.toPNG();width=png.readUInt32BE(16);height=png.readUInt32BE(20);const pixels=image.toBitmap();if(pixels.length!==width*height*4)throw Error('Screenshot bitmap does not match its native pixel dimensions');return pixels}
 function compare(first,second,state,includeCard=false){

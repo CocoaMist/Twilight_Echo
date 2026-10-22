@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import SettingsDisclosure from './SettingsDisclosure.vue'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
+import { useSettingsDisclosure } from './settingsDisclosureRegistry'
 import { DEFAULT_LIQUID_GLASS } from '../../../../shared/liquidGlass.ts'
 import EditableRangeValue from '../EditableRangeValue.vue'
 import type { AppearanceDraft } from '../../../../shared/appAppearance.ts'
@@ -19,7 +20,7 @@ function updateSettings(patch: Partial<AppearanceDraft>): void {
   emit('update:modelValue', { ...props.modelValue, ...patch })
 }
 
-const liquidGlassOpen = ref(true)
+const liquidGlassOpen = useSettingsDisclosure('liquid-glass', true)
 const liquidGlassTab = computed({
   get: () => props.tone ?? 'light',
   set: (tone: 'light' | 'dark') => emit('update:tone', tone)
@@ -119,6 +120,7 @@ function toggleAdaptiveTone(): void {
 <template>
   <button
     type="button"
+    data-setting-id="liquid-glass"
     class="settings-accordion-trigger setting-item"
     :class="{ open: liquidGlassOpen }"
     :aria-expanded="liquidGlassOpen"
@@ -151,7 +153,7 @@ function toggleAdaptiveTone(): void {
     <hr />
     <p class="settings-hint">玻璃用于导航和播放控件；内容卡片使用普通材质，保持文字与封面清晰。</p>
     <hr />
-    <div class="setting-item">
+    <div data-setting-id="glass-enabled" class="setting-item">
       <div class="setting-copy">
         <strong>全局液态玻璃</strong>
         <span>统一启用标题栏、主侧栏、设置导航和播放栏的液态玻璃材质。</span>
@@ -217,7 +219,7 @@ function toggleAdaptiveTone(): void {
     <hr />
     <div v-if="hasLiquidGlassEnabled">
       <hr />
-      <div class="setting-item">
+      <div data-setting-id="glass-pointer" class="setting-item">
         <div class="setting-copy">
           <strong>折射跟随指针</strong>
           <span>播放栏的折射随鼠标移动变化。</span>

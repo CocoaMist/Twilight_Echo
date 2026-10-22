@@ -1,20 +1,22 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import SettingsGroup from './SettingsGroup.vue'
+import ExperienceSettings from './ExperienceSettings.vue'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { useThemeStore } from '../../stores/useThemeStore'
 import { useExtensionRegistry } from '../../extensions/registry'
 import { getPluginThemeKey } from '../../extensions/themeSelection'
 import { accentColorOptions, colorModeOptions, motionPreferenceOptions } from './types.ts'
 import type { AppTheme, MotionPreference } from '../../types/settings'
-defineProps<{ integrated?: boolean }>()
+const props = defineProps<{ integrated?: boolean; colorMode?: AppTheme; paletteOnly?: boolean }>()
 
 const emit = defineEmits<{
+  'update:colorMode': [value: AppTheme]
   openThemeStudio: []
   openThemeWorkshop: []
 }>()
 
-const { settings, updateSettings } = useSettingsStore()
+const { settings, updateSettings, lastSettingsError } = useSettingsStore()
 const themeStore = useThemeStore()
 const { themeContributions, uiContributions } = useExtensionRegistry()
 
@@ -37,23 +39,24 @@ const selectedPluginThemeKey = computed(() => {
 })
 
 function setTheme(theme: AppTheme): void {
-  if (settings.value.theme === theme) return
-  void updateSettings({ theme })
+  if ((props.colorMode ?? settings.value.theme) === theme) return
+  if (props.colorMode !== undefined) emit('update:colorMode', theme)
+  else void updateSettings({ theme }).catch(() => undefined)
 }
 
 function setMotionPreference(event: Event): void {
   const motionPreference = (event.target as HTMLSelectElement).value as MotionPreference
-  void updateSettings({ motionPreference })
+  void updateSettings({ motionPreference }).catch(() => undefined)
 }
 
 function setAccentColor(mode: 'light' | 'dark', color: string): void {
   if (mode === 'light') {
     if (settings.value.lightAccentColor === color) return
-    void updateSettings({ accentColor: color, lightAccentColor: color })
+    void updateSettings({ accentColor: color, lightAccentColor: color }).catch(() => undefined)
     return
   }
   if (settings.value.darkAccentColor === color) return
-  void updateSettings({ darkAccentColor: color })
+  void updateSettings({ darkAccentColor: color }).catch(() => undefined)
 }
 
 async function setPluginTheme(event: Event): Promise<void> {
@@ -73,16 +76,18 @@ async function setPluginTheme(event: Event): Promise<void> {
 </script>
 
 <template>
+  <p v-if="!integrated && lastSettingsError" role="alert">{{ lastSettingsError }}</p>
   <div data-setting-id="color-mode" id="setting-color-mode" class="setting-item">
     <div class="setting-copy">
       <strong>深浅色</strong>
     </div>
-    <div class="theme-segment">
+    <div class="theme-segment" role="group" aria-label="配色模式">
       <button
         v-for="option in colorModeOptions"
         :key="option.value"
         type="button"
-        :class="{ active: settings.theme === option.value }"
+        :class="{ active: (colorMode ?? settings.theme) === option.value }"
+        :aria-pressed="(colorMode ?? settings.theme) === option.value"
         @click="setTheme(option.value)"
       >
         <i :class="option.icon"></i>
@@ -112,8 +117,10 @@ async function setPluginTheme(event: Event): Promise<void> {
       </option>
     </select>
   </div>
-  <hr />
-  <div data-setting-id="motion" id="setting-motion" class="setting-item">
+  <hr v-if="!paletteOnly" />
+  <ExperienceSettings v-if="!paletteOnly" />
+  <hr v-if="!paletteOnly" />
+  <div v-if="!paletteOnly" data-setting-id="motion" id="setting-motion" class="setting-item">
     <div class="setting-copy">
       <strong>界面动画</strong>
     </div>

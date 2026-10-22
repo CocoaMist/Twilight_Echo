@@ -11,7 +11,11 @@ test('selection carries the exact duplicate queue entry into playback and replac
   let activated: Track | undefined
   let loaded: Track | undefined
   let replaced = 0
+  let sourceChanges = 0
   const controller = createPlaybackSelectionController({
+    beforeSelection: () => {
+      sourceChanges++
+    },
     queue,
     queueIndex,
     playMode: ref<PlayMode>('shuffle'),
@@ -44,6 +48,8 @@ test('selection carries the exact duplicate queue entry into playback and replac
     lyrics: null
   }
   const second = { ...first, title: 'second' }
+  controller.playTrack(second, [])
+  assert.equal(sourceChanges, 0)
   controller.playTrack(second, [first, second])
   assert.equal(activated?.title, 'second')
   assert.equal(loaded?.queueEntryId, queue.value[queueIndex.value].queueEntryId)
@@ -59,6 +65,7 @@ test('selection carries the exact duplicate queue entry into playback and replac
   assert.equal(queue.value.length, 1)
   assert.equal(loaded?.id, 'outside')
   assert.equal(replaced, 2)
+  assert.equal(sourceChanges, 3)
 })
 
 test('collection playback applies origin to all occurrences and direct queue selection keeps the chosen origin', () => {

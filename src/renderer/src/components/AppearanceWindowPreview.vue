@@ -1479,6 +1479,9 @@ function update(): void {
   const attributes = new Map(
     [...document.documentElement.attributes].map((attribute) => [attribute.name, attribute.value])
   )
+  // The isolated scene has no Wallpaper Engine media layer. Mirrored bridge
+  // styles must not hide its draft background or force its surfaces clear.
+  attributes.delete('data-te-we-bg')
   for (const page of ['app', 'local', 'streaming', 'settings', 'player']) {
     const name = `data-te-${page}-image-fallback-tone`
     const localState = root.getAttribute(name)

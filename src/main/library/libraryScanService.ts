@@ -16,11 +16,16 @@ import {
   type LocalLibraryWorkerScanResult
 } from '../../shared/localLibraryScan.ts'
 import { SUPPORTED_EXTENSIONS } from './libraryFiles.ts'
-import { deriveCueTracks } from './cueLibrary.ts'
+import { CueDirectoryIndex } from './cueLibrary.ts'
 import { readMp4AlacFormat } from './mp4AlacFormat.ts'
 import { createLocalLibraryScanPlan } from './scanPlanner.ts'
 import { chooseWaveText, readWaveMetadata, repairMojibakeText } from './wavMetadata.ts'
 import { readLocalReleaseDate } from '../../shared/releaseDate.ts'
+import { enumerateDatabaseDirectory, runDatabaseScan } from './libraryDatabaseScanner.ts'
+import { createScanDatabaseProxy } from './libraryScanDatabaseProxy.ts'
+import { runPlaylistRepairScan } from './playlistRepairScanner.ts'
+import type { RepairScanCall } from '../../shared/localLibraryScan.ts'
+import type { LibraryTrackRecord } from '../../shared/libraryDatabase.ts'
 
 type ParentPort = {
   postMessage: (message: LocalLibraryScanWorkerMessage) => void
@@ -64,6 +69,11 @@ if (!parentPort) {
 const servicePort = parentPort
 initializeUtilityDiagnostics('twilight-library-scan')
 const activeScans = new Map<string, ScanControl>()
+const databaseProxies = new Map<string, ReturnType<typeof createScanDatabaseProxy>>()
+const repairReplies = new Map<
+  string,
+  { sequence: number; resolve(): void; reject(error: Error): void }
+>()
 const coverHandlesByDirectory = new Map<string, Promise<string | null>>()
 const MAX_COVER_BYTES = 20 * 1024 * 1024
 const SCAN_BATCH_SIZE = 256
@@ -77,6 +87,27 @@ const MAX_COVER_DIRECTORY_CACHE_ENTRIES = 2_048
 
 servicePort.postMessage({ kind: 'ready' })
 servicePort.on('message', (message) => {
+  if (message.kind === 'repair-ack') {
+    const reply = repairReplies.get(message.requestId)
+    if (reply?.sequence === message.sequence) {
+      repairReplies.delete(message.requestId)
+      if (message.error) reply.reject(new Error(message.error))
+      else reply.resolve()
+    }
+    return
+  }
+  if (message.kind === 'scan-repair') {
+    void handleRepairScan(message.requestId, message.root, message.coverCacheDir)
+    return
+  }
+  if (message.kind === 'database-response') {
+    databaseProxies.get(message.requestId)?.handle(message)
+    return
+  }
+  if (message.kind === 'scan-database') {
+    void handleDatabaseScan(message.requestId, message.coverCacheDir, message.forceParse)
+    return
+  }
   if (message.kind === 'scan') {
     void observeDiagnosticOperation(
       'library.scan',
@@ -104,6 +135,124 @@ servicePort.on('message', (message) => {
   control.resume?.()
   control.resume = null
 })
+
+async function handleRepairScan(
+  requestId: string,
+  root: string,
+  coverCacheDir: string
+): Promise<void> {
+  if (activeScans.size) {
+    servicePort.postMessage({
+      kind: 'repair-result',
+      requestId,
+      error: 'Metadata process is already scanning'
+    })
+    return
+  }
+  activeScans.set(requestId, { paused: false, cancelled: false, resume: null })
+  const cueIndex = new CueDirectoryIndex(SUPPORTED_EXTENSIONS)
+  let sequence = 0
+  try {
+    await runPlaylistRepairScan({
+      root,
+      enumerate: (directory) =>
+        enumerateDatabaseDirectory(directory, (path) => cueIndex.getSignatures(path)),
+      parse: async (identity) =>
+        (
+          await withTimeout(
+            parseTrack(identity, coverCacheDir, cueIndex),
+            PARSE_TIMEOUT_MS + COVER_LOOKUP_TIMEOUT_MS,
+            'repair file parsing'
+          )
+        ).tracks as LibraryTrackRecord[],
+      call: (call: RepairScanCall) =>
+        new Promise<void>((resolve, reject) => {
+          repairReplies.set(requestId, { sequence: ++sequence, resolve, reject })
+          servicePort.postMessage({ kind: 'repair-call', requestId, sequence, call })
+        })
+    })
+    servicePort.postMessage({ kind: 'repair-result', requestId })
+  } catch (error) {
+    servicePort.postMessage({ kind: 'repair-result', requestId, error: String(error) })
+  } finally {
+    repairReplies.delete(requestId)
+    activeScans.delete(requestId)
+  }
+}
+
+async function handleDatabaseScan(
+  requestId: string,
+  coverCacheDir: string,
+  forceParse: boolean
+): Promise<void> {
+  if (activeScans.size) {
+    servicePort.postMessage({
+      kind: 'database-result',
+      requestId,
+      ok: false,
+      error: 'Metadata process is already scanning'
+    })
+    return
+  }
+  const control: ScanControl = { paused: false, cancelled: false, resume: null }
+  const proxy = createScanDatabaseProxy(requestId, (message) => servicePort.postMessage(message))
+  const cueIndex = new CueDirectoryIndex(SUPPORTED_EXTENSIONS, {
+    get: (identity) => proxy.database.getScanCueDefinition(requestId, identity),
+    put: (record) => proxy.database.putScanCueDefinition(requestId, record)
+  })
+  activeScans.set(requestId, control)
+  databaseProxies.set(requestId, proxy)
+  try {
+    const value = await runDatabaseScan({
+      jobId: requestId,
+      database: proxy.database,
+      enumerate: async function* (directory) {
+        cueIndex.invalidateDirectory(directory)
+        try {
+          yield* enumerateDatabaseDirectory(directory, (directory) =>
+            cueIndex.getSignatures(directory)
+          )
+        } finally {
+          // runDatabaseScan drains each yielded page before requesting another.
+          // Completed, failed or cancelled directories need no retained index.
+          cueIndex.invalidateDirectory(directory)
+        }
+      },
+      forceParse,
+      parse: async (identity, audioMetadata) => {
+        const parsed = await withTimeout(
+          parseTrack(identity, coverCacheDir, cueIndex, audioMetadata),
+          PARSE_TIMEOUT_MS + COVER_LOOKUP_TIMEOUT_MS,
+          'file metadata parsing'
+        )
+        return {
+          identity,
+          ...parsed,
+          tracks: parsed.tracks as LibraryTrackRecord[],
+          dependencies: await cueIndex.getDependencies(identity.filePath)
+        }
+      },
+      waitUntilRunnable: () => waitUntilRunnable(control),
+      cancelled: () => control.cancelled,
+      onActivity: (identities) =>
+        servicePort.postMessage({
+          kind: 'activity',
+          requestId,
+          activity: { filePaths: identities.map((file) => file.filePath) }
+        }),
+      onProgress: (progress, phase) =>
+        servicePort.postMessage({ kind: 'database-progress', requestId, progress, phase })
+    })
+    servicePort.postMessage({ kind: 'database-result', requestId, ok: true, value })
+  } catch (error) {
+    writeDiagnostic('library.scan', 'database-scan.failed', { requestId, error }, 'error')
+    servicePort.postMessage({ kind: 'database-result', requestId, ok: false, error: String(error) })
+  } finally {
+    proxy.close()
+    databaseProxies.delete(requestId)
+    activeScans.delete(requestId)
+  }
+}
 
 async function handleScan(
   requestId: string,
@@ -133,6 +282,7 @@ async function runScan(
   control: ScanControl
 ): Promise<LocalLibraryWorkerScanResult> {
   const checkpoint = request.resumeCheckpoint
+  const cueIndex = new CueDirectoryIndex(SUPPORTED_EXTENSIONS)
   const collected = checkpoint
     ? {
         identities: checkpoint.identities,
@@ -242,7 +392,7 @@ async function runScan(
           }
         }
         const parsed = identity
-          ? await parseTrack(identity, request.coverCacheDir)
+          ? await parseTrack(identity, request.coverCacheDir, cueIndex)
           : { tracks: [], metadataRead: false }
         return {
           filePath,
@@ -600,14 +750,34 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: s
 
 async function parseTrack(
   file: LocalLibraryFileIdentity,
-  coverCacheDir: string
-): Promise<{ tracks: Record<string, unknown>[]; metadataRead: boolean }> {
+  coverCacheDir: string,
+  cueIndex: CueDirectoryIndex,
+  cachedAudio?: LibraryTrackRecord
+): Promise<{
+  tracks: Record<string, unknown>[]
+  metadataRead: boolean
+  error?: string
+  audioMetadata?: LibraryTrackRecord
+  metadataReused?: boolean
+}> {
   const filePath = file.filePath
+  if (cachedAudio) {
+    const duration = Number(cachedAudio.duration ?? 0)
+    const cueTracks = file.cueSignature
+      ? await cueIndex.derive(filePath, duration, cachedAudio)
+      : null
+    return {
+      tracks: cueTracks ?? [{ ...cachedAudio, duration: Math.round(duration) }],
+      metadataRead: true,
+      audioMetadata: cachedAudio,
+      metadataReused: true
+    }
+  }
   const fileName = basename(filePath)
   const dir = dirname(filePath)
   const fallback = getNameFromFile(filePath)
   const folderCover = await findCoverInDir(dir, coverCacheDir)
-  const baseTrack: Record<string, unknown> = {
+  const baseTrack: LibraryTrackRecord = {
     id: randomUUID(),
     title: fallback.title,
     artist: fallback.artist,
@@ -665,7 +835,7 @@ async function parseTrack(
       ...metadata.common,
       year: waveMetadata?.year ?? metadata.common.year
     })
-    const track: Record<string, unknown> = {
+    const track: LibraryTrackRecord = {
       ...baseTrack,
       title,
       artist,
@@ -679,7 +849,7 @@ async function parseTrack(
       genre,
       duration: Math.round(metadata.format.duration || waveMetadata?.duration || 0),
       cover: embeddedCover ?? baseTrack.cover,
-      format: alacFormat ? 'ALAC' : metadata.format.container ?? waveMetadata?.codec,
+      format: alacFormat ? 'ALAC' : (metadata.format.container ?? waveMetadata?.codec),
       sampleRate: alacFormat?.sampleRate ?? metadata.format.sampleRate ?? waveMetadata?.sampleRate,
       bitrate: metadata.format.bitrate ?? waveMetadata?.bitrate,
       bitDepth: alacFormat?.bitDepth ?? metadata.format.bitsPerSample ?? waveMetadata?.bitDepth,
@@ -689,19 +859,18 @@ async function parseTrack(
     if (trackNumber !== undefined) track.trackNumber = trackNumber
     if (discNumber !== undefined) track.discNumber = discNumber
     if (audioFingerprint) track.audioFingerprint = audioFingerprint
+    const audioMetadata = {
+      ...track,
+      duration: Number(metadata.format.duration ?? waveMetadata?.duration ?? 0)
+    }
     const cueTracks = file.cueSignature
-      ? deriveCueTracks(
-          filePath,
-          Number(metadata.format.duration ?? 0),
-          track,
-          SUPPORTED_EXTENSIONS
-        )
+      ? await cueIndex.derive(filePath, Number(audioMetadata.duration), track)
       : null
-    if (cueTracks) return { tracks: cueTracks, metadataRead: true }
-    return { tracks: [track], metadataRead: true }
-  } catch {
+    if (cueTracks) return { tracks: cueTracks, metadataRead: true, audioMetadata }
+    return { tracks: [track], metadataRead: true, audioMetadata }
+  } catch (error) {
     if (waveMetadata) {
-      const track: Record<string, unknown> = {
+      const track: LibraryTrackRecord = {
         ...baseTrack,
         title: waveMetadata.title ?? fallback.title,
         artist: waveMetadata.artist ?? fallback.artist,
@@ -715,9 +884,20 @@ async function parseTrack(
         bitDepth: waveMetadata.bitDepth,
         ...(waveMetadata.trackNumber !== undefined ? { trackNumber: waveMetadata.trackNumber } : {})
       }
-      return { tracks: [track], metadataRead: true }
+      const audioMetadata = {
+        ...track,
+        duration: Number(waveMetadata.duration ?? 0)
+      }
+      const cueTracks = file.cueSignature
+        ? await cueIndex.derive(filePath, Number(audioMetadata.duration), track)
+        : null
+      return { tracks: cueTracks ?? [track], metadataRead: true, audioMetadata }
     }
-    return { tracks: [baseTrack], metadataRead: false }
+    return {
+      tracks: [baseTrack],
+      metadataRead: false,
+      error: error instanceof Error ? error.message : String(error)
+    }
   }
 }
 
@@ -786,7 +966,7 @@ async function cacheCoverFromBuffer(data: Buffer, coverCacheDir: string): Promis
   }
 }
 
-function detectCoverExtension(data: Buffer): 'jpg' | 'png' | 'webp' | null {
+function detectCoverExtension(data: Buffer): 'jpg' | 'png' | 'webp' | 'gif' | null {
   if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'jpg'
   if (
     data.length >= 8 &&
@@ -801,6 +981,7 @@ function detectCoverExtension(data: Buffer): 'jpg' | 'png' | 'webp' | null {
   ) {
     return 'webp'
   }
+  if (['GIF87a', 'GIF89a'].includes(data.subarray(0, 6).toString('latin1'))) return 'gif'
   return null
 }
 
@@ -1015,5 +1196,10 @@ const COVER_NAMES = [
   'front.jpg',
   'front.png',
   'artwork.jpg',
-  'artwork.png'
+  'artwork.png',
+  'cover.gif',
+  'folder.gif',
+  'album.gif',
+  'front.gif',
+  'artwork.gif'
 ]

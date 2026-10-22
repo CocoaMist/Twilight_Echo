@@ -219,6 +219,8 @@ window.checkDesktopNavigation=async({tone})=>{
   document.documentElement.dataset.theme=tone;document.documentElement.style.setProperty('--te-font-size-body','14px')
   const host=document.querySelector('#app'),menu=document.querySelector('.side-menu'),bar=document.querySelector('.playbar-fixture')
   host.style.setProperty('--te-side-menu-bottom','0px');bar.style.left='';bar.style.height='84px';await pause(350)
+  expect(getComputedStyle(menu).backgroundColor==='rgba(0, 0, 0, 0)','default sidebar paints a dark overlay in '+tone)
+  expect(getComputedStyle(menu).backdropFilter.includes('blur('),'removing the tint disabled sidebar diffusion')
   const clearance=useSideMenuClearance({showLocalSidebar:visible,hasPlayerBar:ref(true)});clearance.measureSideMenuClearance()
   host.style.setProperty('--te-side-menu-bottom',clearance.sideMenuBottomOffset.value+'px');host.style.setProperty('--te-side-menu-tools-clearance',clearance.sideMenuToolsClearance.value+'px');await nextTick()
   expect(clearance.sideMenuBottomOffset.value===0&&clearance.sideMenuToolsClearance.value===0,'desktop playbar reserves empty space under removed tools')

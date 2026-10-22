@@ -15,6 +15,14 @@ import { createSleepTimerState } from '../shared/sleepTimer.ts'
 import { deviceOptionsForOutput } from '../shared/audioDeviceRouting.ts'
 import { registerNativeSleepTimerBoundaries } from './audio/sleepTimerNativeBoundary.ts'
 import { SleepTimerService } from './sleepTimerCore.ts'
+import { LibraryDatabase } from './library/libraryDatabase.ts'
+import { AfterglowLibraryQueueCore } from './app/afterglowLibraryQueueCore.ts'
+import { afterglowNativeQueueItem } from './app/afterglowQueueCore.ts'
+import { isAfterglowSourceCurrent } from './app/afterglowSourceResolver.ts'
+import {
+  navigateAfterglowLibraryQueue,
+  type AfterglowLibraryNavigation
+} from './app/afterglowLibraryTransport.ts'
 
 // Most fake devices in this suite implement Windows backend contracts. Tests
 // for other platforms explicitly override this fixture and restore it locally.
@@ -4073,6 +4081,588 @@ test('switching to shuffle preserves the active stream and only updates native p
   assert.equal(after.state, before.state)
 })
 
+test('natural-end authority is main-only, exact and revoked by explicit transport or decode failure', async (t) => {
+  for (const action of ['stop', 'pause', 'seek', 'mode', 'error', 'upcoming'] as const) {
+    await t.test(action, async (t) => {
+      const native = new FakeNativeBinding()
+      const manager = makeManager({ exclusiveMode: false }, native)
+      t.after(() => manager.destroy())
+      await manager.loadQueue([
+        { id: 'a', queueEntryId: 'occurrence:a', source: 'a.flac', duration: 60 }
+      ])
+      await manager.play('a.flac', 10)
+      assert.equal(manager.getPlaybackEnd(), null)
+      native.playbackInfo = {
+        ...native.playbackInfo,
+        state: 'stopped',
+        upcomingTrack: null,
+        position: 60
+      }
+      ;(manager as unknown as { tick(): void }).tick()
+      const expected = manager.getPlaybackEnd()
+      assert.ok(expected)
+      assert.equal(expected.selection.queueToken, manager.getQueueToken())
+      if (action === 'stop') await manager.stop()
+      if (action === 'pause') await manager.pause()
+      if (action === 'seek') await manager.seek(0)
+      if (action === 'mode') await manager.setPlayMode('repeat')
+      if (action === 'error' || action === 'upcoming') {
+        native.playbackInfo = {
+          ...native.playbackInfo,
+          ...(action === 'error'
+            ? {
+                diagnostics: makeDiagnostics({ lastError: 'decoder failed' }),
+                outputInfo: makeOutputInfo({
+                  diagnostics: makeDiagnostics({ lastError: 'decoder failed' })
+                })
+              }
+            : { upcomingTrack: { id: 'next', source: 'next.flac' } })
+        }
+        ;(manager as unknown as { tick(): void }).tick()
+        ;(manager as unknown as { tick(): void }).tick()
+        ;(manager as unknown as { tick(): void }).tick()
+        ;(manager as unknown as { tick(): void }).tick()
+      }
+      assert.equal(manager.getPlaybackEnd(), null)
+      assert.equal(
+        await manager.continueAfterPlaybackEnd({
+          expected,
+          item: { id: 'b', source: 'b.flac' },
+          playMode: 'sequential',
+          isCurrent: () => true,
+          onSelected: () => assert.fail('stale end selected a queue')
+        }),
+        false
+      )
+      assert.equal(native.playCalls.length, 1)
+    })
+  }
+})
+
+test('guarded natural-end continuation selects before starting, preserves CUE/rate/volume and consumes its authority once', async (t) => {
+  const native = new FakeNativeBinding()
+  const manager = makeManager({ exclusiveMode: false }, native)
+  t.after(() => manager.destroy())
+  await manager.loadQueue([
+    { id: 'a', queueEntryId: 'occurrence:a', source: 'disc.flac', duration: 60 }
+  ])
+  await manager.play('disc.flac', 10)
+  await manager.setVolume(0.7)
+  await manager.setPlaybackRate(1.25)
+  native.playbackInfo = {
+    ...native.playbackInfo,
+    state: 'stopped',
+    upcomingTrack: null,
+    position: 60
+  }
+  ;(manager as unknown as { tick(): void }).tick()
+  const expected = manager.getPlaybackEnd()!
+  assert.ok(expected)
+  const item: AudioEngineQueueItem = {
+    id: 'a',
+    queueEntryId: 'occurrence:b',
+    source: 'disc.flac',
+    duration: 60,
+    cueRange: { startSeconds: 60, endSeconds: 120, pregapSeconds: 0 }
+  }
+  let selected = false
+  manager.on('start-file', () => assert.equal(selected, true))
+  const options = {
+    expected,
+    item,
+    playMode: 'sequential' as const,
+    isCurrent: () => true,
+    onSelected: () => {
+      selected = true
+    }
+  }
+  assert.equal(await manager.continueAfterPlaybackEnd(options), true)
+  assert.equal(await manager.continueAfterPlaybackEnd(options), false)
+  assert.equal(native.playCalls.length, 2)
+  assert.equal(native.playCalls[1].startTime, 0)
+  const info = await manager.getPlaybackInfo()
+  assert.equal(info.state, 'playing')
+  assert.equal(info.volume, 0.7)
+  assert.equal(info.playbackRate, 1.25)
+  assert.deepEqual(manager.getQueueSnapshot()[0].cueRange, item.cueRange)
+})
+
+test('automatic URL expiry fences load/preparation but never invalidates a decoder whose Play was dispatched while valid', async (t) => {
+  for (const delay of ['load', 'preparation', 'play-ack'] as const) {
+    await t.test(delay, async (t) => {
+      const native = new FakeNativeBinding()
+      const manager = makeManager({ exclusiveMode: false }, native)
+      t.after(() => manager.destroy())
+      await manager.loadQueue([{ id: 'a', queueEntryId: 'a', source: 'a.flac', duration: 60 }])
+      await manager.play('a.flac', 10)
+      native.playbackInfo = { ...native.playbackInfo, state: 'stopped', upcomingTrack: null }
+      ;(manager as unknown as { tick(): void }).tick()
+      const expected = manager.getPlaybackEnd()!
+      assert.ok(expected)
+      let now = 1_000
+      const resolved = { source: 'https://cdn.example/short.flac', expiresAt: 2_000 }
+      if (delay === 'preparation')
+        Object.assign(manager, {
+          prepareLoudnormForPlay: async () => {
+            now = 2_000
+          }
+        })
+      Object.assign(native, {
+        callAsync: async (method: keyof NativeAudioBinding, args: unknown[]) => {
+          const result = (native[method] as (...args: unknown[]) => unknown)(...args)
+          if (
+            (delay === 'load' && method === 'LoadQueue') ||
+            (delay === 'play-ack' && method === 'Play')
+          )
+            now = 2_000
+          return result
+        }
+      })
+      let selections = 0
+      const result = await manager.continueAfterPlaybackEnd({
+        expected,
+        item: { id: 'b', queueEntryId: 'b', source: resolved.source, duration: 60 },
+        playMode: 'sequential',
+        isCurrent: () => isAfterglowSourceCurrent(resolved, now),
+        onSelected: () => {
+          selections++
+        }
+      })
+      assert.equal(result, delay === 'play-ack')
+      assert.equal(selections, 1)
+      assert.equal(native.playCalls.length, delay === 'play-ack' ? 2 : 1)
+      assert.equal(
+        (await manager.getPlaybackInfo()).state,
+        delay === 'play-ack' ? 'playing' : 'stopped'
+      )
+      assert.equal(manager.getQueueSnapshot()[0].queueEntryId, 'b')
+    })
+  }
+})
+
+test('manual SQL navigation fences preparation/fallback expiry but drains dispatched playback and yields to a newer play', async (t) => {
+  for (const delay of ['preparation', 'fallback-route', 'play-ack', 'restore', 'newer-play']) {
+    await t.test(delay, async (t) => {
+      const db = new LibraryDatabase(':memory:')
+      t.after(() => db.close())
+      db.replaceDocument({
+        version: 2,
+        revision: 0,
+        folders: [],
+        exclusions: [],
+        tracks: [{ id: 'cue', filePath: 'disc.flac', title: 'Cue', duration: 60 }]
+      })
+      let queue = db.createLibraryQueue({ ids: Array(605).fill('cue'), sort: 'playlist' })
+      const row = (position: number) => db.readLibraryQueue(queue.id, position, 1).items[0]
+      queue = db.editLibraryQueue(queue.id, queue.revision, {
+        kind: 'select',
+        entryId: row(399).queueEntryId
+      }).queue
+      const native = new FakeNativeBinding()
+      Object.assign(native, {
+        RebindQueue: (json: string, index: number, mode: PlayMode) => {
+          native.lastLoadedQueue = JSON.parse(json)
+          native.playbackInfo = { ...native.playbackInfo, queueIndex: index, playMode: mode }
+          return true
+        }
+      })
+      const manager = makeManager({ exclusiveMode: false }, native)
+      t.after(() => manager.destroy())
+      await manager.loadQueue([
+        afterglowNativeQueueItem(
+          { ...row(399).track, queueEntryId: row(399).queueEntryId },
+          'disc.flac',
+          399
+        )
+      ])
+      await manager.play('disc.flac', 12)
+      if (delay === 'fallback-route') {
+        await manager.setAudioOutput('asio', 'asio:studio')
+        native.failAsioPlayWith = 'ASIO device unavailable'
+      }
+      let now = 1_000,
+        current = true,
+        mapping = [399]
+      t.mock.method(Date, 'now', () => now)
+      const resolved = { source: 'https://cdn.example/short.flac', expiresAt: 2_000 }
+      const session: NonNullable<
+        ReturnType<AfterglowLibraryNavigation['session']['getCachedSession']>
+      > = {
+        version: 1,
+        savedAt: new Date(0).toISOString(),
+        mode: 'off',
+        playMode: 'listLoop',
+        track: { ...row(399).track, queueEntryId: row(399).queueEntryId },
+        position: 12,
+        libraryQueue: {
+          id: queue.id,
+          revision: queue.revision,
+          index: 399,
+          entryId: row(399).queueEntryId
+        }
+      }
+      const states: string[] = []
+      const options: AfterglowLibraryNavigation = {
+        engine: manager,
+        database: {
+          getLibraryQueue: async (id) => db.getLibraryQueue(id),
+          readLibraryQueueNeighbor: async (...args) => db.readLibraryQueueNeighbor(...args)
+        },
+        session: {
+          getCachedSession: () => session,
+          applyEngineState: async (info, selected) => {
+            assert.equal(selected?.logicalIndex, 400)
+            assert.equal(selected?.entryId, row(400).queueEntryId)
+            assert.deepEqual(mapping, [400])
+            assert.equal(manager.getQueueSnapshot()[0].queueEntryId, selected.entryId)
+            queue = db.editLibraryQueue(queue.id, queue.revision, {
+              kind: 'select',
+              entryId: selected.entryId!
+            }).queue
+            states.push(info.state)
+          }
+        },
+        resolver: { resolve: async () => resolved },
+        authorize: async (source) => source,
+        isCurrent: () => current,
+        setMapping: (next) => {
+          mapping = next
+        },
+        mutate: async (operation) => operation()
+      }
+      Object.assign(manager, {
+        prepareLoudnormForPlay: async (source: string) => {
+          if (source !== resolved.source) return
+          if (delay === 'preparation') now = 2_000
+          if (delay === 'restore') current = false
+          if (delay === 'newer-play') {
+            await manager.loadQueue([{ id: 'newer', source: 'newer.flac' }])
+            await manager.play('newer.flac')
+            now = 2_000
+          }
+        }
+      })
+      Object.assign(native, {
+        callAsync: async (method: keyof NativeAudioBinding, args: unknown[]) => {
+          const result = (native[method] as (...args: unknown[]) => unknown)(...args)
+          if (
+            (delay === 'fallback-route' && method === 'SetOutputDevice') ||
+            (delay === 'play-ack' && method === 'Play')
+          )
+            now = 2_000
+          return result
+        }
+      })
+      const navigation = navigateAfterglowLibraryQueue(1, options)
+      const expired = delay === 'preparation' || delay === 'fallback-route'
+      if (expired) await assert.rejects(navigation, /afterglow_no_resumable_track/)
+      else if (delay === 'newer-play') await assert.rejects(navigation, /native_playback/)
+      else await navigation
+      assert.equal(native.stopCalls, expired ? 1 : 0)
+      assert.equal(db.getLibraryQueue(queue.id).index, delay === 'newer-play' ? 399 : 400)
+      assert.deepEqual(states, delay === 'newer-play' ? [] : [expired ? 'stopped' : 'playing'])
+      assert.equal(native.playCalls.length, delay === 'preparation' ? 1 : 2)
+      if (delay === 'fallback-route')
+        assert.equal(native.playCalls.at(-1)?.backend, 'asio', 'no expired WASAPI retry')
+      const info = await manager.getPlaybackInfo()
+      assert.equal(info.state, expired ? 'stopped' : 'playing')
+      assert.equal(
+        info.source,
+        delay === 'newer-play' ? 'newer.flac' : expired ? 'disc.flac' : resolved.source
+      )
+    })
+  }
+})
+
+test('stop or pause during the native continuation load prevents the later automatic play', async (t) => {
+  for (const action of ['stop', 'pause'] as const) {
+    await t.test(action, async (t) => {
+      const native = new FakeNativeBinding()
+      const manager = makeManager({ exclusiveMode: false }, native)
+      t.after(() => manager.destroy())
+      await manager.loadQueue([{ id: 'a', queueEntryId: 'a', source: 'a.flac', duration: 60 }])
+      await manager.play('a.flac', 10)
+      native.playbackInfo = { ...native.playbackInfo, state: 'stopped', upcomingTrack: null }
+      ;(manager as unknown as { tick(): void }).tick()
+      const expected = manager.getPlaybackEnd()!
+      assert.ok(expected)
+      let release!: () => void, started!: () => void
+      const loading = new Promise<void>((done) => {
+          started = done
+        }),
+        reply = new Promise<void>((done) => {
+          release = done
+        })
+      Object.assign(native, {
+        callAsync: async (method: keyof NativeAudioBinding, args: unknown[]) => {
+          if (method === 'LoadQueue') {
+            started()
+            await reply
+          }
+          return (native[method] as (...args: unknown[]) => unknown)(...args)
+        }
+      })
+      let selections = 0
+      const run = manager.continueAfterPlaybackEnd({
+        expected,
+        item: { id: 'b', queueEntryId: 'b', source: 'b.flac' },
+        playMode: 'sequential',
+        isCurrent: () => true,
+        onSelected: () => {
+          selections++
+        }
+      })
+      await loading
+      await manager[action]()
+      release()
+      assert.equal(await run, false)
+      assert.equal(native.playCalls.length, 1)
+      assert.equal(selections, 1)
+      assert.equal((await manager.getPlaybackInfo()).state, 'stopped')
+    })
+  }
+})
+
+test('real SQLite and playback controller recover a delayed CUE successor across the full queue, not the native window', async (t) => {
+  const db = new LibraryDatabase(':memory:')
+  t.after(() => db.close())
+  db.replaceDocument({
+    version: 2,
+    revision: 0,
+    folders: [],
+    exclusions: [],
+    tracks: [
+      {
+        id: 'cue',
+        title: 'Cue',
+        filePath: 'disc.flac',
+        duration: 60,
+        cueRange: { startSeconds: 60, endSeconds: 120, pregapSeconds: 0 }
+      }
+    ]
+  })
+  let queue = db.createLibraryQueue({ ids: Array(605).fill('cue'), sort: 'playlist' })
+  queue = db.editLibraryQueue(queue.id, queue.revision, { kind: 'mode', mode: 'listLoop' }).queue
+  const row = (position: number) => db.readLibraryQueue(queue.id, position, 1).items[0]
+  queue = db.editLibraryQueue(queue.id, queue.revision, {
+    kind: 'select',
+    entryId: row(604).queueEntryId
+  }).queue
+  const initial = afterglowNativeQueueItem(
+    { ...row(604).track, queueEntryId: row(604).queueEntryId },
+    'disc.flac',
+    604
+  )
+  const native = new FakeNativeBinding()
+  Object.assign(native, {
+    RebindQueue: (json: string, index: number, mode: PlayMode) => {
+      native.lastLoadedQueue = JSON.parse(json)
+      native.playbackInfo = { ...native.playbackInfo, queueIndex: index, playMode: mode }
+      return true
+    }
+  })
+  const manager = makeManager({ exclusiveMode: false }, native)
+  t.after(() => manager.destroy())
+  await manager.loadQueue([initial])
+  await manager.play('disc.flac', 12)
+  let started!: () => void,
+    release!: () => void,
+    resolves = 0
+  const resolving = new Promise<void>((done) => {
+      started = done
+    }),
+    reply = new Promise<void>((done) => {
+      release = done
+    })
+  const errors: string[] = [],
+    reads: number[] = []
+  let mapping = [604]
+  const core = new AfterglowLibraryQueueCore({
+    engine: manager,
+    nativeQueueIndices: mapping,
+    readWindow: async (index, entryId) => {
+      queue = db.getLibraryQueue(queue.id)
+      if (queue.selectedEntryId !== entryId)
+        queue = db.editLibraryQueue(queue.id, queue.revision, { kind: 'select', entryId }).queue
+      const window = db.readLibraryQueuePlaybackWindow(queue.id, queue.revision, index, true)
+      reads.push(window.items.length)
+      return { window, mode: 'listLoop' }
+    },
+    validateWindow: async (plan) =>
+      db.getLibraryQueue(queue.id).revision === plan.window.queue.revision,
+    resolver: {
+      resolve: async () => {
+        if (++resolves === 1) {
+          started()
+          await reply
+        }
+        return { source: 'disc.flac', expiresAt: null }
+      }
+    },
+    authorize: async (source) => source,
+    commit: async (operation, current) => {
+      if (current()) await operation()
+    },
+    onMappingChanged: (next) => {
+      mapping = next
+    },
+    onPlaybackAdvanced: async (_info, index, entryId) => {
+      assert.equal(mapping[0], index)
+      queue = db.editLibraryQueue(queue.id, queue.revision, { kind: 'select', entryId }).queue
+    },
+    onError: (message) => errors.push(message)
+  })
+  t.after(() => core.stop())
+  const run = core.start()
+  await resolving
+  native.playbackInfo = {
+    ...native.playbackInfo,
+    state: 'stopped',
+    upcomingTrack: null,
+    position: 60
+  }
+  ;(manager as unknown as { tick(): void }).tick()
+  assert.ok(manager.getPlaybackEnd())
+  core.getPlaybackEndRecoveryDeadline()
+  release()
+  await run
+  assert.equal(db.getLibraryQueue(queue.id).index, 0)
+  assert.equal(db.getLibraryQueue(queue.id).selectedEntryId, row(0).queueEntryId)
+  assert.deepEqual(mapping, [0, 1])
+  assert.equal(native.loadQueueCalls, 2)
+  assert.equal(native.playCalls.length, 2)
+  assert.equal((await manager.getPlaybackInfo()).position, 0)
+  assert.equal(manager.getQueueSnapshot()[0].queueEntryId, row(0).queueEntryId)
+  assert.deepEqual(manager.getQueueSnapshot()[0].cueRange, row(0).track!.cueRange)
+  assert.ok(reads.every((count) => count <= 2))
+  assert.deepEqual(errors, [])
+})
+
+test('unknown natural-end LoadQueue acknowledgement revokes authority without rollback or replay', async (t) => {
+  const native = new FakeNativeBinding()
+  const manager = makeManager({ exclusiveMode: false }, native)
+  t.after(() => manager.destroy())
+  await manager.loadQueue([{ id: 'a', queueEntryId: 'a', source: 'a.flac', duration: 60 }])
+  await manager.play('a.flac', 10)
+  native.playbackInfo = { ...native.playbackInfo, state: 'stopped', upcomingTrack: null }
+  ;(manager as unknown as { tick(): void }).tick()
+  const expected = manager.getPlaybackEnd()!
+  let loads = 0
+  Object.assign(native, {
+    callAsync: async (method: keyof NativeAudioBinding, args: unknown[]) => {
+      if (method === 'LoadQueue') {
+        loads++
+        throw new Error('lost native load acknowledgement')
+      }
+      return (native[method] as (...args: unknown[]) => unknown)(...args)
+    }
+  })
+  await assert.rejects(
+    manager.continueAfterPlaybackEnd({
+      expected,
+      item: { id: 'b', queueEntryId: 'b', source: 'b.flac' },
+      playMode: 'sequential',
+      isCurrent: () => true,
+      onSelected: () => assert.fail('unknown load published')
+    })
+  )
+  await new Promise<void>((done) => setImmediate(done))
+  assert.equal(loads, 1)
+  assert.equal(manager.getQueueToken(), '')
+  assert.equal(native.playCalls.length, 1)
+})
+
+test('automatic continuation preparation yields to seek, mode and pause without changing ordinary play preparation', async (t) => {
+  for (const automatic of [false, true]) {
+    for (const action of ['seek', 'mode', 'pause'] as const) {
+      await t.test(`${automatic ? 'automatic' : 'explicit'} ${action}`, async (t) => {
+        const native = new FakeNativeBinding()
+        const manager = makeManager({ exclusiveMode: false }, native)
+        t.after(() => manager.destroy())
+        await manager.loadQueue([{ id: 'a', queueEntryId: 'a', source: 'a.flac', duration: 60 }])
+        await manager.play('a.flac', 10)
+        native.playbackInfo = { ...native.playbackInfo, state: 'stopped', upcomingTrack: null }
+        ;(manager as unknown as { tick(): void }).tick()
+        const expected = manager.getPlaybackEnd()!
+        let started!: () => void, release!: () => void
+        const preparing = new Promise<void>((done) => {
+            started = done
+          }),
+          reply = new Promise<void>((done) => {
+            release = done
+          })
+        Object.assign(manager, {
+          prepareLoudnormForPlay: async () => {
+            started()
+            await reply
+          }
+        })
+        const run = automatic
+          ? manager.continueAfterPlaybackEnd({
+              expected,
+              item: { id: 'b', queueEntryId: 'b', source: 'b.flac', duration: 60 },
+              playMode: 'sequential',
+              isCurrent: () => true,
+              onSelected: () => {}
+            })
+          : manager.play('a.flac', 0).then((result) => result.nativeStarted)
+        await preparing
+        if (action === 'seek') await manager.seek(22)
+        if (action === 'mode') await manager.setPlayMode('repeat')
+        if (action === 'pause') await manager.pause()
+        release()
+        assert.equal(await run, !automatic)
+        assert.equal(native.playCalls.length, automatic ? 1 : 2)
+      })
+    }
+  }
+})
+
+test('owner restore drains an issued automatic native Play acknowledgement and retains its confirmed playing state', async (t) => {
+  const native = new FakeNativeBinding()
+  const manager = makeManager({ exclusiveMode: false }, native)
+  t.after(() => manager.destroy())
+  await manager.loadQueue([{ id: 'a', queueEntryId: 'a', source: 'a.flac', duration: 60 }])
+  await manager.play('a.flac', 10)
+  native.playbackInfo = { ...native.playbackInfo, state: 'stopped', upcomingTrack: null }
+  ;(manager as unknown as { tick(): void }).tick()
+  const expected = manager.getPlaybackEnd()!
+  let started!: () => void,
+    release!: () => void,
+    current = true
+  const dispatched = new Promise<void>((done) => {
+      started = done
+    }),
+    reply = new Promise<void>((done) => {
+      release = done
+    })
+  Object.assign(native, {
+    callAsync: async (method: keyof NativeAudioBinding, args: unknown[]) => {
+      const result = (native[method] as (...args: unknown[]) => unknown)(...args)
+      if (method === 'Play') {
+        started()
+        await reply
+      }
+      return result
+    }
+  })
+  const run = manager.continueAfterPlaybackEnd({
+    expected,
+    item: { id: 'b', queueEntryId: 'b', source: 'b.flac', duration: 60 },
+    playMode: 'sequential',
+    isCurrent: () => current,
+    onSelected: () => {}
+  })
+  await dispatched
+  current = false
+  release()
+  assert.equal(await run, true)
+  assert.equal((await manager.getPlaybackInfo()).state, 'playing')
+  assert.equal((await manager.getPlaybackInfo()).source, 'b.flac')
+  assert.equal(manager.getQueueSnapshot()[0].queueEntryId, 'b')
+  assert.equal(native.playCalls.length, 2)
+})
+
 test('a native stop mid-queue is not reported as a queue end while an upcoming track exists', async () => {
   const nativeBinding = new FakeNativeBinding()
   const manager = makeManager(
@@ -4177,6 +4767,120 @@ test('a delegated sequential queue does not report a queue end on an ordinary ad
   tickManager.tick()
 
   assert.deepEqual(boundaries, ['trackEnd'])
+})
+
+test('native serials report same-index repeats and skipped logical cycles without counting explicit transport', async () => {
+  const native = new FakeNativeBinding()
+  const zero = { trackSerial: 0, queueSerial: 0, trackTimeMs: 0, queueTimeMs: 0 }
+  native.playbackInfo.naturalBoundaries = { ...zero }
+  const manager = makeManager(
+    { exclusiveMode: true, audioOutput: 'wasapi', audioDevice: 'auto' },
+    native
+  )
+  const boundaries: Array<{ boundary: string; occurredAt?: number }> = []
+  manager.on('sleep-timer-boundary', (event) => boundaries.push(event))
+  await manager.loadQueue([{ id: 'same', source: 'disc.flac', logicalQueueEnd: false }], 0)
+  await manager.setPlayMode('repeat')
+  await manager.play('disc.flac', 0)
+  const tick = () => (manager as unknown as { tick(): void }).tick()
+  tick()
+  native.playbackInfo.naturalBoundaries = {
+    trackSerial: 3,
+    queueSerial: 0,
+    trackTimeMs: 2000,
+    queueTimeMs: 0
+  }
+  tick()
+  tick()
+  assert.deepEqual(boundaries, [{ boundary: 'trackEnd', occurredAt: 2000 }])
+  await manager.seek(0)
+  await manager.next()
+  await manager.previous()
+  await manager.stop()
+  await manager.play('disc.flac', 0)
+  tick()
+  assert.equal(boundaries.length, 1)
+  native.playbackInfo.naturalBoundaries = {
+    trackSerial: 9,
+    queueSerial: 2,
+    trackTimeMs: 6000,
+    queueTimeMs: 5000
+  }
+  tick()
+  assert.deepEqual(boundaries.slice(1), [
+    { boundary: 'trackEnd', occurredAt: 6000 },
+    { boundary: 'queueEnd', occurredAt: 5000 }
+  ])
+})
+
+test('native logical EOF is authoritative before renderer EOF and stale boundaries cannot trigger a rearmed timer', async () => {
+  const native = new FakeNativeBinding()
+  native.playbackInfo.naturalBoundaries = {
+    trackSerial: 0,
+    queueSerial: 0,
+    trackTimeMs: 0,
+    queueTimeMs: 0
+  }
+  const manager = makeManager(
+    { exclusiveMode: true, audioOutput: 'wasapi', audioDevice: 'auto' },
+    native
+  )
+  let now = 3000
+  const timer = new SleepTimerService({ now: () => now })
+  registerNativeSleepTimerBoundaries(manager, timer)
+  const events: string[] = []
+  manager.on('sleep-timer-boundary', ({ boundary }) => events.push(boundary))
+  manager.on('property-change', ({ name }) => {
+    if (name === 'eof-reached') events.push(name)
+  })
+  await manager.loadQueue([{ id: 'last', source: 'last.flac', logicalQueueEnd: true }], 0)
+  await manager.play('last.flac', 0)
+  timer.configure(createSleepTimerState('queueEnd', now, { defaultMinutes: 1, fadeSeconds: 0 }))
+  native.playbackInfo = {
+    ...native.playbackInfo,
+    state: 'stopped',
+    upcomingTrack: null,
+    naturalBoundaries: { trackSerial: 1, queueSerial: 1, trackTimeMs: 2000, queueTimeMs: 2000 }
+  }
+  const tick = () => (manager as unknown as { tick(): void }).tick()
+  tick()
+  assert.equal(timer.snapshot()?.active, true)
+  assert.deepEqual(events, ['trackEnd', 'queueEnd', 'eof-reached'])
+  now = 4000
+  native.playbackInfo.naturalBoundaries = {
+    trackSerial: 2,
+    queueSerial: 2,
+    trackTimeMs: 4000,
+    queueTimeMs: 4000
+  }
+  for (let i = 0; i < 4; i++) tick() // Stopped native output polls every fourth tick.
+  assert.equal(timer.snapshot()?.triggered, true)
+})
+
+test('legacy bindings project explicit SQL end metadata instead of treating every resident window as a full queue', async () => {
+  for (const logicalEnd of [false, true]) {
+    const native = new FakeNativeBinding()
+    const manager = makeManager(
+      { exclusiveMode: true, audioOutput: 'wasapi', audioDevice: 'auto' },
+      native
+    )
+    const queue = [
+      { id: 'same', source: 'disc.flac', logicalQueueEnd: logicalEnd },
+      { id: 'same', source: 'disc.flac', logicalQueueEnd: false }
+    ]
+    const boundaries: string[] = []
+    manager.on('sleep-timer-boundary', ({ boundary }) => boundaries.push(boundary))
+    await manager.loadQueue(queue, 0)
+    await manager.play('disc.flac', 0)
+    native.playbackInfo = { ...native.playbackInfo, queueIndex: 1, state: 'playing' }
+    const tick = () => (manager as unknown as { tick(): void }).tick()
+    tick()
+    assert.deepEqual(boundaries, logicalEnd ? ['trackEnd', 'queueEnd'] : ['trackEnd'])
+    boundaries.length = 0
+    native.playbackInfo = { ...native.playbackInfo, state: 'stopped', upcomingTrack: null }
+    tick()
+    assert.deepEqual(boundaries, ['trackEnd'], 'end of the short window is not global EOF')
+  }
 })
 
 test('shuffle next accepts the native non-adjacent queue target', async () => {
@@ -4542,6 +5246,298 @@ test('queue cursor reuse verifies content token and CUE identity before native s
   assert.deepEqual(selected, [1])
 })
 
+test('conditional queue rebind preserves playback and commits only confirmed authority', async (t) => {
+  for (const state of ['playing', 'paused'] as const) {
+    await t.test(state, async (t) => {
+      const native = new FakeNativeBinding()
+      const calls: unknown[][] = []
+      Object.assign(native, {
+        RebindQueue: (...args: unknown[]) => {
+          calls.push(args)
+          return true
+        }
+      })
+      const manager = makeManager({ exclusiveMode: false }, native)
+      t.after(() => manager.destroy())
+      const current = { id: 'current', source: 'current.flac' }
+      await manager.loadQueue([{ id: 'old', source: 'old.flac' }, current], 1)
+      await manager.play(current.source, 42)
+      if (state === 'paused') await manager.togglePause()
+      const before = await manager.getPlaybackInfo()
+      const oldToken = manager.getQueueToken()
+      const items = [
+        { ...current, queueEntryId: 'sql:0' },
+        { id: 'next', source: 'next.flac' }
+      ]
+      const commit = await manager.rebindQueue({
+        expected: { queueToken: oldToken, index: 1, ...current },
+        items,
+        startIndex: 0,
+        playMode: 'sequential'
+      })
+      assert.ok(commit?.queueToken)
+      assert.notEqual(commit.queueToken, oldToken)
+      assert.deepEqual(calls, [
+        [JSON.stringify(items), 0, 'sequential', JSON.stringify(current), 1]
+      ])
+      assert.deepEqual(manager.getQueueSnapshot(), items)
+      // Native transport is never invoked by a queue-only handoff.
+      assert.equal(native.playCalls.length, 1)
+      assert.equal(native.stopCalls, 0)
+      assert.equal(native.seekCalls, 0)
+      assert.equal(native.loadQueueCalls, 1)
+      assert.equal(native.playModeCalls, 1)
+      assert.equal(before.state, state)
+      assert.equal(native.playbackInfo.state, before.state)
+      assert.equal(native.playbackInfo.position, before.position)
+    })
+  }
+})
+
+test('conditional queue rebind rejects stale authority, CUE changes and unsupported bindings', async (t) => {
+  const native = new FakeNativeBinding()
+  const manager = makeManager({ exclusiveMode: false }, native)
+  t.after(() => manager.destroy())
+  const current: AudioEngineQueueItem = {
+    id: 'cue',
+    source: 'disc.flac',
+    cueRange: {
+      startSeconds: 0,
+      endSeconds: 60,
+      pregapSeconds: 0,
+      virtualPregapSeconds: 0,
+      sourcePregapSeconds: 0
+    }
+  }
+  await manager.loadQueue([current], 0)
+  const queueToken = manager.getQueueToken()
+  const request = {
+    expected: { queueToken, index: 0, id: current.id, source: current.source },
+    items: [current],
+    startIndex: 0,
+    playMode: 'sequential' as const
+  }
+  assert.equal(await manager.rebindQueue(request), null)
+  let calls = 0
+  Object.assign(native, {
+    RebindQueue: () => {
+      calls++
+      return false
+    }
+  })
+  for (const expected of [
+    { ...request.expected, queueToken: 'stale' },
+    { ...request.expected, index: 1 },
+    { ...request.expected, id: 'wrong' },
+    { ...request.expected, source: 'wrong.flac' }
+  ])
+    assert.equal(await manager.rebindQueue({ ...request, expected }), null)
+  assert.equal(
+    await manager.rebindQueue({
+      ...request,
+      items: [{ ...current, cueRange: { ...current.cueRange!, startSeconds: 30 } }]
+    }),
+    null
+  )
+  assert.equal(calls, 0)
+  assert.equal(manager.getQueueToken(), queueToken)
+  assert.equal(await manager.rebindQueue(request), null)
+  assert.equal(calls, 1)
+  assert.equal(manager.getQueueToken(), queueToken, 'native false guarantees no mutation')
+  assert.deepEqual(manager.getQueueSnapshot(), [current])
+})
+
+test('unknown queue rebind revokes authority without rollback or replay', async (t) => {
+  for (const reply of ['lost', 'malformed'] as const) {
+    await t.test(reply, async (t) => {
+      const native = new FakeNativeBinding()
+      let calls = 0
+      Object.assign(native, {
+        RebindQueue: () => {
+          calls++
+          if (reply === 'lost') throw new Error('reply lost')
+          return undefined
+        }
+      })
+      const manager = makeManager({ exclusiveMode: false }, native)
+      t.after(() => manager.destroy())
+      const current = { id: 'a', source: 'a.flac' }
+      await manager.loadQueue([current], 0)
+      const expected = { ...current, queueToken: manager.getQueueToken(), index: 0 }
+      await assert.rejects(
+        manager.rebindQueue({ expected, items: [current], startIndex: 0, playMode: 'sequential' }),
+        /reply lost|Invalid native queue rebind reply/
+      )
+      assert.equal(manager.getQueueToken(), '')
+      assert.equal(calls, 1)
+      assert.equal(native.loadQueueCalls, 1)
+      assert.equal(
+        await manager.rebindQueue({
+          expected,
+          items: [current],
+          startIndex: 0,
+          playMode: 'sequential'
+        }),
+        null
+      )
+      assert.equal(calls, 1)
+    })
+  }
+})
+
+test('late queue rebind cannot overwrite or revoke a newer queue', async (t) => {
+  for (const reply of [true, false, new Error('late failure')]) {
+    await t.test(String(reply), async (t) => {
+      const native = new FakeNativeBinding()
+      let resolve!: (value: boolean) => void
+      let reject!: (error: Error) => void
+      Object.assign(native, {
+        RebindQueue: () =>
+          new Promise<boolean>((yes, no) => {
+            resolve = yes
+            reject = no
+          })
+      })
+      const manager = makeManager({ exclusiveMode: false }, native)
+      t.after(() => manager.destroy())
+      const current = { id: 'a', source: 'a.flac' }
+      await manager.loadQueue([current], 0)
+      const pending = manager.rebindQueue({
+        expected: { ...current, index: 0, queueToken: manager.getQueueToken() },
+        items: [current],
+        startIndex: 0,
+        playMode: 'sequential'
+      })
+      const newer = [{ id: 'newer', source: 'newer.flac' }]
+      await manager.loadQueue(newer, 0)
+      const newerToken = manager.getQueueToken()
+      if (reply instanceof Error) reject(reply)
+      else resolve(reply)
+      if (reply === false) assert.equal(await pending, null)
+      else await assert.rejects(pending, /superseded|late failure/)
+      assert.deepEqual(manager.getQueueSnapshot(), newer)
+      assert.equal(manager.getQueueToken(), newerToken)
+      assert.equal(native.loadQueueCalls, 2)
+    })
+  }
+})
+
+test('explicit queue recovery forces native Stop even when the host mirror was never playing', async (t) => {
+  const native = new FakeNativeBinding()
+  Object.assign(native, {
+    RebindQueue: () => {
+      native.playbackInfo = makePlaybackInfo({
+        state: 'playing',
+        source: 'same.flac',
+        queueIndex: 1
+      })
+      throw new Error('lost queue reply')
+    }
+  })
+  const manager = makeManager({ exclusiveMode: false }, native)
+  t.after(() => manager.destroy())
+  const item = { id: 'duplicate', source: 'same.flac' }
+  await manager.loadQueue([item])
+  await assert.rejects(manager.stopForQueueRecovery(), /queue_changed/)
+  assert.equal(native.stopCalls, 0, 'a known queue must retain its normal live restore contract')
+  await assert.rejects(
+    manager.rebindQueue({
+      expected: { ...item, queueToken: manager.getQueueToken(), index: 0 },
+      items: [item, item],
+      startIndex: 0,
+      playMode: 'sequential'
+    }),
+    /lost queue reply/
+  )
+  const proof = await manager.stopForQueueRecovery()
+  assert.equal(native.stopCalls, 1)
+  assert.equal(native.playbackInfo.state, 'stopped')
+  assert.equal(manager.getQueueToken(), '', 'Stop does not prove queue identity')
+  assert.equal(manager.isQueueRecoveryCurrent(proof), true)
+  assert.equal(native.loadQueueCalls, 1)
+  assert.deepEqual(native.playCalls, [])
+  await manager.setVolume(0.4)
+  assert.equal(manager.isQueueRecoveryCurrent(proof), true)
+  await manager.loadQueue([{ id: 'new', source: 'new.flac' }])
+  assert.equal(manager.isQueueRecoveryCurrent(proof), false)
+})
+
+test('stopped queue recovery requires both the service ACK and a fresh stopped readback', async (t) => {
+  for (const failure of ['stop-reply', 'read-reply', 'still-playing'] as const) {
+    await t.test(failure, async (t) => {
+      const service = new FakeAudioServiceBinding()
+      const manager = makeManager({ exclusiveMode: false }, service)
+      t.after(() => manager.destroy())
+      const methods: string[] = []
+      const call = service.callAsync.bind(service)
+      service.callAsync = async (method, args) => {
+        methods.push(method)
+        if (method === 'Stop') {
+          if (failure !== 'still-playing') service.Stop()
+          if (failure === 'stop-reply') throw new Error('Stop ACK lost')
+          return
+        }
+        if (method === 'GetPlaybackInfo' && failure === 'read-reply')
+          throw new Error('read ACK lost')
+        return call(method, args)
+      }
+      await assert.rejects(manager.stopForQueueRecovery(), /recovery_stop_failed/)
+      assert.equal(methods.filter((method) => method === 'Stop').length, 1)
+      assert.equal(methods.includes('LoadQueue'), false)
+      assert.equal(methods.includes('Play'), false)
+      assert.equal(manager.isQueueRecoveryCurrent(1), false)
+    })
+  }
+})
+
+test('late recovery Stop acknowledgement cannot adopt or stop a newer user queue', async (t) => {
+  const service = new FakeAudioServiceBinding()
+  const manager = makeManager({ exclusiveMode: false }, service)
+  t.after(() => manager.destroy())
+  let acknowledge!: () => void
+  const call = service.callAsync.bind(service)
+  service.callAsync = async (method, args) => {
+    if (method !== 'Stop') return call(method, args)
+    service.Stop()
+    await new Promise<void>((resolve) => {
+      acknowledge = resolve
+    })
+    return undefined
+  }
+  const recovery = manager.stopForQueueRecovery()
+  const rejected = assert.rejects(recovery, /queue_changed/)
+  await manager.loadQueue([{ id: 'new', source: 'new.flac' }])
+  const token = manager.getQueueToken()
+  acknowledge()
+  await rejected
+  assert.equal(service.stopCalls, 1)
+  assert.equal(manager.getQueueToken(), token)
+  assert.equal(manager.isQueueRecoveryCurrent(1), false)
+})
+
+test('native service crash and ready epochs revoke a previously confirmed recovery Stop', async (t) => {
+  const service = new FakeAudioServiceBinding()
+  const manager = new AudioEngineManager(
+    { exclusiveMode: false },
+    {
+      audioServiceFactory: () => service,
+      scheduler: TEST_SCHEDULER,
+      deviceOptionsProvider: () => DEVICE_OPTIONS
+    }
+  )
+  t.after(() => manager.destroy())
+  const proof = await manager.stopForQueueRecovery()
+  assert.equal(manager.isQueueRecoveryCurrent(proof), true)
+  service.emit('crash', 'recovery fixture crash')
+  assert.equal(manager.isQueueRecoveryCurrent(proof), false)
+  const next = await manager.stopForQueueRecovery()
+  assert.equal(manager.isQueueRecoveryCurrent(next), true)
+  service.emit('ready')
+  assert.equal(manager.isQueueRecoveryCurrent(next), false)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(service.playCalls, 0)
+})
+
 test('playback snapshots expose queue authority only for a matching native source', async (t) => {
   const nativeBinding = new FakeNativeBinding()
   let now = 1000
@@ -4580,6 +5576,138 @@ test('playback snapshots expose queue authority only for a matching native sourc
   assert.equal((await manager.getPlaybackInfo()).queueToken, undefined)
 })
 
+test('queue hot update appends and refreshes future sources without reloading', async (t) => {
+  const nativeBinding = new FakeNativeBinding()
+  const calls: Array<{ method: string; args: unknown[] }> = []
+  Object.assign(nativeBinding, {
+    AppendQueueItems: (json: string) => {
+      calls.push({ method: 'AppendQueueItems', args: [json] })
+    },
+    UpdateQueueItemSource: (index: number, source: string) => {
+      calls.push({ method: 'UpdateQueueItemSource', args: [index, source] })
+    }
+  })
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding
+  )
+  t.after(() => manager.destroy())
+  assert.equal(manager.getQueueHotUpdateCapability(), null)
+  Object.assign(nativeBinding, {
+    GetEngineCapabilities: () =>
+      JSON.stringify({
+        queueHotUpdate: {
+          version: 1,
+          append: true,
+          updateSource: true,
+          upcomingIndex: true
+        }
+      })
+  })
+  assert.deepEqual(manager.getQueueHotUpdateCapability(), {
+    version: 1,
+    append: true,
+    updateSource: true,
+    upcomingIndex: true
+  })
+  assert.deepEqual(await manager.getQueueHotUpdateCapabilityAsync(), {
+    version: 1,
+    append: true,
+    updateSource: true,
+    upcomingIndex: true
+  })
+  await manager.loadQueue(
+    [
+      { id: 'ncm:a', source: 'https://cdn.test/a.flac' },
+      { id: 'ncm:b', source: 'https://cdn.test/b.flac' }
+    ],
+    0
+  )
+  const appendEvents: unknown[] = []
+  manager.on('queue-appended', (payload: unknown) => appendEvents.push(payload))
+
+  const firstIndex = await manager.appendQueueItems([
+    { id: 'ncm:c', source: 'https://cdn.test/c.flac' }
+  ])
+  assert.equal(firstIndex, 2)
+  assert.deepEqual(
+    manager.getQueueSnapshot().map((item) => item.source),
+    ['https://cdn.test/a.flac', 'https://cdn.test/b.flac', 'https://cdn.test/c.flac']
+  )
+  assert.equal(nativeBinding.loadQueueCalls, 1, 'append must not reload the queue')
+  assert.equal(calls.filter((call) => call.method === 'AppendQueueItems').length, 1)
+  assert.deepEqual(appendEvents, [{ firstIndex: 2, count: 1, queueToken: manager.getQueueToken() }])
+
+  assert.equal(await manager.updateQueueItemSource(2, 'https://cdn.test/c.flac?sig=2'), true)
+  assert.equal(manager.getQueueSnapshot()[2].source, 'https://cdn.test/c.flac?sig=2')
+  assert.equal(nativeBinding.loadQueueCalls, 1)
+  assert.equal(calls.filter((call) => call.method === 'UpdateQueueItemSource').length, 1)
+  // The active item is already open; hot-swapping it is a contract violation.
+  await assert.rejects(
+    () => manager.updateQueueItemSource(0, 'https://cdn.test/a.flac?sig=2'),
+    /cannot be hot-updated/
+  )
+  await assert.rejects(() => manager.updateQueueItemSource(9, 'x'), /out of range/)
+})
+
+test('service capability probe asks the utility process for the full native JSON', async (t) => {
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    new FakeNativeBinding()
+  )
+  t.after(() => manager.destroy())
+  const calls: string[] = []
+  const binding = {
+    GetEngineCapabilities: () => JSON.stringify({}),
+    getEngineCapabilitiesAsync: async () => {
+      calls.push('async')
+      return JSON.stringify({
+        queueHotUpdate: {
+          version: 1,
+          append: true,
+          updateSource: true,
+          upcomingIndex: true
+        }
+      })
+    },
+    destroy: () => {}
+  }
+  ;(manager as unknown as { audioServiceBinding: typeof binding }).audioServiceBinding = binding
+  assert.deepEqual(await manager.getQueueHotUpdateCapabilityAsync(), {
+    version: 1,
+    append: true,
+    updateSource: true,
+    upcomingIndex: true
+  })
+  assert.deepEqual(calls, ['async'])
+})
+
+test('queue hot update capability falls back to the native queue-state probe', async (t) => {
+  const nativeBinding = new FakeNativeBinding()
+  Object.assign(nativeBinding, {
+    GetEngineCapabilities: () => JSON.stringify({}),
+    GetQueueState: () =>
+      JSON.stringify({
+        revision: 4,
+        size: 2,
+        currentIndex: 0,
+        upcomingIndex: 1,
+        playMode: 'sequential'
+      })
+  })
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding
+  )
+  t.after(() => manager.destroy())
+  assert.deepEqual(await manager.getQueueHotUpdateCapabilityAsync(), {
+    version: 1,
+    append: true,
+    updateSource: true,
+    upcomingIndex: true
+  })
+})
+
 test('loadQueue skips native call and queue fanout when normalized queue is unchanged', async () => {
   const nativeBinding = new FakeNativeBinding()
   const manager = makeManager(
@@ -4613,6 +5741,26 @@ test('loadQueue skips native call and queue fanout when normalized queue is unch
   assert.deepEqual(nativeBinding.lastLoadedQueue, queue)
   assert.equal(nativeBinding.lastLoadedQueueIndex, 1)
   assert.equal(queueChanges.length, 1)
+})
+
+test('changing only a duplicate occurrence invalidates native queue authority', async (t) => {
+  const nativeBinding = new FakeNativeBinding()
+  const manager = makeManager(
+    { exclusiveMode: false, audioOutput: 'wasapi', audioDevice: 'auto' },
+    nativeBinding
+  )
+  t.after(() => manager.destroy())
+  const queue: AudioEngineQueueItem[] = [{ id: 'same', source: 'same.flac', queueEntryId: 'first' }]
+  await manager.loadQueue(queue)
+  const token = manager.getQueueToken()
+  await manager.loadQueue([{ ...queue[0], queueEntryId: 'second' }])
+  assert.notEqual(manager.getQueueToken(), token)
+  assert.equal(nativeBinding.loadQueueCalls, 2)
+  assert.equal(nativeBinding.lastLoadedQueue[0].queueEntryId, 'second')
+  assert.equal(
+    await manager.selectQueueItem({ queueToken: token, index: 0, id: 'same', source: 'same.flac' }),
+    false
+  )
 })
 
 test('same-source CUE queue preserves its logical index and clamps relative seek/play positions', async () => {
@@ -4705,6 +5853,46 @@ test('native tick recognizes a same-source CUE boundary by queue index', async (
   assert.equal(info.queueIndex, 1)
   assert.equal(info.duration, 45)
   assert.equal(startFileEvents, 1)
+})
+
+test('same-file CUE handoff resets the outgoing soft clock and pending seek target', async (t) => {
+  const native = new FakeNativeBinding()
+  const manager = makeManager({ exclusiveMode: false }, native)
+  t.after(() => manager.destroy())
+  const source = 'disc.flac'
+  await manager.loadQueue([
+    {
+      id: 'long',
+      source,
+      duration: 122,
+      cueRange: { startSeconds: 2, endSeconds: 124, pregapSeconds: 0 }
+    },
+    {
+      id: 'short',
+      source,
+      duration: 1,
+      cueRange: { startSeconds: 0, endSeconds: 1, pregapSeconds: 0 }
+    }
+  ])
+  await manager.play(source, 121)
+  await manager.seek(121.9)
+  const updates: PlaybackInfo[] = []
+  manager.on('playback-info', (info) => updates.push(info))
+  native.playbackInfo = {
+    ...native.playbackInfo,
+    queueIndex: 1,
+    position: 0.2,
+    duration: 1,
+    state: 'playing'
+  }
+  ;(manager as unknown as { tick: () => void }).tick()
+  assert.equal(updates.at(-1)?.queueIndex, 1)
+  assert.equal(updates.at(-1)?.duration, 1)
+  assert.equal(
+    updates.at(-1)?.position,
+    0.2,
+    'incoming occurrence must not inherit the outgoing clock'
+  )
 })
 
 test('loadQueue reapplies play mode to clear stale native repeat mode', async () => {
@@ -8009,6 +9197,57 @@ test('play preserves saved volume and reasserts SetVolume on native', async () =
   assert.equal(nativeBinding.playbackInfo.volume, 0.42)
   assert.ok(nativeBinding.volumeCalls >= 1)
 
+  manager.destroy()
+})
+
+test('main-only sleep gain attenuates native output without changing public/user volume, including a later play', async () => {
+  const binding = new FakeNativeBinding()
+  const manager = new AudioEngineManager(
+    { exclusiveMode: false, volume: 0.7 },
+    { nativeBinding: binding, scheduler: TEST_SCHEDULER }
+  )
+  await manager.setSleepTimerGain(0.5)
+  assert.equal(binding.playbackInfo.volume, 0.35)
+  assert.equal((await manager.getPlaybackInfo()).volume, 0.7)
+  await manager.setVolume(0.4)
+  assert.equal(binding.playbackInfo.volume, 0.2)
+  assert.equal((await manager.getPlaybackInfo()).volume, 0.4)
+  await manager.play('C:\\music\\track.flac', 0)
+  assert.equal(binding.playbackInfo.volume, 0.2)
+  assert.equal((await manager.getPlaybackInfo()).volume, 0.4)
+  await manager.setAudioDevice('dac-1')
+  assert.equal(binding.playbackInfo.volume, 0.2, 'a route commit must retain temporary attenuation')
+  binding.failNextOutputConfig = 'target topology rejected'
+  await assert.rejects(manager.setAudioOutput('asio', 'asio:studio'), /target topology rejected/)
+  assert.equal(binding.playbackInfo.volume, 0.2, 'route rollback must also retain attenuation')
+  assert.equal((await manager.getPlaybackInfo()).volume, 0.4)
+  await manager.setSleepTimerGain(1)
+  assert.equal(binding.playbackInfo.volume, 0.4)
+  assert.equal((await manager.getPlaybackInfo()).volume, 0.4)
+  manager.destroy()
+})
+
+test('service-ready restore reapplies attenuation, never temporary gain as the saved user volume', async () => {
+  const service = new FakeAudioServiceBinding()
+  const manager = new AudioEngineManager(
+    { exclusiveMode: false, volume: 0.6 },
+    {
+      audioServiceFactory: () => service,
+      scheduler: TEST_SCHEDULER,
+      deviceOptionsProvider: () => DEVICE_OPTIONS
+    }
+  )
+  await manager.start()
+  await manager.setSleepTimerGain(0.25)
+  assert.equal(service.volume, 0.15)
+  service.volume = 1
+  service.emit('ready')
+  await new Promise((done) => setTimeout(done, 0))
+  await new Promise((done) => setTimeout(done, 0))
+  assert.equal(service.volume, 0.15)
+  assert.equal((await manager.getPlaybackInfo()).volume, 0.6)
+  await manager.setSleepTimerGain(1)
+  assert.equal(service.volume, 0.6)
   manager.destroy()
 })
 

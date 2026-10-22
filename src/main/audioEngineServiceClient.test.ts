@@ -835,6 +835,288 @@ test('a rejected fire-and-forget command leaves other RPCs waiting for their own
   }
 })
 
+test('queue rebind uses addon capabilities and a confirmed boolean reply', async (t) => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 100,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => binding.destroy())
+  startAudioServiceForTest(binding)
+  const args = [
+    '[{"id":"current","source":"a.flac"}]',
+    0,
+    'sequential',
+    '{"id":"current","source":"a.flac"}',
+    1
+  ] as const
+  const ready = (methods: string[]) =>
+    child.emit('message', {
+      kind: 'ready',
+      capabilities: createAudioServiceCapabilities([
+        'ApplyDspState',
+        'GetDspGraphStatus',
+        ...methods
+      ])
+    })
+  assert.equal(await binding.RebindQueue(...args), false, 'no published capabilities')
+  ready([])
+  assert.equal(await binding.RebindQueue(...args), false, 'old addon is not probed')
+  assert.equal(child.messages.length, 0)
+  ready(['RebindQueue'])
+  for (const reply of [false, true, undefined]) {
+    const pending = binding.RebindQueue(...args)
+    const request = child.messages.at(-1) as { requestId: string; method: string; args: unknown[] }
+    assert.equal(request.method, 'RebindQueue')
+    assert.deepEqual(request.args, [...args])
+    child.emit('message', {
+      kind: 'response',
+      requestId: request.requestId,
+      ok: true,
+      value: reply
+    })
+    if (reply === true) {
+      await new Promise((resolve) => setImmediate(resolve))
+      const read = child.messages.at(-1) as { requestId: string; method: string }
+      assert.equal(read.method, 'GetPlaybackInfo')
+      child.emit('message', {
+        kind: 'response',
+        requestId: read.requestId,
+        ok: true,
+        value: '{"state":"paused","queueIndex":0}'
+      })
+    }
+    if (reply === undefined) await assert.rejects(pending, /Invalid native queue rebind reply/)
+    else assert.equal(await pending, reply)
+  }
+  assert.equal(child.messages.length, 4)
+})
+
+test('confirmed rebind drains fresh playback state and a late pre-handoff poll cannot restore its old index', async (t) => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => binding.destroy())
+  startAudioServiceForTest(binding)
+  child.emit('message', {
+    kind: 'ready',
+    capabilities: createAudioServiceCapabilities([
+      'ApplyDspState',
+      'GetDspGraphStatus',
+      'RebindQueue'
+    ])
+  })
+  const reply = (request: unknown, value: unknown) =>
+    child.emit('message', {
+      kind: 'response',
+      requestId: (request as { requestId: string }).requestId,
+      ok: true,
+      value
+    })
+  const oldInfo = '{"state":"playing","queueIndex":1,"position":42.25,"source":"disc.flac"}'
+  const seed = binding.callAsync('GetPlaybackInfo', [])
+  reply(child.messages.at(-1), oldInfo)
+  await seed
+  assert.equal(binding.GetPlaybackInfo(), oldInfo)
+  const oldPoll = child.messages.at(-1)
+  let settled = false
+  const pending = binding.RebindQueue('[]', 0, 'sequential', '{}', 1).then((value) => {
+    settled = true
+    return value
+  })
+  reply(child.messages.at(-1), true)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false, 'new queue cannot be exposed with the pre-rebind cursor cache')
+  const read = child.messages.at(-1) as { method: string }
+  assert.equal(read.method, 'GetPlaybackInfo')
+  const newInfo = '{"state":"playing","queueIndex":0,"position":42.25,"source":"disc.flac"}'
+  reply(read, newInfo)
+  assert.equal(await pending, true)
+  reply(oldPoll, oldInfo)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(
+    binding.GetPlaybackInfo(),
+    newInfo,
+    'late cache callback cannot undo the fresh ACK read'
+  )
+  assert.deepEqual(
+    child.messages.map((message) => (message as { method: string }).method),
+    ['GetPlaybackInfo', 'GetPlaybackInfo', 'RebindQueue', 'GetPlaybackInfo', 'GetPlaybackInfo']
+  )
+  assert.equal(child.killCount, 0)
+})
+
+test('loaded CUE window drains fresh playback state before publishing renumbered same-source slots', async (t) => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => binding.destroy())
+  startAudioServiceForTest(binding)
+  const reply = (request: unknown, value: unknown) =>
+    child.emit('message', {
+      kind: 'response',
+      requestId: (request as { requestId: string }).requestId,
+      ok: true,
+      value
+    })
+  // Native has naturally advanced to the incoming CUE occurrence in slot 1.
+  const oldInfo =
+    '{"state":"playing","queueIndex":1,"position":0.2,"duration":1,"source":"disc.flac"}'
+  const seed = binding.callAsync('GetPlaybackInfo', [])
+  reply(child.messages.at(-1), oldInfo)
+  await seed
+  assert.equal(binding.GetPlaybackInfo(), oldInfo)
+  const oldPoll = child.messages.at(-1)
+  let settled = false
+  const pending = binding
+    .callAsync('LoadQueue', [
+      JSON.stringify([
+        { id: 'second', source: 'disc.flac', cueRange: { startSeconds: 1, endSeconds: 2 } },
+        { id: 'third', source: 'disc.flac', cueRange: { startSeconds: 2, endSeconds: 124 } }
+      ]),
+      0
+    ])
+    .then(() => {
+      settled = true
+    })
+  reply(child.messages.at(-1), undefined)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false, 'old slot 1 must not become the third CUE under the new token')
+  const read = child.messages.at(-1) as { method: string }
+  assert.equal(read.method, 'GetPlaybackInfo')
+  const newInfo =
+    '{"state":"playing","queueIndex":0,"position":0.2,"duration":1,"source":"disc.flac"}'
+  reply(read, newInfo)
+  await pending
+  reply(oldPoll, oldInfo)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(binding.GetPlaybackInfo(), newInfo)
+  assert.deepEqual(
+    child.messages.map((message) => (message as { method: string }).method),
+    ['GetPlaybackInfo', 'GetPlaybackInfo', 'LoadQueue', 'GetPlaybackInfo', 'GetPlaybackInfo']
+  )
+  assert.equal(child.killCount, 0)
+})
+
+test('failed post-load playback read rejects without replaying the queue mutation', async (t) => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => binding.destroy())
+  startAudioServiceForTest(binding)
+  const pending = binding.callAsync('LoadQueue', ['[]', 0])
+  const rejected = assert.rejects(pending, /fresh status unavailable/)
+  const mutation = child.messages.at(-1) as { requestId: string }
+  child.emit('message', { kind: 'response', requestId: mutation.requestId, ok: true })
+  await new Promise((resolve) => setImmediate(resolve))
+  const read = child.messages.at(-1) as { requestId: string; method: string }
+  assert.equal(read.method, 'GetPlaybackInfo')
+  child.emit('message', {
+    kind: 'response',
+    requestId: read.requestId,
+    ok: false,
+    error: 'fresh status unavailable'
+  })
+  await rejected
+  assert.deepEqual(
+    child.messages.map((message) => (message as { method: string }).method),
+    ['LoadQueue', 'GetPlaybackInfo']
+  )
+  assert.equal(child.killCount, 0)
+})
+
+test('failed post-rebind playback read is explicit and never replays the confirmed mutation', async (t) => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => binding.destroy())
+  startAudioServiceForTest(binding)
+  child.emit('message', {
+    kind: 'ready',
+    capabilities: createAudioServiceCapabilities([
+      'ApplyDspState',
+      'GetDspGraphStatus',
+      'RebindQueue'
+    ])
+  })
+  const pending = binding.RebindQueue('[]', 0, 'sequential', '{}', 1)
+  const rejected = assert.rejects(pending, /fresh status unavailable/)
+  const mutation = child.messages.at(-1) as { requestId: string }
+  child.emit('message', { kind: 'response', requestId: mutation.requestId, ok: true, value: true })
+  await new Promise((resolve) => setImmediate(resolve))
+  const read = child.messages.at(-1) as { requestId: string; method: string }
+  assert.equal(read.method, 'GetPlaybackInfo')
+  child.emit('message', {
+    kind: 'response',
+    requestId: read.requestId,
+    ok: false,
+    error: 'fresh status unavailable'
+  })
+  await rejected
+  assert.deepEqual(
+    child.messages.map((message) => (message as { method: string }).method),
+    ['RebindQueue', 'GetPlaybackInfo']
+  )
+  assert.equal(child.killCount, 0)
+})
+
+test('queue rebind timeout neither replays nor kills the service and restart forgets support', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const children: ManualUtilityProcess[] = []
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 5,
+    topologyRequestTimeoutMs: 20,
+    restartDelayMs: 5,
+    electron: {
+      utilityProcess: {
+        fork: () => {
+          const child = new ManualUtilityProcess()
+          children.push(child)
+          return child
+        }
+      }
+    }
+  })
+  t.after(() => binding.destroy())
+  startAudioServiceForTest(binding)
+  children[0].emit('message', {
+    kind: 'ready',
+    capabilities: createAudioServiceCapabilities([
+      'ApplyDspState',
+      'GetDspGraphStatus',
+      'RebindQueue'
+    ])
+  })
+  const pending = binding.RebindQueue('[]', 0, 'sequential', '{}', 0)
+  const timeout = assert.rejects(pending, /音频服务调用超时/)
+  t.mock.timers.tick(6)
+  assert.equal(children[0].messages.length, 1, 'rebind gets the slow/preload deadline')
+  t.mock.timers.tick(20)
+  await timeout
+  t.mock.timers.tick(50)
+  assert.equal(children[0].killCount, 0)
+  assert.equal(children[0].messages.length, 1, 'no probe, rollback or replay')
+  children[0].emit('exit', 1)
+  assert.equal(await binding.RebindQueue('[]', 0, 'sequential', '{}', 0), false)
+  t.mock.timers.tick(5)
+  assert.equal(children.length, 2)
+  assert.equal(
+    await binding.RebindQueue('[]', 0, 'sequential', '{}', 0),
+    false,
+    'previous addon capabilities cannot authorize a new generation'
+  )
+})
+
 test('pause can finish its fade and device release beyond the status polling deadline', async () => {
   const child = new ManualUtilityProcess()
   const binding = new AudioEngineServiceBinding({

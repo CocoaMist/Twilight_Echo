@@ -62,7 +62,11 @@ export function useCommandPalette(
     isOpen.value = true
   }
   function onKeydown(event: KeyboardEvent): void {
-    if (!isCommandPaletteKey(event)) return
+    if (
+      settings.settings.value.shortcutEnabled?.commandPalette === false ||
+      !isCommandPaletteKey(event)
+    )
+      return
     if (
       !isOpen.value &&
       event.target instanceof Element &&
@@ -89,7 +93,6 @@ export function useCommandPalette(
     search,
     actions,
     playlists: music.playlists,
-    tracks: music.tracks,
     playTrack: player.playTrack,
     openPlaylist: navigation.openLibraryPlaylist
   }

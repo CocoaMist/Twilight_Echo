@@ -1,4 +1,14 @@
 export const IPC = {
+  playlistImport: {
+    chooseFile: 'playlistImport:chooseFile',
+    resolveNeteaseShortLink: 'playlistImport:resolveNeteaseShortLink',
+    readPage: 'playlistImport:readPage',
+    cancelRead: 'playlistImport:cancelRead'
+  },
+  // Page history commands forwarded from Windows/Linux mouse side buttons.
+  app: {
+    historyCommand: 'app:history-command'
+  },
   diagnostics: {
     status: 'diagnostics:getStatus',
     marker: 'diagnostics:markProblem',
@@ -57,6 +67,7 @@ export const IPC = {
     isHtmlAudioFallbackAllowed: 'audioEngine:isHtmlAudioFallbackAllowed',
     loadImpulseResponse: 'audioEngine:loadImpulseResponse',
     loadQueue: 'audioEngine:loadQueue',
+    rebindQueue: 'audioEngine:rebindQueue',
     selectQueueItem: 'audioEngine:selectQueueItem',
     loudnormStatus: 'audioEngine:loudnorm-status',
     next: 'audioEngine:next',
@@ -113,6 +124,28 @@ export const IPC = {
     scanStatus: 'library:scan-status',
     scanFull: 'library:scanFull',
     scanStartup: 'library:scanStartup',
-    writeTags: 'library:writeTags'
+    writeTags: 'library:writeTags',
+    getStorageMode: 'library:getStorageMode',
+    databaseMetadata: 'library:databaseMetadata',
+    databaseRepairPlaylist: 'library:databaseRepairPlaylist',
+    databaseSelection: 'library:databaseSelection',
+    databaseBuildQueue: 'library:databaseBuildQueue',
+    databaseQueryTracks: 'library:databaseQueryTracks',
+    databaseQueryCollections: 'library:databaseQueryCollections',
+    databaseTracksByIds: 'library:databaseTracksByIds',
+    databaseLookupPaths: 'library:databaseLookupPaths',
+    databaseLookupPlaylist: 'library:databaseLookupPlaylist',
+    databaseSyncPlaylistView: 'library:databaseSyncPlaylistView',
+    databasePatchTracks: 'library:databasePatchTracks',
+    databaseSyncListeningHistory: 'library:databaseSyncListeningHistory',
+    databaseRemoveFiles: 'library:databaseRemoveFiles',
+    databaseScanDirectories: 'library:databaseScanDirectories',
+    databaseCreateQueue: 'library:databaseCreateQueue',
+    databaseReadQueue: 'library:databaseReadQueue',
+    databaseGetQueue: 'library:databaseGetQueue',
+    databaseEditQueue: 'library:databaseEditQueue',
+    databaseDeleteQueue: 'library:databaseDeleteQueue',
+    databaseSyncQueueReferences: 'library:databaseSyncQueueReferences',
+    databaseCollectQueueGarbage: 'library:databaseCollectQueueGarbage'
   }
 } as const

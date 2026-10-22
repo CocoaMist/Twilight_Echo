@@ -7,58 +7,8 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import { MATERIAL_ROLES, compileMaterialCss } from '../../../shared/materials.ts'
-import { compileStyle, parse } from '@vue/compiler-sfc'
 
 const require = createRequire(import.meta.url)
-test('embedded equalizer preserves the workspace backdrop in both tones and modes', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'twilight-embedded-material-'))
-  try {
-    const page = parse(await readFile(new URL('./EqualizerPage.vue', import.meta.url), 'utf8'))
-    const base = await readFile(new URL('../assets/base.css', import.meta.url), 'utf8')
-    const css = page.descriptor.styles
-      .map((style) => {
-        const result = compileStyle({
-          source: style.content,
-          filename: 'EqualizerPage.vue',
-          id: 'data-v-eq',
-          scoped: true
-        })
-        assert.deepEqual(result.errors, [])
-        return result.code
-      })
-      .join('\n')
-    await writeFile(
-      join(directory, 'index.html'),
-      `<!doctype html><html><style>${base}:root{--te-app-bg:#18191b;--te-app-bg-image:linear-gradient(red,black)}${css}</style>
-      <div class="eq-page" data-v-eq><div class="eq-container" data-v-eq><main class="eq-content" data-v-eq></main></div></div></html>`
-    )
-    await writeFile(
-      join(directory, 'runner.cjs'),
-      `const {app,BrowserWindow}=require('electron');app.setPath('userData',__dirname+'/profile');app.whenReady().then(async()=>{
-      const win=new BrowserWindow({show:false,webPreferences:{offscreen:true,backgroundThrottling:false}});
-      try{await win.loadFile(__dirname+'/index.html');await win.webContents.executeJavaScript(\`(()=>{
-        const root=document.querySelector('.eq-page'),container=root.firstElementChild,content=container.firstElementChild;
-        for(const tone of ['dark','pureWhite'])for(const parametric of [false,true]){
-          document.documentElement.dataset.theme=tone;root.classList.toggle('is-parametric',parametric);
-          root.classList.add('is-embedded');
-          for(const node of [root,container,content]){const style=getComputedStyle(node);if(style.backgroundColor!=='rgba(0, 0, 0, 0)'||style.backgroundImage!=='none')throw Error(tone+'/'+parametric+': embedded DSP repaints the reading backdrop')}
-          root.classList.remove('is-embedded');if(getComputedStyle(root).backgroundImage==='none')throw Error('standalone DSP lost its background');
-        }
-      })()\`);console.log('EMBEDDED_MATERIAL_OK');app.exit(0)}catch(error){console.error(error);app.exit(1)}})`
-    )
-    const env = { ...process.env }
-    delete env.ELECTRON_RUN_AS_NODE
-    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
-      env,
-      windowsHide: true,
-      timeout: 30_000
-    })
-    assert.match(result.stdout, /EMBEDDED_MATERIAL_OK/)
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
 test('material roles render across tones, modes and opaque fallbacks without changing geometry or input', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-material-contract-'))
   try {

@@ -7,6 +7,7 @@ import {
   type SavedQueueTrack
 } from '../../../shared/queueWorkspace.ts'
 import type { PlayMode } from '@renderer/types/settings'
+import type { LibraryPlaybackQueueReference } from '../../../shared/playbackSession.ts'
 
 export function captureQueueSession(
   name: string,
@@ -40,6 +41,28 @@ export function captureQueueSession(
     originalEntryIds,
     currentEntryId,
     position: currentEntryId && Number.isFinite(position) ? Math.max(0, position) : 0
+  }
+}
+
+export function captureLibraryQueueSession(
+  name: string,
+  reference: LibraryPlaybackQueueReference,
+  position: number,
+  playMode: PlayMode,
+  id: string = crypto.randomUUID()
+): NamedQueueSession {
+  const now = new Date().toISOString()
+  return {
+    id,
+    name,
+    createdAt: now,
+    updatedAt: now,
+    playMode: playMode === 'heart' ? 'sequential' : playMode,
+    entries: [],
+    originalEntryIds: [],
+    currentEntryId: reference.entryId,
+    position: Number.isFinite(position) ? Math.max(0, position) : 0,
+    libraryQueue: { ...reference }
   }
 }
 

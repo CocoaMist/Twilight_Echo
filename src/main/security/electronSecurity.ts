@@ -1,6 +1,7 @@
 import { app, session, type IpcMainEvent, type IpcMainInvokeEvent, type Session } from 'electron'
 
 const NCM_API_ORIGINS = ['http://localhost:3100', 'http://127.0.0.1:3100']
+const WALLPAPER_ENGINE_ORIGIN = 'http://127.0.0.1:3100'
 
 export function installElectronSecurity(): void {
   installSessionSecurity(session.defaultSession)
@@ -73,13 +74,13 @@ function contentSecurityPolicyForUrl(url: string): string {
     "base-uri 'none'",
     "object-src 'none'",
     // Allow the bundled audio visualizer surface and other same-origin app frames.
-    "frame-src 'self'",
+    `frame-src 'self' plugin-ui: ${WALLPAPER_ENGINE_ORIGIN}`,
     "frame-ancestors 'none'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: cover: background: theme-asset: twilight-media:",
+    `img-src 'self' data: blob: cover: background: theme-asset: twilight-media: ${WALLPAPER_ENGINE_ORIGIN}`,
     "font-src 'self' data: theme-asset:",
-    "media-src 'self' blob: twilight-audio: twilight-media:",
+    `media-src 'self' blob: twilight-audio: twilight-media: ${WALLPAPER_ENGINE_ORIGIN}`,
     `connect-src ${connectSrc.join(' ')}`,
     "worker-src 'self' blob:",
     "form-action 'none'"
@@ -98,7 +99,10 @@ function withoutHeader(
 }
 
 function isAppDocumentUrl(url: string): boolean {
-  return isDevRendererUrl(url) || /\/renderer\/index\.html(?:[#?].*)?$/i.test(url)
+  return (
+    isDevRendererUrl(url) ||
+    (url.startsWith('file://') && /\/renderer\/index\.html(?:[#?].*)?$/i.test(url))
+  )
 }
 
 function isAudioVisualizerDocumentUrl(url: string): boolean {
@@ -134,7 +138,7 @@ export function assertTrustedIpcSender(
 
 export function isTrustedIpcSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
   const frameUrl = event.senderFrame?.url
-  if (frameUrl && isTrustedIpcSenderUrl(frameUrl)) return true
+  if (frameUrl) return isTrustedIpcSenderUrl(frameUrl)
   const contentsUrl = event.sender.getURL()
   return Boolean(contentsUrl && isTrustedIpcSenderUrl(contentsUrl))
 }

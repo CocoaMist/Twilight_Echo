@@ -13,6 +13,10 @@ const playingMusic = readFileSync(new URL('./PlayingMusic.vue', import.meta.url)
 const lyricStyleVars = readFileSync(new URL('../utils/lyricsStyleVars.ts', import.meta.url), 'utf8')
 const playerBarComponent = readFileSync(new URL('./PlayerBar.vue', import.meta.url), 'utf8')
 const playerBar = readFileSync(new URL('./player-bar/PlayerBar.css', import.meta.url), 'utf8')
+const playbackQueueDrawer = readFileSync(
+  new URL('./player-bar/PlaybackQueueDrawer.css', import.meta.url),
+  'utf8'
+)
 const equalizer = readFileSync(new URL('./EqualizerPage.vue', import.meta.url), 'utf8')
 const equalizerOpra = readFileSync(new URL('./equalizer/OpraEqPanel.vue', import.meta.url), 'utf8')
 const equalizerChart = readFileSync(
@@ -170,6 +174,7 @@ const pluginThemeContract = JSON.parse(
 }
 
 test('every registered playback token is wired into a real playback or DSP surface', () => {
+  assert.match(playerBar, /@import '\.\/PlaybackQueueDrawer\.css'/)
   const playbackVariables = THEME_TOKEN_DEFINITIONS.filter(
     (definition) =>
       definition.group === 'playback' && definition.id !== 'playback.progress.thumbSize'
@@ -178,6 +183,7 @@ test('every registered playback token is wired into a real playback or DSP surfa
     playingMusic,
     lyricStyleVars,
     playerBar,
+    playbackQueueDrawer,
     equalizerSurfaces,
     dspRack
   ].join('\n')

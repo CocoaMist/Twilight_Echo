@@ -2,11 +2,12 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { cloneAppearance, type AppearanceDraft } from '../../../shared/appAppearance'
 
 // A slider gesture is one history step. Keep memory bounded and never retain image pixels.
-export function useAppearanceHistory(
+export function useAppearanceHistory<Context = undefined>(
   read: () => AppearanceDraft,
-  write: (draft: AppearanceDraft) => void
+  write: (draft: AppearanceDraft) => void,
+  context?: { read: () => Context; write: (value: Context) => void }
 ) {
-  const snapshot = computed(() => JSON.stringify(read()))
+  const snapshot = computed(() => JSON.stringify({ draft: read(), context: context?.read() }))
   const entries = ref([snapshot.value])
   const cursor = ref(0)
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -20,7 +21,7 @@ export function useAppearanceHistory(
     cursor.value = entries.value.length - 1
   }
   watch(
-    read,
+    snapshot,
     () => {
       if (restoring) return
       clearTimeout(timer)
@@ -31,7 +32,9 @@ export function useAppearanceHistory(
   function restore(index: number): void {
     restoring = true
     cursor.value = index
-    write(cloneAppearance(JSON.parse(entries.value[index])))
+    const saved = JSON.parse(entries.value[index])
+    write(cloneAppearance(saved.draft))
+    context?.write(saved.context)
     restoring = false
   }
   function reset(): void {

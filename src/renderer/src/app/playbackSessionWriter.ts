@@ -14,6 +14,7 @@ export interface PlaybackSessionWriteApi {
     session: PlaybackSession,
     expectedRevision: number
   ) => Promise<VersionedDataEnvelope<PlaybackSession> | void>
+  syncQueueReferences?: (owner: string, ids: string[]) => Promise<void>
 }
 
 export interface PlaybackSessionWriteReceipt {
@@ -22,20 +23,34 @@ export interface PlaybackSessionWriteReceipt {
 }
 
 export class PlaybackSessionWriter {
+  private readonly referenceOwner = 'playback-session'
   private tail: Promise<void> = Promise.resolve()
   private nextSequence = 0
   private committedSequence = 0
   private revision = 0
   private savedQueueRef: object | null = null
+  private savedLibraryQueueId: string | null = null
   private lastSnapshotSignature: string | null = null
   private pendingWrites = 0
   private autosaveScheduler: (() => void) | null = null
+  private autosaveFlush: (() => Promise<void>) | null = null
 
-  registerAutosaveScheduler(schedule: () => void): () => void {
+  registerAutosaveScheduler(schedule: () => void, flush?: () => Promise<void>): () => void {
     this.autosaveScheduler = schedule
+    this.autosaveFlush = flush ?? null
     return () => {
-      if (this.autosaveScheduler === schedule) this.autosaveScheduler = null
+      if (this.autosaveScheduler === schedule) {
+        this.autosaveScheduler = null
+        this.autosaveFlush = null
+      }
     }
+  }
+
+  /** Backup reads the persisted selection, so drain a fresh compact snapshot
+   * instead of exporting an old occurrence while its debounce is pending. */
+  async flushAutosave(): Promise<void> {
+    await this.autosaveFlush?.()
+    await this.whenIdle()
   }
 
   requestAutosave(): boolean {
@@ -46,9 +61,17 @@ export class PlaybackSessionWriter {
 
   save(api: PlaybackSessionWriteApi, session: PlaybackSession): PlaybackSessionWriteReceipt {
     return this.enqueue(async (expectedRevision) => {
+      await this.prepareLibraryReference(api, session.libraryQueue?.id)
       const receipt = await api.savePlaybackSession(session, expectedRevision)
+      if (session.libraryQueue) {
+        await this.syncReference(api, [session.libraryQueue.id], false)
+        this.savedLibraryQueueId = session.libraryQueue.id
+      } else {
+        await this.syncReference(api, [], false)
+        this.savedLibraryQueueId = null
+      }
       this.lastSnapshotSignature = null
-      if (session.queue !== undefined) this.savedQueueRef = null
+      if (session.queue !== undefined || session.libraryQueue) this.savedQueueRef = null
       return receipt
     })
   }
@@ -68,12 +91,18 @@ export class PlaybackSessionWriter {
     return this.enqueue(async (expectedRevision) => {
       if (snapshot === undefined) {
         snapshot =
-          session && queueRef !== null && queueRef !== this.savedQueueRef && !session.queue
+          session &&
+          queueRef !== null &&
+          queueRef !== this.savedQueueRef &&
+          !session.queue &&
+          !session.libraryQueue
             ? { ...session, queue: createQueue() }
             : session
       }
       if (!snapshot) {
         const receipt = await api.clearPlaybackSession(expectedRevision)
+        await this.syncReference(api, [], false)
+        this.savedLibraryQueueId = null
         this.savedQueueRef = null
         this.lastSnapshotSignature = null
         return receipt
@@ -83,7 +112,16 @@ export class PlaybackSessionWriter {
       // later saves still perform CAS and detect other writers.
       if (mayCoalesce && !snapshot.queue && signature === this.lastSnapshotSignature) return
       try {
+        await this.prepareLibraryReference(api, snapshot.libraryQueue?.id)
         const receipt = await api.savePlaybackSession(snapshot, expectedRevision)
+        if (snapshot.libraryQueue) {
+          await this.syncReference(api, [snapshot.libraryQueue.id], false)
+          this.savedLibraryQueueId = snapshot.libraryQueue.id
+        } else {
+          await this.syncReference(api, [], false)
+          this.savedLibraryQueueId = null
+        }
+        if (snapshot.libraryQueue) this.savedQueueRef = null
         if (snapshot.queue !== undefined) this.savedQueueRef = queueRef
         this.lastSnapshotSignature = signature
         return receipt
@@ -101,6 +139,8 @@ export class PlaybackSessionWriter {
   clear(api: PlaybackSessionWriteApi): PlaybackSessionWriteReceipt {
     return this.enqueue(async (expectedRevision) => {
       const receipt = await api.clearPlaybackSession(expectedRevision)
+      await this.syncReference(api, [], false)
+      this.savedLibraryQueueId = null
       this.savedQueueRef = null
       this.lastSnapshotSignature = null
       return receipt
@@ -129,6 +169,32 @@ export class PlaybackSessionWriter {
 
   setSavedQueueRef(queueRef: object | null): void {
     this.savedQueueRef = queueRef
+  }
+
+  setSavedLibraryQueueId(id: string | null): void {
+    this.savedLibraryQueueId = id
+  }
+
+  private async prepareLibraryReference(
+    api: PlaybackSessionWriteApi,
+    nextId: string | undefined
+  ): Promise<void> {
+    const ids = [...new Set([this.savedLibraryQueueId, nextId].filter((id): id is string => !!id))]
+    if (ids.length) await this.syncReference(api, ids, true)
+  }
+
+  private async syncReference(
+    api: PlaybackSessionWriteApi,
+    ids: string[],
+    required: boolean
+  ): Promise<void> {
+    const sync = api.syncQueueReferences
+    if (!sync) return
+    if (required) {
+      await sync(this.referenceOwner, ids)
+      return
+    }
+    await sync(this.referenceOwner, ids).catch(() => {})
   }
 
   private enqueue(

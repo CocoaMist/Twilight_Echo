@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -121,16 +120,6 @@ test('real theme store and editor keep the applied variant across IPC broadcasts
       assert.equal(scenario.failedActivationKeepsDraftAndTone, true)
     }
     evidence.realModules = compiled
-    evidence.sourceSha256 = Object.fromEntries(
-      await Promise.all(
-        [editorFile, storeFile].map(async (file) => [
-          file.replaceAll('\\', '/'),
-          createHash('sha256')
-            .update(await readFile(file))
-            .digest('hex')
-        ])
-      )
-    )
     if (reportDirectory) {
       await mkdir(reportDirectory, { recursive: true })
       await writeFile(

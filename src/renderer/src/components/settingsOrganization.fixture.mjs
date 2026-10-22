@@ -9,6 +9,7 @@ import {
   appearanceFullWindowPreview
 } from '../composables/appearanceEditorState.ts'
 import { LEGACY_SETTINGS_TARGETS, SETTINGS_SEARCH_INDEX } from './settings-page/types.ts'
+import { appearanceSettingsTarget } from './appearanceSettingsTargets.ts'
 import { DEFAULT_LYRICS_APPEARANCE } from '../../../shared/lyricsAppearance.ts'
 import '../assets/base.css'
 import '../assets/typography.css'
@@ -200,7 +201,11 @@ window.runSettingsOrganizationTests = async () => {
   navigation.openSettingsPage('general')
   await settle()
   const page = document.querySelector('.settings-preview-page')
-  const top = [...page.querySelectorAll('.settings-preview-stack > .preview-section')]
+  // Legacy appearance commands retain a hidden compatibility panel alongside
+  // the eight daily categories and the separate current appearance workspace.
+  const top = [
+    ...page.querySelectorAll('.settings-preview-stack > .preview-section:not(#appearance)')
+  ]
   expect(
     top.length === 7,
     'expected seven retained panels serving eight settings categories, got ' + top.length
@@ -215,7 +220,9 @@ window.runSettingsOrganizationTests = async () => {
   )
   expect(!page.querySelector('.settings-page-header'), 'duplicate category introduction remains')
   expect(
-    !page.querySelector('.settings-section-description'),
+    ![...page.querySelectorAll('.settings-section-description')].some(
+      (element) => !element.closest('#appearance')
+    ),
     'duplicate section introduction remains'
   )
   navigation.openAppearancePage()
@@ -337,7 +344,10 @@ window.runSettingsOrganizationTests = async () => {
     }
     await settle()
     const destination =
-      entry.section === 'appearance' ? document.querySelector('.appearance-page') : page
+      entry.section === 'appearance'
+        ? (document.querySelector('[data-appearance-properties]') ??
+          document.querySelector('.appearance-page'))
+        : page
     if (entry.appearanceArea) return null
     const deadline = Date.now() + 1500
     while (
@@ -370,7 +380,8 @@ window.runSettingsOrganizationTests = async () => {
     expect(target.getClientRects().length, title + ' stayed hidden')
     if (SETTINGS_SEARCH_INDEX.find((entry) => entry.title === title).section === 'appearance') {
       expect(
-        navigation.showAppearancePage.value && target.closest('.appearance-page'),
+        navigation.showAppearancePage.value &&
+          target.closest('.appearance-page, [data-appearance-properties]'),
         'appearance destination did not open its workspace'
       )
       continue
@@ -472,8 +483,8 @@ window.runSettingsOrganizationTests = async () => {
   desktopSize.dispatchEvent(new Event('change', { bubbles: true }))
   await settle()
   expect(settings.value.desktopLyrics.fontSize === 42, 'desktop lyric edit did not persist')
-  const mini = document.querySelector('[data-setting-id="mini-taskbar"] button')
-  mini.click()
+  const mini = await search('迷你播放器显示在任务栏')
+  mini.querySelector('button').click()
   await settle()
   expect(settings.value.miniPlayer.showInTaskbar, 'mini-player taskbar setting did not persist')
   await search('背景与界面材质')
@@ -490,13 +501,27 @@ window.runSettingsOrganizationTests = async () => {
   for (const entry of SETTINGS_SEARCH_INDEX.filter((entry) => !entry.appearanceArea)) {
     navigation.openSettingsPage(entry.section, { entry })
     await settle()
+    if (
+      entry.section === 'appearance' &&
+      ['appearance-workspace', 'theme-studio', 'theme-workshop'].includes(entry.id)
+    ) {
+      expect(navigation.showAppearancePage.value, 'appearance command did not open its workspace')
+      continue
+    }
     const destination =
-      entry.section === 'appearance' ? document.querySelector('.appearance-page') : page
+      entry.section === 'appearance'
+        ? (document.querySelector('[data-appearance-properties]') ??
+          document.querySelector('.appearance-page'))
+        : page
     const target = destination.querySelector('.search-target-flash')
+    const appearanceTarget =
+      entry.section === 'appearance' ? appearanceSettingsTarget(entry) : undefined
     expect(
       target &&
         [
           entry.id === 'theme-workshop' ? 'plugin-theme' : entry.id,
+          appearanceTarget?.settingId,
+          appearanceTarget?.fallbackId,
           entry.fallbackId,
           entry.disclosureId
         ].includes(target.dataset.settingId || target.id),
@@ -617,16 +642,15 @@ window.runSettingsOrganizationTests = async () => {
   }
   document.documentElement.style.removeProperty('--te-font-size-body')
   // Saving failure stays visible and rolls back the mini-player draft.
-  await search('迷你播放器显示在任务栏')
+  const miniTaskbar = await search('迷你播放器显示在任务栏')
   failSettingsSave = true
   const miniBeforeFailure = settings.value.miniPlayer.showInTaskbar
-  document.querySelector('[data-setting-id="mini-taskbar"] button').click()
+  miniTaskbar.querySelector('button').click()
   await settle()
   expect(
-    document.querySelector('#mini-player').textContent.includes('测试保存失败') &&
-      document
-        .querySelector('[data-setting-id="mini-taskbar"] button')
-        .getAttribute('aria-checked') === String(miniBeforeFailure),
+    miniTaskbar.closest('#mini-player').textContent.includes('测试保存失败') &&
+      miniTaskbar.querySelector('button').getAttribute('aria-checked') ===
+        String(miniBeforeFailure),
     'mini-player failed save must remain visible and restore its confirmed value'
   )
   failSettingsSave = false

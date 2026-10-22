@@ -25,6 +25,7 @@ import type {
   TwilightPluginManifest
 } from './types'
 import { parseJsonWithNestingLimit } from '../security/jsonSafety.ts'
+import { LEGACY_GITHUB_PLUGIN_INDEX_URL } from '../../shared/pluginDistribution.ts'
 
 interface PluginIndexRaw {
   schemaVersion: number
@@ -59,7 +60,9 @@ export interface PluginIndexServiceOptions {
   fetchImpl?: typeof fetch
   indexSizeLimitBytes?: number
   packageSizeLimitBytes?: number
+  /** Request deadline; an explicit value also applies to packages unless overridden. */
   timeoutMs?: number
+  packageTimeoutMs?: number
   cacheTtlMs?: number
   now?: () => Date
   trustedPublisherRegistry?: TrustedPluginPublisherRegistry
@@ -89,6 +92,7 @@ const INDEX_SCHEMA_VERSION = 1
 const DEFAULT_INDEX_SIZE_LIMIT_BYTES = 1024 * 1024
 const DEFAULT_PACKAGE_SIZE_LIMIT_BYTES = 50 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 10000
+const DEFAULT_PACKAGE_TIMEOUT_MS = 300000
 const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const DEFAULT_MAX_REDIRECTS = 5
 const PACKAGE_STREAM_CHUNK_BYTES = 64 * 1024
@@ -118,6 +122,7 @@ export class PluginIndexService {
   private readonly indexSizeLimitBytes: number
   private readonly packageSizeLimitBytes: number
   private readonly timeoutMs: number
+  private readonly packageTimeoutMs: number
   private readonly cacheTtlMs: number
   private readonly now: () => Date
   private readonly trustedPublisherRegistry: TrustedPluginPublisherRegistry
@@ -143,6 +148,8 @@ export class PluginIndexService {
     this.indexSizeLimitBytes = options.indexSizeLimitBytes ?? DEFAULT_INDEX_SIZE_LIMIT_BYTES
     this.packageSizeLimitBytes = options.packageSizeLimitBytes ?? DEFAULT_PACKAGE_SIZE_LIMIT_BYTES
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    this.packageTimeoutMs =
+      options.packageTimeoutMs ?? options.timeoutMs ?? DEFAULT_PACKAGE_TIMEOUT_MS
     this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS
     if (!Number.isFinite(this.cacheTtlMs) || this.cacheTtlMs <= 0) {
       throw new Error('插件索引 cacheTtlMs 必须是正数')
@@ -815,11 +822,16 @@ export class PluginIndexService {
     if (isHttpUrl(source)) {
       let serverAcceptsRanges = false
       try {
-        const result = await this.withRemoteResponse(source, async (response, controller) => {
-          serverAcceptsRanges =
-            response.headers.get('accept-ranges')?.toLowerCase().includes('bytes') === true
-          return await this.writeResponsePackage(response, packagePath, controller)
-        })
+        const result = await this.withRemoteResponse(
+          source,
+          async (response, controller) => {
+            serverAcceptsRanges =
+              response.headers.get('accept-ranges')?.toLowerCase().includes('bytes') === true
+            return await this.writeResponsePackage(response, packagePath, controller)
+          },
+          undefined,
+          this.packageTimeoutMs
+        )
         return { checksum: result.value, responseUrl: result.responseUrl }
       } catch (error) {
         const partialSize = existsSync(packagePath) ? (await stat(packagePath)).size : 0
@@ -828,7 +840,8 @@ export class PluginIndexService {
           source,
           async (response, controller) =>
             this.writeResponsePackage(response, packagePath, controller, partialSize),
-          { Range: `bytes=${partialSize}-` }
+          { Range: `bytes=${partialSize}-` },
+          this.packageTimeoutMs
         )
         return { checksum: result.value, responseUrl: result.responseUrl }
       }
@@ -848,7 +861,8 @@ export class PluginIndexService {
   private async withRemoteResponse<T>(
     source: string,
     consume: (response: Response, controller: AbortController) => Promise<T>,
-    headers?: Record<string, string>
+    headers?: Record<string, string>,
+    timeoutMs = this.timeoutMs
   ): Promise<{
     value: T
     responseUrl: string
@@ -857,7 +871,7 @@ export class PluginIndexService {
     etag?: string | null
   }> {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
     let activeResponse: Response | null = null
     try {
       const response = await this.fetchRemoteResponse(source, controller, headers)
@@ -1301,7 +1315,8 @@ function isAllowedHttpUrl(url: URL): boolean {
 }
 
 function sourceKindForUrl(url: string): PluginIndexSourceKind {
-  return url === DEFAULT_PLUGIN_INDEX_URL ? 'github' : 'custom'
+  if (url === DEFAULT_PLUGIN_INDEX_URL) return 'official'
+  return url === LEGACY_GITHUB_PLUGIN_INDEX_URL ? 'github' : 'custom'
 }
 
 function errorMessage(error: unknown): string {

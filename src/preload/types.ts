@@ -244,6 +244,12 @@ export type {
   MiniPlayerSettingsPatch,
   MiniPlayerStateSnapshot
 } from '../shared/miniPlayer.ts'
+export type {
+  DynamicIslandBootstrap,
+  DynamicIslandLyricLine,
+  DynamicIslandLyricsPayload,
+  DynamicIslandPresentation
+} from '../shared/dynamicIsland.ts'
 export type { TrayNavigationTarget, TrayPlayerBootstrap } from '../shared/trayPlayer.ts'
 
 export type AudioEngineSimpleCallback = () => void
@@ -290,7 +296,8 @@ export type {
 } from '../shared/ncmCloud.ts'
 
 export type LibraryChange =
-  | { kind: 'add' | 'remove' | 'unknown'; path?: string }
+  | { kind: 'database'; revision: number }
+  | { kind: 'add' | 'remove' | 'unknown'; path?: string; revision?: number }
   | { kind: 'scan'; update: import('../shared/localLibraryScan.ts').LocalLibraryScanUpdate }
 
 export interface BpmAnalysisRequest {
@@ -334,7 +341,8 @@ export type TwilightPluginIndexInstallState =
   | 'update-available'
   | 'incompatible'
   | 'built-in-blocked'
-export type TwilightPluginIndexSourceKind = 'github' | 'custom' | 'bundled'
+/** Source category only; official verification still requires a valid signature. */
+export type TwilightPluginIndexSourceKind = 'official' | 'github' | 'custom' | 'bundled'
 export type TwilightPluginIndexLoadedFrom = 'remote' | 'cache' | 'bundled'
 export type TwilightPluginIndexCacheFormat = 'envelope-v1' | 'legacy'
 export type TwilightPluginSignatureStatus =

@@ -23,6 +23,13 @@ enum class PlaybackState {
   Paused
 };
 
+struct NaturalPlaybackBoundaries {
+  uint64_t trackSerial = 0;
+  uint64_t queueSerial = 0;
+  uint64_t trackTimeMs = 0;
+  uint64_t queueTimeMs = 0;
+};
+
 struct PlaybackInfo {
   PlaybackState state = PlaybackState::Stopped;
   double positionSeconds = 0.0;
@@ -32,6 +39,9 @@ struct PlaybackInfo {
   uint64_t requestedConfigRevision = 0;
   uint64_t appliedConfigRevision = 0;
   int queueIndex = -1;
+  uint64_t queueRevision = 0;
+  NaturalPlaybackBoundaries naturalBoundaries;
+  int upcomingQueueIndex = -1;
   std::string playMode = "sequential";
   std::string source;
   std::string codec = "未知";
@@ -90,8 +100,7 @@ struct PlaybackInfo {
   std::string dsdMode = "unsupported";
   int dsdRate = 0;
   bool gaplessActive = false;
-  bool preloadReady = false;
-  std::string autoMixMode = "off", autoMixState = "off", autoMixReason;
+  bool preloadReady = false;  std::string autoMixMode = "off", autoMixState = "off", autoMixReason;
   uint64_t autoMixDecodeMs = 0, autoMixPrepareMs = 0;
   double autoMixDurationSeconds = 0;
   bool autoMixStemEnhanced = false;
@@ -129,6 +138,22 @@ class TwilightAudioEngine {
   TAE_Result setOutputBackend(const std::string& backendId);
 
   TAE_Result loadQueue(const std::string& queueJson, int startIndex);
+  TAE_Result rebindQueue(const std::string& queueJson, int startIndex,
+                        const std::string& mode, const std::string& expectedJson,
+                        int expectedIndex, int* outApplied);
+  /**
+   * Append resolved queue entries without reloading the current queue. The
+   * returned first index is the absolute native index of the first appended
+   * item; the host uses it to keep native/logical mappings stable.
+   */
+  TAE_Result appendQueueItems(const std::string& itemsJson, int* outFirstIndex);
+  /**
+   * Refresh the source of a queued (not currently playing) item after a
+   * provider URL expires. Refreshes native preload when the upcoming item
+   * changed; never reopens the active decoder.
+   */
+  TAE_Result updateQueueItemSource(int index, const std::string& source);
+  std::string getQueueStateJson() const;
   TAE_Result selectQueueIndex(int index);
   TAE_Result next();
   TAE_Result previous();
@@ -193,6 +218,7 @@ class TwilightAudioEngine {
   void publishStateLocked() const;
   void applyPipelineStatusLocked(const PipelineStatus& status);
   void applyClockPipelineStatusLocked(const PipelineStatus& status);
+  void recordNaturalBoundaryLocked();
   void updatePerfectLocked();
   bool shouldReleaseOutputLocked() const;
   void markOutputReleasedLocked();

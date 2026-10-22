@@ -2,6 +2,10 @@
 import { computed } from 'vue'
 import SettingsGroup from './SettingsGroup.vue'
 import EditableRangeValue from '../EditableRangeValue.vue'
+import {
+  normalizePlayerBarSettings,
+  type PlayerBarSettings as PlayerBarSettingsValue
+} from '../../../../shared/playerBar.ts'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import {
   PLAYER_BAR_BOUNDS,
@@ -20,36 +24,42 @@ import {
   playerBarVisibilityOptions
 } from './types.ts'
 
+const props = defineProps<{ modelValue?: PlayerBarSettingsValue; busy?: boolean }>()
+const emit = defineEmits<{ 'update:modelValue': [value: PlayerBarSettingsValue] }>()
 const { settings, updateSettings } = useSettingsStore()
+const playerBar = computed(() => props.modelValue ?? settings.value.playerBar)
+function commitPlayerBar(value: PlayerBarSettingsValue): void {
+  if (props.busy) return
+  const normalized = normalizePlayerBarSettings(value)
+  if (props.modelValue !== undefined) emit('update:modelValue', normalized)
+  else void updateSettings({ playerBar: normalized }).catch(() => undefined)
+}
 
 function setPlayerBarMode(mode: PlayerBarMode): void {
-  if (settings.value.playerBar.mode === mode && settings.value.playerBar.modeSource === 'user')
-    return
-  void updateSettings({
-    playerBar: { ...settings.value.playerBar, mode, modeSource: 'user' }
-  })
+  if (playerBar.value.mode === mode && playerBar.value.modeSource === 'user') return
+  commitPlayerBar({ ...playerBar.value, mode, modeSource: 'user' })
 }
 
 function setPlayerBarPlayingPageMode(value: string): void {
   const playingPageMode = normalizePlayerBarPageMode(value)
-  if (settings.value.playerBar.playingPageMode === playingPageMode) return
-  void updateSettings({ playerBar: { ...settings.value.playerBar, playingPageMode } })
+  if (playerBar.value.playingPageMode === playingPageMode) return
+  commitPlayerBar({ ...playerBar.value, playingPageMode })
 }
 
 function setPlayerBarVisibility(visibility: PlayerBarVisibility): void {
-  if (settings.value.playerBar.visibility === visibility) return
-  void updateSettings({ playerBar: { ...settings.value.playerBar, visibility } })
+  if (playerBar.value.visibility === visibility) return
+  commitPlayerBar({ ...playerBar.value, visibility })
 }
 
 function setPlayerBarPlayingPageVisibility(value: string): void {
   const playingPageVisibility = normalizePlayerBarPageVisibility(value)
-  if (settings.value.playerBar.playingPageVisibility === playingPageVisibility) return
-  void updateSettings({ playerBar: { ...settings.value.playerBar, playingPageVisibility } })
+  if (playerBar.value.playingPageVisibility === playingPageVisibility) return
+  commitPlayerBar({ ...playerBar.value, playingPageVisibility })
 }
 
 function setPlayerBarNumber(field: 'revealThresholdPx' | 'hideDelayMs', value: number): void {
   if (!Number.isFinite(value)) return
-  void updateSettings({ playerBar: { ...settings.value.playerBar, [field]: value } })
+  commitPlayerBar({ ...playerBar.value, [field]: value })
 }
 
 /**
@@ -57,7 +67,7 @@ function setPlayerBarNumber(field: 'revealThresholdPx' | 'hideDelayMs', value: n
  * so ask the shared policy about both scopes rather than re-deriving the rules.
  */
 const autoHideAppliesAnywhere = computed(() => {
-  const bar = settings.value.playerBar
+  const bar = playerBar.value
   return (
     playerBarAutoHideApplies(bar, { onPlayingPage: false }) ||
     playerBarAutoHideApplies(bar, { onPlayingPage: true })
@@ -65,11 +75,9 @@ const autoHideAppliesAnywhere = computed(() => {
 })
 
 /** Whether each scope resolves to a shape that carries its own progress readout. */
-const globalShapeCanAutoHide = computed(() =>
-  playerBarShapeCanAutoHide(settings.value.playerBar.mode)
-)
+const globalShapeCanAutoHide = computed(() => playerBarShapeCanAutoHide(playerBar.value.mode))
 const playingPageShapeCanAutoHide = computed(() => {
-  const bar = settings.value.playerBar
+  const bar = playerBar.value
   return playerBarShapeCanAutoHide(
     bar.playingPageMode === 'inherit' ? bar.mode : bar.playingPageMode
   )
@@ -102,7 +110,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
         v-for="option in playerBarModeOptions"
         :key="option.value"
         type="button"
-        :class="{ active: settings.playerBar.mode === option.value }"
+        :class="{ active: playerBar.mode === option.value }"
         @click="setPlayerBarMode(option.value)"
       >
         <i :class="option.icon"></i>
@@ -128,7 +136,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
         :key="option.value"
         type="button"
         :class="{
-          active: settings.playerBar.visibility === option.value,
+          active: playerBar.visibility === option.value,
           disabled: visibilityOptionDisabled(option.value)
         }"
         :disabled="visibilityOptionDisabled(option.value)"
@@ -145,9 +153,8 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
     title="播放页与自动隐藏"
     :summary="
       '播放页：' +
-      (playerBarPageModeOptions.find(
-        (option) => option.value === settings.playerBar.playingPageMode
-      )?.label ?? '跟随全局')
+      (playerBarPageModeOptions.find((option) => option.value === playerBar.playingPageMode)
+        ?.label ?? '跟随全局')
     "
     description="可以只改变播放页；触发距离和收起延迟仅在自动隐藏可用时显示。"
     ><div data-setting-id="player-page-mode" id="setting-player-page-mode" class="setting-item">
@@ -157,7 +164,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
       </div>
       <select
         class="preview-select"
-        :value="settings.playerBar.playingPageMode"
+        :value="playerBar.playingPageMode"
         @change="setPlayerBarPlayingPageMode(($event.target as HTMLSelectElement).value)"
       >
         <option
@@ -180,7 +187,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
       </div>
       <select
         class="preview-select"
-        :value="settings.playerBar.playingPageVisibility"
+        :value="playerBar.playingPageVisibility"
         @change="setPlayerBarPlayingPageVisibility(($event.target as HTMLSelectElement).value)"
       >
         <option
@@ -211,7 +218,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
             type="range"
             :min="PLAYER_BAR_BOUNDS.revealThresholdPx.min"
             :max="PLAYER_BAR_BOUNDS.revealThresholdPx.max"
-            :value="settings.playerBar.revealThresholdPx"
+            :value="playerBar.revealThresholdPx"
             @input="
               setPlayerBarNumber(
                 'revealThresholdPx',
@@ -220,7 +227,7 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
             "
           />
           <EditableRangeValue
-            :value="settings.playerBar.revealThresholdPx"
+            :value="playerBar.revealThresholdPx"
             :min="PLAYER_BAR_BOUNDS.revealThresholdPx.min"
             :max="PLAYER_BAR_BOUNDS.revealThresholdPx.max"
             suffix="px"
@@ -243,13 +250,13 @@ function pageVisibilityOptionDisabled(value: PlayerBarPageVisibility): boolean {
             :min="PLAYER_BAR_BOUNDS.hideDelayMs.min"
             :max="PLAYER_BAR_BOUNDS.hideDelayMs.max"
             step="50"
-            :value="settings.playerBar.hideDelayMs"
+            :value="playerBar.hideDelayMs"
             @input="
               setPlayerBarNumber('hideDelayMs', Number(($event.target as HTMLInputElement).value))
             "
           />
           <EditableRangeValue
-            :value="settings.playerBar.hideDelayMs"
+            :value="playerBar.hideDelayMs"
             :min="PLAYER_BAR_BOUNDS.hideDelayMs.min"
             :max="PLAYER_BAR_BOUNDS.hideDelayMs.max"
             :step="50"

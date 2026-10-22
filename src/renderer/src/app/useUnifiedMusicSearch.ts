@@ -1,8 +1,8 @@
 import { musicVersionRevision } from '@renderer/stores/musicVersions.ts'
 import { buildLogicalTracks } from '@renderer/utils/logicalTrackModel.ts'
-import { computed, ref, shallowRef, type Ref } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue'
 import { useMediaProviders } from '../providers/index.ts'
-import { useMusicStore } from '../stores/useMusicStore.ts'
+import { useLibraryUnifiedSearch } from './useLibraryUnifiedSearch.ts'
 import type { Track } from '../types/music'
 import type { NetworkEntry } from '../../../shared/networkSources.ts'
 import type {
@@ -11,15 +11,18 @@ import type {
   UnifiedSearchResult,
   UnifiedSearchTrackItem
 } from '../utils/unifiedMusicSearch.ts'
+import type { UnifiedLocalSearch } from '../utils/unifiedMusicSearch.ts'
 
 export interface UnifiedMusicSearchDependencies {
   getLocalTracks: () => Track[]
+  localSource?: UnifiedLocalSearch
   searchNetworkLibrary?: (
     query: string
   ) => Promise<Array<{ profileName: string; entry: NetworkEntry }>>
   searchAllSongs: (options: {
     query: string
     localTracks: Track[]
+    localSource?: UnifiedLocalSearch
     networkEntries?: Array<{ profileName: string; entry: NetworkEntry }>
     limit?: number
     offset?: number
@@ -38,19 +41,27 @@ export interface UnifiedMusicSearchState {
   hasMore: Ref<boolean>
   search: (query: string, options?: { limit?: number; offset?: number }) => Promise<void>
   clear: () => void
+  refresh: () => void
+  invalidateLibrary: (revision: number) => void
 }
 
-export function useUnifiedMusicSearch(options: { sync?: boolean } = {}): UnifiedMusicSearchState {
-  const musicStore = useMusicStore()
-  const providers = useMediaProviders(options)
-  return createUnifiedMusicSearch({
-    getLocalTracks: () => musicStore.tracks.value,
+export function useUnifiedMusicSearch(): UnifiedMusicSearchState {
+  const providers = useMediaProviders()
+  const localSource = useLibraryUnifiedSearch((revision) => {
+    if (revision === undefined) search.refresh()
+    else search.invalidateLibrary(revision)
+  })
+  const search = createUnifiedMusicSearch({
+    getLocalTracks: () => [],
+    localSource,
     searchNetworkLibrary: async (query) => {
       if (!window.api?.networkSources) return []
       return window.api.networkSources.searchLibrary(query)
     },
     searchAllSongs: (options) => providers.searchAllSongs(options)
   })
+  onBeforeUnmount(search.clear)
+  return search
 }
 
 export function createUnifiedMusicSearch(
@@ -70,6 +81,25 @@ export function createUnifiedMusicSearch(
   const hasMore = ref(false)
   let latestRequestId = 0
   let controller: AbortController | null = null
+  let lastOptions: { limit?: number; offset?: number } = {}
+  let minimumLibraryRevision = 0,
+    refreshQueued = false
+
+  function refresh(): void {
+    if (refreshQueued || !query.value.trim()) return
+    refreshQueued = true
+    const requestId = latestRequestId
+    queueMicrotask(() => {
+      refreshQueued = false
+      if (requestId === latestRequestId && query.value.trim()) void search(query.value, lastOptions)
+    })
+  }
+  function invalidateLibrary(revision: number): void {
+    if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Invalid library revision')
+    if (revision <= minimumLibraryRevision) return
+    minimumLibraryRevision = revision
+    refresh()
+  }
 
   function clear(): void {
     latestRequestId += 1
@@ -90,6 +120,7 @@ export function createUnifiedMusicSearch(
     options: { limit?: number; offset?: number } = {}
   ): Promise<void> {
     const normalizedQuery = nextQuery.trim()
+    lastOptions = { ...options }
     query.value = nextQuery
     if (!normalizedQuery) {
       clear()
@@ -119,13 +150,16 @@ export function createUnifiedMusicSearch(
       if (requestId !== latestRequestId) return
       const result = await dependencies.searchAllSongs({
         query: snapshot.query,
-        localTracks: dependencies.getLocalTracks(),
+        localTracks: dependencies.localSource ? [] : dependencies.getLocalTracks(),
+        ...(dependencies.localSource ? { localSource: dependencies.localSource } : {}),
         networkEntries,
         limit: snapshot.limit,
         offset: snapshot.offset,
         signal: requestController.signal
       })
       if (requestId !== latestRequestId) return
+      if (result.libraryRevision !== undefined && result.libraryRevision < minimumLibraryRevision)
+        throw new Error('曲库在搜索期间发生变化，请重新搜索')
       items.value = result.items
       resultLogicalItems.value = result.logicalItems
       providerHealth.value = result.health
@@ -155,6 +189,8 @@ export function createUnifiedMusicSearch(
     total,
     hasMore,
     search,
-    clear
+    clear,
+    refresh,
+    invalidateLibrary
   }
 }

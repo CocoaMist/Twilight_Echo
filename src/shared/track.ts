@@ -14,6 +14,7 @@ export interface TrackMetadataMatch {
 }
 
 export interface TrackData {
+  isrc?: string
   id: string
   title: string
   artist: string
@@ -29,6 +30,9 @@ export interface TrackData {
   duration: number
   size: number
   cover: string | null
+  coverSource?: string | null
+  coverSmall?: string | null
+  coverSmallSource?: string | null
   lyrics: string | null
   translatedLyrics?: string | null
   metadataMatch?: TrackMetadataMatch | null

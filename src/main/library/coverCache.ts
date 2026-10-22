@@ -12,19 +12,20 @@ export const prepareBackgroundForDisplay = createBackgroundDisplayCache((bytes) 
 )
 
 // ─── Cover thumbnail disk cache ─────────────────────────────────────
-// Every cover that reaches the disk cache is capped at 500px wide JPEG
+// Decodable JPEG/PNG/WebP covers are capped at 500px wide JPEG
 // (~30-80KB each): main-process imports resize here, the scan worker's raw
 // writes are normalized by `normalizeCachedCoverHandle` when the coordinator
 // ingests its batches, and remote covers go through `resizeCoverImageBytes`
 // before `remoteCoverCache` stores them. The renderer therefore never decodes
-// a multi-megapixel bitmap for a thumbnail slot.
+// a multi-megapixel JPEG/PNG/WebP for a thumbnail slot. Migrated GIFs retain
+// their original bytes and are served as image/gif.
 // Track.cover stores "cover://<hash>.jpg" instead of multi-MB base64 strings.
 // A pre-blurred 32px version ("cover://<hash>_blur.jpg") is also generated
 // for background use, eliminating expensive CSS filter: blur() at runtime.
 export const COVER_THUMBNAIL_WIDTH = 500
 export const COVER_JPEG_QUALITY = 85
 export const COVER_BLUR_WIDTH = 32
-export const COVER_CACHE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp'])
+export const COVER_CACHE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 
 export function getCoverCacheDir(): string {
   return join(getMusicCacheRoot(), 'cover-cache')
@@ -130,6 +131,8 @@ export function getCoverCacheContentType(fileName: string): string {
       return 'image/png'
     case '.webp':
       return 'image/webp'
+    case '.gif':
+      return 'image/gif'
     default:
       return 'image/jpeg'
   }

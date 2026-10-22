@@ -26,6 +26,8 @@ import { fontFamilyOptions } from './settings-page/types'
 import { normalizeAppFontFamily } from '../../../shared/appFont'
 import { normalizeAppearanceLayers } from '../../../shared/appearanceLayers'
 import type { NavigationPageDefinition } from '../app/navigationPages'
+import { appearancePartPanel, type AppearanceSettingsPanel } from './appearanceSettingsTargets'
+import { cloneAppearance, type AppearanceDraft } from '../../../shared/appAppearance'
 const props = withDefaults(
   defineProps<{
     embedded?: boolean
@@ -53,7 +55,7 @@ const props = withDefaults(
   }
 )
 const emit = defineEmits<{
-  focusSetting: [id: 'global-font' | 'player-bar' | 'appearance-theme' | 'appearance-surfaces']
+  focusSetting: [id: AppearanceSettingsPanel]
   workspaceSelected: [part: AppearancePart]
   draftChange: [dirty: boolean]
   editTheme: [region: string]
@@ -100,8 +102,21 @@ useEscapeToClose(
   () => void returnToWindow()
 )
 function openMore(part: AppearancePart): void {
+  if (props.characterEditor) {
+    const panel = appearancePartPanel(part)
+    if (panel) emit('focusSetting', panel)
+    else revealArea('background')
+    return
+  }
   selectedRegion.value = part === 'inner-panel' ? 'background' : part
   moreSettings()
+}
+function revealArea(value: 'background' | 'material' | 'advanced', part?: AppearancePart): void {
+  focusPart(part ?? (value === 'advanced' ? 'card' : 'inner-panel'))
+  selectedRegion.value = characterPart.value === 'card' ? 'card' : 'background'
+  area.value = value
+  detailedOpen.value = true
+  if (value === 'advanced') advancedOpen.value = true
 }
 const quickOpen = ref(false)
 const quickAnchor = ref<HTMLElement | null>(null)
@@ -344,6 +359,8 @@ const {
   previewPage,
   tone,
   setTone,
+  setColorMode,
+  draftColorMode,
   importing,
   imagePaletteNotice,
   matching,
@@ -357,6 +374,7 @@ const {
   activeMaterial,
   previewStyle,
   editableBackground,
+  setBackgroundKind: setDraftBackgroundKind,
   setEffect,
   setInheritance,
   chooseImage,
@@ -389,7 +407,7 @@ function backgroundInputChanged(event: Event): void {
 }
 function setBackgroundKind(kind: 'color' | 'image'): void {
   if (characterBusy.value) return
-  editableBackground().kind = kind
+  setDraftBackgroundKind(kind)
   clearInnerBackgroundOverride()
 }
 function chooseCharacterBackgroundImage(): void {
@@ -409,7 +427,8 @@ const history = useAppearanceHistory(
   () => state.draft,
   (draft) => {
     state.draft = draft
-  }
+  },
+  { read: () => draftColorMode.value, write: setColorMode }
 )
 // The character editor owns the daily appearance draft; empty history never changes its task.
 const themeHistorySelected = computed(() => !props.characterEditor && props.themePanelOpen)
@@ -487,6 +506,18 @@ watch(
   { immediate: true }
 )
 defineExpose({
+  focusPart,
+  revealArea,
+  replaceDraft: (draft: AppearanceDraft) => {
+    if (!characterBusy.value) state.draft = cloneAppearance(draft)
+  },
+  activeMaterial,
+  materials,
+  selectMaterial,
+  setColorMode: (value: 'pureWhite' | 'dark' | 'system') => {
+    if (!characterBusy.value) setColorMode(value)
+  },
+  colorMode: draftColorMode,
   prepareLeave,
   apply,
   cancel,
@@ -946,7 +977,7 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
                 <p class="appearance-section-description">
                   图片、颜色和文字搭配。当前编辑{{ tone === 'light' ? '浅色' : '深色' }}模式。
                 </p>
-                <label class="appearance-field"
+                <label class="appearance-field" data-setting-id="background-target"
                   >应用范围<select v-model="target" aria-label="背景应用范围">
                     <option value="global">统一背景</option>
                     <option v-for="page in pageOptions" :key="page.value" :value="page.value">
@@ -1028,7 +1059,7 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
                       @input="setEffect(field, Number(($event.target as HTMLInputElement).value))"
                     />
                   </div>
-                  <div class="appearance-field">
+                  <div class="appearance-field" data-setting-id="background-text-tone">
                     文字明暗
                     <div class="appearance-segment">
                       <button
@@ -1047,6 +1078,23 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
                     </div>
                   </div>
                 </fieldset>
+                <button
+                  type="button"
+                  class="appearance-recipe"
+                  :disabled="characterBusy || inherited"
+                  @click="useTransparentRecipe"
+                >
+                  {{ matching ? '正在分析图片…' : '图片通透推荐搭配' }}
+                </button>
+                <button
+                  v-if="characterEditor"
+                  type="button"
+                  class="appearance-workspace-text-link"
+                  :disabled="characterBusy"
+                  @click="emit('editTheme', 'inner-panel')"
+                >
+                  主题背景样式与图片绑定<i class="pi pi-arrow-right" />
+                </button>
               </section>
               <section
                 :id="embedded ? 'workspace-material' : 'appearance-material'"
@@ -1085,6 +1133,19 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
                   <i :class="advancedOpen ? 'pi pi-chevron-up' : 'pi pi-chevron-down'" />
                 </button>
                 <div v-if="advancedOpen">
+                  <p
+                    v-if="characterEditor && !hasBackgroundImage"
+                    class="appearance-section-description"
+                  >
+                    选择背景图片后，可调整亮度、缩放和位置。
+                    <button
+                      type="button"
+                      class="appearance-workspace-text-link"
+                      @click="selectDetailedArea('background')"
+                    >
+                      返回背景设置
+                    </button>
+                  </p>
                   <fieldset v-if="hasBackgroundImage" :disabled="inherited || state.saving">
                     <div
                       v-for="field in (embedded

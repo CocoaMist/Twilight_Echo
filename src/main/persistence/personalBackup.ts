@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto'
 import { loadJsonFileWithBackup, writeJsonValueAtomic } from './jsonFile.ts'
 import { parseJsonWithNestingLimit } from '../security/jsonSafety.ts'
 import { loadMusicLibraryDocument } from '../library/libraryRepository.ts'
+import type { LocalMusicLibraryDocument } from '../../shared/localLibrary.ts'
+import type { LibraryDatabaseWorkerApi } from '../library/libraryDatabaseProtocol.ts'
 import {
   isRecord,
   PERSONAL_BACKUP_LIMIT,
@@ -13,6 +15,7 @@ import {
   mergePersonalDomain,
   remapPersonalPaths,
   previewPersonalBackup,
+  personalBackupJsonReplacer,
   type PersonalBackup,
   type PersonalData,
   type PersonalDomain,
@@ -49,11 +52,29 @@ const jsonOptions = {
 const pendingName = 'personal-restore-pending.json'
 const journalName = 'personal-restore-journal.json'
 const rendererName = 'personal-restore-renderer.json'
+const allowedRestoreFiles = new Set([
+  ...Object.values(files),
+  'playback-queue.json',
+  rendererName,
+  'settings.json'
+])
 type RestoreRequest = {
   backup: PersonalBackup
   options: PersonalRestoreOptions
   authorizedRoots?: string[]
+  libraryBackend?: 'sqlite'
 }
+export type PersonalLibraryDatabase = Pick<
+  LibraryDatabaseWorkerApi,
+  | 'exportDocument'
+  | 'restoreDocument'
+  | 'restorePersonalLibrary'
+  | 'previewPersonalLibrary'
+  | 'getMetadata'
+  | 'exportPlaybackQueue'
+>
+type LibraryReadOptions = { library: LocalMusicLibraryDocument | null }
+const libraryBackupCapacity = limits.library! * 1024 * 1024 - 1024
 
 export function parsePersonalBackup(text: string): PersonalBackup {
   if (Buffer.byteLength(text, 'utf8') > PERSONAL_BACKUP_LIMIT) throw new Error('备份超过 180 MiB')
@@ -86,16 +107,20 @@ function readRaw(root: string, file: string): unknown {
 function unwrap(value: unknown): unknown {
   return isRecord(value) && value.version === 2 && 'data' in value ? value.data : value
 }
-export function readPersonalData(root: string): PersonalData {
+export function readPersonalData(root: string, options?: LibraryReadOptions): PersonalData {
+  if (!options && existsSync(join(root, 'music-library.sqlite')))
+    throw new Error('当前曲库使用 SQLite，请通过数据库导出；未读取旧 JSON')
   const result: PersonalData = {}
   for (const domain of PERSONAL_DOMAINS) {
     const file = files[domain]
     if (!file) continue
     let value =
       domain === 'library'
-        ? existsSync(join(root, file))
-          ? loadMusicLibraryDocument(join(root, file)).document
-          : undefined
+        ? options
+          ? (options.library ?? undefined)
+          : existsSync(join(root, file))
+            ? loadMusicLibraryDocument(join(root, file)).document
+            : undefined
         : unwrap(readRaw(root, file))
     if (
       domain === 'playback' &&
@@ -117,8 +142,20 @@ export function readPersonalData(root: string): PersonalData {
   }
   return result
 }
-export function createPersonalBackup(root: string, rendererData: PersonalData): PersonalBackup {
-  const data = readPersonalData(root)
+export function createPersonalBackup(
+  root: string,
+  rendererData: PersonalData,
+  options?: LibraryReadOptions
+): PersonalBackup {
+  const data = readPersonalData(root, options)
+  if (isRecord(data.playback) && data.playback.libraryQueue !== undefined)
+    throw new Error('当前播放队列使用 SQLite，请通过数据库导出')
+  return createPersonalBackupFromData(data, rendererData)
+}
+function createPersonalBackupFromData(
+  data: PersonalData,
+  rendererData: PersonalData
+): PersonalBackup {
   for (const domain of ['statistics', 'versions'] as const)
     if (rendererData[domain] !== undefined) {
       if (!validatePersonalDomain(domain, rendererData[domain]))
@@ -129,14 +166,7 @@ export function createPersonalBackup(root: string, rendererData: PersonalData): 
   // from extensible track snapshots as well, without changing user-authored lyrics or feed URLs.
   const text = JSON.stringify(
     { format: 'twilight-personal-data', version: 1, createdAt: new Date().toISOString(), data },
-    function (key, value) {
-      return /^(cookie|cookies|password|authorization|accessToken|refreshToken|secret|apiKey|headers|credentials|privateKey)$/i.test(
-        key
-      ) ||
-        (key === 'streamUrl' && isRecord(this) && ('title' in this || 'source' in this))
-        ? undefined
-        : value
-    }
+    personalBackupJsonReplacer
   )
   return parsePersonalBackup(text)
 }
@@ -166,13 +196,19 @@ export function stagePersonalRestore(
   root: string,
   backup: PersonalBackup,
   options: PersonalRestoreOptions,
-  authorizedRoots: string[] = []
+  authorizedRoots: string[] = [],
+  current?: PersonalData,
+  libraryBackend?: 'sqlite'
 ): void {
   checkRestoreOptions(options)
   parsePersonalBackup(JSON.stringify(backup))
   // Validate merging now; startup repeats this against the latest saved data.
-  buildRestoreData(backup, options, readPersonalData(root))
-  writeJsonValueAtomic(join(root, pendingName), { backup, options, authorizedRoots }, jsonOptions)
+  buildRestoreData(backup, options, current ?? readPersonalData(root))
+  writeJsonValueAtomic(
+    join(root, pendingName),
+    { backup, options, authorizedRoots, libraryBackend },
+    jsonOptions
+  )
 }
 export function buildRestoreData(
   backup: PersonalBackup,
@@ -191,33 +227,59 @@ export function buildRestoreData(
   }
   return result
 }
-export function previewRestore(root: string, backup: PersonalBackup, rendererData: PersonalData) {
+export function previewRestore(
+  root: string,
+  backup: PersonalBackup,
+  rendererData: PersonalData,
+  options?: LibraryReadOptions
+) {
   return previewPersonalBackup(backup, {
-    ...readPersonalData(root),
+    ...readPersonalData(root, options),
     statistics: rendererData.statistics,
     versions: rendererData.versions
   })
 }
 function removeArtifact(root: string, name: string) {
-  for (const suffix of ['', '.bak']) {
+  // Clear the fallback first: a crash must not resurrect an older request
+  // after its primary completion log has already been removed.
+  for (const suffix of ['.bak', '']) {
     const p = join(root, name + suffix)
     if (existsSync(p)) unlinkSync(p)
   }
 }
 // Called after the single-instance lock and before persistence owners are constructed.
 // A durable redo journal makes a crash between files recoverable and prevents partial startup.
-export function applyPendingPersonalRestore(
+function preparePendingPersonalRestore(
   root: string,
-  beforeWrite?: (name: string) => void
-): void {
+  currentData?: PersonalData,
+  libraryRevision?: number
+): (Record<string, unknown> & { writes: Record<string, unknown> }) | null {
   let journal = readRaw(root, journalName)
   if (journal === undefined) {
     const request = readRaw(root, pendingName) as RestoreRequest | undefined
-    if (!request) return
+    if (!request) return null
+    if (request.libraryBackend === 'sqlite' && !currentData)
+      throw new Error('此恢复请求需要 SQLite 曲库，未写入旧 JSON')
     if (!validatePersonalBackup(request.backup)) throw new Error('待恢复备份无效')
     checkRestoreOptions(request.options)
-    const current = readPersonalData(root)
-    const data = buildRestoreData(request.backup, request.options, current)
+    const current = currentData ?? readPersonalData(root)
+    const sqliteLibrary = libraryRevision !== undefined
+    const data = buildRestoreData(
+      request.backup,
+      sqliteLibrary
+        ? {
+            ...request.options,
+            domains: request.options.domains.filter((domain) => domain !== 'library')
+          }
+        : request.options,
+      current
+    )
+    if (sqliteLibrary && 'library' in request.backup.data) {
+      data.library = remapPersonalPaths(request.backup.data.library, request.options.mappings)
+      if (!validatePersonalDomain('library', data.library)) throw new Error('曲库恢复数据无效')
+      assertDomainSize('library', data.library)
+    }
+    const restoreId = randomUUID()
     const writes: Record<string, unknown> = {}
     const originals: Record<string, unknown> = {}
     if (request.options.domains.includes('library') && request.authorizedRoots?.length) {
@@ -237,8 +299,17 @@ export function applyPendingPersonalRestore(
     for (const domain of PERSONAL_DOMAINS) {
       if (!(domain in data) || !files[domain]) continue
       const file = files[domain]!
-      const previous = readRaw(root, file)
-      originals[file] = previous ?? null
+      const previous =
+        domain === 'library' && libraryRevision !== undefined
+          ? { revision: libraryRevision }
+          : readRaw(root, file)
+      originals[file] =
+        domain === 'library' && sqliteLibrary
+          ? {
+              databaseSnapshot: join(root, `music-library.sqlite.pre-restore-${restoreId}.sqlite`),
+              revision: libraryRevision
+            }
+          : (previous ?? null)
       const revision =
         isRecord(previous) && Number.isSafeInteger(previous.revision)
           ? Number(previous.revision) + 1
@@ -281,28 +352,48 @@ export function applyPendingPersonalRestore(
         ])
     )
     writes[rendererName] = {
-      id: randomUUID(),
+      id: restoreId,
       conflict: request.options.conflict,
       data: rendererData
     }
-    journal = { writes, originals, createdAt: new Date().toISOString() }
+    journal = {
+      writes,
+      originals,
+      createdAt: new Date().toISOString(),
+      id: restoreId,
+      ...(libraryRevision !== undefined || request.libraryBackend === 'sqlite'
+        ? {
+            libraryBackend: 'sqlite',
+            libraryExpectedRevision: libraryRevision,
+            libraryOperation: 'merge',
+            libraryConflict: request.options.conflict
+          }
+        : {})
+    }
     writeJsonValueAtomic(join(root, journalName), journal, jsonOptions)
   }
   if (!isRecord(journal) || !isRecord(journal.writes)) throw new Error('恢复日志无效')
-  const allowed = new Set([
-    ...Object.values(files),
-    'playback-queue.json',
-    rendererName,
-    'settings.json'
-  ])
-  for (const [name, value] of Object.entries(journal.writes)) {
-    if (!allowed.has(name)) throw new Error('恢复日志包含未知文件')
-    beforeWrite?.(name)
-    writeJsonValueAtomic(join(root, name), value, {
-      ...jsonOptions,
-      validate: (v: unknown): v is unknown => v !== undefined
-    })
+  return journal as Record<string, unknown> & { writes: Record<string, unknown> }
+}
+
+function writeRestoreFile(root: string, name: string, value: unknown): void {
+  if (!allowedRestoreFiles.has(name)) throw new Error('恢复日志包含未知文件')
+  writeJsonValueAtomic(join(root, name), value, {
+    ...jsonOptions,
+    validate: (v: unknown): v is unknown => v !== undefined
+  })
+}
+
+function validateRestoreWrites(writes: Record<string, unknown>): void {
+  for (const [name, value] of Object.entries(writes)) {
+    if (!allowedRestoreFiles.has(name) || value === undefined)
+      throw new Error('恢复日志包含未知文件或无效数据')
+    if (name === 'music-library.json' && !validatePersonalDomain('library', value))
+      throw new Error('曲库恢复日志无效')
   }
+}
+
+function finishPersonalRestore(root: string, journal: Record<string, unknown>): void {
   writeJsonValueAtomic(
     join(root, 'personal-restore-previous.json'),
     { data: journal.originals, createdAt: journal.createdAt },
@@ -310,6 +401,165 @@ export function applyPendingPersonalRestore(
   )
   removeArtifact(root, pendingName)
   removeArtifact(root, journalName)
+}
+
+// Existing JSON callers retain their synchronous contract. A database journal
+// can never be replayed into the old JSON library by this compatibility entry.
+export function applyPendingPersonalRestore(
+  root: string,
+  beforeWrite?: (name: string) => void
+): void {
+  const journal = preparePendingPersonalRestore(root)
+  if (!journal) return
+  validateRestoreWrites(journal.writes)
+  if (
+    journal.libraryBackend === 'sqlite' ||
+    ('music-library.json' in journal.writes && existsSync(join(root, 'music-library.sqlite')))
+  )
+    throw new Error('此恢复日志需要 SQLite 曲库，未写入旧 JSON')
+  for (const [name, value] of Object.entries(journal.writes)) {
+    beforeWrite?.(name)
+    writeRestoreFile(root, name, value)
+  }
+  finishPersonalRestore(root, journal)
+}
+
+export async function createPersonalBackupFromDatabase(
+  root: string,
+  rendererData: PersonalData,
+  database: PersonalLibraryDatabase
+): Promise<PersonalBackup> {
+  const library = await database.exportDocument({
+    maxBytes: libraryBackupCapacity,
+    redactPrivateData: true
+  })
+  const data = readPersonalData(root, { library })
+  if (isRecord(data.playback) && data.playback.libraryQueue !== undefined) {
+    const { libraryQueue, ...session } = data.playback
+    const { libraryRevision, ...exported } = await database.exportPlaybackQueue(
+      libraryQueue as import('../../shared/playbackSession.ts').LibraryPlaybackQueueReference,
+      32 * 1024 * 1024 - 1024
+    )
+    if (libraryRevision !== library.revision)
+      throw new Error('导出期间曲库发生变化，请稍后重新导出')
+    if (isRecord(session.track) && exported.queue[exported.queueIndex]?.id !== session.track.id)
+      throw new Error('播放会话与数据库队列不匹配，未导出')
+    data.playback = { ...session, ...exported }
+  }
+  return createPersonalBackupFromData(data, rendererData)
+}
+
+export async function previewRestoreFromDatabase(
+  root: string,
+  backup: PersonalBackup,
+  rendererData: PersonalData,
+  database: PersonalLibraryDatabase
+) {
+  const preview = previewRestore(root, backup, rendererData, { library: null })
+  if ('library' in backup.data) {
+    const row = await database.previewPersonalLibrary(
+      backup.data.library as LocalMusicLibraryDocument
+    )
+    const libraryRow = preview.rows.find((row) => row.domain === 'library')!
+    Object.assign(libraryRow, {
+      incoming: row.incoming,
+      current: row.current,
+      conflicts: row.conflicts
+    })
+  }
+  return preview
+}
+
+export async function stagePersonalRestoreFromDatabase(
+  root: string,
+  backup: PersonalBackup,
+  options: PersonalRestoreOptions,
+  authorizedRoots: string[],
+  database: PersonalLibraryDatabase
+): Promise<void> {
+  checkRestoreOptions(options)
+  parsePersonalBackup(JSON.stringify(backup))
+  if (options.domains.includes('library') && 'library' in backup.data)
+    await database.previewPersonalLibrary(
+      remapPersonalPaths(backup.data.library, options.mappings) as LocalMusicLibraryDocument
+    )
+  stagePersonalRestore(
+    root,
+    backup,
+    options,
+    authorizedRoots,
+    readPersonalData(root, { library: null }),
+    'sqlite'
+  )
+}
+
+/** Run before exposing other persistence owners. File redo and the database's
+ * idempotent restore token survive a crash on either side of the worker ACK. */
+export async function applyPendingPersonalRestoreFromDatabase(
+  root: string,
+  database: PersonalLibraryDatabase,
+  beforeWrite?: (name: string) => void | Promise<void>
+): Promise<void> {
+  let journal = readRaw(root, journalName)
+  if (journal === undefined) {
+    const request = readRaw(root, pendingName) as RestoreRequest | undefined
+    if (!request) return
+    checkRestoreOptions(request.options)
+    if (!validatePersonalBackup(request.backup)) throw new Error('待恢复备份无效')
+    const libraryRevision =
+      request.options.domains.includes('library') && 'library' in request.backup.data
+        ? (await database.getMetadata()).revision
+        : undefined
+    journal = preparePendingPersonalRestore(
+      root,
+      readPersonalData(root, { library: null }),
+      libraryRevision
+    )
+  }
+  if (!isRecord(journal) || !isRecord(journal.writes)) throw new Error('恢复日志无效')
+  validateRestoreWrites(journal.writes)
+  if ('music-library.json' in journal.writes && journal.libraryBackend !== 'sqlite') {
+    // Existing-format redo logs remain readable, but their library write is
+    // redirected to the authority, never to the retained migration source.
+    journal.libraryBackend = 'sqlite'
+    journal.id = randomUUID()
+    journal.libraryExpectedRevision = (await database.getMetadata()).revision
+    journal.originals = {
+      ...(isRecord(journal.originals) ? journal.originals : {}),
+      'music-library.json': {
+        databaseSnapshot: join(root, `music-library.sqlite.pre-restore-${journal.id}.sqlite`),
+        revision: journal.libraryExpectedRevision
+      }
+    }
+    writeJsonValueAtomic(join(root, journalName), journal, jsonOptions)
+  }
+  for (const [name, value] of Object.entries(journal.writes)) {
+    await beforeWrite?.(name)
+    if (name === 'music-library.json') {
+      if (
+        !validatePersonalDomain('library', value) ||
+        typeof journal.id !== 'string' ||
+        !Number.isSafeInteger(journal.libraryExpectedRevision)
+      )
+        throw new Error('SQLite 曲库恢复日志无效')
+      if (journal.libraryOperation === 'merge') {
+        if (!['keep-local', 'use-backup'].includes(String(journal.libraryConflict)))
+          throw new Error('曲库恢复冲突策略无效')
+        await database.restorePersonalLibrary(
+          value as LocalMusicLibraryDocument,
+          journal.libraryConflict as 'keep-local' | 'use-backup',
+          journal.id,
+          Number(journal.libraryExpectedRevision)
+        )
+      } else
+        await database.restoreDocument(
+          value as LocalMusicLibraryDocument,
+          journal.id,
+          Number(journal.libraryExpectedRevision)
+        )
+    } else writeRestoreFile(root, name, value)
+  }
+  finishPersonalRestore(root, journal)
 }
 export function readRendererRestore(root: string): unknown {
   return readRaw(root, rendererName) ?? null

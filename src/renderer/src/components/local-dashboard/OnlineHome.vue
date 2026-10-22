@@ -8,6 +8,7 @@ import type { Track } from '../../types/music'
 import type { MediaProviderPlaylistSummary } from '../../providers/mediaProvider'
 import type { StreamingPageTab } from '../../app/navigationPages'
 import { resolveTimeGreeting } from '../../utils/timeGreeting'
+import { useDomTrackLocator } from '@renderer/composables/useDomTrackLocator'
 
 const props = defineProps<{
   providers: ProviderInfo[]
@@ -22,11 +23,14 @@ const props = defineProps<{
   sectionTitle: string
   playlistTitle: string
   recent: Track[]
+  recentLoading?: boolean
+  recentError?: string
   hero: Track | null
   currentTrackId?: string
   isPlaying: boolean
   pendingPlaylist: string | null
 }>()
+useDomTrackLocator('locatorRoot', () => props.currentTrackId ?? null)
 const emit = defineEmits<{
   'select-provider': [id: string]
   play: [track: Track, queue: Track[]]
@@ -38,6 +42,7 @@ const emit = defineEmits<{
   'open-plugins': []
   'open-radio': []
   'open-recent': []
+  'retry-recent': []
   'open-library-settings': []
   'open-local': []
 }>()
@@ -81,7 +86,7 @@ const primaryLabel = computed(() => {
 </script>
 
 <template>
-  <main class="online-home" aria-label="音乐首页">
+  <main ref="locatorRoot" class="online-home" aria-label="音乐首页">
     <div class="online-home-inner">
       <header class="online-heading">
         <h1>{{ greeting }}</h1>
@@ -205,17 +210,25 @@ const primaryLabel = computed(() => {
         </div>
       </section>
 
-      <section v-if="recent.length" class="online-section">
+      <section v-if="recent.length || recentLoading || recentError" class="online-section">
         <header class="online-section-heading">
           <h2>最近听过</h2>
           <button class="online-text-button" type="button" @click="emit('open-recent')">
             全部记录 <i class="pi pi-arrow-right" aria-hidden="true"></i>
           </button>
         </header>
+        <div v-if="recentError" class="online-notice" role="status">
+          <span>{{ recentError }}</span>
+          <button class="online-text-button" type="button" @click="emit('retry-recent')">
+            重试最近播放
+          </button>
+        </div>
+        <p v-else-if="recentLoading" role="status" aria-live="polite">正在读取最近播放…</p>
         <div class="online-track-grid">
           <button
             v-for="track in recent"
             :key="track.id"
+            :data-te-track-id="track.id"
             type="button"
             class="online-track"
             :class="{ 'is-current': currentTrackId === track.id }"
@@ -330,6 +343,7 @@ const primaryLabel = computed(() => {
               <button
                 v-for="(track, index) in tracks.slice(0, 6)"
                 :key="track.id"
+                :data-te-track-id="track.id"
                 class="online-track"
                 :class="{ 'is-current': currentTrackId === track.id }"
                 type="button"

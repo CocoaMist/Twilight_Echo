@@ -5,6 +5,11 @@ import { useMusicStore } from '../stores/useMusicStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { isTrackUnderLibraryRoot, normalizeLibraryPath } from '../stores/library/musicStoreData.ts'
 import type { Track } from '../types/music'
+import { createLibraryStorageState } from '../stores/library/libraryStorageState.ts'
+import {
+  canResumeLocalLibraryScan,
+  libraryScanStatusText
+} from '../utils/libraryScanPresentation.ts'
 
 const props = defineProps<{
   show: boolean
@@ -36,7 +41,30 @@ const scanError = ref('')
 const dialogRef = ref<HTMLElement | null>(null)
 const choosingFolder = ref(false)
 const newlyAddedFolders = ref<string[]>([])
-const busy = computed(() => isScanning.value || choosingFolder.value)
+const storage = createLibraryStorageState({
+  getStorageMode: () => window.api.library.getStorageMode()
+})
+const databaseMode = computed(() => storage.mode.value === 'sqlite')
+const databaseRequestPending = ref(false)
+const controlPending = ref(false)
+const databaseStatus = computed(() => musicStore.libraryScanStatus.value)
+const databaseScanActive = computed(
+  () => databaseMode.value && ['running', 'paused'].includes(databaseStatus.value.state)
+)
+const busy = computed(
+  () =>
+    !storage.mode.value ||
+    choosingFolder.value ||
+    controlPending.value ||
+    databaseRequestPending.value ||
+    databaseScanActive.value ||
+    (!databaseMode.value && isScanning.value)
+)
+const closeDisabled = computed(
+  () => choosingFolder.value || (!databaseMode.value && isScanning.value)
+)
+const databaseStatusText = computed(() => libraryScanStatusText(databaseStatus.value))
+const canContinue = computed(() => canResumeLocalLibraryScan(databaseStatus.value))
 const availableFolders = computed(() => [
   ...new Set([
     ...(settingsLoaded.value ? settings.value.libraryFolders : scannedFolders.value),
@@ -45,7 +73,7 @@ const availableFolders = computed(() => [
 ])
 
 function close(): void {
-  if (!busy.value) emit('close')
+  if (!closeDisabled.value) emit('close')
 }
 useEscapeToClose(() => props.show, close)
 useFocusTrap(dialogRef, () => props.show)
@@ -60,6 +88,7 @@ watch(
     selectedFolders.value = new Set(availableFolders.value)
     scanStatus.value = 'idle'
     scanError.value = ''
+    void storage.load()
   },
   { immediate: true }
 )
@@ -97,10 +126,14 @@ async function handleRemoveFolder(path: string): Promise<void> {
   choosingFolder.value = true
   scanError.value = ''
   try {
+    if (databaseMode.value && !settingsLoaded.value)
+      throw new Error('设置尚未加载，请稍后再移除文件夹')
     if (settingsLoaded.value) await removeLibraryFolder(path)
     selectedFolders.value.delete(path)
     newlyAddedFolders.value = newlyAddedFolders.value.filter((folder) => folder !== path)
-    if (scannedFolders.value.includes(path)) musicStore.removeFolder(path)
+    // SQLite settings revoke the scope through the application owner; do not
+    // replace its current library with the renderer's compatibility snapshot.
+    if (!databaseMode.value && scannedFolders.value.includes(path)) musicStore.removeFolder(path)
   } catch (error) {
     scanError.value = `移除文件夹失败：${error instanceof Error ? error.message : String(error)}`
   } finally {
@@ -122,6 +155,20 @@ async function startScan(): Promise<void> {
   const foldersToScan = Array.from(selectedFolders.value)
   if (foldersToScan.length === 0) {
     scanError.value = '请先选择要扫描的文件夹。'
+    return
+  }
+
+  if (databaseMode.value) {
+    databaseRequestPending.value = true
+    scanError.value = ''
+    try {
+      await musicStore.scanLibraryDirectories({ directories: foldersToScan, reason: 'import' })
+      newlyAddedFolders.value = []
+    } catch (error) {
+      scanError.value = `目录检查未完成：${error instanceof Error ? error.message : String(error)}。已提交曲目保留。`
+    } finally {
+      databaseRequestPending.value = false
+    }
     return
   }
 
@@ -193,6 +240,24 @@ async function startScan(): Promise<void> {
   }
 }
 
+async function controlScan(command: 'pause' | 'resume' | 'cancel'): Promise<void> {
+  if (controlPending.value) return
+  controlPending.value = true
+  scanError.value = ''
+  try {
+    const accepted = await {
+      pause: musicStore.pauseLibraryScan,
+      resume: musicStore.resumeLibraryScan,
+      cancel: musicStore.cancelLibraryScan
+    }[command]()
+    if (!accepted) scanError.value = '扫描状态已变化，请按当前状态重新操作。'
+  } catch (error) {
+    scanError.value = `扫描操作失败：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    controlPending.value = false
+  }
+}
+
 onMounted(() => {
   cleanupProgress = window.api.fs.onScanProgress((data) => {
     progress.value = data
@@ -211,7 +276,6 @@ onUnmounted(() => {
         <div
           ref="dialogRef"
           class="import-dialog"
-          data-dialog-panel
           role="dialog"
           aria-modal="true"
           aria-labelledby="import-dialog-title"
@@ -224,7 +288,7 @@ onUnmounted(() => {
               type="button"
               class="btn-close"
               aria-label="关闭导入窗口"
-              :disabled="busy"
+              :disabled="closeDisabled"
               @click="close"
             >
               <i class="pi pi-times" aria-hidden="true"></i>
@@ -268,10 +332,95 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <p v-if="storage.error.value" class="scan-error" role="alert">
+              无法确认曲库存储：{{ storage.error.value }}
+              <button
+                type="button"
+                class="btn-cancel"
+                :disabled="storage.loading.value"
+                @click="storage.load"
+              >
+                重试读取
+              </button>
+            </p>
             <p v-if="scanError" class="scan-error" role="alert">{{ scanError }}</p>
             <div class="scan-status-slot" role="status" aria-live="polite">
               <Transition name="scan-status">
-                <div v-if="isScanning" key="scanning" class="progress-section">
+                <div v-if="databaseMode" key="database" class="progress-section">
+                  <p>
+                    {{
+                      databaseRequestPending && !databaseStatus.jobId
+                        ? '正在准备目录检查'
+                        : databaseStatusText
+                    }}
+                  </p>
+                  <progress
+                    v-if="databaseScanActive || databaseRequestPending"
+                    aria-label="目录检查进度"
+                  />
+                  <dl
+                    v-if="databaseStatus.databaseProgress"
+                    class="database-counters"
+                    aria-label="已确认的扫描统计"
+                  >
+                    <div>
+                      <dt>检查文件</dt>
+                      <dd>
+                        {{ databaseStatus.databaseProgress.checkedFiles.toLocaleString() }} 个
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>解析元数据</dt>
+                      <dd>
+                        {{ databaseStatus.databaseProgress.parsedFiles.toLocaleString() }} 个文件
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>已入库曲目</dt>
+                      <dd>{{ databaseStatus.databaseProgress.trackCount.toLocaleString() }} 首</dd>
+                    </div>
+                    <div>
+                      <dt>失败文件</dt>
+                      <dd>{{ databaseStatus.databaseProgress.failedFiles.toLocaleString() }} 个</dd>
+                    </div>
+                  </dl>
+                  <p class="scan-scope-note">
+                    已入库曲目为整个曲库的当前总数。可关闭窗口，扫描会在后台继续。
+                  </p>
+                  <p v-if="canContinue && !databaseScanActive" class="scan-scope-note">
+                    “继续扫描”沿用原任务范围；“检查并导入”会开始所选目录的新任务。
+                  </p>
+                  <div class="scan-controls">
+                    <button
+                      v-if="databaseStatus.state === 'running'"
+                      type="button"
+                      class="btn-cancel"
+                      :disabled="controlPending"
+                      @click="controlScan('pause')"
+                    >
+                      暂停
+                    </button>
+                    <button
+                      v-if="canContinue"
+                      type="button"
+                      class="btn-cancel"
+                      :disabled="controlPending"
+                      @click="controlScan('resume')"
+                    >
+                      继续扫描
+                    </button>
+                    <button
+                      v-if="databaseScanActive || databaseRequestPending"
+                      type="button"
+                      class="btn-cancel"
+                      :disabled="controlPending"
+                      @click="controlScan('cancel')"
+                    >
+                      取消扫描
+                    </button>
+                  </div>
+                </div>
+                <div v-else-if="isScanning" key="scanning" class="progress-section">
                   <div class="progress-info">
                     <span>正在扫描...</span>
                     <span>{{ progress.current }} / {{ progress.total }}</span>
@@ -302,7 +451,13 @@ onUnmounted(() => {
               :disabled="busy || selectedFolders.size === 0"
               @click="startScan"
             >
-              {{ isScanning ? '正在扫描...' : '扫描所选文件夹' }}
+              {{
+                databaseMode
+                  ? '检查并导入所选文件夹'
+                  : isScanning
+                    ? '正在扫描...'
+                    : '扫描所选文件夹'
+              }}
             </button>
           </div>
         </div>
@@ -312,6 +467,34 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.database-counters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.database-counters dt,
+.scan-scope-note {
+  color: var(--te-neutral-600);
+}
+.database-counters dd {
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.scan-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.progress-section progress {
+  width: 100%;
+}
+.progress-section p {
+  margin: 0 0 12px;
+}
+.dialog-footer {
+  flex-wrap: wrap;
+}
 .scan-status-slot {
   display: grid;
 }
@@ -343,42 +526,49 @@ html[data-te-motion='off'] .scan-status-leave-to {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: var(--te-dialog-backdrop);
+  background:
+    radial-gradient(circle at 30% 18%, rgba(124, 77, 255, 0.18), transparent 34%),
+    radial-gradient(circle at 72% 78%, rgba(34, 211, 238, 0.12), transparent 36%),
+    rgba(17, 24, 39, 0.18);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 2000;
   padding: 24px;
+  backdrop-filter: blur(8px) saturate(125%);
+  -webkit-backdrop-filter: blur(8px) saturate(125%);
 }
 
 .import-dialog {
   width: min(520px, calc(100vw - 48px));
-  max-height: calc(100vh - 48px);
-  box-sizing: border-box;
-  background: var(--te-glass-bg-strong);
-  color: var(--te-neutral-900);
+  max-height: calc(100dvh - 48px);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(248, 245, 255, 0.46)),
+    rgba(255, 255, 255, 0.52);
   border-radius: var(--te-dialog-radius);
-  box-shadow: var(--te-glass-shadow);
+  box-shadow:
+    0 28px 90px rgba(86, 70, 160, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--te-card-border);
-  animation: import-dialog-in var(--te-motion-panel) var(--te-ease-out-strong) both;
+  border: 1px solid rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(24px) saturate(155%);
+  -webkit-backdrop-filter: blur(24px) saturate(155%);
+  animation: import-dialog-in 0.32s var(--te-ease-soft) both;
 }
 
 .dialog-header {
-  padding: 16px 20px 0;
+  padding: 8px 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-height: 24px;
-  gap: 12px;
-  flex-shrink: 0;
 }
 
 .dialog-header h3 {
   margin: 0;
-  font-size: var(--te-type-section-title, 20px);
+  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
   font-weight: 600;
   color: var(--te-neutral-900);
 }
@@ -391,31 +581,28 @@ html[data-te-motion='off'] .scan-status-leave-to {
   background: none;
   border: none;
   cursor: pointer;
-  color: var(--te-neutral-600);
+  color: #999;
   font-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
   padding: 4px;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
 }
 
 .dialog-content {
-  padding: 16px 20px;
+  padding: 20px;
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
 }
 
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .section-title {
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-  font-weight: 600;
+  font-weight: 700;
   color: var(--te-neutral-900);
 }
 
@@ -439,17 +626,17 @@ html[data-te-motion='off'] .scan-status-leave-to {
 
 .folder-list {
   background: var(--te-subtle-bg);
-  border: 1px solid var(--te-card-border);
-  border-radius: var(--te-control-radius-sm, 8px);
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 14px;
   max-height: 200px;
   overflow-y: auto;
-  margin-bottom: 0;
+  margin-bottom: 20px;
 }
 
 .empty-folders {
-  padding: 24px 16px;
+  padding: 32px;
   text-align: center;
-  color: var(--te-neutral-600);
+  color: #999;
   font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
 }
 
@@ -458,7 +645,7 @@ html[data-te-motion='off'] .scan-status-leave-to {
   align-items: center;
   padding: 8px 12px;
   gap: 10px;
-  border-bottom: 1px solid var(--te-card-border);
+  border-bottom: 1px solid rgba(229, 231, 235, 0.52);
 }
 
 .folder-item:last-child {
@@ -468,7 +655,7 @@ html[data-te-motion='off'] .scan-status-leave-to {
 .folder-path {
   flex: 1;
   font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  color: var(--te-neutral-900);
+  color: #333;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -501,7 +688,7 @@ html[data-te-motion='off'] .scan-status-leave-to {
 }
 
 .progress-section {
-  background: var(--te-control-accent-soft);
+  background: rgba(124, 77, 255, 0.1);
   padding: 12px;
   border-radius: 14px;
   margin-top: 10px;
@@ -538,55 +725,42 @@ html[data-te-motion='off'] .scan-status-leave-to {
   border: 1px solid rgba(255, 180, 80, 0.24);
   border-radius: 14px;
   font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  color: var(--te-warning-soft-fg);
+  color: #b8780d;
   text-align: center;
 }
 
 .dialog-footer {
-  padding: 0 20px 16px;
+  padding: 16px 20px;
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
 }
 
 .btn-cancel {
   background: var(--te-subtle-bg);
-  border: 1px solid var(--te-control-border);
+  border: 1px solid rgba(255, 255, 255, 0.62);
   padding: 8px 16px;
-  border-radius: var(--te-control-radius-sm, 8px);
+  border-radius: 12px;
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
   cursor: pointer;
-  color: var(--te-neutral-900);
+  color: #666;
 }
 
 .btn-start {
-  background: var(--te-control-accent);
+  background: linear-gradient(135deg, var(--te-primary-500), var(--te-primary-300));
   border: none;
   padding: 8px 24px;
-  border-radius: var(--te-control-radius-sm, 8px);
+  border-radius: 12px;
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
   cursor: pointer;
-  color: var(--te-control-on-accent);
+  color: #fff;
   font-weight: 500;
+  box-shadow: 0 12px 30px rgba(124, 77, 255, 0.24);
 }
 
 .btn-start:disabled {
-  opacity: 0.45;
+  background: rgba(168, 133, 247, 0.36);
   cursor: not-allowed;
-}
-.dialog-footer button {
-  min-height: 36px;
-  font-family: inherit;
-}
-button:focus-visible,
-input:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
-  outline-offset: 2px;
-}
-input[type='checkbox'] {
-  accent-color: var(--te-control-accent);
 }
 
 .fade-enter-active,
@@ -601,7 +775,7 @@ input[type='checkbox'] {
 @keyframes import-dialog-in {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.98);
+    transform: translateY(16px) scale(0.98);
   }
   to {
     opacity: 1;

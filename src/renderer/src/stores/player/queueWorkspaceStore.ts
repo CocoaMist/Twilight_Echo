@@ -21,6 +21,7 @@ export interface QueueWorkspaceApi {
     document: QueueWorkspaceDocument,
     revision: number
   ) => Promise<VersionedDataEnvelope<QueueWorkspaceDocument>>
+  syncQueueReferences?: (owner: string, ids: string[]) => Promise<void>
 }
 
 export function createQueueWorkspaceStore(
@@ -39,6 +40,35 @@ export function createQueueWorkspaceStore(
   let tail: Promise<void> = Promise.resolve()
   let timer: ReturnType<typeof setTimeout> | null = null
   let pendingHistory: PlaybackOrderEntry[] = []
+  const referenceOwner = 'workspace'
+
+  function referenceIds(document: QueueWorkspaceDocument): string[] {
+    return [
+      ...new Set(
+        document.sessions.flatMap((session) =>
+          session.libraryQueue ? [session.libraryQueue.id] : []
+        )
+      )
+    ]
+  }
+
+  async function syncIds(ids: string[], required = false): Promise<void> {
+    const sync = getApi().syncQueueReferences
+    if (!sync) return
+    if (required) {
+      await sync(referenceOwner, ids)
+      return
+    }
+    await sync(referenceOwner, ids).catch(() => {})
+  }
+
+  async function syncReferences(document: QueueWorkspaceDocument): Promise<void> {
+    const ids = referenceIds(document)
+    // Persistence remains usable when the SQLite owner is unavailable (for
+    // example while running in JSON mode). A missed sync is conservative: it
+    // can retain a queue temporarily, but cannot make GC delete a live queue.
+    await syncIds(ids)
+  }
 
   function applyHistory(saved: PlaybackOrderEntry[]): void {
     const ids = new Set(saved.map((entry) => entry.id))
@@ -56,6 +86,7 @@ export function createQueueWorkspaceStore(
       sessions.value = result?.data.sessions ?? []
       applyHistory(result?.data.history ?? [])
       revision = result?.revision ?? 0
+      await syncReferences({ version: 1, sessions: sessions.value, history: history.value })
       loaded = true
       error.value = ''
     })()
@@ -85,15 +116,25 @@ export function createQueueWorkspaceStore(
           throw new Error('所有会话合计最多保存 40,000 首，请删除不需要的会话')
         }
         const savedHistory = history.value
+        const currentDocument = {
+          version: 1 as const,
+          sessions: sessions.value,
+          history: savedHistory
+        }
+        const nextDocument = { version: 1 as const, sessions: next, history: savedHistory }
+        // Protect additions before publishing the new document. Retaining old
+        // IDs in this union keeps a failed save from losing its prior owner.
+        await syncIds(
+          [...new Set([...referenceIds(currentDocument), ...referenceIds(nextDocument)])],
+          true
+        )
         try {
-          const receipt = await getApi().saveQueueWorkspace(
-            { version: 1, sessions: next, history: savedHistory },
-            revision
-          )
+          const receipt = await getApi().saveQueueWorkspace(nextDocument, revision)
           revision = receipt.revision
           sessions.value = receipt.data.sessions
           const savedIds = new Set(savedHistory.map((entry) => entry.id))
           pendingHistory = pendingHistory.filter((entry) => !savedIds.has(entry.id))
+          await syncReferences(receipt.data)
           error.value = ''
         } catch (reason) {
           if (isPersistentDataRevisionConflict(reason)) {

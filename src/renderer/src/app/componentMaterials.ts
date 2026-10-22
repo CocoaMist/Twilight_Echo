@@ -20,15 +20,6 @@ export function componentMaterialStyles(
   tone: AppearanceLayerTone
 ): string {
   const rules: string[] = []
-  // A contact shadow and a restrained upper highlight read as outward relief
-  // without adding another tinted background over the selected glass material.
-  const raisedButton = `:is(.app-shell-content,.app-shell-player) :is(button,[role="button"]):not(:is(.appearance-window-preview *,.appearance-window-region,.appearance-inspector *,.appearance-popover *,[data-te-appearance-ignore],[data-te-appearance-ignore] *,.menu-item,.sidebar-bookmark,.lyric-row,${STRUCTURAL_CONTROL_SELECTOR},${CARD_SURFACE_SELECTOR}))`
-  rules.push(
-    `${raisedButton}{box-shadow:0 1px 3px rgb(0 0 0 / 12%),inset 0 1px 0 rgb(255 255 255 / 7%)!important;}`,
-    `${raisedButton}:active:not(:disabled,[aria-disabled="true"]){box-shadow:0 0 1px rgb(0 0 0 / 10%),inset 0 1px 2px rgb(0 0 0 / 12%)!important;}`,
-    `${raisedButton}:is(:disabled,[aria-disabled="true"]){box-shadow:none!important;}`,
-    `@media(forced-colors:active){${raisedButton}{box-shadow:none!important;}}`
-  )
   for (const [scope, targets] of Object.entries(COMPONENT_MATERIAL_SELECTORS)) {
     const layer = settings.scopes[scope as AppearanceLayerScope][tone]
     const material = layer.material

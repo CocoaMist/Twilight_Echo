@@ -5,7 +5,8 @@ import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { compileScript, parse } from '@vue/compiler-sfc'
 import * as Vue from 'vue'
-import type { AudioWorkspaceTab } from '../app/useAppNavigation.ts'
+import * as workbench from '../utils/dspWorkbench.ts'
+import type { DspWorkspaceTab } from '../utils/dspWorkbench.ts'
 
 const require = createRequire(import.meta.url)
 const typescript = require('typescript') as typeof import('typescript')
@@ -23,66 +24,66 @@ const compiled = typescript.transpileModule(
 
 interface ChildPage {
   requestLeave: () => Promise<boolean>
-  refreshFromEngine?: () => Promise<void>
+  finishAudition: () => Promise<boolean>
+  syncFromEngine: () => Promise<void>
+  refreshDiagnostics: () => Promise<void>
 }
 interface WorkspaceSetup {
-  portalTarget: Vue.ShallowRef<HTMLElement | null>
-  openEditorWindow: () => void
-  pageRef: Vue.Ref<ChildPage | null>
-  busy: Vue.ComputedRef<boolean>
-  dspPending: Vue.Ref<boolean>
-  dspEnabled: Vue.ComputedRef<boolean>
-  errorMessage: Vue.Ref<string>
+  target: Vue.Ref<HTMLElement | null>
+  rack: Vue.Ref<ChildPage | null>
+  equalizer: Vue.Ref<{ requestLeave: () => Promise<boolean>; busy?: boolean } | null>
+  tab: Vue.Ref<DspWorkspaceTab>
+  switching: Vue.Ref<boolean>
+  masterBusy: Vue.Ref<boolean>
+  error: Vue.Ref<string>
+  selectTab: (tab: DspWorkspaceTab) => Promise<void>
+  toggleMaster: () => Promise<void>
+  popout: () => void
   requestLeave: () => Promise<boolean>
-  requestTabChange: (tab: AudioWorkspaceTab) => Promise<void>
-  toggleDsp: () => Promise<void>
-  onTabKeydown: (event: KeyboardEvent) => void
 }
-
-function createWorkspace(tab: AudioWorkspaceTab = 'equalizer') {
-  const events: AudioWorkspaceTab[] = []
+function createWorkspace(initialTab: DspWorkspaceTab = 'equalizer') {
   const updates: { dspEnabled: boolean }[] = []
-  const focused: string[] = []
-  const props = Vue.reactive({ tab })
-  const audioStore = Vue.reactive({
+  const store = Vue.reactive({
     audioProcessing: { dspEnabled: false },
+    audioDevice: 'default',
+    audioDeviceOptions: [],
+    audioEngineReady: true,
     setAudioProcessing: async (
       patch: { dspEnabled: boolean },
       options: { throwOnError: boolean }
     ) => {
       assert.equal(options.throwOnError, true)
       updates.push({ ...patch })
-      audioStore.audioProcessing.dspEnabled = patch.dspEnabled
+      store.audioProcessing.dspEnabled = patch.dspEnabled
     }
   })
-  let beforeUnmount = () => {}
-  let exposed: { requestLeave: () => Promise<boolean> } | undefined
+  const scope = Vue.effectScope()
+  const cleanups: Array<() => void> = []
+  let exposed!: { requestLeave: () => Promise<boolean> }
   const module = { exports: {} as { default: { setup: (...args: unknown[]) => WorkspaceSetup } } }
   runInNewContext(compiled, {
     module,
     exports: module.exports,
     require: (specifier: string) => {
       if (specifier === 'vue')
-        return {
-          ...Vue,
-          onBeforeUnmount: (callback: () => void) => {
-            beforeUnmount = callback
-          }
-        }
+        return { ...Vue, onBeforeUnmount: (callback: () => void) => cleanups.push(callback) }
+      if (specifier === 'pinia') return { storeToRefs: Vue.toRefs }
       if (specifier.endsWith('/useAudioOutputDspStore'))
-        return { useAudioOutputDspStore: () => audioStore }
-      if (specifier.endsWith('/AppBackgroundLayer.vue')) return { default: {} }
+        return { useAudioOutputDspStore: () => store }
+      if (specifier.endsWith('/dspWorkbench')) return workbench
+      if (specifier.endsWith('.vue')) return { default: {} }
       if (specifier.endsWith('/useDspEditorWindow'))
         return {
-          useDspEditorWindow: (onChange: (detached: boolean) => void) => {
+          dspEditorDocumentVisible: Vue.ref(true),
+          useDspEditorWindow: (onChange: (value: boolean) => void) => {
             const target = Vue.shallowRef<HTMLElement | null>(null)
             return {
               target,
+              focus: () => {},
               open: () => {
                 target.value = {} as HTMLElement
                 onChange(true)
               },
-              focus: () => {},
               dock: async () => {
                 target.value = null
                 onChange(false)
@@ -90,173 +91,160 @@ function createWorkspace(tab: AudioWorkspaceTab = 'equalizer') {
             }
           }
         }
-      throw new Error(`Unexpected setup dependency: ${specifier}`)
+      throw Error(`Unexpected setup dependency: ${specifier}`)
     },
-    document: { getElementById: (id: string) => ({ focus: () => focused.push(id) }) }
-  })
-  const state = module.exports.default.setup(props, {
-    emit: (event: 'switchTab' | 'detachedChange', nextTab: AudioWorkspaceTab) => {
-      if (event !== 'switchTab') return
-      events.push(nextTab)
-      props.tab = nextTab
-    },
-    expose: (api: typeof exposed) => {
-      exposed = api
+    document: {},
+    window: {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      api: { window: { close: () => {} } }
     }
   })
+  const state = scope.run(() =>
+    module.exports.default.setup(Vue.reactive({ active: true, initialTab }), {
+      expose: (api: typeof exposed) => {
+        exposed = api
+      }
+    })
+  )!
+  state.rack.value = {
+    requestLeave: async () => true,
+    finishAudition: async () => true,
+    syncFromEngine: async () => {},
+    refreshDiagnostics: async () => {}
+  }
   return {
     state,
-    props,
-    events,
+    store,
     updates,
-    focused,
-    audioStore,
-    unmount: () => beforeUnmount(),
-    exposed
+    exposed,
+    stop: () => {
+      cleanups.forEach((callback) => callback())
+      scope.stop()
+    }
   }
 }
 
-test('workspace tab switches commit the current page first, respect refusal, and focus the selected tab', async () => {
-  const workspace = createWorkspace()
-  let allow = false
-  let attempts = 0
-  workspace.state.pageRef.value = {
+test('workspace tab switches respect EQ refusal and synchronize the rack before entering the chain', async () => {
+  const w = createWorkspace()
+  let allowed = false,
+    attempts = 0,
+    synchronized = 0
+  w.state.equalizer.value = {
     requestLeave: async () => {
-      attempts += 1
-      return allow
+      attempts++
+      return allowed
     }
   }
-  await workspace.state.requestTabChange('equalizer')
+  w.state.rack.value!.syncFromEngine = async () => {
+    synchronized++
+  }
+  await w.state.selectTab('equalizer')
   assert.equal(attempts, 0)
-  await workspace.state.requestTabChange('effects')
-  assert.deepEqual(workspace.events, [])
-  allow = true
-  await workspace.state.requestTabChange('effects')
+  await w.state.selectTab('chain')
+  assert.equal(w.state.tab.value, 'equalizer')
+  allowed = true
+  await w.state.selectTab('chain')
   assert.equal(attempts, 2)
-  assert.deepEqual(workspace.events, ['effects'])
-  assert.deepEqual(workspace.focused, ['audio-workspace-tab-effects'])
-  assert.equal(typeof workspace.exposed?.requestLeave, 'function')
-  assert.deepEqual(workspace.updates, [])
+  assert.equal(synchronized, 1)
+  assert.equal(w.state.tab.value, 'chain')
+  assert.deepEqual(w.updates, [])
+  w.stop()
 })
 
-test('detaching keeps the draft live and permits browsing without asking the editor to discard it', async () => {
-  const workspace = createWorkspace('effects')
-  let leaves = 0
-  workspace.state.pageRef.value = {
-    requestLeave: async () => {
-      leaves += 1
-      return false
-    }
-  }
-  workspace.state.openEditorWindow()
-  assert.ok(workspace.state.portalTarget.value)
-  assert.equal(await workspace.exposed!.requestLeave(), true)
-  assert.equal(leaves, 0)
-  await workspace.state.toggleDsp()
-  assert.equal(leaves, 1)
-  assert.deepEqual(workspace.updates, [])
-})
-
-test('pending or unloaded child pages block duplicate switches and external navigation', async () => {
-  const workspace = createWorkspace()
-  assert.equal(await workspace.state.requestLeave(), false)
+test('pending draft decisions block duplicate switches and external navigation', async () => {
+  const w = createWorkspace()
   let release!: (allowed: boolean) => void
-  workspace.state.pageRef.value = {
+  w.state.equalizer.value = {
     requestLeave: () =>
-      new Promise<boolean>((resolve) => {
+      new Promise((resolve) => {
         release = resolve
       })
   }
-  const pending = workspace.state.requestTabChange('effects')
-  assert.equal(workspace.state.busy.value, true)
-  assert.equal(await workspace.state.requestLeave(), false)
-  await workspace.state.requestTabChange('effects')
+  const pending = w.state.selectTab('chain')
+  assert.equal(w.state.switching.value, true)
+  assert.equal(await w.state.requestLeave(), false)
+  await w.state.selectTab('output')
   release(true)
   await pending
-  assert.deepEqual(workspace.events, ['effects'])
-  assert.equal(workspace.state.busy.value, false)
+  assert.equal(w.state.tab.value, 'chain')
+  assert.equal(w.state.switching.value, false)
+  w.stop()
 })
 
-test('guard failures and late unmount resolutions do not switch away or hide errors', async () => {
-  const workspace = createWorkspace()
-  workspace.state.pageRef.value = {
+test('failed draft saves keep the current tab and expose the engine error', async () => {
+  const w = createWorkspace()
+  w.state.equalizer.value = {
     requestLeave: async () => {
-      throw new Error('save failed')
+      throw Error('save failed')
     }
   }
-  await workspace.state.requestTabChange('effects')
-  assert.deepEqual(workspace.events, [])
-  assert.match(workspace.state.errorMessage.value, /save failed/)
-  workspace.state.pageRef.value = { requestLeave: async () => true }
-  const pending = workspace.state.requestTabChange('effects')
-  workspace.unmount()
-  await pending
-  assert.deepEqual(workspace.events, [])
+  await w.state.selectTab('chain')
+  assert.equal(w.state.tab.value, 'equalizer')
+  assert.match(w.state.error.value, /save failed/)
+  assert.equal(w.state.switching.value, false)
+  w.stop()
 })
 
-test('master DSP only changes after explicit click and protected effects state refreshes after success', async () => {
-  const workspace = createWorkspace('effects')
+test('master DSP writes follow explicit clicks and refresh the committed rack state', async () => {
+  const w = createWorkspace('chain')
   const calls: string[] = []
-  workspace.state.pageRef.value = {
+  w.state.rack.value = {
     requestLeave: async () => {
       calls.push('leave')
       return true
     },
-    refreshFromEngine: async () => {
-      calls.push('refresh')
+    finishAudition: async () => true,
+    syncFromEngine: async () => {
+      calls.push('sync')
+    },
+    refreshDiagnostics: async () => {
+      calls.push('diagnostics')
     }
   }
-  assert.deepEqual(workspace.updates, [])
-  assert.equal(workspace.state.dspEnabled.value, false)
-  await workspace.state.toggleDsp()
-  assert.deepEqual(workspace.updates, [{ dspEnabled: true }])
-  assert.deepEqual(calls, ['leave', 'refresh'])
-  assert.equal(workspace.state.dspEnabled.value, true)
-  await workspace.state.toggleDsp()
-  assert.deepEqual(workspace.updates, [{ dspEnabled: true }, { dspEnabled: false }])
-  assert.equal(workspace.state.dspEnabled.value, false)
+  assert.deepEqual(w.updates, [])
+  await w.state.toggleMaster()
+  assert.deepEqual(w.updates, [{ dspEnabled: true }])
+  assert.deepEqual(calls, ['leave', 'sync', 'diagnostics'])
+  await w.state.toggleMaster()
+  assert.deepEqual(w.updates, [{ dspEnabled: true }, { dspEnabled: false }])
+  w.stop()
 })
 
-test('master DSP cannot race pending engine writes or bypass a refused child draft', async () => {
-  const workspace = createWorkspace()
-  workspace.state.pageRef.value = { requestLeave: async () => false }
-  await workspace.state.toggleDsp()
-  assert.deepEqual(workspace.updates, [])
-  workspace.state.pageRef.value = { requestLeave: async () => true }
+test('master changes cannot bypass a refused draft or race an engine write', async () => {
+  const w = createWorkspace()
+  w.state.equalizer.value = { requestLeave: async () => false }
+  await w.state.toggleMaster()
+  assert.deepEqual(w.updates, [])
+  w.state.equalizer.value = { requestLeave: async () => true }
   let reject!: (error: Error) => void
-  let started!: () => void
-  const applying = new Promise<void>((resolve) => {
-    started = resolve
-  })
-  workspace.audioStore.setAudioProcessing = () =>
-    new Promise<void>((_resolve, fail) => {
+  w.store.setAudioProcessing = () =>
+    new Promise((_resolve, fail) => {
       reject = fail
-      started()
     })
-  const pending = workspace.state.toggleDsp()
-  await applying
-  assert.equal(workspace.state.dspPending.value, true)
-  assert.equal(await workspace.state.requestLeave(), false)
-  await workspace.state.toggleDsp()
-  reject(new Error('engine unavailable'))
+  const pending = w.state.toggleMaster()
+  while (!reject) await Vue.nextTick()
+  assert.equal(w.state.masterBusy.value, true)
+  assert.equal(await w.state.requestLeave(), false)
+  await w.state.toggleMaster()
+  reject(Error('engine unavailable'))
   await pending
-  assert.equal(workspace.state.dspEnabled.value, false)
-  assert.match(workspace.state.errorMessage.value, /engine unavailable/)
-  assert.equal(workspace.state.busy.value, false)
+  assert.equal(w.store.audioProcessing.dspEnabled, false)
+  assert.match(w.state.error.value, /engine unavailable/)
+  assert.equal(w.state.masterBusy.value, false)
+  w.stop()
 })
 
-test('workspace mounts one embedded audio page at a time without retaining hidden workers', () => {
-  const equalizerTag = descriptor.template!.content.match(/<EqualizerPage\b[^>]*\/>/)?.[0]
-  const effectsTag = descriptor.template!.content.match(/<DspRackPage\b[^>]*\/>/)?.[0]
-  assert.ok(equalizerTag)
-  assert.ok(effectsTag)
-  assert.match(equalizerTag, /\bv-if\s*=\s*"tab === 'equalizer'"/)
-  assert.match(effectsTag, /\bv-else\b/)
-  for (const tag of [equalizerTag, effectsTag]) {
-    assert.match(tag, /\bref\s*=\s*"pageRef"/)
-    assert.match(tag, /\bembedded\b/)
-  }
-  assert.match(equalizerTag, /:navigation-locked\s*=\s*"busy"/)
-  assert.doesNotMatch(source, /KeepAlive/)
-  assert.match(descriptor.template!.content, /DSP 已关闭，均衡器和效果链的调整暂不影响播放声音/)
+test('leaving the detached workbench retains refused drafts and docks only after approval', async () => {
+  const w = createWorkspace('chain')
+  let allowed = false
+  w.state.rack.value!.requestLeave = async () => allowed
+  w.state.popout()
+  assert.ok(w.state.target.value)
+  assert.equal(await w.exposed.requestLeave(), false)
+  assert.ok(w.state.target.value)
+  allowed = true
+  assert.equal(await w.exposed.requestLeave(), true)
+  assert.equal(w.state.target.value, null)
+  w.stop()
 })

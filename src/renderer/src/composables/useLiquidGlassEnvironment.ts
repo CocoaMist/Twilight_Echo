@@ -161,9 +161,15 @@ export function useLiquidGlassEnvironment(options: {
       const request = new AbortController()
       imageRequest = request
       const image = await loadLiquidGlassContextImage(source, request.signal)
-      if (disposed || currentSequence !== sequence || !options.active.value) return
-      applyEnvironment(sampleImage(image, isDark), tone)
-      document.documentElement.dataset.teLiquidGlassSource = 'image'
+      try {
+        if (disposed || currentSequence !== sequence || !options.active.value) return
+        applyEnvironment(sampleImage(image, isDark), tone)
+        document.documentElement.dataset.teLiquidGlassSource = 'image'
+      } finally {
+        // The helper keeps successful images alive for the caller to sample. Once
+        // sampling is complete (or the request became stale), release the decode.
+        image.src = ''
+      }
     } catch {
       if (!disposed && currentSequence === sequence && options.active.value) {
         applyEnvironment(fallbackLiquidGlassEnvironment(isDark), tone)

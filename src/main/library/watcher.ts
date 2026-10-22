@@ -1,5 +1,5 @@
 import { existsSync, watch, type FSWatcher } from 'fs'
-import { extname, join } from 'path'
+import { dirname, extname, join } from 'path'
 import { runtime } from '../core/runtime'
 import {
   isActiveLibraryPathExcluded,
@@ -21,6 +21,7 @@ import {
   looksLikeDirectoryEvent,
   LIBRARY_WATCH_EXTENSIONS
 } from './watcherExtensions.ts'
+import { LibraryWatcherPoller } from './libraryWatcherPolling.ts'
 
 export { LIBRARY_WATCH_EXTENSIONS }
 
@@ -36,6 +37,7 @@ type WatcherEntry = {
   recreateTimer: NodeJS.Timeout | null
   recreateAttempts: number
   pollingTimer: NodeJS.Timeout | null
+  poller: LibraryWatcherPoller | null
 }
 
 const libraryWatchers = new Map<string, WatcherEntry>()
@@ -63,8 +65,26 @@ function enqueueChange(folder: string, change: LocalLibraryWatchChange): void {
   const entry = libraryWatchers.get(folder)
   if (!entry) return
   entry.lastEventAt = new Date().toISOString()
-  entry.changes.set(changeKey(change), change)
-  if (entry.debounce) clearTimeout(entry.debounce)
+  if (runtime.libraryDatabase) {
+    // Bound native event storms before the runtime's second coalescing stage.
+    const rootKey = changeKey({ kind: 'reconcile', path: folder })
+    if (!entry.changes.has(rootKey)) {
+      const scoped: LocalLibraryWatchChange = {
+        kind: 'reconcile',
+        path: change.kind === 'reconcile' ? change.path : dirname(change.path)
+      }
+      entry.changes.set(changeKey(scoped), scoped)
+      if (entry.changes.size > 256) {
+        entry.changes.clear()
+        entry.changes.set(rootKey, { kind: 'reconcile', path: folder })
+      }
+    }
+    // A continuous event stream must not postpone the flush indefinitely.
+    if (entry.debounce) return
+  } else {
+    entry.changes.set(changeKey(change), change)
+    if (entry.debounce) clearTimeout(entry.debounce)
+  }
   entry.debounce = setTimeout(() => {
     entry.debounce = null
     flushWatcherChanges(folder)
@@ -77,7 +97,7 @@ function flushWatcherChanges(folder: string): void {
   const changes = Array.from(entry.changes.values())
   entry.changes.clear()
   entry.lastReconcileAt = new Date().toISOString()
-  const coordinator = runtime.localLibraryIndexCoordinator
+  const coordinator = runtime.libraryDatabase ?? runtime.localLibraryIndexCoordinator
   if (coordinator) {
     coordinator.enqueueWatcherChanges(changes)
   } else if (changes.some((change) => change.kind === 'reconcile')) {
@@ -110,6 +130,8 @@ function clearRecreateTimer(entry: WatcherEntry): void {
 }
 
 function clearPollingTimer(entry: WatcherEntry): void {
+  entry.poller?.stop()
+  entry.poller = null
   if (entry.pollingTimer) {
     clearInterval(entry.pollingTimer)
     entry.pollingTimer = null
@@ -133,6 +155,22 @@ function startPollingFallback(folder: string, reason: string): void {
   entry.mode = 'polling'
   entry.state = 'degraded'
   entry.lastError = reason
+  const database = runtime.libraryDatabase
+  if (database) {
+    entry.poller = new LibraryWatcherPoller({
+      check: async () => {
+        const changed = await database.poll(folder)
+        if (changed !== undefined) entry.lastReconcileAt = new Date().toISOString()
+        if (changed) entry.lastEventAt = entry.lastReconcileAt
+        return changed
+      },
+      onError: (error) => {
+        entry.lastError = watcherErrorCode(error)
+      }
+    })
+    entry.poller.start()
+    return
+  }
   entry.pollingTimer = setInterval(() => {
     forceRootReconcile(folder, reason)
   }, POLL_INTERVAL_MS)
@@ -193,7 +231,8 @@ function createFolderWatcher(folder: string, options: { resume?: boolean } = {})
     lastReconcileAt: null,
     recreateTimer: null,
     recreateAttempts: 0,
-    pollingTimer: null
+    pollingTimer: null,
+    poller: null
   }
   libraryWatchers.set(folder, entry)
 
@@ -214,7 +253,10 @@ function createFolderWatcher(folder: string, options: { resume?: boolean } = {})
 
       if (looksLikeDirectoryEvent(filename, fullPath)) {
         // Directory move/rename: scoped root reconcile (complete identity snapshot).
-        enqueueChange(folder, { kind: 'reconcile', path: folder })
+        enqueueChange(folder, {
+          kind: 'reconcile',
+          path: runtime.libraryDatabase ? fullPath : folder
+        })
         return
       }
 
@@ -222,6 +264,10 @@ function createFolderWatcher(folder: string, options: { resume?: boolean } = {})
       if (!isWatchableFileExtension(ext)) return
 
       const kind: 'add' | 'remove' = existsSync(fullPath) ? 'add' : 'remove'
+      if (runtime.libraryDatabase) {
+        enqueueChange(folder, { kind, path: fullPath })
+        return
+      }
       // Coalesce by path so rename+change collapses; latest kind wins.
       const current = libraryWatchers.get(folder)
       if (!current) return

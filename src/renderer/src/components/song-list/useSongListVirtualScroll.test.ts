@@ -260,3 +260,178 @@ test('compact density and text scaling keep the same recording and virtual strid
   assert.equal(scroll.visibleRange.value.start, firstMounted)
   scope.stop()
 })
+
+test('scrollToTrack brings an off-screen row into the virtual window', () => {
+  const scope = effectScope()
+  const scroll = scope.run(() =>
+    useSongListVirtualScroll({
+      displayTracks: computed(
+        () => Array.from({ length: 4_000 }, (_, index) => ({ id: String(index) })) as never[]
+      ),
+      resetSources: [],
+      shouldResetOnSearch: computed(() => false),
+      debouncedSearchQuery: ref('')
+    })
+  )!
+  const container = {
+    clientHeight: 700,
+    clientTop: 0,
+    scrollTop: 0,
+    getBoundingClientRect: () => ({ top: 0 })
+  } as unknown as HTMLElement
+  scroll.containerRef.value = container
+  scroll.tbodyRef.value = {
+    getBoundingClientRect: () => ({ top: 280 })
+  } as unknown as HTMLElement
+  scroll.updateViewportHeight()
+  scroll.scrollToTrack(1_234)
+  assert.ok(container.scrollTop > 0)
+  assert.ok(scroll.visibleRange.value.start <= 1_234)
+  assert.ok(scroll.visibleRange.value.end > 1_234)
+  scope.stop()
+})
+
+test('300k database rows keep full scroll extent with only 200 loaded records', () => {
+  const scope = effectScope()
+  const scroll = scope.run(() =>
+    useSongListVirtualScroll({
+      displayTracks: computed(
+        () => Array.from({ length: 200 }, (_, index) => ({ id: String(index) })) as never[]
+      ),
+      itemCount: computed(() => 300_000),
+      resetSources: [],
+      shouldResetOnSearch: computed(() => false),
+      debouncedSearchQuery: ref('')
+    })
+  )!
+  const container = {
+    clientHeight: 700,
+    clientTop: 0,
+    scrollTop: 0,
+    getBoundingClientRect: () => ({ top: 0 })
+  } as unknown as HTMLElement
+  scroll.containerRef.value = container
+  scroll.tbodyRef.value = {
+    getBoundingClientRect: () => ({ top: 280 - container.scrollTop })
+  } as unknown as HTMLElement
+  scroll.updateViewportHeight()
+  assert.equal(scroll.totalHeight.value, 300_000 * scroll.rowHeight.value)
+  scroll.scrollToTrack(234_567)
+  assert.ok(container.scrollTop > 234_000 * scroll.rowHeight.value)
+  assert.ok(scroll.visibleRange.value.start <= 234_567)
+  assert.ok(scroll.visibleRange.value.end > 234_567)
+  assert.ok(
+    scroll.visibleRange.value.end - scroll.visibleRange.value.start <=
+      Math.ceil(700 / scroll.rowHeight.value) + 12
+  )
+  assert.equal(scroll.paddingTop.value, scroll.visibleRange.value.start * scroll.rowHeight.value)
+  scroll.scrollToTrack(300_100)
+  assert.equal(scroll.visibleRange.value.end, 300_000)
+  scope.stop()
+})
+
+test('a saved deep position waits for database count and real scroll extent before restoration', async () => {
+  const scope = effectScope()
+  const key = ref('test:sqlite:deep')
+  const ready = ref(true)
+  const scroll = scope.run(() =>
+    useSongListVirtualScroll({
+      displayTracks: computed(() => []),
+      itemCount: computed(() => (ready.value ? 300_000 : 0)),
+      restoreReady: computed(() => ready.value),
+      resetSources: [],
+      shouldResetOnSearch: computed(() => false),
+      debouncedSearchQuery: ref(''),
+      viewKey: computed(() => key.value)
+    })
+  )!
+  let top = 0
+  const container = {
+    clientHeight: 700,
+    get scrollTop() {
+      return top
+    },
+    set scrollTop(value) {
+      top = ready.value ? value : 0
+    }
+  } as HTMLElement
+  scroll.containerRef.value = container
+  scroll.restoreScrollAndMeasure()
+  await nextTick()
+  container.scrollTop = 15_000_000
+  scroll.onScroll({ target: container } as unknown as Event)
+  key.value = 'test:sqlite:other'
+  await nextTick()
+  ready.value = false
+  container.scrollTop = 0
+  key.value = 'test:sqlite:deep'
+  await nextTick()
+  scroll.restoreScrollAndMeasure()
+  scroll.onScroll({ target: container } as unknown as Event)
+  await nextTick()
+  assert.equal(container.scrollTop, 0)
+  assert.equal(scroll.scrollTop.value, 15_000_000, 'unready DOM must not overwrite saved position')
+  ready.value = true
+  await nextTick()
+  await nextTick()
+  assert.equal(container.scrollTop, 15_000_000)
+  assert.equal(scroll.scrollTop.value, 15_000_000)
+  scope.stop()
+})
+
+test('a confirmed new total does not restore against the previous shorter table during out-in', async () => {
+  const scope = effectScope()
+  const key = ref('test:sqlite:transition:library')
+  const transitionReady = ref(true)
+  const count = ref(300_000)
+  const scroll = scope.run(() =>
+    useSongListVirtualScroll({
+      displayTracks: computed(() => []),
+      itemCount: computed(() => count.value),
+      restoreReady: computed(() => transitionReady.value),
+      viewKey: computed(() => key.value),
+      viewIdentity: computed(() => key.value),
+      resetSources: [],
+      shouldResetOnSearch: computed(() => false),
+      debouncedSearchQuery: ref('')
+    })
+  )!
+  let top = 0,
+    domMax = 20_400_000
+  const container = {
+    clientHeight: 700,
+    get scrollTop() {
+      return top
+    },
+    set scrollTop(value) {
+      top = Math.min(domMax, value)
+    }
+  } as HTMLElement
+  scroll.containerRef.value = container
+  scroll.restoreScrollAndMeasure()
+  await nextTick()
+  container.scrollTop = 15_000_000
+  scroll.onScroll({ target: container } as unknown as Event)
+  transitionReady.value = false
+  key.value = 'test:sqlite:transition:detail'
+  count.value = 121
+  await nextTick()
+  domMax = 8_000
+  transitionReady.value = true
+  await nextTick()
+  await nextTick()
+  transitionReady.value = false
+  key.value = 'test:sqlite:transition:library'
+  count.value = 300_000 // RPC finished, but the old detail DOM is still leaving.
+  await nextTick()
+  scroll.restoreScrollAndMeasure()
+  await nextTick()
+  assert.equal(scroll.scrollTop.value, 15_000_000)
+  assert.equal(container.scrollTop, 0, 'must not restore into the old 121-row DOM')
+  domMax = 20_400_000
+  transitionReady.value = true
+  await nextTick()
+  await nextTick()
+  assert.equal(container.scrollTop, 15_000_000)
+  scope.stop()
+})

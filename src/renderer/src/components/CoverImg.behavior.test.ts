@@ -34,6 +34,7 @@ export async function resolveCover(cover,source){
  state.calls++
  if(state.mode==='reject')throw Error('Grant failed')
  if(state.mode==='pending')return new Promise(resolve=>state.pending.push(resolve))
+ if(state.mode==='same')return 'data:image/png;base64,AAAA'
  if(state.mode==='good'||state.mode==='recover'&&state.calls===2)return good
  return 'data:image/png;base64,AAAA#'+state.calls
 }
@@ -92,6 +93,7 @@ export const validCover=good`
 const runtime = `import {createApp,h,reactive,ref,nextTick} from 'vue'
 import CoverImg from './ArtworkFrame.vue'
 import {state,validCover} from './loader'
+const diagnostics=[];window.api={diagnostics:{record:events=>diagnostics.push(...events)}}
 const props=reactive({cover:null,coverSource:null,identity:'empty',loading:'lazy'}),errors=[],custom=ref(false)
 createApp({render:()=>h(CoverImg,{...props,onError:event=>errors.push(event)},custom.value?{placeholder:()=>h('span',{'data-custom-placeholder':''},'Custom')}:undefined)}).mount('#app')
 const expect=(ok,message)=>{if(!ok)throw Error(message)}
@@ -99,24 +101,31 @@ const settle=async()=>{await nextTick();await new Promise(resolve=>setTimeout(re
 const loaded=async()=>{for(let i=0;i<30;i++){await settle();const img=document.querySelector('img');if(img?.complete&&img.naturalWidth)return img}throw Error('artwork did not load')}
 window.runArtworkTests=async()=>{
  const empty=await loaded(),fallback=empty.src
- expect(empty.naturalWidth>=512&&empty.loading==='lazy'&&empty.decoding==='async','bundled fallback is absent or loses image hints')
+ expect(empty.naturalWidth===1254&&empty.loading==='lazy'&&empty.decoding==='async','bundled fallback is absent or loses image hints')
+ expect(empty.classList.contains('default-track-cover'),'default art is not theme-aware')
  const lightContent=getComputedStyle(empty).content
  document.documentElement.dataset.theme='dark';await settle()
- expect(getComputedStyle(empty).content!==lightContent&&getComputedStyle(empty).content.startsWith('url('),'fallback does not follow the dark window tone')
+ expect(getComputedStyle(empty).content!==lightContent,'dark theme keeps the light fallback')
  document.documentElement.dataset.theme='pureWhite';await settle()
- expect(getComputedStyle(empty).content===lightContent,'fallback does not restore its light window tone')
+ expect(getComputedStyle(empty).content===lightContent,'light theme keeps the dark fallback')
  const size=empty.getBoundingClientRect().toJSON()
  expect(size.width===160&&size.height===160,'fallback does not inherit its parent scoped thumbnail size and gets cropped')
  state.mode='broken';state.calls=0;props.coverSource='https://example.invalid/cover';props.identity='broken'
  const broken=await loaded();await settle()
  expect(broken.src===fallback&&state.calls===2&&state.invalidations===1&&errors.length===1,'broken grant loops or does not fall back')
+ expect(diagnostics.some(e=>e.event==='image.failed')&&diagnostics.some(e=>e.event==='retry.resolved')&&diagnostics.some(e=>e.event==='fallback.shown'),'cover failure chain is absent from diagnostics')
+ expect(!JSON.stringify(diagnostics).includes('base64,AAAA'),'diagnostics include embedded image payload')
  await settle();expect(state.calls===2,'fallback continues to request remote art')
  state.mode='reject';props.identity='rejected';await settle()
  expect((await loaded()).src===fallback,'rejected grant leaves a broken image')
  state.mode='recover';state.calls=0;props.identity='recover';await settle()
  const recovered=await loaded();expect(recovered.src!==fallback&&state.calls===2,'one expired handle cannot recover')
- expect(!recovered.classList.contains('default-track-cover')&&getComputedStyle(recovered).content==='normal','a real cover is replaced by the theme fallback')
+ expect(!recovered.classList.contains('default-track-cover')&&getComputedStyle(recovered).content==='normal','theme fallback masks real artwork')
+ expect(diagnostics.some(e=>e.event==='image.recovered'),'successful recovery is absent from diagnostics')
  expect(recovered.getBoundingClientRect().width===size.width&&recovered.getBoundingClientRect().height===size.height,'fallback changes thumbnail geometry')
+ state.mode='same';state.calls=0;props.identity='same-handle';await loaded();await settle()
+ expect(diagnostics.some(e=>e.event==='retry.resolved'&&e.details.sameHandle===true),'same-handle retry failure cannot be identified')
+ expect(state.calls===2,'same-handle diagnostics changed retry behavior')
  state.mode='pending';props.identity='older';await settle()
  expect(state.pending.length===1,'deferred cover was not requested')
  state.mode='good';props.identity='newer';await settle();expect((await loaded()).src===validCover,'new track did not acquire its cover')
@@ -125,4 +134,6 @@ window.runArtworkTests=async()=>{
  props.cover=null;props.coverSource=null;props.identity='custom';custom.value=true;await settle()
  expect(document.querySelector('[data-custom-placeholder]'),'explicit placeholder contract was lost')
  custom.value=false;props.fallback='';await settle();expect(!document.querySelector('img'),'explicit empty fallback was lost')
+ props.fallback=validCover;await settle();document.documentElement.dataset.theme='dark';await settle()
+ expect((await loaded()).src===validCover&&!document.querySelector('img').classList.contains('default-track-cover'),'theme replaces an explicit fallback')
 }`

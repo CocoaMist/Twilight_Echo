@@ -176,6 +176,9 @@ importers:
       object-inspect:
         specifier: 1.13.4
         version: 1.13.4
+      opencc-js:
+        specifier: 1.4.2
+        version: 1.4.2
       pend:
         specifier: 1.2.0
         version: 1.2.0
@@ -200,6 +203,9 @@ importers:
       side-channel-weakmap:
         specifier: 1.0.2
         version: 1.0.2
+      stream-json:
+        specifier: 3.7.0
+        version: 3.7.0
       string_decoder:
         specifier: 1.3.0
         version: 1.3.0
@@ -2595,6 +2601,9 @@ packages:
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
+  opencc-js@1.4.2:
+    resolution: {integrity: sha512-EdcspgdROiCCZDM+jZR6Pa670xW+EW2QhctPBQ8gRjg6lrx4IHEl+2s+kt5izk/TkxVRgdWuFgaGkaEdIUfdaw==}
+
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
@@ -3007,6 +3016,12 @@ packages:
   statuses@2.0.2:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
+
+  stream-chain@4.2.6:
+    resolution: {integrity: sha512-1zeJ8CrtJfmiba26ui8jXkq/xLRFvhzkdH02D5QLO9Cnovgeb28IJxg88DdraWnjnkbOol/++uIAybJbJhk7ig==}
+
+  stream-json@3.7.0:
+    resolution: {integrity: sha512-rCSBdcBP/bPk6T8QFcxAj1MSzAuc5i49cYW6IE7sYObNEPccBJIUiL6fU9c9BWt40aJK0siVynLX7lWaW8alXw==}
 
   stream-shift@1.0.3:
     resolution: {integrity: sha512-76ORR0DO1o1hlKwTbi/DM3EXWGf3ZJYO8cXX5RJwnul2DEg2oyoZyjLNoQM8WsvZiFKCRfC1O0J7iCvie3RZmQ==}
@@ -5829,6 +5844,8 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
+  opencc-js@1.4.2: {}
+
   optionator@0.9.4:
     dependencies:
       deep-is: 0.1.4
@@ -6319,6 +6336,12 @@ snapshots:
   stat-mode@1.0.0: {}
 
   statuses@2.0.2: {}
+
+  stream-chain@4.2.6: {}
+
+  stream-json@3.7.0:
+    dependencies:
+      stream-chain: 4.2.6
 
   stream-shift@1.0.3: {}
 

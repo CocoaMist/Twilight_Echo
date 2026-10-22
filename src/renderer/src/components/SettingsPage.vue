@@ -1,12 +1,15 @@
-﻿<script setup lang="ts">
-import './settings-page/SettingsPage.css'
+<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { documentMotionMode, scrollMotionBehavior } from '../app/scrollMotion'
 import GeneralSettingsSection from './settings-page/GeneralSettingsSection.vue'
 import SettingsQuickSetup from './settings-page/SettingsQuickSetup.vue'
+import SettingsWorkspaceNavigation from './settings-page/SettingsWorkspaceNavigation.vue'
+import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
+import { openAppearanceEditor } from '../composables/appearanceEditorState.ts'
 import PlaybackSettingsSection from './settings-page/PlaybackSettingsSection.vue'
 import DspSettingsSection from './settings-page/DspSettingsSection.vue'
 import LibrarySettingsSection from './settings-page/LibrarySettingsSection.vue'
+import { libraryScanStatusText } from '../utils/libraryScanPresentation.ts'
 import ConnectionsSettingsSection from './settings-page/ConnectionsSettingsSection.vue'
 import SystemSettingsSection from './settings-page/SystemSettingsSection.vue'
 import LyricsStyleSettings from './settings-page/LyricsStyleSettings.vue'
@@ -14,7 +17,6 @@ import CacheSettingsSection from './settings-page/CacheSettingsSection.vue'
 import DesktopLyricsSettingsSection from './settings-page/DesktopLyricsSettingsSection.vue'
 import AboutSettingsSection from './settings-page/AboutSettingsSection.vue'
 import ShortcutsSettingsSection from './settings-page/ShortcutsSettingsSection.vue'
-import SettingsWorkspaceNavigation from './settings-page/SettingsWorkspaceNavigation.vue'
 import { provideSettingsDisclosures } from './settings-page/settingsDisclosureRegistry.ts'
 import {
   type SectionKey,
@@ -28,14 +30,12 @@ import {
   type BooleanSettingKey,
   type SettingsSearchEntry,
   startupHomePageOptions,
+  trackActivationModeOptions,
   streamingAudioCachePolicyOptions,
   SETTINGS_SEARCH_INDEX,
-  type PluginSettingsFieldType,
-  type PluginSettingsOption,
-  type PluginSettingsField,
-  type PluginSettingsForm,
   RESET_DESKTOP_LYRICS
 } from './settings-page/types.ts'
+import { usePluginSettingsPanels } from './settings-page/usePluginSettingsPanels.ts'
 import { useAudioOutputDspStore } from '../stores/useAudioOutputDspStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
@@ -43,7 +43,7 @@ import { useLocale } from '../app/useLocale.ts'
 import { useThemeStore } from '../stores/useThemeStore'
 import { useMusicStore } from '../stores/useMusicStore'
 import { isTrackUnderLibraryRoot, normalizeLibraryPath } from '../stores/library/musicStoreData.ts'
-import { useExtensionRegistry, type UiContribution } from '../extensions/registry'
+import { useExtensionRegistry } from '../extensions/registry'
 import type {
   AppSettings,
   DesktopLyricsSettings,
@@ -51,6 +51,7 @@ import type {
   PlayerShortcutStatus,
   GlobalShortcutSettings,
   StartupHomePage,
+  TrackActivationMode,
   StreamingAudioCachePolicy
 } from '../types/settings'
 import type { LibraryWatcherStatusSnapshot } from '../../../shared/localLibraryScan.ts'
@@ -63,7 +64,6 @@ import { DEFAULT_PLAYER_BAR_SETTINGS, clonePlayerBarSettings } from '../../../sh
 import { getBuiltInThemePreset, TWILIGHT_DEFAULT_THEME_ID } from '../../../shared/themeCatalog.ts'
 
 const props = defineProps<{
-  active?: boolean
   initialSection?: SettingsSectionInput
   navigationTarget?: SettingsNavigationTarget
 }>()
@@ -74,16 +74,25 @@ const emit = defineEmits<{
   openDspRack: []
   openThemeStudio: []
   openThemeWorkshop: []
-  reopenOnboarding: []
   openAppearance: [entry?: SettingsSearchEntry]
+  reopenOnboarding: []
 }>()
 
-const runningPluginSettingsCommand = ref('')
-const pluginSettingsResult = ref<Record<string, string>>({})
-const pluginSettingsError = ref<Record<string, string>>({})
-
-const pluginSettingsForms = ref<Record<string, PluginSettingsForm | null>>({})
-const pluginSettingsValues = ref<Record<string, Record<string, string>>>({})
+const {
+  runningPluginSettingsCommand,
+  pluginSettingsResult,
+  pluginSettingsError,
+  pluginSettingsForms,
+  pluginSettingsValues,
+  pluginPanelStateKey,
+  runPluginSettingsPanel,
+  setPluginSettingsField,
+  submitPluginSettingsForm,
+  resetPluginSettingsForm,
+  runPluginSettingsAction,
+  autoLoadPluginSettingsPanels,
+  disposePluginSettingsPanels
+} = usePluginSettingsPanels()
 const settingsNotice = ref('')
 const settingsError = ref('')
 const storageError = ref('')
@@ -102,8 +111,6 @@ let categoryMotionMedia: MediaQueryList | undefined
 let categoryMotionMode = documentMotionMode()
 
 function selectSettingsCategory(section: SectionKey, keyboardNavigation = false): void {
-  if (section !== activeSection.value && pageRef.value)
-    categoryScroll.set(activeSection.value, pageRef.value.scrollTop)
   keyboardCategoryChange = keyboardNavigation
   activeSection.value = section
 }
@@ -124,14 +131,15 @@ watch(
   activeSection,
   (section) => {
     const page = pageRef.value
+    const header = page?.querySelector<HTMLElement>('.settings-market-title-row')
     const panel = page?.querySelector<HTMLElement>(`#${section}`)
     const mode = documentMotionMode()
     // Continue from the visible fade when another category is chosen mid-transition.
-    const opacity = categoryAnimations.length && panel ? getComputedStyle(panel).opacity : '0'
+    const opacity = categoryAnimations.length && header ? getComputedStyle(header).opacity : '0'
     cancelCategoryMotion()
     const keyboard = keyboardCategoryChange
     keyboardCategoryChange = false
-    if (!panel || mode === 'off' || keyboard) return
+    if (!header || !panel || mode === 'off' || keyboard) return
     categoryMotionMode = mode
     const tokens = getComputedStyle(document.documentElement)
     const duration =
@@ -141,16 +149,14 @@ watch(
     const easing =
       tokens.getPropertyValue('--te-ease-out-strong').trim() || 'cubic-bezier(0.23, 1, 0.32, 1)'
     // Opacity keeps search positioning, sticky controls and draft inputs stable.
-    const animation = panel.animate([{ opacity }, { opacity: '1' }], { duration, easing })
-    categoryAnimations.push(animation)
-    const release = (): void => {
-      categoryAnimations = categoryAnimations.filter((running) => running !== animation)
+    for (const element of [header, panel]) {
+      const animation = element.animate([{ opacity }, { opacity: '1' }], { duration, easing })
+      categoryAnimations.push(animation)
+      const release = (): void => {
+        categoryAnimations = categoryAnimations.filter((running) => running !== animation)
+      }
+      void animation.finished.then(release, release)
     }
-    // Remove the finished effect so Chromium releases its temporary opacity layer.
-    void animation.finished.then(() => {
-      animation.cancel()
-      release()
-    }, release)
   },
   { flush: 'post' }
 )
@@ -241,20 +247,9 @@ async function addLibraryFolderAndRestore(): Promise<void> {
     libraryScanCommandError.value = scanCommandErrorMessage(error)
   }
 }
-const libraryScanProgressText = computed(() => {
-  const status = libraryScanStatus.value
-  if (status.state === 'failed') return status.error || '后台扫描失败'
-  if (status.state === 'paused') return `已暂停：${status.current} / ${status.total || '?'} 项`
-  if (status.state === 'running') {
-    const phase = libraryScanProgress.value?.phase === 'parsing' ? '解析元数据' : '检查文件'
-    return `${phase}：${status.current} / ${status.total || '?'} 项`
-  }
-  if (status.state === 'completed') {
-    return `已完成：解析 ${status.parsedFileCount} 个文件，跳过 ${status.skippedUnchanged} 个未变化文件`
-  }
-  if (status.state === 'cancelled') return '扫描已取消，未提交未完成的结果'
-  return '启动时仅核对 path、size 与 mtime；完整元数据重扫只由此处触发。'
-})
+const libraryScanProgressText = computed(() =>
+  libraryScanStatusText(libraryScanStatus.value, libraryScanProgress.value)
+)
 const libraryMetadataEnrichmentText = computed(() => {
   const status = libraryMetadataEnrichmentStatus.value
   if (status.state === 'enriching') {
@@ -429,6 +424,16 @@ const activeCachePath = computed(
 const pluginSettingsPanels = computed(() =>
   uiContributions.value.filter((contribution) => contribution.kind === 'settingsPanel')
 )
+// `autoLoad` panels (e.g. the dynamic island DIY form) load once per page visit
+// so their controls are ready when the user scrolls to the plugin section.
+watch(
+  [activeSection, pluginSettingsPanels],
+  () => {
+    if (activeSection.value !== 'system') return
+    void autoLoadPluginSettingsPanels(pluginSettingsPanels.value)
+  },
+  { immediate: true }
+)
 async function setGenreSeparators(event: Event): Promise<void> {
   const value = (event.target as HTMLInputElement).value
   await updateSettings({ genreSeparators: value })
@@ -464,6 +469,11 @@ async function onUpdateShortcutBindings(patch: Partial<GlobalShortcutSettings>):
   await updateSettings({
     globalShortcutBindings: { ...settings.value.globalShortcutBindings, ...patch }
   })
+  await refreshShortcutStatuses()
+}
+
+async function onUpdateShortcutEnabled(patch: AppSettings['shortcutEnabled']): Promise<void> {
+  await updateSettings({ shortcutEnabled: { ...settings.value.shortcutEnabled, ...patch } })
   await refreshShortcutStatuses()
 }
 
@@ -609,6 +619,11 @@ function setStartupHomePage(startupHomePage: StartupHomePage): void {
   void updateSettings({ startupHomePage })
 }
 
+function setTrackActivationMode(trackActivationMode: TrackActivationMode): void {
+  if (settings.value.trackActivationMode === trackActivationMode) return
+  void updateSettings({ trackActivationMode })
+}
+
 function setCloseBehavior(event: Event): void {
   const closeWindowBehavior = (event.target as HTMLSelectElement).value as
     | 'quit'
@@ -618,177 +633,6 @@ function setCloseBehavior(event: Event): void {
     closeWindowBehavior,
     closeToTray: closeWindowBehavior === 'tray'
   })
-}
-
-function pluginPanelStateKey(panel: UiContribution): string {
-  return `${panel.pluginId}:${panel.id}`
-}
-
-function normalizePluginSettingsForm(value: unknown): PluginSettingsForm | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const record = value as Record<string, unknown>
-  if (record.kind !== 'settings-form') return null
-  const submitCommand = typeof record.submitCommand === 'string' ? record.submitCommand.trim() : ''
-  if (!submitCommand || submitCommand.length > 160 || !Array.isArray(record.fields)) return null
-  const fields = record.fields.slice(0, 20).flatMap((raw): PluginSettingsField[] => {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return []
-    const field = raw as Record<string, unknown>
-    const key = typeof field.key === 'string' ? field.key.trim() : ''
-    const label = typeof field.label === 'string' ? field.label.trim() : ''
-    const type = field.type
-    if (
-      !/^[A-Za-z0-9_.:-]{1,80}$/.test(key) ||
-      !label ||
-      label.length > 100 ||
-      !['text', 'password', 'url', 'select'].includes(String(type))
-    ) {
-      return []
-    }
-    const options = Array.isArray(field.options)
-      ? field.options.slice(0, 30).flatMap((rawOption): PluginSettingsOption[] => {
-          if (!rawOption || typeof rawOption !== 'object' || Array.isArray(rawOption)) return []
-          const option = rawOption as Record<string, unknown>
-          const optionLabel = typeof option.label === 'string' ? option.label.trim() : ''
-          const optionValue = typeof option.value === 'string' ? option.value : ''
-          if (!optionLabel || optionLabel.length > 100 || optionValue.length > 200) return []
-          return [{ label: optionLabel, value: optionValue }]
-        })
-      : []
-    if (type === 'select' && options.length === 0) return []
-    return [
-      {
-        key,
-        label,
-        type: type as PluginSettingsFieldType,
-        required: field.required === true,
-        placeholder: typeof field.placeholder === 'string' ? field.placeholder.slice(0, 200) : '',
-        value:
-          type === 'password'
-            ? ''
-            : typeof field.value === 'string'
-              ? field.value.slice(0, 4096)
-              : '',
-        options
-      }
-    ]
-  })
-  if (fields.length === 0) return null
-  return {
-    submitCommand,
-    fields,
-    notice: typeof record.notice === 'string' ? record.notice.slice(0, 500) : ''
-  }
-}
-
-function setPluginSettingsField(panel: UiContribution, key: string, value: string): void {
-  const stateKey = pluginPanelStateKey(panel)
-  pluginSettingsValues.value = {
-    ...pluginSettingsValues.value,
-    [stateKey]: {
-      ...(pluginSettingsValues.value[stateKey] ?? {}),
-      [key]: value.slice(0, 4096)
-    }
-  }
-}
-
-async function runPluginSettingsPanel(panel: UiContribution): Promise<void> {
-  const stateKey = pluginPanelStateKey(panel)
-  if (!panel.command || runningPluginSettingsCommand.value) return
-  runningPluginSettingsCommand.value = stateKey
-  pluginSettingsError.value = { ...pluginSettingsError.value, [stateKey]: '' }
-  pluginSettingsResult.value = { ...pluginSettingsResult.value, [stateKey]: '' }
-  try {
-    const result = await window.api.extensions.executeCommand(panel.command, [
-      {
-        source: 'settingsPanel',
-        panelId: panel.id
-      }
-    ])
-    const form = normalizePluginSettingsForm(result)
-    if (form) {
-      pluginSettingsForms.value = { ...pluginSettingsForms.value, [stateKey]: form }
-      pluginSettingsValues.value = {
-        ...pluginSettingsValues.value,
-        [stateKey]: Object.fromEntries(form.fields.map((field) => [field.key, field.value]))
-      }
-      pluginSettingsResult.value = { ...pluginSettingsResult.value, [stateKey]: '' }
-      return
-    }
-    pluginSettingsForms.value = { ...pluginSettingsForms.value, [stateKey]: null }
-    pluginSettingsResult.value = {
-      ...pluginSettingsResult.value,
-      [stateKey]:
-        result == null ? '已执行' : typeof result === 'string' ? result : JSON.stringify(result)
-    }
-  } catch (err) {
-    pluginSettingsError.value = {
-      ...pluginSettingsError.value,
-      [stateKey]: err instanceof Error ? err.message : String(err)
-    }
-  } finally {
-    runningPluginSettingsCommand.value = ''
-  }
-}
-
-async function submitPluginSettingsForm(panel: UiContribution): Promise<void> {
-  const stateKey = pluginPanelStateKey(panel)
-  const form = pluginSettingsForms.value[stateKey]
-  if (!form || runningPluginSettingsCommand.value) return
-  const values = pluginSettingsValues.value[stateKey] ?? {}
-  const missingField = form.fields.find((field) => field.required && !values[field.key]?.trim())
-  if (missingField) {
-    pluginSettingsError.value = {
-      ...pluginSettingsError.value,
-      [stateKey]: `请填写${missingField.label}`
-    }
-    return
-  }
-  runningPluginSettingsCommand.value = stateKey
-  pluginSettingsError.value = { ...pluginSettingsError.value, [stateKey]: '' }
-  pluginSettingsResult.value = { ...pluginSettingsResult.value, [stateKey]: '' }
-  try {
-    const plainValues = JSON.parse(JSON.stringify(values)) as Record<string, string>
-    const result = await window.api.extensions.executeCommand(form.submitCommand, [plainValues])
-    const record = result && typeof result === 'object' ? (result as Record<string, unknown>) : null
-    const refreshedForm = normalizePluginSettingsForm(record?.form)
-    if (refreshedForm) {
-      pluginSettingsForms.value = { ...pluginSettingsForms.value, [stateKey]: refreshedForm }
-      pluginSettingsValues.value = {
-        ...pluginSettingsValues.value,
-        [stateKey]: Object.fromEntries(
-          refreshedForm.fields.map((field) => [field.key, field.value])
-        )
-      }
-    } else {
-      pluginSettingsValues.value = {
-        ...pluginSettingsValues.value,
-        [stateKey]: Object.fromEntries(
-          form.fields.map((field) => [
-            field.key,
-            field.type === 'password' ? '' : (values[field.key] ?? '')
-          ])
-        )
-      }
-    }
-    pluginSettingsResult.value = {
-      ...pluginSettingsResult.value,
-      [stateKey]:
-        typeof record?.message === 'string'
-          ? record.message.slice(0, 500)
-          : result == null
-            ? '设置已保存'
-            : typeof result === 'string'
-              ? result
-              : '设置已保存'
-    }
-  } catch (err) {
-    pluginSettingsError.value = {
-      ...pluginSettingsError.value,
-      [stateKey]: err instanceof Error ? err.message : String(err)
-    }
-  } finally {
-    runningPluginSettingsCommand.value = ''
-  }
 }
 
 function downloadTextFile(fileName: string, content: string): void {
@@ -912,7 +756,7 @@ function scrollPageToElement(
   const pageRect = page.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
   const targetTop = targetRect.top - pageRect.top + page.scrollTop
-  const navigation = page.querySelector<HTMLElement>('.settings-preview-nav')
+  const navigation = page.querySelector<HTMLElement>('.settings-market-navigation')
   const scrollOffset =
     SETTINGS_SECTION_SCROLL_OFFSET +
     (navigation && navigation.getBoundingClientRect().right > targetRect.left
@@ -937,20 +781,14 @@ function scrollPageToElement(
   })
 }
 
-const categoryScroll = new Map<SectionKey, number>()
 function scrollToSection(section: SectionKey, keyboardNavigation = false): void {
-  if (section === 'appearance') {
-    emit('openAppearance')
-    return
-  }
-  if (pageRef.value) categoryScroll.set(activeSection.value, pageRef.value.scrollTop)
   const revision = ++settingsNavigationRevision
   settingsNotice.value = ''
   highlightSettingItem(null)
   selectSettingsCategory(section, keyboardNavigation)
   void nextTick(() => {
     if (revision === settingsNavigationRevision)
-      pageRef.value?.scrollTo({ top: categoryScroll.get(section) ?? 0, behavior: 'instant' })
+      pageRef.value?.scrollTo({ top: 0, behavior: 'instant' })
   })
   revealActiveNavigationItem()
 }
@@ -973,7 +811,6 @@ function revealActiveNavigationItem(): void {
 watch(activeSection, revealActiveNavigationItem)
 
 async function applyNavigationTarget(): Promise<void> {
-  if (props.active === false) return
   if (!pageRef.value) return
   const revision = ++settingsNavigationRevision
   settingsNotice.value = ''
@@ -1004,13 +841,9 @@ async function applyNavigationTarget(): Promise<void> {
   else scrollToSection(normalizeSettingsSection(props.initialSection))
 }
 
-watch(
-  [() => props.initialSection, () => props.navigationTarget, () => props.active],
-  applyNavigationTarget,
-  {
-    flush: 'post'
-  }
-)
+watch([() => props.initialSection, () => props.navigationTarget], applyNavigationTarget, {
+  flush: 'post'
+})
 
 let settingsNavigationRevision = 0
 async function settleSettingsNavigation(scope: HTMLElement | null): Promise<void> {
@@ -1066,6 +899,10 @@ async function scrollToSearchResult(
   }
   selectSettingsCategory(normalizeSettingsSection(entry.section), keyboardNavigation)
   revealActiveNavigationItem()
+  if (entry.appearanceArea) {
+    openAppearanceEditor(entry.appearanceArea)
+    return
+  }
   await nextTick()
   if (revision !== settingsNavigationRevision || !pageRef.value) return
   await revealSettingsPath(settingsDisclosurePath(entry), revision)
@@ -1200,7 +1037,7 @@ onMounted(async () => {
   await refreshLibraryWatcherStatus()
   if (settingsDisposed) return
   libraryWatcherStatusTimer = window.setInterval(() => {
-    if (props.active === false || document.visibilityState === 'hidden') return
+    if (document.visibilityState === 'hidden') return
     void refreshLibraryWatcherStatus()
   }, 5_000)
   await nextTick()
@@ -1210,6 +1047,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   settingsDisposed = true
   cancelCategoryMotion()
+  disposePluginSettingsPanels()
   categoryMotionObserver?.disconnect()
   categoryMotionMedia?.removeEventListener('change', settleCategoryMotion)
   ++settingsNavigationRevision
@@ -1267,16 +1105,24 @@ onBeforeUnmount(() => {
 
         <GeneralSettingsSection
           v-show="activeSection === 'general'"
+          :track-activation-mode-options="trackActivationModeOptions"
           :startup-home-page-options="startupHomePageOptions"
           :toggle-setting="toggleSetting"
+          :set-track-activation-mode="setTrackActivationMode"
           :set-startup-home-page="setStartupHomePage"
           :set-close-behavior="setCloseBehavior"
           @reopen-onboarding="emit('reopenOnboarding')"
         />
+        <AppearanceSettingsSection
+          v-if="activeSection === 'appearance'"
+          @open-theme-studio="emit('openThemeStudio')"
+          @open-theme-workshop="emit('openThemeWorkshop')"
+          @open-appearance="emit('openAppearance')"
+        />
         <section
           v-show="['playback', 'audio'].includes(activeSection)"
           :id="activeSection === 'audio' ? 'audio' : 'playback'"
-          class="settings-section preview-section"
+          class="glass-card preview-section"
         >
           <div class="section-title-row">
             <i
@@ -1295,11 +1141,7 @@ onBeforeUnmount(() => {
             @open-dsp-rack="emit('openDspRack')"
           />
         </section>
-        <section
-          v-show="activeSection === 'lyrics'"
-          id="lyrics"
-          class="settings-section preview-section"
-        >
+        <section v-show="activeSection === 'lyrics'" id="lyrics" class="glass-card preview-section">
           <div class="section-title-row">
             <i class="pi pi-align-left" aria-hidden="true" />
             <h2>歌词</h2>
@@ -1403,8 +1245,10 @@ onBeforeUnmount(() => {
             :global-shortcuts="settings.globalShortcuts"
             :shortcut-statuses="shortcutStatuses"
             :shortcut-bindings="settings.globalShortcutBindings"
+            :shortcut-enabled="settings.shortcutEnabled"
             @update:global-shortcuts="toggleGlobalShortcuts"
             @update:shortcut-bindings="onUpdateShortcutBindings"
+            @update:shortcut-enabled="onUpdateShortcutEnabled"
           />
         </ConnectionsSettingsSection>
         <SystemSettingsSection
@@ -1423,6 +1267,8 @@ onBeforeUnmount(() => {
           :run-plugin-settings-panel="runPluginSettingsPanel"
           :set-plugin-settings-field="setPluginSettingsField"
           :submit-plugin-settings-form="submitPluginSettingsForm"
+          :reset-plugin-settings-form="resetPluginSettingsForm"
+          :run-plugin-settings-action="runPluginSettingsAction"
         />
         <AboutSettingsSection
           v-show="activeSection === 'about'"
@@ -1434,57 +1280,7 @@ onBeforeUnmount(() => {
   </main>
 </template>
 
-<style>
-.plugin-settings-form {
-  display: grid;
-  gap: 12px;
-  margin: 0 0 14px;
-  padding: 16px;
-  border: 1px solid var(--te-settings-border);
-  border-radius: 12px;
-  background: var(--te-settings-card-bg);
-}
-
-.plugin-settings-notice {
-  margin: 0;
-  color: var(--te-settings-muted);
-  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
-  line-height: 1.6;
-}
-
-.plugin-settings-field {
-  display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(220px, 1fr);
-  align-items: center;
-  gap: 16px;
-}
-
-.plugin-settings-field > span {
-  color: var(--te-settings-text);
-  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
-  font-weight: 600;
-}
-
-.plugin-settings-field b {
-  color: var(--te-danger, #ef4444);
-}
-
-.plugin-settings-field .preview-select {
-  width: 100%;
-  max-width: none;
-}
-
-.plugin-settings-submit {
-  justify-self: end;
-}
-
-@media (max-width: 760px) {
-  .plugin-settings-field {
-    grid-template-columns: 1fr;
-    gap: 7px;
-  }
-}
-</style>
+<style src="./settings-page/SettingsPage.css"></style>
 
 <style>
 html[data-theme='dark'] .settings-preview-page {
@@ -1528,6 +1324,7 @@ html[data-theme='dark'] .settings-preview-page .select-control,
 html[data-theme='dark'] .settings-preview-page .number-input,
 html[data-theme='dark'] .settings-preview-page .path-control input,
 html[data-theme='dark'] .settings-preview-page .plugin-empty,
+html[data-theme='dark'] .settings-preview-page .range-pill,
 html[data-theme='dark'] .settings-preview-page .update-card,
 html[data-theme='dark'] .settings-preview-page .about-links button,
 html[data-theme='dark'] .settings-preview-page .output-diagnostic-panel,
@@ -1545,8 +1342,8 @@ html[data-theme='dark'] .settings-preview-page .settings-nav-search,
 html[data-theme='dark'] .settings-preview-page .read-only-pill {
   border-color: var(--te-card-border);
   background: var(--te-settings-control-bg);
-  color: var(--te-control-fg);
-  box-shadow: var(--te-settings-shadow-soft);
+  color: rgba(226, 232, 240, 0.9);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
 }
 
 html[data-theme='dark'] .settings-preview-page .folder-chip,
@@ -1591,8 +1388,8 @@ html[data-theme='dark'] .settings-preview-page .about-section hr {
 
 html[data-theme='dark'] .settings-preview-page .segmented-control,
 html[data-theme='dark'] .settings-preview-page .theme-segment {
-  border-color: var(--te-control-border);
-  background: var(--te-control-bg-hover);
+  border-color: var(--te-card-border);
+  background: var(--te-subtle-bg);
   box-shadow: none;
 }
 
@@ -1609,9 +1406,9 @@ html[data-theme='dark'] .settings-preview-page .settings-search-box .settings-se
 html[data-theme='dark'] .settings-preview-page .segmented-control button.active,
 html[data-theme='dark'] .settings-preview-page .theme-segment button.active,
 html[data-theme='dark'] .settings-preview-page .background-kind-toggle button.active {
-  background: var(--te-control-bg);
-  color: var(--te-control-fg);
-  box-shadow: var(--te-settings-shadow-soft);
+  background: var(--te-card-bg);
+  color: var(--te-text);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
 }
 
 html[data-theme='dark'] .settings-preview-page .dsp-signal-chain {
@@ -1619,13 +1416,11 @@ html[data-theme='dark'] .settings-preview-page .dsp-signal-chain {
   background: var(--te-subtle-bg);
 }
 
-html[data-theme='dark'] .settings-preview-page .device-card:hover {
-  background: var(--te-hover-bg);
-}
-
+html[data-theme='dark'] .settings-preview-page .device-card:hover,
 html[data-theme='dark'] .settings-preview-page .device-card.active {
-  border-color: var(--te-primary-500);
+  border-color: rgba(var(--te-primary-rgb), 0.42);
   background: rgba(var(--te-primary-rgb), 0.1);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.32);
 }
 
 html[data-theme='dark'] .settings-preview-page .device-card > i {
@@ -1705,6 +1500,7 @@ html[data-theme='dark'] .settings-preview-page .folder-chip,
 html[data-theme='dark'] .settings-preview-page .folder-empty-hint,
 html[data-theme='dark'] .settings-preview-page .device-card small,
 html[data-theme='dark'] .settings-preview-page .plugin-empty,
+html[data-theme='dark'] .settings-preview-page .range-pill span,
 html[data-theme='dark'] .settings-preview-page .about-copy p,
 html[data-theme='dark'] .settings-preview-page .update-card span,
 html[data-theme='dark'] .settings-preview-page .background-editor-head span,
@@ -1761,7 +1557,7 @@ html[data-theme='dark'] .settings-preview-page .dashed-button,
 html[data-theme='dark'] .settings-preview-page .folder-empty-hint {
   border-color: var(--te-card-border);
   background: var(--te-settings-control-bg);
-  color: var(--te-control-fg);
+  color: var(--te-settings-text);
   box-shadow: none;
 }
 
@@ -1772,8 +1568,8 @@ html[data-theme='dark'] .settings-preview-page .folder-empty-hint {
 
 html[data-theme='dark'] .settings-preview-page .inherit-toggle.active {
   border-color: rgba(var(--te-primary-rgb), 0.34);
-  background: var(--te-control-bg-active);
-  color: var(--te-control-fg);
+  background: rgba(var(--te-primary-rgb), 0.14);
+  color: var(--te-primary-300);
 }
 
 html[data-theme='dark'] .settings-preview-page .dashed-button:hover,
@@ -1781,8 +1577,8 @@ html[data-theme='dark'] .settings-preview-page .brand-soft-button:hover,
 html[data-theme='dark'] .settings-preview-page .preset-btn:hover,
 html[data-theme='dark'] .settings-preview-page .settings-nav-results button.active {
   border-color: rgba(var(--te-primary-rgb), 0.34);
-  background: var(--te-control-bg-hover);
-  color: var(--te-control-fg);
+  background: rgba(var(--te-primary-rgb), 0.14);
+  color: var(--te-primary-300);
 }
 
 html[data-theme='dark'] .settings-preview-page .restart-banner,

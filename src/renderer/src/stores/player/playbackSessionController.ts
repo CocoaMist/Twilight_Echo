@@ -3,6 +3,7 @@ import type { PlaybackSession, Track } from '../../types/music'
 import type { AppSettings, PlaybackResumeMode, PlayMode } from '../../types/settings'
 import type { SleepTimerState } from '../../../../shared/sleepTimer.ts'
 import { playbackSessionWriter } from '../../app/playbackSessionWriter.ts'
+import type { LibraryPlaybackQueueReference } from '../../../../shared/playbackSession.ts'
 import {
   getRestorableSleepTimerState,
   createSleepTimerController
@@ -19,6 +20,16 @@ import {
 } from '../../utils/localTrackRemovalPolicy.ts'
 
 export interface PlaybackSessionControllerOptions {
+  getLibraryQueueReference?: () => LibraryPlaybackQueueReference | null
+  restoreLibraryQueue?: (
+    session: PlaybackSession,
+    isCurrent: () => boolean
+  ) => Promise<{
+    track: Track
+    reference: LibraryPlaybackQueueReference
+    playMode?: PlayMode
+  } | null>
+  detachLibraryQueue?: () => void
   currentTrack: Ref<Track | null>
   queue: Ref<Track[]>
   originalQueue: Ref<Track[]>
@@ -121,7 +132,13 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
     persistSelectedTrackSession()
   }
 
-  function restorePlaybackSession(session: PlaybackSession): void {
+  function restorePlaybackSession(
+    session: PlaybackSession,
+    isCurrent = () => true
+  ): void | Promise<boolean> {
+    if (session.libraryQueue) return restoreLibraryPlaybackSession(session, isCurrent)
+    if (!isCurrent()) return
+    options.detachLibraryQueue?.()
     if (session.playMode) {
       options.setPlayModeInternal(session.playMode, { persist: false })
     }
@@ -173,6 +190,41 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
     }
   }
 
+  async function restoreLibraryPlaybackSession(
+    session: PlaybackSession,
+    isCurrent: () => boolean
+  ): Promise<boolean> {
+    if (!isCurrent()) return false
+    if (!options.restoreLibraryQueue) throw new Error('数据库播放队列恢复尚未接入')
+    const restored = await options.restoreLibraryQueue(session, isCurrent)
+    if (!restored || !isCurrent()) return false
+    if (restored.track.queueEntryId !== restored.reference.entryId)
+      throw new Error('数据库播放队列恢复的 occurrence 不匹配')
+    const mode = restored.playMode ?? session.playMode
+    if (mode) options.setPlayModeInternal(mode, { persist: false })
+    // These arrays retain their legacy full-queue meaning. A database window
+    // belongs to its source, never to queue or originalQueue.
+    options.queue.value = []
+    options.originalQueue.value = []
+    options.queueIndex.value = -1
+    const sameSelection =
+      session.track.id === restored.track.id &&
+      session.libraryQueue?.entryId === restored.reference.entryId
+    prepareQueueSelection(
+      restored.track,
+      sameSelection && session.mode === 'trackAndPosition'
+        ? clampCuePlaybackPosition(restored.track, session.position)
+        : 0
+    )
+    options.clearSleepTimerIntervals()
+    const sleepTimer = getRestorableSleepTimerState(session.sleepTimer)
+    if (sleepTimer) {
+      options.getSleepTimerController().applyAuthoritativeState(sleepTimer)
+      void window.api.sleepTimer?.configure(sleepTimer).catch(() => {})
+    }
+    return true
+  }
+
   function prepareQueueSelection(track: Track | null, position = 0): void {
     options.resetPlaybackRuntimeStateForRestore()
     options.clearCrossfadeTimer()
@@ -195,6 +247,9 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
   function createPlaybackSession(mode: PlaybackResumeMode): PlaybackSession | null {
     const track = options.currentTrack.value
     if (!track || mode === 'off') return null
+    const libraryQueue = options.getLibraryQueueReference?.()
+    if (libraryQueue && libraryQueue.entryId !== track.queueEntryId)
+      throw new Error('数据库播放队列与当前曲目不匹配')
 
     options.flushLatestCurrentTime()
     const rawPosition =
@@ -213,7 +268,9 @@ export function createPlaybackSessionController(options: PlaybackSessionControll
       playMode: options.playMode.value === 'heart' ? 'sequential' : options.playMode.value,
       track: cloneTrackForPlaybackSession(track),
       position,
-      queueIndex: options.queueIndex.value,
+      ...(libraryQueue
+        ? { libraryQueue: { ...libraryQueue } }
+        : { queueIndex: options.queueIndex.value }),
       ...(options.sleepTimerState.value?.active
         ? { sleepTimer: options.sleepTimerState.value }
         : {})

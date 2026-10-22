@@ -230,6 +230,30 @@ test('cancel, remove, reset and unmount invalidate a still-pending image operati
   }
 })
 
+test('removing wallpaper clears image-only treatment while preserving custom solid colors', () => {
+  const f = fixture()
+  f.editor.state.draft = appearance.applyAppearancePreset(f.editor.state.draft, 'transparent')
+  f.editor.setEffect('textTone', 'light')
+  f.editor.setEffect('dim', 45)
+  f.editor.removeImage()
+  const background = f.editor.state.draft.appBackground.global
+  assert.equal(f.editor.state.draft.surfaceMaterial, 'standard')
+  assert.equal(background.image, '')
+  assert.equal(background.imagePalette, undefined)
+  assert.equal(background.customized, false)
+  for (const tone of ['light', 'dark'] as const) {
+    assert.equal(background.effects![tone].textTone, 'theme')
+    assert.equal(background.effects![tone].dim, 0)
+  }
+  background.light = '#123456'
+  f.editor.setBackgroundKind('image')
+  f.editor.setBackgroundKind('color')
+  assert.equal(f.editor.state.draft.appBackground.global.customized, true)
+  assert.equal(f.editor.state.draft.appBackground.global.light, '#123456')
+  assert.equal(f.writes.length, 0)
+  f.unmount()
+})
+
 test('failed imports preserve the previous image; sampling failure accepts a manually adjustable draft', async () => {
   const failure = fixture({
     importImage: async () => {

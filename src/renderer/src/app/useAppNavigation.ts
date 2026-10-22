@@ -22,7 +22,6 @@ import {
 
 export type SettingsSection = SectionKey
 export type AppearanceWorkspaceTab = 'adjust' | 'studio' | 'workshop'
-export type AudioWorkspaceTab = 'equalizer' | 'effects'
 export interface SettingsNavigationTarget {
   revision: number
   entry?: SettingsSearchEntry
@@ -61,19 +60,20 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   const overlay = ref<Overlay | null>(null)
   const overlayHistory = reactive<Array<Overlay | null>>([])
   const history = shallowRef<NavigationPageTarget[]>([])
+  // Pages the user backed out of, newest last. A fresh navigation drops it so
+  // the side-button forward key behaves like a browser's forward history.
+  const forwardHistory = shallowRef<NavigationPageTarget[]>([])
   const lastLocal = shallowRef<Extract<NavigationPageTarget, { kind: 'local' }>>(localHome())
   const loginPageMode = ref<'login' | 'profile'>('login')
   const loginInitialProviderId = ref<string | null>(null)
-  const showAccountPage = ref(false)
-  const accountInitialProviderId = ref<string | null>(null)
   const themeStudioInitialDomain = ref<ThemeStudioDomain>('presets')
   const themeReturn = ref<'playing' | 'settings' | null>(null)
   const settingsInitialSection = ref<SettingsSection>('general')
   const settingsCurrentSection = ref<SettingsSection>('general')
   const themeStudioCurrentDomain = ref<ThemeStudioDomain>('presets')
   const appearanceTab = ref<AppearanceWorkspaceTab>('adjust')
-  const settingsNavigationTarget = shallowRef<SettingsNavigationTarget>({ revision: 0 })
   const appearanceNavigationTarget = shallowRef<SettingsNavigationTarget>({ revision: 0 })
+  const settingsNavigationTarget = shallowRef<SettingsNavigationTarget>({ revision: 0 })
   const songlistTransitionName = ref<'page-down' | 'page-up'>('page-down')
 
   const session = computed<NavigationSession>(() => ({
@@ -93,17 +93,18 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   }))
 
   function restoreSession(saved: NavigationSession, pages: UiContribution[] = []): void {
-    closeAccountPage()
     pageTarget.value = resolveNavigationTarget(saved.pageTarget, pages) ?? localHome()
     history.value = saved.history.flatMap((target) => resolveNavigationTarget(target, pages) ?? [])
     lastLocal.value = saved.lastLocal
-    overlayHistory.splice(0, overlayHistory.length, ...saved.overlayHistory)
-    overlay.value = saved.overlay === 'theme' ? 'appearance' : saved.overlay
-    if (saved.overlay === 'theme') {
-      const previous = overlayHistory.lastIndexOf('appearance')
-      if (previous !== -1) overlayHistory.splice(previous)
-    }
-    appearanceTab.value = saved.overlay === 'theme' ? 'studio' : (saved.appearanceTab ?? 'adjust')
+    const migrateOverlay = (page: Overlay | null): Overlay | null =>
+      page === 'theme' ? 'appearance' : page
+    overlayHistory.splice(0, overlayHistory.length, ...saved.overlayHistory.map(migrateOverlay))
+    overlay.value = migrateOverlay(saved.overlay)
+    appearanceTab.value =
+      saved.overlay === 'theme' || saved.overlayHistory.includes('theme')
+        ? 'studio'
+        : (saved.appearanceTab ?? 'adjust')
+    appearanceNavigationTarget.value = { revision: 0, appearanceTab: appearanceTab.value }
     if (
       saved.pageTarget.kind === 'plugin' &&
       saved.pageTarget.pluginId === 'com.twilightecho.tool.theme-workshop' &&
@@ -111,15 +112,14 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     ) {
       pageTarget.value = history.value.pop() ?? saved.lastLocal
       appearanceTab.value = 'workshop'
+      appearanceNavigationTarget.value = { revision: 0, appearanceTab: 'workshop' }
       if (!overlay.value) {
         overlay.value = 'appearance'
         overlayHistory.splice(0, overlayHistory.length, null)
       } else if (overlay.value !== 'appearance' && !overlayHistory.includes('appearance')) {
-        if (overlayHistory[0] === null) overlayHistory.splice(1, 0, 'appearance')
-        else overlayHistory.unshift(null, 'appearance')
+        overlayHistory.unshift('appearance')
       }
     }
-    appearanceNavigationTarget.value = { revision: 0, appearanceTab: appearanceTab.value }
     menuOpen.value = saved.menuOpen
     settingsInitialSection.value = settingsCurrentSection.value = saved.settingsSection
     themeStudioInitialDomain.value = themeStudioCurrentDomain.value = saved.themeStudioDomain
@@ -135,15 +135,16 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   function rememberThemeStudioDomain(domain: ThemeStudioDomain): void {
     themeStudioCurrentDomain.value = domain
   }
+  function rememberAppearanceTab(tab: AppearanceWorkspaceTab): void {
+    appearanceTab.value = tab
+  }
 
   function openOverlay(key: Overlay): void {
-    closeAccountPage()
     if (overlay.value === key) return
     overlayHistory.push(overlay.value)
     overlay.value = key
   }
   function closeOverlay(key: Overlay): void {
-    closeAccountPage()
     if (overlay.value !== key) return
     overlay.value = overlayHistory.pop() ?? null
   }
@@ -166,16 +167,11 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   const showPluginPage = overlayFlag('plugins')
   const showEqualizerPage = overlayFlag('equalizer')
   const showDspRackPage = overlayFlag('dsp')
-  const showAudioWorkspace = computed(() => showEqualizerPage.value || showDspRackPage.value)
-  const audioWorkspaceTab = computed<AudioWorkspaceTab>(() =>
-    showDspRackPage.value ? 'effects' : 'equalizer'
-  )
   // Preview the retained page without dismissing Settings or changing its return path.
   const pageContentVisible = computed(
     () =>
       !overlay.value ||
       ((overlay.value === 'settings' || overlay.value === 'appearance') &&
-        (overlay.value !== 'appearance' || appearanceTab.value === 'adjust') &&
         !!options.appearancePreviewActive?.())
   )
   const showStreamingPage = computed(
@@ -198,13 +194,8 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     pageTarget.value.kind === 'plugin' && pageContentVisible.value ? pageTarget.value.page : null
   )
   const activePageId = computed(() => navigationTargetId(pageTarget.value))
-  const isHome = computed(
-    () =>
-      !overlay.value &&
-      pageTarget.value.kind === 'local' &&
-      pageTarget.value.category === 'dashboard'
-  )
   const canGoBackPage = computed(() => history.value.length > 0 && !overlay.value)
+  const canGoForwardPage = computed(() => forwardHistory.value.length > 0 && !overlay.value)
   const activeCategory = computed(() =>
     pageTarget.value.kind === 'local' ? pageTarget.value.category : 'dashboard'
   )
@@ -216,8 +207,8 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   )
 
   function navigate(target: NavigationPageTarget, options?: { resetHistory?: boolean }): void {
-    closeAccountPage()
     if (pageTarget.value.kind === 'local') lastLocal.value = pageTarget.value
+    forwardHistory.value = []
     if (options?.resetHistory) {
       history.value = []
     } else if (
@@ -238,7 +229,19 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     const previous = history.value.at(-1)
     if (!previous) return
     history.value = history.value.slice(0, -1)
+    forwardHistory.value = [...forwardHistory.value.slice(-49), pageTarget.value]
     pageTarget.value = previous
+  }
+  function goForwardPage(): boolean {
+    // Foreground tools own the title-bar affordance; moving the page behind one
+    // would leave the user on a surface they never opened for that page.
+    if (overlay.value) return false
+    const next = forwardHistory.value.at(-1)
+    if (!next) return false
+    forwardHistory.value = forwardHistory.value.slice(0, -1)
+    history.value = [...history.value.slice(-49), pageTarget.value]
+    pageTarget.value = next
+    return true
   }
   function onSelectView(category: string, filter: string | null): void {
     if (category === 'recent') {
@@ -265,7 +268,8 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     navigate({ kind: 'plugin', page })
   }
   function closePluginPage(): void {
-    goBackPage()
+    if (history.value.length) goBackPage()
+    else pageTarget.value = lastLocal.value
   }
   function enterRadioPodcastMode(): void {
     navigate({ kind: 'radio' })
@@ -281,10 +285,6 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   }
   function collapseMenu(): void {
     menuOpen.value = false
-  }
-  function goHome(): void {
-    selectSidebarPage(localHome())
-    collapseMenu()
   }
   function openPlayingPage(): void {
     openOverlay('playing')
@@ -305,22 +305,10 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     loginPageMode.value = 'login'
     loginInitialProviderId.value = null
   }
-  function openAccountPage(initialProviderId: string | null = null): void {
-    accountInitialProviderId.value = initialProviderId
-    showAccountPage.value = true
-  }
-  function closeAccountPage(): void {
-    showAccountPage.value = false
-    accountInitialProviderId.value = null
-  }
   function openSettingsPage(
     section: SettingsSectionInput = settingsCurrentSection.value,
     target: Omit<SettingsNavigationTarget, 'revision'> = {}
   ): void {
-    if (section === 'appearance' || target.entry?.section === 'appearance') {
-      openAppearancePage(target.entry)
-      return
-    }
     settingsInitialSection.value = normalizeSettingsSection(section)
     settingsCurrentSection.value = normalizeSettingsSection(section)
     settingsNavigationTarget.value = {
@@ -337,27 +325,26 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
   function closeSettingsPage(): void {
     showSettingsPage.value = false
   }
-  function openAppearancePage(
-    entry?: SettingsSearchEntry,
-    tab: AppearanceWorkspaceTab = 'adjust'
-  ): void {
-    appearanceTab.value = tab
-    appearanceNavigationTarget.value = {
-      ...(entry?.section === 'appearance' ? { entry } : {}),
-      appearanceTab: tab,
-      revision: appearanceNavigationTarget.value.revision + 1
+  function openAppearancePage(entry?: SettingsSearchEntry, tab?: AppearanceWorkspaceTab): void {
+    const retainedIndex = overlayHistory.lastIndexOf('appearance')
+    const retained = overlay.value === 'appearance' || retainedIndex >= 0
+    // Returning from another tool resumes the same workspace and draft. Explicit
+    // deep links are handled by AppearancePage's own tab/dirty-state transition.
+    if (!retained || entry || tab) {
+      appearanceTab.value = tab ?? 'adjust'
+      appearanceNavigationTarget.value = {
+        ...(entry?.section === 'appearance' ? { entry } : {}),
+        appearanceTab: appearanceTab.value,
+        revision: appearanceNavigationTarget.value.revision + 1
+      }
     }
-    openOverlay('appearance')
+    if (retainedIndex >= 0) {
+      overlayHistory.splice(retainedIndex)
+      overlay.value = 'appearance'
+    } else openOverlay('appearance')
   }
   function closeAppearancePage(): void {
     closeOverlay('appearance')
-  }
-  // Compatibility entry for older commands; Appearance has its own page and back route.
-  function openSettingsCategory(section: SectionKey, entry?: SettingsSearchEntry): void {
-    if (section === 'appearance') {
-      if (overlay.value === 'appearance' && !entry) return
-      openAppearancePage(entry, entry ? 'adjust' : appearanceTab.value)
-    } else openSettingsPage(section, entry ? { entry } : {})
   }
   function openThemeStudioPage(initialDomain: ThemeStudioDomain = 'presets'): void {
     themeStudioInitialDomain.value = initialDomain
@@ -372,7 +359,7 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     openSettingsPage('playback')
   }
   function openDspSettings(): void {
-    openDspRackPage()
+    openSettingsPage('dsp')
   }
   function openPluginPage(): void {
     openOverlay('plugins')
@@ -381,35 +368,16 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     showPluginPage.value = false
   }
   function openEqualizerPage(): void {
-    switchAudioWorkspaceTab('equalizer')
+    openOverlay('equalizer')
   }
   function closeEqualizerPage(): void {
-    if (showEqualizerPage.value) closeAudioWorkspace()
+    showEqualizerPage.value = false
   }
   function openDspRackPage(): void {
-    switchAudioWorkspaceTab('effects')
+    openOverlay('dsp')
   }
   function closeDspRackPage(): void {
-    if (showDspRackPage.value) closeAudioWorkspace()
-  }
-  function openAudioWorkspace(): void {
-    // The title-bar entry resumes the active tab and its in-progress edits.
-    closeAccountPage()
-    if (!showAudioWorkspace.value) openEqualizerPage()
-  }
-  function switchAudioWorkspaceTab(tab: AudioWorkspaceTab): void {
-    const target = tab === 'effects' ? 'dsp' : 'equalizer'
-    if (showAudioWorkspace.value) {
-      closeAccountPage()
-      overlay.value = target
-    } else openOverlay(target)
-  }
-  function closeAudioWorkspace(): void {
-    if (!showAudioWorkspace.value) return
-    // Old sessions could have stacked the former independent audio pages.
-    while (overlayHistory.at(-1) === 'dsp' || overlayHistory.at(-1) === 'equalizer')
-      overlayHistory.pop()
-    closeOverlay(overlay.value!)
+    showDspRackPage.value = false
   }
   function openLibraryPlaylist(playlist: { id: string; name: string; kind?: 'aggregate' }): void {
     onSelectView(
@@ -426,16 +394,18 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     if (nextHistory.length !== history.value.length) history.value = nextHistory
     const target = pageTarget.value
     if (target.kind !== 'plugin') return
-    if (
-      !pages.some((page) => page.pluginId === target.page.pluginId && page.id === target.page.id)
-    ) {
+    const current = pages.find(
+      (page) => page.pluginId === target.page.pluginId && page.id === target.page.id
+    )
+    if (!current) {
       pageTarget.value = localHome()
+    } else if (current.experience?.version !== target.page.experience?.version) {
+      pageTarget.value = { kind: 'plugin', page: current }
     }
   }
   function createToggleMenuHandler(): () => void {
     return () => {
-      closeAccountPage()
-      if (overlay.value && overlay.value !== 'plugins') {
+      if (overlay.value) {
         overlay.value = null
         overlayHistory.length = 0
         menuOpen.value = true
@@ -454,16 +424,17 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     restoreSession,
     rememberSettingsSection,
     rememberThemeStudioDomain,
+    rememberAppearanceTab,
     menuOpen,
     pageTarget,
     activePageId,
-    isHome,
-    goHome,
     streamingTab,
     canGoBackPage,
+    canGoForwardPage,
     navigate,
     selectSidebarPage,
     goBackPage,
+    goForwardPage,
     showPlayingPage,
     showStreamingPage,
     showStreamingSurface,
@@ -471,23 +442,17 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     showNetworkSourcesPage,
     showRecentPage,
     showLoginPage,
-    showAccountPage,
-    accountInitialProviderId,
-    openAccountPage,
-    closeAccountPage,
     loginPageMode,
     loginInitialProviderId,
     showSettingsPage,
     showAppearancePage,
-    appearanceNavigationTarget,
     appearanceTab,
+    appearanceNavigationTarget,
     showThemeStudioPage,
     themeStudioInitialDomain,
     showPluginPage,
     showEqualizerPage,
     showDspRackPage,
-    showAudioWorkspace,
-    audioWorkspaceTab,
     activePluginPage,
     settingsInitialSection,
     settingsNavigationTarget,
@@ -510,7 +475,6 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     openLoginPage,
     closeLoginPage,
     openSettingsPage,
-    openSettingsCategory,
     closeSettingsPage,
     openAppearancePage,
     closeAppearancePage,
@@ -524,9 +488,6 @@ export function useAppNavigation(options: { appearancePreviewActive?: () => bool
     closeEqualizerPage,
     openDspRackPage,
     closeDspRackPage,
-    openAudioWorkspace,
-    switchAudioWorkspaceTab,
-    closeAudioWorkspace,
     openLibraryPlaylist,
     closeMissingPluginPage,
     createToggleMenuHandler,

@@ -23,3 +23,12 @@ export interface NativeQueueSelection {
   id: string
   source: string
 }
+
+/** Queue-only handoff. The selected media must remain the same; only its queue
+ * occurrence, lookahead and native play mode may change. */
+export interface NativeQueueRebind {
+  expected: NativeQueueSelection
+  items: import('./audioEngineTypes.ts').AudioEngineQueueItem[]
+  startIndex: number
+  playMode: import('./playbackModes.ts').NativePlayMode
+}

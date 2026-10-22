@@ -12,11 +12,7 @@ import {
 } from 'vue'
 import type { ProviderHomeSectionPresentation } from '../../../shared/providerHome'
 import { useBackHandler } from '../app/useBackStack'
-import type { Track, TrackArtistRef, QueuePlaybackOrigin } from '../types/music'
-import {
-  withQueuePlaybackOrigin,
-  type StreamingCollectionNavigationRequest
-} from '../utils/queuePlaybackOrigin.ts'
+import type { Track, TrackArtistRef } from '../types/music'
 import { copyTrackNames } from '../utils/copyTrackNames'
 import {
   useNcmStore,
@@ -34,6 +30,7 @@ import {
   type PersonalizedStreamSession
 } from '../stores/usePlayerStore'
 import { useMusicStore } from '../stores/useMusicStore'
+import { useLibraryUnifiedSearch } from '../app/useLibraryUnifiedSearch.ts'
 import { useMediaProviders } from '../providers'
 import {
   providerFavoriteChange,
@@ -45,6 +42,7 @@ import {
   supportsAlbumSearch,
   type AlbumSearchItem
 } from '@renderer/components/streaming-page/albumSearch.ts'
+import { createArtistSearch, type ArtistSearchItem } from './streaming-page/artistSearch.ts'
 import { BUILTIN_NAVIGATION_PAGES } from '@renderer/app/navigationPages.ts'
 import type {
   MediaProviderAlbumSummary,
@@ -63,6 +61,11 @@ import { useBilibiliFavorites } from './streaming-page/useBilibiliFavorites'
 import NcmCloudPanel from './NcmCloudPanel.vue'
 import StreamingSearch from './StreamingSearch.vue'
 import StreamingDetailStage from './streaming-page/StreamingDetailStage.vue'
+import NcmAlbumFilters from './streaming-page/NcmAlbumFilters.vue'
+import {
+  filterNcmAlbums,
+  formatNcmAlbumClassification
+} from './streaming-page/ncmAlbumClassification'
 import { useStreamingTrackView } from '@renderer/components/streaming-page/useStreamingTrackView'
 import {
   usePlaylistTrackPaging,
@@ -93,16 +96,16 @@ import {
   findStreamingArtistById,
   matchStreamingArtistsByName,
   resolveLinkedStreamingArtist,
-  type StreamingArtistNavigationRequest
+  type StreamingAlbumNavigationRequest,
+  type StreamingArtistNavigationRequest,
+  type StreamingMetadataNavigationRequest
 } from '../utils/streamingArtistResolution'
 import { getTopTracks } from '../stores/useListeningStatsStore'
+import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
 import { shuffleArray } from '../utils/playerQueueUtils'
 import { resolveUnifiedRecentTracks } from '../utils/unifiedRecentTracks'
-import {
-  searchLocalStreamingArtists,
-  searchLocalStreamingPlaylists,
-  searchLocalStreamingSongs
-} from './streaming-page/localStreamingSearch'
+import { readLibraryRecentHistoryTracks } from '../stores/library/libraryRecentHistory.ts'
+import { searchLocalStreamingPlaylists } from './streaming-page/localStreamingSearch'
 import {
   appendUniqueTracks,
   streamingFavoriteLabel,
@@ -112,7 +115,11 @@ import {
   resolveStreamingTabIndex as getStreamingTabIndex,
   timeGreeting as resolveTimeGreeting
 } from './streaming-page/streamingPageModel'
-import { useStreamingSearch, type SearchSourceOption } from './streaming-page/useStreamingSearch'
+import {
+  useStreamingSearch,
+  type SearchSourceOption,
+  type SongSearchPage
+} from './streaming-page/useStreamingSearch'
 import { useStreamingDiscovery } from './streaming-page/useStreamingDiscovery'
 import { useTrackMultiSelect } from './song-list/useTrackMultiSelect'
 import {
@@ -146,6 +153,7 @@ interface HomeSectionDefinition extends ProviderHomeSectionPresentation {
 
 interface DetailHeaderInfo {
   title: string
+  isExplicit?: boolean
   cover: string | null
   coverSource?: string | null
   desc: string
@@ -176,6 +184,7 @@ interface DetailSnapshot {
   intro: string
   followed: boolean | null
   artistTab: ArtistDetailTab
+  artistAlbumReleaseType: string
   liked: number | null
   likedPaging: { nextOffset: number; total: number | null; hasMore: boolean }
   playlistPaging?: PlaylistTrackPagingSnapshot
@@ -184,6 +193,7 @@ interface DetailSnapshot {
 interface DetailStackEntry {
   view: DetailView
   snapshot?: DetailSnapshot
+  fromPlayback?: boolean
 }
 
 const props = defineProps<{
@@ -192,9 +202,7 @@ const props = defineProps<{
   active?: boolean
   initialTab?: StreamingTab
   rootNavigationRevision?: number
-  artistNavigationRequest?: StreamingArtistNavigationRequest | null
-  collectionNavigationRequest?: StreamingCollectionNavigationRequest | null
-  searchNavigationRequest?: { key: number; query: string } | null
+  metadataNavigationRequest?: StreamingMetadataNavigationRequest | null
 }>()
 
 const activeTab = ref<StreamingTab>(props.initialTab ?? 'home')
@@ -290,6 +298,7 @@ const artistPlaylists = ref<MediaProviderPlaylistSummary[]>([])
 const artistIntro = ref('')
 const artistFollowed = ref<boolean | null>(null)
 const activeArtistTab = ref<ArtistDetailTab>('songs')
+const artistAlbumReleaseType = ref('')
 const detailLoading = ref(false)
 const detailError = ref('')
 const followActionLoading = ref(false)
@@ -326,6 +335,10 @@ const providerStore = useProviderStore()
 const settingsStore = useSettingsStore()
 const musicStore = useMusicStore()
 const mediaProviders = useMediaProviders()
+const localSearchSource = useLibraryUnifiedSearch(() => {
+  if (searchType.value !== 'playlists' && ['all', 'local'].includes(searchSource.value))
+    refreshSearch()
+})
 const { pushNotice } = useAppNoticeStore()
 
 const NCM_PROVIDER_ID = 'ncm'
@@ -654,7 +667,6 @@ const emit = defineEmits<{
   navigateTab: [tab: 'home' | 'discover' | 'library' | 'cloud' | 'search']
   recent: [providerId: string]
   login: [providerId?: string | null]
-  searchQueryChange: [query: string]
 }>()
 
 const {
@@ -779,7 +791,8 @@ async function searchUnifiedSongs(
 ): Promise<{ tracks: Track[]; total: number }> {
   const result = await mediaProviders.searchAllSongs({
     query: keywords,
-    localTracks: musicStore.tracks.value,
+    localTracks: [],
+    localSource: localSearchSource,
     limit,
     offset,
     signal: options?.signal
@@ -818,23 +831,19 @@ async function searchProviderPlaylists(
   return { playlists: result.items, total: result.total }
 }
 
-async function searchProviderArtists(
-  providerId: string,
-  keywords: string,
-  limit?: number,
-  offset?: number,
-  options?: { signal?: AbortSignal }
-): Promise<{ artists: MediaProviderArtistSummary[]; total: number }> {
-  const result = await mediaProviders.searchArtists(providerId, keywords, limit, offset, options)
-  return { artists: result.items, total: result.total }
-}
-
 async function searchLocalSongs(
   keywords: string,
   limit: number = 30,
-  offset: number = 0
-): Promise<{ tracks: Track[]; total: number }> {
-  return searchLocalStreamingSongs(musicStore.tracks.value, keywords, limit, offset)
+  offset: number = 0,
+  options?: { signal?: AbortSignal }
+): Promise<SongSearchPage> {
+  const page = await localSearchSource.searchLocal(keywords, limit, offset, options?.signal)
+  await localSearchSource.confirm(page, options?.signal)
+  return {
+    tracks: page.items.map((item) => item.track),
+    total: page.total,
+    ...(page.playbackQuery ? { playbackQuery: page.playbackQuery } : {})
+  }
 }
 
 async function searchLocalPlaylists(
@@ -845,20 +854,21 @@ async function searchLocalPlaylists(
   return searchLocalStreamingPlaylists(musicStore.localPlaylists.value, keywords, limit, offset)
 }
 
-async function searchLocalArtists(
-  keywords: string,
-  limit: number = 30,
-  offset: number = 0
-): Promise<{ artists: MediaProviderArtistSummary[]; total: number }> {
-  return searchLocalStreamingArtists(musicStore.artists.value, keywords, limit, offset)
-}
-
 const albumSearch = createAlbumSearch({
   localAlbums: () => musicStore.albums.value,
+  localSource: localSearchSource,
   providers: () => providerStore.providers.value,
   searchProvider: (id, query, limit, offset, options) =>
     mediaProviders.searchAlbums(id, query, limit, offset, options),
   getProvider: (id) => mediaProviders.get(id),
+  reportError: (message) => pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
+})
+const artistSearch = createArtistSearch({
+  localArtists: () => musicStore.artists.value,
+  localSource: localSearchSource,
+  providers: () => providerStore.providers.value,
+  searchProvider: (id, query, limit, offset, options) =>
+    mediaProviders.searchArtists(id, query, limit, offset, options),
   reportError: (message) => pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
 })
 
@@ -881,12 +891,13 @@ const searchSources = computed<SearchSourceOption[]>(() => {
   ]
   for (const provider of providerStore.providers.value) {
     const hasSearch = provider.capabilities.includes('search')
+    const hasPlaylist = provider.capabilities.includes('playlist')
     const supportedTypes: SearchSourceOption['supportedTypes'] = []
     if (hasSearch && provider.supportedMethods.includes('searchSongs')) supportedTypes.push('songs')
     if (supportsAlbumSearch(provider)) supportedTypes.push('albums')
     if (hasSearch && provider.supportedMethods.includes('searchArtists'))
       supportedTypes.push('artists')
-    if (hasSearch && provider.supportedMethods.includes('searchPlaylists'))
+    if (hasPlaylist && provider.supportedMethods.includes('searchPlaylists'))
       supportedTypes.push('playlists')
     if (supportedTypes.length === 0) continue
     sources.push({
@@ -915,6 +926,7 @@ const {
   isSearching,
   availableSearchTypes,
   clearSearch,
+  refreshSearch,
   performSearch,
   onPageChange,
   onSearchTrackClick
@@ -948,38 +960,16 @@ const {
     })
     return { playlists: result.items, total: result.total }
   },
-  searchArtists: async (query, limit = 30, offset = 0, options) => {
-    const local = await searchLocalArtists(query, limit, 0)
-    const result = await searchUnifiedCollections({
-      local: { items: local.artists, total: local.total },
-      searchLocal: async (pageLimit, pageOffset) => {
-        const result = await searchLocalArtists(query, pageLimit, pageOffset)
-        return { items: result.artists, total: result.total }
-      },
-      limit,
-      offset,
-      providers: providerStore.providers.value.filter(
-        (provider) =>
-          provider.supportedMethods.includes('searchArtists') &&
-          provider.health?.available !== false
-      ),
-      search: (id, pageLimit, pageOffset) =>
-        mediaProviders.searchArtists(id, query, pageLimit, pageOffset, options),
-      reportError: (message) => {
-        if (!options?.signal?.aborted)
-          pushNotice({ kind: 'warning', message: '部分音源搜索失败：' + message })
-      }
-    })
-    return { artists: result.items, total: result.total }
-  },
+  searchArtists: artistSearch.searchArtists,
   searchProviderSongs,
   searchProviderPlaylists,
-  searchProviderArtists,
+  searchProviderArtists: artistSearch.searchProviderArtists,
   searchLocalSongs,
   searchLocalPlaylists,
-  searchLocalArtists,
+  searchLocalArtists: artistSearch.searchLocalArtists,
   searchSources,
-  playTrack
+  playTrack,
+  playLibraryQuery: (query, id) => playbackStore.playLibraryQuery(query, id)
 })
 
 const discoveryProviderId = computed(() => activeProvider.value)
@@ -1120,22 +1110,6 @@ const activeLoggedIn = computed(() => {
   if (!activeProviderRequiresLogin.value) return true
   return isExternalActive.value ? (activeExternalState.value?.loggedIn ?? false) : isLoggedIn.value
 })
-const libraryViewState = ref<{
-  collection: 'playlists' | 'albums' | 'artists'
-  category: 'all' | 'owned' | 'saved'
-  limit: number
-}>({ collection: 'playlists', category: 'all', limit: 48 })
-watch(
-  [
-    activeProvider,
-    () => (activeProfile.value?.userId == null ? null : String(activeProfile.value.userId)),
-    activeLoggedIn
-  ],
-  () => {
-    libraryViewState.value = { collection: 'playlists', category: 'all', limit: 48 }
-  },
-  { flush: 'sync' }
-)
 const activeProviderSupportsCategories = computed(
   () => activeProviderInfo.value?.supportedMethods.includes('fetchPlaylistCategories') === true
 )
@@ -1185,7 +1159,8 @@ const isExternalHome = computed(
 
 const headerTitle = computed(() => {
   if (currentDetail.value?.type === 'album') return currentDetail.value.album.name
-  if (!currentDetail.value && activeTab.value === 'search') return '搜索'
+  if (!currentDetail.value && activeTab.value === 'search')
+    return searchQuery.value.trim() ? '搜索: ' + searchQuery.value.trim() : '搜索'
   if (!currentDetail.value && activeTab.value === 'library') return '音乐库'
   if (isExternalHome.value) return '主页'
   if (isExternalActive.value && currentDetail.value?.type === 'playlist')
@@ -1244,6 +1219,17 @@ const currentArtistPlaylists = computed(() =>
 )
 const currentArtistAlbums = computed(() =>
   currentDetail.value?.type === 'artist' ? artistAlbums.value : []
+)
+const showNcmAlbumFilters = computed(
+  () =>
+    activeProvider.value === NCM_PROVIDER_ID &&
+    currentDetail.value?.type === 'artist' &&
+    activeArtistTab.value === 'albums'
+)
+const filteredArtistAlbums = computed(() =>
+  activeProvider.value === NCM_PROVIDER_ID
+    ? filterNcmAlbums(currentArtistAlbums.value, artistAlbumReleaseType.value)
+    : currentArtistAlbums.value
 )
 const artistDetailTabs = computed<Array<{ key: ArtistDetailTab; label: string; count: number }>>(
   () => [
@@ -1340,6 +1326,10 @@ const detailHeaderInfo = computed<DetailHeaderInfo | null>(() => {
   if (currentDetail.value.type === 'album') {
     return {
       title: currentDetail.value.album.name,
+      isExplicit:
+        currentDetail.value.providerId === NCM_PROVIDER_ID
+          ? currentDetail.value.album.isExplicit
+          : undefined,
       cover: currentDetail.value.album.cover,
       coverSource: currentDetail.value.album.coverSource ?? null,
       desc: [
@@ -1347,6 +1337,9 @@ const detailHeaderInfo = computed<DetailHeaderInfo | null>(() => {
         currentDetail.value.providerId === 'local'
           ? '本地音乐'
           : providerStore.getProvider(currentDetail.value.providerId)?.name,
+        currentDetail.value.providerId === NCM_PROVIDER_ID
+          ? formatNcmAlbumClassification(currentDetail.value.album)
+          : '',
         `共 ${detailTracks.value.length || currentDetail.value.album.trackCount} 首歌曲`
       ]
         .filter(Boolean)
@@ -1456,6 +1449,7 @@ function selectProvider(provider: string, persist = true): void {
   }
   fallbackProvider.value = null
   if (preferredProvider.value === provider) return
+  detailNavigationToken += 1
   // Only an explicit user action changes the persisted preference; availability
   // fallbacks never write back, so the choice survives restarts and plugin toggles.
   preferredProvider.value = provider
@@ -1470,6 +1464,7 @@ function clearDetailState(): void {
   artistIntro.value = ''
   artistFollowed.value = null
   activeArtistTab.value = 'songs'
+  artistAlbumReleaseType.value = ''
   detailLoading.value = false
   detailError.value = ''
   resetLikedTracksPaging()
@@ -1486,6 +1481,7 @@ function captureDetailState(): DetailSnapshot {
     intro: artistIntro.value,
     followed: artistFollowed.value,
     artistTab: activeArtistTab.value,
+    artistAlbumReleaseType: artistAlbumReleaseType.value,
     liked: likedCount.value,
     playlistPaging: playlistTrackPaging.snapshot(),
     likedPaging: {
@@ -1509,6 +1505,7 @@ function applyDetailState(snapshot: DetailSnapshot | undefined): void {
   artistIntro.value = snapshot.intro
   artistFollowed.value = snapshot.followed
   activeArtistTab.value = snapshot.artistTab
+  artistAlbumReleaseType.value = snapshot.artistAlbumReleaseType ?? ''
   likedCount.value = snapshot.liked
   likedTracksNextOffset.value = snapshot.likedPaging.nextOffset
   likedTracksTotal.value = snapshot.likedPaging.total
@@ -1521,11 +1518,16 @@ function applyDetailState(snapshot: DetailSnapshot | undefined): void {
 
 // Navigates one level deeper. The outgoing level's loaded data is snapshotted
 // onto its own entry first, so back-navigation restores instead of refetching.
-function pushDetail(view: DetailView): void {
+function pushDetail(view: DetailView, fromPlayback = false): void {
   detailNavigationToken += 1
   const top = detailStack.value[detailStack.value.length - 1]
+  if (fromPlayback && top?.fromPlayback) {
+    top.view = view
+    top.snapshot = undefined
+    return
+  }
   if (top) top.snapshot = captureDetailState()
-  detailStack.value.push({ view })
+  detailStack.value.push({ view, fromPlayback })
 }
 
 // Replaces the top entry in place (same level, fresher data).
@@ -1897,10 +1899,13 @@ async function selectDetailProvider(providerId: string): Promise<void> {
 async function openTrackAlbum(track: Track): Promise<void> {
   const token = ++detailNavigationToken
   if (getTrackSource(track) === 'local') {
-    const album = musicStore.albums.value.find((item) =>
-      item.tracks.some((albumTrack) => albumTrack.id === track.id)
-    )
-    if (album) emit('selectView', 'albums', `album:${album.id}`)
+    try {
+      const album = await localSearchSource.resolveAlbum({ trackId: track.id })
+      if (isCurrentDetailNavigation(token)) emit('selectView', 'albums', `album:${album.albumId}`)
+    } catch (error) {
+      if (isCurrentDetailNavigation(token))
+        pushNotice({ kind: 'error', message: friendlyStreamingError(error, '打开本地专辑失败') })
+    }
     return
   }
   if (!track.albumId) {
@@ -1932,7 +1937,8 @@ function openTrackArtist(
 ): void {
   if (getTrackSource(track) === 'local') {
     detailNavigationToken += 1
-    if (track.artist.trim()) emit('selectView', 'artists', `artist:${track.artist.trim()}`)
+    const artistName = artist?.name.trim() || track.artist.trim()
+    if (artistName) emit('selectView', 'artists', `artist:${artistName}`)
     return
   }
   void openRequestedArtist({
@@ -1947,15 +1953,46 @@ async function openSearchAlbum(album: AlbumSearchItem): Promise<void> {
   await openAlbum(album, album.providerId)
 }
 
+async function openSearchArtist(artist: ArtistSearchItem): Promise<void> {
+  const token = ++detailNavigationToken
+  if (artist.providerId === 'local') {
+    // Reuse the local artist page's authoritative paging and complete-query
+    // playback, rather than loading an artist-sized Track[] into this surface.
+    emit('selectView', 'artists', `artist:${artist.name}`)
+    return
+  }
+  if (artist.providerId) {
+    await selectDetailProvider(artist.providerId)
+    if (!isCurrentDetailNavigation(token, artist.providerId)) return
+  }
+  await openArtist(artist)
+}
+
 async function openAlbum(
   album: MediaProviderAlbumSummary,
   providerId = activeProvider.value,
-  replace = false
+  replace = false,
+  fromPlayback = false
 ): Promise<void> {
+  if (providerId === 'local') {
+    const navigation = ++detailNavigationToken
+    try {
+      const target = await localSearchSource.resolveAlbum({ albumId: String(album.id) })
+      if (!isCurrentDetailNavigation(navigation)) return
+      if (target.mode === 'sqlite') {
+        emit('selectView', 'albums', `album:${target.albumId}`)
+        return
+      }
+    } catch (error) {
+      if (isCurrentDetailNavigation(navigation))
+        pushNotice({ kind: 'error', message: friendlyStreamingError(error, '打开本地专辑失败') })
+      return
+    }
+  }
   beginDetailTransition()
   const view: DetailView = { type: 'album', album, providerId }
   if (replace) replaceTopDetail(view)
-  else pushDetail(view)
+  else pushDetail(view, fromPlayback)
   const token = beginDetailLoad()
 
   try {
@@ -1975,10 +2012,11 @@ async function openAlbum(
 
 async function openArtist(
   artist: MediaProviderArtistSummary,
-  linkedUser?: NcmUserSummary
+  linkedUser?: NcmUserSummary,
+  fromPlayback = false
 ): Promise<void> {
   beginDetailTransition()
-  pushDetail({ type: 'artist', artist, user: linkedUser })
+  pushDetail({ type: 'artist', artist, user: linkedUser }, fromPlayback)
   activeArtistTab.value = 'songs'
   const token = beginDetailLoad()
 
@@ -2081,13 +2119,17 @@ async function openArtist(
   }
 }
 
-async function openRequestedArtist(request: StreamingArtistNavigationRequest): Promise<void> {
+async function openRequestedArtist(
+  request: StreamingArtistNavigationRequest,
+  fromPlayback = false,
+  providerReady = false
+): Promise<void> {
   const providerId = request.providerId.trim().toLowerCase()
   const artistName = request.artistName.trim()
   if (!providerId || !artistName) return
   const token = ++detailNavigationToken
 
-  await providerStore.syncProviders().catch(() => undefined)
+  if (!providerReady) await providerStore.syncProviders().catch(() => undefined)
   if (!isCurrentDetailNavigation(token)) return
   const provider = mediaProviders.get(providerId)
   // 带歌手 id 时搜索只用来补头图等展示字段，provider 没有 searchArtists 也能开页；
@@ -2119,7 +2161,11 @@ async function openRequestedArtist(request: StreamingArtistNavigationRequest): P
       const matched = searchResult
         ? findStreamingArtistById(request.artistId, searchResult.items)
         : null
-      await openArtist(matched ?? { id: request.artistId, name: artistName, picUrl: null })
+      await openArtist(
+        matched ?? { id: request.artistId, name: artistName, picUrl: null },
+        undefined,
+        fromPlayback
+      )
       return
     }
 
@@ -2137,38 +2183,48 @@ async function openRequestedArtist(request: StreamingArtistNavigationRequest): P
         message: `有多位歌手叫「${artistName}」，已打开搜索结果中排最前的一位`
       })
     }
-    await openArtist(artist)
+    await openArtist(artist, undefined, fromPlayback)
   } catch (error) {
     if (!isCurrentDetailNavigation(token, providerId)) return
     pushNotice({ kind: 'error', message: friendlyStreamingError(error, '打开歌手页面失败') })
   }
 }
 
-async function openRequestedCollection(
-  request: StreamingCollectionNavigationRequest
+async function openRequestedAlbum(
+  request: StreamingAlbumNavigationRequest,
+  fromPlayback = false
 ): Promise<void> {
-  const origin = request.origin
-  const providerId = origin.providerId.trim()
-  if (!providerId || !origin.id.trim() || !origin.name.trim()) return
+  const providerId = request.providerId.trim().toLowerCase()
+  const albumId = request.albumId.trim()
+  const albumName = request.albumName.trim()
+  if (!providerId || !albumId || !albumName) return
+
   const token = ++detailNavigationToken
-  await providerStore.syncProviders().catch(() => undefined)
-  if (!isCurrentDetailNavigation(token)) return
   const provider = mediaProviders.get(providerId)
-  const supported =
-    origin.kind === 'album'
-      ? Boolean(provider?.fetchAlbumTracks)
-      : Boolean(provider?.fetchPlaylistTracks || provider?.fetchPlaylistTracksPage)
-  if (!supported) {
-    pushNotice({ kind: 'error', message: `${provider?.name ?? providerId} 暂不支持此播放来源` })
+  if (!provider?.fetchAlbumTracks) {
+    pushNotice({
+      kind: 'error',
+      message: `${provider?.name ?? providerId} 暂不支持专辑详情`
+    })
     return
   }
+
   await selectDetailProvider(providerId)
   if (!isCurrentDetailNavigation(token, providerId)) return
-  if (origin.kind === 'album') {
-    await openAlbum({ id: origin.id, name: origin.name, cover: null, trackCount: 0 }, providerId)
-  } else {
-    await openPlaylist({ id: origin.id, name: origin.name, cover: null, trackCount: 0 })
-  }
+
+  await openAlbum(
+    {
+      id: albumId,
+      name: albumName,
+      artist: request.artist,
+      cover: request.cover,
+      coverSource: request.coverSource,
+      trackCount: 0
+    },
+    providerId,
+    false,
+    fromPlayback
+  )
 }
 
 async function openUserList(listType: 'follows' | 'followers'): Promise<void> {
@@ -2238,10 +2294,36 @@ async function openRanking(): Promise<void> {
 
   try {
     const topStats = getTopTracks()
-    let tracks = resolveUnifiedRecentTracks({
-      recentStats: topStats,
-      localTracks: musicStore.tracks.value
-    })
+    const mode = await window.api.library.getStorageMode()
+    let tracks: Track[]
+    if (mode === 'json') {
+      tracks = resolveUnifiedRecentTracks({
+        recentStats: topStats,
+        localTracks: musicStore.tracks.value
+      })
+    } else if (mode === 'sqlite') {
+      const api = window.api.library.database
+      const revision = (await api.getTracksByIds([])).revision
+      const getPreferences = () => ({
+        revision: musicVersionRevision.value,
+        versions: getMusicVersions().tracks.versions
+      })
+      tracks = await readLibraryRecentHistoryTracks(
+        topStats,
+        revision,
+        {
+          getPreferences,
+          api: {
+            lookupPlaylistTracks: (request, expectedRevision) =>
+              api.lookupPlaylistTracks(request, expectedRevision),
+            getTracksByIds: (ids, expectedRevision) => api.getTracksByIds(ids, expectedRevision)
+          }
+        },
+        () => {
+          if (!isActiveDetailLoad(token)) throw new Error('排行榜请求已过期')
+        }
+      )
+    } else throw new Error('无法确认曲库存储，未读取听歌排行')
     if (tracks.length === 0) {
       tracks = await fetchPlayRecords(1)
     }
@@ -2346,11 +2428,6 @@ const streamingListTracks = computed(() => {
   return visibleDetailTracks.value
 })
 
-const detailTrackIds = computed(() => new Set(detailTracks.value.map((track) => track.id)))
-const canLocateDetailTrack = computed(
-  () => !!currentTrack.value && detailTrackIds.value.has(currentTrack.value.id)
-)
-
 const multiSelectEnabled = computed(
   () =>
     !!currentDetail.value ||
@@ -2359,6 +2436,7 @@ const multiSelectEnabled = computed(
 
 const multiSelect = useTrackMultiSelect({
   tracks: streamingListTracks,
+  root: streamingContentRef,
   resetSources: [
     currentDetail,
     activeTab,
@@ -2478,10 +2556,8 @@ function onStreamingTrackContextMenu(track: Track, _index: number, event: MouseE
 async function handleContextPlayTrack(): Promise<void> {
   const track = streamingContextMenuTrack.value
   if (!track) return
-  const fromDetail = currentDetail.value !== null
-  const detail = fromDetail ? await resolveCurrentDetailPlayback() : null
-  if (fromDetail && !detail) return
-  playStreamingTrack(track, detail?.tracks ?? streamingListTracks.value, detail?.origin ?? null)
+  const list = currentDetail.value ? await resolveDetailPlaybackQueue() : streamingListTracks.value
+  playStreamingTrack(track, list)
   closeStreamingContextMenu()
 }
 
@@ -2489,7 +2565,7 @@ function handleContextPlayNext(): void {
   const track = streamingContextMenuTrack.value
   closeStreamingContextMenu()
   if (!track) return
-  playbackStore.playNextTrack(withQueuePlaybackOrigin(track, currentQueuePlaybackOrigin()))
+  playbackStore.playNextTrack(track)
   pushNotice({ kind: 'success', message: `下一首播放：${track.title}` })
 }
 
@@ -2660,66 +2736,16 @@ function getHeartModePlaylistId(): number | null {
   return id != null && Number.isFinite(Number(id)) && Number(id) > 0 ? Number(id) : null
 }
 
-function currentQueuePlaybackOrigin(): QueuePlaybackOrigin | null {
-  const detail = currentDetail.value
-  if (detail?.type === 'album') {
-    return {
-      kind: 'album',
-      scope: 'provider',
-      providerId: detail.providerId,
-      id: String(detail.album.id),
-      name: detail.album.name
-    }
-  }
-  const playlist =
-    detail?.type === 'playlist'
-      ? detail.playlist
-      : detail?.type === 'liked'
-        ? isExternalActive.value
-          ? activeExternalState.value?.likedPlaylist
-          : likedPlaylist.value
-        : null
-  return playlist
-    ? {
-        kind: 'playlist',
-        scope: 'provider',
-        providerId: activeProvider.value,
-        id: String(playlist.id),
-        name: playlist.name
-      }
-    : null
-}
-
-function playStreamingTrack(
-  track: Track,
-  tracks: Track[],
-  origin: QueuePlaybackOrigin | null = currentQueuePlaybackOrigin()
-): void {
+function playStreamingTrack(track: Track, tracks: Track[]): void {
   playTrack(track, tracks.length > 0 ? tracks : [track], {
-    heartModePlaylistId: getHeartModePlaylistId(),
-    queuePlaybackOrigin: origin
+    heartModePlaylistId: getHeartModePlaylistId()
   })
 }
 
-async function resolveCurrentDetailPlayback(): Promise<{
-  tracks: Track[]
-  origin: QueuePlaybackOrigin | null
-} | null> {
-  const token = detailLoadToken
-  const view = currentDetail.value
-  const origin = currentQueuePlaybackOrigin()
-  const tracks = await resolveDetailPlaybackQueue()
-  return token === detailLoadToken && view === currentDetail.value && props.active !== false
-    ? { tracks, origin }
-    : null
-}
-
 async function playTrackFromCurrentDetail(track: Track): Promise<void> {
-  const playback = await resolveCurrentDetailPlayback()
-  if (!playback) return
-  const { tracks, origin } = playback
+  const tracks = await resolveDetailPlaybackQueue()
   const resolvedTrack = tracks.find((item) => item.id === track.id) ?? track
-  playStreamingTrack(resolvedTrack, tracks, origin)
+  playStreamingTrack(resolvedTrack, tracks)
 }
 
 function onTrackClick(track: Track, index: number, event?: MouseEvent): void {
@@ -2772,20 +2798,16 @@ async function resolveDetailPlaybackQueue(): Promise<Track[]> {
 }
 
 async function playAllDetailTracks(): Promise<void> {
-  const playback = await resolveCurrentDetailPlayback()
-  if (!playback) return
-  const { tracks, origin } = playback
+  const tracks = await resolveDetailPlaybackQueue()
   if (tracks.length === 0) return
-  playStreamingTrack(tracks[0], tracks, origin)
+  playStreamingTrack(tracks[0], tracks)
 }
 
 async function shufflePlayDetailTracks(): Promise<void> {
-  const playback = await resolveCurrentDetailPlayback()
-  if (!playback) return
-  const { tracks, origin } = playback
+  const tracks = await resolveDetailPlaybackQueue()
   if (tracks.length === 0) return
   const shuffled = shuffleArray(tracks)
-  playStreamingTrack(shuffled[0], shuffled, origin)
+  playStreamingTrack(shuffled[0], shuffled)
 }
 
 function isDetailRowLiking(track: Track): boolean {
@@ -2852,14 +2874,21 @@ const socialCollections = computed(() => {
   }
   if (detail?.type === 'artist') {
     if (activeArtistTab.value === 'albums') {
-      return currentArtistAlbums.value.map((album) => ({
+      return filteredArtistAlbums.value.map((album) => ({
         id: album.id,
         name: album.name,
         cover: album.cover,
         coverSource: album.coverSource ?? null,
         coverSmall: album.coverSmall ?? null,
         coverSmallSource: album.coverSmallSource ?? null,
-        trackCount: album.trackCount
+        trackCount: album.trackCount,
+        isExplicit: activeProvider.value === NCM_PROVIDER_ID ? album.isExplicit : undefined,
+        meta:
+          activeProvider.value === NCM_PROVIDER_ID
+            ? [formatNcmAlbumClassification(album), `${album.trackCount} 首`]
+                .filter(Boolean)
+                .join(' · ')
+            : undefined
       }))
     }
     if (activeArtistTab.value === 'playlists') {
@@ -3482,60 +3511,48 @@ watch(
   }
 )
 
-let lastArtistNavigationKey = 0
-watch(
-  () => props.artistNavigationRequest?.key,
-  () => {
-    const request = props.artistNavigationRequest
-    if (request && request.key !== lastArtistNavigationKey) {
-      lastArtistNavigationKey = request.key
-      void openRequestedArtist(request)
-    }
-  },
-  { immediate: true }
-)
+let lastMetadataNavigationKey = 0
+let playbackNavigationInFlight = 0
+let playbackNavigationSyncToken: number | null = null
 
-let lastCollectionNavigationKey = 0
-watch(
-  [() => props.collectionNavigationRequest?.key, () => props.active],
-  () => {
-    const request = props.collectionNavigationRequest
-    if (props.active !== false && request && request.key !== lastCollectionNavigationKey) {
-      lastCollectionNavigationKey = request.key
-      void openRequestedCollection(request)
-    }
-  },
-  { immediate: true }
-)
+function playbackNavigationPending(): boolean {
+  return (
+    playbackNavigationInFlight > 0 ||
+    (props.metadataNavigationRequest != null &&
+      props.metadataNavigationRequest.key !== lastMetadataNavigationKey)
+  )
+}
 
-let lastSearchNavigationKey = 0
+function isCurrentPlaybackMetadataRequest(key: number): boolean {
+  return props.active !== false && props.metadataNavigationRequest?.key === key
+}
 watch(
-  [() => props.searchNavigationRequest?.key, () => props.active],
-  () => {
-    const request = props.searchNavigationRequest
-    if (
-      props.active === false ||
-      props.initialTab !== 'search' ||
-      !request ||
-      request.key === lastSearchNavigationKey
-    )
-      return
-    lastSearchNavigationKey = request.key
-    const query = request.query.trim()
-    resetDetail({ animate: false })
-    searchOffset.value = 0
-    if (!query) {
-      clearSearch()
-      return
+  () => props.metadataNavigationRequest?.key,
+  async () => {
+    const request = props.metadataNavigationRequest
+    if (!request || props.active === false) return
+    if (request.key === lastMetadataNavigationKey) return
+
+    lastMetadataNavigationKey = request.key
+    const navigationToken = ++detailNavigationToken
+    playbackNavigationSyncToken = navigationToken
+    playbackNavigationInFlight += 1
+    try {
+      await providerStore.syncProviders().catch(() => undefined)
+      if (
+        !isCurrentPlaybackMetadataRequest(request.key) ||
+        navigationToken !== detailNavigationToken
+      )
+        return
+      if (request.kind === 'artist') await openRequestedArtist(request, true, true)
+      else await openRequestedAlbum(request, true)
+    } finally {
+      if (playbackNavigationSyncToken === navigationToken) playbackNavigationSyncToken = null
+      playbackNavigationInFlight -= 1
     }
-    searchQuery.value = query
-    void performSearch(query)
   },
-  { immediate: true }
+  { immediate: true, flush: 'post' }
 )
-watch(searchQuery, (query) => {
-  if (props.initialTab === 'search' && props.active !== false) emit('searchQueryChange', query)
-})
 
 watch(
   () =>
@@ -3559,10 +3576,10 @@ watch(
 watch(activeProvider, async (provider, oldProvider) => {
   if (provider === oldProvider || props.active === false) return
   // Preserve the request that initiated an internal source switch.
-  resetDetail({ keepNavigationRequest: provider === detailNavigationProvider })
-  // Unified search owns its source filter; discovering or removing a provider
-  // must not erase a query submitted from the title bar.
-  if (provider !== detailNavigationProvider && !showUnifiedSearch.value) clearSearch()
+  const keepNavigationRequest =
+    provider === detailNavigationProvider || playbackNavigationSyncToken === detailNavigationToken
+  resetDetail({ keepNavigationRequest })
+  if (!keepNavigationRequest) clearSearch()
   recommendationRequestId += 1
   recommendationProviderId.value = ''
   homeSectionDefinitions.value = []
@@ -3686,6 +3703,7 @@ watch(
 )
 
 async function refreshStreamingSurface(): Promise<void> {
+  if (playbackNavigationPending()) return
   if (activeProvider.value === NCM_PROVIDER_ID) {
     if (!ncmNavigationAvailable.value) return
     await checkLogin()
@@ -3727,12 +3745,14 @@ watch(ncmNavigationAvailable, (available, wasAvailable) => {
 watch(
   () => props.active,
   (active, wasActive) => {
-    if (!active || wasActive === true) return
+    if (!active || wasActive === true || playbackNavigationPending()) return
     void refreshStreamingSurface()
   }
 )
 
 onMounted(async () => {
+  // Explicit playback navigation performs its own provider readiness check.
+  if (props.metadataNavigationRequest) return
   await providerStore.syncProviders().catch(() => undefined)
   // syncProviders may have resolved the preferred external provider, in which
   // case the activeProvider watcher above already handles the initial load.
@@ -3756,9 +3776,8 @@ onMounted(async () => {
         :is-detail="!!currentDetail"
         :is-searching="isSearching && !currentDetail"
         :show-subtitle="
-          !showUnifiedSearch &&
-          ((activeTab === 'home' && !currentDetail && !isSearching) ||
-            (isExternalActive && !currentDetail && !isSearching))
+          (activeTab === 'home' && !currentDetail && !isSearching) ||
+          (isExternalActive && !currentDetail && !isSearching)
         "
         :title="headerTitle"
         :subtitle="headerSubtitle"
@@ -3791,13 +3810,17 @@ onMounted(async () => {
         <div
           v-if="showUnifiedSearch && !currentDetail"
           key="search-results"
-          class="streaming-content-body stream-view-panel has-search-tabs"
+          class="streaming-content-body stream-view-panel"
+          :class="{ 'has-search-tabs': isSearching }"
         >
+          <StreamingPlaceholder
+            v-if="!isSearching"
+            title="搜索歌曲、专辑、歌单和歌手"
+            hint="输入关键词，可搜索全部来源、本地或指定平台。"
+            icon="pi pi-search"
+          />
           <StreamingSearch
-            :query-active="isSearching"
-            :search-source-label="
-              searchSources.find((source) => source.id === searchSource)?.label ?? '全部音源'
-            "
+            v-else
             :search-type="searchType"
             :search-results="searchResults"
             :search-albums-results="searchAlbumsResults"
@@ -3831,7 +3854,7 @@ onMounted(async () => {
             @like-track="onLikeTrack"
             @open-playlist="openPlaylist"
             @open-album="openSearchAlbum"
-            @open-artist="openArtist"
+            @open-artist="openSearchArtist"
             @open-track-artist="openTrackArtist"
             @open-track-album="openTrackAlbum"
             @page-change="onPageChange"
@@ -3872,6 +3895,7 @@ onMounted(async () => {
             @open-rec-section="openRecSection"
             @open-playlist="openPlaylist"
             @play-track="playHomeTrack"
+            @open-artist="openTrackArtist"
             @request-login="emit('login', activeProvider)"
             @open-discovery="selectTab('discover')"
           >
@@ -3902,7 +3926,7 @@ onMounted(async () => {
             :total="discovery.total.value"
             :offset="discovery.offset.value"
             :has-more="discovery.hasMore.value"
-            :list-loading="discovery.listLoading.value || !discovery.hasRequested.value"
+            :list-loading="discovery.listLoading.value"
             :list-error="discovery.listError.value"
             :loading-more="discovery.loadingMore.value"
             @select-tag="discovery.selectTag"
@@ -3959,12 +3983,12 @@ onMounted(async () => {
           />
 
           <div v-else-if="currentDetail" class="detail-view">
-            <div v-if="showDetailOverlayLoading" class="detail-loading-overlay" role="status">
-              <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+            <div v-if="showDetailOverlayLoading" class="detail-loading-overlay" aria-live="polite">
+              <i class="pi pi-spin pi-spinner"></i>
               <span>正在加载</span>
             </div>
 
-            <!-- Shared collection details preserve the active source and queue origin. -->
+            <!-- Track playlist / rec / liked / album / recent / ranking: editorial stage -->
             <template v-if="showTrackDetailStage">
               <StreamingPlaceholder
                 v-if="detailError"
@@ -3981,6 +4005,7 @@ onMounted(async () => {
                 v-else-if="detailHeaderInfo"
                 :kind="currentDetail.type"
                 :title="detailHeaderInfo.title"
+                :is-explicit="detailHeaderInfo.isExplicit"
                 :cover="detailHeaderInfo.cover"
                 :cover-source="detailHeaderInfo.coverSource"
                 :description="detailHeaderInfo.desc"
@@ -3992,7 +4017,6 @@ onMounted(async () => {
                 v-model:sort="detailSort"
                 v-model:direction="detailSortDirection"
                 :total-tracks="detailTracks.length"
-                :can-locate="canLocateDetailTrack"
                 :refreshing="detailLoading"
                 @refresh="retryCurrentView"
                 :current-track-id="currentTrack?.id ?? null"
@@ -4049,6 +4073,9 @@ onMounted(async () => {
               :follow-error="followActionError"
               :people="socialPeople"
               :collections="socialCollections"
+              :collection-empty-title="
+                showNcmAlbumFilters && artistAlbumReleaseType ? '没有符合筛选条件的专辑' : undefined
+              "
               :collection-empty-hint="socialCollectionEmptyHint"
               :tabs="socialStageKind === 'artist' ? artistDetailTabs : []"
               :active-tab="socialStageKind === 'artist' ? activeArtistTab : ''"
@@ -4067,6 +4094,8 @@ onMounted(async () => {
               :track-count-label="detailTrackCountLabel"
               @follow="toggleCurrentDetailFollow"
               @retry="retryCurrentView"
+              @open-artist="openTrackArtist"
+              @open-album="openTrackAlbum"
               @person-click="onSocialPersonClick"
               @collection-click="onSocialCollectionClick"
               @tab-change="onArtistTabChange"
@@ -4080,7 +4109,15 @@ onMounted(async () => {
               @batch-delete="handleStreamingBatchDelete"
               @clear-selection="clearSelection"
               @track-context-menu="onStreamingTrackContextMenu"
-            />
+            >
+              <template #collection-tools>
+                <NcmAlbumFilters
+                  v-if="showNcmAlbumFilters && currentArtistAlbums.length"
+                  :albums="currentArtistAlbums"
+                  v-model:release-type="artistAlbumReleaseType"
+                />
+              </template>
+            </StreamingSocialStage>
           </div>
 
           <NcmCloudPanel
@@ -4107,7 +4144,6 @@ onMounted(async () => {
 
           <StreamingLibrary
             v-else-if="activeTab === 'library' && !currentDetail"
-            v-model:view-state="libraryViewState"
             :is-logged-in="activeLoggedIn"
             :provider-label="activeProviderLabel"
             :profile="activeProfile"

@@ -24,8 +24,8 @@ const editableTracks = computed(() => {
     (!source && (/^[a-zA-Z]:[\\/]/.test(id) || /^[\\/]/.test(id) || !id.includes(':')))
   return mayBeLocal ? selectLocalLibraryActionTracks([track]) : []
 })
-function applyTags(paths: string[], patch: LocalLibraryTagPatch): void {
-  useMusicStore().applyLocalTagWrite(paths, patch)
+async function applyTags(paths: string[], patch: LocalLibraryTagPatch): Promise<void> {
+  await useMusicStore().applyLocalTagWriteAsync(paths, patch)
 }
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement | null>(null)

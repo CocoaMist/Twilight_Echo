@@ -1,6 +1,6 @@
 import type { StructuredPluginTheme } from '../../shared/theme.ts'
 
-export const TWILIGHT_PLUGIN_API_VERSION = 3
+export const TWILIGHT_PLUGIN_API_VERSION = 4
 
 export const PLUGIN_TYPES = ['provider', 'tool', 'ui', 'theme', 'dsp'] as const
 export type TwilightPluginType = (typeof PLUGIN_TYPES)[number]
@@ -16,6 +16,8 @@ export const PLUGIN_PERMISSIONS = [
   'settings',
   'clipboard',
   'ui:inject',
+  'app:settings',
+  'plugins:manage',
   'dsp:native'
 ] as const
 export type TwilightPluginPermission = (typeof PLUGIN_PERMISSIONS)[number]
@@ -157,7 +159,8 @@ export interface TwilightPluginIndexEntry extends TwilightPluginManifest {
   installedVersion?: string
 }
 
-export type TwilightPluginIndexSourceKind = 'github' | 'custom' | 'bundled'
+/** Source category only; official verification still requires a valid signature. */
+export type TwilightPluginIndexSourceKind = 'official' | 'github' | 'custom' | 'bundled'
 export type TwilightPluginIndexLoadedFrom = 'remote' | 'cache' | 'bundled'
 export type TwilightPluginIndexCacheFormat = 'envelope-v1' | 'legacy'
 
@@ -426,7 +429,7 @@ export type PluginHostResponse =
   | {
       kind: 'api-call'
       requestId: string
-      namespace: 'player' | 'providers' | 'extensions' | 'internal' | 'auth'
+      namespace: 'player' | 'providers' | 'extensions' | 'internal' | 'auth' | 'overlay' | 'library'
       method:
         | 'getPlaybackInfo'
         | 'play'
@@ -439,6 +442,7 @@ export type PluginHostResponse =
         | 'registerUi'
         | 'registerTheme'
         | 'notify'
+        | 'importPlaylists'
         | 'ncmRequest'
         | 'ncmOfficialLogin'
         | 'ncmGetCachedSong'
@@ -447,6 +451,9 @@ export type PluginHostResponse =
         | 'qishuiGetQrLogin'
         | 'qishuiCheckQrLogin'
         | 'qishuiClear'
+        | 'show'
+        | 'configure'
+        | 'hide'
       args: unknown[]
     }
   | {

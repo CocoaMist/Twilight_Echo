@@ -12,14 +12,12 @@ defineProps<{
   count: number
   total: number
   refreshing?: boolean
-  canLocate: boolean
 }>()
 const emit = defineEmits<{
   'update:query': [value: string]
   'update:sort': [value: StreamingTrackSort]
   'update:direction': [value: StreamingSortDirection]
   refresh: []
-  locate: []
 }>()
 const searchInput = ref<HTMLInputElement | null>(null)
 function clearQuery(): void {
@@ -75,15 +73,6 @@ function clearQuery(): void {
         ></i>
       </button>
       <span class="tool-divider" aria-hidden="true"></span>
-      <button
-        type="button"
-        :disabled="!canLocate"
-        title="定位正在播放的歌曲（清除搜索）"
-        aria-label="定位正在播放的歌曲"
-        @click="emit('locate')"
-      >
-        <i class="pi pi-map-marker" aria-hidden="true"></i>
-      </button>
       <button
         type="button"
         :disabled="refreshing"

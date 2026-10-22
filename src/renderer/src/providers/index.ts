@@ -28,9 +28,9 @@ let pluginProviderHealthRefreshing: Promise<void> | null = null
 let pluginProviderHealthRefreshedAt = 0
 const PLUGIN_PROVIDER_HEALTH_REFRESH_INTERVAL_MS = 5_000
 
-export function useMediaProviders(options: { sync?: boolean } = {}): MediaProviderRegistry {
+export function useMediaProviders(options?: { sync?: boolean }): MediaProviderRegistry {
   registerDefaultProviders()
-  if (options.sync !== false) void syncPluginProviders().catch(() => undefined)
+  if (options?.sync !== false) void syncPluginProviders().catch(() => undefined)
   return mediaProviders
 }
 
@@ -145,6 +145,9 @@ export async function syncPluginProviders(): Promise<void> {
                   options
                 )
             : undefined
+        const readPlaylistImportPage: MediaProvider['readPlaylistImportPage'] = supports('readPlaylistImportPage')
+          ? (id, offset, limit, options) => callProvider('readPlaylistImportPage', [id,offset,limit],options)
+          : undefined
         if (mediaProviders.get(provider.id)) {
           mediaProviders.update(provider.id, {
             name: provider.name,
@@ -152,11 +155,13 @@ export async function syncPluginProviders(): Promise<void> {
             health: provider.health as MediaProviderHealth | undefined,
             isEnabled: () => isPluginProviderEnabled(provider.health),
             searchAlbums,
-            searchPlaylists
+            searchPlaylists,
+            readPlaylistImportPage
           })
           continue
         }
         mediaProviders.register({
+          readPlaylistImportPage,
           id: provider.id,
           name: provider.name,
           source: 'plugin',

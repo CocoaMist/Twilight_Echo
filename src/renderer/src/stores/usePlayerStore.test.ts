@@ -36,6 +36,88 @@ test('each playback load clears stale pending positions before asynchronous work
   )
 })
 
+test('native playback starts and background resyncs share the same serialized mutation lane', () => {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const load = extractFunctionBody(source, 'loadAndPlay')
+  assert.match(load, /nativeQueueRevisionFence\.next\(\)/)
+  const serialized = load.slice(load.indexOf('nativeQueueRevisionFence.serialize('))
+  assert.ok(serialized.indexOf('nativeQueueLoader.prepareAndLoad(') > 0)
+  assert.ok(serialized.indexOf('window.api.audioEngine.play(') > 0)
+  for (const name of ['queueNativeQueueStateSync', 'queueNativePlayModeSync']) {
+    assert.match(extractFunctionBody(source, name), /nativeQueueRevisionFence\.serialize\(/)
+  }
+})
+
+test('queue playback keeps the old default zero position and forwards explicit bounded resume positions', () => {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const file = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true)
+  const declaration = file.statements.find(
+    (node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'playQueueTrack'
+  )
+  assert.ok(declaration)
+  const code = ts.transpileModule(declaration.getText(file), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 }
+  }).outputText
+  const track = { id: 'cue', filePath: 'D:/Music/disc.flac' }
+  for (const [input, expected] of [
+    [undefined, 0],
+    [0, 0],
+    [72.5, 72.5],
+    [-1, 0],
+    [NaN, 0],
+    [Infinity, 0]
+  ] as const) {
+    const positions: number[] = []
+    const sandbox = {
+      track,
+      input,
+      castTargetUsn: ref(null),
+      activateCurrentTrack: (selected: unknown, options: { position: number }) => {
+        assert.equal(selected, track)
+        positions.push(options.position)
+      },
+      loadAndPlay: (selected: unknown, position: number) => {
+        assert.equal(selected, track)
+        positions.push(position)
+      }
+    }
+    vm.runInNewContext(`${code}\nplayQueueTrack(track, input)`, sandbox)
+    assert.deepEqual(positions, [expected, expected])
+  }
+})
+
+test('production streamed queue entry forwards cancellation and the final selection fence to the controller', async () => {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const body = extractFunctionBody(source, 'appendLibraryQueuePages')
+  const produce = async () => {}
+  const options = { signal: new AbortController().signal, guard: () => {} }
+  const playbackWindow = { queue: { id: 'queue' } }
+  let calls = 0
+  const run = vm.runInNewContext(`(async () => {${body}})`, {
+    produce,
+    rethrow: true,
+    options,
+    playMode: ref('shuffle'),
+    libraryPlayback: {
+      active: ref(true),
+      appendPages: async (producer: unknown, mode: string, forwarded: unknown) => {
+        calls++
+        assert.equal(producer, produce)
+        assert.equal(mode, 'shuffle')
+        assert.equal(forwarded, options)
+        return { inserted: 1, window: playbackWindow }
+      }
+    },
+    applyLibraryQueueEdit: async (action: () => Promise<unknown>, rethrow: boolean) => {
+      assert.equal(rethrow, true)
+      assert.equal(await action(), playbackWindow)
+    }
+  })
+  await run()
+  assert.equal(calls, 1)
+})
+
 function extractFunctionBody(source: string, functionName: string): string {
   const file = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true)
   const declaration = file.statements.find(
@@ -47,23 +129,81 @@ function extractFunctionBody(source: string, functionName: string): string {
 }
 
 function extractInternalFunctionBody(source: string, functionName: string): string {
-  const signature = new RegExp(
-    `(?:async\\s+)?function ${functionName}\\([^)]*\\)[:\\w\\s<>\\[\\]'|]*\\s*\\{`
-  )
-  const match = source.match(signature)
-  assert.ok(match?.index != null, `${functionName} function should exist`)
-  const bodyStart = match.index + match[0].length - 1
-
-  let depth = 0
-  for (let index = bodyStart; index < source.length; index += 1) {
-    const char = source[index]
-    if (char === '{') depth += 1
-    if (char === '}') depth -= 1
-    if (depth === 0) return source.slice(bodyStart + 1, index)
+  const file = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true)
+  let body: ts.Block | undefined
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === functionName) body = node.body
+    if (!body) ts.forEachChild(node, visit)
   }
-
-  assert.fail(`${functionName} body should close`)
+  visit(file)
+  assert.ok(body, `${functionName} function should exist`)
+  return source.slice(body.getStart(file) + 1, body.end - 1)
 }
+
+test('user transport routes revoke sleep shutdown before navigation; automatic EOF and AB loops retain it', async () => {
+  const source = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
+  const events: string[] = []
+  const sandbox = {
+    playerSleepTimer: { interruptShutdown: () => events.push('interrupt') },
+    next: () => events.push('next'),
+    previous: () => events.push('previous'),
+    seekPlayback: (time: number) => events.push(`seek:${time}`)
+  }
+  for (const [name, expected] of [
+    ['nextFromUser', 'next'],
+    ['previousFromUser', 'previous'],
+    ['seekPlaybackFromUser', 'seek:12']
+  ]) {
+    events.length = 0
+    vm.runInNewContext(extractFunctionBody(source, name), { ...sandbox, time: 12 })
+    assert.deepEqual(events, ['interrupt', expected])
+  }
+  const captures: Record<string, () => void> = {}
+  const shortcut = ts.transpileModule(extractFunctionBody(source, 'handlePlayerShortcutAction'), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 }
+  }).outputText
+  await vm.runInNewContext(`(async () => { ${shortcut} })()`, {
+    action: 'next',
+    dispatchPlayerShortcut: (_action: string, handlers: typeof captures) => {
+      Object.assign(captures, handlers)
+    },
+    nextFromUser: () => {},
+    previousFromUser: () => {},
+    seekPlaybackFromUser: () => {},
+    togglePlayState: () => {},
+    jumpQueue: () => {}
+  })
+  assert.ok(captures.next && captures.previous && captures.seek)
+  const history = source.slice(
+    source.indexOf('const playbackHistoryController ='),
+    source.indexOf('const audioOutputController =')
+  )
+  assert.match(history, /seekPlayback: seekPlaybackFromUser/)
+  const abLoop = source.slice(
+    source.indexOf('} = createAbLoopController('),
+    source.indexOf('const lastAudibleVolume')
+  )
+  assert.match(abLoop, /\bseekPlayback,/)
+  assert.doesNotMatch(abLoop, /seekPlaybackFromUser/)
+  assert.doesNotMatch(extractFunctionBody(source, 'next'), /interruptShutdown/)
+  assert.match(source, /beforeSelection: \(\) => \{\s*playerSleepTimer\.interruptShutdown\(\)/)
+  assert.match(
+    source,
+    /commands: \{\s*togglePlay: togglePlayState,\s*previous: previousFromUser,\s*next: nextFromUser,\s*seek: seekPlaybackFromUser/
+  )
+  for (const name of [
+    'togglePlayState',
+    'playLibraryQuery',
+    'jumpQueue',
+    'cyclePlayMode',
+    'setPlayMode',
+    'stopPlayback'
+  ])
+    assert.match(
+      extractInternalFunctionBody(source, name),
+      /playerSleepTimer\.interruptShutdown\(\)/
+    )
+})
 
 test('native output-perfect facts stay canonical from store normalization to PlayerBar', () => {
   const storeSource = readFileSync(new URL('./usePlayerStore.ts', import.meta.url), 'utf8')
@@ -243,7 +383,7 @@ test('desktop lyrics loads the shared renderer bundle as a satellite window', ()
   assert.match(integrationSource, /rendererUrl\.searchParams\.set\('window', 'desktop-lyrics'\)/)
   assert.match(
     integrationSource,
-    /loadFile\(join\(__dirname, '\.\.\/renderer\/index\.html'\), \{\s*query: \{ window: 'desktop-lyrics' \}/
+    /loadFile\(join\(__dirname, '\.\.\/renderer\/index\.html'\), \{\s*query: \{ window: 'desktop-lyrics'\s*(?:,|\})/
   )
   assert.doesNotMatch(integrationSource, /desktop-lyrics\.html/)
   // The window is the shared renderer document now, so it needs no CSP or IPC-trust
@@ -788,7 +928,7 @@ test('NetEase next-track prefetch wires into playback progress and the native qu
   assert.match(loadAndPlay, /rememberNcmStreamUrlCommit\(track\.id\)/)
   assert.match(
     loadAndPlay,
-    /stripStaleNcmStreamUrls\(playMode\.value === 'heart' \? \[track\] : queue\.value,/
+    /stripStaleNcmStreamUrls\(\s*playMode\.value === 'heart' \? \[track\] : queue\.value,/
   )
 })
 
@@ -819,6 +959,7 @@ function ncmGaplessFixture(
   const modes: string[] = []
   const loader = new NativeQueueLoader()
   const context = {
+    libraryPlayback: { active: ref(false), reference: () => null },
     queue: { value: queue as Track[] },
     currentTrack: { value: queue[0] as Track },
     queueIndex: { value: 0 },
@@ -827,6 +968,7 @@ function ncmGaplessFixture(
     scope: 'account:1',
     activeLoadToken: 1,
     nativePlaybackActive: true,
+    nativeQueueAdoptionUncertain: false,
     isPlaying: { value: true },
     isLoading: { value: false },
     castTargetUsn: { value: '' },
@@ -1102,6 +1244,24 @@ test('NetEase prefetch retries a failed native commit without retaining false fr
   assert.equal(f.loaded[0][1], 'twilight-media://audio/b')
 })
 
+test('NetEase prefetch cannot resynchronize or replay an uncertain conditional queue handoff', async () => {
+  let release!: (target: NcmPrefetchResult) => void
+  const f = ncmGaplessFixture({
+    resolve: () =>
+      new Promise((resolve) => {
+        release = resolve
+      })
+  })
+  const request = f.prefetch()
+  while (!release) await new Promise<void>((resolve) => setImmediate(resolve))
+  f.context.nativeQueueAdoptionUncertain = true
+  release('twilight-media://audio/late')
+  await request
+  await f.prefetch()
+  assert.equal(f.loaded.length, 0)
+  assert.equal(f.context.queue.value[1].streamUrl, null)
+})
+
 for (const change of ['account', 'quality', 'load', 'queue-entry'] as const) {
   test(`NetEase prefetch discards a late result after a ${change} change and prepares the new target`, async () => {
     let release!: (target: NcmPrefetchResult) => void
@@ -1277,7 +1437,7 @@ test('next and previous only use native controls when the native queue is delega
   assert.match(source, /togglePause: \(\) => window\.api\.audioEngine\.togglePause\(\)/)
   assert.match(seekPlayback, /nativePlaybackActive \|\| nativeQueueDelegated/)
   assert.match(playQueueTrack, /if \(castTargetUsn\.value\)[\s\S]*castCurrentTrackToDevice/)
-  assert.match(playQueueTrack, /void loadAndPlay\(track\)/)
+  assert.match(playQueueTrack, /void loadAndPlay\(track, position\)/)
   assert.match(nextBody, /playQueueTrack\(track\)/)
   assert.match(previousBody, /playQueueTrack\(/)
   assert.match(previousBody, /controlCast\?\.\(\{ seek: 0 \}\)/)
@@ -1429,7 +1589,7 @@ test('native queue switching guards the target track before applying playback-in
   assert.match(seekPlaybackGuardBody, /if \(isLoading\.value\) \{\s*restoredPlaybackPending = true/)
   assert.doesNotMatch(seekPlaybackGuardBody, /loadedTrackId !== track\.id/)
   assert.match(advanceAfterPlaybackEnded, /activateCurrentTrack\(track/)
-  assert.match(playQueueTrack, /activateCurrentTrack\(track, \{ resetUi: true, position: 0 \}\)/)
+  assert.match(playQueueTrack, /activateCurrentTrack\(track, \{ resetUi: true, position \}\)/)
   assert.match(
     setupAudioEngineListeners,
     /api\.onPlaybackInfo\(\(info\) => \{\s*applyNativePlaybackInfo\(info\)\s*\}\)/
@@ -1614,6 +1774,7 @@ function volumeRestoreFixture(savedVolume: number) {
     .join('\n')
   const implementation = ts.transpileModule(
     `let suppressVolumePersist = false
+     let adoptedAfterglowRestore = false
      const playbackAudio = null
      const lastAudibleVolume = ref(0.7)
      const muted = ref(false)
@@ -1841,8 +2002,8 @@ test('audio engine errors use the global notice channel instead of the player ba
   )
   assert.match(storeSource, /pushNotice\(\{ kind, message \}\)/)
   assert.doesNotMatch(storeSource, /isFallbackNotice/)
-  // Every caller that keeps audio playing must say so explicitly.
-  assert.equal(storeSource.match(/setAudioEngineError\([\s\S]*?'warning'\s*\)/g)?.length, 3)
+  // Recoverable fallback and the explicit stopped-queue recovery use warnings.
+  assert.equal(storeSource.match(/setAudioEngineError\([\s\S]*?'warning'\s*\)/g)?.length, 4)
   assert.doesNotMatch(source, /audioEngineError/)
   assert.doesNotMatch(source, /player-playback-diagnostic"[^>]*>[\s\S]*audioEngineError/)
 })
@@ -2490,7 +2651,10 @@ test('play mode is persisted in settings and restored on launch', () => {
   const loadAndPlay =
     playerSource.match(/async function loadAndPlay[\s\S]*?function next\(\)/)?.[0] ?? ''
 
-  assert.match(setPlayModeInternal, /if \(mode === playMode\.value\) return/)
+  assert.match(
+    setPlayModeInternal,
+    /if \(mode === \(requestedLibraryPlayMode \?\? playMode\.value\)\) return/
+  )
   assert.match(setPlayModeInternal, /rendererPlayModeBoundaryPending\.value = true/)
   assert.match(setPlayModeInternal, /void updateSettings\(\{ playMode: mode \}\)/)
   assert.match(setPlayModeInternal, /queueNativePlayModeSync\(mode\)/)
@@ -2628,7 +2792,7 @@ test('playback end auto-advance stops at queue end without changing manual next 
     'scheduleCrossfadeIfNeeded'
   )
 
-  assert.match(handlePlaybackEnded, /advanceAfterPlaybackEnded\(\)/)
+  assert.match(handlePlaybackEnded, /advanceAfterPlaybackEnded\(nativeBoundaryAuthoritative\)/)
   assert.doesNotMatch(handlePlaybackEnded, /\n\s*next\(\)/)
   assert.match(advanceAfterPlaybackEnded, /const nextIndex = queueIndex\.value \+ 1/)
   assert.match(advanceAfterPlaybackEnded, /nextIndex < queue\.value\.length/)
@@ -2640,7 +2804,7 @@ test('playback end auto-advance stops at queue end without changing manual next 
   // auto-advance budget equals the queue length. Main only signals EOF when the
   // engine reports no upcoming track, so this cannot race its auto-advance.
   assert.doesNotMatch(handleNativePlaybackEnded, /if \(isNativeQueueDelegated\(\)\) return/)
-  assert.match(handleNativePlaybackEnded, /handlePlaybackEnded\(\)/)
+  assert.match(handleNativePlaybackEnded, /handlePlaybackEnded\(nativeBoundaryAuthoritative\)/)
   assert.match(setupAudioEngineListeners, /case 'eof-reached':\s*handleNativePlaybackEnded\(\)/)
   assert.match(
     setupAudioEngineListeners,

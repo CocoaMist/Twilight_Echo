@@ -36,7 +36,7 @@ test('online home preserves source/playback behavior and refresh geometry; disco
       resolve: {
         alias: [
           {
-            find: /^@renderer\/(stores\/use(?:Provider|Settings|Player|Music|ListeningStats|Theme)Store|utils\/(unifiedRecentTracks|logicalTrackModel))$/,
+            find: /^@renderer\/(stores\/use(?:Provider|Settings|Player|Music|ListeningStats|Theme)Store|utils\/(unifiedRecentTracks|logicalTrackModel)|composables\/useLibraryRecentTracks\.ts)$/,
             replacement: join(directory, 'fixtures.ts')
           },
           {
@@ -116,7 +116,7 @@ app.whenReady().then(async()=>{
  }catch(error){console.error(error.stack);app.exit(1)}
 })`
 
-const fixtures = `import {ref,shallowRef} from 'vue'
+const fixtures = `import {computed,ref,shallowRef} from 'vue'
 export const song=(id,title='晚风经过你的窗')=>({id,source:id.split(':')[0],title,artist:'测试艺术家',album:'暮色回响',duration:180,cover:null,lyrics:null,filePath:'',fileName:'',size:0})
 export const source=id=>({id,name:id==='ncm'?'网易云音乐':'独立音乐',capabilities:['playbackUrl','login','library'],supportedMethods:['daily','fetchRecommendPlaylists','fetchDiscoveryPlaylists','fetchPlaylistTracks','searchSongs','fetchUserLibrary'],ui:{icon:'pi pi-cloud',authType:'qr',streamingSections:[{id:'daily',title:'每日推荐',icon:'pi pi-music',method:'daily'}]}})
 export const providers=ref([source('ncm'),source('other')]),tracks=shallowRef([]),recent=shallowRef([]),authenticated=ref(false),settings=ref({streamingActiveProvider:'ncm'}),currentTrack=shallowRef(null),isPlaying=ref(false),preview=ref(false),layout=ref('default')
@@ -130,6 +130,7 @@ export const useMusicStore=()=>({tracks})
 export const usePlayerStore=()=>({currentTrack,isPlaying,playTrack:(track,queue)=>{played.push({track,queue});currentTrack.value=track;isPlaying.value=true},togglePlay:()=>{isPlaying.value=!isPlaying.value}})
 export const getRecentTracks=()=>recent.value
 export const resolveUnifiedRecentTracks=()=>recent.value
+export const useLibraryRecentTracks=()=>({tracks:computed(()=>recent.value.slice(0,6)),state:ref({mode:'json',loading:false,error:''}),error:ref(''),capture:()=>null,confirm:async()=>true,retry(){}})
 export const getTrackSource=track=>track.source
 export const useThemeStore=()=>({presetLayout:layout})
 `
@@ -140,6 +141,7 @@ import StreamingDiscovery from '@renderer/components/StreamingDiscovery.vue'
 import '@renderer/assets/base.css'
 import 'primeicons/primeicons.css'
 import * as state from './fixtures.ts'
+window.api={library:{getStorageMode:async()=>'json',onChanged:()=>()=>{}}}
 const pause=()=>new Promise(resolve=>setTimeout(resolve,60))
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const events=[],visible=ref(true)

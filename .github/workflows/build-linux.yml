@@ -2,11 +2,23 @@ name: Build Linux packages
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish the built packages to this release tag (for example v1.3.1). Leave empty to only build artifacts.'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
 
 jobs:
   linux:
     name: Linux (AppImage / deb / rpm / tar.gz)
-    runs-on: ubuntu-latest
+    # Keep release binaries on the validated LTS instead of following ubuntu-latest migrations.
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -90,3 +102,44 @@ jobs:
             dist/*.rpm
             dist/*.tar.gz
           if-no-files-found: error
+
+  publish:
+    name: Publish Linux packages
+    needs: linux
+    # A tag push publishes automatically; manual runs must name an existing tag.
+    if: needs.linux.result == 'success' && (github.event_name == 'push' || inputs.release_tag)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          name: twilight-echo-linux
+          path: release-assets
+
+      - name: Verify the release tag matches the packaged version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "v${version}" = "$RELEASE_TAG"
+
+      - name: Write SHA-256 companion files
+        run: node scripts/release-assets.cjs checksum release-assets
+
+      - name: Publish the installers to the release
+        # Draft releases are invisible to `/releases/tags`, so the helper resolves
+        # the release id, replaces any older asset with the same name, and only
+        # publishes once every platform attached its complete asset set.
+        run: >-
+          bash scripts/publish-release-assets.sh
+          --tag "$RELEASE_TAG"
+          --assets release-assets
+          --platform linux
+

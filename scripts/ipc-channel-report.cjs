@@ -1,4 +1,4 @@
-﻿'use strict'
+'use strict'
 
 const fs = require('node:fs')
 const path = require('node:path')
@@ -190,6 +190,7 @@ function buildReport() {
     'shell',
     'discord',
     'library',
+    'playlistImport',
     'fs',
     'audioEngine',
     'bpmAnalysis',
@@ -206,11 +207,13 @@ function buildReport() {
     'settings',
     'fonts',
     'themes',
+    'themeWorkshop',
     'plugins',
     'providers',
     'providerDownloads',
     'extensions',
     'desktopLyrics',
+    'dynamicIsland',
     'miniPlayer',
     'trayPlayer',
     'debug'

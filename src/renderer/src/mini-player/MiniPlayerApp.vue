@@ -15,7 +15,7 @@ import MiniGlyph from './MiniGlyph.vue'
 import PlaybackModeIcon from '../components/icons/PlaybackModeIcon.vue'
 import ThemeIcon from '../components/ThemeIcon.vue'
 import { observeMiniPlayerThemeIcons } from '../app/themeIconRuntime'
-import DEFAULT_TRACK_COVER from '../assets/images/default-track-cover-light.png'
+import DEFAULT_TRACK_COVER from '../assets/images/default-track-cover-light.webp'
 import '../assets/default-track-cover.css'
 import MiniPlayerCustomizer from './MiniPlayerCustomizer.vue'
 import ScrollingText from './ScrollingText.vue'
@@ -797,8 +797,9 @@ onBeforeUnmount(() => {
             >
               <ThemeIcon
                 :icon-slot="state.favoriteLiked ? 'playback.favoriteActive' : 'playback.favorite'"
-                ><i :class="state.favoriteLiked ? 'ph-fill ph-heart' : 'ph ph-heart'"></i
-              ></ThemeIcon>
+              >
+                <i :class="state.favoriteLiked ? 'ph-fill ph-heart' : 'ph ph-heart'"></i>
+              </ThemeIcon>
             </button>
           </div>
         </Transition>
@@ -916,9 +917,9 @@ onBeforeUnmount(() => {
               :aria-label="state.volume > 0.001 ? '静音' : '取消静音'"
               @click="toggleMute()"
             >
-              <ThemeIcon :icon-slot="state.volume <= 0.001 ? 'playback.muted' : 'playback.volume'"
-                ><i :class="volumeIcon"></i
-              ></ThemeIcon>
+              <ThemeIcon :icon-slot="state.volume <= 0.001 ? 'playback.muted' : 'playback.volume'">
+                <i :class="volumeIcon"></i>
+              </ThemeIcon>
             </button>
           </div>
         </div>

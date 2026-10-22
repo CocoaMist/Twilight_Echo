@@ -39,7 +39,7 @@ test('unified appearance workspace keeps discoverable theme operations and indep
           enforce: 'pre',
           resolveId(source) {
             const child = source.match(
-              /\/(AppearanceSettingsSection|AppearanceThemeShelf|AppearanceWindowPreview|ThemeStudioPage|ThemeWorkshopPage)\.vue$/
+              /\/(AppearanceWorkspaceSection|AppearanceThemeShelf|AppearanceWindowPreview|ThemeStudioPage|ThemeWorkshopPage)\.vue$/
             )?.[1]
             if (child) return '\0appearance-child:' + child
             if (source.endsWith('/extensions/registry')) return '\0appearance-registry'
@@ -58,7 +58,7 @@ test('unified appearance workspace keeps discoverable theme operations and indep
             if (id.startsWith('\0appearance-child:')) {
               const name = id.split(':')[1]
               if (name === 'AppearanceWindowPreview') return previewBoundary
-              if (name === 'AppearanceSettingsSection') return appearanceSettingsBoundary(renderer)
+              if (name === 'AppearanceWorkspaceSection') return appearanceSettingsBoundary(renderer)
               return `import {ref,computed} from 'vue';export default {props:['initialKey','initialProjectId','initialSourceKey','initialDomain','initialGroup','unified','contextual','part','controlsOnly'],setup(props,ctx){const key=ref('${name}'==='ThemeStudioPage'?props.initialKey:'workshop:'+ (props.initialProjectId??'project-one'));const tone=ref('dark'),dirty=ref(false),error=ref('');window.editorRefs['${name}']={key,tone,dirty,error};const state=computed(()=>({key:key.value,tone:tone.value,busy:false,canUndo:true,canRedo:true,canReset:true,canExport:true,canApply:true,status:'Preview',dirty:dirty.value,hasUnsavedChanges:dirty.value,error:error.value}));if(props.initialSourceKey)window.customizedSource=props.initialSourceKey;ctx.expose({state,openTools:async()=>window.actions.push({editor:'${name}',action:'tools'}),selectGroup:()=>{},projects:ref([{id:'project-one',name:'Project one'}]),customGroups:ref(['Custom control']),selectKey:async value=>{key.value='${name}'==='ThemeStudioPage'?value:'workshop:'+value;dirty.value=false;error.value=''},setTone:value=>tone.value=value,perform:async action=>{window.actions.push({editor:'${name}',action});error.value='';if(action==='duplicate'){key.value='profile:new-draft';dirty.value=true}if(action==='apply'&&window.failCreationSave)error.value='theme save failed';else if(action==='apply')dirty.value=false},collapse:async()=>false,discard:async()=>{dirty.value=false},prepareLeave:async()=>{window.leaveCalls.push('${name}');return window.allowLeave['${name}']!==false}});return {props}},template:'<div class="fixture-${name}"><button data-context-field>{{props.part}}</button><span class="fixture-domain">{{props.initialDomain||props.initialGroup}}</span></div>'}`
             }
             return null
@@ -92,7 +92,7 @@ test('unified appearance workspace keeps discoverable theme operations and indep
         .map((f) => `<link rel="stylesheet" href="bundle/${f}">`)
         .join(
           ''
-        )}<style>:root{--te-primary-500:#2563eb;--te-control-accent:#2563eb}body{margin:0;background:#f6f6f7}html[data-theme=dark] body{background:#18191b}.fixture-AppearanceSettingsSection{display:flex;flex:1;min-height:0;flex-direction:column}.fixture-AppearanceWindowPreview{position:relative;display:flex;align-items:flex-end;gap:8px;flex:1;min-height:140px;padding:12px;box-sizing:border-box}.fixture-scene-placeholder{position:absolute;inset:12px 12px 52px;border-radius:8px;background:linear-gradient(135deg,#8881,#8883)}.fixture-AppearanceWindowPreview>button{position:relative}.fixture-ThemeStudioPage,.fixture-ThemeWorkshopPage{padding:12px}</style></head><body><div id="app"></div><script src="bundle/${files.find((f) => f.endsWith('.js'))}"></script></body></html>`
+        )}<style>:root{--te-primary-500:#2563eb;--te-control-accent:#2563eb}body{margin:0;background:#f6f6f7}html[data-theme=dark] body{background:#18191b}.fixture-AppearanceWorkspaceSection{display:flex;flex:1;min-height:0;flex-direction:column}.fixture-AppearanceWindowPreview{position:relative;display:flex;align-items:flex-end;gap:8px;flex:1;min-height:140px;padding:12px;box-sizing:border-box}.fixture-scene-placeholder{position:absolute;inset:12px 12px 52px;border-radius:8px;background:linear-gradient(135deg,#8881,#8883)}.fixture-AppearanceWindowPreview>button{position:relative}.fixture-ThemeStudioPage,.fixture-ThemeWorkshopPage{padding:12px}</style></head><body><div id="app"></div><script src="bundle/${files.find((f) => f.endsWith('.js'))}"></script></body></html>`
     )
     await writeFile(join(directory, 'runner.cjs'), runner)
     const env = { ...process.env }
@@ -104,6 +104,7 @@ test('unified appearance workspace keeps discoverable theme operations and indep
     )
     assert.match(result.stdout, /APPEARANCE_CAPABILITIES_OK/)
     assert.match(result.stdout, /APPEARANCE_MANAGEMENT_OK/)
+    assert.match(result.stdout, /APPEARANCE_WORKSHOP_ENTRY_OK/)
     assert.match(result.stdout, /APPEARANCE_RESPONSIVE_CASES 70/)
   } finally {
     assert.equal(dirname(resolve(directory)), resolve(require('node:os').tmpdir()))
@@ -122,10 +123,10 @@ const playerOpen=ref(false),behaviorOpen=ref(false),preview=ref(),previewPart=re
 window.dailyRefs={preview,previewPart,previewBusy};
 registerSettingsDisclosure('player-bar',()=>playerOpen.value=true);registerSettingsDisclosure('player-bar-behavior-details',()=>behaviorOpen.value=true);
 window.dailyContexts.push({commit:props.commit,history:props.themeHistory,externalToolbar:props.externalToolbar});
-const apply=async()=>{window.actions.push({editor:'AppearanceSettingsSection',action:'apply'});return window.allowApply!==false};
-ctx.expose({preview,previewPart,previewBusy,resetView:()=>previewPart.value='overview',collapse:async()=>false,setTone:()=>{},discard:async()=>{},apply,prepareLeave:async()=>{window.leaveCalls.push('AppearanceSettingsSection');return window.allowLeave.AppearanceSettingsSection!==false},reveal:async entry=>{window.revealed=entry.id}});
+const apply=async()=>{window.actions.push({editor:'AppearanceWorkspaceSection',action:'apply'});return window.allowApply!==false};
+ctx.expose({preview,previewPart,previewBusy,resetView:()=>previewPart.value='overview',collapse:async()=>false,setTone:()=>{},discard:async()=>{},apply,prepareLeave:async()=>{window.leaveCalls.push('AppearanceWorkspaceSection');return window.allowLeave.AppearanceWorkspaceSection!==false},reveal:async entry=>{window.revealed=entry.id}});
 return {playerOpen,behaviorOpen,preview,previewPart,apply,more:()=>ctx.emit('editTheme','player-bar')}
-},template:'<div class="fixture-AppearanceSettingsSection"><AppearanceWindowPreview ref="preview" :active="active" :focused-region="previewPart" @region="previewPart=$event"/><button data-daily-apply @click="apply">应用外观</button><button data-daily-more @click="more">主题制作：播放栏</button><div v-show="playerOpen" :inert="!playerOpen" id="player-bar"><div v-show="behaviorOpen" :inert="!behaviorOpen" id="player-bar-behavior-details"><label data-setting-id="player-page-mode">播放页形态<select aria-label="播放页形态"><option>标准</option><option>紧凑</option></select></label></div></div></div>'}
+},template:'<div class="fixture-AppearanceWorkspaceSection"><AppearanceWindowPreview ref="preview" :active="active" :focused-region="previewPart" @region="previewPart=$event"/><button data-daily-apply @click="apply">应用外观</button><button data-daily-more @click="more">主题制作：播放栏</button><div v-show="playerOpen" :inert="!playerOpen" id="player-bar"><div v-show="behaviorOpen" :inert="!behaviorOpen" id="player-bar-behavior-details"><label data-setting-id="player-page-mode">播放页形态<select aria-label="播放页形态"><option>标准</option><option>紧凑</option></select></label></div></div></div>'}
 `
 }
 
@@ -155,7 +156,7 @@ const {app,BrowserWindow}=require('electron'),path=require('node:path'),fs=requi
 app.whenReady().then(async()=>{let win,currentCase;const output=process.env.TE_APPEARANCE_PAGE_QA_OUTPUT,manifest=[];try{
 if(output)await fs.mkdir(output,{recursive:true});win=new BrowserWindow({show:false,width:1280,height:800,webPreferences:{contextIsolation:false,offscreen:true,backgroundThrottling:false}});await win.loadFile(path.join(__dirname,'index.html'));win.webContents.debugger.attach('1.3');await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled',{enabled:true});
 for(const mode of ['dark','pureWhite']){const point=await win.webContents.executeJavaScript('window.checkEditorContrast('+JSON.stringify(mode)+')');await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',...point});await new Promise(r=>setTimeout(r,30));await win.webContents.executeJavaScript('window.checkEditorHover()')}
-await win.webContents.executeJavaScript('window.checkEditorContrast("dark")');await win.webContents.executeJavaScript('window.fixture()');await win.webContents.executeJavaScript('window.managementFixture()');console.log('APPEARANCE_MANAGEMENT_OK');
+await win.webContents.executeJavaScript('window.checkEditorContrast("dark")');await win.webContents.executeJavaScript('window.fixture()');await win.webContents.executeJavaScript('window.workshopEntryFixture()');console.log('APPEARANCE_WORKSHOP_ENTRY_OK');await win.webContents.executeJavaScript('window.managementFixture()');console.log('APPEARANCE_MANAGEMENT_OK');
 const runCase=async(width,height,tone,mode,layered)=>{currentCase={width,height,tone,mode,layered};win.setContentSize(width,height);const result=await win.webContents.executeJavaScript('window.checkResponsiveCreation('+[mode,layered,tone].map(value=>JSON.stringify(value)).join(',')+')');const file=tone+'-'+mode+'-'+(layered?'3d':'2d')+'-'+width+'x'+height+'.png';if(output)await fs.writeFile(path.join(output,file),(await win.webContents.capturePage()).toPNG());manifest.push({...result,requestedWidth:width,requestedHeight:height,file});};
 for(const [width,height] of [[1280,800],[1024,800],[760,720],[620,720],[521,720]])for(const tone of ['dark','pureWhite'])for(const mode of ['selection','adjust','studio','workshop'])for(const layered of (mode==='selection'?[false]:[false,true]))await runCase(width,height,tone,mode,layered);
 

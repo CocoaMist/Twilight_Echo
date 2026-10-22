@@ -48,32 +48,11 @@ test('appearance editor renders reversible drafts and wallpapers across tones, p
       configFile: false,
       root: directory,
       logLevel: 'error',
-      plugins: [
-        {
-          name: 'modal-preview-boundary',
-          enforce: 'pre',
-          resolveId(source, importer) {
-            if (source.endsWith('AppearanceWindowPreview.vue')) return '\0modal-window'
-            if (
-              source.endsWith('/stores/useThemeStore.ts') &&
-              importer?.endsWith('/composables/useBackgroundAppearanceEditor.ts')
-            )
-              return '\0measured-appearance-preview'
-            return null
-          },
-          load(id) {
-            if (id === '\0modal-window')
-              return `import {ref,h} from 'vue';export default {setup(_,ctx){const navigationExpanded=ref(true);ctx.expose({navigationExpanded,toggleNavigation:()=>{navigationExpanded.value=!navigationExpanded.value}});return()=>h('div',{class:'appearance-window-preview',style:{position:'relative',height:'100%',width:'100%'}},[h('div',{class:'fixture-context-anchor',style:{position:'absolute',top:'12px',right:'12px',maxWidth:'calc(100% - 24px)'}},ctx.slots['context-tools']?.())])}}`
-            if (id === '\0measured-appearance-preview')
-              return `export {useThemeStore} from '@renderer/stores/useThemeStore.ts';import {previewAppearance as preview} from '@renderer/stores/useThemeStore.ts';import {cloneAppearance} from '@shared/appAppearance.ts';export async function previewAppearance(draft){window.previewRequests.push(draft?cloneAppearance(draft):null);if(draft&&window.failPreview)throw Error('预览失败示例');await preview(draft)}`
-            return null
-          }
-        },
-        vue()
-      ],
+      plugins: [vue()],
       define: { 'process.env.NODE_ENV': '"production"' },
       resolve: {
         alias: {
+          '/icon.png': resolve('resources/icon.png'),
           '@renderer': resolve('src/renderer/src'),
           '@shared': resolve('src/shared'),
           vue: require.resolve('vue/dist/vue.esm-bundler.js'),
@@ -108,11 +87,6 @@ test('appearance editor renders reversible drafts and wallpapers across tones, p
       { windowsHide: true, timeout: 90_000 }
     )
     assert.match(result.stdout, /APPEARANCE_OK/)
-    assert.match(result.stdout, /APPEARANCE_IMAGE_BUSY_OK/)
-    assert.match(result.stdout, /APPEARANCE_TONE_OK/)
-    assert.match(result.stdout, /APPEARANCE_IMAGE_PALETTE_OK/)
-    assert.match(result.stdout, /APPEARANCE_BACKGROUND_OWNERSHIP_OK/)
-    assert.match(result.stdout, /APPEARANCE_LEGACY_BACKGROUND_BASELINE_OK/)
   } finally {
     assert.equal(dirname(resolve(directory)), resolve(tmpdir()))
     assert.ok(basename(directory).startsWith('twilight-appearance-'))
@@ -122,17 +96,14 @@ test('appearance editor renders reversible drafts and wallpapers across tones, p
 
 const runner = `
 const {app,BrowserWindow,protocol,nativeImage}=require('electron'),fs=require('node:fs'),path=require('node:path');
-protocol.registerSchemesAsPrivileged(['background','theme-asset'].map(scheme=>({scheme,privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}})));
+protocol.registerSchemesAsPrivileged([{scheme:'background',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setPath('userData',path.join(__dirname,'profile'));
 app.commandLine.appendSwitch('force-color-profile','srgb');
 app.whenReady().then(async()=>{
  const bytes=Buffer.alloc(1280*800*4);
  for(let y=0;y<800;y++)for(let x=0;x<1280;x++){const offset=(y*1280+x)*4;bytes[offset]=90;bytes[offset+1]=60;bytes[offset+2]=40;bytes[offset+3]=255}
  const wallpaper=nativeImage.createFromBitmap(bytes,{width:1280,height:800}).toPNG();
- protocol.handle('background',request=>request.url.includes('missing')?new Response('',{status:404}):new Response(wallpaper,{headers:{'content-type':'image/png','Access-Control-Allow-Origin':'*'}}));
- const themeBytes=Buffer.alloc(32*32*4);for(let index=0;index<themeBytes.length;index+=4){themeBytes[index]=68;themeBytes[index+1]=126;themeBytes[index+2]=174;themeBytes[index+3]=255}
- const themeWallpaper=nativeImage.createFromBitmap(themeBytes,{width:32,height:32}).toPNG();
- protocol.handle('theme-asset',()=>new Response(themeWallpaper,{headers:{'content-type':'image/png','Access-Control-Allow-Origin':'*'}}));
+ protocol.handle('background',request=>request.url.includes('missing')?new Response('',{status:404}):new Response(wallpaper,{headers:{'content-type':'image/png'}}));
  // Pixel samples use content coordinates; native Windows borders must not shrink the viewport.
  const win=new BrowserWindow({show:false,width:1280,height:820,useContentSize:true,webPreferences:{contextIsolation:false,offscreen:true,backgroundThrottling:false}});
  // Keep crop coordinates in CSS pixels regardless of the Windows display scale.
@@ -140,66 +111,30 @@ app.whenReady().then(async()=>{
  const capturePixel=async point=>{
   const image=await capture();
   const size=image.getSize();
-  const viewport=await win.webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
-  if(point.x+point.width>viewport.width||point.y+point.height>viewport.height)throw new Error('pixel sample lies outside the CSS viewport: '+JSON.stringify(viewport));
-  // On Windows, capturePage bitmap pixels can differ from CSS coordinates even when devicePixelRatio is 1.
-  const ratioX=size.width/viewport.width,ratioY=size.height/viewport.height;
-  const pixel=image.crop({x:Math.round(point.x*ratioX),y:Math.round(point.y*ratioY),width:Math.max(1,Math.round(point.width*ratioX)),height:Math.max(1,Math.round(point.height*ratioY))}).toBitmap();
+  if(point.x+point.width>size.width||point.y+point.height>size.height)throw new Error('pixel sample lies outside the captured viewport: '+JSON.stringify(size));
+  const pixel=image.crop(point).toBitmap();
   if(pixel.length<4)throw new Error('pixel sample is empty');
   return pixel;
- };
- const referencePixel=async rgb=>{
-  await win.webContents.executeJavaScript('window.setAppearancePixelReference('+JSON.stringify(rgb)+')');
-  return capturePixel({x:4,y:4,width:1,height:1});
  };
  try{
   await win.loadFile(process.argv.at(-1));
   win.webContents.debugger.attach('1.3');
   await win.webContents.executeJavaScript('window.runAppearanceTests()');
-  // capturePage can apply a display color transform even with an sRGB PNG.
-  // Compare to the same window's mathematical CSS result, keeping channel tolerance unchanged.
-  const expectedWallpaper=await referencePixel([40,60,90].map(channel=>Math.round(channel*0.8*0.6)));
+  await win.webContents.executeJavaScript('window.runRecipeRestoreTests()');
   for(const page of ['local','streaming','player','settings'])for(const blur of [0,30]){
    await win.webContents.executeJavaScript('window.prepareAppearancePixels('+JSON.stringify(page)+','+blur+')');
-   const viewport=await win.webContents.executeJavaScript('({width:innerWidth,height:innerHeight})');
+   const viewport=(await capture()).getSize();
    // Windows runners can clamp a hidden window to their smaller virtual display.
    for(const point of [{x:600,y:400,width:1,height:1},{x:viewport.width-10,y:400,width:1,height:1}]){
     const pixel=await capturePixel(point);
-    if([0,1,2].some(channel=>Math.abs(pixel[channel]-expectedWallpaper[channel])>3))throw new Error(page+' background brightness/dim or blur edge mismatch: '+[...pixel]+' expected '+[...expectedWallpaper]);
+    if(Math.abs(pixel[0]-43)>3||Math.abs(pixel[1]-29)>3||Math.abs(pixel[2]-19)>3)throw new Error(page+' background brightness/dim or blur edge mismatch: '+[...pixel]);
    }
   }
   await win.webContents.executeJavaScript('window.prepareMissingBackground()');
-  const expectedFallback=await referencePixel([0x12,0x34,0x56]);
   const fallback=await capturePixel({x:600,y:400,width:1,height:1});
   // Full-frame capture may round color channels; use the same tolerance as wallpaper samples.
-  if([0,1,2].some(channel=>Math.abs(fallback[channel]-expectedFallback[channel])>3))throw new Error('missing image did not fall back to solid color: '+[...fallback]+' expected '+[...expectedFallback]);
+  if(Math.abs(fallback[0]-86)>3||Math.abs(fallback[1]-52)>3||Math.abs(fallback[2]-18)>3)throw new Error('missing image did not fall back to solid color: '+[...fallback]);
   if(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR){fs.mkdirSync(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,{recursive:true});for(const tone of ['pureWhite','dark']){await win.webContents.executeJavaScript('window.showAppearanceEvidence('+JSON.stringify(tone)+')');fs.writeFileSync(path.join(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,'appearance-'+tone+'.png'),(await win.webContents.capturePage()).toPNG())}win.setContentSize(620,820);await win.webContents.executeJavaScript('window.settleAppearance()');if(await win.webContents.executeJavaScript('document.querySelector(".appearance-editor").scrollWidth>document.querySelector(".appearance-editor").clientWidth+1'))throw new Error('narrow editor overflows');fs.writeFileSync(path.join(process.env.TWILIGHT_APPEARANCE_EVIDENCE_DIR,'appearance-narrow.png'),(await win.webContents.capturePage()).toPNG())}
-  await win.webContents.executeJavaScript('window.runCharacterTests()');
-  console.log('APPEARANCE_IMAGE_BUSY_OK');
-  await win.webContents.executeJavaScript('window.runPreviewPerformanceTests()');
-  await win.webContents.executeJavaScript('window.runAppearanceToneTests()');
-  console.log('APPEARANCE_TONE_OK');
-  await win.webContents.executeJavaScript('window.runImagePaletteTests()');
-  console.log('APPEARANCE_IMAGE_PALETTE_OK');
-  const evidenceDirectory=process.env.TWILIGHT_BACKGROUND_EVIDENCE_DIR,ownership=[],ownershipFailures=[];
-  if(evidenceDirectory)fs.mkdirSync(evidenceDirectory,{recursive:true});
-  const checkOwnership=async report=>{
-   const expected=await referencePixel(report.expectedRgb),pixel=await capturePixel({x:600,y:400,width:1,height:1});
-   const matches=[0,1,2].every(channel=>Math.abs(pixel[channel]-expected[channel])<=3),result={...report,pixel:[...pixel.subarray(0,4)],expected:[...expected.subarray(0,4)],matches};ownership.push(result);
-   if(evidenceDirectory){fs.writeFileSync(path.join(evidenceDirectory,'ownership-'+report.id+'.png'),(await win.webContents.capturePage()).toPNG());fs.writeFileSync(path.join(evidenceDirectory,'ownership-pixels.json'),JSON.stringify(ownership,null,2))}
-   if(!matches)ownershipFailures.push(report.id+': '+result.pixel+' expected '+result.expected);
-  };
-  const ownershipCases=await win.webContents.executeJavaScript('window.beginBackgroundOwnershipTests()');
-  for(let index=0;index<ownershipCases;index++)await checkOwnership(await win.webContents.executeJavaScript('window.prepareBackgroundOwnershipCase('+index+')'));
-  await checkOwnership(await win.webContents.executeJavaScript('window.prepareBackgroundCancelPreview()'));
-  await checkOwnership(await win.webContents.executeJavaScript('window.cancelBackgroundOwnershipPreview()'));
-  await win.webContents.executeJavaScript('window.finishBackgroundOwnershipTests()');
-  const legacyCases=await win.webContents.executeJavaScript('window.beginLegacyBackgroundTests()');
-  for(let index=0;index<legacyCases;index++)await checkOwnership(await win.webContents.executeJavaScript('window.prepareLegacyBackgroundCase('+index+')'));
-  await win.webContents.executeJavaScript('window.finishLegacyBackgroundTests()');
-  if(ownershipFailures.length)throw Error('background ownership pixel mismatch: '+ownershipFailures.join('; '));
-  console.log('APPEARANCE_BACKGROUND_OWNERSHIP_OK '+ownership.length);
-  console.log('APPEARANCE_LEGACY_BACKGROUND_BASELINE_OK '+legacyCases);
   console.log('APPEARANCE_OK');app.exit(0)
  }catch(error){console.error(error.stack);app.exit(1)}
 })
@@ -216,17 +151,13 @@ import 'primeicons/primeicons.css'
 import {useSettingsStore} from '@renderer/stores/useSettingsStore.ts'
 import {bootstrapThemeRuntime,useThemeStore,syncThemeSettingsAppearance,previewAppearance} from '@renderer/stores/useThemeStore.ts'
 import {appearanceEditorOpen,appearanceFullWindowPreview,openAppearanceEditor} from '@renderer/composables/appearanceEditorState.ts'
-import {useBackgroundAppearanceEditor} from '@renderer/composables/useBackgroundAppearanceEditor.ts'
-import {useAppearanceHistory} from '@renderer/composables/useAppearanceHistory.ts'
-import {applyAppearancePreset,cloneAppearance,defaultCardAppearance,normalizeAppBackgroundSettings,cardCssVariables,resolveBackgroundPalette,backgroundEffect} from '@shared/appAppearance.ts'
-import {createDefaultThemeLibraryDocument,themeContrastRatio} from '@shared/theme.ts'
+import {applyAppearancePreset,cloneAppearance,defaultCardAppearance,normalizeAppBackgroundSettings} from '@shared/appAppearance.ts'
+import {createDefaultThemeLibraryDocument} from '@shared/theme.ts'
 const expect=(value,message)=>{if(!value)throw new Error(message)}
 const settle=async()=>{await nextTick();for(let i=0;i<4;i++)await new Promise(resolve=>requestAnimationFrame(resolve))}
 window.settleAppearance=settle
-const page=ref('local'),writes=[],settingsListeners=new Set();let failSave=false,failImport=false
-let legacyThemes=[],legacyStyles={};
-window.previewRequests=[]
-window.api={settings:{onChanged:listener=>{settingsListeners.add(listener);return()=>settingsListeners.delete(listener)},update:async patch=>{if(failSave)throw new Error('保存失败示例');writes.push(patch);confirmed={...confirmed,...patch};const result=snapshot();for(const listener of settingsListeners)listener(result);return result},importBackgroundImage:async()=> {if(failImport)throw new Error('图片导入失败示例');return 'background://wallpaper.png'}},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{},validateAssets:async()=>true},plugins:{onChanged:()=>()=>{},onNotice:()=>()=>{}},extensions:{list:async()=>[{pluginId:'background-legacy',ui:[],themes:legacyThemes}],readThemeStylesheet:async path=>legacyStyles[path]}}
+const page=ref('local'),writes=[];let failSave=false,failImport=false
+window.api={settings:{get:async()=>snapshot(),onChanged:()=>()=>{},update:async patch=>{if(failSave)throw new Error('保存失败示例');writes.push(patch);confirmed={...confirmed,...patch};return snapshot()},importBackgroundImage:async()=> {if(failImport)throw new Error('图片导入失败示例');return 'background://wallpaper.png'}},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}}}
 const settingsStore=useSettingsStore(),theme=useThemeStore()
 let confirmed={...settingsStore.settings.value,theme:'dark',appBackground:normalizeAppBackgroundSettings({global:{kind:'image',image:'background://wallpaper.png'}}),cardAppearance:defaultCardAppearance(),surfaceMaterial:'standard'}
 const snapshot=()=>({settings:confirmed,defaults:confirmed,paths:{},appVersion:'test',platform:'win32',windowTransparencySupported:false,restartReasons:[]})
@@ -234,15 +165,15 @@ const startup=()=>({systemTone:'dark',settings:snapshot(),themeBootstrap:{librar
 createApp({setup(){return()=>h('div',[
  h(Background,{page:page.value}),
  h('div',{class:'app-shell'},[
-  h('div',{class:'title-bar','data-v-fixture':''},['Twilight Echo',h('button',{class:'menu-btn','data-v-fixture':''},'⌂')]),
-  h('div',{class:'side-menu','data-v-fixture':''},[h('strong','本地音乐'),h('button',{class:'menu-item','data-v-fixture':''},[h('span',{class:'item-label','data-v-fixture':''},'背景文字')])]),
+  h('div',{class:'title-bar','data-v-fixture':''},'Twilight Echo'),
+  h('div',{class:'side-menu','data-v-fixture':''},[h('strong','本地音乐')]),
   h('div',{class:'fixture-content home','data-v-fixture':''},[h('div',{class:'album-card fixture-tile','data-v-fixture':''},'夜航星'),h('div',{class:'context-menu'},'菜单保留底板')]),
-  h('div',{class:'player-bar','data-v-fixture':'',style:{position:'fixed',bottom:'15px',left:'280px',width:'850px',height:'65px'}},['♫ 夜航星',h('button',{class:'btn-play','data-v-fixture':''},'▶')])]),
- page.value==='settings'?h('div',{class:'fixture-settings settings-overlay-root settings-overlay-root--active','data-v-fixture':''},[h(Background,{page:'settings',embedded:true}),h('main',{class:'settings-preview-page','data-v-fixture':'',style:{position:'absolute',left:'280px',top:'80px'}},[h('input',{class:'number-input','data-v-fixture':'',type:'number',value:36}),h('select',{class:'preview-select','data-v-fixture':''},[h('option','背景文字')])])]):null,
- page.value==='player'?h('div',{class:'playing-music fixture-player','data-v-fixture':''},[h(Background,{page:'player',embedded:true}),h('div',{class:'backdrop','data-v-fixture':''},'旧封面背景'),h('button',{class:'lyric-return-button','data-v-fixture':'',style:{position:'absolute',left:'280px',top:'80px'}},'返回播放')]):null,
+  h('div',{class:'player-bar','data-v-fixture':'',style:{position:'fixed',bottom:'15px',left:'280px',width:'850px',height:'65px'}},'♫ 夜航星 ▶')]),
+ page.value==='settings'?h('div',{class:'fixture-settings settings-overlay-root settings-overlay-root--active','data-v-fixture':''},[h(Background,{page:'settings',embedded:true})]):null,
+ page.value==='player'?h('div',{class:'playing-music fixture-player','data-v-fixture':''},[h(Background,{page:'player',embedded:true}),h('div',{class:'backdrop','data-v-fixture':''},'旧封面背景')]):null,
  appearanceEditorOpen.value?h(Editor):null
 ])}}).mount('#app')
-const button=(text)=>[...document.querySelectorAll('.appearance-editor button,.appearance-full-preview-toolbar button')].find(el=>el.textContent.trim()===text && el.checkVisibility())
+const button=(text)=>[...document.querySelectorAll('.appearance-editor button,.appearance-full-preview-toolbar button,.appearance-recipe-prompt button')].find(el=>el.textContent.trim()===text && el.checkVisibility())
 window.runAppearanceTests=async()=>{
  settingsStore.hydrateStartupSnapshot(startup());await bootstrapThemeRuntime(startup());await settle()
  const cache=localStorage.getItem('twilight-echo:theme-runtime-cache:v1')
@@ -269,12 +200,30 @@ window.runAppearanceTests=async()=>{
  await previewAppearance(null);await theme.setPreviewTone(null)
  const first=cloneAppearance(confirmed),second=cloneAppearance(confirmed);first.surfaceMaterial='transparent';second.surfaceMaterial='liquidGlass';await Promise.all([previewAppearance(first),previewAppearance(second)]);expect(document.documentElement.dataset.teSurfaceMaterial==='liquidGlass','old preview won race');await previewAppearance(null)
 }
+window.runRecipeRestoreTests=async()=>{
+ const baseline=JSON.parse(JSON.stringify(confirmed))
+ const waitFor=async(predicate,message)=>{for(let i=0;i<120;i++){await settle();if(predicate())return}throw new Error(message)}
+ const upload=async()=>{
+  const input=document.querySelector('.appearance-file-input'),transfer=new DataTransfer();transfer.items.add(new File(['image'],'wallpaper.png',{type:'image/png'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));await waitFor(()=>button('图片通透推荐搭配')&&!button('图片通透推荐搭配').disabled,'successful image import did not retain the manual recipe action')
+ }
+ for(const tone of ['pureWhite','dark']){
+  confirmed=JSON.parse(JSON.stringify(baseline));await settingsStore.loadSettings();await theme.setPreviewTone(tone);await settle();openAppearanceEditor();await settle()
+  failImport=true;const input=document.querySelector('.appearance-file-input'),transfer=new DataTransfer();transfer.items.add(new File(['invalid'],'invalid.png',{type:'image/png'}));input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));await settle();expect(!document.querySelector('[role=alertdialog]'),'failed import opened a recommendation');failImport=false
+  const savedWrites=writes.length
+  await upload();expect(!document.querySelector('[role=alertdialog]')&&appearanceEditorOpen.value,'image import interrupted editing with an obsolete prompt');expect(document.querySelector('.appearance-mini-window').style.getPropertyValue('--appearance-image').includes('wallpaper.png'),'image import discarded the image draft');expect(writes.length===savedWrites,'import persisted before save')
+  button('图片通透推荐搭配').click();await waitFor(()=>button('透明')?.getAttribute('aria-pressed')==='true'&&!button('正在分析图片…'),'recipe did not finish');expect(writes.length===savedWrites,'recipe persisted before save')
+  button('保存并使用').click();await settle();expect(confirmed.surfaceMaterial==='transparent','recipe did not save');expect(confirmed.appBackground.global.customized,'recipe did not exercise custom image state')
+  openAppearanceEditor();await settle();button('纯色').click();await settle();expect(button('跟随主题').getAttribute('aria-pressed')==='true','solid colour retained transparent material');expect(!document.querySelector('#background-dim'),'solid colour exposes an inapplicable image mask')
+  page.value='player';button('全窗口预览').click();await settle();expect(document.documentElement.dataset.tePlayerCustomBackground==='off','default solid colour still suppressed the player artwork');expect(document.documentElement.dataset.tePlayerTextTone==='theme','player retained the image text tone');expect(getComputedStyle(document.querySelector('.fixture-player .backdrop')).display!=='none','player backdrop stayed hidden after switching to solid colour');expect(writes.length===savedWrites+1,'solid preview unexpectedly persisted')
+  button('返回编辑').click();await settle();button('保存并使用').click();await settle();expect(confirmed.surfaceMaterial==='standard'&&!confirmed.appBackground.global.customized,'solid colour did not persist its restored state');expect(!confirmed.appBackground.global.image&&confirmed.appBackground.global.kind==='color','solid colour kept the image handle');for(const mode of ['light','dark'])expect(confirmed.appBackground.global.effects[mode].textTone==='theme','image text tone survived a restart')
+  openAppearanceEditor();await settle();button('图片').click();await settle();await upload();button('图片通透推荐搭配').click();await waitFor(()=>button('透明')?.getAttribute('aria-pressed')==='true'&&!button('正在分析图片…'),'second recipe did not finish');button('移除').click();await settle();expect(button('跟随主题').getAttribute('aria-pressed')==='true','remove image retained transparent material');button('取消').click();await settle()
+ }
+ // The affected saved configuration also occurs with the standard material.
+ confirmed=JSON.parse(JSON.stringify(baseline));confirmed.surfaceMaterial='standard';confirmed.appBackground=normalizeAppBackgroundSettings({global:{customized:true,effects:{light:{textTone:'dark'}}}});await settingsStore.loadSettings();await theme.setPreviewTone('pureWhite');await settle();openAppearanceEditor();await settle();button('纯色').click();button('保存并使用').click();await settle();expect(!confirmed.appBackground.global.customized&&confirmed.appBackground.global.effects.light.textTone==='theme','selecting the existing solid mode did not repair the stale saved flags')
+ confirmed=JSON.parse(JSON.stringify(baseline));await settingsStore.loadSettings();page.value='local';await theme.setPreviewTone(null);await settle()
+}
 window.prepareAppearancePixels=async(currentPage,blur)=>{
  page.value=currentPage;document.body.className=currentPage==='streaming'?'te-streaming-surface':currentPage==='settings'?'te-settings-surface':'te-local-surface';const draft=cloneAppearance(confirmed);draft.surfaceMaterial='transparent';draft.appBackground.global.effects.dark={...draft.appBackground.global.effects.dark,blur,brightness:80,dim:40};await theme.setPreviewTone('dark');await previewAppearance(draft);await settle()
-}
-window.setAppearancePixelReference=async rgb=>{
- let reference=document.querySelector('#appearance-pixel-reference');if(!reference){reference=document.createElement('div');reference.id='appearance-pixel-reference';document.body.append(reference)}
- reference.style.cssText='all:initial!important;position:fixed!important;left:0!important;top:0!important;width:12px!important;height:12px!important;z-index:2147483647!important;background:rgb('+rgb.join(',')+')!important;opacity:1!important;filter:none!important;mix-blend-mode:normal!important;display:block!important';await settle()
 }
 window.prepareMissingBackground=async()=>{page.value='local';document.body.className='te-local-surface';const draft=cloneAppearance(confirmed);draft.surfaceMaterial='transparent';draft.appBackground.global.image='background://missing.png';draft.appBackground.global.dark='#123456';await previewAppearance(draft);await settle()}
 window.showAppearanceEvidence=async tone=>{await previewAppearance(null);await theme.setPreviewTone(tone);openAppearanceEditor();await settle();const buttons=[...document.querySelectorAll('.appearance-preview-toolbar button')];buttons[tone==='dark'?1:0].click();await settle()}

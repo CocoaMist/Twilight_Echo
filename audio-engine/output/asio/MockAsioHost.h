@@ -57,6 +57,8 @@ class MockAsioHost final : public IAsioHost {
   int probeCalls = 0;
   int failProbeCount = 0;
   std::string lastHostError;
+  AsioRenderHealth renderHealthSnapshot;
+  bool driverBoundaryHealthAvailable = false;
   /**
    * Refuse a raw DSD open whose semantic rate is absent from the target
    * device's declared nativeDsdSampleRates, as a real driver does.
@@ -90,6 +92,8 @@ class MockAsioHost final : public IAsioHost {
   long activeBufferSize() const override;
   size_t activeRenderFrameCapacity() const override;
   bool dsdBufferUnitConfirmed() const override;
+  AsioRenderHealth renderHealth() const override { return renderHealthSnapshot; }
+  bool hasDriverBoundaryHealth() const override { return driverBoundaryHealthAvailable; }
   std::string lastCloseError() const override;
 
   void triggerBufferSwitch(long bufferIndex);

@@ -15,18 +15,34 @@ const windowKind = query.get('window')
 const isMiniPlayer = windowKind === 'mini-player'
 const isTrayPlayer = windowKind === 'tray-player'
 const isDesktopLyrics = windowKind === 'desktop-lyrics'
-const isSatelliteWindow = isMiniPlayer || isTrayPlayer || isDesktopLyrics
+const isDynamicIsland = windowKind === 'dynamic-island'
+const isSatelliteWindow = isMiniPlayer || isTrayPlayer || isDesktopLyrics || isDynamicIsland
 if (isSatelliteWindow) {
   const documentClass = isMiniPlayer
     ? 'mini-player-document'
     : isTrayPlayer
       ? 'tray-player-document'
-      : 'desktop-lyrics-document'
+      : isDesktopLyrics
+        ? 'desktop-lyrics-document'
+        : 'dynamic-island-document'
   document.documentElement.classList.add(documentClass)
   document.body.classList.add(documentClass)
   document.documentElement.style.background = 'transparent'
   document.body.style.background = 'transparent'
   document.body.style.padding = '0'
+}
+
+function applyExperienceWindowTheme(theme: string): void {
+  const enabled = theme === 'rhine' || theme === 'rhine-night'
+  document.documentElement.classList.toggle('rhine-experience-window', enabled)
+  document.body.classList.toggle('rhine-experience-window', enabled)
+  document.documentElement.dataset.experienceTone = theme === 'rhine-night' ? 'night' : 'day'
+}
+
+if (isSatelliteWindow) {
+  applyExperienceWindowTheme(query.get('experienceTheme') || 'default')
+  void import('./assets/rhineWindows.css')
+  window.api.experienceWindow?.onTheme((theme) => applyExperienceWindowTheme(theme))
 }
 
 installAutoHideScrollbars()
@@ -74,7 +90,9 @@ async function mountApp(): Promise<void> {
       ? (await import('./tray-player/TrayPlayerApp.vue')).default
       : isDesktopLyrics
         ? (await import('./desktop-lyrics/DesktopLyricsApp.vue')).default
-        : (await import('./App.vue')).default
+        : isDynamicIsland
+          ? (await import('./dynamic-island/DynamicIslandApp.vue')).default
+          : (await import('./App.vue')).default
   // The lyrics window reads no theme tokens: every colour arrives in its settings
   // payload, so it must not pay for (or wait on) the theme runtime.
   if (isMiniPlayer) await bootstrapThemeRuntime()

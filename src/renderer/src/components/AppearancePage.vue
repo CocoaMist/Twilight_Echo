@@ -9,7 +9,7 @@ import {
   ref,
   watch
 } from 'vue'
-import AppearanceSettingsSection from './settings-page/AppearanceSettingsSection.vue'
+import AppearanceWorkspaceSection from './settings-page/AppearanceWorkspaceSection.vue'
 import AppearanceWindowPreview from './AppearanceWindowPreview.vue'
 import AppearanceThemeSelection from './AppearanceThemeSelection.vue'
 import { APPEARANCE_PARTS, resolveAppearancePart, type AppearancePart } from './appearanceParts'
@@ -28,17 +28,13 @@ import {
   type ThemeTone
 } from '../../../shared/theme'
 import { cloneAppearance } from '../../../shared/appAppearance'
-import type { WorkshopProjectSummary } from '../../../shared/themeWorkshop'
+import { THEME_WORKSHOP_ID, type WorkshopProjectSummary } from '../../../shared/themeWorkshop'
 import type { AppearanceWorkshopPreviewAdapter } from './appearanceWorkshopPreview'
 import { useThemeStore } from '../stores/useThemeStore'
 import { getPluginThemeKey } from '../extensions/themeSelection'
 import { useExtensionRegistry } from '../extensions/registry'
 import { provideSettingsDisclosures } from './settings-page/settingsDisclosureRegistry.ts'
-import {
-  SETTINGS_SEARCH_INDEX,
-  settingsDisclosurePath,
-  type SettingsSearchEntry
-} from './settings-page/types.ts'
+import { settingsDisclosurePath, type SettingsSearchEntry } from './settings-page/types.ts'
 import type {
   AppearanceWorkspaceTab,
   SettingsNavigationTarget,
@@ -50,6 +46,7 @@ import { useSettingsStore } from '../stores/useSettingsStore'
 import { readThemeStudioRecovery } from './theme-studio/themeStudioRecovery'
 import type { NavigationPageDefinition } from '../app/navigationPages'
 import { usePageDock, type PageDockAction } from '../app/pageDock'
+import { APPEARANCE_STUDIO_PARTS, appearanceSettingsTarget } from './appearanceSettingsTargets'
 
 const props = withDefaults(
   defineProps<{
@@ -77,9 +74,12 @@ const tab = ref<AppearanceWorkspaceTab>(recovery ? 'studio' : 'adjust')
 const loaded = ref(false)
 const applying = ref(false)
 const switching = ref(false)
+const enablingWorkshop = ref(false)
+const workshopEnableDialog = ref<HTMLDialogElement>()
+const workshopEnableError = ref('')
 const studio = ref<InstanceType<typeof ThemeStudioPage>>()
 const workshop = ref<InstanceType<typeof ThemeWorkshopPage>>()
-const appearanceSection = ref<InstanceType<typeof AppearanceSettingsSection>>()
+const appearanceSection = ref<InstanceType<typeof AppearanceWorkspaceSection>>()
 const preview = ref<InstanceType<typeof AppearanceWindowPreview>>()
 const pageRef = ref<HTMLElement | null>(null)
 const creationModeButton = ref<HTMLButtonElement>()
@@ -100,11 +100,10 @@ const pendingCreatorTone = ref<ThemeTone | undefined>(recovery?.tone)
 const { settings, loadSettings } = useSettingsStore()
 const themeStore = useThemeStore()
 const disclosures = provideSettingsDisclosures()
-const { uiContributions, themeContributions } = useExtensionRegistry()
+const { uiContributions, themeContributions, syncExtensions } = useExtensionRegistry()
 const workshopEnabled = computed(() =>
   uiContributions.value.some(
-    (item) =>
-      item.pluginId === 'com.twilightecho.tool.theme-workshop' && item.id === 'theme-workshop'
+    (item) => item.pluginId === THEME_WORKSHOP_ID && item.id === 'theme-workshop'
   )
 )
 const currentEditor = computed(() =>
@@ -115,6 +114,7 @@ const busy = computed(
   () =>
     !loaded.value ||
     switching.value ||
+    enablingWorkshop.value ||
     applying.value ||
     selectionPage.value?.busy ||
     (tab.value === 'adjust' && appearanceSection.value?.previewBusy) ||
@@ -190,15 +190,15 @@ async function showSelection(): Promise<boolean> {
     switching.value = false
   }
 }
-function showCustomize(): void {
+async function showCustomize(): Promise<void> {
   if (busy.value) return
+  if (tab.value === 'workshop' && !(await returnToAdjust())) return
   workspaceView.value = 'customize'
 }
 const categories = computed<AppearanceCategory[]>(() => {
-  if (tab.value === 'adjust') return []
   return [
     ...APPEARANCE_CATEGORIES.filter((item) =>
-      tab.value === 'studio' ? item.studio : item.workshop
+      tab.value !== 'workshop' ? item.studio : item.workshop
     ),
     ...(tab.value === 'workshop'
       ? (workshop.value?.customGroups ?? []).map((name) => ({
@@ -224,6 +224,8 @@ const creatorContextVisible = computed(
 )
 const partCategory: Partial<Record<AppearancePart, string>> = {
   'inner-panel': 'background',
+  'outer-panel': 'background',
+  controls: 'material',
   background: 'background',
   navigation: 'navigation',
   material: 'material',
@@ -261,7 +263,11 @@ function focusCreatorProperties(): void {
     ?.focus({ preventScroll: true })
 }
 async function openContextTools(tool = 'project'): Promise<void> {
-  if (busy.value || tab.value === 'adjust') return
+  if (tab.value === 'adjust') return
+  if (busy.value) {
+    pendingCreatorTools = { tab: tab.value, epoch: editorEpoch.value, tool }
+    return
+  }
   creatorToolsRequested.value = true
   setThemeOptions(false)
   await nextTick()
@@ -269,10 +275,24 @@ async function openContextTools(tool = 'project'): Promise<void> {
   else await workshop.value?.openTools(tool)
 }
 async function openCategory(value: string): Promise<void> {
+  if (tab.value === 'adjust') {
+    const domain = categories.value.find((item) => item.id === value)?.studio
+    if (domain) await editThemeProperties(APPEARANCE_STUDIO_PARTS[domain], domain)
+    return
+  }
   chooseCategory(value)
   await openContextTools('more')
   if (tab.value === 'workshop' && selectedCategory.value?.workshop)
     workshop.value?.selectGroup(selectedCategory.value.workshop)
+}
+async function editThemeProperties(region: string, domain?: ThemeStudioDomain): Promise<void> {
+  if (await enterCreator(region, 'studio', domain)) await openContextTools('more')
+}
+async function openDailySettings(): Promise<void> {
+  if (busy.value || !(await returnToAdjust())) return
+  setThemeOptions(false)
+  await nextTick()
+  await appearanceSection.value?.showPanel('general')
 }
 function togglePreviewView(): void {
   if (busy.value || !activePreview.value) return
@@ -303,12 +323,14 @@ function dismissThemeOptions(event: PointerEvent): void {
 }
 async function enterCreator(
   region?: string,
-  workspace: 'studio' | 'workshop' = 'studio'
+  workspace: 'studio' | 'workshop' = 'studio',
+  domain?: ThemeStudioDomain
 ): Promise<boolean> {
   if (busy.value) return false
   workspaceView.value = 'customize'
   if (tab.value !== 'adjust') {
     if (region) selectCreatorPart(region as AppearancePart)
+    if (domain) category.value = APPEARANCE_CATEGORIES.find((item) => item.studio === domain)!.id
     return true
   }
   switching.value = true
@@ -322,8 +344,9 @@ async function enterCreator(
     pendingCreatorTone.value = dailyTone.value
     tab.value = workspace
     editorEpoch.value++
-    category.value =
-      workspace === 'workshop'
+    category.value = domain
+      ? APPEARANCE_CATEGORIES.find((item) => item.studio === domain)!.id
+      : workspace === 'workshop'
         ? 'theme'
         : region
           ? (partCategory[region as AppearancePart] ?? 'color')
@@ -422,17 +445,44 @@ async function selectSource(key: string, customize?: string): Promise<boolean> {
   }
 }
 async function openWorkshop(): Promise<boolean> {
-  if (tab.value === 'workshop') return true
+  if (busy.value) return false
+  if (!workshopEnabled.value) {
+    workshopEnableError.value = ''
+    workshopEnableDialog.value?.showModal()
+    return false
+  }
+  if (tab.value === 'workshop') {
+    workspaceView.value = 'customize'
+    return true
+  }
   return tab.value === 'adjust'
     ? await enterCreator(undefined, 'workshop')
     : await selectSource('workshop:' + (projects.value[0]?.id ?? 'new'))
+}
+async function enableWorkshop(): Promise<void> {
+  if (enablingWorkshop.value) return
+  enablingWorkshop.value = true
+  workshopEnableError.value = ''
+  try {
+    await window.api.plugins.enable(THEME_WORKSHOP_ID)
+    await syncExtensions()
+    if (!workshopEnabled.value) throw new Error('插件未就绪，请重试或在插件管理中查看状态。')
+  } catch (cause) {
+    workshopEnableError.value =
+      '启用失败：' + (cause instanceof Error ? cause.message : String(cause))
+    return
+  } finally {
+    enablingWorkshop.value = false
+  }
+  workshopEnableDialog.value?.close()
+  if (!disposed && props.active) await openThemeEditor('workshop')
 }
 async function openThemeEditor(workspace: 'studio' | 'workshop'): Promise<void> {
   const entered =
     workspace === 'workshop'
       ? await openWorkshop()
       : tab.value === 'workshop'
-        ? true
+        ? await selectSource(activeThemeKey())
         : await enterCreator()
   if (!entered) return
   setThemeOptions(false)
@@ -459,6 +509,16 @@ async function perform(action: AppearanceAction): Promise<void> {
   }
 }
 async function performThemeOption(action: AppearanceAction): Promise<void> {
+  if (tab.value === 'adjust') {
+    if (!(await enterCreator('appearance-theme', 'studio', 'presets'))) return
+    pendingCreatorAction = { epoch: editorEpoch.value, action }
+    if (!busy.value) {
+      pendingCreatorAction = undefined
+      await perform(action)
+    }
+    setThemeOptions(false)
+    return
+  }
   await perform(action)
   setThemeOptions(false, true)
 }
@@ -676,7 +736,7 @@ async function setTone(value: ThemeTone): Promise<void> {
 }
 function onStudioDomain(value: ThemeStudioDomain): void {
   if (selectedCategory.value?.studio !== value)
-    chooseCategory(APPEARANCE_CATEGORIES.find((item) => item.studio === value)?.id ?? 'theme')
+    category.value = APPEARANCE_CATEGORIES.find((item) => item.studio === value)?.id ?? 'theme'
   emit('domainChange', value)
 }
 function onWorkshopGroup(value: string): void {
@@ -709,10 +769,20 @@ let disposed = false
 let highlightTimer: ReturnType<typeof setTimeout> | undefined
 let pendingSearchFocus: { element: HTMLElement; revision: number } | undefined
 let pendingCreatorFocus: { tab: AppearanceWorkspaceTab; epoch: number } | undefined
+let pendingCreatorTools: { tab: AppearanceWorkspaceTab; epoch: number; tool: string } | undefined
+let pendingCreatorAction: { epoch: number; action: AppearanceAction } | undefined
 watch(
   busy,
   (value) => {
     if (value) return
+    const tools = pendingCreatorTools
+    pendingCreatorTools = undefined
+    if (tools && !disposed && tools.tab === tab.value && tools.epoch === editorEpoch.value)
+      void openContextTools(tools.tool)
+    const action = pendingCreatorAction
+    pendingCreatorAction = undefined
+    if (action && !disposed && tab.value === 'studio' && action.epoch === editorEpoch.value)
+      void perform(action.action)
     const creator = pendingCreatorFocus
     pendingCreatorFocus = undefined
     if (
@@ -734,12 +804,14 @@ watch(
 function scrollToElement(element: HTMLElement, focus = false): void {
   const page = pageRef.value
   if (!page) return
-  const scroller = element.closest<HTMLElement>('.appearance-details-body') ?? page
+  const scroller =
+    element.closest<HTMLElement>('.appearance-popover-content, .appearance-details-body') ?? page
+  const header = scroller.querySelector<HTMLElement>('[data-appearance-properties] > header')
   const top =
     element.getBoundingClientRect().top -
     scroller.getBoundingClientRect().top +
     scroller.scrollTop -
-    20
+    (header ? header.offsetHeight + 20 : 20)
   scroller.scrollTo({ top: Math.max(0, top), behavior: scrollMotionBehavior('smooth', focus) })
   if (focus) {
     const control = element.querySelector<HTMLElement>(
@@ -753,7 +825,15 @@ function scrollToElement(element: HTMLElement, focus = false): void {
   }
 }
 async function revealEntry(entry: SettingsSearchEntry): Promise<void> {
-  if (entry.id === 'plugin-theme' || entry.id === 'theme-workshop') {
+  if (entry.id === 'theme-studio') {
+    await editThemeProperties('appearance-theme', 'presets')
+    return
+  }
+  if (entry.id === 'theme-workshop') {
+    await openThemeEditor('workshop')
+    return
+  }
+  if (entry.id === 'plugin-theme') {
     if (!(await showSelection())) return
     await nextTick()
     const element = pageRef.value?.querySelector<HTMLElement>('#appearance-theme-selection')
@@ -773,7 +853,7 @@ async function revealEntry(entry: SettingsSearchEntry): Promise<void> {
   pendingSearchFocus = undefined
   if (!taskEntry) {
     await appearanceSection.value?.reveal(entry)
-    for (const id of settingsDisclosurePath(entry)) {
+    for (const id of appearanceSettingsTarget(entry).disclosures ?? settingsDisclosurePath(entry)) {
       if (disposed || current !== revision) return
       await disclosures.reveal(id)
     }
@@ -782,6 +862,11 @@ async function revealEntry(entry: SettingsSearchEntry): Promise<void> {
   if (disposed || current !== revision || !pageRef.value) return
   const page = pageRef.value
   if (entry.appearanceArea) {
+    const target = appearanceSection.value?.findSetting?.(entry)
+    if (target) {
+      scrollToElement(target, true)
+      return
+    }
     page
       .querySelector<HTMLButtonElement>(
         '.appearance-section-links button[data-appearance-area="' + entry.appearanceArea + '"]'
@@ -793,6 +878,7 @@ async function revealEntry(entry: SettingsSearchEntry): Promise<void> {
     return
   }
   const element =
+    appearanceSection.value?.findSetting?.(entry) ??
     (entry.id
       ? page.querySelector<HTMLElement>(
           '[data-setting-id="' +
@@ -810,14 +896,6 @@ async function revealEntry(entry: SettingsSearchEntry): Promise<void> {
   highlightTimer = setTimeout(() => element.classList.remove('search-target-flash'), 1800)
   scrollToElement(element, true)
   if (taskEntry && busy.value) pendingSearchFocus = { element, revision: current }
-}
-async function focusSetting(
-  id: 'global-font' | 'player-bar' | 'appearance-theme' | 'appearance-surfaces'
-): Promise<void> {
-  const entry = SETTINGS_SEARCH_INDEX.find(
-    (item) => item.id === (id === 'player-bar' ? 'player-bar-layout' : id)
-  )
-  if (entry) await revealEntry(entry)
 }
 async function applyTarget(): Promise<void> {
   if (!loaded.value) return
@@ -852,8 +930,10 @@ watch(() => props.navigationTarget, applyTarget, { flush: 'post' })
 watch(
   () => props.active,
   async (active) => {
-    if (!active) setThemeOptions(false)
-    else await syncActiveTheme()
+    if (!active) {
+      setThemeOptions(false)
+      workshopEnableDialog.value?.close()
+    } else await syncActiveTheme()
   }
 )
 async function syncActiveTheme(): Promise<void> {
@@ -911,7 +991,10 @@ onMounted(async () => {
       workspaceView.value = 'customize'
       tab.value = 'studio'
       selected.value = recovery.selectedKey
-    } else if (target?.appearanceTab === 'studio' || target?.appearanceTab === 'workshop') {
+    } else if (
+      target?.appearanceTab === 'studio' ||
+      (target?.appearanceTab === 'workshop' && workshopEnabled.value)
+    ) {
       workspaceView.value = 'customize'
       tab.value = target.appearanceTab
       selected.value =
@@ -928,6 +1011,8 @@ onMounted(async () => {
     if (target?.entry && target.entry.id !== 'plugin-theme') workspaceView.value = 'customize'
     loaded.value = true
     emit('tabChange', tab.value)
+    if (target?.appearanceTab === 'workshop' && !workshopEnabled.value && !recovery)
+      await openThemeEditor('workshop')
     if (target?.entry && !recovery) {
       await nextTick()
       await revealEntry(target.entry)
@@ -967,11 +1052,21 @@ onBeforeUnmount(() => {
         <button
           id="appearance-customize-tab"
           type="button"
-          :aria-current="workspaceView === 'customize' ? 'page' : undefined"
+          :aria-current="workspaceView === 'customize' && tab !== 'workshop' ? 'page' : undefined"
           :disabled="busy"
           @click="showCustomize"
         >
           自定义主题
+        </button>
+        <button
+          id="appearance-workshop-tab"
+          type="button"
+          title="主题插件工坊（BETA）"
+          :aria-current="workspaceView === 'customize' && tab === 'workshop' ? 'page' : undefined"
+          :disabled="busy"
+          @click="openThemeEditor('workshop')"
+        >
+          主题插件工坊
         </button>
       </nav>
       <div class="appearance-page-header">
@@ -1012,19 +1107,27 @@ onBeforeUnmount(() => {
             >
               自定义当前主题
             </button>
-            <button type="button" :disabled="busy" @click="openThemeEditor('workshop')">
-              主题插件工坊 <span class="appearance-beta">BETA</span>
-            </button>
             <button
-              v-if="tab !== 'adjust'"
               type="button"
               :disabled="busy"
-              @click="openContextTools()"
+              @click="
+                tab === 'adjust'
+                  ? editThemeProperties('appearance-theme', 'personalization')
+                  : openContextTools()
+              "
             >
               {{ tab === 'workshop' ? '素材与项目' : '其他主题属性' }}
             </button>
-            <label v-if="tab !== 'adjust'" class="appearance-category-tools">
-              <span>其他分类</span>
+            <button
+              v-if="tab !== 'workshop'"
+              type="button"
+              :disabled="busy"
+              @click="openDailySettings"
+            >
+              其他外观设置
+            </button>
+            <label class="appearance-category-tools">
+              <span>主题属性</span>
               <select
                 aria-label="主题制作分类"
                 :value="selectedCategory?.id"
@@ -1036,7 +1139,7 @@ onBeforeUnmount(() => {
                 </option>
               </select>
             </label>
-            <div v-if="tab !== 'adjust'" class="appearance-management-actions">
+            <div class="appearance-management-actions">
               <button
                 type="button"
                 :disabled="busy || (sourceKey.startsWith('plugin:') && !workshopEnabled)"
@@ -1049,7 +1152,7 @@ onBeforeUnmount(() => {
               </button>
               <button
                 type="button"
-                :disabled="busy || !editorState?.canExport"
+                :disabled="busy || (tab !== 'adjust' && !editorState?.canExport)"
                 @click="performThemeOption('export')"
               >
                 导出{{ tab === 'workshop' ? '项目' : '主题' }}
@@ -1162,7 +1265,7 @@ onBeforeUnmount(() => {
       role="tabpanel"
       aria-labelledby="appearance-customize-tab"
     >
-      <AppearanceSettingsSection
+      <AppearanceWorkspaceSection
         :pages="pages"
         ref="appearanceSection"
         integrated
@@ -1173,8 +1276,7 @@ onBeforeUnmount(() => {
         :commit-busy="busy"
         :active="active"
         :tone="dailyTone"
-        @focus-setting="focusSetting"
-        @edit-theme="enterCreator"
+        @edit-theme="editThemeProperties"
         @tone-change="dailyTone = $event"
       />
     </div>
@@ -1247,6 +1349,7 @@ onBeforeUnmount(() => {
                 <div v-else class="appearance-workshop-empty">
                   <h2>启用主题插件工坊</h2>
                   <p>启用后可编辑图层、素材和自定义参数，并导出主题插件。</p>
+                  <button :disabled="busy" @click="openWorkshop">启用插件</button>
                   <button @click="emit('openPlugins')">打开插件管理</button>
                 </div>
               </div>
@@ -1322,6 +1425,41 @@ onBeforeUnmount(() => {
         </div>
       </footer>
     </section>
+    <dialog
+      ref="workshopEnableDialog"
+      class="appearance-enable-dialog"
+      aria-labelledby="appearance-enable-title"
+      aria-describedby="appearance-enable-description"
+      :aria-busy="enablingWorkshop"
+      @keydown.stop
+      @cancel="enablingWorkshop && $event.preventDefault()"
+    >
+      <h2 id="appearance-enable-title">启用主题插件工坊？</h2>
+      <p id="appearance-enable-description">
+        启用内置的主题插件工坊后，可创建、编辑和导出主题插件。
+      </p>
+      <p v-if="workshopEnableError" class="studio-message error" role="alert">
+        {{ workshopEnableError }}
+      </p>
+      <div class="appearance-enable-actions">
+        <button
+          type="button"
+          autofocus
+          :disabled="enablingWorkshop"
+          @click="workshopEnableDialog?.close()"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          class="appearance-command-primary"
+          :disabled="enablingWorkshop"
+          @click="enableWorkshop"
+        >
+          {{ enablingWorkshop ? '正在启用…' : '启用并进入' }}
+        </button>
+      </div>
+    </dialog>
   </main>
 </template>
 <style scoped>
@@ -1393,9 +1531,37 @@ onBeforeUnmount(() => {
 }
 .appearance-workspace-pages {
   display: flex;
+  flex-shrink: 0;
   gap: 4px;
   margin-right: auto;
   min-width: 0;
+}
+.appearance-enable-dialog {
+  box-sizing: border-box;
+  margin: auto;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 24px;
+  border: 1px solid var(--appearance-edit-line);
+  border-radius: var(--te-control-radius-lg, 16px);
+  background: var(--appearance-edit-menu);
+  color: var(--appearance-edit-text);
+}
+.appearance-enable-dialog::backdrop {
+  background: rgb(0 0 0 / 35%);
+}
+.appearance-enable-dialog h2 {
+  margin: 0 0 12px;
+  font-size: var(--te-type-section-title);
+}
+.appearance-enable-dialog p {
+  margin: 0 0 20px;
+  line-height: 1.6;
+}
+.appearance-enable-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .appearance-current-theme {
   max-width: 180px;
@@ -1788,13 +1954,15 @@ onBeforeUnmount(() => {
     clip-path: inset(50%);
   }
 }
-.appearance-page .appearance-command-primary {
+.appearance-page .appearance-command-primary,
+.appearance-page .appearance-enable-actions button.appearance-command-primary {
   padding: 0 12px;
   background: var(--appearance-edit-primary);
   color: var(--appearance-edit-on-primary);
   font-weight: var(--te-control-font-weight-strong, 600);
 }
-.appearance-page .appearance-command-primary:not(:disabled):hover {
+.appearance-page .appearance-command-primary:not(:disabled):hover,
+.appearance-page .appearance-enable-actions button.appearance-command-primary:not(:disabled):hover {
   background: color-mix(in srgb, var(--appearance-edit-primary) 88%, var(--appearance-edit-text));
 }
 .appearance-workshop-empty {

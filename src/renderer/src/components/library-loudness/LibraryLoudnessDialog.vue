@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useNativeDialog } from '@renderer/composables/useNativeDialog'
 import type { Track } from '@renderer/types/music.ts'
 import { getSongListVirtualRange } from '@renderer/components/song-list/songListVirtualWindow.ts'
@@ -16,6 +16,10 @@ const props = defineProps<{
   selectedTracks: Track[] | null
   albums: LoudnessAlbum[]
   restoreFocus?: HTMLElement | null
+  resolvePlan?: (
+    mode: 'track' | 'album',
+    signal: AbortSignal
+  ) => Promise<ReturnType<typeof buildLibraryLoudnessPlan>>
 }>()
 const emit = defineEmits<{ close: [] }>()
 const mode = ref<'track' | 'album'>('track')
@@ -25,7 +29,48 @@ const selection = computed(() =>
     ? props.libraryTracks
     : props.selectedTracks.map((track) => libraryIndex.value.get(track.id) ?? track)
 )
-const plan = computed(() => buildLibraryLoudnessPlan(selection.value, props.albums, mode.value))
+const resolvedPlan = shallowRef<ReturnType<typeof buildLibraryLoudnessPlan>>({
+  groups: [],
+  trackCount: 0,
+  skipped: 0,
+  error: ''
+})
+const resolving = ref(false)
+let planController: AbortController | undefined
+watch(
+  [mode, () => props.resolvePlan],
+  async ([mode, resolve], _, onCleanup) => {
+    if (!resolve) {
+      resolving.value = false
+      return
+    }
+    const controller = new AbortController()
+    planController = controller
+    onCleanup(() => controller.abort())
+    resolving.value = true
+    resolvedPlan.value = { groups: [], trackCount: 0, skipped: 0, error: '' }
+    try {
+      const next = await resolve(mode, controller.signal)
+      if (!controller.signal.aborted) resolvedPlan.value = next
+    } catch (error) {
+      if (!controller.signal.aborted)
+        resolvedPlan.value = {
+          groups: [],
+          trackCount: 0,
+          skipped: 0,
+          error: error instanceof Error ? error.message : '读取分析范围失败'
+        }
+    } finally {
+      if (!controller.signal.aborted) resolving.value = false
+    }
+  },
+  { immediate: true }
+)
+const plan = computed(() =>
+  props.resolvePlan
+    ? resolvedPlan.value
+    : buildLibraryLoudnessPlan(selection.value, props.albums, mode.value)
+)
 const groups = computed(() => plan.value.groups)
 const {
   status,
@@ -201,6 +246,7 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  planController?.abort()
   observer?.disconnect()
   typographyObserver?.disconnect()
 })
@@ -243,7 +289,8 @@ onBeforeUnmount(() => {
           Album</label
         >
       </fieldset>
-      <span
+      <span v-if="resolving" role="status">正在读取完整分析范围…</span>
+      <span v-else
         >{{ plan.trackCount.toLocaleString() }} 首 · {{ groups.length.toLocaleString() }} 组</span
       >
     </div>
@@ -376,7 +423,7 @@ onBeforeUnmount(() => {
           v-else
           type="button"
           class="primary"
-          :disabled="busy || !groups.length || !!plan.error"
+          :disabled="busy || resolving || !groups.length || !!plan.error"
           @click="start()"
         >
           开始分析

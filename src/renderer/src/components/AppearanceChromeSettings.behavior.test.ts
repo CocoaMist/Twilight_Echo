@@ -30,7 +30,7 @@ test('chrome properties edit one reversible appearance draft without importing l
           generateBundle() {
             assert.ok(
               ![...this.getModuleIds()].some((id) =>
-                /(?:useSettingsStore|NavigationPagesDialog|PlayerBarLayoutSettings|AppearanceSettingsSection)/.test(
+                /(?:useSettingsStore|NavigationPagesDialog|PlayerBarLayoutSettings|Appearance(?:Settings|Workspace)Section)/.test(
                   id
                 )
               ),
@@ -160,7 +160,7 @@ window.runChromeTests=async()=>{
  expect(onlyMaterial(session.state.draft)===materialBaseline&&JSON.stringify(confirmed)===confirmedBaseline&&!writes.length,'navigation editing mutates saved settings or appearance');await discard();expect(snapshot()===baseline,'discard fails to restore the full navigation snapshot');
  await choose('player-bar');expect(!chrome().open&&!chrome().querySelector('fieldset'),'new part inherits an expanded heavy property list');await open();expect(chrome().querySelector('[aria-label="移除上一首 / 播放 / 下一首"]').disabled,'last playback control is removable');
  await change('[aria-label="往中间添加按钮"]','queue');expect(controlIds().includes('queue')&&!session.state.draft.playerBar.layout.standard.right.includes('queue'),'adding a placed control does not move it');expect(Object.values(session.state.draft.playerBar.layout.standard).flat().filter(id=>id==='queue').length===1,'control appears in two regions');
- await click('[aria-label="把播放列表往前移"]');expect(controlIds().indexOf('queue')<controlIds().indexOf('volume'),'button step move is lost');await click('[aria-label="移除播放列表"]');expect(!Object.values(session.state.draft.playerBar.layout.standard).flat().includes('queue'),'button removal is lost');
+ const queueIndex=controlIds().indexOf('queue');await click('[aria-label="把播放列表往前移"]');expect(controlIds().indexOf('queue')===queueIndex-1,'button step move is lost');await click('[aria-label="移除播放列表"]');expect(!Object.values(session.state.draft.playerBar.layout.standard).flat().includes('queue'),'button removal is lost');
  const standardChanged=JSON.stringify(session.state.draft.playerBar.layout.standard);await change('[aria-label="播放栏形态"]','mini');expect(session.state.draft.playerBar.mode==='mini'&&session.state.draft.playerBar.modeSource==='user'&&chrome().querySelector('[data-control-region="left"]').getAttribute('aria-pressed')==='true','shape selection does not select the actual draft mode');
  await region('right');await change('[aria-label="往右侧添加按钮"]','favorite');const miniChanged=JSON.stringify(session.state.draft.playerBar.layout.mini);await change('[aria-label="播放栏形态"]','compact');await region('right');await change('[aria-label="往右侧添加按钮"]','playPause');await click('[aria-label="移除退出播放页"]');
  const beforeShapeReset=snapshot();history.reset();await click('.appearance-chrome-reset');expect(JSON.stringify(session.state.draft.playerBar.layout.compact)===JSON.stringify(DEFAULT_PLAYER_BAR_LAYOUT.compact)&&JSON.stringify(session.state.draft.playerBar.layout.standard)===standardChanged&&JSON.stringify(session.state.draft.playerBar.layout.mini)===miniChanged,'reset affects another shape or ignores current shape');

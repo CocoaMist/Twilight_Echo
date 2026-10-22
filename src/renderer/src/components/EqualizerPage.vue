@@ -10,6 +10,7 @@ import { storeToRefs } from 'pinia'
 import { useBackHandler } from '@renderer/app/useBackStack.ts'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
+import EqBandTable from '@renderer/components/equalizer/EqBandTable.vue'
 import EqHistoryControls from '@renderer/components/equalizer/EqHistoryControls.vue'
 import ParametricEqWorkspace from '@renderer/components/equalizer/ParametricEqWorkspace.vue'
 import OpraEqPanel from '@renderer/components/equalizer/OpraEqPanel.vue'
@@ -55,6 +56,13 @@ import type {
 } from '@renderer/types/settings'
 import type { DspSceneState } from '../../../shared/dspGraph.ts'
 
+const props = defineProps<{
+  embedded?: boolean
+  visible?: boolean
+  hostDocument?: Document
+  activeSceneId?: string | null
+}>()
+
 type EqualizerTab = EqMode
 type ResponseView = 'dsp' | 'headphone'
 type HeadphoneCurveKey = 'source' | 'target' | 'individual' | 'combined' | 'corrected'
@@ -62,12 +70,7 @@ type EqApplyFeedback = 'idle' | 'editing' | 'applying' | 'applied' | 'failed'
 type OpraProfile = Awaited<ReturnType<typeof window.api.opra.search>>[number]
 type OpraCatalogStatus = Awaited<ReturnType<typeof window.api.opra.getStatus>>
 
-const props = withDefaults(defineProps<{ embedded?: boolean; navigationLocked?: boolean }>(), {
-  embedded: false,
-  navigationLocked: false
-})
 const audioOutputDspStore = useAudioOutputDspStore()
-const editorRoot = ref<HTMLElement | null>(null)
 const playerStore = usePlayerStore()
 const { audioProcessing, outputInfo, audioEngineReady } = storeToRefs(audioOutputDspStore)
 const { visualizationData, isPlaying, acquireVisualizationConsumer } = playerStore
@@ -85,6 +88,7 @@ const activeTab = ref<EqualizerTab>('graphic')
 const autoPreampEnabled = ref(false)
 const appSettings = ref<AppSettings | null>(null)
 const presetName = ref('')
+const presetError = ref('')
 const saving = ref(false)
 const presetMenuOpen = ref(false)
 const filterMenuOpen = ref(false)
@@ -106,13 +110,12 @@ const opraStatus = ref<OpraCatalogStatus | null>(null)
 const opraSearching = ref(false)
 const opraRefreshing = ref(false)
 const opraApplyingEqId = ref('')
-const opraSaving = ref(false)
 const opraError = ref('')
 let pendingBandFrame = 0
-let pendingBandWindow: Window | null = null
 const pendingBandPatches = new Map<number, Partial<EqualizerBand>>()
 let pendingPreamp: number | null = null
 let commitChain: Promise<void> = Promise.resolve()
+let activeEqApply: Promise<void> = Promise.resolve()
 let applyFeedbackTimer: number | null = null
 let spectrumPollingMounted = false
 const eqHistory = useEqualizerHistory(audioProcessing.value, applyEqualizerSnapshot)
@@ -383,6 +386,7 @@ async function applyAutoPreamp(): Promise<void> {
   await commitChain
 }
 
+let loadedSceneId: string | null = null
 async function loadAppSettings(): Promise<void> {
   try {
     const settings = await window.api.settings.get()
@@ -411,19 +415,25 @@ async function loadAppSettings(): Promise<void> {
 }
 
 function applyActiveSceneEqToEditor(dspState: DspSceneState): void {
+  loadedSceneId = dspState.activeSceneId
   // The scene EQ node holds the effective (OPRA-stacked) bands; never fold
   // those into the manual editor state or the next manual edit would persist
   // OPRA bands as user EQ and the engine would apply them twice.
   if (opraCompensationEnabled.value) return
   const scene = dspState.scenes.find((item) => item.id === dspState.activeSceneId)
-  const node = scene?.graph.nodes.find((item) => item.type === 'equalizer')
-  if (!node) return
-  const params = node.params
+  if (!scene) return
+  const node = scene.graph.nodes.find((item) => item.type === 'equalizer')
+  const params = node?.params ?? {}
   const settings = normalizeAudioProcessing({
     ...audioProcessing.value,
-    // A bypassed engine node does not change either user power switch.
-    eqEnabled: audioProcessing.value.dspEnabled ? node.enabled : audioProcessing.value.eqEnabled,
-    eqMode: params.mode === 'parametric' ? 'parametric' : 'graphic',
+    dspEnabled: audioProcessing.value.dspEnabled,
+    // The legacy default graph encodes the master gate into node.enabled.
+    // Opening an editor while master-bypassed must not erase the EQ toggle.
+    eqEnabled:
+      scene.id === 'default' && !audioProcessing.value.dspEnabled
+        ? audioProcessing.value.eqEnabled
+        : (node?.enabled ?? false),
+    eqMode: !node || params.mode === 'parametric' ? 'parametric' : 'graphic',
     eqPreamp: typeof params.preampDb === 'number' ? params.preampDb : 0,
     eqBands: Array.isArray(params.bands) ? (params.bands as EqualizerBand[]) : []
   })
@@ -434,8 +444,17 @@ function applyActiveSceneEqToEditor(dspState: DspSceneState): void {
 async function syncActiveSceneEq(nextSettings: AudioProcessingSettings): Promise<void> {
   const dspState = await window.api.audioEngine.getDspSceneState()
   const scene = dspState.scenes.find((item) => item.id === dspState.activeSceneId)
-  const node = scene?.graph.nodes.find((item) => item.type === 'equalizer')
-  if (!node) return
+  if (!scene) throw new Error('当前没有活动 DSP 场景。')
+  if (props.embedded && loadedSceneId && scene.id !== loadedSceneId)
+    throw new Error('活动场景已改变，请等待均衡器重新载入后再调节。')
+  let node = scene.graph.nodes.find((item) => item.type === 'equalizer')
+  if (!node) {
+    node = { id: `equalizer-${crypto.randomUUID()}`, type: 'equalizer', enabled: false, params: {} }
+    const tail = scene.graph.nodes.findIndex(
+      (item) => item.type === 'nativePlugin' && item.pluginAbiVersion === 1
+    )
+    scene.graph.nodes.splice(tail < 0 ? scene.graph.nodes.length : tail, 0, node)
+  }
   // OPRA contributes to the equalizer node but must not override the user's EQ
   // bypass. Preserve its parameters while disabled so re-enabling EQ restores
   // the same stacked response without continuing to process audio in bypass.
@@ -448,9 +467,18 @@ async function syncActiveSceneEq(nextSettings: AudioProcessingSettings): Promise
       : nextSettings.eqPreamp,
     bands: opraCompensationEnabled.value
       ? [...cloneBands(headphoneCompensation.value.bands), ...cloneBands(nextSettings.eqBands)]
-      : nextSettings.eqBands
+      : cloneBands(nextSettings.eqBands)
   }
-  await window.api.audioEngine.setDspScenes(dspState.scenes, dspState.pinnedSceneId)
+  const next = await window.api.audioEngine.setDspScenes(dspState.scenes, dspState.pinnedSceneId)
+  if (
+    props.embedded &&
+    next.requiresPcmFallback &&
+    !next.dsdPcmFallbackApplied &&
+    (props.hostDocument?.defaultView ?? window).confirm(
+      '均衡器已保存。停止 DSD Direct / DoP 直通并转换为 PCM 以运行 DSP？'
+    )
+  )
+    await window.api.audioEngine.applyDspScene(next.pinnedSceneId, true)
 }
 
 async function updateAudioProcessing(patch: Partial<AudioProcessingSettings>): Promise<void> {
@@ -475,6 +503,11 @@ async function applyEqualizerSnapshot(snapshot: EqSnapshot): Promise<void> {
   const nextSettings = normalizeAudioProcessing(
     mergeEqualizerPatch(audioProcessing.value, snapshot)
   )
+  if (props.embedded && loadedSceneId) {
+    const current = await window.api.audioEngine.getDspSceneState()
+    if (current.activeSceneId !== loadedSceneId)
+      throw new Error('活动场景已改变，请等待均衡器重新载入后再调节。')
+  }
   await setAudioProcessing(nextSettings, { throwOnError: true })
   await syncActiveSceneEq(nextSettings)
   activeTab.value = nextSettings.eqMode
@@ -509,20 +542,24 @@ function clearApplyFeedbackTimer(): void {
 }
 
 async function runEqApply(action: () => Promise<void>): Promise<void> {
-  clearApplyFeedbackTimer()
-  eqApplyFeedback.value = 'applying'
-  eqApplyError.value = ''
-  try {
-    await action()
-    eqApplyFeedback.value = 'applied'
-    applyFeedbackTimer = window.setTimeout(() => {
-      eqApplyFeedback.value = 'idle'
-      applyFeedbackTimer = null
-    }, 1400)
-  } catch (error) {
-    eqApplyFeedback.value = 'failed'
-    eqApplyError.value = error instanceof Error ? error.message : String(error)
-  }
+  const pending = (async () => {
+    clearApplyFeedbackTimer()
+    eqApplyFeedback.value = 'applying'
+    eqApplyError.value = ''
+    try {
+      await action()
+      eqApplyFeedback.value = 'applied'
+      applyFeedbackTimer = window.setTimeout(() => {
+        eqApplyFeedback.value = 'idle'
+        applyFeedbackTimer = null
+      }, 1400)
+    } catch (error) {
+      eqApplyFeedback.value = 'failed'
+      eqApplyError.value = error instanceof Error ? error.message : String(error)
+    }
+  })()
+  activeEqApply = pending
+  await pending
 }
 
 // Apply the staged edit to renderer state only. The engine apply is deferred to
@@ -551,10 +588,8 @@ function flushStagedEdit(): void {
 function scheduleStagedFlush(): void {
   eqApplyFeedback.value = 'editing'
   if (pendingBandFrame !== 0) return
-  pendingBandWindow = editorRoot.value?.ownerDocument.defaultView ?? window
-  pendingBandFrame = pendingBandWindow.requestAnimationFrame(() => {
+  pendingBandFrame = window.requestAnimationFrame(() => {
     pendingBandFrame = 0
-    pendingBandWindow = null
     flushStagedEdit()
   })
 }
@@ -597,9 +632,8 @@ function updatePreampInput(event: Event): void {
 
 async function commitStagedBands(): Promise<void> {
   if (pendingBandFrame !== 0) {
-    ;(pendingBandWindow ?? window).cancelAnimationFrame(pendingBandFrame)
+    window.cancelAnimationFrame(pendingBandFrame)
     pendingBandFrame = 0
-    pendingBandWindow = null
   }
   flushStagedEdit()
   // Snapshot the staged bands now, before any in-flight commit's response can
@@ -732,7 +766,7 @@ async function pasteBands(): Promise<void> {
 }
 
 function blockWhileApplying(event: Event): void {
-  if (!historyBusy.value && !clipboardBusy.value) return
+  if (!historyBusy.value && !clipboardBusy.value && !opraApplyingEqId.value) return
   if (event instanceof KeyboardEvent && event.key === 'Tab') return
   event.preventDefault()
   event.stopImmediatePropagation()
@@ -781,6 +815,8 @@ function updateSpectrumPolling(): void {
     spectrumFrozen.value = false
   const shouldPoll =
     spectrumPollingMounted &&
+    props.visible !== false &&
+    !(props.hostDocument ?? document).hidden &&
     activeTab.value === 'parametric' &&
     responseView.value === 'dsp' &&
     spectrumVisible.value &&
@@ -791,7 +827,14 @@ function updateSpectrumPolling(): void {
   }
   // Spectrum and meters share a single native sample, also consumed by the bar.
   const points =
-    spectrumPollingMounted && activeTab.value === 'parametric' ? (shouldPoll ? 2048 : 64) : 0
+    spectrumPollingMounted &&
+    props.visible !== false &&
+    !(props.hostDocument ?? document).hidden &&
+    activeTab.value === 'parametric'
+      ? shouldPoll
+        ? 2048
+        : 64
+      : 0
   if (points === visualizationConsumerPoints) return
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = points
@@ -882,7 +925,7 @@ async function refreshOpraCatalog(): Promise<void> {
 }
 
 async function applyOpraProfile(profile: OpraProfile): Promise<void> {
-  if (!profile.applicable || opraApplyingEqId.value || opraSaving.value) return
+  if (!profile.applicable || opraApplyingEqId.value) return
   opraApplyingEqId.value = profile.eqId
   opraError.value = ''
   try {
@@ -915,30 +958,23 @@ async function applyOpraProfile(profile: OpraProfile): Promise<void> {
 }
 
 async function disableOpraCompensation(): Promise<void> {
-  if (!appSettings.value || opraSaving.value || opraApplyingEqId.value) return
-  opraSaving.value = true
+  if (!appSettings.value || opraApplyingEqId.value) return
+  opraApplyingEqId.value = '__disable__'
   opraError.value = ''
   try {
     const savedSettings = await window.api.settings.update({
       headphoneCompensation: {
         ...headphoneCompensation.value,
-        enabled: false
+        enabled: false,
+        bands: cloneBands(headphoneCompensation.value.bands)
       }
     })
-    // Explicitly construct a new object to guarantee Vue reactivity triggers
-    appSettings.value = {
-      ...appSettings.value,
-      ...savedSettings,
-      headphoneCompensation: {
-        ...headphoneCompensation.value,
-        enabled: false
-      }
-    }
+    appSettings.value = { ...appSettings.value, ...savedSettings }
     await syncActiveSceneEq(audioProcessing.value)
   } catch (err) {
     opraError.value = err instanceof Error ? err.message : String(err)
   } finally {
-    opraSaving.value = false
+    opraApplyingEqId.value = ''
   }
 }
 
@@ -967,6 +1003,7 @@ async function saveEqPreset(): Promise<void> {
     })}`
   if (!name || !appSettings.value || saving.value) return
   saving.value = true
+  presetError.value = ''
   try {
     const nextPreset: AudioEqPreset = {
       id: `custom-${Date.now()}`,
@@ -976,12 +1013,17 @@ async function saveEqPreset(): Promise<void> {
       eqBands: cloneBands(audioProcessing.value.eqBands)
     }
     appSettings.value = await window.api.settings.update({
-      audioEqPresets: [...userPresets.value, nextPreset]
+      // contextBridge clones arguments before preload runs. Copy every band's
+      // fields, including those belonging to previously saved reactive presets.
+      audioEqPresets: [
+        ...userPresets.value.map((preset) => ({ ...preset, eqBands: cloneBands(preset.eqBands) })),
+        nextPreset
+      ]
     })
     presetName.value = ''
     presetMenuOpen.value = true
   } catch (err) {
-    console.error('保存均衡器预设失败：', err)
+    presetError.value = `保存预设失败：${err instanceof Error ? err.message : String(err)}`
   } finally {
     saving.value = false
   }
@@ -992,7 +1034,6 @@ function saveAsCurrentPreset(): void {
 }
 
 async function switchTab(tab: EqualizerTab): Promise<void> {
-  if (props.navigationLocked) return
   finishParametricEdits()
   await commitChain
   activeTab.value = tab
@@ -1006,7 +1047,7 @@ async function switchTab(tab: EqualizerTab): Promise<void> {
 // 参数均衡是页面内部的一层：标题栏返回键先退回图形标签，再退出均衡器页
 // （页面层由 App.vue 按页面旗标注冊）。
 useBackHandler(
-  computed(() => activeTab.value === 'parametric'),
+  computed(() => !props.embedded && activeTab.value === 'parametric'),
   () => switchTab('graphic'),
   '返回图形'
 )
@@ -1052,25 +1093,6 @@ function finishParametricEdits(): void {
   if (pendingBandFrame !== 0) void commitStagedBands()
 }
 
-async function requestLeave(): Promise<boolean> {
-  if (
-    historyLoading.value ||
-    historyBusy.value ||
-    clipboardBusy.value ||
-    opraApplyingEqId.value ||
-    opraSaving.value
-  )
-    return false
-  finishParametricEdits()
-  // A preview can already have flushed to the renderer without its final
-  // pointer-up commit. Finish that edit before unmounting the audio editor.
-  if (eqApplyFeedback.value === 'editing') await commitStagedBands()
-  await commitChain
-  return eqApplyFeedback.value !== 'failed'
-}
-
-defineExpose({ requestLeave })
-
 async function toggleParametricEq(): Promise<void> {
   finishParametricEdits()
   await commitChain
@@ -1083,6 +1105,20 @@ function selectBand(index: number, indices: number[] = [index]): void {
   selectedBandIndices.value = valid
   filterMenuOpen.value = false
 }
+
+watch(
+  () => props.activeSceneId,
+  async (sceneId) => {
+    if (!props.embedded || !sceneId || !loadedSceneId || sceneId === loadedSceneId) return
+    historyLoading.value = true
+    finishParametricEdits()
+    await commitChain
+    await activeEqApply
+    await loadAppSettings()
+    eqHistory.reset(audioProcessing.value)
+    historyLoading.value = false
+  }
+)
 
 onMounted(() => {
   spectrumPollingMounted = true
@@ -1102,7 +1138,7 @@ onBeforeUnmount(() => {
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = null
   clearApplyFeedbackTimer()
-  if (pendingBandFrame !== 0) (pendingBandWindow ?? window).cancelAnimationFrame(pendingBandFrame)
+  if (pendingBandFrame !== 0) window.cancelAnimationFrame(pendingBandFrame)
 })
 
 // Keep the compensated preamp in sync when bands change through paths that
@@ -1119,14 +1155,54 @@ watch(autoPreampTargetDb, () => {
   void applyAutoPreamp()
 })
 
-watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], updateSpectrumPolling)
+watch(
+  [
+    activeTab,
+    spectrumVisible,
+    responseView,
+    isPlaying,
+    spectrumFrozen,
+    () => props.visible,
+    () => props.hostDocument
+  ],
+  updateSpectrumPolling
+)
+watch(
+  () => props.hostDocument,
+  (next, previous) => {
+    previous?.removeEventListener('visibilitychange', updateSpectrumPolling)
+    ;(next ?? document).addEventListener('visibilitychange', updateSpectrumPolling)
+  }
+)
+onMounted(() =>
+  (props.hostDocument ?? document).addEventListener('visibilitychange', updateSpectrumPolling)
+)
+onBeforeUnmount(() =>
+  (props.hostDocument ?? document).removeEventListener('visibilitychange', updateSpectrumPolling)
+)
+defineExpose({
+  busy: computed(
+    () =>
+      historyLoading.value || historyBusy.value || clipboardBusy.value || !!opraApplyingEqId.value
+  ),
+  requestLeave: async () => {
+    finishParametricEdits()
+    await commitChain
+    await activeEqApply
+    return (
+      !historyLoading.value &&
+      !clipboardBusy.value &&
+      !opraApplyingEqId.value &&
+      eqApplyFeedback.value !== 'failed'
+    )
+  }
+})
 </script>
 
 <template>
   <div
-    ref="editorRoot"
     class="eq-page"
-    :class="{ 'is-parametric': activeTab === 'parametric', 'is-embedded': props.embedded }"
+    :class="{ 'is-parametric': activeTab === 'parametric', 'eq-embedded': embedded }"
     @keydown="onEqualizerKeydown"
   >
     <div
@@ -1139,21 +1215,43 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
       @wheel.capture="blockWhileApplying"
       @contextmenu.capture="blockWhileApplying"
     >
-      <nav class="eq-mode-tabs" aria-label="均衡器模式">
-        <button
+      <aside v-if="activeTab !== 'parametric'" class="eq-sidebar">
+        <div
           v-for="tab in tabs"
           :key="tab.key"
-          type="button"
           class="nav-item"
+          data-te-interactive
+          role="button"
+          tabindex="0"
           :aria-pressed="activeTab === tab.key"
+          :title="embedded ? tab.desc : undefined"
           :class="{ active: activeTab === tab.key }"
           @click="switchTab(tab.key)"
+          @keydown.enter.prevent="switchTab(tab.key)"
+          @keydown.space.prevent="switchTab(tab.key)"
         >
-          {{ tab.key === 'graphic' ? '图形' : '参数' }}
+          <i :class="tab.icon"></i>
+          <div class="nav-info">
+            <span>{{ tab.label }}</span
+            ><small v-if="!embedded">{{ tab.desc }}</small>
+          </div>
+        </div>
+        <button
+          v-if="embedded"
+          type="button"
+          class="embedded-eq-power"
+          role="switch"
+          aria-label="启用均衡器"
+          :aria-checked="audioProcessing.eqEnabled"
+          @click="toggleParametricEq"
+        >
+          <i class="pi pi-power-off"></i
+          >{{ audioProcessing.eqEnabled ? '均衡器已启用' : '均衡器已旁路' }}
         </button>
-      </nav>
+      </aside>
 
       <main class="eq-content">
+        <p v-if="presetError" class="preset-error" role="alert">{{ presetError }}</p>
         <!-- Toolbar for Presets across Graphic and Parametric -->
         <div v-if="activeTab !== 'parametric'" class="eq-toolbar-modern">
           <EqHistoryControls
@@ -1166,7 +1264,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
             <button type="button" class="eq-command preset-menu-button" @click="togglePresetMenu">
               选择预设 <i class="pi pi-chevron-down"></i>
             </button>
-            <div v-if="presetMenuOpen" class="preset-menu" data-te-material="popover">
+            <div v-if="presetMenuOpen" class="preset-menu">
               <div class="preset-menu-section">
                 <span class="preset-menu-title">内置预设</span>
                 <button
@@ -1233,34 +1331,43 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
         </div>
 
         <div v-if="activeTab === 'graphic'" class="tab-pane active">
-          <header class="eq-header">
+          <header v-if="!embedded" class="eq-header">
             <div class="eq-title">
-              <h2>均衡曲线</h2>
-              <p>{{ audioProcessing.eqBands.length }} 个频段 · {{ eqApplyStatusText }}</p>
+              <h1>图形均衡器</h1>
+              <p>调整此面板会改变最终输出。</p>
             </div>
-            <button
-              type="button"
+            <div
               class="master-switch"
+              data-te-interactive
               role="switch"
+              tabindex="0"
               aria-label="启用均衡器"
               :aria-checked="audioProcessing.eqEnabled"
               :class="{ off: !audioProcessing.eqEnabled }"
               @click="toggleParametricEq()"
+              @keydown.enter.prevent="toggleParametricEq()"
+              @keydown.space.prevent="toggleParametricEq()"
             >
               {{ audioProcessing.eqEnabled ? '已启用' : '已关闭' }}
-            </button>
+              <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            </div>
           </header>
 
-          <p v-if="eqApplyError" class="eq-apply-error" role="alert">{{ eqApplyError }}</p>
-
-          <GraphicEqPanel
-            :preamp="audioProcessing.eqPreamp"
-            :bands="audioProcessing.eqBands"
-            :auto-preamp-enabled="autoPreampEnabled"
-            @preview-preamp="stagePreamp"
-            @preview-band="stageBandPatch"
-            @commit="commitStagedBands"
-            @advanced="openAdvancedSettings"
+          <OpraEqPanel
+            :initially-open="!embedded"
+            :compensation="headphoneCompensation"
+            :status="opraStatus"
+            :searching="opraSearching"
+            :refreshing="opraRefreshing"
+            :applying-eq-id="opraApplyingEqId"
+            :results="opraResults"
+            :error="opraError"
+            :query="opraQuery"
+            @update:query="opraQuery = $event"
+            @search="searchOpraProfiles"
+            @select="applyOpraProfile"
+            @clear="disableOpraCompensation"
+            @refresh="refreshOpraCatalog"
           />
 
           <FrequencyResponseChart
@@ -1299,27 +1406,22 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
             @clear="clearFrequencyResponse"
           />
 
-          <OpraEqPanel
-            :compensation="headphoneCompensation"
-            :status="opraStatus"
-            :searching="opraSearching"
-            :refreshing="opraRefreshing"
-            :applying-eq-id="opraApplyingEqId"
-            :saving="opraSaving"
-            :results="opraResults"
-            :error="opraError"
-            :query="opraQuery"
-            @update:query="opraQuery = $event"
-            @search="searchOpraProfiles"
-            @select="applyOpraProfile"
-            @clear="disableOpraCompensation"
-            @refresh="refreshOpraCatalog"
+          <GraphicEqPanel
+            :preamp="audioProcessing.eqPreamp"
+            :bands="audioProcessing.eqBands"
+            :auto-preamp-enabled="autoPreampEnabled"
+            @preview-preamp="stagePreamp"
+            @preview-band="stageBandPatch"
+            @commit="commitStagedBands"
+            @advanced="openAdvancedSettings"
           />
         </div>
 
         <div v-else-if="activeTab === 'parametric'" class="tab-pane active parametric-pane">
           <ParametricEqWorkspace
             ref="parametricWorkspaceRef"
+            :docked-inspector="embedded"
+            :host-document="hostDocument"
             :bands="audioProcessing.eqBands"
             :selected-index="selectedBandIndex"
             :selected-indices="selectedBandIndices"
@@ -1370,7 +1472,12 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
                 :can-redo="canRedo"
                 @command="runHistoryCommand"
               />
-
+              <div class="instrument-mode-switch" aria-label="均衡器模式">
+                <button type="button" :aria-pressed="false" @click="switchTab('graphic')">
+                  图形
+                </button>
+                <button type="button" class="active" :aria-pressed="true">参数</button>
+              </div>
               <div class="instrument-presets">
                 <div class="preset-menu-anchor">
                   <button
@@ -1380,7 +1487,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
                   >
                     选择预设 <i class="pi pi-chevron-down"></i>
                   </button>
-                  <div v-if="presetMenuOpen" class="preset-menu" data-te-material="popover">
+                  <div v-if="presetMenuOpen" class="preset-menu">
                     <div class="preset-menu-section">
                       <span class="preset-menu-title">内置预设</span>
                       <button
@@ -1480,6 +1587,42 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
               </label>
             </template>
           </ParametricEqWorkspace>
+          <EqBandTable
+            v-if="embedded"
+            :bands="audioProcessing.eqBands"
+            :selected-indices="selectedBandIndices"
+            caption="手动 EQ 频段 · 不含 OPRA 补偿"
+            @select="selectBand"
+            @patch="
+              (index, patch) => {
+                stageBandPatch(index, patch)
+                void commitStagedBands()
+              }
+            "
+            @remove="deleteBand"
+          />
+          <details v-if="embedded" class="workbench-opra">
+            <summary>
+              耳机补偿 · OPRA
+              <span v-if="opraCompensationEnabled">{{ headphoneCompensation.productName }}</span>
+            </summary>
+            <OpraEqPanel
+              :initially-open="!embedded"
+              :compensation="headphoneCompensation"
+              :status="opraStatus"
+              :searching="opraSearching"
+              :refreshing="opraRefreshing"
+              :applying-eq-id="opraApplyingEqId"
+              :results="opraResults"
+              :error="opraError"
+              :query="opraQuery"
+              @update:query="opraQuery = $event"
+              @search="searchOpraProfiles"
+              @select="applyOpraProfile"
+              @clear="disableOpraCompensation"
+              @refresh="refreshOpraCatalog"
+            />
+          </details>
         </div>
       </main>
     </div>
@@ -1498,27 +1641,42 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+}
+
+:global(html[data-theme='dark'] .eq-page) {
+  background-color: var(--te-app-bg);
+  background-image: var(--te-app-bg-image);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
 }
 
 .eq-toolbar-modern {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 0 16px;
-  border-bottom: 1px solid var(--te-card-border);
-  margin-bottom: 0;
+  gap: 12px;
+  padding: 0 0 20px 0;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  margin-bottom: 24px;
   flex-wrap: wrap;
 }
 
+.preset-error {
+  margin: 0 0 12px;
+  color: var(--te-danger-soft-fg);
+  overflow-wrap: anywhere;
+}
+
 .eq-command {
-  min-height: var(--te-control-height-md);
-  background: transparent;
-  border: 1px solid var(--te-card-border);
-  padding: 6px 12px;
-  border-radius: var(--te-control-radius-sm);
-  font-size: var(--te-type-body);
-  font-weight: var(--te-type-weight-medium);
-  color: var(--te-neutral-900);
+  background: var(--te-glass-bg);
+  border: 1px solid var(--te-glass-border);
+  padding: 8px 16px;
+  border-radius: 12px;
+  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+  font-weight: 600;
+  color: var(--te-neutral-700);
   cursor: pointer;
   transition:
     background-color 0.2s var(--te-ease-soft),
@@ -1530,8 +1688,10 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 }
 
 .eq-command:hover:not(:disabled) {
-  background: var(--te-hover-bg);
-  color: var(--te-neutral-900);
+  background: var(--te-card-bg);
+  border-color: var(--te-primary-400);
+  color: var(--te-primary-500);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1);
 }
 
 .eq-command.soft {
@@ -1549,8 +1709,9 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 }
 
 .auto-preamp-toggle.active {
-  background: var(--te-active-bg);
-  color: var(--te-neutral-900);
+  background: rgba(var(--te-primary-rgb), 0.1);
+  border-color: var(--te-primary-400);
+  color: var(--te-primary-500);
 }
 
 .preset-menu-anchor {
@@ -1561,12 +1722,11 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  background: var(--te-material-background);
-  color: var(--te-material-ink);
-  backdrop-filter: var(--te-material-filter);
-  border: 1px solid var(--te-material-border);
+  background: var(--te-glass-bg-strong);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--te-glass-border);
   border-radius: 16px;
-  box-shadow: var(--te-material-shadow);
+  box-shadow: 0 10px 40px rgba(15, 23, 42, 0.1);
   padding: 12px;
   width: 240px;
   z-index: 100;
@@ -1582,9 +1742,9 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 }
 
 .preset-menu-title {
-  font-size: var(--te-type-caption);
-  font-weight: var(--te-type-weight-strong);
-  color: var(--te-control-fg-muted);
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
+  font-weight: 700;
+  color: var(--te-neutral-400);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   padding: 0 8px 4px;
@@ -1595,9 +1755,9 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   border: none;
   padding: 8px;
   text-align: left;
-  font-size: var(--te-type-caption);
+  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
   font-weight: 600;
-  color: var(--te-control-fg);
+  color: var(--te-neutral-700);
   border-radius: 8px;
   cursor: pointer;
   transition:
@@ -1606,13 +1766,13 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 }
 
 .preset-menu-item:hover {
-  background: var(--te-control-bg-hover);
-  color: var(--te-control-fg);
+  background: var(--te-primary-50);
+  color: var(--te-primary-600);
 }
 
 .preset-empty {
-  font-size: var(--te-type-caption);
-  color: var(--te-control-fg-muted);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+  color: var(--te-neutral-400);
   padding: 4px 8px;
 }
 
@@ -1620,17 +1780,16 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   display: flex;
   gap: 8px;
   padding-top: 12px;
-  border-top: 1px solid var(--te-control-border);
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 .preset-create input {
   flex: 1;
-  background: var(--te-control-bg);
-  color: var(--te-control-fg);
+  background: rgba(15, 23, 42, 0.04);
   border: 1px solid transparent;
   border-radius: 8px;
   padding: 6px 10px;
-  font-size: var(--te-type-caption);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   outline: none;
   transition:
     background-color 0.2s var(--te-ease-soft),
@@ -1639,17 +1798,17 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 }
 
 .preset-create input:focus {
-  background: var(--te-control-bg);
-  border-color: var(--te-control-focus-color);
+  background: var(--te-card-bg);
+  border-color: var(--te-primary-400);
 }
 
 .preset-create button {
-  background: var(--te-control-accent);
-  color: var(--te-control-on-accent);
+  background: var(--te-primary-500);
+  color: #fff;
   border: none;
   border-radius: 8px;
   padding: 0 12px;
-  font-size: var(--te-type-caption);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s;
@@ -1669,62 +1828,116 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   padding: 0;
 }
 
-/* One flat editor surface, within the secondary DSP workspace. */
 .eq-container {
   width: 100%;
   height: 100%;
-  min-height: 0;
+  margin: 0;
+  max-width: none;
+  background: var(--te-glass-bg);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Sidebar Navigation */
+.eq-sidebar {
+  width: 240px;
+  background: var(--te-glass-bg);
+  border-right: 1px solid var(--te-glass-border);
+  padding: 90px 20px 32px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  background: transparent;
+  gap: 12px;
+  flex-shrink: 0;
 }
-.eq-mode-tabs {
+.nav-item {
   display: flex;
-  flex: 0 0 auto;
-  gap: 4px;
-  padding: calc(var(--te-titlebar-inset, 40px) + var(--te-page-top, 32px))
-    var(--te-page-inset, 32px) 0;
-}
-.eq-mode-tabs .nav-item {
-  min-height: 34px;
-  padding: 6px 14px;
-  border: 1px solid transparent;
-  border-radius: var(--te-control-radius-sm);
-  background: transparent;
-  color: var(--te-neutral-500);
-  font: inherit;
-  font-size: var(--te-type-body);
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
   cursor: pointer;
+  transition:
+    background-color var(--te-motion-hover) var(--te-ease-soft),
+    color var(--te-motion-hover) var(--te-ease-soft),
+    border-color var(--te-motion-hover) var(--te-ease-soft);
+  color: var(--te-neutral-500);
 }
-.eq-mode-tabs .nav-item:hover {
+.nav-item:hover {
   background: var(--te-hover-bg);
   color: var(--te-neutral-900);
 }
-.eq-mode-tabs .nav-item.active {
-  border-color: var(--te-card-border);
-  background: var(--te-subtle-bg);
-  color: var(--te-neutral-900);
-  font-weight: var(--te-type-weight-medium);
+.nav-item.active {
+  background: var(--te-active-bg);
+  color: var(--te-primary-500);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--te-card-border);
 }
+.nav-item i {
+  font-size: 1.2rem;
+  background: var(--te-subtle-bg);
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  transition:
+    background-color var(--te-motion-hover) var(--te-ease-soft),
+    color var(--te-motion-hover) var(--te-ease-soft),
+    border-color var(--te-motion-hover) var(--te-ease-soft);
+}
+.nav-item.active i {
+  background: rgba(var(--te-primary-rgb), 0.1);
+  color: var(--te-primary-500);
+}
+.nav-info {
+  display: flex;
+  flex-direction: column;
+}
+.nav-info span {
+  font-weight: 700;
+  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
+}
+.nav-info small {
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+/* Content Area */
 .eq-content {
   flex: 1;
-  padding: 20px var(--te-page-inset, 32px) var(--te-page-bottom, 32px);
+  padding: 40px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 30px;
   min-height: 0;
   min-width: 0;
 }
 .tab-pane {
   display: none;
   flex-direction: column;
-  gap: 24px;
-  animation: none;
+  gap: 30px;
+  animation: fadeIn 0.4s var(--te-ease-soft);
 }
 .tab-pane.active {
   display: flex;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .eq-header {
@@ -1733,35 +1946,63 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   align-items: center;
   flex-wrap: wrap;
 }
-.eq-title h2 {
-  font-size: var(--te-type-section-title);
-  font-weight: var(--te-type-weight-strong);
-  letter-spacing: normal;
+.eq-title h1 {
+  font-size: calc(var(--te-font-size-body, 14px) * 28 / 14);
+  font-weight: 800;
+  letter-spacing: -0.5px;
   margin-bottom: 6px;
 }
 .eq-title p {
   color: var(--te-neutral-500);
-  font-size: var(--te-type-body);
+  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
   font-weight: 500;
 }
 
 .master-switch {
-  min-height: 32px;
-  padding: 5px 12px;
-  border: 1px solid var(--te-control-border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--te-neutral-900);
-  font: inherit;
-  font-size: var(--te-type-caption);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--te-card-bg);
+  padding: 8px 16px 8px 20px;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--te-card-border);
+  font-weight: 700;
+  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
+  color: var(--te-primary-500);
   cursor: pointer;
+  transition: color 0.2s;
 }
-.master-switch[aria-checked='true'] {
-  background: var(--te-subtle-bg);
+.master-switch.off {
+  color: var(--te-neutral-500);
 }
-.master-switch:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
-  outline-offset: 3px;
+.toggle-track {
+  width: 44px;
+  height: 24px;
+  background: linear-gradient(135deg, var(--te-primary-500), #22d3ee);
+  border-radius: 999px;
+  position: relative;
+  transition: background 0.2s;
+}
+.master-switch.off .toggle-track {
+  background: rgba(15, 23, 42, 0.12);
+}
+.toggle-thumb {
+  width: 20px;
+  height: 20px;
+  background: #fff; /* keep-white: toggle knob */
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition:
+    right 0.2s,
+    left 0.2s;
+}
+.master-switch.off .toggle-thumb {
+  right: auto;
+  left: 2px;
 }
 
 /* Detailed SVG Chart Area */
@@ -1788,8 +2029,8 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 .parametric-eyebrow,
 .parametric-toolbar-label,
 .parametric-context-status {
-  font-size: var(--te-type-caption);
-  font-weight: var(--te-type-weight-strong);
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
+  font-weight: 800;
   line-height: 1;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1806,7 +2047,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 
 .parametric-page-title h1 {
   margin: 0 0 2px;
-  font-size: var(--te-type-headline);
+  font-size: calc(var(--te-font-size-body, 14px) * 17 / 14);
   font-weight: 760;
   line-height: 1.15;
   letter-spacing: -0.02em;
@@ -1815,7 +2056,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 .parametric-page-title p {
   overflow: hidden;
   color: var(--te-neutral-500);
-  font-size: var(--te-type-caption);
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1854,8 +2095,8 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   border-radius: 10px;
   border: 1px solid var(--te-card-border);
   background: var(--te-card-bg);
-  font-size: var(--te-type-caption);
-  font-weight: var(--te-type-weight-strong);
+  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+  font-weight: 700;
   color: var(--te-neutral-500);
   cursor: pointer;
   transition:
@@ -1889,8 +2130,8 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   gap: 8px;
 }
 .param-group label {
-  font-size: var(--te-type-caption);
-  font-weight: var(--te-type-weight-strong);
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
+  font-weight: 700;
   color: var(--te-neutral-500);
 }
 .param-group input,
@@ -1900,7 +2141,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   padding: 12px 16px;
   border-radius: 12px;
   font-family: inherit;
-  font-size: var(--te-type-body);
+  font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
   font-weight: 600;
   color: var(--te-neutral-900);
   outline: none;
@@ -1908,10 +2149,8 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 }
 .param-group input:focus,
 .param-group select:focus {
-  border-color: var(--te-control-focus-color);
-  outline: 2px solid var(--te-control-focus-color);
-  outline-offset: 2px;
-  box-shadow: none;
+  border-color: var(--te-primary-500);
+  box-shadow: 0 0 0 3px rgba(var(--te-primary-rgb), 0.1);
 }
 
 .square-card {
@@ -1940,8 +2179,8 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   margin-bottom: 24px;
 }
 .square-card h2 {
-  font-size: var(--te-type-page-title);
-  font-weight: var(--te-type-weight-strong);
+  font-size: calc(var(--te-font-size-body, 14px) * 24 / 14);
+  font-weight: 800;
   margin-bottom: 12px;
 }
 .square-card p {
@@ -1972,7 +2211,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   }
 
   .parametric-page-title h1 {
-    font-size: var(--te-type-body);
+    font-size: calc(var(--te-font-size-body, 14px) * 15 / 14);
   }
 
   .parametric-page-title p {
@@ -2012,7 +2251,6 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 :global(html[data-te-equalizer-button='soft'] .eq-page .band-tab) {
   border-color: transparent;
   background: var(--te-equalizer-button-bg);
-  color: var(--te-control-fg);
 }
 
 :global(html[data-te-equalizer-button='outline'] .eq-page .eq-command),
@@ -2025,7 +2263,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 :global(html[data-te-equalizer-button='solid'] .eq-page .band-tab) {
   border-color: var(--te-primary-500);
   background: var(--te-primary-500);
-  color: var(--te-control-on-accent);
+  color: var(--te-neutral-50);
 }
 
 :global(html[data-te-equalizer-knob] .eq-page .toggle-thumb) {
@@ -2091,7 +2329,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   color: var(--te-neutral-900);
 }
 
-.eq-page.is-parametric:not(.is-embedded) .eq-container {
+.eq-page.is-parametric .eq-container {
   background: var(--te-app-bg);
   backdrop-filter: none;
 }
@@ -2124,7 +2362,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   background: transparent;
   color: var(--eq-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   cursor: pointer;
 }
 .instrument-mode-switch button {
@@ -2148,7 +2386,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   background: transparent;
   color: var(--eq-text-muted);
   box-shadow: none;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
 }
 .instrument-presets .preset-menu {
   width: 280px;
@@ -2244,12 +2482,12 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 .instrument-preamp {
   color: var(--eq-text-muted);
   font-family: var(--eq-mono);
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .instrument-preamp small {
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   color: var(--eq-text-subtle);
 }
 .instrument-preamp input {
@@ -2268,7 +2506,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
   appearance: none;
 }
 .instrument-preamp input:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--eq-response);
   outline-offset: 2px;
 }
 .instrument-mode-switch button:focus-visible,
@@ -2276,7 +2514,7 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 .instrument-auto-preamp:focus-visible,
 .instrument-more summary:focus-visible,
 .instrument-more button:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--eq-response);
   outline-offset: 3px;
 }
 @media (max-width: 820px) {
@@ -2334,54 +2572,51 @@ watch([activeTab, spectrumVisible, responseView, isPlaying, spectrumFrozen], upd
 
 @media (max-width: 900px) {
   .eq-content {
-    padding-bottom: var(--te-page-bottom, 32px);
+    padding-bottom: max(40px, calc(var(--te-playbar-bottom-clearance, 0px) + 16px));
   }
 }
+</style>
 
-.eq-page.is-embedded {
+<style scoped>
+.eq-page.eq-embedded {
   position: relative;
   inset: auto;
   z-index: auto;
   height: 100%;
+  min-height: 550px;
+  background: transparent;
+  backdrop-filter: none;
+}
+.eq-embedded .eq-container,
+.eq-page.eq-embedded.is-parametric .eq-container {
+  height: 100%;
   min-height: 0;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  border-radius: 0;
+}
+.eq-page.eq-embedded .eq-content {
+  padding: 12px 0 24px;
+}
+.eq-embedded .eq-sidebar {
+  padding-top: 16px;
   background: transparent;
 }
-.eq-page.is-embedded .eq-mode-tabs {
-  padding: 0;
+.eq-embedded :deep(.parametric-workspace) {
+  --eq-surface: var(--te-app-bg);
+  --eq-text: var(--te-settings-text);
+  --eq-text-muted: var(--te-settings-text-muted);
 }
-.eq-page.is-embedded .eq-content {
-  padding: 12px 0 24px;
-  gap: 16px;
-}
-.eq-page.is-embedded .eq-toolbar-modern {
-  margin-bottom: 0;
-  gap: 8px;
-}
-.eq-page.is-embedded .eq-header {
-  margin-bottom: 16px;
-}
-.eq-page.is-embedded :deep(.chart-card) {
-  border-radius: 8px;
-}
-.eq-page.is-embedded :deep(.svg-container) {
-  height: clamp(120px, 18vh, 160px);
-}
-.eq-page.is-embedded :deep(.sliders-board) {
-  --te-graphic-slider-height: clamp(112px, 18vh, 148px);
-  padding: 16px 8px;
-  border-radius: 8px;
-}
-.eq-page.is-embedded :deep(.slider-column) {
-  gap: 12px;
-}
-.eq-page.is-embedded :deep(.opra-panel) {
-  border-radius: 8px;
-}
-.eq-page.is-embedded.is-parametric .eq-content {
-  padding: 16px 0 24px;
-}
-.eq-apply-error {
-  color: var(--te-danger-soft-fg);
-  font-size: var(--te-type-body);
+@media (max-width: 800px) {
+  .eq-page.eq-embedded .eq-container {
+    flex-direction: column;
+  }
+  .eq-embedded .eq-sidebar {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 0;
+  }
 }
 </style>

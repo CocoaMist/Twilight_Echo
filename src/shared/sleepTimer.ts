@@ -11,6 +11,31 @@ export interface SleepTimerState {
   fadeSeconds: number
   active: boolean
   triggered: boolean
+  /** Main-assigned identity of a fired timer; never persisted as an armed timer. */
+  triggerRevision?: number
+  /** Explicit acknowledgement that main accepted this shutdown execution. */
+  shutdownOwner?: 'main'
+}
+
+export interface SleepTimerShutdownHandoff {
+  triggerRevision: number
+  startedAt: number
+  volume: number
+}
+
+export function isSleepTimerShutdownHandoff(value: unknown): value is SleepTimerShutdownHandoff {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (
+    Number.isSafeInteger(record.triggerRevision) &&
+    (record.triggerRevision as number) > 0 &&
+    Number.isSafeInteger(record.startedAt) &&
+    (record.startedAt as number) > 0 &&
+    typeof record.volume === 'number' &&
+    Number.isFinite(record.volume) &&
+    record.volume >= 0 &&
+    record.volume <= 1
+  )
 }
 
 /** Runtime guard for IPC and persisted playback sessions. */
@@ -37,6 +62,19 @@ export function isSleepTimerState(value: unknown): value is SleepTimerState {
   } else if (state.endsAt !== null) {
     return false
   }
+  if (
+    state.triggerRevision !== undefined &&
+    (!Number.isSafeInteger(state.triggerRevision) ||
+      (state.triggerRevision as number) <= 0 ||
+      state.active ||
+      !state.triggered)
+  )
+    return false
+  if (
+    state.shutdownOwner !== undefined &&
+    (state.shutdownOwner !== 'main' || state.triggerRevision === undefined)
+  )
+    return false
 
   // A timer is either armed or has fired. A cancelled timer is represented by
   // null, never by an inert state object. Keeping this invariant at the wire

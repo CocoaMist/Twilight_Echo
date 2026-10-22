@@ -182,10 +182,9 @@ export function resolveMaterialMode(
 /** Central chrome foundation; existing public aliases keep theme compatibility. */
 export const MATERIAL_FOUNDATION = {
   '--te-chrome-attached-tint': '28%',
-  // The frame darkens the foundation under title chrome; the sidebar repeats
-  // that neutral wash over content. Neither adds a separate themed colour.
+  // Attached chrome samples the shared background without a default dark wash.
   '--te-chrome-attached-surface': 'transparent',
-  '--te-window-foundation-tint': 'rgb(0 0 0 / 10%)',
+  '--te-window-foundation-tint': 'transparent',
   '--te-chrome-attached-filter': 'blur(20px)',
   '--te-chrome-attached-liquid-surface':
     'color-mix(in srgb, var(--te-lg-context-material) calc(clamp(0, var(--te-lg-tint, 0.72), 1) * 100%), transparent)',

@@ -13,7 +13,6 @@ const props = defineProps<{
   actions: CommandPaletteAction[]
   search: UnifiedMusicSearchState
   playlists: Ref<Playlist[]>
-  tracks: Ref<Track[]>
   playTrack: (track: Track, tracks?: Track[]) => unknown
   openPlaylist: (playlist: Playlist) => unknown
 }>()
@@ -243,7 +242,7 @@ watch(rows, (next, previous) => {
         )
   void nextTick(revealSelection)
 })
-watch([props.tracks, props.playlists], scheduleSearch)
+watch(props.playlists, scheduleSearch)
 onMounted(() => {
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   dialog.value?.showModal()

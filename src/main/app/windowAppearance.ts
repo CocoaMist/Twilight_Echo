@@ -18,7 +18,7 @@ export function getWindowBackgroundColor(
 }
 
 /** Avoid a theme-coloured DWM outline around edge-to-edge playback content. */
-export function syncWindowFrameColor(
+export function syncWindowFrameAppearance(
   win: Pick<BrowserWindow, 'setAccentColor'>,
   highContrast: boolean
 ): void {

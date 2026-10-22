@@ -52,6 +52,7 @@ export interface OutputRouterHost {
   readNativePlaybackInfo(): PlaybackInfo | null
   readNativePlaybackInfoAsync(): Promise<PlaybackInfo | null>
   mergeNativePlaybackInfo(nativeInfo: PlaybackInfo): PlaybackInfo
+  effectiveVolume?(volume: number): number
   updateOutputPerfect(): void
   publishPlaybackInfo(): void
   syncPlaybackOutputMirrorsFromOutputInfo(): void
@@ -649,7 +650,7 @@ export class OutputRouter {
       const unmuteSynced = await this.callNativeMaybeAsync(
         '输出切换事务恢复音量',
         'SetVolume',
-        targetVolume
+        this.host.effectiveVolume?.(targetVolume) ?? targetVolume
       )
       if (!unmuteSynced) {
         throw nativeAudioError(options.errorCode, options.errorMessage, this.lastNativeError)
@@ -753,7 +754,7 @@ export class OutputRouter {
       const unmuteSynced = await this.callNativeMaybeAsync(
         '输出切换事务回滚恢复音量',
         'SetVolume',
-        snapshot.volume
+        this.host.effectiveVolume?.(snapshot.volume) ?? snapshot.volume
       )
       if (!unmuteSynced) return false
       this.output = snapshot.output

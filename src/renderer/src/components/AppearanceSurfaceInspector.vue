@@ -432,6 +432,14 @@ watch(
               @importing-change="setImporting"
             />
           </details>
+          <button
+            v-if="!backgroundPart"
+            class="appearance-more-button"
+            :disabled="busy || importing"
+            @click="emit('more', part)"
+          >
+            更多{{ partInfo.label }}设置<i class="pi pi-arrow-right" aria-hidden="true" />
+          </button>
         </div>
       </component>
     </div>

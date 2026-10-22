@@ -220,6 +220,21 @@ class Server final {
       response->channelFormats[channel] = record;
     }
     nativeDsd_ = isDsdSampleFormat(openConfig_.format.sampleFormat);
+    shared_->renderQueueCapacity = 0;
+    shared_->renderQueueChannelStride = 0;
+    exchangeAtomic(&shared_->renderQueueWrite, 0);
+    exchangeAtomic(&shared_->renderQueueRead, 0);
+    if (nativeDsd_) {
+      size_t stride = 0;
+      for (int channel = 0; channel < activeChannelCount_; ++channel)
+        stride = std::max(stride, asio::wireBytesForFrames(channelFormats_[channel], activeBufferSize_));
+      stride = (stride + 63) & ~size_t{63};
+      if (stride > 0 && stride <= kChannelStride) {
+        shared_->renderQueueChannelStride = static_cast<uint32_t>(stride);
+        shared_->renderQueueCapacity = static_cast<uint32_t>(std::min<size_t>(
+            kRenderQueueSlots, sizeof(shared_->renderQueueData) / (stride * activeChannelCount_)));
+      }
+    }
     const bool expanded = channelFormats_[0].dsdPacking == AsioDsdPacking::Ner8;
     dsdGeometry_.reset(static_cast<size_t>(activeBufferSize_), openConfig_.format.sampleRate, expanded,
                        openConfig_.dsdCadenceConfirmCallbacks);
@@ -301,9 +316,14 @@ class Server final {
     }
     const size_t safeFrames = nativeDsd_ ? dsdGeometry_.capacity() : static_cast<size_t>(activeBufferSize_);
     RenderBuffer& buffer = shared_->buffers[bufferIndex];
+    const bool queued = shared_->renderQueueCapacity > 0;
+    const uint32_t queueRead = static_cast<uint32_t>(readAtomic(&shared_->renderQueueRead));
+    const uint32_t queueWrite = static_cast<uint32_t>(readAtomic(&shared_->renderQueueWrite));
+    const RenderQueueBlock* queuedBlock = queued && queueRead != queueWrite
+        ? &shared_->renderQueueBlocks[queueRead % shared_->renderQueueCapacity] : nullptr;
     const LONG generation = readAtomic(&buffer.generation);
     const LONG consumed = readAtomic(&buffer.consumedGeneration);
-    const bool fresh = generation != consumed && generation > 0;
+    const bool fresh = queued ? queuedBlock != nullptr : generation != consumed && generation > 0;
     MemoryBarrier();
     for (int channel = 0; channel < activeChannelCount_; ++channel) {
       uint8_t* destination = static_cast<uint8_t*>(host_->outputBuffer(channel, bufferIndex));
@@ -313,11 +333,14 @@ class Server final {
       if (bytesPerFrame == 0) continue;
       const size_t capacityBytes = asio::wireBytesForFrames(format, safeFrames);
       if (fresh) {
-        const uint32_t bytes = buffer.channelBytes[channel];
-        const size_t committedFrames = buffer.committedFrames;
+        const uint32_t bytes = queued ? queuedBlock->channelBytes[channel] : buffer.channelBytes[channel];
+        const size_t committedFrames = queued ? queuedBlock->committedFrames : buffer.committedFrames;
         if (committedFrames <= safeFrames && bytes == asio::wireBytesForFrames(format, committedFrames) &&
             bytes <= capacityBytes && bytes <= kChannelStride) {
-          std::memcpy(destination, channelBuffer(shared_, channel, bufferIndex), bytes);
+          const auto* source = queued ? queuedChannelBuffer(shared_, queueRead, channel)
+                                      : channelBuffer(shared_, channel, bufferIndex);
+          if (!source) { asio::fillChannelIdle(destination, format, safeFrames); continue; }
+          std::memcpy(destination, source, bytes);
           // A conservative block may precede unit confirmation. Fill the newly
           // approved tail instead of replaying stale samples.
           asio::fillChannelIdle(destination + bytes, format, safeFrames - committedFrames);
@@ -328,7 +351,8 @@ class Server final {
     }
     if (fresh) {
       MemoryBarrier();
-      exchangeAtomic(&buffer.consumedGeneration, generation);
+      if (queued) exchangeAtomic(&shared_->renderQueueRead, static_cast<LONG>(queueRead + 1));
+      else exchangeAtomic(&buffer.consumedGeneration, generation);
     } else {
       incrementAtomic(&shared_->renderUnderrunCount);
     }

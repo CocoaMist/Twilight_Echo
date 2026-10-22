@@ -3,7 +3,7 @@
 :root {
   --te-chrome-attached-tint: 28%;
   --te-chrome-attached-surface: transparent;
-  --te-window-foundation-tint: rgb(0 0 0 / 10%);
+  --te-window-foundation-tint: transparent;
   --te-chrome-attached-filter: blur(20px);
   --te-chrome-attached-liquid-surface: color-mix(in srgb, var(--te-lg-context-material) calc(clamp(0, var(--te-lg-tint, 0.72), 1) * 100%), transparent);
   --te-chrome-attached-liquid-filter: blur(var(--te-lg-blur, var(--te-lg-context-diffusion, 16px))) saturate(var(--te-lg-saturate, 124%));

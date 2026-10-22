@@ -7,6 +7,7 @@ import { useMusicStore } from '../stores/useMusicStore'
 import {
   getMostListenedTracks,
   getRecentTracks,
+  waitForListeningStatsReady,
   useListeningStatsStore
 } from '../stores/useListeningStatsStore'
 import { useAudioOutputDspStore } from '../stores/useAudioOutputDspStore'
@@ -22,10 +23,14 @@ import {
 } from '../../../shared/dspGraph.ts'
 import type { Track } from '../types/music'
 import { createUnifiedRecentTrackResolver } from '../utils/unifiedRecentTracks'
+import { createLibraryDashboard } from '../stores/library/libraryDashboard.ts'
+import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
+import { getTrackSource } from '../utils/trackSourceIdentity.ts'
+import type { LibraryCollectionSummary } from '../../../shared/libraryDatabase.ts'
 import { resolveTimeGreeting } from '@renderer/utils/timeGreeting'
 import CoverImg from './CoverImg.vue'
-
-import { usePageDock } from '../app/pageDock'
+import DEFAULT_COVER from '../assets/images/default-track-cover-light.webp'
+import { useDomTrackLocator } from '@renderer/composables/useDomTrackLocator'
 
 const emit = defineEmits<{
   (event: 'select-view', category: string, filter: string | null): void
@@ -39,16 +44,8 @@ const TOP_TRACK_COUNT = 6
 const ALBUM_SHELF_SIZE = 5
 
 const { tracks: libraryTracks, albums, artists } = useMusicStore()
-const tracks = computed(() => props.previewTracks ?? libraryTracks.value)
-const albumCount = computed(() =>
-  props.previewTracks
-    ? new Set(props.previewTracks.map((track) => track.album)).size
-    : albums.value.length
-)
-const artistCount = computed(() =>
-  props.previewTracks
-    ? new Set(props.previewTracks.map((track) => track.artist)).size
-    : artists.value.length
+const tracks = computed(
+  () => props.previewTracks ?? (databaseDashboard.value ? [] : libraryTracks.value)
 )
 const { listeningStats } = useListeningStatsStore()
 const playbackStore = usePlayerStore()
@@ -56,11 +53,98 @@ const audioOutputDspStore = useAudioOutputDspStore()
 const { currentTrack, isPlaying } = playbackStore
 const { audioProcessing, playbackInfo, outputInfo } = storeToRefs(audioOutputDspStore)
 const { playTrack, togglePlay, next, prev, setPlayMode } = playbackStore
+const dashboardTopStats = computed(() =>
+  props.previewTracks ? [] : getMostListenedTracks(TOP_TRACK_COUNT)
+)
+const dashboardLatestStat = computed(() =>
+  props.previewTracks ? undefined : getRecentTracks(1)[0]
+)
+const dashboard = createLibraryDashboard({
+  getStorageMode: () => window.api.library.getStorageMode(),
+  getHistory: () => [
+    ...new Map(
+      [
+        ...dashboardTopStats.value,
+        ...(dashboardLatestStat.value ? [dashboardLatestStat.value] : [])
+      ].map((stat) => [stat.id, stat])
+    ).values()
+  ],
+  getPreferences: () => {
+    const document = getMusicVersions()
+    return { revision: musicVersionRevision.value, versions: document.tracks.versions }
+  },
+  api: {
+    queryTracks: (query) => window.api.library.database.queryTracks(query),
+    queryCollections: (kind, query) => window.api.library.database.queryCollections(kind, query),
+    lookupPlaylistTracks: (request, revision) =>
+      window.api.library.database.lookupPlaylistTracks(request, revision),
+    getTracksByIds: (ids, revision) => window.api.library.database.getTracksByIds(ids, revision),
+    getMetadata: () => window.api.library.database.getMetadata()
+  }
+})
+const dashboardState = dashboard.state
+const databaseDashboard = computed(
+  () => !props.previewTracks && dashboardState.value.mode !== 'json'
+)
+const dashboardTrackCount = computed(() =>
+  databaseDashboard.value ? (dashboardState.value.data?.total ?? 0) : tracks.value.length
+)
+const dashboardAlbumCount = computed(() =>
+  databaseDashboard.value ? (dashboardState.value.data?.albumCount ?? 0) : albums.value.length
+)
+const dashboardArtistCount = computed(() =>
+  databaseDashboard.value ? (dashboardState.value.data?.artistCount ?? 0) : artists.value.length
+)
+const dashboardReadPending = computed(
+  () =>
+    databaseDashboard.value &&
+    !dashboardState.value.data &&
+    (dashboardState.value.loading ||
+      (dashboardState.value.mode === null && !dashboardState.value.error))
+)
+const dashboardActionError = ref('')
+const dashboardError = computed(() => dashboardActionError.value || dashboardState.value.error)
+function retryDashboard(): void {
+  dashboardActionError.value = ''
+  dashboard.retry()
+  void waitForListeningStatsReady()
+    .then(() => {
+      if (dashboardMounted) dashboard.refresh()
+    })
+    .catch((error) => {
+      if (dashboardMounted)
+        dashboardActionError.value = error instanceof Error ? error.message : String(error)
+    })
+}
+let unsubscribeDashboard: (() => void) | undefined
+let dashboardMounted = false
+let dashboardPlayIntent = 0
+let dashboardPlayBusy = false
+let pendingDashboardPlay: { track: Track; revision: number; intent: number } | null = null
+watch([currentTrack, isPlaying], () => cancelDashboardPlay(), { flush: 'sync' })
+watch([dashboardTopStats, dashboardLatestStat, musicVersionRevision], () => {
+  if (dashboardMounted && databaseDashboard.value) dashboard.refresh()
+})
+useDomTrackLocator('locatorRoot', () => currentTrack.value?.id ?? null)
 
 const now = ref(new Date())
 
 onMounted(() => {
   if (props.previewTracks) return
+  dashboardMounted = true
+  unsubscribeDashboard = window.api.library.onChanged((change) => {
+    const revision = change?.kind === 'scan' ? change.update.libraryRevision : change?.revision
+    dashboard.invalidate(revision)
+  })
+  dashboard.refresh(true)
+  void waitForListeningStatsReady()
+    .then(() => {
+      if (dashboardMounted && databaseDashboard.value) dashboard.refresh()
+    })
+    .catch((error) => {
+      if (dashboardMounted)
+        dashboardActionError.value = error instanceof Error ? error.message : String(error)
+    })
   void refreshDspRouteState(true)
   // The polled graph status only moves while audio is flowing (meters, process
   // time). When paused or stopped the last snapshot stays valid, so the 1 Hz
@@ -88,6 +172,10 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  dashboardMounted = false
+  cancelDashboardPlay()
+  unsubscribeDashboard?.()
+  dashboard.dispose()
   if (dspRoutePoll !== null) window.clearInterval(dspRoutePoll)
   dspRoutePoll = null
 })
@@ -101,10 +189,12 @@ const dateKicker = computed(() => {
   return `${now.value.getMonth() + 1}月${now.value.getDate()}日 · ${weekdays[now.value.getDay()]}`
 })
 
-const hasLibrary = computed(() => tracks.value.length > 0)
+const hasLibrary = computed(() => dashboardTrackCount.value > 0)
 
 const totalDuration = computed(() => {
-  const seconds = tracks.value.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0)
+  const seconds = databaseDashboard.value
+    ? (dashboardState.value.data?.duration ?? 0)
+    : tracks.value.reduce((sum, track) => sum + Math.max(0, track.duration || 0), 0)
   const hours = seconds / 3600
   if (hours >= 24) return { value: (hours / 24).toFixed(1), unit: '天' }
   if (hours >= 1) return { value: hours.toFixed(1), unit: '小时' }
@@ -124,9 +214,13 @@ interface RankedStat {
 
 const rankedStats = computed<RankedStat[]>(() => {
   if (props.previewTracks) return []
-  const resolveRecentTrack = createUnifiedRecentTrackResolver(tracks.value)
-  return getMostListenedTracks(TOP_TRACK_COUNT).map((stat) => {
-    const track = resolveRecentTrack(stat) ?? stat.track ?? null
+  const resolveRecentTrack = databaseDashboard.value
+    ? null
+    : createUnifiedRecentTrackResolver(tracks.value)
+  return dashboardTopStats.value.map((stat) => {
+    const track = databaseDashboard.value
+      ? (dashboardState.value.history.get(stat.id) ?? null)
+      : (resolveRecentTrack!(stat) ?? stat.track ?? null)
     return {
       id: stat.id,
       seconds: stat.seconds,
@@ -142,8 +236,9 @@ const rankedStats = computed<RankedStat[]>(() => {
 
 const lastPlayedTrack = computed<Track | null>(() => {
   if (props.previewTracks) return props.previewTracks[0] ?? null
-  const latestStat = getRecentTracks(1)[0]
+  const latestStat = dashboardLatestStat.value
   if (!latestStat) return null
+  if (databaseDashboard.value) return dashboardState.value.history.get(latestStat.id) ?? null
 
   const resolveRecentTrack = createUnifiedRecentTrackResolver(tracks.value)
   return resolveRecentTrack(latestStat) ?? latestStat.track ?? null
@@ -155,7 +250,9 @@ const heroTrack = computed<Track | null>(() => {
   if (lastPlayedTrack.value) return lastPlayedTrack.value
   const ranked = rankedStats.value[0]
   if (ranked?.track) return ranked.track
-  return tracks.value[0] ?? null
+  return databaseDashboard.value
+    ? (dashboardState.value.data?.first[0] ?? null)
+    : (tracks.value[0] ?? null)
 })
 
 const heroIsCurrent = computed(
@@ -188,11 +285,19 @@ const heroAudioMeta = computed(() => {
   return parts.join(' · ')
 })
 
-const recentlyAdded = computed(() => tracks.value.slice(-SHELF_SIZE).reverse())
+const recentlyAdded = computed(() =>
+  databaseDashboard.value
+    ? (dashboardState.value.data?.recent ?? [])
+    : tracks.value.slice(-SHELF_SIZE).reverse()
+)
 
 const topTracks = computed<RankedStat[]>(() => {
   if (rankedStats.value.length > 0) return rankedStats.value
-  return tracks.value.slice(0, TOP_TRACK_COUNT).map((track) => ({
+  return (
+    databaseDashboard.value
+      ? (dashboardState.value.data?.first ?? [])
+      : tracks.value.slice(0, TOP_TRACK_COUNT)
+  ).map((track) => ({
     id: track.id,
     seconds: 0,
     plays: 0,
@@ -209,13 +314,30 @@ const topMaxSeconds = computed(() =>
 )
 
 const albumShelf = computed(() =>
-  props.previewTracks
-    ? []
-    : [...albums.value].sort((a, b) => b.trackCount - a.trackCount).slice(0, ALBUM_SHELF_SIZE)
+  databaseDashboard.value
+    ? (dashboardState.value.data?.albums ?? [])
+    : props.previewTracks
+      ? []
+      : [...albums.value].sort((a, b) => b.trackCount - a.trackCount).slice(0, ALBUM_SHELF_SIZE)
 )
 
 function playDashboardTrack(track: Track | null | undefined): void {
   if (!track) return
+  cancelDashboardPlay()
+  if (databaseDashboard.value) {
+    const data = dashboardState.value.data
+    if (dashboardState.value.mode !== 'sqlite' || !data) return
+    if (getTrackSource(track) !== 'local') {
+      playTrack(track, [track])
+      return
+    }
+    // A history snapshot or active track may genuinely no longer be in the
+    // library. Confirm that before preserving its old singleton entry; SQL
+    // errors and unloaded records must never masquerade as missing tracks.
+    pendingDashboardPlay = { track, revision: data.revision, intent: dashboardPlayIntent }
+    pumpDashboardPlay()
+    return
+  }
   const sourceIndex = tracks.value.findIndex((item) => item.id === track.id)
   if (sourceIndex < 0) {
     playTrack(track, [track])
@@ -228,27 +350,70 @@ function playDashboardTrack(track: Track | null | undefined): void {
   playTrack(track, tracks.value.slice(queueStart, end))
 }
 
+function cancelDashboardPlay(): void {
+  dashboardPlayIntent++
+  pendingDashboardPlay = null
+}
+
+function pumpDashboardPlay(): void {
+  if (dashboardPlayBusy || !pendingDashboardPlay || !dashboardMounted) return
+  const request = pendingDashboardPlay
+  pendingDashboardPlay = null
+  dashboardPlayBusy = true
+  void (async () => {
+    try {
+      const page = await window.api.library.database.getTracksByIds(
+        [request.track.id],
+        request.revision
+      )
+      if (!dashboardMounted || request.intent !== dashboardPlayIntent) return
+      if (page.revision !== request.revision) throw new Error('曲库已变化，请刷新首页后重试')
+      dashboardActionError.value = ''
+      if (page.tracks.some((track) => track.id === request.track.id)) {
+        void playbackStore.playLibraryQuery(
+          { sort: 'playlist', contentRevision: request.revision },
+          request.track.id
+        )
+      } else playTrack(request.track, [request.track])
+    } catch (error) {
+      if (dashboardMounted && request.intent === dashboardPlayIntent)
+        dashboardActionError.value = error instanceof Error ? error.message : String(error)
+    } finally {
+      dashboardPlayBusy = false
+      pumpDashboardPlay()
+    }
+  })()
+}
+
 function shuffleAll(): void {
+  cancelDashboardPlay()
+  if (databaseDashboard.value) {
+    if (dashboardState.value.mode === 'sqlite' && dashboardTrackCount.value > 0)
+      void playbackStore.playLibraryQuery(
+        { sort: 'playlist', contentRevision: dashboardState.value.data?.revision },
+        undefined,
+        { randomStart: true, playMode: 'shuffle' }
+      )
+    return
+  }
   if (tracks.value.length === 0) return
   const index = Math.floor(Math.random() * tracks.value.length)
   setPlayMode('shuffle')
   playDashboardTrack(tracks.value[index])
 }
-usePageDock(
-  'local-home',
-  () => [
-    {
-      id: 'shuffle-library',
-      label: '随机播放',
-      icon: 'library.shuffle',
-      disabled: !hasLibrary.value,
-      run: shuffleAll
-    }
-  ],
-  () => !props.previewTracks
-)
 
-function playAlbum(album: { tracks: Track[] }): void {
+function playAlbum(album: { tracks: Track[] } | LibraryCollectionSummary): void {
+  cancelDashboardPlay()
+  if (databaseDashboard.value) {
+    if (dashboardState.value.mode === 'sqlite' && 'id' in album)
+      void playbackStore.playLibraryQuery({
+        albumId: album.id,
+        sort: 'trackNumber',
+        contentRevision: dashboardState.value.data?.revision
+      })
+    return
+  }
+  if (!('tracks' in album)) return
   const albumTracks = album.tracks
   if (albumTracks.length === 0) return
   playTrack(albumTracks[0], albumTracks)
@@ -306,7 +471,7 @@ const calendarCells = computed<(CalendarCell | null)[]>(() => {
   const month = calCursor.value.getMonth()
   const daysInMonth = new Date(year, month + 1, 0).getDate()
   const leadingBlanks = (new Date(year, month, 1).getDay() + 6) % 7
-  const days = props.previewTracks ? {} : listeningStats.value.days
+  const days = listeningStats.value.days
   let monthMax = 0
   for (let day = 1; day <= daysInMonth; day += 1) {
     monthMax = Math.max(monthMax, days[calDayKey(year, month, day)] ?? 0)
@@ -833,7 +998,11 @@ function closeDspRouteDialog(): void {
 </script>
 
 <template>
-  <div class="home dashboard-wrapper" :class="{ 'has-route-dialog': dspRouteDialogOpen }">
+  <div
+    ref="locatorRoot"
+    class="home dashboard-wrapper"
+    :class="{ 'has-route-dialog': dspRouteDialogOpen }"
+  >
     <div class="ambient" aria-hidden="true">
       <span class="blob blob-a"></span>
       <span class="blob blob-b"></span>
@@ -851,7 +1020,7 @@ function closeDspRouteDialog(): void {
           v-if="hasLibrary"
           type="button"
           class="masthead-shuffle"
-          :title="`从 ${tracks.length} 首歌曲中随机播放`"
+          :title="`从 ${dashboardTrackCount} 首歌曲中随机播放`"
           @click="shuffleAll"
         >
           <span class="masthead-shuffle-icon" aria-hidden="true"
@@ -861,8 +1030,18 @@ function closeDspRouteDialog(): void {
         </button>
       </header>
 
+      <section
+        v-if="dashboardError || dashboardReadPending"
+        class="dashboard-state"
+        role="status"
+        aria-live="polite"
+      >
+        <span>{{ dashboardError || '正在读取音乐库…' }}</span>
+        <button v-if="dashboardError" type="button" @click="retryDashboard">重试</button>
+      </section>
+
       <!-- ── Empty library ────────────────────────────────────────────── -->
-      <section v-if="!hasLibrary" class="empty-stage">
+      <section v-if="!hasLibrary && !dashboardError && !dashboardReadPending" class="empty-stage">
         <div class="empty-orb empty-orb-a" aria-hidden="true"></div>
         <div class="empty-orb empty-orb-b" aria-hidden="true"></div>
         <span class="empty-badge" aria-hidden="true"><i class="ph ph-music-note"></i></span>
@@ -880,18 +1059,19 @@ function closeDspRouteDialog(): void {
         </div>
       </section>
 
-      <template v-else>
+      <template v-else-if="hasLibrary">
         <!-- ── Hero: now playing / last played ────────────────────────── -->
-        <section class="feature-card" data-te-material="content" aria-label="正在收听">
+        <section class="feature-card" aria-label="正在收听">
           <div :key="`bg:${heroCoverKey}`" class="feature-backdrop" aria-hidden="true">
             <CoverImg
               v-if="heroTrack?.cover || heroTrack?.coverSource"
               :cover="heroTrack?.cover"
               :cover-source="heroTrack?.coverSource"
               :identity="heroTrack?.id"
+              :fallback="DEFAULT_COVER"
               alt=""
             />
-            <CoverImg v-else :cover="null" alt="" />
+            <img v-else :src="DEFAULT_COVER" class="default-track-cover" alt="" />
           </div>
 
           <div class="hero-inner">
@@ -909,14 +1089,16 @@ function closeDspRouteDialog(): void {
                 <p class="hero-artist" :title="heroTrack?.artist">
                   {{ heroTrack?.artist || '未知艺术家' }}
                 </p>
-                <p class="hero-meta" :title="heroTrack?.album || '本地音乐'">
-                  <span class="hero-release">
-                    <i class="ph ph-disc" aria-hidden="true"></i>
-                    <span class="hero-album">{{ heroTrack?.album || '本地音乐' }}</span>
-                  </span>
-                  <span v-if="heroAudioMeta" class="hero-audio-meta">{{ heroAudioMeta }}</span>
-                </p>
               </div>
+              <p class="hero-meta" :title="heroTrack?.album || '本地音乐'">
+                <span class="hero-release">
+                  <i class="ph ph-disc" aria-hidden="true"></i>
+                  <span class="hero-album">{{ heroTrack?.album || '本地音乐' }}</span>
+                </span>
+                <span v-if="heroAudioMeta" class="hero-audio-meta">{{ heroAudioMeta }}</span>
+              </p>
+
+              <DashboardPlaybackProgress v-if="heroIsCurrent" />
 
               <div
                 v-if="heroTrack"
@@ -959,29 +1141,20 @@ function closeDspRouteDialog(): void {
                   <PlaybackIcon name="next" />
                 </button>
               </div>
-
-              <div
-                v-if="heroTrack"
-                class="hero-progress-slot"
-                :class="{ 'is-inactive': !heroIsCurrent }"
-                :aria-hidden="!heroIsCurrent"
-                :inert="!heroIsCurrent"
-              >
-                <DashboardPlaybackProgress :preview="!!previewTracks" />
-              </div>
             </div>
 
             <div :key="`art:${heroCoverKey}`" class="hero-art" aria-hidden="true">
               <span class="hero-art-echo"></span>
-              <span class="hero-art-frame">
+              <span class="hero-art-frame" :class="{ 'is-live': heroIsCurrent && isPlaying }">
                 <CoverImg
                   v-if="heroTrack?.cover || heroTrack?.coverSource"
                   :cover="heroTrack?.cover"
                   :cover-source="heroTrack?.coverSource"
                   :identity="heroTrack?.id"
+                  :fallback="DEFAULT_COVER"
                   alt=""
                 />
-                <CoverImg v-else :cover="null" alt="" />
+                <img v-else :src="DEFAULT_COVER" class="default-track-cover" alt="" />
               </span>
             </div>
           </div>
@@ -990,17 +1163,17 @@ function closeDspRouteDialog(): void {
         <!-- ── Library figures ─────────────────────────────────────────── -->
         <section class="figures" aria-label="音乐库一览">
           <button type="button" class="figure" @click="emit('select-view', 'allSongs', null)">
-            <strong>{{ tracks.length.toLocaleString('zh-CN') }}</strong>
+            <strong>{{ dashboardTrackCount.toLocaleString('zh-CN') }}</strong>
             <span>首歌曲</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
           <button type="button" class="figure" @click="emit('select-view', 'albums', null)">
-            <strong>{{ albumCount.toLocaleString('zh-CN') }}</strong>
+            <strong>{{ dashboardAlbumCount.toLocaleString('zh-CN') }}</strong>
             <span>张专辑</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
           <button type="button" class="figure" @click="emit('select-view', 'artists', null)">
-            <strong>{{ artistCount.toLocaleString('zh-CN') }}</strong>
+            <strong>{{ dashboardArtistCount.toLocaleString('zh-CN') }}</strong>
             <span>位艺术家</span>
             <i class="ph ph-arrow-up-right" aria-hidden="true"></i>
           </button>
@@ -1009,6 +1182,83 @@ function closeDspRouteDialog(): void {
               {{ totalDuration.value }}<small class="figure-unit">{{ totalDuration.unit }}</small>
             </strong>
             <span>收藏总时长</span>
+          </div>
+        </section>
+
+        <!-- ── Live signal path ────────────────────────────────────────── -->
+        <section
+          class="signal-card"
+          role="button"
+          tabindex="0"
+          aria-label="打开实时 DSP 输出线路"
+          @click="openDspRouteDialog"
+          @keydown.enter.prevent="openDspRouteDialog"
+          @keydown.space.prevent="openDspRouteDialog"
+        >
+          <div class="signal-head">
+            <div class="signal-title">
+              <span class="signal-kicker">SIGNAL PATH</span>
+              <h2>播放链路</h2>
+              <small>{{ activeDspSceneName }}</small>
+            </div>
+            <div class="signal-head-state">
+              <span class="signal-summary">
+                <span><i class="ph ph-stack"></i>{{ enabledDspCount }} 个启用阶段</span>
+                <span><i class="ph ph-timer"></i>{{ dspGraphLatencyMs.toFixed(2) }} ms</span>
+              </span>
+              <span class="dsp-state" :class="{ on: dspEngineOn, live: dspProcessingActive }">
+                <span class="dsp-state-dot" aria-hidden="true"></span>
+                {{ dspStatusText }}
+              </span>
+              <i class="ph ph-caret-right signal-caret" aria-hidden="true"></i>
+            </div>
+          </div>
+
+          <div class="dsp-route-strip is-compact">
+            <div class="route-stage route-endpoint-stage" title="播放源">
+              <span class="route-stage-icon"><i class="ph ph-music-notes"></i></span>
+              <div class="route-stage-copy">
+                <small>SOURCE</small>
+                <strong>{{ dspSourceDetail }}</strong>
+              </div>
+            </div>
+
+            <template v-for="stage in dspRouteStages" :key="stage.id">
+              <span
+                class="route-connector"
+                :class="{ active: stage.active || dspProcessingActive }"
+                aria-hidden="true"
+              ></span>
+              <div
+                class="route-stage"
+                :class="[`is-${stage.state}`, { 'is-active': stage.active }]"
+                :title="`${stage.label} · ${stage.stateLabel} · ${stage.detail}`"
+              >
+                <span class="route-stage-icon"><i :class="stage.icon"></i></span>
+                <div class="route-stage-copy">
+                  <small>{{ stage.shortLabel }}</small>
+                  <strong>{{ stage.detail }}</strong>
+                </div>
+              </div>
+            </template>
+
+            <span
+              class="route-connector"
+              :class="{ active: playbackInfo?.state === 'playing' }"
+              aria-hidden="true"
+            ></span>
+            <div class="route-stage route-endpoint-stage is-output" title="实际输出">
+              <span class="route-stage-icon"><i class="ph ph-speaker-hifi"></i></span>
+              <div class="route-stage-copy">
+                <small>OUTPUT</small>
+                <strong>{{ dspOutputDetail }}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="signal-foot">
+            <span>{{ dspOutputDeviceDetail }}</span>
+            <strong>{{ activeDspCount }}/{{ dspRouteStages.length }} LIVE</strong>
           </div>
         </section>
 
@@ -1028,6 +1278,7 @@ function closeDspRouteDialog(): void {
             <button
               v-for="track in recentlyAdded"
               :key="track.id"
+              :data-te-track-id="track.id"
               type="button"
               class="fresh-tile"
               @click="playDashboardTrack(track)"
@@ -1037,6 +1288,7 @@ function closeDspRouteDialog(): void {
                   :cover="track.cover"
                   :cover-source="track.coverSource"
                   :identity="track.id"
+                  :fallback="DEFAULT_COVER"
                   :alt="track.title"
                 />
                 <span v-if="track.format" class="fresh-format">{{
@@ -1072,6 +1324,7 @@ function closeDspRouteDialog(): void {
                 <button
                   v-for="(entry, index) in topTracks"
                   :key="entry.id"
+                  :data-te-track-id="entry.track?.id"
                   type="button"
                   class="chart-row"
                   @click="playDashboardTrack(entry.track)"
@@ -1084,6 +1337,7 @@ function closeDspRouteDialog(): void {
                       :cover="entry.track?.cover || entry.cover"
                       :cover-source="entry.track?.coverSource || entry.coverSource"
                       :identity="entry.track?.id || entry.id"
+                      :fallback="DEFAULT_COVER"
                       :alt="entry.title"
                     />
                   </span>
@@ -1175,7 +1429,7 @@ function closeDspRouteDialog(): void {
               @click="playAlbum(album)"
             >
               <span class="gallery-cover">
-                <CoverImg :cover="album.cover" :alt="album.name" />
+                <CoverImg :cover="album.cover" :fallback="DEFAULT_COVER" :alt="album.name" />
                 <span class="gallery-scrim" aria-hidden="true"></span>
                 <span class="gallery-count">{{ album.trackCount }} 首</span>
                 <span class="gallery-play" aria-hidden="true"><PlaybackIcon name="play" /></span>
@@ -1183,82 +1437,6 @@ function closeDspRouteDialog(): void {
               <span class="gallery-name">{{ album.name }}</span>
               <span class="gallery-artist">{{ album.artist || '未知艺术家' }}</span>
             </button>
-          </div>
-        </section>
-        <!-- ── Live signal path ────────────────────────────────────────── -->
-        <section
-          class="signal-card"
-          role="button"
-          tabindex="0"
-          aria-label="打开实时 DSP 输出线路"
-          @click="openDspRouteDialog"
-          @keydown.enter.prevent="openDspRouteDialog"
-          @keydown.space.prevent="openDspRouteDialog"
-        >
-          <div class="signal-head">
-            <div class="signal-title">
-              <span class="signal-kicker">SIGNAL PATH</span>
-              <h2>播放链路</h2>
-              <small>{{ activeDspSceneName }}</small>
-            </div>
-            <div class="signal-head-state">
-              <span class="signal-summary">
-                <span><i class="ph ph-stack"></i>{{ enabledDspCount }} 个启用阶段</span>
-                <span><i class="ph ph-timer"></i>{{ dspGraphLatencyMs.toFixed(2) }} ms</span>
-              </span>
-              <span class="dsp-state" :class="{ on: dspEngineOn, live: dspProcessingActive }">
-                <span class="dsp-state-dot" aria-hidden="true"></span>
-                {{ dspStatusText }}
-              </span>
-              <i class="ph ph-caret-right signal-caret" aria-hidden="true"></i>
-            </div>
-          </div>
-
-          <div class="dsp-route-strip is-compact">
-            <div class="route-stage route-endpoint-stage" title="播放源">
-              <span class="route-stage-icon"><i class="ph ph-music-notes"></i></span>
-              <div class="route-stage-copy">
-                <small>SOURCE</small>
-                <strong>{{ dspSourceDetail }}</strong>
-              </div>
-            </div>
-
-            <template v-for="stage in dspRouteStages" :key="stage.id">
-              <span
-                class="route-connector"
-                :class="{ active: stage.active || dspProcessingActive }"
-                aria-hidden="true"
-              ></span>
-              <div
-                class="route-stage"
-                :class="[`is-${stage.state}`, { 'is-active': stage.active }]"
-                :title="`${stage.label} · ${stage.stateLabel} · ${stage.detail}`"
-              >
-                <span class="route-stage-icon"><i :class="stage.icon"></i></span>
-                <div class="route-stage-copy">
-                  <small>{{ stage.shortLabel }}</small>
-                  <strong>{{ stage.detail }}</strong>
-                </div>
-              </div>
-            </template>
-
-            <span
-              class="route-connector"
-              :class="{ active: playbackInfo?.state === 'playing' }"
-              aria-hidden="true"
-            ></span>
-            <div class="route-stage route-endpoint-stage is-output" title="实际输出">
-              <span class="route-stage-icon"><i class="ph ph-speaker-hifi"></i></span>
-              <div class="route-stage-copy">
-                <small>OUTPUT</small>
-                <strong>{{ dspOutputDetail }}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div class="signal-foot">
-            <span>{{ dspOutputDeviceDetail }}</span>
-            <strong>{{ activeDspCount }}/{{ dspRouteStages.length }} LIVE</strong>
           </div>
         </section>
       </template>

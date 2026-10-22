@@ -1,8 +1,7 @@
-/* CSS follows the window's tone, including isolated Appearance preview roots. */
 img.default-track-cover {
-  content: url('./images/default-track-cover-light.png');
+  content: url('./images/default-track-cover-light.webp');
 }
 
 :root[data-theme='dark'] img.default-track-cover {
-  content: url('./images/default-track-cover-dark.png');
+  content: url('./images/default-track-cover-dark.webp');
 }

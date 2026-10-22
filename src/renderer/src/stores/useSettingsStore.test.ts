@@ -1,14 +1,35 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { runInNewContext } from 'node:vm'
+import ts from 'typescript'
 import { reactive } from 'vue'
 import {
   backgroundCssVariables,
   cloneAppearance,
   defaultCardAppearance,
-  normalizeAppBackgroundSettings
+  normalizeAppBackgroundSettings,
+  resolveBackgroundAppearance
 } from '../../../shared/appAppearance.ts'
 import { DEFAULT_LIQUID_GLASS } from '../../../shared/liquidGlass.ts'
+import { TWILIGHT_DEFAULT_THEME } from '../../../shared/theme.ts'
+import { backgroundDisplayUrl } from '../../../shared/backgroundDisplay.ts'
+
+function themeFunctions(...names: string[]): string {
+  const source = readFileSync(new URL('./useThemeStore.ts', import.meta.url), 'utf8')
+  return ts.transpileModule(
+    names
+      .map((name) => {
+        const start = source.indexOf(`function ${name}(`)
+        assert.ok(start >= 0, `${name} must exist in the theme store`)
+        const end = source.indexOf('\n}', start)
+        assert.ok(end > start)
+        return source.slice(start, end + 2)
+      })
+      .join('\n'),
+    { compilerOptions: { target: ts.ScriptTarget.ESNext } }
+  ).outputText
+}
 
 test('background settings updates are applied optimistically and protected from stale snapshots', () => {
   const source = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
@@ -78,10 +99,31 @@ test('settings chrome no longer dual-writes theme-owned CSS variables', () => {
   assert.doesNotMatch(source, /dataset\.theme = resolvedTheme/)
   assert.match(themeSource, /function applyAppBackgroundVariables/)
   assert.match(themeSource, /function syncThemeSettingsAppearance/)
-  assert.match(
-    themeSource,
-    /variables\['--te-app-bg-image'\] = toBackgroundImageValue\(globalBackground\)/
-  )
+  const applyBackground = runInNewContext(
+    themeFunctions(
+      'themeBackgroundReferences',
+      'escapeCssUrl',
+      'toBackgroundImageValue',
+      'applyAppBackgroundVariables'
+    ) + '\napplyAppBackgroundVariables',
+    {
+      appBackground: normalizeAppBackgroundSettings({
+        global: { kind: 'image', image: 'background://wallpaper.png' },
+        pages: { settings: { inherit: false, kind: 'color', light: '#aabbcc' } }
+      }),
+      APP_BACKGROUND_PAGES: ['local', 'settings', 'streaming', 'player'],
+      TWILIGHT_DEFAULT_THEME,
+      resolveBackgroundAppearance,
+      backgroundCssVariables,
+      backgroundDisplayUrl
+    }
+  ) as (tone: string, variables: Record<string, string>) => string
+  const variables: Record<string, string> = {}
+  applyBackground('pureWhite', variables)
+  for (const page of ['app', 'local', 'streaming', 'player'])
+    assert.equal(variables[`--te-${page}-bg-image`], 'url("background://wallpaper.png?display=v1")')
+  assert.equal(variables['--te-settings-bg'], '#aabbcc')
+  assert.equal(variables['--te-settings-bg-image'], 'none')
   assert.match(themeSource, /applyAppBackgroundVariables\(tone, variables\)/)
   assert.doesNotMatch(appSource, /body\s*\{\s*background:\s*transparent/)
   // The local background choice lands on the one window-wide body surface
@@ -148,7 +190,24 @@ test('manual tone scheduling follows the app preference, not a stale DOM attribu
   // Manual presets must resolve from the stored preference. Reading the DOM
   // attribute lets a previous timed/system preset leak its tone into the next
   // manual preset (switching presets in dark mode would flip back to light).
-  assert.match(functionBody, /return resolveThemeMode\(themePreference\)/)
+  const context = {
+    themePreference: 'dark',
+    previewTone: { value: null },
+    systemTone: { value: 'dark' },
+    window: { matchMedia: () => ({ matches: false }) },
+    clearTimedToneRefresh: () => {}
+  }
+  const resolveRuntimeTone = runInNewContext(
+    themeFunctions('resolveThemeMode', 'resolveRuntimeTone') + '\nresolveRuntimeTone',
+    context
+  ) as (profile: null, modes: object) => string
+  assert.equal(resolveRuntimeTone(null, {}), 'dark')
+  context.themePreference = 'pureWhite'
+  assert.equal(resolveRuntimeTone(null, {}), 'pureWhite')
+  context.themePreference = 'system'
+  assert.equal(resolveRuntimeTone(null, {}), 'dark')
+  context.systemTone.value = 'pureWhite'
+  assert.equal(resolveRuntimeTone(null, {}), 'pureWhite')
   assert.doesNotMatch(functionBody, /return resolveTone\(\)/)
 })
 
@@ -204,6 +263,7 @@ function readSettingsPageSources(): string {
   return [
     'SettingsPage.vue',
     'settings-page/types.ts',
+    'settings-page/usePluginSettingsPanels.ts',
     'settings-page/AboutSettingsSection.vue',
     'settings-page/ShortcutsSettingsSection.vue',
     'settings-page/MiniPlayerSettingsSection.vue',
@@ -248,13 +308,13 @@ test('about settings expose bundled sponsor payment options and sponsor list', (
   assert.ok(existsSync(new URL('../../../../resources/sponsor/wechat.png', import.meta.url)))
 })
 
-test('appearance parser quotes background image handles when building css url values', () => {
+test('appearance parser quotes display-sized background image handles when building css url values', () => {
   const background = normalizeAppBackgroundSettings({
     global: { kind: 'image', image: 'background://one.png' }
   })
   assert.equal(
     backgroundCssVariables(background.global, 'dark')['--appearance-image'],
-    'url("background://one.png")'
+    'url("background://one.png?display=v1")'
   )
   const invalid = normalizeAppBackgroundSettings({
     global: { kind: 'image', image: 'background://one.png")' }

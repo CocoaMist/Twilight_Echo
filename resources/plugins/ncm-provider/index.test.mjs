@@ -70,6 +70,50 @@ function parseRequest(path) {
   return new URL(path, 'http://twilight.local')
 }
 
+test('readPlaylistImportPage preserves repeated IDs and missing songs across complete pages',async()=>{
+  const requests=[]
+  const provider=await activateProvider(async path=>{
+    requests.push(path)
+    const url=parseRequest(path)
+    if(url.pathname==='/playlist/detail')return {playlist:{name:'Mix',trackCount:3,trackIds:[{id:1},{id:2},{id:1}]}}
+    if(url.pathname==='/song/detail')return {songs:(url.searchParams.get('ids')||'').split(',').filter(id=>id==='1').map(id=>({...song(Number(id)),al:{...song(Number(id)).al,picUrl:'https://p1.music.126.net/cover.jpg'}}))}
+    throw new Error(`unexpected endpoint: ${url.pathname}`)
+  })
+  try{
+    const first=await provider.readPlaylistImportPage('77',0,2)
+    assert.equal(first.name,'Mix');assert.equal(first.total,3);assert.equal(first.hasMore,true);assert.deepEqual(first.songs.map(item=>item.platformId),['1','2'])
+    assert.ok(first.songs[1].unavailableReason)
+    assert.equal(first.songs[0].cover,'https://p1.music.126.net/cover.jpg')
+    assert.equal(first.songs[0].coverSource,'https://p1.music.126.net/cover.jpg')
+    assert.equal(first.songs[0].coverSmall,'https://p1.music.126.net/cover.jpg?param=140y140')
+    const last=await provider.readPlaylistImportPage('77',2,2)
+    assert.equal(last.hasMore,false);assert.equal(last.nextOffset,3);assert.equal(last.songs[0].platformId,'1')
+    assert.equal(requests.filter(path=>parseRequest(path).pathname==='/playlist/detail').length,2)
+  }finally{ncmProvider.deactivate()}
+})
+
+test('readPlaylistImportPage preserves occurrence IDs, unavailable songs and stable pagination',async()=>{
+  const requests=[]
+  const provider=await activateProvider(async path=>{
+    requests.push(path)
+    const url=parseRequest(path)
+    if(url.pathname==='/playlist/detail')return {playlist:{name:'Mix',trackCount:3,trackIds:[{id:1},{id:2},{id:1}]}}
+    if(url.pathname==='/song/detail'){
+      const ids=(url.searchParams.get('ids')||'').split(',')
+      return {songs:ids.filter(id=>id==='1').map(id=>song(Number(id)))}
+    }
+    throw new Error(`unexpected endpoint: ${url.pathname}`)
+  })
+  try{
+    const first=await provider.readPlaylistImportPage('77',0,2)
+    assert.equal(first.name,'Mix');assert.equal(first.total,3);assert.equal(first.hasMore,true);assert.deepEqual(first.songs.map(item=>item.platformId),['1','2'])
+    assert.equal(first.songs[1].unavailableReason!==undefined,true)
+    const last=await provider.readPlaylistImportPage('77',2,2)
+    assert.equal(last.hasMore,false);assert.equal(last.nextOffset,3);assert.equal(last.songs[0].platformId,'1')
+    assert.equal(requests.filter(path=>parseRequest(path).pathname==='/playlist/detail').length,2)
+  }finally{ncmProvider.deactivate()}
+})
+
 test('album search is anonymous-capable and preserves totals, artist credits and cancellation', async () => {
   const controller = new AbortController()
   const provider = await activateProvider(async (path, cookie, options) => {
@@ -1971,6 +2015,81 @@ test('saved albums and artists paginate and normalize cloud collections', async 
     const artists = await provider.fetchSavedArtists()
     assert.equal(artists[0].id, 7)
     assert.equal(artists[0].name, 'Saved artist')
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
+test('album collections retain upstream release kinds without guessing from track counts', async () => {
+  const source = [
+    { ...album(1), name: 'LONG SEASON', size: 1, type: 'Single', subType: '录音室版' },
+    { ...album(2), name: 'Spitfire EP', size: 11, type: '专辑', subType: '录音室版' },
+    { ...album(3), type: ' EP ', subType: ' 现场版 ' },
+    { ...album(4), type: 'EP/Single', subType: 'Remix' },
+    { ...album(5), type: 'Mixtape', subType: 'Demo' },
+    { ...album(6), type: ' ', subType: 7 },
+    album(7)
+  ]
+  const provider = await activateProvider(async (path) => {
+    const url = parseRequest(path)
+    if (url.pathname === '/artist/album') return { hotAlbums: source, more: false }
+    if (url.pathname === '/album/sublist') return { data: source, more: false }
+    throw new Error(`unexpected endpoint: ${url.pathname}`)
+  })
+  try {
+    for (const result of [
+      await provider.fetchArtistAlbums(185871),
+      await provider.fetchSavedAlbums()
+    ]) {
+      assert.deepEqual(
+        result.map(({ releaseType }) => releaseType),
+        ['Single', '专辑', 'EP', 'EP/Single', 'Mixtape', undefined, undefined]
+      )
+      assert.equal(result[0].trackCount, 1)
+      assert.equal(result[1].name, 'Spitfire EP')
+      assert.equal(result[1].trackCount, 11)
+    }
+  } finally {
+    ncmProvider.deactivate()
+  }
+})
+
+test('album explicit badges use the upstream flag bit and leave invalid metadata unknown', async () => {
+  const cases = [
+    [1048576, true],
+    [1056768, true],
+    [2 ** 40 + 1048576, true],
+    ['1056768', true],
+    [0, false],
+    [8192, false],
+    ['0', false],
+    [undefined, undefined],
+    [null, undefined],
+    ['', undefined],
+    [' ', undefined],
+    ['invalid', undefined],
+    [true, undefined],
+    [-1, undefined],
+    [1048576.5, undefined],
+    [Number.MAX_SAFE_INTEGER + 1, undefined]
+  ]
+  const source = cases.map(([mark], id) => ({ ...album(id + 1), name: 'Explicit', mark }))
+  const provider = await activateProvider(async (path) => {
+    const url = parseRequest(path)
+    if (url.pathname === '/artist/album') return { hotAlbums: source, more: false }
+    if (url.pathname === '/album/sublist') return { data: source, more: false }
+    throw new Error(`unexpected endpoint: ${url.pathname}`)
+  })
+  try {
+    for (const result of [
+      await provider.fetchArtistAlbums(53092),
+      await provider.fetchSavedAlbums()
+    ]) {
+      assert.deepEqual(
+        result.map(({ isExplicit }) => isExplicit),
+        cases.map(([, expected]) => expected)
+      )
+    }
   } finally {
     ncmProvider.deactivate()
   }

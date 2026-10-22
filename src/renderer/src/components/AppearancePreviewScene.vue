@@ -2,7 +2,6 @@
 import { onMounted, ref } from 'vue'
 import TitleBar from './TitleBar.vue'
 import SideMenu from './SideMenu.vue'
-import SidebarBookmark from './SidebarBookmark.vue'
 import OnlineHome from './local-dashboard/OnlineHome.vue'
 import PlayerBar from './PlayerBar.vue'
 import { workshopPreviewTracks } from './theme-workshop/workshopPreviewData'
@@ -87,11 +86,6 @@ onMounted(() => {
         :liquid-material="navigationGlass"
       />
     </div>
-    <SidebarBookmark
-      :open="navigationExpanded"
-      :liquid-material="navigationGlass"
-      data-preview-module="navigation"
-    />
     <div class="app-shell-content" data-preview-module="background">
       <main class="main-content" :class="{ 'menu-open': navigationExpanded }">
         <OnlineHome v-bind="homePreview" />

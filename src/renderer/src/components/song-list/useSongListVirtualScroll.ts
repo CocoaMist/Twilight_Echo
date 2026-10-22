@@ -9,7 +9,10 @@ import {
   type Ref
 } from 'vue'
 import type { Track } from '../../types/music'
-import { getSongListVirtualRange } from '@renderer/components/song-list/songListVirtualWindow.ts'
+import {
+  getSongListTrackScrollTopForIndex,
+  getSongListVirtualRange
+} from '@renderer/components/song-list/songListVirtualWindow.ts'
 
 type UseSongListVirtualScrollOptions = {
   displayTracks: ComputedRef<Track[]>
@@ -18,6 +21,8 @@ type UseSongListVirtualScrollOptions = {
   debouncedSearchQuery: Ref<string>
   viewKey?: ComputedRef<string>
   viewIdentity?: ComputedRef<string>
+  itemCount?: ComputedRef<number>
+  restoreReady?: ComputedRef<boolean>
 }
 
 const ROW_HEIGHT = 56
@@ -29,7 +34,9 @@ export function useSongListVirtualScroll({
   shouldResetOnSearch,
   debouncedSearchQuery,
   viewKey,
-  viewIdentity
+  viewIdentity,
+  itemCount,
+  restoreReady
 }: UseSongListVirtualScrollOptions): {
   containerRef: Ref<HTMLElement | null>
   tbodyRef: Ref<HTMLElement | null>
@@ -42,6 +49,7 @@ export function useSongListVirtualScroll({
   updateViewportHeight: () => void
   resetScrollAndMeasure: () => void
   restoreScrollAndMeasure: () => void
+  scrollToTrack: (index: number) => void
   scrollTop: Ref<number>
   viewportHeight: Ref<number>
 } {
@@ -76,9 +84,10 @@ export function useSongListVirtualScroll({
   const tableOffsetTop = ref(0)
   let previousFontOffset: number | undefined
 
+  const trackCount = computed(() => itemCount?.value ?? displayTracks.value.length)
   const visibleRange = computed(() =>
     getSongListVirtualRange({
-      trackCount: displayTracks.value.length,
+      trackCount: trackCount.value,
       scrollTop: scrollTop.value,
       viewportHeight: viewportHeight.value,
       tableOffsetTop: tableOffsetTop.value,
@@ -90,7 +99,7 @@ export function useSongListVirtualScroll({
     return displayTracks.value.slice(visibleRange.value.start, visibleRange.value.end)
   })
 
-  const totalHeight = computed(() => displayTracks.value.length * rowHeight.value)
+  const totalHeight = computed(() => trackCount.value * rowHeight.value)
   const paddingTop = computed(() => visibleRange.value.start * rowHeight.value)
 
   watch(
@@ -173,10 +182,11 @@ export function useSongListVirtualScroll({
   }
 
   function restoreScrollAndMeasure(row = pendingRow): void {
+    if (restoreReady && !restoreReady.value) return
     const revision = ++restoreRevision
     pendingRow = row
     void nextTick(() => {
-      if (revision !== restoreRevision) return
+      if (revision !== restoreRevision || (restoreReady && !restoreReady.value)) return
       updateViewportHeight()
       if (row !== undefined) scrollTop.value = tableOffsetTop.value + row * rowHeight.value
       if (containerRef.value) containerRef.value.scrollTop = scrollTop.value
@@ -185,6 +195,31 @@ export function useSongListVirtualScroll({
       pendingRow = undefined
     })
   }
+
+  function scrollToTrack(index: number): void {
+    const container = containerRef.value
+    if (!container) return
+    updateViewportHeight()
+    restoreRevision++
+    pendingRow = undefined
+    restorePending = false
+    container.scrollTop = getSongListTrackScrollTopForIndex({
+      index,
+      trackCount: trackCount.value,
+      viewportHeight: container.clientHeight,
+      tableOffsetTop: tableOffsetTop.value,
+      rowHeight: rowHeight.value
+    })
+    scrollTop.value = container.scrollTop
+  }
+  if (restoreReady)
+    watch(
+      restoreReady,
+      (ready) => {
+        if (ready && restorePending) restoreScrollAndMeasure()
+      },
+      { flush: 'post' }
+    )
 
   if (viewKey) {
     watch(
@@ -289,6 +324,7 @@ export function useSongListVirtualScroll({
     updateViewportHeight,
     resetScrollAndMeasure,
     restoreScrollAndMeasure,
+    scrollToTrack,
     scrollTop,
     viewportHeight
   }

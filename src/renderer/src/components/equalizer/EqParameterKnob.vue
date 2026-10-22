@@ -20,7 +20,7 @@ const faceRef = ref<HTMLElement | null>(null)
 const displayedValue = ref(props.value)
 const heldPointer = ref<number | null>(null)
 const labels = { frequency: '频率', gain: '增益', q: 'Q 值' }
-const captions = { frequency: '频率', gain: '增益', q: 'Q' }
+const captions = { frequency: 'FREQ', gain: 'GAIN', q: 'Q' }
 const limits = computed(() => eqParameterLimits[props.field])
 const position = computed(() => eqParameterPosition(props.field, displayedValue.value))
 const readout = computed(() =>
@@ -262,8 +262,10 @@ defineExpose({ finishInteraction })
   inset: 8px;
   border: 1px solid var(--eq-knob-edge);
   border-radius: 50%;
-  background: var(--eq-control-bg);
-  box-shadow: none;
+  background: linear-gradient(145deg, var(--eq-knob-light), var(--eq-knob-dark));
+  box-shadow:
+    inset 0 1px 1px var(--eq-highlight),
+    0 2px 5px var(--eq-shadow);
 }
 .knob-disc i {
   position: absolute;
@@ -280,15 +282,16 @@ defineExpose({ finishInteraction })
   background: var(--eq-text-muted);
 }
 .knob-face:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--eq-response);
 }
 .dragging .knob-disc {
   border-color: var(--eq-response);
 }
 .knob-caption {
   color: var(--eq-text-muted);
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   font-weight: 600;
+  letter-spacing: 0.14em;
 }
 .knob-readout {
   display: flex;
@@ -297,7 +300,7 @@ defineExpose({ finishInteraction })
   gap: 3px;
   min-height: 22px;
   font-family: var(--eq-mono);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   color: var(--eq-text-muted);
 }
 .knob-readout input {
@@ -310,7 +313,7 @@ defineExpose({ finishInteraction })
   background: transparent;
   color: var(--eq-text);
   font: inherit;
-  font-size: 12px;
+  font-size: calc(var(--te-font-size-body, 14px) * 12 / 14);
   font-variant-numeric: tabular-nums;
   text-align: right;
   appearance: textfield;
@@ -321,7 +324,7 @@ defineExpose({ finishInteraction })
 }
 .knob-readout input:focus {
   outline: none;
-  border-color: var(--te-control-focus-color);
+  border-color: var(--eq-response);
 }
 .knob-readout input::-webkit-inner-spin-button,
 .knob-readout input::-webkit-outer-spin-button {

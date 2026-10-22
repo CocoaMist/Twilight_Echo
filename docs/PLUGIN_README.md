@@ -100,7 +100,7 @@ JS 插件填写 `main`，DSP 插件填写 `binary`，纯 theme 插件可用 `con
 | `player:control`   | 控制播放器（播放、暂停、跳转、队列等）         |
 | `player:observe`   | 观察播放器状态（事件订阅、读取状态）           |
 | `library:read`     | 读音乐库                                       |
-| `library:write`    | 写音乐库                                       |
+| `library:write`    | 写入用户歌单（目前仅 `twilight.library.importPlaylists`） |
 | `settings`         | 读写应用设置                                   |
 | `clipboard`        | 访问剪贴板                                     |
 | `ui:inject`        | 向 UI 注入扩展点（侧边栏页面、按钮、设置面板） |
@@ -141,6 +141,14 @@ JS 插件实现两个函数：
 | `twilight.providers` | 注册 provider 能力、查询已注册 provider                                                 |
 | `twilight.ui`        | 注册 UI 扩展点（侧边栏页面、播放栏按钮、设置面板、流媒体/本地侧栏入口）并显示提示 toast |
 | `twilight.themes`    | 主题资源声明                                                                            |
+| `twilight.library`   | 把曲目写进用户的本地歌单（`importPlaylists`，需 `library:write`；宿主较新时才有）      |
+
+`twilight.library.importPlaylists({ playlists: [{ name, paths }] })` 让插件把一批歌单
+写进 **音乐库 → 歌单**。曲目按**文件路径**匹配本地音乐库（与自带 m3u8 导入同一套逻辑），
+插件不需要知道本地曲目 ID。名称规范化后最多 80 个字符，超长名称会拒绝，不会截断后写入同名歌单。
+调用是**即发即忘**的：主进程在当前应用会话中排队，等主窗口的音乐库和歌单加载完成后再交给渲染进程执行——
+歌单状态归渲染进程所有，写入走它带版本号的持久化——结果由宿主用一条汇总 toast 告知。
+旧宿主没有这个命名空间，调用前请用 `typeof twilight.library?.importPlaylists` 判断。
 
 不要试图绕过网关直接拿宿主内部对象。API 主版本内只加不改不删（见 [spec §3](./twilight-echo-plugin-spec.md#3-api-版本与兼容性承诺)），所以绑在 `twilight` 上的调用是稳的。
 
@@ -193,6 +201,43 @@ await context.twilight.ui.notify({
 UI contribution 通过 command 返回字符串或可序列化对象，宿主只在受控页面中按纯文本/结构化数据展示。任意插件 HTML、`srcdoc` iframe 和 DOM 注入都不是受支持的扩展路径。旧版 `renderMode: 'html'` 输入只为 API v1 兼容而保留，宿主会忽略它并按 command 模式处理。
 
 不要试图在 UI 入口里直接操纵 DOM 或调 Electron renderer API。所有交互走 command 协议回宿主进程，再由宿主决定渲染什么。
+
+### 9.1 设置表单（settings-form）
+
+`settingsPanel` 的 command 可以返回一个结构化表单，宿主用自己的控件渲染（类型见 `TwilightSettingsForm`）：
+
+```ts
+return {
+  kind: 'settings-form',
+  submitCommand: 'my-plugin.settings.save',
+  resetCommand: 'my-plugin.settings.reset', // 可选：显示「恢复默认」
+  live: true, // 可选：修改后自动提交（防抖），不显示保存按钮
+  fields: [
+    { key: 'theme.color', label: '强调色', type: 'color', value: '#ff8fb6', group: '外观' },
+    { key: 'theme.size', label: '尺寸', type: 'range', min: 0, max: 100, unit: 'px', value: '40' },
+    { key: 'theme.glow', label: '发光', type: 'toggle', value: 'true', description: '可选说明' }
+  ]
+}
+```
+
+- 字段类型：`text` / `password` / `url` / `select` / `toggle` / `range` / `color` / `button`，最多 40 个；相邻且 `group` 相同的字段显示在同一标题下。
+- **`button`** 是一次性操作，不是设置项：它不持有值，按一下就以
+  `{ action: '<字段 key>', values: { …表单当前填写的内容 } }` 调用该字段的 `command`
+  （省略时为 `submitCommand`）。`values` 让你无需用户先点保存就能用上表单里的最新输入。
+  返回值与 `submitCommand` 相同，可以是 `{ message?, form? }`；执行期间按钮显示为进行中。
+- 提交时 `submitCommand` 收到 `Record<string, string>`：开关为 `'true'`/`'false'`，滑块为数字字符串，颜色为 `#rrggbb`。宿主会丢弃非法字段并钳制滑块范围，但插件仍需自行校验。
+- `submitCommand` / `resetCommand` 可返回 `{ message?, form? }`（`TwilightSettingsFormResult`），`form` 会替换当前表单值。实时模式下若用户在提交途中继续编辑，宿主不会用返回值覆盖新的输入，并会在上一次提交完成后补发一次。
+- contribution 设置 `autoLoad: true` 时，打开设置页会自动载入该表单。
+
+### 9.2 灵动岛（overlay）
+
+`twilight.overlay` 控制宿主拥有的灵动岛窗口（需要 `ui:inject`），同一时间只有一个插件可以占用：
+
+- `show()` / `hide()`：显示或隐藏。
+- `configure(config)`：应用 DIY 配置（`TwilightOverlayConfigInput`，外观、布局、组件、交互四组）。缺失或越界的值回退到宿主默认值；返回实际生效的完整配置，插件应持久化这个返回值。隐藏期间也可调用，配置会在下次 `show()` 时生效。
+
+参考实现见外部插件仓库的
+[`plugins/dynamic-island`](https://github.com/Px-asen/Twilight-Echo-plugins/tree/main/plugins/dynamic-island)。
 
 扩展点清单见 [spec §4.4](./twilight-echo-plugin-spec.md#44-扩展点清单首批)。
 
@@ -290,7 +335,9 @@ TLS 由 `undici.ProxyAgent` 处理，使用系统 CA 校验证书。重定向由
 | `verified`                | 索引发布者声明“已审核”的元数据；单独出现时只显示“索引声明”                                    |
 | `publisherSignature`      | 索引专用 Ed25519 发布者签名；不写入包内 `plugin.json`，也不等同于 manifest 的预留 `signature` |
 
-默认远程索引是 `https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json`。第三方插件源码和发布 `.tep` 包不放在应用主仓库。独立开发者在自己的公开仓库发布，目录仓库负责发现并合并为 `plugins.json`。
+默认远程索引是 `https://plugins.aaapi.fun/plugins.json`，索引和安装包由 Cloudflare R2 + CDN 分发。索引缓存 60 秒，带内容哈希的安装包长期缓存；目录仓库更新后由 GitHub Actions 自动发布，先上传安装包再切换索引。第三方插件源码和发布 `.tep` 包不放在应用主仓库。独立开发者在自己的公开仓库发布，目录仓库负责发现并合并为 `plugins.json`。
+
+旧版 GitHub 索引 `https://raw.githubusercontent.com/Px-asen/Twilight-Echo-plugins/main/plugins.json` 保留可用；排查 CDN 访问问题时可用下面的环境变量显式切回。`sourceKind: official` 仅表示固定分发源，不代表插件已通过签名验证。
 
 `TWILIGHT_PLUGIN_INDEX_URL` 环境变量优先级最高，可指向自托管 HTTPS `plugins.json` 或本机 HTTP 测试索引。自定义索引的 `verified: true` 只表示该索引自己的声明。官方徽章要求本次从上面的固定官方 URL 直接、fresh 加载，实际 origin 与配置精确一致，记录未 stale/过期，并由 `resources/plugin-index/trusted-publishers.json` 中当前有效且未吊销的 Ed25519 key 验签通过。宿主在每次 list/status/download 时按当前时间重验索引 TTL 与 key 有效期，不把加载时结果永久缓存。
 
@@ -298,7 +345,7 @@ TLS 由 `undici.ProxyAgent` 处理，使用系统 CA 校验证书。重定向由
 
 `publisherSignature` 绑定精确 `indexOrigin` 和规范化后的完整 entry（包括 manifest、`sourceUrl`、`checksumSha256`、`tags`、`verified`）。`main`、`icon`、`binary.*` 路径先统一为 POSIX `/` canonical form，Windows host 与 Linux signer 必须生成相同 payload。可信公钥注册表支持多个 active key、有效期与吊销列表以完成轮换。生产私钥只允许位于外部插件仓库的受保护 CI 或离线签名环境，绝不能提交到应用仓库；正式 release public key 配置前，空注册表会让未签名条目保持“索引声明/未验证”。
 
-安装前宿主必须校验：`sourceUrl` 可达、包大小合理、sha256 匹配、包内 `plugin.json` 与索引 entry 字段一致。manager 会把实际安装字节写入私有 staging，再计算一次 SHA-256，与索引的 immutable expected SHA-256 比较；下载后发生 A/B 替换时在确认页前拒绝。校验不过就拒绝安装。
+索引请求默认超时 10 秒，安装包下载默认超时 5 分钟，避免较大的主题包被索引请求时限中断。安装前宿主必须校验：`sourceUrl` 可达、包大小合理、sha256 匹配、包内 `plugin.json` 与索引 entry 字段一致。manager 会把实际安装字节写入私有 staging，再计算一次 SHA-256，与索引的 immutable expected SHA-256 比较；下载后发生 A/B 替换时在确认页前拒绝。校验不过就拒绝安装。
 
 索引规则见 [spec §7.5](./twilight-echo-plugin-spec.md#75-phase-5-本地可发布生态形态)。注意 Phase 5 仍是信任式安装，索引只提高可发现性和完整性校验，不代表运行时权限 enforcement 或恶意代码沙箱。
 

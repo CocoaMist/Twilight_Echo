@@ -27,6 +27,7 @@ export interface TrackArtistRef {
 }
 
 export interface Track {
+  isrc?: string
   id: string
   /**
    * Stable playback-queue entry identity. A track may occur more than once in
@@ -36,6 +37,14 @@ export interface Track {
   /** Collection selected when this entry joined the queue; never inferred from album text. */
   queuePlaybackOrigin?: QueuePlaybackOrigin
   title: string
+  /** An independently playable part of a provider video. */
+  mediaPart?: {
+    groupId: string
+    groupTitle: string
+    title: string
+    index: number
+    count: number
+  }
   artist: string
   /** 结构化歌手身份（流媒体 provider 提供）；本地扫描曲目没有这个概念。 */
   artists?: TrackArtistRef[]

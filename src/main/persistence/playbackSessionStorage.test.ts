@@ -184,3 +184,79 @@ test('clearing a session succeeds even if both queue copies are corrupt', async 
   assert.equal((await storage.load())?.data, null)
   assert.equal(await queueStore.load(), null)
 })
+
+test('switching arrays to a database session never inherits or reads the old queue file', async (t) => {
+  const { storage, stateStore, queueFile } = fixture(t)
+  const array: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'trackAndPosition',
+    track,
+    position: 15,
+    queue: [track],
+    queueIndex: 0
+  }
+  await storage.save(array, 0)
+  const before = readFileSync(queueFile, 'utf8')
+  const database: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'trackAndPosition',
+    track,
+    position: 40,
+    libraryQueue: { id: 'database', revision: 6, entryId: 'first', index: 299_999 }
+  }
+  const saved = await storage.save(database, 1)
+  assert.deepEqual(saved.data, database)
+  assert.equal(readFileSync(queueFile, 'utf8'), before)
+  writeFileSync(queueFile, '{corrupt old queue')
+  assert.deepEqual((await storage.load())?.data, database)
+  assert.equal((await stateStore.loadBackup())?.data?.queueRevision, 1)
+  await storage.save({ ...database, position: 50 }, 2)
+  assert.equal((await storage.load())?.data?.position, 50)
+  await storage.save(array, 3)
+  const restored = (await storage.load())!.data!
+  assert.deepEqual(restored.queue, [track])
+  assert.equal(restored.libraryQueue, undefined)
+})
+
+test('failed reference commits leave the prior array session and queue recoverable', async (t) => {
+  const { storage, stateStore } = fixture(t)
+  const array: PlaybackSession = {
+    version: 1,
+    savedAt: '',
+    mode: 'track',
+    track,
+    position: 0,
+    queue: [track]
+  }
+  await storage.save(array, 0)
+  const save = stateStore.save.bind(stateStore)
+  stateStore.save = async () => {
+    throw new Error('disk full')
+  }
+  await assert.rejects(
+    storage.save(
+      {
+        version: 1,
+        savedAt: '',
+        mode: 'track',
+        track,
+        position: 0,
+        libraryQueue: { id: 'database', revision: 0, entryId: 'first', index: 0 }
+      },
+      1
+    ),
+    /disk full/
+  )
+  stateStore.save = save
+  assert.deepEqual((await storage.load())?.data?.queue, [track])
+  await assert.rejects(
+    storage.save(
+      { ...array, libraryQueue: { id: 'database', revision: 0, entryId: 'first', index: 0 } },
+      1
+    ),
+    /Invalid playback session/
+  )
+  assert.deepEqual((await storage.load())?.data?.queue, [track])
+})

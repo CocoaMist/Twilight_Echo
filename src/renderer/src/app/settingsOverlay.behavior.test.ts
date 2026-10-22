@@ -43,7 +43,9 @@ import {appearanceFullWindowPreview,appearanceEditorOpen} from '@renderer/compos
 import {useAppNavigation} from '@renderer/app/useAppNavigation.ts'
 const navigation=useAppNavigation({appearancePreviewActive:()=>appearanceFullWindowPreview.value})
 window.overlayNavigation=navigation
-const {showSettingsPage,showPluginPage,localViewVisible,settingsInitialSection,settingsNavigationTarget}=navigation
+const {showSettingsPage,showAppearancePage,showPluginPage,localViewVisible,settingsInitialSection,settingsNavigationTarget}=navigation
+const appearancePageRetained=computed(()=>showAppearancePage.value),appearancePageRef=ref(null),appearanceNavigationTarget=ref({revision:0}),navigationPages=[]
+const closeAppearancePage=()=>navigation.closeAppearancePage(),openAppearancePage=()=>navigation.openAppearancePage()
 ${lifecycle}
 const noop=()=>{}
 const openEqualizerPage=noop,openDspRackPage=noop,openThemeStudioPage=noop,openThemeWorkshop=noop,handleReopenOnboarding=noop,onSelectPluginPage=noop
@@ -76,6 +78,7 @@ const PluginPage=defineComponent({render:()=>h('section',{class:'settings-previe
       define: { 'process.env.NODE_ENV': '"production"' },
       resolve: {
         alias: {
+          '/icon.png': resolve('resources/icon.png'),
           '@renderer': resolve('src/renderer/src'),
           '@shared': resolve('src/shared'),
           vue: require.resolve('vue/dist/vue.esm-bundler.js')

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { PlaylistPersistence, type PlaylistPersistenceStatus } from './playlistPersistence.ts'
+import {
+  PlaylistPersistence,
+  PlaylistTransactionRejectedError,
+  type PlaylistPersistenceStatus
+} from './playlistPersistence.ts'
 
 class FakeTimers {
   private nextId = 1
@@ -87,7 +91,7 @@ test('application close coordinator awaits the playlist exit flush', () => {
 
   assert.match(
     appSource,
-    /onSavePlaybackSession\(async \(\) => \{[\s\S]*await flushPlaylistsForExit\(\)[\s\S]*savePlaybackSessionForQuit\(\)/
+    /onSavePlaybackSession\(async \([^)]*\) => \{[\s\S]*await flushPlaylistsForExit\(\)[\s\S]*savePlaybackSessionForQuit\(\)/
   )
   assert.match(
     appSource,
@@ -194,4 +198,75 @@ test('a failed in-flight transaction rebases a queued newer snapshot to the orig
     { snapshot: 'first', base: 'base' },
     { snapshot: 'second', base: 'base' }
   ])
+})
+
+test('terminal in-flight rejection retains later gestures without timers or repeated writes until explicit discard', async () => {
+  const timers = new FakeTimers()
+  const writes: Array<{ snapshot: string; base: string }> = []
+  const statuses: PlaylistPersistenceStatus[] = []
+  let reject!: (error: Error) => void
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const blocked = new Promise<void>((_resolve, fail) => {
+    reject = fail
+  })
+  const persistence = new PlaylistPersistence<{ value: string }>({
+    write: async (snapshot, base) => {
+      writes.push({ snapshot: snapshot.value, base: base.value })
+      if (writes.length === 1) {
+        started()
+        await blocked
+      }
+    },
+    onStatus: (status) => statuses.push(status),
+    shouldRetry: (error) => !(error instanceof PlaylistTransactionRejectedError),
+    flushDelayMs: 250,
+    retryDelayMs: 1_000,
+    setTimeout: timers.setTimeout as typeof globalThis.setTimeout,
+    clearTimeout: timers.clearTimeout as typeof globalThis.clearTimeout
+  })
+  persistence.enqueue({ value: 'first' }, { value: 'base' })
+  timers.runNext()
+  await ready
+  persistence.enqueue({ value: 'second' }, { value: 'first' })
+  assert.equal(timers.pendingCount, 1)
+  reject(new PlaylistTransactionRejectedError('refreshed'))
+  assert.equal(await persistence.flush(), false)
+  assert.equal(timers.pendingCount, 0)
+  assert.equal(statuses.at(-1)?.canRetry, false)
+  persistence.enqueue({ value: 'third' }, { value: 'second' })
+  assert.equal(timers.pendingCount, 0)
+  assert.equal(await persistence.flush(), false)
+  assert.deepEqual(writes, [{ snapshot: 'first', base: 'base' }])
+  let applied = false
+  await assert.rejects(
+    persistence.discardPending(
+      () => {
+        throw new Error('live fence')
+      },
+      () => {
+        applied = true
+      }
+    ),
+    /live fence/
+  )
+  assert.equal(applied, false)
+  assert.equal(statuses.at(-1)?.dirty, true)
+  await persistence.discardPending(
+    () => {},
+    () => {
+      applied = true
+    }
+  )
+  assert.equal(applied, true)
+  assert.equal(statuses.at(-1)?.state, 'idle')
+  persistence.enqueue({ value: 'new' }, { value: 'authority' })
+  assert.equal(await persistence.flush(), true)
+  assert.deepEqual(writes, [
+    { snapshot: 'first', base: 'base' },
+    { snapshot: 'new', base: 'authority' }
+  ])
+  assert.equal(timers.pendingCount, 0)
 })

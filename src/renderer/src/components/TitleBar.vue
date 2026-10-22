@@ -12,81 +12,33 @@ import type { PageDockAction } from '../app/pageDock'
 const props = withDefaults(
   defineProps<{
     menuOpen: boolean
-    home?: boolean
-    pageDockActions?: readonly PageDockAction[]
     glass?: boolean
     immersive?: boolean
     liquidMaterial?: boolean
     streaming?: boolean
     titleSurface?: 'default' | 'settings' | 'streaming'
-    reading?: boolean
-    activeTool?: 'settings' | 'plugins' | 'appearance' | 'dsp' | null
+    activeTool?: 'settings' | 'plugins' | 'appearance' | null
+    pageDockActions?: readonly PageDockAction[]
     preview?: boolean
     closeOnly?: boolean
-    accountOpen?: boolean
-    searchQuery?: string
+    notificationsOpen?: boolean
   }>(),
   {
-    titleSurface: 'default',
-    home: true,
-    accountOpen: false,
-    pageDockActions: () => []
+    titleSurface: 'default'
   }
 )
 
-const emit = defineEmits<{
+defineEmits<{
   toggleMenu: []
-  home: []
   collapseMenu: []
   back: []
-  login: [providerId?: string | null, anchor?: HTMLElement]
+  login: [providerId?: string | null]
   settings: []
   appearance: []
-  dsp: []
+  plugins: []
   library: []
-  search: [query: string]
-  'update:searchQuery': [query: string]
+  notifications: [event: MouseEvent]
 }>()
-
-const searchDraft = ref(props.searchQuery ?? '')
-const searchInput = ref<HTMLInputElement | null>(null)
-const searchComposing = ref(false)
-let publishedSearchQuery = searchDraft.value
-watch(
-  () => props.searchQuery,
-  (query) => {
-    if (query === undefined) return
-    searchDraft.value = query
-    publishedSearchQuery = query
-  }
-)
-function updateSearchDraft(query: string): void {
-  searchDraft.value = query
-  if (searchComposing.value || query === publishedSearchQuery) return
-  publishedSearchQuery = query
-  if (!props.preview && !props.closeOnly) emit('update:searchQuery', query)
-}
-function onSearchInput(event: Event): void {
-  updateSearchDraft((event.target as HTMLInputElement).value)
-}
-function endSearchComposition(event: CompositionEvent): void {
-  searchComposing.value = false
-  onSearchInput(event)
-}
-function guardSearchComposition(event: KeyboardEvent): void {
-  if (searchComposing.value || event.isComposing || event.keyCode === 229) event.preventDefault()
-}
-function submitSearch(): void {
-  if (props.preview || props.closeOnly || searchComposing.value) return
-  const query = searchDraft.value.trim()
-  if (!query) return
-  updateSearchDraft(query)
-  emit('search', query)
-}
-function clearSearch(): void {
-  updateSearchDraft('')
-  searchInput.value?.focus()
-}
 
 const { isLoggedIn, profile } = useNcmStore()
 const providerStore = useProviderStore()
@@ -96,15 +48,16 @@ const loginProvider = computed(() => {
   )
   return providers.find((provider) => provider.id === 'ncm') ?? providers[0]
 })
-const showNcmProfile = computed(
-  () => !props.preview && loginProvider.value?.id === 'ncm' && isLoggedIn.value
+const showNcmProfile = computed(() => loginProvider.value?.id === 'ncm' && isLoggedIn.value)
+const loginLabel = computed(() =>
+  showNcmProfile.value
+    ? profile.value?.nickname || '个人详情'
+    : loginProvider.value
+      ? `${loginProvider.value.name}登录`
+      : '流媒体登录'
 )
 const { canGoBack, backHint } = useBackStack()
 const { unreadCount, activeTaskCount, doNotDisturb } = useAppNoticeStore()
-const loginLabel = computed(
-  () =>
-    `我的账户与任务${showNcmProfile.value && profile.value?.nickname ? ' · ' + profile.value.nickname : ''}${doNotDisturb.value ? ' · 勿扰模式已开启' : ''}（${activeTaskCount.value} 项进行中，${unreadCount.value} 条未读）`
-)
 const { maximized } = useWindowChrome(() => props.preview === true)
 const avatarLoadFailed = ref(false)
 watch([() => profile.value?.userId, () => profile.value?.avatarUrl], () => {
@@ -126,11 +79,6 @@ onMounted(() => {
   updateInset()
 })
 onBeforeUnmount(() => titleObserver?.disconnect())
-
-function revealTitleTool(event: FocusEvent): void {
-  const target = event.target
-  if (target instanceof HTMLElement) target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-}
 
 function setPressOrigin(event: PointerEvent): void {
   const button =
@@ -160,7 +108,6 @@ function close(): void {
 <template>
   <div
     class="title-bar"
-    data-te-material="titlebar"
     ref="titleBar"
     :class="{
       'drag-region': !preview,
@@ -170,132 +117,59 @@ function close(): void {
       'title-bar-immersive': immersive && !closeOnly,
       'title-bar-close-only': closeOnly,
       'title-bar-settings': titleSurface === 'settings' && !immersive && !closeOnly,
-      'title-bar-reading': reading && !immersive && !closeOnly,
       'title-bar-streaming': titleSurface === 'streaming' && !immersive && !closeOnly,
       'title-bar-menu-open': menuOpen && !immersive && !closeOnly
     }"
   >
-    <div v-if="!closeOnly" class="title-bar-background" aria-hidden="true"></div>
-    <div v-if="!closeOnly" class="title-bar-leading">
-      <div v-if="!closeOnly" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
-        <button
-          type="button"
-          :aria-label="home ? '侧边栏' : '回到主页'"
-          class="menu-btn"
-          :title="home ? (menuOpen ? '收起侧边栏' : '展开侧边栏') : '回到主页'"
-          :aria-expanded="home ? menuOpen : undefined"
-          :aria-controls="home ? 'app-sidebar' : undefined"
-          @click="home ? $emit('toggleMenu') : $emit('home')"
-        >
-          <TitleBarIcon :name="home ? 'navigation' : 'home'" />
-        </button>
-        <button
-          type="button"
-          :aria-label="loginLabel"
-          :aria-expanded="accountOpen"
-          aria-haspopup="dialog"
-          aria-controls="account-subpage"
-          class="login-btn"
-          :title="loginLabel"
-          @click="$emit('login', null, $event.currentTarget as HTMLElement)"
-        >
-          <img
-            v-if="showNcmProfile && profile?.avatarUrl && !avatarLoadFailed"
-            :src="profile.avatarUrl"
-            class="user-avatar"
-            alt=""
-            @error="avatarLoadFailed = true"
-          />
-          <TitleBarIcon v-else name="person" />
-          <Transition name="notification-dot">
-            <span
-              v-if="!doNotDisturb && (unreadCount || activeTaskCount)"
-              class="notification-dot"
-              :class="{ 'notification-dot--busy': !unreadCount && activeTaskCount }"
-              aria-hidden="true"
-            ></span>
-          </Transition>
-        </button>
-      </div>
-      <!-- Keep commands anchored when a return handler becomes available. -->
-      <div
-        v-if="!closeOnly"
-        class="title-bar-back"
-        :class="{
-          'title-bar-back-visible': canGoBack && !preview,
-          'no-drag': canGoBack && !preview
-        }"
-        :inert="!canGoBack || preview"
-        @pointerdown="setPressOrigin"
-      >
-        <Transition name="title-back-fade">
-          <button
-            type="button"
-            v-if="canGoBack && !preview"
-            class="back-btn"
-            :title="backHint ?? '返回'"
-            aria-label="返回"
-            @click="canGoBack && $emit('back')"
-          >
-            <TitleBarIcon name="arrow_left" />
-          </button>
-        </Transition>
-      </div>
-    </div>
-    <form
-      v-if="!closeOnly"
-      class="title-bar-search no-drag"
-      role="search"
-      aria-label="全局音乐搜索"
-      @submit.prevent="submitSearch()"
+    <!-- Playback already paints the caption backdrop, including filtered artwork.
+         Keeping a separate material layer lets contrast preferences repaint it. -->
+    <div v-if="!closeOnly && !immersive" class="title-bar-background" aria-hidden="true"></div>
+    <div
+      v-if="canGoBack && !preview && !closeOnly"
+      class="title-bar-back no-drag"
+      @pointerdown="setPressOrigin"
     >
-      <button type="submit" class="title-search-submit" aria-label="搜索" title="搜索">
-        <TitleBarIcon name="search" />
-      </button>
-      <input
-        ref="searchInput"
-        :value="searchDraft"
-        type="search"
-        aria-label="搜索音乐"
-        placeholder="搜索音乐"
-        enterkeyhint="search"
-        autocomplete="off"
-        spellcheck="false"
-        @input="onSearchInput"
-        @compositionstart="searchComposing = true"
-        @compositionend="endSearchComposition"
-        @keydown.enter="guardSearchComposition"
-      />
       <button
-        v-if="searchDraft"
         type="button"
-        class="title-search-clear"
-        aria-label="清除搜索"
-        title="清除搜索"
-        @click="clearSearch"
+        class="back-btn"
+        :title="backHint ?? '返回'"
+        aria-label="返回"
+        @click="canGoBack && $emit('back')"
       >
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg>
+        <TitleBarIcon name="arrow_left" />
       </button>
-    </form>
-    <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
-      <div
-        v-if="!closeOnly"
-        class="title-bar-tools"
-        role="group"
-        aria-label="应用工具"
-        @focusin="revealTitleTool"
+    </div>
+    <div v-if="!closeOnly" class="title-bar-start no-drag" @pointerdown="setPressOrigin">
+      <button
+        type="button"
+        aria-label="菜单"
+        class="menu-btn"
+        :title="menuOpen ? '收起导航' : '展开导航'"
+        :aria-expanded="menuOpen"
+        @click="$emit('toggleMenu')"
       >
-        <PageDock :actions="pageDockActions" />
-        <button
-          type="button"
-          aria-label="DSP 音频处理"
-          :aria-pressed="activeTool === 'dsp'"
-          class="settings-btn dsp-btn"
-          title="DSP 音频处理"
-          @click="$emit('dsp')"
-        >
-          <span class="title-bar-label">DSP</span>
-        </button>
+        <TitleBarIcon name="navigation" />
+      </button>
+      <button
+        type="button"
+        :aria-label="loginLabel"
+        class="login-btn"
+        :title="loginLabel"
+        @click="$emit('login', loginProvider?.id ?? null)"
+      >
+        <img
+          v-if="showNcmProfile && profile?.avatarUrl && !avatarLoadFailed"
+          :src="profile.avatarUrl"
+          class="user-avatar"
+          alt=""
+          @error="avatarLoadFailed = true"
+        />
+        <TitleBarIcon v-else name="person" />
+      </button>
+    </div>
+    <div class="title-bar-controls no-drag" @pointerdown="setPressOrigin">
+      <div v-if="!closeOnly" class="title-bar-tools" role="group" aria-label="应用工具">
+        <PageDock :actions="pageDockActions ?? []" />
         <button
           type="button"
           aria-label="外观"
@@ -308,6 +182,16 @@ function close(): void {
         </button>
         <button
           type="button"
+          aria-label="扩展中心"
+          :aria-pressed="activeTool === 'plugins'"
+          class="plugins-btn"
+          title="扩展中心"
+          @click="$emit('plugins')"
+        >
+          <TitleBarIcon name="puzzle_piece" />
+        </button>
+        <button
+          type="button"
           aria-label="设置"
           :aria-pressed="activeTool === 'settings'"
           class="settings-btn"
@@ -315,6 +199,32 @@ function close(): void {
           @click="$emit('settings')"
         >
           <TitleBarIcon name="settings" />
+        </button>
+        <button
+          type="button"
+          :disabled="preview"
+          class="control-btn notification-btn"
+          :aria-label="`任务与通知${doNotDisturb ? ' · 勿扰模式已开启' : ''}（${activeTaskCount} 项进行中，${unreadCount} 条未读）`"
+          :title="
+            doNotDisturb
+              ? '任务与通知 · 勿扰模式已开启'
+              : activeTaskCount
+                ? `任务与通知 · ${activeTaskCount} 项进行中`
+                : '任务与通知'
+          "
+          :aria-expanded="notificationsOpen"
+          aria-controls="app-notice-history"
+          @click="$emit('notifications', $event)"
+        >
+          <TitleBarIcon :name="doNotDisturb ? 'bell_off' : 'bell'" />
+          <Transition name="notification-dot">
+            <span
+              v-if="!doNotDisturb && (unreadCount || activeTaskCount)"
+              class="notification-dot"
+              :class="{ 'notification-dot--busy': !unreadCount && activeTaskCount }"
+              aria-hidden="true"
+            ></span>
+          </Transition>
         </button>
       </div>
       <div class="title-bar-window-controls" role="group" aria-label="窗口控制">
@@ -341,11 +251,8 @@ function close(): void {
           @click="toggleMaximize"
         >
           <svg class="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
-            <g v-if="maximized">
-              <path d="M5 4.5v-1A1 1 0 0 1 6 2.5h6.5a1 1 0 0 1 1 1V10a1 1 0 0 1-1 1h-1" />
-              <rect x="2.5" y="5" width="8.5" height="8.5" rx="1.5" />
-            </g>
-            <rect v-else x="2.5" y="2.5" width="11" height="11" rx="2" />
+            <path v-if="maximized" d="M4.5 4.5v-2h9v9h-2M2.5 4.5h9v9h-9Z" />
+            <rect v-else x="2.5" y="2.5" width="11" height="11" />
           </svg>
         </button>
         <button
@@ -366,6 +273,18 @@ function close(): void {
 </template>
 
 <style scoped>
+.notification-btn {
+  position: relative;
+}
+.notification-icon {
+  width: var(--te-titlebar-icon-size, 16px);
+  height: var(--te-titlebar-icon-size, 16px);
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 280ms var(--te-ease-soft);
+}
 .notification-dot {
   position: absolute;
   top: calc(50% - 9px);
@@ -392,8 +311,6 @@ function close(): void {
   transform: scale(0);
 }
 .title-bar {
-  --te-titlebar-item-opacity: 0.58;
-  --te-titlebar-ink-duration: 160ms;
   --te-titlebar-height: 40px;
   --te-titlebar-material-surface: var(--te-chrome-frosted-solid, var(--te-app-bg));
   --te-titlebar-frosted-surface: var(
@@ -432,155 +349,15 @@ function close(): void {
     box-shadow 0.3s;
 }
 
-/* Keep the search aligned to the expanded navigation edge, including when the
-   overlay is closed. Only the unused leading space yields on a crowded strip. */
-.title-bar-leading {
-  display: flex;
-  flex: 0 999 var(--te-menu-width, 224px);
-  min-width: calc(3 * var(--te-titlebar-control-width, 46px));
-  height: 100%;
-  position: relative;
-  z-index: 1;
-}
-.title-bar-search {
-  --te-titlebar-search-ink: color-mix(in srgb, var(--te-titlebar-material-ink) 68%, transparent);
-  display: flex;
-  align-items: center;
-  flex: 0 1 360px;
-  min-width: 128px;
-  height: 34px;
-  margin: 0 12px 0 0;
-  box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--te-titlebar-material-ink) 10%, transparent);
-  border-radius: var(--te-control-radius-sm);
-  background: transparent;
-  color: var(--te-titlebar-search-ink);
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  transition:
-    color var(--te-motion-fast, 160ms) ease,
-    border-color var(--te-motion-fast, 160ms) ease;
-  position: relative;
-  z-index: 1;
-  -webkit-app-region: no-drag;
-}
-.title-bar-search:is(:hover, :focus-within) {
-  --te-titlebar-search-ink: color-mix(in srgb, var(--te-titlebar-material-ink) 84%, transparent);
-}
-.title-bar-search:focus-within {
-  outline: 2px solid var(--te-control-focus-color);
-  outline-offset: 1px;
-}
-.title-bar-search input {
-  flex: 1;
-  min-width: 0;
-  width: 100%;
-  height: 32px;
-  padding: 0 2px;
-  border: 0;
-  border-radius: 0;
-  outline: none;
-  box-shadow: none;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: var(--te-type-caption);
-  font-weight: 400;
-  line-height: 1.15;
-  user-select: text;
-  -webkit-app-region: no-drag;
-}
-.title-bar-search input::placeholder {
-  color: inherit;
-  opacity: 1;
-}
-.title-bar-search input::-webkit-search-cancel-button,
-.title-bar-search input::-webkit-search-decoration {
-  -webkit-appearance: none;
-  appearance: none;
-}
-.title-bar-search button {
-  display: grid;
-  place-items: center;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--te-control-radius-sm);
-  color: inherit;
-  background: transparent;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-.title-bar-search button:hover {
-  color: var(--te-titlebar-material-ink);
-}
-@media (prefers-contrast: more) {
-  .title-bar-search {
-    color: var(--te-titlebar-material-ink);
-    border-color: currentColor;
-  }
-}
-@media (forced-colors: active) {
-  .title-bar-search {
-    color: CanvasText;
-    border-color: GrayText;
-  }
-  .title-bar-search button:hover {
-    color: Highlight;
-  }
-  .title-bar-search:focus-within,
-  .title-bar-search button:focus-visible {
-    outline-color: Highlight;
-  }
-}
-.title-bar-search button:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
-  outline-offset: -3px;
-}
-.title-search-clear svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-}
-.title-bar-tools {
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  flex: 0 1 auto;
-  min-width: 40px;
-}
-.title-bar-tools::-webkit-scrollbar {
-  display: none;
-}
-.title-bar-tools :deep(.page-dock) {
-  flex-shrink: 0;
-}
-
 .title-bar-background {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  height: calc(100% + var(--te-titlebar-base-extension, 0px));
+  height: 100%;
   z-index: 0;
   pointer-events: none;
-  background: var(--te-material-background, var(--te-chrome-attached-surface));
-  box-shadow: none;
-  backdrop-filter: var(--te-material-filter, none);
-  -webkit-backdrop-filter: var(--te-material-filter, none);
-}
-
-/* Dark chrome has a soft surface, without a pale outline around the strip. */
-html[data-theme='dark']
-  .title-bar:not(.title-bar-immersive):not(.title-bar-liquid)
-  .title-bar-background {
-  background: var(--te-material-background, var(--te-chrome-attached-surface));
+  background: var(--te-titlebar-frosted-surface);
   box-shadow: none;
   backdrop-filter: var(--te-material-filter, none);
   -webkit-backdrop-filter: var(--te-material-filter, none);
@@ -647,10 +424,6 @@ html[data-te-surface-material='transparent'] .title-bar .title-bar-background {
   flex-shrink: 0;
 }
 
-.title-bar-back-visible {
-  overflow: visible;
-}
-
 .back-btn {
   display: flex;
   align-items: center;
@@ -667,14 +440,8 @@ html[data-te-surface-material='transparent'] .title-bar .title-bar-background {
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
 }
 
-.title-back-fade-enter-active,
-.title-back-fade-leave-active {
-  transition: opacity 0.18s ease;
-}
-
-.title-back-fade-enter-from,
-.title-back-fade-leave-to {
-  opacity: 0;
+.back-btn:hover {
+  background: var(--te-shell-control-hover);
 }
 
 .title-bar-glass .back-btn {
@@ -710,13 +477,6 @@ html[data-te-surface-material='transparent'] .title-bar .title-bar-background {
   padding: 0;
   flex-shrink: 0;
   font-size: calc(var(--te-font-size-body, 14px) * 14 / 14);
-}
-
-.dsp-btn {
-  width: auto;
-  min-width: var(--te-titlebar-control-width, 46px);
-  padding: 0 10px;
-  font-weight: 500;
 }
 
 .plugins-btn {
@@ -771,12 +531,7 @@ html[data-theme='dark'] .title-bar .control-btn:not(.notification-btn):not(.clos
   color: #fff;
 }
 
-.title-bar:not(.title-bar-close-only) .title-bar-controls {
-  min-width: calc(3 * var(--te-titlebar-control-width, 46px) + 52px);
-}
-
 .title-bar-controls {
-  --te-titlebar-item-opacity: 0.46;
   display: flex;
   flex-shrink: 1;
   min-width: 0;
@@ -793,16 +548,16 @@ html[data-theme='dark'] .title-bar .control-btn:not(.notification-btn):not(.clos
   height: 100%;
 }
 
-.title-bar-tools {
-  min-width: 40px;
-}
-
 .title-bar-window-controls {
   flex-shrink: 0;
+  margin-left: 12px;
 }
 
-.title-bar-window-controls {
-  margin-left: 12px;
+.title-bar-tools {
+  min-width: 0;
+}
+.title-bar-tools > button {
+  flex-shrink: 0;
 }
 
 .title-bar-close-only .title-bar-window-controls {
@@ -824,7 +579,7 @@ html .title-bar.title-bar-close-only {
 }
 
 .title-bar :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn):focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--te-primary-500);
   outline-offset: -3px;
 }
 
@@ -854,7 +609,7 @@ html .title-bar.title-bar-close-only {
 }
 
 .control-btn:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--te-primary-500);
   outline-offset: -2px;
 }
 
@@ -866,8 +621,8 @@ html .title-bar.title-bar-close-only {
   fill: none;
   stroke: currentColor;
   stroke-width: 1;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
 }
 
 .title-bar-glass .control-btn {
@@ -909,21 +664,22 @@ html
 html
   .title-bar-immersive
   :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn):focus-visible {
-  outline-color: var(--te-control-focus-color);
+  outline-color: var(--te-shell-control-text);
 }
 
 .title-bar-liquid {
-  --te-titlebar-material-ink: var(--te-lg-context-label);
   isolation: isolate;
   color: var(--te-lg-context-label);
 }
 
 .title-bar-liquid .title-bar-background {
   display: block;
-  background: var(--te-chrome-attached-liquid-surface);
+  background: color-mix(in srgb, var(--te-lg-context-material) 72%, transparent);
   box-shadow: none;
-  backdrop-filter: var(--te-chrome-attached-liquid-filter);
-  -webkit-backdrop-filter: var(--te-chrome-attached-liquid-filter);
+  backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
+  -webkit-backdrop-filter: blur(var(--te-chrome-frosted-blur, 24px))
+    saturate(var(--te-chrome-frosted-saturation, 124%));
 }
 
 .title-bar-liquid :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .control-btn) {
@@ -1002,7 +758,7 @@ html
     .login-btn,
     .notification-btn
   ):focus-visible::before {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--te-primary-500);
   outline-offset: 1px;
 }
 
@@ -1011,17 +767,17 @@ html
   :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .notification-btn):not(
     :disabled
   ):hover {
-  --te-titlebar-feedback: color-mix(in srgb, var(--te-shell-control-text) 4%, transparent);
+  --te-titlebar-feedback: color-mix(in srgb, var(--te-shell-control-text) 6%, transparent);
 }
 
 html
   .title-bar
   :is(
     .settings-btn[aria-pressed='true'],
-    .login-btn[aria-expanded='true'],
+    .plugins-btn[aria-pressed='true'],
     .notification-btn[aria-expanded='true']
   ) {
-  --te-titlebar-feedback: color-mix(in srgb, var(--te-shell-control-text) 8%, transparent);
+  --te-titlebar-feedback: color-mix(in srgb, var(--te-shell-control-text) 12%, transparent);
   color: var(--te-primary-500);
 }
 
@@ -1029,7 +785,7 @@ html[data-theme='dark']
   .title-bar
   :is(
     .settings-btn[aria-pressed='true'],
-    .login-btn[aria-expanded='true'],
+    .plugins-btn[aria-pressed='true'],
     .notification-btn[aria-expanded='true']
   ) {
   color: var(--te-primary-400);
@@ -1039,10 +795,10 @@ html
   .title-bar
   :is(
     .settings-btn[aria-pressed='true'],
-    .login-btn[aria-expanded='true'],
+    .plugins-btn[aria-pressed='true'],
     .notification-btn[aria-expanded='true']
   ):not(:disabled):hover {
-  --te-titlebar-feedback: color-mix(in srgb, var(--te-shell-control-text) 10%, transparent);
+  --te-titlebar-feedback: color-mix(in srgb, var(--te-shell-control-text) 16%, transparent);
 }
 
 html
@@ -1067,56 +823,8 @@ html
 
 .title-bar-liquid
   :is(.menu-btn, .back-btn, .settings-btn, .plugins-btn, .login-btn, .notification-btn)::after {
-  /* The inset feedback already owns hover/selection/press paint. */
-  display: none;
-}
-
-/* Quiet only the visual content. Hit areas, notification dots and focus rings
-   keep their own contrast, including when a skin supplies bitmap icons. */
-.title-bar :deep(:is(.title-bar-start, .title-bar-back, .title-bar-tools) .title-bar-icon),
-.title-bar .window-control-icon,
-.title-bar .user-avatar,
-.title-bar :deep(.page-dock-action > .theme-icon) {
-  opacity: var(--te-titlebar-item-opacity);
-  transition: opacity var(--te-titlebar-ink-duration) ease-out;
-}
-
-/* Small command labels need more ink than outlines, especially over dark skins. */
-.title-bar .title-bar-label,
-.title-bar :deep(.page-dock-action-label) {
-  opacity: max(0.58, var(--te-titlebar-item-opacity));
-  transition: opacity var(--te-titlebar-ink-duration) ease-out;
-}
-
-.title-bar :deep(button:not(:disabled):hover) {
-  --te-titlebar-item-opacity: 0.76;
-}
-
-.title-bar :deep(button[aria-pressed='true']),
-.title-bar :deep(button[aria-expanded='true']) {
-  --te-titlebar-item-opacity: 0.82;
-}
-
-.title-bar :deep(button:focus-visible),
-.title-bar .control-btn.close:hover {
-  --te-titlebar-item-opacity: 1;
-}
-
-@media (prefers-contrast: more), (forced-colors: active) {
-  .title-bar,
-  .title-bar :deep(button) {
-    --te-titlebar-item-opacity: 1;
-  }
-}
-
-html:is([data-te-motion='reduced'], [data-te-motion='off']) .title-bar {
-  --te-titlebar-ink-duration: 0ms;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .title-bar {
-    --te-titlebar-ink-duration: 0ms;
-  }
+  inset: 5px 7px;
+  border-radius: 9px;
 }
 
 @media (prefers-contrast: more) {
@@ -1124,87 +832,18 @@ html:is([data-te-motion='reduced'], [data-te-motion='off']) .title-bar {
     .title-bar
     :is(
       .settings-btn[aria-pressed='true'],
-      .login-btn[aria-expanded='true'],
+      .plugins-btn[aria-pressed='true'],
       .notification-btn[aria-expanded='true']
     ),
   html[data-theme]
     .title-bar
     :is(
       .settings-btn[aria-pressed='true'],
-      .login-btn[aria-expanded='true'],
+      .plugins-btn[aria-pressed='true'],
       .notification-btn[aria-expanded='true']
     ):hover {
     --te-titlebar-feedback: color-mix(in srgb, var(--te-shell-control-text) 22%, transparent);
     color: var(--te-shell-control-text);
-  }
-}
-
-@media (forced-colors: active) {
-  html[data-theme]
-    .title-bar
-    :is(
-      .settings-btn[aria-pressed='true'],
-      .login-btn[aria-expanded='true'],
-      .notification-btn[aria-expanded='true']
-    ),
-  html[data-theme]
-    .title-bar
-    :is(
-      .settings-btn[aria-pressed='true'],
-      .login-btn[aria-expanded='true'],
-      .notification-btn[aria-expanded='true']
-    ):hover {
-    --te-titlebar-feedback: Highlight;
-    color: HighlightText;
-    forced-color-adjust: none;
-  }
-  html
-    .title-bar
-    :is(
-      .menu-btn,
-      .back-btn,
-      .settings-btn,
-      .plugins-btn,
-      .login-btn,
-      .notification-btn
-    ):focus-visible::before {
-    outline-color: Highlight;
-  }
-}
-
-html:is([data-te-motion='reduced'], [data-te-motion='off']) .title-bar button,
-html:is([data-te-motion='reduced'], [data-te-motion='off']) .title-bar button::before {
-  transition: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  @scope (:root:not([data-te-motion='full'])) {
-    .title-bar button,
-    .title-bar button::before {
-      transition: none;
-    }
-  }
-}
-
-/* All effect switches target the painter, rather than its transparent host. */
-html[data-te-effects-mode='reduced'] .title-bar .title-bar-background,
-body.te-no-blur .title-bar .title-bar-background {
-  background: var(--te-titlebar-material-surface) !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-  .title-bar-background {
-    background: var(--te-titlebar-material-surface) !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
-  .title-bar-liquid .title-bar-background {
-    background: var(--te-lg-context-surface-solid) !important;
-    border-bottom: 1px solid var(--te-lg-context-label);
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
   }
 }
 

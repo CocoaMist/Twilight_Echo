@@ -105,6 +105,12 @@ const MAX_AUDIO_SOURCE_LENGTH = 8192
 const MAX_AUDIO_DEVICE_LENGTH = 512
 let audioDiagnosticRecorder: AudioDiagnosticRecorder | null = null
 let stopOutputTest: () => Promise<void> = () => Promise.resolve()
+
+/**
+ * Stops a running device output test for transport paths that bypass IPC
+ * (renderer-free playback while Afterglow has unloaded every window).
+ */
+export const stopActiveOutputTest = (): Promise<void> => stopOutputTest()
 function stemWorkerDirectory(): string {
   return join(
     app.isPackaged || app.getAppPath().endsWith('.asar')
@@ -176,7 +182,7 @@ function persistSoftwareVolumeNow(): void {
   )
 }
 
-function scheduleSoftwareVolumePersist(volume: number): void {
+export function scheduleSoftwareVolumePersist(volume: number): void {
   pendingSoftwareVolume = volume
   if (softwareVolumePersistTimer) clearTimeout(softwareVolumePersistTimer)
   softwareVolumePersistTimer = setTimeout(
@@ -237,19 +243,26 @@ export function toQueueItem(raw: unknown): AudioEngineQueueItem | null {
               : ''
   if (!source) return null
   let normalizedSource: string
+  let queueEntryId: string | undefined
   try {
     normalizedSource = normalizeIpcString(source, 'queue item source', MAX_AUDIO_SOURCE_LENGTH)
+    if (item.queueEntryId !== undefined)
+      queueEntryId = normalizeIpcString(item.queueEntryId, 'queue occurrence', 128)
+    if (queueEntryId !== item.queueEntryId) return null
   } catch {
     return null
   }
   const cueRange = item.cueRange === undefined ? undefined : normalizeCueRange(item.cueRange)
   if (cueRange === null) return null
+  if (item.logicalQueueEnd !== undefined && typeof item.logicalQueueEnd !== 'boolean') return null
   return {
     id: normalizeQueueText(item.id, normalizedSource) ?? normalizedSource,
     source: normalizedSource,
     title: normalizeQueueText(item.title),
     artist: normalizeQueueText(item.artist),
     album: normalizeQueueText(item.album),
+    ...(queueEntryId !== undefined ? { queueEntryId } : {}),
+    ...(item.logicalQueueEnd !== undefined ? { logicalQueueEnd: item.logicalQueueEnd } : {}),
     duration: Number.isFinite(item.duration) ? Number(item.duration) : undefined,
     codec:
       typeof item.format === 'string'
@@ -993,6 +1006,71 @@ function registerAudioEngineIpcHandlers(): void {
       )
       throw error
     }
+  })
+
+  ipcMain.handle(IPC.audioEngine.rebindQueue, async (event, raw: unknown) => {
+    assertTrustedIpcSender(event, 'audio engine IPC')
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+      throw new Error('Invalid queue handoff')
+    const request = raw as Record<string, unknown>
+    if (
+      !request.expected ||
+      typeof request.expected !== 'object' ||
+      Array.isArray(request.expected)
+    )
+      throw new Error('Invalid queue handoff selection')
+    const selection = request.expected as Record<string, unknown>
+    if (
+      !Array.isArray(request.items) ||
+      !request.items.length ||
+      request.items.length > MAX_AUDIO_QUEUE_ITEMS
+    )
+      throw new Error('Audio queue is invalid or too large')
+    // Unlike the legacy load API, a conditional command never clamps or guesses
+    // an occurrence: a malformed expectation must not select a different song.
+    if (
+      typeof request.startIndex !== 'number' ||
+      !Number.isInteger(request.startIndex) ||
+      request.startIndex < 0 ||
+      request.startIndex >= request.items.length ||
+      typeof selection.index !== 'number' ||
+      !Number.isInteger(selection.index) ||
+      selection.index < 0 ||
+      // Hot-appended native queues can exceed one load request's item ceiling.
+      selection.index > 2_147_483_647
+    )
+      throw new Error('Invalid queue handoff index')
+    if (
+      request.playMode !== 'sequential' &&
+      request.playMode !== 'listLoop' &&
+      request.playMode !== 'repeat'
+    )
+      throw new Error('Invalid queue handoff mode')
+    const queueToken = normalizeIpcString(selection.queueToken, 'queue token', 128)
+    const id = normalizeIpcString(selection.id, 'queue item id', MAX_AUDIO_SOURCE_LENGTH)
+    const expectedSource = normalizeIpcString(
+      selection.source,
+      'audio source',
+      MAX_AUDIO_SOURCE_LENGTH
+    )
+    const queue = normalizeIpcArray(
+      request.items,
+      'audio queue',
+      MAX_AUDIO_QUEUE_ITEMS,
+      toQueueItem
+    )
+    if (queue.length !== request.items.length)
+      throw new Error('Audio queue contains an invalid item')
+    const sources = await resolveAuthorizationBatch(
+      [expectedSource, ...queue.map((item) => item.source)],
+      resolveAuthorizedPlaybackSource
+    )
+    return (await ensureAudioEngineRuntime()).rebindQueue({
+      expected: { queueToken, id, index: selection.index, source: sources.get(expectedSource)! },
+      items: queue.map((item) => ({ ...item, source: sources.get(item.source)! })),
+      startIndex: request.startIndex,
+      playMode: request.playMode
+    })
   })
 
   ipcMain.handle(IPC.audioEngine.selectQueueItem, async (event, raw: unknown) => {

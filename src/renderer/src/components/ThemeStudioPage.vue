@@ -858,6 +858,37 @@ void editorPaneRef.value
         :style="contextualMode ? popoverTheme : undefined"
         :inert="contextualMode && state.busy"
       >
+        <div v-if="contextualMode" class="studio-context-search">
+          <label class="studio-search">
+            <i class="ph ph-magnifying-glass" aria-hidden="true" />
+            <input
+              v-model="studioSearchQuery"
+              type="search"
+              placeholder="搜索颜色、字体、动画…"
+              aria-label="搜索主题设置"
+            />
+          </label>
+          <label class="studio-setting-row">
+            <span>主题属性</span>
+            <select v-model="domain" aria-label="主题属性分类" :disabled="state.busy">
+              <option v-for="item in domains" :key="item.id" :value="item.id">
+                {{ item.label }}
+              </option>
+            </select>
+          </label>
+          <div v-if="studioSearchQuery.trim()" class="studio-search-hits" aria-label="搜索结果">
+            <button
+              v-for="hit in filteredStudioHits"
+              :key="`${hit.kind}:${hit.id}`"
+              type="button"
+              @click="jumpToSearchHit(hit)"
+            >
+              <strong>{{ hit.title }}</strong
+              ><small>{{ domains.find((item) => item.id === hit.domain)?.label }}</small>
+            </button>
+            <p v-if="!filteredStudioHits.length" role="status">没有找到相关设置</p>
+          </div>
+        </div>
         <button
           v-if="contextualMode && draft?.overrides[tone][contextTokenId] != null"
           type="button"
@@ -1658,8 +1689,8 @@ void editorPaneRef.value
                   <span
                     >跟随当前主题<small>{{
                       themeStore.snapshot.value?.data.windowInheritance.miniPlayer
-                        ? '已开启'
-                        : '正在使用小窗自己的外观'
+                        ? '已开启 · 立即生效'
+                        : '正在使用小窗自己的外观 · 立即生效'
                     }}</small></span
                   >
                   <input
@@ -1791,8 +1822,8 @@ void editorPaneRef.value
                   <span
                     >跟随当前主题<small>{{
                       themeStore.snapshot.value?.data.windowInheritance.desktopLyrics
-                        ? '已开启'
-                        : '正在使用桌面歌词自己的外观'
+                        ? '已开启 · 立即生效'
+                        : '正在使用桌面歌词自己的外观 · 立即生效'
                     }}</small></span
                   >
                   <input

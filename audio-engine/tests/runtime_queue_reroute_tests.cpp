@@ -14,8 +14,10 @@
 #undef NDEBUG
 #endif
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <filesystem>
@@ -628,6 +630,10 @@ std::filesystem::path writeSacdIsoFixture(const std::string& name) {
   std::copy(twoch.begin(), twoch.end(), image.begin() + 23 * kSectorSize);
   for (int i = 0; i < 256; ++i) image[25 * kSectorSize + i] = static_cast<uint8_t>(0x80 + (i & 0x3f));
   std::ofstream out(path, std::ios::binary);
+  if (!out) {
+    std::fprintf(stderr, "DSF fixture create failed (%d): %s\n", errno, path.string().c_str());
+    std::_Exit(1);
+  }
   out.write(reinterpret_cast<const char*>(image.data()), static_cast<std::streamsize>(image.size()));
   return path;
 }
@@ -659,6 +665,11 @@ std::filesystem::path writeDsfFixture(const std::string& name, int sampleRate = 
   writeLe64(out, 12 + kDataBytes);
   for (uint8_t byte : {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}) out.put(static_cast<char>(byte));
   for (uint8_t byte : {0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xf0, 0x0f}) out.put(static_cast<char>(byte));
+  out.close();
+  if (!out) {
+    std::fprintf(stderr, "DSF fixture write failed (%d): %s\n", errno, path.string().c_str());
+    std::_Exit(1);
+  }
   return path;
 }
 
@@ -1433,7 +1444,8 @@ class EngineHarness {
   EngineHarness(
       std::string fixtureName = "twilight-phase6d-runtime-reroute-dsd64.dsf",
       int sampleRate = kDsd64Rate)
-      : dsdPath_(writeDsfFixture(fixtureName, sampleRate)) {
+      : dsdPath_(std::filesystem::temp_directory_path() / fixtureName),
+        dsdSampleRate_(sampleRate) {
     dsdPathString_ = dsdPath_.string();
     g_backendRegistry.reset();
     g_fakeDopBehavior = FakeDopBehavior::Proven;
@@ -1460,16 +1472,26 @@ class EngineHarness {
     g_decodeFirstReadDelayMs = 0;
     g_decodeEveryReadDelayMs = 0;
     std::error_code ignored;
-    std::filesystem::remove(dsdPath_, ignored);
+    if (dsdFixtureCreated_) std::filesystem::remove(dsdPath_, ignored);
   }
 
   TwilightAudioEngine& engine() { return engine_; }
-  const std::string& dsdPath() const { return dsdPathString_; }
+  const std::string& dsdPath() const {
+    // PCM-only cases need neither a DSD file nor permission to create one.
+    // DSD cases still use the original Temp path and must successfully write it.
+    if (!dsdFixtureCreated_) {
+      writeDsfFixture(dsdPathString_, dsdSampleRate_);
+      dsdFixtureCreated_ = true;
+    }
+    return dsdPathString_;
+  }
 
  private:
   TwilightAudioEngine engine_;
   std::filesystem::path dsdPath_;
   std::string dsdPathString_;
+  int dsdSampleRate_;
+  mutable bool dsdFixtureCreated_ = false;
 };
 
 void assertLatestPlaybackContains(TwilightAudioEngine& engine, const std::string& needle) {
@@ -3964,6 +3986,233 @@ void testQueueCursorSelectsSameFileCueWithoutReloadingContent() {
   assert(decoderSeekObserved(0.1));
 }
 
+void testNaturalBoundariesCountIdenticalOccurrencesAndLogicalCycles() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setVolume(0.5) == TAE_RESULT_OK);
+  assert(engine.setDspConfig("{\"enabled\":true,\"gapless\":true,\"crossfadeSeconds\":0}") == TAE_RESULT_OK);
+  const std::string item = "\"id\":\"duplicate\",\"source\":\"boundary-cue.flac\","
+      "\"cueRange\":{\"startSeconds\":0,\"endSeconds\":0.08}";
+  // Both occurrences intentionally have identical ids, source, and CUE range.
+  // Logical last -> first is native 0 -> 1, not a native queue wrap.
+  assert(engine.loadQueue("[{" + item + ",\"logicalQueueEnd\":true},{" + item +
+      ",\"logicalQueueEnd\":false}]", 0) == TAE_RESULT_OK);
+  assert(engine.play("boundary-cue.flac", 0.0) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  assert(waitUntil([&] { return jsonContains(engine.getPlaybackInfoJson(), "\"preloadReady\":true"); }));
+  const auto revision = playbackJsonNumber(engine.getPlaybackInfoJson(), "queueRevision");
+  renderBackendFrames(backend, 3600);
+  assert(waitUntil([&] { return playbackJsonNumber(engine.getPlaybackInfoJson(), "trackSerial") == 1; }));
+  assertLatestPlaybackContains(engine, "\"queueIndex\":1");
+  assertLatestPlaybackContains(engine, "\"queueSerial\":1");
+  assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "trackTimeMs") > 0);
+  assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "queueTimeMs") > 0);
+  assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "queueRevision") == revision);
+  renderBackendFrames(backend, 3600);
+  // Float output declares EOF on its next empty callback, after its last PCM.
+  renderBackendFrames(backend, 256);
+  const bool ended = waitUntil([&] { return playbackJsonNumber(engine.getPlaybackInfoJson(), "trackSerial") == 2; });
+  if (!ended) std::fprintf(stderr, "boundary snapshot: %s\n", engine.getPlaybackInfoJson().c_str());
+  assert(ended);
+  assertLatestPlaybackContains(engine, "\"state\":\"stopped\"");
+  assertLatestPlaybackContains(engine, "\"queueSerial\":1");
+  // Explicit transport is not EOF, even if source/index/position would look like a wrap.
+  assert(engine.selectQueueIndex(0) == TAE_RESULT_OK);
+  assert(engine.play("boundary-cue.flac", 0.0) == TAE_RESULT_OK);
+  assert(engine.seek(0.02) == TAE_RESULT_OK);
+  assert(engine.pause() == TAE_RESULT_OK);
+  assert(engine.next() == TAE_RESULT_OK);
+  assert(engine.stop() == TAE_RESULT_OK);
+  assertLatestPlaybackContains(engine, "\"trackSerial\":2");
+  assertLatestPlaybackContains(engine, "\"queueSerial\":1");
+}
+
+void testNaturalSameIndexRepeatBoundaries(bool logicalQueueEnd) {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setVolume(0.5) == TAE_RESULT_OK);
+  assert(engine.setDspConfig("{\"enabled\":true,\"gapless\":true,\"crossfadeSeconds\":0}") == TAE_RESULT_OK);
+  assert(engine.loadQueue("[{\"id\":\"one\",\"source\":\"repeat-boundary.flac\","
+      "\"logicalQueueEnd\":" + std::string(logicalQueueEnd ? "true" : "false") +
+      ",\"cueRange\":{\"startSeconds\":0,\"endSeconds\":0.08}}]", 0) == TAE_RESULT_OK);
+  assert(engine.setPlayMode("repeat") == TAE_RESULT_OK);
+  assert(engine.play("repeat-boundary.flac", 0.0) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(backend);
+  for (int boundary = 1; boundary <= 3; ++boundary) {
+    assert(waitUntil([&] { return jsonContains(engine.getPlaybackInfoJson(), "\"preloadReady\":true"); }));
+    renderBackendFrames(backend, 3600);
+    assert(waitUntil([&] { return playbackJsonNumber(engine.getPlaybackInfoJson(), "trackSerial") == boundary; }));
+    assertLatestPlaybackContains(engine, "\"queueIndex\":0");
+    assert(playbackJsonNumber(engine.getPlaybackInfoJson(), "queueSerial") == (logicalQueueEnd ? boundary : 0));
+  }
+}
+
+void testQueueRebindKeepsDecoderAndTransport(bool paused, bool releaseOutput = false) {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setOutputConfig(std::string("{\"releaseExclusiveOnPause\":") +
+      (releaseOutput ? "true}" : "false}")) == TAE_RESULT_OK);
+  const std::string selected = "{\"id\":\"current\",\"source\":\"rebind-current.flac\"}";
+  const std::string next = "{\"id\":\"new\",\"source\":\"rebind-next.flac\"}";
+  assert(engine.loadQueue("[{\"id\":\"previous\",\"source\":\"previous.flac\"}," + selected + "]", 1) == TAE_RESULT_OK);
+  assert(engine.setPlayMode("listLoop") == TAE_RESULT_OK);
+  assert(engine.play("rebind-current.flac", 0.25) == TAE_RESULT_OK);
+  if (paused) assert(engine.pause() == TAE_RESULT_OK);
+  std::string before = engine.getPlaybackInfoJson();
+  if (!releaseOutput) assert(waitUntil([&] {
+    before = engine.getPlaybackInfoJson();
+    return jsonContains(before, "\"decodeHealthAvailable\":true");
+  }));
+  const auto backends = g_backendRegistry.snapshots();
+  const auto oldRevision = playbackJsonNumber(engine.getQueueStateJson(), "revision");
+  int applied = -1;
+  assert(engine.rebindQueue("[" + selected + "," + next + "]", 0, "sequential", selected, 1, &applied) == TAE_RESULT_OK);
+  assert(applied == 1);
+  std::string after = engine.getPlaybackInfoJson();
+  if (!releaseOutput) assert(waitUntil([&] {
+    after = engine.getPlaybackInfoJson();
+    return jsonContains(after, "\"decodeHealthAvailable\":true");
+  }));
+  assertLatestPlaybackContains(engine, paused ? "\"state\":\"paused\"" : "\"state\":\"playing\"");
+  assertLatestPlaybackContains(engine, "\"queueIndex\":0");
+  assertLatestPlaybackContains(engine, "\"playMode\":\"sequential\"");
+  assertLatestPlaybackContains(engine, "\"source\":\"rebind-current.flac\"");
+  assert(playbackJsonNumber(after, "position") == playbackJsonNumber(before, "position"));
+  if (!releaseOutput)
+    assert(playbackJsonNumber(after, "decodeStreamToken") == playbackJsonNumber(before, "decodeStreamToken"));
+  assert(playbackJsonNumber(engine.getQueueStateJson(), "revision") > oldRevision);
+  const auto afterBackends = g_backendRegistry.snapshots();
+  assert(afterBackends.size() == backends.size());
+  for (size_t i = 0; i < backends.size(); ++i) {
+    assert(afterBackends[i].openCalls == backends[i].openCalls);
+    assert(afterBackends[i].startCalls == backends[i].startCalls);
+    assert(afterBackends[i].stopCalls == backends[i].stopCalls);
+    assert(afterBackends[i].closeCalls == backends[i].closeCalls);
+  }
+  // A stale occurrence cannot restore the previous queue, even for the same source.
+  const auto committed = engine.getQueueStateJson();
+  assert(engine.rebindQueue("[" + selected + "]", 0, "repeat", selected, 1, &applied) == TAE_RESULT_OK);
+  assert(applied == 0 && engine.getQueueStateJson() == committed);
+}
+
+void testQueueRebindRejectsMalformedReplacementAndCueMismatch() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  const std::string current = "{\"id\":\"cue\",\"source\":\"rebind-cue.flac\",\"cueRange\":{\"startSeconds\":0,\"endSeconds\":0.5}}";
+  const std::string other = "{\"id\":\"cue\",\"source\":\"rebind-cue.flac\",\"cueRange\":{\"startSeconds\":0.5,\"endSeconds\":1}}";
+  assert(engine.loadQueue("[" + current + "]", 0) == TAE_RESULT_OK);
+  assert(engine.play("rebind-cue.flac", 0.1) == TAE_RESULT_OK);
+  const auto before = engine.getQueueStateJson();
+  int applied = -1;
+  assert(engine.rebindQueue("[" + other + "]", 0, "sequential", current, 0, &applied) == TAE_RESULT_INVALID_ARGUMENT);
+  assert(applied == 0 && engine.getQueueStateJson() == before);
+  assert(engine.rebindQueue("[" + current + "]", 0, "sequential", other, 0, &applied) == TAE_RESULT_OK);
+  assert(applied == 0 && engine.getQueueStateJson() == before);
+  assert(engine.rebindQueue("[" + current + "]", 5, "sequential", current, 0, &applied) == TAE_RESULT_INVALID_ARGUMENT);
+  assert(applied == 0 && engine.getQueueStateJson() == before);
+  assert(engine.rebindQueue("broken", 0, "sequential", current, 0, &applied) == TAE_RESULT_INVALID_ARGUMENT);
+  assert(applied == 0 && engine.getQueueStateJson() == before);
+}
+
+void testQueueRebindClearsObsoletePreloadWithoutRestartingCurrent() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  assert(engine.setDspConfig("{\"gapless\":true}") == TAE_RESULT_OK);
+  const std::string selected = "{\"id\":\"current\",\"source\":\"auto-promote-current.flac\"}";
+  assert(engine.loadQueue("[" + selected + ",{\"id\":\"old-next\",\"source\":\"auto-promote-next.flac\"}]", 0) == TAE_RESULT_OK);
+  assert(engine.play("auto-promote-current.flac", 0) == TAE_RESULT_OK);
+  assert(waitUntil([&] { return jsonContains(engine.getPlaybackInfoJson(), "\"preloadReady\":true"); }));
+  const auto backend = waitForLatestStartedBackendState();
+  int applied = 0;
+  assert(engine.rebindQueue("[" + selected + "]", 0, "sequential", selected, 0, &applied) == TAE_RESULT_OK);
+  assert(applied == 1);
+  assertLatestPlaybackContains(engine, "\"preloadReady\":false");
+  pumpBackend(backend, 64);
+  assert(waitUntil([&] { return jsonContains(engine.getPlaybackInfoJson(), "\"state\":\"stopped\""); }));
+  assertLatestPlaybackContains(engine, "\"source\":\"auto-promote-current.flac\"");
+  assert(g_backendRegistry.snapshots().size() == 1);
+}
+
+void testPipelineRebindFencesPendingIdenticalOccurrencePromotion(bool typed) {
+  EngineHarness harness;
+  AudioPipeline pipeline;
+  QueueItem first;
+  first.id = "duplicate";
+  first.source = typed ? "typed-gapless-current.flac" : "auto-promote-current.flac";
+  std::string error;
+  assert(pipeline.play(first, first, 0, "wasapi-exclusive", "auto", typed ? 1.0 : 0.5,
+      "{\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(waitUntil([&] { return pipeline.status().preloadReady; }));
+  pumpBackend(backend, 20);
+  int commits = 0;
+  assert(!pipeline.rebindQueue(first, first, [&] { ++commits; }));
+  assert(commits == 0);
+  pipeline.stop();
+}
+
+void testQueueRebindPreservesMatchingLookaheadAcrossCursorRebase() {
+  EngineHarness harness;
+  auto& engine = harness.engine();
+  const std::string current = "{\"id\":\"current\",\"source\":\"auto-promote-current.flac\"}";
+  const std::string next = "{\"id\":\"next\",\"source\":\"auto-promote-next.flac\"}";
+  assert(engine.loadQueue("[{\"id\":\"previous\",\"source\":\"previous.flac\"}," + current + "," + next + "]", 1) == TAE_RESULT_OK);
+  assert(engine.play("auto-promote-current.flac", 0) == TAE_RESULT_OK);
+  assert(waitUntil([&] { return jsonContains(engine.getPlaybackInfoJson(), "\"preloadReady\":true"); }));
+  const auto backend = waitForLatestStartedBackendState();
+  int applied = 0;
+  assert(engine.rebindQueue("[" + current + "," + next + "]", 0, "sequential", current, 1, &applied) == TAE_RESULT_OK);
+  assert(applied == 1);
+  pumpBackend(backend, 20);
+  assert(waitUntil([&] { return jsonContains(engine.getPlaybackInfoJson(), "\"queueIndex\":1"); }));
+  assertLatestPlaybackContains(engine, "\"source\":\"auto-promote-next.flac\"");
+  pumpBackend(backend, 64);
+  assert(waitUntil([&] { return jsonContains(engine.getPlaybackInfoJson(), "\"state\":\"stopped\""); }));
+  assertLatestPlaybackContains(engine, "\"queueIndex\":1");
+  assert(g_backendRegistry.snapshots().size() == 1);
+}
+
+void testPipelineRebindDoesNotBlockDeviceCallback(bool typed) {
+  EngineHarness harness;
+  AudioPipeline pipeline;
+  QueueItem current, next;
+  current.id = "current";
+  current.source = typed ? "typed-gapless-current.flac" : "auto-promote-current.flac";
+  next.id = "next";
+  next.source = typed ? "typed-gapless-next.flac" : "auto-promote-next.flac";
+  std::string error;
+  assert(pipeline.play(current, next, 0, "wasapi-exclusive", "auto", typed ? 1.0 : 0.5,
+      "{\"gapless\":true}", true, &error) == TAE_RESULT_OK);
+  const auto backend = waitForLatestStartedBackendState();
+  assert(waitUntil([&] { return pipeline.status().preloadReady; }));
+  std::atomic<bool> entered{false}, release{false};
+  bool applied = false;
+  std::thread control([&] {
+    applied = pipeline.rebindQueue(current, std::nullopt, [&] {
+      entered = true;
+      while (!release.load()) std::this_thread::yield();
+    });
+  });
+  const bool ready = waitUntil([&] { return entered.load(); });
+  // A real callback runs while control holds the pipeline mutex and the
+  // transition gate. It must keep rendering the current stream without either
+  // waiting for control or reading the obsolete upcoming stream.
+  const auto started = std::chrono::steady_clock::now();
+  const auto block = ready ? renderBackendFrames(backend, 64) : std::vector<float>{};
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  release = true;
+  control.join();
+  assert(ready && applied);
+  assert(elapsed < std::chrono::milliseconds(100));
+  assert(bufferHasSampleAbove(block, 0.01f));
+  assert(pipeline.status().currentItem.id == current.id);
+  assert(!pipeline.status().preloadReady);
+  assert(g_backendRegistry.snapshots().size() == 1);
+  pipeline.stop();
+}
+
 void testExclusiveAutoReleaseKeepsGaplessDeviceUntilQueueEnd(double volume) {
   EngineHarness harness;
   auto& engine = harness.engine();
@@ -4981,6 +5230,25 @@ void FFmpegDecoder::pollStreamMetadata() {}
   } while (false)
 
 int main() {
+  if (std::getenv("TAE_RUNTIME_SLEEP_BOUNDARY_ONLY")) {
+    RUN_RUNTIME_CASE(testNaturalBoundariesCountIdenticalOccurrencesAndLogicalCycles());
+    RUN_RUNTIME_CASE(testNaturalSameIndexRepeatBoundaries(false));
+    RUN_RUNTIME_CASE(testNaturalSameIndexRepeatBoundaries(true));
+    return 0;
+  }
+  if (std::getenv("TAE_RUNTIME_REBIND_ONLY")) {
+    RUN_RUNTIME_CASE(testQueueRebindKeepsDecoderAndTransport(false));
+    RUN_RUNTIME_CASE(testQueueRebindKeepsDecoderAndTransport(true));
+    RUN_RUNTIME_CASE(testQueueRebindKeepsDecoderAndTransport(true, true));
+    RUN_RUNTIME_CASE(testQueueRebindRejectsMalformedReplacementAndCueMismatch());
+    RUN_RUNTIME_CASE(testQueueRebindClearsObsoletePreloadWithoutRestartingCurrent());
+    RUN_RUNTIME_CASE(testPipelineRebindFencesPendingIdenticalOccurrencePromotion(false));
+    RUN_RUNTIME_CASE(testPipelineRebindFencesPendingIdenticalOccurrencePromotion(true));
+    RUN_RUNTIME_CASE(testQueueRebindPreservesMatchingLookaheadAcrossCursorRebase());
+    RUN_RUNTIME_CASE(testPipelineRebindDoesNotBlockDeviceCallback(false));
+    RUN_RUNTIME_CASE(testPipelineRebindDoesNotBlockDeviceCallback(true));
+    return 0;
+  }
   if(std::getenv("TAE_RUNTIME_CLOCK_ONLY")) {
     RUN_RUNTIME_CASE(testClockSnapshotCannotUndoCompletedPause());
     RUN_RUNTIME_CASE(testClockSnapshotCannotUndoCompletedDopReroute());
@@ -5104,6 +5372,19 @@ int main() {
   RUN_RUNTIME_CASE(testExclusiveReleasedPauseEditsAndResumeFailureRetainContext());
   RUN_RUNTIME_CASE(testExclusiveReleasedPausePreservesCueQueueIdentity());
   RUN_RUNTIME_CASE(testQueueCursorSelectsSameFileCueWithoutReloadingContent());
+  RUN_RUNTIME_CASE(testNaturalBoundariesCountIdenticalOccurrencesAndLogicalCycles());
+  RUN_RUNTIME_CASE(testNaturalSameIndexRepeatBoundaries(false));
+  RUN_RUNTIME_CASE(testNaturalSameIndexRepeatBoundaries(true));
+  RUN_RUNTIME_CASE(testQueueRebindKeepsDecoderAndTransport(false));
+  RUN_RUNTIME_CASE(testQueueRebindKeepsDecoderAndTransport(true));
+  RUN_RUNTIME_CASE(testQueueRebindKeepsDecoderAndTransport(true, true));
+  RUN_RUNTIME_CASE(testQueueRebindRejectsMalformedReplacementAndCueMismatch());
+  RUN_RUNTIME_CASE(testQueueRebindClearsObsoletePreloadWithoutRestartingCurrent());
+  RUN_RUNTIME_CASE(testPipelineRebindFencesPendingIdenticalOccurrencePromotion(false));
+  RUN_RUNTIME_CASE(testPipelineRebindFencesPendingIdenticalOccurrencePromotion(true));
+  RUN_RUNTIME_CASE(testQueueRebindPreservesMatchingLookaheadAcrossCursorRebase());
+  RUN_RUNTIME_CASE(testPipelineRebindDoesNotBlockDeviceCallback(false));
+  RUN_RUNTIME_CASE(testPipelineRebindDoesNotBlockDeviceCallback(true));
   RUN_RUNTIME_CASE(testExclusiveAutoReleasePreservesDsdTransport());
   RUN_RUNTIME_CASE(testExclusiveAutoReleaseKeepsGaplessDeviceUntilQueueEnd(0.5));
   RUN_RUNTIME_CASE(testExclusiveAutoReleaseKeepsGaplessDeviceUntilQueueEnd(1.0));

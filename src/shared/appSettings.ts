@@ -8,6 +8,7 @@ import type {
   PlayMode
 } from './audioEngineTypes.ts'
 import type { MiniPlayerSettings } from './miniPlayer.ts'
+import type { ShortcutEnabledSettings } from './shortcutPreferences.ts'
 import type { DspScene } from './dspGraph.ts'
 import type { SleepTimerSettings } from './sleepTimer.ts'
 import type { ThemeSelection, ThemeWindowInheritance } from './theme.ts'
@@ -20,6 +21,7 @@ import type { LanguagePreference } from './i18n/locale.ts'
 import type { MotionPreference } from './motion.ts'
 import type { NavigationPagePreferences } from './navigationPages.ts'
 import type { AppFontRendering } from './appFont.ts'
+import type { StartupExperience } from './pluginExperience.ts'
 
 export type {
   DesktopLyricsPalette,
@@ -159,6 +161,7 @@ export interface AppSettings {
   launchAtLogin: boolean
   hardwareAcceleration: boolean
   globalShortcuts: boolean
+  shortcutEnabled: ShortcutEnabledSettings
   globalShortcutBindings: GlobalShortcutSettings
   minimizeToTray: boolean
   musicCachePath: string
@@ -173,11 +176,18 @@ export interface AppSettings {
   closeToTray: boolean
   /** Windows taskbar thumbnail transport buttons; independent from SMTC metadata. */
   taskbarThumbarButtonsEnabled: boolean
+  /**
+   * Unload the UI renderer while the native engine keeps playing (Afterglow).
+   * `off` keeps every window resident; other values enter automatically when the
+   * main window is minimized and/or hidden to the tray.
+   */
+  afterglowAutoEntry: import('./afterglowMode.ts').AfterglowAutoEntry
   /** First-run welcome wizard has been completed or skipped. */
   onboardingCompleted: boolean
   /** Unlocks developer-only affordances, e.g. installing an unpacked plugin directory. */
   developerMode: boolean
   startupHomePage: StartupHomePage
+  startupExperience: StartupExperience | null
   navigationPages: NavigationPagePreferences
   trackActivationMode: TrackActivationMode
   /** UI and error-message language. `system` follows the OS locale. */

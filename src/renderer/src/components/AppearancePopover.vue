@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useEscapeToClose } from '../app/useDismissLayer'
-const props = defineProps<{ open: boolean; anchor: HTMLElement | null; label: string }>()
+const props = defineProps<{
+  open: boolean
+  anchor: HTMLElement | null
+  label: string
+  wide?: boolean
+}>()
 const emit = defineEmits<{ close: [] }>()
 const panel = ref<HTMLElement>()
 const position = ref<Record<string, string>>({ left: '0px', top: '0px' })
@@ -101,6 +106,7 @@ onBeforeUnmount(() => {
         v-if="open"
         ref="panel"
         class="appearance-popover"
+        :class="{ 'appearance-popover--wide': wide }"
         data-te-material="popover"
         :data-side="side"
         :style="position"
@@ -134,6 +140,9 @@ onBeforeUnmount(() => {
   overflow: auto;
   padding: 16px;
   border-radius: inherit;
+}
+.appearance-popover--wide {
+  width: min(480px, calc(100vw - 24px));
 }
 .appearance-popover::before {
   content: '';

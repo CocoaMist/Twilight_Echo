@@ -11,6 +11,7 @@ const props = defineProps<{
   selectionCount?: number
   selectionEnabled?: boolean
   movable?: boolean
+  canDelete?: boolean
   filterTypes: { value: EqualizerFilterType; label: string; usesGain: boolean }[]
 }>()
 const emit = defineEmits<{
@@ -74,7 +75,7 @@ defineExpose({ finishInteraction })
         >
           <i class="pi pi-power-off"></i>
         </button>
-        <span class="band-number">频段 {{ String(index + 1).padStart(2, '0') }}</span>
+        <span class="band-number">BAND {{ String(index + 1).padStart(2, '0') }}</span>
       </div>
       <label class="filter-select">
         <svg viewBox="0 0 32 28" aria-hidden="true"><path :d="glyphs[band.filterType]" /></svg>
@@ -118,6 +119,7 @@ defineExpose({ finishInteraction })
       <button
         type="button"
         class="inspector-icon delete-band"
+        :disabled="canDelete === false"
         aria-label="删除所选频段"
         title="删除频段"
         @click="act('delete')"
@@ -138,10 +140,12 @@ defineExpose({ finishInteraction })
   box-sizing: border-box;
   padding: 14px 34px 9px 14px;
   border: 1px solid var(--eq-border);
-  border-radius: 8px;
+  border-radius: 14px;
   color: var(--eq-text);
-  background: var(--eq-panel-raised);
-  box-shadow: none;
+  background: linear-gradient(165deg, var(--eq-panel-raised), var(--eq-panel));
+  box-shadow:
+    0 12px 32px var(--eq-shadow),
+    inset 0 1px color-mix(in srgb, var(--eq-highlight) 18%, transparent);
   cursor: default;
   color-scheme: var(--eq-color-scheme);
 }
@@ -168,7 +172,8 @@ defineExpose({ finishInteraction })
 }
 .band-number {
   font-family: var(--eq-mono);
-  font-size: var(--te-type-caption);
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
+  letter-spacing: 0.1em;
   color: var(--band-color);
 }
 .inspector-icon {
@@ -182,7 +187,7 @@ defineExpose({ finishInteraction })
   background: transparent;
   color: var(--eq-text-muted);
   cursor: pointer;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
 }
 .band-power {
   color: var(--band-color);
@@ -213,7 +218,7 @@ defineExpose({ finishInteraction })
   background: transparent;
   color: var(--eq-text);
   font: inherit;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   cursor: pointer;
 }
 .filter-select option {
@@ -221,7 +226,7 @@ defineExpose({ finishInteraction })
   color: var(--eq-text);
 }
 .band-state {
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   color: var(--eq-text-subtle);
 }
 .precision-controls {
@@ -241,7 +246,7 @@ defineExpose({ finishInteraction })
 }
 .inspector-icon:focus-visible,
 select:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--eq-response);
   outline-offset: 2px;
 }
 @media (hover: hover) and (pointer: fine) {

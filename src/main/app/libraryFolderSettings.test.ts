@@ -32,6 +32,7 @@ for (const watchLibrary of [true, false]) {
       '../integrations/miniPlayer': {},
       '../integrations/desktopLyrics': {},
       '../integrations/shortcutsTray': { applyRuntimeSettings() {} },
+      './AfterglowModeService.ts': { reassertAfterglowShortcuts() {} },
       '../audio/state.ts': {},
       './windowAppearance.ts': {},
       '../cache/ncmCache': {},

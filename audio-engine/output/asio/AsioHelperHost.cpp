@@ -1,11 +1,13 @@
 #include "AsioHelperHost.h"
 
 #include "AsioRenderUtils.h"
+#include "AsioRealtimeThread.h"
 
 #include <Windows.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <thread>
 
@@ -233,6 +235,18 @@ bool AsioHelperHost::createBuffers(
 }
 
 bool AsioHelperHost::start(std::string* error) {
+  auto* shared = process_.shared();
+  if (shared && shared->renderQueueCapacity > 0) {
+    renderAhead_.store(true, std::memory_order_release);
+    process_.wakeCallbacks();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+    const uint32_t target = std::min<uint32_t>(8, shared->renderQueueCapacity);
+    while (std::chrono::steady_clock::now() < deadline &&
+           static_cast<uint32_t>(asio_helper::readAtomic(&shared->renderQueueWrite) -
+               asio_helper::readAtomic(&shared->renderQueueRead)) < target) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
   asio_helper::Response response;
   if (!process_.request(
           asio_helper::Command::Start,
@@ -241,6 +255,7 @@ bool AsioHelperHost::start(std::string* error) {
           error)) {
     std::lock_guard lock(stateMutex_);
     closeError_ = error ? *error : process_.lastFailure();
+    renderAhead_.store(false, std::memory_order_release);
     return false;
   }
   started_.store(true, std::memory_order_release);
@@ -248,6 +263,7 @@ bool AsioHelperHost::start(std::string* error) {
 }
 
 void AsioHelperHost::stop() {
+  renderAhead_.store(false, std::memory_order_release);
   started_.store(false, std::memory_order_release);
   if (!process_.alive()) return;
   asio_helper::Response response;
@@ -263,6 +279,7 @@ void AsioHelperHost::stop() {
 }
 
 void AsioHelperHost::close() {
+  renderAhead_.store(false, std::memory_order_release);
   started_.store(false, std::memory_order_release);
   if (process_.alive()) {
     asio_helper::Response response;
@@ -357,6 +374,15 @@ bool AsioHelperHost::dsdBufferUnitConfirmed() const {
   return shared && asio_helper::readAtomic(&shared->dsdBufferUnitConfirmed) != 0;
 }
 
+AsioRenderHealth AsioHelperHost::renderHealth() const {
+  const auto* shared = process_.shared();
+  if (!shared) return {};
+  return {
+      static_cast<uint32_t>(asio_helper::readAtomic(&shared->callbackHeartbeat)),
+      static_cast<uint32_t>(asio_helper::readAtomic(&shared->renderUnderrunCount)),
+      static_cast<uint32_t>(asio_helper::readAtomic(&shared->callbackDropCount))};
+}
+
 void AsioHelperHost::commitOutputBuffer(long bufferIndex, size_t frameCount) {
   auto* shared = process_.shared();
   if (!shared || bufferIndex < 0 || bufferIndex > 1) return;
@@ -373,6 +399,25 @@ void AsioHelperHost::commitOutputBuffer(long bufferIndex, size_t frameCount) {
         asio::wireBytesForFrames(renderChannelFormats_[channel], boundedFrames);
     buffer.channelBytes[channel] = static_cast<uint32_t>(
         std::min<size_t>(bytes, asio_helper::kChannelStride));
+  }
+  if (shared->renderQueueCapacity > 0) {
+    const uint32_t write = static_cast<uint32_t>(asio_helper::readAtomic(&shared->renderQueueWrite));
+    const uint32_t read = static_cast<uint32_t>(asio_helper::readAtomic(&shared->renderQueueRead));
+    if (write - read >= shared->renderQueueCapacity) {
+      asio_helper::incrementAtomic(&shared->callbackDropCount);
+      return;
+    }
+    auto& queued = shared->renderQueueBlocks[write % shared->renderQueueCapacity];
+    queued.committedFrames = boundedFrames;
+    for (uint32_t channel = 0; channel < channelCount; ++channel) {
+      queued.channelBytes[channel] = buffer.channelBytes[channel];
+      auto* destination = asio_helper::queuedChannelBuffer(shared, write, channel);
+      if (!destination || buffer.channelBytes[channel] > shared->renderQueueChannelStride) return;
+      std::memcpy(destination, asio_helper::channelBuffer(shared, channel, bufferIndex), buffer.channelBytes[channel]);
+    }
+    MemoryBarrier();
+    asio_helper::exchangeAtomic(&shared->renderQueueWrite, static_cast<LONG>(write + 1));
+    return;
   }
   MemoryBarrier();
   asio_helper::incrementAtomic(&buffer.generation);
@@ -404,6 +449,7 @@ std::chrono::milliseconds AsioHelperHost::callbackDeadline() const {
 }
 
 void AsioHelperHost::workerLoop() {
+  asio::RealtimeThread realtimeThread;
   int32_t callbackRead = 0;
   int32_t hostEventRead = 0;
   int32_t lastHeartbeat = 0;
@@ -433,7 +479,7 @@ void AsioHelperHost::workerLoop() {
         std::lock_guard lock(stateMutex_);
         callback = bufferSwitch_;
       }
-      if (callback && record.bufferIndex >= 0 && record.bufferIndex <= 1) {
+      if (shared->renderQueueCapacity == 0 && callback && record.bufferIndex >= 0 && record.bufferIndex <= 1) {
         asio_helper::RenderBuffer& buffer = shared->buffers[record.bufferIndex];
         const LONG generation = asio_helper::readAtomic(&buffer.generation);
         const LONG consumed = asio_helper::readAtomic(&buffer.consumedGeneration);
@@ -442,6 +488,22 @@ void AsioHelperHost::workerLoop() {
         } else {
           asio_helper::incrementAtomic(&shared->callbackDropCount);
         }
+      }
+    }
+
+    if (shared->renderQueueCapacity > 0 && renderAhead_.load(std::memory_order_acquire)) {
+      AsioBufferSwitchCallback callback;
+      { std::lock_guard lock(stateMutex_); callback = bufferSwitch_; }
+      const double periodMs = activeRenderFrameCapacity() * 8000.0 / std::max(1, openFormat_.sampleRate);
+      const uint32_t target = std::min<uint32_t>(shared->renderQueueCapacity,
+          dsdBufferUnitConfirmed() && periodMs > 0
+              ? static_cast<uint32_t>(std::clamp(std::ceil(8.0 / periodMs), 2.0, 32.0)) : 8);
+      for (uint32_t block = 0; callback && block < target && renderAhead_.load(std::memory_order_acquire); ++block) {
+        const uint32_t write = static_cast<uint32_t>(asio_helper::readAtomic(&shared->renderQueueWrite));
+        const uint32_t read = static_cast<uint32_t>(asio_helper::readAtomic(&shared->renderQueueRead));
+        if (write - read >= target) break;
+        callback(0);
+        if (write == static_cast<uint32_t>(asio_helper::readAtomic(&shared->renderQueueWrite))) break;
       }
     }
 

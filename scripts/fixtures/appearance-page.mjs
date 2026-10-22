@@ -5,6 +5,7 @@ import { providePageDock } from '__RENDERER__/app/pageDock.ts'
 import { storeThemeStudioRecovery } from '__RENDERER__/components/theme-studio/themeStudioRecovery.ts'
 import { SETTINGS_SEARCH_INDEX } from '__RENDERER__/components/settings-page/types.ts'
 import { useThemeStore, resetThemeFixture } from '__RENDERER__/stores/useThemeStore'
+import { contributions } from '__RENDERER__/extensions/registry'
 import {
   BUILT_IN_THEME_PRESET_IDS,
   TWILIGHT_DEFAULT_THEME
@@ -107,6 +108,14 @@ window.api = {
     },
     enable: async (id) => {
       window.pluginCalls.push('enable:' + id)
+      if (id === 'com.twilightecho.tool.theme-workshop') {
+        if (window.failWorkshopEnable) throw Error('workshop enable failed')
+        if (window.holdWorkshopEnable)
+          await new Promise((resolve) => {
+            window.releaseWorkshopEnable = resolve
+          })
+        if (!window.workshopNotReady) contributions.value = [{ pluginId: id, id: 'theme-workshop' }]
+      }
     },
     uninstall: async (id) => {
       window.pluginCalls.push('remove:' + id)
@@ -159,7 +168,7 @@ const choosePage = async () => {
 const customizePage = async () => {
   document.querySelector('#appearance-customize-tab').click()
   await until(
-    () => document.querySelector('.fixture-AppearanceSettingsSection'),
+    () => document.querySelector('.fixture-AppearanceWorkspaceSection'),
     'customization did not mount'
   )
 }
@@ -321,7 +330,7 @@ window.fixture = async () => {
   await choosePage()
   await until(choiceReady, 'choice page not ready')
   expect(
-    !document.querySelector('.fixture-AppearanceSettingsSection') &&
+    !document.querySelector('.fixture-AppearanceWorkspaceSection') &&
       !document.querySelector('.fixture-ThemeStudioPage') &&
       !document.querySelector('.appearance-theme-tools'),
     'selection eagerly mounts editor controls'
@@ -403,10 +412,10 @@ window.fixture = async () => {
     !document.querySelector('[data-theme-key]') && !command('新建主题') && !command('删除主题'),
     'selection commands remain in custom pane'
   )
-  window.allowLeave.AppearanceSettingsSection = false
+  window.allowLeave.AppearanceWorkspaceSection = false
   await choosePage()
   expect(!isSelection() && selected === 'adjust', 'page switch dismisses daily draft')
-  window.allowLeave.AppearanceSettingsSection = true
+  window.allowLeave.AppearanceWorkspaceSection = true
   document.querySelector('[data-daily-more]').click()
   await until(creatorReady, 'contextual creator did not mount')
   editorOptionContrast()
@@ -547,6 +556,141 @@ window.fixture = async () => {
   expect(source() === 'profile:' + recovered.id, 'recovery selection lost')
   app.unmount()
   storeThemeStudioRecovery(null)
+}
+
+window.workshopEntryFixture = async () => {
+  const initialContributions = contributions.value
+  const pluginId = 'com.twilightecho.tool.theme-workshop'
+  const enableCount = () =>
+    window.pluginCalls.filter((call) => call === 'enable:' + pluginId).length
+  const entry = () => document.querySelector('#appearance-workshop-tab')
+  const dialog = () => document.querySelector('.appearance-enable-dialog')
+  const current = () =>
+    document.querySelector('.appearance-workspace-pages [aria-current="page"]')?.id
+  try {
+    contributions.value = []
+    window.allowLeave = {}
+    mount()
+    await until(choiceReady, 'disabled workshop blocks theme selection')
+    expect(
+      [...document.querySelectorAll('.appearance-workspace-pages button')]
+        .map((button) => button.textContent.trim())
+        .join('|') === '主题选择|自定义主题|主题插件工坊',
+      'appearance must have three ordered sibling entries'
+    )
+    const before = enableCount()
+    await customizePage()
+    expect(
+      current() === 'appearance-customize-tab' && enableCount() === before,
+      'ordinary customization requires workshop'
+    )
+    entry().click()
+    await settle()
+    expect(
+      dialog().open && current() === 'appearance-customize-tab' && enableCount() === before,
+      'workshop enabled or navigated without confirmation'
+    )
+    const dialogBounds = dialog().getBoundingClientRect()
+    expect(
+      Math.abs(dialogBounds.left + dialogBounds.width / 2 - innerWidth / 2) < 1 &&
+        Math.abs(dialogBounds.top + dialogBounds.height / 2 - innerHeight / 2) < 1,
+      'enable confirmation is not centered'
+    )
+    const confirmStyle = getComputedStyle(command('启用并进入', dialog()))
+    expect(
+      confirmStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' &&
+        contrast(confirmStyle.color, confirmStyle.backgroundColor) >= 4.5,
+      'enable action has no readable primary treatment'
+    )
+    command('取消', dialog()).click()
+    await settle()
+    expect(
+      !dialog().open && selected === 'adjust' && enableCount() === before,
+      'cancel confirmation changes workspace or plugin'
+    )
+    entry().click()
+    await settle()
+    window.failWorkshopEnable = true
+    command('启用并进入', dialog()).click()
+    await until(() => dialog().querySelector('[role="alert"]'), 'enable error not shown')
+    expect(
+      dialog().open &&
+        selected === 'adjust' &&
+        dialog().textContent.includes('workshop enable failed'),
+      'enable failure enters workshop'
+    )
+    window.failWorkshopEnable = false
+    window.workshopNotReady = true
+    command('启用并进入', dialog()).click()
+    await until(
+      () => dialog().textContent.includes('插件未就绪'),
+      'unregistered plugin treated as ready'
+    )
+    expect(selected === 'adjust', 'unregistered plugin opens editor')
+    window.workshopNotReady = false
+    window.holdWorkshopEnable = true
+    command('启用并进入', dialog()).click()
+    await until(() => window.releaseWorkshopEnable, 'enable request did not start')
+    const pendingCount = enableCount()
+    expect(
+      entry().disabled && command('取消', dialog()).disabled && dialog().open,
+      'pending enable allows navigation or cancellation'
+    )
+    const cancel = new Event('cancel', { cancelable: true })
+    dialog().dispatchEvent(cancel)
+    expect(cancel.defaultPrevented, 'Escape dismisses in-flight activation')
+    command('正在启用…', dialog()).click()
+    expect(enableCount() === pendingCount, 'activation duplicated')
+    window.releaseWorkshopEnable()
+    await until(
+      () => document.querySelector('.fixture-ThemeWorkshopPage') && !entry().disabled,
+      'confirmed activation did not enter workshop'
+    )
+    expect(
+      !dialog().open &&
+        current() === 'appearance-workshop-tab' &&
+        document.querySelectorAll('.appearance-workspace-pages [aria-current="page"]').length === 1,
+      'workshop tab selection is ambiguous'
+    )
+    window.allowLeave.ThemeWorkshopPage = false
+    document.querySelector('#appearance-customize-tab').click()
+    await settle()
+    expect(selected === 'workshop', 'customization tab discards workshop draft')
+    window.allowLeave.ThemeWorkshopPage = true
+    await customizePage()
+    expect(
+      selected === 'adjust' && current() === 'appearance-customize-tab',
+      'customization tab cannot return from workshop'
+    )
+    const enabledCount = enableCount()
+    entry().click()
+    await until(
+      () => document.querySelector('.fixture-ThemeWorkshopPage') && !entry().disabled,
+      'enabled workshop did not enter directly'
+    )
+    expect(!dialog().open && enableCount() === enabledCount, 'enabled plugin asks again')
+    await choosePage()
+    expect(current() === 'appearance-selection-tab', 'selection not restored')
+    app.unmount()
+    contributions.value = []
+    mount({ navigationTarget: { revision: 0, appearanceTab: 'workshop' } })
+    await until(() => dialog()?.open, 'direct workshop target bypasses enable confirmation')
+    expect(!document.querySelector('.fixture-ThemeWorkshopPage'), 'disabled editor mounted')
+    command('取消', dialog()).click()
+    await settle()
+    await customizePage()
+    expect(selected === 'adjust', 'cancelled direct target blocks ordinary customization')
+  } finally {
+    window.releaseWorkshopEnable?.()
+    window.releaseWorkshopEnable = undefined
+    window.holdWorkshopEnable = false
+    window.failWorkshopEnable = false
+    window.workshopNotReady = false
+    window.allowLeave = {}
+    app.unmount()
+    contributions.value = initialContributions
+    storeThemeStudioRecovery(null)
+  }
 }
 
 window.managementFixture = async () => {
@@ -766,7 +910,7 @@ window.checkResponsiveCreation = async (mode, layered, tone) => {
           ? 'ThemeStudioPage'
           : mode === 'workshop'
             ? 'ThemeWorkshopPage'
-            : 'AppearanceSettingsSection')
+            : 'AppearanceWorkspaceSection')
   await until(
     () =>
       document.querySelector(child) &&
@@ -803,7 +947,11 @@ window.checkResponsiveCreation = async (mode, layered, tone) => {
           bounds: rect(page)
         })
     )
-    for (const id of ['appearance-selection-tab', 'appearance-customize-tab']) {
+    for (const id of [
+      'appearance-selection-tab',
+      'appearance-customize-tab',
+      'appearance-workshop-tab'
+    ]) {
       const button = document.getElementById(id),
         bounds = rect(button)
       expect(

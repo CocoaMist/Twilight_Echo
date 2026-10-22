@@ -1,5 +1,14 @@
 export class NativeQueueRevisionFence {
   private revision = 0
+  private mutationTail: Promise<unknown> = Promise.resolve()
+
+  /** Queue commits, mode changes and explicit native starts share one lane.
+   * A background resync must not supersede prepareAndLoad before play starts. */
+  serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutationTail.then(operation)
+    this.mutationTail = result.catch(() => {})
+    return result
+  }
 
   next(): number {
     this.revision += 1

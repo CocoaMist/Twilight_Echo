@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useMusicStore } from '@renderer/stores/useMusicStore'
 import {
   getMostListenedTracks,
@@ -12,6 +12,8 @@ import {
 } from '@renderer/stores/useListeningStatsStore'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
 import { createUnifiedRecentTrackResolver } from '@renderer/utils/unifiedRecentTracks'
+import { getMusicVersions, musicVersionRevision } from '@renderer/stores/musicVersions.ts'
+import { readLibraryRecentHistory } from '@renderer/stores/library/libraryRecentHistory.ts'
 import CoverImg from '@renderer/components/CoverImg.vue'
 import ListeningRhythm from '@renderer/components/listening-analytics/ListeningRhythm.vue'
 import ListeningRankings from '@renderer/components/listening-analytics/ListeningRankings.vue'
@@ -33,8 +35,11 @@ const emit = defineEmits<{
 
 const { tracks: libraryTracks, artists: libraryArtists } = useMusicStore()
 const { listeningStats, persistenceStatus, clearListeningStats } = useListeningStatsStore()
-const { currentTrack, playTrack } = usePlayerStore()
+const { currentTrack, playTrack, playLibraryQuery } = usePlayerStore()
 const now = ref(new Date())
+const storageMode = shallowRef<'json' | 'sqlite' | null>(null)
+const resolvedRankingTracks = shallowRef(new Map<string, Track>())
+const databaseArtistNames = shallowRef(new Set<string>())
 const sort = ref<'seconds' | 'plays'>('seconds')
 const showFormatTable = ref(false)
 const analyticsView = ref<'overview' | 'rankings' | 'formats'>('overview')
@@ -54,6 +59,9 @@ onMounted(() => {
   document.addEventListener('visibilitychange', refreshDay)
 })
 onBeforeUnmount(() => {
+  rankingsDisposed = true
+  rankingRequest++
+  stopLibraryChanged?.()
   clearInterval(dayTimer)
   document.removeEventListener('visibilitychange', refreshDay)
 })
@@ -73,7 +81,7 @@ const resolveTrack = computed(() => createUnifiedRecentTrackResolver(libraryTrac
 const favorite = computed(() => {
   const stat = mostListened.value[0]
   if (!stat) return null
-  const track = resolveTrack.value(stat)
+  const track = resolvedRankingTracks.value.get(stat.id) ?? null
   return {
     ...stat,
     resolvedTrack: track,
@@ -81,19 +89,34 @@ const favorite = computed(() => {
     coverSource: track?.coverSource ?? stat.coverSource
   }
 })
-const rankedTracks = computed(() =>
-  (sort.value === 'seconds' ? mostListened.value : getTopTracks(10)).map((stat) => {
-    const track = resolveTrack.value(stat)
-    return {
+const rankedTracks = computed(() => {
+  const seen = new Set<string>()
+  const rows = sort.value === 'seconds' ? mostListened.value : getTopTracks(10)
+  const result: Array<
+    ReturnType<typeof getMostListenedTracks>[number] & { resolvedTrack: Track | null }
+  > = []
+  for (const stat of rows) {
+    const track = resolvedRankingTracks.value.get(stat.id) ?? null
+    if (track) {
+      const identity = `${track.source ?? 'local'}:${track.id}`
+      if (seen.has(identity)) continue
+      seen.add(identity)
+    }
+    result.push({
       ...stat,
       resolvedTrack: track,
       cover: track?.cover ?? stat.cover,
       coverSource: track?.coverSource ?? stat.coverSource
-    }
-  })
-)
+    })
+  }
+  return result
+})
 const rankedArtists = computed(() => getTopArtists(10))
-const localArtistNames = computed(() => new Set(libraryArtists.value.map((artist) => artist.name)))
+const localArtistNames = computed(() =>
+  storageMode.value === 'json'
+    ? new Set(libraryArtists.value.map((artist) => artist.name))
+    : databaseArtistNames.value
+)
 const artistProviders = computed(() => {
   const providers = new Map<string, string>()
   for (const id in listeningStats.value.tracks) {
@@ -119,10 +142,19 @@ const playableRanking = computed(() => {
 })
 
 function playDashboardTrack(track: Track): void {
-  const sourceIndex =
-    track.source && track.source !== 'local'
-      ? -1
-      : libraryTracks.value.findIndex((item) => item.id === track.id)
+  if (track.source && track.source !== 'local') {
+    playTrack(track, [track])
+    return
+  }
+  if (storageMode.value === 'sqlite') {
+    void playLibraryQuery({ sort: 'playlist' }, track.id)
+    return
+  }
+  if (storageMode.value !== 'json') {
+    playTrack(track, [track])
+    return
+  }
+  const sourceIndex = libraryTracks.value.findIndex((item) => item.id === track.id)
   if (sourceIndex < 0) {
     playTrack(track, [track])
     return
@@ -161,6 +193,109 @@ async function clearStats(range: ListeningStatsClearRange): Promise<void> {
     clearingStats.value = false
   }
 }
+
+let rankingRequest = 0
+let rankingActive = false
+let rankingPending = false
+let rankingsDisposed = false
+let stopLibraryChanged: (() => void) | undefined
+
+function requestRankings(): void {
+  if (rankingsDisposed) return
+  rankingRequest++
+  rankingPending = true
+  if (rankingActive) return
+  rankingActive = true
+  void (async () => {
+    try {
+      while (rankingPending && !rankingsDisposed) {
+        rankingPending = false
+        const request = rankingRequest
+        const stats: ReturnType<typeof getMostListenedTracks> = [
+          ...getMostListenedTracks(100),
+          ...getTopTracks(100)
+        ].filter((stat, index, all) => all.findIndex((item) => item.id === stat.id) === index)
+        try {
+          const mode = await window.api.library.getStorageMode()
+          if (mode !== 'json' && mode !== 'sqlite') throw new Error('曲库存储模式无效')
+          const tracks = new Map<string, Track>()
+          const localArtists = new Set<string>()
+          if (mode === 'json') {
+            const resolve = resolveTrack.value
+            for (const stat of stats) {
+              const track = resolve(stat)
+              if (track) tracks.set(stat.id, track)
+            }
+            for (const artist of libraryArtists.value) localArtists.add(artist.name)
+          } else {
+            const api = window.api.library.database
+            const revision = (await api.getTracksByIds([])).revision
+            const result = await readLibraryRecentHistory(
+              stats,
+              revision,
+              {
+                getPreferences: () => ({
+                  revision: musicVersionRevision.value,
+                  versions: getMusicVersions().tracks.versions
+                }),
+                api: {
+                  lookupPlaylistTracks: (input, expectedRevision) =>
+                    api.lookupPlaylistTracks(input, expectedRevision),
+                  getTracksByIds: (ids, expectedRevision) =>
+                    api.getTracksByIds(ids, expectedRevision)
+                }
+              },
+              () => {
+                if (rankingsDisposed) throw new DOMException('Analytics page closed', 'AbortError')
+              }
+            )
+            for (const [id, track] of result.resolved) if (track) tracks.set(id, track)
+            for (const artist of getTopArtists(10)) {
+              const page = await api.queryTracks({
+                artist: artist.name,
+                limit: 1,
+                contentRevision: revision
+              })
+              if (page.revision !== revision) throw new Error('曲库在读取艺人排行期间发生变化')
+              if (page.total > 0) localArtists.add(artist.name)
+            }
+            if ((await api.getTracksByIds([])).revision !== revision)
+              throw new Error('曲库在读取听歌排行期间发生变化')
+          }
+          if (request !== rankingRequest || rankingsDisposed) continue
+          storageMode.value = mode
+          resolvedRankingTracks.value = tracks
+          databaseArtistNames.value = localArtists
+        } catch (error) {
+          if (request === rankingRequest && !rankingsDisposed) {
+            storageMode.value = null
+            resolvedRankingTracks.value = new Map(
+              stats.flatMap((stat) =>
+                stat.track && (!stat.track.source || stat.track.source !== 'local')
+                  ? [[stat.id, stat.track] as const]
+                  : []
+              )
+            )
+            databaseArtistNames.value = new Set()
+            console.warn('[listening-analytics] ranking refresh failed', error)
+          }
+        }
+      }
+    } finally {
+      rankingActive = false
+      if (rankingPending && !rankingsDisposed) requestRankings()
+    }
+  })()
+}
+
+watch([listeningStats, musicVersionRevision], requestRankings)
+watch([libraryTracks, libraryArtists], () => {
+  if (storageMode.value === 'json') requestRankings()
+})
+onMounted(() => {
+  requestRankings()
+  stopLibraryChanged = window.api.library.onChanged(() => requestRankings())
+})
 </script>
 
 <template>

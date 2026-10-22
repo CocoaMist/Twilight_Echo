@@ -186,6 +186,9 @@ export interface OutputDiagnostics {
   liveRenderedFrames?: number
   liveRenderCallbackCount?: number
   sessionUnderrunCount: number
+  asioHelperCallbackCount?: number
+  asioHelperUnderrunCount?: number
+  asioHelperBufferDropCount?: number
   sessionBufferDropCount: number
   sessionRecoveryCount: number
   lifetimeUnderrunCount: number
@@ -252,6 +255,10 @@ export interface AudioOutputState {
 
 export interface AudioEngineQueueItem {
   id: string
+  /** Occurrence identity participates in the host's queue token, even for identical media. */
+  queueEntryId?: string
+  /** Logical cycle boundary, independent of a bounded native window. */
+  logicalQueueEnd?: boolean
   source: string
   title?: string
   artist?: string
@@ -272,6 +279,18 @@ export interface AudioEngineQueueItem {
   r128TrackGainDb?: number
   r128AlbumGainDb?: number
   cueRange?: CueRange
+}
+
+/**
+ * Native queue control-plane state for hot append/source-refresh consumers.
+ * Indices are absolute for the lifetime of the loaded queue and never shift.
+ */
+export interface AudioEngineQueueState {
+  revision: number
+  size: number
+  currentIndex: number
+  upcomingIndex: number
+  playMode: PlayMode
 }
 
 export interface AudioEnginePlayResult {
@@ -455,6 +474,14 @@ export interface PlaybackOutputInfoMirror extends Pick<
   capabilityReason?: OutputInfo['capabilityReason']
 }
 
+export interface NativeNaturalPlaybackBoundaries {
+  trackSerial: number
+  queueSerial: number
+  /** UTC epoch milliseconds at the native clock's natural-boundary decision. */
+  trackTimeMs: number
+  queueTimeMs: number
+}
+
 export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   state: 'stopped' | 'playing' | 'paused'
   position: number
@@ -465,6 +492,12 @@ export interface PlaybackInfo extends PlaybackOutputInfoMirror {
   requestedConfigRevision: number
   appliedConfigRevision: number
   queueIndex: number
+  /** Monotonic native queue content revision (hot append/source updates). */
+  queueRevision?: number
+  /** Monotonic natural EOF/promotion counts; explicit transport never increments them. */
+  naturalBoundaries?: NativeNaturalPlaybackBoundaries
+  /** Absolute native index of the preloaded/upcoming item, or -1. */
+  upcomingQueueIndex?: number
   /** Main-issued content version for mapping partial native queues to logical entries. */
   queueToken?: string
   playMode: PlayMode

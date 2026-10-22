@@ -35,6 +35,9 @@ import type { EqualizerBand, EqualizerFilterType } from '@renderer/types/setting
 
 type HeadphoneCurveKey = 'source' | 'target' | 'individual' | 'combined' | 'corrected'
 const props = defineProps<{
+  hostDocument?: Document
+  dockedInspector?: boolean
+  fixedBandCount?: boolean
   bands: EqualizerBand[]
   selectedIndex: number
   selectedIndices?: number[]
@@ -140,7 +143,7 @@ const geometry = shallowRef({
 const compact = ref(false)
 const spectrumGradientId = `eq-spectrum-${useId()}`
 const spectrum = useEqSpectrum({
-  document: () => workspaceRef.value?.ownerDocument ?? document,
+  document: () => props.hostDocument ?? document,
   levels: () => props.spectrumLevels,
   visible: () => props.spectrumVisible && props.responseView === 'dsp',
   frozen: () => props.spectrumFrozen === true
@@ -186,7 +189,7 @@ const selectedSet = computed(() => new Set(selectedIndices.value))
 const activeBandCount = computed(() => props.bands.filter((band) => band.enabled !== false).length)
 const showInspector = computed(
   () =>
-    inspectorOpen.value &&
+    (props.dockedInspector || inspectorOpen.value) &&
     selectedBand.value &&
     props.responseView === 'dsp' &&
     !boxDrag.value?.moved
@@ -292,6 +295,7 @@ function isInspectorControl(event: Event): boolean {
   )
 }
 function beginInspectorDrag(event: PointerEvent): void {
+  if (props.dockedInspector) return
   if (event.button !== 0 || compact.value || inspectorDrag.value || isInspectorControl(event))
     return
   event.preventDefault()
@@ -456,6 +460,7 @@ function resetSelectedGain(): void {
   emit('commit')
 }
 function addBand(event: MouseEvent): void {
+  if (props.fixedBandCount) return
   if (props.responseView !== 'dsp' || drag.value || props.bands.length >= PARAMETRIC_EQ_MAX_BANDS)
     return
   const surface = surfaceRef.value
@@ -720,13 +725,19 @@ defineExpose({ finishInteraction })
   <section
     ref="workspaceRef"
     class="parametric-workspace"
-    data-te-material="content"
-    :class="{ compact }"
+    :class="{ compact, 'docked-inspector': dockedInspector, 'without-inspector': !showInspector }"
     aria-label="参数均衡器"
     data-te-parametric-eq-workspace
+    :data-te-material="dockedInspector ? 'content' : undefined"
   >
     <header class="parametric-stage-header">
-      <h3 class="stage-title">参数均衡器</h3>
+      <div class="stage-brand">
+        <span class="brand-symbol" aria-hidden="true">∿</span>
+        <div>
+          <strong>Twilight <em>EQ</em></strong
+          ><small>PARAMETRIC EQUALIZER</small>
+        </div>
+      </div>
       <div class="stage-commands"><slot name="commands"></slot></div>
     </header>
     <div class="parametric-graph-frame" :class="{ bypassed: !eqEnabled }">
@@ -745,7 +756,7 @@ defineExpose({ finishInteraction })
           <button
             type="button"
             title="粘贴频段（Ctrl/⌘+V）"
-            :disabled="clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
+            :disabled="fixedBandCount || clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
             @click="emit('paste')"
           >
             粘贴
@@ -1052,12 +1063,17 @@ defineExpose({ finishInteraction })
       v-if="showInspector && selectedBand"
       ref="inspectorHost"
       class="floating-band-inspector"
-      :class="{ moving: inspectorDrag, movable: !compact }"
-      :style="{ ...inspectorPosition, '--band-color': bandColor(selectedIndex) }"
-      :tabindex="compact ? undefined : 0"
+      :class="{ moving: inspectorDrag, movable: !compact && !dockedInspector }"
+      :style="{
+        ...(dockedInspector ? {} : inspectorPosition),
+        '--band-color': bandColor(selectedIndex)
+      }"
+      :tabindex="compact || dockedInspector ? undefined : 0"
       role="group"
       aria-label="频段面板"
-      :aria-description="compact ? undefined : '拖动空白区域移动，双击复位，方向键微调'"
+      :aria-description="
+        compact || dockedInspector ? undefined : '拖动空白区域移动，双击复位，方向键微调'
+      "
       @pointerdown="beginInspectorDrag"
       @pointermove="moveInspector"
       @pointerup="endInspectorDrag"
@@ -1074,7 +1090,8 @@ defineExpose({ finishInteraction })
         :selection-count="selectedIndices.length"
         :selection-enabled="selectedIndices.some((index) => bands[index].enabled !== false)"
         :filter-types="filterTypes"
-        :movable="!compact"
+        :movable="!compact && !dockedInspector"
+        :can-delete="!fixedBandCount"
         @preview="previewBand"
         @commit="emit('commit')"
         @toggle="emit('toggle', $event)"
@@ -1133,7 +1150,7 @@ defineExpose({ finishInteraction })
       </button>
       <button
         type="button"
-        :disabled="clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
+        :disabled="fixedBandCount || clipboardBusy || bands.length >= PARAMETRIC_EQ_MAX_BANDS"
         @click="emit('paste')"
       >
         粘贴频段
@@ -1167,7 +1184,9 @@ defineExpose({ finishInteraction })
               : '启用所选频段'
           }}
         </button>
-        <button type="button" @click="emit('delete', selectedIndex)">删除所选频段</button>
+        <button type="button" :disabled="fixedBandCount" @click="emit('delete', selectedIndex)">
+          删除所选频段
+        </button>
       </template>
     </NativeContextMenu>
   </section>
@@ -1175,24 +1194,27 @@ defineExpose({ finishInteraction })
 
 <style scoped>
 .parametric-workspace {
-  --eq-surface: var(--te-app-bg);
-  --eq-panel: var(--te-settings-search-bg);
-  --eq-panel-raised: var(--te-settings-control-bg);
-  --eq-text: var(--te-settings-text);
-  --eq-text-muted: var(--te-settings-text-muted);
-  --eq-text-subtle: var(--te-settings-text-muted);
-  --eq-border: var(--te-settings-control-border);
-  --eq-border-soft: var(--te-settings-control-border);
+  --eq-surface: #f4f3f0;
+  --eq-surface-end: #eae8ee;
+  --eq-panel: #e9e8e6;
+  --eq-panel-raised: #fdfcfa;
+  --eq-text: #29282e;
+  --eq-text-muted: color-mix(in srgb, var(--eq-text) 74%, transparent);
+  --eq-text-subtle: color-mix(in srgb, var(--eq-text) 68%, transparent);
+  --eq-border: color-mix(in srgb, var(--eq-text) 20%, transparent);
+  --eq-border-soft: color-mix(in srgb, var(--eq-text) 10%, transparent);
   --eq-grid: color-mix(in srgb, var(--eq-text) 5%, transparent);
   --eq-grid-major: color-mix(in srgb, var(--eq-text) 9%, transparent);
   --eq-zero-axis: color-mix(in srgb, var(--eq-text) 24%, transparent);
   --eq-response: #927000;
   --eq-spectrum: #636572;
-  --eq-control-bg: var(--te-control-bg-hover);
-  --eq-shadow: transparent;
+  --eq-control-bg: color-mix(in srgb, var(--eq-text) 6%, transparent);
+  --eq-shadow: rgba(35, 27, 43, 0.2);
   --eq-highlight: #ffffff;
-  --eq-knob-track: var(--te-settings-control-border);
-  --eq-knob-edge: var(--te-settings-control-border);
+  --eq-knob-light: var(--eq-panel-raised);
+  --eq-knob-dark: #d4d3d6;
+  --eq-knob-track: color-mix(in srgb, var(--eq-text) 22%, transparent);
+  --eq-knob-edge: color-mix(in srgb, var(--eq-text) 32%, transparent);
   --eq-meter: #419b66;
   --eq-source: var(--te-info-500);
   --eq-target: var(--eq-text-subtle);
@@ -1206,11 +1228,11 @@ defineExpose({ finishInteraction })
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  border: 0;
-  border-radius: 0;
+  border: 1px solid var(--eq-border);
+  border-radius: 14px;
   color: var(--eq-text);
-  background: var(--te-material-background, transparent);
-  box-shadow: none;
+  background: var(--eq-surface);
+  box-shadow: 0 10px 34px var(--eq-shadow);
   container: eq-workspace / inline-size;
   isolation: isolate;
 }
@@ -1220,18 +1242,39 @@ defineExpose({ finishInteraction })
   gap: 24px;
   min-height: 54px;
   flex-shrink: 0;
-  padding: 0;
-  border-radius: 0;
+  padding: 0 18px;
+  border-radius: 14px 14px 0 0;
   border-bottom: 1px solid var(--eq-border-soft);
-  background: transparent;
+  background: linear-gradient(180deg, var(--eq-panel-raised), var(--eq-surface));
   z-index: 40;
 }
-.stage-title {
-  margin: 0;
+.stage-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
-  color: var(--eq-text);
-  font-size: var(--te-type-body);
-  font-weight: var(--te-type-weight-strong);
+}
+.brand-symbol {
+  font-size: calc(var(--te-font-size-body, 14px) * 32 / 14);
+  font-weight: 300;
+  color: var(--eq-response);
+}
+.stage-brand strong {
+  font-size: calc(var(--te-font-size-body, 14px) * 18 / 14);
+  font-weight: 550;
+  letter-spacing: -0.04em;
+}
+.stage-brand em {
+  color: var(--eq-response);
+  font-style: normal;
+  font-weight: 650;
+}
+.stage-brand small {
+  display: block;
+  margin-top: 2px;
+  font-size: calc(var(--te-font-size-body, 14px) * 7 / 14);
+  letter-spacing: 0.16em;
+  color: var(--eq-text-subtle);
 }
 .stage-commands {
   display: flex;
@@ -1248,7 +1291,8 @@ defineExpose({ finishInteraction })
   min-height: 300px;
   padding: 38px 94px 60px 28px;
   overflow: hidden;
-  background: transparent;
+  background:
+    radial-gradient(ellipse at 50% 85%, var(--eq-surface-end), transparent 80%), var(--eq-surface);
 }
 .graph-heading {
   position: absolute;
@@ -1257,7 +1301,7 @@ defineExpose({ finishInteraction })
   align-items: center;
   gap: 12px;
   color: var(--eq-text-subtle);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
@@ -1285,7 +1329,7 @@ defineExpose({ finishInteraction })
   cursor: default;
 }
 .band-clipboard-actions button:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--eq-response);
   outline-offset: 2px;
 }
 .graph-range select {
@@ -1299,7 +1343,7 @@ defineExpose({ finishInteraction })
   cursor: pointer;
 }
 .graph-range select:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--eq-response);
   outline-offset: 2px;
 }
 .parametric-band-handle.outside-range {
@@ -1319,7 +1363,7 @@ defineExpose({ finishInteraction })
   z-index: 12;
 }
 .parametric-graph-surface:focus-visible {
-  outline: 1px solid var(--te-control-focus-color);
+  outline: 1px solid var(--eq-response);
   outline-offset: 4px;
 }
 .parametric-graph-surface.selecting {
@@ -1359,7 +1403,7 @@ defineExpose({ finishInteraction })
 .frequency-labels span {
   position: absolute;
   font-family: var(--eq-mono);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   font-variant-numeric: tabular-nums;
   color: var(--eq-text-subtle);
   pointer-events: none;
@@ -1496,16 +1540,17 @@ defineExpose({ finishInteraction })
   content: '';
   position: absolute;
   inset: 8px;
-  border: 1.5px solid var(--band-color);
+  border: 1.5px solid color-mix(in srgb, var(--band-color) 30%, var(--eq-highlight));
   border-radius: 50%;
   background: var(--band-color);
-  box-shadow: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--band-color) 12%, transparent);
 }
 .parametric-band-handle.selected::before,
 .parametric-band-handle.hovered::before {
   inset: 6px;
-  outline: 1px solid var(--band-color);
-  outline-offset: 3px;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--band-color) 22%, transparent),
+    0 0 12px color-mix(in srgb, var(--band-color) 36%, transparent);
 }
 .parametric-band-handle.selected::before {
   background: color-mix(in srgb, var(--band-color) 62%, var(--eq-surface));
@@ -1519,7 +1564,7 @@ defineExpose({ finishInteraction })
   position: relative;
   color: var(--eq-highlight);
   font-family: var(--eq-mono);
-  font-size: 8px;
+  font-size: calc(var(--te-font-size-body, 14px) * 8 / 14);
   opacity: 0;
 }
 .selected .handle-index,
@@ -1530,7 +1575,7 @@ defineExpose({ finishInteraction })
   cursor: grabbing;
 }
 .parametric-band-handle:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--band-color);
   outline-offset: 2px;
 }
 .band-tooltip {
@@ -1541,14 +1586,14 @@ defineExpose({ finishInteraction })
   border: 1px solid var(--eq-border);
   border-radius: 8px;
   background: var(--eq-panel-raised);
-  box-shadow: none;
+  box-shadow: 0 4px 16px var(--eq-shadow);
   pointer-events: none;
 }
 .band-tooltip strong {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   font-weight: 550;
 }
 .band-tooltip strong i {
@@ -1560,7 +1605,7 @@ defineExpose({ finishInteraction })
 .band-tooltip small {
   margin-left: auto;
   color: var(--eq-text-subtle);
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   font-weight: 400;
 }
 .band-tooltip div {
@@ -1570,7 +1615,7 @@ defineExpose({ finishInteraction })
   gap: 8px;
   font-family: var(--eq-mono);
   color: var(--eq-text-muted);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
 }
 .graph-crosshair {
   position: absolute;
@@ -1595,11 +1640,11 @@ defineExpose({ finishInteraction })
 }
 .graph-empty strong {
   font-weight: 450;
-  font-size: 17px;
+  font-size: calc(var(--te-font-size-body, 14px) * 17 / 14);
   color: var(--eq-text-muted);
 }
 .graph-empty span {
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   color: var(--eq-text-subtle);
 }
 .floating-band-inspector {
@@ -1615,9 +1660,9 @@ defineExpose({ finishInteraction })
   cursor: grabbing;
 }
 .floating-band-inspector:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--eq-response);
   outline-offset: 2px;
-  border-radius: 8px;
+  border-radius: 14px;
 }
 .output-meter {
   position: absolute;
@@ -1632,7 +1677,7 @@ defineExpose({ finishInteraction })
 .meter-scale {
   position: relative;
   font-family: var(--eq-mono);
-  font-size: 8px;
+  font-size: calc(var(--te-font-size-body, 14px) * 8 / 14);
   color: var(--eq-text-subtle);
 }
 .meter-scale span {
@@ -1668,7 +1713,7 @@ defineExpose({ finishInteraction })
   gap: 4px;
   color: var(--eq-text-subtle);
   font-family: var(--eq-mono);
-  font-size: 8px;
+  font-size: calc(var(--te-font-size-body, 14px) * 8 / 14);
 }
 .graph-hint {
   position: absolute;
@@ -1678,7 +1723,7 @@ defineExpose({ finishInteraction })
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   color: var(--eq-text-subtle);
   pointer-events: none;
 }
@@ -1700,7 +1745,7 @@ defineExpose({ finishInteraction })
   border-radius: 5px;
   background: var(--eq-panel-raised);
   color: var(--eq-text-muted);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   cursor: pointer;
 }
 .curve-control i {
@@ -1734,8 +1779,8 @@ defineExpose({ finishInteraction })
   flex-shrink: 0;
   padding: 0 14px;
   border-top: 1px solid var(--eq-border-soft);
-  border-radius: 0;
-  background: transparent;
+  border-radius: 0 0 14px 14px;
+  background: var(--eq-panel);
   z-index: 40;
 }
 .spectrum-toggle {
@@ -1748,12 +1793,12 @@ defineExpose({ finishInteraction })
   background: transparent;
   color: var(--eq-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
   cursor: pointer;
 }
 .spectrum-toggle small {
   color: var(--eq-text-subtle);
-  font-size: 9px;
+  font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
 }
 .spectrum-toggle.active i,
 .spectrum-toggle.active small {
@@ -1765,7 +1810,7 @@ defineExpose({ finishInteraction })
   gap: 6px;
   margin-left: auto;
   color: var(--eq-text-subtle);
-  font-size: 10px;
+  font-size: calc(var(--te-font-size-body, 14px) * 10 / 14);
   white-space: nowrap;
 }
 .status-dot {
@@ -1784,34 +1829,52 @@ defineExpose({ finishInteraction })
 .eq-apply-error {
   padding: 8px 14px;
   color: var(--te-danger-soft-fg);
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
 }
 .clipboard-feedback {
   padding: 6px 14px;
   color: var(--eq-text-muted);
-  font-size: 11px;
+  font-size: calc(var(--te-font-size-body, 14px) * 11 / 14);
 }
 .clipboard-feedback.failed {
   color: var(--te-danger-soft-fg);
 }
 .spectrum-toggle:focus-visible,
 .curve-control:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--eq-response);
   outline-offset: 3px;
 }
 :global(html[data-theme='dark'] .parametric-workspace) {
+  --eq-surface: #19181d;
+  --eq-surface-end: #34303a;
+  --eq-panel: #211f26;
+  --eq-panel-raised: #35323c;
+  --eq-text: #eeeaf2;
+  --eq-text-muted: color-mix(in srgb, var(--eq-text) 76%, transparent);
+  --eq-text-subtle: color-mix(in srgb, var(--eq-text) 62%, transparent);
   --eq-grid: color-mix(in srgb, var(--eq-text) 3%, transparent);
   --eq-grid-major: color-mix(in srgb, var(--eq-text) 6%, transparent);
   --eq-response: #f2d34f;
   --eq-spectrum: #d4ccd9;
+  --eq-shadow: rgba(0, 0, 0, 0.38);
+  --eq-highlight: #f9f5ff;
+  --eq-knob-light: #44414b;
+  --eq-knob-dark: #25242b;
+  --eq-knob-edge: color-mix(in srgb, var(--eq-text) 30%, transparent);
   --eq-meter: #9bc445;
   --eq-color-scheme: dark;
 }
 .compact .parametric-stage-header {
   gap: 12px;
-  padding-inline: 0;
+  padding-inline: 12px;
   flex-wrap: wrap;
   padding-block: 10px;
+}
+.compact .stage-brand strong {
+  font-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
+}
+.compact .stage-brand small {
+  display: none;
 }
 .compact .stage-commands {
   gap: 8px;
@@ -1841,8 +1904,8 @@ defineExpose({ finishInteraction })
   display: none;
 }
 @container eq-workspace (max-width: 520px) {
-  .stage-title {
-    font-size: var(--te-type-caption);
+  .stage-brand {
+    display: none;
   }
   .parametric-graph-frame {
     padding-right: 52px;
@@ -1854,16 +1917,129 @@ defineExpose({ finishInteraction })
     display: none;
   }
   .stage-status {
-    font-size: 9px;
+    font-size: calc(var(--te-font-size-body, 14px) * 9 / 14);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  @scope (:root:not([data-te-motion='full'])) {
-    .parametric-workspace *,
-    .parametric-workspace *::before {
-      animation: none !important;
-      transition: none !important;
-    }
+  .parametric-workspace *,
+  .parametric-workspace *::before {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+</style>
+
+<style scoped>
+.parametric-workspace.docked-inspector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max(276px, 20em);
+  grid-template-rows: auto minmax(340px, 1fr) auto;
+  border-radius: 6px;
+  box-shadow: none;
+  background: var(--te-app-bg);
+  --eq-surface: var(--te-app-bg);
+  --eq-panel: var(--te-settings-control-bg, var(--te-card-bg));
+  --eq-panel-raised: var(--te-card-bg);
+  --eq-response: var(--te-primary-500);
+  --eq-text: var(--te-settings-text, var(--te-neutral-900));
+}
+.parametric-workspace.docked-inspector.compact {
+  grid-template-columns: minmax(0, 1fr);
+}
+.parametric-workspace.docked-inspector.without-inspector {
+  grid-template-columns: minmax(0, 1fr);
+}
+.docked-inspector .parametric-stage-header {
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  background: transparent;
+  border-radius: 0;
+}
+.docked-inspector .stage-brand {
+  display: none;
+}
+.docked-inspector .stage-commands {
+  flex: 1;
+}
+.docked-inspector .parametric-graph-frame {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 340px;
+  background: transparent;
+}
+.docked-inspector .floating-band-inspector {
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  grid-column: 2;
+  grid-row: 2;
+  width: auto;
+  max-width: none;
+  border-left: 1px solid var(--eq-border-soft);
+  z-index: 2;
+}
+.docked-inspector .floating-band-inspector :deep(.band-inspector) {
+  height: 100%;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 24px;
+  padding: 24px 18px;
+  background: transparent;
+}
+.docked-inspector :deep(.inspector-identity) {
+  width: 100%;
+  display: grid;
+  gap: 16px;
+}
+.docked-inspector :deep(.precision-controls) {
+  grid-template-columns: minmax(5.5em, 1fr) minmax(5.5em, 1fr) minmax(4em, 0.8fr);
+  width: 100%;
+  justify-content: center;
+}
+.docked-inspector :deep(.knob-caption),
+.docked-inspector :deep(.band-state),
+.docked-inspector :deep(.band-number) {
+  font-size: 0.82em;
+}
+.docked-inspector .analyzer-footer {
+  grid-column: 1 / -1;
+  background: transparent;
+  padding: 12px;
+  border-radius: 0;
+}
+.docked-inspector .eq-apply-error,
+.docked-inspector .clipboard-feedback {
+  grid-column: 1 / -1;
+}
+@container eq-workspace (max-width: 800px) {
+  .parametric-workspace.docked-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .docked-inspector .floating-band-inspector {
+    grid-column: 1;
+    grid-row: 3;
+    border-left: 0;
+    border-top: 1px solid var(--eq-border-soft);
+  }
+  .docked-inspector .floating-band-inspector :deep(.band-inspector) {
+    padding: 20px 30px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .docked-inspector :deep(.inspector-identity) {
+    width: auto;
+  }
+  .docked-inspector .analyzer-footer {
+    grid-row: 4;
   }
 }
 </style>

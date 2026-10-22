@@ -587,8 +587,10 @@ test('appearance resumes a clean studio with the latest active theme, preserving
       profiles: vue.ref([])
     }
     const modules = {
+      '../../../shared/themeWorkshop': await import('../../../shared/themeWorkshop.ts'),
       './appearanceParts': parts,
       './appearanceEditor': editor,
+      './appearanceSettingsTargets': await import('./appearanceSettingsTargets.ts'),
       '../../../shared/theme': theme,
       '../../../shared/appAppearance': appearance,
       '../stores/useThemeStore': { useThemeStore: () => themeStore },

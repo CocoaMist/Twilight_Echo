@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import {
+  normalizePlayerBarSettings,
+  type PlayerBarSettings as PlayerBarSettingsValue
+} from '../../../../shared/playerBar.ts'
 import { useSettingsStore } from '../../stores/useSettingsStore'
 import { PLAYER_BAR_MODES, type PlayerBarMode } from '../../../../shared/playerBar.ts'
 import {
@@ -13,20 +17,27 @@ import {
 } from '../../../../shared/playerBarLayout.ts'
 import { playerBarControlOptions, playerBarModeOptions, playerBarRegionOptions } from './types.ts'
 
+const props = defineProps<{ modelValue?: PlayerBarSettingsValue; busy?: boolean }>()
+const emit = defineEmits<{ 'update:modelValue': [value: PlayerBarSettingsValue] }>()
 const { settings, updateSettings } = useSettingsStore()
+const playerBar = computed(() => props.modelValue ?? settings.value.playerBar)
+function commitPlayerBar(value: PlayerBarSettingsValue): void {
+  if (props.busy) return
+  const normalized = normalizePlayerBarSettings(value)
+  if (props.modelValue !== undefined) emit('update:modelValue', normalized)
+  else void updateSettings({ playerBar: normalized }).catch(() => undefined)
+}
 
 /**
  * Which shape's arrangement is being edited. Starts on the global shape so the
  * panel opens on the arrangement the user is actually looking at, but it is a
  * local choice — editing one shape never switches the shape in use.
  */
-const editingShape = ref<PlayerBarMode>(settings.value.playerBar.mode)
+const editingShape = ref<PlayerBarMode>(playerBar.value.mode)
 
 const controlLabels = new Map(playerBarControlOptions.map((option) => [option.value, option]))
 
-const regions = computed(() =>
-  resolvePlayerBarRegions(settings.value.playerBar.layout, editingShape.value)
-)
+const regions = computed(() => resolvePlayerBarRegions(playerBar.value.layout, editingShape.value))
 
 const shapeIsDefault = computed(() => {
   const current = regions.value
@@ -52,11 +63,9 @@ function describe(id: PlayerBarControlId): { label: string; icon: string; hint?:
  * rather than reaching the bar and rendering something unusable.
  */
 function commit(next: PlayerBarRegions): void {
-  const layout = clonePlayerBarLayout(settings.value.playerBar.layout)
+  const layout = clonePlayerBarLayout(playerBar.value.layout)
   layout[editingShape.value] = next
-  void updateSettings({
-    playerBar: { ...settings.value.playerBar, layout: normalizePlayerBarLayout(layout) }
-  })
+  commitPlayerBar({ ...playerBar.value, layout: normalizePlayerBarLayout(layout) })
 }
 
 function currentRegions(): PlayerBarRegions {

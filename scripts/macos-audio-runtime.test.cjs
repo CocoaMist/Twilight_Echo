@@ -92,3 +92,20 @@ test('Node-API uses the native loader-relative rpath on macOS', () => {
   assert.match(cmake, /BUILD_RPATH "\$\{TAE_NAPI_RPATH\}"/)
   assert.match(cmake, /INSTALL_RPATH "\$\{TAE_NAPI_RPATH\}"/)
 })
+
+test('macOS packaging maps Electron architecture names to Clang and keeps downloads distinct', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', '.github', 'workflows', 'build-macos.yml'),
+    'utf8'
+  )
+  assert.match(workflow, /arch: x64\s+cmake_arch: x86_64\s+runner: macos-15-intel/)
+  assert.match(workflow, /arch: arm64\s+cmake_arch: arm64\s+runner: macos-15/)
+  assert.ok(workflow.includes('-DCMAKE_OSX_ARCHITECTURES="${{ matrix.cmake_arch }}"'))
+  assert.ok(workflow.includes('--mac --${{ matrix.arch }}'))
+  const builder = fs.readFileSync(path.join(__dirname, '..', 'electron-builder.yml'), 'utf8')
+  assert.match(
+    builder,
+    /notarize: false\s+artifactName: \$\{name\}-\$\{version\}-mac-\$\{arch\}\.\$\{ext\}/
+  )
+  assert.match(builder, /dmg:\s+artifactName: \$\{name\}-\$\{version\}-mac-\$\{arch\}\.\$\{ext\}/)
+})

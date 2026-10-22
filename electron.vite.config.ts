@@ -19,7 +19,8 @@ export default defineConfig(({ command }) => {
             pluginHost: resolve(__dirname, 'src/main/plugins/host.ts'),
             audioEngineService: resolve(__dirname, 'src/main/audioEngineService.ts'),
             audioAnalysisService: resolve(__dirname, 'src/main/audioAnalysisService.ts'),
-            libraryScanService: resolve(__dirname, 'src/main/library/libraryScanService.ts')
+            libraryScanService: resolve(__dirname, 'src/main/library/libraryScanService.ts'),
+            libraryDatabaseService: resolve(__dirname, 'src/main/library/libraryDatabaseService.ts')
           }
         }
       }

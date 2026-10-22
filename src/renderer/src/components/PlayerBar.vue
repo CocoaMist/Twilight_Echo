@@ -3,12 +3,10 @@ import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import PlaybackModeIcon from '@renderer/components/icons/PlaybackModeIcon.vue'
 import PlayerControlIcon from '@renderer/components/player-bar/PlayerControlIcon.vue'
 import { clampVolumePercent, createVolumeWheelStepper } from './player-bar/volumeWheel'
-import type { Track, QueuePlaybackOrigin } from '@renderer/types/music'
+import type { Track, TrackArtistRef } from '@renderer/types/music'
 import { ref, computed, onMounted, onBeforeUnmount, watch, type ComponentPublicInstance } from 'vue'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
-import { appearanceChromePreview } from '../composables/appearanceEditorState.ts'
-import { useResolvedMotionMode } from '../app/useResolvedMotionMode'
 import { useThemeStore } from '../stores/useThemeStore'
 import { useMusicStore } from '../stores/useMusicStore'
 import { usePlaybackBookmarks } from '../stores/playbackBookmarks'
@@ -24,6 +22,7 @@ import {
 } from '../utils/liquidGlassPointer.ts'
 import { useMediaProviders } from '../providers'
 import { normalizeAccentColor } from '../utils/colorExtractor'
+import SmoothedProgressFill from './SmoothedProgressFill.vue'
 import PlayerSeekProgress from './player-bar/PlayerSeekProgress.vue'
 import { HIFI_STATUS_COPY } from '../../../shared/audioProcessingOptions.ts'
 import { resolveReasonCode } from '../../../shared/audio/reasonCodes.ts'
@@ -31,24 +30,25 @@ import { useLocale } from '../app/useLocale.ts'
 import type { LyricLayerSourceSelection } from '../../../shared/lyricsManagement.ts'
 import CoverImg from './CoverImg.vue'
 import HiFiSidebar from './player-bar/HiFiSidebar.vue'
+import sequentialIcon from '../assets/icons/sequential-playback.svg'
 import { useFavoriteButton } from './player-bar/useFavoriteButton'
 import { useFloatingPanels } from './player-bar/useFloatingPanels'
 import { usePlaybarAutoHide } from './player-bar/usePlaybarAutoHide.ts'
-import type { PlayerBarMode } from '../../../shared/playerBar.ts'
+import { resolveSeekTargetSeconds, type PlayerBarMode } from '../../../shared/playerBar.ts'
 import {
   resolvePlayerBarRegions,
-  isDefaultStandardPlayerBar,
   PLAYER_BAR_REGION_NAMES,
   type PlayerBarRegionName
 } from '../../../shared/playerBarLayout.ts'
 import { useEscapeToClose } from '../app/useDismissLayer.ts'
-import { overlaySidebarsNeedExclusiveMode } from '../app/overlaySidebars'
+import { appearanceChromePreview } from '../composables/appearanceEditorState.ts'
+import type { AppearanceDraft } from '../../../shared/appAppearance.ts'
+import { usePlaybackQueueVirtualScroll } from './player-bar/usePlaybackQueueVirtualScroll'
 import { usePlaybackQueueDrawerActions } from './player-bar/usePlaybackQueueDrawerActions'
-import { createQueueHistoryReplay } from './player-bar/queueHistoryReplay.ts'
-import { getQueueSessionSources } from '../stores/player/queueSessionSources.ts'
 import { useQueueAddToPlaylist } from './player-bar/useQueueAddToPlaylist'
 import QueueAddToPlaylistDialog from './player-bar/QueueAddToPlaylistDialog.vue'
-import PlaybackQueueSidebar from './player-bar/PlaybackQueueSidebar.vue'
+import LibraryQueueDrawer from './player-bar/LibraryQueueDrawer.vue'
+import QueueSavePlaylistDialog from './player-bar/QueueSavePlaylistDialog.vue'
 import CompactPlayerBarVisualizer from './player-bar/CompactPlayerBarVisualizer.vue'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import { syncPluginProviders } from '../providers'
@@ -61,12 +61,9 @@ import type {
   VolumeNormalizationMode
 } from '../types/settings'
 
-import type { AppearanceDraft } from '../../../shared/appAppearance'
 const props = withDefaults(
   defineProps<{
     glass?: boolean
-    liquidMaterial?: boolean
-    leftNavigationOpen?: boolean
     /** @deprecated Navigation no longer controls player geometry. */
     menuOpen?: boolean
     preview?: boolean
@@ -121,6 +118,14 @@ const {
   sleepTimerNotice,
   queue,
   queueIndex,
+  libraryQueueActive,
+  libraryQueueSnapshot,
+  libraryQueueContentRevision,
+  libraryQueueBusy,
+  readLibraryQueuePage,
+  playLibraryQueueEntry,
+  editLibraryQueue,
+  refreshLibraryQueue,
   playMode,
   exclusiveMode,
   audioOutput,
@@ -162,7 +167,6 @@ const {
   queueUndoLabel,
   undoQueue,
   queueSessions,
-  queueWorkspace,
   toggleExclusiveMode,
   formatTime,
   setVolume,
@@ -248,6 +252,7 @@ const {
   removeFromPlaylist,
   createPlaylist,
   createPlaylistWithTracks,
+  createPlaylistWithTrackPages,
   isFavoriteTrack,
   addFavoriteTrack,
   removeFavoriteTrack
@@ -272,7 +277,6 @@ const previewPlayerSettings = computed(
     appearanceChromePreview.value?.playerBar ??
     settings.value.playerBar
 )
-const motionMode = useResolvedMotionMode(computed(() => settings.value.motionPreference))
 const { effectiveSurfaceMaterial, effectiveLiquidGlass } = useThemeStore()
 /* Only the standard bar wears the material. Mini and compact are deliberately
    flat control strips, so they opt out entirely rather than wearing it with the
@@ -297,30 +301,16 @@ const liquidGlassActive = computed(
  * stylesheet both address the bar through them, so only the contents move.
  */
 const barRegions = computed(() => {
-  const regions = resolvePlayerBarRegions(
-    previewPlayerSettings.value.layout,
-    props.mode,
-    props.glass
-  )
+  const regions = resolvePlayerBarRegions(previewPlayerSettings.value.layout, props.mode)
   return PLAYER_BAR_REGION_NAMES.map((name: PlayerBarRegionName) => ({
     name,
     className: `player-${name}`,
     // The left rail still remounts on track change — that remount is what fixed
     // stale covers — so its key carries the track identity, not just the region.
     key: name === 'left' ? `left:${playerLeftKey.value}` : name,
-    // Saved layouts may still contain these legacy tool IDs. Audio editing now
-    // belongs to the title-bar DSP workspace, outside every playback-bar shape.
-    items: regions[name].filter((control) => control !== 'hifi' && control !== 'equalizer')
+    items: regions[name]
   }))
 })
-const groupedStandardLayout = computed(
-  () =>
-    props.mode === 'standard' &&
-    isDefaultStandardPlayerBar(
-      resolvePlayerBarRegions(previewPlayerSettings.value.layout, props.mode)
-    )
-)
-const referenceStandardLayout = computed(() => props.glass && groupedStandardLayout.value)
 
 const lyricsManagement = useLyricsManagement()
 const desktopLyricsOn = ref(settings.value.desktopLyrics.enabled)
@@ -365,14 +355,22 @@ const emit = defineEmits<{
   openSettings: []
   openDsp: []
   openEqualizer: []
-  openArtist: []
-  openQueueSource: [origin: QueuePlaybackOrigin]
-  queueOpened: []
+  openArtist: [artist: TrackArtistRef]
 }>()
 
-function onArtistClick(): void {
-  if (props.preview || !currentTrack.value?.artist.trim()) return
-  emit('openArtist')
+const currentArtists = computed<TrackArtistRef[]>(() => {
+  const track = currentTrack.value
+  if (!track) return []
+  if (track.artists?.length) return track.artists
+  return track.artist
+    .split(/\s+\/\s+/)
+    .map((name) => ({ name: name.trim() }))
+    .filter((artist) => artist.name)
+})
+
+function onArtistClick(artist: TrackArtistRef): void {
+  if (props.preview || !artist.name.trim()) return
+  emit('openArtist', artist)
 }
 
 /**
@@ -413,6 +411,18 @@ function onTrackTitleClick(event: Event): void {
   emitOpenPlayingPage(event.currentTarget instanceof HTMLElement ? event.currentTarget : null)
 }
 
+/**
+ * The flat rails carry a 0..1 ratio so their width never has to match the
+ * timeline. Shared by mini's long middle rail and compact's top-edge hairline.
+ */
+function onFlatRailInput(event: Event): void {
+  if (isLiveStream.value) return
+  const target = event.target as HTMLInputElement
+  const seconds = resolveSeekTargetSeconds(Number(target.value), effectiveDuration.value)
+  if (seconds === null) return
+  seek(seconds)
+}
+
 const RATE_PRESETS = [0.75, 1, 1.25, 1.5, 2] as const
 
 const isLiveStream = computed(() => {
@@ -430,6 +440,10 @@ const isLiveStream = computed(() => {
   )
 })
 
+/** Real DOM width (not CSS custom-prop on ::-webkit-slider-runnable-track).
+ *  Chromium often skips repainting track pseudo-elements when only a custom
+ *  property changes, which freezes the playbar fill until a full re-style
+ *  (pause / open or close now-playing). */
 const effectiveDuration = computed(() => {
   if (Number.isFinite(duration.value) && duration.value > 0) return duration.value
   const trackDuration = currentTrack.value?.duration
@@ -437,6 +451,15 @@ const effectiveDuration = computed(() => {
     return trackDuration
   }
   return 0
+})
+
+const progressPercent = computed(() => {
+  if (isLiveStream.value) return 100
+  const total = effectiveDuration.value
+  if (!Number.isFinite(total) || total <= 0) return 0
+  const ratio = currentTime.value / total
+  if (!Number.isFinite(ratio)) return 0
+  return Math.min(100, Math.max(0, ratio * 100))
 })
 
 const abLoopTitle = computed(() => {
@@ -661,6 +684,11 @@ const queueAddToPlaylistProvider = computed(() =>
       }
 )
 
+const queueSavePlaylistOpen = ref(false)
+const playbackQueueLength = computed(() =>
+  libraryQueueActive.value ? (libraryQueueSnapshot.value?.total ?? 0) : queue.value.length
+)
+
 const {
   volumeOpen,
   playlistOpen,
@@ -668,13 +696,11 @@ const {
   floatingPanelOpen,
   dismissFloatingPanels,
   toggleVolume,
-  togglePlaylist
+  togglePlaylist,
+  toggleMore
 } = useFloatingPanels(playerBarShellRef, {
   // The picker is teleported to `body`, so its clicks read as "outside the bar".
-  isDismissBlocked: () => queueAddToPlaylist.open.value,
-  isInternalTarget: (target) =>
-    target instanceof Element &&
-    !!target.closest('.queue-sidebar, .hifi-overlay, .side-menu, .title-bar .menu-btn')
+  isDismissBlocked: () => queueAddToPlaylist.open.value || queueSavePlaylistOpen.value
 })
 
 /*
@@ -722,13 +748,22 @@ watch(moreOpen, (open) => {
 })
 
 const {
+  containerRef: playlistListRef,
+  visibleItems: visibleQueueItems,
+  totalHeight: queueVirtualHeight,
+  translateY: queueVirtualTranslateY,
+  onScroll: onQueueScroll,
+  scrollToCurrent: scrollQueueToCurrent
+} = usePlaybackQueueVirtualScroll(queue, queueIndex, playlistOpen)
+
+const {
   draggedEntryId,
   getEntryIndex,
   playNext: playQueueEntryNext,
   addToTail: addQueueEntryToTail,
   remove: removeQueueEntry,
-  move: moveQueueEntry,
   clear: clearPlaybackQueue,
+  saveAsPlaylist: savePlaybackQueuePlaylist,
   onDragStart: onQueueDragStart,
   onDragOver: onQueueDragOver,
   onDrop: onQueueDrop,
@@ -743,27 +778,19 @@ const {
     reorderQueue,
     saveQueueAsPlaylist
   },
-  createPlaylistWithTracks
+  createPlaylistWithTracks,
+  createPlaylistWithTrackPages,
+  queueLength: playbackQueueLength
 })
+
+function setPlaylistListRef(element: Element | ComponentPublicInstance | null): void {
+  playlistListRef.value = element instanceof HTMLElement ? element : null
+}
 
 function playQueueEntry(queueEntryId: string): void {
   const index = getEntryIndex(queueEntryId)
   if (index !== -1) playTrackAt(index)
 }
-
-const queueHistory = props.preview ? ref([]) : queueWorkspace.history
-const queueHistoryReplay = createQueueHistoryReplay({
-  queue,
-  history: queueHistory,
-  currentEntryId: () => currentTrack.value?.queueEntryId,
-  isAvailable: () => playlistOpen.value && !props.preview,
-  getSources: getQueueSessionSources,
-  playNextTrack,
-  playTrack,
-  onUnavailable: (message) =>
-    pushNotice({ kind: 'warning', message: `历史曲目暂时不可用：${message}` })
-})
-onBeforeUnmount(queueHistoryReplay.dispose)
 
 const queueDurationMinutes = computed(() => {
   let totalSeconds = 0
@@ -794,37 +821,6 @@ function dismissAllFloatingPanels(): void {
 
 useEscapeToClose(floatingPanelOpen, dismissAllFloatingPanels)
 
-watch(playlistOpen, (open) => {
-  if (open) {
-    emit('queueOpened')
-    if (!props.preview)
-      void queueWorkspace
-        .ensureLoaded()
-        .catch(() =>
-          pushNotice({ kind: 'warning', message: '播放历史暂时无法载入，可以继续使用播放队列。' })
-        )
-  } else queueHistoryReplay.cancel()
-})
-function reconcileNarrowSidebars(): void {
-  if (props.leftNavigationOpen && overlaySidebarsNeedExclusiveMode()) dismissFloatingPanels()
-}
-watch(() => props.leftNavigationOpen, reconcileNarrowSidebars)
-let sidebarLayoutObserver: MutationObserver | null = null
-onMounted(() => {
-  if (props.preview) return
-  window.addEventListener('resize', reconcileNarrowSidebars)
-  sidebarLayoutObserver = new MutationObserver(reconcileNarrowSidebars)
-  sidebarLayoutObserver.observe(document.documentElement, { attributes: true })
-})
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', reconcileNarrowSidebars)
-  sidebarLayoutObserver?.disconnect()
-})
-function openQueueSource(origin: QueuePlaybackOrigin): void {
-  playlistOpen.value = false
-  emit('openQueueSource', origin)
-}
-
 defineExpose({
   openMiniPlayer,
   openQueue: () => {
@@ -833,7 +829,7 @@ defineExpose({
   },
   openAudio: () => {
     dismissFloatingPanels()
-    emit('openEqualizer')
+    moreOpen.value = true
   }
 })
 
@@ -1413,7 +1409,8 @@ function onGlassPointerLeave(): void {
 }
 
 function motionAllowsPointer(): boolean {
-  return motionMode.value === 'full'
+  const mode = document.documentElement.dataset.teMotion ?? 'full'
+  return mode !== 'reduced' && mode !== 'off'
 }
 
 function syncGlassPointer(): void {
@@ -1485,8 +1482,7 @@ const playbarHidden = computed(
 const shellDataAttrs = computed(() => ({
   'data-te-playbar-mode': props.mode,
   'data-te-playbar-hidden': playbarHidden.value ? 'true' : 'false',
-  'data-te-playbar-visibility': fullyHidden.value ? 'hidden' : 'auto',
-  'data-te-playing-page': props.glass ? 'true' : 'false'
+  'data-te-playbar-visibility': fullyHidden.value ? 'hidden' : 'auto'
 }))
 
 // A track change or play/pause is feedback the user asked for; surface it briefly
@@ -1498,35 +1494,12 @@ watch(
   }
 )
 
-let pageChangeAnimation: Animation | null = null
-watch(motionMode, () => {
-  pageChangeAnimation?.cancel()
-  pageChangeAnimation = null
-  syncGlassPointer()
-})
-watch(
-  () => props.glass,
-  () => {
-    resetGlassPointer()
-    pageChangeAnimation?.cancel()
-    if (!motionAllowsPointer() || document.hidden) return
-    // Fade the changed grouping briefly without scaling text or moving hit targets.
-    pageChangeAnimation =
-      playerBarRef.value?.animate([{ opacity: 0.45 }, { opacity: 1 }], {
-        duration: 180,
-        easing: 'ease-out'
-      }) ?? null
-  },
-  { flush: 'post' }
-)
-
 onMounted(() => {
   if (!props.preview) void syncExtensions()
   syncGlassPointer()
 })
 
 onBeforeUnmount(() => {
-  pageChangeAnimation?.cancel()
   releaseVisualizationConsumer?.()
   releaseVisualizationConsumer = null
   stopResizeSidebar()
@@ -1545,19 +1518,230 @@ onBeforeUnmount(() => {
     }"
     v-bind="shellDataAttrs"
   >
+    <!-- 播放列表面板（向上抽屉） -->
+    <button
+      v-if="floatingPanelOpen"
+      class="player-panel-dismiss"
+      type="button"
+      aria-label="关闭浮层"
+      @pointerdown.prevent.stop="dismissAllFloatingPanels"
+      @click.prevent.stop
+    ></button>
+
+    <Transition name="drawer-up">
+      <LibraryQueueDrawer
+        v-if="playlistOpen && libraryQueueActive"
+        :snapshot="libraryQueueSnapshot"
+        :content-revision="libraryQueueContentRevision"
+        :busy="libraryQueueBusy"
+        :is-playing="isPlaying"
+        :glass="glass"
+        :read-page="readLibraryQueuePage"
+        :play-entry="playLibraryQueueEntry"
+        :edit-queue="editLibraryQueue"
+        :refresh-queue="refreshLibraryQueue"
+        @add-to-playlist="queueAddToPlaylist.openForTrack"
+        @save-playlist="queueSavePlaylistOpen = true"
+      />
+      <div v-else-if="playlistOpen" class="playlist-panel" :class="{ 'panel-glass': glass }">
+        <div class="playlist-header">
+          <div class="playlist-heading">
+            <div class="playlist-heading-row">
+              <span class="playlist-heading-title">播放列表</span>
+              <span class="playlist-count">{{ queue.length }} 首</span>
+            </div>
+            <span class="playlist-heading-subtitle">{{ queueSummaryText }}</span>
+          </div>
+          <div class="playlist-tools" aria-label="队列操作">
+            <button
+              class="playlist-tool-btn"
+              type="button"
+              :disabled="queue.length === 0"
+              @click="queueSavePlaylistOpen = true"
+            >
+              存为歌单
+            </button>
+            <button
+              class="playlist-tool-btn"
+              type="button"
+              :disabled="!canUndoQueue"
+              :title="`撤销${queueUndoLabel}`"
+              @click="undoQueue()"
+            >
+              撤销
+            </button>
+            <button
+              class="playlist-tool-btn"
+              type="button"
+              title="保存、恢复会话与查看播放顺序"
+              @click="queueSessions.show()"
+            >
+              会话
+            </button>
+            <button
+              class="playlist-tool-btn"
+              type="button"
+              title="定位到正在播放"
+              aria-label="定位到正在播放"
+              :disabled="queue.length === 0"
+              @click="scrollQueueToCurrent"
+            >
+              <i class="pi pi-map-marker" aria-hidden="true"></i>
+              <span>定位</span>
+            </button>
+            <button
+              class="playlist-tool-btn playlist-tool-danger"
+              type="button"
+              title="清空播放队列"
+              aria-label="清空播放队列"
+              :disabled="queue.length === 0"
+              @click="clearPlaybackQueue"
+            >
+              <i class="pi pi-trash" aria-hidden="true"></i>
+              <span>清空</span>
+            </button>
+          </div>
+        </div>
+        <div v-if="queue.length === 0" class="playlist-empty">
+          <span class="playlist-empty-icon" aria-hidden="true">
+            <i class="pi pi-inbox"></i>
+          </span>
+          <span class="playlist-empty-title">队列还是空的</span>
+          <span class="playlist-empty-hint">播放任意歌曲后，会在这里排队等候</span>
+        </div>
+        <div :ref="setPlaylistListRef" class="playlist-list" @scroll.passive="onQueueScroll">
+          <div class="playlist-virtual-spacer" :style="{ height: `${queueVirtualHeight}px` }">
+            <div
+              class="playlist-virtual-window"
+              :style="{ transform: `translateY(${queueVirtualTranslateY}px)` }"
+            >
+              <div
+                v-for="item in visibleQueueItems"
+                :key="item.queueEntryId"
+                class="playlist-item"
+                data-te-interactive
+                :class="{
+                  active: item.index === queueIndex,
+                  dragging: draggedEntryId === item.queueEntryId
+                }"
+                role="button"
+                tabindex="0"
+                draggable="true"
+                :aria-current="item.index === queueIndex ? 'true' : undefined"
+                :aria-label="`${item.title} - ${item.artist}`"
+                @click="playQueueEntry(item.queueEntryId)"
+                @keydown.enter.prevent="playQueueEntry(item.queueEntryId)"
+                @keydown.space.prevent="playQueueEntry(item.queueEntryId)"
+                @dragstart="onQueueDragStart($event, item.queueEntryId)"
+                @dragover="onQueueDragOver($event, item.queueEntryId)"
+                @drop="onQueueDrop($event, item.queueEntryId)"
+                @dragend="onQueueDragEnd"
+              >
+                <button
+                  class="playlist-drag-handle"
+                  type="button"
+                  tabindex="-1"
+                  aria-label="拖动排序"
+                  title="拖动排序"
+                  @click.stop
+                >
+                  <i class="pi pi-bars" aria-hidden="true"></i>
+                </button>
+                <span class="playlist-index">
+                  <span
+                    v-if="item.index === queueIndex"
+                    class="playing-bars"
+                    :class="{ paused: !isPlaying }"
+                    aria-hidden="true"
+                  >
+                    <i></i><i></i><i></i>
+                  </span>
+                  <span v-else class="playlist-index-num">{{ item.index + 1 }}</span>
+                </span>
+                <CoverImg :cover="item.cover" :identity="item.id" class="playlist-cover" alt="" />
+
+                <div class="playlist-info">
+                  <div class="playlist-title">{{ item.title }}</div>
+                  <div class="playlist-artist">{{ item.artist }}</div>
+                </div>
+                <div class="playlist-row-actions" @click.stop>
+                  <button
+                    type="button"
+                    title="下一首播放"
+                    :aria-label="`将 ${item.title} 设为下一首`"
+                    @click="playQueueEntryNext(item.queueEntryId)"
+                  >
+                    <PlaybackIcon name="next" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    title="添加到队尾"
+                    :aria-label="`将 ${item.title} 添加到队尾`"
+                    @click="addQueueEntryToTail(item.queueEntryId)"
+                  >
+                    <i class="pi pi-plus" aria-hidden="true"></i>
+                  </button>
+                  <button
+                    type="button"
+                    title="添加到歌单"
+                    :aria-label="`将 ${item.title} 添加到歌单`"
+                    @click="queueAddToPlaylist.openForEntry(item.queueEntryId)"
+                  >
+                    <i class="pi pi-list-check" aria-hidden="true"></i>
+                  </button>
+                  <button
+                    type="button"
+                    class="row-action-danger"
+                    title="从队列移除"
+                    :aria-label="`从队列移除 ${item.title}`"
+                    @click="removeQueueEntry(item.queueEntryId)"
+                  >
+                    <i class="pi pi-times" aria-hidden="true"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <QueueSavePlaylistDialog
+      v-if="queueSavePlaylistOpen"
+      :save="savePlaybackQueuePlaylist"
+      @close="queueSavePlaylistOpen = false"
+      @saved="pushNotice({ kind: 'success', message: '已将队列存为歌单' })"
+    />
+
+    <QueueAddToPlaylistDialog
+      v-if="!preview"
+      :open="queueAddToPlaylist.open.value"
+      :target-label="queueAddToPlaylist.targetLabel.value"
+      :local-playlists="queueAddToPlaylist.localPlaylists.value"
+      :provider="queueAddToPlaylistProvider"
+      :error-message="queueAddToPlaylist.errorMessage.value"
+      :busy-target="queueAddToPlaylist.busyTarget.value"
+      :create-scope="queueAddToPlaylist.createScope.value"
+      :new-playlist-name="queueAddToPlaylist.newPlaylistName.value"
+      @update:new-playlist-name="queueAddToPlaylist.newPlaylistName.value = $event"
+      @close="queueAddToPlaylist.close"
+      @start-create="queueAddToPlaylist.startCreate"
+      @cancel-create="queueAddToPlaylist.cancelCreate"
+      @confirm-create="queueAddToPlaylist.confirmCreate"
+      @reload-provider="queueAddToPlaylist.reloadProviderPlaylists"
+      @add-local="queueAddToPlaylist.addToLocalPlaylist"
+      @add-provider="queueAddToPlaylist.addToProviderPlaylist"
+    />
+
     <!-- PlayerBar 主体 -->
     <div
       ref="playerBarRef"
       class="player-bar"
-      data-te-material="transport"
       :class="{
         'player-bar-glass': glass,
-        'player-bar-docked': glass && isStandard,
         'player-bar-liquid': liquidGlassActive,
         'player-bar-mini': isMini,
         'player-bar-compact': isCompact,
-        'player-bar-reference': referenceStandardLayout,
-        'player-bar-transport-grouped': groupedStandardLayout,
         'player-bar-compact-visualizer': showCompactVisualizer
       }"
       :style="{
@@ -1586,20 +1770,25 @@ onBeforeUnmount(() => {
       <!-- 紧凑形态的进度读数：贴着播放条顶边的一条细线。它属于形态固有 chrome，
            不参与区域编排——三种形态的进度呈现差异太大（标准内联、迷你中列长轨、
            紧凑顶边通栏），做成可搬运的控件只会得到渲染不出来的编排。 -->
-      <PlayerSeekProgress
-        v-if="isCompact"
-        :key="`progress:${currentTrack.id}:${currentTrack.queueEntryId || ''}`"
-        variant="compact"
-        :position="currentTime"
-        :duration="effectiveDuration"
-        :live="isLiveStream"
-        :ab-start="abLoopA"
-        :ab-end="abLoopB"
-        :format-time="formatTime"
-        :data-track-id="currentTrack.id"
-        :data-entry-id="currentTrack.queueEntryId || ''"
-        @seek="seek"
-      />
+      <div v-if="isCompact" class="compact-progress-rail">
+        <div class="compact-progress-track" aria-hidden="true">
+          <SmoothedProgressFill class="compact-progress-fill" :percent="progressPercent" />
+        </div>
+        <input
+          type="range"
+          class="compact-progress-slider"
+          @input="onFlatRailInput"
+          min="0"
+          max="1"
+          step="0.0005"
+          :value="effectiveDuration > 0 ? currentTime / effectiveDuration : 0"
+          :disabled="isLiveStream || effectiveDuration <= 0"
+          aria-label="播放进度"
+          :aria-valuetext="
+            isLiveStream ? 'LIVE' : `${formatTime(currentTime)} / ${formatTime(effectiveDuration)}`
+          "
+        />
+      </div>
 
       <!-- 三个区域的类名固定为 player-left / player-center / player-right：本组件的
            样式表和 assets/theme-layouts/ 里的 6 套预设布局都按这三个类名改写播放
@@ -1660,16 +1849,21 @@ onBeforeUnmount(() => {
                 >{{ isStreamBuffering && !isLiveStream ? '缓冲中' : liveBadgeLabel }}</span
               >
             </div>
-            <button
-              type="button"
-              class="player-artist"
-              data-te-interactive
-              :disabled="preview || !currentTrack.artist.trim()"
-              :title="currentTrack.artist ? `打开歌手：${currentTrack.artist}` : undefined"
-              @click.stop="onArtistClick"
-            >
-              {{ currentTrack.artist }}
-            </button>
+            <div class="player-artists">
+              <template v-for="(artist, index) in currentArtists" :key="index">
+                <span v-if="index > 0" class="player-artist-separator" aria-hidden="true">/</span>
+                <button
+                  type="button"
+                  class="player-artist"
+                  data-te-interactive
+                  :disabled="preview || !artist.name.trim()"
+                  :title="`打开歌手：${artist.name}`"
+                  @click.stop="onArtistClick(artist)"
+                >
+                  {{ artist.name }}
+                </button>
+              </template>
+            </div>
             <div
               v-if="streamNowPlaying && isLiveStream && !isMini"
               class="player-stream-now-playing"
@@ -1799,13 +1993,32 @@ onBeforeUnmount(() => {
             v-else-if="control === 'queue'"
             class="icon-btn track-menu-button"
             :class="{ active: playlistOpen }"
-            title="播放队列"
-            aria-label="播放队列"
-            aria-controls="playback-queue-sidebar"
-            :aria-expanded="playlistOpen"
+            title="播放列表"
+            aria-label="播放列表"
             @click="togglePlaylist"
           >
             <PlayerControlIcon name="queue" />
+          </button>
+
+          <button
+            v-else-if="control === 'hifi'"
+            class="icon-btn player-misc-icon hifi-toggle-button"
+            :class="{ active: moreOpen }"
+            title="HiFi 控制台"
+            aria-label="HiFi 控制台"
+            @click="toggleMore"
+          >
+            <PlayerControlIcon name="hifi" />
+          </button>
+
+          <button
+            v-else-if="control === 'equalizer'"
+            class="icon-btn equalizer-btn player-misc-icon"
+            title="均衡器"
+            aria-label="均衡器"
+            @click="openEqualizerPage"
+          >
+            <PlayerControlIcon name="equalizer" />
           </button>
 
           <button
@@ -1844,8 +2057,8 @@ onBeforeUnmount(() => {
           </button>
         </template>
 
-        <!-- 形态固有进度排在编排出来的控件之后。迷你条保留主控与长进度轨的空间，
-             续播提示继续只在其他形态显示。 -->
+        <!-- 形态固有 chrome，永远排在编排出来的控件之后。迷你条 40px 高，塞不下
+             续播提示，所以它在迷你形态里仍然不渲染——和这套编排之前的行为一致。 -->
         <div
           v-if="region.name === 'center' && activeResumeOffer && !isMini"
           class="resume-offer"
@@ -1870,20 +2083,34 @@ onBeforeUnmount(() => {
           :data-entry-id="currentTrack.queueEntryId || ''"
           @seek="seek"
         />
-        <PlayerSeekProgress
-          v-if="region.name === 'center' && isMini"
-          :key="`progress:${currentTrack.id}:${currentTrack.queueEntryId || ''}`"
-          variant="mini"
-          :position="currentTime"
-          :duration="effectiveDuration"
-          :live="isLiveStream"
-          :ab-start="abLoopA"
-          :ab-end="abLoopB"
-          :format-time="formatTime"
-          :data-track-id="currentTrack.id"
-          :data-entry-id="currentTrack.queueEntryId || ''"
-          @seek="seek"
-        />
+        <div v-if="region.name === 'center' && isMini" class="mini-progress-rail">
+          <div class="mini-progress-track" aria-hidden="true">
+            <SmoothedProgressFill class="mini-progress-fill" :percent="progressPercent" />
+          </div>
+          <span class="mini-progress-time" aria-hidden="true">
+            {{
+              isLiveStream
+                ? 'LIVE'
+                : `${formatTime(currentTime)} / ${formatTime(effectiveDuration)}`
+            }}
+          </span>
+          <input
+            type="range"
+            class="mini-progress-slider"
+            @input="onFlatRailInput"
+            min="0"
+            max="1"
+            step="0.0005"
+            :value="effectiveDuration > 0 ? currentTime / effectiveDuration : 0"
+            :disabled="isLiveStream || effectiveDuration <= 0"
+            aria-label="播放进度"
+            :aria-valuetext="
+              isLiveStream
+                ? 'LIVE'
+                : `${formatTime(currentTime)} / ${formatTime(effectiveDuration)}`
+            "
+          />
+        </div>
       </div>
     </div>
 
@@ -2016,36 +2243,16 @@ onBeforeUnmount(() => {
     <div
       ref="playerBarRef"
       class="player-bar player-bar-idle"
-      data-te-material="transport"
       :class="{
         'player-bar-mini': isMini,
-        'player-bar-compact': isCompact,
-        'player-bar-transport-grouped': isStandard
+        'player-bar-compact': isCompact
       }"
       aria-label="播放器，尚未选择歌曲"
     >
-      <PlayerSeekProgress
-        v-if="isCompact"
-        variant="compact"
-        :position="0"
-        :duration="0"
-        :live="false"
-        :ab-start="null"
-        :ab-end="null"
-        :format-time="formatTime"
-      />
       <div class="player-left">
-        <div v-if="isMini" class="player-controls">
-          <button class="ctrl-btn previous-button" disabled aria-label="上一首，请先选择歌曲">
-            <PlaybackIcon name="previous" />
-          </button>
-          <button class="ctrl-btn btn-play" disabled aria-label="播放，请先选择歌曲">
-            <PlaybackIcon name="play" />
-          </button>
-          <button class="ctrl-btn next-button" disabled aria-label="下一首，请先选择歌曲">
-            <PlaybackIcon name="next" />
-          </button>
-        </div>
+        <button v-if="isMini" class="mini-play-button" disabled aria-label="请先选择歌曲">
+          <PlaybackIcon name="play" />
+        </button>
         <template v-else>
           <div class="player-cover-slot player-cover-placeholder" aria-hidden="true">
             <PlayerControlIcon name="queue" />
@@ -2057,14 +2264,6 @@ onBeforeUnmount(() => {
         </template>
       </div>
       <div class="player-center">
-        <button
-          v-if="isStandard"
-          class="ctrl-btn mode-btn-right"
-          disabled
-          aria-label="顺序播放，请先选择歌曲"
-        >
-          <PlaybackModeIcon mode="sequential" />
-        </button>
         <div v-if="!isMini" class="player-controls">
           <button class="ctrl-btn previous-button" disabled aria-label="上一首，请先选择歌曲">
             <PlaybackIcon name="previous" />
@@ -2076,11 +2275,6 @@ onBeforeUnmount(() => {
             <PlaybackIcon name="next" />
           </button>
         </div>
-        <div v-if="isStandard" class="volume-anchor">
-          <button class="volume-control-button icon-btn" disabled aria-label="音量，请先选择歌曲">
-            <PlayerControlIcon name="volume" />
-          </button>
-        </div>
         <PlayerSeekProgress
           v-if="isStandard"
           :position="0"
@@ -2090,85 +2284,31 @@ onBeforeUnmount(() => {
           :ab-end="null"
           :format-time="formatTime"
         />
-        <PlayerSeekProgress
-          v-else-if="isMini"
-          variant="mini"
-          :position="0"
-          :duration="0"
-          :live="false"
-          :ab-start="null"
-          :ab-end="null"
-          :format-time="formatTime"
-        />
+        <div v-else-if="isMini" class="mini-progress-rail" aria-hidden="true">
+          <div class="mini-progress-track"></div>
+          <span class="mini-progress-time">0:00 / 0:00</span>
+        </div>
       </div>
       <div class="player-right">
         <button
-          class="icon-btn track-menu-button"
-          title="播放队列"
-          aria-label="播放队列"
-          aria-controls="playback-queue-sidebar"
-          :aria-expanded="playlistOpen"
-          @click="togglePlaylist"
+          v-if="isStandard"
+          class="ctrl-btn mode-btn-right"
+          disabled
+          aria-label="顺序播放，请先选择歌曲"
         >
-          <PlayerControlIcon name="queue" />
+          <img :src="sequentialIcon" alt="" />
         </button>
+        <div v-if="isStandard" class="volume-anchor">
+          <button class="volume-control-button icon-btn" disabled aria-label="音量，请先选择歌曲">
+            <PlayerControlIcon name="volume" />
+          </button>
+        </div>
         <button class="icon-btn" disabled aria-label="歌词，请先选择歌曲">
           <span class="desktop-lyrics-icon" aria-hidden="true">词</span>
         </button>
       </div>
     </div>
   </div>
-  <Teleport v-if="!preview" to=".app-shell">
-    <PlaybackQueueSidebar
-      :open="playlistOpen && !preview"
-      :queue="queue"
-      :queue-index="queueIndex"
-      :history="queueHistory"
-      :history-loading="!preview && queueWorkspace.loading.value"
-      :is-playing="isPlaying"
-      :summary="queueSummaryText"
-      :can-undo="canUndoQueue"
-      :undo-label="queueUndoLabel"
-      :dragged-entry-id="draggedEntryId"
-      :liquid-material="liquidMaterial"
-      @close="playlistOpen = false"
-      @play="playQueueEntry"
-      @next="playQueueEntryNext"
-      @tail="addQueueEntryToTail"
-      @remove="removeQueueEntry"
-      @move="moveQueueEntry"
-      @replay-history="queueHistoryReplay.replay"
-      @add-playlist="queueAddToPlaylist.openForEntry"
-      @clear="clearPlaybackQueue"
-      @undo="undoQueue"
-      @sessions="queueSessions.show"
-      @open-source="openQueueSource"
-      @drag-start="onQueueDragStart"
-      @drag-over="onQueueDragOver"
-      @drop="onQueueDrop"
-      @drag-end="onQueueDragEnd"
-    />
-  </Teleport>
-  <QueueAddToPlaylistDialog
-    v-if="!preview"
-    :open="queueAddToPlaylist.open.value"
-    :target-label="queueAddToPlaylist.targetLabel.value"
-    :local-playlists="queueAddToPlaylist.localPlaylists.value"
-    :provider="queueAddToPlaylistProvider"
-    :error-message="queueAddToPlaylist.errorMessage.value"
-    :busy-target="queueAddToPlaylist.busyTarget.value"
-    :create-scope="queueAddToPlaylist.createScope.value"
-    :new-playlist-name="queueAddToPlaylist.newPlaylistName.value"
-    @update:new-playlist-name="queueAddToPlaylist.newPlaylistName.value = $event"
-    @close="queueAddToPlaylist.close"
-    @start-create="queueAddToPlaylist.startCreate"
-    @cancel-create="queueAddToPlaylist.cancelCreate"
-    @confirm-create="queueAddToPlaylist.confirmCreate"
-    @reload-provider="queueAddToPlaylist.reloadProviderPlaylists"
-    @add-local="queueAddToPlaylist.addToLocalPlaylist"
-    @add-provider="queueAddToPlaylist.addToProviderPlaylist"
-  />
 </template>
 
 <style scoped src="./player-bar/PlayerBar.css"></style>
-<style scoped src="./player-bar/playerBarGeometry.css"></style>

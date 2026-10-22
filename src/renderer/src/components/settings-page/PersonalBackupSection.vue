@@ -14,6 +14,7 @@ import {
 } from '../../stores/useListeningStatsStore'
 import { getMusicVersions } from '../../stores/musicVersions'
 import { useFocusTrap, useEscapeToClose } from '../../app/useDismissLayer'
+import { playbackSessionWriter } from '../../app/playbackSessionWriter'
 
 const api = window.api
 const busy = ref(false),
@@ -39,6 +40,7 @@ async function rendererData() {
   if (!(await music.flushPlaylists())) throw new Error('歌单尚未保存成功，请先重试保存')
   const { usePlayerStore } = await import('../../stores/usePlayerStore')
   await usePlayerStore().queueWorkspace.flush()
+  await playbackSessionWriter.flushAutosave()
   return {
     ...readPersonalRendererData(),
     statistics: JSON.parse(JSON.stringify(useListeningStatsStore().listeningStats.value)),

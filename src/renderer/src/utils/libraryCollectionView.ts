@@ -1,6 +1,8 @@
 import type { Track } from '../types/music'
 import { splitGenreValues } from '../../../shared/genreSeparators.ts'
-import { getPinyinInitial } from './pinyinInitials.ts'
+import { isLibraryArtistMember } from '../../../shared/libraryCollections.ts'
+import { collectionIndexLetter } from '../../../shared/libraryCollections.ts'
+export { collectionIndexLetter } from '../../../shared/libraryCollections.ts'
 
 export const AZ_INDEX_LETTERS = Array.from({ length: 26 }, (_, index) =>
   String.fromCharCode(65 + index)
@@ -17,6 +19,10 @@ export interface LibraryCollectionItem {
 export interface LibraryCollectionViewState {
   sort: LibraryCollectionSort
   genre: string | null
+}
+
+export function resolveLibraryArtistTracks(tracks: readonly Track[], name: string): Track[] {
+  return tracks.filter((track) => isLibraryArtistMember(track, name))
 }
 
 const DEFAULT_STATE: LibraryCollectionViewState = {
@@ -80,12 +86,6 @@ export function collectionAddedAt(item: LibraryCollectionItem): number {
     }
   }
   return latest
-}
-
-export function collectionIndexLetter(name: string): string | null {
-  const first = name.trim().normalize('NFKD').replace(/\p{M}/gu, '').charAt(0).toUpperCase()
-  if (/^[A-Z]$/.test(first)) return first
-  return getPinyinInitial(first).toUpperCase() || null
 }
 
 export function availableCollectionLetters(items: readonly LibraryCollectionItem[]): Set<string> {

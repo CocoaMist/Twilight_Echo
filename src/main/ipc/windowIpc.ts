@@ -1,9 +1,9 @@
 import { BrowserWindow, Menu, clipboard, type IpcMain } from 'electron'
 import { assertTrustedIpcSender, shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import { nativeMenuTemplate, registerNativeContextMenuIpc } from './nativeContextMenuIpc.ts'
+import { dspEditorInteractionWindow } from '../app/dspEditorWindow.ts'
 import { registerEqualizerClipboardIpc } from './equalizerClipboardIpc.ts'
 import { readWindowChromeState } from '../app/windowChrome.ts'
-import { dspEditorInteractionWindow } from '../app/dspEditorWindow.ts'
 
 export function registerWindowIpc(ipcMain: IpcMain): void {
   ipcMain.handle('window:getState', (event) => {
@@ -29,8 +29,8 @@ export function registerWindowIpc(ipcMain: IpcMain): void {
     },
     popup: (event, request) => {
       const owner = BrowserWindow.fromWebContents(event.sender)
-      if (!owner || owner.isDestroyed() || !request.items.length) return Promise.resolve(null)
-      const win = dspEditorInteractionWindow(owner, BrowserWindow.getFocusedWindow())
+      const win = owner ? dspEditorInteractionWindow(owner, BrowserWindow.getFocusedWindow()) : null
+      if (!win || win.isDestroyed() || !request.items.length) return Promise.resolve(null)
       const senderId = event.sender.id
       menus.get(senderId)?.close()
       return new Promise((resolve) => {

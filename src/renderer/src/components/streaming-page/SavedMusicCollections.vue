@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import CoverImg from '@renderer/components/CoverImg.vue'
+import ExplicitBadge from '@renderer/components/ExplicitBadge.vue'
+import NcmAlbumFilters from './NcmAlbumFilters.vue'
+import { filterNcmAlbums, formatNcmAlbumClassification } from './ncmAlbumClassification'
 import { useBoundedGrid } from '@renderer/composables/useBoundedGrid'
 import { useMediaProviders } from '@renderer/providers'
 import { useProviderStore } from '@renderer/stores/useProviderStore'
@@ -78,9 +81,19 @@ const limit = computed({
     currentState.value.limit = value
   }
 })
-const visibleAlbums = computed(() => albums.value.slice(0, limit.value))
+const releaseType = ref('')
+const isNcm = computed(() => props.providerId === 'ncm')
+const filteredAlbums = computed(() =>
+  isNcm.value ? filterNcmAlbums(albums.value, releaseType.value) : albums.value
+)
+watch(releaseType, () => {
+  limit.value = 40
+})
+const visibleAlbums = computed(() => filteredAlbums.value.slice(0, limit.value))
 const visibleArtists = computed(() => artists.value.slice(0, limit.value))
-const count = computed(() => (tab.value === 'albums' ? albums.value.length : artists.value.length))
+const count = computed(() =>
+  tab.value === 'albums' ? filteredAlbums.value.length : artists.value.length
+)
 const { setGridElement, gridStyle } = useBoundedGrid(() => Math.min(count.value, limit.value))
 let context = 0
 let loadedScope = ''
@@ -120,6 +133,7 @@ watch(
   [() => JSON.stringify([props.providerId, props.userId]), tab, () => props.active, supportedTabs],
   ([scope]) => {
     if (scope !== loadedScope) {
+      releaseType.value = ''
       loadedScope = scope
       context++
       albums.value = []
@@ -162,6 +176,11 @@ defineExpose({ refresh, loading, count })
       </div>
       <button type="button" :disabled="loading" @click="refresh">刷新</button>
     </header>
+    <NcmAlbumFilters
+      v-if="isNcm && tab === 'albums' && albums.length && !loading && !error"
+      :albums="albums"
+      v-model:release-type="releaseType"
+    />
     <p v-if="!supportedTabs.albums && !supportedTabs.artists" role="status">
       这个平台未提供收藏专辑或歌手功能
     </p>
@@ -178,7 +197,16 @@ defineExpose({ refresh, loading, count })
           @click="emit('openAlbum', album)"
         >
           <CoverImg :cover="album.cover" :cover-source="album.coverSource" alt="" />
-          <span>{{ album.name }}</span>
+          <span class="saved-album-title">
+            <span>{{ album.name }}</span>
+            <ExplicitBadge v-if="isNcm && album.isExplicit" />
+          </span>
+          <small
+            v-if="isNcm && formatNcmAlbumClassification(album)"
+            class="saved-album-classification"
+          >
+            {{ formatNcmAlbumClassification(album) }}
+          </small>
         </button>
       </template>
       <template v-else>
@@ -284,7 +312,12 @@ button:disabled {
   border-radius: var(--te-control-radius-sm);
   background: var(--te-subtle-bg);
 }
-.saved-grid span {
+.saved-album-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.saved-grid span:not(.saved-album-title) {
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;

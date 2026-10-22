@@ -44,6 +44,35 @@ std::vector<std::string> asioNativeDsdCapableDeviceIds();
 
 namespace {
 
+// A writer is deliberately try-only: it never waits for a device callback.
+// Readers that arrive during the short control commit render current-only.
+// Seq-cst pairs the reader registration with the exclusive flag, preventing
+// both sides from overlooking one another at the handoff boundary.
+struct QueueTransitionRead {
+  std::atomic<uint32_t>& readers;
+  bool allowed;
+  QueueTransitionRead(std::atomic<bool>& exclusive, std::atomic<uint32_t>& count)
+      : readers(count), allowed(false) {
+    readers.fetch_add(1);
+    allowed = !exclusive.load();
+    if (!allowed) readers.fetch_sub(1);
+  }
+  ~QueueTransitionRead() { if (allowed) readers.fetch_sub(1); }
+};
+
+struct QueueTransitionWrite {
+  std::atomic<bool>& exclusive;
+  bool acquired;
+  QueueTransitionWrite(std::atomic<bool>& flag, std::atomic<uint32_t>& readers)
+      : exclusive(flag), acquired(!exclusive.exchange(true)) {
+    if (acquired && readers.load() != 0) {
+      exclusive.store(false);
+      acquired = false;
+    }
+  }
+  ~QueueTransitionWrite() { if (acquired) exclusive.store(false); }
+};
+
 constexpr size_t kDecodeChunkFrames = 2048;
 constexpr size_t kVisualizationFftResolution = 8192;
 constexpr double kUnityVolumeEpsilon = 0.0001;
@@ -4577,6 +4606,33 @@ void AudioPipeline::resetPreloadOverlap() {
   preloadNext(upcoming, nullptr);
 }
 
+bool AudioPipeline::rebindQueue(const QueueItem& expected,
+                                const std::optional<QueueItem>& upcoming,
+                                const std::function<void()>& commit, bool* preloadNeeded) {
+  std::lock_guard lock(mutex_);
+  QueueTransitionWrite transition(queueRebindExclusive_, queueTransitionReaders_);
+  if (!transition.acquired) return false;
+  synchronizeRenderPromotionLocked();
+  // A pending same-file/repeated-track promotion is significant even when its
+  // media identity is identical. The engine clock must consume it first.
+  if (trackStarted_.load() || ended_.load()) return false;
+  if (activeStream_ && (currentItem_.id != expected.id ||
+      !sameQueueSegment(currentItem_, expected))) return false;
+
+  commit();
+  cancelAutoMixLocked("queue_changed");
+  if (preloadStream_ && (!upcoming || preloadStream_->item.id != upcoming->id ||
+      !sameQueueSegment(preloadStream_->item, *upcoming))) {
+    renderPreloadStream_.store(nullptr, std::memory_order_release);
+    retireDecodeStreamLocked(std::move(preloadStream_));
+    publishRenderDspPointerTransitionLocked(publishedActiveDspGraph_, nullptr);
+    preloadDspStatus_ = {};
+    renderCrossfadeResetRequested_.store(true, std::memory_order_release);
+  }
+  if (preloadNeeded) *preloadNeeded = upcoming.has_value() && !preloadStream_;
+  return true;
+}
+
 bool AudioPipeline::preloadNext(const std::optional<QueueItem>& item, std::string* error) {
   cleanupRetiredDecodeStreams();
 
@@ -5596,6 +5652,7 @@ void AudioPipeline::prepareRenderScratchLocked(size_t maxFrames) {
 
 size_t AudioPipeline::renderTyped(PcmBlock& output) {
   if (!output.data || output.frames == 0) return 0;
+  QueueTransitionRead queueTransition(queueRebindExclusive_, queueTransitionReaders_);
   enableDenormalFlushToZero();
   const auto renderStarted = std::chrono::steady_clock::now();
   const auto recordPerformance = [this, &output, renderStarted]() noexcept {
@@ -5776,7 +5833,8 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
     read = active->read(output);
     renderedFrames_ += dsdRenderedFrameUnits(read, output.format);
   } else {
-    DecodeStream* preload = renderPreloadStream_.load(std::memory_order_acquire);
+    DecodeStream* preload = queueTransition.allowed
+        ? renderPreloadStream_.load(std::memory_order_acquire) : nullptr;
     const size_t bytesPerFrame = audioFormatBytesPerFrame(output.format);
     const size_t requestedFrames = bytesPerFrame > 0
         ? std::min(output.frames, output.byteSize / bytesPerFrame) : 0;
@@ -5850,6 +5908,7 @@ size_t AudioPipeline::renderTyped(PcmBlock& output) {
 }
 
 size_t AudioPipeline::render(float* output, size_t frameCount) {
+  QueueTransitionRead queueTransition(queueRebindExclusive_, queueTransitionReaders_);
   if (!output || frameCount == 0) return 0;
   enableDenormalFlushToZero();
   const auto renderStarted = std::chrono::steady_clock::now();
@@ -5877,8 +5936,10 @@ size_t AudioPipeline::render(float* output, size_t frameCount) {
   const AudioFormat decodeFormat = renderDecodeFormat_;
   const int channels = std::max(1, outputFormat.channelCount);
   DecodeStream* active = renderActiveStream_.load(std::memory_order_acquire);
-  DecodeStream* preload = renderPreloadStream_.load(std::memory_order_acquire);
-  AutoMixGeneration* mix = renderAutoMix_.load(std::memory_order_acquire);
+  DecodeStream* preload = queueTransition.allowed
+      ? renderPreloadStream_.load(std::memory_order_acquire) : nullptr;
+  AutoMixGeneration* mix = queueTransition.allowed
+      ? renderAutoMix_.load(std::memory_order_acquire) : nullptr;
   if (mix != renderAutoMixObserved_) {
     ta_am_handoff_cancel(&renderAutoMixHandoff_);
     renderAutoMixObserved_ = mix;

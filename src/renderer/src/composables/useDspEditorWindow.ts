@@ -37,6 +37,10 @@ export function useDspEditorWindow(onChange: (detached: boolean) => void) {
       const doc = opened.document
       doc.title = 'DSP · Twilight Echo'
       const styles = doc.createElement('div')
+      const definitions = doc.createElement('div')
+      definitions.setAttribute('aria-hidden', 'true')
+      definitions.style.cssText =
+        'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none'
       const styleCopies = new Map<Element, HTMLElement>()
       const windowStyle = doc.createElement('style')
       windowStyle.textContent = `
@@ -61,6 +65,14 @@ export function useDspEditorWindow(onChange: (detached: boolean) => void) {
         }
         doc.documentElement.classList.add('dsp-editor-document')
         doc.body.className = document.body.className
+        doc.body.style.cssText = document.body.style.cssText
+        // CSS material filters resolve in the destination document. Copy their
+        // definitions, not another appearance editor or application instance.
+        const filters = [...document.querySelectorAll('body > svg[aria-hidden="true"]')]
+          .filter((svg) => svg.querySelector('filter'))
+          .map((svg) => svg.outerHTML)
+          .join('')
+        if (definitions.innerHTML !== filters) definitions.innerHTML = filters
         const sources = [...document.head.querySelectorAll('style, link[rel="stylesheet"]')]
         for (const [source, clone] of styleCopies) {
           if (!sources.includes(source)) {
@@ -93,7 +105,7 @@ export function useDspEditorWindow(onChange: (detached: boolean) => void) {
       const host = doc.createElement('div')
       host.id = 'dsp-editor-root'
       appRoot.append(host)
-      doc.body.replaceChildren(appRoot)
+      doc.body.replaceChildren(definitions, appRoot)
       sync()
       const syncVisibility = (): void => {
         if (child === opened) dspEditorDocumentVisible.value = !opened.closed && !doc.hidden
@@ -102,6 +114,11 @@ export function useDspEditorWindow(onChange: (detached: boolean) => void) {
       syncVisibility()
       observer = new MutationObserver(sync)
       observer.observe(document.documentElement, { attributes: true })
+      observer.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style'],
+        childList: true
+      })
       observer.observe(document.head, {
         childList: true,
         subtree: true,

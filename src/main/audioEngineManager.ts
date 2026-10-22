@@ -19,6 +19,7 @@ import type {
   AudioEngineManagerDependencies,
   AudioEnginePlayResult,
   AudioEngineQueueItem,
+  AudioEngineQueueState,
   AudioEngineScheduler,
   AudioEngineServiceNativeBinding,
   AudioOutputId,
@@ -78,6 +79,7 @@ export type {
   AudioEngineManagerDependencies,
   AudioEnginePlayResult,
   AudioEngineQueueItem,
+  AudioEngineQueueState,
   AudioEngineScheduler,
   AudioEngineServiceNativeBinding,
   AudioOutputId,
@@ -127,6 +129,13 @@ export {
   loadNativeBinding,
   rendererFallbackAllowed
 } from './audio/nativeBinding.ts'
+
+export interface QueueHotUpdateCapability {
+  version: number
+  append: boolean
+  updateSource: boolean
+  upcomingIndex: boolean
+}
 
 export class AudioEngineManager extends EventEmitter {
   private native: NativeAudioBinding | null
@@ -207,6 +216,7 @@ export class AudioEngineManager extends EventEmitter {
         readNativePlaybackInfo: () => this.readNativePlaybackInfo(),
         readNativePlaybackInfoAsync: () => this.readNativePlaybackInfoAsync(),
         mergeNativePlaybackInfo: (nativeInfo) => this.mergeNativePlaybackInfo(nativeInfo),
+        effectiveVolume: (volume) => this.playback.effectiveVolume(volume),
         updateOutputPerfect: () => this.updateOutputPerfect(),
         publishPlaybackInfo: () => this.publishPlaybackInfo(),
         syncPlaybackOutputMirrorsFromOutputInfo: () =>
@@ -563,6 +573,7 @@ export class AudioEngineManager extends EventEmitter {
   }
 
   private handleAudioServiceReady(): void {
+    this.playback.invalidateQueueRecovery()
     this.invalidateAutoMixService()
     this.playback.queueToken = ''
     const restoreSerial = ++this.audioServiceReadyRestoreSerial
@@ -671,7 +682,7 @@ export class AudioEngineManager extends EventEmitter {
       'volume',
       '音频服务恢复后应用音量',
       'SetVolume',
-      this.playbackInfo.volume
+      this.playback.effectiveVolume()
     )
     this.nativeVolumeSynced = volumeResult.ok
     results.push(volumeResult)
@@ -712,7 +723,7 @@ export class AudioEngineManager extends EventEmitter {
         'volume',
         '初始化软件音量',
         'SetVolume',
-        this.playbackInfo.volume
+        this.playback.effectiveVolume()
       )
       this.nativeVolumeSynced = volumeStep.ok
       if (this.processing.directMode) await this.applyDirectModeRuntimeOverrides(true)
@@ -1257,9 +1268,13 @@ export class AudioEngineManager extends EventEmitter {
     return this.outputRouter.createDeviceCapabilityRefreshSignature(info)
   }
 
-  async play(source: string, startTime = 0): Promise<AudioEnginePlayResult> {
+  async play(
+    source: string,
+    startTime = 0,
+    requested?: () => boolean
+  ): Promise<AudioEnginePlayResult> {
     this.autoMixCoordinator?.invalidate('playback_changed')
-    return this.playback.play(source, startTime)
+    return this.playback.play(source, startTime, requested)
   }
 
   async togglePause(): Promise<void> {
@@ -1279,6 +1294,11 @@ export class AudioEngineManager extends EventEmitter {
     return this.outputRouter.serializeConfiguration(() =>
       this.playback.setVolume(Math.min(volume, this.deviceProfiles.settings.volumeCeiling))
     )
+  }
+
+  /** Temporary main-process sleep fade; not exposed as a renderer volume setting. */
+  async setSleepTimerGain(gain: number): Promise<void> {
+    return this.outputRouter.serializeConfiguration(() => this.playback.setSleepTimerGain(gain))
   }
 
   async setPlaybackRate(rate: number): Promise<void> {
@@ -1352,14 +1372,146 @@ export class AudioEngineManager extends EventEmitter {
     return this.playback.stop()
   }
 
+  async stopForQueueRecovery(): Promise<number> {
+    this.autoMixCoordinator?.invalidate('queue_recovery')
+    return this.playback.stopForQueueRecovery()
+  }
+
+  isQueueRecoveryCurrent(revision: number): boolean {
+    return this.playback.isQueueRecoveryCurrent(revision)
+  }
+
   async loadQueue(items: AudioEngineQueueItem[], startIndex = 0): Promise<void> {
     this.autoMixCoordinator?.invalidate('queue_changed')
     return this.playback.loadQueue(items, startIndex)
   }
 
+  async rebindQueue(
+    request: import('../shared/nativeQueue.ts').NativeQueueRebind
+  ): Promise<import('../shared/nativeQueue.ts').NativeQueueCommit | null> {
+    try {
+      const commit = await this.playback.rebindQueue(request)
+      if (commit) this.autoMixCoordinator?.invalidate('queue_changed')
+      return commit
+    } catch (error) {
+      this.autoMixCoordinator?.invalidate('queue_handoff_unknown')
+      throw error
+    }
+  }
+
   getQueueToken(): string {
     return this.playback.queueToken
   }
+
+  getPlaybackEnd(): import('./audio/playbackController.ts').PlaybackEndCheckpoint | null {
+    return this.playback.getPlaybackEnd()
+  }
+
+  async continueAfterPlaybackEnd(
+    options: import('./audio/playbackController.ts').PlaybackEndContinuation
+  ): Promise<boolean> {
+    this.autoMixCoordinator?.invalidate('queue_changed')
+    return this.playback.continueAfterPlaybackEnd(options)
+  }
+
+  /**
+   * Read-only copy of the queue currently delegated to the engine. Used by the
+   * Afterglow supervisor to verify that a fully-local queue is resident before
+   * it is safe to unload the renderer.
+   */
+  getQueueSnapshot(): readonly AudioEngineQueueItem[] {
+    return this.playback.queue.slice()
+  }
+
+  /**
+   * Adds already-resolved entries after the current queue. Used while the
+   * renderer is unloaded so online playback can extend its lookahead without
+   * reloading the native queue (which would break the active stream).
+   */
+  async appendQueueItems(items: AudioEngineQueueItem[]): Promise<number> {
+    if (items.length === 0) return this.playback.queue.length
+    return this.playback.appendQueueItems(items)
+  }
+
+  /**
+   * Refreshes an expiring provider URL on a queued item that is not currently
+   * decoding. Rejects the current index: its decoder is already open.
+   */
+  async updateQueueItemSource(index: number, source: string): Promise<boolean> {
+    return this.playback.updateQueueItemSource(index, source)
+  }
+
+  /** Native queue control-plane snapshot, or null on engines without hot update. */
+  async getQueueState(): Promise<AudioEngineQueueState | null> {
+    return this.playback.readQueueState()
+  }
+
+  /**
+   * Capability gate for the Afterglow online core. Older engines return null so
+   * the caller falls back to the window/rebuild mode instead of probing methods.
+   */
+  getQueueHotUpdateCapability(): QueueHotUpdateCapability | null {
+    try {
+      return this.parseQueueHotUpdateCapability(this.native?.GetEngineCapabilities?.())
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Service mode's sync capability accessor is a synthetic subset, so ask the
+   * utility process for the real native JSON before enabling online maintenance.
+   */
+  async getQueueHotUpdateCapabilityAsync(): Promise<QueueHotUpdateCapability | null> {
+    const binding = this.audioServiceBinding
+    const provider = binding?.getEngineCapabilitiesAsync
+    let raw: unknown = null
+    if (binding && provider) {
+      try {
+        raw = await provider.call(binding)
+      } catch {
+        raw = null
+      }
+    } else {
+      raw = this.native?.GetEngineCapabilities?.()
+    }
+    const parsed = raw == null ? null : this.parseQueueHotUpdateCapability(raw)
+    if (parsed) return parsed
+    // Capability JSON can be missing on an otherwise new service. GetQueueState
+    // is only implemented by engines with the hot-update contract, so use it as
+    // a method-level fallback instead of silently disabling the online core.
+    try {
+      const state = await this.playback.readQueueState()
+      if (state) {
+        return { version: 1, append: true, updateSource: true, upcomingIndex: true }
+      }
+    } catch {
+      // ignore: absence of the probe means the feature is unavailable
+    }
+    return null
+  }
+
+  private parseQueueHotUpdateCapability(raw: unknown): QueueHotUpdateCapability | null {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const capability = (parsed as { queueHotUpdate?: unknown } | null)?.queueHotUpdate
+    if (!capability || typeof capability !== 'object') return null
+    const record = capability as Record<string, unknown>
+    if (
+      typeof record.version !== 'number' ||
+      typeof record.append !== 'boolean' ||
+      typeof record.updateSource !== 'boolean' ||
+      typeof record.upcomingIndex !== 'boolean'
+    ) {
+      return null
+    }
+    return {
+      version: record.version,
+      append: record.append,
+      updateSource: record.updateSource,
+      upcomingIndex: record.upcomingIndex
+    }
+  }
+
   setAutoMixCoordinator(coordinator: TwilightAutoMixCoordinator): void {
     this.autoMixCoordinator?.destroy()
     this.off('playback-info', this.observeAutoMix)
@@ -1430,7 +1582,10 @@ export class AudioEngineManager extends EventEmitter {
       playback: this.playbackInfo,
       outputConfig: this.getOutputConfig(),
       effectiveOutputConfig: this.getEffectiveOutputConfig(),
-      dspGraphStatus: this.dsp.lastNativeDspGraphStatus ?? { cached: true, revision: this.dsp.dspGraphRevision },
+      dspGraphStatus: this.dsp.lastNativeDspGraphStatus ?? {
+        cached: true,
+        revision: this.dsp.dspGraphRevision
+      },
       dspSceneState: this.getDspSceneState(),
       nativeError: this.lastNativeError
     }
@@ -1693,7 +1848,7 @@ export class AudioEngineManager extends EventEmitter {
     const dspActive =
       sceneDspActive ||
       crossfadeSeconds > 0 ||
-      Math.abs(this.playbackInfo.volume - 1) > 0.001 ||
+      Math.abs(this.playback.effectiveVolume() - 1) > 0.001 ||
       Math.abs((this.playbackInfo.playbackRate ?? 1) - 1) > 0.001
     // The graph is what runs, so a module toggle whose node is disabled in the
     // effective graph is not active - claiming otherwise marked bit-perfect

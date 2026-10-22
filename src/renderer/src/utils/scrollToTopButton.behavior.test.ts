@@ -403,6 +403,136 @@ window.runScrollTopChecks = async () => {
   if (!/opacity/.test(motionStyle.transitionProperty)) fail('opacity is not animated: ' + motionStyle.transitionProperty)
   if (!/[1-9]/.test(motionStyle.transitionDuration)) fail('the reveal has no duration: ' + motionStyle.transitionDuration)
 
+  // The locator uses the same reveal and dismissal transitions as the arrow,
+  // including the first frame after a list registers its floating action.
+  page.scrollTo({ top: 1800, behavior: 'instant' })
+  hover(page)
+  await nudge()
+  let locateVisible = true
+  const companion = registerScrollToTopCompanion(page, {
+    label: 'Locate animation probe', icon: 'ph ph-crosshair',
+    isVisible: () => locateVisible, activate: () => {}
+  })
+  companion.refresh()
+  await frames(2)
+  const locator = document.querySelector('.te-scroll-companion')
+  if (!locator || locator.dataset.teScrollTopVisible !== 'true') fail('locator did not reveal')
+  const animationProperties = (target) => target.getAnimations().map(animation => animation.transitionProperty)
+  const assertAnimating = (target, label) => {
+    const properties = animationProperties(target)
+    if (!properties.includes('opacity') || !properties.includes('transform'))
+      fail(label + ' must animate opacity and transform: ' + properties.join(','))
+  }
+  assertAnimating(locator, 'new locator reveal')
+  // Mount a visible action without a prior hidden paint, as happens on page entry.
+  const firstPaint = locator.cloneNode(true)
+  firstPaint.style.left = '700px'
+  firstPaint.style.top = '500px'
+  document.body.append(firstPaint)
+  await frames(2)
+  assertAnimating(firstPaint, 'first-paint locator reveal')
+  firstPaint.remove()
+  const locatorStyle = getComputedStyle(locator), arrowStyle = getComputedStyle(control())
+  for (const property of ['transitionProperty', 'transitionDuration', 'transitionTimingFunction']) {
+    if (locatorStyle[property] !== arrowStyle[property]) fail('locator differs from arrow: ' + property)
+  }
+  await new Promise(resolve => setTimeout(resolve, 350))
+  const arrowSlot = control().offsetTop
+  locateVisible = false; companion.refresh()
+  await frames(2)
+  assertAnimating(locator, 'locator dismissal')
+  // Sample the transition itself; a busy compositor may still be on its first frame.
+  const fade = locator.getAnimations().find(animation => animation.transitionProperty === 'opacity')
+  fade.pause()
+  fade.currentTime = Number(fade.effect.getTiming().duration) / 2
+  const fadingOpacity = parseFloat(getComputedStyle(locator).opacity)
+  if (!(fadingOpacity > 0 && fadingOpacity < 1)) fail('locator disappeared without fading')
+  fade.play()
+  if (getComputedStyle(locator).pointerEvents !== 'none') fail('fading locator still accepts clicks')
+  if (control().offsetTop !== arrowSlot) fail('locator dismissal moved the arrow')
+  await new Promise(resolve => setTimeout(resolve, 350))
+  if (getComputedStyle(locator).visibility !== 'hidden') fail('dismissed locator remains visible')
+  locateVisible = true; companion.refresh()
+  await frames(2)
+  assertAnimating(locator, 'locator reappearance')
+  if (control().offsetTop !== arrowSlot) fail('locator reappearance moved the arrow')
+  html.dataset.teMotion = 'off'
+  await frames(2)
+  locateVisible = false; companion.refresh()
+  await frames(2)
+  if (locator.getAnimations().length || getComputedStyle(locator).opacity !== '0')
+    fail('off motion preference must hide locator immediately')
+
+  // Background registration must not activate a hidden cached scrollport or
+  // the non-scrolling document fallback of an unmeasurable virtual list.
+  locateVisible = true; companion.refresh()
+  await settle()
+  const foregroundBox = locator.getBoundingClientRect()
+  const cached = document.createElement('div')
+  cached.className = 'probe'
+  cached.style.cssText = 'display:none;left:0;top:0;width:52vw;height:100vh'
+  cached.innerHTML = '<div class="filler"></div>'
+  document.body.append(cached)
+  const cachedCompanion = registerScrollToTopCompanion(cached, {
+    label: 'Cached locator probe', icon: 'ph ph-crosshair',
+    isVisible: () => true, activate: () => {}
+  })
+  const cachedLocator = document.querySelector('[aria-label="Cached locator probe"]')
+  await settle()
+  if (locator.dataset.teScrollTopVisible !== 'true' || !shown())
+    fail('hidden registration stole the foreground scroll controls')
+  near(locator.getBoundingClientRect().top, foregroundBox.top, 'foreground anchor after hidden registration')
+  cachedCompanion.refresh()
+  await settle()
+  if (locator.dataset.teScrollTopVisible !== 'true') fail('hidden refresh stole the foreground locator')
+  if (document.scrollingElement.scrollHeight - document.scrollingElement.clientHeight >= 8)
+    fail('document fallback fixture must not scroll')
+  const documentCompanion = registerScrollToTopCompanion(document.scrollingElement, {
+    label: 'Document locator probe', icon: 'ph ph-crosshair',
+    isVisible: () => true, activate: () => {}
+  })
+  await settle()
+  if (locator.dataset.teScrollTopVisible !== 'true' || !shown())
+    fail('non-scrolling document registration stole the foreground controls')
+  documentCompanion.dispose()
+
+  page.style.display = 'none'
+  cachedCompanion.refresh()
+  await settle()
+  if (cachedLocator.dataset.teScrollTopVisible === 'true') fail('hidden refresh activated a hidden scrollport')
+  cached.style.display = ''
+  cachedCompanion.refresh()
+  await settle()
+  if (cachedLocator.dataset.teScrollTopVisible !== 'true') fail('revealing the cached scrollport did not activate its action')
+  if (locator.dataset.teScrollTopVisible !== 'false') fail('previous page retained its locator after navigation')
+  page.style.display = ''
+  cached.style.display = 'none'
+  companion.refresh()
+  await settle()
+  if (locator.dataset.teScrollTopVisible !== 'true' || !shown()) fail('returning to the foreground page did not restore its controls')
+  cachedCompanion.dispose()
+
+  // A visible dialog can register during loading, before it needs to scroll.
+  // Its later refresh must still take over from the page underneath it.
+  cached.innerHTML = ''
+  cached.style.display = ''
+  const loadingCompanion = registerScrollToTopCompanion(cached, {
+    label: 'Loading locator probe', icon: 'ph ph-crosshair',
+    isVisible: () => true, activate: () => {}
+  })
+  await settle()
+  if (cached.scrollHeight !== cached.clientHeight) fail('loading fixture must not scroll initially')
+  cached.innerHTML = '<div class="filler"></div>'
+  loadingCompanion.refresh()
+  await settle()
+  if (document.querySelector('[aria-label="Loading locator probe"]').dataset.teScrollTopVisible !== 'true')
+    fail('loaded dialog did not activate its locator over the previous page')
+  loadingCompanion.dispose()
+  cached.remove()
+  companion.refresh()
+  await settle()
+  companion.dispose()
+
   html.dataset.teMotion = 'off'
   await showPage()
   if (!page.classList.contains('is-scrollbar-active')) fail('scrolling did not reveal its thumb')

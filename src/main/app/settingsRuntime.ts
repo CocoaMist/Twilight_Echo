@@ -5,7 +5,7 @@ import type { AppSettings, SettingsSnapshot } from '../core/types'
 import { createSettingsSnapshot, normalizeAppSettings, writeAppSettings } from '../core/settings'
 import type { AudioOutputState } from '../../shared/audioEngineTypes.ts'
 import { applyEffectiveAudioProcessingToEngine } from '../audio/state.ts'
-import { getWindowBackgroundColor, syncWindowFrameColor } from './windowAppearance.ts'
+import { getWindowBackgroundColor, syncWindowFrameAppearance } from './windowAppearance.ts'
 import { ensureMusicCacheDirectories } from '../cache/ncmCache'
 import { applyDiscordRpcSetting } from '../integrations/discord'
 import {
@@ -14,6 +14,7 @@ import {
 } from '../integrations/miniPlayer'
 import { syncDesktopLyricsSettings } from '../integrations/desktopLyrics'
 import { applyRuntimeSettings } from '../integrations/shortcutsTray'
+import { reassertAfterglowShortcuts } from './AfterglowModeService.ts'
 import { applyLibraryWatchers } from '../library/watcher'
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot> {
@@ -57,7 +58,7 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
   )
     runtime.audioEngineManager?.invalidateAutoMixSource()
   if (shouldUpdateWindowBackground && runtime.mainWindow) {
-    syncWindowFrameColor(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
+    syncWindowFrameAppearance(runtime.mainWindow, nativeTheme.shouldUseHighContrastColors)
   }
   if (shouldUpdateWindowBackground && !runtime.appSettings.windowTransparency) {
     runtime.mainWindow?.setBackgroundColor(
@@ -151,6 +152,9 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
     Object.prototype.hasOwnProperty.call(patch, 'libraryFolders') ||
     Object.prototype.hasOwnProperty.call(patch, 'watchLibrary')
   ) {
+    // Revoke the database scope before native events or a pending result can
+    // observe removed roots. The scan worker rechecks this at commit time.
+    await runtime.libraryDatabase?.refreshRoots()
     applyLibraryWatchers(runtime.appSettings.libraryFolders, runtime.appSettings.watchLibrary)
     // Native watchers only report future filesystem changes. Import existing
     // files when a root is added, even when automatic watching is disabled.
@@ -159,7 +163,7 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
         (folder) => !previousLibraryFolders.includes(folder)
       )
       if (addedFolders.length > 0) {
-        runtime.localLibraryIndexCoordinator?.enqueueWatcherChanges(
+        ;(runtime.libraryDatabase ?? runtime.localLibraryIndexCoordinator)?.enqueueWatcherChanges(
           addedFolders.map((path) => ({ kind: 'reconcile', path }))
         )
       }
@@ -186,6 +190,9 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<Se
   }
 
   applyRuntimeSettings()
+  // Shortcut re-registration unregisters everything first; restore the
+  // Afterglow escape hatch when the UI is currently unloaded.
+  reassertAfterglowShortcuts()
   const snapshot = createSettingsSnapshot(runtime.appSettings, runtime.launchSettings)
   runtime.mainWindow?.webContents.send('settings:changed', snapshot)
   const trayWindow = runtime.trayPlayerWindow

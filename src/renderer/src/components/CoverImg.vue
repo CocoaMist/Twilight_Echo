@@ -12,13 +12,15 @@
     decoding="async"
     :loading="loading"
     @error="displayCover && onImageError($event)"
+    @load="displayCover && onImageLoad()"
   />
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import DEFAULT_TRACK_COVER from '../assets/images/default-track-cover-light.png'
+import DEFAULT_TRACK_COVER from '../assets/images/default-track-cover-light.webp'
 import '../assets/default-track-cover.css'
+import { recordCoverDiagnostic } from '../utils/coverDiagnostics.ts'
 import {
   clearLocalCoverDataCache,
   invalidateRemoteCoverGrant,
@@ -61,14 +63,19 @@ async function reloadCover(): Promise<void> {
 
   const cover = typeof props.cover === 'string' ? props.cover.trim() : ''
   const source = typeof props.coverSource === 'string' ? props.coverSource.trim() : ''
-  if (!cover && !source) return
+  if (!cover && !source) {
+    recordCoverDiagnostic('source.missing', null, null)
+    return
+  }
 
   try {
     const next = await resolveCover(cover || null, source || null)
     if (id !== requestId) return
     displayCover.value = next
+    if (!next) recordCoverDiagnostic('resolve.empty', cover, source, {}, 'warn')
   } catch {
     if (id !== requestId) return
+    recordCoverDiagnostic('resolve.failed', cover, source, {}, 'warn')
     displayCover.value = null
   }
 }
@@ -89,6 +96,13 @@ async function onImageError(event: Event): Promise<void> {
     (typeof props.cover === 'string' && /^https?:\/\//i.test(props.cover.trim())
       ? props.cover.trim()
       : '')
+  recordCoverDiagnostic(
+    'image.failed',
+    displayCover.value,
+    source,
+    { retried: retriedCover },
+    'warn'
+  )
   // Recover an expired handle once per identity; a broken image must not loop.
   if (!retriedCover) {
     retriedCover = true
@@ -97,6 +111,10 @@ async function onImageError(event: Event): Promise<void> {
         invalidateRemoteCoverGrant(source)
         const next = await resolveCover(null, source)
         if (id !== requestId) return
+        recordCoverDiagnostic('retry.resolved', next, source, {
+          sameHandle: next === displayCover.value,
+          available: Boolean(next)
+        })
         if (next && next !== displayCover.value) {
           displayCover.value = next
           remountNonce.value += 1
@@ -119,7 +137,18 @@ async function onImageError(event: Event): Promise<void> {
     }
   }
   if (id !== requestId) return
+  recordCoverDiagnostic(
+    'fallback.shown',
+    displayCover.value,
+    source,
+    { retried: retriedCover },
+    'warn'
+  )
   displayCover.value = null
   emit('error', event)
+}
+
+function onImageLoad(): void {
+  if (retriedCover) recordCoverDiagnostic('image.recovered', displayCover.value, props.coverSource)
 }
 </script>

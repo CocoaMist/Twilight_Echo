@@ -1,4 +1,5 @@
 import { applyExplicitThemePreferences } from '@renderer/extensions/themeProfilePriority'
+import { imageDataUrlToBlob } from '../utils/imageDataUrl.ts'
 import { backgroundDisplayUrl } from '../../../shared/backgroundDisplay.ts'
 import {
   backgroundCssVariables,
@@ -200,7 +201,8 @@ export async function previewAppearance(draft: AppearanceDraft | null): Promise<
   appearanceChromePreview.value = draft
     ? {
         navigationPages: draft.navigationPages,
-        playerBar: draft.playerBar
+        playerBar: draft.playerBar,
+        appearanceLayers: draft.appearanceLayers
       }
     : null
   if (savedAppearance) cacheSettingsAppearance(savedAppearance)
@@ -877,7 +879,7 @@ export async function setThemeAdaptiveMedia(input: {
   let nextObjectUrl = ''
   try {
     if (/^data:image\//i.test(coverUrl)) {
-      const blob = await (await fetch(coverUrl)).blob()
+      const blob = imageDataUrlToBlob(coverUrl)
       nextObjectUrl = URL.createObjectURL(blob)
       nextCoverUrl = nextObjectUrl
     } else if (/^(?:blob:|twilight-media:|cover:|background:)/i.test(coverUrl)) {
@@ -1011,7 +1013,13 @@ function decodeThemeResources(urls: string[]): void {
     uncached.map(async (url) => {
       const image = new Image()
       image.src = url
-      await image.decode()
+      try {
+        await image.decode()
+      } finally {
+        image.onload = null
+        image.onerror = null
+        image.src = ''
+      }
     })
   ).then(() => {
     recordThemePerformance('resource-decode', startedAt)

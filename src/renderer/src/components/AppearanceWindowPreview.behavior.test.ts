@@ -70,7 +70,12 @@ test('real window preview preserves controls, isolated drafts, hidden work and o
       join(directory, 'entry.ts'),
       runtime.replaceAll('__COMPONENTS__', components).replaceAll('__SHARED__', shared)
     )
-    await writeFile(join(directory, 'fixtures.ts'), fixtures.replaceAll('__SHARED__', shared))
+    await writeFile(
+      join(directory, 'fixtures.ts'),
+      (
+        await readFile(resolve('scripts/fixtures/appearance-preview-stores.mjs'), 'utf8')
+      ).replaceAll('__SHARED__', shared)
+    )
     const compiledComponents = new Set<string>()
     await build({
       root: directory,
@@ -428,55 +433,11 @@ test('real window preview preserves controls, isolated drafts, hidden work and o
   }
 })
 
-const fixtures = `
-import {ref} from 'vue';
-import {normalizePlayerBarSettings} from '__SHARED__/playerBar.ts';
-import {normalizeNavigationPagePreferences} from '__SHARED__/navigationPages.ts';
-import {normalizeLiquidGlass} from '__SHARED__/liquidGlass.ts';
-import {formatTime} from '@renderer/utils/playerTime.ts';
-const boundary={native:0,storeActions:0,intervals:0,persistence:0,network:0};
-window.previewBoundary=boundary;window.previewErrors=[];window.nativeActions=0;
-window.addEventListener('error',event=>window.previewErrors.push(event.message));
-window.addEventListener('unhandledrejection',event=>window.previewErrors.push(String(event.reason)));
-const forbidden=(kind,name)=>()=>{boundary[kind]++;if(kind==='native')window.nativeActions++;const error=Error('preview crosses '+kind+' boundary: '+name);console.error(error.stack);throw error};
-const api=path=>new Proxy(()=>{}, {get:(_,key)=>key==='then'?undefined:api(path+'.'+String(key)),apply:forbidden('native',path)});
-window.api=api('api');window.setInterval=forbidden('intervals','setInterval');window.fetch=forbidden('network','fetch');XMLHttpRequest.prototype.open=forbidden('network','XMLHttpRequest.open');
-for(const name of ['setItem','removeItem','clear'])Storage.prototype[name]=forbidden('persistence',name);
-const settings=ref({theme:'dark',motionPreference:'off',playerBar:normalizePlayerBarSettings(null),navigationPages:normalizeNavigationPagePreferences(null),desktopLyrics:{enabled:false},sleepTimer:{defaultMinutes:30}});
-window.previewSettings=settings;
-const privateTrack={id:'private-library-fixture',title:'PRIVATE_LIBRARY_SENTINEL',artist:'PRIVATE_ARTIST_SENTINEL',album:'PRIVATE_ALBUM_SENTINEL',duration:4321,source:'local',cover:null,filePath:'private-fixture.flac'};
-const audioProcessing=ref({dspEnabled:false,directMode:false,clipGuard:true,eqEnabled:false,convolverEnabled:false,gapless:true});
-const playbackInfo=ref(null),outputInfo=ref(null);
-const player={
- currentTrack:ref(privateTrack),dominantColor:ref('#aabbcc'),isPlaying:ref(false),isStreamBuffering:ref(false),streamNowPlaying:ref(''),currentTime:ref(62),duration:ref(180),progress:ref(35),volume:ref(.7),playbackRate:ref(1),sleepTimerState:ref(null),sleepTimerNotice:ref(''),queue:ref([privateTrack]),queueIndex:ref(0),playMode:ref('sequential'),exclusiveMode:ref(false),audioOutput:ref('wasapi'),audioOutputOptions:ref([]),audioDevice:ref('auto'),audioOutputDeviceOptions:ref([]),audioProcessing,audioOutputConfig:ref({}),dspOutputStage:ref({}),dspStereoImage:ref({}),playbackInfo,loudnormStatus:ref(null),outputInfo,visualizationData:ref({spectrum:[],waveform:[],active:false}),abLoopA:ref(null),abLoopB:ref(null),resumeOffer:ref(null),canUndoQueue:ref(false),queueUndoLabel:ref(''),queueSessions:ref([]),queueWorkspace:{history:ref([]),ensureLoaded:forbidden('storeActions','queueWorkspace.ensureLoaded')},castTargetName:ref(''),
- formatTime
-};
-for(const name of 'setPlaybackRate acquireVisualizationConsumer cyclePlayMode togglePlay next prev seek toggleAbLoopAtCurrentTime clearAbLoop refreshCurrentLyrics acceptResumeOffer dismissResumeOffer addManualBookmarkAtCurrentTime playTrack enqueueTrack playNextTrack removeQueueItem clearQueue reorderQueue saveQueueAsPlaylist undoQueue toggleExclusiveMode setPlayMode setVolume setUnityVolume configureSleepTimer cancelSleepTimer setAudioProcessing setAudioOutputConfig setAudioOutput setAudioDevice setOutputStage setStereoImage refreshAudioOutputState toggleDspEnabled toggleEqEnabled toggleCrossfeed toggleGapless setReplayGainMode setCrossfeedStrength selectImpulseResponse clearImpulseResponse castToDevice stopCast discoverCastDevices refreshCastTarget'.split(' '))player[name]=forbidden('storeActions',name);
-const music={tracks:ref([privateTrack]),albums:ref([]),artists:ref([]),genres:ref([]),localPlaylists:ref([]),aggregatePlaylists:ref([]),folders:ref([]),libraryRepairReport:ref(null),excludedTracks:ref([]),isScanning:ref(false),libraryScanStatus:ref({state:'idle'}),libraryScanProgress:ref(null),isFavoriteTrack:()=>false};
-for(const name of 'addToPlaylist addTracksToPlaylist removeFromPlaylist createPlaylist createPlaylistWithTracks addFavoriteTrack removeFavoriteTrack'.split(' '))music[name]=forbidden('storeActions',name);
-export const useSettingsStore=()=>({settings,updateSettings:forbidden('storeActions','updateSettings')});
-export const useMusicStore=()=>music;
-export const usePlayerStore=()=>player;
-export const useThemeStore=()=>({presetLayout:ref('default'),effectiveSurfaceMaterial:ref('standard'),effectiveLiquidGlass:ref(normalizeLiquidGlass(null))});
-export const useAudioOutputDspStore=()=>({audioProcessing,playbackInfo,outputInfo});
-export const storeToRefs=store=>store;
-export const useListeningStatsStore=()=>({listeningStats:ref({days:{},tracks:{}})});
-export const buildLastPlayedByTrackId=stats=>{const result=new Map();for(const stat of Object.values(stats.tracks)){if(stat.track?.id)result.set(stat.track.id,stat.lastPlayed);for(const sourceId of stat.sourceIds??[])result.set(sourceId.trackId,stat.lastPlayed);}return result;};
-export const getMostListenedTracks=()=>[{id:privateTrack.id,track:privateTrack}];
-export const getRecentTracks=()=>[{id:privateTrack.id,track:privateTrack}];
-export const useNcmStore=()=>({isLoggedIn:ref(true),profile:ref({nickname:'PRIVATE_PROFILE_SENTINEL',avatarUrl:'PRIVATE_AVATAR_SENTINEL',userId:7})});
-export const useProviderStore=()=>({providers:ref([{id:'ncm',name:'Fixture',capabilities:['login']}])});
-export const useAppNoticeStore=()=>({unreadCount:ref(0),activeTaskCount:ref(0),doNotDisturb:ref(false),pushNotice:forbidden('storeActions','pushNotice')});
-export const usePlaybackBookmarks=()=>({bookmarksFor:()=>[],ensureLoaded:forbidden('storeActions','bookmarks.ensureLoaded'),renameBookmark:forbidden('storeActions','renameBookmark'),removeBookmark:forbidden('storeActions','removeBookmark')});
-export const useLyricsManagement=()=>({document:ref({showTranslation:true}),entryFor:()=>null,selectSource:forbidden('storeActions','lyrics.selectSource'),updateTrack:forbidden('storeActions','lyrics.updateTrack'),updateVisibility:forbidden('storeActions','lyrics.updateVisibility')});
-export const useExtensionRegistry=options=>{if(options?.listen!==false)forbidden('native','preview extension subscription')();return {uiContributions:ref([]),syncExtensions:forbidden('storeActions','syncExtensions')}};
-export const useMediaProviders=options=>{if(options?.sync!==false)forbidden('native','preview provider synchronization')();return {get:()=>undefined,list:()=>[]}};
-export const syncPluginProviders=forbidden('storeActions','syncPluginProviders');
-`
-
 const runtime = `
 import {createApp,h,reactive,ref,nextTick} from 'vue';
 import Preview from '__COMPONENTS__/AppearanceWindowPreview.vue';
+import {installPreviewBoundary} from './fixtures.ts';
+installPreviewBoundary();
 import Popover from '__COMPONENTS__/AppearancePopover.vue';
 import {uiMotionFor} from '__COMPONENTS__/../app/uiMotion.ts';
 import {analyzeLiquidGlassColor} from '__COMPONENTS__/../utils/liquidGlassEnvironment.ts';
@@ -511,7 +472,7 @@ let selected='',propertyActions=0;const app=createApp({setup:()=>()=>h('div',{cl
  visible.value?h('div',{class:'stage'},[h(Preview,{ref:preview,draft,tone:tone.value,page:'local',themeEditing:themeEditing.value,focusedRegion:focused.value,active:previewActive.value,occlusions:occlusions.value,workshopModel:workshopModel.value,onWorkshopLayerSelect:selectWorkshopLayer,onWorkshopLayerEdit:editWorkshopLayer,onWorkshopGesture:action=>workshopEvents.push({kind:'gesture',action}),onRegion:id=>{selected=id;focused.value=id}},floatingEnabled.value?{'context-tools':({region,layered})=>h('div',{style:'width:240px;height:36px;display:flex;align-items:center;gap:6px;background:#27292c', 'data-fixture-floating-region':region,'data-fixture-layered':String(layered)},[h('input',{type:'range',min:0,max:30,step:1,value:floatingValue.value,'aria-label':'浮动模糊',style:'width:72px',onInput:event=>{floatingValue.value=Number(event.target.value)}}),h('input',{value:floatingText.value,'aria-label':'浮动名称',style:'width:80px',onInput:event=>{floatingText.value=event.target.value}}),h('button',{type:'button','aria-label':'浮动恢复',onClick:()=>{floatingActions++}},'恢复')])}:undefined)]):null,
  h('button',{id:'menu-anchor',ref:anchor,onClick:()=>{open.value=true}},'背景'),
  visible.value?h(Popover,{open:open.value,anchor:anchor.value,label:'背景',onClose:()=>{open.value=false}},()=>[h('input',{type:'color',value:draft.appBackground.global.dark,onInput:e=>{draft.appBackground.global.dark=e.target.value;draft.appBackground.global.customized=true}}),h('button',{id:'fixture-property-action',type:'button',onClick:()=>{propertyActions++}},'属性控件')]):null
-])});app.mount('#app');
+])});app.config.errorHandler=error=>{window.previewErrors.push(String(error?.stack??error));console.error(error?.stack??error)};app.mount('#app');
 const settle=async()=>{await nextTick();await new Promise(r=>setTimeout(r,220));await nextTick()};
 const expect=(v,message)=>{if(!v)throw Error(message)};
 const waitFor=async(condition,message)=>{const deadline=performance.now()+3000;while(!condition()&&performance.now()<deadline){await nextTick();await new Promise(resolve=>setTimeout(resolve,30));}expect(condition(),message);};
@@ -881,7 +842,7 @@ window.fixture={
   const original=window.layerHitOriginal;preview.value.setLayeredView(false);preview.value.setViewAngles(original.angles);focused.value=original.focused;if(original.motion===null)document.documentElement.removeAttribute('data-te-motion');else document.documentElement.dataset.teMotion=original.motion;await settle();window.previewLayerHits.draftSettingsUnchanged=JSON.stringify(draft)===original.draft&&JSON.stringify(window.previewSettings.value)===original.settings;expect(window.previewLayerHits.draftSettingsUnchanged,'native hit verification changed personal settings or draft');return window.previewLayerHits;
  },
  diagnostics(){const host=document.querySelector('.appearance-window-preview'),frame=host?.querySelector('iframe'),doc=frame?.contentDocument;return {boundary:window.previewBoundary,errors:window.previewErrors,roots:{parent:{...document.documentElement.dataset},child:doc?{...doc.documentElement.dataset}:null},viewport:doc?{parentWidth:innerWidth,parentHeight:innerHeight,childWidth:doc.defaultView.innerWidth,childHeight:doc.defaultView.innerHeight,frameStyle:getComputedStyle(frame).cssText,frameWidth:getComputedStyle(frame).width,frameHeight:getComputedStyle(frame).height,world:host.querySelector('.appearance-preview-world')?.style.cssText}:null,workshop:workshopModel.value?workshopSnapshot():null,source:doc?.querySelector(moduleSelectors.card)?sourceGeometry(doc):null,controls:doc?Object.fromEntries(['.title-bar','.side-menu','.main-content','.player-bar','.player-cover-slot','.player-center','.player-controls','.btn-play','.mini-play-button','.player-title','.progress-area','.player-bar-warp'].map(selector=>{const element=doc.querySelector(selector);if(!element)return [selector,null];const style=doc.defaultView.getComputedStyle(element),rect=element.getBoundingClientRect();return [selector,{className:element.className,width:rect.width,height:rect.height,background:style.backgroundColor,backdrop:style.backdropFilter,font:style.fontSize,transform:style.transform,grid:style.gridTemplateColumns}]})):null}},
- async initial(){await settle();const host=document.querySelector('.appearance-window-preview'),frame=host.querySelector('iframe'),doc=frame.contentDocument;await waitFor(()=>!!host.dataset.cameraScale&&doc.querySelector('.side-menu'),'initial preview did not mount its source');expect(!preview.value.navigationExpanded&&doc.querySelector('.side-menu').getBoundingClientRect().width===0&&host.querySelector('[aria-label="调整侧边栏材质"]')?.getBoundingClientRect().width<=80,'overview initially obscures the content with navigation');window.previewDefaultNavigation='collapsed';preview.value.toggleNavigation();await waitFor(()=>{const a=host.getBoundingClientRect(),b=frame.getBoundingClientRect();return !!host.dataset.cameraScale&&doc.querySelector('.side-menu')?.getBoundingClientRect().width>0&&b.left>=a.left&&b.top>=a.top&&b.right<=a.right&&b.bottom<=a.bottom;},'initial preview did not settle after styles and viewport became ready');
+ async initial(){await settle();const host=document.querySelector('.appearance-window-preview'),frame=host.querySelector('iframe'),doc=frame.contentDocument;await waitFor(()=>!!host.dataset.cameraScale&&doc.querySelector('.side-menu'),'initial preview did not mount its source');expect(!preview.value.navigationExpanded&&doc.querySelector('.side-menu').getBoundingClientRect().width===0&&noExpandedNavigationHotspot(host),'overview initially obscures the content with navigation');window.previewDefaultNavigation='collapsed';preview.value.toggleNavigation();await waitFor(()=>{const a=host.getBoundingClientRect(),b=frame.getBoundingClientRect();return !!host.dataset.cameraScale&&doc.querySelector('.side-menu')?.getBoundingClientRect().width>0&&b.left>=a.left&&b.top>=a.top&&b.right<=a.right&&b.bottom<=a.bottom;},'initial preview did not settle after styles and viewport became ready');
  expect(frame.getAttribute('sandbox')==='allow-same-origin','preview can execute scripts');expect(doc.querySelector('.app-shell').inert,'real controls not inert');
  await doc.fonts.ready;realScene(doc);expect(JSON.stringify(navigationRows(doc))===JSON.stringify(['local-home','search','streaming','local-library','recent']),'default sidebar diverges from the real five navigation entries');const sourceSnapshot=sourceGeometry(doc);
  const a=host.getBoundingClientRect(),b=frame.getBoundingClientRect();expect(Math.abs(a.width/a.height-innerWidth/innerHeight)<0.003,'preview aspect distorted');expect(b.left>=a.left&&b.top>=a.top&&b.right<=a.right&&b.bottom<=a.bottom,'complete source window not fitted');

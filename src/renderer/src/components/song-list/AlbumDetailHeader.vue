@@ -1,15 +1,45 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LibraryItem } from '../../stores/library/musicStoreTypes'
 import AlbumArtwork from './AlbumArtwork.vue'
 import { formatReleaseDate } from '../../../../shared/releaseDate.ts'
+import { resolveCover } from '../../utils/coverLoader.ts'
+import { extractAverageColor, normalizeAccentColor } from '../../utils/colorExtractor.ts'
 
-defineProps<{ album: LibraryItem; durationText: string; canPlay: boolean }>()
+const props = defineProps<{
+  album: Omit<LibraryItem, 'tracks'>
+  durationText: string
+  canPlay: boolean
+}>()
 defineEmits<{ play: []; shuffle: [] }>()
+const tint = ref<string | null>(null)
+const ambientStyle = computed(() => (tint.value ? { '--album-tint': tint.value } : {}))
+let generation = 0
+watch(
+  () => [props.album.id, props.album.cover, props.album.coverSource] as const,
+  async () => {
+    const request = ++generation
+    tint.value = null
+    if (!props.album.cover && !props.album.coverSource) return
+    try {
+      const cover = await resolveCover(props.album.cover, props.album.coverSource)
+      if (!cover || request !== generation) return
+      const color = await extractAverageColor(cover)
+      if (request === generation && color) tint.value = normalizeAccentColor(color)
+    } catch {
+      /* Neutral theme background is the fallback for unreadable artwork. */
+    }
+  },
+  { immediate: true }
+)
+onBeforeUnmount(() => {
+  generation++
+})
 </script>
 
 <template>
-  <section class="album-detail-header" aria-labelledby="local-album-title">
+  <section class="album-detail-header" :style="ambientStyle" aria-labelledby="local-album-title">
     <AlbumArtwork
       class="album-detail-artwork"
       :cover="album.cover"
@@ -19,18 +49,17 @@ defineEmits<{ play: []; shuffle: [] }>()
       eager
     />
     <div class="album-detail-information">
+      <span class="album-detail-kicker">本地专辑</span>
       <h2 id="local-album-title" class="album-detail-title" :title="album.name">
         {{ album.name }}
       </h2>
-      <div class="album-detail-meta">
-        <p class="album-detail-artist" :title="album.artist || '未知歌手'">
-          {{ album.artist || '未知歌手' }}
-        </p>
-        <p class="album-detail-release">{{ formatReleaseDate(album.releaseDate) }}</p>
-        <p class="album-detail-stats">
-          {{ album.trackCount }} 首<span v-if="durationText"> · {{ durationText }}</span>
-        </p>
-      </div>
+      <p class="album-detail-artist" :title="album.artist || '未知歌手'">
+        {{ album.artist || '未知歌手' }}
+      </p>
+      <p class="album-detail-release">{{ formatReleaseDate(album.releaseDate) }}</p>
+      <p class="album-detail-stats">
+        {{ album.trackCount }} 首<span v-if="durationText"> · {{ durationText }}</span>
+      </p>
       <div class="album-detail-actions">
         <button
           type="button"
@@ -55,95 +84,106 @@ defineEmits<{ play: []; shuffle: [] }>()
 
 <style scoped>
 .album-detail-header {
-  --album-detail-cover-size: 160px;
+  --album-tint: var(--te-primary-500);
   display: grid;
-  grid-template-columns: var(--album-detail-cover-size) minmax(0, 1fr);
-  align-items: start;
-  gap: 24px;
+  grid-template-columns: 240px minmax(0, 1fr);
+  align-items: center;
+  gap: 32px;
   position: relative;
   isolation: isolate;
-  padding: 0;
+  padding: 28px 32px 36px;
   margin-bottom: 24px;
 }
+.album-detail-header::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -10px -12px -20px;
+  pointer-events: none;
+  border-radius: 28px;
+  background: radial-gradient(
+    ellipse at 12% 16%,
+    color-mix(in srgb, var(--album-tint) 17%, transparent),
+    transparent 72%
+  );
+}
 .album-detail-artwork {
-  width: var(--album-detail-cover-size);
+  width: 240px;
 }
 .album-detail-information {
   min-width: 0;
 }
+.album-detail-kicker {
+  display: block;
+  margin-bottom: 12px;
+  font-size: calc(var(--te-font-size-body, 14px) * 0.79);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--te-neutral-500);
+}
 .album-detail-title {
-  margin: 0 0 8px;
-  font-size: var(--te-type-page-title);
-  font-weight: var(--te-type-weight-strong);
-  letter-spacing: -0.015em;
-  line-height: 1.2;
+  margin: 0 0 14px;
+  font-size: clamp(24px, 3vw, 40px);
+  font-weight: 750;
+  letter-spacing: -0.035em;
+  line-height: 1.18;
   color: var(--te-neutral-900);
   overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   overflow: hidden;
 }
 .album-detail-artist {
-  max-width: 100%;
-  min-width: 0;
-  margin: 0;
+  margin: 0 0 14px;
   color: var(--te-neutral-700);
-  font-size: var(--te-type-body);
-  font-weight: var(--te-type-weight-medium);
-  line-height: 1.3;
+  font-size: calc(var(--te-font-size-body, 14px) * 1.14);
+  font-weight: 550;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.album-detail-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: 12px;
-  row-gap: 4px;
-}
 .album-detail-release,
 .album-detail-stats {
-  margin: 0;
-  font-size: var(--te-type-caption);
+  margin: 0 0 6px;
+  font-size: var(--te-font-size-body, 14px);
   line-height: 1.5;
   color: var(--te-neutral-500);
 }
 .album-detail-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 10px;
+  margin-top: 24px;
 }
 .album-detail-actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: var(--te-control-height-md);
-  padding: 6px 16px;
+  gap: 9px;
+  min-height: 40px;
+  padding: 0 20px;
   border: 1px solid transparent;
-  border-radius: var(--te-control-radius-sm, 8px);
+  border-radius: 999px;
   font: inherit;
-  font-size: var(--te-type-caption);
-  font-weight: 500;
+  font-size: var(--te-font-size-body, 14px);
+  font-weight: 600;
   cursor: pointer;
   transition:
     opacity 150ms ease,
     transform 150ms ease-out;
 }
 .album-play-primary {
-  color: var(--te-control-on-accent);
+  color: var(--te-neutral-50);
   background: var(--te-primary-500);
 }
 .album-play-secondary {
   color: var(--te-neutral-900);
-  background: var(--te-subtle-bg);
-  border-color: var(--te-card-border) !important;
+  background: color-mix(in srgb, var(--te-card-bg) 80%, transparent);
+  border-color: color-mix(in srgb, var(--te-neutral-500) 18%, transparent) !important;
 }
 .album-detail-actions button:focus-visible {
-  outline: 2px solid var(--te-control-focus-color);
+  outline: 2px solid var(--te-primary-500);
   outline-offset: 4px;
 }
 .album-detail-actions button:active:not(:disabled) {
@@ -158,34 +198,46 @@ defineEmits<{ play: []; shuffle: [] }>()
     opacity: 0.85;
   }
 }
-@media (max-height: 760px), (max-width: 640px) {
+@media (max-width: 900px) {
   .album-detail-header {
-    --album-detail-cover-size: 120px;
-    gap: 16px;
-    margin-bottom: 16px;
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: 24px;
+    padding-inline: 16px;
+  }
+  .album-detail-artwork {
+    width: 200px;
   }
 }
-@container (max-width: 640px) {
+@media (max-width: 640px) {
   .album-detail-header {
-    --album-detail-cover-size: 120px;
-    gap: 16px;
-    margin-bottom: 16px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    padding: 16px 4px 28px;
   }
-}
-@container (max-width: 360px) {
-  .album-detail-header {
-    --album-detail-cover-size: 96px;
-    gap: 12px;
+  .album-detail-artwork {
+    width: min(240px, 72%);
+    justify-self: center;
+  }
+  .album-detail-information {
+    text-align: center;
+  }
+  .album-detail-actions {
+    justify-content: center;
+  }
+  .album-detail-header::before {
+    background: radial-gradient(
+      ellipse at 50% 10%,
+      color-mix(in srgb, var(--album-tint) 17%, transparent),
+      transparent 74%
+    );
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  @scope (:root:not([data-te-motion='full'])) {
-    .album-detail-actions button {
-      transition: none;
-    }
-    .album-detail-actions button:active:not(:disabled) {
-      transform: none;
-    }
+  .album-detail-actions button {
+    transition: none;
+  }
+  .album-detail-actions button:active:not(:disabled) {
+    transform: none;
   }
 }
 </style>

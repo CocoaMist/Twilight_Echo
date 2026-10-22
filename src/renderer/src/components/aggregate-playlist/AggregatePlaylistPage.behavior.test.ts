@@ -353,6 +353,10 @@ const fixture = window.__aggregateFixture
 const clone = (value) => JSON.parse(JSON.stringify(value))
 const envelope = () => ({ version: 2, revision: fixture.revision, savedAt: new Date().toISOString(), data: clone(fixture.authoritative) })
 window.api = {
+  library: {
+    getStorageMode: async () => 'json',
+    onChanged: () => () => {}
+  },
   data: {
     loadPlaylists: async () => envelope(),
     savePlaylists: async (data, expectedRevision) => {

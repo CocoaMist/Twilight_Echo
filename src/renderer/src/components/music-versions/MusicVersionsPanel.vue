@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue'
 import type { Track } from '@renderer/types/music'
+import { getAlbumIdentity } from '@renderer/stores/library/musicStoreData.ts'
+import { libraryTrack } from '@renderer/utils/libraryQueuePlayback.ts'
+import { getTrackSource, versionSourceKey } from '@renderer/utils/trackSourceIdentity.ts'
 import {
   editMusicVersions,
   type MusicVersionsDocument,
@@ -15,15 +18,29 @@ import {
 } from '@renderer/stores/musicVersions.ts'
 import {
   buildVersionCatalog,
+  localAlbumIdFromVersionKey,
+  queryVersionCatalogPage,
+  resolveLocalTrackVersionKey,
+  resolvePreferredSourceKey,
   versionDescriptions,
   resolvePreferredVersion
 } from '@renderer/components/music-versions/versionCatalog.ts'
+import type { LibraryQuery } from '../../../../shared/libraryDatabase.ts'
 
 const props = withDefaults(
-  defineProps<{ tracks: Track[]; initialScope?: VersionScope; initialTrack?: Track }>(),
-  { initialScope: 'tracks' }
+  defineProps<{
+    tracks: Track[]
+    initialScope?: VersionScope
+    initialTrack?: Track
+    sqliteMode?: boolean
+  }>(),
+  { initialScope: 'tracks', sqliteMode: false }
 )
-const emit = defineEmits<{ close: []; play: [tracks: Track[]] }>()
+const emit = defineEmits<{
+  close: []
+  play: [tracks: Track[]]
+  playQuery: [query: LibraryQuery, selectedId: string]
+}>()
 const scope = ref<VersionScope>(props.initialScope)
 const query = ref('')
 const label = ref('')
@@ -41,49 +58,116 @@ const detailsKey = ref<string | null>(null)
 const detailPage = ref(0)
 const relatedKeys = shallowRef<Set<string> | null>(null)
 const document = computed(() => getMusicVersions())
-const catalog = computed(() => buildVersionCatalog(props.tracks, scope.value))
-const rows = computed(() => {
-  const map = new Map(catalog.value.map((item) => [item.key, item]))
+const externalCatalog = computed(() => buildVersionCatalog(props.tracks, scope.value))
+const databasePage = shallowRef<{
+  items: ReturnType<typeof buildVersionCatalog>
+  total: number
+  revision: number
+  offset: number
+} | null>(null)
+const databaseTotal = ref(0)
+const databaseLoaded = ref(false)
+const databaseLoading = ref(false)
+const databaseError = ref('')
+let databaseGeneration = 0
+const databaseDetails = shallowRef<Track[]>([])
+const databaseDetailTotal = ref(0)
+const databaseDetailLoading = ref(false)
+let detailGeneration = 0
+const tailRows = computed(() => {
+  const map = new Map(externalCatalog.value.map((item) => [item.key, item]))
   for (const version of document.value[scope.value].versions)
     for (const key of version.sources) {
-      if (!map.has(key))
+      const isLocal =
+        scope.value === 'tracks' ? key.startsWith('["local",') : key.startsWith('["album","local",')
+      const searchText = query.value.trim().toLowerCase()
+      const savedMatch = `${version.label} ${key} ${descriptions.value.get(key) ?? ''}`
+        .toLowerCase()
+        .includes(searchText)
+      if (
+        !map.has(key) &&
+        (!props.sqliteMode || !isLocal || relatedKeys.value?.has(key) || (searchText && savedMatch))
+      )
         map.set(key, { key, title: version.label, artist: '此来源未载入', source: key, tracks: [] })
     }
   return [...map.values()]
 })
+const rows = computed(() => {
+  const map = new Map(databasePage.value?.items.map((item) => [item.key, item]) ?? [])
+  for (const item of tailRows.value) if (!map.has(item.key)) map.set(item.key, item)
+  return [...map.values()]
+})
 const descriptions = computed(() => versionDescriptions(document.value, scope.value))
+const matchesQuery = (item: (typeof rows.value)[number], text: string): boolean =>
+  !text ||
+  `${item.title} ${item.artist} ${item.source} ${descriptions.value.get(item.key)}`
+    .toLowerCase()
+    .includes(text)
 const filtered = computed(() => {
   const text = query.value.trim().toLowerCase()
   return rows.value.filter(
-    (item) =>
-      (!relatedKeys.value || relatedKeys.value.has(item.key)) &&
-      (!text ||
-        `${item.title} ${item.artist} ${item.source} ${descriptions.value.get(item.key)}`
-          .toLowerCase()
-          .includes(text))
+    (item) => (!relatedKeys.value || relatedKeys.value.has(item.key)) && matchesQuery(item, text)
   )
 })
-const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / 50)))
-const visible = computed(() => filtered.value.slice(page.value * 50, (page.value + 1) * 50))
+const filteredTail = computed(() => {
+  const text = query.value.trim().toLowerCase()
+  const pageKeys = new Set(databasePage.value?.items.map((item) => item.key) ?? [])
+  return tailRows.value.filter(
+    (item) =>
+      !pageKeys.has(item.key) &&
+      (!relatedKeys.value || relatedKeys.value.has(item.key)) &&
+      matchesQuery(item, text)
+  )
+})
+const pages = computed(() =>
+  Math.max(
+    1,
+    Math.ceil(
+      (props.sqliteMode ? databaseTotal.value + filteredTail.value.length : filtered.value.length) /
+        50
+    )
+  )
+)
+const visible = computed(() => {
+  if (!props.sqliteMode) return filtered.value.slice(page.value * 50, (page.value + 1) * 50)
+  const start = page.value * 50
+  const databaseCount = Math.max(0, Math.min(start + 50, databaseTotal.value) - start)
+  const databaseItems = databasePage.value?.items ?? []
+  const tailStart = Math.max(0, start - databaseTotal.value)
+  const tailCount = 50 - databaseCount
+  return [...databaseItems, ...filteredTail.value.slice(tailStart, tailStart + tailCount)]
+})
 const changes = computed(() => {
   if (!preview.value) return []
   const { before, after } = preview.value
   const oldDescriptions = versionDescriptions(before, scope.value),
     nextDescriptions = versionDescriptions(after, scope.value)
-  return rows.value
-    .map((item) => ({
-      item,
-      before: oldDescriptions.get(item.key) ?? '自动匹配 · 无人工覆盖',
-      after: nextDescriptions.get(item.key) ?? '自动匹配 · 无人工覆盖'
+  const known = new Map(rows.value.map((item) => [item.key, item]))
+  const keys = new Set([...oldDescriptions.keys(), ...nextDescriptions.keys(), ...selection.value])
+  return [...keys]
+    .map((key) => ({
+      item: known.get(key) ?? {
+        key,
+        title:
+          after[scope.value].versions.find((version) => version.sources.includes(key))?.label ??
+          key,
+        artist: '来源',
+        source: key,
+        tracks: []
+      },
+      before: oldDescriptions.get(key) ?? '自动匹配 · 无人工覆盖',
+      after: nextDescriptions.get(key) ?? '自动匹配 · 无人工覆盖'
     }))
     .filter((item) => item.before !== item.after || selection.value.has(item.item.key))
 })
 const visibleChanges = computed(() =>
   changes.value.slice(previewPage.value * 50, (previewPage.value + 1) * 50)
 )
-const details = computed(() => rows.value.find((item) => item.key === detailsKey.value))
-const visibleDetails = computed(
-  () => details.value?.tracks.slice(detailPage.value * 50, (detailPage.value + 1) * 50) ?? []
+const details = shallowRef<(typeof rows.value)[number] | null>(null)
+const visibleDetails = computed(() =>
+  details.value?.albumId && props.sqliteMode
+    ? databaseDetails.value
+    : (details.value?.tracks.slice(detailPage.value * 50, (detailPage.value + 1) * 50) ?? [])
 )
 const operations: Array<{ value: VersionOperation; label: string }> = [
   { value: 'sources', label: '关联为同版本的多个来源' },
@@ -98,12 +182,29 @@ const operations: Array<{ value: VersionOperation; label: string }> = [
 watch(scope, () => {
   relatedKeys.value = null
   selection.value = new Set()
-  preview.value = null
-  detailsKey.value = null
-  page.value = 0
 })
-watch(query, () => {
-  page.value = 0
+watch(
+  [scope, query],
+  () => {
+    databaseGeneration++
+    detailGeneration++
+    preview.value = null
+    details.value = null
+    detailsKey.value = null
+    page.value = 0
+    databasePage.value = null
+    databaseTotal.value = 0
+    databaseLoaded.value = false
+    databaseError.value = ''
+  },
+  { flush: 'sync' }
+)
+watch([() => props.sqliteMode, scope, query, page], () => void loadDatabasePage(), {
+  immediate: true,
+  flush: 'sync'
+})
+watch([() => props.sqliteMode, detailPage, detailsKey], () => void loadDatabaseDetails(), {
+  flush: 'sync'
 })
 watch(pages, (value) => {
   page.value = Math.min(page.value, value - 1)
@@ -116,14 +217,104 @@ watch(
   }
 )
 if (props.initialTrack) {
-  const item = catalog.value.find((entry) =>
-    entry.tracks.some((track) => track.id === props.initialTrack!.id)
-  )
-  if (item) {
-    selection.value = new Set([item.key])
-    query.value = item.title
+  const track = props.initialTrack
+  selection.value = new Set([
+    scope.value === 'tracks'
+      ? versionSourceKey(track)
+      : JSON.stringify(['album', getTrackSource(track), getAlbumIdentity(track)])
+  ])
+  query.value = scope.value === 'tracks' ? track.title : track.album
+}
+
+async function loadDatabasePage(): Promise<void> {
+  const generation = ++databaseGeneration
+  if (!props.sqliteMode) {
+    databasePage.value = null
+    databaseTotal.value = 0
+    databaseLoaded.value = false
+    databaseLoading.value = false
+    databaseError.value = ''
+    return
+  }
+  const offset = page.value * 50
+  if (databaseLoaded.value && offset >= databaseTotal.value) {
+    databasePage.value = null
+    databaseLoading.value = false
+    databaseError.value = ''
+    return
+  }
+  databaseLoading.value = true
+  databaseError.value = ''
+  try {
+    const result = await queryVersionCatalogPage(window.api.library.database, scope.value, {
+      ...(query.value.trim() ? { search: query.value.trim() } : {}),
+      offset,
+      limit: 50
+    })
+    if (generation !== databaseGeneration) return
+    if (
+      result.offset !== offset ||
+      result.items.length > 50 ||
+      !Number.isSafeInteger(result.total) ||
+      result.total < 0 ||
+      !Number.isSafeInteger(result.revision) ||
+      result.revision < 0
+    )
+      throw new Error('数据库返回了无效的版本分页')
+    databasePage.value = result
+    databaseTotal.value = result.total
+    databaseLoaded.value = true
+    const lastPage = Math.max(0, Math.ceil(result.total / 50) - 1)
+    if (offset > 0 && offset >= result.total) {
+      page.value = lastPage
+      return
+    }
+  } catch (cause) {
+    if (generation === databaseGeneration)
+      databaseError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (generation === databaseGeneration) databaseLoading.value = false
   }
 }
+
+async function loadDatabaseDetails(): Promise<void> {
+  const generation = ++detailGeneration
+  const item = details.value
+  if (!props.sqliteMode || !item?.albumId) {
+    databaseDetails.value = []
+    databaseDetailTotal.value = item?.tracks.length ?? 0
+    databaseDetailLoading.value = false
+    return
+  }
+  databaseDetailLoading.value = true
+  try {
+    const result = await window.api.library.database.queryTracks({
+      albumId: item.albumId,
+      sort: 'trackNumber',
+      direction: 'asc',
+      offset: detailPage.value * 50,
+      limit: 50
+    })
+    if (generation !== detailGeneration) return
+    databaseDetails.value = result.tracks.map(libraryTrack)
+    databaseDetailTotal.value = result.total
+  } catch (cause) {
+    if (generation === detailGeneration)
+      databaseError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (generation === detailGeneration) databaseDetailLoading.value = false
+  }
+}
+
+function retryDatabaseRead(): void {
+  databaseError.value = ''
+  if (details.value?.albumId) void loadDatabaseDetails()
+  else {
+    databaseLoaded.value = false
+    void loadDatabasePage()
+  }
+}
+
 function clearSelection(): void {
   selection.value = new Set()
   preview.value = null
@@ -141,8 +332,10 @@ function showRelated(key: string): void {
   page.value = 0
 }
 function showDetails(key: string): void {
-  detailsKey.value = key
+  details.value = rows.value.find((item) => item.key === key) ?? null
   detailPage.value = 0
+  databaseDetails.value = []
+  detailsKey.value = key
 }
 function toggle(key: string): void {
   const next = new Set(selection.value)
@@ -176,13 +369,43 @@ function commit(): void {
     error.value = cause instanceof Error ? cause.message : '保存失败，请重试'
   }
 }
-function playPreferred(): void {
+async function playPreferred(): Promise<void> {
   try {
     if (selection.value.size !== 1) throw new Error('请选择一个来源作为版本选择起点')
-    emit(
-      'play',
-      resolvePreferredVersion(document.value, scope.value, [...selection.value][0], catalog.value)
-    )
+    const startKey = [...selection.value][0]
+    const sourceKey = resolvePreferredSourceKey(document.value, scope.value, startKey)
+    const sourceItem = rows.value.find((item) => item.key === sourceKey)
+    if (!props.sqliteMode) {
+      emit('play', resolvePreferredVersion(document.value, scope.value, startKey, rows.value))
+      error.value = ''
+      return
+    }
+    if (scope.value === 'albums') {
+      const albumId = sourceItem?.albumId ?? localAlbumIdFromVersionKey(sourceKey)
+      if (albumId) {
+        const query: LibraryQuery = {
+          albumId,
+          sort: 'trackNumber',
+          direction: 'asc'
+        }
+        const first = await window.api.library.database.queryTracks({
+          ...query,
+          offset: 0,
+          limit: 1
+        })
+        const selected = first.tracks[0]
+        if (!selected) throw new Error('专辑已不在曲库中')
+        emit('playQuery', query, selected.id)
+      } else if (sourceItem?.tracks.length) {
+        emit('play', resolvePreferredVersion(document.value, scope.value, startKey, rows.value))
+      } else throw new Error('偏好专辑尚未载入，请搜索该专辑后重试')
+    } else {
+      const track =
+        sourceItem?.tracks[0] ??
+        (await resolveLocalTrackVersionKey(window.api.library.database, sourceKey))
+      if (!track) throw new Error('偏好来源已不在曲库中，关系仍保留，可重新关联其他来源')
+      emit('playQuery', { ids: [track.id] }, track.id)
+    }
     error.value = ''
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '无法播放偏好版本'
@@ -227,6 +450,10 @@ function playPreferred(): void {
       ><button :disabled="selection.size !== 1" @click="playPreferred">播放偏好版本</button>
     </div>
     <p role="alert">{{ error }}</p>
+    <p v-if="databaseError" role="alert">
+      {{ databaseError }} <button @click="retryDatabaseRead">重新读取</button>
+    </p>
+    <p v-if="databaseLoading" role="status">正在读取数据库分页...</p>
     <p role="status">{{ notice }}</p>
     <section v-if="preview" class="version-preview" aria-label="关系修改预览">
       <strong>{{ preview.operation }} · 影响 {{ changes.length }} 个来源</strong>
@@ -252,8 +479,8 @@ function playPreferred(): void {
         <p>
           {{ item.source }} ·
           {{
-            item.tracks.length
-              ? `${item.tracks.length} 首已载入，播放时检查资源`
+            item.trackCount || item.tracks.length
+              ? `${item.trackCount ?? item.tracks.length} 首，按需读取曲目`
               : '未载入，人工关系保留'
           }}
         </p>
@@ -262,17 +489,26 @@ function playPreferred(): void {
         <button @click="showDetails(item.key)">查看来源与曲序</button>
       </li>
     </ul>
-    <p v-if="!filtered.length">
+    <p
+      v-if="
+        props.sqliteMode
+          ? databaseLoaded && !databaseTotal && !filteredTail.length
+          : !filtered.length
+      "
+    >
       没有匹配的来源。可在歌曲信息中打开此面板，或先加载对应歌单/搜索结果。
     </p>
     <footer>
       <button :disabled="page === 0" @click="page--">上一页</button
-      ><span>{{ page + 1 }} / {{ pages }} 页 · {{ filtered.length }} 个来源</span
+      ><span
+        >{{ page + 1 }} / {{ pages }} 页 ·
+        {{ props.sqliteMode ? databaseTotal + filteredTail.length : filtered.length }} 个来源</span
       ><button :disabled="page + 1 >= pages" @click="page++">下一页</button>
     </footer>
     <section v-if="details" aria-label="来源曲序">
       <h3>{{ details.title }} · 原始曲序</h3>
-      <p v-if="!details.tracks.length">来源未载入：{{ details.key }}</p>
+      <p v-if="databaseDetailLoading" role="status">正在读取曲目...</p>
+      <p v-else-if="!databaseDetailTotal">来源未载入：{{ details.key }}</p>
       <ol>
         <li v-for="track in visibleDetails" :key="track.id">
           {{ track.discNumber ?? 1 }}-{{ track.trackNumber ?? '—' }} · {{ track.title }} ·
@@ -281,7 +517,7 @@ function playPreferred(): void {
         </li>
       </ol>
       <button :disabled="detailPage === 0" @click="detailPage--">上一页曲目</button
-      ><button :disabled="(detailPage + 1) * 50 >= details.tracks.length" @click="detailPage++">
+      ><button :disabled="(detailPage + 1) * 50 >= databaseDetailTotal" @click="detailPage++">
         下一页曲目</button
       ><button @click="detailsKey = null">收起曲序</button>
     </section>

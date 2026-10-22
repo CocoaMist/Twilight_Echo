@@ -1,6 +1,5 @@
 import { createApp, h, nextTick, ref, watchEffect } from 'vue'
 import Inspector from '@renderer/components/AppearanceSurfaceInspector.vue'
-import Bookmark from '@renderer/components/SidebarBookmark.vue'
 import {
   cloneAppearance,
   defaultCardAppearance,
@@ -15,7 +14,6 @@ import '@renderer/assets/appearance.css'
 import 'primeicons/primeicons.css'
 import '@renderer/components/settings-page/SettingsPage.css'
 import '@renderer/components/settings-page/SettingsLayout.css'
-import '@renderer/components/settings-page/SettingsMarketLayout.css'
 import '@renderer/components/settings-page/BackgroundAppearanceCustomizer.css'
 import '@renderer/components/theme-studio/ThemeStudioPage.css'
 
@@ -119,7 +117,6 @@ const extraCards = [
   surface.append(card)
   return card
 })
-createApp({ setup: () => () => h(Bookmark, { open: false }) }).mount('#bookmark-mount')
 const targets = {
   controls: '#control',
   navigation: '#nav',
@@ -160,21 +157,6 @@ window.runMaterialTests = async () => {
   await settle()
   checkSettingsStructure()
   delete document.documentElement.dataset.teCardCustom
-  const bookmark = document.querySelector('.sidebar-bookmark')
-  expect(
-    !bookmark.querySelector('.bookmark-shape') &&
-      getComputedStyle(bookmark, '::before').opacity === '0' &&
-      getComputedStyle(bookmark, '::after').opacity === '0' &&
-      bookmark.getBoundingClientRect().width === 32 &&
-      bookmark.getBoundingClientRect().height === 32,
-    'sidebar toggle retains a protruding bookmark or a persistent material block'
-  )
-  expect(
-    !bookmark.hasAttribute('data-te-appearance-body') &&
-      getComputedStyle(bookmark).backgroundColor === 'rgba(0, 0, 0, 0)' &&
-      getComputedStyle(bookmark).backdropFilter === 'none',
-    'generic control paint adds a rectangular block behind bookmark'
-  )
   draft.value = initial()
   await settle()
   const baseline = snapshot()
@@ -257,14 +239,6 @@ window.runMaterialTests = async () => {
             getComputedStyle(target).backgroundColor.includes('0.63'),
             'custom color cancelled glass alpha: ' + getComputedStyle(target).backgroundColor
           )
-          if (scope === 'navigation') {
-            const handle = getComputedStyle(document.querySelector('.sidebar-bookmark'), '::before')
-            expect(
-              handle.backgroundColor === getComputedStyle(target).backgroundColor &&
-                handle.backdropFilter === getComputedStyle(target).backdropFilter,
-              'handle differs from panel'
-            )
-          }
         }
         expect(
           getComputedStyle(document.querySelector('#selected')).backgroundColor ===
@@ -321,7 +295,6 @@ window.runMaterialTests = async () => {
   return {
     independentMaterialCases: cases,
     customColorAlpha: true,
-    handleMatchesPanel: true,
     busyGuard: true
   }
 }
@@ -418,11 +391,5 @@ window.verifyFallback = async (feature) => {
       getComputedStyle(document.querySelector(targets[scope])).backdropFilter === 'none',
       'fallback retains filter: ' + feature
     )
-    if (scope === 'navigation')
-      expect(
-        getComputedStyle(document.querySelector('.sidebar-bookmark'), '::before').backdropFilter ===
-          'none',
-        'handle retains filter'
-      )
   }
 }

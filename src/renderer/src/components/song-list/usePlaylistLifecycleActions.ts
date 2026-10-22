@@ -12,6 +12,7 @@ import {
   readPlaylistImportFile
 } from '@renderer/utils/playlistFileValidation.ts'
 import type { PlaylistFileFormat } from '@renderer/utils/playlistLifecycle.ts'
+import type { SongListActionSource, SongListActionLease } from './songListActionSource.ts'
 
 export type PlaylistDialogRequest =
   | { kind: 'rename' | 'copy'; playlistId: string; initialValue: string }
@@ -25,6 +26,16 @@ export interface PlaylistLifecycleActionOptions {
   isSelected(trackId: string): boolean
   clearSelection(): void
   selectPlaylist(name: string): void
+  definitionTrack?(track: Track): Track
+  streamingSelection?: {
+    enabled(): boolean
+    capture(track?: Track): SongListActionSource
+    run(
+      source: SongListActionSource,
+      action: (lease: SongListActionLease, signal: AbortSignal) => Promise<void | boolean>,
+      clear?: boolean
+    ): Promise<boolean>
+  }
 }
 
 function describeError(error: unknown, fallback: string): string {
@@ -33,13 +44,6 @@ function describeError(error: unknown, fallback: string): string {
 
 async function readPlaylistCover(file: File): Promise<string> {
   assertPlaylistCoverFile(file)
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(new Error('读取封面文件失败'))
-    reader.onload = () =>
-      typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('封面数据无效'))
-    reader.readAsDataURL(file)
-  })
   const image = await createImageBitmap(file)
   try {
     assertPlaylistCoverDimensions(image.width, image.height)
@@ -57,7 +61,13 @@ async function readPlaylistCover(file: File): Promise<string> {
     if (!handle) throw new Error('封面缓存失败')
     return handle
   }
-  return dataUrl
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('读取封面文件失败'))
+    reader.onload = () =>
+      typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('封面数据无效'))
+    reader.readAsDataURL(file)
+  })
 }
 
 /**
@@ -74,17 +84,17 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
   playlistDialogError: Ref<string>
   playlistMoveTargets: Readonly<Ref<Playlist[]>>
   dismissPlaylistDialog(): void
-  confirmPlaylistDialog(value: string): void
+  confirmPlaylistDialog(value: string): Promise<void>
   triggerPlaylistImport(): void
   handlePlaylistImport(event: Event): Promise<void>
-  downloadPlaylistDocument(format: PlaylistFileFormat): void
+  downloadPlaylistDocument(format: PlaylistFileFormat): Promise<void>
   triggerPlaylistCoverPicker(): void
   handlePlaylistCover(event: Event): Promise<void>
   handleRenamePlaylist(): void
   handleCopyPlaylist(): void
-  handleMoveSelectedWithinPlaylist(toEnd: boolean): void
+  handleMoveSelectedWithinPlaylist(toEnd: boolean): Promise<void>
   handlePlaylistDragStart(event: DragEvent, track: Track): void
-  handlePlaylistDrop(event: DragEvent, target: Track): void
+  handlePlaylistDrop(event: DragEvent, target: Track): Promise<void>
   handleMoveSelectedToPlaylist(): void
   handlePlaylistRepair(): Promise<void>
 } {
@@ -98,17 +108,22 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
     copyPlaylist,
     reorderPlaylistTracks,
     movePlaylistTracks,
-    importPlaylistDocument,
-    exportPlaylistDocument,
-    repairPlaylistMissingTracks
+    movePlaylistMemberPagesById,
+    reorderPlaylistTrackIdPagesById,
+    importPlaylistDocumentAsync,
+    exportPlaylistDocumentAsync,
+    repairPlaylistMissingTracksAsync
   } = useMusicStore()
   const playlistImportInput = ref<HTMLInputElement | null>(null)
   const playlistCoverInput = ref<HTMLInputElement | null>(null)
   const playlistExportFormat = ref<PlaylistFileFormat>('m3u8')
   const playlistRepairPending = ref(false)
+  let playlistExportPending = false
   const playlistDragTrackId = ref<string | null>(null)
   const playlistDialog = shallowRef<PlaylistDialogRequest | null>(null)
   const playlistDialogError = ref('')
+  let moveSource: SongListActionSource | null = null
+  let dragSource: { playlistId: string; source: SongListActionSource; id: string } | null = null
   const playlistMoveTargets = computed(() =>
     localPlaylists.value.filter((playlist) => playlist.id !== options.currentPlaylist.value?.id)
   )
@@ -154,11 +169,12 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
   }
 
   function dismissPlaylistDialog(): void {
+    moveSource = null
     playlistDialog.value = null
     playlistDialogError.value = ''
   }
 
-  function confirmPlaylistDialog(value: string): void {
+  async function confirmPlaylistDialog(value: string): Promise<void> {
     const request = playlistDialog.value
     if (!request) return
     const playlist = playlists.value.find((item) => item.id === request.playlistId)
@@ -180,6 +196,31 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
         const target = playlistMoveTargets.value.find((item) => item.id === value)
         if (!target) {
           playlistDialogError.value = '目标歌单已不存在，请重新选择'
+          return
+        }
+        if (moveSource && options.streamingSelection) {
+          const source = moveSource
+          const done = await options.streamingSelection.run(
+            source,
+            async (lease, signal) => {
+              const result = await movePlaylistMemberPagesById(
+                playlist.id,
+                target.id,
+                async (append) => {
+                  await lease.members(append)
+                  return () => {
+                    source.guard()
+                    if (playlistDialog.value !== request)
+                      throw new Error('移动对话框已关闭，请重新选择')
+                  }
+                },
+                signal
+              )
+              options.repairMessage.value = `已移动 ${result.sourceRemoved} 首${result.moved < result.sourceRemoved ? '，重复歌曲已合并' : ''}`
+            },
+            true
+          )
+          if (done && playlistDialog.value === request) dismissPlaylistDialog()
           return
         }
         const result = movePlaylistTracks(playlist.name, target.name, request.trackIds)
@@ -208,12 +249,13 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
     input.value = ''
     const playlist = requireCurrentPlaylist()
     if (!file || !playlist) return
+    const targetId = playlist.id,
+      targetName = playlist.name
     try {
-      const result = importPlaylistDocument(
-        playlist.name,
-        file.name,
-        await readPlaylistImportFile(file)
-      )
+      const contents = await readPlaylistImportFile(file)
+      if (!playlists.value.some((item) => item.id === targetId && item.name === targetName))
+        throw new Error('目标歌单已被重命名或删除，请重新导入')
+      const result = await importPlaylistDocumentAsync(targetName, file.name, contents)
       options.repairMessage.value = `已导入 ${result.importedCount} 首${
         result.unresolvedEntries ? `，${result.unresolvedEntries} 首未匹配` : ''
       }`
@@ -225,18 +267,30 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
     }
   }
 
-  function downloadPlaylistDocument(format: PlaylistFileFormat): void {
+  async function downloadPlaylistDocument(format: PlaylistFileFormat): Promise<void> {
     const playlist = requireCurrentPlaylist()
-    if (!playlist) return
-    const contents = exportPlaylistDocument(playlist.name, format)
-    if (contents === null) return
-    const blob = new Blob([contents], { type: playlistExportMimeType(format) })
-    const link = document.createElement('a')
-    link.href = URL.createObjectURL(blob)
-    link.download = playlistExportFilename(playlist.name, format)
-    link.click()
-    URL.revokeObjectURL(link.href)
-    options.repairMessage.value = `已导出 ${format.toUpperCase()} 歌单`
+    if (!playlist || playlistExportPending) return
+    playlistExportPending = true
+    options.repairMessage.value = '正在准备导出歌单…'
+    const name = playlist.name
+    try {
+      const contents = await exportPlaylistDocumentAsync(name, format)
+      if (contents === null) return
+      const blob = new Blob([contents], { type: playlistExportMimeType(format) })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = playlistExportFilename(name, format)
+      try {
+        link.click()
+      } finally {
+        URL.revokeObjectURL(link.href)
+      }
+      options.repairMessage.value = `已导出 ${format.toUpperCase()} 歌单`
+    } catch (error) {
+      options.repairMessage.value = describeError(error, '导出歌单失败')
+    } finally {
+      playlistExportPending = false
+    }
   }
 
   function triggerPlaylistCoverPicker(): void {
@@ -257,9 +311,24 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
     }
   }
 
-  function handleMoveSelectedWithinPlaylist(toEnd: boolean): void {
+  async function handleMoveSelectedWithinPlaylist(toEnd: boolean): Promise<void> {
     const playlist = requireCurrentPlaylist()
     if (!playlist) return
+    if (options.streamingSelection?.enabled()) {
+      const source = options.streamingSelection.capture()
+      await options.streamingSelection.run(source, async (lease, signal) => {
+        if (
+          await reorderPlaylistTrackIdPagesById(
+            playlist.id,
+            lease.ids,
+            toEnd ? playlist.trackIds.length : 0,
+            signal
+          )
+        )
+          options.repairMessage.value = toEnd ? '已移动到歌单末尾' : '已移动到歌单开头'
+      })
+      return
+    }
     const selected = options.getSelectedTracks().map((track) => track.id)
     if (!selected.length) return
     if (reorderPlaylistTracks(playlist.name, selected, toEnd ? playlist.trackIds.length : 0)) {
@@ -269,16 +338,44 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
 
   function handlePlaylistDragStart(event: DragEvent, track: Track): void {
     if (!options.isPlaylistDetail.value) return
-    playlistDragTrackId.value = track.id
-    event.dataTransfer?.setData('text/plain', track.id)
+    const definition = options.definitionTrack?.(track) ?? track
+    dragSource =
+      options.streamingSelection?.enabled() && options.currentPlaylist.value
+        ? {
+            playlistId: options.currentPlaylist.value.id,
+            id: definition.id,
+            source: options.streamingSelection.capture(track)
+          }
+        : null
+    playlistDragTrackId.value = definition.id
+    event.dataTransfer?.setData('text/plain', definition.id)
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
   }
 
-  function handlePlaylistDrop(event: DragEvent, target: Track): void {
+  async function handlePlaylistDrop(event: DragEvent, target: Track): Promise<void> {
     event.preventDefault()
+    target = options.definitionTrack?.(target) ?? target
     const playlist = requireCurrentPlaylist()
     const dragged = playlistDragTrackId.value ?? event.dataTransfer?.getData('text/plain')
     playlistDragTrackId.value = null
+    const captured = dragSource
+    dragSource = null
+    if (options.streamingSelection?.enabled()) {
+      if (
+        !playlist ||
+        !captured ||
+        captured.playlistId !== playlist.id ||
+        captured.id === target.id
+      )
+        return
+      const targetIndex = playlist.trackIds.indexOf(target.id)
+      if (targetIndex < 0) return
+      await options.streamingSelection.run(captured.source, async (lease, signal) => {
+        if (await reorderPlaylistTrackIdPagesById(playlist.id, lease.ids, targetIndex, signal))
+          options.repairMessage.value = '已更新歌单顺序'
+      })
+      return
+    }
     if (!playlist || !dragged || dragged === target.id) return
     const targetIndex = playlist.trackIds.indexOf(target.id)
     if (targetIndex < 0) return
@@ -298,6 +395,18 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
       options.repairMessage.value = '请先创建目标歌单'
       return
     }
+    if (options.streamingSelection?.enabled()) {
+      moveSource = options.streamingSelection.capture()
+      if (!moveSource.count) return
+      playlistDialogError.value = ''
+      playlistDialog.value = {
+        kind: 'move',
+        playlistId: playlist.id,
+        initialValue: choices[0].id,
+        trackIds: []
+      }
+      return
+    }
     const trackIds = options.getSelectedTracks().map((track) => track.id)
     if (!trackIds.length) return
     playlistDialogError.value = ''
@@ -312,12 +421,19 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
   async function handlePlaylistRepair(): Promise<void> {
     const playlist = requireCurrentPlaylist()
     if (!playlist || playlistRepairPending.value) return
+    const targetId = playlist.id,
+      targetName = playlist.name
+    const assertTarget = () => {
+      if (!playlists.value.some((item) => item.id === targetId && item.name === targetName))
+        throw new Error('目标歌单已被重命名或删除，请重新修复')
+    }
     playlistRepairPending.value = true
     try {
       const folder = await window.api.dialog.openFolder()
       if (!folder) return
-      const scanned = (await window.api.fs.scanMusicFiles(folder)) as Track[]
-      const result = repairPlaylistMissingTracks(playlist.name, scanned)
+      assertTarget()
+      options.repairMessage.value = '正在扫描所选文件夹并检查缺失歌曲…'
+      const result = await repairPlaylistMissingTracksAsync(targetId, folder)
       options.repairMessage.value = result.relocations.length
         ? `已重新定位 ${result.relocations.length} 首${
             result.ambiguousTrackIds.length
