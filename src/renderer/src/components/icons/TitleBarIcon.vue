@@ -8,6 +8,7 @@ const iconSlots = {
   settings: 'navigation.settings',
   appearance: 'navigation.appearance',
   puzzle_piece: 'navigation.plugin',
+  bug: 'navigation.report',
   arrow_left: 'navigation.back',
   person: 'navigation.person',
   bell: 'navigation.notification',

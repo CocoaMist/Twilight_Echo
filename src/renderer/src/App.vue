@@ -1273,6 +1273,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
         @back="handleTitleBack"
         @login="handleTitleLogin"
         @settings="toggleSettingsPage"
+        @report-issue="openSettingsPage('system', { anchor: 'application-diagnostics' })"
         @appearance="
           showAppearancePage ? appearancePageRef?.requestClose?.() : openAppearancePage()
         "

@@ -34,6 +34,7 @@ defineEmits<{
   back: []
   login: [providerId?: string | null]
   settings: []
+  reportIssue: []
   appearance: []
   plugins: []
   library: []
@@ -179,6 +180,15 @@ function close(): void {
           @click="$emit('appearance')"
         >
           <TitleBarIcon name="appearance" />
+        </button>
+        <button
+          type="button"
+          aria-label="上报问题"
+          class="settings-btn report-issue-btn"
+          title="上报问题"
+          @click="$emit('reportIssue')"
+        >
+          <TitleBarIcon name="bug" />
         </button>
         <button
           type="button"
