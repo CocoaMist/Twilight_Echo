@@ -7,6 +7,7 @@ import type { BooleanSettingKey } from './types.ts'
 const { settings } = useSettingsStore()
 
 defineProps<{
+  active?: boolean
   updateSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>
   toggleSetting: (key: BooleanSettingKey) => void
 }>()
@@ -81,6 +82,7 @@ defineProps<{
       </div>
     </div>
     <IntegrationsSettingsSection
+      :active="active ?? true"
       :discord-enabled="settings.discordRpcEnabled"
       :remote-enabled="settings.remoteControlEnabled"
       @update:discord-enabled="(value: boolean) => updateSettings({ discordRpcEnabled: value })"

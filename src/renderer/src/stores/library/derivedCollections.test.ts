@@ -82,3 +82,46 @@ test('date-only updates do not request online enrichment, including JSON round t
   assert.equal(isReleaseDateOnlyUpdate(previous, { ...updated, title: 'New title' }), false)
   assert.equal(isReleaseDateOnlyUpdate(undefined, updated), false)
 })
+
+test('collection projections retain mixed-label order, empty fallbacks and same-name ties', () => {
+  const names = ['月亮', '晨光', 'Alice', 'alice', 'é', 'e\u0301', '2', '10', '', '同名', '同名']
+  const tracks = names.map((name, index) => {
+    const directory = `C:\\Music\\${names.length - index}\\${name || 'Empty'}`
+    return track(`track-${index}`, {
+      artist: name,
+      album: name,
+      albumId: `release-${names.length - index}`,
+      genre: name,
+      filePath: `${directory}\\song.flac`,
+      dir: directory
+    })
+  })
+  const before = [...tracks]
+  const collections = buildDerivedCollections(tracks, [], '')
+  assert.deepEqual(
+    collections.artists.map((artist) => artist.name),
+    [...new Set(names.map((name) => name || '未知艺术家'))].sort((a, b) => a.localeCompare(b, 'zh'))
+  )
+  assert.deepEqual(
+    collections.genres.map((genre) => genre.name),
+    [...new Set(names.map((name) => name || '未知流派'))].sort((a, b) => a.localeCompare(b, 'zh'))
+  )
+  const albums = tracks
+    .map((item) => ({ id: `id:${item.albumId}`, name: item.album || '未知专辑' }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh') || a.id.localeCompare(b.id))
+  assert.deepEqual(
+    collections.albums.map(({ id, name }) => ({ id, name })),
+    albums
+  )
+  const folders = tracks
+    .map((item) => ({
+      name: item.dir!.split('\\').pop()!.toLowerCase(),
+      path: item.dir
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh') || a.path!.localeCompare(b.path!))
+  assert.deepEqual(
+    collections.folders.map(({ name, path }) => ({ name, path })),
+    folders
+  )
+  assert.deepEqual(tracks, before)
+})

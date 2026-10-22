@@ -1,21 +1,29 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { ref } from 'vue'
 import type { DiagnosticStatus } from '../../../../shared/diagnostics.ts'
+import { useVisibleSettingsPolling } from './useVisibleSettingsPolling.ts'
+
+const props = defineProps<{ active?: boolean }>()
 
 const status = ref<DiagnosticStatus | null>(null)
 const busy = ref('')
 const note = ref('')
 const message = ref('')
 const failed = ref(false)
-let timer: ReturnType<typeof setInterval> | undefined
-async function refresh() {
-  try {
-    status.value = await window.api.diagnostics.getStatus()
-  } catch (error) {
-    failed.value = true
-    message.value = error instanceof Error ? error.message : String(error)
+const refresh = useVisibleSettingsPolling(
+  () => props.active ?? true,
+  10_000,
+  async (isCurrent) => {
+    try {
+      const result = await window.api.diagnostics.getStatus()
+      if (isCurrent()) status.value = result
+    } catch (error) {
+      if (!isCurrent()) return
+      failed.value = true
+      message.value = error instanceof Error ? error.message : String(error)
+    }
   }
-}
+)
 async function run(action: string, fn: () => Promise<void>) {
   if (busy.value) return
   busy.value = action
@@ -53,11 +61,6 @@ function clear() {
 function openDirectory() {
   void run('directory', () => window.api.diagnostics.openDirectory())
 }
-onMounted(() => {
-  void refresh()
-  timer = setInterval(() => void refresh(), 10000)
-})
-onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>

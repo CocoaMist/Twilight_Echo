@@ -7,33 +7,46 @@ export function mountWorkshopDecorations(doc: Document): () => void {
   style.textContent =
     '.workshop-decoration{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:-1;border-radius:inherit}.workshop-decoration>div{display:none;position:absolute;pointer-events:none}'
   doc.head.append(style)
+  const pendingRoots = new Set<Element>()
   let scheduled = false
   let disposed = false
+  const decorate = (host: Element): void => {
+    if (host.querySelector(':scope > .workshop-decoration')) return
+    const decoration = doc.createElement('div')
+    decoration.className = 'workshop-decoration'
+    decoration.setAttribute('aria-hidden', 'true')
+    decoration.inert = true
+    for (let index = 0; index < WORKSHOP_LAYER_LIMIT; index++)
+      decoration.append(doc.createElement('div'))
+    host.prepend(decoration)
+  }
   const update = (): void => {
     scheduled = false
     if (disposed) return
-    for (const host of doc.querySelectorAll(selector)) {
-      if (host.querySelector(':scope > .workshop-decoration')) continue
-      const decoration = doc.createElement('div')
-      decoration.className = 'workshop-decoration'
-      decoration.setAttribute('aria-hidden', 'true')
-      decoration.inert = true
-      for (let index = 0; index < WORKSHOP_LAYER_LIMIT; index++)
-        decoration.append(doc.createElement('div'))
-      host.prepend(decoration)
+    const roots = [...pendingRoots]
+    pendingRoots.clear()
+    const added = new Set(roots)
+    for (const root of roots) {
+      if (!root.isConnected || root.ownerDocument !== doc) continue
+      // A parent insertion already covers all of its descendants in this batch.
+      let parent = root.parentElement
+      while (parent && !added.has(parent)) parent = parent.parentElement
+      if (parent) continue
+      if (root.matches(selector)) decorate(root)
+      if (root.childElementCount > 0)
+        for (const host of root.querySelectorAll(selector)) decorate(host)
     }
   }
-  const observer = new MutationObserver((records) => {
-    if (
-      scheduled ||
-      !records.some((record) =>
-        [...record.addedNodes].some(
-          (node) =>
-            node.nodeType === 1 && !(node as Element).classList.contains('workshop-decoration')
-        )
-      )
-    )
-      return
+  const Observer = doc.defaultView?.MutationObserver ?? MutationObserver
+  const observer = new Observer((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node.nodeType !== 1 || (node as Element).classList.contains('workshop-decoration'))
+          continue
+        pendingRoots.add(node as Element)
+      }
+    }
+    if (scheduled || pendingRoots.size === 0) return
     scheduled = true
     queueMicrotask(update)
   })
@@ -53,10 +66,12 @@ export function mountWorkshopDecorations(doc: Document): () => void {
     }
   }
   doc.addEventListener('scroll', scroll, true)
+  pendingRoots.add(doc.body)
   update()
   observer.observe(doc.body, { childList: true, subtree: true })
   return () => {
     disposed = true
+    pendingRoots.clear()
     observer.disconnect()
     doc.removeEventListener('scroll', scroll, true)
     style.remove()

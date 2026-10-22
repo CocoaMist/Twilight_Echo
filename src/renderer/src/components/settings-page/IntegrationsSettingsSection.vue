@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import SettingsGroup from './SettingsGroup.vue'
 import type { RemoteControlStatus } from '../../../../shared/remoteControl.ts'
+import { useVisibleSettingsPolling } from './useVisibleSettingsPolling.ts'
 
 const props = defineProps<{
+  active?: boolean
   discordEnabled: boolean
   remoteEnabled: boolean
 }>()
@@ -26,19 +28,36 @@ const discordStatus = ref<{
 } | null>(null)
 const notice = ref('')
 
-let discordStatusTimer: number | null = null
-
-async function refreshDiscordStatus(): Promise<void> {
+async function refreshDiscordStatus(isCurrent: () => boolean): Promise<void> {
   try {
     if (!window.api?.discord?.getStatus) {
-      discordStatus.value = null
+      if (isCurrent()) discordStatus.value = null
       return
     }
-    discordStatus.value = await window.api.discord.getStatus()
+    const status = await window.api.discord.getStatus()
+    if (isCurrent()) discordStatus.value = status
   } catch {
-    discordStatus.value = null
+    if (isCurrent()) discordStatus.value = null
   }
 }
+
+const refreshConnectionStatuses = useVisibleSettingsPolling(
+  () => props.active ?? true,
+  8_000,
+  async (isCurrent, reason) => {
+    await Promise.all([
+      reason !== 'poll' ? refreshRemoteStatus(isCurrent) : Promise.resolve(),
+      reason !== 'poll' || props.discordEnabled
+        ? refreshDiscordStatus(isCurrent)
+        : Promise.resolve()
+    ])
+  }
+)
+
+watch(
+  () => props.discordEnabled,
+  () => void refreshConnectionStatuses()
+)
 
 const discordStatusText = computed(() => {
   if (!props.discordEnabled) return '已关闭'
@@ -49,16 +68,17 @@ const discordStatusText = computed(() => {
     : '未连接（等待 Discord）'
 })
 
-async function refreshRemoteStatus(): Promise<void> {
+async function refreshRemoteStatus(isCurrent: () => boolean): Promise<void> {
   remoteStatusError.value = ''
   try {
     if (!window.api?.remote?.getStatus) {
-      remoteStatus.value = null
+      if (isCurrent()) remoteStatus.value = null
       return
     }
-    remoteStatus.value = await window.api.remote.getStatus()
+    const status = await window.api.remote.getStatus()
+    if (isCurrent()) remoteStatus.value = status
   } catch (err) {
-    remoteStatusError.value = err instanceof Error ? err.message : String(err)
+    if (isCurrent()) remoteStatusError.value = err instanceof Error ? err.message : String(err)
   }
 }
 
@@ -103,9 +123,6 @@ watch(
 
 function toggleDiscord(): void {
   emit('update:discordEnabled', !props.discordEnabled)
-  window.setTimeout(() => {
-    void refreshDiscordStatus()
-  }, 400)
 }
 
 async function toggleRemote(): Promise<void> {
@@ -117,7 +134,7 @@ async function toggleRemote(): Promise<void> {
     if (window.api?.remote?.setEnabled) {
       remoteStatus.value = await window.api.remote.setEnabled(next)
     } else {
-      await refreshRemoteStatus()
+      await refreshConnectionStatuses()
     }
   } catch (err) {
     remoteStatusError.value = err instanceof Error ? err.message : String(err)
@@ -148,21 +165,6 @@ async function copyRemoteUrl(url: string): Promise<void> {
     notice.value = url
   }
 }
-
-onMounted(() => {
-  void refreshRemoteStatus()
-  void refreshDiscordStatus()
-  discordStatusTimer = window.setInterval(() => {
-    if (props.discordEnabled) void refreshDiscordStatus()
-  }, 8_000)
-})
-
-onBeforeUnmount(() => {
-  if (discordStatusTimer !== null) {
-    window.clearInterval(discordStatusTimer)
-    discordStatusTimer = null
-  }
-})
 </script>
 
 <template>
@@ -255,7 +257,7 @@ onBeforeUnmount(() => {
                 type="button"
                 class="soft-button"
                 :disabled="remoteBusy"
-                @click="refreshRemoteStatus"
+                @click="refreshConnectionStatuses()"
               >
                 刷新
               </button>

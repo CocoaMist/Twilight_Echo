@@ -18,7 +18,11 @@ test('startup defers NCM login and loads PlayerBar asynchronously', () => {
 test('startup begins the aggregate snapshot before loading App', () => {
   assert.match(main, /beginStartupSnapshot\(\)/)
   assert.match(main, /import\('\.\/App\.vue'\)/)
-  assert.match(main, /if \(isMiniPlayer\) await bootstrapThemeRuntime\(\)/)
+  assert.doesNotMatch(main, /import\s*\{[^}]*bootstrapThemeRuntime[^}]*\}\s*from/)
+  assert.match(
+    main,
+    /if \(isMiniPlayer\) \{\s*const \{ bootstrapThemeRuntime \} = await import\('\.\/stores\/useThemeStore'\)\s*await bootstrapThemeRuntime\(\)/
+  )
 })
 
 test('the shared navigation loads outside the startup App chunk', () => {

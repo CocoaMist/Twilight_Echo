@@ -1,0 +1,322 @@
+{
+  "date": "2026-10-22",
+  "branch": "NEO",
+  "baselineCommit": "f7ca3241fb1e0efe7a3ce46cf9d2ee54cb375e24",
+  "preOptimizationMerge": "6e96cbc8653e9a4c69774406eaf53e43a4d5764d",
+  "upstreamMain": "d571636e9ecfe44fdbc92e231aa5864e2d3589e1",
+  "absorbedPr": {
+    "number": 181,
+    "head": "7ba8fcaa2f2d6a46f61aceb0cdec0f97d48e1d12",
+    "url": "https://github.com/Px-asen/Twilight_Echo/pull/181"
+  },
+  "environment": {
+    "node": "v24.13.1",
+    "icu": "78.2",
+    "electron": "43.7.0",
+    "platform": "win32",
+    "architecture": "x64"
+  },
+  "build": {
+    "unit": "bytes; unpacked build output, not installer size",
+    "before": {
+      "main": {
+        "files": 21,
+        "bytes": 2935155,
+        "groups": {
+          "audioAnalysisService.js": 3433,
+          "audioEngineService.js": 4107,
+          "chunks": 198146,
+          "diagnosticWriter.js": 1862,
+          "index.js": 2370214,
+          "libraryDatabaseService.js": 262440,
+          "libraryScanService.js": 76566,
+          "pluginHost.js": 18387
+        },
+        "jsBytes": 2935155,
+        "jsGzipBytes": 675918
+      },
+      "renderer": {
+        "files": 653,
+        "bytes": 22696414,
+        "groups": {
+          ".vite": 80077,
+          "assets": 12083672,
+          "audio-engine": 1,
+          "audio-visualizer": 81111,
+          "automix-stems": 36953,
+          "font": 8911725,
+          "icon.png": 223881,
+          "icons": 4612,
+          "index.html": 1485,
+          "left arrow.svg": 191,
+          "max.svg": 286,
+          "menu.svg": 261,
+          "min.svg": 370,
+          "minimize the window.svg": 242,
+          "Next Track.svg": 355,
+          "Pause.svg": 794,
+          "plugin-index": 12333,
+          "plugins": 198021,
+          "Previous track.svg": 357,
+          "qq-group-qrcode.jpg": 417570,
+          "remote": 91045,
+          "sequential playback.svg": 180,
+          "Shuffle.svg": 711,
+          "Single song repeat.svg": 854,
+          "skip-last.svg": 318,
+          "skip-next.svg": 316,
+          "sponsor": 496650,
+          "Start.svg": 321,
+          "we-background.js": 51722
+        },
+        "jsBytes": 7632619,
+        "jsGzipBytes": 1645828
+      },
+      "entry": {
+        "file": "assets/index-BPbwCLZ1.js",
+        "staticChunks": 5,
+        "jsBytes": 922108
+      }
+    },
+    "after": {
+      "main": {
+        "files": 21,
+        "bytes": 1788148,
+        "groups": {
+          "audioAnalysisService.js": 2289,
+          "audioEngineService.js": 2664,
+          "chunks": 119557,
+          "diagnosticWriter.js": 1183,
+          "index.js": 1437624,
+          "libraryDatabaseService.js": 173681,
+          "libraryScanService.js": 40355,
+          "pluginHost.js": 10795
+        },
+        "jsBytes": 1788148,
+        "jsGzipBytes": 536173
+      },
+      "preload": {
+        "files": 1,
+        "bytes": 62602,
+        "groups": {
+          "index.js": 62602
+        },
+        "jsBytes": 62602,
+        "jsGzipBytes": 14080
+      },
+      "renderer": {
+        "files": 657,
+        "bytes": 18506486,
+        "groups": {
+          ".vite": 86772,
+          "assets": 7887224,
+          "audio-engine": 1,
+          "audio-visualizer": 81111,
+          "automix-stems": 36953,
+          "font": 8911725,
+          "icon.png": 223881,
+          "icons": 4612,
+          "index.html": 1310,
+          "left arrow.svg": 191,
+          "max.svg": 286,
+          "menu.svg": 261,
+          "min.svg": 370,
+          "minimize the window.svg": 242,
+          "Next Track.svg": 355,
+          "Pause.svg": 794,
+          "plugin-index": 12333,
+          "plugins": 198021,
+          "Previous track.svg": 357,
+          "qq-group-qrcode.jpg": 417570,
+          "remote": 91045,
+          "sequential playback.svg": 180,
+          "Shuffle.svg": 711,
+          "Single song repeat.svg": 854,
+          "skip-last.svg": 318,
+          "skip-next.svg": 316,
+          "sponsor": 496650,
+          "Start.svg": 321,
+          "we-background.js": 51722
+        },
+        "jsBytes": 3861500,
+        "jsGzipBytes": 1291280
+      },
+      "entry": {
+        "file": "assets/index-DtMVYeVI.js",
+        "staticChunks": 3,
+        "jsBytes": 225683,
+        "chunks": [
+          "assets/index-DtMVYeVI.js",
+          "assets/vendor-music-metadata-CVdP7aR2.js",
+          "assets/vendor-vue-ByzA73MU.js"
+        ]
+      }
+    }
+  },
+  "decorations": {
+    "fixture": "Chromium; 5000 initial nodes, 100 sequential insertion batches; full-document query count",
+    "before": {
+      "fullPageScans": 100,
+      "batches": 100,
+      "initialRows": 5000,
+      "documents": 2,
+      "elapsedMs": 40.89999997615814
+    },
+    "after": {
+      "fullPageScans": 0,
+      "batches": 100,
+      "initialRows": 5000,
+      "documents": 2,
+      "elapsedMs": 0.7999999523162842
+    }
+  },
+  "collation": {
+    "node": "v24.13.1",
+    "icu": "78.2",
+    "baselineCommit": "f7ca3241",
+    "count": 20000,
+    "warmups": 2,
+    "alternatingRounds": 9,
+    "datasetSha256": "17d31c81074dfe56518a0b74bf3e50c606f40660012e4bde550b4fe1d2b8d789",
+    "timings": {
+      "derivedCollections": {
+        "before": {
+          "milliseconds": [
+            500.2035000000001,
+            491.03639999999996,
+            589.1896000000002,
+            500.97869999999966,
+            483.15369999999984,
+            545.585,
+            518.9477999999999,
+            534.3649999999998,
+            486.02299999999923
+          ],
+          "medianMilliseconds": 500.97869999999966
+        },
+        "after": {
+          "milliseconds": [
+            377.8773000000001,
+            358.70679999999993,
+            390.5072999999993,
+            385.5447000000004,
+            382.90409999999974,
+            404.77250000000004,
+            469.9417000000003,
+            361.1954999999998,
+            373.0744999999988
+          ],
+          "medianMilliseconds": 382.90409999999974
+        },
+        "reductionPercent": 23.568786457388313,
+        "outputSha256": "5d8722178a6895e73cb87a57e8462b174f3cbeb062445f45899ac241eb457dec"
+      },
+      "unifiedSearchSort": {
+        "before": {
+          "milliseconds": [
+            923.8196000000007,
+            1006.2636999999995,
+            1048.116399999999,
+            933.6873999999989,
+            950.1129999999976,
+            969.3654000000024,
+            992.6807000000008,
+            1124.518,
+            1116.9946999999993
+          ],
+          "medianMilliseconds": 992.6807000000008
+        },
+        "after": {
+          "milliseconds": [
+            865.3454000000002,
+            894.9426000000003,
+            886.6087000000007,
+            910.1965999999993,
+            971.8688000000002,
+            1047.7698000000019,
+            1001.0522999999994,
+            1144.1018000000004,
+            1015.251400000001
+          ],
+          "medianMilliseconds": 971.8688000000002
+        },
+        "reductionPercent": 2.096535169868885,
+        "outputSha256": "8449a3390a280df892229c8c87c390d39682ec0fcbc897a358f43369ff3a452d"
+      }
+    }
+  },
+  "polling": {
+    "scenario": "settings mounted on General category for 60 seconds; Discord enabled; document visible",
+    "clock": "virtual time; real Vue component mount/unmount hooks and source status callbacks",
+    "counts": {
+      "before": {
+        "diagnostics": 7,
+        "discord": 8,
+        "remote": 1,
+        "library": 13
+      },
+      "after": {
+        "diagnostics": 0,
+        "discord": 0,
+        "remote": 0,
+        "library": 0
+      }
+    }
+  },
+  "packaging": {
+    "excludedDuplicateRendererResourcesBytes": 127998,
+    "excludedPluginTestsBytes": 97315,
+    "savedUncompressedBytes": 225313,
+    "validation": "electron-builder FileMatcher actual filters; remote HTML/CSS/JS, three stem Python files and both plugin index/manifest pairs retained"
+  },
+  "limits": [
+    "Function-level synthetic timings are machine-specific, not end-to-end startup or playback latency.",
+    "No new installer, native audio-device, cast-device or memory-usage acceptance was performed.",
+    "Existing SettingsPage quickSetup mock export failure and scroll-position assertion also reproduce at pre-optimization commit 6e96cbc8."
+  ],
+  "validation": {
+    "buildAndTypes": "passed",
+    "changedFileEslint": "passed",
+    "rendererBudgets": "passed; JS chunk <=512 KiB and aggregate <=4.5 MiB",
+    "workshopAndLayerPixels": {
+      "pass": 32,
+      "fail": 0
+    },
+    "collation": {
+      "pass": 33,
+      "fail": 0
+    },
+    "settingsPollingAndAfterglow": {
+      "pass": 18,
+      "fail": 0
+    },
+    "satelliteWindows": {
+      "pass": 46,
+      "fail": 0
+    },
+    "crossCutting": {
+      "pass": 60,
+      "fail": 0
+    },
+    "buildPolicy": {
+      "pass": 33,
+      "fail": 0
+    },
+    "finalBudgetAndOwnership": {
+      "pass": 16,
+      "fail": 0
+    },
+    "additionalSettingsAndLibrary": {
+      "total": 99,
+      "pass": 95,
+      "fail": 2,
+      "skipped": 2
+    },
+    "isolatedPreOptimizationUiReproduction": {
+      "total": 3,
+      "pass": 1,
+      "fail": 2
+    },
+    "review": "Independent read-only diff review found no new blocking defect"
+  }
+}

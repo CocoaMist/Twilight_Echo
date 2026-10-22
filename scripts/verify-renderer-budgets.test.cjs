@@ -20,6 +20,12 @@ test('renderer budgets validate chunks and reject oversized fonts', () => {
     fs.writeFileSync(path.join(assets, 'app.js'), Buffer.alloc(BUDGETS.jsChunk))
     fs.writeFileSync(path.join(assets, 'app.css'), Buffer.alloc(BUDGETS.cssChunk))
     assert.equal(assertRendererBudgets(root).fontBytes, 0)
+    // Splitting a growing payload into small chunks must not bypass the budget.
+    const chunks = Math.ceil(BUDGETS.jsTotal / BUDGETS.jsChunk)
+    for (let index = 0; index < chunks; index++)
+      fs.writeFileSync(path.join(assets, `extra-${index}.js`), Buffer.alloc(BUDGETS.jsChunk))
+    assert.throws(() => assertRendererBudgets(root), /Renderer JavaScript is/)
+    for (let index = 0; index < chunks; index++) fs.rmSync(path.join(assets, `extra-${index}.js`))
     fs.writeFileSync(path.join(root, 'font.woff2'), Buffer.alloc(BUDGETS.fonts + 1))
     assert.throws(() => assertRendererBudgets(root), /fonts are/)
   } finally {

@@ -9,7 +9,8 @@ const { assertSettingsStyleLoading } = require('./verify-settings-style-loading.
 // cssChunk: the index chunk carries all six preset layout sheets (~11 kB each
 // minified); the Solstice Ledger redesign pushed it past 400 kB.
 const BUDGETS = Object.freeze({
-  jsChunk: 900 * 1024,
+  jsChunk: 512 * 1024,
+  jsTotal: 4608 * 1024,
   cssChunk: 448 * 1024,
   fonts: 32 * 1024 * 1024
 })
@@ -45,6 +46,11 @@ function assertRendererBudgets(rendererDir) {
   const cssAssets = assets.filter((file) => /\.css$/i.test(file))
   assert.ok(jsAssets.length > 0, 'Renderer output has no JavaScript assets')
   assert.ok(cssAssets.length > 0, 'Renderer output has no CSS assets')
+  const jsBytes = jsAssets.reduce((total, file) => total + fs.statSync(file).size, 0)
+  assert.ok(
+    jsBytes <= BUDGETS.jsTotal,
+    `Renderer JavaScript is ${jsBytes} bytes; budget is ${BUDGETS.jsTotal}`
+  )
   for (const file of jsAssets) {
     assert.ok(
       fs.statSync(file).size <= BUDGETS.jsChunk,
@@ -84,7 +90,7 @@ function assertRendererBudgets(rendererDir) {
       /^misans\/(MiSans-(Regular|Medium|Bold|Heavy)\.[\w-]+\.woff2|misans\.css|LICENSE)$/i.test(rel)
     assert.ok(ok, `Unexpected public font asset: ${rel}`)
   }
-  return { files: files.length, fontBytes, manifest, budgets: BUDGETS }
+  return { files: files.length, fontBytes, jsBytes, manifest, budgets: BUDGETS }
 }
 
 if (require.main === module) {

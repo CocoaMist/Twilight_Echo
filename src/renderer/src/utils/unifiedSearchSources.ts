@@ -8,6 +8,7 @@ import {
 } from '@renderer/utils/logicalTrackModel.ts'
 import type { NetworkEntry } from '../../../shared/networkSources.ts'
 import { getMusicVersions, musicVersionRevision } from '../stores/musicVersions.ts'
+import { compareChineseText } from './chineseCollation.ts'
 
 type SearchIndexEntry = { item: UnifiedSearchTrackItem; text: string }
 const localIndexes = new WeakMap<
@@ -28,8 +29,8 @@ export function compareSearchItems(
 ): number {
   return (
     compareSourceVariantPriority(left, right) ||
-    left.track.title.localeCompare(right.track.title, 'zh') ||
-    left.track.artist.localeCompare(right.track.artist, 'zh') ||
+    compareChineseText(left.track.title, right.track.title) ||
+    compareChineseText(left.track.artist, right.track.artist) ||
     left.track.id.localeCompare(right.track.id)
   )
 }

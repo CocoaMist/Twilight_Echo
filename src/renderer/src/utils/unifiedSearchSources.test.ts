@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { searchUnifiedLocalPage, searchUnifiedNetworkPage } from './unifiedSearchSources.ts'
+import {
+  compareSearchItems,
+  searchUnifiedLocalPage,
+  searchUnifiedNetworkPage,
+  toSearchItem
+} from './unifiedSearchSources.ts'
+import { compareChineseText } from './chineseCollation.ts'
+import { compareSourceVariantPriority } from './logicalTrackModel.ts'
 import type { Track } from '@renderer/types/music'
 
 const track = (id: string, title = '月亮', format = 'flac'): Track => ({
@@ -55,4 +62,66 @@ test('network pagination retains stable profile identities and total counts', ()
   assert.equal(page.items.length, 20)
   assert.equal(page.items[0].track.networkSource?.entry.id, 'net:20')
   assert.equal(page.items[0].track.filePath, '')
+})
+
+test('shared Chinese collation retains localeCompare defaults for mixed and empty labels', () => {
+  const labels = [
+    '',
+    '月亮',
+    '晨光',
+    '重庆',
+    '周杰伦',
+    'Alice',
+    'alice',
+    'Álbum',
+    'Album',
+    'é',
+    'e\u0301',
+    '2',
+    '10',
+    '02',
+    'A-2',
+    'A 2',
+    '😀'
+  ]
+  for (const left of labels) {
+    for (const right of labels) {
+      assert.equal(
+        Math.sign(compareChineseText(left, right)),
+        Math.sign(left.localeCompare(right, 'zh')),
+        `${JSON.stringify(left)} against ${JSON.stringify(right)}`
+      )
+    }
+  }
+  assert.ok(compareChineseText('10', '2') < 0, 'numeric collation must remain disabled')
+  assert.notEqual(compareChineseText('Alice', 'alice'), 0, 'case distinctions must remain')
+})
+
+test('search ordering preserves source priority, artist and id ties, and stable equal entries', () => {
+  const labels = ['', '月亮', '晨光', 'Alice', 'alice', 'é', 'e\u0301', '2', '10']
+  const items = labels.flatMap((title, index) =>
+    ['', '歌手', 'Artist'].map((artist, artistIndex) =>
+      toSearchItem(
+        { ...track(`${index}-${artistIndex}`, title), artist },
+        { sourceName: '本地音乐', lossless: index % 2 === 0 }
+      )
+    )
+  )
+  const equivalent = [
+    toSearchItem({ ...track('equal', 'é'), album: 'first' }, {}),
+    toSearchItem({ ...track('equal', 'e\u0301'), album: 'second' }, {})
+  ]
+  items.unshift(...equivalent)
+  const legacyOrder = [...items].sort(
+    (left, right) =>
+      compareSourceVariantPriority(left, right) ||
+      left.track.title.localeCompare(right.track.title, 'zh') ||
+      left.track.artist.localeCompare(right.track.artist, 'zh') ||
+      left.track.id.localeCompare(right.track.id)
+  )
+  const ordered = [...items].sort(compareSearchItems)
+  assert.deepEqual(ordered, legacyOrder)
+  assert.equal(compareSearchItems(equivalent[0], equivalent[1]), 0)
+  assert.ok(ordered.indexOf(equivalent[0]) < ordered.indexOf(equivalent[1]))
+  assert.equal(items[0], equivalent[0], 'sorting must not mutate the input')
 })

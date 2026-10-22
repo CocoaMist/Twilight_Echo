@@ -21,6 +21,9 @@ files:
   - '!out/renderer/audio-engine/**'
   - '!out/renderer/plugins/**'
   - '!out/renderer/plugin-index/**'
+  # Main-process resources are already staged once below in extraResources.
+  - '!out/renderer/remote/**'
+  - '!out/renderer/automix-stems/**'
   # Keep packaged Inter/Jakarta + MiSans subsets; strip legacy TTF/OTF/WOFF.
   - '!out/renderer/font/Alibaba-PuHuiTi-Medium.ttf'
   - '!out/renderer/font/Outfit-**'
@@ -110,6 +113,7 @@ extraResources:
     to: plugins
     filter:
       - '**/*'
+      - '!**/*.test.*'
   - from: resources/plugin-index
     to: plugin-index
     filter:

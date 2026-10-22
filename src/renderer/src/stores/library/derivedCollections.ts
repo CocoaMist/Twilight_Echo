@@ -2,6 +2,7 @@ import type { Track } from '../../types/music'
 import type { DerivedTrackGroup, LibraryItem } from './musicStoreTypes.ts'
 import { splitGenreValues } from '../../../../shared/genreSeparators.ts'
 import { resolveAlbumReleaseDate } from '../../../../shared/releaseDate.ts'
+import { compareChineseText } from '../../utils/chineseCollation.ts'
 import {
   getCollectionAncestors,
   getCollectionDirectory,
@@ -67,7 +68,7 @@ export function buildDerivedCollections(
         tracks: group.tracks,
         cover: group.cover
       }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+      .sort((a, b) => compareChineseText(a.name, b.name))
   }
   const artists = toNamedCollections(artistMap)
 
@@ -88,7 +89,7 @@ export function buildDerivedCollections(
         artist: resolveAlbumArtist(ordered)
       }
     })
-    .sort((a, b) => a.name.localeCompare(b.name, 'zh') || (a.id ?? '').localeCompare(b.id ?? ''))
+    .sort((a, b) => compareChineseText(a.name, b.name) || (a.id ?? '').localeCompare(b.id ?? ''))
 
   const genres = toNamedCollections(genreMap)
 
@@ -139,7 +140,7 @@ export function buildDerivedCollections(
     })
     .filter((f) => f.trackCount > 0)
     .sort(
-      (a, b) => a.name.localeCompare(b.name, 'zh') || (a.path ?? '').localeCompare(b.path ?? '')
+      (a, b) => compareChineseText(a.name, b.name) || (a.path ?? '').localeCompare(b.path ?? '')
     )
   return { artists, albums, genres, folders }
 }

@@ -4,6 +4,8 @@
 >
 > Fork 的 `main` 用于同步上游，`NEO` 长期保留自己的产品、界面与体验方向，不直接作为向上游提交 PR 的分支。通用修复使用单独的主题分支验证和提交 PR，并同步到 NEO。下文的官方下载与版本说明仍指向上游项目，NEO 后续发布会另行标注。
 
+NEO 的近期改动与实测：[2026-10-22 性能优化及瘦身记录](docs/neo-performance-2026-10-22.md)。
+
 <p align="center">
   <img src="./assets/logo.png" width="480" alt="Twilight Echo 渐变色标志" />
 </p>

@@ -10,6 +10,7 @@ import type { BooleanSettingKey, PluginSettingsForm, SettingsResetGroup } from '
 const { settings } = useSettingsStore()
 
 defineProps<{
+  active?: boolean
   pluginSettingsPanels: UiContribution[]
   pluginSettingsResult: Record<string, string>
   pluginSettingsError: Record<string, string>
@@ -62,7 +63,7 @@ defineProps<{
         <AfterglowSettingsSection />
       </div>
     </div>
-    <DiagnosticsSettingsSection />
+    <DiagnosticsSettingsSection :active="active ?? true" />
     <BackupAndResetSettingsSection
       @export-settings="exportSettingsBackup"
       @import-settings="importSettingsBackup"

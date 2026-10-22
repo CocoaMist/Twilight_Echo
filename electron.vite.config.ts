@@ -11,7 +11,9 @@ export default defineConfig(({ command }) => {
   return {
     main: {
       define: autoMixDefine,
+      esbuild: { keepNames: true },
       build: {
+        minify: 'esbuild',
         rollupOptions: {
           input: {
             index: resolve(__dirname, 'src/main/index.ts'),
@@ -25,7 +27,10 @@ export default defineConfig(({ command }) => {
         }
       }
     },
-    preload: {},
+    preload: {
+      esbuild: { keepNames: true },
+      build: { minify: 'esbuild' }
+    },
     renderer: {
       define: autoMixDefine,
       resolve: {
@@ -35,7 +40,11 @@ export default defineConfig(({ command }) => {
       },
       publicDir: resolve('resources'),
       plugins: [vue()],
+      // electron-vite leaves production output unminified by default.
+      // Preserve names for diagnostics while removing parsing/transfer overhead.
+      esbuild: { keepNames: true },
       build: {
+        minify: 'esbuild',
         manifest: true,
         chunkSizeWarningLimit: 600,
         rollupOptions: {

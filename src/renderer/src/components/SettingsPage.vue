@@ -18,6 +18,7 @@ import DesktopLyricsSettingsSection from './settings-page/DesktopLyricsSettingsS
 import AboutSettingsSection from './settings-page/AboutSettingsSection.vue'
 import ShortcutsSettingsSection from './settings-page/ShortcutsSettingsSection.vue'
 import { provideSettingsDisclosures } from './settings-page/settingsDisclosureRegistry.ts'
+import { useVisibleSettingsPolling } from './settings-page/useVisibleSettingsPolling.ts'
 import {
   type SectionKey,
   type SettingsSectionInput,
@@ -224,7 +225,11 @@ const libraryScanCommandError = ref('')
 const libraryResetPending = ref(false)
 const libraryResetMessage = ref('')
 const libraryWatcherStatus = ref<LibraryWatcherStatusSnapshot | null>(null)
-let libraryWatcherStatusTimer: number | null = null
+useVisibleSettingsPolling(
+  () => activeSection.value === 'library',
+  5_000,
+  refreshLibraryWatcherStatus
+)
 
 const libraryScanIsActive = computed(
   () => libraryScanStatus.value.state === 'running' || libraryScanStatus.value.state === 'paused'
@@ -306,11 +311,12 @@ function formatWatcherTime(iso: string | null | undefined): string {
   return new Date(ms).toLocaleString()
 }
 
-async function refreshLibraryWatcherStatus(): Promise<void> {
+async function refreshLibraryWatcherStatus(isCurrent: () => boolean): Promise<void> {
   try {
-    libraryWatcherStatus.value = await window.api.library.getWatcherStatus()
+    const status = await window.api.library.getWatcherStatus()
+    if (isCurrent()) libraryWatcherStatus.value = status
   } catch {
-    libraryWatcherStatus.value = null
+    if (isCurrent()) libraryWatcherStatus.value = null
   }
 }
 
@@ -1034,12 +1040,6 @@ onMounted(async () => {
   if (settingsDisposed) return
   await syncExtensions()
   if (settingsDisposed) return
-  await refreshLibraryWatcherStatus()
-  if (settingsDisposed) return
-  libraryWatcherStatusTimer = window.setInterval(() => {
-    if (document.visibilityState === 'hidden') return
-    void refreshLibraryWatcherStatus()
-  }, 5_000)
   await nextTick()
   if (settingsDisposed) return
 })
@@ -1052,10 +1052,6 @@ onBeforeUnmount(() => {
   categoryMotionMedia?.removeEventListener('change', settleCategoryMotion)
   ++settingsNavigationRevision
   if (searchHighlightTimer !== null) window.clearTimeout(searchHighlightTimer)
-  if (libraryWatcherStatusTimer !== null) {
-    window.clearInterval(libraryWatcherStatusTimer)
-    libraryWatcherStatusTimer = null
-  }
 })
 </script>
 
@@ -1238,6 +1234,7 @@ onBeforeUnmount(() => {
         </LibrarySettingsSection>
         <ConnectionsSettingsSection
           v-show="activeSection === 'connections'"
+          :active="activeSection === 'connections'"
           :update-settings="updateSettings"
           :toggle-setting="toggleSetting"
         >
@@ -1253,6 +1250,7 @@ onBeforeUnmount(() => {
         </ConnectionsSettingsSection>
         <SystemSettingsSection
           v-show="activeSection === 'system'"
+          :active="activeSection === 'system'"
           :plugin-settings-panels="pluginSettingsPanels"
           :plugin-settings-result="pluginSettingsResult"
           :plugin-settings-error="pluginSettingsError"

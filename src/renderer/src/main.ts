@@ -3,7 +3,6 @@ import { installRendererDiagnostics, installVueDiagnostics } from './app/diagnos
 
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import { bootstrapThemeRuntime } from './stores/useThemeStore'
 import { beginStartupSnapshot } from './app/startupSnapshot'
 import { installAutoHideScrollbars } from './utils/autoHideScrollbars'
 import { installScrollToTopButton } from './utils/scrollToTopButton'
@@ -95,7 +94,10 @@ async function mountApp(): Promise<void> {
           : (await import('./App.vue')).default
   // The lyrics window reads no theme tokens: every colour arrives in its settings
   // payload, so it must not pay for (or wait on) the theme runtime.
-  if (isMiniPlayer) await bootstrapThemeRuntime()
+  if (isMiniPlayer) {
+    const { bootstrapThemeRuntime } = await import('./stores/useThemeStore')
+    await bootstrapThemeRuntime()
+  }
   const app = createApp(rootComponent).use(createPinia())
   installVueDiagnostics(app)
   app.mount('#app')
