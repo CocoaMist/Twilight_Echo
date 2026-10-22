@@ -136,8 +136,8 @@ export function createLibraryPlaylistView(
               const importedEntry = group.imported?.entries[index]
               const trackId = importedEntry?.entryId ?? group.trackIds[index]
               const snapshot = importedEntry
-                ? importEntryViewRecord(importedEntry) as LibraryTrackRecord
-                : group.trackSnapshots?.[trackId] as unknown as LibraryTrackRecord | undefined
+                ? (importEntryViewRecord(importedEntry) as LibraryTrackRecord)
+                : (group.trackSnapshots?.[trackId] as unknown as LibraryTrackRecord | undefined)
               entries.push({
                 id: trackId,
                 ...(isCatalog ? { collectionId: group.id } : {}),
@@ -210,7 +210,12 @@ export function createLibraryPlaylistView(
         return task ?? Promise.resolve()
       // Retain the immutable membership references, not the mutable Playlist.
       definition = value
-        ? { id: value.id, trackIds: value.trackIds, trackSnapshots: value.trackSnapshots, imported: value.imported ? {...value.imported} : undefined }
+        ? {
+            id: value.id,
+            trackIds: value.trackIds,
+            trackSnapshots: value.trackSnapshots,
+            imported: value.imported ? { ...value.imported } : undefined
+          }
         : null
       catalog = null
       preferences = next
@@ -236,8 +241,8 @@ export function createLibraryPlaylistView(
                 group.cover === before.cover &&
                 group.isDefault === before.isDefault &&
                 group.trackIds === before.trackIds &&
-                group.trackSnapshots === before.trackSnapshots
-                && group.imported?.membershipRevision === before.imported?.membershipRevision
+                group.trackSnapshots === before.trackSnapshots &&
+                group.imported?.membershipRevision === before.imported?.membershipRevision
               )
             }))
       )
@@ -251,7 +256,7 @@ export function createLibraryPlaylistView(
           isDefault,
           trackIds,
           trackSnapshots,
-          imported: imported ? {...imported} : undefined
+          imported: imported ? { ...imported } : undefined
         })) ?? null
       preferences = next
       return replace()

@@ -1,8 +1,8 @@
-<h1 align="center">Twilight Echo</h1>
+<h1 align="center">Twilight Echo · NEO（独立孵化）</h1>
 
 > **NEO 独立孵化分支**：基于 [Twilight Echo](https://github.com/Px-asen/Twilight_Echo)，由 CocoaMist 持续探索自己的界面与使用体验。当前以 PR #154 的外观方向为基础，并纳入上游更新、问题上报入口与播放／大歌单修复。
 >
-> Fork 的 `main` 用于同步上游，`NEO` 保留独立方向；向上游贡献的通用修复使用单独的主题分支提交 PR。下文的官方下载与版本说明仍指向上游项目，NEO 后续发布会另行标注。
+> Fork 的 `main` 用于同步上游，`NEO` 长期保留自己的产品、界面与体验方向，不直接作为向上游提交 PR 的分支。通用修复使用单独的主题分支验证和提交 PR，并同步到 NEO。下文的官方下载与版本说明仍指向上游项目，NEO 后续发布会另行标注。
 
 <p align="center">
   <img src="./assets/logo.png" width="480" alt="Twilight Echo 渐变色标志" />
