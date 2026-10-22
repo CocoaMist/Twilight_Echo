@@ -480,8 +480,42 @@ test('genre separators persist across settings layers and refresh derived librar
   assert.match(settingsPageSource, /updateSettings\(\{ genreSeparators: value \}\)/)
   assert.match(settingsPageSource, /aria-label="流派分隔符"/)
   assert.match(settingsPageSource, /@change="setGenreSeparators"/)
-  assert.match(songListSource, /settingsStore\.settings\.value\.genreSeparators/)
-  assert.match(songListSource, /\(\) => refreshLibraryIndex\(\)/)
+  const script = songListSource.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]
+  assert.ok(script)
+  const parsed = ts.createSourceFile('SongList.ts', script, ts.ScriptTarget.ESNext, true)
+  const genreWatch = parsed.statements
+    .filter(ts.isExpressionStatement)
+    .map((statement) => statement.expression)
+    .filter(ts.isCallExpression)
+    .find((call) => {
+      const read = call.arguments[0]
+      return (
+        call.expression.getText(parsed) === 'watch' &&
+        read &&
+        ts.isArrowFunction(read) &&
+        read.body.getText(parsed) === 'settingsStore.settings.value.genreSeparators'
+      )
+    })
+  assert.ok(genreWatch, 'genre changes must retain their library refresh watcher')
+  const props: { previewTracks?: unknown[] } = {}
+  const settings = { genreSeparators: ' / ' }
+  let refreshes = 0
+  const [readSeparators, refresh] = runInNewContext(
+    `[${genreWatch.arguments[0].getText(parsed)}, ${genreWatch.arguments[1].getText(parsed)}]`,
+    {
+      props,
+      settingsStore: { settings: { value: settings } },
+      refreshLibraryIndex: () => refreshes++
+    }
+  ) as [() => string, () => void]
+  assert.equal(readSeparators(), ' / ')
+  settings.genreSeparators = ' & '
+  assert.equal(readSeparators(), ' & ')
+  refresh()
+  assert.equal(refreshes, 1, 'live genre changes still refresh derived groups')
+  props.previewTracks = []
+  refresh()
+  assert.equal(refreshes, 1, 'preview genre changes never refresh the real library')
 })
 
 test('audio settings expose advanced replaygain, fft, crossfeed, and real loudnorm option', () => {
@@ -864,10 +898,7 @@ test('playbar control placement is editable per shape and written through the no
 
   // Which shape's arrangement is being edited is a local choice in the editor —
   // it must never write `mode`, or opening the panel would switch the live shape.
-  assert.match(
-    source,
-    /const editingShape = ref<PlayerBarMode>\(playerBar\.value\.mode\)/
-  )
+  assert.match(source, /const editingShape = ref<PlayerBarMode>\(playerBar\.value\.mode\)/)
   assert.match(source, /@click="editingShape = option\.value"/)
   // Three regions, from the shared region list rather than hand-written names.
   assert.match(source, /v-for="region in playerBarRegionOptions"/)
