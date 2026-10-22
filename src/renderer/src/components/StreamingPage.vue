@@ -472,6 +472,10 @@ function providerSupportsDiscovery(providerId: string): boolean {
   return discoveryProviderOptions.value.some((provider) => provider.id === providerId)
 }
 
+function providerSupportsLibrary(providerId: string): boolean {
+  return libraryProviders.value.some((provider) => provider.id === providerId)
+}
+
 function getHomeSectionDefinitions(providerId: string): HomeSectionDefinition[] {
   const provider = providerStore.getProvider(providerId)
   const supportedMethods = new Set(provider?.supportedMethods ?? [])
@@ -1684,6 +1688,7 @@ async function refreshExternalProviderState(id: string): Promise<void> {
 }
 
 async function ensureExternalLibraryLoaded(id: string, force = false): Promise<void> {
+  if (!providerSupportsLibrary(id)) return
   const state = ensureExternalState(id)
   if (!isProviderAvailable(id) || !state.loggedIn) return
   if (state.libraryLoaded && !force) return
@@ -3598,6 +3603,11 @@ watch(activeProvider, async (provider, oldProvider) => {
     if (fallback && fallback !== provider) fallbackProvider.value = fallback
     return
   }
+  if (activeTab.value === 'library' && !providerSupportsLibrary(provider)) {
+    const fallback = libraryProviders.value[0]?.id
+    if (fallback && fallback !== provider) fallbackProvider.value = fallback
+    return
+  }
   if (
     provider !== NCM_PROVIDER_ID &&
     activeProviderRequiresLogin.value &&
@@ -3642,6 +3652,11 @@ watch(activeTab, async (tab) => {
     await discovery.ensureLoaded()
   }
   if (tab === 'library') {
+    if (!providerSupportsLibrary(activeProvider.value)) {
+      const fallback = libraryProviders.value[0]?.id
+      if (fallback) fallbackProvider.value = fallback
+      return
+    }
     if (activeProvider.value === NCM_PROVIDER_ID) {
       if (isLoggedIn.value) await ensureLibraryLoaded()
     } else {
@@ -3868,7 +3883,19 @@ onMounted(async () => {
         </div>
         <div v-else :key="streamingViewKey" class="streaming-content-body stream-view-panel">
           <StreamingPlaceholder
-            v-if="(!hasOnlineNavigationEntries || !surfaceAvailable) && !currentDetail"
+            v-if="
+              hasOnlineNavigationEntries &&
+              activeTab === 'library' &&
+              !surfaceAvailable &&
+              !currentDetail
+            "
+            title="暂无可用的在线音乐库"
+            hint="已启用的音源暂不支持音乐库，可使用在线搜索，或启用支持音乐库的音源插件。"
+            icon="pi pi-folder-open"
+          />
+
+          <StreamingPlaceholder
+            v-else-if="(!hasOnlineNavigationEntries || !surfaceAvailable) && !currentDetail"
             title="未启用可用的在线音源"
             hint="请在设置的插件页启用网易云音乐或其它音源插件。"
             icon="pi pi-plug"

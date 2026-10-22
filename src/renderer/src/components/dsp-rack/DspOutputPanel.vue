@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 import { dspSampleRate } from '@renderer/utils/dspSignalOverview'
+import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import {
   DSP_OUTPUT_SAMPLE_RATE_OPTIONS,
   DSP_RESAMPLER_QUALITY_OPTIONS,
@@ -24,8 +25,8 @@ const resamplerLabels = {
   native: '原生 · Native',
   high: '高品质 · High',
   ultra: '超高品质 · Ultra',
-  soxrHq: 'SoX HQ',
-  soxrVhq: 'SoX VHQ · 最高品质'
+  soxrHq: 'SoX HQ（需运行时验证）',
+  soxrVhq: 'SoX VHQ（需运行时验证）'
 }
 const ditherLabels = {
   off: '关闭',
@@ -138,8 +139,8 @@ async function applyBuffer(): Promise<void> {
             aria-label="安全限幅"
         /></label>
       </div>
-      <p v-if="status?.outputStage?.resamplerFallback" class="notice">
-        SoX 不可用，当前使用 Ultra。
+      <p class="notice" aria-live="polite">
+        {{ describeResampler(scene.graph.outputStage.resamplerQuality, status?.outputStage) }}
       </p>
     </section>
     <section class="buffer-panel surface-panel">

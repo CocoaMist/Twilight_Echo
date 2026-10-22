@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { DspGraphStatus } from '../../../../shared/dspGraph.ts'
+import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import { dspApplyLabel, type DspWorkspaceTab } from '@renderer/utils/dspWorkbench'
 import { dspSampleRate } from '@renderer/utils/dspSignalOverview'
 import { nodeLabel } from '@renderer/utils/dspNodeParams'
@@ -354,7 +355,13 @@ const meterWidth = (value: number | null | undefined) =>
           <div>
             <dt>输出级</dt>
             <dd>
-              {{ status?.outputStage?.resamplerQuality ?? '—' }} /
+              {{
+                describeResampler(
+                  status?.outputStage?.resamplerQuality ?? 'native',
+                  status?.outputStage
+                )
+              }}
+              /
               {{ status?.outputStage?.dither ?? '—' }}
             </dd>
           </div>

@@ -192,12 +192,31 @@ test('SoXR reports only the observed runtime engine and fallback state', () => {
     observed: false
   })
   assert.deepEqual(runtimeResamplerStatus({ resamplerEngine: 'soxr', resamplerFallback: false }), {
-    actualEngine: 'soxr',
-    fallback: false,
-    observed: true
+    actualEngine: null,
+    fallback: null,
+    observed: false
+  })
+  assert.deepEqual(runtimeResamplerStatus({ effectiveResampler: 'none', resampled: false }), {
+    actualEngine: null,
+    fallback: null,
+    observed: false
   })
   assert.deepEqual(
-    runtimeResamplerStatus({ outputStage: { resamplerEngine: 'swr', resamplerFallback: true } }),
+    runtimeResamplerStatus({
+      effectiveResampler: 'soxr',
+      resampled: true,
+      effectiveResamplerFallback: false
+    }),
+    {
+      actualEngine: 'soxr',
+      fallback: false,
+      observed: true
+    }
+  )
+  assert.deepEqual(
+    runtimeResamplerStatus({
+      outputStage: { effectiveResampler: 'swr', resampled: true, effectiveResamplerFallback: true }
+    }),
     { actualEngine: 'swr', fallback: true, observed: true }
   )
 })

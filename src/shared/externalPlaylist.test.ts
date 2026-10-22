@@ -34,3 +34,28 @@ test('refresh reconciles occurrences FIFO and preserves manual bindings',()=>{
   assert.deepEqual(next.map(e=>e.entryId),['1','4','2']);assert.ok(next[2].manualBinding)
   assert.deepEqual(previewImportUpdate(first,[song,{title:'New'},song]),{added:1,removed:1,reordered:false})
 })
+
+test('refresh previews compare retained occurrence order after additions and removals', () => {
+  let id = 0
+  const songs = [{ title: 'A' }, { title: 'B' }, { title: 'C' }, { title: 'A' }]
+  const before = reconcileImportEntries([], songs, () => String(++id))
+  for (const [next, expected] of [
+    [songs, { added: 0, removed: 0, reordered: false }],
+    [[songs[0], { title: 'New' }, songs[2], songs[3]], { added: 1, removed: 1, reordered: false }],
+    [[songs[2], songs[0], songs[3]], { added: 0, removed: 1, reordered: true }],
+    [[], { added: 0, removed: 4, reordered: false }]
+  ] as const) {
+    assert.deepEqual(previewImportUpdate(before, [...next]), expected)
+  }
+})
+
+test('large duplicate imports retain FIFO identities and user bindings', () => {
+  let id = 0
+  const songs = Array.from({ length: 20_000 }, () => song)
+  const before = reconcileImportEntries([], songs, () => String(++id))
+  before[19_999].manualBinding = { ...candidate, filePath: 'last', fileName: 'last', size: 1, cover: null, lyrics: null }
+  const next = reconcileImportEntries(before, songs, () => { throw new Error('unexpected new occurrence') })
+  assert.deepEqual(next.map(entry => entry.entryId), before.map(entry => entry.entryId))
+  assert.equal(next[19_999].manualBinding, before[19_999].manualBinding)
+  assert.deepEqual(previewImportUpdate(before, songs), { added: 0, removed: 0, reordered: false })
+})

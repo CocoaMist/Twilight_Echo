@@ -49,6 +49,7 @@ export function normalizeAuditionGraph(value: DspGraphConfig): DspGraphConfig {
   const nodes = value.nodes.filter((node) => node.enabled && node.type !== 'meter')
   if (nodes.length > 1 || nodes.some((node) => node.type !== 'equalizer'))
     throw new Error('首版等响度试听仅支持无处理或一个内置 EQ 节点')
+  const plainNodes: DspGraphConfig['nodes'] = []
   for (const node of nodes) {
     const params = node.params
     if (
@@ -86,8 +87,35 @@ export function normalizeAuditionGraph(value: DspGraphConfig): DspGraphConfig {
       )
         throw new Error('试听 EQ 频段无效')
     }
+    // Project the validated DTO rather than cloning reactive nodes. A renderer
+    // scene may contain Vue proxies even when its outer graph is a snapshot.
+    plainNodes.push({
+      id: node.id,
+      type: 'equalizer',
+      enabled: true,
+      params: {
+        mode: String(params.mode),
+        preampDb: params.preampDb,
+        bands: params.bands.map((band) => ({
+          frequency: band.frequency,
+          gain: band.gain,
+          q: band.q,
+          ...(band.filterType ? { filterType: band.filterType } : {}),
+          ...(typeof band.enabled === 'boolean' ? { enabled: band.enabled } : {})
+        }))
+      }
+    })
   }
-  return structuredClone({ version: 2, nodes, outputStage: { ...stage, safetyClamp: true } })
+  return {
+    version: 2,
+    nodes: plainNodes,
+    outputStage: {
+      targetSampleRate: 'device',
+      resamplerQuality: 'native',
+      dither: 'off',
+      safetyClamp: true
+    }
+  }
 }
 
 export function matchAuditionLoudness(a: DspAuditionMeasurement, b: DspAuditionMeasurement) {

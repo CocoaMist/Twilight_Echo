@@ -26,6 +26,7 @@ const {
   eqBandsEqual,
   nativePlayMode,
   normalizeAudioProcessingSettings,
+  normalizeInitialAudioProcessingSettings,
   normalizeOutputConversionInfo,
   normalizeOutputProviderImplementation,
   normalizeOutputConfig,
@@ -165,6 +166,41 @@ test('default playback output preserves shared mixer reason with legacy provider
     source: 'unavailable'
   })
   assert.equal(info.outputInfo.perfectReasonCode, 'shared_mixer')
+})
+
+test('initial settings distinguish saved master-off from legacy module-only configurations', () => {
+  const modules = [
+    { eqEnabled: true },
+    { eqPreamp: -2 },
+    { convolverEnabled: true },
+    { convolverIrPath: 'D:/IR/room.wav' },
+    { crossfeedEnabled: true, crossfeedStrength: 0.4 },
+    { volumeNormalization: 'track' as const }
+  ]
+  for (const module of modules) {
+    let saved = normalizeInitialAudioProcessingSettings({
+      ...module,
+      dspEnabled: false,
+      directMode: true
+    })
+    for (let restart = 0; restart < 3; restart++) {
+      saved = normalizeInitialAudioProcessingSettings(JSON.parse(JSON.stringify(saved)))
+      assert.equal(saved.dspEnabled, false)
+      assert.equal(saved.directMode, true)
+      for (const [key, value] of Object.entries(module))
+        assert.equal(saved[key as keyof typeof saved], value)
+    }
+    const legacy = normalizeInitialAudioProcessingSettings(module)
+    assert.equal(legacy.dspEnabled, true)
+    assert.equal(legacy.directMode, false)
+  }
+  const enabled = normalizeInitialAudioProcessingSettings({
+    dspEnabled: true,
+    directMode: true,
+    eqEnabled: true
+  })
+  assert.equal(enabled.dspEnabled, true)
+  assert.equal(enabled.directMode, false)
 })
 
 test('resolveProcessingMasterState reconciles modules, master switch, and direct mode', () => {
