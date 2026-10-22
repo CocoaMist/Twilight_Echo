@@ -1,0 +1,127 @@
+{
+  "date": "2026-10-22",
+  "branch": "NEO",
+  "baseline": "3c1d1333f5defc65d7aa2ef97452f05ec4877023",
+  "environment": {
+    "node": "v24.13.1",
+    "icu": "78.2",
+    "electron": "43.7.0",
+    "platform": "win32",
+    "arch": "x64"
+  },
+  "mini": {
+    "clockIntervalMs": 50,
+    "activeVisiblePlaybackTimers": 1,
+    "pausedTimers": 0,
+    "hiddenTimers": 0,
+    "emptyTrackTimers": 0,
+    "bufferingTimers": 0,
+    "endedTimers": 0,
+    "seek": {
+      "pointerMoves": 5,
+      "moveCommits": 0,
+      "releaseCommits": 1
+    },
+    "shapes": [
+      "strip",
+      "card",
+      "stage",
+      "poster"
+    ],
+    "nonCoverFailureRecovery": [
+      "solid",
+      "gradient",
+      "image"
+    ]
+  },
+  "title": {
+    "updates": 100,
+    "pendingFrames": 1,
+    "framesAfterUnmount": 0,
+    "fontSizeChangesObserved": true,
+    "wideTitleUnduplicated": true
+  },
+  "lyrics": {
+    "before": [
+      {
+        "mode": "minimal",
+        "visibleReads": 75,
+        "hiddenReads": 120,
+        "rowMutations": 64
+      },
+      {
+        "mode": "document",
+        "visibleReads": 74,
+        "hiddenReads": 190,
+        "rowMutations": 66
+      }
+    ],
+    "after": [
+      {
+        "mode": "minimal",
+        "visibleReads": 69,
+        "hiddenReads": 0,
+        "rowMutations": 0
+      },
+      {
+        "mode": "document",
+        "visibleReads": 74,
+        "hiddenReads": 0,
+        "rowMutations": 0
+      }
+    ],
+    "retainsRowDom": true,
+    "resumesAtLatestClock": true
+  },
+  "validation": {
+    "miniUnit": {
+      "pass": 39,
+      "fail": 0
+    },
+    "miniElectron": {
+      "pass": 1,
+      "fail": 0
+    },
+    "independentSharedSeekElectron": {
+      "pass": 1,
+      "fail": 0
+    },
+    "lyricsSuite": {
+      "pass": 363,
+      "fail": 1
+    },
+    "metadataCopyElectron": {
+      "pass": 1,
+      "fail": 0
+    },
+    "nativeMenus": {
+      "pass": 14,
+      "fail": 0
+    },
+    "integrationChecks": {
+      "pass": 58,
+      "fail": 1
+    }
+  },
+  "knownFailures": [
+    {
+      "test": "PlayingMusic.test.ts: player bar smooths progress between player store ticks and snaps large jumps",
+      "reason": "Source assertion rejects existing SmoothedProgressFill in PlayerBar",
+      "baseline": "6e96cbc8",
+      "log": "playing-source-baseline-6e96.log"
+    },
+    {
+      "test": "PlayerSeekProgress.behavior.test.ts: rail clears the rounded panel bottom",
+      "baseline": "6e96cbc8",
+      "log": "main-seek-baseline-6e96.log"
+    }
+  ],
+  "limits": [
+    "Actual Electron component rendering and native input; player state and IPC are fixtures.",
+    "No user desktop acceptance: native computer bridge initialization failed with missing path.",
+    "No physical audio, end-to-end CPU or memory measurements.",
+    "Native menu IPC, actions, cancel, focus and copy tested; physical OS edge placement and Escape not tested.",
+    "No separate async webfont family replacement test."
+  ],
+  "localEvidenceDirectory": ".local/neo-player-20261022/"
+}

@@ -14,6 +14,86 @@ import { build } from 'vite'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../../', import.meta.url))
 
+test('shared seek gesture commits once and cancels across source and live changes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'twilight-seek-gesture-'))
+  try {
+    await writeFile(
+      join(directory, 'entry.ts'),
+      `import {createApp,h,ref,nextTick} from 'vue'
+import Seek from '${join(workspace, 'src/renderer/src/components/player-bar/PlayerSeekProgress.vue').replaceAll('\\', '/')}'
+const variant=ref('default'),track=ref(1),live=ref(false),duration=ref(150),position=ref(30),seeks=[]
+const expect=(value,message)=>{if(!value)throw Error(message)}
+createApp({render:()=>h(Seek,{key:track.value,variant:variant.value,position:position.value,duration:duration.value,live:live.value,abStart:20,abEnd:50,formatTime:s=>s.toFixed(1),onSeek:s=>{seeks.push(s);position.value=s}})}).mount('#app')
+const slider=()=>document.querySelector('input')
+window.prepare=async(shape)=>{variant.value=shape;live.value=false;duration.value=150;position.value=30;track.value++;seeks.length=0;await nextTick();await new Promise(requestAnimationFrame);const b=slider().getBoundingClientRect();return{x:Math.round(b.left+b.width*.2),y:Math.round(b.top+b.height/2),left:b.left,width:b.width}}
+window.checkPreview=async()=>{position.value=35;await nextTick();expect(seeks.length===0,'pointer preview cannot seek');expect(Math.abs(Number(slider().value)-90)<1,'snapshot cannot override pointer preview: '+JSON.stringify({value:slider().value,outer:slider().outerHTML,focus:document.hasFocus()}));expect(document.querySelector('.ab-loop-range'),'AB range remains rendered')}
+window.checkCommit=async()=>{await nextTick();expect(seeks.length===1&&Math.abs(seeks[0]-90)<1,'release commits final preview once')}
+window.checkKeys=async()=>{await nextTick();expect(seeks.length===2,'native keyboard commits once');expect(document.querySelector('.player-seek-progress').classList.contains('is-keyboard-focus'),'keyboard focus remains visible')}
+window.cancelDrag=async(reason)=>{if(reason==='source')track.value++;if(reason==='live')live.value=true;if(reason==='duration')duration.value=0;await nextTick();expect(!document.querySelector('.is-scrubbing'),'state change cancels preview')}
+window.checkCanceled=async()=>{await nextTick();expect(seeks.length===0,'old drag must not seek after state change')}
+window.checkDisabled=async()=>{live.value=true;await nextTick();expect(slider().disabled,'live stream disables seek');live.value=false;duration.value=0;await nextTick();expect(slider().disabled,'unknown duration disables seek')}
+`
+    )
+    await build({
+      configFile: false,
+      logLevel: 'error',
+      root: workspace,
+      plugins: [vue()],
+      resolve: {
+        alias: {
+          vue: require.resolve('vue/dist/vue.runtime.esm-bundler.js'),
+          '@renderer': join(workspace, 'src/renderer/src')
+        }
+      },
+      define: { 'process.env.NODE_ENV': '"production"' },
+      build: {
+        outDir: join(directory, 'bundle'),
+        minify: false,
+        lib: {
+          entry: join(directory, 'entry.ts'),
+          name: 'SeekGesture',
+          formats: ['iife'],
+          fileName: () => 'runtime.js'
+        }
+      }
+    })
+    await writeFile(
+      join(directory, 'index.html'),
+      '<!doctype html><style>body{margin:40px}.player-seek-progress input{width:300px;height:26px}</style><div id="app"></div><script src="bundle/runtime.js"></script>'
+    )
+    await writeFile(
+      join(directory, 'runner.cjs'),
+      `const{app,BrowserWindow}=require('electron');const wait=ms=>new Promise(r=>setTimeout(r,ms));
+app.setPath('userData',require('node:path').join(__dirname,'profile'));
+app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,frame:false,useContentSize:true,width:600,height:300,webPreferences:{offscreen:true,backgroundThrottling:false}});try{
+await win.loadFile(require('node:path').join(__dirname,'index.html'));win.webContents.debugger.attach('1.3');await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled',{enabled:true});win.webContents.focus();await wait(100);const run=s=>win.webContents.executeJavaScript(s);
+const input=async(type,rail,fraction=.6)=>{win.webContents.sendInputEvent({type,button:'left',clickCount:1,x:Math.round(rail.left+rail.width*fraction),y:type==='mouseUp'?rail.y+50:rail.y});await wait(25)};
+for(const shape of ['default','mini','compact']){
+ let rail=await run('window.prepare('+JSON.stringify(shape)+')');await input('mouseDown',rail,.2);
+ for(const fraction of [.3,.4,.5,.6])await input('mouseMove',rail,fraction);
+ await run('window.checkPreview()');await input('mouseUp',rail);await run('window.checkCommit()');
+ win.webContents.sendInputEvent({type:'keyDown',keyCode:'Right'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Right'});await wait(25);await run('window.checkKeys()');
+ for(const reason of ['source','live','duration']){rail=await run('window.prepare('+JSON.stringify(shape)+')');await input('mouseDown',rail,.2);await input('mouseMove',rail);await run('window.cancelDrag('+JSON.stringify(reason)+')');await input('mouseUp',rail);await run('window.checkCanceled()')}
+ await run('window.checkDisabled()');
+}
+console.log('SHARED_SEEK_GESTURE_OK');app.exit(0)
+}catch(error){console.error(error.stack);app.exit(1)}});`
+    )
+    const env = { ...process.env }
+    delete env.ELECTRON_RUN_AS_NODE
+    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
+      windowsHide: true,
+      timeout: 30_000,
+      env
+    })
+    assert.match(result.stdout, /SHARED_SEEK_GESTURE_OK/)
+  } finally {
+    const target = resolve(directory)
+    assert.ok(target.startsWith(resolve(tmpdir()) + sep))
+    await rm(target, { recursive: true, force: true })
+  }
+})
+
 test('player family shares pointer preview, single seek commit and keyboard access', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-edge-seek-'))
   try {

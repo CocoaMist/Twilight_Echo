@@ -12,8 +12,13 @@ import {
   type MiniPlayerWindowSize
 } from '../../../shared/miniPlayer.ts'
 import MiniGlyph from './MiniGlyph.vue'
+import PlayerControlIcon from '../components/player-bar/PlayerControlIcon.vue'
+import { useSeekGesture } from '../components/player-bar/useSeekGesture'
+import { useMiniPlayerClock } from './useMiniPlayerClock'
+import { formatTime } from '../utils/playerTime'
+import { getPlayModeLabel } from '../utils/playbackPresentation'
 import PlaybackModeIcon from '../components/icons/PlaybackModeIcon.vue'
-import ThemeIcon from '../components/ThemeIcon.vue'
+import { isPlaybackSpace } from '../app/playbackKeyboard'
 import { observeMiniPlayerThemeIcons } from '../app/themeIconRuntime'
 import DEFAULT_TRACK_COVER from '../assets/images/default-track-cover-light.webp'
 import '../assets/default-track-cover.css'
@@ -42,9 +47,15 @@ const REMAINING_TIME_STORAGE_KEY = 'te-mini-player-remaining-time'
 const CUSTOMIZER_MIN_SIZE: MiniPlayerWindowSize = { width: 520, height: 340 }
 
 const state = ref<MiniPlayerStateSnapshot>({ ...EMPTY_MINI_PLAYER_STATE })
-const clockNow = ref(Date.now())
+const clockNow = useMiniPlayerClock(
+  () =>
+    Boolean(state.value.track) &&
+    state.value.isPlaying &&
+    !state.value.isLoading &&
+    state.value.playbackRate > 0 &&
+    (state.value.duration <= 0 || state.value.currentTime < state.value.duration)
+)
 let receivedAtMs = clockNow.value
-let clockTimer: ReturnType<typeof setInterval> | null = null
 const playbackTime = computed(() =>
   estimateMiniPlayerTime(state.value, clockNow.value, receivedAtMs)
 )
@@ -104,15 +115,35 @@ const activeProfile = computed(
 )
 const activeStyle = computed(() => resolveMiniPlayerStyle(settings.value.activeStyleId))
 const hasTrack = computed(() => Boolean(state.value.track))
+const seekDisabled = computed(
+  () => !hasTrack.value || !Number.isFinite(state.value.duration) || state.value.duration <= 0
+)
+const {
+  preview: seekPreview,
+  keyboardFocus: seekKeyboardFocus,
+  onInput: onProgressInput,
+  startPointer: startSeekPointer,
+  endPointer: endSeekPointer,
+  commit: commitSeek,
+  cancel: cancelSeek,
+  onFocus: onSeekFocus,
+  onBlur: onSeekBlur
+} = useSeekGesture({
+  duration: () => state.value.duration,
+  disabled: () => seekDisabled.value || customizerLayout.value,
+  identity: () => `${state.value.track?.id ?? 'empty'}:${state.value.queueIndex}`,
+  commit: seekTo
+})
+const displayedTime = computed(() => seekPreview.value ?? playbackTime.value)
 const rawProgressPercent = computed(() =>
   state.value.duration > 0
-    ? Math.min(100, Math.max(0, (playbackTime.value / state.value.duration) * 100))
+    ? Math.min(100, Math.max(0, (displayedTime.value / state.value.duration) * 100))
     : 0
 )
 // Snapshot pushes are stepped; glide between them like the main PlayerBar.
 const progressPercent = useSmoothedValue(rawProgressPercent, { tau: 160, snapThreshold: 2.5 })
 const progressStyle = computed<CSSProperties>(() => ({
-  '--mini-progress': `${Math.min(100, Math.max(0, progressPercent.value)) / 100}`
+  '--mini-progress': `${Math.min(100, Math.max(0, seekPreview.value !== null ? rawProgressPercent.value : progressPercent.value)) / 100}`
 }))
 const resolvedLayout = computed(() =>
   resolveMiniPlayerLayout(
@@ -211,8 +242,8 @@ const trackQuality = computed(() => {
   const bitDepth =
     typeof track.bitDepth === 'number' && track.bitDepth > 0 ? `${track.bitDepth}bit` : ''
   const spec = [format, bitDepth, sampleRate].filter(Boolean).join(' · ')
-  const lossless = /^(flac|alac|wav|aiff|aif|ape|dsf|dff|tta|wv|m4a)$/i.test(format)
-  const isHiRes = (track.bitDepth ?? 0) >= 24 || (track.sampleRate ?? 0) >= 96000
+  const lossless = /^(flac|alac|wav|aiff|aif|ape|dsd|dsf|dff|tta|wv)$/i.test(format)
+  const isHiRes = lossless && ((track.bitDepth ?? 0) >= 24 || (track.sampleRate ?? 0) >= 96000)
   return {
     label: isHiRes ? 'Hi-Res' : lossless ? 'Lossless' : '',
     spec,
@@ -230,20 +261,8 @@ const kickerText = computed(() => {
   const queue = resolvedVisibility.value.queuePosition ? queuePositionText.value : ''
   return [album, queue].filter(Boolean).join('  ·  ')
 })
-const playModeTitle = computed(() => {
-  if (state.value.playMode === 'heart') return '心动模式'
-  if (state.value.playMode === 'listLoop') return '列表循环'
-  if (state.value.playMode === 'repeat') return '单曲循环'
-  if (state.value.playMode === 'shuffle') return '随机播放'
-  return '顺序播放'
-})
+const playModeTitle = computed(() => getPlayModeLabel(state.value.playMode))
 const volumePercent = computed(() => Math.round(state.value.volume * 100))
-const volumeIcon = computed(() => {
-  if (state.value.volume <= 0.001) return 'ph ph-speaker-simple-x'
-  if (state.value.volume < 0.34) return 'ph ph-speaker-simple-none'
-  if (state.value.volume < 0.67) return 'ph ph-speaker-simple-low'
-  return 'ph ph-speaker-simple-high'
-})
 const nextFormLabel = computed(
   () =>
     nextMiniPlayerSizePreset({
@@ -251,10 +270,10 @@ const nextFormLabel = computed(
       height: settings.value.windowHeight
     }).label
 )
-const elapsedText = computed(() => formatTime(playbackTime.value))
+const elapsedText = computed(() => formatTime(displayedTime.value))
 const trailingTimeText = computed(() =>
   showRemaining.value && state.value.duration > 0
-    ? `-${formatTime(Math.max(0, state.value.duration - playbackTime.value))}`
+    ? `-${formatTime(Math.max(0, state.value.duration - displayedTime.value))}`
     : formatTime(state.value.duration)
 )
 
@@ -278,14 +297,10 @@ function toggleFavorite(): void {
 }
 
 function seekTo(value: number): void {
-  if (!hasTrack.value) return
-  const time = Math.min(state.value.duration || value, Math.max(0, value))
+  if (seekDisabled.value || !Number.isFinite(value)) return
+  const time = Math.min(state.value.duration, Math.max(0, value))
   state.value = { ...state.value, currentTime: time, capturedAtMs: Date.now() }
   sendCommand({ type: 'seek', value: time })
-}
-
-function onProgressInput(event: Event): void {
-  seekTo(Number((event.target as HTMLInputElement).value))
 }
 
 function setVolume(value: number, options: { hud?: boolean } = {}): void {
@@ -507,13 +522,6 @@ async function returnToMainWindow(): Promise<void> {
   }
 }
 
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
-  const minutes = Math.floor(seconds / 60)
-  const remainingSeconds = Math.floor(seconds % 60)
-  return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
-}
-
 function updateViewportSize(): void {
   viewportWidth.value = Math.max(1, window.innerWidth)
   viewportHeight.value = Math.max(1, window.innerHeight)
@@ -580,11 +588,18 @@ async function handleKeydown(event: KeyboardEvent): Promise<void> {
   }
 
   const target = event.target as HTMLElement | null
-  if (target?.tagName === 'INPUT' || customizerOpen.value) return
+  if (customizerOpen.value || event.defaultPrevented || event.isComposing) return
+  if (
+    target?.closest(
+      'input, textarea, select, button, a[href], [contenteditable]:not([contenteditable="false"]), [role="button"], [role="switch"], [role="slider"], [role="dialog"], [role="menu"]'
+    )
+  )
+    return
   const withModifier = event.ctrlKey || event.metaKey
 
   switch (event.key) {
     case ' ':
+      if (!isPlaybackSpace(event)) return
       event.preventDefault()
       togglePlay()
       break
@@ -626,9 +641,6 @@ let removeThemeIconListener: (() => void) | null = null
 
 onMounted(async () => {
   removeThemeIconListener = observeMiniPlayerThemeIcons()
-  clockTimer = setInterval(() => {
-    clockNow.value = Date.now()
-  }, 50)
   removeStateListener = window.api.miniPlayer.onState((nextState) => {
     state.value = nextState
   })
@@ -665,24 +677,29 @@ async function loadBootstrap(): Promise<void> {
   }
 }
 
-watch(coverSrc, (source, _previous, onCleanup) => {
+watch(coverSrc, () => {
   coverFailed.value = false
-  coverSurfaceColor.value = null
-  if (!source) return
-  let active = true
-  onCleanup(() => {
-    active = false
-  })
-  void extractAverageColor(source).then((color) => {
-    if (active) coverSurfaceColor.value = color
-  })
 })
+
+watch(
+  () => (activeProfile.value.background.kind === 'cover' ? coverSrc.value : null),
+  (source, _previous, onCleanup) => {
+    coverSurfaceColor.value = null
+    if (!source) return
+    let active = true
+    onCleanup(() => {
+      active = false
+    })
+    void extractAverageColor(source).then((color) => {
+      if (active) coverSurfaceColor.value = color
+    })
+  }
+)
 
 onBeforeUnmount(() => {
   customizerGeneration++
   artworkAnimation?.cancel()
   artworkAnimation = null
-  if (clockTimer !== null) clearInterval(clockTimer)
   if (volumeHudTimer) clearTimeout(volumeHudTimer)
   if (dragFrame !== 0) cancelAnimationFrame(dragFrame)
   const pendingFlush = customization.flush()
@@ -795,11 +812,7 @@ onBeforeUnmount(() => {
               :disabled="state.favoriteLoading"
               @click="toggleFavorite"
             >
-              <ThemeIcon
-                :icon-slot="state.favoriteLiked ? 'playback.favoriteActive' : 'playback.favorite'"
-              >
-                <i :class="state.favoriteLiked ? 'ph-fill ph-heart' : 'ph ph-heart'"></i>
-              </ThemeIcon>
+              <PlayerControlIcon name="favorite" :filled="state.favoriteLiked" />
             </button>
           </div>
         </Transition>
@@ -808,7 +821,12 @@ onBeforeUnmount(() => {
       <div
         class="mini-progress"
         :inert="customizerLayout"
-        :class="{ 'without-time': !resolvedVisibility.time, 'is-disabled': !hasTrack }"
+        :class="{
+          'without-time': !resolvedVisibility.time,
+          'is-disabled': seekDisabled,
+          'is-scrubbing': seekPreview !== null,
+          'is-keyboard-focus': seekKeyboardFocus
+        }"
         :style="progressStyle"
       >
         <span v-if="resolvedVisibility.time" class="mini-time elapsed">{{ elapsedText }}</span>
@@ -823,11 +841,19 @@ onBeforeUnmount(() => {
             min="0"
             :max="state.duration || 1"
             step="0.1"
-            :value="playbackTime"
+            :value="displayedTime"
             aria-label="播放进度"
             :aria-valuetext="`${elapsedText} / ${formatTime(state.duration)}`"
-            :disabled="!hasTrack"
+            :disabled="seekDisabled || customizerLayout"
+            @pointerdown.stop="startSeekPointer"
+            @pointermove.stop
+            @pointerup="endSeekPointer"
             @input="onProgressInput"
+            @change="commitSeek"
+            @pointercancel="cancelSeek"
+            @focus="onSeekFocus"
+            @keydown="seekKeyboardFocus = true"
+            @blur="onSeekBlur"
           />
         </div>
         <button
@@ -917,9 +943,7 @@ onBeforeUnmount(() => {
               :aria-label="state.volume > 0.001 ? '静音' : '取消静音'"
               @click="toggleMute()"
             >
-              <ThemeIcon :icon-slot="state.volume <= 0.001 ? 'playback.muted' : 'playback.volume'">
-                <i :class="volumeIcon"></i>
-              </ThemeIcon>
+              <PlayerControlIcon :name="state.volume <= 0.001 ? 'muted' : 'volume'" />
             </button>
           </div>
         </div>
@@ -989,7 +1013,7 @@ onBeforeUnmount(() => {
 
       <Transition name="mini-hud">
         <div v-if="volumeHudVisible" class="mini-volume-hud" role="status" aria-live="polite">
-          <i :class="volumeIcon" aria-hidden="true"></i>
+          <PlayerControlIcon :name="state.volume <= 0.001 ? 'muted' : 'volume'" />
           <span class="mini-volume-hud-track" :style="{ '--mini-hud-level': state.volume }">
             <span></span>
           </span>

@@ -500,6 +500,7 @@ function runtimeEntrySource(): string {
     '/'
   )
   return `import ${JSON.stringify(mainStylePath)}
+import '@renderer/assets/icon-fonts'
 import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import PlayingMusic from ${JSON.stringify(componentPath)}
@@ -533,6 +534,13 @@ const input = (element, value) => {
 }
 
 window.runPlayingMusicLyricsRuntime = async () => {
+  // A hidden/offscreen Electron window otherwise starts with a hidden document.
+  // Control the actual visibility event explicitly for the suspension probes.
+  let fixtureVisibility = 'visible'
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    get: () => fixtureVisibility
+  })
   const pinia = createPinia()
   setActivePinia(pinia)
   const player = usePlayerStore()
@@ -563,6 +571,11 @@ window.runPlayingMusicLyricsRuntime = async () => {
     ])
   }).use(pinia).mount('#app')
   await tick()
+  await document.fonts.ready
+  const visualizerIcon = document.querySelector('.visualizer-toggle-button i')
+  expect(getComputedStyle(visualizerIcon).fontFamily.includes('Phosphor'), 'the fixture did not load the actual player icon font')
+  expect(!['none', 'normal', '""'].includes(getComputedStyle(visualizerIcon, '::before').content), 'the visualizer icon has no real font glyph')
+  expect([...document.fonts].some(font => font.family.replaceAll('"', '') === 'Phosphor' && font.status === 'loaded'), 'the real Phosphor font was not loaded before the player fixture ran')
   const beforeCurrent = JSON.stringify(player.currentTrack.value)
   const beforeQueue = JSON.stringify(player.queue.value)
 
@@ -1100,10 +1113,7 @@ window.runPlayingMusicLyricsRuntime = async () => {
   )
 
   document.documentElement.dataset.teMotion = 'full'
-  Object.defineProperty(document, 'visibilityState', {
-    configurable: true,
-    get: () => 'visible'
-  })
+  fixtureVisibility = 'visible'
   const yrcTrackA = {
     ...playbackTrack,
     id: 'fixture-provider:yrc-scroll-a',
@@ -1375,6 +1385,82 @@ window.runPlayingMusicLyricsRuntime = async () => {
     }
     throw new Error(message)
   }
+  let nativeRequest
+  let finishNativeMenu
+  window.api.window = {
+    popupContextMenu: request => {
+      nativeRequest = request
+      return new Promise(resolve => { finishNativeMenu = resolve })
+    },
+    closeContextMenu: async () => { finishNativeMenu?.(null) }
+  }
+  const viewControl = document.querySelector('.visualizer-toggle-button')
+  viewControl.focus()
+  document.querySelector('.playing-music').dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true, cancelable: true, clientX: innerWidth - 1, clientY: innerHeight - 1
+  }))
+  await tick()
+  expect(nativeRequest?.items.map(item => item.label).join('|') === '个性化歌词|定制此区域外观', 'appearance actions did not use the shared native menu')
+  expect(!document.querySelector('.player-appearance-menu'), 'the appearance menu retained a clipped renderer overlay')
+  // The shared IPC resolves null when the native menu is dismissed with Escape.
+  // This fixture verifies the component handoff, not operating-system geometry.
+  finishNativeMenu(null)
+  await tick()
+  expect(document.activeElement === viewControl, 'native menu cancellation moved keyboard focus')
+  // All hidden forms share one suspension rule. Retain the real rows and their
+  // translations, but stop clock-driven Vue updates, karaoke and geometry work.
+  const surfaceMeasurements = []
+  for (const hiddenMode of ['minimal', 'document']) {
+    player.seek(1.5)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const retainedRows = [...document.querySelectorAll('.lyric-row')]
+    const lyricStage = document.querySelector('.lyrics-scroll')
+    const stageHeight = lyricStage.clientHeight
+    const ownHeight = Object.getOwnPropertyDescriptor(lyricStage, 'clientHeight')
+    let geometryReads = 0
+    Object.defineProperty(lyricStage, 'clientHeight', {
+      configurable: true,
+      get() { geometryReads++; return stageHeight }
+    })
+    player.seek(4.2)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const visibleReads = geometryReads
+    if (hiddenMode === 'minimal') document.documentElement.dataset.tePlayerLayout = 'minimal'
+    else {
+      fixtureVisibility = 'hidden'
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+    await tick()
+    await new Promise(resolve => setTimeout(resolve, 60))
+    geometryReads = 0
+    let rowMutations = 0
+    const rowObserver = new MutationObserver(records => { rowMutations += records.length })
+    rowObserver.observe(lyricStage, { attributes: true, childList: true, subtree: true })
+    const hiddenTops = retainedRows.map(row => row.style.getPropertyValue('--lyric-line-top'))
+    for (const position of [1.5, 4.2, 1.5]) {
+      player.seek(position)
+      window.dispatchEvent(new Event('resize'))
+      await new Promise(resolve => setTimeout(resolve, 40))
+    }
+    rowObserver.disconnect()
+    surfaceMeasurements.push({ mode: hiddenMode, visibleReads, hiddenReads: geometryReads, rowMutations })
+    console.log('LYRIC_SURFACE_MEASUREMENTS', JSON.stringify(surfaceMeasurements.at(-1)))
+    expect(visibleReads > 0, 'visible lyric control did not measure its viewport')
+    expect(geometryReads === 0, hiddenMode + ' hidden lyrics measured their viewport')
+    expect(rowMutations === 0, hiddenMode + ' hidden lyrics kept reacting to the playback clock')
+    expect([...document.querySelectorAll('.lyric-row-content')].every(node => !node.__vueParentComponent.props.singing && !node.__vueParentComponent.props.karaokeEnabled), hiddenMode + ' hidden lyrics retained karaoke work')
+    expect(retainedRows.every((row, index) => row === document.querySelectorAll('.lyric-row')[index] && row.style.getPropertyValue('--lyric-line-top') === hiddenTops[index]), hiddenMode + ' hidden lyric rows were replaced or relaid out')
+    if (hiddenMode === 'minimal') document.documentElement.dataset.tePlayerLayout = 'standard'
+    else {
+      fixtureVisibility = 'visible'
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+    await waitMotion(() => document.querySelector('.lyric-row[aria-current="true"]')?.textContent.includes('First voice'), hiddenMode + ' return did not snap to the latest clock position')
+    expect(document.querySelector('.lyric-row.is-singing .lyric-row-content').__vueParentComponent.props.singing, hiddenMode + ' return did not restore singing')
+    if (ownHeight) Object.defineProperty(lyricStage, 'clientHeight', ownHeight)
+    else delete lyricStage.clientHeight
+  }
+  window.lyricSurfaceMeasurements = surfaceMeasurements
   let samples = 0
   window.api.audioEngine.getVisualizationData = async () => {
     samples++
@@ -1749,6 +1835,7 @@ app.whenReady().then(async () => {
       'window.runPlayingMusicLyricsRuntime().then(() => ({ ok: true }), (error) => ({ ok: false, message: error?.stack ?? error?.message ?? String(error) }))'
     )
     if (!runtimeResult.ok) throw new Error(runtimeResult.message)
+    await window.webContents.executeJavaScript('document.fonts.ready.then(() => true)')
     if (motionVisualDir) {
       await mkdir(motionVisualDir, { recursive: true })
       await window.webContents.executeJavaScript('window.beginPlaybackMotionCapture()')
@@ -1786,6 +1873,7 @@ app.whenReady().then(async () => {
     await window.webContents.executeJavaScript('window.setPlayingMusicLayoutFixture(true)')
     if (visualDir) {
       await mkdir(visualDir, { recursive: true })
+      await writeFile(path.join(visualDir, 'lyric-surface-measurements.json'), JSON.stringify(await window.webContents.executeJavaScript('window.lyricSurfaceMeasurements'), null, 2))
       await window.webContents.executeJavaScript(${JSON.stringify(resetFixtureGeometrySource)})
       const viewports = [[1440, 900], [1024, 768], [760, 900], [390, 844]]
       for (const [width, height] of viewports) {
@@ -1814,6 +1902,14 @@ app.whenReady().then(async () => {
         const image = await window.webContents.capturePage()
         await writeFile(path.join(visualDir, 'playing-lyrics-' + width + 'x' + height + '.png'), image.toPNG())
         console.error('LYRIC_VISUAL', width + 'x' + height, JSON.stringify(diagnostics))
+      }
+      for (const theme of ['light', 'dark']) {
+        for (const [width, height] of [[1440, 900], [390, 844]]) {
+          await resizeViewport(width, height)
+          await window.webContents.executeJavaScript('document.documentElement.dataset.theme = ' + JSON.stringify(theme) + ';window.dispatchEvent(new Event("resize"))')
+          await new Promise(resolve => setTimeout(resolve, 160))
+          await writeFile(path.join(visualDir, 'playing-unified-' + theme + '-' + width + 'x' + height + '.png'), (await window.webContents.capturePage()).toPNG())
+        }
       }
     }
     app.exit(0)

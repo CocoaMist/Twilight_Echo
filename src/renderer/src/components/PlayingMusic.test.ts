@@ -362,7 +362,7 @@ test('now playing isolates high-frequency playhead updates from the full lyrics 
   assert.match(source, /lyricsLoadState\.value\.status === 'loading'/)
   assert.match(
     source,
-    /watch\(\s*\[lyricLines, playbackClockSnapshot, currentLyricOffsetSeconds\],/
+    /watch\(\s*\[lyricLines, playbackClockSnapshot, currentLyricOffsetSeconds, lyricsViewActive\],/
   )
   assert.doesNotMatch(source, /predictedLyricTime|scheduleLyricIndexBoundary|lyricIndexTimer/)
   assert.match(source, /snapshot: playbackClockSnapshot/)

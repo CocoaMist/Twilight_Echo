@@ -39,28 +39,40 @@ function measure(): void {
 }
 
 let resizeObserver: ResizeObserver | null = null
+let measureFrame = 0
+
+function scheduleMeasure(): void {
+  if (measureFrame !== 0) return
+  measureFrame = requestAnimationFrame(() => {
+    measureFrame = 0
+    measure()
+  })
+}
 
 onMounted(() => {
   measure()
   if (typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(measure)
+    resizeObserver = new ResizeObserver(scheduleMeasure)
     if (rootRef.value) resizeObserver.observe(rootRef.value)
+    if (itemRef.value) resizeObserver.observe(itemRef.value)
   } else {
-    window.addEventListener('resize', measure)
+    window.addEventListener('resize', scheduleMeasure)
   }
 })
 
 watch(
   () => props.text,
   () => {
-    requestAnimationFrame(measure)
+    scheduleMeasure()
   }
 )
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
-  window.removeEventListener('resize', measure)
+  window.removeEventListener('resize', scheduleMeasure)
+  if (measureFrame !== 0) cancelAnimationFrame(measureFrame)
+  measureFrame = 0
 })
 </script>
 
@@ -96,7 +108,6 @@ onBeforeUnmount(() => {
   display: inline-flex;
   min-width: 100%;
   white-space: nowrap;
-  will-change: transform;
 }
 
 .te-scroll-text-item {
@@ -132,6 +143,7 @@ onBeforeUnmount(() => {
 }
 
 .te-scroll-text.is-overflowing .te-scroll-text-inner {
+  will-change: transform;
   /* Longhand form only: Vue's scoped-style keyframe rewriting cannot parse a
      CSS variable inside the `animation` shorthand and would drop every
      longhand, so the marquee never runs. */

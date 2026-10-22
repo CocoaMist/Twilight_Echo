@@ -15,6 +15,7 @@ import { useVisualizationStore } from '../stores/useVisualizationStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useLyricsManagement } from '../stores/lyricsManagement'
 import CoverImg from './CoverImg.vue'
+import NativeContextMenu from './NativeContextMenu.vue'
 import { findActiveLyricIndex } from '../utils/lyrics'
 import { createLyricContentCache } from '../utils/lyricContentCache.ts'
 import type { LyricLine } from '../utils/lyrics'
@@ -95,7 +96,9 @@ function beginMetadataSelection(event: PointerEvent): void {
 
 function trackMetadataSelection(event: PointerEvent): void {
   if (!metadataPointerStart || !(event.buttons & 1)) return
-  if (Math.hypot(event.clientX - metadataPointerStart.x, event.clientY - metadataPointerStart.y) > 4) {
+  if (
+    Math.hypot(event.clientX - metadataPointerStart.x, event.clientY - metadataPointerStart.y) > 4
+  ) {
     metadataDragged = true
   }
 }
@@ -111,14 +114,8 @@ function canOpenMetadataLink(event: MouseEvent): boolean {
     selection.getRangeAt(0).intersectsNode(event.currentTarget as Node)
   )
 }
-const appearanceMenuPosition = ref({ x: 0, y: 0 })
-
-function openAppearanceMenu(event: MouseEvent): void {
+function openAppearanceMenu(): void {
   metadataCopyText.value = null
-  appearanceMenuPosition.value = {
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 210)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 52))
-  }
   appearanceMenuOpen.value = true
 }
 
@@ -142,7 +139,7 @@ function openMetadataCopyMenu(event: MouseEvent): void {
   )
   const text = selectedText || target?.textContent?.trim()
   if (!text) return
-  openAppearanceMenu(event)
+  openAppearanceMenu()
   metadataCopyText.value = text
 }
 
@@ -152,7 +149,9 @@ function copyMetadataText(): void {
   if (!text) return
   const selection = window.getSelection()
   const ranges = selection
-    ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange())
+    ? Array.from({ length: selection.rangeCount }, (_, index) =>
+        selection.getRangeAt(index).cloneRange()
+      )
     : []
   const activeElement = document.activeElement as HTMLElement | null
   const input = document.createElement('textarea')
@@ -270,8 +269,14 @@ const viewMode = ref<'cover' | 'visualizer'>('cover')
 const displayedView = ref<'cover' | 'visualizer' | null>('cover')
 const visualizerMounted = ref(false)
 const hasSwitchedPlaybackView = ref(false)
+const lyricLayoutVisible = ref(document.documentElement.dataset.tePlayerLayout !== 'minimal')
+const lyricDocumentVisible = ref(document.visibilityState === 'visible')
 const lyricsViewActive = computed(
-  () => viewMode.value === 'cover' && displayedView.value === 'cover'
+  () =>
+    viewMode.value === 'cover' &&
+    displayedView.value === 'cover' &&
+    lyricLayoutVisible.value &&
+    lyricDocumentVisible.value
 )
 
 // Finish the outgoing surface before mounting the iframe or restoring its blurred
@@ -328,9 +333,10 @@ watch(lyricMotionLevel, (level) => {
   if (level === 'off' && displayedView.value === null) finishPlaybackHandoff()
 })
 
-function readLyricMotionLevel(): void {
+function readLyricSurfaceState(): void {
   const level = document.documentElement.dataset.teMotion
   lyricMotionLevel.value = level === 'reduced' || level === 'off' ? level : 'full'
+  lyricLayoutVisible.value = document.documentElement.dataset.tePlayerLayout !== 'minimal'
 }
 
 const lyricMotionFull = computed(() => lyricMotionLevel.value === 'full')
@@ -514,6 +520,7 @@ const lyricTimeline = computed(() => buildLyricTimeline(lyricLines.value))
 watch(
   () => lyricsAppearance.value,
   async () => {
+    if (!lyricsViewActive.value) return
     await lyricViewport.recenter('resize')
   },
   { deep: true }
@@ -527,8 +534,8 @@ watch(
       lyricViewport.activate(trackId ?? '')
     }
     if (
-      trackId !== previousTrackId ||
-      (lyricsViewActive.value && displayLyricLines.value !== previousLines)
+      lyricsViewActive.value &&
+      (trackId !== previousTrackId || displayLyricLines.value !== previousLines)
     ) {
       await lyricViewport.recenter('snap')
     }
@@ -569,13 +576,15 @@ function syncActiveLyricIndex(time = playbackClockSnapshot.value.position, isSee
 }
 
 watch(
-  [lyricLines, playbackClockSnapshot, currentLyricOffsetSeconds],
-  ([lines, snapshot], previous) => {
+  [lyricLines, playbackClockSnapshot, currentLyricOffsetSeconds, lyricsViewActive],
+  ([lines, snapshot, , active], previous) => {
+    if (!active) return
     const linesChanged = previous != null && previous[0] !== lines
     const previousSnapshot = previous?.[1]
     const epochChanged = previousSnapshot != null && previousSnapshot.epoch !== snapshot.epoch
-    if (linesChanged) lyricPlayheadState = createLyricPlayheadState()
-    syncActiveLyricIndex(snapshot.position, linesChanged || epochChanged)
+    const resumed = previous != null && !previous[3]
+    if (linesChanged || resumed) lyricPlayheadState = createLyricPlayheadState()
+    syncActiveLyricIndex(snapshot.position, linesChanged || epochChanged || resumed)
     if (epochChanged && !linesChanged && lyricsViewActive.value)
       void lyricViewport.recenter('resize')
   },
@@ -693,8 +702,7 @@ function onLyricViewportResize(): void {
 }
 
 function onLyricVisibilityChange(): void {
-  if (!lyricsViewActive.value) return
-  void lyricViewport.recenter('snap')
+  lyricDocumentVisible.value = document.visibilityState === 'visible'
 }
 
 watch(activeLyricIndex, (index) => {
@@ -735,20 +743,21 @@ onMounted(() => {
   lyricResizeObserver = new ResizeObserver(() => {
     onLyricContentResize()
   })
-  for (const row of lyricRowElements.values()) lyricResizeObserver.observe(row)
-  if (lyricsEl.value) {
+  readLyricSurfaceState()
+  for (const row of lyricRowElements.values()) {
+    if (lyricsViewActive.value) lyricResizeObserver.observe(row)
+  }
+  if (lyricsViewActive.value && lyricsEl.value) {
     lyricViewport.attach(lyricsEl.value)
     lyricResizeObserver.observe(lyricsEl.value)
   }
-  readLyricMotionLevel()
-  void lyricViewport.recenter('snap')
-  lyricMotionObserver = new MutationObserver(readLyricMotionLevel)
+  if (lyricsViewActive.value) void lyricViewport.recenter('snap')
+  lyricMotionObserver = new MutationObserver(readLyricSurfaceState)
   lyricMotionObserver.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['data-te-motion']
+    attributeFilter: ['data-te-motion', 'data-te-player-layout']
   })
   window.addEventListener('resize', onLyricViewportResize)
-  window.addEventListener('pointerdown', closeAppearanceMenu)
   document.addEventListener('visibilitychange', onLyricVisibilityChange)
 })
 
@@ -760,7 +769,6 @@ onBeforeUnmount(() => {
   lyricMotionObserver?.disconnect()
   lyricMotionObserver = null
   window.removeEventListener('resize', onLyricViewportResize)
-  window.removeEventListener('pointerdown', closeAppearanceMenu)
   document.removeEventListener('visibilitychange', onLyricVisibilityChange)
 })
 </script>
@@ -778,9 +786,11 @@ onBeforeUnmount(() => {
       class="visualizer-toggle-button"
       :class="{ 'visualizer-toggle-button--close': viewMode === 'visualizer' }"
       :title="viewMode === 'cover' ? '音频可视化' : '返回封面'"
+      :aria-label="viewMode === 'cover' ? '音频可视化' : '返回封面'"
+      :aria-pressed="viewMode === 'visualizer'"
       @click="toggleVisualizer"
     >
-      <i :class="viewMode === 'cover' ? 'pi pi-chart-bar' : 'pi pi-times'"></i>
+      <i :class="viewMode === 'cover' ? 'ph ph-waveform' : 'ph ph-x'" aria-hidden="true"></i>
     </button>
 
     <div v-if="currentTrack && viewMode === 'cover'" class="playback-time">
@@ -931,8 +941,7 @@ onBeforeUnmount(() => {
                       item.presented,
                       item.line,
                       lyricsAppearance,
-                      viewMode,
-                      displayedView,
+                      lyricsViewActive,
                       lyricMotionLevel
                     ]"
                     :ref="(el) => setLyricLineRef(item.index, el)"
@@ -959,10 +968,10 @@ onBeforeUnmount(() => {
                   >
                     <PlayingLyricLine
                       :line="item.line"
-                      :singing="item.singing && viewMode === 'cover' && displayedView === 'cover'"
+                      :singing="item.singing && lyricsViewActive"
                       :offset-seconds="currentLyricOffsetSeconds"
                       :clock="lyricWordClock"
-                      :karaoke-enabled="lyricsAppearance.karaokeEnabled && viewMode === 'cover'"
+                      :karaoke-enabled="lyricsAppearance.karaokeEnabled && lyricsViewActive"
                       :motion-mode="lyricMotionLevel"
                       :align="lyricLineAlign(item.singing)"
                       :translation-style="lyricTranslationStyle"
@@ -1001,34 +1010,24 @@ onBeforeUnmount(() => {
         />
       </div>
     </Transition>
-    <Teleport to="body">
-      <div
-        v-if="appearanceMenuOpen"
-        class="player-appearance-menu"
-        :style="{
-          left: `${appearanceMenuPosition.x}px`,
-          top: `${appearanceMenuPosition.y}px`
-        }"
-        @pointerdown.stop
+    <NativeContextMenu v-if="appearanceMenuOpen" @close="closeAppearanceMenu">
+      <button
+        v-if="metadataCopyText !== null"
+        type="button"
+        @mousedown.prevent
+        @click="copyMetadataText"
       >
-        <button
-          v-if="metadataCopyText !== null"
-          type="button"
-          @mousedown.prevent
-          @click="copyMetadataText"
-        >
-          <i class="ph ph-copy"></i><span>复制</span>
+        <i class="ph ph-copy"></i><span>复制</span>
+      </button>
+      <template v-else>
+        <button type="button" @click="customizeLyricsAppearance">
+          <i class="ph ph-text-aa"></i><span>个性化歌词</span>
         </button>
-        <template v-else>
-          <button type="button" @click="customizeLyricsAppearance">
-            <i class="ph ph-text-aa"></i><span>个性化歌词</span>
-          </button>
-          <button type="button" @click="customizePlayerAppearance">
-            <i class="ph ph-palette"></i><span>定制此区域外观</span>
-          </button>
-        </template>
-      </div>
-    </Teleport>
+        <button type="button" @click="customizePlayerAppearance">
+          <i class="ph ph-palette"></i><span>定制此区域外观</span>
+        </button>
+      </template>
+    </NativeContextMenu>
     <Teleport to="body">
       <LyricsAppearanceCustomizer
         :open="lyricsCustomizerOpen"
@@ -1123,37 +1122,6 @@ html[data-te-motion='reduced'] .playback-view-leave-to {
   background-size: cover;
   background-repeat: no-repeat;
   --accent-color: var(--te-playback-accent, #7c4dff);
-}
-
-.player-appearance-menu {
-  position: fixed;
-  z-index: 10000;
-  width: 218px;
-  padding: 5px;
-  border: 1px solid var(--te-card-border);
-  border-radius: 6px;
-  box-shadow: var(--te-glass-shadow);
-  background: var(--te-card-bg);
-}
-
-.player-appearance-menu button {
-  display: flex;
-  width: 100%;
-  min-height: 36px;
-  align-items: center;
-  gap: 9px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--te-neutral-900);
-  text-align: left;
-  background: transparent;
-  cursor: pointer;
-}
-
-.player-appearance-menu button:hover {
-  color: var(--te-primary-500);
-  background: var(--te-hover-bg);
 }
 
 .backdrop {
@@ -2085,6 +2053,11 @@ html[data-te-motion='off'] .backdrop-fluid::before {
   box-shadow: var(--te-playback-control-hover-shadow, 0 4px 12px rgba(0, 0, 0, 0.18));
 }
 
+.visualizer-toggle-button:focus-visible {
+  outline: 2px solid var(--te-playback-control-hover-text, currentColor);
+  outline-offset: 3px;
+}
+
 .visualizer-toggle-button--close {
   z-index: 10000;
 }
@@ -2102,30 +2075,6 @@ html[data-te-motion='off'] .backdrop-fluid::before {
   inset: 0;
   width: 100%;
   height: 100%;
-}
-
-:global(html[data-theme='dark'] .playing-music .visualizer-toggle-button) {
-  background: var(--te-playback-control-surface, rgba(255, 255, 255, 0.08));
-  border-color: var(--te-playback-control-border, rgba(255, 255, 255, 0.1));
-  color: var(--te-playback-control-text, rgba(255, 255, 255, 0.7));
-}
-
-:global(html[data-theme='dark'] .playing-music .visualizer-toggle-button:hover) {
-  background: var(--te-playback-control-hover-surface, rgba(255, 255, 255, 0.14));
-  border-color: var(--te-playback-control-hover-border, rgba(255, 255, 255, 0.16));
-  color: var(--te-playback-control-hover-text, rgba(255, 255, 255, 0.92));
-}
-
-:global(html[data-theme='dark'] .playing-music .visualizer-toggle-button--close) {
-  background: var(--te-playback-control-surface, rgba(255, 255, 255, 0.08));
-  border-color: var(--te-playback-control-border, rgba(255, 255, 255, 0.1));
-  box-shadow: none;
-}
-
-:global(html[data-theme='dark'] .playing-music .visualizer-toggle-button--close:hover) {
-  background: var(--te-playback-control-hover-surface, rgba(255, 255, 255, 0.14));
-  border-color: var(--te-playback-control-hover-border, rgba(255, 255, 255, 0.16));
-  box-shadow: var(--te-playback-control-hover-shadow, 0 4px 12px rgba(0, 0, 0, 0.18));
 }
 
 @keyframes te-artwork-fade {

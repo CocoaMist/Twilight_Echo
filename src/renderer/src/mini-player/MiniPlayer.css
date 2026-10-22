@@ -541,12 +541,14 @@
 }
 
 .mini-progress-rail:hover .mini-progress-track,
-.mini-progress-rail:focus-within .mini-progress-track {
+.mini-progress-rail:focus-within .mini-progress-track,
+.mini-progress.is-scrubbing .mini-progress-track {
   height: 6px;
 }
 
 .mini-progress-rail:hover .mini-progress-thumb,
-.mini-progress-rail:focus-within .mini-progress-thumb {
+.mini-progress-rail:focus-within .mini-progress-thumb,
+.mini-progress.is-scrubbing .mini-progress-thumb {
   transform: translate(-50%, -50%) scale(1);
 }
 
@@ -574,7 +576,7 @@
   opacity: 0;
 }
 
-.mini-progress-rail:has(.mini-progress-range:focus-visible) .mini-progress-track {
+.mini-progress.is-keyboard-focus .mini-progress-track {
   outline: 2px solid color-mix(in srgb, var(--mini-accent) 70%, transparent);
   outline-offset: 3px;
 }

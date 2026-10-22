@@ -52,6 +52,7 @@ import LibraryQueueDrawer from './player-bar/LibraryQueueDrawer.vue'
 import QueueSavePlaylistDialog from './player-bar/QueueSavePlaylistDialog.vue'
 import CompactPlayerBarVisualizer from './player-bar/CompactPlayerBarVisualizer.vue'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+import { getPlayModeLabel } from '../utils/playbackPresentation.ts'
 import { syncPluginProviders } from '../providers'
 import type {
   AudioOutputId,
@@ -861,15 +862,7 @@ const {
   removeFavoriteTrack
 })
 
-const modeLabels: Record<string, string> = {
-  sequential: '顺序播放',
-  listLoop: '列表循环',
-  repeat: '单曲循环',
-  shuffle: '随机播放',
-  heart: '心动模式'
-}
-
-const modeTitle = computed(() => modeLabels[playMode.value] ?? '')
+const modeTitle = computed(() => getPlayModeLabel(playMode.value))
 const selectedAudioOutput = computed(() =>
   audioOutputOptions.value.find((option) => option.id === audioOutput.value)
 )

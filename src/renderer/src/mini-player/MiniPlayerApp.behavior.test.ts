@@ -13,7 +13,7 @@ import { build } from 'vite'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../', import.meta.url))
 
-test('mini player undo closes the customizer and restores settings and native window size', async () => {
+test('mini player keeps four forms, undo, low power clock and shared seek behavior', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-mini-player-undo-'))
   try {
     await build({
@@ -51,6 +51,10 @@ app.setPath('userData',require('node:path').join(__dirname,'profile'));
 app.commandLine.appendSwitch('force-device-scale-factor','1');
 app.whenReady().then(async()=>{
  const win=new BrowserWindow({show:false,frame:false,useContentSize:true,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});
+ ipcMain.handle('mini-player-test:pointer',async(_event,phase,x,y)=>{
+  win.webContents.sendInputEvent({type:phase==='down'?'mouseDown':phase==='up'?'mouseUp':'mouseMove',button:'left',clickCount:1,x,y});
+  await new Promise(resolve=>setTimeout(resolve,25));
+ });
  ipcMain.handle('mini-player-test:resize',async(_event,width,height)=>{
   win.setContentSize(width,height);
   const deadline=Date.now()+3000;
@@ -63,8 +67,18 @@ app.whenReady().then(async()=>{
  });
  try{
   await win.loadFile(require('node:path').join(__dirname,'index.html'));
-  await win.webContents.executeJavaScript("window.resizeMiniPlayerTest=(width,height)=>require('electron').ipcRenderer.invoke('mini-player-test:resize',width,height);undefined");
+  await win.webContents.executeJavaScript("window.resizeMiniPlayerTest=(width,height)=>require('electron').ipcRenderer.invoke('mini-player-test:resize',width,height);window.miniPlayerTestPointer=(phase,x,y)=>require('electron').ipcRenderer.invoke('mini-player-test:pointer',phase,x,y);undefined");
   console.log(await win.webContents.executeJavaScript('window.runMiniPlayerUndoTests()'));
+  console.log(await win.webContents.executeJavaScript('window.runMiniPlayerPlaybackTests()'));
+  const evidence=process.env.NEO_PLAYER_EVIDENCE_DIR;
+  if(evidence){
+   require('node:fs').mkdirSync(evidence,{recursive:true});
+   for(let i=0;i<4;i++){
+    const id=await win.webContents.executeJavaScript('window.prepareMiniPlayerForm('+i+')');
+    const image=await win.webContents.capturePage();
+    require('node:fs').writeFileSync(require('node:path').join(evidence,'mini-'+id+'.png'),image.toPNG());
+   }
+  }
   app.exit(0);
  }catch(error){console.error(error.stack);app.exit(1)}
 });`
@@ -77,6 +91,7 @@ app.whenReady().then(async()=>{
       env
     })
     assert.match(result.stdout, /MINI_PLAYER_UNDO_OK/)
+    assert.match(result.stdout, /MINI_PLAYER_PLAYBACK_OK/)
     console.log(result.stdout.trim())
   } finally {
     assert.equal(dirname(resolve(directory)), resolve(tmpdir()))

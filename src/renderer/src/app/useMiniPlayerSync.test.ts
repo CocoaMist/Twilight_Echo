@@ -3,10 +3,12 @@ import test from 'node:test'
 import {
   buildMiniPlayerStateSnapshot,
   createMiniPlayerPublishScheduler,
-  miniPlayerProgressKey
+  miniPlayerProgressKey,
+  useMiniPlayerSync
 } from './useMiniPlayerSync.ts'
 import type { Track } from '../types/music.ts'
-import { ref, shallowRef } from 'vue'
+import { createRenderer, h, nextTick, ref, shallowRef } from 'vue'
+import type { MiniPlayerStateSnapshot } from '../../../shared/miniPlayer.ts'
 import { createQueueCommandController } from '@renderer/stores/player/queueCommandController.ts'
 import { toPlaybackQueueSnapshots } from '@renderer/utils/playbackQueueVirtualization.ts'
 import type { PlayMode } from '@renderer/types/settings'
@@ -51,6 +53,110 @@ function makeSource(track: Track | null, currentTime: number) {
     queueLength: 1
   }
 }
+
+test('paused mini player receives enriched quality metadata without a clock tick', async () => {
+  const currentTrack = ref<Track | null>(
+    makeTrack({
+      albumArtist: undefined,
+      trackNumber: undefined,
+      format: undefined,
+      sampleRate: undefined,
+      bitDepth: undefined
+    })
+  )
+  const snapshots: MiniPlayerStateSnapshot[] = []
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  let listening = false
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      api: {
+        miniPlayer: {
+          publishState: (state: MiniPlayerStateSnapshot) => snapshots.push(state),
+          onCommand: () => {
+            listening = true
+            return () => {
+              listening = false
+            }
+          }
+        }
+      }
+    }
+  })
+  const renderer = createRenderer<object, object>({
+    patchProp() {},
+    insert() {},
+    remove() {},
+    createElement: () => ({}),
+    createText: () => ({}),
+    createComment: () => ({}),
+    setText() {},
+    setElementText() {},
+    parentNode: () => null,
+    nextSibling: () => null
+  })
+  const app = renderer.createApp({
+    setup() {
+      useMiniPlayerSync({
+        currentTrack,
+        isPlaying: ref(false),
+        isLoading: ref(false),
+        currentTime: ref(35),
+        duration: ref(240),
+        playbackRate: ref(1),
+        volume: ref(0.7),
+        playMode: ref<PlayMode>('sequential'),
+        favoriteAvailable: ref(true),
+        favoriteLiked: ref(false),
+        favoriteLoading: ref(false),
+        dominantColor: ref('#7c4dff'),
+        queueIndex: ref(0),
+        queue: ref([currentTrack.value!]),
+        togglePlay: async () => {},
+        next() {},
+        prev() {},
+        seek() {},
+        setVolume() {},
+        cyclePlayMode() {},
+        setPlayMode() {},
+        toggleFavorite: async () => {}
+      })
+      return () => h('div')
+    }
+  })
+  let mounted = false
+  try {
+    app.mount({})
+    mounted = true
+    assert.equal(snapshots.length, 1)
+    assert.equal(listening, true)
+    const metadata = {
+      albumArtist: '专辑艺人',
+      trackNumber: 3,
+      format: 'FLAC',
+      sampleRate: 96000,
+      bitDepth: 24
+    }
+    for (const field of Object.keys(metadata) as Array<keyof typeof metadata>) {
+      const value = metadata[field]
+      Object.assign(currentTrack.value!, { [field]: value })
+      await nextTick()
+      assert.equal(snapshots.at(-1)!.track![field], value, field)
+    }
+    assert.equal(snapshots.length, 6)
+    assert.equal(snapshots.at(-1)!.currentTime, 35)
+    app.unmount()
+    mounted = false
+    assert.equal(listening, false)
+    currentTrack.value!.format = 'MP3'
+    await nextTick()
+    assert.equal(snapshots.length, 6)
+  } finally {
+    if (mounted) app.unmount()
+    if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
+})
 
 test('mini player snapshots follow queue clear and undo with the restored index and paused transport', (t) => {
   const queue = shallowRef(toPlaybackQueueSnapshots([makeTrack(), makeTrack()]))

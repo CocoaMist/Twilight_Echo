@@ -6,6 +6,8 @@
 
 NEO 的近期改动与实测：[2026-10-22 性能优化及瘦身记录](docs/neo-performance-2026-10-22.md)。
 
+播放器的后续统一与节流：[迷你播放器及歌词页优化记录](docs/neo-player-unification-2026-10-22.md)。
+
 <p align="center">
   <img src="./assets/logo.png" width="480" alt="Twilight Echo 渐变色标志" />
 </p>
