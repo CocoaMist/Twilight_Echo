@@ -12,6 +12,25 @@ import {
   searchOnlineLyrics
 } from './onlineLyricsSearch.ts'
 
+test('LRCLIB does not start a network request for an already cancelled lyric load', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  let calls = 0
+  await assert.rejects(
+    searchOnlineLyrics(
+      { title: 'One', artist: 'Artist' },
+      {
+        signal: controller.signal,
+        fetchImpl: async () => {
+          calls++
+          return new Response('[]')
+        }
+      }
+    )
+  )
+  assert.equal(calls, 0)
+})
+
 function makeOkSearchResponse(id = 9): Response {
   return new Response(
     JSON.stringify([
