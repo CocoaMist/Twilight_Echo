@@ -1,4 +1,5 @@
 import type { PlayMode } from './audioEngineTypes.ts'
+import { MAX_QUEUE_OCCURRENCE_ID_LENGTH } from './nativeQueue.ts'
 import { trackCueRangePropertyIsValid, type CueRange } from './cue.ts'
 import {
   isLibraryPlaybackQueueReference,
@@ -14,6 +15,7 @@ export interface SavedQueueTrack {
   id: string
   queueEntryId: string
   source: string
+  sourceSelection?: 'explicit'
   title: string
   artist: string
   album: string
@@ -57,7 +59,8 @@ const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 const text = (value: unknown, max = 8192): value is string =>
   typeof value === 'string' && value.length <= max && !value.includes('\0')
-const identity = (value: unknown): value is string => text(value) && value.trim().length > 0
+const identity = (value: unknown): value is string =>
+  text(value, MAX_QUEUE_OCCURRENCE_ID_LENGTH) && value.trim().length > 0
 const timestamp = (value: unknown): boolean => text(value, 40) && Number.isFinite(Date.parse(value))
 const positive = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -65,6 +68,7 @@ const positive = (value: unknown): value is number =>
 export function isSavedQueueTrack(value: unknown): value is SavedQueueTrack {
   if (!object(value)) return false
   if (!identity(value.id) || !identity(value.queueEntryId) || !identity(value.source)) return false
+  if (value.sourceSelection !== undefined && value.sourceSelection !== 'explicit') return false
   if (!text(value.title) || !text(value.artist) || !text(value.album) || !positive(value.duration))
     return false
   if (value.streamUrl !== undefined || value.cover !== undefined) return false

@@ -55,6 +55,7 @@ import { writeDiagnostic } from '../diagnostics/logger.ts'
 import { LIBRARY_PAGE_SIZE } from '../../shared/libraryDatabase.ts'
 import { sleepTimerService } from '../sleepTimer.ts'
 import { SleepTimerShutdown } from '../sleepTimerShutdown.ts'
+import { getCoreAfterglowMode, dispatchCoreAfterglowTransport } from './coreAfterglowRuntime.ts'
 
 export type AfterglowEntryMode = 'manual' | 'minimize' | 'hide'
 
@@ -1585,22 +1586,43 @@ class AfterglowModeService {
 
 const afterglowModeService = new AfterglowModeService()
 
-export const getAfterglowModeStatus = (): AfterglowModeStatus => afterglowModeService.getStatus()
-export const isAfterglowModeActive = (): boolean => afterglowModeService.isActive()
+export const getAfterglowModeStatus = (): AfterglowModeStatus =>
+  getCoreAfterglowMode()?.getStatus() ?? afterglowModeService.getStatus()
+export const isAfterglowModeActive = (): boolean =>
+  getCoreAfterglowMode()?.getStatus().active ?? afterglowModeService.isActive()
 export const enterAfterglowMode = (): Promise<AfterglowModeStatus> =>
-  afterglowModeService.enter('manual')
+  (getCoreAfterglowMode() ?? afterglowModeService).enter('manual')
 export const restoreAfterglowMode = (): Promise<AfterglowModeStatus> =>
-  afterglowModeService.restore()
+  (getCoreAfterglowMode() ?? afterglowModeService).restore()
 export const getAfterglowRestoreState = (): Promise<AfterglowRestoreState | null> =>
-  afterglowModeService.getRestoreState()
-export const notifyAfterglowRendererAdoptComplete = (): void =>
-  afterglowModeService.notifyRendererAdoptComplete()
+  getCoreAfterglowMode() ? Promise.resolve(null) : afterglowModeService.getRestoreState()
+export const notifyAfterglowRendererAdoptComplete = (): void => {
+  if (!getCoreAfterglowMode()) afterglowModeService.notifyRendererAdoptComplete()
+}
 export const dispatchAfterglowTransport = (command: AfterglowTransportCommand): Promise<void> =>
-  afterglowModeService.dispatch(command)
-export const handleMainWindowMinimized = (): void =>
-  afterglowModeService.handleMainWindowMinimized()
-export const handleMainWindowHidden = (): void => afterglowModeService.handleMainWindowHidden()
-export const shutdownAfterglowMode = (): void => afterglowModeService.shutdown()
-export const reassertAfterglowShortcuts = (): void => afterglowModeService.reassertShortcuts()
+  getCoreAfterglowMode()
+    ? dispatchCoreAfterglowTransport(command)
+    : afterglowModeService.dispatch(command)
+export const handleMainWindowMinimized = (): void => {
+  const core = getCoreAfterglowMode()
+  if (!core) return afterglowModeService.handleMainWindowMinimized()
+  if (['minimize', 'minimizeOrHide'].includes(runtime.appSettings.afterglowAutoEntry))
+    void core.enter('minimize')
+}
+export const handleMainWindowHidden = (): void => {
+  const core = getCoreAfterglowMode()
+  if (!core) return afterglowModeService.handleMainWindowHidden()
+  if (['hide', 'minimizeOrHide'].includes(runtime.appSettings.afterglowAutoEntry))
+    void core.enter('hide')
+}
+export const shutdownAfterglowMode = (): void => {
+  const core = getCoreAfterglowMode()
+  if (core) {
+    core.shutdown()
+    destroyAfterglowAnchorWindow()
+  } else afterglowModeService.shutdown()
+}
+export const reassertAfterglowShortcuts = (): void =>
+  (getCoreAfterglowMode() ?? afterglowModeService).reassertShortcuts()
 export const publishAfterglowRendererSnapshot = (payload: unknown): boolean | Promise<boolean> =>
-  afterglowModeService.setRendererSnapshot(payload)
+  getCoreAfterglowMode() ? false : afterglowModeService.setRendererSnapshot(payload)

@@ -13,8 +13,8 @@ export interface SleepTimerState {
   triggered: boolean
   /** Main-assigned identity of a fired timer; never persisted as an armed timer. */
   triggerRevision?: number
-  /** Explicit acknowledgement that main accepted this shutdown execution. */
-  shutdownOwner?: 'main'
+  /** Authority executing the fade; clients only project this state. */
+  shutdownOwner?: 'main' | 'core'
 }
 
 export interface SleepTimerShutdownHandoff {
@@ -72,7 +72,7 @@ export function isSleepTimerState(value: unknown): value is SleepTimerState {
     return false
   if (
     state.shutdownOwner !== undefined &&
-    (state.shutdownOwner !== 'main' || state.triggerRevision === undefined)
+    (!['main', 'core'].includes(String(state.shutdownOwner)) || state.triggerRevision === undefined)
   )
     return false
 
