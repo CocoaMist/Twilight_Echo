@@ -36,27 +36,25 @@ test('window teardown marks Afterglow unloads and the recreated window carries t
 })
 
 test('renderer restore adopts live engine state without reloading the queue', async () => {
-  const source = await read('../../renderer/src/stores/usePlayerStore.ts')
-  const start = source.indexOf('function adoptAfterglowRestore')
-  assert.notEqual(start, -1)
-  const end = source.indexOf('return {', start)
-  assert.notEqual(end, -1)
-  const body = source.slice(start, end)
-
-  assert.doesNotMatch(body, /loadQueue\(/, 'adoption must not reload the native queue')
-  assert.doesNotMatch(body, /audioEngine\.play\(|api\.play\(/, 'adoption must not restart playback')
-  assert.match(body, /const recovery = state\.recovery === 'native-queue-unknown'/)
-  assert.match(body, /restoredPlaybackPending = recovery/)
-  assert.match(body, /nativePlaybackActive = !recovery/)
-  assert.match(body, /nativeQueueAdoptionUncertain = recovery/)
-  assert.match(body, /nativeQueueLoader\.adopt/)
-  assert.match(body, /adoptedAfterglowRestore = true/)
-
-  const appSource = await read('../../renderer/src/App.vue')
-  assert.match(appSource, /isAfterglowRendererRestore\(window\.location\.search\)/)
-  assert.match(appSource, /adoptAfterglowRestore\(afterglowRestoreState\)/)
-  assert.match(appSource, /rendererAdoptComplete\(\)/)
-  assert.match(appSource, /options\?\.includeQueue[\s\S]*?savePlaybackSessionWithQueue\(\)/)
+  // After the Core migration the restore/adoption logic lives in
+  // core/playback (guarded by its own suite); the renderer is a projection
+  // and must never reintroduce queue loads or playback restarts.
+  const store = await read('../../renderer/src/stores/useCorePlayerStore.ts')
+  const internals = await read('../../renderer/src/stores/player/corePlayerStore.ts')
+  const combined = store + '\n' + internals
+  assert.doesNotMatch(combined, /loadQueue\(/, 'renderer must not reload the native queue')
+  assert.doesNotMatch(
+    combined,
+    /audioEngine\.play\(|api\.play\(/,
+    'renderer must not restart playback'
+  )
+  assert.doesNotMatch(
+    combined,
+    /adoptAfterglowRestore|nativeQueueLoader/,
+    'restore adoption must stay inside Core'
+  )
+  const session = await read('../../core/playback/session.ts')
+  assert.match(session, /resumeMode/, 'Core session must own restore adoption')
 })
 
 test('renderer-free control plane is serialized and reads live engine state', async () => {
@@ -124,25 +122,31 @@ test('the service rejects unloadable playback and keeps a restore escape hatch',
 })
 
 test('the renderer hands its queue to main without touching playback-session.json', async () => {
+  // With Core owning the queue there is no renderer-side queue handoff left.
+  // The regression this guards against ("保存播放状态失败" from persisting
+  // before the in-memory state was handed over) now lives in the quit order:
+  // the renderer session save must complete before Core shuts down.
   const app = await read('../../renderer/src/App.vue')
-  assert.match(app, /publishRendererSnapshot\(\{/)
-  assert.match(app, /queue: toPlainSnapshot\(queue\.value\)/)
-  assert.match(app, /track: toPlainSnapshot\(track\)/)
-  // Disk persistence must never run before the memory handoff, otherwise a
-  // locked playback-session store reproduces "保存播放状态失败".
-  const saveHandler = app.slice(app.indexOf('onSavePlaybackSession'))
-  const handoff = saveHandler.slice(0, saveHandler.indexOf('savePlaybackSessionWithQueue'))
-  assert.match(handoff, /publishRendererSnapshot/)
-  assert.match(handoff, /toPlainSnapshot/)
-  assert.match(handoff, /JSON\.parse\(JSON\.stringify/)
-  assert.match(saveHandler, /non-fatal/)
+  const store = await read('../../renderer/src/stores/useCorePlayerStore.ts')
+  const renderer = app + '\n' + store
+  assert.doesNotMatch(
+    renderer,
+    /publishRendererSnapshot|savePlaybackSessionWithQueue|playback-session/,
+    'renderer must not persist or hand off the queue itself'
+  )
+  const lifecycle = await read('./lifecycle.ts')
+  const beforeQuit = lifecycle.slice(lifecycle.indexOf("app.on('before-quit'"))
+  const saveAt = beforeQuit.indexOf('requestRendererPlaybackSessionSave')
+  const shutdownAt = beforeQuit.indexOf('core.shutdown()')
+  assert.ok(saveAt !== -1 && shutdownAt !== -1 && saveAt < shutdownAt)
 
   const ipc = await read('../ipc/afterglowModeIpc.ts')
   assert.match(ipc, /app:afterglow:publishRendererSnapshot/)
   assert.match(ipc, /publishAfterglowRendererSnapshot\(payload\)/)
 
   // Online queues are a window; the handoff carries the native→logical map.
-  assert.match(app, /nativeQueueIndices/)
+  const queueLoader = await read('../../renderer/src/utils/nativeQueueLoader.ts')
+  assert.match(queueLoader, /nativeQueueIndices/)
   const service = await read('./AfterglowModeService.ts')
   assert.match(service, /resolveAfterglowEngineMapping/)
   assert.match(service, /windowedQueue/)

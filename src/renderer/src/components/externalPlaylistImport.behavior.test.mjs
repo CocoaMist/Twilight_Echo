@@ -19,6 +19,7 @@ test('external playlist preview and gray-row playback behavior run in Electron',
       plugins:[{
         name:'external-playlist-test-boundaries',enforce:'pre',
         resolveId(source,importer){
+          if(source.endsWith('/coreConnection.ts'))return '\0test-core-connection'
           const path=importer?.replaceAll('\\','/').split('?')[0]||''
           if(path.endsWith('/ExternalPlaylistImportDialog.vue')&&source==='../stores/useMusicStore')return '\0import-music-store'
           if((path.endsWith('/PlaylistLibraryPage.vue')||path.endsWith('/CreateAggregatePlaylistDialog.vue'))&&source==='../../stores/useMusicStore')return '\0import-music-store'
@@ -38,6 +39,7 @@ test('external playlist preview and gray-row playback behavior run in Electron',
           if(id==='\0test-providers')return 'export const useMediaProviders=()=>window.auditProviderRegistry;export const syncPluginProviders=async()=>{}'
           if(id==='\0test-playlist-view')return "import {shallowRef} from 'vue';export function createLibraryPlaylistView(){return {state:shallowRef({id:'view',pending:false,error:''}),setPlaylist:async()=>{},retry:async()=>{},dispose:async()=>{}}}"
           if(id==='\0test-playlist-service')return 'export const externalMatchProgress={value:{}};export const getExternalPlaylistService=()=>window.auditService'
+          if(id==='\0test-core-connection')return 'export function useCoreConnection(){return window.auditCore}'
           return null
         }
       },vue()],

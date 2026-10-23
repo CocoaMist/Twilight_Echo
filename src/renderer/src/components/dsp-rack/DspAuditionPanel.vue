@@ -172,6 +172,9 @@ async function select(side: 'a' | 'b'): Promise<void> {
 onBeforeUnmount(() => {
   generation++
   if (timer) clearInterval(timer)
+  // Leaving the workspace must end the audition session, or the engine keeps
+  // the frozen source and A/B processing attached after the panel is gone.
+  void end()
 })
 defineExpose({ end })
 </script>

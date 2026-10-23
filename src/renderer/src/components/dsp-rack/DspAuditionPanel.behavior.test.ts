@@ -19,13 +19,28 @@ test('DSP audition panel waits for measurement and ACK, invalidates edits and re
     await writeFile(join(directory, 'entry.ts'), runtime)
     await writeFile(
       join(directory, 'player.ts'),
-      "import {shallowRef} from 'vue'; export const currentTrack=shallowRef({id:'local',source:'local',filePath:'D:/music/test.wav',title:'Test',duration:120}); export const usePlayerStore=()=>({currentTrack,playbackInfo:shallowRef({isDsd:false,sourceSampleRate:48000,actualSampleRate:48000,decodedChannels:2,actualChannels:2})})"
+      "import {shallowRef} from 'vue'; export const currentTrack=shallowRef({id:'local',source:'local',filePath:'D:/music/test.wav',title:'Test',duration:120}); export const usePlayerStore=()=>({currentTrack,playbackInfo:shallowRef({isDsd:false,sourceSampleRate:48000,actualSampleRate:48000,decodedChannels:2,actualChannels:2}),outputInfo:shallowRef(null)})"
     )
     await build({
       configFile: false,
       logLevel: 'error',
       root: workspace,
-      plugins: [vue()],
+      plugins: [
+        {
+          name: 'audition-core-boundary',
+          enforce: 'pre',
+          resolveId(source) {
+            if (source.endsWith('/coreConnection.ts')) return '\0audition-core'
+            return null
+          },
+          load(id) {
+            if (id === '\0audition-core')
+              return 'export function useCoreConnection(){return window.auditionCore}'
+            return null
+          }
+        },
+        vue()
+      ],
       resolve: {
         alias: {
           '@renderer/stores/usePlayerStore': join(directory, 'player.ts'),
@@ -82,7 +97,18 @@ const click=async text=>{const el=button(text);expect(el&&!el.disabled,'button u
 window.runAuditionTests=async()=>{
   let resolveMeasure,resolveSelect,ends=0,selected=null
   const measured={id:'session',a:{integratedLufs:-14,truePeakDb:-2,processingVersion:1},b:{integratedLufs:-20,truePeakDb:-8,processingVersion:1},gainA:-6,gainB:0,targetLufs:-20,selected:null}
-  window.api={audioEngine:{audition:{measure:()=>new Promise(resolve=>resolveMeasure=resolve),select:(_id,side)=>new Promise(resolve=>resolveSelect=()=>{selected=side;resolve({...measured,selected:side})}),end:async()=>{ends++},status:async()=>({...measured,selected})}}}
+  window.api={audioEngine:{audition:{measure:()=>new Promise(resolve=>resolveMeasure=resolve),select:(_id,side)=>new Promise(resolve=>resolveSelect=()=>{selected=side;resolve({...measured,selected:side})}),end:async()=>{ends++},status:async()=>({revision:1,result:{...measured,selected}})}}}
+  const audition=window.api.audioEngine.audition
+  window.auditionCore={
+    state:{value:{versionsRevision:1}},status:{value:null},
+    query:async name=>{if(name==='audio.audition')return audition.status();throw new Error('unexpected query '+name)},
+    command:async (name,payload)=>{
+      if(name==='audio.audition.measure')return audition.measure(payload)
+      if(name==='audio.audition.select')return audition.select(payload.id,payload.side)
+      if(name==='audio.audition.end')return audition.end(payload)
+      throw new Error('unexpected command '+name)
+    }
+  }
   const graph=()=>({version:2,nodes:[],outputStage:{targetSampleRate:'device',resamplerQuality:'native',dither:'off',safetyClamp:true}})
   const a=ref(null),b=ref(graph())
   const app=createApp({setup:()=>()=>h(Panel,{a:a.value,b:b.value})});app.mount('#app');await tick()

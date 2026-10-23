@@ -48,6 +48,7 @@ test('settings category navigation preserves drafts, geometry, search focus and 
               return null
             if (source.endsWith('/LyricsStyleSettings.vue'))
               return '\0settings-section:playing-lyrics'
+            if (source.endsWith('/coreConnection.ts')) return '\0settings-store:coreConnection'
             const section = source.match(/\/([A-Za-z]+)SettingsSection\.vue$/)?.[1]
             if (section && sectionKeys[section]) return `\0settings-section:${sectionKeys[section]}`
             const store = source.match(
@@ -56,6 +57,8 @@ test('settings category navigation preserves drafts, geometry, search focus and 
             return store ? `\0settings-store:${store}` : null
           },
           load(id) {
+            if (id === '\0settings-store:coreConnection')
+              return 'export function useCoreConnection(){return {state:{value:null},status:{value:null},query: async () => null, command: async () => null}}'
             if (id.startsWith('\0settings-section:')) {
               const key = id.split(':')[1]
               return `export default {inheritAttrs:false,setup(){return window.makeSettingsSection('${key}')}}`
@@ -107,6 +110,7 @@ app.setPath('userData',require('node:path').join(__dirname,'profile'));
 app.commandLine.appendSwitch('force-device-scale-factor','1');
 app.whenReady().then(async()=>{
  const win=new BrowserWindow({show:false,width:1024,height:768,useContentSize:true,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});
+ win.webContents.on('console-message',(event)=>{const m=String(event.message);if(m.includes('Error')||m.includes('error'))console.log('RENDERER:',m.slice(0,700))});
  const resizeViewport=async (width,height=900)=>{
   // Windows limits the initial hidden window to the runner's 1024px display.
   // An explicit resize after loading can exceed the display's work area.
@@ -131,7 +135,7 @@ app.whenReady().then(async()=>{
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
-    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
+    const result = await promisify(execFile)(require('electron'), ['--no-sandbox', join(directory, 'runner.cjs')], {
       windowsHide: true,
       timeout: 60_000,
       env

@@ -38,7 +38,7 @@ test('real settings groups reveal stable search targets, preserve drafts, and re
             )
               return null
             const name = source.match(
-              /\/(useSettingsStore|useMusicStore|useThemeStore|useAudioOutputDspStore|usePlayerStore|useListeningStatsStore|registry)(?:\.ts)?$/
+              /\/(useSettingsStore|useMusicStore|useThemeStore|useAudioOutputDspStore|usePlayerStore|useListeningStatsStore|coreConnection|registry)(?:\.ts)?$/
             )?.[1]
             if (name) return '\0organization-store:' + name
             if (source.endsWith('/AudioDeviceProfilesPanel.vue')) return '\0organization-profiles'
@@ -48,6 +48,8 @@ test('real settings groups reveal stable search targets, preserve drafts, and re
           load(id) {
             if (id === '\0organization-icon')
               return 'export default "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX1sAAAAASUVORK5CYII="'
+            if (id === '\0organization-store:coreConnection')
+              return 'export function useCoreConnection(){return {state:{value:null},status:{value:null},query: async () => null, command: async (name,payload)=>{if(name==="backup.preview")return window.api.data?.previewPersonalBackup?.();if(name==="backup.stage")return window.api.data?.stagePersonalRestore?.(payload?.options);return null}}}'
             if (id.startsWith('\0organization-store:')) {
               const name = id.split(':')[1]
               return `export { ${name === 'registry' ? 'useExtensionRegistry' : name}${name === 'useListeningStatsStore' ? ', waitForListeningStatsReady' : ''} } from ${JSON.stringify(fixture)};${name === 'useThemeStore' ? 'export const syncThemeSettingsAppearance = () => {};' : ''}`
@@ -100,14 +102,14 @@ const {app,BrowserWindow,ipcMain}=require('electron');const fs=require('node:fs'
 app.setPath('userData',path.join(__dirname,'profile'));app.commandLine.appendSwitch('force-device-scale-factor','1');
 app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1024,height:768,useContentSize:true,webPreferences:{nodeIntegration:true,contextIsolation:false,backgroundThrottling:false,offscreen:true}});
 ipcMain.handle('organization:key',async(_event,keyCode)=>{win.webContents.focus();win.webContents.sendInputEvent({type:'keyDown',keyCode});if(keyCode==='Space'||keyCode==='Enter')win.webContents.sendInputEvent({type:'char',keyCode:keyCode==='Space'?' ':String.fromCharCode(13)});win.webContents.sendInputEvent({type:'keyUp',keyCode});await new Promise(resolve=>setTimeout(resolve,60))});
-win.webContents.on('console-message',(_event,_level,message)=>{if(message.includes('Error'))console.error(message)});
+win.webContents.on('console-message',(event)=>{if(String(event.message).includes('Error'))console.error(event.message,'@',JSON.stringify(event.location||null))});
 try{await win.loadFile(path.join(__dirname,'index.html'));await win.webContents.executeJavaScript("window.organizationKey=(key)=>require('electron').ipcRenderer.invoke('organization:key',key);void 0");win.setContentSize(1440,900);console.log(await win.webContents.executeJavaScript('window.runSettingsOrganizationTests()'));
 for(const width of [1440,1024,760]){win.setContentSize(width,width===760?692:900);await new Promise(resolve=>setTimeout(resolve,80));for(const theme of ['pureWhite','dark'])for(const material of ['solid','image','glass'])for(const section of ['general','appearance','playback','lyrics','library','connections','system']){const overflow=await win.webContents.executeJavaScript('window.prepareSettingsEvidence('+JSON.stringify(theme)+','+JSON.stringify(section)+','+JSON.stringify(material)+')');if(overflow.length)throw Error('overflow at '+width+'/'+theme+'/'+material+'/'+section+': '+JSON.stringify(overflow));if(section==='general')await win.webContents.executeJavaScript('window.checkSettingsSearchPopup()');if(${JSON.stringify(evidence || '')}&&['general','appearance','lyrics','playback','system'].includes(section))fs.writeFileSync(path.join(${JSON.stringify(evidence || '')},width+'-'+theme+'-'+material+'-'+section+'.png'),(await win.webContents.capturePage()).toPNG());}}
 app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}});`
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
-    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
+    const result = await promisify(execFile)(require('electron'), ['--no-sandbox', join(directory, 'runner.cjs')], {
       windowsHide: true,
       timeout: 120000,
       env

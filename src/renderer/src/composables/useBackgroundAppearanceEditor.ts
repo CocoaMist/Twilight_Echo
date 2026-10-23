@@ -145,11 +145,10 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     baselineThemeKey = themeKey()
     baselineTheme.value = settings.value.theme
     draftTheme.value = settings.value.theme
-    tone.value =
-      settings.value.theme === 'dark' ||
-      (settings.value.theme === 'system' && document.documentElement.dataset.theme === 'dark')
-        ? 'dark'
-        : 'light'
+    // The editor edits the appearance slot the app is currently rendering:
+    // the applied theme (stored preference, system schedule or a theme-studio
+    // tone preview), not just the stored preference.
+    tone.value = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
     hasConflict.value = false
   }
   function setTone(value: AppearanceTone): void {
@@ -290,6 +289,21 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
   )
   watch(target, (page) => {
     if (page !== 'global') previewPage.value = page
+  })
+  // An external tone flip while the editor is open (system schedule, a
+  // theme-studio tone preview) must keep the editor on the slot the app is
+  // actually rendering; otherwise recipes and edits silently land in the
+  // inactive slot and the full-window preview shows no change.
+  const appliedToneObserver =
+    typeof MutationObserver !== 'undefined'
+      ? new MutationObserver(() => {
+          if (state.saving || importing.value) return
+          tone.value = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+        })
+      : undefined
+  appliedToneObserver?.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme']
   })
 
   function editableBackground(page = target.value, customize = true): AppBackgroundColorPair {
@@ -548,6 +562,7 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     disposed = true
     cancelPendingPreview()
     document.removeEventListener('visibilitychange', previewVisibilityChanged)
+    appliedToneObserver?.disconnect()
     invalidateImageImport()
     if (!embedded || state.fullWindow) {
       appearanceFullWindowPreview.value = false

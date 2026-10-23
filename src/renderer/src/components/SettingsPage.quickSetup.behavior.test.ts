@@ -65,7 +65,7 @@ test('quick setup hides after configuration, reveals nested targets, and preserv
             )
               return null
             const name = source.match(
-              /\/(useSettingsStore|useMusicStore|useThemeStore|useAudioOutputDspStore|usePlayerStore|useListeningStatsStore|registry)(?:\.ts)?$/
+              /\/(useSettingsStore|useMusicStore|useThemeStore|useAudioOutputDspStore|usePlayerStore|useListeningStatsStore|coreConnection|registry)(?:\.ts)?$/
             )?.[1]
             if (name === 'useThemeStore') return '\0quick-theme'
             if (name) return '\0quick-store:' + name
@@ -77,6 +77,8 @@ test('quick setup hides after configuration, reveals nested targets, and preserv
             if (id === '\0quick-theme') return themeState
             if (id === '\0quick-icon')
               return 'export default "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC0lEQVR42mP8/x8AAwMCAO+jX1sAAAAASUVORK5CYII="'
+            if (id === '\0quick-store:coreConnection')
+              return 'export function useCoreConnection(){return {state:{value:null},status:{value:null},query: async () => null, command: async (name,payload)=>{if(name==="backup.preview")return window.api.data?.previewPersonalBackup?.();if(name==="backup.stage")return window.api.data?.stagePersonalRestore?.(payload?.options);return null}}}'
             if (id.startsWith('\0quick-store:')) {
               const name = id.split(':')[1]
               if (name === 'useAudioOutputDspStore')
@@ -134,7 +136,7 @@ app.exit(0)}catch(error){console.error(error.stack);app.exit(1)}})`
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
-    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
+    const result = await promisify(execFile)(require('electron'), ['--no-sandbox', join(directory, 'runner.cjs')], {
       windowsHide: true,
       timeout: 60_000,
       env

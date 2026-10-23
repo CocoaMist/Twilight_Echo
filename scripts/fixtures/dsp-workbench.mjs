@@ -63,10 +63,12 @@ let catalog = {
 window.confirm = () => confirmAnswer
 window.api = {
   settings: {
-    get: async () => ({
-      audioProcessing: { ...defaultAudioProcessing, eqMode: 'parametric', eqEnabled: true },
-      audioEqPresets: [],
-      headphoneCompensation: { enabled: false, bands: [] }
+    // Frozen so Vue's deep ref never proxies these objects: EqualizerPage
+    // structuredClone()s them and rejects reactive proxies.
+    get: async () => Object.freeze({
+      audioProcessing: Object.freeze({ ...defaultAudioProcessing, eqMode: 'parametric', eqEnabled: true }),
+      audioEqPresets: Object.freeze([]),
+      headphoneCompensation: Object.freeze({ enabled: false, bands: [] })
     }),
     set: async () => {}
   },
@@ -162,7 +164,45 @@ const active = ref(true)
 const app = createApp({
   setup: () => () => h(Workspace, { ref: workspace, active: active.value, initialTab: 'monitor' })
 })
+// The migrated workbench speaks the Core DSP protocol; translate it onto the
+// engine stubs this fixture already maintains.
+window.auditCore = {
+  state: { value: { versionsRevision: 1 } },
+  status: { value: null },
+  queries: [],
+  query: async (name) => {
+    this?.queries?.push?.(name)
+    window.__coreQueries = window.__coreQueries || []
+    window.__coreQueries.push(name)
+    if (name === 'audio.dsp')
+      return {
+        revision,
+        processing: { ...defaultAudioProcessing, eqMode: 'parametric', eqEnabled: true },
+        autoPreamp: null,
+        scenes: plain(state),
+        convolver: { loaded: false, active: false, bypassed: false, irResampled: false, path: '', sampleRate: 0 }
+      }
+    if (name === 'audio.dsp.status') return window.api.audioEngine.getDspGraphStatus()
+    if (name === 'audio.dsp.assets') { const items = window.api.audioEngine.getDspAssets(); return { revision, total: items.length, items } }
+    if (name === 'audio.vst3')
+      return { revision, enabled: false, searchPaths: [], total: 0, items: [] }
+    if (name === 'opra.status') return window.api.opra.getStatus()
+    if (name === 'opra.search') return { status: window.api.opra.getStatus(), items: [] }
+    throw new Error('unexpected workbench query ' + name)
+  },
+  command: async (name, payload) => {
+    if (name === 'audio.dsp.edit') {
+      const edit = payload.edit
+      if (edit.kind === 'scenes') await window.api.audioEngine.setDspScenes(edit.scenes, edit.pinnedSceneId)
+      else if (edit.kind === 'apply') await window.api.audioEngine.applyDspScene(edit.id, edit.confirmDsdPcmFallback)
+      else throw new Error('unexpected workbench edit ' + edit.kind)
+      return null
+    }
+    throw new Error('unexpected workbench command ' + name)
+  }
+}
 const pinia = createPinia()
+app.config.errorHandler = (error) => { console.error('WORKBENCH-VUE-ERROR', error && error.stack ? error.stack : error) }
 app.use(pinia).mount('#app')
 const output = useAudioOutputDspStore()
 const player = usePlayerStore()
@@ -182,7 +222,7 @@ const click = async (text, root) => {
   await tick()
 }
 const change = async (node, value) => {
-  check(node, 'missing input')
+  check(node, 'missing input for change to ' + String(value))
   node.value = value
   node.dispatchEvent(new Event('input', { bubbles: true }))
   node.dispatchEvent(new Event('change', { bubbles: true }))
@@ -250,6 +290,7 @@ window.runWorkbenchCases = async () => {
   await tick()
   await click('效果链')
   await click('场景规则')
+  check(document.querySelector('.scene-settings'), 'scene rules missing: rack-error=' + (document.querySelector('.rack-message.error')?.textContent ?? 'none') + ' queries=' + (window.__coreQueries ?? []).join(','))
   await change(document.querySelector('.scene-settings input'), 'Headphones edited')
   check(
     document.querySelector('.draft-toolbar').textContent.includes('未保存'),
@@ -343,6 +384,8 @@ window.runWorkbenchCases = async () => {
   await tick()
   await click('资料库')
   const firstAsset = document.querySelector('.asset-row')
+  check(!firstAsset.querySelector('button')?.disabled || firstAsset.textContent.includes('绑定'), 'x')
+  check(document.querySelector('.bind-target')?.classList.contains('ready'), 'bind target not ready: ' + (document.querySelector('.bind-target')?.textContent.slice(0,200) ?? 'NO BIND TARGET'))
   await click('绑定', firstAsset)
   check(
     firstAsset.querySelector('[title="请先解除保存场景和草稿中的引用"]').disabled,
@@ -442,9 +485,9 @@ window.runWorkbenchCases = async () => {
   )
   await click('效果链')
   await click('均衡器')
-  check(document.querySelector('.eq-embedded'), 'real-time EQ not mounted')
+  check(document.querySelector('.eq-embedded'), 'real-time EQ not mounted: tab=' + (document.querySelector('.workspace-tabs button[aria-current]')?.textContent.trim() ?? '?'))
   check(!output.audioProcessing.dspEnabled, 'opening real-time EQ enabled master DSP')
-  check(document.querySelector('.eq-band-table'), 'real-time frequency table missing')
+  check(document.querySelector('.eq-band-table'), 'real-time frequency table missing: eq=' + (document.querySelector('.eq-page')?.textContent.slice(0, 260) ?? 'NO EQ PAGE'))
   check(document.querySelector('.workbench-opra'), 'OPRA not accessible from parameter EQ')
   await click('效果链')
   return { writes, sceneReads, assetReads, polls, pins: pins.length }

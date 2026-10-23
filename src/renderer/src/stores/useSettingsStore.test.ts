@@ -602,15 +602,12 @@ test('cache strategy settings expose separate artifact and provider-controlled a
   assert.match(storeSource, /cachePolicy: \{/)
   assert.match(storeSource, /autoAnalyzeBpm: true/)
   assert.match(storeSource, /formattedBpmAnalysisCacheSize/)
-  assert.match(storeSource, /window\.api\.bpmAnalysis\.getCacheSize\(\)/)
-  assert.match(storeSource, /window\.api\.bpmAnalysis\.clearCache\(\)/)
-  assert.match(storeSource, /window\.api\.loudnessAnalysis\.getCacheSize\(\)/)
-  assert.match(storeSource, /window\.api\.loudnessAnalysis\.clearCache\(\)/)
+  assert.match(storeSource, /analysis\.cache\.size/)
+  assert.match(storeSource, /analysis\.cache\.clear/)
+  assert.match(storeSource, /query\('analysis\.cache\.size', \{\s*kind: 'bpm'/)
+  assert.match(storeSource, /query\('analysis\.cache\.size', \{\s*kind: 'loudness'/)
   assert.match(storeSource, /formattedLoudnessAnalysisCacheSize/)
-  assert.match(
-    readFileSync(new URL('./useMusicStore.ts', import.meta.url), 'utf8'),
-    /function clearBpmAnalysis\(\): boolean/
-  )
+  assert.match(storeSource, /async function clearBpmAnalysisCache\(\): Promise<void>/)
   assert.match(
     settingsPageSource,
     /function toggleCacheArtifact\(key: keyof MusicCachePolicySettings\): void/

@@ -158,6 +158,7 @@ app.whenReady().then(async()=>{
   await win.loadFile(process.argv.at(-1));await js('window.startOverlayTest()');
   for(const tone of ['pureWhite','dark'])for(const material of ['standard','transparent','liquidGlass'])for(const text of ['light','dark']){
    await js('window.prepareOverlay('+JSON.stringify(tone)+','+JSON.stringify(material)+','+JSON.stringify(text)+')');
+   console.log('COMBO ' + tone + '/' + material + '/' + text);
    await pixel('.home-marker',[60,30,210]);
    // Manual text choices can intentionally disagree with the dark fixture image.
    if(material!=='transparent'||text==='light')await surfaceContrast('.feature-card',['.hero-title','.hero-artist','.hero-meta']);
@@ -251,6 +252,7 @@ window.checkRowContrast=(state,background)=>{
 window.flashRow=async()=>{document.activeElement.blur();document.querySelector('.hover-row').classList.add('search-target-flash');await wait()}
 window.clearRowFlash=async()=>{const row=document.querySelector('.hover-row');row.classList.remove('search-target-flash');await wait();await Promise.allSettled(row.getAnimations().map(animation=>animation.finished))}
 const click=label=>{const button=[...document.querySelectorAll('.appearance-editor button,.appearance-full-preview-toolbar button')].find(el=>el.textContent.trim()===label&&el.checkVisibility());expect(button,'missing button '+label);button.click()}
+const waitFor=async condition=>{for(let attempt=0;attempt<50;attempt++){if(condition())return;await wait()}expect(condition(),'waitFor timed out')}
 window.runAutomaticRecipe=async()=>{
  await store.updateSettings({cardAppearance:{...store.settings.value.cardAppearance,enabled:true},liquidGlass:{...store.settings.value.liquidGlass,navigationEnabled:true,playbarEnabled:true,settingsNavigationEnabled:true,homeCards:{...store.settings.value.liquidGlass.homeCards,enabled:true}}});
  await previewAppearance(null);await theme.setPreviewTone('pureWhite');window.overlayNavigation.openSettingsPage();await wait();openAppearanceEditor();await wait();click('图片');await wait();
@@ -259,7 +261,9 @@ window.runAutomaticRecipe=async()=>{
 }
 window.returnFromPreview=async()=>{click('返回编辑');await wait();click('保存并使用');await wait();expect(store.settings.value.surfaceMaterial==='transparent','automatic recipe did not persist');expect(!store.settings.value.cardAppearance.enabled&&!store.settings.value.liquidGlass.homeCards.enabled&&!store.settings.value.liquidGlass.navigationEnabled&&!store.settings.value.liquidGlass.playbarEnabled&&!store.settings.value.liquidGlass.settingsNavigationEnabled,'automatic recipe retained previous card or glass layers');expect(store.settings.value.appBackground.global.effects.light.textTone==='light','dark image was not analyzed');expect(store.settings.value.appBackground.global.effects.light.dim===0,'dark image got an unnecessary mask')}
 window.saveAutomaticRecipe=async()=>{window.overlayNavigation.closeSettingsPage();await wait();expect(getComputedStyle(document.querySelector('.settings-overlay-root')).display==='none','saved settings covered home')}
-window.runBrightRecipe=async tone=>{await theme.setPreviewTone(tone);const backgrounds=normalizeAppBackgroundSettings(store.settings.value.appBackground);backgrounds.global.kind='image';backgrounds.global.image='background://bright.png';await store.updateSettings({appBackground:backgrounds});await wait();window.overlayNavigation.openSettingsPage();await wait();openAppearanceEditor();await wait();click('图片通透推荐搭配');await wait();click('全窗口预览');await wait()}
+window.runBrightRecipe=async tone=>{const backgrounds=normalizeAppBackgroundSettings(store.settings.value.appBackground);backgrounds.global.kind='image';backgrounds.global.image='background://bright.png';await store.updateSettings({appBackground:backgrounds});await wait();window.overlayNavigation.openSettingsPage();await wait();openAppearanceEditor();await wait();await theme.setPreviewTone(tone);await wait();const recipe=()=>[...document.querySelectorAll('.appearance-editor button')].find(el=>el.textContent.trim()==='图片通透推荐搭配');
+ await waitFor(()=>recipe()&&!recipe().disabled,'recipe button never became available');recipe().click();
+ await waitFor(()=>!recipe()||!recipe().disabled,'recipe never finished');await wait();click('全窗口预览');await wait()}
 window.saveBrightRecipe=async()=>{click('返回编辑');await wait();click('保存并使用');await wait();const tone=document.documentElement.dataset.theme==='dark'?'dark':'light';expect(store.settings.value.appBackground.global.effects[tone].textTone==='dark'&&store.settings.value.appBackground.global.effects[tone].dim===0,'bright image recipe did not preserve unmasked dark text');window.overlayNavigation.closeSettingsPage();await wait()}
 window.showPlugin=async()=>{window.overlayNavigation.openPluginPage();await wait()}
 window.closePlugin=async()=>{window.overlayNavigation.hidePluginPage();await wait()}

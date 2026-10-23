@@ -44,8 +44,8 @@ test('dashboard renders the resolved DSP graph from source through the output st
   const source = readFileSync(new URL('./LocalDashboard.vue', import.meta.url), 'utf8')
   const styles = readFileSync(new URL('./LocalDashboard.css', import.meta.url), 'utf8')
 
-  assert.match(source, /getDspSceneState\(\)/)
-  assert.match(source, /getDspGraphStatus\(\)/)
+  assert.match(source, /core\.query\('audio\.dsp', \{\}\)\)\.scenes/)
+  assert.match(source, /core\.query\('audio\.dsp\.status', \{\}\)/)
   assert.match(source, /dspSceneState\.value\.graph\.nodes/)
   assert.match(source, /type: 'resampler'/)
   assert.match(

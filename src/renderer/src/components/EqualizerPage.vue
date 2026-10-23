@@ -7,7 +7,7 @@ import { useEqualizerHistory } from '@renderer/composables/useEqualizerHistory'
 import type { EqSnapshot } from '@renderer/composables/useEqualizerHistory'
 import { groupEqBandPatches } from '@renderer/utils/parametricEqSelection'
 import type { EqBandPatch } from '@renderer/utils/parametricEqSelection'
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, toRaw, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useBackHandler } from '@renderer/app/useBackStack.ts'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
@@ -350,14 +350,16 @@ async function loadAppSettings(): Promise<void> {
       ...settings.headphoneCompensation,
       bands: cloneBands(settings.headphoneCompensation?.bands ?? [])
     }
-    audioProcessing.value = structuredClone(appSettings.value.audioProcessing)
+    // Clone the raw snapshot: the reactive store copy is a proxy and
+    // structuredClone rejects proxies.
+    audioProcessing.value = structuredClone(toRaw(appSettings.value).audioProcessing)
     const dspState = await coreAudio.getDspSceneState()
     applyActiveSceneEqToEditor(dspState)
     if (audioProcessing.value.eqMode === 'parametric') {
       activeTab.value = 'parametric'
     }
   } catch (err) {
-    console.error('读取均衡器设置失败：', err)
+    console.error('读取均衡器设置失败：', err instanceof Error ? err.stack : err)
   }
 }
 
@@ -384,7 +386,10 @@ function applyActiveSceneEqToEditor(dspState: DspSceneState): void {
     eqPreamp: typeof params.preampDb === 'number' ? params.preampDb : 0,
     eqBands: Array.isArray(params.bands) ? (params.bands as EqualizerBand[]) : []
   })
-  audioProcessing.value = structuredClone(settings)
+  // normalizeAudioProcessing may reuse band arrays verbatim; those can be
+  // reactive proxies, which structuredClone rejects. The settings payload is
+  // plain JSON data, so a JSON round-trip is an exact deep copy here.
+  audioProcessing.value = JSON.parse(JSON.stringify(settings))
   if (appSettings.value) appSettings.value.audioProcessing = settings
 }
 
