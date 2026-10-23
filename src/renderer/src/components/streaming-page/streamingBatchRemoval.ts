@@ -1,25 +1,22 @@
-import type {
-  LocalLibraryMutationFailure,
-  LocalLibraryRemoveResult
-} from '../../../../shared/localLibrary.ts'
+import type { CoreLibraryRemovalResult } from '../../../../shared/coreLibraryMaintenance.ts'
 import type { Track } from '../../types/music.ts'
 import { getProviderLocalId, type MediaProviderRegistry } from '../../providers/mediaProvider.ts'
 import { getTrackSource } from '../../utils/logicalTrackModel.ts'
 
 export interface StreamingBatchRemovalDependencies {
-  removeLocalTracks: (tracks: Track[], mode: 'library') => Promise<LocalLibraryRemoveResult>
+  removeLocalTracks: (tracks: Track[], mode: 'library') => Promise<CoreLibraryRemovalResult>
   removeProviderTrack: (track: Track) => Promise<void> | void
 }
 
 export interface StreamingBatchRemovalResult {
   removedTrackIds: string[]
-  failures: LocalLibraryMutationFailure[]
+  failures: Array<{ id: string; message: string }>
 }
 
 export interface StreamingProviderFavoriteRemovalDependencies {
   providers: Pick<MediaProviderRegistry, 'getForTrack'>
   removeNcmFavorite: (songId: number) => Promise<void>
-  removeSnapshotFavorite: (track: Track) => void
+  removeSnapshotFavorite: (track: Track) => void | Promise<void>
 }
 
 export async function executeStreamingBatchRemoval(
@@ -34,7 +31,7 @@ export async function executeStreamingBatchRemoval(
   }
 
   const removedTrackIds: string[] = []
-  const failures: LocalLibraryMutationFailure[] = []
+  const failures: Array<{ id: string; message: string }> = []
   if (localTracks.length > 0) {
     try {
       const result = await dependencies.removeLocalTracks(localTracks, 'library')
@@ -42,7 +39,7 @@ export async function executeStreamingBatchRemoval(
       failures.push(...result.failures)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      failures.push(...localTracks.map((track) => ({ filePath: track.filePath, message })))
+      failures.push(...localTracks.map((track) => ({ id: track.id, message })))
     }
   }
 
@@ -52,7 +49,7 @@ export async function executeStreamingBatchRemoval(
       removedTrackIds.push(track.id)
     } catch (error) {
       failures.push({
-        filePath: track.filePath,
+        id: track.id,
         message: error instanceof Error ? error.message : String(error)
       })
     }
@@ -72,12 +69,12 @@ export async function removeStreamingProviderFavorite(
         ? track.ncmSongId
         : (getProviderLocalId(track.id, provider.id) ?? track.id)
     await provider.likeTrack(providerTrackId, false)
-    dependencies.removeSnapshotFavorite(track)
+    await dependencies.removeSnapshotFavorite(track)
     return
   }
   if (track.ncmSongId != null) {
     await dependencies.removeNcmFavorite(track.ncmSongId)
-    dependencies.removeSnapshotFavorite(track)
+    await dependencies.removeSnapshotFavorite(track)
     return
   }
   throw new Error(`Provider ${provider?.id ?? getTrackSource(track)} does not support unfavorite`)

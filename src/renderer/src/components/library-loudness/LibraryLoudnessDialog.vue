@@ -1,80 +1,23 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNativeDialog } from '@renderer/composables/useNativeDialog'
-import type { Track } from '@renderer/types/music.ts'
 import { getSongListVirtualRange } from '@renderer/components/song-list/songListVirtualWindow.ts'
-import {
-  buildLibraryLoudnessPlan,
-  type LoudnessAlbum
-} from '@renderer/components/library-loudness/libraryLoudnessPlan.ts'
 import { useLibraryLoudness } from '@renderer/components/library-loudness/useLibraryLoudness.ts'
-import { loudnessGainValues } from '../../../../shared/libraryLoudness.ts'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
+import type { LibrarySelectionRequest } from '../../../../shared/librarySelection.ts'
+import { idleLoudnessBatchStatus, loudnessGainValues } from '../../../../shared/libraryLoudness.ts'
 import type { LoudnessAnalysisResult } from '../../../../shared/audioEngineTypes.ts'
 
 const props = defineProps<{
-  libraryTracks: Track[]
-  selectedTracks: Track[] | null
-  albums: LoudnessAlbum[]
+  selection: LibrarySelectionRequest
   restoreFocus?: HTMLElement | null
-  resolvePlan?: (
-    mode: 'track' | 'album',
-    signal: AbortSignal
-  ) => Promise<ReturnType<typeof buildLibraryLoudnessPlan>>
 }>()
 const emit = defineEmits<{ close: [] }>()
 const mode = ref<'track' | 'album'>('track')
-const libraryIndex = computed(() => new Map(props.libraryTracks.map((track) => [track.id, track])))
-const selection = computed(() =>
-  props.selectedTracks === null
-    ? props.libraryTracks
-    : props.selectedTracks.map((track) => libraryIndex.value.get(track.id) ?? track)
-)
-const resolvedPlan = shallowRef<ReturnType<typeof buildLibraryLoudnessPlan>>({
-  groups: [],
-  trackCount: 0,
-  skipped: 0,
-  error: ''
-})
-const resolving = ref(false)
-let planController: AbortController | undefined
-watch(
-  [mode, () => props.resolvePlan],
-  async ([mode, resolve], _, onCleanup) => {
-    if (!resolve) {
-      resolving.value = false
-      return
-    }
-    const controller = new AbortController()
-    planController = controller
-    onCleanup(() => controller.abort())
-    resolving.value = true
-    resolvedPlan.value = { groups: [], trackCount: 0, skipped: 0, error: '' }
-    try {
-      const next = await resolve(mode, controller.signal)
-      if (!controller.signal.aborted) resolvedPlan.value = next
-    } catch (error) {
-      if (!controller.signal.aborted)
-        resolvedPlan.value = {
-          groups: [],
-          trackCount: 0,
-          skipped: 0,
-          error: error instanceof Error ? error.message : '读取分析范围失败'
-        }
-    } finally {
-      if (!controller.signal.aborted) resolving.value = false
-    }
-  },
-  { immediate: true }
-)
-const plan = computed(() =>
-  props.resolvePlan
-    ? resolvedPlan.value
-    : buildLibraryLoudnessPlan(selection.value, props.albums, mode.value)
-)
-const groups = computed(() => plan.value.groups)
+const core = useCoreConnection()
 const {
-  status,
-  items,
+  plan,
+  page,
   results,
   error,
   busy,
@@ -85,8 +28,20 @@ const {
   cancel,
   clear,
   reload,
-  retryAction
-} = useLibraryLoudness(groups, window.api.loudnessAnalysis)
+  retryAction,
+  refreshPage,
+  loadResults,
+  adoptedRunningPlan
+} = useLibraryLoudness(
+  computed(() => props.selection),
+  mode,
+  core
+)
+const status = computed(() => plan.value?.status ?? idleLoudnessBatchStatus())
+const groupCount = computed(() => plan.value?.groups ?? 0)
+const groups = computed(() => page.value?.items ?? [])
+const totalTracks = computed(() => plan.value?.tracks ?? 0)
+const skippedTracks = computed(() => plan.value?.skipped ?? 0)
 const dialog = ref<HTMLDialogElement | null>(null)
 const grid = ref<HTMLElement | null>(null)
 const trackMode = ref<HTMLInputElement | null>(null)
@@ -97,39 +52,9 @@ const ROW_HEIGHT = 64
 useNativeDialog(dialog, () => props.restoreFocus)
 let observer: ResizeObserver | undefined
 
-const rows = computed(() => {
-  const rows: {
-    id: string
-    groupId: string
-    title: string
-    member: number | null
-    count: number
-  }[] = []
-  for (const group of groups.value) {
-    rows.push({
-      id: group.id,
-      groupId: group.id,
-      title: group.title,
-      member: null,
-      count: group.tracks.length
-    })
-    if (group.mode === 'album') {
-      for (let member = 0; member < group.tracks.length; member++) {
-        rows.push({
-          id: `${group.id}:${member}`,
-          groupId: group.id,
-          title: group.tracks[member].title || group.tracks[member].id,
-          member,
-          count: 1
-        })
-      }
-    }
-  }
-  return rows
-})
 const range = computed(() =>
   getSongListVirtualRange({
-    trackCount: rows.value.length,
+    trackCount: groupCount.value,
     scrollTop: scrollTop.value,
     viewportHeight: viewportHeight.value,
     tableOffsetTop: 0,
@@ -138,38 +63,44 @@ const range = computed(() =>
   })
 )
 const visibleRows = computed(() => {
-  const visible: ((typeof rows.value)[number] & {
+  const visible: Array<{
+    id: string
     index: number
+    title: string
+    count: number
     measurement: LoudnessAnalysisResult | undefined
     gains: ReturnType<typeof loudnessGainValues> | null
     state: string
     reason: string
-  })[] = []
+  }> = []
+  const itemByIndex = new Map(groups.value.map((item) => [item.index, item]))
   for (let index = range.value.start; index < range.value.end; index++) {
-    const row = rows.value[index]
-    const result = results.value.get(row.groupId)
-    const item = items.value.get(row.groupId)
-    const measurement = row.member === null ? result?.measurement : result?.tracks?.[row.member]
+    const item = itemByIndex.get(index)
+    if (!item) continue
+    const result = results.value.get(index)
+    const measurement = result?.measurement
     let state = measurement ? '已分析' : '未分析'
     let reason = result?.reason || ''
-    if (item?.state === 'failed') {
+    if (item.state === 'failed') {
       state = '分析失败'
       reason = item.reason || reason
-    } else if (item && running.value) {
+    } else if (running.value) {
       if (item.state === 'queued') state = '等待分析'
       if (item.state === 'analyzing') state = '正在分析'
-    } else if (
-      !measurement &&
-      (item?.state === 'cancelled' ||
-        (status.value.state === 'cancelled' &&
-          item &&
-          ['queued', 'analyzing'].includes(item.state)))
-    )
-      state = '已取消'
+    } else if (item.state === 'cancelled') state = '已取消'
     if (result?.status === 'unavailable') state = '不可用'
-    if (measurement && item?.state === 'cached') state = '已缓存'
+    if (measurement && item.state === 'cached') state = '已缓存'
     const gains = measurement ? loudnessGainValues(measurement) : null
-    visible.push({ ...row, index, measurement, gains, state, reason })
+    visible.push({
+      id: String(index),
+      index,
+      title: item.title,
+      count: item.trackCount,
+      measurement,
+      gains,
+      state,
+      reason
+    })
   }
   return visible
 })
@@ -184,19 +115,28 @@ const progressText = computed(() => {
   return `${labels[status.value.state]} · ${status.value.processed} / ${status.value.total} 组${status.value.failed ? ` · ${status.value.failed} 组失败` : ''}`
 })
 
+watch(
+  () => [Math.floor(range.value.start / 200), plan.value?.id] as const,
+  ([pageIndex]) => {
+    if (plan.value && groupCount.value) void refreshPage(pageIndex * 200)
+  },
+  { immediate: true }
+)
+watch(visibleRows, (rows) => void loadResults(rows.map((row) => row.index)))
+
 function onGridKey(event: KeyboardEvent): void {
   let next = selectedRow.value
   if (event.key === 'ArrowDown') next++
   else if (event.key === 'ArrowUp') next--
   else if (event.key === 'Home') next = 0
-  else if (event.key === 'End') next = rows.value.length - 1
+  else if (event.key === 'End') next = groupCount.value - 1
   else if (event.key === 'PageDown')
     next += Math.max(1, Math.floor(viewportHeight.value / ROW_HEIGHT))
   else if (event.key === 'PageUp')
     next -= Math.max(1, Math.floor(viewportHeight.value / ROW_HEIGHT))
   else return
   event.preventDefault()
-  selectedRow.value = Math.max(0, Math.min(rows.value.length - 1, next))
+  selectedRow.value = Math.max(0, Math.min(groupCount.value - 1, next))
   const top = selectedRow.value * ROW_HEIGHT
   if (grid.value) {
     if (top < grid.value.scrollTop) grid.value.scrollTop = top
@@ -206,11 +146,14 @@ function onGridKey(event: KeyboardEvent): void {
   }
 }
 
-watch(rows, () => {
-  selectedRow.value = 0
-  scrollTop.value = 0
-  if (grid.value) grid.value.scrollTop = 0
-})
+watch(
+  () => plan.value?.id,
+  () => {
+    selectedRow.value = 0
+    scrollTop.value = 0
+    if (grid.value) grid.value.scrollTop = 0
+  }
+)
 onMounted(async () => {
   await nextTick()
   trackMode.value?.focus()
@@ -219,10 +162,7 @@ onMounted(async () => {
   })
   if (grid.value) observer.observe(grid.value)
 })
-onBeforeUnmount(() => {
-  planController?.abort()
-  observer?.disconnect()
-})
+onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <template>
@@ -251,27 +191,35 @@ onBeforeUnmount(() => {
             type="radio"
             value="track"
             name="loudness-mode"
+            :disabled="running"
           />曲目 Track</label
         >
         <label
-          ><input v-model="mode" type="radio" value="album" name="loudness-mode" />完整专辑
-          Album</label
+          ><input
+            v-model="mode"
+            type="radio"
+            value="album"
+            name="loudness-mode"
+            :disabled="running"
+          />完整专辑 Album</label
         >
       </fieldset>
-      <span v-if="resolving" role="status">正在读取完整分析范围…</span>
+      <span v-if="loading" role="status">正在读取分析结果…</span>
       <span v-else
-        >{{ plan.trackCount.toLocaleString() }} 首 · {{ groups.length.toLocaleString() }} 组</span
+        >{{ totalTracks.toLocaleString() }} 首 · {{ groupCount.toLocaleString() }} 组</span
       >
     </div>
     <p class="scope-note">
       {{
-        mode === 'album'
-          ? '包含当前曲库中这些专辑的全部歌曲，按碟号和曲序测量。'
-          : '每首独立测量；CUE 只分析对应的实际文件区间。'
-      }}<span v-if="plan.skipped"> 已跳过 {{ plan.skipped }} 首非本地或无专辑归属的歌曲。</span>
+        adoptedRunningPlan
+          ? '当前后台分析任务继续运行；关闭此窗口不会取消任务。'
+          : mode === 'album'
+            ? '包含当前曲库中这些专辑的全部歌曲，按碟号和曲序测量。'
+            : '每首独立测量；CUE 只分析对应的实际文件区间。'
+      }}<span v-if="skippedTracks"> 已跳过 {{ skippedTracks }} 首非本地或无专辑归属的歌曲。</span>
     </p>
-    <div v-if="error || plan.error" class="loudness-error" role="alert">
-      <span>{{ error || plan.error }}</span>
+    <div v-if="error" class="loudness-error" role="alert">
+      <span>{{ error }}</span>
       <button v-if="error" type="button" :disabled="busy" @click="retryAction">重试操作</button>
     </div>
     <div class="loudness-progress" role="status" aria-live="polite">
@@ -293,7 +241,7 @@ onBeforeUnmount(() => {
       role="grid"
       tabindex="0"
       aria-label="响度测量结果，使用方向键浏览"
-      :aria-rowcount="rows.length"
+      :aria-rowcount="groupCount"
       :aria-colcount="5"
       :aria-busy="loading"
       :aria-activedescendant="
@@ -304,7 +252,7 @@ onBeforeUnmount(() => {
       @scroll="scrollTop = ($event.target as HTMLElement).scrollTop"
       @keydown="onGridKey"
     >
-      <p v-if="!rows.length" class="empty">{{ plan.error || '此范围没有可分析的本地歌曲。' }}</p>
+      <p v-if="!groupCount" class="empty">此范围没有可分析的本地歌曲。</p>
       <div :style="{ height: `${range.start * ROW_HEIGHT}px` }" aria-hidden="true"></div>
       <div
         v-for="row in visibleRows"
@@ -312,19 +260,16 @@ onBeforeUnmount(() => {
         :key="row.id"
         class="loudness-row"
         data-te-interactive
-        :class="{ member: row.member !== null, selected: selectedRow === row.index }"
+        :class="{ selected: selectedRow === row.index }"
         role="row"
         :aria-rowindex="row.index + 1"
         :aria-selected="selectedRow === row.index"
         @click="selectedRow = row.index"
       >
         <div class="result-name" role="gridcell" :title="row.reason || row.title">
-          <strong
-            >{{ row.member === null && mode === 'album' ? '专辑 · ' : '' }}{{ row.title }}</strong
-          >
+          <strong>{{ mode === 'album' ? '专辑 · ' : '' }}{{ row.title }}</strong>
           <small
-            >{{ row.reason || row.state
-            }}{{ row.member === null && mode === 'album' ? ` · ${row.count} 首` : '' }}</small
+            >{{ row.reason || row.state }}{{ mode === 'album' ? ` · ${row.count} 首` : '' }}</small
           >
         </div>
         <span
@@ -350,7 +295,7 @@ onBeforeUnmount(() => {
         >
       </div>
       <div
-        :style="{ height: `${Math.max(0, rows.length - range.end) * ROW_HEIGHT}px` }"
+        :style="{ height: `${Math.max(0, groupCount - range.end) * ROW_HEIGHT}px` }"
         aria-hidden="true"
       ></div>
     </div>
@@ -369,15 +314,10 @@ onBeforeUnmount(() => {
       <span>{{ loading ? '正在核对结果…' : '关闭后任务继续，可从库管理重新打开。' }}</span>
       <div class="loudness-actions">
         <button type="button" :disabled="busy || loading" @click="reload">刷新结果</button>
-        <button type="button" :disabled="busy || running || !groups.length" @click="clear">
+        <button type="button" :disabled="busy || running || !groupCount" @click="clear">
           清理此范围结果
         </button>
-        <button
-          v-if="retryGroups.length"
-          type="button"
-          :disabled="busy || running"
-          @click="start(true)"
-        >
+        <button v-if="retryGroups" type="button" :disabled="busy || running" @click="start">
           重试未完成项
         </button>
         <button
@@ -392,8 +332,8 @@ onBeforeUnmount(() => {
           v-else
           type="button"
           class="primary"
-          :disabled="busy || resolving || !groups.length || !!plan.error"
-          @click="start()"
+          :disabled="busy || loading || !groupCount"
+          @click="start"
         >
           开始分析
         </button>

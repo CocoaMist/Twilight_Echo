@@ -1,4 +1,5 @@
 import { useRadioStore } from '../stores/useRadioStore'
+import { corePlugins } from './corePlugins.ts'
 import { usePodcastStore } from '../stores/usePodcastStore'
 import {
   getRecentTracks,
@@ -7,10 +8,10 @@ import {
   useListeningStatsStore,
   waitForListeningStatsReady
 } from '../stores/useListeningStatsStore'
-import { usePlayerStore } from '../stores/usePlayerStore'
-import type { Track } from '../types/music'
-import type { NetworkEntry, NetworkSourceProfileInput } from '../../../shared/networkSources.ts'
+import type { NetworkSourceProfileInput } from '../../../shared/networkSources.ts'
 import { assertExperienceMethod } from '../../../shared/pluginExperience.ts'
+import { useCoreConnection } from '../stores/coreConnection.ts'
+import type { CoreNetworkEntry } from '../../../shared/coreNetwork.ts'
 
 const text = (value: unknown, max = 4096) => {
   if (typeof value !== 'string' || value.length > max) throw new Error('无效的文本参数')
@@ -20,13 +21,13 @@ const text = (value: unknown, max = 4096) => {
 /** Explicit adapters to the existing services. Stream paths and credentials stay in the host. */
 export function createExperienceServices(permissions: string[]) {
   const radio = useRadioStore(),
-    podcasts = usePodcastStore(),
-    player = usePlayerStore()
-  const entries = new Map<string, NetworkEntry>()
-  const networkEntry = (value: unknown) => {
-    const entry = entries.get(text(value))
-    if (!entry) throw new Error('条目已失效，请刷新目录')
-    return entry
+    podcasts = usePodcastStore()
+  const core = useCoreConnection()
+  const entries = new Map<string, CoreNetworkEntry>()
+  const networkRevision = () => {
+    const revision = core.state.value?.network?.revision
+    if (revision == null) throw new Error('网络源尚未就绪')
+    return revision
   }
   return async function invoke(method: string, args: Record<string, unknown>): Promise<unknown> {
     assertExperienceMethod(method, permissions)
@@ -34,7 +35,7 @@ export function createExperienceServices(permissions: string[]) {
       case 'themes.list': {
         const { WORKSHOP_TEMPLATES, THEME_WORKSHOP_ID } =
           await import('../../../shared/themeWorkshop.ts')
-        const plugin = (await window.api.plugins.list()).find((p) => p.id === THEME_WORKSHOP_ID)
+        const plugin = (await corePlugins.list()).find((p) => p.id === THEME_WORKSHOP_ID)
         if (!plugin?.enabled) return { enabled: false, projects: [], templates: WORKSHOP_TEMPLATES }
         return {
           enabled: true,
@@ -117,10 +118,7 @@ export function createExperienceServices(permissions: string[]) {
       case 'radio.play': {
         assertExperienceMethod('player.play', permissions)
         await radio.ensureLoaded()
-        const station = radio.stations.value.find((s) => s.id === args.id)
-        if (!station) throw new Error('电台已移除')
-        const track = radio.radioStationToTrack(station)
-        await player.playTrack(track, [track])
+        await radio.playStation(text(args.id))
         return null
       }
       case 'podcasts.list':
@@ -130,13 +128,14 @@ export function createExperienceServices(permissions: string[]) {
           id: s.id,
           title: s.title,
           author: s.author,
-          count: s.episodes.length
+          count: s.episodeCount
         }))
       case 'podcasts.episodes': {
         await podcasts.ensureLoaded()
         const subscription = podcasts.subscriptions.value.find((s) => s.id === args.id)
         if (!subscription) throw new Error('订阅已移除')
-        return subscription.episodes.map((e) => ({
+        const episodes = await podcasts.episodes(subscription.id)
+        return episodes.map((e) => ({
           guid: e.guid,
           title: e.title,
           duration: e.durationSeconds,
@@ -167,38 +166,49 @@ export function createExperienceServices(permissions: string[]) {
         assertExperienceMethod('player.play', permissions)
         await podcasts.ensureLoaded()
         const s = podcasts.subscriptions.value.find((s) => s.id === args.id)
-        const e = s?.episodes.find((e) => e.guid === args.guid)
-        if (!s || !e) throw new Error('节目已失效，请刷新订阅')
-        const track = podcasts.podcastEpisodeToTrack(s, e)
-        await player.playTrack(track, [track])
-        if (e.progressSeconds && e.progressSeconds < (e.durationSeconds || Infinity))
-          player.seek(e.progressSeconds)
+        if (!s) throw new Error('节目已失效，请刷新订阅')
+        await podcasts.playEpisode(s.id, text(args.guid))
         return null
       }
       case 'network.profiles':
-        return window.api.networkSources.listProfiles()
+        return (await core.query('network.profiles', { revision: networkRevision(), limit: 200 })).items
       case 'network.create': {
         const input = args.profile as NetworkSourceProfileInput
         if (!input || typeof input !== 'object' || Array.isArray(input))
           throw new Error('无效的连接配置')
-        // The main-process profile manager validates input and encrypts credentials.
-        return window.api.networkSources.createProfile(input)
+        const result = await core.command('network.profiles.edit', {
+          kind: 'create',
+          revision: networkRevision(),
+          input
+        })
+        return result && typeof result === 'object' && 'profile' in result ? result.profile : null
       }
       case 'network.remove':
-        await window.api.networkSources.deleteProfile(text(args.id))
+        await core.command('network.profiles.edit', {
+          kind: 'delete',
+          revision: networkRevision(),
+          id: text(args.id)
+        })
         return null
       case 'network.test':
-        return window.api.networkSources.testConnection(text(args.id))
+        return core.query('network.test', { profileId: text(args.id) })
       case 'network.browse':
       case 'network.library': {
-        const items =
+        const page =
           method === 'network.browse'
-            ? await window.api.networkSources.listDirectory(text(args.id), text(args.path ?? '/'))
-            : await window.api.networkSources.listLibrary(
-                text(args.id),
-                text(args.query ?? '', 200)
-              )
-        return items.map((entry) => {
+            ? await core.query('network.directory', {
+                revision: networkRevision(),
+                profileId: text(args.id),
+                path: text(args.path ?? '/'),
+                limit: 200
+              })
+            : await core.query('network.library', {
+                revision: networkRevision(),
+                profileId: text(args.id),
+                query: text(args.query ?? '', 200),
+                limit: 200
+              })
+        return page.items.map((entry) => {
           entries.set(entry.id, entry)
           if (entries.size > 10000) entries.delete(entries.keys().next().value!)
           return {
@@ -211,28 +221,22 @@ export function createExperienceServices(permissions: string[]) {
         })
       }
       case 'network.scan':
-        return window.api.networkSources.scanDirectory(text(args.id), text(args.path ?? '/'))
+        return core.command('network.job', {
+          kind: 'scan',
+          revision: networkRevision(),
+          profileId: text(args.id),
+          path: text(args.path ?? '/')
+        })
       case 'network.play': {
         assertExperienceMethod('player.play', permissions)
-        const entry = networkEntry(args.id)
-        if (entry.kind !== 'audio') throw new Error('该条目不是音频')
-        const plan = await window.api.networkSources.resolvePlayback(entry.profileId, entry)
-        const track: Track = {
-          id: entry.id,
-          title: entry.metadata?.title || entry.name,
-          artist: entry.metadata?.artist || '网络音乐',
-          album: entry.metadata?.album || '',
-          fileName: entry.name,
-          filePath: plan.kind === 'direct-url' ? plan.url || '' : plan.cacheFilePath || '',
-          duration: entry.metadata?.duration || 0,
-          size: entry.sizeBytes || 0,
-          cover: null,
-          lyrics: null,
-          source: 'network',
-          networkSource: { profileId: entry.profileId, entry },
-          format: entry.metadata?.format
-        }
-        await player.playTrack(track, [track])
+        const entry = entries.get(text(args.id))
+        if (!entry || entry.kind !== 'audio') throw new Error('条目已失效，请刷新目录')
+        await core.command('network.play', {
+          revision: networkRevision(),
+          profileId: entry.profileId,
+          entryId: entry.id,
+          play: true
+        })
         return null
       }
       case 'stats.read': {
@@ -271,14 +275,14 @@ export function createExperienceServices(permissions: string[]) {
       case 'diagnostics.export':
         return { saved: !!(await window.api.diagnostics.exportBundle()).filePath }
       case 'plugins.catalog':
-        return (await window.api.plugins.refreshIndex()).map((p) => ({
+        return (await corePlugins.refreshIndex()).map((p) => ({
           id: p.id,
           name: p.name,
           version: p.version,
           description: p.description
         }))
       case 'plugins.update':
-        await window.api.plugins.installFromIndex(text(args.id))
+        await corePlugins.installFromIndex(text(args.id))
         return null
     }
     throw new Error('Unsupported service operation')

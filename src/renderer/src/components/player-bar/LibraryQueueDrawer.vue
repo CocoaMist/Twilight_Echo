@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, toRef, watch, type ComponentPublicInstance } from 'vue'
 import type {
-  LibraryQueuePage,
   LibraryQueueSnapshot,
   LibraryQueueEdit
 } from '../../../../shared/libraryDatabase.ts'
 import { LIBRARY_PAGE_SIZE } from '../../../../shared/libraryDatabase.ts'
-import { libraryQueueTrack } from '../../utils/libraryQueuePlayback.ts'
-import type { Track } from '../../types/music'
+import type { CoreQueuePage } from '../../../../shared/coreViews.ts'
+import type { QueuePlaylistEntry } from './useQueueAddToPlaylist.ts'
 import CoverImg from '../CoverImg.vue'
 import PlaybackIcon from '../icons/PlaybackIcon.vue'
 import { useLibraryQueueViewport, type LibraryQueueRow } from './useLibraryQueueViewport.ts'
@@ -19,12 +18,16 @@ const props = defineProps<{
   busy: boolean
   isPlaying: boolean
   glass?: boolean
-  readPage: (page: number) => Promise<LibraryQueuePage | null>
+  readPage: (page: number) => Promise<CoreQueuePage | null>
   playEntry: (entryId: string, expected: QueueVersion) => Promise<void>
-  editQueue: (edit: LibraryQueueEdit, expected: QueueVersion) => Promise<void>
+  editQueue: (
+    edit: Extract<LibraryQueueEdit, { kind: 'remove' | 'move' | 'clear' }>,
+    expected: QueueVersion
+  ) => Promise<void>
+  duplicateEntry: (entryId: string, next: boolean, expected: QueueVersion) => Promise<void>
   refreshQueue: () => Promise<void>
 }>()
-const emit = defineEmits<{ addToPlaylist: [track: Track]; savePlaylist: [] }>()
+const emit = defineEmits<{ addToPlaylist: [track: QueuePlaylistEntry]; savePlaylist: [] }>()
 const viewport = useLibraryQueueViewport({
   snapshot: toRef(props, 'snapshot'),
   contentRevision: toRef(props, 'contentRevision'),
@@ -102,16 +105,7 @@ function remove(row: LibraryQueueRow): void {
 
 function insert(row: LibraryQueueRow, next: boolean): void {
   if (row.state !== 'ready') return
-  action(() =>
-    props.editQueue(
-      {
-        kind: 'insert',
-        trackIds: [row.id],
-        ...(next && selectedEntryId.value ? { afterEntryId: selectedEntryId.value } : {})
-      },
-      version(row)
-    )
-  )
+  action(() => props.duplicateEntry(row.queueEntryId, next, version(row)))
 }
 
 function clear(): void {
@@ -144,7 +138,7 @@ function addToPlaylist(row: LibraryQueueRow): void {
     const entry = await readEntry(row.index, version(row))
     if (!entry?.track || entry.queueEntryId !== row.queueEntryId)
       throw new Error('该曲目已不可用，请刷新队列')
-    if (!disposed) emit('addToPlaylist', libraryQueueTrack(entry.track, entry.queueEntryId))
+    if (!disposed) emit('addToPlaylist', { ...entry.track, queueEntryId: entry.queueEntryId, queue: version(row) })
   })
 }
 

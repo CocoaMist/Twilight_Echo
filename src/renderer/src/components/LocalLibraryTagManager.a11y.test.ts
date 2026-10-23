@@ -53,7 +53,11 @@ async function compileTagManager(): Promise<string> {
   compiled = compiled.replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*/g, '')
   compiled = compiled.replace(
     /import\s+\{[\s\S]*?\}\s+from\s+['"]@renderer\/utils\/localLibraryTagManagement\.ts['"]\s*/,
-    'const { hasTagPatch, successfulTagPaths, summarizeTagWriteResults, tagPatchFromForm, tagWritePathKey, toDuplicateReviewGroups, validateTagCoverFile } = window.__tagManagerUtils\n'
+    'const { hasTagPatch, summarizeTagWriteResults, tagPatchFromForm, validateTagCoverFile } = window.__tagManagerUtils\n'
+  )
+  compiled = compiled.replace(
+    /import\s+\{\s*useCoreConnection\s*\}\s+from\s+['"]@renderer\/stores\/coreConnection\.ts['"]\s*/,
+    ''
   )
   assert.doesNotMatch(compiled, /^import\s/m, 'fixture must run without Node module imports')
   compiled = compiled.replace('export default', 'window.TagManagerComponent =')
@@ -70,20 +74,20 @@ function createFixture(vueRuntime: string, component: string): string {
   <div id="app"></div>
   <script>${vueRuntime}</script>
   <script>
-    window.api = {
-      library: {
-        detectDuplicates: async () => ({ groups: [], suggestions: [], contentHashUnavailableIds: [] }),
-        writeTags: async () => ({ items: [] }),
-        restoreTags: async () => ({ items: [] })
-      }
+    window.useCoreConnection = () => window.__core
+    window.__core = {
+      attach: async () => {},
+      command: async (name) => name === 'library.duplicates.start'
+        ? { id: 'duplicate-check', state: 'running', groups: 0 }
+        : {},
+      query: async (name) => name === 'library.duplicates.status'
+        ? { id: 'duplicate-check', state: 'completed', groups: 0 }
+        : {}
     }
     window.__tagManagerUtils = {
       hasTagPatch: () => false,
-      successfulTagPaths: () => [],
       summarizeTagWriteResults: () => ({ successCount: 0, failedCount: 0, rolledBackCount: 0, notAttemptedCount: 0 }),
       tagPatchFromForm: () => ({}),
-      tagWritePathKey: value => value,
-      toDuplicateReviewGroups: () => [],
       validateTagCoverFile: () => null
     }
   </script>

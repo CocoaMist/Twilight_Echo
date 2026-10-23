@@ -92,7 +92,7 @@ window.runCommandPaletteTests=async()=>{
     {id:'eq',title:'打开均衡器',description:'EQ 与耳机补偿',terms:'eq 均衡器',group:'操作',run:()=>{executed++;if(failAction)throw new Error('操作失败，请重试')}},
     {id:'settings',title:'进入设置',description:'应用偏好与音乐库',terms:'settings 设置',group:'操作',run:()=>{executed++}}
   ]
-  const playlists=shallowRef([{id:'work',name:'工作',trackIds:[],createdAt:'2026-09-14'}])
+  const playlists=shallowRef([{id:'work',name:'工作',count:12345,createdAt:'2026-09-14'}])
   const tracks=shallowRef([]),visible=ref(true)
   const app=createApp({render:()=>visible.value?h(CommandPalette,{actions,search,playlists,tracks,playTrack:track=>{played=track.id},openPlaylist:playlist=>{played=playlist.id},onClose:()=>{closed++;visible.value=false}}):null})
   const opener=document.querySelector('#opener');opener.focus();app.mount('#app');await pause()
@@ -132,7 +132,7 @@ window.runCommandPaletteTests=async()=>{
   failAction=false;document.querySelector('[role="alert"] button').click();await pause()
   expect(!visible.value&&calls.length===callsBefore,'retry searched instead of rerunning the failed action')
   await reopen();await type('工作');await pause(280)
-  expect(document.querySelector('.palette-results').textContent.includes('本地歌单'),'playlist search is missing')
+  expect(document.querySelector('.palette-results').textContent.includes('本地歌单'),'playlist search is missing');expect(document.querySelector('.palette-results').textContent.includes('12345 首'),'Core playlist count is missing')
   key('Escape');await pause()
   await reopen()
 }

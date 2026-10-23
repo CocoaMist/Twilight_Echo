@@ -5,11 +5,11 @@ import { useEscapeToClose } from '@renderer/app/useDismissLayer'
 import type { Track } from '@renderer/types/music'
 import CoverImg from '@renderer/components/CoverImg.vue'
 import LocalLibraryTagManager from '@renderer/components/LocalLibraryTagManager.vue'
-import { useMusicStore } from '@renderer/stores/useMusicStore'
 import { selectLocalLibraryActionTracks } from '@renderer/utils/localTrackRemovalPolicy.ts'
-import type { LocalLibraryTagPatch } from '../../../shared/localLibraryTags.ts'
+import { useMusicStore } from '@renderer/stores/useMusicStore.ts'
 
 const props = defineProps<{ track: Track }>()
+const musicStore = useMusicStore()
 const editing = ref(false)
 const versions = ref(false)
 const MusicVersionsHost = defineAsyncComponent(
@@ -24,10 +24,10 @@ const editableTracks = computed(() => {
     (!source && (/^[a-zA-Z]:[\\/]/.test(id) || /^[\\/]/.test(id) || !id.includes(':')))
   return mayBeLocal ? selectLocalLibraryActionTracks([track]) : []
 })
-async function applyTags(paths: string[], patch: LocalLibraryTagPatch): Promise<void> {
-  await useMusicStore().applyLocalTagWriteAsync(paths, patch)
-}
 const emit = defineEmits<{ close: [] }>()
+function onTagsApplied(): void {
+  void musicStore.refreshLibraryIndex()
+}
 const dialog = ref<HTMLDialogElement | null>(null)
 useNativeDialog(dialog)
 useEscapeToClose(
@@ -50,7 +50,7 @@ useEscapeToClose(
       v-else-if="editing"
       :tracks="editableTracks"
       @close="editing = false"
-      @applied="applyTags"
+      @applied="onTagsApplied"
     />
     <template v-else>
       <button

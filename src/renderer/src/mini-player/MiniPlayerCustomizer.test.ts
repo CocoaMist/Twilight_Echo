@@ -89,7 +89,7 @@ test('main settings reuses the controlled mini player customizer', () => {
   assert.match(settingsSurfaces, /MiniPlayerSettingsSection/)
   assert.match(
     settingsStore,
-    /hasOwnProperty\.call\(patch, 'miniPlayer'\)[\s\S]*cloneMiniPlayerSettings\(patch\.miniPlayer\)/
+    /'miniPlayer',[\s\S]*Object\.hasOwn\(patch, key\)[\s\S]*appearanceDraft\.value[\s\S]*\[key\]: patch\[key\]/
   )
   assert.match(settingsStore, /from '\.\.\/\.\.\/\.\.\/shared\/miniPlayer\.ts'/)
 })

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import './settings-page/SettingsPage.css'
+import { corePlugins } from '../extensions/corePlugins.ts'
 import {
   computed,
   defineAsyncComponent,
@@ -464,7 +465,7 @@ async function enableWorkshop(): Promise<void> {
   enablingWorkshop.value = true
   workshopEnableError.value = ''
   try {
-    await window.api.plugins.enable(THEME_WORKSHOP_ID)
+    await corePlugins.enable(THEME_WORKSHOP_ID)
     await syncExtensions()
     if (!workshopEnabled.value) throw new Error('插件未就绪，请重试或在插件管理中查看状态。')
   } catch (cause) {

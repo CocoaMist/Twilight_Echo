@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useNativeDialog } from '@renderer/composables/useNativeDialog'
-import type { createQueueWorkspaceStore } from '@renderer/stores/player/queueWorkspaceStore.ts'
-import type { createQueueSessionController } from '@renderer/stores/player/queueSessionController.ts'
+import type { createCorePlayerPersonal } from '@renderer/stores/player/corePlayerPersonal.ts'
 import { getPlaybackQueueWindow } from '@renderer/utils/playbackQueueVirtualization.ts'
 import type { NamedQueueSession } from '../../../../shared/queueWorkspace.ts'
 
 const props = defineProps<{
-  workspace: ReturnType<typeof createQueueWorkspaceStore>
-  controller: ReturnType<typeof createQueueSessionController>
+  workspace: ReturnType<typeof createCorePlayerPersonal>['queueWorkspace']
+  controller: ReturnType<typeof createCorePlayerPersonal>['queueSessions']
   queueLength: number
   canUndo: boolean
   undoLabel: string
@@ -32,6 +31,8 @@ const busy = computed(
 const selected = computed(() =>
   props.workspace.sessions.value.find((session) => session.id === selectedId.value)
 )
+const sessions = computed(() => props.workspace.sessions.value)
+const restoreResult = computed(() => props.controller.lastRestore.value)
 const history = computed(() => [...props.workspace.history.value].reverse())
 const historyWindow = computed(() =>
   getPlaybackQueueWindow(history.value.length, scrollTop.value, 324, 54, 3)
@@ -62,7 +63,7 @@ async function run(operation: () => Promise<void>, success: string): Promise<voi
   }
 }
 
-function choose(session: NamedQueueSession): void {
+function choose(session: Pick<NamedQueueSession, 'id' | 'name'>): void {
   selectedId.value = session.id
   name.value = session.name
   deleting.value = false
@@ -182,7 +183,7 @@ onBeforeUnmount(() => {
         </p>
         <div v-else class="session-list" aria-label="已保存的会话">
           <button
-            v-for="session in workspace.sessions.value"
+            v-for="session in sessions"
             :key="session.id"
             type="button"
             class="session-row"
@@ -192,8 +193,10 @@ onBeforeUnmount(() => {
           >
             <span>{{ session.name }}</span
             ><small>
-              <template v-if="session.libraryQueue">数据库队列 · </template>
-              <template v-else>{{ session.entries.length.toLocaleString() }} 首 · </template>
+              <template v-if="session.storage === 'libraryQueue'">数据库队列 · </template>
+              <template v-if="session.count !== null"
+                >{{ session.count.toLocaleString() }} 首 ·
+              </template>
               {{ modes[session.playMode] }}
             </small>
           </button>
@@ -241,23 +244,20 @@ onBeforeUnmount(() => {
           正在核对会话中的资源…
           <button type="button" @click="controller.cancelRestore">取消恢复</button>
         </p>
-        <div v-if="controller.lastRestore.value" class="restore-result" role="status">
+        <div v-if="restoreResult" class="restore-result" role="status">
           <p>
-            可恢复 {{ controller.lastRestore.value.queue.length.toLocaleString() }} 首，跳过
-            {{ controller.lastRestore.value.missing.length.toLocaleString() }} 首。
+            可恢复 {{ restoreResult.restored.toLocaleString() }} 首，跳过
+            {{ restoreResult.unavailable.toLocaleString() }} 首。
           </p>
-          <p v-if="controller.lastRestore.value.deferred" class="hint">
+          <p v-if="restoreResult.deferred" class="hint">
             网络歌曲在播放时获取新地址；无法连接时会显示播放错误。
           </p>
-          <ul v-if="controller.lastRestore.value.missing.length">
-            <li
-              v-for="item in controller.lastRestore.value.missing.slice(0, 8)"
-              :key="item.entry.queueEntryId"
-            >
-              {{ item.entry.title }}：{{ item.reason }}
+          <ul v-if="restoreResult.issues.length">
+            <li v-for="item in restoreResult.issues.slice(0, 8)" :key="item.occurrenceId">
+              {{ item.title }}：{{ item.reason }}
             </li>
-            <li v-if="controller.lastRestore.value.missing.length > 8">
-              另有 {{ controller.lastRestore.value.missing.length - 8 }} 首不可用。
+            <li v-if="restoreResult.unavailable > 8">
+              另有 {{ restoreResult.unavailable - 8 }} 首不可用。
             </li>
           </ul>
         </div>

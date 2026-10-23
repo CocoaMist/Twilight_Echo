@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRadioStore, radioStationToTrack } from '../stores/useRadioStore'
-import { usePodcastStore, podcastEpisodeToTrack } from '../stores/usePodcastStore'
+import { useRadioStore } from '../stores/useRadioStore'
+import { usePodcastStore } from '../stores/usePodcastStore'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useDomTrackLocator } from '../composables/useDomTrackLocator'
 import { isInsecureHttpUrl } from '../../../shared/radioStations.ts'
-import type { PodcastSubscription } from '../../../shared/podcastSubscriptions.ts'
-import { podcastEpisodeTrackId } from '../../../shared/podcastSubscriptions.ts'
+import { podcastEpisodeTrackId, podcastEpisodeProgressRatio } from '../../../shared/podcastSubscriptions.ts'
+import type { CorePodcast, CorePodcastEpisode } from '../../../shared/coreStreams.ts'
+import type { Track } from '../types/music.ts'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 
 const radio = useRadioStore()
@@ -61,15 +62,32 @@ watch(
 )
 const feedUrl = ref('')
 const selectedPodcastId = ref<string | null>(null)
+const selectedEpisodes = ref<CorePodcastEpisode[]>([])
+const episodeError = ref('')
+let episodeRequest = 0
 const pageError = computed(
   () =>
     formError.value ||
-    (tab.value === 'radio' ? directoryError.value || radio.error.value : podcast.error.value)
+    (tab.value === 'radio' ? directoryError.value || radio.error.value : episodeError.value || podcast.error.value)
 )
 
-const selectedPodcast = computed<PodcastSubscription | null>(() => {
+const selectedPodcast = computed<CorePodcast | null>(() => {
   if (!selectedPodcastId.value) return null
   return podcast.subscriptions.value.find((sub) => sub.id === selectedPodcastId.value) ?? null
+})
+
+watch([selectedPodcastId, podcast.revision], async ([id]) => {
+  const request = ++episodeRequest
+  selectedEpisodes.value = []
+  episodeError.value = ''
+  if (!id) return
+  try {
+    const episodes = await podcast.episodes(id)
+    if (request === episodeRequest) selectedEpisodes.value = episodes
+  } catch (error) {
+    if (request === episodeRequest)
+      episodeError.value = error instanceof Error ? error.message : String(error)
+  }
 })
 
 onMounted(() => {
@@ -179,9 +197,7 @@ function addDirectoryStation(row: {
 }
 
 function playStation(id: string): void {
-  const station = radio.stations.value.find((item) => item.id === id)
-  if (!station) return
-  playTrack(radioStationToTrack(station), [radioStationToTrack(station)])
+  void runFormAction(() => radio.playStation(id))
 }
 
 function removeStation(id: string): Promise<void> {
@@ -252,27 +268,39 @@ async function unsubscribePodcast(id: string): Promise<void> {
   }
 }
 
-function playEpisode(subscription: PodcastSubscription, guid: string): void {
-  const episode = subscription.episodes.find((item) => item.guid === guid)
-  if (!episode) return
-  const track = podcastEpisodeToTrack(subscription, episode)
-  const list = subscription.episodes.map((item) => podcastEpisodeToTrack(subscription, item))
-  const progress = episode.progressSeconds ?? 0
-  const duration = episode.durationSeconds || 0
+function episodeTrack(subscription: CorePodcast, episode: CorePodcastEpisode): Track {
+  return {
+    id: podcastEpisodeTrackId(subscription.id, episode.guid),
+    title: episode.title,
+    artist: subscription.author || subscription.title || '播客',
+    album: subscription.title,
+    source: 'podcast',
+    duration: episode.durationSeconds || 0,
+    size: 0
+  }
+}
+
+function playEpisode(subscription: CorePodcast, episode: CorePodcastEpisode): void {
+  const selected = selectedEpisodes.value.find((item) => item.guid === episode.guid)
+  if (!selected) return
+  const track = episodeTrack(subscription, selected)
+  const list = selectedEpisodes.value.map((item) => episodeTrack(subscription, item))
+  const progress = selected.progressSeconds ?? 0
+  const duration = selected.durationSeconds || 0
   // Resume when progress is meaningful and not essentially finished.
   const nearEnd = duration > 0 && progress >= duration * 0.95
   if (progress >= 5 && !nearEnd) {
-    playTrackFromPosition(track, progress, list)
+    void playTrackFromPosition(track, progress, list)
     return
   }
-  playTrack(track, list)
+  void playTrack(track, list)
 }
 
 function progressLabel(episode: { durationSeconds: number; progressSeconds?: number }): string {
-  const ratio = podcast.podcastEpisodeProgressRatio({
+  const ratio = podcastEpisodeProgressRatio({
     guid: '',
     title: '',
-    mediaUrl: 'https://example.test/a.mp3',
+    mediaUrl: '',
     durationSeconds: episode.durationSeconds,
     progressSeconds: episode.progressSeconds
   })
@@ -450,7 +478,7 @@ function formatDuration(seconds: number): string {
               <span class="station-icon"><i class="pi pi-broadcast"></i></span>
               <div>
                 <strong>{{ station.name }}</strong>
-                <small>{{ station.streamUrl }}</small>
+                <small>{{ station.homepage || station.tags?.slice(0, 3).join(', ') || '网络电台' }}</small>
                 <span v-if="station.allowInsecureHttp" class="badge http">HTTP</span>
               </div>
             </div>
@@ -534,7 +562,7 @@ function formatDuration(seconds: number): string {
                 @click="selectedPodcastId = sub.id"
               >
                 <strong>{{ sub.title }}</strong>
-                <small>{{ sub.episodes.length }} 集</small>
+                <small>{{ sub.episodeCount }} 集</small>
               </button>
               <button
                 type="button"
@@ -566,7 +594,7 @@ function formatDuration(seconds: number): string {
           </div>
           <ul class="episode-list">
             <li
-              v-for="episode in selectedPodcast.episodes"
+              v-for="episode in selectedEpisodes"
               :key="episode.guid"
               :data-te-track-id="podcastEpisodeTrackId(selectedPodcast.id, episode.guid)"
             >
@@ -583,14 +611,14 @@ function formatDuration(seconds: number): string {
                 <button
                   type="button"
                   class="primary"
-                  @click="playEpisode(selectedPodcast, episode.guid)"
+                  @click="playEpisode(selectedPodcast, episode)"
                 >
                   <PlaybackIcon name="play" />
                   播放
                 </button>
               </div>
             </li>
-            <li v-if="selectedPodcast.episodes.length === 0" class="empty">
+            <li v-if="selectedEpisodes.length === 0" class="empty">
               这个播客还没有可播放的剧集
             </li>
           </ul>

@@ -212,7 +212,7 @@ const store=useSettingsStore(),theme=useThemeStore()
 let confirmed={...store.settings.value,motionPreference:'full',theme:'pureWhite',appBackground:normalizeAppBackgroundSettings({global:{kind:'image',image:'background://wallpaper.png'}})}
 const snapshot=()=>({settings:confirmed,defaults:confirmed,paths:{},appVersion:'test',platform:'win32',restartReasons:[],windowTransparencySupported:false})
 const startup=()=>({settings:snapshot(),systemTone:'pureWhite',pendingNavigation:null,themeBootstrap:{library:{version:2,revision:0,savedAt:new Date(0).toISOString(),data:createDefaultThemeLibraryDocument()}}})
-window.api={settings:{onChanged:()=>()=>{},update:async patch=>{confirmed={...confirmed,...patch};return snapshot()},importBackgroundImage:async()=> 'background://wallpaper.png'},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}}}
+window.api={core:{onMessage:()=>()=>{},onStatus:()=>()=>{}},settings:{onChanged:()=>()=>{},update:async patch=>{confirmed={...confirmed,...patch};return snapshot()},importBackgroundImage:async()=> 'background://wallpaper.png'},themes:{onChanged:()=>()=>{},onSystemToneChanged:()=>()=>{}},plugins:{onChanged:()=>()=>{}}}
 createApp(Shell).mount('#app')
 const wait=async()=>{await nextTick();await new Promise(resolve=>setTimeout(resolve,160));await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame)}
 window.waitOverlay=wait

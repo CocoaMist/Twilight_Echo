@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import { ref } from 'vue'
 import type { Track } from '../../types/music.ts'
 import type { MediaProviderPlaylistSummary } from '../../providers/mediaProvider.ts'
 import {
   useQueueAddToPlaylist,
+  type QueuePlaylistEntry,
   type QueueAddToPlaylistNotice,
   type QueuePlaylistTarget
 } from './useQueueAddToPlaylist.ts'
@@ -57,7 +59,7 @@ type ProviderStub = {
 
 function createPicker(options: {
   queue?: Track[]
-  playlists?: QueuePlaylistTarget[]
+  playlists?: Array<QueuePlaylistTarget & { trackIds?: string[] }>
   provider?: ProviderStub | null
   addedCount?: number
   calls: string[]
@@ -65,7 +67,8 @@ function createPicker(options: {
 }) {
   return useQueueAddToPlaylist({
     queue: ref(options.queue ?? [track()]),
-    playlists: ref(options.playlists ?? [{ id: 'pl_1', name: '深夜', trackIds: [] }]),
+    playlists: ref(options.playlists ?? [{ id: 'pl_1', name: '深夜', count: 0 }]),
+    getPlaylistMembership: async (id, ids) => ids.map(trackId => options.playlists?.find(p => p.id === id)?.trackIds?.includes(trackId) ?? false),
     mediaProviders: { get: () => options.provider ?? null } as never,
     addTracksToPlaylist: (name, tracks) => {
       options.calls.push(`local-add:${name}:${tracks.map((item) => item.id).join(',')}`)
@@ -83,20 +86,20 @@ async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve))
 }
 
-test('now playing picker accepts a track outside the queue and keeps the clicked snapshot', () => {
+test('now playing picker accepts a track outside the queue and keeps the clicked snapshot', async () => {
   const calls: string[] = []
   const notices: QueueAddToPlaylistNotice[] = []
   const picker = createPicker({ queue: [], calls, notices })
   const current = track({ queueEntryId: undefined })
   picker.openForTrack(current)
   current.id = 'local:next-song'
-  picker.addToLocalPlaylist('深夜')
+  await picker.addToLocalPlaylist('深夜')
   assert.deepEqual(calls, ['local-add:深夜:local:moon'])
   assert.equal(picker.open.value, false)
   assert.equal(notices[0].kind, 'success')
 })
 
-test('queue picker adds the entry it was opened for to a local playlist and reports the result', () => {
+test('queue picker adds the entry it was opened for to a local playlist and reports the result', async () => {
   const calls: string[] = []
   const notices: QueueAddToPlaylistNotice[] = []
   const picker = createPicker({
@@ -109,6 +112,7 @@ test('queue picker adds the entry it was opened for to a local playlist and repo
   })
 
   picker.openForEntry('entry:1')
+  await settle()
 
   assert.equal(picker.open.value, true)
   assert.equal(picker.targetLabel.value, 'Moon River · Audrey')
@@ -119,7 +123,7 @@ test('queue picker adds the entry it was opened for to a local playlist and repo
   // A local file has no remote library to write to, so the section stays hidden.
   assert.equal(picker.providerId.value, null)
 
-  picker.addToLocalPlaylist('深夜')
+  await picker.addToLocalPlaylist('深夜')
 
   assert.deepEqual(calls, ['local-add:深夜:local:moon'])
   assert.deepEqual(notices, [{ kind: 'success', message: '已添加到歌单「深夜」' }])
@@ -127,18 +131,18 @@ test('queue picker adds the entry it was opened for to a local playlist and repo
   assert.equal(picker.targetTrack.value, null)
 })
 
-test('queue picker reports a duplicate instead of claiming a new addition', () => {
+test('queue picker reports a duplicate instead of claiming a new addition', async () => {
   const calls: string[] = []
   const notices: QueueAddToPlaylistNotice[] = []
   const picker = createPicker({ addedCount: 0, calls, notices })
 
   picker.openForEntry('entry:1')
-  picker.addToLocalPlaylist('深夜')
+  await picker.addToLocalPlaylist('深夜')
 
   assert.deepEqual(notices, [{ kind: 'info', message: '「Moon River」已在歌单「深夜」中' }])
 })
 
-test('queue picker creates a local playlist seeded with the entry', () => {
+test('queue picker creates a local playlist seeded with the entry', async () => {
   const calls: string[] = []
   const notices: QueueAddToPlaylistNotice[] = []
   const picker = createPicker({ calls, notices })
@@ -147,11 +151,69 @@ test('queue picker creates a local playlist seeded with the entry', () => {
   picker.startCreate('local')
   picker.newPlaylistName.value = '  新的   歌单  '
   assert.equal(picker.canConfirmCreate.value, true)
-  void picker.confirmCreate()
+  await picker.confirmCreate()
 
   assert.deepEqual(calls, ['local-create:新的 歌单:local:moon'])
   assert.deepEqual(notices, [{ kind: 'success', message: '已创建歌单「新的 歌单」并添加' }])
   assert.equal(picker.open.value, false)
+})
+
+test('Core queue picker sends the selected occurrence and waits for its write acknowledgement', async () => {
+  const notices: QueueAddToPlaylistNotice[] = []
+  const writes: Array<{ id: string; entry: QueuePlaylistEntry }> = []
+  let acknowledge!: () => void
+  const picker = useQueueAddToPlaylist({
+    queue: ref([]),
+    playlists: ref([{ id: 'pl_1', name: '深夜', count: 9 }]),
+    mediaProviders: { get: () => null } as never,
+    addTracksToPlaylist: () => { throw new Error('Display data must not be written as a track') },
+    createPlaylistWithTracks: () => { throw new Error('Display data must not seed a playlist') },
+    addQueueEntry: async (id, entry) => {
+      writes.push({ id, entry })
+      await new Promise<void>(resolve => { acknowledge = resolve })
+      return 1
+    },
+    notify: notice => notices.push(notice)
+  })
+  const entry: QueuePlaylistEntry = {
+    id: 'network:moon', title: 'Moon River', artist: 'Audrey', album: 'Breakfast', duration: 180, size: 1,
+    source: 'network', queueEntryId: 'occurrence:7', queue: { id: 'queue:1', revision: 4 }
+  }
+  picker.openForTrack(entry)
+  const writing = picker.addToLocalPlaylist('深夜')
+  assert.equal(picker.busyTarget.value, 'local:深夜')
+  assert.equal(picker.localPlaylists.value[0].trackCount, 9)
+  assert.equal(notices.length, 0)
+  assert.equal('filePath' in writes[0].entry, false)
+  assert.deepEqual(writes[0], { id: 'pl_1', entry })
+  acknowledge()
+  await writing
+  assert.equal(picker.open.value, false)
+  assert.equal(notices[0].kind, 'success')
+})
+
+test('Core occurrence write failure keeps the picker open and never reports success', async () => {
+  const notices: QueueAddToPlaylistNotice[] = []
+  let writes = 0
+  const picker = useQueueAddToPlaylist({
+    queue: ref([]),
+    playlists: ref([{ id: 'pl_1', name: '深夜', count: 0 }]),
+    mediaProviders: { get: () => null } as never,
+    addTracksToPlaylist: () => 0,
+    createPlaylistWithTracks: () => 'unused',
+    addQueueEntry: async () => { writes++; throw new Error('队列已变化，请重试') },
+    notify: notice => notices.push(notice)
+  })
+  picker.openForTrack({
+    id: 'local:moon', title: 'Moon River', artist: '', album: '', duration: 180, size: 1,
+    queueEntryId: 'occurrence:7', queue: { id: 'queue:1', revision: 4 }
+  })
+  await picker.addToLocalPlaylist('深夜')
+  assert.equal(picker.open.value, true)
+  assert.equal(picker.busyTarget.value, null)
+  assert.equal(picker.errorMessage.value, '队列已变化，请重试')
+  assert.equal(writes, 1)
+  assert.equal(notices.length, 0)
 })
 
 test('a streaming entry lists the provider playlists it owns and writes with the remote song id', async () => {
@@ -282,7 +344,7 @@ test('a remote write failure keeps the picker open so another target can be chos
   assert.equal(picker.errorMessage.value, '歌单已达上限')
   assert.equal(picker.busyTarget.value, null)
   assert.equal(picker.open.value, true)
-  assert.deepEqual(notices, [])
+  assert.equal(notices.length, 0)
 })
 
 test('a streaming entry without a remote song id refuses the remote write locally', async () => {
@@ -346,4 +408,15 @@ test('the queue drawer row exposes the picker and the player bar mounts its dial
   // The picker is teleported outside the bar, so outside-pointer dismissal has
   // to stand down while it is open or the drawer closes underneath it.
   assert.match(source, /isDismissBlocked: \(\) => queueAddToPlaylist\.open\.value/)
+})
+
+test('the queue picker syncs Core providers without the removed provider bridge', async () => {
+  const source = readFileSync(new URL('../PlayerBar.vue', import.meta.url), 'utf8')
+  const body = source.match(/syncProviders: async \(\) => \{([\s\S]*?)\n  \}/)![1]
+  let calls = 0
+  await runInNewContext(`(async () => {${body}\n})()`, {
+    window: { api: {} },
+    syncPluginProviders: async () => { calls++ }
+  })
+  assert.equal(calls, 1)
 })

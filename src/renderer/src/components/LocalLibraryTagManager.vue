@@ -1,50 +1,61 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
-import type { DuplicateDetectionResult } from '../../../shared/duplicateDetection.ts'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import type { CoreTrackView } from '../../../shared/coreViews.ts'
 import type {
-  LocalLibraryTagOperationResult,
-  LocalLibraryTagPatch
-} from '../../../shared/localLibraryTags.ts'
+  CoreFileOperationResult,
+  CoreTagPatch,
+  CoreTagResult
+} from '../../../shared/coreLibraryMaintenance.ts'
+import type {
+  CoreDuplicateGroup,
+  CoreDuplicateItem,
+  CoreDuplicatesStatus
+} from '../../../shared/coreDuplicates.ts'
+import type {
+  LibrarySelectionRequest,
+  LibrarySelectionSnapshot
+} from '../../../shared/librarySelection.ts'
+import type { LocalLibraryTagPatch } from '../../../shared/localLibraryTags.ts'
 import type { Track } from '@renderer/types/music'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import {
   hasTagPatch,
-  successfulTagPaths,
   summarizeTagWriteResults,
   tagPatchFromForm,
-  tagWritePathKey,
-  toDuplicateReviewGroups,
-  validateTagCoverFile,
-  type DuplicateReviewGroup
+  validateTagCoverFile
 } from '@renderer/utils/localLibraryTagManagement.ts'
 
 const props = withDefaults(
   defineProps<{
     tracks: Track[]
-    currentTracks?: Track[]
+    selection?: LibrarySelectionRequest
     initialView?: 'edit' | 'duplicates'
   }>(),
   { initialView: 'edit' }
 )
-
-const emit = defineEmits<{
-  close: []
-  applied: [filePaths: string[], patch: LocalLibraryTagPatch]
-}>()
-
+const emit = defineEmits<{ close: []; applied: [trackIds: string[]] }>()
+const core = useCoreConnection()
 const activeView = ref<'edit' | 'duplicates'>(props.initialView)
 const dialogRef = ref<HTMLElement | null>(null)
 const closeButtonRef = ref<HTMLButtonElement | null>(null)
 let focusRestoreTarget: HTMLElement | null = null
+let selectionId: string | undefined
+let duplicateId: string | undefined
 const busy = ref(false)
 const coverError = ref('')
 const operationError = ref('')
-const operationResults = shallowRef<LocalLibraryTagOperationResult[]>([])
-const duplicateResult = shallowRef<DuplicateDetectionResult | null>(null)
-const previewTracks = shallowRef<Track[]>([])
+const operationResults = shallowRef<CoreFileOperationResult[]>([])
+const selectionSnapshot = shallowRef<LibrarySelectionSnapshot>()
+const previewTracks = shallowRef<CoreTrackView[]>([])
 const previewPatch = shallowRef<LocalLibraryTagPatch | null>(null)
 const previewPage = ref(0)
 const resultsPage = ref(0)
-const duplicatePage = ref(0)
+const duplicateError = ref('')
+const duplicateStatus = shallowRef<CoreDuplicatesStatus | null>(null)
+const duplicateGroup = shallowRef<CoreDuplicateGroup | null>(null)
+const duplicateItems = shallowRef<CoreDuplicateItem[]>([])
+const duplicateGroupIndex = ref(0)
+const duplicateItemOffset = ref(0)
 const tagFieldLabels: Record<keyof LocalLibraryTagPatch, string> = {
   title: '标题',
   artist: '歌手',
@@ -62,25 +73,30 @@ const previewRows = computed(() =>
 const resultRows = computed(() =>
   operationResults.value.slice(resultsPage.value * 50, (resultsPage.value + 1) * 50)
 )
-const duplicateRows = computed(() => {
-  const rows: Array<{
-    key: string
-    label: string
-    track: DuplicateReviewGroup['group']['items'][number]
-  }> = []
-  for (const [groupIndex, review] of reviewGroups.value.entries())
-    for (const track of review.group.items)
-      rows.push({
-        key: `${review.group.kind}:${review.group.key}:${track.id}`,
-        label: `第 ${groupIndex + 1} 组 · ${review.label}`,
-        track
-      })
-  return rows
-})
-const visibleDuplicates = computed(() =>
-  duplicateRows.value.slice(duplicatePage.value * 50, (duplicatePage.value + 1) * 50)
+const localTracks = computed(() =>
+  props.tracks.filter((track) => track.source === 'local' || !track.source)
 )
-const duplicateError = ref('')
+const selectedLocalCount = computed(
+  () => selectionSnapshot.value?.localTrackCount ?? localTracks.value.length
+)
+const summary = computed(() =>
+  summarizeTagWriteResults(
+    operationResults.value.map((item) => ({ filePath: item.name, status: item.status }))
+  )
+)
+const duplicateGroupLabel = computed(() => {
+  const group = duplicateGroup.value
+  if (!group) return ''
+  const kind = {
+    path: '相同路径',
+    contentHash: '相同文件 hash',
+    audioFingerprint: '相同音频指纹',
+    metadataCandidate: '相近元数据',
+    logicalTrack: '相同曲目'
+  }[group.kind]
+  const confidence = { exact: '精确', probable: '较高', possible: '待确认' }[group.confidence]
+  return `${kind} · ${confidence}置信度`
+})
 const form = ref({
   title: undefined as string | undefined,
   artist: undefined as string | undefined,
@@ -93,16 +109,16 @@ const form = ref({
   coverData: undefined as Uint8Array | undefined,
   coverName: ''
 })
-
-const selectedLocalTracks = computed(() => props.tracks.filter((track) => track.filePath))
-const summary = computed(() => summarizeTagWriteResults(operationResults.value))
-const reviewGroups = computed<DuplicateReviewGroup[]>(() =>
-  duplicateResult.value ? toDuplicateReviewGroups(duplicateResult.value) : []
-)
 const hasPatch = computed(() => hasTagPatch(toPatch()))
 const canWrite = computed(
-  () => !busy.value && selectedLocalTracks.value.length > 0 && hasPatch.value && !coverError.value
+  () =>
+    !busy.value &&
+    !!selectionId &&
+    !!selectionSnapshot.value?.fileCount &&
+    hasPatch.value &&
+    !coverError.value
 )
+
 watch(
   form,
   () => {
@@ -112,80 +128,14 @@ watch(
 )
 watch(
   () => props.tracks,
-  () => {
-    previewPatch.value = null
-  }
-)
-watch(
-  () => props.currentTracks,
-  () => {
-    if (duplicateResult.value) {
-      duplicateResult.value = null
-      duplicateError.value = '曲库已变化，请重新检查。'
-      duplicatePage.value = 0
-    }
-  }
-)
-
-function currentTargets(targets: Track[]): Track[] {
-  if (!props.currentTracks) return targets
-  const current = new Map(props.currentTracks.map((track) => [track.id, track]))
-  return targets.filter((track) => current.get(track.id) === track)
-}
-
-function preparePreview(failedOnly = false): void {
-  if (!canWrite.value) return
-  const failed = new Set(
-    operationResults.value
-      .filter((item) => item.status !== 'success')
-      .map((item) => tagWritePathKey(item.filePath))
-  )
-  const targets = failedOnly
-    ? selectedLocalTracks.value.filter((track) => failed.has(tagWritePathKey(track.filePath)))
-    : selectedLocalTracks.value
-  if (currentTargets(targets).length !== targets.length) {
-    operationError.value = '曲库数据已变化，请关闭编辑器并重新选择歌曲。'
-    return
-  }
-  if (targets.some((track) => track.subTrack || track.cueRange)) {
-    operationError.value = 'CUE 或容器子曲目共享源文件，请编辑原文件标签后重新扫描。'
-    return
-  }
-  const paths = new Map(targets.map((track) => [tagWritePathKey(track.filePath), track]))
-  if (paths.size > 1000) {
-    operationError.value = '每次最多写入 1000 个文件，请缩小选择范围。'
-    return
-  }
-  operationError.value = ''
-  previewTracks.value = [...paths.values()]
-  previewPatch.value = toPatch()
-  previewPage.value = 0
-}
-
-function beforeValue(track: Track, key: string): string {
-  if (key === 'coverData') return track.cover || track.coverSource ? '已有封面' : '无封面'
-  if (key === 'track') return String(track.trackNumber ?? '未记录')
-  if (key === 'disc') return String(track.discNumber ?? '未记录')
-  return String((track as unknown as Record<string, unknown>)[key] ?? '未记录')
-}
-
-watch(
-  () => props.tracks,
   (tracks) => {
-    if (tracks.length !== 1) {
-      form.value.title = undefined
-      form.value.artist = undefined
-      form.value.album = undefined
-      form.value.albumArtist = undefined
-      form.value.genre = undefined
-      return
+    if (tracks.length === 1) {
+      form.value.title = tracks[0].title
+      form.value.artist = tracks[0].artist
+      form.value.album = tracks[0].album
+      form.value.albumArtist = tracks[0].albumArtist ?? ''
+      form.value.genre = tracks[0].genre ?? ''
     }
-    const [track] = tracks
-    form.value.title = track.title
-    form.value.artist = track.artist
-    form.value.album = track.album
-    form.value.albumArtist = track.albumArtist ?? ''
-    form.value.genre = track.genre ?? ''
   },
   { immediate: true }
 )
@@ -202,6 +152,77 @@ function toPatch(): LocalLibraryTagPatch {
     genre: form.value.genre,
     coverData: form.value.coverData
   })
+}
+
+function beforeValue(track: CoreTrackView, key: string): string {
+  if (key === 'coverData') return '曲库封面'
+  if (key === 'track') return String(track.trackNumber ?? '未记录')
+  if (key === 'disc') return String(track.discNumber ?? '未记录')
+  return String((track as unknown as Record<string, unknown>)[key] ?? '未记录')
+}
+
+function selectionForIds(ids: string[], revision: number): LibrarySelectionRequest {
+  return {
+    query: { ids, contentRevision: revision, sort: 'insertion' },
+    total: ids.length,
+    ranges: ids.length ? [[0, ids.length]] : []
+  }
+}
+
+async function openSelection(request: LibrarySelectionRequest): Promise<void> {
+  const snapshot = (await core.command(
+    'library.selection.open',
+    request
+  )) as LibrarySelectionSnapshot
+  selectionId = snapshot.id
+  selectionSnapshot.value = snapshot
+  if (snapshot.fileCount > 1000) throw new Error('每次最多编辑 1000 个文件，请缩小选择范围。')
+  let cursor: number | null = 0
+  do {
+    const page = await core.query('library.selection.page', {
+      id: snapshot.id,
+      cursor,
+      projection: 'tracks'
+    })
+    if (page.rows.some(({ track }) => track.cueRange || track.mediaPart))
+      throw new Error('CUE 或容器子曲目共享源文件，请编辑原文件标签后重新扫描。')
+    cursor = page.nextCursor
+  } while (cursor !== null)
+  const files: CoreTrackView[] = []
+  cursor = 0
+  do {
+    const page = await core.query('library.selection.page', {
+      id: snapshot.id,
+      cursor,
+      projection: 'files'
+    })
+    files.push(...page.rows.map(({ track }) => track))
+    cursor = page.nextCursor
+  } while (cursor !== null)
+  previewTracks.value = files
+  if (previewTracks.value.length === 1 && props.tracks.length !== 1) {
+    const [track] = previewTracks.value
+    form.value.title = track.title
+    form.value.artist = track.artist
+    form.value.album = track.album
+    form.value.albumArtist = track.albumArtist ?? ''
+    form.value.genre = track.genre ?? ''
+  }
+}
+
+async function preparePreview(failedOnly = false): Promise<void> {
+  if (busy.value || !hasPatch.value || !core) return
+  operationError.value = ''
+  if (failedOnly) {
+    const ids = operationResults.value
+      .filter((item) => item.status !== 'success' && item.id)
+      .map((item) => item.id!)
+    const revision = (await core.query('library.metadata', {})).revision
+    await openSelection(selectionForIds(ids, revision))
+  }
+  if (!selectionId || !previewTracks.value.length) return
+  previewPatch.value = toPatch()
+  previewPage.value = 0
 }
 
 async function onCoverInput(event: Event): Promise<void> {
@@ -228,33 +249,21 @@ async function onCoverInput(event: Event): Promise<void> {
 }
 
 async function submitTagWrite(): Promise<void> {
-  const patch = previewPatch.value
-  const targets = previewTracks.value
-  if (!patch || !hasTagPatch(patch) || targets.length === 0 || busy.value) return
-  if (currentTargets(targets).length !== targets.length) {
-    previewPatch.value = null
-    operationError.value = '曲库数据已变化，请重新选择并预览。'
-    return
-  }
+  if (!previewPatch.value || !selectionId || busy.value || !core) return
   busy.value = true
   operationError.value = ''
-  operationResults.value = []
   try {
-    const result = await window.api.library.writeTags({
-      items: targets.map((track) => ({ filePath: track.filePath, ...patch }))
-    })
+    const result = (await core.command('library.tags.write', {
+      selectionId,
+      patch: toCorePatch(previewPatch.value)
+    })) as CoreTagResult
     operationResults.value = result.items
     resultsPage.value = 0
-    const currentPaths = new Set(
-      currentTargets(targets).map((track) => tagWritePathKey(track.filePath))
-    )
-    const successful = successfulTagPaths(result.items).filter((path) =>
-      currentPaths.has(tagWritePathKey(path))
-    )
-    if (successful.length > 0) emit('applied', successful, patch)
-    if (currentPaths.size !== targets.length)
-      operationError.value =
-        '文件写入已返回；曲库期间发生变化，请后台重扫刷新，未覆盖新的曲库标签。'
+    const ids = result.items
+      .filter((item) => item.status === 'success' && item.id)
+      .map((item) => item.id!)
+    if (ids.length) emit('applied', ids)
+    await closeSelection()
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : '标签写入失败'
   } finally {
@@ -268,8 +277,12 @@ async function restoreFromJournal(): Promise<void> {
   busy.value = true
   operationError.value = ''
   try {
-    const result = await window.api.library.restoreTags({ fromJournal: true })
+    const result = (await core.command('library.tags.restore', {
+      fromJournal: true
+    })) as CoreTagResult
     operationResults.value = result.items
+    resultsPage.value = 0
+    if (result.items.some((item) => item.status === 'success')) emit('applied', [])
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : '无法从恢复日志还原标签'
   } finally {
@@ -277,20 +290,58 @@ async function restoreFromJournal(): Promise<void> {
   }
 }
 
+async function closeSelection(): Promise<void> {
+  const id = selectionId
+  selectionId = undefined
+  selectionSnapshot.value = undefined
+  if (id) await core.command('library.selection.close', { id })
+}
+
+async function loadDuplicateGroup(index: number): Promise<void> {
+  if (!duplicateId || !duplicateStatus.value) return
+  const page = await core.query('library.duplicates.groups', {
+    id: duplicateId,
+    offset: index,
+    limit: 1
+  })
+  duplicateGroup.value = page.items[0] ?? null
+  duplicateGroupIndex.value = index
+  duplicateItemOffset.value = 0
+  await loadDuplicateItems()
+}
+
+async function loadDuplicateItems(): Promise<void> {
+  if (!duplicateId || !duplicateGroup.value) return
+  const page = await core.query('library.duplicates.items', {
+    id: duplicateId,
+    group: duplicateGroup.value.index,
+    offset: duplicateItemOffset.value,
+    limit: 50
+  })
+  duplicateItems.value = page.items
+}
+
 async function loadDuplicates(): Promise<void> {
   if (busy.value) return
   busy.value = true
   duplicateError.value = ''
-  const snapshot = props.currentTracks ?? props.tracks
   try {
-    const result = await window.api.library.detectDuplicates()
-    if (snapshot !== (props.currentTracks ?? props.tracks)) {
-      duplicateResult.value = null
-      duplicateError.value = '曲库已变化，请重新检查。'
-    } else {
-      duplicateResult.value = result
-      duplicatePage.value = 0
+    const started = (await core.command('library.duplicates.start', {})) as CoreDuplicatesStatus
+    duplicateId = started.id
+    let status = await core.query('library.duplicates.status', {})
+    while (
+      status &&
+      status.id === started.id &&
+      !['completed', 'failed', 'cancelled'].includes(status.state)
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      status = await core.query('library.duplicates.status', {})
     }
+    if (!status || status.id !== started.id || status.state !== 'completed')
+      throw new Error(status?.error || '重复歌曲检查未完成')
+    duplicateStatus.value = status
+    if (status.groups) await loadDuplicateGroup(0)
+    else duplicateGroup.value = null
   } catch (error) {
     duplicateError.value = error instanceof Error ? error.message : '重复歌曲检查失败'
   } finally {
@@ -300,7 +351,7 @@ async function loadDuplicates(): Promise<void> {
 
 function switchView(view: 'edit' | 'duplicates'): void {
   activeView.value = view
-  if (view === 'duplicates' && !duplicateResult.value) void loadDuplicates()
+  if (view === 'duplicates' && !duplicateStatus.value) void loadDuplicates()
 }
 
 function focusableElements(): HTMLElement[] {
@@ -311,19 +362,16 @@ function focusableElements(): HTMLElement[] {
     )
   ].filter((element) => !element.hasAttribute('hidden') && element.getClientRects().length > 0)
 }
-
 function restoreTriggerFocus(): void {
   const target = focusRestoreTarget
   focusRestoreTarget = null
   if (target?.isConnected) target.focus()
 }
-
 function requestClose(): void {
   if (busy.value) return
   emit('close')
   void nextTick(restoreTriggerFocus)
 }
-
 function onDialogKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault()
@@ -331,9 +379,8 @@ function onDialogKeydown(event: KeyboardEvent): void {
     return
   }
   if (event.key !== 'Tab') return
-
   const focusable = focusableElements()
-  if (focusable.length === 0) {
+  if (!focusable.length) {
     event.preventDefault()
     return
   }
@@ -348,7 +395,6 @@ function onDialogKeydown(event: KeyboardEvent): void {
   event.preventDefault()
   focusable[nextIndex].focus()
 }
-
 function onTabKeydown(event: KeyboardEvent): void {
   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
   event.preventDefault()
@@ -356,13 +402,52 @@ function onTabKeydown(event: KeyboardEvent): void {
   switchView(nextView)
   void nextTick(() => document.getElementById(`tag-manager-${nextView}-tab`)?.focus())
 }
-
+function previousDuplicateItems(): void {
+  duplicateItemOffset.value -= 50
+  void loadDuplicateItems()
+}
+function nextDuplicateItems(): void {
+  duplicateItemOffset.value += 50
+  void loadDuplicateItems()
+}
+async function initialize(): Promise<void> {
+  await core.attach()
+  if (props.selection) await openSelection(props.selection)
+  else if (localTracks.value.length) {
+    const revision = (await core.query('library.metadata', {})).revision
+    await openSelection(
+      selectionForIds(
+        props.tracks
+          .filter((track) => track.source === 'local' || !track.source)
+          .map((track) => track.id),
+        revision
+      )
+    )
+  }
+  if (activeView.value === 'duplicates') await loadDuplicates()
+}
 onMounted(() => {
   const activeElement = document.activeElement
   focusRestoreTarget = activeElement instanceof HTMLElement ? activeElement : null
   void nextTick(() => closeButtonRef.value?.focus())
-  if (activeView.value === 'duplicates') void loadDuplicates()
+  void initialize().catch((error) => {
+    operationError.value = error instanceof Error ? error.message : String(error)
+  })
 })
+onBeforeUnmount(() => {
+  void closeSelection()
+})
+
+function toCorePatch(patch: LocalLibraryTagPatch): CoreTagPatch {
+  const { coverData, ...rest } = patch
+  return { ...rest, ...(coverData ? { coverBase64: bytesToBase64(coverData) } : {}) }
+}
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  return btoa(binary)
+}
 </script>
 
 <template>
@@ -377,7 +462,7 @@ onMounted(() => {
     <header class="tag-manager-header">
       <div>
         <h3 id="tag-manager-title">标签与重复歌曲</h3>
-        <p>{{ selectedLocalTracks.length }} 首本地歌曲已选中</p>
+        <p>{{ selectedLocalCount }} 首本地歌曲已选中</p>
       </div>
       <button
         ref="closeButtonRef"
@@ -463,7 +548,7 @@ onMounted(() => {
           从恢复日志还原
         </button>
         <button type="submit" class="tag-primary-button" :disabled="!canWrite" :aria-busy="busy">
-          {{ busy ? '正在写入' : `预览 ${selectedLocalTracks.length} 首的修改` }}
+          {{ busy ? '正在写入' : `预览 ${selectedLocalCount} 首的修改` }}
         </button>
         <button
           v-if="summary.failedCount || summary.rolledBackCount || summary.notAttemptedCount"
@@ -476,8 +561,8 @@ onMounted(() => {
       </div>
       <section v-if="previewPatch" class="tag-preview" aria-label="标签修改预览">
         <p>请核对前后值。未填写的字段保持原值，封面写入后请后台重扫刷新。</p>
-        <article v-for="track in previewRows" :key="track.filePath">
-          <strong>{{ track.filePath }}</strong>
+        <article v-for="track in previewRows" :key="track.id">
+          <strong>{{ track.title }} · {{ track.artist }} · {{ track.album }}</strong>
           <p v-for="(value, field) in previewPatch" :key="field">
             {{ tagFieldLabels[field] }}：{{ beforeValue(track, field) }} →
             {{ field === 'coverData' ? form.coverName : value }}
@@ -515,24 +600,48 @@ onMounted(() => {
       </div>
       <p v-if="duplicateError" class="tag-field-error" role="alert">{{ duplicateError }}</p>
       <p v-else-if="busy" class="tag-help">正在读取本地音乐库并计算重复项。</p>
-      <p v-else-if="duplicateResult && reviewGroups.length === 0" class="tag-help">
+      <p v-else-if="duplicateStatus && duplicateStatus.groups === 0" class="tag-help">
         未发现需要复核的重复歌曲。
       </p>
-      <div v-else class="duplicate-groups">
-        <article v-for="review in visibleDuplicates" :key="review.key" class="duplicate-group">
-          <header>
-            <strong>{{ review.label }}</strong>
-          </header>
-          <p>{{ review.track.title || review.track.filePath }}</p>
-          <small>{{ review.track.artist }} · {{ review.track.filePath }}</small>
+      <div v-else-if="duplicateGroup" class="duplicate-groups">
+        <header>
+          <strong>{{ duplicateGroupLabel }}</strong>
+          <small
+            >{{ duplicateGroup.total }} 个候选 ·
+            {{ duplicateGroup.action === 'mergeSuggestion' ? '精确匹配建议' : '仅供复核' }}</small
+          >
+        </header>
+        <article v-for="item in duplicateItems" :key="item.id" class="duplicate-group">
+          <p>{{ item.title || item.fileName }}</p>
+          <small>{{ item.artist }} · {{ item.fileName }}</small>
         </article>
-        <button :disabled="duplicatePage === 0" @click="duplicatePage--">上一页</button>
-        <span>{{ duplicateRows.length }} 个候选 · 第 {{ duplicatePage + 1 }} 页</span>
-        <button
-          :disabled="(duplicatePage + 1) * 50 >= duplicateRows.length"
-          @click="duplicatePage++"
+        <button :disabled="duplicateItemOffset === 0" @click="previousDuplicateItems">
+          上一页候选
+        </button>
+        <span
+          >{{ duplicateItemOffset + 1 }}–{{
+            Math.min(duplicateItemOffset + duplicateItems.length, duplicateGroup.total)
+          }}
+          / {{ duplicateGroup.total }}</span
         >
-          下一页
+        <button
+          :disabled="duplicateItemOffset + duplicateItems.length >= duplicateGroup.total"
+          @click="nextDuplicateItems"
+        >
+          下一页候选
+        </button>
+        <button
+          :disabled="duplicateGroupIndex === 0"
+          @click="loadDuplicateGroup(duplicateGroupIndex - 1)"
+        >
+          上一组
+        </button>
+        <span>第 {{ duplicateGroupIndex + 1 }} / {{ duplicateStatus?.groups }} 组</span>
+        <button
+          :disabled="duplicateGroupIndex + 1 >= (duplicateStatus?.groups ?? 0)"
+          @click="loadDuplicateGroup(duplicateGroupIndex + 1)"
+        >
+          下一组
         </button>
       </div>
     </section>
@@ -542,11 +651,11 @@ onMounted(() => {
       <ul>
         <li
           v-for="result in resultRows"
-          :key="`${result.filePath}:${result.status}`"
+          :key="`${result.name}:${result.status}`"
           :class="`tag-result-${result.status}`"
         >
           <strong>{{ result.status }}</strong
-          ><span :title="result.filePath">{{ result.filePath }}</span
+          ><span :title="result.name">{{ result.name }}</span
           ><small v-if="result.message">{{ result.message }}</small>
         </li>
       </ul>

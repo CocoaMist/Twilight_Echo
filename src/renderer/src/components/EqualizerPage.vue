@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { createCoreAudioUi } from '@renderer/stores/player/coreAudioUi.ts'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import type { EqDisplayRange } from '@renderer/utils/eqViewport'
 import { mergeEqualizerPatch } from '@renderer/utils/equalizerSettingsPatch'
 import { useEqualizerHistory } from '@renderer/composables/useEqualizerHistory'
@@ -19,7 +21,6 @@ import FrequencyResponseToolbar from '@renderer/components/equalizer/FrequencyRe
 import GraphicEqPanel from '@renderer/components/equalizer/GraphicEqPanel.vue'
 import {
   EQ_RESPONSE_DEFAULT_SAMPLE_RATE,
-  computeAutoPreampDb,
   computeBandResponse,
   computeCompositeResponse,
   computeEstimatedSourceDeviation,
@@ -55,7 +56,10 @@ import type {
   HeadphoneCompensationSettings
 } from '@renderer/types/settings'
 import type { DspSceneState } from '../../../shared/dspGraph.ts'
+import type { OpraProfile, OpraCatalogStatus } from '../../../shared/coreOpra.ts'
 
+const core = useCoreConnection()
+const coreAudio = createCoreAudioUi(core)
 const props = defineProps<{
   embedded?: boolean
   visible?: boolean
@@ -67,22 +71,16 @@ type EqualizerTab = EqMode
 type ResponseView = 'dsp' | 'headphone'
 type HeadphoneCurveKey = 'source' | 'target' | 'individual' | 'combined' | 'corrected'
 type EqApplyFeedback = 'idle' | 'editing' | 'applying' | 'applied' | 'failed'
-type OpraProfile = Awaited<ReturnType<typeof window.api.opra.search>>[number]
-type OpraCatalogStatus = Awaited<ReturnType<typeof window.api.opra.getStatus>>
-
 const audioOutputDspStore = useAudioOutputDspStore()
 const playerStore = usePlayerStore()
-const { audioProcessing, outputInfo, audioEngineReady } = storeToRefs(audioOutputDspStore)
+const { audioProcessing: projectedAudioProcessing, outputInfo, audioEngineReady } = storeToRefs(audioOutputDspStore)
+const audioProcessing = ref<AudioProcessingSettings>(structuredClone(projectedAudioProcessing.value))
 const { visualizationData, isPlaying, acquireVisualizationConsumer } = playerStore
 const { setAudioProcessing } = audioOutputDspStore
 // The spectrum overlay and level meters read visualizationData while this page
 // is open; the store poll only runs while at least one consumer holds a handle.
 let releaseVisualizationConsumer: (() => void) | null = null
 let visualizationConsumerPoints = 0
-
-const autoPreampStorageKey = 'twilight-echo:eq-auto-preamp:v1'
-const manualPreampStorageKey = 'twilight-echo:eq-manual-preamp:v1'
-let manualPreampBeforeAuto: number | null = null
 
 const activeTab = ref<EqualizerTab>('graphic')
 const autoPreampEnabled = ref(false)
@@ -313,77 +311,26 @@ const headphoneBandResponsePaths = computed(() =>
   computeBandResponsePaths(displayEqBands.value, displayEqMode.value)
 )
 
-// Auto gain compensation target: offset the highest boost of the band-only
-// response by a 0.5 dB safety margin, clamped to the preamp slider range.
-const autoPreampTargetDb = computed(() =>
-  computeAutoPreampDb(audioProcessing.value.eqBands, {
-    sampleRate: responseSampleRate.value,
-    mode: audioProcessing.value.eqMode,
-    minFrequency: GRAPH_MIN_FREQUENCY,
-    maxFrequency: GRAPH_MAX_FREQUENCY,
-    marginDb: 0.5,
-    minPreampDb: -24,
-    maxPreampDb: 24
-  })
-)
-
-function loadAutoPreampPreference(): void {
-  try {
-    autoPreampEnabled.value = globalThis.localStorage?.getItem(autoPreampStorageKey) === '1'
-    const saved = globalThis.localStorage?.getItem(manualPreampStorageKey)
-    const value = saved?.trim() ? Number(saved) : NaN
-    manualPreampBeforeAuto =
-      autoPreampEnabled.value && Number.isFinite(value) && value >= -24 && value <= 24
-        ? value
-        : null
-  } catch {
-    // A blocked localStorage must not break the equalizer page.
-  }
-}
-
-function saveAutoPreampPreference(enabled: boolean): void {
-  try {
-    if (enabled && manualPreampBeforeAuto !== null)
-      globalThis.localStorage?.setItem(manualPreampStorageKey, String(manualPreampBeforeAuto))
-    else globalThis.localStorage?.removeItem(manualPreampStorageKey)
-    globalThis.localStorage?.setItem(autoPreampStorageKey, enabled ? '1' : '0')
-  } catch {
-    // Persisting the toggle is best-effort only.
-  }
+async function loadAutoPreampPreference(): Promise<void> {
+  autoPreampEnabled.value = (await core.query('audio.dsp', {})).autoPreamp?.enabled ?? false
 }
 
 async function toggleAutoPreamp(): Promise<void> {
   finishParametricEdits()
   commitChain = commitChain.then(async () => {
-    const enabled = !autoPreampEnabled.value
-    const previousManual = manualPreampBeforeAuto
-    if (enabled) manualPreampBeforeAuto = audioProcessing.value.eqPreamp
-    const preamp = enabled
-      ? autoPreampTargetDb.value
-      : (manualPreampBeforeAuto ?? audioProcessing.value.eqPreamp)
-    autoPreampEnabled.value = enabled
-    await runEqApply(() => updateAudioProcessing({ eqPreamp: preamp }))
-    if (autoPreampEnabled.value !== enabled) return
-    if (eqApplyFeedback.value === 'applied') {
-      if (!enabled) manualPreampBeforeAuto = null
-      saveAutoPreampPreference(enabled)
-    } else {
-      autoPreampEnabled.value = !enabled
-      manualPreampBeforeAuto = previousManual
-    }
+    await runEqApply(async () => {
+      const state = await core.query('audio.dsp', {})
+      await core.command('audio.dsp.edit', { revision: state.revision, edit: { kind: 'autoPreamp', enabled: !autoPreampEnabled.value } })
+      await refreshEqualizerProjection()
+    })
   })
   await commitChain
 }
 
-async function applyAutoPreamp(): Promise<void> {
-  if (!autoPreampEnabled.value) return
-  commitChain = commitChain.then(async () => {
-    if (!autoPreampEnabled.value) return
-    const target = autoPreampTargetDb.value
-    if (Math.abs(audioProcessing.value.eqPreamp - target) < 0.05) return
-    await runEqApply(() => updateAudioProcessing({ eqPreamp: target }))
-  })
-  await commitChain
+async function refreshEqualizerProjection(): Promise<void> {
+  await audioOutputDspStore.refreshAudioOutputState()
+  audioProcessing.value = structuredClone(projectedAudioProcessing.value)
+  await loadAutoPreampPreference()
 }
 
 let loadedSceneId: string | null = null
@@ -403,8 +350,8 @@ async function loadAppSettings(): Promise<void> {
       ...settings.headphoneCompensation,
       bands: cloneBands(settings.headphoneCompensation?.bands ?? [])
     }
-    audioOutputDspStore.applyAudioProcessingState(appSettings.value.audioProcessing)
-    const dspState = await window.api.audioEngine.getDspSceneState()
+    audioProcessing.value = structuredClone(appSettings.value.audioProcessing)
+    const dspState = await coreAudio.getDspSceneState()
     applyActiveSceneEqToEditor(dspState)
     if (audioProcessing.value.eqMode === 'parametric') {
       activeTab.value = 'parametric'
@@ -437,81 +384,29 @@ function applyActiveSceneEqToEditor(dspState: DspSceneState): void {
     eqPreamp: typeof params.preampDb === 'number' ? params.preampDb : 0,
     eqBands: Array.isArray(params.bands) ? (params.bands as EqualizerBand[]) : []
   })
-  audioOutputDspStore.applyAudioProcessingState(settings)
+  audioProcessing.value = structuredClone(settings)
   if (appSettings.value) appSettings.value.audioProcessing = settings
-}
-
-async function syncActiveSceneEq(nextSettings: AudioProcessingSettings): Promise<void> {
-  const dspState = await window.api.audioEngine.getDspSceneState()
-  const scene = dspState.scenes.find((item) => item.id === dspState.activeSceneId)
-  if (!scene) throw new Error('当前没有活动 DSP 场景。')
-  if (props.embedded && loadedSceneId && scene.id !== loadedSceneId)
-    throw new Error('活动场景已改变，请等待均衡器重新载入后再调节。')
-  let node = scene.graph.nodes.find((item) => item.type === 'equalizer')
-  if (!node) {
-    node = { id: `equalizer-${crypto.randomUUID()}`, type: 'equalizer', enabled: false, params: {} }
-    const tail = scene.graph.nodes.findIndex(
-      (item) => item.type === 'nativePlugin' && item.pluginAbiVersion === 1
-    )
-    scene.graph.nodes.splice(tail < 0 ? scene.graph.nodes.length : tail, 0, node)
-  }
-  // OPRA contributes to the equalizer node but must not override the user's EQ
-  // bypass. Preserve its parameters while disabled so re-enabling EQ restores
-  // the same stacked response without continuing to process audio in bypass.
-  node.enabled = nextSettings.dspEnabled && nextSettings.eqEnabled
-  node.params = {
-    ...node.params,
-    mode: opraCompensationEnabled.value ? 'parametric' : nextSettings.eqMode,
-    preampDb: opraCompensationEnabled.value
-      ? nextSettings.eqPreamp + headphoneCompensation.value.preampDb
-      : nextSettings.eqPreamp,
-    bands: opraCompensationEnabled.value
-      ? [...cloneBands(headphoneCompensation.value.bands), ...cloneBands(nextSettings.eqBands)]
-      : cloneBands(nextSettings.eqBands)
-  }
-  const next = await window.api.audioEngine.setDspScenes(dspState.scenes, dspState.pinnedSceneId)
-  if (
-    props.embedded &&
-    next.requiresPcmFallback &&
-    !next.dsdPcmFallbackApplied &&
-    (props.hostDocument?.defaultView ?? window).confirm(
-      '均衡器已保存。停止 DSD Direct / DoP 直通并转换为 PCM 以运行 DSP？'
-    )
-  )
-    await window.api.audioEngine.applyDspScene(next.pinnedSceneId, true)
 }
 
 async function updateAudioProcessing(patch: Partial<AudioProcessingSettings>): Promise<void> {
   const nextSettings = normalizeAudioProcessing(mergeEqualizerPatch(audioProcessing.value, patch))
-  // Auto gain compensation follows band/mode edits in the same engine update
-  // so the compensated preamp reaches the DSP scene without a second apply.
-  if (autoPreampEnabled.value && patch.eqPreamp === undefined) {
-    nextSettings.eqPreamp = computeAutoPreampDb(nextSettings.eqBands, {
-      sampleRate: responseSampleRate.value,
-      mode: nextSettings.eqMode,
-      minFrequency: GRAPH_MIN_FREQUENCY,
-      maxFrequency: GRAPH_MAX_FREQUENCY,
-      marginDb: 0.5,
-      minPreampDb: -24,
-      maxPreampDb: 24
-    })
-  }
+  // Keep an explicit gain edit manual even if an earlier Core reply re-enabled auto gain.
+  if (patch.eqPreamp !== undefined) autoPreampEnabled.value = false
   await eqHistory.commit(nextSettings)
 }
 
 async function applyEqualizerSnapshot(snapshot: EqSnapshot): Promise<void> {
-  const nextSettings = normalizeAudioProcessing(
-    mergeEqualizerPatch(audioProcessing.value, snapshot)
-  )
   if (props.embedded && loadedSceneId) {
-    const current = await window.api.audioEngine.getDspSceneState()
+    const current = await coreAudio.getDspSceneState()
     if (current.activeSceneId !== loadedSceneId)
       throw new Error('活动场景已改变，请等待均衡器重新载入后再调节。')
   }
-  await setAudioProcessing(nextSettings, { throwOnError: true })
-  await syncActiveSceneEq(nextSettings)
-  activeTab.value = nextSettings.eqMode
-  const indices = selectedBandIndices.value.filter((index) => nextSettings.eqBands[index])
+  const edit: Partial<AudioProcessingSettings> = { ...snapshot, eqBands: cloneBands(snapshot.eqBands) }
+  if (autoPreampEnabled.value) delete edit.eqPreamp
+  await setAudioProcessing(edit, { throwOnError: true })
+  await refreshEqualizerProjection()
+  activeTab.value = audioProcessing.value.eqMode
+  const indices = selectedBandIndices.value.filter((index) => audioProcessing.value.eqBands[index])
   selectBand(
     indices.includes(selectedBandIndex.value) ? selectedBandIndex.value : (indices.at(-1) ?? -1),
     indices
@@ -519,7 +414,7 @@ async function applyEqualizerSnapshot(snapshot: EqSnapshot): Promise<void> {
   if (appSettings.value) {
     appSettings.value = {
       ...appSettings.value,
-      audioProcessing: nextSettings
+      audioProcessing: structuredClone(audioProcessing.value)
     }
   }
 }
@@ -575,11 +470,11 @@ function flushStagedEdit(): void {
   const preamp = pendingPreamp ?? audioProcessing.value.eqPreamp
   pendingBandPatches.clear()
   pendingPreamp = null
-  audioOutputDspStore.applyAudioProcessingState({
+  audioProcessing.value = {
     ...audioProcessing.value,
     eqPreamp: preamp,
     eqBands: bands
-  })
+  }
   if (appSettings.value) {
     appSettings.value = { ...appSettings.value, audioProcessing: audioProcessing.value }
   }
@@ -609,8 +504,6 @@ function stageBandPatches(changes: EqBandPatch[]): void {
 function stagePreamp(value: number): void {
   if (autoPreampEnabled.value) {
     autoPreampEnabled.value = false
-    manualPreampBeforeAuto = null
-    saveAutoPreampPreference(false)
   }
   pendingPreamp = clampNumber(value, -24, 24, audioProcessing.value.eqPreamp)
   scheduleStagedFlush()
@@ -857,7 +750,7 @@ async function importFrequencyResponse(): Promise<void> {
   frequencyResponseImporting.value = true
   frequencyResponseError.value = ''
   try {
-    const imported = await window.api.audioEngine.importFrequencyResponse()
+    const imported = await coreAudio.importFrequencyResponse()
     if (!imported) return
     importedFrequencyResponse.value = imported
     responseView.value = 'headphone'
@@ -887,7 +780,7 @@ function toggleHeadphoneCurve(curve: HeadphoneCurveKey): void {
 
 async function loadOpraStatus(): Promise<void> {
   try {
-    opraStatus.value = await window.api.opra.getStatus()
+    opraStatus.value = await core.query('opra.status', {})
   } catch (err) {
     opraError.value = err instanceof Error ? err.message : String(err)
   }
@@ -902,8 +795,8 @@ async function searchOpraProfiles(query: string): Promise<void> {
   opraSearching.value = true
   opraError.value = ''
   try {
-    opraResults.value = await window.api.opra.search(trimmed)
-    opraStatus.value = await window.api.opra.getStatus()
+    opraResults.value = await core.query('opra.search', { query: trimmed })
+    opraStatus.value = await core.query('opra.status', {})
   } catch (err) {
     opraError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -915,7 +808,7 @@ async function refreshOpraCatalog(): Promise<void> {
   opraRefreshing.value = true
   opraError.value = ''
   try {
-    opraStatus.value = await window.api.opra.refresh()
+    opraStatus.value = await core.command('opra.refresh', {}) as OpraCatalogStatus
     await searchOpraProfiles(opraQuery.value)
   } catch (err) {
     opraError.value = err instanceof Error ? err.message : String(err)
@@ -929,7 +822,7 @@ async function applyOpraProfile(profile: OpraProfile): Promise<void> {
   opraApplyingEqId.value = profile.eqId
   opraError.value = ''
   try {
-    const fullProfile = (await window.api.opra.getProfile(profile.eqId)) ?? profile
+    const fullProfile = (await core.query('opra.profile', { id: profile.eqId })) ?? profile
     if (!fullProfile.applicable) {
       opraError.value = `该 profile 包含暂不支持的滤波器：${fullProfile.unsupportedBandTypes.join(', ')}`
       return
@@ -949,7 +842,7 @@ async function applyOpraProfile(profile: OpraProfile): Promise<void> {
       }
     })
     appSettings.value = { ...appSettings.value, ...savedSettings }
-    await syncActiveSceneEq(audioProcessing.value)
+    await refreshEqualizerProjection()
   } catch (err) {
     opraError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -970,7 +863,7 @@ async function disableOpraCompensation(): Promise<void> {
       }
     })
     appSettings.value = { ...appSettings.value, ...savedSettings }
-    await syncActiveSceneEq(audioProcessing.value)
+    await refreshEqualizerProjection()
   } catch (err) {
     opraError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -1122,7 +1015,7 @@ watch(
 
 onMounted(() => {
   spectrumPollingMounted = true
-  loadAutoPreampPreference()
+  void loadAutoPreampPreference()
   void loadAppSettings().then(() => {
     eqHistory.reset(audioProcessing.value)
     historyLoading.value = false
@@ -1141,18 +1034,9 @@ onBeforeUnmount(() => {
   if (pendingBandFrame !== 0) window.cancelAnimationFrame(pendingBandFrame)
 })
 
-// Keep the compensated preamp in sync when bands change through paths that
-// bypass updateAudioProcessing (preset apply on load, external scene edits).
-watch(autoPreampTargetDb, () => {
-  if (
-    !autoPreampEnabled.value ||
-    historyLoading.value ||
-    historyBusy.value ||
-    eqApplyFeedback.value === 'editing' ||
-    eqApplyFeedback.value === 'applying'
-  )
-    return
-  void applyAutoPreamp()
+watch(projectedAudioProcessing, value => {
+  if (eqApplyFeedback.value !== 'editing' && eqApplyFeedback.value !== 'applying')
+    audioProcessing.value = structuredClone(value)
 })
 
 watch(
@@ -1224,7 +1108,6 @@ defineExpose({
           role="button"
           tabindex="0"
           :aria-pressed="activeTab === tab.key"
-          :title="embedded ? tab.desc : undefined"
           :class="{ active: activeTab === tab.key }"
           @click="switchTab(tab.key)"
           @keydown.enter.prevent="switchTab(tab.key)"
@@ -1233,21 +1116,9 @@ defineExpose({
           <i :class="tab.icon"></i>
           <div class="nav-info">
             <span>{{ tab.label }}</span
-            ><small v-if="!embedded">{{ tab.desc }}</small>
+            ><small>{{ tab.desc }}</small>
           </div>
         </div>
-        <button
-          v-if="embedded"
-          type="button"
-          class="embedded-eq-power"
-          role="switch"
-          aria-label="启用均衡器"
-          :aria-checked="audioProcessing.eqEnabled"
-          @click="toggleParametricEq"
-        >
-          <i class="pi pi-power-off"></i
-          >{{ audioProcessing.eqEnabled ? '均衡器已启用' : '均衡器已旁路' }}
-        </button>
       </aside>
 
       <main class="eq-content">
@@ -1328,6 +1199,23 @@ defineExpose({
           <button type="button" class="eq-command" :disabled="saving" @click="saveAsCurrentPreset">
             另存为
           </button>
+          <!-- The workbench hides the page header, so its EQ switch moves into the toolbar. -->
+          <div
+            v-if="embedded"
+            class="master-switch toolbar-master-switch"
+            data-te-interactive
+            role="switch"
+            tabindex="0"
+            aria-label="启用均衡器"
+            :aria-checked="audioProcessing.eqEnabled"
+            :class="{ off: !audioProcessing.eqEnabled }"
+            @click="toggleParametricEq()"
+            @keydown.enter.prevent="toggleParametricEq()"
+            @keydown.space.prevent="toggleParametricEq()"
+          >
+            {{ audioProcessing.eqEnabled ? '已启用' : '已关闭' }}
+            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+          </div>
         </div>
 
         <div v-if="activeTab === 'graphic'" class="tab-pane active">
@@ -1354,7 +1242,6 @@ defineExpose({
           </header>
 
           <OpraEqPanel
-            :initially-open="!embedded"
             :compensation="headphoneCompensation"
             :status="opraStatus"
             :searching="opraSearching"
@@ -1420,7 +1307,6 @@ defineExpose({
         <div v-else-if="activeTab === 'parametric'" class="tab-pane active parametric-pane">
           <ParametricEqWorkspace
             ref="parametricWorkspaceRef"
-            :docked-inspector="embedded"
             :host-document="hostDocument"
             :bands="audioProcessing.eqBands"
             :selected-index="selectedBandIndex"
@@ -1607,7 +1493,6 @@ defineExpose({
               <span v-if="opraCompensationEnabled">{{ headphoneCompensation.productName }}</span>
             </summary>
             <OpraEqPanel
-              :initially-open="!embedded"
               :compensation="headphoneCompensation"
               :status="opraStatus"
               :searching="opraSearching"
@@ -2578,45 +2463,162 @@ defineExpose({
 </style>
 
 <style scoped>
+/*
+ * Inside the DSP workbench the page keeps its standalone look: glass container,
+ * 240px navigation, warm parametric instrument and floating band panel. Only
+ * what a full-window overlay needs (fixed position, title-bar clearance, its own
+ * backdrop) is replaced, and the body typography is re-established so the
+ * workbench's denser type scale does not leak in.
+ */
 .eq-page.eq-embedded {
   position: relative;
   inset: auto;
   z-index: auto;
-  height: 100%;
-  min-height: 550px;
+  height: auto;
+  overflow: visible;
+  color: var(--te-neutral-900);
   background: transparent;
   backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  font-family: var(--te-font-sans);
+  font-size: var(--te-font-size-body);
+  font-feature-settings:
+    'kern' 1,
+    'liga' 1,
+    'calt' 1,
+    'ss01' 1;
+  line-height: 1.65;
+  letter-spacing: 0;
+  -webkit-font-smoothing: var(--te-font-smoothing, auto);
 }
-.eq-embedded .eq-container,
-.eq-page.eq-embedded.is-parametric .eq-container {
-  height: 100%;
-  min-height: 0;
-  padding: 0;
-  background: transparent;
-  backdrop-filter: none;
-  border-radius: 0;
-}
-.eq-page.eq-embedded .eq-content {
-  padding: 12px 0 24px;
+.eq-embedded .eq-container {
+  height: auto;
+  min-height: 640px;
+  overflow: visible;
+  border: 1px solid var(--te-glass-border);
+  border-radius: 24px;
 }
 .eq-embedded .eq-sidebar {
-  padding-top: 16px;
+  padding-top: 32px;
+  border-radius: 24px 0 0 24px;
+}
+.eq-embedded .eq-content {
+  overflow: visible;
+}
+.eq-page.eq-embedded.is-parametric .eq-container {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
 }
-.eq-embedded :deep(.parametric-workspace) {
-  --eq-surface: var(--te-app-bg);
-  --eq-text: var(--te-settings-text);
-  --eq-text-muted: var(--te-settings-text-muted);
+.eq-page.eq-embedded.is-parametric .eq-content {
+  padding: 0;
+  gap: 20px;
 }
+.eq-page.eq-embedded.is-parametric .parametric-pane {
+  gap: 20px;
+}
+.eq-embedded .parametric-pane > :deep(.parametric-workspace) {
+  flex: none;
+  min-height: clamp(560px, calc(100dvh - 300px), 820px);
+}
+.toolbar-master-switch {
+  margin-left: auto;
+  padding: 6px 12px 6px 16px;
+  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+}
+.toolbar-master-switch .toggle-track {
+  width: 40px;
+  height: 22px;
+}
+.toolbar-master-switch .toggle-thumb {
+  width: 18px;
+  height: 18px;
+}
+
+/* Workbench-only additions borrow the page's card language. */
+.eq-embedded .parametric-pane > .eq-band-table-scroll,
+.workbench-opra {
+  border: 1px solid var(--te-card-border);
+  border-radius: 20px;
+  background: var(--te-card-bg);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--te-neutral-900) 3%, transparent);
+}
+.eq-embedded .parametric-pane > .eq-band-table-scroll {
+  padding: 4px 24px 16px;
+}
+.eq-embedded .eq-band-table-scroll :deep(caption) {
+  color: var(--te-neutral-500);
+  font-weight: 600;
+}
+.eq-embedded .eq-band-table-scroll :deep(thead th) {
+  white-space: nowrap;
+}
+.eq-embedded .eq-band-table-scroll :deep(:is(input:not([type='checkbox']), select)) {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--te-card-border);
+  border-radius: 10px;
+  background: var(--te-card-bg);
+  color: var(--te-neutral-900);
+  font-weight: 600;
+  outline: none;
+}
+.eq-embedded .eq-band-table-scroll :deep(:is(input, select):focus-visible) {
+  border-color: var(--te-primary-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--te-primary-500) 12%, transparent);
+}
+.eq-embedded .eq-band-table-scroll :deep(.icon-button) {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--te-neutral-500);
+}
+.eq-embedded .eq-band-table-scroll :deep(.icon-button:hover:not(:disabled)) {
+  background: var(--te-hover-bg);
+  color: var(--te-danger-soft-fg);
+}
+.workbench-opra {
+  overflow: hidden;
+}
+.workbench-opra > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 24px;
+  font-size: calc(var(--te-font-size-body, 14px) * 16 / 14);
+  font-weight: 800;
+  cursor: pointer;
+}
+.workbench-opra > summary:hover {
+  background: var(--te-hover-bg);
+}
+.workbench-opra > summary span {
+  color: var(--te-neutral-500);
+  font-size: calc(var(--te-font-size-body, 14px) * 13 / 14);
+  font-weight: 500;
+}
+.workbench-opra > .opra-panel {
+  border: 0;
+  border-top: 1px solid var(--te-card-border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
 @media (max-width: 800px) {
-  .eq-page.eq-embedded .eq-container {
+  .eq-page.eq-embedded:not(.is-parametric) .eq-container {
     flex-direction: column;
   }
   .eq-embedded .eq-sidebar {
     width: 100%;
     flex-direction: row;
     flex-wrap: wrap;
-    padding: 0;
+    padding: 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--te-glass-border);
+    border-radius: 24px 24px 0 0;
   }
 }
 </style>

@@ -238,6 +238,7 @@ window.fixtureRequire = id => {
   if (id.endsWith('/ThemeIcon.vue')) return { default: window.ThemeIcon };
   if (id.includes('shared/theme')) return { THEME_ICON_SLOT_REGISTRY: window.themeIconRegistry };
   if (id.includes('titleBarIconPaths')) return window.titleBarIconPaths;
+  if (id.includes('themeIconRuntime')) return { useThemeIconImage: () => ({ imageUrl: ref(null), customReady: ref(false), failed: ref(false), imageLoaded() {}, imageFailed() {} }) };
   if (id.endsWith('.vue')) return { default: { render: () => h('span') } };
   if (id.includes('useProviderStore')) return window.providerStoreModule;
   if (id.includes('visibilityPolling')) return window.visibilityPolling;

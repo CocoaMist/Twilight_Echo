@@ -1,22 +1,20 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useThemeStore } from '@renderer/stores/useThemeStore'
-import { useMusicStore } from '@renderer/stores/useMusicStore'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import type { StreamingPageTab } from '@renderer/app/navigationPages'
 import { createLibraryHomeStatus } from '@renderer/stores/library/libraryHomeStatus.ts'
 
 const OnlineDashboard = defineAsyncComponent(() => import('./OnlineDashboard.vue'))
 const props = defineProps<{ preview?: boolean }>()
-const { tracks } = useMusicStore()
+const core = useCoreConnection()
 const home = createLibraryHomeStatus({
-  getStorageMode: () => window.api.library.getStorageMode(),
-  api: { getMetadata: () => window.api.library.database.getMetadata() }
+  getStorageMode: async () => 'sqlite',
+  api: { getMetadata: () => core.query('library.metadata', {}) }
 })
 const homeState = home.state
-const emptyLibrary = computed(() =>
-  homeState.value.mode === 'json'
-    ? tracks.value.length === 0
-    : homeState.value.mode === 'sqlite' && homeState.value.total === 0
+const emptyLibrary = computed(
+  () => homeState.value.mode === 'sqlite' && homeState.value.total === 0
 )
 const homePending = computed(
   () =>
@@ -25,16 +23,26 @@ const homePending = computed(
     (homeState.value.mode === null ||
       (homeState.value.mode === 'sqlite' && homeState.value.total === null))
 )
-let unsubscribe: (() => void) | undefined
+let stopRevision: (() => void) | undefined
 onMounted(() => {
   if (props.preview) return
-  unsubscribe = window.api.library.onChanged((change) => {
-    home.refresh(change?.kind === 'scan' ? change.update.libraryRevision : change?.revision)
-  })
-  home.refresh()
+  stopRevision = watch(
+    () => {
+      const state = core.state.value
+      return state?.phase === 'ready' && state.libraryRevision !== null
+        ? `${state.epoch}:${state.libraryRevision}`
+        : ''
+    },
+    (key) => {
+      if (!key) return
+      const revision = core.state.value?.libraryRevision
+      home.refresh(revision ?? undefined)
+    },
+    { immediate: true }
+  )
 })
 onBeforeUnmount(() => {
-  unsubscribe?.()
+  stopRevision?.()
   home.dispose()
 })
 

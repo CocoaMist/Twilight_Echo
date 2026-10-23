@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { executeCoreExtension } from '../../extensions/corePlugins.ts'
 import type { UiContribution } from '../../extensions/registry'
 import type { PluginSettingsForm } from './types'
 import {
@@ -13,7 +14,7 @@ const LIVE_SUBMIT_DELAY_MS = 250
 const AUTO_LOAD_RETRY_MS = 50
 
 const defaultExecute: ExecuteCommand = (command, args) =>
-  window.api.extensions.executeCommand(command, args)
+  executeCoreExtension(command, args)
 
 /**
  * State and actions for plugin `settingsPanel` contributions. Every panel is

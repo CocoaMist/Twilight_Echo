@@ -2,26 +2,20 @@
 import { ref } from 'vue'
 import {
   PERSONAL_DOMAIN_LABELS,
-  type PersonalBackupPreview,
   type PersonalDomain,
   type PathMapping
 } from '../../../../shared/personalBackup'
-import { readPersonalRendererData } from '../../app/personalRestore'
-import { useMusicStore } from '../../stores/useMusicStore'
-import {
-  useListeningStatsStore,
-  waitForListeningStatsReady
-} from '../../stores/useListeningStatsStore'
-import { getMusicVersions } from '../../stores/musicVersions'
+import type { CorePersonalBackupPreview } from '../../../../shared/coreBackup.ts'
+import { useCoreConnection } from '../../stores/coreConnection.ts'
 import { useFocusTrap, useEscapeToClose } from '../../app/useDismissLayer'
-import { playbackSessionWriter } from '../../app/playbackSessionWriter'
 
 const api = window.api
+const core = useCoreConnection()
 const busy = ref(false),
   error = ref(''),
   message = ref(''),
   staged = ref(false)
-const preview = ref<PersonalBackupPreview | null>(null)
+const preview = ref<CorePersonalBackupPreview | null>(null)
 const selected = ref<PersonalDomain[]>([])
 const mappings = ref<PathMapping[]>([])
 const conflict = ref<'keep-local' | 'use-backup'>('keep-local')
@@ -33,20 +27,6 @@ useEscapeToClose(
     preview.value = null
   }
 )
-async function rendererData() {
-  await waitForListeningStatsReady()
-  const music = useMusicStore()
-  await music.flushSaveLibrary()
-  if (!(await music.flushPlaylists())) throw new Error('歌单尚未保存成功，请先重试保存')
-  const { usePlayerStore } = await import('../../stores/usePlayerStore')
-  await usePlayerStore().queueWorkspace.flush()
-  await playbackSessionWriter.flushAutosave()
-  return {
-    ...readPersonalRendererData(),
-    statistics: JSON.parse(JSON.stringify(useListeningStatsStore().listeningStats.value)),
-    versions: getMusicVersions()
-  }
-}
 async function run(action: () => Promise<void>) {
   if (busy.value) return
   busy.value = true
@@ -62,13 +42,12 @@ async function run(action: () => Promise<void>) {
 }
 function exportBackup() {
   void run(async () => {
-    if (await window.api.data.exportPersonalBackup(await rendererData()))
-      message.value = '个人数据备份已导出'
+    if (await core.command('backup.export', {})) message.value = '个人数据备份已导出'
   })
 }
 function importBackup() {
   void run(async () => {
-    const value = await window.api.data.previewPersonalBackup(await rendererData())
+    const value = (await core.command('backup.preview', {})) as CorePersonalBackupPreview | null
     preview.value = value
     selected.value = value?.rows.map((r) => r.domain) || []
     mappings.value = value?.roots.map((from) => ({ from, to: '' })) || []
@@ -76,16 +55,19 @@ function importBackup() {
 }
 async function chooseMapping(mapping: PathMapping) {
   await run(async () => {
-    const path = await window.api.data.chooseRestoreFolder()
+    const path = (await core.command('backup.chooseFolder', {})) as string | null
     if (path) mapping.to = path
   })
 }
 function restore() {
   void run(async () => {
-    await window.api.data.stagePersonalRestore({
-      conflict: conflict.value,
-      mappings: mappings.value.filter((m) => m.to),
-      domains: selected.value
+    await core.command('backup.stage', {
+      id: preview.value!.id,
+      options: {
+        conflict: conflict.value,
+        mappings: mappings.value.filter((m) => m.to).map(({ from, to }) => ({ from, to })),
+        domains: [...selected.value]
+      }
     })
     preview.value = null
     staged.value = true

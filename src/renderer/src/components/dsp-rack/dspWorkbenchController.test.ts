@@ -111,6 +111,25 @@ test('settings editor entries remain outside the master-bypassed controls and on
   assert.deepEqual(emitted.sort(), ['openDspRack', 'openEqualizer'])
 })
 
+test('VST3 settings load through Core without the removed audio bridge', async () => {
+  const source = readFileSync(
+    new URL('../settings-page/DspSettingsSection.vue', import.meta.url),
+    'utf8'
+  )
+  const handler = source.match(/async function refreshVst3Catalog\(\): Promise<void> \{[\s\S]*?\n\}/)![0]
+  const catalog = { enabled: true, entries: [], searchPaths: [] }
+  const context = {
+    window: { api: {} },
+    coreAudio: { getVst3Catalog: async () => catalog },
+    vst3Catalog: ref(null),
+    vst3Error: ref('previous error'),
+    vst3ErrorMessage: String
+  }
+  await runInNewContext(`${stripTypeScriptTypes(handler)}\nrefreshVst3Catalog()`, context)
+  assert.deepEqual(context.vst3Catalog.value, catalog)
+  assert.equal(context.vst3Error.value, '')
+})
+
 function setup() {
   const one = graph.createDspFactoryScene('headphoneCorrection', 'one')
   const two = graph.createDspFactoryScene('roomCorrection', 'two')

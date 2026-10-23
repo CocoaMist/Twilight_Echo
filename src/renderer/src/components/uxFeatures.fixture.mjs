@@ -37,8 +37,7 @@ async function click(text) {
   b.click()
   await settle()
 }
-let downloadChanged,
-  loudnessChanged,
+let loudnessChanged,
   resolveList,
   connects = 0,
   stopped = 0,
@@ -47,14 +46,23 @@ let downloadChanged,
   action = '',
   played = '',
   staged
+let downloadSnapshot = {
+    protocolVersion: 1,
+    epoch: 'ux-downloads',
+    sequence: 0,
+    phase: 'ready',
+    migrationRequired: false,
+    downloads: { revision: 1, active: 1, total: 2 }
+  },
+  coreMessage,
+  downloadPageItems,
+  downloadPageRequests = 0
 const completed = {
   id: 'done',
   providerId: 'test',
-  providerJobId: 'job',
   track: { id: 'song', title: '已下载歌曲', artist: '歌手' },
   status: 'completed',
   progress: 1,
-  targetPath: 'D:/Download/song.flac',
   requestedQuality: 'lossless',
   actualQuality: 'lossless',
   fileSize: 123,
@@ -69,6 +77,7 @@ const pending = {
   track: { ...completed.track, title: '正在下载' },
   progress: 0.5
 }
+downloadPageItems = [completed, pending]
 const scan = ref({ state: 'running', current: 2, total: 10, error: '' })
 window.__uxMusic = {
   tracks: ref([]),
@@ -98,26 +107,73 @@ window.__uxPlayer = {
 let restoreRequest = null,
   acknowledged = ''
 window.api = {
-  providerDownloads: {
-    onChanged: (callback) => {
+  core: {
+    connect: async () => {
       connects++
-      downloadChanged = callback
-      return () => stopped++
+      return { ok: true, value: { connectionId: 'ux', snapshot: structuredClone(downloadSnapshot) } }
     },
-    list: () =>
-      new Promise((resolve) => {
-        resolveList = resolve
-      }),
-    result: async (id, add) => {
-      expect(id === 'done', 'result must use task ID')
-      action = add ? 'add' : 'read'
-      return completed.targetPath
+    request: async (_connectionId, request) => {
+      if (request.kind === 'query' && request.name === 'downloads.page') {
+        downloadPageRequests++
+        const revision = downloadSnapshot.downloads.revision
+        if (downloadPageRequests === 1)
+          return new Promise((resolve) => {
+            resolveList = () =>
+              resolve({ ok: true, value: { ...downloadSnapshot.downloads, revision: 1, offset: 0, items: [] } })
+          })
+        return {
+          ok: true,
+          value: {
+            ...downloadSnapshot.downloads,
+            revision,
+            offset: 0,
+            items: downloadPageItems
+          }
+        }
+      }
+      if (request.kind === 'query' && request.name === 'downloads.indexed')
+        return { ok: true, value: { indexed: false } }
+      if (request.kind === 'command') {
+        if (request.name === 'backup.preview')
+          return {
+            ok: true,
+            value: {
+              id: 'ux-backup-preview',
+              version: 1,
+              createdAt: '2026-10-03T00:00:00.000Z',
+              rows: [
+                { domain: 'playlists', incoming: 3, current: 2, conflicts: 1 },
+                { domain: 'library', incoming: 5, current: 0, conflicts: 0 }
+              ],
+              roots: ['C:/Old']
+            }
+          }
+        if (request.name === 'backup.chooseFolder') return { ok: true, value: 'D:/Music' }
+        if (request.name === 'backup.stage') {
+          staged = request.payload
+          return { ok: true, value: undefined }
+        }
+        if (request.name === 'backup.export') return { ok: true, value: '/backup.zip' }
+        if (request.name === 'downloads.cancel') {
+          expect(request.payload.id === 'pending', 'wrong cancel target')
+          cancelled++
+        }
+        if (request.name === 'downloads.play') played = request.payload.id
+        if (request.name === 'downloads.reveal') action = 'reveal'
+        if (request.name === 'downloads.result') action = request.payload.addToLibrary ? 'add' : 'read'
+        return { ok: true, value: undefined }
+      }
+      throw new Error(`Unexpected Core request ${request.name}`)
+  },
+    cancel: async () => ({ ok: true, value: undefined }),
+    disconnect: async () => ({ ok: true, value: undefined }),
+    onMessage: (callback) => {
+      coreMessage = callback
+      return () => {
+        stopped++
+      }
     },
-    cancel: async (id) => {
-      expect(id === 'pending', 'wrong cancel target')
-      cancelled++
-    },
-    retry: async () => {}
+    onStatus: () => () => {}
   },
   loudnessAnalysis: {
     onBatchProgress: (callback) => {
@@ -175,7 +231,22 @@ window.runUxFeatureTests = async () => {
   })
   const second = useDownloadTasks().connect()
   expect(connects === 1, 'download subscription must be shared')
-  downloadChanged([completed, pending])
+  await settle()
+  downloadPageItems = [completed, pending]
+  downloadSnapshot = {
+    ...downloadSnapshot,
+    sequence: 1,
+    downloads: { revision: 2, active: 1, total: 2 }
+  }
+  coreMessage({
+    connectionId: 'ux',
+    message: {
+      kind: 'state',
+      epoch: downloadSnapshot.epoch,
+      sequence: downloadSnapshot.sequence,
+      snapshot: structuredClone(downloadSnapshot)
+    }
+  })
   resolveList([])
   await settle()
   expect(useDownloadTasks().tasks.value.length === 2, 'slow initial response overwrote new events')
@@ -183,7 +254,7 @@ window.runUxFeatureTests = async () => {
   document.querySelector('.task-entry').click()
   await settle()
   expect(
-    document.querySelector('.notice-history').textContent.includes('已下载歌曲'),
+    document.body.textContent.includes('已下载歌曲'),
     'global center omitted completed download'
   )
   await window.captureFeature('task-center')
@@ -193,9 +264,9 @@ window.runUxFeatureTests = async () => {
   await click('取消')
   expect(cancelled === 1, 'scan cancellation was not routed')
   await click('播放本地文件')
-  expect(played === completed.targetPath, 'play did not use local downloaded file')
+  expect(played === completed.id, 'play did not use the Core download task ID')
   await click('打开目录')
-  expect(action === completed.targetPath, 'reveal did not use resolved result path')
+  expect(action === 'reveal', 'reveal did not use the Core download task ID')
   await click('加入曲库（复制）')
   expect(action === 'add', 'library action did not request indexing')
   loudnessChanged({
@@ -211,13 +282,13 @@ window.runUxFeatureTests = async () => {
   })
   await settle()
   expect(
-    document.querySelector('.notice-history').textContent.includes('响度分析'),
+    document.body.textContent.includes('响度分析'),
     'loudness task missing'
   )
   await click('需处理')
   expect(
     !document.querySelector('.notice-history progress') &&
-      !document.querySelector('.notice-history').textContent.includes('响度分析') &&
+      !document.body.textContent.includes('响度分析') &&
       button('需处理').getAttribute('aria-pressed') === 'true',
     'attention filter retained active tasks'
   )
@@ -230,10 +301,10 @@ window.runUxFeatureTests = async () => {
   )
   second()
   await mount(PersonalBackupSection)
-  expect(stopped === 1, 'last consumer failed to release download subscription')
+  expect(stopped === 0, 'download view disposed the window-wide Core connection')
   await click('选择备份并预览')
   expect(
-    document.querySelector('table').textContent.includes('歌单与收藏'),
+    document.body.textContent.includes('歌单与收藏'),
     'backup count preview missing'
   )
   await window.captureFeature('personal-backup-preview')
@@ -244,9 +315,10 @@ window.runUxFeatureTests = async () => {
   await settle()
   await click('确认，在下次启动时恢复')
   expect(
-    staged.conflict === 'use-backup' &&
-      staged.mappings[0].to === 'D:/Music' &&
-      staged.domains.length === 2,
+    staged.id === 'ux-backup-preview' &&
+      staged.options.conflict === 'use-backup' &&
+      staged.options.mappings[0].to === 'D:/Music' &&
+      staged.options.domains.length === 2,
     'restore options not sent accurately'
   )
   expect(

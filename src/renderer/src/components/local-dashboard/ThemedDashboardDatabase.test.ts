@@ -13,7 +13,9 @@ import {
   type LibraryDashboardTheme
 } from '../../stores/library/libraryThemeDashboard.ts'
 import { buildArchiveLibrary } from './archiveLibrary.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
+import { coreSnapshot, coreLibraryPage } from '../../stores/coreTestFixtures.ts'
+import { normalizeCueRange } from '../../../../shared/cue.ts'
 import type { UnifiedRecentStat } from '../../utils/unifiedRecentTracks.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -56,12 +58,7 @@ function stat(track: Track, id = track.id): UnifiedRecentStat {
   }
 }
 
-function fixture(
-  t: TestContext,
-  theme: LibraryDashboardTheme,
-  mode: 'json' | 'sqlite' = 'sqlite',
-  failDiscovery = false
-) {
+function fixture(t: TestContext, theme: LibraryDashboardTheme, failOnStart = false) {
   const db = new LibraryDatabase(':memory:')
   const tracks: Track[] = Array.from({ length: 605 }, (_, i) => ({
     id: `track:${i}`,
@@ -97,8 +94,8 @@ function fixture(
     toggles = 0,
     removed = 0,
     hydrated = 0,
-    failReads = false,
-    change: ((change: { kind: 'database'; revision: number }) => void) | undefined,
+    failReads = failOnStart,
+    change: ((message: unknown) => void) | undefined,
     controller!: Controller
   const mounts: Array<() => void> = [],
     unmounts: Array<() => void> = []
@@ -131,11 +128,6 @@ function fixture(
       }
     ])
   ) as unknown as LibraryDatabaseApi
-  const forbidden = {
-    get value(): never {
-      throw new Error('full renderer library access')
-    }
-  }
   const player = {
     currentTrack,
     isPlaying,
@@ -170,14 +162,39 @@ function fixture(
     onScopeDispose,
     onMounted: (mount: () => void) => mounts.push(mount),
     onBeforeUnmount: (unmount: () => void) => unmounts.push(unmount),
-    useMusicStore: () =>
-      mode === 'sqlite' || failDiscovery
-        ? { tracks: forbidden, albums: forbidden, artists: forbidden }
-        : {
-            tracks: ref(tracks),
-            albums: ref(collections.albums),
-            artists: ref(collections.artists)
-          },
+    useCoreConnection: () => ({
+      state: ref(coreSnapshot({ libraryRevision: db.getMetadata().revision, versionsRevision: 0 })),
+      subscribe: (listener: typeof change) => {
+        change = listener
+        return () => {
+          change = undefined
+          removed++
+        }
+      },
+      query: async (name: string, payload: any) => {
+        if (name === 'library.tracks') return coreLibraryPage(await database.queryTracks(payload))
+        if (name === 'library.collections')
+          return database.queryCollections(payload.kind, payload.query)
+        if (name === 'library.metadata') return database.getMetadata()
+        if (name === 'library.byIds')
+          return coreLibraryPage(await database.getTracksByIds(payload.ids, payload.revision))
+        if (name === 'library.artwork') {
+          const page = db.getTracksByIds(payload.ids, payload.revision)
+          return {
+            revision: page.revision,
+            items: page.tracks.map((track) => ({ id: track.id, cover: track.cover ?? null }))
+          }
+        }
+        if (name === 'library.recent.resolve') {
+          const result = await database.lookupPlaylistTracks(
+            { entries: payload.entries, versions: [], resolution: 'recent' },
+            payload.revision
+          )
+          return { ...result, versionsRevision: payload.versionsRevision }
+        }
+        throw new Error(name)
+      }
+    }),
     usePlayerStore: () => player,
     getRecentTracks: (count: number) => {
       historyLimits.push(count)
@@ -192,23 +209,6 @@ function fixture(
     createLibraryThemeDashboard: (options: Parameters<typeof createLibraryThemeDashboard>[0]) => {
       controller = createLibraryThemeDashboard(options)
       return controller
-    },
-    window: {
-      api: {
-        library: {
-          getStorageMode: async () => {
-            if (failDiscovery) throw new Error('discovery offline')
-            return mode
-          },
-          database,
-          onChanged: (listener: typeof change) => {
-            change = listener
-            return () => {
-              removed++
-            }
-          }
-        }
-      }
     }
   }
   const useLibraryThemeDashboard = evaluate(
@@ -269,7 +269,10 @@ function fixture(
     },
     close,
     notify() {
-      change?.({ kind: 'database', revision: db.getMetadata().revision })
+      change?.({
+        kind: 'state',
+        snapshot: coreSnapshot({ libraryRevision: db.getMetadata().revision, versionsRevision: 0 })
+      })
     },
     setFailure(value: boolean) {
       failReads = value
@@ -367,6 +370,9 @@ for (const theme of ['archive', 'nightHarbor', 'soundField'] as const)
     f.entry.play(f.tracks[1])
     assert.equal(f.toggles, 1)
     f.entry.seek?.(12)
+    assert.deepEqual(f.seeks, [], 'a non-hero playback identity must not seek the displayed hero')
+    f.currentTrack.value = f.tracks[604]
+    f.entry.seek?.(12)
     if (theme !== 'archive') assert.deepEqual(f.seeks, [12])
     assert.ok(f.maximum <= 2)
     f.close()
@@ -379,7 +385,7 @@ test('themed activity resolves unloaded CUE sources, removes missing local snaps
     {
       id: 'track:604',
       expectedVersion: 1,
-      patch: { subTrack: 'cue:2', cueRange: { startSeconds: 2, endSeconds: 4 } }
+      patch: { subTrack: 'cue:2', cueRange: { startSeconds: 2, endSeconds: 4, pregapSeconds: 0 } }
     }
   ])
   const remote: Track = {
@@ -403,7 +409,10 @@ test('themed activity resolves unloaded CUE sources, removes missing local snaps
     f.entry.recent.value.map((track) => track.id),
     ['track:604', 'ncm:7']
   )
-  assert.deepEqual(f.entry.recent.value[0].cueRange, { startSeconds: 2, endSeconds: 4 })
+  assert.deepEqual(
+    f.entry.recent.value[0].cueRange,
+    normalizeCueRange({ startSeconds: 2, endSeconds: 4 })
+  )
   f.entry.play(remote)
   await settled(f)
   assert.deepEqual(f.arrays[0].ids, ['ncm:7'])
@@ -450,12 +459,12 @@ test('scan/history/preference updates coalesce and stale or failed lookups canno
   assert.ok(f.maximum <= 2)
 })
 
-test('discovery and SQL failures never fall back to compatibility arrays, and retry/unmount own their requests', async (t) => {
-  const unknown = fixture(t, 'archive', 'sqlite', true)
+test('Core SQL failures never fall back to compatibility arrays, and retry/unmount own their requests', async (t) => {
+  const unknown = fixture(t, 'archive', true)
   unknown.mount()
   await settled(unknown)
-  assert.match(unknown.entry.error.value, /discovery offline/)
-  assert.equal(unknown.calls, 0)
+  assert.match(unknown.entry.error.value, /database offline/)
+  assert.ok(unknown.calls > 0)
   assert.equal(unknown.entry.ready.value, false)
   assert.equal(unknown.entry.summary.value.tracks, 0)
   const f = fixture(t, 'archive')
@@ -490,32 +499,26 @@ test('discovery and SQL failures never fall back to compatibility arrays, and re
 })
 
 for (const theme of ['archive', 'nightHarbor', 'soundField'] as const)
-  test(`${theme} JSON home retains its album order, history size and bounded array playback`, async (t) => {
-    const f = fixture(t, theme, 'json')
+  test(`${theme} attaches to the playing Core state without rebuilding playback or seeking`, async (t) => {
+    const f = fixture(t, theme)
     f.history.value = [stat(f.tracks[604])]
+    f.currentTrack.value = f.tracks[604]
+    f.isPlaying.value = true
     f.mount()
     await settled(f)
-    assert.equal(f.calls, 0)
     assert.equal(f.entry.ready.value, true)
+    assert.equal(f.entry.hero.value?.id, 'track:604')
+    assert.equal(f.entry.heroIsCurrent.value, true)
     assert.equal(f.entry.summary.value.tracks, 605)
     assert.equal(f.entry.recent.value[0].id, 'track:604')
-    assert.deepEqual(
-      f.entry.recentlyAdded.value.map((track) => track.id),
-      buildArchiveLibrary(f.tracks).recentlyAdded.map((track) => track.id)
-    )
-    f.entry.play(f.tracks[604])
-    assert.equal(f.arrays[0].ids.length, 200)
-    assert.equal(f.arrays[0].track.id, 'track:604')
-    assert.ok(f.arrays[0].ids.includes('track:604'))
-    f.currentTrack.value = f.tracks[0]
-    t.mock.method(Math, 'random', () => 0)
-    f.entry.shuffle()
-    assert.equal(
-      f.arrays.length,
-      2,
-      'random selection of the current track still starts the array queue'
-    )
+    assert.deepEqual(f.arrays, [])
+    assert.deepEqual(f.queries, [])
+    assert.deepEqual(f.seeks, [])
     assert.equal(f.toggles, 0)
-    assert.deepEqual(f.modes, ['shuffle'])
-    assert.equal(f.queries.length, 0)
+    f.close()
+    const before = f.calls
+    f.history.value = []
+    f.notify()
+    await settled(f)
+    assert.equal(f.calls, before)
   })

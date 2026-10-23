@@ -21,6 +21,13 @@ test('network sources separates source management from the primary music browsin
   // port must be normalized instead of calling string methods on it.
   assert.match(networkSources, /parseOptionalPort\(form\.value\.port\)/)
   assert.doesNotMatch(networkSources, /form\.value\.port\.trim\(\)/)
+  assert.match(networkSources, /core\.query\('network\.directory'/)
+  assert.match(networkSources, /core\.query\('network\.library'/)
+  assert.match(networkSources, /core\.command\('network\.play'/)
+  assert.doesNotMatch(
+    networkSources,
+    /window\.api\??\.networkSources|resolvePlayback|direct-url|cacheFilePath/
+  )
 })
 
 test('radio and podcast pages keep collections prominent and creation tools secondary', () => {
@@ -32,5 +39,7 @@ test('radio and podcast pages keep collections prominent and creation tools seco
   // Page back lives on the title bar; this page must not carry its own.
   assert.doesNotMatch(radioPodcast, /data-te-page-back-button=/)
   assert.match(radioPodcast, /@click="playStation\(station\.id\)"/)
-  assert.match(radioPodcast, /@click="playEpisode\(selectedPodcast, episode\.guid\)"/)
+  assert.match(radioPodcast, /@click="playEpisode\(selectedPodcast, episode\)"/)
+  assert.match(radioPodcast, /podcastEpisodeTrackId\(subscription\.id, episode\.guid\)/)
+  assert.doesNotMatch(radioPodcast, /selectedPodcast\.episodes|podcastEpisodeToTrack/)
 })

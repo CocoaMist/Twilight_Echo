@@ -20,6 +20,7 @@
 import { computed, ref, watch } from 'vue'
 import DEFAULT_TRACK_COVER from '../assets/images/default-track-cover-light.webp'
 import '../assets/default-track-cover.css'
+import { coreArtworkKey, readCoreArtwork } from '../stores/library/coreArtwork.ts'
 import { recordCoverDiagnostic } from '../utils/coverDiagnostics.ts'
 import {
   clearLocalCoverDataCache,
@@ -29,11 +30,13 @@ import {
 
 const props = withDefaults(
   defineProps<{
-    cover: string | null | undefined
+    cover?: string | null | undefined
     /** Durable remote origin used to re-grant expired twilight-media handles. */
     coverSource?: string | null | undefined
     /** Stable identity (track id) — changes force full remount + re-resolve. */
     identity?: string | null | undefined
+    /** Core-owned local track identity; no source path or durable URL is required. */
+    coreTrackId?: string
     alt?: string
     fallback?: string
     loading?: 'lazy' | 'eager'
@@ -63,13 +66,14 @@ async function reloadCover(): Promise<void> {
 
   const cover = typeof props.cover === 'string' ? props.cover.trim() : ''
   const source = typeof props.coverSource === 'string' ? props.coverSource.trim() : ''
-  if (!cover && !source) {
+  if (!cover && !source && !props.coreTrackId) {
     recordCoverDiagnostic('source.missing', null, null)
     return
   }
 
   try {
-    const next = await resolveCover(cover || null, source || null)
+    const handle = props.coreTrackId ? await readCoreArtwork(props.coreTrackId) : cover || null
+    const next = await resolveCover(handle, props.coreTrackId ? null : source || null)
     if (id !== requestId) return
     displayCover.value = next
     if (!next) recordCoverDiagnostic('resolve.empty', cover, source, {}, 'warn')
@@ -81,7 +85,14 @@ async function reloadCover(): Promise<void> {
 }
 
 watch(
-  () => [props.identity, props.cover, props.coverSource] as const,
+  () =>
+    [
+      props.identity,
+      props.cover,
+      props.coverSource,
+      props.coreTrackId,
+      props.coreTrackId ? coreArtworkKey() : ''
+    ] as const,
   () => {
     remountNonce.value += 1
     void reloadCover()
@@ -107,6 +118,16 @@ async function onImageError(event: Event): Promise<void> {
   if (!retriedCover) {
     retriedCover = true
     try {
+      if (props.coreTrackId) {
+        const handle = await readCoreArtwork(props.coreTrackId, true)
+        const next = await resolveCover(handle, null)
+        if (id !== requestId) return
+        if (next && next !== displayCover.value) {
+          displayCover.value = next
+          remountNonce.value += 1
+          return
+        }
+      }
       if (source) {
         invalidateRemoteCoverGrant(source)
         const next = await resolveCover(null, source)

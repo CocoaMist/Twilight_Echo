@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { corePlugins } from '../extensions/corePlugins.ts'
 import AppearanceThemePreview from './AppearanceThemePreview.vue'
 import { useThemeStore } from '../stores/useThemeStore'
 import { syncExtensions, useExtensionRegistry } from '../extensions/registry'
@@ -93,8 +94,8 @@ async function refresh(force = false): Promise<void> {
   error.value = ''
   try {
     const [plugins, entries] = await Promise.allSettled([
-      window.api.plugins.list(),
-      force ? window.api.plugins.refreshIndex() : window.api.plugins.listIndex()
+      corePlugins.list(),
+      force ? corePlugins.refreshIndex() : corePlugins.listIndex()
     ])
     if (disposed || request !== generation) return
     if (plugins.status === 'fulfilled')
@@ -109,7 +110,7 @@ async function refresh(force = false): Promise<void> {
       error.value =
         '已安装主题读取失败。' +
         (plugins.reason instanceof Error ? plugins.reason.message : String(plugins.reason))
-    const indexStatus = await window.api.plugins.getIndexStatus()
+    const indexStatus = await corePlugins.getIndexStatus()
     if (disposed || request !== generation) return
     status.value = indexStatus
     if (indexStatus.error) error.value = '云端同步未完成，保留可用的主题目录。' + indexStatus.error
@@ -139,10 +140,10 @@ async function pluginAction(id: string, action: 'install' | 'enable' | 'remove')
   warning.value = ''
   try {
     if (action === 'install') {
-      const result = await window.api.plugins.installFromIndex(id)
+      const result = await corePlugins.installFromIndex(id)
       warning.value = result?.warning ?? ''
-    } else if (action === 'enable') await window.api.plugins.enable(id)
-    else await window.api.plugins.uninstall(id)
+    } else if (action === 'enable') await corePlugins.enable(id)
+    else await corePlugins.uninstall(id)
     await syncExtensions()
     await refresh()
     if (
@@ -167,7 +168,7 @@ onMounted(() => {
     attributeFilter: ['data-theme']
   })
   void refresh()
-  unsub = window.api.plugins.onChanged(() => {
+  unsub = corePlugins.onChanged(() => {
     clearTimeout(refreshTimer)
     refreshTimer = setTimeout(() => void refresh(), 80)
   })

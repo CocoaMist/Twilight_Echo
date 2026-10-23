@@ -1,177 +1,185 @@
-import {
-  computed,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  shallowRef,
-  triggerRef,
-  watch,
-  type Ref
-} from 'vue'
-import {
-  idleLoudnessBatchStatus,
-  type LibraryLoudnessApi,
-  type LibraryLoudnessResult,
-  type LoudnessBatchItem,
-  type LoudnessBatchProgress,
-  type LoudnessBatchSnapshot,
-  type LoudnessInputGroup
-} from '../../../../shared/libraryLoudness.ts'
+import { computed, onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue'
+import type { LibrarySelectionRequest } from '../../../../shared/librarySelection.ts'
+import type {
+  CoreLoudnessPage,
+  CoreLoudnessResult,
+  CoreLoudnessState
+} from '../../../../shared/coreAnalysis.ts'
+import type { useCoreConnection } from '../../stores/coreConnection.ts'
 
-export function useLibraryLoudness(groups: Ref<LoudnessInputGroup[]>, api: LibraryLoudnessApi) {
-  const status = ref(idleLoudnessBatchStatus())
-  const items = shallowRef(new Map<string, LoudnessBatchItem>())
-  const results = shallowRef(new Map<string, LibraryLoudnessResult>())
+export function useLibraryLoudness(
+  selection: Ref<LibrarySelectionRequest>,
+  mode: Ref<'track' | 'album'>,
+  core: Pick<ReturnType<typeof useCoreConnection>, 'state' | 'subscribe' | 'command' | 'query' | 'attach'>
+) {
+  const plan = shallowRef<CoreLoudnessState | null>(null)
+  const page = shallowRef<CoreLoudnessPage | null>(null)
+  const results = shallowRef(new Map<number, CoreLoudnessResult>())
   const error = ref('')
   const busy = ref(false)
   const loading = ref(false)
-  const running = computed(() => ['running', 'cancelling'].includes(status.value.state))
-  const groupIndex = computed(() => new Map(groups.value.map((group) => [group.id, group])))
-  const retryGroups = computed(() =>
-    running.value
-      ? []
-      : groups.value.filter((group) => {
-          const state = items.value.get(group.id)?.state
-          return (
-            state === 'failed' ||
-            state === 'cancelled' ||
-            (status.value.state === 'cancelled' && (state === 'queued' || state === 'analyzing'))
-          )
-        })
+  const running = computed(() => ['running', 'cancelling'].includes(plan.value?.status.state ?? ''))
+  const retryGroups = computed(
+    () =>
+      !running.value &&
+      !!plan.value &&
+      (plan.value.status.failed > 0 || plan.value.status.state === 'cancelled')
   )
+  let pageRequest = 0
+  let resultController: AbortController | undefined
+  const resultRequests = new Map<number, Promise<void>>()
   let disposed = false
-  let epoch = 0
-  let requestId = 0
-  let unsubscribe: (() => void) | undefined
-  let failedAction: (() => Promise<void>) | undefined
-  const latestQueries = new Map<string, number>()
+  const adoptedRunningPlan = ref(false)
+  const unsubscribe = core.subscribe((message) => {
+    if (message.kind !== 'state') return
+    const current = message.snapshot.libraryLoudness
+    if (current?.id !== plan.value?.id) return
+    plan.value = current
+    void refreshPage(page.value?.offset ?? 0)
+  })
 
-  function applySnapshot(snapshot: LoudnessBatchSnapshot): void {
-    if (disposed) return
-    if (snapshot.status.revision < status.value.revision) {
-      if (snapshot.status.jobId === status.value.jobId) {
-        for (const item of snapshot.items)
-          if (!items.value.has(item.id)) items.value.set(item.id, item)
-        triggerRef(items)
-      }
+  async function prepare(): Promise<void> {
+    if (!core.state.value) await core.attach()
+    const current = await core.query('library.loudness.state', {})
+    if (current && ['running', 'cancelling'].includes(current.status.state)) {
+      adoptedRunningPlan.value = true
+      plan.value = current
+      await refreshPage()
       return
     }
-    status.value = snapshot.status
-    items.value = new Map(snapshot.items.map((item) => [item.id, item]))
-  }
-
-  async function query(batch: LoudnessInputGroup[]): Promise<void> {
-    const queryEpoch = epoch
-    const id = ++requestId
-    for (const group of batch) latestQueries.set(group.id, id)
-    const values = await api.getResults(batch)
-    if (disposed || queryEpoch !== epoch) return
-    for (const result of values) {
-      if (latestQueries.get(result.id) === id) results.value.set(result.id, result)
+    const value = (await core.command('library.loudness.prepare', {
+      selection: selection.value,
+      mode: mode.value
+    })) as CoreLoudnessState
+    if (!disposed) {
+      plan.value = value
+      results.value = new Map()
+      await refreshPage()
     }
-    triggerRef(results)
   }
 
-  async function refresh(): Promise<void> {
-    const queryEpoch = ++epoch
-    latestQueries.clear()
-    results.value = new Map()
+  async function refreshPage(offset = 0): Promise<void> {
+    const current = plan.value
+    if (!current || disposed) return
+    const request = ++pageRequest
+    resultController?.abort()
+    const controller = (resultController = new AbortController())
     loading.value = true
-    const planned = groups.value
     try {
-      for (let offset = 0; offset < planned.length; offset += 100) {
-        if (disposed || queryEpoch !== epoch) return
-        await query(planned.slice(offset, offset + 100))
+      const value = await core.query(
+        'library.loudness.page',
+        { id: current.id, offset, limit: 200 },
+        controller.signal
+      )
+      if (request !== pageRequest || disposed || plan.value?.id !== current.id) return
+      page.value = value
+      const next = new Map(results.value)
+      for (const item of value.items) {
+        if (!['completed', 'cached'].includes(item.state)) {
+          next.delete(item.index)
+          resultRequests.delete(item.index)
+        }
       }
+      results.value = next
+      error.value = ''
+    } catch (reason) {
+      if (!controller.signal.aborted && request === pageRequest && !disposed)
+        error.value = reason instanceof Error ? reason.message : String(reason)
     } finally {
-      if (queryEpoch === epoch) loading.value = false
+      if (request === pageRequest) loading.value = false
     }
   }
 
-  function progress(event: LoudnessBatchProgress): void {
-    if (disposed || event.status.revision < status.value.revision) return
-    if (event.status.jobId !== status.value.jobId) items.value = new Map()
-    status.value = event.status
-    if (!event.item) return
-    items.value.set(event.item.id, event.item)
-    triggerRef(items)
-    if (event.item.state === 'analyzing' || event.item.state === 'failed') {
-      latestQueries.set(event.item.id, ++requestId)
-      results.value.delete(event.item.id)
-      triggerRef(results)
-    }
-    const group = groupIndex.value.get(event.item.id)
-    if (group && ['completed', 'cached'].includes(event.item.state)) {
-      void query([group]).catch((reason) => {
-        if (!disposed) error.value = errorText(reason)
+  async function loadResults(indexes: number[]): Promise<void> {
+    const current = plan.value
+    if (!current || disposed) return
+    await Promise.all(
+      indexes.map(async (index) => {
+        if (results.value.has(index) || resultRequests.has(index)) return
+        const item = page.value?.items.find((candidate) => candidate.index === index)
+        if (!item || !['completed', 'cached'].includes(item.state)) return
+        const work = core
+          .query('library.loudness.result', { id: current.id, index })
+          .then((value) => {
+            if (!disposed && plan.value?.id === current.id) {
+              const next = new Map(results.value)
+              next.set(index, value)
+              results.value = next
+            }
+          })
+          .catch((reason) => {
+            if (!disposed && plan.value?.id === current.id)
+              error.value = reason instanceof Error ? reason.message : String(reason)
+          })
+          .finally(() => resultRequests.delete(index))
+        resultRequests.set(index, work)
+        await work
       })
-    }
+    )
   }
 
-  async function action(operation: () => Promise<void>): Promise<void> {
+  async function action(operation: () => Promise<CoreLoudnessState | void>): Promise<void> {
     if (busy.value) return
     busy.value = true
     error.value = ''
     try {
-      await operation()
-      failedAction = undefined
+      const value = await operation()
+      if (value && !disposed) plan.value = value
+      await refreshPage(page.value?.offset ?? 0)
     } catch (reason) {
-      if (!disposed) {
-        error.value = errorText(reason)
-        failedAction = operation
-      }
+      if (!disposed) error.value = reason instanceof Error ? reason.message : String(reason)
     } finally {
       busy.value = false
     }
   }
 
-  const start = (retry = false) =>
+  const start = () =>
     action(async () => {
-      const planned = retry ? retryGroups.value : groups.value
-      if (planned.length) applySnapshot(await api.startBatch(planned))
+      if (!plan.value) return
+      return (await core.command('library.loudness.start', {
+        id: plan.value.id
+      })) as CoreLoudnessState
     })
   const cancel = () =>
     action(async () => {
-      if (status.value.jobId) await api.cancelBatch(status.value.jobId)
-      applySnapshot(await api.getBatch())
+      if (!plan.value?.status.jobId) return
+      return (await core.command('library.loudness.cancel', {
+        id: plan.value.id
+      })) as CoreLoudnessState
     })
   const clear = () =>
     action(async () => {
-      await api.clearResults(groups.value.map((group) => group.id))
-      items.value = new Map()
-      await refresh()
+      if (!plan.value) return
+      await core.command('library.loudness.clear', { id: plan.value.id })
+      results.value = new Map()
+      resultRequests.clear()
     })
   const reload = async () => {
-    error.value = ''
-    try {
-      applySnapshot(await api.getBatch())
-      await refresh()
-    } catch (reason) {
-      if (!disposed) {
-        error.value = errorText(reason)
-        failedAction = undefined
-      }
-    }
+    if (!plan.value) return prepare()
+    await refreshPage(page.value?.offset ?? 0)
   }
-  const retryAction = () => (failedAction ? action(failedAction) : reload())
+  const retryAction = reload
 
-  watch(groups, () => {
-    void refresh().catch((reason) => {
-      if (!disposed) error.value = errorText(reason)
-    })
-  })
-  onMounted(() => {
-    unsubscribe = api.onBatchProgress(progress)
-    void reload()
-  })
+  watch(
+    [selection, mode],
+    () => {
+      if (running.value) return
+      void prepare().catch((reason) => {
+        if (!disposed) error.value = reason instanceof Error ? reason.message : String(reason)
+      })
+    },
+    { immediate: true }
+  )
   onBeforeUnmount(() => {
     disposed = true
-    epoch++
-    unsubscribe?.()
+    pageRequest++
+    resultController?.abort()
+    unsubscribe()
   })
+
   return {
-    status,
-    items,
+    plan,
+    page,
     results,
     error,
     busy,
@@ -182,10 +190,9 @@ export function useLibraryLoudness(groups: Ref<LoudnessInputGroup[]>, api: Libra
     cancel,
     clear,
     reload,
-    retryAction
+    retryAction,
+    refreshPage,
+    loadResults,
+    adoptedRunningPlan
   }
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

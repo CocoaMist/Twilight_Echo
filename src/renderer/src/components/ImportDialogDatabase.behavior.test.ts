@@ -13,7 +13,7 @@ import { build } from 'vite'
 const require = createRequire(import.meta.url)
 const workspace = fileURLToPath(new URL('../../../../', import.meta.url))
 
-test('import dialog operates durable scope/pause/cancel/continue, discovery retry and JSON compatibility in sandboxed Electron', async () => {
+test('import dialog operates Core scope/pause/cancel/continue and settings readiness in sandboxed Electron', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'twilight-database-import-'))
   try {
     await build({

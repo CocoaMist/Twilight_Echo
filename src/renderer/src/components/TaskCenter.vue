@@ -4,17 +4,16 @@ import { useDownloadTasks } from '../stores/useDownloadTasks'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useAppUpdateStore } from '../stores/useAppUpdateStore'
 import { useAppNoticeStore } from '../stores/useAppNoticeStore'
+import { useCoreConnection } from '../stores/coreConnection'
 import DownloadResultActions from './streaming-page/DownloadResultActions.vue'
 import { downloadStatusLabel } from './streaming-page/streamingDownloads'
-import type { LoudnessBatchStatus } from '../../../shared/libraryLoudness'
-
-const api = window.api
 const props = withDefaults(
   defineProps<{ active: boolean; filter?: 'all' | 'active' | 'attention' }>(),
   { filter: 'all' }
 )
 const emit = defineEmits<{ library: []; visibleCount: [count: number] }>()
 const notices = useAppNoticeStore()
+const core = useCoreConnection()
 function openLibrary() {
   emit('library')
 }
@@ -23,7 +22,7 @@ const music = useMusicStore()
 const update = useAppUpdateStore()
 const scan = music.libraryScanStatus
 const enrichment = music.libraryMetadataEnrichmentStatus
-const loudness = ref<LoudnessBatchStatus | null>(null)
+const loudness = computed(() => core.state.value?.libraryLoudness)
 const actionError = ref('')
 const pending = ref(new Set<string>())
 const activeStates = [
@@ -94,8 +93,9 @@ const jobs = computed(() => {
       cancel:
         m.state === 'enriching' ? async () => music.cancelLibraryMetadataEnrichment() : undefined
     })
-  const l = loudness.value
-  if (l && l.state !== 'idle')
+  const plan = loudness.value
+  const l = plan?.status
+  if (plan && l && l.state !== 'idle')
     result.push({
       id: 'loudness',
       title: '响度分析',
@@ -103,8 +103,8 @@ const jobs = computed(() => {
       detail: `${l.processed} / ${l.total}，失败 ${l.failed} ${l.currentTitle}`,
       value: l.total ? l.processed / l.total : undefined,
       cancel:
-        l.state === 'running' && l.jobId
-          ? () => window.api.loudnessAnalysis.cancelBatch(l.jobId!)
+        l.state === 'running'
+          ? () => core.command('library.loudness.cancel', { id: plan.id })
           : undefined
     })
   const u = update.state.value.progress
@@ -226,23 +226,11 @@ async function run(id: string, action: () => Promise<unknown>) {
     pending.value.delete(id)
   }
 }
-let disposed = false
 const stops: (() => void)[] = []
 onMounted(() => {
   stops.push(downloads.connect(), update.connect())
-  const apply = (s: LoudnessBatchStatus) => {
-    if (!disposed && (!loudness.value || s.revision >= loudness.value.revision)) loudness.value = s
-  }
-  stops.push(window.api.loudnessAnalysis.onBatchProgress((e) => apply(e.status)))
-  void window.api.loudnessAnalysis
-    .getBatch()
-    .then((s) => apply(s.status))
-    .catch(() => {
-      if (!disposed) actionError.value = '响度任务读取失败'
-    })
 })
 onUnmounted(() => {
-  disposed = true
   stops.forEach((stop) => stop())
   notices.activeTaskCount.value = 0
 })
@@ -312,13 +300,13 @@ onUnmounted(() => {
         <button
           v-if="activeStates.includes(task.status)"
           :disabled="pending.has(task.id)"
-          @click="run(task.id, () => api.providerDownloads.cancel(task.id))"
+          @click="run(task.id, () => core.command('downloads.cancel', { id: task.id }))"
         >
           取消</button
         ><button
           v-if="['failed', 'cancelled'].includes(task.status)"
           :disabled="pending.has(task.id)"
-          @click="run(task.id, () => api.providerDownloads.retry(task.id))"
+          @click="run(task.id, () => core.command('downloads.retry', { id: task.id }))"
         >
           重新下载
         </button>

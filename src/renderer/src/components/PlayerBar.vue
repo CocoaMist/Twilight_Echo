@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
+import { executeCoreExtension } from '../extensions/corePlugins.ts'
 import PlaybackModeIcon from '@renderer/components/icons/PlaybackModeIcon.vue'
 import PlayerControlIcon from '@renderer/components/player-bar/PlayerControlIcon.vue'
 import { clampVolumePercent, createVolumeWheelStepper } from './player-bar/volumeWheel'
 import type { Track, TrackArtistRef } from '@renderer/types/music'
 import { ref, computed, onMounted, onBeforeUnmount, watch, type ComponentPublicInstance } from 'vue'
+import { useCoreConnection } from '../stores/coreConnection.ts'
 import { usePlayerStore } from '../stores/usePlayerStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useThemeStore } from '../stores/useThemeStore'
 import { useMusicStore } from '../stores/useMusicStore'
-import { usePlaybackBookmarks } from '../stores/playbackBookmarks'
 import { useLyricsManagement } from '../stores/lyricsManagement'
-import type { PlaybackBookmark } from '../../../shared/playbackBookmarks.ts'
+import type { CoreBookmark } from '../../../shared/coreBookmarks.ts'
 import { useExtensionRegistry } from '../extensions/registry'
 import {
   createFrameCoalescer,
@@ -31,7 +32,6 @@ import type { LyricLayerSourceSelection } from '../../../shared/lyricsManagement
 import CoverImg from './CoverImg.vue'
 import HiFiSidebar from './player-bar/HiFiSidebar.vue'
 import sequentialIcon from '../assets/icons/sequential-playback.svg'
-import { useFavoriteButton } from './player-bar/useFavoriteButton'
 import { useFloatingPanels } from './player-bar/useFloatingPanels'
 import { usePlaybarAutoHide } from './player-bar/usePlaybarAutoHide.ts'
 import { resolveSeekTargetSeconds, type PlayerBarMode } from '../../../shared/playerBar.ts'
@@ -125,6 +125,7 @@ const {
   readLibraryQueuePage,
   playLibraryQueueEntry,
   editLibraryQueue,
+  duplicateLibraryQueueEntry,
   refreshLibraryQueue,
   playMode,
   exclusiveMode,
@@ -151,11 +152,17 @@ const {
   abLoopB,
   toggleAbLoopAtCurrentTime,
   clearAbLoop,
-  refreshCurrentLyrics,
   resumeOffer,
   acceptResumeOffer,
   dismissResumeOffer,
   addManualBookmarkAtCurrentTime,
+  currentTrackBookmarks,
+  refreshBookmarks,
+  renameBookmark,
+  removeBookmark,
+  seekBookmark,
+  currentFavorite,
+  toggleFavorite,
   playTrack,
   enqueueTrack,
   playNextTrack,
@@ -216,13 +223,6 @@ const currentSourceInfo = computed(() => {
   const info = playbackInfo.value
   if (props.preview || !track || !info?.nativePlaybackActive) return null
 
-  const source = info.source
-  if (typeof source !== 'string' || !source) return null
-
-  if (source === track.filePath || source === track.streamUrl || source === track.subTrack) {
-    return info
-  }
-
   return isCurrentTrackNativePlaybackInfo(info) ? info : null
 })
 // Keep the visualization poll alive only while the compact skyline is mounted.
@@ -247,16 +247,13 @@ const playerLeftKey = computed(
 )
 const {
   localPlaylists,
-  addToPlaylist,
   addTracksToPlaylist,
-  removeFromPlaylist,
   createPlaylist,
-  createPlaylistWithTracks,
-  createPlaylistWithTrackPages,
-  isFavoriteTrack,
-  addFavoriteTrack,
-  removeFavoriteTrack
+  getPlaylistMembership,
+  createPlaylistWithTrackPages
 } = useMusicStore()
+const createPlaylistWithTracks = (name: string, tracks: Track[]) =>
+  createPlaylistWithTrackPages(name, async append => { await append(tracks) })
 const mediaProviders = useMediaProviders({ sync: !props.preview })
 const { pushNotice } = useAppNoticeStore()
 // Reason-code copy is resolved per locale, so the chip labels re-render when the
@@ -435,9 +432,7 @@ const isLiveStream = computed(() => {
     track.source || (track.id.includes(':') ? track.id.slice(0, track.id.indexOf(':')) : 'local')
   if (source === 'local' || source === 'ncm' || source === 'podcast') return false
   if (duration.value > 0) return false
-  return (
-    track.duration === 0 && Boolean(track.streamUrl || /^https?:\/\//i.test(track.filePath || ''))
-  )
+  return track.duration === 0
 })
 
 /** Real DOM width (not CSS custom-prop on ::-webkit-slider-runnable-track).
@@ -497,23 +492,13 @@ const activeResumeOffer = computed(() => {
   return offer
 })
 
-const playbackBookmarks = usePlaybackBookmarks()
 const renamingBookmarkId = ref<string | null>(null)
 const renameDraft = ref('')
-const currentTrackBookmarks = computed(() => playbackBookmarks.bookmarksFor(currentTrack.value))
 
-const castDevices = ref<import('../../../shared/remoteControl.ts').DlnaDeviceInfo[]>([])
+const castDevices = ref<import('../../../shared/coreCast.ts').CoreCastDevice[]>([])
 const castBusy = ref(false)
 const castError = ref('')
-const canCastCurrentTrack = computed(() => {
-  const track = currentTrack.value
-  if (!track) return false
-  // Local path or any stream URL (podcast / radio / provider) can cast once the
-  // remote media token proxy is available in main.
-  return Boolean(
-    track.streamUrl || track.filePath || track.source === 'radio' || track.source === 'podcast'
-  )
-})
+const canCastCurrentTrack = computed(() => !!currentTrack.value)
 
 const sleepTimerSelectValue = computed(() => {
   if (!sleepTimerState.value?.active) return 'off'
@@ -568,16 +553,15 @@ watch(
   }
 )
 
-function onAddBookmark(): void {
-  addManualBookmarkAtCurrentTime()
-  void playbackBookmarks.ensureLoaded()
+async function onAddBookmark(): Promise<void> {
+  try { await addManualBookmarkAtCurrentTime() } catch (error) { reportBookmarkError(error) }
 }
 
-function jumpToBookmark(bookmark: PlaybackBookmark): void {
-  seek(bookmark.positionSeconds)
+async function jumpToBookmark(bookmark: CoreBookmark): Promise<void> {
+  try { await seekBookmark(bookmark.id) } catch (error) { reportBookmarkError(error) }
 }
 
-function startRenameBookmark(bookmark: PlaybackBookmark): void {
+function startRenameBookmark(bookmark: CoreBookmark): void {
   renamingBookmarkId.value = bookmark.id
   renameDraft.value = bookmark.label
 }
@@ -594,18 +578,14 @@ async function commitRenameBookmark(): Promise<void> {
   renamingBookmarkId.value = null
   renameDraft.value = ''
   try {
-    await playbackBookmarks.renameBookmark(id, label)
-  } catch {
-    // CAS conflict: list will refresh on next open
-  }
+    await renameBookmark(id, label)
+  } catch (error) { reportBookmarkError(error) }
 }
 
 async function deleteBookmark(id: string): Promise<void> {
   try {
-    await playbackBookmarks.removeBookmark(id)
-  } catch {
-    // ignore CAS conflict
-  }
+    await removeBookmark(id)
+  } catch (error) { reportBookmarkError(error) }
 }
 
 function onAcceptResume(): void {
@@ -618,7 +598,7 @@ function onDismissResume(): void {
 
 function onVolumeInput(event: Event): void {
   const target = event.target as HTMLInputElement
-  volume.value = clampVolume(Number(target.value))
+  setVolume(clampVolume(Number(target.value)))
 }
 
 function clampVolume(value: number): number {
@@ -656,17 +636,24 @@ const sleepTimerStatus = computed(() => {
   return `${Math.max(1, Math.ceil((state.endsAt - Date.now()) / 60_000))} 分钟后停止`
 })
 
+const core = useCoreConnection()
 const queueAddToPlaylist = useQueueAddToPlaylist({
   queue,
   playlists: localPlaylists,
   mediaProviders,
   addTracksToPlaylist,
   createPlaylistWithTracks,
+  createPlaylist,
+  getPlaylistMembership,
+  addQueueEntry: async (id, entry) => {
+    const result = await core.command('playlists.addQueueEntries', { id, revision: core.state.value!.playlistsRevision!, queue: entry.queue, occurrenceIds: [entry.queueEntryId] }) as { result: number }
+    return result.result
+  },
   notify: (notice) => {
     pushNotice({ kind: notice.kind, message: notice.message })
   },
   syncProviders: async () => {
-    if (typeof window !== 'undefined' && window.api?.providers) await syncPluginProviders()
+    await syncPluginProviders()
   }
 })
 
@@ -741,7 +728,7 @@ function stopResizeSidebar(): void {
 }
 
 watch(moreOpen, (open) => {
-  if (open) void playbackBookmarks.ensureLoaded()
+  if (open) void refreshBookmarks()
   // Closing the deck by any route (outside click, toggle, Esc) leaves no deck to
   // stand down, so drop the flag rather than trusting the child's teardown.
   if (!open) lyricsCustomizerActive.value = false
@@ -842,23 +829,14 @@ const autoHideActive = computed(
   () => props.autoHide && !!currentTrack.value && !fullyHidden.value && !props.preview
 )
 
-const {
-  favoriteButtonVisible,
-  favoriteButtonLiked,
-  favoriteButtonLoading,
-  favoriteButtonTitle,
-  toggleFavorite
-} = useFavoriteButton({
-  currentTrack,
-  playlists: localPlaylists,
-  mediaProviders,
-  addToPlaylist,
-  removeFromPlaylist,
-  createPlaylist,
-  isFavoriteTrack,
-  addFavoriteTrack,
-  removeFavoriteTrack
-})
+const favoriteButtonVisible = computed(() => currentFavorite.value?.available ?? false)
+const favoriteButtonLiked = computed(() => currentFavorite.value?.liked ?? false)
+const favoriteButtonLoading = computed(() => currentFavorite.value?.loading ?? false)
+const favoriteButtonTitle = computed(() => favoriteButtonLiked.value ? '取消喜欢' : '喜欢')
+
+function reportBookmarkError(error: unknown): void {
+  pushNotice({ kind: 'info', message: error instanceof Error ? error.message : String(error) })
+}
 
 const modeLabels: Record<string, string> = {
   sequential: '顺序播放',
@@ -1071,8 +1049,8 @@ function compactPcm(
   return parts.length > 0 ? parts.join(' ') : 'PCM'
 }
 
-function isSacdIsoSource(info: NonNullable<typeof playbackInfo.value>): boolean {
-  return info.source.split('.').pop()?.toUpperCase() === 'ISO'
+function isSacdIsoSource(_info: NonNullable<typeof playbackInfo.value>): boolean {
+  return currentTrack.value?.format?.toUpperCase() === 'ISO'
 }
 
 function inferDsdRate(sampleRate: number): number {
@@ -1084,7 +1062,7 @@ function inferDsdRate(sampleRate: number): number {
 }
 
 function isDsdSource(info: NonNullable<typeof playbackInfo.value>): boolean {
-  return /\.(dsf|dff)$/i.test(info.source) || info.codec.trim().toLowerCase() === 'dsd'
+  return /^(dsf|dff)$/i.test(currentTrack.value?.format ?? '') || info.codec.trim().toLowerCase() === 'dsd'
 }
 
 function isDsdPlayback(): boolean {
@@ -1098,7 +1076,7 @@ function isDsdPlayback(): boolean {
 }
 
 function formatDsdSource(info: NonNullable<typeof playbackInfo.value>): string {
-  const ext = info.source.split('.').pop()?.toUpperCase()
+  const ext = currentTrack.value?.format?.toUpperCase()
   const container = ext === 'DSF' || ext === 'DFF' ? ext : ext === 'ISO' ? 'SACD ISO' : 'DSD'
   const dsdRate = outputInfo.value?.dsdRate || inferDsdRate(info.sourceSampleRate)
   return [container, dsdRate > 0 ? `DSD${dsdRate}` : 'DSD'].filter(Boolean).join(' ')
@@ -1138,7 +1116,7 @@ const outputChainText = computed(() => {
   const out = outputInfo.value
   const backend = out?.actualBackend || info.actualBackend || ''
   const actual = compactPcm(
-    out?.actualOutputFormat || info.actualOutputFormat,
+    out?.actualOutputFormat || info.actualOutputFormat || '',
     out?.actualBitDepth || info.actualBitDepth,
     out?.actualSampleRate || info.actualSampleRate,
     out?.actualChannels || info.actualChannels,
@@ -1178,7 +1156,6 @@ const nativeDsdRuntimeReasonText = computed(() => {
 function playTrackAt(index: number): void {
   const track = queue.value[index]
   if (track) {
-    queueIndex.value = index
     playTrack(track)
   }
 }
@@ -1201,7 +1178,7 @@ function openEqualizerPage(): void {
 async function runPlayerBarExtension(command?: string): Promise<void> {
   if (!command) return
   moreOpen.value = false
-  await window.api.extensions.executeCommand(command, [currentTrack.value])
+  await executeCoreExtension(command, [currentTrack.value])
 }
 
 function onToggleClipGuard(): void {
@@ -1269,8 +1246,6 @@ async function onReloadLyrics(prefer: 'auto' | 'local' | 'amll' | 'provider'): P
   lyricsReloading.value = true
   try {
     await lyricsManagement.selectSource(track.id, prefer)
-    if (currentTrack.value?.id !== track.id) return
-    await refreshCurrentLyrics()
   } catch (error) {
     console.error('[hifi] Failed to reload lyrics:', error)
   } finally {
@@ -1313,7 +1288,6 @@ async function setLyricLayerSelection(
         key === 'translationSelection' ? selection : lyricLayerSelection('translationSelection'),
       romanizationSelection: lyricLayerSelection('romanizationSelection')
     })
-    if (currentTrack.value?.id === track.id) await refreshCurrentLyrics()
   } finally {
     lyricControlsPending.value = false
   }
@@ -1539,6 +1513,7 @@ onBeforeUnmount(() => {
         :read-page="readLibraryQueuePage"
         :play-entry="playLibraryQueueEntry"
         :edit-queue="editLibraryQueue"
+        :duplicate-entry="duplicateLibraryQueueEntry"
         :refresh-queue="refreshLibraryQueue"
         @add-to-playlist="queueAddToPlaylist.openForTrack"
         @save-playlist="queueSavePlaylistOpen = true"

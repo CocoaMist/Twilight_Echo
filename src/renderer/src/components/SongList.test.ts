@@ -2,13 +2,12 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { runInNewContext } from 'node:vm'
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive } from 'vue'
 import ts from 'typescript'
 import { parse } from '@vue/compiler-sfc'
 import type { Track } from '../types/music'
-import { resolveLibraryArtistTracks } from '../utils/libraryCollectionView.ts'
 
-test('local artist navigation resolves collaborations and reacts to the selected performer', () => {
+test('renderer materializes only explicit preview rows while the local library remains Core-paged', () => {
   const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
   const script = parse(source).descriptor.scriptSetup!.content
   const ast = ts.createSourceFile('SongList.ts', script, ts.ScriptTarget.Latest, true)
@@ -23,30 +22,27 @@ test('local artist navigation resolves collaborations and reacts to the selected
   assert.ok(expression)
   const solo = { id: 'solo', artist: 'Alice' } as Track
   const duet = { id: 'duet', artist: 'Alice / Bob' } as Track
-  const tracks = ref([solo, duet])
-  const props = reactive({ category: 'artists', filter: 'artist:Alice' })
+  const props = reactive<{ previewTracks?: Track[] }>({})
   const code = ts.transpileModule(`const result = ${expression}; result`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 }
   }).outputText
   const result = runInNewContext(code, {
     computed,
     props,
-    databaseTableCandidate: ref(false),
-    libraryStorage: { mode: ref('json') },
-    tracks,
-    resolveLibraryArtistTracks
   }) as { value: Track[] }
+  assert.equal(result.value.length, 0)
+  props.previewTracks = [solo, duet]
   assert.deepEqual(
     result.value.map((track) => track.id),
     ['solo', 'duet']
   )
-  props.filter = 'artist:Bob'
+  props.previewTracks = [duet]
   assert.deepEqual(
     result.value.map((track) => track.id),
     ['duet']
   )
-  tracks.value = [solo]
-  assert.deepEqual(result.value, [])
+  props.previewTracks = undefined
+  assert.equal(result.value.length, 0)
 })
 
 test('song list omits header kickers from all non-dashboard local library views', () => {
@@ -84,19 +80,19 @@ test('song list exposes local metadata match confidence from provider enrichment
 test('song list wires clear metadata match action into the context menu', () => {
   const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
 
-  assert.match(source, /clearTrackMetadataMatch/)
+  assert.match(source, /core\.command\('metadata\.clear', \{ id: track\.id, version: await trackVersion\(track\) \}\)/)
   assert.match(source, /clearMetadataMatch:/)
   assert.match(source, /canClearMetadataMatchSelectedTrack/)
   assert.match(source, /handleClearMetadataMatch/)
   assert.match(source, /取消流媒体匹配/)
 })
 
-test('song list manual matching uses ranked metadata match candidates', () => {
+test('song list asks Core for ranked metadata candidates and applies its first result by token', () => {
   const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
 
-  assert.match(source, /buildMetadataMatchCandidates/)
-  assert.match(source, /const candidates = buildMetadataMatchCandidates\(/)
-  assert.match(source, /const rematched = candidates\[0\]\?\.track/)
+  assert.match(source, /core\.query\('metadata\.candidates', \{/)
+  assert.match(source, /version: await trackVersion\(track\)/)
+  assert.match(source, /core\.command\('metadata\.apply', \{ token: candidates\.token, index: 0 \}\)/)
 })
 
 test('playlist rows expose a free source picker instead of only automatic rematching', () => {
@@ -104,7 +100,9 @@ test('playlist rows expose a free source picker instead of only automatic rematc
 
   assert.match(source, /TrackSourcePicker/)
   assert.match(source, /const sourcePickerTrack = shallowRef<Track \| null>\(null\)/)
-  assert.match(source, /replaceTrackReference\(original\.id, replacement\)/)
+  assert.match(source, /core\.command\('playlists\.replaceSource', \{/)
+  assert.match(source, /oldTrackId: original\.id/)
+  assert.match(source, /input: trackInput\(replacement\)/)
   assert.match(source, /v-if="isPlaylistDetail && selectedTrack && contextActionCount <= 1"/)
   assert.match(source, /选择播放来源/)
 })
@@ -113,7 +111,7 @@ test('song list wires local metadata rematch into the context menu', () => {
   const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
 
   assert.match(source, /async function handleMetadataRematch\(track: Track\): Promise<void>/)
-  assert.match(source, /applyTrackMetadataMatch/)
+  assert.match(source, /core\.command\('metadata\.apply'/)
   assert.match(source, /rematchMetadata: handleMetadataRematch/)
   assert.match(source, /canRematchMetadataSelectedTrack/)
   assert.match(source, /handleRematchMetadata/)
@@ -179,7 +177,8 @@ test('song list playlist cards expose mixed-source composition', () => {
   const source = readFileSync(new URL('./SongList.vue', import.meta.url), 'utf8')
   const styles = readFileSync(new URL('./song-list/SongList.css', import.meta.url), 'utf8')
 
-  assert.match(source, /summarizePlaylistSources/)
+  assert.match(source, /playlist\.sourceSummary/)
+  assert.doesNotMatch(source, /summarizePlaylistSources/)
   assert.match(source, /formatPlaylistSourceSummary/)
   assert.match(source, /function playlistSourceSummaryLabel\(playlist: GridItem\): string/)
   assert.match(source, /class="playlist-source-summary"/)

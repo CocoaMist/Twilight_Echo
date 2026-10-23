@@ -112,6 +112,7 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
     reorderPlaylistTrackIdPagesById,
     importPlaylistDocumentAsync,
     exportPlaylistDocumentAsync,
+    getPlaylistMemberPosition,
     repairPlaylistMissingTracksAsync
   } = useMusicStore()
   const playlistImportInput = ref<HTMLInputElement | null>(null)
@@ -184,13 +185,13 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
     }
     try {
       if (request.kind === 'rename') {
-        const changed = renamePlaylist(playlist.id, value)
+        const changed = await renamePlaylist(playlist.id, value)
         if (changed) {
           options.repairMessage.value = '歌单已重命名'
           options.selectPlaylist(playlist.name)
         }
       } else if (request.kind === 'copy') {
-        const copyId = copyPlaylist(playlist.id, value)
+        const copyId = await copyPlaylist(playlist.id, value)
         options.repairMessage.value = copyId ? '已创建歌单副本' : '未找到原歌单'
       } else if (request.kind === 'move') {
         const target = playlistMoveTargets.value.find((item) => item.id === value)
@@ -223,7 +224,7 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
           if (done && playlistDialog.value === request) dismissPlaylistDialog()
           return
         }
-        const result = movePlaylistTracks(playlist.name, target.name, request.trackIds)
+        const result = await movePlaylistTracks(playlist.name, target.name, request.trackIds)
         if (!result.sourceRemoved) {
           playlistDialogError.value = '没有可移动的歌曲，请重新选择'
           return
@@ -304,7 +305,7 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
     const playlist = requireCurrentPlaylist()
     if (!file || !playlist) return
     try {
-      setPlaylistCover(playlist.id, await readPlaylistCover(file))
+      await setPlaylistCover(playlist.id, await readPlaylistCover(file))
       options.repairMessage.value = '歌单封面已更新'
     } catch (error) {
       options.repairMessage.value = describeError(error, '更新歌单封面失败')
@@ -321,7 +322,7 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
           await reorderPlaylistTrackIdPagesById(
             playlist.id,
             lease.ids,
-            toEnd ? playlist.trackIds.length : 0,
+            toEnd ? playlist.count : 0,
             signal
           )
         )
@@ -331,7 +332,7 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
     }
     const selected = options.getSelectedTracks().map((track) => track.id)
     if (!selected.length) return
-    if (reorderPlaylistTracks(playlist.name, selected, toEnd ? playlist.trackIds.length : 0)) {
+    if (await reorderPlaylistTracks(playlist.name, selected, toEnd ? playlist.count : 0)) {
       options.repairMessage.value = toEnd ? '已移动到歌单末尾' : '已移动到歌单开头'
     }
   }
@@ -368,7 +369,7 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
         captured.id === target.id
       )
         return
-      const targetIndex = playlist.trackIds.indexOf(target.id)
+      const targetIndex = await getPlaylistMemberPosition(playlist.id, target.id)
       if (targetIndex < 0) return
       await options.streamingSelection.run(captured.source, async (lease, signal) => {
         if (await reorderPlaylistTrackIdPagesById(playlist.id, lease.ids, targetIndex, signal))
@@ -377,12 +378,12 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
       return
     }
     if (!playlist || !dragged || dragged === target.id) return
-    const targetIndex = playlist.trackIds.indexOf(target.id)
+    const targetIndex = await getPlaylistMemberPosition(playlist.id, target.id)
     if (targetIndex < 0) return
     const selected = options.isSelected(dragged)
       ? options.getSelectedTracks().map((track) => track.id)
       : [dragged]
-    if (reorderPlaylistTracks(playlist.name, selected, targetIndex)) {
+    if (await reorderPlaylistTracks(playlist.name, selected, targetIndex)) {
       options.repairMessage.value = '已更新歌单顺序'
     }
   }
@@ -433,16 +434,8 @@ export function usePlaylistLifecycleActions(options: PlaylistLifecycleActionOpti
       if (!folder) return
       assertTarget()
       options.repairMessage.value = '正在扫描所选文件夹并检查缺失歌曲…'
-      const result = await repairPlaylistMissingTracksAsync(targetId, folder)
-      options.repairMessage.value = result.relocations.length
-        ? `已重新定位 ${result.relocations.length} 首${
-            result.ambiguousTrackIds.length
-              ? `，${result.ambiguousTrackIds.length} 首存在多个候选`
-              : ''
-          }`
-        : result.ambiguousTrackIds.length
-          ? `${result.ambiguousTrackIds.length} 首存在多个候选，需要手动处理`
-          : '未找到可自动重新定位的文件'
+      await repairPlaylistMissingTracksAsync(targetId, folder)
+      options.repairMessage.value = '后台正在修复歌单，可在任务状态中查看结果'
     } catch (error) {
       options.repairMessage.value = describeError(error, '批量修复歌单文件失败')
     } finally {

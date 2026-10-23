@@ -1,75 +1,41 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useEscapeToClose, useFocusTrap } from '../app/useDismissLayer.ts'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
-import { isTrackUnderLibraryRoot, normalizeLibraryPath } from '../stores/library/musicStoreData.ts'
-import type { Track } from '../types/music'
-import { createLibraryStorageState } from '../stores/library/libraryStorageState.ts'
 import {
   canResumeLocalLibraryScan,
   libraryScanStatusText
 } from '../utils/libraryScanPresentation.ts'
 
-const props = defineProps<{
-  show: boolean
-}>()
-
-const emit = defineEmits<{
-  close: []
-}>()
-
+const props = defineProps<{ show: boolean }>()
+const emit = defineEmits<{ close: [] }>()
 const musicStore = useMusicStore()
-const {
-  scannedFolders,
-  addFolder,
-  addTracks,
-  isScanning,
-  saveLibrary,
-  refreshLibraryIndex,
-  excludedTracks,
-  restoreExcludedTracks
-} = musicStore
-const settingsStore = useSettingsStore()
-const { settings, loaded: settingsLoaded, removeLibraryFolder, updateSettings } = settingsStore
-
-const progress = ref({ current: 0, total: 0 })
+const { settings, loaded: settingsLoaded, removeLibraryFolder } = useSettingsStore()
 const selectedFolders = ref<Set<string>>(new Set())
-const scanStatus = ref<'idle' | 'scanning' | 'done' | 'empty'>('idle')
-const scannedTrackCount = ref(0)
 const scanError = ref('')
 const dialogRef = ref<HTMLElement | null>(null)
 const choosingFolder = ref(false)
 const newlyAddedFolders = ref<string[]>([])
-const storage = createLibraryStorageState({
-  getStorageMode: () => window.api.library.getStorageMode()
-})
-const databaseMode = computed(() => storage.mode.value === 'sqlite')
 const databaseRequestPending = ref(false)
 const controlPending = ref(false)
 const databaseStatus = computed(() => musicStore.libraryScanStatus.value)
-const databaseScanActive = computed(
-  () => databaseMode.value && ['running', 'paused'].includes(databaseStatus.value.state)
+const databaseScanActive = computed(() =>
+  ['running', 'paused'].includes(databaseStatus.value.state)
 )
 const busy = computed(
   () =>
-    !storage.mode.value ||
+    !settingsLoaded.value ||
     choosingFolder.value ||
     controlPending.value ||
     databaseRequestPending.value ||
-    databaseScanActive.value ||
-    (!databaseMode.value && isScanning.value)
+    databaseScanActive.value
 )
-const closeDisabled = computed(
-  () => choosingFolder.value || (!databaseMode.value && isScanning.value)
-)
+const closeDisabled = computed(() => choosingFolder.value)
 const databaseStatusText = computed(() => libraryScanStatusText(databaseStatus.value))
 const canContinue = computed(() => canResumeLocalLibraryScan(databaseStatus.value))
 const availableFolders = computed(() => [
-  ...new Set([
-    ...(settingsLoaded.value ? settings.value.libraryFolders : scannedFolders.value),
-    ...newlyAddedFolders.value
-  ])
+  ...new Set([...settings.value.libraryFolders, ...newlyAddedFolders.value])
 ])
 
 function close(): void {
@@ -77,27 +43,20 @@ function close(): void {
 }
 useEscapeToClose(() => props.show, close)
 useFocusTrap(dialogRef, () => props.show)
-
-let cleanupProgress: (() => void) | null = null
-
 watch(
   () => props.show,
   (show) => {
     if (!show) return
     newlyAddedFolders.value = []
     selectedFolders.value = new Set(availableFolders.value)
-    scanStatus.value = 'idle'
     scanError.value = ''
-    void storage.load()
   },
   { immediate: true }
 )
-
 watch(availableFolders, (folders) => {
   const available = new Set(folders)
   selectedFolders.value = new Set([...selectedFolders.value].filter((path) => available.has(path)))
 })
-
 async function handleAddNewFolder(): Promise<void> {
   if (busy.value) return
   choosingFolder.value = true
@@ -107,12 +66,6 @@ async function handleAddNewFolder(): Promise<void> {
     if (path) {
       if (!availableFolders.value.includes(path)) newlyAddedFolders.value.push(path)
       selectedFolders.value.add(path)
-      // `dialog:openFolder` persists the selection in the main process. Keep
-      // the renderer's settings snapshot in sync for windows that were opened
-      // before the settings listener was attached.
-      if (settingsLoaded.value && !settings.value.libraryFolders.includes(path)) {
-        await updateSettings({ libraryFolders: [...settings.value.libraryFolders, path] })
-      }
     }
   } catch (error) {
     scanError.value = `选择文件夹失败：${error instanceof Error ? error.message : String(error)}`
@@ -120,126 +73,42 @@ async function handleAddNewFolder(): Promise<void> {
     choosingFolder.value = false
   }
 }
-
 async function handleRemoveFolder(path: string): Promise<void> {
   if (busy.value) return
   choosingFolder.value = true
   scanError.value = ''
   try {
-    if (databaseMode.value && !settingsLoaded.value)
-      throw new Error('设置尚未加载，请稍后再移除文件夹')
-    if (settingsLoaded.value) await removeLibraryFolder(path)
+    await removeLibraryFolder(path)
     selectedFolders.value.delete(path)
     newlyAddedFolders.value = newlyAddedFolders.value.filter((folder) => folder !== path)
-    // SQLite settings revoke the scope through the application owner; do not
-    // replace its current library with the renderer's compatibility snapshot.
-    if (!databaseMode.value && scannedFolders.value.includes(path)) musicStore.removeFolder(path)
   } catch (error) {
     scanError.value = `移除文件夹失败：${error instanceof Error ? error.message : String(error)}`
   } finally {
     choosingFolder.value = false
   }
 }
-
 function toggleFolder(path: string): void {
-  if (selectedFolders.value.has(path)) {
-    selectedFolders.value.delete(path)
-  } else {
-    selectedFolders.value.add(path)
-  }
+  if (selectedFolders.value.has(path)) selectedFolders.value.delete(path)
+  else selectedFolders.value.add(path)
 }
-
 async function startScan(): Promise<void> {
   if (busy.value) return
-
-  const foldersToScan = Array.from(selectedFolders.value)
-  if (foldersToScan.length === 0) {
+  const foldersToScan = [...selectedFolders.value]
+  if (!foldersToScan.length) {
     scanError.value = '请先选择要扫描的文件夹。'
     return
   }
-
-  if (databaseMode.value) {
-    databaseRequestPending.value = true
-    scanError.value = ''
-    try {
-      await musicStore.scanLibraryDirectories({ directories: foldersToScan, reason: 'import' })
-      newlyAddedFolders.value = []
-    } catch (error) {
-      scanError.value = `目录检查未完成：${error instanceof Error ? error.message : String(error)}。已提交曲目保留。`
-    } finally {
-      databaseRequestPending.value = false
-    }
-    return
-  }
-
-  isScanning.value = true
-  scanStatus.value = 'scanning'
-  progress.value = { current: 0, total: 0 }
-  scannedTrackCount.value = 0
+  databaseRequestPending.value = true
   scanError.value = ''
-
   try {
-    // A deliberate re-import is also the user's way to opt an earlier
-    // "removed from library" path back in. Clear matching exclusions before
-    // asking the scanner for tracks; otherwise the scanner correctly skips
-    // those paths forever.
-    const selectedRoots = foldersToScan.map(normalizeLibraryPath)
-    const excludedForSelection =
-      excludedTracks?.value
-        .filter((item) =>
-          selectedRoots.some((root) => isTrackUnderLibraryRoot(item.filePath, root))
-        )
-        .map((item) => item.filePath) ?? []
-    if (excludedForSelection.length > 0 && typeof restoreExcludedTracks === 'function') {
-      await restoreExcludedTracks(excludedForSelection)
-    }
-
-    for (const folder of foldersToScan) {
-      const tracks = await window.api.fs.scanMusicFiles(folder)
-      // Scan selection never removes unselected roots or their existing tracks.
-      addFolder(folder)
-      if (tracks && tracks.length > 0) {
-        scannedTrackCount.value += tracks.length
-        // 每批导入 500 首，避免一次性更新过重。
-        const batchSize = 500
-        for (let i = 0; i < tracks.length; i += batchSize) {
-          const batch = (tracks as Track[]).slice(i, i + batchSize)
-          await addTracks(batch, { deferRebuild: true })
-          // 让界面有机会刷新导入进度。
-          await new Promise((resolve) => setTimeout(resolve, 50))
-        }
-      }
-    }
-
-    // 全部导入完成后统一重建索引并保存，避免每 500 首全量重算。
-    refreshLibraryIndex()
-    await saveLibrary()
+    await musicStore.scanLibraryDirectories({ directories: foldersToScan, reason: 'import' })
     newlyAddedFolders.value = []
-
-    if (scannedTrackCount.value > 0) {
-      emit('close')
-    } else {
-      scanStatus.value = 'empty'
-    }
-  } catch (err) {
-    console.error('扫描音乐文件失败：', err)
-    scanError.value = `扫描失败：${err instanceof Error ? err.message : String(err)}`
-    scanStatus.value = 'idle'
-    // Deferred batches from completed folders still need to survive a restart.
-    if (scannedTrackCount.value > 0) {
-      refreshLibraryIndex()
-      try {
-        await saveLibrary()
-      } catch (saveError) {
-        scanError.value += `；保存已导入歌曲失败：${saveError instanceof Error ? saveError.message : String(saveError)}`
-      }
-    }
+  } catch (error) {
+    scanError.value = `目录检查未完成：${error instanceof Error ? error.message : String(error)}。已提交曲目保留。`
   } finally {
-    isScanning.value = false
-    progress.value = { current: 0, total: 0 }
+    databaseRequestPending.value = false
   }
 }
-
 async function controlScan(command: 'pause' | 'resume' | 'cancel'): Promise<void> {
   if (controlPending.value) return
   controlPending.value = true
@@ -257,16 +126,6 @@ async function controlScan(command: 'pause' | 'resume' | 'cancel'): Promise<void
     controlPending.value = false
   }
 }
-
-onMounted(() => {
-  cleanupProgress = window.api.fs.onScanProgress((data) => {
-    progress.value = data
-  })
-})
-
-onUnmounted(() => {
-  if (cleanupProgress) cleanupProgress()
-})
 </script>
 
 <template>
@@ -332,21 +191,10 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <p v-if="storage.error.value" class="scan-error" role="alert">
-              无法确认曲库存储：{{ storage.error.value }}
-              <button
-                type="button"
-                class="btn-cancel"
-                :disabled="storage.loading.value"
-                @click="storage.load"
-              >
-                重试读取
-              </button>
-            </p>
             <p v-if="scanError" class="scan-error" role="alert">{{ scanError }}</p>
             <div class="scan-status-slot" role="status" aria-live="polite">
               <Transition name="scan-status">
-                <div v-if="databaseMode" key="database" class="progress-section">
+                <div key="database" class="progress-section">
                   <p>
                     {{
                       databaseRequestPending && !databaseStatus.jobId
@@ -420,23 +268,6 @@ onUnmounted(() => {
                     </button>
                   </div>
                 </div>
-                <div v-else-if="isScanning" key="scanning" class="progress-section">
-                  <div class="progress-info">
-                    <span>正在扫描...</span>
-                    <span>{{ progress.current }} / {{ progress.total }}</span>
-                  </div>
-                  <div class="progress-bar-bg">
-                    <div
-                      class="progress-bar-fill"
-                      :style="{
-                        transform: `scaleX(${progress.total > 0 ? progress.current / progress.total : 0})`
-                      }"
-                    ></div>
-                  </div>
-                </div>
-                <div v-else-if="scanStatus === 'empty'" key="empty" class="empty-result">
-                  <span>未找到音乐文件。请确认文件夹中包含支持的音频格式，或添加其他文件夹。</span>
-                </div>
               </Transition>
             </div>
           </div>
@@ -451,13 +282,7 @@ onUnmounted(() => {
               :disabled="busy || selectedFolders.size === 0"
               @click="startScan"
             >
-              {{
-                databaseMode
-                  ? '检查并导入所选文件夹'
-                  : isScanning
-                    ? '正在扫描...'
-                    : '扫描所选文件夹'
-              }}
+              检查并导入所选文件夹
             </button>
           </div>
         </div>

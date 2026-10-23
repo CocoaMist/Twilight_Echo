@@ -15,7 +15,7 @@ export interface CommandPaletteAction {
 
 export function createCommandPaletteActions(controls: {
   navigation: ReturnType<typeof useAppNavigation>
-  currentTrack: Track | null
+  currentTrack: Pick<Track, 'title'> | null
   playing: boolean
   loading: boolean
   lyricsVisible: boolean
@@ -110,8 +110,9 @@ export function createCommandPaletteActions(controls: {
     {
       id: 'dsp',
       title: '打开 DSP 工作台',
-      description: '均衡器、效果链、资料与插件、监测',
-      terms: 'dsp workbench dsp rack 音效 工作台 机架 场景 均衡器 效果链 资料 插件 监测',
+      description: '总览、均衡器、效果链、输出与资料库',
+      terms:
+        'dsp workbench dsp rack 音效 工作台 机架 场景 均衡器 效果链 输出 缓冲 资料 资料库 插件 监测 总览',
       group: '操作',
       run: navigation.openDspRackPage
     },

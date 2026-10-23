@@ -9,7 +9,7 @@ import { DEFAULT_LYRICS_APPEARANCE } from '../../../shared/lyricsAppearance.ts'
 import '../assets/base.css'
 
 const actual = realSettingsStore()
-export const settings = actual.settings
+export const settings = ref(JSON.parse(JSON.stringify(actual.settings.value)))
 settings.value.libraryFolders = ['D:\\Music\\收藏与长路径示例\\Twilight Echo']
 settings.value.miniPlayer.showInTaskbar = false
 const patches = []
@@ -24,6 +24,7 @@ const updateSettings = async (patch) => {
 export function useSettingsStore() {
   return {
     ...actual,
+    settings,
     updateSettings,
     loadSettings: noop,
     appVersion: ref('1.3.0'),

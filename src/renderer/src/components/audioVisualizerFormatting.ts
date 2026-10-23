@@ -45,8 +45,8 @@ export function formatVisualizerSource(track: { id: string; source?: string }): 
 
 interface VisualizerTrackMetadata {
   id: string
-  filePath: string
-  fileName: string
+  filePath?: string
+  fileName?: string
   streamUrl?: string | null
   size: number
   format?: string
@@ -56,7 +56,8 @@ interface VisualizerTrackMetadata {
 }
 
 interface VisualizerPlaybackMetadata {
-  source: string
+  source?: string
+  nativePlaybackActive?: boolean
   codec: string
   sourceSampleRate: number
   sourceChannels?: number
@@ -95,8 +96,9 @@ export function resolveVisualizerAudioMetadata(
   format: string
 } {
   const sourceMatches =
-    !!playbackInfo?.source &&
-    (playbackInfo.source === track.streamUrl || playbackInfo.source === track.filePath)
+    playbackInfo?.source
+      ? playbackInfo.source === track.streamUrl || playbackInfo.source === track.filePath
+      : playbackInfo?.nativePlaybackActive === true
   const source = sourceMatches ? playbackInfo : null
   const codec = source?.codec.trim().toLowerCase() ?? ''
   const losslessCodec = /^(flac|alac|ape|wavpack|tta|dsd|dst|pcm_)/.test(codec)
@@ -106,7 +108,7 @@ export function resolveVisualizerAudioMetadata(
     positiveNumber(track.bitDepth)
   const bitrate = positiveNumber(source?.bitrate) ?? positiveNumber(track.bitrate)
   const channels = positiveNumber(source?.sourceChannels)
-  const format = track.format?.trim() || formatCodec(source?.codec ?? '', track.fileName)
+  const format = track.format?.trim() || formatCodec(source?.codec ?? '', track.fileName ?? '')
 
   return {
     quality: buildVisualizerQualityString({ format, sampleRate, bitDepth, bitrate }),

@@ -23,10 +23,6 @@ const integrationSource = readFileSync(
   new URL('../../../main/integrations/dynamicIsland.ts', import.meta.url),
   'utf8'
 )
-const lyricsPublisherSource = readFileSync(
-  new URL('../app/useDynamicIslandLyrics.ts', import.meta.url),
-  'utf8'
-)
 
 const defaults = normalizeDynamicIslandConfig(undefined)
 
@@ -84,23 +80,20 @@ test('helpers stay total for odd input', () => {
 })
 
 test('dynamic island bars use the native audio tap instead of a decorative keyframe', () => {
-  assert.match(appSource, /window\.api\.dynamicIsland\.getVisualizationData\(/)
+  assert.match(appSource, /useCoreConnection\(\)/)
   assert.match(visualizerSource, /visualizerBarCount: VISUALIZER_BAR_COUNT/)
   assert.match(visualizerSource, /tapStatus === 'active'/)
-  assert.match(visualizerSource, /VISUALIZER_IDLE_POLL_INTERVAL_MS = 250/)
-  assert.match(
-    visualizerSource,
-    /live \? VISUALIZER_POLL_INTERVAL_MS : VISUALIZER_IDLE_POLL_INTERVAL_MS/
-  )
+  assert.match(visualizerSource, /core\.command\('visualization\.subscribe'/)
+  assert.match(visualizerSource, /core\.command\('visualization\.unsubscribe'/)
   assert.match(visualizerSource, /--visualizer-level/)
   assert.match(styleSource, /scaleY\(calc\(0\.12 \+ var\(--visualizer-level, 0\) \* 0\.88\)\)/)
   assert.doesNotMatch(styleSource, /@keyframes island-(compact|expanded)-wave/)
 })
 
 test('visualizer sampling stops when disabled or when the window is hidden', () => {
-  assert.match(visualizerSource, /watch\(enabled, sync\)/)
+  assert.match(visualizerSource, /enabled\.value, visible\.value/)
   assert.match(visualizerSource, /document\.visibilityState !== 'hidden'/)
-  assert.match(visualizerSource, /addEventListener\('visibilitychange', sync\)/)
+  assert.match(visualizerSource, /addEventListener\('visibilitychange', visibilityChanged\)/)
   assert.match(appSource, /computed\(\(\) => components\.value\.visualizer\)/)
 })
 
@@ -121,8 +114,11 @@ test('dynamic island only renders an active timed lyric', () => {
   assert.match(appSource, /v-if="showExpandedLyric" class="island-player-lyric"/)
 })
 
-test('dynamic island exposes the visualization sampler through its restricted window API', () => {
-  assert.match(preloadSource, /const dynamicIslandWindowApi = \{[\s\S]*getVisualizationData:/)
+test('dynamic island consumes the finite Core stream without the legacy native sampler', () => {
+  assert.doesNotMatch(
+    preloadSource,
+    /getVisualizationData: audioEngineApi\.audioEngine\.getVisualizationData/
+  )
   assert.match(preloadSource, /const dynamicIslandWindowApi = \{[\s\S]*onConfig:/)
   assert.doesNotMatch(appSource, /window\.api\.audioEngine\.getVisualizationData\(/)
 })
@@ -258,10 +254,6 @@ test('focus moves between the summary and panel as the panel toggles inert', () 
 test('play toggle is disabled while idle or loading', () => {
   assert.match(appSource, /:disabled="!state\.track \|\| state\.isLoading"/)
   assert.match(styleSource, /\.island-player-toggle:disabled\s*\{[\s\S]*?opacity: 0\.58/)
-})
-
-test('lyric publisher skips unchanged payloads', () => {
-  assert.match(lyricsPublisherSource, /lastPublished\.lines === next\.lines/)
 })
 
 test('island follows the main window across displays and display topology changes', () => {

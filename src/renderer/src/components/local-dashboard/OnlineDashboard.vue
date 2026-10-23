@@ -46,7 +46,9 @@ const {
   sectionTitle,
   playlistTitle
 } = home
-const hero = computed(() => player.currentTrack.value ?? recent.value[0] ?? tracks.value[0] ?? null)
+const hero = computed(() => recent.value.find((track) => track.id === player.currentTrack.value?.id)
+  ?? tracks.value.find((track) => track.id === player.currentTrack.value?.id)
+  ?? recent.value[0] ?? tracks.value[0] ?? null)
 const actionError = ref('')
 const pendingPlaylist = ref<string | null>(null)
 let actionRevision = 0
@@ -109,22 +111,21 @@ async function canPlay(providerId: string, request: number): Promise<boolean> {
 
 async function play(track: Track, queue: Track[]): Promise<void> {
   const request = ++actionRevision
-  const recentSnapshot = history.capture(queue)
+  const fromRecent = queue === recent.value
   pendingPlaylist.value = null
   actionError.value = ''
   recentActionError.value = ''
-  if (player.currentTrack.value?.id === track.id) {
-    player.togglePlay()
-    return
-  }
   try {
+    if (player.currentTrack.value?.id === track.id) {
+      await player.togglePlay()
+      return
+    }
     if (!(await canPlay(getTrackSource(track), request)) || request !== actionRevision) return
-    if (recentSnapshot && !(await history.confirm(recentSnapshot))) return
-    if (request === actionRevision) player.playTrack(track, queue)
+    if (request === actionRevision) await player.playTrack(track, queue)
   } catch (cause) {
     if (request === actionRevision) {
       const message = friendlyStreamingError(cause, '暂时无法播放')
-      if (recentSnapshot) recentActionError.value = message
+      if (fromRecent) recentActionError.value = message
       else actionError.value = message
     }
   }
@@ -148,7 +149,7 @@ async function playPlaylist(playlist: MediaProviderPlaylistSummary): Promise<voi
     const queue = await providerStore.fetchPlaylistTracks(source.id, playlist.id)
     if (request !== actionRevision) return
     if (!queue.length) throw new Error('这个歌单暂时没有可播放的歌曲')
-    player.playTrack(queue[0], queue)
+    await player.playTrack(queue[0], queue)
   } catch (cause) {
     if (request === actionRevision)
       actionError.value = friendlyStreamingError(cause, '歌单暂时无法播放')

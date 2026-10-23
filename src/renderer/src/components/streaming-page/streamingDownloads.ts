@@ -1,8 +1,8 @@
-import type { ProviderDownloadTaskSnapshot } from '../../../../shared/providerDownloads.ts'
+import type { CoreDownloadTask } from '../../../../shared/coreDownloads.ts'
 
 export function filterActiveDownloadTasks(
-  tasks: ProviderDownloadTaskSnapshot[]
-): ProviderDownloadTaskSnapshot[] {
+  tasks: CoreDownloadTask[]
+): CoreDownloadTask[] {
   return tasks.filter((task) => task.status !== 'completed' && task.status !== 'cancelled')
 }
 
@@ -10,7 +10,7 @@ export function formatDownloadProgress(value: number): string {
   return `${Math.round(value * 100)}%`
 }
 
-export function downloadStatusLabel(task: ProviderDownloadTaskSnapshot): string {
+export function downloadStatusLabel(task: CoreDownloadTask): string {
   switch (task.status) {
     case 'queued':
       return task.queuePosition != null ? `排队中 #${task.queuePosition}` : '排队中'

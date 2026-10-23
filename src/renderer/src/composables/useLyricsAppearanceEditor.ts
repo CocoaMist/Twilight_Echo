@@ -83,7 +83,8 @@ export function useLyricsAppearanceEditor(): LyricsAppearanceEditor {
     return '实时预览'
   })
 
-  const presetConfig = computed(() => settings.value.lyricsPresets)
+  const presetDraft = ref<ReturnType<typeof cloneLyricsPresetConfig> | null>(null)
+  const presetConfig = computed(() => presetDraft.value ?? settings.value.lyricsPresets)
   const presets = computed(() => [...BUILTIN_LYRICS_PRESETS, ...presetConfig.value.custom])
   const activePresetId = computed(() => presetConfig.value.activeId)
   const canSavePreset = computed(() => presetConfig.value.custom.length < MAX_CUSTOM_LYRICS_PRESETS)
@@ -96,22 +97,21 @@ export function useLyricsAppearanceEditor(): LyricsAppearanceEditor {
     if (saveTimer) window.clearTimeout(saveTimer)
     const normalized = normalizeLyricsAppearance(next)
     draft.value = normalized
-    // Write locally first so the page reflects the change while the debounce runs.
-    settings.value = {
-      ...settings.value,
-      ...extra,
-      lyricsAppearance: cloneLyricsAppearance(normalized)
-    }
+    if (extra?.lyricsPresets) presetDraft.value = cloneLyricsPresetConfig(extra.lyricsPresets)
+    const nextPresets = presetDraft.value ? cloneLyricsPresetConfig(presetDraft.value) : undefined
     saveState.value = 'saving'
     const sequence = ++saveSequence
     saveTimer = window.setTimeout(async () => {
       saveTimer = 0
       try {
         await updateSettings({
-          ...extra,
+          ...(nextPresets ? { lyricsPresets: nextPresets } : {}),
           lyricsAppearance: cloneLyricsAppearance(normalized)
         })
-        if (sequence === saveSequence) saveState.value = 'saved'
+        if (sequence === saveSequence) {
+          presetDraft.value = null
+          saveState.value = 'saved'
+        }
       } catch {
         if (sequence === saveSequence) saveState.value = 'error'
       }
@@ -167,6 +167,7 @@ export function useLyricsAppearanceEditor(): LyricsAppearanceEditor {
 
   function reloadFromSettings(): void {
     draft.value = cloneLyricsAppearance(settings.value.lyricsAppearance)
+    presetDraft.value = null
     saveState.value = 'idle'
   }
 

@@ -84,25 +84,19 @@ import { getExternalPlaylistService } from './stores/library/externalPlaylistSer
 import { useNcmStore } from './stores/useNcmStore'
 import { isPlaybackSpace } from '@renderer/app/playbackKeyboard'
 import { usePlayerStore } from './stores/usePlayerStore'
+import { useCoreLibraryApi } from './stores/library/coreLibraryApi.ts'
 import { useSettingsStore } from './stores/useSettingsStore'
 import { useThemeStore, applyActiveTheme, bootstrapThemeRuntime } from './stores/useThemeStore'
 import { getStartupSnapshot } from './app/startupSnapshot'
-import { isAfterglowRendererRestore } from '../../shared/afterglowMode.ts'
-import { startPluginPlaylistImports, useExtensionRegistry } from './extensions/registry'
+import { useExtensionRegistry } from './extensions/registry'
 import { applyStartupExperience } from './app/startupExperience'
-import { syncPluginProviders, useMediaProviders } from './providers'
 import { useAppNavigation } from './app/useAppNavigation'
 import { createNavigationSessionPersistence } from './app/useNavigationSessionPersistence'
 import { useCommandPalette } from '@renderer/app/useCommandPalette.ts'
 import { useBackStack } from './app/useBackStack'
 import { createHistoryCommandRouter } from './app/historyNavigation.ts'
 import { hasDismissLayer } from '@renderer/app/useDismissLayer'
-import { createPlaybackSessionPersistence } from './app/usePlaybackSessionPersistence'
 import { useSideMenuClearance } from './app/useSideMenuClearance'
-import { useMiniPlayerSync } from './app/useMiniPlayerSync'
-import { useDynamicIslandLyrics } from './app/useDynamicIslandLyrics.ts'
-import { useDesktopLyricsPublisher } from './app/useDesktopLyricsPublisher.ts'
-import { useFavoriteButton } from './components/player-bar/useFavoriteButton'
 import { useMotionPreference } from './app/useMotionPreference'
 import { useLanguagePreference } from './app/useLocale'
 import { useLiquidGlassEnvironment } from './composables/useLiquidGlassEnvironment'
@@ -452,13 +446,7 @@ const {
   loadApplicationLibrary,
   libraryCompatibilityError,
   retryLibraryCompatibility,
-  loadPlaylists,
-  flushSaveLibrary,
-  flushPlaylists,
-  handleLibraryChange,
-  startStartupLibraryScan,
-  applyLibraryScanProgress,
-  applyLibraryScanStatus
+  loadPlaylists
 } = musicStore
 watch(libraryCompatibilityError, (error) => {
   if (!error) return
@@ -477,47 +465,22 @@ watch(libraryCompatibilityError, (error) => {
 const { checkLogin } = useNcmStore()
 const {
   currentTrack,
-  currentTime,
-  estimatePlaybackClockPosition,
-  duration,
-  playbackRate,
-  isPlaying,
-  isLoading,
-  volume,
-  playMode,
   coverThemeColor,
   themeCoverUrl,
   themeCoverIdentity,
-  queue,
-  queueIndex,
-  libraryQueueReference,
-  libraryQueueSnapshot,
-  togglePlay,
-  next,
-  prev,
-  seek,
-  setVolume,
-  flushSoftwareVolumePersist,
-  cyclePlayMode,
-  setPlayMode,
-  restorePlaybackSession,
-  createPlaybackSession,
-  adoptAfterglowRestore,
-  getNativeQueueIndices,
-  handoffSleepTimerForAfterglow,
-  rehydrateCurrentTrackFromLibrary,
-  queueWorkspace,
   queueSessions,
   canUndoQueue,
   queueUndoLabel,
   undoQueue,
-  visualizerActive
+  visualizerActive,
+  currentFavorite,
+  queueWorkspace,
+  queueCount,
+  togglePlay,
+  toggleFavorite
 } = usePlayerStore()
-useDesktopLyricsPublisher()
-useDynamicIslandLyrics()
 const { setAdaptiveMedia, effectiveSurfaceMaterial, effectiveLiquidGlass, effectiveThemeLayers } =
   useThemeStore()
-const mediaProviders = useMediaProviders()
 const navigationProviders = useProviderStore()
 const commandPalette = useCommandPalette(navigation, () => navigationPages.value)
 
@@ -544,21 +507,27 @@ function handlePlayerBarArtistClick(artist: TrackArtistRef): void {
   enterStreamingMode(streamingMetadataTab.value)
 }
 
-function handlePlayingAlbumClick(): void {
+async function handlePlayingAlbumClick(): Promise<void> {
   const track = currentTrack.value
   if (!track?.album.trim()) return
 
   const source = getTrackSource(track)
   if (source === 'local') {
     streamingMetadataRequest.value = null
-    const album = musicStore.albums.value.find((item) =>
-      item.tracks.some((albumTrack) => albumTrack.id === track.id)
-    )
-    if (!album) {
-      pushNotice({ kind: 'info', message: '本地曲库中未找到这首歌曲的专辑' })
-      return
+    try {
+      const result = await useCoreLibraryApi().queryCollections('albums', {
+        ids: [track.id],
+        limit: 1
+      })
+      const album = result.items[0]
+      if (!album) {
+        pushNotice({ kind: 'info', message: '本地曲库中未找到这首歌曲的专辑' })
+        return
+      }
+      onSelectView('albums', `album:${album.id}`)
+    } catch (error) {
+      pushNotice({ kind: 'warning', message: error instanceof Error ? error.message : String(error) })
     }
-    onSelectView('albums', `album:${album.id}`)
     return
   }
 
@@ -597,23 +566,10 @@ function handleAnalyticsArtistOpen(request: { name: string; providerId: string }
   enterStreamingMode()
 }
 
-const {
-  favoriteButtonVisible,
-  favoriteButtonLiked,
-  favoriteButtonLoading,
-  favoriteButtonTitle,
-  toggleFavorite
-} = useFavoriteButton({
-  currentTrack,
-  playlists: musicStore.localPlaylists,
-  mediaProviders,
-  addToPlaylist: musicStore.addToPlaylist,
-  removeFromPlaylist: musicStore.removeFromPlaylist,
-  createPlaylist: musicStore.createPlaylist,
-  isFavoriteTrack: musicStore.isFavoriteTrack,
-  addFavoriteTrack: musicStore.addFavoriteTrack,
-  removeFavoriteTrack: musicStore.removeFavoriteTrack
-})
+const favoriteButtonVisible = computed(() => currentFavorite.value?.available ?? false)
+const favoriteButtonLiked = computed(() => currentFavorite.value?.liked ?? false)
+const favoriteButtonLoading = computed(() => currentFavorite.value?.loading ?? false)
+const favoriteButtonTitle = computed(() => favoriteButtonLiked.value ? '取消收藏' : '收藏歌曲')
 
 watch(
   [themeCoverIdentity, coverThemeColor, themeCoverUrl],
@@ -623,31 +579,6 @@ watch(
   { immediate: true }
 )
 
-useMiniPlayerSync({
-  positionAt: estimatePlaybackClockPosition,
-  currentTrack,
-  isPlaying,
-  isLoading,
-  currentTime,
-  duration,
-  playbackRate,
-  volume,
-  playMode,
-  favoriteAvailable: favoriteButtonVisible,
-  favoriteLiked: favoriteButtonLiked,
-  favoriteLoading: favoriteButtonLoading,
-  dominantColor: coverThemeColor,
-  queue,
-  queueIndex,
-  togglePlay,
-  next,
-  prev,
-  seek,
-  setVolume,
-  cyclePlayMode,
-  setPlayMode,
-  toggleFavorite
-})
 const { loadSettings, hydrateStartupSnapshot, settings, updateSettings } = useSettingsStore()
 useMotionPreference(computed(() => settings.value.motionPreference))
 useLanguagePreference(computed(() => settings.value.language))
@@ -756,32 +687,6 @@ const navigationPages = computed(() => {
 })
 const mainContentMinHeight = computed(() => '100vh')
 
-const playbackSessionPersistence = createPlaybackSessionPersistence({
-  settings,
-  currentTrack,
-  currentTime,
-  isPlaying,
-  queue,
-  restorePlaybackSession,
-  createPlaybackSession,
-  syncPluginProviders,
-  dataApi: {
-    ...window.api.data,
-    syncQueueReferences: async (owner: string, ids: string[]) => {
-      try {
-        await window.api.library.database.syncQueueReferences(owner, ids)
-      } catch (error) {
-        if (!String(error).includes('SQLite 曲库尚未启用')) throw error
-      }
-    }
-  },
-  onAutosaveError: (error) => {
-    pushNotice({
-      kind: 'warning',
-      message: `自动保存播放会话失败：${error instanceof Error ? error.message : String(error)}`
-    })
-  }
-})
 const {
   playerBottomClearance,
   sideMenuBottomOffset,
@@ -805,11 +710,6 @@ watch(
 let removePlaybackSessionSaveListener: (() => void) | null = null
 let removeAppNavigationListener: (() => void) | null = null
 let removeHistoryCommandListener: (() => void) | null = null
-let removeLibraryChangedListener: (() => void) | null = null
-let removeCoversMissingListener: (() => void) | null = null
-let removeLibraryScanProgressListener: (() => void) | null = null
-let removeLibraryScanStatusListener: (() => void) | null = null
-let removePluginPlaylistImports: (() => void) | null = null
 let quitFlushHandler: (() => void) | null = null
 let pageHideFlushHandler: (() => void) | null = null
 const startupDataErrorScopes = new Set<string>()
@@ -830,33 +730,11 @@ function reportStartupDataError(scope: string, error: unknown): void {
   })
 }
 
-async function flushPlaylistsForExit(): Promise<void> {
-  try {
-    const persisted = await flushPlaylists()
-    if (!persisted) {
-      throw new Error('Playlist persistence did not finish before exit')
-    }
-  } catch (error) {
-    console.error('[persistence] Failed to flush playlists before exit:', error)
-    throw error
-  }
-}
-
 function flushPendingPersistenceForExit(): void {
   navigationPersistence.flush()
-  flushSaveLibrary()
-  // Browser lifecycle events cannot wait for a Promise. The app-close IPC
-  // callback below awaits this same flush before the main process closes.
-  void flushPlaylistsForExit().catch(() => {
-    // The failure was logged by flushPlaylistsForExit. pagehide is only a
-    // best-effort path; it cannot certify a successful application close.
-  })
 }
 
 onMounted(async () => {
-  const { setupListeningStatsTracking, flushListeningStatsForExit } =
-    await import('@renderer/stores/useListeningStatsStore')
-  setupListeningStatsTracking({ currentTrack, isPlaying, currentTime, duration })
   const startupSnapshot = await getStartupSnapshot()
   await bootstrapThemeRuntime(startupSnapshot ?? undefined)
   const loadedSettings = startupSnapshot
@@ -890,107 +768,10 @@ onMounted(async () => {
   navigationPersistence.start()
   const startupNavigation = navigation.session.value
 
-  // Restore the session before loading the potentially large music library.
-  // The main-process data handlers use synchronous file reads, so issuing the
-  // library request first can delay the home page's current-track state.
-  //
-  // Afterglow restore is different: the native engine kept playing while this
-  // renderer did not exist, so we adopt its live state instead of replaying the
-  // persisted session (which would also reload the native queue).
-  const afterglowRestoreRequested = isAfterglowRendererRestore(window.location.search)
-  const afterglowRestoreState = afterglowRestoreRequested
-    ? await window.api.app.afterglow.getRestoreState().catch(() => null)
-    : null
-  let afterglowAdopted = false
-  const playbackSessionSetupPromise = (
-    afterglowRestoreRequested
-      ? (async () => {
-          if (!afterglowRestoreState) throw new Error('未能读取后台播放状态，请重新恢复窗口')
-          await adoptAfterglowRestore(afterglowRestoreState)
-          afterglowAdopted = true
-          await playbackSessionPersistence.adoptLivePlaybackSession()
-        })()
-      : playbackSessionPersistence.restoreSavedPlaybackSession(loadedSettings.playbackResumeMode)
-  )
-    .catch((error) => {
-      reportStartupDataError('playback session', error)
-    })
-    .finally(() => {
-      removePlaybackSessionSaveListener = window.api.app.onSavePlaybackSession(async (options) => {
-        if (options?.includeQueue) {
-          // Afterglow's handoff is memory-only. Publish the snapshot first so
-          // a failed disk save can never keep the renderer alive; the normal
-          // persistence flush then runs best-effort for resume/close data.
-          const track = currentTrack.value
-          if (!track) throw new Error('当前没有可交接的曲目')
-          // Pinia state is reactive; nested proxies/functions are not
-          // structured-cloneable. IPC rejects them as "An object could not be
-          // cloned", which used to surface as "保存播放状态失败". Hand over a
-          // plain JSON snapshot instead.
-          const toPlainSnapshot = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
-          const nativeQueueIndices = getNativeQueueIndices()
-          // Array handoff remains `queue: toPlainSnapshot(queue.value)` for
-          // the legacy source; SQLite queues publish only their reference.
-          const publishSnapshot = (sleep: {
-            volume: number
-            sleepShutdown?: import('../../shared/sleepTimer.ts').SleepTimerShutdownHandoff
-          }) =>
-            window.api.app.afterglow.publishRendererSnapshot({
-              queue: libraryQueueReference.value ? [] : toPlainSnapshot(queue.value),
-              queueIndex: libraryQueueReference.value?.index ?? queueIndex.value,
-              track: toPlainSnapshot(track),
-              position: currentTime.value,
-              playMode: playMode.value,
-              volume: sleep.volume,
-              playbackRate: playbackRate.value,
-              ...(sleep.sleepShutdown ? { sleepShutdown: sleep.sleepShutdown } : {}),
-              ...(libraryQueueReference.value
-                ? { libraryQueue: toPlainSnapshot(libraryQueueReference.value) }
-                : {}),
-              // Online queues are loaded as a current+next window; tell main
-              // which logical index each native entry came from.
-              ...(nativeQueueIndices && nativeQueueIndices.length > 0
-                ? { nativeQueueIndices: [...nativeQueueIndices] }
-                : {})
-            })
-          const status = await window.api.app.afterglow.getStatus()
-          const published =
-            status.phase === 'active'
-              ? await handoffSleepTimerForAfterglow(publishSnapshot)
-              : await publishSnapshot({ volume: volume.value })
-          if (!published) throw new Error('主进程拒绝了播放队列快照')
-          const bestEffort = async (label: string, action: () => Promise<unknown>) => {
-            try {
-              await action()
-            } catch (error) {
-              console.warn(`[afterglow] ${label} failed (non-fatal):`, error)
-            }
-          }
-          await bestEffort('playback session save', () =>
-            playbackSessionPersistence.savePlaybackSessionWithQueue()
-          )
-          await bestEffort('playlist flush', flushPlaylistsForExit)
-          await bestEffort('volume flush', flushSoftwareVolumePersist)
-          await bestEffort('listening stats flush', flushListeningStatsForExit)
-          await bestEffort('queue workspace flush', () => queueWorkspace.flush())
-          navigationPersistence.flush()
-          return
-        }
-        navigationPersistence.flush()
-        // This callback is awaited by the main-process close coordinator. It
-        // closes the 250ms playlist debounce window before renderer teardown.
-        await flushPlaylistsForExit()
-        await flushSoftwareVolumePersist()
-        await flushListeningStatsForExit()
-        await playbackSessionPersistence.savePlaybackSessionForQuit()
-        await queueWorkspace.flush()
-      })
-      if (!afterglowRestoreRequested || afterglowAdopted)
-        playbackSessionPersistence.startAutosaveWatchers()
-      if (afterglowAdopted) {
-        void window.api.app.afterglow.rendererAdoptComplete().catch(() => {})
-      }
-    })
+  // Closing a view only saves its navigation; main flushes the Core owner.
+  removePlaybackSessionSaveListener = window.api.app.onSavePlaybackSession(async () => {
+    navigationPersistence.flush()
+  })
   // Run independent startup operations in parallel so none blocks the others.
   const libraryLoad = loadApplicationLibrary()
   const playlistsLoad = loadPlaylists()
@@ -1000,16 +781,6 @@ onMounted(async () => {
   const playlistsPromise = playlistsLoad.catch((error) =>
     reportStartupDataError('playlists', error)
   )
-  void startPluginPlaylistImports(Promise.all([libraryLoad, playlistsLoad]))
-    .then((unsubscribe) => {
-      removePluginPlaylistImports = unsubscribe
-    })
-    .catch((error) => {
-      console.warn(
-        '[plugins] Playlist imports remain queued because library startup failed:',
-        error
-      )
-    })
   const extensionsPromise = syncExtensions().then(() => {
     const canEnterExperience =
       !needsOnboarding && !pendingNavigation && navigation.session.value === startupNavigation
@@ -1039,56 +810,12 @@ onMounted(async () => {
     })
   }
 
-  // The session restore starts alongside the library load so the home surface
-  // can receive the actual current track without waiting for a full scan.
   await libraryPromise
-  await playbackSessionSetupPromise
-  // Session restore often finishes before library rows are available; re-apply
-  // embedded covers/lyrics so playbar/home art and now-playing lyrics hydrate.
-  rehydrateCurrentTrackFromLibrary()
-  removeLibraryChangedListener = window.api.library.onChanged((change) => {
-    handleLibraryChange(change).catch((error) => {
-      console.error('[library] Failed to apply an incremental scan update:', error)
-    })
-  })
-  removeLibraryScanProgressListener = window.api.library.onScanProgress(applyLibraryScanProgress)
-  removeLibraryScanStatusListener = window.api.library.onScanStatus(applyLibraryScanStatus)
-  void window.api.library
-    .getScanStatus()
-    .then(applyLibraryScanStatus)
-    .catch((error) => {
-      console.error('[library] Failed to read background scan status:', error)
-    })
-  void startStartupLibraryScan().catch((error) => {
-    console.error('[library] Startup reconciliation failed:', error)
-    pushNotice({
-      kind: 'warning',
-      message: `启动音乐库核对失败：${error instanceof Error ? error.message : String(error)}`,
-      action: {
-        label: '打开音乐库设置',
-        run: () => openSettingsPage('library', { anchor: 'scan-diagnostics' })
-      }
-    })
-  })
-
   // Ensure extensions are loaded before wiring listeners that depend on them.
   await extensionsPromise
   await applyActiveTheme(false)
   await playlistsPromise
 
-  removeCoversMissingListener = window.api.library.onCoversMissing((info) => {
-    const dirtyCount = Math.max(0, Number(info?.dirtyCount) || 0)
-    if (dirtyCount <= 0) return
-    console.warn(`[library] ${dirtyCount} tracks are missing cover art`)
-    pushNotice({
-      kind: 'warning',
-      message: `检测到 ${dirtyCount} 首缺少封面，可在设置中完整重扫以补全封面。`,
-      action: {
-        label: '打开音乐库设置',
-        run: () => openSettingsPage('library', { anchor: 'scan-diagnostics' })
-      }
-    })
-  })
   // Lifecycle events are best-effort; the close IPC callback above provides
   // the awaitable completion barrier for application shutdown.
   quitFlushHandler = flushPendingPersistenceForExit
@@ -1146,7 +873,6 @@ onBeforeUnmount(() => {
   navigationPersistence.stop()
   idleLoginCheck?.cancel()
   idleLoginCheck = null
-  playbackSessionPersistence.stop()
   removePlaybackSessionSaveListener?.()
   removePlaybackSessionSaveListener = null
   removeAppNavigationListener?.()
@@ -1154,16 +880,6 @@ onBeforeUnmount(() => {
   removeHistoryCommandListener?.()
   removeHistoryCommandListener = null
   window.removeEventListener('mouseup', routeHistoryCommand.handleMouseUp, true)
-  removeLibraryChangedListener?.()
-  removeLibraryChangedListener = null
-  removeLibraryScanProgressListener?.()
-  removeLibraryScanProgressListener = null
-  removeLibraryScanStatusListener?.()
-  removeLibraryScanStatusListener = null
-  removePluginPlaylistImports?.()
-  removePluginPlaylistImports = null
-  removeCoversMissingListener?.()
-  removeCoversMissingListener = null
   if (quitFlushHandler) window.removeEventListener('beforeunload', quitFlushHandler)
   if (pageHideFlushHandler) window.removeEventListener('pagehide', pageHideFlushHandler)
   window.removeEventListener('keydown', onGlobalBackKeydown)
@@ -1527,7 +1243,7 @@ onBeforeUnmount(() => onWorkshopDecorationsUnmount?.())
       v-if="queueSessions.open.value"
       :workspace="queueWorkspace"
       :controller="queueSessions"
-      :queue-length="libraryQueueSnapshot?.total ?? queue.length"
+      :queue-length="queueCount"
       :can-undo="canUndoQueue"
       :undo-label="queueUndoLabel"
       :undo="undoQueue"

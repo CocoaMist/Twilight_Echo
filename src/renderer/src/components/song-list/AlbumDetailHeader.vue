@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import type { LibraryItem } from '../../stores/library/musicStoreTypes'
+import type { GridItem } from './types'
 import AlbumArtwork from './AlbumArtwork.vue'
 import { formatReleaseDate } from '../../../../shared/releaseDate.ts'
 import { resolveCover } from '../../utils/coverLoader.ts'
 import { extractAverageColor, normalizeAccentColor } from '../../utils/colorExtractor.ts'
 
 const props = defineProps<{
-  album: Omit<LibraryItem, 'tracks'>
+  album: GridItem
   durationText: string
   canPlay: boolean
 }>()

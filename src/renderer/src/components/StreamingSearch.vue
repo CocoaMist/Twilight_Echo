@@ -25,7 +25,7 @@ const props = defineProps<{
   searchOffset: number
   searchLoading: boolean
   searchError: string
-  currentTrack: Track | null
+  currentTrack: Pick<Track, 'id'> | null
   trackActivationMode: 'singleClick' | 'doubleClick'
   likingTracks: Set<number>
   isTrackLiked: (id: number | undefined) => boolean

@@ -1,39 +1,15 @@
-import { musicVersionRevision } from '@renderer/stores/musicVersions.ts'
-import { buildLogicalTracks } from '@renderer/utils/logicalTrackModel.ts'
-import { computed, onBeforeUnmount, ref, shallowRef, type Ref } from 'vue'
-import { useMediaProviders } from '../providers/index.ts'
-import { useLibraryUnifiedSearch } from './useLibraryUnifiedSearch.ts'
-import type { Track } from '../types/music'
-import type { NetworkEntry } from '../../../shared/networkSources.ts'
-import type {
-  LogicalMusicItem,
-  UnifiedSearchProviderHealth,
-  UnifiedSearchResult,
-  UnifiedSearchTrackItem
-} from '../utils/unifiedMusicSearch.ts'
-import type { UnifiedLocalSearch } from '../utils/unifiedMusicSearch.ts'
+import { onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue'
+import { useCoreConnection } from '../stores/coreConnection.ts'
+import type { CoreMusicSearchPage, CoreMusicSearchQuery, CoreSearchTrackItem } from '../../../shared/coreSearch.ts'
+import type { UnifiedSearchProviderHealth } from '../../../shared/unifiedMusicSearch.ts'
 
 export interface UnifiedMusicSearchDependencies {
-  getLocalTracks: () => Track[]
-  localSource?: UnifiedLocalSearch
-  searchNetworkLibrary?: (
-    query: string
-  ) => Promise<Array<{ profileName: string; entry: NetworkEntry }>>
-  searchAllSongs: (options: {
-    query: string
-    localTracks: Track[]
-    localSource?: UnifiedLocalSearch
-    networkEntries?: Array<{ profileName: string; entry: NetworkEntry }>
-    limit?: number
-    offset?: number
-    signal?: AbortSignal
-  }) => Promise<UnifiedSearchResult>
+  searchAllSongs(options: CoreMusicSearchQuery & { signal?: AbortSignal }): Promise<CoreMusicSearchPage>
 }
-
 export interface UnifiedMusicSearchState {
   query: Ref<string>
-  items: Ref<UnifiedSearchTrackItem[]>
-  logicalItems: Ref<LogicalMusicItem[]>
+  items: Ref<CoreSearchTrackItem[]>
+  logicalItems: Ref<CoreMusicSearchPage['logicalItems']>
   providerHealth: Ref<Record<string, UnifiedSearchProviderHealth>>
   loading: Ref<boolean>
   error: Ref<string>
@@ -46,34 +22,19 @@ export interface UnifiedMusicSearchState {
 }
 
 export function useUnifiedMusicSearch(): UnifiedMusicSearchState {
-  const providers = useMediaProviders()
-  const localSource = useLibraryUnifiedSearch((revision) => {
-    if (revision === undefined) search.refresh()
-    else search.invalidateLibrary(revision)
-  })
-  const search = createUnifiedMusicSearch({
-    getLocalTracks: () => [],
-    localSource,
-    searchNetworkLibrary: async (query) => {
-      if (!window.api?.networkSources) return []
-      return window.api.networkSources.searchLibrary(query)
-    },
-    searchAllSongs: (options) => providers.searchAllSongs(options)
-  })
-  onBeforeUnmount(search.clear)
+  const core = useCoreConnection()
+  const search = createUnifiedMusicSearch({ searchAllSongs: ({ signal, ...query }) => core.query('search.songs', query, signal) })
+  const stop = watch([() => core.state.value?.epoch, () => core.state.value?.libraryRevision, () => core.state.value?.versionsRevision, () => core.state.value?.network?.revision, () => core.state.value?.pluginsRevision],
+    () => search.refresh())
+  onBeforeUnmount(() => { stop(); search.clear() })
   return search
 }
-
 export function createUnifiedMusicSearch(
   dependencies: UnifiedMusicSearchDependencies
 ): UnifiedMusicSearchState {
   const query = ref('')
-  const items = shallowRef<UnifiedSearchTrackItem[]>([])
-  const resultLogicalItems = shallowRef<LogicalMusicItem[]>([])
-  const logicalItems = computed(() => {
-    void musicVersionRevision.value
-    return items.value.length ? buildLogicalTracks(items.value) : resultLogicalItems.value
-  })
+  const items = shallowRef<CoreSearchTrackItem[]>([])
+  const logicalItems = shallowRef<CoreMusicSearchPage['logicalItems']>([])
   const providerHealth = ref<Record<string, UnifiedSearchProviderHealth>>({})
   const loading = ref(false)
   const error = ref('')
@@ -107,7 +68,7 @@ export function createUnifiedMusicSearch(
     controller = null
     query.value = ''
     items.value = []
-    resultLogicalItems.value = []
+    logicalItems.value = []
     providerHealth.value = {}
     loading.value = false
     error.value = ''
@@ -139,20 +100,13 @@ export function createUnifiedMusicSearch(
     loading.value = true
     error.value = ''
     items.value = []
-    resultLogicalItems.value = []
+    logicalItems.value = []
     providerHealth.value = {}
     total.value = 0
     hasMore.value = false
     try {
-      const networkEntries = dependencies.searchNetworkLibrary
-        ? await dependencies.searchNetworkLibrary(normalizedQuery).catch(() => [])
-        : []
-      if (requestId !== latestRequestId) return
       const result = await dependencies.searchAllSongs({
         query: snapshot.query,
-        localTracks: dependencies.localSource ? [] : dependencies.getLocalTracks(),
-        ...(dependencies.localSource ? { localSource: dependencies.localSource } : {}),
-        networkEntries,
         limit: snapshot.limit,
         offset: snapshot.offset,
         signal: requestController.signal
@@ -161,7 +115,7 @@ export function createUnifiedMusicSearch(
       if (result.libraryRevision !== undefined && result.libraryRevision < minimumLibraryRevision)
         throw new Error('曲库在搜索期间发生变化，请重新搜索')
       items.value = result.items
-      resultLogicalItems.value = result.logicalItems
+      logicalItems.value = result.logicalItems
       providerHealth.value = result.health
       total.value = result.total
       hasMore.value =
@@ -170,7 +124,7 @@ export function createUnifiedMusicSearch(
       if (requestId !== latestRequestId) return
       error.value = caught instanceof Error ? caught.message : '统一搜索失败'
       items.value = []
-      resultLogicalItems.value = []
+      logicalItems.value = []
       providerHealth.value = {}
     } finally {
       if (requestId === latestRequestId) {

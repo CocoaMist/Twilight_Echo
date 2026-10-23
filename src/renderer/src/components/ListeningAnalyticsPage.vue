@@ -2,299 +2,95 @@
 import PlaybackIcon from '@renderer/components/icons/PlaybackIcon.vue'
 import NativeDialogTransition from '@renderer/components/NativeDialogTransition.vue'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { useMusicStore } from '@renderer/stores/useMusicStore'
-import {
-  getMostListenedTracks,
-  getTopArtists,
-  getTopTracks,
-  useListeningStatsStore,
-  type ListeningArtistStat
-} from '@renderer/stores/useListeningStatsStore'
+import { getMostListenedTracks, getTopArtists, getTopTracks, useListeningStatsStore, type ListeningArtistStat } from '@renderer/stores/useListeningStatsStore'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
-import { createUnifiedRecentTrackResolver } from '@renderer/utils/unifiedRecentTracks'
-import { getMusicVersions, musicVersionRevision } from '@renderer/stores/musicVersions.ts'
-import { readLibraryRecentHistory } from '@renderer/stores/library/libraryRecentHistory.ts'
 import CoverImg from '@renderer/components/CoverImg.vue'
 import ListeningRhythm from '@renderer/components/listening-analytics/ListeningRhythm.vue'
 import ListeningRankings from '@renderer/components/listening-analytics/ListeningRankings.vue'
 import ListeningFootprint from '@renderer/components/listening-analytics/ListeningFootprint.vue'
 import ListeningStatsClearDialog from '@renderer/components/listening-analytics/ListeningStatsClearDialog.vue'
 import type { ListeningStatsClearRange } from '@renderer/stores/listeningStatsHistory'
-import {
-  formatListeningDuration,
-  listeningDurationParts,
-  summarizeRecordedTracks,
-  utcDayKey
-} from '@renderer/components/listening-analytics/listeningAnalyticsData'
+import { formatListeningDuration, listeningDurationParts, utcDayKey } from '@renderer/components/listening-analytics/listeningAnalyticsData'
 import type { Track } from '@renderer/types/music'
 
 const emit = defineEmits<{
   (event: 'select-view', category: string, filter: string | null): void
   (event: 'open-artist', request: { name: string; providerId: string }): void
 }>()
-
-const { tracks: libraryTracks, artists: libraryArtists } = useMusicStore()
-const { listeningStats, persistenceStatus, clearListeningStats } = useListeningStatsStore()
+const core = useCoreConnection()
+const { listeningStats, persistenceStatus, overview, clearListeningStats } = useListeningStatsStore()
 const { currentTrack, playTrack, playLibraryQuery } = usePlayerStore()
 const now = ref(new Date())
-const storageMode = shallowRef<'json' | 'sqlite' | null>(null)
-const resolvedRankingTracks = shallowRef(new Map<string, Track>())
-const databaseArtistNames = shallowRef(new Set<string>())
 const sort = ref<'seconds' | 'plays'>('seconds')
-const showFormatTable = ref(false)
-const showClearDialog = ref(false)
-const clearingStats = ref(false)
+const showFormatTable = ref(false), showClearDialog = ref(false), clearingStats = ref(false)
 const clearNotice = ref('')
-const clearActivity = computed(() => ({ ...listeningStats.value }))
+const activity = computed(() => ({ days: listeningStats.value.days }))
+const recorded = computed(() => overview.value?.recorded ?? { seconds: 0, plays: 0, trackCount: 0, formats: [] })
+const totalDuration = computed(() => listeningDurationParts(recorded.value.seconds))
+const hasHistory = computed(() => recorded.value.trackCount > 0 || Object.values(listeningStats.value.days).some((seconds) => seconds > 0))
+const mostListened = computed(() => getMostListenedTracks(10))
+const favorite = computed(() => {
+  const stat = mostListened.value[0]
+  return stat ? { ...stat, resolvedTrack: stat.displayTrack } : null
+})
+const rankedTracks = computed(() => (sort.value === 'seconds' ? mostListened.value : getTopTracks(10))
+  .map((stat) => ({ ...stat, resolvedTrack: stat.displayTrack })))
+const rankedArtists = computed(() => getTopArtists(10))
+const localArtistNames = shallowRef(new Set<string>())
+const artistProviders = computed(() => new Map(rankedArtists.value.flatMap((artist) => artist.providerId ? [[artist.name, artist.providerId] as const] : [])))
+const navigableArtists = computed(() => new Set([...localArtistNames.value, ...artistProviders.value.keys()]))
+const playableRanking = computed(() => rankedTracks.value.flatMap((entry) => entry.resolvedTrack ? [entry.resolvedTrack] : []))
+watch([rankedArtists, () => core.state.value?.libraryRevision], async ([artists], _previous, onCleanup) => {
+  const request = new AbortController()
+  onCleanup(() => request.abort())
+  const revision = core.state.value?.libraryRevision
+  try {
+    const rows = await Promise.all(artists.map(async (artist) => ({ name: artist.name, page: await core.query('library.tracks', { artist: artist.name, limit: 1, ...(revision !== null && revision !== undefined ? { contentRevision: revision } : {}) }, request.signal) })))
+    if (!request.signal.aborted) localArtistNames.value = new Set(rows.filter((row) => row.page.total > 0).map((row) => row.name))
+  } catch (error) {
+    if (!request.signal.aborted) console.warn('[listening-analytics] artist navigation unavailable', error)
+  }
+}, { immediate: true })
+function playDashboardTrack(track: Track): void {
+  if (!track.source || track.source === 'local') void playLibraryQuery({ sort: 'playlist' }, track.id)
+  else void playTrack(track, [track])
+}
+function playRanking(): void {
+  const tracks = playableRanking.value
+  if (tracks.length) void playTrack(tracks[0], tracks)
+}
+function openArtist(artist: ListeningArtistStat): void {
+  const name = artist.name.trim()
+  if (localArtistNames.value.has(name)) emit('select-view', 'artists', `artist:${name}`)
+  else {
+    const providerId = artistProviders.value.get(name)
+    if (providerId) emit('open-artist', { name, providerId })
+  }
+}
+async function readClearPreview(range: ListeningStatsClearRange, signal: AbortSignal) {
+  if (!overview.value) throw new Error('聆听统计尚未就绪')
+  return core.query('statistics.previewClear', { range, revision: overview.value.revision }, signal)
+}
+async function clearStats(range: ListeningStatsClearRange, revision: number): Promise<void> {
+  if (clearingStats.value) return
+  clearingStats.value = true
+  try {
+    const saved = await clearListeningStats(range, revision)
+    showClearDialog.value = false
+    clearNotice.value = !saved ? '记录已清除，保存失败，应用会自动重试。' : range
+      ? `已清除 ${range.startDay} 至 ${range.endDay} 的每日记录及对应曲目明细。` : '已清除全部统计数据。'
+  } catch (error) {
+    clearNotice.value = error instanceof Error ? error.message : '统计清理失败，请重试'
+  } finally { clearingStats.value = false }
+}
 let dayTimer: ReturnType<typeof setInterval> | undefined
-
 function refreshDay(): void {
   const next = new Date()
   if (utcDayKey(next) !== utcDayKey(now.value)) now.value = next
 }
-
-onMounted(() => {
-  dayTimer = setInterval(refreshDay, 60_000)
-  document.addEventListener('visibilitychange', refreshDay)
-})
-onBeforeUnmount(() => {
-  rankingsDisposed = true
-  rankingRequest++
-  stopLibraryChanged?.()
-  clearInterval(dayTimer)
-  document.removeEventListener('visibilitychange', refreshDay)
-})
-
-const activity = computed(() => ({ days: listeningStats.value.days }))
-const recorded = computed(() => summarizeRecordedTracks(listeningStats.value.tracks))
-const totalDuration = computed(() => listeningDurationParts(recorded.value.seconds))
-const hasHistory = computed(() => {
-  if (recorded.value.trackCount > 0) return true
-  for (const seconds of Object.values(listeningStats.value.days)) {
-    if (Number.isFinite(seconds) && seconds > 0) return true
-  }
-  return false
-})
-const mostListened = computed(() => getMostListenedTracks(10))
-const resolveTrack = computed(() => createUnifiedRecentTrackResolver(libraryTracks.value))
-const favorite = computed(() => {
-  const stat = mostListened.value[0]
-  if (!stat) return null
-  const track = resolvedRankingTracks.value.get(stat.id) ?? null
-  return {
-    ...stat,
-    resolvedTrack: track,
-    cover: track?.cover ?? stat.cover,
-    coverSource: track?.coverSource ?? stat.coverSource
-  }
-})
-const rankedTracks = computed(() => {
-  const seen = new Set<string>()
-  const rows = sort.value === 'seconds' ? mostListened.value : getTopTracks(10)
-  const result: Array<
-    ReturnType<typeof getMostListenedTracks>[number] & { resolvedTrack: Track | null }
-  > = []
-  for (const stat of rows) {
-    const track = resolvedRankingTracks.value.get(stat.id) ?? null
-    if (track) {
-      const identity = `${track.source ?? 'local'}:${track.id}`
-      if (seen.has(identity)) continue
-      seen.add(identity)
-    }
-    result.push({
-      ...stat,
-      resolvedTrack: track,
-      cover: track?.cover ?? stat.cover,
-      coverSource: track?.coverSource ?? stat.coverSource
-    })
-  }
-  return result
-})
-const rankedArtists = computed(() => getTopArtists(10))
-const localArtistNames = computed(() =>
-  storageMode.value === 'json'
-    ? new Set(libraryArtists.value.map((artist) => artist.name))
-    : databaseArtistNames.value
-)
-const artistProviders = computed(() => {
-  const providers = new Map<string, string>()
-  for (const id in listeningStats.value.tracks) {
-    const stat = listeningStats.value.tracks[id]
-    const name = stat.artist.trim()
-    if (providers.has(name)) continue
-    const provider = stat.sourceIds?.find(
-      (entry) => entry.source && entry.source !== 'local'
-    )?.source
-    if (provider) providers.set(name, provider)
-  }
-  return providers
-})
-const navigableArtists = computed(() => {
-  const names = new Set(localArtistNames.value)
-  for (const name of artistProviders.value.keys()) names.add(name)
-  return names
-})
-const playableRanking = computed(() => {
-  const tracks: Track[] = []
-  for (const entry of rankedTracks.value) if (entry.resolvedTrack) tracks.push(entry.resolvedTrack)
-  return tracks
-})
-
-function playDashboardTrack(track: Track): void {
-  if (track.source && track.source !== 'local') {
-    playTrack(track, [track])
-    return
-  }
-  if (storageMode.value === 'sqlite') {
-    void playLibraryQuery({ sort: 'playlist' }, track.id)
-    return
-  }
-  if (storageMode.value !== 'json') {
-    playTrack(track, [track])
-    return
-  }
-  const sourceIndex = libraryTracks.value.findIndex((item) => item.id === track.id)
-  if (sourceIndex < 0) {
-    playTrack(track, [track])
-    return
-  }
-  const end = Math.min(libraryTracks.value.length, Math.max(0, sourceIndex - 100) + 200)
-  playTrack(track, libraryTracks.value.slice(Math.max(0, end - 200), end))
-}
-
-function playRanking(): void {
-  const tracks = playableRanking.value
-  if (tracks.length) playTrack(tracks[0], tracks)
-}
-
-function openArtist(artist: ListeningArtistStat): void {
-  const name = artist.name.trim()
-  if (localArtistNames.value.has(name)) {
-    emit('select-view', 'artists', `artist:${name}`)
-    return
-  }
-  const providerId = artistProviders.value.get(name)
-  if (providerId) emit('open-artist', { name, providerId })
-}
-
-async function clearStats(range: ListeningStatsClearRange): Promise<void> {
-  if (clearingStats.value) return
-  clearingStats.value = true
-  try {
-    const saved = await clearListeningStats(range)
-    showClearDialog.value = false
-    clearNotice.value = !saved
-      ? '记录已清除，保存失败，应用会自动重试。'
-      : range
-        ? `已清除 ${range.startDay} 至 ${range.endDay} 的每日记录及对应曲目明细。`
-        : '已清除全部统计数据。'
-  } finally {
-    clearingStats.value = false
-  }
-}
-
-let rankingRequest = 0
-let rankingActive = false
-let rankingPending = false
-let rankingsDisposed = false
-let stopLibraryChanged: (() => void) | undefined
-
-function requestRankings(): void {
-  if (rankingsDisposed) return
-  rankingRequest++
-  rankingPending = true
-  if (rankingActive) return
-  rankingActive = true
-  void (async () => {
-    try {
-      while (rankingPending && !rankingsDisposed) {
-        rankingPending = false
-        const request = rankingRequest
-        const stats: ReturnType<typeof getMostListenedTracks> = [
-          ...getMostListenedTracks(100),
-          ...getTopTracks(100)
-        ].filter((stat, index, all) => all.findIndex((item) => item.id === stat.id) === index)
-        try {
-          const mode = await window.api.library.getStorageMode()
-          if (mode !== 'json' && mode !== 'sqlite') throw new Error('曲库存储模式无效')
-          const tracks = new Map<string, Track>()
-          const localArtists = new Set<string>()
-          if (mode === 'json') {
-            const resolve = resolveTrack.value
-            for (const stat of stats) {
-              const track = resolve(stat)
-              if (track) tracks.set(stat.id, track)
-            }
-            for (const artist of libraryArtists.value) localArtists.add(artist.name)
-          } else {
-            const api = window.api.library.database
-            const revision = (await api.getTracksByIds([])).revision
-            const result = await readLibraryRecentHistory(
-              stats,
-              revision,
-              {
-                getPreferences: () => ({
-                  revision: musicVersionRevision.value,
-                  versions: getMusicVersions().tracks.versions
-                }),
-                api: {
-                  lookupPlaylistTracks: (input, expectedRevision) =>
-                    api.lookupPlaylistTracks(input, expectedRevision),
-                  getTracksByIds: (ids, expectedRevision) =>
-                    api.getTracksByIds(ids, expectedRevision)
-                }
-              },
-              () => {
-                if (rankingsDisposed) throw new DOMException('Analytics page closed', 'AbortError')
-              }
-            )
-            for (const [id, track] of result.resolved) if (track) tracks.set(id, track)
-            for (const artist of getTopArtists(10)) {
-              const page = await api.queryTracks({
-                artist: artist.name,
-                limit: 1,
-                contentRevision: revision
-              })
-              if (page.revision !== revision) throw new Error('曲库在读取艺人排行期间发生变化')
-              if (page.total > 0) localArtists.add(artist.name)
-            }
-            if ((await api.getTracksByIds([])).revision !== revision)
-              throw new Error('曲库在读取听歌排行期间发生变化')
-          }
-          if (request !== rankingRequest || rankingsDisposed) continue
-          storageMode.value = mode
-          resolvedRankingTracks.value = tracks
-          databaseArtistNames.value = localArtists
-        } catch (error) {
-          if (request === rankingRequest && !rankingsDisposed) {
-            storageMode.value = null
-            resolvedRankingTracks.value = new Map(
-              stats.flatMap((stat) =>
-                stat.track && (!stat.track.source || stat.track.source !== 'local')
-                  ? [[stat.id, stat.track] as const]
-                  : []
-              )
-            )
-            databaseArtistNames.value = new Set()
-            console.warn('[listening-analytics] ranking refresh failed', error)
-          }
-        }
-      }
-    } finally {
-      rankingActive = false
-      if (rankingPending && !rankingsDisposed) requestRankings()
-    }
-  })()
-}
-
-watch([listeningStats, musicVersionRevision], requestRankings)
-watch([libraryTracks, libraryArtists], () => {
-  if (storageMode.value === 'json') requestRankings()
-})
-onMounted(() => {
-  requestRankings()
-  stopLibraryChanged = window.api.library.onChanged(() => requestRankings())
-})
+onMounted(() => { dayTimer = setInterval(refreshDay, 60_000); document.addEventListener('visibilitychange', refreshDay) })
+onBeforeUnmount(() => { clearInterval(dayTimer); document.removeEventListener('visibilitychange', refreshDay) })
 </script>
 
 <template>
@@ -386,6 +182,7 @@ onMounted(() => {
                   :cover="favorite.cover"
                   :cover-source="favorite.coverSource"
                   :identity="favorite.id"
+                  :core-track-id="favorite.resolvedTrack?.id"
                   fallback="./icon.png"
                   alt=""
                 />
@@ -499,7 +296,8 @@ onMounted(() => {
     <NativeDialogTransition>
       <ListeningStatsClearDialog
         v-if="showClearDialog"
-        :stats="clearActivity"
+        :read-preview="readClearPreview"
+        :revision="overview?.revision ?? null"
         :now="now"
         :busy="clearingStats"
         @close="showClearDialog = false"

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
+import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
 import { usePlayerStore } from '@renderer/stores/usePlayerStore'
 import type { AudioDeviceOption } from '@renderer/types/settings'
 
@@ -9,6 +10,7 @@ const props = defineProps<{ audioExclusiveMode: boolean }>()
 const emit = defineEmits<{ 'update:audioExclusiveMode': [value: boolean] }>()
 
 const audioStore = useAudioOutputDspStore()
+const core = useCoreConnection()
 const { audioDevice, audioOutputDeviceOptions, audioOutput, audioOutputOptions, audioProcessing } =
   storeToRefs(audioStore)
 const { setAudioDevice, refreshAudioOutputState, setReplayGainMode } = audioStore
@@ -21,7 +23,7 @@ let testAttempt = 0
 onBeforeUnmount(() => {
   active = false
   testAttempt++
-  void window.api.audioEngine.stopOutputTest().catch(() => undefined)
+  void core.command('audio.outputTest.stop', {}).catch(() => undefined)
 })
 
 // Device picks apply immediately (like library folders on the local step) so
@@ -49,7 +51,7 @@ async function selectDevice(id: string): Promise<void> {
   testToneState.value = 'idle'
   testToneError.value = ''
   try {
-    await window.api.audioEngine.stopOutputTest()
+    await core.command('audio.outputTest.stop', {})
     await setAudioDevice(id)
     if (audioDevice.value !== id) throw new Error('设备切换未成功，请检查设备连接后重试')
   } catch (error) {
@@ -66,7 +68,7 @@ async function testOutput(): Promise<void> {
   testToneError.value = ''
   const attempt = ++testAttempt
   try {
-    const result = await window.api.audioEngine.testOutput(props.audioExclusiveMode)
+    const result = await core.command('audio.outputTest.play', { revision: (await core.query('audio.outputTest', {})).revision, exclusive: props.audioExclusiveMode }) as { cancelled: boolean }
     if (active && attempt === testAttempt)
       testToneState.value = result.cancelled ? 'idle' : 'success'
   } catch (error) {
@@ -79,7 +81,7 @@ async function testOutput(): Promise<void> {
 async function stopTest(): Promise<boolean> {
   testAttempt++
   try {
-    await window.api.audioEngine.stopOutputTest()
+    await core.command('audio.outputTest.stop', {})
     if (active) testToneState.value = 'idle'
     return true
   } catch (error) {

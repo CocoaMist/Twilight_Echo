@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
+import { usePlayerStore } from '@renderer/stores/usePlayerStore'
 import { dspApplyLabel } from '@renderer/utils/dspWorkbench'
 import { dspSampleRate, dspSignalNodes } from '@renderer/utils/dspSignalOverview'
 import { nodeLabel } from '@renderer/utils/dspNodeParams'
@@ -23,6 +24,7 @@ const {
   audioDevice,
   audioDeviceOptions
 } = storeToRefs(useAudioOutputDspStore())
+const { isPlaying } = usePlayerStore()
 const bypassed = computed(
   () =>
     !audioProcessing.value.dspEnabled ||
@@ -30,6 +32,7 @@ const bypassed = computed(
     !!props.sceneState?.effectiveBypassReason
 )
 const nodes = computed(() => dspSignalNodes(props.sceneState, props.status, bypassed.value))
+const flowing = computed(() => audioEngineReady.value && isPlaying.value)
 const rate = computed(
   () => outputInfo.value?.actualSampleRate || outputInfo.value?.outputSampleRate
 )
@@ -40,119 +43,90 @@ const outputName = computed(
     '等待输出设备'
 )
 const buffer = computed(() => outputInfo.value?.bufferSizeFrames)
-const stateLabel = computed(() =>
+const requestedBuffer = computed(() => audioOutputConfig.value?.preferredBufferSize || 0)
+const sceneTitle = computed(() =>
   audioProcessing.value.directMode
-    ? 'Direct 直通'
+    ? `${props.sceneName} · Direct 直通`
     : !audioProcessing.value.dspEnabled
-      ? 'DSP 已旁路'
-      : dspApplyLabel(props.status)
+      ? `${props.sceneName} · DSP 已旁路`
+      : props.sceneState?.effectiveBypassReason
+        ? `${props.sceneName} · ${props.sceneState.effectiveBypassReason}`
+        : `${props.sceneName} · ${dspApplyLabel(props.status)}`
 )
+const sourceFormat = computed(() => {
+  const info = playbackInfo.value
+  const parts = [dspSampleRate(info?.sourceSampleRate)]
+  if (info?.sourceBitDepth) parts.push(`${info.sourceBitDepth} bit`)
+  return parts.join(' · ')
+})
 </script>
 
 <template>
-  <aside class="signal-overview" aria-label="实时音频链路总览">
-    <div class="overview-heading">
-      <div>
-        <p class="eyebrow">SIGNAL PATH</p>
-        <h2>你的音频链路</h2>
-      </div>
-      <span class="overview-live" :class="{ ready: audioEngineReady }"
-        ><i></i>{{ audioEngineReady ? '已连接' : '未连接' }}</span
+  <section
+    class="signal-overview"
+    :class="{ 'is-bypassed': bypassed, 'is-flowing': flowing, 'is-offline': !audioEngineReady }"
+    aria-label="实时音频链路"
+  >
+    <div class="signal-path">
+      <span
+        class="signal-terminal signal-source"
+        :title="`输入 · ${playbackInfo?.codec?.toUpperCase() || '音频源'} · ${sourceFormat}`"
       >
-    </div>
-    <div class="overview-scene">
-      <i class="pi pi-sliders-h"></i><span>{{ sceneName }}</span
-      ><small>当前场景</small>
-    </div>
-    <div class="signal-route">
-      <div class="route-terminal">
-        <span class="route-icon"><i class="pi pi-play-circle"></i></span>
-        <div>
-          <span class="route-kicker">SOURCE / 输入</span
-          ><strong>{{ playbackInfo?.codec?.toUpperCase() || '音频源' }}</strong>
-          <small
-            >{{ dspSampleRate(playbackInfo?.sourceSampleRate)
-            }}<template v-if="playbackInfo?.sourceBitDepth">
-              · {{ playbackInfo.sourceBitDepth }} bit</template
-            ></small
-          >
-        </div>
-      </div>
-      <div class="route-processing">
-        <div class="route-processing-heading">
-          <span>DSP 处理</span
-          ><small :class="{ 'signal-active': !bypassed }">{{ stateLabel }}</small>
-        </div>
-        <ol class="overview-nodes">
-          <li v-for="(node, index) in nodes" :key="node.id" :class="{ 'is-active': node.active }">
+        <i class="signal-led" aria-hidden="true"></i
+        ><strong>{{ playbackInfo?.codec?.toUpperCase() || '音频源' }}</strong
+        ><em>{{ sourceFormat }}</em>
+      </span>
+      <span class="signal-wire" aria-hidden="true"></span>
+      <div class="signal-scene" :title="sceneTitle">
+        <span class="signal-scene-name">{{ sceneName }}</span>
+        <ol class="overview-nodes" aria-label="当前引擎链路">
+          <li v-for="node in nodes" :key="node.id">
             <button
+              class="rail-node"
+              :class="{ 'is-active': node.active, 'is-off': node.state === '已旁路' }"
               :disabled="disabled || !node.configured"
-              :title="node.reason || `编辑 ${nodeLabel(node.type)}`"
+              :title="node.reason || `${node.state} · 编辑 ${nodeLabel(node.type)}`"
               @click="emit('node', node.id)"
             >
-              <span class="route-node-dot"></span
-              ><span class="route-node-index">{{ String(index + 1).padStart(2, '0') }}</span>
-              <span class="route-node-name">{{ nodeLabel(node.type) }}</span
-              ><small>{{ node.state }}</small>
+              <i class="rail-led" aria-hidden="true"></i>{{ nodeLabel(node.type) }}
             </button>
           </li>
         </ol>
-        <p v-if="!nodes.length" class="route-empty">
-          {{ status ? '直达输出 · 无处理节点' : '等待引擎报告链路' }}
-        </p>
+        <span v-if="!nodes.length" class="route-empty">{{
+          status ? '无处理节点' : '等待引擎报告'
+        }}</span>
       </div>
-      <button class="route-terminal route-output" :disabled="disabled" @click="emit('output')">
-        <span class="route-icon"><i class="pi pi-headphones"></i></span>
-        <span
-          ><span class="route-kicker">OUTPUT / 输出</span
-          ><strong :title="outputName">{{ outputName }}</strong>
-          <small
-            >{{ outputInfo?.actualBackend || outputInfo?.backend || '—' }} ·
-            {{ outputInfo?.exclusive ? '独占' : '共享 / 默认' }}</small
-          ></span
-        ><i class="pi pi-arrow-up-right"></i>
+      <span class="signal-wire" aria-hidden="true"></span>
+      <button
+        class="signal-terminal signal-output"
+        :disabled="disabled"
+        :title="`输出 · ${outputName} · ${outputInfo?.actualBitDepth ? `${outputInfo.actualBitDepth} bit` : '—'} · ${outputInfo?.actualChannels || '—'} ch · 打开输出设置`"
+        @click="emit('output')"
+      >
+        <i class="signal-led" aria-hidden="true"></i><strong>{{ outputName }}</strong
+        ><em
+          >{{ outputInfo?.actualBackend || outputInfo?.backend || '—' }} ·
+          {{ outputInfo?.exclusive ? '独占' : '共享' }}</em
+        >
       </button>
     </div>
-    <div class="overview-parameters">
-      <div class="overview-section-label"><span>运行参数</span><i class="pi pi-microchip"></i></div>
-      <dl>
-        <div>
-          <dt>采样率</dt>
-          <dd>{{ dspSampleRate(rate) }}</dd>
-        </div>
-        <div>
-          <dt>位深 / 声道</dt>
-          <dd>
-            {{ outputInfo?.actualBitDepth ? `${outputInfo.actualBitDepth} bit` : '—' }} /
-            {{ outputInfo?.actualChannels || '—' }}
-          </dd>
-        </div>
-        <div>
-          <dt>Buffer size</dt>
-          <dd>{{ buffer && buffer > 0 ? buffer : '—' }} <small>frames</small></dd>
-        </div>
-        <div>
-          <dt>请求缓冲</dt>
-          <dd>
-            {{ audioOutputConfig?.preferredBufferSize || '自动'
-            }}<small v-if="audioOutputConfig?.preferredBufferSize"> frames</small>
-          </dd>
-        </div>
-        <div>
-          <dt>输出延迟</dt>
-          <dd>
-            {{ outputInfo && outputInfo.latencyMs > 0 ? outputInfo.latencyMs.toFixed(1) : '—' }}
-            <small>ms</small>
-          </dd>
-        </div>
-        <div>
-          <dt>DSP 延迟</dt>
-          <dd>{{ status?.totalLatencyFrames ?? '—' }} <small>frames</small></dd>
-        </div>
-      </dl>
-    </div>
-    <div class="overview-footnote">
-      <i class="pi pi-info-circle"></i><span>显示当前引擎链路，草稿保存后生效。</span>
-    </div>
-  </aside>
+    <dl class="rail-readouts">
+      <div :title="`输出采样率 ${dspSampleRate(rate)}`">
+        <dt>采样率</dt>
+        <dd>{{ dspSampleRate(rate) }}</dd>
+      </div>
+      <div
+        :title="requestedBuffer ? `请求 ${requestedBuffer} frames` : '请求缓冲：自动（由驱动决定）'"
+      >
+        <dt>缓冲</dt>
+        <dd>{{ buffer && buffer > 0 ? buffer : '—' }}</dd>
+      </div>
+      <div :title="`DSP 算法延迟 ${status?.totalLatencyFrames ?? '—'} frames`">
+        <dt>延迟</dt>
+        <dd>
+          {{ outputInfo && outputInfo.latencyMs > 0 ? outputInfo.latencyMs.toFixed(1) : '—' }} ms
+        </dd>
+      </div>
+    </dl>
+  </section>
 </template>

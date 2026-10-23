@@ -4,9 +4,10 @@ import type { LibraryPlaylistSourceSummary } from '../../../../shared/libraryDat
 export type LocalTransitionName = 'local-page-down' | 'local-page-up'
 
 export type GridItem = {
-  imported?: import('../../../../shared/externalPlaylist.ts').ImportedPlaylistData
+  imported?: import('../../../../shared/corePlaylists.ts').CorePlaylistDescriptor['imported']
   id?: string
   name: string
+  count?: number
   trackCount?: number
   sourceSummary?: LibraryPlaylistSourceSummary
   cover?: string | null

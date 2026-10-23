@@ -3,16 +3,16 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import ts from 'typescript'
-import { ref } from 'vue'
-import { LibraryDatabase } from '../../../main/library/libraryDatabase.ts'
-import type { LibraryQuery } from '../../../shared/libraryDatabase.ts'
-import { useMusicStore } from '../stores/useMusicStore.ts'
-import { unifiedSearchSongs } from '../utils/unifiedMusicSearch.ts'
+import * as vue from 'vue'
+import { coreLibraryFixture } from '../stores/coreLibraryTestFixture.ts'
+import { coreQueueTrackInput } from '../stores/player/corePlayerQueue.ts'
 import { getTrackSource } from '../utils/trackSourceIdentity.ts'
-import { createAlbumSearch } from './streaming-page/albumSearch.ts'
-import { createArtistSearch, type ArtistSearchItem } from './streaming-page/artistSearch.ts'
-import type { AlbumSearchItem } from './streaming-page/albumSearch.ts'
+import { createCoreCollectionSearch } from './streaming-page/coreCollectionSearch.ts'
+import type { LibraryQuery } from '../../../shared/libraryDatabase.ts'
 import type { Track } from '../types/music.ts'
+import type { useLibraryUnifiedSearch } from '../app/useLibraryUnifiedSearch.ts'
+import type { AlbumSearchItem } from './streaming-page/albumSearch.ts'
+import type { ArtistSearchItem } from './streaming-page/artistSearch.ts'
 
 function functions(file: string, names: string[]): string {
   const source = readFileSync(new URL(file, import.meta.url), 'utf8')
@@ -44,97 +44,83 @@ function declarations(file: string, names: string[]): string {
   return nodes.map((node) => node.getText(ast)).join('\n')
 }
 
-test('production streaming all/local and manual-rematch callers read authoritative pages without a full renderer array', async (t) => {
-  const db = new LibraryDatabase(':memory:'),
-    store = useMusicStore()
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  const tracks: Track[] = Array.from({ length: 405 }, (_, i) => ({
-    id: `local:${i}`,
-    filePath: `D:/Music/${i}.flac`,
-    fileName: `${i}.flac`,
-    title: `晴天 ${String(i).padStart(4, '0')}`,
-    artist: '周杰伦',
-    album: 'Album',
-    source: 'local',
-    format: 'flac',
-    duration: 180,
-    size: 1,
-    cover: null,
-    lyrics: null
-  }))
-  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks })
-  let fail = false
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: {
-      api: {
-        library: {
-          getStorageMode: async () => 'sqlite',
-          database: {
-            queryTracks: async (query: LibraryQuery) => {
-              if (fail) throw new Error('database offline')
-              return db.queryTracks(query)
-            },
-            getMetadata: async () => db.getMetadata()
-          }
-        }
-      }
-    }
-  })
-  store.clearTracks()
-  const source = store.createUnifiedSearchSource()
+function source(t: test.TestContext, core: Awaited<ReturnType<typeof coreLibraryFixture>>['core']) {
+  const exports: { useLibraryUnifiedSearch?: typeof useLibraryUnifiedSearch } = {}
+  const unmounts: Array<() => void> = [],
+    scope = vue.effectScope()
   t.after(() => {
-    source.dispose()
-    store.clearTracks()
-    db.close()
-    if (previous) Object.defineProperty(globalThis, 'window', previous)
-    else Reflect.deleteProperty(globalThis, 'window')
+    unmounts.forEach((unmount) => unmount())
+    scope.stop()
   })
-  const repairs = ref(''),
-    replacements: string[] = []
-  const bindings = {
-    localSearchSource: source,
-    rematchSearchSource: source,
-    musicStore: {
-      tracks: {
-        get value(): never {
-          throw new Error('full renderer library access')
-        }
-      }
-    },
-    tracks: {
-      get value(): never {
-        throw new Error('full renderer library access')
-      }
-    },
-    mediaProviders: {
-      searchAllSongs: (options: Parameters<typeof unifiedSearchSongs>[0]) =>
-        unifiedSearchSongs({
-          ...options,
-          providers: [],
-          searchProviderSongs: async () => ({ items: [], total: 0 })
-        })
-    },
-    repairMessage: repairs,
-    syncPluginProviders: async () => {},
-    buildMetadataMatchCandidates: (_track: Track, candidates: Track[]) =>
-      candidates.map((track) => ({ track })),
-    replaceTrackReference: (_id: string, track: Track) => {
-      replacements.push(track.id)
-      return 1
-    },
-    getTrackSource: () => 'local',
-    DOMException,
-    Error
+  const dependencies: Record<string, unknown> = {
+    vue: { ...vue, onBeforeUnmount: (fn: () => void) => unmounts.push(fn) },
+    '../stores/coreConnection.ts': { useCoreConnection: () => core }
   }
-  const code =
-    functions('./StreamingPage.vue', ['searchUnifiedSongs', 'searchLocalSongs']) +
-    '\n' +
-    functions('./SongList.vue', ['handleManualRematch'])
-  const entry = runInNewContext(
-    ts.transpileModule(code + '\n({ searchUnifiedSongs, searchLocalSongs, handleManualRematch })', {
+  runInNewContext(
+    ts.transpileModule(
+      readFileSync(new URL('../app/useLibraryUnifiedSearch.ts', import.meta.url), 'utf8'),
+      {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+      }
+    ).outputText,
+    {
+      exports,
+      require: (id: string) => {
+        assert.ok(id in dependencies, id)
+        return dependencies[id]
+      },
+      AbortController,
+      AbortSignal,
+      Error
+    }
+  )
+  return scope.run(() => exports.useLibraryUnifiedSearch!())!
+}
+function evaluate(code: string, bindings: object) {
+  return runInNewContext(
+    ts.transpileModule(code, {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
     }).outputText,
+    { ...bindings, Error, DOMException }
+  )
+}
+
+test('production all/local search and manual-rematch callers use Core pages and commands without a renderer library', async (t) => {
+  const f = await coreLibraryFixture(t, {
+    tracks: Array.from({ length: 405 }, (_, i) => ({
+      id: `local:${i}`,
+      filePath: `D:/Music/${i}.flac`,
+      title: `晴天 ${String(i).padStart(4, '0')}`,
+      artist: '周杰伦',
+      album: 'Album',
+      source: 'local',
+      format: 'flac',
+      duration: 180
+    }))
+  })
+  const localSearchSource = source(t, f.core),
+    repairs = vue.ref(''),
+    rematches: unknown[] = []
+  const bindings = {
+    localSearchSource,
+    mediaProviders: {
+      searchAllSongs: ({ signal, ...query }: any) => f.core.query('search.songs', query, signal)
+    },
+    core: {
+      command: async (name: string, payload: unknown) => {
+        rematches.push({ name, payload })
+        return { count: 1, track: { title: 'Authoritative match' } }
+      }
+    },
+    repairMessage: repairs,
+    playlistRevision: () => f.core.state.value!.playlistsRevision,
+    trackInput: (track: Track) => coreQueueTrackInput(track, null)
+  }
+  const entry = evaluate(
+    functions('./StreamingPage.vue', ['searchUnifiedSongs', 'searchLocalSongs']) +
+      '\n' +
+      functions('./SongList.vue', ['handleManualRematch']) +
+      '\n({ searchUnifiedSongs, searchLocalSongs, handleManualRematch })',
     bindings
   ) as {
     searchUnifiedSongs(
@@ -156,107 +142,57 @@ test('production streaming all/local and manual-rematch callers read authoritati
     assert.equal(page.total, 405)
     assert.equal(page.tracks.length, 30)
     assert.equal(page.tracks[0].id, 'local:300')
+    assert.equal('filePath' in page.tracks[0], false)
     const abort = new AbortController()
     abort.abort()
     await assert.rejects(search('晴天', 30, 0, { signal: abort.signal }), { name: 'AbortError' })
   }
-  const localPage = await entry.searchLocalSongs('zjl', 30, 300)
-  assert.deepEqual(JSON.parse(JSON.stringify(localPage.playbackQuery)), {
-    search: 'zjl',
-    sort: 'playlist',
-    contentRevision: db.getMetadata().revision
-  })
-  const queue = db.createLibraryQueue(localPage.playbackQuery!, localPage.tracks[0].id)
-  assert.equal(
-    queue.total,
-    405,
-    'production local playback includes results outside the 30-row search page'
-  )
+  const page = await entry.searchLocalSongs('zjl', 30, 300)
+  const queue = f.db.createLibraryQueue(page.playbackQuery!, page.tracks[0].id)
+  assert.equal(queue.total, 405)
   assert.equal(queue.index, 300)
-  assert.equal(db.readLibraryQueue(queue.id, 404, 1).items[0].track?.id, 'local:404')
-  await entry.handleManualRematch({ ...tracks[404], artist: '' })
-  assert.equal(replacements[0], 'local:404')
-  fail = true
-  await entry.handleManualRematch({ ...tracks[404], artist: '' })
+  await entry.handleManualRematch(page.tracks[0])
+  assert.equal(repairs.value, '已重新匹配到 Authoritative match')
+  assert.deepEqual(JSON.parse(JSON.stringify(rematches)), [
+    {
+      name: 'playlists.rematch',
+      payload: { revision: f.playlists.getRevision(), input: { kind: 'local', id: 'local:300' } }
+    }
+  ])
+  bindings.core.command = async () => {
+    throw new Error('database offline')
+  }
+  await entry.handleManualRematch(page.tracks[0])
   assert.equal(repairs.value, 'database offline')
-  assert.equal(replacements.length, 1)
-  assert.equal(store.tracks.value.length, 0)
+  assert.equal(rematches.length, 1)
 })
 
-test('production collection factories and navigation use SQL summaries and the existing paged local detail without loading member arrays', async (t) => {
-  const db = new LibraryDatabase(':memory:'),
-    store = useMusicStore()
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
+test('production collection search and navigation read Core summaries and use paged local details rather than member arrays', async (t) => {
   const tracks = Array.from({ length: 405 }, (_, i) => ({
     id: `local:${i}`,
     filePath: `D:/Music/${i}/song.flac`,
-    fileName: 'song.flac',
     title: `Song ${i}`,
     artist: `周杰伦 ${i}`,
     album: `范特西 ${i}`,
     albumId: `release:${i}`,
     source: 'local'
   }))
-  db.replaceDocument({ version: 2, revision: 0, folders: [], exclusions: [], tracks })
-  let release: (() => void) | null = null,
-    delay = false
-  const queries: Array<{ kind: string; query?: LibraryQuery }> = []
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: {
-      api: {
-        library: {
-          getStorageMode: async () => 'sqlite',
-          database: {
-            queryCollections: async (kind: 'albums' | 'artists', query?: LibraryQuery) => {
-              queries.push({ kind, query })
-              if (delay)
-                await new Promise<void>((resolve) => {
-                  release = resolve
-                })
-              return db.queryCollections(kind, query)
-            },
-            getMetadata: async () => db.getMetadata()
-          }
-        }
-      }
-    }
-  })
-  store.clearTracks()
-  const source = store.createUnifiedSearchSource()
-  t.after(() => {
-    source.dispose()
-    store.clearTracks()
-    db.close()
-    if (previous) Object.defineProperty(globalThis, 'window', previous)
-    else Reflect.deleteProperty(globalThis, 'window')
-  })
+  const f = await coreLibraryFixture(t, { tracks }),
+    local = source(t, f.core)
   const events: unknown[][] = [],
     notices: unknown[] = [],
     providerNavigations: string[] = []
-  const searchType = ref('albums'),
-    searchSource = ref('all'),
-    activeProvider = ref('remote-a')
+  const searchType = vue.ref('albums'),
+    searchSource = vue.ref('all'),
+    activeProvider = vue.ref('remote-a')
   let refreshes = 0,
-    invalidate: (() => void) | undefined
+    invalidate!: () => void
   const bindings = {
-    musicStore: {
-      albums: {
-        get value(): never {
-          throw new Error('full renderer albums')
-        }
-      },
-      artists: {
-        get value(): never {
-          throw new Error('full renderer artists')
-        }
-      }
-    },
-    createAlbumSearch,
-    createArtistSearch,
+    core: f.core,
+    createCoreCollectionSearch,
     useLibraryUnifiedSearch: (callback: () => void) => {
       invalidate = callback
-      return source
+      return local
     },
     searchType,
     searchSource,
@@ -264,7 +200,6 @@ test('production collection factories and navigation use SQL summaries and the e
     refreshSearch: () => {
       refreshes++
     },
-    providerStore: { providers: ref([]) },
     mediaProviders: { get: () => null },
     pushNotice: (notice: unknown) => notices.push(notice),
     props: { active: true },
@@ -273,41 +208,51 @@ test('production collection factories and navigation use SQL summaries and the e
     selectDetailProvider: async (id: string) => {
       activeProvider.value = id
     },
-    openArtist: async (artist: ArtistSearchItem) =>
-      providerNavigations.push(`${activeProvider.value}:${artist.id}`),
-    beginDetailTransition: () =>
-      assert.fail('SQLite details must use the existing paged local detail'),
+    openArtist: async (artist: ArtistSearchItem) => {
+      providerNavigations.push(`${activeProvider.value}:${artist.id}`)
+    },
+    beginDetailTransition: () => assert.fail('local details must use existing paged queries'),
     getTrackSource,
-    Error,
-    DOMException
+    friendlyStreamingError: (error: Error) => error.message
   }
-  const code =
-    declarations('./StreamingPage.vue', ['localSearchSource', 'albumSearch', 'artistSearch']) +
-    '\n' +
-    functions('./StreamingPage.vue', [
-      'isCurrentDetailNavigation',
-      'openTrackAlbum',
-      'openSearchAlbum',
-      'openSearchArtist',
-      'openAlbum'
-    ])
-  const entry = runInNewContext(
-    ts.transpileModule(
-      code + '\n({ albumSearch, artistSearch, openTrackAlbum, openSearchAlbum, openSearchArtist })',
-      {
-        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
-      }
-    ).outputText,
+  const entry = evaluate(
+    declarations('./StreamingPage.vue', [
+      'localSearchSource',
+      'collectionSearch',
+      'albumSearch',
+      'artistSearch'
+    ]) +
+      '\n' +
+      functions('./StreamingPage.vue', [
+        'isCurrentDetailNavigation',
+        'openTrackAlbum',
+        'openSearchAlbum',
+        'openSearchArtist',
+        'openAlbum'
+      ]) +
+      '\n({ albumSearch, artistSearch, openTrackAlbum, openSearchAlbum, openSearchArtist })',
     bindings
   ) as {
-    albumSearch: ReturnType<typeof createAlbumSearch>
-    artistSearch: ReturnType<typeof createArtistSearch>
-    openTrackAlbum(track: (typeof tracks)[number]): Promise<void>
+    albumSearch: {
+      searchAlbums(
+        query: string,
+        limit: number,
+        offset: number
+      ): Promise<{ albums: AlbumSearchItem[]; total: number }>
+    }
+    artistSearch: {
+      searchArtists(
+        query: string,
+        limit: number,
+        offset: number
+      ): Promise<{ artists: ArtistSearchItem[]; total: number }>
+    }
+    openTrackAlbum(track: unknown): Promise<void>
     openSearchAlbum(album: AlbumSearchItem): Promise<void>
     openSearchArtist(artist: ArtistSearchItem): Promise<void>
   }
-  const albums = await entry.albumSearch.searchAlbums('zjl ftx', 30, 300)
-  const artists = await entry.artistSearch.searchArtists('周杰伦', 30, 300)
+  const albums = await entry.albumSearch.searchAlbums('zjl ftx', 30, 300),
+    artists = await entry.artistSearch.searchArtists('周杰伦', 30, 300)
   assert.equal(albums.total, 405)
   assert.equal(albums.albums.length, 30)
   assert.equal(artists.total, 405)
@@ -323,11 +268,15 @@ test('production collection factories and navigation use SQL summaries and the e
     [
       'selectView',
       'albums',
-      `album:${(await source.resolveAlbum({ trackId: 'local:404' })).albumId}`
+      `album:${(await local.resolveAlbum({ trackId: 'local:404' })).albumId}`
     ]
   ])
   assert.equal(notices.length, 0)
-  assert.ok(queries.every(({ query }) => (query?.limit ?? 200) <= 30))
+  assert.ok(
+    f.queries
+      .filter((query) => query.name === 'search.collections')
+      .every((query) => (query.payload as { limit: number }).limit <= 30)
+  )
   await entry.openSearchArtist({
     id: artist.id,
     name: artist.name,
@@ -335,22 +284,28 @@ test('production collection factories and navigation use SQL summaries and the e
     providerId: 'remote-b'
   })
   assert.deepEqual(providerNavigations, [`remote-b:${artist.id}`])
-  invalidate!()
+  invalidate()
   searchType.value = 'artists'
-  invalidate!()
+  invalidate()
   searchType.value = 'playlists'
-  invalidate!()
+  invalidate()
   searchType.value = 'albums'
   searchSource.value = 'remote-b'
-  invalidate!()
-  assert.equal(refreshes, 2, 'only searches with local SQL participants refresh on content changes')
-  delay = true
-  const lateAlbum = entry.openSearchAlbum(album)
+  invalidate()
+  assert.equal(refreshes, 2)
+  let release!: () => void
+  f.intercept(async (name) => {
+    if (name === 'library.collections')
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+  })
+  const late = entry.openSearchAlbum(album)
   await new Promise<void>((resolve) => setImmediate(resolve))
   assert.ok(release)
   await entry.openSearchArtist(artist)
   const count = events.length
-  ;(release as () => void)()
-  await lateAlbum
-  assert.equal(events.length, count, 'a slow album read cannot override newer artist navigation')
+  release()
+  await late
+  assert.equal(events.length, count)
 })

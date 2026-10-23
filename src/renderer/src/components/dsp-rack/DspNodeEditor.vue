@@ -28,6 +28,8 @@ import {
   matrixChannelCount,
   matrixValue,
   nodeLabel,
+  nodeIcon,
+  dspNodeCategory,
   dspNodeDescriptions,
   normalizeMultibandCrossovers,
   numberParam,
@@ -119,11 +121,21 @@ function selectVst3State(assetId: string): void {
 <template>
   <aside class="detail-pane">
     <template v-if="scene && node">
-      <div class="pane-heading">
-        <h2>{{ nodeLabel(node.type) }}</h2>
-        <label class="switch-field"><input v-model="node.enabled" type="checkbox" /> 启用</label>
-      </div>
-      <p class="muted node-identity" :title="node.id">{{ dspNodeDescriptions[node.type] }}</p>
+      <header class="node-identity-card" :data-category="dspNodeCategory(node.type)">
+        <span class="node-glyph large" aria-hidden="true"
+          ><i :class="nodeIcon(node.type)"></i
+        ></span>
+        <div class="node-identity">
+          <p class="eyebrow">{{ dspNodeCategory(node.type) }}</p>
+          <h2>{{ nodeLabel(node.type) }}</h2>
+          <p class="muted" :title="node.id">{{ dspNodeDescriptions[node.type] }}</p>
+        </div>
+        <label class="switch-field node-enable" :class="{ on: node.enabled }"
+          ><input v-model="node.enabled" type="checkbox" aria-label="启用处理器" /><span>{{
+            node.enabled ? '已启用' : '已旁路'
+          }}</span></label
+        >
+      </header>
       <label v-if="node.type === 'nativePlugin'" class="full-field"
         >插件 ID<input v-model="node.pluginId" placeholder="com.example.dsp"
       /></label>
@@ -1171,10 +1183,14 @@ function selectVst3State(assetId: string): void {
         class="raw-config"
         @toggle="rawConfigExpanded = ($event.target as HTMLDetailsElement).open"
       >
-        <summary>Raw configuration</summary>
+        <summary>原始配置 · JSON</summary>
         <pre v-if="rawConfigExpanded">{{ JSON.stringify(node.params, null, 2) }}</pre>
       </details>
     </template>
-    <div v-else class="empty-detail">选择一个节点来编辑参数。</div>
+    <div v-else class="empty-detail">
+      <i class="pi pi-sliders-v"></i>
+      <strong>选择一个处理器</strong>
+      <span>在左侧信号链中点选节点，即可在这里编辑参数。</span>
+    </div>
   </aside>
 </template>
