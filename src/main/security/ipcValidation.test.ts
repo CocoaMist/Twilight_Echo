@@ -15,7 +15,8 @@ function readDataIpcSources(): string {
     '../ipc/coverIpc.ts',
     '../ipc/lyricsIpc.ts',
     '../ipc/persistenceIpc.ts',
-    '../ipc/persistenceReporting.ts'
+    '../ipc/persistenceReporting.ts',
+    '../persistence/playbackSessionRepository.ts'
   ]
     .map((rel) => readFileSync(new URL(rel, import.meta.url), 'utf8'))
     .join('\n')
@@ -144,7 +145,7 @@ test('data IPC applies path and storage limits before touching local files', () 
     'utf8'
   )
   const versionedStoreSource = readFileSync(
-    new URL('../persistence/versionedDataStore.ts', import.meta.url),
+    new URL('../../core/persistence/versionedDataStore.ts', import.meta.url),
     'utf8'
   )
 
@@ -219,9 +220,9 @@ test('data IPC applies path and storage limits before touching local files', () 
 
 test('plugin and NCM IPC validate renderer-controlled IDs, methods, paths, and payload sizes', () => {
   const pluginsSource = readFileSync(new URL('../ipc/plugins.ts', import.meta.url), 'utf8')
-  const ncmSource = readFileSync(new URL('../ncm/api.ts', import.meta.url), 'utf8')
+  const ncmSource = readFileSync(new URL('../../core/providers/ncmApi.ts', import.meta.url), 'utf8')
   const providerRoutingSource = readFileSync(
-    new URL('../plugins/providerRouting.ts', import.meta.url),
+    new URL('../../shared/mediaProviderMethods.ts', import.meta.url),
     'utf8'
   )
 

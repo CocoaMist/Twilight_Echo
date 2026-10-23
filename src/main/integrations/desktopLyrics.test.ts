@@ -133,7 +133,7 @@ test('desktop lyrics v3 isolates host and satellite IPC capabilities', async () 
   assert.match(entry, /desktopLyrics: desktopLyricsHostApi/)
   assert.match(
     entry,
-    /if \(isDesktopLyricsDocument\(\)\)\s+return \{\s*diagnostics: diagnosticsApi,\s*desktopLyrics: desktopLyricsWindowApi,\s*experienceWindow: experienceWindowApi\s*\}/
+    /if \(isDesktopLyricsDocument\(\)\)\s+return \{\s*core: coreApi,\s*diagnostics: diagnosticsApi,\s*desktopLyrics: desktopLyricsWindowApi,\s*experienceWindow: experienceWindowApi\s*\}/
   )
   assert.doesNotMatch(preload, /desktopLyrics:toggle/)
 })
@@ -227,11 +227,13 @@ test('desktop lyrics resumes frozen and requests an authoritative snapshot', asy
 })
 
 test('desktop lyrics v3 removes presets and keeps a dedicated lock shortcut', async () => {
-  const settings = await source('../core/settings.ts')
+  const settings = await source('../../core/settings/normalization.ts')
+  const adapter = await source('../core/settings.ts')
   const shared = await source('../../shared/appSettings.ts')
   const tray = await source('./shortcutsTray.ts')
 
   assert.match(settings, /normalizeDesktopLyricsSettings/)
+  assert.match(adapter, /normalizePortableSettings/)
   assert.doesNotMatch(settings, /desktopLyricsPresets/)
   assert.doesNotMatch(shared, /DesktopLyricsPreset/)
   assert.match(settings, /CommandOrControl\+Alt\+L/)

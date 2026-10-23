@@ -43,6 +43,7 @@ test('music folder picker remembers an existing or removed root across registrat
       resolveAuthorizedLibraryRootSettings: async (folders: string[]) => [...new Set(folders)]
     },
     '../security/ipcValidation.ts': {},
+    '../coreProcess/settingsBridge.ts': { getCoreSettingsBridge: () => null },
     '../security/electronSecurity.ts': { assertTrustedIpcSender() {} }
   }
   const register = () => {
@@ -85,4 +86,44 @@ test('music folder picker remembers an existing or removed root across registrat
   assert.equal(await pick({}), selected)
   assert.equal(runtime.appSettings.lastLibraryFolder, selected)
   assert.deepEqual(Array.from(runtime.appSettings.libraryFolders), [selected])
+})
+
+test('settings backup IPC delegates to the installed Core writer', async () => {
+  const calls: unknown[] = []
+  const core = {
+    request: async (name: string, payload: unknown) => {
+      calls.push([name, payload])
+      return 'core-settings-backup'
+    },
+    restore: async (json: string) => {
+      calls.push(['restore', json])
+      return { revision: 8 }
+    }
+  }
+  const exports: { registerSettingsIpc?: (ipc: unknown) => void } = {}
+  runInNewContext(
+    ts.transpileModule(readFileSync(new URL('./settingsIpc.ts', import.meta.url), 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+    }).outputText,
+    {
+      exports,
+      Buffer,
+      require: (id: string) => {
+        if (id === '../coreProcess/settingsBridge.ts') return { getCoreSettingsBridge: () => core }
+        if (id === '../security/electronSecurity.ts') return { assertTrustedIpcSender() {} }
+        return {}
+      }
+    }
+  )
+  const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
+  exports.registerSettingsIpc!({
+    handle: (channel: string, handler: (...args: unknown[]) => Promise<unknown>) =>
+      handlers.set(channel, handler)
+  })
+  assert.equal(await handlers.get('settings:export')!({}), 'core-settings-backup')
+  assert.deepEqual(await handlers.get('settings:import')!({}, '{"version":2}'), { revision: 8 })
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ['settings.backup', {}],
+    ['restore', '{"version":2}']
+  ])
 })

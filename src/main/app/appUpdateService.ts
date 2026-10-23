@@ -1,7 +1,7 @@
 import { app, shell } from 'electron'
 import { join } from 'node:path'
 import { runtime } from '../core/runtime.ts'
-import { requestRendererPlaybackSessionSave } from './window.ts'
+import { requestApplicationPersistence } from './window.ts'
 import { AppUpdateManager } from './appUpdateManager.ts'
 import { GITHUB_OWNER, GITHUB_REPO, RELEASES_URL } from '../../shared/projectUrls.ts'
 import type { AppUpdatePreferencePatch } from '../../shared/appUpdate.ts'
@@ -22,7 +22,7 @@ function service(): AppUpdateManager {
       win.webContents.send('app:update-state', snapshot)
       win.webContents.send('app:update-progress', snapshot.progress)
     },
-    prepareInstall: requestRendererPlaybackSessionSave,
+    prepareInstall: requestApplicationPersistence,
     openInstaller: (path) => shell.openPath(path),
     quit: () => {
       setTimeout(() => {

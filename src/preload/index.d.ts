@@ -310,6 +310,7 @@ interface OpraAPI {
 }
 
 interface WindowAPI {
+  core: import('../shared/coreBridge.ts').CoreBridgeApi
   playlistImport: {
     chooseFile(): Promise<import('../shared/externalPlaylist.ts').PlaylistImportDocument | null>
     resolveNeteaseShortLink(request: {
@@ -931,7 +932,6 @@ interface WindowAPI {
   dynamicIsland: {
     getBootstrap: () => Promise<DynamicIslandBootstrap>
     command: (command: MiniPlayerCommand) => void
-    getVisualizationData: (options?: VisualizationOptions) => Promise<VisualizationData>
     setExpanded: (expanded: boolean) => Promise<boolean>
     onState: (cb: (state: MiniPlayerStateSnapshot) => void) => () => void
     onExpanded: (cb: (expanded: boolean) => void) => () => void

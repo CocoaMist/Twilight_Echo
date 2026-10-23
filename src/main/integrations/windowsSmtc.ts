@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { writeDiagnostic } from '../diagnostics/logger.ts'
 import { pathToFileURL } from 'url'
 import { runtime } from '../core/runtime'
+import { getCoreSystemPlayer } from '../coreProcess/systemPlayerBridge.ts'
 import { resolveCoverCacheFile } from '../library/coverCache.ts'
 import { shouldAcceptIpcEvent } from '../security/electronSecurity.ts'
 import type { MiniPlayerCommand, MiniPlayerStateSnapshot } from '../../shared/miniPlayer.ts'
@@ -47,6 +48,11 @@ export function setupWindowsSmtcIpc(): void {
 }
 
 function sendPlayerCommand(command: MiniPlayerCommand): void {
+  const core = getCoreSystemPlayer()
+  if (core) {
+    core.dispatch(command)
+    return
+  }
   const win = runtime.mainWindow
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
     void routeRendererFreeCommand(command)
@@ -107,6 +113,10 @@ function handleWindowsSmtcEvent(event: WindowsSmtcEvent): void {
   if (!state?.track || runtime.appSettings.smtcEnabled === false) return
 
   if (event.type === 'button') {
+    if (event.button === 'stop' && getCoreSystemPlayer()) {
+      getCoreSystemPlayer()!.dispatch({ type: 'stop' })
+      return
+    }
     if (event.button === 'play') sendPlayerCommand({ type: 'play' })
     else if (event.button === 'pause' || event.button === 'stop') {
       sendPlayerCommand({ type: 'pause' })

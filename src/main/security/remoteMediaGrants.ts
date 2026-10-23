@@ -18,8 +18,9 @@ export interface RemoteMediaGrantServiceOptions {
 
 export interface RemoteMediaRequestHandlerOptions {
   imageCache?: {
+    generation?: () => number
     read: (source: string) => Promise<Response | null>
-    write: (source: string, type: string, bytes: Uint8Array) => Promise<void>
+    write: (source: string, type: string, bytes: Uint8Array, generation?: number) => Promise<void>
   }
   grants?: RemoteMediaGrantService
   fetch: (source: string, init: RequestInit) => Promise<Response>
@@ -162,6 +163,7 @@ export function createRemoteMediaRequestHandler(
       }
 
       const cacheable = grant.kind === 'image' && request.method === 'GET' && !range
+      const cacheGeneration = options.imageCache?.generation?.()
       if (cacheable && options.imageCache) {
         try {
           const cached = await options.imageCache.read(grant.source)
@@ -222,7 +224,8 @@ export function createRemoteMediaRequestHandler(
           await options.imageCache.write(
             grant.source,
             upstream.headers.get('content-type') ?? '',
-            bytes
+            bytes,
+            cacheGeneration
           )
           record('response.ready', {
             status: response.status,
