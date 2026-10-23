@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRemoteCoverCache } from './remoteCoverCache.ts'
@@ -8,6 +8,54 @@ import {
   createRemoteMediaRequestHandler,
   RemoteMediaGrantService
 } from '../security/remoteMediaGrants.ts'
+
+test('cover clear joins real publications and fences HTTP responses begun before or during maintenance', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'te-cover-clear-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const cache = createRemoteCoverCache(() => root)
+  const publishing = cache.write('https://example.com/before', 'image/png', new Uint8Array([1]))
+  let release!: () => void, arrived!: () => void
+  const arrivedAtClear = new Promise<void>((resolve) => {
+    arrived = resolve
+  })
+  const grants = new RemoteMediaGrantService()
+  const bodies: Array<(value: Response) => void> = []
+  const handler = createRemoteMediaRequestHandler({
+    grants,
+    imageCache: cache,
+    fetch: () =>
+      new Promise<Response>((resolve) => {
+        bodies.push(resolve)
+      })
+  })
+  const response = handler(new Request(grants.grant('https://example.com/old', 'image')))
+  while (bodies.length < 1) await new Promise((resolve) => setImmediate(resolve))
+  const clearing = cache.maintain(async () => {
+    await publishing
+    assert.equal((await readdir(root)).length, 1)
+    for (const name of await readdir(root)) await rm(join(root, name))
+    arrived()
+    await new Promise<void>((resolve) => {
+      release = resolve
+    })
+  })
+  await arrivedAtClear
+  const during = handler(new Request(grants.grant('https://example.com/during', 'image')))
+  while (bodies.length < 2) await new Promise((resolve) => setImmediate(resolve))
+  release()
+  await clearing
+  // Both requests retain the generation from before their fetch, rather than
+  // acquiring a fresh publication permit when the slow body finally arrives.
+  for (const body of bodies)
+    body(new Response(new Uint8Array([3]), { headers: { 'content-type': 'image/png' } }))
+  assert.deepEqual(
+    (await Promise.all([response, during])).map((r) => r.status),
+    [200, 200]
+  )
+  assert.deepEqual(await readdir(root), [])
+  await cache.write('https://example.com/new', 'image/png', new Uint8Array([4]))
+  assert.ok(await cache.read('https://example.com/new'))
+})
 
 test('authorized covers survive a cache instance restart and disabling cache bypasses disk', async () => {
   const root = await mkdtemp(join(tmpdir(), 'te-cover-'))

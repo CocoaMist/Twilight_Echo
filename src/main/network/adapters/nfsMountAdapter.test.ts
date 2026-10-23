@@ -1,10 +1,35 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { createNfsMountAdapter, type MountCommandRunner } from './smbMountAdapter.ts'
 import type { NetworkSourceProfile } from '../../../shared/networkSources.ts'
+
+test('failed unmount retains the mounted directory and reports the real error before cleanup', async (t) => {
+  const mountBase = await mkdtemp(join(tmpdir(), 'nfs-unmount-'))
+  t.after(() => rm(mountBase, { recursive: true, force: true }))
+  let point = '',
+    busy = true
+  const session = await createNfsMountAdapter({
+    platform: 'linux',
+    mountBaseDir: mountBase,
+    runCommand: async (command, args) => {
+      if (command === 'mount') {
+        point = args[3]
+        await writeFile(join(point, 'keep.flac'), 'must survive')
+      }
+      return command === 'umount' && busy
+        ? { code: 1, stdout: '', stderr: 'device busy' }
+        : { code: 0, stdout: '', stderr: '' }
+    }
+  }).createSession(makeProfile(), { kind: 'anonymous' })
+  await session.list('/')
+  await assert.rejects(session.close(), /device busy/)
+  assert.equal(await readFile(join(point, 'keep.flac'), 'utf8'), 'must survive')
+  busy = false
+  await session.close()
+})
 
 const FLAC_BYTES = Buffer.from('NFS-MOUNT-DATA')
 

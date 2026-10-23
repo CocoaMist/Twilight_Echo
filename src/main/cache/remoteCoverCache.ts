@@ -21,12 +21,29 @@ export function createRemoteCoverCache(
   directory: () => string | null,
   options: RemoteCoverCacheOptions = {}
 ) {
+  let generation = 0
+  let clearing = false
+  const writes = new Set<Promise<void>>()
   function cachePath(source: string): string | null {
     const root = directory()
     return root ? join(root, `${createHash('sha256').update(source).digest('hex')}.remote`) : null
   }
   return {
+    generation: () => generation,
+    async maintain<T>(action: () => Promise<T>): Promise<T> {
+      if (clearing) throw new Error('Remote cover maintenance is already running')
+      clearing = true
+      generation++
+      try {
+        await Promise.allSettled([...writes])
+        return await action()
+      } finally {
+        generation++
+        clearing = false
+      }
+    },
     async read(source: string): Promise<Response | null> {
+      if (clearing) return null
       const path = cachePath(source)
       const miss = (reason: string) => {
         writeDiagnostic('cover.cache', 'read.miss', { source, reason }, 'debug')
@@ -55,52 +72,66 @@ export function createRemoteCoverCache(
         return null
       }
     },
-    async write(source: string, type: string, bytes: Uint8Array): Promise<void> {
-      const path = cachePath(source)
-      let mime = type.split(';', 1)[0].trim()
-      if (!path || !/^image\/[a-z0-9.+-]+$/i.test(mime) || bytes.byteLength > 25 * 1024 * 1024) {
-        writeDiagnostic(
-          'cover.cache',
-          'write.skipped',
-          {
-            source,
-            reason: !path
-              ? 'disabled'
-              : bytes.byteLength > 25 * 1024 * 1024
-                ? 'oversized'
-                : 'content-type'
-          },
-          'debug'
-        )
-        return
-      }
-      let stored = bytes
-      if (options.resize) {
-        try {
-          const resized = options.resize(bytes, mime)
-          if (resized && resized.bytes.byteLength > 0) {
-            stored = resized.bytes
-            mime = resized.mime.split(';', 1)[0].trim() || mime
-          }
-        } catch (error) {
-          writeDiagnostic('cover.cache', 'resize.failed', { source, error }, 'warn')
-          // Keep the original bytes when downscaling fails.
+    async write(
+      source: string,
+      type: string,
+      bytes: Uint8Array,
+      started = generation
+    ): Promise<void> {
+      if (clearing || started !== generation) return
+      const work = (async () => {
+        const path = cachePath(source)
+        let mime = type.split(';', 1)[0].trim()
+        if (!path || !/^image\/[a-z0-9.+-]+$/i.test(mime) || bytes.byteLength > 25 * 1024 * 1024) {
+          writeDiagnostic(
+            'cover.cache',
+            'write.skipped',
+            {
+              source,
+              reason: !path
+                ? 'disabled'
+                : bytes.byteLength > 25 * 1024 * 1024
+                  ? 'oversized'
+                  : 'content-type'
+            },
+            'debug'
+          )
+          return
         }
-      }
-      const temporary = `${path}.${randomUUID()}.part`
+        let stored = bytes
+        if (options.resize) {
+          try {
+            const resized = options.resize(bytes, mime)
+            if (resized && resized.bytes.byteLength > 0) {
+              stored = resized.bytes
+              mime = resized.mime.split(';', 1)[0].trim() || mime
+            }
+          } catch (error) {
+            writeDiagnostic('cover.cache', 'resize.failed', { source, error }, 'warn')
+            // Keep the original bytes when downscaling fails.
+          }
+        }
+        const temporary = `${path}.${randomUUID()}.part`
+        try {
+          await mkdir(join(path, '..'), { recursive: true })
+          await writeFile(temporary, Buffer.concat([Buffer.from(`${mime}\n`), stored]))
+          await rename(temporary, path)
+          writeDiagnostic(
+            'cover.cache',
+            'write.complete',
+            { source, inputBytes: bytes.byteLength, bytes: stored.byteLength, contentType: mime },
+            'debug'
+          )
+        } catch (error) {
+          writeDiagnostic('cover.cache', 'write.failed', { source, error }, 'warn')
+          await rm(temporary, { force: true }).catch(() => undefined)
+        }
+      })()
+      writes.add(work)
       try {
-        await mkdir(join(path, '..'), { recursive: true })
-        await writeFile(temporary, Buffer.concat([Buffer.from(`${mime}\n`), stored]))
-        await rename(temporary, path)
-        writeDiagnostic(
-          'cover.cache',
-          'write.complete',
-          { source, inputBytes: bytes.byteLength, bytes: stored.byteLength, contentType: mime },
-          'debug'
-        )
-      } catch (error) {
-        writeDiagnostic('cover.cache', 'write.failed', { source, error }, 'warn')
-        await rm(temporary, { force: true }).catch(() => undefined)
+        await work
+      } finally {
+        writes.delete(work)
       }
     }
   }

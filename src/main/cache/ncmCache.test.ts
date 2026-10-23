@@ -7,9 +7,7 @@ import {
   planNcmCachePrune
 } from './ncmCachePrune.ts'
 
-// ncmCache.ts imports electron and cannot run under plain node --test; its
-// streaming/pipeline wiring is pinned with source assertions while the prune
-// policy is unit-tested directly.
+// Preserve the mature streaming/index wiring alongside portable cache behavior tests.
 
 test('ncm cache prune evicts least-recently-used finished files past the byte budget', () => {
   const plan = planNcmCachePrune(
@@ -52,8 +50,26 @@ test('ncm cache prune cleans stale .part orphans but never counts them against t
   assert.equal(plan.remainingBytes, 500)
 })
 
+test('pruning retains pinned current/preloaded files and active writer parts even above budget', () => {
+  const plan = planNcmCachePrune(
+    [
+      { name: 'current.flac', size: 600, mtimeMs: 1 },
+      { name: 'preloaded.flac', size: 600, mtimeMs: 2 },
+      { name: 'old.flac', size: 100, mtimeMs: 3 },
+      { name: 'active.part', size: 900, mtimeMs: 0 },
+      { name: 'orphan.part', size: 900, mtimeMs: 0 }
+    ],
+    100,
+    NCM_CACHE_PART_MAX_AGE_MS + 1,
+    new Set(['current.flac', 'preloaded.flac', 'active.part'])
+  )
+  assert.deepEqual(plan.deleteNames, ['old.flac'])
+  assert.deepEqual(plan.orphanPartNames, ['orphan.part'])
+  assert.equal(plan.remainingBytes, 1200)
+})
+
 test('ncm cache write path streams to .part and only renames the finished file', () => {
-  const source = readFileSync(new URL('./ncmCache.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../../core/providers/ncmCache.ts', import.meta.url), 'utf8')
   // Streaming: no whole-file arrayBuffer buffering remains.
   assert.doesNotMatch(source, /await res\.arrayBuffer\(\)/)
   assert.match(source, /Readable\.fromWeb\(res\.body/)
@@ -64,7 +80,7 @@ test('ncm cache write path streams to .part and only renames the finished file',
   // Cache lookups must never hand out in-flight .part files (enforced by the
   // index builder in ncmCacheIndex.ts).
   assert.match(
-    readFileSync(new URL('./ncmCacheIndex.ts', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../core/providers/ncmCacheIndex.ts', import.meta.url), 'utf8'),
     /name\.includes\('\.part'\)/
   )
   // Capacity governance hooks into the write path and hits refresh mtime (LRU).
@@ -73,7 +89,7 @@ test('ncm cache write path streams to .part and only renames the finished file',
 })
 
 test('ncm cache lookups run on an in-memory index instead of a per-play directory scan', () => {
-  const source = readFileSync(new URL('./ncmCache.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../../core/providers/ncmCache.ts', import.meta.url), 'utf8')
   const lookup = extractFunction(source, 'getCachedNcmSong')
   // 8.3: 命中路径不再 readdirSync；索引由目录快照惰性构建，写入/淘汰同步维护。
   assert.match(lookup, /getNcmCacheEntryName\(songId\)/)
@@ -89,13 +105,13 @@ test('ncm cache lookups run on an in-memory index instead of a per-play director
   assert.match(source, /forgetNcmCacheEntry\(dir, name\)/)
   // .part 临时文件仍绝不可入索引。
   assert.match(
-    readFileSync(new URL('./ncmCacheIndex.ts', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../core/providers/ncmCacheIndex.ts', import.meta.url), 'utf8'),
     /name\.includes\('\.part'\)/
   )
 })
 
 test('ncm cache downloads supersede in-flight ones and start after a skip-window delay', () => {
-  const source = readFileSync(new URL('./ncmCache.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../../core/providers/ncmCache.ts', import.meta.url), 'utf8')
   const cacheWrite = extractFunction(source, 'cacheNcmSong')
   // 8.1②：新解析抢占所有进行中的下载（AbortController map + 全部 abort 后 clear）。
   assert.match(source, /const activeCacheDownloads = new Map<number, AbortController>\(\)/)
@@ -105,8 +121,10 @@ test('ncm cache downloads supersede in-flight ones and start after a skip-window
   )
   assert.match(cacheWrite, /activeCacheDownloads\.clear\(\)/)
   // 8.1③：30s 延迟启动必须发生在 fetch 之前，且 45s 下载超时在其后才计时。
-  const delayAt = cacheWrite.indexOf('await waitForNcmCacheStartDelay(controller.signal)')
-  const fetchAt = cacheWrite.indexOf('await fetch(url,')
+  const delayAt = cacheWrite.indexOf(
+    'await (options.waitForStart ?? waitForNcmCacheStartDelay)(controller.signal)'
+  )
+  const fetchAt = cacheWrite.indexOf('await request(url,')
   assert.ok(delayAt >= 0 && fetchAt > delayAt, 'delay must gate the actual download start')
   const timerAt = cacheWrite.indexOf('setTimeout(() => controller.abort(), 45000)')
   assert.ok(timerAt > delayAt, 'download timeout must start after the delay, not at enqueue')
