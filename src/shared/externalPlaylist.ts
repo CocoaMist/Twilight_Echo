@@ -117,10 +117,16 @@ export function importSongKey(song: ImportSong): string {
 }
 /** Match occurrences FIFO, retaining duplicates and manual choices. */
 export function reconcileImportEntries(before: ImportedPlaylistEntry[], songs: ImportSong[], identity: () => string): ImportedPlaylistEntry[] {
-  const buckets = new Map<string, ImportedPlaylistEntry[]>()
-  for (const entry of before) { const key = importSongKey(entry.original); const list = buckets.get(key) ?? []; list.push(entry); buckets.set(key, list) }
+  const buckets = new Map<string, { entries: ImportedPlaylistEntry[]; cursor: number }>()
+  for (const entry of before) {
+    const key = importSongKey(entry.original)
+    const bucket = buckets.get(key) ?? { entries: [], cursor: 0 }
+    bucket.entries.push(entry)
+    buckets.set(key, bucket)
+  }
   return songs.map((original, position) => {
-    const previous = buckets.get(importSongKey(original))?.shift()
+    const bucket = buckets.get(importSongKey(original))
+    const previous = bucket?.entries[bucket.cursor++]
     return previous ? { ...previous, original, position } : { entryId: identity(), original, position, revision: 0, resolution: { state: 'pending' } }
   })
 }
@@ -128,7 +134,13 @@ export function previewImportUpdate(before: ImportedPlaylistEntry[], songs: Impo
   let i = 0
   const next = reconcileImportEntries(before, songs, () => `new:${i++}`)
   const ids = new Set(before.map(e => e.entryId)), kept = new Set(next.map(e => e.entryId))
-  return { added: next.filter(e => !ids.has(e.entryId)).length, removed: before.filter(e => !kept.has(e.entryId)).length, reordered: next.filter(e => ids.has(e.entryId)).some((e, p) => e.entryId !== before.filter(b => kept.has(b.entryId))[p]?.entryId) }
+  const retainedBefore = before.filter(entry => kept.has(entry.entryId))
+  const retainedNext = next.filter(entry => ids.has(entry.entryId))
+  return {
+    added: next.length - retainedNext.length,
+    removed: before.length - retainedBefore.length,
+    reordered: retainedNext.some((entry, position) => entry.entryId !== retainedBefore[position]?.entryId)
+  }
 }
 
 /** Projection DTO for SQL search/count/order. Never a playable Track. */

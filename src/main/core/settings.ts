@@ -78,6 +78,7 @@ import {
   normalizeMiniPlayerSettings
 } from '../../shared/miniPlayer'
 import { DEFAULT_SOFTWARE_VOLUME } from '../../shared/audioProcessingOptions'
+import { normalizeInitialAudioProcessingSettings } from '../audio/audioEngineHelpers.ts'
 import { normalizeThemeSelection, normalizeThemeWindowInheritance } from '../../shared/theme.ts'
 import { normalizeMotionPreference } from '../../shared/motion.ts'
 import {
@@ -642,7 +643,7 @@ export function normalizeSleepTimerSettings(raw: unknown): SleepTimerSettings {
 export function normalizeAppSettings(settings: Partial<AppSettings>): AppSettings {
   const rawSettings = settings as Record<string, unknown>
   const deviceProfiles = normalizeAudioDeviceProfileSettings(settings.audioDeviceProfiles)
-  const audioProcessing = normalizeAudioProcessingSettings(settings.audioProcessing)
+  const audioProcessing = normalizeInitialAudioProcessingSettings(settings.audioProcessing)
   const dspScenes = normalizeDspScenes(settings.dspScenes, audioProcessing)
   const rawCachePath =
     typeof settings.cachePath === 'string' && settings.cachePath.trim()

@@ -863,6 +863,17 @@ export function normalizeAudioProcessingSettings(
   }
 }
 
+/** Restore explicit master intent before defaults erase missing legacy fields. */
+export function normalizeInitialAudioProcessingSettings(
+  settings?: Partial<AudioProcessingSettings>
+): AudioProcessingSettings {
+  const normalized = normalizeAudioProcessingSettings(settings)
+  return {
+    ...normalized,
+    ...resolveProcessingMasterState(normalized, settings?.dspEnabled, settings?.directMode)
+  }
+}
+
 export interface ProcessingMasterState {
   dspEnabled: boolean
   directMode: boolean

@@ -18,6 +18,7 @@ import {
 } from '../../../../shared/audioProcessingOptions.ts'
 import { isDsdProxyDevice } from '../../../../shared/dsdProxyDrivers.ts'
 import { resolveReasonCode } from '../../../../shared/audio/reasonCodes.ts'
+import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import { useLocale } from '../../app/useLocale.ts'
 import {
   normalizeAutoMixMode,
@@ -71,6 +72,7 @@ const {
   audioDeviceOptions,
   audioOutputDeviceOptions,
   audioProcessing,
+  dspOutputStage,
   audioOutputConfig,
   audioOutputConfigApplyStatus,
   playbackInfo,
@@ -393,8 +395,12 @@ const outputLatencyText = computed(() => {
 
 const outputDiagnosticsText = computed(() => {
   const diagnostics = outputInfo.value?.diagnostics ?? playbackInfo.value?.diagnostics
-  if (!diagnostics) return 'Underrun 0 · Drop 0'
-  return `Underrun ${diagnostics.sessionUnderrunCount} · Drop ${diagnostics.sessionBufferDropCount}`
+  const stage =
+    outputInfo.value?.nativeDsp?.graph?.outputStage ??
+    playbackInfo.value?.outputInfo?.nativeDsp?.graph?.outputStage
+  const src = describeResampler(dspOutputStage.value.resamplerQuality, stage)
+  if (!diagnostics) return `Underrun 0 · Drop 0 · ${src}`
+  return `Underrun ${diagnostics.sessionUnderrunCount} · Drop ${diagnostics.sessionBufferDropCount} · ${src}`
 })
 
 const outputProviderImplementation = computed(() => outputInfo.value?.providerImplementation ?? '')
@@ -562,7 +568,9 @@ function setAsioOutputChannelStart(event: Event): void {
   if (audioOutputConfigApplyStatus.value.state === 'pending') return
   const value = Number((event.target as HTMLInputElement).value)
   if (!Number.isFinite(value)) return
-  void setAudioOutputConfig({ asioOutputChannelStart: Math.min(255, Math.max(0, Math.trunc(value) - 1)) })
+  void setAudioOutputConfig({
+    asioOutputChannelStart: Math.min(255, Math.max(0, Math.trunc(value) - 1))
+  })
 }
 
 function setRoutingMode(event: Event): void {

@@ -6,6 +6,8 @@ nodeLinker: hoisted
 overrides:
   # Fix Axios request/proxy advisories and FTP listing-parser DoS in every runtime branch.
   axios: 1.20.0
+  # Keep every Axios/runtime branch on the credential-stripping fixes.
+  follow-redirects: 1.16.1
   basic-ftp: 6.2.1
   # Bound malformed MP4, EBML, ID3, APEv2 and DSF metadata parsing in all runtime branches.
   music-metadata: 11.16.0

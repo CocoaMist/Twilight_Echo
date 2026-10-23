@@ -617,13 +617,12 @@ async function initializeAudioEngineRuntime(): Promise<void> {
   app.on('before-quit', () => {
     flushSoftwareVolumePersist()
   })
-  // A stale persisted directMode can silently bypass an enabled processing
-  // module (for example EQ) after a restart. Reconcile the master switch once
-  // at startup so the engine and the stored settings agree on what should run.
+  // Respect a saved master-off even when its module settings remain enabled.
+  // An enabled master still repairs a stale directMode from older settings.
   const startupProcessing = normalizeAudioProcessingSettings(runtime.appSettings.audioProcessing)
   const startupMasterState = resolveProcessingMasterState(
     startupProcessing,
-    undefined,
+    startupProcessing.dspEnabled,
     startupProcessing.directMode
   )
   if (

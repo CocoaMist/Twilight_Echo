@@ -511,6 +511,9 @@ export function startApp(): void {
 
     app.on('before-quit', () => {
       runtime.forceQuit = true
+      // Destroy the non-closable Afterglow anchor before Electron closes windows.
+      // Waiting until will-quit can leave that window blocking the quit sequence.
+      shutdownAfterglowMode()
       destroyDesktopLyrics()
       destroyDynamicIsland()
       // 队列已同步落盘；退出期间的网络投递是尽力而为，未发出的事件下次启动重试。
@@ -519,7 +522,6 @@ export function startApp(): void {
     })
 
     app.on('will-quit', () => {
-      shutdownAfterglowMode()
       stopAppUpdateChecks()
       destroyDesktopLyrics()
       destroyDynamicIsland()
