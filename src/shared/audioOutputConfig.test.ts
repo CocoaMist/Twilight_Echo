@@ -7,7 +7,10 @@ import type { OutputConfig } from './audioEngineTypes.ts'
 
 // Execute the production settings adapter without starting Electron or opening
 // a user's settings file. Only its existing defaults and shared schema are needed.
-const settingsSource = readFileSync(new URL('../main/core/settings.ts', import.meta.url), 'utf8')
+const settingsSource = readFileSync(
+  new URL('../core/settings/normalization.ts', import.meta.url),
+  'utf8'
+)
 const settingsAst = ts.createSourceFile('settings.ts', settingsSource, ts.ScriptTarget.Latest, true)
 const adapter = settingsAst.statements.find(
   (node): node is ts.FunctionDeclaration =>
@@ -44,7 +47,14 @@ test('large ASIO buffer preferences survive storage and activation', () => {
 })
 
 test('ASIO output channel preferences are finite zero-based indices', () => {
-  for (const [input, expected] of [[-1, 0], [2.9, 2], [255, 255], [999, 255], [NaN, 0], [Infinity, 0]]) {
+  for (const [input, expected] of [
+    [-1, 0],
+    [2.9, 2],
+    [255, 255],
+    [999, 255],
+    [NaN, 0],
+    [Infinity, 0]
+  ]) {
     const stored = normalizeStored({ asioOutputChannelStart: input })
     assert.equal(stored.asioOutputChannelStart, expected)
     assert.deepEqual(normalizeOutputConfig(stored), stored)

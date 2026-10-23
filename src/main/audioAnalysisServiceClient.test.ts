@@ -39,6 +39,250 @@ const measurement = {
   analyzedAt: '2026-09-14T00:00:00Z'
 }
 
+test('cancelling an album decoder waits for exit before releasing any member source', async () => {
+  const worker = new Worker()
+  let retire!: () => void
+  const exited = new Promise<void>((resolve) => {
+    retire = resolve
+  })
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    launch: () => Object.assign(worker, { terminate: () => exited })
+  })
+  try {
+    let settled = false
+    const work = service
+      .analyzeLoudnessGroup({
+        id: 'album:one',
+        title: 'Album',
+        mode: 'album',
+        tracks: [
+          { id: 'one', filePath: 'first.wav' },
+          { id: 'two', filePath: 'second.wav' }
+        ]
+      })
+      .finally(() => {
+        settled = true
+      })
+    const rejected = assert.rejects(work, { code: 'ERR_AUDIO_ANALYSIS_CANCELLED' })
+    worker.ready()
+    service.cancelAll('loudness-batch')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(settled, false)
+    retire()
+    await rejected
+    assert.equal(worker.messages.length, 1)
+  } finally {
+    service.destroy()
+  }
+})
+
+test('duplicate content hashing uses the cancellable low-priority analysis lane', async () => {
+  const worker = new Worker()
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    launch: () => worker
+  })
+  try {
+    const abort = new AbortController()
+    const work = service.hashContent('library/song.wav', abort.signal)
+    worker.ready()
+    const message = worker.messages[0] as AudioAnalysisWorkerRequest
+    assert.equal(message.analysis, 'content-hash')
+    assert.equal(message.source, 'library/song.wav')
+    worker.emit('message', {
+      kind: 'response',
+      requestId: message.requestId,
+      ok: true,
+      value: 'a'.repeat(64)
+    })
+    assert.equal(await work, 'a'.repeat(64))
+    const cancelled = service.hashContent('library/other.wav', abort.signal)
+    const rejected = assert.rejects(cancelled, { code: 'ERR_AUDIO_ANALYSIS_CANCELLED' })
+    abort.abort()
+    await rejected
+    assert.equal(worker.kills, 1)
+  } finally {
+    service.destroy()
+  }
+})
+
+test('library tag work and targeted decoder release wait for actual exit, without replay', async () => {
+  const worker = new Worker()
+  let retire!: () => void
+  const exited = new Promise<void>((resolve) => {
+    retire = resolve
+  })
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    launch: () => Object.assign(worker, { terminate: () => exited })
+  })
+  try {
+    let settled = false
+    const work = service
+      .libraryTags('tag-backups', {
+        kind: 'write',
+        items: [{ filePath: 'song.wav', title: 'Title' }]
+      })
+      .finally(() => {
+        settled = true
+      })
+    const rejection = assert.rejects(
+      work,
+      (error: any) => error.code === 'ERR_AUDIO_ANALYSIS_CANCELLED'
+    )
+    worker.ready()
+    let released = false
+    const releasing = service.releaseSources(['tag-backups']).then(() => {
+      released = true
+    })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(settled, false)
+    assert.equal(released, false)
+    retire()
+    await Promise.all([rejection, releasing])
+    assert.equal(worker.messages.length, 1)
+    assert.equal((worker.messages[0] as AudioAnalysisWorkerRequest).analysis, 'library-tags')
+  } finally {
+    service.destroy()
+  }
+})
+
+test('download tag writers cancel only after their actual worker has exited, never by replaying the write', async () => {
+  const worker = new Worker()
+  let retire!: () => void
+  const terminated = new Promise<void>((resolve) => {
+    retire = resolve
+  })
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    launch: () => Object.assign(worker, { terminate: () => terminated })
+  })
+  const controller = new AbortController()
+  let settled = false
+  const task = service
+    .prepareDownloadMetadata(
+      'song.part',
+      {
+        targetPath: 'song.wav',
+        track: { id: 'song', title: 'Song', artist: 'Artist' },
+        preferences: { naming: 'provider', embedMetadata: true, saveLyrics: true },
+        lyrics: { lyrics: 'large lyrics' },
+        lyricFailure: false,
+        cover: null,
+        coverFailure: false
+      },
+      controller.signal
+    )
+    .finally(() => {
+      settled = true
+    })
+  const rejected = assert.rejects(task, /cancel/i)
+  worker.ready()
+  assert.equal((worker.messages[0] as AudioAnalysisWorkerRequest).analysis, 'download-metadata')
+  controller.abort()
+  await Promise.resolve()
+  assert.equal(settled, false)
+  retire()
+  await rejected
+  assert.equal(worker.messages.length, 1)
+  service.destroy()
+})
+
+test('a download metadata worker exit is already joined and cannot wait for a second exit event', async () => {
+  const worker = new Worker()
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    launch: () => worker
+  })
+  const task = service.prepareDownloadMetadata(
+    'song.part',
+    {
+      targetPath: 'song.wav',
+      track: { id: 'song', title: 'Song', artist: 'Artist' },
+      preferences: { naming: 'provider', embedMetadata: false, saveLyrics: false },
+      lyrics: {},
+      lyricFailure: false,
+      cover: null,
+      coverFailure: false
+    },
+    new AbortController().signal
+  )
+  const rejected = assert.rejects(task, /exited/)
+  worker.ready()
+  worker.emit('exit', 1)
+  await rejected
+  assert.equal(worker.kills, 0)
+  service.destroy()
+})
+
+test('JS-only metadata workers keep downloads available without claiming native analyses', async () => {
+  const worker = new Worker()
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    launch: () => worker
+  })
+  const task = service.prepareDownloadMetadata(
+    'song.part',
+    {
+      targetPath: 'song.wav',
+      track: { id: 'song', title: 'Song', artist: 'Artist' },
+      preferences: { naming: 'provider', embedMetadata: false, saveLyrics: true },
+      lyrics: {},
+      lyricFailure: false,
+      cover: null,
+      coverFailure: false
+    },
+    new AbortController().signal
+  )
+  worker.emit('message', { kind: 'ready', protocolVersion: 1, analyses: ['download-metadata'] })
+  const value = {
+    actualQuality: 'lossless',
+    warning: null,
+    lyrics: [{ suffix: '.lrc', text: 'a'.repeat(600_000) }]
+  }
+  worker.emit('message', {
+    kind: 'response',
+    requestId: (worker.messages[0] as AudioAnalysisWorkerRequest).requestId,
+    ok: true,
+    value
+  })
+  assert.deepEqual(await task, value)
+  service.destroy()
+})
+
+test('native container metadata uses a cancellable analysis lease and retains complete ISO identities', async () => {
+  const worker = new Worker()
+  const service = new AudioAnalysisServiceClient({
+    serviceEntry: 'analysis.js',
+    launch: () => worker
+  })
+  try {
+    const metadata = service.getMetadata('disc.iso')
+    worker.ready()
+    assert.equal((worker.messages[0] as AudioAnalysisWorkerRequest).analysis, 'metadata')
+    const value = {
+      source: 'disc.iso',
+      error: '',
+      coverDataBase64: 'a'.repeat(600_000),
+      isoTracks: [
+        { source: 'sacd:disc.iso#track=1', title: 'First' },
+        { source: 'sacd:disc.iso#track=2', title: 'Second' }
+      ]
+    }
+    worker.respond(0, value)
+    assert.deepEqual(await metadata, value)
+    const controller = new AbortController()
+    const pending = service.getMetadata('slow.iso', { signal: controller.signal })
+    const cancelled = assert.rejects(pending, /cancel/i)
+    controller.abort()
+    await cancelled
+    assert.equal(worker.kills, 1)
+  } finally {
+    service.destroy()
+  }
+})
+
 test('AutoMix stays single concurrency in a four-worker pool while other analysis can proceed', async () => {
   const children: Worker[] = []
   const service = new AudioAnalysisServiceClient({

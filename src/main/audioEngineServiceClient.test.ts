@@ -38,6 +38,40 @@ class ThrowingUtilityProcess extends ManualUtilityProcess {
   }
 }
 
+test('an unanswered FFT read never queues Pause or the runtime capture gate behind it', async () => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  try {
+    const read = binding.callAsync('GetVisualizationData', ['{}'])
+    const pause = binding.callAsync('Pause', [])
+    const disable = binding.callAsync('SetVisualizationDemand', [false])
+    const [fft, control, gate] = child.messages as Array<{
+      requestId: string
+      method: string
+      args: unknown[]
+    }>
+    assert.deepEqual(
+      [fft.method, control.method, gate.method],
+      ['GetVisualizationData', 'Pause', 'SetVisualizationDemand']
+    )
+    child.emit('message', { kind: 'response', requestId: control.requestId, ok: true })
+    child.emit('message', { kind: 'response', requestId: gate.requestId, ok: true })
+    await Promise.all([pause, disable])
+    child.emit('message', {
+      kind: 'response',
+      requestId: fft.requestId,
+      ok: true,
+      value: '{"active":false}'
+    })
+    assert.equal(await read, '{"active":false}')
+  } finally {
+    binding.destroy()
+  }
+})
+
 test('crash listener calls cannot bypass the configured restart backoff', async () => {
   const children: ManualUtilityProcess[] = []
   const binding = new AudioEngineServiceBinding({
@@ -833,6 +867,48 @@ test('a rejected fire-and-forget command leaves other RPCs waiting for their own
   } finally {
     binding.destroy()
   }
+})
+
+test('confirmed AB loop waits for native ACK and only explicit missing capability permits soft fallback', async (t) => {
+  const child = new ManualUtilityProcess()
+  const binding = new AudioEngineServiceBinding({
+    serviceEntry: 'audioEngineService.js',
+    requestTimeoutMs: 15,
+    electron: { utilityProcess: { fork: () => child } }
+  })
+  t.after(() => binding.destroy())
+  startAudioServiceForTest(binding)
+  child.emit('message', {
+    kind: 'ready',
+    capabilities: createAudioServiceCapabilities(['ApplyDspState', 'GetDspGraphStatus'])
+  })
+  assert.equal(await binding.setLoopRangeConfirmed(1, 2), false)
+  assert.equal(child.messages.length, 0)
+  child.emit('message', {
+    kind: 'ready',
+    capabilities: createAudioServiceCapabilities([
+      'ApplyDspState',
+      'GetDspGraphStatus',
+      'SetLoopRange'
+    ])
+  })
+  let settled = false
+  const work = binding.setLoopRangeConfirmed(1, 2).then((value) => {
+    settled = true
+    return value
+  })
+  await Promise.resolve()
+  assert.equal(settled, false)
+  const request = child.messages.at(-1) as { requestId: string; method: string; args: unknown[] }
+  assert.equal(request.method, 'SetLoopRange')
+  assert.deepEqual(request.args, [1, 2])
+  child.emit('message', { kind: 'response', requestId: request.requestId, ok: true })
+  assert.equal(await work, true)
+  await assert.rejects(binding.setLoopRangeConfirmed(2, 3), /超时/)
+  assert.equal(
+    child.messages.filter((m) => (m as { method: string }).method === 'SetLoopRange').length,
+    2
+  )
 })
 
 test('queue rebind uses addon capabilities and a confirmed boolean reply', async (t) => {
