@@ -190,12 +190,12 @@ window.runWorkbenchCases = async () => {
   await tick()
   check(writes === 0 && !output.audioProcessing.dspEnabled, 'opening enabled DSP or wrote a graph')
   check(
-    document.querySelector('.workspace-tabs button[aria-current]').textContent.trim() === '检测',
-    'DSP does not open on detection'
+    document.querySelector('.workspace-tabs button[aria-current]').textContent.trim() === '总览',
+    'DSP does not open on the overview'
   )
   check(
-    document.querySelector('.workspace-tabs button').textContent.trim() === '检测',
-    'detection is not first'
+    document.querySelector('.workspace-tabs button').textContent.trim() === '总览',
+    'overview is not first'
   )
   check(
     document.querySelector('.signal-overview').textContent.includes('512'),
@@ -297,7 +297,11 @@ window.runWorkbenchCases = async () => {
   await click('恢复自动匹配')
   check(pins.at(-1)[0] === null, 'automatic scene matching not restored')
   await click('信号链')
-  await click('添加')
+  await click('添加处理器')
+  check(
+    document.querySelector('.node-picker[role=dialog]'),
+    'processor picker is not presented as a dialog'
+  )
   check(
     document.querySelectorAll('.node-picker-results button').length === 17,
     'missing processor types'
@@ -326,19 +330,23 @@ window.runWorkbenchCases = async () => {
   await click('还原')
   // Bind a managed IR into the selected room scene, then protect draft references.
   await change(document.querySelector('.compact-scene-select'), 'speakers')
+  check(
+    document.querySelector('.scene-row.selected')?.textContent.includes('Room Correction'),
+    'scene list did not follow the draft scene selector'
+  )
   const convolver = [...document.querySelectorAll('.node-select')].find((node) =>
     node.textContent.includes('卷积')
   )
   convolver.click()
   await tick()
-  await click('资料与插件')
+  await click('资料库')
   const firstAsset = document.querySelector('.asset-row')
   await click('绑定', firstAsset)
   check(
     firstAsset.querySelector('[title="请先解除保存场景和草稿中的引用"]').disabled,
     'draft resource deletion unprotected'
   )
-  await click('检测')
+  await click('总览')
   check(
     document.querySelector('.monitor-page').textContent.includes('-19.7'),
     'real meter fields not rendered'
@@ -353,10 +361,13 @@ window.runWorkbenchCases = async () => {
   check(polls === hiddenPolls, 'hidden workspace keeps polling')
   active.value = true
   await tick()
-  await click('输出与性能')
+  await click('输出')
   const savedRate = state.scenes.find((scene) => scene.id === 'speakers').graph.outputStage
     .targetSampleRate
-  await change(document.querySelector('[aria-label="输出采样率"]'), '96000')
+  const rateChoice = document.querySelector('[aria-label="输出采样率"] input[value="96000"]')
+  check(rateChoice, 'output sample rate choices missing')
+  rateChoice.click()
+  await tick()
   check(
     state.scenes.find((scene) => scene.id === 'speakers').graph.outputStage.targetSampleRate ===
       savedRate,
@@ -414,10 +425,10 @@ window.renderWorkbench = async (tab, tone = 'pureWhite', large = false) => {
   await click(
     {
       chain: '效果链',
-      monitor: '检测',
-      library: '资料与插件',
+      monitor: '总览',
+      library: '资料库',
       equalizer: '均衡器',
-      output: '输出与性能'
+      output: '输出'
     }[tab]
   )
   if (tab === 'chain') document.querySelector('.node-select')?.click()
@@ -425,6 +436,8 @@ window.renderWorkbench = async (tab, tone = 'pureWhite', large = false) => {
   const surface = document.querySelector('.audio-workspace')
   check(surface.scrollWidth <= surface.clientWidth, 'workspace horizontal overflow')
   check(document.documentElement.scrollWidth <= innerWidth, 'document horizontal overflow')
+  const page = document.querySelector('.workspace-content')
+  check(page.scrollWidth <= page.clientWidth, `${tab} content horizontal overflow`)
   return {
     width: surface.clientWidth,
     content: document.querySelector('.workspace-content').clientWidth
