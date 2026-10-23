@@ -1,0 +1,408 @@
+import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { dirname, extname, join } from 'node:path'
+import type {
+  LibraryWatcherFolderStatus,
+  LibraryWatcherMode,
+  LibraryWatcherState,
+  LocalLibraryWatchChange
+} from '../../shared/localLibraryScan.ts'
+export type {
+  LibraryWatcherFolderStatus,
+  LibraryWatcherMode,
+  LibraryWatcherState
+} from '../../shared/localLibraryScan.ts'
+import {
+  isWatchableFileExtension,
+  looksLikeDirectoryEvent,
+  LIBRARY_WATCH_EXTENSIONS
+} from './watcherExtensions.ts'
+import { LibraryWatcherPoller } from './watcherPolling.ts'
+
+export { LIBRARY_WATCH_EXTENSIONS }
+
+type WatcherEntry = {
+  watcher: FSWatcher | null
+  debounce: NodeJS.Timeout | null
+  changes: Map<string, LocalLibraryWatchChange>
+  mode: LibraryWatcherMode
+  state: LibraryWatcherState
+  lastError: string | null
+  lastEventAt: string | null
+  lastReconcileAt: string | null
+  recreateTimer: NodeJS.Timeout | null
+  recreateAttempts: number
+  pollingTimer: NodeJS.Timeout | null
+  poller: LibraryWatcherPoller | null
+}
+
+interface ChangeSink {
+  enqueueWatcherChanges(changes: LocalLibraryWatchChange[]): void
+}
+export interface LibraryWatcherOptions {
+  platform: string
+  now(): Date
+  debounceMs(): number
+  database(): (ChangeSink & { poll(directory: string): Promise<boolean | undefined> }) | null
+  coordinator(): ChangeSink | null
+  isExcluded(path: string): boolean
+  isMutating(path: string): boolean
+  changed(change?: { kind: 'add' | 'remove' | 'unknown'; path?: string }): void
+  watch?: typeof watch
+}
+
+/** One set of native handles and polling timers per business owner. */
+export function createLibraryWatchers(options: LibraryWatcherOptions) {
+  const libraryWatchers = new Map<string, WatcherEntry>()
+  const pollers = new Set<LibraryWatcherPoller>()
+  const RECREATE_BASE_DELAY_MS = 1_000
+  const RECREATE_MAX_DELAY_MS = 30_000
+  const POLL_INTERVAL_MS = 15_000
+  const LINUX_FORCE_POLLING = options.platform === 'linux'
+
+  function notifyLibraryChanged(change?: {
+    kind: 'add' | 'remove' | 'unknown'
+    path?: string
+  }): void {
+    options.changed(change)
+  }
+
+  function changeKey(change: LocalLibraryWatchChange): string {
+    return `${change.kind}:${change.path.replace(/\//g, '\\').toLocaleLowerCase('en-US')}`
+  }
+
+  function pathKey(filePath: string): string {
+    return filePath.replace(/\//g, '\\').toLocaleLowerCase('en-US')
+  }
+
+  function enqueueChange(folder: string, change: LocalLibraryWatchChange): void {
+    const entry = libraryWatchers.get(folder)
+    if (!entry) return
+    entry.lastEventAt = options.now().toISOString()
+    if (options.database()) {
+      // Bound native event storms before the runtime's second coalescing stage.
+      const rootKey = changeKey({ kind: 'reconcile', path: folder })
+      if (!entry.changes.has(rootKey)) {
+        const scoped: LocalLibraryWatchChange = {
+          kind: 'reconcile',
+          path: change.kind === 'reconcile' ? change.path : dirname(change.path)
+        }
+        entry.changes.set(changeKey(scoped), scoped)
+        if (entry.changes.size > 256) {
+          entry.changes.clear()
+          entry.changes.set(rootKey, { kind: 'reconcile', path: folder })
+        }
+      }
+      // A continuous event stream must not postpone the flush indefinitely.
+      if (entry.debounce) return
+    } else {
+      entry.changes.set(changeKey(change), change)
+      if (entry.debounce) clearTimeout(entry.debounce)
+    }
+    entry.debounce = setTimeout(() => {
+      entry.debounce = null
+      flushWatcherChanges(folder)
+    }, options.debounceMs())
+  }
+
+  function flushWatcherChanges(folder: string): void {
+    const entry = libraryWatchers.get(folder)
+    if (!entry || entry.changes.size === 0) return
+    const changes = Array.from(entry.changes.values())
+    entry.changes.clear()
+    entry.lastReconcileAt = options.now().toISOString()
+    const coordinator = options.database() ?? options.coordinator()
+    if (coordinator) {
+      coordinator.enqueueWatcherChanges(changes)
+    } else if (changes.some((change) => change.kind === 'reconcile')) {
+      notifyLibraryChanged({ kind: 'unknown' })
+    } else if (changes.length === 1) {
+      const only = changes[0]
+      if (only.kind === 'add' || only.kind === 'remove') {
+        notifyLibraryChanged({ kind: only.kind, path: only.path })
+      } else {
+        notifyLibraryChanged({ kind: 'unknown' })
+      }
+    } else {
+      notifyLibraryChanged({ kind: 'unknown' })
+    }
+  }
+
+  function forceRootReconcile(folder: string, reason: string): void {
+    const entry = libraryWatchers.get(folder)
+    if (!entry) return
+    entry.lastError = reason || entry.lastError
+    entry.lastEventAt = options.now().toISOString()
+    enqueueChange(folder, { kind: 'reconcile', path: folder })
+  }
+
+  function clearRecreateTimer(entry: WatcherEntry): void {
+    if (entry.recreateTimer) {
+      clearTimeout(entry.recreateTimer)
+      entry.recreateTimer = null
+    }
+  }
+
+  function clearPollingTimer(entry: WatcherEntry): void {
+    const poller = entry.poller
+    if (poller) {
+      poller.stop()
+      void poller.join().then(() => pollers.delete(poller))
+    }
+    entry.poller = null
+    if (entry.pollingTimer) {
+      clearInterval(entry.pollingTimer)
+      entry.pollingTimer = null
+    }
+  }
+
+  function closeWatcherHandle(entry: WatcherEntry): void {
+    if (!entry.watcher) return
+    try {
+      entry.watcher.close()
+    } catch (error) {
+      console.warn('[library] unable to close a library folder watcher:', watcherErrorCode(error))
+    }
+    entry.watcher = null
+  }
+
+  function startPollingFallback(folder: string, reason: string): void {
+    const entry = libraryWatchers.get(folder)
+    if (!entry) return
+    clearPollingTimer(entry)
+    entry.mode = 'polling'
+    entry.state = 'degraded'
+    entry.lastError = reason
+    const database = options.database()
+    if (database) {
+      entry.poller = new LibraryWatcherPoller({
+        check: async () => {
+          const changed = await database.poll(folder)
+          if (changed !== undefined) entry.lastReconcileAt = options.now().toISOString()
+          if (changed) entry.lastEventAt = entry.lastReconcileAt
+          return changed
+        },
+        onError: (error) => {
+          entry.lastError = watcherErrorCode(error)
+        }
+      })
+      pollers.add(entry.poller)
+      entry.poller.start()
+      return
+    }
+    entry.pollingTimer = setInterval(() => {
+      forceRootReconcile(folder, reason)
+    }, POLL_INTERVAL_MS)
+    // Immediate reconcile so Linux / failed recursive watchers catch up without waiting.
+    forceRootReconcile(folder, reason)
+  }
+
+  function scheduleWatcherRecreate(folder: string, reason: string): void {
+    const entry = libraryWatchers.get(folder)
+    if (!entry) return
+    closeWatcherHandle(entry)
+    clearRecreateTimer(entry)
+    entry.state = entry.mode === 'polling' ? 'degraded' : 'failed'
+    entry.lastError = reason
+
+    const attempt = entry.recreateAttempts
+    const delay = Math.min(RECREATE_MAX_DELAY_MS, RECREATE_BASE_DELAY_MS * 2 ** attempt)
+    entry.recreateAttempts = attempt + 1
+    entry.recreateTimer = setTimeout(() => {
+      entry.recreateTimer = null
+      // Drop the map entry so createFolderWatcher can re-arm cleanly.
+      const current = libraryWatchers.get(folder)
+      if (!current) return
+      const preserved: WatcherEntry = {
+        ...current,
+        watcher: null
+      }
+      libraryWatchers.set(folder, preserved)
+      createFolderWatcher(folder, { resume: true })
+    }, delay)
+  }
+
+  function attachWatcherHandlers(folder: string, watcher: FSWatcher): void {
+    watcher.on('error', (error) => {
+      const code = watcherErrorCode(error)
+      console.warn('[library] library folder watcher error:', code)
+      if (LINUX_FORCE_POLLING) {
+        startPollingFallback(folder, code)
+        return
+      }
+      scheduleWatcherRecreate(folder, code)
+      forceRootReconcile(folder, code)
+    })
+  }
+
+  function createFolderWatcher(folder: string, request: { resume?: boolean } = {}): void {
+    const existing = libraryWatchers.get(folder)
+    if (existing && existing.watcher && !request.resume) return
+
+    const entry: WatcherEntry = existing ?? {
+      watcher: null,
+      debounce: null,
+      changes: new Map(),
+      mode: 'none',
+      state: 'failed',
+      lastError: null,
+      lastEventAt: null,
+      lastReconcileAt: null,
+      recreateTimer: null,
+      recreateAttempts: 0,
+      pollingTimer: null,
+      poller: null
+    }
+    libraryWatchers.set(folder, entry)
+
+    if (LINUX_FORCE_POLLING) {
+      startPollingFallback(folder, 'linux-recursive-watch-unsupported')
+      return
+    }
+
+    try {
+      const watcher = (options.watch ?? watch)(
+        folder,
+        { recursive: true },
+        (_eventType, filename) => {
+          if (!filename) {
+            // Some platforms emit empty names for directory-level churn.
+            forceRootReconcile(folder, 'empty-watch-event')
+            return
+          }
+          const fullPath = join(folder, filename)
+          if (options.isExcluded(fullPath) || options.isMutating(fullPath)) return
+
+          if (looksLikeDirectoryEvent(filename, fullPath)) {
+            // Directory move/rename: scoped root reconcile (complete identity snapshot).
+            enqueueChange(folder, {
+              kind: 'reconcile',
+              path: options.database() && existsSync(fullPath) ? fullPath : folder
+            })
+            return
+          }
+
+          const ext = extname(filename).toLowerCase()
+          if (!isWatchableFileExtension(ext)) return
+
+          const kind: 'add' | 'remove' = existsSync(fullPath) ? 'add' : 'remove'
+          if (options.database()) {
+            enqueueChange(folder, { kind, path: fullPath })
+            return
+          }
+          // Coalesce by path so rename+change collapses; latest kind wins.
+          const current = libraryWatchers.get(folder)
+          if (!current) return
+          current.lastEventAt = options.now().toISOString()
+          current.changes.set(pathKey(fullPath), { kind, path: fullPath })
+          if (current.debounce) clearTimeout(current.debounce)
+          current.debounce = setTimeout(() => {
+            current.debounce = null
+            flushWatcherChanges(folder)
+          }, options.debounceMs())
+        }
+      )
+      attachWatcherHandlers(folder, watcher)
+      entry.watcher = watcher
+      entry.mode = 'recursive'
+      entry.state = 'active'
+      entry.lastError = null
+      entry.recreateAttempts = 0
+      clearPollingTimer(entry)
+    } catch (error) {
+      const code = watcherErrorCode(error)
+      console.warn('[library] unable to watch a configured library folder:', code)
+      startPollingFallback(folder, code)
+    }
+  }
+
+  function removeFolderWatcher(folder: string): void {
+    const entry = libraryWatchers.get(folder)
+    if (!entry) return
+    if (entry.debounce) clearTimeout(entry.debounce)
+    clearRecreateTimer(entry)
+    clearPollingTimer(entry)
+    entry.changes.clear()
+    closeWatcherHandle(entry)
+    libraryWatchers.delete(folder)
+  }
+
+  function applyLibraryWatchers(folders: string[], enabled: boolean): void {
+    for (const folder of libraryWatchers.keys()) {
+      if (!folders.includes(folder)) removeFolderWatcher(folder)
+    }
+    if (!enabled) {
+      for (const folder of libraryWatchers.keys()) removeFolderWatcher(folder)
+      return
+    }
+    for (const folder of folders) {
+      if (!libraryWatchers.has(folder)) createFolderWatcher(folder)
+    }
+  }
+
+  function getLibraryWatcherStatus(): LibraryWatcherFolderStatus[] {
+    return Array.from(libraryWatchers.entries())
+      .map(([folder, entry]) => ({
+        folder,
+        state: entry.state,
+        mode: entry.mode,
+        lastError: entry.lastError,
+        lastEventAt: entry.lastEventAt,
+        lastReconcileAt: entry.lastReconcileAt
+      }))
+      .sort((left, right) => left.folder.localeCompare(right.folder))
+  }
+
+  function getLibraryWatcherStatusSnapshot(
+    folders: string[],
+    enabled: boolean
+  ): {
+    enabled: boolean
+    folders: LibraryWatcherFolderStatus[]
+  } {
+    if (!enabled) {
+      return {
+        enabled: false,
+        folders: folders.map((folder) => ({
+          folder,
+          state: 'disabled',
+          mode: 'none',
+          lastError: null,
+          lastEventAt: null,
+          lastReconcileAt: null
+        }))
+      }
+    }
+    const live = new Map(getLibraryWatcherStatus().map((item) => [item.folder, item]))
+    return {
+      enabled: true,
+      folders: folders.map((folder) => {
+        const current = live.get(folder)
+        if (current) return current
+        return {
+          folder,
+          state: 'failed',
+          mode: 'none',
+          lastError: 'not-started',
+          lastEventAt: null,
+          lastReconcileAt: null
+        }
+      })
+    }
+  }
+
+  function watcherErrorCode(error: unknown): string {
+    if (!error || typeof error !== 'object') return 'unknown'
+    const code = (error as { code?: unknown }).code
+    return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? code : 'unknown'
+  }
+
+  return {
+    apply: applyLibraryWatchers,
+    status: getLibraryWatcherStatus,
+    snapshot: getLibraryWatcherStatusSnapshot,
+    close: async () => {
+      applyLibraryWatchers([], false)
+      await Promise.all([...pollers].map((poller) => poller.join()))
+    }
+  }
+}
