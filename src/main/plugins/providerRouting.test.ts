@@ -324,7 +324,7 @@ test('omits utility process env option when no proxy env is configured', () => {
 })
 
 test('bundled provider missing-method errors mention restarting the app', () => {
-  const source = readFileSync(new URL('./manager.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../../core/plugins/manager.ts', import.meta.url), 'utf8')
 
   assert.match(source, /内置音源插件尚未加载最新代码，请重启应用/)
 })

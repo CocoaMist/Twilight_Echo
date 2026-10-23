@@ -2,9 +2,9 @@ import { initializeUtilityDiagnostics } from '../diagnostics/utility.ts'
 import { pathToFileURL } from 'url'
 
 initializeUtilityDiagnostics('twilight-plugin')
-import { deletePluginSetting, getPluginSetting, setPluginSetting } from './settingsStore'
+import { createServicePort } from '../services/servicePort.ts'
 import { initProxy } from './proxyBootstrap'
-import { redactSensitiveText } from '../security/secureStorage.ts'
+import { redactSensitiveText } from '../../shared/errors/redactSensitiveText.ts'
 import { QISHUI_PLUGIN_ID } from './qishuiAuthBridge.ts'
 import type {
   PluginHostApiResult,
@@ -13,16 +13,6 @@ import type {
   TwilightMediaProviderMethod,
   TwilightPluginPermission
 } from './types'
-
-type ParentPort = {
-  postMessage: (
-    message: PluginHostResponse | Extract<PluginHostResponse, { kind: 'api-call' }>
-  ) => void
-  on: (
-    event: 'message',
-    listener: (event: { data: PluginHostRequest | PluginHostApiResult }) => void
-  ) => void
-}
 
 type PluginModule = {
   activate?: (context: TwilightPluginContext) => Promise<void> | void
@@ -225,11 +215,7 @@ const PROVIDER_METHODS: TwilightMediaProviderMethod[] = [
   'removeTracksFromPlaylist'
 ]
 
-const maybeParentPort = (process as unknown as { parentPort?: ParentPort }).parentPort
-if (!maybeParentPort) {
-  throw new Error('Twilight plugin host must run as an Electron utilityProcess')
-}
-const parentPort = maybeParentPort
+const channel = createServicePort<PluginHostRequest | PluginHostApiResult, PluginHostResponse>()
 
 let activePlugin: PluginModule | null = null
 const eventHandlers = new Map<string, Set<(payload: unknown) => void>>()
@@ -244,8 +230,7 @@ const pendingApiCalls = new Map<
 >()
 const pendingPluginCalls = new Map<string, AbortController>()
 
-parentPort.on('message', (event) => {
-  const message = event.data
+channel.on('message', (message) => {
   if (message.kind === 'activate') {
     void activatePlugin(message)
   } else if (message.kind === 'deactivate') {
@@ -431,27 +416,26 @@ function createContext(
       warn: (message) => log('warn', message),
       error: (message) => log('error', message)
     },
-    settings: createSettingsApi(storagePath, permissions),
+    settings: createSettingsApi(permissions),
     twilight
   }
 }
 
 function createSettingsApi(
-  storagePath: string,
   permissions: TwilightPluginPermission[]
 ): TwilightPluginContext['settings'] {
   return {
     get: (key) => {
       requireLocalPermission(permissions, 'settings')
-      return getPluginSetting(storagePath, key)
+      return callApi('settings', 'get', [key])
     },
     set: (key, value) => {
       requireLocalPermission(permissions, 'settings')
-      return setPluginSetting(storagePath, key, value)
+      return callApi('settings', 'set', [key, value]).then(() => undefined)
     },
     delete: (key) => {
       requireLocalPermission(permissions, 'settings')
-      return deletePluginSetting(storagePath, key)
+      return callApi('settings', 'delete', [key]).then(() => undefined)
     }
   }
 }
@@ -673,5 +657,5 @@ function reportError(error: unknown): void {
 }
 
 function post(message: PluginHostResponse): void {
-  parentPort.postMessage(message)
+  channel.postMessage(message)
 }

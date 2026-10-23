@@ -2,6 +2,7 @@ import { net, protocol } from 'electron'
 import { extname, resolve, dirname, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises'
+import { getCoreApplication } from '../app/coreApplication.ts'
 import { runtime } from '../core/runtime'
 import { resolvePluginFile } from './packageSecurity.ts'
 import { normalizeExperiences, type InstalledExperience } from '../../shared/pluginExperience.ts'
@@ -24,6 +25,8 @@ const mime: Record<string, string> = {
 }
 
 export async function listExperiences(): Promise<InstalledExperience[]> {
+  const core = getCoreApplication()
+  if (core) return core.request('extensions.experiences', {})
   await runtime.pluginManagerReady
   const plugins = (await runtime.pluginManager?.list()) ?? []
   return plugins
@@ -43,28 +46,40 @@ export function installExperienceProtocol(): void {
   protocol.handle('plugin-ui', async (request) => {
     try {
       if (!['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 405 })
-      const url = new URL(request.url)
-      const parts = url.pathname.split('/').slice(1).map(decodeURIComponent)
-      const version = parts.shift()
-      if (parts.some((p) => !p || p === '.' || p === '..' || /[\\:\0]/.test(p)))
-        return new Response(null, { status: 403 })
-      const plugin = (await runtime.pluginManager?.list())?.find(
-        (p) => p.id === url.hostname && p.version === version && p.enabled
-      )
-      if (!plugin) return new Response(null, { status: 404 })
-      const entries = normalizeExperiences(plugin)
-      const file = resolvePluginFile(
-        resolve(plugin.paths.versionRoot, ...parts),
-        plugin.paths.versionRoot
-      )
-      if (
-        !file ||
-        !entries.some((e) => {
-          const child = relative(resolve(plugin.paths.versionRoot, dirname(e.entry)), file)
-          return child && !child.startsWith('..') && !child.includes(':')
-        })
-      )
-        return new Response(null, { status: 403 })
+      const core = getCoreApplication()
+      let file: string
+      if (core) {
+        const resource = await core.request('extensions.resource', { url: request.url })
+        if (!resource) return new Response(null, { status: 403 })
+        file = resource.path
+      } else {
+        const url = new URL(request.url)
+        const parts = url.pathname.split('/').slice(1).map(decodeURIComponent)
+        const version = parts.shift()
+        if (parts.some((p) => !p || p === '.' || p === '..' || /[\\:\0]/.test(p)))
+          return new Response(null, { status: 403 })
+        const plugin = (await runtime.pluginManager?.list())?.find(
+          (p) => p.id === url.hostname && p.version === version && p.enabled
+        )
+        if (!plugin) return new Response(null, { status: 404 })
+        const entries = normalizeExperiences(plugin)
+        const resolvedFile = resolvePluginFile(
+          resolve(plugin.paths.versionRoot, ...parts),
+          plugin.paths.versionRoot
+        )
+        if (
+          !resolvedFile ||
+          !entries.some((e) => {
+            const child = relative(
+              resolve(plugin.paths.versionRoot, dirname(e.entry)),
+              resolvedFile
+            )
+            return child && !child.startsWith('..') && !child.includes(':')
+          })
+        )
+          return new Response(null, { status: 403 })
+        file = resolvedFile
+      }
       const type = mime[extname(file).toLowerCase()]
       if (!type) return new Response(null, { status: 403 })
       const response = await net.fetch(pathToFileURL(file).href, {
@@ -87,6 +102,14 @@ export function installExperienceProtocol(): void {
 
 const pendingWrites = new Map<string, Promise<void>>()
 export async function experiencePreferences(pluginId: string, value?: unknown): Promise<unknown> {
+  const core = getCoreApplication()
+  if (core)
+    return value === undefined
+      ? core.request('extensions.preferences', { id: pluginId })
+      : core.request('extensions.preferences.edit', {
+          id: pluginId,
+          value: value as Record<string, unknown>
+        })
   const plugin = (await runtime.pluginManager?.list())?.find((p) => p.id === pluginId && p.enabled)
   if (!plugin || !normalizeExperiences(plugin).length || !plugin.permissions.includes('settings'))
     throw new Error('Experience unavailable')
