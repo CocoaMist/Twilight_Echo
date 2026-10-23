@@ -2116,7 +2116,7 @@ test('direct mode submits an identity graph and restores rate/routing without ch
   manager.destroy()
 })
 
-test('startup with stale directMode and enabled EQ heals to an active DSP graph', async () => {
+test('startup with an enabled master repairs stale directMode and keeps EQ active', async () => {
   const nativeBinding = new FakeNativeBinding()
   const manager = makeManager(
     {
@@ -2124,7 +2124,7 @@ test('startup with stale directMode and enabled EQ heals to an active DSP graph'
       audioOutput: 'wasapi',
       audioDevice: 'auto',
       audioProcessing: {
-        dspEnabled: false,
+        dspEnabled: true,
         directMode: true,
         eqEnabled: true,
         eqMode: 'parametric',
@@ -2151,6 +2151,26 @@ test('startup with stale directMode and enabled EQ heals to an active DSP graph'
   assert.ok(eqNode, 'equalizer node must be present when EQ is enabled')
   assert.equal(eqNode.enabled, true)
   manager.destroy()
+})
+
+test('saved DSP bypass survives engine restarts without clearing configured modules', async () => {
+  let audioProcessing = normalizeAudioProcessingSettings({
+    dspEnabled: false, directMode: true, eqEnabled: true,
+    crossfeedEnabled: true, crossfeedStrength: 0.4
+  })
+  for (let restart = 0; restart < 3; restart++) {
+    const nativeBinding = new FakeNativeBinding()
+    const manager = makeManager({ exclusiveMode: false, audioProcessing }, nativeBinding)
+    await manager.start()
+    const restored = manager.getAudioProcessing()
+    assert.equal(restored.dspEnabled, false)
+    assert.equal(restored.directMode, true)
+    assert.equal(restored.eqEnabled, true)
+    assert.equal(restored.crossfeedStrength, 0.4)
+    assert.equal(nativeBinding.lastDspConfig.dspEnabled, false)
+    audioProcessing = JSON.parse(JSON.stringify(restored))
+    manager.destroy()
+  }
 })
 
 test('module switches gate matching nodes in an active custom scene', async () => {
@@ -8357,7 +8377,9 @@ test('setAudioProcessing skips native DSP fanout when normalized settings are un
   assert.equal(nativeBinding.replayGainCalls, 0)
   assert.equal(nativeBinding.crossfeedCalls, 0)
   assert.equal(nativeBinding.unloadImpulseResponseCalls, 0)
-  assert.equal(playbackUpdates.length, 1)
+  // Leaving a restored bypass also publishes its routing override change.
+  const updatesAfterChange = playbackUpdates.length
+  assert.ok(updatesAfterChange >= 1)
 
   const unchanged = await manager.setAudioProcessing({ eqEnabled: true })
 
@@ -8369,7 +8391,7 @@ test('setAudioProcessing skips native DSP fanout when normalized settings are un
   assert.equal(nativeBinding.replayGainCalls, 0)
   assert.equal(nativeBinding.crossfeedCalls, 0)
   assert.equal(nativeBinding.unloadImpulseResponseCalls, 0)
-  assert.equal(playbackUpdates.length, 1)
+  assert.equal(playbackUpdates.length, updatesAfterChange)
   manager.destroy()
 })
 

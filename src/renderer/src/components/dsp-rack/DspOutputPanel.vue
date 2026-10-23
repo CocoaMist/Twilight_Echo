@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAudioOutputDspStore } from '@renderer/stores/useAudioOutputDspStore'
 import { dspSampleRate } from '@renderer/utils/dspSignalOverview'
+import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import {
   DSP_OUTPUT_SAMPLE_RATE_OPTIONS,
   DSP_RESAMPLER_QUALITY_OPTIONS,
@@ -24,8 +25,9 @@ const resamplerLabels: Record<string, [string, string]> = {
   native: ['原生', 'Native'],
   high: ['高品质', 'High'],
   ultra: ['超高品质', 'Ultra'],
-  soxrHq: ['SoX HQ', 'libsoxr'],
-  soxrVhq: ['SoX VHQ', '最高品质']
+  soxrHq: ['SoX HQ', 'libsoxr · 需运行时验证'],
+  soxrVhq: ['SoX VHQ', '最高品质 · 需运行时验证']
+}
 }
 const ditherLabels: Record<string, [string, string]> = {
   off: ['关闭', '推荐'],
@@ -208,8 +210,10 @@ async function applyBuffer(): Promise<void> {
           aria-label="安全限幅"
         />
       </label>
-      <p v-if="status?.outputStage?.resamplerFallback" class="notice">
-        <i class="pi pi-info-circle"></i>当前构建不含 libsoxr，已改用 Ultra 重采样。
+      <p class="notice" aria-live="polite">
+        <i class="pi pi-info-circle"></i>{{
+          describeResampler(scene.graph.outputStage.resamplerQuality, status?.outputStage)
+        }}
       </p>
     </section>
     <section class="buffer-panel surface-panel">

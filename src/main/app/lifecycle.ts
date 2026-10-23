@@ -552,6 +552,9 @@ function startDesktopApp(owner: 'legacy' | 'core'): void {
     let coreQuitWork: Promise<void> | null = null
     app.on('before-quit', (event) => {
       runtime.forceQuit = true
+      // Destroy the non-closable Afterglow anchor before Electron closes windows.
+      // Waiting until will-quit can leave that window blocking the quit sequence.
+      shutdownAfterglowMode()
       const core = getCoreApplication()
       if (core && !coreQuitComplete) {
         event.preventDefault()
@@ -560,7 +563,6 @@ function startDesktopApp(owner: 'legacy' | 'core'): void {
         destroyDynamicIsland()
         destroyTrayPlayerWindow()
         destroyMiniPlayerWindow()
-        shutdownAfterglowMode()
         coreQuitWork = (async () => {
           if (!runtime.closingAfterPlaybackSessionSave) await requestRendererPlaybackSessionSave()
           await core.shutdown()
@@ -582,7 +584,6 @@ function startDesktopApp(owner: 'legacy' | 'core'): void {
     })
 
     app.on('will-quit', () => {
-      shutdownAfterglowMode()
       stopAppUpdateChecks()
       destroyDesktopLyrics()
       destroyDynamicIsland()

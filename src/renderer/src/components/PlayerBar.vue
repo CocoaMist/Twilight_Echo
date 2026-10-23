@@ -26,6 +26,7 @@ import { normalizeAccentColor } from '../utils/colorExtractor'
 import SmoothedProgressFill from './SmoothedProgressFill.vue'
 import PlayerSeekProgress from './player-bar/PlayerSeekProgress.vue'
 import { HIFI_STATUS_COPY } from '../../../shared/audioProcessingOptions.ts'
+import { describeResampler } from '../../../shared/resamplerStatus.ts'
 import { resolveReasonCode } from '../../../shared/audio/reasonCodes.ts'
 import { useLocale } from '../app/useLocale.ts'
 import type { LyricLayerSourceSelection } from '../../../shared/lyricsManagement.ts'
@@ -1142,11 +1143,18 @@ const outputLatencyText = computed(() => {
 })
 const outputDiagnosticsText = computed(() => {
   const diagnostics = outputInfo.value?.diagnostics ?? playbackInfo.value?.diagnostics
-  if (!diagnostics) return 'Underrun 0 · Drop 0 · Restart 0 · Lost 0 · Recovery 0'
+  const stage =
+    outputInfo.value?.nativeDsp?.graph?.outputStage ??
+    playbackInfo.value?.outputInfo?.nativeDsp?.graph?.outputStage
+  const src = describeResampler(
+    stage?.resamplerQuality ?? dspOutputStage.value.resamplerQuality,
+    stage
+  )
+  if (!diagnostics) return `Underrun 0 · Drop 0 · Restart 0 · Lost 0 · Recovery 0 · ${src}`
   const base = `Underrun ${diagnostics.sessionUnderrunCount} · Drop ${diagnostics.sessionBufferDropCount} · Restart ${diagnostics.driverRestartCount} · Lost ${diagnostics.deviceLostCount} · Recovery ${diagnostics.sessionRecoveryCount}`
   // 驱动瞬时负载事件不会重启流，只在真的发生过时才追加，避免给正常播放增加噪音字段。
   const xrun = diagnostics.driverXrunCount ?? 0
-  return xrun > 0 ? `${base} · Xrun ${xrun}` : base
+  return `${xrun > 0 ? `${base} · Xrun ${xrun}` : base} · ${src}`
 })
 const nativeDsdRuntimeReasonText = computed(() => {
   const reason = outputInfo.value?.nativeDsdRuntimeReason?.trim()
@@ -2114,6 +2122,10 @@ onBeforeUnmount(() => {
             :audio-processing="audioProcessing"
             :audio-output-config="audioOutputConfig"
             :dsp-output-stage="dspOutputStage"
+            :dsp-output-stage-status="
+              outputInfo?.nativeDsp?.graph?.outputStage ??
+              playbackInfo?.outputInfo?.nativeDsp?.graph?.outputStage
+            "
             :dsp-stereo-image="dspStereoImage"
             :dsp-active="playbackInfo?.dspActive === true"
             :actual-sample-rate="

@@ -1532,6 +1532,31 @@ constexpr const char* kUnityGainProcessingConfigJson =
     "{\"dspEnabled\":true,\"volumeNormalization\":\"track\","
     "\"replayGainPreamp\":0,\"replayGainFallback\":0}";
 
+void testResamplerStatusUsesTheCurrentDecodeStream() {
+  for (const int targetRate : {0, 96000}) {
+    g_backendRegistry.reset();
+    AudioPipeline pipeline;
+    std::string error;
+    const std::string processing = std::string("{\"dspEnabled\":true,\"resamplerQuality\":\"soxrVhq\",\"outputStage\":{\"resamplerQuality\":\"soxrVhq\",\"targetSampleRate\":") +
+        std::to_string(targetRate) + "}}";
+    const std::string state = std::string("{\"revision\":1,\"processing\":") + processing +
+        ",\"graph\":{\"version\":2,\"nodes\":[],\"outputStage\":{\"resamplerQuality\":\"soxrVhq\",\"targetSampleRate\":" +
+        std::to_string(targetRate) + "}}}";
+    assert(pipeline.applyDspState(1, state, &error));
+    assert(pipeline.play("resampler-observation.flac", 0.0, "wasapi-exclusive", "auto", 1.0,
+        processing, &error) == TAE_RESULT_OK);
+    const auto backend = waitForLatestStartedBackendState();
+    assert(backend);
+    renderBackendFrames(backend, 128);
+    const std::string json = pipeline.dspGraphStatusJson();
+    assert(json.find(targetRate ? "\"effectiveResampler\":\"swr\"" : "\"effectiveResampler\":\"none\"") != std::string::npos);
+    assert(json.find(targetRate ? "\"resampled\":true" : "\"resampled\":false") != std::string::npos);
+    assert(json.find("\"effectiveResamplerQuality\":\"ultra\"") != std::string::npos);
+    assert(json.find("\"effectiveResamplerFallback\":true") != std::string::npos);
+    pipeline.stop();
+  }
+}
+
 void testVolumeCommandAppliesAtRenderBoundary() {
   g_backendRegistry.reset();
   AudioPipeline pipeline;
@@ -5135,6 +5160,7 @@ struct FFmpegDecoder::Impl {
   int (*interrupt)(void*) = nullptr;
   void* interruptContext = nullptr;
   bool opened = false;
+  FFmpegDecoder::ResamplerQuality quality = FFmpegDecoder::ResamplerQuality::Native;
 
   bool injectedReadFailure(std::string* error) {
     if (positionFrames < 4096 || profile.stream.source.find("read-failure") == std::string::npos) return false;
@@ -5211,7 +5237,18 @@ bool FFmpegDecoder::setOutputFormat(const AudioFormat& format, std::string* erro
 }
 
 void FFmpegDecoder::setResamplerQuality(ResamplerQuality quality) {
-  (void)quality;
+  impl_->quality = quality;
+}
+
+FFmpegDecoder::ResamplerEngine FFmpegDecoder::resamplerEngine() const {
+  if (!impl_->opened) return ResamplerEngine::Unknown;
+  return impl_->outputFormat.sampleRate == impl_->profile.stream.sourceFormat.sampleRate
+      ? ResamplerEngine::None : ResamplerEngine::Swr;
+}
+
+FFmpegDecoder::ResamplerQuality FFmpegDecoder::effectiveResamplerQuality() const {
+  return impl_->quality == ResamplerQuality::SoxrHq || impl_->quality == ResamplerQuality::SoxrVhq
+      ? ResamplerQuality::Ultra : impl_->quality;
 }
 
 size_t FFmpegDecoder::readFrames(float* output, size_t frameCount, std::string* error) {
@@ -5424,6 +5461,7 @@ int main() {
   RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(false, true));
   RUN_RUNTIME_CASE(testLoopRangeClearsBeforePromotedDuplicateCanSeek(true, true));
   RUN_RUNTIME_CASE(testExternalStopClearsLoopRangeAndRetainsOccurrenceJson());
+  RUN_RUNTIME_CASE(testResamplerStatusUsesTheCurrentDecodeStream());
   RUN_RUNTIME_CASE(testPcm192kTypedPassthroughIsOutputPerfect());
   RUN_RUNTIME_CASE(testPcmTypedGaplessPreservesBytesWithoutReopen());
   RUN_RUNTIME_CASE(testPcmTypedGaplessRejectsIncompatiblePreloads());

@@ -286,9 +286,11 @@ bool resamplerQualityUsesSoxr(DspResamplerQuality quality) {
   return quality == DspResamplerQuality::SoxrHq || quality == DspResamplerQuality::SoxrVhq;
 }
 
-// Honest status: engine actually in effect for the requested quality tier.
+// Engine availability for this requested tier. Per-stream observations are
+// added by AudioPipeline; a process-wide probe alone cannot prove conversion.
 const char* resamplerEngineName(DspResamplerQuality quality) {
   if (!resamplerQualityUsesSoxr(quality)) return "swr";
+  if (soxrRuntimeAvailability() == SoxrRuntimeState::Unknown) return "unknown";
   return soxrRuntimeAvailability() == SoxrRuntimeState::Unavailable ? "swr" : "soxr";
 }
 

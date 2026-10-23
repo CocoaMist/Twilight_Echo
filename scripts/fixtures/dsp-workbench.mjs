@@ -33,6 +33,7 @@ let assetReads = 0
 let polls = 0
 let pins = []
 let confirmAnswer = true
+let resamplerObservation = {}
 const assets = [
   {
     id: 'ir-one',
@@ -123,7 +124,8 @@ window.api = {
           actualSampleRate: 48000,
           resamplerQuality: 'native',
           dither: 'off',
-          active: true
+          active: true,
+          ...resamplerObservation
         }
       }
     },

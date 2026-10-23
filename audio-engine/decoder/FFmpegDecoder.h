@@ -19,6 +19,7 @@ class FFmpegDecoder {
     SoxrHq,
     SoxrVhq
   };
+  enum class ResamplerEngine { Unknown, None, Swr, Soxr };
 
   FFmpegDecoder();
   ~FFmpegDecoder();
@@ -34,6 +35,9 @@ class FFmpegDecoder {
 
   bool setOutputFormat(const AudioFormat& format, std::string* error);
   void setResamplerQuality(ResamplerQuality quality);
+  // Observations of the last successful setOutputFormat, not the next request.
+  ResamplerEngine resamplerEngine() const;
+  ResamplerQuality effectiveResamplerQuality() const;
   size_t readFrames(float* output, size_t frameCount, std::string* error);
   size_t readFrames(PcmBlock& output, std::string* error);
   bool seek(double seconds, std::string* error);

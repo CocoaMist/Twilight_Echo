@@ -538,6 +538,7 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'error.audio.queue_load_failed': '播放队列加载失败：{detail}',
   'error.audio.play_mode_sync_failed': '播放模式同步失败：{detail}',
   'error.audio.play_mode_switch_failed': '播放模式切换失败：{detail}',
+  'error.audio.decode_failed': '音频读取或解码失败，请检查文件完整性或音源是否可用',
 
   // ── 网络错误 ──────────────────────────────────────────────────────────────
   'error.network.timeout': '网络请求超时',

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { describeResampler } from '../../../../shared/resamplerStatus.ts'
 import AudioDeviceProfilesPanel from '@renderer/components/settings-page/AudioDeviceProfilesPanel.vue'
 import {
   DSD_OUTPUT_MODE_OPTIONS,
@@ -18,6 +19,7 @@ import {
   stereoImageIsActive,
   type DspDitherMode,
   type DspOutputStageConfig,
+  type DspOutputStageStatus,
   type DspResamplerQuality,
   type DspStereoImageConfig
 } from '../../../../shared/dspGraph.ts'
@@ -61,6 +63,7 @@ const props = defineProps<{
   audioProcessing: AudioProcessingSettings
   audioOutputConfig: OutputConfig
   dspOutputStage: DspOutputStageConfig
+  dspOutputStageStatus?: DspOutputStageStatus | null
   dspStereoImage: DspStereoImageConfig
   dspActive?: boolean
   actualSampleRate?: number
@@ -370,9 +373,9 @@ const actualSampleRateLabel = computed(() => {
 
 const outputStageHint = computed(() => {
   if (!outputStageActive.value) {
-    return `目标 Device · 实际 ${actualSampleRateLabel.value} · 无强制重采样`
+    return `目标 Device · 实际 ${actualSampleRateLabel.value} · ${describeResampler(props.dspOutputStage.resamplerQuality, props.dspOutputStageStatus)}`
   }
-  return `目标 ${targetSampleRateLabel.value} · 实际 ${actualSampleRateLabel.value} · SRC ${props.dspOutputStage.resamplerQuality} · dither ${props.dspOutputStage.dither}（采样率锁会关闭 bit-perfect）`
+  return `目标 ${targetSampleRateLabel.value} · 实际 ${actualSampleRateLabel.value} · ${describeResampler(props.dspOutputStage.resamplerQuality, props.dspOutputStageStatus)} · dither ${props.dspOutputStage.dither}（采样率锁会关闭 bit-perfect）`
 })
 
 const stereoImageActive = computed(() => stereoImageIsActive(props.dspStereoImage))

@@ -264,6 +264,8 @@ struct FFmpegDecoder::Impl {
   bool eof = false;
   std::string terminalReadError;
   FFmpegDecoder::ResamplerQuality resamplerQuality = FFmpegDecoder::ResamplerQuality::Native;
+  FFmpegDecoder::ResamplerQuality effectiveResamplerQuality = FFmpegDecoder::ResamplerQuality::Native;
+  FFmpegDecoder::ResamplerEngine resamplerEngine = FFmpegDecoder::ResamplerEngine::Unknown;
   // ICY StreamTitle snapshot (decode-thread writes; control/status may read).
   mutable std::mutex streamTitleMutex;
   std::string streamTitle;
@@ -278,6 +280,9 @@ struct FFmpegDecoder::Impl {
   int audioStreamIndex = -1;
   bool inputEof = false;
   bool resamplerFlushed = false;
+  uint64_t declaredFlacSamples = 0;
+  uint64_t decodedFlacSamples = 0;
+  bool flacDecodedFromStart = true;
   bool icyEnabled = false;
   std::vector<uint8_t> pending;
   std::vector<uint8_t> convertedScratch;
@@ -342,6 +347,7 @@ struct FFmpegDecoder::Impl {
   }
 
   void close() {
+    resamplerEngine = FFmpegDecoder::ResamplerEngine::Unknown;
     if (swr) {
       swr_free(&swr);
     }
@@ -362,6 +368,9 @@ struct FFmpegDecoder::Impl {
     audioStreamIndex = -1;
     inputEof = false;
     resamplerFlushed = false;
+    declaredFlacSamples = 0;
+    decodedFlacSamples = 0;
+    flacDecodedFromStart = true;
     icyEnabled = false;
     eof = false;
     terminalReadError.clear();
@@ -502,10 +511,12 @@ struct FFmpegDecoder::Impl {
 
   bool decodeOneFrame(std::string* error) {
     resetPending();
+    if (eof) return false;
 
     while (true) {
       int ret = avcodec_receive_frame(codecContext, frame);
       if (ret == 0) {
+        if (declaredFlacSamples > 0) decodedFlacSamples += frame->nb_samples;
         const bool ok = convertFrame(error);
         av_frame_unref(frame);
         if (!ok) return failRead(error && !error->empty() ? *error : "Audio frame conversion failed", error);
@@ -521,6 +532,7 @@ struct FFmpegDecoder::Impl {
         return false;
       }
       if (ret != AVERROR(EAGAIN)) {
+        if (isCompletedFlacTail(ret)) return finishCompletedFlacTail(error);
         return failRead("Audio decoder receive failed, code: " + std::to_string(ret), error);
       }
 
@@ -556,12 +568,27 @@ struct FFmpegDecoder::Impl {
         ret = avcodec_send_packet(codecContext, packet);
         av_packet_unref(packet);
         if (ret < 0 && ret != AVERROR(EAGAIN)) {
+          if (isCompletedFlacTail(ret)) return finishCompletedFlacTail(error);
           return failRead("Audio decoder send failed, code: " + std::to_string(ret), error);
         }
       } else {
         av_packet_unref(packet);
       }
     }
+  }
+  bool isCompletedFlacTail(int code) const {
+    // A duration estimate is insufficient: require the exact, nonzero FLAC
+    // STREAMINFO count and uninterrupted successful decoding from sample zero.
+    return code == AVERROR_INVALIDDATA && flacDecodedFromStart &&
+        declaredFlacSamples > 0 && decodedFlacSamples == declaredFlacSamples;
+  }
+  bool finishCompletedFlacTail(std::string* error) {
+    DiagnosticLog::instance().append(DiagLevel::Warning, "ffmpeg.flac.trailing-data",
+        "Ignored invalid trailing data after all declared FLAC samples were decoded");
+    if (!drainResamplerOnce(error))
+      return failRead(error && !error->empty() ? *error : "Audio resampler flush failed", error);
+    eof = true;
+    return !pending.empty();
   }
   bool failRead(const std::string& message, std::string* error) {
     terminalReadError = message;
@@ -702,6 +729,12 @@ bool FFmpegDecoder::open(const std::string& source, std::string* error) {
 
   AVStream* stream = impl_->formatContext->streams[impl_->audioStreamIndex];
   const AVCodecParameters* params = stream->codecpar;
+  if (params->codec_id == AV_CODEC_ID_FLAC && params->extradata && params->extradata_size == 34) {
+    const uint8_t* info = params->extradata;
+    impl_->declaredFlacSamples = (static_cast<uint64_t>(info[13] & 0x0f) << 32) |
+        (static_cast<uint64_t>(info[14]) << 24) | (static_cast<uint64_t>(info[15]) << 16) |
+        (static_cast<uint64_t>(info[16]) << 8) | info[17];
+  }
   const AVCodec* codec = avcodec_find_decoder(params->codec_id);
   if (!codec) {
     if (error) *error = "当前音频格式没有可用解码器";
@@ -922,6 +955,9 @@ bool FFmpegDecoder::setOutputFormat(const AudioFormat& format, std::string* erro
     impl_->outputFormat.bitDepth = effectivePcmBitDepth(impl_->outputFormat);
   }
   impl_->streamInfo.decodedFormat = impl_->outputFormat;
+  impl_->effectiveResamplerQuality = wantsSoxr && !initialized ? ResamplerQuality::Ultra : impl_->resamplerQuality;
+  impl_->resamplerEngine = format.sampleRate == impl_->codecContext->sample_rate
+      ? ResamplerEngine::None : initialized ? ResamplerEngine::Soxr : ResamplerEngine::Swr;
   // A brand new swr context has nothing buffered yet, so the drain has to be re-armed.
   impl_->resamplerFlushed = false;
   impl_->resetPending();
@@ -1043,6 +1079,8 @@ bool FFmpegDecoder::seek(double seconds, std::string* error) {
   impl_->resetPending();
   impl_->exactSeek = false;
   impl_->exactInputCursor.reset();
+  // A packet seek may skip undecoded audio; do not infer completeness from position.
+  impl_->flacDecodedFromStart = false;
   return true;
 #else
   (void)seconds;
@@ -1082,6 +1120,14 @@ bool FFmpegDecoder::seekOutputFrame(uint64_t frame, std::string* error) {
 
 bool FFmpegDecoder::eof() const {
   return impl_->eof;
+}
+
+FFmpegDecoder::ResamplerEngine FFmpegDecoder::resamplerEngine() const {
+  return impl_->resamplerEngine;
+}
+
+FFmpegDecoder::ResamplerQuality FFmpegDecoder::effectiveResamplerQuality() const {
+  return impl_->effectiveResamplerQuality;
 }
 
 const AudioStreamInfo& FFmpegDecoder::streamInfo() const {

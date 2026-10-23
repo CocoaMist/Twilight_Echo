@@ -11,7 +11,7 @@ test('lifecycle keeps the app alive without windows and shuts the mode down', as
     source,
     /app\.on\('window-all-closed',[\s\S]*?if \(isAfterglowModeActive\(\)\) return[\s\S]*?app\.quit\(\)/
   )
-  assert.match(source, /app\.on\('will-quit',[\s\S]*?shutdownAfterglowMode\(\)/)
+  assert.match(source, /app\.on\('before-quit',[\s\S]*?shutdownAfterglowMode\(\)/)
   assert.match(
     source,
     /app\.on\('second-instance',[\s\S]*?isAfterglowModeActive\(\)[\s\S]*?restoreAfterglowMode\(\)/

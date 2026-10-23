@@ -141,9 +141,15 @@ export interface DspMeterSnapshot {
 export interface DspOutputStageStatus {
   targetSampleRate: number | null
   actualSampleRate: number | null
+  /** Requested quality; does not prove that sample-rate conversion occurred. */
   resamplerQuality: DspResamplerQuality
-  /** Engine actually in effect ('soxr' or 'swr'); absent on older native builds. */
-  resamplerEngine?: 'swr' | 'soxr'
+  /** Engine availability for the requested tier; not a per-stream observation. */
+  resamplerEngine?: 'swr' | 'soxr' | 'unknown'
+  effectiveResampler?: 'swr' | 'soxr' | 'none' | 'unknown'
+  effectiveResamplerQuality?: DspResamplerQuality | null
+  effectiveResamplerFallback?: boolean
+  /** null/absent means the native build has not supplied an observation. */
+  resampled?: boolean | null
   /** True when a soxr tier was requested but the FFmpeg build lacks libsoxr. */
   resamplerFallback?: boolean
   dither: DspDitherMode
@@ -345,8 +351,8 @@ export const DSP_RESAMPLER_QUALITY_OPTIONS: readonly {
   { value: 'native', label: 'Native' },
   { value: 'high', label: 'High' },
   { value: 'ultra', label: 'Ultra' },
-  { value: 'soxrHq', label: 'SoX HQ' },
-  { value: 'soxrVhq', label: 'SoX VHQ (最高)' }
+  { value: 'soxrHq', label: 'SoX HQ（需运行时验证）' },
+  { value: 'soxrVhq', label: 'SoX VHQ（需运行时验证）' }
 ] as const
 
 export const DSP_DITHER_MODE_OPTIONS: readonly {
