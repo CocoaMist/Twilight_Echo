@@ -2545,6 +2545,12 @@ TAE_Result AudioPipeline::playInternal(
     const std::optional<NativeDsdRuntimeFacts>& forcedNativeDsdFallbackFacts,
     std::string* error, bool initiallyPaused) {
   std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
+  {
+    std::lock_guard lock(mutex_);
+    synchronizeRenderPromotionLocked();
+    if (currentItem_.queueEntryId != item.queueEntryId || !sameQueueSegment(currentItem_, item))
+      clearLoopRange();
+  }
   stop();
   if (item.source.empty()) return TAE_RESULT_INVALID_ARGUMENT;
   const double requestedPlaybackVolume = std::clamp(volume, 0.0, 1.0);
@@ -3311,7 +3317,7 @@ TAE_Result AudioPipeline::playInternal(
     dspStatus_ = dspChain_->status();
     recomputeDspActiveLocked(requestedPlaybackVolume);
     spectrum_.prepare(decodeFormat_, visualizationFftResolutionForConfig(dspConfig_.fftResolution));
-    spectrum_.setEnabled(dspConfig_.fftEnabled);
+    spectrum_.setEnabled(dspConfig_.fftEnabled && visualizationDemand_);
     gaplessEnabled_ = gaplessEnabled && !dopPath && !nativeDsdPath && !pcmToDsdPath;
     dopPathActive_ = dopPath;
     nativeDsdPathActive_ = nativeDsdPath;
@@ -3808,7 +3814,10 @@ void AudioPipeline::setPlaybackRate(double rate) {
 }
 
 void AudioPipeline::setLoopRange(double startSeconds, double endSeconds) {
+  std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
   cancelAutoMix("loop_changed");
+  std::lock_guard lock(mutex_);
+  synchronizeRenderPromotionLocked();
   if (!std::isfinite(startSeconds) || !std::isfinite(endSeconds) || endSeconds <= startSeconds ||
       startSeconds < 0.0) {
     clearLoopRange();
@@ -3827,6 +3836,22 @@ void AudioPipeline::clearLoopRange() {
 
 bool AudioPipeline::enforceLoopRange(std::string* error) {
   if (!loopEnabled_.load(std::memory_order_acquire)) return false;
+  std::lock_guard<std::recursive_mutex> transportLock(transportMutex_);
+  QueueTransitionWrite transition(queueRebindExclusive_, queueTransitionReaders_);
+  if (!transition.acquired) return false;
+  double position = 0.0;
+  {
+    std::lock_guard lock(mutex_);
+    // A callback can promote another occurrence before the clock observes it.
+    // Retire its predecessor's range before considering a seek.
+    synchronizeRenderPromotionLocked();
+    const auto state = renderState_.load(std::memory_order_acquire);
+    if (state != PipelineState::Playing) return false;
+    const int sampleRate = positionSampleRateForStream(stream_, outputFormat_);
+    if (sampleRate <= 0) return false;
+    position = static_cast<double>(renderedFrames_.load(std::memory_order_relaxed)) / sampleRate;
+  }
+  if (!loopEnabled_.load(std::memory_order_acquire)) return false;
   // Re-entrancy guard: seek itself must not re-enter enforcement.
   bool expected = false;
   if (!loopEnforceBusy_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -3843,15 +3868,6 @@ bool AudioPipeline::enforceLoopRange(std::string* error) {
     clearLoopRange();
     return false;
   }
-
-  // Read position without holding mutex across seek() (seek also takes mutex_).
-  const auto state = renderState_.load(std::memory_order_acquire);
-  if (state != PipelineState::Playing && state != PipelineState::Paused) return false;
-  const int positionSampleRate = positionSampleRateForStream(stream_, outputFormat_);
-  if (positionSampleRate <= 0) return false;
-  const double position =
-      static_cast<double>(renderedFrames_.load(std::memory_order_relaxed)) /
-      static_cast<double>(positionSampleRate);
 
   // Small epsilon so we jump just as the playhead reaches end.
   if (position + 0.005 < end) return false;
@@ -3975,7 +3991,7 @@ void AudioPipeline::setDspConfig(const std::string& dspConfigJson) {
     if (outputFormat_.sampleRate > 0 && outputFormat_.channelCount > 0) {
       spectrum_.prepare(outputFormat_, visualizationFftResolutionForConfig(dspConfig_.fftResolution));
     }
-    spectrum_.setEnabled(dspConfig_.fftEnabled);
+    spectrum_.setEnabled(dspConfig_.fftEnabled && visualizationDemand_);
     dspStatus_ = activeDspChain.status();
     preloadDspStatus_ = spareDspChain.status();
     recomputeDspActiveLocked();
@@ -4125,7 +4141,7 @@ bool AudioPipeline::applyDspState(
           outputFormat_,
           visualizationFftResolutionForConfig(dspConfig_.fftResolution));
     }
-    spectrum_.setEnabled(dspConfig_.fftEnabled);
+    spectrum_.setEnabled(dspConfig_.fftEnabled && visualizationDemand_);
 
     // GetDspGraphStatus is the authoritative external DSP ACK channel. Its
     // revision comes directly from this request; the generic playback config
@@ -4773,6 +4789,7 @@ bool AudioPipeline::skipToPreloaded(const QueueItem& item, std::string* error) {
       if (error) *error = "下一首尚未完成预加载";
       return false;
     }
+    clearLoopRange();
     oldActive = std::move(activeStream_);
     activeStream_ = std::move(preloadStream_);
     preloadStream_.reset();
@@ -5218,6 +5235,12 @@ size_t AudioPipeline::getSpectrumData(float* buffer, size_t pointCount) const {
   return spectrum_.read(buffer, pointCount, phase);
 }
 
+void AudioPipeline::setVisualizationDemand(bool enabled) {
+  std::lock_guard lock(mutex_);
+  visualizationDemand_ = enabled;
+  spectrum_.setEnabled(dspConfig_.fftEnabled && visualizationDemand_);
+}
+
 std::string AudioPipeline::getVisualizationDataJson(
     size_t spectrumPoints,
     size_t waveformPoints,
@@ -5602,6 +5625,8 @@ void AudioPipeline::synchronizeRenderPromotionLocked() {
   for (auto& g : retiredAutoMix_)
     if (g->continuation.get() == promoted) mixOwner = g.get();
   if (!mixOwner && (!preloadStream_ || preloadStream_.get() != promoted)) return;
+
+  clearLoopRange();
 
   std::shared_ptr<DecodeStream> previous = std::move(activeStream_);
   if (mixOwner) {

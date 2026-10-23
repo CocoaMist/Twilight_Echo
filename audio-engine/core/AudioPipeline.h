@@ -192,6 +192,7 @@ class AudioPipeline {
   bool consumeDecodeError(std::string* message);
   bool consumeTrackStarted(QueueItem* item);
   size_t getSpectrumData(float* buffer, size_t pointCount) const;
+  void setVisualizationDemand(bool enabled);
   std::string getVisualizationDataJson(
       size_t spectrumPoints,
       size_t waveformPoints,
@@ -438,6 +439,7 @@ class AudioPipeline {
   std::atomic<uint64_t> retiredStreamEpoch_{0};
   std::atomic<uint64_t> renderAckedStreamEpoch_{0};
   FftSpectrumAnalyzer spectrum_;
+  bool visualizationDemand_ = true;
   std::unique_ptr<DspChain> dspChain_;
   std::unique_ptr<DspChain> preloadDspChain_;
   static constexpr size_t kMaxRenderDspGraphGenerations = 8;

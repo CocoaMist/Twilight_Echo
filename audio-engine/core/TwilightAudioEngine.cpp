@@ -995,7 +995,10 @@ TAE_Result TwilightAudioEngine::resumeReleasedOutput() {
 TAE_Result TwilightAudioEngine::stop() {
   std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
-  if (pipeline_) pipeline_->stop();
+  if (pipeline_) {
+    pipeline_->clearLoopRange();
+    pipeline_->stop();
+  }
   std::lock_guard lock(mutex_);
   info_.state = PlaybackState::Stopped;
   info_.positionSeconds = 0.0;
@@ -1106,6 +1109,7 @@ TAE_Result TwilightAudioEngine::setPlaybackRate(double rate) {
 }
 
 TAE_Result TwilightAudioEngine::setLoopRange(double startSeconds, double endSeconds) {
+  std::lock_guard transportLock(transportMutex_);
   const ClockWake wake(*this);
   if (pipeline_) {
     pipeline_->setLoopRange(startSeconds, endSeconds);
@@ -2227,6 +2231,10 @@ size_t TwilightAudioEngine::getSpectrumData(float* buffer, size_t pointCount) co
     buffer[i] = static_cast<float>((std::sin((x * 18.0 + phase) * 3.14159) + 1.0) * 0.25);
   }
   return pointCount;
+}
+
+void TwilightAudioEngine::setVisualizationDemand(bool enabled) {
+  if (pipeline_) pipeline_->setVisualizationDemand(enabled);
 }
 
 std::string TwilightAudioEngine::getVisualizationDataJson(const std::string& optionsJson) const {
@@ -3362,6 +3370,12 @@ TAE_Result TAE_GetSpectrumData(TAE_EngineHandle engine, float* buffer, size_t po
   if (!engine) return TAE_RESULT_NOT_INITIALIZED;
   const size_t written = fromHandle(engine)->getSpectrumData(buffer, point_count);
   if (written_count) *written_count = written;
+  return TAE_RESULT_OK;
+}
+
+TAE_Result TAE_SetVisualizationDemand(TAE_EngineHandle engine, int enabled) {
+  if (!engine) return TAE_RESULT_NOT_INITIALIZED;
+  fromHandle(engine)->setVisualizationDemand(enabled != 0);
   return TAE_RESULT_OK;
 }
 

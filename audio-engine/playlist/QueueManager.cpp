@@ -301,6 +301,7 @@ ParsedQueueItem parseQueueItem(const std::string& object) {
     item.logicalQueueEnd = isTrue;
   }
   item.id = extractStringField(object, "id").value_or("");
+  item.queueEntryId = extractStringField(object, "queueEntryId").value_or("");
   item.title = extractStringField(object, "title").value_or(extractStringField(object, "name").value_or(""));
   item.artist = extractStringField(object, "artist").value_or("");
   item.album = extractStringField(object, "album").value_or("");
@@ -665,6 +666,9 @@ std::string QueueManager::itemToJson(const std::optional<QueueItem>& item) {
        << "\"bitDepth\":" << item->bitDepth;
   if (item->logicalQueueEnd.has_value()) {
     json << ",\"logicalQueueEnd\":" << (*item->logicalQueueEnd ? "true" : "false");
+  }
+  if (!item->queueEntryId.empty()) {
+    json << ",\"queueEntryId\":\"" << escapeJson(item->queueEntryId) << "\"";
   }
   if (item->measuredIntegratedLufs) {
     json << ",\"measuredIntegratedLufs\":" << *item->measuredIntegratedLufs;

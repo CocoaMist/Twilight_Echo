@@ -153,6 +153,8 @@ TAE_API TAE_Result TAE_GetDiagnosticLog(
 
 TAE_API TAE_Result TAE_GetPlaybackInfo(TAE_EngineHandle engine, char* buffer, size_t buffer_size, size_t* required_size);
 TAE_API TAE_Result TAE_GetSpectrumData(TAE_EngineHandle engine, float* buffer, size_t point_count, size_t* written_count);
+/** Runtime observation demand, independent from the persisted FFT preference. */
+TAE_API TAE_Result TAE_SetVisualizationDemand(TAE_EngineHandle engine, int enabled);
 TAE_API TAE_Result TAE_GetVisualizationData(
     TAE_EngineHandle engine,
     const char* options_json,
