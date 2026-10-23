@@ -1,145 +1,122 @@
-import { computed, readonly, ref } from 'vue'
+import { computed, effectScope, readonly, shallowRef } from 'vue'
+import { useCoreConnection } from './coreConnection.ts'
+import { createCorePlayerResource } from './player/corePlayerResource.ts'
+import type { CorePlayerClient } from './player/corePlayerTypes.ts'
+import type {
+  CoreLyricPatch,
+  CoreLyricsCurrent,
+  CoreLyricsMutation
+} from '../../../shared/coreLyrics.ts'
 import {
   DEFAULT_LYRICS_MANAGEMENT,
-  clampLyricOffset,
-  cloneLyricsManagementDocument,
   effectiveLyricOffsetSeconds,
-  type LyricTrackOverride,
   type LyricSourcePreference,
   type LyricsManagementDocument
 } from '../../../shared/lyricsManagement.ts'
-import { isPersistentDataRevisionConflict } from '../../../shared/versionedPersistence.ts'
 
-const document = ref<LyricsManagementDocument>(
-  cloneLyricsManagementDocument(DEFAULT_LYRICS_MANAGEMENT)
-)
-const revision = ref(0)
-const loading = ref<Promise<void> | null>(null)
-
-function entryFor(trackId: string): LyricTrackOverride | undefined {
-  return document.value.tracks[trackId]
-}
-
-async function ensureLoaded(): Promise<void> {
-  if (loading.value) return loading.value
-  loading.value = (async () => {
-    const result = await Promise.race([
-      window.api.data.loadLyricsManagement(),
-      new Promise<null>((resolve) => {
-        window.setTimeout(() => resolve(null), 3_000)
-      })
-    ])
-    if (result) {
-      document.value = cloneLyricsManagementDocument(result.data)
-      revision.value = result.revision
+/** A bounded current-track projection; committed lyrics and source resolution live in Core. */
+export function createCoreLyricsManagement(
+  core: Pick<CorePlayerClient, 'state' | 'attach' | 'query' | 'command'>
+) {
+  const scope = effectScope(true)
+  const store = scope.run(() => {
+    const error = shallowRef<Error | null>(null)
+    const failed = (cause: unknown) => {
+      error.value = cause instanceof Error ? cause : new Error(String(cause))
     }
-  })().finally(() => {
-    loading.value = null
-  })
-  return loading.value
+    const key = () => {
+      const state = core.state.value
+      return state?.phase === 'ready' && state.lyricsRevision !== null
+        ? `${state.epoch}:${state.lyricsRevision}:${state.lyricsContentRevision}:${state.track?.id}:${state.queue?.occurrenceId}`
+        : ''
+    }
+    const projection = createCorePlayerResource(
+      key,
+      async () => ({
+        state: await core.query('lyrics.state', {}),
+        content: await core.query('lyrics.current', {})
+      }),
+      failed
+    )
+    const document = computed<LyricsManagementDocument>(() => {
+      const value = projection.value.value
+      const current = value?.content.current
+      const preferences = value?.state.preferences ?? DEFAULT_LYRICS_MANAGEMENT
+      return {
+        schemaVersion: 1,
+        globalOffsetMs: preferences.globalOffsetMs,
+        showOriginal: preferences.showOriginal,
+        showTranslation: preferences.showTranslation,
+        showRomanization: preferences.showRomanization,
+        tracks:
+          current && value?.content.override ? { [current.trackId]: value.content.override } : {}
+      }
+    })
+    const revision = computed(() => projection.value.value?.state.revision ?? null)
+    async function refresh() {
+      await projection.refresh()
+      error.value = null
+    }
+    async function ensureLoaded() {
+      if (!core.state.value) await core.attach()
+      if (!projection.value.value) await refresh()
+      if (revision.value === null) throw new Error('歌词尚未就绪，请稍后重试')
+    }
+    async function edit(edit: CoreLyricsMutation['edit'], expectedRevision?: number | null) {
+      await ensureLoaded()
+      try {
+        await core.command('lyrics.edit', { revision: expectedRevision ?? revision.value!, edit })
+        await refresh()
+      } catch (cause) {
+        if ((cause as { code?: string })?.code === 'STALE_REVISION') await refresh().catch(failed)
+        failed(cause)
+        throw cause
+      }
+    }
+    const entryFor = (trackId: string) => document.value.tracks[trackId]
+    const current = (): CoreLyricsCurrent => {
+      const state = core.state.value
+      if (!state?.track) throw new Error('当前没有播放曲目')
+      return { trackId: state.track.id, occurrenceId: state.queue?.occurrenceId ?? null }
+    }
+    return {
+      document: readonly(document),
+      revision,
+      error: readonly(error),
+      globalOffsetMs: computed(() => document.value.globalOffsetMs),
+      getRevision: () => revision.value,
+      ensureLoaded,
+      refresh,
+      entryFor,
+      effectiveOffsetSeconds: (trackId: string) =>
+        effectiveLyricOffsetSeconds(
+          document.value.globalOffsetMs,
+          entryFor(trackId)?.offsetMs ?? 0
+        ),
+      updateTrack: (trackId: string, patch: CoreLyricPatch, expectedRevision?: number | null) =>
+        edit({ kind: 'track', trackId, patch }, expectedRevision),
+      selectSource: (trackId: string, source: LyricSourcePreference) =>
+        edit({ kind: 'track', trackId, patch: { source } }),
+      updateGlobalOffset: (offsetMs: number) => edit({ kind: 'globalOffset', offsetMs }),
+      updateVisibility: (
+        patch: Partial<
+          Pick<LyricsManagementDocument, 'showOriginal' | 'showTranslation' | 'showRomanization'>
+        >
+      ) => edit({ kind: 'visibility', patch }),
+      importDraft: async () => (await core.command('lyrics.importDraft', {})) as string | null,
+      exportDraft: async (contents: string) =>
+        (await core.command('lyrics.exportDraft', { contents })) as string | null,
+      search: () => core.query('lyrics.search', current())
+    }
+  })!
+  return { ...store, dispose: () => scope.stop() }
 }
-
-async function persist(next: LyricsManagementDocument): Promise<void> {
-  try {
-    const saved = await window.api.data.saveLyricsManagement(next, revision.value)
-    document.value = cloneLyricsManagementDocument(saved.data)
-    revision.value = saved.revision
-  } catch (error) {
-    if (!isPersistentDataRevisionConflict(error)) throw error
-    const current = error.current
-    if (!current) throw error
-    // Do not replay a whole stale document: another renderer could have edited
-    // a different track after we read. Keep the authority and let the caller
-    // retry its focused update against the fresh revision.
-    document.value = cloneLyricsManagementDocument(current.data as LyricsManagementDocument)
-    revision.value = current.revision
-    throw error
-  }
-}
-
-function nextDocument(): LyricsManagementDocument {
-  return cloneLyricsManagementDocument(document.value)
-}
-
-function defaultOverride(): LyricTrackOverride {
-  return {
-    offsetMs: 0,
-    source: 'auto',
-    originalSelection: 'automatic',
-    translationSelection: 'automatic',
-    romanizationSelection: 'automatic',
-    original: null,
-    translation: null,
-    romanization: null,
-    updatedAt: new Date().toISOString()
-  }
-}
-
-async function updateGlobalOffset(offsetMs: number): Promise<void> {
-  await ensureLoaded()
-  const next = nextDocument()
-  next.globalOffsetMs = clampLyricOffset(offsetMs)
-  await persist(next)
-}
-
-async function updateVisibility(
-  patch: Partial<
-    Pick<LyricsManagementDocument, 'showOriginal' | 'showTranslation' | 'showRomanization'>
-  >
-): Promise<void> {
-  await ensureLoaded()
-  const next = nextDocument()
-  if (typeof patch.showOriginal === 'boolean') next.showOriginal = patch.showOriginal
-  if (typeof patch.showTranslation === 'boolean') next.showTranslation = patch.showTranslation
-  if (typeof patch.showRomanization === 'boolean') next.showRomanization = patch.showRomanization
-  await persist(next)
-}
-
-async function updateTrack(
-  trackId: string,
-  patch: Partial<
-    Pick<
-      LyricTrackOverride,
-      | 'offsetMs'
-      | 'source'
-      | 'originalSelection'
-      | 'translationSelection'
-      | 'romanizationSelection'
-      | 'original'
-      | 'translation'
-      | 'romanization'
-    >
-  >
-): Promise<void> {
-  if (!trackId) return
-  await ensureLoaded()
-  const next = nextDocument()
-  const previous = next.tracks[trackId] ?? defaultOverride()
-  const override: LyricTrackOverride = {
-    ...previous,
-    ...patch,
-    offsetMs: clampLyricOffset(patch.offsetMs ?? previous.offsetMs),
-    updatedAt: new Date().toISOString()
-  }
-  next.tracks[trackId] = override
-  await persist(next)
-}
-
-async function selectSource(trackId: string, source: LyricSourcePreference): Promise<void> {
-  await updateTrack(trackId, { source })
-}
-
+let singleton: ReturnType<typeof createCoreLyricsManagement> | null = null
 export function useLyricsManagement() {
-  return {
-    document: readonly(document),
-    globalOffsetMs: computed(() => document.value.globalOffsetMs),
-    ensureLoaded,
-    entryFor,
-    effectiveOffsetSeconds: (trackId: string) =>
-      effectiveLyricOffsetSeconds(document.value.globalOffsetMs, entryFor(trackId)?.offsetMs ?? 0),
-    updateGlobalOffset,
-    updateVisibility,
-    updateTrack,
-    selectSource
-  }
+  return (singleton ??= createCoreLyricsManagement(useCoreConnection()))
 }
+if (import.meta.hot)
+  import.meta.hot.dispose(() => {
+    singleton?.dispose()
+    singleton = null
+  })

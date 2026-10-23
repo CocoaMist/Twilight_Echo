@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { NativeQueueLoader } from './nativeQueueLoader.ts'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
 import type { PreparePlayerNativeQueueOptions } from './nativeQueuePreparation.ts'
 
 function deferred<T>() {

@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { searchUnifiedLocalPage, searchUnifiedNetworkPage } from './unifiedSearchSources.ts'
-import type { Track } from '@renderer/types/music'
+import { createLogicalTrackModel } from '../../../shared/logicalTrackModel.ts'
+import { createUnifiedSearchSources } from '../../../shared/musicSearchSources.ts'
+import type { TrackData as Track } from '../../../shared/track.ts'
+
+const { searchUnifiedLocalPage, searchUnifiedNetworkPage } = createUnifiedSearchSources(
+  createLogicalTrackModel(() => undefined),
+  () => 0
+)
 
 const track = (id: string, title = '月亮', format = 'flac'): Track => ({
   id,

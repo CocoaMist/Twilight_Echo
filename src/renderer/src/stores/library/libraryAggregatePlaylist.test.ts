@@ -2,13 +2,17 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { reactive, watch } from 'vue'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
+import type { CoreLibraryPage, CoreTrackView } from '../../../../shared/coreViews.ts'
 import type {
   LibraryPage,
   LibraryQuery,
   LibraryTrackRecord
 } from '../../../../shared/libraryDatabase.ts'
+import type { CorePlaylistDescriptor } from '../../../../shared/corePlaylists.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
+import { projectCoreTrack } from '../../../../core/projections.ts'
 import { createLibraryAggregatePlaylist } from './libraryAggregatePlaylist.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import { createCoreLibraryApi } from './coreLibraryApi.ts'
 import type { Playlist } from './musicStoreTypes.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -16,18 +20,30 @@ async function until(check: () => boolean) {
   for (let i = 0; i < 150 && !check(); i++) await tick()
   assert.ok(check(), 'aggregate owner did not settle')
 }
-const record = (id: string, patch: Record<string, unknown> = {}): LibraryTrackRecord => ({
-  id,
-  filePath: `D:/Music/${id}.flac`,
-  title: id,
-  artist: 'Artist',
-  album: 'Album',
-  duration: 180,
-  format: 'flac',
-  source: 'local',
-  ...patch
+const record = (id: string, patch: Record<string, unknown> = {}) => ({
+  ...libraryTrack({
+    id,
+    filePath: `D:/Music/${id}.flac`,
+    title: id,
+    artist: 'Artist',
+    album: 'Album',
+    duration: 180,
+    format: 'flac',
+    source: 'local',
+    ...patch
+  })
+})
+const descriptor = (playlist: Playlist): CorePlaylistDescriptor => ({
+  id: playlist.id,
+  name: playlist.name,
+  createdAt: playlist.createdAt,
+  kind: playlist.kind,
+  count: playlist.trackIds.length,
+  hiddenSources: playlist.hiddenSources,
+  cover: playlist.cover
 })
 function fixture(t: TestContext, records: LibraryTrackRecord[], playlist: Playlist) {
+  playlist.kind ??= 'aggregate'
   const db = new LibraryDatabase(':memory:')
   db.replaceDocument({ version: 2, revision: 0, tracks: records, folders: [], exclusions: [] })
   let active = 0,
@@ -35,34 +51,144 @@ function fixture(t: TestContext, records: LibraryTrackRecord[], playlist: Playli
   let intercept: ((query: LibraryQuery, page: LibraryPage) => Promise<void>) | undefined
   let metadataHook: (() => Promise<void>) | undefined
   const calls: LibraryQuery[] = []
-  const owner = createLibraryAggregatePlaylist({
-    syncPlaylistView: async (request) => db.syncPlaylistView(request),
-    queryTracks: async (query = {}) => {
-      calls.push(query)
-      active++
-      maximum = Math.max(maximum, active)
-      try {
-        const result = db.queryTracks(query)
-        await intercept?.(query, result)
-        return result
-      } finally {
-        active--
-      }
-    },
-    queryCollections: async (kind, query) => {
-      active++
-      maximum = Math.max(maximum, active)
-      try {
-        return db.queryCollections(kind, query)
-      } finally {
-        active--
-      }
-    },
-    getMetadata: async () => {
-      await metadataHook?.()
-      return db.getMetadata()
+  let playlists = [playlist]
+  const coreState = {
+    value: { playlistsRevision: 1, versionsRevision: 1, libraryRevision: db.getMetadata().revision }
+  }
+  let nextView = 0,
+    catalogViewId: string | null = null
+  const viewIds = new Map<string, string>()
+  const buildView = async (definition: Playlist, preserveSources: boolean) => {
+    const key = `${definition.id}:${preserveSources}:${coreState.value.playlistsRevision}:${db.getMetadata().revision}`
+    const existing = viewIds.get(key)
+    if (existing) return existing
+    const id = `core-view-${++nextView}`
+    await db.syncPlaylistView({ kind: 'begin', id, versions: [], preserveSources })
+    const members = definition.trackIds.map((trackId) => ({
+      id: trackId,
+      snapshot: definition.trackSnapshots?.[trackId] as LibraryTrackRecord | undefined
+    }))
+    for (let offset = 0; offset < members.length; offset += 200)
+      await db.syncPlaylistView({
+        kind: 'append',
+        id,
+        sequence: offset / 200 + 1,
+        entries: members.slice(offset, offset + 200)
+      })
+    await db.syncPlaylistView({
+      kind: 'commit',
+      id,
+      sequence: Math.ceil(members.length / 200) + 1
+    })
+    viewIds.set(key, id)
+    return id
+  }
+  const buildCatalog = async () => {
+    if (catalogViewId) return catalogViewId
+    const id = `core-catalog-${++nextView}`
+    await db.syncPlaylistView({
+      kind: 'begin',
+      id,
+      versions: [],
+      preserveSources: true,
+      catalog: true
+    })
+    for (let offset = 0; offset < playlists.length; offset += 200) {
+      const groupPage = playlists.slice(offset, offset + 200)
+      await db.syncPlaylistView({
+        kind: 'groups',
+        id,
+        sequence: offset / 200 + 1,
+        groups: groupPage.map(({ id, name, cover, isDefault }) => ({ id, name, cover, isDefault }))
+      })
     }
-  })
+    let sequence = Math.ceil(playlists.length / 200) + 1
+    const entries = playlists.flatMap((item) =>
+      item.trackIds.map((trackId) => ({
+        id: trackId,
+        collectionId: item.id,
+        snapshot: item.trackSnapshots?.[trackId] as LibraryTrackRecord | undefined
+      }))
+    )
+    for (let offset = 0; offset < entries.length; offset += 200)
+      await db.syncPlaylistView({
+        kind: 'append',
+        id,
+        sequence: sequence++,
+        entries: entries.slice(offset, offset + 200)
+      })
+    await db.syncPlaylistView({ kind: 'commit', id, sequence })
+    catalogViewId = id
+    return id
+  }
+  const core = {
+    state: coreState,
+    query: async (name: string, payload: any) => {
+      if (name === 'playlists.view') {
+        const definition = playlists.find((item) => item.id === payload.id) as unknown as
+          | Playlist
+          | undefined
+        if (!definition) throw new Error('playlist missing')
+        const id = await buildView(definition, payload.preserveSources === true)
+        const query: LibraryQuery = {
+          ...payload.query,
+          playlistView: id,
+          contentRevision: payload.query?.contentRevision ?? db.getMetadata().revision,
+          ...(definition.kind === 'aggregate'
+            ? {
+                aggregate: {
+                  hiddenSources: payload.includeHiddenSources ? [] : definition.hiddenSources,
+                  variantPreferences: definition.variantPreferences,
+                  ...(payload.variantRow !== undefined ? { variantRow: payload.variantRow } : {}),
+                  ...(payload.sourceCounts ? { sourceCounts: true } : {})
+                }
+              }
+            : {})
+        }
+        calls.push(query)
+        active++
+        maximum = Math.max(maximum, active)
+        try {
+          const result = db.queryTracks(query)
+          await intercept?.(query, result)
+          const page: CoreLibraryPage = {
+            ...result,
+            tracks: result.tracks.map((track) => projectCoreTrack(track)),
+            definitionIds: result.entryIds?.map((entry) => definition.trackIds[Number(entry)])
+          }
+          return {
+            viewId: id,
+            revision: payload.revision,
+            versionsRevision: payload.versionsRevision,
+            page
+          }
+        } finally {
+          active--
+        }
+      }
+      if (name === 'playlists.collection') {
+        const id = await buildCatalog()
+        active++
+        maximum = Math.max(maximum, active)
+        try {
+          return db.queryCollections('playlists', {
+            ...payload.query,
+            playlistView: id,
+            contentRevision: db.getMetadata().revision
+          })
+        } finally {
+          active--
+        }
+      }
+      if (name === 'library.metadata') {
+        await metadataHook?.()
+        return db.getMetadata()
+      }
+      throw new Error(`unsupported Core query ${name}`)
+    }
+  }
+  const libraryApi = createCoreLibraryApi(core as never)
+  const owner = createLibraryAggregatePlaylist(libraryApi)
   const stop = watch(
     [() => owner.detailState.value.id, () => owner.catalogState.value.id],
     owner.refreshQueries,
@@ -70,11 +196,10 @@ function fixture(t: TestContext, records: LibraryTrackRecord[], playlist: Playli
   )
   const input = {
     enabled: true,
-    playlist,
-    playlists: [playlist],
+    playlist: descriptor(playlist),
+    playlists: playlists.map(descriptor),
     search: '',
-    revision: 1,
-    versions: []
+    revision: 1
   }
   owner.setInput(input)
   t.after(async () => {
@@ -88,6 +213,16 @@ function fixture(t: TestContext, records: LibraryTrackRecord[], playlist: Playli
     owner,
     input,
     calls,
+    setPlaylists(value: Playlist[]) {
+      playlists = value
+      catalogViewId = null
+    },
+    setCorePlaylistRevision(revision: number) {
+      coreState.value = { ...coreState.value, playlistsRevision: revision }
+    },
+    forgetView(id: string) {
+      for (const [key, value] of viewIds) if (value === id) viewIds.delete(key)
+    },
     until,
     intercept(value: typeof intercept) {
       intercept = value
@@ -104,7 +239,7 @@ function fixture(t: TestContext, records: LibraryTrackRecord[], playlist: Playli
 test('aggregate renderer owns authoritative pages, full queues and visible variant preferences without a full Track array', async (t) => {
   const local = Array.from({ length: 405 }, (_, i) => record(`local${i}`, { title: `Song ${i}` })),
     remote = local.map((item, i) =>
-      libraryTrack(record(`ncm:${i}`, { title: item.title, source: 'ncm', ncmSongId: i }))
+      record(`ncm:${i}`, { title: item.title, source: 'ncm', ncmSongId: i })
     )
   const playlist = reactive<Playlist>({
     id: 'mix',
@@ -123,7 +258,7 @@ test('aggregate renderer owns authoritative pages, full queues and visible varia
   assert.equal(owner.pageState.value.total, 405)
   assert.equal(owner.pageState.value.page!.tracks.length, 200)
   assert.equal(owner.pageState.value.page!.tracks[0].id, 'ncm:0')
-  const first = owner.pageState.value.page!.tracks[0] as unknown as ReturnType<typeof libraryTrack>
+  const first = owner.pageState.value.page!.tracks[0] as CoreTrackView
   assert.ok(owner.rowFor(reactive(first)))
   owner.openVariants(first)
   await until(() => !!owner.variantState.value.page)
@@ -132,7 +267,7 @@ test('aggregate renderer owns authoritative pages, full queues and visible varia
   await until(() => !owner.busy.value && !!owner.pageState.value.page)
   assert.equal(owner.pageState.value.page!.tracks.length, 5)
   assert.equal(owner.rowFor(first), null, 'a delayed row action cannot act on another page')
-  const chosen = owner.pageState.value.page!.tracks[2] as unknown as ReturnType<typeof libraryTrack>
+  const chosen = owner.pageState.value.page!.tracks[2] as CoreTrackView
   const query = owner.playbackQuery(chosen)!
   const queue = db.createLibraryQueue(query, chosen.id)
   assert.equal(queue.total, 405)
@@ -164,7 +299,7 @@ test('aggregate renderer keeps ten detail pages total, including the variants me
     owner.goToPage(page)
     await until(() => !!owner.pageState.value.page && !owner.busy.value)
   }
-  const track = owner.pageState.value.page!.tracks[0] as unknown as ReturnType<typeof libraryTrack>
+  const track = owner.pageState.value.page!.tracks[0] as CoreTrackView
   owner.openVariants(track)
   await until(() => !!owner.variantState.value.page)
   assert.equal(owner.readState.cachedDetailPages, 10)
@@ -184,7 +319,7 @@ test('continuous aggregate actions use each loaded page identity, including a se
   owner.setRange(194, 216)
   await until(() => !owner.busy.value)
   assert.equal(owner.pages.value.length, 2)
-  const track = owner.trackAt(215)! as unknown as ReturnType<typeof libraryTrack>
+  const track = owner.trackAt(215)! as CoreTrackView
   assert.equal(owner.rowFor(track)?.page.offset, 200)
   assert.equal(owner.rowFor(track)?.entryId, '216')
   const query = owner.playbackQuery(track)!
@@ -217,6 +352,7 @@ test('lease refresh preserves a deep continuous viewport and failed pages keep i
   f.intercept(async (query) => {
     if (!query.aggregate?.sourceCounts) await new Promise<void>((resolve) => release.push(resolve))
   })
+  f.setCorePlaylistRevision(2)
   owner.setInput({ ...f.input, revision: 2 })
   await until(() => release.length > 0)
   assert.notEqual(owner.detailState.value.id, previous)
@@ -249,12 +385,14 @@ test('aggregate catalogs continuously expose bounded summaries, configured order
   const playlists: Playlist[] = records.map((track, i) => ({
     id: `list${i}`,
     name: `List ${i}`,
+    kind: 'aggregate',
     createdAt: '',
     trackIds: [track.id]
   }))
   const f = fixture(t, records, playlists[0]),
     { owner } = f
-  owner.setInput({ ...f.input, playlist: null, playlists: playlists.toReversed() })
+  f.setPlaylists(playlists)
+  owner.setInput({ ...f.input, playlist: null, playlists: playlists.toReversed().map(descriptor) })
   await until(() => !owner.busy.value && !!owner.cardState.value.page)
   assert.equal(owner.cardState.value.total, 2205)
   for (let i = 1; i < 12; i++) {
@@ -271,8 +409,8 @@ test('aggregate catalogs continuously expose bounded summaries, configured order
 
 test('removing one aggregate row reads all sources by occurrence and maps relinked IDs back to configuration', async (t) => {
   const records = Array.from({ length: 605 }, (_, i) => record(`local${i}`, { title: 'Same' })),
-    remote = libraryTrack(record('remote:7', { title: 'Same', source: 'remote' })),
-    old = libraryTrack(record('old', { ...records[0], id: 'old' })),
+    remote = record('remote:7', { title: 'Same', source: 'remote' }),
+    old = record('old', { ...records[0], id: 'old' }),
     playlist: Playlist = {
       id: 'mix',
       name: 'Mix',
@@ -283,7 +421,7 @@ test('removing one aggregate row reads all sources by occurrence and maps relink
     }
   const { owner } = fixture(t, records, playlist)
   await until(() => !!owner.pageState.value.page)
-  const track = owner.pageState.value.page!.tracks[0] as unknown as ReturnType<typeof libraryTrack>
+  const track = owner.pageState.value.page!.tracks[0] as CoreTrackView
   assert.equal(owner.pageState.value.total, 1)
   const removed = await owner.removalIds(track)
   assert.equal(removed!.ids.length, 606)
@@ -299,7 +437,7 @@ test('removal refuses a changed library or configuration and stale errors cannot
   const f = fixture(t, [record('one')], playlist),
     { owner, db } = f
   await until(() => !!owner.pageState.value.page)
-  const track = owner.pageState.value.page!.tracks[0] as unknown as ReturnType<typeof libraryTrack>
+  const track = owner.pageState.value.page!.tracks[0] as CoreTrackView
   f.metadataHook(async () => {
     db.patchTracks([{ id: 'one', expectedVersion: 1, patch: { title: 'Changed' } }])
   })
@@ -315,11 +453,17 @@ test('removal refuses a changed library or configuration and stale errors cannot
         unblock = resolve
       })
   })
-  const removal = owner.removalIds(
-    owner.pageState.value.page!.tracks[0] as unknown as ReturnType<typeof libraryTrack>
-  )
+  const removal = owner.removalIds(owner.pageState.value.page!.tracks[0] as CoreTrackView)
   await until(() => !!unblock)
-  owner.setInput({ ...f.input, playlist: { ...playlist, id: 'next' } })
+  const nextPlaylist = { ...playlist, id: 'next' }
+  f.setPlaylists([nextPlaylist])
+  f.setCorePlaylistRevision(2)
+  owner.setInput({
+    ...f.input,
+    revision: 2,
+    playlist: descriptor(nextPlaylist),
+    playlists: [descriptor(nextPlaylist)]
+  })
   unblock()
   assert.equal(await removal, null)
   await until(() => !!owner.pageState.value.page && !owner.busy.value)
@@ -363,14 +507,17 @@ test('late reads share the global two-RPC bound, do not overwrite newer searches
 
 test('worker-private view expiration rebuilds the current input, but genuine content fences remain visible', async (t) => {
   const playlist: Playlist = { id: 'mix', name: 'Mix', createdAt: '', trackIds: ['one'] }
-  const { owner, db } = fixture(t, [record('one')], playlist)
+  const { owner, db, calls, forgetView } = fixture(t, [record('one')], playlist)
   await until(() => !!owner.pageState.value.page)
   const previous = owner.detailState.value.id!
   db.syncPlaylistView({ kind: 'drop', id: previous })
+  forgetView(previous)
   owner.invalidate()
   await until(
     () =>
-      !!owner.pageState.value.page && !owner.busy.value && owner.detailState.value.id !== previous
+      !!owner.pageState.value.page &&
+      !owner.busy.value &&
+      calls.some((query) => query.playlistView !== previous)
   )
   assert.equal(owner.error.value, '')
   owner.recoverPlayback(owner.detailState.value.id!, new Error('曲库在读取期间发生变化，请重试'))
@@ -380,10 +527,9 @@ test('worker-private view expiration rebuilds the current input, but genuine con
     ...{
       enabled: true,
       playlist: null,
-      playlists: [playlist],
+      playlists: [descriptor(playlist)],
       search: '',
-      revision: 1,
-      versions: []
+      revision: 1
     }
   })
   await until(() => !!owner.cardState.value.page && !owner.busy.value)
@@ -408,9 +554,7 @@ test('a scan invalidation during removal releases action state after the delayed
         unblock = resolve
       })
   })
-  const removal = owner.removalIds(
-    owner.pageState.value.page!.tracks[0] as unknown as ReturnType<typeof libraryTrack>
-  )
+  const removal = owner.removalIds(owner.pageState.value.page!.tracks[0] as CoreTrackView)
   await until(() => !!unblock)
   owner.invalidate()
   unblock()

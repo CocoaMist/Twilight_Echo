@@ -18,8 +18,11 @@ import type {
   MediaProviderUserSummary
 } from './mediaProvider.ts'
 import type { Track } from '../types/music'
+import { watch } from 'vue'
+import { useCoreConnection } from '../stores/coreConnection.ts'
+import type { TwilightMediaProviderMethod } from '../../../shared/mediaProviderMethods.ts'
 
-const mediaProviders = new MediaProviderRegistry()
+const mediaProviders = new MediaProviderRegistry((query, signal) => useCoreConnection().query('search.songs', query, signal))
 let defaultsRegistered = false
 let pluginProvidersSyncing: Promise<void> | null = null
 let pluginProviderRevision = 0
@@ -35,13 +38,22 @@ export function useMediaProviders(options?: { sync?: boolean }): MediaProviderRe
 }
 
 function ensurePluginChangeListener(): void {
-  if (pluginChangeListenerSetup || !window.api?.plugins?.onChanged) return
+  if (pluginChangeListenerSetup) return
   pluginChangeListenerSetup = true
-  window.api.plugins.onChanged(() => {
-    pluginProviderRevision += 1
-    pluginProviderHealthRefreshedAt = 0
-    void syncPluginProviders().catch(() => undefined)
-  })
+  const core = useCoreConnection()
+  watch(
+    [
+      () => core.state.value?.epoch,
+      () => core.state.value?.pluginsRevision,
+      () => core.state.value?.phase
+    ],
+    () => {
+      pluginProviderRevision += 1
+      pluginProviderHealthRefreshedAt = 0
+      if (core.state.value?.phase === 'ready') void syncPluginProviders().catch(() => undefined)
+    },
+    { flush: 'sync' }
+  )
 }
 
 export function registerDefaultProviders(): void {
@@ -54,9 +66,6 @@ async function refreshPluginProviderHealth(): Promise<void> {
     return
   }
   if (pluginProviderHealthRefreshing) return pluginProviderHealthRefreshing
-  const api = window.api?.providers
-  if (!api) return
-
   pluginProviderHealthRefreshing = (async () => {
     try {
       await syncPluginProviders()
@@ -74,18 +83,17 @@ async function refreshPluginProviderHealth(): Promise<void> {
 export async function syncPluginProviders(): Promise<void> {
   ensurePluginChangeListener()
   if (pluginProvidersSyncing) return pluginProvidersSyncing
-  const api = window.api?.providers
-  if (!api) return
+  const core = useCoreConnection()
 
   pluginProvidersSyncing = (async () => {
     try {
       let revision = pluginProviderRevision
-      let providers = await api.list()
+      let providers = await core.query('providers.list', {})
       // A registration/disable event can arrive while list() is in flight.
       // Discard that old snapshot and let all waiting callers use the fresh one.
       while (revision !== pluginProviderRevision) {
         revision = pluginProviderRevision
-        providers = await api.list()
+        providers = await core.query('providers.list', {})
       }
       const activePluginProviderIds = new Set(providers.map((provider) => provider.id))
       mediaProviders.unregisterWhere(
@@ -98,30 +106,18 @@ export async function syncPluginProviders(): Promise<void> {
           options?: { signal?: AbortSignal }
         ): Promise<T> => {
           if (options?.signal?.aborted) throw new Error('Provider call was cancelled')
-          // AbortSignal instances cannot cross the contextBridge, so the
-          // preload never sees the real signal. Generate a request id here and
-          // cancel the in-flight main-process call from the renderer instead.
-          let requestId: string | undefined
-          let onAbort: (() => void) | undefined
-          if (options?.signal) {
-            requestId = `r${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
-            onAbort = (): void => {
-              if (requestId) void api.cancel(requestId)
-            }
-            options.signal.addEventListener('abort', onAbort, { once: true })
-          }
           try {
-            return (await api.call(
-              provider.id,
-              method as never,
-              toProviderIpcArgs(args),
-              requestId ? { requestId } : undefined
+            return (await core.command(
+              'providers.call',
+              {
+                providerId: provider.id,
+                method: method as TwilightMediaProviderMethod,
+                args: toProviderIpcArgs(args)
+              },
+              options?.signal
             )) as T
           } finally {
             void refreshPluginProviderHealth()
-            if (options?.signal && onAbort) {
-              options.signal.removeEventListener('abort', onAbort)
-            }
           }
         }
         type SupportedMethod = NonNullable<(typeof provider)['supportedMethods']>[number]
@@ -145,11 +141,15 @@ export async function syncPluginProviders(): Promise<void> {
                   options
                 )
             : undefined
-        const readPlaylistImportPage: MediaProvider['readPlaylistImportPage'] = supports('readPlaylistImportPage')
-          ? (id, offset, limit, options) => callProvider('readPlaylistImportPage', [id,offset,limit],options)
+        const readPlaylistImportPage: MediaProvider['readPlaylistImportPage'] = supports(
+          'readPlaylistImportPage'
+        )
+          ? (id, offset, limit, options) =>
+              callProvider('readPlaylistImportPage', [id, offset, limit], options)
           : undefined
         if (mediaProviders.get(provider.id)) {
           mediaProviders.update(provider.id, {
+            call: callProvider,
             name: provider.name,
             capabilities: provider.capabilities,
             health: provider.health as MediaProviderHealth | undefined,
@@ -161,6 +161,7 @@ export async function syncPluginProviders(): Promise<void> {
           continue
         }
         mediaProviders.register({
+          call: callProvider,
           readPlaylistImportPage,
           id: provider.id,
           name: provider.name,

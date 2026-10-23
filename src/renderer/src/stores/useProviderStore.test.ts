@@ -3,14 +3,14 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import ts from 'typescript'
 import { toProviderIpcArgs } from '../providers/mediaProvider.ts'
 
 const source = readFileSync(new URL('./useProviderStore.ts', import.meta.url), 'utf8')
 
 function providerStoreFixture(list: () => Promise<unknown[]>) {
-  const listeners: Array<() => void> = []
+  const coreState = ref({ epoch: 'core', pluginsRevision: 0, phase: 'ready' })
   const exports: {
     useProviderStore?: () => {
       syncProviders: () => Promise<void>
@@ -24,7 +24,8 @@ function providerStoreFixture(list: () => Promise<unknown[]>) {
     {
       exports,
       require: (id: string) => {
-        if (id === 'vue') return { computed, ref }
+        if (id === 'vue') return { computed, ref, watch }
+        if (id === './coreConnection.ts') return { useCoreConnection: () => ({ state: coreState, query: list }) }
         if (id === '@renderer/providers/mediaProvider') return { toProviderIpcArgs }
         throw new Error(`Unexpected dependency: ${id}`)
       },
@@ -32,13 +33,12 @@ function providerStoreFixture(list: () => Promise<unknown[]>) {
         setInterval: () => 1,
         clearInterval: () => {},
         api: {
-          providers: { list },
-          plugins: { onChanged: (listener: () => void) => listeners.push(listener) }
+
         }
       }
     }
   )
-  return { store: exports.useProviderStore!(), changed: () => listeners.forEach((fn) => fn()) }
+  return { store: exports.useProviderStore!(), changed: () => { coreState.value.pluginsRevision++ } }
 }
 
 test('provider navigation waits for fresh lifecycle state when a list is already pending', async () => {
@@ -90,16 +90,10 @@ test('homepage section arguments cross IPC after provider metadata becomes react
   )
   const callProvider = runInNewContext(`${stripTypeScriptTypes(functionSource)}\ncallProvider`, {
     toProviderIpcArgs,
-    window: {
-      api: {
-        providers: {
-          call: async (_provider: string, _method: string, args: unknown[]) => {
-            received.push(structuredClone(args))
-            return []
-          }
-        }
-      }
-    }
+    useCoreConnection: () => ({ command: async (_operation: string, request: { args: unknown[] }) => {
+      received.push(structuredClone(request.args))
+      return []
+    } })
   }) as (id: string, method: string, args: unknown[]) => Promise<unknown>
   for (const section of metadata.value.ui.streamingSections) {
     await callProvider('kugou', section.method, section.args)

@@ -1,6 +1,6 @@
-import type { Track } from '../types/music.ts'
+import type { BpmAnalysisResult } from '../../../shared/audioEngineTypes.ts'
 
-export function equalBpmAnalysis(left: Track['bpmAnalysis'], right: Track['bpmAnalysis']): boolean {
+export function equalBpmAnalysis(left: BpmAnalysisResult | undefined, right: BpmAnalysisResult | undefined): boolean {
   if (left === right) return true
   if (!left || !right) return false
   if (

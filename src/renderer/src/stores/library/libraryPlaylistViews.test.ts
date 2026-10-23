@@ -17,7 +17,7 @@ import {
   type LibrarySortKey
 } from '../../utils/libraryViewPreferences.ts'
 import { getTrackSearchBlob, normalizeSearchText } from '../../utils/localLibrarySearch.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 import { versionSourceKey } from '../../../../shared/trackSourceIdentity.ts'
 
 function track(id: string, patch: Record<string, unknown> = {}): LibraryTrackRecord {

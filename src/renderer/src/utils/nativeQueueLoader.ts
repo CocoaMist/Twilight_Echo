@@ -3,7 +3,7 @@ import type {
   NativeQueueSelection,
   NativeQueueRebind
 } from '../../../shared/nativeQueue.ts'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
 import type { PlayMode } from '../types/settings'
 import { toNativePlayMode } from '../../../shared/playbackModes.ts'
 import { MAX_NATIVE_QUEUE_ITEMS } from '../../../shared/nativeQueue.ts'

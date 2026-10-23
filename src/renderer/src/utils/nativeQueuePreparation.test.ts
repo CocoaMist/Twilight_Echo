@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
 import { preparedNativePlayMode, type PrepareNativeQueueOptions } from './nativeQueuePreparation.ts'
 
 const { prepareNativeQueue } = (await import(

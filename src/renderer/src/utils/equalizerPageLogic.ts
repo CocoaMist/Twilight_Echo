@@ -5,7 +5,7 @@ export {
   responseToPath
 } from '@renderer/utils/eqViewport.ts'
 import { EQ_MIN_FREQUENCY, EQ_MAX_FREQUENCY } from '@renderer/utils/eqViewport.ts'
-import type { OpraCatalogStatus } from '../../../preload/types'
+import type { OpraCatalogStatus } from '../../../shared/coreOpra.ts'
 import type {
   AudioEqPreset,
   AudioProcessingSettings,

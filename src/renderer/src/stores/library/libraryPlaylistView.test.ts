@@ -8,7 +8,9 @@ import type {
 } from '../../../../shared/libraryDatabase.ts'
 import { createLibraryPlaylistView } from './libraryPlaylistView.ts'
 import { createLibraryTrackPages } from './libraryTrackPages.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import { coreLibraryPage } from '../coreTestFixtures.ts'
+import type { CoreLibraryPage } from '../../../../shared/coreViews.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
 import type { Playlist } from './musicStoreTypes.ts'
 import { toPlaylistTrackSnapshot } from './musicStoreData.ts'
 
@@ -211,11 +213,11 @@ test('a lost commit reply is dropped, not replayed; explicit retry allocates a f
 
 test('page windows follow a rebuilt owner and keep late old reads out of the new playlist', async (t) => {
   const { db, playlist, owner } = fixture(t)
-  const late = deferred<ReturnType<LibraryDatabase['queryTracks']>>()
+  const late = deferred<CoreLibraryPage>()
   let first = true
   const pages = createLibraryTrackPages({
     queryTracks: async (query) => {
-      const page = db.queryTracks(query)
+      const page = coreLibraryPage(db.queryTracks(query))
       if (first) {
         first = false
         return late.promise
@@ -240,7 +242,7 @@ test('page windows follow a rebuilt owner and keep late old reads out of the new
   await owner.setPlaylist({ ...playlist, trackIds: ['ncm:7'] }, preferences)
   for (let i = 0; i < 30 && pages.state.value.loading; i++) await tick()
   assert.equal(pages.state.value.page?.tracks[0].id, 'ncm:7')
-  late.resolve(oldPage)
+  late.resolve(coreLibraryPage(oldPage))
   await tick()
   assert.equal(pages.state.value.page?.total, 1)
   assert.equal(pages.cacheState.cachedPages, 1)

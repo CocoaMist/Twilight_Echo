@@ -1,9 +1,9 @@
 import { LIBRARY_PAGE_SIZE, type LibraryDatabaseApi } from '../../../../shared/libraryDatabase.ts'
 import type { RecordingIdentity, RecordingVersion } from '../../../../shared/recordingIdentity.ts'
 import type { Playlist } from './musicStoreTypes.ts'
-import type { Track } from '../../types/music.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 import { getTrackSource } from '../../utils/trackSourceIdentity.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
 
 /** Only the matching fields cross the lookup seam, never playlist artwork,
  * lyrics, analysis or transient provider URLs. */

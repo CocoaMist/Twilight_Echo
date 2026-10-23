@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import { patchLibraryMetadata } from './libraryMetadataPatch.ts'
-import type { Track } from '../../types/music'
+import type { TrackData as Track } from '../../../../shared/track.ts'
 
 const source: Track = {
   id: 'local:a',

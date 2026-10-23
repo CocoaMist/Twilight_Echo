@@ -1,10 +1,13 @@
 import type { ListeningTrackStat } from '../stores/useListeningStatsStore'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
 import { getRecordingTrackKey as getLogicalTrackKey } from '@renderer/utils/logicalTrackModel.ts'
 import { musicVersionRevision, getMusicVersions } from '@renderer/stores/musicVersions.ts'
 import { buildLogicalTracks, getTrackSource, type LogicalTrack } from './logicalTrackModel.ts'
 
-export type UnifiedRecentStat = ListeningTrackStat & { id: string }
+export type UnifiedRecentStat = ListeningTrackStat & {
+  id: string
+  displayTrack?: import('../../../shared/coreViews.ts').CoreTrackView | null
+}
 
 export function resolveUnifiedRecentTracks({
   recentStats,

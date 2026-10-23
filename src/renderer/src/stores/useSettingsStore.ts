@@ -1,6 +1,6 @@
 import { normalizeNavigationPagePreferences } from '../../../shared/navigationPages.ts'
 import { DEFAULT_DOWNLOAD_PREFERENCES } from '../../../shared/downloadPreferences.ts'
-import { computed, ref } from 'vue'
+import { computed, readonly, ref, type Ref } from 'vue'
 import { normalizeAppBackgroundSettings } from '../../../shared/appAppearance.ts'
 import { normalizeAppearanceLayers } from '../../../shared/appearanceLayers.ts'
 import { normalizeAppFontRendering } from '../../../shared/appFont.ts'
@@ -33,6 +33,7 @@ import {
   normalizePlayerBarSettings
 } from '../../../shared/playerBar.ts'
 import type { AppStartupSnapshot } from '../../../shared/appStartup.ts'
+import { useCoreConnection } from './coreConnection.ts'
 import type {
   AppSettings,
   AudioOutputId,
@@ -264,6 +265,7 @@ const fallbackSettings: AppSettings = {
   },
   headphoneCompensation: fallbackHeadphoneCompensation,
   audioEqPresets: [],
+  audioEqAutoPreamp: null,
   desktopLyrics: { ...DEFAULT_DESKTOP_LYRICS_SETTINGS },
   miniPlayer: cloneMiniPlayerSettings(DEFAULT_MINI_PLAYER_SETTINGS),
   proxyMode: 'auto',
@@ -297,7 +299,13 @@ function toWirePatch(patch: Partial<AppSettings>): Partial<AppSettings> {
   return JSON.parse(JSON.stringify(patch)) as Partial<AppSettings>
 }
 
-const settings = ref<AppSettings>({ ...fallbackSettings })
+const confirmedSettings = ref<AppSettings>({ ...fallbackSettings })
+// Visual feedback is an editable draft; music preferences only come from the committed snapshot.
+const appearanceDraft = ref<Partial<AppSettings>>({})
+const settings = computed<AppSettings>(() => ({
+  ...confirmedSettings.value,
+  ...appearanceDraft.value
+}))
 const defaults = ref<SettingsSnapshot['defaults']>({ cachePath: '' })
 const paths = ref<SettingsSnapshot['paths'] | null>(null)
 const appVersion = ref('')
@@ -437,7 +445,7 @@ function applyWindowTransparencyEffect(): void {
 
 function applySnapshot(snapshot: SettingsSnapshot): void {
   const incoming = snapshot.settings ?? {}
-  settings.value = {
+  confirmedSettings.value = {
     ...fallbackSettings,
     ...incoming,
     cachePolicy: {
@@ -492,7 +500,6 @@ function setupListener(): void {
   if (listenerSetup) return
   listenerSetup = true
   window.api.settings.onChanged((snapshot) => {
-    if (pendingSettingsUpdates > 0) return
     applySnapshot(snapshot)
   })
 }
@@ -542,80 +549,28 @@ export function useSettingsStore() {
     const sequence = ++settingsUpdateSequence
     pendingSettingsUpdates += 1
     saving.value = true
-    if (Object.prototype.hasOwnProperty.call(patch, 'appBackground') && patch.appBackground) {
-      settings.value = {
-        ...settings.value,
-        appBackground: patch.appBackground
-      }
-      applyDomSettings()
+    for (const key of [
+      'appBackground',
+      'cardAppearance',
+      'surfaceMaterial',
+      'liquidGlass',
+      'fontRendering',
+      'playerBar',
+      'lyricsAppearance',
+      'lyricsPresets',
+      'miniPlayer',
+      'windowTransparencyEffect'
+    ] as const) {
+      if (Object.hasOwn(patch, key))
+        appearanceDraft.value = { ...appearanceDraft.value, [key]: patch[key] }
     }
-    if (Object.prototype.hasOwnProperty.call(patch, 'cardAppearance') && patch.cardAppearance) {
-      settings.value = {
-        ...settings.value,
-        cardAppearance: patch.cardAppearance
-      }
-      applyDomSettings()
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'surfaceMaterial') && patch.surfaceMaterial) {
-      settings.value = {
-        ...settings.value,
-        surfaceMaterial: patch.surfaceMaterial
-      }
-      applyDomSettings()
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'liquidGlass') && patch.liquidGlass) {
-      settings.value = {
-        ...settings.value,
-        liquidGlass: normalizeLiquidGlass(patch.liquidGlass)
-      }
-      applyDomSettings()
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'fontRendering')) {
-      settings.value = {
-        ...settings.value,
-        fontRendering: normalizeAppFontRendering(patch.fontRendering)
-      }
-      applyDomSettings()
-    }
-    // Playbar shape must flip on the same frame as the click; waiting for the
-    // IPC round trip shows one frame of the old shape.
-    if (Object.prototype.hasOwnProperty.call(patch, 'playerBar') && patch.playerBar) {
-      settings.value = {
-        ...settings.value,
-        playerBar: normalizePlayerBarSettings(patch.playerBar)
-      }
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'lyricsAppearance') && patch.lyricsAppearance) {
-      settings.value = {
-        ...settings.value,
-        lyricsAppearance: cloneLyricsAppearance(patch.lyricsAppearance)
-      }
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'lyricsPresets') && patch.lyricsPresets) {
-      settings.value = {
-        ...settings.value,
-        lyricsPresets: cloneLyricsPresetConfig(patch.lyricsPresets)
-      }
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, 'miniPlayer') && patch.miniPlayer) {
-      settings.value = {
-        ...settings.value,
-        miniPlayer: cloneMiniPlayerSettings(patch.miniPlayer)
-      }
-    }
-    if (
-      Object.prototype.hasOwnProperty.call(patch, 'windowTransparencyEffect') &&
-      patch.windowTransparencyEffect
-    ) {
-      settings.value = {
-        ...settings.value,
-        windowTransparencyEffect: patch.windowTransparencyEffect
-      }
-      applyDomSettings()
-    }
+    if (patch.playerBar)
+      appearanceDraft.value.playerBar = normalizePlayerBarSettings(patch.playerBar)
+    applyDomSettings()
     const runUpdate = settingsUpdateQueue.then(async () => {
       const snapshot = await window.api.settings.update(toWirePatch(patch))
       if (sequence === settingsUpdateSequence) {
+        appearanceDraft.value = {}
         applySnapshot(snapshot)
       }
       lastSettingsError.value = null
@@ -629,13 +584,14 @@ export function useSettingsStore() {
       return await runUpdate
     } catch (error) {
       lastSettingsError.value = error instanceof Error ? error.message : String(error)
+      if (sequence === settingsUpdateSequence) appearanceDraft.value = {}
       try {
         const snapshot = await window.api.settings.get()
         if (sequence === settingsUpdateSequence) {
           applySnapshot(snapshot)
         }
       } catch {
-        // Keep optimistic state if reload also fails; caller still sees the error.
+        // The last confirmed projection remains available; the failed draft is not authority.
       }
       throw error
     } finally {
@@ -702,26 +658,34 @@ export function useSettingsStore() {
   }
 
   async function refreshBpmAnalysisCacheSize(): Promise<void> {
-    bpmAnalysisCacheSize.value = await window.api.bpmAnalysis.getCacheSize()
+    bpmAnalysisCacheSize.value = await useCoreConnection().query('analysis.cache.size', {
+      kind: 'bpm'
+    })
   }
 
   async function clearBpmAnalysisCache(): Promise<void> {
     clearingBpmAnalysisCache.value = true
     try {
-      bpmAnalysisCacheSize.value = await window.api.bpmAnalysis.clearCache()
+      bpmAnalysisCacheSize.value = (await useCoreConnection().command('analysis.cache.clear', {
+        kind: 'bpm'
+      })) as number
     } finally {
       clearingBpmAnalysisCache.value = false
     }
   }
 
   async function refreshLoudnessAnalysisCacheSize(): Promise<void> {
-    loudnessAnalysisCacheSize.value = await window.api.loudnessAnalysis.getCacheSize()
+    loudnessAnalysisCacheSize.value = await useCoreConnection().query('analysis.cache.size', {
+      kind: 'loudness'
+    })
   }
 
   async function clearLoudnessAnalysisCache(): Promise<void> {
     clearingLoudnessAnalysisCache.value = true
     try {
-      loudnessAnalysisCacheSize.value = await window.api.loudnessAnalysis.clearCache()
+      loudnessAnalysisCacheSize.value = (await useCoreConnection().command('analysis.cache.clear', {
+        kind: 'loudness'
+      })) as number
     } finally {
       clearingLoudnessAnalysisCache.value = false
     }
@@ -762,7 +726,7 @@ export function useSettingsStore() {
   }
 
   return {
-    settings,
+    settings: readonly(settings) as Readonly<Ref<AppSettings>>,
     defaults,
     paths,
     appVersion,

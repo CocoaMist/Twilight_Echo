@@ -1,9 +1,10 @@
 import type { Track } from '../types/music.ts'
+import type { TrackData } from '../../../shared/track.ts'
 
 export interface PlaybackQueueRemovalState {
-  currentTrack: Track | null
-  queue: Track[]
-  originalQueue: Track[]
+  currentTrack: TrackData | null
+  queue: TrackData[]
+  originalQueue: TrackData[]
   queueIndex: number
 }
 
@@ -73,7 +74,7 @@ export function pruneUnavailableLocalTracks(
 ): PlaybackQueueRemovalResult {
   const ids = new Set(removedTrackIds)
   const paths = new Set(Array.from(removedFilePaths, normalizePortablePath))
-  const isRemoved = (track: Track): boolean =>
+  const isRemoved = (track: TrackData): boolean =>
     ids.has(track.id) || paths.has(normalizePortablePath(track.filePath))
   const activeTrackRemoved = !!state.currentTrack && isRemoved(state.currentTrack)
   const currentTrack = activeTrackRemoved ? null : state.currentTrack

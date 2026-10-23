@@ -1,75 +1,34 @@
-import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-const persistedValues = new Map<string, string>()
-let localStorageWriteCount = 0
-;(globalThis as Record<string, unknown>).localStorage = {
-  getItem: (key: string) => persistedValues.get(key) ?? null,
-  setItem: (key: string, value: string) => {
-    localStorageWriteCount += 1
-    persistedValues.set(key, value)
-  }
+import { readFileSync } from 'node:fs'
+import {
+  compactListeningStatsForPersistence, LISTENING_STATS_MAX_TRACKS,
+  recordListeningSeconds, recordListeningOutcome, collectTopItems,
+  compareRecentTracks, compareTopTracks, compareMostListenedTracks, selectTopArtists
+} from '../../../core/listening/model.ts'
+import type { TrackData } from '../../../shared/track.ts'
+import type { ListeningStats, ListeningTrackStatWithId } from '../../../shared/listeningStats.ts'
+
+let stats: ListeningStats = { days: {}, tracks: {} }
+const resetListeningStatsForTest = () => { stats = { days: {}, tracks: {} } }
+const recordListeningForTest = (track: TrackData, seconds: number, at: number) => recordListeningSeconds(stats, track, seconds, at, 1)
+const recordPlaybackOutcomeForTest = (track: TrackData, value: { position: number; duration: number; timestamp: number }) => recordListeningOutcome(stats, track, value.position, value.duration, value.timestamp)
+const recordPlaybackTransitionForTest = (value: {previousTrack: TrackData; nextTrack: TrackData | null; position: number; duration: number; timestamp: number}) => {
+  if (value.previousTrack.id !== value.nextTrack?.id) recordPlaybackOutcomeForTest(value.previousTrack, value)
 }
+const entries = () => Object.entries(stats.tracks).map(([id, stat]) => ({ id, ...stat }))
+const getRecentTracks = (limit = 100) => collectTopItems<ListeningTrackStatWithId>(entries(), limit, (stat) => stat.lastPlayed > 0, compareRecentTracks)
+const getTopTracks = (limit = 100) => collectTopItems<ListeningTrackStatWithId>(entries(), limit, (stat) => stat.seconds > 0 || stat.plays > 0, compareTopTracks)
+const getMostListenedTracks = (limit = 100) => collectTopItems<ListeningTrackStatWithId>(entries(), limit, (stat) => stat.seconds > 0, compareMostListenedTracks)
+const getTopArtists = () => selectTopArtists(stats)
 
-const {
-  getRecentTracks,
-  getMostListenedTracks,
-  getTopArtists,
-  getTopTracks,
-  clearListeningStats,
-  useListeningStatsStore,
-  compactListeningStatsForPersistence,
-  flushListeningStatsForTest,
-  LISTENING_STATS_MAX_TRACKS,
-  recordPlaybackOutcomeForTest,
-  recordListeningForTest,
-  recordPlaybackTransitionForTest,
-  resetListeningStatsForTest
-} = (await import(
-  new URL('./useListeningStatsStore.ts', import.meta.url).href
-)) as typeof import('./useListeningStatsStore')
-
-const source = readFileSync(new URL('./useListeningStatsStore.ts', import.meta.url), 'utf8')
-
-test('listening stats tracking receives player refs without dynamically importing player store', () => {
-  assert.match(
-    source,
-    /export function setupListeningStatsTracking\(player: ListeningPlayerState\)/
-  )
-  assert.match(source, /const listeningStats = shallowRef<ListeningStats>/)
-  assert.match(
-    source,
-    /function commitListeningStats\(mutator: \(stats: ListeningStats\) => void\)/
-  )
-  assert.match(source, /triggerRef\(listeningStats\)/)
-  assert.match(source, /const \{ currentTrack, isPlaying, currentTime, duration \} = player/)
-  assert.match(source, /function collectTopItems<T>\(/)
-  assert.match(source, /getRecentTracks[\s\S]*collectTopItems\(/)
-  assert.match(source, /getTopTracks[\s\S]*collectTopItems\(/)
-  assert.match(source, /getMostListenedTracks[\s\S]*collectTopItems\(/)
-  assert.doesNotMatch(source, /import\('\.\/usePlayerStore\.ts'\)/)
-  assert.doesNotMatch(source, /days: \{ \.\.\.listeningStats\.value\.days \}/)
-  assert.doesNotMatch(source, /tracks: \{ \.\.\.listeningStats\.value\.tracks \}/)
-  assert.doesNotMatch(source, /Object\.entries\(listeningStats\.value\.tracks\)[\s\S]*?\.sort/)
+test('renderer statistics are Core queries and commands, with no playback tracker or browser writer', () => {
+  const source = readFileSync(new URL('./useListeningStatsStore.ts', import.meta.url), 'utf8')
+  assert.match(source, /statistics.overview/)
+  assert.match(source, /statistics.tracks/)
+  assert.match(source, /statistics.clear/)
+  assert.doesNotMatch(source, /localStorage|indexedDB|setInterval|recordListeningSeconds|setupListeningStatsTracking/)
 })
-
-test('5-second listening ticks mutate memory first and batch one persisted snapshot', () => {
-  resetListeningStatsForTest()
-  persistedValues.clear()
-  localStorageWriteCount = 0
-
-  for (let index = 0; index < 12; index++) {
-    recordListeningForTest(localTrack, 5, 1_000 + index)
-  }
-
-  assert.equal(localStorageWriteCount, 0)
-  assert.equal(flushListeningStatsForTest(), true)
-  assert.equal(localStorageWriteCount, 1)
-  const persisted = JSON.parse(persistedValues.get('twilight-echo:listening-stats:v1') ?? '{}')
-  assert.equal(persisted.tracks['logic:moon river::audrey'].seconds, 60)
-  assert.equal(persisted.tracks['logic:moon river::audrey'].plays, 1)
-})
-
 test('listening stats compaction retains the bounded recent history deterministically', () => {
   const stats = {
     days: {
@@ -367,87 +326,4 @@ test('listening stats record previous track outcome when playback switches track
   assert.equal(recent.length, 1)
   assert.equal(recent[0].skips, 1)
   assert.equal(recent[0].completions, 1)
-})
-
-test('date clearing removes only selected daily contributions across logical track variants', () => {
-  resetListeningStatsForTest()
-  const today = new Date().toISOString().slice(0, 10)
-  const dayStart = Date.parse(`${today}T00:00:00Z`)
-  const previousDay = new Date(dayStart - 86_400_000).toISOString().slice(0, 10)
-  const olderDay = new Date(dayStart - 2 * 86_400_000).toISOString().slice(0, 10)
-  recordListeningForTest(localTrack, 10, dayStart - 2 * 86_400_000)
-  recordListeningForTest(providerTrack, 20, dayStart - 86_400_000)
-  recordPlaybackOutcomeForTest(providerTrack, {
-    position: 175,
-    duration: 180,
-    timestamp: dayStart - 86_400_000 + 100
-  })
-  recordListeningForTest(localTrack, 30, dayStart)
-  const { listeningStats } = useListeningStatsStore()
-  const original = listeningStats.value
-  assert.equal(clearListeningStats({ startDay: previousDay, endDay: previousDay }), true)
-  assert.equal(listeningStats.value, original)
-  assert.deepEqual(listeningStats.value.days, { [olderDay]: 10, [today]: 30 })
-  const [stat] = getRecentTracks()
-  assert.equal(stat.seconds, 40)
-  assert.equal(stat.plays, 2)
-  assert.equal(stat.completions, 0)
-  assert.equal(stat.lastPlayed, dayStart)
-  assert.deepEqual(Object.keys(stat.daily ?? {}), [olderDay, today])
-  const persisted = JSON.parse(persistedValues.get('twilight-echo:listening-stats:v1') ?? '{}')
-  assert.equal(persisted.tracks[stat.id].seconds, 40)
-  assert.equal(persisted.tracks[stat.id].daily[previousDay], undefined)
-  recordListeningForTest(localTrack, 5, dayStart + 1_000)
-  assert.equal(getRecentTracks()[0].plays, 2)
-  assert.equal(clearListeningStats({ startDay: olderDay, endDay: today }), true)
-  assert.deepEqual(listeningStats.value, { days: {}, tracks: {} })
-})
-
-test('full clearing persists immediately and counts continuing playback as a fresh record', () => {
-  resetListeningStatsForTest()
-  const timestamp = Date.now()
-  recordListeningForTest(localTrack, 30, timestamp)
-  assert.equal(clearListeningStats(null), true)
-  assert.deepEqual(JSON.parse(persistedValues.get('twilight-echo:listening-stats:v1') ?? '{}'), {
-    days: {},
-    tracks: {}
-  })
-  assert.deepEqual(getRecentTracks(), [])
-  assert.deepEqual(getTopArtists(), [])
-  recordListeningForTest(localTrack, 5, timestamp + 5_000)
-  assert.equal(getRecentTracks()[0].plays, 1)
-  assert.equal(getRecentTracks()[0].seconds, 5)
-})
-
-test('invalid date clearing leaves data and persisted storage untouched', () => {
-  resetListeningStatsForTest()
-  recordListeningForTest(localTrack, 5, Date.now())
-  const before = JSON.stringify(useListeningStatsStore().listeningStats.value)
-  const writes = localStorageWriteCount
-  assert.throws(() => clearListeningStats({ startDay: '2026-09-31', endDay: '2026-09-30' }), /有效/)
-  assert.equal(JSON.stringify(useListeningStatsStore().listeningStats.value), before)
-  assert.equal(localStorageWriteCount, writes)
-})
-
-test('clearing reports a save failure and retry saves the cleared snapshot', () => {
-  resetListeningStatsForTest()
-  recordListeningForTest(localTrack, 5, Date.now())
-  assert.equal(flushListeningStatsForTest(), true)
-  const storage = globalThis.localStorage
-  const setItem = storage.setItem
-  storage.setItem = () => {
-    throw new Error('Quota exceeded')
-  }
-  try {
-    assert.equal(clearListeningStats(null), false)
-    assert.deepEqual(useListeningStatsStore().listeningStats.value, { days: {}, tracks: {} })
-    assert.equal(useListeningStatsStore().persistenceStatus.value.state, 'error')
-  } finally {
-    storage.setItem = setItem
-  }
-  assert.equal(flushListeningStatsForTest(), true)
-  assert.deepEqual(JSON.parse(persistedValues.get('twilight-echo:listening-stats:v1') ?? '{}'), {
-    days: {},
-    tracks: {}
-  })
 })

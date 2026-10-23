@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { shallowRef, watch } from 'vue'
+import { playlistRuntime } from '../coreTestFixtures.ts'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import type {
   LibraryPlaylistViewSync,
@@ -9,13 +10,13 @@ import type {
 } from '../../../../shared/libraryDatabase.ts'
 import { createLibraryPlaylistView } from './libraryPlaylistView.ts'
 import { createLibraryCollectionPages } from './libraryCollectionPages.ts'
-import { createPlaylistTrackResolver } from './playlistTrackResolver.ts'
+import { createPlaylistTrackResolver } from '../../../../core/playlists/trackResolver.ts'
 import { filterLocalGridItems } from '../../utils/localLibrarySearch.ts'
 import {
   summarizePlaylistSources,
   formatPlaylistSourceSummary
 } from '../../utils/playlistSourceSummary.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
 import type { Playlist } from './musicStoreTypes.ts'
 
 const preferences = { revision: 1, versions: [] }
@@ -103,6 +104,7 @@ test('catalog summaries use the existing complete resolver, including duplicates
   const page = db.queryCollections('playlists', { playlistView: id })
   assert.equal(page.total, 3)
   const resolver = createPlaylistTrackResolver({
+    runtime: playlistRuntime(),
     tracks: shallowRef(tracks),
     trackById: new Map(tracks.map((track) => [track.id, track])),
     getTracksRevision: () => 1

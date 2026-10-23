@@ -1,13 +1,17 @@
 import { shallowRef } from 'vue'
 import type {
+  LibraryCollectionKind,
   LibraryCollectionSummary,
-  LibraryDatabaseApi
+  LibraryCollectionPage,
+  LibraryMetadata,
+  LibraryQuery
 } from '../../../../shared/libraryDatabase.ts'
+import type { CoreLibraryPage } from '../../../../shared/coreViews.ts'
 import type { RecordingVersion } from '../../../../shared/recordingIdentity.ts'
 import type { Track } from '../../types/music.ts'
 import type { UnifiedRecentStat } from '../../utils/unifiedRecentTracks.ts'
 import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
-import { readLibraryRecentHistory } from './libraryRecentHistory.ts'
+import { readLibraryRecentHistory, type LibraryRecentHistoryOptions } from './libraryRecentHistory.ts'
 
 export const DASHBOARD_SHELF_SIZE = 6
 export const DASHBOARD_ALBUM_COUNT = 5
@@ -43,10 +47,14 @@ export function createLibraryDashboard(options: {
     recentSort: 'insertion' | 'recentlyAdded'
     albumSort: 'trackCount' | 'name'
   }
-  api: Pick<
-    LibraryDatabaseApi,
-    'queryTracks' | 'queryCollections' | 'lookupPlaylistTracks' | 'getTracksByIds' | 'getMetadata'
-  >
+  api: {
+    queryTracks(query?: LibraryQuery): Promise<CoreLibraryPage>
+    queryCollections(
+      kind: LibraryCollectionKind,
+      query?: LibraryQuery
+    ): Promise<LibraryCollectionPage>
+    getMetadata(): Promise<Pick<LibraryMetadata, 'revision'>>
+  } & LibraryRecentHistoryOptions['api']
 }) {
   const shelves: NonNullable<typeof options.shelves> = options.shelves ?? {
     tracks: DASHBOARD_SHELF_SIZE,
@@ -138,13 +146,9 @@ export function createLibraryDashboard(options: {
     void (async () => {
       try {
         const mode = state.value.mode ?? (await options.getStorageMode())
-        if (mode !== 'json' && mode !== 'sqlite') throw new Error('无法确认曲库存储，未读取首页')
+        if (mode !== 'sqlite') throw new Error('首页需要 Core SQLite 曲库')
         if (disposed) return
         state.value = { ...state.value, mode }
-        if (mode === 'json') {
-          if (request === generation) state.value = { ...state.value, loading: false }
-          return
-        }
         if (libraryDirty || !cached) {
           libraryDirty = false
           cached = await readLibrary()

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../types/music.ts'
+import type { TrackData as Track } from '../../../shared/track.ts'
 import {
   exportPlaylistDocument,
   findPlaylistRelocations,

@@ -15,6 +15,12 @@ import { DEFAULT_LIQUID_GLASS } from '../../../shared/liquidGlass.ts'
 import { TWILIGHT_DEFAULT_THEME } from '../../../shared/theme.ts'
 import { backgroundDisplayUrl } from '../../../shared/backgroundDisplay.ts'
 
+function mainSettingsSource(): string {
+  return ['../../../main/core/settings.ts', '../../../core/settings/normalization.ts']
+    .map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'))
+    .join('\n')
+}
+
 function themeFunctions(...names: string[]): string {
   const source = readFileSync(new URL('./useThemeStore.ts', import.meta.url), 'utf8')
   return ts.transpileModule(
@@ -31,27 +37,26 @@ function themeFunctions(...names: string[]): string {
   ).outputText
 }
 
-test('background settings updates are applied optimistically and protected from stale snapshots', () => {
+test('appearance drafts give immediate feedback without mutating the confirmed settings projection', () => {
   const source = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
 
   assert.match(source, /let settingsUpdateQueue: Promise<void> = Promise\.resolve\(\)/)
   assert.match(source, /let pendingSettingsUpdates = 0/)
   assert.match(source, /let settingsUpdateSequence = 0/)
-  assert.match(source, /if \(pendingSettingsUpdates > 0\) return/)
-  assert.match(source, /Object\.prototype\.hasOwnProperty\.call\(patch, 'appBackground'\)/)
+  assert.doesNotMatch(source, /if \(pendingSettingsUpdates > 0\) return/)
+  assert.match(source, /const confirmedSettings = ref<AppSettings>/)
+  assert.match(source, /const appearanceDraft = ref<Partial<AppSettings>>/)
+  assert.match(source, /settings: readonly\(settings\)/)
   assert.match(source, /applyDomSettings\(\)/)
   assert.match(
     source,
-    /if \(sequence === settingsUpdateSequence\) \{\s*applySnapshot\(snapshot\)\s*\}/
+    /if \(sequence === settingsUpdateSequence\) \{\s*appearanceDraft.value = \{\}\s*applySnapshot\(snapshot\)\s*\}/
   )
 })
 
 test('first-use appearance defaults to blue accents and desktop lyrics v3', () => {
   const rendererSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
-  const mainSource = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSource = mainSettingsSource()
   const themeSource = readFileSync(new URL('./useThemeStore.ts', import.meta.url), 'utf8')
   const desktopLyricsSource = readFileSync(
     new URL('../../../shared/desktopLyrics.ts', import.meta.url),
@@ -141,10 +146,7 @@ test('settings chrome no longer dual-writes theme-owned CSS variables', () => {
 test('the global font setting reaches the theme runtime instead of dying in the store', () => {
   const storeSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
   const themeSource = readFileSync(new URL('./useThemeStore.ts', import.meta.url), 'utf8')
-  const mainSource = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSource = mainSettingsSource()
   const sharedSource = readFileSync(new URL('../../../shared/appFont.ts', import.meta.url), 'utf8')
   const appearanceSource = readFileSync(
     new URL('../components/settings-page/AppearanceSettingsSection.vue', import.meta.url),
@@ -340,10 +342,7 @@ test('appearance editor sends independent plain background and material objects 
 })
 
 test('startup home page setting is persisted and selectable from general settings', () => {
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const settingsTypes = readFileSync(
     new URL('../../../shared/appSettings.ts', import.meta.url),
     'utf8'
@@ -373,10 +372,7 @@ test('startup home page setting is persisted and selectable from general setting
 })
 
 test('track activation mode is persisted across layers and applied to all track lists', () => {
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const preloadTypes = readFileSync(new URL('../../../preload/types.ts', import.meta.url), 'utf8')
   const sharedAppSettings = readFileSync(
     new URL('../../../shared/appSettings.ts', import.meta.url),
@@ -451,10 +447,7 @@ test('track activation mode is persisted across layers and applied to all track 
 })
 
 test('genre separators persist across settings layers and refresh derived library groups', () => {
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const sharedAppSettings = readFileSync(
     new URL('../../../shared/appSettings.ts', import.meta.url),
     'utf8'
@@ -539,10 +532,7 @@ test('audio settings do not expose DSP bypass as strict bit-perfect mode', () =>
   const settingsTypes = readFileSync(new URL('../types/settings.ts', import.meta.url), 'utf8')
   const preloadTypes = readFileSync(new URL('../../../preload/types.ts', import.meta.url), 'utf8')
   const mainTypes = readFileSync(new URL('../../../main/core/types.ts', import.meta.url), 'utf8')
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const settingsStoreSource = readFileSync(
     new URL('./useSettingsStore.ts', import.meta.url),
     'utf8'
@@ -565,10 +555,7 @@ test('audio settings do not expose DSP bypass as strict bit-perfect mode', () =>
 })
 
 test('cache strategy settings expose separate artifact and provider-controlled audio policies', () => {
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const storeSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
   const preloadTypes = readFileSync(new URL('../../../preload/types.ts', import.meta.url), 'utf8')
   const pluginIpcSource = readFileSync(
@@ -706,10 +693,7 @@ test('settings backup and shortcut status APIs are exposed to the renderer', () 
 
 test('window transparency is gated on native support (Wayland fallback to opaque)', () => {
   const storeSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const mainTypes = readFileSync(new URL('../../../main/core/types.ts', import.meta.url), 'utf8')
   const rendererTypes = readFileSync(new URL('../types/settings.ts', import.meta.url), 'utf8')
   const sharedTypes = readFileSync(
@@ -757,10 +741,7 @@ test('settings page warns and disables transparency controls on unsupported plat
 
 test('playbar shape persists across settings layers and flips without an IPC round trip', () => {
   const storeSource = readFileSync(new URL('./useSettingsStore.ts', import.meta.url), 'utf8')
-  const mainSource = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSource = mainSettingsSource()
 
   // Main and renderer must start from the same normalized shape, or the first
   // frame after launch renders a different bar than the one that gets persisted.
@@ -772,8 +753,11 @@ test('playbar shape persists across settings layers and flips without an IPC rou
 
   // The optimistic branch: the shape has to change on the click frame, and the
   // patch still goes through normalization so a bad value cannot reach the DOM.
-  assert.match(storeSource, /Object\.prototype\.hasOwnProperty\.call\(patch, 'playerBar'\)/)
-  assert.match(storeSource, /playerBar: normalizePlayerBarSettings\(patch\.playerBar\)/)
+  assert.match(storeSource, /if \(patch.playerBar\)/)
+  assert.match(
+    storeSource,
+    /appearanceDraft.value.playerBar = normalizePlayerBarSettings\(patch\.playerBar\)/
+  )
 
   assert.match(
     readFileSync(new URL('../../../shared/appSettings.ts', import.meta.url), 'utf8'),
@@ -828,7 +812,11 @@ test('playbar settings UI exposes shape and visibility as independent dimensions
   // Auto-hide needs a shape with its own progress readout (mini's rail, compact's
   // top edge), so that one step is marked unavailable per scope instead of being
   // silently ineffective — and the precondition comes from the shared policy.
-  assert.match(source, /playerBarShapeCanAutoHide\(settings\.value\.playerBar\.mode\)/)
+  assert.match(
+    source,
+    /const playerBar = computed\(\(\) => props\.modelValue \?\? settings\.value\.playerBar\)/
+  )
+  assert.match(source, /playerBarShapeCanAutoHide\(playerBar\.value\.mode\)/)
   assert.match(
     source,
     /playerBarShapeCanAutoHide\(\s*bar\.playingPageMode === 'inherit' \? bar\.mode : bar\.playingPageMode\s*\)/
@@ -860,10 +848,7 @@ test('playbar control placement is editable per shape and written through the no
 
   // Which shape's arrangement is being edited is a local choice in the editor —
   // it must never write `mode`, or opening the panel would switch the live shape.
-  assert.match(
-    source,
-    /const editingShape = ref<PlayerBarMode>\(settings\.value\.playerBar\.mode\)/
-  )
+  assert.match(source, /const editingShape = ref<PlayerBarMode>\(playerBar\.value\.mode\)/)
   assert.match(source, /@click="editingShape = option\.value"/)
   // Three regions, from the shared region list rather than hand-written names.
   assert.match(source, /v-for="region in playerBarRegionOptions"/)
@@ -886,7 +871,7 @@ test('playbar control placement is editable per shape and written through the no
   // layout missing its play control is repaired before it reaches the bar, and
   // the region arrays are never shared with the previous settings object.
   assert.match(source, /layout: normalizePlayerBarLayout\(layout\)/)
-  assert.match(source, /clonePlayerBarLayout\(settings\.value\.playerBar\.layout\)/)
+  assert.match(source, /clonePlayerBarLayout\(playerBar\.value\.layout\)/)
   // Reset is per shape, and disabled once this shape already matches the default.
   assert.match(source, /DEFAULT_PLAYER_BAR_LAYOUT\[editingShape\.value\]/)
   assert.match(source, /:disabled="shapeIsDefault"/)
@@ -897,10 +882,7 @@ test('the download directory setting stays authorized from the picker to the dow
     new URL('../../../shared/appSettings.ts', import.meta.url),
     'utf8'
   )
-  const mainSettings = readFileSync(
-    new URL('../../../main/core/settings.ts', import.meta.url),
-    'utf8'
-  )
+  const mainSettings = mainSettingsSource()
   const localPaths = readFileSync(
     new URL('../../../main/security/localPaths.ts', import.meta.url),
     'utf8'
@@ -911,7 +893,7 @@ test('the download directory setting stays authorized from the picker to the dow
   )
   const pluginIpc = readFileSync(new URL('../../../main/ipc/plugins.ts', import.meta.url), 'utf8')
   const downloadManager = readFileSync(
-    new URL('../../../main/plugins/providerDownloadManager.ts', import.meta.url),
+    new URL('../../../core/downloads/providerDownloadManager.ts', import.meta.url),
     'utf8'
   )
   const preload = readFileSync(

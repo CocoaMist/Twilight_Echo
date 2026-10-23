@@ -5,11 +5,12 @@ import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
 import { LibrarySelectionService } from '../../../../main/library/librarySelectionService.ts'
 import { openLibrarySelectionLease } from './librarySelectionLease.ts'
 import { shallowRef } from 'vue'
-import { createPlaylistPageCommands } from './playlistPageCommands.ts'
+import { playlistRuntime } from '../coreTestFixtures.ts'
+import { createPlaylistPageCommands } from '../../../../core/playlists/pageCommands.ts'
 import { createLibraryPlaylistView } from './libraryPlaylistView.ts'
 import { externalEntryForTrack } from './externalPlaylistMembership.ts'
 import type { Playlist } from './musicStoreTypes.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
 import type {
   LibrarySelectionApi,
   LibrarySelectionBridgeApi,
@@ -62,6 +63,7 @@ function playlistCommands(input: Playlist[]) {
   const playlists = shallowRef(input)
   const writes: Playlist[][] = []
   const commands = createPlaylistPageCommands({
+    runtime: playlistRuntime(),
     playlists,
     trackById: new Map(),
     getTracksRevision: () => 0,

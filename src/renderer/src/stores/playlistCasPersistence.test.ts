@@ -1,207 +1,139 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Playlist } from './useMusicStore.ts'
-import { useMusicStore } from './useMusicStore.ts'
+import { nextTick } from 'vue'
+import { coreLibraryFixture } from './coreLibraryTestFixture.ts'
+import { createCoreMusicStore } from './library/coreMusicStore.ts'
+import type { Playlist } from '../../../shared/playlists.ts'
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T
+const clone = <T>(value: T): T => structuredClone(value)
+const base = (aggregate = false): Playlist[] => [
+  { id: 'favorite', name: 'Favorite', trackIds: [], isDefault: true, createdAt: '' },
+  {
+    id: 'shared',
+    name: 'Road Mix',
+    trackIds: ['local:one'],
+    createdAt: '',
+    ...(aggregate ? { kind: 'aggregate' as const } : {})
+  }
+]
+const tick = async () => {
+  await nextTick()
+  await new Promise<void>((resolve) => setImmediate(resolve))
 }
 
-test('a local action queued during CAS recovery preserves the merged authoritative state', async () => {
-  const store = useMusicStore()
-  const base: Playlist[] = [
-    {
-      id: 'pl-favorite',
-      name: 'Favorite',
-      trackIds: [],
-      isDefault: true,
-      createdAt: '2026-07-18T00:00:00.000Z'
-    },
-    {
-      id: 'pl-shared',
-      name: 'Road Mix',
-      trackIds: ['local:base'],
-      createdAt: '2026-07-18T00:00:00.000Z'
-    }
-  ]
-  const concurrent: Playlist[] = [
-    ...clone(base),
-    {
-      id: 'pl-remote',
-      name: 'Remote Only',
-      trackIds: ['remote:track'],
-      createdAt: '2026-07-18T00:01:00.000Z'
-    }
-  ]
-  let revision = 1
-  let authoritative = clone(base)
-  let saveCalls = 0
-  let releaseRecovery!: () => void
-  let signalRecoveryStarted!: () => void
-  const recoveryStarted = new Promise<void>((resolve) => {
-    signalRecoveryStarted = resolve
+test('Core CAS recovery keeps concurrent authoritative members and rejects a queued stale renderer edit without replay', async (t) => {
+  let revision = 1,
+    authoritative = base(),
+    saves = 0
+  let release!: () => void, started!: () => void
+  const hold = new Promise<void>((resolve) => {
+    release = resolve
   })
-  const recoveryGate = new Promise<void>((resolve) => {
-    releaseRecovery = resolve
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
   })
-
-  ;(globalThis as Record<string, unknown>).window = {
-    api: {
-      data: {
-        loadPlaylists: async () => ({
-          version: 2 as const,
-          revision,
-          savedAt: '',
-          data: clone(authoritative)
-        }),
-        savePlaylists: async (data: Playlist[], expectedRevision: number) => {
-          saveCalls += 1
-          if (saveCalls === 1) {
-            assert.equal(expectedRevision, 1)
-            revision = 2
-            authoritative = clone(concurrent)
-            throw Object.assign(new Error('playlist revision changed'), {
-              code: 'ERR_PERSISTENCE_REVISION_CONFLICT',
-              current: {
-                version: 2 as const,
-                revision,
-                savedAt: '',
-                data: clone(authoritative)
-              }
-            })
-          }
-          if (saveCalls === 2) {
-            assert.equal(expectedRevision, 2)
-            signalRecoveryStarted()
-            await recoveryGate
-          } else {
-            assert.equal(expectedRevision, 3)
-          }
-          revision += 1
-          authoritative = clone(data)
-          return {
-            version: 2 as const,
-            revision,
-            savedAt: '',
-            data: clone(authoritative)
-          }
+  const envelope = () => ({
+    version: 2 as const,
+    revision,
+    savedAt: '',
+    data: clone(authoritative)
+  })
+  const f = await coreLibraryFixture(t, {
+    repository: {
+      load: async () => envelope(),
+      save: async (data, expected) => {
+        saves++
+        assert.equal(expected, revision)
+        if (saves === 1) {
+          revision++
+          authoritative.push({
+            id: 'remote',
+            name: 'Remote Only',
+            trackIds: ['remote:track'],
+            createdAt: ''
+          })
+          throw Object.assign(new Error('playlist revision changed'), {
+            code: 'ERR_PERSISTENCE_REVISION_CONFLICT',
+            current: envelope()
+          })
         }
+        if (saves === 2) {
+          started()
+          await hold
+        }
+        authoritative = clone(data)
+        revision++
+        return envelope()
       }
     }
-  }
-
+  })
+  const store = createCoreMusicStore(f.core)
+  t.after(store.dispose)
   await store.loadPlaylists()
-  assert.equal(store.renamePlaylist('pl-shared', 'Road Renamed'), true)
-  const flushing = store.flushPlaylists()
-  await recoveryStarted
-
-  // This action is based on the optimistic local view while the conflict
-  // recovery write (which contains pl-remote) is still in flight.
-  assert.equal(store.setPlaylistCover('pl-shared', 'cover://second-local-action'), true)
-  releaseRecovery()
-  assert.equal(await flushing, true)
-
-  assert.equal(saveCalls, 3)
-  assert.ok(authoritative.some((playlist) => playlist.id === 'pl-remote'))
-  assert.deepEqual(
-    authoritative.find((playlist) => playlist.id === 'pl-shared'),
-    store.playlists.value.find((playlist) => playlist.id === 'pl-shared')
-  )
-  assert.equal(authoritative.find((playlist) => playlist.id === 'pl-shared')?.name, 'Road Renamed')
-  assert.equal(
-    authoritative.find((playlist) => playlist.id === 'pl-shared')?.cover,
-    'cover://second-local-action'
-  )
+  const rename = store.renamePlaylist('shared', 'Road Renamed')
+  await ready
+  const cover = store.setPlaylistCover('shared', 'cover://second-action')
+  const stale = assert.rejects(cover, { code: 'STALE_REVISION' })
+  release()
+  await rename
+  await stale
+  assert.equal(saves, 2)
+  assert.ok(store.playlists.value.some((playlist) => playlist.id === 'remote'))
   assert.equal(store.playlistPersistenceNotice.value?.kind, 'revision-conflict-recovered')
-  store.clearTracks()
+  await store.setPlaylistCover('shared', 'cover://second-action')
+  assert.equal(saves, 3)
+  assert.equal(authoritative.find((playlist) => playlist.id === 'shared')?.name, 'Road Renamed')
+  assert.equal(
+    authoritative.find((playlist) => playlist.id === 'shared')?.cover,
+    'cover://second-action'
+  )
+  assert.equal('trackIds' in store.playlists.value[0], false)
 })
 
-test('CAS recovery keeps the aggregate playlist fields a local transaction changed', async () => {
-  // replayPlaylistRecord 是字段白名单式的回放：kind / pinnedAt / hiddenSources /
-  // variantPreferences 少一条分支，置顶和音源隐藏就会在并发写时被静默抹掉。
-  const store = useMusicStore()
-  const base: Playlist[] = [
-    {
-      id: 'pl-favorite',
-      name: 'Favorite',
-      trackIds: [],
-      isDefault: true,
-      createdAt: '2026-08-20T00:00:00.000Z'
-    },
-    {
-      id: 'pl-aggregate',
-      name: '跨源精选',
-      trackIds: ['local:one'],
-      kind: 'aggregate',
-      createdAt: '2026-08-20T00:00:00.000Z'
-    }
-  ]
-  // 另一个窗口给同一个聚合歌单加了一首歌。
-  const concurrent = clone(base).map((playlist) =>
-    playlist.id === 'pl-aggregate'
-      ? { ...playlist, trackIds: [...playlist.trackIds, 'ncm:concurrent'] }
-      : playlist
-  )
-  let revision = 1
-  let authoritative = clone(base)
-  let saveCalls = 0
-
-  ;(globalThis as Record<string, unknown>).window = {
-    api: {
-      data: {
-        loadPlaylists: async () => ({
-          version: 2 as const,
-          revision,
-          savedAt: '',
-          data: clone(authoritative)
-        }),
-        savePlaylists: async (data: Playlist[], expectedRevision: number) => {
-          saveCalls += 1
-          if (saveCalls === 1) {
-            assert.equal(expectedRevision, 1)
-            revision = 2
-            authoritative = clone(concurrent)
-            throw Object.assign(new Error('playlist revision changed'), {
-              code: 'ERR_PERSISTENCE_REVISION_CONFLICT',
-              current: {
-                version: 2 as const,
-                revision,
-                savedAt: '',
-                data: clone(authoritative)
-              }
-            })
-          }
-          revision += 1
-          authoritative = clone(data)
-          return {
-            version: 2 as const,
-            revision,
-            savedAt: '',
-            data: clone(authoritative)
-          }
+test('Core CAS replay preserves aggregate fields and concurrent members while the renderer retains descriptors only', async (t) => {
+  let revision = 1,
+    authoritative = base(true),
+    saves = 0
+  const envelope = () => ({
+    version: 2 as const,
+    revision,
+    savedAt: '',
+    data: clone(authoritative)
+  })
+  const f = await coreLibraryFixture(t, {
+    repository: {
+      load: async () => envelope(),
+      save: async (data, expected) => {
+        assert.equal(expected, revision)
+        saves++
+        if (saves === 1) {
+          authoritative[1].trackIds.push('ncm:concurrent')
+          revision++
+          throw Object.assign(new Error('playlist revision changed'), {
+            code: 'ERR_PERSISTENCE_REVISION_CONFLICT',
+            current: envelope()
+          })
         }
+        authoritative = clone(data)
+        revision++
+        return envelope()
       }
     }
-  }
-
+  })
+  const store = createCoreMusicStore(f.core)
+  t.after(store.dispose)
   await store.loadPlaylists()
-  assert.equal(store.setPlaylistPinned('pl-aggregate', true), true)
-  assert.equal(store.setPlaylistHiddenSources('pl-aggregate', ['ncm']), true)
-  assert.equal(store.setPlaylistVariantPreference('pl-aggregate', 'local:one', 'ncm'), true)
-  const createdId = store.createAggregatePlaylist('本地新建的聚合歌单')
-
-  assert.equal(await store.flushPlaylists(), true)
-
-  const merged = authoritative.find((playlist) => playlist.id === 'pl-aggregate')
-  assert.ok(merged)
+  await store.setPlaylistPinned('shared', true)
+  await store.setPlaylistHiddenSources('shared', ['ncm'])
+  await store.setPlaylistVariantPreference('shared', 'local:one', 'ncm')
+  const createdId = await store.createAggregatePlaylist('New aggregate')
+  await tick()
+  const merged = authoritative.find((playlist) => playlist.id === 'shared')!
   assert.equal(merged.kind, 'aggregate')
-  assert.ok(merged.pinnedAt, 'pinnedAt survives the CAS replay')
+  assert.ok(merged.pinnedAt)
   assert.deepEqual(merged.hiddenSources, ['ncm'])
   assert.deepEqual(merged.variantPreferences, { 'local:one': 'ncm' })
-  // 并发窗口加进去的曲目不能被这次回放挤掉。
   assert.deepEqual(merged.trackIds, ['local:one', 'ncm:concurrent'])
-
-  const created = authoritative.find((playlist) => playlist.id === createdId)
-  assert.equal(created?.kind, 'aggregate')
-  store.clearTracks()
+  assert.equal(authoritative.find((playlist) => playlist.id === createdId)?.kind, 'aggregate')
+  assert.equal(store.playlists.value.find((playlist) => playlist.id === 'shared')?.count, 2)
 })

@@ -1,4 +1,4 @@
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
 
 const WINDOWS_ABSOLUTE_PATH_PATTERN = /^[a-zA-Z]:[\\/]/
 const URI_SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z0-9+.-]*:/

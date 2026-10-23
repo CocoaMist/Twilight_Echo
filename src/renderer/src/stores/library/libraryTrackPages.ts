@@ -1,10 +1,7 @@
+import type { CoreLibraryReadApi } from './coreLibraryApi.ts'
+import type { CoreLibraryPage as LibraryPage } from '../../../../shared/coreViews.ts'
 import { shallowRef } from 'vue'
-import {
-  LIBRARY_PAGE_SIZE,
-  type LibraryDatabaseApi,
-  type LibraryPage,
-  type LibraryQuery
-} from '../../../../shared/libraryDatabase.ts'
+import { LIBRARY_PAGE_SIZE, type LibraryQuery } from '../../../../shared/libraryDatabase.ts'
 import { LibraryPageCache } from './libraryPageCache.ts'
 
 export interface LibraryTrackPageState {
@@ -19,10 +16,7 @@ export interface LibraryTrackPageState {
 
 /** Explicit pages, never a replacement for useMusicStore.tracks. Fast navigation
  * retains only the latest demand; two old RPCs still count against the read bound. */
-export function createLibraryTrackPages(
-  api: Pick<LibraryDatabaseApi, 'queryTracks'>,
-  capacity?: number
-) {
+export function createLibraryTrackPages(api: CoreLibraryReadApi, capacity?: number) {
   const cache = new LibraryPageCache(api, capacity)
   // Explicit page navigation preserves selections; query/revision/retry does not.
   const selectionEpoch = shallowRef(0)

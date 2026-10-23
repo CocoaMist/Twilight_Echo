@@ -1,4 +1,6 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useCoreConnection } from './coreConnection.ts'
+import type { TwilightMediaProviderMethod } from '../../../shared/mediaProviderMethods.ts'
 import { toProviderIpcArgs } from '@renderer/providers/mediaProvider'
 import type {
   MediaProviderPlaylistSummary,
@@ -87,7 +89,7 @@ async function syncProviders(): Promise<void> {
     try {
       for (;;) {
         const revision = providerListRevision
-        const list = await window.api.providers.list()
+        const list = await useCoreConnection().query('providers.list', {})
         if (revision !== providerListRevision) continue
         providers.value = list.map((provider) => ({
           id: provider.id,
@@ -131,12 +133,16 @@ function stopProviderHealthPolling(): void {
 
 function ensurePluginChangeListener(): void {
   if (pluginChangeListenerSetup) return
-  if (typeof window === 'undefined' || !window.api?.plugins?.onChanged) return
   pluginChangeListenerSetup = true
-  window.api.plugins.onChanged(() => {
-    providerListRevision += 1
-    void syncProviders().catch(() => undefined)
-  })
+  const core = useCoreConnection()
+  watch(
+    [() => core.state.value?.epoch, () => core.state.value?.pluginsRevision, () => core.state.value?.phase],
+    () => {
+      providerListRevision += 1
+      if (core.state.value?.phase === 'ready') void syncProviders().catch(() => undefined)
+    },
+    { flush: 'sync' }
+  )
   // Poll provider health so the streaming UI's health badges reflect the
   // main-process diagnostics (success rates, recent errors, plugin status)
   // without waiting for a plugin lifecycle event.
@@ -148,11 +154,11 @@ async function callProvider<T>(
   method: string,
   args: unknown[] = []
 ): Promise<T> {
-  const result = (await window.api.providers.call(
+  const result = (await useCoreConnection().command('providers.call', {
     providerId,
-    method as never,
-    toProviderIpcArgs(args)
-  )) as T
+    method: method as TwilightMediaProviderMethod,
+    args: toProviderIpcArgs(args)
+  })) as T
   if (/^(?:logout|login|checkQrLogin)/.test(method)) window.dispatchEvent(new Event('twilight-provider-auth-changed'))
   return result
 }

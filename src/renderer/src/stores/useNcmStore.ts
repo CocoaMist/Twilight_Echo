@@ -1,5 +1,8 @@
 import { ref } from 'vue'
 import type { NcmCloudSelectedFile, NcmCloudTransferProgress } from '../../../shared/ncmCloud.ts'
+import type { NcmCloudUploadResult, NcmCloudDownloadResult } from '../../../shared/ncmCloud.ts'
+import { useCoreConnection } from './coreConnection.ts'
+import { createCoreCloudTransfers } from './coreCloudTransfers.ts'
 import type { Track } from '../types/music'
 import { syncPluginProviders, useMediaProviders } from '@renderer/providers'
 
@@ -152,8 +155,7 @@ const cloudLoading = ref(false)
 const cloudLoadingMore = ref(false)
 const cloudError = ref('')
 const cloudSelectedFiles = ref<NcmCloudSelectedFile[]>([])
-const cloudTransferTasks = ref<Record<string, NcmCloudTransferTask>>({})
-let cloudProgressUnsubscribe: (() => void) | null = null
+let cloudProjection: ReturnType<typeof createCoreCloudTransfers> | null = null
 let cloudStateRevision = 0
 let accountRevision = 0
 let loginRequestRevision = 0
@@ -170,7 +172,6 @@ export function captureNcmSession(): () => boolean {
     generation === registry.getGeneration(NCM_PROVIDER_ID)
 }
 let cloudRefreshTimer: ReturnType<typeof setTimeout> | null = null
-const retiredCloudTransferIds = new Set<string>()
 
 function scheduleCloudRefresh(): void {
   if (cloudRefreshTimer || !isLoggedIn.value) return
@@ -205,39 +206,27 @@ function scheduleCloudRefresh(): void {
 }
 
 function ensureCloudProgressListener(): void {
-  if (cloudProgressUnsubscribe) return
-  cloudProgressUnsubscribe = window.api.ncmCloud.onProgress((progress) => {
-    if (retiredCloudTransferIds.has(progress.transferId)) {
-      if (['completed', 'failed', 'cancelled'].includes(progress.stage)) {
-        retiredCloudTransferIds.delete(progress.transferId)
-      }
-      return
-    }
-    cloudTransferTasks.value = {
-      ...cloudTransferTasks.value,
-      [progress.transferId]: progress
-    }
-    if (progress.kind === 'upload' && progress.stage === 'completed') {
+  if (cloudProjection) return
+  const core = useCoreConnection()
+  cloudProjection = createCoreCloudTransfers({
+    state: core.state,
+    page: (revision, offset, signal) =>
+      core.query('ncm.cloud.page', { revision, offset, limit: 200 }, signal),
+    completed(progress) {
+      if (progress.kind !== 'upload') return
       cloudSelectedFiles.value = cloudSelectedFiles.value.filter(
         (file) => file.handle !== progress.handle
       )
       scheduleCloudRefresh()
+    },
+    failed: (error) => {
+      cloudError.value = error instanceof Error ? error.message : String(error)
     }
   })
 }
 
 function resetCloudState(): void {
   cloudStateRevision += 1
-  for (const task of Object.values(cloudTransferTasks.value)) {
-    if (['completed', 'failed', 'cancelled'].includes(task.stage)) continue
-    retiredCloudTransferIds.add(task.transferId)
-    void window.api.ncmCloud
-      .cancel(task.transferId)
-      .then((cancelled) => {
-        if (!cancelled) retiredCloudTransferIds.delete(task.transferId)
-      })
-      .catch(() => retiredCloudTransferIds.delete(task.transferId))
-  }
   if (cloudRefreshTimer) {
     clearTimeout(cloudRefreshTimer)
     cloudRefreshTimer = null
@@ -250,7 +239,6 @@ function resetCloudState(): void {
   cloudLoadingMore.value = false
   cloudError.value = ''
   cloudSelectedFiles.value = []
-  cloudTransferTasks.value = {}
 }
 
 function resetLibraryState(): void {
@@ -506,7 +494,10 @@ export function useNcmStore() {
   async function chooseCloudUploadFiles(): Promise<NcmCloudSelectedFile[]> {
     if (!isLoggedIn.value) throw new Error('请先登录网易云音乐')
     const isCurrent = captureNcmSession()
-    const files = await window.api.ncmCloud.chooseUploadFiles()
+    const files = (await useCoreConnection().command(
+      'ncm.cloud.chooseUploadFiles',
+      {}
+    )) as NcmCloudSelectedFile[]
     if (!isCurrent()) return []
     const existing = new Set(cloudSelectedFiles.value.map((file) => file.handle))
     cloudSelectedFiles.value = [
@@ -519,27 +510,29 @@ export function useNcmStore() {
   async function uploadCloudFile(handle: string): Promise<string> {
     if (!isLoggedIn.value) throw new Error('请先登录网易云音乐')
     ensureCloudProgressListener()
-    const result = await window.api.ncmCloud.upload(handle)
+    const result = (await useCoreConnection().command('ncm.cloud.upload', {
+      handle
+    })) as NcmCloudUploadResult
     return result.transferId
   }
 
   async function downloadCloudSong(song: NcmCloudSong): Promise<string | null> {
     if (!isLoggedIn.value) throw new Error('请先登录网易云音乐')
     ensureCloudProgressListener()
-    const result = await window.api.ncmCloud.download({
+    const result = (await useCoreConnection().command('ncm.cloud.download', {
       cloudSongId: song.cloudSongId,
       fileName:
         song.fileName || song.track.fileName || `${song.track.title}.${song.track.format || 'mp3'}`
-    })
+    })) as NcmCloudDownloadResult
     return result.accepted ? result.transferId : null
   }
 
   async function cancelCloudTransfer(transferId: string): Promise<boolean> {
-    return window.api.ncmCloud.cancel(transferId)
+    return useCoreConnection().command('ncm.cloud.cancel', { id: transferId }) as Promise<boolean>
   }
 
   function removeCloudSelectedFile(handle: string): void {
-    const active = Object.values(cloudTransferTasks.value).some(
+    const active = Object.values(cloudProjection!.tasks.value).some(
       (task) => task.handle === handle && !['completed', 'failed', 'cancelled'].includes(task.stage)
     )
     if (!active) {
@@ -821,7 +814,7 @@ export function useNcmStore() {
     cloudLoadingMore,
     cloudError,
     cloudSelectedFiles,
-    cloudTransferTasks,
+    cloudTransferTasks: cloudProjection!.tasks,
     buildProfile,
     checkLogin,
     setLogin,
@@ -877,3 +870,5 @@ export function useNcmStore() {
     removeTracksFromPlaylist
   }
 }
+
+if (import.meta.hot) import.meta.hot.dispose(() => cloudProjection?.dispose())

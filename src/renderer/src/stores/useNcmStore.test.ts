@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { syncPluginProviders, useMediaProviders } from '../providers/index.ts'
 import { useNcmStore, type NcmProfile } from './useNcmStore.ts'
+import { useCoreConnection } from './coreConnection.ts'
+import type { CoreBridgeApi, CoreBridgeMessage } from '../../../shared/coreBridge.ts'
+import type { CoreSnapshot } from '../../../shared/coreProtocol.ts'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -18,28 +21,64 @@ let chooseFiles: () => Promise<unknown[]> = async () => []
 const provider = { id: 'ncm', name: 'Test NCM', capabilities: [], supportedMethods: [] }
 let listProviders = async () => [provider]
 const pluginChangeListeners = new Set<() => void>()
+const messages = new Set<(event: CoreBridgeMessage) => void>()
+let sequence = 0
+const snapshot = () =>
+  ({
+    protocolVersion: 1,
+    epoch: 'core',
+    phase: 'ready',
+    sequence,
+    pluginsRevision: sequence,
+    cloudTransfers: { revision: 0, total: 0, active: 0 }
+  }) as CoreSnapshot
+const coreApi: CoreBridgeApi = {
+  connect: async () => ({ ok: true, value: { connectionId: 'window', snapshot: snapshot() } }),
+  request: async (_id, request) => {
+    let value: unknown
+    switch (request.name) {
+      case 'providers.list':
+        value = await listProviders()
+        break
+      case 'providers.call':
+        value = await handler(request.payload.method)
+        break
+      case 'ncm.cloud.chooseUploadFiles':
+        value = await chooseFiles()
+        break
+      case 'ncm.cloud.page':
+        value = { revision: 0, total: 0, active: 0, offset: 0, items: [] }
+        break
+    }
+    return { ok: true, value }
+  },
+  cancel: async () => ({ ok: true, value: undefined }),
+  disconnect: async () => ({ ok: true, value: undefined }),
+  onMessage: (listener) => {
+    messages.add(listener)
+    return () => {
+      messages.delete(listener)
+    }
+  },
+  onStatus: () => () => {}
+}
+pluginChangeListeners.add(() => {
+  sequence++
+  for (const listener of messages)
+    listener({
+      connectionId: 'window',
+      message: { kind: 'state', epoch: 'core', sequence, snapshot: snapshot() }
+    })
+})
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
   value: {
     api: {
-      plugins: {
-        onChanged: (listener: () => void) => {
-          pluginChangeListeners.add(listener)
-          return () => pluginChangeListeners.delete(listener)
-        }
-      },
-      providers: {
-        list: () => listProviders(),
-        call: async (_id: string, method: string) => handler(method)
-      },
-      ncmCloud: {
-        onProgress: () => () => {},
-        cancel: async () => true,
-        chooseUploadFiles: () => chooseFiles()
-      }
+      core: coreApi
     }
   }
 })
+await useCoreConnection().attach()
 await syncPluginProviders()
 const store = useNcmStore()
 const account = (userId: number): NcmProfile => ({
@@ -146,10 +185,12 @@ test('an enabled provider can recover from failed startup health without a plugi
 test('provider registration clears stale disabled UI even when login checking fails', async () => {
   await syncPluginProviders()
   listProviders = async () => []
+  for (const listener of pluginChangeListeners) listener()
   try {
     assert.equal(await store.checkLogin(), false)
     assert.equal(store.providerAvailable.value, false)
     listProviders = async () => [provider]
+    for (const listener of pluginChangeListeners) listener()
     handler = async () => {
       throw new Error('temporary login gateway failure')
     }
@@ -204,6 +245,7 @@ test('plugin changes update routes automatically and keep a disabled provider bl
   await syncPluginProviders()
   assert.equal(pluginChangeListeners.size, 1)
   listProviders = async () => []
+  for (const listener of pluginChangeListeners) listener()
   try {
     for (const listener of pluginChangeListeners) listener()
     await new Promise<void>((done) => setImmediate(done))

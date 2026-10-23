@@ -1,41 +1,31 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { LibraryDatabase } from '../../../../main/library/libraryDatabase.ts'
-import type { Track } from '../../types/music.ts'
-import { searchUnifiedLocalPage } from '../../utils/unifiedSearchSources.ts'
+import type { TrackData as Track } from '../../../../shared/track.ts'
+import { createLogicalTrackModel } from '../../../../shared/logicalTrackModel.ts'
+import { createUnifiedSearchSources } from '../../../../shared/musicSearchSources.ts'
 import { versionSourceKey } from '../../../../shared/trackSourceIdentity.ts'
-import { getMusicVersions, loadMusicVersions, saveMusicVersions } from '../musicVersions.ts'
-import { emptyMusicVersions } from '../../utils/musicVersions.ts'
-import { libraryTrack } from '../../utils/libraryQueuePlayback.ts'
+import type { RecordingVersion } from '../../../../shared/recordingIdentity.ts'
+import { libraryTrack } from '../../../../core/playback/libraryTrack.ts'
+
+let preferredVersions = new Map<string, RecordingVersion>(),
+  preferenceRevision = 0
+const identity = createLogicalTrackModel((key) => preferredVersions.get(key))
+const { searchUnifiedLocalPage } = createUnifiedSearchSources(identity, () => preferenceRevision)
 
 function preferences(t: TestContext, selected: Track[]) {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage'),
-    values = new Map<string, string>()
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => {
-        values.set(key, value)
-      }
-    }
-  })
-  loadMusicVersions()
   t.after(() => {
-    values.clear()
-    loadMusicVersions()
-    if (previous) Object.defineProperty(globalThis, 'localStorage', previous)
-    else Reflect.deleteProperty(globalThis, 'localStorage')
+    preferredVersions = new Map()
+    preferenceRevision++
   })
   function set(tracks: Track[]) {
-    const document = emptyMusicVersions()
-    document.tracks.versions = tracks.map((track, i) => ({
-      id: String(i),
-      label: '',
-      sources: [versionSourceKey(track)],
-      preferredSource: versionSourceKey(track)
-    }))
-    saveMusicVersions(document, getMusicVersions())
+    preferredVersions = new Map(
+      tracks.map((track, i) => {
+        const key = versionSourceKey(track)
+        return [key, { id: String(i), sources: [key], preferredSource: key }]
+      })
+    )
+    preferenceRevision++
   }
   set(selected)
   return set

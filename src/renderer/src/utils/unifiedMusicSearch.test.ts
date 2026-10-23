@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Track } from '../types/music'
+import type { TrackData as Track } from '../../../shared/track.ts'
+import { createLogicalTrackModel } from '../../../shared/logicalTrackModel.ts'
+import { createUnifiedSearchSources } from '../../../shared/musicSearchSources.ts'
+import { createUnifiedMusicSearch } from '../../../shared/unifiedMusicSearch.ts'
 
-const { buildLogicalMusicItems, unifiedSearchSongs } = (await import(
-  new URL('./unifiedMusicSearch.ts', import.meta.url).href
-)) as typeof import('./unifiedMusicSearch')
+const identity = createLogicalTrackModel(() => undefined)
+const sources = createUnifiedSearchSources(identity, () => 0)
+const { buildLogicalMusicItems, unifiedSearchSongs } = createUnifiedMusicSearch(identity, sources)
 
 function track(overrides: Partial<Track> & Pick<Track, 'id' | 'title' | 'artist'>): Track {
   return {
