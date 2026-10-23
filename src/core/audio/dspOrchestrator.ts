@@ -37,6 +37,7 @@ import {
   audioProcessingSettingsEqual,
   isVst3ScanDescriptor,
   normalizeAudioProcessingSettings,
+  normalizeInitialAudioProcessingSettings,
   parseDspGraphStatusOrThrow,
   parseNativeJson,
   resolveProcessingMasterState,
@@ -114,7 +115,7 @@ export class DspOrchestrator {
     this.dspAssetPathResolver = dependencies.dspAssetPathResolver
     this.vst3ModuleResolver = dependencies.vst3ModuleResolver
     this.vst3StateAssetResolver = dependencies.vst3StateAssetResolver
-    const normalizedProcessing = normalizeAudioProcessingSettings(config.audioProcessing)
+    const normalizedProcessing = normalizeInitialAudioProcessingSettings(config.audioProcessing)
     const hasExplicitMasterSwitch =
       typeof config.audioProcessing?.dspEnabled === 'boolean' ||
       typeof config.audioProcessing?.directMode === 'boolean'
@@ -135,13 +136,8 @@ export class DspOrchestrator {
     // Pre-direct-mode settings did not always persist the master switch. Keep
     // those legacy module/scene configurations active, while an explicit false
     // remains an authoritative request to bypass every processing node. An
-    // enabled processing module (for example EQ) also implies the graph must
-    // run, so a stale persisted directMode never silently bypasses it.
-    const { dspEnabled, directMode } = resolveProcessingMasterState(
-      normalizedProcessing,
-      undefined,
-      normalizedProcessing.directMode
-    )
+    // enabled master also wins over a stale persisted directMode.
+    const { dspEnabled, directMode } = normalizedProcessing
     this.processing = {
       ...normalizedProcessing,
       dspEnabled: dspEnabled || (hasConfiguredProcessing && !hasExplicitMasterSwitch),

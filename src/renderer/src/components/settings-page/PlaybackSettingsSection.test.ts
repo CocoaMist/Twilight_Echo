@@ -113,11 +113,17 @@ test('production AutoMix modes, stem installation and playback policy survive se
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
-    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
-      windowsHide: true,
-      timeout: 60_000,
-      env
-    })
+    const result = await promisify(execFile)(
+      require('electron'),
+      // Electron 43.7 crashes at sandbox startup on some Windows builds; the
+      // project's other Electron runners already disable it for this reason.
+      ['--no-sandbox', join(directory, 'runner.cjs')],
+      {
+        windowsHide: true,
+        timeout: 60_000,
+        env
+      }
+    )
     assert.match(result.stdout, /PLAYBACK_POLICY_OK/)
     console.log(result.stdout.trim())
   } finally {
@@ -131,6 +137,7 @@ const policyState = `
 import {ref,watch} from 'vue'
 import {defineStore} from 'pinia'
 import {normalizeOutputConfig} from '@shared/audioOutputConfig.ts'
+import {DEFAULT_DSP_OUTPUT_STAGE} from '@shared/dspGraph.ts'
 import {DEFAULT_AUDIO_PROCESSING} from '@core/audio/audioEngineHelpers.ts'
 export const persisted=ref(normalizeOutputConfig({pcmToDsdMode:'dsd128',dsdMutePreRollFrames:1024}))
 export const engine=ref({...persisted.value})
@@ -143,7 +150,7 @@ const audioProcessing=ref(structuredClone(DEFAULT_AUDIO_PROCESSING))
 const exclusiveMode=ref(false)
 const audioOutputConfigApplyStatus=ref({state:'idle',requestedRevision:0,appliedRevision:0,failedRevision:0,error:''})
 const controller={setAudioOutputConfig:async patch=>{engine.value=normalizeOutputConfig({...audioOutputConfig.value,...patch});persisted.value={...engine.value};audioOutputConfig.value={...engine.value};appSettings.value={...appSettings.value,audioOutputConfig:{...engine.value}}},setAudioProcessing:async patch=>{audioProcessing.value={...audioProcessing.value,...patch}},toggleExclusiveMode:async()=>{},setAudioOutput:async()=>{},setAudioDevice:async()=>{},toggleGapless:async()=>{}}
-export const useAudioOutputDspStore=defineStore('policy-output',()=>({exclusiveMode,audioOutput:ref('wasapi'),audioDevice:ref('auto'),audioOutputOptions:ref([]),audioDeviceOptions:ref([]),audioOutputDeviceOptions:ref([]),audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,playbackInfo:ref(null),outputInfo:ref(null),audioEngineError:ref(null),...controller,refreshAudioOutputState:async()=>{}}))
+export const useAudioOutputDspStore=defineStore('policy-output',()=>({exclusiveMode,audioOutput:ref('wasapi'),audioDevice:ref('auto'),audioOutputOptions:ref([]),audioDeviceOptions:ref([]),audioOutputDeviceOptions:ref([]),audioProcessing,audioOutputConfig,audioOutputConfigApplyStatus,dspOutputStage:ref(structuredClone(DEFAULT_DSP_OUTPUT_STAGE)),dspGraphStatus:ref(null),playbackInfo:ref(null),outputInfo:ref(null),audioEngineError:ref(null),...controller,refreshAudioOutputState:async()=>{}}))
 export const useSettingsStore=()=>({settings:appSettings,updateSettings:async patch=>{if(rejectSettings.value)throw Error('settings failure');appSettings.value={...appSettings.value,...patch}}})
 export const usePlayerStore=()=>({volume:ref(.7),setVolume:()=>{},setUnityVolume:()=>{}})
 export const useCoreConnection=()=>({query:(...args)=>window.policyCore.query(...args),command:(...args)=>window.policyCore.command(...args)})

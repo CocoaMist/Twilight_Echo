@@ -137,6 +137,7 @@ const {
   audioProcessing,
   audioOutputConfig,
   dspOutputStage,
+  dspGraphStatus,
   dspStereoImage,
   playbackInfo,
   isCurrentTrackNativePlaybackInfo,
@@ -1143,9 +1144,7 @@ const outputLatencyText = computed(() => {
 })
 const outputDiagnosticsText = computed(() => {
   const diagnostics = outputInfo.value?.diagnostics ?? playbackInfo.value?.diagnostics
-  const stage =
-    outputInfo.value?.nativeDsp?.graph?.outputStage ??
-    playbackInfo.value?.outputInfo?.nativeDsp?.graph?.outputStage
+  const stage = dspGraphStatus.value?.outputStage
   const src = describeResampler(
     stage?.resamplerQuality ?? dspOutputStage.value.resamplerQuality,
     stage
@@ -2122,10 +2121,7 @@ onBeforeUnmount(() => {
             :audio-processing="audioProcessing"
             :audio-output-config="audioOutputConfig"
             :dsp-output-stage="dspOutputStage"
-            :dsp-output-stage-status="
-              outputInfo?.nativeDsp?.graph?.outputStage ??
-              playbackInfo?.outputInfo?.nativeDsp?.graph?.outputStage
-            "
+            :dsp-output-stage-status="dspGraphStatus?.outputStage"
             :dsp-stereo-image="dspStereoImage"
             :dsp-active="playbackInfo?.dspActive === true"
             :actual-sample-rate="

@@ -28,7 +28,6 @@ const resamplerLabels: Record<string, [string, string]> = {
   soxrHq: ['SoX HQ', 'libsoxr · 需运行时验证'],
   soxrVhq: ['SoX VHQ', '最高品质 · 需运行时验证']
 }
-}
 const ditherLabels: Record<string, [string, string]> = {
   off: ['关闭', '推荐'],
   tpdf: ['TPDF', '三角分布'],

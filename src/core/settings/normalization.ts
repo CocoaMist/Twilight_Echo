@@ -30,7 +30,8 @@ import {
 import {
   DEFAULT_AUDIO_PROCESSING,
   normalizeAudioOutput,
-  normalizeAudioProcessingSettings
+  normalizeAudioProcessingSettings,
+  normalizeInitialAudioProcessingSettings
 } from '../audio/audioEngineHelpers.ts'
 import {
   DEFAULT_HEADPHONE_COMPENSATION,
@@ -635,7 +636,7 @@ export function normalizeAppSettings(
 ): AppSettings {
   const rawSettings = settings as Record<string, unknown>
   const deviceProfiles = normalizeAudioDeviceProfileSettings(settings.audioDeviceProfiles)
-  const audioProcessing = normalizeAudioProcessingSettings(settings.audioProcessing)
+  const audioProcessing = normalizeInitialAudioProcessingSettings(settings.audioProcessing)
   const dspScenes = normalizeDspScenes(settings.dspScenes, audioProcessing)
   const rawCachePath =
     typeof settings.cachePath === 'string' && settings.cachePath.trim()

@@ -364,6 +364,34 @@ window.runWorkbenchCases = async () => {
   active.value = true
   await tick()
   await click('输出')
+  document.querySelector('[aria-label="重采样质量"] input[value="soxrVhq"]').click()
+  await tick()
+  const resamplerNotice = () =>
+    document.querySelector('.output-stage-panel .notice')?.textContent ?? ''
+  check(
+    resamplerNotice().includes('实际 SRC 未验证'),
+    'a saved SoX choice claimed effective SRC without evidence'
+  )
+  resamplerObservation = {
+    effectiveResampler: 'swr',
+    effectiveResamplerQuality: 'ultra',
+    effectiveResamplerFallback: true,
+    resampled: true
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1800))
+  await tick()
+  check(
+    resamplerNotice().includes('实际 SWR Ultra'),
+    'observed SoX fallback is missing from the output panel'
+  )
+  resamplerObservation = { effectiveResampler: 'none', resampled: false }
+  await new Promise((resolve) => setTimeout(resolve, 1800))
+  await tick()
+  check(
+    resamplerNotice().includes('本引擎未重采样'),
+    'an equal-rate path claimed an active resampler'
+  )
+  resamplerObservation = {}
   const savedRate = state.scenes.find((scene) => scene.id === 'speakers').graph.outputStage
     .targetSampleRate
   const rateChoice = document.querySelector('[aria-label="输出采样率"] input[value="96000"]')

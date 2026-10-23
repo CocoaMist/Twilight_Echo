@@ -24,6 +24,7 @@ export const useAudioOutputDspStore = defineStore('audio-output-dsp', () => {
     audioOutputConfig: player.audioOutputConfig,
     audioOutputConfigApplyStatus: player.audioOutputConfigApplyStatus,
     dspOutputStage: player.dspOutputStage,
+    dspGraphStatus: player.dspGraphStatus,
     dspStereoImage: player.dspStereoImage,
     playbackInfo: player.playbackInfo,
     outputInfo: player.outputInfo,

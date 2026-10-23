@@ -76,6 +76,7 @@ const {
   audioOutputDeviceOptions,
   audioProcessing,
   dspOutputStage,
+  dspGraphStatus,
   audioOutputConfig,
   audioOutputConfigApplyStatus,
   playbackInfo,
@@ -391,9 +392,7 @@ const outputLatencyText = computed(() => {
 
 const outputDiagnosticsText = computed(() => {
   const diagnostics = outputInfo.value?.diagnostics ?? playbackInfo.value?.diagnostics
-  const stage =
-    outputInfo.value?.nativeDsp?.graph?.outputStage ??
-    playbackInfo.value?.outputInfo?.nativeDsp?.graph?.outputStage
+  const stage = dspGraphStatus.value?.outputStage
   const src = describeResampler(dspOutputStage.value.resamplerQuality, stage)
   if (!diagnostics) return `Underrun 0 · Drop 0 · ${src}`
   return `Underrun ${diagnostics.sessionUnderrunCount} · Drop ${diagnostics.sessionBufferDropCount} · ${src}`
