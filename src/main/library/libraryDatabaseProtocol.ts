@@ -1,13 +1,23 @@
 import type {
   LocalMusicLibraryDocument,
   LocalLibraryRemovalMode,
-  LocalLibraryTrackSelection,
-  LocalLibraryMutationFailure
+  LocalLibraryTrackSelection
 } from '../../shared/localLibrary.ts'
 import type { LocalLibraryFileIdentity } from '../../shared/localLibraryScan.ts'
 import type { LibraryPlaybackQueueReference } from '../../shared/playbackSession.ts'
 import type { DuplicateCandidate } from '../../shared/duplicateDetection.ts'
 import type { LibrarySelectionApi } from '../../shared/librarySelection.ts'
+import type { CoreStateApi } from '../../shared/coreState.ts'
+import type { CoreInboxDatabase } from '../../shared/coreInbox.ts'
+import type { CoreVersionsApi } from '../../shared/coreVersions.ts'
+import type { CoreStatisticsApi } from '../../shared/coreStatistics.ts'
+import type { CorePersonalRestoreApi } from '../../shared/coreBackup.ts'
+import type { CoreQueueImportApi } from '../../shared/coreQueueImport.ts'
+import type { CoreQueueRestoreApi } from '../../shared/coreQueueRestore.ts'
+import type { CoreQueueExtensionApi } from '../../shared/corePersonalized.ts'
+import type { CoreHeartQueueApi } from '../../shared/coreHeart.ts'
+import type { CoreSourceRecoveryApi } from '../../shared/coreSourceRecovery.ts'
+import type { CatalogDatabaseApi } from '../../shared/musicCatalog.ts'
 import type {
   LibraryDatabaseApi,
   LibraryMetadata,
@@ -32,26 +42,15 @@ export interface PersonalLibraryPreview {
   conflicts: number
   revision: number
 }
-export interface LibraryRemovalItem {
-  selection: LocalLibraryTrackSelection
-  state: 'pending' | 'working' | 'succeeded' | 'failed'
-  identity?: { size: string; mtimeNs: string; device: string; inode: string }
-  removedTrackIds: string[]
-  error?: string
-}
-export interface LibraryRemovalOperation {
-  id: string
-  mode: LocalLibraryRemovalMode
-  items: LibraryRemovalItem[]
-}
-export interface LibraryRemovalResult {
-  id: string
-  mode: LocalLibraryRemovalMode
-  metadata: LibraryMetadata
-  removedTrackIds: string[]
-  removedFilePaths: string[]
-  failures: LocalLibraryMutationFailure[]
-}
+import type {
+  LibraryRemovalOperation,
+  LibraryRemovalResult
+} from '../../shared/coreLibraryMaintenance.ts'
+export type {
+  LibraryRemovalItem,
+  LibraryRemovalOperation,
+  LibraryRemovalResult
+} from '../../shared/coreLibraryMaintenance.ts'
 export interface LibraryDuplicateCandidatePage {
   items: DuplicateCandidate[]
   revision: number
@@ -59,7 +58,22 @@ export interface LibraryDuplicateCandidatePage {
   nextCursor: number | null
 }
 export interface LibraryDatabaseWorkerApi
-  extends LibraryDatabaseApi, LibraryScanDatabaseApi, LibrarySelectionApi {
+  extends
+    LibraryDatabaseApi,
+    LibraryScanDatabaseApi,
+    LibrarySelectionApi,
+    CoreStateApi,
+    CoreInboxDatabase,
+    CoreVersionsApi,
+    CoreStatisticsApi,
+    CorePersonalRestoreApi,
+    CoreQueueImportApi,
+    CoreQueueRestoreApi,
+    CoreQueueExtensionApi,
+    CoreHeartQueueApi,
+    CoreSourceRecoveryApi,
+    CatalogDatabaseApi {
+  insertCorePlaybackQueue(id: string, revision: number, edit: Extract<import('../../shared/libraryDatabase.ts').LibraryQueueEdit, { kind: 'insert' }>): Promise<import('../../shared/libraryDatabase.ts').LibraryQueueEditResult>
   /** Current and SQL-selected successor, read together without exporting metadata or holes. */
   readLibraryQueuePlaybackWindow(
     id: string,
@@ -98,13 +112,14 @@ export interface LibraryDatabaseWorkerApi
     libraryRevision: number
   }>
   setLibraryRoots(folders: string[]): Promise<LibraryMetadata>
-  resetLibrary(): Promise<{
+  resetLibrary(expectedRevision?: number): Promise<{
     metadata: LibraryMetadata
     removedTrackIds: string[]
     removedFilePaths: string[]
   }>
   clearFileExclusions(
-    filePaths: string[]
+    filePaths: string[],
+    expectedRevision?: number
   ): Promise<{ metadata: LibraryMetadata; clearedFilePaths: string[] }>
   beginRemoval(
     id: string,
@@ -162,6 +177,24 @@ export interface LibraryDatabaseWorkerApi
 }
 export type DatabaseMethod = keyof LibraryDatabaseWorkerApi
 export const DATABASE_METHODS = new Set<DatabaseMethod>([
+  'catalogStatus', 'catalogAdvance', 'catalogQuery', 'catalogDetail', 'catalogSources',
+  'catalogSync', 'catalogProjectVersions', 'catalogResolve',
+  'corePersonalRestore',
+  'coreStateOpen',
+  'coreStateStatus',
+  'coreStateRead',
+  'coreStateWrite',
+  'coreVersionsReplace',
+  'coreInboxWrite',
+  'coreStatisticsStatus',
+  'coreStatisticsBegin',
+  'coreStatisticsStage',
+  'coreStatisticsCommit',
+  'coreStatisticsAbort',
+  'coreMigrationBegin',
+  'coreMigrationStage',
+  'coreMigrationCommit',
+  'coreMigrationAbort',
   'createTrackSelection',
   'readTrackSelection',
   'closeTrackSelection',
@@ -188,6 +221,12 @@ export const DATABASE_METHODS = new Set<DatabaseMethod>([
   'patchTracks',
   'createLibraryQueue',
   'buildLibraryQueue',
+  'importLegacyPlaybackQueue',
+  'restoreNamedPlaybackQueue',
+  'extendPlaybackQueue',
+  'insertCorePlaybackQueue',
+  'restoreHeartBaseQueue',
+  'replacePlaybackQueueSource',
   'readLibraryQueue',
   'readLibraryQueueNeighbor',
   'readLibraryQueuePlaybackWindow',
@@ -222,12 +261,13 @@ export const DATABASE_METHODS = new Set<DatabaseMethod>([
   'updateConfiguration'
 ])
 export type LibraryDatabaseWorkerRequest =
-  | { kind: 'open'; libraryFilePath: string; coverCacheDir?: string }
+  | { kind: 'open'; libraryFilePath?: string; coreStateFilePath?: string; coverCacheDir?: string }
   | { kind: 'call'; requestId: string; method: DatabaseMethod; args: unknown[] }
   | { kind: 'close'; requestId: string }
 export type LibraryDatabaseWorkerMessage =
+  | { kind: 'library-changed'; revision: number }
   | { kind: 'ready' }
   | { kind: 'opened' }
   | { kind: 'open-error'; error: string }
   | { kind: 'response'; requestId: string; ok: true; value: unknown }
-  | { kind: 'response'; requestId: string; ok: false; error: string }
+  | { kind: 'response'; requestId: string; ok: false; error: string; errorCode?: string }

@@ -1,3 +1,4 @@
+import { LEGACY_QUEUE_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, readdirSync } from 'node:fs'
 import fsPromises from 'node:fs/promises'
@@ -467,7 +468,8 @@ test('schema v1 upgrades only after a consistent snapshot including committed WA
     tracks: [{ id: 'wal', filePath: join(root, 'one.flac') }]
   })
   original.sql.exec(
-    `DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX tracks_recording; DROP INDEX tracks_playlist_path; DROP INDEX tracks_playlist_suffix;
+    LEGACY_QUEUE_SCHEMA_SQL +
+      `DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX tracks_recording; DROP INDEX tracks_playlist_path; DROP INDEX tracks_playlist_suffix;
     ALTER TABLE tracks DROP COLUMN playlist_path; ALTER TABLE tracks DROP COLUMN playlist_path_reverse;
     ALTER TABLE scan_jobs DROP COLUMN parsed_files; ALTER TABLE files DROP COLUMN audio_metadata;
     DROP INDEX queue_entries_original; ALTER TABLE queue_entries DROP COLUMN original_position;
@@ -477,7 +479,7 @@ test('schema v1 upgrades only after a consistent snapshot including committed WA
   // Leave this writer open so the upgrade must read committed WAL pages.
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
     assert.equal(upgraded.getTracksByIds(['wal']).tracks[0].id, 'wal')
     const names = readdirSync(root).filter((name) => name.includes('.v1-backup-'))
     assert.equal(names.length, 1)

@@ -115,7 +115,7 @@ test('local library scan persists ReplayGain and R128 tags onto Track records', 
 })
 
 test('local library scan decodes sibling lyrics with the shared multi-encoding decoder', () => {
-  const source = readFileSync(new URL('../lyrics/loadLyrics.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../../core/lyrics/loadLyrics.ts', import.meta.url), 'utf8')
 
   assert.match(source, /decodeLyrics\(bytes\)\.text/)
   assert.doesNotMatch(source, /readFile\(lrcPath,\s*['"]utf-?8['"]\)/)

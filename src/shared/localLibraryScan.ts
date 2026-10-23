@@ -157,6 +157,7 @@ export interface LocalLibraryScanUpdate {
 }
 
 export type LocalLibraryScanWorkerRequest =
+  | { kind: 'cache-suspend' | 'cache-resume'; requestId: string }
   | { kind: 'scan-repair'; requestId: string; root: string; coverCacheDir: string }
   | { kind: 'repair-ack'; requestId: string; sequence: number; error?: string }
   | { kind: 'scan-database'; requestId: string; coverCacheDir: string; forceParse: boolean }
@@ -172,6 +173,7 @@ export type LocalLibraryScanWorkerRequest =
   | { kind: 'cancel'; requestId: string }
 
 export type LocalLibraryScanWorkerMessage =
+  | { kind: 'cache-ready'; requestId: string; state: 'suspended' | 'running' }
   | { kind: 'repair-call'; requestId: string; sequence: number; call: RepairScanCall }
   | { kind: 'repair-result'; requestId: string; error?: string }
   | { kind: 'database-call'; requestId: string; callId: number; call: LibraryScanDatabaseCall }

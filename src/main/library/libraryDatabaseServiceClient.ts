@@ -34,8 +34,12 @@ export interface DatabaseUtilityProcess {
   on(event: 'error', listener: (error: unknown) => void): void
 }
 export interface DatabaseServiceOptions {
+  changed?(revision: number): void
   serviceEntry: string
-  libraryFilePath: string
+  /** Omit only for Core state in development JSON-library mode. */
+  libraryFilePath?: string
+  /** Reopened with the service connection after a crash, never as a business-write replay. */
+  coreStateFilePath?: string
   coverCacheDir?: string
   startupTimeoutMs?: number
   requestTimeoutMs?: number
@@ -47,6 +51,17 @@ type Pending = { resolve(value: unknown): void; reject(error: Error): void; time
 
 /** Bounded asynchronous transport. Mutations are never automatically replayed. */
 export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
+  catalogStatus() { return this.call('catalogStatus') }
+  catalogAdvance(limit?: number) { return this.call('catalogAdvance', limit) }
+  catalogQuery(...args: Parameters<LibraryDatabaseWorkerApi['catalogQuery']>) { return this.call('catalogQuery', ...args) }
+  catalogDetail(...args: Parameters<LibraryDatabaseWorkerApi['catalogDetail']>) { return this.call('catalogDetail', ...args) }
+  catalogSources(...args: Parameters<LibraryDatabaseWorkerApi['catalogSources']>) { return this.call('catalogSources', ...args) }
+  catalogSync(...args: Parameters<LibraryDatabaseWorkerApi['catalogSync']>) { return this.call('catalogSync', ...args) }
+  catalogProjectVersions(...args: Parameters<LibraryDatabaseWorkerApi['catalogProjectVersions']>) { return this.call('catalogProjectVersions', ...args) }
+  catalogResolve(...args: Parameters<LibraryDatabaseWorkerApi['catalogResolve']>) { return this.call('catalogResolve', ...args) }
+  corePersonalRestore() {
+    return this.call('corePersonalRestore')
+  }
   private readonly options: DatabaseServiceOptions
   private child: DatabaseUtilityProcess | null = null
   private ready: Promise<void> | null = null
@@ -56,9 +71,61 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
   private readonly pending = new Map<string, Pending>()
   private reservations = 0
   private stopped = false
+  private closing = false
+  private coreStateFilePath: string | undefined
 
   constructor(options: DatabaseServiceOptions) {
     this.options = options
+    this.coreStateFilePath = options.coreStateFilePath
+  }
+
+  coreStateOpen(filePath: string) {
+    if (this.coreStateFilePath && this.coreStateFilePath !== filePath)
+      return Promise.reject(new Error('Core state path is already bound'))
+    this.coreStateFilePath = filePath
+    return this.call('coreStateOpen', filePath)
+  }
+  coreStateStatus() {
+    return this.call('coreStateStatus')
+  }
+  coreStatisticsStatus() {
+    return this.call('coreStatisticsStatus')
+  }
+  coreStatisticsBegin(...args: Parameters<LibraryDatabaseWorkerApi['coreStatisticsBegin']>) {
+    return this.call('coreStatisticsBegin', ...args)
+  }
+  coreStatisticsStage(...args: Parameters<LibraryDatabaseWorkerApi['coreStatisticsStage']>) {
+    return this.call('coreStatisticsStage', ...args)
+  }
+  coreStatisticsCommit(id: string) {
+    return this.call('coreStatisticsCommit', id)
+  }
+  coreStatisticsAbort(id: string) {
+    return this.call('coreStatisticsAbort', id)
+  }
+  coreStateRead(...args: Parameters<LibraryDatabaseWorkerApi['coreStateRead']>) {
+    return this.call('coreStateRead', ...args)
+  }
+  coreStateWrite(...args: Parameters<LibraryDatabaseWorkerApi['coreStateWrite']>) {
+    return this.call('coreStateWrite', ...args)
+  }
+  coreVersionsReplace(...args: Parameters<LibraryDatabaseWorkerApi['coreVersionsReplace']>) {
+    return this.call('coreVersionsReplace', ...args)
+  }
+  coreInboxWrite(...args: Parameters<LibraryDatabaseWorkerApi['coreInboxWrite']>) {
+    return this.call('coreInboxWrite', ...args)
+  }
+  coreMigrationBegin(...args: Parameters<LibraryDatabaseWorkerApi['coreMigrationBegin']>) {
+    return this.call('coreMigrationBegin', ...args)
+  }
+  coreMigrationStage(...args: Parameters<LibraryDatabaseWorkerApi['coreMigrationStage']>) {
+    return this.call('coreMigrationStage', ...args)
+  }
+  coreMigrationCommit(id: string) {
+    return this.call('coreMigrationCommit', id)
+  }
+  coreMigrationAbort(id: string) {
+    return this.call('coreMigrationAbort', id)
   }
 
   private open(): Promise<void> {
@@ -84,6 +151,7 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
           child.postMessage({
             kind: 'open',
             libraryFilePath: this.options.libraryFilePath,
+            ...(this.coreStateFilePath ? { coreStateFilePath: this.coreStateFilePath } : {}),
             coverCacheDir: this.options.coverCacheDir
           })
         else if (message.kind === 'opened') {
@@ -93,13 +161,20 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
           this.readyResolve = null
           this.readyReject = null
         } else if (message.kind === 'open-error') this.fail(new Error(message.error))
+        else if (message.kind === 'library-changed') this.options.changed?.(message.revision)
         else if (message.kind === 'response') {
           const pending = this.pending.get(message.requestId)
           if (!pending) return
           clearTimeout(pending.timer)
           this.pending.delete(message.requestId)
           if (message.ok) pending.resolve(message.value)
-          else pending.reject(new Error(message.error))
+          else
+            pending.reject(
+              Object.assign(
+                new Error(message.error),
+                message.errorCode ? { code: message.errorCode } : {}
+              )
+            )
         }
       })
       child.on('error', (error) => {
@@ -149,6 +224,7 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
     method: M,
     ...args: Parameters<LibraryDatabaseWorkerApi[M]>
   ): Promise<Awaited<ReturnType<LibraryDatabaseWorkerApi[M]>>> {
+    if (this.closing) throw new Error('Music library database service is closing')
     if (this.reservations >= (this.options.maxPendingRequests ?? 16))
       throw new Error('Music library database request queue is full')
     this.reservations++
@@ -204,8 +280,8 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
   setLibraryRoots(folders: string[]) {
     return this.call('setLibraryRoots', folders)
   }
-  resetLibrary() {
-    return this.call('resetLibrary')
+  resetLibrary(expectedRevision?: number) {
+    return this.call('resetLibrary', expectedRevision)
   }
   repairCandidates(
     command: import('../../shared/playlistRepair.ts').LibraryRepairCandidateCommand
@@ -218,8 +294,8 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
   getPendingRemoval() {
     return this.call('getPendingRemoval')
   }
-  clearFileExclusions(filePaths: string[]) {
-    return this.call('clearFileExclusions', filePaths)
+  clearFileExclusions(filePaths: string[], expectedRevision?: number) {
+    return this.call('clearFileExclusions', filePaths, expectedRevision)
   }
   markRemovalAttempting(id: string, filePath: string) {
     return this.call('markRemovalAttempting', id, filePath)
@@ -244,8 +320,13 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
   ) {
     return this.call('createTrackSelection', request)
   }
-  readTrackSelection(id: string, cursor?: number, projection?: 'tracks' | 'files') {
-    return this.call('readTrackSelection', id, cursor, projection)
+  readTrackSelection(
+    id: string,
+    cursor?: number,
+    projection?: 'tracks' | 'files',
+    requireCurrent?: boolean
+  ) {
+    return this.call('readTrackSelection', id, cursor, projection, requireCurrent)
   }
   closeTrackSelection(id: string) {
     return this.call('closeTrackSelection', id)
@@ -273,6 +354,34 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
   }
   buildLibraryQueue(command: import('../../shared/libraryQueueBuild.ts').LibraryQueueBuildCommand) {
     return this.call('buildLibraryQueue', command)
+  }
+  importLegacyPlaybackQueue(
+    command: import('../../shared/coreQueueImport.ts').CoreQueueImportCommand
+  ) {
+    return this.call('importLegacyPlaybackQueue', command)
+  }
+  restoreNamedPlaybackQueue(
+    command: import('../../shared/coreQueueRestore.ts').CoreQueueRestoreCommand
+  ) {
+    return this.call('restoreNamedPlaybackQueue', command)
+  }
+  extendPlaybackQueue(
+    ...args: Parameters<LibraryDatabaseWorkerApi['extendPlaybackQueue']>
+  ): ReturnType<LibraryDatabaseWorkerApi['extendPlaybackQueue']> {
+    return this.call('extendPlaybackQueue', ...args)
+  }
+  insertCorePlaybackQueue(...args: Parameters<LibraryDatabaseWorkerApi['insertCorePlaybackQueue']>): ReturnType<LibraryDatabaseWorkerApi['insertCorePlaybackQueue']> {
+    return this.call('insertCorePlaybackQueue', ...args)
+  }
+  restoreHeartBaseQueue(
+    ...args: Parameters<LibraryDatabaseWorkerApi['restoreHeartBaseQueue']>
+  ): ReturnType<LibraryDatabaseWorkerApi['restoreHeartBaseQueue']> {
+    return this.call('restoreHeartBaseQueue', ...args)
+  }
+  replacePlaybackQueueSource(
+    ...args: Parameters<LibraryDatabaseWorkerApi['replacePlaybackQueueSource']>
+  ): ReturnType<LibraryDatabaseWorkerApi['replacePlaybackQueueSource']> {
+    return this.call('replacePlaybackQueueSource', ...args)
   }
   readLibraryQueue(
     id: string,
@@ -406,5 +515,31 @@ export class LibraryDatabaseServiceClient implements LibraryDatabaseWorkerApi {
   destroy(): void {
     this.stopped = true
     this.fail(new Error('Music library database service stopped'))
+  }
+
+  /** Wait for the serial worker to close both durable connections before reaping it. */
+  async close(): Promise<void> {
+    if (this.stopped) return
+    if (this.closing) throw new Error('Database close already in progress')
+    this.closing = true
+    try {
+      if (!this.child) return
+      await this.open()
+      const requestId = randomUUID()
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => this.fail(new Error('Database close outcome unknown')),
+          this.options.requestTimeoutMs ?? 120_000
+        )
+        this.pending.set(requestId, { resolve: () => resolve(), reject, timer })
+        try {
+          this.child!.postMessage({ kind: 'close', requestId })
+        } catch (error) {
+          this.fail(error instanceof Error ? error : new Error(String(error)))
+        }
+      })
+    } finally {
+      this.destroy()
+    }
   }
 }

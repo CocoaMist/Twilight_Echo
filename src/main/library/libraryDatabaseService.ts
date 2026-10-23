@@ -1,3 +1,5 @@
+import { createServicePort } from '../services/servicePort.ts'
+import { CoreStateDatabase, CoreStateDurabilityError } from './coreStateDatabase.ts'
 import {
   LibraryDatabase,
   LibraryDatabaseDurabilityError,
@@ -15,37 +17,17 @@ import type { LibraryQuery } from '../../shared/libraryDatabase.ts'
 import type { LibrarySelectionRequest } from '../../shared/librarySelection.ts'
 import { validateLibrarySelection } from './libraryDatabaseSelections.ts'
 
-type Port = {
-  postMessage(message: LibraryDatabaseWorkerMessage): void
-  on(event: 'message', listener: (message: LibraryDatabaseWorkerRequest) => void): void
-}
-const electronPort = (
-  process as unknown as {
-    parentPort?: {
-      postMessage(message: LibraryDatabaseWorkerMessage): void
-      on(event: 'message', listener: (event: { data: LibraryDatabaseWorkerRequest }) => void): void
-    }
-  }
-).parentPort
-const port: Port | null = electronPort
-  ? {
-      postMessage: (message) => electronPort.postMessage(message),
-      on: (_, listener) => electronPort.on('message', (event) => listener(event.data))
-    }
-  : process.send
-    ? {
-        postMessage: (message) => process.send?.(message),
-        on: (_, listener) => process.on('message', listener)
-      }
-    : null
-if (!port) throw new Error('Music library database requires a parent port')
-const servicePort = port
+const servicePort = createServicePort<LibraryDatabaseWorkerRequest, LibraryDatabaseWorkerMessage>()
 initializeUtilityDiagnostics('twilight-library-database')
 let database: LibraryDatabase | null = null
+let coreState: CoreStateDatabase | null = null
+let coreStateFilePath: string | undefined
+let opened = false
 let closing = false
 let serial = Promise.resolve()
 let maintenanceScheduled = false
 let maintenanceTimer: NodeJS.Timeout | undefined
+let publishedRevision: number | null = null
 type Work = {
   request: LibraryDatabaseWorkerRequest
   playlistToken?: symbol
@@ -57,13 +39,19 @@ async function dispatch(work: Work): Promise<void> {
   const { request } = work
   if (request.kind === 'open') {
     try {
-      if (database || closing) throw new Error('Database service was already opened')
-      database = await openLibraryDatabase(request.libraryFilePath, request.coverCacheDir)
+      if (opened || closing) throw new Error('Database service was already opened')
+      if (request.libraryFilePath)
+        database = await openLibraryDatabase(request.libraryFilePath, request.coverCacheDir)
+      if (request.coreStateFilePath) {
+        coreState = new CoreStateDatabase(request.coreStateFilePath)
+        coreStateFilePath = request.coreStateFilePath
+      }
       // Explicitly cancelled or paused jobs stay that way. A running job belongs
       // to the previous process and can only resume from its committed checkpoint.
-      database.sql.exec(
+      database?.sql.exec(
         "UPDATE scan_jobs SET state='interrupted' WHERE state='running'; UPDATE scan_items SET state='pending' WHERE state='working'; UPDATE scan_directories SET state='pending' WHERE state='working';"
       )
+      opened = true
       servicePort.postMessage({ kind: 'opened' })
     } catch (error) {
       servicePort.postMessage({ kind: 'open-error', error: String(error) })
@@ -76,6 +64,8 @@ async function dispatch(work: Work): Promise<void> {
       clearTimeout(maintenanceTimer)
       database?.close()
       database = null
+      coreState?.close()
+      coreState = null
       servicePort.postMessage({
         kind: 'response',
         requestId: request.requestId,
@@ -84,9 +74,68 @@ async function dispatch(work: Work): Promise<void> {
       })
       return
     }
-    if (!database || closing) throw new Error('Music library database is not open')
     if (!DATABASE_METHODS.has(request.method) || !Array.isArray(request.args))
       throw new Error('Unknown database method')
+    if (!opened || closing) throw new Error('Database service is not open')
+    if (request.method === 'coreStateOpen') {
+      const filePath = request.args[0]
+      if (typeof filePath !== 'string' || !filePath) throw new Error('Invalid Core state path')
+      if (coreState && coreStateFilePath !== filePath)
+        throw new Error('Core state connection is already open at a different path')
+      if (!coreState) {
+        coreState = new CoreStateDatabase(filePath)
+        coreStateFilePath = filePath
+      }
+      servicePort.postMessage({
+        kind: 'response',
+        requestId: request.requestId,
+        ok: true,
+        value: undefined
+      })
+      return
+    }
+    if (
+      request.method.startsWith('coreState') ||
+      request.method === 'coreVersionsReplace' ||
+      request.method === 'coreInboxWrite' ||
+      request.method === 'corePersonalRestore' ||
+      request.method.startsWith('coreMigration') ||
+      request.method.startsWith('coreStatistics')
+    ) {
+      if (!coreState) throw new Error('Core state connection is not open')
+      const methods = {
+        coreInboxWrite: (
+          rows: import('../../shared/coreState.ts').CoreStateRow[],
+          revision: number,
+          deletes: string[],
+          libraryRevision: number
+        ) => {
+          if (!database || database.getMetadata().revision !== libraryRevision)
+            throw new Error('曲库已变化，请刷新整理收件箱')
+          return coreState!.write('inbox', rows, revision, deletes)
+        },
+        corePersonalRestore: coreState.restorePersonalData.bind(coreState),
+        coreStateStatus: coreState.status.bind(coreState),
+        coreStateRead: coreState.read.bind(coreState),
+        coreStateWrite: coreState.write.bind(coreState),
+        coreVersionsReplace: coreState.replaceVersions.bind(coreState),
+        coreStatisticsStatus: coreState.statisticsStatus.bind(coreState),
+        coreStatisticsBegin: coreState.statisticsBegin.bind(coreState),
+        coreStatisticsStage: coreState.statisticsStage.bind(coreState),
+        coreStatisticsCommit: coreState.statisticsCommit.bind(coreState),
+        coreStatisticsAbort: coreState.statisticsAbort.bind(coreState),
+        coreMigrationBegin: coreState.begin.bind(coreState),
+        coreMigrationStage: coreState.stage.bind(coreState),
+        coreMigrationCommit: coreState.commit.bind(coreState),
+        coreMigrationAbort: coreState.abort.bind(coreState)
+      }
+      const method = methods[request.method as keyof typeof methods]
+      if (!method) throw new Error('Unknown Core state operation')
+      const value = (method as (...args: unknown[]) => unknown)(...request.args)
+      servicePort.postMessage({ kind: 'response', requestId: request.requestId, ok: true, value })
+      return
+    }
+    if (!database) throw new Error('Music library database is not open (JSON library mode)')
     if (request.method === 'createTrackSelection') {
       const selection = request.args[0] as LibrarySelectionRequest
       validateLibrarySelection(selection)
@@ -166,7 +215,10 @@ async function dispatch(work: Work): Promise<void> {
     const value = await method.apply(database, request.args)
     servicePort.postMessage({ kind: 'response', requestId: request.requestId, ok: true, value })
   } catch (error) {
-    if (error instanceof LibraryDatabaseDurabilityError) {
+    if (
+      error instanceof LibraryDatabaseDurabilityError ||
+      error instanceof CoreStateDurabilityError
+    ) {
       console.error('[library-db] Unsafe database connection closed:', error)
       // The client rejects every pending operation and reopens/recovers only
       // on a later request; no uncertain mutation is silently replayed.
@@ -190,7 +242,10 @@ async function dispatch(work: Work): Promise<void> {
       kind: 'response',
       requestId: request.requestId,
       ok: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      ...((error as { code?: string })?.code
+        ? { errorCode: (error as { code: string }).code }
+        : {})
     })
   }
 }
@@ -232,6 +287,13 @@ function enqueue(work: Work): void {
   // returns with its transaction closed before rejoining this queue.
   serial = serial
     .then(() => dispatch(work))
+    .then(() => {
+      if (!database || closing) return
+      const revision = database.getContentRevision()
+      if (revision === publishedRevision) return
+      publishedRevision = revision
+      servicePort.postMessage({ kind: 'library-changed', revision })
+    })
     .then(scheduleMaintenance)
     .catch((error) => {
       console.error('[library-db] Request transport failed:', error)

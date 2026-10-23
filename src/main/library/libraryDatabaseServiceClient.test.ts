@@ -28,8 +28,9 @@ class ManualProcess extends EventEmitter {
 }
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 
-function workerClient(json: string, children: ChildProcess[]) {
+function workerClient(json: string, children: ChildProcess[], changed?: (revision: number) => void) {
   return new LibraryDatabaseServiceClient({
+    changed,
     serviceEntry: fileURLToPath(new URL('./libraryDatabaseService.ts', import.meta.url)),
     libraryFilePath: json,
     fork: (entry) => {
@@ -45,6 +46,51 @@ function workerClient(json: string, children: ChildProcess[]) {
     }
   })
 }
+
+test('catalog worker transport persists derived identity without publishing library content changes', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'catalog-worker-')), json = join(root, 'library.json')
+  const children: ChildProcess[] = [], revisions: number[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', source: 'local', filePath: join(root, 'one.flac'), title: 'One', artist: 'Artist', album: 'Album' }]))
+  const client = workerClient(json, children, revision => revisions.push(revision))
+  t.after(async () => {
+    client.destroy()
+    for (const child of children) if (child.exitCode === null) await once(child, 'exit')
+    rmSync(root, { recursive: true, force: true })
+  })
+  await client.getMetadata()
+  const before = [...revisions]
+  assert.equal((await client.catalogStatus()).localPending, true)
+  await client.catalogAdvance(200)
+  const page = await client.catalogQuery({ kind: 'recording' })
+  const entity = (await client.catalogDetail(page.items[0].id, page.revision)).entity!
+  const sources = await client.catalogSources({ entityId: entity.id, revision: page.revision })
+  assert.equal(sources.total, 1)
+  assert.equal((await client.catalogResolve(sources.items[0].id, page.revision))!.filePath, join(root, 'one.flac'))
+  assert.equal(JSON.stringify(sources).includes('filePath'), false)
+  const job = await client.catalogSync({ kind: 'begin', revision: 0 })
+  await client.catalogSync({ kind: 'commit', ...job })
+  await client.catalogProjectVersions({ version: 1, tracks: { versions: [], families: [] }, albums: { versions: [], families: [] } }, 0)
+  await tick()
+  assert.deepEqual(revisions, before)
+})
+
+test('database worker publishes content changes without position polling or duplicate read notifications', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'core-library-changed-'))
+  const json = join(root, 'library.json'), children: ChildProcess[] = [], revisions: number[] = []
+  writeFileSync(json, JSON.stringify([{ id: 'one', filePath: join(root, 'one.flac'), title: 'One' }]))
+  const client = workerClient(json, children, (revision) => revisions.push(revision))
+  t.after(async () => { client.destroy(); for (const child of children) { if (child.exitCode === null) await once(child, 'exit') }; rmSync(root, { recursive: true, force: true }) })
+  const initial = await client.getMetadata()
+  await client.getMetadata()
+  await tick()
+  assert.deepEqual(revisions, [initial.revision])
+  const page = await client.getTracksByIds(['one'])
+  await client.patchTracks([{ id: 'one', expectedVersion: page.versions.one, patch: { title: 'Changed' } }])
+  const after = await client.getMetadata()
+  await tick()
+  assert.deepEqual(revisions, [initial.revision, after.revision])
+  assert.ok(after.revision > initial.revision)
+})
 
 async function uploadWorkerView(
   client: LibraryDatabaseServiceClient,
@@ -127,6 +173,67 @@ test('worker navigation preview returns one exact occurrence without committing 
     client.readLibraryQueueNeighbor(queue.id, queue.revision + 1, 0, 1, true),
     /变化|revision|changed/i
   )
+})
+
+test('real worker preserves queue revision conflicts through the database transport without replaying edits', async (t) => {
+  const { client } = await queueWorkerFixture(t)
+  const queue = await client.createLibraryQueue({ ids: ['one', 'two', 'one'], sort: 'playlist' })
+  const original = await client.readLibraryQueue(queue.id)
+  const edited = await client.editLibraryQueue(queue.id, queue.revision, {
+    kind: 'remove', entryIds: [original.items[1].queueEntryId]
+  })
+  await assert.rejects(
+    client.readLibraryQueue(queue.id, 0, 1, { expectedRevision: queue.revision }),
+    { code: 'STALE_REVISION', message: 'Library queue changed concurrently' }
+  )
+  await assert.rejects(
+    client.editLibraryQueue(queue.id, queue.revision, { kind: 'clear' }),
+    { code: 'STALE_REVISION', message: 'Library queue changed concurrently' }
+  )
+  assert.deepEqual(await client.getLibraryQueue(queue.id), edited.queue)
+  assert.deepEqual(
+    (await client.readLibraryQueue(queue.id)).items.map(item => item.queueEntryId),
+    [original.items[0].queueEntryId, original.items[2].queueEntryId]
+  )
+  await assert.rejects(client.getLibraryQueue('missing'), error => {
+    assert.equal((error as { code?: string }).code, undefined)
+    assert.match(String(error), /does not exist/)
+    return true
+  })
+})
+
+test('the private database worker replaces only the requested source identity and does not replay a stale replacement', async (t) => {
+  const { client } = await queueWorkerFixture(t)
+  const queue = await client.createLibraryQueue({ ids: ['one', 'two', 'one'], sort: 'playlist' })
+  const page = await client.readLibraryQueue(queue.id)
+  const command = {
+    queue: {
+      id: queue.id,
+      revision: queue.revision,
+      index: queue.index,
+      entryId: queue.selectedEntryId!
+    },
+    contentRevision: page.libraryRevision,
+    occurrenceId: page.items[2].queueEntryId,
+    expectedTrackId: 'one',
+    replacement: {
+      id: 'fixture:new',
+      snapshot: { id: 'fixture:new', source: 'fixture', title: 'New source', filePath: '' }
+    }
+  }
+  const updated = await client.replacePlaybackQueueSource(command)
+  assert.equal(updated.revision, queue.revision + 1)
+  const result = await client.readLibraryQueue(queue.id)
+  assert.deepEqual(
+    result.items.map((row) => row.queueEntryId),
+    page.items.map((row) => row.queueEntryId)
+  )
+  assert.deepEqual(
+    result.items.map((row) => row.track?.id),
+    ['one', 'two', 'fixture:new']
+  )
+  await assert.rejects(client.replacePlaybackQueueSource(command), /changed concurrently/i)
+  assert.deepEqual(await client.readLibraryQueue(queue.id), result)
 })
 
 async function waitForQueueCleanup(inspector: DatabaseSync) {

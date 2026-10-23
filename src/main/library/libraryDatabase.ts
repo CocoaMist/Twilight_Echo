@@ -1,3 +1,4 @@
+import type { LibraryPlaybackQueueReference } from '../../shared/playbackSession.ts'
 import { DatabaseSync, backup, type SQLInputValue } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, renameSync, unlinkSync, statSync } from 'node:fs'
@@ -22,6 +23,7 @@ import {
   type LibraryQueueSnapshot,
   type LibraryQueuePage,
   type LibraryQueueEdit,
+  type LibraryQueueInsertItem,
   type LibraryScanCommit,
   type LibraryScanJob,
   type LibraryScanStartRequest,
@@ -74,6 +76,9 @@ import {
 import type { LibrarySelectionRequest } from '../../shared/librarySelection.ts'
 import { validateLibrarySelection } from './libraryDatabaseSelections.ts'
 import { LibraryDatabaseHistory, LIBRARY_HISTORY_SCHEMA_SQL } from './libraryDatabaseHistory.ts'
+import { LibraryDatabaseCatalog, CATALOG_SCHEMA_SQL } from './libraryDatabaseCatalog.ts'
+import type { CatalogQuery, CatalogSourceQuery, CatalogSync } from '../../shared/musicCatalog.ts'
+import type { MusicVersionsDocument } from '../../shared/musicVersions.ts'
 import {
   LIBRARY_RECORDING_INDEX_EXPRESSION,
   lookupPlaylistTrackIds,
@@ -165,12 +170,17 @@ export class LibraryDatabase {
   private readonly history: LibraryDatabaseHistory
   private readonly playlistViews: LibraryDatabasePlaylistViews
   private readonly selections: LibraryDatabaseSelections
+  private readonly catalog: LibraryDatabaseCatalog
 
   constructor(filePath: string) {
     this.filePath = filePath
     const existing = filePath !== ':memory:' && existsSync(filePath)
     mkdirSync(dirname(filePath), { recursive: true })
     this.sql = new DatabaseSync(filePath)
+    this.catalog = new LibraryDatabaseCatalog({
+      sql: this.sql,
+      transaction: (action) => this.transaction(action)
+    })
     this.repair = new LibraryDatabaseRepair(this.sql, (action) => this.transaction(action, false))
     registerLibraryRecordingFunctions(this.sql)
     this.removal = new LibraryDatabaseRemoval({
@@ -211,18 +221,18 @@ export class LibraryDatabase {
     })
     try {
       const version = Number((this.sql.prepare('PRAGMA user_version').get() as Row).user_version)
-      if (version > 10) throw new Error(`Unsupported music library database version: ${version}`)
+      if (version > 12) throw new Error(`Unsupported music library database version: ${version}`)
       if (existing) {
         const identity = Number(
           (this.sql.prepare('PRAGMA application_id').get() as Row).application_id
         )
         const tables = new Set(
           (
-            this.sql.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Row[]
+            this.sql.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view','trigger')").all() as Row[]
           ).map((row) => text(row.name))
         )
         if (
-          ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(version) ||
+          ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(version) ||
           identity !== 0x54574c42 ||
           [
             'meta',
@@ -232,7 +242,12 @@ export class LibraryDatabase {
             'queue_entries',
             'track_search',
             ...(version >= 4 ? ['library_history'] : []),
-            ...(version >= 7 ? ['queue_snapshots'] : [])
+            ...(version >= 7 ? ['queue_snapshots'] : []),
+            ...(version >= 12 ? ['catalog_state', 'catalog_entities', 'catalog_aliases',
+              'catalog_sources', 'catalog_memberships', 'catalog_source_artists', 'catalog_facts',
+              'catalog_pending', 'catalog_imports', 'catalog_import_members', 'catalog_versions',
+              'catalog_version_sources', 'catalog_bindings', 'catalog_entity_sources',
+              'catalog_tracks_ai', 'catalog_tracks_au', 'catalog_tracks_ad'] : [])
           ].some((name) => !tables.has(name))
         )
           throw new Error(
@@ -346,9 +361,9 @@ export class LibraryDatabase {
           state TEXT NOT NULL DEFAULT 'ready' CHECK(state IN ('building','ready','abandoned')),
           play_mode TEXT CHECK(play_mode IN ('sequential','listLoop','repeat','shuffle')));
         CREATE INDEX queues_state ON queues(state,id);
-        CREATE TABLE IF NOT EXISTS queue_entries(queue_id TEXT NOT NULL REFERENCES queues(id) ON DELETE CASCADE, position INTEGER NOT NULL, entry_id TEXT NOT NULL UNIQUE, track_id TEXT NOT NULL, original_position INTEGER NOT NULL, PRIMARY KEY(queue_id,position));
+        CREATE TABLE IF NOT EXISTS queue_entries(queue_id TEXT NOT NULL REFERENCES queues(id) ON DELETE CASCADE, position INTEGER NOT NULL, entry_id TEXT NOT NULL, track_id TEXT NOT NULL, original_position INTEGER NOT NULL, PRIMARY KEY(queue_id,position), UNIQUE(queue_id,entry_id));
         CREATE INDEX IF NOT EXISTS queue_entries_original ON queue_entries(queue_id,original_position);
-        CREATE TABLE queue_snapshots(entry_id TEXT PRIMARY KEY REFERENCES queue_entries(entry_id) ON DELETE CASCADE,payload TEXT NOT NULL);
+        CREATE TABLE queue_snapshots(queue_id TEXT NOT NULL,entry_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(queue_id,entry_id),FOREIGN KEY(queue_id,entry_id) REFERENCES queue_entries(queue_id,entry_id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS queue_history(id INTEGER PRIMARY KEY AUTOINCREMENT,queue_id TEXT NOT NULL REFERENCES queues(id) ON DELETE CASCADE,revision INTEGER NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS queue_history_queue ON queue_history(queue_id,id);
         CREATE TABLE IF NOT EXISTS queue_history_entries(history_id INTEGER NOT NULL REFERENCES queue_history(id) ON DELETE CASCADE,position INTEGER NOT NULL,original_position INTEGER NOT NULL,entry_id TEXT NOT NULL,track_id TEXT NOT NULL,snapshot TEXT,PRIMARY KEY(history_id,entry_id));
@@ -357,10 +372,11 @@ export class LibraryDatabase {
         PRAGMA application_id=1415007298;
         ${LIBRARY_HISTORY_SCHEMA_SQL}
         CREATE INDEX tracks_recording ON tracks(${LIBRARY_RECORDING_INDEX_EXPRESSION},seq);
-        PRAGMA user_version=10;
+        ${CATALOG_SCHEMA_SQL}
+        PRAGMA user_version=12;
         COMMIT;
       `)
-      if (existing && version < 10) {
+      if (existing && version < 12) {
         // VACUUM INTO is a consistent SQLite snapshot, including committed WAL
         // pages. A backup failure must prevent the schema change.
         const destination = `${filePath}.v${version}-backup-${randomUUID()}.sqlite`
@@ -408,10 +424,24 @@ export class LibraryDatabase {
             )
           // Snapshot legacy completion counts lazily, one job at a time, before
           // retiring its rows. Opening must not scan all historical checkpoints.
-          this.sql.exec(`ALTER TABLE scan_jobs ADD COLUMN checked_files INTEGER;
+          if (version < 10)
+            this.sql.exec(`ALTER TABLE scan_jobs ADD COLUMN checked_files INTEGER;
             ALTER TABLE scan_jobs ADD COLUMN checkpoints_reclaimed INTEGER NOT NULL DEFAULT 0 CHECK(checkpoints_reclaimed IN (0,1));
-            CREATE INDEX scan_checkpoint_cleanup ON scan_jobs(updated_at) WHERE state='completed' AND checkpoints_reclaimed=0;
-            PRAGMA user_version=10; COMMIT;`)
+            CREATE INDEX scan_checkpoint_cleanup ON scan_jobs(updated_at) WHERE state='completed' AND checkpoints_reclaimed=0;`)
+          // Named array sessions may overlap the live queue or each other.
+          // Keep their occurrence IDs; identity is scoped by the durable queue.
+          if (version < 11) this.sql
+            .exec(`CREATE TABLE queue_entries_v11(queue_id TEXT NOT NULL REFERENCES queues(id) ON DELETE CASCADE,position INTEGER NOT NULL,entry_id TEXT NOT NULL,track_id TEXT NOT NULL,original_position INTEGER NOT NULL,PRIMARY KEY(queue_id,position),UNIQUE(queue_id,entry_id));
+            INSERT INTO queue_entries_v11 SELECT queue_id,position,entry_id,track_id,original_position FROM queue_entries;
+            CREATE TABLE queue_snapshots_v11(queue_id TEXT NOT NULL,entry_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(queue_id,entry_id),FOREIGN KEY(queue_id,entry_id) REFERENCES queue_entries_v11(queue_id,entry_id) ON DELETE CASCADE);
+            INSERT INTO queue_snapshots_v11 SELECT q.queue_id,s.entry_id,s.payload FROM queue_snapshots s JOIN queue_entries q ON q.entry_id=s.entry_id;
+            DROP TABLE queue_snapshots;
+            DROP TABLE queue_entries;
+            ALTER TABLE queue_entries_v11 RENAME TO queue_entries;
+            ALTER TABLE queue_snapshots_v11 RENAME TO queue_snapshots;
+            CREATE INDEX queue_entries_original ON queue_entries(queue_id,original_position);
+            `)
+          this.sql.exec(`${CATALOG_SCHEMA_SQL}\nPRAGMA user_version=12; COMMIT;`)
         } catch (error) {
           this.sql.exec('ROLLBACK')
           throw error
@@ -442,6 +472,16 @@ export class LibraryDatabase {
   close(): void {
     if (this.sql.isOpen) this.sql.close()
   }
+  catalogStatus() { return this.catalog.status() }
+  catalogAdvance(limit?: number) { return this.catalog.advance(limit) }
+  catalogQuery(query: CatalogQuery) { return this.catalog.query(query) }
+  catalogDetail(id: string, revision?: number) { return this.catalog.detail(id, revision) }
+  catalogSources(query: CatalogSourceQuery) { return this.catalog.sources(query) }
+  catalogSync(request: CatalogSync) { return this.catalog.sync(request) }
+  catalogProjectVersions(document: MusicVersionsDocument, revision: number) {
+    return this.catalog.projectVersions(document, revision)
+  }
+  catalogResolve(sourceId: string, revision: number) { return this.catalog.resolve(sourceId, revision) }
   repairCandidates(
     command: import('../../shared/playlistRepair.ts').LibraryRepairCandidateCommand
   ) {
@@ -545,14 +585,20 @@ export class LibraryDatabase {
   abandonTrackSelectionBuild(preparation: LibrarySelectionPreparation): void {
     this.selections.close(preparation.build.id)
   }
-  readTrackSelection(id: string, cursor = 0, projection: 'tracks' | 'files' = 'tracks') {
-    return this.selections.read(id, cursor, projection)
+  readTrackSelection(
+    id: string,
+    cursor = 0,
+    projection: 'tracks' | 'files' = 'tracks',
+    requireCurrent = false
+  ) {
+    return this.selections.read(id, cursor, projection, requireCurrent)
   }
   closeTrackSelection(id: string): void {
     this.selections.close(id)
   }
-  resetLibrary() {
+  resetLibrary(expectedRevision?: number) {
     return this.transaction(() => {
+      this.assertContentRevision(expectedRevision)
       this.removal.assertIdle()
       const rows = this.statement(
         'SELECT tracks.id,files.file_path FROM tracks JOIN files USING(file_key) ORDER BY tracks.seq'
@@ -591,7 +637,7 @@ export class LibraryDatabase {
   recoverRemovalJournal(id: string, items: LocalLibraryTrackSelection[]) {
     return this.removal.recoverLegacyJournal(id, items)
   }
-  clearFileExclusions(filePaths: string[]) {
+  clearFileExclusions(filePaths: string[], expectedRevision?: number) {
     if (
       !Array.isArray(filePaths) ||
       filePaths.length > 256 ||
@@ -599,6 +645,7 @@ export class LibraryDatabase {
     )
       throw new Error('Invalid exclusion batch; at most 256 files are allowed')
     return this.transaction(() => {
+      this.assertContentRevision(expectedRevision)
       const keys = new Set(filePaths.map(normalizeLibraryFilePath)),
         clearedFilePaths: string[] = []
       const exclusions = this.getMetadata().exclusions.filter((entry) => {
@@ -851,6 +898,9 @@ export class LibraryDatabase {
       folders: JSON.parse(this.meta('folders')),
       exclusions: JSON.parse(this.meta('exclusions'))
     }
+  }
+  getContentRevision(): number {
+    return Number(this.meta('revision'))
   }
   updateConfiguration(
     configuration: Pick<LibraryMetadata, 'folders' | 'exclusions'>,
@@ -1463,6 +1513,30 @@ export class LibraryDatabase {
    * owner lease and atomic player adoption, not direct calls to this seam. */
   buildLibraryQueue(command: import('../../shared/libraryQueueBuild.ts').LibraryQueueBuildCommand) {
     return this.queues.stream(command)
+  }
+  importLegacyPlaybackQueue(
+    command: import('../../shared/coreQueueImport.ts').CoreQueueImportCommand
+  ) {
+    return this.queues.importLegacyPlaybackQueue(command)
+  }
+  restoreNamedPlaybackQueue(
+    command: import('../../shared/coreQueueRestore.ts').CoreQueueRestoreCommand
+  ) {
+    return this.queues.restoreNamedPlaybackQueue(command)
+  }
+  extendPlaybackQueue(id: string, revision: number, items: LibraryQueueInsertItem[]) {
+    return this.queues.extend(id, revision, items)
+  }
+  insertCorePlaybackQueue(id: string, revision: number, edit: Extract<LibraryQueueEdit, { kind: 'insert' }>) {
+    return this.queues.edit(id, revision, edit, false, true)
+  }
+  restoreHeartBaseQueue(base: LibraryPlaybackQueueReference, selectedTrackId: string) {
+    return this.queues.restoreHeartBaseQueue(base, selectedTrackId)
+  }
+  replacePlaybackQueueSource(
+    command: import('../../shared/coreSourceRecovery.ts').CoreQueueSourceReplacement
+  ) {
+    return this.queues.replaceSource(command)
   }
   get nextQueueBuildExpiry(): number | undefined {
     return this.queues.nextStreamExpiry

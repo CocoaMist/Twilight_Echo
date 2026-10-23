@@ -1,3 +1,4 @@
+import { LEGACY_QUEUE_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,6 +24,44 @@ function beginStream(db: LibraryDatabase, id: string, order: 'original' | 'shuff
     contentRevision: db.getMetadata().revision
   })
 }
+
+test('private heart base restoration preserves frozen order, duplicates, snapshots and holes in one SQL transaction', (t) => {
+  const f = fixture(t)
+  f.edit({ kind: 'mode', mode: 'shuffle' })
+  f.edit({
+    kind: 'insert',
+    items: [
+      {
+        id: 'ncm:9',
+        snapshot: { id: 'ncm:9', source: 'ncm', ncmSongId: 9, filePath: 'https://audio.test/9' }
+      }
+    ]
+  })
+  f.db.sql.prepare('DELETE FROM tracks WHERE id=?').run('1')
+  const before = f.page(),
+    base = {
+      id: f.queue.id,
+      revision: f.queue.revision,
+      index: f.queue.index,
+      entryId: f.queue.selectedEntryId!
+    }
+  const restored = f.db.restoreHeartBaseQueue(base, '0')
+  assert.equal(restored.matched, true)
+  assert.equal(restored.queue.order, 'original')
+  assert.equal(restored.queue.playMode, 'sequential')
+  assert.deepEqual(f.db.readLibraryQueue(restored.queue.id).items, before.items)
+  assert.deepEqual(f.db.getLibraryQueue(f.queue.id), f.queue)
+  assert.throws(
+    () => f.db.restoreHeartBaseQueue({ ...base, revision: base.revision - 1 }, '0'),
+    /revision|changed/i
+  )
+  const count = f.db.sql.prepare('SELECT count(*) AS n FROM queues').get()!.n
+  f.db.sql.exec(
+    "CREATE TRIGGER fail_heart_copy BEFORE INSERT ON queue_snapshots BEGIN SELECT RAISE(ABORT,'heart copy failure'); END"
+  )
+  assert.throws(() => f.db.restoreHeartBaseQueue(base, 'outside'), /heart copy failure/)
+  assert.equal(f.db.sql.prepare('SELECT count(*) AS n FROM queues').get()!.n, count)
+})
 
 test('seed-only local snapshots preserve temporary CUE/SACD/network occurrences without importing tracks or retaining transient URLs', (t) => {
   const { db } = fixture(t)
@@ -1107,9 +1146,13 @@ test('stale edits and foreign occurrence IDs cannot mutate a queue or dispose an
   f.edit({ kind: 'select', entryId: f.entry(1) })
   assert.throws(
     () => f.db.editLibraryQueue(f.queue.id, revision, { kind: 'clear' }),
-    /changed concurrently/
+    { code: 'STALE_REVISION', message: 'Library queue changed concurrently' }
   )
-  assert.throws(() => f.db.deleteLibraryQueue(f.queue.id, revision), /changed concurrently/)
+  assert.throws(
+    () => f.db.readLibraryQueue(f.queue.id, 0, 1, { expectedRevision: revision }),
+    { code: 'STALE_REVISION', message: 'Library queue changed concurrently' }
+  )
+  assert.throws(() => f.db.deleteLibraryQueue(f.queue.id, revision), { code: 'STALE_REVISION' })
   const other = f.db.createLibraryQueue({ ids: ['4'] }),
     foreign = f.db.readLibraryQueue(other.id).items[0].queueEntryId
   const before = f.page()
@@ -1278,7 +1321,7 @@ test('failed mode/order commits roll back metadata, both orders, cursor, history
   }
 })
 
-test('v8 mode migration snapshots WAL and leaves legacy order unbound; backup/DDL failure cannot publish v10', (t) => {
+test('v8 mode migration snapshots WAL and leaves legacy order unbound; backup/DDL failure cannot publish v11', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'queue-mode-upgrade-')),
     path = join(root, 'library.sqlite')
   const old = new LibraryDatabase(path)
@@ -1309,7 +1352,8 @@ test('v8 mode migration snapshots WAL and leaves legacy order unbound; backup/DD
   old.syncLibraryQueueReferences('session', [queue.id])
   const page = old.readLibraryQueue(queue.id)
   old.sql.exec(
-    'ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=8;'
+    LEGACY_QUEUE_SCHEMA_SQL +
+      'ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=8;'
   )
   const prepare = DatabaseSync.prototype.prepare
   const backupFailure = t.mock.method(
@@ -1346,7 +1390,7 @@ test('v8 mode migration snapshots WAL and leaves legacy order unbound; backup/DD
   ddlFailure.mock.restore()
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
     assert.deepEqual(upgraded.getLibraryQueue(queue.id), queue)
     assert.deepEqual(upgraded.readLibraryQueue(queue.id), page)
     assert.equal(
@@ -1396,10 +1440,10 @@ test('v2 queue upgrade snapshots WAL first and preserves frozen membership and d
   })
   const queue = old.createLibraryQueue({ ids: ['one', 'one'], sort: 'playlist' })
   const entries = old.readLibraryQueue(queue.id).items.map((item) => item.queueEntryId)
-  old.sql.exec(legacyQueueSchema)
+  old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + legacyQueueSchema)
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
     assert.deepEqual(
       upgraded.readLibraryQueue(queue.id).items.map((item) => item.queueEntryId),
       entries
@@ -1427,7 +1471,7 @@ test('a failed queue schema upgrade rolls back DDL and leaves the old version an
     rmSync(root, { recursive: true, force: true })
   })
   old.createLibraryQueue({})
-  old.sql.exec(legacyQueueSchema)
+  old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + legacyQueueSchema)
   old.sql.exec(
     "CREATE TRIGGER fail_upgrade BEFORE UPDATE ON queues BEGIN SELECT RAISE(ABORT,'upgrade fault'); END"
   )
@@ -1452,7 +1496,7 @@ test('a failed pre-upgrade snapshot cannot alter schema, version or queue member
     rmSync(root, { recursive: true, force: true })
   })
   const queue = old.createLibraryQueue({})
-  old.sql.exec(legacyQueueSchema)
+  old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + legacyQueueSchema)
   const prepare = DatabaseSync.prototype.prepare
   t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
     if (sql === 'VACUUM INTO ?') throw new Error('SQLITE_FULL: database or disk is full')
@@ -1983,7 +2027,7 @@ test('reopening abandons unpublished queues, keeps all committed mixed occurrenc
   }
 })
 
-test('v7 to v10 snapshots WAL and preserves existing queue identities, while failed DDL or backup rolls back', (t) => {
+test('v7 to v11 snapshots WAL and preserves existing queue identities, while failed DDL or backup rolls back', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'queue-build-upgrade-')),
     path = join(root, 'library.sqlite')
   const old = new LibraryDatabase(path)
@@ -2001,7 +2045,8 @@ test('v7 to v10 snapshots WAL and preserves existing queue identities, while fai
   const queue = old.createLibraryQueue({ ids: ['one', 'one'], sort: 'playlist' })
   const remoteEntry = old.readLibraryQueue(queue.id).items[1].queueEntryId
   old.sql.prepare('UPDATE queue_entries SET track_id=? WHERE entry_id=?').run('ncm:7', remoteEntry)
-  old.sql.prepare('INSERT INTO queue_snapshots VALUES(?,?)').run(
+  old.sql.prepare('INSERT INTO queue_snapshots VALUES(?,?,?)').run(
+    queue.id,
     remoteEntry,
     JSON.stringify({
       id: 'ncm:7',
@@ -2013,7 +2058,8 @@ test('v7 to v10 snapshots WAL and preserves existing queue identities, while fai
   )
   const page = old.readLibraryQueue(queue.id)
   old.sql.exec(
-    'DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=7;'
+    LEGACY_QUEUE_SCHEMA_SQL +
+      'DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=7;'
   )
   const exec = DatabaseSync.prototype.exec
   const fail = t.mock.method(
@@ -2048,7 +2094,7 @@ test('v7 to v10 snapshots WAL and preserves existing queue identities, while fai
   full.mock.restore()
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
     assert.deepEqual(upgraded.getLibraryQueue(queue.id), queue)
     assert.deepEqual(upgraded.readLibraryQueue(queue.id), page)
     const backup = readdirSync(root).find((name) => name.includes('.v7-backup-'))!

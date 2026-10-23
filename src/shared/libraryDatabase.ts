@@ -354,6 +354,8 @@ export interface LibraryDatabaseScanResult {
   removedFileCount: number
 }
 export interface LibraryQueueSnapshot {
+  canUndo?: boolean
+  undoLabel?: string | null
   id: string
   total: number
   index: number
@@ -397,6 +399,8 @@ export interface LibraryQueuePage {
 }
 
 export interface LibraryQueueReadOptions {
+  /** Exact indexed occurrence lookup; positions in the response remain absolute. */
+  occurrenceId?: string
   /** Reject an outdated displayed occurrence order before reading. */
   expectedRevision?: number
   /** Literal metadata substring; nonempty searches count/page matching

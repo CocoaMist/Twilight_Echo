@@ -1,3 +1,4 @@
+import { createServicePort } from '../services/servicePort.ts'
 import { initializeUtilityDiagnostics } from '../diagnostics/utility.ts'
 import { observeDiagnosticOperation } from '../diagnostics/observation.ts'
 import { writeDiagnostic } from '../diagnostics/logger.ts'
@@ -26,21 +27,7 @@ import { createScanDatabaseProxy } from './libraryScanDatabaseProxy.ts'
 import { runPlaylistRepairScan } from './playlistRepairScanner.ts'
 import type { RepairScanCall } from '../../shared/localLibraryScan.ts'
 import type { LibraryTrackRecord } from '../../shared/libraryDatabase.ts'
-
-type ParentPort = {
-  postMessage: (message: LocalLibraryScanWorkerMessage) => void
-  on: (event: 'message', listener: (message: LocalLibraryScanWorkerRequest) => void) => void
-}
-
-type ElectronParentPort = {
-  postMessage: ParentPort['postMessage']
-  on: (event: 'message', listener: (event: { data: LocalLibraryScanWorkerRequest }) => void) => void
-}
-
-type NodeIpcProcess = {
-  send?: ParentPort['postMessage']
-  on?: (event: 'message', listener: (message: LocalLibraryScanWorkerRequest) => void) => void
-}
+import { ScanCoverWrites } from './scanCoverWrites.ts'
 
 type ScanControl = {
   paused: boolean
@@ -48,25 +35,10 @@ type ScanControl = {
   resume: (() => void) | null
 }
 
-const workerParentPort = (process as unknown as { parentPort?: ElectronParentPort }).parentPort
-const nodeIpc = process as unknown as NodeIpcProcess
-const parentPort: ParentPort | null = workerParentPort
-  ? {
-      postMessage: (message) => workerParentPort.postMessage(message),
-      on: (_event, listener) => workerParentPort.on('message', (event) => listener(event.data))
-    }
-  : typeof nodeIpc.send === 'function' && typeof nodeIpc.on === 'function'
-    ? {
-        postMessage: (message) => nodeIpc.send?.(message),
-        on: (_event, listener) => nodeIpc.on?.('message', listener)
-      }
-    : null
-
-if (!parentPort) {
-  throw new Error('Twilight local library scan service requires an Electron or Node parent port')
-}
-
-const servicePort = parentPort
+const servicePort = createServicePort<
+  LocalLibraryScanWorkerRequest,
+  LocalLibraryScanWorkerMessage
+>()
 initializeUtilityDiagnostics('twilight-library-scan')
 const activeScans = new Map<string, ScanControl>()
 const databaseProxies = new Map<string, ReturnType<typeof createScanDatabaseProxy>>()
@@ -75,6 +47,8 @@ const repairReplies = new Map<
   { sequence: number; resolve(): void; reject(error: Error): void }
 >()
 const coverHandlesByDirectory = new Map<string, Promise<string | null>>()
+const coverWrites = new ScanCoverWrites()
+let coverMaintenance: string | null = null
 const MAX_COVER_BYTES = 20 * 1024 * 1024
 const SCAN_BATCH_SIZE = 256
 const IDENTITY_BATCH_SIZE = 1_024
@@ -87,6 +61,27 @@ const MAX_COVER_DIRECTORY_CACHE_ENTRIES = 2_048
 
 servicePort.postMessage({ kind: 'ready' })
 servicePort.on('message', (message) => {
+  if (message.kind === 'cache-suspend') {
+    coverMaintenance = message.requestId
+    coverHandlesByDirectory.clear()
+    void coverWrites.suspend().then(() => {
+      servicePort.postMessage({
+        kind: 'cache-ready',
+        requestId: message.requestId,
+        state: 'suspended'
+      })
+    })
+    return
+  }
+  if (message.kind === 'cache-resume') {
+    if (coverMaintenance === message.requestId) {
+      coverMaintenance = null
+      coverHandlesByDirectory.clear()
+      coverWrites.resume()
+    }
+    servicePort.postMessage({ kind: 'cache-ready', requestId: message.requestId, state: 'running' })
+    return
+  }
   if (message.kind === 'repair-ack') {
     const reply = repairReplies.get(message.requestId)
     if (reply?.sequence === message.sequence) {
@@ -162,7 +157,8 @@ async function handleRepairScan(
           await withTimeout(
             parseTrack(identity, coverCacheDir, cueIndex),
             PARSE_TIMEOUT_MS + COVER_LOOKUP_TIMEOUT_MS,
-            'repair file parsing'
+            'repair file parsing',
+            true
           )
         ).tracks as LibraryTrackRecord[],
       call: (call: RepairScanCall) =>
@@ -223,7 +219,8 @@ async function handleDatabaseScan(
         const parsed = await withTimeout(
           parseTrack(identity, coverCacheDir, cueIndex, audioMetadata),
           PARSE_TIMEOUT_MS + COVER_LOOKUP_TIMEOUT_MS,
-          'file metadata parsing'
+          'file metadata parsing',
+          true
         )
         return {
           identity,
@@ -733,7 +730,13 @@ async function parseAudioMetadata(filePath: string, skipCovers = false): Promise
   }
 }
 
-async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string,
+  pauseForCache = false
+): Promise<T> {
+  if (pauseForCache) return coverWrites.timeout(operation, timeoutMs, label)
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
@@ -902,6 +905,7 @@ async function parseTrack(
 }
 
 async function findCoverInDir(dir: string, coverCacheDir: string): Promise<string | null> {
+  const generation = coverWrites.generation
   const cached = coverHandlesByDirectory.get(dir)
   if (cached) return await cached
 
@@ -924,16 +928,16 @@ async function findCoverInDir(dir: string, coverCacheDir: string): Promise<strin
     }
     return null
   })()
-  const pending = withTimeout(lookup, COVER_LOOKUP_TIMEOUT_MS, 'folder cover lookup').catch(
+  const pending = withTimeout(lookup, COVER_LOOKUP_TIMEOUT_MS, 'folder cover lookup', true).catch(
     () => null
   )
   const cachedPending = pending.then(
     (handle) => {
-      rememberCoverHandle(dir, handle)
+      if (generation === coverWrites.generation) rememberCoverHandle(dir, handle)
       return handle
     },
     () => {
-      rememberCoverHandle(dir, null)
+      if (generation === coverWrites.generation) rememberCoverHandle(dir, null)
       return null
     }
   )
@@ -958,8 +962,10 @@ async function cacheCoverFromBuffer(data: Buffer, coverCacheDir: string): Promis
     if (!extension) return null
     const hash = createHash('sha256').update(data).digest('hex').slice(0, 24)
     const fileName = `${hash}.${extension}`
-    await mkdir(coverCacheDir, { recursive: true })
-    await writeIfMissing(join(coverCacheDir, fileName), data)
+    await coverWrites.use(async () => {
+      await mkdir(coverCacheDir, { recursive: true })
+      await writeIfMissing(join(coverCacheDir, fileName), data)
+    })
     return `cover://${fileName}`
   } catch {
     return null

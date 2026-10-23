@@ -61,6 +61,48 @@ test('scan worker preserves GIF folder covers and rejects invalid GIF signatures
   }
 })
 
+test('real scan worker suspends only cover writes and invalidates directory handles after clearing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'twilight-scan-cover-maintenance-'))
+  writeTaggedWav(join(root, 'audio.wav'))
+  writeFileSync(join(root, 'cover.gif'), Buffer.from('GIF89a-fixture'))
+  const child = await startWorker()
+  try {
+    const first = await sendScan(child, { ...baseRequest(root), mode: 'full' })
+    assert.ok(first.ok)
+    const cover = String((first.value.parsedTracks[0] as Record<string, unknown>).cover)
+    assert.match(cover, /^cover:\/\//)
+    const suspended = waitForMessage(
+      child,
+      (m) => m.kind === 'cache-ready' && m.state === 'suspended'
+    )
+    child.send({ kind: 'cache-suspend', requestId: 'maintenance' })
+    await suspended
+    rmSync(join(root, 'covers'), { recursive: true, force: true })
+    // A full scan would finish immediately from the old directory memo if it
+    // weren't invalidated. Its actual cover write must now wait for resume.
+    let finished = false
+    const second = sendScan(child, { ...baseRequest(root), mode: 'full' }).then((r) => {
+      finished = true
+      return r
+    })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(finished, false)
+    const resumed = waitForMessage(child, (m) => m.kind === 'cache-ready' && m.state === 'running')
+    child.send({ kind: 'cache-resume', requestId: 'maintenance' })
+    await resumed
+    const result = await second
+    assert.ok(result.ok)
+    assert.equal((result.value.parsedTracks[0] as Record<string, unknown>).cover, cover)
+    assert.equal(
+      readFileSync(join(root, 'covers', cover.slice('cover://'.length)), 'utf8'),
+      'GIF89a-fixture'
+    )
+  } finally {
+    await terminateWorker(child)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('scan worker reads duration and trailing tags across a large audio payload', async () => {
   const root = mkdtempSync(join(tmpdir(), 'twilight-scan-seek-'))
   const filePath = join(root, 'large.wav')

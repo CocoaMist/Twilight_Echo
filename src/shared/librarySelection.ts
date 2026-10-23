@@ -48,7 +48,8 @@ export interface LibrarySelectionApi {
   readTrackSelection(
     id: string,
     cursor?: number,
-    projection?: 'tracks' | 'files'
+    projection?: 'tracks' | 'files',
+    requireCurrent?: boolean
   ): Promise<LibrarySelectionPage>
   closeTrackSelection(id: string): Promise<void>
 }

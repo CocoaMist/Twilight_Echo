@@ -1,3 +1,4 @@
+import { LEGACY_QUEUE_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -108,10 +109,10 @@ test('v4 upgrade snapshots WAL and builds path indexes without changing content,
     .prepare('SELECT file_key,content_version FROM files ORDER BY file_key')
     .all()
   const queue = old.createLibraryQueue({ sort: 'playlist', ids: ['t:0', 't:0'] })
-  old.sql.exec(removePathIndex)
+  old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + removePathIndex)
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
     assert.deepEqual(upgraded.exportDocument(), before)
     assert.deepEqual(upgraded.getTracksByIds(['t:0', 't:2']).versions, versions)
     assert.deepEqual(
@@ -145,7 +146,7 @@ test('path schema DDL faults roll back and a failed snapshot prevents any upgrad
     rmSync(root, { recursive: true, force: true })
   })
   seed(old)
-  old.sql.exec(removePathIndex)
+  old.sql.exec(LEGACY_QUEUE_SCHEMA_SQL + removePathIndex)
   const original = DatabaseSync.prototype.exec
   const mock = t.mock.method(
     DatabaseSync.prototype,

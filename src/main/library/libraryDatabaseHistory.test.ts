@@ -1,3 +1,4 @@
+import { LEGACY_QUEUE_SCHEMA_SQL } from './legacyQueueSchema.fixture.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
@@ -262,14 +263,15 @@ test('v3 upgrade saves a consistent snapshot, preserves tracks and queues, and i
   })
   const queue = old.createLibraryQueue({ sort: 'playlist', ids: ['one', 'one'] })
   old.sql.exec(
-    `DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP TABLE library_history; DELETE FROM meta WHERE key='history_revision';
+    LEGACY_QUEUE_SCHEMA_SQL +
+      `DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP TABLE library_history; DELETE FROM meta WHERE key='history_revision';
     DROP INDEX tracks_recording; DROP INDEX tracks_playlist_path; DROP INDEX tracks_playlist_suffix;
     ALTER TABLE tracks DROP COLUMN playlist_path; ALTER TABLE tracks DROP COLUMN playlist_path_reverse;
     DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=3;`
   )
   const upgraded = new LibraryDatabase(path)
   try {
-    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 10)
+    assert.equal(upgraded.sql.prepare('PRAGMA user_version').get()?.user_version, 12)
     assert.equal(upgraded.readLibraryQueue(queue.id).total, 2)
     replace(upgraded, [{ id: 'one', lastPlayed: 100 }])
     assert.equal(upgraded.queryTracks().historyRevision, 1)
@@ -302,7 +304,8 @@ test('history schema upgrade rolls back partial DDL and refuses to upgrade when 
     rmSync(root, { recursive: true, force: true })
   })
   old.sql.exec(
-    `DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP TABLE library_history; DELETE FROM meta WHERE key='history_revision';
+    LEGACY_QUEUE_SCHEMA_SQL +
+      `DROP TABLE queue_snapshots; DROP INDEX queues_state; ALTER TABLE queues DROP COLUMN state; ALTER TABLE queues DROP COLUMN play_mode; DROP TABLE library_history; DELETE FROM meta WHERE key='history_revision';
     DROP INDEX tracks_recording; DROP INDEX tracks_playlist_path; DROP INDEX tracks_playlist_suffix;
     ALTER TABLE tracks DROP COLUMN playlist_path; ALTER TABLE tracks DROP COLUMN playlist_path_reverse;
     DROP INDEX scan_checkpoint_cleanup; ALTER TABLE scan_jobs DROP COLUMN checked_files; ALTER TABLE scan_jobs DROP COLUMN checkpoints_reclaimed; PRAGMA user_version=3;`
