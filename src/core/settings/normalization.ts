@@ -1,0 +1,793 @@
+import { normalizeNavigationPagePreferences } from '../../shared/navigationPages.ts'
+import { normalizeShortcutEnabled } from '../../shared/shortcutPreferences.ts'
+import {
+  normalizeAutoMixMode,
+  normalizeAutoMixStemMode,
+  normalizeAutoMixStemDevice,
+  normalizeAutoMixStemCacheMiB
+} from '../../shared/twilightAutoMix.ts'
+import {
+  DEFAULT_DOWNLOAD_PREFERENCES,
+  normalizeDownloadPreferences
+} from '../../shared/downloadPreferences.ts'
+import { normalizeAppBackgroundSettings } from '../../shared/appAppearance.ts'
+import { normalizeAppearanceLayers } from '../../shared/appearanceLayers.ts'
+import {
+  normalizeContinuityOutputConfig,
+  normalizeOutputConfig as normalizeSharedOutputConfig
+} from '../../shared/audioOutputConfig.ts'
+export {
+  normalizeChannelRoutingMode,
+  normalizePcmToDsdMode
+} from '../../shared/audioOutputConfig.ts'
+
+import { normalizeAudioDeviceProfileSettings } from '../../shared/audioDeviceProfiles.ts'
+import { createLegacyDspGraph, normalizeDspScenes } from '../../shared/dspGraph.ts'
+import {
+  DEFAULT_LANGUAGE_PREFERENCE,
+  normalizeLanguagePreference
+} from '../../shared/i18n/locale.ts'
+import {
+  DEFAULT_AUDIO_PROCESSING,
+  normalizeAudioOutput,
+  normalizeAudioProcessingSettings
+} from '../audio/audioEngineHelpers.ts'
+import {
+  DEFAULT_HEADPHONE_COMPENSATION,
+  normalizeHeadphoneCompensationSettings
+} from '../audio/audioProcessingEffective.ts'
+import type {
+  AppBackgroundKind,
+  AppBackgroundPage,
+  AppBackgroundSettings,
+  AppSettings,
+  AppTheme,
+  AudioEqPreset,
+  BackgroundEffectTheme,
+  CardAppearanceSettings,
+  CardAppearanceTheme,
+  CardHoverEffect,
+  CardShadowStrength,
+  CloseWindowBehavior,
+  DesktopLyricsSettings,
+  GlobalShortcutSettings,
+  WindowTransparencyEffectSettings,
+  MusicCachePolicySettings,
+  NcmPlaybackQuality,
+  NowPlayingBackground,
+  PlaybackResumeMode,
+  PreviousButtonAction,
+  ProxyMode,
+  StartupHomePage,
+  TrackActivationMode,
+  StreamingAudioCachePolicy,
+  UiDensity
+} from '../../shared/appSettings.ts'
+import type { AfterglowAutoEntry } from '../../shared/afterglowMode.ts'
+import type { PlayMode } from '../../shared/audioEngineTypes.ts'
+import {
+  DEFAULT_MINI_PLAYER_SETTINGS,
+  cloneMiniPlayerSettings,
+  normalizeMiniPlayerSettings
+} from '../../shared/miniPlayer.ts'
+import { DEFAULT_SOFTWARE_VOLUME } from '../../shared/audioProcessingOptions.ts'
+import { normalizeThemeSelection, normalizeThemeWindowInheritance } from '../../shared/theme.ts'
+import { normalizeMotionPreference } from '../../shared/motion.ts'
+import {
+  DEFAULT_LIQUID_GLASS,
+  normalizeLiquidGlass,
+  normalizeSurfaceMaterial
+} from '../../shared/liquidGlass.ts'
+import {
+  DEFAULT_PLAYER_BAR_SETTINGS,
+  clonePlayerBarSettings,
+  normalizePlayerBarSettings
+} from '../../shared/playerBar.ts'
+import { DEFAULT_SLEEP_TIMER_SETTINGS, type SleepTimerSettings } from '../../shared/sleepTimer.ts'
+import {
+  DEFAULT_LYRICS_APPEARANCE,
+  cloneLyricsAppearance,
+  normalizeLyricsAppearance
+} from '../../shared/lyricsAppearance.ts'
+import {
+  DEFAULT_DESKTOP_LYRICS_SETTINGS,
+  normalizeDesktopLyricsSettings
+} from '../../shared/desktopLyrics.ts'
+import { normalizeAppFontFamily, normalizeAppFontRendering } from '../../shared/appFont.ts'
+import {
+  DEFAULT_LYRICS_PRESET_CONFIG,
+  cloneLyricsPresetConfig,
+  normalizeLyricsPresetConfig
+} from '../../shared/lyricsPresets.ts'
+import { DEFAULT_GENRE_SEPARATORS, normalizeGenreSeparators } from '../../shared/genreSeparators.ts'
+import { normalizeStartupExperience } from '../../shared/pluginExperience.ts'
+import { normalizeEqualizerAutoPreamp } from '../../shared/equalizerPreferences.ts'
+
+import type { OutputConfig } from '../../shared/audioEngineTypes.ts'
+export const DEFAULT_DESKTOP_LYRICS: DesktopLyricsSettings = DEFAULT_DESKTOP_LYRICS_SETTINGS
+
+export const DEFAULT_MUSIC_CACHE_POLICY: MusicCachePolicySettings = {
+  cover: true,
+  lyrics: true,
+  metadata: true,
+  streamingAudio: 'provider'
+}
+
+export const DEFAULT_GLOBAL_SHORTCUT_BINDINGS: GlobalShortcutSettings = {
+  previous: 'CommandOrControl+Alt+Left',
+  next: 'CommandOrControl+Alt+Right',
+  playPause: 'CommandOrControl+Alt+Space',
+  volumeUp: 'CommandOrControl+Alt+Up',
+  volumeDown: 'CommandOrControl+Alt+Down',
+  toggleDesktopLyrics: 'CommandOrControl+Alt+D',
+  toggleDesktopLyricsLock: 'CommandOrControl+Alt+L'
+}
+
+const BASE_SETTINGS: AppSettings = {
+  autoCheckLogin: true,
+  autoLaunch: false,
+  launchAtLogin: false,
+  hardwareAcceleration: true,
+  globalShortcuts: false,
+  shortcutEnabled: {},
+  globalShortcutBindings: { ...DEFAULT_GLOBAL_SHORTCUT_BINDINGS },
+  minimizeToTray: false,
+  musicCachePath: '',
+  cachePath: '',
+  cachePolicy: DEFAULT_MUSIC_CACHE_POLICY,
+  autoAnalyzeBpm: true,
+  closeWindowBehavior: 'quit',
+  closeToTray: false,
+  taskbarThumbarButtonsEnabled: true,
+  afterglowAutoEntry: 'off',
+  onboardingCompleted: false,
+  developerMode: false,
+  startupHomePage: 'local',
+  startupExperience: null,
+  navigationPages: normalizeNavigationPagePreferences(undefined),
+  trackActivationMode: 'singleClick',
+  language: DEFAULT_LANGUAGE_PREFERENCE,
+  theme: 'system',
+  pluginThemeId: null,
+  activeTheme: { kind: 'builtin', id: 'builtin:twilight-echo-default' },
+  themeWindowInheritance: { miniPlayer: true, desktopLyrics: true },
+  motionPreference: 'system',
+  blurEffect: true,
+  windowTransparency: false,
+  windowTransparencyEffect: {
+    surfaceOpacity: 55,
+    surfaceBlur: 0,
+    cardOpacity: 60,
+    cardBlur: 24
+  },
+  useCoverTheme: true,
+  lyricsAppearance: cloneLyricsAppearance(DEFAULT_LYRICS_APPEARANCE),
+  lyricsPresets: cloneLyricsPresetConfig(DEFAULT_LYRICS_PRESET_CONFIG),
+  libraryFolders: [],
+  lastLibraryFolder: '',
+  downloadPreferences: { ...DEFAULT_DOWNLOAD_PREFERENCES },
+  downloadFolder: '',
+  genreSeparators: DEFAULT_GENRE_SEPARATORS,
+  watchLibrary: true,
+  onlineLyricsFallback: false,
+  smtcEnabled: true,
+  discordRpcEnabled: false,
+  accentColor: 'blue',
+  lightAccentColor: 'blue',
+  darkAccentColor: 'blue',
+  fontFamily: 'system',
+  fontRendering: 'auto',
+  uiDensity: 'standard',
+  appBackground: {
+    global: {
+      light: '#f4f4f7',
+      dark: '#17181a',
+      kind: 'color',
+      image: ''
+    },
+    pages: {
+      local: { inherit: true, light: '#ffffff', dark: '#17181a', kind: 'color', image: '' },
+      settings: { inherit: true, light: '#f4f4f7', dark: '#17181a', kind: 'color', image: '' },
+      streaming: { inherit: true, light: '#fafbfe', dark: '#17181a', kind: 'color', image: '' },
+      player: { inherit: true, light: '#080e17', dark: '#17181a', kind: 'color', image: '' }
+    }
+  },
+  cardAppearance: {
+    enabled: false,
+    light: {
+      blurRadius: 20,
+      blurSaturation: 150,
+      backgroundColor: '#ffffff',
+      backgroundOpacity: 100,
+      borderColor: '#0f172a',
+      borderOpacity: 8,
+      borderWidth: 1,
+      borderRadius: 16,
+      shadowStrength: 'medium',
+      hoverEffect: 'lift',
+      glassHighlight: true
+    },
+    dark: {
+      blurRadius: 20,
+      blurSaturation: 150,
+      backgroundColor: '#181818',
+      backgroundOpacity: 100,
+      borderColor: '#ffffff',
+      borderOpacity: 10,
+      borderWidth: 1,
+      borderRadius: 16,
+      shadowStrength: 'medium',
+      hoverEffect: 'lift',
+      glassHighlight: true
+    },
+    background: {
+      enabled: false,
+      light: { blur: 0, brightness: 100, dim: 0 },
+      dark: { blur: 0, brightness: 100, dim: 0 }
+    }
+  },
+  surfaceMaterial: 'standard',
+  liquidGlass: DEFAULT_LIQUID_GLASS,
+  playerBar: clonePlayerBarSettings(DEFAULT_PLAYER_BAR_SETTINGS),
+  nowPlayingBackground: 'blur',
+  playbackResumeMode: 'off',
+  previousButtonAction: 'restart',
+  sleepTimer: DEFAULT_SLEEP_TIMER_SETTINGS,
+  ncmPlaybackQuality: 'auto',
+  playMode: 'sequential',
+  softwareVolume: DEFAULT_SOFTWARE_VOLUME,
+  audioOutput: 'wasapi',
+  audioDevice: 'auto',
+  audioExclusiveMode: false,
+  audioExclusiveAutoRelease: false,
+  autoMixMode: 'off',
+  autoMixStemMode: 'auto',
+  autoMixStemDevice: 'auto',
+  autoMixStemCacheMiB: 512,
+  audioOutputConfig: {
+    ...normalizeContinuityOutputConfig({}),
+    preferredBufferSize: 0,
+    routingMode: 'auto',
+    wasapiExclusivePushMode: false,
+    pcmToDsdMode: 'off',
+    dsdMutePreRollFrames: 256,
+    dsdMutePostRollFrames: 256,
+    dsdMuteTimeoutFrames: 4096
+  },
+  audioProcessing: DEFAULT_AUDIO_PROCESSING,
+  dspScenes: [
+    {
+      id: 'default',
+      name: 'Default',
+      enabled: true,
+      priority: 0,
+      rules: {},
+      graph: createLegacyDspGraph(DEFAULT_AUDIO_PROCESSING)
+    }
+  ],
+  dspPinnedSceneId: null,
+  audioDeviceProfiles: normalizeAudioDeviceProfileSettings(),
+  headphoneCompensation: DEFAULT_HEADPHONE_COMPENSATION,
+  audioEqPresets: [],
+  audioEqAutoPreamp: null,
+  desktopLyrics: { ...DEFAULT_DESKTOP_LYRICS },
+  miniPlayer: cloneMiniPlayerSettings(DEFAULT_MINI_PLAYER_SETTINGS),
+  proxyMode: 'auto',
+  proxyHost: '',
+  proxyPort: 0,
+  proxyAllowDirectFallback: false,
+  streamingActiveProvider: 'ncm',
+  remoteControlEnabled: false,
+  remoteControlPort: 0
+}
+
+export function createDefaultSettings(platform: NodeJS.Platform): AppSettings {
+  return structuredClone({
+    ...BASE_SETTINGS,
+    audioOutput: normalizeAudioOutput(undefined, platform)
+  })
+}
+
+const DEFAULT_SETTINGS = BASE_SETTINGS
+
+export interface SettingsEnvironment {
+  platform: NodeJS.Platform
+  defaultCachePath: string
+  resolvePath(path: string): string
+}
+
+export function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, value))
+}
+
+export function normalizeProxyMode(value: unknown): ProxyMode {
+  if (value === 'auto' || value === 'custom' || value === 'off') return value
+  return 'auto'
+}
+
+export function compareVersions(a: string, b: string): number {
+  const partsA = a.split('.').map((n) => parseInt(n, 10) || 0)
+  const partsB = b.split('.').map((n) => parseInt(n, 10) || 0)
+  const maxLen = Math.max(partsA.length, partsB.length)
+  for (let i = 0; i < maxLen; i++) {
+    const va = partsA[i] ?? 0
+    const vb = partsB[i] ?? 0
+    if (va > vb) return 1
+    if (va < vb) return -1
+  }
+  return 0
+}
+
+export function normalizeAudioEqPresets(presets: unknown): AudioEqPreset[] {
+  if (!Array.isArray(presets)) return []
+
+  return presets
+    .map((preset, index): AudioEqPreset | null => {
+      if (!preset || typeof preset !== 'object') return null
+      const raw = preset as Partial<AudioEqPreset>
+      const normalized = normalizeAudioProcessingSettings({
+        eqMode: raw.eqMode,
+        eqPreamp: raw.eqPreamp,
+        eqBands: raw.eqBands
+      })
+      return {
+        id: typeof raw.id === 'string' && raw.id ? raw.id : `custom-${index}`,
+        name:
+          typeof raw.name === 'string' && raw.name ? raw.name.slice(0, 40) : `Preset ${index + 1}`,
+        eqMode: normalized.eqMode,
+        eqPreamp: normalized.eqPreamp,
+        eqBands: normalized.eqBands
+      }
+    })
+    .filter((preset): preset is AudioEqPreset => Boolean(preset))
+    .slice(0, 24)
+}
+
+export function normalizeAppTheme(theme: unknown): AppTheme {
+  return theme === 'system' || theme === 'dark' || theme === 'pureWhite'
+    ? theme
+    : DEFAULT_SETTINGS.theme
+}
+
+export function normalizePlaybackResumeMode(mode: unknown): PlaybackResumeMode {
+  return mode === 'track' || mode === 'trackAndPosition' || mode === 'off'
+    ? mode
+    : DEFAULT_SETTINGS.playbackResumeMode
+}
+
+export function normalizePreviousButtonAction(value: unknown): PreviousButtonAction {
+  return value === 'previous' ? 'previous' : DEFAULT_SETTINGS.previousButtonAction
+}
+
+export function normalizeNcmPlaybackQuality(value: unknown): NcmPlaybackQuality {
+  return value === 'standard' ||
+    value === 'exhigh' ||
+    value === 'lossless' ||
+    value === 'hires' ||
+    value === 'auto'
+    ? value
+    : DEFAULT_SETTINGS.ncmPlaybackQuality
+}
+
+export function normalizeStartupHomePage(value: unknown): StartupHomePage {
+  return value === 'streaming' ? 'streaming' : 'local'
+}
+
+export function normalizeTrackActivationMode(value: unknown): TrackActivationMode {
+  return value === 'doubleClick' ? 'doubleClick' : 'singleClick'
+}
+
+export function normalizeAfterglowAutoEntry(value: unknown): AfterglowAutoEntry {
+  return value === 'minimize' || value === 'hide' || value === 'minimizeOrHide' ? value : 'off'
+}
+
+export function normalizeStreamingAudioCachePolicy(value: unknown): StreamingAudioCachePolicy {
+  return value === 'off' ? 'off' : 'provider'
+}
+
+const ACCELERATOR_PATTERN = /^([A-Za-z0-9+]+)$/
+export function normalizeShortcutAccelerator(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback
+  const trimmed = value.trim().slice(0, 128)
+  if (!trimmed) return fallback
+  if (!ACCELERATOR_PATTERN.test(trimmed)) return fallback
+  return trimmed
+}
+
+export function normalizeGlobalShortcutBindings(raw: unknown): GlobalShortcutSettings {
+  const value = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  return {
+    volumeUp: normalizeShortcutAccelerator(
+      value.volumeUp,
+      DEFAULT_GLOBAL_SHORTCUT_BINDINGS.volumeUp
+    ),
+    volumeDown: normalizeShortcutAccelerator(
+      value.volumeDown,
+      DEFAULT_GLOBAL_SHORTCUT_BINDINGS.volumeDown
+    ),
+    previous: normalizeShortcutAccelerator(
+      value.previous,
+      DEFAULT_GLOBAL_SHORTCUT_BINDINGS.previous
+    ),
+    next: normalizeShortcutAccelerator(value.next, DEFAULT_GLOBAL_SHORTCUT_BINDINGS.next),
+    playPause: normalizeShortcutAccelerator(
+      value.playPause,
+      DEFAULT_GLOBAL_SHORTCUT_BINDINGS.playPause
+    ),
+    toggleDesktopLyrics: normalizeShortcutAccelerator(
+      value.toggleDesktopLyrics,
+      DEFAULT_GLOBAL_SHORTCUT_BINDINGS.toggleDesktopLyrics
+    ),
+    toggleDesktopLyricsLock: normalizeShortcutAccelerator(
+      value.toggleDesktopLyricsLock,
+      DEFAULT_GLOBAL_SHORTCUT_BINDINGS.toggleDesktopLyricsLock
+    )
+  }
+}
+
+export function normalizeMusicCachePolicy(raw: unknown): MusicCachePolicySettings {
+  const value = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  return {
+    cover: value.cover !== false,
+    lyrics: value.lyrics !== false,
+    metadata: value.metadata !== false,
+    streamingAudio: normalizeStreamingAudioCachePolicy(value.streamingAudio)
+  }
+}
+
+export function normalizePlayMode(mode: unknown): PlayMode {
+  return mode === 'listLoop' || mode === 'repeat' || mode === 'shuffle' ? mode : 'sequential'
+}
+
+export const ACCENT_COLORS = ['violet', 'blue', 'emerald', 'rose', 'amber', 'slate']
+
+export function normalizeAccentColor(value: unknown): string {
+  return typeof value === 'string' && ACCENT_COLORS.includes(value)
+    ? value
+    : DEFAULT_SETTINGS.accentColor
+}
+
+export function normalizeLightAccentColor(value: unknown): string {
+  return typeof value === 'string' && ACCENT_COLORS.includes(value)
+    ? value
+    : DEFAULT_SETTINGS.lightAccentColor
+}
+
+export function normalizeDarkAccentColor(value: unknown, legacyValue: unknown): string {
+  if (typeof value === 'string' && ACCENT_COLORS.includes(value)) return value
+  if (typeof legacyValue === 'string' && ACCENT_COLORS.includes(legacyValue)) return legacyValue
+  return DEFAULT_SETTINGS.darkAccentColor
+}
+
+export function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 64)
+}
+
+export function normalizeUiDensity(value: unknown): UiDensity {
+  return value === 'compact' || value === 'comfortable' ? value : 'standard'
+}
+
+export function normalizeNowPlayingBackground(value: unknown): NowPlayingBackground {
+  return value === 'fluid' || value === 'solid' ? value : 'blur'
+}
+
+export function normalizeHexColor(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback
+  const normalized = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(normalized)) return normalized.toLowerCase()
+  if (/^[0-9a-fA-F]{6}$/.test(normalized)) return `#${normalized.toLowerCase()}`
+  return fallback
+}
+
+export function normalizeBackgroundKind(value: unknown): AppBackgroundKind {
+  if (value === 'theme' || value === 'none') return 'theme'
+  return value === 'image' ? 'image' : 'color'
+}
+
+export function normalizeBackgroundImageHandle(value: unknown): string {
+  return typeof value === 'string' && /^background:\/\/[a-zA-Z0-9._-]+$/.test(value) ? value : ''
+}
+
+export const APP_BACKGROUND_PAGES: AppBackgroundPage[] = [
+  'local',
+  'settings',
+  'streaming',
+  'player'
+]
+
+export function normalizeAppBackground(raw: unknown): AppBackgroundSettings {
+  return normalizeAppBackgroundSettings(raw)
+}
+
+export const CARD_SHADOW_STRENGTHS: CardShadowStrength[] = ['none', 'subtle', 'medium', 'strong']
+export const CARD_HOVER_EFFECTS: CardHoverEffect[] = ['none', 'lift', 'zoom', 'glow']
+
+export function normalizeCardShadowStrength(value: unknown): CardShadowStrength {
+  return typeof value === 'string' && CARD_SHADOW_STRENGTHS.includes(value as CardShadowStrength)
+    ? (value as CardShadowStrength)
+    : 'medium'
+}
+
+export function normalizeCardHoverEffect(value: unknown): CardHoverEffect {
+  return typeof value === 'string' && CARD_HOVER_EFFECTS.includes(value as CardHoverEffect)
+    ? (value as CardHoverEffect)
+    : 'lift'
+}
+
+export function normalizeCardAppearanceTheme(
+  raw: unknown,
+  defaults: CardAppearanceTheme
+): CardAppearanceTheme {
+  const t = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  return {
+    blurRadius: clampNumber(t.blurRadius, 0, 40, defaults.blurRadius),
+    blurSaturation: clampNumber(t.blurSaturation, 80, 180, defaults.blurSaturation),
+    backgroundColor: normalizeHexColor(t.backgroundColor, defaults.backgroundColor),
+    backgroundOpacity: clampNumber(t.backgroundOpacity, 0, 100, defaults.backgroundOpacity),
+    borderColor: normalizeHexColor(t.borderColor, defaults.borderColor),
+    borderOpacity: clampNumber(t.borderOpacity, 0, 100, defaults.borderOpacity),
+    borderWidth: clampNumber(t.borderWidth, 0, 3, defaults.borderWidth),
+    borderRadius: clampNumber(t.borderRadius, 0, 24, defaults.borderRadius),
+    shadowStrength: normalizeCardShadowStrength(t.shadowStrength),
+    hoverEffect: normalizeCardHoverEffect(t.hoverEffect),
+    glassHighlight: t.glassHighlight !== false
+  }
+}
+
+export function normalizeWindowTransparencyEffect(raw: unknown): WindowTransparencyEffectSettings {
+  const defaults = DEFAULT_SETTINGS.windowTransparencyEffect
+  const t = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  return {
+    surfaceOpacity: clampNumber(t.surfaceOpacity, 20, 100, defaults.surfaceOpacity),
+    surfaceBlur: clampNumber(t.surfaceBlur, 0, 60, defaults.surfaceBlur),
+    cardOpacity: clampNumber(t.cardOpacity, 0, 100, defaults.cardOpacity),
+    cardBlur: clampNumber(t.cardBlur, 0, 60, defaults.cardBlur)
+  }
+}
+
+export function normalizeBackgroundEffectTheme(
+  raw: unknown,
+  defaults: BackgroundEffectTheme
+): BackgroundEffectTheme {
+  const t = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  return {
+    blur: clampNumber(t.blur, 0, 30, defaults.blur),
+    brightness: clampNumber(t.brightness, 50, 120, defaults.brightness),
+    dim: clampNumber(t.dim, 0, 80, defaults.dim)
+  }
+}
+
+export function normalizeCardAppearance(raw: unknown): CardAppearanceSettings {
+  const value = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  const defaults = DEFAULT_SETTINGS.cardAppearance
+  const bgRaw = (
+    typeof value.background === 'object' && value.background !== null ? value.background : {}
+  ) as Record<string, unknown>
+  return {
+    enabled: value.enabled === true,
+    light: normalizeCardAppearanceTheme(value.light, defaults.light),
+    dark: normalizeCardAppearanceTheme(value.dark, defaults.dark),
+    background: {
+      enabled: bgRaw.enabled === true,
+      light: normalizeBackgroundEffectTheme(bgRaw.light, defaults.background.light),
+      dark: normalizeBackgroundEffectTheme(bgRaw.dark, defaults.background.dark)
+    }
+  }
+}
+
+export function normalizePluginThemeId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim()
+  return normalized && /^[a-z][a-z0-9-_.]*:[a-z][a-z0-9-_.]*$/.test(normalized) ? normalized : null
+}
+
+export function isDefaultAudioDeviceAlias(device: string): boolean {
+  const normalized = device.trim()
+  const lower = normalized.toLowerCase()
+  return (
+    lower === 'auto' ||
+    lower === 'default' ||
+    lower === 'system default' ||
+    lower === 'system-default' ||
+    normalized === '系统默认'
+  )
+}
+
+export function normalizeAudioDevice(device: unknown): string {
+  if (typeof device !== 'string') return DEFAULT_SETTINGS.audioDevice
+  const normalized = device.trim()
+  if (!normalized || isDefaultAudioDeviceAlias(normalized)) return DEFAULT_SETTINGS.audioDevice
+  return normalized
+}
+
+// Preserve large ASIO buffers through storage and activation.
+export function normalizeOutputConfig(config: unknown): OutputConfig {
+  if (!config || typeof config !== 'object') return { ...DEFAULT_SETTINGS.audioOutputConfig }
+  return normalizeSharedOutputConfig(config as Partial<OutputConfig>, 32768)
+}
+
+export function normalizeDesktopLyrics(raw: unknown): DesktopLyricsSettings {
+  return normalizeDesktopLyricsSettings(raw)
+}
+
+export function normalizeSleepTimerSettings(raw: unknown): SleepTimerSettings {
+  const value = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
+  return {
+    defaultMinutes: clampNumber(
+      value.defaultMinutes,
+      1,
+      720,
+      DEFAULT_SLEEP_TIMER_SETTINGS.defaultMinutes
+    ),
+    fadeSeconds: clampNumber(value.fadeSeconds, 0, 120, DEFAULT_SLEEP_TIMER_SETTINGS.fadeSeconds)
+  }
+}
+
+export function normalizeAppSettings(
+  settings: Partial<AppSettings>,
+  environment: SettingsEnvironment
+): AppSettings {
+  const rawSettings = settings as Record<string, unknown>
+  const deviceProfiles = normalizeAudioDeviceProfileSettings(settings.audioDeviceProfiles)
+  const audioProcessing = normalizeAudioProcessingSettings(settings.audioProcessing)
+  const dspScenes = normalizeDspScenes(settings.dspScenes, audioProcessing)
+  const rawCachePath =
+    typeof settings.cachePath === 'string' && settings.cachePath.trim()
+      ? settings.cachePath.trim()
+      : typeof settings.musicCachePath === 'string' && settings.musicCachePath.trim()
+        ? settings.musicCachePath.trim()
+        : environment.defaultCachePath
+  const cachePath = environment.resolvePath(rawCachePath)
+  const launchAtLogin =
+    typeof settings.launchAtLogin === 'boolean'
+      ? settings.launchAtLogin
+      : typeof settings.autoLaunch === 'boolean'
+        ? settings.autoLaunch
+        : DEFAULT_SETTINGS.launchAtLogin
+  const autoLaunch = launchAtLogin
+  const legacyCloseToTray =
+    typeof settings.closeToTray === 'boolean'
+      ? settings.closeToTray
+      : typeof settings.minimizeToTray === 'boolean'
+        ? settings.minimizeToTray
+        : DEFAULT_SETTINGS.closeToTray
+  const closeWindowBehavior: CloseWindowBehavior =
+    settings.closeWindowBehavior === 'quit' ||
+    settings.closeWindowBehavior === 'tray' ||
+    settings.closeWindowBehavior === 'miniPlayer'
+      ? settings.closeWindowBehavior
+      : legacyCloseToTray
+        ? 'tray'
+        : 'quit'
+  const closeToTray = closeWindowBehavior === 'tray'
+  const minimizeToTray =
+    typeof settings.minimizeToTray === 'boolean' ? settings.minimizeToTray : closeToTray
+
+  const activeTheme = normalizeThemeSelection(settings.activeTheme, settings.pluginThemeId)
+  const themeWindowInheritance = normalizeThemeWindowInheritance(
+    settings.themeWindowInheritance,
+    Object.prototype.hasOwnProperty.call(settings, 'themeWindowInheritance')
+      ? DEFAULT_SETTINGS.themeWindowInheritance
+      : { miniPlayer: false, desktopLyrics: false }
+  )
+
+  return {
+    autoCheckLogin: settings.autoCheckLogin !== false,
+    autoLaunch,
+    launchAtLogin,
+    hardwareAcceleration: settings.hardwareAcceleration !== false,
+    globalShortcuts: settings.globalShortcuts === true,
+    shortcutEnabled: normalizeShortcutEnabled(settings.shortcutEnabled),
+    globalShortcutBindings: normalizeGlobalShortcutBindings(settings.globalShortcutBindings),
+    minimizeToTray,
+    musicCachePath: cachePath,
+    cachePath,
+    cachePolicy: normalizeMusicCachePolicy(settings.cachePolicy),
+    autoAnalyzeBpm: settings.autoAnalyzeBpm !== false,
+    closeWindowBehavior,
+    closeToTray,
+    taskbarThumbarButtonsEnabled: settings.taskbarThumbarButtonsEnabled !== false,
+    afterglowAutoEntry: normalizeAfterglowAutoEntry(settings.afterglowAutoEntry),
+    onboardingCompleted: settings.onboardingCompleted === true,
+    developerMode: settings.developerMode === true,
+    startupHomePage: normalizeStartupHomePage(settings.startupHomePage),
+    startupExperience: normalizeStartupExperience(settings.startupExperience),
+    navigationPages: normalizeNavigationPagePreferences(settings.navigationPages),
+    trackActivationMode: normalizeTrackActivationMode(settings.trackActivationMode),
+    language: normalizeLanguagePreference(settings.language),
+    theme: normalizeAppTheme(settings.theme),
+    pluginThemeId:
+      activeTheme.kind === 'plugin' ? `${activeTheme.pluginId}:${activeTheme.themeId}` : null,
+    activeTheme,
+    themeWindowInheritance,
+    motionPreference: normalizeMotionPreference(settings.motionPreference),
+    blurEffect: settings.blurEffect !== false,
+    windowTransparency: settings.windowTransparency === true,
+    windowTransparencyEffect: normalizeWindowTransparencyEffect(settings.windowTransparencyEffect),
+    useCoverTheme: settings.useCoverTheme !== false,
+    lyricsAppearance: normalizeLyricsAppearance(settings.lyricsAppearance, rawSettings),
+    lyricsPresets: normalizeLyricsPresetConfig(settings.lyricsPresets),
+    libraryFolders: normalizeStringArray(settings.libraryFolders),
+    lastLibraryFolder:
+      typeof settings.lastLibraryFolder === 'string' ? settings.lastLibraryFolder.trim() : '',
+    downloadPreferences: normalizeDownloadPreferences(settings.downloadPreferences),
+    downloadFolder:
+      typeof settings.downloadFolder === 'string' && settings.downloadFolder.trim()
+        ? environment.resolvePath(settings.downloadFolder.trim())
+        : DEFAULT_SETTINGS.downloadFolder,
+    genreSeparators: normalizeGenreSeparators(settings.genreSeparators),
+    watchLibrary: settings.watchLibrary !== false,
+    onlineLyricsFallback: settings.onlineLyricsFallback === true,
+    smtcEnabled: settings.smtcEnabled !== false,
+    discordRpcEnabled: settings.discordRpcEnabled === true,
+    accentColor: normalizeAccentColor(
+      settings.lightAccentColor ?? DEFAULT_SETTINGS.lightAccentColor
+    ),
+    lightAccentColor: normalizeLightAccentColor(settings.lightAccentColor),
+    darkAccentColor: normalizeDarkAccentColor(settings.darkAccentColor, settings.accentColor),
+    fontFamily: normalizeAppFontFamily(settings.fontFamily),
+    fontRendering: normalizeAppFontRendering(settings.fontRendering),
+    uiDensity: normalizeUiDensity(settings.uiDensity),
+    appBackground: normalizeAppBackgroundSettings(
+      settings.appBackground,
+      settings.cardAppearance?.background
+    ),
+    cardAppearance: normalizeCardAppearance(settings.cardAppearance),
+    appearanceLayers: normalizeAppearanceLayers(settings.appearanceLayers),
+    surfaceMaterial: normalizeSurfaceMaterial(settings.surfaceMaterial),
+    liquidGlass: normalizeLiquidGlass(settings.liquidGlass),
+    playerBar: normalizePlayerBarSettings(settings.playerBar),
+    nowPlayingBackground: normalizeNowPlayingBackground(settings.nowPlayingBackground),
+    playbackResumeMode: normalizePlaybackResumeMode(settings.playbackResumeMode),
+    previousButtonAction: normalizePreviousButtonAction(settings.previousButtonAction),
+    sleepTimer: normalizeSleepTimerSettings(settings.sleepTimer),
+    ncmPlaybackQuality: normalizeNcmPlaybackQuality(settings.ncmPlaybackQuality),
+    playMode: normalizePlayMode(settings.playMode),
+    softwareVolume: clampNumber(
+      settings.softwareVolume,
+      0,
+      deviceProfiles.volumeCeiling,
+      Math.min(DEFAULT_SOFTWARE_VOLUME, deviceProfiles.volumeCeiling)
+    ),
+    audioOutput: normalizeAudioOutput(settings.audioOutput, environment.platform),
+    audioDevice: normalizeAudioDevice(settings.audioDevice),
+    audioExclusiveMode: settings.audioExclusiveMode === true,
+    audioExclusiveAutoRelease: settings.audioExclusiveAutoRelease === true,
+    autoMixMode: normalizeAutoMixMode(settings.autoMixMode),
+    autoMixStemMode: normalizeAutoMixStemMode(settings.autoMixStemMode),
+    autoMixStemDevice: normalizeAutoMixStemDevice(settings.autoMixStemDevice),
+    autoMixStemCacheMiB: normalizeAutoMixStemCacheMiB(settings.autoMixStemCacheMiB),
+    audioOutputConfig: normalizeOutputConfig(settings.audioOutputConfig),
+    audioDeviceProfiles: deviceProfiles,
+    audioProcessing,
+    dspScenes,
+    dspPinnedSceneId:
+      typeof settings.dspPinnedSceneId === 'string' &&
+      dspScenes.some((scene) => scene.id === settings.dspPinnedSceneId)
+        ? settings.dspPinnedSceneId
+        : null,
+    headphoneCompensation: normalizeHeadphoneCompensationSettings(settings.headphoneCompensation),
+    audioEqPresets: normalizeAudioEqPresets(settings.audioEqPresets),
+    audioEqAutoPreamp: normalizeEqualizerAutoPreamp(settings.audioEqAutoPreamp),
+    desktopLyrics: normalizeDesktopLyrics(settings.desktopLyrics),
+    miniPlayer: normalizeMiniPlayerSettings(settings.miniPlayer),
+    proxyMode: normalizeProxyMode(settings.proxyMode),
+    proxyHost:
+      typeof settings.proxyHost === 'string' ? settings.proxyHost.trim().slice(0, 255) : '',
+    proxyPort: clampNumber(settings.proxyPort, 0, 65535, 0),
+    proxyAllowDirectFallback: settings.proxyAllowDirectFallback === true,
+    streamingActiveProvider:
+      typeof settings.streamingActiveProvider === 'string' &&
+      settings.streamingActiveProvider.trim()
+        ? settings.streamingActiveProvider.trim()
+        : DEFAULT_SETTINGS.streamingActiveProvider,
+    remoteControlEnabled: settings.remoteControlEnabled === true,
+    remoteControlPort: clampNumber(settings.remoteControlPort, 0, 65535, 0)
+  }
+}

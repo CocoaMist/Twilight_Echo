@@ -1,0 +1,130 @@
+import {
+  TWILIGHT_DEFAULT_THEME,
+  getBuiltInThemePreset,
+  resolveThemeProfileWindowDefaults,
+  type ThemeLibrarySnapshot,
+  type ThemeWindowDefaults
+} from '../../shared/theme.ts'
+import { cloneMiniPlayerSettings } from '../../shared/miniPlayer.ts'
+import { resolveThemePlayerBarMode } from '../../shared/themePlayerBar.ts'
+import type { AppSettings } from '../../shared/appSettings.ts'
+
+export function createThemePlayerBarSettingsPatch(
+  snapshot: ThemeLibrarySnapshot,
+  settings: AppSettings
+): Partial<AppSettings> {
+  const selection = snapshot.data.activeTheme
+  const profile =
+    selection.kind === 'user'
+      ? (snapshot.data.profiles.find((entry) => entry.id === selection.id) ?? null)
+      : null
+  const mode = resolveThemePlayerBarMode(selection, profile)
+  const current = settings.playerBar
+  if (mode === null || current.modeSource === 'user' || current.mode === mode) return {}
+  return {
+    playerBar: { ...current, mode, modeSource: 'theme' }
+  }
+}
+
+export async function createInheritedThemeSettingsPatch(
+  snapshot: ThemeLibrarySnapshot,
+  settings: AppSettings,
+  pluginDefaults?: (pluginId: string, themeId: string) => Promise<ThemeWindowDefaults | undefined>
+): Promise<Partial<AppSettings>> {
+  const defaults = await resolveThemeWindowDefaults(snapshot, pluginDefaults)
+  const patch: Partial<AppSettings> = {}
+
+  if (snapshot.data.windowInheritance.miniPlayer) {
+    const miniPlayer = cloneMiniPlayerSettings(settings.miniPlayer)
+    const profile = miniPlayer.profiles[miniPlayer.activeStyleId]
+    const appearance = defaults.miniPlayer
+    if (profile && appearance) {
+      miniPlayer.profiles[miniPlayer.activeStyleId] = {
+        ...profile,
+        background: {
+          ...profile.background,
+          ...(appearance.surfaceColor
+            ? {
+                solidColor: appearance.surfaceColor,
+                fallbackColor: appearance.surfaceColor
+              }
+            : {})
+        },
+        appearance: {
+          ...profile.appearance,
+          ...(appearance.accentColor
+            ? { accentMode: 'custom' as const, accentColor: appearance.accentColor }
+            : {}),
+          ...(appearance.primaryTextColor || appearance.mutedTextColor
+            ? { textMode: 'custom' as const }
+            : {}),
+          ...(appearance.primaryTextColor ? { primaryTextColor: appearance.primaryTextColor } : {}),
+          ...(appearance.mutedTextColor ? { mutedTextColor: appearance.mutedTextColor } : {}),
+          ...(appearance.fontFamily ? { fontFamily: appearance.fontFamily } : {}),
+          ...(appearance.surfaceOpacity != null
+            ? { surfaceOpacity: appearance.surfaceOpacity }
+            : {}),
+          ...(appearance.glassBlur != null ? { glassBlur: appearance.glassBlur } : {}),
+          ...(appearance.cornerRadius != null ? { cornerRadius: appearance.cornerRadius } : {}),
+          ...(appearance.borderWidth != null ? { borderWidth: appearance.borderWidth } : {}),
+          ...(appearance.borderColor ? { borderColor: appearance.borderColor } : {}),
+          ...(appearance.shadowStrength != null
+            ? { shadowStrength: appearance.shadowStrength }
+            : {}),
+          ...(appearance.shadowColor ? { shadowColor: appearance.shadowColor } : {})
+        }
+      }
+      patch.miniPlayer = miniPlayer
+    }
+  }
+
+  if (snapshot.data.windowInheritance.desktopLyrics && defaults.desktopLyrics) {
+    const lyrics = defaults.desktopLyrics
+    patch.desktopLyrics = {
+      ...settings.desktopLyrics,
+      ...(lyrics.fontFamily ? { fontFamily: lyrics.fontFamily } : {}),
+      ...(lyrics.fontSize != null ? { fontSize: lyrics.fontSize } : {}),
+      ...(lyrics.fontWeight != null ? { fontWeight: lyrics.fontWeight } : {}),
+      ...(lyrics.color ? { color: lyrics.color } : {}),
+      // v2 sings through a gradient; a theme that names one colour pins both ends,
+      // and has to switch the mode off `accent` or its colours would be ignored.
+      ...(lyrics.highlightColor
+        ? {
+            colorMode: 'custom' as const,
+            highlightStart: lyrics.highlightColor,
+            highlightEnd: lyrics.highlightColor
+          }
+        : {}),
+      ...(lyrics.backgroundColor ? { bgColor: lyrics.backgroundColor } : {}),
+      ...(lyrics.backgroundOpacity != null ? { bgOpacity: lyrics.backgroundOpacity } : {}),
+      ...(lyrics.shadow != null ? { shadow: lyrics.shadow } : {}),
+      ...(lyrics.shadowBlur != null ? { shadowBlur: lyrics.shadowBlur } : {}),
+      ...(lyrics.shadowColor ? { shadowColor: lyrics.shadowColor } : {})
+    }
+  }
+
+  Object.assign(patch, createThemePlayerBarSettingsPatch(snapshot, settings))
+
+  return patch
+}
+
+async function resolveThemeWindowDefaults(
+  snapshot: ThemeLibrarySnapshot,
+  pluginDefaults?: (pluginId: string, themeId: string) => Promise<ThemeWindowDefaults | undefined>
+): Promise<ThemeWindowDefaults> {
+  const base = TWILIGHT_DEFAULT_THEME.windowDefaults ?? {}
+  const selection = snapshot.data.activeTheme
+  let selected: ThemeWindowDefaults | undefined
+  if (selection.kind === 'builtin') {
+    selected = getBuiltInThemePreset(selection.id)?.windowDefaults
+  } else if (selection.kind === 'user') {
+    const profile = snapshot.data.profiles.find((entry) => entry.id === selection.id) ?? null
+    selected = resolveThemeProfileWindowDefaults(profile)
+  } else if (selection.kind === 'plugin') {
+    selected = await pluginDefaults?.(selection.pluginId, selection.themeId)
+  }
+  return {
+    miniPlayer: { ...base.miniPlayer, ...selected?.miniPlayer },
+    desktopLyrics: { ...base.desktopLyrics, ...selected?.desktopLyrics }
+  }
+}

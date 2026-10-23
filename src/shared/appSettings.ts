@@ -254,6 +254,8 @@ export interface AppSettings {
   dspPinnedSceneId: string | null
   headphoneCompensation: HeadphoneCompensationSettings
   audioEqPresets: AudioEqPreset[]
+  /** Null until the one-time browser preference import has been applied. */
+  audioEqAutoPreamp: import('./equalizerPreferences.ts').EqualizerAutoPreamp | null
   desktopLyrics: DesktopLyricsSettings
   miniPlayer: MiniPlayerSettings
   proxyMode: ProxyMode
