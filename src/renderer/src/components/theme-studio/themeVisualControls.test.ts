@@ -8,6 +8,8 @@ import {
   replaceGradientAngle,
   replaceGradientColor,
   studioColorValue,
+  studioModeLabels,
+  studioTokenGroup,
   studioTokenLabel
 } from './themeVisualControls.ts'
 
@@ -80,4 +82,37 @@ test('gradient edits preserve all other colors, alpha and stop positions', () =>
     replaceGradientAngle('linear-gradient(#fff, #000)', 90),
     'linear-gradient(90deg, #fff, #000)'
   )
+})
+
+test('player page tokens and modes are grouped and labeled for theme studio', () => {
+  assert.equal(studioTokenGroup('surface.player'), '播放页背景')
+  assert.equal(studioTokenGroup('playback.cover.border'), '专辑封面')
+  assert.equal(studioTokenGroup('playback.cover.scale'), '专辑封面')
+  assert.equal(studioTokenGroup('playback.stage.spread'), '舞台与间距')
+  assert.equal(studioTokenGroup('playback.stage.span'), '舞台与间距')
+  assert.equal(studioTokenGroup('playback.lyrics.karaoke'), '歌词颜色')
+  assert.equal(studioTokenGroup('playback.lyrics.density'), '歌词颜色')
+  assert.equal(studioTokenLabel('播放页背景', 'surface.player'), '播放页纯色底色')
+  for (const id of [
+    'surface.player',
+    'playback.cover.border',
+    'playback.cover.scale',
+    'playback.stage.spread',
+    'playback.stage.span',
+    'playback.lyrics.karaoke',
+    'playback.lyrics.density',
+    'playback.lyrics.activeScale',
+    'playback.lyrics.inactiveOpacity',
+    'playback.lyrics.inactiveBlur',
+    'playback.backdrop.tempo'
+  ]) {
+    assert.equal(isStudioTokenEditable(id), true, id)
+  }
+  assert.equal(studioModeLabels['player.backdrop'], '播放页背景模式')
+  assert.equal(studioModeLabels['player.lyricsAlign'], '播放页歌词对齐')
+  assert.equal(studioModeLabels['player.lyricHighlight'], '当前歌词底板样式')
+  assert.equal(studioModeLabels['player.timeStyle'], '播放页顶部胶囊')
+  assert.equal(studioModeLabels['player.stageAlign'], '播放舞台垂直对齐')
+  assert.equal(studioModeLabels['artwork.frame'], '封面外框样式')
+  assert.equal(studioModeLabels['artwork.spin'], '黑胶唱盘旋转')
 })

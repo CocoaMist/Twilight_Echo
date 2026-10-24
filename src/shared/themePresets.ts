@@ -128,6 +128,13 @@ export const THEME_MODE_DEFINITIONS: readonly ThemeModeDefinition[] = Object.fre
     defaultValue: 'standard'
   },
   {
+    id: 'player.backdrop',
+    dataAttribute: 'data-te-player-backdrop',
+    label: '播放页背景模式',
+    options: ['follow', 'cover-blur', 'fluid', 'solid', 'image'],
+    defaultValue: 'follow'
+  },
+  {
     id: 'player.controls',
     dataAttribute: 'data-te-player-controls',
     label: '播放器控制区',
@@ -142,11 +149,53 @@ export const THEME_MODE_DEFINITIONS: readonly ThemeModeDefinition[] = Object.fre
     defaultValue: 'left'
   },
   {
+    id: 'player.lyricsAlign',
+    dataAttribute: 'data-te-player-lyrics-align',
+    label: '播放页歌词对齐',
+    options: ['follow', 'left', 'center', 'right'],
+    defaultValue: 'follow'
+  },
+  {
+    id: 'player.lyricHighlight',
+    dataAttribute: 'data-te-player-lyric-highlight',
+    label: '当前歌词底板样式',
+    options: ['minimal', 'surface', 'glow'],
+    defaultValue: 'minimal'
+  },
+  {
+    id: 'player.timeStyle',
+    dataAttribute: 'data-te-player-time-style',
+    label: '播放页顶部胶囊',
+    options: ['pill', 'minimal', 'glass'],
+    defaultValue: 'pill'
+  },
+  {
+    id: 'player.stageAlign',
+    dataAttribute: 'data-te-player-stage-align',
+    label: '播放舞台垂直对齐',
+    options: ['center', 'top', 'bottom'],
+    defaultValue: 'center'
+  },
+  {
     id: 'player.progress',
     dataAttribute: 'data-te-player-progress',
     label: '播放器进度样式',
     options: ['line', 'ring', 'solid', 'spectrum'],
     defaultValue: 'line'
+  },
+  {
+    id: 'artwork.frame',
+    dataAttribute: 'data-te-artwork-frame',
+    label: '封面外框样式',
+    options: ['borderless', 'subtle-ring', 'glass-frame', 'vinyl', 'polaroid'],
+    defaultValue: 'borderless'
+  },
+  {
+    id: 'artwork.spin',
+    dataAttribute: 'data-te-artwork-spin',
+    label: '黑胶唱盘旋转',
+    options: ['off', 'on'],
+    defaultValue: 'off'
   },
   {
     id: 'artwork.transition',
@@ -238,11 +287,16 @@ export const DEFAULT_THEME_MODES: Readonly<ThemeModes> = Object.freeze({
   library: Object.freeze({ density: 'comfortable', selection: 'fill', titleOverlay: 'off' }),
   player: Object.freeze({
     layout: 'standard',
+    backdrop: 'follow',
     controls: 'standard',
     titleAlign: 'left',
+    lyricsAlign: 'follow',
+    lyricHighlight: 'minimal',
+    timeStyle: 'pill',
+    stageAlign: 'center',
     progress: 'line'
   }),
-  artwork: Object.freeze({ transition: 'fade', shadow: 'on' }),
+  artwork: Object.freeze({ frame: 'borderless', spin: 'off', transition: 'fade', shadow: 'on' }),
   equalizer: Object.freeze({
     panel: 'neutral',
     slider: 'ring',

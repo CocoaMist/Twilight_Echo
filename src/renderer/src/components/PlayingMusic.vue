@@ -183,6 +183,15 @@ function customizeLyricsAppearance(): void {
 }
 
 const nowPlayingBackground = computed(() => settings.value.nowPlayingBackground)
+const themePlayerBackdrop = ref<'follow' | 'cover-blur' | 'fluid' | 'solid' | 'image'>('follow')
+const themePlayerLyricsAlign = ref<'follow' | 'left' | 'center' | 'right'>('follow')
+const themePlayerLyricHighlight = ref<'minimal' | 'surface' | 'glow'>('minimal')
+const effectiveNowPlayingBackground = computed<'blur' | 'fluid' | 'solid'>(() => {
+  if (themePlayerBackdrop.value === 'cover-blur') return 'blur'
+  if (themePlayerBackdrop.value === 'fluid') return 'fluid'
+  if (themePlayerBackdrop.value === 'solid' || themePlayerBackdrop.value === 'image') return 'solid'
+  return nowPlayingBackground.value
+})
 const lyricsAppearance = computed(() => settings.value.lyricsAppearance)
 const lyricsCustomizerOpen = ref(false)
 
@@ -190,10 +199,11 @@ const lyricTextStyle = computed(() => lyricsAppearance.value.styles)
 
 function lyricStyleVars(target: LyricsStyleTarget): Record<string, string> {
   const styles = lyricsStyleVars(lyricTextStyle.value[target], target)
-  styles['--lyric-style-align'] = constrainLyricsAlignment(
-    lyricTextStyle.value[target].align,
-    isTtmlLyrics.value
-  )
+  const rawAlign =
+    themePlayerLyricsAlign.value !== 'follow'
+      ? themePlayerLyricsAlign.value
+      : lyricTextStyle.value[target].align
+  styles['--lyric-style-align'] = constrainLyricsAlignment(rawAlign, isTtmlLyrics.value)
   return styles
 }
 
@@ -203,9 +213,9 @@ const lyricTranslationStyle = computed(() => lyricStyleVars('translation'))
 const lyricRomanizationStyle = computed(() => lyricStyleVars('romanization'))
 const lyricHarmonyStyle = computed(() => lyricStyleVars('harmony'))
 
-const isBlurBackground = computed(() => nowPlayingBackground.value === 'blur')
-const isFluidBackground = computed(() => nowPlayingBackground.value === 'fluid')
-const isSolidBackground = computed(() => nowPlayingBackground.value === 'solid')
+const isBlurBackground = computed(() => effectiveNowPlayingBackground.value === 'blur')
+const isFluidBackground = computed(() => effectiveNowPlayingBackground.value === 'fluid')
+const isSolidBackground = computed(() => effectiveNowPlayingBackground.value === 'solid')
 
 const lyricStyle = computed<Record<string, string>>(() => {
   const appearance = lyricsAppearance.value
@@ -240,11 +250,16 @@ const lyricStyle = computed<Record<string, string>>(() => {
 
 const layoutStyle = computed<Record<string, string>>(() => {
   const appearance = lyricsAppearance.value
-  return {
-    '--te-lyric-cover-gap': `${appearance.coverGap}px`,
-    '--te-lyric-max-width': `${appearance.lyricsMaxWidth}px`,
+  const styles: Record<string, string> = {
     '--te-lyric-offset-x': `${appearance.lyricsOffsetX}px`
   }
+  if (appearance.coverGap !== DEFAULT_LYRICS_APPEARANCE.coverGap) {
+    styles['--te-lyric-cover-gap'] = `${appearance.coverGap}px`
+  }
+  if (appearance.lyricsMaxWidth !== DEFAULT_LYRICS_APPEARANCE.lyricsMaxWidth) {
+    styles['--te-lyric-max-width'] = `${appearance.lyricsMaxWidth}px`
+  }
+  return styles
 })
 
 /**
@@ -329,8 +344,23 @@ watch(lyricMotionLevel, (level) => {
 })
 
 function readLyricMotionLevel(): void {
-  const level = document.documentElement.dataset.teMotion
+  const dataset = document.documentElement.dataset
+  const level = dataset.teMotion
   lyricMotionLevel.value = level === 'reduced' || level === 'off' ? level : 'full'
+  const backdrop = dataset.tePlayerBackdrop
+  themePlayerBackdrop.value =
+    backdrop === 'cover-blur' ||
+    backdrop === 'fluid' ||
+    backdrop === 'solid' ||
+    backdrop === 'image'
+      ? backdrop
+      : 'follow'
+  const align = dataset.tePlayerLyricsAlign
+  themePlayerLyricsAlign.value =
+    align === 'left' || align === 'center' || align === 'right' ? align : 'follow'
+  const highlight = dataset.tePlayerLyricHighlight
+  themePlayerLyricHighlight.value =
+    highlight === 'surface' || highlight === 'glow' ? highlight : 'minimal'
 }
 
 const lyricMotionFull = computed(() => lyricMotionLevel.value === 'full')
@@ -402,7 +432,11 @@ function lyricLineAlign(singing: boolean): 'left' | 'center' | 'right' {
    * whole TTML page; active styling still controls weight, colour and effects.
    */
   const target = isTtmlLyrics.value ? 'normal' : singing ? 'active' : 'normal'
-  return constrainLyricsAlignment(lyricTextStyle.value[target].align, isTtmlLyrics.value)
+  const rawAlign =
+    themePlayerLyricsAlign.value !== 'follow'
+      ? themePlayerLyricsAlign.value
+      : lyricTextStyle.value[target].align
+  return constrainLyricsAlignment(rawAlign, isTtmlLyrics.value)
 }
 function usesManualManagedLayer(key: 'translationSelection' | 'romanizationSelection'): boolean {
   const override = managedLyricOverride.value
@@ -467,6 +501,13 @@ const lyricFocusWindow = computed<ReadonlySet<number> | null>(() => {
  * scale and blur from scroll position, which made those values slaves to the
  * scroll and left no room for per-line physics. Depth is part of the layout.
  */
+function readThemeRootNumber(variable: string, fallback: number): number {
+  if (typeof document === 'undefined') return fallback
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(variable).trim()
+  const parsed = Number.parseFloat(raw)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
 const lyricViewport = createLyricViewportController({
   afterLayout: async () => {
     await nextTick()
@@ -479,16 +520,25 @@ const lyricViewport = createLyricViewportController({
   alignPosition: LYRIC_ACTIVE_ANCHOR_RATIO,
   getAlignPosition: () => lyricsAppearance.value.anchorPosition,
   getBottomReservedPx: measurePlaybarReservedPx,
-  getRowGapPx: () => LYRIC_ROW_GAP_PX,
+  getRowGapPx: () => readThemeRootNumber('--te-playback-lyric-density', LYRIC_ROW_GAP_PX),
   isSpringEnabled: () => lyricMotionFull.value && lyricsViewActive.value,
   isBlurEnabled: () => lyricMotionFull.value,
   isScaleEnabled: () => lyricMotionFull.value,
   isPlaying: () => isPlaying.value,
   isNonDynamic: () => isNonDynamicTimeline(lyricLines.value),
   getFocusWindow: () => lyricFocusWindow.value,
-  getInactiveDim: () => lyricsAppearance.value.inactiveOpacity / 100,
-  getScaleIntensity: () => lyricsAppearance.value.scaleIntensity / 100,
-  getBlurIntensity: () => lyricsAppearance.value.blurIntensity / 100,
+  getInactiveDim: () =>
+    lyricsAppearance.value.inactiveOpacity !== DEFAULT_LYRICS_APPEARANCE.inactiveOpacity
+      ? lyricsAppearance.value.inactiveOpacity / 100
+      : readThemeRootNumber('--te-playback-lyric-inactive-opacity', 66) / 100,
+  getScaleIntensity: () =>
+    lyricsAppearance.value.scaleIntensity !== DEFAULT_LYRICS_APPEARANCE.scaleIntensity
+      ? lyricsAppearance.value.scaleIntensity / 100
+      : Math.max(0, (readThemeRootNumber('--te-playback-lyric-active-scale', 102) - 100) / 2),
+  getBlurIntensity: () =>
+    lyricsAppearance.value.blurIntensity !== DEFAULT_LYRICS_APPEARANCE.blurIntensity
+      ? lyricsAppearance.value.blurIntensity / 100
+      : readThemeRootNumber('--te-playback-lyric-inactive-blur', 0.8) / 0.8,
   getCascadeSpeedFactor: () => resolveCascadeSpeedFactor(lyricsAppearance.value.cascadeSpeed),
   shouldHidePassedLines: () => lyricsAppearance.value.hidePassedLines,
   getInterludeAfterIndex: () => lyricInterludeAfterIndex.value,
@@ -736,7 +786,12 @@ onMounted(() => {
   lyricMotionObserver = new MutationObserver(readLyricMotionLevel)
   lyricMotionObserver.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['data-te-motion']
+    attributeFilter: [
+      'data-te-motion',
+      'data-te-player-backdrop',
+      'data-te-player-lyrics-align',
+      'data-te-player-lyric-highlight'
+    ]
   })
   window.addEventListener('resize', onLyricViewportResize)
   window.addEventListener('pointerdown', closeAppearanceMenu)
@@ -759,7 +814,7 @@ onBeforeUnmount(() => {
 <template>
   <div
     class="playing-music"
-    :class="`bg-${nowPlayingBackground}`"
+    :class="`bg-${effectiveNowPlayingBackground}`"
     :style="{ '--accent-color': dominantColor }"
     @contextmenu.prevent="openAppearanceMenu"
   >
@@ -912,7 +967,9 @@ onBeforeUnmount(() => {
                       lyricsAppearance,
                       viewMode,
                       displayedView,
-                      lyricMotionLevel
+                      lyricMotionLevel,
+                      themePlayerLyricsAlign,
+                      themePlayerLyricHighlight
                     ]"
                     :ref="(el) => setLyricLineRef(item.index, el)"
                     type="button"
@@ -926,7 +983,8 @@ onBeforeUnmount(() => {
                         'is-plain': !item.line.timed,
                         'lyric-row--custom-background':
                           lyricTextStyle[item.singing ? 'active' : 'normal'].backgroundStyle !==
-                          'none'
+                            'none' ||
+                          (item.singing && themePlayerLyricHighlight !== 'minimal')
                       }
                     ]"
                     :aria-current="item.index === highlightedLyricIndex ? 'true' : undefined"
@@ -1262,7 +1320,7 @@ html[data-te-motion='reduced'] .playback-view-leave-to {
   );
   background-size: 400% 400%;
   will-change: transform;
-  animation: fluid-drift-transform 18s ease-in-out infinite;
+  animation: fluid-drift-transform var(--te-playback-fluid-tempo, 18s) ease-in-out infinite;
 }
 
 .backdrop-solid {
@@ -1320,7 +1378,7 @@ html[data-te-motion='off'] .backdrop-fluid::before {
   display: grid;
   grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  gap: var(--te-lyric-cover-gap, 40px);
+  gap: var(--te-lyric-cover-gap, var(--te-playback-stage-spread, 40px));
   align-items: stretch;
   height: 100%;
   min-height: 0;
@@ -1353,14 +1411,27 @@ html[data-te-motion='off'] .backdrop-fluid::before {
 :global(html[data-te-player-layout='standard'] .playing-music .layout:not(.layout--single)) {
   width: min(
     100%,
-    calc(360px + var(--te-lyric-cover-gap, 40px) + var(--te-lyric-max-width, 820px))
+    calc(
+      360px + var(--te-lyric-cover-gap, var(--te-playback-stage-spread, 40px)) +
+        var(--te-lyric-max-width, var(--te-playback-stage-span, 820px))
+    )
   );
   margin-inline: auto;
 }
 
+:global(html[data-te-player-stage-align='top'] .playing-music .cover-column) {
+  align-self: start;
+  margin-top: 4vh;
+}
+
+:global(html[data-te-player-stage-align='bottom'] .playing-music .cover-column) {
+  align-self: end;
+  margin-bottom: 6vh;
+}
+
 .cover-frame {
   width: min(
-    var(--te-playback-cover-size, 100%),
+    var(--te-playback-cover-size, var(--te-playback-cover-scale, 100%)),
     max(120px, calc(100vh - 100px - var(--te-font-size-body, 14px) * 180 / 14))
   );
   max-width: 100%;
@@ -1400,6 +1471,76 @@ html[data-te-motion='off'] .backdrop-fluid::before {
 }
 
 :global(html[data-te-artwork-shadow='off'] .playing-music .cover-frame) {
+  box-shadow: none;
+}
+
+:global(html[data-te-artwork-frame='subtle-ring'] .playing-music .cover-frame) {
+  border: 1px solid var(--te-playback-cover-border);
+}
+
+:global(html[data-te-artwork-frame='glass-frame'] .playing-music .cover-frame) {
+  padding: 10px;
+  border: 1px solid var(--te-playback-cover-border);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+}
+
+:global(html[data-te-artwork-frame='glass-frame'] .playing-music .cover-frame :deep(img.cover-image)),
+:global(html[data-te-artwork-frame='glass-frame'] .playing-music .cover-image) {
+  border-radius: calc(max(0px, var(--te-playback-cover-radius, 26px) - 8px));
+}
+
+:global(html[data-te-artwork-frame='vinyl'] .playing-music .cover-frame) {
+  border-radius: 999px;
+  padding: 14px;
+  border: 2px solid var(--te-playback-cover-border);
+}
+
+:global(html[data-te-artwork-frame='vinyl'] .playing-music .cover-frame :deep(img.cover-image)),
+:global(html[data-te-artwork-frame='vinyl'] .playing-music .cover-image) {
+  border-radius: 999px;
+}
+
+:global(html[data-te-artwork-frame='polaroid'] .playing-music .cover-frame) {
+  padding: 14px 14px 42px;
+  border: 1px solid var(--te-playback-cover-border);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+
+:global(html[data-te-artwork-frame='polaroid'] .playing-music .cover-frame :deep(img.cover-image)),
+:global(html[data-te-artwork-frame='polaroid'] .playing-music .cover-image) {
+  border-radius: calc(max(0px, var(--te-playback-cover-radius, 26px) - 10px));
+}
+
+:global(html[data-te-artwork-spin='on'] .playing-music .cover-frame :deep(img.cover-image)),
+:global(html[data-te-artwork-spin='on'] .playing-music .cover-image) {
+  border-radius: 999px;
+  animation: te-vinyl-spin 22s linear infinite;
+}
+
+@keyframes te-vinyl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:global(html[data-te-player-lyric-highlight='glow'] .playing-music .lyric-row.active) {
+  backdrop-filter: blur(16px) saturate(135%);
+  -webkit-backdrop-filter: blur(16px) saturate(135%);
+}
+
+:global(html[data-te-player-time-style='glass'] .playing-music .time-chip),
+:global(html[data-te-player-time-style='glass'] .playing-music .visualizer-toggle-button) {
+  background: var(--te-player-time-surface);
+  backdrop-filter: blur(16px) saturate(135%);
+  -webkit-backdrop-filter: blur(16px) saturate(135%);
+}
+
+:global(html[data-te-player-time-style='minimal'] .playing-music .time-chip),
+:global(html[data-te-player-time-style='minimal'] .playing-music .visualizer-toggle-button) {
+  background: transparent;
+  border-color: transparent;
   box-shadow: none;
 }
 

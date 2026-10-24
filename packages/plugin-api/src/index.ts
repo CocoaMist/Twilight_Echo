@@ -865,11 +865,18 @@ export interface TwilightThemeModesV2 {
   }
   player?: {
     layout?: 'standard' | 'full-cover' | 'lyrics-focus' | 'split' | 'minimal'
+    backdrop?: 'follow' | 'cover-blur' | 'fluid' | 'solid' | 'image'
     controls?: 'standard' | 'pro'
     titleAlign?: 'left' | 'center'
+    lyricsAlign?: 'follow' | 'left' | 'center' | 'right'
+    lyricHighlight?: 'minimal' | 'surface' | 'glow'
+    timeStyle?: 'pill' | 'minimal' | 'glass'
+    stageAlign?: 'center' | 'top' | 'bottom'
     progress?: 'line' | 'ring' | 'solid' | 'spectrum'
   }
   artwork?: {
+    frame?: 'borderless' | 'subtle-ring' | 'glass-frame' | 'vinyl' | 'polaroid'
+    spin?: 'off' | 'on'
     transition?: 'fade' | 'slide' | 'none'
     shadow?: 'on' | 'off'
   }

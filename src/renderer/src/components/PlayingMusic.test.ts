@@ -573,3 +573,37 @@ test('player volume control opens the volume drawer without toggling mute', () =
   assert.doesNotMatch(source, /volume-control-chevron/)
   assert.doesNotMatch(source, /pi-angle-up/)
 })
+
+test('now playing wires theme studio player page backdrop, cover frame, lyric highlight and time style modes', () => {
+  const source = readFileSync(new URL('./PlayingMusic.vue', import.meta.url), 'utf8')
+  const studio = readFileSync(new URL('./ThemeStudioPage.vue', import.meta.url), 'utf8')
+
+  assert.match(source, /data-te-player-backdrop/)
+  assert.match(source, /data-te-player-lyrics-align/)
+  assert.match(source, /data-te-player-lyric-highlight/)
+  assert.match(source, /data-te-player-time-style='glass'/)
+  assert.match(source, /data-te-player-time-style='minimal'/)
+  assert.match(source, /data-te-player-stage-align='top'/)
+  assert.match(source, /data-te-player-stage-align='bottom'/)
+  assert.match(source, /data-te-artwork-spin='on'/)
+  for (const frame of ['subtle-ring', 'glass-frame', 'vinyl', 'polaroid']) {
+    assert.match(source, new RegExp(`data-te-artwork-frame='${frame}'`))
+  }
+  assert.match(source, /--te-playback-cover-border/)
+  assert.match(source, /--te-playback-cover-scale/)
+  assert.match(source, /--te-playback-stage-spread/)
+  assert.match(source, /--te-playback-stage-span/)
+  assert.match(source, /--te-playback-lyric-density/)
+  for (const setting of [
+    'player.backdrop',
+    'artwork.frame',
+    'artwork.spin',
+    'player.stageAlign',
+    'player.lyricsAlign',
+    'player.lyricHighlight',
+    'player.timeStyle'
+  ]) {
+    assert.match(studio, new RegExp(`data-studio-setting="${setting}"`))
+  }
+  assert.match(studio, /updateAssetBinding\('playerBackground'/)
+})
