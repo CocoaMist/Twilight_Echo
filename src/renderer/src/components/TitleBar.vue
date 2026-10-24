@@ -41,8 +41,9 @@ defineEmits<{
 }>()
 
 const { isLoggedIn, profile } = useNcmStore()
-const providerStore = useProviderStore()
+const providerStore = useProviderStore({ listen: !props.preview })
 const loginProvider = computed(() => {
+  if (props.preview) return undefined
   const providers = providerStore.providers.value.filter((provider) =>
     provider.capabilities.includes('login')
   )

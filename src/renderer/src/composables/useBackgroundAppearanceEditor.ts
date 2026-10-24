@@ -310,6 +310,7 @@ export function useBackgroundAppearanceEditor(options: { embedded?: boolean } = 
     const background =
       page === 'global' ? state.draft.appBackground.global : state.draft.appBackground.pages[page]
     if (customize) {
+      if (page !== 'global') state.draft.appBackground.pages[page].inherit = false
       if (background.kind === 'theme') background.kind = 'color'
       background.customized = true
     }

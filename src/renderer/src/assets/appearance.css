@@ -474,7 +474,11 @@ html:not([data-theme='dark']) :is(.audio-workspace, .settings-preview-page) {
     body.te-settings-surface
     .settings-preview-page:not([data-appearance-workspace='customize'])
     .brand-soft-button {
-    background: color-mix(in srgb, var(--te-control-accent) 16%, var(--te-image-control-surface)) !important;
+    background: color-mix(
+      in srgb,
+      var(--te-control-accent) 16%,
+      var(--te-image-control-surface)
+    ) !important;
     color: var(--te-image-control-text) !important;
   }
 
@@ -875,6 +879,13 @@ html:not([data-theme='dark']) :is(.audio-workspace, .settings-preview-page) {
     --te-control-accent-text: var(--te-overlay-settings-text);
     color: var(--te-overlay-settings-text) !important;
   }
+  /* Accent chips paint their own tone-matched scrim, including over an image
+     reading wash. Keep their ink aligned with that scrim. */
+  html:is([data-te-settings-text-tone='light'], [data-te-settings-text-tone='dark'])
+    .settings-preview-page
+    .brand-soft-button {
+    color: var(--te-control-accent-text) !important;
+  }
   /* Legacy translucent panels need enough of their theme surface behind the
      theme foreground; wallpaper contrast cannot protect text inside them. */
   html:is([data-te-settings-text-tone='light'], [data-te-settings-text-tone='dark'])
@@ -891,7 +902,11 @@ html:not([data-theme='dark']) :is(.audio-workspace, .settings-preview-page) {
     background: color-mix(in srgb, var(--te-control-accent) 14%, rgba(0, 0, 0, 0.74)) !important;
   }
   html[data-te-settings-text-tone='dark'] .settings-preview-page .brand-soft-button {
-    background: color-mix(in srgb, var(--te-control-accent) 14%, rgba(255, 255, 255, 0.88)) !important;
+    background: color-mix(
+      in srgb,
+      var(--te-control-accent) 14%,
+      rgba(255, 255, 255, 0.88)
+    ) !important;
   }
   /* A custom background replaces the dark artwork stage. Its theme text tone
      must follow the app tone too, including chrome outside the playing page. */

@@ -96,6 +96,7 @@ const panelLabels: Record<AppearanceSettingsPanel, string> = {
   'appearance-surfaces': '全局材质',
   'global-font': '文字',
   'player-bar': '播放栏',
+  'player-page': '播放页',
   'outer-panel': '外框',
   controls: '控件',
   navigation: '侧边栏',
@@ -122,6 +123,8 @@ const themeLinks = computed<{ label: string; domain: ThemeStudioDomain; part?: A
           { label: '播放页、封面与均衡器外观', domain: 'player' },
           { label: '小窗与桌面歌词主题默认值', domain: 'windows' }
         ]
+      case 'player-page':
+        return [{ label: '播放页布局、背景、封面与歌词外观', domain: 'player', part: 'player-page' }]
       case 'card':
         return [{ label: '歌曲列表间距、选中样式与标题底色', domain: 'library' }]
       case 'controls':
@@ -231,6 +234,19 @@ function toggleSetting(key: BooleanSettingKey): void {
   void updateSettings({ [key]: !settings.value[key] } as Partial<AppSettings>).catch(
     () => undefined
   )
+}
+function updateLyricsLayoutField(
+  key: 'coverSize' | 'coverGap' | 'lyricsMaxWidth' | 'translationSpacing',
+  event: Event
+): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  if (!Number.isFinite(value)) return
+  void updateSettings({
+    lyricsAppearance: {
+      ...settings.value.lyricsAppearance,
+      [key]: value
+    }
+  }).catch(() => undefined)
 }
 const { installed, load: loadFonts } = useLyricsFontPicker()
 onMounted(loadFonts)
@@ -481,6 +497,119 @@ defineExpose({
           >
             <MiniPlayerSettingsSection />
           </SettingsGroup>
+        </template>
+        <template v-if="activePanel === 'player-page'">
+          <p class="appearance-immediate-note">
+            播放页默认使用当前封面的动态模糊背景，也可切换为流体光影、纯色底色或自选背景图片。
+          </p>
+          <div data-setting-id="player-page-background" class="setting-item">
+            <strong>播放页背景模式</strong>
+            <select
+              class="preview-select"
+              aria-label="播放页背景模式"
+              :value="
+                !backgroundEditor?.previewDraft?.appBackground?.pages?.player?.inherit &&
+                backgroundEditor?.previewDraft?.appBackground?.pages?.player?.kind === 'image'
+                  ? 'image'
+                  : !backgroundEditor?.previewDraft?.appBackground?.pages?.player?.inherit &&
+                      backgroundEditor?.previewDraft?.appBackground?.pages?.player?.kind === 'color'
+                    ? 'solid'
+                    : settings.nowPlayingBackground
+              "
+              @change="
+                backgroundEditor?.setPlayerPageBackgroundMode(
+                  ($event.target as HTMLSelectElement).value as 'blur' | 'fluid' | 'solid' | 'image'
+                )
+              "
+            >
+              <option value="blur">模糊封面（默认）</option>
+              <option value="fluid">流体光影</option>
+              <option value="solid">纯色底色</option>
+              <option value="image">自选背景图片</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <strong>播放页自选图片</strong>
+            <button
+              type="button"
+              class="secondary-btn"
+              :disabled="commitBusy || backgroundEditor?.previewBusy"
+              @click="backgroundEditor?.choosePlayerBackgroundImage()"
+            >
+              {{
+                !backgroundEditor?.previewDraft?.appBackground?.pages?.player?.inherit &&
+                backgroundEditor?.previewDraft?.appBackground?.pages?.player?.kind === 'image' &&
+                backgroundEditor?.previewDraft?.appBackground?.pages?.player?.image
+                  ? '更换图片'
+                  : '选择图片'
+              }}
+            </button>
+          </div>
+          <div class="setting-item">
+            <strong>播放页封面大小（{{ settings.lyricsAppearance.coverSize }}%）</strong>
+            <input
+              type="range"
+              min="60"
+              max="100"
+              step="2"
+              aria-label="播放页封面大小"
+              :value="settings.lyricsAppearance.coverSize"
+              @input="updateLyricsLayoutField('coverSize', $event)"
+            />
+          </div>
+          <div class="setting-item">
+            <strong>封面与歌词间距（{{ settings.lyricsAppearance.coverGap }}px）</strong>
+            <input
+              type="range"
+              min="16"
+              max="96"
+              step="2"
+              aria-label="封面与歌词间距"
+              :value="settings.lyricsAppearance.coverGap"
+              @input="updateLyricsLayoutField('coverGap', $event)"
+            />
+          </div>
+          <div class="setting-item">
+            <strong>歌词区域宽度（{{ settings.lyricsAppearance.lyricsMaxWidth }}px）</strong>
+            <input
+              type="range"
+              min="520"
+              max="1120"
+              step="10"
+              aria-label="歌词区域宽度"
+              :value="settings.lyricsAppearance.lyricsMaxWidth"
+              @input="updateLyricsLayoutField('lyricsMaxWidth', $event)"
+            />
+          </div>
+          <div class="setting-item">
+            <strong>原词与译文行距（{{ settings.lyricsAppearance.translationSpacing }}px）</strong>
+            <input
+              type="range"
+              min="2"
+              max="24"
+              step="1"
+              aria-label="原词与译文行距"
+              :value="settings.lyricsAppearance.translationSpacing"
+              @input="updateLyricsLayoutField('translationSpacing', $event)"
+            />
+          </div>
+          <div data-setting-id="compact-visualizer" class="setting-item">
+            <strong>歌词页底部动态频谱</strong>
+            <button
+              type="button"
+              class="toggle-switch"
+              role="switch"
+              aria-label="歌词页底部动态频谱"
+              :aria-checked="playerBar.compactVisualizerEnabled"
+              :class="{ active: playerBar.compactVisualizerEnabled }"
+              @click="
+                playerBar = {
+                  ...playerBar,
+                  compactVisualizerEnabled: !playerBar.compactVisualizerEnabled
+                }
+              "
+            />
+          </div>
         </template>
         <div v-if="themeLinks.length" class="appearance-theme-links">
           <button

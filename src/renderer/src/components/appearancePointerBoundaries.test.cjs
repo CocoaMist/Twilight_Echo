@@ -600,6 +600,7 @@ test('appearance resumes a clean studio with the latest active theme, preserving
       '../extensions/themeSelection': {
         getPluginThemeKey: (value) => value.pluginId + ':' + value.id
       },
+      '../extensions/corePlugins.ts': { corePlugins: {} },
       '../extensions/registry': {
         useExtensionRegistry: () => ({
           uiContributions: vue.ref([]),

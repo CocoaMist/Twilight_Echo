@@ -120,7 +120,7 @@ export function interpolateEditorCamera(
 }
 
 export function measureEditorNodes<Id extends string>(
-  document: Document,
+  root: Document | Element,
   definitions: readonly EditorNodeDefinition<Id>[]
 ): EditorNode[] {
   const ids = new Set<string>()
@@ -128,7 +128,11 @@ export function measureEditorNodes<Id extends string>(
     if (ids.has(definition.id)) throw new Error(`Duplicate editor node: ${definition.id}`)
     ids.add(definition.id)
     let rect: DOMRect | undefined
-    for (const element of document.querySelectorAll(definition.selector)) {
+    const elements = [
+      ...('matches' in root && root.matches(definition.selector) ? [root] : []),
+      ...root.querySelectorAll(definition.selector)
+    ]
+    for (const element of elements) {
       const bounds = element.getBoundingClientRect()
       if (bounds.width > 0 && bounds.height > 0) {
         rect = bounds

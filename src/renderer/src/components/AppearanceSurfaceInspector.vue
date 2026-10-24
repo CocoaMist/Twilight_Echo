@@ -19,6 +19,21 @@ import {
   type ComponentMaterialMode
 } from '../../../shared/appearanceLayers'
 import type { NavigationPageDefinition } from '../app/navigationPages'
+import { useSettingsStore } from '../stores/useSettingsStore'
+
+const { settings, updateSettings } = useSettingsStore()
+function updatePlayerLayoutField(
+  key: 'coverSize' | 'coverGap' | 'lyricsMaxWidth',
+  value: number
+): void {
+  if (props.busy || !Number.isFinite(value)) return
+  void updateSettings({
+    lyricsAppearance: {
+      ...settings.value.lyricsAppearance,
+      [key]: value
+    }
+  }).catch(() => undefined)
+}
 
 const props = defineProps<{
   draft: AppearanceDraft
@@ -27,6 +42,7 @@ const props = defineProps<{
   part: AppearancePart
   busy?: boolean
   playerMode?: 'standard' | 'mini' | 'compact'
+  nowPlayingBackground?: 'blur' | 'fluid' | 'solid'
   collapsed?: boolean
   horizontal?: boolean
   currentColor?: string
@@ -36,6 +52,7 @@ const emit = defineEmits<{
   'update:draft': [draft: AppearanceDraft]
   image: []
   more: [part: AppearancePart]
+  'now-playing-background': [mode: 'blur' | 'fluid' | 'solid']
   'update:collapsed': [collapsed: boolean]
   'importing-change': [importing: boolean]
 }>()
@@ -47,6 +64,8 @@ const importing = ref(false)
 const imageSettingsOpen = ref(false)
 const panelTheme = ref<Record<string, string>>({})
 const backgroundPart = computed(() => ['background', 'inner-panel'].includes(props.part))
+const playerPagePart = computed(() => props.part === 'player-page')
+const backgroundEditablePart = computed(() => backgroundPart.value || playerPagePart.value)
 const partInfo = computed(
   () =>
     APPEARANCE_PARTS.find(
@@ -64,7 +83,15 @@ const layer = computed(() =>
   scope.value ? layers.value.scopes[scope.value][props.tone] : undefined
 )
 const material = computed(() => layer.value?.material ?? defaultComponentMaterial())
-const background = computed(() => props.draft.appBackground.global)
+const background = computed(() =>
+  playerPagePart.value ? props.draft.appBackground.pages.player : props.draft.appBackground.global
+)
+const playerBackgroundMode = computed<'blur' | 'fluid' | 'solid' | 'image'>(() => {
+  const pageBg = props.draft.appBackground.pages.player
+  if (!pageBg.inherit && pageBg.kind === 'image') return 'image'
+  if (!pageBg.inherit && pageBg.kind === 'color' && pageBg.customized) return 'solid'
+  return props.nowPlayingBackground ?? 'blur'
+})
 const effect = computed(() => backgroundEffect(background.value, props.tone))
 const palette = computed(() => resolveBackgroundPalette(background.value, props.tone))
 const hasImage = computed(() => background.value.kind === 'image' && !!background.value.image)
@@ -76,7 +103,7 @@ const materialModes = [
   { value: 'liquidGlass', label: '液态玻璃' }
 ] as const
 const fields = computed(() =>
-  backgroundPart.value
+  backgroundEditablePart.value
     ? hasImage.value
       ? [
           { key: 'dim', label: '图片遮罩', min: 0, max: 80, suffix: '%' },
@@ -116,12 +143,16 @@ function setMaterial(value: string): void {
     })
 }
 function fieldValue(key: string): number {
-  return Number((backgroundPart.value ? effect.value : material.value)[key])
+  return Number((backgroundEditablePart.value ? effect.value : material.value)[key])
 }
 function setField(key: string, value: number): void {
-  if (backgroundPart.value)
+  if (backgroundEditablePart.value)
     edit((draft) => {
-      draft.appBackground.global.effects![props.tone][key] = value
+      const targetBg = playerPagePart.value
+        ? draft.appBackground.pages.player
+        : draft.appBackground.global
+      if (playerPagePart.value) draft.appBackground.pages.player.inherit = false
+      targetBg.effects![props.tone][key] = value
     })
   else
     editLayer((valueLayer) => {
@@ -129,8 +160,16 @@ function setField(key: string, value: number): void {
     })
 }
 function setColor(value: string): void {
-  if (backgroundPart.value)
+  if (backgroundEditablePart.value)
     edit((draft) => {
+      if (playerPagePart.value) {
+        draft.appBackground.pages.player.inherit = false
+        if (draft.appBackground.pages.player.kind === 'theme')
+          draft.appBackground.pages.player.kind = 'color'
+        draft.appBackground.pages.player[props.tone] = value
+        draft.appBackground.pages.player.customized = true
+        return
+      }
       if (draft.appBackground.global.kind === 'theme') draft.appBackground.global.kind = 'color'
       draft.appBackground.global[props.tone] = value
       draft.appBackground.global.customized = true
@@ -144,21 +183,62 @@ function setColor(value: string): void {
       valueLayer.material.colorSource = 'custom'
     })
 }
+function setPlayerBackgroundMode(value: string): void {
+  if (value === 'blur' || value === 'fluid') {
+    edit((draft) => {
+      draft.appBackground.pages.player.inherit = false
+      draft.appBackground.pages.player.kind = 'theme'
+      draft.appBackground.pages.player.customized = false
+      draft.appBackground.pages.player.image = ''
+      delete draft.appBackground.pages.player.imagePalette
+    })
+    emit('now-playing-background', value)
+  } else if (value === 'solid') {
+    edit((draft) => {
+      draft.appBackground.pages.player.inherit = false
+      draft.appBackground.pages.player.kind = 'color'
+      draft.appBackground.pages.player.customized = true
+      draft.appBackground.pages.player.image = ''
+      delete draft.appBackground.pages.player.imagePalette
+    })
+    emit('now-playing-background', 'solid')
+  } else if (value === 'image') {
+    edit((draft) => {
+      draft.appBackground.pages.player.inherit = false
+      draft.appBackground.pages.player.kind = 'image'
+      draft.appBackground.pages.player.customized = true
+    })
+    if (!props.draft.appBackground.pages.player.image) emit('image')
+  }
+}
 function removeImage(): void {
   edit((draft) => {
+    if (playerPagePart.value) {
+      draft.appBackground.pages.player.image = ''
+      delete draft.appBackground.pages.player.imagePalette
+      draft.appBackground.pages.player.kind = 'theme'
+      draft.appBackground.pages.player.customized = false
+      draft.appBackground.pages.player.inherit = false
+      return
+    }
     draft.appBackground.global.image = ''
     delete draft.appBackground.global.imagePalette
     draft.appBackground.global.kind = 'color'
   })
+  if (playerPagePart.value) emit('now-playing-background', 'blur')
 }
 function setTextTone(value: string): void {
   if (['theme', 'light', 'dark'].includes(value))
     edit((draft) => {
-      if (draft.appBackground.global.kind === 'theme') {
-        draft.appBackground.global.kind = 'color'
-        draft.appBackground.global.customized = true
+      const targetBg = playerPagePart.value
+        ? draft.appBackground.pages.player
+        : draft.appBackground.global
+      if (playerPagePart.value) draft.appBackground.pages.player.inherit = false
+      if (targetBg.kind === 'theme') {
+        targetBg.kind = 'color'
+        targetBg.customized = true
       }
-      draft.appBackground.global.effects![props.tone].textTone = value as 'theme' | 'light' | 'dark'
+      targetBg.effects![props.tone].textTone = value as 'theme' | 'light' | 'dark'
     })
 }
 function setImporting(value: boolean): void {
@@ -265,8 +345,38 @@ watch(
             }}
           </button>
         </template>
+        <template v-else-if="playerPagePart">
+          <label class="appearance-material-field"
+            ><span>背景</span
+            ><select
+              aria-label="播放页背景模式"
+              :value="playerBackgroundMode"
+              @change="setPlayerBackgroundMode(($event.target as HTMLSelectElement).value)"
+            >
+              <option value="blur">模糊封面</option>
+              <option value="fluid">流体光影</option>
+              <option value="solid">纯色底色</option>
+              <option value="image">自选图片</option>
+            </select></label
+          >
+          <label
+            v-if="playerBackgroundMode === 'solid' || hasImage"
+            class="appearance-material-field"
+            ><span>底色</span
+            ><input
+              type="color"
+              aria-label="播放页背景颜色"
+              :value="background[tone]"
+              @input="setColor(($event.target as HTMLInputElement).value)"
+          /></label>
+          <button class="appearance-image-button" @click="emit('image')">
+            <i class="pi pi-image" aria-hidden="true" />{{
+              background.image ? '更换图片' : '选择图片'
+            }}
+          </button>
+        </template>
         <button
-          v-if="scope"
+          v-if="scope || playerPagePart"
           ref="trigger"
           class="appearance-parameters-button"
           :aria-expanded="parametersOpen"
@@ -346,8 +456,8 @@ watch(
                 /></label>
               </template>
             </template>
-            <template v-if="backgroundPart">
-              <label class="appearance-material-field"
+            <template v-if="backgroundEditablePart">
+              <label v-if="!playerPagePart || hasImage" class="appearance-material-field"
                 ><span>文字明暗</span
                 ><select
                   aria-label="背景文字明暗"
@@ -362,9 +472,102 @@ watch(
               <p v-if="!hasImage" class="appearance-inspector-note">
                 选择图片后可调整遮罩、亮度与模糊。
               </p>
+              <template v-if="playerPagePart && settings.lyricsAppearance">
+                <div class="appearance-parameter">
+                  <div>
+                    <label for="part-player-cover-size">封面大小</label
+                    ><EditableRangeValue
+                      :value="settings.lyricsAppearance.coverSize"
+                      :min="60"
+                      :max="100"
+                      suffix="%"
+                      aria-label="封面大小数值"
+                      :disabled="busy"
+                      @change="updatePlayerLayoutField('coverSize', $event)"
+                    />
+                  </div>
+                  <input
+                    id="part-player-cover-size"
+                    type="range"
+                    aria-label="封面大小"
+                    min="60"
+                    max="100"
+                    step="2"
+                    :value="settings.lyricsAppearance.coverSize"
+                    @input="
+                      updatePlayerLayoutField(
+                        'coverSize',
+                        Number(($event.target as HTMLInputElement).value)
+                      )
+                    "
+                  />
+                </div>
+                <div class="appearance-parameter">
+                  <div>
+                    <label for="part-player-cover-gap">封面与歌词间距</label
+                    ><EditableRangeValue
+                      :value="settings.lyricsAppearance.coverGap"
+                      :min="16"
+                      :max="96"
+                      suffix="px"
+                      aria-label="封面与歌词间距数值"
+                      :disabled="busy"
+                      @change="updatePlayerLayoutField('coverGap', $event)"
+                    />
+                  </div>
+                  <input
+                    id="part-player-cover-gap"
+                    type="range"
+                    aria-label="封面与歌词间距"
+                    min="16"
+                    max="96"
+                    step="2"
+                    :value="settings.lyricsAppearance.coverGap"
+                    @input="
+                      updatePlayerLayoutField(
+                        'coverGap',
+                        Number(($event.target as HTMLInputElement).value)
+                      )
+                    "
+                  />
+                </div>
+                <div class="appearance-parameter">
+                  <div>
+                    <label for="part-player-lyrics-width">歌词区域宽度</label
+                    ><EditableRangeValue
+                      :value="settings.lyricsAppearance.lyricsMaxWidth"
+                      :min="520"
+                      :max="1120"
+                      suffix="px"
+                      aria-label="歌词区域宽度数值"
+                      :disabled="busy"
+                      @change="updatePlayerLayoutField('lyricsMaxWidth', $event)"
+                    />
+                  </div>
+                  <input
+                    id="part-player-lyrics-width"
+                    type="range"
+                    aria-label="歌词区域宽度"
+                    min="520"
+                    max="1120"
+                    step="10"
+                    :value="settings.lyricsAppearance.lyricsMaxWidth"
+                    @input="
+                      updatePlayerLayoutField(
+                        'lyricsMaxWidth',
+                        Number(($event.target as HTMLInputElement).value)
+                      )
+                    "
+                  />
+                </div>
+              </template>
               <button v-if="background.image" @click="removeImage">移除背景图片</button>
-              <button class="appearance-more-button" @click="emit('more', part)">
-                页面背景设置
+              <button
+                class="appearance-more-button"
+                data-daily-more
+                @click="emit('more', part)"
+              >
+                {{ playerPagePart ? '更多播放页设置' : '页面背景设置' }}
               </button>
             </template>
             <div v-for="field in fields" :key="field.key" class="appearance-parameter">

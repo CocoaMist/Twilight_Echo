@@ -177,7 +177,9 @@ const currentPartColor = computed(() => {
       ? 'navigation.surface'
       : characterPart.value === 'player-bar'
         ? 'playback.control.surface'
-        : 'surface.app'
+        : characterPart.value === 'player-page'
+          ? 'surface.player'
+          : 'surface.app'
   const definition = THEME_TOKEN_DEFINITIONS.find((entry) => entry.id === tokenId)
   if (!definition) return undefined
   const previewTone = tone.value === 'dark' ? 'dark' : 'pureWhite'
@@ -264,6 +266,7 @@ function moreSettings(): void {
   if (
     selectedRegion.value === 'global-font' ||
     selectedRegion.value === 'player-bar' ||
+    selectedRegion.value === 'player-page' ||
     selectedRegion.value === 'appearance-theme'
   )
     emit('focusSetting', selectedRegion.value)
@@ -412,8 +415,32 @@ function setBackgroundKind(kind: 'color' | 'image'): void {
 }
 function chooseCharacterBackgroundImage(): void {
   if (characterBusy.value) return
-  target.value = 'global'
+  target.value = characterPart.value === 'player-page' ? 'player' : 'global'
   chooseImage()
+}
+function choosePlayerBackgroundImage(): void {
+  if (characterBusy.value) return
+  target.value = 'player'
+  chooseImage()
+}
+function setPlayerPageBackgroundMode(mode: 'blur' | 'fluid' | 'solid' | 'image'): void {
+  if (characterBusy.value) return
+  if (mode === 'image') {
+    const playerPage = state.draft.appBackground.pages.player
+    playerPage.inherit = false
+    playerPage.kind = 'image'
+    if (!playerPage.image) choosePlayerBackgroundImage()
+    return
+  }
+  const playerPage = state.draft.appBackground.pages.player
+  if (mode === 'solid') {
+    playerPage.inherit = false
+    playerPage.kind = 'color'
+  } else {
+    playerPage.inherit = false
+    playerPage.kind = 'theme'
+  }
+  void changeQuickSetting({ nowPlayingBackground: mode })
 }
 async function importImage(event: Event): Promise<void> {
   const hasFile = !!(event.target as HTMLInputElement).files?.length
@@ -546,6 +573,8 @@ defineExpose({
     setTone(value === 'dark' ? 'dark' : 'light')
   },
   reset: resetAdjustableAppearance,
+  choosePlayerBackgroundImage,
+  setPlayerPageBackgroundMode,
   hasChanges,
   previewDraft: computed(() => state.draft),
   tone
@@ -676,7 +705,7 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
                   ref="characterPreview"
                   :draft="state.draft"
                   :tone="tone"
-                  :page="previewPage"
+                  :page="characterPart === 'player-page' ? 'player' : previewPage"
                   :focused-region="characterPart"
                   :active="active && !state.fullWindow"
                   :theme-editing="themeDirty && !hasChanges"
@@ -696,10 +725,12 @@ watch(tone, (value) => emit('toneChange', value === 'dark' ? 'dark' : 'pureWhite
                       :part="characterPart"
                       :current-color="currentPartColor"
                       :player-mode="state.draft.playerBar?.mode ?? settings.playerBar.mode"
+                      :now-playing-background="settings.nowPlayingBackground"
                       :busy="characterBusy"
                       @update:draft="state.draft = $event"
                       @importing-change="layerImporting = $event"
                       @image="chooseCharacterBackgroundImage"
+                      @now-playing-background="changeQuickSetting({ nowPlayingBackground: $event })"
                       @more="openMore"
                     />
                   </template>

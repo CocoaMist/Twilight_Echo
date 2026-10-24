@@ -255,7 +255,9 @@ const {
   createPlaylistWithTrackPages
 } = useMusicStore()
 const createPlaylistWithTracks = (name: string, tracks: Track[]) =>
-  createPlaylistWithTrackPages(name, async append => { await append(tracks) })
+  createPlaylistWithTrackPages(name, async (append) => {
+    await append(tracks)
+  })
 const mediaProviders = useMediaProviders({ sync: !props.preview })
 const { pushNotice } = useAppNoticeStore()
 // Reason-code copy is resolved per locale, so the chip labels re-render when the
@@ -556,11 +558,19 @@ watch(
 )
 
 async function onAddBookmark(): Promise<void> {
-  try { await addManualBookmarkAtCurrentTime() } catch (error) { reportBookmarkError(error) }
+  try {
+    await addManualBookmarkAtCurrentTime()
+  } catch (error) {
+    reportBookmarkError(error)
+  }
 }
 
 async function jumpToBookmark(bookmark: CoreBookmark): Promise<void> {
-  try { await seekBookmark(bookmark.id) } catch (error) { reportBookmarkError(error) }
+  try {
+    await seekBookmark(bookmark.id)
+  } catch (error) {
+    reportBookmarkError(error)
+  }
 }
 
 function startRenameBookmark(bookmark: CoreBookmark): void {
@@ -581,13 +591,17 @@ async function commitRenameBookmark(): Promise<void> {
   renameDraft.value = ''
   try {
     await renameBookmark(id, label)
-  } catch (error) { reportBookmarkError(error) }
+  } catch (error) {
+    reportBookmarkError(error)
+  }
 }
 
 async function deleteBookmark(id: string): Promise<void> {
   try {
     await removeBookmark(id)
-  } catch (error) { reportBookmarkError(error) }
+  } catch (error) {
+    reportBookmarkError(error)
+  }
 }
 
 function onAcceptResume(): void {
@@ -648,7 +662,12 @@ const queueAddToPlaylist = useQueueAddToPlaylist({
   createPlaylist,
   getPlaylistMembership,
   addQueueEntry: async (id, entry) => {
-    const result = await core.command('playlists.addQueueEntries', { id, revision: core.state.value!.playlistsRevision!, queue: entry.queue, occurrenceIds: [entry.queueEntryId] }) as { result: number }
+    const result = (await core.command('playlists.addQueueEntries', {
+      id,
+      revision: core.state.value!.playlistsRevision!,
+      queue: entry.queue,
+      occurrenceIds: [entry.queueEntryId]
+    })) as { result: number }
     return result.result
   },
   notify: (notice) => {
@@ -831,10 +850,16 @@ const autoHideActive = computed(
   () => props.autoHide && !!currentTrack.value && !fullyHidden.value && !props.preview
 )
 
-const favoriteButtonVisible = computed(() => currentFavorite.value?.available ?? false)
-const favoriteButtonLiked = computed(() => currentFavorite.value?.liked ?? false)
-const favoriteButtonLoading = computed(() => currentFavorite.value?.loading ?? false)
-const favoriteButtonTitle = computed(() => favoriteButtonLiked.value ? '取消喜欢' : '喜欢')
+const favoriteButtonVisible = computed(
+  () => !props.preview && (currentFavorite.value?.available ?? false)
+)
+const favoriteButtonLiked = computed(
+  () => !props.preview && (currentFavorite.value?.liked ?? false)
+)
+const favoriteButtonLoading = computed(
+  () => !props.preview && (currentFavorite.value?.loading ?? false)
+)
+const favoriteButtonTitle = computed(() => (favoriteButtonLiked.value ? '取消喜欢' : '喜欢'))
 
 function reportBookmarkError(error: unknown): void {
   pushNotice({ kind: 'info', message: error instanceof Error ? error.message : String(error) })
@@ -1064,7 +1089,10 @@ function inferDsdRate(sampleRate: number): number {
 }
 
 function isDsdSource(info: NonNullable<typeof playbackInfo.value>): boolean {
-  return /^(dsf|dff)$/i.test(currentTrack.value?.format ?? '') || info.codec.trim().toLowerCase() === 'dsd'
+  return (
+    /^(dsf|dff)$/i.test(currentTrack.value?.format ?? '') ||
+    info.codec.trim().toLowerCase() === 'dsd'
+  )
 }
 
 function isDsdPlayback(): boolean {

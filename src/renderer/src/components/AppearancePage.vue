@@ -231,6 +231,7 @@ const partCategory: Partial<Record<AppearancePart, string>> = {
   navigation: 'navigation',
   material: 'material',
   'player-bar': 'player',
+  'player-page': 'player',
   card: 'material',
   'global-font': 'font',
   'appearance-theme': 'color'
@@ -1295,7 +1296,7 @@ onBeforeUnmount(() => {
             ref="preview"
             :draft="creationDraft"
             :tone="tone === 'dark' ? 'dark' : 'light'"
-            page="local"
+            :page="selectedPart === 'player-page' ? 'player' : 'local'"
             theme-editing
             :workshop-model="tab === 'workshop' ? workshopPreview : undefined"
             :focused-region="selectedPart"

@@ -9,6 +9,7 @@ export type AppearancePart =
   | 'navigation'
   | 'material'
   | 'player-bar'
+  | 'player-page'
   | 'card'
   | 'global-font'
   | 'appearance-theme'
@@ -70,6 +71,12 @@ export const APPEARANCE_PARTS: {
     icon: 'pi pi-play-circle',
     description: '调整播放栏整体材质与背景皮肤，保留按钮和进度条的独立操作。',
     preview: { selector: '.player-bar', label: '调整播放条布局' }
+  },
+  {
+    id: 'player-page',
+    label: '播放页',
+    icon: 'pi pi-disc',
+    description: '调整播放页背景、封面外框、歌词排版与全屏播放视觉。'
   },
   {
     id: 'card',

@@ -740,8 +740,9 @@ function resetFocus(event: MouseEvent): void {
 }
 watch(
   selectedRegion,
-  (id) => {
+  (id, previous) => {
     updatePresentationFocus()
+    if ((id === 'player-page') !== (previous === 'player-page')) scheduleUpdate()
     if (layeredPresentation.value) presentScene()
     engine.focus(id)
     syncCameraZoom()
@@ -837,6 +838,8 @@ const playerGlass = computed(
     (props.draft.surfaceMaterial === 'liquidGlass' || props.draft.liquidGlass.playbarEnabled)
 )
 const sceneModel = shallowRef({
+  page: (selectedRegion.value === 'player-page' ? 'player' : props.page) as AppBackgroundPage,
+  nowPlayingBackground: settings.value.nowPlayingBackground,
   navigationExpanded: navigationExpanded.value,
   navigationGlass: navigationGlass.value,
   playerGlass: playerGlass.value,
@@ -850,11 +853,15 @@ function updateSceneModel(): void {
   // Commit a detached scene snapshot once per visible update. Camera frames never
   // invalidate the native component tree; hidden drafts wait for the next reveal.
   const previous = sceneModel.value
+  const page: AppBackgroundPage = selectedRegion.value === 'player-page' ? 'player' : props.page
+  const nowPlayingBackground = settings.value.nowPlayingBackground
   const navigationPages = normalizeNavigationPagePreferences(navigationSettings.value)
   const playerLayout = normalizePlayerBarLayout(playerSettings.value.layout)
   const appearance = cloneAppearance({ ...props.draft, playerBar: playerSettings.value })
   const pages = props.pages?.map((page) => ({ ...page, target: { ...page.target } }))
   const next = {
+    page,
+    nowPlayingBackground,
     navigationExpanded: navigationExpanded.value,
     navigationGlass: navigationGlass.value,
     playerGlass: playerGlass.value,
@@ -1398,8 +1405,12 @@ function refreshRegions(): void {
         if (shell.style.getPropertyValue(name) !== value) shell.style.setProperty(name, value)
       }
     }
-    const measured: (EditorNode & { pose?: string })[] = measureEditorNodes(doc, definitions)
-    const sceneForHits = doc.querySelector<HTMLElement>('.appearance-preview-scene')
+    // Static 3D copies share native selectors. Never measure a stale copy when
+    // a source module is hidden or removed (for example, a collapsed sidebar).
+    const sceneForHits = doc.querySelector<HTMLElement>('body > .appearance-preview-scene')
+    const measured: (EditorNode & { pose?: string })[] = sceneForHits
+      ? measureEditorNodes(sceneForHits, definitions)
+      : []
     surfaceHits.value = sceneForHits ? measureAppearanceSurfaces(sceneForHits, viewport.value) : []
     for (const id of ['card', 'controls'] as const) {
       const surface =
@@ -1470,9 +1481,11 @@ function update(): void {
   layerTransition.setAnimated(animated.value)
   const glass = props.draft.liquidGlass
   const functional = props.draft.surfaceMaterial === 'transparent'
+  const effectivePage: AppBackgroundPage =
+    selectedRegion.value === 'player-page' ? 'player' : props.page
   const resolvedBackground = resolveBackgroundAppearance(
     props.draft.appBackground,
-    props.page,
+    effectivePage,
     props.tone
   )
   const customBackground = !props.themeEditing && resolvedBackground.customBackground
@@ -1500,6 +1513,8 @@ function update(): void {
     'data-te-liquid-glass-coverage': 'functional',
     'data-te-app-custom-background': customBackground ? 'on' : 'off',
     'data-te-local-custom-background': customBackground ? 'on' : 'off',
+    'data-te-player-custom-background':
+      effectivePage === 'player' && customBackground ? 'on' : 'off',
     'data-te-card-custom':
       !props.themeEditing &&
       props.draft.cardAppearance.enabled &&
@@ -1581,8 +1596,14 @@ function update(): void {
             }
           : {})
       }
+  if (!props.workshopModel && !props.themeEditing && settings.value.lyricsAppearance) {
+    const la = settings.value.lyricsAppearance
+    if (la.coverSize !== 100) vars['--te-playback-cover-size'] = `${la.coverSize}%`
+    if (la.coverGap !== 40) vars['--te-lyric-cover-gap'] = `${la.coverGap}px`
+    if (la.lyricsMaxWidth !== 820) vars['--te-lyric-max-width'] = `${la.lyricsMaxWidth}px`
+  }
   if (!props.workshopModel && !customBackground) {
-    for (const page of ['app', 'local'] as const) {
+    for (const page of ['app', 'local', 'player'] as const) {
       const color = TWILIGHT_DEFAULT_THEME.variants[previewTheme].tokens[`surface.${page}`]
       const sameTone = document.documentElement.dataset.theme === previewTheme
       vars[`--te-${page}-bg`] = sameTone ? `var(--te-theme-${page}-bg, ${color})` : color
@@ -1766,7 +1787,15 @@ watch(
   { flush: 'post' }
 )
 watch(navigationExpanded, scheduleUpdate)
-watch(() => playerSettings.value.mode, scheduleUpdate, { flush: 'post' })
+watch(
+  () => [
+    playerSettings.value.mode,
+    settings.value.nowPlayingBackground,
+    settings.value.lyricsAppearance
+  ],
+  scheduleUpdate,
+  { deep: true, flush: 'post' }
+)
 watch(() => [navigationSettings.value, playerSettings.value.layout, props.pages], scheduleUpdate, {
   deep: true,
   flush: 'post'

@@ -54,11 +54,15 @@ test('legacy appearance color mode persists all three choices, follows native ch
     )
     const env = { ...process.env }
     delete env.ELECTRON_RUN_AS_NODE
-    const result = await promisify(execFile)(require('electron'), [join(directory, 'runner.cjs')], {
-      env,
-      windowsHide: true,
-      timeout: 30_000
-    })
+    const result = await promisify(execFile)(
+      require('electron'),
+      [join(directory, 'runner.cjs')],
+      {
+        env,
+        windowsHide: true,
+        timeout: 30_000
+      }
+    )
     assert.match(result.stdout, /SETTINGS_COLOR_MODE_OK/)
     console.info(
       'SETTINGS_COLOR_MODE_OK: native light/dark, preview override, save failure, reopen and palette frames'

@@ -136,7 +136,11 @@ function ensurePluginChangeListener(): void {
   pluginChangeListenerSetup = true
   const core = useCoreConnection()
   watch(
-    [() => core.state.value?.epoch, () => core.state.value?.pluginsRevision, () => core.state.value?.phase],
+    [
+      () => core.state.value?.epoch,
+      () => core.state.value?.pluginsRevision,
+      () => core.state.value?.phase
+    ],
     () => {
       providerListRevision += 1
       if (core.state.value?.phase === 'ready') void syncProviders().catch(() => undefined)
@@ -159,12 +163,13 @@ async function callProvider<T>(
     method: method as TwilightMediaProviderMethod,
     args: toProviderIpcArgs(args)
   })) as T
-  if (/^(?:logout|login|checkQrLogin)/.test(method)) window.dispatchEvent(new Event('twilight-provider-auth-changed'))
+  if (/^(?:logout|login|checkQrLogin)/.test(method))
+    window.dispatchEvent(new Event('twilight-provider-auth-changed'))
   return result
 }
 
-export function useProviderStore() {
-  ensurePluginChangeListener()
+export function useProviderStore(options?: { listen?: boolean }) {
+  if (options?.listen !== false) ensurePluginChangeListener()
 
   function hasProvider(id: string): boolean {
     return providerIds.value.has(id)

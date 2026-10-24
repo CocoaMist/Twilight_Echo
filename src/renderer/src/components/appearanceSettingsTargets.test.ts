@@ -5,6 +5,7 @@ import {
   appearanceSettingsTarget,
   APPEARANCE_STUDIO_PARTS
 } from './appearanceSettingsTargets.ts'
+import { APPEARANCE_PARTS } from './appearanceParts.ts'
 import { SETTINGS_SEARCH_INDEX } from './settings-page/types.ts'
 
 test('existing settings resolve to visible part properties rather than hidden legacy sections', () => {
@@ -28,6 +29,11 @@ test('existing settings resolve to visible part properties rather than hidden le
   }
   assert.equal(appearancePartPanel('background'), undefined)
   assert.equal(appearancePartPanel('outer-panel'), 'outer-panel')
+  assert.equal(appearancePartPanel('player-page'), 'player-page')
+  assert.equal(
+    APPEARANCE_PARTS.find((part) => part.id === 'player-page')?.label,
+    '播放页'
+  )
   assert.equal(APPEARANCE_STUDIO_PARTS.library, 'card')
   assert.equal(APPEARANCE_STUDIO_PARTS.typography, 'global-font')
 })
