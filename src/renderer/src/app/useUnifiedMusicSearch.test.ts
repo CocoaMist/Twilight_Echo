@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
+import { runInNewContext } from 'node:vm'
+import { nextTick, ref, shallowRef, watch } from 'vue'
+import ts from 'typescript'
 import type { Track } from '../types/music'
 import type { CoreMusicSearchPage as UnifiedSearchResult } from '../../../shared/coreSearch.ts'
 
@@ -61,6 +65,67 @@ function unifiedResult(track: Track): UnifiedSearchResult {
     total: 1
   }
 }
+
+test('preview search does not react to Core revisions while live searches refresh and clean up', async () => {
+  const state = ref({ epoch: 'core', libraryRevision: 1, versionsRevision: 1, pluginsRevision: 1 })
+  let reads = 0
+  const cleanups: Array<() => void> = []
+  const exports: {
+    useUnifiedMusicSearch?: typeof import('./useUnifiedMusicSearch.ts').useUnifiedMusicSearch
+  } = {}
+  runInNewContext(
+    ts.transpileModule(
+      readFileSync(new URL('./useUnifiedMusicSearch.ts', import.meta.url), 'utf8'),
+      {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+      }
+    ).outputText,
+    {
+      exports,
+      require: (id: string) => {
+        if (id === 'vue')
+          return {
+            ref,
+            shallowRef,
+            watch,
+            onBeforeUnmount: (cleanup: () => void) => cleanups.push(cleanup)
+          }
+        if (id === '../stores/coreConnection.ts')
+          return {
+            useCoreConnection: () => ({
+              state,
+              query: async () => {
+                reads++
+                return unifiedResult(localTrack)
+              }
+            })
+          }
+        throw new Error(`Unexpected dependency: ${id}`)
+      },
+      AbortController,
+      queueMicrotask
+    }
+  )
+  const preview = exports.useUnifiedMusicSearch!({ listen: false })
+  const live = exports.useUnifiedMusicSearch!()
+  try {
+    await preview.search('preview')
+    await live.search('live')
+    state.value.libraryRevision++
+    await nextTick()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(reads, 3)
+    assert.equal(preview.query.value, 'preview')
+    assert.equal(live.query.value, 'live')
+  } finally {
+    for (const cleanup of cleanups) cleanup()
+  }
+  state.value.libraryRevision++
+  await nextTick()
+  assert.equal(reads, 3)
+  assert.equal(preview.query.value, '')
+  assert.equal(live.query.value, '')
+})
 
 test('unified music search composable exposes unified items and provider health', async () => {
   const search = createUnifiedMusicSearch({

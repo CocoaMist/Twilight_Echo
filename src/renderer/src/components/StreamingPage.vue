@@ -62,6 +62,10 @@ import { useBilibiliFavorites } from './streaming-page/useBilibiliFavorites'
 import NcmCloudPanel from './NcmCloudPanel.vue'
 import StreamingSearch from './StreamingSearch.vue'
 import StreamingDetailStage from './streaming-page/StreamingDetailStage.vue'
+import {
+  collectionMetadataContext,
+  type EntityMetadataContext
+} from './music-metadata/entityMetadataView.ts'
 import NcmAlbumFilters from './streaming-page/NcmAlbumFilters.vue'
 import {
   filterNcmAlbums,
@@ -405,6 +409,21 @@ const isExternalActive = computed(() => activeProvider.value !== NCM_PROVIDER_ID
 const detailProviderId = computed(() =>
   currentDetail.value?.type === 'album' ? currentDetail.value.providerId : activeProvider.value
 )
+const detailMetadataTarget = computed<EntityMetadataContext | null>(() => {
+  const detail = currentDetail.value
+  if (detail?.type !== 'artist' && detail?.type !== 'album') return null
+  const kind = detail.type === 'artist' ? 'artist' : 'release'
+  const id = String(detail.type === 'artist' ? detail.artist.id : detail.album.id)
+  if (detailProviderId.value === 'local')
+    return collectionMetadataContext(
+      detail.type === 'artist' ? 'artists' : 'albums', `${detail.type}:${id}`
+    )
+  return {
+    context: { type: 'native', provider: detailProviderId.value, id },
+    kind,
+    sourceProvider: detailProviderId.value
+  }
+})
 const activeExternalState = computed<ExternalProviderState | null>(() =>
   isExternalActive.value ? (externalStates[activeProvider.value] ?? null) : null
 )
@@ -3971,6 +3990,7 @@ onMounted(async () => {
                 :cover-source="detailHeaderInfo.coverSource"
                 :description="detailHeaderInfo.desc"
                 :intro="detailHeaderInfo.intro"
+                :metadata-target="detailMetadataTarget"
                 :icon="detailHeaderInfo.icon"
                 :track-count-label="detailTrackCountLabel"
                 :tracks="visibleDetailTracks"
@@ -4023,6 +4043,7 @@ onMounted(async () => {
               :cover-source="detailHeaderInfo.coverSource"
               :description="detailHeaderInfo.desc"
               :intro="detailHeaderInfo.intro"
+              :metadata-target="detailMetadataTarget"
               :icon="detailHeaderInfo.icon"
               :loading="socialStageLoading"
               :error="detailError"

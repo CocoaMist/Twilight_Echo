@@ -7,6 +7,8 @@ import CoverImg from '@renderer/components/CoverImg.vue'
 import LocalLibraryTagManager from '@renderer/components/LocalLibraryTagManager.vue'
 import { selectLocalLibraryActionTracks } from '@renderer/utils/localTrackRemovalPolicy.ts'
 import { useMusicStore } from '@renderer/stores/useMusicStore.ts'
+import TrackCreditsPanel from '@renderer/components/music-metadata/TrackCreditsPanel.vue'
+import TrackRatingsPanel from '@renderer/components/music-ratings/TrackRatingsPanel.vue'
 
 const props = defineProps<{ track: Track }>()
 const musicStore = useMusicStore()
@@ -91,6 +93,8 @@ useEscapeToClose(
         编辑歌曲信息
       </button>
       <button type="button" class="track-info-edit" @click="versions = true">歌曲与专辑版本</button>
+      <TrackRatingsPanel :track="track" />
+      <TrackCreditsPanel :track="track" />
     </template>
   </dialog>
 </template>

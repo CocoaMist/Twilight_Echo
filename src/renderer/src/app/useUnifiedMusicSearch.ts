@@ -1,10 +1,16 @@
 import { onBeforeUnmount, ref, shallowRef, watch, type Ref } from 'vue'
 import { useCoreConnection } from '../stores/coreConnection.ts'
-import type { CoreMusicSearchPage, CoreMusicSearchQuery, CoreSearchTrackItem } from '../../../shared/coreSearch.ts'
+import type {
+  CoreMusicSearchPage,
+  CoreMusicSearchQuery,
+  CoreSearchTrackItem
+} from '../../../shared/coreSearch.ts'
 import type { UnifiedSearchProviderHealth } from '../../../shared/unifiedMusicSearch.ts'
 
 export interface UnifiedMusicSearchDependencies {
-  searchAllSongs(options: CoreMusicSearchQuery & { signal?: AbortSignal }): Promise<CoreMusicSearchPage>
+  searchAllSongs(
+    options: CoreMusicSearchQuery & { signal?: AbortSignal }
+  ): Promise<CoreMusicSearchPage>
 }
 export interface UnifiedMusicSearchState {
   query: Ref<string>
@@ -21,12 +27,31 @@ export interface UnifiedMusicSearchState {
   invalidateLibrary: (revision: number) => void
 }
 
-export function useUnifiedMusicSearch(): UnifiedMusicSearchState {
+export function useUnifiedMusicSearch(options?: {
+  sync?: boolean
+  listen?: boolean
+}): UnifiedMusicSearchState {
   const core = useCoreConnection()
-  const search = createUnifiedMusicSearch({ searchAllSongs: ({ signal, ...query }) => core.query('search.songs', query, signal) })
-  const stop = watch([() => core.state.value?.epoch, () => core.state.value?.libraryRevision, () => core.state.value?.versionsRevision, () => core.state.value?.network?.revision, () => core.state.value?.pluginsRevision],
-    () => search.refresh())
-  onBeforeUnmount(() => { stop(); search.clear() })
+  const search = createUnifiedMusicSearch({
+    searchAllSongs: ({ signal, ...query }) => core.query('search.songs', query, signal)
+  })
+  const stop =
+    options?.listen === false
+      ? () => {}
+      : watch(
+          [
+            () => core.state.value?.epoch,
+            () => core.state.value?.libraryRevision,
+            () => core.state.value?.versionsRevision,
+            () => core.state.value?.network?.revision,
+            () => core.state.value?.pluginsRevision
+          ],
+          () => search.refresh()
+        )
+  onBeforeUnmount(() => {
+    stop()
+    search.clear()
+  })
   return search
 }
 export function createUnifiedMusicSearch(

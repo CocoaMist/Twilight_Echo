@@ -11,6 +11,21 @@ import type {
 import type { CoreRequestEnvelope, CoreSnapshot } from '../../../shared/coreProtocol.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+test('Focus supplies a known command request ID and reconciles with a read instead of replaying', async () => {
+  const f = fixture(), store = createCoreConnectionStore(f.api)
+  try {
+    await store.attach()
+    const payload = { query: { version: 1 as const, entity: 'recording' as const }, token: {} } as import('../../../shared/musicFocus.ts').MusicFocusPlay
+    await store.command('focus.play', payload, undefined, 'focus-intent-one')
+    await store.query('focus.play.status', { requestId: 'focus-intent-one', epoch: 'first' })
+    assert.equal(f.requests[0].requestId, 'focus-intent-one')
+    assert.equal(f.requests[0].name, 'focus.play')
+    assert.equal(f.requests[1].name, 'focus.play.status')
+    assert.deepEqual(f.requests[1].payload, { requestId: 'focus-intent-one', epoch: 'first' })
+    assert.equal(f.requests.filter(r => r.name === 'focus.play').length, 1)
+  } finally { store.dispose() }
+})
 const snapshot = (sequence = 0, epoch = 'first') =>
   ({ protocolVersion: 1, epoch, sequence, phase: 'ready' }) as CoreSnapshot
 function fixture() {

@@ -126,9 +126,10 @@ export class CoreProjection {
   async command<K extends CoreCommandName>(
     name: K,
     payload: CoreCommands[K],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    requestId?: string
   ): Promise<unknown> {
-    return this.request({ kind: 'command', name, payload } as CoreRequestEnvelope, signal)
+    return this.request({ kind: 'command', name, payload } as CoreRequestEnvelope, signal, requestId)
   }
   async query<K extends CoreQueryName>(
     name: K,
@@ -139,14 +140,14 @@ export class CoreProjection {
       CoreQueries[K]['output']
     >
   }
-  private async request(operation: CoreRequestEnvelope, signal?: AbortSignal): Promise<unknown> {
+  private async request(operation: CoreRequestEnvelope, signal?: AbortSignal, requestId = this.newId()): Promise<unknown> {
     if (!this.current || this.disposed || !this.synchronized || this.refreshing)
       throw new Error('Core state is not attached')
     const epoch = this.current.epoch
     let value: unknown
     try {
       value = await this.connection.request(
-        { ...operation, epoch, requestId: this.newId() },
+        { ...operation, epoch, requestId },
         signal
       )
     } catch (error) {

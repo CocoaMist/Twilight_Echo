@@ -2,15 +2,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { Track } from '@renderer/types/music'
 import LocalLibraryTagManager from '@renderer/components/LocalLibraryTagManager.vue'
+import IdentityReviewInbox from '../music-metadata/IdentityReviewInbox.vue'
 import { useEscapeToClose, useFocusTrap } from '@renderer/app/useDismissLayer.ts'
 import { useCoreConnection } from '@renderer/stores/coreConnection.ts'
-import type { CoreInboxPage, CoreInboxState, InboxKind, InboxStatus } from '../../../../shared/coreInbox.ts'
+import type {
+  CoreInboxPage,
+  CoreInboxState,
+  InboxKind,
+  InboxStatus
+} from '../../../../shared/coreInbox.ts'
 import type { CoreDuplicatesStatus } from '../../../../shared/coreDuplicates.ts'
 import type { LibrarySelectionRequest } from '../../../../shared/librarySelection.ts'
-import {
-  inboxLabels,
-  INBOX_PAGE_SIZE
-} from '@renderer/components/library-inbox/libraryInbox.ts'
+import { inboxLabels, INBOX_PAGE_SIZE } from '@renderer/components/library-inbox/libraryInbox.ts'
 
 const props = defineProps<{
   tracks: Track[]
@@ -23,6 +26,7 @@ const emit = defineEmits<{
   applied: [trackIds: string[]]
 }>()
 const core = useCoreConnection()
+const section = ref<'files' | 'metadata'>('files')
 const root = ref<HTMLElement | null>(null)
 const list = ref<HTMLElement | null>(null)
 const inboxState = shallowRef<CoreInboxState | null>(null)
@@ -92,9 +96,12 @@ onBeforeUnmount(() => {
 })
 onMounted(() => {
   mounted.value = true
-  void core.attach().then(() => refreshInbox()).catch((cause) => {
-    error.value = cause instanceof Error ? cause.message : '整理收件箱读取失败'
-  })
+  void core
+    .attach()
+    .then(() => refreshInbox())
+    .catch((cause) => {
+      error.value = cause instanceof Error ? cause.message : '整理收件箱读取失败'
+    })
 })
 useFocusTrap(root, () => mounted.value && editTracks.value.length === 0)
 useEscapeToClose(
@@ -128,6 +135,14 @@ function selectPage(): void {
   }
   selection.value = next
   selectedTracks.value = tracks
+}
+function clearSelection(): void {
+  selection.value = new Set()
+  selectedTracks.value = new Map()
+}
+function closeTagEditor(): void {
+  editTracks.value = []
+  editSelection.value = undefined
 }
 function mark(nextStatus: InboxStatus): void {
   const state = inboxState.value
@@ -262,80 +277,101 @@ function applied(trackIds: string[]): void {
       <header>
         <div>
           <h2 id="inbox-title">曲库整理收件箱</h2>
-          <p>基于已加载曲库；已处理和忽略仅保存复核状态。</p>
+          <p>
+            {{
+              section === 'files'
+                ? '基于已加载曲库；已处理和忽略仅保存复核状态。'
+                : '按库内实体复核已保存的音乐资料候选。'
+            }}
+          </p>
         </div>
         <button @click="emit('close')">关闭</button>
       </header>
-      <div class="inbox-controls">
-        <label
-          >问题
-          <select v-model="kind" :disabled="marking">
-            <option value="">全部</option>
-            <option v-for="(label, value) in inboxLabels" :key="value" :value="value">
-              {{ label }} · {{ counts[value] }}
-            </option>
-          </select></label
-        >
-        <label
-          >状态
-          <select v-model="status" :disabled="marking">
-            <option value="pending">待处理</option>
-            <option value="ignored">已忽略</option>
-            <option value="done">已处理</option>
-          </select></label
-        >
-        <button :disabled="detecting" @click="detect">
-          {{ detecting ? '检查中…' : '检查疑似重复' }}
+      <div class="inbox-controls" role="group" aria-label="整理范围">
+        <button type="button" :aria-pressed="section === 'files'" @click="section = 'files'">
+          文件问题
         </button>
-        <button :disabled="rescanning || scanning" @click="requestRescan">
-          {{ rescanning || scanning ? '重扫中…' : '全库后台重扫与补全' }}
+        <button type="button" :aria-pressed="section === 'metadata'" @click="section = 'metadata'">
+          音乐资料复核
         </button>
       </div>
-      <p v-if="error" role="alert">{{ error }}</p>
-      <p role="status">{{ notice }}</p>
-      <div class="inbox-controls">
-        <button :disabled="marking" @click="selectPage">选择本页</button
-        ><button :disabled="marking" @click="selection = new Set(); selectedTracks = new Map()">清空选择</button>
-        <span>{{ chosen.length }} 首已选</span>
-        <button :disabled="marking || !chosen.length" @click="editSelected">预览并编辑标签</button>
-        <button :disabled="marking || !chosen.length" @click="mark('ignored')">忽略</button>
-        <button :disabled="marking || !chosen.length" @click="mark('done')">标记已处理</button>
-        <button :disabled="marking || !chosen.length" @click="mark('pending')">重新打开</button>
-      </div>
-      <p v-if="!visible.length">
-        {{
-          kind === 'duplicate' && !inboxPage
-            ? '点击“检查疑似重复”开始只读复核。'
-            : '当前筛选没有待展示的问题。'
-        }}
-      </p>
-      <ul ref="list" class="inbox-list">
-        <li v-for="issue in visible" :key="issue.key" class="inbox-row">
+      <IdentityReviewInbox v-if="section === 'metadata'" />
+      <template v-else>
+        <div class="inbox-controls">
           <label
-            ><input
-              type="checkbox"
-              :disabled="marking"
-              :checked="selection.has(issue.key)"
-              @change="toggle(issue.key)"
-            /><strong>{{ issue.track.title || issue.track.id }}</strong> ·
-            {{ inboxLabels[issue.kind] }}</label
+            >问题
+            <select v-model="kind" :disabled="marking">
+              <option value="">全部</option>
+              <option v-for="(label, value) in inboxLabels" :key="value" :value="value">
+                {{ label }} · {{ counts[value] }}
+              </option>
+            </select></label
           >
-          <p>{{ issue.track.artist }} · {{ issue.track.album }} · {{ issue.reason }}</p>
-          <small>{{ issue.track.id }}</small>
-        </li>
-      </ul>
-      <footer>
-        <button :disabled="page === 0" @click="page--">上一页</button
-        ><span>第 {{ page + 1 }} / {{ pageCount }} 页 · {{ filtered }} 项</span
-        ><button :disabled="page + 1 >= pageCount" @click="page++">下一页</button>
-      </footer>
+          <label
+            >状态
+            <select v-model="status" :disabled="marking">
+              <option value="pending">待处理</option>
+              <option value="ignored">已忽略</option>
+              <option value="done">已处理</option>
+            </select></label
+          >
+          <button :disabled="detecting" @click="detect">
+            {{ detecting ? '检查中…' : '检查疑似重复' }}
+          </button>
+          <button :disabled="rescanning || scanning" @click="requestRescan">
+            {{ rescanning || scanning ? '重扫中…' : '全库后台重扫与补全' }}
+          </button>
+        </div>
+        <p v-if="error" role="alert">{{ error }}</p>
+        <p role="status">{{ notice }}</p>
+        <div class="inbox-controls">
+          <button :disabled="marking" @click="selectPage">选择本页</button
+          ><button :disabled="marking" @click="clearSelection">
+            清空选择
+          </button>
+          <span>{{ chosen.length }} 首已选</span>
+          <button :disabled="marking || !chosen.length" @click="editSelected">
+            预览并编辑标签
+          </button>
+          <button :disabled="marking || !chosen.length" @click="mark('ignored')">忽略</button>
+          <button :disabled="marking || !chosen.length" @click="mark('done')">标记已处理</button>
+          <button :disabled="marking || !chosen.length" @click="mark('pending')">重新打开</button>
+        </div>
+        <p v-if="!visible.length">
+          {{
+            kind === 'duplicate' && !inboxPage
+              ? '点击“检查疑似重复”开始只读复核。'
+              : '当前筛选没有待展示的问题。'
+          }}
+        </p>
+        <ul ref="list" class="inbox-list">
+          <li v-for="issue in visible" :key="issue.key" class="inbox-row">
+            <label
+              ><input
+                type="checkbox"
+                :disabled="marking"
+                :checked="selection.has(issue.key)"
+                @change="toggle(issue.key)"
+              /><strong>{{ issue.track.title || issue.track.id }}</strong> ·
+              {{ inboxLabels[issue.kind] }}</label
+            >
+            <p>{{ issue.track.artist }} · {{ issue.track.album }} · {{ issue.reason }}</p>
+            <small>{{ issue.track.id }}</small>
+          </li>
+        </ul>
+        <footer>
+          <button :disabled="page === 0" @click="page--">上一页</button
+          ><span>第 {{ page + 1 }} / {{ pageCount }} 页 · {{ filtered }} 项</span
+          ><button :disabled="page + 1 >= pageCount" @click="page++">下一页</button>
+        </footer>
+      </template>
     </section>
     <LocalLibraryTagManager
       v-if="editTracks.length"
       :tracks="editTracks"
       :selection="editSelection"
       :current-tracks="tracks"
-      @close="editTracks = []; editSelection = undefined"
+      @close="closeTagEditor"
       @applied="applied"
     />
   </div>
@@ -404,6 +440,9 @@ button {
 button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--te-primary-500) 14%, transparent);
 }
 .inbox-list {
   flex: 1;

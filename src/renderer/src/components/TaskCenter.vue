@@ -7,6 +7,7 @@ import { useAppNoticeStore } from '../stores/useAppNoticeStore'
 import { useCoreConnection } from '../stores/coreConnection'
 import DownloadResultActions from './streaming-page/DownloadResultActions.vue'
 import { downloadStatusLabel } from './streaming-page/streamingDownloads'
+import MetadataTaskList from './music-metadata/MetadataTaskList.vue'
 const props = withDefaults(
   defineProps<{ active: boolean; filter?: 'all' | 'active' | 'attention' }>(),
   { filter: 'all' }
@@ -25,6 +26,7 @@ const enrichment = music.libraryMetadataEnrichmentStatus
 const loudness = computed(() => core.state.value?.libraryLoudness)
 const actionError = ref('')
 const pending = ref(new Set<string>())
+const metadataCounts = ref({ active: 0, visible: 0 })
 const activeStates = [
   'queued',
   'preparing',
@@ -126,7 +128,8 @@ const jobs = computed(() => {
 const activeCount = computed(
   () =>
     jobs.value.filter((j) => activeStates.includes(j.state)).length +
-    downloads.tasks.value.filter((t) => activeStates.includes(t.status)).length
+    downloads.tasks.value.filter((t) => activeStates.includes(t.status)).length +
+    metadataCounts.value.active
 )
 const terminal = (state: string) => ['completed', 'failed', 'cancelled', 'error'].includes(state)
 const visibleJobs = computed(() =>
@@ -169,7 +172,7 @@ watch(
   { immediate: true }
 )
 watch(
-  () => visibleJobs.value.length + visibleDownloads.value.length,
+  () => visibleJobs.value.length + visibleDownloads.value.length + metadataCounts.value.visible,
   (count) => emit('visibleCount', count),
   { immediate: true }
 )
@@ -313,6 +316,12 @@ onUnmounted(() => {
       </div>
     </article>
   </section>
+  <MetadataTaskList
+    class="notice-tasks"
+    :active="active"
+    :filter="filter"
+    @counts="metadataCounts = $event"
+  />
 </template>
 <style scoped>
 .notice-tasks {

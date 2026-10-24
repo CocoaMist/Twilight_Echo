@@ -20,6 +20,11 @@ import {
   watch
 } from 'vue'
 import { useUnifiedMusicSearch } from '../app/useUnifiedMusicSearch'
+const GenreWorkspacePanel = defineAsyncComponent(() => import('./music-genres/GenreWorkspacePanel.vue'))
+const GenreBrowsePanel = defineAsyncComponent(() => import('./music-genres/GenreBrowsePanel.vue'))
+const MusicTagsPanel = defineAsyncComponent(() => import('./music-tags/MusicTagsPanel.vue'))
+const MusicFocusPanel = defineAsyncComponent(() => import('./music-focus/MusicFocusPanel.vue'))
+const MusicExplorationSearch = defineAsyncComponent(() => import('./music-exploration/MusicExplorationSearch.vue'))
 import { useMediaProviders } from '../providers'
 import { useMusicStore } from '../stores/useMusicStore'
 import { useCoreConnection } from '../stores/coreConnection.ts'
@@ -69,6 +74,8 @@ import {
 import CoverImg from './CoverImg.vue'
 import AlbumCard from './song-list/AlbumCard.vue'
 import AlbumDetailHeader from './song-list/AlbumDetailHeader.vue'
+import EntityMetadataPanel from './music-metadata/EntityMetadataPanel.vue'
+import { collectionMetadataContext } from './music-metadata/entityMetadataView.ts'
 import CreateAggregatePlaylistDialog from './aggregate-playlist/CreateAggregatePlaylistDialog.vue'
 import LocalLibraryTagManager from './LocalLibraryTagManager.vue'
 const LibraryInboxDialog = defineAsyncComponent(
@@ -175,12 +182,14 @@ const playbackStore = usePlayerStore()
 const settingsStore = useSettingsStore()
 const { currentTrack } = playbackStore
 const { playTrack, playTrackFromPosition, setPlayMode, playNextTrack } = playbackStore
-const playbackBookmarks = usePlaybackBookmarks()
-void playbackBookmarks.ensureLoaded()
-const mediaProviders = useMediaProviders()
-const unifiedSearch = useUnifiedMusicSearch()
-const providerStore = useProviderStore()
-const { listeningStats } = useListeningStatsStore()
+const playbackBookmarks = props.previewTracks ? null : usePlaybackBookmarks()
+if (playbackBookmarks) void playbackBookmarks.ensureLoaded()
+const mediaProviders = useMediaProviders({ sync: !props.previewTracks })
+const unifiedSearch = useUnifiedMusicSearch({ listen: !props.previewTracks })
+const providerStore = useProviderStore({ listen: !props.previewTracks })
+const listeningStats = props.previewTracks
+  ? shallowRef({ days: {}, tracks: {} })
+  : useListeningStatsStore().listeningStats
 const EMPTY_LAST_PLAYED_BY_TRACK_ID: ReadonlyMap<string, number> = new Map()
 const libraryStorage = createLibraryStorageState({
   getStorageMode: async () => 'sqlite'
@@ -190,8 +199,9 @@ onMounted(() => {
 })
 
 const currentLibraryViewKey = computed(() => libraryViewKey(props.category, props.filter))
-const { searchQuery, debouncedSearchQuery, searchInputFocused } =
-  useSongListSearch(currentLibraryViewKey)
+const { searchQuery, debouncedSearchQuery, searchInputFocused } = useSongListSearch(
+  props.previewTracks ? undefined : currentLibraryViewKey
+)
 
 // ─── Recent playback source selector ──────────────────────────────────────
 const recentSource = ref('all')
@@ -202,6 +212,7 @@ const recentSourceOptions = computed(() => {
     { id: 'local', label: '本地音乐', icon: 'pi pi-desktop' },
     { id: 'all', label: '全平台', icon: 'pi pi-bolt' }
   ]
+  if (props.previewTracks) return options
   for (const provider of providerStore.providers.value) {
     if (provider.capabilities.includes('library')) {
       options.push({
@@ -294,7 +305,9 @@ const albums = computed(() => previewGroups('album'))
 const genres = computed(() => previewGroups('genre'))
 const folders = computed<GridItem[]>(() => [])
 
-const libraryViewPreferences = new LibraryViewPreferences()
+const libraryViewPreferences = new LibraryViewPreferences(
+  props.previewTracks ? { getItem: () => null, setItem: () => {} } : undefined
+)
 const libraryViewState = ref<LibraryViewState>(
   libraryViewPreferences.read(currentLibraryViewKey.value, props.category)
 )
@@ -512,6 +525,9 @@ const isPlaylistDetail = computed(() => currentPlaylistName.value !== null)
 const isAlbumDetail = computed(
   () => props.category === 'albums' && props.filter?.startsWith('album:') === true
 )
+const metadataTarget = computed(() =>
+  props.previewTracks ? null : collectionMetadataContext(props.category, props.filter)
+)
 const currentAlbum = computed(() => {
   if (!isAlbumDetail.value) return null
   if (!props.previewTracks && libraryStorage.mode.value !== 'json')
@@ -568,7 +584,9 @@ const libraryMutationPending = ref(false)
 const exclusionRestorePending = ref(false)
 const searchOnlineSongs = ref(false)
 
-const showOnlineSearchToggle = computed(() => props.category === 'allSongs' && !props.filter)
+const showOnlineSearchToggle = computed(
+  () => !props.previewTracks && props.category === 'allSongs' && !props.filter
+)
 const shouldUseUnifiedSearch = computed(
   () => showOnlineSearchToggle.value && searchOnlineSongs.value
 )
@@ -578,7 +596,7 @@ watch(
   [
     () => libraryStorage.mode.value,
     localPlaylists,
-    musicVersionRevision,
+    () => (props.previewTracks ? 0 : musicVersionRevision.value),
     currentPlaylistName,
     () => props.previewTracks
   ],
@@ -709,7 +727,7 @@ function retryDatabaseRead(): void {
   else databasePages.retry()
 }
 const libraryRepairStatusText = computed(() => {
-  if (props.category !== 'allSongs' || props.filter) return ''
+  if (props.previewTracks || props.category !== 'allSongs' || props.filter) return ''
   const report = libraryRepairReport.value
   if (!report) return ''
   if (report.state === 'running') return '正在后台修复歌单引用'
@@ -717,7 +735,9 @@ const libraryRepairStatusText = computed(() => {
   return [
     report.relocated ? `已自动重定位 ${report.relocated} 首` : '',
     report.unresolved ? `${report.unresolved} 首本地文件未找到` : ''
-  ].filter(Boolean).join(' · ')
+  ]
+    .filter(Boolean)
+    .join(' · ')
 })
 
 watch(
@@ -906,7 +926,9 @@ const isCollectionGrid = computed(
   () => showGrid.value && (props.category === 'artists' || props.category === 'albums')
 )
 
-const collectionViewPreferences = new LibraryCollectionViewPreferences()
+const collectionViewPreferences = new LibraryCollectionViewPreferences(
+  props.previewTracks ? null : undefined
+)
 const collectionViewState = ref<LibraryCollectionViewState>(
   collectionViewPreferences.read(props.category)
 )
@@ -938,14 +960,17 @@ function setCollectionGenre(value: string): void {
 
 const playlistOrderNotice = ref('')
 const localPlaylistEntries = computed(() =>
-  localPlaylists.value.map((playlist) => ({ ...playlist, id: playlist.id ?? playlist.name }))
+  props.previewTracks
+    ? []
+    : localPlaylists.value.map((playlist) => ({ ...playlist, id: playlist.id ?? playlist.name }))
 )
 const localPlaylistOrder = useLocalPlaylistOrder(
   localPlaylistEntries,
   () => 'library',
   (message) => {
     playlistOrderNotice.value = message
-  }
+  },
+  { persist: !props.previewTracks }
 )
 const databasePlaylistCatalog = libraryApi.createPlaylistView()
 const databaseCatalogState = databasePlaylistCatalog.state
@@ -973,7 +998,7 @@ watch(
   () => ({
     enabled: databaseGridEnabled.value && databaseGridKind.value === 'playlists',
     playlists: localPlaylistEntries.value,
-    revision: musicVersionRevision.value
+    revision: props.previewTracks ? 0 : musicVersionRevision.value
   }),
   ({ enabled, playlists }) => void databasePlaylistCatalog.setCatalog(enabled ? playlists : null),
   { immediate: true, flush: 'sync' }
@@ -1122,7 +1147,9 @@ const collectionGridItems = computed(() =>
 
 watch(
   () => settingsStore.settings.value.genreSeparators,
-  () => refreshLibraryIndex()
+  () => {
+    if (!props.previewTracks) refreshLibraryIndex()
+  }
 )
 const localPlaylistReorderEntries = computed(() => {
   if (!databaseGridEnabled.value) return filteredGridItems.value as Array<GridItem & { id: string }>
@@ -1557,15 +1584,17 @@ const {
         (databaseGridEnabled.value && databaseCollectionState.value.total !== null))
   ),
   resetSources: [],
-  viewIdentity: currentLibraryViewKey,
-  viewKey: computed(() =>
-    JSON.stringify([
-      currentLibraryViewKey.value,
-      debouncedSearchQuery.value,
-      libraryViewState.value,
-      databaseGridEnabled.value ? collectionViewState.value : null
-    ])
-  ),
+  viewIdentity: props.previewTracks ? undefined : currentLibraryViewKey,
+  viewKey: props.previewTracks
+    ? undefined
+    : computed(() =>
+        JSON.stringify([
+          currentLibraryViewKey.value,
+          debouncedSearchQuery.value,
+          libraryViewState.value,
+          databaseGridEnabled.value ? collectionViewState.value : null
+        ])
+      ),
   shouldResetOnSearch: showTable,
   debouncedSearchQuery
 })
@@ -1593,6 +1622,7 @@ const providerCoverRequests = new Map<string, Promise<void>>()
 const providerCoverTails = new Map<string, Promise<unknown>>()
 const providerCoverController = new AbortController()
 async function resolveMissingTrackCover(track: Track): Promise<void> {
+  if (props.previewTracks) return
   if (track.cover || track.coverSource || track.coverSmall || track.coverSmallSource) return
   const source = getLogicalTrackSource(track)
   if (
@@ -2102,11 +2132,7 @@ async function appendActionTracksToQueue(actionTracks?: Track[]): Promise<void> 
       async (lease, signal) => {
         await playbackStore.appendLibraryQueuePages(
           async (append) => {
-            await lease.forEachPage((rows) =>
-              append(
-                rows.map(({ track }) => trackInput(track))
-              )
-            )
+            await lease.forEachPage((rows) => append(rows.map(({ track }) => trackInput(track))))
           },
           true,
           { signal, guard: source.guard }
@@ -2284,7 +2310,7 @@ function handleContextCreatePlaylist(): void {
 
 const canContinueFromBookmark = computed(() => {
   const track = selectedTrack.value
-  if (!track || contextActionCount.value > 1) return false
+  if (!track || !playbackBookmarks || contextActionCount.value > 1) return false
   return (
     !!playbackBookmarks.resumeBookmarkFor(track) || playbackBookmarks.bookmarksFor(track).length > 0
   )
@@ -2292,7 +2318,7 @@ const canContinueFromBookmark = computed(() => {
 
 function handleContinueFromBookmark(): void {
   const track = selectedTrack.value
-  if (!track) return
+  if (!track || !playbackBookmarks) return
   const resume =
     playbackBookmarks.resumeBookmarkFor(track) ?? playbackBookmarks.bookmarksFor(track)[0]
   if (!resume) return
@@ -2726,6 +2752,8 @@ watch(
               </div>
             </div>
           </div>
+          <GenreBrowsePanel v-if="databaseGridEnabled && category === 'genres'" />
+          <GenreWorkspacePanel v-if="databaseGridEnabled && category === 'genres'" />
           <div v-if="databaseGridEnabled" class="database-page-controls" aria-label="分类读取状态">
             <span role="status" aria-live="polite"
               >{{
@@ -2980,12 +3008,7 @@ watch(
                       </div>
                       <div class="playlist-name">{{ item.name }}</div>
                       <div class="playlist-count">
-                        {{
-                          item.trackCount ??
-                          item.count ??
-                          item.trackIds?.length ??
-                          0
-                        }}
+                        {{ item.trackCount ?? item.count ?? item.trackIds?.length ?? 0 }}
                         首
                       </div>
                       <div class="playlist-source-summary">
@@ -3132,9 +3155,11 @@ watch(
                 >
                   <i class="pi pi-sitemap"></i>
                   <span>库管理</span>
-                  <span v-if="excludedTracks.length > 0" class="library-tools-badge">{{
-                    excludedTracks.length
-                  }}</span>
+                  <span
+                    v-if="!previewTracks && excludedTracks.length > 0"
+                    class="library-tools-badge"
+                    >{{ excludedTracks.length }}</span
+                  >
                   <i
                     class="pi pi-chevron-down"
                     style="font-size: calc(var(--te-font-size-body, 14px) * 10 / 14)"
@@ -3500,6 +3525,15 @@ watch(
               </div>
             </div>
           </div>
+          <MusicTagsPanel
+            v-if="!previewTracks && category === 'allSongs'"
+            label="音乐库"
+            scope="library-tags"
+          />
+          <MusicFocusPanel
+            v-if="!previewTracks && category === 'allSongs'"
+            scope="library-focus"
+          />
           <AlbumDetailHeader
             v-if="currentAlbum"
             :album="currentAlbum"
@@ -3508,6 +3542,7 @@ watch(
             @play="playAllTracks"
             @shuffle="shufflePlayTracks"
           />
+          <EntityMetadataPanel v-if="metadataTarget" :target="metadataTarget" />
           <p
             v-if="databaseAlbumEnabled && databaseAlbumState.error"
             class="repair-status"
@@ -3585,6 +3620,7 @@ watch(
               </span>
             </div>
           </div>
+          <MusicExplorationSearch v-if="!props.previewTracks && debouncedSearchQuery.trim()" :query="debouncedSearchQuery" />
           <div
             v-if="databaseReadError && databasePageState.total === null"
             class="empty-state"
@@ -3816,7 +3852,7 @@ watch(
                           :cover="displayTrackCover(track)"
                           :cover-source="displayTrackCoverSource(track)"
                           :identity="track.id"
-                          :core-track-id="track.id"
+                          :core-track-id="previewTracks ? undefined : track.id"
                           class="cover-img"
                           alt="cover"
                         />

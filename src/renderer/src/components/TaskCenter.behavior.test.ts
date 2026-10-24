@@ -139,6 +139,7 @@ window.runTaskCenterTests=async dark=>{
       onMessage:fn=>{message=fn;return()=>stops++},onStatus:()=>()=>stops++,
       disconnect:async()=>{disconnected++;return {ok:true}},cancel:async()=>({ok:true}),
       request:async(_id,request)=>{
+        if(request.name==='metadata.entity.tasks')return {ok:true,value:{offset:0,total:0,counts:{queued:0,running:0,retry_wait:0,needs_review:0,blocked:0,failed:0,completed:0,cancelled:0},items:[]}};
         if(request.name==='downloads.page')return {ok:true,value:{...state.downloads,offset:0,items:downloadTasks}};
         if(request.name==='downloads.indexed')return {ok:true,value:{indexed:true}};
         commands.push(request);

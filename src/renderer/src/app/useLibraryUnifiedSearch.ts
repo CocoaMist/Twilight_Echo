@@ -4,16 +4,26 @@ import type { CoreCollectionSearchQuery } from '../../../shared/coreSearch.ts'
 import type { LibrarySearchSnapshot } from '../../../shared/unifiedMusicSearch.ts'
 
 /** Component-owned read cancellation only; matching and search belong to Core. */
-export function useLibraryUnifiedSearch(onInvalidate?: (revision?: number) => void) {
+export function useLibraryUnifiedSearch(
+  onInvalidate?: (revision?: number) => void,
+  options?: { listen?: boolean }
+) {
   const core = useCoreConnection()
   const lifetime = new AbortController()
   const signalFor = (signal?: AbortSignal) => AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])])
-  const stop = watch(
-    [() => core.state.value?.epoch, () => core.state.value?.libraryRevision, () => core.state.value?.versionsRevision],
-    ([, revision], previous) => {
-      if (previous[0] !== undefined) onInvalidate?.(revision ?? undefined)
-    }
-  )
+  const stop =
+    options?.listen === false
+      ? () => {}
+      : watch(
+          [
+            () => core.state.value?.epoch,
+            () => core.state.value?.libraryRevision,
+            () => core.state.value?.versionsRevision
+          ],
+          ([, revision], previous) => {
+            if (previous[0] !== undefined) onInvalidate?.(revision ?? undefined)
+          }
+        )
   onBeforeUnmount(() => { lifetime.abort(); stop() })
   const songs = (query: string, limit = 30, offset = 0, signal?: AbortSignal) =>
     core.query('search.songs', { query, scope: 'local', limit, offset }, signalFor(signal))

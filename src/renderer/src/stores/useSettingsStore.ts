@@ -1,4 +1,5 @@
 import { normalizeNavigationPagePreferences } from '../../../shared/navigationPages.ts'
+import { defaultMusicIdentificationSettings } from '../../../shared/musicIdentificationSchedule.ts'
 import { DEFAULT_DOWNLOAD_PREFERENCES } from '../../../shared/downloadPreferences.ts'
 import { computed, readonly, ref, type Ref } from 'vue'
 import { normalizeAppBackgroundSettings } from '../../../shared/appAppearance.ts'
@@ -163,6 +164,7 @@ const fallbackSettings: AppSettings = {
   downloadFolder: '',
   genreSeparators: DEFAULT_GENRE_SEPARATORS,
   watchLibrary: true,
+  musicIdentification: defaultMusicIdentificationSettings(),
   onlineLyricsFallback: false,
   smtcEnabled: true,
   discordRpcEnabled: false,

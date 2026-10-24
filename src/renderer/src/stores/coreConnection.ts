@@ -146,8 +146,8 @@ export function createCoreConnectionStore(api: CoreBridgeApi) {
     attach: () => projection.attach(),
     refresh: () => projection.refresh(),
     subscribe: (listener: (message: CoreClientMessage) => void) => connection.subscribe(listener),
-    command: <K extends CoreCommandName>(name: K, payload: CoreCommands[K], signal?: AbortSignal) =>
-      projection.command(name, payload, signal),
+    command: <K extends CoreCommandName>(name: K, payload: CoreCommands[K], signal?: AbortSignal, requestId?: string) =>
+      projection.command(name, payload, signal, requestId),
     query: <K extends CoreQueryName>(
       name: K,
       payload: CoreQueries[K]['input'],

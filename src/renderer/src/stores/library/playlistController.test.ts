@@ -9,10 +9,17 @@ import type {
   PlaylistTrackPageProducer
 } from './musicStoreTypes.ts'
 import type { PlaylistPersistenceStatus } from '../playlistPersistence.ts'
+import { emptyMusicVersions } from '../../../../shared/musicVersions.ts'
+import { editMusicVersions } from '../../utils/musicVersions.ts'
+import type { CoreSnapshot } from '../../../../shared/coreProtocol.ts'
 import { createPlaylistController } from './playlistController.ts'
 import { PersistentDataRevisionConflictError } from '../../../../shared/versionedPersistence.ts'
-import { getMusicVersions, loadMusicVersions, saveMusicVersions } from '../musicVersions.ts'
-import { editMusicVersions } from '../../utils/musicVersions.ts'
+import {
+  getMusicVersions,
+  loadMusicVersions,
+  previewMusicVersionEdit,
+  saveMusicVersions
+} from '../musicVersions.ts'
 import { versionSourceKey } from '../../utils/trackSourceIdentity.ts'
 
 function track(id: number): Track {
@@ -54,6 +61,125 @@ function fixture(
   return { controller, playlists }
 }
 
+function readySnapshot(): CoreSnapshot {
+  return {
+    protocolVersion: 1,
+    epoch: 'versions-test-epoch',
+    sequence: 0,
+    phase: 'ready',
+    playback: null,
+    track: null,
+    queue: null,
+    error: null,
+    migrationRequired: false,
+    loading: false,
+    isStreamBuffering: false,
+    presentationRevision: null,
+    pluginsRevision: null,
+    libraryRevision: null,
+    abLoop: null,
+    mute: null,
+    modelPack: null,
+    cloudTransfers: null,
+    inbox: null,
+    libraryLoudness: null,
+    loudness: null,
+    scan: null,
+    statisticsRevision: null,
+    playlistsRevision: null,
+    versionsRevision: 0,
+    audioRevision: null,
+    settingsRevision: null,
+    sleepTimer: null,
+    bookmarksRevision: null,
+    lyricsRevision: null,
+    lyricsContentRevision: null,
+    workspaceRevision: null,
+    workspaceContentRevision: null,
+    streams: null,
+    cast: null,
+    network: null,
+    downloads: null,
+    personalized: null,
+    heart: null
+  }
+}
+
+/**
+ * A minimal in-memory Core bridge serving the versions protocol. The migrated
+ * music-version store reads through the Core connection, so the local
+ * controller tests back it with this deterministic fake instead of a bridge.
+ */
+function versionsCoreBridge() {
+  let doc = emptyMusicVersions()
+  let versionsRevision = 1
+  const epoch = 'versions-test-epoch'
+  const listeners = new Set<(event: { connectionId: string; message: unknown }) => void>()
+  let connectionId: string | null = null
+  const snapshot = () => ({
+    ...readySnapshot(),
+    sequence: versionsRevision,
+    versionsRevision
+  })
+  const emitState = () => {
+    for (const listener of listeners)
+      listener({
+        connectionId: connectionId ?? 'conn',
+        message: { kind: 'state', epoch, sequence: versionsRevision, snapshot: snapshot() }
+      })
+  }
+  const applyEdit = (edit: {
+    scope: 'tracks' | 'albums'
+    operation: 'split'
+    keys: string[]
+    label: string
+  }) => {
+    doc = editMusicVersions(doc, edit.scope, edit.operation, edit.keys, edit.label)
+    versionsRevision += 1
+    emitState()
+  }
+  return {
+    connect: async () => {
+      connectionId = 'conn'
+      return { ok: true as const, value: { connectionId, snapshot: snapshot() } }
+    },
+    request: async (_id: string, request: { name: string; payload: Record<string, unknown> }) => {
+      if (request.name === 'versions.edit') {
+        applyEdit(request.payload as {
+          scope: 'tracks' | 'albums'
+          operation: 'split'
+          keys: string[]
+          label: string
+        })
+        return { ok: true as const, value: null }
+      }
+      if (request.name !== 'versions.page') throw new Error('unexpected core query ' + request.name)
+      const scope = request.payload.scope as 'tracks' | 'albums'
+      const kind = request.payload.kind as 'versions' | 'families'
+      const list = doc[scope][kind]
+      const offset = Number(request.payload.offset ?? 0)
+      const limit = Number(request.payload.limit ?? 128)
+      return {
+        ok: true as const,
+        value: { revision: versionsRevision, offset, total: list.length, items: list.slice(offset, offset + limit) }
+      }
+    },
+    cancel: async () => ({ ok: true as const, value: undefined }),
+    disconnect: async () => ({ ok: true as const, value: undefined }),
+    onMessage: (listener: (event: { connectionId: string; message: unknown }) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    onStatus: () => () => {},
+    applyEdit
+  }
+}
+
+let sharedVersionsBridge: ReturnType<typeof versionsCoreBridge> | null = null
+function versionsCoreApi() {
+  return (sharedVersionsBridge ??= versionsCoreBridge())
+}
+
 function mockWindow(t: TestContext, value: unknown): void {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', { configurable: true, value })
@@ -72,7 +198,8 @@ test('batch preserves matching, order, duplicates, empty results and existing pl
         savePlaylists: async (snapshot: Playlist[]) => {
           writes.push(snapshot)
         }
-      }
+      },
+      core: versionsCoreApi()
     }
   } as unknown as Window & typeof globalThis)
   const { controller, playlists } = fixture([track(1), track(2)])
@@ -110,7 +237,8 @@ test('async imports do not consult an incomplete renderer library and commit the
         savePlaylists: async (snapshot: Playlist[]) => {
           writes.push(snapshot)
         }
-      }
+      },
+      core: versionsCoreApi()
     }
   })
   const { controller, playlists } = fixture([], async (paths) => {
@@ -304,7 +432,7 @@ test('batched persistence replays its delta across a revision conflict', async (
   assert.deepEqual(saved.map((p) => p.name).sort(), ['One', 'Other window', 'Two'])
 })
 
-function streamingFixture(t: TestContext, getTracksRevision?: () => number) {
+async function streamingFixture(t: TestContext, getTracksRevision?: () => number) {
   t.mock.method(globalThis, 'setTimeout', (() => 0) as unknown as typeof setTimeout)
   const writes: Playlist[][] = []
   mockWindow(t, {
@@ -313,14 +441,18 @@ function streamingFixture(t: TestContext, getTracksRevision?: () => number) {
         savePlaylists: async (snapshot: Playlist[]) => {
           writes.push(snapshot)
         }
-      }
+      },
+      core: versionsCoreApi()
     }
   })
+  // The versions store loads through the Core bridge asynchronously; settle
+  // it before the test captures a revision guard.
+  await loadMusicVersions()
   return { ...fixture([], undefined, getTracksRevision), writes }
 }
 
 test('streamed playlist stages compact pages and publishes/clones only the transaction endpoints', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   const clones = t.mock.method(globalThis, 'structuredClone')
   const pageSizes: number[] = []
   const id = await controller.createPlaylistWithTrackPages('Stream', async (append) => {
@@ -359,7 +491,7 @@ test('streamed playlist stages compact pages and publishes/clones only the trans
 })
 
 test('aggregate creation streams one compact document without an empty shell or name-space collision', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   playlists.value = [{ id: 'ordinary', name: 'Mix', trackIds: [], createdAt: '' }]
   const clones = t.mock.method(globalThis, 'structuredClone')
   let pages = 0
@@ -394,7 +526,7 @@ test('aggregate creation streams one compact document without an empty shell or 
 })
 
 test('aggregate streamed creation reuses its own existing ID and preserves live settings', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   playlists.value = [
     { id: 'aggregate', name: 'Mix', kind: 'aggregate', trackIds: ['1'], createdAt: '' }
   ]
@@ -415,7 +547,7 @@ test('aggregate streamed creation reuses its own existing ID and preserves live 
 
 for (const failure of ['read', 'abort', 'guard', 'swallowed', 'collision', 'metadata'] as const) {
   test(`aggregate creation ${failure} does not publish a staged prefix`, async (t) => {
-    const { controller, playlists, writes } = streamingFixture(t)
+    const { controller, playlists, writes } = await streamingFixture(t)
     const abort = new AbortController()
     await assert.rejects(
       controller.createAggregatePlaylistWithTrackPages(
@@ -446,7 +578,7 @@ for (const failure of ['read', 'abort', 'guard', 'swallowed', 'collision', 'meta
 }
 
 test('streaming append rebases once on live membership, order and presentation edits', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   playlists.value = [
     {
       id: 'existing',
@@ -478,7 +610,7 @@ test('streaming append rebases once on live membership, order and presentation e
 for (const existing of [false, true]) {
   for (const failure of ['read', 'abort', 'guard', 'oversize', 'swallowed'] as const) {
     test(`streaming ${failure} leaves ${existing ? 'existing' : 'new'} playlist unpublished`, async (t) => {
-      const { controller, playlists, writes } = streamingFixture(t)
+      const { controller, playlists, writes } = await streamingFixture(t)
       if (existing)
         playlists.value = [{ id: 'existing', name: 'Mix', trackIds: ['1'], createdAt: '' }]
       const before = structuredClone(playlists.value)
@@ -510,7 +642,7 @@ for (const existing of [false, true]) {
 }
 
 test('pre-abort skips source and late appends cannot alter a completed document', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   const cancellation = new AbortController()
   cancellation.abort()
   await assert.rejects(
@@ -535,7 +667,7 @@ test('pre-abort skips source and late appends cannot alter a completed document'
 
 for (const change of ['delete', 'kind', 'imported', 'collision'] as const) {
   test(`streaming target fence rejects ${change} without retargeting`, async (t) => {
-    const { controller, playlists } = streamingFixture(t)
+    const { controller, playlists } = await streamingFixture(t)
     if (change !== 'collision')
       playlists.value = [{ id: 'existing', name: 'Mix', trackIds: ['1'], createdAt: '' }]
     await assert.rejects(
@@ -555,7 +687,7 @@ for (const change of ['delete', 'kind', 'imported', 'collision'] as const) {
 }
 
 test('aggregate streaming preserves settings and imported streams create independent occurrences', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   playlists.value = [
     {
       id: 'aggregate',
@@ -596,7 +728,7 @@ test('aggregate streaming preserves settings and imported streams create indepen
 })
 
 test('streamed commit uses the existing authoritative CAS merge', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   const original: Playlist = {
     id: 'existing',
     name: 'Mix',
@@ -651,7 +783,7 @@ function playlistRecord(id: string, ids: number[], extra: Partial<Playlist> = {}
 }
 
 test('favorite pages stage 10005 compact tracks with no shell, growing clones or early persistence', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   const clones = t.mock.method(globalThis, 'structuredClone')
   let pages = 0
   assert.equal(
@@ -688,7 +820,7 @@ test('favorite pages stage 10005 compact tracks with no shell, growing clones or
 })
 
 test('favorite page add/query/remove preserve the synchronous recording, remote-ID and CUE/SACD rules', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   const legacy = fixture([])
   const local = track(1)
   const remote = { ...local, id: 'ncm:10', filePath: 'ncm:10', source: 'ncm' }
@@ -731,7 +863,7 @@ test('favorite page add/query/remove preserve the synchronous recording, remote-
 })
 
 test('favorite append preserves concurrent removals and snapshots, and rechecks new recording duplicates once at commit', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   playlists.value = [playlistRecord('favorite', [1], { isDefault: true })]
   const alias = { ...track(3), id: 'ncm:300', filePath: 'ncm:300', source: 'ncm' }
   assert.equal(
@@ -758,7 +890,7 @@ test('favorite append preserves concurrent removals and snapshots, and rechecks 
 })
 
 test('unfavorite removes every captured compatible membership but preserves new and same-titled neighbours', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   const local = track(1)
   const remote = { ...local, id: 'ncm:10', filePath: 'ncm:10', source: 'ncm' }
   const namesake = { ...remote, id: 'ncm:11', filePath: 'ncm:11' }
@@ -779,7 +911,7 @@ test('unfavorite removes every captured compatible membership but preserves new 
 })
 
 test('favorite state reads every page instead of inferring full selection from its loaded prefix', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   playlists.value = [
     playlistRecord(
       'favorite',
@@ -830,15 +962,15 @@ test('manual recording splits are honored and a late version/library change reje
   })
   loadMusicVersions()
   let revision = 0
-  const { controller, playlists } = streamingFixture(t, () => revision)
+  const { controller, playlists } = await streamingFixture(t, () => revision)
   const local = track(1),
     remote = { ...local, id: 'ncm:10', source: 'ncm', filePath: 'ncm:10' }
   playlists.value = [playlistRecord('favorite', [1], { isDefault: true })]
   const before = getMusicVersions()
-  saveMusicVersions(
-    editMusicVersions(before, 'tracks', 'split', [versionSourceKey(remote)], 'Live'),
-    before
-  )
+  const { after } = previewMusicVersionEdit('tracks', 'split', [versionSourceKey(remote)], 'Live')
+  await saveMusicVersions(after, before)
+  // Settle the client projection so the recording index sees the split.
+  await loadMusicVersions()
   assert.deepEqual(
     await controller.readFavoriteTrackPages(async (append) => {
       await append([remote])
@@ -855,10 +987,21 @@ test('manual recording splits are honored and a late version/library change reje
     await assert.rejects(
       controller.setFavoriteTrackPages(async (append) => {
         await append([track(2)])
-        return () => {
-          if (change === 'library') revision++
-          else loadMusicVersions()
+        // The capture happened before produce ran; a change landing now is a
+        // late conflict and must invalidate the in-flight publication.
+        if (change === 'library') {
+          revision++
+          return
         }
+        const current = getMusicVersions()
+        const { after } = previewMusicVersionEdit(
+          'tracks',
+          'split',
+          [versionSourceKey(local)],
+          'Studio'
+        )
+        await saveMusicVersions(after, current)
+        await loadMusicVersions()
       }, true),
       /曲库或录音版本已变化/
     )
@@ -868,7 +1011,7 @@ test('manual recording splits are honored and a late version/library change reje
 })
 
 test('ID-page removal preserves latest unselected order, metadata and additions with one endpoint save', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   playlists.value = [playlistRecord('source', [1, 2, 3, 4])]
   assert.equal(
     await controller.removeTrackIdPagesFromPlaylistById('source', async (append) => {
@@ -891,7 +1034,7 @@ test('ID-page removal preserves latest unselected order, metadata and additions 
 })
 
 test('ID-page move publishes both records together using current source order/snapshots without resurrecting removed members', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   playlists.value = [
     playlistRecord('source', [1, 2, 3, 4]),
     playlistRecord('target', [3, 9], { kind: 'aggregate', hiddenSources: ['demo'] })
@@ -947,7 +1090,7 @@ test('ID-page move publishes both records together using current source order/sn
 })
 
 test('ID-page reorder matches legacy boundaries while keeping a stable drop anchor under concurrent edits', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   const legacy = fixture([])
   for (const targetIndex of [-10, 0, 2, 4, 8, 99]) {
     playlists.value = [playlistRecord('source', [1, 2, 3, 4, 5, 6])]
@@ -989,7 +1132,7 @@ test('ID-page reorder matches legacy boundaries while keeping a stable drop anch
 for (const action of ['remove', 'move', 'reorder'] as const) {
   for (const failure of ['read', 'abort', 'guard', 'swallowed', 'oversize'] as const) {
     test(`ID-page ${action} ${failure} leaves both playlists and persistence untouched`, async (t) => {
-      const { controller, playlists, writes } = streamingFixture(t)
+      const { controller, playlists, writes } = await streamingFixture(t)
       playlists.value = [playlistRecord('source', [1, 2, 3]), playlistRecord('target', [4])]
       const before = structuredClone(playlists.value),
         abort = new AbortController()
@@ -1022,7 +1165,7 @@ for (const action of ['remove', 'move', 'reorder'] as const) {
 for (const favorite of [false, true]) {
   for (const failure of ['read', 'abort', 'guard', 'swallowed'] as const) {
     test(`favorite ${favorite} ${failure} never publishes staged pages`, async (t) => {
-      const { controller, playlists, writes } = streamingFixture(t)
+      const { controller, playlists, writes } = await streamingFixture(t)
       playlists.value = [playlistRecord('favorite', [1], { isDefault: true })]
       const before = structuredClone(playlists.value),
         abort = new AbortController()
@@ -1046,7 +1189,7 @@ for (const favorite of [false, true]) {
 }
 
 test('late ID appends and pre-aborted sources cannot change a committed playlist', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   playlists.value = [playlistRecord('source', [1, 2, 3])]
   const abort = new AbortController()
   abort.abort()
@@ -1075,7 +1218,7 @@ test('late ID appends and pre-aborted sources cannot change a committed playlist
 })
 
 test('streaming membership targets are ID-bound and type-fenced without retargeting', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   playlists.value = [playlistRecord('source', [1, 2]), playlistRecord('target', [])]
   await assert.rejects(
     controller.movePlaylistTrackIdPagesById('source', 'target', async (append) => {
@@ -1097,7 +1240,7 @@ test('streaming membership targets are ID-bound and type-fenced without retarget
 })
 
 test('two-playlist streamed move uses the existing CAS owner and merges remote order/settings/additions', async (t) => {
-  const { controller, playlists } = streamingFixture(t)
+  const { controller, playlists } = await streamingFixture(t)
   const base = [
     playlistRecord('source', [1, 2, 3], { isDefault: true }),
     playlistRecord('target', [4])
@@ -1145,7 +1288,7 @@ test('two-playlist streamed move uses the existing CAS owner and merges remote o
 })
 
 test('empty/no-op favorite and ID streams publish nothing; favorite target replacement never retargets by name', async (t) => {
-  const { controller, playlists, writes } = streamingFixture(t)
+  const { controller, playlists, writes } = await streamingFixture(t)
   const abort = new AbortController()
   abort.abort()
   await assert.rejects(
