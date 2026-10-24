@@ -32,28 +32,28 @@ class Server final {
     const Request request = shared_->request;
     const Command command = static_cast<Command>(request.command);
     if (options_.beforeCommand) options_.beforeCommand(command);
-    Response response;
-    response.command = request.command;
+    auto response = std::make_unique<Response>();
+    response->command = request.command;
     bool ok = false;
     switch (command) {
       case Command::EnumerateDevices:
-        ok = enumerate(&response);
+        ok = enumerate(response.get());
         break;
       case Command::GetDiagnostics:
-        response.diagnostics = encodeDiagnostics(host_->diagnostics());
+        response->diagnostics = encodeDiagnostics(host_->diagnostics());
         ok = true;
         break;
       case Command::ProbeDevice:
-        ok = probe(request, &response);
+        ok = probe(request, response.get());
         break;
       case Command::Open:
-        ok = open(request, &response);
+        ok = open(request, response.get());
         break;
       case Command::CreateBuffers:
-        ok = createBuffers(&response);
+        ok = createBuffers(response.get());
         break;
       case Command::Start:
-        ok = start(&response);
+        ok = start(response.get());
         break;
       case Command::Stop:
         host_->stop();
@@ -61,23 +61,23 @@ class Server final {
         ok = true;
         break;
       case Command::Close:
-        ok = close(&response);
+        ok = close(response.get());
         break;
       case Command::Shutdown:
-        close(&response);
-        ok = response.failureReason == static_cast<int32_t>(FailureReason::None);
+        close(response.get());
+        ok = response->failureReason == static_cast<int32_t>(FailureReason::None);
         if (shutdown) *shutdown = true;
         break;
       case Command::None:
       default:
-        fail(&response, FailureReason::ProtocolError, "ASIO helper received an unknown command");
+        fail(response.get(), FailureReason::ProtocolError, "ASIO helper received an unknown command");
         break;
     }
-    if (response.failureReason == static_cast<int32_t>(FailureReason::ProtocolError) && shutdown) {
+    if (response->failureReason == static_cast<int32_t>(FailureReason::ProtocolError) && shutdown) {
       *shutdown = true;
     }
-    if (response.failureReason == static_cast<int32_t>(FailureReason::None)) response.ok = ok ? 1 : 0;
-    shared_->response = response;
+    if (response->failureReason == static_cast<int32_t>(FailureReason::None)) response->ok = ok ? 1 : 0;
+    shared_->response = *response;
     MemoryBarrier();
     exchangeAtomic(&shared_->responseSequence, sequence);
     SetEvent(responseEvent_);
@@ -110,15 +110,15 @@ class Server final {
   }
 
   bool open(const Request& request, Response* response) {
-    Response closeResponse;
-    if (!close(&closeResponse)) {
+    auto closeResponse = std::make_unique<Response>();
+    if (!close(closeResponse.get())) {
       response->openFailureKind = static_cast<int32_t>(AsioOpenFailureKind::Driver);
       fail(
           response,
           FailureReason::FormatRestoreFailed,
-          readText(closeResponse.message).empty()
+          readText(closeResponse->message).empty()
               ? "ASIO helper could not restore the previous driver format"
-              : readText(closeResponse.message));
+              : readText(closeResponse->message));
       return false;
     }
     if (!validSampleFormat(request.format.sampleFormat) || request.format.sampleRate <= 0 ||

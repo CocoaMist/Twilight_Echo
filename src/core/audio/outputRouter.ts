@@ -1030,14 +1030,14 @@ export class OutputRouter {
     return physical?.id || ''
   }
 
-  private rememberFollowedDefaultDeviceFromOptions(
-    options: AudioDeviceOption[] = this.readNativeAudioDeviceOptions()
-  ): void {
+  private rememberFollowedDefaultDeviceFromOptions(options?: AudioDeviceOption[]): void {
     if (this.device !== 'auto') {
       this.lastFollowedDefaultDeviceId = ''
       return
     }
-    const defaultId = this.resolvePhysicalDefaultDeviceId(options)
+    const defaultId = this.resolvePhysicalDefaultDeviceId(
+      options ?? this.readNativeAudioDeviceOptions()
+    )
     if (defaultId) this.lastFollowedDefaultDeviceId = defaultId
   }
 
