@@ -35,6 +35,8 @@ struct Behavior {
   bool cleanupMissing = false;
   int32_t ioMode = kAsioIoFormatPcm;
   int32_t type = kAsioSampleFloat32Lsb;
+  int32_t minSize = 0;
+  int32_t preferredSize = 0;
   int32_t acceptedSize = 512;
   int32_t inputs = 2;
   int32_t outputs = 2;
@@ -72,8 +74,11 @@ class Driver final : public AsioDriver {
   }
   AsioError getBufferSize(int32_t* min, int32_t* max, int32_t* preferred, int32_t* granularity) override {
     const bool dsd = b->ioMode == kAsioIoFormatDsd;
-    *min = dsd ? 1024 : 64; *max = dsd ? 8192 : 4096;
-    *preferred = b->changeRangeOnFailure && !b->attempts.empty() ? 3072 : dsd ? 2048 : 512;
+    *min = b->minSize > 0 ? b->minSize : (dsd ? 1024 : 64);
+    *max = dsd ? 8192 : 4096;
+    *preferred = b->preferredSize > 0
+        ? b->preferredSize
+        : (b->changeRangeOnFailure && !b->attempts.empty() ? 3072 : dsd ? 2048 : 512);
     *granularity = b->changeRangeOnFailure ? 0 : -1;
     return kAsioOk;
   }
@@ -220,6 +225,19 @@ void testLifecycle() {
   routed->outputs = 8; routed->expectedChannelStart = 4; routed->requiresDuplex = true;
   auto routingConfig = config(); routingConfig.outputChannelStart = 4;
   runSession(routed, routingConfig);
+
+  auto tinyPreferred = std::make_shared<Behavior>();
+  tinyPreferred->minSize = 8;
+  tinyPreferred->preferredSize = 16;
+  tinyPreferred->acceptedSize = 256;
+  auto tinyConfig = config(96000);
+  tinyConfig.bufferSizeFrames = 16;
+  runSession(tinyPreferred, tinyConfig);
+  assert(!tinyPreferred->attempts.empty());
+  for (const auto& [size, inputs] : tinyPreferred->attempts) {
+    (void)inputs;
+    assert(size >= 256);
+  }
 }
 
 void testDriverDsdGeometry() {
@@ -314,6 +332,9 @@ void testLegalCandidates() {
   const auto powers = bufferSizeCandidates({64, 32768, 512, -1}, 700);
   assert(powers.front() == 512);
   assert(std::find(powers.begin(), powers.end(), 32768) != powers.end());
+  const auto halved = bufferSizeCandidates({8, 2048, 16, -1}, 256, 256);
+  assert(!halved.empty() && halved.front() == 256);
+  for (int32_t candidate : halved) assert(candidate >= 256);
 }
 
 uint64_t decode(const uint8_t* data, size_t bytes, bool littleEndian) {

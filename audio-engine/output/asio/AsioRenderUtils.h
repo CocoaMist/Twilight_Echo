@@ -147,6 +147,30 @@ inline int callbackFrameRate(const AudioFormat& format) {
 }
 
 /**
+ * Absolute floor for any ASIO PCM/DoP buffer size, even when a driver's
+ * getBufferSize() reports a smaller preferred or minimum value (for example,
+ * Thesycon/FiiO USB ASIO drivers whose init() resets the sample rate to 48 kHz
+ * and halves the previously active buffer size on each reopen: 64 -> 32 -> 16).
+ */
+inline constexpr long kMinimumSafeAsioBufferFrames = 64;
+
+/**
+ * Sample-rate-aware floor for automatic ASIO buffer selection
+ * (`preferredBufferSize == 0`), keeping callback period above ~2.5 ms at high
+ * sample rates instead of blindly trusting tiny driver `preferredBufferSize`
+ * values.
+ */
+inline long minimumAutoBufferFrames(const AudioFormat& format) {
+  if (isDsdSampleFormat(format.sampleFormat)) {
+    return 2048;
+  }
+  const int rate = callbackFrameRate(format);
+  if (rate >= 352800) return 1024;
+  if (rate >= 176400) return 512;
+  return 256;
+}
+
+/**
  * The unit a driver's DSD-mode getBufferSize/createBuffers count refers to.
  *
  * The ASIO DSD extension describes buffers as "8 samples per byte" with the
