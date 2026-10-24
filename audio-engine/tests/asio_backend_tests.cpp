@@ -1557,8 +1557,8 @@ void testLifecycleAndPlaybackInfo() {
   const OutputInfo info = backend.outputInfo();
   assert(info.driverName == "Mock ASIO");
   assert(info.driverVersion == 1);
-  assert(info.bufferSizeFrames == 4);
-  assert(info.latencyFrames == 8);
+  assert(info.bufferSizeFrames == 256);
+  assert(info.latencyFrames == 512);
   assert(info.actualChannels == 2);
   backend.stop();
   assert(rawHost->stopCalls >= 1);
@@ -1820,6 +1820,38 @@ void testBufferSizeMatrix() {
     assert(rawHost->outputChannelFormatCalls == formatQueriesBeforePump);
     assert(backend.outputInfo().diagnostics.sessionBufferDropCount == 0);
     backend.stop();
+  }
+}
+
+void testAutoBufferFloorPreventsDriverHalvingRegression() {
+  for (long probedPreferred : {64L, 32L, 16L, 8L}) {
+    auto host = std::make_unique<MockAsioHost>();
+    auto device = makeMockAsioDevice(
+        "asio:fiio-thesycon",
+        {44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000});
+    device.minBufferSize = 8;
+    device.maxBufferSize = 2048;
+    device.bufferGranularity = -1;
+    device.preferredBufferSize = probedPreferred;
+    host->devices.push_back(device);
+    auto* rawHost = host.get();
+    AsioBackend backend(std::move(host));
+
+    std::string error;
+    assert(backend.open("asio:fiio-thesycon", sourceFormat(96000, 32), &error));
+    assert(rawHost->lastOpenConfig.bufferSizeFrames == 256);
+    assert(backend.outputInfo().bufferSizeFrames == 256);
+    backend.close();
+
+    assert(backend.open("asio:fiio-thesycon", sourceFormat(192000, 32), &error));
+    assert(rawHost->lastOpenConfig.bufferSizeFrames == 512);
+    assert(backend.outputInfo().bufferSizeFrames == 512);
+    backend.close();
+
+    assert(backend.open("asio:fiio-thesycon", sourceFormat(384000, 32), &error));
+    assert(rawHost->lastOpenConfig.bufferSizeFrames == 1024);
+    assert(backend.outputInfo().bufferSizeFrames == 1024);
+    backend.close();
   }
 }
 
@@ -2416,6 +2448,7 @@ int main() {
   testHelperStarvationIsIncludedInSessionAndLifetimeDiagnostics();
   testOutputReadyFailureDisablesRepeatedDriverCalls();
   testBufferSizeMatrix();
+  testAutoBufferFloorPreventsDriverHalvingRegression();
   testNativeDsdBufferSizeWithoutCatalogRange();
   testPacking();
   testTypedPassthroughPacking();

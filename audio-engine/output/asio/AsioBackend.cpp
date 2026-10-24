@@ -1231,13 +1231,55 @@ long AsioBackend::chooseBufferSize(const AsioDeviceInfo& device, const AudioForm
   const long minSize = hasBufferRange ? device.minBufferSize : preferred;
   const long maxSize = hasBufferRange ? device.maxBufferSize : preferred;
   const long granularity = device.bufferGranularity;
+  auto legalize = [&](long target) {
+    const long clamped = std::clamp(target, minSize, maxSize);
+    if (granularity > 0) {
+      const long offset = clamped - minSize;
+      const long lower = minSize + (offset / granularity) * granularity;
+      const long upper = std::min(maxSize, lower + granularity);
+      const long lowerDistance = std::labs(clamped - lower);
+      const long upperDistance = std::labs(upper - clamped);
+      return lowerDistance <= upperDistance ? lower : upper;
+    }
+    if (granularity < 0) {
+      long best = minSize;
+      long bestDistance = std::labs(target - best);
+      for (long size = minSize; size <= maxSize; size *= 2) {
+        const long distance = std::labs(target - size);
+        if (distance < bestDistance || (distance == bestDistance && size < best)) {
+          best = size;
+          bestDistance = distance;
+        }
+        if (size > maxSize / 2) break;
+      }
+      return best;
+    }
+    return clamped;
+  };
   if (outputConfig_.preferredBufferSize == 0) {
-    if (!hasBufferRange) return nativeDsd ? std::max(preferred, 2048L) : preferred;
-    const long automaticTarget = nativeDsd ? std::max(preferred, 2048L) : preferred;
-    long selected = std::clamp(automaticTarget, minSize, maxSize);
-    if (nativeDsd && quirkApplication_.dsdMinimumBufferFrames > 0 && hasBufferRange) {
-      selected = std::clamp(
-          std::max(selected, quirkApplication_.dsdMinimumBufferFrames), minSize, maxSize);
+    long minimumFrames = asio::minimumAutoBufferFrames(requestedFormat);
+    if (nativeDsd && quirkApplication_.dsdMinimumBufferFrames > 0) {
+      minimumFrames = std::max(minimumFrames, quirkApplication_.dsdMinimumBufferFrames);
+    }
+    const long automaticTarget = std::max(preferred, minimumFrames);
+    if (!hasBufferRange) return automaticTarget;
+    long selected = legalize(automaticTarget);
+    if (selected < minimumFrames && maxSize >= minimumFrames) {
+      if (granularity > 0) {
+        const long offset = std::max(0L, minimumFrames - minSize);
+        const long steps = (offset + granularity - 1) / granularity;
+        selected = std::clamp(minSize + steps * granularity, minSize, maxSize);
+      } else if (granularity < 0) {
+        for (long size = minSize; size <= maxSize; size *= 2) {
+          if (size >= minimumFrames) {
+            selected = size;
+            break;
+          }
+          if (size > maxSize / 2) break;
+        }
+      } else {
+        selected = std::clamp(minimumFrames, minSize, maxSize);
+      }
     }
     return selected;
   }
@@ -1248,31 +1290,6 @@ long AsioBackend::chooseBufferSize(const AsioDeviceInfo& device, const AudioForm
   // against the driver's authoritative getBufferSize() result.
   if (!hasBufferRange) return requested;
 
-  auto legalize = [&](long value) {
-    value = std::clamp(value, minSize, maxSize);
-    if (granularity > 0) {
-      const long offset = value - minSize;
-      const long lower = minSize + (offset / granularity) * granularity;
-      const long upper = std::min(maxSize, lower + granularity);
-      const long lowerDistance = std::labs(value - lower);
-      const long upperDistance = std::labs(upper - value);
-      return lowerDistance <= upperDistance ? lower : upper;
-    }
-    if (granularity < 0) {
-      long best = minSize;
-      long bestDistance = std::labs(requested - best);
-      for (long size = minSize; size <= maxSize; size *= 2) {
-        const long distance = std::labs(requested - size);
-        if (distance < bestDistance || (distance == bestDistance && size < best)) {
-          best = size;
-          bestDistance = distance;
-        }
-        if (size > maxSize / 2) break;
-      }
-      return best;
-    }
-    return value;
-  };
   long selected = legalize(requested);
   if (nativeDsd && quirkApplication_.dsdMinimumBufferFrames > 0 && hasBufferRange) {
     selected = std::clamp(

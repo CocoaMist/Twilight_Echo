@@ -555,6 +555,7 @@ export const ZH_CN_MESSAGES: Record<string, string> = {
   'diagnostics.panel.perfect': '输出链已验证为逐位直通',
   'diagnostics.panel.blockerCount': '{count} 项影响直通',
   'diagnostics.panel.noBlockers': '没有检测到影响直通的因素',
+  'diagnostics.panel.underrunRateWarning': '当前缓冲不足（欠载率 {rate}%），建议增大缓冲区',
   'diagnostics.panel.showDetail': '展开原因',
   'diagnostics.panel.hideDetail': '收起原因',
   'diagnostics.panel.fixLabel': '处理建议',
