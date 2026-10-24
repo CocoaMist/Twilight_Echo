@@ -16,26 +16,98 @@ type Download = {
   cacheRoot: string
   signal?: AbortSignal
 }
-const downloads = new Map<string, Promise<unknown>>()
-export function downloadEntryToCache(deps: Download): Promise<string> {
-  const key = resolve(deps.cacheRoot, `${deps.entry.id}${extname(deps.entry.name)}`)
-  const previous = downloads.get(key) ?? Promise.resolve()
-  const result = previous
-    .catch(() => {})
-    .then(() => {
-      deps.signal?.throwIfAborted()
-      return download(deps)
-    })
-  downloads.set(key, result)
-  void result
-    .finally(() => {
-      if (downloads.get(key) === result) downloads.delete(key)
-    })
-    .catch(() => {})
-  return result
+const downloads = new Map<string, Promise<void>>()
+
+interface CacheDirectoryAccess {
+  clear: Promise<void>
+  clears: number
+  targets: Map<string, number>
 }
-async function download(deps: Download): Promise<string> {
-  const { session, entry, cacheRoot, signal } = deps
+
+const cacheDirectories = new Map<string, CacheDirectoryAccess>()
+
+function cachePathKey(path: string): string {
+  const absolute = resolve(path)
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+}
+
+function directoryAccess(directory: string): CacheDirectoryAccess {
+  const key = cachePathKey(directory)
+  let access = cacheDirectories.get(key)
+  if (!access) {
+    access = { clear: Promise.resolve(), clears: 0, targets: new Map() }
+    cacheDirectories.set(key, access)
+  }
+  return access
+}
+
+function releaseDirectoryAccess(directory: string, access: CacheDirectoryAccess): void {
+  if (access.clears === 0 && access.targets.size === 0) {
+    cacheDirectories.delete(cachePathKey(directory))
+  }
+}
+
+function abortFailure(signal?: AbortSignal): NetworkSourceFailure {
+  const reason = signal?.reason
+  return new NetworkSourceFailure(
+    'timeout',
+    reason instanceof Error && reason.name !== 'AbortError'
+      ? `网络文件下载已取消：${reason.message}`
+      : '网络文件下载已取消'
+  )
+}
+
+async function withCacheDirectoryWriter<T>(
+  target: string,
+  signal: AbortSignal | undefined,
+  write: () => Promise<T>
+): Promise<T> {
+  const directory = dirname(target)
+  const access = directoryAccess(directory)
+  const previousClear = access.clear
+  const key = cachePathKey(target)
+  access.targets.set(key, (access.targets.get(key) ?? 0) + 1)
+  try {
+    // Register before waiting so a later clear also preserves queued targets.
+    // Calls arriving after a clear cannot create files inside that clear.
+    await waitForDownload(previousClear, signal)
+    return await withCacheWriter(target, signal, write)
+  } finally {
+    const remaining = (access.targets.get(key) ?? 1) - 1
+    if (remaining === 0) access.targets.delete(key)
+    else access.targets.set(key, remaining)
+    releaseDirectoryAccess(directory, access)
+  }
+}
+
+async function withCacheWriter<T>(
+  target: string,
+  signal: AbortSignal | undefined,
+  write: () => Promise<T>
+): Promise<T> {
+  const key = cachePathKey(target)
+  const previous = downloads.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const owned = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const tail = previous.then(() => owned)
+  downloads.set(key, tail)
+  void tail.then(() => {
+    if (downloads.get(key) === tail) downloads.delete(key)
+  })
+  try {
+    await waitForDownload(previous, signal)
+    if (signal?.aborted) throw abortFailure(signal)
+    return await write()
+  } finally {
+    // A cancelled waiter leaves the active writer ahead of subsequent callers.
+    release()
+  }
+}
+
+export async function downloadEntryToCache(deps: Download): Promise<string> {
+  const { entry, cacheRoot, signal } = deps
   // Safe legacy keys remain readable. Renderer-supplied keys are never used by
   // the manager; this check also protects metadata and future direct callers.
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(entry.id)) {
@@ -50,6 +122,27 @@ async function download(deps: Download): Promise<string> {
   if (entry.sizeBytes != null && (!Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0)) {
     throw new NetworkSourceFailure('network', '无效的网络文件大小')
   }
+  return withCacheDirectoryWriter(target, signal, () => download({ ...deps, target }))
+}
+
+function waitForDownload(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return previous
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort)
+      reject(abortFailure(signal))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+    void previous.then(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    })
+  })
+}
+
+async function download(deps: Download & { target: string }): Promise<string> {
+  const { session, entry, cacheRoot, target, signal } = deps
   await mkdir(cacheRoot, { recursive: true })
 
   try {
@@ -133,8 +226,33 @@ export async function getDirectorySize(directory: string): Promise<number> {
 }
 
 export async function clearDirectory(directory: string): Promise<void> {
-  await rm(directory, { recursive: true, force: true })
-  await mkdir(directory, { recursive: true })
+  const access = directoryAccess(directory)
+  const previousClear = access.clear
+  // These callers may return a completed path before the clear finishes. Keep
+  // both names even if a writer renames its partial file during enumeration.
+  const protectedPaths = new Set(
+    [...access.targets.keys()].flatMap((target) => [target, `${target}.part`])
+  )
+  let release!: () => void
+  const owned = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  access.clear = previousClear.then(() => owned)
+  access.clears++
+  try {
+    await previousClear
+    await mkdir(directory, { recursive: true })
+    for (const entry of await readdir(directory)) {
+      const path = join(directory, entry)
+      if (!protectedPaths.has(cachePathKey(path))) {
+        await rm(path, { recursive: true, force: true })
+      }
+    }
+  } finally {
+    release()
+    access.clears--
+    releaseDirectoryAccess(directory, access)
+  }
 }
 
 /** Native keeps its current/preloaded files; writers must be joined by the owner. */

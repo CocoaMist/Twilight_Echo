@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
@@ -9,7 +9,7 @@ import { createNetworkProfileStore } from './profileStore.ts'
 import { createNetworkLibrary } from './networkLibrary.ts'
 import { buildNetworkEntryId } from './networkPath.ts'
 import { createSourceResolver } from '../playback/sourceResolver.ts'
-import { downloadEntryToCache } from './networkCache.ts'
+import { clearDirectory, downloadEntryToCache, getDirectorySize } from './networkCache.ts'
 import type { NetworkEntry } from '../../shared/networkSources.ts'
 import type { NetworkSourceSession } from './adapters/types.ts'
 
@@ -281,6 +281,81 @@ test('concurrent cache consumers serialize one physical target without racing it
   assert.equal(await readFile(paths[0], 'utf8'), 'test')
 })
 
+test('a cancelled cache waiter exits without releasing the active writer to later consumers', async (t) => {
+  const f = await fixture(t)
+  const gate = deferred(),
+    started = deferred()
+  let reads = 0
+  const session: NetworkSourceSession = {
+    ...f.session,
+    async readStream() {
+      reads++
+      started.resolve()
+      await gate.promise
+      return Readable.from(['test'])
+    }
+  }
+  const deps = { session, entry: f.entry, cacheRoot: join(f.root, 'cancelled-waiter') }
+  const first = downloadEntryToCache(deps)
+  await started.promise
+  const controller = new AbortController()
+  const second = downloadEntryToCache({ ...deps, signal: controller.signal })
+  const cancelled = assert.rejects(second, {
+    code: 'timeout',
+    message: /cancelled waiter/
+  })
+  controller.abort(new Error('cancelled waiter'))
+  await cancelled
+  let thirdFinished = false
+  const third = downloadEntryToCache(deps).then((path) => {
+    thirdFinished = true
+    return path
+  })
+  await tick()
+  assert.equal(reads, 1)
+  assert.equal(thirdFinished, false)
+  gate.resolve()
+  const paths = await Promise.all([first, third])
+  assert.equal(paths[0], paths[1])
+  assert.equal(await readFile(paths[0], 'utf8'), 'test')
+  assert.equal(reads, 1)
+})
+
+test('cache writers coordinate by the sanitized physical target and Windows path casing', async (t) => {
+  const f = await fixture(t)
+  const gate = deferred(),
+    started = deferred()
+  let reads = 0
+  const session: NetworkSourceSession = {
+    ...f.session,
+    async readStream() {
+      reads++
+      started.resolve()
+      await gate.promise
+      return Readable.from(['test'])
+    }
+  }
+  const cacheRoot = join(f.root, 'physical-target')
+  const first = downloadEntryToCache({
+    session,
+    cacheRoot,
+    entry: { ...f.entry, name: 'a.invalid-extension' }
+  })
+  await started.promise
+  const second = downloadEntryToCache({
+    session,
+    cacheRoot: process.platform === 'win32' ? cacheRoot.toUpperCase() : cacheRoot,
+    entry: { ...f.entry, name: 'a.another-invalid-extension' }
+  })
+  await tick()
+  assert.equal(reads, 1)
+  gate.resolve()
+  const paths = await Promise.all([first, second])
+  assert.equal(paths[0].toLowerCase(), paths[1].toLowerCase())
+  assert.equal(await readFile(paths[0], 'utf8'), 'test')
+  assert.equal(reads, 1)
+})
+
 test('cache clearing joins cancelled readers and session close, preserves native pins and gates new resolution', async (t) => {
   const f = await fixture(t)
   await f.service.directory({ revision: 0, profileId: f.profile.id, path: '/' })
@@ -368,4 +443,54 @@ test('cache clearing leaves directory scans active and releases its gate after a
   slow.gate.resolve()
   await completed(f.service)
   assert.equal(f.service.state().jobs[0].state, 'completed')
+})
+
+test('clearDirectory preserves active and queued downloads and serializes against waiting writers', async (t) => {
+  const f = await fixture(t)
+  const cacheRoot = join(f.root, 'clear-directory-active')
+  await mkdir(cacheRoot, { recursive: true })
+  const partial = join(cacheRoot, `${f.entry.id}.flac.part`)
+  await writeFile(join(cacheRoot, 'old.flac'), 'old cache')
+  await writeFile(join(cacheRoot, 'old.flac.part'), 'abandoned partial')
+  const gate = deferred(),
+    firstChunk = deferred()
+  let reads = 0
+  const session: NetworkSourceSession = {
+    ...f.session,
+    async readStream() {
+      reads++
+      return Readable.from(
+        (async function* () {
+          yield Buffer.from('te')
+          firstChunk.resolve()
+          await gate.promise
+          yield Buffer.from('st')
+        })()
+      )
+    }
+  }
+  const first = downloadEntryToCache({ session, entry: f.entry, cacheRoot })
+  await firstChunk.promise
+  for (let i = 0; i < 50; i++) {
+    if (
+      await stat(partial)
+        .then((info) => info.size === 2)
+        .catch(() => false)
+    )
+      break
+    await tick()
+  }
+  const queued = downloadEntryToCache({ session, entry: f.entry, cacheRoot })
+  const clearRoot = process.platform === 'win32' ? cacheRoot.toUpperCase() : cacheRoot
+  await clearDirectory(clearRoot)
+  assert.equal(await readFile(partial, 'utf8'), 'te')
+  await assert.rejects(readFile(join(cacheRoot, 'old.flac')), { code: 'ENOENT' })
+  await assert.rejects(readFile(join(cacheRoot, 'old.flac.part')), { code: 'ENOENT' })
+  gate.resolve()
+  const [firstPath, queuedPath] = await Promise.all([first, queued])
+  assert.equal(firstPath, queuedPath)
+  assert.equal(await readFile(firstPath, 'utf8'), 'test')
+  assert.equal(reads, 1)
+  await clearDirectory(cacheRoot)
+  assert.equal(await getDirectorySize(cacheRoot), 0)
 })
