@@ -1,6 +1,6 @@
 # M2 实施细案：让本地和流媒体共用可追溯的音乐资料
 
-日期：2026-10-23。状态：**计划已细化，尚未实施**。主记录：[统一音乐库计划](D:/Project/Twilight_Echo/docs/unified-music-library-plan.md)。前置成果：[M1 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m1.md)。
+日期：2026-10-23，更新：2026-10-24。状态：**M2.1—M2.4 后端已实施；M2.5 资料页、身份纠错／历史恢复、原收件箱和 TaskCenter 重新查询已接线；M2.6 内容与真实 Electron 验收待完成**。本批记录：[M2.5 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m2.5.md)。主记录：[统一音乐库计划](D:/Project/Twilight_Echo/docs/unified-music-library-plan.md)。前置成果：[M1 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m1.md)。
 
 ## 1. 先交付什么
 
@@ -17,12 +17,12 @@
 
 | 当前实现 | M2 的处理 |
 |---|---|
-| [CoreMetadataService](D:/Project/Twilight_Echo/src/core/library/metadataService.ts)已在 Core 运行，按本地 Track 查询／写回补全字段；候选、已见条目和任务状态主要在内存中 | 沿用服务和生产接线，增加实体资料路径与持久任务；不新增 Renderer 调度器 |
-| [现有补全队列](D:/Project/Twilight_Echo/src/core/library/metadataEnrichment.ts)以搜索词聚合本地曲目，默认并发 6；不提供 MusicBrainz 级别的共享 host 限流 | 不能直接用于所有资料源；实体任务按来源预算调度，旧队列受影响的请求出口也接入相应预算 |
+| [CoreMetadataService](D:/Project/Twilight_Echo/src/core/library/metadataService.ts)保留原 Track 补全，并已拥有 M2.1 实体服务；明确 MB 人物 ID 的候选、事实、覆盖和任务已持久化 | 在实体路径上扩展自动候选和分层识别；原 Track 路径的内存状态不冒充持久实体任务，不新增 Renderer 调度器 |
+| [原 Track 补全队列](D:/Project/Twilight_Echo/src/core/library/metadataEnrichment.ts)仍以搜索词聚合，默认并发 6；M2.1 已新增[共享 HTTP 调度](D:/Project/Twilight_Echo/src/core/library/metadataHttp.ts)，新人物资料与 Rhine 的 MB／百科出口共用 host 预算 | 新实体查询沿用共享调度；平台 RPC 及插件内部 HTTP 的预算与取消仍需按实际出口接入，不能直接复用 Track 队列代替 |
 | [M1 目录仓库](D:/Project/Twilight_Echo/src/main/library/libraryDatabaseCatalog.ts)已有稳定来源、录音、发行、人物；无人物 ID 时保留来源范围身份 | 增加外部 ID、可撤销确认关联和专辑项目；不能用同名人物合并替代这一步 |
 | M1 的 `catalog_facts` 只有 title／artist／album；来源刷新会删除并重建该来源的事实 | 外部资料和人工覆盖放入独立资料表，不能塞入这组三字段后被扫描清掉 |
-| [Rhine 资料业务](D:/Project/Twilight_Echo/src/core/plugins/experienceMusic.ts)也已移入 Core，但仍写插件的 `music-metadata.json`；任务状态在 Map 中 | 迁入主库资料权威；旧操作成为适配入口，不能保留两套写入和后台任务 |
-| [MusicBrainz 适配器](D:/Project/Twilight_Echo/src/core/plugins/rhine-vendor/musicbrainz.mjs)目前串行处理专辑，重点保留 release／release-group 和 producer，节流为实例内状态 | 复用响应解析、匹配样例和归属依据；改为无单专辑共享可变状态的能力适配器，保留完整 ID 与角色 |
+| [Rhine 资料业务](D:/Project/Twilight_Echo/src/core/plugins/experienceMusic.ts)已通过 schema 20 文档适配器读写主库；旧查询已接原 Core 持久队列 | 生产只使用一个任务 owner，保留旧显式操作、来源能力与取消；独立未注入任务 owner 的旧调用保留兼容路径 |
+| [Rhine 的 MusicBrainz 适配器](D:/Project/Twilight_Echo/src/core/plugins/rhine-vendor/musicbrainz.mjs)仍串行处理专辑，重点保留 release／release-group 和 producer；Core 已注入共享 fetch 出口 | 复用响应解析、匹配样例和归属依据；扩展为无单专辑共享可变状态的能力适配器，保留完整 ID 与角色；网络预算统一不代表存储已迁移 |
 | [平台方法](D:/Project/Twilight_Echo/src/shared/mediaProviderMethods.ts)已有 `fetchArtistIntro`、`fetchAlbumTracks` 等，但没有统一专辑详情契约；简介返回字符串 | 按实际方法和使用条件声明能力，不假设所有平台有专辑正文或可跨来源使用的简介 |
 | [本地专辑页头](D:/Project/Twilight_Echo/src/renderer/src/components/song-list/AlbumDetailHeader.vue)已有封面和播放入口；[平台页](D:/Project/Twilight_Echo/src/renderer/src/components/StreamingPage.vue)直接查询平台简介 | 在原入口加入共享资料视图；平台发现功能、原曲目顺序和播放入口保持原用途 |
 
@@ -37,6 +37,7 @@
 每一层分别记录 `unresolved / candidate / confirmed / rejected`、依据与版本。人物、录音、专辑项目可以先确认，具体发行继续待定。旧 `identity: source | manual` 描述现有目录身份来源，不直接冒充这套识别状态。
 
 - 外部 ID 唯一键为“供应商、实体类型、ID 类型、外部 ID”，指向内部 UUID。平台人物 ID 只在对应平台内有效。
+- 内部身份不依赖 MusicBrainz 收录；有平台原生 ID 的人物无需先取得 MBID。连接本地人物需要另外确认身份，复用正文还要符合该资料的使用范围。
 - 用可撤销关联连接来源实体与已确认实体，保留原实体和来源事实，不物理吞并旧实体。一个外部身份只拥有一份共享资料，多个来源通过关联读取它。
 - 身份资料关联不修改既有手工版本／版本族的权威，也不授予换源资格；M2 不新增自动切换播放来源。
 - 拒绝和拆分记录落库。相同候选不会在后台下次刷新时重新自动采纳；明确重新查询可以展示它，但重新关联仍需用户选择。
@@ -44,7 +45,7 @@
 
 **自动确认的依据**：一致且无矛盾的明确 ID／跨源关系，或唯一整专辑候选并完成逐轨校验。MusicBrainz 搜索分、标题／艺人／时长相似、旧 `metadataMatch` 的 high 标记都只用于召回与排序，不直接升级为确认身份。
 
-整专辑校验比较碟号、曲序、标题、全部艺人、时长和版本标记；多候选、缺轨、现场／重制等矛盾保留待确认。已确认录音出现在某张发行中，不等于本地文件来自该发行。多人 credits 保留顺序和 joinphrase，不从一个人名字符串猜造多个人物。
+整专辑校验比较碟号、曲序、标题、全部艺人、时长和版本标记；多候选、缺轨、现场／重制等矛盾保留待确认。同一音轨列表可出现在多个发行中，逐轨匹配只确认有依据的项目／录音／人物关系；具体发行还需发行 ID 或可区分的条码、目录号、地区／日期等依据。已确认录音出现在某张发行中，不等于本地文件来自该发行。多人 credits 保留顺序和 joinphrase，不从一个人名字符串猜造多个人物。
 
 ### 3.2 本地标签不全时，也能逐层前进
 
@@ -94,6 +95,8 @@
 
 平台简介的字符串要包装为带来源页面、目标 ID、语言和使用范围的事实。需要新增专辑详情能力时，采用**可选方法和共享 DTO**，同步宿主白名单、声明与校验，只让真正支持的平台声明；不修改所有平台的最低必需接口。
 
+平台正文与百科共同提供资料，不要求平台人物先关联 MB。对获准的本地共享正文，先选用户语言，同语言默认百科优先、平台补充；不同来源各自保留，不拼接成一份传记。平台原页自身资料继续遵守来源上下文优先规则，跨源展示不能继承原页权限。具体消费契约见 [M2.2 细案 §7](D:/Project/Twilight_Echo/docs/unified-music-library-m2.2-plan.md#7-为-m23-固定平台资料的消费契约)。
+
 开发／测试和商业发布分别使用部署策略。策略按“供应商 × 端点 × 字段 × 使用范围”判断；`enabled` 不等于内容可以跨来源复用。关闭某个字段应返回可解释的不可用原因，而不是悄悄换抓取端点。CAA 和 Commons 的图片与 API 返回的结构数据分别判断。
 
 MusicBrainz 使用有意义的应用 User-Agent 与真实项目联系方式；联系方式从应用配置提供，不要求每个用户提交邮箱。商业发布的服务资格由发布负责人核对，未满足的能力在该构建中关闭，不阻塞本地资料模型开发。
@@ -127,45 +130,63 @@ Discogs、TheAudioDB、Last.fm、AcoustID 暂不增加首轮必需依赖；已�
 
 ## 6. 按六个工作包串行推进
 
-同一音乐库域负责人拥有模型、Core、适配、客户端和验收。下列均为待办；每包交付可观察结果后再进入下一包，不以建表或声明接口代替完成。
+同一音乐库域负责人拥有模型、Core、适配、客户端和验收。生产验收受 Windows 窗口站权限阻塞；期间已完成 M2.2、M2.3 后端及 M2.4 存储／导入切换，见 [M2.4 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m2.4.md)。旧查询已接唯一 Core 持久队列，M2.5 的历史恢复和当前批次重新查询也已接线。用户要求先开发后验收，现已接入 M3.1—M3.3、M4.1—M4.4 的评分、统一收藏／自动禁播、标签和 Focus，以及 M5.1 人物／作品探索和 M5.2 的 v2 备份、手工图片与资料首选、旧正文出处复核和跨字典恢复；M5.3 首轮十万条实测已完成，当前正在修复查询退化并准备同库复测。M2.6 的人工内容样本、真实页面与原 Electron 生产验收保留待办。
 
 ### M2.1：先打通一个已确认实体的完整资料链路
 
-- [ ] 增加外部身份关联、资料事实、出处、覆盖、任务和输入版本的必要存储，以及 schema 升级／一致备份。
-- [ ] 建立 MetadataProvider 协议和基本部署策略、共享 host 调度、取消／重试；扩展 CoreMetadataService 和数据库有界操作，接一个按明确 ID 查询的 MusicBrainz → Wikidata／Wikipedia 路径。provider fixture 覆盖取消与故障，真实公开样例做小量验证。
-- [ ] 提供显式外部 ID 解析 → Core 保存候选 → 人工确认、实体资料查询、针对实体的补全、任务读取／取消及覆盖入口，接入生产 Core；不依赖窗口创建任务或持有请求。
+- [x] 增加外部身份关联、资料事实、出处、覆盖、任务和输入版本的必要存储，以及 schema 升级／一致备份。
+- [x] 建立 MetadataProvider 协议和基本部署策略、共享 host 调度、取消／重试；扩展 CoreMetadataService 和数据库有界操作，接一个按明确 ID 查询的 MusicBrainz → Wikidata／Wikipedia 路径。provider fixture 覆盖取消与故障，真实公开样例做小量验证。
+- [x] 提供显式外部 ID 解析 → Core 保存候选 → 人工确认、实体资料查询、针对实体的补全、任务读取／取消及覆盖入口，接入生产 Core；不依赖窗口创建任务或持有请求。
 
 **本包完成条件**：一个本地来源和一个平台来源分别经明确依据关联同一人物，读取同一份带语言／出处的介绍；Core 重启后资料与未完任务可继续；人工值和取消后的迟到结果不会被覆盖。此时只是后端纵向链路，不标记 M2 界面已交付。
 
+**本包验收状态**：人物链路的存储、服务、公开请求与生产接线已实现；fixture、真实数据库 worker、类型检查、构建及小量真实请求通过。Electron 浏览器进程启动崩溃使原 headless 生产验收未完成，暂不宣布本包验收完成。详见实施记录。
+
 ### M2.2：让真实入库条目自动进入分层识别
 
-- [ ] 增加现有平台／MusicBrainz 的候选适配和分层匹配，支持人物先确认、专辑项目先确认、具体发行待确认。
-- [ ] 从 M1 已发布的新增成员／来源变化调度增量任务；历史回填保存游标。需要本地外部 ID 时，仅扩展当前解析结果保留字段，不重写扫描器或触发全库反复解析。
-- [ ] 持久保存候选、拒绝和拆分；实现确认、冲突预览、解除关联，以及按查询和实体的两层去重。
+执行顺序、输入证据和验收用例见 [M2.2：自动分层识别](D:/Project/Twilight_Echo/docs/unified-music-library-m2.2-plan.md)。可靠 ID、MB／平台完整专辑及录音／人物逐层关联现已接入真实库成员增量调度和持久历史回填。自动来源、新入库和历史选择通过原 Core 设置保存，默认关闭；介绍语言随 M2.3 正文消费接入。
+
+- [x] 将内部身份与多供应商外部引用解耦，保留 M2.1 UUID、事实、覆盖和旧明确 MBID API；无 MBID 的平台人物可独立定位。
+- [x] 在原扫描／缓存和目录私有快照保留原始身份标签、分层 ID、时长精度与来历；CUE 子轨隔离父录音依据；相关 ID／曲序／来源和手工分组变更使旧候选失效，不强制全库重读。
+- [x] 接入现有平台／MusicBrainz 有界召回及可靠 ID 自动确认；MB 完整专辑可先确认项目、保留具体发行待复核，平台 ID 仅确认其命名空间。
+- [x] 补齐平台完整曲序的可核实 count／complete 契约；网易云实现可选 `fetchAlbumIdentity`，唯一完整匹配自动确认自己的平台 release，不升级为具体压片。
+- [x] 补齐整专辑到录音／人物的逐层证明与独立版本栅栏；多压片逐子 ID 一致、结构化人物 credit、来源范围及人工决定分别检查，父子结果同事务保存。
+- [x] 在 M1 本地目录／平台成员事务标记识别输入变化，每批最多处理 200 个实体；历史回填保存起始上界与单调游标，只枚举真实库成员。本地外部 ID 沿用原解析采集，不强制全库重解析。
+- [x] 原 Core 设置持久保存自动来源、新入库和历史开关，默认关闭；按当前部署／适配器能力调度，提供只读 identification.status 进度，不改变旧显式调用条件。
+- [x] 持久保存稳定 candidateId、逐层证据、拒绝和可撤销关联；实现确认、冲突预览、解除关联及候选输入／关联版本栅栏，接入 Core 与真实数据库 worker。
+- [x] 显式识别按实体／适配器／输入共享持久任务，Core／数据库 worker 重启和回执丢失后按 generation 对账，不重放写请求。
+- [x] 自动需求与游标同事务发布，Core／数据库 worker 重启可恢复；移出库或关闭自动设置只撤对应消费者，人工共享需求保持，未变化供应商的完成任务不重复执行。
+- [x] 跨未确认实体的同查询响应共享：供应商与使用上下文隔离的会话有界缓存、独立取消、逐实体校验证据；平台账号／设置变化使旧上下文失效并恢复任务。
 
 **本包完成条件**：带标签但没介绍、只有部分标签和完全不可识别的样本分别得到资料、候选或保留原样；同名异人／现场／翻唱不误合并。重复扫描、窗口重连和无关资料更新不造成整库重新请求。
 
 ### M2.3：补齐图片、平台资料和角色信息
 
-- [ ] 接入 CAA、Commons 与平台实际支持的资料能力，完成语言回退、图片归属、来源上下文和部署策略。
-- [ ] 将已取得的角色关系按正确目标和 ID 入库，保留原始角色；不把 arranger、mix、vocal 改写成 producer。
-- [ ] 接入现有图片授权、缓存与 [artwork projection](D:/Project/Twilight_Echo/src/main/coreProcess/artworkProjection.ts)；重启重新签发会话句柄，持久层不保存临时授权 token。限制重定向、资源大小与类型，沿用现有媒体安全链路。
+字段合同、图片使用、Rhine 切换及页面验收按[后续交付细案 §2—§4](D:/Project/Twilight_Echo/docs/unified-music-library-delivery-design.md)执行。
+
+- [x] 接入 CAA、Commons 与平台实际支持的资料能力，按 M2.2 固定的身份和使用范围契约取得正文，完成语言回退、图片归属、来源上下文和部署策略；没有 MBID 不阻塞平台原生资料。
+- [x] 增加可选 fetchArtistMetadata／fetchAlbumMetadata 文字详情合同并同步 SDK、白名单、Core 使用范围和网易云实际实现；保留原 fetchArtistIntro 字符串与 fetchAlbumTracks 曲目表含义，不支持新方法的平台仍能按原能力使用。新增图片来自 CAA／Commons，角色来自 MB，平台已有图片走原入口，见 [M2.3 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m2.3.md)。
+- [x] 将已取得的角色关系按正确目标和 ID 入库，保留原始角色；不把 arranger、mix、vocal 改写成 producer。
+- [x] 接入现有图片授权、缓存与 [artwork projection](D:/Project/Twilight_Echo/src/main/coreProcess/artworkProjection.ts)；重启重新签发会话句柄，持久层不保存临时授权 token。限制重定向、资源大小与类型，沿用现有媒体安全链路。
 
 **本包完成条件**：精确发行封面与项目回退可区分；断网可读允许缓存的资料；平台停用、缺图片或缺许可信息不影响本地播放，也不清空已有人工图片。查询凭据、CDN 授权参数和文件路径不进入新公开 DTO。
 
 ### M2.4：Rhine 迁入主库，再切换旧入口
 
-- [ ] 从当前 Core experience 生成的专辑身份、成员 Track 映射、历史 proofs 和文档 revision 建立迁移证据。现有 Rhine 专辑 ID 是从旧 collection ID 派生的 `album-…`，不是 MBID，也不是新 catalog UUID；不能靠标题重建映射。
-- [ ] 分批导入介绍、人员、外部链接、人工注记及原始出处；外部 ID 保留原状态并复核矛盾。只有旧状态 matched、只有姓名／trackTitle 或找不到原专辑的记录保留待确认，不升级为共享已确认事实。
-- [ ] `external-ai` 显式导入内容作为用户保留的导入资料保存，保留 references／batch／method，不冒充已核验的百科正文。未归属记录保留原载荷和恢复入口，不丢弃。
-- [ ] 暂停旧资料写入和任务，在一致 revision 上暂存、核对、事务发布迁移标记。失败继续旧读取，成功后旧音乐资料读写与 task／preview／import／reconcile／查询操作改接主库。
-- [ ] 旧文档接口保留原有 revision 冲突检查、受限载荷和非资料配置；插件 UI 偏好继续走原偏好域。旧 JSON 和备份作为只读恢复材料，不能再跑独立资料任务或写同一字段。后续流派切换由 M3 承接。
+- [x] 从当前 Core experience 生成的专辑身份、成员 Track 映射、历史 proofs 和文档 revision 建立迁移证据。现有 Rhine 专辑 ID 是从旧 collection ID 派生的 `album-…`，不是 MBID，也不是新 catalog UUID；不能靠标题重建映射。
+- [x] 分批导入介绍、人员、外部链接、人工注记及原始出处；外部 ID 保留原状态并复核矛盾。只有旧状态 matched、只有姓名／trackTitle 或找不到原专辑的记录保留待确认，不升级为共享已确认事实。
+- [x] `external-ai` 显式导入内容作为用户保留的导入资料保存，保留 references／batch／method，不冒充已核验的百科正文。未归属记录保留原载荷和恢复入口，不丢弃。
+- [x] 暂停旧资料写入和任务，在一致 revision 上暂存、核对、事务发布迁移标记。失败继续旧读取，成功后旧音乐资料读写与 task／preview／import／reconcile／查询操作改接主库。
+- [x] 旧文档接口保留原有 revision 冲突检查、受限载荷和非资料配置；插件 UI 偏好继续走原偏好域。旧 JSON 和备份作为只读恢复材料，不能再跑独立资料任务或写同一字段。后续流派切换由 M3 承接。
 
 **本包完成条件**：既有 Rhine 页面与导入／预览仍可使用；改一次资料只改变一个权威；重复启动不重导入覆盖新值；部分迁移失败可恢复，明确记录已迁、未归属和冲突项。
 
+**当前进度**：schema 20 已实现唯一资料权威、原导入与恢复、旧 introductions／credits／enrich 接入原 Core 持久 worker；完整批次发布、取消、重启恢复、权限与手动输入栅栏已验证。M2.4 后端切换完成；旧页面生产验收仍保留，继续 M2.5 接原页面。证据与继续点见 [M2.4 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m2.4.md)。
+
 ### M2.5：在原页面把资料、状态和纠错接起来
 
-- [ ] 为旧歌曲／collection 查询附加稳定 catalog 引用，历史导航映射到实体页。原 `artist:名字` 可能对应多个人物，无法唯一定位时展示选择，不取第一个同名实体。
+- [x] 身份确认后按选定来源及真实能力自动补正文／图片／credits；复用原事务 outbox 与唯一持久 worker，覆盖共享取消、语言／账号切换及重启。见 [M2.5 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m2.5.md)。
+- [x] 为旧歌曲／collection 查询附加有界稳定 catalog 引用，原人物／专辑导航通过准确 context 分页解析。原 `artist:名字` 对应多个人物时展示选择，不取第一个同名实体；保持 occurrence、专辑别名和手工版本语义。
 - [ ] 本地人物页和平台人物页共用“身份、头像、介绍、出处、识别状态”资料组件；本地名称分组仍可看歌曲，未确认时不展示其他同名人物的传记。
 - [ ] 本地／平台专辑详情共用项目介绍与发行状态，保留各自原曲目表与播放按钮；不在 M2 改成另一发行的标准曲目表。发行不明确时明确标注，不假造厂牌／条码。
 - [ ] 基础歌曲信息展示已有 credits；资料区提供编辑／清空／恢复自动值、重新查询、确认候选、纠正及撤销。
@@ -174,9 +195,13 @@ Discogs、TheAudioDB、Last.fm、AcoustID 暂不增加首轮必需依赖；已�
 
 **本包完成条件**：从本地曲目和平台曲目都能打开共享资料，查看出处并纠正；待确认进入同一收件箱，刷新和重启后决定仍在。详情阅读不等待联网，也不触发整库查询。
 
+**当前页面接线**：人物／专辑已共用介绍、图片、语言、出处与许可组件，支持同名选择、项目／发行切换和确认状态；介绍可编辑、明确清空或恢复自动，revision 冲突保留草稿并要求核对。图片保留实际层次、关联发行和授权到期处理；原歌曲信息按已确认录音分页显示人员及作品级关系，不借用整张发行的混合名单。原设置页已有资料源、首选语言、新入库与历史回填，按实际识别／正文／图片能力分别显示不可用原因。
+
+身份面板现可比较、确认／替换、拒绝、重新确认已拒绝候选、解除及显式重新识别；原收件箱按真实实体分页复核。TaskCenter 已显示持久状态、结果、重试时间及当前批次需求；支持按批次查看和 generation 校验的单需求取消，关闭下拉仍保持全量计数。身份面板已增加历史关联的预览与安全恢复；TaskCenter 支持明确选择有效来源后的终态共享补全重新查询，当前批次本页所选集合统一校验后事务提交。当前需求关联不等于完整取消历史，不复活已删除需求。组件已做浏览器渲染与交互检查，真实 Electron 界面验收未完成，上述完整页面项暂不勾选，见 [M2.5 记录](D:/Project/Twilight_Echo/docs/unified-music-library-m2.5.md)。
+
 ### M2.6：按内容质量与恢复能力验收
 
-- [ ] 固定至少 200 条人工核对的混合样本，记录本地／平台来源、预期实体层次及判断依据；包含简繁体／别名、同名异人、多人合作、无专辑、部分专辑、多碟、CUE、现场、翻唱、重制和附加曲。
+- [ ] 固定至少 200 条人工核对的混合样本，本地与平台各至少 100 条，记录来源、预期实体层次及判断依据；包含简繁体／别名、同名异人、多人合作、无专辑、部分专辑、多碟、CUE、现场、翻唱、重制和附加曲。
 - [ ] fixtures 验证身份与合成规则、任务去重／共享取消、429／503／鉴权、重启续跑、策略关闭、语言／图片缺失、迁移和撤销。真实服务只做限流内的小量抽样，覆盖率与模拟故障结果分开报告。
 - [ ] 扩展现有真实 Electron 无窗口用例：窗口分离后继续运行，进程重启恢复；打开窗口检查人物页、专辑页、TaskCenter、候选确认／拒绝／撤销和手工值保护。
 - [ ] 复用数据库、Core／插件边界、相关 Renderer 用例及 Node／Web 类型检查、生产构建。只运行受影响回归；M5 的十万条正式性能对比和 Windows 发布验收仍归 M5。
@@ -200,7 +225,9 @@ Discogs、TheAudioDB、Last.fm、AcoustID 暂不增加首轮必需依赖；已�
 
 ## 8. 依赖和下一步
 
-- **现在即可进入 M2.1**：现有 Core、SQLite 和 M1 身份／来源入口已经具备；不需要先做新云服务、重写扫描器或购买补充资料服务。
+- **2026-10-25 正在推进 M5.3 性能修复**：只读对账、真实 worker 后台读取探针与收藏 occurrence 修复已接入；十万条完整实测暴露的查询退化仍在优化，正式同库复测后再判断完成，见 [M5.3 记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.3.md)。随后由音乐库域负责人修复 SQLite date-only 回填覆盖非日期字段与取消后发布的合同缺口，保留普通扫描已提交批次语义；人工内容和实际桌面验收继续后置。
+- **M2.1 生产验收待恢复环境**：桌面执行环境需允许创建 sandbox alternate window station，再由音乐库域负责人完成原 headless 集成；已有结果及未通过项见 [M2.1 实施记录](D:/Project/Twilight_Echo/docs/unified-music-library-m2.1.md)。
+- **当前继续点为 M5.3 全库对账与十万条混合记录性能**：M2.5 已接通资料页、编辑／自动设置、图片／credits、身份复核、历史关联恢复、原收件箱和 TaskCenter 的持久投影／需求取消与重新查询。用户于 2026-10-24 要求先开发、验收后置，M3.1—M3.3 已接分类、迁移、发行浏览和统一选源；M4.1—M4.3 已接评分、唯一收藏权威、独立偏好冲突处理、自动禁播、精确标签与冻结集合队列。M4.4 在 schema 26 接入原歌曲页的 Focus 条件树、保存查询、分面、精确来源物化及请求 ID 对账，见 [M4.4 记录](D:/Project/Twilight_Echo/docs/unified-music-library-m4.4.md)。M5.1 在 schema 27 接入人物角色参与、作品／录音关系和人工有序演绎，原歌曲资料与统一搜索可进入，人物／作品复用原标签及偏好冲突预览，见 [M5.1 记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.1.md)。M5.2 已接 v2 envelope／music 的现有个人数据、引用冲突、选择性恢复及中断 redo，手工图片资源、独立资料首选、旧正文出处复核与跨字典恢复也已接线，见 [M5.2 记录](D:/Project/Twilight_Echo/docs/unified-music-library-m5.2.md)。普通歌单顺序和重复 occurrence 不变；v2 系统收藏只由 music 恢复，v1 继续读原合同。自动推荐为检查最新禁播使用单曲 native window，普通队列预播／gapless 不变。M2.6 内容、M3 与本阶段真实桌面／键盘／主题及打包验收保留，未标记通过；本批自动检查见 M5.3 记录。
 - 实施负责人处理来源能力、匹配、迁移与界面；真实覆盖率在 M2.6 形成证据后决定是否增加可选供应商，不先承诺中文覆盖百分比。
 - 商业发行负责人在发布前核对实际启用来源、字段、图片／文字和缓存使用条件；未满足的能力由部署策略禁用，其余本地及已许可能力照常交付。
-- 文档状态只随已实现代码和验收证据更新。本轮完成的是执行计划，未运行实现测试，也未将任何 M2 工作包标记完成。
+- 文档分别记录方案、代码实现和验收。当前 M2.1—M2.3 证据为 Core／数据库测试、类型检查、构建与有限真实服务抽样；完整生产链路与界面仍待后续验收，M2 整体尚未交付。
