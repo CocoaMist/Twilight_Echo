@@ -41,6 +41,7 @@ test(
       })
       const env = { ...process.env }
       delete env.ELECTRON_RUN_AS_NODE
+      env.TWILIGHT_METADATA_ENABLED = '0'
       // Native remains stopped throughout. No app instance lock or user profile is used.
       const execution = promisify(execFile)(require('electron'), [runner, root], {
         env,
@@ -151,8 +152,8 @@ async function main() {
   writeFileSync(join(music, 'cover.gif'), 'GIF89a-fixture')
   writeFileSync(join(music, 'disc.cue'), 'FILE "0000.wav" WAVE\nTRACK 01 AUDIO\nTITLE "Core Cue First"\nINDEX 01 00:00:00\nTRACK 02 AUDIO\nTITLE "Core Cue Second"\nINDEX 01 00:01:00\n')
   writeFileSync(library, JSON.stringify({ version: 2, revision: 0, folders: [music], exclusions: [], tracks: [
-    { id: 'one', title: 'One', filePath: join(profile, 'one.wav'), duration: 1 },
-    { id: 'two', title: 'Two', filePath: join(profile, 'two.wav'), duration: 1 }
+    { id: 'one', title: 'One', artist: 'Artist', album: 'Album', filePath: join(profile, 'one.wav'), duration: 1 },
+    { id: 'two', title: 'Two', artist: 'Artist', album: 'Album', filePath: join(profile, 'two.wav'), duration: 1 }
   ] }))
   supervisor = new CoreSupervisor({
     configuration: { root: profile, libraryFilePath: library, coverCacheDir: join(cacheRoot, 'cover-cache'), libraryStorage: 'sqlite', resumeMode: 'trackAndPosition' },
@@ -256,6 +257,30 @@ async function main() {
   assert.equal(catalogSources.items[0].provider, 'local')
   assert.doesNotMatch(JSON.stringify(catalogSources), /filePath|streamUrl|source_key/)
   assert.equal((await request('query', 'state.snapshot')).catalogRevision, catalog.revision)
+  // New entity operations traverse the real Core/database ports without a UI.
+  // This fixture leaves public metadata networking disabled; blocked != not_found.
+  const metadataArtist = (await request('query', 'catalog.query', { kind: 'artist', limit: 1 })).items[0].id
+  const metadataIdentity = await request('query', 'identification.detail', { entityId: metadataArtist })
+  assert.equal(metadataIdentity.kind, 'artist')
+  assert.equal(metadataIdentity.link, null)
+  assert.equal((await request('query', 'identification.candidates', { entityId: metadataArtist, limit: 1 })).total, 0)
+  const albumProjects = await request('query', 'catalog.query', { kind: 'album_project', limit: 1 })
+  assert.ok(albumProjects.total > 0)
+  assert.equal((await request('query', 'identification.detail', { entityId: albumProjects.items[0].id })).kind, 'album_project')
+  const metadataPolicy = await request('query', 'metadata.entity.policy')
+  assert.equal(metadataPolicy.identity, false)
+  const metadataJob = await request('command', 'metadata.entity.resolve', { entityId: metadataArtist, mbid: 'a223958d-5c56-4b2c-a30a-87e357bc121b', language: 'zh-Hans', batchId: 'headless' })
+  let entityJob
+  for (let i = 0; i < 200; i++) {
+    entityJob = (await request('query', 'metadata.entity.jobs', { jobId: metadataJob.id })).items[0]
+    if (entityJob.state === 'blocked') break
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert.equal(entityJob.state, 'blocked')
+  assert.equal(entityJob.outcome, null)
+  const metadataDetail = await request('query', 'metadata.entity.detail', { entityId: metadataArtist, language: 'zh-Hans' })
+  await request('command', 'metadata.entity.override', { entityId: metadataArtist, revision: metadataDetail.revision, mode: 'value', value: 'Headless user introduction', language: 'en' })
+  assert.doesNotMatch(JSON.stringify(metadataDetail), /filePath|streamUrl|source_key/)
   const importedStatistics = await request('query', 'statistics.tracks', { limit: 1 })
   assert.equal(importedStatistics.items[0].plays, 2)
   assert.equal(importedStatistics.items[0].seconds, 15)
@@ -393,6 +418,9 @@ async function main() {
   let oldEpochRejected = false
   try { await request('command', 'playback.pause', {}, epoch) } catch (e) { oldEpochRejected = e.code === 'STALE_EPOCH' }
   const recovered = await request('query', 'state.snapshot')
+  const recoveredMetadata = await request('query', 'metadata.entity.detail', { entityId: metadataArtist, language: 'en' })
+  assert.equal(recoveredMetadata.introduction.value, 'Headless user introduction')
+  assert.equal((await request('query', 'metadata.entity.jobs', { jobId: metadataJob.id })).items[0].state, 'blocked')
   assert.equal((await request('query', 'settings.state')).settings.ncmPlaybackQuality, 'hires')
   const recoveredEqualizer = await request('query', 'audio.dsp')
   assert.deepEqual(recoveredEqualizer.autoPreamp, equalizerState.autoPreamp)

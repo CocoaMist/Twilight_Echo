@@ -125,6 +125,9 @@ jobs:
       - name: Production build
         run: pnpm run build
 
+      - name: Test sandboxed Core window bridge
+        run: node --test scripts/core-window-bridge.test.cjs
+
   native-audio:
     name: Native Audio (windows-latest)
     runs-on: windows-latest
